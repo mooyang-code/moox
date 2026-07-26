@@ -242,7 +242,6 @@ export interface DatasetColumn {
   origin_id: string;
   value_type: FieldValueType;
   required?: boolean;
-  is_unique?: boolean;
   aliases?: string[];
   status: string;
   created_at?: string;
@@ -398,6 +397,7 @@ export interface TimeSeriesRowKey {
   subject_id: string;
   freq: string;
   data_time: string;
+  dimensions?: Record<string, string>;
 }
 
 export interface RecordRowKey {
@@ -416,5 +416,4 @@ export interface RowFieldUpsert {
   key: RowKey;
   fields: FieldValue[];
   attributes?: Record<string, TypedValue>;
-  operation: "ROW_FIELD_OPERATION_UPSERT" | 1;
 }

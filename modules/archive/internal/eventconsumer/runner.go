@@ -2,7 +2,6 @@ package eventconsumer
 
 import (
 	"context"
-	"time"
 
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
@@ -35,19 +34,6 @@ func (r *Runner) Run(ctx context.Context) error {
 		return jetstream.ErrInvalidConsumer
 	}
 	return r.shared.Run(ctx)
-}
-
-// Kept for callers of the old archive runner helper; retry pacing now belongs
-// to JetStream's NAK delay and is not used by the shared transport loop.
-func sleepContext(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 type deliveryAdapter struct{ *jetstream.Delivery }

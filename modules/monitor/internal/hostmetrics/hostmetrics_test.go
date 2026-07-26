@@ -58,7 +58,7 @@ func (w *fakeSnapshotWriter) WriteSnapshot(_ context.Context, snapshot *hostmetr
 
 func TestStorePersistsBeforeUpdatingLatest(t *testing.T) {
 	writer := &fakeSnapshotWriter{}
-	store := NewStoreWithWriter(writer)
+	store := NewStore(writer, nil)
 	message := validHostMessage(t)
 	metric, err := ValidateMessage(message)
 	require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestStorePersistsBeforeUpdatingLatest(t *testing.T) {
 }
 
 func TestStoreLeavesLatestUnchangedWhenStorageFails(t *testing.T) {
-	store := NewStoreWithWriter(&fakeSnapshotWriter{err: errors.New("storage unavailable")})
+	store := NewStore(&fakeSnapshotWriter{err: errors.New("storage unavailable")}, nil)
 	message := validHostMessage(t)
 	metric, _ := ValidateMessage(message)
 	assert.Error(t, store.Persist(context.Background(), message, metric))
@@ -81,7 +81,7 @@ func TestStoreLeavesLatestUnchangedWhenStorageFails(t *testing.T) {
 }
 
 func TestStoreHistoryIsOwnedByStorage(t *testing.T) {
-	store := NewStoreWithWriter(&fakeSnapshotWriter{})
+	store := NewStore(&fakeSnapshotWriter{}, nil)
 	history, err := store.History(context.Background(), "agent", time.Time{}, time.Now(), 100)
 	require.NoError(t, err)
 	assert.Empty(t, history)

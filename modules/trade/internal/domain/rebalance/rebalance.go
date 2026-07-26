@@ -43,9 +43,6 @@ const (
 	PatchTarget TargetMode = "PATCH"
 )
 
-func (Planner) Build(targets []Target, currents []Current) ([]Leg, error) {
-	return (Planner{}).BuildMode(FullTarget, targets, currents)
-}
 func (Planner) BuildMode(mode TargetMode, targets []Target, currents []Current) ([]Leg, error) {
 	if mode != FullTarget && mode != PatchTarget {
 		return nil, ErrInvalidRebalance

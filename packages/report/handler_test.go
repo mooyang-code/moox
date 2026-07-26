@@ -27,6 +27,20 @@ func validConfig(serviceName string) Config {
 	return Config{ServiceName: serviceName, InstanceID: serviceName + "@node-a", NodeID: "node-a", BootID: "boot-a"}
 }
 
+func NewHandlerWithPublisher(cfg Config, p Publisher, gatherer prometheus.Gatherer) (*Handler, error) {
+	h, err := NewHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if p != nil {
+		h.client = p
+	}
+	if gatherer != nil {
+		h.gatherer = gatherer
+	}
+	return h, nil
+}
+
 func (f *fakePublisher) Publish(_ context.Context, event events.Event, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
 	f.events = append(f.events, event)
 	f.payloads = append(f.payloads, payload)
@@ -147,22 +161,6 @@ func TestHandlePublishesEventMessage(t *testing.T) {
 	}
 }
 
-func TestReportErrorIncrementsErrorCount(t *testing.T) {
-	h := &Handler{cfg: validConfig("monitor")}
-
-	err := h.reportError(context.Background(), errors.New("publish failed"))
-	require.Error(t, err)
-	assert.Equal(t, uint64(1), h.ErrorCount())
-	assert.Equal(t, "publish failed", h.LastError())
-
-	require.NoError(t, h.reportError(context.Background(), nil))
-	assert.Equal(t, uint64(1), h.ErrorCount())
-
-	var nilHandler *Handler
-	assert.Equal(t, uint64(0), nilHandler.ErrorCount())
-	assert.Empty(t, nilHandler.LastError())
-}
-
 func TestHandleReportsPublisherError(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	h, err := NewHandlerWithPublisher(validConfig("monitor"), nil, registry)
@@ -175,5 +173,4 @@ func TestHandleReportsPublisherError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "eventbus down")
-	assert.Equal(t, uint64(1), h.ErrorCount())
 }

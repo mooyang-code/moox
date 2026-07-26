@@ -105,7 +105,7 @@ func TestPartialFillLeavesOrderPartiallyFilled(t *testing.T) {
 		BaseAsset: "BTC", QuoteAsset: "USDT",
 		Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("10"), Fee: shared.Zero(),
 	}
-	if err = (consumer.FillHandler{Store: s}).Handle(ctx, "space", "account", "partial", "pf-1", fill); err != nil {
+	if _, err = (consumer.FillHandler{Store: s}).HandleSource(ctx, "space", "account", "partial", "pf-1", fill, "test"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetOrder(ctx, "space", "partial")

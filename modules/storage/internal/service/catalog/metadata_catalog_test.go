@@ -62,7 +62,7 @@ func (s *activationMetadataStore) CommitDatasetActivation(_ context.Context, _, 
 func newActivationService(t *testing.T, dataset *pb.Dataset, node *pb.DataNode, runtime *fakeNodeStateChecker) (*Service, *activationMetadataStore) {
 	t.Helper()
 	store := &activationMetadataStore{dataset: dataset, node: node}
-	svc, err := NewMetadataServiceWithNodeStateChecker(store, nil, "secret", runtime)
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret", NodeStateChecker: runtime})
 	require.NoError(t, err)
 	return svc, store
 }
@@ -99,7 +99,7 @@ func TestActivateDatasetReportsCommittedPublicationFailureAndRetryIsIdempotent(t
 	dataset := newActivationReader("disabled", "ip://127.0.0.1:19090").dataset
 	runtime := &fakeNodeStateChecker{rsp: readyNodeState("node-a")}
 	store := &activationMetadataStore{dataset: dataset, node: &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:19090"}}
-	svc, err := NewMetadataServiceWithNodeStateChecker(store, &metacache.Store{}, "secret", runtime)
+	svc, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret", NodeStateChecker: runtime})
 	require.NoError(t, err)
 
 	first, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 7})

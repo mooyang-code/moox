@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -71,4 +70,3 @@ func (c *Client) Register(ctx context.Context, file *storagepb.ArchiveFile) erro
 	}
 	return nil
 }
-func PartitionKeyFromPath(path string) string { return filepath.ToSlash(path) }

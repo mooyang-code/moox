@@ -37,7 +37,9 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 
 	manager := database.NewManager()
 	require.NoError(t, manager.Initialize(&adminconfig.DatabaseConfig{Path: filepath.Join(dir, "admin.db")}))
-	t.Cleanup(func() { _ = manager.Close() })
+	sqlDB, err := manager.GetDB().DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, manager.GetDB().Exec(adminschema.AdminSQL()).Error)
 
 	rpcService := setuprpc.NewService(setupdomain.NewService(manager.GetDB(), encryptionKey))

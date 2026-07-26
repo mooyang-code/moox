@@ -25,9 +25,7 @@ func newAuthServiceForLoginTest(t *testing.T) (*AuthServiceImpl, string, string)
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 
-	cache, err := dao.NewCacheDB(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = cache.Close() })
+	cache := openAuthTestCache(t)
 
 	secretKey := "test-secret-for-login"
 	password := "secret123"

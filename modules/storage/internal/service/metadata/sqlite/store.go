@@ -122,9 +122,8 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	return err
 }
 
-// ValidateSchemaVersion checks the persisted metadata schema without creating
-// or altering tables. Storage processes fail fast when the database is not the
-// supported v5 schema; users must handle incompatible upgrades explicitly.
+// ValidateSchemaVersion checks that the persisted metadata database matches the
+// schema shipped with the current binary without creating or altering tables.
 func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("metadata store is not open")

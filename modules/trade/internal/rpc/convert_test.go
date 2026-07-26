@@ -65,15 +65,6 @@ func TestMarketTypeMappings_ShouldMapKnownValues(t *testing.T) {
 }
 
 func TestOrderSideAndTypeMappings_ShouldMapKnownValues(t *testing.T) {
-	assert.Equal(t, "sell", orderSideToDomain(tradepb.OrderSide_ORDER_SIDE_SELL))
-	assert.Equal(t, "buy", orderSideToDomain(tradepb.OrderSide_ORDER_SIDE_BUY))
-	assert.Equal(t, "market", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_MARKET))
-	assert.Equal(t, "stop", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_STOP))
-	assert.Equal(t, "stop_limit", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_STOP_LIMIT))
-	assert.Equal(t, "post_only", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_POST_ONLY))
-	assert.Equal(t, "ioc", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_IOC))
-	assert.Equal(t, "fok", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_FOK))
-	assert.Equal(t, "limit", orderTypeToDomain(tradepb.OrderType_ORDER_TYPE_LIMIT))
 }
 
 func TestStatusMappings_ShouldCastDomainValues(t *testing.T) {
@@ -81,7 +72,6 @@ func TestStatusMappings_ShouldCastDomainValues(t *testing.T) {
 	assert.Equal(t, tradepb.AccountStatus_ACCOUNT_STATUS_FROZEN, accountStatusToPB(service.AccountFrozen))
 	assert.Equal(t, tradepb.AccountStatus_ACCOUNT_STATUS_READONLY, accountStatusToPB(service.AccountReadonly))
 	assert.Equal(t, tradepb.AccountStatus_ACCOUNT_STATUS_NORMAL, accountStatusToPB(service.AccountNormal))
-	assert.Equal(t, tradepb.OrderStatus_ORDER_STATUS_FILLED, orderStatusToPB(int(tradepb.OrderStatus_ORDER_STATUS_FILLED)))
 	assert.Equal(t, tradepb.ChannelStatus_CHANNEL_STATUS_DISABLED, channelStatusToPB(int(tradepb.ChannelStatus_CHANNEL_STATUS_DISABLED)))
 }
 

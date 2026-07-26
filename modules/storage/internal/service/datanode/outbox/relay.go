@@ -146,8 +146,6 @@ func (r *Relay) Close() {
 	}
 }
 
-func (r *Relay) Flush(ctx context.Context) error { return r.flush(ctx) }
-
 func (r *Relay) flush(ctx context.Context) error {
 	if err := r.observeOutboxStats(ctx); err != nil {
 		return err

@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -49,13 +48,6 @@ func TestJSONHelpers_ShouldMergeAndStringify(t *testing.T) {
 	assert.Equal(t, "{}", jsonString(nil))
 }
 
-func TestRevealAndMaskSecret(t *testing.T) {
-	assert.Equal(t, "secret", reveal("secret", true))
-	assert.Equal(t, "", reveal("", false))
-	assert.Equal(t, "****", maskSecret("short"))
-	assert.Equal(t, "abcd****wxyz", maskSecret("abcdefghijwxyz"))
-}
-
 func TestDirectBatchIDAndFormatTime(t *testing.T) {
 	id := directBatchID("create")
 	assert.Contains(t, id, "batch-create-")
@@ -87,8 +79,4 @@ func TestCompactStrings_ShouldDedupeAndTrim(t *testing.T) {
 
 func TestFirstString_ReturnsFirstNonEmpty(t *testing.T) {
 	assert.Equal(t, "b", firstString("", " b ", "c"))
-}
-
-func TestSpaceFromContext_ReturnsSpaceID(t *testing.T) {
-	assert.Equal(t, "", spaceFromContext(context.Background()))
 }

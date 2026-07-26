@@ -12,17 +12,6 @@ type Service struct {
 	Engine *engine.Engine
 }
 
-func (s *Service) Run(ctx context.Context, t domain.Task, d domain.StrategyDefinition) (domain.Output, string, error) {
-	out, hash, err := s.Evaluate(ctx, t, d)
-	if err != nil {
-		return domain.Output{}, "", err
-	}
-	if err := s.Commit(ctx, t, out, hash); err != nil {
-		return domain.Output{}, "", err
-	}
-	return out, hash, nil
-}
-
 // Evaluate executes a strategy without changing state. Backtests, dry runs,
 // and the RPC commit=false path all use this method so they share the exact
 // Python contract with live execution.

@@ -57,7 +57,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "加载应用配置失败: %v", err)
 		return nil, err
 	}
-	config.SetGlobalConfig(appCfg)
 	log.InfoContextf(ctx, "应用配置加载成功: db=%s", appCfg.Database.Path)
 
 	// 2. 初始化数据库（建表）
@@ -71,6 +70,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.RegisterOnShutdown(func() {
+		_ = tradeStore.Close()
+		_ = dm.Close()
+	})
 	kernel := &command.Engine{Store: tradeStore, Resolver: exchangebridge.Resolver{Store: store, Factory: exchange.New}}
 
 	// 3. 装配领域服务
@@ -84,7 +87,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			ExpireSecs: appCfg.ControlGateway.ServiceAuth.ExpireSeconds,
 		},
 	})
-	svc := service.New("trade", service.WithStore(store), service.WithExchangeSecretSource(secretSource))
+	svc := service.New("trade", service.WithStore(store), service.WithExchangeFactory(exchange.New), service.WithExchangeSecretSource(secretSource))
 
 	// 4. 注册 9 个 tRPC service
 	rpc.RegisterAll(s, svc, kernel)

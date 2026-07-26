@@ -18,6 +18,12 @@ func testConfig(target string) Config {
 	}
 }
 
+func resetRegistryForTest() {
+	globalRegistry.mu.Lock()
+	defer globalRegistry.mu.Unlock()
+	globalRegistry.handlers = map[string]Handler{}
+}
+
 func TestExecuteJobItemReportsBeforeAck(t *testing.T) {
 	resetRegistryForTest()
 	Register("collect.kline", HandlerFunc(func(context.Context, JobItem) (Result, error) {

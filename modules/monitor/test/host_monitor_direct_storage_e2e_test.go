@@ -66,19 +66,19 @@ func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 		Disks:       []*hostmetricpb.DiskMetric{{Device: "sda", ReadBytesTotal: 10, WriteBytesTotal: 20, RateAvailable: true, UtilizationPercent: 10}},
 		Networks:    []*hostmetricpb.NetworkMetric{{Device: "eth0", Operstate: "up", ReceiveBytesTotal: 30, TransmitBytesTotal: 40, RateAvailable: true}},
 	}
-	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed, "message-1"); err != nil {
+	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.rows) != 4 {
 		t.Fatalf("stored rows=%d, want four datasets", len(fake.rows))
 	}
-	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed.Add(2*time.Minute), "message-2"); err != nil {
+	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.rows) != 8 {
 		t.Fatalf("different minute should add four rows, got %d", len(fake.rows))
 	}
-	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed, "message-duplicate"); err != nil {
+	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.rows) != 8 {

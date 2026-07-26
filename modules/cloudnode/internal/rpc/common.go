@@ -1,14 +1,12 @@
 package rpc
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -19,11 +17,6 @@ func Now() time.Time {
 
 func directBatchID(action string) string {
 	return fmt.Sprintf("batch-%s-%d", action, Now().UnixNano())
-}
-
-func spaceFromContext(ctx context.Context) string {
-	spaceID, _ := spacecontext.FromContext(ctx)
-	return spaceID
 }
 
 func pageFromCommon(page *pb.Page) (int, int) {
@@ -190,23 +183,6 @@ func supportedWorkloadsFromMetadata(metadata map[string]any) string {
 		}
 	}
 	return "[]"
-}
-
-func reveal(secret string, ok bool) string {
-	if ok {
-		return secret
-	}
-	return maskSecret(secret)
-}
-
-func maskSecret(secret string) string {
-	if secret == "" {
-		return ""
-	}
-	if len(secret) <= 8 {
-		return "****"
-	}
-	return secret[:4] + "****" + secret[len(secret)-4:]
 }
 
 func firstString(values ...string) string {

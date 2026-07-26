@@ -73,13 +73,6 @@ func TestRunnerRetriesAfterScheduledRetry(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSleepContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	require.Error(t, sleepContext(ctx, time.Second))
-	require.NoError(t, sleepContext(context.Background(), time.Millisecond))
-}
-
 func TestDeliveryAdapter(t *testing.T) {
 	d := deliveryAdapter{Delivery: &jetstream.Delivery{
 		RawMessageID: "mid-1", RawData: []byte("raw"), Subject: "topic", StreamSeq: 9, DeliveryCount: 3,

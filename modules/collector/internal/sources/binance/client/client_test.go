@@ -114,12 +114,6 @@ func TestSymbolInfoRaw_ToSymbolInfo_ShouldMapTradingPair(t *testing.T) {
 	assert.Equal(t, "0.01", info.TickSize)
 }
 
-func TestAPIError_Error_ShouldFormatMessage(t *testing.T) {
-	err := (&APIError{Code: -1000, Message: "invalid"}).Error()
-	assert.Contains(t, err, "-1000")
-	assert.Contains(t, err, "invalid")
-}
-
 func TestClient_DefaultDomains_ShouldUseBinanceHosts(t *testing.T) {
 	c := NewClient()
 	assert.Equal(t, SpotDomain, c.SpotDomain())

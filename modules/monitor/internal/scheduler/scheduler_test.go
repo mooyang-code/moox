@@ -89,40 +89,6 @@ func TestSchedulerConcurrencyCap(t *testing.T) {
 	}
 }
 
-func TestRunCheckOncePersistsWithoutChangingSchedule(t *testing.T) {
-	ctx := context.Background()
-	mgr := openSchedulerDB(t)
-	next := time.Now().Add(time.Hour)
-	check := domain.Check{SpaceID: "space-a", CheckID: "manual", Kind: domain.CheckKindHTTP, Enabled: true, IntervalSeconds: 60, TimeoutMS: 1000, NextCheckAt: &next}
-	checkRepo := mgr.Repositories().Checks
-	createCheck(t, checkRepo, check)
-
-	s := New(mgr.Repositories(), Options{
-		InstanceID: "monitor-a",
-		Runner: runnerFunc(func(ctx context.Context, check domain.Check) domain.CheckResult {
-			return okResult(check)
-		}),
-	})
-	result, err := s.RunCheckOnce(ctx, check)
-	if err != nil {
-		t.Fatalf("RunCheckOnce: %v", err)
-	}
-	if !result.Success || result.InstanceID != "monitor-a" {
-		t.Fatalf("result = %+v", result)
-	}
-	results, _ := mgr.Repositories().Results.Recent(ctx, "space-a", "manual", 10)
-	if len(results) != 1 {
-		t.Fatalf("results len = %d", len(results))
-	}
-	got, err := checkRepo.Get(ctx, "space-a", "manual")
-	if err != nil {
-		t.Fatalf("get check: %v", err)
-	}
-	if got.NextCheckAt == nil || !got.NextCheckAt.Equal(next) {
-		t.Fatalf("next schedule changed: got=%v want=%v", got.NextCheckAt, next)
-	}
-}
-
 type runnerFunc func(context.Context, domain.Check) domain.CheckResult
 
 func (f runnerFunc) Run(ctx context.Context, check domain.Check) domain.CheckResult {

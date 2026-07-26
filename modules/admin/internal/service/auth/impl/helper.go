@@ -11,16 +11,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// validateLoginSalt 验证登录盐值
-func (s *AuthServiceImpl) validateLoginSalt(ctx context.Context, username, salt string, timestamp int64) bool {
-	loginSalt, err := s.userDAO.GetLoginSalt(ctx, username)
-	if err != nil {
-		return false
-	}
-
-	return loginSalt.Salt == salt && loginSalt.Timestamp == timestamp && time.Now().Before(loginSalt.ExpiresAt)
-}
-
 // isUserLocked 检查用户是否被锁定
 func (s *AuthServiceImpl) isUserLocked(ctx context.Context, username, ip string) bool {
 	attempt, err := s.userDAO.GetLoginAttempt(ctx, username, ip)

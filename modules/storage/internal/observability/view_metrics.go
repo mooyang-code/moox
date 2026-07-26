@@ -398,27 +398,6 @@ func (m *ViewMetrics) IncRetryExhausted() {
 	}
 }
 
-func (m *ViewMetrics) SetOutboxSnapshot(pending int, oldestAge time.Duration) {
-	if m == nil {
-		return
-	}
-	if pending < 0 {
-		pending = 0
-	}
-	if oldestAge < 0 {
-		oldestAge = 0
-	}
-	// Keep this compatibility helper's age stable for deterministic unit tests.
-	// The relay uses SetOutboxSnapshotAt so readiness can age without another poll.
-	m.outboxObservedSnapshot.Store(true)
-	m.outboxDynamicAge.Store(false)
-	m.outboxOldestEventAt.Store(0)
-	m.outboxPendingEntries.Set(float64(pending))
-	m.outboxOldestAge.Set(oldestAge.Seconds())
-	m.outboxPendingSnapshot.Store(int64(pending))
-	m.outboxOldestAgeSnapshot.Store(oldestAge.Nanoseconds())
-}
-
 // SetOutboxSnapshotAt records the source timestamp of the oldest pending
 // entry. Health checks can then observe an increasing age even if the relay
 // stops polling after the entry was first observed.

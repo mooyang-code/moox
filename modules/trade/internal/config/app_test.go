@@ -76,14 +76,6 @@ func TestValidate_EventBusDisabled_ShouldPass(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 }
 
-func TestSetAndGetGlobalConfig_ShouldRoundTrip(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Health.Addr = ":17777"
-	SetGlobalConfig(cfg)
-	got := GetGlobalConfig()
-	assert.Equal(t, ":17777", got.Health.Addr)
-}
-
 func TestValidate_NormalizesSyncDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EventBus.Enabled = false

@@ -5,7 +5,6 @@
  * SHA-256(salt + timestamp) 密钥派生和 nonce + ciphertext + tag 布局。
  */
 import { gatewayURL } from "@/api/gateway";
-import { getAppInfo } from "@/api/storage/auth";
 
 /**
  * 生成设备指纹
@@ -136,7 +135,6 @@ class SecureLoginManager {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        app_info: getAppInfo(),
         username: username
       })
     });
@@ -173,7 +171,6 @@ class SecureLoginManager {
 
       // 3. 构建登录请求（严格按照 LoginReq 协议）
       const loginRequest = {
-        app_info: getAppInfo(),
         username: username,
         password_hash: encryptedPassword,
         salt: saltData.salt,

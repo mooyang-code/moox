@@ -34,7 +34,6 @@ func LoadConfigs(ctx context.Context) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	config.SetGlobalConfig(appCfg) // 设置全局配置，供其他模块使用
 	if err := loadEncryptionKey(); err != nil {
 		return nil, err
 	}

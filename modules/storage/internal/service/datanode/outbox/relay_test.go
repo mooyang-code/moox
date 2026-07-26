@@ -83,7 +83,7 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := relay.Flush(context.Background()); err == nil {
+	if err := relay.flush(context.Background()); err == nil {
 		t.Fatal("expected failure")
 	}
 	if got := metrics.Snapshot().OutboxPublishErrorsTotal; got != 1 {
@@ -94,7 +94,7 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 		t.Fatalf("remaining outbox=%v err=%v", entries, err)
 	}
 	publisher.failAt = 0
-	if err := relay.Flush(context.Background()); err != nil {
+	if err := relay.flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 3 || !bytes.Equal(publisher.attempts[1], publisher.attempts[2]) {
@@ -138,7 +138,7 @@ func TestRelayRecordsOutboxSnapshotAndDuplicateAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := relay.Flush(context.Background()); err != nil {
+	if err := relay.flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := metrics.Snapshot()
@@ -181,7 +181,7 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := firstRelay.Flush(context.Background()); !errors.Is(err, deleteErr) {
+	if err := firstRelay.flush(context.Background()); !errors.Is(err, deleteErr) {
 		t.Fatalf("first flush error=%v, want delete failure", err)
 	}
 	entries, err := firstStore.ListOutbox(context.Background(), 0, 10)
@@ -206,7 +206,7 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := secondRelay.Flush(context.Background()); err != nil {
+	if err := secondRelay.flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	entries, err = store.ListOutbox(context.Background(), 0, 10)

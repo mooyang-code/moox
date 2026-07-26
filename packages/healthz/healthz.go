@@ -219,11 +219,6 @@ func Base(module, instanceID, version, gitCommit string, start time.Time, ready 
 	}
 }
 
-// Handler converts a SnapshotFunc into a readiness JSON HTTP handler.
-func Handler(snapshot SnapshotFunc) http.Handler {
-	return readinessHandler(snapshot)
-}
-
 // LivenessHandler returns HTTP 200 when the process can execute the handler.
 // Dependency state is intentionally kept in Details, while readiness is
 // reported by ReadinessHandler on /readyz.

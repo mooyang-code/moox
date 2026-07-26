@@ -69,10 +69,3 @@ func doubleField(name string, value float64) *storagepb.FieldValue {
 		Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: value}},
 	}
 }
-
-func intField(name string, value int64) *storagepb.FieldValue {
-	return &storagepb.FieldValue{
-		FieldId: name,
-		Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: value}},
-	}
-}

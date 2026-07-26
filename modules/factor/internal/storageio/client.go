@@ -43,11 +43,6 @@ func NewClientWithCredentials(accessTarget, targetNode string, credentials gatew
 	}
 }
 
-// NewClientWithAccess creates a StorageIO client around a supplied Access client.
-func NewClientWithAccess(access AccessClient, auth *commonpb.AuthInfo) *Client {
-	return &Client{access: access, auth: auth}
-}
-
 // ReadWindow reads up to lookbackBars rows ending at endTime.
 func (c *Client) ReadWindow(ctx context.Context, key WindowKey, lookbackBars int, endTime time.Time, columns []string) (*engine.DataFrame, error) {
 	if lookbackBars <= 0 {

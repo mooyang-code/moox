@@ -151,34 +151,6 @@ func marketTypeToPB(s string) tradepb.MarketType {
 	}
 }
 
-func orderSideToDomain(s tradepb.OrderSide) string {
-	if s == tradepb.OrderSide_ORDER_SIDE_SELL {
-		return "sell"
-	}
-	return "buy"
-}
-
-func orderTypeToDomain(t tradepb.OrderType) string {
-	switch t {
-	case tradepb.OrderType_ORDER_TYPE_MARKET:
-		return "market"
-	case tradepb.OrderType_ORDER_TYPE_STOP:
-		return "stop"
-	case tradepb.OrderType_ORDER_TYPE_STOP_LIMIT:
-		return "stop_limit"
-	case tradepb.OrderType_ORDER_TYPE_POST_ONLY:
-		return "post_only"
-	case tradepb.OrderType_ORDER_TYPE_IOC:
-		return "ioc"
-	case tradepb.OrderType_ORDER_TYPE_FOK:
-		return "fok"
-	default:
-		return "limit"
-	}
-}
-
-func orderStatusToPB(s int) tradepb.OrderStatus { return tradepb.OrderStatus(s) }
-
 func channelStatusToPB(s int) tradepb.ChannelStatus { return tradepb.ChannelStatus(s) }
 
 // ===== 模型 -> PB =====

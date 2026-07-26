@@ -91,7 +91,13 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	stop, err := service.StartEventConsumer(ctx, client, viewservice.EventConsumerOptions{
 		Consumer: "storage_view", FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
 		BeforeProcess: func(hookCtx context.Context, delivery *jetstream.Delivery) error {
-			_, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+			_, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(
+				registry,
+				delivery.RawData,
+				delivery.Subject,
+				delivery.RawMessageID,
+				delivery.ContentType,
+			)
 			if err != nil || payload.GetDatasetId() != "prices_a" {
 				return nil
 			}

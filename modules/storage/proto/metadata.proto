@@ -367,18 +367,16 @@ message DatasetColumn {
   FieldValueType value_type = 6;
   // required 表示导入数据时该列是否必须存在。
   bool required = 7;
-  // is_unique 表示该列值是否应在 Dataset 内保持唯一。
-  bool is_unique = 8;
   // aliases 是导入数据时可识别的列名别名。
-  repeated string aliases = 9;
+  repeated string aliases = 8;
   // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 10;
+  string status = 9;
   // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 11;
+  string created_at = 10;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 12;
+  string updated_at = 11;
   // attributes 是扩展属性；display_name 是用户可见中文列名，创建和更新时必须包含中文且不超过 10 个字符。
-  map<string, string> attributes = 13;
+  map<string, string> attributes = 12;
 }
 
 // DataNode 表示一个可被 storage-primary 直接调用的数据存储节点。

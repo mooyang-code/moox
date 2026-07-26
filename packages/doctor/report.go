@@ -100,7 +100,3 @@ func (r Report) MarshalJSONBounded() ([]byte, error) {
 	}
 	return append(data, '\n'), nil
 }
-
-func EmbeddedReportSchema() []byte {
-	return append([]byte(nil), embeddedReportSchema...)
-}

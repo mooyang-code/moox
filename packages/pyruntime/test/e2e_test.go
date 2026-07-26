@@ -1,11 +1,9 @@
 package e2e_test
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"os/exec"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -43,24 +41,13 @@ func TestRuntimePublishesAndSharesSnapshot(t *testing.T) {
 		t.Fatal("expected one Arrow record batch")
 	}
 	_ = mapped.Close()
-	stream, err := transport.EncodeArrowStream(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := transport.DecodeArrowStream(stream)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decoded.Rows[0][0] != 1.25 || !reflect.DeepEqual(decoded.Rows[1], []any{2.5, "ETH"}) {
-		t.Fatalf("Arrow stream contract mismatch: %#v", decoded.Rows)
-	}
-	testPythonArrowContract(t, stream, h.Path)
+	testPythonArrowContract(t, h.Path)
 	if err := protocol.ValidateHello(protocol.HelloExpectation{ProtocolVersion: protocol.VersionV1}, protocol.Hello{ProtocolVersion: protocol.VersionV1}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func testPythonArrowContract(t *testing.T, stream []byte, path string) {
+func testPythonArrowContract(t *testing.T, path string) {
 	python := os.Getenv("PYRUNTIME_PYTHON")
 	if python == "" {
 		python = "python3"
@@ -69,22 +56,12 @@ func testPythonArrowContract(t *testing.T, stream []byte, path string) {
 		t.Logf("%s has no pyarrow; set PYRUNTIME_PYTHON to run Go/Python Arrow E2E", python)
 		return
 	}
-	streamScript := `import sys, pyarrow.ipc as ipc
-table = ipc.open_stream(sys.stdin.buffer).read_all()
-assert table.num_rows == 2 and table.column_names == ["close", "symbol"]
-print("stream-ok")`
-	cmd := exec.Command(python, "-c", streamScript)
-	cmd.Stdin = bytes.NewReader(stream)
-	out, err := cmd.CombinedOutput()
-	if err != nil || strings.TrimSpace(string(out)) != "stream-ok" {
-		t.Fatalf("Python could not read Go Arrow stream: output=%q err=%v", out, err)
-	}
 	fileScript := `import sys, pyarrow as pa, pyarrow.ipc as ipc
 source = pa.memory_map(sys.argv[1], "r")
 table = ipc.open_file(source).read_all()
 assert table.num_rows == 2 and table.column_names == ["close", "symbol"]
 print("file-ok")`
-	out, err = exec.Command(python, "-c", fileScript, path).CombinedOutput()
+	out, err := exec.Command(python, "-c", fileScript, path).CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "file-ok" {
 		t.Fatalf("Python could not read Go Arrow mmap file: output=%q err=%v", out, err)
 	}

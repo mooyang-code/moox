@@ -58,7 +58,7 @@ func TestWriteFactorPatchMapsTailAndOmitsNilValues(t *testing.T) {
 	t1 := t0.Add(time.Minute)
 	t2 := t1.Add(time.Minute)
 	access := &fakeAccessClient{}
-	client := NewClientWithAccess(access, nil)
+	client := &Client{access: access}
 
 	err := client.WriteFactorPatch(context.Background(), &engine.FactorTask{
 		SpaceID:       "crypto",
@@ -134,6 +134,13 @@ func TestValueForFrameRowAndAsFloat64CoverEdges(t *testing.T) {
 
 type fakeAccessClient struct {
 	writeReqs []*storagepb.PrimaryUpsertFieldsReq
+}
+
+func intField(name string, value int64) *storagepb.FieldValue {
+	return &storagepb.FieldValue{
+		FieldId: name,
+		Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: value}},
+	}
 }
 
 func (f *fakeAccessClient) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {

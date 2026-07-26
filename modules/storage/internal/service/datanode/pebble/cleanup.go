@@ -41,7 +41,7 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 				return 0, err
 			}
 			parts, ok := decodePhysicalParts(iter.Key()[2:])
-			if ok && len(parts) == 7 && parts[0] == spaceID && parts[1] == datasetID {
+			if ok && len(parts) == 8 && parts[0] == spaceID && parts[1] == datasetID {
 				buckets[parts[2]] = struct{}{}
 			}
 		}
@@ -67,7 +67,7 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 }
 
 func decodePhysicalParts(data []byte) ([]string, bool) {
-	parts := make([]string, 0, 7)
+	parts := make([]string, 0, 8)
 	for len(data) > 0 {
 		part, rest, err := decodePart(data)
 		if err != nil {

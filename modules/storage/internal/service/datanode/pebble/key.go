@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/rowidentity"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 )
@@ -55,7 +56,11 @@ func rowParts(key *pb.RowKey, bucketDuration time.Duration) (kind byte, parts []
 		at = at.UTC()
 		bucket := at.Truncate(bucketDuration).Format(canonicalTimeLayout)
 		dataTime := at.Format(canonicalTimeLayout)
-		return timeSeriesKind, append(base, []byte(bucket), []byte(row.GetSubjectId()), []byte(row.GetFreq()), []byte(dataTime)), nil
+		dimensions, dimensionsErr := rowidentity.CanonicalDimensions(row.GetDimensions())
+		if dimensionsErr != nil {
+			return 0, nil, invalidf("invalid dimensions: %w", dimensionsErr)
+		}
+		return timeSeriesKind, append(base, []byte(bucket), []byte(row.GetSubjectId()), []byte(row.GetFreq()), []byte(dataTime), []byte(dimensions)), nil
 	case *pb.RowKey_Record:
 		row := value.Record
 		if row == nil || row.GetRecordId() == "" || row.GetVersion() == "" {

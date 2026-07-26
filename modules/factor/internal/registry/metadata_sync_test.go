@@ -8,12 +8,6 @@ import (
 	"testing"
 )
 
-func TestSafeID(t *testing.T) {
-	assert.Equal(t, "abc-123", safeID("Abc 123"))
-	assert.Equal(t, "hello-world", safeID("Hello__World!!"))
-	assert.Equal(t, "", safeID("!!!"))
-}
-
 func TestFactorParams(t *testing.T) {
 	got, err := factorParams("")
 	require.NoError(t, err)

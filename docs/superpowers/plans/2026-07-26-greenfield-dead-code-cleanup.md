@@ -163,7 +163,7 @@ string indexed_to = 10;
 
 Also compact `Device`, `ListDevicesReq`, the three SysDeploy request messages, and `RevealedSecret`. Remove the trailing reservations from `FilterSpec` and `DataKind`.
 
-Keep `DatasetColumn.required`, `is_unique`, and `aliases` because current import and UI flows use them. Remove their `[deprecated = true]` annotations and replace the compatibility comments with their current semantics.
+Keep `DatasetColumn.required` and `aliases` because current import and UI flows use them. Delete `is_unique`: no write path enforces it, so exposing it would be a false contract.
 
 - [ ] **Step 4: Regenerate affected bindings**
 
@@ -534,7 +534,6 @@ write := &storagepb.RowFieldUpsert{
 		}},
 	},
 	Fields: row.GetFields(),
-	Operation: storagepb.RowFieldOperation_ROW_FIELD_OPERATION_UPSERT,
 }
 ```
 

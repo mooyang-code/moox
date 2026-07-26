@@ -84,18 +84,6 @@ func (dm *Manager) GetCache() *badger.DB {
 	return dm.cache
 }
 
-// Close 关闭数据库连接和缓存
-func (dm *Manager) Close() error {
-	if dm.cache != nil {
-		if err := dm.cache.Close(); err != nil {
-			log.Errorf("关闭缓存失败: %v", err)
-			return err
-		}
-	}
-	// GORM SQLite 不需要手动关闭
-	return nil
-}
-
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
 		"_pragma=journal_mode(WAL)",

@@ -9,14 +9,14 @@ import (
 )
 
 func TestResolverAcceptsActiveTencentCloudSecret(t *testing.T) {
-	resolver := NewForTest(func(context.Context, *adminpb.RevealSecretReq) (*adminpb.RevealSecretRsp, error) {
+	resolver := &Resolver{reveal: func(context.Context, *adminpb.RevealSecretReq) (*adminpb.RevealSecretRsp, error) {
 		return &adminpb.RevealSecretRsp{
 			RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS},
 			Secret: &adminpb.RevealedSecret{
 				Category: "cloud", Provider: "tencent", Status: "active", KeyId: "sid", SecretValue: "skey",
 			},
 		}, nil
-	})
+	}}
 	credential, err := resolver.Resolve(context.Background(), store.CloudAccount{
 		Provider: "tencent", CredentialSecretID: "secret-1",
 	})
@@ -26,14 +26,14 @@ func TestResolverAcceptsActiveTencentCloudSecret(t *testing.T) {
 }
 
 func TestResolverRejectsInactiveOrWrongCategory(t *testing.T) {
-	resolver := NewForTest(func(context.Context, *adminpb.RevealSecretReq) (*adminpb.RevealSecretRsp, error) {
+	resolver := &Resolver{reveal: func(context.Context, *adminpb.RevealSecretReq) (*adminpb.RevealSecretRsp, error) {
 		return &adminpb.RevealSecretRsp{
 			RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS},
 			Secret: &adminpb.RevealedSecret{
 				Category: "exchange", Provider: "tencent", Status: "inactive", KeyId: "sid", SecretValue: "skey",
 			},
 		}, nil
-	})
+	}}
 	if _, err := resolver.Resolve(context.Background(), store.CloudAccount{
 		Provider: "tencent", CredentialSecretID: "secret-1",
 	}); err == nil {

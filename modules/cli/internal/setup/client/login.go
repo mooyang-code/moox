@@ -19,17 +19,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	frontendAppID  = "moox_frontend"
-	frontendAppKey = "2521e0d21b6be0347b72bca93904a0dd"
-)
-
 type LoginResult struct {
 	LoginAPI string `json:"login_api"`
-}
-
-func VerifyPublicLogin(ctx context.Context, baseURL, username, password string) (LoginResult, error) {
-	return verifyPublicLogin(ctx, baseURL, username, password, &http.Client{Timeout: 30 * time.Second})
 }
 
 func VerifyPublicLoginWithCAFile(ctx context.Context, baseURL, username, password, caPath string) (LoginResult, error) {
@@ -54,10 +45,9 @@ func verifyPublicLogin(ctx context.Context, baseURL, username, password string, 
 	if baseURL == "" || strings.TrimSpace(username) == "" || password == "" {
 		return LoginResult{}, fmt.Errorf("login_verification_failed")
 	}
-	appInfo := &pb.AppInfo{AppId: frontendAppID, AppKey: frontendAppKey}
 	saltResponse := &pb.GetLoginSaltRsp{}
 	if err := postPublicProto(ctx, httpClient, baseURL+"/api/admin/auth/GetLoginSalt", &pb.GetLoginSaltReq{
-		AppInfo: appInfo, Username: username,
+		Username: username,
 	}, saltResponse); err != nil || !retInfoSuccess(saltResponse.GetRetInfo()) || saltResponse.GetSalt() == "" || saltResponse.GetTimestamp() <= 0 {
 		return LoginResult{}, fmt.Errorf("login_verification_failed")
 	}
@@ -67,7 +57,7 @@ func verifyPublicLogin(ctx context.Context, baseURL, username, password string, 
 	}
 	loginResponse := &pb.LoginRsp{}
 	if err := postPublicProto(ctx, httpClient, baseURL+"/api/admin/auth/Login", &pb.LoginReq{
-		AppInfo: appInfo, Username: username, PasswordHash: encryptedPassword,
+		Username: username, PasswordHash: encryptedPassword,
 		Salt: saltResponse.GetSalt(), Timestamp: saltResponse.GetTimestamp(),
 		DeviceId: "moox-cli-setup-verification", UserAgent: "moox-cli/setup", ClientIp: "127.0.0.1",
 	}, loginResponse); err != nil || !retInfoSuccess(loginResponse.GetRetInfo()) {

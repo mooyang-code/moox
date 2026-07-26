@@ -53,25 +53,6 @@ func GetBestIP(domain string) string {
 	return ""
 }
 
-// GetAvailableIPs 获取指定域名所有可用的 IP 列表
-func GetAvailableIPs(domain string) []string {
-	dnsMutex.RLock()
-	defer dnsMutex.RUnlock()
-
-	record, exists := dnsRecords[domain]
-	if !exists || record == nil || len(record.IPList) == 0 {
-		return nil
-	}
-
-	var ips []string
-	for _, ipInfo := range record.IPList {
-		if ipInfo.Available {
-			ips = append(ips, ipInfo.IP)
-		}
-	}
-	return ips
-}
-
 // GetNextAvailableIP 获取指定域名的下一个可用 IP（排除指定的 IP）
 // excludeIPs: 需要排除的 IP 列表（已尝试失败的 IP）
 // 返回值: 下一个可用的 IP，如果没有则返回空字符串
@@ -97,18 +78,6 @@ func GetNextAvailableIP(domain string, excludeIPs []string) string {
 		}
 	}
 	return ""
-}
-
-// GetDNSRecord 获取指定域名的完整 DNS 记录
-func GetDNSRecord(domain string) *DNSRecord {
-	dnsMutex.RLock()
-	defer dnsMutex.RUnlock()
-
-	record, exists := dnsRecords[domain]
-	if !exists {
-		return nil
-	}
-	return record
 }
 
 // updateDNSRecords 更新全局 DNS 记录

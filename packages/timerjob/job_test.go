@@ -45,9 +45,6 @@ func TestHandleClonesContextAndCompletesSynchronously(t *testing.T) {
 	if err := job.Handle(context.WithValue(context.Background(), key, "value")); err != nil {
 		t.Fatalf("Handle() error = %v", err)
 	}
-	if job.Running() {
-		t.Fatal("Running() = true after Handle returned")
-	}
 }
 
 func TestHandleSkipsOverlappingInvocation(t *testing.T) {
@@ -66,9 +63,6 @@ func TestHandleSkipsOverlappingInvocation(t *testing.T) {
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- job.Handle(context.Background()) }()
 	<-started
-	if !job.Running() {
-		t.Fatal("Running() = false while callback is blocked")
-	}
 	if err := job.Handle(context.Background()); err != nil {
 		t.Fatalf("overlapping Handle() error = %v", err)
 	}

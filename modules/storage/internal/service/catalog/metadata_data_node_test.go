@@ -84,7 +84,7 @@ func TestListDataNodesAggregatesDatasetsWithOneUnpaginatedQuery(t *testing.T) {
 			{SpaceId: "space-b", DatasetId: "dataset-b", DataNodeId: "node-a", Name: "B Dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Status: "disabled"},
 		},
 	}
-	svc, err := NewMetadataService(store, nil, "secret")
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
 	rsp, err := svc.ListDataNodes(context.Background(), &pb.ListDataNodesReq{Page: &pb.Page{Page: 1, Size: 10}})
@@ -104,7 +104,7 @@ func TestListDataNodesFiltersStatusBeforePagination(t *testing.T) {
 		{NodeId: "node-b", Name: "B", Status: "disabled"},
 		{NodeId: "node-c", Name: "C", Status: "active"},
 	}}
-	svc, err := NewMetadataService(store, nil, "secret")
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
 	pageOne, err := svc.ListDataNodes(context.Background(), &pb.ListDataNodesReq{
@@ -138,7 +138,7 @@ func TestListDataNodesFetchesAllUnderlyingPagesBeforeFiltering(t *testing.T) {
 	}
 	nodes = append(nodes, &pb.DataNode{NodeId: "node-1000", Status: "active"})
 	store := &dataNodeMetadataStore{nodes: nodes}
-	svc, err := NewMetadataService(store, nil, "secret")
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
 	rsp, err := svc.ListDataNodes(context.Background(), &pb.ListDataNodesReq{
@@ -166,7 +166,7 @@ func TestDataNodeMutationSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) 
 	store := &dataNodeMetadataStore{nodes: []*pb.DataNode{{NodeId: "node-a", Name: "A", Status: "active"}}}
 	// An uninitialized cache represents a refresh failure without requiring a
 	// second metadata implementation just for this post-commit behavior.
-	svc, err := NewMetadataService(store, &metacache.Store{}, "secret")
+	svc, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
 	updated, err := svc.UpdateDataNode(context.Background(), &pb.UpdateDataNodeReq{
@@ -183,7 +183,7 @@ func TestDataNodeMutationSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) 
 
 func TestRebindDatasetSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
 	store := &dataNodeMetadataStore{nodes: []*pb.DataNode{{NodeId: "node-a", Status: "active"}}}
-	svc, err := NewMetadataService(store, &metacache.Store{}, "secret")
+	svc, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
 	rsp, err := svc.RebindDatasetDataNode(context.Background(), &pb.RebindDatasetDataNodeReq{
@@ -196,7 +196,7 @@ func TestRebindDatasetSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {
 
 func TestRegisterDataNodeRequiresDeploymentHMAC(t *testing.T) {
 	store := &dataNodeMetadataStore{nodes: []*pb.DataNode{{NodeId: "node-a"}}}
-	svc, err := NewMetadataService(store, nil, "secret")
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
 	bad, err := svc.RegisterDataNode(context.Background(), &pb.RegisterDataNodeReq{

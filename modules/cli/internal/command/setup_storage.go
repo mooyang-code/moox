@@ -923,7 +923,7 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	}
 	result.Assertions = append(result.Assertions, "dataset_column_created")
 	rowKey = &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "row-1", Version: "1"}}}
-	row := &storagepb.RowFieldUpsert{Key: rowKey, Fields: []*storagepb.FieldValue{{FieldId: "value", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "row-value"}}}}, Operation: storagepb.RowFieldOperation_ROW_FIELD_OPERATION_UPSERT}
+	row := &storagepb.RowFieldUpsert{Key: rowKey, Fields: []*storagepb.FieldValue{{FieldId: "value", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "row-value"}}}}}
 	disabledWrite, err := session.primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: session.primaryAuth, Rows: []*storagepb.RowFieldUpsert{row}})
 	if err != nil || disabledWrite == nil || disabledWrite.GetRetInfo() == nil || disabledWrite.GetRetInfo().GetCode() == storagepb.ErrorCode_SUCCESS {
 		return result, errors.New("storage_e2e_disabled_write_accepted")

@@ -15,7 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-go"
 )
 
-func TestGetUserInfoRejectsRequestAccessTokenWithoutContextMetadata(t *testing.T) {
+func TestGetUserInfoRequiresContextMetadata(t *testing.T) {
 	ctx := context.Background()
 	secretKey := "test-secret-for-get-user-info"
 	user := &model.User{
@@ -30,7 +30,7 @@ func TestGetUserInfoRejectsRequestAccessTokenWithoutContextMetadata(t *testing.T
 		LastPasswordChange: time.Now(),
 	}
 	svc := newAuthServiceForUserTest(t, secretKey, user)
-	rsp, err := svc.GetUserInfo(ctx, &pb.GetUserInfoReq{AccessToken: "ignored"})
+	rsp, err := svc.GetUserInfo(ctx, &pb.GetUserInfoReq{})
 	if err != nil {
 		t.Fatalf("GetUserInfo() error = %v", err)
 	}

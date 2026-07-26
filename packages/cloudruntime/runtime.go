@@ -110,11 +110,6 @@ func (r *registry) get(jobType string) (Handler, bool) {
 	handler, ok := r.handlers[strings.TrimSpace(jobType)]
 	return handler, ok
 }
-func resetRegistryForTest() {
-	globalRegistry.mu.Lock()
-	defer globalRegistry.mu.Unlock()
-	globalRegistry.handlers = map[string]Handler{}
-}
 
 type retInfo struct {
 	Code int    `json:"code"`

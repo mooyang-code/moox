@@ -32,14 +32,14 @@ func (f *fakeMetadataClient) ListSubjectSymbols(_ context.Context, _ *storagepb.
 }
 
 func TestDatasetSource_ListSubjects_EmptyDatasetID_ShouldReturnError(t *testing.T) {
-	src := newDatasetSourceWithClient(&fakeMetadataClient{})
+	src := &DatasetSource{metadata: &fakeMetadataClient{}}
 	_, err := src.ListSubjects(context.Background(), "space-1", "", "ds-src")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "dataset_id is required")
 }
 
 func TestDatasetSource_ListSubjects_ValidBindings_ShouldMergeSymbols(t *testing.T) {
-	src := newDatasetSourceWithClient(&fakeMetadataClient{
+	src := &DatasetSource{metadata: &fakeMetadataClient{
 		subjects: []*storagepb.DatasetSubject{
 			{SubjectId: "BTC-USDT", Status: "active"},
 			{SubjectId: "ETH-USDT", Status: "inactive"},
@@ -47,7 +47,7 @@ func TestDatasetSource_ListSubjects_ValidBindings_ShouldMergeSymbols(t *testing.
 		symbols: []*storagepb.SubjectSymbol{
 			{SubjectId: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
 		},
-	})
+	}}
 	subjects, err := src.ListSubjects(context.Background(), "space-1", "ds-1", "src-1")
 	require.NoError(t, err)
 	require.Len(t, subjects, 1)

@@ -55,10 +55,10 @@ func seedFrontendBinding(t *testing.T, db *gorm.DB, r *store.Store, bindingID st
 		RunID: "run-1", InstrumentID: "BTC", PortfolioTarget: "0.5", ActualPosition: "0.4", Deviation: "0.1",
 		SourceTime: now, DataRevision: "rev-1",
 	}).Error)
-	require.NoError(t, r.WritePerformancePoint(ctx, domain.PerformancePoint{
+	require.NoError(t, db.Create(&domain.PerformancePoint{
 		BindingID: bindingID, Source: "paper", PointTime: now, NAV: "1.0", CumulativeReturn: "0.01",
 		Drawdown: "0.0", CalculatedAt: now,
-	}))
+	}).Error)
 }
 
 func TestListRunningStrategies_RejectsUnavailableRepo(t *testing.T) {

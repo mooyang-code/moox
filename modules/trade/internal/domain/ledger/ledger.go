@@ -32,14 +32,3 @@ func (t Transaction) Validate() error {
 	}
 	return nil
 }
-
-func Transfer(id shared.LedgerTransactionID, biz, refType, refID, asset, fromAccount, fromBucket, toAccount, toBucket string, amount shared.Decimal) (Transaction, error) {
-	if amount.Cmp(shared.Zero()) <= 0 {
-		return Transaction{}, ErrUnbalanced
-	}
-	t := Transaction{ID: id, BizType: biz, RefType: refType, RefID: refID, Entries: []Entry{
-		{AccountID: fromAccount, Asset: asset, Bucket: fromBucket, Amount: amount.Neg()},
-		{AccountID: toAccount, Asset: asset, Bucket: toBucket, Amount: amount},
-	}}
-	return t, t.Validate()
-}

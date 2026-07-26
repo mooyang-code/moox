@@ -12,7 +12,7 @@ import (
 
 // GetUserInfo 获取用户信息
 func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoReq) (*pb.GetUserInfoRsp, error) {
-	log.InfoContextf(ctx, "[Auth] # GetUserInfo enter:%+v", req)
+	log.InfoContext(ctx, "[Auth] # GetUserInfo")
 
 	currentUserID, _, role, err := authutils.GetUserInfoFromCtx(ctx)
 	if err != nil {

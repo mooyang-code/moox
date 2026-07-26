@@ -193,7 +193,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 		if _, err := store.UpsertDatasetColumn(ctx, &pb.DatasetColumn{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, ColumnName: item.ColumnName,
 			OriginType: parseDatasetColumnOriginType(item.OriginType), OriginId: item.OriginID,
-			ValueType: parseValueType(item.ValueType), Required: item.Required, IsUnique: item.IsUnique,
+			ValueType: parseValueType(item.ValueType), Required: item.Required,
 			Aliases: item.Aliases, Attributes: item.Attributes, Status: item.Status,
 		}); err != nil {
 			return result, seedErr("dataset_column", item.DatasetID+"."+item.ColumnName, err)
@@ -498,7 +498,6 @@ type seedDatasetColumn struct {
 	OriginID   string            `yaml:"origin_id"`
 	ValueType  string            `yaml:"value_type"`
 	Required   bool              `yaml:"required"`
-	IsUnique   bool              `yaml:"is_unique"`
 	Aliases    []string          `yaml:"aliases"`
 	Attributes map[string]string `yaml:"attributes"`
 	Status     string            `yaml:"status"`

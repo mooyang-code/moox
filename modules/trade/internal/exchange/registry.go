@@ -2,7 +2,6 @@ package exchange
 
 import (
 	"fmt"
-	"sort"
 	"sync"
 )
 
@@ -37,16 +36,4 @@ func New(name string) (ExchangeAdapter, error) {
 		return nil, fmt.Errorf("exchange: unknown exchange %q", name)
 	}
 	return f(), nil
-}
-
-// Names 返回已注册的交易所名（按字典序）。
-func Names() []string {
-	mu.RLock()
-	defer mu.RUnlock()
-	names := make([]string, 0, len(registry))
-	for name := range registry {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }

@@ -20,17 +20,19 @@ func TestModuleMetricsRejectsTwoHundredFiftySeventhSeries(t *testing.T) {
 	}
 	created := 0
 	for _, stage := range []string{"ingest", "publish", "dispatch", "calculate", "evaluate", "materialize", "reconcile", "rebalance", "collect"} {
-		for _, pipeline := range pipelines {
-			err := m.SetBacklog(stage, pipeline, 0)
-			if created < MaxModuleMetricSeries && err != nil {
-				t.Fatalf("series %d rejected early: %v", created+1, err)
-			}
-			created++
-			if created == MaxModuleMetricSeries+1 {
-				if err == nil {
-					t.Fatal("257th series was accepted")
+		for _, result := range []string{"success", "error", "rejected"} {
+			for _, pipeline := range pipelines {
+				err := m.RecordRun(stage, result, pipeline, time.Time{})
+				if created < MaxModuleMetricSeries && err != nil {
+					t.Fatalf("series %d rejected early: %v", created+1, err)
 				}
-				return
+				created++
+				if created == MaxModuleMetricSeries+1 {
+					if err == nil {
+						t.Fatal("257th series was accepted")
+					}
+					return
+				}
 			}
 		}
 	}
@@ -75,10 +77,10 @@ func TestModuleMetricsEnforcesSeriesLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.maxSeries = 1
-	if err := m.SetBacklog("ingest", "metrics", 1); err != nil {
+	if err := m.RecordRun("ingest", "success", "metrics", time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.RecordRun("ingest", "success", "metrics", time.Now()); err == nil {
+	if err := m.RecordRun("ingest", "error", "metrics", time.Now()); err == nil {
 		t.Fatal("series limit was not enforced")
 	}
 }

@@ -107,6 +107,3 @@ func TestRetryDelay(t *testing.T) {
 	assert.Equal(t, 2*time.Second, retryDelay(2))
 	assert.Equal(t, 30*time.Second, retryDelay(100))
 }
-func TestRetryScheduledError(t *testing.T) {
-	assert.Contains(t, (&RetryScheduledError{Delay: 2 * time.Second}).Error(), "2s")
-}

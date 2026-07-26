@@ -58,9 +58,10 @@ func TestDataNodeManagementLifecycle(t *testing.T) {
 		"ip://127.0.0.1:21002": nodeB,
 	}
 	checker := inProcessNodeStateChecker{nodesByTarget: nodesByTarget}
-	metadataService, err := catalog.NewMetadataServiceWithNodeStateChecker(
-		store, cache, dataNodeManagementSecret, checker,
-	)
+	metadataService, err := catalog.NewMetadataService(store, cache, catalog.Options{
+		AuthSecret:       dataNodeManagementSecret,
+		NodeStateChecker: checker,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

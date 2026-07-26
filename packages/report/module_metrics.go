@@ -2,7 +2,6 @@ package report
 
 import (
 	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +24,6 @@ type ModuleMetrics struct {
 	runs             *prometheus.CounterVec
 	lastSuccess      *prometheus.GaugeVec
 	lastError        *prometheus.GaugeVec
-	backlog          *prometheus.GaugeVec
 	watermark        *prometheus.GaugeVec
 	inputWatermark   *prometheus.GaugeVec
 	mu               sync.Mutex
@@ -132,11 +130,10 @@ func NewModuleMetrics(registerer prometheus.Registerer, module string, pipelines
 		runs:           prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_module_runs_total", Help: "Completed module stage runs."}, []string{"module", "stage", "result", "pipeline"}),
 		lastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_last_success_timestamp_seconds", Help: "Last successful module stage completion."}, []string{"module", "stage", "pipeline"}),
 		lastError:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_last_error_timestamp_seconds", Help: "Last failed module stage completion."}, []string{"module", "stage", "pipeline"}),
-		backlog:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_backlog", Help: "Bounded module stage backlog."}, []string{"module", "stage", "pipeline"}),
 		watermark:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_business_watermark_timestamp_seconds", Help: "Monotonic authoritative business output watermark."}, []string{"module", "stage", "pipeline"}),
 		inputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_module_input_watermark_timestamp_seconds", Help: "Monotonic business timestamp accepted as pipeline input."}, []string{"module", "stage", "pipeline"}),
 	}
-	for _, collector := range []prometheus.Collector{m.runs, m.lastSuccess, m.lastError, m.backlog, m.watermark, m.inputWatermark} {
+	for _, collector := range []prometheus.Collector{m.runs, m.lastSuccess, m.lastError, m.watermark, m.inputWatermark} {
 		if err := registerer.Register(collector); err != nil {
 			return nil, fmt.Errorf("register module metrics: %w", err)
 		}
@@ -165,20 +162,6 @@ func (m *ModuleMetrics) RecordRun(stage, result, pipeline string, at time.Time) 
 		return err
 	}
 	metric.WithLabelValues(m.module, stage, pipeline).Set(float64(at.UTC().Unix()))
-	return nil
-}
-
-func (m *ModuleMetrics) SetBacklog(stage, pipeline string, value float64) error {
-	if err := m.validate(stage, "success", pipeline); err != nil {
-		return err
-	}
-	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
-		return fmt.Errorf("invalid backlog %v", value)
-	}
-	if err := m.claim("backlog", stage, "", pipeline); err != nil {
-		return err
-	}
-	m.backlog.WithLabelValues(m.module, stage, pipeline).Set(value)
 	return nil
 }
 

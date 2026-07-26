@@ -62,11 +62,14 @@ func TestTimeSeriesBucketPrecedesSubjectInPhysicalKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts, ok := decodePhysicalParts(encoded[2:])
-	if !ok || len(parts) != 7 {
+	if !ok || len(parts) != 8 {
 		t.Fatalf("parts=%v ok=%v", parts, ok)
 	}
 	if parts[2] != "2026-07-19T10:00:00.000000000Z" || parts[3] != "subject" {
 		t.Fatalf("physical order=%v", parts)
+	}
+	if parts[6] != "{}" {
+		t.Fatalf("dimensions identity=%q, want empty object", parts[6])
 	}
 }
 

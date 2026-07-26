@@ -24,12 +24,11 @@ const remaining = forbidden.filter((token) => joined.includes(token));
 const requirements = [
   [web.includes('pageSize: 20'), 'frontend default page size 20'],
   [web.includes(':scroll="{ x: 1650 }"'), 'reduced table scroll width'],
-  [(proto.match(/reserved 12;/g) || []).length === 2, 'reserved field number 12 twice'],
-  [(proto.match(/reserved "planned_exec_node";/g) || []).length === 2, 'reserved field name twice'],
+  [!proto.includes('reserved'), 'protobuf reservations removed'],
   [!proto.includes('string planned_exec_node = 12;'), 'removed protobuf field declaration'],
   [
-    schema.includes(
-      'idx_collector_instances_exec ON t_collector_task_instances(c_last_exec_status)',
+    /idx_collector_instances_exec\s+ON\s+t_collector_task_instances\s*\(c_last_exec_status\)/.test(
+      schema,
     ),
     'status-only execution index',
   ],

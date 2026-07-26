@@ -85,13 +85,6 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 
 func TestTopicCoverageAndKVTTL(t *testing.T) {
 	c := repositoryConfig(t)
-	topic, _, err := TopicStream(c, "moox.metrics.host.reported.v1.space.agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if topic.Owner != "hostagent" {
-		t.Fatalf("topic owner = %q, want hostagent", topic.Owner)
-	}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}

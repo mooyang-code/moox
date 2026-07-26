@@ -15,10 +15,6 @@ import (
 
 type FillHandler struct{ Store *store.Store }
 
-func (h FillHandler) Handle(ctx context.Context, space, account, orderID, fillID string, f exchange.FillEvent) error {
-	_, err := h.HandleSource(ctx, space, account, orderID, fillID, f, "consumer")
-	return err
-}
 func (h FillHandler) HandleSource(ctx context.Context, space, account, orderID, fillID string, f exchange.FillEvent, source string) (bool, error) {
 	applied := false
 	err := h.Store.Transaction(ctx, func(tx *store.Tx) error {

@@ -17,8 +17,8 @@ type MetricEvent struct {
 	Evaluation *RuleEvaluation
 }
 
-// WebhookMetricNotifier adapts the existing webhook implementation so metric
-// alerts retain the same timeout, retry and template semantics as check alerts.
+// WebhookMetricNotifier routes metric alerts through the shared webhook
+// delivery implementation.
 type WebhookMetricNotifier struct{ Sender alerting.Notifier }
 
 func (n WebhookMetricNotifier) SendMetric(ctx context.Context, webhook domain.WebhookChannel, event MetricEvent) error {
@@ -33,6 +33,6 @@ func (n WebhookMetricNotifier) SendMetric(ctx context.Context, webhook domain.We
 	if dedupeKey == "" {
 		dedupeKey = fmt.Sprintf("%s:%s:%s", event.Rule.GetSpaceId(), event.Rule.GetRuleId(), event.EventType)
 	}
-	legacy := alerting.Event{EventID: dedupeKey, EventType: event.EventType, Status: event.Evaluation.Status, Message: fmt.Sprintf("metric rule %s %s", event.Rule.GetRuleId(), event.EventType), Check: check, Result: result, DedupeKey: dedupeKey}
-	return sender.Send(ctx, webhook, legacy)
+	alert := alerting.Event{EventID: dedupeKey, EventType: event.EventType, Status: event.Evaluation.Status, Message: fmt.Sprintf("metric rule %s %s", event.Rule.GetRuleId(), event.EventType), Check: check, Result: result, DedupeKey: dedupeKey}
+	return sender.Send(ctx, webhook, alert)
 }

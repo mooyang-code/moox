@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"reflect"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -17,76 +16,12 @@ import (
 type Encoding string
 
 const (
-	JSON        Encoding = "json"
-	ArrowStream Encoding = "arrow_stream"
-	ArrowMMap   Encoding = "arrow_mmap"
+	ArrowMMap Encoding = "arrow_mmap"
 )
 
 type Table struct {
 	Columns []string `json:"columns"`
 	Rows    [][]any  `json:"rows"`
-}
-
-func EncodeJSON(t Table) ([]byte, error) { return json.Marshal(t) }
-func DecodeJSON(b []byte) (Table, error) {
-	var t Table
-	if err := json.Unmarshal(b, &t); err != nil {
-		return Table{}, fmt.Errorf("decode table: %w", err)
-	}
-	return t, nil
-}
-
-// EncodeArrowStream encodes one or more Arrow record batches in IPC stream
-// format. Table is deliberately small and dependency-free at the API boundary;
-// the runtime converts its rows to a typed Arrow schema before writing.
-func EncodeArrowStream(t Table) ([]byte, error) {
-	record, schema, release, err := tableRecord(t)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-	var buf bytes.Buffer
-	w := ipc.NewWriter(&buf, ipc.WithSchema(schema), ipc.WithAllocator(memory.DefaultAllocator))
-	if err := w.Write(record); err != nil {
-		_ = w.Close()
-		return nil, fmt.Errorf("encode arrow stream: %w", err)
-	}
-	if err := w.Close(); err != nil {
-		return nil, fmt.Errorf("close arrow stream: %w", err)
-	}
-	return buf.Bytes(), nil
-}
-
-// DecodeArrowStream decodes Arrow IPC stream bytes into the transport Table
-// representation. Multiple record batches are concatenated in order.
-func DecodeArrowStream(b []byte) (Table, error) {
-	r, err := ipc.NewReader(bytes.NewReader(b), ipc.WithAllocator(memory.DefaultAllocator))
-	if err != nil {
-		return Table{}, fmt.Errorf("open arrow stream: %w", err)
-	}
-	defer r.Release()
-	var out Table
-	for r.Next() {
-		record := r.RecordBatch()
-		if record == nil {
-			continue
-		}
-		part, err := recordTable(record)
-		if err != nil {
-			return Table{}, err
-		}
-		if out.Columns == nil {
-			out.Columns = part.Columns
-		}
-		if !reflect.DeepEqual(out.Columns, part.Columns) {
-			return Table{}, fmt.Errorf("arrow stream schema changed between batches")
-		}
-		out.Rows = append(out.Rows, part.Rows...)
-	}
-	if err := r.Err(); err != nil {
-		return Table{}, fmt.Errorf("read arrow stream: %w", err)
-	}
-	return out, nil
 }
 
 // EncodeArrowFile writes Arrow IPC file bytes. Unlike a stream, the file has a
@@ -111,35 +46,6 @@ func EncodeArrowFile(t Table) ([]byte, error) {
 		return nil, fmt.Errorf("close arrow file: %w", err)
 	}
 	return buf.Bytes(), nil
-}
-
-// DecodeArrowFile decodes an Arrow IPC file from memory. It is useful for
-// tests and small snapshots; large snapshots should use snapshot.Store.Open.
-func DecodeArrowFile(b []byte) (Table, error) {
-	r, err := ipc.NewMappedFileReader(b, ipc.WithAllocator(memory.DefaultAllocator))
-	if err != nil {
-		return Table{}, fmt.Errorf("open arrow file: %w", err)
-	}
-	defer r.Close()
-	var out Table
-	for i := 0; i < r.NumRecords(); i++ {
-		record, err := r.RecordBatchAt(i)
-		if err != nil {
-			return Table{}, fmt.Errorf("read arrow file record %d: %w", i, err)
-		}
-		part, err := recordTable(record)
-		record.Release()
-		if err != nil {
-			return Table{}, err
-		}
-		if out.Columns == nil {
-			out.Columns = part.Columns
-		} else if !reflect.DeepEqual(out.Columns, part.Columns) {
-			return Table{}, fmt.Errorf("arrow file schema changed between batches")
-		}
-		out.Rows = append(out.Rows, part.Rows...)
-	}
-	return out, nil
 }
 
 type columnKind uint8
@@ -409,36 +315,4 @@ func toFloat64(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func recordTable(record arrow.RecordBatch) (Table, error) {
-	columns := make([]string, record.NumCols())
-	for i := range columns {
-		columns[i] = record.ColumnName(i)
-	}
-	rows := make([][]any, record.NumRows())
-	for row := range rows {
-		rows[row] = make([]any, record.NumCols())
-		for col := range columns {
-			values := record.Column(col)
-			if values.IsNull(row) {
-				continue
-			}
-			value := values.GetOneForMarshal(row)
-			if _, isTimestamp := record.Schema().Field(col).Type.(*arrow.TimestampType); isTimestamp {
-				switch ts := value.(type) {
-				case arrow.Timestamp:
-					value = int64(ts)
-				case string:
-					parsed, err := time.Parse(time.RFC3339Nano, ts)
-					if err != nil {
-						return Table{}, fmt.Errorf("decode timestamp column %q: %w", columns[col], err)
-					}
-					value = parsed.UnixMilli()
-				}
-			}
-			rows[row][col] = value
-		}
-	}
-	return Table{Columns: columns, Rows: rows}, nil
 }

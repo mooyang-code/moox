@@ -27,7 +27,7 @@ func NewStorageWriter(access hostStorageAccess, cfg monconfig.HostStorageConfig)
 	return &StorageWriter{access: access, cfg: cfg}
 }
 
-func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricpb.HostSnapshot, agentID string, observedAt time.Time, messageID string) error {
+func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricpb.HostSnapshot, agentID string, observedAt time.Time) error {
 	if w == nil || w.access == nil {
 		return fmt.Errorf("host storage-primary client is nil")
 	}
@@ -39,25 +39,25 @@ func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricp
 		dataset string
 		row     *storagepb.RowFieldUpsert
 	}{
-		{dataset: w.cfg.ResourceDatasetID, row: resourceRow(w.cfg.SpaceID, w.cfg.ResourceDatasetID, w.cfg.Frequency, bucket, snapshot, agentID, messageID)},
+		{dataset: w.cfg.ResourceDatasetID, row: resourceRow(w.cfg.SpaceID, w.cfg.ResourceDatasetID, w.cfg.Frequency, bucket, snapshot, agentID)},
 	}
 	for _, fs := range sortedFilesystems(snapshot.GetFilesystems()) {
 		rows = append(rows, struct {
 			dataset string
 			row     *storagepb.RowFieldUpsert
-		}{w.cfg.FilesystemDatasetID, filesystemRow(w.cfg.SpaceID, w.cfg.FilesystemDatasetID, w.cfg.Frequency, bucket, fs, agentID, messageID)})
+		}{w.cfg.FilesystemDatasetID, filesystemRow(w.cfg.SpaceID, w.cfg.FilesystemDatasetID, w.cfg.Frequency, bucket, fs, agentID)})
 	}
 	for _, disk := range sortedDisks(snapshot.GetDisks()) {
 		rows = append(rows, struct {
 			dataset string
 			row     *storagepb.RowFieldUpsert
-		}{w.cfg.DiskDatasetID, diskRow(w.cfg.SpaceID, w.cfg.DiskDatasetID, w.cfg.Frequency, bucket, disk, agentID, messageID)})
+		}{w.cfg.DiskDatasetID, diskRow(w.cfg.SpaceID, w.cfg.DiskDatasetID, w.cfg.Frequency, bucket, disk, agentID)})
 	}
 	for _, network := range sortedNetworks(snapshot.GetNetworks()) {
 		rows = append(rows, struct {
 			dataset string
 			row     *storagepb.RowFieldUpsert
-		}{w.cfg.NetworkDatasetID, networkRow(w.cfg.SpaceID, w.cfg.NetworkDatasetID, w.cfg.Frequency, bucket, network, agentID, messageID)})
+		}{w.cfg.NetworkDatasetID, networkRow(w.cfg.SpaceID, w.cfg.NetworkDatasetID, w.cfg.Frequency, bucket, network, agentID)})
 	}
 	for _, group := range groupRows(rows) {
 		writeCtx := ctx
@@ -101,17 +101,7 @@ func groupRows(rows []struct {
 }
 
 func baseKey(space, dataset, subject, freq, dataTime string, dimensions map[string]string) *storagepb.RowKey {
-	return &storagepb.RowKey{SpaceId: space, DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Freq: freq, DataTime: dataTime}}}
-}
-func attrs(agentID, messageID string) map[string]*storagepb.TypedValue {
-	return map[string]*storagepb.TypedValue{"agent_id": stringValue(agentID), "message_id": stringValue(messageID)}
-}
-func attrsWithDimensions(agentID, messageID string, dimensions map[string]string) map[string]*storagepb.TypedValue {
-	values := attrs(agentID, messageID)
-	for key, value := range dimensions {
-		values[key] = stringValue(value)
-	}
-	return values
+	return &storagepb.RowKey{SpaceId: space, DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Freq: freq, DataTime: dataTime, Dimensions: dimensions}}}
 }
 func intColumn(name string, value uint64) *storagepb.FieldValue {
 	return &storagepb.FieldValue{FieldId: name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(value)}}}
@@ -126,34 +116,34 @@ func boolColumn(name string, value bool) *storagepb.FieldValue {
 	return &storagepb.FieldValue{FieldId: name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_BoolValue{BoolValue: value}}}
 }
 
-func resourceRow(space, dataset, freq, at string, snapshot *hostmetricpb.HostSnapshot, agentID, messageID string) *storagepb.RowFieldUpsert {
+func resourceRow(space, dataset, freq, at string, snapshot *hostmetricpb.HostSnapshot, agentID string) *storagepb.RowFieldUpsert {
 	cpu, memory := snapshot.GetCpu(), snapshot.GetMemory()
-	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, nil), Attributes: attrs(agentID, messageID), Fields: []*storagepb.FieldValue{
+	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, nil), Fields: []*storagepb.FieldValue{
 		stringColumn("agent_id", agentID), intColumn("logical_cores", uint64(cpu.GetLogicalCores())), doubleColumn("cpu_usage_percent", cpu.GetUsagePercent()), boolColumn("cpu_usage_available", cpu.GetUsageAvailable()), intColumn("memory_total_bytes", memory.GetTotalBytes()), intColumn("memory_used_bytes", memory.GetUsedBytes()), intColumn("memory_available_bytes", memory.GetAvailableBytes()), doubleColumn("memory_usage_percent", memory.GetUsagePercent()),
 	}}
 }
 
-func filesystemRow(space, dataset, freq, at string, fs *hostmetricpb.FilesystemMetric, agentID, messageID string) *storagepb.RowFieldUpsert {
+func filesystemRow(space, dataset, freq, at string, fs *hostmetricpb.FilesystemMetric, agentID string) *storagepb.RowFieldUpsert {
 	dimensions := map[string]string{"device": fs.GetDevice(), "mountpoint": fs.GetMountpoint()}
-	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Attributes: attrsWithDimensions(agentID, messageID, dimensions), Fields: []*storagepb.FieldValue{stringColumn("device", fs.GetDevice()), stringColumn("mountpoint", fs.GetMountpoint()), stringColumn("fs_type", fs.GetFsType()), intColumn("total_bytes", fs.GetTotalBytes()), intColumn("used_bytes", fs.GetUsedBytes()), intColumn("available_bytes", fs.GetAvailableBytes()), doubleColumn("usage_percent", fs.GetUsagePercent()), boolColumn("read_only", fs.GetReadOnly())}}
+	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Fields: []*storagepb.FieldValue{stringColumn("device", fs.GetDevice()), stringColumn("mountpoint", fs.GetMountpoint()), stringColumn("fs_type", fs.GetFsType()), intColumn("total_bytes", fs.GetTotalBytes()), intColumn("used_bytes", fs.GetUsedBytes()), intColumn("available_bytes", fs.GetAvailableBytes()), doubleColumn("usage_percent", fs.GetUsagePercent()), boolColumn("read_only", fs.GetReadOnly())}}
 }
 
-func diskRow(space, dataset, freq, at string, disk *hostmetricpb.DiskMetric, agentID, messageID string) *storagepb.RowFieldUpsert {
+func diskRow(space, dataset, freq, at string, disk *hostmetricpb.DiskMetric, agentID string) *storagepb.RowFieldUpsert {
 	fields := []*storagepb.FieldValue{stringColumn("device", disk.GetDevice()), intColumn("read_bytes_total", disk.GetReadBytesTotal()), intColumn("write_bytes_total", disk.GetWriteBytesTotal()), intColumn("read_ops_total", disk.GetReadOpsTotal()), intColumn("write_ops_total", disk.GetWriteOpsTotal()), intColumn("io_time_ms_total", disk.GetIoTimeMsTotal()), boolColumn("rate_available", disk.GetRateAvailable())}
 	if disk.GetRateAvailable() {
 		fields = append(fields, doubleColumn("read_bytes_per_second", disk.GetReadBytesPerSecond()), doubleColumn("write_bytes_per_second", disk.GetWriteBytesPerSecond()), doubleColumn("read_iops", disk.GetReadIops()), doubleColumn("write_iops", disk.GetWriteIops()), doubleColumn("utilization_percent", disk.GetUtilizationPercent()))
 	}
 	dimensions := map[string]string{"device": disk.GetDevice()}
-	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Attributes: attrsWithDimensions(agentID, messageID, dimensions), Fields: fields}
+	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Fields: fields}
 }
 
-func networkRow(space, dataset, freq, at string, network *hostmetricpb.NetworkMetric, agentID, messageID string) *storagepb.RowFieldUpsert {
+func networkRow(space, dataset, freq, at string, network *hostmetricpb.NetworkMetric, agentID string) *storagepb.RowFieldUpsert {
 	fields := []*storagepb.FieldValue{stringColumn("device", network.GetDevice()), stringColumn("operstate", network.GetOperstate()), intColumn("receive_bytes_total", network.GetReceiveBytesTotal()), intColumn("transmit_bytes_total", network.GetTransmitBytesTotal()), intColumn("receive_errors_total", network.GetReceiveErrorsTotal()), intColumn("transmit_errors_total", network.GetTransmitErrorsTotal()), intColumn("receive_dropped_total", network.GetReceiveDroppedTotal()), intColumn("transmit_dropped_total", network.GetTransmitDroppedTotal()), boolColumn("rate_available", network.GetRateAvailable())}
 	if network.GetRateAvailable() {
 		fields = append(fields, doubleColumn("receive_bytes_per_second", network.GetReceiveBytesPerSecond()), doubleColumn("transmit_bytes_per_second", network.GetTransmitBytesPerSecond()))
 	}
 	dimensions := map[string]string{"device": network.GetDevice()}
-	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Attributes: attrsWithDimensions(agentID, messageID, dimensions), Fields: fields}
+	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Fields: fields}
 }
 
 func stringValue(value string) *storagepb.TypedValue {

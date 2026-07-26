@@ -255,21 +255,21 @@ func TestHasHostColumnsIgnoresInactive(t *testing.T) {
 
 func TestStorageWriterNilAndErrorPaths(t *testing.T) {
 	cfg := monconfig.Default().Metrics.HostStorage
-	require.Error(t, (*StorageWriter)(nil).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now(), "m"))
-	require.Error(t, NewStorageWriter(nil, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now(), "m"))
-	require.Error(t, NewStorageWriter(&writerAccessFake{}, cfg).WriteSnapshot(context.Background(), nil, "a", time.Now(), "m"))
-	require.Error(t, NewStorageWriter(&writerAccessFake{}, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "", time.Now(), "m"))
+	require.Error(t, (*StorageWriter)(nil).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now()))
+	require.Error(t, NewStorageWriter(nil, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "a", time.Now()))
+	require.Error(t, NewStorageWriter(&writerAccessFake{}, cfg).WriteSnapshot(context.Background(), nil, "a", time.Now()))
+	require.Error(t, NewStorageWriter(&writerAccessFake{}, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{}, "", time.Now()))
 
 	failing := &writerAccessFailFake{err: errors.New("write failed")}
 	err := NewStorageWriter(failing, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{
 		Cpu: &hostmetricpb.CpuMetric{}, Memory: &hostmetricpb.MemoryMetric{},
-	}, "agent-1", time.Now().UTC(), "m1")
+	}, "agent-1", time.Now().UTC())
 	require.Error(t, err)
 
 	failing = &writerAccessFailFake{badRet: true}
 	err = NewStorageWriter(failing, cfg).WriteSnapshot(context.Background(), &hostmetricpb.HostSnapshot{
 		Cpu: &hostmetricpb.CpuMetric{}, Memory: &hostmetricpb.MemoryMetric{},
-	}, "agent-1", time.Now().UTC(), "m1")
+	}, "agent-1", time.Now().UTC())
 	require.Error(t, err)
 }
 
@@ -304,7 +304,7 @@ func TestStorageWriterIncludesRateColumnsWhenAvailable(t *testing.T) {
 		}},
 		Filesystems: []*hostmetricpb.FilesystemMetric{{Device: "sda1", Mountpoint: "/", FsType: "ext4"}},
 	}
-	require.NoError(t, writer.WriteSnapshot(context.Background(), snapshot, "agent-1", time.Now().UTC(), "m1"))
+	require.NoError(t, writer.WriteSnapshot(context.Background(), snapshot, "agent-1", time.Now().UTC()))
 	require.Len(t, fake.requests, 4)
 	foundRate := false
 	for _, req := range fake.requests {
@@ -335,9 +335,9 @@ func TestStorageReaderValidationAndMerge(t *testing.T) {
 		readRow(resourceRow(SpaceID, cfg.ResourceDatasetID, "1m", at, &hostmetricpb.HostSnapshot{
 			Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 8, UsagePercent: 11, UsageAvailable: true},
 			Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 40, AvailableBytes: 60, UsagePercent: 40},
-		}, "agent-1", "m1")),
-		readRow(diskRow(SpaceID, cfg.DiskDatasetID, "1m", at, &hostmetricpb.DiskMetric{Device: "sda", ReadBytesTotal: 9, RateAvailable: true}, "agent-1", "m1")),
-		readRow(networkRow(SpaceID, cfg.NetworkDatasetID, "1m", at, &hostmetricpb.NetworkMetric{Device: "eth0", Operstate: "up", ReceiveBytesTotal: 1}, "agent-1", "m1")),
+		}, "agent-1")),
+		readRow(diskRow(SpaceID, cfg.DiskDatasetID, "1m", at, &hostmetricpb.DiskMetric{Device: "sda", ReadBytesTotal: 9, RateAvailable: true}, "agent-1")),
+		readRow(networkRow(SpaceID, cfg.NetworkDatasetID, "1m", at, &hostmetricpb.NetworkMetric{Device: "eth0", Operstate: "up", ReceiveBytesTotal: 1}, "agent-1")),
 	}}
 	points, err := NewStorageReader(fake, cfg).History(context.Background(), "agent-1", time.Now().Add(-time.Hour), time.Now().UTC(), 0)
 	require.NoError(t, err)

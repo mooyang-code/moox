@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -20,22 +21,22 @@ func TestRecordIngestUpdatesBoundedTelemetry(t *testing.T) {
 
 func TestEvaluatePipelineSignalsTruthTable(t *testing.T) {
 	now := time.Unix(1000, 0)
-	base := PipelineSignals{EnabledWorkloads: 1, PreviousInputWatermark: now.Add(-3 * time.Minute), InputWatermark: now.Add(-time.Minute), OutputWatermark: now.Add(-90 * time.Second), LagTolerance: 2 * time.Minute}
+	base := report.PipelineSignals{EnabledWorkloads: 1, PreviousInputWatermark: now.Add(-3 * time.Minute), InputWatermark: now.Add(-time.Minute), OutputWatermark: now.Add(-90 * time.Second), LagTolerance: 2 * time.Minute}
 	cases := []struct {
 		name, want string
-		mutate     func(*PipelineSignals)
+		mutate     func(*report.PipelineSignals)
 	}{
-		{name: "no workload", want: "SKIPPED", mutate: func(s *PipelineSignals) { s.EnabledWorkloads = 0 }},
-		{name: "input idle", want: "PASS", mutate: func(s *PipelineSignals) { s.InputWatermark = s.PreviousInputWatermark }},
-		{name: "output stalled", want: "FAIL", mutate: func(s *PipelineSignals) { s.OutputWatermark = now.Add(-10 * time.Minute) }},
-		{name: "legal empty", want: "PASS", mutate: func(s *PipelineSignals) { s.LegalEmptyOutput = true }},
-		{name: "storage deferred", want: "SKIPPED", mutate: func(s *PipelineSignals) { s.CrossesStorageDeferred = true }},
+		{name: "no workload", want: "SKIPPED", mutate: func(s *report.PipelineSignals) { s.EnabledWorkloads = 0 }},
+		{name: "input idle", want: "PASS", mutate: func(s *report.PipelineSignals) { s.InputWatermark = s.PreviousInputWatermark }},
+		{name: "output stalled", want: "FAIL", mutate: func(s *report.PipelineSignals) { s.OutputWatermark = now.Add(-10 * time.Minute) }},
+		{name: "legal empty", want: "PASS", mutate: func(s *report.PipelineSignals) { s.LegalEmptyOutput = true }},
+		{name: "storage deferred", want: "SKIPPED", mutate: func(s *report.PipelineSignals) { s.CrossesStorageDeferred = true }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			signals := base
 			tc.mutate(&signals)
-			got := EvaluatePipelineSignals(signals, now)
+			got := report.EvaluatePipelineSignals(signals, now)
 			if got.Status != tc.want {
 				t.Fatalf("verdict = %+v, want %s", got, tc.want)
 			}

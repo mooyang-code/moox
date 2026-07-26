@@ -23,7 +23,7 @@ func (w *snapshotWriter) WriteSnapshot(context.Context, *hostmetricpb.HostSnapsh
 
 func TestHandlePersistsValidMetricBeforeAck(t *testing.T) {
 	writer := &snapshotWriter{}
-	store := hostmetrics.NewStoreWithWriter(writer)
+	store := hostmetrics.NewStore(writer, nil)
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	agentID := "0190f4d0-7b1c-4f45-9a3e-7c28f6479a73"

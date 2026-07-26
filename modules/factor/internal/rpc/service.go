@@ -68,11 +68,6 @@ type Service struct {
 	recalc     map[string]*recalcState
 }
 
-// New creates a FactorMgr service.
-func New(persistence *store.Store) *Service {
-	return NewWithRuntime(persistence, nil, nil)
-}
-
 // NewWithRuntime creates a FactorMgr service with optional runtime status providers.
 func NewWithRuntime(persistence *store.Store, sched schedulerRuntime, eng engineStatusProvider, opts ...Option) *Service {
 	s := &Service{

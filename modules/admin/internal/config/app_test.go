@@ -72,10 +72,3 @@ func TestAppConfig_applyEnv_DBPath_ShouldOverridePath(t *testing.T) {
 	cfg.applyEnv()
 	assert.Equal(t, filepath.Join(dir, "env.db"), cfg.Database.Path)
 }
-
-func TestAppConfig_GlobalConfig_ShouldRoundTrip(t *testing.T) {
-	cfg := DefaultConfig()
-	SetGlobalConfig(cfg)
-	got := GetGlobalConfig()
-	assert.Equal(t, cfg, got)
-}

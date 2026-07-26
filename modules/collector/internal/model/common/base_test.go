@@ -16,11 +16,6 @@ func TestNewDecimal_StringAndFloat(t *testing.T) {
 	assert.InDelta(t, 1.25, f, 1e-9)
 }
 
-func TestNewDecimalFromFloat_ShouldFormat(t *testing.T) {
-	d := NewDecimalFromFloat(1.5)
-	assert.Equal(t, "1.50000000", d.String())
-}
-
 func TestDecimal_MarshalUnmarshalJSON(t *testing.T) {
 	d := NewDecimal("3.14")
 	raw, err := json.Marshal(d)
@@ -35,20 +30,9 @@ func TestDecimal_MarshalUnmarshalJSON(t *testing.T) {
 	assert.Equal(t, "2.50000000", fromNumber.String())
 }
 
-func TestZero_ShouldBeZeroString(t *testing.T) {
-	assert.Equal(t, "0", Zero().String())
-}
-
 func TestNewBaseDataPoint_ShouldPopulateFields(t *testing.T) {
 	dp := NewBaseDataPoint("binance", "kline")
-	assert.Equal(t, "binance", dp.Source())
-	assert.Equal(t, "kline", dp.SourceType())
-	assert.False(t, dp.Timestamp().IsZero())
-	assert.NoError(t, dp.Validate())
-
-	raw, err := dp.Marshal()
-	require.NoError(t, err)
-	var restored BaseDataPoint
-	require.NoError(t, restored.Unmarshal(raw))
-	assert.Equal(t, dp.DataSource, restored.DataSource)
+	assert.Equal(t, "binance", dp.DataSource)
+	assert.Equal(t, "kline", dp.DataType)
+	assert.False(t, dp.CreatedAt.IsZero())
 }

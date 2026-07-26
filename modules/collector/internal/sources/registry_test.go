@@ -55,13 +55,7 @@ func TestCollectorRegistry_GetDataTypes_ShouldDeduplicate(t *testing.T) {
 	assert.ElementsMatch(t, []string{"kline", "symbol"}, types)
 }
 
-func TestCollectorRegistry_ListAndGetRegistry(t *testing.T) {
-	r := &CollectorRegistry{collectors: make(map[string]*CollectorDescriptor)}
-	require.NoError(t, r.Register(&CollectorDescriptor{Source: "binance", Market: "spot", DataType: "kline", Collector: &fakeCollector{}}))
-	require.NoError(t, r.Register(&CollectorDescriptor{Source: "binance", Market: "swap", DataType: "kline", Collector: &fakeCollector{}}))
-	assert.Len(t, r.List(), 2)
-	assert.Len(t, r.ListBySource("binance"), 2)
-	assert.Len(t, r.ListBySource("okx"), 0)
+func TestCollectorRegistry_GetRegistry(t *testing.T) {
 	assert.NotNil(t, GetRegistry())
 }
 
@@ -78,7 +72,7 @@ func TestCollectorBuilder_Register_ShouldDefaultMarketToSpot(t *testing.T) {
 		Register()
 	require.NoError(t, err)
 
-	desc, err := r.GetDescriptor("builder", "", "symbol")
+	collector, err := r.Get("builder", "", "symbol")
 	require.NoError(t, err)
-	assert.Equal(t, "spot", desc.Market)
+	assert.Equal(t, "builder", collector.Source())
 }

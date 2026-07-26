@@ -37,7 +37,7 @@ func TestHandler_ReadinessEndpoint_Ready_ShouldReturn200(t *testing.T) {
 
 func TestHandler_MetricsEndpoint_ShouldExposePrometheusMetrics(t *testing.T) {
 	state := New("storage", "test", "dev", "local")
-	observability.DefaultViewMetrics.SetOutboxSnapshot(2, 3*time.Second)
+	observability.DefaultViewMetrics.SetOutboxSnapshotAt(2, time.Now().Add(-3*time.Second))
 	rec := httptest.NewRecorder()
 	Handler(state).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	require.Equal(t, 200, rec.Code)
@@ -65,11 +65,11 @@ func TestSnapshotForRole_NodeRejectsOldOutbox(t *testing.T) {
 	state.SetReady(true)
 	state.SnapshotFunc = SnapshotForRole("storage-node", metrics)
 
-	metrics.SetOutboxSnapshot(1, 6*time.Minute)
+	metrics.SetOutboxSnapshotAt(1, time.Now().Add(-6*time.Minute))
 	rsp := state.Snapshot(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Equal(t, false, rsp.Details["outbox_draining"])
-	metrics.SetOutboxSnapshot(0, 0)
+	metrics.SetOutboxSnapshotAt(0, time.Time{})
 	assert.True(t, state.Snapshot(context.Background()).Ready)
 }
 
@@ -78,6 +78,6 @@ func TestSnapshotForRoleWithOptionsUsesConfiguredThreshold(t *testing.T) {
 	require.NoError(t, err)
 	state := New("storage", InstanceStorageNode, "", "")
 	state.SnapshotFunc = SnapshotForRoleWithOptions(InstanceStorageNode, metrics, RoleOptions{OldestPendingThreshold: time.Second})
-	metrics.SetOutboxSnapshot(1, 2*time.Second)
+	metrics.SetOutboxSnapshotAt(1, time.Now().Add(-2*time.Second))
 	assert.False(t, state.Snapshot(context.Background()).Ready)
 }

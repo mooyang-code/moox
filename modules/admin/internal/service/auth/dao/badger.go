@@ -14,20 +14,6 @@ type CacheDB struct {
 	db *badger.DB
 }
 
-// NewCacheDB 创建BadgerDB实例
-func NewCacheDB(dataDir string) (*CacheDB, error) {
-	opts := badger.DefaultOptions(dataDir).
-		WithLogger(nil). // 禁用默认日志，使用trpc日志
-		WithLoggingLevel(badger.WARNING)
-
-	db, err := badger.Open(opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open badger db: %w", err)
-	}
-
-	return &CacheDB{db: db}, nil
-}
-
 // NewCacheDBFromBadger 从现有 BadgerDB 实例创建 CacheDB（用于与 database.Manager 集成）
 func NewCacheDBFromBadger(db *badger.DB) (*CacheDB, error) {
 	if db == nil {

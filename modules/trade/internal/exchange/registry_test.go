@@ -88,13 +88,6 @@ func TestRegistry_New_UnknownExchange_ShouldReturnError(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown exchange")
 }
 
-func TestRegistry_Names_ShouldReturnSortedNames(t *testing.T) {
-	names := Names()
-	for i := 1; i < len(names); i++ {
-		assert.LessOrEqual(t, names[i-1], names[i])
-	}
-}
-
 func TestClassifiedError_IsCategory_ShouldMatchCategory(t *testing.T) {
 	err := &ClassifiedError{Category: ErrorTransportUncertain, Err: errors.New("timeout")}
 	assert.True(t, IsCategory(err, ErrorTransportUncertain))

@@ -60,7 +60,7 @@ func TestHealthzResponseIncludesStableFields(t *testing.T) {
 }
 
 func TestHealthzHandlerReturns200WhenReady(t *testing.T) {
-	handler := Handler(func(context.Context) Response {
+	handler := ReadinessHandler(func(context.Context) Response {
 		return Response{Module: "admin", Ready: true, Status: "ok"}
 	})
 
@@ -76,7 +76,7 @@ func TestHealthzHandlerReturns200WhenReady(t *testing.T) {
 }
 
 func TestHealthzHandlerReturns503WhenNotReady(t *testing.T) {
-	handler := Handler(func(context.Context) Response {
+	handler := ReadinessHandler(func(context.Context) Response {
 		return Response{Module: "storage", Ready: false}
 	})
 
@@ -183,7 +183,7 @@ func TestMuxDispatchesExactAndPrefixRoutes(t *testing.T) {
 }
 
 func TestHealthzHandlerPreservesDetails(t *testing.T) {
-	handler := Handler(func(context.Context) Response {
+	handler := ReadinessHandler(func(context.Context) Response {
 		return Response{
 			Module: "monitor",
 			Ready:  true,

@@ -29,7 +29,7 @@ func Open(path string) (*Store, error) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
-	return &Store{db: db}, nil
+	return New(db), nil
 }
 
 // Ping verifies that the database is available.

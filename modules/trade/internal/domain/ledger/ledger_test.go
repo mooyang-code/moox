@@ -6,8 +6,12 @@ import (
 )
 
 func TestBalancedTransfer(t *testing.T) {
-	tx, err := Transfer("tx", "freeze", "order", "o", "USDT", "a", "available", "a", "frozen", shared.MustDecimal("5"))
-	if err != nil || len(tx.Entries) != 2 {
+	amount := shared.MustDecimal("5")
+	tx := Transaction{ID: "tx", BizType: "freeze", RefType: "order", RefID: "o", Entries: []Entry{
+		{AccountID: "a", Asset: "USDT", Bucket: "available", Amount: amount.Neg()},
+		{AccountID: "a", Asset: "USDT", Bucket: "frozen", Amount: amount},
+	}}
+	if err := tx.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	tx.Entries[1].Amount = shared.MustDecimal("4")

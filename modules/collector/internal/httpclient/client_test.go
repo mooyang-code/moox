@@ -154,30 +154,13 @@ func TestGetNextAvailableIP_WithExcludeList_ShouldSkipExcluded(t *testing.T) {
 	assert.Equal(t, "2.2.2.2", GetNextAvailableIP("api.binance.com", []string{"1.1.1.1"}))
 }
 
-func TestGetAvailableIPs_ShouldReturnOnlyAvailable(t *testing.T) {
-	Init()
-	now := time.Now()
-	updateDNSRecords([]*DNSRecord{{
-		Domain:    "api.binance.com",
-		ResolveAt: now,
-		IPList:    []*IPInfo{{IP: "1.1.1.1", Available: true}, {IP: "2.2.2.2", Available: false}},
-		Success:   true,
-	}})
-	assert.Equal(t, []string{"1.1.1.1"}, GetAvailableIPs("api.binance.com"))
-}
-
-func TestGetDNSRecord_MissingDomain_ShouldReturnNil(t *testing.T) {
-	Init()
-	assert.Nil(t, GetDNSRecord("missing.example"))
-}
-
 func TestGetAllDNSRecords_ShouldReturnCopy(t *testing.T) {
 	Init()
 	updateDNSRecords([]*DNSRecord{{Domain: "api.binance.com", IPList: []*IPInfo{{IP: "1.1.1.1", Available: true}}}})
 	all := GetAllDNSRecords()
 	require.Contains(t, all, "api.binance.com")
 	all["api.binance.com"] = nil
-	assert.NotNil(t, GetDNSRecord("api.binance.com"))
+	assert.NotNil(t, GetAllDNSRecords()["api.binance.com"])
 }
 
 func TestProbeTCP_Localhost_ShouldSucceed(t *testing.T) {

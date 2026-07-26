@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 )
@@ -46,23 +45,4 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 		}
 	}
 	return nil
-}
-
-func (r *Relay) Run(ctx context.Context, interval time.Duration, batchSize int) error {
-	if interval <= 0 {
-		return errors.New("strategy outbox relay interval must be positive")
-	}
-	if batchSize <= 0 {
-		return errors.New("strategy outbox relay batch size must be positive")
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		_ = r.PublishPending(ctx, batchSize)
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-		}
-	}
 }

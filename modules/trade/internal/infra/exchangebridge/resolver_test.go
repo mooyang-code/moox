@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	legacy "github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,77 +80,77 @@ func (s stubStore) ListSyncCursors(context.Context, string, string, service.Sync
 type stubExchangeAdapter struct{}
 
 func (stubExchangeAdapter) Name() string { return "stub" }
-func (stubExchangeAdapter) Ping(context.Context, legacy.Credential) (int64, error) {
+func (stubExchangeAdapter) Ping(context.Context, exchange.Credential) (int64, error) {
 	return 0, nil
 }
-func (stubExchangeAdapter) GetInstruments(context.Context, legacy.MarketType) ([]legacy.Instrument, error) {
-	return []legacy.Instrument{{
+func (stubExchangeAdapter) GetInstruments(context.Context, exchange.MarketType) ([]exchange.Instrument, error) {
+	return []exchange.Instrument{{
 		Symbol: "BTC-USDT", BaseCcy: "BTC", QuoteCcy: "USDT",
 		TickSize: "0.01", LotSize: "0.001", MinQty: "0.001", MinNotional: "5", LastPrice: "10",
 	}}, nil
 }
-func (stubExchangeAdapter) GetAccountInfo(context.Context, legacy.Credential, legacy.MarketType) (*legacy.AccountInfo, error) {
+func (stubExchangeAdapter) GetAccountInfo(context.Context, exchange.Credential, exchange.MarketType) (*exchange.AccountInfo, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) GetBalances(context.Context, legacy.Credential, legacy.MarketType, []string) ([]legacy.Balance, error) {
+func (stubExchangeAdapter) GetBalances(context.Context, exchange.Credential, exchange.MarketType, []string) ([]exchange.Balance, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) GetTradeFee(context.Context, legacy.Credential, legacy.MarketType, string) (*legacy.FeeRate, error) {
+func (stubExchangeAdapter) GetTradeFee(context.Context, exchange.Credential, exchange.MarketType, string) (*exchange.FeeRate, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) ListFundFlows(context.Context, legacy.Credential, *legacy.FundFlowQuery) ([]legacy.FundFlow, error) {
+func (stubExchangeAdapter) ListFundFlows(context.Context, exchange.Credential, *exchange.FundFlowQuery) ([]exchange.FundFlow, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) Transfer(context.Context, legacy.Credential, *legacy.TransferReq) (*legacy.TransferResult, error) {
+func (stubExchangeAdapter) Transfer(context.Context, exchange.Credential, *exchange.TransferReq) (*exchange.TransferResult, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) ListConvertibleDustAssets(context.Context, legacy.Credential, *legacy.DustConvertibleReq) ([]legacy.DustConvertibleAsset, error) {
+func (stubExchangeAdapter) ListConvertibleDustAssets(context.Context, exchange.Credential, *exchange.DustConvertibleReq) ([]exchange.DustConvertibleAsset, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) ConvertDust(context.Context, legacy.Credential, *legacy.DustTransferReq) (*legacy.DustTransferResult, error) {
+func (stubExchangeAdapter) ConvertDust(context.Context, exchange.Credential, *exchange.DustTransferReq) (*exchange.DustTransferResult, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) PlaceOrder(context.Context, legacy.Credential, *legacy.PlaceOrderReq) (*legacy.OrderResult, error) {
-	return &legacy.OrderResult{OrderID: "client-1", ClientOrderID: "client-1", ExchangeOrderID: "ex-1", Status: legacy.StatusSubmitted}, nil
+func (stubExchangeAdapter) PlaceOrder(context.Context, exchange.Credential, *exchange.PlaceOrderReq) (*exchange.OrderResult, error) {
+	return &exchange.OrderResult{OrderID: "client-1", ClientOrderID: "client-1", ExchangeOrderID: "ex-1", Status: exchange.StatusSubmitted}, nil
 }
-func (stubExchangeAdapter) CancelOrder(context.Context, legacy.Credential, *legacy.CancelOrderReq) (*legacy.OrderResult, error) {
-	return &legacy.OrderResult{OrderID: "client-1", ClientOrderID: "client-1", ExchangeOrderID: "ex-1", Status: legacy.StatusCanceled}, nil
+func (stubExchangeAdapter) CancelOrder(context.Context, exchange.Credential, *exchange.CancelOrderReq) (*exchange.OrderResult, error) {
+	return &exchange.OrderResult{OrderID: "client-1", ClientOrderID: "client-1", ExchangeOrderID: "ex-1", Status: exchange.StatusCanceled}, nil
 }
-func (stubExchangeAdapter) CancelAllOrders(context.Context, legacy.Credential, legacy.MarketType, string) (int, error) {
+func (stubExchangeAdapter) CancelAllOrders(context.Context, exchange.Credential, exchange.MarketType, string) (int, error) {
 	return 0, nil
 }
-func (stubExchangeAdapter) AmendOrder(context.Context, legacy.Credential, *legacy.AmendOrderReq) (*legacy.OrderResult, error) {
+func (stubExchangeAdapter) AmendOrder(context.Context, exchange.Credential, *exchange.AmendOrderReq) (*exchange.OrderResult, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) SetLeverage(context.Context, legacy.Credential, legacy.MarketType, string, string) error {
+func (stubExchangeAdapter) SetLeverage(context.Context, exchange.Credential, exchange.MarketType, string, string) error {
 	return nil
 }
-func (stubExchangeAdapter) ClosePosition(context.Context, legacy.Credential, legacy.MarketType, string, string) error {
+func (stubExchangeAdapter) ClosePosition(context.Context, exchange.Credential, exchange.MarketType, string, string) error {
 	return nil
 }
-func (stubExchangeAdapter) GetOrder(context.Context, legacy.Credential, *legacy.GetOrderReq) (*legacy.Order, error) {
-	return &legacy.Order{ClientOrderID: "client-1", ExchangeOrderID: "ex-1", Status: legacy.StatusPartiallyFilled, FilledQty: "0.4"}, nil
+func (stubExchangeAdapter) GetOrder(context.Context, exchange.Credential, *exchange.GetOrderReq) (*exchange.Order, error) {
+	return &exchange.Order{ClientOrderID: "client-1", ExchangeOrderID: "ex-1", Status: exchange.StatusPartiallyFilled, FilledQty: "0.4"}, nil
 }
-func (stubExchangeAdapter) ListOpenOrders(context.Context, legacy.Credential, *legacy.ListOrdersReq) ([]legacy.Order, error) {
+func (stubExchangeAdapter) ListOpenOrders(context.Context, exchange.Credential, *exchange.ListOrdersReq) ([]exchange.Order, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) ListOrders(context.Context, legacy.Credential, *legacy.ListOrdersReq) ([]legacy.Order, error) {
+func (stubExchangeAdapter) ListOrders(context.Context, exchange.Credential, *exchange.ListOrdersReq) ([]exchange.Order, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) ListTrades(context.Context, legacy.Credential, *legacy.ListTradesReq) ([]legacy.Trade, error) {
-	return []legacy.Trade{{
+func (stubExchangeAdapter) ListTrades(context.Context, exchange.Credential, *exchange.ListTradesReq) ([]exchange.Trade, error) {
+	return []exchange.Trade{{
 		TradeID: "trade-1", ExchangeTradeID: "trade-1", OrderID: "ex-1",
-		ClientOrderID: "client-1", Symbol: "BTC-USDT", Side: legacy.SideBuy,
+		ClientOrderID: "client-1", Symbol: "BTC-USDT", Side: exchange.SideBuy,
 		Price: "100", Quantity: "0.4", Fee: "0.01", FeeCurrency: "USDT",
 	}}, nil
 }
-func (stubExchangeAdapter) ListPositions(context.Context, legacy.Credential, legacy.MarketType, string) ([]legacy.Position, error) {
+func (stubExchangeAdapter) ListPositions(context.Context, exchange.Credential, exchange.MarketType, string) ([]exchange.Position, error) {
 	return nil, nil
 }
-func (stubExchangeAdapter) SubscribePrivate(_ context.Context, _ legacy.Credential, _ legacy.MarketType, handler legacy.StreamHandler) error {
-	handler.OnTrade(&legacy.TradeEvent{Trade: legacy.Trade{
+func (stubExchangeAdapter) SubscribePrivate(_ context.Context, _ exchange.Credential, _ exchange.MarketType, handler exchange.StreamHandler) error {
+	handler.OnTrade(&exchange.TradeEvent{Trade: exchange.Trade{
 		TradeID: "trade-1", ExchangeTradeID: "trade-1", OrderID: "ex-1",
-		ClientOrderID: "client-1", Symbol: "BTC-USDT", Side: legacy.SideSell,
+		ClientOrderID: "client-1", Symbol: "BTC-USDT", Side: exchange.SideSell,
 		Price: "101", Quantity: "0.2", Fee: "0.02", FeeCurrency: "USDT",
 	}})
 	return nil
@@ -159,9 +159,9 @@ func (stubExchangeAdapter) SubscribePrivate(_ context.Context, _ legacy.Credenti
 func TestPrivateHandler_NoOpCallbacks_ShouldNotPanic(t *testing.T) {
 	h := &privateHandler{}
 	assert.NotPanics(t, func() {
-		h.OnOrderUpdate(&legacy.OrderEvent{})
-		h.OnPositionUpdate(&legacy.PositionEvent{})
-		h.OnBalanceUpdate(&legacy.BalanceEvent{})
+		h.OnOrderUpdate(&exchange.OrderEvent{})
+		h.OnPositionUpdate(&exchange.PositionEvent{})
+		h.OnBalanceUpdate(&exchange.BalanceEvent{})
 		h.OnError(errors.New("stream"))
 	})
 }
@@ -191,7 +191,7 @@ func TestResolver_Resolve_ValidChannel_ShouldReturnBoundAdapter(t *testing.T) {
 				APISecret: "sk",
 			},
 		},
-		Factory: func(name string) (legacy.ExchangeAdapter, error) {
+		Factory: func(name string) (exchange.ExchangeAdapter, error) {
 			assert.Equal(t, "stub-exchange", name)
 			return stubExchangeAdapter{}, nil
 		},
@@ -208,21 +208,21 @@ func TestResolver_Resolve_ValidChannel_ShouldReturnBoundAdapter(t *testing.T) {
 }
 
 func TestStatus_KnownStatuses_ShouldMapToTradeStatus(t *testing.T) {
-	assert.Equal(t, "FILLED", status(legacy.StatusFilled))
-	assert.Equal(t, "CANCELED", status(legacy.StatusCanceled))
-	assert.Equal(t, "OPEN", status(legacy.StatusSubmitted))
+	assert.Equal(t, "FILLED", status(exchange.StatusFilled))
+	assert.Equal(t, "CANCELED", status(exchange.StatusCanceled))
+	assert.Equal(t, "OPEN", status(exchange.StatusSubmitted))
 }
 
 func TestClassify_TimeoutError_ShouldMarkTransportUncertain(t *testing.T) {
 	err := classify(errors.New("request timeout"))
 	require.Error(t, err)
-	assert.True(t, legacy.IsCategory(err, legacy.ErrorTransportUncertain))
+	assert.True(t, exchange.IsCategory(err, exchange.ErrorTransportUncertain))
 }
 
 func TestBound_OrderMethods_ShouldMapLegacyAdapterResults(t *testing.T) {
-	b := &bound{adapter: stubExchangeAdapter{}, credential: legacy.Credential{APIKey: "ak"}, market: legacy.MarketSpot}
+	b := &bound{adapter: stubExchangeAdapter{}, credential: exchange.Credential{APIKey: "ak"}, market: exchange.MarketSpot}
 
-	placed, err := b.Place(context.Background(), legacy.PlaceRequest{
+	placed, err := b.Place(context.Background(), exchange.PlaceRequest{
 		ClientOrderID: "client-1", Symbol: "BTC-USDT", Side: "BUY", Type: "LIMIT",
 		Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("100"),
 	})
@@ -241,7 +241,7 @@ func TestBound_OrderMethods_ShouldMapLegacyAdapterResults(t *testing.T) {
 }
 
 func TestBound_RulesAndListFills_ShouldAttachInstrumentAssets(t *testing.T) {
-	b := &bound{adapter: stubExchangeAdapter{}, market: legacy.MarketSpot}
+	b := &bound{adapter: stubExchangeAdapter{}, market: exchange.MarketSpot}
 
 	rules, err := b.Rules(context.Background(), "BTC-USDT")
 	require.NoError(t, err)
@@ -257,10 +257,10 @@ func TestBound_RulesAndListFills_ShouldAttachInstrumentAssets(t *testing.T) {
 }
 
 func TestBound_SubscribePrivate_ShouldForwardTradeEvents(t *testing.T) {
-	b := &bound{adapter: stubExchangeAdapter{}, market: legacy.MarketSpot}
-	var got legacy.FillEvent
+	b := &bound{adapter: stubExchangeAdapter{}, market: exchange.MarketSpot}
+	var got exchange.FillEvent
 
-	err := b.SubscribePrivate(context.Background(), func(_ context.Context, event legacy.FillEvent) error {
+	err := b.SubscribePrivate(context.Background(), func(_ context.Context, event exchange.FillEvent) error {
 		got = event
 		return nil
 	})

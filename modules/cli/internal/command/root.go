@@ -42,14 +42,6 @@ var rootCmd = &cobra.Command{
 	},
 }
 
-// GetVersionInfo 返回格式化的版本信息
-func GetVersionInfo() string {
-	if Version == "" {
-		Version = "dev"
-	}
-	return fmt.Sprintf("moox CLI %s", Version)
-}
-
 // GetFullVersionInfo 返回完整的版本信息
 func GetFullVersionInfo() string {
 	if Version == "" {

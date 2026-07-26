@@ -645,17 +645,16 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 		return nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_is_unique, c_aliases_json, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_aliases_json, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_dataset_id, c_column_name) DO UPDATE SET
 			c_origin_type = excluded.c_origin_type,
 			c_origin_id = excluded.c_origin_id,
 			c_value_type = excluded.c_value_type,
-			c_is_unique = excluded.c_is_unique,
 			c_aliases_json = excluded.c_aliases_json,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json
-	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), datasetOriginSQL(item.GetOriginType()), item.GetOriginId(), valueTypeSQL(item.GetValueType()), boolInt(item.GetIsUnique()), aliases, item.GetStatus(), raw)
+	`, item.GetSpaceId(), item.GetDatasetId(), item.GetColumnName(), datasetOriginSQL(item.GetOriginType()), item.GetOriginId(), valueTypeSQL(item.GetValueType()), aliases, item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
 	}

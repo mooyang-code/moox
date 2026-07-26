@@ -14,7 +14,10 @@ while IFS= read -r module_path; do
   }
 done < <(awk '/^use \(/ {on=1; next} on && /^\)/ {exit} on {gsub(/^[[:space:]]*\.\//, ""); if (length) print}' go.work)
 
-[[ "${workspace_count}" -gt 0 ]]
+[[ "${workspace_count}" -eq 45 ]] || {
+  echo "unexpected go.work module count: ${workspace_count}" >&2
+  exit 1
+}
 
 grep -Fq '分布在 `modules/`、`packages/` 和仓库根级运行模块中' docs/架构总览.md
 ! grep -Fq 'internal/services/' docs/架构总览.md

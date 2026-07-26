@@ -92,7 +92,7 @@ async function openDatasetPage(page: Page, fixture: BrowserFixture) {
   const spacesResponse = waitForMethod(page, "ListSpaces", "space");
   const nodesResponse = waitForMethod(page, "ListDataNodes");
   const datasetsResponse = waitForMethod(page, "ListDatasets");
-  await page.goto(`/#/data/datasets?space_id=${encodeURIComponent(fixture.space_id)}`);
+  await page.goto(`/#/collector/data-management?tab=datasets&space_id=${encodeURIComponent(fixture.space_id)}`);
   const [spaces, nodes, datasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
   await expect(page.getByRole("heading", { name: "数据集" })).toBeVisible();
   await expect(page.getByText("数据集ID", { exact: true })).toBeVisible();

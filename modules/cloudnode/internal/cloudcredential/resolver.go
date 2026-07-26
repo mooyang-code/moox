@@ -33,10 +33,6 @@ func NewFromEnv() (*Resolver, error) {
 	}}, nil
 }
 
-func NewForTest(reveal func(context.Context, *adminpb.RevealSecretReq) (*adminpb.RevealSecretRsp, error)) *Resolver {
-	return &Resolver{reveal: reveal}
-}
-
 func (r *Resolver) Resolve(ctx context.Context, account store.CloudAccount) (TencentCredential, error) {
 	if r == nil || r.reveal == nil {
 		return TencentCredential{}, fmt.Errorf("cloud credential resolver is not configured")

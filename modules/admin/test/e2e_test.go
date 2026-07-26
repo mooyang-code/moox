@@ -19,7 +19,11 @@ func TestAdminGatewayControlPlaneContract(t *testing.T) {
 	if err := manager.Initialize(&adminconfig.DatabaseConfig{Path: filepath.Join(t.TempDir(), "admin.db")}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = manager.Close() })
+	sqlDB, err := manager.GetDB().DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := manager.GetDB().Exec(adminschema.AdminSQL()).Error; err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}

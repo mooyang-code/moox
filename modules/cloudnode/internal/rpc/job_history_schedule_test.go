@@ -12,6 +12,21 @@ type fakeHistoryMaintainer struct {
 	err    error
 }
 
+func setDefaultJobHistoryMaintainerForTest(maintainer jobHistoryMaintainer, now func() time.Time) func() {
+	defaultJobHistoryMaintenance.Lock()
+	oldMaintainer := defaultJobHistoryMaintenance.maintainer
+	oldNow := defaultJobHistoryMaintenance.now
+	defaultJobHistoryMaintenance.maintainer = maintainer
+	defaultJobHistoryMaintenance.now = now
+	defaultJobHistoryMaintenance.Unlock()
+	return func() {
+		defaultJobHistoryMaintenance.Lock()
+		defaultJobHistoryMaintenance.maintainer = oldMaintainer
+		defaultJobHistoryMaintenance.now = oldNow
+		defaultJobHistoryMaintenance.Unlock()
+	}
+}
+
 func (f *fakeHistoryMaintainer) MaintainDaily(_ context.Context, now time.Time) error {
 	f.called = true
 	f.now = now

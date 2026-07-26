@@ -12,7 +12,7 @@ import (
 
 func TestEncodeParseHistogramSummary(t *testing.T) {
 	raw := []byte("# TYPE request_duration_seconds histogram\nrequest_duration_seconds_bucket{method=\"GET\",le=\"0.5\"} 2\nrequest_duration_seconds_bucket{method=\"GET\",le=\"+Inf\"} 3\nrequest_duration_seconds_sum{method=\"GET\"} 1.2\nrequest_duration_seconds_count{method=\"GET\"} 3\n# TYPE request_size summary\nrequest_size{quantile=\"0.5\"} 10\nrequest_size_sum 20\nrequest_size_count 2\n")
-	snapshot, err := EncodeSnapshot(raw, 30*time.Second, gzip.BestSpeed, Limits{})
+	snapshot, err := testSnapshot(raw, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestDecodeSnapshotNoneUsesUncompressedLimit(t *testing.T) {
 }
 
 func TestParseSnapshotRejectsDeclaredFamilyCountMismatch(t *testing.T) {
-	snapshot, err := EncodeSnapshot([]byte("# TYPE x gauge\nx 1\n"), time.Second, gzip.BestSpeed, Limits{})
+	snapshot, err := testSnapshot([]byte("# TYPE x gauge\nx 1\n"), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +62,29 @@ func TestParseSnapshotRejectsDeclaredFamilyCountMismatch(t *testing.T) {
 	if _, err := ParseSnapshot(snapshot, Envelope{ServiceName: "svc", InstanceID: "i"}, Limits{}); err == nil {
 		t.Fatal("ParseSnapshot() error = nil, want family count mismatch")
 	}
+}
+
+func testSnapshot(raw []byte, interval time.Duration) (*metricspb.MetricSnapshot, error) {
+	var compressed bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = zw.Write(raw); err != nil {
+		return nil, err
+	}
+	if err = zw.Close(); err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(raw)
+	return &metricspb.MetricSnapshot{
+		SchemaVersion:             1,
+		CollectionIntervalSeconds: uint32(interval / time.Second),
+		Format:                    metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT,
+		Compression:               metricspb.Compression_COMPRESSION_GZIP,
+		Data:                      compressed.Bytes(),
+		UncompressedSha256:        sum[:],
+	}, nil
 }
 
 func TestSeriesIDLengthPrefixes(t *testing.T) {

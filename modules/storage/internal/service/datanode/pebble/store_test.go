@@ -127,6 +127,43 @@ func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.
 	}
 }
 
+func TestHostMetricDimensionsKeepSameTimestampEntitiesDistinct(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	key := func(device string) *pb.RowKey {
+		return &pb.RowKey{
+			SpaceId:   "moox_system",
+			DatasetId: "monitor_host_disk",
+			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: "agent-1",
+				Freq:      "1m",
+				DataTime:  "2026-07-26T01:02:00Z",
+				Dimensions: map[string]string{
+					"device": device,
+				},
+			}},
+		}
+	}
+	rows := []*pb.RowFieldUpsert{
+		{Key: key("disk0"), Fields: []*pb.FieldValue{{FieldId: "device", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "disk0"}}}}},
+		{Key: key("disk1"), Fields: []*pb.FieldValue{{FieldId: "device", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "disk1"}}}}},
+	}
+	if err := store.UpsertFields(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.ReadFields(context.Background(), []*pb.RowKey{key("disk0"), key("disk1")}, []string{"device"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].GetFields()[0].GetValue().GetStringValue() != "disk0" || got[1].GetFields()[0].GetValue().GetStringValue() != "disk1" {
+		t.Fatalf("dimensioned rows collided: %v", got)
+	}
+}
+
 func TestReadFieldsReportsPhysicalRowPresenceWithoutRequestedField(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
 	if err != nil {

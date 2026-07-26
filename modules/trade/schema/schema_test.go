@@ -35,18 +35,6 @@ func TestAllSQLIncludesTradeSyncCursorSchema(t *testing.T) {
 	}
 }
 
-func TestAccountSQLAndOrderSQL_ShouldReturnEmbeddedDDL(t *testing.T) {
-	account := AccountSQL()
-	order := OrderSQL()
-	assert.Contains(t, account, "CREATE TABLE")
-	assert.Contains(t, order, "CREATE TABLE")
-	assert.Contains(t, account, "t_accounts")
-	assert.Contains(t, order, "t_trade_channels")
-	assert.NotContains(t, order, "CREATE TABLE IF NOT EXISTS t_orders")
-	assert.NotContains(t, order, "CREATE TABLE IF NOT EXISTS t_trades")
-	assert.NotContains(t, order, "CREATE TABLE IF NOT EXISTS t_positions")
-}
-
 func TestAllSQL_ContainsKernelTables(t *testing.T) {
 	sql := AllSQL()
 	for _, want := range []string{

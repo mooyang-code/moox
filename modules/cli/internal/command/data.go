@@ -98,18 +98,6 @@ func writeRowsExport(rsp *pb.ReadTimeSeriesRowsRsp, outputFile string, source st
 	return nil
 }
 
-func parseDimensions(items []string) map[string]string {
-	values := make(map[string]string, len(items))
-	for _, item := range items {
-		name, value, ok := strings.Cut(item, "=")
-		if !ok || strings.TrimSpace(name) == "" {
-			continue
-		}
-		values[strings.TrimSpace(name)] = strings.TrimSpace(value)
-	}
-	return values
-}
-
 func defaultFlag(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback

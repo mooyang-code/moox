@@ -214,12 +214,12 @@ func TestFillHandler_Handle_IncompleteFill_ShouldReturnError(t *testing.T) {
 	}))
 
 	handler := FillHandler{Store: s}
-	err = handler.Handle(ctx, "space-1", "acct-1", "order-1", "fill-1", exchange.FillEvent{
+	_, err = handler.HandleSource(ctx, "space-1", "acct-1", "order-1", "fill-1", exchange.FillEvent{
 		ExchangeTradeID: "trade-1",
 		Symbol:          "BTC-USDT",
 		Quantity:        shared.MustDecimal("0.5"),
 		Price:           shared.MustDecimal("100"),
 		Fee:             shared.Zero(),
-	})
+	}, "test")
 	assert.Error(t, err)
 }

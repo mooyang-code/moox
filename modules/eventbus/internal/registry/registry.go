@@ -184,7 +184,7 @@ func reconcileKV(js nats.JetStreamContext, spec *config.KVConfig, cfg *config.Co
 	} else if err != nil {
 		return fmt.Errorf("inspect kv %q: %w", spec.Bucket, err)
 	}
-	// The legacy KV API does not expose an atomic update operation. Inspect the
+	// The NATS KV API does not expose an atomic update operation. Inspect the
 	// backing stream and update only fields that are safe to reconcile.
 	streamName := "KV_" + spec.Bucket
 	info, err := js.StreamInfo(streamName)
@@ -259,37 +259,4 @@ type Topic struct {
 	Payload      string
 	Enabled      bool
 	Owner        string
-}
-
-func TopicStream(cfg *config.Config, topic string) (Topic, string, error) {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return Topic{}, "", err
-	}
-	for _, event := range registry.Events() {
-		family, familyErr := registry.FamilyPattern(event)
-		if familyErr == nil && topicMatchesPattern(topic, family) {
-			return Topic{Topic: topic, Stream: event.Stream(), EventName: event.Name(), EventVersion: event.Version(), Payload: string(event.PayloadFullName()), Enabled: true, Owner: event.Owner()}, event.Stream(), nil
-		}
-	}
-	return Topic{}, "", fmt.Errorf("topic %q is not registered", topic)
-}
-
-func topicMatchesPattern(topic, pattern string) bool {
-	a, b := strings.Split(topic, "."), strings.Split(pattern, ".")
-	if len(b) > 0 && b[len(b)-1] == ">" {
-		if len(a) < len(b) {
-			return false
-		}
-		b = b[:len(b)-1]
-		a = a[:len(b)]
-	} else if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if b[i] != "*" && b[i] != a[i] {
-			return false
-		}
-	}
-	return true
 }

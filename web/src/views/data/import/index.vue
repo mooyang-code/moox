@@ -359,14 +359,11 @@ async function importRows() {
           time_series: {
             subject_id: form.subject_id,
             freq: form.freq,
-            data_time: row[form.time_column]
+            data_time: row[form.time_column],
+            dimensions
           }
         },
-        fields: rowFields(row),
-        attributes: Object.fromEntries(
-          Object.entries(dimensions).map(([key, value]) => [key, { string_value: value } satisfies TypedValue])
-        ),
-        operation: "ROW_FIELD_OPERATION_UPSERT"
+        fields: rowFields(row)
       }));
       await upsertFields(rows);
     } else {
@@ -379,8 +376,7 @@ async function importRows() {
             version: form.version_column ? row[form.version_column] : ""
           }
         },
-        fields: rowFields(row),
-        operation: "ROW_FIELD_OPERATION_UPSERT"
+        fields: rowFields(row)
       }));
       await upsertFields(rows);
     }

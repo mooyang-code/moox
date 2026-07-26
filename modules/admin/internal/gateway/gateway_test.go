@@ -133,7 +133,7 @@ func TestHandleGatewayRequest_RawHandlerHit_ShouldServeWithoutForward(t *testing
 	})
 
 	router := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
-	muxRouter := router.buildRouter()
+	muxRouter := router.buildControlRouter()
 	rr := httptest.NewRecorder()
 	muxRouter.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/admin/demo/Ping", nil))
 
@@ -149,7 +149,7 @@ func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t 
 		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
 	router := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
-	muxRouter := router.buildRouter()
+	muxRouter := router.buildControlRouter()
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))
 	muxRouter.ServeHTTP(rr, req)
@@ -161,7 +161,7 @@ func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t 
 func TestAdminRouterDeniesMachineOnlyRevealSecretAliases(t *testing.T) {
 	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/secret/RevealSecret", "/api/admin/SecretMgr/revealsecret"}}})
 	provider := &fakeGatewayControlProvider{}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildRouter()
+	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
 	for _, path := range []string{"/api/admin/secret/RevealSecret", "/api/admin/SecretMgr/revealsecret", "/api/admin/trpc.moox.ops.SecretMgr/REVEALSECRET"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{"secret_id":"s1"}`))))
@@ -188,7 +188,7 @@ func TestAdminRouterDeniesRevealSecretThroughDeploymentAlias(t *testing.T) {
 			Path:    "TRPC.MOOX.OPS.SECRET_MGR",
 		},
 	}}
-	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildRouter()
+	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
 
 	denied := httptest.NewRecorder()
 	router.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/admin/secret_alias/RevealSecret", bytes.NewReader([]byte(`{"secret_id":"s1"}`))))
@@ -214,7 +214,7 @@ func TestHandleGatewayRequest_ResolvesOnlyConfiguredAdminNode(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))
 
-	router.buildRouter().ServeHTTP(rr, req)
+	router.buildControlRouter().ServeHTTP(rr, req)
 
 	assert.Equal(t, "admin-node-b", provider.lastNode)
 }
@@ -237,7 +237,7 @@ func TestHandleGatewayRequest_GetLoginSaltWorksWithConfiguredNode(t *testing.T) 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetLoginSalt", bytes.NewBufferString(`{"username":"admin"}`))
 
-	router.buildRouter().ServeHTTP(rr, req)
+	router.buildControlRouter().ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.JSONEq(t, `{"ret_info":{"code":0},"salt":"salt-1"}`, rr.Body.String())
@@ -257,7 +257,7 @@ func TestHandleGatewayRequest_UserIDFromContext_ShouldInjectHeader(t *testing.T)
 		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/auth/GetUserInfo"}},
 	})
 	router := NewHTTPRouter(NewGatewayHandle(), nil, "admin-node-test")
-	muxRouter := router.buildRouter()
+	muxRouter := router.buildControlRouter()
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/auth/GetUserInfo", bytes.NewReader([]byte(`{}`)))
 	ctx := context.WithValue(req.Context(), authmodel.CtxUserID, "user-ctx-1")

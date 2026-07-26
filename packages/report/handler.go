@@ -45,15 +45,13 @@ type Publisher interface {
 type Connector func(context.Context, Config) (Publisher, error)
 
 type Handler struct {
-	cfg        Config
-	gatherer   prometheus.Gatherer
-	connector  Connector
-	mu         sync.Mutex
-	client     Publisher
-	sequence   atomic.Uint64
-	errorCount atomic.Uint64
-	lastError  atomic.Value
-	bootID     string
+	cfg       Config
+	gatherer  prometheus.Gatherer
+	connector Connector
+	mu        sync.Mutex
+	client    Publisher
+	sequence  atomic.Uint64
+	bootID    string
 }
 
 func NewHandler(cfg Config) (*Handler, error) {
@@ -74,20 +72,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("exclude regex: %w", err)
 	}
 	return &Handler{cfg: cfg, gatherer: prometheus.DefaultGatherer, connector: connect, bootID: cfg.BootID}, nil
-}
-
-func NewHandlerWithPublisher(cfg Config, p Publisher, gatherer prometheus.Gatherer) (*Handler, error) {
-	h, err := NewHandler(cfg)
-	if err != nil {
-		return nil, err
-	}
-	if p != nil {
-		h.client = p
-	}
-	if gatherer != nil {
-		h.gatherer = gatherer
-	}
-	return h, nil
 }
 
 func (h *Handler) Handle(ctx context.Context) error {
@@ -112,28 +96,11 @@ func (h *Handler) Handle(ctx context.Context) error {
 
 func (h *Handler) reportError(ctx context.Context, err error) error {
 	if err != nil {
-		h.errorCount.Add(1)
-		h.lastError.Store(err.Error())
 		reporterErrors.WithLabelValues(h.cfg.ServiceName).Inc()
 		reporterLastError.WithLabelValues(h.cfg.ServiceName).Set(float64(time.Now().Unix()))
 		log.WarnContextf(ctx, "metrics snapshot report failed for %s: %v", h.cfg.ServiceName, err)
 	}
 	return err
-}
-
-func (h *Handler) LastError() string {
-	if h == nil {
-		return ""
-	}
-	value, _ := h.lastError.Load().(string)
-	return value
-}
-
-func (h *Handler) ErrorCount() uint64 {
-	if h == nil {
-		return 0
-	}
-	return h.errorCount.Load()
 }
 
 func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {

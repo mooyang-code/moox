@@ -384,7 +384,7 @@ option go_package = "github.com/mooyang-code/moox/packages/events/tradingpb;trad
 - Fresh review found no P0/P1 findings.
 - The P2 finding in `DatasetPublisher.PublishMessageWithAck` was fixed by routing outbox bytes through `events.DecodeDatasetRowsUpserted` before publishing; empty payloads, invalid timestamps, and outer/payload identity mismatches are now rejected, with focused tests.
 - Boundary conversion tests were added for time-series keys, record keys, typed values, UPSERT defaulting, and identity mismatch rejection.
-- A minor legacy `Archive.Decoder.Decode(*messagepb.MooxMessage)` path remains because the current Archive handler test seam and old internal fixtures still use it. The live governed path uses `DecodeEvent` and `EventMessage`; removing the test seam is a separate cleanup and is not a compatibility alias in the public event contract.
+- The Archive test seam and fixtures now use the governed `EventMessage` path directly; the old `MooxMessage` decoder has been deleted.
 
 ### Independent Review Follow-up (2026-07-23, Lorentz)
 

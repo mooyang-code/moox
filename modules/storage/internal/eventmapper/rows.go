@@ -64,11 +64,6 @@ func ToStorageRows(in *sharedpb.DatasetRowsUpserted) (*localpb.RowsUpserted, err
 	if err := protojson.Unmarshal(raw, out); err != nil {
 		return nil, fmt.Errorf("convert shared rows event: %w", err)
 	}
-	for _, row := range out.GetRows() {
-		if row != nil && row.GetOperation() == localpb.RowFieldOperation_ROW_FIELD_OPERATION_UNSPECIFIED {
-			row.Operation = localpb.RowFieldOperation_ROW_FIELD_OPERATION_UPSERT
-		}
-	}
 	return out, nil
 }
 

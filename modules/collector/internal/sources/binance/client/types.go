@@ -127,10 +127,6 @@ type APIError struct {
 	Message string `json:"msg"`
 }
 
-func (e *APIError) Error() string {
-	return fmt.Sprintf("币安API错误 [%d]: %s", e.Code, e.Message)
-}
-
 // ExchangeInfoResponse 交易所信息响应（现货和永续合约通用）
 type ExchangeInfoResponse struct {
 	Timezone   string          `json:"timezone"`

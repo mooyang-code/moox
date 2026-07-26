@@ -215,24 +215,6 @@ func (s *MetadataSync) bindDatasetSubject(ctx context.Context, binder datasetSub
 	return retInfoError("BindDatasetSubject", rsp.GetRetInfo())
 }
 
-func safeID(raw string) string {
-	var b strings.Builder
-	lastDash := false
-	for _, r := range strings.ToLower(strings.TrimSpace(raw)) {
-		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if ok {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
-
 func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor domain.FactorDef) error {
 	req := &storagepb.CreateFactorReq{
 		AuthInfo: s.auth,

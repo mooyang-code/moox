@@ -36,8 +36,9 @@ test-event-contracts:
 test-eventbus-topology:
 	cd modules/eventbus && go test ./...
 
-test-storage-market-pipeline:
-	cd modules/storage && CGO_ENABLED=1 go test ./internal/service/e2e -run TestMarketKlineToStorageOutboxE2E -count=1
+test-storage-view-event-pipeline:
+	@rg -q '^func TestViewEventConsumerProcessesIndependentDatasetLanesE2E' modules/storage/internal/service/e2e/view_consumer_concurrency_e2e_test.go
+	cd modules/storage && CGO_ENABLED=1 go test ./internal/service/e2e -run '^TestViewEventConsumerProcessesIndependentDatasetLanesE2E$$' -count=1
 
 e2e-storage-datanode-management:
 	bash scripts/e2e/storage-datanode-management.sh
@@ -84,7 +85,7 @@ proto-check:
 	$(MAKE) proto
 	@test -z "$$(git status --porcelain)"
 
-verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-datanode-management-contract test-build-storage-linux-contract
+verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-datanode-management-contract test-build-storage-linux-contract
 
 verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy
 	CI=true pnpm install --frozen-lockfile

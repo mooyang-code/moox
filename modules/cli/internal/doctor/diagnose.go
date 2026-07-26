@@ -203,7 +203,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 			return checkResult(spec.ID, core.StatusSkipped, "component does not use Reporter transport", nil)
 		}
 		for _, metric := range r.context.GetModuleObservations() {
-			if metric.GetComponentId() == component.GetComponentId() && metric.GetSummary() == "moox_module_metrics_errors_total" && metric.GetValue() > 0 && recentMetricError(r.context.GetModuleObservations(), component.GetComponentId(), metric.GetObservedAt(), r.now()) {
+			if metric.GetComponentId() == component.GetComponentId() && metric.GetSummary() == "moox_module_metrics_errors_total" && metric.GetValue() > 0 && recentMetricError(r.context.GetModuleObservations(), component.GetComponentId(), r.now()) {
 				return checkResult(spec.ID, core.StatusFail, "module metric observations have been rejected", nil, "inspect_pipeline_input")
 			}
 		}
@@ -360,7 +360,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 	return checkResult(spec.ID, core.StatusFail, "unknown diagnose check", nil)
 }
 
-func recentMetricError(observations []*monitorpb.DoctorObservation, componentID string, observedAt string, now time.Time) bool {
+func recentMetricError(observations []*monitorpb.DoctorObservation, componentID string, now time.Time) bool {
 	for _, metric := range observations {
 		if metric.GetComponentId() != componentID || metric.GetSummary() != "moox_module_metrics_last_error_timestamp_seconds" {
 			continue
@@ -368,7 +368,7 @@ func recentMetricError(observations []*monitorpb.DoctorObservation, componentID 
 		at := time.Unix(int64(metric.GetValue()), 0).UTC()
 		return !at.IsZero() && now.Sub(at) <= 2*time.Minute
 	}
-	return observedAt != "" // legacy snapshots without the timestamp fail closed
+	return false
 }
 
 func (r *diagnoseRunner) directMetrics(ctx context.Context, id string, component *monitorpb.DoctorExpectedComponent, severity core.CheckStatus) core.CheckResult {

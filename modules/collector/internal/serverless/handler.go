@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"time"
 
@@ -198,28 +196,6 @@ func normalizeDeploymentName(name string) string {
 	normalized := strings.TrimSpace(strings.ToLower(name))
 	normalized = strings.ReplaceAll(normalized, "-", "_")
 	return normalized
-}
-
-// parseServerFromURL 从控制面 URL（形如 http://ip:port）解析出 ip 和 port。
-// 解析失败或字段缺失时返回 ok=false。
-func parseServerFromURL(rawURL string) (string, int, bool) {
-	if rawURL == "" {
-		return "", 0, false
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		return "", 0, false
-	}
-	host := u.Hostname()
-	portStr := u.Port()
-	if host == "" || portStr == "" {
-		return "", 0, false
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port <= 0 {
-		return "", 0, false
-	}
-	return host, port, true
 }
 
 // processCloudFunctionEvent 处理云函数事件

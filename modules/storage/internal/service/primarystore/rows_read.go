@@ -156,11 +156,11 @@ func timeSeriesKeyFromRowKey(key *pb.RowKey) *pb.TimeSeriesKey {
 	if key == nil || key.GetTimeSeries() == nil {
 		return nil
 	}
-	return &pb.TimeSeriesKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime()}
+	return &pb.TimeSeriesKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime(), Dimensions: key.GetTimeSeries().GetDimensions()}
 }
 
 func timeSeriesRowKey(key *pb.TimeSeriesKey) *pb.RowKey {
-	return &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime()}}}
+	return &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), Dimensions: key.GetDimensions()}}}
 }
 
 func recordRowKey(key *pb.RecordKey) *pb.RowKey {

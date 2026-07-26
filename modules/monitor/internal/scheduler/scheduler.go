@@ -91,10 +91,6 @@ func (s *Scheduler) RunDueOnce(ctx context.Context) (int, error) {
 	return len(checks), joined
 }
 
-func (s *Scheduler) RunCheckOnce(ctx context.Context, check domain.Check) (domain.CheckResult, error) {
-	return s.runAndPersist(ctx, check, false)
-}
-
 func (s *Scheduler) runAndPersist(ctx context.Context, check domain.Check, advanceSchedule bool) (domain.CheckResult, error) {
 	result := s.runner.Run(ctx, check)
 	normalizeResult(&result, check, s.instanceID)

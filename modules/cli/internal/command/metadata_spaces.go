@@ -19,14 +19,6 @@ func metadataSpaceCatalog(seed metadataSeed) []metadataSpaceChoice {
 	return choices
 }
 
-func metadataSeedSpaceIDs(seed metadataSeed) []string {
-	ids := make([]string, 0, len(seed.Spaces))
-	for _, item := range seed.Spaces {
-		ids = append(ids, item.SpaceID)
-	}
-	return ids
-}
-
 func selectMetadataSpaces(seed metadataSeed, requested []string) (metadataSeed, error) {
 	if len(requested) == 0 {
 		return seed, nil

@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/engine"
-	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/engine"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
 func TestHashSubjectKeepsSameSubjectOnSameShard(t *testing.T) {
@@ -304,11 +304,11 @@ func captureRunLogs(t *testing.T) *[]string {
 
 func TestSchedulerLoadDrainsSyntheticEventStorm(t *testing.T) {
 	ctx := context.Background()
-	storage := &testkit.FakeStorage{}
-	exec := &testkit.FakeExecutor{Latency: 5 * time.Millisecond}
+	storage := &loadStorage{}
+	exec := &loadExecutor{latency: 5 * time.Millisecond}
 	svc := NewService(Config{Workers: 8, MaxRetry: 1}, storage, exec)
 	barTime := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	for i, symbol := range testkit.Symbols(120) {
+	for i, symbol := range testSymbols(120) {
 		task := taskAt(barTime)
 		task.TaskID = fmt.Sprintf("task-%d", i)
 		task.SubjectID = symbol
@@ -322,7 +322,52 @@ func TestSchedulerLoadDrainsSyntheticEventStorm(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("drain took %s, want <= 2s", elapsed)
 	}
-	if exec.Calls.Load() != 120 || storage.Writes.Load() != 120 {
-		t.Fatalf("calls/writes = %d/%d, want 120/120", exec.Calls.Load(), storage.Writes.Load())
+	if exec.calls.Load() != 120 || storage.writes.Load() != 120 {
+		t.Fatalf("calls/writes = %d/%d, want 120/120", exec.calls.Load(), storage.writes.Load())
 	}
+}
+
+type loadStorage struct {
+	writes atomic.Int64
+}
+
+func (s *loadStorage) ReadWindow(context.Context, storageio.WindowKey, int, time.Time, []string) (*engine.DataFrame, error) {
+	now := time.Now().UTC()
+	return &engine.DataFrame{
+		Columns:   storageio.KLineColumns,
+		DataTimes: []time.Time{now.Add(-time.Minute), now},
+		Rows: [][]any{
+			{now.Add(-time.Minute), 1.0, 2.0, 0.8, 1.6, 100.0, 160.0, int64(10)},
+			{now, 1.6, 2.2, 1.2, 2.0, 120.0, 240.0, int64(12)},
+		},
+	}, nil
+}
+
+func (s *loadStorage) WriteFactorPatch(context.Context, *engine.FactorTask, *engine.DataFrame, *engine.FactorResult) error {
+	s.writes.Add(1)
+	return nil
+}
+
+type loadExecutor struct {
+	latency time.Duration
+	calls   atomic.Int64
+}
+
+func (e *loadExecutor) Execute(context.Context, *engine.FactorTask, *engine.DataFrame) (*engine.FactorResult, error) {
+	e.calls.Add(1)
+	time.Sleep(e.latency)
+	return &engine.FactorResult{
+		Columns:   map[string]engine.FactorColumnResult{"Bias_20": {Tail: 1, Values: []any{1.0}}},
+		ElapsedMS: e.latency.Milliseconds(),
+	}, nil
+}
+
+func (e *loadExecutor) Close() error { return nil }
+
+func testSymbols(n int) []string {
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, fmt.Sprintf("SYM-%03d", i))
+	}
+	return out
 }

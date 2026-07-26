@@ -20,36 +20,23 @@ type Service struct {
 	nodeState      NodeStateChecker
 }
 
-func NewMetadataService(store metadata.Store, cache *metacache.Store, authSecret ...string) (*Service, error) {
-	return newMetadataService(store, cache, firstAuthSecret(authSecret), nil)
+type Options struct {
+	AuthSecret       string
+	NodeStateChecker NodeStateChecker
 }
 
-// NewMetadataServiceWithNodeStateChecker is used by tests and by embedders
-// that provide a local DataNode runtime client. The production constructor
-// uses the generated DataNodeRuntime client automatically.
-func NewMetadataServiceWithNodeStateChecker(store metadata.Store, cache *metacache.Store, authSecret string, checker NodeStateChecker) (*Service, error) {
-	return newMetadataService(store, cache, authSecret, checker)
-}
-
-func firstAuthSecret(authSecret []string) string {
-	if len(authSecret) == 0 {
-		return ""
-	}
-	return authSecret[0]
-}
-
-func newMetadataService(store metadata.Store, cache *metacache.Store, authSecret string, checker NodeStateChecker) (*Service, error) {
+func NewMetadataService(store metadata.Store, cache *metacache.Store, options Options) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	secret := authSecret
+	secret := options.AuthSecret
 	if secret == "" {
 		secret = os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
 	}
-	if checker == nil {
-		checker = rpcNodeStateChecker{}
+	if options.NodeStateChecker == nil {
+		options.NodeStateChecker = rpcNodeStateChecker{}
 	}
-	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, nodeState: checker}, nil
+	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, nodeState: options.NodeStateChecker}, nil
 }
 
 func (s *Service) refreshMetadataCache(ctx context.Context) error {

@@ -3,13 +3,13 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/testkit"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -264,7 +264,7 @@ func TestConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
 }
 
 func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
-	symbols := testkit.Symbols(500)
+	symbols := testSymbols(500)
 	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
 	d := trigger.NewEventBatcher(time.Second, []domain.FactorBinding{{
 		BindingID:     "b1",
@@ -278,7 +278,7 @@ func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 		Status:        domain.BindingStatusEnabled,
 	}})
 
-	d.Ingest(testkit.RowsChangedEvent("crypto", "binance_spot_kline", "1m", now, symbols), now)
+	d.Ingest(rowsChangedEvent("crypto", "binance_spot_kline", "1m", now, symbols), now)
 	tasks, err := d.FlushPending(context.Background(), now.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +325,7 @@ func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
 		},
 	})
 
-	d.Ingest(testkit.RowsChangedEvent("crypto", "binance_spot_kline", "1m", now, []string{"BTC-USDT"}), now)
+	d.Ingest(rowsChangedEvent("crypto", "binance_spot_kline", "1m", now, []string{"BTC-USDT"}), now)
 	tasks, err := d.FlushPending(context.Background(), now.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
@@ -343,4 +343,30 @@ func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
 	if got := byTarget["binance_spot_volume_factor"]; len(got) != 1 || got[0] != "volume" {
 		t.Fatalf("binance_spot_volume_factor ids = %#v", got)
 	}
+}
+
+func rowsChangedEvent(spaceID, datasetID, freq string, barTime time.Time, subjects []string) *storagepb.DatasetRowsUpserted {
+	rows := make([]*storagepb.RowUpsert, 0, len(subjects))
+	for _, subject := range subjects {
+		rows = append(rows, &storagepb.RowUpsert{
+			Key: &storagepb.RowKey{
+				SpaceId:   spaceID,
+				DatasetId: datasetID,
+				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+					SubjectId: subject,
+					Freq:      freq,
+					DataTime:  barTime.UTC().Format(time.RFC3339),
+				}},
+			},
+		})
+	}
+	return &storagepb.DatasetRowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: rows}
+}
+
+func testSymbols(n int) []string {
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, fmt.Sprintf("SYM-%03d", i))
+	}
+	return out
 }

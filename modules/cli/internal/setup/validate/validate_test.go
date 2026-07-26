@@ -106,7 +106,7 @@ func TestRunSSHSkipsTencentIdentityValidation(t *testing.T) {
 	identity := &fakeIdentity{err: fmt.Errorf("tencent credentials must not be used")}
 	sshChecker := &fakeSSHChecker{errs: map[string]error{}}
 
-	result, err := RunSSH(context.Background(), snapshot, Dependencies{Identity: identity, SSH: sshChecker})
+	result, err := RunSSHHosts(context.Background(), snapshot, Dependencies{Identity: identity, SSH: sshChecker}, snapshot.Manifest.Hosts())
 	require.NoError(t, err)
 	assert.Equal(t, []Check{
 		{Name: "config", Status: "valid"},

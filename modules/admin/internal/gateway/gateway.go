@@ -101,9 +101,6 @@ func (hr *HTTPRouter) buildControlRouter() *mux.Router {
 	return router
 }
 
-// buildRouter remains the control-router test helper.
-func (hr *HTTPRouter) buildRouter() *mux.Router { return hr.buildControlRouter() }
-
 // handleControlRequest 处理管理台网关请求(中间件authorize通过之后，执行流才到本函数)
 func (hr *HTTPRouter) handleControlRequest(w http.ResponseWriter, r *http.Request) {
 	hr.handleGatewayRequest(w, r)

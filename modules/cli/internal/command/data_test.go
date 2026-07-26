@@ -17,11 +17,6 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-func TestParseDimensions(t *testing.T) {
-	got := parseDimensions([]string{" env=prod ", "bad", "zone=a"})
-	assert.Equal(t, map[string]string{"env": "prod", "zone": "a"}, got)
-}
-
 func TestDefaultAndRequiredFlagValue(t *testing.T) {
 	assert.Equal(t, "default", defaultFlag("", "default"))
 	assert.Equal(t, "custom", defaultFlag("custom", "default"))

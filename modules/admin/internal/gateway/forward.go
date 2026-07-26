@@ -102,24 +102,6 @@ func writeNodeGatewayResponse(w http.ResponseWriter, response *http.Response, he
 	_, _ = io.Copy(w, response.Body)
 }
 
-// forwardHTTP 把统一网关请求纯透传到目标服务的有协议 http 端口。
-// 目标服务由 t_service_deployments 中的 active 部署记录决定：
-//   - address: 目标 host:port（本进程 127.0.0.1:port，远端 storage host:port）
-//   - path:    trpc 服务全名（如 trpc.moox.infra.Auth）
-//
-// 请求 URL = /{path}/{method}，框架服务端自动 JSON↔PB，网关不做序列化/加工，
-// 原样返回 http body；错误由 trpc 框架以 errs 错误返回，网关转写 trpc-ret/trpc-func-ret header。
-func forwardHTTP(ctx context.Context, provider AdminServiceDetailProvider, adminNodeID, serviceID, method string, body []byte, headers map[string]string) ([]byte, error) {
-	if GetConfig() == nil {
-		return nil, fmt.Errorf("网关配置未初始化")
-	}
-	detail, err := resolveAdminServiceDetail(ctx, provider, adminNodeID, serviceID)
-	if err != nil {
-		return nil, err
-	}
-	return forwardHTTPToDetail(ctx, serviceID, method, detail, body, headers)
-}
-
 func forwardHTTPToDetail(ctx context.Context, serviceID, method string, detail ServiceDetail, body []byte, headers map[string]string) ([]byte, error) {
 	cfg := GetConfig()
 	if cfg == nil {

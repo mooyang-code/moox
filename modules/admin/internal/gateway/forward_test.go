@@ -93,29 +93,6 @@ func TestWriteForwardError_ShouldWriteRetInfo(t *testing.T) {
 	assert.Equal(t, "10001", rr.Header().Get("trpc-ret"))
 }
 
-func TestForwardHTTP_NilConfig_ShouldError(t *testing.T) {
-	SetConfig(nil)
-	_, err := forwardHTTP(context.Background(), nil, "node-a", "auth", "Login", []byte(`{}`), nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "网关配置未初始化")
-}
-
-func TestForwardHTTP_MissingResolver_ShouldError(t *testing.T) {
-	SetConfig(&Config{JWT: JWTConfig{SecretKey: "secret"}})
-	_, err := forwardHTTP(context.Background(), nil, "node-a", "auth", "Login", []byte(`{}`), nil)
-	require.Error(t, err)
-}
-
-func TestForwardHTTP_EmptyAddress_ShouldError(t *testing.T) {
-	SetConfig(&Config{JWT: JWTConfig{SecretKey: "secret"}})
-	provider := stubAdminServiceProvider{details: map[string]ServiceDetail{
-		"node-a:auth": {Address: "", Path: "trpc.moox.infra.Auth"},
-	}}
-	_, err := forwardHTTP(context.Background(), provider, "node-a", "auth", "Login", []byte(`{}`), nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "配置缺失")
-}
-
 func TestAddVaryHeader_ExistingValue_ShouldAppend(t *testing.T) {
 	rr := httptest.NewRecorder()
 	rr.Header().Set("Vary", "Origin")

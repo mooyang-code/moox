@@ -7,13 +7,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-type PipelineVerdict = report.PipelineVerdict
-type PipelineSignals = report.PipelineSignals
-
-func EvaluatePipelineSignals(signals PipelineSignals, now time.Time) PipelineVerdict {
-	return report.EvaluatePipelineSignals(signals, now)
-}
-
 var (
 	ingestTotal       = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_monitor_metrics_ingest_total", Help: "Metric snapshot ingestion outcomes."}, []string{"result"})
 	ingestLastSuccess = prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_monitor_metrics_ingest_last_success_timestamp_seconds", Help: "Last successful metric snapshot ingestion."})

@@ -57,12 +57,16 @@ func TestStrategyRunOnceCommitsStateAndOutbox(t *testing.T) {
 	}
 	defer e.Close()
 	svc := &action.Service{Repo: r, Engine: e}
-	out, _, err := svc.Run(context.Background(), domain.Task{
+	task := domain.Task{
 		RunID: "run-1", BindingID: "b1", StrategyID: d.StrategyID, Version: d.Version,
 		TriggerBarTime: "2026-07-11T10:00:00Z", DataRevision: "revision-1",
 		PreviousState: domain.State{BindingID: "b1", Revision: 0, StateJSON: "{}"},
-	}, d)
+	}
+	out, inputHash, err := svc.Evaluate(context.Background(), task, d)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Commit(context.Background(), task, out, inputHash); err != nil {
 		t.Fatal(err)
 	}
 	if out.Action != domain.ActionRebalance {

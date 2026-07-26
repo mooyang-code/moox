@@ -65,45 +65,6 @@ func (r *CollectorRegistry) Get(source, market, dataType string) (Collector, err
 	return descriptor.Collector, nil
 }
 
-// GetDescriptor 获取采集器描述符
-func (r *CollectorRegistry) GetDescriptor(source, market, dataType string) (*CollectorDescriptor, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	key := r.generateKey(source, market, dataType)
-	descriptor, exists := r.collectors[key]
-	if !exists {
-		return nil, fmt.Errorf("采集器 %s 未注册", key)
-	}
-	return descriptor, nil
-}
-
-// List 列出所有采集器描述符
-func (r *CollectorRegistry) List() []*CollectorDescriptor {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	descriptors := make([]*CollectorDescriptor, 0, len(r.collectors))
-	for _, desc := range r.collectors {
-		descriptors = append(descriptors, desc)
-	}
-	return descriptors
-}
-
-// ListBySource 按数据源列出采集器
-func (r *CollectorRegistry) ListBySource(source string) []*CollectorDescriptor {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var descriptors []*CollectorDescriptor
-	for _, desc := range r.collectors {
-		if desc.Source == source {
-			descriptors = append(descriptors, desc)
-		}
-	}
-	return descriptors
-}
-
 func (r *CollectorRegistry) generateKey(source, market, dataType string) string {
 	if market == "" {
 		market = "spot"

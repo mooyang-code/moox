@@ -6,7 +6,7 @@ import (
 )
 
 func TestPlannerSellReduceBeforeIncreaseAndZeroCloses(t *testing.T) {
-	legs, e := (Planner{}).Build([]Target{{"BTC", shared.Zero()}, {"ETH", shared.MustDecimal("2")}}, []Current{{"BTC", shared.MustDecimal("1")}, {"ETH", shared.MustDecimal("1")}})
+	legs, e := (Planner{}).BuildMode(FullTarget, []Target{{"BTC", shared.Zero()}, {"ETH", shared.MustDecimal("2")}}, []Current{{"BTC", shared.MustDecimal("1")}, {"ETH", shared.MustDecimal("1")}})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -16,7 +16,7 @@ func TestPlannerSellReduceBeforeIncreaseAndZeroCloses(t *testing.T) {
 }
 
 func TestPlannerSplitsReverseAndFullModeClosesMissingTarget(t *testing.T) {
-	legs, e := (Planner{}).Build([]Target{{"ETH", shared.MustDecimal("-5")}}, []Current{{"ETH", shared.MustDecimal("10")}, {"BTC", shared.MustDecimal("2")}})
+	legs, e := (Planner{}).BuildMode(FullTarget, []Target{{"ETH", shared.MustDecimal("-5")}}, []Current{{"ETH", shared.MustDecimal("10")}, {"BTC", shared.MustDecimal("2")}})
 	if e != nil {
 		t.Fatal(e)
 	}

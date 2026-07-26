@@ -117,14 +117,14 @@ func TestEventDrivenOrderRecoveryFillLedgerAndProjection(t *testing.T) {
 	}
 	h := consumer.FillHandler{Store: s}
 	fill := exchange.FillEvent{ExchangeTradeID: "ef1", ExchangeOrderID: "ex-1", ClientOrderID: "client-1", Symbol: "BTCUSDT", Side: "BUY", BaseAsset: "BTC", QuoteAsset: "USDT", Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("9"), Fee: shared.MustDecimal("0.01"), FeeCurrency: "BNB"}
-	if err = h.Handle(ctx, "space", "account", "o1", "f1", fill); err != nil {
+	if _, err = h.HandleSource(ctx, "space", "account", "o1", "f1", fill, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if err = h.Handle(ctx, "space", "account", "o1", "f1", fill); err != nil {
+	if _, err = h.HandleSource(ctx, "space", "account", "o1", "f1", fill, "test"); err != nil {
 		t.Fatal(err)
 	}
 	fill.ExchangeTradeID = "ef2"
-	if err = h.Handle(ctx, "space", "account", "o1", "f2", fill); err != nil {
+	if _, err = h.HandleSource(ctx, "space", "account", "o1", "f2", fill, "test"); err != nil {
 		t.Fatal(err)
 	}
 	r, err = s.GetOrder(ctx, "space", "o1")
@@ -234,7 +234,7 @@ func TestPersistedRebalanceExecutesThroughOrderKernel(t *testing.T) {
 		t.Fatal(err)
 	}
 	fill := exchange.FillEvent{ExchangeTradeID: "rebalance-fill", Symbol: "BTCUSDT", Side: "SELL", BaseAsset: "BTC", QuoteAsset: "USDT", Quantity: shared.MustDecimal("2"), Price: shared.MustDecimal("10"), Fee: shared.Zero()}
-	if err = (consumer.FillHandler{Store: s}).Handle(ctx, "space", "account", legs[0].PlanID, "rebalance-fill", fill); err != nil {
+	if _, err = (consumer.FillHandler{Store: s}).HandleSource(ctx, "space", "account", legs[0].PlanID, "rebalance-fill", fill, "test"); err != nil {
 		t.Fatal(err)
 	}
 	status, err = svc.Advance(ctx, "space", "run1", "account", "channel")
@@ -350,7 +350,7 @@ func TestContractSellPriceImprovementUsesReservedMargin(t *testing.T) {
 		t.Fatal(err)
 	}
 	fill := exchange.FillEvent{ExchangeTradeID: "contract-fill", Symbol: "BTCUSDT", Side: "SELL", BaseAsset: "BTC", QuoteAsset: "USDT", Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("12"), Fee: shared.Zero()}
-	if err = (consumer.FillHandler{Store: s}).Handle(ctx, "space", "account", "contract", "contract-fill", fill); err != nil {
+	if _, err = (consumer.FillHandler{Store: s}).HandleSource(ctx, "space", "account", "contract", "contract-fill", fill, "test"); err != nil {
 		t.Fatal(err)
 	}
 	assertScalar(t, s, "SELECT c_amount FROM t_trade_balance_projections WHERE c_space_id='space' AND c_account_id='account' AND c_asset='USDT' AND c_bucket='frozen'", "0")

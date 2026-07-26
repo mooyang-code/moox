@@ -36,10 +36,6 @@ func NewDatasetSource(metadataTarget string) *DatasetSource {
 	}
 }
 
-func newDatasetSourceWithClient(metadata metadataClient) *DatasetSource {
-	return &DatasetSource{metadata: metadata}
-}
-
 // ListSubjects returns active dataset subjects enriched with external symbols.
 func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datasetID string, dataSourceID string) ([]domain.DatasetSubject, error) {
 	if strings.TrimSpace(datasetID) == "" {

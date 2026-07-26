@@ -31,7 +31,7 @@ func TestHostStorageWriterBucketsAndOmitsUnavailableRates(t *testing.T) {
 		Disks:    []*hostmetricpb.DiskMetric{{Device: "sdb", ReadBytesTotal: 1, RateAvailable: false}},
 		Networks: []*hostmetricpb.NetworkMetric{{Device: "eth0", ReceiveBytesTotal: 2, RateAvailable: false}},
 	}
-	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", at, "msg-1"); err != nil {
+	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", at); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.requests) != 3 {
@@ -46,8 +46,15 @@ func TestHostStorageWriterBucketsAndOmitsUnavailableRates(t *testing.T) {
 			if row.GetKey().GetSpaceId() != SpaceID || key.GetSubjectId() != "agent-1" || key.GetFreq() != "1m" || key.GetDataTime() != "2026-07-11T04:34:00Z" {
 				t.Fatalf("unexpected key: %+v", row.GetKey())
 			}
-			if row.GetAttributes()["message_id"].GetStringValue() != "msg-1" || row.GetAttributes()["agent_id"].GetStringValue() != "agent-1" {
-				t.Fatalf("attributes=%v", row.GetAttributes())
+		}
+	}
+	for _, req := range fake.requests {
+		for _, row := range req.GetRows() {
+			if row.GetKey().GetDatasetId() == cfg.DiskDatasetID && row.GetKey().GetTimeSeries().GetDimensions()["device"] != "sdb" {
+				t.Fatalf("disk dimensions=%v", row.GetKey().GetTimeSeries().GetDimensions())
+			}
+			if row.GetKey().GetDatasetId() == cfg.NetworkDatasetID && row.GetKey().GetTimeSeries().GetDimensions()["device"] != "eth0" {
+				t.Fatalf("network dimensions=%v", row.GetKey().GetTimeSeries().GetDimensions())
 			}
 		}
 	}

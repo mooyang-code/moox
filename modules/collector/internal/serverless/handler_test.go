@@ -75,10 +75,6 @@ func TestDeploymentHelpers_ShouldResolveURLsAndTargets(t *testing.T) {
 	assert.True(t, deploymentMatches(deployments["service_gateway"], "service_gateway"))
 	assert.Equal(t, "service_gateway", normalizeDeploymentName(" Service_Gateway "))
 
-	host, port, ok := parseServerFromURL("http://127.0.0.1:11000")
-	assert.True(t, ok)
-	assert.Equal(t, "127.0.0.1", host)
-	assert.Equal(t, 11000, port)
 	assert.True(t, isKeepaliveProbeSource("keepalive_probe"))
 	assert.False(t, isKeepaliveProbeSource("manual"))
 }

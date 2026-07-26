@@ -117,7 +117,7 @@ func backfillSorts(engine string) []*pb.SortSpec {
 		return []*pb.SortSpec{{FieldName: "record_id"}, {FieldName: "version"}}
 	}
 	return []*pb.SortSpec{
-		{FieldName: "subject_id"}, {FieldName: "freq"}, {FieldName: "data_time"},
+		{FieldName: "subject_id"}, {FieldName: "freq"}, {FieldName: "data_time"}, {FieldName: "dimensions_json"},
 		{FieldName: "record_id"}, {FieldName: "version"},
 	}
 }

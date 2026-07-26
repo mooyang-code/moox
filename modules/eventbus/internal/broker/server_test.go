@@ -180,11 +180,3 @@ func TestLoadUsersFile(t *testing.T) {
 	_, err = loadUsersFile("")
 	require.Error(t, err)
 }
-
-func TestServerStringAndConfig(t *testing.T) {
-	cfg := config.Default()
-	cfg.Broker.StoreDir = t.TempDir()
-	s := &Server{cfg: cfg}
-	assert.Equal(t, "", s.String())
-	assert.Equal(t, cfg, s.Config())
-}

@@ -54,16 +54,6 @@ func Run(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies)
 	return appendHostChecks(ctx, snapshot, deps.SSH, result, snapshot.Manifest.Hosts())
 }
 
-// RunSSH validates the immutable setup snapshot and all configured SSH hosts
-// without contacting Tencent Cloud. It is kept as the full-manifest variant
-// for callers such as the setup validation command.
-func RunSSH(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies) (Result, error) {
-	if snapshot == nil {
-		return Result{}, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
-	}
-	return RunSSHHosts(ctx, snapshot, deps, snapshot.Manifest.Hosts())
-}
-
 // RunSSHHosts validates only the supplied deployment targets. Deployment
 // commands should not be blocked by an unrelated host in the manifest.
 func RunSSHHosts(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies, hosts []setupconfig.Host) (Result, error) {

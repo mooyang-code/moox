@@ -37,30 +37,6 @@ type MergedDNSResult struct {
 	Success bool      `json:"success"`
 }
 
-// UpdateNodeDNSRecords 更新节点DNS到缓存（365天TTL，永不过期）
-// 该函数由心跳处理逻辑调用
-func UpdateNodeDNSRecords(ctx context.Context, nodeID string, records []*NodeDNSRecord) error {
-	if nodeID == "" {
-		return fmt.Errorf("nodeID cannot be empty")
-	}
-
-	cacheKey := nodeDNSCacheKeyPrefix + nodeID
-
-	// 序列化为JSON
-	data, err := json.Marshal(records)
-	if err != nil {
-		return fmt.Errorf("failed to marshal node DNS records: %w", err)
-	}
-
-	// 存入localcache（365天TTL）
-	localcache.Set(cacheKey, data, nodeDNSCacheTTL)
-
-	log.DebugContextf(ctx, "[DNSProxy] Node DNS records updated: nodeID=%s, domains=%d, ttl=%ds",
-		nodeID, len(records), nodeDNSCacheTTL)
-
-	return nil
-}
-
 // GetNodeDNSRecords 获取指定节点的DNS记录
 func GetNodeDNSRecords(ctx context.Context, nodeID string) ([]*NodeDNSRecord, error) {
 	if nodeID == "" {

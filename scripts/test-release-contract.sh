@@ -44,6 +44,7 @@ for contract in \
   'modules/strategy/config/.' \
   'modules/strategy/pyworker/.' \
   'packages/pyruntime/python/.' \
+  'RELEASE_ROOT}/factor/python-runtime/' \
   'RELEASE_ROOT}/strategy/python-runtime/' \
   'modules/strategy/pysdk/.' \
   'modules/strategy/strategies/example/.'; do
@@ -54,9 +55,14 @@ for contract in \
 done
 tmp_strategy="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-release.XXXXXX")"
 trap 'rm -rf "${tmp_strategy}"' EXIT
-mkdir -p "${tmp_strategy}/strategy/pyworker" "${tmp_strategy}/strategy/python-runtime"
+mkdir -p \
+  "${tmp_strategy}/factor/python-runtime" \
+  "${tmp_strategy}/strategy/pyworker" \
+  "${tmp_strategy}/strategy/python-runtime"
+cp -R "${ROOT}/packages/pyruntime/python/." "${tmp_strategy}/factor/python-runtime/"
 cp "${ROOT}/modules/strategy/pyworker/worker.py" "${tmp_strategy}/strategy/pyworker/worker.py"
 cp -R "${ROOT}/packages/pyruntime/python/." "${tmp_strategy}/strategy/python-runtime/"
+PYTHONPATH="${tmp_strategy}/factor/python-runtime" python3 -c 'from moox_pyruntime import protocol; assert protocol.TYPE_RUN'
 python3 - "${tmp_strategy}/strategy/pyworker/worker.py" <<'PY'
 import importlib.util
 import pathlib

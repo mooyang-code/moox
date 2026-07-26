@@ -10,7 +10,11 @@ import (
 func TestQuantInitialSeedUsesUnifiedCryptoMarket(t *testing.T) {
 	seed, err := loadMetadataSeed(filepath.Join("..", "..", "..", "..", "examples", "metadata-quant-initial.seed.yaml"))
 	require.NoError(t, err)
-	require.Equal(t, []string{"stock_cn", "stock_hk", "stock_us", "crypto"}, metadataSeedSpaceIDs(seed))
+	spaceIDs := make([]string, 0, len(seed.Spaces))
+	for _, space := range seed.Spaces {
+		spaceIDs = append(spaceIDs, space.SpaceID)
+	}
+	require.Equal(t, []string{"stock_cn", "stock_hk", "stock_us", "crypto"}, spaceIDs)
 
 	var dataSourceIDs []string
 	var datasetIDs []string

@@ -20,9 +20,7 @@ func setupUserTestDB(t *testing.T) (*gorm.DB, *CacheDB) {
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 
-	cache, err := NewCacheDB(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = cache.Close() })
+	cache := openTestCacheDB(t, t.TempDir())
 	return db, cache
 }
 
@@ -153,17 +151,14 @@ func TestConsumeGatewayControlNonceRejectsReplay(t *testing.T) {
 func TestConsumeGatewayControlNonceSurvivesCacheRestart(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	cache, err := NewCacheDB(dir)
-	require.NoError(t, err)
+	cache := openTestCacheDB(t, dir)
 	d := NewUserDAO(nil, cache)
 	consumed, err := d.ConsumeGatewayControlNonce(ctx, "control-key", "nonce-1", 2*time.Minute)
 	require.NoError(t, err)
 	require.True(t, consumed)
 	require.NoError(t, cache.Close())
 
-	reopened, err := NewCacheDB(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := openTestCacheDB(t, dir)
 	d = NewUserDAO(nil, reopened)
 	consumed, err = d.ConsumeGatewayControlNonce(ctx, "control-key", "nonce-1", 2*time.Minute)
 	require.NoError(t, err)

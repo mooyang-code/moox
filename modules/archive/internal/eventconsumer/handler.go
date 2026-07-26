@@ -33,12 +33,6 @@ type Journal interface {
 	Quarantine(context.Context, journal.QuarantineRecord) error
 }
 type DirtyNotifier interface{ Notify([]domain.PartitionKey) }
-type RetryScheduledError struct{ Delay time.Duration }
-
-func (e *RetryScheduledError) Error() string {
-	return fmt.Sprintf("archive delivery retry scheduled after %s", e.Delay)
-}
-
 type Handler struct {
 	decoder  DecoderAPI
 	journal  Journal

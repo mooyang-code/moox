@@ -302,16 +302,3 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
-
-func (s *Server) Config() *config.Config {
-	if s == nil {
-		return nil
-	}
-	return s.cfg
-}
-func (s *Server) String() string {
-	if s == nil {
-		return ""
-	}
-	return strings.TrimSpace(s.URL())
-}

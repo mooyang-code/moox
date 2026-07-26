@@ -12,14 +12,6 @@ import (
 	"testing"
 )
 
-func TestGetVersionInfoDefaultsToDev(t *testing.T) {
-	old := Version
-	Version = ""
-	t.Cleanup(func() { Version = old })
-	assert.Equal(t, "moox CLI dev", GetVersionInfo())
-	assert.Equal(t, "moox CLI dev", GetFullVersionInfo())
-}
-
 func TestGetFullVersionInfoDefaultsToDev(t *testing.T) {
 	old := Version
 	Version = ""

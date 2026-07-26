@@ -45,7 +45,7 @@ func TestReportJSONMatchesSchemaAndIsStable(t *testing.T) {
 	}
 
 	compiler := jsonschema.NewCompiler()
-	if err := compiler.AddResource("report.schema.json", bytes.NewReader(EmbeddedReportSchema())); err != nil {
+	if err := compiler.AddResource("report.schema.json", bytes.NewReader(embeddedReportSchema)); err != nil {
 		t.Fatalf("add schema: %v", err)
 	}
 	schema, err := compiler.Compile("report.schema.json")

@@ -245,7 +245,6 @@ type seedDatasetColumn struct {
 	OriginID   string   `yaml:"origin_id"`
 	ValueType  string   `yaml:"value_type"`
 	Required   bool     `yaml:"required"`
-	IsUnique   bool     `yaml:"is_unique"`
 	Aliases    []string `yaml:"aliases"`
 	seedCommon `yaml:",inline"`
 }

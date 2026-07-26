@@ -65,11 +65,6 @@ func (j *Job) Handle(ctx context.Context) error {
 	return err
 }
 
-// Running reports whether this process is currently executing the job.
-func (j *Job) Running() bool {
-	return j.running.Load()
-}
-
 func classify(err, contextErr error) Result {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(contextErr, context.DeadlineExceeded) {
 		return ResultTimeout

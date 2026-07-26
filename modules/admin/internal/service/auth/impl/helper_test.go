@@ -2,6 +2,7 @@ package impl
 
 import (
 	"context"
+	"github.com/dgraph-io/badger/v4"
 	"github.com/glebarez/sqlite"
 	authconfig "github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
@@ -23,9 +24,7 @@ func newAuthServiceForHelperTest(t *testing.T) *AuthServiceImpl {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
-	cache, err := dao.NewCacheDB(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = cache.Close() })
+	cache := openAuthTestCache(t)
 	return &AuthServiceImpl{
 		cfg: &authconfig.Config{
 			Security: authconfig.SecurityConfig{
@@ -36,6 +35,16 @@ func newAuthServiceForHelperTest(t *testing.T) *AuthServiceImpl {
 		},
 		userDAO: dao.NewUserDAO(db, cache),
 	}
+}
+
+func openAuthTestCache(t *testing.T) *dao.CacheDB {
+	t.Helper()
+	db, err := badger.Open(badger.DefaultOptions(t.TempDir()).WithLogger(nil))
+	require.NoError(t, err)
+	cache, err := dao.NewCacheDBFromBadger(db)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cache.Close() })
+	return cache
 }
 
 func TestExtractClientIPFromContext_XClientIP_ShouldPreferHeader(t *testing.T) {
@@ -57,19 +66,6 @@ func TestIsUserLocked_ExceedAttempts_ShouldReturnTrue(t *testing.T) {
 	svc.recordLoginAttempt(ctx, "alice", "1.1.1.1", false)
 	svc.recordLoginAttempt(ctx, "alice", "1.1.1.1", false)
 	assert.True(t, svc.isUserLocked(ctx, "alice", "1.1.1.1"))
-}
-
-func TestValidateLoginSalt_ValidSalt_ShouldReturnTrue(t *testing.T) {
-	svc := newAuthServiceForHelperTest(t)
-	ctx := context.Background()
-	salt := model.LoginSalt{
-		Username:  "bob",
-		Salt:      "salt-1",
-		Timestamp: 123,
-		ExpiresAt: time.Now().Add(time.Minute),
-	}
-	require.NoError(t, svc.userDAO.SetLoginSalt(ctx, "bob", salt))
-	assert.True(t, svc.validateLoginSalt(ctx, "bob", "salt-1", 123))
 }
 
 func TestRecordLoginHistory_ShouldNotPanic(t *testing.T) {

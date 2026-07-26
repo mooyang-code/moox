@@ -51,7 +51,7 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	metrics.IncInProgressError()
 	metrics.IncOutboxPublishError()
 	metrics.IncOutboxDuplicatePublish()
-	metrics.SetOutboxSnapshot(3, 4*time.Second)
+	metrics.SetOutboxSnapshotAt(3, time.Now().Add(-4*time.Second))
 	metrics.ObserveDelivery("term", "success")
 
 	snapshot := metrics.Snapshot()
@@ -59,7 +59,8 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	assert.True(t, snapshot.ConsumerBound)
 	assert.Equal(t, int64(1), snapshot.LaneActive)
 	assert.Equal(t, int64(3), snapshot.OutboxPendingEntries)
-	assert.Equal(t, 4*time.Second, snapshot.OutboxOldestAge)
+	assert.GreaterOrEqual(t, snapshot.OutboxOldestAge, 4*time.Second)
+	assert.Less(t, snapshot.OutboxOldestAge, 5*time.Second)
 	assert.Greater(t, snapshot.OldestPendingAge, time.Second)
 	assert.Equal(t, int64(1), snapshot.AckErrorsTotal)
 	assert.Equal(t, int64(1), snapshot.InProgressErrorsTotal)

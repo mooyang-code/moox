@@ -121,7 +121,7 @@ func TestUpsertBindingSuccess(t *testing.T) {
 
 func TestListFactorRunsReturnsEmptyPageWithoutPersistentRunStore(t *testing.T) {
 	ctx := context.Background()
-	svc := New(openEmptyRPCTestDB(t))
+	svc := NewWithRuntime(openEmptyRPCTestDB(t), nil, nil)
 
 	rsp, err := svc.ListFactorRuns(ctx, &factorpb.ListFactorRunsReq{
 		SpaceId:       "crypto",
@@ -526,7 +526,7 @@ func TestGetRecalcProgress_Validation(t *testing.T) {
 }
 
 func TestRecalcFactor_ValidationBranches(t *testing.T) {
-	svc := New(openRPCTestDB(t))
+	svc := NewWithRuntime(openRPCTestDB(t), nil, nil)
 	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{
 		SpaceId: "s", SourceDataset: "d", Freq: "1m", SubjectId: "BTC",
 	})

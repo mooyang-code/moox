@@ -33,7 +33,7 @@ moox-trade      -> modules/trade/schema
 | 数据类型 | 所属模块 | 重建方式 |
 | --- | --- | --- |
 | Space、用户、登录态、本地运维配置 | `moox-admin` | admin 启动建表，管理台/API 创建 |
-| 服务部署信息 | `moox-admin` | SysDeploy 启动补齐默认部署记录，再通过管理台 `/settings/service-deployments` 调整 |
+| 服务部署信息 | `moox-admin` | SysDeploy 启动补齐默认部署记录，再通过管理台 `/ops/services?tab=instances` 调整 |
 | Storage DataNode 注册和业务元数据 | `moox-storage` | 部署注册 DataNode；`examples/*.seed.yaml` 通过 `moox-cli metadata import` 导入直接绑定的 disabled Dataset |
 | 云账户、云节点、函数包 | `moox-cloudnode` | 管理台或 `/api/admin/cloudnode/*` API 创建 |
 | 采集规则、任务实例 | `moox-collector` | 管理台或 `/api/admin/collectmgr/*` API 创建规则，再由 collector 生成；采集执行日志由 SCF/CLS 承载 |

@@ -103,10 +103,6 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 	return manifest, nil
 }
 
-func EmbeddedManifest() []byte {
-	return append([]byte(nil), embeddedManifest...)
-}
-
 func (m Manifest) Validate() error {
 	if m.Version != 1 {
 		return fmt.Errorf("unsupported manifest version %d", m.Version)

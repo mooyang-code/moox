@@ -52,7 +52,8 @@ func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 
 	selected, err := selectMetadataSpaces(seed, []string{" A股市场 "})
 	require.NoError(t, err)
-	require.Equal(t, []string{"stock_cn"}, metadataSeedSpaceIDs(selected))
+	require.Len(t, selected.Spaces, 1)
+	require.Equal(t, "stock_cn", selected.Spaces[0].SpaceID)
 	require.Len(t, selected.DataSources, 1)
 	require.Len(t, selected.FieldGroups, 1)
 	require.Len(t, selected.Fields, 1)

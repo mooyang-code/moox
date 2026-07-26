@@ -2,6 +2,7 @@ package dnsproxy
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -9,38 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-database/localcache"
 )
-
-func TestUpdateNodeDNSRecords_EmptyNodeID_ShouldError(t *testing.T) {
-	err := UpdateNodeDNSRecords(context.Background(), "", nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nodeID cannot be empty")
-}
-
-func TestUpdateNodeDNSRecords_ValidPayload_ShouldCache(t *testing.T) {
-	ctx := context.Background()
-	nodeID := "node-cache-" + t.Name()
-	records := []*NodeDNSRecord{{
-		Domain:    "example.com",
-		IPList:    []string{"1.1.1.1"},
-		ResolveAt: time.Now(),
-	}}
-	require.NoError(t, UpdateNodeDNSRecords(ctx, nodeID, records))
-	waitLocalCache(t, nodeDNSCacheKeyPrefix+nodeID)
-
-	var got []*NodeDNSRecord
-	var err error
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		got, err = GetNodeDNSRecords(ctx, nodeID)
-		require.NoError(t, err)
-		if len(got) == 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	require.Len(t, got, 1)
-	assert.Equal(t, "example.com", got[0].Domain)
-}
 
 func TestGetNodeDNSRecords_CacheMiss_ShouldReturnEmpty(t *testing.T) {
 	got, err := GetNodeDNSRecords(context.Background(), "missing-node")
@@ -73,9 +42,11 @@ func TestGetAllNodesDNSForDomain_WithNodeRecords_ShouldReturnIPs(t *testing.T) {
 	ctx := context.Background()
 	prev := GetActiveNodeIDsFunc
 	t.Cleanup(func() { GetActiveNodeIDsFunc = prev })
-	require.NoError(t, UpdateNodeDNSRecords(ctx, "node-a", []*NodeDNSRecord{{
+	records, err := json.Marshal([]*NodeDNSRecord{{
 		Domain: "svc.local", IPList: []string{"10.0.0.1"},
-	}}))
+	}})
+	require.NoError(t, err)
+	require.True(t, localcache.Set(nodeDNSCacheKeyPrefix+"node-a", records, nodeDNSCacheTTL))
 	waitLocalCache(t, nodeDNSCacheKeyPrefix+"node-a")
 	GetActiveNodeIDsFunc = func(ctx context.Context) ([]string, error) {
 		return []string{"node-a"}, nil

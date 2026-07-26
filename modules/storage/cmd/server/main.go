@@ -134,7 +134,7 @@ func runPrimaryRole() error {
 	if err != nil {
 		return err
 	}
-	metadataSvc, err := metadataservice.NewMetadataService(meta, cached)
+	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{})
 	if err != nil {
 		return err
 	}

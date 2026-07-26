@@ -40,15 +40,7 @@ type Store struct {
 	latest map[string]AgentView
 }
 
-func NewStore(writer SnapshotWriter) *Store {
-	return NewStoreWithWriter(writer)
-}
-
-func NewStoreWithWriter(writer SnapshotWriter) *Store {
-	return NewStoreWithWriterReader(writer, nil)
-}
-
-func NewStoreWithWriterReader(writer SnapshotWriter, reader HistoryReader) *Store {
+func NewStore(writer SnapshotWriter, reader HistoryReader) *Store {
 	return &Store{writer: writer, reader: reader, latest: make(map[string]AgentView)}
 }
 
@@ -65,10 +57,6 @@ func (s *Store) SetStorageReady(ready func() bool) {
 }
 
 func (s *Store) StorageReady() bool { return s != nil && (s.ready == nil || s.ready()) }
-
-// EnsureSchema is retained as a no-op during the deployment migration. Host
-// sample tables are no longer created or read.
-func (s *Store) EnsureSchema() error { return nil }
 
 func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error) {
 	if msg == nil {

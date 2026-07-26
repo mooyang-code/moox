@@ -5,7 +5,7 @@ import (
 	"errors"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/instrument"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	legacy "github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/service"
 	"strings"
 )
@@ -15,7 +15,7 @@ type Resolver struct {
 	Factory service.ExchangeFactory
 }
 
-func (r Resolver) Resolve(ctx context.Context, space, channelID string) (legacy.TradingAdapter, error) {
+func (r Resolver) Resolve(ctx context.Context, space, channelID string) (exchange.TradingAdapter, error) {
 	ch, err := r.Store.GetChannel(ctx, space, channelID)
 	if err != nil {
 		return nil, err
@@ -29,72 +29,72 @@ func (r Resolver) Resolve(ctx context.Context, space, channelID string) (legacy.
 	}
 	factory := r.Factory
 	if factory == nil {
-		factory = legacy.New
+		factory = exchange.New
 	}
 	a, err := factory(ch.Exchange)
 	if err != nil {
 		return nil, err
 	}
-	return &bound{adapter: a, credential: legacy.Credential{APIKey: key.APIKey, APISecret: key.APISecret, Passphrase: key.Passphrase}, market: legacy.MarketType(ch.MarketType)}, nil
+	return &bound{adapter: a, credential: exchange.Credential{APIKey: key.APIKey, APISecret: key.APISecret, Passphrase: key.Passphrase}, market: exchange.MarketType(ch.MarketType)}, nil
 }
 
-func (r Resolver) DescribeChannel(ctx context.Context, space, channelID string) (legacy.Channel, error) {
+func (r Resolver) DescribeChannel(ctx context.Context, space, channelID string) (exchange.Channel, error) {
 	ch, err := r.Store.GetChannel(ctx, space, channelID)
 	if err != nil {
-		return legacy.Channel{}, err
+		return exchange.Channel{}, err
 	}
-	return legacy.Channel{AccountID: ch.AccountID, Exchange: ch.Exchange, MarketType: ch.MarketType, IsSimulated: ch.IsSimulated}, nil
+	return exchange.Channel{AccountID: ch.AccountID, Exchange: ch.Exchange, MarketType: ch.MarketType, IsSimulated: ch.IsSimulated}, nil
 }
 
-func (r Resolver) ResolvePublic(ctx context.Context, space, channelID string) (legacy.TradingAdapter, error) {
+func (r Resolver) ResolvePublic(ctx context.Context, space, channelID string) (exchange.TradingAdapter, error) {
 	ch, err := r.Store.GetChannel(ctx, space, channelID)
 	if err != nil {
 		return nil, err
 	}
 	factory := r.Factory
 	if factory == nil {
-		factory = legacy.New
+		factory = exchange.New
 	}
 	adapter, err := factory(ch.Exchange)
 	if err != nil {
 		return nil, err
 	}
-	return &bound{adapter: adapter, market: legacy.MarketType(ch.MarketType)}, nil
+	return &bound{adapter: adapter, market: exchange.MarketType(ch.MarketType)}, nil
 }
 
 type bound struct {
-	adapter    legacy.ExchangeAdapter
-	credential legacy.Credential
-	market     legacy.MarketType
+	adapter    exchange.ExchangeAdapter
+	credential exchange.Credential
+	market     exchange.MarketType
 }
 
 func (b *bound) MarketType() string   { return string(b.market) }
 func (b *bound) ExchangeName() string { return b.adapter.Name() }
 
-func (b *bound) Place(ctx context.Context, r legacy.PlaceRequest) (legacy.ExchangeOrderResult, error) {
-	out, err := b.adapter.PlaceOrder(ctx, b.credential, &legacy.PlaceOrderReq{Market: b.market, Symbol: r.Symbol, Side: legacy.OrderSide(strings.ToLower(r.Side)), Type: legacy.OrderType(strings.ToLower(r.Type)), TimeInForce: r.TimeInForce, Price: r.Price.String(), Quantity: r.Quantity.String(), ClientOrderID: r.ClientOrderID, ReduceOnly: r.ReduceOnly})
+func (b *bound) Place(ctx context.Context, r exchange.PlaceRequest) (exchange.ExchangeOrderResult, error) {
+	out, err := b.adapter.PlaceOrder(ctx, b.credential, &exchange.PlaceOrderReq{Market: b.market, Symbol: r.Symbol, Side: exchange.OrderSide(strings.ToLower(r.Side)), Type: exchange.OrderType(strings.ToLower(r.Type)), TimeInForce: r.TimeInForce, Price: r.Price.String(), Quantity: r.Quantity.String(), ClientOrderID: r.ClientOrderID, ReduceOnly: r.ReduceOnly})
 	if err != nil {
-		return legacy.ExchangeOrderResult{}, classify(err)
+		return exchange.ExchangeOrderResult{}, classify(err)
 	}
-	return legacy.ExchangeOrderResult{ExchangeOrderID: out.ExchangeOrderID, ClientOrderID: out.ClientOrderID, Status: status(out.Status), FilledQuantity: shared.Zero()}, nil
+	return exchange.ExchangeOrderResult{ExchangeOrderID: out.ExchangeOrderID, ClientOrderID: out.ClientOrderID, Status: status(out.Status), FilledQuantity: shared.Zero()}, nil
 }
-func (b *bound) Cancel(ctx context.Context, symbol, clientID string) (legacy.ExchangeOrderResult, error) {
-	out, err := b.adapter.CancelOrder(ctx, b.credential, &legacy.CancelOrderReq{Market: b.market, Symbol: symbol, ClientOrderID: clientID})
+func (b *bound) Cancel(ctx context.Context, symbol, clientID string) (exchange.ExchangeOrderResult, error) {
+	out, err := b.adapter.CancelOrder(ctx, b.credential, &exchange.CancelOrderReq{Market: b.market, Symbol: symbol, ClientOrderID: clientID})
 	if err != nil {
-		return legacy.ExchangeOrderResult{}, classify(err)
+		return exchange.ExchangeOrderResult{}, classify(err)
 	}
-	return legacy.ExchangeOrderResult{ExchangeOrderID: out.ExchangeOrderID, ClientOrderID: out.ClientOrderID, Status: status(out.Status), FilledQuantity: shared.Zero()}, nil
+	return exchange.ExchangeOrderResult{ExchangeOrderID: out.ExchangeOrderID, ClientOrderID: out.ClientOrderID, Status: status(out.Status), FilledQuantity: shared.Zero()}, nil
 }
-func (b *bound) QueryByClientOrderID(ctx context.Context, symbol, clientID string) (legacy.ExchangeOrderResult, error) {
-	out, err := b.adapter.GetOrder(ctx, b.credential, &legacy.GetOrderReq{Market: b.market, Symbol: symbol, ClientOrderID: clientID})
+func (b *bound) QueryByClientOrderID(ctx context.Context, symbol, clientID string) (exchange.ExchangeOrderResult, error) {
+	out, err := b.adapter.GetOrder(ctx, b.credential, &exchange.GetOrderReq{Market: b.market, Symbol: symbol, ClientOrderID: clientID})
 	if err != nil {
-		return legacy.ExchangeOrderResult{}, classify(err)
+		return exchange.ExchangeOrderResult{}, classify(err)
 	}
 	filled, parseErr := shared.ParseDecimal(out.FilledQty)
 	if parseErr != nil {
 		filled = shared.Zero()
 	}
-	return legacy.ExchangeOrderResult{ExchangeOrderID: out.ExchangeOrderID, ClientOrderID: out.ClientOrderID, Status: status(out.Status), FilledQuantity: filled}, nil
+	return exchange.ExchangeOrderResult{ExchangeOrderID: out.ExchangeOrderID, ClientOrderID: out.ClientOrderID, Status: status(out.Status), FilledQuantity: filled}, nil
 }
 func (b *bound) Rules(ctx context.Context, symbol string) (instrument.Rules, error) {
 	xs, err := b.adapter.GetInstruments(ctx, b.market)
@@ -131,8 +131,8 @@ func (b *bound) Rules(ctx context.Context, symbol string) (instrument.Rules, err
 	}
 	return instrument.Rules{}, errors.New("trade: instrument not found")
 }
-func (b *bound) SubscribePrivate(ctx context.Context, handler legacy.PrivateEventHandler) error {
-	stream, ok := b.adapter.(legacy.PrivateStreamAdapter)
+func (b *bound) SubscribePrivate(ctx context.Context, handler exchange.PrivateEventHandler) error {
+	stream, ok := b.adapter.(exchange.PrivateStreamAdapter)
 	if !ok {
 		return errors.New("trade: private stream not available for adapter")
 	}
@@ -147,16 +147,16 @@ func (b *bound) SubscribePrivate(ctx context.Context, handler legacy.PrivateEven
 
 type privateHandler struct {
 	ctx     context.Context
-	handler legacy.PrivateEventHandler
+	handler exchange.PrivateEventHandler
 	cancel  context.CancelFunc
 	err     error
 }
 
-func (h *privateHandler) OnOrderUpdate(*legacy.OrderEvent)       {}
-func (h *privateHandler) OnPositionUpdate(*legacy.PositionEvent) {}
-func (h *privateHandler) OnBalanceUpdate(*legacy.BalanceEvent)   {}
-func (h *privateHandler) OnError(error)                          {}
-func (h *privateHandler) OnTrade(event *legacy.TradeEvent) {
+func (h *privateHandler) OnOrderUpdate(*exchange.OrderEvent)       {}
+func (h *privateHandler) OnPositionUpdate(*exchange.PositionEvent) {}
+func (h *privateHandler) OnBalanceUpdate(*exchange.BalanceEvent)   {}
+func (h *privateHandler) OnError(error)                            {}
+func (h *privateHandler) OnTrade(event *exchange.TradeEvent) {
 	if event == nil || h.handler == nil {
 		return
 	}
@@ -176,14 +176,14 @@ func (h *privateHandler) OnTrade(event *legacy.TradeEvent) {
 			return
 		}
 	}
-	err = h.handler(h.ctx, legacy.FillEvent{ExchangeTradeID: trade.ExchangeTradeID, ExchangeOrderID: trade.OrderID, ClientOrderID: trade.ClientOrderID, Symbol: trade.Symbol, Side: strings.ToUpper(string(trade.Side)), Quantity: quantity, Price: price, Fee: fee, FeeCurrency: trade.FeeCurrency, TradedAt: trade.TradedAt})
+	err = h.handler(h.ctx, exchange.FillEvent{ExchangeTradeID: trade.ExchangeTradeID, ExchangeOrderID: trade.OrderID, ClientOrderID: trade.ClientOrderID, Symbol: trade.Symbol, Side: strings.ToUpper(string(trade.Side)), Quantity: quantity, Price: price, Fee: fee, FeeCurrency: trade.FeeCurrency, TradedAt: trade.TradedAt})
 	if err != nil {
 		h.err = err
 		h.cancel()
 	}
 }
-func (b *bound) ListFills(ctx context.Context, symbol, orderID string) ([]legacy.FillEvent, error) {
-	rows, err := b.adapter.ListTrades(ctx, b.credential, &legacy.ListTradesReq{Market: b.market, Symbol: symbol, OrderID: orderID, Limit: 500})
+func (b *bound) ListFills(ctx context.Context, symbol, orderID string) ([]exchange.FillEvent, error) {
+	rows, err := b.adapter.ListTrades(ctx, b.credential, &exchange.ListTradesReq{Market: b.market, Symbol: symbol, OrderID: orderID, Limit: 500})
 	if err != nil {
 		return nil, classify(err)
 	}
@@ -191,7 +191,7 @@ func (b *bound) ListFills(ctx context.Context, symbol, orderID string) ([]legacy
 	if err != nil {
 		return nil, err
 	}
-	out := make([]legacy.FillEvent, 0, len(rows))
+	out := make([]exchange.FillEvent, 0, len(rows))
 	for _, r := range rows {
 		q, e := shared.ParseDecimal(r.Quantity)
 		if e != nil {
@@ -208,21 +208,21 @@ func (b *bound) ListFills(ctx context.Context, symbol, orderID string) ([]legacy
 				return nil, e
 			}
 		}
-		out = append(out, legacy.FillEvent{ExchangeTradeID: r.ExchangeTradeID, ExchangeOrderID: r.OrderID, Symbol: r.Symbol, Side: strings.ToUpper(string(r.Side)), BaseAsset: rules.BaseAsset, QuoteAsset: rules.QuoteAsset, Quantity: q, Price: p, Fee: fee, FeeCurrency: r.FeeCurrency, TradedAt: r.TradedAt})
+		out = append(out, exchange.FillEvent{ExchangeTradeID: r.ExchangeTradeID, ExchangeOrderID: r.OrderID, Symbol: r.Symbol, Side: strings.ToUpper(string(r.Side)), BaseAsset: rules.BaseAsset, QuoteAsset: rules.QuoteAsset, Quantity: q, Price: p, Fee: fee, FeeCurrency: r.FeeCurrency, TradedAt: r.TradedAt})
 	}
 	return out, nil
 }
-func status(s legacy.OrderStatus) string {
+func status(s exchange.OrderStatus) string {
 	switch s {
-	case legacy.StatusFilled:
+	case exchange.StatusFilled:
 		return "FILLED"
-	case legacy.StatusCanceled, legacy.StatusPartialCanceled:
+	case exchange.StatusCanceled, exchange.StatusPartialCanceled:
 		return "CANCELED"
-	case legacy.StatusRejected:
+	case exchange.StatusRejected:
 		return "REJECTED"
-	case legacy.StatusExpired:
+	case exchange.StatusExpired:
 		return "EXPIRED"
-	case legacy.StatusPartiallyFilled:
+	case exchange.StatusPartiallyFilled:
 		return "PARTIALLY_FILLED"
 	default:
 		return "OPEN"
@@ -230,15 +230,15 @@ func status(s legacy.OrderStatus) string {
 }
 func classify(err error) error {
 	msg := strings.ToLower(err.Error())
-	cat := legacy.ErrorPermanent
+	cat := exchange.ErrorPermanent
 	if strings.Contains(msg, "order not found") || strings.Contains(msg, "unknown order") {
-		cat = legacy.ErrorOrderNotFound
+		cat = exchange.ErrorOrderNotFound
 	} else if strings.Contains(msg, "timeout") || strings.Contains(msg, "connection reset") {
-		cat = legacy.ErrorTransportUncertain
+		cat = exchange.ErrorTransportUncertain
 	} else if strings.Contains(msg, "rate") || strings.Contains(msg, "429") {
-		cat = legacy.ErrorRateLimited
+		cat = exchange.ErrorRateLimited
 	} else if strings.Contains(msg, "balance") {
-		cat = legacy.ErrorInsufficientBalance
+		cat = exchange.ErrorInsufficientBalance
 	}
-	return &legacy.ClassifiedError{Category: cat, Err: err}
+	return &exchange.ClassifiedError{Category: cat, Err: err}
 }

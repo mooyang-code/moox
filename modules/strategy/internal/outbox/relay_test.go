@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
@@ -89,23 +88,5 @@ func TestRelayReleasesFailedPublishAndRetries(t *testing.T) {
 	}
 	if len(publisher.rows) != 2 {
 		t.Fatalf("publish attempts=%d", len(publisher.rows))
-	}
-}
-
-func TestRelayRunStopsOnCancellation(t *testing.T) {
-	_, repo := openOutboxTestStore(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- (&Relay{Store: repo, Publisher: &recordingPublisher{}}).Run(ctx, time.Millisecond, 1)
-	}()
-	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("relay did not stop")
 	}
 }

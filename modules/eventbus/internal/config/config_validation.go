@@ -179,15 +179,6 @@ func patternCovers(cover, subjectPattern string) bool {
 	return len(coverParts) == len(subjectParts)
 }
 
-func findStream(c *Config, name string) (StreamConfig, bool) {
-	for _, stream := range c.Streams {
-		if stream.Name == name {
-			return stream, true
-		}
-	}
-	return StreamConfig{}, false
-}
-
 func unsafeStoreDir(dir string) bool {
 	dir = strings.TrimSpace(dir)
 	if dir == "" || dir == "." || dir == string(filepath.Separator) {
@@ -218,19 +209,6 @@ func validateSubject(subject string, wildcard bool) error {
 		}
 	}
 	return nil
-}
-
-func subjectMatches(pattern, subject string) bool {
-	p, s := strings.Split(pattern, "."), strings.Split(subject, ".")
-	for i := 0; i < len(p); i++ {
-		if p[i] == ">" {
-			return i < len(s)
-		}
-		if i >= len(s) || (p[i] != "*" && p[i] != s[i]) {
-			return false
-		}
-	}
-	return len(p) == len(s)
 }
 
 func patternsOverlap(a, b string) bool {

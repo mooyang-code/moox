@@ -1,26 +1,6 @@
 package common
 
-import (
-	"encoding/json"
-	"time"
-)
-
-// DataPoint 数据点接口
-type DataPoint interface {
-	// 数据源信息
-	Source() string     // 数据来源
-	SourceType() string // 来源类型
-
-	// 时间信息
-	Timestamp() time.Time
-
-	// 数据验证
-	Validate() error
-
-	// 序列化
-	Marshal() ([]byte, error)
-	Unmarshal([]byte) error
-}
+import "time"
 
 // BaseDataPoint 基础数据点实现
 type BaseDataPoint struct {
@@ -37,31 +17,6 @@ func NewBaseDataPoint(source, dataType string) BaseDataPoint {
 		DataType:   dataType,
 		CreatedAt:  time.Now(),
 	}
-}
-
-func (b *BaseDataPoint) Source() string {
-	return b.DataSource
-}
-
-func (b *BaseDataPoint) SourceType() string {
-	return b.DataType
-}
-
-func (b *BaseDataPoint) Timestamp() time.Time {
-	return b.CreatedAt
-}
-
-func (b *BaseDataPoint) Validate() error {
-	// 基础验证逻辑
-	return nil
-}
-
-func (b *BaseDataPoint) Marshal() ([]byte, error) {
-	return json.Marshal(b)
-}
-
-func (b *BaseDataPoint) Unmarshal(data []byte) error {
-	return json.Unmarshal(data, b)
 }
 
 // 生成唯一ID的辅助函数

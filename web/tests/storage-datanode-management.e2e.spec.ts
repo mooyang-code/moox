@@ -371,7 +371,7 @@ test.describe("DataNode management browser workflows", () => {
     const fixture = makeFixture();
     fixture.nodes[1].node.status = "active";
     await preparePage(page, fixture);
-    await page.goto("/#/data/datasets");
+    await page.goto("/#/collector/data-management?tab=datasets");
 
     await expect(page.getByRole("heading", { name: "数据集" })).toBeVisible();
     const lockedRow = page.getByRole("row", { name: /dataset-locked/ });
@@ -441,7 +441,7 @@ test.describe("DataNode management browser workflows", () => {
     fixture.nodes[1].node.status = "active";
     await page.setViewportSize({ width: 390, height: 844 });
     await preparePage(page, fixture);
-    await page.goto("/#/data/datasets");
+    await page.goto("/#/collector/data-management?tab=datasets");
 
     const infoButton = page.getByRole("button", { name: "数据集绑定规则说明" });
     await infoButton.focus();

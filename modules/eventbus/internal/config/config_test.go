@@ -89,16 +89,13 @@ func TestRejectUnsafeAndInvalidConfiguration(t *testing.T) {
 	}
 }
 
-func TestSubjectValidationAndMatching(t *testing.T) {
+func TestSubjectValidation(t *testing.T) {
 	require.NoError(t, validateSubject("moox.storage.>", true))
 	require.Error(t, validateSubject("", true))
 	require.Error(t, validateSubject("moox..storage", true))
 	require.Error(t, validateSubject("moox.>", false))
 	require.Error(t, validateSubject("moox.*.rows", false))
 
-	assert.True(t, subjectMatches("moox.storage.>", "moox.storage.rows.v1"))
-	assert.True(t, subjectMatches("moox.*.rows", "moox.storage.rows"))
-	assert.False(t, subjectMatches("moox.storage.rows", "moox.storage.other"))
 }
 
 func TestPatternOverlap(t *testing.T) {
@@ -112,19 +109,4 @@ func TestUnsafeStoreDir(t *testing.T) {
 	assert.True(t, unsafeStoreDir("."))
 	assert.True(t, unsafeStoreDir("/"))
 	assert.False(t, unsafeStoreDir("./data/eventbus"))
-}
-
-func TestFindStream(t *testing.T) {
-	cfg := loadRepositoryConfig(t)
-	stream, ok := findStream(cfg, "MOOX_STORAGE")
-	require.True(t, ok)
-	assert.Equal(t, "MOOX_STORAGE", stream.Name)
-	assert.EqualValues(t, 1073741824, stream.MaxBytes)
-	for _, name := range []string{"MOOX_METRICS", "MOOX_CLOUDNODE_EXEC", "MOOX_TRADE"} {
-		stream, ok = findStream(cfg, name)
-		require.True(t, ok)
-		assert.EqualValues(t, 268435456, stream.MaxBytes)
-	}
-	_, ok = findStream(cfg, "missing")
-	assert.False(t, ok)
 }
