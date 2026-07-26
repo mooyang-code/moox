@@ -11,6 +11,13 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
+func TestJobItemExecuteAtZeroMeansMissing(t *testing.T) {
+	var item JobItem
+	if !item.ExecuteAt.IsZero() {
+		t.Fatalf("execute_at = %v, want zero value", item.ExecuteAt)
+	}
+}
+
 func testConfig(target string) Config {
 	return Config{
 		ServiceGatewayTarget: target, SpaceID: "crypto", NodeID: "node-1", CodePackageID: "pkg",

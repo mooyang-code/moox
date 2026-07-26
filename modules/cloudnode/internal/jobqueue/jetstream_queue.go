@@ -91,6 +91,7 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) error {
 	payload := &cloudjobpb.JobExecutionRequested{
 		JobId: item.GetJobId(), JobItemId: item.GetJobItemId(), JobType: item.GetJobType(),
 		CodePackageId: item.GetCodePackageId(), Params: item.GetParams(), Priority: item.GetPriority(),
+		ExecuteAt: item.GetExecuteAt(),
 	}
 	_, err = q.publisher.Publish(ctx, events.CloudJobExecutionRequested, payload, events.PublishOptions{
 		EventID: item.GetJobItemId(), OccurredAt: time.Now().UTC(), SpaceID: item.GetSpaceId(), SubjectID: subjectID,

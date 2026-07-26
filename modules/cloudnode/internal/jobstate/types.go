@@ -34,6 +34,7 @@ type State struct {
 	CodePackageID    string         `json:"code_package_id"`
 	Params           map[string]any `json:"params,omitempty"`
 	Priority         int32          `json:"priority"`
+	ExecuteAt        *time.Time     `json:"execute_at,omitempty"`
 	Status           string         `json:"status"`
 	ResultSummary    map[string]any `json:"result_summary,omitempty"`
 	LastErrorKind    string         `json:"last_error_kind,omitempty"`
@@ -79,7 +80,7 @@ func (s State) ToDetail() *pb.JobItemDetail {
 		Status: statusToPB(s.Status), ResultSummary: mapToStruct(s.ResultSummary),
 		LastErrorKind: errorKindToPB(s.LastErrorKind), LastErrorCode: s.LastErrorCode,
 		LastErrorMessage: s.LastErrorMessage, DurationMs: s.DurationMS, ExecutionNode: s.ExecutionNode,
-		CreateTime: timeToPB(s.CreatedAt), FinishTime: timePtrToPB(s.FinishedAt),
+		CreateTime: timeToPB(s.CreatedAt), FinishTime: timePtrToPB(s.FinishedAt), ExecuteAt: timePtrToPB(s.ExecuteAt),
 	}
 }
 

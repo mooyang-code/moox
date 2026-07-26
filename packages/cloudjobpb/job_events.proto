@@ -3,6 +3,7 @@ syntax = "proto3";
 package trpc.moox.cloudjob;
 
 import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/mooyang-code/moox/packages/cloudjobpb;cloudjobpb";
 
@@ -13,4 +14,5 @@ message JobExecutionRequested {
   string code_package_id = 4;
   google.protobuf.Struct params = 5;
   int32 priority = 6;
+  google.protobuf.Timestamp execute_at = 7;
 }

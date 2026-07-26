@@ -48,11 +48,19 @@ func (s *KVStore) CreatePending(ctx context.Context, item *pb.JobItem) (*CreateR
 	if s == nil || s.kv == nil || ValidateJobItem(item) != nil {
 		return nil, ErrInvalid
 	}
+	var executeAt *time.Time
+	if item.GetExecuteAt() != nil {
+		if err := item.GetExecuteAt().CheckValid(); err != nil {
+			return nil, ErrInvalid
+		}
+		value := item.GetExecuteAt().AsTime().UTC()
+		executeAt = &value
+	}
 	now := s.now()
 	state := State{
 		SchemaVersion: 1, SpaceID: item.GetSpaceId(), JobID: item.GetJobId(), JobItemID: item.GetJobItemId(),
 		JobType: item.GetJobType(), CodePackageID: item.GetCodePackageId(), Params: structToMap(item.GetParams()),
-		Priority: item.GetPriority(), Status: StatusPending, CreatedAt: now, UpdatedAt: now,
+		Priority: item.GetPriority(), ExecuteAt: executeAt, Status: StatusPending, CreatedAt: now, UpdatedAt: now,
 	}
 	raw, err := encodeState(state)
 	if err != nil {

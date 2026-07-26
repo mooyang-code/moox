@@ -42,6 +42,7 @@ type JobItem struct {
 	JobType       string
 	CodePackageID string
 	Params        map[string]any
+	ExecuteAt     time.Time
 }
 
 type Result struct{ Summary map[string]any }

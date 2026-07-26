@@ -431,6 +431,7 @@ message JobItem {
   string code_package_id = 5;
   google.protobuf.Struct params = 6;
   int32 priority = 7;
+  google.protobuf.Timestamp execute_at = 8;
 }
 
 message SubmitJobItemsReq {
@@ -489,6 +490,7 @@ message JobItemDetail {
   string execution_node = 14;
   google.protobuf.Timestamp create_time = 15;
   google.protobuf.Timestamp finish_time = 16;
+  google.protobuf.Timestamp execute_at = 17;
 }
 
 message GetJobItemRsp {
