@@ -129,6 +129,7 @@ func TestCollectorFunctionEnvironmentUsesRuntimeCollectorIdentity(t *testing.T) 
 	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "node-a", env["MOOX_GATEWAY_NODE_ID"])
+	assert.Equal(t, "node-a", env["MOOX_GATEWAY_TARGET_NODE"])
 	assert.Equal(t, "collector", env["MOOX_GATEWAY_SERVICE_KEY_ID"])
 	assert.Equal(t, "collector-secret", env["MOOX_GATEWAY_SERVICE_SECRET_KEY"])
 }

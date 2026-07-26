@@ -375,7 +375,9 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	}
 	env := map[string]string{}
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
-	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", firstNonEmpty(os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE")))
+	gatewayNodeID := firstNonEmpty(os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
+	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", gatewayNodeID)
+	setDefaultEnv(env, "MOOX_GATEWAY_TARGET_NODE", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"))
 	clsHost := firstNonEmpty(os.Getenv("MOOX_CLS_HOST"), clsprepare.Host)
@@ -396,6 +398,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_GATEWAY_SERVICE_KEY_ID":       {},
 		"MOOX_GATEWAY_SERVICE_SECRET_KEY":   {},
 		"MOOX_GATEWAY_NODE_ID":              {},
+		"MOOX_GATEWAY_TARGET_NODE":          {},
 	}
 	for key := range overrides {
 		if _, ok := managed[key]; ok {

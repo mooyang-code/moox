@@ -112,10 +112,10 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if opts.UseControlGateway {
 		controlGateway = "1"
 	}
-	if result, err := transport.Run(ctx, []string{
+	if _, err := transport.Run(ctx, []string{
 		"sh", "-lc", installStorageScript, "moox-install-storage", reset, controlGateway,
 	}, nil); err != nil {
-		return fmt.Errorf("storage_install_failed: stdout=%s stderr=%s", strings.TrimSpace(result.Stdout), strings.TrimSpace(result.Stderr))
+		return fmt.Errorf("storage_install_failed")
 	}
 	installed := true
 	defer func() {
@@ -198,11 +198,11 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if opts.ResetControlData {
 		reset = "1"
 	}
-	if result, err := transport.Run(ctx, []string{
+	if _, err := transport.Run(ctx, []string{
 		"sh", "-lc", installControlScript, "moox-install-control",
 		opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH, reset,
 	}, nil); err != nil {
-		return fmt.Errorf("control_install_failed: stdout=%s stderr=%s", result.Stdout, result.Stderr)
+		return fmt.Errorf("control_install_failed")
 	}
 	installed := true
 	defer func() {
