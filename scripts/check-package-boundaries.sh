@@ -80,10 +80,10 @@ done < <(rg -n 'jetstream\.(Delivery|HandlerResult)' modules \
 
 # packages/events is the sole owner of event names, streams, and subject
 # patterns. Business modules consume Registry metadata instead of redeclaring it.
+go test scripts/check-event-topology-declarations.go scripts/check-event-topology-declarations_test.go >/dev/null
 while IFS= read -r match; do
 	violations+=("${match}: Registry-owned event topology must not be redeclared in a business module")
-done < <(rg -n '^[[:space:]]*(const|var)[[:space:]]+([A-Za-z0-9_]*(Topic|Stream|SubjectPrefix)|Topic|Stream)[[:space:]=]' \
-	modules --glob '*.go' --glob '!**/*_test.go' || true)
+done < <(go run scripts/check-event-topology-declarations.go modules)
 
 event_legacy_symbols='DatasetRowsUpsertedSubjectPrefix|DatasetRowsUpsertedSubject|ParseDatasetRowsUpsertedSubject|ToSharedRows|ToLocalRows|NATSConsumer'
 while IFS= read -r match; do
