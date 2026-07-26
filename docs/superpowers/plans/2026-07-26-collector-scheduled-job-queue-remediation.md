@@ -792,7 +792,7 @@ git commit -m "fix(collector): bind task summaries to job items"
 - Modify: `modules/collector/internal/sources/binance/symbol_test.go`
 - Modify: `modules/collector/configs/sources/market/binance.yaml`
 
-- [ ] **Step 1: 先写目标 Dataset 不可被配置覆盖的测试**
+- [x] **Step 1: 先写目标 Dataset 不可被配置覆盖的测试**
 
 ```go
 func TestKlineCollectorWritesRequestedSpaceAndDataset(t *testing.T)
@@ -803,7 +803,7 @@ func TestTaskEventFromJobItemRequiresDatasetID(t *testing.T)
 
 测试故意让旧 binding 中的 Dataset 与任务 Dataset 不同，断言最终读写只出现任务携带的值。
 
-- [ ] **Step 2: 扩展执行参数**
+- [x] **Step 2: 扩展执行参数**
 
 ```go
 type CollectParams struct {
@@ -815,7 +815,7 @@ type CollectParams struct {
 
 `dataset_id` 已由 Kline/Symbol planner 写入 JobItem params。taskrunner、`TaskExecuteEvent`、executor 和 source 之间不得丢失该字段。
 
-- [ ] **Step 3: 收窄 Binance StorageBinding**
+- [x] **Step 3: 收窄 Binance StorageBinding**
 
 删除运行时写入目标字段：
 
@@ -837,7 +837,7 @@ auth_info
 
 其中 `subject_dataset_ids` 只表示 Symbol 应维护哪些 Dataset 的 Subject membership，不是行数据写入目标。
 
-- [ ] **Step 4: Kline 全部使用请求目标**
+- [x] **Step 4: Kline 全部使用请求目标**
 
 水位读取、RowKey 构造和日志统一使用：
 
@@ -860,11 +860,11 @@ func buildKlineRows(
 
 禁止再传整个 `StorageBinding`，避免以后误用固定目标。
 
-- [ ] **Step 5: Symbol 记录行使用请求目标**
+- [x] **Step 5: Symbol 记录行使用请求目标**
 
 `buildSymbolRecordRows` 同样显式接收 `spaceID` 和 `datasetID`。注册 active subject 时，将任务目标 Dataset 与 `subject_dataset_ids` 做去重并集。
 
-- [ ] **Step 6: 运行执行和 Binance source 测试**
+- [x] **Step 6: 运行执行和 Binance source 测试**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/executor ./internal/taskrunner ./internal/sources/binance)
@@ -872,7 +872,7 @@ func buildKlineRows(
 
 Expected: Kline 水位和写入、Symbol record 写入都严格落到规则目标。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add modules/collector
