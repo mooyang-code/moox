@@ -12,10 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	storagepb "github.com/mooyang-code/moox/packages/storagepb"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -104,81 +100,6 @@ func TestViewServiceRequiresSecretAndAuth(t *testing.T) {
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
-	}
-}
-
-func TestMalformedDeliveryIsPermanent(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = svc.applyDelivery(context.Background(), &jetstream.Delivery{
-		Subject: "malformed",
-		RawData: []byte("not-protobuf"), ContentType: events.ContentType, RawMessageID: "malformed",
-	})
-	if !isPermanentDeliveryError(err) {
-		t.Fatalf("err=%v", err)
-	}
-	err = svc.applyDelivery(context.Background(), &jetstream.Delivery{DecodeError: errors.New("decode failed")})
-	if !isPermanentDeliveryError(err) {
-		t.Fatalf("decode err=%v", err)
-	}
-}
-
-func TestApplyDeliveryRejectsInvalidStorageEvent(t *testing.T) {
-	svc := svcForDeliveryTest(t)
-	if err := svc.applyDelivery(context.Background(), &jetstream.Delivery{RawData: []byte("legacy"), ContentType: "application/x-protobuf"}); !isPermanentDeliveryError(err) {
-		t.Fatalf("legacy event error = %v, want permanent error", err)
-	}
-	encoded, raw := validRawStorageDelivery(t)
-	if err := svc.applyDelivery(context.Background(), &jetstream.Delivery{Subject: encoded.Subject, RawData: raw, RawMessageID: "wrong-id", ContentType: events.ContentType}); !isPermanentDeliveryError(err) {
-		t.Fatalf("event id mismatch = %v, want permanent error", err)
-	}
-}
-
-func TestApplyDeliveryAcceptsGovernedRawEventMessage(t *testing.T) {
-	svc := svcForDeliveryTest(t)
-	encoded, raw := validRawStorageDelivery(t)
-	if err := svc.applyDelivery(context.Background(), &jetstream.Delivery{Subject: encoded.Subject, RawData: raw, RawMessageID: encoded.Message.GetEventId(), ContentType: events.ContentType}); err != nil {
-		t.Fatalf("apply governed raw event: %v", err)
-	}
-}
-
-func validRawStorageDelivery(t *testing.T) (events.EncodedEvent, []byte) {
-	t.Helper()
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := registry.Encode(events.DatasetRowsUpserted, &storagepb.DatasetRowsUpserted{SpaceId: "foo", DatasetId: "bar", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}}, events.PublishOptions{EventID: "storage-test-1", OccurredAt: time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC), SpaceID: "foo", SubjectID: "bar"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := proto.Marshal(encoded.Message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return encoded, raw
-}
-
-func svcForDeliveryTest(t *testing.T) *Service {
-	t.Helper()
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return svc
-}
-
-func TestProcessDeliveryBalancesLiveWork(t *testing.T) {
-	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	svc.processDelivery(context.Background(), &jetstream.Delivery{DecodeError: errors.New("decode failed")})
-	if got := svc.liveWork.Load(); got != 0 {
-		t.Fatalf("live work count = %d, want 0", got)
 	}
 }
 

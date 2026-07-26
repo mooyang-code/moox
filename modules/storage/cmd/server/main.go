@@ -20,13 +20,13 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	metadataservice "github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
+	storageoutbox "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/outbox"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -495,8 +495,8 @@ func runDataNodeRole() error {
 		return err
 	}
 	defer client.Close()
-	publisher := eventconsumer.NewDatasetPublisher(client, nodeID)
-	relay, err := datanode.NewOutboxRelay(svc.Store(), publisher, datanode.OutboxRelayOptions{})
+	publisher := storageoutbox.NewJetStreamPublisher(client)
+	relay, err := storageoutbox.NewRelay(svc.Store(), publisher, storageoutbox.RelayOptions{})
 	if err != nil {
 		return err
 	}

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-
-	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
 func (s *Service) initLiveGate() {
@@ -19,9 +17,9 @@ func (s *Service) acquireBackfill(ctx context.Context) error {
 	return s.liveGate.acquireWrite(ctx)
 }
 
-func (s *Service) acquireLiveDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
+func (s *Service) acquireLiveDelivery(ctx context.Context) error {
 	s.initLiveGate()
-	return s.liveGate.acquireRead(ctx, delivery)
+	return s.liveGate.acquireRead(ctx)
 }
 
 func (s *Service) releaseLiveDelivery() {
@@ -32,11 +30,6 @@ func (s *Service) releaseLiveDelivery() {
 func (s *Service) releaseBackfill() {
 	s.initLiveGate()
 	s.liveGate.releaseWrite()
-}
-
-// releaseLiveGate remains as a compatibility shim for old live callers.
-func (s *Service) releaseLiveGate() {
-	s.releaseLiveDelivery()
 }
 
 type liveLeaseGate struct {
@@ -51,7 +44,7 @@ func newLiveLeaseGate() *liveLeaseGate {
 	return &liveLeaseGate{notify: make(chan struct{})}
 }
 
-func (g *liveLeaseGate) acquireRead(ctx context.Context, _ *jetstream.Delivery) error {
+func (g *liveLeaseGate) acquireRead(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("storage view read lease context is required")
 	}

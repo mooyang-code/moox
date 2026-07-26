@@ -1,4 +1,4 @@
-package eventconsumer
+package outbox
 
 import (
 	"testing"

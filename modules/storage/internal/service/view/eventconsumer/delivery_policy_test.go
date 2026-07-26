@@ -1,4 +1,4 @@
-package view
+package eventconsumer
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestProcessDeliveryUsesClientRetryCountWhenDeliveryCountDoesNotChange(t *testing.T) {
-	svc := &Service{}
+	consumer := &Consumer{config: Config{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var applies, progress, terms int
@@ -21,7 +21,7 @@ func TestProcessDeliveryUsesClientRetryCountWhenDeliveryCountDoesNotChange(t *te
 	deliveryTerm := func(context.Context) error { terms++; cancel(); return nil }
 	// Keep the callbacks on the delivery rather than changing DeliveryCount;
 	// this models client-side InProgress calls renewing one broker delivery.
-	err := svc.processDeliveryWithApplyAndActions(ctx, delivery, nil, 3, func(context.Context, *jetstream.Delivery) error {
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, 3, func(context.Context, *jetstream.Delivery) error {
 		applies++
 		return errors.New("temporary event apply failure")
 	}, deliveryActions{
@@ -38,10 +38,10 @@ func TestProcessDeliveryUsesClientRetryCountWhenDeliveryCountDoesNotChange(t *te
 }
 
 func TestProcessDeliveryTermsAfterRetryExhaustion(t *testing.T) {
-	svc := &Service{}
+	consumer := &Consumer{config: Config{}}
 	var applies, terms int
 	delivery := &jetstream.Delivery{Subject: "same", DeliveryCount: 1}
-	err := svc.processDeliveryWithApplyAndActions(context.Background(), delivery, nil, 1, func(context.Context, *jetstream.Delivery) error {
+	err := consumer.processDeliveryWithApplyAndActions(context.Background(), delivery, nil, 1, func(context.Context, *jetstream.Delivery) error {
 		applies++
 		return errors.New("temporary event apply failure")
 	}, deliveryActions{

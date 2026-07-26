@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/eventcontract"
+	"github.com/mooyang-code/moox/modules/storage/internal/eventmapper"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -39,7 +39,7 @@ func buildDatasetRowsUpsertedMessage(nodeID, eventID, spaceID, datasetID string,
 	if spaceID == "" || datasetID == "" {
 		return nil, fmt.Errorf("space_id and dataset_id are required")
 	}
-	rowPayload, err := eventcontract.ToSharedRows(&pb.RowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: rows})
+	rowPayload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: rows})
 	if err != nil {
 		return nil, err
 	}

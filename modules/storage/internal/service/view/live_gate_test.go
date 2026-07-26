@@ -12,7 +12,7 @@ func TestBackfillWriterWaitsForLiveAndBlocksNewLive(t *testing.T) {
 	defer cancel()
 	liveStarted, releaseLive := make(chan struct{}), make(chan struct{})
 	go func() {
-		if err := svc.acquireLiveDelivery(ctx, nil); err == nil {
+		if err := svc.acquireLiveDelivery(ctx); err == nil {
 			close(liveStarted)
 			<-releaseLive
 			svc.releaseLiveDelivery()
@@ -42,7 +42,7 @@ func TestBackfillWriterWaitsForLiveAndBlocksNewLive(t *testing.T) {
 	}
 	newLive := make(chan struct{})
 	go func() {
-		if err := svc.acquireLiveDelivery(ctx, nil); err == nil {
+		if err := svc.acquireLiveDelivery(ctx); err == nil {
 			close(newLive)
 		}
 	}()

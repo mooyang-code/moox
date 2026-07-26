@@ -1,4 +1,4 @@
-package view
+package eventconsumer
 
 import (
 	"context"
@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
-func (s *Service) processDelivery(ctx context.Context, delivery *jetstream.Delivery, queued ...*deliveryHeartbeat) error {
-	return s.processDeliveryWithPolicy(ctx, delivery, firstHeartbeat(queued), defaultMaxRetryAttempts)
+func (c *Consumer) processDelivery(ctx context.Context, delivery *jetstream.Delivery, queued ...*deliveryHeartbeat) error {
+	return c.processDeliveryWithPolicy(ctx, delivery, firstHeartbeat(queued), defaultMaxRetryAttempts)
 }
 
 func firstHeartbeat(queued []*deliveryHeartbeat) *deliveryHeartbeat {
@@ -21,14 +22,14 @@ func firstHeartbeat(queued []*deliveryHeartbeat) *deliveryHeartbeat {
 	return queued[0]
 }
 
-func (s *Service) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int) error {
-	return s.processDeliveryWithApply(ctx, delivery, heartbeat, maxRetryAttempts, func(ctx context.Context, delivery *jetstream.Delivery) error {
-		return s.applyDelivery(ctx, delivery)
+func (c *Consumer) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int) error {
+	return c.processDeliveryWithApply(ctx, delivery, heartbeat, maxRetryAttempts, func(ctx context.Context, delivery *jetstream.Delivery) error {
+		return c.applyDelivery(ctx, delivery)
 	})
 }
 
-func (s *Service) processDeliveryWithApply(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error) error {
-	return s.processDeliveryWithApplyAndActions(ctx, delivery, heartbeat, maxRetryAttempts, apply, deliveryActions{
+func (c *Consumer) processDeliveryWithApply(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error) error {
+	return c.processDeliveryWithApplyAndActions(ctx, delivery, heartbeat, maxRetryAttempts, apply, deliveryActions{
 		ack:      delivery.Ack,
 		progress: delivery.InProgress,
 		term:     delivery.Term,
@@ -41,9 +42,9 @@ type deliveryActions struct {
 	term     func(context.Context) error
 }
 
-func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error, actions deliveryActions) error {
-	if s == nil {
-		return errors.New("storage view service is nil")
+func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error, actions deliveryActions) error {
+	if c == nil {
+		return errors.New("storage view event consumer is nil")
 	}
 	if delivery == nil {
 		return errors.New("storage view delivery is nil")
@@ -55,7 +56,7 @@ func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delive
 		return errors.New("storage view delivery context is required")
 	}
 	started := time.Now()
-	metrics := s.metrics
+	metrics := c.config.Metrics
 	if metrics == nil {
 		metrics = observability.DefaultViewMetrics
 	}
@@ -63,8 +64,10 @@ func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delive
 	if delivery != nil && delivery.DeliveryCount > 1 {
 		metrics.IncRedelivery()
 	}
-	s.liveWork.Add(1)
-	defer s.liveWork.Add(-1)
+	if c.config.WorkDelta != nil {
+		c.config.WorkDelta(1)
+		defer c.config.WorkDelta(-1)
+	}
 	if maxRetryAttempts < 1 {
 		maxRetryAttempts = defaultMaxRetryAttempts
 	}
@@ -72,10 +75,12 @@ func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delive
 		heartbeat = newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(120*time.Second), metrics)
 	}
 	defer func() { heartbeat.stop() }()
-	if err := s.acquireLiveDelivery(ctx, delivery); err != nil {
-		return errors.Join(err, heartbeat.err())
+	if c.config.Lease != nil {
+		if err := c.config.Lease.Acquire(ctx); err != nil {
+			return errors.Join(err, heartbeat.err())
+		}
+		defer c.config.Lease.Release()
 	}
-	defer s.releaseLiveDelivery()
 	retryCount := 0
 	for ctx.Err() == nil {
 		err := apply(ctx, delivery)
@@ -99,7 +104,7 @@ func (s *Service) processDeliveryWithApplyAndActions(ctx context.Context, delive
 			}
 			return ctx.Err()
 		}
-		if isPermanentDeliveryError(err) {
+		if IsPermanent(err) {
 			for ctx.Err() == nil {
 				if termErr := actions.term(ctx); termErr == nil {
 					metrics.ObserveDelivery("term", "success")
@@ -162,7 +167,37 @@ func sleepDeliveryRetry(ctx context.Context, delay time.Duration) bool {
 
 type permanentDeliveryError struct{ error }
 
-func isPermanentDeliveryError(err error) bool {
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return permanentDeliveryError{err}
+}
+
+func IsPermanent(err error) bool {
 	var target permanentDeliveryError
 	return errors.As(err, &target)
+}
+
+func (c *Consumer) applyDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
+	if delivery == nil {
+		return Permanent(errors.New("storage event delivery is empty"))
+	}
+	if delivery.DecodeError != nil {
+		return Permanent(delivery.DecodeError)
+	}
+	message, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(
+		c.registry,
+		delivery.RawData,
+		delivery.Subject,
+		delivery.RawMessageID,
+		delivery.ContentType,
+	)
+	if err != nil {
+		return Permanent(err)
+	}
+	if err := c.handler.HandleDatasetRows(ctx, message, payload); err != nil {
+		return err
+	}
+	return nil
 }

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	strategybus "github.com/mooyang-code/moox/modules/strategy/internal/bus"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
@@ -97,9 +97,9 @@ func TestExternalStrategyCommitPublishesRebalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay := strategybus.Relay{
+	relay := strategyoutbox.Relay{
 		Store: repo,
-		Publisher: &strategybus.JetStreamPublisher{
+		Publisher: &strategyoutbox.JetStreamPublisher{
 			Publisher: publisher, InstanceID: "strategy-trade-e2e",
 		},
 	}

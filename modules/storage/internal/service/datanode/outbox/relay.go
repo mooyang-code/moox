@@ -1,4 +1,4 @@
-package datanode
+package outbox
 
 import (
 	"context"
@@ -25,7 +25,7 @@ type PublishAckPublisher interface {
 	PublishMessageWithAck(context.Context, []byte) (*jetstream.PublishAck, error)
 }
 
-type OutboxRelayOptions struct {
+type RelayOptions struct {
 	PollInterval                  time.Duration
 	BatchSize                     int
 	Metrics                       *observability.ViewMetrics
@@ -37,13 +37,13 @@ type OutboxRelayOptions struct {
 	ErrorReporter func(error)
 }
 
-// OutboxRelay is intentionally single-threaded. A publish failure stops the
+// Relay is intentionally single-threaded. A publish failure stops the
 // loop before later IDs are attempted; only the contiguous successful prefix
 // is removed from Pebble.
-type OutboxRelay struct {
+type Relay struct {
 	store     *pebble.Store
 	publisher Publisher
-	options   OutboxRelayOptions
+	options   RelayOptions
 	metrics   *observability.ViewMetrics
 	stop      chan struct{}
 	done      chan struct{}
@@ -52,7 +52,7 @@ type OutboxRelay struct {
 	startOnce sync.Once
 }
 
-func NewOutboxRelay(store *pebble.Store, publisher Publisher, opts OutboxRelayOptions) (*OutboxRelay, error) {
+func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Relay, error) {
 	if store == nil || publisher == nil {
 		return nil, errors.New("store and publisher are required")
 	}
@@ -74,10 +74,10 @@ func NewOutboxRelay(store *pebble.Store, publisher Publisher, opts OutboxRelayOp
 	if opts.DeleteOutbox == nil {
 		opts.DeleteOutbox = store.DeleteOutbox
 	}
-	return &OutboxRelay{store: store, publisher: publisher, options: opts, metrics: opts.Metrics, stop: make(chan struct{}), done: make(chan struct{}), started: make(chan struct{})}, nil
+	return &Relay{store: store, publisher: publisher, options: opts, metrics: opts.Metrics, stop: make(chan struct{}), done: make(chan struct{}), started: make(chan struct{})}, nil
 }
 
-func (r *OutboxRelay) Start(ctx context.Context) {
+func (r *Relay) Start(ctx context.Context) {
 	r.startOnce.Do(func() {
 		close(r.started)
 		go func() {
@@ -117,13 +117,13 @@ func (r *OutboxRelay) Start(ctx context.Context) {
 	})
 }
 
-func (r *OutboxRelay) cleanupProcessedSourceEvents(ctx context.Context) error {
+func (r *Relay) cleanupProcessedSourceEvents(ctx context.Context) error {
 	cutoff := time.Now().UTC().Add(-r.options.ProcessedEventRetention)
 	_, err := r.store.CleanupProcessedSourceEventsBefore(ctx, cutoff)
 	return err
 }
 
-func (r *OutboxRelay) report(err error) {
+func (r *Relay) report(err error) {
 	if err == nil {
 		return
 	}
@@ -134,7 +134,7 @@ func (r *OutboxRelay) report(err error) {
 	log.Printf("storage outbox relay flush failed: %v", err)
 }
 
-func (r *OutboxRelay) Close() {
+func (r *Relay) Close() {
 	if r == nil {
 		return
 	}
@@ -146,9 +146,9 @@ func (r *OutboxRelay) Close() {
 	}
 }
 
-func (r *OutboxRelay) Flush(ctx context.Context) error { return r.flush(ctx) }
+func (r *Relay) Flush(ctx context.Context) error { return r.flush(ctx) }
 
-func (r *OutboxRelay) flush(ctx context.Context) error {
+func (r *Relay) flush(ctx context.Context) error {
 	if err := r.observeOutboxStats(ctx); err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func (r *OutboxRelay) flush(ctx context.Context) error {
 	return err
 }
 
-func (r *OutboxRelay) cleanupConfirmed(ctx context.Context, ids []uint64) error {
+func (r *Relay) cleanupConfirmed(ctx context.Context, ids []uint64) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -203,7 +203,7 @@ func (r *OutboxRelay) cleanupConfirmed(ctx context.Context, ids []uint64) error 
 	return result
 }
 
-func (r *OutboxRelay) observeOutboxStats(ctx context.Context) error {
+func (r *Relay) observeOutboxStats(ctx context.Context) error {
 	stats, err := r.store.OutboxStats(ctx)
 	if err != nil {
 		return err
@@ -212,7 +212,7 @@ func (r *OutboxRelay) observeOutboxStats(ctx context.Context) error {
 	return nil
 }
 
-func (r *OutboxRelay) publish(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
+func (r *Relay) publish(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
 	if publisher, ok := r.publisher.(PublishAckPublisher); ok {
 		return publisher.PublishMessageWithAck(ctx, data)
 	}

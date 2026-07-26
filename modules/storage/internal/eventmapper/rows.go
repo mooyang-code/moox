@@ -1,4 +1,4 @@
-package eventcontract
+package eventmapper
 
 import (
 	"fmt"
@@ -9,11 +9,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// ToSharedRows converts the Storage module's RPC write model to the public
+// ToEventRows converts the Storage module's RPC write model to the public
 // event model at the publishing boundary. JSON is used only as a deliberate
 // schema boundary because the two protobuf packages have different ownership
 // and full names but intentionally share field semantics.
-func ToSharedRows(in *localpb.RowsUpserted) (*sharedpb.DatasetRowsUpserted, error) {
+func ToEventRows(in *localpb.RowsUpserted) (*sharedpb.DatasetRowsUpserted, error) {
 	if in == nil {
 		return nil, fmt.Errorf("storage rows event is nil")
 	}
@@ -39,9 +39,9 @@ func ToSharedRows(in *localpb.RowsUpserted) (*sharedpb.DatasetRowsUpserted, erro
 	return out, nil
 }
 
-// ToLocalRows converts a public Dataset delta back to the Storage module's
+// ToStorageRows converts a public Dataset delta back to the Storage module's
 // internal write model at the consumption boundary.
-func ToLocalRows(in *sharedpb.DatasetRowsUpserted) (*localpb.RowsUpserted, error) {
+func ToStorageRows(in *sharedpb.DatasetRowsUpserted) (*localpb.RowsUpserted, error) {
 	if in == nil {
 		return nil, fmt.Errorf("shared rows event is nil")
 	}

@@ -1,31 +1,28 @@
-package eventconsumer
+package outbox
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/eventcontract"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
 )
 
-// DatasetPublisher publishes one durable message to the subject owned by a
+// JetStreamPublisher publishes one durable message to the subject owned by a
 // Dataset. The transport message id is stable for a DataNode outbox id.
-type DatasetPublisher struct {
+type JetStreamPublisher struct {
 	publisher *events.Publisher
 }
 
-func (p *DatasetPublisher) PublishMessage(ctx context.Context, data []byte) error {
+func (p *JetStreamPublisher) PublishMessage(ctx context.Context, data []byte) error {
 	_, err := p.PublishMessageWithAck(ctx, data)
 	return err
 }
 
-func (p *DatasetPublisher) PublishMessageWithAck(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
+func (p *JetStreamPublisher) PublishMessageWithAck(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
 	if p == nil || p.publisher == nil {
 		return nil, errors.New("storage eventbus client is nil")
 	}
@@ -65,44 +62,17 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 	return subject, message.GetEventId(), nil
 }
 
-func NewDatasetPublisher(client *jetstream.Client, _ string) *DatasetPublisher {
+func NewJetStreamPublisher(client *jetstream.Client) *JetStreamPublisher {
 	if client == nil {
-		return &DatasetPublisher{}
+		return &JetStreamPublisher{}
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
-		return &DatasetPublisher{}
+		return &JetStreamPublisher{}
 	}
 	publisher, err := events.NewPublisher(client, registry)
 	if err != nil {
-		return &DatasetPublisher{}
+		return &JetStreamPublisher{}
 	}
-	return &DatasetPublisher{publisher: publisher}
-}
-
-func (p *DatasetPublisher) Publish(ctx context.Context, event *pb.RowsUpserted, outboxID uint64) error {
-	if p == nil || p.publisher == nil {
-		return errors.New("storage eventbus client is nil")
-	}
-	if event == nil || event.GetSpaceId() == "" || event.GetDatasetId() == "" {
-		return errors.New("rows upserted payload requires space_id and dataset_id")
-	}
-	rowPayload, err := eventcontract.ToSharedRows(event)
-	if err != nil {
-		return fmt.Errorf("marshal rows payload: %w", err)
-	}
-	messageID := fmt.Sprintf("storage-%d", outboxID)
-	if outboxID == 0 {
-		messageID = fmt.Sprintf("storage-%s", event.GetDatasetId())
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	encoded, err := registry.Encode(events.DatasetRowsUpserted, rowPayload, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: event.GetSpaceId(), SubjectID: event.GetDatasetId()})
-	if err != nil {
-		return err
-	}
-	_, err = p.publisher.PublishMessage(ctx, encoded.Message)
-	return err
+	return &JetStreamPublisher{publisher: publisher}
 }

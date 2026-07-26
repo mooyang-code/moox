@@ -184,7 +184,7 @@ func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq)
 		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("unsupported write mode %q", b.GetWriteMode()))}, nil
 	}
 	if mode == viewindex.LiveWrite {
-		if err := s.acquireLiveDelivery(ctx, nil); err != nil {
+		if err := s.acquireLiveDelivery(ctx); err != nil {
 			return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 		}
 		defer s.releaseLiveDelivery()

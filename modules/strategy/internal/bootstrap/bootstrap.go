@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	strategybus "github.com/mooyang-code/moox/modules/strategy/internal/bus"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
+	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
 	"github.com/mooyang-code/moox/modules/strategy/internal/rpc"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -36,7 +36,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	keepResources := false
 	var eng *engine.Engine
-	var eventRuntime *strategybus.Runtime
+	var eventRuntime *strategyoutbox.Runtime
 	defer func() {
 		if keepResources {
 			return
@@ -111,8 +111,8 @@ func workerProbeTimeout() time.Duration {
 	return 30 * time.Second
 }
 
-func newEventBusRuntime(repo *store.Store, cfg Config) (*strategybus.Runtime, error) {
-	connector := func(ctx context.Context) (strategybus.JetStreamClient, error) {
+func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime, error) {
+	connector := func(ctx context.Context) (strategyoutbox.JetStreamClient, error) {
 		jsConfig := jetstream.ConfigFromEnv(cfg.EventBus.URLs, "moox-strategy")
 		if jsConfig.Credentials == "" && jsConfig.Username == "" && strings.TrimSpace(cfg.EventBus.CredentialFile) != "" {
 			if err := jsConfig.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.EventBus.CredentialFile)); err != nil {
@@ -124,12 +124,12 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategybus.Runtime, er
 		if err != nil {
 			return nil, err
 		}
-		return strategybus.NewManagedClient(client)
+		return strategyoutbox.NewManagedClient(client)
 	}
-	return strategybus.NewRuntime(strategybus.RuntimeConfig{
+	return strategyoutbox.NewRuntime(strategyoutbox.RuntimeConfig{
 		Connector: connector, Store: repo, InstanceID: cfg.InstanceID,
-		Probe: func(ctx context.Context, client strategybus.JetStreamClient) error {
-			return strategybus.ValidateJetStreamPublisher(ctx, client, cfg.InstanceID)
+		Probe: func(ctx context.Context, client strategyoutbox.JetStreamClient) error {
+			return strategyoutbox.ValidateJetStreamPublisher(ctx, client, cfg.InstanceID)
 		},
 		RelayInterval: cfg.EventBus.RelayInterval, ReconnectInterval: cfg.EventBus.ReconnectInterval,
 		BatchSize: cfg.EventBus.RelayBatchSize,
@@ -143,7 +143,7 @@ func newRPCService(repo *store.Store, eng *engine.Engine, cfg Config) *rpc.Servi
 	}
 }
 
-func strategyHealthSnapshot(db *store.Store, eventRuntime *strategybus.Runtime, workers int, state *health.State) func(context.Context) healthz.Response {
+func strategyHealthSnapshot(db *store.Store, eventRuntime *strategyoutbox.Runtime, workers int, state *health.State) func(context.Context) healthz.Response {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := db != nil && db.Ping(ctx) == nil
 		workerReady := state.Ready()

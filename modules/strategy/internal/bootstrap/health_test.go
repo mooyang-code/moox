@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	strategybus "github.com/mooyang-code/moox/modules/strategy/internal/bus"
 	strategyhealth "github.com/mooyang-code/moox/modules/strategy/internal/health"
+	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 )
@@ -22,10 +22,10 @@ func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := strategybus.NewRuntime(strategybus.RuntimeConfig{
+	runtime, err := strategyoutbox.NewRuntime(strategyoutbox.RuntimeConfig{
 		Store: repo, RelayInterval: time.Millisecond, ReconnectInterval: time.Millisecond, BatchSize: 1,
-		Probe:     func(context.Context, strategybus.JetStreamClient) error { return nil },
-		Connector: func(context.Context) (strategybus.JetStreamClient, error) { return nil, errors.New("unavailable") },
+		Probe:     func(context.Context, strategyoutbox.JetStreamClient) error { return nil },
+		Connector: func(context.Context) (strategyoutbox.JetStreamClient, error) { return nil, errors.New("unavailable") },
 	})
 	if err != nil {
 		t.Fatal(err)

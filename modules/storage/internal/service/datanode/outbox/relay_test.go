@@ -1,4 +1,4 @@
-package datanode
+package outbox
 
 import (
 	"bytes"
@@ -79,7 +79,7 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := NewOutboxRelay(store, publisher, OutboxRelayOptions{BatchSize: 10, Metrics: metrics})
+	relay, err := NewRelay(store, publisher, RelayOptions{BatchSize: 10, Metrics: metrics})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestRelayRecordsOutboxSnapshotAndDuplicateAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := NewOutboxRelay(store, &duplicatePublisher{testPublisher: &testPublisher{}}, OutboxRelayOptions{Metrics: metrics})
+	relay, err := NewRelay(store, &duplicatePublisher{testPublisher: &testPublisher{}}, RelayOptions{Metrics: metrics})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstStore := store
-	firstRelay, err := NewOutboxRelay(firstStore, publisher, OutboxRelayOptions{Metrics: firstMetrics, DeleteOutbox: func(ctx context.Context, ids []uint64) error {
+	firstRelay, err := NewRelay(firstStore, publisher, RelayOptions{Metrics: firstMetrics, DeleteOutbox: func(ctx context.Context, ids []uint64) error {
 		if firstDelete {
 			firstDelete = false
 			return deleteErr
@@ -202,7 +202,7 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondRelay, err := NewOutboxRelay(store, publisher, OutboxRelayOptions{Metrics: secondMetrics})
+	secondRelay, err := NewRelay(store, publisher, RelayOptions{Metrics: secondMetrics})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	strategybus "github.com/mooyang-code/moox/modules/strategy/internal/bus"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/events"
@@ -59,18 +59,18 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	commitDecision(t, repo, "run-1", 0, "2026-07-17T00:00:00Z")
-	runtime, err := strategybus.NewRuntime(strategybus.RuntimeConfig{
+	runtime, err := strategyoutbox.NewRuntime(strategyoutbox.RuntimeConfig{
 		Store: repo, InstanceID: "strategy-e2e", RelayInterval: 20 * time.Millisecond,
 		ReconnectInterval: 20 * time.Millisecond, BatchSize: 10,
-		Probe: func(ctx context.Context, client strategybus.JetStreamClient) error {
-			return strategybus.ValidateJetStreamPublisher(ctx, client, "strategy-e2e")
+		Probe: func(ctx context.Context, client strategyoutbox.JetStreamClient) error {
+			return strategyoutbox.ValidateJetStreamPublisher(ctx, client, "strategy-e2e")
 		},
-		Connector: func(ctx context.Context) (strategybus.JetStreamClient, error) {
+		Connector: func(ctx context.Context) (strategyoutbox.JetStreamClient, error) {
 			client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{natsURL}, Name: "strategy-e2e", ConnectTimeout: 200 * time.Millisecond})
 			if err != nil {
 				return nil, err
 			}
-			return strategybus.NewManagedClient(client)
+			return strategyoutbox.NewManagedClient(client)
 		},
 	})
 	if err != nil {

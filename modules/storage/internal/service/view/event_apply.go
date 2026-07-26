@@ -3,41 +3,27 @@ package view
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/eventcontract"
+	"github.com/mooyang-code/moox/modules/storage/internal/eventmapper"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
-func (s *Service) applyDelivery(ctx context.Context, delivery *jetstream.Delivery) error {
-	if delivery == nil {
-		return permanentDeliveryError{errors.New("storage event delivery is empty")}
+func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventMessage, payload *storagepb.DatasetRowsUpserted) error {
+	if message == nil || payload == nil {
+		return eventconsumer.Permanent(errors.New("storage dataset event is empty"))
 	}
-	if delivery.DecodeError != nil {
-		return permanentDeliveryError{delivery.DecodeError}
+	rowEvent, err := eventmapper.ToStorageRows(payload)
+	if err != nil {
+		return eventconsumer.Permanent(err)
 	}
-	if delivery.ContentType == events.ContentType {
-		registry, err := events.DefaultRegistry()
-		if err != nil {
-			return permanentDeliveryError{err}
-		}
-		event, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
-		if err != nil {
-			return permanentDeliveryError{err}
-		}
-		rowEvent, err := eventcontract.ToLocalRows(payload)
-		if err != nil {
-			return permanentDeliveryError{err}
-		}
-		return s.applyDatasetEvent(ctx, event.GetSpaceId(), event.GetSubjectId(), rowEvent.GetRows())
-	}
-	return permanentDeliveryError{fmt.Errorf("unexpected storage event content type %q", delivery.ContentType)}
+	return s.applyDatasetEvent(ctx, message.GetSpaceId(), message.GetSubjectId(), rowEvent.GetRows())
 }
 
 func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
@@ -146,7 +132,7 @@ func partitionCompleteWrites(schema viewindex.ViewIndexSchema, writes []viewinde
 	return complete, incomplete
 }
 
-func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ string, schema viewindex.ViewIndexSchema, datasetID string, events []*pb.RowFieldUpsert, writes []viewindex.RowWrite) ([]viewindex.RowWrite, error) {
+func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ string, schema viewindex.ViewIndexSchema, datasetID string, eventRowsInput []*pb.RowFieldUpsert, writes []viewindex.RowWrite) ([]viewindex.RowWrite, error) {
 	s.mu.RLock()
 	reader := s.primary
 	auth := s.primaryAuth
@@ -182,8 +168,8 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 			byDataset[sourceDataset] = append(byDataset[sourceDataset], origin)
 		}
 	}
-	eventRows := make(map[string]*pb.RowFieldUpsert, len(events))
-	for _, event := range events {
+	eventRows := make(map[string]*pb.RowFieldUpsert, len(eventRowsInput))
+	for _, event := range eventRowsInput {
 		if event == nil || event.GetKey() == nil {
 			continue
 		}

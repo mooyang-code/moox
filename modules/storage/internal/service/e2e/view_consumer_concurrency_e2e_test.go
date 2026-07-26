@@ -11,7 +11,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -92,8 +91,8 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	stop, err := service.StartEventConsumer(ctx, client, viewservice.EventConsumerOptions{
 		Consumer: "storage_view", FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
 		BeforeProcess: func(hookCtx context.Context, delivery *jetstream.Delivery) error {
-			_, datasetID, err := eventconsumer.ParseDatasetRowsUpsertedSubject(eventconsumer.DatasetRowsUpsertedSubjectPrefix, delivery.Subject)
-			if err != nil || datasetID != "prices_a" {
+			_, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+			if err != nil || payload.GetDatasetId() != "prices_a" {
 				return nil
 			}
 			blocked := false

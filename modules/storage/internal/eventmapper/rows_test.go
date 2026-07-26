@@ -1,4 +1,4 @@
-package eventcontract
+package eventmapper
 
 import (
 	"testing"
@@ -16,7 +16,7 @@ func TestRowsBoundaryConversionPreservesStructuredDelta(t *testing.T) {
 			{Key: &localpb.RowKey{SpaceId: "crypto", DatasetId: "prices", Kind: &localpb.RowKey_Record{Record: &localpb.RecordRowKey{RecordId: "r-1", Version: "v1"}}}, Fields: []*localpb.FieldValue{{FieldId: "payload", Value: &localpb.TypedValue{Value: &localpb.TypedValue_BytesValue{BytesValue: []byte{1, 2, 3}}}}}, Operation: localpb.RowFieldOperation_ROW_FIELD_OPERATION_UNSPECIFIED},
 		},
 	}
-	shared, err := ToSharedRows(in)
+	shared, err := ToEventRows(in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestRowsBoundaryConversionPreservesStructuredDelta(t *testing.T) {
 		t.Fatalf("shared rows lost typed values: %v", shared)
 	}
 
-	local, err := ToLocalRows(shared)
+	local, err := ToStorageRows(shared)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,12 +38,12 @@ func TestRowsBoundaryConversionPreservesStructuredDelta(t *testing.T) {
 	}
 }
 
-func TestToSharedRowsRejectsRowIdentityMismatch(t *testing.T) {
-	_, err := ToSharedRows(&localpb.RowsUpserted{SpaceId: "crypto", DatasetId: "prices", Rows: []*localpb.RowFieldUpsert{{Key: &localpb.RowKey{SpaceId: "other", DatasetId: "prices"}}}})
+func TestToEventRowsRejectsRowIdentityMismatch(t *testing.T) {
+	_, err := ToEventRows(&localpb.RowsUpserted{SpaceId: "crypto", DatasetId: "prices", Rows: []*localpb.RowFieldUpsert{{Key: &localpb.RowKey{SpaceId: "other", DatasetId: "prices"}}}})
 	if err == nil {
 		t.Fatal("row identity mismatch was accepted")
 	}
-	_, err = ToLocalRows(&sharedpb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "prices", Rows: []*sharedpb.RowUpsert{{Key: &sharedpb.RowKey{SpaceId: "other", DatasetId: "prices"}}}})
+	_, err = ToStorageRows(&sharedpb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "prices", Rows: []*sharedpb.RowUpsert{{Key: &sharedpb.RowKey{SpaceId: "other", DatasetId: "prices"}}}})
 	if err == nil {
 		t.Fatal("invalid shared rows were accepted")
 	}

@@ -1,4 +1,4 @@
-package view
+package eventconsumer
 
 import (
 	"context"
@@ -102,6 +102,3 @@ func (h *deliveryHeartbeat) stop() {
 	h.stopOnce.Do(func() { close(h.stopCh) })
 	<-h.doneCh
 }
-
-// liveLeaseGate gives backfill writer priority. Once a writer is waiting,
-// new real-time reads stop entering and the writer waits for readers to drain.
