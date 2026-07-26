@@ -964,7 +964,7 @@ git commit -m "fix(collector): reconcile inactive symbols"
 - Modify: `scripts/build-collector-scf-package_test.sh`
 - Modify: `modules/collector/README.md`
 
-- [ ] **Step 1: 先锁定 JobItem 日志事件和固定字段**
+- [x] **Step 1: 先锁定 JobItem 日志事件和固定字段**
 
 增加纯格式化测试，至少覆盖：
 
@@ -1010,7 +1010,7 @@ error
 
 无法解析的 delivery 至少记录 `consumer`、`message_id`、`delivery_count` 和解析错误。禁止记录完整 `params`、HTTP 请求体、认证头、AccessKey、SecretKey、CLS 密钥或交易所凭据。
 
-- [ ] **Step 2: 定义简洁且完整的生命周期事件**
+- [x] **Step 2: 定义简洁且完整的生命周期事件**
 
 固定事件名和级别：
 
@@ -1030,7 +1030,7 @@ error
 
 不记录空队列的每次 fetch timeout，也不记录周期性“仍在等待”，避免常驻 Runner 每 500ms 向 CLS 制造无业务价值的噪声。
 
-- [ ] **Step 3: 在 taskrunner 记录获取、校验、延期和触发**
+- [x] **Step 3: 在 taskrunner 记录获取、校验、延期和触发**
 
 `handleDelivery` 一进入就写 `collector_job_received`。解码并校验身份后补齐 JobItem 和采集维度字段：
 
@@ -1041,7 +1041,7 @@ error
 
 使用一个窄的日志字段构造 helper 保证字段名一致，不建立通用审计框架，也不改变业务返回结果。
 
-- [ ] **Step 4: 记录两个状态上报边界和最终结果**
+- [x] **Step 4: 记录两个状态上报边界和最终结果**
 
 Collector TaskInstance 状态上报每次请求结束后写 `collector_job_instance_reported`：
 
@@ -1056,7 +1056,7 @@ Collector TaskInstance 状态上报每次请求结束后写 `collector_job_insta
 - 失败事件用 error 级别，正常事件用 info 级别；
 - 不把结果 summary 或完整 params 写入日志。
 
-- [ ] **Step 5: 记录实际 ACK/NAK/TERM 结果**
+- [x] **Step 5: 记录实际 ACK/NAK/TERM 结果**
 
 `packages/jetstream.RunnerConfig` 增加可选、传输无关的 action observer：
 
@@ -1078,7 +1078,7 @@ workload 返回的业务错误重复标成 transport error。业务成功/失败
 `collector_job_done` 表达，ACK/NAK/TERM 及其失败由 `ActionReporter` 表达。
 通用 JetStream 包不依赖 tRPC log 或 CLS。
 
-- [ ] **Step 6: 将 SCF CLS writer 调整为 info**
+- [x] **Step 6: 将 SCF CLS writer 调整为 info**
 
 `renderTRPCConfigWithCLS` 当前生成：
 
@@ -1099,7 +1099,7 @@ CLI packager 与 `scripts/build-collector-scf-package.sh` 两条真实打包路�
 锁定测试。控制台 writer 保持现状。这样正常的 `received`、`started`、`done` 和
 `ACK` 才会进入 CLS；不新建日志 topic、outbox 或旁路数据库。
 
-- [ ] **Step 7: 运行日志与打包测试**
+- [x] **Step 7: 运行日志与打包测试**
 
 ```bash
 (cd packages/jetstream && go test -count=1 ./...)
@@ -1110,7 +1110,7 @@ CLI packager 与 `scripts/build-collector-scf-package.sh` 两条真实打包路�
 
 Expected: 正常、未来、非法和失败 JobItem 都有可关联的生命周期日志；ACK/NAK/TERM 记录的是实际 JetStream action 结果；SCF 包中的 CLS writer 接收 info 日志。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add modules/collector packages/cloudruntime packages/jetstream modules/cli
