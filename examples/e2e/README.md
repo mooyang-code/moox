@@ -88,7 +88,7 @@ moox-storage-cli activate-datasets --metadata-target ip://127.0.0.1:20100
 `activate-datasets` 只激活已经通过只读检查的 Dataset。绑定一旦锁定，不能再解绑或迁移；
 新项目不提供历史 Schema 或节点拓扑迁移。
 
-默认 seed 不静态枚举测试币种。E2E 的 prepare 阶段通过 Metadata
+默认 seed 不静态枚举测试币种。E2E 的 setup 阶段通过 Metadata
 `RegisterDataSubject` API 登记 `BTC-USDT`，同时创建 Binance 外部代码映射和
 `binance_spot_kline_1h` DatasetSubject 绑定。
 
@@ -144,7 +144,11 @@ examples/platform-local.seed.yaml
 examples/metadata-quant-initial.seed.yaml --spaces crypto
 ```
 
-随后通过管理台同一套 HTTP 网关完成注册/登录、修正 public service deployments、创建 `crypto` Space、登记测试 Subject 和本地逻辑 SCF 节点、创建 Binance 现货 1H K 线规则、触发 collector 重算任务实例，再启动常驻 `moox-collector-scf`，由 JetStream delivery 驱动未来 `execute_at` 到期后执行。脚本退出时会清理该进程。最后断言：
+随后通过管理台同一套 HTTP 网关完成注册/登录、修正 public service deployments、创建
+`crypto` Space、登记测试 Subject 和本地逻辑 SCF 节点并创建 Binance 现货 1H K 线规则。
+脚本先启动常驻 `moox-collector-scf`，再提交带未来 `execute_at` 的任务；到期前必须观测到
+同一 `job_item_id` 的 `deferred + delivery_action(RETRY)`，到期后才允许执行。脚本退出时会
+清理该进程和分阶段状态文件。最后断言：
 
 这里的 `-resident` 是为本地/远端 E2E 提供显式节点身份和网关地址的诊断模式，用于验证
 与生产一致的常驻 taskrunner；它不替代 Tencent SCF 发布、keepalive 或云端运行验收。
@@ -154,9 +158,10 @@ examples/metadata-quant-initial.seed.yaml --spaces crypto
 - 管理台 JWT 请求能访问 space、sysdeploy、cloudnode、collector、storage metadata；
 - SysDeploy 的地址派生、更新、删除后重建和再次删除契约通过临时服务记录验证；
 - collector 生成 task instances、绑定 `cloud_job_item_id`，并提交带未来 `execute_at` 的 JobItem；
-- 常驻诊断 SCF 启动前，JobItem 保持 pending，目标 Dataset 不发生本次采集写入；
+- 常驻诊断 SCF 已运行时，JobItem 在到期前保持 pending，并实际记录 deferred/RETRY；
 - 到期后 scheduled JobItem 全部成功，task instance 的 `cloud_job_item_id` 仍对应本次执行；
-- 另行提交一个缺失 `execute_at` 的 JobItem，确认其立即进入同一执行链路；
+- 另行提交一个缺失 `execute_at` 的诊断 JobItem，确认其立即进入同一执行链路；该 JobItem
+  使用独立 `task_id`，不声称更新 scheduled TaskInstance；
 - K 线严格写入规则指定的 `crypto/binance_spot_kline_1h`，并可经 DataNode Snapshot 和 View 查询；
 - 输出 scheduled/immediate `job_item_id`、预期生命周期事件和对应 CLS 查询条件。
 
@@ -171,7 +176,10 @@ examples/e2e/run.sh \
   --host 106.53.107.122
 ```
 
-如果远端使用 `~/.ssh/config` 别名，`--host` 需要填写浏览器和网关可访问的公网主机名或 IP。需要复用已启动服务时可传 `--skip-deploy`；需要保留已有运行数据时可传 `--preserve-data`。
+如果远端使用 `~/.ssh/config` 别名，`--host` 需要填写浏览器和网关可访问的公网主机名或
+IP。需要复用已启动服务时可传 `--skip-deploy`；需要保留已有运行数据时可传
+`--preserve-data`。无论是否保留数据，本次运行都必须改变目标 Dataset 的完整行快照；
+水位线已最新而产生零写入时会明确失败，不能用历史行冒充本次采集证据。
 
 ## 边界说明
 

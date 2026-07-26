@@ -20,6 +20,7 @@ E2E_NODE_ID="${MOOX_E2E_NODE_ID:-e2e-gateway}"
 E2E_MONITOR_INSTANCE_ID="${MOOX_E2E_MONITOR_INSTANCE_ID:-e2e-monitor}"
 E2E_GATEWAY_CONTROL_URL="${MOOX_E2E_GATEWAY_CONTROL_URL:-http://127.0.0.1:11000}"
 E2E_GATEWAY_INPUT_DIR=""
+E2E_STATE_FILE="$(mktemp "${TMPDIR:-/tmp}/moox-e2e-state.XXXXXX")"
 SCF_RUNTIME_PID=""
 SCF_RUNTIME_REMOTE=0
 
@@ -43,6 +44,7 @@ EOF
     wait "${SCF_RUNTIME_PID}" 2>/dev/null || true
   fi
   [[ -z "${E2E_GATEWAY_INPUT_DIR}" ]] || rm -rf "${E2E_GATEWAY_INPUT_DIR}"
+  rm -f "${E2E_STATE_FILE}"
 }
 trap cleanup_e2e EXIT
 
@@ -280,6 +282,49 @@ EOF
   SCF_RUNTIME_REMOTE=1
 }
 
+scf_log_has() {
+  local item_id="$1"
+  local event="$2"
+  local decision="${3:-}"
+  if is_local_target; then
+    local deploy_dir
+    deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
+    grep -F "job_item_id=\"${item_id}\"" "${deploy_dir}/log/e2e-collector-scf.log" 2>/dev/null |
+      grep -F "event=\"${event}\"" |
+      { [[ -z "${decision}" ]] || grep -F "decision=\"${decision}\""; } >/dev/null
+    return
+  fi
+  ssh "${TARGET}" bash -s -- "${DEPLOY_DIR}" "${item_id}" "${event}" "${decision}" <<'EOF'
+deploy=$1
+item_id=$2
+event=$3
+decision=$4
+case "${deploy}" in
+  "~") deploy="${HOME}" ;;
+  "~/"*) deploy="${HOME}/${deploy#\~/}" ;;
+esac
+grep -F "job_item_id=\"${item_id}\"" "${deploy}/log/e2e-collector-scf.log" 2>/dev/null |
+  grep -F "event=\"${event}\"" |
+  { [[ -z "${decision}" ]] || grep -F "decision=\"${decision}\""; } >/dev/null
+EOF
+}
+
+assert_scf_deferred() {
+  local item_id
+  item_id="$(node -e 'const s=require(process.argv[1]); process.stdout.write(s.scheduled_job_ids?.[0] || "")' "${E2E_STATE_FILE}")"
+  [[ -n "${item_id}" ]] || fail "scheduled job id missing from E2E state"
+  local deadline=$((SECONDS + 15))
+  while (( SECONDS < deadline )); do
+    if scf_log_has "${item_id}" "collector_job_deferred" &&
+      scf_log_has "${item_id}" "collector_job_delivery_action" "RETRY"; then
+      log "scheduled job deferred by resident SCF before execute_at: ${item_id}"
+      return
+    fi
+    sleep 0.25
+  done
+  fail "resident SCF did not log deferred/RETRY before execute_at for ${item_id}"
+}
+
 verify_phase() {
   local phase="$1"
   local web_url="http://${PUBLIC_HOST}:9527"
@@ -300,6 +345,7 @@ verify_phase() {
     --e2e-node "${E2E_NODE_ID}" \
     --package "${PACKAGE_ID}" \
     --dataset "${DATASET_ID}" \
+    --state-file "${E2E_STATE_FILE}" \
     --timeout-seconds "${TIMEOUT_SECONDS}"
 }
 
@@ -325,12 +371,16 @@ fi
 import_seed "platform-local.seed.yaml"
 import_seed "metadata-quant-initial.seed.yaml" "${SPACE_ID}"
 
-log "prepare management/backend state"
+log "prepare management/backend state and queue topology"
 ensure_admin_user
-verify_phase "prepare"
+verify_phase "setup"
 
 log "start resident collector SCF runtime"
 start_scf_runtime
+
+log "schedule future collector jobs"
+verify_phase "schedule"
+assert_scf_deferred
 
 log "assert collector/cloudnode/storage results"
 verify_phase "assert"

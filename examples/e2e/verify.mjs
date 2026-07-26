@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createCipheriv, createHash, createHmac, randomBytes } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -33,7 +34,7 @@ class FatalAssertionError extends Error {}
 
 function parseArgs(argv) {
   const args = {
-    phase: "prepare",
+    phase: "setup",
     gateway: "http://127.0.0.1:11000",
     health: "http://127.0.0.1:11010/healthz",
     web: "http://127.0.0.1:9527",
@@ -46,6 +47,7 @@ function parseArgs(argv) {
     e2eNodeId: "e2e-gateway",
     username: "mooxe2eadmin",
     password: "MooxE2E#20260704!",
+    stateFile: "",
     timeoutSeconds: 120,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -62,11 +64,20 @@ function parseArgs(argv) {
       case "--node":
       case "--package":
       case "--dataset":
-      case "--e2e-node":
       case "--username":
       case "--password":
         if (!value) throw new Error(`${key} requires a value`);
         args[key.slice(2)] = value;
+        i += 1;
+        break;
+      case "--e2e-node":
+        if (!value) throw new Error(`${key} requires a value`);
+        args.e2eNodeId = value;
+        i += 1;
+        break;
+      case "--state-file":
+        if (!value) throw new Error(`${key} requires a value`);
+        args.stateFile = value;
         i += 1;
         break;
       case "--timeout-seconds":
@@ -88,12 +99,15 @@ function parseArgs(argv) {
   if (!Number.isFinite(args.timeoutSeconds) || args.timeoutSeconds <= 0) {
     throw new Error("--timeout-seconds must be positive");
   }
+  if (args.phase !== "sysdeploy" && !args.stateFile) {
+    throw new Error("--state-file is required");
+  }
   return args;
 }
 
 function usage() {
   console.log(`Usage:
-  node examples/e2e/verify.mjs --phase sysdeploy|prepare|assert [options]
+  node examples/e2e/verify.mjs --phase sysdeploy|setup|schedule|assert [options]
 
 Options:
   --gateway <url>          Admin gateway URL. Default: http://127.0.0.1:11000
@@ -105,6 +119,7 @@ Options:
   --package <package_id>   Code package ID. Default: moox-collector_dev
   --dataset <dataset_id>   Dataset ID. Default: binance_spot_kline_1h
   --e2e-node <node_id>     Admin Gateway node used by SysDeploy checks.
+  --state-file <path>      Local state shared by setup/schedule/assert phases.
   --timeout-seconds <n>    Assertion timeout. Default: 120`);
 }
 
@@ -120,8 +135,12 @@ function log(message) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.phase === "sysdeploy" || args.phase === "prepare") {
-    await prepare(args);
+  if (args.phase === "sysdeploy" || args.phase === "setup") {
+    await setup(args);
+    return;
+  }
+  if (args.phase === "schedule") {
+    await schedule(args);
     return;
   }
   if (args.phase === "assert") {
@@ -131,7 +150,7 @@ async function main() {
   throw new Error(`unsupported phase: ${args.phase}`);
 }
 
-async function prepare(args) {
+async function setup(args) {
   log("waiting for web host and admin gateway");
   await waitFor("web host", 60_000, async () => {
     await assertWebHost(args.web);
@@ -150,8 +169,13 @@ async function prepare(args) {
   await assertManagementRequests(args, token);
   await ensureCloudNode(args, token);
   await ensureCollectorRule(args, token);
-  const storageBefore = await datasetRowFingerprint(args, token);
-  const scheduleDelay = scheduleLeadDelay(Date.now(), 30_000, 10_000);
+  await writeState(args, { setup_complete: true });
+  log("setup ok: queue topology and collector rule are ready");
+}
+
+async function schedule(args) {
+  const token = await login(args);
+  const scheduleDelay = scheduleLeadDelay(Date.now(), 30_000, 15_000);
   if (scheduleDelay > 0) {
     log(`waiting ${scheduleDelay}ms for a deterministic future schedule window`);
     await sleep(scheduleDelay);
@@ -178,17 +202,20 @@ async function prepare(args) {
     }
     const notPending = current.filter((item) => !isJobStatus(item.status, "JOB_ITEM_STATUS_PENDING"));
     if (notPending.length > 0) {
-      throw new FatalAssertionError(`scheduled job executed before the resident SCF started: ${notPending.map((item) => item.job_item_id).join(", ")}`);
+      throw new FatalAssertionError(`scheduled job reached a terminal state before execute_at: ${notPending.map((item) => item.job_item_id).join(", ")}`);
     }
     assertFutureExecutionTimes(current, Date.now());
     return current;
   });
 
-  const storageAfter = await datasetRowFingerprint(args, token);
-  if (storageAfter !== storageBefore) {
-    throw new FatalAssertionError("target Dataset changed before the scheduled SCF workload was allowed to run");
-  }
-  log(`prepare ok: instances=${instances.length}, job_items=${jobItems.length}, pending_before_due=true`);
+  const storageBefore = await datasetRowFingerprint(args, token);
+  await writeState(args, {
+    setup_complete: true,
+    scheduled_job_ids: jobItems.map((item) => item.job_item_id),
+    execute_at: jobItems.map((item) => item.execute_at),
+    storage_before: storageBefore,
+  });
+  log(`schedule ok: instances=${instances.length}, job_items=${jobItems.length}, pending_before_due=true`);
   logLifecycleQueries(jobItems, "scheduled");
 }
 
@@ -196,6 +223,7 @@ async function assertAfterSCF(args) {
   const token = await login(args);
   await updatePublicDeployments(args, token);
   const timeoutMs = args.timeoutSeconds * 1000;
+  const state = await readState(args);
 
   const instancesBefore = await waitFor("scheduled task-instance bindings", 30_000, async () => {
     const rows = await listTaskInstances(args, token);
@@ -204,7 +232,14 @@ async function assertAfterSCF(args) {
     }
     return rows;
   });
-  const scheduledIDs = new Set(instancesBefore.map((item) => item.cloud_job_item_id).filter(Boolean));
+  const scheduledIDs = new Set(state.scheduled_job_ids || []);
+  if (scheduledIDs.size === 0) {
+    throw new FatalAssertionError("E2E state does not contain scheduled job items");
+  }
+  const unbound = instancesBefore.filter((item) => !scheduledIDs.has(item.cloud_job_item_id));
+  if (unbound.length > 0) {
+    throw new FatalAssertionError(`${unbound.length}/${instancesBefore.length} task instances are not bound to this scheduled run`);
+  }
   const jobItems = await waitFor("cloudnode scheduled job items success", timeoutMs, async () => {
     const rows = await listJobItems(args, token);
     const current = rows.filter((item) => scheduledIDs.has(item.job_item_id));
@@ -265,6 +300,10 @@ async function assertAfterSCF(args) {
     }
     return dataRows;
   });
+  const storageAfter = await datasetRowFingerprint(args, token);
+  if (!state.storage_before || storageAfter === state.storage_before) {
+    throw new FatalAssertionError("target Dataset did not change during this E2E run");
+  }
 
   const sample = rows[0]?.key || {};
   const sampleTime = sample.data_time || new Date().toISOString();
@@ -642,13 +681,35 @@ async function datasetRowFingerprint(args, token) {
     keys: [{ space_id: args.space, dataset_id: args.dataset }],
     page: { page: 1, size: 200 },
   });
-  return JSON.stringify((rsp.rows || []).map((row) => row.key || {}).sort((a, b) =>
-    JSON.stringify(a).localeCompare(JSON.stringify(b))));
+  return JSON.stringify(stableJSON(rsp.rows || []));
+}
+
+function stableJSON(value) {
+  if (Array.isArray(value)) {
+    return value.map(stableJSON).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableJSON(value[key])]));
+  }
+  return value;
+}
+
+async function writeState(args, value) {
+  await writeFile(args.stateFile, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function readState(args) {
+  try {
+    return JSON.parse(await readFile(args.stateFile, "utf8"));
+  } catch (err) {
+    throw new FatalAssertionError(`cannot read E2E state: ${err.message}`);
+  }
 }
 
 async function submitImmediateJob(args, token, instance) {
   if (!instance) throw new FatalAssertionError("cannot submit immediate job without a task instance");
   const suffix = `${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const diagnosticTaskID = `e2e-immediate-${suffix}`;
   const item = {
     space_id: args.space,
     job_id: `${args.rule}-immediate-e2e`,
@@ -657,7 +718,7 @@ async function submitImmediateJob(args, token, instance) {
     params: {
       ...(instance.task_params || {}),
       space_id: args.space,
-      task_id: instance.task_id,
+      task_id: diagnosticTaskID,
       dataset_id: instance.dataset_id || args.dataset,
       data_type: instance.data_type || "kline",
       exchange: instance.exchange || "binance",
@@ -680,7 +741,7 @@ async function submitImmediateJob(args, token, instance) {
   if (!ack || !["JOB_ITEM_ACK_STATUS_CREATED", "JOB_ITEM_ACK_STATUS_DEDUPLICATED"].includes(ackStatus)) {
     throw new FatalAssertionError(`immediate job rejected: ${ack?.reject_reason || ackStatus || "missing ack"}`);
   }
-  log(`submitted immediate job without execute_at: ${item.job_item_id}`);
+  log(`submitted immediate job without execute_at: ${item.job_item_id}; task_instance_update=not_expected`);
   return item;
 }
 
@@ -837,8 +898,9 @@ function logLifecycleQueries(items, kind) {
   for (const item of items) {
     const expected = kind === "scheduled"
       ? "received,deferred,delivery_action(RETRY),received,started,instance_reported,done,cloudnode_reported,delivery_action(ACK)"
-      : "received,started,instance_reported,done,cloudnode_reported,delivery_action(ACK)";
-    log(`CLS query: job_item_id="${item.job_item_id}" kind=${kind} expected_events=${expected}`);
+      : "received,started,instance_reported(stale_task_binding),done,cloudnode_reported,delivery_action(ACK)";
+    const note = kind === "immediate" ? " task_instance_update=not_expected" : "";
+    log(`CLS query: job_item_id="${item.job_item_id}" kind=${kind} expected_events=${expected}${note}`);
   }
 }
 

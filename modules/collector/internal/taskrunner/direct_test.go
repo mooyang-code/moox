@@ -454,11 +454,6 @@ func TestDirectWorkerJetStreamExecuteAtTiming(t *testing.T) {
 	if firstFuture.delay <= 0 || firstFuture.delay > 300*time.Millisecond {
 		t.Fatalf("future retry delay = %s, want (0, 300ms]", firstFuture.delay)
 	}
-	select {
-	case got := <-executions:
-		t.Fatalf("future workload executed before the pre-due guard: %+v", got)
-	case <-time.After(50 * time.Millisecond):
-	}
 
 	futureExecution := assertDirectTestExecution(t, executions, "timing-future")
 	if futureExecution.at.Before(due) {
