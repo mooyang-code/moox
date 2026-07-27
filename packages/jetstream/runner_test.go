@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -493,6 +494,234 @@ func TestRunnerCancellationDoesNotStartNextDelivery(t *testing.T) {
 	}
 	if len(actions) != 0 {
 		t.Fatalf("actions = %v, want no delivery started after cancellation", actions)
+	}
+}
+
+func TestRunnerBatchIsSequentialByDefault(t *testing.T) {
+	const batchSize = 3
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var handled atomic.Int32
+	var actions atomic.Int32
+	deliveries := make([]*Delivery, batchSize)
+	for i := range deliveries {
+		deliveries[i] = &Delivery{ackFn: func(context.Context) error {
+			if actions.Add(1) == batchSize {
+				cancel()
+			}
+			return nil
+		}}
+	}
+	handler := DeliveryHandlerFunc(func(context.Context, *Delivery) HandlerResult {
+		call := handled.Add(1)
+		if call == 1 {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		return HandlerResult{Decision: ACK}
+	})
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- NewRunner(
+			&runnerFakeConsumer{batches: [][]*Delivery{deliveries}},
+			handler,
+			RunnerConfig{BatchSize: batchSize},
+		).Run(ctx)
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first delivery did not start")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got := handled.Load(); got != 1 {
+		t.Fatalf("handled = %d before first completed, want 1", got)
+	}
+	close(releaseFirst)
+	if err := <-runDone; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := handled.Load(); got != batchSize {
+		t.Fatalf("handled = %d, want %d", got, batchSize)
+	}
+}
+
+func TestRunnerIndependentBatchStartsAllFetchedDeliveriesConcurrently(t *testing.T) {
+	const batchSize = 4
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	releaseHandlers := make(chan struct{})
+	allStarted := make(chan struct{})
+	var started atomic.Int32
+	var actions atomic.Int32
+	deliveries := make([]*Delivery, batchSize)
+	for i := range deliveries {
+		deliveries[i] = &Delivery{ackFn: func(context.Context) error {
+			if actions.Add(1) == batchSize {
+				cancel()
+			}
+			return nil
+		}}
+	}
+	handler := DeliveryHandlerFunc(func(context.Context, *Delivery) HandlerResult {
+		if started.Add(1) == batchSize {
+			close(allStarted)
+		}
+		<-releaseHandlers
+		return HandlerResult{Decision: ACK}
+	})
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- NewRunner(
+			&runnerFakeConsumer{batches: [][]*Delivery{deliveries}},
+			handler,
+			RunnerConfig{BatchSize: batchSize, IndependentBatch: true},
+		).Run(ctx)
+	}()
+
+	select {
+	case <-allStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("started = %d, want all %d deliveries before release", started.Load(), batchSize)
+	}
+	close(releaseHandlers)
+	if err := <-runDone; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+func TestRunnerIndependentBatchRetryDoesNotNakPeers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var actionCount atomic.Int32
+	var firstNAKs atomic.Int32
+	var peerACKs atomic.Int32
+	first := &Delivery{nakFn: func(context.Context, time.Duration) error {
+		firstNAKs.Add(1)
+		if actionCount.Add(1) == 3 {
+			cancel()
+		}
+		return nil
+	}}
+	peer := func() *Delivery {
+		return &Delivery{
+			ackFn: func(context.Context) error {
+				peerACKs.Add(1)
+				if actionCount.Add(1) == 3 {
+					cancel()
+				}
+				return nil
+			},
+			nakFn: func(context.Context, time.Duration) error {
+				t.Error("peer delivery was NAKed")
+				return nil
+			},
+		}
+	}
+	second, third := peer(), peer()
+	handler := DeliveryHandlerFunc(func(_ context.Context, delivery *Delivery) HandlerResult {
+		if delivery == first {
+			return HandlerResult{Decision: RETRY, Delay: time.Second}
+		}
+		return HandlerResult{Decision: ACK}
+	})
+
+	err := NewRunner(
+		&runnerFakeConsumer{batches: [][]*Delivery{{first, second, third}}},
+		handler,
+		RunnerConfig{BatchSize: 3, IndependentBatch: true},
+	).Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := firstNAKs.Load(); got != 1 {
+		t.Fatalf("first NAKs = %d, want 1", got)
+	}
+	if got := peerACKs.Load(); got != 2 {
+		t.Fatalf("peer ACKs = %d, want 2", got)
+	}
+}
+
+func TestRunnerIndependentBatchWaitsForAllDeliveries(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	slowStarted := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	var actions atomic.Int32
+	newDelivery := func() *Delivery {
+		return &Delivery{ackFn: func(context.Context) error {
+			if actions.Add(1) == 2 {
+				cancel()
+			}
+			return nil
+		}}
+	}
+	slow, fast := newDelivery(), newDelivery()
+	handler := DeliveryHandlerFunc(func(_ context.Context, delivery *Delivery) HandlerResult {
+		if delivery == slow {
+			close(slowStarted)
+			<-releaseSlow
+		}
+		return HandlerResult{Decision: ACK}
+	})
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- NewRunner(
+			&runnerFakeConsumer{batches: [][]*Delivery{{slow, fast}}},
+			handler,
+			RunnerConfig{BatchSize: 2, IndependentBatch: true},
+		).Run(ctx)
+	}()
+
+	select {
+	case <-slowStarted:
+	case <-time.After(time.Second):
+		t.Fatal("slow delivery did not start")
+	}
+	select {
+	case err := <-runDone:
+		t.Fatalf("Run() returned before all deliveries completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseSlow)
+	if err := <-runDone; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := actions.Load(); got != 2 {
+		t.Fatalf("actions = %d, want 2", got)
+	}
+}
+
+func TestRunnerIndependentBatchAggregatesActionErrors(t *testing.T) {
+	firstErr := errors.New("first ack failed")
+	secondErr := errors.New("second ack failed")
+	var attempts atomic.Int32
+	first := &Delivery{ackFn: func(context.Context) error {
+		attempts.Add(1)
+		return firstErr
+	}}
+	second := &Delivery{ackFn: func(context.Context) error {
+		attempts.Add(1)
+		return secondErr
+	}}
+
+	err := NewRunner(
+		&runnerFakeConsumer{batches: [][]*Delivery{{first, second}}},
+		DeliveryHandlerFunc(func(context.Context, *Delivery) HandlerResult {
+			return HandlerResult{Decision: ACK}
+		}),
+		RunnerConfig{BatchSize: 2, IndependentBatch: true},
+	).Run(context.Background())
+	if !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
+		t.Fatalf("Run() error = %v, want both action errors", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("action attempts = %d, want 2", got)
 	}
 }
 

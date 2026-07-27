@@ -67,7 +67,8 @@ func (f ErrorReporterFunc) Report(err error) {
 }
 
 // ActionReporter observes the actual ACK/NAK/TERM attempt for a delivery.
-// Reporting is best-effort and cannot change transport behavior.
+// Reporting is best-effort and cannot change transport behavior. Reports may
+// be concurrent when RunnerConfig.IndependentBatch is enabled.
 type ActionReporter interface {
 	ReportAction(context.Context, *Delivery, HandlerResult, error)
 }
@@ -77,6 +78,7 @@ type RunnerConfig struct {
 	InProgressInterval time.Duration
 	ErrorReporter      ErrorReporter
 	ActionReporter     ActionReporter
+	IndependentBatch   bool
 }
 
 type Runner struct {
@@ -144,31 +146,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 
 		var batchErr error
-		for index, delivery := range deliveries {
-			if ctx.Err() != nil {
-				return nil
-			}
-			result, inProgressErr, actionErr := r.handle(ctx, delivery)
-			if inProgressErr != nil {
-				r.report(inProgressErr)
-				batchErr = errors.Join(batchErr, inProgressErr)
-			}
-			if actionErr != nil {
-				batchErr = errors.Join(batchErr, actionErr)
-			}
-			if result.Decision == RETRY {
-				// Keep this fetched batch together. A later fetch may still overtake
-				// these delayed deliveries, so ordered domains must reject stale work.
-				for _, pending := range deliveries[index+1:] {
-					pendingResult := HandlerResult{Decision: RETRY, Delay: result.Delay}
-					pendingActionErr := ApplyHandlerResult(ctx, pending, pendingResult)
-					r.reportAction(ctx, pending, pendingResult, pendingActionErr)
-					if pendingActionErr != nil {
-						batchErr = errors.Join(batchErr, fmt.Errorf("apply pending handler result: %w", pendingActionErr))
-					}
-				}
-				break
-			}
+		if r.cfg.IndependentBatch {
+			batchErr = r.handleIndependentBatch(ctx, deliveries)
+		} else {
+			batchErr = r.handleSequentialBatch(ctx, deliveries)
 		}
 		if ctx.Err() != nil {
 			return nil
@@ -185,6 +166,67 @@ func (r *Runner) Run(ctx context.Context) error {
 			return batchErr
 		}
 	}
+}
+
+func (r *Runner) handleSequentialBatch(ctx context.Context, deliveries []*Delivery) error {
+	var batchErr error
+	for index, delivery := range deliveries {
+		if ctx.Err() != nil {
+			return batchErr
+		}
+		result, inProgressErr, actionErr := r.handle(ctx, delivery)
+		if inProgressErr != nil {
+			r.report(inProgressErr)
+			batchErr = errors.Join(batchErr, inProgressErr)
+		}
+		if actionErr != nil {
+			batchErr = errors.Join(batchErr, actionErr)
+		}
+		if result.Decision == RETRY {
+			// Keep this fetched batch together. A later fetch may still overtake
+			// these delayed deliveries, so ordered domains must reject stale work.
+			for _, pending := range deliveries[index+1:] {
+				pendingResult := HandlerResult{Decision: RETRY, Delay: result.Delay}
+				pendingActionErr := ApplyHandlerResult(ctx, pending, pendingResult)
+				r.reportAction(ctx, pending, pendingResult, pendingActionErr)
+				if pendingActionErr != nil {
+					batchErr = errors.Join(batchErr, fmt.Errorf("apply pending handler result: %w", pendingActionErr))
+				}
+			}
+			break
+		}
+	}
+	return batchErr
+}
+
+func (r *Runner) handleIndependentBatch(ctx context.Context, deliveries []*Delivery) error {
+	perDeliveryErrs := make([]error, len(deliveries))
+	inProgressErrs := make([]error, len(deliveries))
+	handlers := make([]func() error, len(deliveries))
+	for index, delivery := range deliveries {
+		index, delivery := index, delivery
+		handlers[index] = func() error {
+			_, inProgressErr, actionErr := r.handle(ctx, delivery)
+			inProgressErrs[index] = inProgressErr
+			perDeliveryErrs[index] = errors.Join(inProgressErr, actionErr)
+			return nil
+		}
+	}
+
+	waitErr := trpc.GoAndWait(handlers...)
+	var batchErr error
+	for index, deliveryErr := range perDeliveryErrs {
+		if inProgressErrs[index] != nil {
+			r.report(inProgressErrs[index])
+		}
+		if deliveryErr != nil {
+			batchErr = errors.Join(batchErr, fmt.Errorf("delivery %d: %w", index, deliveryErr))
+		}
+	}
+	if waitErr != nil {
+		batchErr = errors.Join(batchErr, fmt.Errorf("process independent batch: %w", waitErr))
+	}
+	return batchErr
 }
 
 func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult, error, error) {
