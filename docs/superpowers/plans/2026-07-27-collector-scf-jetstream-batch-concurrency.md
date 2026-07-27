@@ -1,6 +1,6 @@
 # Collector SCF JetStream 批量并发优化 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use Markdown checkboxes for tracking.
 
 **Goal:** 在不引入同步 SCF 调用、额外调度中心或高可靠基础设施的前提下，让 Collector 控制面按 Dataset 标的一次生成数百个 JobItem 并串行分批投递到 JetStream；常驻 SCF 根据配置绑定 provider-specific JobType，每次 `Fetch(10)` 后使用 `trpc.GoAndWait` 并发执行整批任务，逐消息独立 ACK/NAK/TERM，并保证短任务有界重试、Storage 重投结果正确、Binance TLS 正常校验。
 
@@ -156,7 +156,7 @@ Task 9  真实 SCF 验收、独立 CR、提交与推送
 - Modify: `packages/jetstream/runner.go`
 - Modify: `packages/jetstream/runner_test.go`
 
-- [ ] **Step 1: 先写 opt-in 并发批和默认兼容测试**
+- [x] **Step 1: 先写 opt-in 并发批和默认兼容测试**
 
 新增测试：
 
@@ -195,7 +195,7 @@ handler := DeliveryHandlerFunc(func(context.Context, *Delivery) HandlerResult {
 
 Expected: `RunnerConfig` 尚无 `IndependentBatch`，测试先编译失败。
 
-- [ ] **Step 2: 只增加内部 opt-in 开关，默认值保持串行**
+- [x] **Step 2: 只增加内部 opt-in 开关，默认值保持串行**
 
 ```go
 type RunnerConfig struct {
@@ -214,7 +214,7 @@ type RunnerConfig struct {
 - `IndependentBatch=true` 表示 Fetch 到的每条 delivery 独立完成，不能传播某一条的 delay。
 - 更新 `ActionReporter` 注释，明确并发模式下可能被多个 goroutine 同时调用。
 
-- [ ] **Step 3: 使用 trpc.GoAndWait 实现整批并发**
+- [x] **Step 3: 使用 trpc.GoAndWait 实现整批并发**
 
 把批处理拆为两个方法：
 
@@ -268,7 +268,7 @@ if r.cfg.IndependentBatch {
 
 每个 closure 只写自己下标的 `errs[index]`，不需要 mutex。`GoAndWait` 返回后再聚合错误；每条 delivery 已经独立完成 ACK/NAK/TERM。Collector 不启用 `InProgressInterval`，因此这里不会为任务启动 delivery heartbeat goroutine。
 
-- [ ] **Step 4: 验证旧串行语义无回归**
+- [x] **Step 4: 验证旧串行语义无回归**
 
 ```bash
 (cd packages/jetstream && go test -count=1 ./...)
@@ -281,7 +281,7 @@ if r.cfg.IndependentBatch {
 
 Expected: 新并发测试通过；现有 `TestRunnerRetryStopsBatchAndNaksRemainingWithSameDelay` 继续通过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add packages/jetstream/runner.go packages/jetstream/runner_test.go
@@ -314,7 +314,7 @@ git commit -m "feat(jetstream): support independent concurrent batches"
 - Modify: `examples/e2e/verify.mjs`
 - Modify: `examples/e2e/verify-status.test.mjs`
 
-- [ ] **Step 1: 先写 JobType、配置过滤和发布元数据测试**
+- [x] **Step 1: 先写 JobType、配置过滤和发布元数据测试**
 
 新增或修改：
 
@@ -338,7 +338,7 @@ binance symbol -> collect.binance.symbol
 
 旧的 `collect.kline`、`collect.symbol` 不作为兼容别名保留。A 股 Provider 本次不虚构实现；route 单元测试证明新增 `collect.tushare.kline` 后可以被配置选择。
 
-- [ ] **Step 2: 将 JobType 改为 provider-specific**
+- [x] **Step 2: 将 JobType 改为 provider-specific**
 
 先把现有 provider 常量改为：
 
@@ -383,7 +383,7 @@ func SupportedJobTypes() []string
 
 实际 Provider/source 实现仍是新增该 route 的前置条件。
 
-- [ ] **Step 3: 增加最小 JobWorker 配置**
+- [x] **Step 3: 增加最小 JobWorker 配置**
 
 ```go
 type JobWorkerConfig struct {
@@ -415,7 +415,7 @@ job_worker:
 - 不增加 `concurrency` 和 `in_progress_interval`。
 - `MOOX_COLLECTOR_JOB_TYPES` 非空时覆盖 YAML，格式为逗号分隔列表，供同一代码包按 SCF 部署选择消费者。
 
-- [ ] **Step 4: 让部署元数据与运行时配置使用同一列表**
+- [x] **Step 4: 让部署元数据与运行时配置使用同一列表**
 
 在 `collectorPublishOptions` 增加：
 
@@ -450,7 +450,7 @@ moox collector function publish \
 
 前提是代码包已经注册对应 Provider；未知 JobType 必须在发布或 SCF 启动时失败。
 
-- [ ] **Step 5: 更新受影响的契约与 E2E fixture**
+- [x] **Step 5: 更新受影响的契约与 E2E fixture**
 
 把 Collector/CLI/E2E 中作为真实 Collector workload 的：
 
@@ -468,7 +468,7 @@ collect.binance.symbol
 
 CloudNode、CloudRuntime、JetStream 的通用单元测试仍可使用 `collect.kline` 作为任意字符串样例，不做无意义全仓机械替换。
 
-- [ ] **Step 6: 运行测试并提交**
+- [x] **Step 6: 运行测试并提交**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/jobs/... ./internal/taskpublisher \
@@ -493,7 +493,7 @@ git commit -m "refactor(collector): scope job types by provider"
 - Modify: `modules/collector/internal/serverless/handler_test.go`
 - Modify: `scripts/build-collector-scf-package_test.sh`
 
-- [ ] **Step 1: 先写 worker 配置和 Fetch 参数测试**
+- [x] **Step 1: 先写 worker 配置和 Fetch 参数测试**
 
 新增：
 
@@ -514,7 +514,7 @@ first.Fetch(10)
 
 不能只检查返回数量。并发测试使用 barrier，必须证明 10 个 handler 都已开始，而不是串行完成 10 次。
 
-- [ ] **Step 2: 只为配置中的 JobType 创建 consumer binding**
+- [x] **Step 2: 只为配置中的 JobType 创建 consumer binding**
 
 将：
 
@@ -534,7 +534,7 @@ jobTypes := workerCfg.JobTypes
 
 只用配置列表创建 consumer binding。进程内 handler registry 可以继续一次性注册代码包支持的全部 route，避免动态修改全局 registry；是否实际消费完全由 binding 决定。配置 `collect.binance.kline` 的 SCF 不得顺带 bind `collect.binance.symbol`，heartbeat 也只上报前者。
 
-- [ ] **Step 3: 修正 roundRobinConsumer**
+- [x] **Step 3: 修正 roundRobinConsumer**
 
 将：
 
@@ -563,7 +563,7 @@ func (c *roundRobinConsumer) Fetch(
 - 下一轮优先尝试 Symbol durable。
 - 总并发由单个 resident Runner 的 Fetch 批次限制为 10，不为每个 JobType 各起一个 runner 或第二层并发池。
 
-- [ ] **Step 4: 将配置传入 Runner**
+- [x] **Step 4: 将配置传入 Runner**
 
 ```go
 return jetstream.NewRunner(roundRobin, handler, jetstream.RunnerConfig{
@@ -576,7 +576,7 @@ return jetstream.NewRunner(roundRobin, handler, jetstream.RunnerConfig{
 
 `InProgressInterval` 保持零值。每个 delivery 继续通过现有 `handleDelivery -> CloudRuntime.ExecuteJobItem` 执行；不得在 handler 内再创建第二层“JobItem 并发池”。Kline 单任务的分页请求仍串行，避免把一次 JobItem 再无界放大成多页并发。
 
-- [ ] **Step 5: 固化 keepalive 与执行解耦**
+- [x] **Step 5: 固化 keepalive 与执行解耦**
 
 扩展现有测试，明确断言：
 
@@ -588,7 +588,7 @@ func TestKeepaliveDoesNotFetchOrExecuteJobItems(t *testing.T)
 
 允许第一次 keepalive 完成运行时配置并解除 readiness；禁止每次 keepalive 重启 runner 或触发一次消费。
 
-- [ ] **Step 6: 验证 SCF 包含新配置**
+- [x] **Step 6: 验证 SCF 包含新配置**
 
 `scripts/build-collector-scf-package_test.sh` 解压 zip 后断言：
 
@@ -606,7 +606,7 @@ config.yaml does not contain concurrency or in_progress_interval
 bash scripts/build-collector-scf-package_test.sh
 ```
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add modules/collector/internal/taskrunner \
@@ -628,7 +628,7 @@ git commit -m "feat(collector): fetch and execute job batches concurrently"
 - Modify: `modules/collector/internal/rpc/service_test.go`
 - Modify: `scripts/check-collector-planned-node-removal.mjs`
 
-- [ ] **Step 1: 先写严格串行和失败停止测试**
+- [x] **Step 1: 先写严格串行和失败停止测试**
 
 新增：
 
@@ -655,7 +655,7 @@ max concurrent HTTP requests: 1
 - 返回错误包含 `batch 25-50`。
 - 下次 `ScheduleTasks` 通过稳定 JobItemID 让第一批 deduplicate，并继续补发未成功批次。
 
-- [ ] **Step 2: 删除发布端 errgroup 和 semaphore**
+- [x] **Step 2: 删除发布端 errgroup 和 semaphore**
 
 实现保持直接：
 
@@ -674,7 +674,7 @@ return idsByTaskID, nil
 
 删除 `submitJobItemConcurrency`、`sync.Mutex` 和 `errgroup`。发布端串行只保证控制面简单和请求顺序；任务执行并发由 SCF 消费端负责，两者不要混淆。
 
-- [ ] **Step 3: ScheduleTasks 按规则继续并聚合错误**
+- [x] **Step 3: ScheduleTasks 按规则继续并聚合错误**
 
 规则之间保持串行。某条规则失败时记录错误并继续下一条，最后返回聚合错误：
 
@@ -695,7 +695,7 @@ for i := range rules {
 
 这样一个错误规则不会阻塞其后数百个有效标的，但不增加重试调度器。
 
-- [ ] **Step 4: 增加静态边界检查**
+- [x] **Step 4: 增加静态边界检查**
 
 扩展 `scripts/check-collector-planned-node-removal.mjs`，在以下控制面文件中拒绝同步 SCF 调用或 wake 概念：
 
@@ -715,7 +715,7 @@ ActivateSCF
 
 不要扫描 serverless keepalive handler；keepalive 本身是被接受的生命周期机制。
 
-- [ ] **Step 5: 运行测试并提交**
+- [x] **Step 5: 运行测试并提交**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/taskpublisher ./internal/rpc)
@@ -751,7 +751,7 @@ git commit -m "refactor(collector): submit cloud jobs in serial batches"
 - Modify: `modules/cloudnode/internal/jobqueue/jetstream_queue_test.go`
 - Modify: `modules/cloudnode/internal/jobqueue/jetstream_client_test.go`
 
-- [ ] **Step 1: 先写总超时、重试次数和 AckWait 测试**
+- [x] **Step 1: 先写总超时、重试次数和 AckWait 测试**
 
 新增：
 
@@ -769,7 +769,7 @@ func TestJobExecutionQueueUsesSixtySecondAckWait(t *testing.T)
 
 测试时间通过注入 timeout/clock 或毫秒级测试配置完成，禁止真实等待 20 秒或 60 秒。`retry.Attempts(3)` 的含义固定为总共 3 次调用，即首次加两次重试。
 
-- [ ] **Step 2: 把 20 秒 deadline 覆盖到整个 JobItem**
+- [x] **Step 2: 把 20 秒 deadline 覆盖到整个 JobItem**
 
 在 resident Runner 的 delivery handler 外层创建 timeout context：
 
@@ -812,7 +812,7 @@ func workloadContext(ctx context.Context) (context.Context, context.CancelFunc, 
 
 因此采集和本地 retry 最多使用约 18 秒，成功或最终失败后仍有 2 秒完成 CloudNode 状态上报与 ACK/TERM。达到执行预算时返回 retryable 结果，由当前 delivery `NAK(delay)`；不得把超时转成 TERM。测试使用注入时钟或短 deadline，不真实等待。
 
-- [ ] **Step 3: 统一 Binance 的 3 次短重试**
+- [x] **Step 3: 统一 Binance 的 3 次短重试**
 
 复用现有 `github.com/avast/retry-go`，不要再引入第二个 retry 库。公共 helper 的有效参数：
 
@@ -840,7 +840,7 @@ func (e *StatusError) Error() string {
 }
 ```
 
-- [ ] **Step 4: 给 Storage RPC 增加同样的 3 次短重试**
+- [x] **Step 4: 给 Storage RPC 增加同样的 3 次短重试**
 
 在 `storageWriter` 的 RPC 边界统一使用：
 
@@ -856,7 +856,7 @@ retry.RetryIf(isRetryableStorageError)
 
 只重试 tRPC 网络/超时和 Storage `INNER_ERR`；`INVALID_PARAM`、鉴权失败、context canceled 不重试。删除 `SymbolCollector.sendSymbolBatchWithRetry` 外层的整批 retry，防止 Storage writer 3 次乘以外层 3 次变成 9 次。Kline 和 Symbol 都通过同一个 `storageWriter` 获得一致行为。
 
-- [ ] **Step 5: 将 durable 设置为 60 秒 AckWait、4 次 MaxDeliver**
+- [x] **Step 5: 将 durable 设置为 60 秒 AckWait、4 次 MaxDeliver**
 
 最终值：
 
@@ -885,7 +885,7 @@ MaxDeliver=4
 MaxAckPending=32
 ```
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 运行：
 
@@ -895,7 +895,7 @@ MaxAckPending=32
 (cd modules/cloudnode && go test -count=1 ./internal/config ./internal/jobqueue)
 ```
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add modules/collector/internal/taskrunner modules/collector/internal/sources/binance \
@@ -936,7 +936,7 @@ git commit -m "fix(collector): bound retries within short job deadlines"
 - Modify: `examples/e2e/verify.mjs`
 - Modify: `examples/e2e/README.md`
 
-- [ ] **Step 1: 先写 envelope 权威性测试**
+- [x] **Step 1: 先写 envelope 权威性测试**
 
 新增：
 
@@ -962,7 +962,7 @@ params 中若重复携带 `space_id` 或 `data_type`，必须与权威值一致�
 
 Storage 行写入继续依赖现有 RowKey upsert 获得结果幂等；本计划不新增 Collector inbox、分页哈希或 source-event 去重表。JetStream 重投可能再次发起同一 upsert，这是个人量化场景接受的 at-least-once 边界。
 
-- [ ] **Step 2: 定义唯一规则 JSON 契约**
+- [x] **Step 2: 定义唯一规则 JSON 契约**
 
 新项目不保留旧字段兼容。最终形状：
 
@@ -996,7 +996,7 @@ Storage 行写入继续依赖现有 RowKey upsert 获得结果幂等；本计划
 - `objects`：Dataset active membership 已经是任务全集；需要子集时创建一个更小 Dataset，不维护第二套标的过滤语义。
 - task params 中的 `schedule_timezone` 和 `job_type`。
 
-- [ ] **Step 3: DatasetID 不再按字符串猜测**
+- [x] **Step 3: DatasetID 不再按字符串猜测**
 
 删除 `inferDatasetID` 和前端 `inferCollectDatasetId`。规则创建时明确要求：
 
@@ -1005,7 +1005,7 @@ Storage 行写入继续依赖现有 RowKey upsert 获得结果幂等；本计划
 
 这会直接消除 `binance_spot_symbol` 与实际 `binance_spot_symbols` 的默认命名不一致，不需要维护类型到 Dataset 的魔法映射。
 
-- [ ] **Step 4: Create/Update 时按 jobs registry 完整校验**
+- [x] **Step 4: Create/Update 时按 jobs registry 完整校验**
 
 在写 DB 前完成：
 
@@ -1026,7 +1026,7 @@ if !ok || !routeOK || !definition.Matches(params) {
 
 同步收紧 `JobDefinition.Matches`，要求 `exchange + market + data_type + source_kind` 同时匹配 `Supports`。验证 intervals 非空、DatasetID 非空、schedule interval 可被 `time.ParseDuration` 接受。非法规则不得等到 `ScheduleTasks` 才失败。
 
-- [ ] **Step 5: 简化前端规则表单**
+- [x] **Step 5: 简化前端规则表单**
 
 `collector-rule-params.ts` 只负责：
 
@@ -1056,11 +1056,11 @@ export function buildCollectorRuleParams(input: CollectorRuleInput): Record<stri
 
 Vitest 覆盖 Kline、Symbol、缺失 Dataset、切换市场四种构造结果。
 
-- [ ] **Step 6: 更新 E2E 请求**
+- [x] **Step 6: 更新 E2E 请求**
 
 `examples/e2e/verify.mjs` 和 README 只使用新形状，不再发送 `job_type`、`timezone`、重复 intervals。
 
-- [ ] **Step 7: 运行测试并提交**
+- [x] **Step 7: 运行测试并提交**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/domain ./internal/jobs/... \
@@ -1085,7 +1085,7 @@ git commit -m "refactor(collector): simplify dataset driven rule contracts"
 - Modify: `modules/collector/internal/httpclient/probe.go`
 - Add: `modules/collector/internal/httpclient/probe_test.go`
 
-- [ ] **Step 1: 先写证书校验测试**
+- [x] **Step 1: 先写证书校验测试**
 
 新增：
 
@@ -1098,7 +1098,7 @@ func TestProbeHTTPSRejectsCertificateForWrongDomain(t *testing.T)
 
 测试必须覆盖“URL 仍使用域名、DialContext 只替换目标 IP”的真实方式。不能只断言字段值。
 
-- [ ] **Step 2: 使用系统根证书，不要求 Binance 专用证书配置**
+- [x] **Step 2: 使用系统根证书，不要求 Binance 专用证书配置**
 
 普通 client：
 
@@ -1126,7 +1126,7 @@ Verify name: api.binance.com
 
 不要把 URL 改成 IP。`http.Transport` 会根据请求 URL host 设置 SNI 和主机名校验；probe 中显式设置 `ServerName: domain` 以让意图清晰。
 
-- [ ] **Step 3: 删除两个 InsecureSkipVerify**
+- [x] **Step 3: 删除两个 InsecureSkipVerify**
 
 以下两处均不得残留：
 
@@ -1141,7 +1141,7 @@ modules/collector/internal/httpclient/probe.go
 ! rg -n 'InsecureSkipVerify:\s*true' modules/collector/internal/httpclient
 ```
 
-- [ ] **Step 4: 运行测试并提交**
+- [x] **Step 4: 运行测试并提交**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/httpclient)
@@ -1165,7 +1165,7 @@ git commit -m "fix(collector): verify Binance TLS certificates"
 - Modify: `examples/e2e/test-run-real-scf.sh`
 - Modify: `examples/e2e/README.md`
 
-- [ ] **Step 1: 建立 100 条任务的本地 JetStream E2E**
+- [x] **Step 1: 建立 100 条任务的本地 JetStream E2E**
 
 `jetstream_batch_e2e_test.go` 使用 testkit NATS、真实 events registry 和 Collector taskrunner adapter：
 
@@ -1187,11 +1187,11 @@ TERM count: 0
 duplicate handler starts: 0
 ```
 
-- [ ] **Step 2: 增加 mixed batch E2E**
+- [x] **Step 2: 增加 mixed batch E2E**
 
 同一 Fetch 返回 due、future、retryable、invalid 四类消息，断言各自动作。未来消息第二次 delivery 到期后执行，且第一轮不阻塞 due 消息。
 
-- [ ] **Step 3: 增加 Storage 重投结果正确性 E2E**
+- [x] **Step 3: 增加 Storage 重投结果正确性 E2E**
 
 模拟：
 
@@ -1206,7 +1206,7 @@ duplicate handler starts: 0
 - 不要求 Collector 自己维护去重状态。
 - 不把“下游事件严格只发布一次”列入本计划承诺。
 
-- [ ] **Step 4: 扩展现有端到端脚本**
+- [x] **Step 4: 扩展现有端到端脚本**
 
 `examples/e2e/verify.mjs` 增加 batch acceptance state：
 
@@ -1219,7 +1219,7 @@ duplicate handler starts: 0
 
 最大并发直接从任务 started/completed barrier 观测，不增加第二个配置字段。`run.sh` 本地 resident 路径至少提交 20 条立即任务，验证全部终态和 Storage rows。`run-real-scf.sh` 继续只使用已经发布的真实 SCF，不启动本地 SCF。
 
-- [ ] **Step 5: 运行跨模块验证**
+- [x] **Step 5: 运行跨模块验证**
 
 ```bash
 (cd packages/jetstream && go test -race -count=1 ./...)
@@ -1236,7 +1236,7 @@ make verify-pr
 
 Expected: 全部通过；任何 race、提前执行、整批共同 NAK 或重复 Storage 行都必须在进入 Task 9 前修复。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules/collector/test examples/e2e
@@ -1254,7 +1254,7 @@ git commit -m "test(collector): cover concurrent JetStream job batches"
 - Modify if required by acceptance: `examples/e2e/verify.mjs`
 - Modify: `docs/superpowers/plans/2026-07-27-collector-scf-jetstream-batch-concurrency.md`
 
-- [ ] **Step 1: 构建并发布新的 SCF 包**
+- [x] **Step 1: 构建并发布新的 SCF 包**
 
 ```bash
 make -C modules/collector package-scf
@@ -1271,7 +1271,7 @@ EventBus CA and worker credential loading support
 
 通过现有 CloudNode 发布链路更新真实 Tencent SCF 节点。记录 code package ID 和函数版本。
 
-- [ ] **Step 2: 验证 keepalive 前提仍成立**
+- [x] **Step 2: 验证 keepalive 前提仍成立**
 
 在不投递 JobItem 的情况下连续观察至少两个 keepalive 周期：
 
@@ -1282,7 +1282,7 @@ EventBus CA and worker credential loading support
 
 随后停止控制面 Schedule timer 但保留 keepalive，手工投递立即 JobItem；任务仍应被后台 taskrunner 消费。该用例直接证明 keepalive 不负责触发任务。
 
-- [ ] **Step 3: 真实批量并发验收**
+- [x] **Step 3: 真实批量并发验收**
 
 使用至少 20 个 active DatasetSubject：
 
@@ -1319,7 +1319,7 @@ subject_id
 interval
 ```
 
-- [ ] **Step 4: 运行 codeCR 独立审查**
+- [x] **Step 4: 运行 codeCR 独立审查**
 
 按全局约定使用 `codeCR` subAgent 审查最终 diff，要求重点核查：
 
@@ -1334,10 +1334,11 @@ interval
 
 所有 actionable finding 修复后重新运行 Task 8 的完整验证集。
 
-- [ ] **Step 5: 更新计划勾选状态并检查文档**
+- [x] **Step 5: 更新计划勾选状态并检查文档**
 
 ```bash
-rg -n '\- \[ \]' docs/superpowers/plans/2026-07-27-collector-scf-jetstream-batch-concurrency.md
+rg -n '\- \[ \]' docs/superpowers/plans/2026-07-27-collector-scf-jetstream-batch-concurrency.md \
+  | rg -v "rg -n"
 rg -n 'TODO|TBD|placeholder|similar file|appropriate file' \
   docs/superpowers/plans/2026-07-27-collector-scf-jetstream-batch-concurrency.md \
   | rg -v "rg -n 'TODO"
@@ -1350,7 +1351,7 @@ Expected:
 - 第二条无输出。
 - `git diff --check` 无输出。
 
-- [ ] **Step 6: 最终提交并推送**
+- [x] **Step 6: 最终提交并推送**
 
 ```bash
 git add docs/superpowers/plans/2026-07-27-collector-scf-jetstream-batch-concurrency.md
@@ -1407,3 +1408,15 @@ git ls-remote --heads origin feature/mooyang
 - 本地 JetStream E2E 和真实 Tencent SCF E2E 都通过。
 - codeCR 独立审查无未处理的 actionable finding。
 - 最终提交已推送，远端分支 SHA 与本地 HEAD 一致。
+
+## 6. 完成证据
+
+- 实施分支：`feature/collector-scf-batch-concurrency`。
+- 核心实现截止提交：`37d85162`；最终 E2E 断言加固提交：`e83a64bc`。
+- 本地验证：`make verify-pr`、`scripts/test-go-workspace.sh`、Collector/CloudRuntime race 测试、17 个 Node E2E 契约测试和 `git diff --check` 均通过。
+- 106 微服务：Collector、CloudNode、EventBus、Storage、Gateway 和 Web Host 均以本计划配置运行；Collector 已更新为当前实现。
+- 腾讯云 SCF 包：`moox-collector-batch-a5-20260727_37d85162-ca5` 与 `moox-collector-batch-b5-20260727_37d85162-ca5`。
+- 在线 SCF 节点：`moox-collector-batch-a5-20260727-ap-guangzhou-0` 与 `moox-collector-batch-b5-20260727-ap-guangzhou-0`。
+- 真实 E2E：`/tmp/moox-real-scf-20260727T073106Z.json` 与 `/tmp/moox-real-scf-20260727T073106Z.log`，覆盖 1 个定时任务、1 个立即任务、20 个批任务、受控失败、TaskInstance、Storage 和 View，结果 `PASS`。
+- 运行期清理：旧测试 SCF 节点已从 CloudNode 和腾讯云删除；EventBus worker 凭据已轮换，避免已删除常驻实例继续消费。
+- 接受的剩余边界：若 CloudRuntime 在每次重投中都无法查询 JobItem 状态并最终达到 `MaxDeliver`，JobItem 可能保留 `PENDING`，需手工清理；个人量化场景不为此引入额外协调系统。
