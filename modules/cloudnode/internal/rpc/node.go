@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultSCFTimeoutSeconds = 120
-	scfOperationTimeout      = 120 * time.Second
+	scfOperationTimeout      = 5 * time.Minute
 )
 
 func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.GetNodeListRsp, error) {
