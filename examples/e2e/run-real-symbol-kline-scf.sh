@@ -3,7 +3,7 @@ set -euo pipefail
 umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_ID="$(date -u +%Y%m%dt%H%M%Sz)"
 GATEWAY="${MOOX_E2E_GATEWAY:-http://127.0.0.1:11000}"
 WEB="${MOOX_E2E_WEB:-http://127.0.0.1:9527}"
 SPACE_ID="${MOOX_E2E_SPACE_ID:-crypto}"

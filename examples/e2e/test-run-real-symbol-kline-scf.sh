@@ -41,6 +41,10 @@ export MOOX_ACCESS_TOKEN="test-access-token"
 grep -q -- '--node-count 50' "${CALL_LOG}" || fail "default SCF count was not 50"
 grep -q -- '--create-batch-size 5' "${CALL_LOG}" || fail "create batch size was not 5"
 grep -q -- '--function-name-prefix e2e-collector' "${CALL_LOG}" || fail "fleet prefix missing"
+grep -Eq -- '--symbol-rule e2e_symbols_[0-9]{8}t[0-9]{6}z' "${CALL_LOG}" ||
+  fail "generated Symbol Rule ID must satisfy the lowercase E2E Rule contract"
+grep -Eq -- '--kline-rule e2e_kline_[0-9]{8}t[0-9]{6}z' "${CALL_LOG}" ||
+  fail "generated Kline Rule ID must satisfy the lowercase E2E Rule contract"
 if grep -Eq -- '--password|test-password' "${CALL_LOG}"; then
   fail "admin password must not be exposed in process arguments"
 fi
