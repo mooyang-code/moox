@@ -29,8 +29,12 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("HTTP status %d", e.StatusCode)
 }
 
-// NewHTTPClient 创建通用 HTTP 客户端
-func NewHTTPClient() *HTTPClient {
+// NewHTTPClient 创建通用 HTTP 客户端。可选的 base client 供受控集成环境复用
+// 已配置的 Transport，例如本地 TLS 测试服务器。
+func NewHTTPClient(base ...*http.Client) *HTTPClient {
+	if len(base) > 0 && base[0] != nil {
+		return &HTTPClient{httpClient: base[0]}
+	}
 	return &HTTPClient{
 		httpClient: &http.Client{
 			Timeout: defaultRequestTimeout,
@@ -44,11 +48,6 @@ func NewHTTPClient() *HTTPClient {
 			},
 		},
 	}
-}
-
-// NewHTTPClientWithClient wraps an HTTP client supplied by an integration.
-func NewHTTPClientWithClient(client *http.Client) *HTTPClient {
-	return &HTTPClient{httpClient: client}
 }
 
 // Get 发送 GET 请求（自动获取最优 IP）

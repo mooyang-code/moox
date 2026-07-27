@@ -38,7 +38,7 @@ func TestPublicAggregateTradeAPIsUseCursorAndExpectedEndpoints(t *testing.T) {
 			}))
 			defer server.Close()
 			client := NewClient()
-			client.HTTPClient = httpclient.NewHTTPClientWithClient(server.Client())
+			client.HTTPClient = httpclient.NewHTTPClient(server.Client())
 			require.NoError(t, tt.setBaseURL(client, server.URL))
 			trades, err := tt.call(client, &exchange.TradeRequest{Symbol: "BTCUSDT", Limit: 100, FromID: 41})
 			require.NoError(t, err)
