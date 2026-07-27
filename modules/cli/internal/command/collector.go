@@ -389,6 +389,8 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	summary.DeployBatchIDs = fleetSummary.DeployBatchIDs
 	summary.CreateProcessedCount = fleetSummary.CreateProcessedCount
 	summary.DeployProcessedCount = fleetSummary.DeployProcessedCount
+	summary.DeploySkippedCount = fleetSummary.DeploySkippedCount
+	summary.DeployBatchSize = fleetSummary.DeployBatchSize
 	return summary, nil
 }
 
