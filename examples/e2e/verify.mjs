@@ -249,7 +249,7 @@ async function schedule(args) {
   const previousState = await readState(args);
   const storageBefore = await waitFor("storage target Dataset view ready", 60_000, async () =>
     datasetRowSnapshot(args, token));
-  const scheduleDelay = scheduleLeadDelay(Date.now(), 30_000, 15_000);
+  const scheduleDelay = scheduleLeadDelay(Date.now(), 60_000, 15_000);
   if (scheduleDelay > 0) {
     log(`waiting ${scheduleDelay}ms for a deterministic future schedule window`);
     await sleep(scheduleDelay);
@@ -790,10 +790,10 @@ async function ensureCollectorRule(args, token) {
     data_type: "kline",
     exchange: "binance",
     collect_params: {
-      source: { kind: "dataset_subjects", dataset_id: args.dataset },
+      source: { kind: "dataset_subjects", dataset_id: "binance_spot_symbols" },
       collector: { exchange: "binance", market: "spot", data_type: "kline", intervals: ["1h"] },
       target: { dataset_id: args.dataset },
-      schedule: { interval: "30s" },
+      schedule: { interval: "1m" },
     },
     enabled: true,
     creator: "moox-e2e",

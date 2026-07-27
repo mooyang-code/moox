@@ -88,9 +88,10 @@ moox-storage-cli activate-datasets --metadata-target ip://127.0.0.1:20100
 `activate-datasets` 只激活已经通过只读检查的 Dataset。绑定一旦锁定，不能再解绑或迁移；
 新项目不提供历史 Schema 或节点拓扑迁移。
 
-默认 seed 不静态枚举测试币种。E2E 的 setup 阶段通过 Metadata
-`RegisterDataSubject` API 登记 `BTC-USDT`，同时创建 Binance 外部代码映射和
-`binance_spot_kline_1h` DatasetSubject 绑定。
+默认 seed 不静态枚举测试币种。全市场 E2E 先创建独立的 Symbol RECORD Dataset，
+由 Symbol Job 注册所有 `TRADING` 状态的 USDT 现货交易对、外部代码映射和
+DatasetSubject；Kline Rule 再以这个 Symbol Dataset 为 source，并写入独立的
+TIME_SERIES Dataset。
 
 ## 创建采集规则
 
@@ -106,14 +107,16 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
     "biz_type": "data_collector",
     "data_type": "kline",
     "data_source": "binance",
-    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline_1h\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"binance_spot_kline_1h\"},\"schedule\":{\"interval\":\"1h\"}}",
+    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_symbols\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"binance_spot_kline_1h\"},\"schedule\":{\"interval\":\"1h\"}}",
     "enabled": "true",
     "creator": "system"
   }
 }
 ```
 
-创建规则后，调用 `/api/admin/collectmgr/ScheduleTasks`，由 `moox-collector` 从 storage metadata 读取 `binance_spot_kline_1h` 数据集的 subjects，生成 task instances，并通过 `moox-cloudnode` 只提交下一次 CloudNode JobItem。`execute_at` 缺失或已到期时立即执行。
+创建规则后，调用 `/api/admin/collectmgr/ScheduleTasks`。Collector 只在 Rule 到期时读取
+Symbol Dataset 的 active subjects，生成 task instances，并提交下一个对齐周期边界的
+CloudNode JobItem。`execute_at` 缺失或已到期时立即执行。
 
 ## 最小可演示闭环
 
@@ -188,6 +191,41 @@ setup 会先要求至少两个状态在线、心跳在两分钟内的 `tencent-s
 避免生产 Timer 改写 TaskInstance 绑定；无论测试成功还是中途失败，runner 仍会执行 cleanup，
 禁用独立 E2E 规则，避免生产环境继续每 30 秒生成采集任务。
 
+### 全市场 Symbol 到 1m Kline 的 50 SCF 验收
+
+下面的入口会创建或严格校验两个隔离 Dataset，上传一次新 Collector package，创建或更新
+同一 prefix 下的 50 个真实 SCF，然后依次验证 Symbol 全集、Kline JobItem 和 Storage
+本次写入。Rule timer 在每分钟第 20 秒触发，分钟 Rule 的 `execute_at` 是下一分钟边界。
+
+```bash
+read -rsp 'E2E admin password: ' MOOX_E2E_ADMIN_PASSWORD && echo
+export MOOX_E2E_ADMIN_PASSWORD
+# fleet publish 需要先加载 0600 的后台签名、EventBus、Gateway CA 和 CLS 环境。
+# 生产机示例：
+set -a
+source /home/ubuntu/moox/prod/secrets/gateway-moox-cli.env
+source /home/ubuntu/moox/prod/secrets/cls.env
+set +a
+
+examples/e2e/run-real-symbol-kline-scf.sh \
+  --gateway http://127.0.0.1:11000 \
+  --web http://127.0.0.1:9527 \
+  --space crypto \
+  --cloud-account tencent-prod \
+  --package-name moox-collector-e2e \
+  --package-version 20260727 \
+  --region ap-guangzhou \
+  --fleet-prefix moox-collector-e2e \
+  --scf-count 50 \
+  --timeout-seconds 600
+```
+
+runner 固定执行 `setup -> fleet -> symbols -> klines -> assert`，退出时始终执行 Rule
+cleanup。默认保留两个 Dataset 和 50 个真实函数供后续观察；它不会调用只软删 catalog
+的 `BatchDeleteNodes`。删除真实 fleet 必须使用能够调用腾讯云 `DeleteFunction` 的独立运维
+流程，删除测试 Dataset 也必须显式执行。state、publish summary 和日志均为 `0600`，路径
+在启动时输出。
+
 ### 本地诊断 E2E
 
 脚本默认会调用 `scripts/deploy-moox.sh --reset-data`，然后导入：
@@ -247,4 +285,4 @@ IP。需要复用已启动服务时可传 `--skip-deploy`；需要保留已有�
   执行完全由 JetStream delivery 驱动。
 - 允许少量重复执行，不承诺任务级去重。JobItem 获取、延期、执行、状态上报、完成和
   delivery action 可按 `job_item_id` 在 CLS 检索。
-- Binance TLS 证书校验关闭是本 E2E 接受的运行配置。
+- Binance HTTP 使用系统根证书和域名 SNI 验证 TLS；E2E 不允许跳过证书校验。
