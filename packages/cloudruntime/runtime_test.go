@@ -129,6 +129,30 @@ func TestExecuteJobItemSkipsTerminalRedelivery(t *testing.T) {
 	}
 }
 
+func TestExecuteJobItemRunsFinalDeliveryWhenTerminalLookupFails(t *testing.T) {
+	resetRegistryForTest()
+	handled := false
+	Register("collect.kline", HandlerFunc(func(context.Context, JobItem) (Result, error) {
+		handled = true
+		return Result{}, Permanent(errors.New("final failure"), "FINAL")
+	}))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/GetJobItem") {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"}}`))
+	}))
+	defer server.Close()
+
+	result := ExecuteJobItem(context.Background(), testConfig(server.URL), JobItem{
+		SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline",
+	}, 4, 4)
+	if !handled || result.Decision != jetstream.TERM {
+		t.Fatalf("handled=%v result=%+v", handled, result)
+	}
+}
+
 func TestExecuteJobItemReportFailureRetriesDelivery(t *testing.T) {
 	resetRegistryForTest()
 	Register("collect.kline", HandlerFunc(func(context.Context, JobItem) (Result, error) {
