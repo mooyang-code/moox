@@ -169,15 +169,7 @@ func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount
 	if deliveryCount > 1 {
 		decision, terminal, err := terminalRedeliveryDecision(ctx, cfg, item)
 		if err != nil {
-			if maxDeliver <= 0 || deliveryCount < uint64(maxDeliver) {
-				return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: normalRetryDelay, Err: err}
-			}
-			// The final delivery must still run so the normal terminal reporting
-			// path can close a PENDING job instead of exhausting MaxDeliver.
-			log.WarnContextf(ctx,
-				"cloud job terminal lookup failed on final delivery; executing handler: job_item_id=%s error=%v",
-				item.JobItemID, err,
-			)
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: normalRetryDelay, Err: err}
 		}
 		if terminal {
 			return jetstream.HandlerResult{Decision: decision}
