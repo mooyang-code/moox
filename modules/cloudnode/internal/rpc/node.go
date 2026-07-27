@@ -423,9 +423,6 @@ func (s *Service) updateSCFFunctionCode(
 	}); err != nil {
 		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
 	}
-	if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
-		return err
-	}
 	return nil
 }
 

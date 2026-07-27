@@ -455,8 +455,8 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	if len(fake.configured) != 1 {
 		t.Fatalf("configuration calls = %d, want 1", len(fake.configured))
 	}
-	if fake.getCalls != 3 {
-		t.Fatalf("GetFunction calls = %d, want initial and one after each update", fake.getCalls)
+	if fake.getCalls != 2 {
+		t.Fatalf("GetFunction calls = %d, want initial and one after code update", fake.getCalls)
 	}
 	if got := fake.configured[0].Environment["MOOX_EVENTBUS_NATS_PASSWORD"]; got != "rotated-worker-token" {
 		t.Fatalf("worker credential = %q", got)
