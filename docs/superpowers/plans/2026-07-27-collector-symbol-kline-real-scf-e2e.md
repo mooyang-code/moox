@@ -1673,6 +1673,7 @@ Task 8  文档、全量验证、真实验收、codeCR、推送
 Tencent SCF；Collector E2E 本身没有实现或绕过 CloudNode 发布机制。
 
 ```text
+implementation_commit: 0fc0c523038868e671e67f200298f221db538e91
 run_rule_suffix: 20260727t233211z
 package_id: moox-collector-e2e_20260727T233125Z_32de3f34-39a4-4a2d-b59f-6296b0fdaf69
 package_version: 20260727T233125Z

@@ -1425,6 +1425,7 @@ Task 9  全量门禁、真实 50 SCF、codeCR、推送
 完成，未使用同步批量接口：
 
 ```text
+implementation_commit: 0fc0c523038868e671e67f200298f221db538e91
 space_id: crypto
 package_id: moox-collector-e2e_20260727T233125Z_32de3f34-39a4-4a2d-b59f-6296b0fdaf69
 package_version: 20260727T233125Z
