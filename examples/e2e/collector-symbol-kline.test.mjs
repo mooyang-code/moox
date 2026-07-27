@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash, createHmac } from "node:crypto";
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,7 @@ import {
   restoreCleanupScope,
   validateKlineStorageRow,
   validatePublishSummary,
+  signedHeaders,
   validateKlineJobs,
   verifiedSCFFleet,
   writeState,
@@ -389,6 +391,28 @@ test("validates created and updated fleet publish summaries", () => {
     fleet_mode: "created",
     create_processed_count: 49,
   }, 50), /processed 49/);
+});
+
+test("request signature includes empty app headers when space is signed", () => {
+  const payload = JSON.stringify({ space_id: "crypto" });
+  const headers = signedHeaders("signing-key", "/api/admin/cloudnode/GetNodeList", payload, {
+    "X-Space-Id": "crypto",
+  });
+  const canonical = [
+    "moox-request-v1",
+    "POST",
+    "/api/admin/cloudnode/GetNodeList",
+    "x-app-id:",
+    "x-app-key:",
+    "x-space-id:crypto",
+    createHash("sha256").update(payload).digest("hex"),
+    headers["X-Moox-Timestamp"],
+    headers["X-Moox-Nonce"],
+  ].join("\n");
+  assert.equal(
+    headers["X-Moox-Signature"],
+    createHmac("sha256", "signing-key").update(canonical).digest("hex"),
+  );
 });
 
 test("fleet readiness requires exactly 50 fresh online Tencent SCFs", () => {

@@ -1519,16 +1519,17 @@ async function adminPost(args, token, service, method, body, options = {}) {
   return data;
 }
 
-function signedHeaders(signingKey, path, payload, headers) {
+export function signedHeaders(signingKey, path, payload, headers) {
   const timestamp = String(Math.floor(Date.now() / 1000));
   const nonce = randomBytes(32).toString("hex");
   const canonical = ["moox-request-v1", "POST", path];
-  for (const [name, value] of [
+  const signed = [
     ["x-app-id", headers["X-App-Id"] || ""],
     ["x-app-key", headers["X-App-Key"] || ""],
     ["x-space-id", headers["X-Space-Id"] || ""],
-  ]) {
-    if (value) canonical.push(`${name}:${value}`);
+  ];
+  if (signed.some(([, value]) => value)) {
+    for (const [name, value] of signed) canonical.push(`${name}:${value}`);
   }
   canonical.push(createHash("sha256").update(payload).digest("hex"), timestamp, nonce);
   return {
