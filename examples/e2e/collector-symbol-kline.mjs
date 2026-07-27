@@ -1037,7 +1037,7 @@ async function ensureFields(args, token, definitions) {
       field_id: fieldID,
     });
     if (retOK(existing.ret_info)) {
-      if (existing.field?.value_type !== VALUE_TYPES[type] || existing.field?.status !== "active") {
+      if (!fieldContractMatches(existing.field, type)) {
         throw new Error(`field ${fieldID} contract mismatch`);
       }
       continue;
@@ -1053,6 +1053,10 @@ async function ensureFields(args, token, definitions) {
       },
     });
   }
+}
+
+export function fieldContractMatches(field, type) {
+  return [type, VALUE_TYPES[type]].includes(field?.value_type) && field?.status === "active";
 }
 
 async function ensureFieldGroup(args, token) {

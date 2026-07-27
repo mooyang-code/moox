@@ -13,6 +13,7 @@ import {
   buildSCFNodeDefinitions,
   buildSymbolDatasetContract,
   collectKlineWriteEvidence,
+  fieldContractMatches,
   hasMorePages,
   parseArgs,
   restoreCleanupScope,
@@ -54,6 +55,12 @@ test("builds 1m time-series dataset contract", () => {
     ["quote_volume", "FIELD_VALUE_TYPE_DOUBLE"],
     ["trade_num", "FIELD_VALUE_TYPE_INT"],
   ]);
+});
+
+test("existing field contract accepts Storage scalar and protobuf enum names", () => {
+  assert.equal(fieldContractMatches({ value_type: "string", status: "active" }, "string"), true);
+  assert.equal(fieldContractMatches({ value_type: "FIELD_VALUE_TYPE_STRING", status: "active" }, "string"), true);
+  assert.equal(fieldContractMatches({ value_type: "double", status: "disabled" }, "double"), false);
 });
 
 test("rejects dataset ids longer than 30 characters", () => {
