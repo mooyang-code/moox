@@ -8,7 +8,8 @@ import {
   assertFutureExecutionTimes,
   assertRealExecutionNodes,
   assertRealSCFFleet,
-  assertStorageWriteEvidence,
+  assertTaskInstanceWriteEvidence,
+  collectStorageWriteEvidence,
   controlledFailureJob,
   currentRealSCFNodes,
   currentScheduledJobItems,
@@ -41,17 +42,21 @@ test("storage snapshot queries the target View without an empty subject selector
 });
 
 test("storage write evidence accepts only an explicit K-line zero-write result", () => {
-  assert.doesNotThrow(() => assertStorageWriteEvidence([{
+  assert.deepEqual(collectStorageWriteEvidence([{
+    job_item_id: "zero",
+    params: { interval: "1h" },
     result_summary: {
-      tasks: [{ data_type: "kline", rows_written: 0, zero_write_reason: "no_new_closed_kline" }],
+      tasks: [{ data_type: "kline", interval: "1h", rows_written: 0, zero_write_reason: "no_new_closed_kline" }],
     },
-  }], "same", { fingerprint: "same", rows: [{ key: { subject_id: "BTC-USDT" } }] }));
-  assert.throws(() => assertStorageWriteEvidence([{
-    result_summary: { tasks: [{ data_type: "kline", rows_written: 0 }] },
-  }], "same", { fingerprint: "same", rows: [] }), /missing an accepted reason/);
+  }]), { rowsWritten: 0, writtenKeys: [] });
+  assert.throws(() => collectStorageWriteEvidence([{
+    job_item_id: "bad-zero",
+    params: { interval: "1h" },
+    result_summary: { tasks: [{ data_type: "kline", interval: "1h", rows_written: 0 }] },
+  }]), /missing an accepted reason/);
 });
 
-test("storage write evidence verifies positive writes through exact RowKeys", () => {
+test("storage write evidence requires every successful JobItem and requested interval", () => {
   const key = {
     space_id: "crypto",
     dataset_id: "binance_spot_kline_1h",
@@ -60,20 +65,33 @@ test("storage write evidence verifies positive writes through exact RowKeys", ()
     data_time: "2026-07-27T06:00:00Z",
   };
   const jobItems = [{
+    job_item_id: "positive",
+    params: { interval: "1h" },
     result_summary: {
-      tasks: [{ data_type: "kline", rows_written: 1, written_row_key_samples: [key] }],
+      tasks: [{ data_type: "kline", interval: "1h", rows_written: 1, written_row_key_samples: [key] }],
     },
   }];
-  assert.doesNotThrow(() => assertStorageWriteEvidence(
-    jobItems,
-    "before",
-    { fingerprint: "after", rows: [{ key: { ...key } }] },
+  assert.deepEqual(collectStorageWriteEvidence(jobItems), { rowsWritten: 1, writtenKeys: [key] });
+  assert.throws(() => collectStorageWriteEvidence([
+    ...jobItems,
+    { job_item_id: "missing", params: { interval: "1h" }, result_summary: {} },
+  ]), /missing.*does not contain collection write evidence/);
+  assert.throws(() => collectStorageWriteEvidence([{
+    ...jobItems[0],
+    params: { interval: "5m" },
+  }]), /does not match requested intervals/);
+});
+
+test("TaskInstance persists the same write evidence as its JobItem", () => {
+  const tasks = [{ data_type: "kline", interval: "1h", rows_written: 0, zero_write_reason: "no_new_closed_kline" }];
+  assert.doesNotThrow(() => assertTaskInstanceWriteEvidence(
+    [{ task_id: "task-1", cloud_job_item_id: "item-1", result: { tasks } }],
+    [{ job_item_id: "item-1", result_summary: { tasks } }],
   ));
-  assert.throws(() => assertStorageWriteEvidence(
-    jobItems,
-    "before",
-    { fingerprint: "after", rows: [{ key: { ...key, subject_id: "ETH-USDT" } }] },
-  ), /not readable/);
+  assert.throws(() => assertTaskInstanceWriteEvidence(
+    [{ task_id: "task-1", cloud_job_item_id: "item-1", result: {} }],
+    [{ job_item_id: "item-1", result_summary: { tasks } }],
+  ), /did not persist/);
 });
 
 test("CloudNode JobItem status values match the protobuf contract", () => {

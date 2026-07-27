@@ -432,6 +432,12 @@ async function assertAfterSCF(args) {
   if (state.require_real_scf) {
     assertRealExecutionNodes(batchResults, state.real_scf_node_ids);
   }
+  assertTaskInstanceWriteEvidence(instances, jobItems);
+  const writeEvidence = collectStorageWriteEvidence([
+    ...jobItems,
+    immediate,
+    ...batchResults,
+  ]);
   await writeState(args, {
     ...state,
     immediate_job_item_id: immediate.job_item_id,
@@ -444,8 +450,14 @@ async function assertAfterSCF(args) {
   logLifecycleQueries(batchResults, "batch");
   logLifecycleQueries([terminalFailure], "failure");
 
-  if (!state.storage_before) {
-    throw new FatalAssertionError("E2E state does not contain the target Dataset baseline");
+  if (writeEvidence.writtenKeys.length > 0) {
+    await waitFor("Storage Primary exact written RowKeys", timeoutMs, async () => {
+      await assertWrittenRowKeysReadable(args, token, writeEvidence.writtenKeys);
+      return true;
+    });
+    log(`storage write evidence: rows_written=${writeEvidence.rowsWritten}, verified_row_keys=${writeEvidence.writtenKeys.length}`);
+  } else {
+    log("storage write evidence: every successful JobItem reported no new closed K-line");
   }
   const storageAfter = await waitFor("storage target Dataset available after write", timeoutMs, async () => {
     const snapshot = await datasetRowSnapshot(args, token);
@@ -454,7 +466,6 @@ async function assertAfterSCF(args) {
     }
     return snapshot;
   });
-  assertStorageWriteEvidence(jobItems, state.storage_before, storageAfter);
   const rows = storageAfter.rows;
 
   const sample = rows[0]?.key || {};
@@ -859,44 +870,73 @@ function stableJSON(value) {
   return value;
 }
 
-export function assertStorageWriteEvidence(jobItems, storageBefore, storageAfter) {
-  const tasks = (jobItems || []).flatMap((item) => item.result_summary?.tasks || []);
-  if (tasks.length === 0) {
-    throw new FatalAssertionError("scheduled JobItems do not contain collection write evidence");
-  }
+export function collectStorageWriteEvidence(jobItems) {
   let rowsWritten = 0;
   const writtenKeys = [];
-  for (const task of tasks) {
-    const count = Number(task.rows_written);
-    if (!Number.isInteger(count) || count < 0) {
-      throw new FatalAssertionError(`invalid rows_written in collection result: ${task.rows_written}`);
+  for (const item of jobItems || []) {
+    const tasks = item.result_summary?.tasks;
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      throw new FatalAssertionError(`successful JobItem ${item.job_item_id || "unknown"} does not contain collection write evidence`);
     }
-    rowsWritten += count;
-    if (count === 0 && task.zero_write_reason !== "no_new_closed_kline") {
-      throw new FatalAssertionError(`zero-write collection is missing an accepted reason: ${task.zero_write_reason || "missing"}`);
+    const expectedIntervals = Array.isArray(item.params?.intervals) && item.params.intervals.length > 0
+      ? item.params.intervals.map(String)
+      : [String(item.params?.interval || "")];
+    const actualIntervals = tasks.map((task) => String(task.interval || ""));
+    if (JSON.stringify([...actualIntervals].sort()) !== JSON.stringify([...expectedIntervals].sort())) {
+      throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} task evidence does not match requested intervals`);
     }
-    if (count > 0) {
-      const samples = task.written_row_key_samples || [];
-      if (samples.length === 0) {
-        throw new FatalAssertionError("positive collection result does not contain written RowKey samples");
+    for (const task of tasks) {
+      const count = Number(task.rows_written);
+      if (!Number.isInteger(count) || count < 0) {
+        throw new FatalAssertionError(`invalid rows_written in JobItem ${item.job_item_id || "unknown"}: ${task.rows_written}`);
       }
-      writtenKeys.push(...samples);
+      rowsWritten += count;
+      if (count === 0 && task.zero_write_reason !== "no_new_closed_kline") {
+        throw new FatalAssertionError(`zero-write JobItem ${item.job_item_id || "unknown"} is missing an accepted reason`);
+      }
+      if (count > 0) {
+        const samples = task.written_row_key_samples || [];
+        if (samples.length === 0) {
+          throw new FatalAssertionError(`positive JobItem ${item.job_item_id || "unknown"} does not contain written RowKey samples`);
+        }
+        writtenKeys.push(...samples);
+      }
     }
   }
-  if (rowsWritten === 0) {
-    log("storage write evidence: no new closed K-line, zero writes accepted");
-    return;
-  }
-  if (storageAfter.fingerprint === storageBefore) {
-    throw new FatalAssertionError(`collector reported ${rowsWritten} written rows but target Dataset did not change`);
-  }
-  const visibleKeys = new Set((storageAfter.rows || []).map((row) => JSON.stringify(stableJSON(row.key || {}))));
-  for (const key of writtenKeys) {
-    if (!visibleKeys.has(JSON.stringify(stableJSON(key)))) {
-      throw new FatalAssertionError(`written RowKey is not readable from target Dataset: ${JSON.stringify(key)}`);
+  return { rowsWritten, writtenKeys };
+}
+
+export function assertTaskInstanceWriteEvidence(instances, jobItems) {
+  const byID = new Map((jobItems || []).map((item) => [item.job_item_id, item]));
+  for (const instance of instances || []) {
+    const item = byID.get(instance.cloud_job_item_id);
+    if (!item) {
+      throw new FatalAssertionError(`TaskInstance ${instance.task_id || "unknown"} has no matching JobItem`);
+    }
+    const instanceTasks = instance.result?.tasks;
+    const jobTasks = item.result_summary?.tasks;
+    if (!Array.isArray(instanceTasks) || JSON.stringify(stableJSON(instanceTasks)) !== JSON.stringify(stableJSON(jobTasks))) {
+      throw new FatalAssertionError(`TaskInstance ${instance.task_id || "unknown"} did not persist its JobItem write evidence`);
     }
   }
-  log(`storage write evidence: rows_written=${rowsWritten}, verified_row_keys=${writtenKeys.length}`);
+}
+
+async function assertWrittenRowKeysReadable(args, token, keys) {
+  const unique = [...new Map(keys.map((key) => [JSON.stringify(stableJSON(key)), key])).values()];
+  for (let offset = 0; offset < unique.length; offset += 50) {
+    const batch = unique.slice(offset, offset + 50);
+    const rsp = await storagePost(args, token, "access", "ReadTimeSeriesRows", {
+      space_id: args.space,
+      dataset_id: args.dataset,
+      keys: batch,
+      page: { page: 1, size: batch.length },
+    });
+    const visible = new Set((rsp.rows || []).map((row) => JSON.stringify(stableJSON(row.key || {}))));
+    const missing = batch.filter((key) => !visible.has(JSON.stringify(stableJSON(key))));
+    if (missing.length > 0) {
+      throw new Error(`${missing.length}/${batch.length} written RowKeys are not readable from Storage Primary`);
+    }
+  }
 }
 
 async function writeState(args, value) {
