@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在不引入同步 SCF 调用、额外调度中心或高可靠基础设施的前提下，让 Collector 控制面按 Dataset 标的一次生成数百个 JobItem 并串行分批投递到 JetStream，常驻 SCF 每次 `Fetch(10)` 后并发执行最多 10 个采集任务，逐消息独立 ACK/NAK/TERM，并保证 Storage 重投幂等、Binance TLS 正常校验。
+**Goal:** 在不引入同步 SCF 调用、额外调度中心或高可靠基础设施的前提下，让 Collector 控制面按 Dataset 标的一次生成数百个 JobItem 并串行分批投递到 JetStream；常驻 SCF 根据配置绑定 provider-specific JobType，每次 `Fetch(10)` 后使用 `trpc.GoAndWait` 并发执行整批任务，逐消息独立 ACK/NAK/TERM，并保证短任务有界重试、Storage 重投结果正确、Binance TLS 正常校验。
 
-**Architecture:** 保留现有“Collector 规划、CloudNode 管队列、SCF 常驻消费、Storage 落库”的边界。已实测 keepalive 可严格保证 SCF 在线，因此把它作为确定前提：keepalive 只做进程保活、运行时配置更新和心跳，不触发、不拉取、不执行 JobItem。控制面按固定批次顺序调用 CloudNode，CloudNode 异步发布 JetStream；SCF 由一个常驻 taskrunner 在不同 JobType durable 之间按批次轮转，每次从一个 durable 拉取最多 10 条，并通过通用 JetStream Runner 的显式并发模式独立处理每条 delivery。
+**Architecture:** 保留现有“Collector 规划、CloudNode 管队列、SCF 常驻消费、Storage 落库”的边界。已实测 keepalive 可严格保证 SCF 在线，因此把它作为确定前提：keepalive 只做进程保活、运行时配置更新和心跳，不触发、不拉取、不执行 JobItem。控制面按固定批次顺序调用 CloudNode，CloudNode 异步发布 JetStream；SCF 由一个常驻 taskrunner 只绑定 `job_worker.job_types` 指定的 durable，在不同 durable 之间按批次轮转。`batch_size` 同时表示单次 Fetch 数量和该批最大并发数，不再增加第二个 concurrency 参数；并发由通用 JetStream Runner 的 opt-in independent batch 模式调用 `trpc.GoAndWait` 完成。
 
 **Tech Stack:** Go 1.25、tRPC-Go、NATS JetStream、Tencent SCF、SQLite/GORM、Storage PrimaryStore/DataNode、Vue 3、Vitest、CLS。
 
@@ -38,6 +38,8 @@
 2. keepalive invocation 更新服务地址、NodeID、心跳和在线状态。
 3. taskrunner 就绪后持续独立消费 JetStream，不等待后续 keepalive 才执行下一批任务。
 
+resident taskrunner 使用进程级 context，不把某次 keepalive invocation 的 deadline 当作任务寿命。每个 JobItem 由 worker 自己创建独立的 20 秒 deadline；keepalive 返回不会取消正在执行的采集任务。
+
 明确禁止：
 
 - `ScheduleTasks -> InvokeFunction` 或任何按 JobItem 激活 SCF 的链路。
@@ -60,14 +62,19 @@
 ```yaml
 job_worker:
   batch_size: 10
-  concurrency: 10
-  in_progress_interval: 30s
+  timeout: 20s
+  job_types:
+    - collect.binance.kline
+    - collect.binance.symbol
 ```
 
-并发只由两个已有边界限制：
+约束解释：
 
-- 单 SCF、单批最多 10 个任务同时执行。
-- 单 durable 的 `max_ack_pending: 32` 限制所有 SCF 合计未 ACK delivery 数。
+- `batch_size=10`：一次从一个 durable 最多拉 10 条，并通过 `trpc.GoAndWait` 同时执行这最多 10 条；不再定义重复的 `concurrency`。
+- `timeout=20s`：每个 JobItem 从开始处理到完成 Storage/状态上报的总预算；正常采集一般小于 5 秒。
+- `job_types`：当前 SCF 实例实际绑定和对外上报的 provider-specific JobType；未来 A 股 Provider 只需注册如 `collect.tushare.kline` 并在对应 SCF 配置中启用。
+- Collector 不设置 `in_progress_interval`。CloudNode durable 使用 `AckWait=60s`，给 20 秒任务保留 40 秒余量。
+- 单 durable 的 `max_ack_pending=32` 继续限制所有 SCF 合计未 ACK delivery 数。
 
 ## 2. 最终运行模型
 
@@ -81,13 +88,14 @@ flowchart LR
 
     Keepalive["SCF keepalive invocation"] --> Runtime["Keep process online and refresh runtime config"]
     Runtime --> Runner["One resident taskrunner"]
-    Runner --> Fetch["Fetch up to 10 from one durable"]
-    Fetch --> Concurrent["Run up to 10 deliveries concurrently"]
+    Config["job_worker.job_types"] --> Runner
+    Runner --> Fetch["Fetch batch_size=10 from one configured durable"]
+    Fetch --> Concurrent["trpc.GoAndWait runs the fetched batch"]
 
     Concurrent --> Due{"execute_at due?"}
     Due -->|"future"| NAK["NAK this delivery with exact delay"]
     Due -->|"due or absent"| Binance["Call Binance API"]
-    Binance --> Storage["Write Storage with stable source_event_id"]
+    Binance --> Storage["Upsert Storage rows by stable RowKey"]
     Storage --> ACK["ACK this delivery"]
     Concurrent --> TERM["Invalid payload: TERM this delivery"]
     Concurrent --> Retry["Transient error: NAK only this delivery"]
@@ -103,7 +111,7 @@ flowchart LR
 | Binance/Storage 临时失败 | 返回 retryable error | `NAK(retryDelay)` | 不影响 |
 | ACK/NAK/TERM 传输失败 | 本批完成后返回聚合错误，外层 runner 重建 | 动作错误写日志 | 已开始的消息均完成各自动作 |
 
-并发模式下不得保留当前“某一条 RETRY 后，把本批剩余消息全部以同一 delay NAK”的顺序批语义。该语义只保留给 `Concurrency == 1` 的现有调用方。
+Collector 的 independent batch 模式下不得保留当前“某一条 RETRY 后，把本批剩余消息全部以同一 delay NAK”的顺序批语义。通用 Runner 的默认串行模式保持不变，继续服务 Archive、Trade、Factor、Monitor 等现有调用方。
 
 ### 2.2 期望容量
 
@@ -120,15 +128,15 @@ flowchart LR
 ```text
 Task 1  通用 JetStream Runner 增加独立并发批模式
   ↓
-Task 2  Collector 真正 Fetch(10) 并启用批内并发
+Task 2  provider-specific JobType 与配置驱动消费者
   ↓
-Task 3  控制面改为串行分批投递
+Task 3  Collector 真正 Fetch(10) 并启用批内并发
   ↓
-Task 4  调整 delivery 心跳与重投预算
+Task 4  控制面改为串行分批投递
   ↓
-Task 5  收紧 JobItem 身份并贯通 Storage 幂等键
+Task 5  收紧 20 秒执行预算、3 次本地重试和 60 秒 AckWait
   ↓
-Task 6  简化规则参数和 Dataset 选择
+Task 6  收紧 JobItem 身份并简化 Dataset 规则
   ↓
 Task 7  恢复 Binance TLS 证书校验
   ↓
@@ -148,20 +156,20 @@ Task 9  真实 SCF 验收、独立 CR、提交与推送
 - Modify: `packages/jetstream/runner.go`
 - Modify: `packages/jetstream/runner_test.go`
 
-- [ ] **Step 1: 先写并发度和默认兼容测试**
+- [ ] **Step 1: 先写 opt-in 并发批和默认兼容测试**
 
 新增测试：
 
 ```go
-func TestRunnerDefaultsConcurrencyToOne(t *testing.T)
-func TestRunnerConcurrentBatchHonorsLimit(t *testing.T)
+func TestRunnerDefaultsToSequentialBatch(t *testing.T)
+func TestRunnerIndependentBatchRunsWholeFetchedBatchConcurrently(t *testing.T)
 func TestRunnerConcurrentRetryDoesNotNakOtherDeliveries(t *testing.T)
 func TestRunnerConcurrentBatchWaitsForAllStartedDeliveries(t *testing.T)
 func TestRunnerConcurrentBatchAggregatesActionErrors(t *testing.T)
-func TestRunnerConcurrentBatchRunsInProgressPerDelivery(t *testing.T)
+func TestRunnerSequentialRetryStillNaksRemainingDeliveries(t *testing.T)
 ```
 
-`TestRunnerConcurrentBatchHonorsLimit` 使用 atomic 计数和 barrier：
+`TestRunnerIndependentBatchRunsWholeFetchedBatchConcurrently` 使用 atomic 计数和 barrier：
 
 ```go
 var active atomic.Int32
@@ -177,49 +185,36 @@ handler := DeliveryHandlerFunc(func(context.Context, *Delivery) HandlerResult {
 })
 ```
 
-输入 10 条 delivery，配置 `BatchSize: 10, Concurrency: 3`，断言 `maxActive == 3`，而不是只断言总共处理 10 条。
+输入 10 条 delivery，配置 `BatchSize: 10, IndependentBatch: true`，在释放 barrier 前等待 `active == 10`，最终断言 `maxActive == 10`。这里不存在第二个并发度：`BatchSize` 就是 Fetch 上限和该批最大并发数。
 
 运行：
 
 ```bash
-(cd packages/jetstream && go test -count=1 ./... -run 'TestRunner(Default|Concurrent)')
+(cd packages/jetstream && go test -count=1 ./... -run 'TestRunner(Default|Independent|Concurrent|Sequential)')
 ```
 
-Expected: `RunnerConfig` 尚无 `Concurrency`，测试先编译失败。
+Expected: `RunnerConfig` 尚无 `IndependentBatch`，测试先编译失败。
 
-- [ ] **Step 2: 扩展 RunnerConfig，默认值保持串行**
+- [ ] **Step 2: 只增加内部 opt-in 开关，默认值保持串行**
 
 ```go
 type RunnerConfig struct {
     BatchSize          int
-    Concurrency        int
+    IndependentBatch   bool
     InProgressInterval time.Duration
     ErrorReporter      ErrorReporter
     ActionReporter     ActionReporter
-}
-
-func normalizeRunnerConfig(cfg RunnerConfig) RunnerConfig {
-    if cfg.BatchSize <= 0 {
-        cfg.BatchSize = 1
-    }
-    if cfg.Concurrency <= 0 {
-        cfg.Concurrency = 1
-    }
-    if cfg.Concurrency > cfg.BatchSize {
-        cfg.Concurrency = cfg.BatchSize
-    }
-    return cfg
 }
 ```
 
 兼容约束：
 
-- 所有未设置 `Concurrency` 的 Archive、Trade、Factor、Monitor 调用方继续使用 1。
-- `Concurrency == 1` 保留当前 ordered batch 行为：遇到 RETRY 后把未开始的剩余 delivery 一并延期。
-- `Concurrency > 1` 明确表示每条 delivery 可独立完成，不能再传播某一条的 delay。
+- Archive、Trade、Factor、Monitor 等未设置 `IndependentBatch` 的调用方继续走当前串行逻辑。
+- 默认串行模式保留 ordered batch 行为：遇到 RETRY 后把未开始的剩余 delivery 一并延期。
+- `IndependentBatch=true` 表示 Fetch 到的每条 delivery 独立完成，不能传播某一条的 delay。
 - 更新 `ActionReporter` 注释，明确并发模式下可能被多个 goroutine 同时调用。
 
-- [ ] **Step 3: 实现有界并发处理**
+- [ ] **Step 3: 使用 trpc.GoAndWait 实现整批并发**
 
 把批处理拆为两个方法：
 
@@ -235,26 +230,43 @@ func (r *Runner) processConcurrentBatch(
 ) error
 ```
 
-并发实现使用固定数量 worker，而不是为无限输入创建 goroutine；本批 delivery 数本身不超过 `BatchSize`：
+禁止自行实现 worker channel、semaphore 或 `sync.WaitGroup` 并发池。`trpc.GoAndWait` 每个 handler 启动一个受 panic recovery 保护的 goroutine；输入已由 `Fetch(batch_size)` 严格限制，因此不会出现无界 goroutine：
 
 ```go
-jobs := make(chan *Delivery)
-errs := make(chan error, len(deliveries))
-var wg sync.WaitGroup
-
-for i := 0; i < min(r.cfg.Concurrency, len(deliveries)); i++ {
-    wg.Add(1)
-    go func() {
-        defer wg.Done()
-        for delivery := range jobs {
+func (r *Runner) processConcurrentBatch(
+    ctx context.Context,
+    deliveries []*Delivery,
+) error {
+    errs := make([]error, len(deliveries))
+    handlers := make([]func() error, len(deliveries))
+    for index := range deliveries {
+        index := index
+        delivery := deliveries[index]
+        handlers[index] = func() error {
+            if ctx.Err() != nil {
+                return nil
+            }
             _, inProgressErr, actionErr := r.handle(ctx, delivery)
-            errs <- errors.Join(inProgressErr, actionErr)
+            errs[index] = errors.Join(inProgressErr, actionErr)
+            return nil
         }
-    }()
+    }
+    waitErr := trpc.GoAndWait(handlers...)
+    return errors.Join(waitErr, errors.Join(errs...))
 }
 ```
 
-发送 jobs 时若 `ctx.Done()` 已关闭，不再启动尚未分发的 delivery；已经进入 worker 的 delivery 等待 `handle` 返回。所有 worker 退出后聚合非空错误。
+`Run` 中只做一次分支：
+
+```go
+if r.cfg.IndependentBatch {
+    batchErr = r.processConcurrentBatch(ctx, deliveries)
+} else {
+    batchErr = r.processSequentialBatch(ctx, deliveries)
+}
+```
+
+每个 closure 只写自己下标的 `errs[index]`，不需要 mutex。`GoAndWait` 返回后再聚合错误；每条 delivery 已经独立完成 ACK/NAK/TERM。Collector 不启用 `InProgressInterval`，因此这里不会为任务启动 delivery heartbeat goroutine。
 
 - [ ] **Step 4: 验证旧串行语义无回归**
 
@@ -278,13 +290,203 @@ git commit -m "feat(jetstream): support independent concurrent batches"
 
 ---
 
-## Task 2: 让 Collector 真正 Fetch(10) 并启用批内并发
+## Task 2: 落地 provider-specific JobType 与配置驱动消费者
 
 **Files:**
 
+- Modify: `modules/collector/internal/jobs/kline/definition.go`
+- Modify: `modules/collector/internal/jobs/kline/handler_test.go`
+- Modify: `modules/collector/internal/jobs/symbol/definition.go`
+- Modify: `modules/collector/internal/jobs/symbol/handler_test.go`
+- Modify: `modules/collector/internal/jobs/registry.go`
+- Modify: `modules/collector/internal/jobs/registry_test.go`
+- Add: `modules/collector/internal/jobs/route.go`
+- Add: `modules/collector/internal/jobs/route_test.go`
+- Modify: `modules/collector/internal/taskpublisher/client.go`
+- Modify: `modules/collector/internal/taskpublisher/client_test.go`
 - Modify: `modules/collector/internal/app/runtime/local_config.go`
 - Add: `modules/collector/internal/app/runtime/local_config_test.go`
 - Modify: `modules/collector/configs/config.yaml`
+- Modify: `modules/collector/internal/reporter/heartbeat.go`
+- Modify: `modules/collector/internal/reporter/heartbeat_test.go`
+- Modify: `modules/cli/internal/command/collector.go`
+- Modify: `modules/cli/internal/command/collector_test.go`
+- Modify: `examples/e2e/verify.mjs`
+- Modify: `examples/e2e/verify-status.test.mjs`
+
+- [ ] **Step 1: 先写 JobType、配置过滤和发布元数据测试**
+
+新增或修改：
+
+```go
+func TestRegistryUsesProviderSpecificJobTypes(t *testing.T)
+func TestJobRouteForBinanceKline(t *testing.T)
+func TestJobRouteByJobType(t *testing.T)
+func TestBuildJobItemDerivesProviderSpecificJobType(t *testing.T)
+func TestDefaultConfigEnablesBinanceJobTypes(t *testing.T)
+func TestJobWorkerConfigRejectsUnknownJobType(t *testing.T)
+func TestHeartbeatAdvertisesConfiguredJobTypesOnly(t *testing.T)
+func TestCollectorPublishUsesSameJobTypesForMetadataAndEnvironment(t *testing.T)
+```
+
+硬性断言：
+
+```text
+binance kline  -> collect.binance.kline
+binance symbol -> collect.binance.symbol
+```
+
+旧的 `collect.kline`、`collect.symbol` 不作为兼容别名保留。A 股 Provider 本次不虚构实现；route 单元测试证明新增 `collect.tushare.kline` 后可以被配置选择。
+
+- [ ] **Step 2: 将 JobType 改为 provider-specific**
+
+先把现有 provider 常量改为：
+
+```go
+// internal/jobs/kline
+const JobType = "collect.binance.kline"
+
+// internal/jobs/symbol
+const JobType = "collect.binance.symbol"
+```
+
+再新增小而明确的路由表。JobDefinition 继续只负责 `kline`、`symbol` 的规则表单和 planner；不要为 Binance Kline、A 股 Kline 复制两套 UI definition：
+
+```go
+type JobRoute struct {
+    Exchange string
+    DataType string
+    JobType  string
+}
+
+var jobRoutes = []JobRoute{
+    {Exchange: "binance", DataType: "kline", JobType: kline.JobType},
+    {Exchange: "binance", DataType: "symbol", JobType: symbol.JobType},
+}
+```
+
+路由 API：
+
+```go
+func JobRouteFor(exchange, dataType string) (JobRoute, bool)
+func JobRouteByJobType(jobType string) (JobRoute, bool)
+func SupportedJobTypes() []string
+```
+
+删除 `JobDefinition.JobType`，避免一个 Kline definition 只能表达一个 Provider。`buildJobItem` 改为返回 `(*pb.JobItem, error)`，根据 TaskInstance payload 中已经过规则校验的 `exchange + data_type` 查询 `JobRouteFor`；找不到 route 时返回错误，不再拼接 `"collect."+dataType`，也不再信任 params 中可篡改的 `job_type`。
+
+未来 A 股只需给现有 Kline definition 增加对应 `Supports`，并在路由表新增：
+
+```go
+{Exchange: "tushare", DataType: "kline", JobType: "collect.tushare.kline"}
+```
+
+实际 Provider/source 实现仍是新增该 route 的前置条件。
+
+- [ ] **Step 3: 增加最小 JobWorker 配置**
+
+```go
+type JobWorkerConfig struct {
+    BatchSize int           `json:"batch_size" yaml:"batch_size"`
+    Timeout   time.Duration `json:"timeout" yaml:"timeout"`
+    JobTypes  []string      `json:"job_types" yaml:"job_types"`
+}
+
+func GetJobWorkerConfig() (JobWorkerConfig, error)
+```
+
+默认值和部署配置：
+
+```yaml
+job_worker:
+  batch_size: 10
+  timeout: 20s
+  job_types:
+    - collect.binance.kline
+    - collect.binance.symbol
+```
+
+校验规则：
+
+- `batch_size <= 0` 使用 10。
+- `timeout <= 0` 使用 20 秒。
+- `job_types` 去空白、去重并保持输入顺序。
+- `job_types` 为空或包含 registry 未注册值时启动失败，不能静默回退为“消费全部”。
+- 不增加 `concurrency` 和 `in_progress_interval`。
+- `MOOX_COLLECTOR_JOB_TYPES` 非空时覆盖 YAML，格式为逗号分隔列表，供同一代码包按 SCF 部署选择消费者。
+
+- [ ] **Step 4: 让部署元数据与运行时配置使用同一列表**
+
+在 `collectorPublishOptions` 增加：
+
+```go
+JobTypes []string
+```
+
+发布命令增加：
+
+```go
+collectorFunctionPublishCmd.Flags().StringSliceVar(
+    &collectorPublishFlags.JobTypes,
+    "job-types",
+    []string{"collect.binance.kline", "collect.binance.symbol"},
+    "JobTypes consumed by this SCF deployment",
+)
+```
+
+`buildCollectorCreateNodeItem` 同时写入：
+
+```text
+metadata.supported_workloads = normalized job types
+environment.MOOX_COLLECTOR_JOB_TYPES = comma-joined job types
+```
+
+这样 CloudNode 在创建节点时预建的 durable、SCF 实际绑定的 durable、heartbeat 上报的 `supported_workloads` 使用同一列表。未来 A 股部署的形状是：
+
+```bash
+moox collector function publish \
+  --job-types collect.tushare.kline
+```
+
+前提是代码包已经注册对应 Provider；未知 JobType 必须在发布或 SCF 启动时失败。
+
+- [ ] **Step 5: 更新受影响的契约与 E2E fixture**
+
+把 Collector/CLI/E2E 中作为真实 Collector workload 的：
+
+```text
+collect.kline
+collect.symbol
+```
+
+更新为：
+
+```text
+collect.binance.kline
+collect.binance.symbol
+```
+
+CloudNode、CloudRuntime、JetStream 的通用单元测试仍可使用 `collect.kline` 作为任意字符串样例，不做无意义全仓机械替换。
+
+- [ ] **Step 6: 运行测试并提交**
+
+```bash
+(cd modules/collector && go test -count=1 ./internal/jobs/... ./internal/taskpublisher \
+  ./internal/app/runtime ./internal/reporter)
+(cd modules/cli && go test -count=1 ./internal/command)
+node --test examples/e2e/verify-status.test.mjs
+git add modules/collector/internal/jobs modules/collector/internal/taskpublisher \
+  modules/collector/internal/app/runtime modules/collector/internal/reporter \
+  modules/collector/configs/config.yaml modules/cli/internal/command examples/e2e
+git commit -m "refactor(collector): scope job types by provider"
+```
+
+---
+
+## Task 3: 让 Collector Fetch(10) 并通过 trpc.GoAndWait 并发整批
+
+**Files:**
+
 - Modify: `modules/collector/internal/taskrunner/direct.go`
 - Modify: `modules/collector/internal/taskrunner/direct_test.go`
 - Modify: `modules/collector/cmd/scf/main_test.go`
@@ -296,10 +498,10 @@ git commit -m "feat(jetstream): support independent concurrent batches"
 新增：
 
 ```go
-func TestDefaultConfigUsesTenConcurrentJobWorkers(t *testing.T)
-func TestLoadConfigsReadsJobWorkerConfig(t *testing.T)
+func TestTaskRunnerBindsConfiguredJobTypesOnly(t *testing.T)
 func TestRoundRobinConsumerFetchesRequestedBatchAndRotates(t *testing.T)
-func TestCollectorRunnerUsesConfiguredBatchConcurrency(t *testing.T)
+func TestCollectorRunnerUsesIndependentBatch(t *testing.T)
+func TestCollectorBatchStartsAllFetchedDeliveriesBeforeWaiting(t *testing.T)
 ```
 
 `fakeQueueConsumer` 记录每次 `Fetch` 收到的 batch 参数。断言调用序列为：
@@ -310,45 +512,27 @@ second.Fetch(10)
 first.Fetch(10)
 ```
 
-不能只检查返回数量。
+不能只检查返回数量。并发测试使用 barrier，必须证明 10 个 handler 都已开始，而不是串行完成 10 次。
 
-- [ ] **Step 2: 增加单一、显式的 worker 配置**
+- [ ] **Step 2: 只为配置中的 JobType 创建 consumer binding**
+
+将：
 
 ```go
-type JobWorkerConfig struct {
-    BatchSize          int           `json:"batch_size" yaml:"batch_size"`
-    Concurrency        int           `json:"concurrency" yaml:"concurrency"`
-    InProgressInterval time.Duration `json:"in_progress_interval" yaml:"in_progress_interval"`
+jobTypes := jobs.SupportedJobTypes()
+```
+
+改为：
+
+```go
+workerCfg, err := runtimeapp.GetJobWorkerConfig()
+if err != nil {
+    return err
 }
+jobTypes := workerCfg.JobTypes
 ```
 
-在 `AppConfig` 增加 `JobWorker *JobWorkerConfig`。默认值：
-
-```go
-JobWorker: &JobWorkerConfig{
-    BatchSize:          10,
-    Concurrency:        10,
-    InProgressInterval: 30 * time.Second,
-},
-```
-
-配置文件使用：
-
-```yaml
-job_worker:
-  batch_size: 10
-  concurrency: 10
-  in_progress_interval: 30s
-```
-
-归一化规则：
-
-- `batch_size <= 0` 使用 10。
-- `concurrency <= 0` 使用 10。
-- `concurrency > batch_size` 收敛到 `batch_size`。
-- `in_progress_interval <= 0` 使用 30 秒。
-
-不再复用含义模糊的 `event_bus.workers` 控制 JobItem 并发。
+只用配置列表创建 consumer binding。进程内 handler registry 可以继续一次性注册代码包支持的全部 route，避免动态修改全局 registry；是否实际消费完全由 binding 决定。配置 `collect.binance.kline` 的 SCF 不得顺带 bind `collect.binance.symbol`，heartbeat 也只上报前者。
 
 - [ ] **Step 3: 修正 roundRobinConsumer**
 
@@ -377,22 +561,20 @@ func (c *roundRobinConsumer) Fetch(
 
 - 一轮从 Kline durable 拉最多 10 条。
 - 下一轮优先尝试 Symbol durable。
-- 总并发仍由同一个 Runner 限制为 10，不为每个 JobType 各起 10 个并发池。
+- 总并发由单个 resident Runner 的 Fetch 批次限制为 10，不为每个 JobType 各起一个 runner 或第二层并发池。
 
 - [ ] **Step 4: 将配置传入 Runner**
 
 ```go
-workerCfg := runtimeapp.GetJobWorkerConfig()
 return jetstream.NewRunner(roundRobin, handler, jetstream.RunnerConfig{
-    BatchSize:          workerCfg.BatchSize,
-    Concurrency:        workerCfg.Concurrency,
-    InProgressInterval: workerCfg.InProgressInterval,
-    ErrorReporter:      ...,
-    ActionReporter:     actionReporter,
+    BatchSize:        workerCfg.BatchSize,
+    IndependentBatch: true,
+    ErrorReporter:    ...,
+    ActionReporter:   actionReporter,
 }).Run(ctx)
 ```
 
-每个 delivery 继续通过现有 `handleDelivery -> CloudRuntime.ExecuteJobItem` 执行；不得在 handler 内再创建第二层“JobItem 并发池”。Kline 单任务的分页请求仍串行，避免无界放大 Binance 请求量。
+`InProgressInterval` 保持零值。每个 delivery 继续通过现有 `handleDelivery -> CloudRuntime.ExecuteJobItem` 执行；不得在 handler 内再创建第二层“JobItem 并发池”。Kline 单任务的分页请求仍串行，避免把一次 JobItem 再无界放大成多页并发。
 
 - [ ] **Step 5: 固化 keepalive 与执行解耦**
 
@@ -412,8 +594,9 @@ func TestKeepaliveDoesNotFetchOrExecuteJobItems(t *testing.T)
 
 ```text
 config.yaml contains job_worker.batch_size: 10
-config.yaml contains job_worker.concurrency: 10
-config.yaml contains job_worker.in_progress_interval: 30s
+config.yaml contains job_worker.timeout: 20s
+config.yaml contains collect.binance.kline
+config.yaml does not contain concurrency or in_progress_interval
 ```
 
 运行：
@@ -426,9 +609,7 @@ bash scripts/build-collector-scf-package_test.sh
 - [ ] **Step 7: 提交**
 
 ```bash
-git add modules/collector/internal/app/runtime \
-  modules/collector/configs/config.yaml \
-  modules/collector/internal/taskrunner \
+git add modules/collector/internal/taskrunner \
   modules/collector/cmd/scf \
   modules/collector/internal/serverless \
   scripts/build-collector-scf-package_test.sh
@@ -437,7 +618,7 @@ git commit -m "feat(collector): fetch and execute job batches concurrently"
 
 ---
 
-## Task 3: 将控制面改为串行分批投递
+## Task 4: 将控制面改为串行分批投递
 
 **Files:**
 
@@ -546,45 +727,136 @@ git commit -m "refactor(collector): submit cloud jobs in serial batches"
 
 ---
 
-## Task 4: 调整 delivery 心跳和重投预算
+## Task 5: 收紧 20 秒执行预算、3 次本地重试和 60 秒 AckWait
 
 **Files:**
 
+- Modify: `modules/collector/internal/taskrunner/direct.go`
+- Modify: `modules/collector/internal/taskrunner/direct_test.go`
+- Add: `modules/collector/internal/sources/binance/client/retry.go`
+- Add: `modules/collector/internal/sources/binance/client/retry_test.go`
+- Modify: `modules/collector/internal/httpclient/client.go`
+- Modify: `modules/collector/internal/httpclient/client_test.go`
+- Modify: `modules/collector/internal/sources/binance/client/spot.go`
+- Modify: `modules/collector/internal/sources/binance/client/swap.go`
+- Modify: `modules/collector/internal/sources/binance/client/trades.go`
+- Modify: `modules/collector/internal/sources/binance/storage_rpc.go`
+- Add: `modules/collector/internal/sources/binance/storage_rpc_test.go`
+- Modify: `modules/collector/internal/sources/binance/symbol.go`
+- Modify: `modules/collector/internal/sources/binance/symbol_test.go`
 - Modify: `modules/cloudnode/internal/config/config.go`
 - Modify: `modules/cloudnode/internal/config/config_test.go`
 - Modify: `modules/cloudnode/config/app.yaml`
 - Modify: `modules/cloudnode/internal/jobqueue/jetstream_queue.go`
 - Modify: `modules/cloudnode/internal/jobqueue/jetstream_queue_test.go`
 - Modify: `modules/cloudnode/internal/jobqueue/jetstream_client_test.go`
-- Modify: `modules/collector/internal/taskrunner/direct_test.go`
 
-- [ ] **Step 1: 先写混合批和长任务测试**
+- [ ] **Step 1: 先写总超时、重试次数和 AckWait 测试**
 
-新增真实 JetStream 测试：
+新增：
 
 ```go
-func TestDirectWorkerMixedBatchHandlesEachDeliveryIndependently(t *testing.T)
-func TestDirectWorkerLongJobUsesInProgressWithoutRedelivery(t *testing.T)
+func TestCollectorJobItemUsesConfiguredTwentySecondDeadline(t *testing.T)
+func TestCollectorWorkloadLeavesTwoSecondsForFinalReport(t *testing.T)
+func TestCollectorTimeoutReturnsRetryableDecision(t *testing.T)
+func TestBinanceTransientRequestAttemptsThreeTimes(t *testing.T)
+func TestBinancePermanentResponseDoesNotRetry(t *testing.T)
+func TestStorageTransientFailureAttemptsThreeTimes(t *testing.T)
+func TestStoragePermanentResponseDoesNotRetry(t *testing.T)
+func TestCollectorRunnerDoesNotSendInProgress(t *testing.T)
+func TestJobExecutionQueueUsesSixtySecondAckWait(t *testing.T)
 ```
 
-同批 10 条中放入：
+测试时间通过注入 timeout/clock 或毫秒级测试配置完成，禁止真实等待 20 秒或 60 秒。`retry.Attempts(3)` 的含义固定为总共 3 次调用，即首次加两次重试。
 
-- 6 条已到期且成功。
-- 1 条未来任务。
-- 1 条永久非法参数。
-- 1 条 retryable 执行错误。
-- 1 条慢任务。
+- [ ] **Step 2: 把 20 秒 deadline 覆盖到整个 JobItem**
 
-断言：
+在 resident Runner 的 delivery handler 外层创建 timeout context：
 
-- 6 条成功和 1 条慢任务均执行并 ACK。
-- 未来任务没有调用 executor，只 NAK 自己。
-- 非法任务 TERM。
-- retryable 任务只 NAK 自己。
-- 每条 delivery 恰好产生自己的 action log。
-- 慢任务运行超过一个 heartbeat 周期仍没有因 AckWait 重投。
+```go
+handler := jetstream.DeliveryHandlerFunc(func(
+    handleCtx context.Context,
+    delivery *jetstream.Delivery,
+) jetstream.HandlerResult {
+    jobCtx, cancel := context.WithTimeout(handleCtx, workerCfg.Timeout)
+    defer cancel()
+    return handleDelivery(jobCtx, registry, bindings, runtimeCfg, delivery)
+})
+```
 
-- [ ] **Step 2: 保持 AckWait 和全局在途上限，MaxDeliver 调整为 4**
+删除内部固定 `collectorWorkloadTimeout = 100s`。整体 20 秒 deadline 包含：
+
+- delivery 校验和到期判断。
+- Binance 请求与本地 retry。
+- Storage 请求与本地 retry。
+- Collector/CloudNode 状态上报。
+
+为终态上报保留固定 2 秒，不新增配置项：
+
+```go
+const jobReportReserve = 2 * time.Second
+
+func workloadContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
+    deadline, ok := ctx.Deadline()
+    if !ok {
+        return nil, nil, errors.New("job deadline is required")
+    }
+    workloadDeadline := deadline.Add(-jobReportReserve)
+    if !time.Now().Before(workloadDeadline) {
+        return nil, nil, context.DeadlineExceeded
+    }
+    workloadCtx, cancel := context.WithDeadline(ctx, workloadDeadline)
+    return workloadCtx, cancel, nil
+}
+```
+
+因此采集和本地 retry 最多使用约 18 秒，成功或最终失败后仍有 2 秒完成 CloudNode 状态上报与 ACK/TERM。达到执行预算时返回 retryable 结果，由当前 delivery `NAK(delay)`；不得把超时转成 TERM。测试使用注入时钟或短 deadline，不真实等待。
+
+- [ ] **Step 3: 统一 Binance 的 3 次短重试**
+
+复用现有 `github.com/avast/retry-go`，不要再引入第二个 retry 库。公共 helper 的有效参数：
+
+```go
+retry.Attempts(3)
+retry.Delay(200 * time.Millisecond)
+retry.DelayType(retry.BackOffDelay)
+retry.MaxDelay(time.Second)
+retry.LastErrorOnly(true)
+retry.Context(ctx)
+retry.RetryIf(isRetryableBinanceError)
+```
+
+每次 HTTP 请求最多使用 5 秒 child context，但不得超过 JobItem 剩余 deadline。只重试网络错误、超时、HTTP 429 和 5xx；JSON/参数错误及其他 4xx 直接返回。现有 spot/swap/trades 中分散的 `retry.Do` 改为调用同一个 helper，避免不同接口各自演化出不同次数。
+
+`httpclient` 增加可供 `errors.As` 判断的状态错误，禁止根据错误字符串识别状态码：
+
+```go
+type StatusError struct {
+    StatusCode int
+}
+
+func (e *StatusError) Error() string {
+    return fmt.Sprintf("HTTP status %d", e.StatusCode)
+}
+```
+
+- [ ] **Step 4: 给 Storage RPC 增加同样的 3 次短重试**
+
+在 `storageWriter` 的 RPC 边界统一使用：
+
+```go
+retry.Attempts(3)
+retry.Delay(200 * time.Millisecond)
+retry.DelayType(retry.BackOffDelay)
+retry.MaxDelay(time.Second)
+retry.LastErrorOnly(true)
+retry.Context(ctx)
+retry.RetryIf(isRetryableStorageError)
+```
+
+只重试 tRPC 网络/超时和 Storage `INNER_ERR`；`INVALID_PARAM`、鉴权失败、context canceled 不重试。删除 `SymbolCollector.sendSymbolBatchWithRetry` 外层的整批 retry，防止 Storage writer 3 次乘以外层 3 次变成 9 次。Kline 和 Symbol 都通过同一个 `storageWriter` 获得一致行为。
+
+- [ ] **Step 5: 将 durable 设置为 60 秒 AckWait、4 次 MaxDeliver**
 
 最终值：
 
@@ -595,63 +867,74 @@ jetstream:
 ```
 
 ```go
-const DefaultAckWait = 120 * time.Second
+const DefaultAckWait = 60 * time.Second
 ```
 
 解释：
 
-- 未来任务通常先消耗 1 次 delivery 用于延期。
-- 剩余最多 3 次可用于真实执行和临时错误重投。
-- 30 秒 `InProgress` 续期覆盖最长 100 秒 Collector workload，不需要把 AckWait 放大到数分钟。
-- `MaxAckPending=32` 已足够容纳 3 个完整 10 条批次和少量余量；个人量化不增加动态容量算法。
-
-- [ ] **Step 3: 更新 durable 配置测试**
+- JobItem 硬超时 20 秒，ACK 前还有 40 秒用于调度抖动和 action 发送。
+- 不发送 `InProgress`，减少一个心跳状态机。
+- 未来任务第一次 delivery 可用于精确 `NAK(execute_at-now)`；剩余 3 次可用于到期后的真实执行。
+- `MaxAckPending=32` 足够容纳 3 个 10 条批次和少量余量，不增加动态容量算法。
 
 断言 `EnsureJobExecutionQueue` 会把已存在 consumer 更新为：
 
 ```text
-AckWait=120s
+AckWait=60s
 MaxDeliver=4
 MaxAckPending=32
 ```
 
+- [ ] **Step 6: 运行测试**
+
 运行：
 
 ```bash
+(cd modules/collector && go test -count=1 ./internal/taskrunner \
+  ./internal/httpclient ./internal/sources/binance ./internal/sources/binance/client)
 (cd modules/cloudnode && go test -count=1 ./internal/config ./internal/jobqueue)
-(cd modules/collector && go test -count=1 ./internal/taskrunner)
 ```
 
-- [ ] **Step 4: 提交**
+- [ ] **Step 7: 提交**
 
 ```bash
-git add modules/cloudnode/internal/config modules/cloudnode/config/app.yaml \
-  modules/cloudnode/internal/jobqueue modules/collector/internal/taskrunner
-git commit -m "fix(cloudjob): preserve execution retries after deferral"
+git add modules/collector/internal/taskrunner modules/collector/internal/sources/binance \
+  modules/collector/internal/httpclient \
+  modules/cloudnode/internal/config modules/cloudnode/config/app.yaml \
+  modules/cloudnode/internal/jobqueue
+git commit -m "fix(collector): bound retries within short job deadlines"
 ```
 
 ---
 
-## Task 5: 收紧 JobItem 身份并贯通 Storage 幂等键
+## Task 6: 收紧 JobItem 身份并简化 Dataset 规则
 
 **Files:**
 
+以下两个原计划任务合并实施，避免 identity、规则 JSON 和前端表单在两个提交之间出现互相矛盾的中间状态。
+
 - Modify: `modules/collector/internal/jobs/registry.go`
 - Modify: `modules/collector/internal/jobs/registry_test.go`
+- Modify: `modules/collector/internal/jobs/jobdef/definition.go`
+- Modify: `modules/collector/internal/jobs/jobdef/definition_test.go`
 - Modify: `modules/collector/internal/taskpublisher/client.go`
 - Modify: `modules/collector/internal/taskpublisher/client_test.go`
 - Modify: `modules/collector/internal/taskrunner/direct.go`
 - Modify: `modules/collector/internal/taskrunner/direct_test.go`
-- Modify: `modules/collector/internal/model/types.go`
-- Modify: `modules/collector/internal/executor/executor.go`
-- Modify: `modules/collector/internal/executor/executor_test.go`
-- Modify: `modules/collector/internal/sources/interface.go`
-- Modify: `modules/collector/internal/sources/binance/storage_rpc.go`
-- Modify: `modules/collector/internal/sources/binance/storage_config_test.go`
-- Modify: `modules/collector/internal/sources/binance/kline.go`
-- Modify: `modules/collector/internal/sources/binance/api_config_test.go`
-- Modify: `modules/collector/internal/sources/binance/symbol.go`
-- Modify: `modules/collector/internal/sources/binance/symbol_test.go`
+- Modify: `modules/collector/internal/domain/collect_params.go`
+- Modify: `modules/collector/internal/domain/collect_params_test.go`
+- Modify: `modules/collector/internal/jobs/kline/planner.go`
+- Modify: `modules/collector/internal/jobs/kline/params.go`
+- Modify: `modules/collector/internal/jobs/symbol/planner.go`
+- Modify: `modules/collector/internal/jobs/symbol/params.go`
+- Modify: `modules/collector/internal/rpc/service.go`
+- Modify: `modules/collector/internal/rpc/service_test.go`
+- Modify: `modules/collector/internal/planner/task_builder_test.go`
+- Modify: `web/src/views/collector/collector-rules/collector-rules.vue`
+- Add: `web/src/views/collector/collector-rules/collector-rule-params.ts`
+- Add: `web/src/views/collector/collector-rules/collector-rule-params.test.ts`
+- Modify: `examples/e2e/verify.mjs`
+- Modify: `examples/e2e/README.md`
 
 - [ ] **Step 1: 先写 envelope 权威性测试**
 
@@ -662,7 +945,7 @@ func TestTaskEventUsesEnvelopeSpaceID(t *testing.T)
 func TestTaskEventRejectsPayloadSpaceMismatch(t *testing.T)
 func TestTaskEventDerivesDataTypeFromJobType(t *testing.T)
 func TestTaskEventRejectsPayloadDataTypeMismatch(t *testing.T)
-func TestBuildJobItemDerivesJobTypeFromInstanceDataType(t *testing.T)
+func TestBuildJobItemDerivesJobTypeFromExchangeAndDataType(t *testing.T)
 ```
 
 权威字段：
@@ -677,124 +960,9 @@ func TestBuildJobItemDerivesJobTypeFromInstanceDataType(t *testing.T)
 
 params 中若重复携带 `space_id` 或 `data_type`，必须与权威值一致，否则 TERM；不得静默接受跨空间或跨类型串写。
 
-- [ ] **Step 2: jobs registry 增加反向查询**
+Storage 行写入继续依赖现有 RowKey upsert 获得结果幂等；本计划不新增 Collector inbox、分页哈希或 source-event 去重表。JetStream 重投可能再次发起同一 upsert，这是个人量化场景接受的 at-least-once 边界。
 
-```go
-func JobDefinitionByJobType(jobType string) (JobDefinition, bool)
-```
-
-`buildJobItem` 使用 `TaskInstance.DataType -> JobDefinition.JobType`，不再从可篡改的 `TaskParams["job_type"]` 推断路由。
-
-- [ ] **Step 3: 将 JobItemID 传到 source**
-
-```go
-type CollectParams struct {
-    SpaceID    string
-    DatasetID  string
-    JobItemID  string
-    InstType   string
-    Symbol     string
-    SubjectID  string
-    Interval   string
-    Live       bool
-}
-```
-
-`TaskExecuteEvent -> collectTask -> sources.CollectParams` 全链路必须保留同一个 JobItemID。
-
-- [ ] **Step 4: Storage writer 接受 source_event_id**
-
-改为：
-
-```go
-type klineStorage interface {
-    LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesKey) (time.Time, bool, error)
-    UpsertFields(context.Context, string, []*storagepb.RowFieldUpsert) error
-}
-
-func (w *storageWriter) UpsertFields(
-    ctx context.Context,
-    sourceEventID string,
-    rows []*storagepb.RowFieldUpsert,
-) error {
-    rsp, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
-        AuthInfo:      w.authInfo,
-        Rows:          rows,
-        SourceEventId: sourceEventID,
-    })
-    // existing response handling
-}
-```
-
-- [ ] **Step 5: 为每次 Storage 写入生成稳定且不冲突的事件 ID**
-
-同一 JobItem 可能分页写多次，不能简单把所有页面都设成同一个 source event ID。新增纯函数：
-
-```go
-func storageSourceEventID(
-    jobItemID string,
-    rows []*storagepb.RowFieldUpsert,
-) (string, error)
-```
-
-算法：
-
-1. 校验 JobItemID 非空。
-2. 提取每一行完整 RowKey：space、dataset、subject、freq、data_time。
-3. 对 key 字符串排序。
-4. 对 `jobItemID + NUL + sorted keys` 做 SHA-256。
-5. 返回 `collector:` 加完整 hex digest。
-
-必须覆盖：
-
-```go
-func TestStorageSourceEventIDSameJobAndRowsIsStable(t *testing.T)
-func TestStorageSourceEventIDDifferentPagesDoNotCollide(t *testing.T)
-func TestStorageWriterPassesSourceEventID(t *testing.T)
-func TestKlineRedeliveryReusesSourceEventIDForSameRows(t *testing.T)
-func TestSymbolBatchesUseDistinctStableSourceEventIDs(t *testing.T)
-```
-
-这只复用 Storage 已有 source-event 去重能力，不新增 Collector 去重表。
-
-- [ ] **Step 6: 运行测试并提交**
-
-```bash
-(cd modules/collector && go test -count=1 ./internal/jobs ./internal/taskpublisher \
-  ./internal/taskrunner ./internal/executor ./internal/sources/...)
-(cd modules/storage && go test -count=1 ./internal/service/primarystore ./internal/service/datanode/...)
-git add modules/collector/internal/jobs modules/collector/internal/taskpublisher \
-  modules/collector/internal/taskrunner modules/collector/internal/model \
-  modules/collector/internal/executor modules/collector/internal/sources
-git commit -m "fix(collector): bind job identity to idempotent storage writes"
-```
-
----
-
-## Task 6: 简化规则参数和 Dataset 选择
-
-**Files:**
-
-- Modify: `modules/collector/internal/domain/collect_params.go`
-- Modify: `modules/collector/internal/domain/collect_params_test.go`
-- Modify: `modules/collector/internal/jobs/kline/definition.go`
-- Modify: `modules/collector/internal/jobs/kline/handler_test.go`
-- Modify: `modules/collector/internal/jobs/kline/planner.go`
-- Modify: `modules/collector/internal/jobs/kline/params.go`
-- Modify: `modules/collector/internal/jobs/symbol/planner.go`
-- Modify: `modules/collector/internal/jobs/symbol/params.go`
-- Modify: `modules/collector/internal/jobs/registry.go`
-- Modify: `modules/collector/internal/jobs/registry_test.go`
-- Modify: `modules/collector/internal/rpc/service.go`
-- Modify: `modules/collector/internal/rpc/service_test.go`
-- Modify: `modules/collector/internal/planner/task_builder_test.go`
-- Modify: `web/src/views/collector/collector-rules/collector-rules.vue`
-- Add: `web/src/views/collector/collector-rules/collector-rule-params.ts`
-- Add: `web/src/views/collector/collector-rules/collector-rule-params.test.ts`
-- Modify: `examples/e2e/verify.mjs`
-- Modify: `examples/e2e/README.md`
-
-- [ ] **Step 1: 定义唯一规则 JSON 契约**
+- [ ] **Step 2: 定义唯一规则 JSON 契约**
 
 新项目不保留旧字段兼容。最终形状：
 
@@ -828,7 +996,7 @@ git commit -m "fix(collector): bind job identity to idempotent storage writes"
 - `objects`：Dataset active membership 已经是任务全集；需要子集时创建一个更小 Dataset，不维护第二套标的过滤语义。
 - task params 中的 `schedule_timezone` 和 `job_type`。
 
-- [ ] **Step 2: DatasetID 不再按字符串猜测**
+- [ ] **Step 3: DatasetID 不再按字符串猜测**
 
 删除 `inferDatasetID` 和前端 `inferCollectDatasetId`。规则创建时明确要求：
 
@@ -837,36 +1005,35 @@ git commit -m "fix(collector): bind job identity to idempotent storage writes"
 
 这会直接消除 `binance_spot_symbol` 与实际 `binance_spot_symbols` 的默认命名不一致，不需要维护类型到 Dataset 的魔法映射。
 
-- [ ] **Step 3: Create/Update 时按 jobs registry 完整校验**
+- [ ] **Step 4: Create/Update 时按 jobs registry 完整校验**
 
 在写 DB 前完成：
 
 ```go
 params, err := domain.ParseCollectParams(...)
-definition, ok := jobs.JobDefinitionFor(params)
-if !ok {
+definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
+_, routeOK := jobs.JobRouteFor(params.Collector.Exchange, params.Collector.DataType)
+if !ok || !routeOK || !definition.Matches(params) {
     return fmt.Errorf(
-        "unsupported collector: exchange=%s market=%s data_type=%s",
+        "unsupported collector: exchange=%s market=%s data_type=%s source_kind=%s",
         params.Collector.Exchange,
         params.Collector.Market,
         params.Collector.DataType,
+        params.Source.Kind,
     )
-}
-if !definition.AcceptsSourceKind(params.Source.Kind) {
-    return fmt.Errorf("source kind %q is invalid for %s", ...)
 }
 ```
 
-验证 intervals 非空、DatasetID 非空、schedule interval 可被 `time.ParseDuration` 接受。非法规则不得等到 `ScheduleTasks` 才失败。
+同步收紧 `JobDefinition.Matches`，要求 `exchange + market + data_type + source_kind` 同时匹配 `Supports`。验证 intervals 非空、DatasetID 非空、schedule interval 可被 `time.ParseDuration` 接受。非法规则不得等到 `ScheduleTasks` 才失败。
 
-- [ ] **Step 4: 简化前端规则表单**
+- [ ] **Step 5: 简化前端规则表单**
 
 `collector-rule-params.ts` 只负责：
 
 ```ts
 export type CollectorRuleInput = {
   dataType: "kline" | "symbol";
-  exchange: "binance";
+  exchange: string;
   market: "spot" | "swap";
   datasetId: string;
   intervals: string[];
@@ -879,6 +1046,7 @@ export function buildCollectorRuleParams(input: CollectorRuleInput): Record<stri
 在 `collector-rules.vue`：
 
 - 使用现有 Storage metadata API 加载当前 Space 的 active datasets。
+- Provider 选项读取后端 `DataSourceOptions`，当前显示 Binance，未来注册 A 股 Provider 后不需要重写表单类型。
 - 增加必选 Dataset 下拉框。
 - 移除 objects 输入、通配符和对应状态。
 - Kline 与 Symbol 统一使用一个产品类型/market 控件，删除未被后端定义采用的 `inst_types` 分支。
@@ -888,18 +1056,19 @@ export function buildCollectorRuleParams(input: CollectorRuleInput): Record<stri
 
 Vitest 覆盖 Kline、Symbol、缺失 Dataset、切换市场四种构造结果。
 
-- [ ] **Step 5: 更新 E2E 请求**
+- [ ] **Step 6: 更新 E2E 请求**
 
 `examples/e2e/verify.mjs` 和 README 只使用新形状，不再发送 `job_type`、`timezone`、重复 intervals。
 
-- [ ] **Step 6: 运行测试并提交**
+- [ ] **Step 7: 运行测试并提交**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/domain ./internal/jobs/... \
-  ./internal/rpc ./internal/planner)
+  ./internal/taskpublisher ./internal/taskrunner ./internal/rpc ./internal/planner)
 (cd web && pnpm test -- src/views/collector/collector-rules/collector-rule-params.test.ts)
 (cd web && pnpm exec vue-tsc --noEmit)
 git add modules/collector/internal/domain modules/collector/internal/jobs \
+  modules/collector/internal/taskpublisher modules/collector/internal/taskrunner \
   modules/collector/internal/rpc modules/collector/internal/planner \
   web/src/views/collector/collector-rules examples/e2e
 git commit -m "refactor(collector): simplify dataset driven rule contracts"
@@ -937,6 +1106,10 @@ func TestProbeHTTPSRejectsCertificateForWrongDomain(t *testing.T)
 transport := http.DefaultTransport.(*http.Transport).Clone()
 transport.TLSClientConfig = &tls.Config{
     MinVersion: tls.VersionTLS12,
+}
+client := &http.Client{
+    Timeout:   5 * time.Second,
+    Transport: transport,
 }
 ```
 
@@ -998,7 +1171,7 @@ git commit -m "fix(collector): verify Binance TLS certificates"
 
 1. 创建 100 个稳定 JobItem。
 2. 以 25 条一批串行提交。
-3. consumer 使用 `BatchSize=10, Concurrency=10`。
+3. consumer 使用 `BatchSize=10, IndependentBatch=true`。
 4. fake workload 用 barrier 记录最大并发。
 5. 等待全部 delivery 得到动作。
 
@@ -1018,7 +1191,7 @@ duplicate handler starts: 0
 
 同一 Fetch 返回 due、future、retryable、invalid 四类消息，断言各自动作。未来消息第二次 delivery 到期后执行，且第一轮不阻塞 due 消息。
 
-- [ ] **Step 3: 增加 Storage 重投幂等 E2E**
+- [ ] **Step 3: 增加 Storage 重投结果正确性 E2E**
 
 模拟：
 
@@ -1028,10 +1201,10 @@ duplicate handler starts: 0
 
 断言：
 
-- 最终行值正确。
-- source-event outbox 只产生一次对应事件。
-- JobItem 第二次处理使用相同 source event ID。
+- 同一 RowKey 最终只有一行且字段值正确。
+- redelivery 可以重复调用 upsert，但不会产生重复数据行。
 - 不要求 Collector 自己维护去重状态。
+- 不把“下游事件严格只发布一次”列入本计划承诺。
 
 - [ ] **Step 4: 扩展现有端到端脚本**
 
@@ -1040,12 +1213,11 @@ duplicate handler starts: 0
 ```json
 {
   "batch_job_item_ids": ["..."],
-  "expected_batch_size": 10,
-  "expected_concurrency": 10
+  "expected_batch_size": 10
 }
 ```
 
-`run.sh` 本地 resident 路径至少提交 20 条立即任务，验证全部终态和 Storage rows。`run-real-scf.sh` 继续只使用已经发布的真实 SCF，不启动本地 SCF。
+最大并发直接从任务 started/completed barrier 观测，不增加第二个配置字段。`run.sh` 本地 resident 路径至少提交 20 条立即任务，验证全部终态和 Storage rows。`run-real-scf.sh` 继续只使用已经发布的真实 SCF，不启动本地 SCF。
 
 - [ ] **Step 5: 运行跨模块验证**
 
@@ -1062,7 +1234,7 @@ bash scripts/test-go-workspace.sh
 make verify-pr
 ```
 
-Expected: 全部通过；任何 race、提前执行、整批共同 NAK 或重复 source event 都必须在进入 Task 9 前修复。
+Expected: 全部通过；任何 race、提前执行、整批共同 NAK 或重复 Storage 行都必须在进入 Task 9 前修复。
 
 - [ ] **Step 6: 提交**
 
@@ -1092,7 +1264,8 @@ make -C modules/collector package-scf
 
 ```text
 main
-config.yaml with batch_size=10, concurrency=10, in_progress_interval=30s
+config.yaml with batch_size=10, timeout=20s and provider-specific job_types
+config.yaml without concurrency or in_progress_interval
 EventBus CA and worker credential loading support
 ```
 
@@ -1151,12 +1324,13 @@ interval
 按全局约定使用 `codeCR` subAgent 审查最终 diff，要求重点核查：
 
 1. Runner 并发下 ACK/NAK/TERM 和 cancellation 是否有 race。
-2. `Concurrency==1` 的已有模块是否行为回归。
+2. 默认串行模式的已有模块是否行为回归。
 3. keepalive 是否重新耦合任务执行。
 4. 同一批 mixed delivery 是否真正独立。
-5. Storage source event ID 是否会跨页面冲突。
-6. TLS 是否仍有跳过校验路径。
-7. E2E 是否实际覆盖 `Fetch(10)` 和最大并发 10，而非只看最终成功数。
+5. 20 秒 deadline 是否包含本地重试和状态上报，是否仍残留 100 秒 timeout。
+6. Binance/Storage 是否存在嵌套 retry 导致超过 3 次调用。
+7. TLS 是否仍有跳过校验路径。
+8. E2E 是否实际覆盖 `Fetch(10)` 和最大并发 10，而非只看最终成功数。
 
 所有 actionable finding 修复后重新运行 Task 8 的完整验证集。
 
@@ -1205,9 +1379,11 @@ git ls-remote --heads origin feature/mooyang
 | 多 SCF 消费 | 多个常驻 SCF 绑定同 durable | 竞争消费，无节点定向，未 ACK 总数不超过 32 |
 | 混合时间 | 同批 due + future | due 立即执行，future 单独 NAK，不整批延期 |
 | 永久非法 | space/job_type/data_type 不一致 | 只 TERM 当前 delivery |
-| 临时失败 | Binance 或 Storage 临时错误 | 只 NAK 当前 delivery |
-| 长任务 | 单任务超过 30 秒 | 周期 InProgress，无 AckWait 重投 |
-| ACK 丢失 | Storage 成功后 ACK 失败 | 重投后 rows 正确，source event 不重复 |
+| 临时失败 | Binance 或 Storage 暂时失败 | 单次调用总尝试 3 次；仍失败则只 NAK 当前 delivery |
+| 任务超时 | 单任务达到 20 秒 | context 取消并 NAK，不发送 InProgress |
+| durable 超时 | 正常任务小于 20 秒 | AckWait 60 秒，不发生处理中重投 |
+| ACK 丢失 | Storage 成功后 ACK 失败 | 重投后同一 RowKey 最终只有一行 |
+| 多 Provider | Binance SCF 与未来 A 股 SCF 使用不同 job_types | 各自只绑定配置声明的 durable |
 | TLS 正常 | 域名 URL + 优选 IP Dial | 系统 CA、SNI 和域名校验均生效 |
 | TLS 异常 | 不受信或错误域名证书 | 请求失败，不降级为跳过校验 |
 | keepalive | 连续 invocation | SCF 常驻且 runner 不重启，不执行任务 |
@@ -1218,9 +1394,13 @@ git ls-remote --heads origin feature/mooyang
 只有同时满足以下条件才算完成：
 
 - 控制面串行分批发布，SCF 端 `Fetch(10)` 后并发执行 10 条。
+- `batch_size` 是唯一并发数量；实现使用 `trpc.GoAndWait`，没有自建 worker pool。
 - 并发批中每条 delivery 独立决定 ACK、NAK、TERM。
 - keepalive 仍严格保活，但不包含任务执行逻辑。
-- Storage 重投使用稳定且分页不冲突的 source event ID。
+- JobType 按 Provider 划分，SCF 只绑定配置中的 `job_types`。
+- JobItem 总超时 20 秒，Binance/Storage 临时失败总尝试 3 次。
+- CloudNode 使用 `AckWait=60s`、`MaxDeliver=4`，Collector 不发送 InProgress。
+- Storage 重投依赖 RowKey upsert 保证最终数据行正确，不引入额外去重系统。
 - Binance 客户端使用系统 CA 和域名校验，不需要业务证书配置。
 - 规则明确选择 Dataset，不再猜 Dataset 名或保存无运行时读者的字段。
 - package、Collector、CloudNode、Storage race 测试和 workspace 验证全部通过。
