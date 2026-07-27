@@ -34,20 +34,6 @@ type ServerDNSRecord struct {
 	Success   bool      `json:"success"`
 }
 
-// ScheduledResolveDNS 定时器入口函数 - 定时解析 DNS 记录（先本地解析，失败则请求远端）
-func ScheduledResolveDNS(ctx context.Context, _ string) error {
-	nodeID, version := runtimeapp.GetNodeInfo()
-	log.WithContextFields(ctx, "func", "ScheduledResolveDNS", "version", version, "nodeID", nodeID)
-
-	log.DebugContext(ctx, "ScheduledResolveDNS Enter")
-	if err := FetchDNSRecords(ctx); err != nil {
-		log.ErrorContextf(ctx, "scheduled resolve DNS failed: %v", err)
-		return err
-	}
-	log.DebugContext(ctx, "ScheduledResolveDNS Success")
-	return nil
-}
-
 // FetchDNSRecords 获取 DNS 记录（先本地解析，失败则请求远端）
 func FetchDNSRecords(ctx context.Context) error {
 	// 1. 获取需要解析的域名列表

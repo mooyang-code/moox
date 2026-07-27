@@ -4,6 +4,7 @@ package bootstrap
 import (
 	"context"
 
+	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	_ "github.com/mooyang-code/moox/modules/collector/internal/sources/binance" // 注册 binance 采集器
 	"trpc.group/trpc-go/trpc-go/log"
@@ -24,6 +25,12 @@ func StartBackgroundServices(ctx context.Context) (*Services, error) {
 		log.Errorf("初始化 DNS 代理失败: %v", err)
 		return nil, err
 	}
+	runtimeapp.InitLocalAppConfig()
+	go func() {
+		if err := httpclient.FetchDNSRecords(ctx); err != nil {
+			log.WarnContextf(ctx, "initial DNS refresh failed: %v", err)
+		}
+	}()
 
 	log.Info("后台服务启动完成")
 	return &Services{}, nil

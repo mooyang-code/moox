@@ -31,20 +31,6 @@ type ServerRetInfo struct {
 	Msg  string `json:"msg"`
 }
 
-// ScheduledHeartbeat 框架定时器入口函数 - 定时心跳
-func ScheduledHeartbeat(ctx context.Context, _ string) error {
-	nodeID, version := runtimeapp.GetNodeInfo()
-	log.WithContextFields(ctx, "func", "ScheduledHeartbeat", "version", version, "nodeID", nodeID)
-
-	log.DebugContextf(ctx, "ScheduledHeartbeat Enter")
-	if err := ReportHeartbeat(ctx); err != nil {
-		log.ErrorContextf(ctx, "scheduled heartbeat failed: %v", err)
-		return err
-	}
-	log.DebugContextf(ctx, "ScheduledHeartbeat Success")
-	return nil
-}
-
 // ReportHeartbeat 发送心跳上报服务端
 func ReportHeartbeat(ctx context.Context) error {
 	serviceGatewayTarget := runtimeapp.GetServiceGatewayTarget()
