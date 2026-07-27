@@ -13,7 +13,7 @@ import (
 
 const (
 	keepaliveProbeSource = "keepalive_probe"
-	keepaliveBatchSize   = 32
+	keepaliveBatchSize   = 10
 )
 
 // HeartbeatTargets are the control-plane endpoints an SCF runtime needs to

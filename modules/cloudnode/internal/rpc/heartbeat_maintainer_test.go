@@ -93,7 +93,11 @@ func TestHeartbeatMaintainerInvokesNodesSequentially(t *testing.T) {
 
 	require.NoError(t, maintainer.Handle(context.Background()))
 	assert.Equal(t, 1, invoker.maxConcurrency())
-	assert.Len(t, invoker.requestsSnapshot(), 25)
+	assert.Len(t, invoker.requestsSnapshot(), 10)
+	require.NoError(t, maintainer.Handle(context.Background()))
+	requests := invoker.requestsSnapshot()
+	require.Len(t, requests, 20)
+	assert.Equal(t, "function-10", requests[10].FunctionName)
 }
 
 func TestHeartbeatMaintainerContinuesWithNextNodeAfterDeadline(t *testing.T) {
