@@ -11,6 +11,7 @@ import {
   assertDatasetContract,
   assertNoRuntimeParams,
   buildKlineDatasetContract,
+  buildKlineViewContract,
   buildSCFNodeDefinitions,
   buildSymbolDatasetContract,
   collectKlineWriteEvidence,
@@ -57,6 +58,16 @@ test("builds 1m time-series dataset contract", () => {
     ["quote_volume", "FIELD_VALUE_TYPE_DOUBLE"],
     ["trade_num", "FIELD_VALUE_TYPE_INT"],
   ]);
+});
+
+test("builds an active query view for the Kline dataset", () => {
+  const view = buildKlineViewContract("crypto", "e2e_binance_kline_1m");
+  assert.equal(view.view_id, "e2e_binance_kline_view");
+  assert.equal(view.primary_dataset_id, "e2e_binance_kline_1m");
+  assert.deepEqual(view.dataset_ids, ["e2e_binance_kline_1m"]);
+  assert.deepEqual(view.grain_keys, ["subject_id", "freq", "data_time"]);
+  assert.equal(view.filter_json, '{"freq":"1m"}');
+  assert.equal(view.status, "active");
 });
 
 test("existing field contract accepts Storage scalar and protobuf enum names", () => {

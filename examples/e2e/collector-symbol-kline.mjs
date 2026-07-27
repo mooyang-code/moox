@@ -53,6 +53,7 @@ const KLINE_COLUMNS = [
   ["quote_volume", "double", "成交额"],
   ["trade_num", "int", "成交笔数"],
 ];
+const KLINE_VIEW_ID = "e2e_binance_kline_view";
 
 const VALUE_TYPES = {
   string: "FIELD_VALUE_TYPE_STRING",
@@ -219,6 +220,22 @@ export function buildKlineDatasetContract(spaceID, datasetID, dataNodeID) {
     freqs: ["1m"],
     columns: KLINE_COLUMNS,
   });
+}
+
+export function buildKlineViewContract(spaceID, datasetID) {
+  return {
+    space_id: spaceID,
+    view_id: KLINE_VIEW_ID,
+    name: "币安分钟视图",
+    description: "Collector E2E 1m Kline query view",
+    primary_dataset_id: datasetID,
+    dataset_ids: [datasetID],
+    grain_keys: ["subject_id", "freq", "data_time"],
+    filter_json: JSON.stringify({ freq: "1m" }),
+    engine: "duckdb",
+    keep_duration: "0",
+    status: "active",
+  };
 }
 
 function buildDatasetContract({ spaceID, datasetID, dataNodeID, name, description, dataKind, freqs, columns }) {
@@ -652,6 +669,7 @@ async function setup(args) {
   const klineContract = buildKlineDatasetContract(args.space, args.klineDataset, dataNode.node_id);
   await ensureDataset(args, token, symbolContract);
   await ensureDataset(args, token, klineContract);
+  await ensureKlineView(args, token);
   const initialState = {
     ...emptyState(),
     run_id: `${Date.now()}-${randomBytes(4).toString("hex")}`,
@@ -670,6 +688,39 @@ async function setup(args) {
   await ensureRule(args, token, { ...buildSymbolRule(args), enabled: false });
   await ensureRule(args, token, { ...buildKlineRule(args), enabled: false });
   log(`setup ready data_node=${dataNode.node_id}`);
+}
+
+async function ensureKlineView(args, token) {
+  const expected = buildKlineViewContract(args.space, args.klineDataset);
+  let rsp = await storagePostRaw(args, token, "metadata", "GetView", {
+    space_id: args.space,
+    view_id: expected.view_id,
+  });
+  if (!retOK(rsp.ret_info)) {
+    rsp = await storagePost(args, token, "metadata", "CreateView", { view: expected });
+  }
+  const assertContract = (view) => {
+    for (const field of ["space_id", "view_id", "primary_dataset_id", "engine", "keep_duration", "status"]) {
+      if (view?.[field] !== expected[field]) {
+        throw new Error(`Kline View ${field}=${view?.[field] || ""} want=${expected[field]}`);
+      }
+    }
+    if (!sameStringSet(view.dataset_ids || [], expected.dataset_ids) ||
+        !sameStringSet(view.grain_keys || [], expected.grain_keys) ||
+        view.filter_json !== expected.filter_json) {
+      throw new Error("Kline View contract does not match the E2E dataset");
+    }
+  };
+  assertContract(rsp.view);
+  await waitFor("active Kline DataView", 120_000, async () => {
+    const current = await storagePost(args, token, "metadata", "GetView", {
+      space_id: args.space,
+      view_id: expected.view_id,
+    });
+    assertContract(current.view);
+    if (!current.view?.active_index_id) throw new Error("Kline View has no active index");
+    return current.view;
+  });
 }
 
 async function symbols(args) {
