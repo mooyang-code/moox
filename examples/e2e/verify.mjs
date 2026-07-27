@@ -963,12 +963,22 @@ async function assertWrittenRowKeysReadable(args, token, keys) {
     const batch = unique.slice(offset, offset + 50);
     const rsp = await storagePost(args, token, "access", "ReadTimeSeriesRows",
       primaryWrittenRowsRequest(args, batch));
-    const visible = new Set((rsp.rows || []).map((row) => JSON.stringify(stableJSON(row.key || {}))));
+    const visible = primaryRowsWithField(rsp.rows || [], "close");
     const missing = batch.filter((key) => !visible.has(JSON.stringify(stableJSON(key))));
     if (missing.length > 0) {
       throw new Error(`${missing.length}/${batch.length} written RowKeys are not readable from Storage Primary`);
     }
   }
+}
+
+export function primaryRowsWithField(rows, fieldID) {
+  return new Set((rows || [])
+    .filter((row) => (row.fields || []).some((field) => {
+      if (field.field_id !== fieldID || !field.value || typeof field.value !== "object") return false;
+      return Object.entries(field.value).some(([name, value]) =>
+        name.endsWith("_value") && value !== null && value !== undefined);
+    }))
+    .map((row) => JSON.stringify(stableJSON(row.key || {}))));
 }
 
 export function primaryWrittenRowsRequest(args, keys) {

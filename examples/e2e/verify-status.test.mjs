@@ -16,6 +16,7 @@ import {
   currentScheduledTaskInstances,
   failedJobItems,
   parseArgs,
+  primaryRowsWithField,
   primaryWrittenRowsRequest,
   scheduleLeadDelay,
   statusName,
@@ -146,6 +147,19 @@ test("exact written RowKey read is forced through Storage Primary", () => {
     column_names: ["close"],
     page: { page: 1, size: 1 },
   });
+  assert.deepEqual(
+    [...primaryRowsWithField([
+      { key, fields: [] },
+      { key: { ...key, subject_id: "ETH-USDT" }, fields: [{ field_id: "close", value: { double_value: 0 } }] },
+    ], "close")],
+    [JSON.stringify({
+      data_time: key.data_time,
+      dataset_id: key.dataset_id,
+      freq: key.freq,
+      space_id: key.space_id,
+      subject_id: "ETH-USDT",
+    })],
+  );
 });
 
 test("CloudNode JobItem status values match the protobuf contract", () => {
