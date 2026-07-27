@@ -34,7 +34,7 @@ func (p *captureRawPublisher) PublishRaw(_ context.Context, _ string, _ string, 
 
 func TestNewJetStreamQueueUsesCodeOwnedDefaults(t *testing.T) {
 	queue := NewJetStreamQueue(nil, QueueConfig{})
-	if queue.cfg.AckWait != 120*time.Second || queue.cfg.MaxDeliver != 3 || queue.cfg.MaxAckPending != 32 {
+	if queue.cfg.AckWait != 60*time.Second || queue.cfg.MaxDeliver != 4 || queue.cfg.MaxAckPending != 32 {
 		t.Fatalf("config = %+v", queue.cfg)
 	}
 	if err := queue.Close(); err != nil {

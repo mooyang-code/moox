@@ -16,7 +16,7 @@ jetstream:
   urls:
     - nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml
-  max_deliver: 3
+  max_deliver: 4
   max_ack_pending: 32
 
 job_item:

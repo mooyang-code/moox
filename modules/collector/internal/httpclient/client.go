@@ -18,7 +18,16 @@ type HTTPClient struct {
 	httpClient *http.Client
 }
 
-const defaultRequestTimeout = 8 * time.Second
+const defaultRequestTimeout = 5 * time.Second
+
+// StatusError reports a non-success HTTP response.
+type StatusError struct {
+	StatusCode int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("HTTP status %d", e.StatusCode)
+}
 
 // NewHTTPClient 创建通用 HTTP 客户端
 func NewHTTPClient() *HTTPClient {
@@ -27,8 +36,7 @@ func NewHTTPClient() *HTTPClient {
 			Timeout: defaultRequestTimeout,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
-					// 跳过证书验证，提升性能
-					InsecureSkipVerify: true,
+					MinVersion: tls.VersionTLS12,
 				},
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
@@ -36,6 +44,11 @@ func NewHTTPClient() *HTTPClient {
 			},
 		},
 	}
+}
+
+// NewHTTPClientWithClient wraps an HTTP client supplied by an integration.
+func NewHTTPClientWithClient(client *http.Client) *HTTPClient {
+	return &HTTPClient{httpClient: client}
 }
 
 // Get 发送 GET 请求（自动获取最优 IP）
@@ -113,7 +126,7 @@ func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, ful
 
 	// 检查状态码
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP 错误 %d", resp.StatusCode)
+		return &StatusError{StatusCode: resp.StatusCode}
 	}
 
 	// 解析 JSON

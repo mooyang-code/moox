@@ -112,8 +112,7 @@ func probeHTTPS(ctx context.Context, ip, domain string, cfg *runtimeapp.ProbeAPI
 	// 创建自定义 Transport，将域名解析到指定 IP
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			// 跳过证书验证（因为证书是域名，但连接的是 IP）
-			InsecureSkipVerify: true,
+			MinVersion: tls.VersionTLS12,
 		},
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			// 提取端口号

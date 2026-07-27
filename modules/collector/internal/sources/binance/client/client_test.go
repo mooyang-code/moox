@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,7 @@ func TestPublicAggregateTradeAPIsUseCursorAndExpectedEndpoints(t *testing.T) {
 			}))
 			defer server.Close()
 			client := NewClient()
+			client.HTTPClient = httpclient.NewHTTPClientWithClient(server.Client())
 			require.NoError(t, tt.setBaseURL(client, server.URL))
 			trades, err := tt.call(client, &exchange.TradeRequest{Symbol: "BTCUSDT", Limit: 100, FromID: 41})
 			require.NoError(t, err)

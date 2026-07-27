@@ -28,7 +28,7 @@ func TestValidateRejectsNonPositiveMaxAckPending(t *testing.T) {
 func TestDefaultQueueConfigIsValid(t *testing.T) {
 	cfg := Default()
 	require.NoError(t, cfg.Validate())
-	assert.Equal(t, 3, cfg.JetStream.MaxDeliver)
+	assert.Equal(t, 4, cfg.JetStream.MaxDeliver)
 	assert.Equal(t, 32, cfg.JetStream.MaxAckPending)
 }
 

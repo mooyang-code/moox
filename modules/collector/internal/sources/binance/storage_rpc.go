@@ -42,27 +42,34 @@ func storageGatewayTarget(accessTarget, metadataTarget string) string {
 }
 
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
-	rsp, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
-		AuthInfo: w.authInfo,
-		Rows:     rows,
+	return retryStorage(ctx, func() error {
+		rsp, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
+			AuthInfo: w.authInfo,
+			Rows:     rows,
+		})
+		if err != nil {
+			return fmt.Errorf("write time-series rows: %w", err)
+		}
+		return ensureStorageOK("write time-series rows", rsp.GetRetInfo())
 	})
-	if err != nil {
-		return fmt.Errorf("write time-series rows: %w", err)
-	}
-	return ensureStorageOK("write time-series rows", rsp.GetRetInfo())
 }
 
 func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, key *storagepb.TimeSeriesKey) (time.Time, bool, error) {
-	rsp, err := w.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: w.authInfo,
-		Keys:     []*storagepb.TimeSeriesKey{key},
-		Order:    storagepb.SortOrder_SORT_ORDER_DESC,
-		Page:     &storagepb.Page{Page: 1, Size: 1},
+	var rsp *storagepb.ReadTimeSeriesRowsRsp
+	err := retryStorage(ctx, func() error {
+		var callErr error
+		rsp, callErr = w.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+			AuthInfo: w.authInfo,
+			Keys:     []*storagepb.TimeSeriesKey{key},
+			Order:    storagepb.SortOrder_SORT_ORDER_DESC,
+			Page:     &storagepb.Page{Page: 1, Size: 1},
+		})
+		if callErr != nil {
+			return fmt.Errorf("read latest time-series row: %w", callErr)
+		}
+		return ensureStorageOK("read latest time-series row", rsp.GetRetInfo())
 	})
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("read latest time-series row: %w", err)
-	}
-	if err := ensureStorageOK("read latest time-series row", rsp.GetRetInfo()); err != nil {
 		return time.Time{}, false, err
 	}
 	if len(rsp.GetRows()) == 0 || rsp.GetRows()[0].GetKey() == nil {
@@ -81,11 +88,13 @@ func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, key *storagepb
 
 func (w *storageWriter) RegisterDataSubject(ctx context.Context, req *storagepb.RegisterDataSubjectReq) error {
 	req.AuthInfo = w.authInfo
-	rsp, err := w.metadata.RegisterDataSubject(ctx, req)
-	if err != nil {
-		return fmt.Errorf("register data subject: %w", err)
-	}
-	return ensureStorageOK("register data subject", rsp.GetRetInfo())
+	return retryStorage(ctx, func() error {
+		rsp, err := w.metadata.RegisterDataSubject(ctx, req)
+		if err != nil {
+			return fmt.Errorf("register data subject: %w", err)
+		}
+		return ensureStorageOK("register data subject", rsp.GetRetInfo())
+	})
 }
 
 func (w *storageWriter) ListDatasetSubjects(
@@ -95,16 +104,21 @@ func (w *storageWriter) ListDatasetSubjects(
 ) ([]*storagepb.DatasetSubject, error) {
 	var all []*storagepb.DatasetSubject
 	for page := uint32(1); ; page++ {
-		rsp, err := w.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
-			AuthInfo:  w.authInfo,
-			SpaceId:   spaceID,
-			DatasetId: datasetID,
-			Page:      &storagepb.Page{Page: page, Size: datasetSubjectPageSize},
+		var rsp *storagepb.ListDatasetSubjectsRsp
+		err := retryStorage(ctx, func() error {
+			var callErr error
+			rsp, callErr = w.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
+				AuthInfo:  w.authInfo,
+				SpaceId:   spaceID,
+				DatasetId: datasetID,
+				Page:      &storagepb.Page{Page: page, Size: datasetSubjectPageSize},
+			})
+			if callErr != nil {
+				return fmt.Errorf("list dataset subjects: %w", callErr)
+			}
+			return ensureStorageOK("list dataset subjects", rsp.GetRetInfo())
 		})
 		if err != nil {
-			return nil, fmt.Errorf("list dataset subjects: %w", err)
-		}
-		if err := ensureStorageOK("list dataset subjects", rsp.GetRetInfo()); err != nil {
 			return nil, err
 		}
 		all = append(all, rsp.GetDatasetSubjects()...)
@@ -115,22 +129,36 @@ func (w *storageWriter) ListDatasetSubjects(
 }
 
 func (w *storageWriter) BindDatasetSubject(ctx context.Context, item *storagepb.DatasetSubject) error {
-	rsp, err := w.metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{
-		AuthInfo:       w.authInfo,
-		DatasetSubject: item,
+	return retryStorage(ctx, func() error {
+		rsp, err := w.metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{
+			AuthInfo:       w.authInfo,
+			DatasetSubject: item,
+		})
+		if err != nil {
+			return fmt.Errorf("bind dataset subject: %w", err)
+		}
+		return ensureStorageOK("bind dataset subject", rsp.GetRetInfo())
 	})
-	if err != nil {
-		return fmt.Errorf("bind dataset subject: %w", err)
-	}
-	return ensureStorageOK("bind dataset subject", rsp.GetRetInfo())
+}
+
+type storageResponseError struct {
+	code storagepb.ErrorCode
+	msg  string
+}
+
+func (e *storageResponseError) Error() string {
+	return e.msg
 }
 
 func ensureStorageOK(action string, ret *storagepb.RetInfo) error {
 	if ret == nil {
-		return fmt.Errorf("%s: empty ret_info", action)
+		return &storageResponseError{msg: fmt.Sprintf("%s: empty ret_info", action)}
 	}
 	if ret.GetCode() != storagepb.ErrorCode_SUCCESS {
-		return fmt.Errorf("%s: %s", action, ret.GetMsg())
+		return &storageResponseError{
+			code: ret.GetCode(),
+			msg:  fmt.Sprintf("%s: %s", action, ret.GetMsg()),
+		}
 	}
 	return nil
 }

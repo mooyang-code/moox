@@ -3,20 +3,39 @@ package httpclient
 import (
 	"context"
 	"encoding/json"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewHTTPClient_ShouldInitializeClient(t *testing.T) {
 	client := NewHTTPClient()
 	require.NotNil(t, client)
 	require.NotNil(t, client.httpClient)
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, transport.TLSClientConfig)
+	assert.False(t, transport.TLSClientConfig.InsecureSkipVerify)
+}
+
+func TestHTTPClientRejectsUntrustedCertificate(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	err = NewHTTPClient().Get(context.Background(), parsed.Host, "", nil, &map[string]string{})
+
+	require.Error(t, err)
 }
 
 func TestHTTPClient_GetWithIP_UnreachableHost_ShouldReturnError(t *testing.T) {
@@ -76,8 +95,9 @@ func TestHTTPClient_Get_ShouldRejectNonOKStatus(t *testing.T) {
 	client.httpClient = server.Client()
 	var result map[string]string
 	err = client.GetWithIP(context.Background(), parsed.Host, parsed.Path, nil, &result, "")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "HTTP 错误")
+	var statusErr *StatusError
+	require.True(t, errors.As(err, &statusErr))
+	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode)
 }
 
 func TestParseBestIPs_ShouldSplitPlusSeparatedValues(t *testing.T) {

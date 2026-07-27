@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/avast/retry-go"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
@@ -221,8 +220,8 @@ func (c *SymbolCollector) reportSymbols(
 			rows := rowBatches[j]
 			batchSymbols := symbolBatches[j]
 			handlers = append(handlers, func() error {
-				err := c.sendSymbolBatchWithRetry(
-					ctx, writer, spaceID, datasetID, binding, batchSymbols, rows, idx, totalBatches,
+				err := c.sendSymbolBatch(
+					ctx, writer, spaceID, datasetID, binding, batchSymbols, rows,
 				)
 				mu.Lock()
 				defer mu.Unlock()
@@ -318,8 +317,7 @@ func reconcileInactiveSymbolMemberships(
 	return nil
 }
 
-// sendSymbolBatchWithRetry 发送单个批次请求（带重试）。
-func (c *SymbolCollector) sendSymbolBatchWithRetry(
+func (c *SymbolCollector) sendSymbolBatch(
 	ctx context.Context,
 	writer symbolStorage,
 	spaceID string,
@@ -327,30 +325,16 @@ func (c *SymbolCollector) sendSymbolBatchWithRetry(
 	binding StorageBinding,
 	symbols []*exchange.SymbolInfo,
 	rows []*storagepb.RowFieldUpsert,
-	batchIdx int,
-	totalBatches int,
 ) error {
-	return retry.Do(
-		func() error {
-			if err := writer.UpsertFields(ctx, rows); err != nil {
-				return err
-			}
-			for _, symbol := range symbols {
-				if err := writer.RegisterDataSubject(ctx, buildSymbolRegisterRequest(symbol, spaceID, datasetID, binding)); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-		retry.Attempts(3),
-		retry.Delay(500*time.Millisecond),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			log.WarnContextf(ctx, "[SymbolCollector] 批次 %d/%d 重试第 %d 次: %v",
-				batchIdx+1, totalBatches, n+1, err)
-		}),
-		retry.Context(ctx),
-	)
+	if err := writer.UpsertFields(ctx, rows); err != nil {
+		return err
+	}
+	for _, symbol := range symbols {
+		if err := writer.RegisterDataSubject(ctx, buildSymbolRegisterRequest(symbol, spaceID, datasetID, binding)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildSymbolRegisterRequest(

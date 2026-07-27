@@ -2,6 +2,7 @@ package binance
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -68,18 +69,30 @@ func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
 }
 
 type fakeKlineStorage struct {
-	latest    time.Time
-	found     bool
-	latestKey *storagepb.TimeSeriesKey
-	writes    [][]*storagepb.RowFieldUpsert
+	latest         time.Time
+	found          bool
+	latestKey      *storagepb.TimeSeriesKey
+	writes         [][]*storagepb.RowFieldUpsert
+	latestCalls    int
+	latestFailures int
+	writeCalls     int
+	writeFailures  int
 }
 
 func (s *fakeKlineStorage) LatestTimeSeriesTime(_ context.Context, key *storagepb.TimeSeriesKey) (time.Time, bool, error) {
+	s.latestCalls++
+	if s.latestCalls <= s.latestFailures {
+		return time.Time{}, false, errors.New("temporary read failure")
+	}
 	s.latestKey = key
 	return s.latest, s.found, nil
 }
 
 func (s *fakeKlineStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
+	s.writeCalls++
+	if s.writeCalls <= s.writeFailures {
+		return errors.New("temporary write failure")
+	}
 	s.writes = append(s.writes, rows)
 	return nil
 }
@@ -126,7 +139,9 @@ func TestKlineCollector_SourceAndDataType(t *testing.T) {
 func TestKlineCollectorLiveAlsoWritesOnlyClosedKlines(t *testing.T) {
 	now := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
 	watermark := now.Add(-2 * time.Hour)
-	store := &fakeKlineStorage{latest: watermark, found: true}
+	store := &fakeKlineStorage{
+		latest: watermark, found: true,
+	}
 	collector := &KlineCollector{
 		storage: store,
 		fetchKlinePage: func(_ context.Context, _ *sources.CollectParams, _ *exchange.KlineRequest) ([]*exchange.Kline, error) {

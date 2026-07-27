@@ -16,7 +16,7 @@ import (
 )
 
 // DefaultAckWait leaves enough time for the Collector's bounded workload and status reports.
-const DefaultAckWait = 120 * time.Second
+const DefaultAckWait = 60 * time.Second
 
 type JetStreamQueue struct {
 	rt        *Runtime
@@ -31,7 +31,7 @@ func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 		cfg.AckWait = DefaultAckWait
 	}
 	if cfg.MaxDeliver <= 0 {
-		cfg.MaxDeliver = 3
+		cfg.MaxDeliver = 4
 	}
 	if cfg.MaxAckPending <= 0 {
 		cfg.MaxAckPending = 32

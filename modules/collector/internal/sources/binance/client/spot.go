@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"time"
 
-	"github.com/avast/retry-go"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -55,7 +53,7 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 	var rawKlines []CandleStick
 	var triedIPs []string // 记录已尝试失败的IP列表
 
-	err := retry.Do(
+	err := retryBinance(ctx,
 		func() error {
 			// 获取下一个可用的IP（排除已失败的IP）
 			currentIP := httpclient.GetNextAvailableIP(domain, triedIPs)
@@ -78,14 +76,6 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 			}
 			return nil
 		},
-		retry.Attempts(3),
-		retry.Delay(1*time.Second),
-		retry.LastErrorOnly(true),
-		retry.OnRetry(func(n uint, err error) {
-			log.WarnContextf(ctx, "[SpotAPI] 获取K线重试 #%d, symbol=%s, interval=%s, err=%v",
-				n+1, symbol, req.Interval, err)
-		}),
-		retry.Context(ctx),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("获取现货K线失败: %w", err)
@@ -110,7 +100,7 @@ func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo
 	var triedIPs []string
 	domain := api.client.SpotDomain()
 
-	err := retry.Do(
+	err := retryBinance(ctx,
 		func() error {
 			currentIP := httpclient.GetNextAvailableIP(domain, triedIPs)
 			if currentIP == "" {
@@ -127,13 +117,6 @@ func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo
 			}
 			return nil
 		},
-		retry.Attempts(3),
-		retry.Delay(1*time.Second),
-		retry.LastErrorOnly(true),
-		retry.OnRetry(func(n uint, err error) {
-			log.WarnContextf(ctx, "[SpotAPI] 获取ExchangeInfo重试 #%d, err=%v", n+1, err)
-		}),
-		retry.Context(ctx),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("获取现货交易所信息失败: %w", err)

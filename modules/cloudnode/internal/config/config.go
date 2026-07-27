@@ -147,7 +147,7 @@ func Default() *Config {
 			Enabled:        true,
 			URLs:           []string{"nats://127.0.0.1:4222"},
 			CredentialFile: "~/.config/moox/eventbus/cloudnode-eventbus.yaml",
-			MaxDeliver:     3,
+			MaxDeliver:     4,
 			MaxAckPending:  32,
 		},
 		JobItem: JobItemConfig{

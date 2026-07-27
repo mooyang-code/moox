@@ -18,6 +18,10 @@ const joined = trackedWithoutProtoReservation.map(read).join('\n');
 const web = read(trackedWithoutProtoReservation[0]);
 const proto = read('modules/collector/proto/collector.proto');
 const schema = read('modules/collector/schema/collector.sql');
+const controlPlane = [
+  'modules/collector/internal/taskpublisher/client.go',
+  'modules/collector/internal/rpc/service.go',
+].map(read).join('\n');
 
 const forbidden = ['planned_exec_node', 'PlannedExecNode', 'c_planned_exec_node', '计划节点'];
 const remaining = forbidden.filter((token) => joined.includes(token));
@@ -34,10 +38,12 @@ const requirements = [
   ],
 ];
 const missing = requirements.filter(([ok]) => !ok).map(([, label]) => label);
+const forbiddenActivation = ['InvokeFunction', 'InvokeSync', 'WakeNode', 'ActivateSCF']
+  .filter((token) => controlPlane.includes(token));
 
-if (remaining.length || missing.length) {
+if (remaining.length || missing.length || forbiddenActivation.length) {
   console.error(
-    `collector planned-node removal failed; remaining: ${remaining.join(', ') || 'none'}; missing: ${missing.join(', ') || 'none'}`,
+    `collector planned-node removal failed; remaining: ${remaining.join(', ') || 'none'}; missing: ${missing.join(', ') || 'none'}; activation: ${forbiddenActivation.join(', ') || 'none'}`,
   );
   process.exit(1);
 }

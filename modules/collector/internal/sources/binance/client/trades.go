@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"time"
 
-	"github.com/avast/retry-go"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -34,7 +32,7 @@ func getRecentTrades(ctx context.Context, client *Client, domain, endpoint, labe
 
 	var raw []AggregateTrade
 	var triedIPs []string
-	err := retry.Do(func() error {
+	err := retryBinance(ctx, func() error {
 		currentIP := httpclient.GetNextAvailableIP(domain, triedIPs)
 		if currentIP == "" {
 			log.WarnContextf(ctx, "[%s] 无可用DNS优选IP，降级为域名直连, symbol=%s", label, req.Symbol)
@@ -46,7 +44,7 @@ func getRecentTrades(ctx context.Context, client *Client, domain, endpoint, labe
 			return err
 		}
 		return nil
-	}, retry.Attempts(3), retry.Delay(time.Second), retry.LastErrorOnly(true), retry.Context(ctx))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("获取%s最近成交失败: %w", label, err)
 	}

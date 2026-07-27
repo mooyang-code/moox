@@ -117,6 +117,33 @@ func TestLatestTimeSeriesTimeReadsNewestStorageRow(t *testing.T) {
 	assert.Equal(t, uint32(1), proxy.req.GetPage().GetSize())
 }
 
+func TestStorageWriterRetriesInnerErrorThreeTimes(t *testing.T) {
+	proxy := &latestTimeSeriesProxy{
+		failures: 2,
+		rsp: &storagepb.ReadTimeSeriesRowsRsp{
+			RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
+		},
+	}
+	writer := &storageWriter{access: proxy}
+
+	_, _, err := writer.LatestTimeSeriesTime(context.Background(), &storagepb.TimeSeriesKey{})
+
+	require.NoError(t, err)
+	assert.Equal(t, outboundAttempts, proxy.calls)
+}
+
+func TestStorageWriterDoesNotRetryInvalidParam(t *testing.T) {
+	proxy := &latestTimeSeriesProxy{rsp: &storagepb.ReadTimeSeriesRowsRsp{
+		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM, Msg: "bad key"},
+	}}
+	writer := &storageWriter{access: proxy}
+
+	_, _, err := writer.LatestTimeSeriesTime(context.Background(), &storagepb.TimeSeriesKey{})
+
+	require.Error(t, err)
+	assert.Equal(t, 1, proxy.calls)
+}
+
 func TestStorageWriterListsAllDatasetSubjectPages(t *testing.T) {
 	proxy := &datasetSubjectProxy{}
 	writer := &storageWriter{
@@ -159,12 +186,20 @@ func TestStorageWriterBindsCompleteDatasetSubject(t *testing.T) {
 
 type latestTimeSeriesProxy struct {
 	storagepb.PrimaryStoreClientProxy
-	req *storagepb.ReadTimeSeriesRowsReq
-	rsp *storagepb.ReadTimeSeriesRowsRsp
+	req      *storagepb.ReadTimeSeriesRowsReq
+	rsp      *storagepb.ReadTimeSeriesRowsRsp
+	calls    int
+	failures int
 }
 
 func (p *latestTimeSeriesProxy) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	p.calls++
 	p.req = req
+	if p.calls <= p.failures {
+		return &storagepb.ReadTimeSeriesRowsRsp{
+			RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: "temporary"},
+		}, nil
+	}
 	return p.rsp, nil
 }
 
