@@ -886,6 +886,20 @@ export function collectStorageWriteEvidence(jobItems) {
       throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} task evidence does not match requested intervals`);
     }
     for (const task of tasks) {
+      const expectedDataType = String(item.params?.data_type || "");
+      const expectedSymbol = String(item.params?.symbol || "");
+      if (String(task.data_type || "") !== expectedDataType || String(task.symbol || "") !== expectedSymbol) {
+        throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} task evidence does not match requested data_type/symbol`);
+      }
+      const expectedScope = {
+        space_id: String(item.params?.space_id || item.space_id || ""),
+        dataset_id: String(item.params?.dataset_id || ""),
+        subject_id: String(item.params?.subject_id || expectedSymbol),
+        freq: expectedKlineFreq(task.interval),
+      };
+      if (JSON.stringify(stableJSON(task.storage_read_scope || {})) !== JSON.stringify(stableJSON(expectedScope))) {
+        throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} Storage read scope does not match its request`);
+      }
       const count = Number(task.rows_written);
       if (!Number.isInteger(count) || count < 0) {
         throw new FatalAssertionError(`invalid rows_written in JobItem ${item.job_item_id || "unknown"}: ${task.rows_written}`);
@@ -899,11 +913,33 @@ export function collectStorageWriteEvidence(jobItems) {
         if (samples.length === 0) {
           throw new FatalAssertionError(`positive JobItem ${item.job_item_id || "unknown"} does not contain written RowKey samples`);
         }
+        for (const key of samples) {
+          const scope = {
+            space_id: key.space_id,
+            dataset_id: key.dataset_id,
+            subject_id: key.subject_id,
+            freq: key.freq,
+          };
+          if (!key.data_time || JSON.stringify(stableJSON(scope)) !== JSON.stringify(stableJSON(expectedScope))) {
+            throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} contains an out-of-scope written RowKey`);
+          }
+        }
         writtenKeys.push(...samples);
       }
     }
   }
   return { rowsWritten, writtenKeys };
+}
+
+function expectedKlineFreq(interval) {
+  const value = String(interval || "");
+  if (value.length < 2) return value;
+  const unit = value.at(-1);
+  if (unit === "h" || unit === "H") return `${value.slice(0, -1)}H`;
+  if (unit === "d" || unit === "D") return `${value.slice(0, -1)}D`;
+  if (unit === "w" || unit === "W") return `${value.slice(0, -1)}W`;
+  if (unit === "y" || unit === "Y") return `${value.slice(0, -1)}Y`;
+  return value;
 }
 
 export function assertTaskInstanceWriteEvidence(instances, jobItems) {
@@ -925,18 +961,24 @@ async function assertWrittenRowKeysReadable(args, token, keys) {
   const unique = [...new Map(keys.map((key) => [JSON.stringify(stableJSON(key)), key])).values()];
   for (let offset = 0; offset < unique.length; offset += 50) {
     const batch = unique.slice(offset, offset + 50);
-    const rsp = await storagePost(args, token, "access", "ReadTimeSeriesRows", {
-      space_id: args.space,
-      dataset_id: args.dataset,
-      keys: batch,
-      page: { page: 1, size: batch.length },
-    });
+    const rsp = await storagePost(args, token, "access", "ReadTimeSeriesRows",
+      primaryWrittenRowsRequest(args, batch));
     const visible = new Set((rsp.rows || []).map((row) => JSON.stringify(stableJSON(row.key || {}))));
     const missing = batch.filter((key) => !visible.has(JSON.stringify(stableJSON(key))));
     if (missing.length > 0) {
       throw new Error(`${missing.length}/${batch.length} written RowKeys are not readable from Storage Primary`);
     }
   }
+}
+
+export function primaryWrittenRowsRequest(args, keys) {
+  return {
+    space_id: args.space,
+    dataset_id: args.dataset,
+    keys,
+    column_names: ["close"],
+    page: { page: 1, size: keys.length },
+  };
 }
 
 async function writeState(args, value) {

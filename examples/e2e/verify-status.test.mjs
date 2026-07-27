@@ -16,6 +16,7 @@ import {
   currentScheduledTaskInstances,
   failedJobItems,
   parseArgs,
+  primaryWrittenRowsRequest,
   scheduleLeadDelay,
   statusName,
 } from "./verify.mjs";
@@ -44,15 +45,36 @@ test("storage snapshot queries the target View without an empty subject selector
 test("storage write evidence accepts only an explicit K-line zero-write result", () => {
   assert.deepEqual(collectStorageWriteEvidence([{
     job_item_id: "zero",
-    params: { interval: "1h" },
+    space_id: "crypto",
+    params: {
+      space_id: "crypto", dataset_id: "binance_spot_kline_1h", data_type: "kline",
+      symbol: "BTCUSDT", subject_id: "BTC-USDT", interval: "1h",
+    },
     result_summary: {
-      tasks: [{ data_type: "kline", interval: "1h", rows_written: 0, zero_write_reason: "no_new_closed_kline" }],
+      tasks: [{
+        data_type: "kline", symbol: "BTCUSDT", interval: "1h", rows_written: 0,
+        zero_write_reason: "no_new_closed_kline",
+        storage_read_scope: {
+          space_id: "crypto", dataset_id: "binance_spot_kline_1h",
+          subject_id: "BTC-USDT", freq: "1H",
+        },
+      }],
     },
   }]), { rowsWritten: 0, writtenKeys: [] });
   assert.throws(() => collectStorageWriteEvidence([{
     job_item_id: "bad-zero",
-    params: { interval: "1h" },
-    result_summary: { tasks: [{ data_type: "kline", interval: "1h", rows_written: 0 }] },
+    space_id: "crypto",
+    params: {
+      space_id: "crypto", dataset_id: "binance_spot_kline_1h", data_type: "kline",
+      symbol: "BTCUSDT", subject_id: "BTC-USDT", interval: "1h",
+    },
+    result_summary: { tasks: [{
+      data_type: "kline", symbol: "BTCUSDT", interval: "1h", rows_written: 0,
+      storage_read_scope: {
+        space_id: "crypto", dataset_id: "binance_spot_kline_1h",
+        subject_id: "BTC-USDT", freq: "1H",
+      },
+    }] },
   }]), /missing an accepted reason/);
 });
 
@@ -66,9 +88,20 @@ test("storage write evidence requires every successful JobItem and requested int
   };
   const jobItems = [{
     job_item_id: "positive",
-    params: { interval: "1h" },
+    space_id: "crypto",
+    params: {
+      space_id: "crypto", dataset_id: "binance_spot_kline_1h", data_type: "kline",
+      symbol: "BTCUSDT", subject_id: "BTC-USDT", interval: "1h",
+    },
     result_summary: {
-      tasks: [{ data_type: "kline", interval: "1h", rows_written: 1, written_row_key_samples: [key] }],
+      tasks: [{
+        data_type: "kline", symbol: "BTCUSDT", interval: "1h", rows_written: 1,
+        storage_read_scope: {
+          space_id: "crypto", dataset_id: "binance_spot_kline_1h",
+          subject_id: "BTC-USDT", freq: "1H",
+        },
+        written_row_key_samples: [key],
+      }],
     },
   }];
   assert.deepEqual(collectStorageWriteEvidence(jobItems), { rowsWritten: 1, writtenKeys: [key] });
@@ -80,6 +113,10 @@ test("storage write evidence requires every successful JobItem and requested int
     ...jobItems[0],
     params: { interval: "5m" },
   }]), /does not match requested intervals/);
+  assert.throws(() => collectStorageWriteEvidence([{
+    ...jobItems[0],
+    params: { ...jobItems[0].params, symbol: "ETHUSDT", subject_id: "ETH-USDT" },
+  }]), /does not match requested data_type\/symbol/);
 });
 
 test("TaskInstance persists the same write evidence as its JobItem", () => {
@@ -92,6 +129,23 @@ test("TaskInstance persists the same write evidence as its JobItem", () => {
     [{ task_id: "task-1", cloud_job_item_id: "item-1", result: {} }],
     [{ job_item_id: "item-1", result_summary: { tasks } }],
   ), /did not persist/);
+});
+
+test("exact written RowKey read is forced through Storage Primary", () => {
+  const key = {
+    space_id: "crypto", dataset_id: "binance_spot_kline_1h",
+    subject_id: "BTC-USDT", freq: "1H", data_time: "2026-07-27T06:00:00Z",
+  };
+  assert.deepEqual(primaryWrittenRowsRequest(
+    { space: "crypto", dataset: "binance_spot_kline_1h" },
+    [key],
+  ), {
+    space_id: "crypto",
+    dataset_id: "binance_spot_kline_1h",
+    keys: [key],
+    column_names: ["close"],
+    page: { page: 1, size: 1 },
+  });
 });
 
 test("CloudNode JobItem status values match the protobuf contract", () => {

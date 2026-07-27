@@ -26,9 +26,17 @@ type ResultCollector interface {
 // CollectResult is persisted with the JobItem and TaskInstance so callers can
 // distinguish an intentional zero-write collection from a false success.
 type CollectResult struct {
-	RowsWritten          int             `json:"rows_written"`
-	WrittenRowKeySamples []WrittenRowKey `json:"written_row_key_samples,omitempty"`
-	ZeroWriteReason      string          `json:"zero_write_reason,omitempty"`
+	RowsWritten          int               `json:"rows_written"`
+	WrittenRowKeySamples []WrittenRowKey   `json:"written_row_key_samples,omitempty"`
+	ZeroWriteReason      string            `json:"zero_write_reason,omitempty"`
+	StorageReadScope     *StorageReadScope `json:"storage_read_scope,omitempty"`
+}
+
+type StorageReadScope struct {
+	SpaceID   string `json:"space_id"`
+	DatasetID string `json:"dataset_id"`
+	SubjectID string `json:"subject_id"`
+	Freq      string `json:"freq"`
 }
 
 type WrittenRowKey struct {

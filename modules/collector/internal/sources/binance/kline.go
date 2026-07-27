@@ -117,6 +117,9 @@ func (c *KlineCollector) CollectWithResult(
 	if storageSubjectID == "" {
 		storageSubjectID = params.Symbol
 	}
+	result.StorageReadScope = &sources.StorageReadScope{
+		SpaceID: spaceID, DatasetID: datasetID, SubjectID: storageSubjectID, Freq: freq,
+	}
 	writer := c.storage
 	if writer == nil {
 		accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
