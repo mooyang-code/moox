@@ -37,7 +37,7 @@ moox-trade      -> modules/trade/schema
 | Storage DataNode 注册和业务元数据 | `moox-storage` | 部署注册 DataNode；`examples/*.seed.yaml` 通过 `moox-cli metadata import` 导入直接绑定的 disabled Dataset |
 | 云账户、云节点、函数包 | `moox-cloudnode` | 管理台或 `/api/admin/cloudnode/*` API 创建 |
 | 采集规则、任务实例 | `moox-collector` | 管理台或 `/api/admin/collectmgr/*` API 创建规则，再由 collector 生成；采集执行日志由 SCF/CLS 承载 |
-| SCF 异步 JobItem、同步 invocation | `moox-cloudnode` | 由 collector/factor/trade 等业务服务通过 `/api/service/cloudnode/*` 提交 |
+| SCF 异步 JobItem | `moox-cloudnode` | 由 collector/factor/trade 等业务服务通过 `/api/service/cloudnode/*` 提交；Collector 不同步调用 SCF |
 | K 线、标的、视图数据 | `moox-storage` | collector/SCF 通过 storage RPC 写入，view/archive 通过 rebuild 或事件更新 |
 
 这些数据如果被删除，不需要旧库迁移，也不应该通过手工 SQL 恢复；按上表重新走模块入口即可。
@@ -106,7 +106,7 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
     "biz_type": "data_collector",
     "data_type": "kline",
     "data_source": "binance",
-    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline_1h\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"binance_spot_kline_1h\",\"job_type\":\"collect.kline\"},\"schedule\":{\"interval\":\"1h\",\"timezone\":\"Asia/Shanghai\"}}",
+    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_kline_1h\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"binance_spot_kline_1h\"},\"schedule\":{\"interval\":\"1h\"}}",
     "enabled": "true",
     "creator": "system"
   }
@@ -167,10 +167,12 @@ examples/e2e/run-real-scf.sh \
 传入 `--skip-cloud-node-setup`，因此不会写入假的 `e2e-local` CloudNode；它直接复用
 已发布并上线的云函数节点。脚本成功或失败都会保留 state 和完整日志，路径在输出中显示。
 默认使用独立规则 `moox_real_scf_e2e_kline_1h`，不会覆盖正式规则
-`binance_spot_kline_1h`。state 包含 `scheduled_job_ids`、`immediate_job_item_id` 和
-`failure_job_item_id`，日志同时输出逐个 `job_item_id` 的 CLS 查询提示。
+`binance_spot_kline_1h`。state 包含 `scheduled_job_ids`、`immediate_job_item_id`、
+`batch_job_item_ids`、`expected_batch_size=10` 和 `failure_job_item_id`。assert 阶段会额外
+提交 20 条不含 `execute_at` 的采集任务，等待全部终态成功；日志同时输出逐个
+`job_item_id` 的 CLS 查询提示。
 setup 会先要求至少两个状态在线、心跳在两分钟内的 `tencent-scf/scf-event`
-节点，要求它们都支持 `collect.kline` 且来自不同 `package_id`；节点、代码包版本、
+节点，要求它们都支持 `collect.binance.kline` 且来自不同 `package_id`；节点、代码包版本、
 支持的 workload 和心跳会写入 state
 作为验收证据。所有任务终态还会校验 `execution_node` 必须属于这些真实节点。schedule
 持续检查任务在 `execute_at` 到来前保持 pending；是否发生过提前消费后的
@@ -179,8 +181,8 @@ setup 会先要求至少两个状态在线、心跳在两分钟内的 `tencent-s
 `assert` 还会提交一个小型受控失败 JobItem。该任务使用稳定的非法 Binance symbol，
 不包含凭据或大体积参数，并等待 CloudNode 记录最终失败，同时校验
 `COLLECT_FAILED`、retryable error kind、简短的 HTTP 400 错误以及真实
-`execution_node`。生产 `max_deliver=3`，使用它在 CLS 中确认三轮
-`received/started/instance_reported/done`、两次 `delivery_action(RETRY)`，
+`execution_node`。生产 `max_deliver=4`，使用它在 CLS 中确认四轮
+`received/started/instance_reported/done`、三次 `delivery_action(RETRY)`，
 以及最终 `cloudnode_reported` 和 `delivery_action(TERM)`；它不写入生产 DSL，
 也不依赖 JetStream testkit。schedule 捕获本次 JobItem 后会立即禁用 E2E 规则，
 避免生产 Timer 改写 TaskInstance 绑定；无论测试成功还是中途失败，runner 仍会执行 cleanup，

@@ -40,6 +40,9 @@ const TASK_STATUS = {
   3: "TASK_INSTANCE_STATUS_FAILED",
 };
 
+const BATCH_ACCEPTANCE_COUNT = 20;
+const EXPECTED_BATCH_SIZE = 10;
+
 class FatalAssertionError extends Error {}
 
 export function parseArgs(argv) {
@@ -407,13 +410,38 @@ async function assertAfterSCF(args) {
   if (state.require_real_scf) {
     assertRealExecutionNodes([terminalFailure], state.real_scf_node_ids);
   }
+
+  const batchJobs = await submitImmediateJobBatch(args, token, instances, BATCH_ACCEPTANCE_COUNT);
+  const batchJobIDs = new Set(batchJobs.map((item) => item.job_item_id));
+  const batchResults = await waitFor("immediate batch job items success", timeoutMs, async () => {
+    const rows = await listJobItems(args, token, batchJobs[0].job_id);
+    const current = rows.filter((item) => batchJobIDs.has(item.job_item_id));
+    if (current.length !== batchJobIDs.size) {
+      throw new Error(`cloudnode has ${current.length}/${batchJobIDs.size} immediate batch job items`);
+    }
+    const failed = failedJobItems(current);
+    if (failed.length > 0) {
+      throw new FatalAssertionError(`batch job failed: ${failed.map((item) => `${item.job_item_id}:${statusName(item.status, JOB_STATUS)}:${item.last_error_message || ""}`).join(", ")}`);
+    }
+    const pending = current.filter((item) => !isJobStatus(item.status, "JOB_ITEM_STATUS_SUCCESS"));
+    if (pending.length > 0) {
+      throw new Error(`${pending.length}/${current.length} immediate batch jobs are not success yet`);
+    }
+    return current;
+  });
+  if (state.require_real_scf) {
+    assertRealExecutionNodes(batchResults, state.real_scf_node_ids);
+  }
   await writeState(args, {
     ...state,
     immediate_job_item_id: immediate.job_item_id,
     failure_job_item_id: terminalFailure.job_item_id,
     failure_status: statusName(terminalFailure.status, JOB_STATUS),
     failure_error_code: terminalFailure.last_error_code,
+    batch_job_item_ids: batchResults.map((item) => item.job_item_id),
+    expected_batch_size: EXPECTED_BATCH_SIZE,
   });
+  logLifecycleQueries(batchResults, "batch");
   logLifecycleQueries([terminalFailure], "failure");
 
   if (!state.storage_before) {
@@ -448,7 +476,7 @@ async function assertAfterSCF(args) {
     if ((rsp.rows || []).length === 0) throw new Error("storage view has no rows for the sampled fact");
     return rsp.rows;
   });
-  log(`assert ok: scheduled_job_items=${jobItems.length}, immediate_job_item=${immediate.job_item_id}, failure_job_item=${terminalFailure.job_item_id}, instances=${instances.length}, storage_rows=${rows.length}, view_rows=${queryRows.length}, target=${args.space}/${args.dataset}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
+  log(`assert ok: scheduled_job_items=${jobItems.length}, batch_job_items=${batchResults.length}, expected_batch_size=${EXPECTED_BATCH_SIZE}, immediate_job_item=${immediate.job_item_id}, failure_job_item=${terminalFailure.job_item_id}, instances=${instances.length}, storage_rows=${rows.length}, view_rows=${queryRows.length}, target=${args.space}/${args.dataset}, sample=${sample.subject_id || "-"}:${sample.freq || "-"}:${sample.data_time || "-"}`);
 }
 
 async function assertWebHost(webURL) {
@@ -736,7 +764,7 @@ async function ensureCloudNode(args, token) {
         node_id: args.node,
         function_name: args.node,
         function_name_prefix: "e2e-scf",
-        supported_workloads: ["collect.kline", "collect.symbol"],
+        supported_workloads: ["collect.binance.kline", "collect.binance.symbol"],
       },
     }],
   }, { spaceId: args.space });
@@ -755,8 +783,8 @@ async function ensureCollectorRule(args, token) {
     collect_params: {
       source: { kind: "dataset_subjects", dataset_id: args.dataset },
       collector: { exchange: "binance", market: "spot", data_type: "kline", intervals: ["1h"] },
-      target: { dataset_id: args.dataset, job_type: "collect.kline" },
-      schedule: { interval: "30s", timezone: "Asia/Shanghai" },
+      target: { dataset_id: args.dataset },
+      schedule: { interval: "30s" },
     },
     enabled: true,
     creator: "moox-e2e",
@@ -853,7 +881,7 @@ async function submitImmediateJob(args, token, instance) {
     space_id: args.space,
     job_id: `${args.rule}-immediate-e2e`,
     job_item_id: `e2e-immediate-${suffix}`,
-    job_type: `collect.${instance.data_type || "kline"}`,
+    job_type: `collect.${instance.exchange || "binance"}.${instance.data_type || "kline"}`,
     params: {
       ...(instance.task_params || {}),
       space_id: args.space,
@@ -884,13 +912,61 @@ async function submitImmediateJob(args, token, instance) {
   return item;
 }
 
+async function submitImmediateJobBatch(args, token, instances, count) {
+  if (!Array.isArray(instances) || instances.length === 0) {
+    throw new FatalAssertionError("cannot submit immediate batch without task instances");
+  }
+  const suffix = `${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const jobID = `${args.rule}-batch-e2e-${suffix}`;
+  const items = Array.from({ length: count }, (_, index) => {
+    const instance = instances[index % instances.length];
+    const jobItemID = `e2e-batch-${suffix}-${String(index).padStart(3, "0")}`;
+    return {
+      space_id: args.space,
+      job_id: jobID,
+      job_item_id: jobItemID,
+      job_type: `collect.${instance.exchange || "binance"}.${instance.data_type || "kline"}`,
+      params: {
+        ...(instance.task_params || {}),
+        space_id: args.space,
+        task_id: jobItemID,
+        dataset_id: instance.dataset_id || args.dataset,
+        data_type: instance.data_type || "kline",
+        exchange: instance.exchange || "binance",
+        market: instance.market || "spot",
+        subject_id: instance.subject_id,
+        symbol: instance.symbol,
+        interval: instance.interval || "1h",
+      },
+      priority: 100,
+    };
+  });
+  const rsp = await adminPost(args, token, "cloudnode", "SubmitJobItems", {
+    items,
+  }, { spaceId: args.space });
+  const ackStatuses = {
+    1: "JOB_ITEM_ACK_STATUS_CREATED",
+    2: "JOB_ITEM_ACK_STATUS_DEDUPLICATED",
+    3: "JOB_ITEM_ACK_STATUS_REJECTED",
+  };
+  const accepted = new Set((rsp.acks || [])
+    .filter((ack) => ["JOB_ITEM_ACK_STATUS_CREATED", "JOB_ITEM_ACK_STATUS_DEDUPLICATED"].includes(statusName(ack.status, ackStatuses)))
+    .map((ack) => ack.job_item_id));
+  const rejected = items.filter((item) => !accepted.has(item.job_item_id));
+  if (rejected.length > 0) {
+    throw new FatalAssertionError(`immediate batch rejected ${rejected.length}/${items.length}: ${rejected.map((item) => item.job_item_id).join(", ")}`);
+  }
+  log(`submitted immediate batch without execute_at: count=${items.length}, expected_fetch_batch_size=${EXPECTED_BATCH_SIZE}`);
+  return items;
+}
+
 export function controlledFailureJob(args, instance, suffix) {
   const id = `e2e-failure-${suffix}`;
   return {
     space_id: args.space,
     job_id: `${args.rule}-failure-e2e`,
     job_item_id: id,
-    job_type: "collect.kline",
+    job_type: "collect.binance.kline",
     params: {
       space_id: args.space,
       task_id: id,
@@ -1074,7 +1150,7 @@ export function assertFutureExecutionTimes(items, nowMs) {
   }
 }
 
-export function currentRealSCFNodes(nodes, nowMs, maxAgeMs, requiredJobType = "collect.kline") {
+export function currentRealSCFNodes(nodes, nowMs, maxAgeMs, requiredJobType = "collect.binance.kline") {
   return nodes.filter((node) => {
     if (node.provider !== "tencent-scf" || node.node_type !== "scf-event") return false;
     if (statusName(node.status, NODE_STATUS) !== "NODE_STATUS_ONLINE") return false;

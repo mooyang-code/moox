@@ -106,7 +106,7 @@ cleanup_on_exit() {
   fi
   if [[ "${original_status}" -eq 0 ]]; then
     printf '[real-scf-e2e] PASS state=%s log=%s\n' "${STATE_FILE}" "${LOG_FILE}"
-    printf '[real-scf-e2e] Use the scheduled_job_ids, immediate_job_item_id, and failure_job_item_id in state for CLS queries.\n'
+    printf '[real-scf-e2e] Use scheduled_job_ids, batch_job_item_ids, immediate_job_item_id, and failure_job_item_id in state for CLS queries.\n'
   fi
   exit "${original_status}"
 }

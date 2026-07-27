@@ -114,7 +114,7 @@ test("real SCF nodes must be online Tencent functions with a recent heartbeat", 
     node_type: "scf-event",
     status: 2,
     last_heartbeat: "2026-07-27T03:59:30Z",
-    supported_workloads: ["collect.kline", "collect.symbol"],
+    supported_workloads: ["collect.binance.kline", "collect.binance.symbol"],
   };
   const nodes = [
     { ...base, node_id: "real" },
@@ -122,7 +122,7 @@ test("real SCF nodes must be online Tencent functions with a recent heartbeat", 
     { ...base, node_id: "offline", status: 1 },
     { ...base, node_id: "stale", last_heartbeat: "2026-07-27T03:50:00Z" },
     { ...base, node_id: "wrong-type", node_type: "scf-polling" },
-    { ...base, node_id: "wrong-workload", supported_workloads: ["collect.symbol"] },
+    { ...base, node_id: "wrong-workload", supported_workloads: ["collect.binance.symbol"] },
   ];
   assert.deepEqual(
     currentRealSCFNodes(nodes, now, 120_000).map((node) => node.node_id),
@@ -166,7 +166,7 @@ test("controlled failure job is deterministic, small, and contains no credential
     "fixed-run",
   );
   assert.equal(item.job_item_id, "e2e-failure-fixed-run");
-  assert.equal(item.job_type, "collect.kline");
+  assert.equal(item.job_type, "collect.binance.kline");
   assert.equal(item.params.symbol, "INVALID-E2E-SYMBOL");
   assert.equal(item.params.task_id, "e2e-failure-fixed-run");
   assert.equal(item.execute_at, undefined);
