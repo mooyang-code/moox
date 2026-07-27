@@ -5,6 +5,7 @@ umask 077
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN_ID="$(date -u +%Y%m%dt%H%M%Sz)"
 GATEWAY="${MOOX_E2E_GATEWAY:-http://127.0.0.1:11000}"
+CONTROL_URL="${MOOX_E2E_CONTROL_URL:-${GATEWAY}}"
 WEB="${MOOX_E2E_WEB:-http://127.0.0.1:9527}"
 SPACE_ID="${MOOX_E2E_SPACE_ID:-crypto}"
 SYMBOL_DATASET="${MOOX_E2E_SYMBOL_DATASET:-e2e_binance_symbols}"
@@ -40,6 +41,7 @@ Fleet:
 
 Fixture:
   --gateway <url> --web <url> --space <id>
+  --control-url <url>  Service Gateway base used by moox-cli fleet publish.
   --symbol-dataset <id> --kline-dataset <id>
   --symbol-rule <id> --kline-rule <id>
   --timeout-seconds <n> --state-file <path> --log-file <path>
@@ -54,6 +56,7 @@ fail() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --gateway) GATEWAY="${2:-}"; shift 2 ;;
+    --control-url) CONTROL_URL="${2:-}"; shift 2 ;;
     --web) WEB="${2:-}"; shift 2 ;;
     --space) SPACE_ID="${2:-}"; shift 2 ;;
     --symbol-dataset) SYMBOL_DATASET="${2:-}"; shift 2 ;;
@@ -136,7 +139,7 @@ run_phase() {
 publish_fleet() {
   local args=(
     collector function publish
-    --control-url "${GATEWAY}"
+    --control-url "${CONTROL_URL}"
     --space-id "${SPACE_ID}"
     --cloud-account-id "${CLOUD_ACCOUNT}"
     --package-name "${PACKAGE_NAME}"
