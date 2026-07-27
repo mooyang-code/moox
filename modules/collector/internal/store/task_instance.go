@@ -58,8 +58,18 @@ func (r *TaskInstanceRepository) List(ctx context.Context, filter TaskInstanceFi
 
 // UpsertMany creates or updates task instances by stable task id.
 func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []domain.TaskInstance) error {
+	_, err := r.ReserveMany(ctx, instances)
+	return err
+}
+
+// ReserveMany persists schedulable instances and returns the rows whose job item
+// remains current. A pending job cannot be replaced by the next schedule window.
+func (r *TaskInstanceRepository) ReserveMany(
+	ctx context.Context,
+	instances []domain.TaskInstance,
+) ([]domain.TaskInstance, error) {
 	if len(instances) == 0 {
-		return nil
+		return nil, nil
 	}
 	now := time.Now().UTC()
 	for i := range instances {
@@ -68,39 +78,59 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 		}
 		instances[i].ModifyTime = now
 	}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "c_space_id"},
-			{Name: "c_task_id"},
-		},
-		DoUpdates: clause.Assignments(map[string]any{
-			"c_cloud_job_item_id": clause.Expr{SQL: "excluded.c_cloud_job_item_id"},
-			"c_rule_id":           clause.Expr{SQL: "excluded.c_rule_id"},
-			"c_exchange":          clause.Expr{SQL: "excluded.c_exchange"},
-			"c_market":            clause.Expr{SQL: "excluded.c_market"},
-			"c_data_type":         clause.Expr{SQL: "excluded.c_data_type"},
-			"c_dataset_id":        clause.Expr{SQL: "excluded.c_dataset_id"},
-			"c_subject_id":        clause.Expr{SQL: "excluded.c_subject_id"},
-			"c_symbol":            clause.Expr{SQL: "excluded.c_symbol"},
-			"c_interval":          clause.Expr{SQL: "excluded.c_interval"},
-			"c_task_params":       clause.Expr{SQL: "excluded.c_task_params"},
-			"c_is_deleted":        clause.Expr{SQL: "excluded.c_is_deleted"},
-			"c_mtime":             clause.Expr{SQL: "excluded.c_mtime"},
-			"c_last_exec_node": clause.Expr{
-				SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN '' ELSE c_last_exec_node END",
-			},
-			"c_last_exec_status": clause.Expr{
-				SQL:  "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN ? ELSE c_last_exec_status END",
-				Vars: []any{domain.InstanceStatusPending},
-			},
-			"c_last_exec_time": clause.Expr{
-				SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN NULL ELSE c_last_exec_time END",
-			},
-			"c_result": clause.Expr{
-				SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN '{}' ELSE c_result END",
-			},
-		}),
-	}).Create(&instances).Error
+	reserved := make([]domain.TaskInstance, 0, len(instances))
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for i := range instances {
+			result := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{
+					{Name: "c_space_id"},
+					{Name: "c_task_id"},
+				},
+				DoUpdates: clause.Assignments(map[string]any{
+					"c_cloud_job_item_id": clause.Expr{SQL: "excluded.c_cloud_job_item_id"},
+					"c_rule_id":           clause.Expr{SQL: "excluded.c_rule_id"},
+					"c_exchange":          clause.Expr{SQL: "excluded.c_exchange"},
+					"c_market":            clause.Expr{SQL: "excluded.c_market"},
+					"c_data_type":         clause.Expr{SQL: "excluded.c_data_type"},
+					"c_dataset_id":        clause.Expr{SQL: "excluded.c_dataset_id"},
+					"c_subject_id":        clause.Expr{SQL: "excluded.c_subject_id"},
+					"c_symbol":            clause.Expr{SQL: "excluded.c_symbol"},
+					"c_interval":          clause.Expr{SQL: "excluded.c_interval"},
+					"c_task_params":       clause.Expr{SQL: "excluded.c_task_params"},
+					"c_is_deleted":        clause.Expr{SQL: "excluded.c_is_deleted"},
+					"c_mtime":             clause.Expr{SQL: "excluded.c_mtime"},
+					"c_last_exec_node": clause.Expr{
+						SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN '' ELSE c_last_exec_node END",
+					},
+					"c_last_exec_status": clause.Expr{
+						SQL:  "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN ? ELSE c_last_exec_status END",
+						Vars: []any{domain.InstanceStatusPending},
+					},
+					"c_last_exec_time": clause.Expr{
+						SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN NULL ELSE c_last_exec_time END",
+					},
+					"c_result": clause.Expr{
+						SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN '{}' ELSE c_result END",
+					},
+				}),
+				Where: clause.Where{Exprs: []clause.Expression{clause.Expr{
+					SQL: "c_cloud_job_item_id = excluded.c_cloud_job_item_id OR c_last_exec_status IN (?, ?)",
+					Vars: []any{
+						domain.InstanceStatusSuccess,
+						domain.InstanceStatusFailed,
+					},
+				}}},
+			}).Create(&instances[i])
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected > 0 {
+				reserved = append(reserved, instances[i])
+			}
+		}
+		return nil
+	})
+	return reserved, err
 }
 
 // UpdateStatus updates a task instance only when the report belongs to its current cloud job item.

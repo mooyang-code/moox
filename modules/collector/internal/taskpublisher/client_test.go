@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -21,24 +20,26 @@ import (
 
 func TestBuildScheduledJobItemUsesNextBoundary(t *testing.T) {
 	now := time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC)
-	instances := PrepareScheduledInstances([]domain.TaskInstance{{
-		SpaceID: "space-a",
-		RuleID:  "rule-1",
-		TaskID:  "task-1",
+	instances := mustPrepareScheduledInstances(t, []domain.TaskInstance{{
+		SpaceID:  "space-a",
+		RuleID:   "rule-1",
+		TaskID:   "task-1",
+		Exchange: "binance",
+		DataType: "symbol",
 		TaskParams: `{
 			"exchange":"binance",
 			"data_type":"symbol",
-			"job_type":"collect.symbol",
+			"job_type":"collect.untrusted",
 			"schedule_interval":"30m"
 			}`,
 	}}, now)
-	item := buildJobItem(instances[0])
+	item := mustBuildJobItem(t, instances[0])
 
 	if item.GetSpaceId() != "space-a" || item.GetJobId() != "rule-1" {
 		t.Fatalf("identity fields = space:%q job:%q item:%q", item.GetSpaceId(), item.GetJobId(), item.GetJobItemId())
 	}
-	if item.GetJobType() != "collect.symbol" {
-		t.Fatalf("job_type = %q, want collect.symbol", item.GetJobType())
+	if item.GetJobType() != "collect.binance.symbol" {
+		t.Fatalf("job_type = %q, want collect.binance.symbol", item.GetJobType())
 	}
 	if item.GetParams().GetFields()["task_id"].GetStringValue() != "task-1" {
 		t.Fatalf("params.task_id = %q, want task-1", item.GetParams().GetFields()["task_id"].GetStringValue())
@@ -63,9 +64,9 @@ func TestPrepareScheduledInstancesRepeatedInSameWindowUsesSameJobItemID(t *testi
 				"schedule_interval":"1m"
 			}`,
 	}
-	first := PrepareScheduledInstances([]domain.TaskInstance{instance},
+	first := mustPrepareScheduledInstances(t, []domain.TaskInstance{instance},
 		time.Date(2026, 7, 26, 10, 17, 1, 0, time.UTC))[0]
-	second := PrepareScheduledInstances([]domain.TaskInstance{instance},
+	second := mustPrepareScheduledInstances(t, []domain.TaskInstance{instance},
 		time.Date(2026, 7, 26, 10, 17, 59, 0, time.UTC))[0]
 
 	if first.CloudJobItemID != second.CloudJobItemID {
@@ -76,17 +77,80 @@ func TestPrepareScheduledInstancesRepeatedInSameWindowUsesSameJobItemID(t *testi
 	}
 }
 
-func TestBuildJobItemDefaultsRoutingFromDataType(t *testing.T) {
-	instances := PrepareScheduledInstances([]domain.TaskInstance{{
+func TestBuildJobItemDerivesRoutingFromTaskInstance(t *testing.T) {
+	instances := mustPrepareScheduledInstances(t, []domain.TaskInstance{{
 		SpaceID:    "space-a",
 		RuleID:     "rule-1",
 		TaskID:     "task-1",
-		TaskParams: `{"exchange":"binance","data_type":"kline"}`,
+		Exchange:   " Binance ",
+		DataType:   " KLINE ",
+		TaskParams: `{"exchange":"tushare","data_type":"symbol","job_type":"collect.untrusted"}`,
 	}}, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
-	item := buildJobItem(instances[0])
+	item := mustBuildJobItem(t, instances[0])
 
-	if item.GetJobType() != "collect.kline" {
-		t.Fatalf("job_type = %q, want collect.kline", item.GetJobType())
+	if item.GetJobType() != "collect.binance.kline" {
+		t.Fatalf("job_type = %q, want collect.binance.kline", item.GetJobType())
+	}
+}
+
+func TestBuildJobItemRejectsUnknownTaskInstanceRoute(t *testing.T) {
+	_, err := buildJobItem(domain.TaskInstance{
+		TaskID:     "task-1",
+		Exchange:   "tushare",
+		DataType:   "kline",
+		TaskParams: `{}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "tushare") ||
+		!strings.Contains(err.Error(), "kline") {
+		t.Fatalf("buildJobItem() error = %v, want unknown route details", err)
+	}
+}
+
+func TestSubmitCollectorJobItemsRejectsInvalidItemsBeforeRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	defer server.Close()
+	client := New(Config{ServiceGatewayTarget: server.URL})
+
+	tests := []struct {
+		name     string
+		instance domain.TaskInstance
+	}{
+		{
+			name: "malformed params",
+			instance: domain.TaskInstance{
+				TaskID: "task-bad-json", Exchange: "binance", DataType: "kline", TaskParams: `{bad`,
+			},
+		},
+		{
+			name: "unknown route",
+			instance: domain.TaskInstance{
+				TaskID: "task-unknown-route", Exchange: "tushare", DataType: "kline", TaskParams: `{}`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.SubmitCollectorJobItems(context.Background(), []domain.TaskInstance{tt.instance})
+			if err == nil || !strings.Contains(err.Error(), tt.instance.TaskID) {
+				t.Fatalf("SubmitCollectorJobItems() error = %v, want task identity", err)
+			}
+		})
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want 0", requests)
+	}
+}
+
+func TestPrepareScheduledInstancesRejectsMalformedTaskParams(t *testing.T) {
+	_, err := PrepareScheduledInstances([]domain.TaskInstance{{
+		TaskID:     "task-1",
+		TaskParams: `{bad`,
+	}}, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "task-1") {
+		t.Fatalf("PrepareScheduledInstances() error = %v, want task identity", err)
 	}
 }
 
@@ -126,14 +190,26 @@ func TestJobItemIDsByTaskIDReturnsRejectedAckDetailsAndSuccessfulIDs(t *testing.
 func TestSubmitCollectorJobItemsBatchesLargeRequests(t *testing.T) {
 	requestSizes := []int{}
 	var requestSizesMu sync.Mutex
+	inFlight := 0
+	maxInFlight := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req cloudnodepb.SubmitJobItemsReq
 		if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
 			t.Fatal(err)
 		}
 		requestSizesMu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
 		requestSizes = append(requestSizes, len(req.GetItems()))
 		requestSizesMu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		defer func() {
+			requestSizesMu.Lock()
+			inFlight--
+			requestSizesMu.Unlock()
+		}()
 		acks := make([]*cloudnodepb.JobItemAck, 0, len(req.GetItems()))
 		for _, item := range req.GetItems() {
 			acks = append(acks, &cloudnodepb.JobItemAck{
@@ -154,10 +230,12 @@ func TestSubmitCollectorJobItemsBatchesLargeRequests(t *testing.T) {
 			SpaceID:    "crypto",
 			RuleID:     "binance_spot_kline_1m",
 			TaskID:     fmt.Sprintf("task-%d", i),
-			TaskParams: `{"data_type":"kline","job_type":"collect.kline","schedule_interval":"1m"}`,
+			Exchange:   "binance",
+			DataType:   "kline",
+			TaskParams: `{"data_type":"kline","schedule_interval":"1m"}`,
 		})
 	}
-	instances = PrepareScheduledInstances(instances, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
+	instances = mustPrepareScheduledInstances(t, instances, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
 	client := New(Config{
 		ServiceGatewayTarget: server.URL,
 		Auth:                 AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"},
@@ -167,9 +245,11 @@ func TestSubmitCollectorJobItemsBatchesLargeRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sort.Ints(requestSizes)
-	if len(requestSizes) != 2 || requestSizes[0] != 1 || requestSizes[1] != submitJobItemBatchSize {
+	if len(requestSizes) != 2 || requestSizes[0] != submitJobItemBatchSize || requestSizes[1] != 1 {
 		t.Fatalf("request sizes = %v, want [%d 1]", requestSizes, submitJobItemBatchSize)
+	}
+	if maxInFlight != 1 {
+		t.Fatalf("max in-flight submit batches = %d, want 1", maxInFlight)
 	}
 	if len(ids) != len(instances) {
 		t.Fatalf("acked task ids = %d, want %d", len(ids), len(instances))
@@ -200,9 +280,12 @@ func TestSubmitCollectorJobItemsReturnsSuccessfulBatchesWithError(t *testing.T) 
 
 	instances := make([]domain.TaskInstance, 0, submitJobItemBatchSize+1)
 	for i := 0; i < submitJobItemBatchSize+1; i++ {
-		instances = append(instances, domain.TaskInstance{SpaceID: "crypto", RuleID: "rule", TaskID: fmt.Sprintf("task-%d", i), TaskParams: `{"job_type":"collect.kline"}`})
+		instances = append(instances, domain.TaskInstance{
+			SpaceID: "crypto", RuleID: "rule", TaskID: fmt.Sprintf("task-%d", i),
+			Exchange: "binance", DataType: "kline", TaskParams: `{}`,
+		})
 	}
-	instances = PrepareScheduledInstances(instances, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
+	instances = mustPrepareScheduledInstances(t, instances, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
 	client := New(Config{ServiceGatewayTarget: server.URL, Auth: AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"}})
 	ids, err := client.SubmitCollectorJobItems(context.Background(), instances)
 	if err == nil || !strings.Contains(err.Error(), "rejected batch") {
@@ -236,9 +319,9 @@ func TestSubmitCollectorJobItemsKeepsSuccessfulIDsFromRejectedAckBatch(t *testin
 	}))
 	defer server.Close()
 
-	instances := PrepareScheduledInstances([]domain.TaskInstance{
-		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-ok", TaskParams: `{"job_type":"collect.kline"}`},
-		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-bad", TaskParams: `{"job_type":"collect.unknown"}`},
+	instances := mustPrepareScheduledInstances(t, []domain.TaskInstance{
+		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-ok", Exchange: "binance", DataType: "kline", TaskParams: `{}`},
+		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-bad", Exchange: "binance", DataType: "symbol", TaskParams: `{}`},
 	}, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
 	client := New(Config{ServiceGatewayTarget: server.URL, Auth: AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"}})
 
@@ -282,9 +365,6 @@ func TestNextExecuteAtParsesDurationAndDayIntervals(t *testing.T) {
 }
 
 func TestPayloadAndJobItemHelpersCoverFallbacks(t *testing.T) {
-	if payload := parsePayload("{bad"); len(payload) != 0 {
-		t.Fatalf("parsePayload invalid = %#v, want empty", payload)
-	}
 	if got := valueString(map[string]any{"name": "  "}, "name", "fallback"); got != "fallback" {
 		t.Fatalf("valueString blank = %q, want fallback", got)
 	}
@@ -294,6 +374,24 @@ func TestPayloadAndJobItemHelpersCoverFallbacks(t *testing.T) {
 	if got := scheduledJobItemID("", time.Now()); got != "" {
 		t.Fatalf("scheduled empty task = %q, want empty", got)
 	}
+}
+
+func mustPrepareScheduledInstances(t *testing.T, instances []domain.TaskInstance, now time.Time) []domain.TaskInstance {
+	t.Helper()
+	prepared, err := PrepareScheduledInstances(instances, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prepared
+}
+
+func mustBuildJobItem(t *testing.T, instance domain.TaskInstance) *cloudnodepb.JobItem {
+	t.Helper()
+	item, err := buildJobItem(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return item
 }
 
 func mapStruct(t *testing.T, values map[string]any) *structpb.Struct {

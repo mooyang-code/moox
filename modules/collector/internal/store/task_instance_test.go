@@ -152,6 +152,50 @@ func TestTaskInstanceRepository_UpsertManyUpdatesCloudJobItemID(t *testing.T) {
 	assert.JSONEq(t, `{"state":"current"}`, instances[0].Result)
 }
 
+func TestTaskInstanceRepository_ReserveManyDoesNotReplacePendingJob(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.TaskInstances()
+	ctx := context.Background()
+
+	current := domain.TaskInstance{
+		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1",
+		Exchange: "binance", Market: "spot", DataType: "kline",
+		TaskParams: `{}`, CloudJobItemID: "task-1:2026-07-26T10:30:00Z",
+		LastExecStatus: domain.InstanceStatusPending,
+	}
+	reserved, err := repo.ReserveMany(ctx, []domain.TaskInstance{current})
+	require.NoError(t, err)
+	require.Len(t, reserved, 1)
+
+	next := current
+	next.CloudJobItemID = "task-1:2026-07-26T11:00:00Z"
+	reserved, err = repo.ReserveMany(ctx, []domain.TaskInstance{next})
+	require.NoError(t, err)
+	assert.Empty(t, reserved)
+
+	instances, _, err := repo.List(ctx, TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, current.CloudJobItemID, instances[0].CloudJobItemID)
+
+	updated, err := repo.UpdateStatus(
+		ctx,
+		"crypto",
+		"task-1",
+		current.CloudJobItemID,
+		"node-current",
+		domain.InstanceStatusSuccess,
+		`{"state":"done"}`,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	reserved, err = repo.ReserveMany(ctx, []domain.TaskInstance{next})
+	require.NoError(t, err)
+	require.Len(t, reserved, 1)
+	assert.Equal(t, next.CloudJobItemID, reserved[0].CloudJobItemID)
+}
+
 func TestTaskInstanceRepository_NormalizeHelpers(t *testing.T) {
 	page, size := normalizePage(0, 0)
 	assert.Equal(t, 1, page)

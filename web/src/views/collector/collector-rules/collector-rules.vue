@@ -90,135 +90,71 @@
       v-model:visible="open"
       @close="afterClose"
       @cancel="afterClose"
-      width="900px"
+      width="760px"
       :ok-loading="submitLoading"
       @before-ok="handleOk"
     >
       <template #title> {{ title }} </template>
-      <div>
-        <a-form ref="formRef" auto-label-width :rules="rules" :model="addForm" :layout="'vertical'">
-          <a-row :gutter="16">
-            <a-col v-if="title === '修改采集规则'" :span="12">
-              <a-form-item field="rule_id" label="规则ID" validate-trigger="blur">
-                <a-input v-model="addForm.rule_id" placeholder="留空自动生成" allow-clear :disabled="true" />
-              </a-form-item>
-            </a-col>
-            <a-col :span="title === '修改采集规则' ? 12 : 24">
-              <a-form-item field="data_type" label="数据类型" validate-trigger="blur">
-                <a-select v-model="addForm.data_type" placeholder="请选择数据类型" @change="onDataTypeChange">
-                  <a-option v-for="config in dataTypeConfigs" :key="config.data_type" :value="config.data_type">
-                    {{ config.type_name }}
-                  </a-option>
-                </a-select>
-              </a-form-item>
-            </a-col>
-          </a-row>
+      <a-form ref="formRef" auto-label-width :rules="rules" :model="addForm" layout="vertical">
+        <a-row :gutter="16">
+          <a-col v-if="title === '修改采集规则'" :span="12">
+            <a-form-item field="rule_id" label="规则ID" validate-trigger="blur">
+              <a-input v-model="addForm.rule_id" placeholder="留空自动生成" allow-clear :disabled="true" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="title === '修改采集规则' ? 12 : 24">
+            <a-form-item field="data_type" label="数据类型" validate-trigger="blur">
+              <a-select v-model="addForm.data_type" placeholder="请选择数据类型" @change="onDataTypeChange">
+                <a-option v-for="config in dataTypeConfigs" :key="config.data_type" :value="config.data_type">
+                  {{ config.type_name }}
+                </a-option>
+              </a-select>
+            </a-form-item>
+          </a-col>
+        </a-row>
 
-          <a-form-item field="data_source" label="数据源" validate-trigger="blur">
-            <a-select v-model="addForm.data_source" placeholder="请选择数据源" :loading="loadingDataSources" allow-clear>
-              <a-option v-for="source in dataSourceOptions" :key="source.value" :value="source.value">
-                {{ source.label }}
-              </a-option>
-            </a-select>
-          </a-form-item>
+        <a-form-item field="data_source" label="数据源" validate-trigger="blur">
+          <a-select v-model="addForm.data_source" placeholder="请选择数据源" :loading="loadingDataSources" allow-clear>
+            <a-option v-for="source in dataSourceOptions" :key="source.value" :value="source.value">
+              {{ source.label }}
+            </a-option>
+          </a-select>
+        </a-form-item>
 
-        </a-form>
+        <a-form-item label="产品类型" required>
+          <a-radio-group v-model="marketValue" type="button">
+            <a-radio value="spot">现货</a-radio>
+            <a-radio value="swap">永续合约</a-radio>
+          </a-radio-group>
+        </a-form-item>
 
-        <!-- 采集参数配置 - 完全独立于表单 -->
-        <a-divider>采集参数配置</a-divider>
+        <a-form-item label="Dataset" required>
+          <a-select v-model="datasetIdValue" placeholder="请选择已激活的 Dataset" :loading="loadingDatasets" allow-search>
+            <a-option v-for="dataset in availableDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
+              {{ dataset.name || dataset.dataset_id }} ({{ dataset.dataset_id }})
+            </a-option>
+          </a-select>
+        </a-form-item>
 
-        <template v-if="addForm.data_type">
-          <!-- 产品类型选择 (inst_type) - 仅K线、逐笔交易、行情、订单簿显示 -->
-          <div v-if="hasField('inst_type')" class="custom-form-item">
-            <div class="custom-form-label">产品类型</div>
-            <a-radio-group v-model="instTypeValue" type="button">
-              <a-radio value="SPOT">现货</a-radio>
-              <a-radio value="SWAP">永续合约</a-radio>
-              <a-radio value="FUTURES">交割合约</a-radio>
-            </a-radio-group>
-            <div class="custom-form-extra">选择采集的产品类型：现货交易对或合约交易对</div>
-          </div>
+        <a-form-item v-if="addForm.data_type === 'kline'" label="K线周期" required>
+          <a-checkbox-group v-model="intervalsValue" :options="INTERVAL_OPTIONS"> </a-checkbox-group>
+        </a-form-item>
 
-          <!-- 产品类型多选 (inst_types) - 仅标的数据显示 -->
-          <div v-if="hasField('inst_types')" class="custom-form-item">
-            <div class="custom-form-label">产品类型</div>
-            <a-checkbox-group v-model="instTypesValue">
-              <a-checkbox value="SPOT">现货</a-checkbox>
-              <a-checkbox value="SWAP">永续合约</a-checkbox>
-              <a-checkbox value="FUTURES">交割合约</a-checkbox>
-              <a-checkbox value="OPTION">期权</a-checkbox>
-            </a-checkbox-group>
-            <div class="custom-form-extra">选择要同步的产品类型，可多选</div>
-          </div>
+        <a-form-item label="采集频率" required>
+          <a-input v-model="scheduleIntervalValue" placeholder="例如 5m、1h、24h" allow-clear />
+        </a-form-item>
 
-          <!-- 标的列表输入 (objects) -->
-          <div v-if="hasField('objects')" class="custom-form-item">
-            <div class="custom-form-label">交易标的</div>
-            <div class="objects-input-wrapper">
-              <a-checkbox v-model="objectsSelectAll" @change="onObjectsSelectAllChange"> 全部标的 </a-checkbox>
-              <a-input-tag
-                v-show="!objectsSelectAll"
-                v-model="objectsValue"
-                placeholder="输入标的后按回车添加，如 BTC-USDT 或 BTC-*"
-                allow-clear
-                :style="{ marginTop: 'var(--moox-space-2)' }"
-              />
-              <div v-show="objectsSelectAll" class="select-all-hint">已选择全部标的，将采集所有可用交易对数据</div>
-            </div>
-            <div class="custom-form-extra">
-              支持通配符：* 匹配任意字符，如 BTC-* 匹配所有BTC交易对（注意：输入后按回车键才会生效！）
-            </div>
-          </div>
+        <a-form-item label="创建人">
+          <a-input v-model="addForm.creator" readonly />
+        </a-form-item>
 
-          <!-- K线周期选择 (intervals) -->
-          <div v-if="hasField('intervals')" class="custom-form-item">
-            <div class="custom-form-label">时间周期</div>
-            <a-checkbox-group v-model="intervalsValue" :options="INTERVAL_OPTIONS"> </a-checkbox-group>
-          </div>
-
-          <!-- 订单簿深度 (depth) -->
-          <div v-if="hasField('depth')" class="custom-form-item">
-            <div class="custom-form-label">订单簿深度</div>
-            <a-input-number
-              v-model="depthValue"
-              placeholder="请输入订单簿深度"
-              :min="1"
-              :max="1000"
-              :style="{ width: '200px' }"
-            />
-          </div>
-
-          <!-- 新闻来源 (sources) -->
-          <div v-if="hasField('sources')" class="custom-form-item">
-            <div class="custom-form-label">新闻来源</div>
-            <a-input-tag v-model="sourcesValue" placeholder="输入新闻来源后按回车添加" allow-clear />
-          </div>
-
-          <!-- 关键词 (keywords) -->
-          <div v-if="hasField('keywords')" class="custom-form-item">
-            <div class="custom-form-label">关键词</div>
-            <a-input-tag v-model="keywordsValue" placeholder="输入关键词后按回车添加" allow-clear />
-          </div>
-        </template>
-
-        <template v-else>
-          <a-alert type="info">请先选择数据类型以配置采集参数</a-alert>
-        </template>
-
-        <!-- 其他表单字段 -->
-        <a-form auto-label-width :layout="'vertical'" style="margin-top: var(--moox-space-4)">
-          <a-form-item label="创建人">
-            <a-input v-model="addForm.creator" readonly />
-          </a-form-item>
-
-          <a-form-item field="enabled" label="启用状态">
-            <a-select v-model="addForm.enabled">
-              <a-option value="true">启用</a-option>
-              <a-option value="false">禁用</a-option>
-            </a-select>
-          </a-form-item>
-        </a-form>
-      </div>
+        <a-form-item field="enabled" label="启用状态">
+          <a-select v-model="addForm.enabled">
+            <a-option value="true">启用</a-option>
+            <a-option value="false">禁用</a-option>
+          </a-select>
+        </a-form-item>
+      </a-form>
     </a-modal>
 
     <!-- 详情模态框 -->
@@ -253,9 +189,12 @@
 import { ref, computed, onMounted, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { callControl } from "@/api/admin/http";
+import { listDatasets } from "@/api/storage/metadata";
+import type { Dataset } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { storeToRefs } from "pinia";
+import { buildCollectorRuleParams, type CollectorRuleInput } from "./collector-rule-params";
 
 interface TaskConfig {
   id?: number;
@@ -282,26 +221,6 @@ interface DataTypeConfig {
   modify_time: string;
 }
 
-interface FieldConfig {
-  id: number;
-  data_type: string;
-  field_key: string;
-  field_name: string;
-  field_type: string;
-  is_required: boolean;
-  default_value: any;
-  field_options: Record<string, any>;
-  data_source_options: Record<string, any>;
-  sort_order: number;
-  create_time: string;
-  modify_time: string;
-}
-
-// interface DataTypeConfigDetail {
-//   config: DataTypeConfig;
-//   fields: FieldConfig;
-// }
-
 const loading = ref(false);
 const submitLoading = ref(false);
 const taskList = ref<TaskConfig[]>([]);
@@ -311,45 +230,17 @@ const title = ref("新建任务");
 const formRef = ref();
 const detailVisible = ref(false);
 const detailData = ref<Partial<TaskConfig>>({});
-const activeDataType = ref(""); // 用于跟踪当前激活的数据类型，防止重复初始化
 
-// 数据类型配置相关数据
 const dataTypeConfigs = ref<DataTypeConfig[]>([]);
-const currentFieldConfigs = ref<FieldConfig[]>([]);
-
-// 动态字段使用独立的 ref，避免相互干扰
-const instTypeValue = ref<string>("SPOT"); // 产品类型：SPOT-现货, SWAP-永续合约, FUTURES-交割合约
-const instTypesValue = ref<string[]>(["SPOT"]); // 产品类型多选：用于标的数据任务
-const objectsValue = ref<string[]>([]);
+const marketValue = ref<CollectorRuleInput["market"]>("spot");
+const datasetIdValue = ref("");
 const intervalsValue = ref<string[]>([]);
-const depthValue = ref<number | undefined>(undefined);
-const sourcesValue = ref<string[]>([]);
-const keywordsValue = ref<string[]>([]);
+const scheduleIntervalValue = ref("");
 
-// 数据源相关数据
 const dataSourceOptions = ref<{ label: string; value: string }[]>([]);
 const loadingDataSources = ref(false);
-
-// 标的"全部"选项状态
-const objectsSelectAll = ref(false);
-
-// CollectParams 中定义的有效字段（根据数据类型动态过滤）
-const COLLECT_PARAMS_FIELDS: { [dataType: string]: string[] } = {
-  // 标的数据：产品类型（多选）、时间周期
-  symbol: ["inst_types", "intervals"],
-  // K线数据：产品类型、标的、周期
-  kline: ["inst_type", "objects", "intervals"],
-  // 逐笔交易：产品类型、标的
-  trade: ["inst_type", "objects"],
-  // 行情数据：产品类型、标的
-  ticker: ["inst_type", "objects"],
-  // 订单簿：产品类型、标的、深度
-  orderbook: ["inst_type", "objects", "depth"],
-  // 新闻资讯：来源、关键词（不需要产品类型）
-  news: ["sources", "keywords"],
-  // 默认：所有字段
-  default: ["inst_type", "objects", "intervals", "depth", "sources", "keywords"]
-};
+const activeDatasets = ref<Dataset[]>([]);
+const loadingDatasets = ref(false);
 
 // Get Space store
 const spaceStore = useSpaceStore();
@@ -397,113 +288,17 @@ const addForm = ref({
   creator: ""
 });
 
+const availableDatasets = computed(() => {
+  if (!addForm.value.data_source) {
+    return activeDatasets.value;
+  }
+  const matching = activeDatasets.value.filter(dataset => dataset.data_source_id === addForm.value.data_source);
+  return matching.length > 0 ? matching : activeDatasets.value;
+});
+
 const rules = {
   data_type: [{ required: true, message: "请选择数据类型" }],
   data_source: [{ required: true, message: "请选择数据源" }]
-};
-
-// 处理"全部标的"复选框变化
-const onObjectsSelectAllChange = (checked: boolean | (string | number | boolean)[]) => {
-  const isChecked = Array.isArray(checked) ? checked.length > 0 : checked;
-  if (isChecked) {
-    // 选择全部时，设置为 ["*"]
-    objectsValue.value = ["*"];
-  } else {
-    // 取消选择全部时，清空列表
-    objectsValue.value = [];
-  }
-};
-
-// 检查当前数据类型是否需要某个字段
-const hasField = (fieldKey: string) => {
-  const dataType = addForm.value.data_type?.toLowerCase() || "";
-  const allowedFields = COLLECT_PARAMS_FIELDS[dataType] || COLLECT_PARAMS_FIELDS["default"];
-  return allowedFields.includes(fieldKey);
-};
-
-const normalizeCollectToken = (value: any, fallback = "") => {
-  const text = String(value || "")
-    .trim()
-    .toLowerCase();
-  return text || fallback;
-};
-
-const inferCollectMarket = (instTypeValue: any) => {
-  const instType = String(instTypeValue || "")
-    .trim()
-    .toUpperCase();
-  if (instType === "SWAP" || instType === "FUTURES") {
-    return "swap";
-  }
-  return "spot";
-};
-
-const instTypeFromMarket = (marketValue: any) => {
-  const market = String(marketValue || "")
-    .trim()
-    .toLowerCase();
-  if (market === "swap" || market === "futures") {
-    return "SWAP";
-  }
-  return "SPOT";
-};
-
-const inferCollectDatasetId = (exchange: string, market: string, dataType: string) => {
-  return `${exchange || "binance"}_${market || "spot"}_${dataType || "kline"}`;
-};
-
-const buildStandardCollectParams = () => {
-  const existingParams = normalizeObject(addForm.value.collect_params);
-  const existingSource = normalizeObject(existingParams.source);
-  const existingCollector = normalizeObject(existingParams.collector);
-  const existingTarget = normalizeObject(existingParams.target);
-  const existingSchedule = normalizeObject(existingParams.schedule);
-  const dataType = normalizeCollectToken(addForm.value.data_type, "kline");
-  const exchange = normalizeCollectToken(addForm.value.data_source, "binance");
-  const instTypesValue = getDynamicFieldValue("inst_types");
-  const instTypes = Array.isArray(instTypesValue) ? instTypesValue : [];
-  const market = inferCollectMarket(getDynamicFieldValue("inst_type") || instTypes[0]);
-  const intervalsValue = getDynamicFieldValue("intervals");
-  const intervals = (Array.isArray(intervalsValue) ? intervalsValue : []).map(item => String(item || "").trim()).filter(Boolean);
-  const normalizedIntervals = dataType === "symbol" ? [] : intervals.length > 0 ? intervals : ["1m"];
-  const defaultDatasetId = inferCollectDatasetId(exchange, market, dataType);
-  const defaultJobType = `collect.${dataType}`;
-  const sameCollectShape =
-    normalizeCollectToken(existingCollector.exchange, exchange) === exchange &&
-    normalizeCollectToken(existingCollector.market, market) === market &&
-    normalizeCollectToken(existingCollector.data_type, dataType) === dataType;
-  const datasetId = sameCollectShape
-    ? String(existingSource.dataset_id || existingTarget.dataset_id || defaultDatasetId)
-    : defaultDatasetId;
-  const sourceKind =
-    dataType === "symbol"
-      ? "none"
-      : sameCollectShape
-        ? normalizeCollectToken(existingSource.kind, "dataset_subjects")
-        : "dataset_subjects";
-  const jobType = sameCollectShape ? String(existingTarget.job_type || defaultJobType) : defaultJobType;
-
-  return {
-    source: {
-      kind: sourceKind,
-      dataset_id: datasetId
-    },
-    collector: {
-      exchange,
-      market,
-      data_type: dataType,
-      intervals: normalizedIntervals
-    },
-    target: {
-      dataset_id: datasetId,
-      job_type: jobType
-    },
-    schedule: {
-      interval: sameCollectShape ? String(existingSchedule.interval || "30m") : "30m",
-      timezone: sameCollectShape ? String(existingSchedule.timezone || "Asia/Shanghai") : "Asia/Shanghai",
-      intervals: normalizedIntervals
-    }
-  };
 };
 
 // K线周期选项（常量，避免每次渲染重新创建）
@@ -548,21 +343,13 @@ const getDataSourceLabel = (value: string) => {
   return labels[value] || value;
 };
 
-// 当前 collector 只内置 Binance 实现。不要在管理台暴露尚未实现的数据源，
-// 避免生成无法执行的采集规则。
-const supportedDataSourceOptions = [{ label: "币安 (Binance)", value: "binance" }];
-
-const supportedDataSourceValues = new Set(supportedDataSourceOptions.map(option => option.value));
-
-const toSupportedDataSourceOptions = (options: Array<{ label?: string; value?: string }>) => {
-  const normalized = options
-    .filter(option => option.value && supportedDataSourceValues.has(option.value))
+const toDataSourceOptions = (options: Array<{ label?: string; value?: string }>) =>
+  options
+    .filter(option => option.value)
     .map(option => ({
       label: option.label || getDataSourceLabel(option.value as string),
       value: option.value as string
     }));
-  return normalized.length > 0 ? normalized : supportedDataSourceOptions;
-};
 
 const normalizeObject = (value: any): Record<string, any> => {
   if (!value) return {};
@@ -591,7 +378,7 @@ const normalizeTaskConfig = (raw: any): TaskConfig => ({
 const dataSourceOptionsFromConfig = (value: any) => {
   const config = normalizeObject(value);
   if (config.options && Array.isArray(config.options)) {
-    return toSupportedDataSourceOptions(
+    return toDataSourceOptions(
       config.options.map((option: any) => ({
         label: option.label || getDataSourceLabel(option.value),
         value: option.value
@@ -599,7 +386,7 @@ const dataSourceOptionsFromConfig = (value: any) => {
     );
   }
   if (Array.isArray(value)) {
-    return toSupportedDataSourceOptions(
+    return toDataSourceOptions(
       value.map((source: string) => ({
         label: getDataSourceLabel(source),
         value: source
@@ -730,123 +517,98 @@ const getDataTypeConfigs = async () => {
   }
 };
 
-// 获取特定数据类型的字段配置
-const getFieldConfigs = async (dataType: string) => {
-  if (!dataType) {
-    currentFieldConfigs.value = [];
+const loadDataSourceOptionsForType = (dataType: string) => {
+  loadingDataSources.value = true;
+  const config = dataTypeConfigs.value.find(item => item.data_type === dataType);
+  dataSourceOptions.value = config ? dataSourceOptionsFromConfig(config.data_source_options) : [];
+  loadingDataSources.value = false;
+};
+
+const loadActiveDatasets = async () => {
+  const spaceId = selectedSpaceId.value || "";
+  if (!spaceId) {
+    activeDatasets.value = [];
     return;
   }
-
+  loadingDatasets.value = true;
   try {
-    const data = await callControl<{ data_type: string }, { detail?: { config?: DataTypeConfig; fields?: FieldConfig[] } }>(
-      "collectmgr",
-      "GetDataTypeConfigWithFields",
-      { data_type: dataType }
-    );
-    const detail = data.detail || null;
-    if (detail) {
-      currentFieldConfigs.value = detail.fields || [];
-      // 注意：不在这里调用 initializeDynamicFormData，由调用方控制初始化
-      // 加载数据源选项，优先使用数据类型配置中的数据源选项
-      if (detail.config?.data_source_options) {
-        loadDataSourceOptions(detail.config.data_source_options);
-      } else if (detail.fields && detail.fields.length > 0 && detail.fields[0].data_source_options) {
-        // 如果数据类型配置中没有，尝试使用字段配置中的数据源选项
-        loadDataSourceOptions(detail.fields[0].data_source_options);
-      } else {
-        // 如果都没有，使用默认选项
-        loadDataSourceOptions();
-      }
-    } else {
-      currentFieldConfigs.value = [];
-      dataSourceOptions.value = [];
+    const datasets: Dataset[] = [];
+    for (let page = 1; ; page += 1) {
+      const response = await listDatasets({
+        space_id: spaceId,
+        status: "active",
+        page: { page, size: 500 }
+      });
+      datasets.push(...(response.datasets || []).filter(dataset => dataset.status === "active"));
+      if (!response.page_result?.has_more || (response.datasets || []).length === 0) break;
     }
+    activeDatasets.value = datasets;
   } catch (error) {
-    console.error("获取字段配置失败:", error);
-    Message.error("获取字段配置失败");
-    currentFieldConfigs.value = [];
+    console.error("获取 Dataset 失败:", error);
+    activeDatasets.value = [];
+    Message.error("获取 Dataset 失败");
+  } finally {
+    loadingDatasets.value = false;
   }
 };
 
-// 初始化动态表单数据（使用独立的 ref 变量）
-const initializeDynamicFormData = (existingParams?: { [key: string]: any }) => {
-  objectsSelectAll.value = false;
-  const collectorParams = normalizeObject(existingParams?.collector);
-  const scheduleParams = normalizeObject(existingParams?.schedule);
-  const instType = existingParams?.inst_type ?? instTypeFromMarket(collectorParams.market);
-  const intervalParams = existingParams?.intervals ?? collectorParams.intervals ?? scheduleParams.intervals;
-
-  // 解析并设置 inst_type（产品类型）
-  if (instType !== undefined) {
-    instTypeValue.value = instType || "SPOT";
-  } else {
-    instTypeValue.value = "SPOT";
-  }
-
-  // 解析并设置 inst_types（产品类型多选，用于标的数据）
-  if (existingParams?.inst_types !== undefined) {
-    const instTypesVal = existingParams.inst_types;
-    instTypesValue.value = Array.isArray(instTypesVal) ? instTypesVal : instTypesVal ? [instTypesVal] : ["SPOT"];
-  } else if (collectorParams.market !== undefined) {
-    instTypesValue.value = [instTypeFromMarket(collectorParams.market)];
-  } else {
-    instTypesValue.value = ["SPOT"];
-  }
-
-  // 解析并设置 objects
-  if (existingParams?.objects !== undefined) {
-    const objVal = existingParams.objects;
-    objectsValue.value = Array.isArray(objVal) ? objVal : objVal ? [objVal] : [];
-    // 检查是否为全部标的
-    if (objectsValue.value.length === 1 && objectsValue.value[0] === "*") {
-      objectsSelectAll.value = true;
-    }
-  } else {
-    objectsValue.value = [];
-  }
-
-  // 解析并设置 intervals
-  if (intervalParams !== undefined) {
-    const intVal = intervalParams;
-    intervalsValue.value = Array.isArray(intVal) ? intVal : intVal ? [intVal] : [];
-  } else {
-    intervalsValue.value = [];
-  }
-
-  // 解析并设置 depth
-  if (existingParams?.depth !== undefined) {
-    depthValue.value = typeof existingParams.depth === "number" ? existingParams.depth : undefined;
-  } else {
-    depthValue.value = undefined;
-  }
-
-  // 解析并设置 sources
-  if (existingParams?.sources !== undefined) {
-    const srcVal = existingParams.sources;
-    sourcesValue.value = Array.isArray(srcVal) ? srcVal : srcVal ? [srcVal] : [];
-  } else {
-    sourcesValue.value = [];
-  }
-
-  // 解析并设置 keywords
-  if (existingParams?.keywords !== undefined) {
-    const kwVal = existingParams.keywords;
-    keywordsValue.value = Array.isArray(kwVal) ? kwVal : kwVal ? [kwVal] : [];
-  } else {
-    keywordsValue.value = [];
-  }
-};
-
-// 重置所有动态字段
-const resetDynamicFields = () => {
-  instTypeValue.value = "SPOT";
-  instTypesValue.value = ["SPOT"];
-  objectsValue.value = [];
+const resetRuleFields = () => {
+  marketValue.value = "spot";
+  datasetIdValue.value = "";
   intervalsValue.value = [];
-  depthValue.value = undefined;
-  sourcesValue.value = [];
-  keywordsValue.value = [];
-  objectsSelectAll.value = false;
+  scheduleIntervalValue.value = "";
+};
+
+const isRecord = (value: unknown): value is Record<string, any> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
+  const params: unknown = JSON.parse(raw || "{}");
+  if (!isRecord(params) || !isRecord(params.source) || !isRecord(params.collector)) {
+    throw new Error("规则参数不是当前支持的结构");
+  }
+  if (!isRecord(params.target) || !isRecord(params.schedule)) {
+    throw new Error("规则参数不是当前支持的结构");
+  }
+
+  const source = params.source;
+  const collector = params.collector;
+  const target = params.target;
+  const schedule = params.schedule;
+  if (
+    "objects" in params ||
+    "inst_type" in params ||
+    "inst_types" in params ||
+    "job_type" in target ||
+    "timezone" in schedule ||
+    "intervals" in schedule
+  ) {
+    throw new Error("规则包含已删除字段，请按新结构重新创建");
+  }
+
+  const dataType = collector.data_type;
+  const exchange = String(collector.exchange || "").trim();
+  const market = collector.market;
+  const datasetId = String(target.dataset_id || "").trim();
+  const scheduleInterval = String(schedule.interval || "").trim();
+  const intervals = Array.isArray(collector.intervals)
+    ? collector.intervals.map((interval: unknown) => String(interval || "").trim()).filter(Boolean)
+    : [];
+  if (dataType !== "kline" && dataType !== "symbol") {
+    throw new Error("规则数据类型无效");
+  }
+  if (!exchange || (market !== "spot" && market !== "swap") || !datasetId || !scheduleInterval) {
+    throw new Error("规则缺少必填参数");
+  }
+  if (dataType === "kline") {
+    if (source.kind !== "dataset_subjects" || source.dataset_id !== datasetId || intervals.length === 0) {
+      throw new Error("K线规则参数无效");
+    }
+  } else if (source.kind !== "none") {
+    throw new Error("标的规则参数无效");
+  }
+
+  return { dataType, exchange, market, datasetId, intervals, scheduleInterval };
 };
 
 const onAdd = () => {
@@ -860,80 +622,41 @@ const onAdd = () => {
     enabled: "true",
     creator: account.value.user.userName || ""
   };
-  currentFieldConfigs.value = [];
-  resetDynamicFields();
+  resetRuleFields();
   dataSourceOptions.value = [];
-  activeDataType.value = "";
   open.value = true;
 };
 
 const onUpdate = (record: TaskConfig) => {
-  title.value = "修改采集规则";
-  addForm.value = { ...record };
-  activeDataType.value = record.data_type;
-
-  // 解析现有的采集参数
-  let existingParams: { [key: string]: any } = {};
+  let input: CollectorRuleInput;
   try {
-    existingParams = JSON.parse(record.collect_params || "{}");
+    input = parseStrictRuleParams(record.collect_params);
   } catch (error) {
     console.error("解析现有采集参数失败:", error);
+    Message.error(error instanceof Error ? error.message : "解析现有采集参数失败");
+    return;
   }
 
-  // 使用现有参数初始化动态表单
-  initializeDynamicFormData(existingParams);
-
-  // 如果有数据类型，加载对应的字段配置
-  if (record.data_type) {
-    getFieldConfigs(record.data_type).then(() => {
-      // 设置数据源值
-      if (record.data_source) {
-        addForm.value.data_source = record.data_source;
-      }
-    });
-  }
-
+  title.value = "修改采集规则";
+  addForm.value = {
+    ...record,
+    data_type: input.dataType,
+    data_source: input.exchange
+  };
+  marketValue.value = input.market;
+  datasetIdValue.value = input.datasetId;
+  intervalsValue.value = input.intervals;
+  scheduleIntervalValue.value = input.scheduleInterval;
+  loadDataSourceOptionsForType(input.dataType);
   open.value = true;
 };
 
-// 数据类型变化处理
 const onDataTypeChange = (value: string) => {
-  // 如果数据类型没有实际变化，不执行任何操作
-  if (value === activeDataType.value) {
-    return;
-  }
-  activeDataType.value = value;
-
   addForm.value.data_type = value;
-  // 重置数据源选择
   addForm.value.data_source = "";
-  // 重置全部标的选项
-  objectsSelectAll.value = false;
-
-  if (value) {
-    // 注意：切换数据类型时不重置已填写的字段值，只加载字段配置
-    getFieldConfigs(value);
-  } else {
-    currentFieldConfigs.value = [];
-    resetDynamicFields();
-    dataSourceOptions.value = [];
-  }
-};
-
-// 加载数据源选项
-const loadDataSourceOptions = (dataSources?: any) => {
-  loadingDataSources.value = true;
-  dataSourceOptions.value = [];
-
-  if (dataSources) {
-    const options = dataSourceOptionsFromConfig(dataSources);
-    dataSourceOptions.value = options.length > 0 ? options : supportedDataSourceOptions;
-  } else {
-    // 如果没有提供数据源配置，仅提供当前已实现的数据源
-    dataSourceOptions.value = supportedDataSourceOptions;
-  }
-
-  loadingDataSources.value = false;
+  datasetIdValue.value = "";
+  intervalsValue.value = [];
+  loadDataSourceOptionsForType(value);
 };
 
 const afterClose = () => {
@@ -941,31 +664,8 @@ const afterClose = () => {
   open.value = false;
 };
 
-// 获取动态字段值的辅助函数
-const getDynamicFieldValue = (fieldKey: string): any => {
-  switch (fieldKey) {
-    case "inst_type":
-      return instTypeValue.value;
-    case "inst_types":
-      return instTypesValue.value;
-    case "objects":
-      return objectsValue.value;
-    case "intervals":
-      return intervalsValue.value;
-    case "depth":
-      return depthValue.value;
-    case "sources":
-      return sourcesValue.value;
-    case "keywords":
-      return keywordsValue.value;
-    default:
-      return undefined;
-  }
-};
-
 const handleOk = async (): Promise<boolean> => {
   try {
-    // 验证表单数据
     if (!addForm.value.data_type) {
       Message.error("请选择数据类型");
       return false;
@@ -981,16 +681,21 @@ const handleOk = async (): Promise<boolean> => {
       return false;
     }
 
-    // 验证交易标的（当数据类型需要 objects 字段时）
-    if (hasField("objects") && (!objectsValue.value || objectsValue.value.length === 0)) {
-      Message.error("请输入交易标的");
+    if (addForm.value.data_type !== "kline" && addForm.value.data_type !== "symbol") {
+      Message.error("不支持的数据类型");
       return false;
     }
 
-    addForm.value.collect_params = JSON.stringify(buildStandardCollectParams());
-    const collectParams = normalizeObject(addForm.value.collect_params);
+    const collectParams = buildCollectorRuleParams({
+      dataType: addForm.value.data_type,
+      exchange: addForm.value.data_source,
+      market: marketValue.value,
+      datasetId: datasetIdValue.value,
+      intervals: intervalsValue.value,
+      scheduleInterval: scheduleIntervalValue.value
+    });
+    addForm.value.collect_params = JSON.stringify(collectParams);
 
-    // 准备请求数据
     const requestData: any = {
       space_id: spaceId,
       data_type: addForm.value.data_type,
@@ -1000,7 +705,6 @@ const handleOk = async (): Promise<boolean> => {
       creator: addForm.value.creator || account.value.user?.userName || ""
     };
 
-    // 如果是修改操作，添加rule_id
     if (title.value.includes("修改") && addForm.value.rule_id) {
       requestData.rule_id = addForm.value.rule_id;
     }
@@ -1021,10 +725,8 @@ const handleOk = async (): Promise<boolean> => {
     getTaskList();
     return true;
   } catch (error) {
-    if (error && typeof error === "object" && (error as any).message) {
-      Message.error(`网络请求失败: ${(error as any).message}`);
-    } else if (error instanceof SyntaxError) {
-      Message.error("JSON格式错误，请检查输入");
+    if (error instanceof Error && error.message) {
+      Message.error(error.message);
     } else {
       Message.error(title.value.includes("新建") ? "创建失败，请检查网络连接" : "更新失败，请检查网络连接");
     }
@@ -1068,12 +770,12 @@ const onViewDetails = (record: TaskConfig) => {
   detailVisible.value = true;
 };
 
-// Watch for Space changes
 watch(selectedSpaceId, () => {
+  datasetIdValue.value = "";
   getTaskList();
+  loadActiveDatasets();
 });
 
-// Watch for search data type changes
 watch(
   () => form.value.dataType,
   newDataType => {
@@ -1087,6 +789,7 @@ watch(
 onMounted(() => {
   getTaskList();
   getDataTypeConfigs();
+  loadActiveDatasets();
 });
 </script>
 
@@ -1112,36 +815,6 @@ pre {
   border-radius: 4px;
   max-height: 200px;
   overflow: auto;
-}
-
-.objects-input-wrapper {
-  width: 100%;
-}
-
-.select-all-hint {
-  margin-top: var(--moox-space-2);
-  padding: var(--moox-space-2) var(--moox-space-3);
-  background: #f0f9eb;
-  border: 1px solid #c6e7c6;
-  border-radius: 4px;
-  color: #67c23a;
-  font-size: 13px;
-}
-
-.custom-form-item {
-  margin-bottom: var(--moox-space-5);
-}
-
-.custom-form-label {
-  margin-bottom: var(--moox-space-2);
-  color: var(--color-text-2);
-  font-size: 14px;
-}
-
-.custom-form-extra {
-  margin-top: var(--moox-space-1);
-  color: var(--color-text-3);
-  font-size: 12px;
 }
 
 :deep(.arco-checkbox-group) {

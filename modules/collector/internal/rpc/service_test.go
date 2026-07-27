@@ -40,7 +40,7 @@ func validCollectParams(t *testing.T) *structpb.Struct {
 	st, err := structpb.NewStruct(map[string]any{
 		"source":    map[string]any{"kind": "none"},
 		"collector": map[string]any{"exchange": "binance", "market": "spot", "data_type": "symbol"},
-		"target":    map[string]any{"dataset_id": "ds-1", "job_type": "collect.symbol"},
+		"target":    map[string]any{"dataset_id": "ds-1"},
 		"schedule":  map[string]any{"interval": "1h"},
 	})
 	require.NoError(t, err)
@@ -86,6 +86,33 @@ func TestCollectorService_TaskRuleCRUD(t *testing.T) {
 	disableRsp, err := svc.DisableTaskRule(ctx, &pb.DisableTaskRuleReq{SpaceId: "crypto", RuleId: "rule-1"})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, disableRsp.GetRetInfo().GetCode())
+}
+
+func TestValidateTaskRuleRejectsUnsupportedOrLegacyContracts(t *testing.T) {
+	base := domain.TaskRule{
+		SpaceID: "crypto", RuleID: "rule-1", Exchange: "binance", DataType: "kline",
+		CollectParams: `{
+			"source":{"kind":"dataset_subjects","dataset_id":"kline"},
+			"collector":{"exchange":"binance","market":"spot","data_type":"kline","intervals":["1m"]},
+			"target":{"dataset_id":"kline"},
+			"schedule":{"interval":"1m"}
+		}`,
+	}
+	require.NoError(t, validateTaskRule(base))
+
+	unsupported := base
+	unsupported.Exchange = "okx"
+	unsupported.CollectParams = strings.ReplaceAll(base.CollectParams, "binance", "okx")
+	require.ErrorContains(t, validateTaskRule(unsupported), "unsupported collector")
+
+	legacy := base
+	legacy.CollectParams = strings.Replace(
+		base.CollectParams,
+		`"target":{"dataset_id":"kline"}`,
+		`"target":{"dataset_id":"kline","job_type":"collect.kline"}`,
+		1,
+	)
+	require.ErrorContains(t, validateTaskRule(legacy), "unknown field")
 }
 
 func TestCollectorService_GetDataTypeConfigs(t *testing.T) {
@@ -142,7 +169,7 @@ func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWak
 			CollectParams: `{
 				"source":{"kind":"none"},
 				"collector":{"exchange":"binance","market":"spot","data_type":"symbol"},
-				"target":{"dataset_id":"symbols","job_type":"collect.symbol"},
+				"target":{"dataset_id":"symbols"},
 				"schedule":{"interval":"30m"}
 			}`,
 			Enabled: true,
@@ -339,8 +366,8 @@ func TestGetDataTypeConfigWithFieldsNormalizesDataType(t *testing.T) {
 	if rsp.GetDetail().GetConfig().GetDataType() != "kline" {
 		t.Fatalf("data_type = %q, want kline", rsp.GetDetail().GetConfig().GetDataType())
 	}
-	if len(rsp.GetDetail().GetFields()) != 3 {
-		t.Fatalf("len(fields) = %d, want 3", len(rsp.GetDetail().GetFields()))
+	if len(rsp.GetDetail().GetFields()) != 2 {
+		t.Fatalf("len(fields) = %d, want 2", len(rsp.GetDetail().GetFields()))
 	}
 }
 

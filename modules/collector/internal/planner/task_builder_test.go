@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +28,7 @@ func TestTaskBuilder_BuildDatasetDrivenInstances_EmptySubjects_ShouldReturnEmpty
 		SpaceID:       "space-1",
 		Exchange:      "binance",
 		DataType:      "kline",
-		CollectParams: `{"collector":{"exchange":"binance","market":"spot","data_type":"kline","intervals":["1m"]},"target":{"dataset_id":"ds-1","job_type":"` + jobs.JobTypeCollectKline + `"}}`,
+		CollectParams: `{"source":{"kind":"dataset_subjects","dataset_id":"ds-1"},"collector":{"exchange":"binance","market":"spot","data_type":"kline","intervals":["1m"]},"target":{"dataset_id":"ds-1"},"schedule":{"interval":"1m"}}`,
 	}
 	instances, err := b.BuildDatasetDrivenInstances(context.Background(), rule, nil)
 	require.NoError(t, err)
@@ -40,7 +39,8 @@ func TestTaskBuilder_BuildInstancesWithParams_KlineSubjects_ShouldCreateInstance
 	b := NewTaskBuilder()
 	params := &domain.CollectParams{}
 	params.Normalize("binance", "kline")
-	params.Target.JobType = jobs.JobTypeCollectKline
+	params.Source.Kind = "dataset_subjects"
+	params.Collector.Market = "spot"
 	params.Target.DatasetID = "ds-1"
 	params.Collector.Intervals = []string{"1m", "5m"}
 
@@ -59,7 +59,8 @@ func TestTaskBuilder_BuildInstancesWithParams_SymbolJob_ShouldCreateSingleInstan
 	b := NewTaskBuilder()
 	params := &domain.CollectParams{}
 	params.Normalize("binance", "symbol")
-	params.Target.JobType = jobs.JobTypeCollectSymbol
+	params.Source.Kind = "none"
+	params.Collector.Market = "spot"
 	params.Target.DatasetID = "ds-symbol"
 
 	rule := &domain.TaskRule{RuleID: "rule-2", SpaceID: "space-1"}

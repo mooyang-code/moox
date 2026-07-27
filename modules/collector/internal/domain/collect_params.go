@@ -2,9 +2,12 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
+	"time"
 )
 
 // CollectParams describes how a rule generates concrete task instances.
@@ -33,14 +36,11 @@ type CollectorSpec struct {
 // CollectTarget describes where collected rows should be written.
 type CollectTarget struct {
 	DatasetID string `json:"dataset_id"`
-	JobType   string `json:"job_type"`
 }
 
 // CollectSchedule describes task frequency dimensions.
 type CollectSchedule struct {
-	Interval  string   `json:"interval"`
-	Timezone  string   `json:"timezone"`
-	Intervals []string `json:"intervals"`
+	Interval string `json:"interval"`
 }
 
 // ParseCollectParams parses rule JSON and normalizes the standard shape.
@@ -50,71 +50,72 @@ func ParseCollectParams(raw string, fallbackExchange string, fallbackDataType st
 		raw = "{}"
 	}
 	var params CollectParams
-	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+	decoder := json.NewDecoder(bytes.NewBufferString(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&params); err != nil {
 		return nil, fmt.Errorf("parse collect params: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("parse collect params: trailing JSON value")
 	}
 	params.Normalize(fallbackExchange, fallbackDataType)
 	return &params, nil
 }
 
-// Normalize fills defaults for the standard collect params shape.
+// Normalize canonicalizes the standard collect params shape.
 func (p *CollectParams) Normalize(fallbackExchange string, fallbackDataType string) {
-	dataType := p.Collector.DataType
-	if dataType == "" {
-		dataType = fallbackDataType
-	}
-	if p.Source.Kind == "" {
-		if strings.EqualFold(dataType, "symbol") {
-			p.Source.Kind = "none"
-		} else {
-			p.Source.Kind = "dataset_subjects"
-		}
-	}
 	if p.Collector.Exchange == "" {
 		p.Collector.Exchange = fallbackExchange
-	}
-	if p.Collector.Market == "" {
-		p.Collector.Market = "spot"
 	}
 	if p.Collector.DataType == "" {
 		p.Collector.DataType = fallbackDataType
 	}
 	p.Source.Kind = strings.ToLower(strings.TrimSpace(p.Source.Kind))
+	p.Source.DatasetID = strings.TrimSpace(p.Source.DatasetID)
 	p.Collector.Exchange = strings.ToLower(strings.TrimSpace(p.Collector.Exchange))
 	p.Collector.Market = strings.ToLower(strings.TrimSpace(p.Collector.Market))
 	p.Collector.DataType = strings.ToLower(strings.TrimSpace(p.Collector.DataType))
-	if len(p.Collector.Intervals) == 0 && !strings.EqualFold(p.Collector.DataType, "symbol") {
-		p.Collector.Intervals = append([]string(nil), p.Schedule.Intervals...)
+	for i := range p.Collector.Intervals {
+		p.Collector.Intervals[i] = strings.TrimSpace(p.Collector.Intervals[i])
 	}
-	if len(p.Collector.Intervals) == 0 && !strings.EqualFold(p.Collector.DataType, "symbol") {
-		p.Collector.Intervals = []string{"1m"}
-	}
-	if p.Source.DatasetID == "" {
-		p.Source.DatasetID = inferDatasetID(p.Collector.Exchange, p.Collector.Market, p.Collector.DataType)
-	}
-	if p.Target.DatasetID == "" {
-		p.Target.DatasetID = p.Source.DatasetID
-	}
-	if p.Target.JobType == "" {
-		p.Target.JobType = "collect." + p.Collector.DataType
-	}
-	if p.Schedule.Interval == "" {
-		p.Schedule.Interval = "30m"
-	}
-	if p.Schedule.Timezone == "" {
-		p.Schedule.Timezone = "Asia/Shanghai"
-	}
+	p.Target.DatasetID = strings.TrimSpace(p.Target.DatasetID)
+	p.Schedule.Interval = strings.TrimSpace(p.Schedule.Interval)
 }
 
-func inferDatasetID(exchange string, market string, dataType string) string {
-	if exchange == "" {
-		exchange = "binance"
+// Validate checks the single supported rule JSON contract.
+func (p *CollectParams) Validate() error {
+	if p == nil {
+		return fmt.Errorf("collect params are required")
 	}
-	if market == "" {
-		market = "spot"
+	if p.Collector.Exchange == "" || p.Collector.Market == "" || p.Collector.DataType == "" {
+		return fmt.Errorf("collector exchange, market and data_type are required")
 	}
-	if dataType == "" {
-		dataType = "kline"
+	if p.Target.DatasetID == "" {
+		return fmt.Errorf("target.dataset_id is required")
 	}
-	return strings.ToLower(exchange + "_" + market + "_" + dataType)
+	interval, err := time.ParseDuration(p.Schedule.Interval)
+	if err != nil || interval <= 0 {
+		return fmt.Errorf("schedule.interval must be a positive duration")
+	}
+	switch p.Collector.DataType {
+	case "kline":
+		if p.Source.Kind != "dataset_subjects" || p.Source.DatasetID == "" {
+			return fmt.Errorf("kline source.dataset_id is required with source.kind=dataset_subjects")
+		}
+		if len(p.Collector.Intervals) == 0 {
+			return fmt.Errorf("collector.intervals is required for kline")
+		}
+		for _, value := range p.Collector.Intervals {
+			if value == "" {
+				return fmt.Errorf("collector.intervals must not contain empty values")
+			}
+		}
+	case "symbol":
+		if p.Source.Kind != "none" {
+			return fmt.Errorf("symbol source.kind must be none")
+		}
+	default:
+		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)
+	}
+	return nil
 }

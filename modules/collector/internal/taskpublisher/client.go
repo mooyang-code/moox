@@ -10,23 +10,19 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	"golang.org/x/sync/errgroup"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const (
-	submitJobItemBatchSize   = 25
-	submitJobItemConcurrency = 8
-)
+const submitJobItemBatchSize = 25
 
 // AuthConfig describes HMAC auth for /api/service/cloudnode/* calls.
 type AuthConfig struct {
@@ -76,50 +72,34 @@ func New(cfg Config) *Client {
 func (c *Client) SubmitCollectorJobItems(ctx context.Context, instances []domain.TaskInstance) (map[string]string, error) {
 	jobItems := make([]*pb.JobItem, 0, len(instances))
 	for _, instance := range instances {
-		jobItems = append(jobItems, buildJobItem(instance))
+		item, err := buildJobItem(instance)
+		if err != nil {
+			return nil, fmt.Errorf("build collector job item task_id=%s: %w", strings.TrimSpace(instance.TaskID), err)
+		}
+		jobItems = append(jobItems, item)
 	}
 	if len(jobItems) == 0 {
 		return map[string]string{}, nil
 	}
 	idsByTaskID := make(map[string]string, len(jobItems))
-	var idsMu sync.Mutex
-	var group errgroup.Group
-	semaphore := make(chan struct{}, submitJobItemConcurrency)
-	var batchErrors []error
 	for start := 0; start < len(jobItems); start += submitJobItemBatchSize {
+		if err := ctx.Err(); err != nil {
+			return idsByTaskID, err
+		}
 		end := start + submitJobItemBatchSize
 		if end > len(jobItems) {
 			end = len(jobItems)
 		}
-		batchStart, batchEnd := start, end
 		batch := append([]*pb.JobItem(nil), jobItems[start:end]...)
-		group.Go(func() error {
-			select {
-			case semaphore <- struct{}{}:
-			case <-ctx.Done():
-				idsMu.Lock()
-				batchErrors = append(batchErrors, ctx.Err())
-				idsMu.Unlock()
-				return nil
-			}
-			defer func() { <-semaphore }()
-
-			ids, err := c.submitCollectorJobItemBatch(ctx, batch, batchStart, batchEnd)
-			idsMu.Lock()
-			for taskID, jobItemID := range ids {
-				idsByTaskID[taskID] = jobItemID
-			}
-			if err != nil {
-				batchErrors = append(batchErrors, err)
-				idsMu.Unlock()
-				return nil
-			}
-			idsMu.Unlock()
-			return nil
-		})
+		ids, err := c.submitCollectorJobItemBatch(ctx, batch, start, end)
+		for taskID, jobItemID := range ids {
+			idsByTaskID[taskID] = jobItemID
+		}
+		if err != nil {
+			return idsByTaskID, err
+		}
 	}
-	_ = group.Wait()
-	return idsByTaskID, errors.Join(batchErrors...)
+	return idsByTaskID, nil
 }
 
 func (c *Client) submitCollectorJobItemBatch(ctx context.Context, batch []*pb.JobItem, start, end int) (map[string]string, error) {
@@ -192,30 +172,44 @@ func normalizeGatewayTarget(raw string) string {
 }
 
 // PrepareScheduledInstances assigns the next execution boundary and stable queue identity.
-func PrepareScheduledInstances(instances []domain.TaskInstance, now time.Time) []domain.TaskInstance {
+func PrepareScheduledInstances(instances []domain.TaskInstance, now time.Time) ([]domain.TaskInstance, error) {
 	prepared := append([]domain.TaskInstance(nil), instances...)
 	for i := range prepared {
-		payload := parsePayload(prepared[i].TaskParams)
+		payload, err := parsePayload(prepared[i].TaskParams)
+		if err != nil {
+			return nil, fmt.Errorf("parse task params task_id=%s: %w", strings.TrimSpace(prepared[i].TaskID), err)
+		}
 		executeAt := nextExecuteAt(now, valueString(payload, "schedule_interval", "30m"))
 		prepared[i].ExecuteAt = executeAt
 		prepared[i].CloudJobItemID = scheduledJobItemID(prepared[i].TaskID, executeAt)
 	}
-	return prepared
+	return prepared, nil
 }
 
-func buildJobItem(instance domain.TaskInstance) *pb.JobItem {
-	payload := parsePayload(instance.TaskParams)
+func buildJobItem(instance domain.TaskInstance) (*pb.JobItem, error) {
+	payload, err := parsePayload(instance.TaskParams)
+	if err != nil {
+		return nil, fmt.Errorf("parse task params: %w", err)
+	}
+	route, ok := jobs.JobRouteFor(instance.Exchange, instance.DataType)
+	if !ok {
+		return nil, fmt.Errorf("collector job route not found: exchange=%s data_type=%s",
+			strings.TrimSpace(instance.Exchange), strings.TrimSpace(instance.DataType))
+	}
 	payload["space_id"] = instance.SpaceID
 	payload["task_id"] = instance.TaskID
 	if !instance.ExecuteAt.IsZero() {
 		payload["schedule_window"] = instance.ExecuteAt.UTC().Format(time.RFC3339)
 	}
-	payloadStruct, _ := structpb.NewStruct(payload)
+	payloadStruct, err := structpb.NewStruct(payload)
+	if err != nil {
+		return nil, fmt.Errorf("build job item params: %w", err)
+	}
 	item := &pb.JobItem{
 		SpaceId:   instance.SpaceID,
 		JobId:     instance.RuleID,
 		JobItemId: strings.TrimSpace(instance.CloudJobItemID),
-		JobType:   jobType(payload),
+		JobType:   route.JobType,
 		Params:    payloadStruct,
 		Priority:  100,
 	}
@@ -225,7 +219,7 @@ func buildJobItem(instance domain.TaskInstance) *pb.JobItem {
 	if !instance.ExecuteAt.IsZero() {
 		item.ExecuteAt = timestamppb.New(instance.ExecuteAt.UTC())
 	}
-	return item
+	return item, nil
 }
 
 func jobItemIDsByTaskID(items []*pb.JobItem, acks []*pb.JobItemAck) (map[string]string, error) {
@@ -286,20 +280,15 @@ func scheduledJobItemID(taskID string, executeAt time.Time) string {
 	return taskID + ":" + executeAt.UTC().Format(time.RFC3339)
 }
 
-func jobType(payload map[string]any) string {
-	if value := valueString(payload, "job_type", ""); value != "" {
-		return value
-	}
-	dataType := valueString(payload, "data_type", "kline")
-	return "collect." + dataType
-}
-
-func parsePayload(raw string) map[string]any {
+func parsePayload(raw string) (map[string]any, error) {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return map[string]any{}
+		return nil, err
 	}
-	return payload
+	if payload == nil {
+		return nil, fmt.Errorf("task params must be a JSON object")
+	}
+	return payload, nil
 }
 
 func valueString(payload map[string]any, key string, fallback string) string {

@@ -4,6 +4,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -309,15 +310,20 @@ func (s *Service) ScheduleTasks(ctx context.Context, req *pb.ScheduleTasksReq) (
 		now = s.now().UTC()
 	}
 	total := 0
+	var scheduleErr error
 	for i := range rules {
 		created, err := s.scheduleRule(ctx, &rules[i], now)
 		if err != nil {
 			log.ErrorContextf(ctx, "[Collector] schedule rule %s failed: %v", rules[i].RuleID, err)
-			return &pb.ScheduleTasksRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+			scheduleErr = errors.Join(scheduleErr, fmt.Errorf("rule %s: %w", rules[i].RuleID, err))
+			continue
 		}
 		total += created
 	}
 	log.InfoContextf(ctx, "[Collector] scheduled tasks space_id=%s rules=%d instances=%d", spaceID, len(rules), total)
+	if scheduleErr != nil {
+		return &pb.ScheduleTasksRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, scheduleErr.Error())}, nil
+	}
 	return &pb.ScheduleTasksRsp{RetInfo: retOK()}, nil
 }
 
@@ -337,15 +343,22 @@ func (s *Service) scheduleRule(ctx context.Context, rule *domain.TaskRule, now t
 	if err != nil {
 		return 0, fmt.Errorf("build instances for rule %s: %w", rule.RuleID, err)
 	}
-	instances = taskpublisher.PrepareScheduledInstances(instances, now)
-	if err := s.instanceRepo.UpsertMany(ctx, instances); err != nil {
-		return 0, fmt.Errorf("upsert instances for rule %s: %w", rule.RuleID, err)
+	instances, err = taskpublisher.PrepareScheduledInstances(instances, now)
+	if err != nil {
+		return 0, fmt.Errorf("prepare instances for rule %s: %w", rule.RuleID, err)
 	}
-	_, submitErr := s.cloudJobs.SubmitCollectorJobItems(ctx, instances)
+	reserved, err := s.instanceRepo.ReserveMany(ctx, instances)
+	if err != nil {
+		return 0, fmt.Errorf("reserve instances for rule %s: %w", rule.RuleID, err)
+	}
+	if len(reserved) == 0 {
+		return 0, nil
+	}
+	_, submitErr := s.cloudJobs.SubmitCollectorJobItems(ctx, reserved)
 	if submitErr != nil {
 		return 0, fmt.Errorf("submit cloud job items for rule %s: %w", rule.RuleID, submitErr)
 	}
-	return len(instances), nil
+	return len(reserved), nil
 }
 
 // GetDataTypeConfigs returns the currently supported collector rule data types.
@@ -400,8 +413,27 @@ func validateTaskRule(rule domain.TaskRule) error {
 	if strings.TrimSpace(rule.Exchange) == "" {
 		return fmt.Errorf("exchange is required")
 	}
-	if _, err := domain.ParseCollectParams(rule.CollectParams, rule.Exchange, rule.DataType); err != nil {
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Exchange, rule.DataType)
+	if err != nil {
 		return fmt.Errorf("invalid collect_params: %w", err)
+	}
+	if err := params.Validate(); err != nil {
+		return fmt.Errorf("invalid collect_params: %w", err)
+	}
+	definition, ok := jobs.JobDefinitionByDataType(params.Collector.DataType)
+	_, routeOK := jobs.JobRouteFor(params.Collector.Exchange, params.Collector.DataType)
+	if !ok || !routeOK || !definition.Matches(params) {
+		return fmt.Errorf(
+			"unsupported collector: exchange=%s market=%s data_type=%s source_kind=%s",
+			params.Collector.Exchange,
+			params.Collector.Market,
+			params.Collector.DataType,
+			params.Source.Kind,
+		)
+	}
+	if !strings.EqualFold(rule.Exchange, params.Collector.Exchange) ||
+		!strings.EqualFold(rule.DataType, params.Collector.DataType) {
+		return fmt.Errorf("rule identity does not match collect_params collector")
 	}
 	return nil
 }
