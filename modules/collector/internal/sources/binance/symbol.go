@@ -190,6 +190,16 @@ func (c *SymbolCollector) reportSymbols(
 		}
 		writer = newStorageWriter(target, target, storageAuthInfo(binding))
 	}
+	memberships, err := writer.ListDatasetSubjects(ctx, spaceID, datasetID)
+	if err != nil {
+		return "", fmt.Errorf("list symbol memberships for dataset %s: %w", datasetID, err)
+	}
+	existingActive := make(map[string]struct{}, len(memberships))
+	for _, membership := range memberships {
+		if membership != nil && strings.EqualFold(strings.TrimSpace(membership.GetStatus()), "active") {
+			existingActive[strings.TrimSpace(membership.GetSubjectId())] = struct{}{}
+		}
+	}
 
 	// 构建所有对象行
 	allRows, err := buildSymbolRecordRows(symbols, spaceID, datasetID)
@@ -239,7 +249,7 @@ func (c *SymbolCollector) reportSymbols(
 			batchSymbols := symbolBatches[j]
 			handlers = append(handlers, func() error {
 				err := c.sendSymbolBatch(
-					ctx, writer, spaceID, datasetID, binding, batchSymbols, rows,
+					ctx, writer, spaceID, datasetID, binding, existingActive, batchSymbols, rows,
 				)
 				mu.Lock()
 				defer mu.Unlock()
@@ -272,7 +282,7 @@ func (c *SymbolCollector) reportSymbols(
 		return "", fmt.Errorf("部分批次上报失败: %w", firstErr)
 	}
 
-	if err := reconcileInactiveSymbolMemberships(ctx, writer, spaceID, datasetID, symbols); err != nil {
+	if err := reconcileInactiveSymbolMemberships(ctx, writer, spaceID, datasetID, symbols, memberships); err != nil {
 		return "", err
 	}
 
@@ -286,6 +296,7 @@ func reconcileInactiveSymbolMemberships(
 	spaceID string,
 	datasetID string,
 	activeSymbols []*exchange.SymbolInfo,
+	memberships []*storagepb.DatasetSubject,
 ) error {
 	if len(activeSymbols) == 0 {
 		return nil
@@ -301,10 +312,6 @@ func reconcileInactiveSymbolMemberships(
 		return nil
 	}
 
-	memberships, err := writer.ListDatasetSubjects(ctx, spaceID, datasetID)
-	if err != nil {
-		return fmt.Errorf("list symbol memberships for dataset %s: %w", datasetID, err)
-	}
 	inactiveMemberships := make([]*storagepb.DatasetSubject, 0)
 	inactiveSymbols := make([]*exchange.SymbolInfo, 0)
 	for _, membership := range memberships {
@@ -368,6 +375,7 @@ func (c *SymbolCollector) sendSymbolBatch(
 	spaceID string,
 	datasetID string,
 	binding StorageBinding,
+	existingActive map[string]struct{},
 	symbols []*exchange.SymbolInfo,
 	rows []*storagepb.RowFieldUpsert,
 ) error {
@@ -375,6 +383,9 @@ func (c *SymbolCollector) sendSymbolBatch(
 		return err
 	}
 	for _, symbol := range symbols {
+		if _, exists := existingActive[normalizedSubjectID(symbol)]; exists {
+			continue
+		}
 		if err := writer.RegisterDataSubject(ctx, buildSymbolRegisterRequest(symbol, spaceID, datasetID, binding)); err != nil {
 			return err
 		}

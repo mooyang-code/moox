@@ -207,6 +207,7 @@ func TestSymbolCollectorKeepsReturnedSubjectsActive(t *testing.T) {
 
 	require.NoError(t, collector.Collect(context.Background(), symbolCollectParams()))
 	assert.Empty(t, writer.bound)
+	assert.Equal(t, 0, writer.registerCalls, "an existing active membership must not be re-registered")
 }
 
 func TestSymbolCollectorDoesNotDeactivateAfterPartialWriteFailure(t *testing.T) {
@@ -227,7 +228,7 @@ func TestSymbolCollectorDoesNotDeactivateAfterPartialWriteFailure(t *testing.T) 
 	err := collector.Collect(context.Background(), symbolCollectParams())
 	require.ErrorContains(t, err, "write failed")
 	assert.GreaterOrEqual(t, writer.upsertCalls, 2)
-	assert.Empty(t, writer.listCalls)
+	assert.Equal(t, []string{"symbols-custom"}, writer.listCalls)
 	assert.Empty(t, writer.bound)
 }
 
@@ -245,7 +246,7 @@ func TestSymbolCollectorDoesNotDeactivateAfterRegistrationFailure(t *testing.T) 
 	err := collector.Collect(context.Background(), symbolCollectParams())
 	require.ErrorContains(t, err, "register failed")
 	assert.GreaterOrEqual(t, writer.registerCalls, 2)
-	assert.Empty(t, writer.listCalls)
+	assert.Equal(t, []string{"symbols-custom"}, writer.listCalls)
 	assert.Empty(t, writer.bound)
 }
 
@@ -262,7 +263,7 @@ func TestSymbolCollectorDoesNotDeactivateAfterWorkerPanic(t *testing.T) {
 
 	err := collector.Collect(context.Background(), symbolCollectParams())
 	require.ErrorContains(t, err, "panic found in call handlers")
-	assert.Empty(t, writer.listCalls)
+	assert.Equal(t, []string{"symbols-custom"}, writer.listCalls)
 	assert.Empty(t, writer.bound)
 }
 
