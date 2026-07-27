@@ -203,7 +203,7 @@ func TestStorageWriterListsAllDatasetSubjectPages(t *testing.T) {
 	assert.Equal(t, "BTC-USDT", got[0].GetSubjectId())
 	assert.Equal(t, "OLD-USDT", got[1].GetSubjectId())
 	assert.Equal(t, []uint32{1, 2}, proxy.pages)
-	assert.Equal(t, []uint32{200, 200}, proxy.sizes)
+	assert.Equal(t, []uint32{1000, 1000}, proxy.sizes)
 	for _, req := range proxy.listRequests {
 		assert.Equal(t, "collector", req.GetAuthInfo().GetAppId())
 		assert.Equal(t, "space-a", req.GetSpaceId())

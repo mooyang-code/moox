@@ -13,7 +13,7 @@ import (
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
-const datasetSubjectPageSize = 200
+const datasetSubjectPageSize = 1000
 
 type storageWriter struct {
 	access   storagepb.PrimaryStoreClientProxy
