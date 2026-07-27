@@ -155,6 +155,8 @@ type collectorPublishSummary struct {
 	DeployBatchIDs       []string `json:"deploy_batch_ids,omitempty"`
 	CreateProcessedCount int      `json:"create_processed_count,omitempty"`
 	DeployProcessedCount int      `json:"deploy_processed_count,omitempty"`
+	DeploySkippedCount   int      `json:"deploy_skipped_count,omitempty"`
+	DeployBatchSize      int      `json:"deploy_batch_size,omitempty"`
 }
 
 type collectorDeploySummary struct {
@@ -469,14 +471,19 @@ func applyCollectorFleet(
 	}
 
 	summary.FleetMode = "updated"
-	deployments := make([]adminclient.NodeDeployItem, len(fleetNodes))
+	summary.DeployBatchSize = opts.DeployBatchSize
+	deployments := make([]adminclient.NodeDeployItem, 0, len(fleetNodes))
 	for index, node := range fleetNodes {
-		deployments[index] = adminclient.NodeDeployItem{
+		if node.PackageID == packageID {
+			summary.DeploySkippedCount++
+			continue
+		}
+		deployments = append(deployments, adminclient.NodeDeployItem{
 			NodeID:      node.NodeID,
 			PackageID:   packageID,
 			Config:      cloneCollectorStringMap(createItems[index].Config),
 			Environment: cloneCollectorStringMap(createItems[index].Environment),
-		}
+		})
 	}
 	for start := 0; start < len(deployments); start += opts.DeployBatchSize {
 		end := min(start+opts.DeployBatchSize, len(deployments))

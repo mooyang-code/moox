@@ -438,6 +438,8 @@ func TestApplyCollectorFleetDeploysNewPackageToExistingFleet(t *testing.T) {
 	assert.Len(t, api.deployCalls, 50)
 	assert.Len(t, summary.DeployBatchIDs, 50)
 	assert.Equal(t, 50, summary.DeployProcessedCount)
+	assert.Zero(t, summary.DeploySkippedCount)
+	assert.Equal(t, 1, summary.DeployBatchSize)
 	for _, batch := range api.deployCalls {
 		for _, item := range batch {
 			assert.Equal(t, "pkg-new", item.PackageID)
@@ -445,6 +447,32 @@ func TestApplyCollectorFleetDeploysNewPackageToExistingFleet(t *testing.T) {
 			assert.Equal(t, createItems[0].Environment, item.Environment)
 		}
 	}
+}
+
+func TestApplyCollectorFleetSkipsNodesAlreadyOnRequestedPackage(t *testing.T) {
+	nodes := make([]adminclient.CloudNode, 50)
+	items := make([]adminclient.NodeCreateItem, 50)
+	for index := range nodes {
+		nodes[index] = adminclient.CloudNode{
+			NodeID:    fmt.Sprintf("fleet-%d", index),
+			PackageID: "pkg-new",
+			BizType:   "data_collector",
+			Metadata:  map[string]any{"function_name_prefix": "fleet", "index": float64(index)},
+		}
+	}
+	api := &fakeCollectorFleetAPI{nodes: nodes}
+	summary, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
+		FunctionNamePrefix: "fleet",
+		NodeCount:          50,
+		CreateBatchSize:    5,
+		DeployBatchSize:    1,
+	}, "pkg-new", items)
+	require.NoError(t, err)
+	assert.Equal(t, "updated", summary.FleetMode)
+	assert.Empty(t, api.deployCalls)
+	assert.Zero(t, summary.DeployProcessedCount)
+	assert.Equal(t, 50, summary.DeploySkippedCount)
+	assert.Equal(t, 1, summary.DeployBatchSize)
 }
 
 func TestApplyCollectorFleetRejectsPartialWithoutMutation(t *testing.T) {

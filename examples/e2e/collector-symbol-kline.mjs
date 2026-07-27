@@ -502,11 +502,16 @@ export function validatePublishSummary(summary, expectedCount) {
     }
     assertUniqueBatchIDs(summary.create_batch_ids);
   } else {
-    if (deployed !== expectedCount) {
-      throw new Error(`updated fleet processed ${deployed} nodes; expected ${expectedCount}`);
+    const skipped = Number(summary.deploy_skipped_count || 0);
+    const batchSize = Number(summary.deploy_batch_size || 0);
+    if (deployed + skipped !== expectedCount) {
+      throw new Error(`updated fleet covered ${deployed + skipped} nodes; expected ${expectedCount}`);
     }
     if (created !== 0) throw new Error("updated fleet must not report created nodes");
-    const expectedBatches = Math.ceil(expectedCount / 10);
+    if (!Number.isInteger(batchSize) || batchSize <= 0) {
+      throw new Error(`updated fleet has invalid deploy_batch_size=${summary.deploy_batch_size}`);
+    }
+    const expectedBatches = Math.ceil(deployed / batchSize);
     if (!Array.isArray(summary.deploy_batch_ids) || summary.deploy_batch_ids.length !== expectedBatches) {
       throw new Error(`updated fleet has ${summary.deploy_batch_ids?.length || 0} batches; expected ${expectedBatches}`);
     }

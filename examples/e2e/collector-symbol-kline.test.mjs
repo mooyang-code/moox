@@ -374,8 +374,9 @@ test("validates created and updated fleet publish summaries", () => {
   assert.equal(validatePublishSummary({
     package_id: "package-new",
     fleet_mode: "updated",
-    deploy_batch_ids: Array.from({ length: 5 }, (_, index) => `deploy-${index}`),
+    deploy_batch_ids: Array.from({ length: 50 }, (_, index) => `deploy-${index}`),
     deploy_processed_count: 50,
+    deploy_batch_size: 1,
   }, 50).fleet_mode, "updated");
   assert.throws(() => validatePublishSummary({
     package_id: "package-new",
