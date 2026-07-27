@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
@@ -159,42 +158,4 @@ func serviceAuth() *commonpb.AuthInfo {
 		AppId: "moox-factor", Operator: "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}
-}
-
-type metadataAdapter struct {
-	proxy storagepb.MetadataClientProxy
-}
-
-func (m metadataAdapter) CreateFactor(ctx context.Context, req *storagepb.CreateFactorReq) (*storagepb.CreateFactorRsp, error) {
-	return m.proxy.CreateFactor(ctx, req)
-}
-func (m metadataAdapter) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
-	return m.proxy.CreateDataset(ctx, req)
-}
-func (m metadataAdapter) UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
-	return m.proxy.UpdateDataset(ctx, req)
-}
-func (m metadataAdapter) UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
-	return m.proxy.UpsertDatasetColumn(ctx, req)
-}
-func (m metadataAdapter) GetFactor(ctx context.Context, req *storagepb.GetFactorReq) (*storagepb.GetFactorRsp, error) {
-	return m.proxy.GetFactor(ctx, req)
-}
-func (m metadataAdapter) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
-	return m.proxy.GetDataset(ctx, req)
-}
-func (m metadataAdapter) CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
-	return m.proxy.CheckDatasetActivation(ctx, req)
-}
-func (m metadataAdapter) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
-	return m.proxy.ActivateDataset(ctx, req)
-}
-func (m metadataAdapter) ListDatasetColumns(ctx context.Context, req *storagepb.ListDatasetColumnsReq) (*storagepb.ListDatasetColumnsRsp, error) {
-	return m.proxy.ListDatasetColumns(ctx, req)
-}
-func (m metadataAdapter) ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
-	return m.proxy.ListDatasetSubjects(ctx, req)
-}
-func (m metadataAdapter) BindDatasetSubject(ctx context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
-	return m.proxy.BindDatasetSubject(ctx, req)
 }

@@ -287,7 +287,7 @@ func environmentVariables(values map[string]string) []*scf.Variable {
 
 // InvokeFunction invokes a Tencent SCF function.
 func (c *Client) InvokeFunction(ctx context.Context, req InvokeFunctionRequest) (*InvokeFunctionResponse, error) {
-	log.InfoContextf(ctx, "[CloudNode-TencentSCF] invoke function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
+	log.DebugContextf(ctx, "[CloudNode-TencentSCF] invoke function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
 	scfClient, err := c.newClient(req.Region)
 	if err != nil {
 		return nil, err

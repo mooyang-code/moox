@@ -45,16 +45,6 @@ func TestCollectorRegistry_Get_UnknownCollector_ShouldReturnError(t *testing.T) 
 	assert.Error(t, err)
 }
 
-func TestCollectorRegistry_GetDataTypes_ShouldDeduplicate(t *testing.T) {
-	r := &CollectorRegistry{collectors: make(map[string]*CollectorDescriptor)}
-	require.NoError(t, r.Register(&CollectorDescriptor{Source: "a", Market: "spot", DataType: "kline", Collector: &fakeCollector{}}))
-	require.NoError(t, r.Register(&CollectorDescriptor{Source: "a", Market: "swap", DataType: "kline", Collector: &fakeCollector{}}))
-	require.NoError(t, r.Register(&CollectorDescriptor{Source: "a", Market: "spot", DataType: "symbol", Collector: &fakeCollector{}}))
-
-	types := r.GetDataTypes()
-	assert.ElementsMatch(t, []string{"kline", "symbol"}, types)
-}
-
 func TestCollectorRegistry_GetRegistry(t *testing.T) {
 	assert.NotNil(t, GetRegistry())
 }

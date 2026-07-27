@@ -16,19 +16,16 @@ import (
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-const wakeNodeListPageSize uint32 = 200
 
 const (
 	submitJobItemBatchSize   = 25
 	submitJobItemConcurrency = 8
-	wakeNodeConcurrency      = 8
 )
 
 // AuthConfig describes HMAC auth for /api/service/cloudnode/* calls.
@@ -45,35 +42,20 @@ type AuthConfig struct {
 type Config struct {
 	// ServiceGatewayTarget is the control-plane /api/service gateway used by Collector.
 	ServiceGatewayTarget string
-	// EventServiceGatewayTarget is the gateway target passed to SCF wake events.
-	EventServiceGatewayTarget string
-	StorageRPCGatewayTarget   string
-	Auth                      AuthConfig
+	Auth                 AuthConfig
 }
 
 // Client submits collector work to CloudNode through the admin service gateway.
 type Client struct {
-	serviceGatewayTarget      string
-	eventServiceGatewayTarget string
-	storageRPCGatewayTarget   string
-	auth                      AuthConfig
-	httpClient                *http.Client
-	httpClientErr             error
-}
-
-// WakeOptions describes which Collector runtime nodes should be nudged to poll queued work.
-type WakeOptions struct {
-	SpaceID  string
-	JobTypes []string
+	serviceGatewayTarget string
+	auth                 AuthConfig
+	httpClient           *http.Client
+	httpClientErr        error
 }
 
 // New creates a CloudNode client.
 func New(cfg Config) *Client {
 	controlTarget := strings.TrimSpace(cfg.ServiceGatewayTarget)
-	eventTarget := strings.TrimSpace(cfg.EventServiceGatewayTarget)
-	if eventTarget == "" {
-		eventTarget = controlTarget
-	}
 	httpClient, httpClientErr := runtimeapp.NewGatewayHTTPClient(8*time.Second, runtimeapp.AuthConfig{
 		AccessKey:   cfg.Auth.AccessKey,
 		SecretKey:   cfg.Auth.SecretKey,
@@ -83,12 +65,10 @@ func New(cfg Config) *Client {
 		ExpireSec:   cfg.Auth.ExpireSec,
 	})
 	return &Client{
-		serviceGatewayTarget:      normalizeGatewayTarget(controlTarget),
-		eventServiceGatewayTarget: normalizeGatewayTarget(eventTarget),
-		storageRPCGatewayTarget:   strings.TrimSpace(cfg.StorageRPCGatewayTarget),
-		auth:                      cfg.Auth,
-		httpClient:                httpClient,
-		httpClientErr:             httpClientErr,
+		serviceGatewayTarget: normalizeGatewayTarget(controlTarget),
+		auth:                 cfg.Auth,
+		httpClient:           httpClient,
+		httpClientErr:        httpClientErr,
 	}
 }
 
@@ -125,15 +105,14 @@ func (c *Client) SubmitCollectorJobItems(ctx context.Context, instances []domain
 			defer func() { <-semaphore }()
 
 			ids, err := c.submitCollectorJobItemBatch(ctx, batch, batchStart, batchEnd)
-			if err != nil {
-				idsMu.Lock()
-				batchErrors = append(batchErrors, err)
-				idsMu.Unlock()
-				return nil
-			}
 			idsMu.Lock()
 			for taskID, jobItemID := range ids {
 				idsByTaskID[taskID] = jobItemID
+			}
+			if err != nil {
+				batchErrors = append(batchErrors, err)
+				idsMu.Unlock()
+				return nil
 			}
 			idsMu.Unlock()
 			return nil
@@ -155,138 +134,10 @@ func (c *Client) submitCollectorJobItemBatch(ctx context.Context, batch []*pb.Jo
 	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		return nil, fmt.Errorf("submit cloud job items batch %d-%d: %s", start, end, rsp.GetRetInfo().GetMsg())
 	}
-	return jobItemIDsByTaskID(batch, rsp.GetAcks()), nil
-}
-
-// WakeCollectorNodes invokes matching Collector SCF nodes so they poll queued JobItems.
-func (c *Client) WakeCollectorNodes(ctx context.Context, opts WakeOptions) (int, error) {
-	spaceID := strings.TrimSpace(opts.SpaceID)
-	if spaceID == "" {
-		return 0, fmt.Errorf("space_id is required")
-	}
-	nodes, err := c.listCloudNodes(ctx, spaceID)
-	if err != nil {
-		return 0, err
-	}
-	wakeEvent, err := c.buildWakeEvent()
-	if err != nil {
-		return 0, err
-	}
-	woken := 0
-	var wakeErrors []error
-	var wakeMu sync.Mutex
-	group, groupCtx := errgroup.WithContext(ctx)
-	semaphore := make(chan struct{}, wakeNodeConcurrency)
-	for _, node := range nodes {
-		if !supportsAnyJobType(node.GetSupportedWorkloads(), opts.JobTypes) {
-			continue
-		}
-		node := node
-		group.Go(func() error {
-			select {
-			case semaphore <- struct{}{}:
-			case <-groupCtx.Done():
-				wakeMu.Lock()
-				wakeErrors = append(wakeErrors, groupCtx.Err())
-				wakeMu.Unlock()
-				return nil
-			}
-			defer func() { <-semaphore }()
-			recordWakeError := func(err error) {
-				wakeMu.Lock()
-				wakeErrors = append(wakeErrors, err)
-				wakeMu.Unlock()
-			}
-			nodeID := node.GetNodeId()
-			wakeStruct, err := structpb.NewStruct(wakeEventWithNodeID(wakeEvent, nodeID))
-			if err != nil {
-				recordWakeError(fmt.Errorf("build wake event for %s: %w", nodeID, err))
-				return nil
-			}
-			req := &pb.InvokeFunctionReq{
-				NodeId:        nodeID,
-				EventData:     wakeStruct,
-				ScfInvokeType: pb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT,
-			}
-			raw, err := protojson.Marshal(req)
-			if err != nil {
-				recordWakeError(fmt.Errorf("marshal invoke function request for %s: %w", nodeID, err))
-				return nil
-			}
-			var rsp pb.InvokeFunctionRsp
-			if err := c.postServiceWithHeaders(groupCtx, "cloudnode", "InvokeFunction", raw, &rsp, spaceHeaders(spaceID)); err != nil {
-				recordWakeError(fmt.Errorf("invoke collector node %s: %w", nodeID, err))
-				return nil
-			}
-			if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-				recordWakeError(fmt.Errorf("invoke collector node %s: %s", nodeID, rsp.GetRetInfo().GetMsg()))
-				return nil
-			}
-			if rsp.GetScf().GetCode() != 0 {
-				recordWakeError(fmt.Errorf("invoke collector node %s: %s", nodeID, rsp.GetScf().GetMessage()))
-				return nil
-			}
-			wakeMu.Lock()
-			woken++
-			wakeMu.Unlock()
-			return nil
-		})
-	}
-	_ = group.Wait()
-	wakeMu.Lock()
-	defer wakeMu.Unlock()
-	if len(wakeErrors) > 0 {
-		return woken, errors.Join(wakeErrors...)
-	}
-	return woken, nil
-}
-
-func wakeEventWithNodeID(base map[string]any, nodeID string) map[string]any {
-	out := make(map[string]any, len(base))
-	for key, value := range base {
-		out[key] = value
-	}
-	data := map[string]any{}
-	if raw, ok := base["data"].(map[string]any); ok {
-		for key, value := range raw {
-			data[key] = value
-		}
-	}
-	data["node_id"] = strings.TrimSpace(nodeID)
-	out["data"] = data
-	return out
-}
-
-func (c *Client) listCloudNodes(ctx context.Context, spaceID string) ([]*pb.CloudNode, error) {
-	nodes := []*pb.CloudNode{}
-	for page := uint32(1); ; page++ {
-		body, err := protojson.Marshal(&pb.GetNodeListReq{
-			Page: &commonpb.Page{Page: page, Size: wakeNodeListPageSize},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("marshal get node list request: %w", err)
-		}
-		var rsp pb.GetNodeListRsp
-		if err := c.postServiceWithHeaders(ctx, "cloudnode", "GetNodeList", body, &rsp, spaceHeaders(spaceID)); err != nil {
-			return nil, fmt.Errorf("list cloud nodes: %w", err)
-		}
-		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return nil, fmt.Errorf("list cloud nodes: %s", rsp.GetRetInfo().GetMsg())
-		}
-		items := rsp.GetItems()
-		nodes = append(nodes, items...)
-		if len(items) == 0 || !rsp.GetPage().GetHasMore() {
-			break
-		}
-	}
-	return nodes, nil
+	return jobItemIDsByTaskID(batch, rsp.GetAcks())
 }
 
 func (c *Client) postService(ctx context.Context, service string, method string, body []byte, out proto.Message) error {
-	return c.postServiceWithHeaders(ctx, service, method, body, out, nil)
-}
-
-func (c *Client) postServiceWithHeaders(ctx context.Context, service string, method string, body []byte, out proto.Message, headers map[string]string) error {
 	if c.httpClientErr != nil {
 		return c.httpClientErr
 	}
@@ -294,7 +145,7 @@ func (c *Client) postServiceWithHeaders(ctx context.Context, service string, met
 		return fmt.Errorf("service gateway target is required")
 	}
 	url := fmt.Sprintf("%s/api/service/%s/%s", c.serviceGatewayTarget, service, method)
-	req, err := runtimeapp.NewSignedRequestWithContextAndHeaders(ctx, http.MethodPost, url, body, headers, runtimeapp.AuthConfig{
+	req, err := runtimeapp.NewSignedRequestWithContextAndHeaders(ctx, http.MethodPost, url, body, nil, runtimeapp.AuthConfig{
 		AccessKey:   c.auth.AccessKey,
 		SecretKey:   c.auth.SecretKey,
 		TargetNode:  c.auth.TargetNode,
@@ -329,22 +180,6 @@ func (c *Client) postServiceWithHeaders(ctx context.Context, service string, met
 	return nil
 }
 
-func (c *Client) buildWakeEvent() (map[string]any, error) {
-	if c.eventServiceGatewayTarget == "" {
-		return nil, fmt.Errorf("event service gateway target is required")
-	}
-	return map[string]any{
-		"action":                     "keepalive",
-		"source":                     "collector_schedule",
-		"timestamp":                  time.Now().UTC().Format(time.RFC3339),
-		"service_gateway_target":     c.eventServiceGatewayTarget,
-		"storage_rpc_gateway_target": c.storageRPCGatewayTarget,
-		"data": map[string]any{
-			"wake_reason": "collector_job_items",
-		},
-	}, nil
-}
-
 func normalizeGatewayTarget(raw string) string {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	if raw == "" {
@@ -356,69 +191,44 @@ func normalizeGatewayTarget(raw string) string {
 	return "http://" + raw
 }
 
-func spaceHeaders(spaceID string) map[string]string {
-	return map[string]string{"X-Space-Id": strings.TrimSpace(spaceID)}
-}
-
-func supportsAnyJobType(supported []string, required []string) bool {
-	required = compactStrings(required)
-	if len(required) == 0 {
-		return true
+// PrepareScheduledInstances assigns the next execution boundary and stable queue identity.
+func PrepareScheduledInstances(instances []domain.TaskInstance, now time.Time) []domain.TaskInstance {
+	prepared := append([]domain.TaskInstance(nil), instances...)
+	for i := range prepared {
+		payload := parsePayload(prepared[i].TaskParams)
+		executeAt := nextExecuteAt(now, valueString(payload, "schedule_interval", "30m"))
+		prepared[i].ExecuteAt = executeAt
+		prepared[i].CloudJobItemID = scheduledJobItemID(prepared[i].TaskID, executeAt)
 	}
-	allowed := make(map[string]struct{}, len(supported))
-	for _, value := range supported {
-		if value = normalizeJobType(value); value != "" {
-			allowed[value] = struct{}{}
-		}
-	}
-	for _, value := range required {
-		if _, ok := allowed[normalizeJobType(value)]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeJobType(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	if strings.HasPrefix(value, "collect.") {
-		return strings.TrimPrefix(value, "collect.")
-	}
-	return value
-}
-
-func compactStrings(values []string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			out = append(out, value)
-		}
-	}
-	return out
+	return prepared
 }
 
 func buildJobItem(instance domain.TaskInstance) *pb.JobItem {
 	payload := parsePayload(instance.TaskParams)
 	payload["space_id"] = instance.SpaceID
 	payload["task_id"] = instance.TaskID
-	window := scheduleWindow(time.Now().UTC(), valueString(payload, "schedule_interval", "30m"))
-	payload["schedule_window"] = window
-	payloadStruct, _ := structpb.NewStruct(payload)
-	return &pb.JobItem{
-		SpaceId:       instance.SpaceID,
-		JobId:         instance.RuleID,
-		JobItemId:     windowedJobItemID(instance.TaskID, window),
-		JobType:       jobType(payload),
-		CodePackageId: valueString(payload, "code_package_id", defaultCodePackageID(payload)),
-		Params:        payloadStruct,
-		Priority:      100,
+	if !instance.ExecuteAt.IsZero() {
+		payload["schedule_window"] = instance.ExecuteAt.UTC().Format(time.RFC3339)
 	}
+	payloadStruct, _ := structpb.NewStruct(payload)
+	item := &pb.JobItem{
+		SpaceId:   instance.SpaceID,
+		JobId:     instance.RuleID,
+		JobItemId: strings.TrimSpace(instance.CloudJobItemID),
+		JobType:   jobType(payload),
+		Params:    payloadStruct,
+		Priority:  100,
+	}
+	if item.JobItemId == "" {
+		item.JobItemId = strings.TrimSpace(instance.TaskID)
+	}
+	if !instance.ExecuteAt.IsZero() {
+		item.ExecuteAt = timestamppb.New(instance.ExecuteAt.UTC())
+	}
+	return item
 }
 
-func jobItemIDsByTaskID(items []*pb.JobItem, acks []*pb.JobItemAck) map[string]string {
+func jobItemIDsByTaskID(items []*pb.JobItem, acks []*pb.JobItemAck) (map[string]string, error) {
 	taskByItemID := make(map[string]string, len(items))
 	for _, item := range items {
 		if item == nil {
@@ -427,6 +237,7 @@ func jobItemIDsByTaskID(items []*pb.JobItem, acks []*pb.JobItemAck) map[string]s
 		taskByItemID[strings.TrimSpace(item.GetJobItemId())] = taskIDFromJobItem(item)
 	}
 	out := make(map[string]string, len(acks))
+	var rejected []error
 	for _, ack := range acks {
 		if ack == nil {
 			continue
@@ -434,6 +245,14 @@ func jobItemIDsByTaskID(items []*pb.JobItem, acks []*pb.JobItemAck) map[string]s
 		switch ack.GetStatus() {
 		case pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED,
 			pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED:
+		case pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_REJECTED:
+			reason := strings.TrimSpace(ack.GetRejectReason())
+			if reason == "" {
+				reason = "rejected"
+			}
+			rejected = append(rejected, fmt.Errorf("job_item_id=%s rejected: %s",
+				strings.TrimSpace(ack.GetJobItemId()), reason))
+			continue
 		default:
 			continue
 		}
@@ -444,7 +263,7 @@ func jobItemIDsByTaskID(items []*pb.JobItem, acks []*pb.JobItemAck) map[string]s
 		}
 		out[taskID] = jobItemID
 	}
-	return out
+	return out, errors.Join(rejected...)
 }
 
 func taskIDFromJobItem(item *pb.JobItem) string {
@@ -459,13 +278,12 @@ func taskIDFromJobItem(item *pb.JobItem) string {
 	return strings.TrimSpace(item.GetJobItemId())
 }
 
-func windowedJobItemID(taskID string, window string) string {
+func scheduledJobItemID(taskID string, executeAt time.Time) string {
 	taskID = strings.TrimSpace(taskID)
-	window = strings.TrimSpace(window)
-	if taskID == "" || window == "" {
+	if taskID == "" || executeAt.IsZero() {
 		return taskID
 	}
-	return taskID + ":" + window
+	return taskID + ":" + executeAt.UTC().Format(time.RFC3339)
 }
 
 func jobType(payload map[string]any) string {
@@ -474,10 +292,6 @@ func jobType(payload map[string]any) string {
 	}
 	dataType := valueString(payload, "data_type", "kline")
 	return "collect." + dataType
-}
-
-func defaultCodePackageID(_ map[string]any) string {
-	return domain.DefaultCollectorCodePackageID
 }
 
 func parsePayload(raw string) map[string]any {
@@ -495,12 +309,12 @@ func valueString(payload map[string]any, key string, fallback string) string {
 	return fallback
 }
 
-func scheduleWindow(now time.Time, interval string) string {
+func nextExecuteAt(now time.Time, interval string) time.Time {
 	duration, ok := parseScheduleDuration(interval)
 	if !ok || duration <= 0 {
 		duration = 30 * time.Minute
 	}
-	return now.Truncate(duration).Format(time.RFC3339)
+	return now.UTC().Truncate(duration).Add(duration)
 }
 
 func parseScheduleDuration(interval string) (time.Duration, bool) {

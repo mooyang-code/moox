@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	cloudnodeschema "github.com/mooyang-code/moox/modules/cloudnode/schema"
+	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -155,7 +156,8 @@ func TestMergeNodeUpdateCoversOptionalFields(t *testing.T) {
 
 func TestGetNodeListAndUpdateNode(t *testing.T) {
 	catalog := newCatalogForAccountTests(t)
-	svc := &Service{catalog: catalog}
+	queue := &orderedQueue{}
+	svc := &Service{catalog: catalog, executionQueue: queue}
 	ctx := spacecontext.WithSpaceID(context.Background(), "crypto")
 	require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{
 		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "acct-1",
@@ -170,9 +172,13 @@ func TestGetNodeListAndUpdateNode(t *testing.T) {
 
 	updateRsp, err := svc.UpdateNode(ctx, &pb.UpdateNodeReq{Node: &pb.CloudNode{
 		NodeId: "node-a", Region: "ap-shanghai", Status: pb.NodeStatusCode_NODE_STATUS_ONLINE,
+		SupportedWorkloads: []string{"collect.kline"},
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
+	require.Equal(t, []cloudjobqueue.Identity{{
+		SpaceID: "crypto", JobType: "collect.kline",
+	}}, queue.identities)
 }
 
 func TestBatchDeleteNodes_ShouldSoftDelete(t *testing.T) {
@@ -278,7 +284,6 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 			Runtime:        "CustomRuntime",
 			Handler:        "main",
 			Config: map[string]string{
-				"timeout":       "60",
 				"memory_size":   "256",
 				"cls_logset_id": "logset-config",
 				"cls_topic_id":  "topic-config",
@@ -306,7 +311,7 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	if create.COSBucket != "moox-scf-1255382561" || create.COSRegion != "ap-guangzhou" || create.COSObject != "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip" {
 		t.Fatalf("cos package = bucket:%q region:%q object:%q", create.COSBucket, create.COSRegion, create.COSObject)
 	}
-	if create.Runtime != "CustomRuntime" || create.Handler != "main" || create.Timeout != 60 || create.MemorySize != 256 {
+	if create.Runtime != "CustomRuntime" || create.Handler != "main" || create.Timeout != 120 || create.MemorySize != 256 {
 		t.Fatalf("runtime config = %#v", create)
 	}
 	if create.ClsLogsetID != "logset-config" || create.ClsTopicID != "topic-config" {
@@ -342,22 +347,59 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	}
 }
 
+func TestBatchCreateNodesSharesExecutionQueuesAcrossCodePackages(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	queue := &orderedQueue{}
+	svc := &Service{catalog: catalog, executionQueue: queue}
+	metadata, err := structpb.NewStruct(map[string]any{
+		"supported_workloads": []any{"collect.kline", "collect.symbol"},
+	})
+	require.NoError(t, err)
+
+	rsp, err := svc.BatchCreateNodes(
+		spacecontext.WithSpaceID(context.Background(), "crypto"),
+		&pb.BatchCreateNodesReq{Nodes: []*pb.NodeCreateItem{
+			{
+				CloudAccountId: "account-a", Region: "local", PackageId: "package-a",
+				Metadata: metadata,
+			},
+			{
+				CloudAccountId: "account-a", Region: "local", PackageId: "package-b",
+				Metadata: metadata,
+			},
+		}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.Len(t, queue.identities, 4)
+	assert.Equal(t, queue.identities[0], queue.identities[2])
+	assert.Equal(t, queue.identities[1], queue.identities[3])
+	assert.Equal(t, cloudjobqueue.Identity{SpaceID: "crypto", JobType: "collect.kline"}, queue.identities[0])
+	assert.Equal(t, cloudjobqueue.Identity{SpaceID: "crypto", JobType: "collect.symbol"}, queue.identities[1])
+	firstDurable, err := queue.identities[0].ConsumerName()
+	require.NoError(t, err)
+	secondPackageDurable, err := queue.identities[2].ConsumerName()
+	require.NoError(t, err)
+	assert.Equal(t, firstDurable, secondPackageDurable)
+}
+
 func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) {
 	db := newNodeSCFTestDB(t)
 	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
 	if err := catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID:        "crypto",
-		NodeID:         "node-a",
-		CloudAccountID: "account-a",
-		PackageID:      "old-package",
-		NodeType:       "scf-event",
-		Provider:       "tencent-scf",
-		Region:         "ap-guangzhou",
-		Namespace:      "collector",
-		FunctionName:   "moox-collector-ap-guangzhou-0",
-		Metadata:       `{"handler":"main"}`,
-		Status:         "unknown",
+		SpaceID:            "crypto",
+		NodeID:             "node-a",
+		CloudAccountID:     "account-a",
+		PackageID:          "old-package",
+		NodeType:           "scf-event",
+		Provider:           "tencent-scf",
+		Region:             "ap-guangzhou",
+		Namespace:          "collector",
+		FunctionName:       "moox-collector-ap-guangzhou-0",
+		SupportedWorkloads: `["collect.kline","collect.symbol"]`,
+		Metadata:           `{"handler":"main"}`,
+		Status:             "unknown",
 	}); err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
@@ -368,8 +410,10 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 			"MOOX_CODE_PACKAGE_ID":        "old-package",
 		},
 	}}}}
+	queue := &orderedQueue{}
 	svc := &Service{
 		catalog:            catalog,
+		executionQueue:     queue,
 		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "secret-id", SecretKey: "secret-key"}},
 		scfClientFactory: func(credential cloudcredential.TencentCredential) scfProvisioner {
 			return fake
@@ -413,6 +457,10 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	if update.Handler != "main" {
 		t.Fatalf("handler = %q", update.Handler)
 	}
+	require.Equal(t, []cloudjobqueue.Identity{
+		{SpaceID: "crypto", JobType: "collect.kline"},
+		{SpaceID: "crypto", JobType: "collect.symbol"},
+	}, queue.identities)
 }
 
 type fakeSCFClient struct {
@@ -458,6 +506,10 @@ func (f *fakeSCFClient) UpdateFunctionCode(_ context.Context, req tencentscf.Upd
 func (f *fakeSCFClient) UpdateFunctionConfiguration(_ context.Context, req tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error) {
 	f.configured = append(f.configured, req)
 	return &tencentscf.UpdateFunctionConfigurationResponse{RequestID: "config-req"}, nil
+}
+
+func (f *fakeSCFClient) InvokeFunction(_ context.Context, _ tencentscf.InvokeFunctionRequest) (*tencentscf.InvokeFunctionResponse, error) {
+	return &tencentscf.InvokeFunctionResponse{RequestID: "invoke-req"}, nil
 }
 
 func newNodeSCFTestDB(t *testing.T) *gorm.DB {

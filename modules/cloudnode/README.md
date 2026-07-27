@@ -12,11 +12,12 @@ Gateway 调用 `RevealSecret`，校验 secret 为 active、`category=cloud`、
 ## Job Execution Queue
 
 提交 JobItem 时，CloudNode 按
-`space_id + code_package_id + job_type` 使用 `packages/cloudjobqueue.Identity` 创建或校准
+`space_id + job_type` 使用 `packages/cloudjobqueue.Identity` 创建或校准
 Consumer，然后写 pending 状态并发布消息。CloudNode 不订阅执行队列。
 
-Collector SCF 使用 `cloudnode-worker` 凭据 bind 已存在的 Consumer。某个作业类型尚未创建
-时只跳过该类型；所有类型都不存在时明确退出。Worker 执行后先上报终态，再 ACK 或 TERM。
+发布新的 Collector SCF 节点时，CloudNode 根据节点声明的 `supported_workloads` 提前创建
+Consumer；不同代码包只要 `space_id + job_type` 相同就共享队列。Collector SCF 使用
+`cloudnode-worker` 凭据 bind 已存在的 Consumer。Worker 执行后先上报终态，再 ACK 或 TERM。
 可重试非末次失败只 NAK。JobItem 状态只有 `pending`、`enqueue_failed`、`success` 和
 `failed`，不含 Poll、attempt、running、cancel 或服务端 ack token。
 

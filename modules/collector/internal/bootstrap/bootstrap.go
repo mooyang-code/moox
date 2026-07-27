@@ -62,7 +62,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
 		AdminGatewayURL:                deps.AdminGatewayURL,
-		ServiceGatewayTarget:           deps.ServiceGatewayTarget,
 		ServiceAuth:                    taskpublisherAuth(deps.ServiceAuth),
 		StorageRPCGatewayTarget:        deps.StorageRPCGatewayTarget,
 		PlannerStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,

@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
+	"testing"
+	"time"
+
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestOnceOptionsFromEnv(t *testing.T) {
@@ -34,14 +36,6 @@ func TestInitializeRuntimeOnceDoesNotRequireTRPCConfig(t *testing.T) {
 	}
 }
 
-func TestInitializeServerlessRuntimeDoesNotRequireTRPCConfig(t *testing.T) {
-	t.Chdir(t.TempDir())
-
-	if err := initializeServerlessRuntime(context.Background(), runtimeapp.DefaultConfig()); err != nil {
-		t.Fatalf("initializeServerlessRuntime() error = %v", err)
-	}
-}
-
 func TestOnceOptionsFromEnv_EmptyDefaults(t *testing.T) {
 	t.Setenv("MOOX_SERVICE_GATEWAY_TARGET", "")
 	t.Setenv("MOOX_RUNTIME_NODE_ID", "")
@@ -61,9 +55,112 @@ func TestRunOnce_RequiresGatewayAndNodeID(t *testing.T) {
 	assert.Contains(t, err.Error(), "node-id")
 }
 
+func TestConfigureResidentRuntimeFromExplicitOptions(t *testing.T) {
+	configureResidentRuntime(onceOptions{
+		ServiceGatewayTarget:    "http://127.0.0.1:11002",
+		NodeID:                  "e2e-scf-node",
+		StorageRPCGatewayTarget: "127.0.0.1:11003",
+	})
+
+	nodeID, _ := runtimeapp.GetNodeInfo()
+	assert.Equal(t, "e2e-scf-node", nodeID)
+	assert.Equal(t, "http://127.0.0.1:11002", runtimeapp.GetServiceGatewayTarget())
+	assert.Equal(t, "127.0.0.1:11003", runtimeapp.GetStorageRPCGatewayTarget())
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	assert.ErrorIs(t, runtimeapp.WaitForReadiness(waitCtx), context.DeadlineExceeded)
+}
+
+func TestStartProductionRuntimeRequiresSpaceID(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "")
+
+	err := startProductionRuntime(context.Background(), runtimeapp.DefaultConfig())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MOOX_SPACE_ID")
+}
+
+func TestStartProductionRuntimeStartsServicesFunctionAndOneRunner(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Chdir(t.TempDir())
+	oldRegisterTRPC := registerTRPCServices
+	oldRegisterFunction := registerCloudFunction
+	oldRun := runTaskRunner
+	t.Cleanup(func() {
+		registerTRPCServices = oldRegisterTRPC
+		registerCloudFunction = oldRegisterFunction
+		runTaskRunner = oldRun
+	})
+
+	trpcStarts := 0
+	functionStarts := 0
+	runnerStarts := make(chan struct{}, 2)
+	registerTRPCServices = func() error {
+		trpcStarts++
+		return nil
+	}
+	registerCloudFunction = func() {
+		functionStarts++
+	}
+	runTaskRunner = func(ctx context.Context) error {
+		runnerStarts <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, startProductionRuntime(ctx, runtimeapp.DefaultConfig()))
+	select {
+	case <-runnerStarts:
+	case <-time.After(time.Second):
+		t.Fatal("resident taskrunner did not start")
+	}
+	select {
+	case <-runnerStarts:
+		t.Fatal("resident taskrunner started more than once")
+	case <-time.After(10 * time.Millisecond):
+	}
+	assert.Equal(t, 1, trpcStarts)
+	assert.Equal(t, 1, functionStarts)
+}
+
+func TestResidentTaskRunnerRestartsAfterTransportFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := make(chan int, 2)
+	count := 0
+	run := func(context.Context) error {
+		count++
+		calls <- count
+		if count == 1 {
+			return errors.New("temporary NATS failure")
+		}
+		cancel()
+		return context.Canceled
+	}
+
+	runResidentTaskRunner(ctx, run, time.Millisecond)
+
+	assert.Equal(t, 1, <-calls)
+	assert.Equal(t, 2, <-calls)
+}
+
+func TestStartProductionRuntimeReturnsTRPCStartFailure(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Chdir(t.TempDir())
+	oldRegisterTRPC := registerTRPCServices
+	t.Cleanup(func() { registerTRPCServices = oldRegisterTRPC })
+	registerTRPCServices = func() error { return errors.New("bad timer config") }
+
+	err := startProductionRuntime(context.Background(), runtimeapp.DefaultConfig())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bad timer config")
+}
+
 func TestDurationEnv(t *testing.T) {
 	t.Setenv("MOOX_RUNTIME_ONCE_TIMEOUT", "bad")
-	assert.Equal(t, 90*time.Second, durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second))
+	assert.Equal(t, defaultOnceTimeout, durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", defaultOnceTimeout))
 	t.Setenv("MOOX_RUNTIME_ONCE_TIMEOUT", "30s")
-	assert.Equal(t, 30*time.Second, durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", 90*time.Second))
+	assert.Equal(t, 30*time.Second, durationEnv("MOOX_RUNTIME_ONCE_TIMEOUT", defaultOnceTimeout))
 }

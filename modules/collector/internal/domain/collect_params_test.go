@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,9 @@ func TestCollectParams_ParseCollectParams_EmptyJSON_ShouldApplyDefaults(t *testi
 	assert.Equal(t, []string{"1m"}, params.Collector.Intervals)
 	assert.Equal(t, "binance_spot_kline", params.Source.DatasetID)
 	assert.Equal(t, "collect.kline", params.Target.JobType)
-	assert.Equal(t, DefaultCollectorCodePackageID, params.Target.CodePackageID)
+	raw, err := json.Marshal(params.Target)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"dataset_id":"binance_spot_kline","job_type":"collect.kline"}`, string(raw))
 }
 
 func TestCollectParams_ParseCollectParams_SymbolDataType_ShouldUseNoneSource(t *testing.T) {

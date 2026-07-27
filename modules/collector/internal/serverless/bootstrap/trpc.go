@@ -11,8 +11,12 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// RegisterTRPCServices 注册所有TRPC服务并启动服务
-// 包括：心跳定时器服务、采集执行定时器服务、DNS获取定时器服务
+const (
+	heartbeatTimerService  = "trpc.heartbeat.timer"
+	dnsResolveTimerService = "trpc.dnsresolve.timer"
+)
+
+// RegisterTRPCServices registers heartbeat and DNS timers and starts the server.
 func RegisterTRPCServices() error {
 	log.Info("正在初始化TRPC服务...")
 
@@ -23,14 +27,14 @@ func RegisterTRPCServices() error {
 	// 注册心跳定时器
 	log.Info("注册心跳定时器...")
 	timer.RegisterScheduler("heartbeatSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.reporter.timer"), func(ctx context.Context) error {
+	timer.RegisterHandlerService(s.Service(heartbeatTimerService), func(ctx context.Context) error {
 		return reporter.ScheduledHeartbeat(ctx, "")
 	})
 
 	// 注册 DNS 解析定时器
 	log.Info("注册 DNS 解析定时器...")
 	timer.RegisterScheduler("dnsResolveSchedule", &timer.DefaultScheduler{})
-	timer.RegisterHandlerService(s.Service("trpc.dnsresolve.timer"), func(ctx context.Context) error {
+	timer.RegisterHandlerService(s.Service(dnsResolveTimerService), func(ctx context.Context) error {
 		return httpclient.ScheduledResolveDNS(ctx, "")
 	})
 

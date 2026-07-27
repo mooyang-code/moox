@@ -19,10 +19,8 @@ option go_package = "github.com/mooyang-code/moox/modules/collector/proto/collec
 enum TaskInstanceStatus {
   TASK_INSTANCE_STATUS_UNSPECIFIED = 0;
   TASK_INSTANCE_STATUS_PENDING = 1;
-  TASK_INSTANCE_STATUS_RUNNING = 2;
-  TASK_INSTANCE_STATUS_SUCCESS = 3;
-  TASK_INSTANCE_STATUS_PART_FAILED = 4;
-  TASK_INSTANCE_STATUS_FAILED = 5;
+  TASK_INSTANCE_STATUS_SUCCESS = 2;
+  TASK_INSTANCE_STATUS_FAILED = 3;
 }
 
 // TaskRule 任务规则。
@@ -32,14 +30,10 @@ message TaskRule {
   string data_type = 3;
   string exchange = 4;
   google.protobuf.Struct collect_params = 5;
-  string assignment_type = 6;
-  repeated string assigned_nodes = 7;
-  string node_pattern = 8;
-  repeated string node_tags = 9;
-  optional bool enabled = 10;
-  string creator = 11;
-  string create_time = 12;     // RFC3339
-  string modify_time = 13;     // RFC3339
+  optional bool enabled = 6;
+  string creator = 7;
+  string create_time = 8;     // RFC3339
+  string modify_time = 9;     // RFC3339
 }
 
 message GetTaskRuleListReq {
@@ -156,6 +150,7 @@ message ReportInstanceStatusReq {
   google.protobuf.Struct result = 5;
   string error_message = 6;
   int64 duration_ms = 7;
+  string job_item_id = 8;
 }
 
 message ReportInstanceStatusRsp {
@@ -213,11 +208,11 @@ message GetDataTypeConfigWithFieldsRsp {
   DataTypeConfigDetail detail = 2;
 }
 
-message RecalculateAllTaskInstancesReq {
+message ScheduleTasksReq {
   string space_id = 1;
 }
 
-message RecalculateAllTaskInstancesRsp {
+message ScheduleTasksRsp {
   common.RetInfo ret_info = 1;
 }
 
@@ -238,5 +233,5 @@ service CollectMgr {
   rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
 
   // ----- 任务规划器 -----
-  rpc RecalculateAllTaskInstances(RecalculateAllTaskInstancesReq) returns (RecalculateAllTaskInstancesRsp);
+  rpc ScheduleTasks(ScheduleTasksReq) returns (ScheduleTasksRsp);
 }

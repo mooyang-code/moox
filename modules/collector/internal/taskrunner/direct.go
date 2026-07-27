@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/executor"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
@@ -35,6 +34,8 @@ type queueBinding struct {
 	maxDeliver int
 }
 
+const collectorWorkloadTimeout = 100 * time.Second
+
 type queueConsumer interface {
 	Fetch(context.Context, int) ([]*jetstream.Delivery, error)
 	Close() error
@@ -44,8 +45,9 @@ type queueConsumer interface {
 const directFetchMaxWait = 500 * time.Millisecond
 
 type roundRobinConsumer struct {
-	bindings []queueBinding
-	next     int
+	bindings   []queueBinding
+	next       int
+	stopOnIdle bool
 }
 
 func (c *roundRobinConsumer) Fetch(ctx context.Context, _ int) ([]*jetstream.Delivery, error) {
@@ -63,7 +65,10 @@ func (c *roundRobinConsumer) Fetch(ctx context.Context, _ int) ([]*jetstream.Del
 			return nil, err
 		}
 	}
-	return nil, jetstream.ErrClosed
+	if c.stopOnIdle {
+		return nil, jetstream.ErrClosed
+	}
+	return nil, nats.ErrTimeout
 }
 
 func (c *roundRobinConsumer) Close() error {
@@ -74,17 +79,37 @@ func (c *roundRobinConsumer) Close() error {
 	return joined
 }
 
-// RunJobItems binds existing per-route consumers, executes available work, then exits.
-func RunJobItems(ctx context.Context) error {
-	spaceID := runtimeSpaceID()
-	codePackageID := strings.TrimSpace(os.Getenv("MOOX_CODE_PACKAGE_ID"))
-	nodeID, _ := runtimeapp.GetNodeInfo()
-	nodeID = firstString(nodeID, os.Getenv("MOOX_RUNTIME_NODE_ID"))
-	gatewayTarget := runtimeapp.GetServiceGatewayTarget()
-	if spaceID == "" || codePackageID == "" || nodeID == "" || gatewayTarget == "" {
-		return fmt.Errorf("job execution requires space_id, code_package_id, node_id and service gateway target")
+// Run waits for the first complete keepalive and consumes jobs until ctx ends.
+func Run(ctx context.Context) error {
+	if err := runtimeapp.WaitForReadiness(ctx); err != nil {
+		return err
 	}
-	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv(nil, "collector-cloudjob-worker"))
+	return run(ctx, false)
+}
+
+// RunConfigured consumes jobs until ctx ends using identity and targets supplied
+// by a controlled diagnostic environment instead of a keepalive.
+func RunConfigured(ctx context.Context) error {
+	return run(ctx, false)
+}
+
+// RunOnce binds the same queues as Run but exits after one empty fetch round.
+func RunOnce(ctx context.Context) error {
+	return run(ctx, true)
+}
+
+func run(ctx context.Context, stopOnIdle bool) error {
+	spaceID := runtimeSpaceID()
+	nodeID, _ := runtimeapp.GetNodeInfo()
+	gatewayTarget := runtimeapp.GetServiceGatewayTarget()
+	if spaceID == "" || nodeID == "" || gatewayTarget == "" {
+		return fmt.Errorf("job execution requires MOOX_SPACE_ID, node_id and service gateway target")
+	}
+	eventBusCfg, err := eventBusConfig()
+	if err != nil {
+		return err
+	}
+	client, err := jetstream.Connect(ctx, eventBusCfg)
 	if err != nil {
 		return err
 	}
@@ -93,10 +118,10 @@ func RunJobItems(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	jobTypes := []string{jobs.JobTypeCollectKline, jobs.JobTypeCollectSymbol}
+	jobTypes := jobs.SupportedJobTypes()
 	bindings := make([]queueBinding, 0, len(jobTypes))
 	for _, jobType := range jobTypes {
-		identity := cloudjobqueue.Identity{SpaceID: spaceID, CodePackageID: codePackageID, JobType: jobType}
+		identity := cloudjobqueue.Identity{SpaceID: spaceID, JobType: jobType}
 		name, nameErr := identity.ConsumerName()
 		if nameErr != nil {
 			return nameErr
@@ -133,21 +158,66 @@ func RunJobItems(ctx context.Context) error {
 	registerCollectorHandlers()
 	auth := runtimeapp.GetServiceAuthConfig()
 	runtimeCfg := nodeRuntime.Config{
-		ServiceGatewayTarget: gatewayTarget, SpaceID: spaceID, NodeID: nodeID, CodePackageID: codePackageID,
+		ServiceGatewayTarget: gatewayTarget, SpaceID: spaceID, NodeID: nodeID,
 		Auth: nodeRuntime.AuthConfig{
 			AccessKey: auth.AccessKey, SecretKey: auth.SecretKey, TargetNode: auth.TargetNode,
 			CAFile: auth.CAFile, CAPEMBase64: auth.CAPEMBase64, ExpireSec: auth.ExpireSec,
 		},
 	}
-	roundRobin := &roundRobinConsumer{bindings: bindings}
+	roundRobin := &roundRobinConsumer{bindings: bindings, stopOnIdle: stopOnIdle}
 	defer roundRobin.Close()
 	handler := jetstream.DeliveryHandlerFunc(func(handleCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 		return handleDelivery(handleCtx, registry, bindings, runtimeCfg, delivery)
 	})
-	return jetstream.NewRunner(roundRobin, handler, jetstream.RunnerConfig{BatchSize: 1, InProgressInterval: 0}).Run(ctx)
+	actionReporter := &jobActionReporter{
+		registry: registry, bindings: bindings, spaceID: spaceID, nodeID: nodeID,
+	}
+	return jetstream.NewRunner(roundRobin, handler, jetstream.RunnerConfig{
+		BatchSize: 1, InProgressInterval: 0,
+		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+			reportTransportError(ctx, nodeID, err)
+		}),
+		ActionReporter: actionReporter,
+	}).Run(ctx)
+}
+
+func eventBusConfig() (jetstream.Config, error) {
+	cfg := jetstream.ConfigFromEnv(nil, "collector-cloudjob-worker")
+	credentialFile := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CREDENTIAL_FILE"))
+	if credentialFile == "" {
+		return cfg, nil
+	}
+	if err := cfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(credentialFile)); err != nil {
+		return jetstream.Config{}, fmt.Errorf("load EventBus credential file: %w", err)
+	}
+	return cfg, nil
 }
 
 func handleDelivery(ctx context.Context, registry *events.Registry, bindings []queueBinding, cfg nodeRuntime.Config, delivery *jetstream.Delivery) jetstream.HandlerResult {
+	return handleDeliveryAt(ctx, registry, bindings, cfg, delivery, time.Now)
+}
+
+func handleDeliveryAt(
+	ctx context.Context,
+	registry *events.Registry,
+	bindings []queueBinding,
+	cfg nodeRuntime.Config,
+	delivery *jetstream.Delivery,
+	now func() time.Time,
+) jetstream.HandlerResult {
+	receivedFields := baseDeliveryLogFields(delivery, cfg.NodeID)
+
+	if delivery == nil {
+		err := jetstream.ErrInvalidDelivery
+		receivedFields.Event = "collector_job_received"
+		writeJobLog(ctx, receivedFields, false)
+		receivedFields.Event = "collector_job_rejected"
+		receivedFields.Decision = "TERM"
+		receivedFields.ErrorCode = "INVALID_DELIVERY"
+		receivedFields.Err = err
+		writeJobLog(ctx, receivedFields, true)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	}
 	var binding *queueBinding
 	for i := range bindings {
 		if bindings[i].name == delivery.Consumer {
@@ -156,56 +226,115 @@ func handleDelivery(ctx context.Context, registry *events.Registry, bindings []q
 		}
 	}
 	if binding == nil || delivery.Subject != binding.subject {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("job execution queue identity mismatch")}
+		err := fmt.Errorf("job execution queue identity mismatch")
+		receivedFields.Event = "collector_job_received"
+		writeJobLog(ctx, receivedFields, false)
+		receivedFields.Event = "collector_job_rejected"
+		receivedFields.Decision = "TERM"
+		receivedFields.ErrorCode = "QUEUE_IDENTITY_MISMATCH"
+		receivedFields.Err = err
+		writeJobLog(ctx, receivedFields, true)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
 	decoded := events.DecodeDelivery(registry, delivery)
 	payload, ok := decoded.Payload.(*cloudjobpb.JobExecutionRequested)
 	if decoded.Err != nil || !ok || decoded.Message.GetSpaceId() != cfg.SpaceID ||
 		decoded.Message.GetSubjectId() != binding.subjectID ||
-		payload.GetCodePackageId() != cfg.CodePackageID || payload.GetJobType() != binding.jobType {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("invalid job execution delivery: %v", decoded.Err)}
+		payload.GetJobType() != binding.jobType {
+		err := fmt.Errorf("invalid job execution delivery: %v", decoded.Err)
+		receivedFields.Event = "collector_job_received"
+		writeJobLog(ctx, receivedFields, false)
+		receivedFields.Event = "collector_job_rejected"
+		receivedFields.Decision = "TERM"
+		receivedFields.ErrorCode = "INVALID_DELIVERY"
+		receivedFields.Err = err
+		writeJobLog(ctx, receivedFields, true)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
+	fields := validatedDeliveryLogFields(registry, bindings, cfg.SpaceID, cfg.NodeID, delivery)
+	fields.Event = "collector_job_received"
+	writeJobLog(ctx, fields, false)
+	executeAt, err := requestedExecutionTime(payload)
+	if err != nil {
+		fields.Event = "collector_job_rejected"
+		fields.Decision = "TERM"
+		fields.ErrorCode = "INVALID_EXECUTE_AT"
+		fields.Err = err
+		writeJobLog(ctx, fields, true)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	}
+	if decision := executeAtDecision(executeAt, now().UTC()); decision.Decision == jetstream.RETRY {
+		fields.Event = "collector_job_deferred"
+		fields.Decision = "RETRY"
+		fields.Delay = decision.Delay
+		fields.Status = "deferred"
+		writeJobLog(ctx, fields, false)
+		return decision
+	}
+	fields.Event = "collector_job_started"
+	fields.Decision = "EXECUTE"
+	fields.Status = "running"
+	writeJobLog(ctx, fields, false)
 	item := nodeRuntime.JobItem{
 		SpaceID: decoded.Message.GetSpaceId(), JobID: payload.GetJobId(), JobItemID: payload.GetJobItemId(),
-		JobType: payload.GetJobType(), CodePackageID: payload.GetCodePackageId(), Params: payload.GetParams().AsMap(),
+		JobType: payload.GetJobType(), Params: payload.GetParams().AsMap(), ExecuteAt: executeAt,
+		Consumer: delivery.Consumer, MessageID: delivery.RawMessageID,
 	}
 	return nodeRuntime.ExecuteJobItem(ctx, cfg, item, delivery.DeliveryCount, binding.maxDeliver)
 }
 
+func requestedExecutionTime(payload *cloudjobpb.JobExecutionRequested) (time.Time, error) {
+	if payload.GetExecuteAt() == nil {
+		return time.Time{}, nil
+	}
+	if err := payload.GetExecuteAt().CheckValid(); err != nil {
+		return time.Time{}, fmt.Errorf("invalid execute_at: %w", err)
+	}
+	return payload.GetExecuteAt().AsTime(), nil
+}
+
+func executeAtDecision(executeAt, now time.Time) jetstream.HandlerResult {
+	if executeAt.IsZero() || !now.Before(executeAt) {
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
+	}
+	return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: executeAt.Sub(now)}
+}
+
 func registerCollectorHandlers() {
 	registerHandlersOnce.Do(func() {
-		nodeRuntime.Register(jobs.JobTypeCollectKline, nodeRuntime.HandlerFunc(executeCollectorJobItem))
-		nodeRuntime.Register(jobs.JobTypeCollectSymbol, nodeRuntime.HandlerFunc(executeCollectorJobItem))
+		for _, jobType := range jobs.SupportedJobTypes() {
+			nodeRuntime.Register(jobType, nodeRuntime.HandlerFunc(executeCollectorJobItem))
+		}
 	})
 }
 
 func runtimeSpaceID() string {
-	if value := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); value != "" {
-		return value
-	}
-	binding, err := binance.ResolveStorageBinding(binance.InstTypeSPOT)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(binding.SpaceID)
+	return strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 }
 
 func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
-	execCtx, cancel := context.WithTimeout(ctx, 105*time.Second)
+	execCtx, cancel := context.WithTimeout(ctx, collectorWorkloadTimeout)
 	defer cancel()
 	taskEvent, err := taskEventFromJobItem(item)
 	if err != nil {
 		return nodeRuntime.Result{}, nodeRuntime.Permanent(err, "INVALID_JOB_ITEM")
 	}
-	result, err := executor.ExecuteTaskImmediately(execCtx, taskEvent)
+	result, err := executor.ExecuteTask(execCtx, taskEvent)
 	summary := map[string]any{}
 	if strings.TrimSpace(result) != "" {
 		_ = json.Unmarshal([]byte(result), &summary)
 	}
 	if err != nil {
-		return nodeRuntime.Result{Summary: summary}, nodeRuntime.Retryable(err, "COLLECT_FAILED")
+		return nodeRuntime.Result{Summary: summary}, nodeRuntime.Retryable(err, collectorErrorCode(err))
 	}
 	return nodeRuntime.Result{Summary: summary}, nil
+}
+
+func collectorErrorCode(err error) string {
+	if errors.Is(err, executor.ErrTaskInstanceReportFailed) {
+		return "TASK_INSTANCE_REPORT_FAILED"
+	}
+	return "COLLECT_FAILED"
 }
 
 func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, error) {
@@ -215,9 +344,16 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 	market := strings.ToLower(firstString(stringValue(payload, "market"), "spot"))
 	symbol := stringValue(payload, "symbol")
 	subjectID := firstString(stringValue(payload, "subject_id"), symbol)
+	datasetID := stringValue(payload, "dataset_id")
 	interval := stringValue(payload, "interval")
 	if taskID == "" {
 		return nil, fmt.Errorf("task_id is required")
+	}
+	if strings.TrimSpace(item.JobItemID) == "" {
+		return nil, fmt.Errorf("job_item_id is required")
+	}
+	if datasetID == "" {
+		return nil, fmt.Errorf("dataset_id is required")
 	}
 	if dataType != "symbol" && symbol == "" {
 		return nil, fmt.Errorf("symbol is required")
@@ -230,10 +366,11 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 		intervals = []string{""}
 	}
 	return &model.TaskExecuteEvent{
-		SpaceID: stringValue(payload, "space_id"), TaskID: taskID, DataType: dataType,
+		SpaceID: stringValue(payload, "space_id"), DatasetID: datasetID,
+		TaskID: taskID, JobItemID: item.JobItemID, DeliveryCount: item.DeliveryCount, DataType: dataType,
 		DataSource: firstString(stringValue(payload, "exchange"), "binance"), Market: market,
 		InstType: strings.ToUpper(market), SubjectID: subjectID, Symbol: symbol, Intervals: intervals,
-		Immediate: true, Live: boolValue(payload, "live"),
+		Live: boolValue(payload, "live"),
 	}, nil
 }
 

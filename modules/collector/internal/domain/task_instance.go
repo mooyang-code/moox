@@ -8,11 +8,9 @@ import (
 )
 
 const (
-	InstanceStatusPending    = 1
-	InstanceStatusRunning    = 2
-	InstanceStatusSuccess    = 3
-	InstanceStatusPartFailed = 4
-	InstanceStatusFailed     = 5
+	InstanceStatusPending = 1
+	InstanceStatusSuccess = 2
+	InstanceStatusFailed  = 3
 )
 
 // DatasetSubject is a storage dataset subject projected into Collector.
@@ -52,6 +50,7 @@ type TaskInstance struct {
 	LastExecNode   string     `gorm:"column:c_last_exec_node"`
 	LastExecStatus int        `gorm:"column:c_last_exec_status"`
 	TaskParams     string     `gorm:"column:c_task_params"`
+	ExecuteAt      time.Time  `gorm:"-"`
 	LastExecTime   *time.Time `gorm:"column:c_last_exec_time"`
 	Result         string     `gorm:"column:c_result"`
 	IsDeleted      bool       `gorm:"column:c_is_deleted"`

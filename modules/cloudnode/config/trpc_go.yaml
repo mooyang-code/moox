@@ -36,6 +36,11 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.cloudnode.scf_heartbeat_maintainer.timer
+      port: 11414
+      network: "*/9 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 8000
 
 plugins:
   metrics:

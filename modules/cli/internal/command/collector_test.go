@@ -186,14 +186,13 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 		PackageName:      "moox-collector",
 		BizType:          "data_collector",
 		NodeType:         "scf-event",
-		Config:           []string{"timeout=60"},
 		Env:              []string{"MOOX_ENV=prod"},
 	}, "moox-collector_dev")
 
 	if item.CloudAccountID != "account-a" || item.Region != "ap-guangzhou" || item.PackageID != "moox-collector_dev" {
 		t.Fatalf("routing fields = %#v", item)
 	}
-	if item.Config["timeout"] != "60" {
+	if item.Config["timeout"] != "120" {
 		t.Fatalf("config = %#v", item.Config)
 	}
 	if item.Config["cls_logset_id"] != "logset-unified" || item.Config["cls_topic_id"] != "topic-unified" {

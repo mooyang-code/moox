@@ -15,6 +15,9 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// DefaultAckWait leaves enough time for the Collector's bounded workload and status reports.
+const DefaultAckWait = 120 * time.Second
+
 type JetStreamQueue struct {
 	rt        *Runtime
 	client    *jetstream.Client
@@ -25,13 +28,13 @@ type JetStreamQueue struct {
 
 func NewJetStreamQueue(rt *Runtime, cfg QueueConfig) *JetStreamQueue {
 	if cfg.AckWait <= 0 {
-		cfg.AckWait = time.Minute
+		cfg.AckWait = DefaultAckWait
 	}
 	if cfg.MaxDeliver <= 0 {
 		cfg.MaxDeliver = 3
 	}
 	if cfg.MaxAckPending <= 0 {
-		cfg.MaxAckPending = 1
+		cfg.MaxAckPending = 32
 	}
 	var client *jetstream.Client
 	if rt != nil {
@@ -81,7 +84,7 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) error {
 	if strings.TrimSpace(item.GetSpaceId()) == "" || strings.TrimSpace(item.GetJobItemId()) == "" {
 		return fmt.Errorf("space_id and job_item_id are required")
 	}
-	subjectID, err := (cloudjobqueue.Identity{SpaceID: item.GetSpaceId(), CodePackageID: item.GetCodePackageId(), JobType: item.GetJobType()}).SubjectID()
+	subjectID, err := (cloudjobqueue.Identity{SpaceID: item.GetSpaceId(), JobType: item.GetJobType()}).SubjectID()
 	if err != nil {
 		return err
 	}
@@ -90,7 +93,7 @@ func (q *JetStreamQueue) Publish(ctx context.Context, item *pb.JobItem) error {
 	}
 	payload := &cloudjobpb.JobExecutionRequested{
 		JobId: item.GetJobId(), JobItemId: item.GetJobItemId(), JobType: item.GetJobType(),
-		CodePackageId: item.GetCodePackageId(), Params: item.GetParams(), Priority: item.GetPriority(),
+		Params: item.GetParams(), Priority: item.GetPriority(), ExecuteAt: item.GetExecuteAt(),
 	}
 	_, err = q.publisher.Publish(ctx, events.CloudJobExecutionRequested, payload, events.PublishOptions{
 		EventID: item.GetJobItemId(), OccurredAt: time.Now().UTC(), SpaceID: item.GetSpaceId(), SubjectID: subjectID,

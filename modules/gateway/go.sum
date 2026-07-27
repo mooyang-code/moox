@@ -181,5 +181,7 @@ trpc.group/trpc-go/trpc-database/timer v1.0.0 h1:DdzhsEhZ8uNLDHrPWolCPXxgdwln/hS
 trpc.group/trpc-go/trpc-database/timer v1.0.0/go.mod h1:ffT3RQEbEQZZhAgJvL3s9ZnezzTYV3FI48Cr/HS5NIM=
 trpc.group/trpc-go/trpc-go v1.0.4 h1:DaTTeaSf5Ah/dtQ8nAKKV2zaO7b7EB6qWLNWlMwLSsc=
 trpc.group/trpc-go/trpc-go v1.0.4/go.mod h1:lZOyo/G6nv2eBEPeDmbEfRhQDCOB65WsTqKqsgC2paA=
+trpc.group/trpc-go/trpc-log-cls v1.0.0 h1:zJ7NnE7khFmxN+jxkZkJd5qTUj4ERJ+2DJXAWyP/akc=
+trpc.group/trpc-go/trpc-log-cls v1.0.0/go.mod h1:ws/wxx51jkd1CClG6+n82rZvRWxczmzbve3tapK61D0=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 h1:xSqncQDYiUeNQSCz8RMdF7pVJWZImJ/RK+FgtSMFjss=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1/go.mod h1:BasNP/F0p0Y/fcbQMMw4TJzhYKv+dVPlnxiQaWZUpWs=

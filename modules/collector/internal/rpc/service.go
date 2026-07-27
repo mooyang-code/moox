@@ -4,7 +4,6 @@ package rpc
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -23,11 +22,10 @@ import (
 // Dependencies contains external service endpoints used by CollectMgr.
 type Dependencies struct {
 	AdminGatewayURL         string
-	ServiceGatewayTarget    string
 	ServiceAuth             taskpublisher.AuthConfig
 	StorageRPCGatewayTarget string
 	// PlannerStorageRPCGatewayTarget is the control-plane's local metadata target.
-	// The public target remains in StorageRPCGatewayTarget for SCF wake events.
+	// It overrides the runtime Storage target when both are available.
 	PlannerStorageRPCGatewayTarget string
 }
 
@@ -39,6 +37,7 @@ type Service struct {
 	builder      *planner.TaskBuilder
 	datasetSrc   *storagesource.DatasetSource
 	cloudJobs    *taskpublisher.Client
+	now          func() time.Time
 }
 
 // New creates a collector management service.
@@ -53,11 +52,10 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 		builder:      planner.NewTaskBuilder(),
 		datasetSrc:   storagesource.NewDatasetSource(plannerMetadataTarget),
 		cloudJobs: taskpublisher.New(taskpublisher.Config{
-			ServiceGatewayTarget:      deps.AdminGatewayURL,
-			EventServiceGatewayTarget: deps.ServiceGatewayTarget,
-			StorageRPCGatewayTarget:   deps.StorageRPCGatewayTarget,
-			Auth:                      deps.ServiceAuth,
+			ServiceGatewayTarget: deps.AdminGatewayURL,
+			Auth:                 deps.ServiceAuth,
 		}),
+		now: time.Now,
 	}
 }
 
@@ -257,6 +255,7 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 func (s *Service) ReportTaskStatus(ctx context.Context, req *pb.ReportInstanceStatusReq) (*pb.ReportInstanceStatusRsp, error) {
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	taskID := strings.TrimSpace(req.GetTaskId())
+	jobItemID := strings.TrimSpace(req.GetJobItemId())
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	if spaceID == "" {
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
@@ -264,48 +263,65 @@ func (s *Service) ReportTaskStatus(ctx context.Context, req *pb.ReportInstanceSt
 	if taskID == "" {
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task_id is required")}, nil
 	}
+	if jobItemID == "" {
+		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_item_id is required")}, nil
+	}
 	status := fromPBStatus(req.GetStatus())
 	if status == 0 {
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "status is required")}, nil
 	}
 	result := jsonStringFromStruct(req.GetResult())
-	if err := s.instanceRepo.UpdateStatus(ctx, spaceID, taskID, nodeID, status, result); err != nil {
+	updated, err := s.instanceRepo.UpdateStatus(ctx, spaceID, taskID, jobItemID, nodeID, status, result)
+	if err != nil {
 		log.ErrorContextf(ctx, "[Collector] update task status failed: %v", err)
-		if errors.Is(err, store.ErrTaskInstanceNotFound) {
-			return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "task instance not found")}, nil
-		}
 		return &pb.ReportInstanceStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	log.InfoContextf(ctx, "[Collector] task status space_id=%s task_id=%s node_id=%s status=%d",
-		spaceID, taskID, nodeID, status)
+	if !updated {
+		log.InfoContextf(
+			ctx,
+			"[Collector] ignored stale task status space_id=%s task_id=%s job_item_id=%s node_id=%s status=%d",
+			spaceID,
+			taskID,
+			jobItemID,
+			nodeID,
+			status,
+		)
+		return &pb.ReportInstanceStatusRsp{RetInfo: retOK()}, nil
+	}
+	log.InfoContextf(ctx, "[Collector] task status space_id=%s task_id=%s job_item_id=%s node_id=%s status=%d",
+		spaceID, taskID, jobItemID, nodeID, status)
 	return &pb.ReportInstanceStatusRsp{RetInfo: retOK()}, nil
 }
 
-// RecalculateAllTaskInstances rebuilds task instances for all enabled rules in one space.
-func (s *Service) RecalculateAllTaskInstances(ctx context.Context, req *pb.RecalculateAllTaskInstancesReq) (*pb.RecalculateAllTaskInstancesRsp, error) {
+// ScheduleTasks plans and submits the next execution of every enabled task in one space.
+func (s *Service) ScheduleTasks(ctx context.Context, req *pb.ScheduleTasksReq) (*pb.ScheduleTasksRsp, error) {
 	spaceID := strings.TrimSpace(req.GetSpaceId())
 	if spaceID == "" {
-		return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
+		return &pb.ScheduleTasksRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
 	rules, err := s.ruleRepo.ListEnabled(ctx, spaceID)
 	if err != nil {
 		log.ErrorContextf(ctx, "[Collector] list enabled rules failed: %v", err)
-		return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		return &pb.ScheduleTasksRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	now := time.Now().UTC()
+	if s.now != nil {
+		now = s.now().UTC()
 	}
 	total := 0
 	for i := range rules {
-		created, err := s.recalculateRule(ctx, &rules[i])
+		created, err := s.scheduleRule(ctx, &rules[i], now)
 		if err != nil {
-			log.ErrorContextf(ctx, "[Collector] recalculate rule %s failed: %v", rules[i].RuleID, err)
-			return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+			log.ErrorContextf(ctx, "[Collector] schedule rule %s failed: %v", rules[i].RuleID, err)
+			return &pb.ScheduleTasksRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
 		total += created
 	}
-	log.InfoContextf(ctx, "[Collector] recalculated task instances space_id=%s rules=%d instances=%d", spaceID, len(rules), total)
-	return &pb.RecalculateAllTaskInstancesRsp{RetInfo: retOK()}, nil
+	log.InfoContextf(ctx, "[Collector] scheduled tasks space_id=%s rules=%d instances=%d", spaceID, len(rules), total)
+	return &pb.ScheduleTasksRsp{RetInfo: retOK()}, nil
 }
 
-func (s *Service) recalculateRule(ctx context.Context, rule *domain.TaskRule) (int, error) {
+func (s *Service) scheduleRule(ctx context.Context, rule *domain.TaskRule, now time.Time) (int, error) {
 	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Exchange, rule.DataType)
 	if err != nil {
 		return 0, fmt.Errorf("parse rule %s params: %w", rule.RuleID, err)
@@ -321,67 +337,22 @@ func (s *Service) recalculateRule(ctx context.Context, rule *domain.TaskRule) (i
 	if err != nil {
 		return 0, fmt.Errorf("build instances for rule %s: %w", rule.RuleID, err)
 	}
+	instances = taskpublisher.PrepareScheduledInstances(instances, now)
 	if err := s.instanceRepo.UpsertMany(ctx, instances); err != nil {
 		return 0, fmt.Errorf("upsert instances for rule %s: %w", rule.RuleID, err)
 	}
-	jobItemIDs, submitErr := s.cloudJobs.SubmitCollectorJobItems(ctx, instances)
-	if err := s.instanceRepo.UpdateCloudJobItemIDs(ctx, rule.SpaceID, jobItemIDs); err != nil {
-		return 0, fmt.Errorf("record cloud job items for rule %s: %w", rule.RuleID, err)
-	}
-	var wakeErr error
-	if len(jobItemIDs) > 0 {
-		woken, err := s.cloudJobs.WakeCollectorNodes(ctx, taskpublisher.WakeOptions{
-			SpaceID:  rule.SpaceID,
-			JobTypes: jobTypesFromInstances(instances),
-		})
-		if err != nil {
-			wakeErr = err
-			log.WarnContextf(ctx, "[Collector] wake collector nodes failed rule_id=%s: %v", rule.RuleID, err)
-		} else if woken == 0 {
-			log.WarnContextf(ctx, "[Collector] no collector nodes woken rule_id=%s", rule.RuleID)
-		} else {
-			log.InfoContextf(ctx, "[Collector] woken collector nodes rule_id=%s count=%d", rule.RuleID, woken)
-		}
-	}
+	_, submitErr := s.cloudJobs.SubmitCollectorJobItems(ctx, instances)
 	if submitErr != nil {
-		err := fmt.Errorf("submit cloud job items for rule %s: %w", rule.RuleID, submitErr)
-		if wakeErr != nil {
-			err = errors.Join(err, fmt.Errorf("wake submitted cloud job items: %w", wakeErr))
-		}
-		return 0, err
+		return 0, fmt.Errorf("submit cloud job items for rule %s: %w", rule.RuleID, submitErr)
 	}
 	return len(instances), nil
 }
 
-func jobTypesFromInstances(instances []domain.TaskInstance) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(instances))
-	for _, instance := range instances {
-		payload := map[string]any{}
-		_ = json.Unmarshal([]byte(instance.TaskParams), &payload)
-		jobType, _ := payload["job_type"].(string)
-		jobType = strings.TrimSpace(jobType)
-		if jobType == "" {
-			dataType, _ := payload["data_type"].(string)
-			jobType = "collect." + strings.TrimSpace(dataType)
-		}
-		if jobType == "collect." || jobType == "" {
-			continue
-		}
-		if _, ok := seen[jobType]; ok {
-			continue
-		}
-		seen[jobType] = struct{}{}
-		out = append(out, jobType)
-	}
-	return out
-}
-
 // GetDataTypeConfigs returns the currently supported collector rule data types.
 func (s *Service) GetDataTypeConfigs(ctx context.Context, req *pb.GetDataTypeConfigsReq) (*pb.GetDataTypeConfigsRsp, error) {
-	definitions := jobs.ListDefinitions()
-	configs := make([]*pb.DataTypeConfig, 0, len(definitions))
-	for _, definition := range definitions {
+	jobDefinitions := jobs.ListJobDefinitions()
+	configs := make([]*pb.DataTypeConfig, 0, len(jobDefinitions))
+	for _, definition := range jobDefinitions {
 		configs = append(configs, dataTypeConfigFromDefinition(definition))
 	}
 	return &pb.GetDataTypeConfigsRsp{
@@ -392,7 +363,7 @@ func (s *Service) GetDataTypeConfigs(ctx context.Context, req *pb.GetDataTypeCon
 
 // GetDataTypeConfigWithFields returns field metadata for the rule form.
 func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDataTypeConfigWithFieldsReq) (*pb.GetDataTypeConfigWithFieldsRsp, error) {
-	definition, ok := jobs.DefinitionByDataType(req.GetDataType())
+	definition, ok := jobs.JobDefinitionByDataType(req.GetDataType())
 	if !ok {
 		return &pb.GetDataTypeConfigWithFieldsRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "unsupported data_type")}, nil
 	}
@@ -409,15 +380,6 @@ func normalizeTaskRule(rule domain.TaskRule) domain.TaskRule {
 	rule.RuleID = strings.TrimSpace(rule.RuleID)
 	if rule.RuleID == "" {
 		rule.RuleID = fmt.Sprintf("rule-%d", time.Now().UnixNano())
-	}
-	if strings.TrimSpace(rule.AssignmentType) == "" {
-		rule.AssignmentType = "auto"
-	}
-	if strings.TrimSpace(rule.AssignedNodes) == "" {
-		rule.AssignedNodes = "[]"
-	}
-	if strings.TrimSpace(rule.NodeTags) == "" {
-		rule.NodeTags = "[]"
 	}
 	if strings.TrimSpace(rule.CollectParams) == "" {
 		rule.CollectParams = "{}"
@@ -444,7 +406,7 @@ func validateTaskRule(rule domain.TaskRule) error {
 	return nil
 }
 
-func dataTypeConfigFromDefinition(definition jobs.Definition) *pb.DataTypeConfig {
+func dataTypeConfigFromDefinition(definition jobs.JobDefinition) *pb.DataTypeConfig {
 	return &pb.DataTypeConfig{
 		Id:                definition.ID,
 		DataType:          definition.DataType,
@@ -456,7 +418,7 @@ func dataTypeConfigFromDefinition(definition jobs.Definition) *pb.DataTypeConfig
 	}
 }
 
-func dataTypeFieldsFromDefinition(definition jobs.Definition) []*pb.DataTypeFieldConfig {
+func dataTypeFieldsFromDefinition(definition jobs.JobDefinition) []*pb.DataTypeFieldConfig {
 	fields := make([]*pb.DataTypeFieldConfig, 0, len(definition.Fields))
 	for _, field := range definition.Fields {
 		fields = append(fields, &pb.DataTypeFieldConfig{

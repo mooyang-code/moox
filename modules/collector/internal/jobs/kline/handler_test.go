@@ -9,8 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDefinition_ShouldExposeKlineMetadata(t *testing.T) {
-	def := Definition("collect.kline")
+func TestNewJobDefinition_ShouldExposeKlineMetadata(t *testing.T) {
+	def := NewJobDefinition()
+	assert.Equal(t, "collect.kline", def.JobType)
 	assert.Equal(t, "kline", def.DataType)
 	assert.Equal(t, "K线", def.TypeName)
 	require.Len(t, def.Fields, 3)
@@ -44,8 +45,8 @@ func TestBuildTaskSpecs_EmptyInterval_ShouldDefaultToOneMinute(t *testing.T) {
 	assert.Equal(t, "1m", specs[0].Interval)
 }
 
-func TestDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing.T) {
-	def := Definition("collect.kline")
+func TestNewJobDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing.T) {
+	def := NewJobDefinition()
 	params := &domain.CollectParams{}
 	params.Normalize("binance", "kline")
 	params.Source.Kind = "none"

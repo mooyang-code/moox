@@ -11,6 +11,7 @@ SCF 由 Collector 入口直接绑定 CloudNode 已创建的 JetStream Job Execut
 - 永久失败或末次投递：先上报 failed，成功后 TERM。
 - 终态上报失败：NAK，让 JetStream 重投。
 
-队列身份由 `packages/cloudjobqueue.Identity` 统一生成。运行时必须提供
-`MOOX_SPACE_ID`、`MOOX_CODE_PACKAGE_ID`、节点身份和 Service Gateway 签名凭据。
-`delivery_count` 只用于判断末次投递，不进入业务状态模型。
+队列身份由 `packages/cloudjobqueue.Identity` 根据 `space_id + job_type` 统一生成。
+运行时必须提供 `MOOX_SPACE_ID`、节点身份和 Service Gateway 签名凭据。
+`MOOX_CODE_PACKAGE_ID` 只描述当前部署产物，可作为日志元数据，但不参与 JobItem
+或 durable identity。`delivery_count` 只用于判断末次投递，不进入业务状态模型。

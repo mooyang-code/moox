@@ -11,7 +11,6 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/reporter"
-	"github.com/mooyang-code/moox/modules/collector/internal/taskrunner"
 	"github.com/tencentyun/scf-go-lib/cloudfunction"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -21,12 +20,8 @@ import (
 type CloudFunctionHandler struct{}
 
 const keepaliveHeartbeatTimeout = 8 * time.Second
-const keepaliveTaskExecutionTimeout = 115 * time.Second
 
 var reportHeartbeatAfterProbe = reporter.ReportHeartbeat
-var pollJobItemsAfterHeartbeat = func(ctx context.Context) error {
-	return taskrunner.RunJobItems(ctx)
-}
 
 // NewCloudFunctionHandler 创建云函数处理器
 func NewCloudFunctionHandler() *CloudFunctionHandler {
@@ -202,11 +197,7 @@ func normalizeDeploymentName(name string) string {
 func (h *CloudFunctionHandler) processCloudFunctionEvent(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
 	log.DebugContextf(ctx, "[CloudFunction] 处理云函数事件, action=%s", event.Action)
 
-	// 根据事件类型处理
 	switch event.Action {
-	case model.EventActionTask:
-		return h.errorResponse("unsupported_event_type", "direct task execution is disabled; use CloudNode JobItem polling"), nil
-
 	case model.EventActionKeepalive:
 		return h.handleKeepalive(ctx, event)
 
@@ -257,13 +248,6 @@ func (h *CloudFunctionHandler) handleKeepalive(ctx context.Context, event model.
 		} else {
 			log.InfoContextf(ctx, "[handleKeepalive] 心跳上报成功")
 		}
-		executeCtx, cancel := context.WithTimeout(ctx, keepaliveTaskExecutionTimeout)
-		defer cancel()
-		if err := pollJobItemsAfterHeartbeat(executeCtx); err != nil {
-			log.WarnContextf(ctx, "[handleKeepalive] CloudNode JobItem 拉取/执行失败: %v", err)
-		} else {
-			log.InfoContextf(ctx, "[handleKeepalive] CloudNode JobItem 拉取/执行完成")
-		}
 	}
 
 	// 构建保活响应
@@ -296,7 +280,7 @@ func (h *CloudFunctionHandler) buildKeepaliveResponse(ctx context.Context, event
 	// 构建节点信息。任务执行由 CloudNode JobItem 租约维护，keepalive 不再展示旧本地任务缓存。
 	nodeInfo := &model.NodeInfo{
 		NodeID:       nodeID,
-		NodeType:     "scf",
+		NodeType:     model.NodeTypeSCFEvent,
 		Region:       funcCtx.TencentcloudRegion,
 		Namespace:    funcCtx.Namespace,
 		Version:      funcCtx.FunctionVersion,

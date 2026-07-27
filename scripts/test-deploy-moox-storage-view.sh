@@ -138,8 +138,12 @@ done
 
 assert_file "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_file "${DEPLOY_DIR}/secrets/storage-node-auth.env"
+assert_file "${DEPLOY_DIR}/secrets/storage-internal-auth.env"
 [[ $(stat -f '%Lp' "${DEPLOY_DIR}/secrets/storage-node-auth.env" 2>/dev/null || stat -c '%a' "${DEPLOY_DIR}/secrets/storage-node-auth.env") == 600 ]] || { echo 'storage node auth mode must be 0600' >&2; exit 1; }
+[[ $(stat -f '%Lp' "${DEPLOY_DIR}/secrets/storage-internal-auth.env" 2>/dev/null || stat -c '%a' "${DEPLOY_DIR}/secrets/storage-internal-auth.env") == 600 ]] || { echo 'storage internal auth mode must be 0600' >&2; exit 1; }
 assert_grep '^MOOX_STORAGE_NODE_AUTH_SECRET=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/storage-node-auth.env"
+assert_grep '^MOOX_STORAGE_PRIMARY_AUTH_SECRET=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/storage-internal-auth.env"
+assert_grep '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/storage-internal-auth.env"
 [[ $(stat -f '%Lp' "${DEPLOY_DIR}/secrets/health-auth.env" 2>/dev/null || stat -c '%a' "${DEPLOY_DIR}/secrets/health-auth.env") == 600 ]] || { echo 'health auth mode must be 0600' >&2; exit 1; }
 assert_grep '^MOOX_HEALTH_AUTH_VERSION=moox-health-v1$' "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/health-auth.env"
@@ -166,6 +170,7 @@ assert_grep '"\$\{ROOT\}/start\.sh" "\$\{name\}" 9>&-' "${DEPLOY_DIR}/healthchec
 
 assert_grep 'start_storage_process "storage-primary" "moox-storage-primary"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'source "\$\{ROOT\}/secrets/storage-node-auth.env"' "${DEPLOY_DIR}/start.sh"
+assert_grep 'source "\$\{ROOT\}/secrets/storage-internal-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'register-node' "${DEPLOY_DIR}/start.sh"
 assert_grep 'import-seed' "${DEPLOY_DIR}/start.sh"
 assert_grep 'doctor bootstrap --format json' "${DEPLOY_DIR}/start.sh"
@@ -202,6 +207,7 @@ assert_order "${DEPLOY_DIR}/start.sh" \
   '^    activate_storage_datasets$'
 doctor_body="$(awk '/^run_storage_doctor\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${DEPLOY_DIR}/start.sh")"
 grep -q 'doctor bootstrap --format json' <<<"${doctor_body}"
+grep -q 'cd "${ROOT}"' <<<"${doctor_body}"
 if grep -q 'activate-datasets' <<<"${doctor_body}"; then
   echo 'ordinary Doctor path must not activate Datasets' >&2
   exit 1
@@ -233,12 +239,6 @@ assert_grep 'log_path: \.\./logs/storage-primary' "${DEPLOY_DIR}/storage/config/
 assert_grep 'log_path: \.\./logs/storage-view' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'port: 20104' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'port: 20202' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
-assert_grep 'scheduler=viewReconcileSchedule&startAtOnce=1' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
-if grep -Eq '[?&](params|disable|location)=' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"; then
-  echo "view reconcile timer contains options unsupported by the official tRPC timer" >&2
-  exit 1
-fi
-assert_grep 'timeout: 900000' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${ROOT}/scripts/deploy-moox.sh"; then
   echo 'legacy storage route seed environment remains in deployment script' >&2
   exit 1

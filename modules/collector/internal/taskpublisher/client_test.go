@@ -14,14 +14,14 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestBuildJobItemUsesCollectorRoutingFields(t *testing.T) {
-	item := buildJobItem(domain.TaskInstance{
+func TestBuildScheduledJobItemUsesNextBoundary(t *testing.T) {
+	now := time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC)
+	instances := PrepareScheduledInstances([]domain.TaskInstance{{
 		SpaceID: "space-a",
 		RuleID:  "rule-1",
 		TaskID:  "task-1",
@@ -29,9 +29,10 @@ func TestBuildJobItemUsesCollectorRoutingFields(t *testing.T) {
 			"exchange":"binance",
 			"data_type":"symbol",
 			"job_type":"collect.symbol",
-			"code_package_id":"moox-collector_dev"
-		}`,
-	})
+			"schedule_interval":"30m"
+			}`,
+	}}, now)
+	item := buildJobItem(instances[0])
 
 	if item.GetSpaceId() != "space-a" || item.GetJobId() != "rule-1" {
 		t.Fatalf("identity fields = space:%q job:%q item:%q", item.GetSpaceId(), item.GetJobId(), item.GetJobItemId())
@@ -39,60 +40,58 @@ func TestBuildJobItemUsesCollectorRoutingFields(t *testing.T) {
 	if item.GetJobType() != "collect.symbol" {
 		t.Fatalf("job_type = %q, want collect.symbol", item.GetJobType())
 	}
-	if item.GetCodePackageId() != "moox-collector_dev" {
-		t.Fatalf("code_package_id = %q, want moox-collector_dev", item.GetCodePackageId())
-	}
 	if item.GetParams().GetFields()["task_id"].GetStringValue() != "task-1" {
 		t.Fatalf("params.task_id = %q, want task-1", item.GetParams().GetFields()["task_id"].GetStringValue())
 	}
+	wantExecuteAt := time.Date(2026, 7, 26, 10, 30, 0, 0, time.UTC)
+	if item.GetExecuteAt() == nil || !item.GetExecuteAt().AsTime().Equal(wantExecuteAt) {
+		t.Fatalf("execute_at = %v, want %v", item.GetExecuteAt(), wantExecuteAt)
+	}
+	if got := item.GetJobItemId(); got != "task-1:2026-07-26T10:30:00Z" {
+		t.Fatalf("job_item_id = %q, want deterministic execute_at id", got)
+	}
 }
 
-func TestBuildJobItemUsesWindowedJobItemIDAndStableTaskID(t *testing.T) {
-	item := buildJobItem(domain.TaskInstance{
+func TestPrepareScheduledInstancesRepeatedInSameWindowUsesSameJobItemID(t *testing.T) {
+	instance := domain.TaskInstance{
 		SpaceID: "space-a",
 		RuleID:  "rule-1",
 		TaskID:  "task-1",
 		TaskParams: `{
 			"exchange":"binance",
 			"data_type":"kline",
-			"schedule_interval":"1m"
-		}`,
-	})
+				"schedule_interval":"1m"
+			}`,
+	}
+	first := PrepareScheduledInstances([]domain.TaskInstance{instance},
+		time.Date(2026, 7, 26, 10, 17, 1, 0, time.UTC))[0]
+	second := PrepareScheduledInstances([]domain.TaskInstance{instance},
+		time.Date(2026, 7, 26, 10, 17, 59, 0, time.UTC))[0]
 
-	fields := item.GetParams().GetFields()
-	window := fields["schedule_window"].GetStringValue()
-	if window == "" {
-		t.Fatalf("params.schedule_window is empty")
+	if first.CloudJobItemID != second.CloudJobItemID {
+		t.Fatalf("job ids differ in one window: %q != %q", first.CloudJobItemID, second.CloudJobItemID)
 	}
-	if fields["task_id"].GetStringValue() != "task-1" {
-		t.Fatalf("params.task_id = %q, want task-1", fields["task_id"].GetStringValue())
-	}
-	if item.GetJobItemId() == "task-1" {
-		t.Fatalf("job_item_id = %q, want a windowed id", item.GetJobItemId())
-	}
-	if item.GetJobItemId() != "task-1:"+window {
-		t.Fatalf("job_item_id = %q, want task-1:%s", item.GetJobItemId(), window)
+	if !first.ExecuteAt.Equal(second.ExecuteAt) {
+		t.Fatalf("execute_at differs in one window: %v != %v", first.ExecuteAt, second.ExecuteAt)
 	}
 }
 
 func TestBuildJobItemDefaultsRoutingFromDataType(t *testing.T) {
-	item := buildJobItem(domain.TaskInstance{
+	instances := PrepareScheduledInstances([]domain.TaskInstance{{
 		SpaceID:    "space-a",
 		RuleID:     "rule-1",
 		TaskID:     "task-1",
 		TaskParams: `{"exchange":"binance","data_type":"kline"}`,
-	})
+	}}, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
+	item := buildJobItem(instances[0])
 
 	if item.GetJobType() != "collect.kline" {
 		t.Fatalf("job_type = %q, want collect.kline", item.GetJobType())
 	}
-	if item.GetCodePackageId() != "moox-collector_dev" {
-		t.Fatalf("code_package_id = %q, want moox-collector_dev", item.GetCodePackageId())
-	}
 }
 
-func TestJobItemIDsByTaskIDUsesAckedJobItemID(t *testing.T) {
-	got := jobItemIDsByTaskID(
+func TestJobItemIDsByTaskIDReturnsRejectedAckDetailsAndSuccessfulIDs(t *testing.T) {
+	got, err := jobItemIDsByTaskID(
 		[]*cloudnodepb.JobItem{
 			{
 				JobItemId: "task-1:2026-07-04T09:07:00Z",
@@ -104,12 +103,21 @@ func TestJobItemIDsByTaskIDUsesAckedJobItemID(t *testing.T) {
 			},
 		},
 		[]*cloudnodepb.JobItemAck{
-			{JobItemId: "task-1:2026-07-04T09:07:00Z", Status: cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_REJECTED},
-			{JobItemId: "task-2:2026-07-04T09:07:00Z", Status: cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED},
+			{
+				JobItemId:    "task-1:2026-07-04T09:07:00Z",
+				Status:       cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_REJECTED,
+				RejectReason: "invalid collector params",
+			},
+			{JobItemId: "task-2:2026-07-04T09:07:00Z", Status: cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED},
 			{JobItemId: "missing", Status: cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED},
 		},
 	)
 
+	if err == nil ||
+		!strings.Contains(err.Error(), "task-1:2026-07-04T09:07:00Z") ||
+		!strings.Contains(err.Error(), "invalid collector params") {
+		t.Fatalf("error = %v, want rejected job_item_id and reject_reason", err)
+	}
 	if len(got) != 1 || got["task-2"] != "task-2:2026-07-04T09:07:00Z" {
 		t.Fatalf("ids = %#v, want task-2 mapped to windowed job item id", got)
 	}
@@ -146,9 +154,10 @@ func TestSubmitCollectorJobItemsBatchesLargeRequests(t *testing.T) {
 			SpaceID:    "crypto",
 			RuleID:     "binance_spot_kline_1m",
 			TaskID:     fmt.Sprintf("task-%d", i),
-			TaskParams: `{"data_type":"kline","job_type":"collect.kline","code_package_id":"moox-collector_dev","schedule_interval":"1m"}`,
+			TaskParams: `{"data_type":"kline","job_type":"collect.kline","schedule_interval":"1m"}`,
 		})
 	}
+	instances = PrepareScheduledInstances(instances, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
 	client := New(Config{
 		ServiceGatewayTarget: server.URL,
 		Auth:                 AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway-gz-122"},
@@ -191,8 +200,9 @@ func TestSubmitCollectorJobItemsReturnsSuccessfulBatchesWithError(t *testing.T) 
 
 	instances := make([]domain.TaskInstance, 0, submitJobItemBatchSize+1)
 	for i := 0; i < submitJobItemBatchSize+1; i++ {
-		instances = append(instances, domain.TaskInstance{SpaceID: "crypto", RuleID: "rule", TaskID: fmt.Sprintf("task-%d", i), TaskParams: `{"job_type":"collect.kline","code_package_id":"pkg"}`})
+		instances = append(instances, domain.TaskInstance{SpaceID: "crypto", RuleID: "rule", TaskID: fmt.Sprintf("task-%d", i), TaskParams: `{"job_type":"collect.kline"}`})
 	}
+	instances = PrepareScheduledInstances(instances, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
 	client := New(Config{ServiceGatewayTarget: server.URL, Auth: AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"}})
 	ids, err := client.SubmitCollectorJobItems(context.Background(), instances)
 	if err == nil || !strings.Contains(err.Error(), "rejected batch") {
@@ -203,215 +213,46 @@ func TestSubmitCollectorJobItemsReturnsSuccessfulBatchesWithError(t *testing.T) 
 	}
 }
 
-func TestWakeCollectorNodesSetsSpaceHeaderAndInvokesMatchingNodes(t *testing.T) {
-	var invoked bool
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-Moox-Target-Node"); got != "gateway-gz-122" {
-			t.Fatalf("X-Moox-Target-Node = %q, want gateway-gz-122", got)
-		}
-		if r.Header.Get("X-Space-Id") != "crypto" {
-			t.Fatalf("X-Space-Id = %q, want crypto", r.Header.Get("X-Space-Id"))
-		}
-		switch r.URL.Path {
-		case "/api/service/cloudnode/GetNodeList":
-			writeProtoJSON(t, w, &cloudnodepb.GetNodeListRsp{
-				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-				Items: []*cloudnodepb.CloudNode{
-					{NodeId: "node-a", SupportedWorkloads: []string{"kline"}},
-					{NodeId: "node-b", SupportedWorkloads: []string{"collect.symbol"}},
-				},
-			})
-		case "/api/service/cloudnode/InvokeFunction":
-			invoked = true
-			var req cloudnodepb.InvokeFunctionReq
-			if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
-				t.Fatal(err)
-			}
-			if req.GetNodeId() != "node-a" {
-				t.Fatalf("node_id = %q, want node-a", req.GetNodeId())
-			}
-			if req.GetScfInvokeType() != cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT {
-				t.Fatalf("invoke type = %v, want event", req.GetScfInvokeType())
-			}
-			event := req.GetEventData().AsMap()
-			if event["service_gateway_target"] != server.URL {
-				t.Fatalf("event service_gateway_target = %#v, want %s", event["service_gateway_target"], server.URL)
-			}
-			if event["storage_rpc_gateway_target"] != "127.0.0.1:11003" {
-				t.Fatalf("event storage targets = %#v", event)
-			}
-			data, ok := event["data"].(map[string]any)
-			if !ok || data["node_id"] != "node-a" {
-				t.Fatalf("event data.node_id = %#v, want node-a", event["data"])
-			}
-			writeProtoJSON(t, w, &cloudnodepb.InvokeFunctionRsp{
-				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-				Scf:     &cloudnodepb.ScfInvokeResult{},
-			})
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-	client := New(Config{
-		ServiceGatewayTarget:    server.URL,
-		StorageRPCGatewayTarget: "127.0.0.1:11003",
-		Auth: AuthConfig{
-			AccessKey:  "ak",
-			SecretKey:  "sk",
-			TargetNode: "gateway-gz-122",
-		},
-	})
-
-	count, err := client.WakeCollectorNodes(context.Background(), WakeOptions{
-		SpaceID:  "crypto",
-		JobTypes: []string{"collect.kline"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 || !invoked {
-		t.Fatalf("wake count=%d invoked=%v, want one invoke", count, invoked)
-	}
-}
-
-func TestWakeCollectorNodesPaginatesNodeList(t *testing.T) {
-	pages := []uint32{}
-	invoked := []string{}
-	var invokedMu sync.Mutex
+func TestSubmitCollectorJobItemsKeepsSuccessfulIDsFromRejectedAckBatch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/service/cloudnode/GetNodeList":
-			var req cloudnodepb.GetNodeListReq
-			if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
-				t.Fatal(err)
-			}
-			page := req.GetPage().GetPage()
-			pages = append(pages, page)
-			if page == 1 {
-				writeProtoJSON(t, w, &cloudnodepb.GetNodeListRsp{
-					RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-					Items: []*cloudnodepb.CloudNode{
-						{NodeId: "node-a", SupportedWorkloads: []string{"collect.kline"}},
-					},
-					Page: &commonpb.PageResult{Page: 1, Size: wakeNodeListPageSize, Total: 2, HasMore: true},
-				})
-				return
-			}
-			writeProtoJSON(t, w, &cloudnodepb.GetNodeListRsp{
-				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-				Items: []*cloudnodepb.CloudNode{
-					{NodeId: "node-b", SupportedWorkloads: []string{"collect.kline"}},
-				},
-				Page: &commonpb.PageResult{Page: 2, Size: wakeNodeListPageSize, Total: 2, HasMore: false},
-			})
-		case "/api/service/cloudnode/InvokeFunction":
-			var req cloudnodepb.InvokeFunctionReq
-			if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
-				t.Fatal(err)
-			}
-			invokedMu.Lock()
-			invoked = append(invoked, req.GetNodeId())
-			invokedMu.Unlock()
-			writeProtoJSON(t, w, &cloudnodepb.InvokeFunctionRsp{
-				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-				Scf:     &cloudnodepb.ScfInvokeResult{},
-			})
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+		var req cloudnodepb.SubmitJobItemsReq
+		if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
+			t.Fatal(err)
 		}
+		writeProtoJSON(t, w, &cloudnodepb.SubmitJobItemsRsp{
+			RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+			Acks: []*cloudnodepb.JobItemAck{
+				{
+					JobItemId: req.GetItems()[0].GetJobItemId(),
+					Status:    cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED,
+				},
+				{
+					JobItemId:    req.GetItems()[1].GetJobItemId(),
+					Status:       cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_REJECTED,
+					RejectReason: "unsupported job type",
+				},
+			},
+		})
 	}))
 	defer server.Close()
 
-	client := New(Config{
-		ServiceGatewayTarget: server.URL,
-		Auth: AuthConfig{
-			AccessKey:  "ak",
-			SecretKey:  "sk",
-			TargetNode: "gateway-gz-122",
-		},
-	})
+	instances := PrepareScheduledInstances([]domain.TaskInstance{
+		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-ok", TaskParams: `{"job_type":"collect.kline"}`},
+		{SpaceID: "crypto", RuleID: "rule", TaskID: "task-bad", TaskParams: `{"job_type":"collect.unknown"}`},
+	}, time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC))
+	client := New(Config{ServiceGatewayTarget: server.URL, Auth: AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"}})
 
-	count, err := client.WakeCollectorNodes(context.Background(), WakeOptions{
-		SpaceID:  "crypto",
-		JobTypes: []string{"collect.kline"},
-	})
-	if err != nil {
-		t.Fatal(err)
+	ids, err := client.SubmitCollectorJobItems(context.Background(), instances)
+	if err == nil || !strings.Contains(err.Error(), instances[1].CloudJobItemID) ||
+		!strings.Contains(err.Error(), "unsupported job type") {
+		t.Fatalf("error = %v, want rejected ACK details", err)
 	}
-	if count != 2 {
-		t.Fatalf("wake count=%d, want 2", count)
-	}
-	sort.Strings(invoked)
-	if strings.Join(invoked, ",") != "node-a,node-b" {
-		t.Fatalf("invoked=%v, want both pages", invoked)
-	}
-	if len(pages) != 2 || strings.Join([]string{fmt.Sprint(pages[0]), fmt.Sprint(pages[1])}, ",") != "1,2" {
-		t.Fatalf("pages=%v, want 1,2", pages)
+	if got := ids["task-ok"]; got != instances[0].CloudJobItemID {
+		t.Fatalf("successful id = %q, want %q", got, instances[0].CloudJobItemID)
 	}
 }
 
-func TestWakeCollectorNodesContinuesAfterFailedNode(t *testing.T) {
-	invoked := []string{}
-	var invokedMu sync.Mutex
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/service/cloudnode/GetNodeList":
-			writeProtoJSON(t, w, &cloudnodepb.GetNodeListRsp{
-				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-				Items: []*cloudnodepb.CloudNode{
-					{NodeId: "bad-node", SupportedWorkloads: []string{"collect.kline"}},
-					{NodeId: "good-node", SupportedWorkloads: []string{"collect.kline"}},
-				},
-			})
-		case "/api/service/cloudnode/InvokeFunction":
-			var req cloudnodepb.InvokeFunctionReq
-			if err := protojson.Unmarshal(readRequestBody(t, r), &req); err != nil {
-				t.Fatal(err)
-			}
-			invokedMu.Lock()
-			invoked = append(invoked, req.GetNodeId())
-			invokedMu.Unlock()
-			if req.GetNodeId() == "bad-node" {
-				writeProtoJSON(t, w, &cloudnodepb.InvokeFunctionRsp{
-					RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_INNER_ERR, Msg: "cloud account not found"},
-				})
-				return
-			}
-			writeProtoJSON(t, w, &cloudnodepb.InvokeFunctionRsp{
-				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
-				Scf:     &cloudnodepb.ScfInvokeResult{},
-			})
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	client := New(Config{
-		ServiceGatewayTarget: server.URL,
-		Auth: AuthConfig{
-			AccessKey:  "ak",
-			SecretKey:  "sk",
-			TargetNode: "gateway-gz-122",
-		},
-	})
-
-	count, err := client.WakeCollectorNodes(context.Background(), WakeOptions{
-		SpaceID:  "crypto",
-		JobTypes: []string{"collect.kline"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "cloud account not found") {
-		t.Fatalf("error=%v, want partial wake error", err)
-	}
-	sort.Strings(invoked)
-	if count != 1 || strings.Join(invoked, ",") != "bad-node,good-node" {
-		t.Fatalf("count=%d invoked=%v, want both attempted with one success", count, invoked)
-	}
-}
-
-func TestScheduleWindowParsesDurationAndDayIntervals(t *testing.T) {
+func TestNextExecuteAtParsesDurationAndDayIntervals(t *testing.T) {
 	now := time.Date(2026, 7, 12, 10, 17, 42, 0, time.UTC)
 
 	tests := []struct {
@@ -420,11 +261,11 @@ func TestScheduleWindowParsesDurationAndDayIntervals(t *testing.T) {
 		want     string
 		ok       bool
 	}{
-		{name: "duration", interval: "15m", want: now.Truncate(15 * time.Minute).Format(time.RFC3339), ok: true},
-		{name: "single day", interval: "d", want: now.Truncate(24 * time.Hour).Format(time.RFC3339), ok: true},
-		{name: "multi day", interval: "2d", want: now.Truncate(48 * time.Hour).Format(time.RFC3339), ok: true},
-		{name: "invalid falls back", interval: "bad", want: now.Truncate(30 * time.Minute).Format(time.RFC3339), ok: false},
-		{name: "empty falls back", interval: "", want: now.Truncate(30 * time.Minute).Format(time.RFC3339), ok: false},
+		{name: "duration", interval: "15m", want: now.Truncate(15 * time.Minute).Add(15 * time.Minute).Format(time.RFC3339), ok: true},
+		{name: "single day", interval: "d", want: now.Truncate(24 * time.Hour).Add(24 * time.Hour).Format(time.RFC3339), ok: true},
+		{name: "multi day", interval: "2d", want: now.Truncate(48 * time.Hour).Add(48 * time.Hour).Format(time.RFC3339), ok: true},
+		{name: "invalid falls back", interval: "bad", want: now.Truncate(30 * time.Minute).Add(30 * time.Minute).Format(time.RFC3339), ok: false},
+		{name: "empty falls back", interval: "", want: now.Truncate(30 * time.Minute).Add(30 * time.Minute).Format(time.RFC3339), ok: false},
 	}
 
 	for _, tt := range tests {
@@ -433,8 +274,8 @@ func TestScheduleWindowParsesDurationAndDayIntervals(t *testing.T) {
 			if ok != tt.ok {
 				t.Fatalf("parseScheduleDuration ok=%v, want %v", ok, tt.ok)
 			}
-			if got := scheduleWindow(now, tt.interval); got != tt.want {
-				t.Fatalf("scheduleWindow=%q, want %q", got, tt.want)
+			if got := nextExecuteAt(now, tt.interval).Format(time.RFC3339); got != tt.want {
+				t.Fatalf("nextExecuteAt=%q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -450,14 +291,8 @@ func TestPayloadAndJobItemHelpersCoverFallbacks(t *testing.T) {
 	if got := taskIDFromJobItem(&cloudnodepb.JobItem{JobItemId: " item-1 "}); got != "item-1" {
 		t.Fatalf("taskIDFromJobItem fallback = %q, want item-1", got)
 	}
-	if got := windowedJobItemID("", "window"); got != "" {
-		t.Fatalf("windowed empty task = %q, want empty", got)
-	}
-	if !supportsAnyJobType([]string{"collect.kline"}, []string{" kline "}) {
-		t.Fatal("supportsAnyJobType should normalize collect prefix")
-	}
-	if supportsAnyJobType([]string{"symbol"}, []string{"kline"}) {
-		t.Fatal("supportsAnyJobType should reject missing job type")
+	if got := scheduledJobItemID("", time.Now()); got != "" {
+		t.Fatalf("scheduled empty task = %q, want empty", got)
 	}
 }
 

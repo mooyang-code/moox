@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/pprof"
+	"os"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+const scfHeartbeatMaintainerTimerService = "trpc.moox.cloudnode.scf_heartbeat_maintainer.timer"
 
 // Runtime owns CloudNode process resources and their shutdown order.
 type Runtime struct {
@@ -130,9 +133,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		stateStore := jobstate.NewKVStore(kv, jobstate.Options{})
 		execQueue := jobqueue.NewJetStreamQueue(rt, jobqueue.QueueConfig{
-			AckWait:       time.Minute,
+			AckWait:       jobqueue.DefaultAckWait,
 			MaxDeliver:    cfg.JetStream.MaxDeliver,
-			MaxAckPending: 1,
+			MaxAckPending: cfg.JetStream.MaxAckPending,
 		})
 		catalog := dbm.Catalog()
 		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
@@ -157,6 +160,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	opts = append(opts, cloudnoderpc.WithCredentialResolver(credentialResolver))
 	svc := cloudnoderpc.New(dbm, opts...)
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
+	heartbeatMaintainer := cloudnoderpc.NewHeartbeatMaintainer(svc, scfHeartbeatTargetsFromEnv())
+	if err := registerSCFHeartbeatMaintainerHandler(s, heartbeatMaintainer.Handle); err != nil {
+		return nil, err
+	}
 	if err := registerHealth(s, cfg, dbm); err != nil {
 		return nil, err
 	}
@@ -172,6 +179,36 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
+}
+
+func scfHeartbeatTargetsFromEnv() cloudnoderpc.HeartbeatTargets {
+	serviceTarget := strings.TrimSpace(os.Getenv("MOOX_SCF_SERVICE_GATEWAY_TARGET"))
+	if serviceTarget == "" {
+		serviceTarget = "http://127.0.0.1:11002"
+	}
+	storageTarget := strings.TrimSpace(os.Getenv("MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET"))
+	if storageTarget == "" {
+		storageTarget = "ip://127.0.0.1:11003"
+	}
+	return cloudnoderpc.HeartbeatTargets{
+		ServiceGatewayTarget:    serviceTarget,
+		StorageRPCGatewayTarget: storageTarget,
+	}
+}
+
+func registerSCFHeartbeatMaintainerHandler(s *server.Server, handler func(context.Context) error) error {
+	if s == nil {
+		return fmt.Errorf("cloudnode SCF heartbeat maintainer requires a tRPC server")
+	}
+	if handler == nil {
+		return fmt.Errorf("cloudnode SCF heartbeat maintainer handler is required")
+	}
+	service := s.Service(scfHeartbeatMaintainerTimerService)
+	if service == nil {
+		return fmt.Errorf("cloudnode SCF heartbeat maintainer timer service %q is not configured", scfHeartbeatMaintainerTimerService)
+	}
+	timer.RegisterHandlerService(service, handler)
+	return nil
 }
 
 func registerMetricsReporter(s *server.Server) {

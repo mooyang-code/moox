@@ -2,8 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -15,9 +13,6 @@ const (
 	defaultPageSize = 50
 	maxPageSize     = 1000
 )
-
-// ErrTaskInstanceNotFound indicates that a task instance does not exist.
-var ErrTaskInstanceNotFound = errors.New("task instance not found")
 
 // TaskInstanceFilter describes task instance list filters.
 type TaskInstanceFilter struct {
@@ -78,50 +73,46 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			{Name: "c_space_id"},
 			{Name: "c_task_id"},
 		},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"c_rule_id",
-			"c_exchange",
-			"c_market",
-			"c_data_type",
-			"c_dataset_id",
-			"c_subject_id",
-			"c_symbol",
-			"c_interval",
-			"c_task_params",
-			"c_is_deleted",
-			"c_mtime",
+		DoUpdates: clause.Assignments(map[string]any{
+			"c_cloud_job_item_id": clause.Expr{SQL: "excluded.c_cloud_job_item_id"},
+			"c_rule_id":           clause.Expr{SQL: "excluded.c_rule_id"},
+			"c_exchange":          clause.Expr{SQL: "excluded.c_exchange"},
+			"c_market":            clause.Expr{SQL: "excluded.c_market"},
+			"c_data_type":         clause.Expr{SQL: "excluded.c_data_type"},
+			"c_dataset_id":        clause.Expr{SQL: "excluded.c_dataset_id"},
+			"c_subject_id":        clause.Expr{SQL: "excluded.c_subject_id"},
+			"c_symbol":            clause.Expr{SQL: "excluded.c_symbol"},
+			"c_interval":          clause.Expr{SQL: "excluded.c_interval"},
+			"c_task_params":       clause.Expr{SQL: "excluded.c_task_params"},
+			"c_is_deleted":        clause.Expr{SQL: "excluded.c_is_deleted"},
+			"c_mtime":             clause.Expr{SQL: "excluded.c_mtime"},
+			"c_last_exec_node": clause.Expr{
+				SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN '' ELSE c_last_exec_node END",
+			},
+			"c_last_exec_status": clause.Expr{
+				SQL:  "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN ? ELSE c_last_exec_status END",
+				Vars: []any{domain.InstanceStatusPending},
+			},
+			"c_last_exec_time": clause.Expr{
+				SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN NULL ELSE c_last_exec_time END",
+			},
+			"c_result": clause.Expr{
+				SQL: "CASE WHEN c_cloud_job_item_id <> excluded.c_cloud_job_item_id THEN '{}' ELSE c_result END",
+			},
 		}),
 	}).Create(&instances).Error
 }
 
-// UpdateCloudJobItemIDs stores CloudNode JobItem IDs returned by SubmitJobItems.
-func (r *TaskInstanceRepository) UpdateCloudJobItemIDs(ctx context.Context, spaceID string, idsByTaskID map[string]string) error {
-	if len(idsByTaskID) == 0 {
-		return nil
-	}
-	now := time.Now().UTC()
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for taskID, jobItemID := range idsByTaskID {
-			taskID = strings.TrimSpace(taskID)
-			jobItemID = strings.TrimSpace(jobItemID)
-			if taskID == "" || jobItemID == "" {
-				continue
-			}
-			if err := tx.Model(&domain.TaskInstance{}).
-				Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).
-				Updates(map[string]any{
-					"c_cloud_job_item_id": jobItemID,
-					"c_mtime":             now,
-				}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// UpdateStatus updates a task instance by Collector task id.
-func (r *TaskInstanceRepository) UpdateStatus(ctx context.Context, spaceID string, taskID string, nodeID string, status int, result string) error {
+// UpdateStatus updates a task instance only when the report belongs to its current cloud job item.
+func (r *TaskInstanceRepository) UpdateStatus(
+	ctx context.Context,
+	spaceID string,
+	taskID string,
+	jobItemID string,
+	nodeID string,
+	status int,
+	result string,
+) (bool, error) {
 	now := time.Now().UTC()
 	updates := map[string]any{
 		"c_last_exec_node":   nodeID,
@@ -132,15 +123,17 @@ func (r *TaskInstanceRepository) UpdateStatus(ctx context.Context, spaceID strin
 	}
 	tx := r.db.WithContext(ctx).
 		Model(&domain.TaskInstance{}).
-		Where("c_space_id = ? AND c_task_id = ?", spaceID, taskID).
+		Where(
+			"c_space_id = ? AND c_task_id = ? AND c_cloud_job_item_id = ?",
+			spaceID,
+			taskID,
+			jobItemID,
+		).
 		Updates(updates)
 	if tx.Error != nil {
-		return tx.Error
+		return false, tx.Error
 	}
-	if tx.RowsAffected == 0 {
-		return ErrTaskInstanceNotFound
-	}
-	return nil
+	return tx.RowsAffected > 0, nil
 }
 
 func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilter) *gorm.DB {

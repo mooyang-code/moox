@@ -683,12 +683,6 @@ HOST_GOOS="$(go env GOOS)"
 HOST_GOARCH="$(go env GOARCH)"
 STAGE_DIR="${STAGE_DIR:-${ROOT}/release/deploy-stage/moox}"
 
-build_storage_node_binary() {
-  [[ "${WITH_STORAGE_NODE}" -eq 1 ]] || return 0
-  TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-    "${ROOT}/scripts/build.sh" storage-node
-}
-
 build_core_binaries() {
   if [[ "${SKIP_BUILD}" -eq 1 ]]; then
     log "skip core build; reuse ./bin"
@@ -696,61 +690,69 @@ build_core_binaries() {
   fi
 
   log "build core binaries (${TARGET_GOOS}/${TARGET_GOARCH})"
-  if [[ "${WITH_STORAGE}" -eq 0 ]]; then
-    if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" cli
-    fi
-    if [[ "${WITH_ADMIN}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" admin
-    fi
+  local cross_storage=0
+  if [[ "${WITH_STORAGE}" -eq 1 ]] &&
+    [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
+    [[ "${TARGET_GOOS}" == linux ]] || fail "cross-platform Storage build supports only Linux targets"
+    [[ "${TARGET_GOARCH}" == amd64 ]] || fail "cross-platform Storage build supports only linux/amd64"
+    cross_storage=1
+    log "cross build detected; build CGO-enabled Storage on compile host"
+    TARGET_GOOS="${HOST_GOOS}" TARGET_GOARCH="${HOST_GOARCH}" \
+      "${ROOT}/scripts/build.sh" cli
+    "${ROOT}/scripts/build-storage-linux.sh"
+  fi
+
+  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" cli
+  fi
+  if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" admin
+  fi
+  if [[ "${WITH_GATEWAY}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" gateway
-    if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" cloudnode
-    fi
-    if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" eventbus
-    fi
-    if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" collector
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" collector-scf
-    fi
-    if [[ "${WITH_FACTOR}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" factor
-    fi
-    if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" strategy
-    fi
-    if [[ "${WITH_MONITOR}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" monitor
-    fi
-    if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
-      TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-        "${ROOT}/scripts/build.sh" archive
-    fi
-    return
   fi
-
-  if [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
-    log "cross build detected; storage requires CGO-enabled DuckDB build"
+  if [[ "${WITH_CLOUDNODE}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-      "${ROOT}/scripts/build.sh" all
-    build_storage_node_binary
-    return
+      "${ROOT}/scripts/build.sh" cloudnode
+  fi
+  if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" eventbus
+  fi
+  if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" collector
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" collector-scf
+  fi
+  if [[ "${WITH_FACTOR}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" factor
+  fi
+  if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" strategy
+  fi
+  if [[ "${WITH_MONITOR}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" monitor
+  fi
+  if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" archive
   fi
 
+  if [[ "${WITH_STORAGE}" -eq 0 ]]; then
+    return 0
+  fi
+  if [[ "${cross_storage}" -eq 1 ]]; then
+    return 0
+  fi
   TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-    "${ROOT}/scripts/build.sh" all
-  build_storage_node_binary
+    "${ROOT}/scripts/build.sh" storage
 }
 
 build_web_host_binary() {
@@ -962,6 +964,12 @@ PY
 }
 
 write_runtime_scripts() {
+  local scf_service_gateway_target="http://127.0.0.1:11002"
+  local scf_storage_rpc_gateway_target="ip://127.0.0.1:11003"
+  if [[ -n "${PUBLIC_HOST}" ]]; then
+    scf_service_gateway_target="https://${PUBLIC_HOST}:${SERVICE_HTTPS_PORT}"
+    scf_storage_rpc_gateway_target="ip://${PUBLIC_HOST}:11003"
+  fi
   cat > "${STAGE_DIR}/start.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1046,6 +1054,8 @@ WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
 PUBLIC_HOST="${MOOX_PUBLIC_HOST:-__PUBLIC_HOST__}"
+SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-__SCF_SERVICE_GATEWAY_TARGET__}"
+SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-__SCF_STORAGE_RPC_GATEWAY_TARGET__}"
 if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
   echo "storage-node requires storage" >&2
   exit 2
@@ -1251,6 +1261,7 @@ PY
 nats_endpoint() {
   local url="$1"
   url="${url#nats://}"
+  url="${url#tls://}"
   url="${url%%,*}"
   url="${url%%/*}"
   local host="${url%%:*}"
@@ -1367,9 +1378,9 @@ apply_metrics_metadata() {
   fi
   wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
   if [[ "${WITH_STORAGE}" == "1" ]]; then
-    "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/platform-local.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
+    "${ROOT}/bin/moox-cli" metadata import --file "${ROOT}/examples/platform-local.seed.yaml" --metadata-url "${METRICS_METADATA_URL}" --if-not-exists
   fi
-  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
+  "${ROOT}/bin/moox-cli" metadata import --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --metadata-url "${METRICS_METADATA_URL}" --if-not-exists
 }
 
 apply_host_metadata() {
@@ -1381,7 +1392,7 @@ apply_host_metadata() {
     return 0
   fi
   wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
-  "${ROOT}/bin/moox-cli" metadata apply --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --metadata-url "${METRICS_METADATA_URL}"
+  "${ROOT}/bin/moox-cli" metadata import --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --metadata-url "${METRICS_METADATA_URL}" --if-not-exists
 }
 
 init_storage_schema() {
@@ -1426,7 +1437,10 @@ run_storage_doctor() {
   fi
   local report="${ROOT}/logs/storage/doctor-bootstrap.json"
   echo "running read-only Doctor bootstrap before Dataset activation"
-  if ! "${ROOT}/bin/moox-cli" doctor bootstrap --format json --output "${report}"; then
+  if ! (
+    cd "${ROOT}"
+    "${ROOT}/bin/moox-cli" doctor bootstrap --format json --output "${report}"
+  ); then
     echo "defer Dataset activation: Doctor bootstrap failed"
     return 1
   fi
@@ -1621,7 +1635,7 @@ start_admin() {
       --db-path "${ROOT}/data/admin.db" \
       --file "${ROOT}/examples/service-deployments.seed.yaml" \
       --node-id "${MOOX_ADMIN_NODE_ID}" \
-      --public-host "${PUBLIC_HOST}" \
+      --public-host "${PUBLIC_HOST:-127.0.0.1}" \
       --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}")
     if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
       service_seed_args+=(--with-storage-shard)
@@ -1678,6 +1692,8 @@ start_cloudnode() {
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_SERVICE_GATEWAY_HTTP_URL=http://127.0.0.1:11002" \
+      "MOOX_SCF_SERVICE_GATEWAY_TARGET=${SCF_SERVICE_GATEWAY_TARGET}" \
+      "MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET=${SCF_STORAGE_RPC_GATEWAY_TARGET}" \
       "MOOX_CLOUDNODE_PPROF_ADDR=${MOOX_CLOUDNODE_PPROF_ADDR:-127.0.0.1:16001}" \
       "${ROOT}/bin/moox-cloudnode" -conf=config/trpc_go.yaml
 }
@@ -2333,7 +2349,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g; s#__PUBLIC_HOST__#${PUBLIC_HOST}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g; s#__PUBLIC_HOST__#${PUBLIC_HOST}#g; s#__SCF_SERVICE_GATEWAY_TARGET__#${scf_service_gateway_target}#g; s#__SCF_STORAGE_RPC_GATEWAY_TARGET__#${scf_storage_rpc_gateway_target}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -2350,7 +2366,6 @@ prepare_stage() {
     "${STAGE_DIR}/collector/configs" \
     "${STAGE_DIR}/factor/config" \
     "${STAGE_DIR}/factor/factors" \
-    "${STAGE_DIR}/factor/sections" \
     "${STAGE_DIR}/strategy/config" \
     "${STAGE_DIR}/strategy/pyworker" \
     "${STAGE_DIR}/strategy/pysdk" \
@@ -2405,6 +2420,7 @@ prepare_stage() {
   {
     printf 'MOOX_GATEWAY_NODE_ID=%q\n' "${NODE_ID}"
     printf 'MOOX_GATEWAY_SERVICE_KEY_ID=moox-gateway-service\n'
+    printf 'MOOX_GATEWAY_CALLER=admin-gateway\n'
     printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_service_secret}"
   } >"${STAGE_DIR}/secrets/gateway-service.env"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
@@ -2552,7 +2568,6 @@ EOF
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/factor/config/." "${STAGE_DIR}/factor/config/"
     cp -R "${ROOT}/modules/factor/factors/." "${STAGE_DIR}/factor/factors/"
-    cp -R "${ROOT}/modules/factor/sections/." "${STAGE_DIR}/factor/sections/"
     cp -R "${ROOT}/modules/factor/pyworker" "${STAGE_DIR}/factor/pyworker"
     find "${STAGE_DIR}/factor/pyworker" -type d -name __pycache__ -prune -exec rm -rf {} +
   fi
@@ -2759,8 +2774,9 @@ sync_local_stage() {
   install -m 0600 "${STAGE_DIR}/secrets/gateway-service.env" "${deploy_dir}/secrets/gateway-service.env"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-node-auth.env"
+    install -m 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
   else
-    rm -f "${deploy_dir}/secrets/storage-node-auth.env"
+    rm -f "${deploy_dir}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
   fi
   for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key; do
     install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
@@ -3132,11 +3148,11 @@ path=/api/service/sysdeploy/ListActiveServiceDeployments
 expect_status 401 -X POST -H "Content-Type: application/json" --data "{}" "$service$path"
 set -a; source "$service_auth_file"; set +a
 timestamp=$(date +%s); nonce=$(openssl rand -hex 32); body_hash=$(printf "{}" | openssl dgst -sha256 | awk "{print \$NF}")
-canonical=$(printf "moox-gateway-auth-v1\nPOST\n%s\n%s\n%s\n%s\n%s" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
+canonical=$(printf "moox-gateway-auth-v1\n%s\nPOST\n%s\n\n\n%s\n%s\n%s\n%s" "$MOOX_GATEWAY_CALLER" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")
 signature=$(printf %s "$canonical" | openssl dgst -sha256 -hmac "$MOOX_GATEWAY_SERVICE_SECRET_KEY" | awk "{print \$NF}")
 expected=404; [[ "$with_admin" == 0 ]] || expected=200
 expect_status "$expected" -X POST -H "Content-Type: application/json" \
-  -H "X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID" -H "X-Moox-Timestamp: $timestamp" \
+  -H "X-Moox-Key-Id: $MOOX_GATEWAY_SERVICE_KEY_ID" -H "X-Moox-Caller: $MOOX_GATEWAY_CALLER" -H "X-Moox-Timestamp: $timestamp" \
   -H "X-Moox-Nonce: $nonce" -H "X-Moox-Target-Node: $node_id" -H "X-Moox-Signature: $signature" \
   --data "{}" "$service$path"'
   if is_local_target; then

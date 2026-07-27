@@ -2,12 +2,14 @@ package jobstate
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type memoryKV struct {
@@ -61,7 +63,7 @@ func (m *memoryKV) Keys(_ context.Context) ([]string, error) {
 
 func TestMarkReportedFirstTerminalWins(t *testing.T) {
 	store := NewKVStore(newMemoryKV(), Options{})
-	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg"}
+	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline"}
 	if _, err := store.CreatePending(context.Background(), item); err != nil {
 		t.Fatal(err)
 	}
@@ -91,16 +93,23 @@ func TestMarkReportedMissingIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestCreatePendingRepublishesOnlyNonterminalDuplicate(t *testing.T) {
+func TestCreatePendingRepublishesOnlyEnqueueFailedDuplicate(t *testing.T) {
 	store := NewKVStore(newMemoryKV(), Options{})
-	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline", CodePackageId: "pkg"}
+	item := &pb.JobItem{SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline"}
 	first, err := store.CreatePending(context.Background(), item)
 	if err != nil || !first.ShouldPublish {
 		t.Fatalf("first=%+v err=%v", first, err)
 	}
 	duplicate, err := store.CreatePending(context.Background(), item)
-	if err != nil || !duplicate.Deduplicated || !duplicate.ShouldPublish {
+	if err != nil || !duplicate.Deduplicated || duplicate.ShouldPublish {
 		t.Fatalf("pending duplicate=%+v err=%v", duplicate, err)
+	}
+	if err := store.MarkEnqueueFailed(context.Background(), "crypto", "item-1", "publish failed"); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.CreatePending(context.Background(), item)
+	if err != nil || !retry.Created || !retry.ShouldPublish {
+		t.Fatalf("enqueue_failed retry=%+v err=%v", retry, err)
 	}
 	if _, _, err := store.MarkReported(context.Background(), ReportEvent{
 		SpaceID: "crypto", JobItemID: "item-1", Status: StatusSuccess,
@@ -110,5 +119,63 @@ func TestCreatePendingRepublishesOnlyNonterminalDuplicate(t *testing.T) {
 	terminal, err := store.CreatePending(context.Background(), item)
 	if err != nil || !terminal.Deduplicated || terminal.ShouldPublish {
 		t.Fatalf("terminal duplicate=%+v err=%v", terminal, err)
+	}
+}
+
+func TestCreatePendingPersistsExecuteAt(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	executeAt := time.Date(2026, 7, 26, 9, 30, 0, 123, time.FixedZone("CST", 8*60*60))
+	item := &pb.JobItem{
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
+		ExecuteAt: timestamppb.New(executeAt),
+	}
+	if _, err := store.CreatePending(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Get(context.Background(), "crypto", "item-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExecuteAt == nil || !state.ExecuteAt.Equal(executeAt.UTC()) || state.ExecuteAt.Location() != time.UTC {
+		t.Fatalf("execute_at = %v, want %v in UTC", state.ExecuteAt, executeAt.UTC())
+	}
+}
+
+func TestCreatePendingWithoutExecuteAtMeansImmediate(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	item := &pb.JobItem{
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
+	}
+	if _, err := store.CreatePending(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Get(context.Background(), "crypto", "item-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExecuteAt != nil {
+		t.Fatalf("execute_at = %v, want nil immediate execution", state.ExecuteAt)
+	}
+}
+
+func TestJobItemDetailReturnsExecuteAt(t *testing.T) {
+	executeAt := time.Date(2026, 7, 26, 1, 30, 0, 0, time.UTC)
+	detail := (State{ExecuteAt: &executeAt}).ToDetail()
+	if detail.GetExecuteAt() == nil || !detail.GetExecuteAt().AsTime().Equal(executeAt) {
+		t.Fatalf("execute_at = %v, want %v", detail.GetExecuteAt(), executeAt)
+	}
+	if immediate := (State{}).ToDetail(); immediate.GetExecuteAt() != nil {
+		t.Fatalf("missing execute_at became %v", immediate.GetExecuteAt())
+	}
+}
+
+func TestCreatePendingRejectsInvalidExecuteAt(t *testing.T) {
+	store := NewKVStore(newMemoryKV(), Options{})
+	item := &pb.JobItem{
+		SpaceId: "crypto", JobId: "job-1", JobItemId: "item-1", JobType: "collect.kline",
+		ExecuteAt: &timestamppb.Timestamp{Seconds: 253402300800},
+	}
+	if _, err := store.CreatePending(context.Background(), item); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("CreatePending() error = %v, want ErrInvalid", err)
 	}
 }

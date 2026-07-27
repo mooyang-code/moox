@@ -5,6 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${VERSION:-v$(date +%Y%m%d%H%M%S)}"
 OUT_DIR="${OUT_DIR:-${ROOT}/release/scf}"
 OUT_PATH="${OUT_PATH:-${OUT_DIR}/collector-scf-${VERSION}.zip}"
+if [[ "${OUT_PATH}" != /* ]]; then
+  OUT_PATH="${PWD}/${OUT_PATH}"
+fi
 BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moox-collector-scf.XXXXXX")"
 
 python3 -c 'import yaml' >/dev/null 2>&1 || {
@@ -72,7 +75,7 @@ logs = plugins.setdefault("log", {})
 writers = [item for item in logs.get("default", []) if not isinstance(item, dict) or item.get("writer") != "cls"]
 writers.append({
     "writer": "cls",
-    "level": "warn",
+    "level": "info",
     "remote_config": {
         "topic_id": topic_id,
         "host": "${MOOX_CLS_HOST}",
@@ -86,10 +89,57 @@ with open(path, "w", encoding="utf-8") as stream:
     yaml.safe_dump(document, stream, sort_keys=False)
 PY
 
+[[ -n "${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" ]] || {
+  echo "MOOX_STORAGE_PRIMARY_AUTH_SECRET is required to package Binance Storage credentials" >&2
+  exit 1
+}
+python3 - "${BUILD_DIR}/package/sources/market/binance.yaml" <<'PY'
+import hashlib
+import hmac
+import os
+import sys
+import yaml
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as stream:
+    document = yaml.safe_load(stream) or {}
+
+rendered = 0
+
+def render(value):
+    global rendered
+    if isinstance(value, dict):
+        auth = value.get("auth_info")
+        if isinstance(auth, dict):
+            app_id = str(auth.get("app_id") or "").strip()
+            if not app_id or "app_key" not in auth:
+                raise ValueError("Binance Storage auth_info requires app_id and app_key")
+            auth["app_key"] = hmac.new(
+                os.environ["MOOX_STORAGE_PRIMARY_AUTH_SECRET"].encode(),
+                app_id.encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            rendered += 1
+        for child in value.values():
+            render(child)
+    elif isinstance(value, list):
+        for child in value:
+            render(child)
+
+render(document)
+if rendered == 0:
+    raise ValueError("Binance source config contains no Storage auth_info")
+with open(path, "w", encoding="utf-8") as stream:
+    yaml.safe_dump(document, stream, sort_keys=False)
+PY
+
 echo "==> package ${OUT_PATH}"
+rm -f "${OUT_PATH}"
 (
+  umask 077
   cd "${BUILD_DIR}/package"
   zip -qr "${OUT_PATH}" .
 )
+chmod 0600 "${OUT_PATH}"
 
 echo "==> SCF package written to ${OUT_PATH}"

@@ -115,7 +115,7 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_e2e_invalid")
 	}
 	eventID := fmt.Sprintf("setup-e2e-%d", time.Now().UnixNano())
-	identity := cloudjobqueue.Identity{SpaceID: "system", CodePackageID: eventID, JobType: "eventbus.e2e"}
+	identity := cloudjobqueue.Identity{SpaceID: "system", JobType: "eventbus.e2e"}
 	consumerName, err := identity.ConsumerName()
 	if err != nil {
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_e2e_invalid")
@@ -151,7 +151,7 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 		return eventBusE2EResult{}, fmt.Errorf("eventbus_owner_prepare_failed")
 	}
 	if _, err := publisher.Publish(operationCtx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
-		JobId: eventID, JobItemId: eventID, JobType: identity.JobType, CodePackageId: identity.CodePackageID,
+		JobId: eventID, JobItemId: eventID, JobType: identity.JobType,
 	}, events.PublishOptions{
 		EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: identity.SpaceID, SubjectID: subjectID,
 	}); err != nil {
@@ -186,7 +186,7 @@ func defaultSetupE2EEventBus(ctx context.Context, snapshot *setupconfig.Snapshot
 	publishDenialCtx, cancelPublishDenial := context.WithTimeout(ctx, 3*time.Second)
 	defer cancelPublishDenial()
 	_, publishErr := workerPublisher.Publish(publishDenialCtx, events.CloudJobExecutionRequested, &cloudjobpb.JobExecutionRequested{
-		JobId: eventID + "-forbidden", JobItemId: eventID + "-forbidden", JobType: identity.JobType, CodePackageId: identity.CodePackageID,
+		JobId: eventID + "-forbidden", JobItemId: eventID + "-forbidden", JobType: identity.JobType,
 	}, events.PublishOptions{
 		EventID: eventID + "-forbidden", OccurredAt: time.Now().UTC(), SpaceID: identity.SpaceID, SubjectID: subjectID,
 	})

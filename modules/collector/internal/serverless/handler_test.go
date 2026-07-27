@@ -13,22 +13,15 @@ import (
 	"github.com/tencentyun/scf-go-lib/functioncontext"
 )
 
-func TestHandleKeepaliveRunsPollWithServiceGatewayTarget(t *testing.T) {
+func TestHandleKeepaliveOnlyReportsHeartbeatWithServiceGatewayTarget(t *testing.T) {
 	oldReport := reportHeartbeatAfterProbe
-	oldPoll := pollJobItemsAfterHeartbeat
 	t.Cleanup(func() {
 		reportHeartbeatAfterProbe = oldReport
-		pollJobItemsAfterHeartbeat = oldPoll
 	})
 
 	heartbeats := 0
-	polls := 0
 	reportHeartbeatAfterProbe = func(ctx context.Context) error {
 		heartbeats++
-		return nil
-	}
-	pollJobItemsAfterHeartbeat = func(ctx context.Context) error {
-		polls++
 		return nil
 	}
 
@@ -44,7 +37,7 @@ func TestHandleKeepaliveRunsPollWithServiceGatewayTarget(t *testing.T) {
 	})
 	rsp, err := NewCloudFunctionHandler().handleKeepalive(ctx, model.CloudFunctionEvent{
 		Action:               model.EventActionKeepalive,
-		Source:               "collector_schedule",
+		Source:               "process_probe",
 		ServiceGatewayTarget: "http://127.0.0.1:11000",
 	})
 	if err != nil {
@@ -56,40 +49,27 @@ func TestHandleKeepaliveRunsPollWithServiceGatewayTarget(t *testing.T) {
 	if heartbeats != 1 {
 		t.Fatalf("heartbeats = %d, want 1", heartbeats)
 	}
-	if polls != 1 {
-		t.Fatalf("polls = %d, want 1", polls)
-	}
 }
 
-func TestHandleKeepaliveRunsPollWhenHeartbeatFails(t *testing.T) {
+func TestHandleKeepaliveDoesNotPollWhenHeartbeatFails(t *testing.T) {
 	oldReport := reportHeartbeatAfterProbe
-	oldPoll := pollJobItemsAfterHeartbeat
 	t.Cleanup(func() {
 		reportHeartbeatAfterProbe = oldReport
-		pollJobItemsAfterHeartbeat = oldPoll
 	})
 
-	polls := 0
 	reportHeartbeatAfterProbe = func(context.Context) error {
 		return errors.New("heartbeat unavailable")
-	}
-	pollJobItemsAfterHeartbeat = func(context.Context) error {
-		polls++
-		return nil
 	}
 
 	h := NewCloudFunctionHandler()
 	rsp, err := h.handleKeepalive(withFunctionContext(context.Background()), model.CloudFunctionEvent{
 		Action:               "keepalive",
-		Source:               "collector_schedule",
+		Source:               "process_probe",
 		ServiceGatewayTarget: "http://127.0.0.1:11000",
 		Data:                 map[string]any{"node_id": "node-scf-1"},
 	})
 	if err != nil || rsp == nil || !rsp.Success {
 		t.Fatalf("handleKeepalive() = %#v, %v", rsp, err)
-	}
-	if polls != 1 {
-		t.Fatalf("polls = %d, want 1", polls)
 	}
 }
 
@@ -162,14 +142,9 @@ func TestApplyRuntimeConfig_UpdatesFromDeployments(t *testing.T) {
 	assert.Equal(t, "node-scf-1", nodeID)
 }
 
-func TestProcessCloudFunctionEvent_UnsupportedAndUnknown(t *testing.T) {
+func TestProcessCloudFunctionEvent_Unknown(t *testing.T) {
 	h := NewCloudFunctionHandler()
-	rsp, err := h.processCloudFunctionEvent(context.Background(), model.CloudFunctionEvent{Action: model.EventActionTask})
-	require.NoError(t, err)
-	assert.False(t, rsp.Success)
-	assert.Contains(t, rsp.Message, "disabled")
-
-	rsp, err = h.processCloudFunctionEvent(context.Background(), model.CloudFunctionEvent{Action: "unknown"})
+	rsp, err := h.processCloudFunctionEvent(context.Background(), model.CloudFunctionEvent{Action: "unknown"})
 	require.NoError(t, err)
 	assert.False(t, rsp.Success)
 	assert.Contains(t, rsp.Message, "unknown")
@@ -187,12 +162,9 @@ func TestHandleKeepalive_WithoutServerReturnsAlive(t *testing.T) {
 
 func TestHandleRequest_KeepaliveEvent(t *testing.T) {
 	oldReport := reportHeartbeatAfterProbe
-	oldPoll := pollJobItemsAfterHeartbeat
 	reportHeartbeatAfterProbe = func(context.Context) error { return nil }
-	pollJobItemsAfterHeartbeat = func(context.Context) error { return nil }
 	t.Cleanup(func() {
 		reportHeartbeatAfterProbe = oldReport
-		pollJobItemsAfterHeartbeat = oldPoll
 	})
 
 	h := NewCloudFunctionHandler()

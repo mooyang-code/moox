@@ -9,6 +9,18 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// ListSCFEventNodes returns every live catalog entry backed by Tencent SCF's
+// event invocation mode. Node status is intentionally not part of the filter:
+// newly published functions need keepalives before their first heartbeat.
+func (r *CatalogRepository) ListSCFEventNodes(ctx context.Context) ([]CloudNode, error) {
+	var nodes []CloudNode
+	err := r.db.WithContext(ctx).
+		Where("c_is_deleted = ? AND c_provider = ? AND c_node_type = ?", false, "tencent-scf", "scf-event").
+		Order("c_id ASC").
+		Find(&nodes).Error
+	return nodes, err
+}
+
 func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *pb.GetNodeListReq) ([]CloudNode, int64, error) {
 	q := r.db.WithContext(ctx).Model(&CloudNode{}).Where("c_is_deleted = ?", false)
 	if spaceID != "" {
@@ -114,12 +126,11 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 	return q.Updates(updates).Error
 }
 
-func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, nodeType string, version string, supported string, metadata string) error {
+func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, version string, supported string, metadata string) error {
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Model(&CloudNode{}).
 		Where("c_space_id = ? AND c_node_id = ? AND c_is_deleted = ?", spaceID, nodeID, false).
 		Updates(map[string]any{
-			"c_node_type":           nodeType,
 			"c_running_version":     version,
 			"c_supported_workloads": supported,
 			"c_metadata":            metadata,

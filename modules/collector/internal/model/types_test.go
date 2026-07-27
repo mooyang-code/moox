@@ -14,8 +14,13 @@ func TestCollectorType_Constants_ShouldMatchExpectedValues(t *testing.T) {
 }
 
 func TestEventAction_Constants_ShouldMatchExpectedValues(t *testing.T) {
-	assert.Equal(t, EventAction("task"), EventActionTask)
 	assert.Equal(t, EventAction("keepalive"), EventActionKeepalive)
+}
+
+func TestTaskExecuteEventJSONHasNoImmediateFlag(t *testing.T) {
+	raw, err := json.Marshal(TaskExecuteEvent{TaskID: "task-1"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "immediate")
 }
 
 func TestHeartbeatPayload_JSONRoundTrip_ShouldPreserveFields(t *testing.T) {

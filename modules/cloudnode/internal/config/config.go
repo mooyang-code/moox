@@ -51,6 +51,7 @@ type JetStreamConfig struct {
 	URLs           []string `yaml:"urls"`
 	CredentialFile string   `yaml:"credential_file"`
 	MaxDeliver     int      `yaml:"max_deliver"`
+	MaxAckPending  int      `yaml:"max_ack_pending"`
 }
 
 // TencentSCFConfig stores defaults for the Tencent SCF provider.
@@ -95,6 +96,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Queue.Backend == "jetstream" && c.JetStream.Enabled && c.JetStream.MaxDeliver <= 0 {
 		return fmt.Errorf("jetstream.max_deliver must be positive")
+	}
+	if c.Queue.Backend == "jetstream" && c.JetStream.Enabled && c.JetStream.MaxAckPending <= 0 {
+		return fmt.Errorf("jetstream.max_ack_pending must be positive")
 	}
 	return nil
 }
@@ -144,6 +148,7 @@ func Default() *Config {
 			URLs:           []string{"nats://127.0.0.1:4222"},
 			CredentialFile: "~/.config/moox/eventbus/cloudnode-eventbus.yaml",
 			MaxDeliver:     3,
+			MaxAckPending:  32,
 		},
 		JobItem: JobItemConfig{
 			ActiveKVBucket:       "MOOX_CLOUDNODE_JOB_ACTIVE",

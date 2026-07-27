@@ -2,8 +2,7 @@ package adminclient
 
 import (
 	"context"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +10,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPostJSONSendsSpaceHeader(t *testing.T) {
@@ -79,7 +80,8 @@ func TestServiceAuthUsesConfiguredHTTPTimeout(t *testing.T) {
 
 	_, err := c.postJSON(context.Background(), http.MethodPost, "/api/admin/cloudnode/ListAccounts", map[string]any{})
 
-	require.ErrorContains(t, err, "deadline exceeded")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.DeadlineExceeded), "error does not report a timeout: %v", err)
 }
 
 func TestIsRetInfoSuccess(t *testing.T) {

@@ -1,2 +1,0 @@
-# Arrow encodings are negotiated only for workers with this dependency.
-pyarrow>=16

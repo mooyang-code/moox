@@ -2,12 +2,45 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestStorageBFFBodySignsInternalStorageAuth(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
+	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "view-secret")
+	body := []byte(`{"auth_info":{"app_id":"browser","app_key":"public","operator":"e2e","request_id":"req-1"},"space_id":"crypto"}`)
+
+	got, err := storageBFFBody("storage-view", body)
+	require.NoError(t, err)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(got, &payload))
+	assert.Equal(t, "crypto", payload["space_id"])
+	assert.Equal(t, map[string]any{
+		"app_id":     "admin-gateway",
+		"app_key":    storageServiceAuthKey("view-secret", "admin-gateway"),
+		"operator":   "e2e",
+		"request_id": "req-1",
+	}, payload["auth_info"])
+
+	got, err = storageBFFBody("storage-primary", body)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(got, &payload))
+	assert.Equal(t, storageServiceAuthKey("primary-secret", "admin-gateway"),
+		payload["auth_info"].(map[string]any)["app_key"])
+}
+
+func TestStorageBFFBodyRequiresTargetAuthSecret(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
+	if _, err := storageBFFBody("storage-primary", []byte(`{}`)); err == nil {
+		t.Fatal("storageBFFBody() accepted a missing primary secret")
+	}
+}
 
 func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *testing.T) {
 	for _, test := range []struct {
@@ -59,6 +92,7 @@ func TestAdminRouterStorageBFFRequiresNativeGatewayConfiguration(t *testing.T) {
 	t.Setenv("MOOX_NODE_GATEWAY_NATIVE_URL", "")
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "")
 	t.Setenv("MOOX_NODE_GATEWAY_NODE_ID", "")
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 	provider := &fakeGatewayControlProvider{}
 	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
 	recorder := httptest.NewRecorder()
@@ -81,6 +115,7 @@ func TestAdminRouterStorageBFFDoesNotUseHTTPServiceDetail(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "service-secret")
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "moox-gateway-service")
 	t.Setenv("MOOX_NODE_GATEWAY_NODE_ID", "node-a")
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 	router := NewHTTPRouter(NewGatewayHandle(), &fakeGatewayControlProvider{}, "admin-node-test").buildControlRouter()
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/admin/storage/GetDataSource", bytes.NewBufferString(`{"space_id":"space-1"}`)))
@@ -100,4 +135,34 @@ func TestAdminRouterStorageBFFRejectsInternalMethodBeforeResolvingService(t *tes
 
 	assert.Equal(t, http.StatusNotFound, recorder.Code)
 	assert.Empty(t, provider.lastNode)
+}
+
+func TestAdminRouterRejectsDirectStorageServiceIDsAndAliases(t *testing.T) {
+	SetConfig(&Config{
+		CORS: CORSConfig{AllowedOrigins: []string{"*"}},
+		Gateway: GatewayConfig{NoAuthMethods: []string{
+			"/api/admin/storage-primary/DeleteDataset",
+			"/api/admin/storage-view/ClaimViewIndexBuild",
+			"/api/admin/storage_alias/DeleteDataset",
+		}},
+	})
+	upstreamCalls := 0
+	provider := &fakeGatewayControlProvider{details: map[string]ServiceDetail{
+		"admin-node-test:storage_alias": {
+			Address: "127.0.0.1:1",
+			Path:    "trpc.moox.storage.Metadata",
+		},
+	}}
+	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
+
+	for _, path := range []string{
+		"/api/admin/storage-primary/DeleteDataset",
+		"/api/admin/storage-view/ClaimViewIndexBuild",
+		"/api/admin/storage_alias/DeleteDataset",
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{}`)))
+		assert.Equal(t, http.StatusNotFound, recorder.Code, path)
+	}
+	assert.Equal(t, 0, upstreamCalls)
 }

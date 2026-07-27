@@ -7,8 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDefinition_Matches_MatchingSupport_ShouldReturnTrue(t *testing.T) {
-	def := Definition{
+func TestJobDefinition_Matches_MatchingSupport_ShouldReturnTrue(t *testing.T) {
+	def := JobDefinition{
+		JobType: "collect.kline",
 		Supports: []Support{
 			{Exchange: "binance", Market: "spot", DataType: "kline"},
 		},
@@ -23,8 +24,9 @@ func TestDefinition_Matches_MatchingSupport_ShouldReturnTrue(t *testing.T) {
 	assert.True(t, def.Matches(params))
 }
 
-func TestDefinition_Matches_NonMatchingExchange_ShouldReturnFalse(t *testing.T) {
-	def := Definition{
+func TestJobDefinition_Matches_NonMatchingExchange_ShouldReturnFalse(t *testing.T) {
+	def := JobDefinition{
+		JobType: "collect.kline",
 		Supports: []Support{
 			{Exchange: "binance", Market: "spot", DataType: "kline"},
 		},
@@ -39,8 +41,9 @@ func TestDefinition_Matches_NonMatchingExchange_ShouldReturnFalse(t *testing.T) 
 	assert.False(t, def.Matches(params))
 }
 
-func TestDefinition_Matches_NilParams_ShouldReturnFalse(t *testing.T) {
-	def := Definition{
+func TestJobDefinition_Matches_NilParams_ShouldReturnFalse(t *testing.T) {
+	def := JobDefinition{
+		JobType: "collect.kline",
 		Supports: []Support{
 			{Exchange: "binance", Market: "spot", DataType: "kline"},
 		},

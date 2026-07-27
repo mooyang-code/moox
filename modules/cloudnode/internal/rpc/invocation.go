@@ -189,7 +189,14 @@ func (s *Service) invokeNode(ctx context.Context, node *store.CloudNode, eventDa
 	if err != nil {
 		return nil, err
 	}
-	resp, err := tencentscf.New(credential.SecretID, credential.SecretKey).InvokeFunction(ctx, tencentscf.InvokeFunctionRequest{
+	if s.scfClientFactory == nil {
+		return nil, fmt.Errorf("scf client factory is not configured")
+	}
+	client := s.scfClientFactory(credential)
+	if client == nil {
+		return nil, fmt.Errorf("scf client is not configured")
+	}
+	resp, err := client.InvokeFunction(ctx, tencentscf.InvokeFunctionRequest{
 		Region:       node.Region,
 		FunctionName: firstString(node.FunctionName, node.NodeID),
 		Namespace:    firstString(node.Namespace, "default"),

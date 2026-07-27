@@ -9,8 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDefinition_ShouldExposeSymbolMetadata(t *testing.T) {
-	def := Definition("collect.symbol")
+func TestNewJobDefinition_ShouldExposeSymbolMetadata(t *testing.T) {
+	def := NewJobDefinition()
+	assert.Equal(t, "collect.symbol", def.JobType)
 	assert.Equal(t, "symbol", def.DataType)
 	assert.Equal(t, "标的", def.TypeName)
 	require.Len(t, def.Fields, 1)
@@ -30,8 +31,8 @@ func TestBuildTaskSpecs_ValidParams_ShouldReturnSingleTask(t *testing.T) {
 	assert.Equal(t, "collect.symbol", specs[0].Params["job_type"])
 }
 
-func TestDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing.T) {
-	def := Definition("collect.symbol")
+func TestNewJobDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing.T) {
+	def := NewJobDefinition()
 	params := &domain.CollectParams{}
 	params.Normalize("binance", "symbol")
 	params.Source.Kind = "dataset_subjects"

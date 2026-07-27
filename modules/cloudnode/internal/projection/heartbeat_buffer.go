@@ -20,7 +20,7 @@ const (
 
 // HeartbeatWriter is the catalog write surface needed by heartbeat buffering.
 type HeartbeatWriter interface {
-	UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, nodeType string, version string, supported string, metadata string) error
+	UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, version string, supported string, metadata string) error
 }
 
 // HeartbeatSink accepts heartbeats on the RPC path and persists them later.
@@ -49,7 +49,6 @@ type HeartbeatBuffer struct {
 type heartbeatEvent struct {
 	spaceID            string
 	nodeID             string
-	nodeType           string
 	runningVersion     string
 	supportedWorkloads []string
 	metadata           map[string]any
@@ -90,7 +89,6 @@ func (b *HeartbeatBuffer) Enqueue(req *pb.ReportHeartbeatReq) error {
 	event := heartbeatEvent{
 		spaceID:            spaceID,
 		nodeID:             nodeID,
-		nodeType:           strings.TrimSpace(req.GetNodeType()),
 		runningVersion:     strings.TrimSpace(req.GetRunningVersion()),
 		supportedWorkloads: append([]string(nil), req.GetSupportedWorkloads()...),
 		metadata:           map[string]any{},
@@ -112,14 +110,10 @@ func (b *HeartbeatBuffer) Flush(ctx context.Context) error {
 	for i, event := range events {
 		supported, _ := json.Marshal(event.supportedWorkloads)
 		metadata, _ := json.Marshal(event.metadata)
-		nodeType := event.nodeType
-		if nodeType == "" {
-			nodeType = "scf-event"
-		}
 		if b.writer == nil {
 			continue
 		}
-		if err := b.writer.UpdateHeartbeat(ctx, event.spaceID, event.nodeID, nodeType, event.runningVersion, string(supported), string(metadata)); err != nil {
+		if err := b.writer.UpdateHeartbeat(ctx, event.spaceID, event.nodeID, event.runningVersion, string(supported), string(metadata)); err != nil {
 			b.requeue(events[i:])
 			return err
 		}

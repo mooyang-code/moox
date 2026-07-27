@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"log"
 	"os"
 	"strings"
@@ -28,6 +29,54 @@ type NodeInfoConfig struct {
 var GlobalConfig Config
 
 var configMu sync.RWMutex
+
+type readiness struct {
+	once sync.Once
+	done chan struct{}
+}
+
+func newReadiness() *readiness {
+	return &readiness{done: make(chan struct{})}
+}
+
+func (r *readiness) signal() {
+	r.once.Do(func() {
+		close(r.done)
+	})
+}
+
+func (r *readiness) wait(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-r.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+var processReadiness = newReadiness()
+
+// SignalReadinessIfConfigured marks the SCF runtime ready after a keepalive
+// has supplied both the node identity and service gateway.
+func SignalReadinessIfConfigured() bool {
+	configMu.RLock()
+	ready := strings.TrimSpace(GlobalConfig.NodeInfo.NodeID) != "" &&
+		strings.TrimSpace(GlobalConfig.ServiceGatewayTarget) != ""
+	configMu.RUnlock()
+	if !ready {
+		return false
+	}
+	processReadiness.signal()
+	return true
+}
+
+// WaitForReadiness waits until the first complete keepalive initializes the runtime.
+func WaitForReadiness(ctx context.Context) error {
+	return processReadiness.wait(ctx)
+}
 
 // UpdateServiceGatewayTarget updates the /api/service gateway target used by SCF callbacks.
 func UpdateServiceGatewayTarget(target string) {

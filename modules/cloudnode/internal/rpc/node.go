@@ -13,8 +13,14 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
+)
+
+const (
+	defaultSCFTimeoutSeconds = 120
+	scfOperationTimeout      = 120 * time.Second
 )
 
 func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.GetNodeListRsp, error) {
@@ -55,6 +61,9 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	if existing != nil {
 		node = mergeNodeUpdate(*existing, pbNode)
 	}
+	if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
 	if err := s.catalog.UpsertNode(ctx, node); err != nil {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -82,6 +91,9 @@ func (s *Service) BatchCreateNodes(ctx context.Context, req *pb.BatchCreateNodes
 		if node.Region == "" {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes.region is required")}, nil
 		}
+		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
 		if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
@@ -95,6 +107,21 @@ func (s *Service) BatchCreateNodes(ctx context.Context, req *pb.BatchCreateNodes
 		BatchId:        directBatchID("create_nodes"),
 		ProcessedCount: int32(created),
 	}, nil
+}
+
+func (s *Service) ensureNodeExecutionQueues(ctx context.Context, spaceID string, workloads []string) error {
+	if s == nil || s.executionQueue == nil {
+		return nil
+	}
+	for _, jobType := range compactStrings(workloads) {
+		if err := s.executionQueue.EnsureJobExecutionQueue(ctx, cloudjobqueue.Identity{
+			SpaceID: spaceID,
+			JobType: jobType,
+		}); err != nil {
+			return fmt.Errorf("ensure execution queue for workload %s: %w", jobType, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.BatchChangeResult, error) {
@@ -140,6 +167,9 @@ func (s *Service) BatchDeployNodes(ctx context.Context, req *pb.BatchDeployNodes
 		if node == nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found")}, nil
 		}
+		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
 		pkg, err := s.catalog.GetPackage(ctx, spaceID, item.GetPackageId())
 		if err != nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -182,7 +212,7 @@ func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatRe
 	if req.GetNodeId() != "" {
 		supported, _ := json.Marshal(req.GetSupportedWorkloads())
 		metadata, _ := json.Marshal(req.GetMetadata().AsMap())
-		if err := s.catalog.UpdateHeartbeat(ctx, spaceID, req.GetNodeId(), firstString(req.GetNodeType(), "scf-event"), req.GetRunningVersion(), string(supported), string(metadata)); err != nil {
+		if err := s.catalog.UpdateHeartbeat(ctx, spaceID, req.GetNodeId(), req.GetRunningVersion(), string(supported), string(metadata)); err != nil {
 			log.WarnContextf(ctx, "[CloudNode] heartbeat upsert node failed: %v", err)
 		}
 	}
@@ -236,7 +266,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		Handler:     firstString(item.GetHandler(), "main"),
 		Description: fmt.Sprintf("MooX cloud function node %s", node.NodeID),
 		MemorySize:  configInt64(config, "memory_size", 256),
-		Timeout:     configInt64(config, "timeout", 60),
+		Timeout:     configInt64(config, "timeout", defaultSCFTimeoutSeconds),
 		Environment: copyStringMap(item.GetEnvironment()),
 		COSBucket:   pkg.COSBucket,
 		COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
@@ -374,7 +404,7 @@ func (s *Service) updateSCFFunctionCode(ctx context.Context, node store.CloudNod
 }
 
 func waitForSCFActive(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, current *tencentscf.FunctionInfo) (*tencentscf.FunctionInfo, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	waitCtx, cancel := context.WithTimeout(ctx, scfOperationTimeout)
 	defer cancel()
 	for {
 		if current == nil {

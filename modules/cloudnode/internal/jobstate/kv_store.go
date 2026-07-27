@@ -48,11 +48,19 @@ func (s *KVStore) CreatePending(ctx context.Context, item *pb.JobItem) (*CreateR
 	if s == nil || s.kv == nil || ValidateJobItem(item) != nil {
 		return nil, ErrInvalid
 	}
+	var executeAt *time.Time
+	if item.GetExecuteAt() != nil {
+		if err := item.GetExecuteAt().CheckValid(); err != nil {
+			return nil, ErrInvalid
+		}
+		value := item.GetExecuteAt().AsTime().UTC()
+		executeAt = &value
+	}
 	now := s.now()
 	state := State{
 		SchemaVersion: 1, SpaceID: item.GetSpaceId(), JobID: item.GetJobId(), JobItemID: item.GetJobItemId(),
-		JobType: item.GetJobType(), CodePackageID: item.GetCodePackageId(), Params: structToMap(item.GetParams()),
-		Priority: item.GetPriority(), Status: StatusPending, CreatedAt: now, UpdatedAt: now,
+		JobType: item.GetJobType(), Params: structToMap(item.GetParams()),
+		Priority: item.GetPriority(), ExecuteAt: executeAt, Status: StatusPending, CreatedAt: now, UpdatedAt: now,
 	}
 	raw, err := encodeState(state)
 	if err != nil {
@@ -77,7 +85,7 @@ func (s *KVStore) CreatePending(ctx context.Context, item *pb.JobItem) (*CreateR
 		}
 		return &CreateResult{
 			JobItemID: state.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_DEDUPLICATED,
-			Deduplicated: true, ShouldPublish: updated.Status == StatusPending,
+			Deduplicated: true, ShouldPublish: false,
 		}, nil
 	}
 	return &CreateResult{JobItemID: state.JobItemID, Status: pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED, Created: true, ShouldPublish: true}, nil
@@ -240,7 +248,7 @@ func ValidateJobItem(item *pb.JobItem) error {
 	if item == nil {
 		return ErrInvalid
 	}
-	for _, value := range []string{item.GetSpaceId(), item.GetJobId(), item.GetJobItemId(), item.GetJobType(), item.GetCodePackageId()} {
+	for _, value := range []string{item.GetSpaceId(), item.GetJobId(), item.GetJobItemId(), item.GetJobType()} {
 		if value == "" || strings.TrimSpace(value) != value {
 			return ErrInvalid
 		}

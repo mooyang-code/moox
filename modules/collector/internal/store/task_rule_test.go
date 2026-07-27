@@ -27,8 +27,7 @@ func TestTaskRuleRepository_CRUD(t *testing.T) {
 	ctx := context.Background()
 	rule := domain.TaskRule{
 		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Exchange: "binance",
-		CollectParams: `{"source":{"kind":"none"}}`, AssignmentType: "auto",
-		AssignedNodes: "[]", NodeTags: "[]", Enabled: true,
+		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
 
@@ -43,13 +42,38 @@ func TestTaskRuleRepository_CRUD(t *testing.T) {
 
 	updated, err := repo.UpdateByRuleID(ctx, "crypto", "rule-1", domain.TaskRule{
 		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Exchange: "binance",
-		CollectParams: `{"source":{"kind":"none"}}`, AssignmentType: "manual", Enabled: true,
+		CollectParams: `{"source":{"kind":"none"}}`, Creator: "updated", Enabled: true,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "manual", updated.AssignmentType)
+	assert.Equal(t, "updated", updated.Creator)
 
 	require.NoError(t, repo.SetEnabled(ctx, "crypto", "rule-1", false))
 	enabled, err := repo.ListEnabled(ctx, "crypto")
 	require.NoError(t, err)
 	assert.Len(t, enabled, 0)
+}
+
+func TestCollectorRuleSchemaOmitsNodeAssignmentColumns(t *testing.T) {
+	s := newCollectorStore(t)
+	rows, err := s.db.Raw("PRAGMA table_info(t_collector_task_rules)").Rows()
+	require.NoError(t, err)
+	defer rows.Close()
+
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		require.NoError(t, rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey))
+		columns[name] = true
+	}
+	for _, forbidden := range []string{
+		"c_" + "assignment" + "_type",
+		"c_" + "assigned" + "_nodes",
+		"c_" + "node" + "_pattern",
+		"c_" + "node" + "_tags",
+	} {
+		assert.False(t, columns[forbidden], "schema still contains %s", forbidden)
+	}
 }

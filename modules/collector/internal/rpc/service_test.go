@@ -2,14 +2,24 @@ package rpc
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"time"
+
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/symbol"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 	"path/filepath"
 	"testing"
@@ -66,12 +76,12 @@ func TestCollectorService_TaskRuleCRUD(t *testing.T) {
 	updateRsp, err := svc.UpdateTaskRule(ctx, &pb.UpdateTaskRuleReq{
 		SpaceId: "crypto", RuleId: "rule-1", Rule: &pb.TaskRule{
 			SpaceId: "crypto", RuleId: "rule-1", DataType: "symbol", Exchange: "binance",
-			CollectParams: validCollectParams(t), NodePattern: "node-*",
+			CollectParams: validCollectParams(t), Creator: "updated",
 		},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
-	assert.Equal(t, "node-*", updateRsp.GetRule().GetNodePattern())
+	assert.Equal(t, "updated", updateRsp.GetRule().GetCreator())
 
 	disableRsp, err := svc.DisableTaskRule(ctx, &pb.DisableTaskRuleReq{SpaceId: "crypto", RuleId: "rule-1"})
 	require.NoError(t, err)
@@ -88,9 +98,21 @@ func TestCollectorService_GetDataTypeConfigs(t *testing.T) {
 
 func TestCollectorService_ReportTaskStatusValidatesInput(t *testing.T) {
 	svc := newCollectorRPCService(t)
-	rsp, err := svc.ReportTaskStatus(context.Background(), &pb.ReportInstanceStatusReq{})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	for _, test := range []struct {
+		name string
+		req  *pb.ReportInstanceStatusReq
+	}{
+		{name: "space", req: &pb.ReportInstanceStatusReq{}},
+		{name: "task", req: &pb.ReportInstanceStatusReq{SpaceId: "crypto"}},
+		{name: "job item", req: &pb.ReportInstanceStatusReq{SpaceId: "crypto", TaskId: "task-1"}},
+		{name: "status", req: &pb.ReportInstanceStatusReq{SpaceId: "crypto", TaskId: "task-1", JobItemId: "item-1"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rsp, err := svc.ReportTaskStatus(context.Background(), test.req)
+			require.NoError(t, err)
+			assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+		})
+	}
 }
 
 func TestCollectorService_GetTaskInstanceListRequiresSpaceID(t *testing.T) {
@@ -100,17 +122,132 @@ func TestCollectorService_GetTaskInstanceListRequiresSpaceID(t *testing.T) {
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
-func TestCollectorService_RecalculateRequiresSpaceID(t *testing.T) {
+func TestCollectorService_ScheduleTasksRequiresSpaceID(t *testing.T) {
 	svc := newCollectorRPCService(t)
-	rsp, err := svc.RecalculateAllTaskInstances(context.Background(), &pb.RecalculateAllTaskInstancesReq{})
+	rsp, err := svc.ScheduleTasks(context.Background(), &pb.ScheduleTasksReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
+func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWake(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	mgr, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	for _, ruleID := range []string{"rule-a", "rule-b"} {
+		require.NoError(t, mgr.TaskRules().Create(context.Background(), domain.TaskRule{
+			SpaceID: "crypto", RuleID: ruleID, Exchange: "binance", DataType: "symbol",
+			CollectParams: `{
+				"source":{"kind":"none"},
+				"collector":{"exchange":"binance","market":"spot","data_type":"symbol"},
+				"target":{"dataset_id":"symbols","job_type":"collect.symbol"},
+				"schedule":{"interval":"30m"}
+			}`,
+			Enabled: true,
+		}))
+	}
+
+	var observedMu sync.Mutex
+	observedIDs := map[string][]string{}
+	observedExecuteAt := []time.Time{}
+	paths := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observedMu.Lock()
+		paths = append(paths, r.URL.Path)
+		observedMu.Unlock()
+		if r.URL.Path != "/api/service/cloudnode/SubmitJobItems" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		raw, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			http.Error(w, readErr.Error(), http.StatusBadRequest)
+			return
+		}
+		var req cloudnodepb.SubmitJobItemsReq
+		if unmarshalErr := protojson.Unmarshal(raw, &req); unmarshalErr != nil {
+			http.Error(w, unmarshalErr.Error(), http.StatusBadRequest)
+			return
+		}
+		acks := make([]*cloudnodepb.JobItemAck, 0, len(req.GetItems()))
+		for _, item := range req.GetItems() {
+			taskID := item.GetParams().GetFields()["task_id"].GetStringValue()
+			persisted, _, listErr := mgr.TaskInstances().List(context.Background(), store.TaskInstanceFilter{
+				SpaceID: "crypto", TaskID: taskID,
+			})
+			if listErr != nil || len(persisted) != 1 || persisted[0].CloudJobItemID != item.GetJobItemId() {
+				http.Error(w, "job item id was not persisted before publish", http.StatusConflict)
+				return
+			}
+			if item.GetExecuteAt() == nil {
+				http.Error(w, "execute_at is required", http.StatusBadRequest)
+				return
+			}
+			observedMu.Lock()
+			observedIDs[taskID] = append(observedIDs[taskID], item.GetJobItemId())
+			observedExecuteAt = append(observedExecuteAt, item.GetExecuteAt().AsTime())
+			observedMu.Unlock()
+			acks = append(acks, &cloudnodepb.JobItemAck{
+				JobItemId: item.GetJobItemId(),
+				Status:    cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED,
+			})
+		}
+		body, marshalErr := protojson.Marshal(&cloudnodepb.SubmitJobItemsRsp{
+			RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+			Acks:    acks,
+		})
+		if marshalErr != nil {
+			http.Error(w, marshalErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	svc := New(mgr, Dependencies{
+		AdminGatewayURL: server.URL,
+		ServiceAuth:     taskpublisher.AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"},
+	})
+	currentNow := time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC)
+	nowCalls := 0
+	svc.now = func() time.Time {
+		nowCalls++
+		return currentNow
+	}
+
+	for _, invocationNow := range []time.Time{
+		currentNow,
+		time.Date(2026, 7, 26, 10, 25, 0, 0, time.UTC),
+	} {
+		currentNow = invocationNow
+		rsp, scheduleErr := svc.ScheduleTasks(context.Background(), &pb.ScheduleTasksReq{SpaceId: "crypto"})
+		require.NoError(t, scheduleErr)
+		require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	}
+
+	assert.Equal(t, 2, nowCalls, "Schedule must capture now once per invocation")
+	observedMu.Lock()
+	defer observedMu.Unlock()
+	require.Len(t, observedExecuteAt, 4)
+	for _, executeAt := range observedExecuteAt {
+		assert.Equal(t, time.Date(2026, 7, 26, 10, 30, 0, 0, time.UTC), executeAt)
+	}
+	for taskID, ids := range observedIDs {
+		require.Len(t, ids, 2, taskID)
+		assert.Equal(t, ids[0], ids[1], taskID)
+	}
+	for _, path := range paths {
+		assert.False(t, strings.Contains(path, "GetNodeList"), paths)
+		assert.False(t, strings.Contains(path, "InvokeFunction"), paths)
+	}
 }
 
 func TestNormalizeAndValidateTaskRule(t *testing.T) {
 	rule := normalizeTaskRule(domain.TaskRule{SpaceID: "crypto", DataType: "symbol", Exchange: "binance"})
 	assert.NotEmpty(t, rule.RuleID)
-	assert.Equal(t, "auto", rule.AssignmentType)
 	assert.Equal(t, "{}", rule.CollectParams)
 
 	err := validateTaskRule(domain.TaskRule{SpaceID: "", DataType: "symbol", Exchange: "binance", RuleID: "r1"})
@@ -126,7 +263,8 @@ func TestCollectorService_TaskInstanceFlow(t *testing.T) {
 
 	require.NoError(t, mgr.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{
 		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1", Exchange: "binance",
-		DataType: "symbol", Market: "spot", TaskParams: `{}`,
+		DataType: "symbol", Market: "spot", TaskParams: `{}`, CloudJobItemID: "item-new",
+		LastExecStatus: domain.InstanceStatusPending,
 	}}))
 
 	svc := New(mgr, Dependencies{})
@@ -140,20 +278,51 @@ func TestCollectorService_TaskInstanceFlow(t *testing.T) {
 	assert.Len(t, listRsp.GetInstances(), 1)
 
 	reportRsp, err := svc.ReportTaskStatus(ctx, &pb.ReportInstanceStatusReq{
-		SpaceId: "crypto", TaskId: "task-1", NodeId: "node-a",
+		SpaceId: "crypto", TaskId: "task-1", JobItemId: "item-new", NodeId: "node-new",
 		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+		Result: mustStruct(t, map[string]any{"state": "new"}),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, reportRsp.GetRetInfo().GetCode())
 
-	missingRsp, err := svc.ReportTaskStatus(ctx, &pb.ReportInstanceStatusReq{
-		SpaceId: "crypto", TaskId: "missing", Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+	instances, _, err := mgr.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, "node-new", instances[0].LastExecNode)
+	assert.Equal(t, domain.InstanceStatusSuccess, instances[0].LastExecStatus)
+	assert.JSONEq(t, `{"state":"new"}`, instances[0].Result)
+
+	reportRsp, err = svc.ReportTaskStatus(ctx, &pb.ReportInstanceStatusReq{
+		SpaceId: "crypto", TaskId: "task-1", JobItemId: "item-old", NodeId: "node-old",
+		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED,
+		Result: mustStruct(t, map[string]any{"state": "old"}),
 	})
 	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_NOT_FOUND, missingRsp.GetRetInfo().GetCode())
+	assert.Equal(t, pb.ErrorCode_SUCCESS, reportRsp.GetRetInfo().GetCode())
+
+	instances, _, err = mgr.TaskInstances().List(ctx, store.TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, "node-new", instances[0].LastExecNode)
+	assert.Equal(t, domain.InstanceStatusSuccess, instances[0].LastExecStatus)
+	assert.JSONEq(t, `{"state":"new"}`, instances[0].Result)
+
+	missingRsp, err := svc.ReportTaskStatus(ctx, &pb.ReportInstanceStatusReq{
+		SpaceId: "crypto", TaskId: "missing", JobItemId: "item-missing",
+		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, missingRsp.GetRetInfo().GetCode())
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func mustStruct(t *testing.T, value map[string]any) *structpb.Struct {
+	t.Helper()
+	result, err := structpb.NewStruct(value)
+	require.NoError(t, err)
+	return result
+}
 
 func TestGetDataTypeConfigWithFieldsNormalizesDataType(t *testing.T) {
 	svc := &Service{}
@@ -175,18 +344,8 @@ func TestGetDataTypeConfigWithFieldsNormalizesDataType(t *testing.T) {
 	}
 }
 
-func TestJobTypesFromInstances_DedupesAndDerivesJobType(t *testing.T) {
-	got := jobTypesFromInstances([]domain.TaskInstance{
-		{TaskParams: `{"job_type":"collect.symbol"}`},
-		{TaskParams: `{"job_type":"collect.symbol"}`},
-		{TaskParams: `{"data_type":"kline"}`},
-	})
-	assert.Equal(t, []string{"collect.symbol", "collect.kline"}, got)
-	assert.Empty(t, jobTypesFromInstances([]domain.TaskInstance{{TaskParams: `{"data_type":""}`}}))
-}
-
 func TestDataTypeConfigFromDefinition(t *testing.T) {
-	def := symbol.Definition(jobs.JobTypeCollectSymbol)
+	def := symbol.NewJobDefinition()
 	cfg := dataTypeConfigFromDefinition(def)
 	assert.Equal(t, "symbol", cfg.GetDataType())
 	assert.Equal(t, "标的", cfg.GetTypeName())
@@ -205,6 +364,6 @@ func TestStructFromAnyAndValueFromAny(t *testing.T) {
 	assert.Equal(t, "", valueFromAny(make(chan int)).GetStringValue())
 }
 
-func TestJobsListDefinitionsNotEmpty(t *testing.T) {
-	assert.NotEmpty(t, jobs.ListDefinitions())
+func TestJobsListJobDefinitionsNotEmpty(t *testing.T) {
+	assert.NotEmpty(t, jobs.ListJobDefinitions())
 }

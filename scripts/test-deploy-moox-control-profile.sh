@@ -61,7 +61,8 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --profile control --package-only --archive "${ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
-  --node-id control --gateway-control-url http://127.0.0.1:11000 >/dev/null
+  --node-id control --gateway-control-url http://127.0.0.1:11000 \
+  --public-host 106.53.107.122 --service-https-port 11001 >/dev/null
 
 [[ -f "${ARCHIVE}" ]]
 mode=$(file_mode "${ARCHIVE}")
@@ -85,6 +86,10 @@ done
 grep -q 'native_addr: 0.0.0.0:11003' "${TMP_ROOT}/unpacked/gateway/config/app.yaml"
 grep -Fq -- '--disable-storage-shard' "${TMP_ROOT}/unpacked/start.sh"
 ! grep -Fq -- '--disable-storage-node' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-https://106.53.107.122:11001}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-ip://106.53.107.122:11003}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"MOOX_SCF_SERVICE_GATEWAY_TARGET=${SCF_SERVICE_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET=${SCF_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --package-only --archive "${DEFAULT_ARCHIVE}" \

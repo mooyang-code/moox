@@ -51,8 +51,9 @@ type ConsumerAPI interface {
 	Close() error
 }
 
-// ErrorReporter 接收业务处理、拉取和传输动作错误；业务处理错误只上报，
-// 拉取和传输错误会结束本轮 Runner。
+// ErrorReporter observes fetch and in-progress transport failures. Handler
+// business errors belong to the handler, while delivery actions are observed
+// through ActionReporter.
 type ErrorReporter interface {
 	Report(error)
 }
@@ -65,10 +66,17 @@ func (f ErrorReporterFunc) Report(err error) {
 	}
 }
 
+// ActionReporter observes the actual ACK/NAK/TERM attempt for a delivery.
+// Reporting is best-effort and cannot change transport behavior.
+type ActionReporter interface {
+	ReportAction(context.Context, *Delivery, HandlerResult, error)
+}
+
 type RunnerConfig struct {
 	BatchSize          int
 	InProgressInterval time.Duration
 	ErrorReporter      ErrorReporter
+	ActionReporter     ActionReporter
 }
 
 type Runner struct {
@@ -140,18 +148,23 @@ func (r *Runner) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			result, err := r.handle(ctx, delivery)
-			if err != nil {
-				batchErr = errors.Join(batchErr, err)
+			result, inProgressErr, actionErr := r.handle(ctx, delivery)
+			if inProgressErr != nil {
+				r.report(inProgressErr)
+				batchErr = errors.Join(batchErr, inProgressErr)
+			}
+			if actionErr != nil {
+				batchErr = errors.Join(batchErr, actionErr)
 			}
 			if result.Decision == RETRY {
 				// Keep this fetched batch together. A later fetch may still overtake
 				// these delayed deliveries, so ordered domains must reject stale work.
 				for _, pending := range deliveries[index+1:] {
-					actionErr := ApplyHandlerResult(ctx, pending, HandlerResult{Decision: RETRY, Delay: result.Delay})
-					if actionErr != nil {
-						r.report(actionErr)
-						batchErr = errors.Join(batchErr, actionErr)
+					pendingResult := HandlerResult{Decision: RETRY, Delay: result.Delay}
+					pendingActionErr := ApplyHandlerResult(ctx, pending, pendingResult)
+					r.reportAction(ctx, pending, pendingResult, pendingActionErr)
+					if pendingActionErr != nil {
+						batchErr = errors.Join(batchErr, fmt.Errorf("apply pending handler result: %w", pendingActionErr))
 					}
 				}
 				break
@@ -164,16 +177,17 @@ func (r *Runner) Run(ctx context.Context) error {
 			return nil
 		}
 		if fetchErr != nil && !isDecodeOnly(fetchErr) && !errors.Is(fetchErr, nats.ErrTimeout) {
-			batchErr = errors.Join(batchErr, fmt.Errorf("fetch deliveries: %w", fetchErr))
+			wrappedFetchErr := fmt.Errorf("fetch deliveries: %w", fetchErr)
+			r.report(wrappedFetchErr)
+			batchErr = errors.Join(batchErr, wrappedFetchErr)
 		}
 		if batchErr != nil {
-			r.report(batchErr)
 			return batchErr
 		}
 	}
 }
 
-func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult, error) {
+func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult, error, error) {
 	stopHeartbeat := make(chan struct{})
 	heartbeatErrs := make(chan error, 1)
 	var heartbeatWG sync.WaitGroup
@@ -185,15 +199,11 @@ func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult,
 	close(stopHeartbeat)
 	heartbeatWG.Wait()
 
-	if result.Err != nil {
-		r.report(fmt.Errorf("handle delivery: %w", result.Err))
-	}
-	var transportErr error
+	var inProgressErr error
 	for {
 		select {
 		case err := <-heartbeatErrs:
-			r.report(err)
-			transportErr = errors.Join(transportErr, err)
+			inProgressErr = errors.Join(inProgressErr, err)
 		default:
 			goto heartbeatDone
 		}
@@ -201,20 +211,19 @@ func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult,
 
 heartbeatDone:
 	if ctx.Err() != nil {
-		return result, nil
+		return result, inProgressErr, nil
 	}
 	if delivery == nil {
 		err := ErrInvalidDelivery
-		r.report(err)
-		return result, errors.Join(transportErr, err)
+		r.reportAction(ctx, delivery, result, err)
+		return result, inProgressErr, err
 	}
 	actionErr := ApplyHandlerResult(ctx, delivery, result)
+	r.reportAction(ctx, delivery, result, actionErr)
 	if actionErr != nil {
 		actionErr = fmt.Errorf("apply handler result: %w", actionErr)
-		r.report(actionErr)
-		transportErr = errors.Join(transportErr, actionErr)
 	}
-	return result, transportErr
+	return result, inProgressErr, actionErr
 }
 
 func (r *Runner) heartbeat(ctx context.Context, delivery *Delivery, stop <-chan struct{}, errs chan<- error, wg *sync.WaitGroup) {
@@ -241,6 +250,24 @@ func (r *Runner) heartbeat(ctx context.Context, delivery *Delivery, stop <-chan 
 func (r *Runner) report(err error) {
 	if r.cfg.ErrorReporter != nil && err != nil {
 		r.cfg.ErrorReporter.Report(err)
+	}
+}
+
+func (r *Runner) reportAction(
+	ctx context.Context,
+	delivery *Delivery,
+	result HandlerResult,
+	err error,
+) {
+	if r.cfg.ActionReporter != nil {
+		func() {
+			defer func() {
+				// The transport action has already happened; an observer cannot
+				// be allowed to change delivery control flow.
+				_ = recover()
+			}()
+			r.cfg.ActionReporter.ReportAction(ctx, delivery, result, err)
+		}()
 	}
 }
 

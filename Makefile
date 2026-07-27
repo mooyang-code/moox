@@ -1,4 +1,4 @@
-.PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline proto-check release release-matrix deploy test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline proto-check release release-matrix deploy test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -85,7 +85,7 @@ proto-check:
 	$(MAKE) proto
 	@test -z "$$(git status --porcelain)"
 
-verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-datanode-management-contract test-build-storage-linux-contract
+verify-pr: proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
 
 verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy
 	CI=true pnpm install --frozen-lockfile
@@ -107,6 +107,9 @@ test-caddy:
 	bash scripts/test-install-caddy-ca.sh
 	bash skills/moox/scripts/test-caddy-prerequisite.sh
 	bash skills/moox/scripts/test-caddy-ca.sh
+
+test-collector-scf-package-contract:
+	bash scripts/build-collector-scf-package_test.sh
 
 test-gateway-deploy:
 	bash scripts/test-deploy-moox-gateway.sh

@@ -32,9 +32,20 @@ func (s *Service) submitJobItems(ctx context.Context, req *pb.SubmitJobItemsReq)
 	ensured := make(map[string]struct{})
 	var created, deduplicated, rejected int32
 	for _, item := range req.GetItems() {
-		key := item.GetSpaceId() + "\x00" + item.GetCodePackageId() + "\x00" + item.GetJobType()
+		if executeAt := item.GetExecuteAt(); executeAt != nil {
+			if err := executeAt.CheckValid(); err != nil {
+				acks = append(acks, &pb.JobItemAck{
+					JobItemId:    item.GetJobItemId(),
+					Status:       pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_REJECTED,
+					RejectReason: "invalid execute_at: " + err.Error(),
+				})
+				rejected++
+				continue
+			}
+		}
+		key := item.GetSpaceId() + "\x00" + item.GetJobType()
 		if _, ok := ensured[key]; !ok {
-			if err := s.executionQueue.EnsureJobExecutionQueue(ctx, cloudjobqueue.Identity{SpaceID: item.GetSpaceId(), CodePackageID: item.GetCodePackageId(), JobType: item.GetJobType()}); err != nil {
+			if err := s.executionQueue.EnsureJobExecutionQueue(ctx, cloudjobqueue.Identity{SpaceID: item.GetSpaceId(), JobType: item.GetJobType()}); err != nil {
 				return &pb.SubmitJobItemsRsp{RetInfo: retFromError(err)}, nil
 			}
 			ensured[key] = struct{}{}

@@ -20,7 +20,7 @@ Never paste SecretKey, service auth secret, SSH password, signed `Auth` headers,
    - No package: local build or package upload failed.
    - No function: CloudNode batch_change or Tencent SCF API failed.
    - Function offline: keepalive or heartbeat failed.
-   - Task pending: task planner, CloudNode work_item polling, or collector task status report failed.
+   - Task pending: planner submission, JetStream delivery, or collector task status report failed.
    - Task success but no data: collector execution or storage write failed.
 2. Preserve `git status --short` before touching code.
 3. Use narrow commands and logs; avoid broad log dumps.
@@ -112,7 +112,7 @@ bin/moox-cli collector function publish \
   --package-type data_collector \
   --biz-type data_collector \
   --node-type scf-event \
-  --function-config timeout=60 \
+  --function-config timeout=120 \
   --env MOOX_ENV=prod
 ```
 
@@ -130,7 +130,7 @@ Use `/api/admin` for management calls and `/api/service` for service-to-service 
 Useful log filters:
 
 ```bash
-rg -n "InitPackageUpload|CompletePackageUpload|CreateNode|CreateFunction|UpdateFunction|Invoke keepalive|ReportHeartbeat|PollWorkItems|ReportWorkItemStatus|SubmitWorkItems|TaskPlanner|ReportTaskStatus|storage" ~/moox/log/trpc.log
+rg -n "InitPackageUpload|CompletePackageUpload|CreateNode|CreateFunction|UpdateFunction|Invoke keepalive|ReportHeartbeat|SubmitJobItems|ReportJobItemStatus|ScheduleTasks|ReportTaskStatus|storage" ~/moox/log/trpc.log
 ```
 
 Check these boundaries:
@@ -140,22 +140,23 @@ Check these boundaries:
 - Node row has node ID/function name, package ID, region, namespace, runtime, handler, node type, biz type, supported collectors, and probe enabled.
 - Keepalive probe invokes the same function name shown in Tencent SCF.
 - Heartbeat store marks the node online after keepalive success.
-- Task planner has already run at least once after rule/node changes.
+- `ScheduleTasks` submitted only the next JobItem after the rule changed.
+- The runtime has one NATS connection and one resident taskrunner bound to all supported durables.
+- Heartbeat scheduling is independent of the resident taskrunner; SCF execution needs no scheduler invocation.
+- New compatible SCF instances join the same `space_id + job_type` durable automatically.
 
 ## CLS Log Investigation
 
 Use the `cls-query` skill when available. Query a narrow time range first, then widen only if needed.
 
-Search patterns:
+Search by `job_item_id` across the complete lifecycle:
 
-- Function entry: `handleKeepalive`, `ProcessProbe`, `ReportHeartbeat`.
-- CloudNode work_item poll: `PollWorkItems`, `CloudWorkItemLease`, `collector.binance.spot.kline`.
-- Legacy/direct task download: `收到任务实例更新`, `Task[`, `parse_task_params_success`.
-- Due-task decision: `client_task_fetch`, `client_task_detail`, `shouldExecute`, `Will execute`.
-- Collector execution: `执行采集`, `采集成功`, `采集失败`.
+- Function entry and heartbeat: `handleKeepalive`, `ProcessProbe`, `ReportHeartbeat`.
+- Delivery lifecycle: `collector_job_received`, validation, deferral, execution start, and `collector_job_done`.
+- Status callbacks: `collector_job_instance_reported`, `collector_job_cloudnode_reported`,
+  `ReportTaskStatus`, and `ReportJobItemStatus`.
+- Delivery action: actual ACK, NAK, or TERM result.
 - Storage write: `WriteRecordRows`, `UpsertSubject`, `BindDatasetSubject`, `key.data_time`.
-- CloudNode work_item callback: `ReportWorkItemStatus`.
-- Collector task callback: `ReportTaskStatus`, `任务状态上报成功`, `status=2`.
 
 Evidence table:
 
@@ -163,8 +164,8 @@ Evidence table:
 | --- | --- |
 | No `handleKeepalive` | control did not invoke SCF, or SCF trigger/API failed |
 | `ProcessProbe` ok but no `ReportHeartbeat` | SCF cannot reach control `/api/service/cloudnode/ReportHeartbeat` |
-| Heartbeat ok but no CloudNode work_item lease | planner/store/node assignment issue |
-| Task list ok but `shouldExecute=false` | interval/time scheduling issue |
+| Heartbeat ok but no `collector_job_received` | submission, stream, durable identity, or NATS connectivity issue |
+| Received then deferred | future `execute_at`; NAK delay must equal `execute_at - now` |
 | `采集成功` but status callback fails | service auth/path/firewall issue |
 | Status success but no view rows | storage write, subject binding, dataset, freq, or view materialization issue |
 
@@ -194,8 +195,9 @@ If the view is empty but raw records exist, inspect view definition, freq select
 - Keepalive did not include active `service_deployments`, or the SCF runtime did not apply them before callback/storage writes.
 - Remote firewall allows storage port but not control gateway port.
 - Management API path was used by SCF callback, causing login-state auth failure.
-- Task planner store is empty, so collector did not submit CloudNode work_items for the expected dataset subjects.
-- Rule or node lacks matching `space_id`, `biz_type`, supported collector type, or online heartbeat status.
-- Fixed node assignment points at an offline or incompatible node.
+- Collector did not submit the next JobItem for the expected dataset subjects.
+- Publisher and SCF use different `space_id + job_type` durable identities.
+- SCF metadata omits a supported workload, so its resident taskrunner did not bind that durable.
 - Function runtime/handler differs from the zip layout.
 - CLS topic/region is for another function or namespace.
+- Binance TLS verification being disabled is accepted here; do not diagnose that configured state as the failure by itself.
