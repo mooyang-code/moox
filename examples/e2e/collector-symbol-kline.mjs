@@ -59,6 +59,15 @@ const VALUE_TYPES = {
   int: "FIELD_VALUE_TYPE_INT",
   double: "FIELD_VALUE_TYPE_DOUBLE",
 };
+const VALUE_TYPE_CODES = { string: 1, int: 2, double: 3 };
+const ENUM_CODES = {
+  DATA_KIND_RECORD: 1,
+  DATA_KIND_TIME_SERIES: 2,
+  DATASET_COLUMN_ORIGIN_TYPE_FIELD: 1,
+  FIELD_VALUE_TYPE_STRING: 1,
+  FIELD_VALUE_TYPE_INT: 2,
+  FIELD_VALUE_TYPE_DOUBLE: 3,
+};
 
 const FORBIDDEN_JOB_PARAM_KEYS = new Set([
   "storage_target",
@@ -243,7 +252,9 @@ function buildDatasetContract({ spaceID, datasetID, dataNodeID, name, descriptio
 export function assertDatasetContract(actual, actualColumns, expected) {
   if (!actual) throw new Error(`dataset ${expected.dataset_id} is missing`);
   for (const key of ["space_id", "dataset_id", "data_source_id", "data_node_id", "data_kind"]) {
-    if (actual[key] !== expected[key]) {
+    const gotValue = key === "data_kind" ? enumCode(actual[key]) : actual[key];
+    const wantValue = key === "data_kind" ? enumCode(expected[key]) : expected[key];
+    if (gotValue !== wantValue) {
       throw new Error(`dataset ${expected.dataset_id} ${key}=${actual[key]} want=${expected[key]}`);
     }
   }
@@ -252,9 +263,9 @@ export function assertDatasetContract(actual, actualColumns, expected) {
   }
   const simplify = (column) => [
     column.column_name,
-    column.origin_type,
+    enumCode(column.origin_type),
     column.origin_id,
-    column.value_type,
+    enumCode(column.value_type),
     column.status,
   ];
   const got = (actualColumns || []).map(simplify).sort(compareJSON);
@@ -265,6 +276,10 @@ export function assertDatasetContract(actual, actualColumns, expected) {
   if (actual.status === "active" && actual.binding_locked !== true) {
     throw new Error(`dataset ${expected.dataset_id} active binding is not locked`);
   }
+}
+
+function enumCode(value) {
+  return typeof value === "string" && Object.hasOwn(ENUM_CODES, value) ? ENUM_CODES[value] : value;
 }
 
 export function activeUSDTSymbolIDs(records, memberships, mappings) {
@@ -1038,7 +1053,9 @@ async function ensureFields(args, token, definitions) {
     });
     if (retOK(existing.ret_info)) {
       if (!fieldContractMatches(existing.field, type)) {
-        throw new Error(`field ${fieldID} contract mismatch`);
+        throw new Error(
+          `field ${fieldID} contract mismatch: value_type=${existing.field?.value_type} status=${existing.field?.status}`,
+        );
       }
       continue;
     }
@@ -1056,7 +1073,8 @@ async function ensureFields(args, token, definitions) {
 }
 
 export function fieldContractMatches(field, type) {
-  return [type, VALUE_TYPES[type]].includes(field?.value_type) && field?.status === "active";
+  return [type, VALUE_TYPES[type], VALUE_TYPE_CODES[type]].includes(field?.value_type) &&
+    field?.status === "active";
 }
 
 async function ensureFieldGroup(args, token) {

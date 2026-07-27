@@ -60,6 +60,7 @@ test("builds 1m time-series dataset contract", () => {
 test("existing field contract accepts Storage scalar and protobuf enum names", () => {
   assert.equal(fieldContractMatches({ value_type: "string", status: "active" }, "string"), true);
   assert.equal(fieldContractMatches({ value_type: "FIELD_VALUE_TYPE_STRING", status: "active" }, "string"), true);
+  assert.equal(fieldContractMatches({ value_type: 1, status: "active" }, "string"), true);
   assert.equal(fieldContractMatches({ value_type: "double", status: "disabled" }, "double"), false);
 });
 
@@ -90,6 +91,20 @@ test("existing active dataset must exactly match the fixture contract", () => {
     columns: undefined,
     status: "active",
   }, columns.slice(1), expected), /columns/);
+});
+
+test("dataset contract accepts numeric protobuf enum responses", () => {
+  const expected = buildSymbolDatasetContract("crypto", "e2e_symbols", "node-a");
+  const valueCodes = {
+    FIELD_VALUE_TYPE_STRING: 1,
+    FIELD_VALUE_TYPE_INT: 2,
+    FIELD_VALUE_TYPE_DOUBLE: 3,
+  };
+  assert.doesNotThrow(() => assertDatasetContract(
+    { ...expected, data_kind: 1, status: "disabled" },
+    expected.columns.map((column) => ({ ...column, origin_type: 1, value_type: valueCodes[column.value_type] })),
+    expected,
+  ));
 });
 
 test("counts only active USDT symbol memberships", () => {
