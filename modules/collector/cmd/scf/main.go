@@ -30,7 +30,6 @@ type onceOptions struct {
 }
 
 var (
-	registerTRPCServices  = runtimebootstrap.RegisterTRPCServices
 	registerCloudFunction = serverless.RegisterCloudFunction
 	runTaskRunner         = taskrunner.Run
 	runConfiguredRunner   = taskrunner.RunConfigured
@@ -62,7 +61,7 @@ func main() {
 			ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
 			defer cancel()
 		}
-		if err := initializeRuntime(ctx, cfg, false); err != nil {
+		if err := initializeRuntime(ctx, cfg); err != nil {
 			panic("failed to initialize one-shot collector runtime: " + err.Error())
 		}
 		if err := runOnce(ctx, opts); err != nil {
@@ -72,7 +71,7 @@ func main() {
 	}
 	if *resident {
 		ctx := trpc.BackgroundContext()
-		if err := initializeRuntime(ctx, cfg, false); err != nil {
+		if err := initializeRuntime(ctx, cfg); err != nil {
 			panic("failed to initialize resident collector runtime: " + err.Error())
 		}
 		configureResidentRuntime(opts)
@@ -103,15 +102,12 @@ func configureResidentRuntime(opts onceOptions) {
 	}
 }
 
-func initializeRuntime(ctx context.Context, cfg *runtimeapp.AppConfig, startTRPC bool) error {
+func initializeRuntime(ctx context.Context, cfg *runtimeapp.AppConfig) error {
 	if _, err := runtimeapp.LoadConfigs(cfg); err != nil {
 		return err
 	}
 	if _, err := runtimebootstrap.StartBackgroundServices(ctx); err != nil {
 		return err
-	}
-	if startTRPC {
-		return registerTRPCServices()
 	}
 	return nil
 }
@@ -120,7 +116,7 @@ func startProductionRuntime(ctx context.Context, cfg *runtimeapp.AppConfig) erro
 	if strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")) == "" {
 		return fmt.Errorf("MOOX_SPACE_ID is required")
 	}
-	if err := initializeRuntime(ctx, cfg, true); err != nil {
+	if err := initializeRuntime(ctx, cfg); err != nil {
 		return err
 	}
 	registerCloudFunction()

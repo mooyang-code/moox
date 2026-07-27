@@ -31,7 +31,7 @@ func TestOnceOptionsFromEnv(t *testing.T) {
 func TestInitializeRuntimeOnceDoesNotRequireTRPCConfig(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	if err := initializeRuntime(context.Background(), runtimeapp.DefaultConfig(), false); err != nil {
+	if err := initializeRuntime(context.Background(), runtimeapp.DefaultConfig()); err != nil {
 		t.Fatalf("initializeRuntime() error = %v", err)
 	}
 }
@@ -80,25 +80,18 @@ func TestStartProductionRuntimeRequiresSpaceID(t *testing.T) {
 	assert.Contains(t, err.Error(), "MOOX_SPACE_ID")
 }
 
-func TestStartProductionRuntimeStartsServicesFunctionAndOneRunner(t *testing.T) {
+func TestStartProductionRuntimeStartsFunctionAndOneRunnerWithoutTRPCServer(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Chdir(t.TempDir())
-	oldRegisterTRPC := registerTRPCServices
 	oldRegisterFunction := registerCloudFunction
 	oldRun := runTaskRunner
 	t.Cleanup(func() {
-		registerTRPCServices = oldRegisterTRPC
 		registerCloudFunction = oldRegisterFunction
 		runTaskRunner = oldRun
 	})
 
-	trpcStarts := 0
 	functionStarts := 0
 	runnerStarts := make(chan struct{}, 2)
-	registerTRPCServices = func() error {
-		trpcStarts++
-		return nil
-	}
 	registerCloudFunction = func() {
 		functionStarts++
 	}
@@ -121,7 +114,6 @@ func TestStartProductionRuntimeStartsServicesFunctionAndOneRunner(t *testing.T) 
 		t.Fatal("resident taskrunner started more than once")
 	case <-time.After(10 * time.Millisecond):
 	}
-	assert.Equal(t, 1, trpcStarts)
 	assert.Equal(t, 1, functionStarts)
 }
 
@@ -143,19 +135,6 @@ func TestResidentTaskRunnerRestartsAfterTransportFailure(t *testing.T) {
 
 	assert.Equal(t, 1, <-calls)
 	assert.Equal(t, 2, <-calls)
-}
-
-func TestStartProductionRuntimeReturnsTRPCStartFailure(t *testing.T) {
-	t.Setenv("MOOX_SPACE_ID", "crypto")
-	t.Chdir(t.TempDir())
-	oldRegisterTRPC := registerTRPCServices
-	t.Cleanup(func() { registerTRPCServices = oldRegisterTRPC })
-	registerTRPCServices = func() error { return errors.New("bad timer config") }
-
-	err := startProductionRuntime(context.Background(), runtimeapp.DefaultConfig())
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bad timer config")
 }
 
 func TestDurationEnv(t *testing.T) {
