@@ -49,6 +49,7 @@ func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *test
 		allowed bool
 	}{
 		{method: "GetDataSource", service: "storage-primary", allowed: true},
+		{method: "GetFieldGroup", service: "storage-primary", allowed: true},
 		{method: "ListSubjectSymbols", service: "storage-primary", allowed: true},
 		{method: "RegisterDataSubject", service: "storage-primary", allowed: true},
 		{method: "GetDataNode", service: "storage-primary", allowed: true},

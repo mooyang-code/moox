@@ -33,6 +33,7 @@ var storageBFFMethods = map[string]string{
 	"CreateField":            "storage-primary",
 	"CreateFieldGroup":       "storage-primary",
 	"UpdateFieldGroup":       "storage-primary",
+	"GetFieldGroup":          "storage-primary",
 	"ListFieldGroups":        "storage-primary",
 	"UpdateField":            "storage-primary",
 	"GetField":               "storage-primary",
