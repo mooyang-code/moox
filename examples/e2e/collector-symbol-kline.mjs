@@ -635,6 +635,7 @@ async function setup(args) {
     ...emptyState(),
     run_id: `${Date.now()}-${randomBytes(4).toString("hex")}`,
     rule_owner: `collector-symbol-kline-e2e:${Date.now()}-${randomBytes(4).toString("hex")}`,
+    space_id: args.space,
     symbol_dataset_id: args.symbolDataset,
     kline_dataset_id: args.klineDataset,
     symbol_rule_id: args.symbolRule,
@@ -947,9 +948,29 @@ async function cleanup(args) {
     log("cleanup skipped Rule changes because this state has no rule owner");
     return;
   }
-  args.ruleOwner = state.rule_owner;
+  restoreCleanupScope(args, state);
   await disableOwnedRule(args, token, buildSymbolRule(args), true);
   await disableOwnedRule(args, token, buildKlineRule(args), true);
+}
+
+export function restoreCleanupScope(args, state) {
+  const scope = {
+    space: String(state?.space_id || "").trim(),
+    symbolDataset: validateDatasetID(state?.symbol_dataset_id),
+    klineDataset: validateDatasetID(state?.kline_dataset_id),
+    symbolRule: String(state?.symbol_rule_id || "").trim(),
+    klineRule: String(state?.kline_rule_id || "").trim(),
+    ruleOwner: String(state?.rule_owner || "").trim(),
+  };
+  validateE2ERuleID(scope.symbolRule);
+  validateE2ERuleID(scope.klineRule);
+  if (!scope.space) throw new FatalAssertionError("cleanup state space_id is required");
+  if (!scope.ruleOwner) throw new FatalAssertionError("cleanup state rule_owner is required");
+  if (scope.symbolRule === scope.klineRule) {
+    throw new FatalAssertionError("cleanup state Symbol and Kline Rule IDs must differ");
+  }
+  Object.assign(args, scope);
+  return args;
 }
 
 async function ensureDataSource(args, token) {
@@ -1346,6 +1367,7 @@ function nextMinute(date) {
 function emptyState() {
   return {
     run_id: "",
+    space_id: "",
     symbol_dataset_id: "",
     kline_dataset_id: "",
     symbol_rule_id: "",

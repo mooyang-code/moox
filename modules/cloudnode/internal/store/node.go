@@ -41,6 +41,9 @@ func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *
 	if req.GetNodeType() != "" {
 		q = q.Where("c_node_type = ?", req.GetNodeType())
 	}
+	if req.GetBizType() != "" {
+		q = q.Where("json_extract(c_metadata, '$.biz_type') = ?", req.GetBizType())
+	}
 	if req.GetStatus() != pb.NodeStatusCode_NODE_STATUS_UNSPECIFIED {
 		if status := nodeStatusFromPB(req.GetStatus()); status != "" {
 			q = q.Where("c_status = ?", status)
@@ -133,10 +136,13 @@ func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string,
 		Updates(map[string]any{
 			"c_running_version":     version,
 			"c_supported_workloads": supported,
-			"c_metadata":            metadata,
-			"c_status":              "online",
-			"c_last_heartbeat_at":   now,
-			"c_mtime":               now,
+			"c_metadata": gorm.Expr(
+				"json_patch(CASE WHEN json_valid(c_metadata) THEN c_metadata ELSE '{}' END, ?)",
+				metadata,
+			),
+			"c_status":            "online",
+			"c_last_heartbeat_at": now,
+			"c_mtime":             now,
 		}).Error
 }
 

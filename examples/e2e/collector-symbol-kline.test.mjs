@@ -15,6 +15,7 @@ import {
   collectKlineWriteEvidence,
   hasMorePages,
   parseArgs,
+  restoreCleanupScope,
   validateKlineStorageRow,
   validatePublishSummary,
   validateKlineJobs,
@@ -475,6 +476,24 @@ test("rejects non-E2E Rule IDs before making cleanup-capable requests", () => {
     "--symbol-rule", "e2e_same",
     "--kline-rule", "e2e_same",
   ]), /must differ/);
+});
+
+test("cleanup restores the exact run scope from state", () => {
+  const args = parseArgs(["--phase", "cleanup", "--state-file", "/tmp/state.json"]);
+  restoreCleanupScope(args, {
+    space_id: "crypto-old",
+    symbol_dataset_id: "e2e_symbols_old",
+    kline_dataset_id: "e2e_kline_old",
+    symbol_rule_id: "e2e_symbols_old_1m",
+    kline_rule_id: "e2e_kline_old_1m",
+    rule_owner: "collector-symbol-kline-e2e:old",
+  });
+  assert.equal(args.space, "crypto-old");
+  assert.equal(args.symbolDataset, "e2e_symbols_old");
+  assert.equal(args.klineDataset, "e2e_kline_old");
+  assert.equal(args.symbolRule, "e2e_symbols_old_1m");
+  assert.equal(args.klineRule, "e2e_kline_old_1m");
+  assert.equal(args.ruleOwner, "collector-symbol-kline-e2e:old");
 });
 
 function typed(value) {

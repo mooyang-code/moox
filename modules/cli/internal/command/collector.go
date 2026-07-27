@@ -434,7 +434,12 @@ func applyCollectorFleet(
 	if err != nil {
 		return summary, err
 	}
-	fleetNodes, err := selectCollectorFleetNodes(catalogNodes, opts.FunctionNamePrefix, opts.NodeCount)
+	fleetNodes, err := selectCollectorFleetNodes(
+		catalogNodes,
+		opts.FunctionNamePrefix,
+		defaultFlag(opts.BizType, "data_collector"),
+		opts.NodeCount,
+	)
 	if err != nil {
 		return summary, err
 	}
@@ -597,7 +602,7 @@ func cloneCollectorStringMap(source map[string]string) map[string]string {
 	return cloned
 }
 
-func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, expected int) ([]adminclient.CloudNode, error) {
+func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, bizType string, expected int) ([]adminclient.CloudNode, error) {
 	indexed := make([]adminclient.CloudNode, expected)
 	found := make([]bool, expected)
 	count := 0
@@ -608,6 +613,15 @@ func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, exp
 		}
 		if node.IsDeleted || !belongs {
 			continue
+		}
+		if node.BizType != bizType {
+			return nil, fmt.Errorf(
+				"fleet prefix %q node %q has biz_type %q; expected %q",
+				prefix,
+				node.NodeID,
+				node.BizType,
+				bizType,
+			)
 		}
 		count++
 		if index < 0 || index >= expected {

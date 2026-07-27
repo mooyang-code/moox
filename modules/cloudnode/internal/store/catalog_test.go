@@ -84,6 +84,38 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	assert.Nil(t, deleted)
 }
 
+func TestCatalogRepository_ListNodesFiltersBizTypeAndHeartbeatPreservesFleetMetadata(t *testing.T) {
+	repo := newTestCatalog(t)
+	ctx := context.Background()
+	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
+		SpaceID: "crypto", NodeID: "collector-0", NodeType: "scf-event",
+		Region: "ap-guangzhou", Status: "online",
+		Metadata: `{"biz_type":"data_collector","function_name_prefix":"collector","index":0}`,
+	}))
+	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
+		SpaceID: "crypto", NodeID: "factor-0", NodeType: "scf-event",
+		Region: "ap-guangzhou", Status: "online",
+		Metadata: `{"biz_type":"factor_calculator","function_name_prefix":"collector","index":0}`,
+	}))
+
+	require.NoError(t, repo.UpdateHeartbeat(
+		ctx, "crypto", "collector-0", "v1", `["collect.binance.kline"]`,
+		`{"runtime_code_package_id":"pkg-1"}`,
+	))
+	nodes, total, err := repo.ListNodes(ctx, "crypto", &pb.GetNodeListReq{
+		NodeType: "scf-event", Region: "ap-guangzhou", BizType: "data_collector",
+		Page: &pb.Page{Page: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, nodes, 1)
+	assert.Equal(t, "collector-0", nodes[0].NodeID)
+	assert.JSONEq(t,
+		`{"biz_type":"data_collector","function_name_prefix":"collector","index":0,"runtime_code_package_id":"pkg-1"}`,
+		nodes[0].Metadata,
+	)
+}
+
 func TestCatalogRepository_ListSCFEventNodesReturnsEveryEligibleNodeWithoutPagination(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()

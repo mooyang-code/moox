@@ -296,10 +296,10 @@ func TestBuildCollectorFleetCreateItemsRequiresCompleteRuntimeEnvironment(t *tes
 
 func TestSelectCollectorFleetNodesRejectsPartialFleet(t *testing.T) {
 	nodes := []adminclient.CloudNode{
-		{NodeID: "fleet-0", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}},
-		{NodeID: "other-0", Metadata: map[string]any{"function_name_prefix": "other", "index": float64(0)}},
+		{NodeID: "fleet-0", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}},
+		{NodeID: "other-0", BizType: "factor_calculator", Metadata: map[string]any{"function_name_prefix": "other", "index": float64(0)}},
 	}
-	_, err := selectCollectorFleetNodes(nodes, "fleet", 50)
+	_, err := selectCollectorFleetNodes(nodes, "fleet", "data_collector", 50)
 	require.ErrorContains(t, err, `fleet prefix "fleet" has 1 nodes; expected either 0 or 50`)
 }
 
@@ -308,15 +308,16 @@ func TestSelectCollectorFleetNodesRequiresUniqueCompleteIndexes(t *testing.T) {
 	for index := range nodes {
 		nodes[index] = adminclient.CloudNode{
 			NodeID:   fmt.Sprintf("fleet-%d", index),
+			BizType:  "data_collector",
 			Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(index)},
 		}
 	}
-	selected, err := selectCollectorFleetNodes(nodes, "fleet", 50)
+	selected, err := selectCollectorFleetNodes(nodes, "fleet", "data_collector", 50)
 	require.NoError(t, err)
 	require.Len(t, selected, 50)
 
 	nodes[49].Metadata["index"] = float64(48)
-	_, err = selectCollectorFleetNodes(nodes, "fleet", 50)
+	_, err = selectCollectorFleetNodes(nodes, "fleet", "data_collector", 50)
 	require.ErrorContains(t, err, "duplicate fleet index")
 }
 
@@ -327,13 +328,27 @@ func TestSelectCollectorFleetNodesSurvivesHeartbeatMetadataReplacement(t *testin
 			NodeID:       fmt.Sprintf("fleet-ap-guangzhou-%d", index),
 			FunctionName: fmt.Sprintf("fleet-ap-guangzhou-%d", index),
 			Region:       "ap-guangzhou",
+			BizType:      "data_collector",
 			Metadata:     map[string]any{"arch": "amd64", "version": "runtime"},
 		}
 	}
-	selected, err := selectCollectorFleetNodes(nodes, "fleet", 50)
+	selected, err := selectCollectorFleetNodes(nodes, "fleet", "data_collector", 50)
 	require.NoError(t, err)
 	require.Len(t, selected, 50)
 	assert.Equal(t, "fleet-ap-guangzhou-49", selected[49].NodeID)
+}
+
+func TestSelectCollectorFleetNodesRejectsCrossBizFleet(t *testing.T) {
+	nodes := []adminclient.CloudNode{{
+		NodeID:  "fleet-0",
+		BizType: "factor_calculator",
+		Metadata: map[string]any{
+			"function_name_prefix": "fleet",
+			"index":                float64(0),
+		},
+	}}
+	_, err := selectCollectorFleetNodes(nodes, "fleet", "data_collector", 1)
+	require.ErrorContains(t, err, `has biz_type "factor_calculator"; expected "data_collector"`)
 }
 
 type fakeCollectorFleetAPI struct {
@@ -394,6 +409,7 @@ func TestApplyCollectorFleetDeploysNewPackageToExistingFleet(t *testing.T) {
 		nodes[index] = adminclient.CloudNode{
 			NodeID:    fmt.Sprintf("fleet-%d", index),
 			PackageID: "pkg-old",
+			BizType:   "data_collector",
 			Metadata:  map[string]any{"function_name_prefix": "fleet", "index": float64(index)},
 		}
 	}
@@ -432,6 +448,7 @@ func TestApplyCollectorFleetDeploysNewPackageToExistingFleet(t *testing.T) {
 func TestApplyCollectorFleetRejectsPartialWithoutMutation(t *testing.T) {
 	api := &fakeCollectorFleetAPI{nodes: []adminclient.CloudNode{{
 		NodeID:   "fleet-0",
+		BizType:  "data_collector",
 		Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)},
 	}}}
 	_, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
