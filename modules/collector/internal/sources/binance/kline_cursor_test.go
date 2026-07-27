@@ -9,12 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestKlineCursorInitialRequestUsesOneThousandRows(t *testing.T) {
+func TestKlineCursorInitialRequestUsesSmallRecentWindow(t *testing.T) {
 	cursor := newKlineCursor(nil)
 
 	req, ok := cursor.NextRequest("BTCUSDT", "1m")
 	require.True(t, ok)
-	assert.Equal(t, 1000, req.Limit)
+	assert.Equal(t, 10, req.Limit)
 	assert.True(t, req.StartTime.IsZero())
 
 	more, err := cursor.Advance([]*exchange.Kline{{OpenTime: time.Now().UTC()}})
