@@ -316,6 +316,54 @@ func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWak
 	}
 }
 
+func TestCollectorService_ReconcilesPendingInstanceOnlyFromCloudNodeTerminalState(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	mgr, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	current := domain.TaskInstance{
+		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1",
+		Exchange: "binance", Market: "spot", DataType: "symbol",
+		TaskParams: `{}`, CloudJobItemID: "task-1:2026-07-27T10:30:00Z",
+		LastExecStatus: domain.InstanceStatusPending,
+	}
+	_, err = mgr.TaskInstances().ReserveMany(context.Background(), []domain.TaskInstance{current})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/service/cloudnode/GetJobItem", r.URL.Path)
+		raw, marshalErr := protojson.Marshal(&cloudnodepb.GetJobItemRsp{
+			RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+			Item: &cloudnodepb.JobItemDetail{
+				SpaceId: "crypto", JobItemId: current.CloudJobItemID,
+				Status:        cloudnodepb.JobItemStatus_JOB_ITEM_STATUS_SUCCESS,
+				ResultSummary: mustStructPB(t, map[string]any{"rows": float64(2)}),
+				ExecutionNode: "scf-a",
+			},
+		})
+		require.NoError(t, marshalErr)
+		_, _ = w.Write(raw)
+	}))
+	defer server.Close()
+
+	svc := New(mgr, Dependencies{
+		AdminGatewayURL: server.URL,
+		ServiceAuth: taskpublisher.AuthConfig{
+			AccessKey: "ak", SecretKey: "sk", TargetNode: "control",
+		},
+	})
+	next := current
+	next.CloudJobItemID = "task-1:2026-07-27T11:00:00Z"
+	require.NoError(t, svc.reconcilePendingInstances(context.Background(), []domain.TaskInstance{next}))
+
+	reserved, err := mgr.TaskInstances().ReserveMany(context.Background(), []domain.TaskInstance{next})
+	require.NoError(t, err)
+	require.Len(t, reserved, 1)
+	assert.Equal(t, next.CloudJobItemID, reserved[0].CloudJobItemID)
+}
+
 func TestNormalizeAndValidateTaskRule(t *testing.T) {
 	rule := normalizeTaskRule(domain.TaskRule{SpaceID: "crypto", DataType: "symbol", Exchange: "binance"})
 	assert.NotEmpty(t, rule.RuleID)
@@ -323,6 +371,13 @@ func TestNormalizeAndValidateTaskRule(t *testing.T) {
 
 	err := validateTaskRule(domain.TaskRule{SpaceID: "", DataType: "symbol", Exchange: "binance", RuleID: "r1"})
 	assert.Error(t, err)
+}
+
+func mustStructPB(t *testing.T, values map[string]any) *structpb.Struct {
+	t.Helper()
+	value, err := structpb.NewStruct(values)
+	require.NoError(t, err)
+	return value
 }
 
 func TestCollectorService_TaskInstanceFlow(t *testing.T) {

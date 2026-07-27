@@ -106,6 +106,54 @@ func TestBuildJobItemRejectsUnknownTaskInstanceRoute(t *testing.T) {
 	}
 }
 
+func TestClientGetTerminalStateUsesCloudNodeAuthority(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/service/cloudnode/GetJobItem" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		raw, err := protojson.Marshal(&cloudnodepb.GetJobItemRsp{
+			RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+			Item: &cloudnodepb.JobItemDetail{
+				SpaceId: "crypto", JobItemId: "item-1",
+				Status:           cloudnodepb.JobItemStatus_JOB_ITEM_STATUS_FAILED,
+				ResultSummary:    mustStruct(t, map[string]any{"attempts": float64(4)}),
+				LastErrorMessage: "upstream timeout", ExecutionNode: "scf-a",
+			},
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write(raw)
+	}))
+	defer server.Close()
+
+	client := New(Config{
+		ServiceGatewayTarget: server.URL,
+		Auth:                 AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "control"},
+	})
+	state, err := client.GetTerminalState(context.Background(), "crypto", "item-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Terminal || state.Status != domain.InstanceStatusFailed || state.NodeID != "scf-a" {
+		t.Fatalf("state = %+v", state)
+	}
+	if !strings.Contains(state.Result, "upstream timeout") {
+		t.Fatalf("result = %s", state.Result)
+	}
+}
+
+func mustStruct(t *testing.T, values map[string]any) *structpb.Struct {
+	t.Helper()
+	value, err := structpb.NewStruct(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
 func TestSubmitCollectorJobItemsRejectsInvalidItemsBeforeRequest(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

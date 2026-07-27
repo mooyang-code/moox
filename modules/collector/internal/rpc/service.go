@@ -18,6 +18,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/types/known/structpb"
+	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -359,6 +360,9 @@ func (s *Service) scheduleRule(ctx context.Context, rule *domain.TaskRule, now t
 	if err != nil {
 		return 0, fmt.Errorf("prepare instances for rule %s: %w", rule.RuleID, err)
 	}
+	if err := s.reconcilePendingInstances(ctx, instances); err != nil {
+		return 0, fmt.Errorf("reconcile pending instances for rule %s: %w", rule.RuleID, err)
+	}
 	reserved, err := s.instanceRepo.ReserveMany(ctx, instances)
 	if err != nil {
 		return 0, fmt.Errorf("reserve instances for rule %s: %w", rule.RuleID, err)
@@ -371,6 +375,52 @@ func (s *Service) scheduleRule(ctx context.Context, rule *domain.TaskRule, now t
 		return 0, fmt.Errorf("submit cloud job items for rule %s: %w", rule.RuleID, submitErr)
 	}
 	return len(reserved), nil
+}
+
+func (s *Service) reconcilePendingInstances(ctx context.Context, desired []domain.TaskInstance) error {
+	for i := range desired {
+		current, err := s.instanceRepo.Get(ctx, desired[i].SpaceID, desired[i].TaskID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if current.LastExecStatus != domain.InstanceStatusPending ||
+			current.CloudJobItemID == desired[i].CloudJobItemID {
+			continue
+		}
+		state, stateErr := s.cloudJobs.GetTerminalState(ctx, current.SpaceID, current.CloudJobItemID)
+		if stateErr != nil {
+			log.WarnContextf(ctx,
+				"reconcile pending collector job failed: task_id=%s job_item_id=%s error=%v",
+				current.TaskID, current.CloudJobItemID, stateErr,
+			)
+			continue
+		}
+		if !state.Terminal {
+			continue
+		}
+		updated, updateErr := s.instanceRepo.UpdateStatus(
+			ctx,
+			current.SpaceID,
+			current.TaskID,
+			current.CloudJobItemID,
+			state.NodeID,
+			state.Status,
+			state.Result,
+		)
+		if updateErr != nil {
+			return updateErr
+		}
+		if !updated {
+			log.WarnContextf(ctx,
+				"pending collector job changed during reconciliation: task_id=%s job_item_id=%s",
+				current.TaskID, current.CloudJobItemID,
+			)
+		}
+	}
+	return nil
 }
 
 // GetDataTypeConfigs returns the currently supported collector rule data types.

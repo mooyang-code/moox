@@ -49,6 +49,14 @@ type Client struct {
 	httpClientErr        error
 }
 
+// TerminalState is the CloudNode-authoritative terminal state of a JobItem.
+type TerminalState struct {
+	Terminal bool
+	Status   int
+	NodeID   string
+	Result   string
+}
+
 // New creates a CloudNode client.
 func New(cfg Config) *Client {
 	controlTarget := strings.TrimSpace(cfg.ServiceGatewayTarget)
@@ -100,6 +108,54 @@ func (c *Client) SubmitCollectorJobItems(ctx context.Context, instances []domain
 		}
 	}
 	return idsByTaskID, nil
+}
+
+// GetTerminalState returns a terminal state only after CloudNode has accepted
+// the worker's final report. Pending queue items are deliberately not inferred
+// from elapsed wall-clock time.
+func (c *Client) GetTerminalState(ctx context.Context, spaceID, jobItemID string) (TerminalState, error) {
+	raw, err := protojson.Marshal(&pb.GetJobItemReq{
+		SpaceId: strings.TrimSpace(spaceID), JobItemId: strings.TrimSpace(jobItemID),
+	})
+	if err != nil {
+		return TerminalState{}, fmt.Errorf("marshal get job item request: %w", err)
+	}
+	var rsp pb.GetJobItemRsp
+	if err := c.postService(ctx, "cloudnode", "GetJobItem", raw, &rsp); err != nil {
+		return TerminalState{}, fmt.Errorf("get cloud job item: %w", err)
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return TerminalState{}, fmt.Errorf("get cloud job item: %s", rsp.GetRetInfo().GetMsg())
+	}
+	item := rsp.GetItem()
+	if item == nil {
+		return TerminalState{}, fmt.Errorf("get cloud job item: empty item")
+	}
+	state := TerminalState{NodeID: strings.TrimSpace(item.GetExecutionNode())}
+	switch item.GetStatus() {
+	case pb.JobItemStatus_JOB_ITEM_STATUS_SUCCESS:
+		state.Terminal = true
+		state.Status = domain.InstanceStatusSuccess
+	case pb.JobItemStatus_JOB_ITEM_STATUS_FAILED,
+		pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED:
+		state.Terminal = true
+		state.Status = domain.InstanceStatusFailed
+	default:
+		return state, nil
+	}
+	result := map[string]any{}
+	if item.GetResultSummary() != nil {
+		result = item.GetResultSummary().AsMap()
+	}
+	if item.GetLastErrorMessage() != "" {
+		result["error"] = item.GetLastErrorMessage()
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return TerminalState{}, fmt.Errorf("marshal cloud job item result: %w", err)
+	}
+	state.Result = string(encoded)
+	return state, nil
 }
 
 func (c *Client) submitCollectorJobItemBatch(ctx context.Context, batch []*pb.JobItem, start, end int) (map[string]string, error) {

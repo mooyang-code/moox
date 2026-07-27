@@ -200,36 +200,6 @@ func TestTaskInstanceRepository_ReserveManyReturnsCurrentPendingJob(t *testing.T
 	assert.Equal(t, next.CloudJobItemID, reserved[0].CloudJobItemID)
 }
 
-func TestTaskInstanceRepository_ReserveManyRecoversStalePendingJob(t *testing.T) {
-	s := newCollectorStore(t)
-	repo := s.TaskInstances()
-	ctx := context.Background()
-
-	staleExecuteAt := time.Now().UTC().Add(-pendingRecoveryGrace - time.Minute).Truncate(time.Second)
-	stale := domain.TaskInstance{
-		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1",
-		Exchange: "binance", Market: "spot", DataType: "kline",
-		TaskParams: `{}`, CloudJobItemID: "task-1:" + staleExecuteAt.Format(time.RFC3339),
-		LastExecStatus: domain.InstanceStatusPending,
-	}
-	reserved, err := repo.ReserveMany(ctx, []domain.TaskInstance{stale})
-	require.NoError(t, err)
-	require.Len(t, reserved, 1)
-
-	next := stale
-	next.CloudJobItemID = "task-1:" + time.Now().UTC().Add(time.Minute).Truncate(time.Second).Format(time.RFC3339)
-	reserved, err = repo.ReserveMany(ctx, []domain.TaskInstance{next})
-	require.NoError(t, err)
-	require.Len(t, reserved, 1)
-	assert.Equal(t, next.CloudJobItemID, reserved[0].CloudJobItemID)
-
-	instances, _, err := repo.List(ctx, TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
-	require.NoError(t, err)
-	require.Len(t, instances, 1)
-	assert.Equal(t, next.CloudJobItemID, instances[0].CloudJobItemID)
-	assert.Equal(t, domain.InstanceStatusPending, instances[0].LastExecStatus)
-}
-
 func TestTaskInstanceRepository_NormalizeHelpers(t *testing.T) {
 	page, size := normalizePage(0, 0)
 	assert.Equal(t, 1, page)
