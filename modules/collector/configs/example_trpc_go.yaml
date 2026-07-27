@@ -10,18 +10,11 @@ server:
     read_timeout: 3000
     write_timeout: 60000
   service:
-      ######## 定时任务 ########
-    - name: trpc.heartbeat.timer
-      port: 8001
-      network: "*/9 * * * * *?scheduler=heartbeatSchedule&startAtOnce=1"
+    - name: trpc.moox.collector.schedule.timer
+      port: 11403
+      network: "20 */1 * * * *?scheduler=collectorSchedule"
       protocol: timer
-      timeout: 5000  #请求最长处理时间 单位 毫秒
-
-    - name: trpc.dnsresolve.timer
-      port: 8003
-      network: "30 * * * * *?scheduler=dnsResolveSchedule&startAtOnce=1"
-      protocol: timer
-      timeout: 5000  #请求最长处理时间 单位 毫秒
+      timeout: 60000
 
 plugins:
   log:

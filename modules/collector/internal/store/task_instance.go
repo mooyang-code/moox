@@ -72,7 +72,8 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 }
 
 // ReserveMany persists schedulable instances and returns the rows whose job item
-// remains current. A pending job cannot be replaced by the next schedule window.
+// remains current. A newer schedule window replaces the current binding even
+// while the previous window is still pending.
 func (r *TaskInstanceRepository) ReserveMany(
 	ctx context.Context,
 	instances []domain.TaskInstance,
@@ -123,11 +124,9 @@ func (r *TaskInstanceRepository) ReserveMany(
 					},
 				}),
 				Where: clause.Where{Exprs: []clause.Expression{clause.Expr{
-					SQL: "c_cloud_job_item_id = excluded.c_cloud_job_item_id OR c_last_exec_status IN (?, ?)",
-					Vars: []any{
-						domain.InstanceStatusSuccess,
-						domain.InstanceStatusFailed,
-					},
+					// Scheduled IDs share the stable task ID prefix and end in RFC3339 UTC.
+					// Lexical order therefore matches window order for the same row.
+					SQL: "excluded.c_cloud_job_item_id >= c_cloud_job_item_id",
 				}}},
 			}
 			result := tx.Clauses(upsert).Create(&instances[i])
@@ -136,41 +135,11 @@ func (r *TaskInstanceRepository) ReserveMany(
 			}
 			if result.RowsAffected > 0 {
 				reserved = append(reserved, instances[i])
-				continue
-			}
-			// A previous publish may have failed after this row was reserved, or
-			// its response may have been lost. Resubmit the current deterministic
-			// JobItem ID; CloudNode deduplicates it and the pending fence still
-			// prevents rolling to a newer window.
-			var current domain.TaskInstance
-			if err := tx.Where(
-				"c_space_id = ? AND c_task_id = ?",
-				instances[i].SpaceID,
-				instances[i].TaskID,
-			).First(&current).Error; err != nil {
-				return err
-			}
-			if current.LastExecStatus == domain.InstanceStatusPending {
-				current.ExecuteAt = scheduledExecuteAt(current.CloudJobItemID)
-				reserved = append(reserved, current)
 			}
 		}
 		return nil
 	})
 	return reserved, err
-}
-
-func scheduledExecuteAt(jobItemID string) time.Time {
-	const encodedLen = len("2006-01-02T15:04:05Z")
-	if len(jobItemID) < encodedLen {
-		return time.Time{}
-	}
-	value := jobItemID[len(jobItemID)-encodedLen:]
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return time.Time{}
-	}
-	return parsed.UTC()
 }
 
 // UpdateStatus updates a task instance only when the report belongs to its current cloud job item.

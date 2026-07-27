@@ -153,7 +153,7 @@ func TestTaskInstanceRepository_UpsertManyUpdatesCloudJobItemID(t *testing.T) {
 	assert.JSONEq(t, `{"state":"current"}`, instances[0].Result)
 }
 
-func TestTaskInstanceRepository_ReserveManyReturnsCurrentPendingJob(t *testing.T) {
+func TestTaskInstanceRepository_ReserveManyAdvancesPendingJobToNewWindow(t *testing.T) {
 	s := newCollectorStore(t)
 	repo := s.TaskInstances()
 	ctx := context.Background()
@@ -174,30 +174,63 @@ func TestTaskInstanceRepository_ReserveManyReturnsCurrentPendingJob(t *testing.T
 	reserved, err = repo.ReserveMany(ctx, []domain.TaskInstance{next})
 	require.NoError(t, err)
 	require.Len(t, reserved, 1)
-	assert.Equal(t, current.CloudJobItemID, reserved[0].CloudJobItemID)
-	assert.Equal(t, currentExecuteAt, reserved[0].ExecuteAt)
+	assert.Equal(t, next.CloudJobItemID, reserved[0].CloudJobItemID)
 
 	instances, _, err := repo.List(ctx, TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
 	require.NoError(t, err)
 	require.Len(t, instances, 1)
-	assert.Equal(t, current.CloudJobItemID, instances[0].CloudJobItemID)
+	assert.Equal(t, next.CloudJobItemID, instances[0].CloudJobItemID)
+	assert.Equal(t, domain.InstanceStatusPending, instances[0].LastExecStatus)
 
 	updated, err := repo.UpdateStatus(
 		ctx,
 		"crypto",
 		"task-1",
 		current.CloudJobItemID,
-		"node-current",
+		"node-stale",
 		domain.InstanceStatusSuccess,
-		`{"state":"done"}`,
+		`{"state":"stale"}`,
 	)
 	require.NoError(t, err)
-	require.True(t, updated)
+	require.False(t, updated)
+	instances, _, err = repo.List(ctx, TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, next.CloudJobItemID, instances[0].CloudJobItemID)
+	assert.Equal(t, domain.InstanceStatusPending, instances[0].LastExecStatus)
+	assert.Empty(t, instances[0].LastExecNode)
+	assert.JSONEq(t, `{}`, instances[0].Result)
 
 	reserved, err = repo.ReserveMany(ctx, []domain.TaskInstance{next})
 	require.NoError(t, err)
 	require.Len(t, reserved, 1)
 	assert.Equal(t, next.CloudJobItemID, reserved[0].CloudJobItemID)
+}
+
+func TestTaskInstanceRepository_ReserveManyDoesNotMoveWindowBackward(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.TaskInstances()
+	ctx := context.Background()
+	base := domain.TaskInstance{
+		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1",
+		Exchange: "binance", Market: "spot", DataType: "kline",
+		TaskParams: `{}`, LastExecStatus: domain.InstanceStatusPending,
+	}
+	newer := base
+	newer.CloudJobItemID = "task-1:2026-07-27T12:36:00Z"
+	reserved, err := repo.ReserveMany(ctx, []domain.TaskInstance{newer})
+	require.NoError(t, err)
+	require.Len(t, reserved, 1)
+
+	older := base
+	older.CloudJobItemID = "task-1:2026-07-27T12:35:00Z"
+	reserved, err = repo.ReserveMany(ctx, []domain.TaskInstance{older})
+	require.NoError(t, err)
+	assert.Empty(t, reserved)
+
+	current, err := repo.Get(ctx, "crypto", "task-1")
+	require.NoError(t, err)
+	assert.Equal(t, newer.CloudJobItemID, current.CloudJobItemID)
 }
 
 func TestTaskInstanceRepository_NormalizeHelpers(t *testing.T) {

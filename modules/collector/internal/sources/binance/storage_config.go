@@ -2,6 +2,7 @@ package binance
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,11 +12,10 @@ import (
 )
 
 type StorageBinding struct {
-	DataSourceID      string          `yaml:"data_source_id"`
-	SubjectType       string          `yaml:"subject_type"`
-	SubjectMarket     string          `yaml:"subject_market"`
-	SubjectDatasetIDs []string        `yaml:"subject_dataset_ids"`
-	AuthInfo          StorageAuthInfo `yaml:"auth_info"`
+	DataSourceID  string          `yaml:"data_source_id"`
+	SubjectType   string          `yaml:"subject_type"`
+	SubjectMarket string          `yaml:"subject_market"`
+	AuthInfo      StorageAuthInfo `yaml:"auth_info"`
 }
 
 type StorageAuthInfo struct {
@@ -32,6 +32,12 @@ type APIConfig struct {
 }
 
 type binanceSourceConfig struct {
+	App struct {
+		ID          string `yaml:"id"`
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+		Type        string `yaml:"type"`
+	} `yaml:"app"`
 	API     APIConfig `yaml:"api"`
 	Storage struct {
 		Bindings map[string]StorageBinding `yaml:"bindings"`
@@ -90,30 +96,6 @@ func applyBindingDefaults(binding *StorageBinding, subjectMarket string) {
 	if binding.SubjectMarket == "" {
 		binding.SubjectMarket = subjectMarket
 	}
-	binding.SubjectDatasetIDs = appendMissingDatasetIDs(binding.SubjectDatasetIDs)
-}
-
-func appendMissingDatasetIDs(ids []string, defaults ...string) []string {
-	out := make([]string, 0, len(ids)+len(defaults))
-	seen := make(map[string]struct{}, len(ids)+len(defaults))
-	appendID := func(id string) {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			return
-		}
-		if _, ok := seen[id]; ok {
-			return
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	for _, id := range ids {
-		appendID(id)
-	}
-	for _, id := range defaults {
-		appendID(id)
-	}
-	return out
 }
 
 func loadBinanceSourceConfig() (*binanceSourceConfig, error) {
@@ -122,13 +104,20 @@ func loadBinanceSourceConfig() (*binanceSourceConfig, error) {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer file.Close()
 
+	return decodeBinanceSourceConfig(file)
+}
+
+func decodeBinanceSourceConfig(reader io.Reader) (*binanceSourceConfig, error) {
 	var source binanceSourceConfig
-	if err := yaml.Unmarshal(data, &source); err != nil {
+	decoder := yaml.NewDecoder(reader)
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&source); err != nil {
 		return nil, err
 	}
 	return &source, nil

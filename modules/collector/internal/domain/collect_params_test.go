@@ -67,3 +67,38 @@ func TestParseCollectParamsInvalidJSONReturnsError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "parse collect params")
 }
+
+func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval string
+		wantErr  string
+	}{
+		{name: "go duration", interval: "90m"},
+		{name: "day duration", interval: "2d"},
+		{name: "shorter than one minute", interval: "30s", wantErr: "whole minutes"},
+		{name: "fractional minute", interval: "90s", wantErr: "whole minutes"},
+		{name: "zero days", interval: "0d", wantErr: "positive"},
+		{name: "fractional days", interval: "1.5d", wantErr: "positive"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params, err := ParseCollectParams(`{
+				"source":{"kind":"none","dataset_id":""},
+				"collector":{"exchange":"binance","market":"spot","data_type":"symbol"},
+				"target":{"dataset_id":"symbols"},
+				"schedule":{"interval":"`+tt.interval+`"}
+			}`, "", "")
+			require.NoError(t, err)
+
+			err = params.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}

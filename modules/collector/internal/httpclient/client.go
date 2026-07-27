@@ -114,7 +114,7 @@ func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, ful
 
 	// 发送请求
 	start := time.Now()
-	log.DebugContextf(ctx, "[collector-http] GET start domain=%s url=%s timeout=%s", domain, fullURL, httpClient.Timeout)
+	log.DebugContextf(ctx, "[collector-http] GET start domain=%s timeout=%s", domain, httpClient.Timeout)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.WarnContextf(ctx, "[collector-http] GET error domain=%s duration=%s error=%v", domain, time.Since(start), err)
@@ -127,6 +127,10 @@ func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, ful
 	if resp.StatusCode != http.StatusOK {
 		return &StatusError{StatusCode: resp.StatusCode}
 	}
+	log.InfoContextf(ctx,
+		"collector_http_completed domain=%s status=%d duration_ms=%d",
+		domain, resp.StatusCode, time.Since(start).Milliseconds(),
+	)
 
 	// 解析 JSON
 	if result != nil {

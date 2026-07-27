@@ -29,7 +29,9 @@ import (
 )
 
 type fakeRuleDatasetSource struct {
-	datasets map[string]storagesource.DatasetInfo
+	datasets  map[string]storagesource.DatasetInfo
+	subjects  []domain.DatasetSubject
+	listCalls int
 }
 
 func (f *fakeRuleDatasetSource) GetDataset(_ context.Context, _, datasetID string) (storagesource.DatasetInfo, error) {
@@ -40,8 +42,9 @@ func (f *fakeRuleDatasetSource) GetDataset(_ context.Context, _, datasetID strin
 	return info, nil
 }
 
-func (*fakeRuleDatasetSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
-	return nil, nil
+func (f *fakeRuleDatasetSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
+	f.listCalls++
+	return append([]domain.DatasetSubject(nil), f.subjects...), nil
 }
 
 func newCollectorRPCService(t *testing.T) *Service {
@@ -61,6 +64,23 @@ func validCollectParams(t *testing.T) *structpb.Struct {
 		"collector": map[string]any{"exchange": "binance", "market": "spot", "data_type": "symbol"},
 		"target":    map[string]any{"dataset_id": "ds-1"},
 		"schedule":  map[string]any{"interval": "1h"},
+	})
+	require.NoError(t, err)
+	return st
+}
+
+func validKlineCollectParams(t *testing.T) *structpb.Struct {
+	t.Helper()
+	st, err := structpb.NewStruct(map[string]any{
+		"source": map[string]any{"kind": "dataset_subjects", "dataset_id": "symbols"},
+		"collector": map[string]any{
+			"exchange":  "binance",
+			"market":    "spot",
+			"data_type": "kline",
+			"intervals": []any{"1m"},
+		},
+		"target":   map[string]any{"dataset_id": "kline_1m"},
+		"schedule": map[string]any{"interval": "1m"},
 	})
 	require.NoError(t, err)
 	return st
@@ -132,6 +152,96 @@ func TestCollectorServiceRejectsDatasetThatDoesNotMatchCollector(t *testing.T) {
 	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "data_source_id")
 }
 
+func TestCreateKlineRuleAcceptsRecordSymbolSourceAndTimeSeriesTarget(t *testing.T) {
+	svc := newCollectorRPCService(t)
+	svc.datasetSrc = &fakeRuleDatasetSource{datasets: map[string]storagesource.DatasetInfo{
+		"symbols": {
+			DataSourceID: "binance",
+			DataKind:     storagepb.DataKind_DATA_KIND_RECORD,
+			Status:       "active",
+		},
+		"kline_1m": {
+			DataSourceID: "binance",
+			DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			Status:       "active",
+		},
+	}}
+
+	rsp, err := svc.CreateTaskRule(context.Background(), &pb.CreateTaskRuleReq{Rule: &pb.TaskRule{
+		SpaceId: "crypto", RuleId: "kline-record-source", DataType: "kline", Exchange: "binance",
+		CollectParams: validKlineCollectParams(t), Enabled: boolPtr(true),
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+}
+
+func TestCreateKlineRuleRejectsTimeSeriesSource(t *testing.T) {
+	svc := newCollectorRPCService(t)
+	svc.datasetSrc = &fakeRuleDatasetSource{datasets: map[string]storagesource.DatasetInfo{
+		"symbols": {
+			DataSourceID: "binance",
+			DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			Status:       "active",
+		},
+		"kline_1m": {
+			DataSourceID: "binance",
+			DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			Status:       "active",
+		},
+	}}
+
+	rsp, err := svc.CreateTaskRule(context.Background(), &pb.CreateTaskRuleReq{Rule: &pb.TaskRule{
+		SpaceId: "crypto", RuleId: "kline-timeseries-source", DataType: "kline", Exchange: "binance",
+		CollectParams: validKlineCollectParams(t), Enabled: boolPtr(true),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "source Dataset symbols data_kind")
+}
+
+func TestCreateKlineRuleRejectsRecordTarget(t *testing.T) {
+	svc := newCollectorRPCService(t)
+	svc.datasetSrc = &fakeRuleDatasetSource{datasets: map[string]storagesource.DatasetInfo{
+		"symbols": {
+			DataSourceID: "binance",
+			DataKind:     storagepb.DataKind_DATA_KIND_RECORD,
+			Status:       "active",
+		},
+		"kline_1m": {
+			DataSourceID: "binance",
+			DataKind:     storagepb.DataKind_DATA_KIND_RECORD,
+			Status:       "active",
+		},
+	}}
+
+	rsp, err := svc.CreateTaskRule(context.Background(), &pb.CreateTaskRuleReq{Rule: &pb.TaskRule{
+		SpaceId: "crypto", RuleId: "kline-record-target", DataType: "kline", Exchange: "binance",
+		CollectParams: validKlineCollectParams(t), Enabled: boolPtr(true),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "target Dataset kline_1m data_kind")
+}
+
+func TestCreateSymbolRuleRequiresRecordTarget(t *testing.T) {
+	svc := newCollectorRPCService(t)
+	svc.datasetSrc = &fakeRuleDatasetSource{datasets: map[string]storagesource.DatasetInfo{
+		"ds-1": {
+			DataSourceID: "binance",
+			DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			Status:       "active",
+		},
+	}}
+
+	rsp, err := svc.CreateTaskRule(context.Background(), &pb.CreateTaskRuleReq{Rule: &pb.TaskRule{
+		SpaceId: "crypto", RuleId: "symbol-timeseries-target", DataType: "symbol", Exchange: "binance",
+		CollectParams: validCollectParams(t), Enabled: boolPtr(true),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "target Dataset ds-1 data_kind")
+}
+
 func TestValidateTaskRuleRejectsUnsupportedOrLegacyContracts(t *testing.T) {
 	base := domain.TaskRule{
 		SpaceID: "crypto", RuleID: "rule-1", Exchange: "binance", DataType: "kline",
@@ -200,6 +310,107 @@ func TestCollectorService_ScheduleTasksRequiresSpaceID(t *testing.T) {
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
+func TestScheduleTasksSkipsRuleBeforeDatasetScanWhenNotDue(t *testing.T) {
+	svc := newCollectorRPCService(t)
+	require.NoError(t, svc.ruleRepo.Create(context.Background(), domain.TaskRule{
+		SpaceID: "crypto", RuleID: "hourly-kline", Exchange: "binance", DataType: "kline",
+		CollectParams: `{
+			"source":{"kind":"dataset_subjects","dataset_id":"symbols"},
+			"collector":{"exchange":"binance","market":"spot","data_type":"kline","intervals":["1m"]},
+			"target":{"dataset_id":"klines"},
+			"schedule":{"interval":"1h"}
+		}`,
+		Enabled: true,
+	}))
+	datasetSource := &fakeRuleDatasetSource{subjects: []domain.DatasetSubject{{
+		SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active",
+	}}}
+	svc.datasetSrc = datasetSource
+	svc.now = func() time.Time {
+		return time.Date(2026, 7, 27, 12, 34, 20, 0, time.UTC)
+	}
+
+	rsp, err := svc.ScheduleTasks(context.Background(), &pb.ScheduleTasksReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	assert.Zero(t, datasetSource.listCalls)
+	instances, total, err := svc.instanceRepo.List(context.Background(), store.TaskInstanceFilter{SpaceID: "crypto"})
+	require.NoError(t, err)
+	assert.Zero(t, total)
+	assert.Empty(t, instances)
+}
+
+func TestScheduleTasksBuildsHourlyRuleOnlyAtPreviousMinuteWithOneExecuteAt(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	mgr, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.TaskRules().Create(context.Background(), domain.TaskRule{
+		SpaceID: "crypto", RuleID: "hourly-kline", Exchange: "binance", DataType: "kline",
+		CollectParams: `{
+			"source":{"kind":"dataset_subjects","dataset_id":"symbols"},
+			"collector":{"exchange":"binance","market":"spot","data_type":"kline","intervals":["1m"]},
+			"target":{"dataset_id":"klines"},
+			"schedule":{"interval":"1h"}
+		}`,
+		Enabled: true,
+	}))
+
+	var submitted []*cloudnodepb.JobItem
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/service/cloudnode/SubmitJobItems", r.URL.Path)
+		var req cloudnodepb.SubmitJobItemsReq
+		raw, readErr := io.ReadAll(r.Body)
+		require.NoError(t, readErr)
+		require.NoError(t, protojson.Unmarshal(raw, &req))
+		submitted = append(submitted, req.GetItems()...)
+		acks := make([]*cloudnodepb.JobItemAck, 0, len(req.GetItems()))
+		for _, item := range req.GetItems() {
+			acks = append(acks, &cloudnodepb.JobItemAck{
+				JobItemId: item.GetJobItemId(),
+				Status:    cloudnodepb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_CREATED,
+			})
+		}
+		body, marshalErr := protojson.Marshal(&cloudnodepb.SubmitJobItemsRsp{
+			RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+			Acks:    acks,
+		})
+		require.NoError(t, marshalErr)
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	svc := New(mgr, Dependencies{
+		AdminGatewayURL: server.URL,
+		ServiceAuth:     taskpublisher.AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"},
+	})
+	datasetSource := &fakeRuleDatasetSource{subjects: []domain.DatasetSubject{
+		{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
+		{SubjectID: "ETH-USDT", ExternalSymbol: "ETHUSDT", Status: "active"},
+	}}
+	svc.datasetSrc = datasetSource
+	currentNow := time.Date(2026, 7, 27, 12, 58, 20, 0, time.UTC)
+	svc.now = func() time.Time { return currentNow }
+
+	rsp, err := svc.ScheduleTasks(context.Background(), &pb.ScheduleTasksReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	assert.Zero(t, datasetSource.listCalls)
+	assert.Empty(t, submitted)
+
+	currentNow = time.Date(2026, 7, 27, 12, 59, 20, 0, time.UTC)
+	rsp, err = svc.ScheduleTasks(context.Background(), &pb.ScheduleTasksReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	assert.Equal(t, 1, datasetSource.listCalls)
+	require.Len(t, submitted, 2)
+	for _, item := range submitted {
+		require.NotNil(t, item.GetExecuteAt())
+		assert.Equal(t, time.Date(2026, 7, 27, 13, 0, 0, 0, time.UTC), item.GetExecuteAt().AsTime())
+	}
+}
+
 func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWake(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
 	mgr, err := store.Open(&store.Options{Path: dbPath})
@@ -214,7 +425,7 @@ func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWak
 				"source":{"kind":"none"},
 				"collector":{"exchange":"binance","market":"spot","data_type":"symbol"},
 				"target":{"dataset_id":"symbols"},
-				"schedule":{"interval":"30m"}
+				"schedule":{"interval":"1m"}
 			}`,
 			Enabled: true,
 		}))
@@ -228,6 +439,19 @@ func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWak
 		observedMu.Lock()
 		paths = append(paths, r.URL.Path)
 		observedMu.Unlock()
+		if r.URL.Path == "/api/service/cloudnode/GetJobItem" {
+			body, marshalErr := protojson.Marshal(&cloudnodepb.GetJobItemRsp{
+				RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+				Item: &cloudnodepb.JobItemDetail{
+					SpaceId: "crypto",
+					Status:  cloudnodepb.JobItemStatus_JOB_ITEM_STATUS_PENDING,
+				},
+			})
+			require.NoError(t, marshalErr)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+			return
+		}
 		if r.URL.Path != "/api/service/cloudnode/SubmitJobItems" {
 			http.Error(w, "unexpected path", http.StatusNotFound)
 			return
@@ -282,7 +506,7 @@ func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWak
 		AdminGatewayURL: server.URL,
 		ServiceAuth:     taskpublisher.AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "gateway"},
 	})
-	currentNow := time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC)
+	currentNow := time.Date(2026, 7, 26, 10, 17, 20, 0, time.UTC)
 	nowCalls := 0
 	svc.now = func() time.Time {
 		nowCalls++
@@ -291,7 +515,8 @@ func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWak
 
 	for _, invocationNow := range []time.Time{
 		currentNow,
-		time.Date(2026, 7, 26, 10, 25, 0, 0, time.UTC),
+		time.Date(2026, 7, 26, 10, 17, 50, 0, time.UTC),
+		time.Date(2026, 7, 26, 10, 18, 20, 0, time.UTC),
 	} {
 		currentNow = invocationNow
 		rsp, scheduleErr := svc.ScheduleTasks(context.Background(), &pb.ScheduleTasksReq{SpaceId: "crypto"})
@@ -299,16 +524,21 @@ func TestCollectorService_SchedulePrebindsStableJobIDsBeforePublishingWithoutWak
 		require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	}
 
-	assert.Equal(t, 2, nowCalls, "Schedule must capture now once per invocation")
+	assert.Equal(t, 3, nowCalls, "Schedule must capture now once per invocation")
 	observedMu.Lock()
 	defer observedMu.Unlock()
-	require.Len(t, observedExecuteAt, 4)
-	for _, executeAt := range observedExecuteAt {
-		assert.Equal(t, time.Date(2026, 7, 26, 10, 30, 0, 0, time.UTC), executeAt)
+	require.Len(t, observedExecuteAt, 6)
+	for _, executeAt := range observedExecuteAt[:4] {
+		assert.Equal(t, time.Date(2026, 7, 26, 10, 18, 0, 0, time.UTC), executeAt)
+	}
+	for _, executeAt := range observedExecuteAt[4:] {
+		assert.Equal(t, time.Date(2026, 7, 26, 10, 19, 0, 0, time.UTC), executeAt)
 	}
 	for taskID, ids := range observedIDs {
-		require.Len(t, ids, 2, taskID)
+		require.Len(t, ids, 3, taskID)
 		assert.Equal(t, ids[0], ids[1], taskID)
+		assert.NotEqual(t, ids[1], ids[2], taskID)
+		assert.Contains(t, ids[2], "2026-07-26T10:19:00Z")
 	}
 	for _, path := range paths {
 		assert.False(t, strings.Contains(path, "GetNodeList"), paths)

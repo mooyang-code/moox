@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,7 +14,84 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/log"
 )
+
+type httpLogCapture struct {
+	info []string
+}
+
+func (l *httpLogCapture) Trace(...interface{})          {}
+func (l *httpLogCapture) Tracef(string, ...interface{}) {}
+func (l *httpLogCapture) Debug(...interface{})          {}
+func (l *httpLogCapture) Debugf(string, ...interface{}) {}
+func (l *httpLogCapture) Info(args ...interface{}) {
+	l.info = append(l.info, fmt.Sprint(args...))
+}
+func (l *httpLogCapture) Infof(format string, args ...interface{}) {
+	l.info = append(l.info, fmt.Sprintf(format, args...))
+}
+func (l *httpLogCapture) Warn(...interface{})           {}
+func (l *httpLogCapture) Warnf(string, ...interface{})  {}
+func (l *httpLogCapture) Error(...interface{})          {}
+func (l *httpLogCapture) Errorf(string, ...interface{}) {}
+func (l *httpLogCapture) Fatal(...interface{})          {}
+func (l *httpLogCapture) Fatalf(string, ...interface{}) {}
+func (l *httpLogCapture) Sync() error                   { return nil }
+func (l *httpLogCapture) SetLevel(string, log.Level)    {}
+func (l *httpLogCapture) GetLevel(string) log.Level     { return log.LevelInfo }
+func (l *httpLogCapture) With(...log.Field) log.Logger  { return l }
+
+func TestHTTPClientSuccessLogIsInfoAndDoesNotLeakURLOrQuery(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	capture := &httpLogCapture{}
+	original := log.GetDefaultLogger()
+	log.SetLogger(capture)
+	t.Cleanup(func() { log.SetLogger(original) })
+
+	var result map[string]string
+	err = NewHTTPClient(server.Client()).GetWithIP(
+		context.Background(),
+		parsed.Host,
+		"/api/v3/klines",
+		url.Values{"api_key": {"super-secret"}, "symbol": {"BTCUSDT"}},
+		&result,
+		"",
+	)
+	require.NoError(t, err)
+	require.Len(t, capture.info, 1)
+	assert.Contains(t, capture.info[0], "collector_http_completed")
+	assert.Contains(t, capture.info[0], "domain="+parsed.Host)
+	assert.Contains(t, capture.info[0], "status=200")
+	assert.Contains(t, capture.info[0], "duration_ms=")
+	assert.NotContains(t, capture.info[0], "super-secret")
+	assert.NotContains(t, capture.info[0], "/api/v3/klines")
+	assert.NotContains(t, capture.info[0], server.URL)
+}
+
+func TestHTTPClientTLSFailureDoesNotEmitSuccessLog(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	capture := &httpLogCapture{}
+	original := log.GetDefaultLogger()
+	log.SetLogger(capture)
+	t.Cleanup(func() { log.SetLogger(original) })
+
+	err = NewHTTPClient().GetWithIP(context.Background(), parsed.Host, "", nil, &map[string]string{}, "")
+	require.Error(t, err)
+	assert.Empty(t, capture.info)
+}
 
 func TestNewHTTPClient_ShouldInitializeClient(t *testing.T) {
 	client := NewHTTPClient()

@@ -82,16 +82,25 @@ func init() {
 
 // Collect 执行标的同步采集
 func (c *SymbolCollector) Collect(ctx context.Context, params *sources.CollectParams) error {
+	_, err := c.CollectWithResult(ctx, params)
+	return err
+}
+
+// CollectWithResult executes a symbol snapshot and reports current-invocation writes.
+func (c *SymbolCollector) CollectWithResult(
+	ctx context.Context,
+	params *sources.CollectParams,
+) (sources.CollectResult, error) {
 	if params == nil {
-		return fmt.Errorf("标的采集参数不能为空")
+		return sources.CollectResult{}, fmt.Errorf("标的采集参数不能为空")
 	}
 	spaceID := strings.TrimSpace(params.SpaceID)
 	if spaceID == "" {
-		return fmt.Errorf("space_id 不能为空")
+		return sources.CollectResult{}, fmt.Errorf("space_id 不能为空")
 	}
 	datasetID := strings.TrimSpace(params.DatasetID)
 	if datasetID == "" {
-		return fmt.Errorf("dataset_id 不能为空")
+		return sources.CollectResult{}, fmt.Errorf("dataset_id 不能为空")
 	}
 	log.InfoContextf(ctx, "[SymbolCollector] 开始采集标的, space_id=%s, dataset_id=%s, InstType=%s",
 		spaceID, datasetID, params.InstType)
@@ -100,7 +109,7 @@ func (c *SymbolCollector) Collect(ctx context.Context, params *sources.CollectPa
 	symbols, err := c.fetchSymbols(ctx, params)
 	if err != nil {
 		log.ErrorContextf(ctx, "[SymbolCollector] 获取标的失败: %v", err)
-		return err
+		return sources.CollectResult{}, err
 	}
 
 	log.InfoContextf(ctx, "[SymbolCollector] 获取标的成功（过滤前）, count=%d, InstType=%s",
@@ -110,16 +119,24 @@ func (c *SymbolCollector) Collect(ctx context.Context, params *sources.CollectPa
 	filteredSymbols := c.filterSymbols(symbols)
 	log.InfoContextf(ctx, "[SymbolCollector] 过滤后标的数量, count=%d (过滤前: %d), InstType=%s",
 		len(filteredSymbols), len(symbols), params.InstType)
+	if len(filteredSymbols) == 0 {
+		return sources.CollectResult{}, fmt.Errorf("Binance active USDT symbol snapshot is empty")
+	}
 
 	// 上报标的到 Server
-	if err := c.reportSymbols(ctx, spaceID, datasetID, params.InstType, filteredSymbols); err != nil {
+	snapshotVersion, err := c.reportSymbols(ctx, spaceID, datasetID, params.InstType, filteredSymbols)
+	if err != nil {
 		log.ErrorContextf(ctx, "[SymbolCollector] 上报标的失败: %v", err)
-		return err
+		return sources.CollectResult{}, err
 	}
 
 	log.InfoContextf(ctx, "[SymbolCollector] 标的采集完成, space_id=%s, dataset_id=%s, InstType=%s",
 		spaceID, datasetID, params.InstType)
-	return nil
+	result := sources.CollectResult{
+		RowsWritten:           len(filteredSymbols),
+		RecordSnapshotVersion: snapshotVersion,
+	}
+	return result, nil
 }
 
 // fetchSymbols 获取标的列表
@@ -159,17 +176,17 @@ func (c *SymbolCollector) reportSymbols(
 	datasetID string,
 	instType string,
 	symbols []*exchange.SymbolInfo,
-) error {
+) (string, error) {
 	binding, err := ResolveStorageBinding(instType)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	writer := c.storage
 	if writer == nil {
 		target := runtimeapp.GetStorageRPCGatewayTarget()
 		if target == "" {
-			return fmt.Errorf("未配置存储服务 tRPC 地址")
+			return "", fmt.Errorf("未配置存储服务 tRPC 地址")
 		}
 		writer = newStorageWriter(target, target, storageAuthInfo(binding))
 	}
@@ -177,13 +194,14 @@ func (c *SymbolCollector) reportSymbols(
 	// 构建所有对象行
 	allRows, err := buildSymbolRecordRows(symbols, spaceID, datasetID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	totalRows := len(allRows)
 	if totalRows == 0 {
 		log.InfoContextf(ctx, "[SymbolCollector] 无标的需要上报")
-		return nil
+		return "", nil
 	}
+	snapshotVersion := allRows[0].GetKey().GetRecord().GetVersion()
 
 	// 分批（一个请求最多25行，分N次请求）
 	var rowBatches [][]*storagepb.RowFieldUpsert
@@ -251,23 +269,22 @@ func (c *SymbolCollector) reportSymbols(
 	if firstErr != nil {
 		log.ErrorContextf(ctx, "[SymbolCollector] 上报完成，成功=%d, 失败=%d, 首个错误: %v",
 			successCount, totalRows-successCount, firstErr)
-		return fmt.Errorf("部分批次上报失败: %w", firstErr)
+		return "", fmt.Errorf("部分批次上报失败: %w", firstErr)
 	}
 
-	datasetIDs := appendMissingDatasetIDs([]string{datasetID}, binding.SubjectDatasetIDs...)
-	if err := reconcileInactiveSymbolMemberships(ctx, writer, spaceID, datasetIDs, symbols); err != nil {
-		return err
+	if err := reconcileInactiveSymbolMemberships(ctx, writer, spaceID, datasetID, symbols); err != nil {
+		return "", err
 	}
 
 	log.InfoContextf(ctx, "[SymbolCollector] 上报标的成功, count=%d, datasetID=%s", totalRows, datasetID)
-	return nil
+	return snapshotVersion, nil
 }
 
 func reconcileInactiveSymbolMemberships(
 	ctx context.Context,
 	writer symbolStorage,
 	spaceID string,
-	datasetIDs []string,
+	datasetID string,
 	activeSymbols []*exchange.SymbolInfo,
 ) error {
 	if len(activeSymbols) == 0 {
@@ -284,37 +301,65 @@ func reconcileInactiveSymbolMemberships(
 		return nil
 	}
 
-	for _, datasetID := range datasetIDs {
-		memberships, err := writer.ListDatasetSubjects(ctx, spaceID, datasetID)
-		if err != nil {
-			return fmt.Errorf("list symbol memberships for dataset %s: %w", datasetID, err)
+	memberships, err := writer.ListDatasetSubjects(ctx, spaceID, datasetID)
+	if err != nil {
+		return fmt.Errorf("list symbol memberships for dataset %s: %w", datasetID, err)
+	}
+	inactiveMemberships := make([]*storagepb.DatasetSubject, 0)
+	inactiveSymbols := make([]*exchange.SymbolInfo, 0)
+	for _, membership := range memberships {
+		if membership == nil ||
+			strings.TrimSpace(membership.GetSpaceId()) != spaceID ||
+			strings.TrimSpace(membership.GetDatasetId()) != datasetID ||
+			!strings.EqualFold(strings.TrimSpace(membership.GetStatus()), "active") {
+			continue
 		}
-		for _, membership := range memberships {
-			if membership == nil ||
-				strings.TrimSpace(membership.GetSpaceId()) != spaceID ||
-				strings.TrimSpace(membership.GetDatasetId()) != datasetID ||
-				!strings.EqualFold(strings.TrimSpace(membership.GetStatus()), "active") {
-				continue
-			}
-			if _, ok := activeSubjectIDs[strings.TrimSpace(membership.GetSubjectId())]; ok {
-				continue
-			}
-			inactive := proto.Clone(membership).(*storagepb.DatasetSubject)
-			inactive.Status = "inactive"
-			if err := writer.BindDatasetSubject(ctx, inactive); err != nil {
-				return fmt.Errorf(
-					"deactivate symbol membership %s/%s/%s: %w",
-					spaceID, datasetID, inactive.GetSubjectId(), err,
-				)
-			}
-			log.InfoContextf(
-				ctx,
-				"[SymbolCollector] 停用已下架标的 membership, space_id=%s, dataset_id=%s, subject_id=%s",
-				spaceID, datasetID, inactive.GetSubjectId(),
-			)
+		if _, ok := activeSubjectIDs[strings.TrimSpace(membership.GetSubjectId())]; ok {
+			continue
+		}
+		inactive := proto.Clone(membership).(*storagepb.DatasetSubject)
+		inactive.Status = "disabled"
+		inactiveMemberships = append(inactiveMemberships, inactive)
+		inactiveSymbols = append(inactiveSymbols, inactiveSymbolInfo(inactive.GetSubjectId()))
+	}
+	inactiveRows, err := buildSymbolRecordRows(inactiveSymbols, spaceID, datasetID)
+	if err != nil {
+		return fmt.Errorf("build inactive symbol rows for dataset %s: %w", datasetID, err)
+	}
+	for start := 0; start < len(inactiveRows); start += batchSize {
+		end := start + batchSize
+		if end > len(inactiveRows) {
+			end = len(inactiveRows)
+		}
+		if err := writer.UpsertFields(ctx, inactiveRows[start:end]); err != nil {
+			return fmt.Errorf("write inactive symbol rows for dataset %s: %w", datasetID, err)
 		}
 	}
+	for _, inactive := range inactiveMemberships {
+		if err := writer.BindDatasetSubject(ctx, inactive); err != nil {
+			return fmt.Errorf(
+				"deactivate symbol membership %s/%s/%s: %w",
+				spaceID, datasetID, inactive.GetSubjectId(), err,
+			)
+		}
+		log.InfoContextf(
+			ctx,
+			"[SymbolCollector] 停用已下架标的 membership, space_id=%s, dataset_id=%s, subject_id=%s",
+			spaceID, datasetID, inactive.GetSubjectId(),
+		)
+	}
 	return nil
+}
+
+func inactiveSymbolInfo(subjectID string) *exchange.SymbolInfo {
+	subjectID = strings.TrimSpace(subjectID)
+	baseAsset, quoteAsset, _ := strings.Cut(subjectID, "-")
+	return &exchange.SymbolInfo{
+		Symbol:     subjectID,
+		BaseAsset:  baseAsset,
+		QuoteAsset: quoteAsset,
+		Status:     "inactive",
+	}
 }
 
 func (c *SymbolCollector) sendSymbolBatch(
@@ -345,17 +390,6 @@ func buildSymbolRegisterRequest(
 ) *storagepb.RegisterDataSubjectReq {
 	subjectID := normalizedSubjectID(symbol)
 	externalSymbol := binanceapi.FormatSymbol(subjectID)
-	datasetIDs := appendMissingDatasetIDs([]string{targetDatasetID}, binding.SubjectDatasetIDs...)
-	bindings := make([]*storagepb.DatasetSubject, 0, len(datasetIDs))
-	for _, datasetID := range datasetIDs {
-		bindings = append(bindings, &storagepb.DatasetSubject{
-			SpaceId:     spaceID,
-			DatasetId:   datasetID,
-			SubjectId:   subjectID,
-			SubjectRole: "normal",
-			Status:      "active",
-		})
-	}
 	return &storagepb.RegisterDataSubjectReq{
 		SpaceId:        spaceID,
 		DataSourceId:   binding.DataSourceID,
@@ -374,7 +408,13 @@ func buildSymbolRegisterRequest(
 				"external_symbol": externalSymbol,
 			},
 		},
-		DatasetBindings: bindings,
+		DatasetBindings: []*storagepb.DatasetSubject{{
+			SpaceId:     spaceID,
+			DatasetId:   targetDatasetID,
+			SubjectId:   subjectID,
+			SubjectRole: "normal",
+			Status:      "active",
+		}},
 	}
 }
 

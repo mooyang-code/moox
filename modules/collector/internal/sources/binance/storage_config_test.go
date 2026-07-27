@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,17 +44,62 @@ func TestStorageBindingHelpers(t *testing.T) {
 	_, _, err = storageBindingKey("UNKNOWN")
 	assert.Error(t, err)
 
-	binding := &StorageBinding{SubjectDatasetIDs: []string{"rec-1", "rec-1", "", "kline-1"}}
+	binding := &StorageBinding{}
 	applyBindingDefaults(binding, "spot")
 	assert.Equal(t, "binance", binding.DataSourceID)
 	assert.Equal(t, "crypto_pair", binding.SubjectType)
 	assert.Equal(t, "spot", binding.SubjectMarket)
-	assert.Equal(t, []string{"rec-1", "kline-1"}, binding.SubjectDatasetIDs)
-
-	ids := appendMissingDatasetIDs([]string{"a", "a", ""}, "b", "a", "c")
-	assert.Equal(t, []string{"a", "b", "c"}, ids)
 
 	assert.Equal(t, []string{"x", "y"}, dedupeStrings([]string{"x", "x", "y"}))
+}
+
+func TestDecodeBinanceSourceConfigRejectsLegacySubjectDatasetIDs(t *testing.T) {
+	_, err := decodeBinanceSourceConfig(strings.NewReader(`
+app:
+  id: binance
+  name: Binance
+  description: market data
+  type: market
+api:
+  base_url: https://example.com
+storage:
+  bindings:
+    spot:
+      data_source_id: binance
+      subject_dataset_ids:
+        - symbols
+`))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "subject_dataset_ids")
+}
+
+func TestDecodeBinanceSourceConfigAcceptsDeclaredTopLevelSections(t *testing.T) {
+	cfg, err := decodeBinanceSourceConfig(strings.NewReader(`
+app:
+  id: binance
+  name: Binance
+  description: market data
+  type: market
+api:
+  base_url: https://example.com
+  spot_base_url: https://spot.example.com
+  swap_base_url: https://swap.example.com
+storage:
+  bindings:
+    spot:
+      data_source_id: binance
+      subject_type: crypto_pair
+      subject_market: spot
+      auth_info:
+        app_id: collector
+        app_key: secret
+        operator: e2e
+        request_id: request
+`))
+	require.NoError(t, err)
+	assert.Equal(t, "binance", cfg.App.ID)
+	assert.Equal(t, "https://spot.example.com", cfg.API.SpotBaseURL)
+	assert.Equal(t, "spot", cfg.Storage.Bindings["spot"].SubjectMarket)
 }
 
 func TestEnsureStorageOK(t *testing.T) {

@@ -53,14 +53,13 @@ func TestBuildSymbolRegisterRequest(t *testing.T) {
 	req := buildSymbolRegisterRequest(&exchange.SymbolInfo{
 		Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active",
 	}, "space-custom", "target-dataset", StorageBinding{
-		DataSourceID: "binance", SubjectDatasetIDs: []string{"shared-dataset", "target-dataset"},
+		DataSourceID: "binance",
 	})
 	assert.Equal(t, "space-custom", req.GetSpaceId())
 	assert.Equal(t, "BTC-USDT", req.GetSubject().GetSubjectId())
 	assert.Equal(t, "binance", req.GetDataSourceId())
-	require.Len(t, req.GetDatasetBindings(), 2)
+	require.Len(t, req.GetDatasetBindings(), 1)
 	assert.Equal(t, "target-dataset", req.GetDatasetBindings()[0].GetDatasetId())
-	assert.Equal(t, "shared-dataset", req.GetDatasetBindings()[1].GetDatasetId())
 	for _, binding := range req.GetDatasetBindings() {
 		assert.Equal(t, "space-custom", binding.GetSpaceId())
 	}
@@ -102,8 +101,47 @@ func TestSymbolCollectorWritesRowsAndRegistrationsToRequestedTarget(t *testing.T
 	assert.Equal(t, "symbols-custom", writer.registrations[0].GetDatasetBindings()[0].GetDatasetId())
 }
 
+func TestSymbolCollectorCollectWithResultReportsCurrentWriteCount(t *testing.T) {
+	writer := &fakeSymbolStorage{}
+	collector := symbolCollectorWithSymbols(
+		writer,
+		activeSymbol("BTC"),
+		activeSymbol("ETH"),
+		&exchange.SymbolInfo{
+			Symbol: "BTCEUR", BaseAsset: "BTC", QuoteAsset: "EUR", Status: "active",
+		},
+	)
+
+	result, err := collector.CollectWithResult(context.Background(), symbolCollectParams())
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.RowsWritten)
+	_, err = time.Parse(time.RFC3339Nano, result.RecordSnapshotVersion)
+	require.NoError(t, err)
+	assert.Nil(t, result.StorageReadScope)
+	assert.Empty(t, result.ZeroWriteReason)
+}
+
+func TestSymbolCollectorRejectsEmptyAuthoritativeSnapshot(t *testing.T) {
+	writer := &fakeSymbolStorage{
+		listByDataset: map[string][]*storagepb.DatasetSubject{
+			"symbols-custom": {{
+				SpaceId: "space-custom", DatasetId: "symbols-custom",
+				SubjectId: "BTC-USDT", Status: "active",
+			}},
+		},
+	}
+	collector := symbolCollectorWithSymbols(writer)
+
+	_, err := collector.CollectWithResult(context.Background(), symbolCollectParams())
+
+	require.ErrorContains(t, err, "snapshot is empty")
+	assert.Empty(t, writer.rows)
+	assert.Empty(t, writer.bound)
+}
+
 func TestSymbolCollectorDeactivatesMissingDatasetSubjects(t *testing.T) {
-	datasetIDs := []string{"symbols-custom", "binance_spot_symbols", "binance_spot_kline_1h"}
+	datasetIDs := []string{"symbols-custom"}
 	writer := &fakeSymbolStorage{listByDataset: make(map[string][]*storagepb.DatasetSubject)}
 	oldTemplate := &storagepb.DatasetSubject{
 		SpaceId: "space-custom", DatasetId: datasetIDs[0], SubjectId: "OLD-USDT",
@@ -133,8 +171,15 @@ func TestSymbolCollectorDeactivatesMissingDatasetSubjects(t *testing.T) {
 	require.NoError(t, collector.Collect(context.Background(), symbolCollectParams()))
 	assert.Equal(t, datasetIDs, writer.listCalls)
 	require.Len(t, writer.bound, len(datasetIDs))
+	require.Len(t, writer.rows, 2, "active and inactive symbol versions must both be persisted")
+	inactiveFields := symbolRowFields(writer.rows[1])
+	assert.Equal(t, "OLD-USDT", inactiveFields["symbol"])
+	assert.Equal(t, "OLDUSDT", inactiveFields["external_symbol"])
+	assert.Equal(t, "OLD", inactiveFields["base_asset"])
+	assert.Equal(t, "USDT", inactiveFields["quote_asset"])
+	assert.Equal(t, "inactive", inactiveFields["status"])
 	for _, got := range writer.bound {
-		assert.Equal(t, "inactive", got.GetStatus())
+		assert.Equal(t, "disabled", got.GetStatus())
 		assert.Equal(t, "benchmark", got.GetSubjectRole())
 		assert.Equal(t, "2026-01-01T00:00:00Z", got.GetEffectiveStartTime())
 		assert.Equal(t, "2026-12-31T00:00:00Z", got.GetEffectiveEndTime())
@@ -146,6 +191,7 @@ func TestSymbolCollectorDeactivatesMissingDatasetSubjects(t *testing.T) {
 
 	require.NoError(t, collector.Collect(context.Background(), symbolCollectParams()))
 	assert.Len(t, writer.bound, len(datasetIDs), "repeated reconciliation must not rewrite inactive memberships")
+	assert.Len(t, writer.rows, 3, "repeated collection writes only the current active snapshot")
 }
 
 func TestSymbolCollectorKeepsReturnedSubjectsActive(t *testing.T) {
@@ -220,21 +266,6 @@ func TestSymbolCollectorDoesNotDeactivateAfterWorkerPanic(t *testing.T) {
 	assert.Empty(t, writer.bound)
 }
 
-func TestSymbolCollectorSkipsDeactivationForEmptySnapshot(t *testing.T) {
-	writer := &fakeSymbolStorage{
-		listByDataset: map[string][]*storagepb.DatasetSubject{
-			"symbols-custom": {{
-				SpaceId: "space-custom", DatasetId: "symbols-custom", SubjectId: "OLD-USDT", Status: "active",
-			}},
-		},
-	}
-	collector := symbolCollectorWithSymbols(writer)
-
-	require.NoError(t, collector.Collect(context.Background(), symbolCollectParams()))
-	assert.Empty(t, writer.listCalls)
-	assert.Empty(t, writer.bound)
-}
-
 func symbolCollectorWithSymbols(writer symbolStorage, symbols ...*exchange.SymbolInfo) *SymbolCollector {
 	return &SymbolCollector{
 		storage: writer,
@@ -304,4 +335,12 @@ func (s *fakeSymbolStorage) BindDatasetSubject(_ context.Context, item *storagep
 		}
 	}
 	return nil
+}
+
+func symbolRowFields(row *storagepb.RowFieldUpsert) map[string]string {
+	fields := make(map[string]string, len(row.GetFields()))
+	for _, field := range row.GetFields() {
+		fields[field.GetFieldId()] = field.GetValue().GetStringValue()
+	}
+	return fields
 }

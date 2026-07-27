@@ -28,7 +28,7 @@ server:
       timeout: 3000
     - name: trpc.moox.collector.schedule.timer
       port: 11403
-      network: "0 */1 * * * *?scheduler=collectorSchedule"
+      network: "20 */1 * * * *?scheduler=collectorSchedule"
       protocol: timer
       timeout: 60000
     - name: trpc.moox.collector.metrics.timer

@@ -226,15 +226,14 @@ func normalizeGatewayTarget(raw string) string {
 	return "http://" + raw
 }
 
-// PrepareScheduledInstances assigns the next execution boundary and stable queue identity.
-func PrepareScheduledInstances(instances []domain.TaskInstance, now time.Time) ([]domain.TaskInstance, error) {
+// PrepareScheduledInstances assigns a control-plane execution window and stable queue identity.
+func PrepareScheduledInstances(instances []domain.TaskInstance, executeAt time.Time) ([]domain.TaskInstance, error) {
+	if executeAt.IsZero() {
+		return nil, fmt.Errorf("execute_at is required")
+	}
+	executeAt = executeAt.UTC()
 	prepared := append([]domain.TaskInstance(nil), instances...)
 	for i := range prepared {
-		payload, err := parsePayload(prepared[i].TaskParams)
-		if err != nil {
-			return nil, fmt.Errorf("parse task params task_id=%s: %w", strings.TrimSpace(prepared[i].TaskID), err)
-		}
-		executeAt := nextExecuteAt(now, valueString(payload, "schedule_interval", "30m"))
 		prepared[i].ExecuteAt = executeAt
 		prepared[i].CloudJobItemID = scheduledJobItemID(prepared[i].TaskID, executeAt)
 	}
@@ -344,40 +343,4 @@ func parsePayload(raw string) (map[string]any, error) {
 		return nil, fmt.Errorf("task params must be a JSON object")
 	}
 	return payload, nil
-}
-
-func valueString(payload map[string]any, key string, fallback string) string {
-	if v, ok := payload[key].(string); ok && strings.TrimSpace(v) != "" {
-		return v
-	}
-	return fallback
-}
-
-func nextExecuteAt(now time.Time, interval string) time.Time {
-	duration, ok := parseScheduleDuration(interval)
-	if !ok || duration <= 0 {
-		duration = 30 * time.Minute
-	}
-	return now.UTC().Truncate(duration).Add(duration)
-}
-
-func parseScheduleDuration(interval string) (time.Duration, bool) {
-	interval = strings.TrimSpace(interval)
-	if interval == "" {
-		return 0, false
-	}
-	if d, err := time.ParseDuration(interval); err == nil {
-		return d, true
-	}
-	if strings.HasSuffix(interval, "d") {
-		n := strings.TrimSuffix(interval, "d")
-		if n == "" {
-			n = "1"
-		}
-		var days int
-		if _, err := fmt.Sscanf(n, "%d", &days); err == nil && days > 0 {
-			return time.Duration(days) * 24 * time.Hour, true
-		}
-	}
-	return 0, false
 }

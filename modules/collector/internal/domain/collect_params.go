@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 )
 
 // CollectParams describes how a rule generates concrete task instances.
@@ -93,9 +92,8 @@ func (p *CollectParams) Validate() error {
 	if p.Target.DatasetID == "" {
 		return fmt.Errorf("target.dataset_id is required")
 	}
-	interval, err := time.ParseDuration(p.Schedule.Interval)
-	if err != nil || interval <= 0 {
-		return fmt.Errorf("schedule.interval must be a positive duration")
+	if _, err := ParseScheduleInterval(p.Schedule.Interval); err != nil {
+		return fmt.Errorf("schedule.interval: %w", err)
 	}
 	switch p.Collector.DataType {
 	case "kline":

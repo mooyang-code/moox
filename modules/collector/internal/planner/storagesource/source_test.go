@@ -70,22 +70,43 @@ func TestDatasetSource_ListSubjects_ValidBindings_ShouldMergeSymbols(t *testing.
 	subjects, err := src.ListSubjects(context.Background(), "space-1", "ds-1", "src-1")
 	require.NoError(t, err)
 	require.Len(t, subjects, 1)
+	assert.Equal(t, "BTC-USDT", subjects[0].SubjectID)
 	assert.Equal(t, "BTCUSDT", subjects[0].ExternalSymbol)
+	assert.Equal(t, "active", subjects[0].Status)
 }
 
-func TestMergeDatasetSubjects_AttributeSymbol_ShouldTakePrecedence(t *testing.T) {
-	subjects := mergeDatasetSubjects([]*storagepb.DatasetSubject{
+func TestMergeDatasetSubjectsRequiresActiveSubjectSymbol(t *testing.T) {
+	_, err := mergeDatasetSubjects([]*storagepb.DatasetSubject{
 		{SubjectId: "BTC-USDT", Status: "active", Attributes: map[string]string{"external_symbol": "BTCUSDT_ATTR"}},
+	}, nil)
+	require.ErrorContains(t, err, "no active external symbol")
+
+	subjects, err := mergeDatasetSubjects([]*storagepb.DatasetSubject{
+		{SubjectId: "BTC-USDT", Status: "active"},
 	}, map[string]string{"BTC-USDT": "BTCUSDT_MAP"})
+	require.NoError(t, err)
 	require.Len(t, subjects, 1)
-	assert.Equal(t, "BTCUSDT_ATTR", subjects[0].ExternalSymbol)
+	assert.Equal(t, "BTCUSDT_MAP", subjects[0].ExternalSymbol)
 }
 
-func TestIsInactive_StatusValues_ShouldClassifyCorrectly(t *testing.T) {
-	assert.False(t, isInactive("active"))
-	assert.False(t, isInactive("enabled"))
-	assert.False(t, isInactive(""))
-	assert.True(t, isInactive("inactive"))
+func TestDatasetSourceRejectsDuplicateActiveSubjectSymbols(t *testing.T) {
+	src := &DatasetSource{metadata: &fakeMetadataClient{
+		subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC-USDT", Status: "active"}},
+		symbols: []*storagepb.SubjectSymbol{
+			{SubjectId: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
+			{SubjectId: "BTC-USDT", ExternalSymbol: "BTCUSDT2", Status: "active"},
+		},
+	}}
+	_, err := src.ListSubjects(context.Background(), "crypto", "symbols", "binance")
+	require.ErrorContains(t, err, "duplicate active external symbols")
+}
+
+func TestIsActiveRequiresLiteralActiveStatus(t *testing.T) {
+	assert.True(t, isActive("active"))
+	assert.True(t, isActive(" ACTIVE "))
+	assert.False(t, isActive("enabled"))
+	assert.False(t, isActive(""))
+	assert.False(t, isActive("inactive"))
 }
 
 func TestEnsureStorageOK_ErrorCode_ShouldReturnError(t *testing.T) {

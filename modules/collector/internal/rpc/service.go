@@ -325,7 +325,28 @@ func (s *Service) ScheduleTasks(ctx context.Context, req *pb.ScheduleTasksReq) (
 	total := 0
 	var scheduleErr error
 	for i := range rules {
-		created, err := s.scheduleRule(ctx, &rules[i], now)
+		params, err := domain.ParseCollectParams(rules[i].CollectParams, rules[i].Exchange, rules[i].DataType)
+		if err != nil {
+			log.ErrorContextf(ctx, "[Collector] parse rule %s params failed: %v", rules[i].RuleID, err)
+			scheduleErr = errors.Join(scheduleErr, fmt.Errorf("rule %s: %w", rules[i].RuleID, err))
+			continue
+		}
+		executeAt, due, err := domain.ScheduleDecision(now, params.Schedule.Interval)
+		if err != nil {
+			log.ErrorContextf(ctx, "[Collector] decide rule %s schedule failed: %v", rules[i].RuleID, err)
+			scheduleErr = errors.Join(scheduleErr, fmt.Errorf("rule %s: %w", rules[i].RuleID, err))
+			continue
+		}
+		if !due {
+			log.DebugContextf(
+				ctx,
+				"[Collector] schedule rule skipped: rule_id=%s interval=%s",
+				rules[i].RuleID,
+				params.Schedule.Interval,
+			)
+			continue
+		}
+		created, err := s.scheduleRule(ctx, &rules[i], params, executeAt)
 		if err != nil {
 			log.ErrorContextf(ctx, "[Collector] schedule rule %s failed: %v", rules[i].RuleID, err)
 			scheduleErr = errors.Join(scheduleErr, fmt.Errorf("rule %s: %w", rules[i].RuleID, err))
@@ -340,13 +361,15 @@ func (s *Service) ScheduleTasks(ctx context.Context, req *pb.ScheduleTasksReq) (
 	return &pb.ScheduleTasksRsp{RetInfo: retOK()}, nil
 }
 
-func (s *Service) scheduleRule(ctx context.Context, rule *domain.TaskRule, now time.Time) (int, error) {
-	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Exchange, rule.DataType)
-	if err != nil {
-		return 0, fmt.Errorf("parse rule %s params: %w", rule.RuleID, err)
-	}
+func (s *Service) scheduleRule(
+	ctx context.Context,
+	rule *domain.TaskRule,
+	params *domain.CollectParams,
+	executeAt time.Time,
+) (int, error) {
 	var subjects []domain.DatasetSubject
 	if params.Source.Kind == "dataset_subjects" {
+		var err error
 		subjects, err = s.datasetSrc.ListSubjects(ctx, rule.SpaceID, params.Source.DatasetID, rule.Exchange)
 		if err != nil {
 			return 0, fmt.Errorf("load dataset subjects for %s: %w", params.Source.DatasetID, err)
@@ -356,7 +379,7 @@ func (s *Service) scheduleRule(ctx context.Context, rule *domain.TaskRule, now t
 	if err != nil {
 		return 0, fmt.Errorf("build instances for rule %s: %w", rule.RuleID, err)
 	}
-	instances, err = taskpublisher.PrepareScheduledInstances(instances, now)
+	instances, err = taskpublisher.PrepareScheduledInstances(instances, executeAt)
 	if err != nil {
 		return 0, fmt.Errorf("prepare instances for rule %s: %w", rule.RuleID, err)
 	}
@@ -505,33 +528,38 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 	if err != nil {
 		return err
 	}
-	expectedKind := storagepb.DataKind_DATA_KIND_RECORD
-	if params.Collector.DataType == "kline" {
-		expectedKind = storagepb.DataKind_DATA_KIND_TIME_SERIES
-	}
-	if err := s.validateDataset(
-		ctx,
-		rule.SpaceID,
-		params.Target.DatasetID,
-		params.Collector.Exchange,
-		expectedKind,
-		"target",
-	); err != nil {
-		return err
-	}
-	if params.Source.Kind == "dataset_subjects" {
+	switch params.Collector.DataType {
+	case "symbol":
+		return s.validateDataset(
+			ctx,
+			rule.SpaceID,
+			params.Target.DatasetID,
+			params.Collector.Exchange,
+			storagepb.DataKind_DATA_KIND_RECORD,
+			"target",
+		)
+	case "kline":
 		if err := s.validateDataset(
 			ctx,
 			rule.SpaceID,
 			params.Source.DatasetID,
 			params.Collector.Exchange,
-			storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			storagepb.DataKind_DATA_KIND_RECORD,
 			"source",
 		); err != nil {
 			return err
 		}
+		return s.validateDataset(
+			ctx,
+			rule.SpaceID,
+			params.Target.DatasetID,
+			params.Collector.Exchange,
+			storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			"target",
+		)
+	default:
+		return fmt.Errorf("unsupported collector data_type: %s", params.Collector.DataType)
 	}
-	return nil
 }
 
 func (s *Service) validateDataset(

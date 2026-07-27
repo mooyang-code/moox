@@ -18,8 +18,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestBuildScheduledJobItemUsesNextBoundary(t *testing.T) {
-	now := time.Date(2026, 7, 26, 10, 17, 42, 0, time.UTC)
+func TestBuildScheduledJobItemUsesControlPlaneExecuteAt(t *testing.T) {
+	executeAt := time.Date(2026, 7, 26, 10, 30, 0, 0, time.UTC)
 	instances := mustPrepareScheduledInstances(t, []domain.TaskInstance{{
 		SpaceID:  "space-a",
 		RuleID:   "rule-1",
@@ -32,7 +32,7 @@ func TestBuildScheduledJobItemUsesNextBoundary(t *testing.T) {
 			"job_type":"collect.untrusted",
 			"schedule_interval":"30m"
 			}`,
-	}}, now)
+	}}, executeAt)
 	item := mustBuildJobItem(t, instances[0])
 
 	if item.GetSpaceId() != "space-a" || item.GetJobId() != "rule-1" {
@@ -44,9 +44,8 @@ func TestBuildScheduledJobItemUsesNextBoundary(t *testing.T) {
 	if item.GetParams().GetFields()["task_id"].GetStringValue() != "task-1" {
 		t.Fatalf("params.task_id = %q, want task-1", item.GetParams().GetFields()["task_id"].GetStringValue())
 	}
-	wantExecuteAt := time.Date(2026, 7, 26, 10, 30, 0, 0, time.UTC)
-	if item.GetExecuteAt() == nil || !item.GetExecuteAt().AsTime().Equal(wantExecuteAt) {
-		t.Fatalf("execute_at = %v, want %v", item.GetExecuteAt(), wantExecuteAt)
+	if item.GetExecuteAt() == nil || !item.GetExecuteAt().AsTime().Equal(executeAt) {
+		t.Fatalf("execute_at = %v, want %v", item.GetExecuteAt(), executeAt)
 	}
 	if got := item.GetJobItemId(); got != "task-1:2026-07-26T10:30:00Z" {
 		t.Fatalf("job_item_id = %q, want deterministic execute_at id", got)
@@ -64,10 +63,9 @@ func TestPrepareScheduledInstancesRepeatedInSameWindowUsesSameJobItemID(t *testi
 				"schedule_interval":"1m"
 			}`,
 	}
-	first := mustPrepareScheduledInstances(t, []domain.TaskInstance{instance},
-		time.Date(2026, 7, 26, 10, 17, 1, 0, time.UTC))[0]
-	second := mustPrepareScheduledInstances(t, []domain.TaskInstance{instance},
-		time.Date(2026, 7, 26, 10, 17, 59, 0, time.UTC))[0]
+	executeAt := time.Date(2026, 7, 26, 10, 18, 0, 0, time.UTC)
+	first := mustPrepareScheduledInstances(t, []domain.TaskInstance{instance}, executeAt)[0]
+	second := mustPrepareScheduledInstances(t, []domain.TaskInstance{instance}, executeAt)[0]
 
 	if first.CloudJobItemID != second.CloudJobItemID {
 		t.Fatalf("job ids differ in one window: %q != %q", first.CloudJobItemID, second.CloudJobItemID)
@@ -222,13 +220,13 @@ func TestSubmitCollectorJobItemsRejectsInvalidItemsBeforeRequest(t *testing.T) {
 	}
 }
 
-func TestPrepareScheduledInstancesRejectsMalformedTaskParams(t *testing.T) {
+func TestPrepareScheduledInstancesRejectsZeroExecuteAt(t *testing.T) {
 	_, err := PrepareScheduledInstances([]domain.TaskInstance{{
 		TaskID:     "task-1",
 		TaskParams: `{bad`,
-	}}, time.Now())
-	if err == nil || !strings.Contains(err.Error(), "task-1") {
-		t.Fatalf("PrepareScheduledInstances() error = %v, want task identity", err)
+	}}, time.Time{})
+	if err == nil || !strings.Contains(err.Error(), "execute_at is required") {
+		t.Fatalf("PrepareScheduledInstances() error = %v, want execute_at validation", err)
 	}
 }
 
@@ -413,39 +411,7 @@ func TestSubmitCollectorJobItemsKeepsSuccessfulIDsFromRejectedAckBatch(t *testin
 	}
 }
 
-func TestNextExecuteAtParsesDurationAndDayIntervals(t *testing.T) {
-	now := time.Date(2026, 7, 12, 10, 17, 42, 0, time.UTC)
-
-	tests := []struct {
-		name     string
-		interval string
-		want     string
-		ok       bool
-	}{
-		{name: "duration", interval: "15m", want: now.Truncate(15 * time.Minute).Add(15 * time.Minute).Format(time.RFC3339), ok: true},
-		{name: "single day", interval: "d", want: now.Truncate(24 * time.Hour).Add(24 * time.Hour).Format(time.RFC3339), ok: true},
-		{name: "multi day", interval: "2d", want: now.Truncate(48 * time.Hour).Add(48 * time.Hour).Format(time.RFC3339), ok: true},
-		{name: "invalid falls back", interval: "bad", want: now.Truncate(30 * time.Minute).Add(30 * time.Minute).Format(time.RFC3339), ok: false},
-		{name: "empty falls back", interval: "", want: now.Truncate(30 * time.Minute).Add(30 * time.Minute).Format(time.RFC3339), ok: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, ok := parseScheduleDuration(tt.interval)
-			if ok != tt.ok {
-				t.Fatalf("parseScheduleDuration ok=%v, want %v", ok, tt.ok)
-			}
-			if got := nextExecuteAt(now, tt.interval).Format(time.RFC3339); got != tt.want {
-				t.Fatalf("nextExecuteAt=%q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestPayloadAndJobItemHelpersCoverFallbacks(t *testing.T) {
-	if got := valueString(map[string]any{"name": "  "}, "name", "fallback"); got != "fallback" {
-		t.Fatalf("valueString blank = %q, want fallback", got)
-	}
 	if got := taskIDFromJobItem(&cloudnodepb.JobItem{JobItemId: " item-1 "}); got != "item-1" {
 		t.Fatalf("taskIDFromJobItem fallback = %q, want item-1", got)
 	}

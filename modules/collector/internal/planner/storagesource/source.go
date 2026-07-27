@@ -79,7 +79,7 @@ func (s *DatasetSource) ListSubjects(ctx context.Context, spaceID string, datase
 	if err != nil {
 		return nil, err
 	}
-	return mergeDatasetSubjects(bindings, symbols), nil
+	return mergeDatasetSubjects(bindings, symbols)
 }
 
 func (s *DatasetSource) listDatasetBindings(ctx context.Context, spaceID string, datasetID string) ([]*storagepb.DatasetSubject, error) {
@@ -119,10 +119,13 @@ func (s *DatasetSource) listSubjectSymbols(ctx context.Context, spaceID string, 
 			return nil, err
 		}
 		for _, item := range rsp.GetSubjectSymbols() {
-			if item.GetSubjectId() == "" || isInactive(item.GetStatus()) {
+			if item.GetSubjectId() == "" || !isActive(item.GetStatus()) {
 				continue
 			}
 			if item.GetExternalSymbol() != "" {
+				if _, exists := symbols[item.GetSubjectId()]; exists {
+					return nil, fmt.Errorf("subject %s has duplicate active external symbols", item.GetSubjectId())
+				}
 				symbols[item.GetSubjectId()] = item.GetExternalSymbol()
 			}
 		}
@@ -133,18 +136,18 @@ func (s *DatasetSource) listSubjectSymbols(ctx context.Context, spaceID string, 
 	return symbols, nil
 }
 
-func mergeDatasetSubjects(bindings []*storagepb.DatasetSubject, symbols map[string]string) []domain.DatasetSubject {
+func mergeDatasetSubjects(
+	bindings []*storagepb.DatasetSubject,
+	symbols map[string]string,
+) ([]domain.DatasetSubject, error) {
 	subjects := make([]domain.DatasetSubject, 0, len(bindings))
 	for _, binding := range bindings {
-		if binding.GetSubjectId() == "" || isInactive(binding.GetStatus()) {
+		if binding.GetSubjectId() == "" || !isActive(binding.GetStatus()) {
 			continue
 		}
-		external := binding.GetAttributes()["external_symbol"]
+		external := strings.TrimSpace(symbols[binding.GetSubjectId()])
 		if external == "" {
-			external = symbols[binding.GetSubjectId()]
-		}
-		if external == "" {
-			external = binding.GetSubjectId()
+			return nil, fmt.Errorf("active dataset subject %s has no active external symbol", binding.GetSubjectId())
 		}
 		subjects = append(subjects, domain.DatasetSubject{
 			SubjectID:      binding.GetSubjectId(),
@@ -153,7 +156,7 @@ func mergeDatasetSubjects(bindings []*storagepb.DatasetSubject, symbols map[stri
 			Status:         binding.GetStatus(),
 		})
 	}
-	return subjects
+	return subjects, nil
 }
 
 func ensureStorageOK(action string, ret *storagepb.RetInfo) error {
@@ -166,13 +169,8 @@ func ensureStorageOK(action string, ret *storagepb.RetInfo) error {
 	return nil
 }
 
-func isInactive(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "", "active", "enabled":
-		return false
-	default:
-		return true
-	}
+func isActive(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "active")
 }
 
 func normalizeTRPCTarget(raw string, defaultPort string) string {

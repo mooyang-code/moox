@@ -16,9 +16,6 @@ func BuildTaskSpecs(params *domain.CollectParams, subjects []domain.DatasetSubje
 	for _, subject := range subjects {
 		symbol := strings.TrimSpace(subject.ExternalSymbol)
 		if symbol == "" {
-			symbol = strings.TrimSpace(subject.SubjectID)
-		}
-		if symbol == "" {
 			continue
 		}
 		for _, interval := range intervals {

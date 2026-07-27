@@ -1,5 +1,5 @@
 # Binance source configuration used by collector runtime.
-# Current code reads only api.* and storage.bindings.* from this file.
+# Strictly decoded Binance source configuration.
 app:
   id: "binance"
   name: "币安交易所"
@@ -17,9 +17,6 @@ storage:
       data_source_id: "binance"
       subject_type: "crypto_pair"
       subject_market: "spot"
-      subject_dataset_ids:
-        - "binance_spot_symbols"
-        - "binance_spot_kline_1h"
       auth_info:
         app_id: "moox-collector"
         app_key: "binance-spot-collector"
@@ -27,9 +24,6 @@ storage:
       data_source_id: "binance"
       subject_type: "crypto_pair"
       subject_market: "swap"
-      subject_dataset_ids:
-        - "binance_swap_symbols"
-        - "binance_swap_kline"
       auth_info:
         app_id: "moox-collector"
         app_key: "binance-swap-collector"

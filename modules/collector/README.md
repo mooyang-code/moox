@@ -105,15 +105,23 @@ keepalive 会下发真实的 `service_gateway_target`，完成首次通信初始
 
 每个 SCF 进程只有一个 NATS 连接和一个常驻 taskrunner，内部绑定 registry 声明的多个
 JobType。`execute_at` 缺失或已到期时立即执行；未来时间通过 JetStream 延迟重投。
-`ScheduleTasks` 每次只提交下一次任务。增加 SCF 实例时，新实例使用相同 durable 自动
+控制面 timer 在每分钟第 20 秒调用 `ScheduleTasks`。`schedule.interval` 表示 Rule 生成
+任务的周期，`collector.intervals` 表示 Kline 数据频率；控制面只在 Rule 到期时读取
+Dataset，并把 `execute_at` 设置为下一个 UTC 对齐周期边界。增加 SCF 实例时，新实例使用相同 durable 自动
 参与竞争消费；SCF 执行完全由 JetStream delivery 驱动。系统允许少量重复执行，
 不承诺任务级去重。查询接口和 `moox-cli init` 不在 SCF 中执行。
+
+Dataset 契约固定为：Symbol Rule 写入 RECORD Dataset；Kline Rule 从该 Symbol RECORD
+Dataset 的 active subjects 展开任务，并写入 TIME_SERIES Dataset。Binance 配置不再静态
+绑定任何 Dataset，真实 source/target 只来自 Rule。
 
 SCF 包中的 CLS writer 使用 `info` 级别。每次 JobItem delivery 都记录
 `collector_job_received`、校验/延期/开始、TaskInstance 与 CloudNode 上报、
 `collector_job_done` 和实际 ACK/NAK/TERM 结果。日志使用稳定的 `key=value` 字段，
 依靠 `job_item_id + delivery_count` 关联重投，不输出完整任务参数或认证信息。
-Binance 客户端关闭 TLS 证书校验是当前项目接受的运行配置。
+Binance HTTP 客户端使用系统信任根和域名 SNI 正常验证 TLS 证书，不配置私有客户端证书，
+也不允许 `InsecureSkipVerify`。成功日志只记录 domain、HTTP status 和耗时，不记录完整
+URL、query 或凭据。
 
 关键字段：
 
