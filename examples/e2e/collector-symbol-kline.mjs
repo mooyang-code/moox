@@ -512,10 +512,11 @@ export function validatePublishSummary(summary, expectedCount) {
       throw new Error(`updated fleet has invalid deploy_batch_size=${summary.deploy_batch_size}`);
     }
     const expectedBatches = Math.ceil(deployed / batchSize);
-    if (!Array.isArray(summary.deploy_batch_ids) || summary.deploy_batch_ids.length !== expectedBatches) {
-      throw new Error(`updated fleet has ${summary.deploy_batch_ids?.length || 0} batches; expected ${expectedBatches}`);
+    const deployBatchIDs = summary.deploy_batch_ids || [];
+    if (!Array.isArray(deployBatchIDs) || deployBatchIDs.length !== expectedBatches) {
+      throw new Error(`updated fleet has ${deployBatchIDs.length || 0} batches; expected ${expectedBatches}`);
     }
-    assertUniqueBatchIDs(summary.deploy_batch_ids);
+    assertUniqueBatchIDs(deployBatchIDs);
   }
   return summary;
 }
