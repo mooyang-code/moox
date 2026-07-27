@@ -136,8 +136,7 @@ func (c *Client) GetTerminalState(ctx context.Context, spaceID, jobItemID string
 	case pb.JobItemStatus_JOB_ITEM_STATUS_SUCCESS:
 		state.Terminal = true
 		state.Status = domain.InstanceStatusSuccess
-	case pb.JobItemStatus_JOB_ITEM_STATUS_FAILED,
-		pb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED:
+	case pb.JobItemStatus_JOB_ITEM_STATUS_FAILED:
 		state.Terminal = true
 		state.Status = domain.InstanceStatusFailed
 	default:

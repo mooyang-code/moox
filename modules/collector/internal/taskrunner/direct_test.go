@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -457,7 +458,11 @@ func TestDirectWorkerJetStreamAckRetryAndTerm(t *testing.T) {
 
 	reportsFail := false
 	reports := 0
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/GetJobItem") {
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"item":{"status":"JOB_ITEM_STATUS_PENDING"}}`))
+			return
+		}
 		reports++
 		if reportsFail {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -560,7 +565,11 @@ func TestDirectWorkerJetStreamExecuteAtTiming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/GetJobItem") {
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"item":{"status":"JOB_ITEM_STATUS_PENDING"}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"}}`))
 	}))
 	t.Cleanup(gateway.Close)

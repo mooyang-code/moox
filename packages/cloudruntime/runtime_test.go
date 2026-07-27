@@ -50,6 +50,10 @@ func TestExecuteJobItemReportsBeforeAck(t *testing.T) {
 	}))
 	reported := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/GetJobItem") {
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"item":{"status":"JOB_ITEM_STATUS_PENDING"}}`))
+			return
+		}
 		reported = true
 		var body reportRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -83,6 +87,10 @@ func TestExecuteJobItemRetryableFailureOnlyReportsOnLastDelivery(t *testing.T) {
 	}))
 	reports := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/GetJobItem") {
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"item":{"status":"JOB_ITEM_STATUS_PENDING"}}`))
+			return
+		}
 		reports++
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"}}`))
 	}))
@@ -95,6 +103,29 @@ func TestExecuteJobItemRetryableFailureOnlyReportsOnLastDelivery(t *testing.T) {
 	last := ExecuteJobItem(context.Background(), testConfig(server.URL), item, 3, 3)
 	if last.Decision != jetstream.TERM || reports != 1 {
 		t.Fatalf("last=%+v reports=%d", last, reports)
+	}
+}
+
+func TestExecuteJobItemSkipsTerminalRedelivery(t *testing.T) {
+	resetRegistryForTest()
+	handled := false
+	Register("collect.kline", HandlerFunc(func(context.Context, JobItem) (Result, error) {
+		handled = true
+		return Result{}, nil
+	}))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/GetJobItem") {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"item":{"status":"JOB_ITEM_STATUS_SUCCESS"}}`))
+	}))
+	defer server.Close()
+
+	result := ExecuteJobItem(context.Background(), testConfig(server.URL), JobItem{
+		SpaceID: "crypto", JobItemID: "item-1", JobType: "collect.kline",
+	}, 2, 4)
+	if handled || result.Decision != jetstream.ACK {
+		t.Fatalf("handled=%v result=%+v", handled, result)
 	}
 }
 

@@ -145,6 +145,36 @@ func TestClientGetTerminalStateUsesCloudNodeAuthority(t *testing.T) {
 	}
 }
 
+func TestClientGetTerminalStateKeepsEnqueueFailedNonTerminal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		raw, err := protojson.Marshal(&cloudnodepb.GetJobItemRsp{
+			RetInfo: &cloudnodepb.RetInfo{Code: cloudnodepb.ErrorCode_SUCCESS, Msg: "ok"},
+			Item: &cloudnodepb.JobItemDetail{
+				SpaceId: "crypto", JobItemId: "item-1",
+				Status: cloudnodepb.JobItemStatus_JOB_ITEM_STATUS_ENQUEUE_FAILED,
+			},
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write(raw)
+	}))
+	defer server.Close()
+
+	client := New(Config{
+		ServiceGatewayTarget: server.URL,
+		Auth:                 AuthConfig{AccessKey: "ak", SecretKey: "sk", TargetNode: "control"},
+	})
+	state, err := client.GetTerminalState(context.Background(), "crypto", "item-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Terminal {
+		t.Fatalf("enqueue_failed must remain recoverable: %+v", state)
+	}
+}
+
 func mustStruct(t *testing.T, values map[string]any) *structpb.Struct {
 	t.Helper()
 	value, err := structpb.NewStruct(values)

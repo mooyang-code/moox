@@ -27,6 +27,8 @@ const (
 	reportFailed       = 2
 	errorRetryable     = 1
 	errorPermanent     = 2
+	jobStatusSuccess   = 3
+	jobStatusFailed    = 4
 )
 
 type Config struct {
@@ -164,6 +166,15 @@ func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount
 		}, true)
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
+	if deliveryCount > 1 {
+		decision, terminal, err := terminalRedeliveryDecision(ctx, cfg, item)
+		if err != nil {
+			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: normalRetryDelay, Err: err}
+		}
+		if terminal {
+			return jetstream.HandlerResult{Decision: decision}
+		}
+	}
 	started := time.Now()
 	result, execErr := invokeHandler(ctx, item)
 	duration := time.Since(started)
@@ -208,6 +219,64 @@ func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount
 		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: normalRetryDelay, Err: reportErr}
 	}
 	return jetstream.HandlerResult{Decision: decision, Err: execErr}
+}
+
+func terminalRedeliveryDecision(
+	ctx context.Context,
+	cfg Config,
+	item JobItem,
+) (jetstream.HandlerDecision, bool, error) {
+	request := struct {
+		SpaceID   string `json:"space_id"`
+		JobItemID string `json:"job_item_id"`
+	}{SpaceID: cfg.SpaceID, JobItemID: item.JobItemID}
+	var response struct {
+		RetInfo *retInfo `json:"ret_info"`
+		Item    *struct {
+			Status json.RawMessage `json:"status"`
+		} `json:"item"`
+	}
+	if err := postService(ctx, cfg, "cloudnode", "GetJobItem", request, &response); err != nil {
+		return jetstream.RETRY, false, fmt.Errorf("get redelivered job item: %w", err)
+	}
+	if response.RetInfo == nil || response.RetInfo.Code != 0 || response.Item == nil {
+		message := ""
+		if response.RetInfo != nil {
+			message = response.RetInfo.Msg
+		}
+		return jetstream.RETRY, false, fmt.Errorf("get redelivered job item rejected: %s", message)
+	}
+	status, err := decodeJobItemStatus(response.Item.Status)
+	if err != nil {
+		return jetstream.RETRY, false, err
+	}
+	switch status {
+	case jobStatusSuccess:
+		return jetstream.ACK, true, nil
+	case jobStatusFailed:
+		return jetstream.TERM, true, nil
+	default:
+		return jetstream.RETRY, false, nil
+	}
+}
+
+func decodeJobItemStatus(raw json.RawMessage) (int, error) {
+	var numeric int
+	if err := json.Unmarshal(raw, &numeric); err == nil {
+		return numeric, nil
+	}
+	var name string
+	if err := json.Unmarshal(raw, &name); err != nil {
+		return 0, fmt.Errorf("decode job item status: %w", err)
+	}
+	switch name {
+	case "JOB_ITEM_STATUS_SUCCESS":
+		return jobStatusSuccess, nil
+	case "JOB_ITEM_STATUS_FAILED":
+		return jobStatusFailed, nil
+	default:
+		return 0, nil
+	}
 }
 
 func invokeHandler(ctx context.Context, item JobItem) (result Result, err error) {
