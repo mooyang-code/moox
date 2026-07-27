@@ -64,6 +64,7 @@ type collectorPublishOptions struct {
 	EventBusCredentialFile string
 	NodeCount              int
 	CreateBatchSize        int
+	DeployBatchSize        int
 	FunctionNamePrefix     string
 	CLSSecretID            string
 	CLSSecretKey           string
@@ -210,6 +211,7 @@ func init() {
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/cloudnode-worker.yaml", "0600 cloudnode-worker EventBus credential YAML")
 	collectorFunctionPublishCmd.Flags().IntVar(&collectorPublishFlags.NodeCount, "node-count", 50, "number of SCF nodes in the collector fleet")
 	collectorFunctionPublishCmd.Flags().IntVar(&collectorPublishFlags.CreateBatchSize, "create-batch-size", 5, "nodes submitted in each serial create batch")
+	collectorFunctionPublishCmd.Flags().IntVar(&collectorPublishFlags.DeployBatchSize, "deploy-batch-size", 1, "nodes submitted in each serial deploy batch")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.FunctionNamePrefix, "function-name-prefix", "moox-collector", "stable function name prefix used to identify the fleet")
 }
 
@@ -299,6 +301,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	}
 	if opts.CreateBatchSize <= 0 {
 		return collectorPublishSummary{}, fmt.Errorf("--create-batch-size must be a positive integer")
+	}
+	if opts.DeployBatchSize <= 0 {
+		return collectorPublishSummary{}, fmt.Errorf("--deploy-batch-size must be a positive integer")
 	}
 	if err := validateCollectorPublishAuth(opts); err != nil {
 		return collectorPublishSummary{}, err
@@ -415,6 +420,9 @@ func applyCollectorFleet(
 	if opts.CreateBatchSize <= 0 {
 		return summary, fmt.Errorf("create batch size must be positive")
 	}
+	if opts.DeployBatchSize <= 0 {
+		return summary, fmt.Errorf("deploy batch size must be positive")
+	}
 	if strings.TrimSpace(packageID) == "" {
 		return summary, fmt.Errorf("package id is required")
 	}
@@ -461,7 +469,6 @@ func applyCollectorFleet(
 	}
 
 	summary.FleetMode = "updated"
-	const deployBatchSize = 10
 	deployments := make([]adminclient.NodeDeployItem, len(fleetNodes))
 	for index, node := range fleetNodes {
 		deployments[index] = adminclient.NodeDeployItem{
@@ -471,8 +478,8 @@ func applyCollectorFleet(
 			Environment: cloneCollectorStringMap(createItems[index].Environment),
 		}
 	}
-	for start := 0; start < len(deployments); start += deployBatchSize {
-		end := min(start+deployBatchSize, len(deployments))
+	for start := 0; start < len(deployments); start += opts.DeployBatchSize {
+		end := min(start+opts.DeployBatchSize, len(deployments))
 		resp, err := api.BatchDeployNodes(ctx, deployments[start:end])
 		if err != nil {
 			return summary, err

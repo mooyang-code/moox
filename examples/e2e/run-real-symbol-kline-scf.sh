@@ -148,6 +148,7 @@ publish_fleet() {
     --function-name-prefix "${FLEET_PREFIX}"
     --node-count "${SCF_COUNT}"
     --create-batch-size 5
+    --deploy-batch-size 1
     --collector-root "${ROOT}/modules/collector"
   )
   if [[ -n "${ZIP_PATH}" ]]; then

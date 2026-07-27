@@ -41,6 +41,7 @@ export MOOX_ACCESS_TOKEN="test-access-token"
 
 grep -q -- '--node-count 50' "${CALL_LOG}" || fail "default SCF count was not 50"
 grep -q -- '--create-batch-size 5' "${CALL_LOG}" || fail "create batch size was not 5"
+grep -q -- '--deploy-batch-size 1' "${CALL_LOG}" || fail "deploy batch size was not 1"
 grep -q -- '--function-name-prefix e2e-collector' "${CALL_LOG}" || fail "fleet prefix missing"
 grep -q -- '--control-url https://service.example.test' "${CALL_LOG}" || fail "service control URL missing"
 grep -Eq -- '--symbol-rule e2e_symbols_[0-9]{8}t[0-9]{6}z' "${CALL_LOG}" ||

@@ -394,6 +394,7 @@ func TestApplyCollectorFleetCreatesInSerialBatches(t *testing.T) {
 		FunctionNamePrefix: "fleet",
 		NodeCount:          50,
 		CreateBatchSize:    5,
+		DeployBatchSize:    1,
 	}, "pkg-new", items)
 	require.NoError(t, err)
 	assert.Equal(t, "created", summary.FleetMode)
@@ -429,12 +430,13 @@ func TestApplyCollectorFleetDeploysNewPackageToExistingFleet(t *testing.T) {
 		FunctionNamePrefix: "fleet",
 		NodeCount:          50,
 		CreateBatchSize:    5,
+		DeployBatchSize:    1,
 	}, "pkg-new", createItems)
 	require.NoError(t, err)
 	assert.Equal(t, "updated", summary.FleetMode)
 	assert.Empty(t, api.createCalls)
-	assert.Len(t, api.deployCalls, 5)
-	assert.Len(t, summary.DeployBatchIDs, 5)
+	assert.Len(t, api.deployCalls, 50)
+	assert.Len(t, summary.DeployBatchIDs, 50)
 	assert.Equal(t, 50, summary.DeployProcessedCount)
 	for _, batch := range api.deployCalls {
 		for _, item := range batch {
@@ -455,6 +457,7 @@ func TestApplyCollectorFleetRejectsPartialWithoutMutation(t *testing.T) {
 		FunctionNamePrefix: "fleet",
 		NodeCount:          50,
 		CreateBatchSize:    5,
+		DeployBatchSize:    1,
 	}, "pkg-new", make([]adminclient.NodeCreateItem, 50))
 	require.ErrorContains(t, err, `fleet prefix "fleet" has 1 nodes`)
 	assert.Empty(t, api.createCalls)
@@ -467,6 +470,7 @@ func TestApplyCollectorFleetRejectsShortDesiredItemsForExistingFleet(t *testing.
 		FunctionNamePrefix: "fleet",
 		NodeCount:          50,
 		CreateBatchSize:    5,
+		DeployBatchSize:    1,
 	}, "pkg-new", make([]adminclient.NodeCreateItem, 49))
 	require.ErrorContains(t, err, "create item count=49")
 	assert.Empty(t, api.createCalls)
