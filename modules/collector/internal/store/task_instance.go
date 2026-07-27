@@ -12,6 +12,9 @@ import (
 const (
 	defaultPageSize = 50
 	maxPageSize     = 1000
+	// Four 20-second attempts plus retry/action overhead fit inside two minutes.
+	// After that, a missing terminal callback must not fence future schedules forever.
+	pendingRecoveryGrace = 2 * time.Minute
 )
 
 // TaskInstanceFilter describes task instance list filters.
@@ -81,7 +84,7 @@ func (r *TaskInstanceRepository) ReserveMany(
 	reserved := make([]domain.TaskInstance, 0, len(instances))
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for i := range instances {
-			result := tx.Clauses(clause.OnConflict{
+			upsert := clause.OnConflict{
 				Columns: []clause.Column{
 					{Name: "c_space_id"},
 					{Name: "c_task_id"},
@@ -120,7 +123,8 @@ func (r *TaskInstanceRepository) ReserveMany(
 						domain.InstanceStatusFailed,
 					},
 				}}},
-			}).Create(&instances[i])
+			}
+			result := tx.Clauses(upsert).Create(&instances[i])
 			if result.Error != nil {
 				return result.Error
 			}
@@ -141,6 +145,34 @@ func (r *TaskInstanceRepository) ReserveMany(
 				return err
 			}
 			if current.LastExecStatus == domain.InstanceStatusPending {
+				if pendingReservationExpired(current, now) {
+					marked := tx.Model(&domain.TaskInstance{}).
+						Where(
+							"c_space_id = ? AND c_task_id = ? AND c_cloud_job_item_id = ? AND c_last_exec_status = ?",
+							current.SpaceID,
+							current.TaskID,
+							current.CloudJobItemID,
+							domain.InstanceStatusPending,
+						).
+						Updates(map[string]any{
+							"c_last_exec_status": domain.InstanceStatusFailed,
+							"c_result":           `{"error":"pending callback timeout"}`,
+							"c_mtime":            now,
+						})
+					if marked.Error != nil {
+						return marked.Error
+					}
+					if marked.RowsAffected > 0 {
+						retry := tx.Clauses(upsert).Create(&instances[i])
+						if retry.Error != nil {
+							return retry.Error
+						}
+						if retry.RowsAffected > 0 {
+							reserved = append(reserved, instances[i])
+							continue
+						}
+					}
+				}
 				current.ExecuteAt = scheduledExecuteAt(current.CloudJobItemID)
 				reserved = append(reserved, current)
 			}
@@ -148,6 +180,14 @@ func (r *TaskInstanceRepository) ReserveMany(
 		return nil
 	})
 	return reserved, err
+}
+
+func pendingReservationExpired(current domain.TaskInstance, now time.Time) bool {
+	reference := scheduledExecuteAt(current.CloudJobItemID)
+	if reference.IsZero() {
+		reference = current.ModifyTime
+	}
+	return !reference.IsZero() && !now.Before(reference.Add(pendingRecoveryGrace))
 }
 
 func scheduledExecuteAt(jobItemID string) time.Time {

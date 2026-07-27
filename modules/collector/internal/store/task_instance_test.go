@@ -153,15 +153,16 @@ func TestTaskInstanceRepository_UpsertManyUpdatesCloudJobItemID(t *testing.T) {
 	assert.JSONEq(t, `{"state":"current"}`, instances[0].Result)
 }
 
-func TestTaskInstanceRepository_ReserveManyDoesNotReplacePendingJob(t *testing.T) {
+func TestTaskInstanceRepository_ReserveManyReturnsCurrentPendingJob(t *testing.T) {
 	s := newCollectorStore(t)
 	repo := s.TaskInstances()
 	ctx := context.Background()
 
+	currentExecuteAt := time.Now().UTC().Add(time.Minute).Truncate(time.Second)
 	current := domain.TaskInstance{
 		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1",
 		Exchange: "binance", Market: "spot", DataType: "kline",
-		TaskParams: `{}`, CloudJobItemID: "task-1:2026-07-26T10:30:00Z",
+		TaskParams: `{}`, CloudJobItemID: "task-1:" + currentExecuteAt.Format(time.RFC3339),
 		LastExecStatus: domain.InstanceStatusPending,
 	}
 	reserved, err := repo.ReserveMany(ctx, []domain.TaskInstance{current})
@@ -169,12 +170,12 @@ func TestTaskInstanceRepository_ReserveManyDoesNotReplacePendingJob(t *testing.T
 	require.Len(t, reserved, 1)
 
 	next := current
-	next.CloudJobItemID = "task-1:2026-07-26T11:00:00Z"
+	next.CloudJobItemID = "task-1:" + currentExecuteAt.Add(30*time.Minute).Format(time.RFC3339)
 	reserved, err = repo.ReserveMany(ctx, []domain.TaskInstance{next})
 	require.NoError(t, err)
 	require.Len(t, reserved, 1)
 	assert.Equal(t, current.CloudJobItemID, reserved[0].CloudJobItemID)
-	assert.Equal(t, time.Date(2026, 7, 26, 10, 30, 0, 0, time.UTC), reserved[0].ExecuteAt)
+	assert.Equal(t, currentExecuteAt, reserved[0].ExecuteAt)
 
 	instances, _, err := repo.List(ctx, TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
 	require.NoError(t, err)
@@ -197,6 +198,36 @@ func TestTaskInstanceRepository_ReserveManyDoesNotReplacePendingJob(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, reserved, 1)
 	assert.Equal(t, next.CloudJobItemID, reserved[0].CloudJobItemID)
+}
+
+func TestTaskInstanceRepository_ReserveManyRecoversStalePendingJob(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.TaskInstances()
+	ctx := context.Background()
+
+	staleExecuteAt := time.Now().UTC().Add(-pendingRecoveryGrace - time.Minute).Truncate(time.Second)
+	stale := domain.TaskInstance{
+		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1",
+		Exchange: "binance", Market: "spot", DataType: "kline",
+		TaskParams: `{}`, CloudJobItemID: "task-1:" + staleExecuteAt.Format(time.RFC3339),
+		LastExecStatus: domain.InstanceStatusPending,
+	}
+	reserved, err := repo.ReserveMany(ctx, []domain.TaskInstance{stale})
+	require.NoError(t, err)
+	require.Len(t, reserved, 1)
+
+	next := stale
+	next.CloudJobItemID = "task-1:" + time.Now().UTC().Add(time.Minute).Truncate(time.Second).Format(time.RFC3339)
+	reserved, err = repo.ReserveMany(ctx, []domain.TaskInstance{next})
+	require.NoError(t, err)
+	require.Len(t, reserved, 1)
+	assert.Equal(t, next.CloudJobItemID, reserved[0].CloudJobItemID)
+
+	instances, _, err := repo.List(ctx, TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, next.CloudJobItemID, instances[0].CloudJobItemID)
+	assert.Equal(t, domain.InstanceStatusPending, instances[0].LastExecStatus)
 }
 
 func TestTaskInstanceRepository_NormalizeHelpers(t *testing.T) {
