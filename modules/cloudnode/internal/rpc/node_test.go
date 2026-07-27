@@ -424,6 +424,16 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 		Deployments: []*pb.NodeDeployItem{{
 			NodeId:    "node-a",
 			PackageId: "moox-collector_dev",
+			Environment: map[string]string{
+				"MOOX_EVENTBUS_NATS_PASSWORD": "rotated-worker-token",
+				"MOOX_SPACE_ID":               "crypto",
+			},
+			Config: map[string]string{
+				"memory_size":   "512",
+				"timeout":       "90",
+				"cls_logset_id": "logset-new",
+				"cls_topic_id":  "topic-new",
+			},
 		}},
 	})
 	if err != nil {
@@ -448,11 +458,17 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	if fake.getCalls != 3 {
 		t.Fatalf("GetFunction calls = %d, want initial and one after each update", fake.getCalls)
 	}
-	if got := fake.configured[0].Environment["MOOX_EVENTBUS_NATS_PASSWORD"]; got != "worker-token" {
-		t.Fatalf("worker credential changed = %q", got)
+	if got := fake.configured[0].Environment["MOOX_EVENTBUS_NATS_PASSWORD"]; got != "rotated-worker-token" {
+		t.Fatalf("worker credential = %q", got)
 	}
 	if got := fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"]; got != "moox-collector_dev" {
 		t.Fatalf("package id env = %q", got)
+	}
+	if fake.configured[0].MemorySize != 512 ||
+		fake.configured[0].Timeout != 90 ||
+		fake.configured[0].ClsLogsetID != "logset-new" ||
+		fake.configured[0].ClsTopicID != "topic-new" {
+		t.Fatalf("desired function config = %#v", fake.configured[0])
 	}
 	if update.Handler != "main" {
 		t.Fatalf("handler = %q", update.Handler)

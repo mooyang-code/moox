@@ -177,7 +177,13 @@ func (s *Service) BatchDeployNodes(ctx context.Context, req *pb.BatchDeployNodes
 		if pkg == nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "package not found")}, nil
 		}
-		if err := s.updateSCFFunctionCode(ctx, *node, *pkg); err != nil {
+		if err := s.updateSCFFunctionCode(
+			ctx,
+			*node,
+			*pkg,
+			item.GetEnvironment(),
+			item.GetConfig(),
+		); err != nil {
 			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 		}
 		if err := s.catalog.UpdateNodeDeployment(ctx, spaceID, item.GetNodeId(), item.GetPackageId(), pkg.Version); err != nil {
@@ -344,7 +350,13 @@ func mergeSCFFunctionMetadata(node *store.CloudNode, info *tencentscf.FunctionIn
 	}
 }
 
-func (s *Service) updateSCFFunctionCode(ctx context.Context, node store.CloudNode, pkg store.FunctionPackage) error {
+func (s *Service) updateSCFFunctionCode(
+	ctx context.Context,
+	node store.CloudNode,
+	pkg store.FunctionPackage,
+	desiredEnvironment map[string]string,
+	desiredConfig map[string]string,
+) error {
 	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 	if err != nil {
 		return err
@@ -386,14 +398,21 @@ func (s *Service) updateSCFFunctionCode(ctx context.Context, node store.CloudNod
 	if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
 		return err
 	}
-	environment := copyStringMap(info.Environment)
-	if environment == nil {
-		environment = make(map[string]string)
+	environment := copyStringMap(desiredEnvironment)
+	if len(environment) == 0 {
+		environment = copyStringMap(info.Environment)
+		if environment == nil {
+			environment = make(map[string]string)
+		}
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
 		FunctionRef: ref,
 		Environment: environment,
+		MemorySize:  configInt64(desiredConfig, "memory_size", 0),
+		Timeout:     configInt64(desiredConfig, "timeout", 0),
+		ClsLogsetID: strings.TrimSpace(desiredConfig["cls_logset_id"]),
+		ClsTopicID:  strings.TrimSpace(desiredConfig["cls_topic_id"]),
 	}); err != nil {
 		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
 	}

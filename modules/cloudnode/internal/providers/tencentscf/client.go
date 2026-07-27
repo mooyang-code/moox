@@ -79,6 +79,10 @@ type UpdateFunctionCodeResponse struct {
 type UpdateFunctionConfigurationRequest struct {
 	FunctionRef
 	Environment map[string]string
+	MemorySize  int64
+	Timeout     int64
+	ClsLogsetID string
+	ClsTopicID  string
 }
 
 type UpdateFunctionConfigurationResponse struct {
@@ -159,6 +163,18 @@ func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunc
 	request.FunctionName = common.StringPtr(req.FunctionName)
 	request.Namespace = common.StringPtr(req.Namespace)
 	request.Environment = &scf.Environment{Variables: environmentVariables(req.Environment)}
+	if req.MemorySize > 0 {
+		request.MemorySize = common.Int64Ptr(req.MemorySize)
+	}
+	if req.Timeout > 0 {
+		request.Timeout = common.Int64Ptr(req.Timeout)
+	}
+	if req.ClsLogsetID != "" {
+		request.ClsLogsetId = common.StringPtr(req.ClsLogsetID)
+	}
+	if req.ClsTopicID != "" {
+		request.ClsTopicId = common.StringPtr(req.ClsTopicID)
+	}
 	response, err := scfClient.UpdateFunctionConfigurationWithContext(ctx, request)
 	if err != nil {
 		return nil, err

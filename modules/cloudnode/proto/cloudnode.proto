@@ -190,6 +190,8 @@ message BatchDeleteNodesReq {
 message NodeDeployItem {
   string node_id = 1;
   string package_id = 2;
+  map<string, string> config = 3;
+  map<string, string> environment = 4;
 }
 
 message BatchDeployNodesReq {

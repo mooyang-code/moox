@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,31 @@ func setCollectorCLSTestCredentials(t *testing.T) {
 	if os.Getenv("MOOX_CLS_SECRET_KEY") == "" && os.Getenv("TENCENTCLOUD_SECRET_KEY") == "" {
 		t.Setenv("TENCENTCLOUD_SECRET_KEY", "test-cls-key")
 	}
+}
+
+func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
+	t.Helper()
+	setCollectorCLSTestCredentials(t)
+	t.Setenv("MOOX_CLS_HOST", "ap-guangzhou.cls.tencentyun.com")
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-e2e")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
+	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "collector-secret")
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(server.Close)
+	gatewayCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	dir := t.TempDir()
+	gatewayCAFile := filepath.Join(dir, "gateway-ca.pem")
+	require.NoError(t, os.WriteFile(gatewayCAFile, gatewayCA, 0o600))
+	t.Setenv("MOOX_GATEWAY_CA_FILE", gatewayCAFile)
+
+	eventBusCAFile := filepath.Join(dir, "eventbus-ca.pem")
+	require.NoError(t, os.WriteFile(eventBusCAFile, []byte("eventbus-ca"), 0o600))
+	credentialFile := filepath.Join(dir, "eventbus.yaml")
+	require.NoError(t, os.WriteFile(credentialFile, []byte(
+		"version: 1\nurls: [tls://203.0.113.10:4222]\nusername: worker\npassword: worker-secret\nca_file: eventbus-ca.pem\n",
+	), 0o600))
+	return credentialFile
 }
 
 func TestCollectorFunctionEnvironmentEmbedsCAFileMaterial(t *testing.T) {
@@ -157,7 +183,7 @@ func (collectorCLSAPI) CreateIndex(context.Context, string) (string, error) {
 
 func TestResolveCollectorCLSResourcesUsesTencentCloudAPI(t *testing.T) {
 	original := newCollectorCLSAPI
-	newCollectorCLSAPI = func() (tencent.CLSAPI, error) { return collectorCLSAPI{}, nil }
+	newCollectorCLSAPI = func(string, string) (tencent.CLSAPI, error) { return collectorCLSAPI{}, nil }
 	t.Cleanup(func() { newCollectorCLSAPI = original })
 
 	resources, err := resolveCollectorCLSResources(context.Background())
@@ -225,6 +251,220 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 		t.Fatalf("supported_workloads = %#v", workloads)
 	}
 	assert.Equal(t, "collect.binance.kline,collect.binance.symbol", item.Environment["MOOX_COLLECTOR_JOB_TYPES"])
+}
+
+func TestBuildCollectorFleetCreateItemsAreUniqueAndDeepCloned(t *testing.T) {
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	items, err := buildCollectorFleetCreateItems(collectorPublishOptions{
+		CloudAccountID:         "account-a",
+		SpaceID:                "crypto",
+		Region:                 "ap-guangzhou",
+		FunctionNamePrefix:     "e2e-collector",
+		NodeCount:              50,
+		EventBusCredentialFile: credentialFile,
+	}, "pkg-new")
+	require.NoError(t, err)
+	require.Len(t, items, 50)
+
+	seen := make(map[any]struct{}, len(items))
+	for index, item := range items {
+		assert.Equal(t, "e2e-collector", item.Metadata["function_name_prefix"])
+		assert.Equal(t, index, item.Metadata["index"])
+		assert.Equal(t, "pkg-new", item.PackageID)
+		_, duplicate := seen[item.Metadata["index"]]
+		assert.False(t, duplicate)
+		seen[item.Metadata["index"]] = struct{}{}
+	}
+
+	items[0].Metadata["sentinel"] = true
+	items[0].Environment["MOOX_TEST_ONLY"] = "changed"
+	items[0].Config["timeout"] = "999"
+	assert.NotContains(t, items[1].Metadata, "sentinel")
+	assert.NotContains(t, items[1].Environment, "MOOX_TEST_ONLY")
+	assert.Equal(t, defaultCollectorSCFTimeout, items[1].Config["timeout"])
+}
+
+func TestBuildCollectorFleetCreateItemsRequiresCompleteRuntimeEnvironment(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	t.Setenv("MOOX_CLS_HOST", "ap-guangzhou.cls.tencentyun.com")
+	_, err := buildCollectorFleetCreateItems(collectorPublishOptions{
+		SpaceID:   "crypto",
+		NodeCount: 50,
+	}, "pkg-new")
+	require.ErrorContains(t, err, "collector fleet runtime environment requires")
+}
+
+func TestSelectCollectorFleetNodesRejectsPartialFleet(t *testing.T) {
+	nodes := []adminclient.CloudNode{
+		{NodeID: "fleet-0", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}},
+		{NodeID: "other-0", Metadata: map[string]any{"function_name_prefix": "other", "index": float64(0)}},
+	}
+	_, err := selectCollectorFleetNodes(nodes, "fleet", 50)
+	require.ErrorContains(t, err, `fleet prefix "fleet" has 1 nodes; expected either 0 or 50`)
+}
+
+func TestSelectCollectorFleetNodesRequiresUniqueCompleteIndexes(t *testing.T) {
+	nodes := make([]adminclient.CloudNode, 50)
+	for index := range nodes {
+		nodes[index] = adminclient.CloudNode{
+			NodeID:   fmt.Sprintf("fleet-%d", index),
+			Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(index)},
+		}
+	}
+	selected, err := selectCollectorFleetNodes(nodes, "fleet", 50)
+	require.NoError(t, err)
+	require.Len(t, selected, 50)
+
+	nodes[49].Metadata["index"] = float64(48)
+	_, err = selectCollectorFleetNodes(nodes, "fleet", 50)
+	require.ErrorContains(t, err, "duplicate fleet index")
+}
+
+func TestSelectCollectorFleetNodesSurvivesHeartbeatMetadataReplacement(t *testing.T) {
+	nodes := make([]adminclient.CloudNode, 50)
+	for index := range nodes {
+		nodes[index] = adminclient.CloudNode{
+			NodeID:       fmt.Sprintf("fleet-ap-guangzhou-%d", index),
+			FunctionName: fmt.Sprintf("fleet-ap-guangzhou-%d", index),
+			Region:       "ap-guangzhou",
+			Metadata:     map[string]any{"arch": "amd64", "version": "runtime"},
+		}
+	}
+	selected, err := selectCollectorFleetNodes(nodes, "fleet", 50)
+	require.NoError(t, err)
+	require.Len(t, selected, 50)
+	assert.Equal(t, "fleet-ap-guangzhou-49", selected[49].NodeID)
+}
+
+type fakeCollectorFleetAPI struct {
+	nodes       []adminclient.CloudNode
+	createCalls [][]adminclient.NodeCreateItem
+	deployCalls [][]adminclient.NodeDeployItem
+}
+
+func (f *fakeCollectorFleetAPI) ListCloudNodes(context.Context, adminclient.CloudNodeListFilter) ([]adminclient.CloudNode, error) {
+	return append([]adminclient.CloudNode(nil), f.nodes...), nil
+}
+
+func (f *fakeCollectorFleetAPI) BatchCreateNodes(_ context.Context, items []adminclient.NodeCreateItem) (*adminclient.BatchChangeResponse, error) {
+	f.createCalls = append(f.createCalls, append([]adminclient.NodeCreateItem(nil), items...))
+	return &adminclient.BatchChangeResponse{
+		BatchID:        fmt.Sprintf("create-%d", len(f.createCalls)),
+		ProcessedCount: len(items),
+	}, nil
+}
+
+func (f *fakeCollectorFleetAPI) BatchDeployNodes(_ context.Context, items []adminclient.NodeDeployItem) (*adminclient.BatchChangeResponse, error) {
+	f.deployCalls = append(f.deployCalls, append([]adminclient.NodeDeployItem(nil), items...))
+	return &adminclient.BatchChangeResponse{
+		BatchID:        fmt.Sprintf("deploy-%d", len(f.deployCalls)),
+		ProcessedCount: len(items),
+	}, nil
+}
+
+func TestApplyCollectorFleetCreatesInSerialBatches(t *testing.T) {
+	items := make([]adminclient.NodeCreateItem, 50)
+	for index := range items {
+		items[index] = adminclient.NodeCreateItem{
+			PackageID: "pkg-new",
+			Metadata:  map[string]any{"function_name_prefix": "fleet", "index": index},
+		}
+	}
+	api := &fakeCollectorFleetAPI{}
+	summary, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
+		CloudAccountID:     "account-a",
+		Region:             "ap-guangzhou",
+		NodeType:           "scf-event",
+		BizType:            "data_collector",
+		FunctionNamePrefix: "fleet",
+		NodeCount:          50,
+		CreateBatchSize:    5,
+	}, "pkg-new", items)
+	require.NoError(t, err)
+	assert.Equal(t, "created", summary.FleetMode)
+	assert.Len(t, api.createCalls, 10)
+	assert.Empty(t, api.deployCalls)
+	assert.Len(t, summary.CreateBatchIDs, 10)
+	assert.Equal(t, 50, summary.CreateProcessedCount)
+}
+
+func TestApplyCollectorFleetDeploysNewPackageToExistingFleet(t *testing.T) {
+	nodes := make([]adminclient.CloudNode, 50)
+	for index := range nodes {
+		nodes[index] = adminclient.CloudNode{
+			NodeID:    fmt.Sprintf("fleet-%d", index),
+			PackageID: "pkg-old",
+			Metadata:  map[string]any{"function_name_prefix": "fleet", "index": float64(index)},
+		}
+	}
+	api := &fakeCollectorFleetAPI{nodes: nodes}
+	createItems := make([]adminclient.NodeCreateItem, 50)
+	for index := range createItems {
+		createItems[index] = adminclient.NodeCreateItem{
+			Config:      map[string]string{"timeout": "120", "cls_topic_id": "topic-new"},
+			Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "pkg-new", "MOOX_SPACE_ID": "crypto"},
+		}
+	}
+	summary, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
+		CloudAccountID:     "account-a",
+		Region:             "ap-guangzhou",
+		NodeType:           "scf-event",
+		BizType:            "data_collector",
+		FunctionNamePrefix: "fleet",
+		NodeCount:          50,
+		CreateBatchSize:    5,
+	}, "pkg-new", createItems)
+	require.NoError(t, err)
+	assert.Equal(t, "updated", summary.FleetMode)
+	assert.Empty(t, api.createCalls)
+	assert.Len(t, api.deployCalls, 5)
+	assert.Len(t, summary.DeployBatchIDs, 5)
+	assert.Equal(t, 50, summary.DeployProcessedCount)
+	for _, batch := range api.deployCalls {
+		for _, item := range batch {
+			assert.Equal(t, "pkg-new", item.PackageID)
+			assert.Equal(t, createItems[0].Config, item.Config)
+			assert.Equal(t, createItems[0].Environment, item.Environment)
+		}
+	}
+}
+
+func TestApplyCollectorFleetRejectsPartialWithoutMutation(t *testing.T) {
+	api := &fakeCollectorFleetAPI{nodes: []adminclient.CloudNode{{
+		NodeID:   "fleet-0",
+		Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)},
+	}}}
+	_, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
+		FunctionNamePrefix: "fleet",
+		NodeCount:          50,
+		CreateBatchSize:    5,
+	}, "pkg-new", make([]adminclient.NodeCreateItem, 50))
+	require.ErrorContains(t, err, `fleet prefix "fleet" has 1 nodes`)
+	assert.Empty(t, api.createCalls)
+	assert.Empty(t, api.deployCalls)
+}
+
+func TestApplyCollectorFleetRejectsShortDesiredItemsForExistingFleet(t *testing.T) {
+	api := &fakeCollectorFleetAPI{}
+	_, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
+		FunctionNamePrefix: "fleet",
+		NodeCount:          50,
+		CreateBatchSize:    5,
+	}, "pkg-new", make([]adminclient.NodeCreateItem, 49))
+	require.ErrorContains(t, err, "create item count=49")
+	assert.Empty(t, api.createCalls)
+	assert.Empty(t, api.deployCalls)
+}
+
+func TestCollectorCLSCredentialsPreferDedicatedRuntimeIdentity(t *testing.T) {
+	t.Setenv("MOOX_CLS_SECRET_ID", "dedicated-id")
+	t.Setenv("MOOX_CLS_SECRET_KEY", "dedicated-key")
+	t.Setenv("TENCENTCLOUD_SECRET_ID", "control-id")
+	t.Setenv("TENCENTCLOUD_SECRET_KEY", "control-key")
+
+	secretID, secretKey := collectorCLSCredentials()
+	assert.Equal(t, "dedicated-id", secretID)
+	assert.Equal(t, "dedicated-key", secretKey)
 }
 
 func TestBuildCollectorCreateNodeItemNormalizesJobTypesAndKeepsMetadataEnvironmentInSync(t *testing.T) {
@@ -359,4 +599,18 @@ func TestResolveCollectorRootMissing(t *testing.T) {
 	_, err := resolveCollectorRoot("/nonexistent/path")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "collector root not found")
+}
+
+func TestValidateCollectorPublishAuth(t *testing.T) {
+	t.Setenv("MOOX_ACCESS_TOKEN", "")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "")
+
+	require.ErrorContains(t, validateCollectorPublishAuth(collectorPublishOptions{}), "control authentication")
+	require.NoError(t, validateCollectorPublishAuth(collectorPublishOptions{AccessToken: "token"}))
+	require.Error(t, validateCollectorPublishAuth(collectorPublishOptions{ServiceAccessKey: "key"}))
+	require.NoError(t, validateCollectorPublishAuth(collectorPublishOptions{
+		ServiceAccessKey: "key",
+		ServiceSecretKey: "secret",
+	}))
 }

@@ -68,13 +68,71 @@ type NodeCreateItem struct {
 }
 
 type NodeDeployItem struct {
-	NodeID    string `json:"node_id"`
-	PackageID string `json:"package_id"`
+	NodeID      string            `json:"node_id"`
+	PackageID   string            `json:"package_id"`
+	Config      map[string]string `json:"config,omitempty"`
+	Environment map[string]string `json:"environment,omitempty"`
+}
+
+type CloudNode struct {
+	NodeID         string         `json:"node_id"`
+	CloudAccountID string         `json:"cloud_account_id"`
+	PackageID      string         `json:"package_id"`
+	Region         string         `json:"region"`
+	NodeType       string         `json:"node_type"`
+	BizType        string         `json:"biz_type"`
+	FunctionName   string         `json:"function_name"`
+	Metadata       map[string]any `json:"metadata"`
+	Status         any            `json:"status"`
+	LastHeartbeat  string         `json:"last_heartbeat"`
+	IsDeleted      bool           `json:"is_deleted"`
+}
+
+type CloudNodeListFilter struct {
+	CloudAccountID string
+	Region         string
+	NodeType       string
+	BizType        string
 }
 
 type BatchChangeResponse struct {
 	BatchID        string
 	ProcessedCount int
+}
+
+// ListCloudNodes returns every catalog node matching the server-side fleet filters.
+func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter) ([]CloudNode, error) {
+	const pageSize = 500
+	var nodes []CloudNode
+	for page := 1; ; page++ {
+		raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeList", map[string]any{
+			"cloud_account_id": filter.CloudAccountID,
+			"region":           filter.Region,
+			"node_type":        filter.NodeType,
+			"biz_type":         filter.BizType,
+			"page":             map[string]int{"page": page, "size": pageSize},
+		})
+		if err != nil {
+			return nil, err
+		}
+		var resp struct {
+			RetInfo *retInfo    `json:"ret_info"`
+			Items   []CloudNode `json:"items"`
+			Page    struct {
+				HasMore bool `json:"has_more"`
+			} `json:"page"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return nil, err
+		}
+		if resp.RetInfo == nil || !isRetInfoSuccess(resp.RetInfo.Code) {
+			return nil, fmt.Errorf("GetNodeList rejected")
+		}
+		nodes = append(nodes, resp.Items...)
+		if !resp.Page.HasMore {
+			return nodes, nil
+		}
+	}
 }
 
 // ListCloudAccounts 调 cloudnode/ListCloudAccounts，返回脱敏账户列表。

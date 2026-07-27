@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +62,9 @@ type collectorPublishOptions struct {
 	Env                    []string
 	Config                 []string
 	EventBusCredentialFile string
+	NodeCount              int
+	CreateBatchSize        int
+	FunctionNamePrefix     string
 	CLSSecretID            string
 	CLSSecretKey           string
 }
@@ -143,12 +147,26 @@ var collectorFunctionPublishCmd = &cobra.Command{
 }
 
 type collectorPublishSummary struct {
+	ZipPath              string   `json:"zip_path"`
+	PackageID            string   `json:"package_id"`
+	FleetMode            string   `json:"fleet_mode"`
+	CreateBatchIDs       []string `json:"create_batch_ids,omitempty"`
+	DeployBatchIDs       []string `json:"deploy_batch_ids,omitempty"`
+	CreateProcessedCount int      `json:"create_processed_count,omitempty"`
+	DeployProcessedCount int      `json:"deploy_processed_count,omitempty"`
+}
+
+type collectorDeploySummary struct {
 	ZipPath              string `json:"zip_path"`
-	PackageID            string `json:"package_id,omitempty"`
-	CreateBatchID        string `json:"create_batch_id,omitempty"`
-	DeployBatchID        string `json:"deploy_batch_id,omitempty"`
-	CreateProcessedCount int    `json:"create_processed_count,omitempty"`
-	DeployProcessedCount int    `json:"deploy_processed_count,omitempty"`
+	PackageID            string `json:"package_id"`
+	DeployBatchID        string `json:"deploy_batch_id"`
+	DeployProcessedCount int    `json:"deploy_processed_count"`
+}
+
+type collectorFleetAPI interface {
+	ListCloudNodes(context.Context, adminclient.CloudNodeListFilter) ([]adminclient.CloudNode, error)
+	BatchCreateNodes(context.Context, []adminclient.NodeCreateItem) (*adminclient.BatchChangeResponse, error)
+	BatchDeployNodes(context.Context, []adminclient.NodeDeployItem) (*adminclient.BatchChangeResponse, error)
 }
 
 func init() {
@@ -190,6 +208,9 @@ func init() {
 	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
 	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/cloudnode-worker.yaml", "0600 cloudnode-worker EventBus credential YAML")
+	collectorFunctionPublishCmd.Flags().IntVar(&collectorPublishFlags.NodeCount, "node-count", 50, "number of SCF nodes in the collector fleet")
+	collectorFunctionPublishCmd.Flags().IntVar(&collectorPublishFlags.CreateBatchSize, "create-batch-size", 5, "nodes submitted in each serial create batch")
+	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.FunctionNamePrefix, "function-name-prefix", "moox-collector", "stable function name prefix used to identify the fleet")
 }
 
 func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions) {
@@ -242,16 +263,17 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 	})
 }
 
-var newCollectorCLSAPI = func() (tencent.CLSAPI, error) {
+var newCollectorCLSAPI = func(secretID, secretKey string) (tencent.CLSAPI, error) {
 	return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
-		SecretID:  firstNonEmpty(os.Getenv("TENCENTCLOUD_SECRET_ID"), os.Getenv("MOOX_CLS_SECRET_ID")),
-		SecretKey: firstNonEmpty(os.Getenv("TENCENTCLOUD_SECRET_KEY"), os.Getenv("MOOX_CLS_SECRET_KEY")),
+		SecretID:  secretID,
+		SecretKey: secretKey,
 		Region:    clsprepare.Region,
 	})
 }
 
 func resolveCollectorCLSResources(ctx context.Context) (tencent.CLSBootstrapResult, error) {
-	api, err := newCollectorCLSAPI()
+	secretID, secretKey := collectorCLSCredentials()
+	api, err := newCollectorCLSAPI(secretID, secretKey)
 	if err != nil {
 		return tencent.CLSBootstrapResult{}, fmt.Errorf("create CLS client for collector package: %w", err)
 	}
@@ -272,27 +294,36 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.Region == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--region is required")
 	}
+	if opts.NodeCount <= 0 {
+		return collectorPublishSummary{}, fmt.Errorf("--node-count must be a positive integer")
+	}
+	if opts.CreateBatchSize <= 0 {
+		return collectorPublishSummary{}, fmt.Errorf("--create-batch-size must be a positive integer")
+	}
+	if err := validateCollectorPublishAuth(opts); err != nil {
+		return collectorPublishSummary{}, err
+	}
+	opts.FunctionNamePrefix = defaultFlag(opts.FunctionNamePrefix, defaultFlag(opts.PackageName, "moox-collector"))
+	if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
+		return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before control-plane access: %w", err)
+	}
 	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
 	accounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
-	var credentialSecretID string
+	accountFound := false
 	for _, account := range accounts {
 		if account.AccountID == opts.CloudAccountID {
-			credentialSecretID = account.CredentialSecretID
+			accountFound = true
 			break
 		}
 	}
-	if credentialSecretID == "" {
-		return collectorPublishSummary{}, fmt.Errorf("Tencent cloud account %q not found or has no credential reference", opts.CloudAccountID)
+	if !accountFound {
+		return collectorPublishSummary{}, fmt.Errorf("Tencent cloud account %q not found", opts.CloudAccountID)
 	}
-	secret, err := client.RevealSecret(ctx, credentialSecretID)
-	if err != nil {
-		return collectorPublishSummary{}, err
-	}
-	opts.CLSSecretID, opts.CLSSecretKey = secret.KeyID, secret.SecretValue
-	clsAPI, err := tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{SecretID: secret.KeyID, SecretKey: secret.SecretValue, Region: clsprepare.Region})
+	opts.CLSSecretID, opts.CLSSecretKey = collectorCLSCredentials()
+	clsAPI, err := newCollectorCLSAPI(opts.CLSSecretID, opts.CLSSecretKey)
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
@@ -312,6 +343,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	}
 	if err := collectorpackager.ValidateSCFPackageCLSTopic(zipPath, opts.CLSTopicID); err != nil {
 		return collectorPublishSummary{}, err
+	}
+	if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
+		return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before package upload: %w", err)
 	}
 	data, err := os.ReadFile(zipPath)
 	if err != nil {
@@ -335,17 +369,121 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		PackageID: uploadResp.PackageID,
 	}
 
-	createItem, err := buildCollectorCreateNodeItem(opts, uploadResp.PackageID)
+	createItems, err := buildCollectorFleetCreateItems(opts, uploadResp.PackageID)
 	if err != nil {
 		return summary, err
 	}
-	createResp, err := client.BatchCreateNodes(ctx, []adminclient.NodeCreateItem{createItem})
+	fleetSummary, err := applyCollectorFleet(ctx, client, opts, uploadResp.PackageID, createItems)
 	if err != nil {
 		return summary, err
 	}
-	summary.CreateBatchID = createResp.BatchID
-	summary.CreateProcessedCount = createResp.ProcessedCount
+	summary.FleetMode = fleetSummary.FleetMode
+	summary.CreateBatchIDs = fleetSummary.CreateBatchIDs
+	summary.DeployBatchIDs = fleetSummary.DeployBatchIDs
+	summary.CreateProcessedCount = fleetSummary.CreateProcessedCount
+	summary.DeployProcessedCount = fleetSummary.DeployProcessedCount
 	return summary, nil
+}
+
+func validateCollectorPublishAuth(opts collectorPublishOptions) error {
+	accessToken := defaultFlag(opts.AccessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
+	accessKey := defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
+	secretKey := defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
+	if strings.TrimSpace(accessToken) != "" {
+		return nil
+	}
+	if strings.TrimSpace(accessKey) == "" || strings.TrimSpace(secretKey) == "" {
+		return fmt.Errorf(
+			"control authentication is required; set MOOX_ACCESS_TOKEN or both " +
+				"MOOX_GATEWAY_SERVICE_KEY_ID and MOOX_GATEWAY_SERVICE_SECRET_KEY",
+		)
+	}
+	return nil
+}
+
+func applyCollectorFleet(
+	ctx context.Context,
+	api collectorFleetAPI,
+	opts collectorPublishOptions,
+	packageID string,
+	createItems []adminclient.NodeCreateItem,
+) (collectorPublishSummary, error) {
+	var summary collectorPublishSummary
+	if opts.NodeCount <= 0 {
+		return summary, fmt.Errorf("node count must be positive")
+	}
+	if opts.CreateBatchSize <= 0 {
+		return summary, fmt.Errorf("create batch size must be positive")
+	}
+	if strings.TrimSpace(packageID) == "" {
+		return summary, fmt.Errorf("package id is required")
+	}
+	if len(createItems) != opts.NodeCount {
+		return summary, fmt.Errorf(
+			"collector fleet create item count=%d; expected %d",
+			len(createItems),
+			opts.NodeCount,
+		)
+	}
+	catalogNodes, err := api.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
+		CloudAccountID: opts.CloudAccountID,
+		Region:         opts.Region,
+		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
+		BizType:        defaultFlag(opts.BizType, "data_collector"),
+	})
+	if err != nil {
+		return summary, err
+	}
+	fleetNodes, err := selectCollectorFleetNodes(catalogNodes, opts.FunctionNamePrefix, opts.NodeCount)
+	if err != nil {
+		return summary, err
+	}
+	if len(fleetNodes) == 0 {
+		summary.FleetMode = "created"
+		for start := 0; start < len(createItems); start += opts.CreateBatchSize {
+			end := min(start+opts.CreateBatchSize, len(createItems))
+			resp, err := api.BatchCreateNodes(ctx, createItems[start:end])
+			if err != nil {
+				return summary, err
+			}
+			if resp.ProcessedCount != end-start {
+				return summary, fmt.Errorf("BatchCreateNodes processed %d nodes; expected %d", resp.ProcessedCount, end-start)
+			}
+			summary.CreateBatchIDs = append(summary.CreateBatchIDs, resp.BatchID)
+			summary.CreateProcessedCount += resp.ProcessedCount
+		}
+		return summary, nil
+	}
+
+	summary.FleetMode = "updated"
+	const deployBatchSize = 10
+	deployments := make([]adminclient.NodeDeployItem, len(fleetNodes))
+	for index, node := range fleetNodes {
+		deployments[index] = adminclient.NodeDeployItem{
+			NodeID:      node.NodeID,
+			PackageID:   packageID,
+			Config:      cloneCollectorStringMap(createItems[index].Config),
+			Environment: cloneCollectorStringMap(createItems[index].Environment),
+		}
+	}
+	for start := 0; start < len(deployments); start += deployBatchSize {
+		end := min(start+deployBatchSize, len(deployments))
+		resp, err := api.BatchDeployNodes(ctx, deployments[start:end])
+		if err != nil {
+			return summary, err
+		}
+		if resp.ProcessedCount != end-start {
+			return summary, fmt.Errorf("BatchDeployNodes processed %d nodes; expected %d", resp.ProcessedCount, end-start)
+		}
+		summary.DeployBatchIDs = append(summary.DeployBatchIDs, resp.BatchID)
+		summary.DeployProcessedCount += resp.ProcessedCount
+	}
+	return summary, nil
+}
+
+func collectorCLSCredentials() (string, string) {
+	return firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_ID"), os.Getenv("TENCENTCLOUD_SECRET_ID")),
+		firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_KEY"), os.Getenv("TENCENTCLOUD_SECRET_KEY"))
 }
 
 func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) (adminclient.NodeCreateItem, error) {
@@ -384,6 +522,157 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 			"supported_workloads":  append([]string(nil), jobTypes...),
 		},
 	}, nil
+}
+
+func buildCollectorFleetCreateItems(opts collectorPublishOptions, packageID string) ([]adminclient.NodeCreateItem, error) {
+	if opts.NodeCount <= 0 {
+		return nil, fmt.Errorf("node count must be positive")
+	}
+	base, err := buildCollectorCreateNodeItem(opts, packageID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateCollectorFleetRuntimeEnvironment(base.Environment); err != nil {
+		return nil, err
+	}
+	prefix := defaultFlag(opts.FunctionNamePrefix, defaultFlag(opts.PackageName, "moox-collector"))
+	items := make([]adminclient.NodeCreateItem, opts.NodeCount)
+	for index := range items {
+		items[index] = cloneCollectorNodeCreateItem(base)
+		items[index].Metadata["function_name_prefix"] = prefix
+		items[index].Metadata["index"] = index
+	}
+	return items, nil
+}
+
+func validateCollectorFleetRuntimeEnvironment(environment map[string]string) error {
+	required := []string{
+		"MOOX_SPACE_ID",
+		"MOOX_COLLECTOR_JOB_TYPES",
+		"MOOX_EVENTBUS_NATS_URL",
+		"MOOX_EVENTBUS_NATS_USERNAME",
+		"MOOX_EVENTBUS_NATS_PASSWORD",
+		"MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64",
+		"MOOX_CODE_PACKAGE_ID",
+		"MOOX_GATEWAY_NODE_ID",
+		"MOOX_GATEWAY_TARGET_NODE",
+		"MOOX_GATEWAY_SERVICE_KEY_ID",
+		"MOOX_GATEWAY_SERVICE_SECRET_KEY",
+		"MOOX_GATEWAY_CA_PEM_B64",
+		"MOOX_CLS_HOST",
+		"MOOX_CLS_SECRET_ID",
+		"MOOX_CLS_SECRET_KEY",
+	}
+	for _, key := range required {
+		if strings.TrimSpace(environment[key]) == "" {
+			return fmt.Errorf("collector fleet runtime environment requires %s", key)
+		}
+	}
+	return nil
+}
+
+func cloneCollectorNodeCreateItem(source adminclient.NodeCreateItem) adminclient.NodeCreateItem {
+	cloned := source
+	cloned.Config = cloneCollectorStringMap(source.Config)
+	cloned.Environment = cloneCollectorStringMap(source.Environment)
+	cloned.Metadata = make(map[string]any, len(source.Metadata))
+	for key, value := range source.Metadata {
+		switch typed := value.(type) {
+		case []string:
+			cloned.Metadata[key] = append([]string(nil), typed...)
+		case map[string]string:
+			cloned.Metadata[key] = cloneCollectorStringMap(typed)
+		default:
+			cloned.Metadata[key] = value
+		}
+	}
+	return cloned
+}
+
+func cloneCollectorStringMap(source map[string]string) map[string]string {
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, expected int) ([]adminclient.CloudNode, error) {
+	indexed := make([]adminclient.CloudNode, expected)
+	found := make([]bool, expected)
+	count := 0
+	for _, node := range nodes {
+		index, belongs, err := collectorFleetIndex(node, prefix)
+		if err != nil {
+			return nil, err
+		}
+		if node.IsDeleted || !belongs {
+			continue
+		}
+		count++
+		if index < 0 || index >= expected {
+			return nil, fmt.Errorf("fleet prefix %q has invalid index metadata on node %q", prefix, node.NodeID)
+		}
+		if found[index] {
+			return nil, fmt.Errorf("fleet prefix %q has duplicate fleet index %d", prefix, index)
+		}
+		found[index] = true
+		indexed[index] = node
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	if count != expected {
+		return nil, fmt.Errorf("fleet prefix %q has %d nodes; expected either 0 or %d", prefix, count, expected)
+	}
+	for index, present := range found {
+		if !present {
+			return nil, fmt.Errorf("fleet prefix %q is missing fleet index %d", prefix, index)
+		}
+	}
+	return indexed, nil
+}
+
+func collectorFleetIndex(node adminclient.CloudNode, prefix string) (int, bool, error) {
+	metadataPrefix := metadataStringValue(node.Metadata, "function_name_prefix")
+	if metadataPrefix != "" {
+		if metadataPrefix != prefix {
+			return 0, false, nil
+		}
+		index, ok := metadataIntValue(node.Metadata, "index")
+		if !ok {
+			return 0, true, fmt.Errorf("fleet prefix %q has invalid index metadata on node %q", prefix, node.NodeID)
+		}
+		return index, true, nil
+	}
+
+	stablePrefix := fmt.Sprintf("%s-%s-", prefix, node.Region)
+	if !strings.HasPrefix(node.FunctionName, stablePrefix) {
+		return 0, false, nil
+	}
+	rawIndex := strings.TrimPrefix(node.FunctionName, stablePrefix)
+	index, err := strconv.Atoi(rawIndex)
+	if err != nil || index < 0 {
+		return 0, true, fmt.Errorf("fleet prefix %q has invalid function name %q", prefix, node.FunctionName)
+	}
+	return index, true, nil
+}
+
+func metadataStringValue(metadata map[string]any, key string) string {
+	value, _ := metadata[key].(string)
+	return value
+}
+
+func metadataIntValue(metadata map[string]any, key string) (int, bool) {
+	switch value := metadata[key].(type) {
+	case int:
+		return value, true
+	case float64:
+		integer := int(value)
+		return integer, value == float64(integer)
+	default:
+		return 0, false
+	}
 }
 
 func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {
@@ -539,27 +828,27 @@ func setDefaultEnv(env map[string]string, key string, value string) {
 	env[key] = value
 }
 
-func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (collectorPublishSummary, error) {
+func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (collectorDeploySummary, error) {
 	if opts.ControlURL == "" {
-		return collectorPublishSummary{}, fmt.Errorf("--control-url is required")
+		return collectorDeploySummary{}, fmt.Errorf("--control-url is required")
 	}
 	if opts.CloudAccountID == "" {
-		return collectorPublishSummary{}, fmt.Errorf("--cloud-account-id is required")
+		return collectorDeploySummary{}, fmt.Errorf("--cloud-account-id is required")
 	}
 	if opts.NodeID == "" {
-		return collectorPublishSummary{}, fmt.Errorf("--node-id is required")
+		return collectorDeploySummary{}, fmt.Errorf("--node-id is required")
 	}
 	zipPath := opts.ZipPath
 	if zipPath == "" {
 		result, err := packageCollectorFunction(ctx, opts.collectorPackageOptions)
 		if err != nil {
-			return collectorPublishSummary{}, err
+			return collectorDeploySummary{}, err
 		}
 		zipPath = result.Path
 	}
 	data, err := os.ReadFile(zipPath)
 	if err != nil {
-		return collectorPublishSummary{}, err
+		return collectorDeploySummary{}, err
 	}
 
 	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
@@ -573,9 +862,9 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 		OriginalFilename: filepath.Base(zipPath),
 	}, data)
 	if err != nil {
-		return collectorPublishSummary{}, err
+		return collectorDeploySummary{}, err
 	}
-	summary := collectorPublishSummary{
+	summary := collectorDeploySummary{
 		ZipPath:   zipPath,
 		PackageID: uploadResp.PackageID,
 	}
