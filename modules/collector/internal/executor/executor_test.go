@@ -39,6 +39,10 @@ func (s *stubCollector) Collect(_ context.Context, params *sources.CollectParams
 	s.params = params
 	return s.err
 }
+func (s *stubCollector) CollectWithResult(ctx context.Context, params *sources.CollectParams) (sources.CollectResult, error) {
+	err := s.Collect(ctx, params)
+	return sources.CollectResult{RowsWritten: 1}, err
+}
 
 func TestNormalizeMarket(t *testing.T) {
 	assert.Equal(t, "spot", normalizeMarket(nil))
@@ -74,6 +78,7 @@ func TestExecuteTask_WithStubCollector(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, msg, "成功")
+	assert.Contains(t, msg, `"rows_written":1`)
 	assert.Equal(t, "item-1", reportedJobItemID)
 	assert.Equal(t, uint64(3), reportedDeliveryCount)
 	require.NotNil(t, collector.params)

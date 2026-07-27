@@ -32,7 +32,7 @@ func TestKlineCollectorCollectStartsAfterStorageWatermark(t *testing.T) {
 		now: func() time.Time { return watermark.Add(time.Hour) },
 	}
 
-	err := c.Collect(context.Background(), &sources.CollectParams{
+	result, err := c.CollectWithResult(context.Background(), &sources.CollectParams{
 		SpaceID: "space-custom", DatasetID: "kline-custom", InstType: InstTypeSPOT,
 		Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m",
 	})
@@ -47,6 +47,10 @@ func TestKlineCollectorCollectStartsAfterStorageWatermark(t *testing.T) {
 	assert.Equal(t, "space-custom", store.writes[0][0].GetKey().GetSpaceId())
 	assert.Equal(t, "kline-custom", store.writes[0][0].GetKey().GetDatasetId())
 	assert.Equal(t, "BTC-USDT", store.writes[0][0].GetKey().GetTimeSeries().GetSubjectId())
+	assert.Equal(t, 1, result.RowsWritten)
+	require.Len(t, result.WrittenRowKeySamples, 1)
+	assert.Equal(t, "BTC-USDT", result.WrittenRowKeySamples[0].SubjectID)
+	assert.Empty(t, result.ZeroWriteReason)
 }
 
 func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
@@ -60,12 +64,14 @@ func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
 		now: func() time.Time { return now },
 	}
 
-	err := c.Collect(context.Background(), &sources.CollectParams{
+	result, err := c.CollectWithResult(context.Background(), &sources.CollectParams{
 		SpaceID: "crypto", DatasetID: "kline", InstType: InstTypeSPOT,
 		Symbol: "BTCUSDT", SubjectID: "BTC-USDT", Interval: "1m",
 	})
 	require.NoError(t, err)
 	assert.Empty(t, store.writes)
+	assert.Zero(t, result.RowsWritten)
+	assert.Equal(t, "no_new_closed_kline", result.ZeroWriteReason)
 }
 
 type fakeKlineStorage struct {

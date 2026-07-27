@@ -81,27 +81,37 @@ func (c *KlineCollector) DataType() string {
 
 // Collect 执行一次K线采集
 func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectParams) error {
+	_, err := c.CollectWithResult(ctx, params)
+	return err
+}
+
+// CollectWithResult executes one K-line collection and returns write evidence.
+func (c *KlineCollector) CollectWithResult(
+	ctx context.Context,
+	params *sources.CollectParams,
+) (sources.CollectResult, error) {
+	result := sources.CollectResult{}
 	if params == nil {
-		return fmt.Errorf("K线采集参数不能为空")
+		return result, fmt.Errorf("K线采集参数不能为空")
 	}
 	spaceID := strings.TrimSpace(params.SpaceID)
 	if spaceID == "" {
-		return fmt.Errorf("space_id 不能为空")
+		return result, fmt.Errorf("space_id 不能为空")
 	}
 	datasetID := strings.TrimSpace(params.DatasetID)
 	if datasetID == "" {
-		return fmt.Errorf("dataset_id 不能为空")
+		return result, fmt.Errorf("dataset_id 不能为空")
 	}
 	log.InfoContextf(ctx, "K线采集开始: space_id=%s, dataset_id=%s, inst_type=%s, symbol=%s, interval=%s",
 		spaceID, datasetID, params.InstType, params.Symbol, params.Interval)
 
 	freq, err := normalizeFreq(params.Interval)
 	if err != nil {
-		return err
+		return result, err
 	}
 	binding, err := ResolveStorageBinding(params.InstType)
 	if err != nil {
-		return err
+		return result, err
 	}
 	storageSubjectID := strings.TrimSpace(params.SubjectID)
 	if storageSubjectID == "" {
@@ -111,7 +121,7 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 	if writer == nil {
 		accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
 		if accessTarget == "" {
-			return fmt.Errorf("未配置存储 access tRPC 地址")
+			return result, fmt.Errorf("未配置存储 access tRPC 地址")
 		}
 		writer = newStorageWriter(accessTarget, "", storageAuthInfo(binding))
 	}
@@ -119,7 +129,7 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 		SpaceId: spaceID, DatasetId: datasetID, SubjectId: storageSubjectID, Freq: freq,
 	})
 	if err != nil {
-		return fmt.Errorf("读取K线水位线失败: %w", err)
+		return result, fmt.Errorf("读取K线水位线失败: %w", err)
 	}
 	var watermarkPtr *time.Time
 	if found {
@@ -134,7 +144,7 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 		}
 		exchangeKlines, err := c.fetchKlines(ctx, params, req)
 		if err != nil {
-			return err
+			return result, err
 		}
 		klines := convertExchangeKlines(exchangeKlines, params.Symbol, params.Interval)
 		closed, skipped := filterClosedKlines(klines, c.currentTime())
@@ -145,16 +155,28 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 		if len(closed) > 0 {
 			rows, buildErr := buildKlineRows(closed, spaceID, datasetID, storageSubjectID, freq)
 			if buildErr != nil {
-				return buildErr
+				return result, buildErr
 			}
 			if err := writer.UpsertFields(ctx, rows); err != nil {
-				return fmt.Errorf("K线写入存储失败: %w", err)
+				return result, fmt.Errorf("K线写入存储失败: %w", err)
 			}
 			total += len(rows)
+			for _, row := range rows {
+				key := row.GetKey()
+				timeSeries := key.GetTimeSeries()
+				result.WrittenRowKeySamples = append(result.WrittenRowKeySamples, sources.WrittenRowKey{
+					SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(),
+					SubjectID: timeSeries.GetSubjectId(), Freq: timeSeries.GetFreq(),
+					DataTime: timeSeries.GetDataTime(),
+				})
+				if len(result.WrittenRowKeySamples) > 10 {
+					result.WrittenRowKeySamples = result.WrittenRowKeySamples[1:]
+				}
+			}
 		}
 		more, advanceErr := cursor.Advance(exchangeKlines)
 		if advanceErr != nil {
-			return advanceErr
+			return result, advanceErr
 		}
 		if !more {
 			break
@@ -162,7 +184,11 @@ func (c *KlineCollector) Collect(ctx context.Context, params *sources.CollectPar
 	}
 	log.InfoContextf(ctx, "K线采集完成: space_id=%s, dataset_id=%s, inst_type=%s, symbol=%s, interval=%s, count=%d",
 		spaceID, datasetID, params.InstType, params.Symbol, params.Interval, total)
-	return nil
+	result.RowsWritten = total
+	if total == 0 {
+		result.ZeroWriteReason = "no_new_closed_kline"
+	}
+	return result, nil
 }
 
 func (c *KlineCollector) currentTime() time.Time {

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -38,6 +39,14 @@ type executeResult struct {
 	mu        sync.Mutex
 	HasError  bool
 	LastError string
+	Tasks     []taskExecutionSummary
+}
+
+type taskExecutionSummary struct {
+	DataType string `json:"data_type"`
+	Symbol   string `json:"symbol"`
+	Interval string `json:"interval,omitempty"`
+	sources.CollectResult
 }
 
 type taskStatusReporter func(
@@ -95,7 +104,14 @@ func buildCollectHandler(
 		log.InfoContextf(ctx, "执行采集: taskID=%s, source=%s, dataType=%s, symbol=%s, interval=%s",
 			task.TaskID, task.DataSource, task.DataType, task.Symbol, task.Interval)
 
-		if err := c.Collect(ctx, params); err != nil {
+		var collectResult sources.CollectResult
+		var err error
+		if resultCollector, ok := c.(sources.ResultCollector); ok {
+			collectResult, err = resultCollector.CollectWithResult(ctx, params)
+		} else {
+			err = c.Collect(ctx, params)
+		}
+		if err != nil {
 			_ = mooxreport.ObserveModuleRun("collector", "collect", "error", "collector-market-data", time.Now())
 			log.ErrorContextf(ctx, "采集失败: taskID=%s, interval=%s, error=%v",
 				task.TaskID, task.Interval, err)
@@ -122,6 +138,14 @@ func buildCollectHandler(
 		}
 
 		log.InfoContextf(ctx, "采集成功: taskID=%s, interval=%s", task.TaskID, task.Interval)
+		if result != nil {
+			result.mu.Lock()
+			result.Tasks = append(result.Tasks, taskExecutionSummary{
+				DataType: task.DataType, Symbol: task.Symbol, Interval: task.Interval,
+				CollectResult: collectResult,
+			})
+			result.mu.Unlock()
+		}
 		now := time.Now().UTC()
 		_ = mooxreport.ObserveModuleRun("collector", "collect", "success", "collector-market-data", now)
 		// The Collector interface currently reports only terminal status. Do not
@@ -251,7 +275,14 @@ func ExecuteTask(
 		resultMsg = fmt.Sprintf("部分或全部任务执行失败, lastError=%s", result.LastError)
 	} else {
 		status = reporter.StatusSuccess
-		resultMsg = "所有任务执行成功"
+		payload, err := json.Marshal(map[string]any{
+			"message": "所有任务执行成功",
+			"tasks":   result.Tasks,
+		})
+		if err != nil {
+			return "", fmt.Errorf("encode collection result: %w", err)
+		}
+		resultMsg = string(payload)
 	}
 
 	log.InfoContextf(workloadCtx, "[ExecuteTask] 任务执行完成: taskID=%s, status=%d, result=%s",

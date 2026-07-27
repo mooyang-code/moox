@@ -8,6 +8,7 @@ import {
   assertFutureExecutionTimes,
   assertRealExecutionNodes,
   assertRealSCFFleet,
+  assertStorageWriteEvidence,
   controlledFailureJob,
   currentRealSCFNodes,
   currentScheduledJobItems,
@@ -37,6 +38,42 @@ test("storage snapshot queries the target View without an empty subject selector
       page: { page: 1, size: 200 },
     },
   );
+});
+
+test("storage write evidence accepts only an explicit K-line zero-write result", () => {
+  assert.doesNotThrow(() => assertStorageWriteEvidence([{
+    result_summary: {
+      tasks: [{ data_type: "kline", rows_written: 0, zero_write_reason: "no_new_closed_kline" }],
+    },
+  }], "same", { fingerprint: "same", rows: [{ key: { subject_id: "BTC-USDT" } }] }));
+  assert.throws(() => assertStorageWriteEvidence([{
+    result_summary: { tasks: [{ data_type: "kline", rows_written: 0 }] },
+  }], "same", { fingerprint: "same", rows: [] }), /missing an accepted reason/);
+});
+
+test("storage write evidence verifies positive writes through exact RowKeys", () => {
+  const key = {
+    space_id: "crypto",
+    dataset_id: "binance_spot_kline_1h",
+    subject_id: "BTC-USDT",
+    freq: "1H",
+    data_time: "2026-07-27T06:00:00Z",
+  };
+  const jobItems = [{
+    result_summary: {
+      tasks: [{ data_type: "kline", rows_written: 1, written_row_key_samples: [key] }],
+    },
+  }];
+  assert.doesNotThrow(() => assertStorageWriteEvidence(
+    jobItems,
+    "before",
+    { fingerprint: "after", rows: [{ key: { ...key } }] },
+  ));
+  assert.throws(() => assertStorageWriteEvidence(
+    jobItems,
+    "before",
+    { fingerprint: "after", rows: [{ key: { ...key, subject_id: "ETH-USDT" } }] },
+  ), /not readable/);
 });
 
 test("CloudNode JobItem status values match the protobuf contract", () => {

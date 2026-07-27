@@ -454,9 +454,7 @@ async function assertAfterSCF(args) {
     }
     return snapshot;
   });
-  log(storageAfter.fingerprint === state.storage_before
-    ? "storage target Dataset write was idempotent: existing rows unchanged"
-    : "storage target Dataset changed after collection");
+  assertStorageWriteEvidence(jobItems, state.storage_before, storageAfter);
   const rows = storageAfter.rows;
 
   const sample = rows[0]?.key || {};
@@ -859,6 +857,46 @@ function stableJSON(value) {
     return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableJSON(value[key])]));
   }
   return value;
+}
+
+export function assertStorageWriteEvidence(jobItems, storageBefore, storageAfter) {
+  const tasks = (jobItems || []).flatMap((item) => item.result_summary?.tasks || []);
+  if (tasks.length === 0) {
+    throw new FatalAssertionError("scheduled JobItems do not contain collection write evidence");
+  }
+  let rowsWritten = 0;
+  const writtenKeys = [];
+  for (const task of tasks) {
+    const count = Number(task.rows_written);
+    if (!Number.isInteger(count) || count < 0) {
+      throw new FatalAssertionError(`invalid rows_written in collection result: ${task.rows_written}`);
+    }
+    rowsWritten += count;
+    if (count === 0 && task.zero_write_reason !== "no_new_closed_kline") {
+      throw new FatalAssertionError(`zero-write collection is missing an accepted reason: ${task.zero_write_reason || "missing"}`);
+    }
+    if (count > 0) {
+      const samples = task.written_row_key_samples || [];
+      if (samples.length === 0) {
+        throw new FatalAssertionError("positive collection result does not contain written RowKey samples");
+      }
+      writtenKeys.push(...samples);
+    }
+  }
+  if (rowsWritten === 0) {
+    log("storage write evidence: no new closed K-line, zero writes accepted");
+    return;
+  }
+  if (storageAfter.fingerprint === storageBefore) {
+    throw new FatalAssertionError(`collector reported ${rowsWritten} written rows but target Dataset did not change`);
+  }
+  const visibleKeys = new Set((storageAfter.rows || []).map((row) => JSON.stringify(stableJSON(row.key || {}))));
+  for (const key of writtenKeys) {
+    if (!visibleKeys.has(JSON.stringify(stableJSON(key)))) {
+      throw new FatalAssertionError(`written RowKey is not readable from target Dataset: ${JSON.stringify(key)}`);
+    }
+  }
+  log(`storage write evidence: rows_written=${rowsWritten}, verified_row_keys=${writtenKeys.length}`);
 }
 
 async function writeState(args, value) {

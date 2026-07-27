@@ -16,6 +16,29 @@ type Collector interface {
 	Collect(ctx context.Context, params *CollectParams) error
 }
 
+// ResultCollector is implemented by collectors that can prove what the current
+// invocation wrote. Collector remains the small extension boundary for sources
+// that do not have row-oriented output.
+type ResultCollector interface {
+	CollectWithResult(ctx context.Context, params *CollectParams) (CollectResult, error)
+}
+
+// CollectResult is persisted with the JobItem and TaskInstance so callers can
+// distinguish an intentional zero-write collection from a false success.
+type CollectResult struct {
+	RowsWritten          int             `json:"rows_written"`
+	WrittenRowKeySamples []WrittenRowKey `json:"written_row_key_samples,omitempty"`
+	ZeroWriteReason      string          `json:"zero_write_reason,omitempty"`
+}
+
+type WrittenRowKey struct {
+	SpaceID   string `json:"space_id"`
+	DatasetID string `json:"dataset_id"`
+	SubjectID string `json:"subject_id"`
+	Freq      string `json:"freq"`
+	DataTime  string `json:"data_time"`
+}
+
 // CollectParams 采集参数
 type CollectParams struct {
 	SpaceID   string // 业务空间
