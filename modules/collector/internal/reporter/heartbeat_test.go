@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
@@ -151,6 +152,7 @@ func TestCollectNodeMetrics_ReturnsMemoryUsage(t *testing.T) {
 func TestBuildPayloadInfo_UsesRuntimeAndEnvSpace(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "space-test")
 	t.Setenv("MOOX_COLLECTOR_JOB_TYPES", "collect.binance.kline")
+	t.Setenv("MOOX_CODE_PACKAGE_ID", "package-current")
 	runtimeapp.UpdateNodeInfo("node-payload", "v9")
 	httpclient.Init()
 	t.Cleanup(func() { runtimeapp.UpdateNodeInfo("", "") })
@@ -161,10 +163,40 @@ func TestBuildPayloadInfo_UsesRuntimeAndEnvSpace(t *testing.T) {
 	assert.Equal(t, "space-test", payload.SpaceID)
 	assert.Equal(t, "node-payload", payload.NodeID)
 	assert.Equal(t, model.NodeTypeSCFEvent, payload.NodeType)
+	assert.Equal(t, "v9", payload.RunningVersion)
 	assert.Equal(t, "v9", payload.Metadata["version"])
+	assert.Equal(t, "package-current", payload.Metadata["runtime_code_package_id"])
 	assert.Equal(t, []string{"collect.binance.kline"}, payload.SupportedCollectors)
 	assert.NotNil(t, payload.Metrics)
 	assert.Nil(t, payload.LocalDNSRecords)
+}
+
+func TestExecuteReportSendsRuntimePackageIdentity(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "test-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-sk")
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		_ = json.NewEncoder(w).Encode(ServerResponse{RetInfo: &ServerRetInfo{Code: 0, Msg: "ok"}})
+	}))
+	defer server.Close()
+
+	err := executeReport(context.Background(), &model.HeartbeatPayload{
+		SpaceID:        "crypto",
+		NodeID:         "node-1",
+		NodeType:       model.NodeTypeSCFEvent,
+		RunningVersion: "version-1",
+		Timestamp:      time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
+		Metadata: map[string]any{
+			"runtime_code_package_id": "package-1",
+		},
+	}, server.URL)
+
+	require.NoError(t, err)
+	assert.Equal(t, "version-1", request["running_version"])
+	assert.Equal(t, "collector", request["source_service"])
+	assert.Equal(t, "package-1", request["metadata"].(map[string]any)["runtime_code_package_id"])
 }
 
 func TestBuildPayloadInfoRejectsUnsupportedConfiguredJobType(t *testing.T) {

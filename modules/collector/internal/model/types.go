@@ -54,6 +54,7 @@ type HeartbeatPayload struct {
 	SpaceID             string                 `json:"space_id"`
 	NodeID              string                 `json:"node_id"`
 	NodeType            string                 `json:"node_type"`
+	RunningVersion      string                 `json:"running_version"`
 	Timestamp           time.Time              `json:"timestamp"`
 	RunningTasks        []*TaskSummary         `json:"running_tasks"`
 	Metrics             *NodeMetrics           `json:"metrics"`

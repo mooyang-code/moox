@@ -394,7 +394,11 @@ test("fleet readiness requires exactly 50 fresh online Tencent SCFs", () => {
 
   const heartbeatNodes = nodes.map((node) => ({
     ...node,
-    metadata: { arch: "amd64", version: "runtime" },
+    metadata: {
+      arch: "amd64",
+      version: "runtime",
+      runtime_code_package_id: "package-new",
+    },
   }));
   assert.equal(verifiedSCFFleet(heartbeatNodes, {
     cloudAccount: "account",
@@ -404,6 +408,28 @@ test("fleet readiness requires exactly 50 fresh online Tencent SCFs", () => {
     packageVersion: "v1",
     scfCount: 50,
   }, now).length, 50);
+  assert.throws(() => verifiedSCFFleet([
+    { ...nodes[0], running_version: "old-version" },
+    ...nodes.slice(1),
+  ], {
+    cloudAccount: "account",
+    region: "ap-shanghai",
+    fleetPrefix: "e2e-fleet",
+    packageID: "package-new",
+    packageVersion: "v1",
+    scfCount: 50,
+  }, now), /running_version/);
+  assert.throws(() => verifiedSCFFleet([
+    { ...nodes[0], metadata: { ...nodes[0].metadata, runtime_code_package_id: "package-old" } },
+    ...nodes.slice(1),
+  ], {
+    cloudAccount: "account",
+    region: "ap-shanghai",
+    fleetPrefix: "e2e-fleet",
+    packageID: "package-new",
+    packageVersion: "v1",
+    scfCount: 50,
+  }, now), /runtime_code_package_id/);
 });
 
 test("state is written with mode 0600 and contains no secrets", async () => {
@@ -510,12 +536,17 @@ function fleetNode(index, now) {
     cloud_account_id: "account",
     package_id: "package-new",
     package_version: "v1",
+    running_version: "v1",
     region: "ap-shanghai",
     node_type: "scf-event",
     provider: "tencent-scf",
     function_name: `e2e-fleet-ap-shanghai-${index}`,
     supported_workloads: ["collect.binance.symbol", "collect.binance.kline"],
-    metadata: { function_name_prefix: "e2e-fleet", index },
+    metadata: {
+      function_name_prefix: "e2e-fleet",
+      index,
+      runtime_code_package_id: "package-new",
+    },
     status: "NODE_STATUS_ONLINE",
     last_heartbeat: new Date(now - 30_000).toISOString(),
   };

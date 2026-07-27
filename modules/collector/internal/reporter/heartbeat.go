@@ -144,16 +144,18 @@ func buildPayloadInfo() (*model.HeartbeatPayload, error) {
 		SpaceID:             heartbeatSpaceID(),
 		NodeID:              nodeID,
 		NodeType:            model.NodeTypeSCFEvent,
+		RunningVersion:      version,
 		Timestamp:           time.Now(),
 		RunningTasks:        []*model.TaskSummary{},
 		Metrics:             nodeMetrics,
 		SupportedCollectors: workerCfg.JobTypes,
 		LocalDNSRecords:     localDNSRecords,
 		Metadata: map[string]interface{}{
-			"version":    version,
-			"go_version": runtime.Version(),
-			"os":         runtime.GOOS,
-			"arch":       runtime.GOARCH,
+			"version":                 version,
+			"runtime_code_package_id": strings.TrimSpace(os.Getenv("MOOX_CODE_PACKAGE_ID")),
+			"go_version":              runtime.Version(),
+			"os":                      runtime.GOOS,
+			"arch":                    runtime.GOARCH,
 		},
 	}
 	return payload, nil
@@ -199,8 +201,13 @@ func executeReport(ctx context.Context, payload *model.HeartbeatPayload, service
 		"space_id":            payload.SpaceID,
 		"node_id":             payload.NodeID,
 		"node_type":           payload.NodeType,
+		"running_version":     payload.RunningVersion,
+		"source_service":      "collector",
+		"timestamp":           payload.Timestamp.UTC().Format(time.RFC3339Nano),
+		"metrics":             payload.Metrics,
 		"metadata":            payload.Metadata,
 		"supported_workloads": payload.SupportedCollectors,
+		"local_dns_records":   payload.LocalDNSRecords,
 	}
 
 	log.DebugContextf(ctx, "[Heartbeat] 发送心跳: nodeID=%s", payload.NodeID)

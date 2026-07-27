@@ -530,10 +530,17 @@ export function verifiedSCFFleet(nodes, criteria, now = Date.now(), heartbeatMax
     for (const [field, want] of Object.entries({
       package_id: criteria.packageID,
       package_version: criteria.packageVersion,
+      running_version: criteria.packageVersion,
       provider: "tencent-scf",
       node_type: "scf-event",
     })) {
       if (node[field] !== want) throw new Error(`fleet node ${node.node_id} ${field}=${node[field]} want=${want}`);
+    }
+    if (node.metadata?.runtime_code_package_id !== criteria.packageID) {
+      throw new Error(
+        `fleet node ${node.node_id} runtime_code_package_id=${node.metadata?.runtime_code_package_id || ""} ` +
+        `want=${criteria.packageID}`,
+      );
     }
     if (!(node.status === 2 || node.status === "NODE_STATUS_ONLINE")) {
       throw new Error(`fleet node ${node.node_id} is not online`);
