@@ -69,3 +69,14 @@ func TestDefaultAuthConfig_UsesGlobalConfig(t *testing.T) {
 	assert.Equal(t, "env-sk", cfg.SecretKey)
 	assert.Equal(t, "gateway-gz-122", cfg.TargetNode)
 }
+
+func TestDefaultAuthConfig_PrefersServiceGatewayCA(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_CA_FILE", "/gateway/peers.pem")
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "gateway-ca")
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "service-ca")
+
+	cfg := DefaultAuthConfig()
+
+	assert.Empty(t, cfg.CAFile)
+	assert.Equal(t, "service-ca", cfg.CAPEMBase64)
+}

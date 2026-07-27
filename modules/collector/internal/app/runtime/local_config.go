@@ -182,6 +182,16 @@ func GetServiceAuthConfig() ServiceAuthConfig {
 	if value := os.Getenv("MOOX_GATEWAY_CA_PEM_B64"); value != "" {
 		cfg.CAPEMBase64 = value
 	}
+	// Service Gateway is exposed through Caddy and may use a different trust
+	// root from the native Gateway peer bundle.
+	if value := os.Getenv("MOOX_SERVICE_GATEWAY_CA_FILE"); value != "" {
+		cfg.CAFile = value
+		cfg.CAPEMBase64 = ""
+	}
+	if value := os.Getenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64"); value != "" {
+		cfg.CAFile = ""
+		cfg.CAPEMBase64 = value
+	}
 	return cfg
 }
 

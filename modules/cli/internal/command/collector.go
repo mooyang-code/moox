@@ -580,6 +580,7 @@ func validateCollectorFleetRuntimeEnvironment(environment map[string]string) err
 		"MOOX_GATEWAY_SERVICE_KEY_ID",
 		"MOOX_GATEWAY_SERVICE_SECRET_KEY",
 		"MOOX_GATEWAY_CA_PEM_B64",
+		"MOOX_SERVICE_GATEWAY_CA_PEM_B64",
 		"MOOX_CLS_HOST",
 		"MOOX_CLS_SECRET_ID",
 		"MOOX_CLS_SECRET_KEY",
@@ -741,6 +742,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_GATEWAY_SERVICE_SECRET_KEY":   {},
 		"MOOX_GATEWAY_NODE_ID":              {},
 		"MOOX_GATEWAY_TARGET_NODE":          {},
+		"MOOX_SERVICE_GATEWAY_CA_PEM_B64":   {},
 		"MOOX_COLLECTOR_JOB_TYPES":          {},
 	}
 	for key := range overrides {
@@ -787,6 +789,9 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	if strings.TrimSpace(overrides["MOOX_GATEWAY_CA_FILE"]) != "" {
 		return nil, fmt.Errorf("serverless environment must not contain MOOX_GATEWAY_CA_FILE")
 	}
+	if strings.TrimSpace(overrides["MOOX_SERVICE_GATEWAY_CA_FILE"]) != "" {
+		return nil, fmt.Errorf("serverless environment must not contain MOOX_SERVICE_GATEWAY_CA_FILE")
+	}
 	caFile := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_FILE"))
 	caMaterial := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_PEM_B64"))
 	if overrideMaterial := strings.TrimSpace(overrides["MOOX_GATEWAY_CA_PEM_B64"]); overrideMaterial != "" {
@@ -811,8 +816,28 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		}
 		setDefaultEnv(env, "MOOX_GATEWAY_CA_PEM_B64", caMaterial)
 	}
+	serviceCAFile := strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_CA_FILE"))
+	serviceCAMaterial := strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64"))
+	if serviceCAFile != "" && serviceCAMaterial != "" {
+		return nil, fmt.Errorf("service gateway CA file and CA PEM material are mutually exclusive")
+	}
+	if serviceCAFile != "" {
+		pem, err := os.ReadFile(serviceCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read service gateway CA file: %w", err)
+		}
+		serviceCAMaterial = base64.StdEncoding.EncodeToString(pem)
+	}
+	if serviceCAMaterial != "" {
+		if _, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{CAPEMBase64: serviceCAMaterial}); err != nil {
+			return nil, fmt.Errorf("invalid service gateway CA material: %w", err)
+		}
+		env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"] = serviceCAMaterial
+	}
 	for key, value := range overrides {
-		if key == "MOOX_GATEWAY_CA_FILE" || key == "MOOX_GATEWAY_CA_PEM_B64" || key == "MOOX_EVENTBUS_NATS_TLS_CA_FILE" {
+		if key == "MOOX_GATEWAY_CA_FILE" || key == "MOOX_GATEWAY_CA_PEM_B64" ||
+			key == "MOOX_SERVICE_GATEWAY_CA_FILE" || key == "MOOX_SERVICE_GATEWAY_CA_PEM_B64" ||
+			key == "MOOX_EVENTBUS_NATS_TLS_CA_FILE" {
 			continue
 		}
 		env[key] = value

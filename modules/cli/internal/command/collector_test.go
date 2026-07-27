@@ -52,6 +52,7 @@ func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
 	gatewayCAFile := filepath.Join(dir, "gateway-ca.pem")
 	require.NoError(t, os.WriteFile(gatewayCAFile, gatewayCA, 0o600))
 	t.Setenv("MOOX_GATEWAY_CA_FILE", gatewayCAFile)
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_FILE", gatewayCAFile)
 
 	eventBusCAFile := filepath.Join(dir, "eventbus-ca.pem")
 	require.NoError(t, os.WriteFile(eventBusCAFile, []byte("eventbus-ca"), 0o600))
@@ -70,10 +71,13 @@ func TestCollectorFunctionEnvironmentEmbedsCAFileMaterial(t *testing.T) {
 	caFile := filepath.Join(t.TempDir(), "peer.pem")
 	require.NoError(t, os.WriteFile(caFile, pemBytes, 0o600))
 	t.Setenv("MOOX_GATEWAY_CA_FILE", caFile)
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_FILE", caFile)
 	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, base64.StdEncoding.EncodeToString(pemBytes), env["MOOX_GATEWAY_CA_PEM_B64"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString(pemBytes), env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
 	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
+	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_FILE")
 }
 
 func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T) {
@@ -100,6 +104,12 @@ func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T)
 		setCollectorCLSTestCredentials(t)
 		_, err := collectorFunctionEnvironment(collectorPublishOptions{Env: []string{"MOOX_GATEWAY_CA_FILE=/host/peer.pem"}})
 		require.ErrorContains(t, err, "must not contain")
+	})
+	t.Run("invalid service gateway material", func(t *testing.T) {
+		setCollectorCLSTestCredentials(t)
+		t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "not-base64")
+		_, err := collectorFunctionEnvironment(collectorPublishOptions{})
+		require.ErrorContains(t, err, "invalid service gateway CA material")
 	})
 }
 
