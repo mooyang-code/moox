@@ -479,6 +479,44 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	}, queue.identities)
 }
 
+func TestBatchDeployNodesReconcilesAcceptedSCFDeploymentAfterCallerTimeout(t *testing.T) {
+	db := newNodeSCFTestDB(t)
+	catalog := store.NewCatalogRepository(db)
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "account-a",
+		PackageID: "old-package", NodeType: "scf-event", Provider: "tencent-scf",
+		Region: "ap-guangzhou", Namespace: "collector", FunctionName: "collector-0",
+		Metadata: `{"handler":"main"}`,
+	}))
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
+		Status: "Updating",
+		Environment: map[string]string{
+			"MOOX_CODE_PACKAGE_ID": "moox-collector_dev",
+		},
+	}}}}
+	svc := &Service{
+		catalog: catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{
+			SecretID: "secret-id", SecretKey: "secret-key",
+		}},
+		scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+
+	rsp, err := svc.BatchDeployNodes(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.BatchDeployNodesReq{
+		Deployments: []*pb.NodeDeployItem{{NodeId: "node-a", PackageId: "moox-collector_dev"}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	assert.Empty(t, fake.updated)
+	assert.Empty(t, fake.configured)
+	node, err := catalog.GetNode(context.Background(), "crypto", "node-a")
+	require.NoError(t, err)
+	require.NotNil(t, node)
+	assert.Equal(t, "moox-collector_dev", node.PackageID)
+}
+
 type fakeSCFClient struct {
 	getErr     error
 	getResults []fakeSCFGetResult

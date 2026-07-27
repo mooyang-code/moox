@@ -381,6 +381,13 @@ func (s *Service) updateSCFFunctionCode(
 	if err != nil {
 		return fmt.Errorf("get scf function %s before deploy: %w", ref.FunctionName, err)
 	}
+	// MOOX_CODE_PACKAGE_ID is written only after the code update has completed
+	// and the desired configuration update has been accepted. It therefore
+	// doubles as the idempotency marker when the caller times out while Tencent
+	// is still returning Updating.
+	if strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"]) == pkg.PackageID {
+		return nil
+	}
 	info, err = waitForSCFActive(ctx, client, ref, info)
 	if err != nil {
 		return err
