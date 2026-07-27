@@ -119,10 +119,12 @@ func startProductionRuntime(ctx context.Context, cfg *runtimeapp.AppConfig) erro
 	if err := initializeRuntime(ctx, cfg); err != nil {
 		return err
 	}
-	registerCloudFunction()
 	go func() {
 		runResidentTaskRunner(ctx, runTaskRunner, residentRunnerRetryDelay)
 	}()
+	// Start the resident worker before the function can accept its first
+	// keepalive; readiness is then delivered to an already waiting runner.
+	registerCloudFunction()
 	return nil
 }
 

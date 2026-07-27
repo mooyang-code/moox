@@ -759,7 +759,7 @@ async function assertManagementRequests(args, token) {
 }
 
 async function ensureCloudNode(args, token) {
-  const rsp = await adminPost(args, token, "cloudnode", "BatchCreateNodes", {
+  const submitted = await adminPost(args, token, "cloudnode", "SubmitCreateNodes", {
     nodes: [{
       cloud_account_id: "e2e-local",
       node_type: "scf-event",
@@ -777,9 +777,23 @@ async function ensureCloudNode(args, token) {
       },
     }],
   }, { spaceId: args.space });
-  if ((rsp.processed_count || 0) < 1) {
-    throw new Error("BatchCreateNodes did not process the e2e node");
+  if (!submitted.job_id || Number(submitted.total_count || 0) !== 1) {
+    throw new Error("SubmitCreateNodes did not return one asynchronous node item");
   }
+  await waitFor("local CloudNode publish job", args.timeoutSeconds * 1000, async () => {
+    const status = await adminPost(args, token, "cloudnode", "GetNodeBatchChange", {
+      job_id: submitted.job_id,
+    }, { spaceId: args.space });
+    const jobStatus = status.job?.status;
+    if (jobStatus === "NODE_BATCH_STATUS_FAILED" || jobStatus === "NODE_BATCH_STATUS_PARTIAL") {
+      const failed = (status.items || []).find((item) => item.status === "NODE_BATCH_ITEM_STATUS_FAILED");
+      throw new FatalAssertionError(`local CloudNode publish failed: ${failed?.error_message || jobStatus}`);
+    }
+    if (jobStatus !== "NODE_BATCH_STATUS_SUCCESS") {
+      throw new Error(`local CloudNode publish status=${jobStatus || ""}`);
+    }
+    return status;
+  });
   log(`cloudnode runtime node ready: ${args.node}`);
 }
 

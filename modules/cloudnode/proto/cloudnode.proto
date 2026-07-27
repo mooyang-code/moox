@@ -78,6 +78,29 @@ enum ScfInvokeType {
   SCF_INVOKE_TYPE_EVENT = 2;
 }
 
+enum NodeBatchOperation {
+  NODE_BATCH_OPERATION_UNSPECIFIED = 0;
+  NODE_BATCH_OPERATION_CREATE_NODES = 1;
+  NODE_BATCH_OPERATION_DEPLOY_NODES = 2;
+}
+
+enum NodeBatchStatus {
+  NODE_BATCH_STATUS_UNSPECIFIED = 0;
+  NODE_BATCH_STATUS_PENDING = 1;
+  NODE_BATCH_STATUS_RUNNING = 2;
+  NODE_BATCH_STATUS_SUCCESS = 3;
+  NODE_BATCH_STATUS_FAILED = 4;
+  NODE_BATCH_STATUS_PARTIAL = 5;
+}
+
+enum NodeBatchItemStatus {
+  NODE_BATCH_ITEM_STATUS_UNSPECIFIED = 0;
+  NODE_BATCH_ITEM_STATUS_PENDING = 1;
+  NODE_BATCH_ITEM_STATUS_RUNNING = 2;
+  NODE_BATCH_ITEM_STATUS_SUCCESS = 3;
+  NODE_BATCH_ITEM_STATUS_FAILED = 4;
+}
+
 // CloudNode 云节点。
 message CloudNode {
   int32 id = 1;
@@ -177,14 +200,54 @@ message BatchCreateNodesReq {
   repeated NodeCreateItem nodes = 1;
 }
 
-message BatchChangeResult {
+message SubmitNodeBatchRsp {
   common.RetInfo ret_info = 1;
-  string batch_id = 2;
-  int32 processed_count = 3;
+  string job_id = 2;
+  NodeBatchOperation operation = 3;
+  int32 total_count = 4;
+}
+
+message GetNodeBatchChangeReq {
+  string job_id = 1;
+}
+
+message NodeBatchSummary {
+  string job_id = 1;
+  NodeBatchOperation operation = 2;
+  NodeBatchStatus status = 3;
+  int32 total_count = 4;
+  int32 pending_count = 5;
+  int32 running_count = 6;
+  int32 success_count = 7;
+  int32 failed_count = 8;
+  int32 progress_percent = 9;
+  string created_at = 10;
+  string completed_at = 11;
+}
+
+message NodeBatchItemResult {
+  string item_id = 1;
+  string node_id = 2;
+  NodeBatchItemStatus status = 3;
+  string result_summary = 4;
+  string error_message = 5;
+  string started_at = 6;
+  string completed_at = 7;
+}
+
+message GetNodeBatchChangeRsp {
+  common.RetInfo ret_info = 1;
+  NodeBatchSummary job = 2;
+  repeated NodeBatchItemResult items = 3;
 }
 
 message BatchDeleteNodesReq {
   repeated string node_ids = 1;
+}
+
+message BatchDeleteNodesRsp {
+  common.RetInfo ret_info = 1;
+  int32 processed_count = 2;
 }
 
 message NodeDeployItem {
@@ -553,9 +616,10 @@ service CloudNodeMgr {
   rpc UpdateNode(UpdateNodeReq) returns (UpdateNodeRsp);
   rpc InvokeFunction(InvokeFunctionReq) returns (InvokeFunctionRsp);
 
-  rpc BatchCreateNodes(BatchCreateNodesReq) returns (BatchChangeResult);
-  rpc BatchDeleteNodes(BatchDeleteNodesReq) returns (BatchChangeResult);
-  rpc BatchDeployNodes(BatchDeployNodesReq) returns (BatchChangeResult);
+  rpc SubmitCreateNodes(BatchCreateNodesReq) returns (SubmitNodeBatchRsp);
+  rpc SubmitDeployNodes(BatchDeployNodesReq) returns (SubmitNodeBatchRsp);
+  rpc GetNodeBatchChange(GetNodeBatchChangeReq) returns (GetNodeBatchChangeRsp);
+  rpc BatchDeleteNodes(BatchDeleteNodesReq) returns (BatchDeleteNodesRsp);
 
   rpc ListCloudAccounts(ListCloudAccountsReq) returns (ListCloudAccountsRsp);
   rpc CreateCloudAccount(CreateCloudAccountReq) returns (CreateCloudAccountRsp);

@@ -4,10 +4,38 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDefaultNodeBatchConfig(t *testing.T) {
+	cfg := Default()
+	assert.Equal(t, 3, cfg.NodeBatch.BatchSize)
+	assert.Equal(t, 500*time.Millisecond, cfg.NodeBatch.PollInterval)
+	require.NoError(t, cfg.Validate())
+}
+
+func TestValidateRejectsInvalidNodeBatchConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		field  string
+	}{
+		{name: "batch too small", mutate: func(cfg *Config) { cfg.NodeBatch.BatchSize = 0 }, field: "node_batch.batch_size"},
+		{name: "batch too large", mutate: func(cfg *Config) { cfg.NodeBatch.BatchSize = 11 }, field: "node_batch.batch_size"},
+		{name: "poll too fast", mutate: func(cfg *Config) { cfg.NodeBatch.PollInterval = 99 * time.Millisecond }, field: "node_batch.poll_interval"},
+		{name: "poll too slow", mutate: func(cfg *Config) { cfg.NodeBatch.PollInterval = 11 * time.Second }, field: "node_batch.poll_interval"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.mutate(cfg)
+			require.ErrorContains(t, cfg.Validate(), tt.field)
+		})
+	}
+}
 
 func TestValidateRejectsNonPositiveMaxDeliver(t *testing.T) {
 	cfg := Default()

@@ -48,9 +48,7 @@ func TestJSONHelpers_ShouldMergeAndStringify(t *testing.T) {
 	assert.Equal(t, "{}", jsonString(nil))
 }
 
-func TestDirectBatchIDAndFormatTime(t *testing.T) {
-	id := directBatchID("create")
-	assert.Contains(t, id, "batch-create-")
+func TestFormatTime(t *testing.T) {
 	assert.Equal(t, "", formatTime(time.Time{}))
 	assert.NotEmpty(t, formatTime(Now()))
 }

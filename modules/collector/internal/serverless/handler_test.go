@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
@@ -179,6 +180,21 @@ func TestHandleRequest_KeepaliveEvent(t *testing.T) {
 	resp, ok := rsp.(*model.Response)
 	require.True(t, ok)
 	assert.True(t, resp.Success)
+}
+
+func TestKeepaliveResidentDuration(t *testing.T) {
+	assert.Zero(t, keepaliveResidentDuration(model.CloudFunctionEvent{
+		Source: "manual",
+		Data:   map[string]any{"resident_seconds": float64(20)},
+	}))
+	assert.Equal(t, 20*time.Second, keepaliveResidentDuration(model.CloudFunctionEvent{
+		Source: "keepalive_probe",
+		Data:   map[string]any{"resident_seconds": float64(20)},
+	}))
+	assert.Equal(t, maxKeepaliveResidentDuration, keepaliveResidentDuration(model.CloudFunctionEvent{
+		Source: "keepalive_probe",
+		Data:   map[string]any{"resident_seconds": float64(600)},
+	}))
 }
 
 func TestDeploymentTRPCTargetValue_IPProtocol(t *testing.T) {

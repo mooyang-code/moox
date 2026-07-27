@@ -39,12 +39,16 @@ func TestHeartbeatMaintainerBuildsCommunicationOnlyKeepalivePayload(t *testing.T
 	require.NoError(t, err)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(raw, &payload))
+	assert.Equal(t, 60, keepaliveResidentSec)
 	assert.Equal(t, map[string]any{
-		"action":                     "keepalive",
-		"source":                     "keepalive_probe",
-		"timestamp":                  "2026-07-27T03:04:05Z",
-		"request_id":                 "keepalive-node-a",
-		"data":                       map[string]any{"node_id": "node-a"},
+		"action":     "keepalive",
+		"source":     "keepalive_probe",
+		"timestamp":  "2026-07-27T03:04:05Z",
+		"request_id": "keepalive-node-a",
+		"data": map[string]any{
+			"node_id":          "node-a",
+			"resident_seconds": float64(keepaliveResidentSec),
+		},
 		"service_gateway_target":     "https://gateway.example.com/service",
 		"storage_rpc_gateway_target": "ip://gateway.example.com:11003",
 	}, payload)

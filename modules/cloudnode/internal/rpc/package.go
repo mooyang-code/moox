@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
@@ -121,8 +122,8 @@ func (s *Service) InitPackageUpload(ctx context.Context, req *pb.InitPackageUplo
 	}
 	packageType := packageTypeToDB(req.GetPackageType())
 	filename := sanitizePackageFileName(firstString(req.GetOriginalFilename(), req.GetPackageName()+"-"+req.GetVersion()+".zip"))
-	packageID := buildPackageID(req.GetPackageName(), req.GetVersion())
-	cosPath := buildPackageCOSPath(packageType, req.GetPackageName(), req.GetVersion(), filename)
+	packageID := buildPackageID(req.GetPackageName(), req.GetVersion(), uuid.NewString())
+	cosPath := buildPackageCOSPath(packageType, req.GetPackageName(), req.GetVersion(), packageID, filename)
 	expires := time.Now().UTC().Add(time.Hour)
 	uploadURL, err := presignCOSPut(ctx, *account, credential, cosPath, expires)
 	if err != nil {
@@ -315,12 +316,22 @@ func verifyCOSObject(ctx context.Context, account store.CloudAccount, credential
 	return nil
 }
 
-func buildPackageID(packageName string, version string) string {
-	return sanitizePackagePathSegment(packageName) + "_" + sanitizePackagePathSegment(version)
+func buildPackageID(packageName string, version string, uploadID string) string {
+	return sanitizePackagePathSegment(packageName) + "_" +
+		sanitizePackagePathSegment(version) + "_" +
+		sanitizePackagePathSegment(uploadID)
 }
 
-func buildPackageCOSPath(packageType string, packageName string, version string, filename string) string {
-	return path.Join("moox", "cloud-packages", sanitizePackagePathSegment(packageType), sanitizePackagePathSegment(packageName), sanitizePackagePathSegment(version), filename)
+func buildPackageCOSPath(packageType string, packageName string, version string, packageID string, filename string) string {
+	return path.Join(
+		"moox",
+		"cloud-packages",
+		sanitizePackagePathSegment(packageType),
+		sanitizePackagePathSegment(packageName),
+		sanitizePackagePathSegment(version),
+		sanitizePackagePathSegment(packageID),
+		filename,
+	)
 }
 
 func sanitizePackageFileName(value string) string {

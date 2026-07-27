@@ -25,6 +25,10 @@ job_item:
   history_dir: ../data/cloudnode/jobs
   history_retention_days: 2
 
+node_batch:
+  batch_size: 3
+  poll_interval: 500ms
+
 tencent_scf:
   default_region: ap-guangzhou
   default_namespace: default

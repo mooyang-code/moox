@@ -83,6 +83,9 @@ done
 [[ ! -e "${TMP_ROOT}/unpacked/storage" ]]
 [[ -d "${TMP_ROOT}/unpacked/cloudnode" ]]
 [[ -d "${TMP_ROOT}/unpacked/collector" ]]
+grep -q '^node_batch:' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
+grep -q '  batch_size: 3' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
+grep -q '  poll_interval: 500ms' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
 grep -q 'native_addr: 0.0.0.0:11003' "${TMP_ROOT}/unpacked/gateway/config/app.yaml"
 grep -Fq -- '--disable-storage-shard' "${TMP_ROOT}/unpacked/start.sh"
 ! grep -Fq -- '--disable-storage-node' "${TMP_ROOT}/unpacked/start.sh"

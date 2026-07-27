@@ -3,6 +3,11 @@ package rpc
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
@@ -15,9 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
-	"strings"
-	"testing"
-	"time"
 )
 
 func TestReportHeartbeatEnqueuesHeartbeatSink(t *testing.T) {
@@ -245,9 +247,23 @@ func TestNodeConversionHelpers(t *testing.T) {
 	}, 2)
 	assert.Contains(t, item.NodeID, "moox-cloudnode")
 	assert.Equal(t, "acct-1", item.CloudAccountID)
+
+	otherSpace := cloudNodeFromCreateItem("stocks", &pb.NodeCreateItem{
+		CloudAccountId: "acct-1", Region: "ap-guangzhou", PackageId: "pkg-1",
+	}, 2)
+	collidingSpace := cloudNodeFromCreateItem("foo/bar", &pb.NodeCreateItem{
+		CloudAccountId: "acct-1", Region: "ap-guangzhou", PackageId: "pkg-1",
+	}, 2)
+	normalizedSpace := cloudNodeFromCreateItem("foo-bar", &pb.NodeCreateItem{
+		CloudAccountId: "acct-1", Region: "ap-guangzhou", PackageId: "pkg-1",
+	}, 2)
+	assert.NotEqual(t, item.FunctionName, otherSpace.FunctionName)
+	assert.NotEqual(t, collidingSpace.FunctionName, normalizedSpace.FunctionName)
+	assert.Contains(t, item.FunctionName, "-crypto-")
+	assert.Contains(t, otherSpace.FunctionName, "-stocks-")
 }
 
-func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
+func TestExecuteCreateNodeItemPreservesTencentSCFConfiguration(t *testing.T) {
 	db := newNodeSCFTestDB(t)
 	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
@@ -277,35 +293,31 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 		t.Fatalf("metadata: %v", err)
 	}
 
-	rsp, err := svc.BatchCreateNodes(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.BatchCreateNodesReq{
-		Nodes: []*pb.NodeCreateItem{{
-			CloudAccountId: "account-a",
-			NodeType:       "scf-event",
-			Runtime:        "CustomRuntime",
-			Handler:        "main",
-			Config: map[string]string{
-				"memory_size":   "256",
-				"cls_logset_id": "logset-config",
-				"cls_topic_id":  "topic-config",
-			},
-			Environment: map[string]string{"MOOX_ENV": "prod"},
-			Region:      "ap-guangzhou",
-			Namespace:   "collector",
-			PackageId:   "moox-collector_dev",
-			Metadata:    metadata,
-		}},
-	})
+	_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
+		CloudAccountId: "account-a",
+		NodeType:       "scf-event",
+		Runtime:        "CustomRuntime",
+		Handler:        "main",
+		Config: map[string]string{
+			"memory_size":   "256",
+			"cls_logset_id": "logset-config",
+			"cls_topic_id":  "topic-config",
+		},
+		Environment: map[string]string{"MOOX_ENV": "prod"},
+		Region:      "ap-guangzhou",
+		Namespace:   "collector",
+		PackageId:   "moox-collector_dev",
+		Metadata:    metadata,
+	}, 0)
 	if err != nil {
-		t.Fatalf("BatchCreateNodes transport error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("ret = %v %s", rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+		t.Fatalf("executeCreateNodeItem error = %v", err)
 	}
 	if len(fake.created) != 1 {
 		t.Fatalf("created calls = %d, want 1", len(fake.created))
 	}
 	create := fake.created[0]
-	if create.FunctionName != "moox-collector-ap-guangzhou-0" || create.Namespace != "collector" || create.Region != "ap-guangzhou" {
+	expectedFunctionName := fmt.Sprintf("moox-collector-%s-ap-guangzhou-0", sanitizeSCFFunctionToken("crypto"))
+	if create.FunctionName != expectedFunctionName || create.Namespace != "collector" || create.Region != "ap-guangzhou" {
 		t.Fatalf("function ref = %#v", create.FunctionRef)
 	}
 	if create.COSBucket != "moox-scf-1255382561" || create.COSRegion != "ap-guangzhou" || create.COSObject != "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip" {
@@ -321,7 +333,7 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 		t.Fatalf("env = %#v", create.Environment)
 	}
 
-	node, err := catalog.GetNode(context.Background(), "crypto", "moox-collector-ap-guangzhou-0")
+	node, err := catalog.GetNode(context.Background(), "crypto", expectedFunctionName)
 	if err != nil {
 		t.Fatalf("load node: %v", err)
 	}
@@ -347,7 +359,7 @@ func TestBatchCreateNodesCreatesTencentSCFFunctionFromPackage(t *testing.T) {
 	}
 }
 
-func TestBatchCreateNodesSharesExecutionQueuesAcrossCodePackages(t *testing.T) {
+func TestExecuteCreateNodeItemSharesExecutionQueuesAcrossCodePackages(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	queue := &orderedQueue{}
 	svc := &Service{catalog: catalog, executionQueue: queue}
@@ -356,21 +368,20 @@ func TestBatchCreateNodesSharesExecutionQueuesAcrossCodePackages(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	rsp, err := svc.BatchCreateNodes(
-		spacecontext.WithSpaceID(context.Background(), "crypto"),
-		&pb.BatchCreateNodesReq{Nodes: []*pb.NodeCreateItem{
-			{
-				CloudAccountId: "account-a", Region: "local", PackageId: "package-a",
-				Metadata: metadata,
-			},
-			{
-				CloudAccountId: "account-a", Region: "local", PackageId: "package-b",
-				Metadata: metadata,
-			},
-		}},
-	)
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	items := []*pb.NodeCreateItem{
+		{
+			CloudAccountId: "account-a", Region: "local", PackageId: "package-a",
+			Metadata: metadata,
+		},
+		{
+			CloudAccountId: "account-a", Region: "local", PackageId: "package-b",
+			Metadata: metadata,
+		},
+	}
+	for i, item := range items {
+		_, err := svc.executeCreateNodeItem(context.Background(), "crypto", item, i)
+		require.NoError(t, err)
+	}
 	require.Len(t, queue.identities, 4)
 	assert.Equal(t, queue.identities[0], queue.identities[2])
 	assert.Equal(t, queue.identities[1], queue.identities[3])
@@ -383,7 +394,7 @@ func TestBatchCreateNodesSharesExecutionQueuesAcrossCodePackages(t *testing.T) {
 	assert.Equal(t, firstDurable, secondPackageDurable)
 }
 
-func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) {
+func TestExecuteDeployNodeItemUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) {
 	db := newNodeSCFTestDB(t)
 	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
@@ -420,27 +431,22 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 		},
 	}
 
-	rsp, err := svc.BatchDeployNodes(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.BatchDeployNodesReq{
-		Deployments: []*pb.NodeDeployItem{{
-			NodeId:    "node-a",
-			PackageId: "moox-collector_dev",
-			Environment: map[string]string{
-				"MOOX_EVENTBUS_NATS_PASSWORD": "rotated-worker-token",
-				"MOOX_SPACE_ID":               "crypto",
-			},
-			Config: map[string]string{
-				"memory_size":   "512",
-				"timeout":       "90",
-				"cls_logset_id": "logset-new",
-				"cls_topic_id":  "topic-new",
-			},
-		}},
+	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{
+		NodeId:    "node-a",
+		PackageId: "moox-collector_dev",
+		Environment: map[string]string{
+			"MOOX_EVENTBUS_NATS_PASSWORD": "rotated-worker-token",
+			"MOOX_SPACE_ID":               "crypto",
+		},
+		Config: map[string]string{
+			"memory_size":   "512",
+			"timeout":       "90",
+			"cls_logset_id": "logset-new",
+			"cls_topic_id":  "topic-new",
+		},
 	})
 	if err != nil {
-		t.Fatalf("BatchDeployNodes transport error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("ret = %v %s", rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+		t.Fatalf("executeDeployNodeItem error = %v", err)
 	}
 	if len(fake.updated) != 1 {
 		t.Fatalf("updated calls = %d, want 1", len(fake.updated))
@@ -455,8 +461,8 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	if len(fake.configured) != 1 {
 		t.Fatalf("configuration calls = %d, want 1", len(fake.configured))
 	}
-	if fake.getCalls != 2 {
-		t.Fatalf("GetFunction calls = %d, want initial and one after code update", fake.getCalls)
+	if fake.getCalls != 3 {
+		t.Fatalf("GetFunction calls = %d, want initial, post-code, and post-configuration checks", fake.getCalls)
 	}
 	if got := fake.configured[0].Environment["MOOX_EVENTBUS_NATS_PASSWORD"]; got != "rotated-worker-token" {
 		t.Fatalf("worker credential = %q", got)
@@ -479,7 +485,7 @@ func TestBatchDeployNodesUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) 
 	}, queue.identities)
 }
 
-func TestBatchDeployNodesReconcilesAcceptedSCFDeploymentAfterCallerTimeout(t *testing.T) {
+func TestExecuteDeployNodeItemReconcilesAcceptedSCFDeploymentAfterCallerTimeout(t *testing.T) {
 	db := newNodeSCFTestDB(t)
 	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
@@ -503,12 +509,11 @@ func TestBatchDeployNodesReconcilesAcceptedSCFDeploymentAfterCallerTimeout(t *te
 		scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake },
 	}
 
-	rsp, err := svc.BatchDeployNodes(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.BatchDeployNodesReq{
-		Deployments: []*pb.NodeDeployItem{{NodeId: "node-a", PackageId: "moox-collector_dev"}},
+	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{
+		NodeId: "node-a", PackageId: "moox-collector_dev",
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	assert.Empty(t, fake.updated)
 	assert.Empty(t, fake.configured)
 	node, err := catalog.GetNode(context.Background(), "crypto", "node-a")
@@ -518,12 +523,15 @@ func TestBatchDeployNodesReconcilesAcceptedSCFDeploymentAfterCallerTimeout(t *te
 }
 
 type fakeSCFClient struct {
-	getErr     error
-	getResults []fakeSCFGetResult
-	getCalls   int
-	created    []tencentscf.CreateFunctionRequest
-	updated    []tencentscf.UpdateFunctionCodeRequest
-	configured []tencentscf.UpdateFunctionConfigurationRequest
+	getErr               error
+	getResults           []fakeSCFGetResult
+	getCalls             int
+	respectContext       bool
+	createErr            error
+	createWaitForContext bool
+	created              []tencentscf.CreateFunctionRequest
+	updated              []tencentscf.UpdateFunctionCodeRequest
+	configured           []tencentscf.UpdateFunctionConfigurationRequest
 }
 
 type fakeSCFGetResult struct {
@@ -531,8 +539,11 @@ type fakeSCFGetResult struct {
 	err  error
 }
 
-func (f *fakeSCFClient) GetFunction(context.Context, tencentscf.FunctionRef) (*tencentscf.FunctionInfo, error) {
+func (f *fakeSCFClient) GetFunction(ctx context.Context, _ tencentscf.FunctionRef) (*tencentscf.FunctionInfo, error) {
 	f.getCalls++
+	if f.respectContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if len(f.getResults) > 0 {
 		result := f.getResults[0]
 		f.getResults = f.getResults[1:]
@@ -547,8 +558,15 @@ func (f *fakeSCFClient) GetFunction(context.Context, tencentscf.FunctionRef) (*t
 	return &tencentscf.FunctionInfo{Status: "Active"}, nil
 }
 
-func (f *fakeSCFClient) CreateFunction(_ context.Context, req tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error) {
+func (f *fakeSCFClient) CreateFunction(ctx context.Context, req tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error) {
 	f.created = append(f.created, req)
+	if f.createWaitForContext {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	return &tencentscf.CreateFunctionResponse{RequestID: "create-req"}, nil
 }
 
@@ -576,6 +594,12 @@ func newNodeSCFTestDB(t *testing.T) *gorm.DB {
 	if err := db.Exec(cloudnodeschema.AllSQL()).Error; err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("open sql db: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
 	return db
 }
 

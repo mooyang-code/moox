@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -19,6 +20,7 @@ import (
 
 type httpLogCapture struct {
 	info []string
+	warn []string
 }
 
 func (l *httpLogCapture) Trace(...interface{})          {}
@@ -31,8 +33,12 @@ func (l *httpLogCapture) Info(args ...interface{}) {
 func (l *httpLogCapture) Infof(format string, args ...interface{}) {
 	l.info = append(l.info, fmt.Sprintf(format, args...))
 }
-func (l *httpLogCapture) Warn(...interface{})           {}
-func (l *httpLogCapture) Warnf(string, ...interface{})  {}
+func (l *httpLogCapture) Warn(args ...interface{}) {
+	l.warn = append(l.warn, fmt.Sprint(args...))
+}
+func (l *httpLogCapture) Warnf(format string, args ...interface{}) {
+	l.warn = append(l.warn, fmt.Sprintf(format, args...))
+}
 func (l *httpLogCapture) Error(...interface{})          {}
 func (l *httpLogCapture) Errorf(string, ...interface{}) {}
 func (l *httpLogCapture) Fatal(...interface{})          {}
@@ -56,8 +62,9 @@ func TestHTTPClientSuccessLogIsInfoAndDoesNotLeakURLOrQuery(t *testing.T) {
 	t.Cleanup(func() { log.SetLogger(original) })
 
 	var result map[string]string
+	ctx := jobcontext.WithJobItemID(context.Background(), "job-item-a")
 	err = NewHTTPClient(server.Client()).GetWithIP(
-		context.Background(),
+		ctx,
 		parsed.Host,
 		"/api/v3/klines",
 		url.Values{"api_key": {"super-secret"}, "symbol": {"BTCUSDT"}},
@@ -70,6 +77,7 @@ func TestHTTPClientSuccessLogIsInfoAndDoesNotLeakURLOrQuery(t *testing.T) {
 	assert.Contains(t, capture.info[0], "domain="+parsed.Host)
 	assert.Contains(t, capture.info[0], "status=200")
 	assert.Contains(t, capture.info[0], "duration_ms=")
+	assert.Contains(t, capture.info[0], `job_item_id="job-item-a"`)
 	assert.NotContains(t, capture.info[0], "super-secret")
 	assert.NotContains(t, capture.info[0], "/api/v3/klines")
 	assert.NotContains(t, capture.info[0], server.URL)
@@ -169,13 +177,25 @@ func TestHTTPClient_Get_ShouldRejectNonOKStatus(t *testing.T) {
 	parsed, err := url.Parse(server.URL)
 	require.NoError(t, err)
 
+	capture := &httpLogCapture{}
+	original := log.GetDefaultLogger()
+	log.SetLogger(capture)
+	t.Cleanup(func() { log.SetLogger(original) })
+
 	client := NewHTTPClient()
 	client.httpClient = server.Client()
 	var result map[string]string
-	err = client.GetWithIP(context.Background(), parsed.Host, parsed.Path, nil, &result, "")
+	requestPath := "/api/v3/klines"
+	err = client.GetWithIP(context.Background(), parsed.Host, requestPath, nil, &result, "")
 	var statusErr *StatusError
 	require.True(t, errors.As(err, &statusErr))
 	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode)
+	require.Len(t, capture.warn, 1)
+	assert.Contains(t, capture.warn[0], "collector_http_failed")
+	assert.Contains(t, capture.warn[0], "domain="+parsed.Host)
+	assert.Contains(t, capture.warn[0], "status=502")
+	assert.NotContains(t, capture.warn[0], requestPath)
+	assert.NotContains(t, capture.warn[0], server.URL)
 }
 
 func TestParseBestIPs_ShouldSplitPlusSeparatedValues(t *testing.T) {

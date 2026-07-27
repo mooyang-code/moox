@@ -53,8 +53,6 @@ const KLINE_COLUMNS = [
   ["quote_volume", "double", "成交额"],
   ["trade_num", "int", "成交笔数"],
 ];
-const KLINE_VIEW_ID = "e2e_binance_kline_view";
-
 const VALUE_TYPES = {
   string: "FIELD_VALUE_TYPE_STRING",
   int: "FIELD_VALUE_TYPE_INT",
@@ -222,22 +220,6 @@ export function buildKlineDatasetContract(spaceID, datasetID, dataNodeID) {
   });
 }
 
-export function buildKlineViewContract(spaceID, datasetID) {
-  return {
-    space_id: spaceID,
-    view_id: KLINE_VIEW_ID,
-    name: "币安分钟视图",
-    description: "Collector E2E 1m Kline query view",
-    primary_dataset_id: datasetID,
-    dataset_ids: [datasetID],
-    grain_keys: ["subject_id", "freq", "data_time"],
-    filter_json: JSON.stringify({ freq: "1m" }),
-    engine: "duckdb",
-    keep_duration: "0",
-    status: "active",
-  };
-}
-
 function buildDatasetContract({ spaceID, datasetID, dataNodeID, name, description, dataKind, freqs, columns }) {
   validateDatasetID(datasetID);
   if (!String(dataNodeID || "").trim()) throw new Error("data node id is required");
@@ -341,6 +323,15 @@ export function activeUSDTSymbolIDs(records, memberships, mappings) {
   return new Set([...recordIDs].sort());
 }
 
+export function validateSymbolWriteCount(task, subjectIDs) {
+  if (!(subjectIDs instanceof Set)) throw new Error("subjectIDs must be a Set");
+  const rowsWritten = Number(task?.rows_written);
+  if (!Number.isInteger(rowsWritten) || rowsWritten !== subjectIDs.size) {
+    throw new Error(`Symbol rows_written=${task?.rows_written ?? ""} want=${subjectIDs.size}`);
+  }
+  return rowsWritten;
+}
+
 export function validateKlineJobs(jobItems, subjectSymbols, targetDatasetID) {
   if (!(subjectSymbols instanceof Map)) throw new Error("subjectSymbols must be a Map");
   const seen = new Set();
@@ -439,7 +430,7 @@ export function collectKlineWriteEvidence(jobItems, spaceID, targetDatasetID) {
 
 export function validateKlineStorageRow(row, expectedKey) {
   const key = row?.key || {};
-  if (JSON.stringify(stableObject(key)) !== JSON.stringify(stableObject(expectedKey))) {
+  if (JSON.stringify(normalizedKlineKey(key)) !== JSON.stringify(normalizedKlineKey(expectedKey))) {
     throw new Error(`Storage returned an unexpected Kline RowKey`);
   }
   const timestamp = new Date(key.data_time || "");
@@ -469,6 +460,14 @@ function stableObject(value) {
   if (Array.isArray(value)) return value.map(stableObject);
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableObject(value[key])]));
+}
+
+function normalizedKlineKey(key) {
+  const normalized = { ...(key || {}) };
+  if (normalized.dimensions && Object.keys(normalized.dimensions).length === 0) {
+    delete normalized.dimensions;
+  }
+  return stableObject(normalized);
 }
 
 export function hasMorePages(pageInfo, collectedCount, returnedCount, requestedSize) {
@@ -503,39 +502,61 @@ export function buildSCFNodeDefinitions(prefix, count) {
 
 export function validatePublishSummary(summary, expectedCount) {
   if (!summary?.package_id) throw new Error("publish summary is missing package_id");
+  if (!summary?.job_id) throw new Error("publish summary is missing job_id");
   if (!["created", "updated"].includes(summary.fleet_mode)) {
     throw new Error(`publish summary has invalid fleet_mode=${summary?.fleet_mode}`);
   }
-  const created = Number(summary.create_processed_count || 0);
-  const deployed = Number(summary.deploy_processed_count || 0);
-  if (summary.fleet_mode === "created") {
-    if (created !== expectedCount) {
-      throw new Error(`created fleet processed ${created} nodes; expected ${expectedCount}`);
-    }
-    if (deployed !== 0) throw new Error("created fleet must not report deployed nodes");
-    const expectedBatches = Math.ceil(expectedCount / 5);
-    if (!Array.isArray(summary.create_batch_ids) || summary.create_batch_ids.length !== expectedBatches) {
-      throw new Error(`created fleet has ${summary.create_batch_ids?.length || 0} batches; expected ${expectedBatches}`);
-    }
-    assertUniqueBatchIDs(summary.create_batch_ids);
-  } else {
-    const skipped = Number(summary.deploy_skipped_count || 0);
-    const batchSize = Number(summary.deploy_batch_size || 0);
-    if (deployed + skipped !== expectedCount) {
-      throw new Error(`updated fleet covered ${deployed + skipped} nodes; expected ${expectedCount}`);
-    }
-    if (created !== 0) throw new Error("updated fleet must not report created nodes");
-    if (!Number.isInteger(batchSize) || batchSize <= 0) {
-      throw new Error(`updated fleet has invalid deploy_batch_size=${summary.deploy_batch_size}`);
-    }
-    const expectedBatches = Math.ceil(deployed / batchSize);
-    const deployBatchIDs = summary.deploy_batch_ids || [];
-    if (!Array.isArray(deployBatchIDs) || deployBatchIDs.length !== expectedBatches) {
-      throw new Error(`updated fleet has ${deployBatchIDs.length || 0} batches; expected ${expectedBatches}`);
-    }
-    assertUniqueBatchIDs(deployBatchIDs);
+  if (Number(summary.total_count || 0) !== expectedCount) {
+    throw new Error(`publish summary total_count=${summary.total_count || 0}; expected ${expectedCount}`);
   }
+  const job = summary.job || {};
+  if (job.job_id !== summary.job_id) throw new Error("publish status job_id does not match submit job_id");
+  const expectedOperation = summary.operation === "create_nodes"
+    ? "NODE_BATCH_OPERATION_CREATE_NODES"
+    : summary.operation === "deploy_nodes"
+      ? "NODE_BATCH_OPERATION_DEPLOY_NODES"
+      : "";
+  if (!expectedOperation || job.operation !== expectedOperation) {
+    throw new Error(`publish job operation=${job.operation || ""} does not match submit operation=${summary.operation || ""}`);
+  }
+  if (job.status !== "NODE_BATCH_STATUS_SUCCESS") {
+    throw new Error(`publish job status=${job.status || ""}; expected NODE_BATCH_STATUS_SUCCESS`);
+  }
+  if (Number(job.total_count || 0) !== expectedCount ||
+      Number(job.pending_count || 0) !== 0 ||
+      Number(job.running_count || 0) !== 0 ||
+      Number(job.success_count || 0) !== expectedCount ||
+      Number(job.failed_count || 0) !== 0 ||
+      Number(job.progress_percent || 0) !== 100) {
+    throw new Error(
+      `publish job counts total=${job.total_count || 0} pending=${job.pending_count || 0} ` +
+      `running=${job.running_count || 0} success=${job.success_count || 0} ` +
+      `failed=${job.failed_count || 0} progress=${job.progress_percent || 0}`,
+    );
+  }
+  if (!Array.isArray(summary.items) || summary.items.length !== expectedCount) {
+    throw new Error(`publish status items=${summary.items?.length || 0}; expected ${expectedCount}`);
+  }
+  const failed = summary.items.filter((item) => item.status !== "NODE_BATCH_ITEM_STATUS_SUCCESS");
+  if (failed.length > 0) throw new Error(`publish status has ${failed.length} non-success items`);
   return summary;
+}
+
+export function fleetCLSTopicID(nodes, expectedTopicID = "") {
+  const topicIDs = new Set((nodes || [])
+    .map((node) => String(node?.metadata?.cls_topic_id || "").trim())
+    .filter(Boolean));
+  const expected = String(expectedTopicID || "").trim();
+  if (expected) {
+    if ([...topicIDs].some((topicID) => topicID !== expected)) {
+      throw new Error("SCF fleet CLS topic_id does not match the published package");
+    }
+    return expected;
+  }
+  if (topicIDs.size !== 1) {
+    throw new Error(`SCF fleet or publish summary must expose exactly one CLS topic_id; got ${topicIDs.size}`);
+  }
+  return [...topicIDs][0];
 }
 
 export function verifiedSCFFleet(nodes, criteria, now = Date.now(), heartbeatMaxAgeMS = 120_000) {
@@ -610,12 +631,6 @@ function fleetNodeIndex(node, fleetPrefix) {
   return Number.isInteger(index) ? index : null;
 }
 
-function assertUniqueBatchIDs(ids) {
-  if (ids.some((id) => !id) || new Set(ids).size !== ids.length) {
-    throw new Error("publish summary contains empty or duplicate batch IDs");
-  }
-}
-
 export async function writeState(path, value) {
   assertNoStateSecrets(value);
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
@@ -648,12 +663,18 @@ async function fleet(args) {
   };
   const nodes = await waitFor("50-node Tencent SCF fleet", args.timeoutSeconds * 1000, async () =>
     verifiedSCFFleet(await listFleetNodes(args, token), criteria));
+  const clsTopicID = fleetCLSTopicID(nodes, summary.cls_topic_id);
   await writeState(args.stateFile, {
     ...state,
     package_id: summary.package_id,
     package_version: args.packageVersion,
     fleet_mode: summary.fleet_mode,
+    publish_job_id: summary.job_id,
+    publish_operation: summary.operation,
+    publish_status: summary.job.status,
     scf_node_ids: nodes.map((node) => node.node_id),
+    cls_topic_id: clsTopicID,
+    cls_region: args.region,
   });
   log(`fleet ready count=${nodes.length} package_id=${summary.package_id} mode=${summary.fleet_mode}`);
 }
@@ -669,7 +690,6 @@ async function setup(args) {
   const klineContract = buildKlineDatasetContract(args.space, args.klineDataset, dataNode.node_id);
   await ensureDataset(args, token, symbolContract);
   await ensureDataset(args, token, klineContract);
-  await ensureKlineView(args, token);
   const initialState = {
     ...emptyState(),
     run_id: `${Date.now()}-${randomBytes(4).toString("hex")}`,
@@ -685,42 +705,7 @@ async function setup(args) {
   args.ruleOwner = initialState.rule_owner;
   await disableOwnedRule(args, token, buildSymbolRule(args), true);
   await disableOwnedRule(args, token, buildKlineRule(args), true);
-  await ensureRule(args, token, { ...buildSymbolRule(args), enabled: false });
-  await ensureRule(args, token, { ...buildKlineRule(args), enabled: false });
   log(`setup ready data_node=${dataNode.node_id}`);
-}
-
-async function ensureKlineView(args, token) {
-  const expected = buildKlineViewContract(args.space, args.klineDataset);
-  let rsp = await storagePostRaw(args, token, "metadata", "GetView", {
-    space_id: args.space,
-    view_id: expected.view_id,
-  });
-  if (!retOK(rsp.ret_info)) {
-    rsp = await storagePost(args, token, "metadata", "CreateView", { view: expected });
-  }
-  const assertContract = (view) => {
-    for (const field of ["space_id", "view_id", "primary_dataset_id", "engine", "keep_duration", "status"]) {
-      if (view?.[field] !== expected[field]) {
-        throw new Error(`Kline View ${field}=${view?.[field] || ""} want=${expected[field]}`);
-      }
-    }
-    if (!sameStringSet(view.dataset_ids || [], expected.dataset_ids) ||
-        !sameStringSet(view.grain_keys || [], expected.grain_keys) ||
-        view.filter_json !== expected.filter_json) {
-      throw new Error("Kline View contract does not match the E2E dataset");
-    }
-  };
-  assertContract(rsp.view);
-  await waitFor("active Kline DataView", 120_000, async () => {
-    const current = await storagePost(args, token, "metadata", "GetView", {
-      space_id: args.space,
-      view_id: expected.view_id,
-    });
-    assertContract(current.view);
-    if (!current.view?.active_index_id) throw new Error("Kline View has no active index");
-    return current.view;
-  });
 }
 
 async function symbols(args) {
@@ -761,44 +746,35 @@ async function symbols(args) {
     }
     return item;
   });
-  const windowSymbolJobs = (await listAllJobItems(args, token, args.symbolRule))
-    .filter((item) => item.execute_at === jobItem.execute_at);
-  if (windowSymbolJobs.length !== 1 || windowSymbolJobs[0].job_item_id !== jobItem.job_item_id) {
-    throw new FatalAssertionError(`Symbol window JobItem count=${windowSymbolJobs.length} want=1`);
-  }
-
-  const memberships = await listAll(args, token, "metadata", "ListDatasetSubjects", "dataset_subjects", {
-    space_id: args.space,
-    dataset_id: args.symbolDataset,
-  });
-  const recordIDs = memberships
-    .filter((item) => item.status === "active")
-    .map((item) => item.subject_id)
-    .filter(Boolean);
-  if (recordIDs.length === 0) {
-    throw new FatalAssertionError("Symbol collection produced no active dataset memberships");
-  }
   const symbolResult = symbolTaskResult(jobItem);
   const snapshotVersion = String(symbolResult.record_snapshot_version || "");
   if (Number.isNaN(new Date(snapshotVersion).getTime())) {
     throw new FatalAssertionError("Symbol Job result is missing a valid record_snapshot_version");
   }
-  const records = await readExactRecordRows(
-    args,
-    token,
-    args.symbolDataset,
-    recordIDs,
-    snapshotVersion,
-  );
-  const mappings = await listAll(args, token, "metadata", "ListSubjectSymbols", "subject_symbols", {
-    space_id: args.space,
-    data_source_id: "binance",
+  const verifiedSymbols = await waitFor("complete indexed Symbol snapshot", 120_000, async () => {
+    const [memberships, mappings] = await Promise.all([
+      listAll(args, token, "metadata", "ListDatasetSubjects", "dataset_subjects", {
+        space_id: args.space,
+        dataset_id: args.symbolDataset,
+      }),
+      listAll(args, token, "metadata", "ListSubjectSymbols", "subject_symbols", {
+        space_id: args.space,
+        data_source_id: "binance",
+      }),
+    ]);
+    const records = await readSnapshotRecordRows(
+      args, token, args.symbolDataset, snapshotVersion, memberships,
+    );
+    if (records.length === 0) throw new Error("completed Symbol snapshot is not readable yet");
+    const subjectIDs = activeUSDTSymbolIDs(records, memberships, mappings);
+    if (subjectIDs.size === 0) throw new Error("Symbol collection produced no active USDT symbols");
+    return { mappings, subjectIDs };
   });
-  const subjectIDs = activeUSDTSymbolIDs(records, memberships, mappings);
-  if (subjectIDs.size === 0) throw new FatalAssertionError("Symbol collection produced no active USDT symbols");
-  const symbolWriteCount = Number(symbolResult.rows_written || 0);
-  if (symbolWriteCount <= 0) {
-    throw new FatalAssertionError("Symbol Job result does not contain a positive rows_written count");
+  const { mappings, subjectIDs } = verifiedSymbols;
+  try {
+    validateSymbolWriteCount(symbolResult, subjectIDs);
+  } catch (error) {
+    throw new FatalAssertionError(error.message);
   }
   await disableRule(args, token, args.symbolRule);
   await ensureRule(args, token, buildKlineRule(args));
@@ -840,8 +816,7 @@ async function klines(args) {
   });
   const wanted = new Set(instances.map((item) => item.cloud_job_item_id));
   const items = await waitFor("Kline JobItems", 60_000, async () => {
-    const rows = await listAllJobItems(args, token, args.klineRule);
-    const current = rows.filter((item) => wanted.has(item.job_item_id));
+    const current = await getJobItems(args, token, wanted);
     if (current.length !== wanted.size) {
       throw new Error(`Kline JobItem count=${current.length} want=${wanted.size}`);
     }
@@ -851,10 +826,12 @@ async function klines(args) {
   if (new Date(executeAt).toISOString() !== nextMinute(scheduledAt).toISOString()) {
     throw new FatalAssertionError(`Kline execute_at=${executeAt} is not the next whole-minute boundary`);
   }
+  await disableRule(args, token, args.klineRule);
   await writeState(args.stateFile, {
     ...state,
     kline_job_item_ids: [...wanted].sort(),
     kline_execute_at: executeAt,
+    kline_rule_disabled: true,
   });
   log(`klines planned count=${items.length} execute_at=${executeAt}`);
 }
@@ -862,6 +839,7 @@ async function klines(args) {
 async function assertPhase(args) {
   const token = await login(args);
   const state = await readState(args.stateFile);
+  args.ruleOwner = state.rule_owner;
   assertFleetState(state, args.scfCount);
   const symbolContract = await currentDatasetContract(args, token, args.symbolDataset, buildSymbolDatasetContract);
   const klineContract = await currentDatasetContract(args, token, args.klineDataset, buildKlineDatasetContract);
@@ -889,7 +867,7 @@ async function assertPhase(args) {
   if (evidence.executionNodes.size < 2) {
     throw new FatalAssertionError("Kline execution did not cover at least two SCF nodes across two windows");
   }
-  for (const nodeID of evidence.executionNodes) {
+  for (const nodeID of new Set(windows.flat().map((item) => item.execution_node))) {
     if (!state.scf_node_ids.includes(nodeID)) {
       throw new FatalAssertionError(`Kline JobItem execution_node=${nodeID} is outside the verified fleet`);
     }
@@ -898,8 +876,11 @@ async function assertPhase(args) {
   await verifyWrittenKlineRows(args, token, verifiedSamples);
   const distribution = jobDistribution(windows.flat());
   log(`Kline node distribution: ${JSON.stringify(distribution)}`);
-  logLifecycleQuery(state.symbol_job_item_id, "symbol");
-  for (const item of windows.flat().slice(0, 10)) logLifecycleQuery(item.job_item_id, "kline");
+  const lifecycleJobs = [
+    { jobItemID: state.symbol_job_item_id, kind: "symbol" },
+    ...selectKlineLifecycleCandidates(windows.flat(), 100),
+  ];
+  await verifyCLSLifecycle(args, state, lifecycleJobs);
   await writeState(args.stateFile, {
     ...state,
     kline_job_item_ids: [...wanted].sort(),
@@ -914,20 +895,33 @@ async function assertPhase(args) {
 
 async function waitForKlineWindowSuccess(args, token, wanted, subjectSymbols) {
   return waitFor("all Kline JobItems success", args.timeoutSeconds * 1000, async () => {
-    const current = (await listAllJobItems(args, token, args.klineRule))
-      .filter((item) => wanted.has(item.job_item_id));
+    const current = await getJobItems(args, token, wanted);
     if (current.length !== wanted.size) {
       throw new Error(`Kline terminal count=${current.length} want=${wanted.size}`);
     }
     for (const item of current) assertJobNotFailed(item);
     const pending = current.filter((item) => !isSuccess(item.status));
-    if (pending.length > 0) throw new Error(`${pending.length}/${current.length} Kline JobItems are still pending`);
+    if (pending.length > 0) {
+      const sample = pending.length <= 3
+        ? `: ${JSON.stringify(pending.map((item) => ({
+          job_item_id: item.job_item_id,
+          status: item.status,
+          execution_node: item.execution_node || "",
+          last_error_code: item.last_error_code || "",
+          params: item.params || {},
+        })))}`
+        : "";
+      throw new Error(
+        `${pending.length}/${current.length} Kline JobItems are still pending${sample}`,
+      );
+    }
     validateKlineJobs(current, subjectSymbols, args.klineDataset);
     return current;
   });
 }
 
 async function scheduleNextKlineWindow(args, token, previous, subjectSymbols) {
+  await ensureRule(args, token, buildKlineRule(args));
   await adminPost(args, token, "collectmgr", "ScheduleTasks", { space_id: args.space });
   const instances = await waitFor("next Kline TaskInstance window", 60_000, async () => {
     const rows = (await listTaskInstances(args, token, args.klineRule))
@@ -941,12 +935,12 @@ async function scheduleNextKlineWindow(args, token, previous, subjectSymbols) {
   });
   const wanted = new Set(instances.map((item) => item.cloud_job_item_id));
   await waitFor("next Kline JobItem window", 60_000, async () => {
-    const current = (await listAllJobItems(args, token, args.klineRule))
-      .filter((item) => wanted.has(item.job_item_id));
+    const current = await getJobItems(args, token, wanted);
     if (current.length !== wanted.size) throw new Error(`next Kline JobItem count=${current.length} want=${wanted.size}`);
     validateKlineJobs(current, subjectSymbols, args.klineDataset);
     return current;
   });
+  await disableRule(args, token, args.klineRule);
   return { wanted };
 }
 
@@ -995,10 +989,16 @@ async function verifyWrittenKlineRows(args, token, keys) {
     column_names: KLINE_COLUMNS.map(([name]) => name),
     page: { page: 1, size: keys.length },
   });
-  const byKey = new Map((rsp.rows || []).map((row) => [JSON.stringify(stableObject(row.key || {})), row]));
+  const byKey = new Map((rsp.rows || []).map((row) => [JSON.stringify(normalizedKlineKey(row.key)), row]));
   for (const key of keys) {
-    const row = byKey.get(JSON.stringify(stableObject(key)));
-    if (!row) throw new Error(`written Kline RowKey is not readable: ${JSON.stringify(key)}`);
+    const row = byKey.get(JSON.stringify(normalizedKlineKey(key)));
+    if (!row) {
+      const received = (rsp.rows || []).slice(0, 3).map((item) => item.key || {});
+      throw new Error(
+        `written Kline RowKey is not readable: ${JSON.stringify(key)}; ` +
+        `received=${JSON.stringify(received)}`,
+      );
+    }
     validateKlineStorageRow(row, key);
   }
 }
@@ -1009,8 +1009,223 @@ function jobDistribution(jobs) {
   return Object.fromEntries([...counts].sort(([left], [right]) => left.localeCompare(right)));
 }
 
-function logLifecycleQuery(jobItemID, kind) {
-  log(`CLS query: job_item_id="${jobItemID}" kind=${kind} expected_events=received,deferred_or_started,collector_http_completed,done,cloudnode_reported,delivery_action`);
+export function selectKlineLifecycleCandidates(items, limit = 20) {
+  const selected = [];
+  const remaining = [];
+  const seenNodes = new Set();
+  for (const item of items || []) {
+    const jobItemID = String(item?.job_item_id || "").trim();
+    if (!jobItemID) continue;
+    const candidate = { jobItemID, kind: "kline" };
+    const nodeID = String(item?.execution_node || "").trim();
+    if (nodeID && !seenNodes.has(nodeID) && selected.length < limit) {
+      seenNodes.add(nodeID);
+      selected.push(candidate);
+    } else {
+      remaining.push(candidate);
+    }
+  }
+  for (const candidate of remaining) {
+    if (selected.length >= limit) break;
+    selected.push(candidate);
+  }
+  return selected;
+}
+
+export function validateCLSLifecycle(logLines, jobs) {
+  const lines = (logLines || []).map((line) => String(line || ""));
+  const joined = lines.join("\n");
+  const hasCompleteJob = ({ jobItemID, kind }) => {
+    const scoped = lines.filter((line) => clsLineBelongsToJob(line, jobItemID)).join("\n");
+    for (const event of [
+      "collector_job_received",
+      "collector_job_started",
+      "collector_job_done",
+      "collector_job_cloudnode_reported",
+    ]) {
+      if (!scoped.includes(event)) return false;
+    }
+    const completion = kind === "symbol" ? "[SymbolCollector] 标的采集完成" : "K线采集完成";
+    return scoped.includes("collector_job_delivery_action") &&
+      scoped.includes('decision="ACK"') &&
+      scoped.includes("collector_http_completed") &&
+      scoped.includes("status=200") &&
+      scoped.includes(completion);
+  };
+  for (const job of jobs.filter((item) => item.kind === "symbol")) {
+    if (!hasCompleteJob(job)) {
+      throw new Error(
+        `CLS is missing Symbol transport, HTTP 200, and Storage completion for JobItem ${job.jobItemID}`,
+      );
+    }
+  }
+  const klineJobs = jobs.filter((item) => item.kind === "kline");
+  const requiredKlineCount = Math.min(10, klineJobs.length);
+  const completeKlineCount = klineJobs.filter(hasCompleteJob).length;
+  if (completeKlineCount < requiredKlineCount) {
+    throw new Error(
+      `CLS complete Kline JobItem lifecycle count=${completeKlineCount}; ` +
+      `want at least ${requiredKlineCount}`,
+    );
+  }
+  const deferred = jobs.some(({ jobItemID }) => {
+    const scoped = lines.filter((line) => clsLineBelongsToJob(line, jobItemID)).join("\n");
+    return scoped.includes("collector_job_deferred") &&
+      scoped.includes("collector_job_delivery_action") &&
+      scoped.includes('decision="RETRY"');
+  });
+  if (!deferred) throw new Error("CLS has no deferred JobItem with delivery_action RETRY");
+  const forbidden = [
+    /x509|certificate verify|tls handshake error/i,
+    /collector_http_failed[^\n]*status=(429|5\d\d)/i,
+    /storage target missing|invalid dataset.*binding|invalid subject.*binding|maxdeliver/i,
+    /MOOX_EVENTBUS_NATS_PASSWORD|MOOX_GATEWAY_SERVICE_SECRET_KEY|MOOX_STORAGE_PRIMARY_AUTH_SECRET/i,
+  ];
+  for (const pattern of forbidden) {
+    if (pattern.test(joined)) throw new Error(`CLS contains forbidden failure or secret pattern: ${pattern}`);
+  }
+  return true;
+}
+
+function clsLineBelongsToJob(line, jobItemID) {
+  const separator = line.indexOf("\n");
+  const searchable = separator >= 0 ? line.slice(separator + 1) : line;
+  const ids = new Set();
+  for (const pattern of [
+    /"job_item_id"\s*:\s*"([^"]+)"/g,
+    /\bjob_item_id=(?:"([^"]+)"|([^\s,}]+))/g,
+  ]) {
+    for (const match of searchable.matchAll(pattern)) {
+      ids.add(match[1] || match[2]);
+    }
+  }
+  return ids.size === 1 && ids.has(jobItemID);
+}
+
+async function verifyCLSLifecycle(args, state, jobs) {
+  if (!state.cls_topic_id) throw new FatalAssertionError("state does not contain the fleet CLS topic_id");
+  const from = Math.max(0, new Date(state.started_at).getTime() - 60_000);
+  await waitFor("CLS lifecycle evidence", 120_000, async () => {
+    const lines = await searchCLSLogLines({
+      topicID: state.cls_topic_id,
+      region: state.cls_region || args.region,
+      from,
+      to: Date.now() + 10_000,
+      terms: [
+        ...jobs.map((job) => job.jobItemID),
+        "collector_http_completed",
+        "collector_http_failed",
+        "[SymbolCollector] 标的采集完成",
+        "K线采集完成",
+        "x509",
+        "certificate verify",
+        "status=429",
+        "storage target missing",
+        "invalid dataset",
+        "invalid subject",
+        "MaxDeliver",
+        "MOOX_EVENTBUS_NATS_PASSWORD",
+        "MOOX_GATEWAY_SERVICE_SECRET_KEY",
+        "MOOX_STORAGE_PRIMARY_AUTH_SECRET",
+      ],
+    });
+    validateCLSLifecycle(lines, jobs);
+    return lines;
+  });
+}
+
+export async function searchCLSLogLines({ topicID, region, from, to, terms }) {
+  const secretID = firstNonEmptyEnv("MOOX_CLS_SECRET_ID", "CLS_SECRET_ID", "TENCENTCLOUD_SECRET_ID");
+  const secretKey = firstNonEmptyEnv("MOOX_CLS_SECRET_KEY", "CLS_SECRET_KEY", "TENCENTCLOUD_SECRET_KEY");
+  if (!secretID || !secretKey) {
+    throw new FatalAssertionError("CLS query requires MOOX_CLS_SECRET_ID and MOOX_CLS_SECRET_KEY");
+  }
+  const endpoint = firstNonEmptyEnv("MOOX_CLS_API_ENDPOINT", "CLS_ENDPOINT") || "cls.tencentcloudapi.com";
+  const query = `(${terms.map((term) => `"${String(term).replaceAll('"', '\\"')}"`).join(" OR ")})`;
+  const lines = [];
+  let context = "";
+  for (;;) {
+    const params = {
+      TopicId: topicID,
+      Query: query,
+      From: from,
+      To: to,
+      Limit: 1000,
+      Sort: "asc",
+      HighLight: false,
+      UseNewAnalysis: true,
+      SyntaxRule: 1,
+    };
+    if (context) params.Context = context;
+    const result = await searchCLSPage({ endpoint, region, secretID, secretKey, params });
+    lines.push(...(result.Results || []).map((entry) => flattenCLSLog(entry.LogJson)));
+    if (result.ListOver !== false) return lines;
+    const nextContext = String(result.Context || "").trim();
+    if (!nextContext || nextContext === context) {
+      throw new Error("CLS SearchLog returned an invalid pagination context");
+    }
+    if (lines.length >= 10_000) {
+      throw new Error("CLS SearchLog exceeded the 10000-record verification bound");
+    }
+    context = nextContext;
+  }
+}
+
+async function searchCLSPage({ endpoint, region, secretID, secretKey, params }) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
+  const payload = JSON.stringify(params);
+  const hashedPayload = createHash("sha256").update(payload).digest("hex");
+  const canonicalHeaders = `content-type:application/json\nhost:${endpoint}\n`;
+  const canonicalRequest = `POST\n/\n\n${canonicalHeaders}\ncontent-type;host\n${hashedPayload}`;
+  const scope = `${date}/cls/tc3_request`;
+  const stringToSign = `TC3-HMAC-SHA256\n${timestamp}\n${scope}\n${createHash("sha256").update(canonicalRequest).digest("hex")}`;
+  const secretDate = hmacDigest(`TC3${secretKey}`, date);
+  const secretService = hmacDigest(secretDate, "cls");
+  const secretSigning = hmacDigest(secretService, "tc3_request");
+  const signature = createHmac("sha256", secretSigning).update(stringToSign).digest("hex");
+  const response = await fetch(`https://${endpoint}/`, {
+    method: "POST",
+    headers: {
+      Authorization: `TC3-HMAC-SHA256 Credential=${secretID}/${scope}, SignedHeaders=content-type;host, Signature=${signature}`,
+      "Content-Type": "application/json",
+      "X-TC-Action": "SearchLog",
+      "X-TC-Timestamp": String(timestamp),
+      "X-TC-Version": "2020-10-16",
+      "X-TC-Region": region,
+    },
+    body: payload,
+    signal: AbortSignal.timeout(30_000),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(`CLS SearchLog HTTP ${response.status}`);
+  const decoded = JSON.parse(raw);
+  const result = decoded.Response || decoded;
+  if (result.Error) throw new Error(`CLS SearchLog ${result.Error.Code}: ${result.Error.Message}`);
+  return result;
+}
+
+function flattenCLSLog(raw) {
+  if (typeof raw !== "string") return JSON.stringify(raw || {});
+  try {
+    const parsed = JSON.parse(raw);
+    return `${raw}\n${Object.values(parsed).map((value) =>
+      typeof value === "string" ? value : JSON.stringify(value)).join("\n")}`;
+  } catch {
+    return raw;
+  }
+}
+
+function firstNonEmptyEnv(...keys) {
+  for (const key of keys) {
+    const value = String(process.env[key] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function hmacDigest(key, value) {
+  return createHmac("sha256", key).update(value).digest();
 }
 
 async function cleanup(args) {
@@ -1341,18 +1556,14 @@ async function getJobItem(args, token, jobItemID) {
   return rsp.item;
 }
 
-async function listAllJobItems(args, token, jobID) {
-  const all = [];
-  for (let page = 1; ; page += 1) {
-    const rsp = await adminPost(args, token, "cloudnode", "ListJobItems", {
-      space_id: args.space,
-      job_id: jobID,
-      page: { page, size: 500 },
-    }, { spaceId: args.space });
-    const items = rsp.items || [];
-    all.push(...items);
-    if (!hasMorePages(rsp.page, all.length, items.length, 500)) return all;
+async function getJobItems(args, token, jobItemIDs) {
+  const ids = [...jobItemIDs];
+  const items = [];
+  for (let offset = 0; offset < ids.length; offset += 25) {
+    items.push(...await Promise.all(ids.slice(offset, offset + 25)
+      .map((id) => getJobItem(args, token, id))));
   }
+  return items;
 }
 
 async function listFleetNodes(args, token) {
@@ -1383,22 +1594,28 @@ async function listAll(args, token, group, method, property, body) {
   }
 }
 
-async function readExactRecordRows(args, token, datasetID, recordIDs, version) {
+async function readSnapshotRecordRows(args, token, datasetID, version, memberships) {
   const rows = [];
-  for (let offset = 0; offset < recordIDs.length; offset += 100) {
+  const recordIDs = [...new Set((memberships || [])
+    .filter((item) => item?.status === "active")
+    .map((item) => String(item?.subject_id || "").trim())
+    .filter(Boolean))]
+    .sort();
+  for (let offset = 0; offset < recordIDs.length; offset += 25) {
+    const keys = recordIDs.slice(offset, offset + 25).map((recordID) => ({
+      space_id: args.space,
+      dataset_id: datasetID,
+      record_id: recordID,
+      version,
+    }));
     const rsp = await storagePost(args, token, "primary", "ReadRecordRows", {
-      keys: recordIDs.slice(offset, offset + 100).map((recordID) => ({
-        space_id: args.space,
-        dataset_id: datasetID,
-        record_id: recordID,
-        version,
-      })),
+      space_id: args.space,
+      dataset_id: datasetID,
+      keys,
       column_names: SYMBOL_COLUMNS.map(([name]) => name),
+      page: { page: 1, size: 25 },
     });
     rows.push(...(rsp.rows || []));
-  }
-  if (rows.length !== recordIDs.length) {
-    throw new Error(`exact Symbol Record rows=${rows.length} want=${recordIDs.length}`);
   }
   return rows;
 }
@@ -1556,7 +1773,12 @@ async function adminPost(args, token, service, method, body, options = {}) {
   if (token?.signingKey) {
     Object.assign(headers, signedHeaders(token.signingKey, new URL(url).pathname, payload, headers));
   }
-  const response = await fetch(url, { method: "POST", headers, body: payload });
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: payload,
+    signal: AbortSignal.timeout(30_000),
+  });
   const text = await response.text();
   let data;
   try {
@@ -1593,12 +1815,17 @@ export function signedHeaders(signingKey, path, payload, headers) {
 async function waitFor(label, timeoutMS, fn) {
   const deadline = Date.now() + timeoutMS;
   let lastError;
+  let nextProgressLog = Date.now() + 10_000;
   while (Date.now() < deadline) {
     try {
       return await fn();
     } catch (error) {
       if (error instanceof FatalAssertionError) throw error;
       lastError = error;
+      if (Date.now() >= nextProgressLog) {
+        log(`waiting for ${label}: ${error?.message || error}`);
+        nextProgressLog = Date.now() + 10_000;
+      }
       await sleep(2000);
     }
   }

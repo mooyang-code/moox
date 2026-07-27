@@ -2,7 +2,9 @@ package rpc
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -19,8 +21,10 @@ import (
 )
 
 const (
-	defaultSCFTimeoutSeconds = 120
-	scfOperationTimeout      = 5 * time.Minute
+	defaultSCFTimeoutSeconds  = 120
+	scfOperationTimeout       = 5 * time.Minute
+	scfCreateAttemptTimeout   = 4 * time.Minute
+	scfCreateReconcileTimeout = 10 * time.Second
 )
 
 func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.GetNodeListRsp, error) {
@@ -70,43 +74,37 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	return &pb.UpdateNodeRsp{RetInfo: retOK()}, nil
 }
 
-func (s *Service) BatchCreateNodes(ctx context.Context, req *pb.BatchCreateNodesReq) (*pb.BatchChangeResult, error) {
-	spaceID, err := spacecontext.MustFromContext(ctx)
-	if err != nil {
-		return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+func (s *Service) executeCreateNodeItem(
+	ctx context.Context,
+	spaceID string,
+	item *pb.NodeCreateItem,
+	index int,
+) (string, error) {
+	if item == nil {
+		return "", fmt.Errorf("node item is required")
 	}
-	nodes := req.GetNodes()
-	if len(nodes) == 0 {
-		return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes is required")}, nil
+	node := cloudNodeFromCreateItem(spaceID, item, index)
+	if strings.TrimSpace(node.CloudAccountID) == "" {
+		return "", fmt.Errorf("cloud_account_id is required")
 	}
-	created := 0
-	for i, item := range nodes {
-		if item == nil {
-			continue
-		}
-		node := cloudNodeFromCreateItem(spaceID, item, i)
-		if node.CloudAccountID == "" {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes.cloud_account_id is required")}, nil
-		}
-		if node.Region == "" {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes.region is required")}, nil
-		}
-		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		if err := s.catalog.UpsertNode(ctx, node); err != nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		created++
+	if strings.TrimSpace(node.Region) == "" {
+		return "", fmt.Errorf("region is required")
 	}
-	return &pb.BatchChangeResult{
-		RetInfo:        retOK(),
-		BatchId:        directBatchID("create_nodes"),
-		ProcessedCount: int32(created),
-	}, nil
+	if strings.TrimSpace(node.PackageID) == "" {
+		return "", fmt.Errorf("package_id is required")
+	}
+	if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+		return "", err
+	}
+	if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
+		return "", err
+	}
+	persistCtx, persistCancel := acceptedSCFPersistenceContext(ctx)
+	defer persistCancel()
+	if err := s.catalog.UpsertNode(persistCtx, node); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("created function %s", node.FunctionName), nil
 }
 
 func (s *Service) ensureNodeExecutionQueues(ctx context.Context, spaceID string, workloads []string) error {
@@ -124,78 +122,61 @@ func (s *Service) ensureNodeExecutionQueues(ctx context.Context, spaceID string,
 	return nil
 }
 
-func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.BatchChangeResult, error) {
+func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.BatchDeleteNodesRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
-		return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	nodeIDs := compactStrings(req.GetNodeIds())
 	if len(nodeIDs) == 0 {
-		return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_ids is required")}, nil
+		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_ids is required")}, nil
 	}
 	if err := s.catalog.DeleteNodes(ctx, spaceID, nodeIDs); err != nil {
-		return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	return &pb.BatchChangeResult{
+	return &pb.BatchDeleteNodesRsp{
 		RetInfo:        retOK(),
-		BatchId:        directBatchID("delete_nodes"),
 		ProcessedCount: int32(len(nodeIDs)),
 	}, nil
 }
 
-func (s *Service) BatchDeployNodes(ctx context.Context, req *pb.BatchDeployNodesReq) (*pb.BatchChangeResult, error) {
-	spaceID, err := spacecontext.MustFromContext(ctx)
+func (s *Service) executeDeployNodeItem(
+	ctx context.Context,
+	spaceID string,
+	item *pb.NodeDeployItem,
+) (string, error) {
+	if item == nil || strings.TrimSpace(item.GetNodeId()) == "" || strings.TrimSpace(item.GetPackageId()) == "" {
+		return "", fmt.Errorf("node_id and package_id are required")
+	}
+	node, err := s.catalog.GetNode(ctx, spaceID, item.GetNodeId())
 	if err != nil {
-		return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		return "", err
 	}
-	deployments := req.GetDeployments()
-	if len(deployments) == 0 {
-		return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "deployments is required")}, nil
+	if node == nil {
+		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
 	}
-	updated := 0
-	for _, item := range deployments {
-		if item == nil {
-			continue
-		}
-		if item.GetNodeId() == "" || item.GetPackageId() == "" {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "deployments.node_id and package_id are required")}, nil
-		}
-		node, err := s.catalog.GetNode(ctx, spaceID, item.GetNodeId())
-		if err != nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		if node == nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found")}, nil
-		}
-		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		pkg, err := s.catalog.GetPackage(ctx, spaceID, item.GetPackageId())
-		if err != nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		if pkg == nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "package not found")}, nil
-		}
-		if err := s.updateSCFFunctionCode(
-			ctx,
-			*node,
-			*pkg,
-			item.GetEnvironment(),
-			item.GetConfig(),
-		); err != nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		if err := s.catalog.UpdateNodeDeployment(ctx, spaceID, item.GetNodeId(), item.GetPackageId(), pkg.Version); err != nil {
-			return &pb.BatchChangeResult{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		updated++
+	pkg, err := s.catalog.GetPackage(ctx, spaceID, item.GetPackageId())
+	if err != nil {
+		return "", err
 	}
-	return &pb.BatchChangeResult{
-		RetInfo:        retOK(),
-		BatchId:        directBatchID("deploy_nodes"),
-		ProcessedCount: int32(updated),
-	}, nil
+	if pkg == nil {
+		return "", fmt.Errorf("package not found: %s", item.GetPackageId())
+	}
+	if pkg.Status != "available" {
+		return "", fmt.Errorf("package %s is not available", pkg.PackageID)
+	}
+	if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+		return "", err
+	}
+	if err := s.updateSCFFunctionCode(ctx, *node, *pkg, item.GetEnvironment(), item.GetConfig()); err != nil {
+		return "", err
+	}
+	persistCtx, persistCancel := acceptedSCFPersistenceContext(ctx)
+	defer persistCancel()
+	if err := s.catalog.UpdateNodeDeployment(persistCtx, spaceID, item.GetNodeId(), item.GetPackageId(), pkg.Version); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("deployed package %s to %s", pkg.PackageID, node.NodeID), nil
 }
 
 func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatReq) (*pb.ReportHeartbeatRsp, error) {
@@ -260,20 +241,42 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	}
 	info, err := client.GetFunction(ctx, ref)
 	if err == nil {
+		remotePackageID := strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"])
+		if remotePackageID != pkg.PackageID {
+			return fmt.Errorf(
+				"scf function %s already exists with code package %q; expected %q",
+				ref.FunctionName,
+				remotePackageID,
+				pkg.PackageID,
+			)
+		}
+		info, err = waitForSCFActive(ctx, client, ref, info)
+		if err != nil {
+			return err
+		}
 		mergeSCFFunctionMetadata(node, info)
-		return fmt.Errorf("SCF function %s already exists; use deploy to update it", ref.FunctionName)
+		// A previous attempt may have created the function before CloudNode was
+		// interrupted. The package marker proves this is the accepted create,
+		// rather than an unrelated function with the same stable name.
+		return nil
 	}
 	if !isSCFNotFound(err) {
 		return fmt.Errorf("get scf function %s: %w", ref.FunctionName, err)
 	}
-	_, err = client.CreateFunction(ctx, tencentscf.CreateFunctionRequest{
+	environment := copyStringMap(item.GetEnvironment())
+	if environment == nil {
+		environment = make(map[string]string)
+	}
+	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
+	createCtx, createCancel := context.WithTimeout(ctx, scfCreateAttemptTimeout)
+	_, err = client.CreateFunction(createCtx, tencentscf.CreateFunctionRequest{
 		FunctionRef: ref,
 		Runtime:     firstString(item.GetRuntime(), pkg.Runtime, "CustomRuntime"),
 		Handler:     firstString(item.GetHandler(), "main"),
 		Description: fmt.Sprintf("MooX cloud function node %s", node.NodeID),
 		MemorySize:  configInt64(config, "memory_size", 256),
 		Timeout:     configInt64(config, "timeout", defaultSCFTimeoutSeconds),
-		Environment: copyStringMap(item.GetEnvironment()),
+		Environment: environment,
 		COSBucket:   pkg.COSBucket,
 		COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
 		COSObject:   strings.TrimPrefix(pkg.COSPath, "/"),
@@ -281,14 +284,45 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		ClsTopicID:  strings.TrimSpace(config["cls_topic_id"]),
 		Type:        firstString(config["function_type"], "Event"),
 	})
+	createCancel()
 	if err != nil {
-		return fmt.Errorf("create scf function %s: %w", ref.FunctionName, err)
-	}
-	info, err = client.GetFunction(ctx, ref)
-	if err != nil {
-		log.WarnContextf(ctx, "[CloudNode] get scf function metadata after create failed, function=%s namespace=%s region=%s err=%v",
-			ref.FunctionName, ref.Namespace, ref.Region, err)
+		createErr := err
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return fmt.Errorf("create scf function %s: %w", ref.FunctionName, createErr)
+		}
+		reconcileCtx := ctx
+		reconcileCancel := func() {}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			reconcileCtx, reconcileCancel = context.WithTimeout(
+				context.WithoutCancel(ctx),
+				scfCreateReconcileTimeout,
+			)
+		}
+		defer reconcileCancel()
+		info, err = client.GetFunction(reconcileCtx, ref)
+		if err != nil {
+			return fmt.Errorf("create scf function %s: %w", ref.FunctionName, createErr)
+		}
+		remotePackageID := strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"])
+		if remotePackageID != pkg.PackageID {
+			return fmt.Errorf(
+				"create scf function %s returned an ambiguous error and remote code package is %q, expected %q: %w",
+				ref.FunctionName,
+				remotePackageID,
+				pkg.PackageID,
+				createErr,
+			)
+		}
+		info, err = waitForSCFActive(reconcileCtx, client, ref, info)
+		if err != nil {
+			return err
+		}
+		mergeSCFFunctionMetadata(node, info)
 		return nil
+	}
+	info, err = waitForSCFActive(ctx, client, ref, nil)
+	if err != nil {
+		return err
 	}
 	mergeSCFFunctionMetadata(node, info)
 	return nil
@@ -386,7 +420,8 @@ func (s *Service) updateSCFFunctionCode(
 	// doubles as the idempotency marker when the caller times out while Tencent
 	// is still returning Updating.
 	if strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"]) == pkg.PackageID {
-		return nil
+		_, err = waitForSCFActive(ctx, client, ref, info)
+		return err
 	}
 	info, err = waitForSCFActive(ctx, client, ref, info)
 	if err != nil {
@@ -423,7 +458,15 @@ func (s *Service) updateSCFFunctionCode(
 	}); err != nil {
 		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
 	}
-	return nil
+	_, err = waitForSCFActive(ctx, client, ref, nil)
+	return err
+}
+
+func acceptedSCFPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return context.WithTimeout(context.WithoutCancel(ctx), nodeBatchCompletionTimeout)
+	}
+	return context.WithCancel(ctx)
 }
 
 func waitForSCFActive(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, current *tencentscf.FunctionInfo) (*tencentscf.FunctionInfo, error) {
@@ -433,7 +476,17 @@ func waitForSCFActive(ctx context.Context, client scfProvisioner, ref tencentscf
 		if current == nil {
 			info, err := client.GetFunction(waitCtx, ref)
 			if err != nil {
-				return nil, fmt.Errorf("get scf function %s status: %w", ref.FunctionName, err)
+				if !isSCFNotFound(err) && !isTransientSCFProviderError(err) {
+					return nil, fmt.Errorf("get scf function %s status: %w", ref.FunctionName, err)
+				}
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-waitCtx.Done():
+					timer.Stop()
+					return nil, fmt.Errorf("wait for scf function %s active: %w", ref.FunctionName, waitCtx.Err())
+				case <-timer.C:
+					continue
+				}
 			}
 			current = info
 		}
@@ -552,7 +605,13 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 	indexSuffix := firstString(metadataString(metadata, "index"), strconv.Itoa(index))
 	functionName := firstString(
 		metadataString(metadata, "function_name"),
-		fmt.Sprintf("%s-%s-%s", prefix, firstString(item.GetRegion(), "region"), indexSuffix),
+		fmt.Sprintf(
+			"%s-%s-%s-%s",
+			prefix,
+			sanitizeSCFFunctionToken(spaceID),
+			firstString(item.GetRegion(), "region"),
+			indexSuffix,
+		),
 	)
 	nodeID := firstString(metadataString(metadata, "node_id"), functionName)
 	return store.CloudNode{
@@ -571,6 +630,27 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 		Status:             "unknown",
 		IsDeleted:          false,
 	}
+}
+
+func sanitizeSCFFunctionToken(value string) string {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		raw = "space"
+	}
+	var b strings.Builder
+	for _, r := range raw {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('-')
+	}
+	token := strings.Trim(b.String(), "-_")
+	if token == "" {
+		token = "space"
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("%s-%x", token, sum[:4])
 }
 
 func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNode {

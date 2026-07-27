@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BatchChangeStatus } from "@/utils/cloud-node-batch-change";
-import {
-  computeAggregateStatus,
-  getStatusText,
-  normalizeCloudNodes,
-  normalizeSupportedWorkloads,
-  parseMetadata
-} from "./cloud-node-model";
+import { getStatusText, normalizeCloudNodes, normalizeSupportedWorkloads, parseMetadata } from "./cloud-node-model";
 
 describe("cloud node model", () => {
   it("normalizes canonical node payloads without sharing mutable workload arrays", () => {
@@ -25,13 +18,7 @@ describe("cloud node model", () => {
     expect(normalizeSupportedWorkloads("broken")).toEqual([]);
   });
 
-  it("aggregates partial batch results", () => {
-    const status = computeAggregateStatus([
-      { batchIndex: 0, batch_change_status: BatchChangeStatus.SUCCESS, total_count: 2, success_count: 2, failed_count: 0 },
-      { batchIndex: 1, batch_change_status: BatchChangeStatus.FAILED, total_count: 1, success_count: 0, failed_count: 1 }
-    ]);
-    expect(status.batch_change_status).toBe(BatchChangeStatus.PARTIAL);
-    expect(status.total_count).toBe(3);
+  it("formats canonical node statuses", () => {
     expect(getStatusText(2)).toBe("在线");
     expect(getStatusText("online")).toBe("online");
   });

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
@@ -185,8 +186,11 @@ func (c *KlineCollector) CollectWithResult(
 			break
 		}
 	}
-	log.InfoContextf(ctx, "K线采集完成: space_id=%s, dataset_id=%s, inst_type=%s, symbol=%s, interval=%s, count=%d",
-		spaceID, datasetID, params.InstType, params.Symbol, params.Interval, total)
+	log.InfoContextf(
+		ctx,
+		"K线采集完成: space_id=%s, dataset_id=%s, inst_type=%s, symbol=%s, interval=%s, count=%d, job_item_id=%q",
+		spaceID, datasetID, params.InstType, params.Symbol, params.Interval, total, jobcontext.JobItemID(ctx),
+	)
 	result.RowsWritten = total
 	if total == 0 {
 		result.ZeroWriteReason = "no_new_closed_kline"

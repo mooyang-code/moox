@@ -11,6 +11,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -29,9 +30,17 @@ func Open(dbCfg *config.DatabaseConfig) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
-	db, err := gorm.Open(sqlite.Open(buildSQLiteDSN(dbPath)), &gorm.Config{})
+	// Batch Item request_json contains deployment credentials. Do not let
+	// GORM's error/slow-query logger render SQL values into service logs.
+	db, err := gorm.Open(sqlite.Open(buildSQLiteDSN(dbPath)), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+	if err := os.Chmod(dbPath, 0o600); err != nil {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		return nil, fmt.Errorf("restrict cloudnode database permissions: %w", err)
 	}
 	s := &Store{db: db, catalog: NewCatalogRepository(db)}
 	applySQLitePoolConfig(db, dbCfg)

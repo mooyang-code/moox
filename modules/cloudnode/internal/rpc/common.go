@@ -15,10 +15,6 @@ func Now() time.Time {
 	return time.Now().UTC()
 }
 
-func directBatchID(action string) string {
-	return fmt.Sprintf("batch-%s-%d", action, Now().UnixNano())
-}
-
 func pageFromCommon(page *pb.Page) (int, int) {
 	if page == nil {
 		return 1, 50

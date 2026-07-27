@@ -26,7 +26,9 @@ type Service struct {
 	credentialResolver interface {
 		Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error)
 	}
-	scfClientFactory func(cloudcredential.TencentCredential) scfProvisioner
+	scfClientFactory     func(cloudcredential.TencentCredential) scfProvisioner
+	executeNodeBatchItem func(context.Context, store.NodeBatchItem) (string, error)
+	nodeBatchTakenHook   func([]store.NodeBatchItem)
 }
 
 type scfProvisioner interface {

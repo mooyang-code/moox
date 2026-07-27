@@ -9,6 +9,7 @@ import (
 	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
@@ -130,8 +131,11 @@ func (c *SymbolCollector) CollectWithResult(
 		return sources.CollectResult{}, err
 	}
 
-	log.InfoContextf(ctx, "[SymbolCollector] 标的采集完成, space_id=%s, dataset_id=%s, InstType=%s",
-		spaceID, datasetID, params.InstType)
+	log.InfoContextf(
+		ctx,
+		"[SymbolCollector] 标的采集完成, space_id=%s, dataset_id=%s, InstType=%s, job_item_id=%q",
+		spaceID, datasetID, params.InstType, jobcontext.JobItemID(ctx),
+	)
 	result := sources.CollectResult{
 		RowsWritten:           len(filteredSymbols),
 		RecordSnapshotVersion: snapshotVersion,

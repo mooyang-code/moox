@@ -17,6 +17,7 @@ type Config struct {
 	Queue      QueueConfig      `yaml:"queue"`
 	JetStream  JetStreamConfig  `yaml:"jetstream"`
 	JobItem    JobItemConfig    `yaml:"job_item"`
+	NodeBatch  NodeBatchConfig  `yaml:"node_batch"`
 	TencentSCF TencentSCFConfig `yaml:"tencent_scf"`
 	Debug      DebugConfig      `yaml:"debug"`
 	Health     HealthConfig     `yaml:"health"`
@@ -38,6 +39,12 @@ type JobItemConfig struct {
 	ActiveTTLHours       int    `yaml:"active_ttl_hours"`
 	HistoryDir           string `yaml:"history_dir"`
 	HistoryRetentionDays int    `yaml:"history_retention_days"`
+}
+
+// NodeBatchConfig controls asynchronous SCF node batch execution.
+type NodeBatchConfig struct {
+	BatchSize    int           `yaml:"batch_size"`
+	PollInterval time.Duration `yaml:"poll_interval"`
 }
 
 // QueueConfig selects the CloudNode JobItem execution queue backend.
@@ -100,6 +107,12 @@ func (c *Config) Validate() error {
 	if c.Queue.Backend == "jetstream" && c.JetStream.Enabled && c.JetStream.MaxAckPending <= 0 {
 		return fmt.Errorf("jetstream.max_ack_pending must be positive")
 	}
+	if c.NodeBatch.BatchSize < 1 || c.NodeBatch.BatchSize > 10 {
+		return fmt.Errorf("node_batch.batch_size must be between 1 and 10")
+	}
+	if c.NodeBatch.PollInterval < 100*time.Millisecond || c.NodeBatch.PollInterval > 10*time.Second {
+		return fmt.Errorf("node_batch.poll_interval must be between 100ms and 10s")
+	}
 	return nil
 }
 
@@ -155,6 +168,10 @@ func Default() *Config {
 			ActiveTTLHours:       48,
 			HistoryDir:           "../data/cloudnode/jobs",
 			HistoryRetentionDays: 2,
+		},
+		NodeBatch: NodeBatchConfig{
+			BatchSize:    3,
+			PollInterval: 500 * time.Millisecond,
 		},
 		TencentSCF: TencentSCFConfig{
 			DefaultRegion:    "ap-guangzhou",

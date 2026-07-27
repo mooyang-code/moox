@@ -64,7 +64,7 @@
 
         <!-- 批量变更进度提示 -->
         <a-alert
-          v-if="batchChangeStatuses.length > 0"
+          v-if="currentBatchChangeStatus"
           type="info"
           style="margin: var(--moox-space-4) 0"
           closable
@@ -72,49 +72,31 @@
         >
           <template #title>
             <a-space>
-              <icon-loading spin />
-              <span>云节点批量变更处理中</span>
-            </a-space>
-          </template>
-          <div
-            v-for="(batchChange, index) in batchChangeStatuses"
-            :key="batchChange.batch_id || index"
-            style="margin-bottom: var(--moox-space-3)"
-          >
-            <div>批次 {{ index + 1 }}：{{ getBatchChangeTypeText(batchChange.batch_change_type) }}</div>
-            <div>处理进度：{{ batchChange.success_count + batchChange.failed_count }} / {{ batchChange.total_count }}</div>
-            <div>成功：{{ batchChange.success_count }}，失败：{{ batchChange.failed_count }}</div>
-            <a-progress
-              :percent="(Number(batchChange.progress) || 0) / 100"
-              :status="batchChange.failed_count > 0 ? 'warning' : 'normal'"
-              :stroke-width="8"
-              style="margin-top: var(--moox-space-2)"
-            />
-          </div>
-        </a-alert>
-        <a-alert
-          v-else-if="currentBatchChangeStatus && currentBatchChangeStatus.batch_change_status === 1"
-          type="info"
-          style="margin: var(--moox-space-4) 0"
-          closable
-          @close="handleCloseBatchChangeAlert"
-        >
-          <template #title>
-            <a-space>
-              <icon-loading spin />
-              <span>云节点批量变更处理中</span>
+              <icon-loading v-if="batchChangeProcessing" spin />
+              <span>
+                {{
+                  batchChangeProcessing
+                    ? "云节点批量变更处理中"
+                    : batchPollingTimedOut
+                      ? "已停止自动查询任务进度"
+                      : "云节点批量变更已完成"
+                }}
+              </span>
             </a-space>
           </template>
           <div>
-            <div>变更类型：{{ getBatchChangeTypeText(currentBatchChangeStatus.batch_change_type) }}</div>
+            <div>任务：{{ currentBatchChangeStatus.job.job_id }}</div>
+            <div>变更类型：{{ getBatchChangeTypeText(currentBatchChangeStatus.job.operation) }}</div>
             <div>
-              处理进度：{{ currentBatchChangeStatus.success_count + currentBatchChangeStatus.failed_count }} /
-              {{ currentBatchChangeStatus.total_count }}
+              处理进度：{{ currentBatchChangeStatus.job.success_count + currentBatchChangeStatus.job.failed_count }} /
+              {{ currentBatchChangeStatus.job.total_count }}
             </div>
-            <div>成功：{{ currentBatchChangeStatus.success_count }}，失败：{{ currentBatchChangeStatus.failed_count }}</div>
+            <div>
+              成功：{{ currentBatchChangeStatus.job.success_count }}，失败：{{ currentBatchChangeStatus.job.failed_count }}
+            </div>
             <a-progress
-              :percent="(Number(currentBatchChangeStatus.progress) || 0) / 100"
-              :status="currentBatchChangeStatus.failed_count > 0 ? 'warning' : 'normal'"
+              :percent="(Number(currentBatchChangeStatus.job.progress_percent) || 0) / 100"
+              :status="currentBatchChangeStatus.job.failed_count > 0 ? 'warning' : 'normal'"
               :stroke-width="8"
               style="margin-top: var(--moox-space-2)"
             />
@@ -322,7 +304,13 @@
         </a-form-item>
 
         <a-form-item field="nodeCount" label="节点数量" required>
-          <a-input-number v-model="batchAddForm.nodeCount" :min="1" placeholder="请输入要创建的节点数量" style="width: 100%" />
+          <a-input-number
+            v-model="batchAddForm.nodeCount"
+            :min="1"
+            :max="100"
+            placeholder="请输入要创建的节点数量"
+            style="width: 100%"
+          />
         </a-form-item>
 
         <!-- 心跳配置 -->
@@ -753,6 +741,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -762,16 +751,24 @@ import {
   type FunctionPackage
 } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
-import { batchDeleteNodes, batchDeployNodes, getNodeList, listCloudRegions, updateNode } from "@/api/cloud-node";
+import {
+  batchDeleteNodes,
+  getNodeBatchChange,
+  getNodeList,
+  listCloudRegions,
+  submitDeployNodes,
+  updateNode,
+  type GetNodeBatchChangeResponse,
+  type SubmitNodeBatchResponse
+} from "@/api/cloud-node";
 import { useSpaceStore } from "@/store/modules/space";
-import { BatchChangeStatus } from "@/utils/cloud-node-batch-change";
-import type { BatchChangeStatusResponse } from "@/utils/cloud-node-batch-change";
+import { getNodeBatchJobId, setNodeBatchJobId } from "@/utils/cloud-node-batch-change";
 import CloudAccountManage from "../cloud-account/cloud-account-manage.vue";
 import FunctionPackageManage from "./function-package-manage.vue";
 import CloudNodeTable from "./components/cloud-node-table.vue";
-import { makeCompletedBatchChangeStatus, submitCloudNodeBatchChange } from "./cloud-node-batch-service";
+import { submitCloudNodeBatchChange } from "./cloud-node-batch-service";
+import { createCloudNodeBatchPoller } from "./cloud-node-batch-poller";
 import {
-  computeAggregateStatus,
   formatDateTime,
   formatFileSize,
   formatMetadata,
@@ -790,7 +787,6 @@ import {
   getStatusText,
   normalizeCloudNodes,
   normalizeSupportedWorkloads,
-  type BatchChangeViewStatus,
   type BatchPlanItem,
   type CloudNode,
   type RegionInfo
@@ -799,10 +795,13 @@ import {
 // 状态管理
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
+const route = useRoute();
+const router = useRouter();
 const loading = ref(false);
 const batchChangeProcessing = ref(false);
-const currentBatchChangeStatus = ref<BatchChangeStatusResponse | null>(null);
-const batchChangeCompleteHandled = ref(false); // 防止重复处理提交完成
+const batchPollingTimedOut = ref(false);
+const currentBatchChangeStatus = ref<GetNodeBatchChangeResponse | null>(null);
+const batchPoller = createCloudNodeBatchPoller(getNodeBatchChange);
 
 const form = reactive({
   cloudAccountId: "",
@@ -846,7 +845,6 @@ const batchPlanItems = ref<BatchPlanItem[]>([]);
 const batchPlanNotice = ref("");
 const batchPlanRequested = ref(0);
 const batchPlanTag = ref("");
-const batchChangeStatuses = ref<BatchChangeViewStatus[]>([]);
 
 // 批量部署相关
 const batchDeployVisible = ref(false);
@@ -943,10 +941,21 @@ onMounted(async () => {
   }
   await loadCloudAccounts();
   await loadRegions(); // 加载地区列表
+  const jobId = getNodeBatchJobId(route.query);
+  if (jobId) {
+    await startBatchPolling(jobId);
+  }
 });
 
 watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   if (spaceId === oldSpaceId) return;
+  batchPoller.stop();
+  currentBatchChangeStatus.value = null;
+  batchChangeProcessing.value = false;
+  batchPollingTimedOut.value = false;
+  if (getNodeBatchJobId(route.query)) {
+    await replaceRouteJobId();
+  }
   pagination.value.current = 1;
   selectedKeys.value = [];
   if (!spaceId) {
@@ -958,101 +967,97 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
 });
 
 onBeforeUnmount(() => {
-  batchChangeStatuses.value = [];
+  batchPoller.dispose();
   currentBatchChangeStatus.value = null;
 });
 
-// 批量变更完成处理
-const handleBatchChangeComplete = async (data: BatchChangeStatusResponse) => {
-  batchChangeStatuses.value = [];
+const replaceRouteJobId = (jobId?: string) => router.replace({ query: setNodeBatchJobId(route.query, jobId) });
 
-  // 防止重复处理
-  if (batchChangeCompleteHandled.value) {
+const showBatchResult = (data: GetNodeBatchChangeResponse) => {
+  if (data.job.failed_count === 0) {
+    Message.success(`${getBatchChangeTypeText(data.job.operation)}成功！共处理 ${data.job.total_count} 个节点`);
     return;
   }
-  batchChangeCompleteHandled.value = true;
 
-  // 先更新状态为完成状态，让用户看到100%的进度
-  currentBatchChangeStatus.value = data;
+  const failedItems = data.items.filter(item => item.status === "NODE_BATCH_ITEM_STATUS_FAILED");
+  const content = () =>
+    h("div", { style: { maxHeight: "400px", overflowY: "auto" } }, [
+      h("div", { style: { marginBottom: "var(--moox-space-3)" } }, [
+        h("div", `变更类型：${getBatchChangeTypeText(data.job.operation)}`),
+        h("div", `总数量：${data.job.total_count}`),
+        h("div", `成功数量：${data.job.success_count}`),
+        h("div", { style: { color: "#ff4d4f" } }, `失败数量：${data.job.failed_count}`)
+      ]),
+      ...failedItems.map(item =>
+        h(
+          "div",
+          {
+            key: item.item_id,
+            style: {
+              marginBottom: "var(--moox-space-3)",
+              padding: "var(--moox-space-2)",
+              backgroundColor: "#fff2f0",
+              borderRadius: "4px",
+              border: "1px solid #ffccc7"
+            }
+          },
+          [
+            h("div", { style: { fontWeight: "bold" } }, item.node_id || item.item_id),
+            h("div", { style: { color: "#ff4d4f", fontSize: "12px" } }, item.error_message || "未知错误")
+          ]
+        )
+      )
+    ]);
 
-  // 延迟1秒后再清理
-  setTimeout(async () => {
-    batchChangeProcessing.value = false;
-    currentBatchChangeStatus.value = null;
+  Modal.error({
+    title: data.job.status === "NODE_BATCH_STATUS_PARTIAL" ? "批量变更部分失败" : "批量变更失败",
+    content,
+    width: 700,
+    maskClosable: false
+  });
+};
 
-    // 清空选中项
-    selectedKeys.value = [];
-    // 刷新数据
-    await loadData();
-  }, 1000);
-
-  // 延迟显示结果弹窗，让用户先看到完成的进度
-  setTimeout(() => {
-    // 检查是否有失败项（通过failed_count判断）
-    if (data.failed_count > 0) {
-      // 有失败项，使用 Modal.error 显示失败详情
-      const failedItems = data.failed_items || [];
-
-      // 创建 Vue 渲染函数
-      const content = () =>
-        h("div", { style: { maxHeight: "400px", overflowY: "auto" } }, [
-          h("div", { style: { marginBottom: "var(--moox-space-3)" } }, [
-            h("div", `变更类型：${getBatchChangeTypeText(data.batch_change_type)}`),
-            h("div", `总数量：${data.total_count}`),
-            h("div", `成功数量：${data.success_count}`),
-            h("div", { style: { color: "#ff4d4f" } }, `失败数量：${data.failed_count}`)
-          ]),
-          failedItems.length > 0 &&
-            h("div", { style: { marginTop: "var(--moox-space-4)" } }, [
-              h("strong", "失败详情："),
-              h(
-                "div",
-                { style: { marginTop: "var(--moox-space-2)" } },
-                failedItems.map((item: any, index: number) =>
-                  h(
-                    "div",
-                    {
-                      key: index,
-                      style: {
-                        marginBottom: "var(--moox-space-3)",
-                        padding: "var(--moox-space-2)",
-                        backgroundColor: "#fff2f0",
-                        borderRadius: "4px",
-                        border: "1px solid #ffccc7"
-                      }
-                    },
-                    [
-                      h(
-                        "div",
-                        { style: { fontWeight: "bold", marginBottom: "var(--moox-space-1)" } },
-                        item.item_name || item.item_id
-                      ),
-                      h("div", { style: { color: "#ff4d4f", fontSize: "12px" } }, item.error_message || "未知错误")
-                    ]
-                  )
-                )
-              )
-            ])
-        ]);
-
-      Modal.error({
-        title: "批量变更失败",
-        content,
-        width: 700,
-        maskClosable: false
-      });
-    } else {
-      // 全部成功，显示成功提示
-      Message.success(`${getBatchChangeTypeText(data.batch_change_type)}成功！共处理 ${data.total_count} 个节点`);
+const startBatchPolling = async (jobId: string) => {
+  batchChangeProcessing.value = true;
+  batchPollingTimedOut.value = false;
+  await batchPoller.start(jobId, {
+    onUpdate: data => {
+      currentBatchChangeStatus.value = data;
+    },
+    onTerminal: async data => {
+      currentBatchChangeStatus.value = data;
+      batchChangeProcessing.value = false;
+      batchPollingTimedOut.value = false;
+      selectedKeys.value = [];
+      await replaceRouteJobId();
+      await loadData();
+      showBatchResult(data);
+    },
+    onError: error => {
+      console.warn("查询云节点批量变更进度失败，将继续重试:", error);
+    },
+    onPollingTimeout: () => {
+      batchChangeProcessing.value = false;
+      batchPollingTimedOut.value = true;
+      Message.warning("已停止自动查询任务进度，刷新页面可继续查询");
     }
-  }, 1200); // 稍微延迟比进度条消失时间长一点，避免冲突
+  });
+};
+
+const beginBatchPolling = async (response: SubmitNodeBatchResponse) => {
+  if (!response.job_id) throw new Error("cloudnode 未返回 job_id");
+  currentBatchChangeStatus.value = null;
+  await replaceRouteJobId(response.job_id);
+  await startBatchPolling(response.job_id);
 };
 
 // 关闭批量变更提示
 const handleCloseBatchChangeAlert = () => {
-  batchChangeStatuses.value = [];
+  batchPoller.stop();
   currentBatchChangeStatus.value = null;
   batchChangeProcessing.value = false;
+  batchPollingTimedOut.value = false;
+  void replaceRouteJobId();
 };
 
 // 批量新增
@@ -1124,6 +1129,10 @@ const handleBatchAddOk = async () => {
     Message.warning("请输入有效的节点数量");
     return;
   }
+  if (batchAddForm.nodeCount > 100) {
+    Message.warning("一次最多创建 100 个云节点");
+    return;
+  }
 
   // 关闭弹窗
   batchAddVisible.value = false;
@@ -1179,86 +1188,24 @@ const buildBatchChangesFromPlan = (items: BatchPlanItem[]) => {
   return batchChanges;
 };
 
-const chunkTasks = <T,>(items: T[], size: number): T[][] => {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    chunks.push(items.slice(i, i + size));
-  }
-  return chunks;
-};
-
 const executeBatchAddChanges = async (batchChanges: Array<{ batchChangeType: string; requestPayload: any }>) => {
   if (batchChanges.length === 0) {
     Message.warning("没有可执行的批量变更");
     return;
   }
-
-  const chunks = chunkTasks(batchChanges, 100);
-
-  batchChangeProcessing.value = true;
-  batchChangeCompleteHandled.value = false;
-  currentBatchChangeStatus.value = null;
-
-  const initialStatuses: BatchChangeViewStatus[] = chunks.map((chunk, index) => ({
-    batchIndex: index,
-    batch_id: "",
-    batch_change_type: "CREATE_NODE",
-    batch_change_status: BatchChangeStatus.PROCESSING,
-    total_count: chunk.length,
-    success_count: 0,
-    failed_count: 0,
-    progress: 0,
-    created_at: new Date().toISOString()
-  }));
-  batchChangeStatuses.value = initialStatuses;
-
-  const batchIds: string[] = [];
-
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunk = chunks[i];
-    try {
-      const batchId = await submitCloudNodeBatchChange(chunk);
-      batchIds.push(batchId);
-      batchChangeStatuses.value = batchChangeStatuses.value.map(item =>
-        item.batchIndex === i ? { ...item, batch_id: batchId } : item
-      );
-    } catch (error: any) {
-      batchChangeStatuses.value = batchChangeStatuses.value.map(item =>
-        item.batchIndex === i
-          ? {
-              ...item,
-              batch_change_status: BatchChangeStatus.FAILED,
-              failed_count: item.total_count,
-              progress: 100,
-              error_message: error?.message || "创建批量变更失败"
-            }
-          : item
-      );
-    }
-  }
-
-  if (batchIds.length === 0) {
-    const finalStatus = computeAggregateStatus(batchChangeStatuses.value);
-    batchChangeStatuses.value = [];
-    handleBatchChangeComplete(finalStatus);
+  if (batchChanges.length > 100) {
+    Message.warning("一次最多创建 100 个云节点");
     return;
   }
 
-  batchChangeStatuses.value = batchChangeStatuses.value.map(item =>
-    item.batch_id
-      ? {
-          ...item,
-          batch_change_status: BatchChangeStatus.SUCCESS,
-          success_count: item.total_count,
-          failed_count: 0,
-          progress: 100,
-          completed_time: new Date().toISOString()
-        }
-      : item
-  );
-  const finalStatus = computeAggregateStatus(batchChangeStatuses.value);
-  batchChangeStatuses.value = [];
-  handleBatchChangeComplete(finalStatus);
+  try {
+    batchChangeProcessing.value = true;
+    const response = await submitCloudNodeBatchChange(batchChanges);
+    await beginBatchPolling(response);
+  } catch (error: any) {
+    batchChangeProcessing.value = false;
+    Message.error(error?.message || "创建批量变更失败");
+  }
 };
 
 const executeBatchAddDirect = async () => {
@@ -1503,15 +1450,12 @@ const executeBatchDelete = async () => {
   try {
     const total = selectedKeys.value.length;
     const rsp = await batchDeleteNodes({ node_ids: selectedKeys.value });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-
-    batchChangeProcessing.value = true;
-    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
-    completeCloudNodeBatchChange(rsp.batch_id, "DELETE_NODE", total);
-  } catch (error) {
-    console.error("创建批量删除变更失败:", error);
+    selectedKeys.value = [];
+    await loadData();
+    Message.success(`已删除 ${rsp.processed_count} / ${total} 个节点`);
+  } catch (error: any) {
+    console.error("批量删除失败:", error);
+    Message.error("批量删除失败: " + (error?.message || "未知错误"));
   }
 };
 
@@ -1607,10 +1551,6 @@ watch(
   }
 );
 
-const completeCloudNodeBatchChange = (batchId: string, batchChangeType: string, total: number) => {
-  handleBatchChangeComplete(makeCompletedBatchChangeStatus(batchId, batchChangeType, total));
-};
-
 const getSupportedWorkloads = (value: string[] | string | undefined): string[] => normalizeSupportedWorkloads(value);
 
 // 分页相关（使用后端分页）
@@ -1660,13 +1600,8 @@ const selectAll = (checked: boolean) => {
 const onDelete = async (record: CloudNode) => {
   try {
     const rsp = await batchDeleteNodes({ node_ids: [record.node_id] });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-
-    batchChangeProcessing.value = true;
-    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
-    completeCloudNodeBatchChange(rsp.batch_id, "DELETE_NODE", 1);
+    await loadData();
+    Message.success(rsp.processed_count > 0 ? "删除成功" : "节点无需删除");
   } catch (error: any) {
     Message.error("删除失败: " + (error?.message || "未知错误"));
   }
@@ -1812,23 +1747,18 @@ const handleBatchDeployOk = async () => {
 // 执行批量部署
 const executeBatchDeploy = async () => {
   try {
-    const total = selectedKeys.value.length;
-    const rsp = await batchDeployNodes({
+    batchChangeProcessing.value = true;
+    const response = await submitDeployNodes({
       node_ids: selectedKeys.value,
       package_id: batchDeployForm.selectedPackageId
     });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-
-    batchChangeProcessing.value = true;
-    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
-    completeCloudNodeBatchChange(rsp.batch_id, "DEPLOY_NODE", total);
+    await beginBatchPolling(response);
 
     // 清理表单
     batchDeployForm.selectedPackageId = "";
     batchDeployForm.deployConfig = {};
   } catch (error: any) {
+    batchChangeProcessing.value = false;
     console.error("创建批量部署变更失败:", error);
     Message.error("创建批量部署变更失败: " + (error?.message || "未知错误"));
   }
@@ -1890,21 +1820,17 @@ const handleSingleDeployOk = async () => {
   singleDeployVisible.value = false;
 
   try {
-    const rsp = await batchDeployNodes({
+    batchChangeProcessing.value = true;
+    const response = await submitDeployNodes({
       node_ids: [singleDeployForm.nodeId],
       package_id: singleDeployForm.selectedPackageId
     });
-    if (!rsp.batch_id) {
-      throw new Error("cloudnode 未返回 batch_id");
-    }
-
-    batchChangeProcessing.value = true;
-    batchChangeCompleteHandled.value = false; // 重置批量变更完成处理标志
-    completeCloudNodeBatchChange(rsp.batch_id, "DEPLOY_NODE", 1);
+    await beginBatchPolling(response);
 
     // 清理表单
     singleDeployForm.selectedPackageId = "";
   } catch (error: any) {
+    batchChangeProcessing.value = false;
     console.error("创建部署变更失败:", error);
     Message.error("创建部署变更失败: " + (error?.message || "未知错误"));
   }

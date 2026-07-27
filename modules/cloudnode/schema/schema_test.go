@@ -28,3 +28,18 @@ func TestAllSQLDoesNotContainDeletedOnlineJobItemTables(t *testing.T) {
 		}
 	}
 }
+
+func TestSchemaContainsNodeBatchTablesAndIndexes(t *testing.T) {
+	sql := AllSQL()
+	for _, required := range []string{
+		"t_cloud_node_batches",
+		"t_cloud_node_batch_items",
+		"idx_cloud_node_batches_space_job",
+		"idx_cloud_node_batch_items_job_index",
+		"idx_cloud_node_batch_items_status_id",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("cloudnode schema does not contain %s", required)
+		}
+	}
+}

@@ -1,7 +1,5 @@
 import { NODE_STATUS_LABEL } from "@/api/cloud-node";
 import { PACKAGE_STATUS_LABEL, PACKAGE_TYPE_LABEL } from "@/api/function-package";
-import { BatchChangeStatus } from "@/utils/cloud-node-batch-change";
-import type { BatchChangeDetailItem, BatchChangeStatusResponse } from "@/utils/cloud-node-batch-change";
 
 export interface CloudNode {
   node_id: string;
@@ -43,8 +41,6 @@ export interface BatchPlanItem {
   availableNodes: number;
   planCount: number;
 }
-
-export type BatchChangeViewStatus = BatchChangeStatusResponse & { batchIndex: number };
 
 export function normalizeSupportedWorkloads(value: string[] | string | undefined): string[] {
   if (!value) return [];
@@ -97,38 +93,15 @@ export function parseMetadata(value: unknown): Record<string, unknown> {
   return typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-export function computeAggregateStatus(statuses: BatchChangeViewStatus[]): BatchChangeStatusResponse {
-  const totals = statuses.reduce(
-    (acc, item) => {
-      acc.total += item.total_count || 0;
-      acc.success += item.success_count || 0;
-      acc.failed += item.failed_count || 0;
-      if (item.failed_items?.length) acc.failedItems.push(...item.failed_items);
-      return acc;
-    },
-    { total: 0, success: 0, failed: 0, failedItems: [] as BatchChangeDetailItem[] }
-  );
-  const status =
-    totals.failed === 0 ? BatchChangeStatus.SUCCESS : totals.success > 0 ? BatchChangeStatus.PARTIAL : BatchChangeStatus.FAILED;
-  const now = new Date().toISOString();
-  return {
-    batch_id: "",
-    batch_change_type: "CREATE_NODE",
-    batch_change_status: status,
-    total_count: totals.total,
-    success_count: totals.success,
-    failed_count: totals.failed,
-    progress: 100,
-    created_at: now,
-    completed_time: now,
-    failed_items: totals.failedItems
-  };
-}
-
 export const getBatchChangeTypeText = (value: string) =>
-  ({ CREATE_NODE: "批量创建节点", BATCH_UPDATE_NODE: "批量更新节点", DELETE_NODE: "批量删除节点", DEPLOY_NODE: "批量部署节点" })[
-    value
-  ] || value;
+  (
+    ({
+      CREATE_NODE: "批量创建节点",
+      DEPLOY_NODE: "批量部署节点",
+      NODE_BATCH_OPERATION_CREATE_NODES: "批量创建节点",
+      NODE_BATCH_OPERATION_DEPLOY_NODES: "批量部署节点"
+    }) as Record<string, string>
+  )[value] || value;
 
 export const getProviderName = (value: string) => ({ tencent: "腾讯云", aliyun: "阿里云", aws: "AWS" })[value] || value;
 export const getNodeTypeLabel = (value: string) =>

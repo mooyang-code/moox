@@ -13,6 +13,7 @@ import (
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/executor"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
@@ -290,6 +291,7 @@ func handleDeliveryAt(
 		JobType: payload.GetJobType(), Params: payload.GetParams().AsMap(), ExecuteAt: executeAt,
 		Consumer: delivery.Consumer, MessageID: delivery.RawMessageID,
 	}
+	ctx = jobcontext.WithJobItemID(ctx, item.JobItemID)
 	return nodeRuntime.ExecuteJobItem(ctx, cfg, item, delivery.DeliveryCount, binding.maxDeliver)
 }
 

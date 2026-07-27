@@ -191,8 +191,11 @@ func actionLogEntries(
 	fields.Decision = decisionName(result.Decision)
 	fields.Delay = result.Delay
 	fields.Err = actionErr
+	if fields.Err == nil {
+		fields.Err = result.Err
+	}
 	if actionErr == nil {
-		return []jobLogEntry{{fields: fields}}
+		return []jobLogEntry{{fields: fields, failed: result.Err != nil}}
 	}
 	fields.ErrorCode = "DELIVERY_ACTION_FAILED"
 	actionEntry := jobLogEntry{fields: fields, failed: true}

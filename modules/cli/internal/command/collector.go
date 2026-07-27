@@ -24,7 +24,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultCollectorSCFTimeout = "120"
+const (
+	defaultCollectorSCFTimeout   = "120"
+	maxCollectorPublishNodeCount = 100
+)
 
 var defaultCollectorJobTypes = []string{
 	"collect.binance.kline",
@@ -63,11 +66,18 @@ type collectorPublishOptions struct {
 	Config                 []string
 	EventBusCredentialFile string
 	NodeCount              int
-	CreateBatchSize        int
-	DeployBatchSize        int
 	FunctionNamePrefix     string
 	CLSSecretID            string
 	CLSSecretKey           string
+}
+
+type collectorPublishStatusOptions struct {
+	ControlURL       string
+	AccessToken      string
+	ServiceAccessKey string
+	ServiceSecretKey string
+	SpaceID          string
+	JobID            string
 }
 
 type collectorDeployOptions struct {
@@ -89,7 +99,10 @@ var collectorDeployFlags collectorDeployOptions
 
 var collectorFunctionDeployCmd = &cobra.Command{
 	Use:   "deploy",
-	Short: "上传并部署数据采集器云函数到已有节点",
+	Short: "上传数据采集器云函数并提交单节点异步部署",
+	Long: "上传数据采集器云函数并提交单节点异步部署。\n" +
+		"使用 moox-cli collector function publish status --job-id <id> 查询结果。",
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		summary, err := deployCollectorFunction(cmd.Context(), collectorDeployFlags)
 		if err != nil {
@@ -103,6 +116,7 @@ var collectorFunctionDeployCmd = &cobra.Command{
 
 var collectorPackageFlags collectorPackageOptions
 var collectorPublishFlags collectorPublishOptions
+var collectorPublishStatusFlags collectorPublishStatusOptions
 
 var collectorCmd = &cobra.Command{
 	Use:   "collector",
@@ -135,7 +149,17 @@ var collectorFunctionPackageCmd = &cobra.Command{
 
 var collectorFunctionPublishCmd = &cobra.Command{
 	Use:   "publish",
-	Short: "上传并发布数据采集器云函数节点",
+	Short: "提交并查询数据采集器云函数发布任务",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		_ = cmd.Help()
+	},
+}
+
+var collectorFunctionPublishSubmitCmd = &cobra.Command{
+	Use:   "submit",
+	Short: "上传并提交数据采集器云函数 fleet 发布任务",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		summary, err := publishCollectorFunction(cmd.Context(), collectorPublishFlags)
 		if err != nil {
@@ -147,38 +171,53 @@ var collectorFunctionPublishCmd = &cobra.Command{
 	},
 }
 
+var collectorFunctionPublishStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "查询数据采集器云函数发布任务",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		status, err := publishCollectorFunctionStatus(cmd.Context(), collectorPublishStatusFlags)
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(status)
+	},
+}
+
 type collectorPublishSummary struct {
-	ZipPath              string   `json:"zip_path"`
-	PackageID            string   `json:"package_id"`
-	FleetMode            string   `json:"fleet_mode"`
-	CreateBatchIDs       []string `json:"create_batch_ids,omitempty"`
-	DeployBatchIDs       []string `json:"deploy_batch_ids,omitempty"`
-	CreateProcessedCount int      `json:"create_processed_count,omitempty"`
-	DeployProcessedCount int      `json:"deploy_processed_count,omitempty"`
-	DeploySkippedCount   int      `json:"deploy_skipped_count,omitempty"`
-	DeployBatchSize      int      `json:"deploy_batch_size,omitempty"`
+	ZipPath    string `json:"zip_path"`
+	PackageID  string `json:"package_id"`
+	CLSTopicID string `json:"cls_topic_id"`
+	FleetMode  string `json:"fleet_mode"`
+	JobID      string `json:"job_id"`
+	Operation  string `json:"operation"`
+	TotalCount int    `json:"total_count"`
 }
 
 type collectorDeploySummary struct {
-	ZipPath              string `json:"zip_path"`
-	PackageID            string `json:"package_id"`
-	DeployBatchID        string `json:"deploy_batch_id"`
-	DeployProcessedCount int    `json:"deploy_processed_count"`
+	ZipPath    string `json:"zip_path"`
+	PackageID  string `json:"package_id"`
+	JobID      string `json:"job_id"`
+	Operation  string `json:"operation"`
+	TotalCount int    `json:"total_count"`
 }
 
 type collectorFleetAPI interface {
 	ListCloudNodes(context.Context, adminclient.CloudNodeListFilter) ([]adminclient.CloudNode, error)
-	BatchCreateNodes(context.Context, []adminclient.NodeCreateItem) (*adminclient.BatchChangeResponse, error)
-	BatchDeployNodes(context.Context, []adminclient.NodeDeployItem) (*adminclient.BatchChangeResponse, error)
+	SubmitCreateNodes(context.Context, []adminclient.NodeCreateItem) (*adminclient.SubmitNodeBatchResponse, error)
+	SubmitDeployNodes(context.Context, []adminclient.NodeDeployItem) (*adminclient.SubmitNodeBatchResponse, error)
 }
 
 func init() {
 	rootCmd.AddCommand(collectorCmd)
 	collectorCmd.AddCommand(collectorFunctionCmd)
 	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd, collectorFunctionPublishCmd, collectorFunctionDeployCmd)
+	collectorFunctionPublishCmd.AddCommand(collectorFunctionPublishSubmitCmd, collectorFunctionPublishStatusCmd)
 
 	addCollectorPackageFlags(collectorFunctionPackageCmd, &collectorPackageFlags)
-	addCollectorPackageFlags(collectorFunctionPublishCmd, &collectorPublishFlags.collectorPackageOptions)
+	addCollectorPackageFlags(collectorFunctionPublishSubmitCmd, &collectorPublishFlags.collectorPackageOptions)
 	addCollectorPackageFlags(collectorFunctionDeployCmd, &collectorDeployFlags.collectorPackageOptions)
 
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ControlURL, "control-url", "", "Control service base URL")
@@ -193,28 +232,35 @@ func init() {
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.BizType, "biz-type", "data_collector", "business type")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.Runtime, "runtime", "Go1", "SCF runtime")
 
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN (登录态, 不推荐)")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Runtime, "runtime", "Go1", "SCF runtime")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Handler, "handler", "main", "SCF handler")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.Region, "region", "", "cloud region")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.ZipPath, "zip", "", "existing SCF zip path")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.PackageName, "package-name", "moox-collector", "function package name")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.PackageType, "package-type", "data_collector", "function package type")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.BizType, "biz-type", "data_collector", "business type")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.NodeType, "node-type", "scf-event", "cloud node type")
-	collectorFunctionPublishCmd.Flags().StringSliceVar(&collectorPublishFlags.JobTypes, "job-types", defaultCollectorJobTypes, "JobTypes consumed by this SCF deployment")
-	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
-	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/cloudnode-worker.yaml", "0600 cloudnode-worker EventBus credential YAML")
-	collectorFunctionPublishCmd.Flags().IntVar(&collectorPublishFlags.NodeCount, "node-count", 50, "number of SCF nodes in the collector fleet")
-	collectorFunctionPublishCmd.Flags().IntVar(&collectorPublishFlags.CreateBatchSize, "create-batch-size", 5, "nodes submitted in each serial create batch")
-	collectorFunctionPublishCmd.Flags().IntVar(&collectorPublishFlags.DeployBatchSize, "deploy-batch-size", 1, "nodes submitted in each serial deploy batch")
-	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.FunctionNamePrefix, "function-name-prefix", "moox-collector", "stable function name prefix used to identify the fleet")
+	submitFlags := collectorFunctionPublishSubmitCmd.Flags()
+	submitFlags.StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
+	submitFlags.StringVar(&collectorPublishFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN (登录态, 不推荐)")
+	submitFlags.StringVar(&collectorPublishFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
+	submitFlags.StringVar(&collectorPublishFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
+	submitFlags.StringVar(&collectorPublishFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
+	submitFlags.StringVar(&collectorPublishFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
+	submitFlags.StringVar(&collectorPublishFlags.Runtime, "runtime", "Go1", "SCF runtime")
+	submitFlags.StringVar(&collectorPublishFlags.Handler, "handler", "main", "SCF handler")
+	submitFlags.StringVar(&collectorPublishFlags.Region, "region", "", "cloud region")
+	submitFlags.StringVar(&collectorPublishFlags.ZipPath, "zip", "", "existing SCF zip path")
+	submitFlags.StringVar(&collectorPublishFlags.PackageName, "package-name", "moox-collector", "function package name")
+	submitFlags.StringVar(&collectorPublishFlags.PackageType, "package-type", "data_collector", "function package type")
+	submitFlags.StringVar(&collectorPublishFlags.BizType, "biz-type", "data_collector", "business type")
+	submitFlags.StringVar(&collectorPublishFlags.NodeType, "node-type", "scf-event", "cloud node type")
+	submitFlags.StringSliceVar(&collectorPublishFlags.JobTypes, "job-types", defaultCollectorJobTypes, "JobTypes consumed by this SCF deployment")
+	submitFlags.StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
+	submitFlags.StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
+	submitFlags.StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/cloudnode-worker.yaml", "0600 cloudnode-worker EventBus credential YAML")
+	submitFlags.IntVar(&collectorPublishFlags.NodeCount, "node-count", 50, "number of SCF nodes in the collector fleet")
+	submitFlags.StringVar(&collectorPublishFlags.FunctionNamePrefix, "function-name-prefix", "moox-collector", "stable function name prefix used to identify the fleet")
+
+	statusFlags := collectorFunctionPublishStatusCmd.Flags()
+	statusFlags.StringVar(&collectorPublishStatusFlags.ControlURL, "control-url", "", "Control service base URL")
+	statusFlags.StringVar(&collectorPublishStatusFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
+	statusFlags.StringVar(&collectorPublishStatusFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id")
+	statusFlags.StringVar(&collectorPublishStatusFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key")
+	statusFlags.StringVar(&collectorPublishStatusFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
+	statusFlags.StringVar(&collectorPublishStatusFlags.JobID, "job-id", "", "node batch job id")
 }
 
 func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions) {
@@ -298,14 +344,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.Region == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--region is required")
 	}
-	if opts.NodeCount <= 0 {
-		return collectorPublishSummary{}, fmt.Errorf("--node-count must be a positive integer")
-	}
-	if opts.CreateBatchSize <= 0 {
-		return collectorPublishSummary{}, fmt.Errorf("--create-batch-size must be a positive integer")
-	}
-	if opts.DeployBatchSize <= 0 {
-		return collectorPublishSummary{}, fmt.Errorf("--deploy-batch-size must be a positive integer")
+	if opts.NodeCount <= 0 || opts.NodeCount > maxCollectorPublishNodeCount {
+		return collectorPublishSummary{}, fmt.Errorf(
+			"--node-count must be between 1 and %d",
+			maxCollectorPublishNodeCount,
+		)
 	}
 	if err := validateCollectorPublishAuth(opts); err != nil {
 		return collectorPublishSummary{}, err
@@ -328,6 +371,10 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	}
 	if !accountFound {
 		return collectorPublishSummary{}, fmt.Errorf("Tencent cloud account %q not found", opts.CloudAccountID)
+	}
+	fleetNodes, err := inspectCollectorFleet(ctx, client, opts)
+	if err != nil {
+		return collectorPublishSummary{}, err
 	}
 	opts.CLSSecretID, opts.CLSSecretKey = collectorCLSCredentials()
 	clsAPI, err := newCollectorCLSAPI(opts.CLSSecretID, opts.CLSSecretKey)
@@ -372,25 +419,23 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 	summary := collectorPublishSummary{
-		ZipPath:   zipPath,
-		PackageID: uploadResp.PackageID,
+		ZipPath:    zipPath,
+		PackageID:  uploadResp.PackageID,
+		CLSTopicID: opts.CLSTopicID,
 	}
 
 	createItems, err := buildCollectorFleetCreateItems(opts, uploadResp.PackageID)
 	if err != nil {
 		return summary, err
 	}
-	fleetSummary, err := applyCollectorFleet(ctx, client, opts, uploadResp.PackageID, createItems)
+	fleetSummary, err := submitCollectorFleet(ctx, client, opts, uploadResp.PackageID, createItems, fleetNodes)
 	if err != nil {
 		return summary, err
 	}
 	summary.FleetMode = fleetSummary.FleetMode
-	summary.CreateBatchIDs = fleetSummary.CreateBatchIDs
-	summary.DeployBatchIDs = fleetSummary.DeployBatchIDs
-	summary.CreateProcessedCount = fleetSummary.CreateProcessedCount
-	summary.DeployProcessedCount = fleetSummary.DeployProcessedCount
-	summary.DeploySkippedCount = fleetSummary.DeploySkippedCount
-	summary.DeployBatchSize = fleetSummary.DeployBatchSize
+	summary.JobID = fleetSummary.JobID
+	summary.Operation = fleetSummary.Operation
+	summary.TotalCount = fleetSummary.TotalCount
 	return summary, nil
 }
 
@@ -410,22 +455,43 @@ func validateCollectorPublishAuth(opts collectorPublishOptions) error {
 	return nil
 }
 
-func applyCollectorFleet(
+func inspectCollectorFleet(
+	ctx context.Context,
+	api collectorFleetAPI,
+	opts collectorPublishOptions,
+) ([]adminclient.CloudNode, error) {
+	catalogNodes, err := api.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
+		CloudAccountID: opts.CloudAccountID,
+		Region:         opts.Region,
+		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
+		BizType:        defaultFlag(opts.BizType, "data_collector"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	fleetNodes, err := selectCollectorFleetNodes(
+		catalogNodes,
+		opts.FunctionNamePrefix,
+		defaultFlag(opts.BizType, "data_collector"),
+		opts.NodeCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return fleetNodes, nil
+}
+
+func submitCollectorFleet(
 	ctx context.Context,
 	api collectorFleetAPI,
 	opts collectorPublishOptions,
 	packageID string,
 	createItems []adminclient.NodeCreateItem,
+	fleetNodes []adminclient.CloudNode,
 ) (collectorPublishSummary, error) {
 	var summary collectorPublishSummary
 	if opts.NodeCount <= 0 {
 		return summary, fmt.Errorf("node count must be positive")
-	}
-	if opts.CreateBatchSize <= 0 {
-		return summary, fmt.Errorf("create batch size must be positive")
-	}
-	if opts.DeployBatchSize <= 0 {
-		return summary, fmt.Errorf("deploy batch size must be positive")
 	}
 	if strings.TrimSpace(packageID) == "" {
 		return summary, fmt.Errorf("package id is required")
@@ -437,49 +503,24 @@ func applyCollectorFleet(
 			opts.NodeCount,
 		)
 	}
-	catalogNodes, err := api.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
-		CloudAccountID: opts.CloudAccountID,
-		Region:         opts.Region,
-		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
-		BizType:        defaultFlag(opts.BizType, "data_collector"),
-	})
-	if err != nil {
-		return summary, err
-	}
-	fleetNodes, err := selectCollectorFleetNodes(
-		catalogNodes,
-		opts.FunctionNamePrefix,
-		defaultFlag(opts.BizType, "data_collector"),
-		opts.NodeCount,
-	)
-	if err != nil {
-		return summary, err
-	}
 	if len(fleetNodes) == 0 {
 		summary.FleetMode = "created"
-		for start := 0; start < len(createItems); start += opts.CreateBatchSize {
-			end := min(start+opts.CreateBatchSize, len(createItems))
-			resp, err := api.BatchCreateNodes(ctx, createItems[start:end])
-			if err != nil {
-				return summary, err
-			}
-			if resp.ProcessedCount != end-start {
-				return summary, fmt.Errorf("BatchCreateNodes processed %d nodes; expected %d", resp.ProcessedCount, end-start)
-			}
-			summary.CreateBatchIDs = append(summary.CreateBatchIDs, resp.BatchID)
-			summary.CreateProcessedCount += resp.ProcessedCount
+		resp, err := api.SubmitCreateNodes(ctx, createItems)
+		if err != nil {
+			return summary, err
 		}
+		summary.JobID = resp.JobID
+		summary.Operation = "create_nodes"
+		summary.TotalCount = resp.TotalCount
 		return summary, nil
+	}
+	if len(fleetNodes) != opts.NodeCount {
+		return summary, fmt.Errorf("collector fleet node count=%d; expected %d", len(fleetNodes), opts.NodeCount)
 	}
 
 	summary.FleetMode = "updated"
-	summary.DeployBatchSize = opts.DeployBatchSize
 	deployments := make([]adminclient.NodeDeployItem, 0, len(fleetNodes))
 	for index, node := range fleetNodes {
-		if node.PackageID == packageID {
-			summary.DeploySkippedCount++
-			continue
-		}
 		deployments = append(deployments, adminclient.NodeDeployItem{
 			NodeID:      node.NodeID,
 			PackageID:   packageID,
@@ -487,19 +528,31 @@ func applyCollectorFleet(
 			Environment: cloneCollectorStringMap(createItems[index].Environment),
 		})
 	}
-	for start := 0; start < len(deployments); start += opts.DeployBatchSize {
-		end := min(start+opts.DeployBatchSize, len(deployments))
-		resp, err := api.BatchDeployNodes(ctx, deployments[start:end])
-		if err != nil {
-			return summary, err
-		}
-		if resp.ProcessedCount != end-start {
-			return summary, fmt.Errorf("BatchDeployNodes processed %d nodes; expected %d", resp.ProcessedCount, end-start)
-		}
-		summary.DeployBatchIDs = append(summary.DeployBatchIDs, resp.BatchID)
-		summary.DeployProcessedCount += resp.ProcessedCount
+	resp, err := api.SubmitDeployNodes(ctx, deployments)
+	if err != nil {
+		return summary, err
 	}
+	summary.JobID = resp.JobID
+	summary.Operation = "deploy_nodes"
+	summary.TotalCount = resp.TotalCount
 	return summary, nil
+}
+
+func publishCollectorFunctionStatus(ctx context.Context, opts collectorPublishStatusOptions) (*adminclient.NodeBatchChangeResponse, error) {
+	if strings.TrimSpace(opts.ControlURL) == "" {
+		return nil, fmt.Errorf("--control-url is required")
+	}
+	if strings.TrimSpace(opts.JobID) == "" {
+		return nil, fmt.Errorf("--job-id is required")
+	}
+	client := newControlClient(
+		opts.ControlURL,
+		opts.AccessToken,
+		opts.ServiceAccessKey,
+		opts.ServiceSecretKey,
+		opts.SpaceID,
+	)
+	return client.GetNodeBatchChange(ctx, opts.JobID)
 }
 
 func collectorCLSCredentials() (string, string) {
@@ -744,6 +797,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_GATEWAY_TARGET_NODE":          {},
 		"MOOX_SERVICE_GATEWAY_CA_PEM_B64":   {},
 		"MOOX_COLLECTOR_JOB_TYPES":          {},
+		"MOOX_SPACE_ID":                     {},
 	}
 	for key := range overrides {
 		if _, ok := managed[key]; ok {
@@ -924,15 +978,16 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 		PackageID: uploadResp.PackageID,
 	}
 
-	deployResp, err := client.BatchDeployNodes(ctx, []adminclient.NodeDeployItem{{
+	deployResp, err := client.SubmitDeployNodes(ctx, []adminclient.NodeDeployItem{{
 		NodeID:    opts.NodeID,
 		PackageID: uploadResp.PackageID,
 	}})
 	if err != nil {
 		return summary, err
 	}
-	summary.DeployBatchID = deployResp.BatchID
-	summary.DeployProcessedCount = deployResp.ProcessedCount
+	summary.JobID = deployResp.JobID
+	summary.Operation = "deploy_nodes"
+	summary.TotalCount = deployResp.TotalCount
 	return summary, nil
 }
 

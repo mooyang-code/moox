@@ -129,8 +129,52 @@ export interface BatchDeleteNodesRequest {
   node_ids: string[];
 }
 
-export interface BatchChangeResult {
-  batch_id: string;
+export type NodeBatchStatus =
+  | "NODE_BATCH_STATUS_PENDING"
+  | "NODE_BATCH_STATUS_RUNNING"
+  | "NODE_BATCH_STATUS_SUCCESS"
+  | "NODE_BATCH_STATUS_FAILED"
+  | "NODE_BATCH_STATUS_PARTIAL";
+
+export type NodeBatchItemStatus =
+  | "NODE_BATCH_ITEM_STATUS_PENDING"
+  | "NODE_BATCH_ITEM_STATUS_RUNNING"
+  | "NODE_BATCH_ITEM_STATUS_SUCCESS"
+  | "NODE_BATCH_ITEM_STATUS_FAILED";
+
+export interface SubmitNodeBatchResponse {
+  job_id: string;
+  operation: string;
+  total_count: number;
+}
+
+export interface NodeBatchSummary extends SubmitNodeBatchResponse {
+  status: NodeBatchStatus;
+  pending_count: number;
+  running_count: number;
+  success_count: number;
+  failed_count: number;
+  progress_percent: number;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface NodeBatchItemResult {
+  item_id: string;
+  node_id: string;
+  status: NodeBatchItemStatus;
+  result_summary?: string;
+  error_message?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface GetNodeBatchChangeResponse {
+  job: NodeBatchSummary;
+  items: NodeBatchItemResult[];
+}
+
+export interface BatchDeleteNodesResponse {
   processed_count: number;
 }
 
@@ -174,7 +218,7 @@ export const updateNode = async (data: UpdateNodeRequest): Promise<void> => {
   await callControl<{ node: UpdateNodeRequest }, Record<string, never>>("cloudnode", "UpdateNode", { node: data });
 };
 
-export const batchCreateNodes = async (data: BatchCreateNodesRequest): Promise<BatchChangeResult> => {
+export const submitCreateNodes = async (data: BatchCreateNodesRequest): Promise<SubmitNodeBatchResponse> => {
   const nodes =
     data.nodes ??
     Array.from({ length: data.count }).map((_, index) => ({
@@ -194,27 +238,26 @@ export const batchCreateNodes = async (data: BatchCreateNodesRequest): Promise<B
         index
       }
     }));
-  const rsp = await callControl<{ nodes: BatchCreateNodeItem[] }, Partial<BatchChangeResult>>("cloudnode", "BatchCreateNodes", {
-    nodes
-  });
-  return { batch_id: rsp.batch_id ?? "", processed_count: rsp.processed_count ?? 0 };
+  return callControl<{ nodes: BatchCreateNodeItem[] }, SubmitNodeBatchResponse>("cloudnode", "SubmitCreateNodes", { nodes });
 };
 
-export const batchDeployNodes = async (data: BatchDeployNodesRequest): Promise<BatchChangeResult> => {
+export const submitDeployNodes = async (data: BatchDeployNodesRequest): Promise<SubmitNodeBatchResponse> => {
   const deployments = data.node_ids.map(id => ({ node_id: id, package_id: data.package_id }));
-  const rsp = await callControl<{ deployments: Array<{ node_id: string; package_id: string }> }, Partial<BatchChangeResult>>(
+  return callControl<{ deployments: Array<{ node_id: string; package_id: string }> }, SubmitNodeBatchResponse>(
     "cloudnode",
-    "BatchDeployNodes",
+    "SubmitDeployNodes",
     { deployments }
   );
-  return { batch_id: rsp.batch_id ?? "", processed_count: rsp.processed_count ?? 0 };
 };
 
-export const batchDeleteNodes = async (data: BatchDeleteNodesRequest): Promise<BatchChangeResult> => {
-  const rsp = await callControl<{ node_ids: string[] }, Partial<BatchChangeResult>>("cloudnode", "BatchDeleteNodes", {
+export const getNodeBatchChange = async (jobId: string): Promise<GetNodeBatchChangeResponse> =>
+  callControl<{ job_id: string }, GetNodeBatchChangeResponse>("cloudnode", "GetNodeBatchChange", { job_id: jobId });
+
+export const batchDeleteNodes = async (data: BatchDeleteNodesRequest): Promise<BatchDeleteNodesResponse> => {
+  const rsp = await callControl<{ node_ids: string[] }, Partial<BatchDeleteNodesResponse>>("cloudnode", "BatchDeleteNodes", {
     node_ids: data.node_ids
   });
-  return { batch_id: rsp.batch_id ?? "", processed_count: rsp.processed_count ?? 0 };
+  return { processed_count: rsp.processed_count ?? 0 };
 };
 
 export const listCloudRegions = async (provider = "tencent"): Promise<CloudRegion[]> => {

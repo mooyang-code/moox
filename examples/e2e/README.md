@@ -220,11 +220,17 @@ examples/e2e/run-real-symbol-kline-scf.sh \
   --timeout-seconds 600
 ```
 
-runner 固定执行 `setup -> fleet -> symbols -> klines -> assert`，退出时始终执行 Rule
-cleanup。默认保留两个 Dataset 和 50 个真实函数供后续观察；它不会调用只软删 catalog
-的 `BatchDeleteNodes`。删除真实 fleet 必须使用能够调用腾讯云 `DeleteFunction` 的独立运维
-流程，删除测试 Dataset 也必须显式执行。state、publish summary 和日志均为 `0600`，路径
-在启动时输出。
+runner 先完成 Dataset fixture，然后只调用一次
+`moox-cli collector function publish submit --node-count 50 ...`。命令返回 `job_id` 后，
+runner 每 2 秒调用
+`moox-cli collector function publish status --job-id <id>`；只有 Job 和 50 个 Item
+全部成功后才进入 `fleet -> symbols -> klines -> assert`。查询遇到临时网络错误会继续，
+`FAILED/PARTIAL` 会输出失败 Item，30 分钟未终态则保留 `job_id` 并失败退出。
+
+退出时始终执行 Rule cleanup。默认保留两个 Dataset 和 50 个真实函数供后续观察；runner
+不自动删除真实 fleet。删除真实 fleet 必须使用能够调用腾讯云 `DeleteFunction` 的独立运维
+流程，删除测试 Dataset 也必须显式执行。state、publish summary、publish status 和日志均为
+`0600`，路径在启动时输出。
 
 ### 本地诊断 E2E
 

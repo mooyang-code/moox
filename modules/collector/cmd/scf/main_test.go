@@ -90,10 +90,12 @@ func TestStartProductionRuntimeStartsFunctionAndOneRunnerWithoutTRPCServer(t *te
 		runTaskRunner = oldRun
 	})
 
-	functionStarts := 0
+	functionStarts := make(chan struct{}, 1)
+	releaseFunction := make(chan struct{})
 	runnerStarts := make(chan struct{}, 2)
 	registerCloudFunction = func() {
-		functionStarts++
+		functionStarts <- struct{}{}
+		<-releaseFunction
 	}
 	runTaskRunner = func(ctx context.Context) error {
 		runnerStarts <- struct{}{}
@@ -103,18 +105,27 @@ func TestStartProductionRuntimeStartsFunctionAndOneRunnerWithoutTRPCServer(t *te
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, startProductionRuntime(ctx, runtimeapp.DefaultConfig()))
+	started := make(chan error, 1)
+	go func() {
+		started <- startProductionRuntime(ctx, runtimeapp.DefaultConfig())
+	}()
+	select {
+	case <-functionStarts:
+	case <-time.After(time.Second):
+		t.Fatal("cloud function registration did not start")
+	}
 	select {
 	case <-runnerStarts:
 	case <-time.After(time.Second):
-		t.Fatal("resident taskrunner did not start")
+		t.Fatal("resident taskrunner did not start before blocking function registration")
 	}
 	select {
 	case <-runnerStarts:
 		t.Fatal("resident taskrunner started more than once")
 	case <-time.After(10 * time.Millisecond):
 	}
-	assert.Equal(t, 1, functionStarts)
+	close(releaseFunction)
+	require.NoError(t, <-started)
 }
 
 func TestResidentTaskRunnerRestartsAfterTransportFailure(t *testing.T) {

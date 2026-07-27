@@ -12,11 +12,7 @@ export type CollectorDatasetOption = {
   data_kind: string | number;
 };
 
-export function datasetMatchesCollector(
-  dataset: CollectorDatasetOption,
-  exchange: string,
-  dataType: string
-): boolean {
+export function datasetMatchesCollector(dataset: CollectorDatasetOption, exchange: string, dataType: string): boolean {
   if (dataset.data_source_id !== exchange) {
     return false;
   }

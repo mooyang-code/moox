@@ -4,6 +4,12 @@ global: #全局配置
 
 server:
   timeout: 5000
+  service:
+    - name: trpc.moox.collector.schedule.timer
+      port: 11403
+      network: "20 */1 * * * *?scheduler=collectorSchedule"
+      protocol: timer
+      timeout: 60000
 
 plugins:
   log:

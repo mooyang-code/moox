@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -125,11 +126,15 @@ func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, ful
 
 	// 检查状态码
 	if resp.StatusCode != http.StatusOK {
+		log.WarnContextf(ctx,
+			"collector_http_failed domain=%s status=%d duration_ms=%d job_item_id=%q",
+			domain, resp.StatusCode, time.Since(start).Milliseconds(), jobcontext.JobItemID(ctx),
+		)
 		return &StatusError{StatusCode: resp.StatusCode}
 	}
 	log.InfoContextf(ctx,
-		"collector_http_completed domain=%s status=%d duration_ms=%d",
-		domain, resp.StatusCode, time.Since(start).Milliseconds(),
+		"collector_http_completed domain=%s status=%d duration_ms=%d job_item_id=%q",
+		domain, resp.StatusCode, time.Since(start).Milliseconds(), jobcontext.JobItemID(ctx),
 	)
 
 	// 解析 JSON

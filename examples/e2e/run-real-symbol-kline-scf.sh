@@ -25,7 +25,10 @@ PASSWORD="${MOOX_E2E_ADMIN_PASSWORD:-}"
 STATE_FILE="${MOOX_E2E_STATE_FILE:-${TMPDIR:-/tmp}/moox-symbol-kline-${RUN_ID}.json}"
 LOG_FILE="${MOOX_E2E_LOG_FILE:-${TMPDIR:-/tmp}/moox-symbol-kline-${RUN_ID}.log}"
 PUBLISH_SUMMARY_FILE="${MOOX_E2E_PUBLISH_SUMMARY_FILE:-${TMPDIR:-/tmp}/moox-symbol-kline-publish-${RUN_ID}.json}"
+PUBLISH_STATUS_FILE="${MOOX_E2E_PUBLISH_STATUS_FILE:-${TMPDIR:-/tmp}/moox-symbol-kline-publish-status-${RUN_ID}.json}"
+PUBLISH_TIMEOUT_SECONDS="${MOOX_E2E_PUBLISH_TIMEOUT_SECONDS:-1800}"
 MOOX_CLI="${MOOX_E2E_MOOX_CLI:-}"
+COMPLETED=0
 
 usage() {
   cat <<'EOF'
@@ -90,14 +93,18 @@ fi
   fail "--scf-count must be a positive integer"
 [[ "${TIMEOUT_SECONDS}" =~ ^[0-9]+$ && "${TIMEOUT_SECONDS}" -gt 0 ]] ||
   fail "--timeout-seconds must be a positive integer"
+[[ "${PUBLISH_TIMEOUT_SECONDS}" =~ ^[0-9]+$ && "${PUBLISH_TIMEOUT_SECONDS}" -gt 0 ]] ||
+  fail "MOOX_E2E_PUBLISH_TIMEOUT_SECONDS must be a positive integer"
 
-mkdir -p "$(dirname "${STATE_FILE}")" "$(dirname "${LOG_FILE}")" "$(dirname "${PUBLISH_SUMMARY_FILE}")"
+mkdir -p "$(dirname "${STATE_FILE}")" "$(dirname "${LOG_FILE}")" \
+  "$(dirname "${PUBLISH_SUMMARY_FILE}")" "$(dirname "${PUBLISH_STATUS_FILE}")"
 : >"${STATE_FILE}"
 : >"${LOG_FILE}"
 : >"${PUBLISH_SUMMARY_FILE}"
-chmod 600 "${STATE_FILE}" "${LOG_FILE}" "${PUBLISH_SUMMARY_FILE}"
-printf '[symbol-kline-scf-e2e] artifacts: state=%s publish=%s log=%s\n' \
-  "${STATE_FILE}" "${PUBLISH_SUMMARY_FILE}" "${LOG_FILE}" | tee -a "${LOG_FILE}"
+: >"${PUBLISH_STATUS_FILE}"
+chmod 600 "${STATE_FILE}" "${LOG_FILE}" "${PUBLISH_SUMMARY_FILE}" "${PUBLISH_STATUS_FILE}"
+printf '[symbol-kline-scf-e2e] artifacts: state=%s publish=%s publish_status=%s log=%s\n' \
+  "${STATE_FILE}" "${PUBLISH_SUMMARY_FILE}" "${PUBLISH_STATUS_FILE}" "${LOG_FILE}" | tee -a "${LOG_FILE}"
 
 phase_args() {
   local phase="$1"
@@ -138,7 +145,7 @@ run_phase() {
 
 publish_fleet() {
   local args=(
-    collector function publish
+    collector function publish submit
     --control-url "${CONTROL_URL}"
     --space-id "${SPACE_ID}"
     --cloud-account-id "${CLOUD_ACCOUNT}"
@@ -147,23 +154,81 @@ publish_fleet() {
     --region "${REGION}"
     --function-name-prefix "${FLEET_PREFIX}"
     --node-count "${SCF_COUNT}"
-    --create-batch-size 5
-    --deploy-batch-size 1
     --collector-root "${ROOT}/modules/collector"
   )
   if [[ -n "${ZIP_PATH}" ]]; then
     args+=(--zip "${ZIP_PATH}")
   fi
   printf '[symbol-kline-scf-e2e] phase=fleet-publish\n' | tee -a "${LOG_FILE}"
-  if [[ -n "${MOOX_CLI}" ]]; then
-    "${MOOX_CLI}" "${args[@]}" >"${PUBLISH_SUMMARY_FILE}"
-  else
-    (
-    cd "${ROOT}/modules/cli"
-      go run ./cmd/moox-cli "${args[@]}"
-    ) >"${PUBLISH_SUMMARY_FILE}"
-  fi
+  run_moox_cli "${args[@]}" >"${PUBLISH_SUMMARY_FILE}"
   chmod 600 "${PUBLISH_SUMMARY_FILE}"
+  local job_id
+  job_id="$(node -e '
+    const fs = require("node:fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (!value.job_id) process.exit(2);
+    process.stdout.write(value.job_id);
+  ' "${PUBLISH_SUMMARY_FILE}")" || fail "publish submit did not return job_id"
+
+  local deadline=$((SECONDS + PUBLISH_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if ! run_moox_cli collector function publish status \
+      --control-url "${CONTROL_URL}" \
+      --space-id "${SPACE_ID}" \
+      --job-id "${job_id}" >"${PUBLISH_STATUS_FILE}"; then
+      printf '[symbol-kline-scf-e2e] transient publish status error job_id=%s\n' "${job_id}" | tee -a "${LOG_FILE}"
+      sleep 2
+      continue
+    fi
+    chmod 600 "${PUBLISH_STATUS_FILE}"
+    local status
+    status="$(node -e '
+      const fs = require("node:fs");
+      const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(String(value.job?.status || ""));
+    ' "${PUBLISH_STATUS_FILE}")"
+    case "${status}" in
+      NODE_BATCH_STATUS_PENDING|NODE_BATCH_STATUS_RUNNING)
+        sleep 2
+        ;;
+      NODE_BATCH_STATUS_SUCCESS)
+        node -e '
+          const fs = require("node:fs");
+          const submit = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+          const status = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          fs.writeFileSync(process.argv[1], `${JSON.stringify({ ...submit, ...status }, null, 2)}\n`, { mode: 0o600 });
+        ' "${PUBLISH_SUMMARY_FILE}" "${PUBLISH_STATUS_FILE}"
+        return
+        ;;
+      NODE_BATCH_STATUS_FAILED|NODE_BATCH_STATUS_PARTIAL)
+        node -e '
+          const fs = require("node:fs");
+          const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+          for (const item of value.items || []) {
+            if (item.status === "NODE_BATCH_ITEM_STATUS_FAILED") {
+              console.error(`failed item_id=${item.item_id || ""} node_id=${item.node_id || ""} error=${item.error_message || ""}`);
+            }
+          }
+        ' "${PUBLISH_STATUS_FILE}" 2>&1 | tee -a "${LOG_FILE}"
+        fail "publish job ${job_id} ended with ${status}"
+        ;;
+      *)
+        fail "publish status returned unknown job status: ${status}"
+        ;;
+    esac
+  done
+  fail "publish job ${job_id} did not finish within ${PUBLISH_TIMEOUT_SECONDS}s; query it with publish status"
+}
+
+run_moox_cli() {
+  if [[ -n "${MOOX_CLI}" ]]; then
+    "${MOOX_CLI}" "$@"
+    return
+  fi
+  (
+    cd "${ROOT}/modules/cli"
+    go run ./cmd/moox-cli "$@"
+  )
 }
 
 cleanup_on_exit() {
@@ -172,11 +237,15 @@ cleanup_on_exit() {
   set +e
   run_phase cleanup
   local cleanup_status=$?
+  if [[ "${original_status}" -eq 0 && "${COMPLETED}" -ne 1 ]]; then
+    original_status=1
+  fi
   if [[ "${original_status}" -eq 0 && "${cleanup_status}" -ne 0 ]]; then
     original_status="${cleanup_status}"
   fi
   if [[ "${original_status}" -eq 0 ]]; then
-    printf '[symbol-kline-scf-e2e] PASS state=%s log=%s\n' "${STATE_FILE}" "${LOG_FILE}"
+    printf '[symbol-kline-scf-e2e] PASS state=%s log=%s\n' "${STATE_FILE}" "${LOG_FILE}" |
+      tee -a "${LOG_FILE}"
   fi
   exit "${original_status}"
 }
@@ -188,3 +257,4 @@ run_phase fleet
 run_phase symbols
 run_phase klines
 run_phase assert
+COMPLETED=1

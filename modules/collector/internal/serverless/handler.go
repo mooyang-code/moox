@@ -20,6 +20,7 @@ import (
 type CloudFunctionHandler struct{}
 
 const keepaliveHeartbeatTimeout = 8 * time.Second
+const maxKeepaliveResidentDuration = time.Minute
 
 var reportHeartbeatAfterProbe = reporter.ReportHeartbeat
 
@@ -250,12 +251,38 @@ func (h *CloudFunctionHandler) handleKeepalive(ctx context.Context, event model.
 		}
 	}
 
+	// Keep the invocation open without coupling keepalive to task execution.
+	// The resident taskrunner runs independently while SCF schedules this process.
+	if residentDuration := keepaliveResidentDuration(event); residentDuration > 0 {
+		timer := time.NewTimer(residentDuration)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+
 	// 构建保活响应
 	return h.buildKeepaliveResponse(ctx, event)
 }
 
 func isKeepaliveProbeSource(source string) bool {
 	return source == "keepalive_probe" || source == "heartbeat_probe"
+}
+
+func keepaliveResidentDuration(event model.CloudFunctionEvent) time.Duration {
+	if !isKeepaliveProbeSource(event.Source) || event.Data == nil {
+		return 0
+	}
+	seconds, ok := event.Data["resident_seconds"].(float64)
+	if !ok || seconds <= 0 {
+		return 0
+	}
+	duration := time.Duration(seconds * float64(time.Second))
+	if duration > maxKeepaliveResidentDuration {
+		return maxKeepaliveResidentDuration
+	}
+	return duration
 }
 
 // buildKeepaliveResponse 构建保活响应

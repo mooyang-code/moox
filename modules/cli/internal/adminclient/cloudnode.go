@@ -95,9 +95,146 @@ type CloudNodeListFilter struct {
 	BizType        string
 }
 
-type BatchChangeResponse struct {
-	BatchID        string
-	ProcessedCount int
+type SubmitNodeBatchResponse struct {
+	JobID      string `json:"job_id"`
+	Operation  string `json:"operation"`
+	TotalCount int    `json:"total_count"`
+}
+
+type NodeBatchSummary struct {
+	JobID           string `json:"job_id"`
+	Operation       string `json:"operation"`
+	Status          string `json:"status"`
+	TotalCount      int    `json:"total_count"`
+	PendingCount    int    `json:"pending_count"`
+	RunningCount    int    `json:"running_count"`
+	SuccessCount    int    `json:"success_count"`
+	FailedCount     int    `json:"failed_count"`
+	ProgressPercent int    `json:"progress_percent"`
+	CreatedAt       string `json:"created_at"`
+	CompletedAt     string `json:"completed_at,omitempty"`
+}
+
+type NodeBatchItemResult struct {
+	ItemID        string `json:"item_id"`
+	NodeID        string `json:"node_id"`
+	Status        string `json:"status"`
+	ResultSummary string `json:"result_summary,omitempty"`
+	ErrorMessage  string `json:"error_message,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
+	CompletedAt   string `json:"completed_at,omitempty"`
+}
+
+type NodeBatchChangeResponse struct {
+	Job   *NodeBatchSummary     `json:"job"`
+	Items []NodeBatchItemResult `json:"items"`
+}
+
+var (
+	nodeBatchOperationNames = map[int]string{
+		0: "NODE_BATCH_OPERATION_UNSPECIFIED",
+		1: "NODE_BATCH_OPERATION_CREATE_NODES",
+		2: "NODE_BATCH_OPERATION_DEPLOY_NODES",
+	}
+	nodeBatchStatusNames = map[int]string{
+		0: "NODE_BATCH_STATUS_UNSPECIFIED",
+		1: "NODE_BATCH_STATUS_PENDING",
+		2: "NODE_BATCH_STATUS_RUNNING",
+		3: "NODE_BATCH_STATUS_SUCCESS",
+		4: "NODE_BATCH_STATUS_FAILED",
+		5: "NODE_BATCH_STATUS_PARTIAL",
+	}
+	nodeBatchItemStatusNames = map[int]string{
+		0: "NODE_BATCH_ITEM_STATUS_UNSPECIFIED",
+		1: "NODE_BATCH_ITEM_STATUS_PENDING",
+		2: "NODE_BATCH_ITEM_STATUS_RUNNING",
+		3: "NODE_BATCH_ITEM_STATUS_SUCCESS",
+		4: "NODE_BATCH_ITEM_STATUS_FAILED",
+	}
+)
+
+func (s *NodeBatchSummary) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		JobID           string `json:"job_id"`
+		Operation       any    `json:"operation"`
+		Status          any    `json:"status"`
+		TotalCount      int    `json:"total_count"`
+		PendingCount    int    `json:"pending_count"`
+		RunningCount    int    `json:"running_count"`
+		SuccessCount    int    `json:"success_count"`
+		FailedCount     int    `json:"failed_count"`
+		ProgressPercent int    `json:"progress_percent"`
+		CreatedAt       string `json:"created_at"`
+		CompletedAt     string `json:"completed_at"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	operation, err := normalizeProtoEnum(wire.Operation, nodeBatchOperationNames)
+	if err != nil {
+		return fmt.Errorf("node batch operation: %w", err)
+	}
+	status, err := normalizeProtoEnum(wire.Status, nodeBatchStatusNames)
+	if err != nil {
+		return fmt.Errorf("node batch status: %w", err)
+	}
+	*s = NodeBatchSummary{
+		JobID: wire.JobID, Operation: operation, Status: status,
+		TotalCount: wire.TotalCount, PendingCount: wire.PendingCount,
+		RunningCount: wire.RunningCount, SuccessCount: wire.SuccessCount,
+		FailedCount: wire.FailedCount, ProgressPercent: wire.ProgressPercent,
+		CreatedAt: wire.CreatedAt, CompletedAt: wire.CompletedAt,
+	}
+	return nil
+}
+
+func (item *NodeBatchItemResult) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ItemID        string `json:"item_id"`
+		NodeID        string `json:"node_id"`
+		Status        any    `json:"status"`
+		ResultSummary string `json:"result_summary"`
+		ErrorMessage  string `json:"error_message"`
+		StartedAt     string `json:"started_at"`
+		CompletedAt   string `json:"completed_at"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	status, err := normalizeProtoEnum(wire.Status, nodeBatchItemStatusNames)
+	if err != nil {
+		return fmt.Errorf("node batch item status: %w", err)
+	}
+	*item = NodeBatchItemResult{
+		ItemID: wire.ItemID, NodeID: wire.NodeID, Status: status,
+		ResultSummary: wire.ResultSummary, ErrorMessage: wire.ErrorMessage,
+		StartedAt: wire.StartedAt, CompletedAt: wire.CompletedAt,
+	}
+	return nil
+}
+
+func normalizeProtoEnum(value any, names map[int]string) (string, error) {
+	switch typed := value.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return "", nil
+		}
+		return typed, nil
+	case float64:
+		number := int(typed)
+		if typed != float64(number) {
+			return "", fmt.Errorf("invalid numeric enum %v", typed)
+		}
+		name, ok := names[number]
+		if !ok {
+			return "", fmt.Errorf("unknown numeric enum %d", number)
+		}
+		return name, nil
+	case nil:
+		return "", nil
+	default:
+		return "", fmt.Errorf("unsupported enum value %T", value)
+	}
 }
 
 // ListCloudNodes returns every catalog node matching the server-side fleet filters.
@@ -215,36 +352,80 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 	return &UploadPackageResponse{PackageID: initResp.PackageID}, nil
 }
 
-func (c *Client) BatchCreateNodes(ctx context.Context, nodes []NodeCreateItem) (*BatchChangeResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchCreateNodes", map[string]any{"nodes": nodes})
+func (c *Client) SubmitCreateNodes(ctx context.Context, nodes []NodeCreateItem) (*SubmitNodeBatchResponse, error) {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitCreateNodes", map[string]any{"nodes": nodes})
 	if err != nil {
 		return nil, err
 	}
-	return parseBatchChangeResponse(raw, "BatchCreateNodes")
+	return parseSubmitNodeBatchResponse(raw, "SubmitCreateNodes")
 }
 
-func (c *Client) BatchDeployNodes(ctx context.Context, deployments []NodeDeployItem) (*BatchChangeResponse, error) {
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/BatchDeployNodes", map[string]any{"deployments": deployments})
+func (c *Client) SubmitDeployNodes(ctx context.Context, deployments []NodeDeployItem) (*SubmitNodeBatchResponse, error) {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeployNodes", map[string]any{"deployments": deployments})
 	if err != nil {
 		return nil, err
 	}
-	return parseBatchChangeResponse(raw, "BatchDeployNodes")
+	return parseSubmitNodeBatchResponse(raw, "SubmitDeployNodes")
 }
 
-func parseBatchChangeResponse(raw []byte, method string) (*BatchChangeResponse, error) {
+func (c *Client) GetNodeBatchChange(ctx context.Context, jobID string) (*NodeBatchChangeResponse, error) {
+	if strings.TrimSpace(jobID) == "" {
+		return nil, fmt.Errorf("GetNodeBatchChange: job_id is required")
+	}
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/GetNodeBatchChange", map[string]any{"job_id": jobID})
+	if err != nil {
+		return nil, err
+	}
 	var resp struct {
-		RetInfo        *retInfo `json:"ret_info"`
-		BatchID        string   `json:"batch_id"`
-		ProcessedCount int      `json:"processed_count"`
+		RetInfo *retInfo              `json:"ret_info"`
+		Job     *NodeBatchSummary     `json:"job"`
+		Items   []NodeBatchItemResult `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, err
 	}
-	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
-		return nil, fmt.Errorf("%s: code %d: %s", method, resp.RetInfo.Code, resp.RetInfo.Msg)
+	if err := validateCloudNodeRetInfo(resp.RetInfo, "GetNodeBatchChange"); err != nil {
+		return nil, err
 	}
-	if resp.BatchID == "" {
-		return nil, fmt.Errorf("%s: empty batch_id", method)
+	if resp.Job == nil || strings.TrimSpace(resp.Job.JobID) == "" {
+		return nil, fmt.Errorf("GetNodeBatchChange: empty job")
 	}
-	return &BatchChangeResponse{BatchID: resp.BatchID, ProcessedCount: resp.ProcessedCount}, nil
+	return &NodeBatchChangeResponse{Job: resp.Job, Items: resp.Items}, nil
+}
+
+func parseSubmitNodeBatchResponse(raw []byte, method string) (*SubmitNodeBatchResponse, error) {
+	var resp struct {
+		RetInfo    *retInfo `json:"ret_info"`
+		JobID      string   `json:"job_id"`
+		Operation  any      `json:"operation"`
+		TotalCount int      `json:"total_count"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	if err := validateCloudNodeRetInfo(resp.RetInfo, method); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(resp.JobID) == "" {
+		return nil, fmt.Errorf("%s: empty job_id", method)
+	}
+	operation, err := normalizeProtoEnum(resp.Operation, nodeBatchOperationNames)
+	if err != nil {
+		return nil, fmt.Errorf("%s: operation: %w", method, err)
+	}
+	return &SubmitNodeBatchResponse{
+		JobID:      resp.JobID,
+		Operation:  operation,
+		TotalCount: resp.TotalCount,
+	}, nil
+}
+
+func validateCloudNodeRetInfo(info *retInfo, method string) error {
+	if info == nil {
+		return fmt.Errorf("%s: missing ret_info", method)
+	}
+	if !isRetInfoSuccess(info.Code) {
+		return fmt.Errorf("%s: code %d: %s", method, info.Code, info.Msg)
+	}
+	return nil
 }

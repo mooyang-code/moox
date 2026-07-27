@@ -794,14 +794,11 @@ watch(
   }
 );
 
-watch(
-  [() => addForm.value.data_source, () => addForm.value.data_type],
-  () => {
-    if (datasetIdValue.value && !availableDatasets.value.some(dataset => dataset.dataset_id === datasetIdValue.value)) {
-      datasetIdValue.value = "";
-    }
+watch([() => addForm.value.data_source, () => addForm.value.data_type], () => {
+  if (datasetIdValue.value && !availableDatasets.value.some(dataset => dataset.dataset_id === datasetIdValue.value)) {
+    datasetIdValue.value = "";
   }
-);
+});
 
 onMounted(() => {
   getTaskList();

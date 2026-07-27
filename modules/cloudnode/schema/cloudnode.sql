@@ -73,6 +73,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_packages_space_package ON t_cloud_fu
 CREATE INDEX IF NOT EXISTS idx_cloud_packages_workload ON t_cloud_function_packages (c_workload_type);
 CREATE INDEX IF NOT EXISTS idx_cloud_packages_deleted ON t_cloud_function_packages (c_is_deleted);
 
+CREATE TABLE IF NOT EXISTS t_cloud_node_batches (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_job_id TEXT NOT NULL,
+    c_operation TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_total_count INTEGER NOT NULL,
+    c_completed_at DATETIME,
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_node_batches_space_job
+ON t_cloud_node_batches (c_space_id, c_job_id);
+
+CREATE TABLE IF NOT EXISTS t_cloud_node_batch_items (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_job_id TEXT NOT NULL,
+    c_item_id TEXT NOT NULL,
+    c_item_index INTEGER NOT NULL,
+    c_node_id TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_request_json TEXT NOT NULL,
+    c_result_summary TEXT NOT NULL DEFAULT '',
+    c_error_message TEXT NOT NULL DEFAULT '',
+    c_started_at DATETIME,
+    c_completed_at DATETIME,
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (c_space_id, c_job_id)
+        REFERENCES t_cloud_node_batches (c_space_id, c_job_id)
+        ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_node_batch_items_job_index
+ON t_cloud_node_batch_items (c_space_id, c_job_id, c_item_index);
+CREATE INDEX IF NOT EXISTS idx_cloud_node_batch_items_status_id ON t_cloud_node_batch_items (c_status, c_id);
+
 CREATE TRIGGER IF NOT EXISTS update_cloud_nodes_mtime
 AFTER UPDATE ON t_cloud_nodes
 BEGIN

@@ -81,6 +81,10 @@ Timer 本身不表达某条 Rule 的业务周期。每条 Rule 的：
 
 ### 1.4 50 SCF 的验收口径
 
+SCF 发布能力不是本计划的实现范围。本计划直接假设
+`docs/superpowers/plans/2026-07-27-cloudnode-async-scf-publish.md`
+已经完整实现并通过验收，只把 `moox-cli` 当作发布入口。
+
 50 个节点表示 50 个独立 Tencent SCF Function，使用相同：
 
 ```text
@@ -91,12 +95,15 @@ collect.binance.kline JobType
 
 durable identity 只由 `space_id + job_type` 决定，与 package ID 无关。50 个节点必须部署同一个已验收 package 版本，但它们因为 Space 和 JobType 相同而竞争同一个 durable，不复制任务。当前每个 JobType 的 `MaxAckPending=32`，因此本次验收：
 
+- E2E 只调用 `moox-cli collector function publish submit --node-count 50` 提交发布，并读取返回的 `job_id`。
+- E2E 只调用 `moox-cli collector function publish status --job-id <id>` 轮询真实发布进度。
+- 所有 SCF 发布实现细节均以 CloudNode 前置计划为准，本计划不再展开。
 - 要求 50 个节点全部部署成功、online、心跳新鲜、package ID 正确。
 - 要求所有 Kline JobItem 的 `execution_node` 属于这 50 个节点。
 - 统计并输出每个节点的任务数，但不要求均匀分配。
 - 不要求 50 个节点都实际获得任务。
 - 不为了让 50 个节点同时繁忙而提高 `MaxAckPending`。
-- 50 个节点在验收后保留。当前 CloudNode `BatchDeleteNodes` 只删除 catalog 记录、不删除真实云函数，因此本计划不提供误导性的自动节点清理参数。
+- 50 个节点在验收后保留；本计划不通过 E2E runner 自动删除真实云函数。
 
 ### 1.5 明确不做
 
@@ -128,7 +135,6 @@ durable identity 只由 `space_id + job_type` 决定，与 package ID 无关。5
 2. `ScheduleTasks` 每分钟处理所有 enabled Rule，未在读取 Dataset subjects 前判断本轮是否到期。
 3. Kline source Dataset 被错误地强制为 `TIME_SERIES`，无法读取 Symbol `RECORD` Dataset。
 4. Symbol Collector 会把标的绑定到 YAML 的静态 `subject_dataset_ids`，隔离 E2E Dataset 可能因静态 Dataset 不存在而整批失败。
-
 现有 `examples/e2e/verify.mjs` 只覆盖预置 Kline Dataset 和手工注册的 BTC-USDT，不覆盖：
 
 ```text
@@ -146,6 +152,10 @@ durable identity 只由 `space_id + job_type` 决定，与 package ID 无关。5
 
 ```mermaid
 flowchart LR
+    Package["Collector SCF ZIP"] --> Publish["moox-cli publish submit returns job_id"]
+    Publish --> Status["publish status polls every 2s"]
+    Status --> Functions["50 Tencent SCF Functions online"]
+
     Timer["tRPC Timer every minute at :20"] --> Due["Rule due decision"]
     Due -->|"not due"| Skip["Skip before Dataset scan"]
     Due -->|"due"| Plan["Collector planner"]
@@ -163,7 +173,8 @@ flowchart LR
     Plan --> Fanout["One 1m JobItem per active subject"]
     Fanout --> Batch["Serial batches of 25"]
     Batch --> JS2["JetStream kline durable"]
-    JS2 --> Fleet["50 SCFs compete; Fetch(10)"]
+    Functions --> Fleet
+    JS2 --> Fleet["50 SCFs compete for data; Fetch(10)"]
     Fleet --> DueAt{"execute_at reached?"}
     DueAt -->|"no"| Delay["NAK with exact delay"]
     DueAt -->|"yes"| KlineAPI["Binance 1m Kline TLS"]
@@ -237,13 +248,17 @@ Symbol 和 Kline Rule 的标准配置：
 - Create: `examples/e2e/collector-symbol-kline.test.mjs`
 - Create: `examples/e2e/run-real-symbol-kline-scf.sh`
 - Create: `examples/e2e/test-run-real-symbol-kline-scf.sh`
-- Modify: `modules/cli/internal/command/collector.go`
-- Modify: `modules/cli/internal/command/collector_test.go`
 - Modify: `modules/collector/internal/httpclient/client.go`
 - Modify: `modules/collector/internal/httpclient/client_test.go`
 - Modify: `examples/e2e/README.md`
 - Modify: `modules/collector/README.md`
 - Modify: `docs/采集任务管理.md`
+
+本计划假设以下前置计划已经完成，只说明如何通过 `moox-cli` 发布并验收 SCF，不展开 CloudNode、前端或 CLI 的内部实现：
+
+```text
+docs/superpowers/plans/2026-07-27-cloudnode-async-scf-publish.md
+```
 
 不修改 Storage protobuf；当前 Metadata 和 PrimaryStore RPC 已足够完成 Dataset 注册、激活、读取和写入验收。
 
@@ -260,7 +275,7 @@ Symbol 和 Kline Rule 的标准配置：
 - Modify: `modules/collector/config/trpc_go.yaml`
 - Modify: `modules/collector/configs/example_trpc_go.yaml`
 
-- [ ] **Step 1: 先写周期解析和 due decision 的失败测试**
+- [x] **Step 1: 先写周期解析和 due decision 的失败测试**
 
 新增表驱动测试：
 
@@ -311,7 +326,7 @@ func TestParseScheduleIntervalRejectsSubMinuteAndFractionalMinute(t *testing.T) 
 
 Expected: `ParseScheduleInterval` 和 `ScheduleDecision` 尚不存在，测试编译失败。
 
-- [ ] **Step 2: 在 domain 中实现唯一的周期解析和对齐规则**
+- [x] **Step 2: 在 domain 中实现唯一的周期解析和对齐规则**
 
 新增：
 
@@ -352,7 +367,7 @@ func ScheduleDecision(now time.Time, raw string) (time.Time, bool, error) {
 
 `CollectParams.Validate` 必须调用同一个 `ParseScheduleInterval`，删除直接使用 `time.ParseDuration` 的重复校验。`30s` 从此作为非法配置拒绝，不保留兼容分支。
 
-- [ ] **Step 3: 将 tRPC Timer 固定到第 20 秒**
+- [x] **Step 3: 将 tRPC Timer 固定到第 20 秒**
 
 两个配置都使用：
 
@@ -364,7 +379,7 @@ timeout: 60000
 
 不增加第二个 Collector schedule timer。
 
-- [ ] **Step 4: 验证周期和配置**
+- [x] **Step 4: 验证周期和配置**
 
 ```bash
 (cd modules/collector && go test -count=1 ./internal/domain)
@@ -375,7 +390,7 @@ rg -n 'network: "20 \*/1 \* \* \* \*\?scheduler=collectorSchedule"' \
 
 Expected: domain 测试通过；两个配置各命中一次。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add \
@@ -401,7 +416,7 @@ git commit -m "feat(collector): align rule scheduling to minute boundaries"
 - Modify: `modules/collector/internal/store/task_instance.go`
 - Modify: `modules/collector/internal/store/task_instance_test.go`
 
-- [ ] **Step 1: 先写未到期 Rule 不访问 Dataset、不提交任务的测试**
+- [x] **Step 1: 先写未到期 Rule 不访问 Dataset、不提交任务的测试**
 
 为 fake dataset source 增加调用计数，并新增：
 
@@ -443,7 +458,7 @@ assert.Contains(t, secondWindowJobItemID, "2026-07-27T12:36:00Z")
 
 Expected: 当前实现仍会加载所有 enabled Rule，至少一个测试失败。
 
-- [ ] **Step 2: 将 due 判断放在 Dataset 查询之前**
+- [x] **Step 2: 将 due 判断放在 Dataset 查询之前**
 
 `ScheduleTasks` 每条 Rule 只解析一次参数：
 
@@ -469,7 +484,7 @@ created, err := s.scheduleRule(ctx, &rule, params, executeAt)
 
 `scheduleRule` 改为接收已经验证的 `params` 和唯一 `executeAt`，不得重新读取当前时间或重新计算周期。
 
-- [ ] **Step 3: 让 TaskPublisher 只接受控制面计算好的执行窗口**
+- [x] **Step 3: 让 TaskPublisher 只接受控制面计算好的执行窗口**
 
 将：
 
@@ -495,7 +510,7 @@ prepared[i].CloudJobItemID = scheduledJobItemID(prepared[i].TaskID, executeAt.UT
 
 删除 `taskpublisher` 内的 `nextExecuteAt`、`parseScheduleDuration` 和默认 `30m` fallback，避免 domain 与 publisher 出现两套周期语义。
 
-- [ ] **Step 4: 允许连续分钟窗口各自拥有 pending JobItem**
+- [x] **Step 4: 允许连续分钟窗口各自拥有 pending JobItem**
 
 当前 TaskInstance pending fence 会在上一窗口仍 pending 时重投旧 JobItem，并可能跳过中间一分钟。新模型允许 TaskInstance 绑定向更新的窗口推进：
 
@@ -528,7 +543,7 @@ OR c_last_exec_status IN (?, ?)
 },
 ```
 
-- [ ] **Step 5: 固化提前投递和 SCF 延期语义**
+- [x] **Step 5: 固化提前投递和 SCF 延期语义**
 
 现有 taskrunner 测试必须继续证明：
 
@@ -545,7 +560,7 @@ execute_at <= now => execute immediately
 
 Expected: 全部通过；1h Rule 在非 `xx:59` Tick 不创建任何 TaskInstance/JobItem。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add \
@@ -569,7 +584,7 @@ git commit -m "feat(collector): generate jobs only for due rule windows"
 - Modify: `modules/collector/internal/planner/storagesource/source_test.go`
 - Modify: `modules/collector/internal/jobs/kline/planner_test.go`
 
-- [ ] **Step 1: 先写 Symbol RECORD 到 Kline TIME_SERIES 的规则测试**
+- [x] **Step 1: 先写 Symbol RECORD 到 Kline TIME_SERIES 的规则测试**
 
 新增：
 
@@ -620,7 +635,7 @@ fake Dataset metadata：
 
 Expected: Kline source 当前被强制要求 TIME_SERIES，accept 测试失败。
 
-- [ ] **Step 2: 分别验证 source 和 target，不再共用错误的 expectedKind**
+- [x] **Step 2: 分别验证 source 和 target，不再共用错误的 expectedKind**
 
 规则固定为：
 
@@ -653,7 +668,7 @@ default:
 
 不保留“Kline source 也可以是旧 Kline Dataset”的兼容分支。
 
-- [ ] **Step 3: 固化 active subjects 和 external symbol 展开**
+- [x] **Step 3: 固化 active subjects 和 external symbol 展开**
 
 Storagesource 测试必须覆盖：
 
@@ -671,7 +686,7 @@ Storagesource 测试必须覆盖：
 
 Expected: 全部通过。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add \
@@ -694,7 +709,7 @@ git commit -m "feat(collector): plan kline jobs from symbol datasets"
 - Modify: `modules/collector/internal/sources/binance/symbol_test.go`
 - Modify: `modules/collector/configs/sources/market/binance.yaml`
 
-- [ ] **Step 1: 先写 Symbol 只绑定任务目标 Dataset 的测试**
+- [x] **Step 1: 先写 Symbol 只绑定任务目标 Dataset 的测试**
 
 替换现有多 Dataset 断言：
 
@@ -719,7 +734,7 @@ func TestSymbolCollectorReconcilesOnlyRequestedTargetDataset(t *testing.T)
 
 增加 YAML strict decode 测试，包含 `subject_dataset_ids` 时必须因未知字段失败，防止配置重新引入隐藏绑定。
 
-- [ ] **Step 2: 删除静态绑定字段和辅助函数**
+- [x] **Step 2: 删除静态绑定字段和辅助函数**
 
 从 `StorageBinding` 删除：
 
@@ -767,7 +782,7 @@ if err := decoder.Decode(&source); err != nil {
 
 这样旧 `subject_dataset_ids` 或拼错的 binding 字段会直接使启动配置校验失败。
 
-- [ ] **Step 3: 清理 Binance YAML**
+- [x] **Step 3: 清理 Binance YAML**
 
 spot 和 swap 都删除：
 
@@ -777,7 +792,7 @@ subject_dataset_ids:
 
 保留 `data_source_id`、subject identity 和 auth 配置。Kline Dataset 只能由 Rule target 指定。
 
-- [ ] **Step 4: 验证 Symbol 过滤和目标 Dataset**
+- [x] **Step 4: 验证 Symbol 过滤和目标 Dataset**
 
 测试必须继续覆盖：
 
@@ -798,7 +813,7 @@ DatasetSubject 只绑定 target Dataset
 
 Expected: 全部通过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add \
@@ -819,7 +834,7 @@ git commit -m "refactor(collector): bind symbols only to rule target dataset"
 - Create: `examples/e2e/collector-symbol-kline.mjs`
 - Create: `examples/e2e/collector-symbol-kline.test.mjs`
 
-- [ ] **Step 1: 先写纯函数测试**
+- [x] **Step 1: 先写纯函数测试**
 
 使用 `node:test` 覆盖：
 
@@ -842,7 +857,7 @@ node --test examples/e2e/collector-symbol-kline.test.mjs
 
 Expected: E2E module尚不存在，测试失败。
 
-- [ ] **Step 2: 定义隔离运行参数和 state**
+- [x] **Step 2: 定义隔离运行参数和 state**
 
 脚本接受：
 
@@ -900,7 +915,7 @@ state 至少保存：
 
 state 文件权限为 `0600`，不得保存密码、HMAC、云密钥或完整 keepalive event。
 
-- [ ] **Step 3: 通过 Storage API 创建完整 Dataset**
+- [x] **Step 3: 通过 Storage API 创建完整 Dataset**
 
 fixture 必须：
 
@@ -964,7 +979,7 @@ Kline Dataset：
 
 不得直接写 Storage SQLite，也不得依赖 `metadata-quant-initial.seed.yaml` 中既有 Kline Dataset。
 
-- [ ] **Step 4: 保证 fixture 可重复运行**
+- [x] **Step 4: 保证 fixture 可重复运行**
 
 若 Dataset 已存在：
 
@@ -974,7 +989,7 @@ Kline Dataset：
 
 cleanup 默认只 disable 两条 Rule；只有显式请求时删除临时 Dataset。真实 SCF fleet 保留在 CloudNode catalog 和腾讯云中，后续运行通过相同 fleet prefix 复用。
 
-- [ ] **Step 5: 运行 JS 单测**
+- [x] **Step 5: 运行 JS 单测**
 
 ```bash
 node --test examples/e2e/collector-symbol-kline.test.mjs
@@ -982,7 +997,7 @@ node --test examples/e2e/collector-symbol-kline.test.mjs
 
 Expected: 全部通过。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add \
@@ -1000,7 +1015,7 @@ git commit -m "test(e2e): add collector symbol and kline dataset fixture"
 - Modify: `examples/e2e/collector-symbol-kline.mjs`
 - Modify: `examples/e2e/collector-symbol-kline.test.mjs`
 
-- [ ] **Step 1: 创建并触发 Symbol Rule**
+- [x] **Step 1: 创建并触发 Symbol Rule**
 
 setup 创建：
 
@@ -1027,7 +1042,7 @@ setup 创建：
 
 `symbols` phase 调用一次 `ScheduleTasks`。因为 Symbol Rule 为 `1m`，任意分钟调用都应生成下一个分钟边界任务；不得直接调用 `SubmitJobItems`。
 
-- [ ] **Step 2: 等待 Symbol Job 成功并验证全集**
+- [x] **Step 2: 等待 Symbol Job 成功并验证全集**
 
 断言：
 
@@ -1039,7 +1054,10 @@ setup 创建：
 - Job result 的写入数大于 0。
 - Symbol Job 总执行时间小于现有 `job_worker.timeout=20s`；超时即本轮失败，不通过放宽 E2E 判断掩盖。
 
-使用 Storage PrimaryStore `ReadRecordRows` 的 `next_page_token` 分页读取 Symbol Dataset，再按 Subject ID 比较集合：
+先分页读取 active DatasetSubject 和 Binance SubjectSymbol 映射，再按
+`record_id + snapshot version` 分成每批 25 个 Key 调用 Storage PrimaryStore
+`ReadRecordRows` 精确读取 Symbol Dataset。这样验证 PrimaryStore 真实写入，不依赖
+Storage View 的异步索引进度。随后按 Subject ID 比较集合：
 
 ```text
 最新 Symbol Record 中 status=active 的 record_id 集合
@@ -1059,7 +1077,7 @@ active DatasetSubject 的 subject_id 集合
 
 完成上述集合验证后立即 `DisableTaskRule(symbol_rule)`。E2E 使用 `1m` 只是为了快速得到首次 Symbol 结果；若继续保持 enabled，随后为 Kline 调用 `ScheduleTasks` 时会额外生成下一窗口 Symbol JobItem。
 
-- [ ] **Step 3: 创建 Kline Rule 并让 Collector 生成任务**
+- [x] **Step 3: 创建 Kline Rule 并让 Collector 生成任务**
 
 只有 Symbol Job 成功且 active subjects 已可读后，才创建/启用：
 
@@ -1101,7 +1119,7 @@ Kline TaskInstance 数 = active Symbol DatasetSubject 数
 所有 JobItem ID 包含同一 execute_at 窗口
 ```
 
-- [ ] **Step 4: 验证业务参数与运行时参数分离**
+- [x] **Step 4: 验证业务参数与运行时参数分离**
 
 遍历本窗口 JobItem params，禁止出现：
 
@@ -1120,7 +1138,7 @@ const forbidden = [
 
 同时通过 fleet readiness 证明 keepalive 已下发可用 Service/Storage target；通过 SCF 环境和连接日志证明 EventBus/CA 在 worker 启动前可用。
 
-- [ ] **Step 5: 增加 phase 纯函数测试**
+- [x] **Step 5: 增加 phase 纯函数测试**
 
 测试至少覆盖：
 
@@ -1130,7 +1148,7 @@ const forbidden = [
 - `execute_at` 不一致立即失败。
 - JobItem 中出现 endpoint/secret 字段立即失败。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add \
@@ -1141,7 +1159,7 @@ git commit -m "test(e2e): cover symbol to kline job planning"
 
 ---
 
-## Task 7: 批量创建部署 50 个真实 SCF 并验证 Storage 1m Kline
+## Task 7: 通过 moox-cli 发布 50 个真实 SCF 并验证 Storage 1m Kline
 
 **Files:**
 
@@ -1149,12 +1167,10 @@ git commit -m "test(e2e): cover symbol to kline job planning"
 - Create: `examples/e2e/test-run-real-symbol-kline-scf.sh`
 - Modify: `examples/e2e/collector-symbol-kline.mjs`
 - Modify: `examples/e2e/collector-symbol-kline.test.mjs`
-- Modify: `modules/cli/internal/command/collector.go`
-- Modify: `modules/cli/internal/command/collector_test.go`
 - Modify: `modules/collector/internal/httpclient/client.go`
 - Modify: `modules/collector/internal/httpclient/client_test.go`
 
-- [ ] **Step 1: 先写 shell runner 参数和失败边界测试**
+- [x] **Step 1: 先写 shell runner 参数和失败边界测试**
 
 `test-run-real-symbol-kline-scf.sh` 使用 fake `node` 验证 runner：
 
@@ -1162,9 +1178,13 @@ git commit -m "test(e2e): cover symbol to kline job planning"
 默认 --scf-count 50
 缺少 cloud account/package name/region 时启动前失败
 scf-count 非正整数时失败
-setup -> fleet -> symbols -> klines -> assert 顺序固定
+setup -> publish submit -> publish status -> fleet online -> symbols -> klines -> assert 顺序固定
+submit 未返回 job_id 时立即失败
+status 返回 NODE_BATCH_STATUS_FAILED/PARTIAL 时输出失败 Item 并立即失败
+status 临时请求失败时继续轮询，但超过 30 分钟后停止
+发布终态前不得创建或启用 Symbol/Kline Rule
 退出时总是执行 Rule cleanup
-runner 不调用只软删 catalog 的 BatchDeleteNodes
+runner 不自动删除真实 SCF fleet
 state/log 文件权限为 0600
 密码和 secret 不出现在命令回显
 ```
@@ -1177,129 +1197,69 @@ bash examples/e2e/test-run-real-symbol-kline-scf.sh
 
 Expected: runner 尚不存在，测试失败。
 
-- [ ] **Step 2: 让现有 Collector 发布 CLI 生成完整 SCF 环境**
+- [x] **Step 2: 通过 moox-cli 提交 50 个 SCF 的异步发布任务**
 
-不要在 Node.js E2E 中重新拼生产 NodeCreateItem。扩展现有 `moox-cli collector function publish`：
+开始本 Task 前，假设
+`docs/superpowers/plans/2026-07-27-cloudnode-async-scf-publish.md`
+已经完整实现并验收。本计划不修改 CloudNode、CLI 或前端的发布实现，也不重复描述发布 Job、Item、并发、恢复和腾讯云调用细节。
+
+E2E runner 准备好 `moox-cli collector function publish submit --help` 要求的控制面鉴权、SCF 运行配置和 EventBus 凭据后，只调用一次：
+
+```bash
+moox-cli collector function publish submit \
+  --control-url "${CONTROL_URL}" \
+  --space-id "${SPACE_ID}" \
+  --node-count 50 \
+  --function-name-prefix "${FLEET_PREFIX}" \
+  --cloud-account-id "${CLOUD_ACCOUNT_ID}" \
+  --region "${REGION}" \
+  --package-name "${PACKAGE_NAME}" \
+  --version "${PACKAGE_VERSION}" \
+  --zip "${PACKAGE_ZIP}" \
+  --eventbus-credential-file "${EVENTBUS_CREDENTIAL_FILE}"
+```
+
+CLI 必须立即返回非空 `job_id`、本次 `package_id` 和
+`total_count=50`。runner 将结果写入权限为 `0600` 的 state 文件；如果
+submit 失败或没有返回 `job_id`，则在创建 Rule 前终止 E2E。
+
+- [x] **Step 3: 通过 moox-cli 查询发布结果**
+
+runner 只使用 submit 返回的 `job_id`，每 2 秒调用：
+
+```bash
+moox-cli collector function publish status \
+  --control-url "${CONTROL_URL}" \
+  --space-id "${SPACE_ID}" \
+  --job-id "${JOB_ID}"
+```
+
+`PENDING/RUNNING` 时继续轮询；`FAILED/PARTIAL` 时输出失败 Item 并终止；
+30 分钟未到终态时保留 `job_id` 供继续查询并终止本轮。只有以下结果才继续创建 Rule：
 
 ```text
---node-count 50
---create-batch-size 5
---function-name-prefix <fleet-prefix>
+status = NODE_BATCH_STATUS_SUCCESS
+total_count = 50
+success_count = 50
+failed_count = 0
 ```
 
-CLI 只构建和上传一次 package，然后先按 Space、region、fleet prefix 查询现有节点：
+- [x] **Step 4: 校验发布后的 SCF fleet**
 
-```text
-现有节点数 = 0  -> 构造 50 个完整 NodeCreateItem，分批 BatchCreateNodes
-现有节点数 = 50 -> 不创建 Function，使用新 package ID 分批 BatchDeployNodes
-现有节点数 1..49 -> 立即失败，不猜测补建
-```
-
-新建分支复用现有 `buildCollectorCreateNodeItem` 和 `collectorFunctionEnvironment`。每个 item 复制完整 config/environment，只修改全局唯一的 metadata index：
-
-```go
-base, err := buildCollectorCreateNodeItem(opts, uploadResp.PackageID)
-if err != nil {
-    return err
-}
-items := make([]adminclient.NodeCreateItem, opts.NodeCount)
-for index := range items {
-    items[index] = cloneNodeCreateItem(base)
-    items[index].Metadata["function_name_prefix"] = opts.FunctionNamePrefix
-    items[index].Metadata["index"] = index
-}
-```
-
-`cloneNodeCreateItem` 必须深复制 Metadata、Environment 和 Config map，避免修改一个 index 污染全部 item。复用分支必须使用本次刚上传得到的 `uploadResp.PackageID` 构造 50 个 deploy item，不能沿用旧 package ID。
-
-publish summary 将单个 batch 字段改为：
-
-```go
-type collectorPublishSummary struct {
-    ZipPath              string   `json:"zip_path"`
-    PackageID            string   `json:"package_id"`
-    FleetMode            string   `json:"fleet_mode"` // created or updated
-    CreateBatchIDs       []string `json:"create_batch_ids,omitempty"`
-    DeployBatchIDs       []string `json:"deploy_batch_ids,omitempty"`
-    CreateProcessedCount int      `json:"create_processed_count,omitempty"`
-    DeployProcessedCount int      `json:"deploy_processed_count,omitempty"`
-}
-```
-
-新项目不保留旧单 batch JSON 字段兼容。
-
-每个 item 必须具有：
-
-```text
-MOOX_SPACE_ID
-MOOX_COLLECTOR_JOB_TYPES=collect.binance.kline,collect.binance.symbol
-MOOX_EVENTBUS_NATS_URL
-MOOX_EVENTBUS_NATS_USERNAME
-MOOX_EVENTBUS_NATS_PASSWORD
-MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64
-MOOX_CODE_PACKAGE_ID
-MOOX_GATEWAY_NODE_ID / MOOX_GATEWAY_TARGET_NODE
-MOOX_GATEWAY_SERVICE_KEY_ID
-MOOX_GATEWAY_SERVICE_SECRET_KEY
-MOOX_GATEWAY_CA_PEM_B64
-MOOX_CLS_HOST
-MOOX_CLS_SECRET_ID
-MOOX_CLS_SECRET_KEY
-```
-
-CLI 测试断言：
-
-- 50 个 item 的 function/node name 唯一。
-- 所有 item 的 environment/config 除 index 外一致。
-- EventBus URL 必须是非 loopback `tls://`。
-- credential、CA、Gateway 身份或 CLS 任一缺失时，在第一次 CloudNode RPC 前失败。
-- CLI 不把 secret 写入 stdout、错误消息或结果 JSON。
-- 已存在 50 节点时仍上传得到新的 package ID，只调用 `BatchDeployNodes`，不调用 `BatchCreateNodes`。
-- 部分存在时不创建、不部署，返回包含实际数量和 fleet prefix 的错误。
-
-- [ ] **Step 3: 由 runner 调用一次 fleet-aware publish**
-
-runner 始终调用一次上一步 CLI，并从 JSON summary 读取本次新 package ID。首次创建时，CLI 每次向 `BatchCreateNodes` 提交 5 个节点，共 10 批串行执行；复用时每次向 `BatchDeployNodes` 提交 10 个节点，共 5 批串行执行。每批必须要求：
-
-```text
-ret_info.code = SUCCESS
-processed_count = 当前批大小
-```
-
-不得对已经存在的 Tencent SCF Function 再调用 `BatchCreateNodes`；CloudNode 会明确拒绝此操作。runner 不调用 `BatchDeleteNodes`，因为该 RPC 当前只软删 catalog、不会删除真实 Function。
-
-- [ ] **Step 4: 校验 fleet-aware publish 结果**
-
-当 `fleet_mode=created` 时，要求 10 个 create batch 共处理 50 个节点且 deploy count 为 0；CreateFunction 已直接引用本次 package，因此不做无意义的二次 deploy。当 `fleet_mode=updated` 时，要求 create count 为 0、5 个 deploy batch 共处理 50 个节点。
-
-两种模式都轮询节点目录并确认：
-
-```text
-50 个 node ID 唯一
-package_id = summary.package_id
-package_version = 本次上传版本
-provider = tencent-scf
-node_type = scf-event
-supported_workloads 包含 symbol/kline
-```
-
-全部一致后才进入 Rule 调度，避免任务被旧 package 消费。
-
-- [ ] **Step 5: 等待 50 个节点全部 online**
-
-最多等待 10 分钟，要求：
+发布 Job 成功后，使用现有节点查询能力等待最多 10 分钟并确认：
 
 ```text
 匹配 node prefix 的节点数 = 50
+50 个 node ID 唯一
 status = ONLINE
 last_heartbeat 距现在 <= 120s
-package_id = 本次 package
+package_id/package_version = 本次发布产物
 supported_workloads 包含 collect.binance.symbol 和 collect.binance.kline
 ```
 
-记录全部 node ID 到 state。keepalive 每轮最多处理 32 个节点，因此不得用 9 秒作为 50 节点全部上线的超时。
+记录全部 node ID 到 state 后再进入 Symbol/Kline Rule 调度。发布机制本身的正确性由前置计划负责；本计划只验证 CLI 发布结果能够支持真实 Collector E2E。
 
-- [ ] **Step 6: 等待所有 Kline JobItem 终态**
+- [x] **Step 5: 等待所有 Kline JobItem 终态**
 
 每次分页拉取 CloudNode JobItem，按本窗口 ID 集合匹配。验收：
 
@@ -1319,7 +1279,7 @@ zero_write_reason = no_new_closed_kline
 
 至少要求一个 JobItem 提供正数写入证据；若全为零，等待下一个 1m Rule 窗口再验一次，而不是用历史 Storage 行冒充本次成功。
 
-- [ ] **Step 7: 从 Storage 读取真实 1m Kline**
+- [x] **Step 6: 从 Storage 读取真实 1m Kline**
 
 使用 Job result 的 `written_row_key_samples` 读取 PrimaryStore，并逐条验证：
 
@@ -1343,7 +1303,7 @@ trade_num >= 0
 - 至少 9 个其他本次实际写入的 subjects
 - 至少 2 个不同 execution nodes 的写入结果；若本轮只有一个节点获得任务，则记录为 fleet 分布未覆盖并重新运行一个窗口。
 
-- [ ] **Step 8: 增加可关联的 Binance HTTP 成功日志**
+- [x] **Step 7: 增加可关联的 Binance HTTP 成功日志**
 
 将 HTTP 成功从 Debug 提升为不含 URL/query/secret 的 Info 事件：
 
@@ -1363,7 +1323,7 @@ log.InfoContextf(ctx,
 - 日志不含 query、credential、完整 URL。
 - TLS 验证失败不产生 success event。
 
-- [ ] **Step 9: 通过日志证明 TLS、延期和 Storage 链路**
+- [x] **Step 8: 通过日志证明 TLS、延期和 Storage 链路**
 
 对 Symbol JobItem 和至少 10 个 Kline JobItem 记录 CLS 查询键：
 
@@ -1401,18 +1361,17 @@ JobItem retry 超过 MaxDeliver = 0
 
 日志中不得打印 EventBus credential、Gateway HMAC、Storage app key 或完整环境变量。
 
-- [ ] **Step 10: 运行 runner 自测**
+- [x] **Step 9: 运行 runner 自测**
 
 ```bash
 node --test examples/e2e/collector-symbol-kline.test.mjs
 bash examples/e2e/test-run-real-symbol-kline-scf.sh
-(cd modules/cli && go test -count=1 ./internal/command -run 'TestCollector.*NodeCount')
 (cd modules/collector && go test -count=1 ./internal/httpclient)
 ```
 
 Expected: 全部通过。
 
-- [ ] **Step 11: 提交**
+- [x] **Step 10: 提交**
 
 ```bash
 git add \
@@ -1420,8 +1379,6 @@ git add \
   examples/e2e/test-run-real-symbol-kline-scf.sh \
   examples/e2e/collector-symbol-kline.mjs \
   examples/e2e/collector-symbol-kline.test.mjs \
-  modules/cli/internal/command/collector.go \
-  modules/cli/internal/command/collector_test.go \
   modules/collector/internal/httpclient/client.go \
   modules/collector/internal/httpclient/client_test.go
 git commit -m "test(e2e): verify symbol fanout across real scf fleet"
@@ -1438,7 +1395,7 @@ git commit -m "test(e2e): verify symbol fanout across real scf fleet"
 - Modify: `docs/采集任务管理.md`
 - Modify: `docs/superpowers/plans/2026-07-27-collector-symbol-kline-real-scf-e2e.md`
 
-- [ ] **Step 1: 更新 Rule 和 Timer 文档**
+- [x] **Step 1: 更新 Rule 和 Timer 文档**
 
 文档必须明确：
 
@@ -1460,7 +1417,7 @@ schedule.interval = 30s
 Symbol YAML 静态绑定 Kline Dataset
 ```
 
-- [ ] **Step 2: 写出真实 E2E 命令**
+- [x] **Step 2: 写出真实 E2E 命令**
 
 README 使用：
 
@@ -1484,18 +1441,16 @@ examples/e2e/run-real-symbol-kline-scf.sh \
 README 同时说明：
 
 - 默认保留 50 个节点供观察。
-- runner 不调用 `BatchDeleteNodes`；需要删除真实 fleet 时必须走能够调用腾讯云 DeleteFunction 的独立运维流程。
+- runner 不自动删除真实 fleet；需要删除时使用独立的 SCF 运维流程。
 - Rule cleanup 始终执行。
 - Dataset cleanup 必须显式执行。
 - state 和日志路径会在启动时打印。
 
-- [ ] **Step 3: 运行模块测试**
+- [x] **Step 3: 运行模块测试**
 
 ```bash
 (cd modules/collector && go test -count=1 ./...)
 (cd modules/collector && go test -race -count=1 ./internal/rpc ./internal/taskpublisher ./internal/taskrunner ./internal/sources/binance)
-(cd modules/cli && go test -count=1 ./internal/command)
-(cd modules/cloudnode && go test -count=1 ./internal/jobqueue ./internal/jobstate ./internal/rpc)
 (cd packages/jetstream && go test -race -count=1 ./...)
 node --test examples/e2e/verify-status.test.mjs
 node --test examples/e2e/collector-symbol-kline.test.mjs
@@ -1505,7 +1460,7 @@ bash examples/e2e/test-run-real-symbol-kline-scf.sh
 
 Expected: 全部通过。
 
-- [ ] **Step 4: 运行仓库验证**
+- [x] **Step 4: 运行仓库验证**
 
 ```bash
 ./scripts/test-go-workspace.sh
@@ -1521,7 +1476,7 @@ Expected:
 - `git diff --check` 无输出。
 - worktree 只包含本计划范围内的预期变更。
 
-- [ ] **Step 5: 发布新 SCF package 前做外部连通性预检**
+- [x] **Step 5: 发布新 SCF package 前做外部连通性预检**
 
 必须在真实 SCF 可达的网络环境证明：
 
@@ -1535,9 +1490,14 @@ Storage tRPC target 由 keepalive 下发且可达
 
 任一预检失败时不得创建 50 个函数。
 
-- [ ] **Step 6: 构建并发布精确代码包**
+- [x] **Step 6: 构建代码包并通过 moox-cli 发布 SCF fleet**
 
-使用项目现有两阶段发布流程，记录：
+runner 复用 Task 7 的 `moox-cli` 流程：执行一次
+`collector function publish submit --node-count 50 ...`，读取返回的
+`job_id`，再通过 `collector function publish status --job-id ...`
+等待发布完成。本 Step 不包含 CloudNode/CLI 发布机制的实现、单测或内部故障恢复验证。
+
+记录：
 
 ```text
 git HEAD
@@ -1545,17 +1505,23 @@ package_id
 package_version
 artifact SHA-256
 上传时间
+publish job_id
+publish operation
+publish terminal status
+50 个 Item 的最终结果
 ```
 
 确认 50 个节点的 package ID/version 都指向本次产物，并确认 worker 的 `MOOX_SPACE_ID` 与 JobType 配置会绑定目标 durable 后，再启用 Symbol/Kline Rule。package ID 不参与 durable identity。
 
-- [ ] **Step 7: 执行真实 50 SCF E2E**
+- [x] **Step 7: 执行真实 50 SCF E2E**
 
 执行 Task 8 Step 2 命令，保存：
 
 ```text
 runner log
 state JSON
+publish job_id 和 Job 终态
+50 个发布 Item 最终结果
 50 节点列表和 heartbeat 时间
 Symbol JobItem ID
 Kline JobItem ID 集合
@@ -1574,7 +1540,7 @@ Storage 有本次写入的 1m Kline
 CLS 无 TLS、429、Storage endpoint 或认证错误
 ```
 
-- [ ] **Step 8: 使用 codeCR 做独立审查**
+- [x] **Step 8: 使用 codeCR 做独立审查**
 
 审查范围：
 
@@ -1585,6 +1551,8 @@ UTC 周期与 execute_at 是否一致
 Symbol source/target Dataset 类型是否正确
 静态 subject_dataset_ids 是否完全删除
 50 SCF 是否竞争同一 durable
+SCF 发布是否一次提交一个 Job 并立即返回 job_id
+E2E 是否只通过 moox-cli submit/status 发布并查询真实进度
 JobItem 是否泄漏 endpoint/secret
 E2E 是否用历史数据冒充本次写入
 cleanup 是否误删正式 Rule/Dataset/SCF
@@ -1592,13 +1560,15 @@ cleanup 是否误删正式 Rule/Dataset/SCF
 
 所有 finding 必须附文件、符号或行号。P0/P1 必须修复；P2 若不修复，需在本计划记录明确理由。
 
-- [ ] **Step 9: 更新计划勾选与验收证据**
+- [x] **Step 9: 更新计划勾选与验收证据**
 
 将已完成 Step 改为 `[x]`，在文档末尾追加：
 
 ```text
 implementation HEAD
 package ID/version/SHA-256
+publish job ID/operation/terminal status
+publish Item success count
 test command summaries
 real E2E run ID
 symbol count
@@ -1610,7 +1580,7 @@ CLS error counts
 codeCR result
 ```
 
-- [ ] **Step 10: 最终提交并推送**
+- [x] **Step 10: 最终提交并推送**
 
 ```bash
 git add \
@@ -1648,6 +1618,7 @@ Expected:
 | 全部 TRADING USDT 现货标的 | Binance filter tests | Symbol rows/memberships/mappings |
 | Symbol Dataset 为 Kline source | RPC/planner tests | TaskInstance subject 集合 |
 | Collector 串行分批写 MQ | taskpublisher tests | JobItem 数和提交日志 |
+| SCF 发布异步提交 | runner contract tests | submit 返回的 `job_id` 与 status 终态 |
 | 50 SCF 部署在线 | E2E fleet assertion | CloudNode 节点目录/heartbeat |
 | SCF 竞争消费、不复制任务 | durable tests + JobItem ID 集合 | execution_node 分布 |
 | Kline 写入目标 Dataset | Job result scope assertion | PrimaryStore RowKey 和 OHLCV |
@@ -1672,7 +1643,7 @@ Task 5  E2E Dataset fixture
   ↓
 Task 6  Symbol -> Kline 任务闭环
   ↓
-Task 7  50 SCF 和 Storage 写入闭环
+Task 7  异步发布 50 SCF 和 Storage 写入闭环
   ↓
 Task 8  文档、全量验证、真实验收、codeCR、推送
 ```
@@ -1689,8 +1660,52 @@ Task 8  文档、全量验证、真实验收、codeCR、推送
 - [x] 覆盖 Symbol RECORD Dataset 到 Kline TIME_SERIES Dataset。
 - [x] 明确 Kline JobItem 只能由 Collector 生成。
 - [x] 覆盖 JetStream、50 SCF、Storage 和 CLS 的真实链路。
+- [x] 覆盖通过 moox-cli 异步发布 SCF 并查询真实进度。
 - [x] 明确业务参数、keepalive topology 和部署 Secret 的归属。
 - [x] 不引入工作流引擎、分布式锁、exactly-once 或自动扩缩容。
 - [x] 不要求 50 SCF 均匀消费或全部实际获得任务。
 - [x] 覆盖测试、race、仓库验证、独立 codeCR、提交和远端 SHA。
 - [x] 所有实施步骤均有明确文件、命令、断言和完成标准。
+
+## 8. 实施验收记录（2026-07-28）
+
+真实 E2E 使用前置计划提供的 `moox-cli publish submit/status` 发布 50 个
+Tencent SCF；Collector E2E 本身没有实现或绕过 CloudNode 发布机制。
+
+```text
+run_rule_suffix: 20260727t233211z
+package_id: moox-collector-e2e_20260727T233125Z_32de3f34-39a4-4a2d-b59f-6296b0fdaf69
+package_version: 20260727T233125Z
+artifact_sha256: 11b224155bb63be1834fac93ad9dc90497bff70678dc5ba002fe9896b0a632f3
+publish_job_id: node-batch-4c254a15-2003-4839-a0f3-8a7a11beb785
+publish_status: NODE_BATCH_STATUS_SUCCESS
+publish_items: success=50 failed=0
+online_scf_count: 50
+symbol_count: 470
+kline_job_count: 470
+positive_write_count: 4258
+distinct_execution_node_count: 50
+verified_storage_row_keys: 10
+enabled_e2e_rules_after_cleanup: 0
+```
+
+Storage 验证直接读取本次 Symbol snapshot 的 470 个 Record Key，并精确读取
+本次 Kline Job result 给出的 10 个 TimeSeries RowKey，不依赖历史 View 数据。
+CLS 通过每个任务独立、不可变的 `job_item_id` 上下文关联后台 resident worker
+的 transport、Binance HTTP 200 和 Storage 完成日志，不依赖 keepalive invocation
+的 `SCF_RequestId`；含多个 JobItem ID 的日志行会被拒绝。验证覆盖 Symbol 完整
+生命周期和最多 100 个跨节点候选中的至少 10 个 Kline 完整生命周期。
+查询范围内没有 x509/TLS、HTTP 429、无效 Storage binding 或 Secret 泄漏。
+高并发阶段出现的少量 Storage deadline 重试均由 JetStream 重投恢复，470 个
+Kline JobItem 最终全部 SUCCESS。
+
+本地验证：
+
+```text
+(modules/collector) go test ./... -count=1                         PASS
+(modules/collector) go test -race ./internal/taskrunner
+  ./internal/taskpublisher ./internal/serverless ./test -count=1  PASS
+node --test examples/e2e/collector-symbol-kline.test.mjs          34/34 PASS
+bash examples/e2e/test-run-real-symbol-kline-scf.sh               PASS
+./scripts/test-go-workspace.sh                                    PASS
+```

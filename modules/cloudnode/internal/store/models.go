@@ -69,3 +69,36 @@ type FunctionPackage struct {
 }
 
 func (*FunctionPackage) TableName() string { return "t_cloud_function_packages" }
+
+type NodeBatch struct {
+	ID          int        `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID     string     `gorm:"column:c_space_id"`
+	JobID       string     `gorm:"column:c_job_id"`
+	Operation   string     `gorm:"column:c_operation"`
+	Status      string     `gorm:"column:c_status"`
+	TotalCount  int        `gorm:"column:c_total_count"`
+	CompletedAt *time.Time `gorm:"column:c_completed_at"`
+	CreateTime  time.Time  `gorm:"column:c_ctime"`
+	ModifyTime  time.Time  `gorm:"column:c_mtime"`
+}
+
+func (*NodeBatch) TableName() string { return "t_cloud_node_batches" }
+
+type NodeBatchItem struct {
+	ID            int        `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID       string     `gorm:"column:c_space_id"`
+	JobID         string     `gorm:"column:c_job_id"`
+	ItemID        string     `gorm:"column:c_item_id"`
+	ItemIndex     int        `gorm:"column:c_item_index"`
+	NodeID        string     `gorm:"column:c_node_id"`
+	Status        string     `gorm:"column:c_status"`
+	RequestJSON   string     `gorm:"column:c_request_json"`
+	ResultSummary string     `gorm:"column:c_result_summary"`
+	ErrorMessage  string     `gorm:"column:c_error_message"`
+	StartedAt     *time.Time `gorm:"column:c_started_at"`
+	CompletedAt   *time.Time `gorm:"column:c_completed_at"`
+	CreateTime    time.Time  `gorm:"column:c_ctime"`
+	ModifyTime    time.Time  `gorm:"column:c_mtime"`
+}
+
+func (*NodeBatchItem) TableName() string { return "t_cloud_node_batch_items" }

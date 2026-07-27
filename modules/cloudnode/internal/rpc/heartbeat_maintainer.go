@@ -14,6 +14,9 @@ import (
 const (
 	keepaliveProbeSource = "keepalive_probe"
 	keepaliveBatchSize   = 10
+	// Fifty nodes are rotated in five 9-second timer ticks. One minute keeps
+	// adjacent invocations overlapped while leaving room for a job to finish.
+	keepaliveResidentSec = 60
 )
 
 // HeartbeatTargets are the control-plane endpoints an SCF runtime needs to
@@ -88,7 +91,7 @@ func (m *HeartbeatMaintainer) invoke(ctx context.Context, node *store.CloudNode)
 		Source:                  keepaliveProbeSource,
 		Timestamp:               at.Format(time.RFC3339Nano),
 		RequestID:               m.requestID(node.NodeID, at),
-		Data:                    keepaliveIdentity{NodeID: node.NodeID},
+		Data:                    keepaliveIdentity{NodeID: node.NodeID, ResidentSeconds: keepaliveResidentSec},
 		ServiceGatewayTarget:    m.targets.ServiceGatewayTarget,
 		StorageRPCGatewayTarget: m.targets.StorageRPCGatewayTarget,
 	}
@@ -113,5 +116,6 @@ type keepalivePayload struct {
 }
 
 type keepaliveIdentity struct {
-	NodeID string `json:"node_id"`
+	NodeID          string `json:"node_id"`
+	ResidentSeconds int    `json:"resident_seconds"`
 }

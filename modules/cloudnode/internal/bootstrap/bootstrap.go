@@ -39,6 +39,7 @@ type Runtime struct {
 	JetStream       *jobqueue.Runtime
 	HeartbeatBuffer *projection.HeartbeatBuffer
 	DebugServer     *http.Server
+	NodeBatchCancel context.CancelFunc
 }
 
 func (r *Runtime) Close(ctx context.Context) error {
@@ -47,6 +48,9 @@ func (r *Runtime) Close(ctx context.Context) error {
 	}
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
+	}
+	if r.NodeBatchCancel != nil {
+		r.NodeBatchCancel()
 	}
 	var firstErr error
 	if r.HeartbeatBuffer != nil {
@@ -159,6 +163,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	opts = append(opts, cloudnoderpc.WithCredentialResolver(credentialResolver))
 	svc := cloudnoderpc.New(dbm, opts...)
+	nodeBatchCtx, nodeBatchCancel := context.WithCancel(ctx)
+	runtime.NodeBatchCancel = nodeBatchCancel
+	if err := startNodeBatchRunner(nodeBatchCtx, svc, cfg); err != nil {
+		return nil, err
+	}
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
 	heartbeatMaintainer := cloudnoderpc.NewHeartbeatMaintainer(svc, scfHeartbeatTargetsFromEnv())
 	if err := registerSCFHeartbeatMaintainerHandler(s, heartbeatMaintainer.Handle); err != nil {
@@ -179,6 +188,16 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
 	return s, nil
+}
+
+func startNodeBatchRunner(ctx context.Context, svc *cloudnoderpc.Service, cfg *config.Config) error {
+	if svc == nil {
+		return fmt.Errorf("cloudnode node batch service is required")
+	}
+	if cfg == nil {
+		return fmt.Errorf("cloudnode config is required")
+	}
+	return svc.StartNodeBatchRunner(ctx, cfg.NodeBatch.BatchSize, cfg.NodeBatch.PollInterval)
 }
 
 func scfHeartbeatTargetsFromEnv() cloudnoderpc.HeartbeatTargets {

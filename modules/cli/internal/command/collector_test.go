@@ -371,23 +371,50 @@ func (f *fakeCollectorFleetAPI) ListCloudNodes(context.Context, adminclient.Clou
 	return append([]adminclient.CloudNode(nil), f.nodes...), nil
 }
 
-func (f *fakeCollectorFleetAPI) BatchCreateNodes(_ context.Context, items []adminclient.NodeCreateItem) (*adminclient.BatchChangeResponse, error) {
+func (f *fakeCollectorFleetAPI) SubmitCreateNodes(_ context.Context, items []adminclient.NodeCreateItem) (*adminclient.SubmitNodeBatchResponse, error) {
 	f.createCalls = append(f.createCalls, append([]adminclient.NodeCreateItem(nil), items...))
-	return &adminclient.BatchChangeResponse{
-		BatchID:        fmt.Sprintf("create-%d", len(f.createCalls)),
-		ProcessedCount: len(items),
+	return &adminclient.SubmitNodeBatchResponse{
+		JobID:      fmt.Sprintf("create-%d", len(f.createCalls)),
+		Operation:  "NODE_BATCH_OPERATION_CREATE_NODES",
+		TotalCount: len(items),
 	}, nil
 }
 
-func (f *fakeCollectorFleetAPI) BatchDeployNodes(_ context.Context, items []adminclient.NodeDeployItem) (*adminclient.BatchChangeResponse, error) {
+func (f *fakeCollectorFleetAPI) SubmitDeployNodes(_ context.Context, items []adminclient.NodeDeployItem) (*adminclient.SubmitNodeBatchResponse, error) {
 	f.deployCalls = append(f.deployCalls, append([]adminclient.NodeDeployItem(nil), items...))
-	return &adminclient.BatchChangeResponse{
-		BatchID:        fmt.Sprintf("deploy-%d", len(f.deployCalls)),
-		ProcessedCount: len(items),
+	return &adminclient.SubmitNodeBatchResponse{
+		JobID:      fmt.Sprintf("deploy-%d", len(f.deployCalls)),
+		Operation:  "NODE_BATCH_OPERATION_DEPLOY_NODES",
+		TotalCount: len(items),
 	}, nil
 }
 
-func TestApplyCollectorFleetCreatesInSerialBatches(t *testing.T) {
+func TestCollectorPublishSubmitCommandExists(t *testing.T) {
+	cmd, args, err := collectorFunctionPublishCmd.Find([]string{"submit"})
+	require.NoError(t, err)
+	require.Empty(t, args)
+	assert.Same(t, collectorFunctionPublishSubmitCmd, cmd)
+}
+
+func TestCollectorPublishStatusCommandExists(t *testing.T) {
+	cmd, args, err := collectorFunctionPublishCmd.Find([]string{"status"})
+	require.NoError(t, err)
+	require.Empty(t, args)
+	assert.Same(t, collectorFunctionPublishStatusCmd, cmd)
+}
+
+func TestPublishSubmitReturnsAfterJobSubmission(t *testing.T) {
+	api := &fakeCollectorFleetAPI{}
+	summary, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{
+		NodeCount: 1,
+	}, "pkg-new", []adminclient.NodeCreateItem{{PackageID: "pkg-new"}}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "create-1", summary.JobID)
+	assert.Equal(t, "create_nodes", summary.Operation)
+	assert.Equal(t, 1, summary.TotalCount)
+}
+
+func TestPublishSubmitCreateFleetUsesOneJob(t *testing.T) {
 	items := make([]adminclient.NodeCreateItem, 50)
 	for index := range items {
 		items[index] = adminclient.NodeCreateItem{
@@ -396,25 +423,19 @@ func TestApplyCollectorFleetCreatesInSerialBatches(t *testing.T) {
 		}
 	}
 	api := &fakeCollectorFleetAPI{}
-	summary, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
-		CloudAccountID:     "account-a",
-		Region:             "ap-guangzhou",
-		NodeType:           "scf-event",
-		BizType:            "data_collector",
-		FunctionNamePrefix: "fleet",
-		NodeCount:          50,
-		CreateBatchSize:    5,
-		DeployBatchSize:    1,
-	}, "pkg-new", items)
+	summary, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{
+		NodeCount: 50,
+	}, "pkg-new", items, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "created", summary.FleetMode)
-	assert.Len(t, api.createCalls, 10)
+	assert.Len(t, api.createCalls, 1)
+	assert.Len(t, api.createCalls[0], 50)
 	assert.Empty(t, api.deployCalls)
-	assert.Len(t, summary.CreateBatchIDs, 10)
-	assert.Equal(t, 50, summary.CreateProcessedCount)
+	assert.Equal(t, "create-1", summary.JobID)
+	assert.Equal(t, 50, summary.TotalCount)
 }
 
-func TestApplyCollectorFleetDeploysNewPackageToExistingFleet(t *testing.T) {
+func TestPublishSubmitDeployFleetUsesOneJob(t *testing.T) {
 	nodes := make([]adminclient.CloudNode, 50)
 	for index := range nodes {
 		nodes[index] = adminclient.CloudNode{
@@ -432,87 +453,89 @@ func TestApplyCollectorFleetDeploysNewPackageToExistingFleet(t *testing.T) {
 			Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "pkg-new", "MOOX_SPACE_ID": "crypto"},
 		}
 	}
-	summary, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
-		CloudAccountID:     "account-a",
-		Region:             "ap-guangzhou",
-		NodeType:           "scf-event",
-		BizType:            "data_collector",
-		FunctionNamePrefix: "fleet",
-		NodeCount:          50,
-		CreateBatchSize:    5,
-		DeployBatchSize:    1,
-	}, "pkg-new", createItems)
+	summary, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{
+		NodeCount: 50,
+	}, "pkg-new", createItems, nodes)
 	require.NoError(t, err)
 	assert.Equal(t, "updated", summary.FleetMode)
 	assert.Empty(t, api.createCalls)
-	assert.Len(t, api.deployCalls, 50)
-	assert.Len(t, summary.DeployBatchIDs, 50)
-	assert.Equal(t, 50, summary.DeployProcessedCount)
-	assert.Zero(t, summary.DeploySkippedCount)
-	assert.Equal(t, 1, summary.DeployBatchSize)
-	for _, batch := range api.deployCalls {
-		for _, item := range batch {
-			assert.Equal(t, "pkg-new", item.PackageID)
-			assert.Equal(t, createItems[0].Config, item.Config)
-			assert.Equal(t, createItems[0].Environment, item.Environment)
-		}
+	assert.Len(t, api.deployCalls, 1)
+	assert.Len(t, api.deployCalls[0], 50)
+	assert.Equal(t, "deploy-1", summary.JobID)
+	assert.Equal(t, "deploy_nodes", summary.Operation)
+	for _, item := range api.deployCalls[0] {
+		assert.Equal(t, "pkg-new", item.PackageID)
+		assert.Equal(t, createItems[0].Config, item.Config)
+		assert.Equal(t, createItems[0].Environment, item.Environment)
 	}
 }
 
-func TestApplyCollectorFleetSkipsNodesAlreadyOnRequestedPackage(t *testing.T) {
-	nodes := make([]adminclient.CloudNode, 50)
-	items := make([]adminclient.NodeCreateItem, 50)
-	for index := range nodes {
-		nodes[index] = adminclient.CloudNode{
-			NodeID:    fmt.Sprintf("fleet-%d", index),
-			PackageID: "pkg-new",
-			BizType:   "data_collector",
-			Metadata:  map[string]any{"function_name_prefix": "fleet", "index": float64(index)},
+func TestPublishSubmitRejectsPartialFleetBeforeUpload(t *testing.T) {
+	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
+	uploadCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/admin/cloudnode/ListCloudAccounts":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"accounts":[{"account_id":"account-a"}]}`))
+		case "/api/admin/cloudnode/GetNodeList":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fleet-0","biz_type":"data_collector","metadata":{"function_name_prefix":"fleet","index":0}}],"page":{"has_more":false}}`))
+		case "/api/admin/cloudnode/InitPackageUpload":
+			uploadCalled = true
+			t.Fatal("partial fleet must fail before upload")
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-	}
-	api := &fakeCollectorFleetAPI{nodes: nodes}
-	summary, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
-		FunctionNamePrefix: "fleet",
-		NodeCount:          50,
-		CreateBatchSize:    5,
-		DeployBatchSize:    1,
-	}, "pkg-new", items)
-	require.NoError(t, err)
-	assert.Equal(t, "updated", summary.FleetMode)
-	assert.Empty(t, api.deployCalls)
-	assert.Zero(t, summary.DeployProcessedCount)
-	assert.Equal(t, 50, summary.DeploySkippedCount)
-	assert.Equal(t, 1, summary.DeployBatchSize)
-}
-
-func TestApplyCollectorFleetRejectsPartialWithoutMutation(t *testing.T) {
-	api := &fakeCollectorFleetAPI{nodes: []adminclient.CloudNode{{
-		NodeID:   "fleet-0",
-		BizType:  "data_collector",
-		Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)},
-	}}}
-	_, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
-		FunctionNamePrefix: "fleet",
-		NodeCount:          50,
-		CreateBatchSize:    5,
-		DeployBatchSize:    1,
-	}, "pkg-new", make([]adminclient.NodeCreateItem, 50))
+	}))
+	defer server.Close()
+	_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{
+		ControlURL:             server.URL,
+		AccessToken:            "token",
+		SpaceID:                "crypto",
+		CloudAccountID:         "account-a",
+		Region:                 "ap-guangzhou",
+		NodeCount:              50,
+		FunctionNamePrefix:     "fleet",
+		EventBusCredentialFile: credentialFile,
+	})
 	require.ErrorContains(t, err, `fleet prefix "fleet" has 1 nodes`)
-	assert.Empty(t, api.createCalls)
-	assert.Empty(t, api.deployCalls)
+	assert.False(t, uploadCalled)
 }
 
-func TestApplyCollectorFleetRejectsShortDesiredItemsForExistingFleet(t *testing.T) {
-	api := &fakeCollectorFleetAPI{}
-	_, err := applyCollectorFleet(context.Background(), api, collectorPublishOptions{
-		FunctionNamePrefix: "fleet",
-		NodeCount:          50,
-		CreateBatchSize:    5,
-		DeployBatchSize:    1,
-	}, "pkg-new", make([]adminclient.NodeCreateItem, 49))
-	require.ErrorContains(t, err, "create item count=49")
-	assert.Empty(t, api.createCalls)
-	assert.Empty(t, api.deployCalls)
+func TestPublishSubmitRejectsNodeCountAboveBatchLimitBeforeControlPlaneAccess(t *testing.T) {
+	controlPlaneCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		controlPlaneCalled = true
+		t.Fatalf("node count validation must run before control-plane access: %s", r.URL.Path)
+	}))
+	defer server.Close()
+
+	_, err := publishCollectorFunction(context.Background(), collectorPublishOptions{
+		ControlURL:     server.URL,
+		AccessToken:    "token",
+		SpaceID:        "crypto",
+		CloudAccountID: "account-a",
+		Region:         "ap-guangzhou",
+		NodeCount:      maxCollectorPublishNodeCount + 1,
+	})
+
+	require.ErrorContains(t, err, "--node-count must be between 1 and 100")
+	assert.False(t, controlPlaneCalled)
+}
+
+func TestPublishStatusPrintsJobAndItems(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/admin/cloudnode/GetNodeBatchChange", r.URL.Path)
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job":{"job_id":"node-batch-1","status":"NODE_BATCH_STATUS_PARTIAL","total_count":2},"items":[{"item_id":"item-1","node_id":"node-1","status":"NODE_BATCH_ITEM_STATUS_SUCCESS"},{"item_id":"item-2","node_id":"node-2","status":"NODE_BATCH_ITEM_STATUS_FAILED","error_message":"failed"}]}`))
+	}))
+	defer server.Close()
+	status, err := publishCollectorFunctionStatus(context.Background(), collectorPublishStatusOptions{
+		ControlURL: server.URL,
+		JobID:      "node-batch-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "node-batch-1", status.Job.JobID)
+	assert.Equal(t, "NODE_BATCH_STATUS_PARTIAL", status.Job.Status)
+	require.Len(t, status.Items, 2)
 }
 
 func TestCollectorCLSCredentialsPreferDedicatedRuntimeIdentity(t *testing.T) {
@@ -567,7 +590,7 @@ func TestBuildCollectorCreateNodeItemRejectsInvalidJobTypes(t *testing.T) {
 }
 
 func TestCollectorFunctionPublishJobTypesFlagDefaultsToBinance(t *testing.T) {
-	got, err := collectorFunctionPublishCmd.Flags().GetStringSlice("job-types")
+	got, err := collectorFunctionPublishSubmitCmd.Flags().GetStringSlice("job-types")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"collect.binance.kline", "collect.binance.symbol"}, got)
 }
@@ -610,6 +633,15 @@ func TestCollectorFunctionEnvironmentRejectsManagedJobTypesOverride(t *testing.T
 	require.ErrorContains(t, err, "managed key MOOX_COLLECTOR_JOB_TYPES")
 }
 
+func TestCollectorFunctionEnvironmentRejectsManagedSpaceOverride(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := collectorFunctionEnvironment(collectorPublishOptions{
+		SpaceID: "crypto",
+		Env:     []string{"MOOX_SPACE_ID=stocks"},
+	})
+	require.ErrorContains(t, err, "managed key MOOX_SPACE_ID")
+}
+
 func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	zipPath := filepath.Join(t.TempDir(), "collector.zip")
 	require.NoError(t, os.WriteFile(zipPath, []byte("fake-zip"), 0o600))
@@ -629,11 +661,12 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		case "/api/admin/cloudnode/CompletePackageUpload":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0, "msg": "ok"}})
-		case "/api/admin/cloudnode/BatchDeployNodes":
+		case "/api/admin/cloudnode/SubmitDeployNodes":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"ret_info":        map[string]any{"code": 0, "msg": "ok"},
-				"batch_id":        "batch-1",
-				"processed_count": 1,
+				"ret_info":    map[string]any{"code": 0, "msg": "ok"},
+				"job_id":      "node-batch-1",
+				"operation":   "NODE_BATCH_OPERATION_DEPLOY_NODES",
+				"total_count": 1,
 			})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -650,8 +683,9 @@ func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, zipPath, summary.ZipPath)
 	assert.Equal(t, "pkg-1", summary.PackageID)
-	assert.Equal(t, "batch-1", summary.DeployBatchID)
-	assert.Equal(t, 1, summary.DeployProcessedCount)
+	assert.Equal(t, "node-batch-1", summary.JobID)
+	assert.Equal(t, "deploy_nodes", summary.Operation)
+	assert.Equal(t, 1, summary.TotalCount)
 }
 
 func TestResolveCollectorRootMissing(t *testing.T) {

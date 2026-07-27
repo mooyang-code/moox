@@ -157,6 +157,7 @@ func (cfg *Config) Validate() error {
 // ExecuteJobItem reports a terminal state before selecting ACK or TERM.
 // Retryable non-final failures are intentionally not reported as terminal.
 func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount uint64, maxDeliver int) jetstream.HandlerResult {
+	defer log.Sync()
 	item.DeliveryCount = deliveryCount
 	item.MaxDeliver = maxDeliver
 	if err := cfg.Validate(); err != nil {
@@ -169,7 +170,9 @@ func ExecuteJobItem(ctx context.Context, cfg Config, item JobItem, deliveryCount
 	if deliveryCount > 1 {
 		decision, terminal, err := terminalRedeliveryDecision(ctx, cfg, item)
 		if err != nil {
-			return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: normalRetryDelay, Err: err}
+			log.WarnContextf(ctx,
+				"cloud job terminal-state check failed; executing idempotently job_item_id=%s error=%q",
+				item.JobItemID, errorString(err))
 		}
 		if terminal {
 			return jetstream.HandlerResult{Decision: decision}

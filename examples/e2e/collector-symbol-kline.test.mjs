@@ -11,16 +11,20 @@ import {
   assertDatasetContract,
   assertNoRuntimeParams,
   buildKlineDatasetContract,
-  buildKlineViewContract,
   buildSCFNodeDefinitions,
   buildSymbolDatasetContract,
   collectKlineWriteEvidence,
   fieldContractMatches,
+  fleetCLSTopicID,
   hasMorePages,
   parseArgs,
   restoreCleanupScope,
+  searchCLSLogLines,
+  selectKlineLifecycleCandidates,
   validateKlineStorageRow,
+  validateCLSLifecycle,
   validatePublishSummary,
+  validateSymbolWriteCount,
   signedHeaders,
   validateKlineJobs,
   verifiedSCFFleet,
@@ -60,14 +64,16 @@ test("builds 1m time-series dataset contract", () => {
   ]);
 });
 
-test("builds an active query view for the Kline dataset", () => {
-  const view = buildKlineViewContract("crypto", "e2e_binance_kline_1m");
-  assert.equal(view.view_id, "e2e_binance_kline_view");
-  assert.equal(view.primary_dataset_id, "e2e_binance_kline_1m");
-  assert.deepEqual(view.dataset_ids, ["e2e_binance_kline_1m"]);
-  assert.deepEqual(view.grain_keys, ["subject_id", "freq", "data_time"]);
-  assert.equal(view.filter_json, '{"freq":"1m"}');
-  assert.equal(view.status, "active");
+test("requires one shared CLS topic across the SCF fleet", () => {
+  assert.equal(fleetCLSTopicID([
+    { metadata: { cls_topic_id: "topic-a" } },
+    { metadata: { cls_topic_id: "topic-a" } },
+  ]), "topic-a");
+  assert.equal(fleetCLSTopicID([{ metadata: {} }], "topic-from-publish"), "topic-from-publish");
+  assert.throws(() => fleetCLSTopicID([
+    { metadata: { cls_topic_id: "topic-a" } },
+    { metadata: { cls_topic_id: "topic-b" } },
+  ]), /exactly one CLS topic_id/);
 });
 
 test("existing field contract accepts Storage scalar and protobuf enum names", () => {
@@ -158,6 +164,15 @@ test("active symbol records, memberships, and mappings must be identical sets", 
     [membership("ETH-USDT", "active")],
     [symbol("ETH-USDT", "ETHUSDT")],
   ), /must contain BTC-USDT/);
+});
+
+test("Symbol rows_written must equal the active subject count", () => {
+  const subjectIDs = new Set(["BTC-USDT", "ETH-USDT"]);
+  assert.equal(validateSymbolWriteCount({ rows_written: 2 }, subjectIDs), 2);
+  assert.throws(
+    () => validateSymbolWriteCount({ rows_written: 3 }, subjectIDs),
+    /rows_written=3 want=2/,
+  );
 });
 
 test("matches kline jobs to active symbol subjects", () => {
@@ -326,13 +341,17 @@ test("zero-write success does not count as a distinct writing SCF node", () => {
 });
 
 test("validates sampled 1m OHLCV rows", () => {
+  const expectedKey = {
+    space_id: "crypto",
+    dataset_id: "e2e_binance_kline_1m",
+    subject_id: "BTC-USDT",
+    freq: "1m",
+    data_time: "2026-07-27T12:34:00Z",
+  };
   const row = {
     key: {
-      space_id: "crypto",
-      dataset_id: "e2e_binance_kline_1m",
-      subject_id: "BTC-USDT",
-      freq: "1m",
-      data_time: "2026-07-27T12:34:00Z",
+      ...expectedKey,
+      dimensions: {},
     },
     fields: [
       field("open", 100),
@@ -344,7 +363,7 @@ test("validates sampled 1m OHLCV rows", () => {
       field("trade_num", 42),
     ],
   };
-  assert.doesNotThrow(() => validateKlineStorageRow(row, row.key));
+  assert.doesNotThrow(() => validateKlineStorageRow(row, expectedKey));
   const invalid = structuredClone(row);
   invalid.fields.find((item) => item.field_id === "high").value = typed(99);
   assert.throws(() => validateKlineStorageRow(invalid, invalid.key), /high/);
@@ -377,31 +396,83 @@ test("builds exactly 50 unique SCF node definitions", () => {
   assert.equal(new Set(nodes.map((item) => item.function_name)).size, 50);
 });
 
-test("validates created and updated fleet publish summaries", () => {
+test("validates successful asynchronous fleet publish summaries", () => {
   assert.equal(validatePublishSummary({
     package_id: "package-new",
     fleet_mode: "created",
-    create_batch_ids: Array.from({ length: 10 }, (_, index) => `create-${index}`),
-    create_processed_count: 50,
+    job_id: "node-batch-create",
+    operation: "create_nodes",
+    total_count: 50,
+    job: {
+      job_id: "node-batch-create",
+      operation: "NODE_BATCH_OPERATION_CREATE_NODES",
+      status: "NODE_BATCH_STATUS_SUCCESS",
+      total_count: 50,
+      pending_count: 0,
+      running_count: 0,
+      success_count: 50,
+      failed_count: 0,
+      progress_percent: 100,
+    },
+    items: Array.from({ length: 50 }, (_, index) => ({
+      item_id: `create-${index}`,
+      status: "NODE_BATCH_ITEM_STATUS_SUCCESS",
+    })),
   }, 50).package_id, "package-new");
   assert.equal(validatePublishSummary({
     package_id: "package-new",
     fleet_mode: "updated",
-    deploy_batch_ids: Array.from({ length: 50 }, (_, index) => `deploy-${index}`),
-    deploy_processed_count: 50,
-    deploy_batch_size: 1,
-  }, 50).fleet_mode, "updated");
-  assert.equal(validatePublishSummary({
-    package_id: "package-new",
-    fleet_mode: "updated",
-    deploy_skipped_count: 50,
-    deploy_batch_size: 1,
+    job_id: "node-batch-deploy",
+    operation: "deploy_nodes",
+    total_count: 50,
+    job: {
+      job_id: "node-batch-deploy",
+      operation: "NODE_BATCH_OPERATION_DEPLOY_NODES",
+      status: "NODE_BATCH_STATUS_SUCCESS",
+      total_count: 50,
+      pending_count: 0,
+      running_count: 0,
+      success_count: 50,
+      failed_count: 0,
+      progress_percent: 100,
+    },
+    items: Array.from({ length: 50 }, (_, index) => ({
+      item_id: `deploy-${index}`,
+      status: "NODE_BATCH_ITEM_STATUS_SUCCESS",
+    })),
   }, 50).fleet_mode, "updated");
   assert.throws(() => validatePublishSummary({
     package_id: "package-new",
     fleet_mode: "created",
-    create_processed_count: 49,
-  }, 50), /processed 49/);
+    job_id: "node-batch-running",
+    operation: "create_nodes",
+    total_count: 50,
+    job: {
+      job_id: "node-batch-running",
+      operation: "NODE_BATCH_OPERATION_CREATE_NODES",
+      status: "NODE_BATCH_STATUS_RUNNING",
+      total_count: 50,
+      success_count: 49,
+      failed_count: 0,
+    },
+    items: [],
+  }, 50), /status/);
+  assert.throws(() => validatePublishSummary({
+    package_id: "package-new",
+    fleet_mode: "created",
+    job_id: "node-batch-failed",
+    operation: "create_nodes",
+    total_count: 50,
+    job: {
+      job_id: "node-batch-failed",
+      operation: "NODE_BATCH_OPERATION_CREATE_NODES",
+      status: "NODE_BATCH_STATUS_PARTIAL",
+      total_count: 50,
+      success_count: 49,
+      failed_count: 1,
+    },
+    items: [],
+  }, 50), /status/);
 });
 
 test("request signature includes empty app headers when space is signed", () => {
@@ -509,6 +580,146 @@ test("state is written with mode 0600 and contains no secrets", async () => {
   await assert.rejects(() => writeState(path, { secret: "oops" }), /secret/);
 });
 
+test("validates CLS lifecycle, retry, HTTP, and Storage evidence", () => {
+  const jobs = [
+    { jobItemID: "symbol-job", kind: "symbol" },
+    { jobItemID: "kline-job", kind: "kline" },
+  ];
+  const terminal = (id, requestID, completion) => [
+    clsLine(requestID, `event="collector_job_received" job_item_id="${id}"`),
+    clsLine(requestID, `event="collector_job_started" job_item_id="${id}"`),
+    clsLine(requestID, `event="collector_job_done" job_item_id="${id}" status="success"`),
+    clsLine(requestID, `event="collector_job_cloudnode_reported" job_item_id="${id}" status="success"`),
+    clsLine(requestID, `event="collector_job_delivery_action" job_item_id="${id}" decision="ACK"`),
+    clsLine(requestID, `collector_http_completed domain=api.binance.com status=200 duration_ms=8 job_item_id="${id}"`),
+    clsLine(requestID, `${completion} job_item_id="${id}"`),
+  ];
+  const logs = [
+    ...terminal("symbol-job", "symbol-request", "[SymbolCollector] 标的采集完成, dataset_id=e2e_symbols"),
+    ...terminal("kline-job", "kline-request", "K线采集完成: dataset_id=e2e_klines count=1"),
+    clsLine("retry-request", 'event="collector_job_deferred" job_item_id="kline-job"'),
+    clsLine("retry-request", 'event="collector_job_delivery_action" job_item_id="kline-job" decision="RETRY"'),
+  ];
+  assert.equal(validateCLSLifecycle(logs, jobs), true);
+  assert.throws(
+    () => validateCLSLifecycle([...logs, "x509: certificate signed by unknown authority"], jobs),
+    /forbidden failure/,
+  );
+  assert.throws(
+    () => validateCLSLifecycle([...logs, "collector_http_failed domain=api.binance.com status=429 duration_ms=4"], jobs),
+    /forbidden failure/,
+  );
+});
+
+test("does not fill a JobItem lifecycle with logs from another JobItem", () => {
+  const job = { jobItemID: "symbol-job", kind: "symbol" };
+  const transport = [
+    "collector_job_received",
+    "collector_job_started",
+    "collector_job_done",
+    "collector_job_cloudnode_reported",
+  ].map((event) => clsLine("job-request", `event="${event}" job_item_id="symbol-job"`));
+  const logs = [
+    ...transport,
+    clsLine("job-request", 'event="collector_job_delivery_action" job_item_id="symbol-job" decision="ACK"'),
+    clsLine("retry-request", 'event="collector_job_deferred" job_item_id="symbol-job"'),
+    clsLine("retry-request", 'event="collector_job_delivery_action" job_item_id="symbol-job" decision="RETRY"'),
+    clsLine(
+      "unrelated-request",
+      'collector_http_completed domain=api.binance.com status=200 job_item_id="symbol-job" job_item_id="other-job"',
+    ),
+    clsLine(
+      "unrelated-request",
+      '[SymbolCollector] 标的采集完成 job_item_id="symbol-job" job_item_id="other-job"',
+    ),
+  ];
+  assert.throws(
+    () => validateCLSLifecycle(logs, [job]),
+    /for JobItem/,
+  );
+});
+
+test("accepts ten complete Kline lifecycles from a larger distributed sample", () => {
+  const symbol = { jobItemID: "symbol-job", kind: "symbol" };
+  const klines = Array.from({ length: 20 }, (_, index) => ({
+    jobItemID: `kline-${index}`,
+    kind: "kline",
+  }));
+  const terminal = (id, completion = "K线采集完成") => [
+    clsLine(`${id}-request`, `event="collector_job_received" job_item_id="${id}"`),
+    clsLine(`${id}-request`, `event="collector_job_started" job_item_id="${id}"`),
+    clsLine(`${id}-request`, `event="collector_job_done" job_item_id="${id}" status="success"`),
+    clsLine(`${id}-request`, `event="collector_job_cloudnode_reported" job_item_id="${id}" status="success"`),
+    clsLine(`${id}-request`, `event="collector_job_delivery_action" job_item_id="${id}" decision="ACK"`),
+    clsLine(`${id}-request`, `collector_http_completed status=200 job_item_id="${id}"`),
+    clsLine(`${id}-request`, `${completion} job_item_id="${id}"`),
+  ];
+  const logs = [
+    ...terminal(symbol.jobItemID, "[SymbolCollector] 标的采集完成"),
+    ...klines.slice(0, 10).flatMap((job) => terminal(job.jobItemID)),
+    clsLine("symbol-retry", 'event="collector_job_deferred" job_item_id="symbol-job"'),
+    clsLine("symbol-retry", 'event="collector_job_delivery_action" job_item_id="symbol-job" decision="RETRY"'),
+  ];
+  assert.equal(validateCLSLifecycle(logs, [symbol, ...klines]), true);
+  assert.throws(
+    () => validateCLSLifecycle(logs.filter((line) => !line.includes("kline-9")), [symbol, ...klines]),
+    /JobItem lifecycle count=9/,
+  );
+});
+
+test("selects Kline lifecycle candidates across execution nodes first", () => {
+  const candidates = selectKlineLifecycleCandidates([
+    { job_item_id: "job-a1", execution_node: "node-a" },
+    { job_item_id: "job-a2", execution_node: "node-a" },
+    { job_item_id: "job-b1", execution_node: "node-b" },
+    { job_item_id: "job-c1", execution_node: "node-c" },
+  ], 3);
+  assert.deepEqual(candidates.map((item) => item.jobItemID), ["job-a1", "job-b1", "job-c1"]);
+});
+
+test("CLS SearchLog follows Context pagination", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalID = process.env.MOOX_CLS_SECRET_ID;
+  const originalKey = process.env.MOOX_CLS_SECRET_KEY;
+  process.env.MOOX_CLS_SECRET_ID = "test-id";
+  process.env.MOOX_CLS_SECRET_KEY = "test-key";
+  const bodies = [];
+  globalThis.fetch = async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    const second = bodies.length === 2;
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        Response: {
+          ListOver: second,
+          Context: second ? "" : "next-page",
+          Results: [{ LogJson: JSON.stringify({ content: second ? "second" : "first" }) }],
+        },
+      }),
+    };
+  };
+  try {
+    const lines = await searchCLSLogLines({
+      topicID: "topic-a",
+      region: "ap-guangzhou",
+      from: 1,
+      to: 2,
+      terms: ["job-a"],
+    });
+    assert.equal(lines.length, 2);
+    assert.equal(bodies.length, 2);
+    assert.equal(bodies[0].Context, undefined);
+    assert.equal(bodies[1].Context, "next-page");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalID === undefined) delete process.env.MOOX_CLS_SECRET_ID;
+    else process.env.MOOX_CLS_SECRET_ID = originalID;
+    if (originalKey === undefined) delete process.env.MOOX_CLS_SECRET_KEY;
+    else process.env.MOOX_CLS_SECRET_KEY = originalKey;
+  }
+});
+
 test("parses all fixture phases and enforces positive SCF count", () => {
   for (const phase of ["setup", "symbols", "klines", "assert", "cleanup"]) {
     assert.equal(parseArgs(["--phase", phase, "--state-file", "/tmp/state"]).phase, phase);
@@ -564,6 +775,10 @@ function typed(value) {
   if (typeof value === "string") return { string_value: value };
   if (Number.isInteger(value)) return { int_value: String(value) };
   return { double_value: value };
+}
+
+function clsLine(requestID, content) {
+  return `${JSON.stringify({ SCF_RequestId: requestID, content })}\n${content}`;
 }
 
 function record(subjectID, fields) {
