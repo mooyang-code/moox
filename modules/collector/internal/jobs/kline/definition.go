@@ -9,14 +9,13 @@ import (
 )
 
 // JobType is the queue routing type for K-line collection.
-const JobType = "collect.kline"
+const JobType = "collect.binance.kline"
 
 // NewJobDefinition returns the K-line collector job definition.
 func NewJobDefinition() jobdef.JobDefinition {
 	dataSources := jobdef.OptionList{Options: []jobdef.Option{{Value: "binance", Label: "币安"}}}
 	return jobdef.JobDefinition{
 		ID:                1,
-		JobType:           JobType,
 		DataType:          "kline",
 		TypeName:          "K线",
 		TypeDesc:          "交易所K线行情采集",
@@ -37,18 +36,6 @@ func NewJobDefinition() jobdef.JobDefinition {
 				SortOrder:         1,
 			},
 			{
-				ID:                2,
-				DataType:          "kline",
-				FieldKey:          "objects",
-				FieldName:         "交易标的",
-				FieldType:         "multi_input",
-				IsRequired:        true,
-				DefaultValue:      []any{"*"},
-				FieldOptionsJSON:  `{"placeholder":"输入交易标的，例如 BTCUSDT；选择全部时使用 *"}`,
-				DataSourceOptions: dataSources,
-				SortOrder:         2,
-			},
-			{
 				ID:                3,
 				DataType:          "kline",
 				FieldKey:          "intervals",
@@ -58,7 +45,7 @@ func NewJobDefinition() jobdef.JobDefinition {
 				DefaultValue:      []any{"1m"},
 				FieldOptionsJSON:  `{"options":[{"value":"1m","label":"1分钟"},{"value":"3m","label":"3分钟"},{"value":"5m","label":"5分钟"},{"value":"15m","label":"15分钟"},{"value":"30m","label":"30分钟"},{"value":"1h","label":"1小时"},{"value":"2h","label":"2小时"},{"value":"4h","label":"4小时"},{"value":"6h","label":"6小时"},{"value":"12h","label":"12小时"},{"value":"1d","label":"1天"},{"value":"1w","label":"1周"},{"value":"1M","label":"1月"}]}`,
 				DataSourceOptions: dataSources,
-				SortOrder:         3,
+				SortOrder:         2,
 			},
 		},
 		Supports: []jobdef.Support{

@@ -44,10 +44,9 @@ type FieldDefinition struct {
 	SortOrder         int32
 }
 
-// JobDefinition describes one collector job type and its rule-planning metadata.
+// JobDefinition describes one collector data type and its rule-planning metadata.
 type JobDefinition struct {
 	ID                int32
-	JobType           string
 	DataType          string
 	TypeName          string
 	TypeDesc          string
@@ -67,7 +66,8 @@ func (d JobDefinition) Matches(params *domain.CollectParams) bool {
 	for _, support := range d.Supports {
 		if equalFoldTrim(support.Exchange, params.Collector.Exchange) &&
 			equalFoldTrim(support.Market, params.Collector.Market) &&
-			equalFoldTrim(support.DataType, params.Collector.DataType) {
+			equalFoldTrim(support.DataType, params.Collector.DataType) &&
+			equalFoldTrim(support.SourceKind, params.Source.Kind) {
 			return true
 		}
 	}

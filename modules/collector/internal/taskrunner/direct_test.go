@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/executor"
+	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
@@ -39,8 +41,70 @@ func (f directTestActionReporterFunc) ReportAction(
 }
 
 func TestCollectorWorkloadTimeout(t *testing.T) {
-	if collectorWorkloadTimeout != 100*time.Second {
-		t.Fatalf("collectorWorkloadTimeout = %v, want 100s", collectorWorkloadTimeout)
+	if collectorReportReserve != 2*time.Second {
+		t.Fatalf("collectorReportReserve = %v, want 2s", collectorReportReserve)
+	}
+}
+
+func TestWorkloadContextLeavesTwoSecondsForFinalReport(t *testing.T) {
+	parentDeadline := time.Now().Add(20 * time.Second)
+	parent, cancelParent := context.WithDeadline(context.Background(), parentDeadline)
+	defer cancelParent()
+
+	workload, cancel, err := workloadContext(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	got, ok := workload.Deadline()
+	if !ok || !got.Equal(parentDeadline.Add(-collectorReportReserve)) {
+		t.Fatalf("workload deadline = %v, want %v", got, parentDeadline.Add(-collectorReportReserve))
+	}
+}
+
+func TestCollectorTimeoutReturnsRetryableDecision(t *testing.T) {
+	jobType := fmt.Sprintf("test.collector.timeout.%d", time.Now().UnixNano())
+	nodeRuntime.Register(jobType, nodeRuntime.HandlerFunc(executeCollectorJobItem))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	result := nodeRuntime.ExecuteJobItem(ctx, nodeRuntime.Config{
+		ServiceGatewayTarget: "http://127.0.0.1:1",
+		SpaceID:              "crypto",
+		NodeID:               "scf-timeout",
+	}, nodeRuntime.JobItem{
+		SpaceID: "crypto", JobItemID: "timeout-1", JobType: jobType,
+	}, 1, 4)
+
+	if result.Decision != jetstream.RETRY {
+		t.Fatalf("timeout decision = %v, want RETRY; err=%v", result.Decision, result.Err)
+	}
+	if !errors.Is(result.Err, context.DeadlineExceeded) {
+		t.Fatalf("timeout error = %v, want context deadline exceeded", result.Err)
+	}
+}
+
+func TestRuntimeConfigUsesLatestKeepaliveValues(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "test-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-sk")
+	t.Cleanup(func() {
+		runtimeapp.UpdateNodeInfo("", "")
+		runtimeapp.UpdateServiceGatewayTarget("")
+	})
+
+	runtimeapp.UpdateNodeInfo("collector-scf-1", "v1")
+	runtimeapp.UpdateServiceGatewayTarget("http://gateway-old:11000")
+	first := runtimeConfig("space-1")
+
+	runtimeapp.UpdateNodeInfo("collector-scf-2", "v2")
+	runtimeapp.UpdateServiceGatewayTarget("http://gateway-new:11000")
+	second := runtimeConfig("space-1")
+
+	if first.NodeID != "collector-scf-1" || first.ServiceGatewayTarget != "http://gateway-old:11000" {
+		t.Fatalf("first runtime config = %+v", first)
+	}
+	if second.NodeID != "collector-scf-2" || second.ServiceGatewayTarget != "http://gateway-new:11000" {
+		t.Fatalf("second runtime config = %+v", second)
 	}
 }
 
@@ -96,7 +160,8 @@ func TestCollectorErrorCodeDistinguishesInstanceReportFailure(t *testing.T) {
 }
 
 type fakeQueueConsumer struct {
-	results []fakeFetchResult
+	results       []fakeFetchResult
+	requestedSize int
 }
 
 type fakeFetchResult struct {
@@ -117,7 +182,8 @@ type directTestAction struct {
 	err           error
 }
 
-func (f *fakeQueueConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
+func (f *fakeQueueConsumer) Fetch(_ context.Context, batchSize int) ([]*jetstream.Delivery, error) {
+	f.requestedSize = batchSize
 	if len(f.results) == 0 {
 		return nil, nats.ErrTimeout
 	}
@@ -127,6 +193,22 @@ func (f *fakeQueueConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, 
 }
 func (*fakeQueueConsumer) Close() error    { return nil }
 func (*fakeQueueConsumer) MaxDeliver() int { return 3 }
+
+func TestRoundRobinConsumerForwardsConfiguredBatchSize(t *testing.T) {
+	binding := &fakeQueueConsumer{results: []fakeFetchResult{{
+		deliveries: []*jetstream.Delivery{{Consumer: "one"}},
+	}}}
+	consumer := &roundRobinConsumer{bindings: []queueBinding{{consumer: binding}}}
+
+	rows, err := consumer.Fetch(context.Background(), 10)
+
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("fetch = %+v, %v", rows, err)
+	}
+	if binding.requestedSize != 10 {
+		t.Fatalf("requested batch size = %d, want 10", binding.requestedSize)
+	}
+}
 
 func TestRoundRobinConsumerDoesNotStarveBindings(t *testing.T) {
 	if directFetchMaxWait != 500*time.Millisecond {
@@ -209,6 +291,7 @@ func TestTaskEventFromJobItemCarriesJobItemID(t *testing.T) {
 	event, err := taskEventFromJobItem(nodeRuntime.JobItem{
 		SpaceID:       "crypto",
 		JobItemID:     "item-123",
+		JobType:       jobs.JobTypeCollectBinanceSymbol,
 		DeliveryCount: 4,
 		Params: map[string]any{
 			"space_id":   "crypto",
@@ -216,6 +299,7 @@ func TestTaskEventFromJobItemCarriesJobItemID(t *testing.T) {
 			"task_id":    "task-1",
 			"data_type":  "symbol",
 			"exchange":   "binance",
+			"market":     "spot",
 		},
 	})
 	if err != nil {
@@ -235,12 +319,14 @@ func TestTaskEventFromJobItemCarriesJobItemID(t *testing.T) {
 func TestTaskEventFromJobItemRequiresJobItemID(t *testing.T) {
 	_, err := taskEventFromJobItem(nodeRuntime.JobItem{
 		SpaceID: "crypto",
+		JobType: jobs.JobTypeCollectBinanceSymbol,
 		Params: map[string]any{
 			"space_id":   "crypto",
 			"dataset_id": "symbols-custom",
 			"task_id":    "task-1",
 			"data_type":  "symbol",
 			"exchange":   "binance",
+			"market":     "spot",
 		},
 	})
 	if err == nil || err.Error() != "job_item_id is required" {
@@ -252,15 +338,45 @@ func TestTaskEventFromJobItemRequiresDatasetID(t *testing.T) {
 	_, err := taskEventFromJobItem(nodeRuntime.JobItem{
 		SpaceID:   "crypto",
 		JobItemID: "item-123",
+		JobType:   jobs.JobTypeCollectBinanceSymbol,
 		Params: map[string]any{
 			"space_id":  "crypto",
 			"task_id":   "task-1",
 			"data_type": "symbol",
 			"exchange":  "binance",
+			"market":    "spot",
 		},
 	})
 	if err == nil || err.Error() != "dataset_id is required" {
 		t.Fatalf("taskEventFromJobItem() error = %v, want required dataset_id", err)
+	}
+}
+
+func TestTaskEventUsesEnvelopeIdentity(t *testing.T) {
+	item := nodeRuntime.JobItem{
+		SpaceID: "crypto", JobItemID: "item-1", JobType: jobs.JobTypeCollectBinanceKline,
+		Params: map[string]any{
+			"space_id": "crypto", "data_type": "kline", "exchange": "binance",
+			"market": "spot", "dataset_id": "kline", "task_id": "task-1",
+			"subject_id": "BTC-USDT", "symbol": "BTCUSDT", "interval": "1m",
+		},
+	}
+	event, err := taskEventFromJobItem(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.SpaceID != item.SpaceID || event.DataType != "kline" || event.DataSource != "binance" {
+		t.Fatalf("event identity = %+v", event)
+	}
+
+	item.Params["space_id"] = "other"
+	if _, err := taskEventFromJobItem(item); err == nil {
+		t.Fatal("taskEventFromJobItem() accepted payload space mismatch")
+	}
+	item.Params["space_id"] = "crypto"
+	item.Params["data_type"] = "symbol"
+	if _, err := taskEventFromJobItem(item); err == nil {
+		t.Fatal("taskEventFromJobItem() accepted payload data_type mismatch")
 	}
 }
 

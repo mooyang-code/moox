@@ -34,7 +34,7 @@ type queueBinding struct {
 	maxDeliver int
 }
 
-const collectorWorkloadTimeout = 100 * time.Second
+const collectorReportReserve = 2 * time.Second
 
 type queueConsumer interface {
 	Fetch(context.Context, int) ([]*jetstream.Delivery, error)
@@ -50,13 +50,13 @@ type roundRobinConsumer struct {
 	stopOnIdle bool
 }
 
-func (c *roundRobinConsumer) Fetch(ctx context.Context, _ int) ([]*jetstream.Delivery, error) {
+func (c *roundRobinConsumer) Fetch(ctx context.Context, batchSize int) ([]*jetstream.Delivery, error) {
 	if len(c.bindings) == 0 {
 		return nil, jetstream.ErrClosed
 	}
 	for offset := 0; offset < len(c.bindings); offset++ {
 		index := (c.next + offset) % len(c.bindings)
-		deliveries, err := c.bindings[index].consumer.Fetch(ctx, 1)
+		deliveries, err := c.bindings[index].consumer.Fetch(ctx, batchSize)
 		if len(deliveries) > 0 {
 			c.next = (index + 1) % len(c.bindings)
 			return deliveries, err
@@ -109,6 +109,13 @@ func run(ctx context.Context, stopOnIdle bool) error {
 	if err != nil {
 		return err
 	}
+	workerCfg, err := runtimeapp.GetJobWorkerConfig()
+	if err != nil {
+		return err
+	}
+	if err := jobs.ValidateJobTypes(workerCfg.JobTypes); err != nil {
+		return err
+	}
 	client, err := jetstream.Connect(ctx, eventBusCfg)
 	if err != nil {
 		return err
@@ -118,7 +125,7 @@ func run(ctx context.Context, stopOnIdle bool) error {
 	if err != nil {
 		return err
 	}
-	jobTypes := jobs.SupportedJobTypes()
+	jobTypes := workerCfg.JobTypes
 	bindings := make([]queueBinding, 0, len(jobTypes))
 	for _, jobType := range jobTypes {
 		identity := cloudjobqueue.Identity{SpaceID: spaceID, JobType: jobType}
@@ -156,29 +163,35 @@ func run(ctx context.Context, stopOnIdle bool) error {
 		return fmt.Errorf("no active job execution queue")
 	}
 	registerCollectorHandlers()
-	auth := runtimeapp.GetServiceAuthConfig()
-	runtimeCfg := nodeRuntime.Config{
-		ServiceGatewayTarget: gatewayTarget, SpaceID: spaceID, NodeID: nodeID,
-		Auth: nodeRuntime.AuthConfig{
-			AccessKey: auth.AccessKey, SecretKey: auth.SecretKey, TargetNode: auth.TargetNode,
-			CAFile: auth.CAFile, CAPEMBase64: auth.CAPEMBase64, ExpireSec: auth.ExpireSec,
-		},
-	}
 	roundRobin := &roundRobinConsumer{bindings: bindings, stopOnIdle: stopOnIdle}
 	defer roundRobin.Close()
 	handler := jetstream.DeliveryHandlerFunc(func(handleCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-		return handleDelivery(handleCtx, registry, bindings, runtimeCfg, delivery)
+		execCtx, cancel := context.WithTimeout(handleCtx, workerCfg.Timeout)
+		defer cancel()
+		return handleDelivery(execCtx, registry, bindings, runtimeConfig(spaceID), delivery)
 	})
 	actionReporter := &jobActionReporter{
 		registry: registry, bindings: bindings, spaceID: spaceID, nodeID: nodeID,
 	}
 	return jetstream.NewRunner(roundRobin, handler, jetstream.RunnerConfig{
-		BatchSize: 1, InProgressInterval: 0,
+		BatchSize: workerCfg.BatchSize, InProgressInterval: 0, IndependentBatch: true,
 		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
 			reportTransportError(ctx, nodeID, err)
 		}),
 		ActionReporter: actionReporter,
 	}).Run(ctx)
+}
+
+func runtimeConfig(spaceID string) nodeRuntime.Config {
+	nodeID, _ := runtimeapp.GetNodeInfo()
+	auth := runtimeapp.GetServiceAuthConfig()
+	return nodeRuntime.Config{
+		ServiceGatewayTarget: runtimeapp.GetServiceGatewayTarget(), SpaceID: spaceID, NodeID: nodeID,
+		Auth: nodeRuntime.AuthConfig{
+			AccessKey: auth.AccessKey, SecretKey: auth.SecretKey, TargetNode: auth.TargetNode,
+			CAFile: auth.CAFile, CAPEMBase64: auth.CAPEMBase64, ExpireSec: auth.ExpireSec,
+		},
+	}
 }
 
 func eventBusConfig() (jetstream.Config, error) {
@@ -313,7 +326,10 @@ func runtimeSpaceID() string {
 }
 
 func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nodeRuntime.Result, error) {
-	execCtx, cancel := context.WithTimeout(ctx, collectorWorkloadTimeout)
+	execCtx, cancel, err := workloadContext(ctx)
+	if err != nil {
+		return nodeRuntime.Result{}, nodeRuntime.Retryable(err, "JOB_DEADLINE_EXCEEDED")
+	}
 	defer cancel()
 	taskEvent, err := taskEventFromJobItem(item)
 	if err != nil {
@@ -330,6 +346,19 @@ func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nod
 	return nodeRuntime.Result{Summary: summary}, nil
 }
 
+func workloadContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, nil, fmt.Errorf("job deadline is required")
+	}
+	workloadDeadline := deadline.Add(-collectorReportReserve)
+	if !time.Now().Before(workloadDeadline) {
+		return nil, nil, context.DeadlineExceeded
+	}
+	workloadCtx, cancel := context.WithDeadline(ctx, workloadDeadline)
+	return workloadCtx, cancel, nil
+}
+
 func collectorErrorCode(err error) string {
 	if errors.Is(err, executor.ErrTaskInstanceReportFailed) {
 		return "TASK_INSTANCE_REPORT_FAILED"
@@ -339,9 +368,28 @@ func collectorErrorCode(err error) string {
 
 func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, error) {
 	payload := item.Params
+	spaceID := strings.TrimSpace(item.SpaceID)
+	if spaceID == "" {
+		return nil, fmt.Errorf("space_id is required")
+	}
+	route, ok := jobs.JobRouteByJobType(item.JobType)
+	if !ok {
+		return nil, fmt.Errorf("unsupported job_type: %s", strings.TrimSpace(item.JobType))
+	}
+	if payloadSpaceID := stringValue(payload, "space_id"); payloadSpaceID != "" && payloadSpaceID != spaceID {
+		return nil, fmt.Errorf("payload space_id does not match job envelope")
+	}
+	if payloadDataType := strings.ToLower(stringValue(payload, "data_type")); payloadDataType != "" &&
+		payloadDataType != route.DataType {
+		return nil, fmt.Errorf("payload data_type does not match job_type")
+	}
+	if payloadExchange := strings.ToLower(stringValue(payload, "exchange")); payloadExchange != "" &&
+		payloadExchange != route.Exchange {
+		return nil, fmt.Errorf("payload exchange does not match job_type")
+	}
 	taskID := firstString(stringValue(payload, "task_id"), item.JobItemID)
-	dataType := strings.ToLower(firstString(stringValue(payload, "data_type"), "kline"))
-	market := strings.ToLower(firstString(stringValue(payload, "market"), "spot"))
+	dataType := route.DataType
+	market := strings.ToLower(stringValue(payload, "market"))
 	symbol := stringValue(payload, "symbol")
 	subjectID := firstString(stringValue(payload, "subject_id"), symbol)
 	datasetID := stringValue(payload, "dataset_id")
@@ -355,20 +403,23 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 	if datasetID == "" {
 		return nil, fmt.Errorf("dataset_id is required")
 	}
+	if market == "" {
+		return nil, fmt.Errorf("market is required")
+	}
 	if dataType != "symbol" && symbol == "" {
 		return nil, fmt.Errorf("symbol is required")
 	}
 	if dataType != "symbol" && interval == "" {
-		interval = "1m"
+		return nil, fmt.Errorf("interval is required")
 	}
 	intervals := []string{interval}
 	if dataType == "symbol" {
 		intervals = []string{""}
 	}
 	return &model.TaskExecuteEvent{
-		SpaceID: stringValue(payload, "space_id"), DatasetID: datasetID,
+		SpaceID: spaceID, DatasetID: datasetID,
 		TaskID: taskID, JobItemID: item.JobItemID, DeliveryCount: item.DeliveryCount, DataType: dataType,
-		DataSource: firstString(stringValue(payload, "exchange"), "binance"), Market: market,
+		DataSource: route.Exchange, Market: market,
 		InstType: strings.ToUpper(market), SubjectID: subjectID, Symbol: symbol, Intervals: intervals,
 		Live: boolValue(payload, "live"),
 	}, nil

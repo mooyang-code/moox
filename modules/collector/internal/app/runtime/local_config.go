@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -9,10 +12,18 @@ import (
 
 // AppConfig 启动器配置（基于 yaml）
 type AppConfig struct {
-	System   *SystemConfig   `json:"system" yaml:"system"`       // 系统配置
-	EventBus *EventBusConfig `json:"event_bus" yaml:"event_bus"` // 事件总线配置
-	Sources  *SourcesConfig  `json:"sources" yaml:"sources"`     // 数据源配置
-	DNSProxy *DNSProxyConfig `json:"dnsproxy" yaml:"dnsproxy"`   // DNS 代理配置
+	System    *SystemConfig    `json:"system" yaml:"system"`       // 系统配置
+	EventBus  *EventBusConfig  `json:"event_bus" yaml:"event_bus"` // 事件总线配置
+	Sources   *SourcesConfig   `json:"sources" yaml:"sources"`     // 数据源配置
+	DNSProxy  *DNSProxyConfig  `json:"dnsproxy" yaml:"dnsproxy"`   // DNS 代理配置
+	JobWorker *JobWorkerConfig `json:"job_worker" yaml:"job_worker"`
+}
+
+// JobWorkerConfig controls the resident JetStream worker.
+type JobWorkerConfig struct {
+	BatchSize int           `json:"batch_size" yaml:"batch_size"`
+	Timeout   time.Duration `json:"timeout" yaml:"timeout"`
+	JobTypes  []string      `json:"job_types" yaml:"job_types"`
 }
 
 // SystemConfig 系统配置
@@ -86,7 +97,58 @@ func DefaultConfig() *AppConfig {
 				{Name: "binance", Enabled: true, Config: "./sources/market/binance.yaml"},
 			},
 		},
+		JobWorker: &JobWorkerConfig{
+			BatchSize: 10,
+			Timeout:   20 * time.Second,
+			JobTypes:  []string{"collect.binance.kline", "collect.binance.symbol"},
+		},
 	}
+}
+
+// GetJobWorkerConfig returns a validated copy of the worker configuration.
+func GetJobWorkerConfig() (JobWorkerConfig, error) {
+	if LocalAppConfig == nil {
+		InitLocalAppConfig()
+	}
+	localAppConfigMu.RLock()
+	cfg := JobWorkerConfig{}
+	if LocalAppConfig != nil && LocalAppConfig.JobWorker != nil {
+		cfg = *LocalAppConfig.JobWorker
+		cfg.JobTypes = append([]string(nil), LocalAppConfig.JobWorker.JobTypes...)
+	}
+	localAppConfigMu.RUnlock()
+
+	if override := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_JOB_TYPES")); override != "" {
+		cfg.JobTypes = strings.Split(override, ",")
+	}
+	cfg.JobTypes = normalizeJobTypes(cfg.JobTypes)
+	if cfg.BatchSize <= 0 {
+		return JobWorkerConfig{}, fmt.Errorf("job_worker.batch_size must be positive")
+	}
+	if cfg.Timeout <= 2*time.Second {
+		return JobWorkerConfig{}, fmt.Errorf("job_worker.timeout must be greater than 2s")
+	}
+	if len(cfg.JobTypes) == 0 {
+		return JobWorkerConfig{}, fmt.Errorf("job_worker.job_types must not be empty")
+	}
+	return cfg, nil
+}
+
+func normalizeJobTypes(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized
 }
 
 // GetServiceAuthConfig 获取后台服务请求签名配置。

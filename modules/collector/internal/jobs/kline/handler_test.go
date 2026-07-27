@@ -11,11 +11,10 @@ import (
 
 func TestNewJobDefinition_ShouldExposeKlineMetadata(t *testing.T) {
 	def := NewJobDefinition()
-	assert.Equal(t, "collect.kline", def.JobType)
 	assert.Equal(t, "kline", def.DataType)
 	assert.Equal(t, "K线", def.TypeName)
-	require.Len(t, def.Fields, 3)
-	assert.Equal(t, "intervals", def.Fields[2].FieldKey)
+	require.Len(t, def.Fields, 2)
+	assert.Equal(t, "intervals", def.Fields[1].FieldKey)
 }
 
 func TestBuildTaskSpecs_MultipleIntervals_ShouldExpandSubjects(t *testing.T) {

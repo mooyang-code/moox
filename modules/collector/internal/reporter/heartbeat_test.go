@@ -9,7 +9,6 @@ import (
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
-	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -126,6 +125,22 @@ func TestSendSingleHeartbeat_Success(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestSendSingleHeartbeat_ReturnsBusinessError(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
+	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "test-ak")
+	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "test-sk")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(ServerResponse{RetInfo: &ServerRetInfo{Code: 7, Msg: "rejected"}})
+	}))
+	defer server.Close()
+
+	err := sendSingleHeartbeat(context.Background(), server.URL, []byte(`{}`), server.Client())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rejected")
+}
+
 func TestCollectNodeMetrics_ReturnsMemoryUsage(t *testing.T) {
 	metrics := collectNodeMetrics()
 	assert.NotNil(t, metrics)
@@ -135,6 +150,7 @@ func TestCollectNodeMetrics_ReturnsMemoryUsage(t *testing.T) {
 
 func TestBuildPayloadInfo_UsesRuntimeAndEnvSpace(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "space-test")
+	t.Setenv("MOOX_COLLECTOR_JOB_TYPES", "collect.binance.kline")
 	runtimeapp.UpdateNodeInfo("node-payload", "v9")
 	httpclient.Init()
 	t.Cleanup(func() { runtimeapp.UpdateNodeInfo("", "") })
@@ -146,9 +162,18 @@ func TestBuildPayloadInfo_UsesRuntimeAndEnvSpace(t *testing.T) {
 	assert.Equal(t, "node-payload", payload.NodeID)
 	assert.Equal(t, model.NodeTypeSCFEvent, payload.NodeType)
 	assert.Equal(t, "v9", payload.Metadata["version"])
-	assert.Equal(t, jobs.SupportedJobTypes(), payload.SupportedCollectors)
+	assert.Equal(t, []string{"collect.binance.kline"}, payload.SupportedCollectors)
 	assert.NotNil(t, payload.Metrics)
 	assert.Nil(t, payload.LocalDNSRecords)
+}
+
+func TestBuildPayloadInfoRejectsUnsupportedConfiguredJobType(t *testing.T) {
+	t.Setenv("MOOX_COLLECTOR_JOB_TYPES", "collect.kline")
+
+	_, err := buildPayloadInfo()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported collector job type")
 }
 
 func TestSendToServer_RejectsEmptyGatewayTarget(t *testing.T) {

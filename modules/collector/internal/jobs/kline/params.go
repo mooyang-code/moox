@@ -13,6 +13,5 @@ type Params struct {
 	Symbol           string `json:"symbol"`
 	Interval         string `json:"interval"`
 	ScheduleInterval string `json:"schedule_interval"`
-	ScheduleTimezone string `json:"schedule_timezone"`
 	ScheduleWindow   string `json:"schedule_window"`
 }

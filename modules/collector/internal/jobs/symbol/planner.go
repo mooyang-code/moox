@@ -15,9 +15,7 @@ func BuildTaskSpecs(params *domain.CollectParams) []domain.TaskSpec {
 				"market":            params.Collector.Market,
 				"data_type":         params.Collector.DataType,
 				"dataset_id":        params.Target.DatasetID,
-				"job_type":          JobType,
 				"schedule_interval": params.Schedule.Interval,
-				"schedule_timezone": params.Schedule.Timezone,
 			},
 		},
 	}

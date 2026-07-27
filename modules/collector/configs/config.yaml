@@ -26,6 +26,13 @@ event_bus:
       addr: "localhost:6379"
       db: 0
 
+job_worker:
+  batch_size: 10
+  timeout: 20s
+  job_types:
+    - "collect.binance.kline"
+    - "collect.binance.symbol"
+
 # DNS 代理配置
 dnsproxy:
   # 本地 DNS 解析配置

@@ -12,11 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/symbol"
 )
 
-const (
-	JobTypeCollectKline  = kline.JobType
-	JobTypeCollectSymbol = symbol.JobType
-)
-
 // JobDefinition describes one collector job type.
 type JobDefinition = jobdef.JobDefinition
 
@@ -32,15 +27,6 @@ var jobDefinitions = []JobDefinition{
 func ListJobDefinitions() []JobDefinition {
 	out := make([]JobDefinition, len(jobDefinitions))
 	copy(out, jobDefinitions)
-	return out
-}
-
-// SupportedJobTypes returns stable queue routing types handled by Collector SCF.
-func SupportedJobTypes() []string {
-	out := make([]string, 0, len(jobDefinitions))
-	for _, definition := range jobDefinitions {
-		out = append(out, definition.JobType)
-	}
 	return out
 }
 

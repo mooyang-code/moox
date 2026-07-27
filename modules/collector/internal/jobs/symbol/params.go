@@ -10,6 +10,5 @@ type Params struct {
 	DataType         string `json:"data_type"`
 	DatasetID        string `json:"dataset_id"`
 	ScheduleInterval string `json:"schedule_interval"`
-	ScheduleTimezone string `json:"schedule_timezone"`
 	ScheduleWindow   string `json:"schedule_window"`
 }

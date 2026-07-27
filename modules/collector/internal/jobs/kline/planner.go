@@ -41,9 +41,7 @@ func BuildTaskSpecs(params *domain.CollectParams, subjects []domain.DatasetSubje
 					"subject_id":        subject.SubjectID,
 					"symbol":            symbol,
 					"interval":          interval,
-					"job_type":          JobType,
 					"schedule_interval": params.Schedule.Interval,
-					"schedule_timezone": params.Schedule.Timezone,
 					"live":              params.Collector.Live,
 				},
 			})

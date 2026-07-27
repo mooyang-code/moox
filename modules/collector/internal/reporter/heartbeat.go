@@ -123,6 +123,13 @@ func ProcessProbe(ctx context.Context, event model.CloudFunctionEvent) (*model.R
 }
 
 func buildPayloadInfo() (*model.HeartbeatPayload, error) {
+	workerCfg, err := runtimeapp.GetJobWorkerConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := jobs.ValidateJobTypes(workerCfg.JobTypes); err != nil {
+		return nil, err
+	}
 	// 从全局配置获取节点信息
 	nodeID, version := runtimeapp.GetNodeInfo()
 
@@ -140,7 +147,7 @@ func buildPayloadInfo() (*model.HeartbeatPayload, error) {
 		Timestamp:           time.Now(),
 		RunningTasks:        []*model.TaskSummary{},
 		Metrics:             nodeMetrics,
-		SupportedCollectors: jobs.SupportedJobTypes(),
+		SupportedCollectors: workerCfg.JobTypes,
 		LocalDNSRecords:     localDNSRecords,
 		Metadata: map[string]interface{}{
 			"version":    version,
@@ -254,8 +261,7 @@ func sendSingleHeartbeat(ctx context.Context, url string, data []byte, httpClien
 	}
 
 	if parseErr := parseServerResponse(respData); parseErr != nil {
-		log.WarnContextf(ctx, "failed to parse server response: %v", parseErr)
-		return nil // 不影响心跳上报，只记录警告
+		return fmt.Errorf("heartbeat server rejected request: %w", parseErr)
 	}
 	return nil
 }

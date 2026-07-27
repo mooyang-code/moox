@@ -9,14 +9,13 @@ import (
 )
 
 // JobType is the queue routing type for symbol collection.
-const JobType = "collect.symbol"
+const JobType = "collect.binance.symbol"
 
 // NewJobDefinition returns the symbol collector job definition.
 func NewJobDefinition() jobdef.JobDefinition {
 	dataSources := jobdef.OptionList{Options: []jobdef.Option{{Value: "binance", Label: "币安"}}}
 	return jobdef.JobDefinition{
 		ID:                2,
-		JobType:           JobType,
 		DataType:          "symbol",
 		TypeName:          "标的",
 		TypeDesc:          "交易所标的元数据同步",

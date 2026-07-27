@@ -11,7 +11,6 @@ import (
 
 func TestNewJobDefinition_ShouldExposeSymbolMetadata(t *testing.T) {
 	def := NewJobDefinition()
-	assert.Equal(t, "collect.symbol", def.JobType)
 	assert.Equal(t, "symbol", def.DataType)
 	assert.Equal(t, "标的", def.TypeName)
 	require.Len(t, def.Fields, 1)
@@ -21,14 +20,15 @@ func TestNewJobDefinition_ShouldExposeSymbolMetadata(t *testing.T) {
 func TestBuildTaskSpecs_ValidParams_ShouldReturnSingleTask(t *testing.T) {
 	params := &domain.CollectParams{}
 	params.Normalize("binance", "symbol")
+	params.Source.Kind = "none"
+	params.Collector.Market = "spot"
 	params.Target.DatasetID = "ds-symbol"
-	params.Target.JobType = "collect.symbol"
 
 	specs := BuildTaskSpecs(params)
 	require.Len(t, specs, 1)
 	assert.Equal(t, "binance", specs[0].Exchange)
 	assert.Equal(t, "symbol", specs[0].DataType)
-	assert.Equal(t, "collect.symbol", specs[0].Params["job_type"])
+	assert.NotContains(t, specs[0].Params, "job_type")
 }
 
 func TestNewJobDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing.T) {

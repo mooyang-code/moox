@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
@@ -220,9 +221,56 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if !ok {
 		t.Fatalf("supported_workloads type = %T", item.Metadata["supported_workloads"])
 	}
-	if len(workloads) != 2 || workloads[0] != "collect.kline" || workloads[1] != "collect.symbol" {
+	if len(workloads) != 2 || workloads[0] != "collect.binance.kline" || workloads[1] != "collect.binance.symbol" {
 		t.Fatalf("supported_workloads = %#v", workloads)
 	}
+	assert.Equal(t, "collect.binance.kline,collect.binance.symbol", item.Environment["MOOX_COLLECTOR_JOB_TYPES"])
+}
+
+func TestBuildCollectorCreateNodeItemNormalizesJobTypesAndKeepsMetadataEnvironmentInSync(t *testing.T) {
+	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+		CloudAccountID: "account-a",
+		Region:         "ap-guangzhou",
+		JobTypes: []string{
+			" collect.binance.symbol ",
+			"collect.binance.kline",
+			"collect.binance.symbol",
+		},
+	}, "moox-collector_dev")
+
+	workloads, ok := item.Metadata["supported_workloads"].([]string)
+	require.True(t, ok)
+	assert.Equal(t, []string{"collect.binance.symbol", "collect.binance.kline"}, workloads)
+	assert.Equal(t, strings.Join(workloads, ","), item.Environment["MOOX_COLLECTOR_JOB_TYPES"])
+}
+
+func TestBuildCollectorCreateNodeItemRejectsInvalidJobTypes(t *testing.T) {
+	tests := []struct {
+		name     string
+		jobTypes []string
+		want     string
+	}{
+		{name: "empty", jobTypes: []string{""}, want: "must not be empty"},
+		{name: "whitespace", jobTypes: []string{"  "}, want: "must not be empty"},
+		{name: "unknown", jobTypes: []string{"collect.tushare.kline"}, want: "unsupported collector job type"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setCollectorCLSTestCredentials(t)
+			_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
+				CloudAccountID: "account-a",
+				Region:         "ap-guangzhou",
+				JobTypes:       tt.jobTypes,
+			}, "moox-collector_dev")
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
+func TestCollectorFunctionPublishJobTypesFlagDefaultsToBinance(t *testing.T) {
+	got, err := collectorFunctionPublishCmd.Flags().GetStringSlice("job-types")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"collect.binance.kline", "collect.binance.symbol"}, got)
 }
 
 func TestBuildCollectorCreateNodeItemDefaultsToGoRuntime(t *testing.T) {
@@ -249,9 +297,18 @@ func TestCollectorFunctionEnvironmentRejectsManagedGatewayOverride(t *testing.T)
 			"MOOX_GATEWAY_SERVICE_KEY_ID=override-ak",
 			"MOOX_GATEWAY_SERVICE_SECRET_KEY=override-sk",
 			"MOOX_GATEWAY_SERVICE_EXPIRE_SECONDS=60",
+			"MOOX_COLLECTOR_JOB_TYPES=collect.binance.symbol",
 		},
 	}, "moox-collector_dev")
 	require.ErrorContains(t, err, "managed key")
+}
+
+func TestCollectorFunctionEnvironmentRejectsManagedJobTypesOverride(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := collectorFunctionEnvironment(collectorPublishOptions{
+		Env: []string{"MOOX_COLLECTOR_JOB_TYPES=collect.binance.symbol"},
+	})
+	require.ErrorContains(t, err, "managed key MOOX_COLLECTOR_JOB_TYPES")
 }
 
 func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {

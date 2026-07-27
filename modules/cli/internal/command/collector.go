@@ -25,6 +25,11 @@ import (
 
 const defaultCollectorSCFTimeout = "120"
 
+var defaultCollectorJobTypes = []string{
+	"collect.binance.kline",
+	"collect.binance.symbol",
+}
+
 type collectorPackageOptions struct {
 	CollectorRoot            string
 	Version                  string
@@ -52,6 +57,7 @@ type collectorPublishOptions struct {
 	PackageType            string
 	BizType                string
 	NodeType               string
+	JobTypes               []string
 	Env                    []string
 	Config                 []string
 	EventBusCredentialFile string
@@ -180,6 +186,7 @@ func init() {
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.PackageType, "package-type", "data_collector", "function package type")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.BizType, "biz-type", "data_collector", "business type")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.NodeType, "node-type", "scf-event", "cloud node type")
+	collectorFunctionPublishCmd.Flags().StringSliceVar(&collectorPublishFlags.JobTypes, "job-types", defaultCollectorJobTypes, "JobTypes consumed by this SCF deployment")
 	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
 	collectorFunctionPublishCmd.Flags().StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
 	collectorFunctionPublishCmd.Flags().StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/cloudnode-worker.yaml", "0600 cloudnode-worker EventBus credential YAML")
@@ -344,6 +351,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) (adminclient.NodeCreateItem, error) {
 	packageName := defaultFlag(opts.PackageName, "moox-collector")
 	bizType := defaultFlag(opts.BizType, "data_collector")
+	jobTypes, err := resolveCollectorPublishJobTypes(opts.JobTypes)
+	if err != nil {
+		return adminclient.NodeCreateItem{}, err
+	}
+	opts.JobTypes = jobTypes
 	environment, err := collectorFunctionEnvironment(opts, packageID)
 	if err != nil {
 		return adminclient.NodeCreateItem{}, err
@@ -369,17 +381,22 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 		Metadata: map[string]any{
 			"function_name_prefix": packageName,
 			"biz_type":             bizType,
-			"supported_workloads":  []string{"collect.kline", "collect.symbol"},
+			"supported_workloads":  append([]string(nil), jobTypes...),
 		},
 	}, nil
 }
 
 func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {
+	jobTypes, err := resolveCollectorPublishJobTypes(opts.JobTypes)
+	if err != nil {
+		return nil, err
+	}
 	packageID := ""
 	if len(packageIDs) > 0 {
 		packageID = packageIDs[0]
 	}
 	env := map[string]string{}
+	setDefaultEnv(env, "MOOX_COLLECTOR_JOB_TYPES", strings.Join(jobTypes, ","))
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
 	gatewayNodeID := firstNonEmpty(os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", gatewayNodeID)
@@ -405,6 +422,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_GATEWAY_SERVICE_SECRET_KEY":   {},
 		"MOOX_GATEWAY_NODE_ID":              {},
 		"MOOX_GATEWAY_TARGET_NODE":          {},
+		"MOOX_COLLECTOR_JOB_TYPES":          {},
 	}
 	for key := range overrides {
 		if _, ok := managed[key]; ok {
@@ -487,6 +505,31 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		return nil, nil
 	}
 	return env, nil
+}
+
+func resolveCollectorPublishJobTypes(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return append([]string(nil), defaultCollectorJobTypes...), nil
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		jobType := strings.TrimSpace(value)
+		if jobType == "" {
+			return nil, fmt.Errorf("collector job type must not be empty")
+		}
+		switch jobType {
+		case "collect.binance.kline", "collect.binance.symbol":
+		default:
+			return nil, fmt.Errorf("unsupported collector job type %q", jobType)
+		}
+		if _, ok := seen[jobType]; ok {
+			continue
+		}
+		seen[jobType] = struct{}{}
+		result = append(result, jobType)
+	}
+	return result, nil
 }
 
 func setDefaultEnv(env map[string]string, key string, value string) {
