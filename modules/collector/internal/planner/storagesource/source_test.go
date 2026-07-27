@@ -11,8 +11,16 @@ import (
 )
 
 type fakeMetadataClient struct {
+	dataset  *storagepb.Dataset
 	subjects []*storagepb.DatasetSubject
 	symbols  []*storagepb.SubjectSymbol
+}
+
+func (f *fakeMetadataClient) GetDataset(_ context.Context, _ *storagepb.GetDatasetReq, _ ...client.Option) (*storagepb.GetDatasetRsp, error) {
+	return &storagepb.GetDatasetRsp{
+		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
+		Dataset: f.dataset,
+	}, nil
 }
 
 func (f *fakeMetadataClient) ListDatasetSubjects(_ context.Context, _ *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
@@ -36,6 +44,17 @@ func TestDatasetSource_ListSubjects_EmptyDatasetID_ShouldReturnError(t *testing.
 	_, err := src.ListSubjects(context.Background(), "space-1", "", "ds-src")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "dataset_id is required")
+}
+
+func TestDatasetSourceGetDatasetReturnsValidationContract(t *testing.T) {
+	src := &DatasetSource{metadata: &fakeMetadataClient{dataset: &storagepb.Dataset{
+		DataSourceId: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active",
+	}}}
+	info, err := src.GetDataset(context.Background(), "crypto", "kline")
+	require.NoError(t, err)
+	assert.Equal(t, "binance", info.DataSourceID)
+	assert.Equal(t, storagepb.DataKind_DATA_KIND_TIME_SERIES, info.DataKind)
+	assert.Equal(t, "active", info.Status)
 }
 
 func TestDatasetSource_ListSubjects_ValidBindings_ShouldMergeSymbols(t *testing.T) {

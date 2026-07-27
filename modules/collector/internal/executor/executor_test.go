@@ -48,7 +48,7 @@ func TestNormalizeMarket(t *testing.T) {
 }
 
 func TestExecuteTask_NilEvent(t *testing.T) {
-	_, err := ExecuteTask(context.Background(), nil)
+	_, err := ExecuteTask(context.Background(), context.Background(), nil)
 	assert.Error(t, err)
 }
 
@@ -68,7 +68,7 @@ func TestExecuteTask_WithStubCollector(t *testing.T) {
 		Source: "stubex", Market: "spot", DataType: "symbol", Collector: collector,
 	}))
 
-	msg, err := ExecuteTask(context.Background(), &model.TaskExecuteEvent{
+	msg, err := ExecuteTask(context.Background(), context.Background(), &model.TaskExecuteEvent{
 		SpaceID: "crypto", DatasetID: "symbols-custom", TaskID: "task-1", JobItemID: "item-1",
 		DeliveryCount: 3, DataSource: "stubex", DataType: "symbol", InstType: "SPOT", Symbol: "BTCUSDT",
 	})
@@ -78,6 +78,38 @@ func TestExecuteTask_WithStubCollector(t *testing.T) {
 	assert.Equal(t, uint64(3), reportedDeliveryCount)
 	require.NotNil(t, collector.params)
 	assert.Equal(t, "symbols-custom", collector.params.DatasetID)
+}
+
+func TestExecuteTaskReportsFailureOnlyOnFinalDeliveryWithReservedContext(t *testing.T) {
+	old := sendTaskStatus
+	reports := 0
+	sendTaskStatus = func(ctx context.Context, _, _, _ string, _ uint64, _ int, _ string) error {
+		reports++
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("report context already expired: %v", err)
+		}
+		return nil
+	}
+	t.Cleanup(func() { sendTaskStatus = old })
+
+	collector := &stubCollector{err: context.DeadlineExceeded}
+	require.NoError(t, sources.GetRegistry().Register(&sources.CollectorDescriptor{
+		Source: "stubfail", Market: "spot", DataType: "symbol", Collector: collector,
+	}))
+	event := &model.TaskExecuteEvent{
+		SpaceID: "crypto", DatasetID: "symbols-custom", TaskID: "task-fail", JobItemID: "item-fail",
+		DeliveryCount: 1, MaxDeliver: 4, DataSource: "stubfail", DataType: "symbol", Market: "spot",
+	}
+	workloadCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ExecuteTask(workloadCtx, context.Background(), event)
+	require.Error(t, err)
+	assert.Equal(t, 0, reports)
+
+	event.DeliveryCount = 4
+	_, err = ExecuteTask(workloadCtx, context.Background(), event)
+	require.Error(t, err)
+	assert.Equal(t, 1, reports)
 }
 
 func TestExecuteCollectTasks_EmptyAndMissingCollector(t *testing.T) {

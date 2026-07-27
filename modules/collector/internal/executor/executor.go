@@ -189,13 +189,18 @@ func executeCollectTasks(
 	return result
 }
 
-// ExecuteTask executes one task delivered by the resident JetStream taskrunner.
-func ExecuteTask(ctx context.Context, taskEvent *model.TaskExecuteEvent) (string, error) {
+// ExecuteTask keeps downstream collection inside workloadCtx
+// while reserving reportCtx for the terminal TaskInstance update.
+func ExecuteTask(
+	workloadCtx context.Context,
+	reportCtx context.Context,
+	taskEvent *model.TaskExecuteEvent,
+) (string, error) {
 	if taskEvent == nil {
 		return "", fmt.Errorf("taskEvent is nil")
 	}
 
-	log.InfoContextf(ctx, "[ExecuteTask] Starting execution: taskID=%s, symbol=%s",
+	log.InfoContextf(workloadCtx, "[ExecuteTask] Starting execution: taskID=%s, symbol=%s",
 		taskEvent.TaskID, taskEvent.Symbol)
 
 	// 构建所有需要执行的采集任务
@@ -224,9 +229,9 @@ func ExecuteTask(ctx context.Context, taskEvent *model.TaskExecuteEvent) (string
 
 	if len(collectTasks) == 0 {
 		errMsg := "没有需要执行的interval"
-		log.WarnContextf(ctx, "[ExecuteTask] %s", errMsg)
+		log.WarnContextf(workloadCtx, "[ExecuteTask] %s", errMsg)
 		if err := reportTaskStatus(
-			ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, taskEvent.DeliveryCount,
+			reportCtx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, taskEvent.DeliveryCount,
 			reporter.StatusFailed, errMsg,
 		); err != nil {
 			return "", err
@@ -235,7 +240,7 @@ func ExecuteTask(ctx context.Context, taskEvent *model.TaskExecuteEvent) (string
 	}
 
 	// 执行采集任务，统一在最后上报状态。
-	result := executeCollectTasks(ctx, collectTasks, nil)
+	result := executeCollectTasks(workloadCtx, collectTasks, nil)
 
 	// 根据执行结果上报状态
 	var resultMsg string
@@ -249,11 +254,15 @@ func ExecuteTask(ctx context.Context, taskEvent *model.TaskExecuteEvent) (string
 		resultMsg = "所有任务执行成功"
 	}
 
-	log.InfoContextf(ctx, "[ExecuteTask] 任务执行完成: taskID=%s, status=%d, result=%s",
+	log.InfoContextf(workloadCtx, "[ExecuteTask] 任务执行完成: taskID=%s, status=%d, result=%s",
 		taskEvent.TaskID, status, resultMsg)
 
+	if result.HasError && taskEvent.MaxDeliver > 0 &&
+		taskEvent.DeliveryCount < uint64(taskEvent.MaxDeliver) {
+		return resultMsg, errors.New(resultMsg)
+	}
 	if err := reportTaskStatus(
-		ctx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, taskEvent.DeliveryCount, status, resultMsg,
+		reportCtx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, taskEvent.DeliveryCount, status, resultMsg,
 	); err != nil {
 		return resultMsg, err
 	}

@@ -148,11 +148,8 @@ func run(ctx context.Context, stopOnIdle bool) error {
 			},
 			SpaceID: spaceID, SubjectID: subjectID,
 		})
-		if errors.Is(bindErr, jetstream.ErrConsumerNotFound) {
-			continue
-		}
 		if bindErr != nil {
-			return bindErr
+			return fmt.Errorf("bind collector queue job_type=%s: %w", jobType, bindErr)
 		}
 		bindings = append(bindings, queueBinding{
 			consumer: consumer, name: name, subject: subject, subjectID: subjectID,
@@ -335,7 +332,7 @@ func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nod
 	if err != nil {
 		return nodeRuntime.Result{}, nodeRuntime.Permanent(err, "INVALID_JOB_ITEM")
 	}
-	result, err := executor.ExecuteTask(execCtx, taskEvent)
+	result, err := executor.ExecuteTask(execCtx, ctx, taskEvent)
 	summary := map[string]any{}
 	if strings.TrimSpace(result) != "" {
 		_ = json.Unmarshal([]byte(result), &summary)
@@ -419,6 +416,7 @@ func taskEventFromJobItem(item nodeRuntime.JobItem) (*model.TaskExecuteEvent, er
 	return &model.TaskExecuteEvent{
 		SpaceID: spaceID, DatasetID: datasetID,
 		TaskID: taskID, JobItemID: item.JobItemID, DeliveryCount: item.DeliveryCount, DataType: dataType,
+		MaxDeliver: item.MaxDeliver,
 		DataSource: route.Exchange, Market: market,
 		InstType: strings.ToUpper(market), SubjectID: subjectID, Symbol: symbol, Intervals: intervals,
 		Live: boolValue(payload, "live"),

@@ -17,8 +17,38 @@ import (
 const storagePageSize = 500
 
 type metadataClient interface {
+	GetDataset(ctx context.Context, req *storagepb.GetDatasetReq, opts ...client.Option) (*storagepb.GetDatasetRsp, error)
 	ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq, opts ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
 	ListSubjectSymbols(ctx context.Context, req *storagepb.ListSubjectSymbolsReq, opts ...client.Option) (*storagepb.ListSubjectSymbolsRsp, error)
+}
+
+// DatasetInfo is the minimal Dataset contract required by Collector rules.
+type DatasetInfo struct {
+	DataSourceID string
+	DataKind     storagepb.DataKind
+	Status       string
+}
+
+// GetDataset returns the Dataset identity and write shape used for rule validation.
+func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error) {
+	rsp, err := s.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{
+		SpaceId: strings.TrimSpace(spaceID), DatasetId: strings.TrimSpace(datasetID),
+	})
+	if err != nil {
+		return DatasetInfo{}, fmt.Errorf("get dataset: %w", err)
+	}
+	if err := ensureStorageOK("get dataset", rsp.GetRetInfo()); err != nil {
+		return DatasetInfo{}, err
+	}
+	dataset := rsp.GetDataset()
+	if dataset == nil {
+		return DatasetInfo{}, fmt.Errorf("get dataset: empty dataset")
+	}
+	return DatasetInfo{
+		DataSourceID: strings.TrimSpace(dataset.GetDataSourceId()),
+		DataKind:     dataset.GetDataKind(),
+		Status:       strings.ToLower(strings.TrimSpace(dataset.GetStatus())),
+	}, nil
 }
 
 // DatasetSource loads active dataset subjects and source-side symbols.

@@ -7,6 +7,23 @@ export type CollectorRuleInput = {
   scheduleInterval: string;
 };
 
+export type CollectorDatasetOption = {
+  data_source_id: string;
+  data_kind: string | number;
+};
+
+export function datasetMatchesCollector(
+  dataset: CollectorDatasetOption,
+  exchange: string,
+  dataType: string
+): boolean {
+  if (dataset.data_source_id !== exchange) {
+    return false;
+  }
+  const expected = dataType === "kline" ? ["DATA_KIND_TIME_SERIES", "time_series", 2] : ["DATA_KIND_RECORD", "record", 1];
+  return expected.includes(dataset.data_kind);
+}
+
 export function buildCollectorRuleParams(input: CollectorRuleInput): Record<string, unknown> {
   const datasetId = input.datasetId.trim();
   if (!datasetId) {

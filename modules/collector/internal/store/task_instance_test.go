@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -171,7 +172,9 @@ func TestTaskInstanceRepository_ReserveManyDoesNotReplacePendingJob(t *testing.T
 	next.CloudJobItemID = "task-1:2026-07-26T11:00:00Z"
 	reserved, err = repo.ReserveMany(ctx, []domain.TaskInstance{next})
 	require.NoError(t, err)
-	assert.Empty(t, reserved)
+	require.Len(t, reserved, 1)
+	assert.Equal(t, current.CloudJobItemID, reserved[0].CloudJobItemID)
+	assert.Equal(t, time.Date(2026, 7, 26, 10, 30, 0, 0, time.UTC), reserved[0].ExecuteAt)
 
 	instances, _, err := repo.List(ctx, TaskInstanceFilter{SpaceID: "crypto", TaskID: "task-1"})
 	require.NoError(t, err)

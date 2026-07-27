@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,10 +14,12 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs/symbol"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/collector/schema"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -24,6 +27,22 @@ import (
 	"path/filepath"
 	"testing"
 )
+
+type fakeRuleDatasetSource struct {
+	datasets map[string]storagesource.DatasetInfo
+}
+
+func (f *fakeRuleDatasetSource) GetDataset(_ context.Context, _, datasetID string) (storagesource.DatasetInfo, error) {
+	info, ok := f.datasets[datasetID]
+	if !ok {
+		return storagesource.DatasetInfo{}, errors.New("dataset not found")
+	}
+	return info, nil
+}
+
+func (*fakeRuleDatasetSource) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
+	return nil, nil
+}
 
 func newCollectorRPCService(t *testing.T) *Service {
 	t.Helper()
@@ -49,6 +68,13 @@ func validCollectParams(t *testing.T) *structpb.Struct {
 
 func TestCollectorService_TaskRuleCRUD(t *testing.T) {
 	svc := newCollectorRPCService(t)
+	svc.datasetSrc = &fakeRuleDatasetSource{datasets: map[string]storagesource.DatasetInfo{
+		"ds-1": {
+			DataSourceID: "binance",
+			DataKind:     storagepb.DataKind_DATA_KIND_RECORD,
+			Status:       "active",
+		},
+	}}
 	ctx := context.Background()
 
 	listRsp, err := svc.GetTaskRuleList(ctx, &pb.GetTaskRuleListReq{})
@@ -86,6 +112,24 @@ func TestCollectorService_TaskRuleCRUD(t *testing.T) {
 	disableRsp, err := svc.DisableTaskRule(ctx, &pb.DisableTaskRuleReq{SpaceId: "crypto", RuleId: "rule-1"})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, disableRsp.GetRetInfo().GetCode())
+}
+
+func TestCollectorServiceRejectsDatasetThatDoesNotMatchCollector(t *testing.T) {
+	svc := newCollectorRPCService(t)
+	svc.datasetSrc = &fakeRuleDatasetSource{datasets: map[string]storagesource.DatasetInfo{
+		"ds-1": {
+			DataSourceID: "okx",
+			DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			Status:       "active",
+		},
+	}}
+	rsp, err := svc.CreateTaskRule(context.Background(), &pb.CreateTaskRuleReq{Rule: &pb.TaskRule{
+		SpaceId: "crypto", RuleId: "rule-invalid-dataset", DataType: "symbol", Exchange: "binance",
+		CollectParams: validCollectParams(t), Enabled: boolPtr(true),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "data_source_id")
 }
 
 func TestValidateTaskRuleRejectsUnsupportedOrLegacyContracts(t *testing.T) {

@@ -102,6 +102,7 @@ type TaskExecuteEvent struct {
 	TaskID        string   `json:"task_id"`
 	JobItemID     string   `json:"job_item_id"`
 	DeliveryCount uint64   `json:"delivery_count"`
+	MaxDeliver    int      `json:"max_deliver"`
 	DataType      string   `json:"data_type"`
 	DataSource    string   `json:"data_source"`
 	Market        string   `json:"market,omitempty"`

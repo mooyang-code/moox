@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCollectorRuleParams } from "./collector-rule-params";
+import { buildCollectorRuleParams, datasetMatchesCollector } from "./collector-rule-params";
 
 describe("buildCollectorRuleParams", () => {
   it("builds the single dataset-driven Kline contract", () => {
@@ -96,5 +96,14 @@ describe("buildCollectorRuleParams", () => {
       collector: { market: "swap" },
       target: { dataset_id: "shared_kline" }
     });
+  });
+});
+
+describe("datasetMatchesCollector", () => {
+  it("requires both provider and data shape", () => {
+    expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")).toBe(true);
+    expect(datasetMatchesCollector({ data_source_id: "okx", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")).toBe(false);
+    expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_RECORD" }, "binance", "kline")).toBe(false);
+    expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: 1 }, "binance", "symbol")).toBe(true);
   });
 });

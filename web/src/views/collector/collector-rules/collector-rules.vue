@@ -194,7 +194,7 @@ import type { Dataset } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { storeToRefs } from "pinia";
-import { buildCollectorRuleParams, type CollectorRuleInput } from "./collector-rule-params";
+import { buildCollectorRuleParams, datasetMatchesCollector, type CollectorRuleInput } from "./collector-rule-params";
 
 interface TaskConfig {
   id?: number;
@@ -289,11 +289,10 @@ const addForm = ref({
 });
 
 const availableDatasets = computed(() => {
-  if (!addForm.value.data_source) {
-    return activeDatasets.value;
-  }
-  const matching = activeDatasets.value.filter(dataset => dataset.data_source_id === addForm.value.data_source);
-  return matching.length > 0 ? matching : activeDatasets.value;
+  if (!addForm.value.data_source || !addForm.value.data_type) return [];
+  return activeDatasets.value.filter(dataset =>
+    datasetMatchesCollector(dataset, addForm.value.data_source, addForm.value.data_type)
+  );
 });
 
 const rules = {
@@ -743,6 +742,15 @@ const handleEnableChange = async (record: TaskConfig, value: boolean) => {
       Message.error("请选择空间");
       return;
     }
+    if (!value) {
+      await callControl("collectmgr", "DisableTaskRule", {
+        space_id: spaceId,
+        rule_id: record.rule_id
+      });
+      Message.success("状态更新成功");
+      getTaskList();
+      return;
+    }
     const rule = {
       space_id: spaceId,
       rule_id: record.rule_id,
@@ -782,6 +790,15 @@ watch(
     // 当数据类型变化时，清空数据源选择
     if (newDataType) {
       form.value.dataSource = "";
+    }
+  }
+);
+
+watch(
+  [() => addForm.value.data_source, () => addForm.value.data_type],
+  () => {
+    if (datasetIdValue.value && !availableDatasets.value.some(dataset => dataset.dataset_id === datasetIdValue.value)) {
+      datasetIdValue.value = "";
     }
   }
 );

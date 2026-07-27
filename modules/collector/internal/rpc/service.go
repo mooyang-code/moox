@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -36,9 +37,14 @@ type Service struct {
 	ruleRepo     *store.TaskRuleRepository
 	instanceRepo *store.TaskInstanceRepository
 	builder      *planner.TaskBuilder
-	datasetSrc   *storagesource.DatasetSource
+	datasetSrc   datasetSource
 	cloudJobs    *taskpublisher.Client
 	now          func() time.Time
+}
+
+type datasetSource interface {
+	GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error)
+	ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error)
 }
 
 // New creates a collector management service.
@@ -156,6 +162,9 @@ func (s *Service) CreateTaskRule(ctx context.Context, req *pb.CreateTaskRuleReq)
 	if err := validateTaskRule(rule); err != nil {
 		return &pb.CreateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	if err := s.validateTaskRuleDatasets(ctx, rule); err != nil {
+		return &pb.CreateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
 	if err := s.ruleRepo.Create(ctx, rule); err != nil {
 		log.ErrorContextf(ctx, "[Collector] create task rule failed: %v", err)
 		return &pb.CreateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -185,6 +194,9 @@ func (s *Service) UpdateTaskRule(ctx context.Context, req *pb.UpdateTaskRuleReq)
 	}
 	rule.SpaceID = spaceID
 	if err := validateTaskRule(rule); err != nil {
+		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if err := s.validateTaskRuleDatasets(ctx, rule); err != nil {
 		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	updated, err := s.ruleRepo.UpdateByRuleID(ctx, spaceID, ruleID, rule)
@@ -434,6 +446,75 @@ func validateTaskRule(rule domain.TaskRule) error {
 	if !strings.EqualFold(rule.Exchange, params.Collector.Exchange) ||
 		!strings.EqualFold(rule.DataType, params.Collector.DataType) {
 		return fmt.Errorf("rule identity does not match collect_params collector")
+	}
+	return nil
+}
+
+func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.TaskRule) error {
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Exchange, rule.DataType)
+	if err != nil {
+		return err
+	}
+	expectedKind := storagepb.DataKind_DATA_KIND_RECORD
+	if params.Collector.DataType == "kline" {
+		expectedKind = storagepb.DataKind_DATA_KIND_TIME_SERIES
+	}
+	if err := s.validateDataset(
+		ctx,
+		rule.SpaceID,
+		params.Target.DatasetID,
+		params.Collector.Exchange,
+		expectedKind,
+		"target",
+	); err != nil {
+		return err
+	}
+	if params.Source.Kind == "dataset_subjects" {
+		if err := s.validateDataset(
+			ctx,
+			rule.SpaceID,
+			params.Source.DatasetID,
+			params.Collector.Exchange,
+			storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			"source",
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) validateDataset(
+	ctx context.Context,
+	spaceID string,
+	datasetID string,
+	exchange string,
+	expectedKind storagepb.DataKind,
+	role string,
+) error {
+	info, err := s.datasetSrc.GetDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return fmt.Errorf("%s Dataset %s is unavailable: %w", role, datasetID, err)
+	}
+	if info.Status != "active" {
+		return fmt.Errorf("%s Dataset %s must be active", role, datasetID)
+	}
+	if !strings.EqualFold(info.DataSourceID, exchange) {
+		return fmt.Errorf(
+			"%s Dataset %s data_source_id=%s does not match collector exchange=%s",
+			role,
+			datasetID,
+			info.DataSourceID,
+			exchange,
+		)
+	}
+	if info.DataKind != expectedKind {
+		return fmt.Errorf(
+			"%s Dataset %s data_kind=%s does not match collector data_type",
+			role,
+			datasetID,
+			info.DataKind.String(),
+		)
 	}
 	return nil
 }
