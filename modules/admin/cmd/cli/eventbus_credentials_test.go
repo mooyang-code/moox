@@ -141,15 +141,15 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	metricsPublisherACL := eventBusACLBlock(yaml, "metrics-publisher")
 	assert.NotContains(t, metricsPublisherACL, "$JS.API.>")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(metricsPublisherACL, "subscribe:"))
-	assert.Contains(t, yaml, "moox.trade.rebalance.requested.v1.>")
+	assert.Contains(t, yaml, "moox.trade.target.requested.v1.>")
 	strategyACL := eventBusACLBlock(yaml, "strategy-eventbus")
 	assert.NotContains(t, strategyACL, "$JS.API.>")
 	assert.Contains(t, strategyACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	tradeACL := eventBusACLBlock(yaml, "trade-eventbus")
-	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_rebalance_v1")
-	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.INFO.*.trade_rebalance_v1")
-	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_rebalance_v1")
-	assert.Contains(t, tradeACL, "$JS.ACK.MOOX_TRADE.trade_rebalance_v1.>")
+	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_v1")
+	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.INFO.*.trade_target_v1")
+	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_v1")
+	assert.Contains(t, tradeACL, "$JS.ACK.MOOX_TRADE.trade_target_v1.>")
 	storageACL := eventBusACLBlock(yaml, "storage-eventbus")
 	assert.Contains(t, storageACL, "moox.storage.dataset.rows.upserted.v1.>")
 	assert.NotContains(t, storageACL, "moox.dlq.")
@@ -337,7 +337,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	adminJS, err := admin.JetStream()
 	require.NoError(t, err)
 	_, err = adminJS.AddStream(&nats.StreamConfig{
-		Name: "MOOX_TRADE", Subjects: []string{"moox.trade.rebalance.requested.v1.>"},
+		Name: "MOOX_TRADE", Subjects: []string{"moox.trade.target.requested.v1.>"},
 	})
 	require.NoError(t, err)
 	_, err = adminJS.AddStream(&nats.StreamConfig{
@@ -358,7 +358,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	t.Cleanup(strategy.Close)
 	strategyJS, err := strategy.JetStream()
 	require.NoError(t, err)
-	_, err = strategyJS.Publish("moox.trade.rebalance.requested.v1.space.binding", []byte("payload"))
+	_, err = strategyJS.Publish("moox.trade.target.requested.v1.space.binding", []byte("payload"))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -370,8 +370,8 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.NoError(t, err)
 	defer trade.Close()
 	cfg := jetstream.ConsumerConfig{
-		Stream: "MOOX_TRADE", Durable: "trade_rebalance_v1",
-		FilterSubject: "moox.trade.rebalance.requested.v1.>",
+		Stream: "MOOX_TRADE", Durable: "trade_target_v1",
+		FilterSubject: "moox.trade.target.requested.v1.>",
 		AckWait:       time.Second, MaxDeliver: 3, MaxAckPending: 8,
 		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
 	}
@@ -453,23 +453,23 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 		"CloudNode worker 不得发布执行事件",
 	)
 
-	_, err = cloudJS.ConsumerInfo("MOOX_TRADE", "trade_rebalance_v1")
+	_, err = cloudJS.ConsumerInfo("MOOX_TRADE", "trade_target_v1")
 	require.NoError(t, err, "CloudNode 需要只读 Consumer 元数据完成跨 Stream 命名检查")
 	_, err = cloudJS.AddConsumer("MOOX_TRADE", &nats.ConsumerConfig{
 		Name: "cn_exec_escape", Durable: "cn_exec_escape",
-		FilterSubject: "moox.trade.rebalance.requested.v1.>",
+		FilterSubject: "moox.trade.target.requested.v1.>",
 		AckPolicy:     nats.AckExplicitPolicy,
 	})
 	require.Error(t, err, "CloudNode 不得在所属 Stream 之外创建 Consumer")
 
 	requirePublishPermissionViolation(
 		t, server.ClientURL(), "cloudnode-eventbus", tokens["cloudnode-eventbus"],
-		"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_rebalance_v1",
+		"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_v1",
 		"CloudNode 不得拉取其他 Stream 的 Consumer",
 	)
 	requirePublishPermissionViolation(
 		t, server.ClientURL(), "cloudnode-eventbus", tokens["cloudnode-eventbus"],
-		"$JS.ACK.MOOX_TRADE.trade_rebalance_v1.1.1.1.1.1",
+		"$JS.ACK.MOOX_TRADE.trade_target_v1.1.1.1.1.1",
 		"CloudNode 不得 ACK 其他 Stream 的 Consumer",
 	)
 }

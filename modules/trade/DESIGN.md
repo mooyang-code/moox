@@ -57,14 +57,11 @@ CANCEL_REQUESTED -> CANCEL_CONFIRMED -> REPLACEMENT_CREATED -> REPLACEMENT_SUBMI
 
 若交易所结果未知则进入 `CANCEL_UNKNOWN` 或 `REPLACEMENT_SUBMIT_UNKNOWN`。恢复器先查询交易所事实。原单确认撤销后才创建替代单，避免双重敞口。
 
-## 目标仓位调仓
-
-调仓规划支持 `FULL` 与 `PATCH`，确定性地产生带依赖关系的 legs。反向仓位拆为先平仓、后开仓；leg 的 `market_type`、`reduce_only`、价格快照和规则版本被持久化。
+## 目标持仓执行
 
 Strategy 为每个 paper/live execution binding 发布一条
-`moox.trade.rebalance.requested.v1` 命令。Trade Consumer 原子记录 Inbox 和调仓计划，
-本地 wake 推进可执行 legs，恢复循环仅兜底。每个 leg 复用普通下单内核，因此共享幂等、
-风控、账本、成交和恢复语义。
+`moox.trade.target.requested.v1` 命令，携带最终目标数量。Trade Consumer 原子记录
+Inbox 和 TargetExecution，再通过与手工订单相同的执行内核收敛持仓。
 
 ## 一致性边界
 

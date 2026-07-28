@@ -1811,6 +1811,9 @@ git commit -m "refactor(strategy): publish target quantities"
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
 - Modify: `modules/admin/internal/service/sysdeploy/acceptance_test.go`
+- Modify: `modules/admin/cmd/cli/eventbus_credentials.go`
+- Modify: `examples/service-deployments.seed.yaml`
+- Modify: `modules/eventbus/config/app.yaml`
 - Modify: `modules/admin/README.md`
 - Modify: `web/src/api/trade/http.ts`
 - Modify: `web/src/api/trade/index.ts`
@@ -1820,7 +1823,7 @@ git commit -m "refactor(strategy): publish target quantities"
 - Modify: `web/src/views/trading/position-detail/position-detail.vue`
 - Modify: `web/src/views/trading/trade-record/trade-record.vue`
 
-- [ ] **Step 1: Make the deployment catalog tests require two services**
+- [x] **Step 1: Make the deployment catalog tests require two services**
 
 Replace the old eleven-service assertions with exactly:
 
@@ -1835,6 +1838,8 @@ trade_execution -> 127.0.0.1:11201
 Both services are internal and sensitive. Assert that old IDs such as
 `trade_account`, `trade_channel`, `trade_apikey`, `trade_order`,
 `trade_rebalance`, and `trade_ops` are absent.
+When seeding an existing node, delete exactly the obsolete Trade service rows
+for that node in the same transaction; do not leave stale resolvable endpoints.
 
 Run:
 
@@ -1845,11 +1850,14 @@ go test ./internal/service/sysdeploy
 
 Expected: FAIL because the catalog still publishes the legacy service split.
 
-- [ ] **Step 2: Replace the deployment catalog entries**
+- [x] **Step 2: Replace the deployment catalog entries**
 
 Update `defaults.go` and the Admin service documentation. Keep the process
 name `trade`; only the tRPC service IDs and ports collapse. Do not expose a
 local health URL for either entry.
+
+Update the production EventBus stream and generated NATS ACLs to
+`moox.trade.target.requested.v1.>` and durable `trade_target_v1`.
 
 Run:
 
@@ -1860,7 +1868,7 @@ go test ./internal/service/sysdeploy
 
 Expected: PASS with exactly two Trade deployment records.
 
-- [ ] **Step 3: Write failing Web API contract tests**
+- [x] **Step 3: Write failing Web API contract tests**
 
 Test that:
 
@@ -1888,7 +1896,7 @@ pnpm test -- src/api/trade/trade.test.ts
 
 Expected: FAIL because the Web client still maps the legacy services.
 
-- [ ] **Step 4: Replace the Web Trade API surface**
+- [x] **Step 4: Replace the Web Trade API surface**
 
 Use only two transport groups:
 
@@ -1903,7 +1911,7 @@ Mirror the new protobuf names and enums exactly. Use strings for quantities,
 prices, fees, PnL, leverage values, and timestamps crossing the JSON boundary.
 Do not retain aliases for the old field or method names.
 
-- [ ] **Step 5: Update the three Trade views**
+- [x] **Step 5: Update the three Trade views**
 
 The account view must show Exchange, account type, mode, readiness,
 `last_synced_at`, and a `SyncAccount` command. The position view must show
@@ -1920,7 +1928,7 @@ The trade-record view must:
 
 Do not add transfer, dust-conversion, grid, TWAP, or hedge-mode controls.
 
-- [ ] **Step 6: Run the Admin and Web checks**
+- [x] **Step 6: Run the Admin and Web checks**
 
 ```bash
 cd modules/admin
@@ -1935,7 +1943,7 @@ pnpm run build:prod
 Expected: PASS. The browser has one account surface and one execution surface,
 matching the public RPC contract.
 
-- [ ] **Step 7: Commit the integration surface**
+- [x] **Step 7: Commit the integration surface**
 
 ```bash
 git add modules/admin/internal/service/sysdeploy modules/admin/README.md \

@@ -151,7 +151,27 @@ func (d *DAO) ListActive(ctx context.Context, nodeID string) ([]Deployment, erro
 	return rows, err
 }
 
-func (d *DAO) SeedDefaults(ctx context.Context, rows []Deployment) error {
+func (d *DAO) SeedDefaults(
+	ctx context.Context,
+	rows []Deployment,
+	retireNodeID string,
+	retireServiceNames []string,
+) error {
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if retireNodeID != "" && len(retireServiceNames) > 0 {
+			if err := tx.Where(
+				"c_node_id = ? AND c_service_name IN ?",
+				retireNodeID,
+				retireServiceNames,
+			).Delete(&Deployment{}).Error; err != nil {
+				return err
+			}
+		}
+		return (&DAO{db: tx}).seedDefaultRows(ctx, rows)
+	})
+}
+
+func (d *DAO) seedDefaultRows(ctx context.Context, rows []Deployment) error {
 	for i := range rows {
 		item := rows[i]
 		normalizeDeployment(&item)

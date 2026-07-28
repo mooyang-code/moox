@@ -172,8 +172,30 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("obsolete split View deployment %s must not be registered", name)
 		}
 	}
-	if healthURL(byName["trade_account"].ExtraConfig) != "" {
-		t.Fatalf("trade_account should not default to local health_url: %s", byName["trade_account"].ExtraConfig)
+	for name, expected := range map[string]struct {
+		port int32
+		path string
+	}{
+		"trade_exchange_account": {11200, "trpc.moox.trade.ExchangeAccountService"},
+		"trade_execution":        {11201, "trpc.moox.trade.TradeExecutionService"},
+	} {
+		row, ok := byName[name]
+		if !ok || row.Port != expected.port || row.GatewayPath != expected.path ||
+			row.Protocol != "http" || row.Host != "127.0.0.1" || row.Scope != "internal" {
+			t.Fatalf("%s deployment = %+v", name, row)
+		}
+		if healthURL(row.ExtraConfig) != "" {
+			t.Fatalf("%s should not default to local health_url: %s", name, row.ExtraConfig)
+		}
+	}
+	for _, name := range []string{
+		"trade_account", "trade_balance", "trade_fund", "trade_apikey",
+		"trade_channel", "trade_tradeop", "trade_order", "trade_tradeq",
+		"trade_position", "trade_rebalance", "trade_ops",
+	} {
+		if _, ok := byName[name]; ok {
+			t.Fatalf("obsolete Trade deployment %s must not be registered", name)
+		}
 	}
 }
 

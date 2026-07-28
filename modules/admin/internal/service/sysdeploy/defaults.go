@@ -16,6 +16,20 @@ const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor
 const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"
 const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\"]"
 
+var obsoleteTradeDeploymentNames = []string{
+	"trade_account",
+	"trade_balance",
+	"trade_fund",
+	"trade_apikey",
+	"trade_channel",
+	"trade_tradeop",
+	"trade_order",
+	"trade_tradeq",
+	"trade_position",
+	"trade_rebalance",
+	"trade_ops",
+}
+
 func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{
 		withExtra(deployment("admin_gateway", "gateway", "https", defaultPublicHost, 9527, "/api/admin", "public", "Caddy 管理台 HTTPS 入口，浏览器同源访问 /api/admin/*"), `{"health_url":"http://127.0.0.1:11010/readyz","health_kind":"readiness","monitor_enabled":true}`),
@@ -40,17 +54,8 @@ func DefaultDeployments(nodeID string) []Deployment {
 		deployment("space", "admin_rpc", "http", "127.0.0.1", 11107, "trpc.moox.admin.SpaceMgr", "internal", "空间管理 RPC 服务"),
 		deployment("secret", "admin_rpc", "http", "127.0.0.1", 11108, "trpc.moox.ops.SecretMgr", "internal", "秘钥管理 RPC 服务"),
 		deployment("sysdeploy", "admin_rpc", "http", "127.0.0.1", 11109, "trpc.moox.ops.SysDeploy", "internal", "系统服务部署信息 RPC 服务"),
-		deployment("trade_account", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.AccountSvc", "internal", "交易账户服务"),
-		deployment("trade_balance", "trade", "http", "127.0.0.1", 11201, "trpc.moox.trade.BalanceSvc", "internal", "交易余额服务"),
-		deployment("trade_fund", "trade", "http", "127.0.0.1", 11202, "trpc.moox.trade.FundSvc", "internal", "交易资金服务"),
-		deployment("trade_apikey", "trade", "http", "127.0.0.1", 11203, "trpc.moox.trade.ApiKeySvc", "internal", "交易 API Key 服务"),
-		deployment("trade_channel", "trade", "http", "127.0.0.1", 11204, "trpc.moox.trade.ChannelSvc", "internal", "交易通道服务"),
-		deployment("trade_tradeop", "trade", "http", "127.0.0.1", 11205, "trpc.moox.trade.TradeOpSvc", "internal", "交易操作服务"),
-		deployment("trade_order", "trade", "http", "127.0.0.1", 11206, "trpc.moox.trade.OrderSvc", "internal", "订单服务"),
-		deployment("trade_tradeq", "trade", "http", "127.0.0.1", 11207, "trpc.moox.trade.TradeQuerySvc", "internal", "交易查询服务"),
-		deployment("trade_position", "trade", "http", "127.0.0.1", 11208, "trpc.moox.trade.PositionSvc", "internal", "持仓服务"),
-		deployment("trade_rebalance", "trade", "http", "127.0.0.1", 11211, "trpc.moox.trade.RebalanceSvc", "internal", "目标仓位调仓服务"),
-		deployment("trade_ops", "trade", "http", "127.0.0.1", 11212, "trpc.moox.trade.TradeOpsSvc", "internal", "交易暂停、对账与 Saga 运维服务"),
+		deployment("trade_exchange_account", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.ExchangeAccountService", "internal", "Exchange 账户管理与同步服务"),
+		deployment("trade_execution", "trade", "http", "127.0.0.1", 11201, "trpc.moox.trade.TradeExecutionService", "internal", "订单、成交、持仓与目标执行服务"),
 	}
 	canonical := map[string]string{
 		"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret",

@@ -39,6 +39,9 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 			t.Fatalf("unexpected stream %q", stream.Name)
 		}
 		assert.Equal(t, retention, stream.Retention, stream.Name)
+		if stream.Name == "MOOX_TRADE" {
+			assert.Equal(t, []string{"moox.trade.target.requested.v1.>"}, stream.Subjects)
+		}
 		delete(want, stream.Name)
 	}
 	assert.Empty(t, want, "missing streams")

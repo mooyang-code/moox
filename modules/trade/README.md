@@ -1,7 +1,7 @@
 # moox-trade
 
 Trade 是账户、订单、成交、账本、仓位和调仓的唯一事实源。它只消费 Strategy 发布的
-`trade.rebalance.requested` 命令，不消费自己产生的订单、成交或进度事件。
+`trade.target.requested` 命令，不消费自己产生的订单、成交或进度事件。
 
 ## 主流程
 
@@ -33,7 +33,7 @@ Trade 从交易所公开 instrument 接口读取最新价格、精度和报价�
 - `database.path`：Trade SQLite 路径。
 - `eventbus.urls`：JetStream 地址。
 - `eventbus.credential_file`：Trade 专属 EventBus 凭据。
-- Strategy 调仓命令 Consumer 名称固定为代码常量 `trade_rebalance_v1`。
+- Strategy 目标命令 Consumer 名称固定为代码常量 `trade_target_v1`。
 - `security.encryption_key`：交易所凭证 AES-GCM 密钥。
 
 `ReconcileNow` 直接执行一次有界对账，不发布事件。健康检查覆盖数据库、EventBus、
