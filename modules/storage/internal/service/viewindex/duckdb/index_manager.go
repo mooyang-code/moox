@@ -67,7 +67,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 	createColumns := []string{
 		"subject_id VARCHAR NOT NULL",
 		"freq VARCHAR NOT NULL",
-		"data_time TIMESTAMP NOT NULL",
+		"data_time TIMESTAMP_NS NOT NULL",
 		"dimensions_json VARCHAR NOT NULL",
 	}
 	for name, valueType := range columns {
@@ -503,7 +503,7 @@ func duckType(valueType pb.FieldValueType) string {
 	case pb.FieldValueType_FIELD_VALUE_TYPE_BOOL:
 		return "BOOLEAN"
 	case pb.FieldValueType_FIELD_VALUE_TYPE_TIME:
-		return "TIMESTAMP"
+		return "TIMESTAMP_NS"
 	case pb.FieldValueType_FIELD_VALUE_TYPE_BYTES:
 		return "BLOB"
 	case pb.FieldValueType_FIELD_VALUE_TYPE_JSON:
