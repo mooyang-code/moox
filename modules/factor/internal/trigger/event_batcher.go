@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Task is an event-batched scheduler request.
@@ -86,6 +87,10 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 		endTime := dataTime.Add(time.Nanosecond)
 		if dataTime.IsZero() || dataTime.Year() < 1 || dataTime.Year() > 9999 || endTime.Year() > 9999 {
 			d.rejectedTimeCount++
+			log.Warnf(
+				"factor realtime event row rejected: unsupported data_time space_id=%q dataset_id=%q subject_id=%q freq=%q data_time=%q",
+				key.GetSpaceId(), key.GetDatasetId(), rowKey.GetSubjectId(), rowKey.GetFreq(), rowKey.GetDataTime(),
+			)
 			continue
 		}
 		matches := d.matchBindings(key.GetSpaceId(), key.GetDatasetId(), rowKey.GetSubjectId(), rowKey.GetFreq())
