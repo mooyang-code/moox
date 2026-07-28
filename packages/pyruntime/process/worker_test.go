@@ -2,10 +2,14 @@ package process
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/pyruntime/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,6 +60,66 @@ func TestStdioWorkerLoadCancellationReapsProcess(t *testing.T) {
 	assert.Nil(t, w.cmd)
 	assert.NotNil(t, cmd.ProcessState)
 	require.NoError(t, w.Close())
+}
+
+func TestStdioWorkerRunPreservesLargeMetaNumbers(t *testing.T) {
+	requestReader, requestWriter := io.Pipe()
+	responseReader, responseWriter := io.Pipe()
+	t.Cleanup(func() {
+		_ = requestReader.Close()
+		_ = requestWriter.Close()
+		_ = responseReader.Close()
+		_ = responseWriter.Close()
+	})
+	cfg := Config{TaskTimeout: time.Second}
+	cfg.defaults()
+	worker := &StdioWorker{cfg: cfg, in: requestWriter, out: responseReader, state: StateReady}
+
+	frameCh := make(chan protocol.Frame, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		frame, err := protocol.ReadFrame(requestReader, cfg.Limits)
+		frameCh <- frame
+		if err == nil {
+			err = protocol.WriteFrame(responseWriter, cfg.Limits, protocol.Frame{
+				Type: protocol.TypeResult,
+				Meta: json.RawMessage(`{"ok":true}`),
+			})
+		}
+		errCh <- err
+	}()
+
+	_, err := worker.Run(context.Background(), RunRequest{
+		RequestID: "authoritative-request", ModuleType: "factor",
+		LogicalID: "Factor", SourceHash: "hash", Encoding: protocol.EncodingJSON,
+		Meta: json.RawMessage(
+			`{"request_id":"stale","large":9007199254740993,"huge":1e400}`,
+		),
+	})
+	require.NoError(t, err)
+	frame := <-frameCh
+	require.NoError(t, <-errCh)
+	require.Contains(t, string(frame.Meta), `"large":9007199254740993`)
+	require.Contains(t, string(frame.Meta), `"huge":1e400`)
+
+	var fields map[string]any
+	decoder := json.NewDecoder(strings.NewReader(string(frame.Meta)))
+	decoder.UseNumber()
+	require.NoError(t, decoder.Decode(&fields))
+	require.Equal(t, "authoritative-request", fields["request_id"])
+	require.Equal(t, "factor", fields["module_type"])
+	require.Equal(t, "Factor", fields["logical_id"])
+	require.Equal(t, "hash", fields["source_hash"])
+	require.Equal(t, "json", fields["encoding"])
+}
+
+func TestStdioWorkerRunRejectsNonObjectOrTrailingMeta(t *testing.T) {
+	for _, raw := range []string{`[]`, `{} {}`} {
+		worker := &StdioWorker{cfg: Config{TaskTimeout: time.Second}, state: StateReady}
+		_, err := worker.Run(context.Background(), RunRequest{Meta: json.RawMessage(raw)})
+		require.Error(t, err)
+		require.Equal(t, StateReady, worker.State())
+	}
 }
 
 func newSilentStdioWorker(t *testing.T) (*StdioWorker, *exec.Cmd) {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -146,11 +147,9 @@ func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error
 	}()
 	ctx, cancel := context.WithTimeout(ctx, w.cfg.TaskTimeout)
 	defer cancel()
-	fields := map[string]any{}
-	if len(req.Meta) > 0 {
-		if err := json.Unmarshal(req.Meta, &fields); err != nil {
-			return RunResult{}, err
-		}
+	fields, err := decodeRunMeta(req.Meta)
+	if err != nil {
+		return RunResult{}, err
 	}
 	fields["request_id"], fields["module_type"], fields["logical_id"], fields["source_hash"], fields["encoding"] = req.RequestID, req.ModuleType, req.LogicalID, req.SourceHash, req.Encoding
 	meta, err := json.Marshal(fields)
@@ -190,6 +189,30 @@ func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error
 		return RunResult{Meta: result.f.Meta, Payload: result.f.Payload}, nil
 	}
 }
+
+func decodeRunMeta(raw json.RawMessage) (map[string]any, error) {
+	fields := map[string]any{}
+	if len(raw) == 0 {
+		return fields, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&fields); err != nil {
+		return nil, fmt.Errorf("decode run meta: %w", err)
+	}
+	if fields == nil {
+		return nil, errors.New("decode run meta: expected JSON object")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("decode run meta: trailing JSON value")
+		}
+		return nil, fmt.Errorf("decode run meta: %w", err)
+	}
+	return fields, nil
+}
+
 func (w *StdioWorker) control(ctx context.Context, typ protocol.MessageType, meta map[string]any) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
