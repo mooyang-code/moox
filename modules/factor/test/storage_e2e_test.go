@@ -44,6 +44,13 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		requiredEnv(t, "MOOX_STORAGE_PRIMARY_AUTH_SECRET"),
 		[]byte(auth.AppId),
 	)
+	viewAuth := &commonpb.AuthInfo{
+		AppId: auth.GetAppId(), Operator: auth.GetOperator(), RequestId: auth.GetRequestId(),
+	}
+	viewAuth.AppKey = mooxsecurity.HMACSHA256Hex(
+		requiredEnv(t, "MOOX_STORAGE_VIEW_AUTH_SECRET"),
+		[]byte(viewAuth.AppId),
+	)
 	options := gatewayauth.NewTRPCClientOptions(
 		gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(gatewayTarget, "11003")),
 		gatewayNodeID,
@@ -212,7 +219,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	})
 	requireStorageOK(t, "CreateView(source)", sourceViewRsp, err)
 	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
-	waitForViewQueryable(t, ctx, view, auth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
+	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
 
 	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
@@ -283,10 +290,10 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	})
 	requireStorageOK(t, "CreateView", createViewRsp, err)
 	waitForViewReady(t, ctx, metadata, auth, spaceID, viewID)
-	waitForViewQueryable(t, ctx, view, auth, spaceID, viewID, targetID, subjectID, freq, first, end)
+	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq, first, end)
 
 	runDeployedFactor(t, ctx, deployRoot, factorID, spaceID, sourceID, subjectID, freq, first, end)
-	rows := waitForViewRows(t, ctx, view, auth, spaceID, viewID, targetID, subjectID, freq, first, second, end, false)
+	rows := waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq, first, second, end, false)
 	assertFactorRows(t, rows, first, second, false)
 
 	nullSource := `def compute(df, params):
@@ -308,7 +315,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	require.NoError(t, err)
 	requireStorageRet(t, "FactorMgr.UpdateFactor", updateRsp.GetRetInfo())
 	runDeployedFactor(t, ctx, deployRoot, factorID, spaceID, sourceID, subjectID, freq, first, end)
-	rows = waitForViewRows(t, ctx, view, auth, spaceID, viewID, targetID, subjectID, freq, first, second, end, true)
+	rows = waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq, first, second, end, true)
 	assertFactorRows(t, rows, first, second, true)
 }
 

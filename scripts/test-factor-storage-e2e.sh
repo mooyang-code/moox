@@ -66,6 +66,12 @@ storage_primary_secret="$(
 )"
 [[ -n "${storage_primary_secret}" && "${storage_primary_secret}" != *$'\n'* && "${storage_primary_secret}" != *$'\r'* ]] ||
   fail "storage-internal-auth.env must contain one MOOX_STORAGE_PRIMARY_AUTH_SECRET"
+storage_view_secret="$(
+  bash -c 'set -u; source "$1"; printf "%s" "${MOOX_STORAGE_VIEW_AUTH_SECRET-}"' \
+    _ "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
+)"
+[[ -n "${storage_view_secret}" && "${storage_view_secret}" != *$'\n'* && "${storage_view_secret}" != *$'\r'* ]] ||
+  fail "storage-internal-auth.env must contain one MOOX_STORAGE_VIEW_AUTH_SECRET"
 
 (
   export MOOX_DEPLOY_ROOT="${DEPLOY_ROOT}"
@@ -80,6 +86,7 @@ storage_primary_secret="$(
   export MOOX_GATEWAY_SERVICE_SECRET_KEY="${secret}"
   export MOOX_GATEWAY_CA_FILE="${DEPLOY_ROOT}/certs/gateway/peers.pem"
   export MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}"
+  export MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}"
 
   cd "${REPO_ROOT}/modules/factor"
   go test -tags=integration ./test -run '^TestFactorRealStorageE2E$' -count=1 -v
