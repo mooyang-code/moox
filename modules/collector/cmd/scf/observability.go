@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,8 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/serverless"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskrunner"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/msgbox"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,9 +28,8 @@ const scfObservabilityService = "trpc.moox.collector.scf_observability.timer"
 var scfBootID = fmt.Sprintf("scf-%d", time.Now().UTC().UnixNano())
 
 type sentinelFactory struct {
-	once    sync.Once
+	mu      sync.Mutex
 	handler *serverless.WatchdogHandler
-	err     error
 }
 
 func (f *sentinelFactory) Handle(ctx context.Context) error {
@@ -37,13 +39,19 @@ func (f *sentinelFactory) Handle(ctx context.Context) error {
 	if !runtimeapp.IsReady() {
 		return nil
 	}
-	f.once.Do(func() {
-		f.handler, f.err = buildSentinel(ctx)
-	})
-	if f.err != nil {
-		return f.err
+	f.mu.Lock()
+	handler := f.handler
+	if handler == nil {
+		built, err := buildSentinel(ctx)
+		if err != nil {
+			f.mu.Unlock()
+			return err
+		}
+		f.handler = built
+		handler = built
 	}
-	return f.handler.Handle(ctx)
+	f.mu.Unlock()
+	return handler.Handle(ctx)
 }
 
 func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
@@ -75,20 +83,36 @@ func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 
 	monitorURL := strings.TrimSpace(os.Getenv("MOOX_MONITOR_READY_URL"))
 	gatewayURL := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_READY_URL"))
-	if gatewayURL == "" {
-		gatewayURL = strings.TrimRight(runtimeapp.GetServiceGatewayTarget(), "/") + "/readyz"
+	if monitorURL == "" || gatewayURL == "" {
+		return nil, fmt.Errorf("SCF watchdog requires MOOX_MONITOR_READY_URL and MOOX_GATEWAY_READY_URL")
 	}
 	healthAuth := serverless.HealthAuth{
 		Version:   firstNonEmpty(os.Getenv("MOOX_HEALTH_HMAC_VERSION"), "moox-health-v1"),
 		AccessKey: os.Getenv("MOOX_HEALTH_HMAC_KEY_ID"),
 		SecretKey: os.Getenv("MOOX_HEALTH_HMAC_SECRET"),
 	}
+	if strings.TrimSpace(healthAuth.AccessKey) == "" || strings.TrimSpace(healthAuth.SecretKey) == "" {
+		return nil, fmt.Errorf("SCF watchdog requires health HMAC credentials")
+	}
 	checks := []serverless.WatchdogCheck{
 		serverless.SignedHTTPReadyCheck("monitor_ready", monitorURL, nil, healthAuth),
 		serverless.SignedHTTPReadyCheck("gateway_ready", gatewayURL, nil, healthAuth),
 	}
-	if canaryURL := strings.TrimSpace(os.Getenv("MOOX_SCF_CANARY_URL")); canaryURL != "" {
-		checks = append(checks, serverless.HTTPReadyCheck("market_canary", canaryURL, nil))
+	if envDefaultTrue("MOOX_SCF_CANARY_ENABLED") {
+		storageOptions := gatewayauth.NewTRPCClientOptions(
+			runtimeapp.GetStorageRPCGatewayTarget(),
+			strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")),
+			gatewayauth.CredentialsFromEnv(),
+		)
+		checks = append(checks, serverless.StorageMarketCanaryCheck(storagepb.NewPrimaryStoreClientProxy(storageOptions...), serverless.MarketCanaryConfig{
+			SpaceID:              firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_SPACE_ID"), "crypto"),
+			DatasetID:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_DATASET_ID"), "binance_spot_kline"),
+			SubjectID:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_SUBJECT_ID"), "BTC-USDT"),
+			Frequency:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_FREQUENCY"), "1m"),
+			Freshness:            durationEnv("MOOX_SCF_CANARY_FRESHNESS", 3*time.Minute),
+			ReturnThreshold:      envFloat("MOOX_SCF_CANARY_RETURN_THRESHOLD", 0.05),
+			VolumeRatioThreshold: envFloat("MOOX_SCF_CANARY_VOLUME_RATIO_THRESHOLD", 5),
+		}))
 	}
 
 	var sender msgbox.Sender
@@ -99,7 +123,7 @@ func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 		}
 	}
 	return serverless.NewWatchdogHandler(serverless.WatchdogOptions{
-		Enabled: true, ObserverID: "scf_sentinel", SpaceID: firstNonEmpty(os.Getenv("MOOX_SPACE_ID"), report.DefaultSpace),
+		Enabled: true, ObserverID: "scf_sentinel", SpaceID: firstNonEmpty(os.Getenv("MOOX_SPACE_ID"), "crypto"),
 		Ready: runtimeapp.IsReady, Checks: checks, Events: events, Metrics: reporter, DirectSender: sender,
 	})
 }
@@ -130,6 +154,14 @@ func envBool(name string) bool {
 	}
 }
 
+func envDefaultTrue(name string) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return true
+	}
+	return envBool(name)
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value = strings.TrimSpace(value); value != "" {
@@ -137,4 +169,12 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func envFloat(name string, fallback float64) float64 {
+	value, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv(name)), 64)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/report"
 )
 
 const (
@@ -62,6 +65,7 @@ type Builder struct {
 	Hosts   *hostmetrics.Store
 	Checks  *store.CheckRepository
 	Results *store.ResultRepository
+	Policy  report.RealtimeTimeSeriesPolicy
 	Now     func() time.Time
 }
 
@@ -78,7 +82,9 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	if out.Services, err = b.buildServices(ctx, spaceID); err != nil {
 		return Overview{}, err
 	}
-	out.SCF = summarizeSCF(out.Services)
+	if out.SCF, err = b.buildSCFSummary(ctx, now); err != nil {
+		return Overview{}, err
+	}
 	if out.Hosts, err = b.buildHosts(ctx); err != nil {
 		return Overview{}, err
 	}
@@ -90,6 +96,106 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	sortOverview(&out)
 	return out, nil
+}
+
+func (b Builder) buildSCFSummary(ctx context.Context, now time.Time) (SCFSummary, error) {
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return SCFSummary{}, nil
+	}
+	const (
+		nodesMetric     = "moox_cloudnode_scf_nodes"
+		oldestAgeMetric = "moox_cloudnode_scf_oldest_heartbeat_age_seconds"
+		maxSeries       = 500
+	)
+	series, total, err := b.Metrics.Catalog().ListSeries(ctx, "", nodesMetric, "", 0, maxSeries+1)
+	if err != nil {
+		return SCFSummary{}, err
+	}
+	if total > maxSeries {
+		return SCFSummary{}, fmt.Errorf("SCF metric series exceed limit %d", maxSeries)
+	}
+	if len(series) == 0 {
+		return SCFSummary{}, nil
+	}
+	latestInstance := series[0].InstanceID
+	latestSeen := series[0].LastSeenAt
+	for _, item := range series[1:] {
+		if item.LastSeenAt.After(latestSeen) {
+			latestInstance, latestSeen = item.InstanceID, item.LastSeenAt
+		}
+	}
+
+	var out SCFSummary
+	var stale bool
+	for _, item := range series {
+		if item.InstanceID != latestInstance {
+			continue
+		}
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return SCFSummary{}, fmt.Errorf("SCF status labels: %w", err)
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return SCFSummary{}, err
+		}
+		count, err := nonNegativeMetricCount(latest.Value)
+		if err != nil {
+			return SCFSummary{}, fmt.Errorf("SCF status %q: %w", labels["status"], err)
+		}
+		stale = stale || item.IsStale
+		switch labels["status"] {
+		case "online":
+			out.OnlineCount += count
+		case "timeout":
+			out.TimeoutCount += count
+		case "unknown":
+			out.UnknownCount += count
+		default:
+			return SCFSummary{}, fmt.Errorf("unknown SCF heartbeat status %q", labels["status"])
+		}
+	}
+	if stale {
+		out.UnknownCount += out.OnlineCount + out.TimeoutCount
+		out.OnlineCount, out.TimeoutCount = 0, 0
+		return out, nil
+	}
+
+	ages, ageTotal, err := b.Metrics.Catalog().ListSeries(ctx, "", oldestAgeMetric, "", 0, maxSeries+1)
+	if err != nil {
+		return SCFSummary{}, err
+	}
+	if ageTotal > maxSeries {
+		return SCFSummary{}, fmt.Errorf("SCF oldest heartbeat series exceed limit %d", maxSeries)
+	}
+	for _, item := range ages {
+		if item.InstanceID != latestInstance {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return SCFSummary{}, err
+		}
+		if latest.Value < 0 || math.IsNaN(latest.Value) || math.IsInf(latest.Value, 0) {
+			return SCFSummary{}, fmt.Errorf("SCF oldest heartbeat age is invalid")
+		}
+		if out.OnlineCount+out.TimeoutCount+out.UnknownCount > 0 {
+			age := latest.Value
+			if observedLag := now.Sub(latest.ObservedAt).Seconds(); observedLag > 0 {
+				age += observedLag
+			}
+			out.OldestHeartbeatAt = now.Add(-time.Duration(age * float64(time.Second)))
+		}
+		break
+	}
+	return out, nil
+}
+
+func nonNegativeMetricCount(value float64) (int, error) {
+	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value > maxOverviewServices {
+		return 0, fmt.Errorf("count is invalid")
+	}
+	return int(value), nil
 }
 
 func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceStatus, error) {
@@ -163,8 +269,8 @@ type datasetKey struct {
 }
 
 type datasetValues struct {
-	interval, lastRun, lastSuccess, input, output float64
-	reporterStale                                 bool
+	interval, inventory, lastRun, lastSuccess, input, output float64
+	reporterStale                                            bool
 }
 
 func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Time) ([]DatasetFrequencyStatus, error) {
@@ -258,11 +364,26 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 				break
 			}
 		}
+		inventorySeries, _, err := b.Metrics.Catalog().ListSeries(ctx, key.producer, prefix+"inventory_last_success_timestamp_seconds", "", 0, 100)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range inventorySeries {
+			if item.InstanceID != key.instance {
+				continue
+			}
+			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+			if err != nil {
+				return nil, err
+			}
+			current.inventory = latest.Value
+			break
+		}
 		values[key] = current
 	}
 	out := make([]DatasetFrequencyStatus, 0, len(values))
 	for key, value := range values {
-		out = append(out, datasetStatus(now, key, value))
+		out = append(out, datasetStatus(now, key, value, b.Policy))
 	}
 	return out, nil
 }
@@ -295,7 +416,7 @@ func datasetLimitError() error {
 	return fmt.Errorf("dataset frequency statuses exceed limit %d", MaxDatasetFrequencyStatuses)
 }
 
-func datasetStatus(now time.Time, key datasetKey, value datasetValues) DatasetFrequencyStatus {
+func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy report.RealtimeTimeSeriesPolicy) DatasetFrequencyStatus {
 	item := DatasetFrequencyStatus{
 		Producer: key.producer, SpaceID: key.spaceID, DatasetID: key.datasetID, Freq: key.freq,
 		LastRunAt: unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess),
@@ -308,14 +429,22 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues) DatasetFr
 	if !reference.IsZero() {
 		item.LagSeconds = max(int64(0), int64(now.Sub(reference)/time.Second))
 	}
+	runLag, successLag, watermarkLag := datasetTolerances(key, value.interval, policy)
+	inventoryAt := unixTime(value.inventory)
 	switch {
 	case value.reporterStale:
 		item.Status, item.Reason = "stale", "producer stale"
+	case inventoryAt.IsZero() || now.Sub(inventoryAt) > 10*time.Minute:
+		item.Status, item.Reason = "unknown", "inventory_stale"
 	case item.LastRunAt.IsZero():
 		item.Status, item.Reason = "unknown", "尚未上报"
+	case runLag > 0 && now.Sub(item.LastRunAt) > runLag:
+		item.Status, item.Reason = "stale", "run stale"
 	case item.LastSuccessAt.IsZero():
 		item.Status, item.Reason = "degraded", "尚无成功运行"
-	case value.interval > 0 && item.LagSeconds > int64(max(2*value.interval, 120)):
+	case successLag > 0 && now.Sub(item.LastSuccessAt) > successLag:
+		item.Status, item.Reason = "degraded", "success stale"
+	case watermarkLag > 0 && item.LagSeconds > int64(watermarkLag):
 		item.Status, item.Reason = "stale", "watermark stale"
 	case item.OutputWatermarkAt.IsZero():
 		item.Status, item.Reason = "healthy", "正常但空结果"
@@ -325,35 +454,115 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues) DatasetFr
 	return item
 }
 
-func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
-	if b.Checks == nil || b.Results == nil {
-		return []BusinessStatus{}, nil
+func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeTimeSeriesPolicy) (time.Duration, time.Duration, time.Duration) {
+	runBase := time.Duration(interval * float64(time.Second))
+	frequency := parseOverviewFrequency(key.freq)
+	defaults := policy.Defaults
+	var runLag, successLag time.Duration
+	if defaults.RunMissedIntervals > 0 && runBase > 0 {
+		runLag = time.Duration(defaults.RunMissedIntervals)*runBase + 30*time.Second
 	}
-	enabled := true
-	checks, err := b.Checks.List(ctx, store.ListChecksOptions{SpaceID: spaceID, Enabled: &enabled, Page: store.Page{PageSize: 500}})
-	if err != nil {
-		return nil, err
+	if defaults.SuccessMissedIntervals > 0 && runBase > 0 {
+		successLag = time.Duration(defaults.SuccessMissedIntervals)*runBase + 30*time.Second
 	}
-	out := make([]BusinessStatus, 0)
-	for _, check := range checks {
-		kind := businessKind(check)
-		if kind == "" {
-			continue
+	watermarkLag := max(time.Duration(defaults.WatermarkPeriods)*frequency, defaults.MinimumWatermarkLag)
+	for _, override := range policy.Overrides {
+		if override.SpaceID == key.spaceID && override.DatasetID == key.datasetID && override.Freq == key.freq && override.WatermarkLag > 0 {
+			watermarkLag = override.WatermarkLag
+			break
 		}
-		item := BusinessStatus{Kind: kind, Module: check.Source, Status: "unknown", Reason: "尚未上报"}
-		results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
+	}
+	return runLag, successLag, watermarkLag
+}
+
+func parseOverviewFrequency(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if strings.HasSuffix(raw, "d") {
+		days, err := strconv.ParseUint(strings.TrimSuffix(raw, "d"), 10, 32)
+		if err == nil && days > 0 {
+			return time.Duration(days) * 24 * time.Hour
+		}
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
+}
+
+func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
+	out := make([]BusinessStatus, 0)
+	if b.Checks != nil && b.Results != nil {
+		enabled := true
+		checks, err := b.Checks.List(ctx, store.ListChecksOptions{SpaceID: spaceID, Enabled: &enabled, Page: store.Page{PageSize: 500}})
 		if err != nil {
 			return nil, err
 		}
-		if len(results) > 0 {
-			item.LastCheckedAt = results[0].CheckedAt.UTC()
-			item.Status = strings.ToLower(string(results[0].Status))
-			item.Reason = results[0].ErrorMessage
-			if item.Reason == "" {
-				item.Reason = map[bool]string{true: "normal", false: "check failed"}[results[0].Success]
+		for _, check := range checks {
+			kind := businessKind(check)
+			if kind == "" {
+				continue
 			}
+			item := BusinessStatus{Kind: kind, Module: check.Source, Status: "unknown", Reason: "尚未上报"}
+			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
+			if err != nil {
+				return nil, err
+			}
+			if len(results) > 0 {
+				item.LastCheckedAt = results[0].CheckedAt.UTC()
+				item.Status = strings.ToLower(string(results[0].Status))
+				item.Reason = results[0].ErrorMessage
+				if item.Reason == "" {
+					item.Reason = map[bool]string{true: "normal", false: "check failed"}[results[0].Success]
+				}
+			}
+			out = append(out, item)
 		}
-		out = append(out, item)
+	}
+	balances, err := b.buildBalanceStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, balances...)
+	return out, nil
+}
+
+func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, error) {
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	const metricName = "moox_trade_balance_sync_last_success_timestamp_seconds"
+	series, total, err := b.Metrics.Catalog().ListSeries(ctx, "", metricName, "", 0, 101)
+	if err != nil {
+		return nil, err
+	}
+	if total > 100 {
+		return nil, fmt.Errorf("trade balance series exceed limit 100")
+	}
+	now := time.Now().UTC()
+	if b.Now != nil {
+		now = b.Now().UTC()
+	}
+	out := make([]BusinessStatus, 0, len(series))
+	for _, item := range series {
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		lastSuccess := unixTime(latest.Value)
+		status, reason := "healthy", "balance sync fresh"
+		switch {
+		case item.IsStale:
+			status, reason = "stale", "producer stale"
+		case lastSuccess.IsZero():
+			status, reason = "unknown", "尚未上报"
+		case now.Sub(lastSuccess) > 15*time.Minute:
+			status, reason = "down", "balance sync stale"
+		}
+		out = append(out, BusinessStatus{
+			Kind: "balance", Module: item.ServiceName, Status: status,
+			Reason: reason, LastCheckedAt: lastSuccess,
+		})
 	}
 	return out, nil
 }
@@ -368,28 +577,6 @@ func businessKind(check domain.Check) string {
 	default:
 		return ""
 	}
-}
-
-func summarizeSCF(services []ServiceStatus) SCFSummary {
-	var out SCFSummary
-	for _, service := range services {
-		name := strings.ToLower(service.ServiceName)
-		if !strings.Contains(name, "scf") {
-			continue
-		}
-		switch service.Status {
-		case "healthy":
-			out.OnlineCount++
-		case "stale", "down":
-			out.TimeoutCount++
-		default:
-			out.UnknownCount++
-		}
-		if !service.LastSeenAt.IsZero() && (out.OldestHeartbeatAt.IsZero() || service.LastSeenAt.Before(out.OldestHeartbeatAt)) {
-			out.OldestHeartbeatAt = service.LastSeenAt
-		}
-	}
-	return out
 }
 
 func sortOverview(out *Overview) {

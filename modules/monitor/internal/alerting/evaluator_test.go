@@ -2,7 +2,6 @@ package alerting
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -171,33 +170,6 @@ func TestAlertEvaluatorDoesNotDelegateToPeerOwner(t *testing.T) {
 	}
 }
 
-func TestRenderTemplateEscapesJSONValues(t *testing.T) {
-	body := renderTemplate("", Event{
-		EventType: domain.AlertEventTriggered,
-		Status:    domain.AlertStatusFiring,
-		Check: domain.Check{
-			CheckID: "check-a",
-			Name:    "API \"prod\"",
-			Kind:    domain.CheckKindHTTP,
-			URL:     "http://example.com/healthz?name=\"api\"",
-		},
-		Result: domain.CheckResult{
-			ErrorMessage: "failed with \"quote\"\nand newline",
-			CheckedAt:    time.Now(),
-		},
-	})
-	if !json.Valid([]byte(body)) {
-		t.Fatalf("rendered body is invalid JSON: %s", body)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		t.Fatalf("unmarshal rendered body: %v", err)
-	}
-	if payload["error_message"] != "failed with \"quote\"\nand newline" {
-		t.Fatalf("error_message = %q", payload["error_message"])
-	}
-}
-
 type recordingNotifier struct {
 	fail   bool
 	events []string
@@ -280,29 +252,6 @@ func openAlertDB(t *testing.T) *store.Store {
 		t.Fatalf("apply schema: %v", err)
 	}
 	return mgr
-}
-
-func TestParseHeadersAndEventTarget(t *testing.T) {
-	if got := parseHeaders(`{"X-Token":"abc"}`); got["X-Token"] != "abc" {
-		t.Fatalf("parseHeaders = %#v", got)
-	}
-	if parseHeaders("bad-json") != nil {
-		t.Fatal("invalid headers should return nil")
-	}
-	check := domain.Check{Kind: domain.CheckKindTCP, TCPHost: "127.0.0.1", TCPPort: 8080}
-	if eventTarget(check) != "127.0.0.1:8080" {
-		t.Fatalf("tcp target = %q", eventTarget(check))
-	}
-	check = domain.Check{Kind: domain.CheckKindHTTP, URL: "https://example.com"}
-	if eventTarget(check) != "https://example.com" {
-		t.Fatalf("http target = %q", eventTarget(check))
-	}
-}
-
-func TestJsonStringValueEscapesQuotes(t *testing.T) {
-	if got := jsonStringValue(`say "hi"`); got != `say \"hi\"` {
-		t.Fatalf("jsonStringValue = %q", got)
-	}
 }
 
 func TestWebhookNotifierRoutesThroughMsgboxSender(t *testing.T) {

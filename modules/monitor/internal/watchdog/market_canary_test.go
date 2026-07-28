@@ -1,59 +1,61 @@
 package watchdog
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
-func TestEvaluateMarketCanaryChecksFreshnessBeforeMovement(t *testing.T) {
-	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	cfg := MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 4}
-
-	insufficient, err := EvaluateMarketCanary(now, []MarketBar{{DataTime: now.Add(-time.Minute), Close: 100, Volume: 2, Closed: true}}, cfg)
-	require.NoError(t, err)
-	require.False(t, insufficient.Fresh)
-	require.Equal(t, "insufficient_closed_bars", insufficient.Reason)
-
-	stale, err := EvaluateMarketCanary(now, []MarketBar{
-		{DataTime: now.Add(-6 * time.Minute), Close: 100, Volume: 2, Closed: true},
-		{DataTime: now.Add(-5 * time.Minute), Close: 200, Volume: 20, Closed: true},
-	}, cfg)
-	require.NoError(t, err)
-	require.False(t, stale.Fresh)
-	require.False(t, stale.Abnormal)
-	require.Equal(t, "stale_watermark", stale.Reason)
+type canaryReader struct {
+	rows    []*storagepb.TimeSeriesRow
+	request *storagepb.ReadTimeSeriesRowsReq
 }
 
-func TestEvaluateMarketCanaryDetectsPriceOrVolumeThreshold(t *testing.T) {
-	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	cfg := MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 4}
-	result, err := EvaluateMarketCanary(now, []MarketBar{
-		{DataTime: now.Add(-2 * time.Minute), Close: 100, Volume: 2, Closed: true},
-		{DataTime: now.Add(-time.Minute), Close: 106, Volume: 3, Closed: true},
-	}, cfg)
-	require.NoError(t, err)
-	require.True(t, result.Fresh)
-	require.True(t, result.Abnormal)
-	require.InDelta(t, 0.06, result.Return, 0.0001)
-
-	result, err = EvaluateMarketCanary(now, []MarketBar{
-		{DataTime: now.Add(-2 * time.Minute), Close: 100, Volume: 1, Closed: true},
-		{DataTime: now.Add(-time.Minute), Close: 101, Volume: 5, Closed: true},
-	}, cfg)
-	require.NoError(t, err)
-	require.True(t, result.Abnormal)
-	require.InDelta(t, 5, result.VolumeRatio, 0.0001)
+func (r *canaryReader) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	r.request = request
+	return &storagepb.ReadTimeSeriesRowsRsp{
+		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
+		Rows:    r.rows,
+	}, nil
 }
 
-func TestEvaluateMarketCanaryIgnoresOpenBars(t *testing.T) {
+func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	result, err := EvaluateMarketCanary(now, []MarketBar{
-		{DataTime: now.Add(-2 * time.Minute), Close: 100, Volume: 1, Closed: true},
-		{DataTime: now.Add(-time.Minute), Close: 200, Volume: 20, Closed: false},
-	}, MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 4})
-	require.NoError(t, err)
-	require.False(t, result.Fresh)
-	require.Equal(t, "insufficient_closed_bars", result.Reason)
+	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+		marketCanaryRow(now.Add(-2*time.Minute), 100, 10),
+		marketCanaryRow(now.Add(-time.Minute), 101, 12),
+	}}
+	config := MarketCanaryConfig{
+		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
+		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+	}
+	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+	require.True(t, result.Success)
+	require.Equal(t, "market_canary:market_kline:BTC-USDT:1m", result.CheckID)
+	require.Equal(t, "crypto", reader.request.GetSpaceId())
+	require.Equal(t, "market_kline", reader.request.GetDatasetId())
+	require.Equal(t, "BTC-USDT", reader.request.GetKeys()[0].GetSubjectId())
+	require.Equal(t, uint32(2), reader.request.GetPage().GetSize())
+
+	reader.rows = []*storagepb.TimeSeriesRow{
+		marketCanaryRow(now.Add(-2*time.Minute), 100, 10),
+		marketCanaryRow(now.Add(-time.Minute), 110, 12),
+	}
+	result = (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+	require.False(t, result.Success)
+	require.Equal(t, "threshold_exceeded", result.ErrorMessage)
+}
+
+func marketCanaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.TimeSeriesRow {
+	return &storagepb.TimeSeriesRow{
+		Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano)},
+		Fields: []*storagepb.FieldValue{
+			{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: closeValue}}},
+			{FieldId: "volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: volumeValue}}},
+		},
+	}
 }

@@ -7,8 +7,9 @@ const (
 	CheckKindTCP      = "tcp"
 	CheckKindExternal = "external"
 
-	CheckSourceManual    = "manual"
-	CheckSourceSysDeploy = "sysdeploy"
+	CheckSourceManual        = "manual"
+	CheckSourceSysDeploy     = "sysdeploy"
+	CheckSourceObservability = "observability"
 )
 
 type Check struct {

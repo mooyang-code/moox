@@ -8,6 +8,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const MaxDatasetMetricSeries = 1000
+
 var allowedDatasetResults = stringSet("success", "error", "empty", "rejected")
 
 type DatasetKey struct {
@@ -43,6 +45,7 @@ type DatasetMetrics struct {
 	rows                     *prometheus.CounterVec
 	mu                       sync.Mutex
 	expected                 map[DatasetKey]time.Duration
+	known                    map[DatasetKey]struct{}
 	inputWatermarkByDataset  map[DatasetKey]float64
 	outputWatermarkByDataset map[DatasetKey]float64
 }
@@ -68,6 +71,7 @@ func NewDatasetMetrics(registerer prometheus.Registerer, module string) (*Datase
 		outputWatermark:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "output_watermark_timestamp_seconds", Help: "Latest observed output business watermark."}, labels),
 		rows:                     prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "rows_total", Help: "Rows produced by realtime dataset runs."}, append(labels, "result")),
 		expected:                 make(map[DatasetKey]time.Duration),
+		known:                    make(map[DatasetKey]struct{}),
 		inputWatermarkByDataset:  make(map[DatasetKey]float64),
 		outputWatermarkByDataset: make(map[DatasetKey]float64),
 	}
@@ -111,14 +115,32 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.enabled.Reset()
-	m.expectedInterval.Reset()
+	known := make(map[DatasetKey]struct{}, len(m.known)+len(next))
+	for key := range m.known {
+		known[key] = struct{}{}
+	}
+	for key := range next {
+		known[key] = struct{}{}
+	}
+	if len(known) > MaxDatasetMetricSeries {
+		m.inventoryRefreshErrors.Inc()
+		return fmt.Errorf("dataset metric series exceed limit %d", MaxDatasetMetricSeries)
+	}
+	for key := range m.known {
+		if _, remains := next[key]; remains {
+			continue
+		}
+		values := datasetLabelValues(key)
+		m.enabled.WithLabelValues(values...).Set(0)
+		m.expectedInterval.WithLabelValues(values...).Set(0)
+	}
 	for key, interval := range next {
 		values := datasetLabelValues(key)
 		m.enabled.WithLabelValues(values...).Set(1)
 		m.expectedInterval.WithLabelValues(values...).Set(interval.Seconds())
 	}
 	m.expected = next
+	m.known = known
 	m.inventoryLastSuccess.Set(float64(time.Now().UTC().Unix()))
 	return nil
 }
@@ -157,7 +179,7 @@ func (m *DatasetMetrics) ObserveRun(observation DatasetObservation) error {
 	m.rows.WithLabelValues(resultValues...).Add(float64(observation.Rows))
 	finishedAt := float64(observation.FinishedAt.UTC().Unix())
 	m.lastRun.WithLabelValues(values...).Set(finishedAt)
-	if observation.Result == "success" {
+	if observation.Result == "success" || observation.Result == "empty" {
 		m.lastSuccess.WithLabelValues(values...).Set(finishedAt)
 	}
 	m.advanceWatermark(m.inputWatermark, m.inputWatermarkByDataset, observation.Key, observation.InputWatermark)

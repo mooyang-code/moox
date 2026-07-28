@@ -594,6 +594,43 @@ func TestExecuteDeployNodeItemReconcilesAcceptedSCFDeploymentAfterCallerTimeout(
 	assert.Equal(t, "moox-collector_dev", node.PackageID)
 }
 
+func TestExecuteDeployNodeItemUpdatesConfigurationWhenPackageIsCurrent(t *testing.T) {
+	db := newNodeSCFTestDB(t)
+	catalog := store.NewCatalogRepository(db)
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "account-a",
+		PackageID: "moox-collector_dev", NodeType: "scf-event", Provider: "tencent-scf",
+		Region: "ap-guangzhou", Namespace: "collector", FunctionName: "collector-0",
+		Metadata: `{"handler":"main"}`,
+	}))
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
+		Status: "Active",
+		Environment: map[string]string{
+			"MOOX_CODE_PACKAGE_ID": "moox-collector_dev",
+			"MOOX_MONITOR_URL":     "https://old.example",
+		},
+	}}}}
+	svc := &Service{
+		catalog: catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{
+			SecretID: "secret-id", SecretKey: "secret-key",
+		}},
+		scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+
+	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{
+		NodeId: "node-a", PackageId: "moox-collector_dev",
+		Environment: map[string]string{"MOOX_MONITOR_URL": "https://new.example"},
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, fake.updated)
+	require.Len(t, fake.configured, 1)
+	require.Equal(t, "https://new.example", fake.configured[0].Environment["MOOX_MONITOR_URL"])
+	require.Equal(t, "moox-collector_dev", fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"])
+}
+
 type fakeSCFClient struct {
 	getErr               error
 	getResults           []fakeSCFGetResult

@@ -9,9 +9,6 @@ import (
 )
 
 func (s *Service) GetObservabilityOverview(ctx context.Context, req *monitorpb.GetObservabilityOverviewReq) (*monitorpb.GetObservabilityOverviewRsp, error) {
-	if req.GetSpaceId() == "" {
-		return &monitorpb.GetObservabilityOverviewRsp{RetInfo: invalid(errors.New("space_id is required"))}, nil
-	}
 	if s.observabilityOverview == nil {
 		return &monitorpb.GetObservabilityOverviewRsp{RetInfo: inner(errors.New("observability overview is unavailable"))}, nil
 	}

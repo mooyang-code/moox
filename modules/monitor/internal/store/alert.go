@@ -152,6 +152,17 @@ func (r *AlertRepository) ListRulesForCheck(ctx context.Context, spaceID, checkI
 	return rules, err
 }
 
+func (r *AlertRepository) GetRule(ctx context.Context, spaceID, ruleID string) (*domain.AlertRule, error) {
+	var rule domain.AlertRule
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_rule_id = ?", spaceID, ruleID).
+		First(&rule).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rule, nil
+}
+
 func (r *AlertRepository) ListEnabledRulesForCheck(ctx context.Context, spaceID, checkID string) ([]domain.AlertRule, error) {
 	var rules []domain.AlertRule
 	err := r.db.WithContext(ctx).

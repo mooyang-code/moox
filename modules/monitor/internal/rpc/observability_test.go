@@ -9,19 +9,11 @@ import (
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 )
 
-func TestGetObservabilityOverviewValidatesSpaceAndMapsAllSections(t *testing.T) {
+func TestGetObservabilityOverviewSupportsAllSpacesAndMapsAllSections(t *testing.T) {
 	svc := New(store.NewRepositories(nil), Options{})
-	invalidRsp, err := svc.GetObservabilityOverview(t.Context(), &monitorpb.GetObservabilityOverviewReq{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if invalidRsp.GetRetInfo().GetCode() == 0 {
-		t.Fatalf("empty space response = %+v", invalidRsp)
-	}
-
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	svc.observabilityOverview = &monitorobservability.Builder{Now: func() time.Time { return now }}
-	rsp, err := svc.GetObservabilityOverview(t.Context(), &monitorpb.GetObservabilityOverviewReq{SpaceId: "moox_system"})
+	rsp, err := svc.GetObservabilityOverview(t.Context(), &monitorpb.GetObservabilityOverviewReq{})
 	if err != nil {
 		t.Fatal(err)
 	}

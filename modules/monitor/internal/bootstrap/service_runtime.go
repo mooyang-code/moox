@@ -33,6 +33,7 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		ObservabilityOverview: &monitorobservability.Builder{
 			Metrics: metricsQuery, Hosts: hostStore,
 			Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+			Policy: doctorContext.Pipelines.RealtimeTimeSeries,
 		},
 	}))
 }
@@ -64,7 +65,16 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 		return nil
 	}
 	syncer := monitorsysdeploy.NewSyncer(runtime.Repositories.Checks, monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
-	syncFunc := serializedMonitorSync(syncer.Sync)
+	syncFunc := serializedMonitorSync(func(syncCtx context.Context) (int, error) {
+		count, err := syncer.Sync(syncCtx)
+		if err != nil {
+			return count, err
+		}
+		if err := ensureDefaultCheckAlertRules(syncCtx, runtime.Repositories); err != nil {
+			return count, err
+		}
+		return count, nil
+	})
 	handler := monitorSyncHandler(syncFunc)
 	registerMonitorSyncTimer(s, handler)
 

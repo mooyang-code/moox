@@ -459,7 +459,7 @@ func (s *Service) updateSCFFunctionCode(
 	// is still returning Updating.
 	codeCurrent := strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"]) == pkg.PackageID
 	watchdogCurrent := remoteSCFWatchdogEnabled(info.Environment) == watchdogEnabled
-	if codeCurrent && watchdogCurrent {
+	if codeCurrent && watchdogCurrent && len(desiredEnvironment) == 0 && len(desiredConfig) == 0 {
 		_, err = waitForSCFActive(ctx, client, ref, info)
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ResultRepository struct {
@@ -19,6 +20,13 @@ func NewResultRepository(db *gorm.DB) *ResultRepository {
 
 func (r *ResultRepository) Insert(ctx context.Context, result *domain.CheckResult) error {
 	return r.db.WithContext(ctx).Create(result).Error
+}
+
+func (r *ResultRepository) InsertIfAbsent(ctx context.Context, result *domain.CheckResult) (bool, error) {
+	tx := r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_result_id"}}, DoNothing: true}).
+		Create(result)
+	return tx.RowsAffected == 1, tx.Error
 }
 
 func (r *ResultRepository) Recent(ctx context.Context, spaceID, checkID string, limit int) ([]domain.CheckResult, error) {

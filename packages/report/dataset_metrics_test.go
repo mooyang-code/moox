@@ -51,6 +51,27 @@ func TestDatasetMetricsReplaceExpectedIsAtomic(t *testing.T) {
 	}
 }
 
+func TestDatasetMetricsReplaceExpectedPublishesDisabledTombstone(t *testing.T) {
+	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "collector")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := DatasetKey{SpaceID: "crypto", DatasetID: "market_kline", Freq: "1m"}
+	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: time.Minute}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := metrics.ReplaceExpected(nil); err != nil {
+		t.Fatal(err)
+	}
+	labels := []string{"crypto", "market_kline", "1m"}
+	if got := testutil.ToFloat64(metrics.enabled.WithLabelValues(labels...)); got != 0 {
+		t.Fatalf("disabled tombstone = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(metrics.expectedInterval.WithLabelValues(labels...)); got != 0 {
+		t.Fatalf("disabled interval = %v, want 0", got)
+	}
+}
+
 func TestDatasetMetricsRecordsUpstreamInventoryRefreshError(t *testing.T) {
 	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "factor")
 	if err != nil {
@@ -125,8 +146,12 @@ func TestDatasetMetricsAcceptsEmptyWithoutExpandingModuleResults(t *testing.T) {
 	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: time.Minute}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := metrics.ObserveRun(DatasetObservation{Key: key, Result: "empty", FinishedAt: time.Now()}); err != nil {
+	finishedAt := time.Now().UTC().Truncate(time.Second)
+	if err := metrics.ObserveRun(DatasetObservation{Key: key, Result: "empty", FinishedAt: finishedAt}); err != nil {
 		t.Fatalf("empty dataset result rejected: %v", err)
+	}
+	if got := testutil.ToFloat64(metrics.lastSuccess.WithLabelValues("crypto", "market_kline", "1m")); got != float64(finishedAt.Unix()) {
+		t.Fatalf("empty last success = %v, want %d", got, finishedAt.Unix())
 	}
 	module, err := NewModuleMetrics(prometheus.NewRegistry(), "collector", []string{"market-data"})
 	if err != nil {

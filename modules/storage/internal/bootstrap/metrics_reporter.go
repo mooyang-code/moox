@@ -17,11 +17,11 @@ func MetricsReporterSpecForRole(role string) (MetricsReporterSpec, error) {
 	switch role {
 	case "primary":
 		return MetricsReporterSpec{
-			ServiceName: "storage_primary", TimerService: "trpc.moox.storage.primary.metrics.timer",
+			ServiceName: "storage-primary", TimerService: "trpc.moox.storage.primary.metrics.timer",
 		}, nil
 	case "view":
 		return MetricsReporterSpec{
-			ServiceName: "storage_view", TimerService: "trpc.moox.storage.view.metrics.timer",
+			ServiceName: "storage-view", TimerService: "trpc.moox.storage.view.metrics.timer",
 		}, nil
 	default:
 		return MetricsReporterSpec{}, fmt.Errorf("storage metrics reporter does not support role %q", role)

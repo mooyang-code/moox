@@ -3,7 +3,10 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
@@ -12,11 +15,13 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/msgbox"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -59,10 +64,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	presenceSink := hostmetrics.PresenceTransitionFunc(func(ctx context.Context, transition hostmetrics.PresenceTransition) {
-		log.InfoContextf(ctx, "host presence transition agent_id=%s from=%s to=%s observed_at=%s",
-			transition.AgentID, transition.From, transition.To, transition.ObservedAt.Format(time.RFC3339Nano))
-	})
+	var presenceSender msgbox.Sender
+	if webhookURL := strings.TrimSpace(os.Getenv("MOOX_MSGBOX_WECOM_WEBHOOK")); webhookURL != "" {
+		presenceSender, err = msgbox.NewWeComSender(webhookURL)
+		if err != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("initialize host presence notifier: %w", err)
+		}
+	}
+	presenceSink := hostPresenceTransitionSink(presenceSender)
 	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceSink)
 
 	var hostStore *hostmetrics.Store
@@ -136,6 +146,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	resultHook := monitorResultHook(runtime)
 	probeRunner := buildProbeRunner(cfg)
+	marketCanary, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, resultHook)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	if err := ensureDefaultCheckAlertRules(runtimeCtx, runtime.Repositories); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
 	syncSystem := monitorSyncFunc(runtimeCtx, s, cfg, runtime)
 	hostReady := func() bool { return false }
 	if hostGate != nil {
@@ -150,17 +169,34 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		Deployments: monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore, Pipelines: pipelines,
 	}
+	businessFreshness := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: metricsQuery, Hosts: hostStore,
+		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+		Policy: doctorContext.Pipelines.RealtimeTimeSeries,
+	}, runtime.Repositories, resultHook)
+	watchdogRun := func(watchdogCtx context.Context) error {
+		var marketErr, freshnessErr error
+		if marketCanary != nil {
+			marketErr = marketCanary(watchdogCtx)
+		}
+		if businessFreshness != nil {
+			freshnessErr = businessFreshness(watchdogCtx)
+		}
+		return errors.Join(marketErr, freshnessErr)
+	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator, doctorContext)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, metricEvaluator, metricRules); err != nil {
+	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, metricEvaluator, metricRules, watchdogRun); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := registerMonitorHostSilenceTimer(s, hostSilence); err != nil {
+	if err := registerMonitorHostSilenceTimer(s, hostSilence, func(timerCtx context.Context) error {
+		return ensureDefaultHostAlertRules(timerCtx, runtime.Repositories, hostRegistry)
+	}); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}

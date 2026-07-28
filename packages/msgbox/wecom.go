@@ -25,7 +25,7 @@ type WeComSender struct {
 	webhookURL string
 }
 
-type WeComOption func(*weComOptions) error
+type weComOption func(*weComOptions) error
 
 type weComOptions struct {
 	client    *http.Client
@@ -33,36 +33,11 @@ type weComOptions struct {
 	allowHTTP bool
 }
 
-func WithHTTPClient(client *http.Client) WeComOption {
-	return func(options *weComOptions) error {
-		if client == nil {
-			return errors.New("msgbox: HTTP client must not be nil")
-		}
-		options.client = client
-		return nil
-	}
+func NewWeComSender(webhookURL string) (*WeComSender, error) {
+	return newWeComSender(webhookURL)
 }
 
-func WithTimeout(timeout time.Duration) WeComOption {
-	return func(options *weComOptions) error {
-		if timeout <= 0 {
-			return errors.New("msgbox: timeout must be positive")
-		}
-		options.timeout = timeout
-		return nil
-	}
-}
-
-// WithTestHTTPAllowed permits plain HTTP endpoints used by local test servers.
-// Production callers must not use this option.
-func WithTestHTTPAllowed() WeComOption {
-	return func(options *weComOptions) error {
-		options.allowHTTP = true
-		return nil
-	}
-}
-
-func NewWeComSender(webhookURL string, options ...WeComOption) (*WeComSender, error) {
+func newWeComSender(webhookURL string, options ...weComOption) (*WeComSender, error) {
 	config := weComOptions{timeout: defaultTimeout}
 	for _, option := range options {
 		if option == nil {

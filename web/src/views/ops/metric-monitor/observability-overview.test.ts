@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callControl } from "@/api/admin/http";
-import { METRIC_MONITOR_SERVICE, METRIC_SPACE_ID, metricMonitorApi } from "@/api/metric-monitor";
+import { METRIC_MONITOR_SERVICE, metricMonitorApi } from "@/api/metric-monitor";
 
 vi.mock("@/api/admin/http", () => ({
   callControl: vi.fn(),
@@ -14,12 +14,10 @@ const mockedCallControl = vi.mocked(callControl);
 describe("observability overview", () => {
   beforeEach(() => mockedCallControl.mockReset());
 
-  it("uses the bounded Monitor overview endpoint and default space", async () => {
+  it("uses the bounded Monitor overview endpoint across all spaces", async () => {
     mockedCallControl.mockResolvedValue({ overview: { datasets: [] } });
     await metricMonitorApi.getObservabilityOverview();
-    expect(mockedCallControl).toHaveBeenCalledWith(METRIC_MONITOR_SERVICE, "GetObservabilityOverview", {
-      space_id: METRIC_SPACE_ID
-    });
+    expect(mockedCallControl).toHaveBeenCalledWith(METRIC_MONITOR_SERVICE, "GetObservabilityOverview", {});
   });
 
   it("keeps all five operational sections, filters, tooltips, and explicit empty states", () => {

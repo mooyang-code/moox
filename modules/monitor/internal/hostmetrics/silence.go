@@ -33,12 +33,6 @@ func NewSilenceScanner(registry *Registry, staleAfter time.Duration, sink Presen
 	return &SilenceScanner{registry: registry, staleAfter: staleAfter, sink: sink}
 }
 
-func (s *SilenceScanner) SetTransitionSink(sink PresenceTransitionSink) {
-	if s != nil {
-		s.sink = sink
-	}
-}
-
 func (s *SilenceScanner) Scan(ctx context.Context, now time.Time) error {
 	if s == nil || s.registry == nil {
 		return errors.New("host silence scanner is unavailable")

@@ -1498,12 +1498,14 @@ start_storage_process() {
 	local name="$1"
 	local binary="$2"
 	local trpc_conf="$3"
-	local storage_conf="$4"
-	gateway_service_env_for "${name}"
-	local role="${name#storage-}"
-	start_service "${name}" "${ROOT}/storage" \
-    env \
-      "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+		local storage_conf="$4"
+		gateway_service_env_for "${name}"
+		runtime_identity_env "${name}" "${ROOT}/storage/config/${trpc_conf}"
+		local role="${name#storage-}"
+		start_service "${name}" "${ROOT}/storage" \
+	    env \
+	      "${RUNTIME_IDENTITY_ENV[@]}" \
+	      "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_OTEL_SERVICE_NAME=moox-${name}" \
       "STORAGE_CONFIG_PATH=${ROOT}/storage/config" \
       "MOOX_STORAGE_CONFIG=${ROOT}/storage/config/${storage_conf}" \
@@ -1562,8 +1564,9 @@ start_storage_primary() {
 
 start_storage_view() {
   gateway_service_env_for storage-view
+  runtime_identity_env storage-view "${ROOT}/storage-view/config/trpc_go.yaml"
   start_service "storage-view" "${ROOT}/storage-view" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_OTEL_SERVICE_NAME=moox-storage-view" \
       "MOOX_GATEWAY_CALLER=storage-view" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
       "MOOX_SERVICE_GATEWAY_TARGET=ip://127.0.0.1:11003" \

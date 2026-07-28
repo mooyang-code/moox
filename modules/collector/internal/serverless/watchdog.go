@@ -197,10 +197,6 @@ func (h *WatchdogHandler) skipped(reason string) {
 	}
 }
 
-func HTTPReadyCheck(checkID, target string, client *http.Client) WatchdogCheck {
-	return SignedHTTPReadyCheck(checkID, target, client, HealthAuth{})
-}
-
 func SignedHTTPReadyCheck(checkID, target string, client *http.Client, auth HealthAuth) WatchdogCheck {
 	return func(ctx context.Context) CheckResult {
 		startedAt := time.Now()

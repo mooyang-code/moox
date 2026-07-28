@@ -10,6 +10,23 @@ import (
 	"time"
 )
 
+func withTimeout(timeout time.Duration) weComOption {
+	return func(options *weComOptions) error {
+		if timeout <= 0 {
+			return errors.New("msgbox: timeout must be positive")
+		}
+		options.timeout = timeout
+		return nil
+	}
+}
+
+func withTestHTTPAllowed() weComOption {
+	return func(options *weComOptions) error {
+		options.allowHTTP = true
+		return nil
+	}
+}
+
 func TestWeComSenderSendSuccess(t *testing.T) {
 	var gotContentType string
 	var gotBody string
@@ -23,7 +40,7 @@ func TestWeComSenderSendSuccess(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	sender, err := NewWeComSender(server.URL, WithTestHTTPAllowed())
+	sender, err := newWeComSender(server.URL, withTestHTTPAllowed())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +70,7 @@ func TestWeComSenderRejectsNon2xx(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	sender, err := NewWeComSender(server.URL, WithTestHTTPAllowed())
+	sender, err := newWeComSender(server.URL, withTestHTTPAllowed())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +86,7 @@ func TestWeComSenderRejectsBusinessError(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	sender, err := NewWeComSender(server.URL, WithTestHTTPAllowed())
+	sender, err := newWeComSender(server.URL, withTestHTTPAllowed())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +103,7 @@ func TestWeComSenderTimesOut(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	sender, err := NewWeComSender(server.URL, WithTestHTTPAllowed(), WithTimeout(20*time.Millisecond))
+	sender, err := newWeComSender(server.URL, withTestHTTPAllowed(), withTimeout(20*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +119,7 @@ func TestWeComSenderLimitsResponseBody(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	sender, err := NewWeComSender(server.URL, WithTestHTTPAllowed())
+	sender, err := newWeComSender(server.URL, withTestHTTPAllowed())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +130,7 @@ func TestWeComSenderLimitsResponseBody(t *testing.T) {
 }
 
 func TestWeComSenderValidatesMessageLimits(t *testing.T) {
-	sender, err := NewWeComSender("http://example.test", WithTestHTTPAllowed())
+	sender, err := newWeComSender("http://example.test", withTestHTTPAllowed())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +169,7 @@ func TestWeComSenderErrorsDoNotLeakSecrets(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	sender, err := NewWeComSender(server.URL+"?key="+secret, WithTestHTTPAllowed())
+	sender, err := newWeComSender(server.URL+"?key="+secret, withTestHTTPAllowed())
 	if err != nil {
 		t.Fatal(err)
 	}

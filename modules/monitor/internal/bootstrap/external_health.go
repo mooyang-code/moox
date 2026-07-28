@@ -81,8 +81,25 @@ func externalHealthRoute(repos *store.Repositories, evaluator *alerting.Evaluato
 			Connected: report.GetSuccess(), LatencyMS: report.GetLatencyMs(),
 			ErrorMessage: strings.TrimSpace(report.GetErrorSummary()), CheckedAt: checkedAt, CreatedAt: time.Now().UTC(),
 		}
-		if err := repos.Results.Insert(ctx, result); err != nil {
+		inserted, err := repos.Results.InsertIfAbsent(ctx, result)
+		if err != nil {
 			return err
+		}
+		if !inserted {
+			return nil
+		}
+		if check.LastCheckedAt != nil && !checkedAt.After(check.LastCheckedAt.UTC()) {
+			return nil
+		}
+		freshFor := 2 * time.Duration(check.IntervalSeconds) * time.Second
+		if freshFor <= 0 {
+			freshFor = time.Minute
+		}
+		if checkedAt.Before(time.Now().UTC().Add(-freshFor)) {
+			// Durable delivery may replay a long outage after Monitor recovers.
+			// Keep the historical fact, but do not reopen or resolve the current
+			// alert state from stale evidence.
+			return nil
 		}
 		check.LastCheckedAt = &checkedAt
 		if err := repos.Checks.Update(ctx, check); err != nil {

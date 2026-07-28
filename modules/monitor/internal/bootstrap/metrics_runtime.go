@@ -101,8 +101,13 @@ func startObservabilityConsumer(
 		return
 	}
 	routes := observabilityconsumer.Routes{
-		Metrics: metricsObservabilityRoute(storage, messageStore, monmetrics.CheckProducerAuthorizer{Checks: runtime.Repositories.Checks}, runtime.ModuleMetrics, cfg.Metrics.Enabled),
-		Host:    hostObservabilityRoute(hostStore, cfg.Metrics.HostStorage.Enabled),
+		Metrics: metricsObservabilityRoute(storage, messageStore, monmetrics.CheckProducerAuthorizer{
+			Checks: runtime.Repositories.Checks,
+			ExternalProducers: map[string]struct{}{
+				"moox_collector_scf": {},
+			},
+		}, runtime.ModuleMetrics, cfg.Metrics.Enabled),
+		Host: hostObservabilityRoute(hostStore, cfg.Metrics.HostStorage.Enabled),
 		Health: func(routeCtx context.Context, message *eventpb.EventMessage, health *observabilitypb.HealthCheckReport) error {
 			if runtime.ObservabilityHealthRoute == nil {
 				return nil
