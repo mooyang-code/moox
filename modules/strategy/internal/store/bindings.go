@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"gorm.io/gorm"
@@ -19,6 +20,14 @@ func (s *Store) CreateBinding(ctx context.Context, binding domain.Binding) error
 
 func (s *Store) CreateExecutionBinding(ctx context.Context, binding domain.ExecutionBinding) error {
 	return s.db.WithContext(ctx).Create(&binding).Error
+}
+
+func (s *Store) GetExecutionBinding(ctx context.Context, executionBindingID string) (domain.ExecutionBinding, error) {
+	var binding domain.ExecutionBinding
+	err := s.db.WithContext(ctx).
+		Where("c_execution_binding_id=?", executionBindingID).
+		First(&binding).Error
+	return binding, err
 }
 
 func (s *Store) GetState(ctx context.Context, bindingID string) (domain.State, error) {
@@ -49,25 +58,42 @@ func (s *Store) WriteAudit(ctx context.Context, audit domain.OperationAudit) err
 	return s.db.WithContext(ctx).Create(&audit).Error
 }
 
-func (s *Store) SetExecutionMode(ctx context.Context, binding domain.Binding, mode, channelID, capitalAmount, quoteAsset string, audit domain.OperationAudit) error {
+func (s *Store) SetExecutionMode(ctx context.Context, binding domain.Binding, executionBindingID, mode, exchangeAccountID string, audit domain.OperationAudit) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing struct {
-			Mode string `gorm:"column:c_mode"`
+			Mode              string `gorm:"column:c_mode"`
+			ExchangeAccountID string `gorm:"column:c_exchange_account_id"`
 		}
-		if err := tx.Table("t_strategy_execution_bindings").Select("c_mode").Where("c_group_id=?", binding.GroupID).First(&existing).Error; err != nil {
+		if err := tx.Table("t_strategy_execution_bindings").
+			Select("c_mode, c_exchange_account_id").
+			Where("c_execution_binding_id=? AND c_group_id=?", executionBindingID, binding.GroupID).
+			First(&existing).Error; err != nil {
 			return err
 		}
-		updates := map[string]any{"c_mode": mode}
-		if mode == "paper" || mode == "live" {
-			updates["c_channel_id"] = channelID
-			updates["c_capital_amount"] = capitalAmount
-			updates["c_quote_asset"] = quoteAsset
-		}
-		if err := tx.Table("t_strategy_execution_bindings").Where("c_group_id=?", binding.GroupID).Updates(updates).Error; err != nil {
+		updates := map[string]any{"c_mode": mode, "c_exchange_account_id": exchangeAccountID}
+		if err := tx.Table("t_strategy_execution_bindings").
+			Where("c_execution_binding_id=? AND c_group_id=?", executionBindingID, binding.GroupID).
+			Updates(updates).Error; err != nil {
 			return err
 		}
-		audit.OldValue = existing.Mode
-		audit.NewValue = mode
+		oldValue, err := json.Marshal(domain.ExecutionModeAuditValue{
+			ExecutionBindingID: executionBindingID,
+			Mode:               existing.Mode,
+			ExchangeAccountID:  existing.ExchangeAccountID,
+		})
+		if err != nil {
+			return err
+		}
+		newValue, err := json.Marshal(domain.ExecutionModeAuditValue{
+			ExecutionBindingID: executionBindingID,
+			Mode:               mode,
+			ExchangeAccountID:  exchangeAccountID,
+		})
+		if err != nil {
+			return err
+		}
+		audit.OldValue = string(oldValue)
+		audit.NewValue = string(newValue)
 		return tx.Create(&audit).Error
 	})
 }

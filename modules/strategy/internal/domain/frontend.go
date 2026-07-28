@@ -110,6 +110,12 @@ type OperationAudit struct {
 
 func (OperationAudit) TableName() string { return "t_strategy_operation_audits" }
 
+type ExecutionModeAuditValue struct {
+	ExecutionBindingID string `json:"execution_binding_id"`
+	Mode               string `json:"mode"`
+	ExchangeAccountID  string `json:"exchange_account_id"`
+}
+
 type RunningStrategySummary struct {
 	StrategyID       string
 	Version          string

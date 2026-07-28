@@ -103,7 +103,7 @@ export const useStrategyStore = defineStore("strategy", () => {
     return resumeBinding(bindingId, reason, crypto.randomUUID());
   }
 
-  async function changeMode(bindingId: string, mode: string, reason: string, settings: ExecutionSettings = {}) {
+  async function changeMode(bindingId: string, mode: string, reason: string, settings: ExecutionSettings) {
     return setExecutionMode(bindingId, mode, reason, crypto.randomUUID(), settings);
   }
 

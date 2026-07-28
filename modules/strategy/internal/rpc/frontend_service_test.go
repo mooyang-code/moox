@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -16,6 +17,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+type testExchangeAccountModes map[string]string
+
+func (m testExchangeAccountModes) ExecutionMode(_ context.Context, _, id string) (string, error) {
+	mode, ok := m[id]
+	if !ok {
+		return "", errors.New("account not found")
+	}
+	return mode, nil
+}
 
 func newFrontendRPCStore(t *testing.T) (*gorm.DB, *store.Store) {
 	t.Helper()
@@ -37,7 +48,7 @@ func seedFrontendBinding(t *testing.T, db *gorm.DB, r *store.Store, bindingID st
 		BindingID: bindingID, StrategyID: def.StrategyID, StrategyVersion: def.Version,
 		SpaceID: "space-a", ViewID: "view-a", Freq: "1h", ParamsJSON: "{}", GroupID: "grp-1", Status: "enabled",
 	}).Error)
-	require.NoError(t, db.Exec(`INSERT INTO t_strategy_execution_bindings (c_execution_binding_id, c_group_id, c_account_id, c_mode, c_status) VALUES ('exec-1', 'grp-1', 'acct-1', 'observe', 'enabled')`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO t_strategy_execution_bindings (c_execution_binding_id, c_group_id, c_exchange_account_id, c_mode, c_status) VALUES ('exec-1', 'grp-1', 'acct-1', 'observe', 'enabled')`).Error)
 	require.NoError(t, db.Create(&domain.State{
 		BindingID: bindingID, StrategyVersion: def.Version, Revision: 1, StateJSON: `{"x":1}`, LastRunID: "run-1",
 	}).Error)
@@ -48,13 +59,9 @@ func seedFrontendBinding(t *testing.T, db *gorm.DB, r *store.Store, bindingID st
 	run := domain.StrategyRun{
 		RunID: "run-1", BindingID: bindingID, StrategyVersion: def.Version, TriggerBarTime: now.Format(time.RFC3339Nano),
 		DataRevision: "rev-1", Status: "accepted", Action: "rebalance",
-		OutputJSON: `{"action":"rebalance","targets":[{"instrument_id":"BTC","target_weight":"0.5"}]}`,
+		OutputJSON: `{"action":"rebalance","targets":[{"instrument_id":"BTC","symbol":"BTCUSDT","target_quantity":"0.5"}]}`,
 	}
 	require.NoError(t, db.Create(&run).Error)
-	require.NoError(t, db.Create(&domain.TargetComparison{
-		RunID: "run-1", InstrumentID: "BTC", PortfolioTarget: "0.5", ActualPosition: "0.4", Deviation: "0.1",
-		SourceTime: now, DataRevision: "rev-1",
-	}).Error)
 	require.NoError(t, db.Create(&domain.PerformancePoint{
 		BindingID: bindingID, Source: "paper", PointTime: now, NAV: "1.0", CumulativeReturn: "0.01",
 		Drawdown: "0.0", CalculatedAt: now,
@@ -71,7 +78,7 @@ func TestListRunningStrategies_RejectsUnavailableRepo(t *testing.T) {
 func TestFrontendRPC_ReadsBindingOverviewRunsTargetsAndPerformance(t *testing.T) {
 	db, r := newFrontendRPCStore(t)
 	seedFrontendBinding(t, db, r, "b1")
-	svc := &Service{Repo: r}
+	svc := &Service{Repo: r, ExchangeAccounts: testExchangeAccountModes{"account-1": "paper"}}
 	ctx := context.Background()
 
 	listRsp, err := svc.ListRunningStrategies(ctx, &strategypb.ListRunningStrategiesReq{SpaceId: "space-a"})
@@ -126,7 +133,7 @@ func TestFrontendRPC_ReadsBindingOverviewRunsTargetsAndPerformance(t *testing.T)
 func TestBindingOperations_ValidateInputAndChangeStatus(t *testing.T) {
 	db, r := newFrontendRPCStore(t)
 	seedFrontendBinding(t, db, r, "b1")
-	svc := &Service{Repo: r}
+	svc := &Service{Repo: r, ExchangeAccounts: testExchangeAccountModes{"account-1": "paper"}}
 	ctx := context.Background()
 
 	pauseRsp, err := svc.PauseBinding(ctx, &strategypb.BindingOperationReq{
@@ -145,11 +152,32 @@ func TestBindingOperations_ValidateInputAndChangeStatus(t *testing.T) {
 
 	modeRsp, err := svc.SetExecutionMode(ctx, &strategypb.SetExecutionModeReq{
 		BindingId: "b1", Mode: "paper", OperationId: "op-mode", Reason: "test",
-		ChannelId: "channel-1", CapitalAmount: "100", QuoteAsset: "USDT",
+		ExchangeAccountId: "account-1", ExecutionBindingId: "exec-1",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, commonpb.ErrorCode_SUCCESS, modeRsp.GetRetInfo().GetCode())
 	assert.Equal(t, "paper", modeRsp.GetStatus())
+
+	replay, err := svc.SetExecutionMode(ctx, &strategypb.SetExecutionModeReq{
+		BindingId: "b1", Mode: "paper", OperationId: "op-mode", Reason: "retry",
+		ExchangeAccountId: "account-1", ExecutionBindingId: "exec-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, commonpb.ErrorCode_SUCCESS, replay.GetRetInfo().GetCode())
+
+	conflict, err := svc.SetExecutionMode(ctx, &strategypb.SetExecutionModeReq{
+		BindingId: "b1", Mode: "paper", OperationId: "op-mode", Reason: "conflict",
+		ExchangeAccountId: "account-2", ExecutionBindingId: "exec-1",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, conflict.GetRetInfo().GetMsg(), "conflicts")
+
+	bindingConflict, err := svc.SetExecutionMode(ctx, &strategypb.SetExecutionModeReq{
+		BindingId: "other-binding", Mode: "paper", OperationId: "op-mode", Reason: "conflict",
+		ExchangeAccountId: "account-1", ExecutionBindingId: "exec-1",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, bindingConflict.GetRetInfo().GetMsg(), "conflicts")
 }
 
 func TestFrontendRPC_RejectsMissingRequiredFields(t *testing.T) {
@@ -241,10 +269,10 @@ func TestGetStrategyPerformanceRejectsUnsupportedInterval(t *testing.T) {
 func TestSetExecutionModeRejectsLiveWhenCapabilityDisabled(t *testing.T) {
 	db, repo := newFrontendRPCStore(t)
 	seedFrontendBinding(t, db, repo, "b1")
-	svc := &Service{Repo: repo, LiveExecutionEnabled: false}
+	svc := &Service{Repo: repo, LiveExecutionEnabled: false, ExchangeAccounts: testExchangeAccountModes{"acct-1": "live"}}
 
 	rsp, err := svc.SetExecutionMode(context.Background(), &strategypb.SetExecutionModeReq{
-		BindingId: "b1", Mode: "live", OperationId: "op-live", Reason: "enable live",
+		BindingId: "b1", ExecutionBindingId: "exec-1", Mode: "live", ExchangeAccountId: "acct-1", OperationId: "op-live", Reason: "enable live",
 	})
 	require.NoError(t, err)
 	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "live execution is disabled")
@@ -254,27 +282,43 @@ func TestSetExecutionModeRejectsLiveWhenCapabilityDisabled(t *testing.T) {
 	assert.Equal(t, "observe", mode)
 }
 
-func TestSetExecutionModeRejectsPaperWithoutExecutionSettings(t *testing.T) {
+func TestSetExecutionModeRejectsMissingExchangeAccount(t *testing.T) {
 	db, repo := newFrontendRPCStore(t)
 	seedFrontendBinding(t, db, repo, "b1")
-	svc := &Service{Repo: repo}
+	svc := &Service{Repo: repo, ExchangeAccounts: testExchangeAccountModes{"acct-1": "paper"}}
 
 	rsp, err := svc.SetExecutionMode(context.Background(), &strategypb.SetExecutionModeReq{
-		BindingId: "b1", Mode: "paper", OperationId: "op-paper", Reason: "enable paper",
+		BindingId: "b1", ExecutionBindingId: "exec-1", Mode: "paper", OperationId: "op-paper", Reason: "enable paper",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "channel_id")
+	assert.Contains(t, rsp.GetRetInfo().GetMsg(), "exchange_account_id")
+}
+
+func TestSetExecutionModeRejectsAccountModeMismatch(t *testing.T) {
+	db, repo := newFrontendRPCStore(t)
+	seedFrontendBinding(t, db, repo, "b1")
+	svc := &Service{
+		Repo:                 repo,
+		ExchangeAccounts:     testExchangeAccountModes{"live-account": "live"},
+		LiveExecutionEnabled: true,
+	}
+	response, err := svc.SetExecutionMode(context.Background(), &strategypb.SetExecutionModeReq{
+		BindingId: "b1", ExecutionBindingId: "exec-1", Mode: "paper", ExchangeAccountId: "live-account",
+		OperationId: "op-mismatch", Reason: "must not execute live",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, response.GetRetInfo().GetMsg(), "does not match")
 }
 
 func TestDisabledLiveCapabilityKeepsObservePaperMutationsAndLiveHistoryAvailable(t *testing.T) {
 	db, repo := newFrontendRPCStore(t)
 	seedFrontendBinding(t, db, repo, "b1")
-	svc := &Service{Repo: repo, LiveExecutionEnabled: false}
+	svc := &Service{Repo: repo, LiveExecutionEnabled: false, ExchangeAccounts: testExchangeAccountModes{"account-1": "paper"}}
 
 	for i, mode := range []string{"paper", "observe"} {
 		rsp, err := svc.SetExecutionMode(context.Background(), &strategypb.SetExecutionModeReq{
 			BindingId: "b1", Mode: mode, OperationId: fmt.Sprintf("op-mode-%d", i), Reason: "capability boundary test",
-			ChannelId: "channel-1", CapitalAmount: "100", QuoteAsset: "USDT",
+			ExchangeAccountId: "account-1", ExecutionBindingId: "exec-1",
 		})
 		require.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())

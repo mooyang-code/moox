@@ -296,6 +296,8 @@ execution.
 The Python Strategy output contract changes from `target_weight` to
 `target_quantity`. The execution binding keeps `exchange_account_id` and
 mode; it removes `channel_id`, `capital_amount`, and `quote_asset`.
+Execution-mode changes identify both the Strategy binding and the exact
+execution binding so one destination cannot overwrite its siblings.
 
 ## Target Convergence
 

@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/strategy/proto/strategygen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
@@ -115,6 +116,8 @@ replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requ
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
 replace github.com/mooyang-code/moox/modules/strategy/proto/strategygen => ./proto/strategygen
+
+replace github.com/mooyang-code/moox/modules/trade/proto/tradegen => ../trade/proto/tradegen
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 

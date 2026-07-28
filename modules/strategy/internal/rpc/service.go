@@ -24,6 +24,11 @@ type Service struct {
 	ReadyWorkers         int
 	Engine               *engine.Engine
 	LiveExecutionEnabled bool
+	ExchangeAccounts     ExchangeAccountModeSource
+}
+
+type ExchangeAccountModeSource interface {
+	ExecutionMode(context.Context, string, string) (string, error)
 }
 
 func (s *Service) CreateStrategy(ctx context.Context, req *strategypb.CreateStrategyReq) (*strategypb.CreateStrategyRsp, error) {

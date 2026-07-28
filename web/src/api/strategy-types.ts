@@ -82,14 +82,11 @@ export interface StrategyRun {
   output_json?: string;
 }
 
-export interface TargetWeight {
+export interface TargetPosition {
   instrument_id: string;
-  target_weight: string;
-  symbol?: string;
-  market_type?: string;
-  portfolio_target?: string;
-  actual_position?: string;
-  deviation?: string;
+  symbol: string;
+  target_quantity: string;
+  reason?: string;
   source_time?: string;
   data_revision?: string;
 }

@@ -1676,8 +1676,13 @@ git commit -m "refactor(trade): consolidate RPC and bootstrap"
 - Modify: `modules/strategy/pyworker/worker.py`
 - Modify: `modules/strategy/pyworker/test_worker.py`
 - Modify: Strategy outbox tests and E2E tests
+- Modify: `web/src/api/strategy-types.ts`
+- Modify: `web/src/api/strategy.ts`
+- Modify: `web/src/store/modules/strategy.ts`
+- Modify: Strategy operation and target views
+- Modify: `web/src/api/strategy.test.ts`
 
-- [ ] **Step 1: Write the new Strategy output tests**
+- [x] **Step 1: Write the new Strategy output tests**
 
 Require:
 
@@ -1709,7 +1714,7 @@ python3 -m unittest pyworker/test_worker.py
 
 Expected: FAIL because the current contract requires `target_weight`.
 
-- [ ] **Step 2: Replace TargetWeight with TargetPosition**
+- [x] **Step 2: Replace TargetWeight with TargetPosition**
 
 Use:
 
@@ -1725,10 +1730,10 @@ type TargetPosition struct {
 ```
 
 Update Output, previous-target state, frontend queries, Python SDK, worker
-validation, and generated Strategy protobuf. Do not keep a compatibility
-`target_weight` field.
+validation, generated Strategy protobuf, and the Web Strategy target view. Do
+not keep a compatibility `target_weight` field.
 
-- [ ] **Step 3: Simplify execution bindings**
+- [x] **Step 3: Simplify execution bindings**
 
 Replace:
 
@@ -1749,10 +1754,12 @@ Keep mode `observe`, `paper`, or `live` for UI capability and audit. Trade
 still derives authoritative execution mode from ExchangeAccount and rejects a
 mismatch.
 
-Update `SetExecutionModeReq` to accept binding ID, mode,
-ExchangeAccountID, operation ID, and reason.
+Update `SetExecutionModeReq` to accept Strategy binding ID, execution binding
+ID, mode, ExchangeAccountID, operation ID, and reason. Update exactly one
+execution binding; other destinations in the same group remain unchanged.
+Update the Web Strategy operation panel to send only these new fields.
 
-- [ ] **Step 4: Publish TargetIntent atomically**
+- [x] **Step 4: Publish TargetIntent atomically**
 
 For every enabled non-observe execution binding:
 
@@ -1772,7 +1779,7 @@ payload := &tradeeventpb.TargetIntent{
 Keep sequence advancement, Strategy Run commit, state update, and Outbox
 insert in one SQLite transaction.
 
-- [ ] **Step 5: Run Strategy contract and Outbox tests**
+- [x] **Step 5: Run Strategy contract and Outbox tests**
 
 ```bash
 cd modules/strategy
@@ -1783,12 +1790,15 @@ CGO_ENABLED=1 go test -race -count=1 ./internal/store \
   ./internal/outbox
 python3 -m unittest discover -s pysdk/tests
 python3 -m unittest pyworker/test_worker.py
+cd ../../web
+pnpm exec vitest run --config vitest.config.ts src/api/strategy.test.ts
+pnpm exec vue-tsc --noEmit
 ```
 
 Expected: PASS with only final target quantities in Strategy output and the
 public Trade event.
 
-- [ ] **Step 6: Commit the Strategy boundary**
+- [x] **Step 6: Commit the Strategy boundary**
 
 ```bash
 git add modules/strategy packages/tradeeventpb

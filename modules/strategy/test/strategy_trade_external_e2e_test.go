@@ -18,7 +18,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-func TestExternalStrategyCommitPublishesRebalance(t *testing.T) {
+func TestExternalStrategyCommitPublishesTargetIntent(t *testing.T) {
 	natsURL := os.Getenv("MOOX_STRATEGY_TRADE_E2E_NATS_URL")
 	if natsURL == "" {
 		t.Fatal("MOOX_STRATEGY_TRADE_E2E_NATS_URL is required by the cross-module harness")
@@ -35,7 +35,7 @@ func TestExternalStrategyCommitPublishesRebalance(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = js.AddStream(&nats.StreamConfig{
-		Name: "MOOX_TRADE", Subjects: []string{"moox.trade.rebalance.requested.v1.>"},
+		Name: "MOOX_TRADE", Subjects: []string{"moox.trade.target.requested.v1.>"},
 		Retention: nats.WorkQueuePolicy, Storage: nats.FileStorage,
 	}); err != nil {
 		t.Fatal(err)
@@ -57,8 +57,8 @@ func TestExternalStrategyCommitPublishesRebalance(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err = repo.CreateExecutionBinding(ctx, domain.ExecutionBinding{
-		ExecutionBindingID: "execution-e2e", GroupID: "group-e2e", AccountID: "acct",
-		ChannelID: "chan", Mode: "paper", CapitalAmount: "100", QuoteAsset: "USDT", Status: "enabled",
+		ExecutionBindingID: "execution-e2e", GroupID: "group-e2e", ExchangeAccountID: "acct",
+		Mode: "paper", Status: "enabled",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -70,13 +70,13 @@ func TestExternalStrategyCommitPublishesRebalance(t *testing.T) {
 	task := domain.Task{
 		RunID: "strategy-e2e-run", BindingID: "binding-e2e", StrategyID: "strategy-e2e",
 		Version: "1", Namespace: "default", SpaceID: "space",
-		TriggerBarTime: "2026-07-25T00:00:00Z", DataRevision: "revision-e2e",
+		TriggerBarTime: time.Now().UTC().Format(time.RFC3339Nano), DataRevision: "revision-e2e",
 		PreviousState: domain.State{BindingID: "binding-e2e", StrategyVersion: "1", Revision: 0},
 	}
 	output := domain.Output{
 		Action: domain.ActionRebalance,
-		Targets: []domain.TargetWeight{{
-			InstrumentID: "BTC-USDT", Symbol: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5",
+		Targets: []domain.TargetPosition{{
+			InstrumentID: "BTC-USDT", Symbol: "BTC-USDT", TargetQuantity: "0.5",
 		}},
 		NextState: map[string]any{"runs": 1},
 	}

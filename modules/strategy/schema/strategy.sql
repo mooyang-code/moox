@@ -65,26 +65,11 @@ CREATE TABLE IF NOT EXISTS t_strategy_command_sequences (
 CREATE TABLE IF NOT EXISTS t_strategy_execution_bindings (
     c_execution_binding_id TEXT PRIMARY KEY,
     c_group_id TEXT NOT NULL,
-    c_account_id TEXT NOT NULL,
-    c_channel_id TEXT NOT NULL DEFAULT '',
+    c_exchange_account_id TEXT NOT NULL DEFAULT '',
     c_mode TEXT NOT NULL,
-    c_capital_amount TEXT NOT NULL DEFAULT '',
-    c_quote_asset TEXT NOT NULL DEFAULT 'USDT',
     c_status TEXT NOT NULL DEFAULT 'enabled',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS t_strategy_target_comparisons (
-    c_run_id TEXT NOT NULL,
-    c_instrument_id TEXT NOT NULL,
-    c_portfolio_target TEXT NOT NULL DEFAULT '',
-    c_actual_position TEXT NOT NULL DEFAULT '',
-    c_deviation TEXT NOT NULL DEFAULT '',
-    c_source_time DATETIME,
-    c_data_revision TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_run_id, c_instrument_id)
 );
 
 CREATE TABLE IF NOT EXISTS t_strategy_run_metrics (

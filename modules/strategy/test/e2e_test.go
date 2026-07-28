@@ -4,6 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"path/filepath"
+	"testing"
+	"time"
+
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/strategy/internal/action"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
@@ -11,8 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"gorm.io/gorm"
-	"path/filepath"
-	"testing"
 )
 
 func TestStrategyRunOnceCommitsStateAndOutbox(t *testing.T) {
@@ -28,7 +30,7 @@ func TestStrategyRunOnceCommitsStateAndOutbox(t *testing.T) {
 	if err := db.Exec(schema.AllSQL()).Error; err != nil {
 		t.Fatal(err)
 	}
-	source := `def run(context, data, params, state): return {"action":"rebalance","targets":[{"instrument_id":"BTC-USDT","target_weight":"0.5"}],"next_state":{"runs":1}}`
+	source := `def run(context, data, params, state): return {"action":"rebalance","targets":[{"instrument_id":"BTC-USDT","symbol":"BTCUSDT","target_quantity":"0.5"}],"next_state":{"runs":1}}`
 	sum := sha256.Sum256([]byte(source))
 	d := domain.StrategyDefinition{StrategyID: "demo", Version: "1.0.0", API: "moox.strategy/v1", SourceCode: source, SourceHash: hex.EncodeToString(sum[:]), Status: "enabled"}
 	r := store.New(db)
@@ -42,8 +44,8 @@ func TestStrategyRunOnceCommitsStateAndOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := r.CreateExecutionBinding(context.Background(), domain.ExecutionBinding{
-		ExecutionBindingID: "execution-1", GroupID: "group-1", AccountID: "account-1",
-		ChannelID: "channel-1", Mode: "paper", CapitalAmount: "100", QuoteAsset: "USDT", Status: "enabled",
+		ExecutionBindingID: "execution-1", GroupID: "group-1", ExchangeAccountID: "account-1",
+		Mode: "paper", Status: "enabled",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +61,7 @@ func TestStrategyRunOnceCommitsStateAndOutbox(t *testing.T) {
 	svc := &action.Service{Repo: r, Engine: e}
 	task := domain.Task{
 		RunID: "run-1", BindingID: "b1", StrategyID: d.StrategyID, Version: d.Version,
-		TriggerBarTime: "2026-07-11T10:00:00Z", DataRevision: "revision-1",
+		TriggerBarTime: time.Now().UTC().Format(time.RFC3339Nano), DataRevision: "revision-1",
 		PreviousState: domain.State{BindingID: "b1", Revision: 0, StateJSON: "{}"},
 	}
 	out, inputHash, err := svc.Evaluate(context.Background(), task, d)

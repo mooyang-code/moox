@@ -25,7 +25,7 @@ func TestRunOnceEvaluatesAndOptionallyCommits(t *testing.T) {
 	if err := db.Exec(schema.AllSQL()).Error; err != nil {
 		t.Fatal(err)
 	}
-	source := `def run(context, data, params, state): return {"action":"rebalance","targets":[{"instrument_id":"BTC","target_weight":"0.25"}],"next_state":{"revision":context["data_revision"],"close":data.iloc[0]["close"]}}`
+	source := `def run(context, data, params, state): return {"action":"rebalance","targets":[{"instrument_id":"BTC","symbol":"BTCUSDT","target_quantity":"0.25"}],"next_state":{"revision":context["data_revision"],"close":data.iloc[0]["close"]}}`
 	h := sha256.Sum256([]byte(source))
 	d := domain.StrategyDefinition{StrategyID: "demo", Version: "1.0.0", API: "moox.strategy/v1", SourceCode: source, SourceHash: hex.EncodeToString(h[:]), Status: "enabled"}
 	r := store.New(db)

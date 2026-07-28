@@ -72,10 +72,11 @@ func strategyEventData(id string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return registry.MarshalMessage(events.TradeRebalanceRequested, &tradeeventpb.RebalanceRequested{
-		RequestId: id, StrategyRunId: "strategy-" + id, ExecutionBindingId: "execution-1",
-		AccountId: "account-1", ChannelId: "channel-1", Mode: "paper", DataRevision: "revision-1",
-		CapitalAmount: "100", QuoteAsset: "USDT", CommandSequence: 1,
+	return registry.MarshalMessage(events.TradeTargetRequested, &tradeeventpb.TargetIntent{
+		ExecutionId: id, StrategyRunId: "strategy-" + id, ExecutionBindingId: "execution-1",
+		ExchangeAccountId: "account-1", DataRevision: "revision-1", CommandSequence: 1,
+		NotAfterUnixMs: time.Now().Add(time.Minute).UnixMilli(),
+		Targets:        []*tradeeventpb.TargetPosition{{InstrumentId: "BTC-USDT", Symbol: "BTCUSDT", TargetQuantity: "1"}},
 	}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "execution-1"})
 }
 
