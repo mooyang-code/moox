@@ -104,6 +104,15 @@ syntax = "proto3";
 message ExchangeAccount {
   string exchange = 1;
 }
+
+message ExchangeBraceText {
+  string marker = 1 [json_name = "{"];
+  // {
+}
+
+message Telemetry {
+  string provider = 1;
+}
 EOF
 
 cat >"${TMP}/packages/tradeeventpb/generated.pb.go" <<'EOF'
@@ -120,9 +129,20 @@ export interface ExchangeOrder {
 export interface TradeClient {
   provider?: ConfigProvider;
   providers?: ConfigProvider[];
+  vueConfig?: Vue.ConfigProvider;
   configList?: ReadonlyArray<ConfigProvider>;
   configPromise?: Promise<ConfigProvider[]>;
 }
+
+export interface ExchangeBraceText {
+  marker: "{";
+  // {
+}
+const providerAfterBrace = "telemetry";
+
+export function configureTrade(
+  provider: Vue.ConfigProvider,
+) {}
 
 export type ExchangeID = string;
 const provider = "telemetry";
@@ -131,6 +151,8 @@ EOF
 cat >"${TMP}/web/src/api/trade/accepted.yaml" <<'EOF'
 telemetry:
   tracer_provider: otel
+"telemetry":
+  provider: otel
 EOF
 
 cat >"${TMP}/web/src/api/trade/accepted.md" <<'EOF'
@@ -239,6 +261,17 @@ type ExchangeAccount struct {
 }
 
 func SyncExchange(broker TracerProvider) {}
+EOF
+
+cat >"${TMP}/modules/trade/internal/bad_provider_qualifier.go" <<'EOF'
+package trade
+
+type TradeTelemetry struct {
+	Source binance.ConfigProvider
+	Other OKX.TracerProvider
+}
+
+func SyncExchange(provider binance.ConfigProvider) {}
 EOF
 
 cat >"${TMP}/modules/trade/internal/bad_type_expression.go" <<'EOF'
@@ -413,6 +446,20 @@ message exchangeaccount {
 }
 EOF
 
+cat >"${TMP}/packages/tradeeventpb/bad_braces.proto" <<'EOF'
+syntax = "proto3";
+
+message ExchangeStringBrace {
+  string marker = 1 [json_name = "}"];
+  string provider = 2;
+}
+
+message TradeCommentBrace {
+  // }
+  string broker = 1;
+}
+EOF
+
 cat >"${TMP}/web/src/api/trade/bad.ts" <<'EOF'
 export interface ExchangeOrder {
   venue?: string;
@@ -426,6 +473,34 @@ export interface TradeClient {
   venue?: ConfigProvider[];
   platform?: Promise<ConfigProvider>;
 }
+EOF
+
+cat >"${TMP}/web/src/api/trade/bad_provider_qualifier.ts" <<'EOF'
+export interface TradeClient {
+  provider?: Binance.ConfigProvider;
+  source?: OKX.TracerProvider;
+}
+EOF
+
+cat >"${TMP}/web/src/api/trade/bad_braces.ts" <<'EOF'
+export interface ExchangeStringBrace {
+  marker: "}";
+  provider?: string;
+}
+
+export interface TradeCommentBrace {
+  // }
+  broker?: string;
+}
+EOF
+
+cat >"${TMP}/web/src/api/trade/bad_function.ts" <<'EOF'
+export function syncExchange(
+  provider: string,
+  broker: string,
+  venue: string,
+  platform: string,
+) {}
 EOF
 
 cat >"${TMP}/web/src/api/trade/bad_multiline.ts" <<'EOF'
@@ -474,6 +549,12 @@ trade:
 exchange:
   venue: spot
 exchangeprovider: binance
+"exchange":
+  provider: binance
+'trade':
+  broker: spot
+  venue: spot
+  platform: api
 EOF
 
 cat >"${TMP}/web/src/api/trade/bad.md" <<'EOF'
@@ -503,12 +584,14 @@ missing_fixture=false
 for fixture in \
   bad.go bad_interface.go bad_receiver.go bad_okx.go bad_lowercase.go \
   bad_statements.go bad_third_party_name.go \
-  bad_third_party_identifier.go bad_type_expression.go bad_local_var.go \
+  bad_third_party_identifier.go bad_provider_qualifier.go \
+  bad_type_expression.go bad_local_var.go \
   bad_type_specs.go bad_generic_constraints.go bad_recursive_types.go \
   bad_results.go bad_short_decl.go bad_provider_shadow.go bad_body_expressions.go \
   bad_range.go bad_secretclient.go \
   bad_secret_wire.go bad_struct_tags.go bad.proto bad_multiline.proto \
-  bad_lowercase.proto bad.ts bad_third_party_name.ts bad_multiline.ts \
+  bad_lowercase.proto bad_braces.proto bad.ts bad_third_party_name.ts \
+  bad_provider_qualifier.ts bad_braces.ts bad_function.ts bad_multiline.ts \
   bad_union.ts bad_lowercase.ts \
   bad.yaml bad.md; do
   if ! rg -q --fixed-strings "${fixture}:" "${TMP}/bad.out"; then
@@ -531,6 +614,8 @@ for expected in \
   bad_third_party_name.go:6 bad_third_party_name.go:9 bad_third_party_name.go:11 \
   bad_third_party_identifier.go:4 bad_third_party_identifier.go:7 \
   bad_third_party_identifier.go:10 \
+  bad_provider_qualifier.go:4 bad_provider_qualifier.go:5 \
+  bad_provider_qualifier.go:8 \
   bad_type_expression.go:6 bad_type_expression.go:10 bad_type_expression.go:13 \
   bad_local_var.go:4 bad_type_specs.go:5 bad_type_specs.go:6 \
   bad_generic_constraints.go:5 bad_generic_constraints.go:7 \
@@ -543,12 +628,17 @@ for expected in \
   bad_secretclient.go:12 \
   bad_secret_wire.go:4 bad_struct_tags.go:4 bad_struct_tags.go:5 \
   bad_multiline.proto:5 bad_lowercase.proto:4 bad_lowercase.proto:5 \
+  bad_braces.proto:5 bad_braces.proto:10 \
   bad_third_party_name.ts:2 bad_third_party_name.ts:3 \
   bad_third_party_name.ts:4 bad_third_party_name.ts:5 \
+  bad_provider_qualifier.ts:2 bad_provider_qualifier.ts:3 \
+  bad_braces.ts:3 bad_braces.ts:8 \
+  bad_function.ts:2 bad_function.ts:3 bad_function.ts:4 bad_function.ts:5 \
   bad_multiline.ts:3 bad_multiline.ts:8 \
   bad_union.ts:3 bad_union.ts:7 bad_union.ts:11 bad_union.ts:14 \
   bad_lowercase.ts:2 bad_lowercase.ts:3 bad_lowercase.ts:4 \
   bad.yaml:3 bad.yaml:4 bad.yaml:5 bad.yaml:7 bad.yaml:8 \
+  bad.yaml:10 bad.yaml:12 bad.yaml:13 bad.yaml:14 \
   bad.md:4 bad.md:5 bad.md:6 bad.md:9 bad.md:12; do
   rg -q --fixed-strings "${expected}:" "${TMP}/bad.out" || {
     echo "checker did not report ${expected}" >&2
@@ -566,6 +656,7 @@ rm \
   "${TMP}/modules/trade/internal/bad_statements.go" \
   "${TMP}/modules/trade/internal/bad_third_party_name.go" \
   "${TMP}/modules/trade/internal/bad_third_party_identifier.go" \
+  "${TMP}/modules/trade/internal/bad_provider_qualifier.go" \
   "${TMP}/modules/trade/internal/bad_type_expression.go" \
   "${TMP}/modules/trade/internal/bad_local_var.go" \
   "${TMP}/modules/trade/internal/bad_type_specs.go" \
@@ -582,8 +673,12 @@ rm \
   "${TMP}/packages/tradeeventpb/bad.proto" \
   "${TMP}/packages/tradeeventpb/bad_multiline.proto" \
   "${TMP}/packages/tradeeventpb/bad_lowercase.proto" \
+  "${TMP}/packages/tradeeventpb/bad_braces.proto" \
   "${TMP}/web/src/api/trade/bad.ts" \
   "${TMP}/web/src/api/trade/bad_third_party_name.ts" \
+  "${TMP}/web/src/api/trade/bad_provider_qualifier.ts" \
+  "${TMP}/web/src/api/trade/bad_braces.ts" \
+  "${TMP}/web/src/api/trade/bad_function.ts" \
   "${TMP}/web/src/api/trade/bad_multiline.ts" \
   "${TMP}/web/src/api/trade/bad_union.ts" \
   "${TMP}/web/src/api/trade/bad_lowercase.ts" \

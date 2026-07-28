@@ -17,11 +17,12 @@ import (
 	"unicode"
 )
 
-var declarationPattern = regexp.MustCompile(`(?i)^\s*(?:(?:export|declare)\s+)*(message|interface|type|class|enum|service)\s+([A-Za-z_][A-Za-z0-9_]*)`)
+var declarationPattern = regexp.MustCompile(`(?i)^\s*(?:(?:export|declare)\s+)*(message|interface|type|class|enum|service|function)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 var sourceIdentifierPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+var qualifiedProviderTypePattern = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*\.\s*(TracerProvider|ConfigProvider)`)
 var thirdPartyProviderFieldPattern = regexp.MustCompile(`^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:\s*(.+?)\s*[;,]?\s*$`)
 var structTagEntryPattern = regexp.MustCompile(`([A-Za-z0-9_-]+):"([^"]*)"`)
-var yamlMappingPattern = regexp.MustCompile(`^\s*(?:-\s*)?([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$`)
+var yamlMappingPattern = regexp.MustCompile(`^\s*(?:-\s*)?(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s*:\s*(.*)$`)
 var markdownHeadingPattern = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
 var defaultRoots = []string{
 	"modules/trade",
@@ -632,13 +633,25 @@ func explicitThirdPartyProviderType(expression ast.Expr) bool {
 
 	found := false
 	safe := true
+	selectorTypePositions := make(map[token.Pos]bool)
 	ast.Inspect(expression, func(node ast.Node) bool {
+		if selector, ok := node.(*ast.SelectorExpr); ok &&
+			thirdPartyProviderTypeName(selector.Sel.Name) {
+			selectorTypePositions[selector.Sel.Pos()] = true
+			found = true
+			if !thirdPartyProviderQualifierAllowed(selector.X) {
+				safe = false
+			}
+			return true
+		}
 		identifier, ok := node.(*ast.Ident)
 		if !ok {
 			return true
 		}
-		switch identifier.Name {
-		case "TracerProvider", "ConfigProvider":
+		if selectorTypePositions[identifier.Pos()] {
+			return true
+		}
+		if thirdPartyProviderTypeName(identifier.Name) {
 			found = true
 			return true
 		}
@@ -648,6 +661,26 @@ func explicitThirdPartyProviderType(expression ast.Expr) bool {
 		return true
 	})
 	return found && safe
+}
+
+func thirdPartyProviderTypeName(name string) bool {
+	return name == "TracerProvider" || name == "ConfigProvider"
+}
+
+func thirdPartyProviderQualifierAllowed(expression ast.Expr) bool {
+	safe := true
+	ast.Inspect(expression, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		tokens := terminologyTokens(identifier.Name)
+		if containsForbiddenToken(tokens) || containsDomainToken(tokens) {
+			safe = false
+		}
+		return true
+	})
+	return safe
 }
 
 func explicitThirdPartyProviderValue(expression ast.Expr) bool {
@@ -780,6 +813,7 @@ func goNodeTokensInScope(node ast.Node, scope *providerScope) []string {
 	}
 
 	nonBindingPositions := make(map[token.Pos]bool)
+	hostileProviderTypePositions := make(map[token.Pos]bool)
 	ast.Inspect(node, func(current ast.Node) bool {
 		if literal, ok := current.(*ast.FuncLit); ok && ast.Node(literal) != node {
 			return false
@@ -787,6 +821,10 @@ func goNodeTokensInScope(node ast.Node, scope *providerScope) []string {
 		switch value := current.(type) {
 		case *ast.SelectorExpr:
 			nonBindingPositions[value.Sel.Pos()] = true
+			if thirdPartyProviderTypeName(value.Sel.Name) &&
+				!thirdPartyProviderQualifierAllowed(value.X) {
+				hostileProviderTypePositions[value.Sel.Pos()] = true
+			}
 		case *ast.KeyValueExpr:
 			if identifier, ok := value.Key.(*ast.Ident); ok {
 				nonBindingPositions[identifier.Pos()] = true
@@ -805,7 +843,11 @@ func goNodeTokensInScope(node ast.Node, scope *providerScope) []string {
 			if !nonBindingPositions[value.Pos()] && scope.allowed(value.Name) {
 				return true
 			}
-			tokens = append(tokens, sourceTokens(value.Name)...)
+			if hostileProviderTypePositions[value.Pos()] {
+				tokens = append(tokens, terminologyTokens(value.Name)...)
+			} else {
+				tokens = append(tokens, sourceTokens(value.Name)...)
+			}
 		case *ast.BasicLit:
 			text := value.Value
 			if value.Kind == token.STRING || value.Kind == token.CHAR {
@@ -860,6 +902,15 @@ func isDomainToken(item string) bool {
 	}
 }
 
+func containsDomainToken(tokens []string) bool {
+	for _, item := range tokens {
+		if isDomainToken(item) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *checker) addTokens(path string, line int, context, tokens []string) {
 	term, ok := exchangeSynonymTokens(append(append([]string{}, context...), tokens...))
 	if !ok {
@@ -880,16 +931,19 @@ func (c *checker) scanText(path string) error {
 	awaitingTypeBody := false
 	typeAliasBranchSeen := false
 	typeAliasRequiresNext := false
+	var lexState textLexState
 	for index, line := range strings.Split(string(contents), "\n") {
+		openBraces, closeBraces := textBraceCounts(line, &lexState)
+		hasOpeningBrace := openBraces > 0
 		declaration := false
 		if match := declarationPattern.FindStringSubmatch(line); len(match) == 3 {
 			kind := strings.ToLower(match[1])
 			context = match[2]
 			depth = 0
 			declaration = true
-			awaitingBrace = kind != "type" && !strings.Contains(line, "{")
+			awaitingBrace = kind != "type" && !hasOpeningBrace
 			awaitingTypeBody = kind == "type" &&
-				!strings.Contains(line, "{") &&
+				!hasOpeningBrace &&
 				typeAliasAwaitsBody(line)
 			typeAliasRequiresNext = kind == "type" && typeAliasEndsWithOperator(line)
 			typeAliasBranchSeen = typeAliasRequiresNext
@@ -898,7 +952,7 @@ func (c *checker) scanText(path string) error {
 			!typeAliasRequiresNext &&
 			!ignorableTextLine(line) &&
 			!typeAliasContinuationLine(line) &&
-			!strings.Contains(line, "{") {
+			!hasOpeningBrace {
 			context = ""
 			awaitingTypeBody = false
 			typeAliasBranchSeen = false
@@ -908,8 +962,6 @@ func (c *checker) scanText(path string) error {
 			continue
 		}
 
-		openBraces := strings.Count(line, "{")
-		closeBraces := strings.Count(line, "}")
 		if openBraces > 0 || depth > 0 {
 			awaitingBrace = false
 			awaitingTypeBody = false
@@ -951,6 +1003,54 @@ func (c *checker) scanText(path string) error {
 	return nil
 }
 
+type textLexState struct {
+	blockComment bool
+	quote        byte
+}
+
+func textBraceCounts(line string, state *textLexState) (int, int) {
+	var openBraces, closeBraces int
+	for index := 0; index < len(line); index++ {
+		current := line[index]
+		if state.blockComment {
+			if current == '*' && index+1 < len(line) && line[index+1] == '/' {
+				state.blockComment = false
+				index++
+			}
+			continue
+		}
+		if state.quote != 0 {
+			if current == '\\' {
+				index++
+				continue
+			}
+			if current == state.quote {
+				state.quote = 0
+			}
+			continue
+		}
+		if current == '/' && index+1 < len(line) {
+			switch line[index+1] {
+			case '/':
+				return openBraces, closeBraces
+			case '*':
+				state.blockComment = true
+				index++
+				continue
+			}
+		}
+		switch current {
+		case '"', '\'', '`':
+			state.quote = current
+		case '{':
+			openBraces++
+		case '}':
+			closeBraces++
+		}
+	}
+	return openBraces, closeBraces
+}
+
 type indentedDomainContext struct {
 	indent  int
 	domains []string
@@ -983,16 +1083,23 @@ func (c *checker) scanYAML(path string) error {
 		)
 
 		match := yamlMappingPattern.FindStringSubmatch(line)
-		if len(match) != 3 {
+		if len(match) != 5 {
 			continue
 		}
-		value := strings.TrimSpace(match[2])
+		key := match[1]
+		if key == "" {
+			key = match[2]
+		}
+		if key == "" {
+			key = match[3]
+		}
+		value := strings.TrimSpace(match[4])
 		if value != "" && !strings.HasPrefix(value, "#") {
 			continue
 		}
 		contexts = append(contexts, indentedDomainContext{
 			indent:  indent,
-			domains: extendDomainContext(domains, sourceTokens(match[1])),
+			domains: extendDomainContext(domains, sourceTokens(key)),
 		})
 	}
 	return nil
@@ -1099,17 +1206,33 @@ func textLineForScan(line string) string {
 
 func explicitThirdPartyProviderText(text string) bool {
 	found := false
-	for _, identifier := range sourceIdentifierPattern.FindAllString(text, -1) {
-		switch identifier {
-		case "TracerProvider", "ConfigProvider":
-			found = true
-		default:
-			if containsForbiddenToken(terminologyTokens(identifier)) {
+	hostilePositions := hostileQualifiedProviderTypePositions(text)
+	for _, match := range sourceIdentifierPattern.FindAllStringIndex(text, -1) {
+		identifier := text[match[0]:match[1]]
+		if thirdPartyProviderTypeName(identifier) {
+			if hostilePositions[match[0]] {
 				return false
 			}
+			found = true
+			continue
+		}
+		if containsForbiddenToken(terminologyTokens(identifier)) {
+			return false
 		}
 	}
 	return found
+}
+
+func hostileQualifiedProviderTypePositions(text string) map[int]bool {
+	positions := make(map[int]bool)
+	for _, match := range qualifiedProviderTypePattern.FindAllStringSubmatchIndex(text, -1) {
+		qualifier := text[match[2]:match[3]]
+		tokens := terminologyTokens(qualifier)
+		if containsForbiddenToken(tokens) || containsDomainToken(tokens) {
+			positions[match[4]] = true
+		}
+	}
+	return positions
 }
 
 func (c *checker) addTextAllowingThirdPartyTypes(path string, line int, text string) {
@@ -1140,8 +1263,14 @@ func displayPath(path string) string {
 
 func exchangeSynonymWithThirdPartyTypes(text string) (string, bool) {
 	var tokens []string
-	for _, identifier := range sourceIdentifierPattern.FindAllString(text, -1) {
-		tokens = append(tokens, sourceTokens(identifier)...)
+	hostilePositions := hostileQualifiedProviderTypePositions(text)
+	for _, match := range sourceIdentifierPattern.FindAllStringIndex(text, -1) {
+		identifier := text[match[0]:match[1]]
+		if hostilePositions[match[0]] {
+			tokens = append(tokens, terminologyTokens(identifier)...)
+		} else {
+			tokens = append(tokens, sourceTokens(identifier)...)
+		}
 	}
 	return exchangeSynonymTokens(tokens)
 }
