@@ -16,7 +16,10 @@ go build -o "${CHECKER}" "${ROOT}/scripts/check-trade-exchange-terminology.go"
 cat >"${TMP}/modules/trade/internal/accepted.go" <<'EOF'
 package trade
 
-import trace "example.com/trace"
+import (
+	sdktrace "example.com/sdktrace"
+	trace "example.com/trace"
+)
 
 type ExchangeAccount struct{}
 type ExchangeAdapter struct{}
@@ -38,6 +41,11 @@ func NewTradeRuntime(provider trace.TracerProvider) {
 	runtime.tracerProvider = provider
 }
 func NewTradeConfig(provider ConfigProvider)         {}
+func TradeRun(provider trace.TracerProvider) error {
+	provider, err := Load()
+	_ = provider
+	return err
+}
 func NewTradeComposite(
 	providers []trace.TracerProvider,
 	array [2]*trace.TracerProvider,
@@ -50,6 +58,8 @@ func BuildTradeRuntime() {
 	_ = tradeTracerProvider
 	providers := make([]trace.TracerProvider, 0)
 	_ = providers
+	provider := sdktrace.NewTracerProvider()
+	_ = provider
 }
 
 type TradeTelemetry[T trace.TracerProvider] struct {
@@ -255,6 +265,17 @@ func BuildTradeRuntime() {
 }
 EOF
 
+cat >"${TMP}/modules/trade/internal/bad_provider_shadow.go" <<'EOF'
+package trade
+
+func TradeShadow(provider trace.TracerProvider) {
+	{
+		provider := "binance"
+		_ = provider
+	}
+}
+EOF
+
 cat >"${TMP}/modules/trade/internal/bad_range.go" <<'EOF'
 package trade
 
@@ -350,6 +371,13 @@ export type ExchangeMode =
 export type ExchangeSource =
   | "manual"
   | Provider;
+
+export type ExchangeTrailing =
+  "spot" |
+  Broker;
+
+export type ExchangeInline = "spot" |
+  Provider;
 EOF
 
 cat >"${TMP}/web/src/api/trade/bad.yaml" <<'EOF'
@@ -373,7 +401,7 @@ for fixture in \
   bad.go bad_interface.go bad_receiver.go bad_okx.go bad_third_party_name.go \
   bad_third_party_identifier.go bad_type_expression.go bad_local_var.go \
   bad_type_specs.go bad_generic_constraints.go bad_recursive_types.go \
-  bad_results.go bad_short_decl.go bad_range.go bad_secretclient.go \
+  bad_results.go bad_short_decl.go bad_provider_shadow.go bad_range.go bad_secretclient.go \
   bad_secret_wire.go bad_struct_tags.go bad.proto bad_multiline.proto bad.ts \
   bad_third_party_name.ts bad_multiline.ts bad_union.ts \
   bad.yaml bad.md; do
@@ -398,14 +426,14 @@ for expected in \
   bad_generic_constraints.go:5 bad_generic_constraints.go:7 \
   bad_recursive_types.go:8 bad_recursive_types.go:9 bad_recursive_types.go:10 \
   bad_recursive_types.go:11 bad_results.go:5 bad_results.go:6 \
-  bad_short_decl.go:4 bad_range.go:4 bad_secretclient.go:8 \
+  bad_short_decl.go:4 bad_provider_shadow.go:5 bad_range.go:4 bad_secretclient.go:8 \
   bad_secretclient.go:12 \
   bad_secret_wire.go:4 bad_struct_tags.go:4 bad_struct_tags.go:5 \
   bad_multiline.proto:5 \
   bad_third_party_name.ts:2 bad_third_party_name.ts:3 \
   bad_third_party_name.ts:4 bad_third_party_name.ts:5 \
   bad_multiline.ts:3 bad_multiline.ts:8 \
-  bad_union.ts:3 bad_union.ts:7; do
+  bad_union.ts:3 bad_union.ts:7 bad_union.ts:11 bad_union.ts:14; do
   rg -q --fixed-strings "${expected}:" "${TMP}/bad.out" || {
     echo "checker did not report ${expected}" >&2
     cat "${TMP}/bad.out" >&2
@@ -427,6 +455,7 @@ rm \
   "${TMP}/modules/trade/internal/bad_recursive_types.go" \
   "${TMP}/modules/trade/internal/bad_results.go" \
   "${TMP}/modules/trade/internal/bad_short_decl.go" \
+  "${TMP}/modules/trade/internal/bad_provider_shadow.go" \
   "${TMP}/modules/trade/internal/bad_range.go" \
   "${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" \
   "${TMP}/modules/trade/internal/bad_secret_wire.go" \

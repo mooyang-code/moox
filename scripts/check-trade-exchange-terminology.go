@@ -209,14 +209,20 @@ func (c *checker) scanGoAssignment(path string, assignment *ast.AssignStmt, cont
 	var statementTokens []string
 	for index, left := range assignment.Lhs {
 		allowed := identifierAllowedInScope(left, scope)
+		newGenericBinding := false
 		if identifier, ok := left.(*ast.Ident); ok &&
 			assignment.Tok == token.DEFINE &&
 			genericProviderIdentifier(identifier.Name) &&
 			!scope.declaredHere(identifier.Name) {
+			newGenericBinding = true
 			allowed = explicitThirdPartyProviderValue(matchedAssignmentValue(assignment, index))
 		}
 		if !allowed {
-			statementTokens = append(statementTokens, goNodeTokensInScope(left, scope)...)
+			if newGenericBinding {
+				statementTokens = append(statementTokens, goNodeTokens(left)...)
+			} else {
+				statementTokens = append(statementTokens, goNodeTokensInScope(left, scope)...)
+			}
 		}
 	}
 	for _, right := range assignment.Rhs {
@@ -280,12 +286,15 @@ func (c *checker) scanGoBody(
 	context []string,
 	scope *providerScope,
 ) {
-	ast.Walk(&goBodyVisitor{
+	visitor := &goBodyVisitor{
 		checker: c,
 		path:    path,
 		context: context,
 		scope:   scope,
-	}, body)
+	}
+	for _, statement := range body.List {
+		ast.Walk(visitor, statement)
+	}
 }
 
 type goBodyVisitor struct {
@@ -545,6 +554,9 @@ func explicitThirdPartyProviderType(expression ast.Expr) bool {
 func explicitThirdPartyProviderValue(expression ast.Expr) bool {
 	switch value := expression.(type) {
 	case *ast.CallExpr:
+		if standardThirdPartyProviderConstructor(value.Fun) {
+			return true
+		}
 		if identifier, ok := value.Fun.(*ast.Ident); ok &&
 			(identifier.Name == "make" || identifier.Name == "new") &&
 			len(value.Args) > 0 {
@@ -556,6 +568,15 @@ func explicitThirdPartyProviderValue(expression ast.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func standardThirdPartyProviderConstructor(expression ast.Expr) bool {
+	selector, ok := expression.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "NewTracerProvider" {
+		return false
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	return ok && qualifier.Name == "sdktrace"
 }
 
 func providerValueSpecAllowed(spec *ast.ValueSpec, index int) bool {
@@ -771,8 +792,8 @@ func (c *checker) scanText(path string) error {
 			awaitingTypeBody = kind == "type" &&
 				!strings.Contains(line, "{") &&
 				typeAliasAwaitsBody(line)
-			typeAliasBranchSeen = false
-			typeAliasRequiresNext = false
+			typeAliasRequiresNext = kind == "type" && typeAliasEndsWithOperator(line)
+			typeAliasBranchSeen = typeAliasRequiresNext
 		} else if awaitingTypeBody &&
 			typeAliasBranchSeen &&
 			!typeAliasRequiresNext &&
@@ -809,11 +830,13 @@ func (c *checker) scanText(path string) error {
 		}
 		if awaitingTypeBody && !ignorableTextLine(line) {
 			trimmed := strings.TrimSpace(line)
-			continuation := typeAliasContinuationLine(line) || typeAliasRequiresNext
+			endsWithOperator := typeAliasEndsWithOperator(line)
+			continuation := typeAliasContinuationLine(line) ||
+				typeAliasRequiresNext ||
+				endsWithOperator
 			if continuation {
 				typeAliasBranchSeen = true
-				typeAliasRequiresNext = strings.HasSuffix(trimmed, "|") ||
-					strings.HasSuffix(trimmed, "&")
+				typeAliasRequiresNext = endsWithOperator
 				if strings.HasSuffix(trimmed, ";") {
 					context = ""
 					awaitingTypeBody = false
@@ -831,7 +854,14 @@ func (c *checker) scanText(path string) error {
 
 func typeAliasAwaitsBody(line string) bool {
 	line, _, _ = strings.Cut(line, "//")
-	return strings.HasSuffix(strings.TrimSpace(line), "=")
+	trimmed := strings.TrimSpace(line)
+	return strings.HasSuffix(trimmed, "=") || typeAliasEndsWithOperator(trimmed)
+}
+
+func typeAliasEndsWithOperator(line string) bool {
+	line, _, _ = strings.Cut(line, "//")
+	trimmed := strings.TrimSpace(line)
+	return strings.HasSuffix(trimmed, "|") || strings.HasSuffix(trimmed, "&")
 }
 
 func typeAliasContinuationLine(line string) bool {
