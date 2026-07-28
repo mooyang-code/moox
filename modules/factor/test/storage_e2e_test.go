@@ -509,16 +509,17 @@ func assertFactorRows(t *testing.T, rows []*storagepb.TimeSeriesRow, first, seco
 	require.Equal(t, first.Format(time.RFC3339Nano), rows[0].GetKey().GetDataTime())
 	require.Equal(t, second.Format(time.RFC3339Nano), rows[1].GetKey().GetDataTime())
 	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, rowFieldIDs(rows[0]))
-	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, rowFieldIDs(rows[1]))
 	firstValues := rowValues(rows[0])
 	require.InDelta(t, 1.04, firstValues["excess_return"].GetDoubleValue(), 1e-12)
 	require.InDelta(t, 1.0, firstValues["rolling_rank"].GetDoubleValue(), 1e-12)
 	secondValues := rowValues(rows[1])
 	if secondNull {
+		require.Empty(t, rowFieldIDs(rows[1]), "cleared null outputs must not expose extra fields")
 		require.Nil(t, secondValues["excess_return"], "explicit null must clear old double")
 		require.Nil(t, secondValues["rolling_rank"], "explicit null must clear old double")
 		return
 	}
+	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, rowFieldIDs(rows[1]))
 	require.InDelta(t, 1.16, secondValues["excess_return"].GetDoubleValue(), 1e-12)
 	require.InDelta(t, 2.0, secondValues["rolling_rank"].GetDoubleValue(), 1e-12)
 }
