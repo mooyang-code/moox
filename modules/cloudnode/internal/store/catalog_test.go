@@ -53,6 +53,7 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "acct-1",
 		NodeType: "scf-event", Region: "ap-guangzhou", Namespace: "default", Status: "online",
 		SupportedWorkloads: `["collect.kline"]`, DeploymentID: "dep-1",
+		LastHeartbeatAt: timePtr(repo.currentTime()),
 	}))
 	node, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
