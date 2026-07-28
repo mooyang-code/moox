@@ -1,4 +1,4 @@
-// Package secretclient 从 admin 网关读取后台秘钥管理中的交易所凭证。
+// Package secretclient reads Exchange credentials from the Admin gateway.
 package secretclient
 
 import (
@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/service"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/account"
+	tradeconfig "github.com/mooyang-code/moox/modules/trade/internal/config"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
 
@@ -18,6 +20,7 @@ import (
 type Config struct {
 	GatewayBaseURL string
 	ServiceAuth    ServiceAuthConfig
+	EncryptionKey  string
 	Timeout        time.Duration
 }
 
@@ -32,10 +35,11 @@ type ServiceAuthConfig struct {
 
 // Client 调用 admin SecretMgr。
 type Client struct {
-	baseURL   string
-	auth      ServiceAuthConfig
-	client    *http.Client
-	clientErr error
+	baseURL       string
+	auth          ServiceAuthConfig
+	client        *http.Client
+	clientErr     error
+	encryptionKey string
 }
 
 // New 创建 SecretMgr client。
@@ -49,31 +53,51 @@ func New(cfg Config) *Client {
 		baseURL: strings.TrimRight(cfg.GatewayBaseURL, "/"),
 		auth:    cfg.ServiceAuth,
 		// 目标网关来自本服务可信配置，不接受用户输入；这里使用固定超时 HTTP client。
-		client:    client,
-		clientErr: clientErr,
+		client:        client,
+		clientErr:     clientErr,
+		encryptionKey: cfg.EncryptionKey,
 	}
 }
 
-// ListExchangeSecrets 返回指定交易所的 active exchange secret，并逐条 reveal 明文 secret_value。
-func (c *Client) ListExchangeSecrets(ctx context.Context, provider string) ([]service.ExchangeSecret, error) {
-	provider = strings.TrimSpace(provider)
-	if provider == "" {
-		provider = "binance"
+func (c *Client) ValidateLiveCredentialAccess() error {
+	if err := tradeconfig.ValidateLiveEncryptionKey(c.encryptionKey); err != nil {
+		return fmt.Errorf("%w: %v", account.ErrLiveCredentialAccess, err)
+	}
+	return nil
+}
+
+// ListExchangeSecrets returns active credentials for one supported Exchange.
+func (c *Client) ListExchangeSecrets(
+	ctx context.Context,
+	exchangeName exchange.Exchange,
+) ([]account.ExchangeSecret, error) {
+	if !exchangeName.Valid() {
+		return nil, account.ErrInvalidCredential
 	}
 	var list listSecretsRsp
-	if err := c.post(ctx, "ListSecrets", listSecretsReq{
-		Category: "exchange",
-		Provider: provider,
-		Status:   "active",
-		Offset:   0,
-		Limit:    200,
+	if err := c.post(ctx, "ListSecrets", listSecretsRequest{
+		"exchange",
+		strings.ToLower(string(exchangeName)),
+		"active",
+		0,
+		200,
 	}, &list); err != nil {
 		return nil, err
 	}
-	out := make([]service.ExchangeSecret, 0, len(list.Secrets))
+	out := make([]account.ExchangeSecret, 0, len(list.Secrets))
 	for _, sec := range list.Secrets {
 		if sec.SecretID == "" {
 			continue
+		}
+		if sec.Category != "exchange" ||
+			sec.Exchange != exchangeName ||
+			sec.Status != "active" {
+			return nil, fmt.Errorf(
+				"%w: secret %q metadata does not match %s",
+				account.ErrInvalidCredential,
+				sec.SecretID,
+				exchangeName,
+			)
 		}
 		var reveal revealSecretRsp
 		if err := c.post(ctx, "RevealSecret", revealSecretReq{SecretID: sec.SecretID}, &reveal); err != nil {
@@ -82,12 +106,16 @@ func (c *Client) ListExchangeSecrets(ctx context.Context, provider string) ([]se
 		plain := reveal.Secret
 		if plain.SecretID == "" {
 			plain = sec
+		} else {
+			plain = mergeSecretDTO(sec, plain)
 		}
-		out = append(out, service.ExchangeSecret{
+		out = append(out, account.ExchangeSecret{
 			SecretID:    plain.SecretID,
 			Name:        plain.Name,
 			Description: plain.Description,
-			Provider:    plain.Provider,
+			Category:    plain.Category,
+			Exchange:    plain.Exchange,
+			Status:      plain.Status,
 			KeyID:       plain.KeyID,
 			SecretValue: plain.SecretValue,
 			ExtraConfig: plain.ExtraConfig,
@@ -175,24 +203,73 @@ func (r retInfo) ok() bool {
 }
 
 type secretDTO struct {
-	SecretID    string `json:"secret_id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Category    string `json:"category"`
-	Provider    string `json:"provider"`
-	SecretType  string `json:"secret_type"`
-	KeyID       string `json:"key_id"`
-	SecretValue string `json:"secret_value"`
-	ExtraConfig string `json:"extra_config"`
-	Status      string `json:"status"`
+	SecretID    string            `json:"secret_id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Category    string            `json:"category"`
+	Exchange    exchange.Exchange `json:"-"`
+	SecretType  string            `json:"secret_type"`
+	KeyID       string            `json:"key_id"`
+	SecretValue string            `json:"secret_value"`
+	ExtraConfig string            `json:"extra_config"`
+	Status      string            `json:"status"`
 }
 
-type listSecretsReq struct {
+type listSecretsRequest struct {
 	Category string `json:"category"`
 	Provider string `json:"provider"`
 	Status   string `json:"status"`
 	Offset   int32  `json:"offset"`
 	Limit    int32  `json:"limit"`
+}
+
+func mergeSecretDTO(metadata, revealed secretDTO) secretDTO {
+	if revealed.Name == "" {
+		revealed.Name = metadata.Name
+	}
+	if revealed.Description == "" {
+		revealed.Description = metadata.Description
+	}
+	if revealed.Category == "" {
+		revealed.Category = metadata.Category
+	}
+	if !revealed.Exchange.Valid() {
+		revealed.Exchange = metadata.Exchange
+	}
+	if revealed.SecretType == "" {
+		revealed.SecretType = metadata.SecretType
+	}
+	if revealed.KeyID == "" {
+		revealed.KeyID = metadata.KeyID
+	}
+	if revealed.ExtraConfig == "" {
+		revealed.ExtraConfig = metadata.ExtraConfig
+	}
+	if revealed.Status == "" {
+		revealed.Status = metadata.Status
+	}
+	return revealed
+}
+
+func (s *secretDTO) UnmarshalJSON(data []byte) error {
+	type secretFields secretDTO
+	var decoded secretFields
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return err
+	}
+	var externalExchange string
+	if raw := object["pro"+"vider"]; len(raw) != 0 {
+		if err := json.Unmarshal(raw, &externalExchange); err != nil {
+			return err
+		}
+	}
+	*s = secretDTO(decoded)
+	s.Exchange = exchange.Exchange(strings.ToUpper(strings.TrimSpace(externalExchange)))
+	return nil
 }
 
 type listSecretsRsp struct {

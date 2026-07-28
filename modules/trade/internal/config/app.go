@@ -1,7 +1,6 @@
 // Package config 提供 Trade 模块的应用配置加载。
 //
-// Trade 模块使用独立的 SQLite 库（账户域 + 交易域同库），
-// 并复用与 admin 一致的 AES 加密密钥用于 API 凭证加解密。
+// Trade 模块使用独立的 SQLite 库（账户域 + 交易域同库）。
 // trpc_go.yaml 由 trpc-go 运行时自动加载，本包只加载业务侧 app.yaml。
 package config
 
@@ -9,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -39,6 +39,8 @@ type DatabaseConfig struct {
 type SecurityConfig struct {
 	EncryptionKey string `yaml:"encryption_key"`
 }
+
+const rejectedEncryptionKey = "moox-cloud-secret-key-32bytes"
 
 // ControlGatewayConfig 配置 trade 调用 admin 网关的后台服务地址。
 type ControlGatewayConfig struct {
@@ -100,9 +102,7 @@ func DefaultConfig() *AppConfig {
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		Security: SecurityConfig{
-			EncryptionKey: "moox-cloud-secret-key-32bytes",
-		},
+		Security: SecurityConfig{},
 		ControlGateway: ControlGatewayConfig{
 			BaseURL: "https://106.53.107.122:11001",
 			ServiceAuth: ServiceAuthConfig{
@@ -133,6 +133,18 @@ func DefaultConfig() *AppConfig {
 		},
 		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, RebalanceConsumer: RebalanceConsumer},
 	}
+}
+
+// ValidateLiveEncryptionKey rejects material that cannot protect live credentials.
+// Paper-only startup does not call this gate and may leave the key unset.
+func ValidateLiveEncryptionKey(key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" || len([]byte(key)) < 32 || key == rejectedEncryptionKey {
+		return fmt.Errorf(
+			"MOOX_TRADE_ENCRYPTION_KEY must be at least 32 bytes and must not use the old checked-in value",
+		)
+	}
+	return nil
 }
 
 // Load 从文件加载配置，叠加默认值与环境变量覆盖。

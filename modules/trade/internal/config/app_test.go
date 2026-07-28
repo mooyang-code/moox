@@ -10,6 +10,9 @@ import (
 
 func TestDefaultConfigIncludesSyncDefaults(t *testing.T) {
 	cfg := DefaultConfig()
+	if cfg.Security.EncryptionKey != "" {
+		t.Fatalf("default encryption key = %q, want empty", cfg.Security.EncryptionKey)
+	}
 	if !cfg.Sync.Enabled {
 		t.Fatalf("sync must be enabled by default")
 	}
@@ -116,6 +119,26 @@ func TestLoad_InvalidYAML_ShouldReturnParseError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse config file")
+}
+
+func TestValidateLiveEncryptionKeyFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "empty"},
+		{name: "short", key: "too-short"},
+		{name: "old checked in literal", key: "moox-cloud-secret-key-32bytes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateLiveEncryptionKey(tt.key)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "MOOX_TRADE_ENCRYPTION_KEY")
+		})
+	}
+
+	require.NoError(t, ValidateLiveEncryptionKey("0123456789abcdef0123456789abcdef"))
 }
 
 func TestValidate_SQLiteWithoutPath_ShouldFail(t *testing.T) {

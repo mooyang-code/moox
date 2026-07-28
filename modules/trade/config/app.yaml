@@ -9,9 +9,10 @@ database:
   conn_max_lifetime: 1h
   conn_max_idle_time: 10m
 
-# 安全配置（API 凭证加解密）。生产环境请改为强随机 32 字节值。
+# Paper-only startup may leave this empty. Live accounts require
+# MOOX_TRADE_ENCRYPTION_KEY with at least 32 bytes.
 security:
-  encryption_key: "moox-cloud-secret-key-32bytes"
+  encryption_key: ""
 
 control_gateway:
   base_url: "https://106.53.107.122:11001"
