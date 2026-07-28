@@ -2,7 +2,6 @@ package httpclient
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -91,16 +90,6 @@ func TestClient_Do_DefaultMethodAndTimeout_ShouldUseGetAndDefaultTimeout(t *test
 	require.NoError(t, err)
 }
 
-func TestDecodeJSON_ValidAndEmptyPayload_ShouldDecode(t *testing.T) {
-	var got map[string]any
-	err := DecodeJSON([]byte(`{"name":"btc"}`), &got)
-	require.NoError(t, err)
-	assert.Equal(t, "btc", got["name"])
-
-	err = DecodeJSON(nil, &got)
-	assert.NoError(t, err)
-}
-
 func TestTruncate_LongBody_ShouldAppendEllipsis(t *testing.T) {
 	assert.Equal(t, "abcd...", truncate([]byte("abcdef"), 4))
 	assert.Equal(t, "abc", truncate([]byte("abc"), 4))
@@ -118,28 +107,4 @@ func TestClient_Do_WithQuery_ShouldEncodeQueryString(t *testing.T) {
 	q.Set("symbol", "BTCUSDT")
 	_, err := c.Do(context.Background(), &Request{Path: "/klines", Query: q})
 	require.NoError(t, err)
-}
-
-func TestDecodeJSON_InvalidJSON_ShouldReturnError(t *testing.T) {
-	var v map[string]any
-	err := DecodeJSON([]byte("{"), &v)
-	assert.Error(t, err)
-}
-
-func TestClient_Do_ResponseBody_ShouldRoundTripThroughJSON(t *testing.T) {
-	type payload struct {
-		Code int `json:"code"`
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(payload{Code: 0})
-	}))
-	defer server.Close()
-
-	c := New(server.URL)
-	raw, err := c.Do(context.Background(), &Request{Path: "/ok"})
-	require.NoError(t, err)
-
-	var got payload
-	require.NoError(t, DecodeJSON(raw, &got))
-	assert.Equal(t, 0, got.Code)
 }

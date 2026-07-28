@@ -4,7 +4,6 @@ package httpclient
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -104,14 +103,6 @@ func (c *Client) Do(ctx context.Context, req *Request) ([]byte, error) {
 		}
 	}
 	return raw, nil
-}
-
-// DecodeJSON 把 raw 解析到 v。
-func DecodeJSON(raw []byte, v interface{}) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	return json.Unmarshal(raw, v)
 }
 
 func truncate(b []byte, n int) string {

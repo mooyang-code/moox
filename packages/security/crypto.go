@@ -214,18 +214,3 @@ func NewSalt() (string, error) {
 	}
 	return hex.EncodeToString(buf), nil
 }
-
-// MaskSecret keeps a secret's outer characters and replaces its middle with
-// four asterisks. Short values are fully masked.
-func MaskSecret(value string, prefix, suffix int) string {
-	if prefix < 0 {
-		prefix = 0
-	}
-	if suffix < 0 {
-		suffix = 0
-	}
-	if len(value) <= prefix+suffix {
-		return "****"
-	}
-	return value[:prefix] + "****" + value[len(value)-suffix:]
-}

@@ -189,7 +189,7 @@ func TestAccountBoundAdapterLooksUpTerminalOrderByClientOrderID(t *testing.T) {
 	}
 }
 
-func TestReduceOnlySurvivesRequestResponseAndPrivateEventTypes(t *testing.T) {
+func TestReduceOnlySurvivesRequestResponse(t *testing.T) {
 	adapter := &stubAdapter{config: AccountConfig{Exchange: ExchangeBinance}}
 	response, err := adapter.PlaceOrder(context.Background(), OrderRequest{
 		ClientOrderID: "reduce-client",
@@ -201,33 +201,4 @@ func TestReduceOnlySurvivesRequestResponseAndPrivateEventTypes(t *testing.T) {
 	if !response.ReduceOnly {
 		t.Fatal("PlaceOrder() response lost ReduceOnly")
 	}
-
-	handler := &recordingEventHandler{}
-	if err := handler.OnOrder(context.Background(), response); err != nil {
-		t.Fatalf("OnOrder() error = %v", err)
-	}
-	if !handler.order.ReduceOnly {
-		t.Fatal("private Order event lost ReduceOnly")
-	}
-}
-
-type recordingEventHandler struct {
-	order Order
-}
-
-func (h *recordingEventHandler) OnOrder(_ context.Context, order Order) error {
-	h.order = order
-	return nil
-}
-
-func (*recordingEventHandler) OnFill(context.Context, Fill) error {
-	return nil
-}
-
-func (*recordingEventHandler) OnPosition(context.Context, Position) error {
-	return nil
-}
-
-func (*recordingEventHandler) OnAccountSnapshot(context.Context, AccountSnapshot) error {
-	return nil
 }

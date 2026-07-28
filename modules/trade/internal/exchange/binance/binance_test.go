@@ -13,13 +13,41 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/contracttest"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 )
 
 func TestAdapterRequestValidationContract(t *testing.T) {
 	adapter := testAdapter(exchange.MarketTypeSpot, "http://unused")
-	contracttest.RunRequestValidation(t, exchange.MarketTypeSpot, adapter.PlaceOrder)
+	base := orderRequest(exchange.OrderTypeMarket)
+	price := shared.MustDecimal("100")
+	tests := []struct {
+		name   string
+		mutate func(*exchange.OrderRequest)
+	}{
+		{"MARKET rejects price", func(request *exchange.OrderRequest) {
+			request.LimitPrice = &price
+		}},
+		{"MARKET rejects time in force", func(request *exchange.OrderRequest) {
+			request.TimeInForce = exchange.TimeInForceGTC
+		}},
+		{"LIMIT requires price", func(request *exchange.OrderRequest) {
+			request.OrderType = exchange.OrderTypeLimit
+			request.TimeInForce = exchange.TimeInForceGTC
+		}},
+		{"SPOT rejects reduce only", func(request *exchange.OrderRequest) {
+			request.ReduceOnly = true
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := base
+			test.mutate(&request)
+			_, err := adapter.PlaceOrder(context.Background(), request)
+			if !exchange.IsKind(err, exchange.ErrorRejected) {
+				t.Fatalf("PlaceOrder() error = %v, want REJECTED", err)
+			}
+		})
+	}
 }
 
 func TestAdapterOrderMappings(t *testing.T) {
@@ -348,7 +376,23 @@ func testAdapter(market exchange.MarketType, baseURL string) *Adapter {
 		config.MarginMode = exchange.MarginModeCross
 	}
 	client := httpclient.New(baseURL)
-	return NewWithClients(config, exchange.Credential{APIKey: "key", APISecret: "secret"}, client, client)
+	return newWithClients(config, exchange.Credential{APIKey: "key", APISecret: "secret"}, client, client)
+}
+
+func newWithClients(
+	config exchange.AccountConfig,
+	credential exchange.Credential,
+	spot *httpclient.Client,
+	swap *httpclient.Client,
+) *Adapter {
+	adapter := New(config, credential)
+	if spot != nil {
+		adapter.spot = spot
+	}
+	if swap != nil {
+		adapter.swap = swap
+	}
+	return adapter
 }
 
 func orderRequest(orderType exchange.OrderType) exchange.OrderRequest {

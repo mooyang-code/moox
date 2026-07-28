@@ -33,37 +33,12 @@ type Adapter struct {
 	privateGate   chan struct{}
 }
 
-func init() {
-	exchange.Register(exchange.ExchangeOKX, func(
-		config exchange.AccountConfig,
-		credential exchange.Credential,
-	) (exchange.Adapter, error) {
-		if config.ExecutionMode == exchange.ExecutionModeLive &&
-			strings.TrimSpace(credential.Passphrase) == "" {
-			return nil, rejected("OKX live account requires passphrase", nil)
-		}
-		return New(config, credential), nil
-	})
-}
-
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
 	return &Adapter{
 		config: config, credential: credential,
 		client:      httpclient.New(defaultBaseURL),
 		instruments: make(map[string]exchange.Instrument),
 	}
-}
-
-func NewWithClient(
-	config exchange.AccountConfig,
-	credential exchange.Credential,
-	client *httpclient.Client,
-) *Adapter {
-	adapter := New(config, credential)
-	if client != nil {
-		adapter.client = client
-	}
-	return adapter
 }
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }

@@ -84,13 +84,3 @@ func validateBinding(config AccountConfig, credential Credential) error {
 	}
 	return nil
 }
-
-var defaultRegistry = NewRegistry()
-
-func Register(name Exchange, factory Factory) {
-	defaultRegistry.Register(name, factory)
-}
-
-func Bind(config AccountConfig, credential Credential) (Adapter, error) {
-	return defaultRegistry.Bind(config, credential)
-}

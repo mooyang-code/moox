@@ -607,17 +607,3 @@ func (e *Executor) now() time.Time {
 }
 
 var _ OrderService = (*orderapp.Service)(nil)
-
-func ParseProgress(raw string) (Progress, error) {
-	if strings.TrimSpace(raw) == "" {
-		return Progress{Symbols: map[string]SymbolProgress{}}, nil
-	}
-	var progress Progress
-	if err := json.Unmarshal([]byte(raw), &progress); err != nil {
-		return Progress{}, err
-	}
-	if progress.Symbols == nil {
-		progress.Symbols = map[string]SymbolProgress{}
-	}
-	return progress, nil
-}

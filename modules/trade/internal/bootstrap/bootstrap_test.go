@@ -64,6 +64,40 @@ func TestExchangeCredentialFailsClosedBeforeSecretReveal(t *testing.T) {
 	}
 }
 
+func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
+	registry := exchange.NewRegistry()
+	registerBuiltins(registry)
+	for _, name := range []exchange.Exchange{
+		exchange.ExchangeBinance,
+		exchange.ExchangeOKX,
+	} {
+		adapter, err := registry.Bind(exchange.AccountConfig{
+			ExchangeAccountID: "account-1",
+			Exchange:          name,
+			MarketType:        exchange.MarketTypeSpot,
+			ExecutionMode:     exchange.ExecutionModePaper,
+			SettlementAsset:   "USDT",
+		}, exchange.Credential{})
+		if err != nil {
+			t.Fatalf("Bind(%s) error = %v", name, err)
+		}
+		if adapter.Exchange() != name {
+			t.Fatalf("Bind(%s) adapter Exchange = %s", name, adapter.Exchange())
+		}
+	}
+
+	_, err := registry.Bind(exchange.AccountConfig{
+		ExchangeAccountID: "account-1",
+		Exchange:          exchange.ExchangeOKX,
+		MarketType:        exchange.MarketTypeSpot,
+		ExecutionMode:     exchange.ExecutionModeLive,
+		SettlementAsset:   "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret"})
+	if err == nil || !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("OKX LIVE Bind() error = %v, want passphrase rejection", err)
+	}
+}
+
 type bootstrapSecretSource struct {
 	gateErr   error
 	listCalls int

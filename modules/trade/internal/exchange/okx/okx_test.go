@@ -11,13 +11,47 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/contracttest"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 )
 
 func TestAdapterRequestValidationContract(t *testing.T) {
 	adapter := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
-	contracttest.RunRequestValidation(t, exchange.MarketTypeSpot, adapter.PlaceOrder)
+	base := exchange.OrderRequest{
+		ClientOrderID: "contract-client",
+		Symbol:        "BTC-USDT",
+		OrderType:     exchange.OrderTypeMarket,
+		Side:          exchange.SideBuy,
+		Quantity:      shared.MustDecimal("1"),
+	}
+	price := shared.MustDecimal("100")
+	tests := []struct {
+		name   string
+		mutate func(*exchange.OrderRequest)
+	}{
+		{"MARKET rejects price", func(request *exchange.OrderRequest) {
+			request.LimitPrice = &price
+		}},
+		{"MARKET rejects time in force", func(request *exchange.OrderRequest) {
+			request.TimeInForce = exchange.TimeInForceGTC
+		}},
+		{"LIMIT requires price", func(request *exchange.OrderRequest) {
+			request.OrderType = exchange.OrderTypeLimit
+			request.TimeInForce = exchange.TimeInForceGTC
+		}},
+		{"SPOT rejects reduce only", func(request *exchange.OrderRequest) {
+			request.ReduceOnly = true
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := base
+			test.mutate(&request)
+			_, err := adapter.PlaceOrder(context.Background(), request)
+			if !exchange.IsKind(err, exchange.ErrorRejected) {
+				t.Fatalf("PlaceOrder() error = %v, want REJECTED", err)
+			}
+		})
+	}
 }
 
 func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
@@ -28,7 +62,7 @@ func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
 		)
 	}))
 	defer server.Close()
-	adapter := NewWithClient(exchange.AccountConfig{
+	adapter := newWithClient(exchange.AccountConfig{
 		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
@@ -53,7 +87,7 @@ func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
 		ok(w, `[{"instId":"BTC-USDT","last":"100.25","ts":"2000"}]`)
 	}))
 	defer server.Close()
-	adapter := NewWithClient(
+	adapter := newWithClient(
 		exchange.AccountConfig{MarketType: exchange.MarketTypeSpot},
 		exchange.Credential{},
 		httpclient.New(server.URL),
@@ -137,7 +171,7 @@ func TestSpotMarketBuyUsesBaseQuantity(t *testing.T) {
 		ok(w, `[{"ordId":"42","clOrdId":"cid","sCode":"0"}]`)
 	}))
 	defer server.Close()
-	adapter := NewWithClient(exchange.AccountConfig{
+	adapter := newWithClient(exchange.AccountConfig{
 		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
@@ -267,7 +301,7 @@ func TestRecentFillsPaginatesWithoutSkippingGap(t *testing.T) {
 		ok(w, string(data))
 	}))
 	defer server.Close()
-	adapter := NewWithClient(exchange.AccountConfig{
+	adapter := newWithClient(exchange.AccountConfig{
 		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
@@ -322,7 +356,7 @@ func TestRecentFillsEmptyCursorConsumesAllAvailablePages(t *testing.T) {
 		ok(w, string(data))
 	}))
 	defer server.Close()
-	adapter := NewWithClient(exchange.AccountConfig{
+	adapter := newWithClient(exchange.AccountConfig{
 		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
@@ -402,11 +436,23 @@ func TestRejectsUnsupportedAndClassifiesErrors(t *testing.T) {
 }
 
 func swapAdapter(baseURL string) *Adapter {
-	return NewWithClient(exchange.AccountConfig{
+	return newWithClient(exchange.AccountConfig{
 		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSwap, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT", MarginMode: exchange.MarginModeCross,
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"}, httpclient.New(baseURL))
+}
+
+func newWithClient(
+	config exchange.AccountConfig,
+	credential exchange.Credential,
+	client *httpclient.Client,
+) *Adapter {
+	adapter := New(config, credential)
+	if client != nil {
+		adapter.client = client
+	}
+	return adapter
 }
 
 func ok(w http.ResponseWriter, data string) {

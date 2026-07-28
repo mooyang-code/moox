@@ -34,15 +34,6 @@ type Adapter struct {
 	instruments map[string]exchange.Instrument
 }
 
-func init() {
-	exchange.Register(exchange.ExchangeBinance, func(
-		config exchange.AccountConfig,
-		credential exchange.Credential,
-	) (exchange.Adapter, error) {
-		return New(config, credential), nil
-	})
-}
-
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
 	return &Adapter{
 		config:      config,
@@ -51,23 +42,6 @@ func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter
 		swap:        httpclient.New(defaultSwapURL),
 		instruments: make(map[string]exchange.Instrument),
 	}
-}
-
-// NewWithClients is intended for contract tests and local paper simulators.
-func NewWithClients(
-	config exchange.AccountConfig,
-	credential exchange.Credential,
-	spot *httpclient.Client,
-	swap *httpclient.Client,
-) *Adapter {
-	adapter := New(config, credential)
-	if spot != nil {
-		adapter.spot = spot
-	}
-	if swap != nil {
-		adapter.swap = swap
-	}
-	return adapter
 }
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeBinance }
