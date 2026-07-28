@@ -40,6 +40,16 @@ func TestSpotSubscriptionClassifiesAuthenticationFailure(t *testing.T) {
 	}
 }
 
+func TestSpotSubscriptionClassifiesIPBanAsRateLimited(t *testing.T) {
+	err := classifySpotSubscriptionError(
+		418,
+		[]byte(`{"code":-1003,"msg":"IP banned"}`),
+	)
+	if !exchange.IsKind(err, exchange.ErrorRateLimited) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 type recordingHandler struct {
 	orders    []exchange.Order
 	fills     []exchange.Fill

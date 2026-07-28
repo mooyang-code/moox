@@ -91,7 +91,9 @@ func classifySpotSubscriptionError(status int, raw json.RawMessage) error {
 			Kind: exchange.ErrorAuthentication, HTTPStatus: status,
 			Code: fmt.Sprint(payload.Code), Err: cause,
 		}
-	case status == http.StatusTooManyRequests:
+	case status == http.StatusTooManyRequests ||
+		status == http.StatusTeapot ||
+		payload.Code == -1003:
 		return &exchange.Error{
 			Kind: exchange.ErrorRateLimited, HTTPStatus: status,
 			Code: fmt.Sprint(payload.Code), Err: cause,
