@@ -367,6 +367,7 @@ func (*Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHand
 
 func (a *Adapter) allFills(ctx context.Context) ([]exchange.Fill, error) {
 	byID := make(map[string]exchange.Fill)
+	persistedIDs := make(map[string]struct{})
 	if a.store != nil {
 		for offset := 0; ; offset += fillPageSize {
 			records, _, err := a.store.ListFills(ctx, a.spaceID, store.FillQuery{
@@ -382,6 +383,7 @@ func (a *Adapter) allFills(ctx context.Context) ([]exchange.Fill, error) {
 					return nil, err
 				}
 				byID[fill.ExchangeTradeID] = fill
+				persistedIDs[fill.ExchangeTradeID] = struct{}{}
 			}
 			if len(records) < fillPageSize {
 				break
@@ -433,6 +435,11 @@ func (a *Adapter) allFills(ctx context.Context) ([]exchange.Fill, error) {
 		fills = append(fills, fill)
 	}
 	sort.Slice(fills, func(i, j int) bool {
+		_, leftPersisted := persistedIDs[fills[i].ExchangeTradeID]
+		_, rightPersisted := persistedIDs[fills[j].ExchangeTradeID]
+		if leftPersisted != rightPersisted {
+			return leftPersisted
+		}
 		if fills[i].TradedAt.Equal(fills[j].TradedAt) {
 			return fills[i].ExchangeTradeID < fills[j].ExchangeTradeID
 		}

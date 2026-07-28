@@ -23,9 +23,11 @@ fi
 
 (
   cd "$ROOT/modules/eventbus"
-  exec go run github.com/nats-io/nats-server/v2 \
-    -js -a 127.0.0.1 -p "$PORT" -sd "$WORK_DIR/jetstream"
-) >"$WORK_DIR/nats.log" 2>&1 &
+  go build -o "$WORK_DIR/nats-server" github.com/nats-io/nats-server/v2
+)
+"$WORK_DIR/nats-server" \
+  -js -a 127.0.0.1 -p "$PORT" -sd "$WORK_DIR/jetstream" \
+  >"$WORK_DIR/nats.log" 2>&1 &
 NATS_PID=$!
 
 for _ in $(seq 1 120); do
@@ -46,13 +48,27 @@ fi
 
 export MOOX_STRATEGY_TRADE_E2E_NATS_URL="$NATS_URL"
 
+STRATEGY_TEST='TestExternalStrategyCommitPublishesTargetIntent'
+TRADE_TEST='TestExternalStrategyTargetIntentIsConsumedIntoTradeStore'
+
 (
   cd "$ROOT/modules/strategy"
-  CGO_ENABLED=1 go test -count=1 -run '^TestExternalStrategyCommitPublishesRebalance$' ./test
-)
+  CGO_ENABLED=1 go test -v -tags=e2e_external -count=1 \
+    -run "^${STRATEGY_TEST}$" ./test
+) | tee "$WORK_DIR/strategy-test.log"
+grep -Fq -- "--- PASS: ${STRATEGY_TEST}" "$WORK_DIR/strategy-test.log" || {
+  echo "strategy external E2E target test did not run" >&2
+  exit 1
+}
+
 (
   cd "$ROOT/modules/trade"
-  CGO_ENABLED=1 go test -count=1 -run '^TestExternalStrategyRebalanceEventCreatesOneRunAndWakesWorker$' ./internal/bootstrap
-)
+  CGO_ENABLED=1 go test -v -tags=e2e_external -count=1 \
+    -run "^${TRADE_TEST}$" ./test
+) | tee "$WORK_DIR/trade-test.log"
+grep -Fq -- "--- PASS: ${TRADE_TEST}" "$WORK_DIR/trade-test.log" || {
+  echo "trade external E2E target test did not run" >&2
+  exit 1
+}
 
 echo "strategy -> eventbus -> trade E2E passed"

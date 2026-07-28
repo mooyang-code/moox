@@ -2113,7 +2113,7 @@ unrelated pre-existing document.
 - Modify: `scripts/test-strategy-trade-event-e2e.sh`
 - Create: `modules/trade/scripts/testnet-smoke.sh`
 
-- [ ] **Step 1: Build a deterministic fake Exchange**
+- [x] **Step 1: Build a deterministic fake Exchange**
 
 The fake must record normalized requests and independently emit:
 
@@ -2127,17 +2127,25 @@ The fake must record normalized requests and independently emit:
 It must not share the Order reducer with production code; otherwise the tests
 would repeat the implementation instead of testing it.
 
-- [ ] **Step 2: Cover SPOT MARKET end to end**
+- [x] **Step 2: Cover SPOT MARKET end to end**
 
 Test MARKET buy and sell with base quantity and no price:
 
 ```text
-RPC -> validation -> persist intent -> Exchange submit
+OrderService -> validation -> persist intent -> Exchange submit
     -> Fill -> Order reducer -> Position -> ListOrders/ListFills
 ```
 
-Verify symbol normalization, quantity/step rounding, fee persistence,
+Verify Exchange-native symbol propagation/validation, quantity-step
+validation/rejection, fee persistence,
 `FILLED` terminal state, and restart recovery from SQLite.
+
+Covered: normalized MARKET buy/sell requests, no limit price, base quantity,
+off-step fail-fast rejection, non-zero normalized Exchange fee persistence,
+Paper Fill/order/balance persistence, terminal state, public Store queries, and
+SQLite restart. Task 7 Binance/OKX tests cited in Step 3 additionally prove
+adapter request mapping and quantity/protocol conversion; they are not treated
+as evidence of implicit InstrumentID-to-symbol conversion.
 
 - [ ] **Step 3: Cover Binance and OKX SWAP semantics**
 
@@ -2154,10 +2162,24 @@ Test:
 
 No test may depend on locally recomputing an Exchange liquidation price.
 
-- [ ] **Step 4: Cover uncertainty and cancel races**
+Task 7 adapter evidence retained by this acceptance suite:
+
+- Binance normalized MARKET/SWAP request and quantity mapping:
+  `internal/exchange/binance.TestAdapterOrderMappings` and
+  `TestLoadSwapInstruments`.
+- OKX base-to-contract and contract-to-base conversion:
+  `internal/exchange/okx.TestSwapMarketOrderConvertsBaseQuantity` and
+  `TestRecentFillsAndPositionsConvertContracts`.
+
+The generic E2E covers NET long/short, partial/full reduce-only, CROSS, leverage,
+and Exchange-provided realized PnL. Long-to-short Target convergence and
+Exchange snapshot liquidation fields are not asserted here, so this step
+remains unchecked.
+
+- [x] **Step 4: Cover uncertainty and cancel races**
 
 Test that EOF, timeout, 429, and 5xx leave the order in
-`SUBMIT_UNCERTAIN`, then query by client order ID before any retry. Verify that
+`SUBMIT_UNKNOWN`, then query by client order ID before any retry. Verify that
 no path produces two Exchange orders for one client order ID.
 
 Test delayed Fill after cancel:
@@ -2170,12 +2192,22 @@ NEW -> CANCELED acknowledgement -> delayed partial Fill
 Also test duplicate Fill idempotency and cumulative-quantity regression
 rejection.
 
-- [ ] **Step 5: Cover readiness and SyncAccount**
+- [x] **Step 5: Cover readiness and SyncAccount**
 
 Test startup, reconnect, manual `SyncAccount`, and failed synchronization.
 Submission must remain disabled until Account, Position, OpenOrder, and
 RecentFill snapshots all succeed. An imported external order or Fill must be
 persisted and returned by the public queries.
+
+Covered by the Task 15 AccountSync matrix: isolated failure and recovery for
+all four snapshots, persisted readiness, manual sync, and external Order/Fill
+import. Runtime startup, buffering, disconnect readiness clearing, and retry are
+proved by production tests
+`runtime.TestExchangeSessionNeverBecomesReadyAfterDisconnectDuringStartup`,
+`TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect`, and
+`TestManagerReconnectsTheExistingSessionAfterRunFailure`. Order submission
+readiness uses that Session/Manager state through the real account eligibility
+service.
 
 - [ ] **Step 6: Cover TargetIntent convergence through JetStream**
 
@@ -2188,6 +2220,13 @@ Use embedded NATS JetStream and real Strategy Outbox publication. Verify:
 - reference price freshness and pre-trade deviation checks;
 - post-Fill slippage recording;
 - reconnect resumes toward the latest target rather than an old plan.
+
+Covered: real Strategy Outbox publication, real Trade consumer, monotonic
+sequence/latest supersede, `not_after`, stale reference rejection, real
+Executor child submission, active-order duplicate suppression, and durable
+JetStream delivery after producer disconnect. The current implementation has
+no pre-trade deviation policy or post-Fill slippage field to assert; those
+items remain implementation gaps, so this step remains unchecked.
 
 - [ ] **Step 7: Add an opt-in Exchange testnet smoke script**
 
@@ -2214,7 +2253,13 @@ sync account -> SPOT MARKET -> query Fill
 -> sync account -> assert ready
 ```
 
-- [ ] **Step 8: Run E2E and race suites**
+**Deferred:** the current adapters do not expose a testnet-endpoint injection
+boundary or a cleanup-safe CLI/RPC workflow. The script therefore performs
+strict preflight validation and then fails closed without placing an order.
+Task 16 must not run it without explicit testnet credentials, and this step
+must not be marked executed until safe order cleanup exists.
+
+- [x] **Step 8: Run E2E and race suites**
 
 ```bash
 cd modules/trade
@@ -2229,7 +2274,7 @@ Expected: PASS without real Exchange credentials. Run
 `modules/trade/scripts/testnet-smoke.sh` only with explicit testnet
 credentials; never point it at production keys.
 
-- [ ] **Step 9: Commit the acceptance suite**
+- [x] **Step 9: Commit the acceptance suite**
 
 ```bash
 git add modules/trade/test modules/trade/scripts \
