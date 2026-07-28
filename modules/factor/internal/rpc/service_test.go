@@ -120,6 +120,61 @@ func TestRecalcHonorsBindingSubjectScope(t *testing.T) {
 	require.Empty(t, runner.tasks)
 }
 
+func TestUpsertBindingRejectsInvalidIncludeSubjectsWithoutPersisting(t *testing.T) {
+	for _, raw := range []string{"", "null", `{}`, `[""]`, `["BTC"," "]`, `[1]`, `[]`} {
+		t.Run(raw, func(t *testing.T) {
+			db := openRPCTestDB(t)
+			seedRPCFactorDefinition(t, db, "factor")
+			svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+			rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{
+				Binding: testBindingPB(domain.SubjectModeInclude, raw),
+			})
+			require.NoError(t, err)
+			require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+			rows, total, listErr := db.Bindings().List(context.Background(), store.BindingFilter{})
+			require.NoError(t, listErr)
+			require.Zero(t, total)
+			require.Empty(t, rows)
+		})
+	}
+}
+
+func TestUpsertBindingPersistsCanonicalSubjects(t *testing.T) {
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinition(t, db, "factor")
+	svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+	binding := testBindingPB(domain.SubjectModeInclude, `[" ETH ","BTC","ETH"]`)
+	binding.Status = domain.BindingStatusDisabled
+	rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{Binding: binding})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, `["BTC","ETH"]`, rsp.GetBinding().GetSubjectsJson())
+	rows, total, err := db.Bindings().List(context.Background(), store.BindingFilter{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Equal(t, `["BTC","ETH"]`, rows[0].SubjectsJSON)
+}
+
+func TestUpsertBindingAllModeDiscardsSubjects(t *testing.T) {
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinition(t, db, "factor")
+	svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+	binding := testBindingPB(domain.SubjectModeAll, `not-json`)
+	binding.Status = domain.BindingStatusDisabled
+	rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{Binding: binding})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, domain.DefaultSubjectsJSON, rsp.GetBinding().GetSubjectsJson())
+}
+
+func testBindingPB(mode, subjectsJSON string) *factorpb.FactorBinding {
+	return &factorpb.FactorBinding{
+		BindingId: "bind", FactorId: "factor", SpaceId: "space",
+		SourceDataset: "source", Freq: "1m", SubjectMode: mode,
+		SubjectsJson: subjectsJSON, TargetDataset: "target",
+	}
+}
+
 func TestGetEngineStatusIsMinimal(t *testing.T) {
 	runner := &fakeRPCScheduler{status: scheduler.Status{QueueDepth: 3, QueueOverflowCount: 4}}
 	svc := NewWithRuntime(openRPCTestDB(t), runner)
@@ -161,6 +216,15 @@ func seedRPCFactorAndBinding(t *testing.T, db *store.Store, status string) {
 		BindingID: "bind", FactorID: "bias", SpaceID: "crypto", SourceDataset: "bars",
 		Freq: "1m", SubjectMode: domain.SubjectModeAll, SubjectsJSON: "[]",
 		TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
+	}))
+}
+
+func seedRPCFactorDefinition(t *testing.T, db *store.Store, factorID string) {
+	t.Helper()
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
+		FactorID: factorID, Name: "TestFactor", SourceCode: "x", SourceHash: "hash",
+		InputColumns: []string{"close"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
+		LookbackRows: 2, Status: domain.FactorStatusEnabled,
 	}))
 }
 

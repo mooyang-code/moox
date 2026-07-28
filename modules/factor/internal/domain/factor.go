@@ -2,6 +2,9 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -49,4 +52,40 @@ func BindingAllowsSubject(binding FactorBinding, subjectID string) bool {
 		}
 	}
 	return false
+}
+
+// NormalizeBindingSubjects validates and canonicalizes a binding subject scope.
+func NormalizeBindingSubjects(mode, raw string) (string, error) {
+	switch mode {
+	case SubjectModeAll:
+		return DefaultSubjectsJSON, nil
+	case SubjectModeInclude:
+		var subjects []string
+		if err := json.Unmarshal([]byte(raw), &subjects); err != nil {
+			return "", fmt.Errorf("subjects_json must be a JSON string array: %w", err)
+		}
+		unique := make(map[string]struct{}, len(subjects))
+		for _, subject := range subjects {
+			subject = strings.TrimSpace(subject)
+			if subject == "" {
+				return "", fmt.Errorf("subjects_json must not contain empty subjects")
+			}
+			unique[subject] = struct{}{}
+		}
+		if len(unique) == 0 {
+			return "", fmt.Errorf("subjects_json must contain at least one subject in include mode")
+		}
+		normalized := make([]string, 0, len(unique))
+		for subject := range unique {
+			normalized = append(normalized, subject)
+		}
+		sort.Strings(normalized)
+		encoded, err := json.Marshal(normalized)
+		if err != nil {
+			return "", fmt.Errorf("marshal normalized subjects_json: %w", err)
+		}
+		return string(encoded), nil
+	default:
+		return "", fmt.Errorf("subject_mode must be %q or %q", SubjectModeAll, SubjectModeInclude)
+	}
 }

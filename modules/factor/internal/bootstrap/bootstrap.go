@@ -265,6 +265,10 @@ func (c *metadataClientAdapter) CreateFactor(ctx context.Context, req *storagepb
 	return c.client.CreateFactor(ctx, req)
 }
 
+func (c *metadataClientAdapter) UpdateFactor(ctx context.Context, req *storagepb.UpdateFactorReq) (*storagepb.UpdateFactorRsp, error) {
+	return c.client.UpdateFactor(ctx, req)
+}
+
 func (c *metadataClientAdapter) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	return c.client.CreateDataset(ctx, req)
 }

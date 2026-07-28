@@ -263,9 +263,11 @@ func (s *Service) normalizeBinding(pb *factorpb.FactorBinding) (domain.FactorBin
 	if binding.SubjectMode == "" {
 		binding.SubjectMode = domain.SubjectModeAll
 	}
-	if binding.SubjectsJSON == "" {
-		binding.SubjectsJSON = "[]"
+	subjectsJSON, err := domain.NormalizeBindingSubjects(binding.SubjectMode, binding.SubjectsJSON)
+	if err != nil {
+		return domain.FactorBinding{}, err
 	}
+	binding.SubjectsJSON = subjectsJSON
 	if binding.TargetDataset == "" {
 		binding.TargetDataset = registry.ResultDataset(binding.SourceDataset)
 	}
