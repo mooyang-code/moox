@@ -15,9 +15,9 @@ type CheckProducerAuthorizer struct {
 	Checks *store.CheckRepository
 }
 
-func (a CheckProducerAuthorizer) IsRegistered(ctx context.Context, serviceName, _ string) (bool, error) {
+func (a CheckProducerAuthorizer) IsRegistered(ctx context.Context, serviceName, nodeID string) (bool, error) {
 	if a.Checks == nil {
 		return false, errors.New("check producer authorizer is not initialized")
 	}
-	return a.Checks.IsSysDeployRegistered(ctx, serviceName)
+	return a.Checks.IsSysDeployRegistered(ctx, serviceName, nodeID)
 }

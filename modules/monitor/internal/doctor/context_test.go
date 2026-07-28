@@ -26,9 +26,9 @@ func TestBuilderHealthUsesPerComponentFreshnessAndConsecutiveFailures(t *testing
 	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	repos := mgr.Repositories()
-	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "moox_monitor", IntervalSeconds: 30, Enabled: true}))
+	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "sysdeploy:node-a:moox_monitor", IntervalSeconds: 30, Enabled: true}))
 	for i := 0; i < 3; i++ {
-		require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: time.Now().Add(time.Duration(i) * time.Nanosecond).String(), CheckID: "moox_monitor", Status: domain.CheckStatusDegraded, Success: false, BodyExcerpt: `{"service":"moox_monitor","instance_id":"moox_monitor@node-a","node_id":"node-a","boot_id":"boot-a"}`, CheckedAt: now.Add(-time.Duration(i+3) * time.Minute)}))
+		require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: time.Now().Add(time.Duration(i) * time.Nanosecond).String(), CheckID: "sysdeploy:node-a:moox_monitor", Status: domain.CheckStatusDegraded, Success: false, BodyExcerpt: `{"service":"moox_monitor","instance_id":"moox_monitor@node-a","node_id":"node-a","boot_id":"boot-a"}`, CheckedAt: now.Add(-time.Duration(i+3) * time.Minute)}))
 	}
 	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ServiceDeployment{{ServiceName: "moox_monitor", NodeId: "node-a", Status: "active"}}}, Checks: repos.Checks, Results: repos.Results, Pipelines: report.PipelineConfig{Version: 1}, Now: func() time.Time { return now }}
 	got, err := builder.Build(context.Background(), "node-a", []string{"moox_monitor"}, nil)
@@ -71,8 +71,8 @@ func TestBuilderDoesNotRequireReporterIdentityForNotApplicableComponent(t *testi
 	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	repos := mgr.Repositories()
-	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "eventbus", IntervalSeconds: 30, Enabled: true}))
-	require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: "eventbus-result", CheckID: "eventbus", Status: domain.CheckStatusOK, Success: true, BodyExcerpt: `{}`, CheckedAt: now}))
+	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "sysdeploy:node-a:eventbus", IntervalSeconds: 30, Enabled: true}))
+	require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: "eventbus-result", CheckID: "sysdeploy:node-a:eventbus", Status: domain.CheckStatusOK, Success: true, BodyExcerpt: `{}`, CheckedAt: now}))
 	builder := Builder{
 		Deployments: deploymentSourceStub{rows: []*adminpb.ServiceDeployment{{ServiceName: "eventbus", NodeId: "node-a", Status: "active"}}},
 		Checks:      repos.Checks,

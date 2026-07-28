@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -114,16 +115,16 @@ func (r *CheckRepository) CountEnabled(ctx context.Context) (int64, error) {
 	return total, err
 }
 
-// IsSysDeployRegistered reports whether a service has an enabled check managed
-// by the system deployment controller. Metrics ingestion uses this as its
-// producer authorization source instead of issuing raw SQL from the consumer.
-func (r *CheckRepository) IsSysDeployRegistered(ctx context.Context, serviceName string) (bool, error) {
+// IsSysDeployRegistered reports whether a service instance on a specific node
+// has an enabled check managed by the system deployment controller.
+func (r *CheckRepository) IsSysDeployRegistered(ctx context.Context, serviceName, nodeID string) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, gorm.ErrInvalidDB
 	}
 	var count int64
+	checkID := "sysdeploy:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
 	err := r.db.WithContext(ctx).Model(&domain.Check{}).
-		Where("c_check_id = ? AND c_source = ? AND c_enabled = 1 AND c_is_deleted = 0", serviceName, domain.CheckSourceSysDeploy).
+		Where("c_check_id = ? AND c_source = ? AND c_enabled = 1 AND c_is_deleted = 0", checkID, domain.CheckSourceSysDeploy).
 		Count(&count).Error
 	return count > 0, err
 }

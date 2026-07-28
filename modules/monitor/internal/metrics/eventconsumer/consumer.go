@@ -167,7 +167,7 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 		return c.reject(ctx, delivery, fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
 	}
 	if c.opts.Authorizer != nil {
-		registered, err := c.opts.Authorizer.IsRegistered(ctx, report.GetServiceName(), report.GetInstanceId())
+		registered, err := c.opts.Authorizer.IsRegistered(ctx, report.GetServiceName(), report.GetNodeId())
 		if err != nil {
 			return c.retry(fmt.Errorf("authorize metric producer: %w", err))
 		}

@@ -162,7 +162,8 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 		if !expected.Expected {
 			continue
 		}
-		check, err := b.Checks.Get(ctx, "", expected.ServiceName)
+		checkID := sysDeployCheckID(expected.NodeID, expected.ServiceName)
+		check, err := b.Checks.Get(ctx, "", checkID)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health check is not registered"})
 			continue
@@ -170,7 +171,7 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 		if err != nil {
 			return err
 		}
-		results, err := b.Results.Recent(ctx, "", expected.ServiceName, 3)
+		results, err := b.Results.Recent(ctx, "", checkID, 3)
 		if err != nil {
 			return err
 		}
@@ -210,6 +211,10 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 		out.HealthObservations = append(out.HealthObservations, observation)
 	}
 	return nil
+}
+
+func sysDeployCheckID(nodeID, serviceName string) string {
+	return "sysdeploy:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
 }
 
 func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, pipelineIDs []string, now time.Time, out *Context) error {

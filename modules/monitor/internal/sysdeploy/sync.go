@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -95,8 +97,11 @@ func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.Ser
 		if deployment == nil || !processes[deployment.GetServiceName()] {
 			continue
 		}
-		check, ok := checkFromDeployment(deployment)
-		if !ok {
+		check, err := checkFromDeployment(deployment)
+		if err != nil {
+			return synced, err
+		}
+		if check == nil {
 			continue
 		}
 		activeIDs[check.CheckID] = struct{}{}
@@ -130,29 +135,40 @@ type extraConfig struct {
 	MonitorEnabled *bool  `json:"monitor_enabled"`
 }
 
-func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, bool) {
-	if deployment == nil || deployment.GetStatus() != "active" || deployment.GetServiceName() == "" {
-		return nil, false
+func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, error) {
+	if deployment == nil || deployment.GetStatus() != "active" ||
+		strings.TrimSpace(deployment.GetNodeId()) == "" ||
+		strings.TrimSpace(deployment.GetServiceName()) == "" {
+		return nil, nil
 	}
+	nodeID := strings.TrimSpace(deployment.GetNodeId())
+	serviceName := strings.TrimSpace(deployment.GetServiceName())
 	extra := parseExtra(deployment.GetExtraConfig())
 	if extra.MonitorEnabled != nil && !*extra.MonitorEnabled {
-		return nil, false
+		return nil, nil
 	}
+	labels, _ := json.Marshal(map[string]string{
+		"node_id":      nodeID,
+		"service_name": serviceName,
+	})
 	check := &domain.Check{
-		CheckID:         deployment.GetServiceName(),
-		Name:            deployment.GetServiceName(),
+		CheckID:         sysDeployCheckID(nodeID, serviceName),
+		Name:            serviceName + "@" + nodeID,
 		GroupName:       "moox-system",
 		IntervalSeconds: 30,
 		TimeoutMS:       3000,
 		ExpectedStatus:  "200-299",
 		Enabled:         true,
 		Source:          domain.CheckSourceSysDeploy,
-		Labels:          "{}",
+		Labels:          string(labels),
 		Description:     deployment.GetDescription(),
 		Method:          "GET",
 		Headers:         "{}",
 	}
 	if strings.TrimSpace(extra.HealthURL) != "" {
+		if err := validateHealthURL(extra.HealthURL, nodeID); err != nil {
+			return nil, fmt.Errorf("sysdeploy %s@%s health URL: %w", serviceName, nodeID, err)
+		}
 		check.Kind = domain.CheckKindHTTP
 		check.URL = strings.TrimSpace(extra.HealthURL)
 		kind := strings.ToLower(strings.TrimSpace(extra.HealthKind))
@@ -166,15 +182,42 @@ func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, 
 		if kind == "readiness" || kind == "ready" {
 			check.BodyContains = `"ready":true`
 		}
-		return check, true
+		return check, nil
 	}
 	if deployment.GetProtocol() == "http" && deployment.GetHost() != "" && deployment.GetPort() > 0 {
+		if nodeID != "control" && isLoopbackHost(deployment.GetHost()) {
+			return nil, fmt.Errorf("sysdeploy %s@%s TCP host is loopback", serviceName, nodeID)
+		}
 		check.Kind = domain.CheckKindTCP
 		check.TCPHost = deployment.GetHost()
 		check.TCPPort = int(deployment.GetPort())
-		return check, true
+		return check, nil
 	}
-	return nil, false
+	return nil, nil
+}
+
+func sysDeployCheckID(nodeID, serviceName string) string {
+	return "sysdeploy:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
+}
+
+func validateHealthURL(raw, nodeID string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return errors.New("must be an absolute HTTP URL")
+	}
+	if nodeID != "control" && isLoopbackHost(parsed.Hostname()) {
+		return errors.New("loopback is only reachable for the control node")
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func parseExtra(raw string) extraConfig {
