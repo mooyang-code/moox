@@ -21,6 +21,7 @@ import trace "example.com/trace"
 type ExchangeAccount struct{}
 type ExchangeAdapter struct{}
 type ExchangeOrder struct{}
+type List[T any] []T
 
 // OpenTelemetry TracerProvider is an unrelated third-party Provider type.
 type TracerProvider struct{}
@@ -31,6 +32,15 @@ var tradeTracerProvider trace.TracerProvider
 
 func NewTradeRuntime(provider trace.TracerProvider) {}
 func NewTradeConfig(provider ConfigProvider)         {}
+func NewTradeComposite(
+	providers []trace.TracerProvider,
+	array [2]*trace.TracerProvider,
+	generic List[trace.TracerProvider],
+) {}
+
+func BuildTradeRuntime() {
+	tradeTracerProvider := trace.TracerProvider(nil)
+}
 EOF
 
 cat >"${TMP}/modules/trade/internal/secretclient/client.go" <<'EOF'
@@ -62,6 +72,7 @@ export interface ExchangeOrder {
 
 export interface TradeClient {
   provider?: ConfigProvider;
+  providers?: ConfigProvider[];
 }
 EOF
 
@@ -151,6 +162,31 @@ type ExchangeAdapter interface {
 func SyncExchange(source Provider) {}
 EOF
 
+cat >"${TMP}/modules/trade/internal/bad_local_var.go" <<'EOF'
+package trade
+
+func SyncExchange() {
+	var provider = "binance"
+}
+EOF
+
+cat >"${TMP}/modules/trade/internal/bad_type_specs.go" <<'EOF'
+package trade
+
+type Provider interface{}
+
+type ExchangeResolver func(source Provider)
+type ExchangeSource Provider
+EOF
+
+cat >"${TMP}/modules/trade/internal/bad_short_decl.go" <<'EOF'
+package trade
+
+func BuildTradeRuntime() {
+	ExchangeProvider := trace.TracerProvider(nil)
+}
+EOF
+
 cat >"${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" <<'EOF'
 package secretclient
 
@@ -198,7 +234,8 @@ fi
 missing_fixture=false
 for fixture in \
   bad.go bad_interface.go bad_receiver.go bad_okx.go bad_third_party_name.go \
-  bad_type_expression.go bad_secretclient.go bad.proto bad.ts bad_third_party_name.ts \
+  bad_type_expression.go bad_local_var.go bad_type_specs.go bad_short_decl.go \
+  bad_secretclient.go bad.proto bad.ts bad_third_party_name.ts \
   bad.yaml bad.md; do
   if ! rg -q --fixed-strings "${fixture}:" "${TMP}/bad.out"; then
     echo "checker did not report ${fixture}" >&2
@@ -215,6 +252,7 @@ for expected in \
   bad_okx.go:3 bad_okx.go:4 bad_okx.go:5 bad_okx.go:6 \
   bad_third_party_name.go:6 bad_third_party_name.go:9 bad_third_party_name.go:11 \
   bad_type_expression.go:6 bad_type_expression.go:10 bad_type_expression.go:13 \
+  bad_local_var.go:4 bad_type_specs.go:5 bad_type_specs.go:6 bad_short_decl.go:4 \
   bad_third_party_name.ts:2; do
   rg -q --fixed-strings "${expected}:" "${TMP}/bad.out" || {
     echo "checker did not report ${expected}" >&2
@@ -230,6 +268,9 @@ rm \
   "${TMP}/modules/trade/internal/bad_okx.go" \
   "${TMP}/modules/trade/internal/bad_third_party_name.go" \
   "${TMP}/modules/trade/internal/bad_type_expression.go" \
+  "${TMP}/modules/trade/internal/bad_local_var.go" \
+  "${TMP}/modules/trade/internal/bad_type_specs.go" \
+  "${TMP}/modules/trade/internal/bad_short_decl.go" \
   "${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" \
   "${TMP}/packages/tradeeventpb/bad.proto" \
   "${TMP}/web/src/api/trade/bad.ts" \

@@ -20,7 +20,7 @@ import (
 )
 
 var declarationPattern = regexp.MustCompile(`(?i)^\s*(?:(?:export|declare)\s+)*(?:message|interface|type|class|enum|service)\s+([A-Za-z_][A-Za-z0-9_]*)`)
-var thirdPartyProviderFieldPattern = regexp.MustCompile(`^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?(TracerProvider|ConfigProvider)\s*[;,]?\s*$`)
+var thirdPartyProviderFieldPattern = regexp.MustCompile(`^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:\s*(.+?)\s*[;,]?\s*$`)
 
 var defaultRoots = []string{
 	"modules/trade",
@@ -125,24 +125,18 @@ func (c *checker) scanGo(path string) error {
 }
 
 func (c *checker) scanGoDeclaration(path string, declaration ast.Decl) {
-	switch decl := declaration.(type) {
-	case *ast.GenDecl:
-		for _, spec := range decl.Specs {
-			switch value := spec.(type) {
-			case *ast.TypeSpec:
-				c.scanGoType(path, value)
-			case *ast.ValueSpec:
-				c.scanGoValueSpec(path, value)
-			}
-		}
-	case *ast.FuncDecl:
+	if decl, ok := declaration.(*ast.FuncDecl); ok {
 		c.scanGoFunction(path, decl)
 	}
 
 	ast.Inspect(declaration, func(node ast.Node) bool {
 		switch value := node.(type) {
+		case *ast.TypeSpec:
+			c.scanGoType(path, value)
+		case *ast.ValueSpec:
+			c.scanGoValueSpec(path, value)
 		case *ast.AssignStmt:
-			c.addNode(path, value)
+			c.scanGoAssignment(path, value)
 		}
 		return true
 	})
@@ -165,6 +159,26 @@ func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec) {
 	}
 }
 
+func (c *checker) scanGoAssignment(path string, assignment *ast.AssignStmt) {
+	for index, left := range assignment.Lhs {
+		identifier, ok := left.(*ast.Ident)
+		if !ok {
+			c.addNode(path, assignment)
+			return
+		}
+		var right ast.Expr
+		if index < len(assignment.Rhs) {
+			right = assignment.Rhs[index]
+		} else if len(assignment.Rhs) == 1 {
+			right = assignment.Rhs[0]
+		}
+		c.scanGoIdentifier(path, c.fset.Position(identifier.Pos()).Line, "", identifier.Name, thirdPartyProviderConversionType(right))
+		if right != nil && !isThirdPartyProviderTypeExpression(thirdPartyProviderConversionType(right)) {
+			c.addText(path, c.fset.Position(identifier.Pos()).Line, identifier.Name+" "+nodeText(c.fset, right))
+		}
+	}
+}
+
 func (c *checker) scanGoType(path string, spec *ast.TypeSpec) {
 	c.addText(path, c.fset.Position(spec.Name.Pos()).Line, spec.Name.Name)
 	var fields *ast.FieldList
@@ -173,7 +187,11 @@ func (c *checker) scanGoType(path string, spec *ast.TypeSpec) {
 		fields = value.Fields
 	case *ast.InterfaceType:
 		fields = value.Methods
+	case *ast.FuncType:
+		c.scanGoParameters(path, spec.Name.Name, value.Params, value.Results)
+		return
 	default:
+		c.scanGoTypeExpression(path, c.fset.Position(spec.Name.Pos()).Line, spec.Name.Name, spec.Type)
 		return
 	}
 	for _, field := range fields.List {
@@ -228,8 +246,8 @@ func (c *checker) scanGoParameters(path, context string, fieldLists ...*ast.Fiel
 }
 
 func (c *checker) scanGoIdentifier(path string, line int, context, name string, expression ast.Expr) {
-	typeName := goTypeIdentifier(expression)
-	if thirdPartyProviderIdentifierAllowed(name, typeName) {
+	kinds, thirdPartyType := thirdPartyProviderTypeKinds(expression)
+	if thirdPartyType && thirdPartyProviderIdentifierAllowed(name, kinds) {
 		return
 	}
 	c.addText(path, line, name)
@@ -239,7 +257,7 @@ func (c *checker) scanGoIdentifier(path string, line int, context, name string, 
 }
 
 func (c *checker) scanGoTypeExpression(path string, line int, context string, expression ast.Expr) {
-	if isThirdPartyProviderType(goTypeIdentifier(expression)) {
+	if isThirdPartyProviderTypeExpression(expression) {
 		return
 	}
 	c.addText(path, line, context+" "+nodeText(c.fset, expression))
@@ -265,17 +283,41 @@ func allowedSecretClientProvider(path string, field *ast.Field, name string) boo
 	return jsonName == "provider"
 }
 
-func goTypeIdentifier(expression ast.Expr) string {
-	switch value := expression.(type) {
-	case *ast.Ident:
-		return value.Name
-	case *ast.SelectorExpr:
-		return value.Sel.Name
-	case *ast.StarExpr:
-		return goTypeIdentifier(value.X)
-	default:
-		return ""
+func thirdPartyProviderConversionType(expression ast.Expr) ast.Expr {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok {
+		return nil
 	}
+	return call.Fun
+}
+
+func isThirdPartyProviderTypeExpression(expression ast.Expr) bool {
+	_, ok := thirdPartyProviderTypeKinds(expression)
+	return ok
+}
+
+func thirdPartyProviderTypeKinds(expression ast.Expr) (map[string]bool, bool) {
+	kinds := make(map[string]bool)
+	if expression == nil {
+		return kinds, false
+	}
+	safe := true
+	ast.Inspect(expression, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch identifier.Name {
+		case "TracerProvider", "ConfigProvider":
+			kinds[identifier.Name] = true
+			return true
+		}
+		if containsAny(terminologyTokens(identifier.Name), "provider", "broker", "venue", "platform") {
+			safe = false
+		}
+		return true
+	})
+	return kinds, safe && len(kinds) > 0
 }
 
 func (c *checker) addNode(path string, node ast.Node) {
@@ -325,13 +367,11 @@ func allowedThirdPartyProviderText(line string) bool {
 	if len(match) != 3 {
 		return false
 	}
-	return thirdPartyProviderIdentifierAllowed(match[1], match[2])
+	kinds, ok := thirdPartyProviderTextKinds(match[2])
+	return ok && thirdPartyProviderIdentifierAllowed(match[1], kinds)
 }
 
-func thirdPartyProviderIdentifierAllowed(name, typeName string) bool {
-	if !isThirdPartyProviderType(typeName) {
-		return false
-	}
+func thirdPartyProviderIdentifierAllowed(name string, kinds map[string]bool) bool {
 	term, conflicts := exchangeSynonym(name)
 	if !conflicts {
 		return true
@@ -340,18 +380,30 @@ func thirdPartyProviderIdentifierAllowed(name, typeName string) bool {
 	if term != "provider" || containsAny(tokens, "exchange", "binance", "okx", "broker", "venue", "platform") {
 		return false
 	}
-	switch typeName {
-	case "TracerProvider":
-		return contains(tokens, "tracer")
-	case "ConfigProvider":
-		return contains(tokens, "config")
-	default:
-		return false
-	}
+	return kinds["TracerProvider"] && contains(tokens, "tracer") ||
+		kinds["ConfigProvider"] && contains(tokens, "config")
 }
 
-func isThirdPartyProviderType(typeName string) bool {
-	return typeName == "TracerProvider" || typeName == "ConfigProvider"
+func thirdPartyProviderTextKinds(typeText string) (map[string]bool, bool) {
+	tokens := terminologyTokens(typeText)
+	kinds := make(map[string]bool)
+	safe := true
+	for index, token := range tokens {
+		if token == "provider" && index > 0 {
+			switch tokens[index-1] {
+			case "tracer":
+				kinds["TracerProvider"] = true
+				continue
+			case "config":
+				kinds["ConfigProvider"] = true
+				continue
+			}
+		}
+		if token == "provider" || token == "broker" || token == "venue" || token == "platform" {
+			safe = false
+		}
+	}
+	return kinds, safe && len(kinds) > 0
 }
 
 func (c *checker) addText(path string, line int, text string) {
