@@ -67,6 +67,7 @@ Only these local diagnostic routes are served:
 ```bash
 go run ./cmd/cli check-config --config config/app.yaml
 go run ./cmd/cli routes --config config/app.yaml
+set -a; source ../../secrets/health-auth.env; set +a
 go run ./cmd/cli health --url http://127.0.0.1:11012/readyz
 ```
 

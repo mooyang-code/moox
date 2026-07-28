@@ -15,8 +15,7 @@
 cd /home/ubuntu/moox/prod
 ./status.sh gateway
 ./healthcheck.sh gateway
-curl --fail --silent --show-error http://127.0.0.1:11012/healthz
-curl --fail --silent --show-error http://127.0.0.1:11012/readyz
+set -a; source ./secrets/health-auth.env; set +a
 ./bin/moox-gateway-cli health --url http://127.0.0.1:11012/readyz
 ```
 

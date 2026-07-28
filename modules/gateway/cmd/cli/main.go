@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,10 +11,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/gateway/internal/config"
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
+	"github.com/mooyang-code/moox/packages/requestauth"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout)) }
@@ -96,7 +101,14 @@ func checkHealth(arguments []string, output io.Writer) error {
 		return errors.New("health URL must be HTTP(S)")
 	}
 	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	response, err := client.Get(parsed.String())
+	request, err := http.NewRequest(http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return err
+	}
+	if err := signHealthRequest(request); err != nil {
+		return err
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return err
 	}
@@ -106,6 +118,31 @@ func checkHealth(arguments []string, output io.Writer) error {
 		return fmt.Errorf("gateway is not ready: HTTP %d", response.StatusCode)
 	}
 	_, _ = fmt.Fprintln(output, "ready")
+	return nil
+}
+
+func signHealthRequest(request *http.Request) error {
+	version := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_VERSION"))
+	accessKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"))
+	secretKey := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"))
+	if version == "" || accessKey == "" || secretKey == "" {
+		return errors.New("health authentication environment is required")
+	}
+	nonceBytes := make([]byte, 32)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return fmt.Errorf("generate health nonce: %w", err)
+	}
+	timestamp := time.Now().Unix()
+	nonce := hex.EncodeToString(nonceBytes)
+	signature, err := requestauth.Sign(secretKey, requestauth.Material{
+		Method: request.Method, Path: request.URL.EscapedPath(), Timestamp: timestamp, Nonce: nonce,
+	})
+	if err != nil {
+		return fmt.Errorf("sign health request: %w", err)
+	}
+	request.Header.Set("X-Moox-Health-Auth", strings.Join([]string{
+		version, accessKey, strconv.FormatInt(timestamp, 10), nonce, signature,
+	}, "/"))
 	return nil
 }
 
