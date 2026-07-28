@@ -188,6 +188,9 @@ func TestEventBatcherSkipsZeroTimeWithoutPoisoningNormalRange(t *testing.T) {
 	if !tasks[0].StartTime.Equal(normal) || !tasks[0].EndTime.Equal(normal.Add(time.Nanosecond)) {
 		t.Fatalf("range=[%s,%s), want [%s,%s)", tasks[0].StartTime, tasks[0].EndTime, normal, normal.Add(time.Nanosecond))
 	}
+	if got := batcher.RejectedTimeCount(); got != 1 {
+		t.Fatalf("rejected time count=%d, want 1", got)
+	}
 }
 
 func TestEventBatcherSkipsTimestampWhoseExclusiveEndExceedsRFC3339(t *testing.T) {
@@ -201,6 +204,27 @@ func TestEventBatcherSkipsTimestampWhoseExclusiveEndExceedsRFC3339(t *testing.T)
 
 	if tasks := flushPending(t, batcher, now.Add(time.Second)); len(tasks) != 0 {
 		t.Fatalf("tasks=%+v, want invalid exclusive upper bound ignored", tasks)
+	}
+	if got := batcher.RejectedTimeCount(); got != 1 {
+		t.Fatalf("rejected time count=%d, want 1", got)
+	}
+}
+
+func TestEventBatcherDoesNotCountMalformedTimestampAsUnsupportedTime(t *testing.T) {
+	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+	payload := event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now)
+	payload.Rows[0].GetKey().GetTimeSeries().DataTime = "not-a-time"
+
+	batcher.Add(payload, now)
+
+	if tasks := flushPending(t, batcher, now.Add(time.Second)); len(tasks) != 0 {
+		t.Fatalf("tasks=%+v, want malformed timestamp ignored", tasks)
+	}
+	if got := batcher.RejectedTimeCount(); got != 0 {
+		t.Fatalf("rejected time count=%d, want malformed input excluded from supported-time counter", got)
 	}
 }
 

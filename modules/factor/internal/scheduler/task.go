@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
@@ -15,13 +17,37 @@ type Task struct {
 	TriggerType string
 }
 
-// DeterministicTaskID identifies the executable task content, independent of enqueue order.
+// DeterministicTaskID identifies the executable task snapshot, independent of enqueue order.
 func DeterministicTaskID(task Task) string {
-	factorIDs := make([]string, 0, len(task.Factors))
-	for _, factor := range task.Factors {
-		factorIDs = append(factorIDs, factor.FactorID)
+	type encodedFactor struct {
+		factorID string
+		payload  string
 	}
-	sort.Strings(factorIDs)
+	factors := make([]encodedFactor, 0, len(task.Factors))
+	for _, factor := range task.Factors {
+		inputs := append([]string(nil), factor.InputColumns...)
+		outputs := append([]string(nil), factor.Outputs...)
+		sort.Strings(inputs)
+		sort.Strings(outputs)
+		factors = append(factors, encodedFactor{
+			factorID: factor.FactorID,
+			payload: encodeTaskIDParts(
+				factor.FactorID,
+				factor.Name,
+				factor.SourceHash,
+				factor.SourcePath,
+				encodeTaskIDParts(inputs...),
+				encodeTaskIDParts(outputs...),
+				factor.ParamsJSON,
+			),
+		})
+	}
+	sort.Slice(factors, func(i, j int) bool {
+		if factors[i].factorID != factors[j].factorID {
+			return factors[i].factorID < factors[j].factorID
+		}
+		return factors[i].payload < factors[j].payload
+	})
 
 	h := sha256.New()
 	write := func(value string) {
@@ -36,13 +62,22 @@ func DeterministicTaskID(task Task) string {
 		task.StartTime.UTC().Format(time.RFC3339Nano),
 		task.EndTime.UTC().Format(time.RFC3339Nano),
 		task.TriggerType,
+		strconv.Itoa(task.LookbackRows),
 	} {
 		write(value)
 	}
-	for _, factorID := range factorIDs {
-		write("factor:" + factorID)
+	for _, factor := range factors {
+		write("factor:" + factor.payload)
 	}
 	return fmt.Sprintf("ft-%x", h.Sum(nil)[:16])
+}
+
+func encodeTaskIDParts(parts ...string) string {
+	var encoded strings.Builder
+	for _, part := range parts {
+		_, _ = fmt.Fprintf(&encoded, "%d:%s;", len(part), part)
+	}
+	return encoded.String()
 }
 
 type taskKey struct {

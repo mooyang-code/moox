@@ -97,6 +97,77 @@ func TestSchedulerMergedTaskIDDescribesFinalUnionAndIgnoresArrivalOrder(t *testi
 	require.NotEqual(t, second.TaskID, wantID)
 }
 
+func TestSchedulerMergedTaskIDUsesLatestExecutableFactorSnapshot(t *testing.T) {
+	old := rangeTask("BTC", time.Unix(10, 0), time.Unix(20, 0))
+	old.LookbackRows = 2
+	old.Factors = []engine.FactorSpec{{
+		FactorID: "factor", Name: "Factor", SourceHash: "old-hash", SourcePath: "/old/module.py",
+		InputColumns: []string{"old_input"}, Outputs: []string{"old_output"}, ParamsJSON: `{"version":1}`,
+	}}
+	old.TaskID = DeterministicTaskID(old)
+	latest := rangeTask("BTC", time.Unix(5, 0), time.Unix(15, 0))
+	latest.LookbackRows = 7
+	latest.Factors = []engine.FactorSpec{{
+		FactorID: "factor", Name: "FactorV2", SourceHash: "new-hash", SourcePath: "/new/module.py",
+		InputColumns: []string{"input_b", "input_a"}, Outputs: []string{"output_b", "output_a"}, ParamsJSON: `{"version":2}`,
+	}}
+	latest.TaskID = DeterministicTaskID(latest)
+	want := latest
+	want.EndTime = old.EndTime
+	want.TaskID = DeterministicTaskID(want)
+	oldSnapshotAtFinalRange := old
+	oldSnapshotAtFinalRange.StartTime = latest.StartTime
+
+	svc := NewService(Config{Workers: 1, QueueCapacity: 1}, nil, nil)
+	require.NoError(t, svc.Enqueue(context.Background(), old))
+	require.NoError(t, svc.Enqueue(context.Background(), latest))
+	queued, ok := svc.popShard(0, false)
+	require.True(t, ok)
+	require.Equal(t, want.TaskID, queued.TaskID)
+	require.NotEqual(t, old.TaskID, queued.TaskID)
+	require.NotEqual(t, latest.TaskID, queued.TaskID)
+	require.NotEqual(t, DeterministicTaskID(oldSnapshotAtFinalRange), queued.TaskID)
+}
+
+func TestDeterministicTaskIDCoversFactorSnapshotAndNormalizesSliceOrder(t *testing.T) {
+	base := rangeTask("BTC", time.Unix(5, 0), time.Unix(20, 0))
+	base.LookbackRows = 7
+	base.Factors = []engine.FactorSpec{{
+		FactorID: "factor", Name: "Factor", SourceHash: "hash", SourcePath: "/module.py",
+		InputColumns: []string{"input_a", "input_b"}, Outputs: []string{"output_a", "output_b"}, ParamsJSON: `{"version":1}`,
+	}, {
+		FactorID: "other", Name: "Other", SourceHash: "other-hash", SourcePath: "/other.py",
+		InputColumns: []string{"other_input"}, Outputs: []string{"other_output"}, ParamsJSON: `{}`,
+	}}
+	baseID := DeterministicTaskID(base)
+
+	mutations := map[string]func(*Task){
+		"lookback":    func(task *Task) { task.LookbackRows++ },
+		"factor id":   func(task *Task) { task.Factors[0].FactorID = "changed" },
+		"name":        func(task *Task) { task.Factors[0].Name = "Changed" },
+		"source hash": func(task *Task) { task.Factors[0].SourceHash = "changed" },
+		"source path": func(task *Task) { task.Factors[0].SourcePath = "/changed.py" },
+		"inputs":      func(task *Task) { task.Factors[0].InputColumns = []string{"different"} },
+		"outputs":     func(task *Task) { task.Factors[0].Outputs = []string{"different"} },
+		"params":      func(task *Task) { task.Factors[0].ParamsJSON = `{"version":2}` },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			changed := base
+			changed.Factors = append([]engine.FactorSpec(nil), base.Factors...)
+			mutate(&changed)
+			require.NotEqual(t, baseID, DeterministicTaskID(changed))
+		})
+	}
+
+	reordered := base
+	reordered.Factors = append([]engine.FactorSpec(nil), base.Factors...)
+	reordered.Factors[0].InputColumns = []string{"input_b", "input_a"}
+	reordered.Factors[0].Outputs = []string{"output_b", "output_a"}
+	reordered.Factors[0], reordered.Factors[1] = reordered.Factors[1], reordered.Factors[0]
+	require.Equal(t, baseID, DeterministicTaskID(reordered))
+}
+
 func TestSchedulerAcceptsConfiguredNumberOfScopes(t *testing.T) {
 	svc := NewService(Config{Workers: 4, QueueCapacity: 2000}, nil, nil)
 	for i := 0; i < 2000; i++ {

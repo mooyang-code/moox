@@ -32,6 +32,8 @@ type EventBatcher struct {
 	window   time.Duration
 	bindings []domain.FactorBinding
 	buckets  map[bucketKey]*bucket
+	// rejectedTimeCount counts parsed timestamps that cannot form a supported half-open range.
+	rejectedTimeCount uint64
 }
 
 type bucketKey struct {
@@ -83,6 +85,7 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 		dataTime = dataTime.UTC()
 		endTime := dataTime.Add(time.Nanosecond)
 		if dataTime.IsZero() || dataTime.Year() < 1 || dataTime.Year() > 9999 || endTime.Year() > 9999 {
+			d.rejectedTimeCount++
 			continue
 		}
 		matches := d.matchBindings(key.GetSpaceId(), key.GetDatasetId(), rowKey.GetSubjectId(), rowKey.GetFreq())
@@ -135,6 +138,17 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 			b.factors[binding.FactorID] = struct{}{}
 		}
 	}
+}
+
+// RejectedTimeCount reports parsed timestamps rejected because they cannot form a supported range.
+// Malformed timestamp strings are ignored separately and do not increment this counter.
+func (d *EventBatcher) RejectedTimeCount() uint64 {
+	if d == nil {
+		return 0
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.rejectedTimeCount
 }
 
 // Flush removes and returns buckets whose fixed window has elapsed.
