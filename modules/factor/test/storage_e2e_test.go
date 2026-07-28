@@ -212,6 +212,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	})
 	requireStorageOK(t, "CreateView(source)", sourceViewRsp, err)
 	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
+	waitForViewQueryable(t, ctx, view, auth, spaceID, sourceViewID, sourceID, subjectID, freq, first, end)
 
 	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
@@ -282,6 +283,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	})
 	requireStorageOK(t, "CreateView", createViewRsp, err)
 	waitForViewReady(t, ctx, metadata, auth, spaceID, viewID)
+	waitForViewQueryable(t, ctx, view, auth, spaceID, viewID, targetID, subjectID, freq, first, end)
 
 	runDeployedFactor(t, ctx, deployRoot, factorID, spaceID, sourceID, subjectID, freq, first, end)
 	rows := waitForViewRows(t, ctx, view, auth, spaceID, viewID, targetID, subjectID, freq, first, second, end, false)
@@ -387,6 +389,32 @@ func waitForViewReady(t *testing.T, ctx context.Context, metadata storagepb.Meta
 		require.Equal(collect, rsp.GetView().GetDesiredViewRevision(), rsp.GetView().GetActiveViewRevision())
 	}, 60*time.Second, 250*time.Millisecond)
 	t.Log("real Storage View reconcile became active")
+}
+
+func waitForViewQueryable(
+	t *testing.T,
+	ctx context.Context,
+	view storagepb.DataViewClientProxy,
+	auth *commonpb.AuthInfo,
+	spaceID, viewID, datasetID, subjectID, freq string,
+	start, end time.Time,
+) {
+	t.Helper()
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		rsp, err := view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
+			AuthInfo: auth, SpaceId: spaceID, ViewId: viewID,
+			Keys: []*storagepb.TimeSeriesKey{{
+				SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID, Freq: freq,
+			}},
+			TimeRange: &storagepb.TimeRange{
+				StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano),
+			},
+			Page: &commonpb.Page{Page: 1, Size: 1},
+		})
+		require.NoError(collect, err)
+		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	}, 10*time.Second, 100*time.Millisecond)
+	t.Log("real Storage View runtime accepted a public query")
 }
 
 func runDeployedFactor(t *testing.T, ctx context.Context, deployRoot, factorID, spaceID, sourceID, subjectID, freq string, start, end time.Time) {
