@@ -57,6 +57,7 @@ target institutional availability or distributed execution.
 | Naming | Use `Exchange`; do not use Provider, Broker, Venue, or Platform as Exchange synonyms |
 | Account model | Merge the current Account and TradeChannel into `ExchangeAccount` |
 | Synchronization name | Public method is `SyncAccount` |
+| Persistence | Keep nine tables, including a local double-entry ledger |
 
 ## Architecture
 
@@ -392,27 +393,54 @@ The replacement schema contains:
 
 ```text
 t_exchange_accounts
-t_exchange_account_leverage
 t_exchange_instruments
 t_trade_orders
-t_trade_fills
+t_order_fills
 t_exchange_positions
-t_exchange_account_snapshots
 t_target_executions
-t_target_positions
-t_trade_reservations
 t_ledger_transactions
 t_ledger_entries
 t_trade_balance_projections
-t_trade_command_offsets
-t_trade_inbox
 ```
+
+The nine tables keep Order and Fill facts normalized while merging small,
+account-scoped configuration and single-record execution state:
+
+- `t_exchange_accounts` stores leverage settings as a symbol-keyed JSON object
+  and the latest ExchangeAccountSnapshot as typed JSON. Trade does not keep
+  historical account snapshots.
+- `t_trade_orders` stores reservation totals and the remaining reservation.
+  A separate reservation table is unnecessary because every reservation
+  belongs to one Order.
+- `t_order_fills` stores immutable Exchange executions. It remains separate
+  because one Order may have many Fills, including a Fill arriving after a
+  cancel response.
+- `t_target_executions` stores target positions as typed JSON together with
+  event ID, execution binding ID, command sequence, expiry, and processing
+  status. The same row provides event idempotency and sequence ordering.
+- `t_ledger_transactions` and `t_ledger_entries` preserve the local
+  double-entry audit trail. `t_trade_balance_projections` is the
+  transactionally maintained current balance by ExchangeAccount, asset, and
+  bucket.
+
+Exchange snapshots remain authoritative. The local ledger supports
+reservation, Fill accounting, fees, audit, and pre-trade risk checks; it does
+not attempt to reproduce the Exchange margin or liquidation engine.
+`SyncAccount` may append an explicitly typed synchronization-adjustment
+transaction when the local projection differs from the authoritative
+Exchange snapshot.
 
 The rewrite deletes:
 
 ```text
 t_trade_channels
 t_account_api_keys
+t_exchange_account_leverage
+t_exchange_account_snapshots
+t_target_positions
+t_trade_reservations
+t_trade_command_offsets
+t_trade_inbox
 t_execution_plans
 t_execution_slices
 t_trade_sagas

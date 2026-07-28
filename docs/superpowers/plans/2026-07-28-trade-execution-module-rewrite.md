@@ -40,6 +40,7 @@
 | Strategy publishes final target quantities | Tasks 2, 10, 12, 15 |
 | Continuous target convergence | Tasks 8, 10, 15 |
 | Exchange-authoritative account and Position state | Tasks 4, 7, 9, 15 |
+| Nine-table schema with local double-entry ledger | Tasks 4, 8, 9, 15 |
 | Two public services only | Tasks 3, 11, 13, 14 |
 | No Saga, fixed Rebalance Legs, or execution plugins | Tasks 5, 10, 14 |
 
@@ -131,7 +132,6 @@ modules/trade/
     tradegen/
   schema/
     account.sql
-    event.sql
     execution.sql
     instrument.sql
     ledger.sql
@@ -502,7 +502,6 @@ git commit -m "refactor(trade): replace public execution API"
 
 **Files:**
 - Rewrite: `modules/trade/schema/account.sql`
-- Create: `modules/trade/schema/event.sql`
 - Rewrite: `modules/trade/schema/execution.sql`
 - Create: `modules/trade/schema/instrument.sql`
 - Rewrite: `modules/trade/schema/ledger.sql`
@@ -525,25 +524,19 @@ Require exactly these owned tables:
 
 ```text
 t_exchange_accounts
-t_exchange_account_leverage
 t_exchange_instruments
 t_trade_orders
-t_trade_fills
+t_order_fills
 t_exchange_positions
-t_exchange_account_snapshots
 t_target_executions
-t_target_positions
-t_trade_reservations
 t_ledger_transactions
 t_ledger_entries
 t_trade_balance_projections
-t_trade_command_offsets
-t_trade_inbox
 ```
 
-Reject every deleted table from the approved design. Load `schema.AllSQL()` into
-an empty SQLite database and assert all foreign keys and unique indexes can be
-created.
+Reject every deleted table from the approved design, including the six tables
+merged into the nine-table schema. Load `schema.AllSQL()` into an empty SQLite
+database and assert all foreign keys and unique indexes can be created.
 
 Run:
 
@@ -564,9 +557,6 @@ t_exchange_accounts:
   PRIMARY KEY (c_space_id, c_exchange_account_id)
   UNIQUE (c_space_id, c_name)
 
-t_exchange_account_leverage:
-  PRIMARY KEY (c_space_id, c_exchange_account_id, c_symbol)
-
 t_exchange_instruments:
   PRIMARY KEY (c_exchange, c_market_type, c_symbol)
 ```
@@ -574,6 +564,20 @@ t_exchange_instruments:
 Store Exchange, market type, execution mode, credential secret ID, settlement
 asset, margin mode, status, pause state, last sync/ready timestamps, and last
 error on the account row.
+
+Also store:
+
+```text
+c_leverage_settings_json
+c_snapshot_json
+c_snapshot_source_time
+```
+
+`c_leverage_settings_json` is a canonical symbol-to-leverage object.
+`c_snapshot_json` contains only the latest typed ExchangeAccountSnapshot,
+including balances, equity, available funds, and margin values. Validate and
+encode both through domain types in the Store; application code must not
+manipulate arbitrary JSON maps.
 
 - [ ] **Step 3: Define immutable facts and execution state**
 
@@ -584,7 +588,7 @@ t_trade_orders:
   UNIQUE (c_space_id, c_order_id)
   UNIQUE (c_space_id, c_exchange_account_id, c_client_order_id)
 
-t_trade_fills:
+t_order_fills:
   UNIQUE (
     c_space_id,
     c_exchange_account_id,
@@ -603,13 +607,43 @@ t_exchange_positions:
 t_target_executions:
   UNIQUE (c_space_id, c_execution_id)
   UNIQUE (c_space_id, c_execution_binding_id, c_command_sequence)
+  UNIQUE (c_space_id, c_event_id)
 ```
 
 Order rows must include every `OrderSpec` field plus Exchange, MarketType,
 ExchangeOrderID, state, filled quantity, average price, reservation totals,
 source, strategy execution ID, and version.
 
-- [ ] **Step 4: Split one Store across focused files**
+`t_target_executions` stores canonical `c_targets_json`, event ID, execution
+binding ID, command sequence, expiry, processing status, and progress. These
+columns replace separate TargetPosition, Inbox, and CommandOffset tables.
+Accepting a target and advancing its sequence is one transaction.
+
+- [ ] **Step 4: Keep the local double-entry ledger focused**
+
+Use:
+
+```text
+t_ledger_transactions:
+  UNIQUE (c_space_id, c_transaction_id)
+  UNIQUE (c_space_id, c_exchange_account_id, c_source_type, c_source_id)
+
+t_ledger_entries:
+  PRIMARY KEY (c_space_id, c_transaction_id, c_entry_no)
+
+t_trade_balance_projections:
+  PRIMARY KEY (c_space_id, c_exchange_account_id, c_asset, c_bucket)
+```
+
+Ledger transaction types are limited to reservation, reservation release,
+Fill settlement, fee, and synchronization adjustment. Every transaction must
+balance per asset across its ledger buckets. Insert LedgerEntries and update
+BalanceProjections in the same SQLite transaction.
+
+ExchangeAccountSnapshot remains authoritative. The local ledger is an audit
+and pre-trade risk projection, not a replacement Exchange margin engine.
+
+- [ ] **Step 5: Split one Store across focused files**
 
 `store.Open(path)` must open one GORM handle, execute `schema.AllSQL()`, set a
 bounded SQLite busy timeout, enable foreign keys, and expose one
@@ -622,11 +656,12 @@ func (s *Store) Transaction(
 ) error
 ```
 
-Account, Order, Fill, Position, Snapshot, Target, Inbox, and Ledger writes must
-all use this `Tx`. Remove the second database manager from later bootstrap
-wiring rather than introducing another repository abstraction.
+Account, Order, Fill, Position, TargetExecution, LedgerTransaction,
+LedgerEntry, and BalanceProjection writes must all use this `Tx`. Remove the
+second database manager from later bootstrap wiring rather than introducing
+another repository abstraction.
 
-- [ ] **Step 5: Validate schema formatting and Store behavior**
+- [ ] **Step 6: Validate schema formatting and Store behavior**
 
 ```bash
 cd modules/trade
@@ -636,9 +671,11 @@ git diff --check -- modules/trade/schema modules/trade/internal/infra/store
 ```
 
 Expected: PASS. Every SQL file loads into a fresh SQLite database and follows
-the repository schema format.
+the repository schema format. Add focused tests for malformed account JSON,
+duplicate ExchangeTradeID, target sequence compare-and-set, unbalanced ledger
+transactions, and atomic projection updates.
 
-- [ ] **Step 6: Commit the persistence reset**
+- [ ] **Step 7: Commit the persistence reset**
 
 ```bash
 git add modules/trade/schema modules/trade/internal/infra/store
@@ -1366,20 +1403,21 @@ Expected: FAIL because TargetExecutor does not exist.
 
 - [ ] **Step 2: Persist only the latest desired target**
 
-Record the command sequence and inbox row in the same transaction as
-TargetExecution and TargetPosition updates:
+Record the event identity, command sequence, and target-position JSON in one
+TargetExecution row:
 
 ```go
 func (s *Store) AcceptTarget(
     ctx context.Context,
-    envelope InboxEnvelope,
+    envelope events.EventMessage,
     intent execution.TargetIntent,
 ) (accepted bool, err error)
 ```
 
 The SQL compare-and-set updates a binding only when the new sequence is
-greater. It never creates multiple independently advancing runs for one
-binding.
+greater. The unique event ID supplies inbox idempotency, and the greatest
+accepted command sequence supplies the binding offset. It never creates
+multiple independently advancing runs for one binding.
 
 - [ ] **Step 3: Implement deterministic convergence**
 
@@ -2296,6 +2334,9 @@ pre-existing changes, but none may be part of the Trade commits.
   `PARTIALLY_CANCELED`.
 - [ ] Startup and reconnect keep the account not ready until the full
   authoritative snapshot succeeds.
+- [ ] Schema inventory contains exactly nine tables, uses `t_order_fills`,
+  keeps the three-table double-entry ledger, and contains none of the six
+  merged account, target, reservation, or event-state tables.
 - [ ] Obsolete services, Rebalance Legs, Saga, transfer, dust, and duplicate
   Exchange abstractions are deleted rather than deprecated.
 - [ ] Focused tests, race tests, E2E, workspace checks, Web build, protobuf
