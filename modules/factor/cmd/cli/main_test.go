@@ -31,6 +31,18 @@ func TestParseImportGenericDefinition(t *testing.T) {
 	require.Equal(t, 200, cfg.LookbackRows)
 }
 
+func TestParseImportRejectsBlankColumnTokens(t *testing.T) {
+	tests := [][]string{
+		{"--input-columns", "close,,", "--outputs", "bias"},
+		{"--input-columns", "close", "--outputs", ",bias,,"},
+	}
+	for _, flags := range tests {
+		args := append([]string{"import"}, flags...)
+		_, err := parseArgs(args)
+		require.Error(t, err)
+	}
+}
+
 func TestReplayCommandIsRemoved(t *testing.T) {
 	_, err := parseArgs([]string{"replay"})
 	require.Error(t, err)

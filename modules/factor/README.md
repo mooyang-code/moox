@@ -42,7 +42,7 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
 - `run-once` 和 `RecalcFactor` 都只执行适用于当前 source、freq、subject 的 enabled binding，
   并按 binding 的 `target_dataset` 分组写回。
 - Python 因子仅实现 `compute(df, params)`，每个结果列必须为每个目标行返回有限数值或 `null`。
-- `null` 只跳过对应单元格写回，不影响同一行的其他因子列。
+- `null` 会显式清除对应单元格的旧值，不影响同一行的其他因子列。
 
 实时 Consumer 在事件加入内存 `EventBatcher` 后 ACK。ACK 后若进程退出，尚未计算的
 任务可能丢失；这是个人项目为简洁性接受的边界。使用 `run-once` 或同步

@@ -86,8 +86,15 @@ func parseArgs(args []string) (cliConfig, error) {
 		if err := fs.Parse(args[1:]); err != nil {
 			return cliConfig{}, err
 		}
-		cfg.InputColumns = parseStringCSV(inputColumns)
-		cfg.Outputs = parseStringCSV(outputs)
+		var err error
+		cfg.InputColumns, err = parseImportCSV("--input-columns", inputColumns)
+		if err != nil {
+			return cliConfig{}, err
+		}
+		cfg.Outputs, err = parseImportCSV("--outputs", outputs)
+		if err != nil {
+			return cliConfig{}, err
+		}
 	case "run-once":
 		var startTime, endTime string
 		var factors string
@@ -139,4 +146,16 @@ func parseStringCSV(raw string) []string {
 		}
 	}
 	return out
+}
+
+func parseImportCSV(flagName, raw string) ([]string, error) {
+	parts := strings.Split(raw, ",")
+	out := make([]string, len(parts))
+	for i, part := range parts {
+		out[i] = strings.TrimSpace(part)
+		if out[i] == "" {
+			return nil, fmt.Errorf("%s contains an empty value", flagName)
+		}
+	}
+	return out, nil
 }

@@ -66,4 +66,6 @@ func TestResultDataset(t *testing.T) {
 	require.Equal(t, "foo_kline_factor", ResultDataset("foo_kline"))
 	require.NotEqual(t, ResultDataset("foo"), ResultDataset("foo_kline"))
 	require.NotEqual(t, ResultDataset("same-long-readable-prefix-one"), ResultDataset("same-long-readable-prefix-two"))
+	require.NotEqual(t, ResultDataset("same-long-prefix-138"), ResultDataset("same-long-prefix-489"))
+	require.LessOrEqual(t, len(ResultDataset("same-long-prefix-138")), 20)
 }

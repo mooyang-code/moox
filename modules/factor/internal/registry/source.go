@@ -14,14 +14,14 @@ func ResultDataset(sourceDataset string) string {
 		return candidate
 	}
 	sum := sha1.Sum([]byte(normalized))
-	suffix := fmt.Sprintf("_f%x", sum[:2])
+	suffix := fmt.Sprintf("_f%x", sum[:8])
 	prefixLen := 20 - len(suffix)
 	prefix := strings.TrimRight(normalized, "_")
 	if len(prefix) > prefixLen {
 		prefix = strings.TrimRight(prefix[:prefixLen], "_")
 	}
 	if prefix == "" {
-		prefix = "dataset"
+		prefix = strings.Repeat("d", prefixLen)
 	}
 	return prefix + suffix
 }
