@@ -2509,7 +2509,7 @@ EOF
     fi
     expected_caddy_sha=$(awk -v asset="${caddy_asset}" '$2 == asset {print $1}' "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt")
     [[ -n "${expected_caddy_sha}" ]] || fail "missing checksum for ${caddy_asset}"
-    actual_caddy_sha=$(shasum -a 256 "${caddy_archive}" | awk '{print $1}')
+    actual_caddy_sha=$(shasum -a 512 "${caddy_archive}" | awk '{print $1}')
     [[ "${actual_caddy_sha}" == "${expected_caddy_sha}" ]] || fail "Caddy archive checksum mismatch for ${caddy_asset}"
   fi
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then
