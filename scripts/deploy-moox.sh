@@ -2497,9 +2497,20 @@ EOF
     esac
     caddy_asset="caddy_2.11.4_${caddy_os}_${TARGET_GOARCH}.tar.gz"
     caddy_archive="${STAGE_DIR}/lib/${caddy_asset}"
-    log "download pinned Caddy ${caddy_asset} for deployment bundle"
-    curl -fL --retry 3 --connect-timeout 10 --max-time 180 \
-      -o "${caddy_archive}" "https://github.com/caddyserver/caddy/releases/download/v2.11.4/${caddy_asset}"
+    if [[ -n "${MOOX_CADDY_ARCHIVE_CACHE:-}" ]]; then
+      [[ -f "${MOOX_CADDY_ARCHIVE_CACHE}" && ! -L "${MOOX_CADDY_ARCHIVE_CACHE}" ]] || \
+        fail "MOOX_CADDY_ARCHIVE_CACHE must name a regular file"
+      log "use cached pinned Caddy ${caddy_asset}"
+      cp "${MOOX_CADDY_ARCHIVE_CACHE}" "${caddy_archive}"
+    else
+      log "download pinned Caddy ${caddy_asset} for deployment bundle"
+      curl -fL --retry 3 --connect-timeout 10 --max-time 180 \
+        -o "${caddy_archive}" "https://github.com/caddyserver/caddy/releases/download/v2.11.4/${caddy_asset}"
+    fi
+    expected_caddy_sha=$(awk -v asset="${caddy_asset}" '$2 == asset {print $1}' "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt")
+    [[ -n "${expected_caddy_sha}" ]] || fail "missing checksum for ${caddy_asset}"
+    actual_caddy_sha=$(shasum -a 256 "${caddy_archive}" | awk '{print $1}')
+    [[ "${actual_caddy_sha}" == "${expected_caddy_sha}" ]] || fail "Caddy archive checksum mismatch for ${caddy_asset}"
   fi
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then
     mkdir -p "${STAGE_DIR}/admin/config"
