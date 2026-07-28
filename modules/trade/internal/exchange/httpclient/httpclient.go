@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
 // DefaultTimeout 默认请求超时。
@@ -39,6 +42,9 @@ type Request struct {
 
 // Do 执行请求，返回响应体。非 2xx 视为错误并返回交易所原始 body 便于诊断。
 func (c *Client) Do(ctx context.Context, req *Request) ([]byte, error) {
+	if c == nil || c.HTTP == nil || req == nil {
+		return nil, &exchange.Error{Kind: exchange.ErrorNotReady, Err: errors.New("http client is not configured")}
+	}
 	if req.Method == "" {
 		req.Method = http.MethodGet
 	}
@@ -52,7 +58,7 @@ func (c *Client) Do(ctx context.Context, req *Request) ([]byte, error) {
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, full, bodyReader)
 	if err != nil {
-		return nil, err
+		return nil, &exchange.Error{Kind: exchange.ErrorRejected, Err: err}
 	}
 	for k, v := range req.Headers {
 		httpReq.Header.Set(k, v)
@@ -70,15 +76,32 @@ func (c *Client) Do(ctx context.Context, req *Request) ([]byte, error) {
 
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, &exchange.Error{Kind: exchange.ErrorTransportUnknown, HTTPStatus: resp.StatusCode, Err: err}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return raw, fmt.Errorf("http %d: %s", resp.StatusCode, truncate(raw, 512))
+		kind := exchange.ErrorRejected
+		switch resp.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			kind = exchange.ErrorAuthentication
+		case http.StatusNotFound:
+			kind = exchange.ErrorOrderNotFound
+		case http.StatusTooManyRequests:
+			kind = exchange.ErrorRateLimited
+		default:
+			if resp.StatusCode >= 500 {
+				kind = exchange.ErrorTransportUnknown
+			}
+		}
+		return raw, &exchange.Error{
+			Kind:       kind,
+			HTTPStatus: resp.StatusCode,
+			Err:        fmt.Errorf("http %d: %s", resp.StatusCode, truncate(raw, 512)),
+		}
 	}
 	return raw, nil
 }

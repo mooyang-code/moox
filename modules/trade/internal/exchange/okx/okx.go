@@ -1,6 +1,3 @@
-// Package okx 实现 OKX 交易所的 ExchangeAdapter（V5 API）。
-// 签名：HMAC-SHA256(secret, timestamp+method+requestPath+body) 后 base64；
-// 鉴权头：OK-ACCESS-KEY / OK-ACCESS-SIGN / OK-ACCESS-TIMESTAMP / OK-ACCESS-PASSPHRASE。
 package okx
 
 import (
@@ -9,752 +6,847 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 )
 
-const baseURL = "https://www.okx.com"
+const defaultBaseURL = "https://www.okx.com"
 
-var (
-	errNotImplemented = errors.New("okx: not implemented for this market")
-	errInvalidParam   = errors.New("okx: invalid parameter")
-)
+type Adapter struct {
+	config     exchange.AccountConfig
+	credential exchange.Credential
+	client     *httpclient.Client
+
+	mu          sync.RWMutex
+	instruments map[string]exchange.Instrument
+}
 
 func init() {
-	exchange.Register("okx", func() exchange.ExchangeAdapter { return &Adapter{} })
+	exchange.Register(exchange.ExchangeOKX, func(
+		config exchange.AccountConfig,
+		credential exchange.Credential,
+	) (exchange.Adapter, error) {
+		return New(config, credential), nil
+	})
 }
 
-// Adapter 是 OKX 的统一适配实现。
-type Adapter struct {
-	insMu  sync.RWMutex
-	ins    map[string]exchange.Instrument
-	insExp time.Time
-}
-
-func (a *Adapter) Name() string { return "okx" }
-
-func client() *httpclient.Client { return httpclient.New(baseURL) }
-
-// ---- 签名 ----
-
-func isoTimestamp() string {
-	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-}
-
-func sign(secret, ts, method, path, body string) string {
-	payload := ts + strings.ToUpper(method) + path + body
-	h := hmacSha256([]byte(secret), []byte(payload))
-	return base64.StdEncoding.EncodeToString(h)
-}
-
-func authHeaders(cred exchange.Credential, method, path, body string) map[string]string {
-	ts := isoTimestamp()
-	return map[string]string{
-		"OK-ACCESS-KEY":        cred.APIKey,
-		"OK-ACCESS-SIGN":       sign(cred.APISecret, ts, method, path, body),
-		"OK-ACCESS-TIMESTAMP":  ts,
-		"OK-ACCESS-PASSPHRASE": cred.Passphrase,
-		"Content-Type":         "application/json",
+func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
+	return &Adapter{
+		config: config, credential: credential,
+		client:      httpclient.New(defaultBaseURL),
+		instruments: make(map[string]exchange.Instrument),
 	}
 }
 
-// okxResp V5 通用响应壳。
-type okxResp struct {
+func NewWithClient(
+	config exchange.AccountConfig,
+	credential exchange.Credential,
+	client *httpclient.Client,
+) *Adapter {
+	adapter := New(config, credential)
+	if client != nil {
+		adapter.client = client
+	}
+	return adapter
+}
+
+func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }
+
+type response struct {
 	Code string          `json:"code"`
 	Msg  string          `json:"msg"`
 	Data json.RawMessage `json:"data"`
 }
 
-// doSign 执行签名请求并解析 V5 响应 data 字段。
-func doSign(ctx context.Context, cred exchange.Credential, method, path string, query url.Values, body string) (json.RawMessage, error) {
-	full := path
+func (a *Adapter) request(
+	ctx context.Context,
+	method string,
+	path string,
+	query url.Values,
+	body any,
+	signed bool,
+) (json.RawMessage, error) {
+	fullPath := path
 	if len(query) > 0 {
-		full = path + "?" + query.Encode()
+		fullPath += "?" + query.Encode()
 	}
-	hdrs := authHeaders(cred, method, full, body)
-	raw, err := client().Do(ctx, &httpclient.Request{Method: method, Path: full, Body: []byte(body), Headers: hdrs})
+	var rawBody []byte
+	var err error
+	if body != nil {
+		rawBody, err = json.Marshal(body)
+		if err != nil {
+			return nil, rejected("encode request", err)
+		}
+	}
+	headers := map[string]string{}
+	if signed {
+		timestamp := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+		headers = map[string]string{
+			"OK-ACCESS-KEY":        a.credential.APIKey,
+			"OK-ACCESS-SIGN":       signature(a.credential.APISecret, timestamp, method, fullPath, string(rawBody)),
+			"OK-ACCESS-TIMESTAMP":  timestamp,
+			"OK-ACCESS-PASSPHRASE": a.credential.Passphrase,
+			"Content-Type":         "application/json",
+		}
+	}
+	raw, err := a.client.Do(ctx, &httpclient.Request{
+		Method: method, Path: fullPath, Body: rawBody, Headers: headers,
+	})
 	if err != nil {
-		return nil, err
+		return raw, classify(err, raw)
 	}
-	var r okxResp
-	if err := httpclient.DecodeJSON(raw, &r); err != nil {
-		return nil, fmt.Errorf("parse okx resp: %w", err)
+	var envelope response
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, rejected("decode OKX response", err)
 	}
-	if r.Code != "0" {
-		return nil, fmt.Errorf("okx code %s: %s", r.Code, r.Msg)
+	if envelope.Code != "0" {
+		return envelope.Data, classifyOKXCode(envelope.Code, envelope.Msg)
 	}
-	return r.Data, nil
+	return envelope.Data, nil
 }
 
-func doPublic(ctx context.Context, method, path string, query url.Values) (json.RawMessage, error) {
-	full := path
-	if len(query) > 0 {
-		full = path + "?" + query.Encode()
-	}
-	raw, err := client().Do(ctx, &httpclient.Request{Method: method, Path: full})
-	if err != nil {
-		return nil, err
-	}
-	var r okxResp
-	if err := httpclient.DecodeJSON(raw, &r); err != nil {
-		return nil, fmt.Errorf("parse okx resp: %w", err)
-	}
-	if r.Code != "0" {
-		return nil, fmt.Errorf("okx code %s: %s", r.Code, r.Msg)
-	}
-	return r.Data, nil
+func signature(secret, timestamp, method, path, body string) string {
+	payload := timestamp + strings.ToUpper(method) + path + body
+	return base64.StdEncoding.EncodeToString(hmacSha256([]byte(secret), []byte(payload)))
 }
 
-// instType 把市场类型映射为 OKX instType。
-func instType(market exchange.MarketType) string {
-	switch market {
-	case exchange.MarketSwap:
+func (a *Adapter) instrumentType() string {
+	if a.config.MarketType == exchange.MarketTypeSwap {
 		return "SWAP"
-	case exchange.MarketFutures:
-		return "FUTURES"
-	case exchange.MarketMargin:
-		return "MARGIN"
-	default:
-		return "SPOT"
 	}
+	return "SPOT"
 }
 
-// ---- 元信息 / 通道 ----
-
-func (a *Adapter) Ping(ctx context.Context, cred exchange.Credential) (int64, error) {
-	start := time.Now()
-	if _, err := a.GetBalances(ctx, cred, exchange.MarketSpot, nil); err != nil {
-		return 0, err
-	}
-	return time.Since(start).Milliseconds(), nil
+type instrumentPayload struct {
+	InstID    string `json:"instId"`
+	InstType  string `json:"instType"`
+	BaseCcy   string `json:"baseCcy"`
+	QuoteCcy  string `json:"quoteCcy"`
+	SettleCcy string `json:"settleCcy"`
+	TickSz    string `json:"tickSz"`
+	LotSz     string `json:"lotSz"`
+	MinSz     string `json:"minSz"`
+	CtVal     string `json:"ctVal"`
+	CtValCcy  string `json:"ctValCcy"`
+	CtType    string `json:"ctType"`
+	State     string `json:"state"`
 }
 
-type okxInstrument struct {
-	InstID   string `json:"instId"`
-	InstType string `json:"instType"`
-	BaseCcy  string `json:"baseCcy"`
-	QuoteCcy string `json:"quoteCcy"`
-	TickSz   string `json:"tickSz"`
-	LotSz    string `json:"lotSz"`
-	MinSz    string `json:"minSz"`
-	State    string `json:"state"`
-}
-
-type okxTicker struct {
-	InstID string `json:"instId"`
-	Last   string `json:"last"`
-}
-
-func (a *Adapter) GetInstruments(ctx context.Context, market exchange.MarketType) ([]exchange.Instrument, error) {
-	a.insMu.RLock()
-	if a.ins != nil && time.Now().Before(a.insExp) {
-		out := make([]exchange.Instrument, 0, len(a.ins))
-		for _, ins := range a.ins {
-			out = append(out, ins)
-		}
-		a.insMu.RUnlock()
-		return out, nil
-	}
-	a.insMu.RUnlock()
-
-	data, err := doPublic(ctx, "GET", "/api/v5/public/instruments", url.Values{"instType": []string{instType(market)}})
+func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, error) {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/public/instruments", url.Values{
+		"instType": []string{a.instrumentType()},
+	}, nil, false)
 	if err != nil {
 		return nil, err
 	}
-	var arr []okxInstrument
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	prices, err := loadTickerPrices(ctx, market)
-	if err != nil {
-		return nil, err
-	}
-	m := make(map[string]exchange.Instrument, len(arr))
-	for _, it := range arr {
-		m[it.InstID] = exchange.Instrument{
-			Symbol: it.InstID, Market: market, BaseCcy: it.BaseCcy, QuoteCcy: it.QuoteCcy,
-			TickSize: it.TickSz, LotSize: it.LotSz, MinQty: it.MinSz, LastPrice: prices[it.InstID], Status: it.State,
-		}
-	}
-	a.insMu.Lock()
-	a.ins = m
-	a.insExp = time.Now().Add(5 * time.Minute)
-	a.insMu.Unlock()
-	out := make([]exchange.Instrument, 0, len(m))
-	for _, ins := range m {
-		out = append(out, ins)
-	}
-	return out, nil
-}
-
-func loadTickerPrices(ctx context.Context, market exchange.MarketType) (map[string]string, error) {
-	data, err := doPublic(ctx, "GET", "/api/v5/market/tickers", url.Values{"instType": []string{instType(market)}})
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxTicker
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	out := make(map[string]string, len(arr))
-	for _, item := range arr {
-		out[item.InstID] = item.Last
-	}
-	return out, nil
-}
-
-// ---- 账户 / 余额 ----
-
-type okxBalance struct {
-	Ccy       string `json:"ccy"`
-	AvailBal  string `json:"availBal"`
-	FrozenBal string `json:"frozenBal"`
-	Eq        string `json:"eq"`
-}
-
-func (a *Adapter) GetBalances(ctx context.Context, cred exchange.Credential, market exchange.MarketType, currencies []string) ([]exchange.Balance, error) {
-	data, err := doSign(ctx, cred, "GET", "/api/v5/account/balance", nil, "")
-	if err != nil {
-		return nil, err
-	}
-	var top []struct {
-		Data []okxBalance `json:"data"`
-	}
-	if err := httpclient.DecodeJSON(data, &top); err != nil {
-		return nil, err
-	}
-	want := map[string]bool{}
-	for _, c := range currencies {
-		want[strings.ToUpper(c)] = true
-	}
-	out := make([]exchange.Balance, 0)
-	for _, t := range top {
-		for _, b := range t.Data {
-			if len(want) > 0 && !want[strings.ToUpper(b.Ccy)] {
-				continue
-			}
-			avail := b.AvailBal
-			if avail == "" {
-				avail = b.Eq
-			}
-			total := b.Eq
-			if total == "" {
-				total = decAdd(avail, b.FrozenBal)
-			}
-			out = append(out, exchange.Balance{Currency: b.Ccy, Available: avail, Frozen: b.FrozenBal, Total: total})
-		}
-	}
-	return out, nil
-}
-
-func (a *Adapter) GetAccountInfo(ctx context.Context, cred exchange.Credential, market exchange.MarketType) (*exchange.AccountInfo, error) {
-	data, err := doSign(ctx, cred, "GET", "/api/v5/account/balance", nil, "")
-	if err != nil {
-		return nil, err
-	}
-	var top []struct {
-		TotalEq string `json:"totalEq"`
-	}
-	if err := httpclient.DecodeJSON(data, &top); err != nil {
-		return nil, err
-	}
-	info := &exchange.AccountInfo{Market: market, Raw: map[string]string{}}
-	if len(top) > 0 {
-		info.TotalEq = top[0].TotalEq
-	}
-	return info, nil
-}
-
-type okxTradeFee struct {
-	TakerFee string `json:"taker"`
-	MakerFee string `json:"maker"`
-}
-
-func (a *Adapter) GetTradeFee(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol string) (*exchange.FeeRate, error) {
-	q := url.Values{}
-	q.Set("instType", instType(market))
-	if symbol != "" {
-		q.Set("instId", symbol)
-	}
-	data, err := doSign(ctx, cred, "GET", "/api/v5/account/trade-fee", q, "")
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxTradeFee
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	if len(arr) == 0 {
-		return &exchange.FeeRate{Symbol: symbol}, nil
-	}
-	return &exchange.FeeRate{Symbol: symbol, Maker: arr[0].MakerFee, Taker: arr[0].TakerFee}, nil
-}
-
-// ---- 下单 / 撤单 ----
-
-func mapStatus(s string) exchange.OrderStatus {
-	switch strings.ToUpper(s) {
-	case "live":
-		return exchange.StatusSubmitted
-	case "partially_filled":
-		return exchange.StatusPartiallyFilled
-	case "filled":
-		return exchange.StatusFilled
-	case "canceled", "mmp_canceled":
-		return exchange.StatusCanceled
-	default:
-		return exchange.StatusSubmitted
-	}
-}
-
-type okxOrderResp struct {
-	OrdID   string `json:"ordId"`
-	ClOrdID string `json:"clOrdId"`
-	SCode   string `json:"sCode"`
-	SMsg    string `json:"sMsg"`
-	State   string `json:"state"`
-}
-
-func (a *Adapter) PlaceOrder(ctx context.Context, cred exchange.Credential, req *exchange.PlaceOrderReq) (*exchange.OrderResult, error) {
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	side := "buy"
-	if req.Side == exchange.SideSell {
-		side = "sell"
-	}
-	ordType := okxOrderType(req.Type)
-	body := map[string]string{
-		"instId":  req.Symbol,
-		"tdMode":  okxTdMode(req.Market),
-		"side":    side,
-		"ordType": ordType,
-		"clOrdId": req.ClientOrderID,
-	}
-	if req.Quantity != "" && req.Quantity != "0" {
-		body["sz"] = req.Quantity
-	}
-	if req.Price != "" && req.Price != "0" {
-		body["px"] = req.Price
-	}
-	if req.Amount != "" && req.Amount != "0" {
-		// 市价买单按金额：tgtCcy=quote_ccy，sz=amount
-		body["sz"] = req.Amount
-		body["tgtCcy"] = "quote_ccy"
-	}
-	if req.PosSide != "" {
-		body["posSide"] = req.PosSide
-	}
-	if req.ReduceOnly {
-		body["reduceOnly"] = "true"
-	}
-	bodyStr := jsonMarshal(body)
-	data, err := doSign(ctx, cred, "POST", "/api/v5/trade/order", nil, bodyStr)
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxOrderResp
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	if len(arr) == 0 {
-		return nil, errors.New("okx: empty order response")
-	}
-	r := arr[0]
-	if r.SCode != "0" {
-		return nil, fmt.Errorf("okx place: %s", r.SMsg)
-	}
-	return &exchange.OrderResult{OrderID: r.ClOrdID, ClientOrderID: r.ClOrdID, ExchangeOrderID: r.OrdID, Status: mapStatus(r.State)}, nil
-}
-
-func (a *Adapter) CancelOrder(ctx context.Context, cred exchange.Credential, req *exchange.CancelOrderReq) (*exchange.OrderResult, error) {
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	body := map[string]string{"instId": req.Symbol}
-	if req.OrderID != "" {
-		body["ordId"] = req.OrderID
-	}
-	if req.ClientOrderID != "" {
-		body["clOrdId"] = req.ClientOrderID
-	}
-	bodyStr := jsonMarshal(body)
-	data, err := doSign(ctx, cred, "POST", "/api/v5/trade/cancel-order", nil, bodyStr)
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxOrderResp
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	if len(arr) == 0 {
-		return nil, errors.New("okx: empty cancel response")
-	}
-	r := arr[0]
-	return &exchange.OrderResult{OrderID: r.ClOrdID, ClientOrderID: r.ClOrdID, ExchangeOrderID: r.OrdID, Status: exchange.StatusCanceled}, nil
-}
-
-func (a *Adapter) CancelAllOrders(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol string) (int, error) {
-	// OKX 无单接口「撤销全部」；用批量撤销需先查挂单。MVP 阶段返回未实现，由上层循环调用 CancelOrder。
-	return 0, errNotImplemented
-}
-
-func (a *Adapter) AmendOrder(ctx context.Context, cred exchange.Credential, req *exchange.AmendOrderReq) (*exchange.OrderResult, error) {
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	body := map[string]string{"instId": req.Symbol}
-	if req.OrderID != "" {
-		body["ordId"] = req.OrderID
-	}
-	if req.ClientOrderID != "" {
-		body["clOrdId"] = req.ClientOrderID
-	}
-	if req.NewPrice != "" {
-		body["newPx"] = req.NewPrice
-	}
-	if req.NewQuantity != "" {
-		body["newSz"] = req.NewQuantity
-	}
-	bodyStr := jsonMarshal(body)
-	data, err := doSign(ctx, cred, "POST", "/api/v5/trade/amend-order", nil, bodyStr)
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxOrderResp
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	if len(arr) == 0 {
-		return nil, errors.New("okx: empty amend response")
-	}
-	r := arr[0]
-	return &exchange.OrderResult{OrderID: r.ClOrdID, ClientOrderID: r.ClOrdID, ExchangeOrderID: r.OrdID, Status: mapStatus(r.State)}, nil
-}
-
-func (a *Adapter) SetLeverage(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol, leverage string) error {
-	if market == exchange.MarketSpot {
-		return errNotImplemented
-	}
-	body := map[string]string{"instId": symbol, "lever": leverage, "mgnMode": "cross"}
-	bodyStr := jsonMarshal(body)
-	_, err := doSign(ctx, cred, "POST", "/api/v5/account/set-leverage", nil, bodyStr)
-	return err
-}
-
-func (a *Adapter) ClosePosition(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol, posSide string) error {
-	body := map[string]string{"instId": symbol, "mgnMode": "cross"}
-	if posSide != "" {
-		body["posSide"] = posSide
-	}
-	bodyStr := jsonMarshal(body)
-	_, err := doSign(ctx, cred, "POST", "/api/v5/trade/close-position", nil, bodyStr)
-	return err
-}
-
-// ---- 查询 ----
-
-type okxOrderInfo struct {
-	OrdID   string `json:"ordId"`
-	ClOrdID string `json:"clOrdId"`
-	InstID  string `json:"instId"`
-	Side    string `json:"side"`
-	OrdType string `json:"ordType"`
-	Px      string `json:"px"`
-	Sz      string `json:"sz"`
-	FillSz  string `json:"fillSz"`
-	FillPx  string `json:"fillPx"`
-	AvgPx   string `json:"avgPx"`
-	State   string `json:"state"`
-	Fee     string `json:"fee"`
-	FeeCcy  string `json:"feeCcy"`
-	CTime   string `json:"cTime"`
-	UTime   string `json:"uTime"`
-}
-
-func okxOrderToDomain(o *okxOrderInfo, market exchange.MarketType) *exchange.Order {
-	return &exchange.Order{
-		OrderID: o.ClOrdID, ClientOrderID: o.ClOrdID, ExchangeOrderID: o.OrdID,
-		Symbol: o.InstID, Market: market, Side: exchange.OrderSide(o.Side),
-		Type: exchange.OrderType(o.OrdType), Price: o.Px, Quantity: o.Sz,
-		FilledQty: o.FillSz, AvgPrice: o.AvgPx, Fee: o.Fee, FeeCurrency: o.FeeCcy,
-		Status: mapStatus(o.State),
-	}
-}
-
-func (a *Adapter) GetOrder(ctx context.Context, cred exchange.Credential, req *exchange.GetOrderReq) (*exchange.Order, error) {
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	q := url.Values{}
-	q.Set("instId", req.Symbol)
-	if req.OrderID != "" {
-		q.Set("ordId", req.OrderID)
-	}
-	if req.ClientOrderID != "" {
-		q.Set("clOrdId", req.ClientOrderID)
-	}
-	data, err := doSign(ctx, cred, "GET", "/api/v5/trade/order", q, "")
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxOrderInfo
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	if len(arr) == 0 {
-		return nil, errors.New("okx: order not found")
-	}
-	return okxOrderToDomain(&arr[0], req.Market), nil
-}
-
-func (a *Adapter) ListOpenOrders(ctx context.Context, cred exchange.Credential, req *exchange.ListOrdersReq) ([]exchange.Order, error) {
-	q := url.Values{}
-	if req != nil && req.Symbol != "" {
-		q.Set("instId", req.Symbol)
-	}
-	if req != nil && req.Limit > 0 {
-		q.Set("limit", strconv.Itoa(req.Limit))
-	}
-	data, err := doSign(ctx, cred, "GET", "/api/v5/trade/orders-pending", q, "")
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxOrderInfo
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	out := make([]exchange.Order, 0, len(arr))
-	for i := range arr {
-		out = append(out, *okxOrderToDomain(&arr[i], req.Market))
-	}
-	return out, nil
-}
-
-func (a *Adapter) ListOrders(ctx context.Context, cred exchange.Credential, req *exchange.ListOrdersReq) ([]exchange.Order, error) {
-	q := url.Values{}
-	q.Set("instType", instType(req.Market))
-	if req.Symbol != "" {
-		q.Set("instId", req.Symbol)
-	}
-	if req.Limit > 0 {
-		q.Set("limit", strconv.Itoa(req.Limit))
-	}
-	data, err := doSign(ctx, cred, "GET", "/api/v5/trade/orders-history", q, "")
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxOrderInfo
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	out := make([]exchange.Order, 0, len(arr))
-	for i := range arr {
-		out = append(out, *okxOrderToDomain(&arr[i], req.Market))
-	}
-	return out, nil
-}
-
-type okxFill struct {
-	TradeID string `json:"tradeId"`
-	OrdID   string `json:"ordId"`
-	InstID  string `json:"instId"`
-	Side    string `json:"side"`
-	FillPx  string `json:"fillPx"`
-	FillSz  string `json:"fillSz"`
-	Fee     string `json:"fee"`
-	FeeCcy  string `json:"feeCcy"`
-	Ts      string `json:"ts"`
-}
-
-func (a *Adapter) ListTrades(ctx context.Context, cred exchange.Credential, req *exchange.ListTradesReq) ([]exchange.Trade, error) {
-	q := url.Values{}
-	if req != nil && req.Symbol != "" {
-		q.Set("instId", req.Symbol)
-	}
-	if req != nil && req.OrderID != "" {
-		q.Set("ordId", req.OrderID)
-	}
-	if req != nil && req.Limit > 0 {
-		q.Set("limit", strconv.Itoa(req.Limit))
-	}
-	data, err := doSign(ctx, cred, "GET", "/api/v5/trade/fills", q, "")
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxFill
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	out := make([]exchange.Trade, 0, len(arr))
-	for _, f := range arr {
-		ts, _ := strconv.ParseInt(f.Ts, 10, 64)
-		out = append(out, exchange.Trade{
-			TradeID: f.TradeID, ExchangeTradeID: f.TradeID, OrderID: f.OrdID,
-			Symbol: f.InstID, Side: exchange.OrderSide(f.Side), Price: f.FillPx,
-			Quantity: f.FillSz, Fee: f.Fee, FeeCurrency: f.FeeCcy, TradedAt: ts,
-		})
-	}
-	return out, nil
-}
-
-type okxPosition struct {
-	InstID  string `json:"instId"`
-	PosSide string `json:"posSide"`
-	Pos     string `json:"pos"`
-	AvgPx   string `json:"avgPx"`
-	Lever   string `json:"lever"`
-	Margin  string `json:"margin"`
-	LiqPx   string `json:"liqPx"`
-	Upl     string `json:"upl"`
-}
-
-func (a *Adapter) ListPositions(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol string) ([]exchange.Position, error) {
-	q := url.Values{}
-	if symbol != "" {
-		q.Set("instId", symbol)
-	}
-	data, err := doSign(ctx, cred, "GET", "/api/v5/account/positions", q, "")
-	if err != nil {
-		return nil, err
-	}
-	var arr []okxPosition
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	out := make([]exchange.Position, 0, len(arr))
-	for _, p := range arr {
-		if p.Pos == "0" {
+	var payload []instrumentPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, rejected("decode instruments", err)
+	}
+	out := make([]exchange.Instrument, 0, len(payload))
+	for _, row := range payload {
+		if row.InstType != a.instrumentType() {
 			continue
 		}
-		out = append(out, exchange.Position{
-			Symbol: p.InstID, PosSide: p.PosSide, Quantity: p.Pos, AvgPrice: p.AvgPx,
-			Leverage: p.Lever, Margin: p.Margin, LiqPrice: p.LiqPx, UnrealizedPnl: p.Upl,
-		})
+		instrument := exchange.Instrument{
+			Exchange: exchange.ExchangeOKX, MarketType: a.config.MarketType,
+			Symbol: row.InstID, InstrumentID: row.InstID,
+			BaseAsset: row.BaseCcy, QuoteAsset: row.QuoteCcy,
+			Status: row.State, ExchangeUpdatedAt: time.Now().UTC(),
+		}
+		instrument.PriceTick, err = decimal(row.TickSz)
+		if err == nil {
+			instrument.ExchangeQuantityStep, err = decimal(row.LotSz)
+		}
+		if err == nil {
+			instrument.MinExchangeQuantity, err = decimal(row.MinSz)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if a.config.MarketType == exchange.MarketTypeSwap {
+			if row.CtType != "linear" || row.SettleCcy != "USDT" ||
+				row.CtVal == "" || row.CtValCcy == "" {
+				continue
+			}
+			instrument.BaseAsset = row.CtValCcy
+			instrument.QuoteAsset = row.SettleCcy
+			instrument.Linear = true
+			instrument.SettlementAsset = row.SettleCcy
+			instrument.ContractValue, err = decimal(row.CtVal)
+			instrument.ContractValueAsset = row.CtValCcy
+			if err != nil ||
+				instrument.ContractValue.Cmp(shared.Zero()) <= 0 ||
+				!strings.EqualFold(instrument.ContractValueAsset, instrument.BaseAsset) {
+				continue
+			}
+		} else {
+			instrument.SettlementAsset = row.QuoteCcy
+			instrument.ContractValue = shared.MustDecimal("1")
+			instrument.ContractValueAsset = row.BaseCcy
+		}
+		out = append(out, instrument)
 	}
+	a.mu.Lock()
+	a.instruments = make(map[string]exchange.Instrument, len(out))
+	for _, instrument := range out {
+		a.instruments[instrument.Symbol] = instrument
+	}
+	a.mu.Unlock()
 	return out, nil
 }
 
-// ---- 资金 ----
+func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {
+	a.mu.RLock()
+	instrument, ok := a.instruments[symbol]
+	a.mu.RUnlock()
+	if !ok {
+		return exchange.Instrument{}, &exchange.Error{
+			Kind: exchange.ErrorNotReady,
+			Err:  fmt.Errorf("OKX instrument %q is not loaded", symbol),
+		}
+	}
+	return instrument, nil
+}
 
-func (a *Adapter) ListFundFlows(ctx context.Context, cred exchange.Credential, req *exchange.FundFlowQuery) ([]exchange.FundFlow, error) {
-	q := url.Values{}
-	if req != nil && req.Currency != "" {
-		q.Set("ccy", strings.ToUpper(req.Currency))
+func (a *Adapter) toExchangeQuantity(symbol string, base shared.Decimal) (shared.Decimal, error) {
+	if a.config.MarketType == exchange.MarketTypeSpot {
+		return base, nil
 	}
-	if req != nil && req.Limit > 0 {
-		q.Set("limit", strconv.Itoa(req.Limit))
+	instrument, err := a.instrument(symbol)
+	if err != nil {
+		return shared.Decimal{}, err
 	}
-	data, err := doSign(ctx, cred, "GET", "/api/v5/asset/bills", q, "")
+	contracts := base.Div(instrument.ContractValue)
+	if contracts.Cmp(instrument.MinExchangeQuantity) < 0 {
+		return shared.Decimal{}, rejected("quantity is below OKX minimum contracts", nil)
+	}
+	steps := contracts.Div(instrument.ExchangeQuantityStep)
+	if strings.Contains(steps.String(), ".") || strings.Contains(steps.String(), "/") {
+		return shared.Decimal{}, rejected("quantity does not align with OKX lot size", nil)
+	}
+	if _, err := shared.ParseDecimal(contracts.String()); err != nil {
+		return shared.Decimal{}, rejected("contract quantity is not a finite decimal", err)
+	}
+	return contracts, nil
+}
+
+func (a *Adapter) toBaseQuantity(symbol string, contracts shared.Decimal) (shared.Decimal, error) {
+	if a.config.MarketType == exchange.MarketTypeSpot {
+		return contracts, nil
+	}
+	instrument, err := a.instrument(symbol)
+	if err != nil {
+		return shared.Decimal{}, err
+	}
+	base := contracts.Mul(instrument.ContractValue)
+	if _, err := shared.ParseDecimal(base.String()); err != nil {
+		return shared.Decimal{}, rejected("base quantity is not a finite decimal", err)
+	}
+	return base, nil
+}
+
+type balanceEnvelope struct {
+	UTime   string `json:"uTime"`
+	TotalEq string `json:"totalEq"`
+	AdjEq   string `json:"adjEq"`
+	Details []struct {
+		Ccy       string `json:"ccy"`
+		AvailBal  string `json:"availBal"`
+		FrozenBal string `json:"frozenBal"`
+		CashBal   string `json:"cashBal"`
+		Eq        string `json:"eq"`
+		AvailEq   string `json:"availEq"`
+		Imr       string `json:"imr"`
+		Mmr       string `json:"mmr"`
+		Upl       string `json:"upl"`
+	} `json:"details"`
+}
+
+func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		if err := a.ensureNetPositionMode(ctx); err != nil {
+			return exchange.AccountSnapshot{}, err
+		}
+	}
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/account/balance", nil, nil, true)
+	if err != nil {
+		return exchange.AccountSnapshot{}, err
+	}
+	var payload []balanceEnvelope
+	if err := json.Unmarshal(data, &payload); err != nil || len(payload) == 0 {
+		return exchange.AccountSnapshot{}, rejected("decode account snapshot", err)
+	}
+	row := payload[0]
+	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millisString(row.UTime)}
+	snapshot.Equity, err = decimalOrZero(row.TotalEq)
+	if err != nil {
+		return exchange.AccountSnapshot{}, err
+	}
+	for _, detail := range row.Details {
+		totalRaw := detail.Eq
+		if totalRaw == "" {
+			totalRaw = detail.CashBal
+		}
+		total, parseErr := decimalOrZero(totalRaw)
+		if parseErr != nil {
+			return exchange.AccountSnapshot{}, parseErr
+		}
+		availableRaw := detail.AvailEq
+		if availableRaw == "" {
+			availableRaw = detail.AvailBal
+		}
+		available, parseErr := decimalOrZero(availableRaw)
+		if parseErr != nil {
+			return exchange.AccountSnapshot{}, parseErr
+		}
+		locked, parseErr := decimalOrZero(detail.FrozenBal)
+		if parseErr != nil {
+			return exchange.AccountSnapshot{}, parseErr
+		}
+		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
+			Asset: detail.Ccy, Available: available, Locked: locked, Total: total,
+		})
+		if strings.EqualFold(detail.Ccy, a.config.SettlementAsset) {
+			snapshot.AvailableFunds = available
+			snapshot.UsedMargin, _ = decimalOrZero(detail.Imr)
+			snapshot.MaintenanceMargin, _ = decimalOrZero(detail.Mmr)
+			snapshot.UnrealizedPnL, _ = decimalOrZero(detail.Upl)
+		}
+	}
+	return snapshot, nil
+}
+
+func (a *Adapter) ensureNetPositionMode(ctx context.Context) error {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/account/config", nil, nil, true)
+	if err != nil {
+		return err
+	}
+	var payload []struct {
+		PositionMode string `json:"posMode"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || len(payload) == 0 {
+		return rejected("decode OKX account configuration", err)
+	}
+	if payload[0].PositionMode != "net_mode" {
+		return rejected("OKX hedge position mode is unsupported", nil)
+	}
+	return nil
+}
+
+type positionPayload struct {
+	InstID   string `json:"instId"`
+	PosSide  string `json:"posSide"`
+	Pos      string `json:"pos"`
+	AvgPx    string `json:"avgPx"`
+	MarkPx   string `json:"markPx"`
+	Lever    string `json:"lever"`
+	MgnMode  string `json:"mgnMode"`
+	Margin   string `json:"margin"`
+	LiqPx    string `json:"liqPx"`
+	Upl      string `json:"upl"`
+	Realized string `json:"realizedPnl"`
+	UTime    string `json:"uTime"`
+}
+
+func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
+	if a.config.MarketType == exchange.MarketTypeSpot {
+		return nil, nil
+	}
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/account/positions", url.Values{
+		"instType": []string{"SWAP"},
+	}, nil, true)
 	if err != nil {
 		return nil, err
 	}
-	var arr []struct {
-		BillID string `json:"billId"`
-		Ccy    string `json:"ccy"`
-		Type   string `json:"type"`
-		Amt    string `json:"amt"`
-		BalChg string `json:"balChg"`
-		Ts     string `json:"ts"`
+	var payload []positionPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, rejected("decode positions", err)
 	}
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
-	}
-	out := make([]exchange.FundFlow, 0, len(arr))
-	for _, b := range arr {
-		ts, _ := strconv.ParseInt(b.Ts, 10, 64)
-		dir := 1
-		if strings.HasPrefix(b.BalChg, "-") {
-			dir = -1
+	out := make([]exchange.Position, 0, len(payload))
+	for _, row := range payload {
+		if row.PosSide != "" && row.PosSide != "net" {
+			return nil, rejected("hedge position mode is unsupported", nil)
 		}
-		out = append(out, exchange.FundFlow{FlowID: b.BillID, Currency: b.Ccy, BizType: b.Type, Direction: dir, Amount: b.Amt, Balance: b.BalChg, Timestamp: ts})
+		contracts, err := decimalOrZero(row.Pos)
+		if err != nil || contracts.IsZero() {
+			continue
+		}
+		quantity, err := a.toBaseQuantity(row.InstID, contracts)
+		if err != nil {
+			return nil, err
+		}
+		position := exchange.Position{
+			ExchangeAccountID: a.config.ExchangeAccountID,
+			Symbol:            row.InstID, PositionSide: exchange.PositionSideNet,
+			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
+			ExchangeUpdatedAt: millisString(row.UTime),
+		}
+		position.EntryPrice, err = decimalOrZero(row.AvgPx)
+		if err == nil {
+			position.MarkPrice, err = decimalOrZero(row.MarkPx)
+		}
+		if err == nil {
+			position.Leverage, err = decimalOrZero(row.Lever)
+		}
+		if err == nil {
+			position.UsedMargin, err = decimalOrZero(row.Margin)
+		}
+		if err == nil {
+			position.LiquidationPrice, err = decimalOrZero(row.LiqPx)
+		}
+		if err == nil {
+			position.UnrealizedPnL, err = decimalOrZero(row.Upl)
+		}
+		if err == nil {
+			position.RealizedPnL, err = decimalOrZero(row.Realized)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if row.MgnMode != "" && row.MgnMode != "cross" {
+			return nil, rejected("isolated margin is unsupported", nil)
+		}
+		out = append(out, position)
 	}
 	return out, nil
 }
 
-func (a *Adapter) Transfer(ctx context.Context, cred exchange.Credential, req *exchange.TransferReq) (*exchange.TransferResult, error) {
-	if req == nil || req.Currency == "" || req.Amount == "" {
-		return nil, errInvalidParam
+type orderPayload struct {
+	InstID     string `json:"instId"`
+	OrdID      string `json:"ordId"`
+	ClOrdID    string `json:"clOrdId"`
+	Side       string `json:"side"`
+	PosSide    string `json:"posSide"`
+	OrdType    string `json:"ordType"`
+	Sz         string `json:"sz"`
+	AccFillSz  string `json:"accFillSz"`
+	AvgPx      string `json:"avgPx"`
+	Px         string `json:"px"`
+	State      string `json:"state"`
+	ReduceOnly string `json:"reduceOnly"`
+	CTime      string `json:"cTime"`
+	UTime      string `json:"uTime"`
+	SCode      string `json:"sCode"`
+	SMsg       string `json:"sMsg"`
+}
+
+func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/orders-pending", url.Values{
+		"instType": []string{a.instrumentType()},
+	}, nil, true)
+	if err != nil {
+		return nil, err
+	}
+	var payload []orderPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, rejected("decode open orders", err)
+	}
+	return a.orders(payload)
+}
+
+func (a *Adapter) GetOrder(
+	ctx context.Context,
+	symbol string,
+	clientOrderID string,
+) (exchange.Order, error) {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
+		"instId":  []string{symbol},
+		"clOrdId": []string{clientOrderID},
+	}, nil, true)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	var payload []orderPayload
+	if err := json.Unmarshal(data, &payload); err != nil || len(payload) == 0 {
+		return exchange.Order{}, &exchange.Error{
+			Kind: exchange.ErrorOrderNotFound, Err: errors.New("OKX order not found"),
+		}
+	}
+	return a.order(payload[0])
+}
+
+func (a *Adapter) PlaceOrder(
+	ctx context.Context,
+	request exchange.OrderRequest,
+) (exchange.Order, error) {
+	if err := validateRequest(request, a.config.MarketType); err != nil {
+		return exchange.Order{}, err
+	}
+	quantity, err := a.toExchangeQuantity(request.Symbol, request.Quantity)
+	if err != nil {
+		return exchange.Order{}, err
 	}
 	body := map[string]string{
-		"ccy":  strings.ToUpper(req.Currency),
-		"amt":  req.Amount,
-		"from": okxAccountType(req.From),
-		"to":   okxAccountType(req.To),
-		"type": "0",
+		"instId": request.Symbol, "clOrdId": request.ClientOrderID,
+		"tdMode": "cash", "side": strings.ToLower(string(request.Side)),
+		"ordType": strings.ToLower(string(request.OrderType)),
+		"sz":      quantity.String(),
 	}
-	bodyStr := jsonMarshal(body)
-	data, err := doSign(ctx, cred, "POST", "/api/v5/asset/transfer", nil, bodyStr)
+	if request.OrderType == exchange.OrderTypeLimit {
+		body["px"] = request.LimitPrice.String()
+		body["ordType"] = mapOKXLimitType(request.TimeInForce)
+	}
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		body["tdMode"] = "cross"
+		body["posSide"] = "net"
+		if request.ReduceOnly {
+			body["reduceOnly"] = "true"
+		}
+	}
+	data, err := a.request(ctx, http.MethodPost, "/api/v5/trade/order", nil, body, true)
 	if err != nil {
-		return nil, err
+		return exchange.Order{}, err
 	}
-	var arr []struct {
-		TransID string `json:"transId"`
+	var payload []orderPayload
+	if err := json.Unmarshal(data, &payload); err != nil || len(payload) == 0 {
+		return exchange.Order{}, rejected("decode placed order", err)
 	}
-	if err := httpclient.DecodeJSON(data, &arr); err != nil {
-		return nil, err
+	if payload[0].SCode != "" && payload[0].SCode != "0" {
+		return exchange.Order{}, classifyOKXCode(payload[0].SCode, payload[0].SMsg)
 	}
-	if len(arr) == 0 {
-		return nil, errors.New("okx: empty transfer response")
-	}
-	return &exchange.TransferResult{TransferID: arr[0].TransID}, nil
+	return exchange.Order{
+		ExchangeOrderID: payload[0].OrdID,
+		ClientOrderID:   request.ClientOrderID,
+		Symbol:          request.Symbol,
+		OrderType:       request.OrderType,
+		TimeInForce:     request.TimeInForce,
+		Side:            request.Side,
+		PositionSide:    request.PositionSide,
+		Quantity:        request.Quantity,
+		ReduceOnly:      request.ReduceOnly,
+		Status:          exchange.OrderStatusOpen,
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}, nil
 }
 
-func (a *Adapter) ListConvertibleDustAssets(ctx context.Context, cred exchange.Credential, req *exchange.DustConvertibleReq) ([]exchange.DustConvertibleAsset, error) {
-	return nil, errNotImplemented
+func (a *Adapter) CancelOrder(
+	ctx context.Context,
+	symbol string,
+	clientOrderID string,
+) (exchange.Order, error) {
+	data, err := a.request(ctx, http.MethodPost, "/api/v5/trade/cancel-order", nil, map[string]string{
+		"instId": symbol, "clOrdId": clientOrderID,
+	}, true)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	var payload []orderPayload
+	if err := json.Unmarshal(data, &payload); err != nil || len(payload) == 0 {
+		return exchange.Order{}, rejected("decode canceled order", err)
+	}
+	if payload[0].SCode != "" && payload[0].SCode != "0" {
+		return exchange.Order{}, classifyOKXCode(payload[0].SCode, payload[0].SMsg)
+	}
+	// Fetch the authoritative terminal state; a cancel acknowledgement alone is
+	// not sufficient because final fills may have raced with the request.
+	return a.GetOrder(ctx, symbol, clientOrderID)
 }
 
-func (a *Adapter) ConvertDust(ctx context.Context, cred exchange.Credential, req *exchange.DustTransferReq) (*exchange.DustTransferResult, error) {
-	return nil, errNotImplemented
+type fillPayload struct {
+	InstID   string `json:"instId"`
+	TradeID  string `json:"tradeId"`
+	OrdID    string `json:"ordId"`
+	ClOrdID  string `json:"clOrdId"`
+	Side     string `json:"side"`
+	PosSide  string `json:"posSide"`
+	FillSz   string `json:"fillSz"`
+	FillPx   string `json:"fillPx"`
+	Fee      string `json:"fee"`
+	FeeCcy   string `json:"feeCcy"`
+	FillPnl  string `json:"fillPnl"`
+	ExecType string `json:"execType"`
+	Ts       string `json:"ts"`
 }
 
-// ---- 辅助 ----
+func (a *Adapter) ListRecentFills(
+	ctx context.Context,
+	cursor string,
+) ([]exchange.Fill, string, error) {
+	query := url.Values{"instType": []string{a.instrumentType()}, "limit": []string{"100"}}
+	if cursor != "" {
+		query.Set("after", cursor)
+	}
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/fills-history", query, nil, true)
+	if err != nil {
+		return nil, cursor, err
+	}
+	var payload []fillPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, cursor, rejected("decode fills", err)
+	}
+	out := make([]exchange.Fill, 0, len(payload))
+	next := cursor
+	for _, row := range payload {
+		fill, err := a.fill(row)
+		if err != nil {
+			return nil, cursor, err
+		}
+		out = append(out, fill)
+		if row.TradeID != "" {
+			next = row.TradeID
+		}
+	}
+	return out, next, nil
+}
 
-func okxOrderType(t exchange.OrderType) string {
-	switch t {
-	case exchange.TypeMarket:
-		return "market"
-	case exchange.TypeLimit:
-		return "limit"
-	case exchange.TypePostOnly:
-		return "post_only"
-	case exchange.TypeIOC:
+func (a *Adapter) SetLeverage(
+	ctx context.Context,
+	symbol string,
+	leverage shared.Decimal,
+) error {
+	if a.config.MarketType != exchange.MarketTypeSwap ||
+		leverage.Cmp(shared.Zero()) <= 0 {
+		return rejected("positive SWAP leverage is required", nil)
+	}
+	_, err := a.request(ctx, http.MethodPost, "/api/v5/account/set-leverage", nil, map[string]string{
+		"instId": symbol, "lever": leverage.String(), "mgnMode": "cross", "posSide": "net",
+	}, true)
+	return err
+}
+
+func (a *Adapter) SetMarginMode(
+	_ context.Context,
+	_ string,
+	mode exchange.MarginMode,
+) error {
+	if a.config.MarketType != exchange.MarketTypeSwap || mode != exchange.MarginModeCross {
+		return rejected("only CROSS SWAP margin mode is supported", nil)
+	}
+	// OKX applies tdMode=cross per order and leverage setting; there is no
+	// separate account-wide margin-mode mutation for this v1 scope.
+	return nil
+}
+
+func (a *Adapter) orders(payload []orderPayload) ([]exchange.Order, error) {
+	out := make([]exchange.Order, 0, len(payload))
+	for _, row := range payload {
+		order, err := a.order(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, order)
+	}
+	return out, nil
+}
+
+func (a *Adapter) order(row orderPayload) (exchange.Order, error) {
+	contracts, err := decimalOrZero(row.Sz)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	quantity, err := a.toBaseQuantity(row.InstID, contracts)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	filledContracts, err := decimalOrZero(row.AccFillSz)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	filled, err := a.toBaseQuantity(row.InstID, filledContracts)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	average, err := decimalOrZero(row.AvgPx)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	positionSide := exchange.PositionSideUnspecified
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		if row.PosSide != "" && row.PosSide != "net" {
+			return exchange.Order{}, rejected("hedge order is unsupported", nil)
+		}
+		positionSide = exchange.PositionSideNet
+	}
+	orderType, tif := parseOKXOrderType(row.OrdType)
+	return exchange.Order{
+		ExchangeOrderID: row.OrdID, ClientOrderID: row.ClOrdID,
+		Symbol: row.InstID, OrderType: orderType, TimeInForce: tif,
+		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
+		Quantity: quantity, FilledQuantity: filled, AveragePrice: average,
+		ReduceOnly: row.ReduceOnly == "true",
+		Status:     mapStatus(row.State, filled),
+		CreatedAt:  millisString(row.CTime), UpdatedAt: millisString(row.UTime),
+	}, nil
+}
+
+func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
+	contracts, err := decimalOrZero(row.FillSz)
+	if err != nil {
+		return exchange.Fill{}, err
+	}
+	quantity, err := a.toBaseQuantity(row.InstID, contracts)
+	if err != nil {
+		return exchange.Fill{}, err
+	}
+	price, err := decimalOrZero(row.FillPx)
+	if err != nil {
+		return exchange.Fill{}, err
+	}
+	fee, err := decimalOrZero(row.Fee)
+	if err != nil {
+		return exchange.Fill{}, err
+	}
+	pnl, err := decimalOrZero(row.FillPnl)
+	if err != nil {
+		return exchange.Fill{}, err
+	}
+	positionSide := exchange.PositionSideUnspecified
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		if row.PosSide != "" && row.PosSide != "net" {
+			return exchange.Fill{}, rejected("hedge fill is unsupported", nil)
+		}
+		positionSide = exchange.PositionSideNet
+	}
+	return exchange.Fill{
+		ExchangeTradeID: row.TradeID, ExchangeOrderID: row.OrdID,
+		ClientOrderID: row.ClOrdID, Symbol: row.InstID,
+		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
+		Quantity: quantity, Price: price, Fee: fee.Abs(), FeeAsset: row.FeeCcy,
+		RealizedPnL: pnl, SettlementAsset: a.config.SettlementAsset,
+		LiquidityRole: strings.ToUpper(row.ExecType), TradedAt: millisString(row.Ts),
+	}, nil
+}
+
+func validateRequest(request exchange.OrderRequest, market exchange.MarketType) error {
+	if strings.TrimSpace(request.ClientOrderID) == "" ||
+		strings.TrimSpace(request.Symbol) == "" ||
+		!request.Side.Valid() ||
+		request.Quantity.Cmp(shared.Zero()) <= 0 {
+		return rejected("invalid order request", nil)
+	}
+	switch request.OrderType {
+	case exchange.OrderTypeMarket:
+		if request.LimitPrice != nil || request.TimeInForce != exchange.TimeInForceUnspecified {
+			return rejected("MARKET order cannot carry price or TimeInForce", nil)
+		}
+	case exchange.OrderTypeLimit:
+		if request.LimitPrice == nil || request.LimitPrice.Cmp(shared.Zero()) <= 0 ||
+			!request.TimeInForce.ValidForLimit() {
+			return rejected("invalid LIMIT order", nil)
+		}
+	default:
+		return rejected("unsupported order type", nil)
+	}
+	if market == exchange.MarketTypeSpot {
+		if request.PositionSide != exchange.PositionSideUnspecified || request.ReduceOnly {
+			return rejected("SPOT cannot use position side or reduce-only", nil)
+		}
+	} else if request.PositionSide != exchange.PositionSideNet {
+		return rejected("SWAP requires NET position side", nil)
+	}
+	return nil
+}
+
+func mapOKXLimitType(tif exchange.TimeInForce) string {
+	switch tif {
+	case exchange.TimeInForceIOC:
 		return "ioc"
-	case exchange.TypeFOK:
+	case exchange.TimeInForceFOK:
 		return "fok"
-	case exchange.TypeStopLimit:
-		return "conditional"
 	default:
 		return "limit"
 	}
 }
 
-func okxTdMode(market exchange.MarketType) string {
-	switch market {
-	case exchange.MarketSpot:
-		return "cash"
-	case exchange.MarketMargin:
-		return "cross"
-	case exchange.MarketSwap, exchange.MarketFutures:
-		return "cross"
+func parseOKXOrderType(raw string) (exchange.OrderType, exchange.TimeInForce) {
+	switch raw {
+	case "market":
+		return exchange.OrderTypeMarket, exchange.TimeInForceUnspecified
+	case "ioc":
+		return exchange.OrderTypeLimit, exchange.TimeInForceIOC
+	case "fok":
+		return exchange.OrderTypeLimit, exchange.TimeInForceFOK
 	default:
-		return "cash"
+		return exchange.OrderTypeLimit, exchange.TimeInForceGTC
 	}
 }
 
-func okxAccountType(market exchange.MarketType) string {
-	switch market {
-	case exchange.MarketSpot, exchange.MarketMargin:
-		return "6"
-	case exchange.MarketSwap, exchange.MarketFutures:
-		return "1"
+func mapStatus(raw string, filled shared.Decimal) exchange.OrderStatus {
+	switch raw {
+	case "live":
+		return exchange.OrderStatusOpen
+	case "partially_filled":
+		return exchange.OrderStatusPartiallyFilled
+	case "filled":
+		return exchange.OrderStatusFilled
+	case "canceled":
+		if filled.Cmp(shared.Zero()) > 0 {
+			return exchange.OrderStatusPartiallyCanceled
+		}
+		return exchange.OrderStatusCanceled
+	case "mmp_canceled":
+		return exchange.OrderStatusCanceled
 	default:
-		return "6"
+		return exchange.OrderStatusSubmitUnknown
 	}
+}
+
+func classify(err error, _ []byte) error {
+	if err == nil {
+		return nil
+	}
+	var typed *exchange.Error
+	if errors.As(err, &typed) {
+		return typed
+	}
+	return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+}
+
+func classifyOKXCode(code, message string) error {
+	kind := exchange.ErrorRejected
+	switch code {
+	case "50011", "50040":
+		kind = exchange.ErrorRateLimited
+	case "50014", "50101", "50113":
+		kind = exchange.ErrorAuthentication
+	case "51008":
+		kind = exchange.ErrorInsufficientBalance
+	case "51400", "51401", "51603":
+		kind = exchange.ErrorOrderNotFound
+	case "50000", "50004", "50026":
+		kind = exchange.ErrorTransportUnknown
+	}
+	return &exchange.Error{Kind: kind, Code: code, Err: errors.New(message)}
+}
+
+func rejected(message string, err error) error {
+	if err == nil {
+		err = errors.New(message)
+	} else {
+		err = fmt.Errorf("%s: %w", message, err)
+	}
+	return &exchange.Error{Kind: exchange.ErrorRejected, Err: err}
+}
+
+func decimal(raw string) (shared.Decimal, error) {
+	value, err := shared.ParseDecimal(raw)
+	if err != nil {
+		return shared.Decimal{}, rejected("invalid OKX decimal", err)
+	}
+	return value, nil
+}
+
+func decimalOrZero(raw string) (shared.Decimal, error) {
+	if raw == "" {
+		return shared.Zero(), nil
+	}
+	return decimal(raw)
+}
+
+func millisString(raw string) time.Time {
+	value, _ := strconv.ParseInt(raw, 10, 64)
+	if value <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(value).UTC()
 }

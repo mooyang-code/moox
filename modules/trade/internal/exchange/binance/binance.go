@@ -1,987 +1,828 @@
-// Package binance 实现 Binance 交易所的 ExchangeAdapter。
-// 按市场类型路由：现货 /api、U本位合约 /fapi、币本位合约 /dapi。
 package binance
 
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 )
 
 const (
-	baseSpot = "https://api.binance.com"
-	baseSwap = "https://fapi.binance.com"
-
-	recvWindow = 5000
+	defaultSpotURL = "https://api.binance.com"
+	defaultSwapURL = "https://fapi.binance.com"
+	recvWindow     = 5000
 )
 
-func init() {
-	exchange.Register("binance", func() exchange.ExchangeAdapter { return &Adapter{} })
-}
-
-// Adapter 是 Binance 的统一适配实现。
 type Adapter struct {
-	insCache *instrumentCache
+	config     exchange.AccountConfig
+	credential exchange.Credential
+	spot       *httpclient.Client
+	swap       *httpclient.Client
+
+	mu          sync.RWMutex
+	instruments map[string]exchange.Instrument
 }
 
-// instrumentCache 缓存交易规则，按市场+交易所维度 TTL 失效。
-type instrumentCache struct {
-	mu      sync.RWMutex
-	spot    map[string]exchange.Instrument
-	swap    map[string]exchange.Instrument
-	spotExp time.Time
-	swapExp time.Time
+func init() {
+	exchange.Register(exchange.ExchangeBinance, func(
+		config exchange.AccountConfig,
+		credential exchange.Credential,
+	) (exchange.Adapter, error) {
+		return New(config, credential), nil
+	})
 }
 
-var globalInsCache = &instrumentCache{}
-
-func (a *Adapter) Name() string { return "binance" }
-
-func (a *Adapter) ensureCache() *instrumentCache {
-	if a.insCache == nil {
-		a.insCache = globalInsCache
-	}
-	return a.insCache
-}
-
-// ---- 签名 ----
-
-// sign 计算 HMAC-SHA256(secret, payload) 的十六进制签名。
-func sign(secret, payload string) string {
-	h := hmacSha256([]byte(secret), []byte(payload))
-	return hex.EncodeToString(h)
-}
-
-// signedQuery 构造带 timestamp/recvWindow/signature 的签名 query。
-func signedQuery(cred exchange.Credential, base url.Values) url.Values {
-	q := url.Values{}
-	for k, v := range base {
-		q[k] = v
-	}
-	q.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))
-	q.Set("recvWindow", strconv.Itoa(recvWindow))
-	payload := q.Encode()
-	q.Set("signature", sign(cred.APISecret, payload))
-	return q
-}
-
-// apiHeader 返回币安签名请求必需的 X-MBX-APIKEY 头。
-func apiHeader(cred exchange.Credential) map[string]string {
-	return map[string]string{"X-MBX-APIKEY": cred.APIKey}
-}
-
-func client(market exchange.MarketType) *httpclient.Client {
-	switch market {
-	case exchange.MarketSwap, exchange.MarketFutures:
-		return httpclient.New(baseSwap)
-	default:
-		return httpclient.New(baseSpot)
+func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
+	return &Adapter{
+		config:      config,
+		credential:  credential,
+		spot:        httpclient.New(defaultSpotURL),
+		swap:        httpclient.New(defaultSwapURL),
+		instruments: make(map[string]exchange.Instrument),
 	}
 }
 
-func marketPath(market exchange.MarketType, spot, swap string) string {
-	switch market {
-	case exchange.MarketSwap, exchange.MarketFutures:
+// NewWithClients is intended for contract tests and local paper simulators.
+func NewWithClients(
+	config exchange.AccountConfig,
+	credential exchange.Credential,
+	spot *httpclient.Client,
+	swap *httpclient.Client,
+) *Adapter {
+	adapter := New(config, credential)
+	if spot != nil {
+		adapter.spot = spot
+	}
+	if swap != nil {
+		adapter.swap = swap
+	}
+	return adapter
+}
+
+func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeBinance }
+
+func (a *Adapter) client() *httpclient.Client {
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		return a.swap
+	}
+	return a.spot
+}
+
+func (a *Adapter) path(spot, swap string) string {
+	if a.config.MarketType == exchange.MarketTypeSwap {
 		return swap
-	default:
-		return spot
 	}
+	return spot
 }
 
-// ---- 元信息 / 通道 ----
-
-// Ping 用账户接口校验凭证连通性。
-func (a *Adapter) Ping(ctx context.Context, cred exchange.Credential) (int64, error) {
-	start := time.Now()
-	c := client(exchange.MarketSpot)
-	q := signedQuery(cred, url.Values{})
-	if _, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: "/api/v3/account", Query: q, Headers: apiHeader(cred)}); err != nil {
-		futuresClient := client(exchange.MarketSwap)
-		futuresQuery := signedQuery(cred, url.Values{})
-		if _, futuresErr := futuresClient.Do(ctx, &httpclient.Request{Method: "GET", Path: "/fapi/v3/balance", Query: futuresQuery, Headers: apiHeader(cred)}); futuresErr != nil {
-			return 0, err
-		}
-	}
-	return time.Since(start).Milliseconds(), nil
+func (a *Adapter) signedQuery(values url.Values) url.Values {
+	query := cloneValues(values)
+	query.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))
+	query.Set("recvWindow", strconv.Itoa(recvWindow))
+	query.Set("signature", hex.EncodeToString(hmacSha256(
+		[]byte(a.credential.APISecret),
+		[]byte(query.Encode()),
+	)))
+	return query
 }
 
-// GetInstruments 拉取交易规则（带 5 分钟缓存）。
-func (a *Adapter) GetInstruments(ctx context.Context, market exchange.MarketType) ([]exchange.Instrument, error) {
-	cache := a.ensureCache()
-	now := time.Now()
-	if market == exchange.MarketSwap || market == exchange.MarketFutures {
-		cache.mu.RLock()
-		if cache.swap != nil && now.Before(cache.swapExp) {
-			out := make([]exchange.Instrument, 0, len(cache.swap))
-			for _, ins := range cache.swap {
-				out = append(out, ins)
-			}
-			cache.mu.RUnlock()
-			return out, nil
-		}
-		cache.mu.RUnlock()
-		return a.loadSwapInstruments(ctx, cache)
-	}
-	cache.mu.RLock()
-	if cache.spot != nil && now.Before(cache.spotExp) {
-		out := make([]exchange.Instrument, 0, len(cache.spot))
-		for _, ins := range cache.spot {
-			out = append(out, ins)
-		}
-		cache.mu.RUnlock()
-		return out, nil
-	}
-	cache.mu.RUnlock()
-	return a.loadSpotInstruments(ctx, cache)
+func (a *Adapter) request(
+	ctx context.Context,
+	method string,
+	path string,
+	values url.Values,
+) ([]byte, error) {
+	return a.client().Do(ctx, &httpclient.Request{
+		Method: method,
+		Path:   path,
+		Query:  a.signedQuery(values),
+		Headers: map[string]string{
+			"X-MBX-APIKEY": a.credential.APIKey,
+		},
+	})
 }
 
-type binanceExchangeInfo struct {
+type exchangeInfo struct {
 	Symbols []struct {
-		Symbol     string `json:"symbol"`
-		Status     string `json:"status"`
-		BaseAsset  string `json:"baseAsset"`
-		QuoteAsset string `json:"quoteAsset"`
-		Filters    []struct {
+		Symbol       string `json:"symbol"`
+		Pair         string `json:"pair"`
+		ContractType string `json:"contractType"`
+		Status       string `json:"status"`
+		BaseAsset    string `json:"baseAsset"`
+		QuoteAsset   string `json:"quoteAsset"`
+		MarginAsset  string `json:"marginAsset"`
+		Filters      []struct {
 			FilterType  string `json:"filterType"`
-			MinPrice    string `json:"minPrice"`
 			TickSize    string `json:"tickSize"`
 			StepSize    string `json:"stepSize"`
 			MinQty      string `json:"minQty"`
+			Notional    string `json:"notional"`
 			MinNotional string `json:"minNotional"`
 		} `json:"filters"`
 	} `json:"symbols"`
 }
 
-type binanceTickerPrice struct {
-	Symbol string `json:"symbol"`
-	Price  string `json:"price"`
-}
-
-func (a *Adapter) loadSpotInstruments(ctx context.Context, cache *instrumentCache) ([]exchange.Instrument, error) {
-	c := client(exchange.MarketSpot)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: "/api/v3/exchangeInfo"})
+func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, error) {
+	path := a.path("/api/v3/exchangeInfo", "/fapi/v1/exchangeInfo")
+	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: path})
 	if err != nil {
 		return nil, err
 	}
-	var info binanceExchangeInfo
-	if err := httpclient.DecodeJSON(raw, &info); err != nil {
-		return nil, fmt.Errorf("parse exchangeInfo: %w", err)
+	var payload exchangeInfo
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, typedRejected("decode exchange info", err)
 	}
-	prices, err := a.loadTickerPrices(ctx, exchange.MarketSpot)
-	if err != nil {
-		return nil, err
-	}
-	m := make(map[string]exchange.Instrument, len(info.Symbols))
-	for _, s := range info.Symbols {
-		ins := exchange.Instrument{Symbol: s.Symbol, Market: exchange.MarketSpot, BaseCcy: s.BaseAsset, QuoteCcy: s.QuoteAsset, LastPrice: prices[s.Symbol], Status: s.Status}
-		for _, f := range s.Filters {
-			switch f.FilterType {
+	out := make([]exchange.Instrument, 0, len(payload.Symbols))
+	for _, item := range payload.Symbols {
+		if a.config.MarketType == exchange.MarketTypeSwap {
+			if item.ContractType != "PERPETUAL" || item.MarginAsset != "USDT" {
+				continue
+			}
+		}
+		instrument := exchange.Instrument{
+			Exchange:           exchange.ExchangeBinance,
+			MarketType:         a.config.MarketType,
+			Symbol:             item.Symbol,
+			InstrumentID:       item.Symbol,
+			BaseAsset:          item.BaseAsset,
+			QuoteAsset:         item.QuoteAsset,
+			SettlementAsset:    item.QuoteAsset,
+			Linear:             a.config.MarketType == exchange.MarketTypeSwap,
+			ContractValue:      shared.MustDecimal("1"),
+			ContractValueAsset: item.BaseAsset,
+			Status:             item.Status,
+			ExchangeUpdatedAt:  time.Now().UTC(),
+		}
+		if a.config.MarketType == exchange.MarketTypeSwap {
+			instrument.SettlementAsset = item.MarginAsset
+		}
+		for _, filter := range item.Filters {
+			switch filter.FilterType {
 			case "PRICE_FILTER":
-				ins.TickSize = f.TickSize
-			case "LOT_SIZE":
-				ins.LotSize = f.StepSize
-				ins.MinQty = f.MinQty
+				instrument.PriceTick, err = parseOptionalDecimal(filter.TickSize)
+			case "LOT_SIZE", "MARKET_LOT_SIZE":
+				// LOT_SIZE wins when both filters are present.
+				if instrument.ExchangeQuantityStep.IsZero() || filter.FilterType == "LOT_SIZE" {
+					instrument.ExchangeQuantityStep, err = parseOptionalDecimal(filter.StepSize)
+					if err == nil {
+						instrument.MinExchangeQuantity, err = parseOptionalDecimal(filter.MinQty)
+					}
+				}
 			case "NOTIONAL", "MIN_NOTIONAL":
-				ins.MinNotional = f.MinNotional
+				rawNotional := filter.Notional
+				if rawNotional == "" {
+					rawNotional = filter.MinNotional
+				}
+				instrument.MinNotional, err = parseOptionalDecimal(rawNotional)
+			}
+			if err != nil {
+				return nil, typedRejected("decode instrument decimal", err)
 			}
 		}
-		m[s.Symbol] = ins
-	}
-	cache.mu.Lock()
-	cache.spot = m
-	cache.spotExp = time.Now().Add(5 * time.Minute)
-	cache.mu.Unlock()
-	out := make([]exchange.Instrument, 0, len(m))
-	for _, ins := range m {
-		out = append(out, ins)
-	}
-	return out, nil
-}
-
-func (a *Adapter) loadSwapInstruments(ctx context.Context, cache *instrumentCache) ([]exchange.Instrument, error) {
-	c := client(exchange.MarketSwap)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: "/fapi/v1/exchangeInfo"})
-	if err != nil {
-		return nil, err
-	}
-	var info binanceExchangeInfo
-	if err := httpclient.DecodeJSON(raw, &info); err != nil {
-		return nil, fmt.Errorf("parse fapi exchangeInfo: %w", err)
-	}
-	prices, err := a.loadTickerPrices(ctx, exchange.MarketSwap)
-	if err != nil {
-		return nil, err
-	}
-	m := make(map[string]exchange.Instrument, len(info.Symbols))
-	for _, s := range info.Symbols {
-		ins := exchange.Instrument{Symbol: s.Symbol, Market: exchange.MarketSwap, BaseCcy: s.BaseAsset, QuoteCcy: s.QuoteAsset, LastPrice: prices[s.Symbol], Status: s.Status}
-		for _, f := range s.Filters {
-			switch f.FilterType {
-			case "PRICE_FILTER":
-				ins.TickSize = f.TickSize
-			case "MARKET_LOT_SIZE":
-				ins.LotSize = f.StepSize
-				ins.MinQty = f.MinQty
-			case "MIN_NOTIONAL":
-				ins.MinNotional = f.MinNotional
-			}
+		if instrument.ExchangeQuantityStep.Cmp(shared.Zero()) <= 0 ||
+			instrument.MinExchangeQuantity.Cmp(shared.Zero()) <= 0 ||
+			instrument.PriceTick.Cmp(shared.Zero()) <= 0 {
+			return nil, typedRejected("incomplete instrument filters", nil)
 		}
-		m[s.Symbol] = ins
+		out = append(out, instrument)
 	}
-	cache.mu.Lock()
-	cache.swap = m
-	cache.swapExp = time.Now().Add(5 * time.Minute)
-	cache.mu.Unlock()
-	out := make([]exchange.Instrument, 0, len(m))
-	for _, ins := range m {
-		out = append(out, ins)
+	a.mu.Lock()
+	a.instruments = make(map[string]exchange.Instrument, len(out))
+	for _, instrument := range out {
+		a.instruments[instrument.Symbol] = instrument
 	}
+	a.mu.Unlock()
 	return out, nil
 }
 
-func (a *Adapter) loadTickerPrices(ctx context.Context, market exchange.MarketType) (map[string]string, error) {
-	c := client(market)
-	path := marketPath(market, "/api/v3/ticker/price", "/fapi/v1/ticker/price")
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: path})
-	if err != nil {
-		return nil, err
-	}
-	var arr []binanceTickerPrice
-	if err := httpclient.DecodeJSON(raw, &arr); err != nil {
-		return nil, fmt.Errorf("parse ticker price: %w", err)
-	}
-	out := make(map[string]string, len(arr))
-	for _, item := range arr {
-		out[item.Symbol] = item.Price
-	}
-	return out, nil
-}
-
-// ---- 账户 / 余额 ----
-
-type binanceAccount struct {
-	Balances []struct {
+type spotAccount struct {
+	UpdateTime int64 `json:"updateTime"`
+	Balances   []struct {
 		Asset  string `json:"asset"`
 		Free   string `json:"free"`
 		Locked string `json:"locked"`
 	} `json:"balances"`
 }
 
-func (a *Adapter) GetAccountInfo(ctx context.Context, cred exchange.Credential, market exchange.MarketType) (*exchange.AccountInfo, error) {
-	bs, err := a.GetBalances(ctx, cred, market, nil)
-	if err != nil {
-		return nil, err
-	}
-	info := &exchange.AccountInfo{Market: market, Raw: map[string]string{}}
-	for _, b := range bs {
-		info.Available = b.Available
-		info.Frozen = b.Frozen
-	}
-	return info, nil
+type swapAccount struct {
+	UpdateTime            int64  `json:"updateTime"`
+	TotalWalletBalance    string `json:"totalWalletBalance"`
+	AvailableBalance      string `json:"availableBalance"`
+	TotalInitialMargin    string `json:"totalInitialMargin"`
+	TotalMaintMargin      string `json:"totalMaintMargin"`
+	TotalUnrealizedProfit string `json:"totalUnrealizedProfit"`
+	MultiAssetsMargin     bool   `json:"multiAssetsMargin"`
+	Assets                []struct {
+		Asset            string `json:"asset"`
+		WalletBalance    string `json:"walletBalance"`
+		AvailableBalance string `json:"availableBalance"`
+		InitialMargin    string `json:"initialMargin"`
+		UnrealizedProfit string `json:"unrealizedProfit"`
+	} `json:"assets"`
 }
 
-// GetBalances 现货走 /api/v3/account；U本位合约走 /fapi/v2/balance。
-func (a *Adapter) GetBalances(ctx context.Context, cred exchange.Credential, market exchange.MarketType, currencies []string) ([]exchange.Balance, error) {
-	if market == exchange.MarketSwap || market == exchange.MarketFutures {
-		return a.getSwapBalances(ctx, cred, currencies)
-	}
-	c := client(market)
-	q := signedQuery(cred, url.Values{})
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: "/api/v3/account", Query: q, Headers: apiHeader(cred)})
-	if err != nil {
-		return nil, err
-	}
-	var acc binanceAccount
-	if err := httpclient.DecodeJSON(raw, &acc); err != nil {
-		return nil, err
-	}
-	want := map[string]bool{}
-	for _, c := range currencies {
-		want[strings.ToUpper(c)] = true
-	}
-	out := make([]exchange.Balance, 0, len(acc.Balances))
-	for _, b := range acc.Balances {
-		if len(want) > 0 && !want[strings.ToUpper(b.Asset)] {
-			continue
+func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		if err := a.ensureOneWayMode(ctx); err != nil {
+			return exchange.AccountSnapshot{}, err
 		}
-		if b.Free == "0" && b.Locked == "0" && len(want) == 0 {
-			continue
+	}
+	path := a.path("/api/v3/account", "/fapi/v3/account")
+	raw, err := a.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return exchange.AccountSnapshot{}, err
+	}
+	if a.config.MarketType == exchange.MarketTypeSpot {
+		var payload spotAccount
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return exchange.AccountSnapshot{}, typedRejected("decode account", err)
 		}
-		total := decAdd(b.Free, b.Locked)
-		out = append(out, exchange.Balance{Currency: b.Asset, Available: b.Free, Frozen: b.Locked, Total: total})
-	}
-	return out, nil
-}
-
-type binanceSwapBalance struct {
-	Asset       string `json:"asset"`
-	Balance     string `json:"balance"`
-	Available   string `json:"availableBalance"`
-	CrossUnPnl  string `json:"crossUnPnl"`
-	MaintMargin string `json:"maintMargin"`
-	MaxWithdraw string `json:"maxWithdrawAmount"`
-}
-
-func (a *Adapter) getSwapBalances(ctx context.Context, cred exchange.Credential, currencies []string) ([]exchange.Balance, error) {
-	c := client(exchange.MarketSwap)
-	q := signedQuery(cred, url.Values{})
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: "/fapi/v3/balance", Query: q, Headers: apiHeader(cred)})
-	if err != nil {
-		return nil, err
-	}
-	var arr []binanceSwapBalance
-	if err := httpclient.DecodeJSON(raw, &arr); err != nil {
-		return nil, err
-	}
-	want := map[string]bool{}
-	for _, c := range currencies {
-		want[strings.ToUpper(c)] = true
-	}
-	out := make([]exchange.Balance, 0, len(arr))
-	for _, b := range arr {
-		if len(want) > 0 && !want[strings.ToUpper(b.Asset)] {
-			continue
+		snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(payload.UpdateTime)}
+		for _, balance := range payload.Balances {
+			available, err := decimalOrZero(balance.Free)
+			if err != nil {
+				return exchange.AccountSnapshot{}, err
+			}
+			locked, err := decimalOrZero(balance.Locked)
+			if err != nil {
+				return exchange.AccountSnapshot{}, err
+			}
+			snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
+				Asset: balance.Asset, Available: available, Locked: locked, Total: available.Add(locked),
+			})
 		}
-		avail := b.Available
-		if avail == "" {
-			avail = b.MaxWithdraw
+		return snapshot, nil
+	}
+	var payload swapAccount
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return exchange.AccountSnapshot{}, typedRejected("decode futures account", err)
+	}
+	if payload.MultiAssetsMargin {
+		return exchange.AccountSnapshot{}, typedRejected("multi-assets margin is unsupported", nil)
+	}
+	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(payload.UpdateTime)}
+	snapshot.Equity, err = decimalOrZero(payload.TotalWalletBalance)
+	if err == nil {
+		snapshot.AvailableFunds, err = decimalOrZero(payload.AvailableBalance)
+	}
+	if err == nil {
+		snapshot.UsedMargin, err = decimalOrZero(payload.TotalInitialMargin)
+	}
+	if err == nil {
+		snapshot.MaintenanceMargin, err = decimalOrZero(payload.TotalMaintMargin)
+	}
+	if err == nil {
+		snapshot.UnrealizedPnL, err = decimalOrZero(payload.TotalUnrealizedProfit)
+	}
+	if err != nil {
+		return exchange.AccountSnapshot{}, err
+	}
+	for _, balance := range payload.Assets {
+		total, parseErr := decimalOrZero(balance.WalletBalance)
+		if parseErr != nil {
+			return exchange.AccountSnapshot{}, parseErr
 		}
-		out = append(out, exchange.Balance{Currency: b.Asset, Available: avail, Frozen: decSub(b.Balance, avail), Total: b.Balance})
+		available, parseErr := decimalOrZero(balance.AvailableBalance)
+		if parseErr != nil {
+			return exchange.AccountSnapshot{}, parseErr
+		}
+		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
+			Asset: balance.Asset, Available: available, Locked: total.Sub(available), Total: total,
+		})
 	}
-	return out, nil
+	return snapshot, nil
 }
 
-type binanceTradeFee struct {
-	Symbol string `json:"symbol"`
-	Maker  string `json:"maker"`
-	Taker  string `json:"taker"`
-}
-
-func (a *Adapter) GetTradeFee(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol string) (*exchange.FeeRate, error) {
-	params := url.Values{}
-	if symbol != "" {
-		params.Set("symbol", strings.ToUpper(symbol))
-	}
-	q := signedQuery(cred, params)
-	c := client(exchange.MarketSpot)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: "/sapi/v1/asset/tradeFee", Query: q, Headers: apiHeader(cred)})
+func (a *Adapter) ensureOneWayMode(ctx context.Context) error {
+	raw, err := a.request(ctx, http.MethodGet, "/fapi/v1/positionSide/dual", nil)
 	if err != nil {
-		return nil, err
-	}
-	var arr []binanceTradeFee
-	if err := httpclient.DecodeJSON(raw, &arr); err != nil {
-		return nil, err
-	}
-	if len(arr) == 0 {
-		return &exchange.FeeRate{Symbol: symbol}, nil
-	}
-	return &exchange.FeeRate{Symbol: arr[0].Symbol, Maker: arr[0].Maker, Taker: arr[0].Taker}, nil
-}
-
-// 下单/撤单状态映射。
-func mapStatus(s string) exchange.OrderStatus {
-	switch strings.ToUpper(s) {
-	case "NEW", "PENDING_NEW":
-		return exchange.StatusSubmitted
-	case "PARTIALLY_FILLED":
-		return exchange.StatusPartiallyFilled
-	case "FILLED":
-		return exchange.StatusFilled
-	case "CANCELED", "CANCELLED", "PENDING_CANCEL":
-		return exchange.StatusCanceled
-	case "REJECTED":
-		return exchange.StatusRejected
-	case "EXPIRED", "EXPIRED_IN_MATCH":
-		return exchange.StatusExpired
-	default:
-		return exchange.StatusSubmitted
-	}
-}
-
-// ---- 下单 / 撤单 ----
-
-type binanceOrderResp struct {
-	OrderID       int64  `json:"orderId"`
-	ClientOrderID string `json:"clientOrderId"`
-	Status        string `json:"status"`
-}
-
-func (a *Adapter) PlaceOrder(ctx context.Context, cred exchange.Credential, req *exchange.PlaceOrderReq) (*exchange.OrderResult, error) {
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	posSide := binancePositionSide(req.PosSide)
-	params := url.Values{}
-	params.Set("symbol", strings.ToUpper(req.Symbol))
-	params.Set("side", string(req.Side))
-	params.Set("type", binanceOrderType(req.Type))
-	if posSide != "" && req.Market != exchange.MarketSpot {
-		params.Set("positionSide", posSide)
-	}
-	if req.Price != "" && req.Price != "0" {
-		params.Set("price", req.Price)
-	}
-	if req.Quantity != "" && req.Quantity != "0" {
-		params.Set("quantity", req.Quantity)
-	}
-	if req.Amount != "" && req.Amount != "0" {
-		params.Set("quoteOrderQty", req.Amount)
-	}
-	if req.TimeInForce != "" {
-		params.Set("timeInForce", req.TimeInForce)
-	} else if req.Type == exchange.TypeLimit {
-		params.Set("timeInForce", "GTC")
-	}
-	if req.ClientOrderID != "" {
-		params.Set("newClientOrderId", req.ClientOrderID)
-	}
-	if binanceShouldSendReduceOnly(req.ReduceOnly, posSide) {
-		params.Set("reduceOnly", "true")
-	}
-	path := marketPath(req.Market, "/api/v3/order", "/fapi/v1/order")
-	q := signedQuery(cred, params)
-	c := client(req.Market)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "POST", Path: path, Query: q, Headers: apiHeader(cred)})
-	if err != nil {
-		return nil, err
-	}
-	var r binanceOrderResp
-	if err := httpclient.DecodeJSON(raw, &r); err != nil {
-		return nil, fmt.Errorf("parse order resp: %w", err)
-	}
-	return &exchange.OrderResult{
-		OrderID: r.ClientOrderID, ClientOrderID: r.ClientOrderID,
-		ExchangeOrderID: strconv.FormatInt(r.OrderID, 10), Status: mapStatus(r.Status),
-	}, nil
-}
-
-func binancePositionSide(posSide string) string {
-	switch strings.ToUpper(strings.TrimSpace(posSide)) {
-	case "":
-		return ""
-	case "LONG":
-		return "LONG"
-	case "SHORT":
-		return "SHORT"
-	case "BOTH", "NET":
-		return "BOTH"
-	default:
-		return strings.ToUpper(strings.TrimSpace(posSide))
-	}
-}
-
-func binanceShouldSendReduceOnly(reduceOnly bool, posSide string) bool {
-	if !reduceOnly {
-		return false
-	}
-	switch strings.ToUpper(strings.TrimSpace(posSide)) {
-	case "LONG", "SHORT":
-		return false
-	default:
-		return true
-	}
-}
-
-func (a *Adapter) CancelOrder(ctx context.Context, cred exchange.Credential, req *exchange.CancelOrderReq) (*exchange.OrderResult, error) {
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	params := url.Values{}
-	params.Set("symbol", strings.ToUpper(req.Symbol))
-	if req.OrderID != "" {
-		params.Set("orderId", req.OrderID)
-	}
-	if req.ClientOrderID != "" {
-		params.Set("origClientOrderId", req.ClientOrderID)
-	}
-	path := marketPath(req.Market, "/api/v3/order", "/fapi/v1/order")
-	q := signedQuery(cred, params)
-	c := client(req.Market)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "DELETE", Path: path, Query: q, Headers: apiHeader(cred)})
-	if err != nil {
-		return nil, err
-	}
-	var r binanceOrderResp
-	if err := httpclient.DecodeJSON(raw, &r); err != nil {
-		return nil, err
-	}
-	return &exchange.OrderResult{
-		OrderID: r.ClientOrderID, ClientOrderID: r.ClientOrderID,
-		ExchangeOrderID: strconv.FormatInt(r.OrderID, 10), Status: mapStatus(r.Status),
-	}, nil
-}
-
-func (a *Adapter) CancelAllOrders(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol string) (int, error) {
-	params := url.Values{}
-	if symbol != "" {
-		params.Set("symbol", strings.ToUpper(symbol))
-	}
-	path := marketPath(market, "/api/v3/openOrders", "/fapi/v1/allOpenOrders")
-	q := signedQuery(cred, params)
-	c := client(market)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "DELETE", Path: path, Query: q, Headers: apiHeader(cred)})
-	if err != nil {
-		return 0, err
-	}
-	var arr []binanceOrderResp
-	if err := httpclient.DecodeJSON(raw, &arr); err != nil {
-		return 0, err
-	}
-	return len(arr), nil
-}
-
-// AmendOrder 现货无原生改单，退化为撤单 + 重下（用 ClientOrderID 保幂等）。
-func (a *Adapter) AmendOrder(ctx context.Context, cred exchange.Credential, req *exchange.AmendOrderReq) (*exchange.OrderResult, error) {
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	if _, err := a.CancelOrder(ctx, cred, &exchange.CancelOrderReq{
-		Market: req.Market, Symbol: req.Symbol, OrderID: req.OrderID, ClientOrderID: req.ClientOrderID,
-	}); err != nil {
-		return nil, err
-	}
-	return a.PlaceOrder(ctx, cred, &exchange.PlaceOrderReq{
-		Market: req.Market, Symbol: req.Symbol, ClientOrderID: req.ClientOrderID,
-		Price: req.NewPrice, Quantity: req.NewQuantity, Type: exchange.TypeLimit,
-	})
-}
-
-func (a *Adapter) SetLeverage(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol, leverage string) error {
-	if market != exchange.MarketSwap && market != exchange.MarketFutures {
-		return errNotImplemented
-	}
-	params := url.Values{}
-	params.Set("symbol", strings.ToUpper(symbol))
-	params.Set("leverage", leverage)
-	q := signedQuery(cred, params)
-	c := client(market)
-	if _, err := c.Do(ctx, &httpclient.Request{Method: "POST", Path: "/fapi/v1/leverage", Query: q, Headers: apiHeader(cred)}); err != nil {
 		return err
+	}
+	var payload struct {
+		DualSidePosition bool `json:"dualSidePosition"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return typedRejected("decode position mode", err)
+	}
+	if payload.DualSidePosition {
+		return typedRejected("hedge position mode is unsupported", nil)
 	}
 	return nil
 }
 
-func (a *Adapter) ClosePosition(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol, posSide string) error {
-	return errNotImplemented
-}
-
-// ---- 查询 ----
-
-type binanceOrderInfo struct {
-	OrderID          int64  `json:"orderId"`
-	ClientOrderID    string `json:"clientOrderId"`
+type positionRisk struct {
 	Symbol           string `json:"symbol"`
-	Side             string `json:"side"`
-	Type             string `json:"type"`
-	Price            string `json:"price"`
-	OrigQty          string `json:"origQty"`
-	ExecutedQty      string `json:"executedQty"`
-	CummulativeQuote string `json:"cummulativeQuoteQty"`
-	CumQuote         string `json:"cumQuote"`
-	AvgPrice         string `json:"avgPrice"`
-	Status           string `json:"status"`
-	Time             int64  `json:"time"`
+	PositionSide     string `json:"positionSide"`
+	PositionAmt      string `json:"positionAmt"`
+	EntryPrice       string `json:"entryPrice"`
+	MarkPrice        string `json:"markPrice"`
+	Leverage         string `json:"leverage"`
+	MarginType       string `json:"marginType"`
+	IsolatedMargin   string `json:"isolatedMargin"`
+	LiquidationPrice string `json:"liquidationPrice"`
+	UnRealizedProfit string `json:"unRealizedProfit"`
 	UpdateTime       int64  `json:"updateTime"`
 }
 
-func (a *Adapter) GetOrder(ctx context.Context, cred exchange.Credential, req *exchange.GetOrderReq) (*exchange.Order, error) {
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	params := url.Values{}
-	params.Set("symbol", strings.ToUpper(req.Symbol))
-	if req.OrderID != "" {
-		params.Set("orderId", req.OrderID)
-	}
-	if req.ClientOrderID != "" {
-		params.Set("origClientOrderId", req.ClientOrderID)
-	}
-	path := marketPath(req.Market, "/api/v3/order", "/fapi/v1/order")
-	q := signedQuery(cred, params)
-	c := client(req.Market)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: path, Query: q, Headers: apiHeader(cred)})
-	if err != nil {
-		return nil, err
-	}
-	var o binanceOrderInfo
-	if err := httpclient.DecodeJSON(raw, &o); err != nil {
-		return nil, err
-	}
-	return binanceOrderToDomain(&o, req.Market), nil
-}
-
-func (a *Adapter) ListOpenOrders(ctx context.Context, cred exchange.Credential, req *exchange.ListOrdersReq) ([]exchange.Order, error) {
-	params := url.Values{}
-	if req != nil && req.Symbol != "" {
-		params.Set("symbol", strings.ToUpper(req.Symbol))
-	}
-	path := marketPath(req.Market, "/api/v3/openOrders", "/fapi/v1/openOrders")
-	q := signedQuery(cred, params)
-	c := client(req.Market)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: path, Query: q, Headers: apiHeader(cred)})
-	if err != nil {
-		return nil, err
-	}
-	var arr []binanceOrderInfo
-	if err := httpclient.DecodeJSON(raw, &arr); err != nil {
-		return nil, err
-	}
-	out := make([]exchange.Order, 0, len(arr))
-	for i := range arr {
-		out = append(out, *binanceOrderToDomain(&arr[i], req.Market))
-	}
-	return out, nil
-}
-
-func (a *Adapter) ListOrders(ctx context.Context, cred exchange.Credential, req *exchange.ListOrdersReq) ([]exchange.Order, error) {
-	params := url.Values{}
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	params.Set("symbol", strings.ToUpper(req.Symbol))
-	if req.Limit > 0 {
-		params.Set("limit", strconv.Itoa(req.Limit))
-	} else {
-		params.Set("limit", "500")
-	}
-	if req.StartTime > 0 {
-		params.Set("startTime", strconv.FormatInt(req.StartTime, 10))
-	}
-	if req.EndTime > 0 {
-		params.Set("endTime", strconv.FormatInt(req.EndTime, 10))
-	}
-	path := marketPath(req.Market, "/api/v3/allOrders", "/fapi/v1/allOrders")
-	q := signedQuery(cred, params)
-	c := client(req.Market)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: path, Query: q, Headers: apiHeader(cred)})
-	if err != nil {
-		return nil, err
-	}
-	var arr []binanceOrderInfo
-	if err := httpclient.DecodeJSON(raw, &arr); err != nil {
-		return nil, err
-	}
-	out := make([]exchange.Order, 0, len(arr))
-	for i := range arr {
-		out = append(out, *binanceOrderToDomain(&arr[i], req.Market))
-	}
-	return out, nil
-}
-
-type binanceMyTrade struct {
-	ID              int64  `json:"id"`
-	OrderID         int64  `json:"orderId"`
-	Symbol          string `json:"symbol"`
-	Side            string `json:"side"`
-	Price           string `json:"price"`
-	Qty             string `json:"qty"`
-	QuoteQty        string `json:"quoteQty"`
-	Commission      string `json:"commission"`
-	CommissionAsset string `json:"commissionAsset"`
-	IsBuyer         bool   `json:"isBuyer"`
-	Buyer           bool   `json:"buyer"`
-	Maker           bool   `json:"maker"`
-	Time            int64  `json:"time"`
-}
-
-func (a *Adapter) ListTrades(ctx context.Context, cred exchange.Credential, req *exchange.ListTradesReq) ([]exchange.Trade, error) {
-	if req == nil || req.Symbol == "" {
-		return nil, errInvalidParam
-	}
-	params := url.Values{}
-	params.Set("symbol", strings.ToUpper(req.Symbol))
-	if req.OrderID != "" {
-		params.Set("orderId", req.OrderID)
-	}
-	if req.Limit > 0 {
-		params.Set("limit", strconv.Itoa(req.Limit))
-	}
-	if req.StartTime > 0 {
-		params.Set("startTime", strconv.FormatInt(req.StartTime, 10))
-	}
-	if req.EndTime > 0 {
-		params.Set("endTime", strconv.FormatInt(req.EndTime, 10))
-	}
-	path := marketPath(req.Market, "/api/v3/myTrades", "/fapi/v1/userTrades")
-	q := signedQuery(cred, params)
-	c := client(req.Market)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: path, Query: q, Headers: apiHeader(cred)})
-	if err != nil {
-		return nil, err
-	}
-	var arr []binanceMyTrade
-	if err := httpclient.DecodeJSON(raw, &arr); err != nil {
-		return nil, err
-	}
-	out := make([]exchange.Trade, 0, len(arr))
-	for _, t := range arr {
-		side := exchange.SideSell
-		switch strings.ToUpper(t.Side) {
-		case "BUY":
-			side = exchange.SideBuy
-		case "SELL":
-			side = exchange.SideSell
-		default:
-			if t.IsBuyer || t.Buyer {
-				side = exchange.SideBuy
-			}
-		}
-		role := "taker"
-		if t.Maker {
-			role = "maker"
-		}
-		out = append(out, exchange.Trade{
-			TradeID: strconv.FormatInt(t.ID, 10), ExchangeTradeID: strconv.FormatInt(t.ID, 10),
-			OrderID: strconv.FormatInt(t.OrderID, 10), Symbol: t.Symbol, Side: side,
-			Price: t.Price, Quantity: t.Qty, Amount: t.QuoteQty,
-			Fee: t.Commission, FeeCurrency: t.CommissionAsset, Role: role, TradedAt: t.Time,
-		})
-	}
-	return out, nil
-}
-
-func (a *Adapter) ListPositions(ctx context.Context, cred exchange.Credential, market exchange.MarketType, symbol string) ([]exchange.Position, error) {
-	if market != exchange.MarketSwap && market != exchange.MarketFutures {
+func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
+	if a.config.MarketType == exchange.MarketTypeSpot {
 		return nil, nil
 	}
-	params := url.Values{}
-	if symbol != "" {
-		params.Set("symbol", strings.ToUpper(symbol))
-	}
-	q := signedQuery(cred, params)
-	c := client(market)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "GET", Path: "/fapi/v3/positionRisk", Query: q, Headers: apiHeader(cred)})
+	raw, err := a.request(ctx, http.MethodGet, "/fapi/v3/positionRisk", nil)
 	if err != nil {
 		return nil, err
 	}
-	var arr []struct {
-		Symbol           string `json:"symbol"`
-		PositionAmt      string `json:"positionAmt"`
-		PositionSide     string `json:"positionSide"`
-		EntryPrice       string `json:"entryPrice"`
-		Leverage         string `json:"leverage"`
-		IsolatedMargin   string `json:"isolatedMargin"`
-		UnRealizedProfit string `json:"unRealizedProfit"`
-		LiquidationPrice string `json:"liquidationPrice"`
-		UpdateTime       int64  `json:"updateTime"`
+	var payload []positionRisk
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, typedRejected("decode positions", err)
 	}
-	if err := httpclient.DecodeJSON(raw, &arr); err != nil {
-		return nil, err
-	}
-	out := make([]exchange.Position, 0, len(arr))
-	for _, p := range arr {
-		if symbol != "" && !strings.EqualFold(p.Symbol, symbol) {
+	out := make([]exchange.Position, 0, len(payload))
+	for _, row := range payload {
+		if row.PositionSide != "" && row.PositionSide != "BOTH" {
+			return nil, typedRejected("hedge position mode is unsupported", nil)
+		}
+		quantity, err := decimalOrZero(row.PositionAmt)
+		if err != nil || quantity.IsZero() {
 			continue
 		}
-		if p.PositionAmt == "0" {
-			continue
+		position := exchange.Position{
+			ExchangeAccountID: a.config.ExchangeAccountID,
+			Symbol:            row.Symbol, PositionSide: exchange.PositionSideNet,
+			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
+			ExchangeUpdatedAt: millis(row.UpdateTime),
 		}
-		posSide := strings.ToLower(p.PositionSide)
-		if posSide == "" || posSide == "both" {
-			posSide = "long"
+		position.EntryPrice, err = decimalOrZero(row.EntryPrice)
+		if err == nil {
+			position.MarkPrice, err = decimalOrZero(row.MarkPrice)
 		}
-		if strings.HasPrefix(p.PositionAmt, "-") {
-			posSide = "short"
+		if err == nil {
+			position.Leverage, err = decimalOrZero(row.Leverage)
 		}
-		out = append(out, exchange.Position{
-			Symbol: p.Symbol, PosSide: posSide, Quantity: p.PositionAmt,
-			AvgPrice: p.EntryPrice, Leverage: p.Leverage, LiqPrice: p.LiquidationPrice,
-			Margin: p.IsolatedMargin, UnrealizedPnl: p.UnRealizedProfit, UpdatedAt: p.UpdateTime,
-		})
+		if err == nil {
+			position.LiquidationPrice, err = decimalOrZero(row.LiquidationPrice)
+		}
+		if err == nil {
+			position.UnrealizedPnL, err = decimalOrZero(row.UnRealizedProfit)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !strings.EqualFold(row.MarginType, "cross") {
+			return nil, typedRejected("isolated margin is unsupported", nil)
+		}
+		out = append(out, position)
 	}
 	return out, nil
 }
 
-// ---- 资金 ----
-
-func (a *Adapter) ListFundFlows(ctx context.Context, cred exchange.Credential, req *exchange.FundFlowQuery) ([]exchange.FundFlow, error) {
-	return nil, errNotImplemented
+type orderPayload struct {
+	OrderID       json.Number `json:"orderId"`
+	ClientOrderID string      `json:"clientOrderId"`
+	Symbol        string      `json:"symbol"`
+	Type          string      `json:"type"`
+	TimeInForce   string      `json:"timeInForce"`
+	Side          string      `json:"side"`
+	PositionSide  string      `json:"positionSide"`
+	OrigQty       string      `json:"origQty"`
+	ExecutedQty   string      `json:"executedQty"`
+	AvgPrice      string      `json:"avgPrice"`
+	Price         string      `json:"price"`
+	ReduceOnly    bool        `json:"reduceOnly"`
+	Status        string      `json:"status"`
+	Time          int64       `json:"time"`
+	UpdateTime    int64       `json:"updateTime"`
 }
 
-func (a *Adapter) Transfer(ctx context.Context, cred exchange.Credential, req *exchange.TransferReq) (*exchange.TransferResult, error) {
-	if req == nil || req.Currency == "" || req.Amount == "" {
-		return nil, errInvalidParam
-	}
-	params := url.Values{}
-	params.Set("asset", strings.ToUpper(req.Currency))
-	params.Set("amount", req.Amount)
-	params.Set("type", binanceTransferType(req.From, req.To))
-	if req.Remark != "" {
-		params.Set("loanId", req.Remark) // 复用字段承载备注/标识
-	}
-	q := signedQuery(cred, params)
-	c := client(exchange.MarketSpot)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "POST", Path: "/sapi/v1/asset/transfer", Query: q, Headers: apiHeader(cred)})
+func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
+	raw, err := a.request(
+		ctx,
+		http.MethodGet,
+		a.path("/api/v3/openOrders", "/fapi/v1/openOrders"),
+		nil,
+	)
 	if err != nil {
 		return nil, err
 	}
-	var r struct {
-		TranID int64 `json:"tranId"`
+	var payload []orderPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, typedRejected("decode open orders", err)
 	}
-	if err := httpclient.DecodeJSON(raw, &r); err != nil {
-		return nil, err
-	}
-	return &exchange.TransferResult{TransferID: strconv.FormatInt(r.TranID, 10)}, nil
+	return a.ordersFromPayload(payload)
 }
 
-// ListConvertibleDustAssets 查询当前 Binance 现货可转换为 BNB 的小额资产。
-func (a *Adapter) ListConvertibleDustAssets(ctx context.Context, cred exchange.Credential, req *exchange.DustConvertibleReq) ([]exchange.DustConvertibleAsset, error) {
-	accountType := "SPOT"
-	if req != nil && strings.TrimSpace(req.AccountType) != "" {
-		accountType = strings.ToUpper(strings.TrimSpace(req.AccountType))
+func (a *Adapter) GetOrder(
+	ctx context.Context,
+	symbol string,
+	clientOrderID string,
+) (exchange.Order, error) {
+	if strings.TrimSpace(symbol) == "" || strings.TrimSpace(clientOrderID) == "" {
+		return exchange.Order{}, typedRejected("symbol and client order id are required", nil)
 	}
-	params := url.Values{}
-	params.Set("accountType", accountType)
-	q := signedQuery(cred, params)
-	c := client(exchange.MarketSpot)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "POST", Path: "/sapi/v1/asset/dust-btc", Query: q, Headers: apiHeader(cred)})
+	raw, err := a.request(ctx, http.MethodGet, a.path("/api/v3/order", "/fapi/v1/order"), url.Values{
+		"symbol":            []string{symbol},
+		"origClientOrderId": []string{clientOrderID},
+	})
 	if err != nil {
-		return nil, err
+		return exchange.Order{}, classifyAPIError(err, raw)
 	}
-	var r struct {
-		Details []struct {
-			Asset            string `json:"asset"`
-			AssetFullName    string `json:"assetFullName"`
-			AmountFree       string `json:"amountFree"`
-			ToBTC            string `json:"toBTC"`
-			ToBNB            string `json:"toBNB"`
-			ToBNBOffExchange string `json:"toBNBOffExchange"`
-			Exchange         string `json:"exchange"`
-		} `json:"details"`
+	var payload orderPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return exchange.Order{}, typedRejected("decode order", err)
 	}
-	if err := httpclient.DecodeJSON(raw, &r); err != nil {
-		return nil, fmt.Errorf("parse convertible dust assets: %w", err)
-	}
-	out := make([]exchange.DustConvertibleAsset, 0, len(r.Details))
-	for _, item := range r.Details {
-		out = append(out, exchange.DustConvertibleAsset{
-			Asset:            item.Asset,
-			AssetFullName:    item.AssetFullName,
-			AmountFree:       item.AmountFree,
-			ToBTC:            item.ToBTC,
-			ToBNB:            item.ToBNB,
-			ToBNBOffExchange: item.ToBNBOffExchange,
-			Exchange:         item.Exchange,
-		})
-	}
-	return out, nil
+	return a.orderFromPayload(payload)
 }
 
-// ConvertDust 将 Binance 现货小额资产转换为 BNB。
-func (a *Adapter) ConvertDust(ctx context.Context, cred exchange.Credential, req *exchange.DustTransferReq) (*exchange.DustTransferResult, error) {
-	if req == nil || len(req.Assets) == 0 {
-		return nil, errInvalidParam
+func (a *Adapter) PlaceOrder(
+	ctx context.Context,
+	request exchange.OrderRequest,
+) (exchange.Order, error) {
+	if err := validateOrderRequest(request, a.config.MarketType); err != nil {
+		return exchange.Order{}, err
 	}
-	assets := make([]string, 0, len(req.Assets))
-	for _, asset := range req.Assets {
-		asset = strings.ToUpper(strings.TrimSpace(asset))
-		if asset != "" {
-			assets = append(assets, asset)
+	values := url.Values{
+		"symbol":           []string{request.Symbol},
+		"newClientOrderId": []string{request.ClientOrderID},
+		"side":             []string{string(request.Side)},
+		"type":             []string{string(request.OrderType)},
+		"quantity":         []string{request.Quantity.String()},
+		"newOrderRespType": []string{"RESULT"},
+	}
+	if request.OrderType == exchange.OrderTypeLimit {
+		values.Set("timeInForce", string(request.TimeInForce))
+		values.Set("price", request.LimitPrice.String())
+	}
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		values.Set("positionSide", "BOTH")
+		if request.ReduceOnly {
+			values.Set("reduceOnly", "true")
 		}
 	}
-	if len(assets) == 0 {
-		return nil, errInvalidParam
-	}
-	accountType := strings.ToUpper(strings.TrimSpace(req.AccountType))
-	if accountType == "" {
-		accountType = "SPOT"
-	}
-	params := url.Values{}
-	params.Set("asset", strings.Join(assets, ","))
-	params.Set("accountType", accountType)
-	q := signedQuery(cred, params)
-	c := client(exchange.MarketSpot)
-	raw, err := c.Do(ctx, &httpclient.Request{Method: "POST", Path: "/sapi/v1/asset/dust", Query: q, Headers: apiHeader(cred)})
+	raw, err := a.request(
+		ctx,
+		http.MethodPost,
+		a.path("/api/v3/order", "/fapi/v1/order"),
+		values,
+	)
 	if err != nil {
-		return nil, err
+		return exchange.Order{}, classifyAPIError(err, raw)
 	}
-	var r struct {
-		TotalServiceCharge string `json:"totalServiceCharge"`
-		TotalTransfered    string `json:"totalTransfered"`
-		TransferResult     []struct {
-			Amount              string `json:"amount"`
-			FromAsset           string `json:"fromAsset"`
-			OperateTime         int64  `json:"operateTime"`
-			ServiceChargeAmount string `json:"serviceChargeAmount"`
-			TranID              int64  `json:"tranId"`
-			TransferedAmount    string `json:"transferedAmount"`
-		} `json:"transferResult"`
+	var payload orderPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return exchange.Order{}, typedRejected("decode placed order", err)
 	}
-	if err := httpclient.DecodeJSON(raw, &r); err != nil {
-		return nil, fmt.Errorf("parse dust transfer: %w", err)
+	order, err := a.orderFromPayload(payload)
+	if err != nil {
+		return exchange.Order{}, err
 	}
-	out := &exchange.DustTransferResult{
-		TotalServiceCharge: r.TotalServiceCharge,
-		TotalTransfered:    r.TotalTransfered,
-		Results:            make([]exchange.DustTransferItem, 0, len(r.TransferResult)),
+	// Some Binance acknowledgements omit these echoed fields.
+	order.ClientOrderID = request.ClientOrderID
+	order.Symbol = request.Symbol
+	order.OrderType = request.OrderType
+	order.TimeInForce = request.TimeInForce
+	order.Side = request.Side
+	order.PositionSide = request.PositionSide
+	order.Quantity = request.Quantity
+	order.ReduceOnly = request.ReduceOnly
+	return order, nil
+}
+
+func (a *Adapter) CancelOrder(
+	ctx context.Context,
+	symbol string,
+	clientOrderID string,
+) (exchange.Order, error) {
+	raw, err := a.request(ctx, http.MethodDelete, a.path("/api/v3/order", "/fapi/v1/order"), url.Values{
+		"symbol":            []string{symbol},
+		"origClientOrderId": []string{clientOrderID},
+	})
+	if err != nil {
+		return exchange.Order{}, classifyAPIError(err, raw)
 	}
-	for _, item := range r.TransferResult {
-		out.Results = append(out.Results, exchange.DustTransferItem{
-			Asset:               item.FromAsset,
-			Amount:              item.Amount,
-			OperateTime:         item.OperateTime,
-			ServiceChargeAmount: item.ServiceChargeAmount,
-			TranID:              item.TranID,
-			TransferedAmount:    item.TransferedAmount,
-		})
+	var payload orderPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return exchange.Order{}, typedRejected("decode canceled order", err)
+	}
+	return a.orderFromPayload(payload)
+}
+
+type tradePayload struct {
+	ID              json.Number `json:"id"`
+	OrderID         json.Number `json:"orderId"`
+	Symbol          string      `json:"symbol"`
+	Price           string      `json:"price"`
+	Qty             string      `json:"qty"`
+	Commission      string      `json:"commission"`
+	CommissionAsset string      `json:"commissionAsset"`
+	RealizedPnl     string      `json:"realizedPnl"`
+	Time            int64       `json:"time"`
+	IsBuyer         bool        `json:"isBuyer"`
+	IsMaker         bool        `json:"isMaker"`
+	PositionSide    string      `json:"positionSide"`
+}
+
+func (a *Adapter) ListRecentFills(
+	ctx context.Context,
+	cursor string,
+) ([]exchange.Fill, string, error) {
+	values := url.Values{}
+	if cursor != "" {
+		values.Set("fromId", cursor)
+	}
+	raw, err := a.request(
+		ctx,
+		http.MethodGet,
+		a.path("/api/v3/myTrades", "/fapi/v1/userTrades"),
+		values,
+	)
+	if err != nil {
+		return nil, cursor, err
+	}
+	var payload []tradePayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, cursor, typedRejected("decode fills", err)
+	}
+	out := make([]exchange.Fill, 0, len(payload))
+	next := cursor
+	for _, row := range payload {
+		fill, err := a.fillFromPayload(row)
+		if err != nil {
+			return nil, cursor, err
+		}
+		out = append(out, fill)
+		if row.ID.String() != "" {
+			next = row.ID.String()
+		}
+	}
+	return out, next, nil
+}
+
+func (a *Adapter) SetLeverage(
+	ctx context.Context,
+	symbol string,
+	leverage shared.Decimal,
+) error {
+	if a.config.MarketType != exchange.MarketTypeSwap ||
+		strings.TrimSpace(symbol) == "" ||
+		leverage.Cmp(shared.Zero()) <= 0 ||
+		strings.ContainsAny(leverage.String(), "./") {
+		return typedRejected("positive integer SWAP leverage is required", nil)
+	}
+	raw, err := a.request(ctx, http.MethodPost, "/fapi/v1/leverage", url.Values{
+		"symbol":   []string{symbol},
+		"leverage": []string{leverage.String()},
+	})
+	return classifyAPIError(err, raw)
+}
+
+func (a *Adapter) SetMarginMode(
+	ctx context.Context,
+	symbol string,
+	mode exchange.MarginMode,
+) error {
+	if a.config.MarketType != exchange.MarketTypeSwap ||
+		mode != exchange.MarginModeCross ||
+		strings.TrimSpace(symbol) == "" {
+		return typedRejected("only CROSS SWAP margin mode is supported", nil)
+	}
+	raw, err := a.request(ctx, http.MethodPost, "/fapi/v1/marginType", url.Values{
+		"symbol":     []string{symbol},
+		"marginType": []string{"CROSSED"},
+	})
+	if err != nil && apiCode(raw) == "-4046" {
+		return nil
+	}
+	return classifyAPIError(err, raw)
+}
+
+func (a *Adapter) ordersFromPayload(payload []orderPayload) ([]exchange.Order, error) {
+	out := make([]exchange.Order, 0, len(payload))
+	for _, row := range payload {
+		order, err := a.orderFromPayload(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, order)
 	}
 	return out, nil
 }
 
-// ---- 辅助 ----
+func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
+	quantity, err := decimalOrZero(row.OrigQty)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	filled, err := decimalOrZero(row.ExecutedQty)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	average, err := decimalOrZero(row.AvgPrice)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	positionSide := exchange.PositionSideUnspecified
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		if row.PositionSide != "" && row.PositionSide != "BOTH" {
+			return exchange.Order{}, typedRejected("hedge order is unsupported", nil)
+		}
+		positionSide = exchange.PositionSideNet
+	}
+	return exchange.Order{
+		ExchangeOrderID: row.OrderID.String(),
+		ClientOrderID:   row.ClientOrderID,
+		Symbol:          row.Symbol,
+		OrderType:       exchange.OrderType(row.Type),
+		TimeInForce:     exchange.TimeInForce(row.TimeInForce),
+		Side:            exchange.Side(row.Side),
+		PositionSide:    positionSide,
+		Quantity:        quantity,
+		FilledQuantity:  filled,
+		AveragePrice:    average,
+		ReduceOnly:      row.ReduceOnly,
+		Status:          mapOrderStatus(row.Status, filled),
+		CreatedAt:       millis(row.Time),
+		UpdatedAt:       millis(row.UpdateTime),
+	}, nil
+}
 
-func binanceOrderType(t exchange.OrderType) string {
-	switch t {
-	case exchange.TypeMarket:
-		return "MARKET"
-	case exchange.TypeLimit:
-		return "LIMIT"
-	case exchange.TypeStopLimit:
-		return "STOP_LOSS_LIMIT"
-	case exchange.TypeStop:
-		return "STOP_LOSS"
-	case exchange.TypeIOC:
-		return "LIMIT"
-	case exchange.TypeFOK:
-		return "LIMIT"
-	case exchange.TypePostOnly:
-		return "LIMIT_MAKER"
+func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
+	quantity, err := decimalOrZero(row.Qty)
+	if err != nil {
+		return exchange.Fill{}, err
+	}
+	price, err := decimalOrZero(row.Price)
+	if err != nil {
+		return exchange.Fill{}, err
+	}
+	fee, err := decimalOrZero(row.Commission)
+	if err != nil {
+		return exchange.Fill{}, err
+	}
+	pnl, err := decimalOrZero(row.RealizedPnl)
+	if err != nil {
+		return exchange.Fill{}, err
+	}
+	side := exchange.SideSell
+	if row.IsBuyer {
+		side = exchange.SideBuy
+	}
+	positionSide := exchange.PositionSideUnspecified
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		if row.PositionSide != "" && row.PositionSide != "BOTH" {
+			return exchange.Fill{}, typedRejected("hedge fill is unsupported", nil)
+		}
+		positionSide = exchange.PositionSideNet
+	}
+	role := "TAKER"
+	if row.IsMaker {
+		role = "MAKER"
+	}
+	return exchange.Fill{
+		ExchangeTradeID: row.ID.String(),
+		ExchangeOrderID: row.OrderID.String(),
+		Symbol:          row.Symbol,
+		Side:            side,
+		PositionSide:    positionSide,
+		Quantity:        quantity,
+		Price:           price,
+		Fee:             fee.Abs(),
+		FeeAsset:        row.CommissionAsset,
+		RealizedPnL:     pnl,
+		SettlementAsset: a.config.SettlementAsset,
+		LiquidityRole:   role,
+		TradedAt:        millis(row.Time),
+	}, nil
+}
+
+func validateOrderRequest(request exchange.OrderRequest, market exchange.MarketType) error {
+	if strings.TrimSpace(request.ClientOrderID) == "" ||
+		strings.TrimSpace(request.Symbol) == "" ||
+		!request.Side.Valid() ||
+		request.Quantity.Cmp(shared.Zero()) <= 0 {
+		return typedRejected("invalid order request", nil)
+	}
+	switch request.OrderType {
+	case exchange.OrderTypeMarket:
+		if request.LimitPrice != nil || request.TimeInForce != exchange.TimeInForceUnspecified {
+			return typedRejected("MARKET order cannot carry price or TimeInForce", nil)
+		}
+	case exchange.OrderTypeLimit:
+		if request.LimitPrice == nil ||
+			request.LimitPrice.Cmp(shared.Zero()) <= 0 ||
+			!request.TimeInForce.ValidForLimit() {
+			return typedRejected("invalid LIMIT order", nil)
+		}
 	default:
-		return "LIMIT"
+		return typedRejected("unsupported order type", nil)
+	}
+	if market == exchange.MarketTypeSpot {
+		if request.PositionSide != exchange.PositionSideUnspecified || request.ReduceOnly {
+			return typedRejected("SPOT order cannot set position side or reduce-only", nil)
+		}
+	} else if request.PositionSide != exchange.PositionSideNet {
+		return typedRejected("SWAP order requires NET position side", nil)
+	}
+	return nil
+}
+
+func classifyAPIError(err error, raw []byte) error {
+	if err == nil {
+		return nil
+	}
+	var typed *exchange.Error
+	if !errors.As(err, &typed) {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	code := apiCode(raw)
+	typed.Code = code
+	switch code {
+	case "-2010", "-2019":
+		typed.Kind = exchange.ErrorInsufficientBalance
+	case "-2011", "-2013":
+		typed.Kind = exchange.ErrorOrderNotFound
+	case "-2015":
+		typed.Kind = exchange.ErrorAuthentication
+	case "-1003":
+		typed.Kind = exchange.ErrorRateLimited
+	}
+	return typed
+}
+
+func apiCode(raw []byte) string {
+	var payload struct {
+		Code json.Number `json:"code"`
+	}
+	_ = json.Unmarshal(raw, &payload)
+	return payload.Code.String()
+}
+
+func mapOrderStatus(status string, filled shared.Decimal) exchange.OrderStatus {
+	switch status {
+	case "NEW":
+		return exchange.OrderStatusOpen
+	case "PARTIALLY_FILLED":
+		return exchange.OrderStatusPartiallyFilled
+	case "FILLED":
+		return exchange.OrderStatusFilled
+	case "CANCELED":
+		if filled.Cmp(shared.Zero()) > 0 {
+			return exchange.OrderStatusPartiallyCanceled
+		}
+		return exchange.OrderStatusCanceled
+	case "EXPIRED":
+		return exchange.OrderStatusExpired
+	case "REJECTED":
+		return exchange.OrderStatusRejected
+	default:
+		return exchange.OrderStatusSubmitUnknown
 	}
 }
 
-func binanceTransferType(from, to exchange.MarketType) string {
-	// Binance asset transfer type: MAIN_UMFUTURE / UMFUTURE_MAIN ...
-	if from == exchange.MarketSpot && (to == exchange.MarketSwap || to == exchange.MarketFutures) {
-		return "MAIN_UMFUTURE"
+func typedRejected(message string, err error) error {
+	if err == nil {
+		err = errors.New(message)
+	} else {
+		err = fmt.Errorf("%s: %w", message, err)
 	}
-	if (from == exchange.MarketSwap || from == exchange.MarketFutures) && to == exchange.MarketSpot {
-		return "UMFUTURE_MAIN"
-	}
-	return "MAIN_UMFUTURE"
+	return &exchange.Error{Kind: exchange.ErrorRejected, Err: err}
 }
 
-func binanceOrderToDomain(o *binanceOrderInfo, market exchange.MarketType) *exchange.Order {
-	filledAmount := o.CummulativeQuote
-	if filledAmount == "" {
-		filledAmount = o.CumQuote
+func decimalOrZero(raw string) (shared.Decimal, error) {
+	if raw == "" {
+		return shared.Zero(), nil
 	}
-	return &exchange.Order{
-		OrderID: o.ClientOrderID, ClientOrderID: o.ClientOrderID,
-		ExchangeOrderID: strconv.FormatInt(o.OrderID, 10),
-		Symbol:          o.Symbol, Market: market,
-		Side: exchange.OrderSide(strings.ToLower(o.Side)), Type: exchange.OrderType(strings.ToLower(o.Type)),
-		Price: o.Price, Quantity: o.OrigQty, FilledQty: o.ExecutedQty,
-		FilledAmount: filledAmount, AvgPrice: o.AvgPrice, Status: mapStatus(o.Status),
-		CreatedAt: o.Time, UpdatedAt: o.UpdateTime,
+	value, err := shared.ParseDecimal(raw)
+	if err != nil {
+		return shared.Decimal{}, typedRejected("invalid Exchange decimal", err)
 	}
+	return value, nil
+}
+
+func parseOptionalDecimal(raw string) (shared.Decimal, error) {
+	return decimalOrZero(raw)
+}
+
+func cloneValues(values url.Values) url.Values {
+	out := make(url.Values, len(values))
+	for key, list := range values {
+		out[key] = append([]string(nil), list...)
+	}
+	return out
+}
+
+func millis(value int64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(value).UTC()
 }
