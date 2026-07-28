@@ -398,7 +398,7 @@ func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, facto
 		TaskID: deterministicTaskID(task), TriggerType: "event",
 		SpaceID: task.SpaceID, SourceDataset: task.SourceDataset,
 		TargetDataset: task.TargetDataset, SubjectID: task.SubjectID, Freq: task.Freq,
-		StartTime: task.BarTime, EndTime: task.BarTime.Add(time.Nanosecond),
+		StartTime: task.StartTime, EndTime: task.EndTime,
 	}, factors, factorsDir)
 	return built, err == nil, err
 }
@@ -416,7 +416,8 @@ func deterministicTaskID(task trigger.Task) string {
 		task.TargetDataset,
 		task.SubjectID,
 		task.Freq,
-		task.BarTime.UTC().Format(time.RFC3339Nano),
+		task.StartTime.UTC().Format(time.RFC3339Nano),
+		task.EndTime.UTC().Format(time.RFC3339Nano),
 	} {
 		write(value)
 	}

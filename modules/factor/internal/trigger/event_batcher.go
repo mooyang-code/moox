@@ -18,7 +18,8 @@ type Task struct {
 	TargetDataset   string
 	SubjectID       string
 	Freq            string
-	BarTime         time.Time
+	StartTime       time.Time
+	EndTime         time.Time
 	FirstReceivedAt time.Time
 	LastReceivedAt  time.Time
 	TriggerType     string
@@ -104,7 +105,8 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 						TargetDataset:   targetDataset,
 						SubjectID:       rowKey.GetSubjectId(),
 						Freq:            rowKey.GetFreq(),
-						BarTime:         dataTime.UTC(),
+						StartTime:       dataTime.UTC(),
+						EndTime:         dataTime.UTC().Add(time.Nanosecond),
 						FirstReceivedAt: now.UTC(),
 						LastReceivedAt:  now.UTC(),
 					},
@@ -113,8 +115,12 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 				}
 				d.buckets[bkey] = b
 			}
-			if dataTime.After(b.task.BarTime) {
-				b.task.BarTime = dataTime.UTC()
+			if dataTime.Before(b.task.StartTime) {
+				b.task.StartTime = dataTime.UTC()
+			}
+			end := dataTime.UTC().Add(time.Nanosecond)
+			if end.After(b.task.EndTime) {
+				b.task.EndTime = end
 			}
 			if now.Before(b.task.FirstReceivedAt) {
 				b.task.FirstReceivedAt = now.UTC()

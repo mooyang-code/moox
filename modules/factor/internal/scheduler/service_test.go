@@ -28,6 +28,52 @@ func TestSchedulerSupersedeDoesNotGrowQueue(t *testing.T) {
 	require.Equal(t, 1, svc.Status().QueueDepth)
 }
 
+func TestSchedulerSupersedeMergesPendingRanges(t *testing.T) {
+	svc := NewService(Config{Workers: 1, QueueCapacity: 1}, nil, nil)
+	first := rangeTask("BTC", time.Unix(10, 0), time.Unix(20, 0))
+	first.TaskID = "first"
+	first.LookbackRows = 2
+	first.Factors = []engine.FactorSpec{{FactorID: "old", Outputs: []string{"old"}}}
+	second := rangeTask("BTC", time.Unix(5, 0), time.Unix(15, 0))
+	second.TaskID = "second"
+	second.LookbackRows = 7
+	second.Factors = []engine.FactorSpec{{FactorID: "new", Outputs: []string{"new"}}}
+	third := rangeTask("BTC", time.Unix(12, 0), time.Unix(30, 0))
+	third.TaskID = "third"
+	third.LookbackRows = 11
+	third.Factors = []engine.FactorSpec{{FactorID: "latest", Outputs: []string{"latest"}}}
+
+	require.NoError(t, svc.Enqueue(context.Background(), first))
+	require.NoError(t, svc.Enqueue(context.Background(), second))
+	require.NoError(t, svc.Enqueue(context.Background(), third))
+	queued, ok := svc.popShard(0, false)
+	require.True(t, ok)
+	require.Equal(t, time.Unix(5, 0), queued.StartTime)
+	require.Equal(t, time.Unix(30, 0), queued.EndTime)
+	require.Equal(t, "third", queued.TaskID)
+	require.Equal(t, 11, queued.LookbackRows)
+	require.Equal(t, third.Factors, queued.Factors)
+}
+
+func TestSchedulerDoesNotMergeNewEventIntoRunningTask(t *testing.T) {
+	svc := NewService(Config{Workers: 1, QueueCapacity: 1}, nil, nil)
+	running := rangeTask("BTC", time.Unix(10, 0), time.Unix(20, 0))
+	next := rangeTask("BTC", time.Unix(5, 0), time.Unix(30, 0))
+	next.TaskID = "next"
+
+	require.NoError(t, svc.Enqueue(context.Background(), running))
+	popped, ok := svc.popShard(0, true)
+	require.True(t, ok)
+	require.Equal(t, running.StartTime, popped.StartTime)
+	require.NoError(t, svc.Enqueue(context.Background(), next))
+	queued, ok := svc.popShard(0, false)
+	require.True(t, ok)
+	require.Equal(t, next.StartTime, queued.StartTime)
+	require.Equal(t, next.EndTime, queued.EndTime)
+	require.Equal(t, "next", queued.TaskID)
+	svc.running.Add(-1)
+}
+
 func TestSchedulerAcceptsConfiguredNumberOfScopes(t *testing.T) {
 	svc := NewService(Config{Workers: 4, QueueCapacity: 2000}, nil, nil)
 	for i := 0; i < 2000; i++ {
@@ -116,10 +162,14 @@ func TestRunHonorsCanceledContext(t *testing.T) {
 }
 
 func oneBarTask(subject string, at time.Time) Task {
+	return rangeTask(subject, at, at.Add(time.Nanosecond))
+}
+
+func rangeTask(subject string, start, end time.Time) Task {
 	return Task{FactorTask: engine.FactorTask{
-		TaskID: "task-" + subject + at.String(), SpaceID: "crypto",
+		TaskID: "task-" + subject, SpaceID: "crypto",
 		SourceDataset: "bars", TargetDataset: "bars_factor",
-		SubjectID: subject, Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond),
+		SubjectID: subject, Freq: "1m", StartTime: start, EndTime: end,
 		LookbackRows: 20, Factors: []engine.FactorSpec{{FactorID: "bias", Name: "Bias", Outputs: []string{"bias"}}},
 	}, TriggerType: "event"}
 }

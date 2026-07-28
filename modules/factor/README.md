@@ -37,7 +37,7 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
 - 当前 schema 不兼容早期实验数据库；检测到旧表或旧列时会拒绝启动，请新建数据库。
 - `input_columns` 和 `outputs` 显式声明输入输出；框架不猜测源码依赖。
 - `params_json` 必须是 JSON object，`lookback_rows` 是每个目标 chunk 前的输入上下文。
-- 实时事件转换为 `[bar_time, bar_time + 1ns)` 的单 bar 范围。
+- 同一完整 binding scope 的实时事件在固定窗口内合并为 `[min(data_time), max(data_time) + 1ns)` 半开范围。
 - 手动补算使用 `[start_time, end_time)`；超过 2000 个目标 bar 时自动分 chunk。
 - `run-once` 和 `RecalcFactor` 都只执行适用于当前 source、freq、subject 的 enabled binding，
   并按 binding 的 `target_dataset` 分组写回。

@@ -24,14 +24,19 @@ func TestBuildSchedulerTaskUsesRealtimeHalfOpenRange(t *testing.T) {
 		LookbackRows: 100, Status: domain.FactorStatusEnabled,
 	}))
 	at := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
+	end := at.Add(3*time.Minute + time.Nanosecond)
 	task, ok, err := buildSchedulerTask(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
-		SubjectID: "BTC", Freq: "1m", BarTime: at, FactorIDs: []string{"bias"},
+		SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: end, FactorIDs: []string{"bias"},
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, at, task.StartTime)
-	require.Equal(t, at.Add(time.Nanosecond), task.EndTime)
+	require.Equal(t, end, task.EndTime)
+	require.Equal(t, deterministicTaskID(trigger.Task{
+		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
+		SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: end, FactorIDs: []string{"bias"},
+	}), task.TaskID)
 }
 
 func TestDisabledFactorMakesRealtimeTaskNoop(t *testing.T) {
@@ -46,10 +51,26 @@ func TestDisabledFactorMakesRealtimeTaskNoop(t *testing.T) {
 	}))
 	_, ok, err := buildSchedulerTask(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
 		SpaceID: "crypto", SourceDataset: "bars", SubjectID: "BTC", Freq: "1m",
-		BarTime: time.Now(), FactorIDs: []string{"bias"},
+		StartTime: time.Now(), EndTime: time.Now().Add(time.Nanosecond), FactorIDs: []string{"bias"},
 	})
 	require.NoError(t, err)
 	require.False(t, ok)
+}
+
+func TestDeterministicTaskIDIncludesBothRangeBounds(t *testing.T) {
+	start := time.Date(2026, 7, 28, 0, 0, 0, 123, time.UTC)
+	base := trigger.Task{
+		SpaceID: "crypto", SourceDataset: "series", TargetDataset: "series_factor",
+		SubjectID: "BTC", Freq: "1m", StartTime: start, EndTime: start.Add(time.Minute),
+		FactorIDs: []string{"f"},
+	}
+	differentStart := base
+	differentStart.StartTime = differentStart.StartTime.Add(time.Nanosecond)
+	differentEnd := base
+	differentEnd.EndTime = differentEnd.EndTime.Add(time.Nanosecond)
+
+	require.NotEqual(t, deterministicTaskID(base), deterministicTaskID(differentStart))
+	require.NotEqual(t, deterministicTaskID(base), deterministicTaskID(differentEnd))
 }
 
 func TestRealtimeConsumerReadyWhenEventBusDisabled(t *testing.T) {

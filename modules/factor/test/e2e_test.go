@@ -117,7 +117,7 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 		TaskID: "e2e-factor", TriggerType: "event", SpaceID: requests[0].SpaceID,
 		SourceDataset: requests[0].SourceDataset, TargetDataset: requests[0].TargetDataset,
 		SubjectID: requests[0].SubjectID, Freq: requests[0].Freq,
-		StartTime: requests[0].BarTime, EndTime: requests[0].BarTime.Add(time.Nanosecond),
+		StartTime: requests[0].StartTime, EndTime: requests[0].EndTime,
 	}, []domain.FactorDef{{
 		FactorID: "bias", Name: "Bias", SourceHash: hex.EncodeToString(sum[:]),
 		SourcePath: factorPath, InputColumns: []string{"close"}, Outputs: []string{"bias_2"},

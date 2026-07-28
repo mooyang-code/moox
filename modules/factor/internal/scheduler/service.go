@@ -87,9 +87,16 @@ func (s *Service) Enqueue(ctx context.Context, task Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if current, ok := s.pending[key]; ok {
-		if !task.EndTime.Before(current.EndTime) {
-			s.pending[key] = task
+		if task.StartTime.Before(current.StartTime) {
+			current.StartTime = task.StartTime
 		}
+		if task.EndTime.After(current.EndTime) {
+			current.EndTime = task.EndTime
+		}
+		current.TaskID = task.TaskID
+		current.Factors = task.Factors
+		current.LookbackRows = task.LookbackRows
+		s.pending[key] = current
 		return nil
 	}
 	if len(s.pending) >= s.cfg.QueueCapacity {
