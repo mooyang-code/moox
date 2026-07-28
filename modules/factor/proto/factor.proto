@@ -74,6 +74,9 @@ message SetFactorStatusRsp {
   FactorDef factor = 2;
 }
 
+message DeleteFactorReq { string factor_id = 1; }
+message DeleteFactorRsp { common.RetInfo ret_info = 1; }
+
 message UpsertBindingReq { FactorBinding binding = 1; }
 message UpsertBindingRsp {
   common.RetInfo ret_info = 1;
@@ -122,6 +125,7 @@ service FactorMgr {
   rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
   rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
   rpc SetFactorStatus(SetFactorStatusReq) returns (SetFactorStatusRsp);
+  rpc DeleteFactor(DeleteFactorReq) returns (DeleteFactorRsp);
   rpc UpsertBinding(UpsertBindingReq) returns (UpsertBindingRsp);
   rpc ListBindings(ListBindingsReq) returns (ListBindingsRsp);
   rpc DeleteBinding(DeleteBindingReq) returns (DeleteBindingRsp);

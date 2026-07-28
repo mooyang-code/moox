@@ -201,7 +201,7 @@ func TestDefaultFactorGatewayCallersAreAdministrative(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantMethods := []string{
-			"CreateFactor", "UpdateFactor", "GetFactor", "ListFactors", "SetFactorStatus",
+			"CreateFactor", "UpdateFactor", "GetFactor", "ListFactors", "SetFactorStatus", "DeleteFactor",
 			"UpsertBinding", "ListBindings", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
 		}
 		if !reflect.DeepEqual(extra.GatewayMethods, wantMethods) ||

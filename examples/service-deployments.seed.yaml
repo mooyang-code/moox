@@ -212,7 +212,7 @@ services:
       health_url: http://127.0.0.1:11414/readyz
       health_kind: readiness
       monitor_enabled: true
-      gateway_methods: [CreateFactor, UpdateFactor, GetFactor, ListFactors, SetFactorStatus, UpsertBinding, ListBindings, DeleteBinding, RecalcFactor, GetEngineStatus]
+      gateway_methods: [CreateFactor, UpdateFactor, GetFactor, ListFactors, SetFactorStatus, DeleteFactor, UpsertBinding, ListBindings, DeleteBinding, RecalcFactor, GetEngineStatus]
       gateway_callers: [admin-gateway, moox-cli]
   - name: moox_strategy
     kind: strategy

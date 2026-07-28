@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -19,6 +21,7 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var _ factorpb.FactorMgrService = (*Service)(nil)
@@ -57,6 +60,7 @@ type Service struct {
 	factorsDir string
 	publisher  *moduleregistry.SourcePublisher
 	meta       *registry.MetadataSync
+	mutationMu sync.Mutex
 }
 
 // NewWithRuntime creates a FactorMgr service with an optional scheduler runtime.
@@ -75,6 +79,8 @@ func NewWithRuntime(persistence *store.Store, sched schedulerRuntime, opts ...Op
 }
 
 func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorReq) (*factorpb.CreateFactorRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	factor, err := s.normalizeFactor(req.GetFactor())
 	if err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(err)}, nil
@@ -99,6 +105,8 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 }
 
 func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorReq) (*factorpb.UpdateFactorRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	factorPB := req.GetFactor()
 	if factorPB != nil && factorPB.GetFactorId() == "" {
 		factorPB.FactorId = req.GetFactorId()
@@ -170,6 +178,8 @@ func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq)
 }
 
 func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorStatusReq) (*factorpb.SetFactorStatusRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	if req.GetFactorId() == "" || req.GetStatus() == "" {
 		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("factor_id and status are required"))}, nil
 	}
@@ -186,7 +196,39 @@ func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorSt
 	return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorToPB(*got)}, nil
 }
 
+func (s *Service) DeleteFactor(ctx context.Context, req *factorpb.DeleteFactorReq) (*factorpb.DeleteFactorRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	if strings.TrimSpace(req.GetFactorId()) == "" {
+		return &factorpb.DeleteFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id is required"))}, nil
+	}
+	factor, err := s.factors.Get(ctx, req.GetFactorId())
+	if err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}, nil
+	}
+	bindings, err := s.bindings.ListByFactor(ctx, factor.FactorID)
+	if err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}, nil
+	}
+	if len(bindings) != 0 {
+		return &factorpb.DeleteFactorRsp{RetInfo: invalid(fmt.Errorf("factor %q still has bindings; delete them first", factor.FactorID))}, nil
+	}
+	stage, err := stageFactorArtifacts(s.factorsDir, factor.Name)
+	if err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}, nil
+	}
+	if err := s.factors.Delete(ctx, factor.FactorID); err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(errors.Join(err, stage.Restore()))}, nil
+	}
+	if err := stage.Remove(); err != nil {
+		log.Errorf("remove deleted factor %s staged artifacts: %v", factor.FactorID, err)
+	}
+	return &factorpb.DeleteFactorRsp{RetInfo: success()}, nil
+}
+
 func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBindingReq) (*factorpb.UpsertBindingRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	binding, err := s.normalizeBinding(req.GetBinding())
 	if err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}, nil
@@ -223,6 +265,8 @@ func (s *Service) ListBindings(ctx context.Context, req *factorpb.ListBindingsRe
 }
 
 func (s *Service) DeleteBinding(ctx context.Context, req *factorpb.DeleteBindingReq) (*factorpb.DeleteBindingRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	if req.GetBindingId() == "" {
 		return &factorpb.DeleteBindingRsp{RetInfo: invalid(fmt.Errorf("binding_id is required"))}, nil
 	}

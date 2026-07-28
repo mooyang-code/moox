@@ -42,3 +42,14 @@ func TestFactorRepositoryUpdateNeverChangesOutputs(t *testing.T) {
 	require.Equal(t, []string{"bias_20", "bias_96"}, got.Outputs)
 	require.Equal(t, `{"windows":[10]}`, got.ParamsJSON)
 }
+
+func TestFactorRepositoryDeleteRemovesDefinition(t *testing.T) {
+	repo := NewFactorRepository(openTestDB(t))
+	factor := testFactor("factor-1", domain.FactorStatusEnabled)
+	require.NoError(t, repo.Create(context.Background(), factor))
+
+	require.NoError(t, repo.Delete(context.Background(), factor.FactorID))
+	_, err := repo.Get(context.Background(), factor.FactorID)
+	require.Error(t, err)
+	require.Error(t, repo.Delete(context.Background(), factor.FactorID))
+}

@@ -43,6 +43,7 @@ require_file "${DEPLOY_ROOT}/secrets/gateway-factor.key"
 require_file "${DEPLOY_ROOT}/secrets/gateway-moox-cli.key"
 require_file "${DEPLOY_ROOT}/secrets/gateway-service.env"
 require_file "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
+require_file "${DEPLOY_ROOT}/secrets/storage-node-auth.env"
 require_file "${DEPLOY_ROOT}/certs/gateway/peers.pem"
 
 secret_raw="$(cat "${DEPLOY_ROOT}/secrets/gateway-factor.key"; printf x)"
@@ -82,11 +83,18 @@ storage_view_secret="$(
 )"
 [[ -n "${storage_view_secret}" && "${storage_view_secret}" != *$'\n'* && "${storage_view_secret}" != *$'\r'* ]] ||
   fail "storage-internal-auth.env must contain one MOOX_STORAGE_VIEW_AUTH_SECRET"
+storage_node_secret="$(
+  bash -c 'set -u; source "$1"; printf "%s" "${MOOX_STORAGE_NODE_AUTH_SECRET-}"' \
+    _ "${DEPLOY_ROOT}/secrets/storage-node-auth.env"
+)"
+[[ -n "${storage_node_secret}" && "${storage_node_secret}" != *$'\n'* && "${storage_node_secret}" != *$'\r'* ]] ||
+  fail "storage-node-auth.env must contain one MOOX_STORAGE_NODE_AUTH_SECRET"
 
 (
   export MOOX_DEPLOY_ROOT="${DEPLOY_ROOT}"
   export MOOX_FACTOR_STORAGE_E2E=1
   export MOOX_FACTOR_STORAGE_E2E_DATA_NODE_ID="${MOOX_STORAGE_NODE_ID:-storage-node-0}"
+  export MOOX_FACTOR_STORAGE_E2E_DATA_NODE_TARGET="${MOOX_STORAGE_NODE_TARGET:-ip://127.0.0.1:20107}"
   export MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET="ip://127.0.0.1:11003"
   export MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID="${gateway_node_id}"
   export MOOX_SERVICE_GATEWAY_TARGET="ip://127.0.0.1:11003"
@@ -97,6 +105,7 @@ storage_view_secret="$(
   export MOOX_GATEWAY_CA_FILE="${DEPLOY_ROOT}/certs/gateway/peers.pem"
   export MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}"
   export MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}"
+  export MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}"
   export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_KEY_ID="moox-cli"
   export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_CALLER="moox-cli"
   export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET="${factor_mgr_secret}"

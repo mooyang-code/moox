@@ -46,13 +46,16 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="230" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
                 <a-button size="mini" type="text" @click="toggleStatus(record)">
                   {{ record.status === "enabled" ? "禁用" : "启用" }}
                 </a-button>
+                <a-popconfirm content="仅无绑定因子可删除，确认继续？" @ok="remove(record)">
+                  <a-button size="mini" type="text" status="danger">删除</a-button>
+                </a-popconfirm>
               </a-space>
             </template>
           </a-table-column>
@@ -106,7 +109,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { createFactorDef, listFactorDefs, setFactorStatus, updateFactorDef } from "@/api/factor";
+import { createFactorDef, deleteFactorDef, listFactorDefs, setFactorStatus, updateFactorDef } from "@/api/factor";
 import type { FactorDef } from "@/api/factor/types";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 import { validateFactorParamsJSON } from "./factor-form";
@@ -226,6 +229,16 @@ async function toggleStatus(record: FactorDef) {
   await setFactorStatus(record.factor_id, next);
   Message.success("状态已更新");
   await load();
+}
+
+async function remove(record: FactorDef) {
+  try {
+    await deleteFactorDef(record.factor_id);
+    Message.success("因子已删除");
+    await load();
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "删除因子失败");
+  }
 }
 
 function onPageChange(page: number) {

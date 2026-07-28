@@ -207,7 +207,7 @@ func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
 			continue
 		}
 		require.Equal(t, []any{
-			"CreateFactor", "UpdateFactor", "GetFactor", "ListFactors", "SetFactorStatus",
+			"CreateFactor", "UpdateFactor", "GetFactor", "ListFactors", "SetFactorStatus", "DeleteFactor",
 			"UpsertBinding", "ListBindings", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
 		}, item.ExtraConfig["gateway_methods"])
 		require.Equal(t, []any{"admin-gateway", "moox-cli"}, item.ExtraConfig["gateway_callers"])

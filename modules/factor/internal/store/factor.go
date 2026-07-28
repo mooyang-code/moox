@@ -83,6 +83,20 @@ func (r *FactorRepository) GetByName(ctx context.Context, name string) (*domain.
 	return &factor, nil
 }
 
+// Delete removes one factor definition.
+func (r *FactorRepository) Delete(ctx context.Context, factorID string) error {
+	result := r.db.WithContext(ctx).
+		Where("c_factor_id = ?", strings.TrimSpace(factorID)).
+		Delete(&domain.FactorDef{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 // List returns factor definitions matching the filter.
 func (r *FactorRepository) List(ctx context.Context, filter FactorFilter) ([]domain.FactorDef, int64, error) {
 	page, size := normalizePage(filter.Page)

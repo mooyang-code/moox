@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -49,6 +50,111 @@ func TestCreateFactorRejectsDuplicateIDOrNameWithoutOverwritingOutputs(t *testin
 	rsp, err = svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: duplicateName})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
+func TestDeleteFactorRemovesDefinitionAndArtifacts(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	factorsDir := t.TempDir()
+	svc := NewWithRuntime(db, nil, WithFactorsDir(factorsDir))
+	factor := genericFactorPB("factor-1", "First", []string{"value"})
+	createRsp, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: factor})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, createRsp.GetRetInfo().GetCode())
+	require.FileExists(t, filepath.Join(factorsDir, "First.py"))
+	require.DirExists(t, filepath.Join(factorsDir, ".versions", "factor", "First"))
+
+	deleteRsp, err := svc.DeleteFactor(ctx, &factorpb.DeleteFactorReq{FactorId: "factor-1"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, deleteRsp.GetRetInfo().GetCode())
+	_, err = db.Factors().Get(ctx, "factor-1")
+	require.Error(t, err)
+	require.NoFileExists(t, filepath.Join(factorsDir, "First.py"))
+	require.NoDirExists(t, filepath.Join(factorsDir, ".versions", "factor", "First"))
+}
+
+func TestConcurrentDeleteFactorLeavesNoArtifacts(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	factorsDir := t.TempDir()
+	svc := NewWithRuntime(db, nil, WithFactorsDir(factorsDir))
+	factor := genericFactorPB("factor-1", "First", []string{"value"})
+	createRsp, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: factor})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, createRsp.GetRetInfo().GetCode())
+
+	start := make(chan struct{})
+	type deleteResult struct {
+		code commonpb.ErrorCode
+		err  error
+	}
+	results := make(chan deleteResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			rsp, callErr := svc.DeleteFactor(ctx, &factorpb.DeleteFactorReq{FactorId: "factor-1"})
+			results <- deleteResult{code: rsp.GetRetInfo().GetCode(), err: callErr}
+		}()
+	}
+	close(start)
+	first, second := <-results, <-results
+	require.NoError(t, first.err)
+	require.NoError(t, second.err)
+	codes := []commonpb.ErrorCode{first.code, second.code}
+	require.Equal(t, 1, countErrorCode(codes, commonpb.ErrorCode_SUCCESS))
+	_, err = db.Factors().Get(ctx, "factor-1")
+	require.Error(t, err)
+	require.NoFileExists(t, filepath.Join(factorsDir, "First.py"))
+	require.NoDirExists(t, filepath.Join(factorsDir, ".versions", "factor", "First"))
+}
+
+func TestDeleteFactorWithBindingLeavesDefinitionAndArtifacts(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	factorsDir := t.TempDir()
+	svc := NewWithRuntime(db, nil, WithFactorsDir(factorsDir))
+	factor := genericFactorPB("factor-1", "First", []string{"value"})
+	createRsp, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: factor})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, createRsp.GetRetInfo().GetCode())
+	require.NoError(t, db.Bindings().Upsert(ctx, domain.FactorBinding{
+		BindingID: "binding-1", FactorID: "factor-1", SpaceID: "space",
+		SourceDataset: "source", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+		SubjectsJSON: "[]", TargetDataset: "target", Status: domain.BindingStatusDisabled,
+	}))
+
+	deleteRsp, err := svc.DeleteFactor(ctx, &factorpb.DeleteFactorReq{FactorId: "factor-1"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, deleteRsp.GetRetInfo().GetCode())
+	_, err = db.Factors().Get(ctx, "factor-1")
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(factorsDir, "First.py"))
+	require.DirExists(t, filepath.Join(factorsDir, ".versions", "factor", "First"))
+}
+
+func TestStageFactorArtifactsRestoresSourceWhenVersionStagingFails(t *testing.T) {
+	factorsDir := t.TempDir()
+	sourcePath := filepath.Join(factorsDir, "First.py")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("source"), 0o644))
+	require.NoError(t, os.Mkdir(filepath.Join(factorsDir, ".versions"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, ".versions", "factor"), []byte("not a directory"), 0o644))
+
+	_, err := stageFactorArtifacts(factorsDir, "First")
+	require.Error(t, err)
+	require.FileExists(t, sourcePath)
+	raw, readErr := os.ReadFile(sourcePath)
+	require.NoError(t, readErr)
+	require.Equal(t, "source", string(raw))
+}
+
+func countErrorCode(codes []commonpb.ErrorCode, want commonpb.ErrorCode) int {
+	count := 0
+	for _, code := range codes {
+		if code == want {
+			count++
+		}
+	}
+	return count
 }
 
 func TestUpdateFactorRejectsOutputChangesButUpdatesMutableFields(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestFactorRealStorageE2E(t *testing.T) {
@@ -27,6 +28,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		"integration test must be started through scripts/test-factor-storage-e2e.sh")
 	deployRoot := requiredEnv(t, "MOOX_DEPLOY_ROOT")
 	dataNodeID := requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_DATA_NODE_ID")
+	dataNodeTarget := requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_DATA_NODE_TARGET")
 	gatewayTarget := requiredEnv(t, "MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET")
 	gatewayNodeID := requiredEnv(t, "MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID")
 	credentials := gatewayauth.CredentialsFromEnv()
@@ -56,6 +58,13 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		requiredEnv(t, "MOOX_STORAGE_VIEW_AUTH_SECRET"),
 		[]byte(viewAuth.AppId),
 	)
+	dataNodeAuth := &commonpb.AuthInfo{
+		AppId: auth.GetAppId(), Operator: auth.GetOperator(), RequestId: auth.GetRequestId(),
+	}
+	dataNodeAuth.AppKey = mooxsecurity.HMACSHA256Hex(
+		requiredEnv(t, "MOOX_STORAGE_NODE_AUTH_SECRET"),
+		[]byte(dataNodeAuth.AppId),
+	)
 	options := gatewayauth.NewTRPCClientOptions(
 		gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(gatewayTarget, "11003")),
 		gatewayNodeID,
@@ -74,6 +83,11 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		gatewayNodeID,
 		factorCredentials,
 	)...)
+	dataNode := storagepb.NewDataNodeRuntimeClientProxy(
+		client.WithTarget(dataNodeTarget),
+		client.WithNetwork("tcp"),
+		client.WithProtocol("trpc"),
+	)
 	storage := storageio.NewClientWithCredentials(gatewayTarget, gatewayNodeID, credentials, auth)
 
 	suffix := fmt.Sprintf("%x", time.Now().UnixNano())
@@ -109,13 +123,15 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			}
 		}
 		if factorCreated {
-			if rsp, err := factor.SetFactorStatus(cleanupCtx, &factorpb.SetFactorStatusReq{
-				FactorId: factorID, Status: "disabled",
+			if rsp, err := factor.DeleteFactor(cleanupCtx, &factorpb.DeleteFactorReq{
+				FactorId: factorID,
 			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 				reportCleanupFailure(t, "factor "+factorID, rsp, err)
 			}
 		}
 		if spaceCreated {
+			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, sourceID)
+			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, targetID)
 			if rsp, err := cleanupMetadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
 				AuthInfo: auth, SpaceId: spaceID,
 			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
@@ -337,6 +353,12 @@ type retResponse interface {
 	GetRetInfo() *commonpb.RetInfo
 }
 
+func TestRequiredEnvPreservesNonEmptyValue(t *testing.T) {
+	const name = "MOOX_FACTOR_STORAGE_E2E_REQUIRED_ENV_TEST"
+	t.Setenv(name, " secret with spaces ")
+	require.Equal(t, " secret with spaces ", requiredEnv(t, name))
+}
+
 func requireStorageOK[T retResponse](t *testing.T, action string, rsp T, err error) {
 	t.Helper()
 	require.NoError(t, err, action)
@@ -352,9 +374,31 @@ func requireStorageRet(t *testing.T, action string, ret *commonpb.RetInfo) {
 
 func requiredEnv(t *testing.T, name string) string {
 	t.Helper()
-	value := strings.TrimSpace(os.Getenv(name))
-	require.NotEmpty(t, value, "%s is required", name)
+	value := os.Getenv(name)
+	require.NotEmpty(t, strings.TrimSpace(value), "%s is required", name)
 	return value
+}
+
+func cleanupDatasetBuckets(
+	t *testing.T,
+	ctx context.Context,
+	dataNode storagepb.DataNodeRuntimeClientProxy,
+	auth *commonpb.AuthInfo,
+	nodeID, spaceID, datasetID string,
+) {
+	t.Helper()
+	rsp, err := dataNode.CleanupExpiredBuckets(ctx, &storagepb.CleanupExpiredBucketsReq{
+		AuthInfo:          auth,
+		NodeId:            nodeID,
+		SpaceId:           spaceID,
+		DatasetId:         datasetID,
+		BeforeBucketStart: "9999-12-31T23:59:59Z",
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		reportCleanupFailure(t, "DataNode buckets "+spaceID+"/"+datasetID, rsp, err)
+		return
+	}
+	t.Logf("cleanup DataNode buckets %s/%s succeeded (%d buckets)", spaceID, datasetID, rsp.GetDeletedBuckets())
 }
 
 func reportCleanupFailure(t *testing.T, resource string, rsp any, err error) {

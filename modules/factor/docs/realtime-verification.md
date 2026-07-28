@@ -40,6 +40,8 @@ MOOX_DEPLOY_ROOT=/absolute/path/to/running/moox \
 直接失败。`TestFactorRealStorageE2E` 只走公共 RPC 和真实 `storageio.Client`，创建临时
 非 K 线 source，调用部署 `moox-factor-run-once`，再通过
 `DataView.QueryTimeSeriesRows` 验证双输出、纳秒时间和重算 `null` 清旧值。
+测试清理先调用 `DeleteBinding`、`DeleteFactor`，再通过 `DataNodeRuntime` 清空
+source/target Dataset 的物理桶，最后 `DeleteSpace`；任一步失败都会令验收失败。
 
 Realtime 仍是 best-effort：Consumer 在加入内存 batcher 后 ACK，进程退出可丢尚未
 执行的任务。没有持久化 inbox、自动 replay 或 exactly-once；修复方式仍是对明确的
