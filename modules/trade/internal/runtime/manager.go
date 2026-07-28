@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -81,9 +83,66 @@ func (m *Manager) Run(ctx context.Context) error {
 
 func (m *Manager) Ready(exchangeAccountID string) bool {
 	m.mu.RLock()
+	defer m.mu.RUnlock()
 	entry := m.sessions[exchangeAccountID]
-	m.mu.RUnlock()
-	return entry != nil && entry.session.Ready()
+	return entry != nil && !entry.stopping && entry.session.Ready()
+}
+
+func (m *Manager) ReadyFor(account exchangeaccount.Account) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry := m.sessions[account.ID]
+	if entry == nil || entry.stopping || !entry.session.Ready() {
+		return false
+	}
+	leverage := make(store.LeverageSettings, len(account.LeverageSettings))
+	for symbol, value := range account.LeverageSettings {
+		leverage[symbol] = value.String()
+	}
+	current := store.ExchangeAccountRecord{
+		SpaceID: account.SpaceID, ExchangeAccountID: account.ID,
+		Exchange: string(account.Exchange), MarketType: string(account.MarketType),
+		ExecutionMode:      string(account.ExecutionMode),
+		CredentialSecretID: account.CredentialSecretID,
+		SettlementAsset:    account.SettlementAsset, MarginMode: string(account.MarginMode),
+		Status: string(account.Status), Paused: account.Paused,
+		SyncSymbols:      append([]string(nil), account.SyncSymbols...),
+		LeverageSettings: leverage,
+	}
+	return sameSessionConfig(entry.account, current)
+}
+
+func (m *Manager) Invalidate(exchangeAccountID string) {
+	m.mu.Lock()
+	entry := m.sessions[exchangeAccountID]
+	if entry != nil && !entry.stopping {
+		entry.stopping = true
+		entry.cancel()
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) Adapter(exchangeAccountID string) (exchange.Adapter, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry := m.sessions[exchangeAccountID]
+	if entry == nil {
+		return nil, ErrSessionConfig
+	}
+	if entry.stopping {
+		return nil, ErrSessionConfig
+	}
+	source, ok := entry.session.(interface {
+		ExchangeAdapter() exchange.Adapter
+	})
+	if !ok {
+		return nil, ErrSessionConfig
+	}
+	adapter := source.ExchangeAdapter()
+	if adapter == nil {
+		return nil, ErrSessionConfig
+	}
+	return adapter, nil
 }
 
 func (m *Manager) Snapshot() SessionSnapshot {
@@ -127,7 +186,7 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	stopping := make(map[string]*managedEntry)
 	for id, entry := range m.sessions {
 		account, found := wanted[id]
-		if found && sameSessionConfig(entry.account, account) {
+		if found && !entry.stopping && sameSessionConfig(entry.account, account) {
 			continue
 		}
 		if !entry.stopping {

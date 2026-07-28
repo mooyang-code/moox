@@ -11,6 +11,10 @@ import (
 )
 
 func RunTarget(ctx context.Context, opts TargetOptions) error {
+	if opts.SetReady != nil {
+		opts.SetReady(false)
+		defer opts.SetReady(false)
+	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return err
@@ -29,6 +33,9 @@ func RunTarget(ctx context.Context, opts TargetOptions) error {
 			}
 			continue
 		}
+		if opts.SetReady != nil {
+			opts.SetReady(true)
+		}
 		handler := jetstream.DeliveryHandlerFunc(func(handlerCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
 			return HandleTarget(handlerCtx, delivery, opts)
 		})
@@ -39,6 +46,9 @@ func RunTarget(ctx context.Context, opts TargetOptions) error {
 			}),
 		})
 		runErr := runner.Run(ctx)
+		if opts.SetReady != nil {
+			opts.SetReady(false)
+		}
 		_ = consumer.Close()
 		if ctx.Err() != nil {
 			return ctx.Err()

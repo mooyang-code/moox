@@ -93,6 +93,7 @@ type targetOrderServiceStub struct {
 
 func (s *targetOrderServiceStub) Place(
 	_ context.Context,
+	_ string,
 	spec orderdomain.OrderSpec,
 ) (orderdomain.Order, error) {
 	if s.placeHook != nil {

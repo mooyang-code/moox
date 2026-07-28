@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
@@ -52,30 +53,34 @@ type ExchangeAccountRecord struct {
 	LastSyncAt         int64
 	LastReadyAt        int64
 	LastError          string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type exchangeAccountRow struct {
-	SpaceID              string `gorm:"column:c_space_id"`
-	ExchangeAccountID    string `gorm:"column:c_exchange_account_id"`
-	Name                 string `gorm:"column:c_name"`
-	Exchange             string `gorm:"column:c_exchange"`
-	MarketType           string `gorm:"column:c_market_type"`
-	ExecutionMode        string `gorm:"column:c_execution_mode"`
-	CredentialSecretID   string `gorm:"column:c_credential_secret_id"`
-	SettlementAsset      string `gorm:"column:c_settlement_asset"`
-	MarginMode           string `gorm:"column:c_margin_mode"`
-	Status               string `gorm:"column:c_status"`
-	Paused               bool   `gorm:"column:c_paused"`
-	PauseReason          string `gorm:"column:c_pause_reason"`
-	Ready                bool   `gorm:"column:c_ready"`
-	SyncSymbolsJSON      string `gorm:"column:c_sync_symbols_json"`
-	LeverageSettingsJSON string `gorm:"column:c_leverage_settings_json"`
-	FillCursorsJSON      string `gorm:"column:c_fill_cursors_json"`
-	SnapshotJSON         string `gorm:"column:c_snapshot_json"`
-	SnapshotSourceTime   int64  `gorm:"column:c_snapshot_source_time"`
-	LastSyncAt           int64  `gorm:"column:c_last_sync_at"`
-	LastReadyAt          int64  `gorm:"column:c_last_ready_at"`
-	LastError            string `gorm:"column:c_last_error"`
+	SpaceID              string    `gorm:"column:c_space_id"`
+	ExchangeAccountID    string    `gorm:"column:c_exchange_account_id"`
+	Name                 string    `gorm:"column:c_name"`
+	Exchange             string    `gorm:"column:c_exchange"`
+	MarketType           string    `gorm:"column:c_market_type"`
+	ExecutionMode        string    `gorm:"column:c_execution_mode"`
+	CredentialSecretID   string    `gorm:"column:c_credential_secret_id"`
+	SettlementAsset      string    `gorm:"column:c_settlement_asset"`
+	MarginMode           string    `gorm:"column:c_margin_mode"`
+	Status               string    `gorm:"column:c_status"`
+	Paused               bool      `gorm:"column:c_paused"`
+	PauseReason          string    `gorm:"column:c_pause_reason"`
+	Ready                bool      `gorm:"column:c_ready"`
+	SyncSymbolsJSON      string    `gorm:"column:c_sync_symbols_json"`
+	LeverageSettingsJSON string    `gorm:"column:c_leverage_settings_json"`
+	FillCursorsJSON      string    `gorm:"column:c_fill_cursors_json"`
+	SnapshotJSON         string    `gorm:"column:c_snapshot_json"`
+	SnapshotSourceTime   int64     `gorm:"column:c_snapshot_source_time"`
+	LastSyncAt           int64     `gorm:"column:c_last_sync_at"`
+	LastReadyAt          int64     `gorm:"column:c_last_ready_at"`
+	LastError            string    `gorm:"column:c_last_error"`
+	CreatedAt            time.Time `gorm:"column:c_ctime"`
+	UpdatedAt            time.Time `gorm:"column:c_mtime"`
 }
 
 func (exchangeAccountRow) TableName() string {
@@ -164,10 +169,22 @@ func (tx *Tx) UpdateExchangeAccountConfiguration(
 		UPDATE t_exchange_accounts
 		SET c_name = ?, c_credential_secret_id = ?, c_settlement_asset = ?,
 			c_margin_mode = ?, c_status = ?, c_sync_symbols_json = ?,
+			c_ready = CASE
+				WHEN c_credential_secret_id <> ?
+					OR c_settlement_asset <> ?
+					OR c_margin_mode <> ?
+					OR c_status <> ?
+					OR c_sync_symbols_json <> ?
+				THEN 0
+				ELSE c_ready
+			END,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_exchange_account_id = ?
 	`, config.Name, config.CredentialSecretID, config.SettlementAsset,
-		config.MarginMode, config.Status, syncSymbolsJSON, spaceID, exchangeAccountID)
+		config.MarginMode, config.Status, syncSymbolsJSON,
+		config.CredentialSecretID, config.SettlementAsset,
+		config.MarginMode, config.Status, syncSymbolsJSON,
+		spaceID, exchangeAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account configuration")
 }
 
@@ -186,6 +203,27 @@ func (tx *Tx) SetExchangeAccountPause(
 		WHERE c_space_id = ? AND c_exchange_account_id = ?
 	`, paused, reason, spaceID, exchangeAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account pause")
+}
+
+func (tx *Tx) SetExchangeAccountLeverage(
+	spaceID string,
+	exchangeAccountID string,
+	settings LeverageSettings,
+) error {
+	if blank(spaceID) || blank(exchangeAccountID) {
+		return fmt.Errorf("%w: incomplete Exchange account leverage", ErrInvalidRecord)
+	}
+	encoded, err := encodeLeverageSettings(settings)
+	if err != nil {
+		return err
+	}
+	result := tx.db.Exec(`
+		UPDATE t_exchange_accounts
+		SET c_leverage_settings_json = ?, c_ready = 0,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+	`, encoded, spaceID, exchangeAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "Exchange account leverage")
 }
 
 type ExchangeAccountSyncState struct {
@@ -447,6 +485,7 @@ func decodeAccountRow(row exchangeAccountRow) (ExchangeAccountRecord, error) {
 		Snapshot:           snapshot,
 		SnapshotSourceTime: row.SnapshotSourceTime, LastSyncAt: row.LastSyncAt,
 		LastReadyAt: row.LastReadyAt, LastError: row.LastError,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
 }
 

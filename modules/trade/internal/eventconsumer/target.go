@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -22,6 +22,7 @@ type TargetOptions struct {
 	Store        *store.Store
 	Wake         func()
 	Now          func() time.Time
+	SetReady     func(bool)
 }
 
 func HandleTarget(
@@ -78,75 +79,27 @@ func HandleTarget(
 			Err:      fmt.Errorf("%w: envelope identity mismatch", execution.ErrInvalidTarget),
 		}
 	}
-	account, err := opts.Store.GetExchangeAccountByID(ctx, intent.ExchangeAccountID)
+	_, _, err = (targetapp.Submission{
+		Store: opts.Store,
+		Wake:  opts.Wake,
+		Now:   opts.Now,
+	}).Accept(ctx, message.GetSpaceId(), intent)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidRecord) ||
+			errors.Is(err, store.ErrConflict) ||
+			errors.Is(err, execution.ErrInvalidTarget) {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+			account, accountErr := opts.Store.GetExchangeAccountByID(
+				ctx,
+				intent.ExchangeAccountID,
+			)
+			if accountErr != nil || account.Ready {
+				return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+			}
 		}
 		return retryTarget(err)
-	}
-	if account.SpaceID != message.GetSpaceId() || account.Status != "ENABLED" {
-		return jetstream.HandlerResult{
-			Decision: jetstream.TERM,
-			Err:      fmt.Errorf("%w: unsupported Exchange account", execution.ErrInvalidTarget),
-		}
-	}
-	positions := make([]store.TargetPosition, 0, len(intent.Targets))
-	for _, target := range intent.Targets {
-		if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot &&
-			target.TargetQuantity.IsNegative() {
-			return jetstream.HandlerResult{
-				Decision: jetstream.TERM,
-				Err:      fmt.Errorf("%w: negative SPOT target", execution.ErrInvalidTarget),
-			}
-		}
-		instrument, instrumentErr := opts.Store.GetInstrument(
-			ctx,
-			account.Exchange,
-			account.MarketType,
-			target.Symbol,
-		)
-		if instrumentErr != nil {
-			if errors.Is(instrumentErr, gorm.ErrRecordNotFound) {
-				if !account.Ready {
-					return retryTarget(instrumentErr)
-				}
-				return jetstream.HandlerResult{
-					Decision: jetstream.TERM,
-					Err:      instrumentErr,
-				}
-			}
-			return retryTarget(instrumentErr)
-		}
-		if instrument.InstrumentID != target.InstrumentID ||
-			(instrument.Status != "TRADING" && instrument.Status != "live") {
-			return jetstream.HandlerResult{
-				Decision: jetstream.TERM,
-				Err:      fmt.Errorf("%w: unsupported instrument %s", execution.ErrInvalidTarget, target.Symbol),
-			}
-		}
-		positions = append(positions, store.TargetPosition{
-			InstrumentID: target.InstrumentID,
-			Symbol:       target.Symbol, TargetQuantity: target.TargetQuantity.String(),
-		})
-	}
-	accepted, err := opts.Store.AcceptTarget(ctx, store.TargetExecutionRecord{
-		SpaceID: message.GetSpaceId(), ExecutionID: intent.ExecutionID,
-		EventID: message.GetEventId(), StrategyRunID: intent.StrategyRunID,
-		ExecutionBindingID: intent.ExecutionBindingID,
-		ExchangeAccountID:  intent.ExchangeAccountID,
-		CommandSequence:    intent.CommandSequence,
-		NotAfter:           intent.NotAfter.UnixMilli(), DataRevision: intent.DataRevision,
-		Targets: positions, Status: "RUNNING",
-	})
-	if err != nil {
-		if errors.Is(err, store.ErrInvalidRecord) || errors.Is(err, store.ErrConflict) {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
-		}
-		return retryTarget(err)
-	}
-	if accepted && opts.Wake != nil {
-		opts.Wake()
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }

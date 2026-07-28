@@ -476,4 +476,5 @@ func (f *fakeSecrets) ValidateLiveCredentialAccess() error {
 
 type fakeSessionState struct{ ready bool }
 
-func (f fakeSessionState) Ready(string) bool { return f.ready }
+func (f fakeSessionState) ReadyFor(exchangeaccount.Account) bool { return f.ready }
+func (f fakeSessionState) Invalidate(string)                     {}

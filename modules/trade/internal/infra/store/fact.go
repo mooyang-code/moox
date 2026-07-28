@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"gorm.io/gorm"
@@ -260,38 +261,42 @@ type OrderRecord struct {
 	Version                   uint64
 	SubmittedAt               int64
 	FinishedAt                int64
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
 }
 
 type orderRow struct {
-	SpaceID                   string  `gorm:"column:c_space_id"`
-	OrderID                   string  `gorm:"column:c_order_id"`
-	ExchangeAccountID         string  `gorm:"column:c_exchange_account_id"`
-	ClientOrderID             string  `gorm:"column:c_client_order_id"`
-	ExchangeOrderID           string  `gorm:"column:c_exchange_order_id"`
-	Exchange                  string  `gorm:"column:c_exchange"`
-	MarketType                string  `gorm:"column:c_market_type"`
-	Symbol                    string  `gorm:"column:c_symbol"`
-	OrderType                 string  `gorm:"column:c_order_type"`
-	TimeInForce               string  `gorm:"column:c_time_in_force"`
-	Side                      string  `gorm:"column:c_side"`
-	PositionSide              string  `gorm:"column:c_position_side"`
-	Quantity                  string  `gorm:"column:c_quantity"`
-	LimitPrice                *string `gorm:"column:c_limit_price"`
-	ReferencePrice            string  `gorm:"column:c_reference_price"`
-	ReferencePriceAt          int64   `gorm:"column:c_reference_price_at"`
-	ReduceOnly                bool    `gorm:"column:c_reduce_only"`
-	Source                    string  `gorm:"column:c_source"`
-	StrategyExecutionID       string  `gorm:"column:c_strategy_execution_id"`
-	State                     string  `gorm:"column:c_state"`
-	FilledQuantity            string  `gorm:"column:c_filled_quantity"`
-	AveragePrice              string  `gorm:"column:c_average_price"`
-	ReservedAsset             string  `gorm:"column:c_reserved_asset"`
-	ReservedQuantity          string  `gorm:"column:c_reserved_quantity"`
-	RemainingReservedQuantity string  `gorm:"column:c_remaining_reserved_quantity"`
-	RejectReason              string  `gorm:"column:c_reject_reason"`
-	Version                   uint64  `gorm:"column:c_version"`
-	SubmittedAt               int64   `gorm:"column:c_submitted_at"`
-	FinishedAt                int64   `gorm:"column:c_finished_at"`
+	SpaceID                   string    `gorm:"column:c_space_id"`
+	OrderID                   string    `gorm:"column:c_order_id"`
+	ExchangeAccountID         string    `gorm:"column:c_exchange_account_id"`
+	ClientOrderID             string    `gorm:"column:c_client_order_id"`
+	ExchangeOrderID           string    `gorm:"column:c_exchange_order_id"`
+	Exchange                  string    `gorm:"column:c_exchange"`
+	MarketType                string    `gorm:"column:c_market_type"`
+	Symbol                    string    `gorm:"column:c_symbol"`
+	OrderType                 string    `gorm:"column:c_order_type"`
+	TimeInForce               string    `gorm:"column:c_time_in_force"`
+	Side                      string    `gorm:"column:c_side"`
+	PositionSide              string    `gorm:"column:c_position_side"`
+	Quantity                  string    `gorm:"column:c_quantity"`
+	LimitPrice                *string   `gorm:"column:c_limit_price"`
+	ReferencePrice            string    `gorm:"column:c_reference_price"`
+	ReferencePriceAt          int64     `gorm:"column:c_reference_price_at"`
+	ReduceOnly                bool      `gorm:"column:c_reduce_only"`
+	Source                    string    `gorm:"column:c_source"`
+	StrategyExecutionID       string    `gorm:"column:c_strategy_execution_id"`
+	State                     string    `gorm:"column:c_state"`
+	FilledQuantity            string    `gorm:"column:c_filled_quantity"`
+	AveragePrice              string    `gorm:"column:c_average_price"`
+	ReservedAsset             string    `gorm:"column:c_reserved_asset"`
+	ReservedQuantity          string    `gorm:"column:c_reserved_quantity"`
+	RemainingReservedQuantity string    `gorm:"column:c_remaining_reserved_quantity"`
+	RejectReason              string    `gorm:"column:c_reject_reason"`
+	Version                   uint64    `gorm:"column:c_version"`
+	SubmittedAt               int64     `gorm:"column:c_submitted_at"`
+	FinishedAt                int64     `gorm:"column:c_finished_at"`
+	CreatedAt                 time.Time `gorm:"column:c_ctime"`
+	UpdatedAt                 time.Time `gorm:"column:c_mtime"`
 }
 
 func (tx *Tx) CreateOrder(record OrderRecord) error {
@@ -456,6 +461,60 @@ func (s *Store) ListOrdersForLane(
 	return records, nil
 }
 
+type OrderQuery struct {
+	ExchangeAccountID string
+	Symbol            string
+	State             string
+	OnlyOpen          bool
+	StartTime         int64
+	EndTime           int64
+	Offset            int
+	Limit             int
+}
+
+func (s *Store) ListOrders(
+	ctx context.Context,
+	spaceID string,
+	query OrderQuery,
+) ([]OrderRecord, int64, error) {
+	db := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where("c_space_id = ?", spaceID)
+	if query.ExchangeAccountID != "" {
+		db = db.Where("c_exchange_account_id = ?", query.ExchangeAccountID)
+	}
+	if query.Symbol != "" {
+		db = db.Where("c_symbol = ?", query.Symbol)
+	}
+	if query.State != "" {
+		db = db.Where("c_state = ?", query.State)
+	}
+	if query.OnlyOpen {
+		db = db.Where("c_state NOT IN ?", []string{
+			"FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED",
+		})
+	}
+	if query.StartTime > 0 {
+		db = db.Where("c_ctime >= datetime(? / 1000, 'unixepoch')", query.StartTime)
+	}
+	if query.EndTime > 0 {
+		db = db.Where("c_ctime <= datetime(? / 1000, 'unixepoch')", query.EndTime)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []orderRow
+	if err := db.Order("c_ctime DESC, c_order_id DESC").
+		Offset(query.Offset).Limit(query.Limit).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	records := make([]OrderRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, orderRecordFromRow(row))
+	}
+	return records, total, nil
+}
+
 func (tx *Tx) GetOrder(spaceID string, orderID string) (OrderRecord, error) {
 	var row orderRow
 	result := tx.db.Raw(`
@@ -582,6 +641,7 @@ func orderRecordFromRow(row orderRow) OrderRecord {
 		RemainingReservedQuantity: row.RemainingReservedQuantity,
 		RejectReason:              row.RejectReason, Version: row.Version,
 		SubmittedAt: row.SubmittedAt, FinishedAt: row.FinishedAt,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
 
@@ -605,6 +665,7 @@ type FillRecord struct {
 	RealizedPnL       string
 	Role              string
 	TradedAt          int64
+	CreatedAt         time.Time
 }
 
 func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
@@ -712,25 +773,84 @@ func (tx *Tx) fillIdentityExists(record FillRecord) (bool, error) {
 }
 
 type fillRow struct {
-	SpaceID           string `gorm:"column:c_space_id"`
-	FillID            string `gorm:"column:c_fill_id"`
-	ExchangeTradeID   string `gorm:"column:c_exchange_trade_id"`
-	OrderID           string `gorm:"column:c_order_id"`
-	ExchangeOrderID   string `gorm:"column:c_exchange_order_id"`
-	ExchangeAccountID string `gorm:"column:c_exchange_account_id"`
-	Exchange          string `gorm:"column:c_exchange"`
-	MarketType        string `gorm:"column:c_market_type"`
-	Symbol            string `gorm:"column:c_symbol"`
-	Side              string `gorm:"column:c_side"`
-	PositionSide      string `gorm:"column:c_position_side"`
-	Price             string `gorm:"column:c_price"`
-	Quantity          string `gorm:"column:c_quantity"`
-	Fee               string `gorm:"column:c_fee"`
-	FeeAsset          string `gorm:"column:c_fee_asset"`
-	SettlementAsset   string `gorm:"column:c_settlement_asset"`
-	RealizedPnL       string `gorm:"column:c_realized_pnl"`
-	Role              string `gorm:"column:c_role"`
-	TradedAt          int64  `gorm:"column:c_traded_at"`
+	SpaceID           string    `gorm:"column:c_space_id"`
+	FillID            string    `gorm:"column:c_fill_id"`
+	ExchangeTradeID   string    `gorm:"column:c_exchange_trade_id"`
+	OrderID           string    `gorm:"column:c_order_id"`
+	ExchangeOrderID   string    `gorm:"column:c_exchange_order_id"`
+	ExchangeAccountID string    `gorm:"column:c_exchange_account_id"`
+	Exchange          string    `gorm:"column:c_exchange"`
+	MarketType        string    `gorm:"column:c_market_type"`
+	Symbol            string    `gorm:"column:c_symbol"`
+	Side              string    `gorm:"column:c_side"`
+	PositionSide      string    `gorm:"column:c_position_side"`
+	Price             string    `gorm:"column:c_price"`
+	Quantity          string    `gorm:"column:c_quantity"`
+	Fee               string    `gorm:"column:c_fee"`
+	FeeAsset          string    `gorm:"column:c_fee_asset"`
+	SettlementAsset   string    `gorm:"column:c_settlement_asset"`
+	RealizedPnL       string    `gorm:"column:c_realized_pnl"`
+	Role              string    `gorm:"column:c_role"`
+	TradedAt          int64     `gorm:"column:c_traded_at"`
+	CreatedAt         time.Time `gorm:"column:c_ctime"`
+}
+
+type FillQuery struct {
+	ExchangeAccountID string
+	OrderID           string
+	Symbol            string
+	StartTime         int64
+	EndTime           int64
+	Offset            int
+	Limit             int
+}
+
+func (s *Store) ListFills(
+	ctx context.Context,
+	spaceID string,
+	query FillQuery,
+) ([]FillRecord, int64, error) {
+	db := s.db.WithContext(ctx).Table("t_order_fills").
+		Where("c_space_id = ?", spaceID)
+	if query.ExchangeAccountID != "" {
+		db = db.Where("c_exchange_account_id = ?", query.ExchangeAccountID)
+	}
+	if query.OrderID != "" {
+		db = db.Where("c_order_id = ?", query.OrderID)
+	}
+	if query.Symbol != "" {
+		db = db.Where("c_symbol = ?", query.Symbol)
+	}
+	if query.StartTime > 0 {
+		db = db.Where("c_traded_at >= ?", query.StartTime)
+	}
+	if query.EndTime > 0 {
+		db = db.Where("c_traded_at <= ?", query.EndTime)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []fillRow
+	if err := db.Order("c_traded_at DESC, c_fill_id DESC").
+		Offset(query.Offset).Limit(query.Limit).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	records := make([]FillRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, FillRecord{
+			SpaceID: row.SpaceID, FillID: row.FillID,
+			ExchangeTradeID: row.ExchangeTradeID, OrderID: row.OrderID,
+			ExchangeOrderID:   row.ExchangeOrderID,
+			ExchangeAccountID: row.ExchangeAccountID, Exchange: row.Exchange,
+			MarketType: row.MarketType, Symbol: row.Symbol, Side: row.Side,
+			PositionSide: row.PositionSide, Price: row.Price, Quantity: row.Quantity,
+			Fee: row.Fee, FeeAsset: row.FeeAsset,
+			SettlementAsset: row.SettlementAsset, RealizedPnL: row.RealizedPnL,
+			Role: row.Role, TradedAt: row.TradedAt, CreatedAt: row.CreatedAt,
+		})
+	}
+	return records, total, nil
 }
 
 func (tx *Tx) resolveDuplicateFill(
@@ -818,6 +938,7 @@ type PositionRecord struct {
 	UnrealizedPnL     string
 	RealizedPnL       string
 	ExchangeUpdatedAt int64
+	UpdatedAt         time.Time
 }
 
 func (tx *Tx) UpsertPosition(record PositionRecord) error {
@@ -913,20 +1034,21 @@ func (tx *Tx) GetPosition(
 	positionSide string,
 ) (PositionRecord, bool, error) {
 	var row struct {
-		SpaceID           string `gorm:"column:c_space_id"`
-		ExchangeAccountID string `gorm:"column:c_exchange_account_id"`
-		Symbol            string `gorm:"column:c_symbol"`
-		PositionSide      string `gorm:"column:c_position_side"`
-		SignedQuantity    string `gorm:"column:c_signed_quantity"`
-		EntryPrice        string `gorm:"column:c_entry_price"`
-		MarkPrice         string `gorm:"column:c_mark_price"`
-		Leverage          string `gorm:"column:c_leverage"`
-		MarginMode        string `gorm:"column:c_margin_mode"`
-		UsedMargin        string `gorm:"column:c_used_margin"`
-		LiquidationPrice  string `gorm:"column:c_liquidation_price"`
-		UnrealizedPnL     string `gorm:"column:c_unrealized_pnl"`
-		RealizedPnL       string `gorm:"column:c_realized_pnl"`
-		ExchangeUpdatedAt int64  `gorm:"column:c_exchange_updated_at"`
+		SpaceID           string    `gorm:"column:c_space_id"`
+		ExchangeAccountID string    `gorm:"column:c_exchange_account_id"`
+		Symbol            string    `gorm:"column:c_symbol"`
+		PositionSide      string    `gorm:"column:c_position_side"`
+		SignedQuantity    string    `gorm:"column:c_signed_quantity"`
+		EntryPrice        string    `gorm:"column:c_entry_price"`
+		MarkPrice         string    `gorm:"column:c_mark_price"`
+		Leverage          string    `gorm:"column:c_leverage"`
+		MarginMode        string    `gorm:"column:c_margin_mode"`
+		UsedMargin        string    `gorm:"column:c_used_margin"`
+		LiquidationPrice  string    `gorm:"column:c_liquidation_price"`
+		UnrealizedPnL     string    `gorm:"column:c_unrealized_pnl"`
+		RealizedPnL       string    `gorm:"column:c_realized_pnl"`
+		ExchangeUpdatedAt int64     `gorm:"column:c_exchange_updated_at"`
+		UpdatedAt         time.Time `gorm:"column:c_mtime"`
 	}
 	result := tx.db.Raw(`
 		SELECT * FROM t_exchange_positions
@@ -948,6 +1070,7 @@ func (tx *Tx) GetPosition(
 		LiquidationPrice: row.LiquidationPrice,
 		UnrealizedPnL:    row.UnrealizedPnL, RealizedPnL: row.RealizedPnL,
 		ExchangeUpdatedAt: row.ExchangeUpdatedAt,
+		UpdatedAt:         row.UpdatedAt,
 	}, true, nil
 }
 
@@ -971,6 +1094,53 @@ func (s *Store) GetPosition(
 		return err
 	})
 	return record, found, err
+}
+
+func (s *Store) ListPositions(
+	ctx context.Context,
+	spaceID string,
+	exchangeAccountID string,
+	symbol string,
+) ([]PositionRecord, error) {
+	db := s.db.WithContext(ctx).Table("t_exchange_positions").
+		Where("c_space_id = ? AND c_exchange_account_id = ?", spaceID, exchangeAccountID)
+	if symbol != "" {
+		db = db.Where("c_symbol = ?", symbol)
+	}
+	var rows []struct {
+		SpaceID           string    `gorm:"column:c_space_id"`
+		ExchangeAccountID string    `gorm:"column:c_exchange_account_id"`
+		Symbol            string    `gorm:"column:c_symbol"`
+		PositionSide      string    `gorm:"column:c_position_side"`
+		SignedQuantity    string    `gorm:"column:c_signed_quantity"`
+		EntryPrice        string    `gorm:"column:c_entry_price"`
+		MarkPrice         string    `gorm:"column:c_mark_price"`
+		Leverage          string    `gorm:"column:c_leverage"`
+		MarginMode        string    `gorm:"column:c_margin_mode"`
+		UsedMargin        string    `gorm:"column:c_used_margin"`
+		LiquidationPrice  string    `gorm:"column:c_liquidation_price"`
+		UnrealizedPnL     string    `gorm:"column:c_unrealized_pnl"`
+		RealizedPnL       string    `gorm:"column:c_realized_pnl"`
+		ExchangeUpdatedAt int64     `gorm:"column:c_exchange_updated_at"`
+		UpdatedAt         time.Time `gorm:"column:c_mtime"`
+	}
+	if err := db.Order("c_symbol, c_position_side").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]PositionRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, PositionRecord{
+			SpaceID: row.SpaceID, ExchangeAccountID: row.ExchangeAccountID,
+			Symbol: row.Symbol, PositionSide: row.PositionSide,
+			SignedQuantity: row.SignedQuantity, EntryPrice: row.EntryPrice,
+			MarkPrice: row.MarkPrice, Leverage: row.Leverage,
+			MarginMode: row.MarginMode, UsedMargin: row.UsedMargin,
+			LiquidationPrice: row.LiquidationPrice,
+			UnrealizedPnL:    row.UnrealizedPnL, RealizedPnL: row.RealizedPnL,
+			ExchangeUpdatedAt: row.ExchangeUpdatedAt, UpdatedAt: row.UpdatedAt,
+		})
+	}
+	return records, nil
 }
 
 func canonicalizeOrder(record *OrderRecord) error {

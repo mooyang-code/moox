@@ -3,7 +3,6 @@ package order
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -54,6 +53,7 @@ func (s *Service) Get(
 
 func (s *Service) Place(
 	ctx context.Context,
+	spaceID string,
 	spec orderdomain.OrderSpec,
 ) (orderdomain.Order, error) {
 	if s == nil || s.Store == nil {
@@ -63,7 +63,7 @@ func (s *Service) Place(
 	defer unlock()
 	if existing, err := s.Store.GetOrderByClientID(
 		ctx,
-		s.Validator.SpaceID,
+		spaceID,
 		spec.ExchangeAccountID,
 		spec.ClientOrderID,
 	); err == nil {
@@ -74,7 +74,7 @@ func (s *Service) Place(
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return orderdomain.Order{}, err
 	}
-	validation, err := s.Validator.Validate(ctx, spec)
+	validation, err := s.Validator.Validate(ctx, spaceID, spec)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
@@ -233,6 +233,78 @@ func (s *Service) Cancel(
 	return current, callErr
 }
 
+func (s *Service) RecoverCancel(
+	ctx context.Context,
+	spaceID string,
+	orderID string,
+) (orderdomain.Order, error) {
+	if s == nil || s.Store == nil || s.Adapters == nil || s.Syncer == nil {
+		return orderdomain.Order{}, ErrServiceConfig
+	}
+	record, err := s.Store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	current, err := domainOrder(record)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	if current.State != orderdomain.Canceling &&
+		current.State != orderdomain.CancelUnknown {
+		return current, orderdomain.ErrInvalidTransition
+	}
+	adapter, err := s.Adapters.Adapter(record.ExchangeAccountID)
+	if err != nil {
+		return current, err
+	}
+	_, callErr := adapter.CancelOrder(ctx, record.Symbol, record.ClientOrderID)
+	if callErr == nil {
+		if err := s.Syncer.SyncAccount(ctx, record.ExchangeAccountID); err != nil {
+			return current, err
+		}
+		return s.Get(ctx, spaceID, orderID)
+	}
+	if !exchange.IsKind(callErr, exchange.ErrorTransportUnknown) {
+		if syncErr := s.Syncer.SyncAccount(ctx, record.ExchangeAccountID); syncErr == nil {
+			latest, getErr := s.Get(ctx, spaceID, orderID)
+			if getErr == nil {
+				if latest.State.Terminal() ||
+					(latest.State != orderdomain.Canceling &&
+						latest.State != orderdomain.CancelUnknown) {
+					return latest, nil
+				}
+				current = latest
+				record, getErr = s.Store.GetOrder(ctx, spaceID, orderID)
+				if getErr != nil {
+					return orderdomain.Order{}, getErr
+				}
+			}
+		}
+	}
+	expected := current.Version
+	switch {
+	case exchange.IsKind(callErr, exchange.ErrorTransportUnknown) &&
+		current.State == orderdomain.Canceling:
+		_, err = current.MarkCancelUnknown()
+	case exchange.IsKind(callErr, exchange.ErrorTransportUnknown):
+		return current, callErr
+	case current.State == orderdomain.Canceling:
+		_, err = current.CancelRejected()
+	default:
+		_, err = current.CancelStillOpen()
+	}
+	if err != nil {
+		return current, err
+	}
+	applyAggregate(&record, current)
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.UpdateOrder(record, expected)
+	}); err != nil {
+		return orderdomain.Order{}, err
+	}
+	return current, callErr
+}
+
 func (s *Service) DiscardPending(
 	ctx context.Context,
 	spaceID string,
@@ -382,7 +454,7 @@ func (s *Service) submit(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	if _, err := s.Validator.Validate(ctx, aggregate.Spec); err != nil {
+	if _, err := s.Validator.Validate(ctx, record.SpaceID, aggregate.Spec); err != nil {
 		if permanentValidationError(err) {
 			return s.rejectPending(ctx, record, aggregate, err)
 		}
@@ -644,5 +716,5 @@ func (s *Service) now() time.Time {
 }
 
 func (s *Service) String() string {
-	return fmt.Sprintf("trade order service for %s", s.Validator.SpaceID)
+	return "trade order service"
 }

@@ -83,13 +83,13 @@ type HealthConfig struct {
 	Addr string `yaml:"addr"`
 }
 type EventBusConfig struct {
-	Enabled           bool     `yaml:"enabled"`
-	URLs              []string `yaml:"urls"`
-	CredentialFile    string   `yaml:"credential_file"`
-	RebalanceConsumer string   `yaml:"-"`
+	Enabled        bool     `yaml:"enabled"`
+	URLs           []string `yaml:"urls"`
+	CredentialFile string   `yaml:"credential_file"`
+	TargetConsumer string   `yaml:"-"`
 }
 
-const RebalanceConsumer = "trade_rebalance_v1"
+const TargetConsumer = "trade_target_v1"
 
 // DefaultConfig 返回默认配置。
 func DefaultConfig() *AppConfig {
@@ -131,7 +131,7 @@ func DefaultConfig() *AppConfig {
 		Health: HealthConfig{
 			Addr: ":11210",
 		},
-		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, RebalanceConsumer: RebalanceConsumer},
+		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer},
 	}
 }
 
@@ -226,8 +226,8 @@ func (c *AppConfig) Validate() error {
 		if len(c.EventBus.URLs) == 0 {
 			return fmt.Errorf("eventbus urls are required")
 		}
-		if c.EventBus.RebalanceConsumer == "" {
-			return fmt.Errorf("eventbus rebalance consumer is required")
+		if c.EventBus.TargetConsumer == "" {
+			return fmt.Errorf("eventbus target consumer is required")
 		}
 	}
 	return nil

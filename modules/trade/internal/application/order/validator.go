@@ -49,7 +49,6 @@ type Validator struct {
 	Accounts         AccountEligibility
 	Instruments      InstrumentSource
 	Positions        PositionSource
-	SpaceID          string
 	Now              func() time.Time
 	MaxReferenceAge  time.Duration
 	MaxChildNotional shared.Decimal
@@ -59,9 +58,10 @@ type Validator struct {
 
 func (v Validator) Validate(
 	ctx context.Context,
+	spaceID string,
 	spec orderdomain.OrderSpec,
 ) (Validation, error) {
-	if v.Accounts == nil || v.Instruments == nil || strings.TrimSpace(v.SpaceID) == "" {
+	if v.Accounts == nil || v.Instruments == nil || strings.TrimSpace(spaceID) == "" {
 		return Validation{}, ErrValidatorConfig
 	}
 	now := time.Now()
@@ -72,7 +72,7 @@ func (v Validator) Validate(
 	if err != nil {
 		return Validation{}, err
 	}
-	if account.SpaceID != v.SpaceID {
+	if account.SpaceID != spaceID {
 		return Validation{}, ErrAccountOwnership
 	}
 	if err := spec.Validate(account.MarketType, now, v.MaxReferenceAge); err != nil {

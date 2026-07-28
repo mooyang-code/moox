@@ -1559,7 +1559,7 @@ git commit -m "feat(trade): converge target positions"
 - Modify: `modules/trade/config/trpc_go.yaml`
 - Modify: `modules/trade/cmd/server/main.go`
 
-- [ ] **Step 1: Write service-registration tests**
+- [x] **Step 1: Write service-registration tests**
 
 Assert that bootstrap registers only:
 
@@ -1583,7 +1583,7 @@ go test ./internal/rpc ./internal/bootstrap
 
 Expected: FAIL on the old registrations.
 
-- [ ] **Step 2: Implement concise account RPC methods**
+- [x] **Step 2: Implement concise account RPC methods**
 
 Map:
 
@@ -1600,7 +1600,7 @@ SyncAccount   -> accountsync.Service.SyncAccount
 Return full `ExchangeAccount` entities. Preserve Space identity from
 `spacecontext`; never trust a request SpaceID.
 
-- [ ] **Step 3: Implement execution RPC methods**
+- [x] **Step 3: Implement execution RPC methods**
 
 `PlaceOrder` constructs one `OrderSpec`. It does not parse or default
 Exchange/MarketType from caller values. `SubmitTarget` uses the same
@@ -1609,7 +1609,7 @@ TargetExecutor path as EventBus. Query methods read the single Store.
 Cancel by local OrderID. Resolve the account, symbol, and client order ID from
 the stored Order rather than accepting a caller-supplied Exchange route.
 
-- [ ] **Step 4: Wire one Store and the runtime Manager**
+- [x] **Step 4: Wire one Store and the runtime Manager**
 
 Bootstrap order:
 
@@ -1627,13 +1627,13 @@ register one shutdown function
 
 Do not open the SQLite path twice.
 
-- [ ] **Step 5: Reduce tRPC configuration**
+- [x] **Step 5: Reduce tRPC configuration**
 
 Keep two RPC service entries on ports 11200 and 11201, Health on 11210, and
 metrics. Remove the old service and recovery timer ports. Update comments to
 the exact new service names.
 
-- [ ] **Step 6: Run RPC and bootstrap tests**
+- [x] **Step 6: Run RPC and bootstrap tests**
 
 ```bash
 cd modules/trade
@@ -1645,7 +1645,7 @@ go test -race -count=1 ./internal/rpc ./internal/bootstrap
 Expected: PASS with two services, one Store handle, runtime shutdown, and
 correct MARKET/SWAP field round trips.
 
-- [ ] **Step 7: Commit service consolidation**
+- [x] **Step 7: Commit service consolidation**
 
 ```bash
 git add modules/trade/internal/rpc \

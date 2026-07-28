@@ -51,7 +51,8 @@ type SecretSource interface {
 }
 
 type SessionState interface {
-	Ready(exchangeAccountID string) bool
+	ReadyFor(exchangeaccount.Account) bool
+	Invalidate(exchangeAccountID string)
 }
 
 type Service struct {
@@ -117,6 +118,9 @@ func (s *Service) Update(
 	if err := s.Store.Update(ctx, command); err != nil {
 		return exchangeaccount.Account{}, err
 	}
+	if s.SessionState != nil {
+		s.SessionState.Invalidate(command.ExchangeAccountID)
+	}
 	return s.Store.Get(ctx, command.ExchangeAccountID)
 }
 
@@ -141,7 +145,13 @@ func (s *Service) SetLeverage(
 	if current.MarketType != exchange.MarketTypeSwap {
 		return exchangeaccount.ErrInvalidAccount
 	}
-	return s.Store.SetLeverage(ctx, exchangeAccountID, symbol, leverage)
+	if err := s.Store.SetLeverage(ctx, exchangeAccountID, symbol, leverage); err != nil {
+		return err
+	}
+	if s.SessionState != nil {
+		s.SessionState.Invalidate(exchangeAccountID)
+	}
+	return nil
 }
 
 func (s *Service) Pause(
@@ -168,7 +178,13 @@ func (s *Service) Pause(
 	if err := current.Validate(); err != nil {
 		return err
 	}
-	return s.Store.SetPause(ctx, exchangeAccountID, paused, reason)
+	if err := s.Store.SetPause(ctx, exchangeAccountID, paused, reason); err != nil {
+		return err
+	}
+	if s.SessionState != nil {
+		s.SessionState.Invalidate(exchangeAccountID)
+	}
+	return nil
 }
 
 func (s *Service) ExecutionEligibility(
@@ -185,7 +201,7 @@ func (s *Service) ExecutionEligibility(
 	if err != nil {
 		return exchangeaccount.Account{}, err
 	}
-	current.Ready = s.SessionState.Ready(exchangeAccountID)
+	current.Ready = s.SessionState.ReadyFor(current)
 	if err := current.ExecutionEligibility(); err != nil {
 		return exchangeaccount.Account{}, err
 	}

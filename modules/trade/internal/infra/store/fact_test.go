@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -91,6 +92,64 @@ func TestCreateOrderEnforcesAccountClientIdentity(t *testing.T) {
 		})
 	})
 	require.ErrorIs(t, err, ErrConflict)
+}
+
+func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, seedOrder(ctx, s))
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		if err := tx.CreateOrder(OrderRecord{
+			SpaceID: "space-1", OrderID: "order-2", ExchangeAccountID: "account-1",
+			ClientOrderID: "client-order-2", ExchangeOrderID: "exchange-order-2",
+			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			OrderType: "MARKET", Side: "SELL", Quantity: "1",
+			ReferencePrice: "101", Source: "test", State: "FILLED",
+			FilledQuantity: "1", AveragePrice: "101", FinishedAt: 2_000,
+		}); err != nil {
+			return err
+		}
+		inserted, err := tx.InsertFill(FillRecord{
+			SpaceID: "space-1", FillID: "fill-1", ExchangeTradeID: "trade-1",
+			OrderID: "order-2", ExchangeOrderID: "exchange-order-2",
+			ExchangeAccountID: "account-1", Exchange: "BINANCE",
+			MarketType: "SPOT", Symbol: "BTCUSDT", Side: "SELL",
+			Price: "101", Quantity: "1", Fee: "0", TradedAt: 1_500,
+		})
+		if err != nil || !inserted {
+			return err
+		}
+		return tx.UpsertPosition(PositionRecord{
+			SpaceID: "space-1", ExchangeAccountID: "account-1",
+			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			ExchangeUpdatedAt: 1_500,
+		})
+	}))
+	now := time.Now()
+	orders, total, err := s.ListOrders(ctx, "space-1", OrderQuery{
+		ExchangeAccountID: "account-1", StartTime: now.Add(-time.Minute).UnixMilli(),
+		EndTime: now.Add(time.Minute).UnixMilli(), Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, orders, 1)
+	require.Equal(t, int64(2), total)
+	open, openTotal, err := s.ListOrders(ctx, "space-1", OrderQuery{
+		ExchangeAccountID: "account-1", OnlyOpen: true, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	require.Equal(t, int64(1), openTotal)
+	fills, fillTotal, err := s.ListFills(ctx, "space-1", FillQuery{
+		ExchangeAccountID: "account-1", StartTime: 1_000, EndTime: 2_000,
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, fills, 1)
+	require.Equal(t, int64(1), fillTotal)
+	positions, err := s.ListPositions(ctx, "space-1", "account-1", "BTCUSDT")
+	require.NoError(t, err)
+	require.Len(t, positions, 1)
+	require.False(t, positions[0].UpdatedAt.IsZero())
 }
 
 func TestExchangeInstrumentSwapFieldsRoundTrip(t *testing.T) {

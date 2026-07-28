@@ -54,7 +54,7 @@ type StateStore interface {
 }
 
 type OrderService interface {
-	Place(context.Context, orderdomain.OrderSpec) (orderdomain.Order, error)
+	Place(context.Context, string, orderdomain.OrderSpec) (orderdomain.Order, error)
 	Submit(context.Context, string, string) (orderdomain.Order, error)
 	Cancel(context.Context, string, string) (orderdomain.Order, error)
 	DiscardPending(context.Context, string, string) (orderdomain.Order, error)
@@ -398,7 +398,7 @@ func (e *Executor) convergeLane(
 	if account.MarketType == string(exchange.MarketTypeSwap) {
 		spec.PositionSide = exchange.PositionSideNet
 	}
-	placed, err := e.Orders.Place(ctx, spec)
+	placed, err := e.Orders.Place(ctx, execution.SpaceID, spec)
 	if err != nil {
 		return laneResult{}, err
 	}

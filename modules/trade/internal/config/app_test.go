@@ -154,10 +154,10 @@ func TestValidate_SQLiteWithoutPath_ShouldFail(t *testing.T) {
 
 func TestValidate_EventBusEnabledWithoutConsumer_ShouldFail(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.EventBus.RebalanceConsumer = ""
+	cfg.EventBus.TargetConsumer = ""
 
 	err := cfg.Validate()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "eventbus rebalance consumer is required")
+	assert.Contains(t, err.Error(), "eventbus target consumer is required")
 }

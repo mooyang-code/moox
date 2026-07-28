@@ -22,86 +22,18 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-      ######## 账户域 RPC 服务（http 协议，经 admin 网关透传 /api/trade/account/{method}） ########
-    - name: trpc.moox.trade.AccountSvc
+      ######## Exchange 账户 RPC ########
+    - name: trpc.moox.trade.ExchangeAccountService
       ip: 127.0.0.1
       port: 11200
       network: tcp
       protocol: http
       timeout: 5000
 
-      ######## 余额服务 /api/trade/balance/{method} ########
-    - name: trpc.moox.trade.BalanceSvc
+      ######## 交易执行 RPC ########
+    - name: trpc.moox.trade.TradeExecutionService
       ip: 127.0.0.1
       port: 11201
-      network: tcp
-      protocol: http
-      timeout: 10000
-
-      ######## 资金流水服务 /api/trade/fund/{method} ########
-    - name: trpc.moox.trade.FundSvc
-      ip: 127.0.0.1
-      port: 11202
-      network: tcp
-      protocol: http
-      timeout: 10000
-
-      ######## API 凭证服务 /api/trade/apikey/{method} ########
-    - name: trpc.moox.trade.ApiKeySvc
-      ip: 127.0.0.1
-      port: 11203
-      network: tcp
-      protocol: http
-      timeout: 5000
-
-      ######## 交易通道服务 /api/trade/channel/{method} ########
-    - name: trpc.moox.trade.ChannelSvc
-      ip: 127.0.0.1
-      port: 11204
-      network: tcp
-      protocol: http
-      timeout: 10000
-
-      ######## 交易操作服务 /api/trade/tradeop/{method} ########
-    - name: trpc.moox.trade.TradeOpSvc
-      ip: 127.0.0.1
-      port: 11205
-      network: tcp
-      protocol: http
-      timeout: 15000
-
-      ######## 订单查询服务 /api/trade/order/{method} ########
-    - name: trpc.moox.trade.OrderSvc
-      ip: 127.0.0.1
-      port: 11206
-      network: tcp
-      protocol: http
-      timeout: 5000
-
-      ######## 成交查询服务 /api/trade/tradeq/{method} ########
-    - name: trpc.moox.trade.TradeQuerySvc
-      ip: 127.0.0.1
-      port: 11207
-      network: tcp
-      protocol: http
-      timeout: 5000
-
-      ######## 持仓查询服务 /api/trade/position/{method} ########
-    - name: trpc.moox.trade.PositionSvc
-      ip: 127.0.0.1
-      port: 11208
-      network: tcp
-      protocol: http
-      timeout: 5000
-    - name: trpc.moox.trade.RebalanceSvc
-      ip: 127.0.0.1
-      port: 11211
-      network: tcp
-      protocol: http
-      timeout: 15000
-    - name: trpc.moox.trade.TradeOpsSvc
-      ip: 127.0.0.1
-      port: 11212
       network: tcp
       protocol: http
       timeout: 15000
@@ -111,16 +43,6 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
-    - name: trpc.moox.trade.fill_reconcile.timer
-      port: 11213
-      network: "*/30 * * * * *?startAtOnce=1"
-      protocol: timer
-      timeout: 30000
-    - name: trpc.moox.trade.order_recovery.timer
-      port: 11214
-      network: "*/15 * * * * *?startAtOnce=1"
-      protocol: timer
-      timeout: 15000
 
 client:
   filter:

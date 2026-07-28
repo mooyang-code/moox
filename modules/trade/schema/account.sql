@@ -41,3 +41,6 @@ ON t_exchange_accounts (c_space_id, c_status);
 
 CREATE INDEX IF NOT EXISTS idx_exchange_accounts_exchange
 ON t_exchange_accounts (c_exchange, c_market_type);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_exchange_accounts_id
+ON t_exchange_accounts (c_exchange_account_id);

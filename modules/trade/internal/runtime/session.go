@@ -33,6 +33,13 @@ func (s *ExchangeSession) Ready() bool {
 	return s != nil && s.ready.Load()
 }
 
+func (s *ExchangeSession) ExchangeAdapter() exchange.Adapter {
+	if s == nil {
+		return nil
+	}
+	return s.Adapter
+}
+
 func (s *ExchangeSession) Run(ctx context.Context) error {
 	if s == nil || s.Adapter == nil || s.Sync == nil || s.Sync.Store == nil ||
 		s.Account.ExchangeAccountID == "" {

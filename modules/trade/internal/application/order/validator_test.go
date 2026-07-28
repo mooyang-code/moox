@@ -120,8 +120,7 @@ func TestValidatorReservationMatrix(t *testing.T) {
 				},
 				Positions: positionSourceStub{
 					position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
-				},
-				SpaceID: "space-1", Now: func() time.Time { return now },
+				}, Now: func() time.Time { return now },
 				MaxReferenceAge:  time.Second,
 				MaxChildNotional: shared.MustDecimal("1000"),
 				MaxLeverage:      shared.MustDecimal("10"),
@@ -137,7 +136,7 @@ func TestValidatorReservationMatrix(t *testing.T) {
 				spec.PositionSide = exchange.PositionSideNet
 			}
 
-			got, err := validator.Validate(context.Background(), spec)
+			got, err := validator.Validate(context.Background(), "space-1", spec)
 			require.NoError(t, err)
 			require.Equal(t, tt.wantAsset, got.ReservedAsset)
 			require.Equal(t, tt.wantAmount, got.ReservedQuantity.String())
@@ -152,16 +151,14 @@ func TestValidatorRejectsOwnershipAndStalePrice(t *testing.T) {
 		Accounts: accountEligibilityStub{account: account},
 		Instruments: instrumentSourceStub{
 			instrument: testInstrument(exchange.MarketTypeSpot),
-		},
-		SpaceID: "other-space", Now: func() time.Time { return now },
+		}, Now: func() time.Time { return now },
 		MaxReferenceAge: time.Second,
 	}
-	_, err := validator.Validate(context.Background(), testSpec(now))
+	_, err := validator.Validate(context.Background(), "other-space", testSpec(now))
 	require.ErrorIs(t, err, ErrAccountOwnership)
 
-	validator.SpaceID = "space-1"
 	spec := testSpec(now.Add(-2 * time.Second))
-	_, err = validator.Validate(context.Background(), spec)
+	_, err = validator.Validate(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, orderdomain.ErrInvalidSpec)
 }
 
@@ -170,10 +167,9 @@ func TestValidatorPropagatesNotExecutable(t *testing.T) {
 		Accounts: accountEligibilityStub{err: exchangeaccount.ErrAccountNotExecutable},
 		Instruments: instrumentSourceStub{
 			instrument: testInstrument(exchange.MarketTypeSpot),
-		},
-		SpaceID: "space-1", MaxReferenceAge: time.Second,
+		}, MaxReferenceAge: time.Second,
 	}
-	_, err := validator.Validate(context.Background(), testSpec(time.Now()))
+	_, err := validator.Validate(context.Background(), "space-1", testSpec(time.Now()))
 	require.True(t, errors.Is(err, exchangeaccount.ErrAccountNotExecutable))
 }
 
@@ -215,7 +211,7 @@ func TestValidatorRejectsDisabledInstrumentAndInvalidQuantity(t *testing.T) {
 				spec.PositionSide = exchange.PositionSideNet
 			}
 
-			_, err := validator.Validate(context.Background(), spec)
+			_, err := validator.Validate(context.Background(), "space-1", spec)
 			require.ErrorIs(t, err, tt.wantErr)
 		})
 	}
@@ -228,7 +224,7 @@ func TestValidatorRejectsDisabledInstrumentAndInvalidQuantity(t *testing.T) {
 	spec := testSpec(now)
 	spec.Quantity = shared.MustDecimal("0.2")
 	spec.PositionSide = exchange.PositionSideNet
-	_, err := validator.Validate(context.Background(), spec)
+	_, err := validator.Validate(context.Background(), "space-1", spec)
 	require.NoError(t, err, "0.2 base units must convert to two whole contracts")
 }
 
@@ -241,13 +237,13 @@ func TestValidatorRejectsNotionalAndInsufficientFunds(t *testing.T) {
 		testInstrument(exchange.MarketTypeSpot),
 	)
 	validator.MaxChildNotional = shared.MustDecimal("99")
-	_, err := validator.Validate(context.Background(), testSpec(now))
+	_, err := validator.Validate(context.Background(), "space-1", testSpec(now))
 	require.ErrorIs(t, err, ErrNotionalLimit)
 
 	spotBuy := executableAccount(exchange.MarketTypeSpot)
 	spotBuy.Snapshot.Balances[0].Available = shared.MustDecimal("100")
 	validator = testValidator(now, spotBuy, testInstrument(exchange.MarketTypeSpot))
-	_, err = validator.Validate(context.Background(), testSpec(now))
+	_, err = validator.Validate(context.Background(), "space-1", testSpec(now))
 	require.ErrorIs(t, err, ErrInsufficientFunds)
 
 	spotSell := executableAccount(exchange.MarketTypeSpot)
@@ -255,7 +251,7 @@ func TestValidatorRejectsNotionalAndInsufficientFunds(t *testing.T) {
 	validator = testValidator(now, spotSell, testInstrument(exchange.MarketTypeSpot))
 	spec := testSpec(now)
 	spec.Side = exchange.SideSell
-	_, err = validator.Validate(context.Background(), spec)
+	_, err = validator.Validate(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrInsufficientFunds)
 
 	swap := executableAccount(exchange.MarketTypeSwap)
@@ -263,7 +259,7 @@ func TestValidatorRejectsNotionalAndInsufficientFunds(t *testing.T) {
 	validator = testValidator(now, swap, testInstrument(exchange.MarketTypeSwap))
 	spec = testSpec(now)
 	spec.PositionSide = exchange.PositionSideNet
-	_, err = validator.Validate(context.Background(), spec)
+	_, err = validator.Validate(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrInsufficientFunds)
 }
 
@@ -276,13 +272,13 @@ func TestValidatorRejectsInvalidLeverage(t *testing.T) {
 	account := executableAccount(exchange.MarketTypeSwap)
 	delete(account.LeverageSettings, spec.Symbol)
 	validator := testValidator(now, account, instrument)
-	_, err := validator.Validate(context.Background(), spec)
+	_, err := validator.Validate(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrLeverageLimit)
 
 	account = executableAccount(exchange.MarketTypeSwap)
 	account.LeverageSettings[spec.Symbol] = shared.MustDecimal("11")
 	validator = testValidator(now, account, instrument)
-	_, err = validator.Validate(context.Background(), spec)
+	_, err = validator.Validate(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrLeverageLimit)
 }
 
@@ -314,7 +310,7 @@ func TestValidatorRejectsInvalidReduceOnlyOrder(t *testing.T) {
 			candidate.Side = tt.side
 			candidate.Quantity = shared.MustDecimal(tt.quantity)
 
-			_, err := validator.Validate(context.Background(), candidate)
+			_, err := validator.Validate(context.Background(), "space-1", candidate)
 			require.ErrorIs(t, err, ErrReduceOnly)
 		})
 	}
@@ -328,7 +324,6 @@ func testValidator(
 	return Validator{
 		Accounts:         accountEligibilityStub{account: account},
 		Instruments:      instrumentSourceStub{instrument: instrument},
-		SpaceID:          "space-1",
 		Now:              func() time.Time { return now },
 		MaxReferenceAge:  time.Second,
 		MaxChildNotional: shared.MustDecimal("1000"),

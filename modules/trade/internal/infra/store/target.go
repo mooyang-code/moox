@@ -32,23 +32,27 @@ type TargetExecutionRecord struct {
 	Progress           string
 	ResidualQuantity   string
 	LastError          string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type targetExecutionRow struct {
-	SpaceID            string `gorm:"column:c_space_id"`
-	ExecutionID        string `gorm:"column:c_execution_id"`
-	EventID            string `gorm:"column:c_event_id"`
-	StrategyRunID      string `gorm:"column:c_strategy_run_id"`
-	ExecutionBindingID string `gorm:"column:c_execution_binding_id"`
-	ExchangeAccountID  string `gorm:"column:c_exchange_account_id"`
-	CommandSequence    uint64 `gorm:"column:c_command_sequence"`
-	NotAfter           int64  `gorm:"column:c_not_after"`
-	DataRevision       string `gorm:"column:c_data_revision"`
-	TargetsJSON        string `gorm:"column:c_targets_json"`
-	Status             string `gorm:"column:c_status"`
-	Progress           string `gorm:"column:c_progress"`
-	ResidualQuantity   string `gorm:"column:c_residual_quantity"`
-	LastError          string `gorm:"column:c_last_error"`
+	SpaceID            string    `gorm:"column:c_space_id"`
+	ExecutionID        string    `gorm:"column:c_execution_id"`
+	EventID            string    `gorm:"column:c_event_id"`
+	StrategyRunID      string    `gorm:"column:c_strategy_run_id"`
+	ExecutionBindingID string    `gorm:"column:c_execution_binding_id"`
+	ExchangeAccountID  string    `gorm:"column:c_exchange_account_id"`
+	CommandSequence    uint64    `gorm:"column:c_command_sequence"`
+	NotAfter           int64     `gorm:"column:c_not_after"`
+	DataRevision       string    `gorm:"column:c_data_revision"`
+	TargetsJSON        string    `gorm:"column:c_targets_json"`
+	Status             string    `gorm:"column:c_status"`
+	Progress           string    `gorm:"column:c_progress"`
+	ResidualQuantity   string    `gorm:"column:c_residual_quantity"`
+	LastError          string    `gorm:"column:c_last_error"`
+	CreatedAt          time.Time `gorm:"column:c_ctime"`
+	UpdatedAt          time.Time `gorm:"column:c_mtime"`
 }
 
 func (targetExecutionRow) TableName() string {
@@ -180,6 +184,7 @@ func (s *Store) GetTargetExecutionByBinding(
 		NotAfter: row.NotAfter, DataRevision: row.DataRevision, Targets: targets,
 		Status: row.Status, Progress: row.Progress,
 		ResidualQuantity: row.ResidualQuantity, LastError: row.LastError,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
 }
 
@@ -223,6 +228,50 @@ func (s *Store) ListTargetExecutions(
 		records = append(records, targetExecutionRecordFromRow(row, targets))
 	}
 	return records, nil
+}
+
+type TargetExecutionQuery struct {
+	ExchangeAccountID  string
+	ExecutionBindingID string
+	Status             string
+	Offset             int
+	Limit              int
+}
+
+func (s *Store) QueryTargetExecutions(
+	ctx context.Context,
+	spaceID string,
+	query TargetExecutionQuery,
+) ([]TargetExecutionRecord, int64, error) {
+	db := s.db.WithContext(ctx).Table("t_target_executions").
+		Where("c_space_id = ?", spaceID)
+	if query.ExchangeAccountID != "" {
+		db = db.Where("c_exchange_account_id = ?", query.ExchangeAccountID)
+	}
+	if query.ExecutionBindingID != "" {
+		db = db.Where("c_execution_binding_id = ?", query.ExecutionBindingID)
+	}
+	if query.Status != "" {
+		db = db.Where("c_status = ?", query.Status)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []targetExecutionRow
+	if err := db.Order("c_mtime DESC, c_execution_id DESC").
+		Offset(query.Offset).Limit(query.Limit).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	records := make([]TargetExecutionRecord, 0, len(rows))
+	for _, row := range rows {
+		var targets []TargetPosition
+		if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
+			return nil, 0, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
+		}
+		records = append(records, targetExecutionRecordFromRow(row, targets))
+	}
+	return records, total, nil
 }
 
 func (s *Store) UpdateTargetExecutionState(
@@ -270,6 +319,7 @@ func targetExecutionRecordFromRow(
 		NotAfter: row.NotAfter, DataRevision: row.DataRevision, Targets: targets,
 		Status: row.Status, Progress: row.Progress,
 		ResidualQuantity: row.ResidualQuantity, LastError: row.LastError,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
 

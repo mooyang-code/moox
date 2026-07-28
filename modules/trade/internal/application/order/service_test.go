@@ -81,11 +81,14 @@ func (a *adapterStub) SubscribePrivate(context.Context, exchange.EventHandler) e
 	return nil
 }
 
-type syncerStub struct{ calls int }
+type syncerStub struct {
+	calls int
+	err   error
+}
 
 func (s *syncerStub) SyncAccount(context.Context, string) error {
 	s.calls++
-	return nil
+	return s.err
 }
 
 func TestServicePlacePersistsBeforeSubmissionAndIsIdempotent(t *testing.T) {
@@ -93,7 +96,7 @@ func TestServicePlacePersistsBeforeSubmissionAndIsIdempotent(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	spec := testSpec(now)
 
-	got, err := service.Place(context.Background(), spec)
+	got, err := service.Place(context.Background(), "space-1", spec)
 	require.NoError(t, err)
 	require.Equal(t, "PENDING", string(got.State))
 	require.Equal(t, 0, adapter.placeCalls)
@@ -116,21 +119,21 @@ func TestServicePlacePersistsBeforeSubmissionAndIsIdempotent(t *testing.T) {
 	service.Validator.Now = func() time.Time {
 		return time.Unix(1_700_000_100, 0)
 	}
-	replayed, err := service.Place(context.Background(), spec)
+	replayed, err := service.Place(context.Background(), "space-1", spec)
 	require.NoError(t, err)
 	require.Equal(t, got.ID, replayed.ID)
 	require.Equal(t, 1, adapter.placeCalls)
 
 	conflict := spec
 	conflict.Quantity = shared.MustDecimal("2")
-	_, err = service.Place(context.Background(), conflict)
+	_, err = service.Place(context.Background(), "space-1", conflict)
 	require.ErrorIs(t, err, ErrIdempotencyConflict)
 }
 
 func TestServiceDiscardPendingReleasesReservationWithoutExchangeCall(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	now := time.Unix(1_700_000_000, 0)
-	_, err := service.Place(context.Background(), testSpec(now))
+	_, err := service.Place(context.Background(), "space-1", testSpec(now))
 	require.NoError(t, err)
 
 	discarded, err := service.DiscardPending(
@@ -164,6 +167,7 @@ func TestServicePlaceTransportUnknownRetainsReservation(t *testing.T) {
 
 	pending, err := service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -188,6 +192,7 @@ func TestServiceSubmitRevalidatesReadinessAndReferencePrice(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	pending, err := service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -207,6 +212,7 @@ func TestServiceSubmitRevalidatesReadinessAndReferencePrice(t *testing.T) {
 	service, tradeStore, adapter = newTestService(t)
 	pending, err = service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -228,6 +234,7 @@ func TestServiceResolveUnknownFindsOrderOrReturnsPendingAfterWindow(t *testing.T
 	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
 	pending, err := service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -246,6 +253,7 @@ func TestServiceResolveUnknownFindsOrderOrReturnsPendingAfterWindow(t *testing.T
 	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
 	pending, err = service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -275,6 +283,7 @@ func TestServiceSubmitAcceptsFillThatRacesWithAcknowledgement(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	pending, err := service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -307,6 +316,7 @@ func TestServiceResolveUnknownRecoversSubmittingAfterCrash(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	pending, err := service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -333,6 +343,7 @@ func TestServiceCancelWaitsForAccountSyncBeforeTerminalRelease(t *testing.T) {
 	service.Syncer = syncer
 	placed, err := service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -355,6 +366,7 @@ func TestServiceCancelRejectionRestoresOpenState(t *testing.T) {
 	service.Syncer = &syncerStub{}
 	placed, err := service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -371,6 +383,7 @@ func TestServiceCancelRequiresAccountSyncBeforeDispatch(t *testing.T) {
 	service, _, adapter := newTestService(t)
 	placed, err := service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -382,12 +395,50 @@ func TestServiceCancelRequiresAccountSyncBeforeDispatch(t *testing.T) {
 	require.Equal(t, 0, adapter.cancelCalls)
 }
 
+func TestServiceRecoverCancelRetriesCancelingAndUnknown(t *testing.T) {
+	service, _, adapter := newTestService(t)
+	syncer := &syncerStub{err: errors.New("sync unavailable")}
+	service.Syncer = syncer
+	placed, err := service.Place(
+		context.Background(),
+		"space-1",
+		testSpec(time.Unix(1_700_000_000, 0)),
+	)
+	require.NoError(t, err)
+	placed, err = service.Submit(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+
+	_, err = service.Cancel(context.Background(), "space-1", string(placed.ID))
+	require.EqualError(t, err, "sync unavailable")
+	syncer.err = nil
+	recovered, err := service.RecoverCancel(
+		context.Background(),
+		"space-1",
+		string(placed.ID),
+	)
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Canceling, recovered.State)
+	require.Equal(t, 2, adapter.cancelCalls)
+
+	adapter.cancelErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
+	_, err = service.RecoverCancel(context.Background(), "space-1", string(placed.ID))
+	require.Error(t, err)
+	stored, getErr := service.Get(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, getErr)
+	require.Equal(t, orderdomain.CancelUnknown, stored.State)
+
+	adapter.cancelErr = nil
+	_, err = service.RecoverCancel(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+}
+
 func TestServiceRejectedSubmissionReleasesReservation(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("bad order")}
 
 	pending, err := service.Place(
 		context.Background(),
+		"space-1",
 		testSpec(time.Unix(1_700_000_000, 0)),
 	)
 	require.NoError(t, err)
@@ -433,7 +484,7 @@ func TestServiceConcurrentPlaceCannotOverReserveSnapshot(t *testing.T) {
 		wait.Add(1)
 		go func(index int) {
 			defer wait.Done()
-			_, errs[index] = service.Place(context.Background(), specs[index])
+			_, errs[index] = service.Place(context.Background(), "space-1", specs[index])
 		}(i)
 	}
 	wait.Wait()
@@ -490,7 +541,6 @@ func newTestService(t *testing.T) (*Service, *store.Store, *adapterStub) {
 		Validator: Validator{
 			Accounts:         accountEligibilityStub{account: account},
 			Instruments:      instrumentSourceStub{instrument: instrument},
-			SpaceID:          "space-1",
 			Now:              func() time.Time { return time.Unix(1_700_000_000, 0) },
 			MaxReferenceAge:  time.Second,
 			MaxChildNotional: shared.MustDecimal("1000"),

@@ -200,6 +200,14 @@ func (s *Store) Close() error {
 	return sqlDB.Close()
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.PingContext(ctx)
+}
+
 func (s *Store) Transaction(ctx context.Context, fn func(*Tx) error) error {
 	if fn == nil {
 		return fmt.Errorf("%w: nil transaction callback", ErrInvalidRecord)

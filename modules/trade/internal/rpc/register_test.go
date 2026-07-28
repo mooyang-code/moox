@@ -1,13 +1,12 @@
 package rpc
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/stretchr/testify/assert"
-)
-
-func TestServiceNameConstants_ShouldMatchTRPCNames(t *testing.T) {
-	assert.Equal(t, "trpc.moox.trade.AccountSvc", AccountSvcName)
-	assert.Equal(t, "trpc.moox.trade.TradeOpsSvc", TradeOpsSvcName)
-	assert.Equal(t, "trpc.moox.trade.RebalanceSvc", RebalanceSvcName)
+func TestServiceNames(t *testing.T) {
+	if ExchangeAccountServiceName != "trpc.moox.trade.ExchangeAccountService" {
+		t.Fatalf("account service name = %q", ExchangeAccountServiceName)
+	}
+	if TradeExecutionServiceName != "trpc.moox.trade.TradeExecutionService" {
+		t.Fatalf("execution service name = %q", TradeExecutionServiceName)
+	}
 }
