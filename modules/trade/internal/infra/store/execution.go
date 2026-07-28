@@ -169,6 +169,9 @@ func validateLedger(record LedgerTransactionRecord) error {
 		if entry.Asset == "" || entry.Bucket == "" {
 			return fmt.Errorf("%w: incomplete ledger entry", ErrInvalidRecord)
 		}
+		if _, err := canonicalFiniteDecimal(entry.Amount, "ledger entry amount"); err != nil {
+			return err
+		}
 		totals[entry.Asset] = totals[entry.Asset].Add(entry.Amount)
 	}
 	assets := make([]string, 0, len(totals))

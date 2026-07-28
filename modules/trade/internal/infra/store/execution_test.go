@@ -110,3 +110,49 @@ func TestPostLedgerUpdatesExistingProjectionInSecondTransaction(t *testing.T) {
 		require.Equal(t, uint64(2), projection.Version)
 	}
 }
+
+func TestPostLedgerRejectsNonTerminatingDecimalBeforeAnyWrite(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateExchangeAccount(testAccount())
+	}))
+	seed := LedgerTransactionRecord{
+		SpaceID: "space-1", TransactionID: "seed-1",
+		ExchangeAccountID: "account-1", TransactionType: LedgerSyncAdjustment,
+		SourceType: "SYNC", SourceID: "sync-1",
+		Entries: []LedgerEntryRecord{
+			{Asset: "USDT", Bucket: "AVAILABLE", Amount: shared.MustDecimal("10")},
+			{Asset: "USDT", Bucket: "SYNC_OFFSET", Amount: shared.MustDecimal("-10")},
+		},
+	}
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.PostLedger(seed)
+	}))
+
+	oneThird := shared.MustDecimal("1").Div(shared.MustDecimal("3"))
+	fraction := LedgerTransactionRecord{
+		SpaceID: "space-1", TransactionID: "fraction-1",
+		ExchangeAccountID: "account-1", TransactionType: LedgerSyncAdjustment,
+		SourceType: "SYNC", SourceID: "sync-fraction",
+		Entries: []LedgerEntryRecord{
+			{Asset: "USDT", Bucket: "AVAILABLE", Amount: oneThird},
+			{Asset: "USDT", Bucket: "SYNC_OFFSET", Amount: oneThird.Neg()},
+		},
+	}
+	err := s.Transaction(ctx, func(tx *Tx) error {
+		return tx.PostLedger(fraction)
+	})
+	require.ErrorIs(t, err, ErrInvalidRecord)
+
+	var transactions int64
+	require.NoError(t, s.db.Table("t_ledger_transactions").Count(&transactions).Error)
+	require.Equal(t, int64(1), transactions)
+	projections, err := s.ListBalanceProjections(ctx, "space-1", "account-1")
+	require.NoError(t, err)
+	require.Len(t, projections, 2)
+	require.Equal(t, "10", projections[0].Amount.String())
+	require.Equal(t, "-10", projections[1].Amount.String())
+	require.Equal(t, uint64(1), projections[0].Version)
+	require.Equal(t, uint64(1), projections[1].Version)
+}
