@@ -174,6 +174,21 @@ func TestEnableOptionalStorageShardReplacesEmbeddedRoute(t *testing.T) {
 	require.Equal(t, []any{"storage-primary"}, shard.ExtraConfig["gateway_callers"])
 }
 
+func TestServiceDeploymentSeedExposesStorageSpaceCleanup(t *testing.T) {
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	require.NoError(t, err)
+	for _, item := range seed.Services {
+		if item.Name != "storage-primary" {
+			continue
+		}
+		methods, ok := item.ExtraConfig["gateway_methods"].([]any)
+		require.True(t, ok)
+		require.Contains(t, methods, "DeleteSpace")
+		return
+	}
+	t.Fatal("storage-primary deployment is missing")
+}
+
 func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
 	require.NoError(t, err)

@@ -62,6 +62,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	spaceID := "factor_e2e_" + suffix
 	sourceID := "portfolio_" + suffix
 	targetID := "portfolio_factor_" + suffix
+	sourceViewID := "source_view_" + suffix
 	viewID := "factor_view_" + suffix
 	factorID := "excess_return_" + suffix
 	factorName := "ExcessReturn_" + suffix
@@ -182,6 +183,21 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		ExpectedRevision: checkRsp.GetDatasetRevision(),
 	})
 	requireStorageOK(t, "ActivateDataset", activateRsp, err)
+	sourceViewRsp, err := metadata.CreateView(ctx, &storagepb.CreateViewReq{
+		AuthInfo: auth,
+		View: &storagepb.View{
+			SpaceId: spaceID, ViewId: sourceViewID, Name: "组合输入视图",
+			PrimaryDatasetId: sourceID, DatasetIds: []string{sourceID},
+			GrainKeys: []string{"subject_id", "freq", "data_time"}, Engine: "duckdb",
+			KeepDuration: "24h", Status: "active",
+			Columns: []*storagepb.ViewColumn{
+				viewColumn(spaceID, sourceViewID, sourceID, "nav", "净值", 10),
+				viewColumn(spaceID, sourceViewID, sourceID, "benchmark_return", "基准收益", 20),
+			},
+		},
+	})
+	requireStorageOK(t, "CreateView(source)", sourceViewRsp, err)
+	waitForViewReady(t, ctx, metadata, auth, spaceID, sourceViewID)
 
 	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
