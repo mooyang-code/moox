@@ -178,7 +178,11 @@ func (c *checker) scanGoFunction(path string, function *ast.FuncDecl) {
 }
 
 func allowedSecretClientProvider(path string, field *ast.Field, name string) bool {
-	if !strings.Contains(filepath.ToSlash(path), "/modules/trade/internal/secretclient/") || !strings.EqualFold(name, "provider") || field.Tag == nil {
+	const secretClientPath = "modules/trade/internal/secretclient/"
+	normalizedPath := filepath.ToSlash(filepath.Clean(path))
+	inSecretClient := strings.HasPrefix(normalizedPath, secretClientPath) ||
+		strings.Contains(normalizedPath, "/"+secretClientPath)
+	if !inSecretClient || !strings.EqualFold(name, "provider") || field.Tag == nil {
 		return false
 	}
 	return strings.Contains(field.Tag.Value, `json:"provider"`)

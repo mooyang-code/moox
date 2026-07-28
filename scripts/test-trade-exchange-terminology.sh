@@ -28,7 +28,7 @@ EOF
 cat >"${TMP}/modules/trade/internal/secretclient/client.go" <<'EOF'
 package secretclient
 
-type listSecretsRequest struct {
+type ExchangeSecretWire struct {
 	Provider string `json:"provider"`
 }
 EOF
@@ -74,6 +74,14 @@ func SyncExchangeAccounts(provider string) string {
 var providerName = "binance"
 EOF
 
+cat >"${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" <<'EOF'
+package secretclient
+
+func ResolveExchange(provider string) string {
+	return provider
+}
+EOF
+
 cat >"${TMP}/packages/tradeeventpb/bad.proto" <<'EOF'
 syntax = "proto3";
 
@@ -96,12 +104,15 @@ cat >"${TMP}/web/src/api/trade/bad.md" <<'EOF'
 Trade Platform: OKX
 EOF
 
-if "${CHECKER}" "${TMP}/modules/trade" "${TMP}/packages/tradeeventpb" "${TMP}/web/src/api/trade" >"${TMP}/bad.out" 2>&1; then
+if (
+  cd "${TMP}"
+  "${CHECKER}" modules/trade packages/tradeeventpb web/src/api/trade
+) >"${TMP}/bad.out" 2>&1; then
   echo "checker accepted forbidden Exchange terminology" >&2
   exit 1
 fi
 
-for fixture in bad.go bad.proto bad.ts bad.yaml bad.md; do
+for fixture in bad.go bad_secretclient.go bad.proto bad.ts bad.yaml bad.md; do
   rg -q --fixed-strings "${fixture}:" "${TMP}/bad.out" || {
     echo "checker did not report ${fixture}" >&2
     cat "${TMP}/bad.out" >&2
@@ -111,11 +122,16 @@ done
 
 rm \
   "${TMP}/modules/trade/internal/bad.go" \
+  "${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" \
   "${TMP}/packages/tradeeventpb/bad.proto" \
   "${TMP}/web/src/api/trade/bad.ts" \
   "${TMP}/web/src/api/trade/bad.yaml" \
   "${TMP}/web/src/api/trade/bad.md"
 
+(
+  cd "${TMP}"
+  "${CHECKER}" modules/trade packages/tradeeventpb web/src/api/trade
+)
 "${CHECKER}" "${TMP}/modules/trade" "${TMP}/packages/tradeeventpb" "${TMP}/web/src/api/trade"
 
 echo "trade Exchange terminology fixtures passed"
