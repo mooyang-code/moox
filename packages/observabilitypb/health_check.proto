@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package trpc.moox.observability;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/mooyang-code/moox/packages/observabilitypb;observabilitypb";
+
+message HealthCheckReport {
+  string observer_id = 1;
+  string check_id = 2;
+  string target = 3;
+  string kind = 4;
+  bool success = 5;
+  int32 status_code = 6;
+  int64 latency_ms = 7;
+  string error_code = 8;
+  string error_summary = 9;
+  google.protobuf.Timestamp checked_at = 10;
+}

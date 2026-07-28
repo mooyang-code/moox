@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
+	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
@@ -61,12 +62,15 @@ var (
 	CloudJobExecutionRequested = declareEvent("cloudnode.job.execution.requested", 1, "MOOX_CLOUDNODE_EXEC", "cloudnode", func() proto.Message {
 		return &cloudjobpb.JobExecutionRequested{}
 	}, validateCloudJobExecutionRequested)
-	MetricsHostReported = declareEvent("metrics.host.reported", 1, "MOOX_METRICS", "hostagent", func() proto.Message {
-		return &hostmetricpb.HostMetric{}
-	}, validateMetricsHostReported)
-	MetricsSnapshotReported = declareEvent("metrics.snapshot.reported", 1, "MOOX_METRICS", "service", func() proto.Message {
+	ObservabilityMetricsSnapshotReported = declareEvent("observability.metrics.snapshot.reported", 1, "MOOX_OBSERVABILITY", "service", func() proto.Message {
 		return &metricspb.MetricReport{}
-	}, validateMetricsSnapshotReported)
+	}, validateObservabilityMetricsSnapshotReported)
+	ObservabilityHostSnapshotReported = declareEvent("observability.host.snapshot.reported", 1, "MOOX_OBSERVABILITY", "hostagent", func() proto.Message {
+		return &hostmetricpb.HostMetric{}
+	}, validateObservabilityHostSnapshotReported)
+	ObservabilityHealthCheckReported = declareEvent("observability.health.check.reported", 1, "MOOX_OBSERVABILITY", "watchdog", func() proto.Message {
+		return &observabilitypb.HealthCheckReport{}
+	}, validateObservabilityHealthCheckReported)
 	DatasetRowsUpserted = declareEvent("storage.dataset.rows.upserted", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)

@@ -74,10 +74,10 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	}
 	c.KV[0].History = 1
 	c.KV[0].MaxAge = originalTTL
-	if _, err := js.Publish("moox.metrics.host.reported.v1", []byte("metric")); err != nil {
+	if _, err := js.Publish("moox.observability.host.snapshot.reported.v1", []byte("metric")); err != nil {
 		t.Fatal(err)
 	}
-	c.Streams[1].Subjects = []string{"moox.metrics.other.>"}
+	c.Streams[1].Subjects = []string{"moox.observability.other.>"}
 	if _, err := r.Reconcile(ctx); err == nil {
 		t.Fatal("subject removal was accepted")
 	}
@@ -88,7 +88,7 @@ func TestTopicCoverageAndKVTTL(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	c.Streams = append(c.Streams, config.StreamConfig{Name: "MOOX_METRICS_DUP", Subjects: []string{"moox.metrics.>"}, Retention: "limits", Storage: "file", Replicas: 1})
+	c.Streams = append(c.Streams, config.StreamConfig{Name: "MOOX_OBSERVABILITY_DUP", Subjects: []string{"moox.observability.>"}, Retention: "limits", Storage: "file", Replicas: 1})
 	if err := c.Validate(); err == nil {
 		t.Fatal("overlapping stream accepted")
 	}

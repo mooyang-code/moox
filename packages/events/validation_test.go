@@ -9,9 +9,11 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
+	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type semanticValidationPublisher struct {
@@ -44,13 +46,13 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 			mutate:  func(value proto.Message) { value.(*cloudjobpb.JobExecutionRequested).JobItemId = "other" },
 		},
 		{
-			name: "host agent", event: MetricsHostReported,
+			name: "host agent", event: ObservabilityHostSnapshotReported,
 			payload: &hostmetricpb.HostMetric{AgentId: "agent-1", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
 			opts:    validationOptions("host-event-1", "moox_system", "agent-1"),
 			mutate:  func(value proto.Message) { value.(*hostmetricpb.HostMetric).AgentId = "other" },
 		},
 		{
-			name: "metrics producer", event: MetricsSnapshotReported,
+			name: "metrics producer", event: ObservabilityMetricsSnapshotReported,
 			payload: &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage-1", Snapshot: &metricspb.MetricSnapshot{}},
 			opts:    validationOptions("metric-event-1", "moox_system", "storage/storage-1"),
 			mutate:  func(value proto.Message) { value.(*metricspb.MetricReport).InstanceId = "other" },
@@ -119,6 +121,58 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 			test.mutate(invalid)
 			if _, err := registry.Encode(test.event, invalid, test.opts); err == nil {
 				t.Fatal("identity mismatch was accepted")
+			}
+		})
+	}
+}
+
+func TestHealthCheckReportValidation(t *testing.T) {
+	occurredAt := time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC)
+	valid := &observabilitypb.HealthCheckReport{
+		ObserverId: "scf-watchdog",
+		CheckId:    "storage-health",
+		Target:     "http://storage:8080/healthz",
+		Kind:       "http",
+		Success:    true,
+		LatencyMs:  12,
+		CheckedAt:  timestamppb.New(occurredAt),
+	}
+	opts := validationOptions("health-event-1", "moox_system", "storage-health")
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Encode(ObservabilityHealthCheckReported, valid, opts); err != nil {
+		t.Fatalf("valid health check rejected: %v", err)
+	}
+
+	tests := map[string]func(*observabilitypb.HealthCheckReport){
+		"observer required":   func(v *observabilitypb.HealthCheckReport) { v.ObserverId = "" },
+		"check required":      func(v *observabilitypb.HealthCheckReport) { v.CheckId = "" },
+		"kind required":       func(v *observabilitypb.HealthCheckReport) { v.Kind = "" },
+		"target too long":     func(v *observabilitypb.HealthCheckReport) { v.Target = string(make([]byte, 513)) },
+		"error code too long": func(v *observabilitypb.HealthCheckReport) { v.ErrorCode = string(make([]byte, 65)) },
+		"error summary too long": func(v *observabilitypb.HealthCheckReport) {
+			v.ErrorSummary = string(make([]byte, 257))
+		},
+		"negative latency":   func(v *observabilitypb.HealthCheckReport) { v.LatencyMs = -1 },
+		"checked at missing": func(v *observabilitypb.HealthCheckReport) { v.CheckedAt = nil },
+		"checked at invalid": func(v *observabilitypb.HealthCheckReport) {
+			v.CheckedAt = &timestamppb.Timestamp{Seconds: 253402300800}
+		},
+		"checked at too early": func(v *observabilitypb.HealthCheckReport) {
+			v.CheckedAt = timestamppb.New(occurredAt.Add(-5*time.Minute - time.Nanosecond))
+		},
+		"checked at too late": func(v *observabilitypb.HealthCheckReport) {
+			v.CheckedAt = timestamppb.New(occurredAt.Add(5*time.Minute + time.Nanosecond))
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			invalid := proto.Clone(valid).(*observabilitypb.HealthCheckReport)
+			mutate(invalid)
+			if _, err := registry.Encode(ObservabilityHealthCheckReported, invalid, opts); err == nil {
+				t.Fatal("invalid health check was accepted")
 			}
 		})
 	}

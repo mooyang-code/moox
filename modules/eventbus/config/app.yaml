@@ -41,8 +41,8 @@ streams:
     max_age: 72h
     duplicates: 2m
     max_bytes: 1073741824
-  - name: MOOX_METRICS
-    subjects: ["moox.metrics.>"]
+  - name: MOOX_OBSERVABILITY
+    subjects: ["moox.observability.>"]
     retention: limits
     discard: old
     storage: file

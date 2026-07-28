@@ -7,15 +7,18 @@ require (
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats.go v1.51.0
+	github.com/stretchr/testify v1.11.1
 	google.golang.org/protobuf v1.36.11
 )
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
@@ -31,6 +34,7 @@ require (
 	github.com/panjf2000/ants/v2 v2.8.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.48.0 // indirect
@@ -54,6 +58,8 @@ replace github.com/mooyang-code/moox/packages/hostmetricpb => ../hostmetricpb
 replace github.com/mooyang-code/moox/packages/jetstream => ../jetstream
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../metricspb
+
+replace github.com/mooyang-code/moox/packages/observabilitypb => ../observabilitypb
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../storagepb
 

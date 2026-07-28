@@ -37,6 +37,8 @@ use (
 	./packages/hostmetricpb
 	./packages/jetstream
 	./packages/metricspb
+	./packages/msgbox
+	./packages/observabilitypb
 	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
