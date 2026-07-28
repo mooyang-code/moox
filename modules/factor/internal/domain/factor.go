@@ -17,9 +17,10 @@ type FactorDef struct {
 	SourceCode   string    `gorm:"column:c_source_code"`
 	SourceHash   string    `gorm:"column:c_source_hash"`
 	SourcePath   string    `gorm:"column:c_source_path"`
-	Periods      []int     `gorm:"column:c_periods_json;serializer:json"`
-	LookbackBars int       `gorm:"column:c_lookback_bars"`
-	Depends      []string  `gorm:"column:c_depends_json;serializer:json"`
+	InputColumns []string  `gorm:"column:c_input_columns_json;serializer:json"`
+	Outputs      []string  `gorm:"column:c_outputs_json;serializer:json"`
+	ParamsJSON   string    `gorm:"column:c_params_json"`
+	LookbackRows int       `gorm:"column:c_lookback_rows"`
 	Status       string    `gorm:"column:c_status"`
 	CreateTime   time.Time `gorm:"column:c_ctime"`
 	ModifyTime   time.Time `gorm:"column:c_mtime"`

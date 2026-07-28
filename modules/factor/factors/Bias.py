@@ -1,8 +1,7 @@
-def signal_multi_params(df, param_list):
+def compute(df, params):
     close = df["close"]
-    out = {}
-    for n in param_list:
-        n = int(n)
-        ma = close.rolling(n, min_periods=1).mean()
-        out[str(n)] = close / ma
-    return out
+    outputs = {}
+    for window in params["windows"]:
+        average = close.rolling(window, min_periods=1).mean()
+        outputs[f"bias_{window}"] = close / average - 1
+    return outputs

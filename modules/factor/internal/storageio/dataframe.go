@@ -9,9 +9,6 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// KLineColumns is the canonical V1 OHLCV input order.
-var KLineColumns = []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"}
-
 // RowsToDataFrame converts Storage rows into an engine DataFrame sorted by data_time ASC.
 func RowsToDataFrame(rows []*storagepb.TimeSeriesRow, columns []string) (*engine.DataFrame, error) {
 	ordered := append([]*storagepb.TimeSeriesRow(nil), rows...)

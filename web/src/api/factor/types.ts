@@ -9,9 +9,10 @@ export interface FactorDef {
   name: string;
   source_code: string;
   source_hash?: string;
-  periods: number[];
-  lookback_bars: number;
-  depends: string[];
+  input_columns: string[];
+  outputs: string[];
+  params_json: string;
+  lookback_rows: number;
   status: FactorStatus;
   created_at?: string;
   updated_at?: string;

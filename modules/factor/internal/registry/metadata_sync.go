@@ -3,7 +3,6 @@ package registry
 import (
 	"context"
 	"crypto/sha1"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -92,9 +91,8 @@ func (s *MetadataSync) SyncTargetDataset(ctx context.Context, spaceID string, so
 		return err
 	}
 	for _, factor := range factors {
-		for _, period := range factor.Periods {
-			columnName := fmt.Sprintf("%s_%d", factor.Name, period)
-			if err := s.upsertColumn(ctx, spaceID, targetDataset, factor, period, columnName); err != nil {
+		for _, output := range factor.Outputs {
+			if err := s.upsertColumn(ctx, spaceID, targetDataset, factor, output); err != nil {
 				return err
 			}
 		}
@@ -212,10 +210,6 @@ func (s *MetadataSync) bindDatasetSubject(ctx context.Context, binder datasetSub
 }
 
 func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor domain.FactorDef) error {
-	periods, err := json.Marshal(factor.Periods)
-	if err != nil {
-		return fmt.Errorf("marshal periods for factor %s: %w", factor.FactorID, err)
-	}
 	req := &storagepb.CreateFactorReq{
 		AuthInfo: s.auth,
 		Factor: &storagepb.Factor{
@@ -223,7 +217,7 @@ func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor 
 			FactorId:   factor.FactorID,
 			Name:       factor.Name,
 			Algorithm:  factor.Name,
-			ParamsJson: string(periods),
+			ParamsJson: factor.ParamsJSON,
 			ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			Status:     storageFactorStatus(factor.Status),
 		},
@@ -284,7 +278,7 @@ func (s *MetadataSync) createDataset(ctx context.Context, spaceID string, source
 	return retInfoError("CreateDataset", rsp.GetRetInfo())
 }
 
-func (s *MetadataSync) upsertColumn(ctx context.Context, spaceID string, datasetID string, factor domain.FactorDef, param int, columnName string) error {
+func (s *MetadataSync) upsertColumn(ctx context.Context, spaceID string, datasetID string, factor domain.FactorDef, columnName string) error {
 	req := &storagepb.UpsertDatasetColumnReq{
 		AuthInfo: s.auth,
 		Column: &storagepb.DatasetColumn{
@@ -292,14 +286,14 @@ func (s *MetadataSync) upsertColumn(ctx context.Context, spaceID string, dataset
 			DatasetId:  datasetID,
 			ColumnName: columnName,
 			OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
-			OriginId:   factorColumnOriginID(factor.FactorID, param),
+			OriginId:   factorColumnOriginID(factor.FactorID, columnName),
 			ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			Required:   false,
 			Status:     "active",
 			Attributes: map[string]string{
 				"display_name":     columnDisplayName(columnName),
 				"origin_factor_id": factor.FactorID,
-				"factor_param":     fmt.Sprintf("%d", param),
+				"factor_output":    columnName,
 			},
 		},
 	}
@@ -512,8 +506,8 @@ func mergeDatasetFreq(freqs []string, freq string) []string {
 	return append(out, normalized)
 }
 
-func factorColumnOriginID(factorID string, param int) string {
-	return fmt.Sprintf("%s_%d", strings.TrimSpace(factorID), param)
+func factorColumnOriginID(factorID string, output string) string {
+	return strings.TrimSpace(factorID) + "." + strings.TrimSpace(output)
 }
 
 func retOK(ret *commonpb.RetInfo) bool {

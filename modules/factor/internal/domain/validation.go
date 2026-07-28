@@ -1,7 +1,10 @@
 package domain
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -23,40 +26,72 @@ func NormalizeFactorDefinition(factor FactorDef) (FactorDef, error) {
 	if factor.Status != FactorStatusEnabled && factor.Status != FactorStatusDisabled {
 		return FactorDef{}, fmt.Errorf("invalid factor status %q", factor.Status)
 	}
-	if len(factor.Periods) == 0 {
-		return FactorDef{}, fmt.Errorf("periods are required")
+	var err error
+	factor.InputColumns, err = normalizeColumns("input_columns", factor.InputColumns)
+	if err != nil {
+		return FactorDef{}, err
 	}
-	periodSet := make(map[int]struct{}, len(factor.Periods))
-	periods := make([]int, 0, len(factor.Periods))
-	for _, period := range factor.Periods {
-		if period <= 0 {
-			return FactorDef{}, fmt.Errorf("period must be positive: %d", period)
-		}
-		if _, ok := periodSet[period]; ok {
-			continue
-		}
-		periodSet[period] = struct{}{}
-		periods = append(periods, period)
+	factor.Outputs, err = normalizeColumns("outputs", factor.Outputs)
+	if err != nil {
+		return FactorDef{}, err
 	}
-	sort.Ints(periods)
-	if factor.LookbackBars < periods[len(periods)-1] {
-		return FactorDef{}, fmt.Errorf("lookback_bars %d is smaller than maximum period %d", factor.LookbackBars, periods[len(periods)-1])
+	factor.ParamsJSON, err = normalizeParamsJSON(factor.ParamsJSON)
+	if err != nil {
+		return FactorDef{}, err
 	}
-	factor.Periods = periods
-	dependsSet := make(map[string]struct{}, len(factor.Depends))
-	depends := make([]string, 0, len(factor.Depends))
-	for _, dependency := range factor.Depends {
-		dependency = strings.TrimSpace(dependency)
-		if dependency == "" {
-			continue
-		}
-		if _, ok := dependsSet[dependency]; ok {
-			continue
-		}
-		dependsSet[dependency] = struct{}{}
-		depends = append(depends, dependency)
+	if factor.LookbackRows < 1 {
+		return FactorDef{}, fmt.Errorf("lookback_rows must be at least 1")
 	}
-	sort.Strings(depends)
-	factor.Depends = depends
 	return factor, nil
+}
+
+func normalizeColumns(field string, values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, fmt.Errorf("%s must contain at least one column", field)
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, fmt.Errorf("%s contains an empty column", field)
+		}
+		if value == "data_time" {
+			return nil, fmt.Errorf("%s contains reserved column data_time", field)
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func normalizeParamsJSON(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "{}", nil
+	}
+	var params map[string]any
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&params); err != nil {
+		return "", fmt.Errorf("params_json must be a JSON object: %w", err)
+	}
+	if params == nil {
+		return "", errors.New("params_json must be a JSON object")
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return "", errors.New("params_json contains trailing JSON values")
+		}
+		return "", fmt.Errorf("params_json contains trailing JSON values: %w", err)
+	}
+	normalized, err := json.Marshal(params)
+	if err != nil {
+		return "", fmt.Errorf("marshal params_json: %w", err)
+	}
+	return string(normalized), nil
 }

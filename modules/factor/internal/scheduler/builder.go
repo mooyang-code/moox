@@ -35,6 +35,7 @@ func BuildTask(scope TaskScope, factors []domain.FactorDef, factorsDir string) (
 	}
 	specs := make([]engine.FactorSpec, 0, len(factors))
 	lookback := 0
+	outputOwners := make(map[string]string)
 	for _, factor := range factors {
 		if factor.Status != domain.FactorStatusEnabled {
 			return Task{}, fmt.Errorf("factor %s is not enabled", factor.FactorID)
@@ -46,13 +47,19 @@ func BuildTask(scope TaskScope, factors []domain.FactorDef, factorsDir string) (
 		if sourcePath == "" {
 			sourcePath = filepath.Join(factorsDir, ".versions", "factor", factor.Name, factor.SourceHash, "module.py")
 		}
+		for _, output := range factor.Outputs {
+			if owner, exists := outputOwners[output]; exists {
+				return Task{}, fmt.Errorf("factor output %s is declared by both %s and %s", output, owner, factor.FactorID)
+			}
+			outputOwners[output] = factor.FactorID
+		}
 		specs = append(specs, engine.FactorSpec{
 			FactorID: factor.FactorID, Name: factor.Name, SourceHash: factor.SourceHash,
-			SourcePath: sourcePath, Periods: append([]int(nil), factor.Periods...),
-			Depends: append([]string(nil), factor.Depends...),
+			SourcePath: sourcePath, InputColumns: append([]string(nil), factor.InputColumns...),
+			Outputs: append([]string(nil), factor.Outputs...), ParamsJSON: factor.ParamsJSON,
 		})
-		if factor.LookbackBars > lookback {
-			lookback = factor.LookbackBars
+		if factor.LookbackRows > lookback {
+			lookback = factor.LookbackRows
 		}
 	}
 	return Task{
@@ -60,7 +67,7 @@ func BuildTask(scope TaskScope, factors []domain.FactorDef, factorsDir string) (
 			TaskID: scope.TaskID, SpaceID: scope.SpaceID, SourceDataset: scope.SourceDataset,
 			TargetDataset: scope.TargetDataset, SubjectID: scope.SubjectID, Freq: scope.Freq,
 			StartTime: scope.StartTime.UTC(), EndTime: scope.EndTime.UTC(),
-			LookbackBars: lookback, Factors: specs,
+			LookbackRows: lookback, Factors: specs,
 		},
 		TriggerType: scope.TriggerType,
 	}, nil

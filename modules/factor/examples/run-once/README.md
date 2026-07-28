@@ -9,7 +9,13 @@ go run ./cmd/cli init --db ./data/factor/factor.db
 go run ./cmd/cli import \
   --db ./data/factor/factor.db \
   --factors-dir ./factors \
-  --default-periods 20,96
+  --file ./factors/Bias.py \
+  --factor-id bias \
+  --input-columns close \
+  --outputs bias_20,bias_96 \
+  --params-json '{"windows":[20,96]}' \
+  --lookback-rows 200 \
+  --status enabled
 go run ./cmd/cli run-once \
   --space crypto \
   --dataset binance_spot_kline \
@@ -20,5 +26,5 @@ go run ./cmd/cli run-once \
 ```
 
 命令按当前 subject 匹配 enabled binding，并按 binding 的目标 Dataset 分组，同步完成整个
-`[start_time,end_time)` 范围；超过 2000 个目标 bar 自动分块。
+`[start_time,end_time)` 范围；超过 2000 个目标行自动分块。
 terminal JSON 的 `elapsed_ms` 是完整读取、计算和写回耗时。

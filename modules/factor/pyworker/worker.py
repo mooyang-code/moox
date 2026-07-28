@@ -60,25 +60,45 @@ class FactorWorker:
         target_start = pd.Timestamp(meta["target_start_time"])
         target_end = pd.Timestamp(meta["target_end_time"])
         target_mask = (
-            (df["candle_begin_time"] >= target_start)
-            & (df["candle_begin_time"] < target_end)
+            (df["data_time"] >= target_start)
+            & (df["data_time"] < target_end)
         )
 
         stdout, stderr = StringIO(), StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             for factor in meta.get("factors", []):
                 name = factor["name"]
-                periods = factor.get("periods", [])
-                mod = self.factors[name]
-                if hasattr(mod, "signal_multi_params"):
-                    out = mod.signal_multi_params(df.copy(deep=False), periods)
-                    for param, series in out.items():
-                        results[f"{name}_{param}"] = series.loc[target_mask].tolist()
-                else:
-                    for param in periods:
-                        column = f"{name}_{param}"
-                        out_df = mod.signal(df.copy(deep=False), param, column)
-                        results[column] = out_df.loc[target_mask, column].tolist()
+                inputs = list(factor.get("input_columns", []))
+                expected_outputs = list(factor.get("outputs", []))
+                params = factor.get("params", {})
+                if not isinstance(params, dict):
+                    raise TypeError(f"{name} params must be an object")
+                if len(set(expected_outputs)) != len(expected_outputs):
+                    raise ValueError(f"{name} outputs must be unique")
+
+                module = self.factors[name]
+                compute = getattr(module, "compute", None)
+                if not callable(compute):
+                    raise AttributeError(f"{name} must define compute(df, params)")
+
+                factor_df = df[["data_time", *inputs]].copy(deep=False)
+                produced = compute(factor_df, params)
+                if not isinstance(produced, dict):
+                    raise TypeError(f"{name} compute result must be a dict")
+                if set(produced) != set(expected_outputs):
+                    raise ValueError(
+                        f"{name} outputs mismatch: got={sorted(produced)} "
+                        f"want={sorted(expected_outputs)}"
+                    )
+                for output in expected_outputs:
+                    if output in results:
+                        raise ValueError(f"duplicate factor output {output}")
+                    series = produced[output]
+                    if not isinstance(series, pd.Series):
+                        raise TypeError(f"{name}.{output} must be a pandas Series")
+                    if len(series) != len(df.index) or not series.index.equals(df.index):
+                        raise ValueError(f"{name}.{output} must align with input rows")
+                    results[output] = series.loc[target_mask].tolist()
 
         return encode_json_results(
             meta.get("id", ""), results,

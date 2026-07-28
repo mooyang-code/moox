@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +17,13 @@ type cliConfig struct {
 	Command           string
 	DBPath            string
 	FactorsDir        string
-	DefaultPeriods    []int
+	File              string
+	FactorID          string
+	InputColumns      []string
+	Outputs           []string
+	ParamsJSON        string
+	LookbackRows      int
+	Status            string
 	SpaceID           string
 	DatasetID         string
 	SubjectID         string
@@ -58,7 +63,7 @@ func parseArgs(args []string) (cliConfig, error) {
 	if len(args) == 0 {
 		return cliConfig{}, errors.New("command is required")
 	}
-	cfg := cliConfig{Command: args[0], DBPath: "./data/factor/factor.db", FactorsDir: "./factors", DefaultPeriods: []int{20}}
+	cfg := cliConfig{Command: args[0], DBPath: "./data/factor/factor.db", FactorsDir: "./factors", ParamsJSON: "{}", Status: "disabled"}
 	switch args[0] {
 	case "init":
 		fs := newFlagSet("init")
@@ -67,19 +72,22 @@ func parseArgs(args []string) (cliConfig, error) {
 			return cliConfig{}, err
 		}
 	case "import":
-		var params string
+		var inputColumns, outputs string
 		fs := newFlagSet("import")
 		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
 		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
-		fs.StringVar(&params, "default-periods", "20", "comma-separated default periods")
+		fs.StringVar(&cfg.File, "file", "", "single Python factor file")
+		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
+		fs.StringVar(&inputColumns, "input-columns", "", "comma-separated input columns")
+		fs.StringVar(&outputs, "outputs", "", "comma-separated output columns")
+		fs.StringVar(&cfg.ParamsJSON, "params-json", "{}", "factor parameter JSON object")
+		fs.IntVar(&cfg.LookbackRows, "lookback-rows", 0, "input lookback rows")
+		fs.StringVar(&cfg.Status, "status", cfg.Status, "factor status")
 		if err := fs.Parse(args[1:]); err != nil {
 			return cliConfig{}, err
 		}
-		parsed, err := parseIntCSV(params)
-		if err != nil {
-			return cliConfig{}, err
-		}
-		cfg.DefaultPeriods = parsed
+		cfg.InputColumns = parseStringCSV(inputColumns)
+		cfg.Outputs = parseStringCSV(outputs)
 	case "run-once":
 		var startTime, endTime string
 		var factors string
@@ -117,19 +125,6 @@ func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	return fs
-}
-
-func parseIntCSV(raw string) ([]int, error) {
-	parts := parseStringCSV(raw)
-	out := make([]int, 0, len(parts))
-	for _, part := range parts {
-		v, err := strconv.Atoi(part)
-		if err != nil {
-			return nil, fmt.Errorf("parse int %q: %w", part, err)
-		}
-		out = append(out, v)
-	}
-	return out, nil
 }
 
 func parseStringCSV(raw string) []string {

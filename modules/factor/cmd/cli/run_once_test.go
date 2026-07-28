@@ -17,13 +17,16 @@ func TestRunInitAndImport(t *testing.T) {
 	factorsDir := filepath.Join(tmp, "factors")
 	require.NoError(t, os.MkdirAll(factorsDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "Bias.py"), []byte(
-		"def signal(df, n, factor_name):\n    return df\n",
+		"def compute(df, params):\n    return {'bias': df['close']}\n",
 	), 0o644))
 	var out bytes.Buffer
 	require.NoError(t, run(context.Background(), []string{"init", "--db", dbPath}, &out))
 	out.Reset()
 	require.NoError(t, run(context.Background(), []string{
-		"import", "--db", dbPath, "--factors-dir", factorsDir, "--default-periods", "20",
+		"import", "--db", dbPath, "--factors-dir", factorsDir,
+		"--file", filepath.Join(factorsDir, "Bias.py"), "--factor-id", "bias",
+		"--input-columns", "close", "--outputs", "bias", "--params-json", "{}",
+		"--lookback-rows", "20", "--status", "enabled",
 	}, &out))
 	require.Contains(t, out.String(), `"ok":true`)
 }

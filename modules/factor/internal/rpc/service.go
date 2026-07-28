@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,13 +79,16 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 	if err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	if existing, err := s.factors.GetByName(ctx, factor.Name); err == nil && existing.FactorID != factor.FactorID {
+	if _, err := s.factors.Get(ctx, factor.FactorID); err == nil {
+		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id %q already exists", factor.FactorID))}, nil
+	}
+	if _, err := s.factors.GetByName(ctx, factor.Name); err == nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name %q already exists", factor.Name))}, nil
 	}
 	if err := s.publishFactorSource(ctx, &factor); err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
-	if err := s.factors.Upsert(ctx, factor); err != nil {
+	if err := s.factors.Create(ctx, factor); err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
 	if err := s.syncFactorBindings(ctx, factor.FactorID); err != nil {
@@ -103,10 +107,20 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	if err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(err)}, nil
 	}
+	existing, err := s.factors.Get(ctx, factor.FactorID)
+	if err != nil {
+		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
+	}
+	if !slices.Equal(existing.Outputs, factor.Outputs) {
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor outputs are immutable; create a new factor_id"))}, nil
+	}
+	if sameName, err := s.factors.GetByName(ctx, factor.Name); err == nil && sameName.FactorID != factor.FactorID {
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name %q already exists", factor.Name))}, nil
+	}
 	if err := s.publishFactorSource(ctx, &factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
-	if err := s.factors.Upsert(ctx, factor); err != nil {
+	if err := s.factors.Update(ctx, factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
 	if err := s.syncFactorBindings(ctx, factor.FactorID); err != nil {
@@ -230,14 +244,8 @@ func (s *Service) normalizeFactor(pb *factorpb.FactorDef) (domain.FactorDef, err
 	if !pythonModuleNamePattern.MatchString(factor.Name) {
 		return domain.FactorDef{}, fmt.Errorf("factor name %q must be a valid Python module name", factor.Name)
 	}
-	factor.Depends = registry.DependsFromSource(factor.SourceCode)
-	if factor.LookbackBars == 0 {
-		factor.LookbackBars = registry.DefaultLookback(factor.Periods)
-	}
-	if factor.SourceHash == "" {
-		sum := sha256.Sum256([]byte(factor.SourceCode))
-		factor.SourceHash = hex.EncodeToString(sum[:])
-	}
+	sum := sha256.Sum256([]byte(factor.SourceCode))
+	factor.SourceHash = hex.EncodeToString(sum[:])
 	return domain.NormalizeFactorDefinition(factor)
 }
 

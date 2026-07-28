@@ -6,32 +6,62 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNormalizeFactorDefinitionSortsAndValidatesPeriods(t *testing.T) {
+func TestNormalizeFactorDefinitionCanonicalizesGenericContract(t *testing.T) {
 	got, err := NormalizeFactorDefinition(FactorDef{
-		FactorID: "bias", Name: "Bias", SourceCode: "def signal(): pass",
-		Periods: []int{20, 5, 20}, LookbackBars: 30,
-		Status: FactorStatusEnabled,
+		FactorID: " excess-return ", Name: " ExcessReturn ",
+		SourceCode:   " def compute(df, params): return {} ",
+		InputColumns: []string{" benchmark_return ", "nav", "nav"},
+		Outputs:      []string{"rolling_rank", "excess_return"},
+		ParamsJSON:   ` { "window": 20 } `,
+		LookbackRows: 20,
 	})
 	require.NoError(t, err)
-	require.Equal(t, []int{5, 20}, got.Periods)
-}
-
-func TestNormalizeFactorDefinitionRejectsInvalidWindow(t *testing.T) {
-	_, err := NormalizeFactorDefinition(FactorDef{
-		FactorID: "bias", Name: "Bias", SourceCode: "x",
-		Periods: []int{20}, LookbackBars: 10,
-	})
-	require.Error(t, err)
+	require.Equal(t, "excess-return", got.FactorID)
+	require.Equal(t, "ExcessReturn", got.Name)
+	require.Equal(t, []string{"benchmark_return", "nav"}, got.InputColumns)
+	require.Equal(t, []string{"excess_return", "rolling_rank"}, got.Outputs)
+	require.Equal(t, `{"window":20}`, got.ParamsJSON)
+	require.Equal(t, FactorStatusDisabled, got.Status)
 }
 
 func TestNormalizeFactorDefinitionRejectsInvalidValues(t *testing.T) {
-	tests := []FactorDef{
-		{FactorID: "f", Name: "F", SourceCode: "x", LookbackBars: 20},
-		{FactorID: "f", Name: "F", SourceCode: "x", Periods: []int{0}, LookbackBars: 20},
-		{FactorID: "f", Name: "F", SourceCode: "x", Periods: []int{20}, LookbackBars: 20, Status: "bad"},
+	valid := FactorDef{
+		FactorID: "f", Name: "F", SourceCode: "x",
+		InputColumns: []string{"close"}, Outputs: []string{"value"},
+		ParamsJSON: `{}`, LookbackRows: 1,
 	}
-	for _, test := range tests {
-		_, err := NormalizeFactorDefinition(test)
-		require.Error(t, err)
+	tests := map[string]func(*FactorDef){
+		"empty inputs":      func(f *FactorDef) { f.InputColumns = nil },
+		"empty outputs":     func(f *FactorDef) { f.Outputs = nil },
+		"reserved input":    func(f *FactorDef) { f.InputColumns = []string{"data_time"} },
+		"reserved output":   func(f *FactorDef) { f.Outputs = []string{"data_time"} },
+		"blank input item":  func(f *FactorDef) { f.InputColumns = []string{"close", " "} },
+		"blank output item": func(f *FactorDef) { f.Outputs = []string{"value", " "} },
+		"invalid lookback":  func(f *FactorDef) { f.LookbackRows = 0 },
+		"invalid json":      func(f *FactorDef) { f.ParamsJSON = `{"window":` },
+		"array params":      func(f *FactorDef) { f.ParamsJSON = `[]` },
+		"null params":       func(f *FactorDef) { f.ParamsJSON = `null` },
+		"string params":     func(f *FactorDef) { f.ParamsJSON = `"x"` },
+		"number params":     func(f *FactorDef) { f.ParamsJSON = `1` },
+		"trailing json":     func(f *FactorDef) { f.ParamsJSON = `{} {}` },
+		"invalid status":    func(f *FactorDef) { f.Status = "bad" },
 	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			factor := valid
+			mutate(&factor)
+			_, err := NormalizeFactorDefinition(factor)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestNormalizeFactorDefinitionDefaultsEmptyParamsObject(t *testing.T) {
+	got, err := NormalizeFactorDefinition(FactorDef{
+		FactorID: "f", Name: "F", SourceCode: "x",
+		InputColumns: []string{"close"}, Outputs: []string{"value"},
+		LookbackRows: 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, `{}`, got.ParamsJSON)
 }

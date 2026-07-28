@@ -14,16 +14,16 @@ import (
 func TestFactorRepositoryRoundTrip(t *testing.T) {
 	repo := NewFactorRepository(openTestDB(t))
 	factor := testFactor("bias", domain.FactorStatusEnabled)
-	require.NoError(t, repo.Upsert(context.Background(), factor))
+	require.NoError(t, repo.Create(context.Background(), factor))
 	got, err := repo.Get(context.Background(), factor.FactorID)
 	require.NoError(t, err)
-	require.Equal(t, []int{20, 96}, got.Periods)
-	require.Equal(t, []string{"funding_rate"}, got.Depends)
+	require.Equal(t, []string{"close", "funding_rate"}, got.InputColumns)
+	require.Equal(t, []string{"bias_20", "bias_96"}, got.Outputs)
 }
 
 func TestListExecutableExcludesDisabledFactor(t *testing.T) {
 	db := openTestDB(t)
-	require.NoError(t, NewFactorRepository(db).Upsert(context.Background(), testFactor("bias", domain.FactorStatusDisabled)))
+	require.NoError(t, NewFactorRepository(db).Create(context.Background(), testFactor("bias", domain.FactorStatusDisabled)))
 	require.NoError(t, NewBindingRepository(db).Upsert(context.Background(), domain.FactorBinding{
 		BindingID: "bind-bias", FactorID: "bias", SpaceID: "crypto",
 		SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
@@ -48,8 +48,9 @@ func openTestDB(t *testing.T) *gorm.DB {
 
 func testFactor(id, status string) domain.FactorDef {
 	return domain.FactorDef{
-		FactorID: id, Name: "Factor_" + id, SourceCode: "def signal(): pass",
-		SourceHash: "hash", Periods: []int{20, 96}, LookbackBars: 200,
-		Depends: []string{"funding_rate"}, Status: status,
+		FactorID: id, Name: "Factor_" + id, SourceCode: "def compute(df, params): return {}",
+		SourceHash: "hash", InputColumns: []string{"close", "funding_rate"},
+		Outputs: []string{"bias_20", "bias_96"}, ParamsJSON: `{"windows":[20,96]}`,
+		LookbackRows: 200, Status: status,
 	}
 }

@@ -13,9 +13,10 @@ func factorToPB(f domain.FactorDef) *factorpb.FactorDef {
 		Name:         f.Name,
 		SourceCode:   f.SourceCode,
 		SourceHash:   f.SourceHash,
-		Periods:      intsToInt32s(f.Periods),
-		LookbackBars: int32(f.LookbackBars),
-		Depends:      append([]string(nil), f.Depends...),
+		InputColumns: append([]string(nil), f.InputColumns...),
+		Outputs:      append([]string(nil), f.Outputs...),
+		ParamsJson:   f.ParamsJSON,
+		LookbackRows: int32(f.LookbackRows),
 		Status:       f.Status,
 		CreatedAt:    formatTime(f.CreateTime),
 		UpdatedAt:    formatTime(f.ModifyTime),
@@ -31,27 +32,12 @@ func factorFromPB(pb *factorpb.FactorDef) domain.FactorDef {
 		Name:         pb.GetName(),
 		SourceCode:   pb.GetSourceCode(),
 		SourceHash:   pb.GetSourceHash(),
-		Periods:      int32sToInts(pb.GetPeriods()),
-		LookbackBars: int(pb.GetLookbackBars()),
-		Depends:      append([]string(nil), pb.GetDepends()...),
+		InputColumns: append([]string(nil), pb.GetInputColumns()...),
+		Outputs:      append([]string(nil), pb.GetOutputs()...),
+		ParamsJSON:   pb.GetParamsJson(),
+		LookbackRows: int(pb.GetLookbackRows()),
 		Status:       pb.GetStatus(),
 	}
-}
-
-func intsToInt32s(values []int) []int32 {
-	out := make([]int32, len(values))
-	for i, value := range values {
-		out[i] = int32(value)
-	}
-	return out
-}
-
-func int32sToInts(values []int32) []int {
-	out := make([]int, len(values))
-	for i, value := range values {
-		out[i] = int(value)
-	}
-	return out
 }
 
 func bindingToPB(b domain.FactorBinding) *factorpb.FactorBinding {

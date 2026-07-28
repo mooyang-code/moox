@@ -15,16 +15,60 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateFactorUsesPeriodsAndExtractedDepends(t *testing.T) {
+func TestCreateFactorUsesGenericContractAndComputedSourceHash(t *testing.T) {
 	svc := NewWithRuntime(openRPCTestDB(t), nil, WithFactorsDir(t.TempDir()))
-	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
-		FactorId: "bias", Name: "Bias",
-		SourceCode: "extra_data_dict={'x':['funding_rate']}\ndef signal(*args): return args[0]\n",
-		Periods:    []int32{20}, LookbackBars: 20, Status: domain.FactorStatusEnabled,
-	}})
+	factor := genericFactorPB("bias", "Bias", []string{"bias"})
+	factor.SourceHash = "untrusted"
+	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: factor})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, []string{"funding_rate"}, rsp.GetFactor().GetDepends())
+	require.Equal(t, []string{"close"}, rsp.GetFactor().GetInputColumns())
+	require.Equal(t, []string{"bias"}, rsp.GetFactor().GetOutputs())
+	require.NotEqual(t, "untrusted", rsp.GetFactor().GetSourceHash())
+}
+
+func TestCreateFactorRejectsDuplicateIDOrNameWithoutOverwritingOutputs(t *testing.T) {
+	db := openRPCTestDB(t)
+	svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+	first := genericFactorPB("factor-1", "First", []string{"original"})
+	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: first})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+
+	duplicateID := genericFactorPB("factor-1", "First", []string{"changed"})
+	rsp, err = svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: duplicateID})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	stored, err := db.Factors().Get(context.Background(), "factor-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"original"}, stored.Outputs)
+
+	duplicateName := genericFactorPB("factor-2", "First", []string{"other"})
+	rsp, err = svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: duplicateName})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
+func TestUpdateFactorRejectsOutputChangesButUpdatesMutableFields(t *testing.T) {
+	db := openRPCTestDB(t)
+	svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+	created := genericFactorPB("factor-1", "First", []string{"value"})
+	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: created})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+
+	changed := genericFactorPB("factor-1", "First", []string{"changed"})
+	updateRsp, err := svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{FactorId: "factor-1", Factor: changed})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, updateRsp.GetRetInfo().GetCode())
+
+	mutable := genericFactorPB("factor-1", "Renamed", []string{"value"})
+	mutable.ParamsJson = `{"window":10}`
+	updateRsp, err = svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{FactorId: "factor-1", Factor: mutable})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
+	require.Equal(t, "Renamed", updateRsp.GetFactor().GetName())
+	require.Equal(t, `{"window":10}`, updateRsp.GetFactor().GetParamsJson())
 }
 
 func TestRecalcFactorRunsSynchronousRange(t *testing.T) {
@@ -108,13 +152,22 @@ func openRPCTestDB(t *testing.T) *store.Store {
 
 func seedRPCFactorAndBinding(t *testing.T, db *store.Store, status string) {
 	t.Helper()
-	require.NoError(t, db.Factors().Upsert(context.Background(), domain.FactorDef{
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
-		Periods: []int{20}, LookbackBars: 20, Status: status,
+		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
+		LookbackRows: 20, Status: status,
 	}))
 	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{
 		BindingID: "bind", FactorID: "bias", SpaceID: "crypto", SourceDataset: "bars",
 		Freq: "1m", SubjectMode: domain.SubjectModeAll, SubjectsJSON: "[]",
 		TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
 	}))
+}
+
+func genericFactorPB(id, name string, outputs []string) *factorpb.FactorDef {
+	return &factorpb.FactorDef{
+		FactorId: id, Name: name, SourceCode: "def compute(df, params): return {}",
+		InputColumns: []string{"close"}, Outputs: outputs, ParamsJson: `{}`,
+		LookbackRows: 20, Status: domain.FactorStatusEnabled,
+	}
 }

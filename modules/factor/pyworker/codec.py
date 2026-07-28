@@ -16,17 +16,15 @@ from moox_pyruntime.protocol import (
 
 def decode_json_df(meta):
     spec = meta.get("df", {})
-    columns = spec.get("columns", {})
-    if isinstance(columns, dict):
-        df = pd.DataFrame(columns)
-    else:
-        names = list(columns)
-        df = pd.DataFrame(spec.get("rows", []), columns=names)
-    index_ms = spec.get("index_ms")
-    if index_ms is True and "candle_begin_time" in df.columns:
-        df["candle_begin_time"] = _utc_ns(df["candle_begin_time"])
-    elif isinstance(index_ms, list):
-        df.insert(0, "candle_begin_time", _utc_ns(index_ms))
+    df = pd.DataFrame(spec.get("columns", {}))
+    data_times = spec.get("data_times", [])
+    if len(data_times) != len(df.index):
+        raise ValueError("data_times length must match dataframe rows")
+    df.insert(
+        0,
+        "data_time",
+        pd.to_datetime(data_times, format="ISO8601", utc=True),
+    )
     return df
 
 
@@ -53,7 +51,3 @@ def _json_value(value):
     if isinstance(value, float) and not np.isfinite(value):
         return None
     return value
-
-
-def _utc_ns(values):
-    return pd.to_datetime(values, unit="ms", utc=True).astype("datetime64[ns, UTC]")

@@ -112,7 +112,8 @@ func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
 		"t_factor_defs": {
 			"c_factor_id", "c_name", "c_source_code", "c_source_hash", "c_source_path",
-			"c_periods_json", "c_lookback_bars", "c_depends_json", "c_status", "c_ctime", "c_mtime",
+			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_rows",
+			"c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_bindings": {
 			"c_binding_id", "c_factor_id", "c_space_id", "c_source_dataset", "c_freq",

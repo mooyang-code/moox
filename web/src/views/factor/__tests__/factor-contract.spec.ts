@@ -2,17 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { EngineStatus, FactorDef, RecalcFactorReq } from "@/api/factor/types";
 
 describe("factor management contract", () => {
-  it("uses explicit periods and source-derived depends", () => {
+  it("uses explicit generic time-series fields", () => {
     const factor: FactorDef = {
       factor_id: "bias",
       name: "Bias",
-      source_code: "def signal(): pass",
-      periods: [5, 20],
-      lookback_bars: 100,
-      depends: ["funding_rate"],
+      source_code: "def compute(df, params): return {}",
+      input_columns: ["nav", "benchmark_return"],
+      outputs: ["excess_return", "rolling_rank"],
+      params_json: `{"window":20}`,
+      lookback_rows: 100,
       status: "enabled"
     };
-    expect(factor.periods).toEqual([5, 20]);
+    expect(factor.input_columns).toEqual(["nav", "benchmark_return"]);
+    expect(factor.outputs).toEqual(["excess_return", "rolling_rank"]);
   });
 
   it("uses synchronous half-open range recalc", () => {

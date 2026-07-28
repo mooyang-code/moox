@@ -120,7 +120,8 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 		StartTime: requests[0].BarTime, EndTime: requests[0].BarTime.Add(time.Nanosecond),
 	}, []domain.FactorDef{{
 		FactorID: "bias", Name: "Bias", SourceHash: hex.EncodeToString(sum[:]),
-		SourcePath: factorPath, Periods: []int{2}, LookbackBars: 3,
+		SourcePath: factorPath, InputColumns: []string{"close"}, Outputs: []string{"bias_2"},
+		ParamsJSON: `{"windows":[2]}`, LookbackRows: 3,
 		Status: domain.FactorStatusEnabled,
 	}}, filepath.Join(root, "factors"))
 	require.NoError(t, err)
@@ -137,7 +138,7 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 	require.NoError(t, service.Enqueue(context.Background(), task))
 	require.NoError(t, service.Drain(context.Background()))
 	require.Equal(t, 1, storage.writes)
-	require.Equal(t, []any{101.0 / 100.5}, storage.result.Columns["Bias_2"])
+	require.InDelta(t, 101.0/100.5-1, storage.result.Columns["bias_2"][0], 1e-15)
 }
 
 type storageFake struct {

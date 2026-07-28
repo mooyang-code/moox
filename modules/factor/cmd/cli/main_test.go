@@ -18,10 +18,17 @@ func TestParseRunOnceRange(t *testing.T) {
 	require.Equal(t, []string{"bias", "cci"}, cfg.FactorIDs)
 }
 
-func TestParseImportDefaultPeriods(t *testing.T) {
-	cfg, err := parseArgs([]string{"import", "--default-periods", "20,96"})
+func TestParseImportGenericDefinition(t *testing.T) {
+	cfg, err := parseArgs([]string{
+		"import", "--file", "./Bias.py", "--factor-id", "bias",
+		"--input-columns", "close, benchmark_return", "--outputs", "bias_20,bias_96",
+		"--params-json", `{"windows":[20,96]}`, "--lookback-rows", "200", "--status", "enabled",
+	})
 	require.NoError(t, err)
-	require.Equal(t, []int{20, 96}, cfg.DefaultPeriods)
+	require.Equal(t, "./Bias.py", cfg.File)
+	require.Equal(t, []string{"close", "benchmark_return"}, cfg.InputColumns)
+	require.Equal(t, []string{"bias_20", "bias_96"}, cfg.Outputs)
+	require.Equal(t, 200, cfg.LookbackRows)
 }
 
 func TestReplayCommandIsRemoved(t *testing.T) {

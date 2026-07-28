@@ -55,7 +55,7 @@ func TestMergeDatasetFreq(t *testing.T) {
 }
 
 func TestFactorColumnOriginAndStatus(t *testing.T) {
-	assert.Equal(t, "sma_14", factorColumnOriginID("sma", 14))
+	assert.Equal(t, "sma.output", factorColumnOriginID("sma", "output"))
 	assert.Equal(t, "disabled", storageFactorStatus(domain.FactorStatusDisabled))
 	assert.Equal(t, "active", storageFactorStatus("enabled"))
 }

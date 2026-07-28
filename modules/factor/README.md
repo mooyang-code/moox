@@ -15,7 +15,13 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
 ./bin/moox-factor-cli import \
   --db ./data/factor/factor.db \
   --factors-dir ./factors \
-  --default-periods 20,96
+  --file ./factors/Bias.py \
+  --factor-id bias \
+  --input-columns close \
+  --outputs bias_20,bias_96 \
+  --params-json '{"windows":[20,96]}' \
+  --lookback-rows 200 \
+  --status enabled
 
 ./bin/moox-factor-cli run-once \
   --space crypto \
@@ -29,13 +35,13 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
 ## Runtime Contract
 
 - 当前 schema 不兼容早期实验数据库；检测到旧表或旧列时会拒绝启动，请新建数据库。
-- `periods` 是因子计算周期；`depends` 是源码声明的额外输入列，不表示因子 DAG。
-- `lookback_bars` 是每个目标 chunk 前的输入上下文，不决定输出行数。
+- `input_columns` 和 `outputs` 显式声明输入输出；框架不猜测源码依赖。
+- `params_json` 必须是 JSON object，`lookback_rows` 是每个目标 chunk 前的输入上下文。
 - 实时事件转换为 `[bar_time, bar_time + 1ns)` 的单 bar 范围。
 - 手动补算使用 `[start_time, end_time)`；超过 2000 个目标 bar 时自动分 chunk。
 - `run-once` 和 `RecalcFactor` 都只执行适用于当前 source、freq、subject 的 enabled binding，
   并按 binding 的 `target_dataset` 分组写回。
-- Python 每个结果列必须为每个目标 bar 返回一个有限数值或 `null`。
+- Python 因子仅实现 `compute(df, params)`，每个结果列必须为每个目标行返回有限数值或 `null`。
 - `null` 只跳过对应单元格写回，不影响同一行的其他因子列。
 
 实时 Consumer 在事件加入内存 `EventBatcher` 后 ACK。ACK 后若进程退出，尚未计算的

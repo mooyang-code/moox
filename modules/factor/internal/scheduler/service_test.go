@@ -40,18 +40,26 @@ func TestSchedulerAcceptsConfiguredNumberOfScopes(t *testing.T) {
 }
 
 func TestValidateFactorResultNullAndFiniteContract(t *testing.T) {
-	specs := []engine.FactorSpec{{Name: "Cci", Periods: []int{20}}}
+	specs := []engine.FactorSpec{{Name: "Cci", Outputs: []string{"cci"}}}
 	require.NoError(t, validateFactorResult(specs, 2, &engine.FactorResult{
-		Columns: map[string][]any{"Cci_20": {nil, 1.25}},
+		Columns: map[string][]any{"cci": {nil, 1.25}},
 	}))
 	for _, value := range []any{"bad", math.NaN(), math.Inf(1)} {
 		require.Error(t, validateFactorResult(specs, 1, &engine.FactorResult{
-			Columns: map[string][]any{"Cci_20": {value}},
+			Columns: map[string][]any{"cci": {value}},
 		}))
 	}
 	require.Error(t, validateFactorResult(specs, 2, &engine.FactorResult{
-		Columns: map[string][]any{"Cci_20": {1.0}},
+		Columns: map[string][]any{"cci": {1.0}},
 	}))
+	require.Error(t, validateFactorResult(specs, 1, &engine.FactorResult{
+		Columns: map[string][]any{"extra": {1.0}},
+	}))
+	require.Error(t, validateFactorResult(
+		[]engine.FactorSpec{{Outputs: []string{"shared"}}, {Outputs: []string{"shared"}}},
+		1,
+		&engine.FactorResult{Columns: map[string][]any{"shared": {1.0}}},
+	))
 }
 
 func TestRunChunksRangeAndWritesInOrder(t *testing.T) {
@@ -112,7 +120,7 @@ func oneBarTask(subject string, at time.Time) Task {
 		TaskID: "task-" + subject + at.String(), SpaceID: "crypto",
 		SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: subject, Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond),
-		LookbackBars: 20, Factors: []engine.FactorSpec{{FactorID: "bias", Name: "Bias", Periods: []int{20}}},
+		LookbackRows: 20, Factors: []engine.FactorSpec{{FactorID: "bias", Name: "Bias", Outputs: []string{"bias"}}},
 	}, TriggerType: "event"}
 }
 
@@ -161,7 +169,15 @@ func (e *fakeExecutor) Execute(_ context.Context, _ *engine.FactorTask, frame *e
 	for range frame.DataTimes {
 		targetRows++
 	}
-	return &engine.FactorResult{Columns: map[string][]any{"Bias_20": make([]any, targetRows)}}, nil
+	return &engine.FactorResult{Columns: map[string][]any{"bias": make([]any, targetRows)}}, nil
+}
+
+func TestInputColumnsUsesOnlyDeclaredColumns(t *testing.T) {
+	specs := []engine.FactorSpec{
+		{InputColumns: []string{"nav", "benchmark_return"}},
+		{InputColumns: []string{"nav", "risk_free_rate"}},
+	}
+	require.Equal(t, []string{"benchmark_return", "nav", "risk_free_rate"}, inputColumns(specs))
 }
 func (*fakeExecutor) Close() error { return nil }
 

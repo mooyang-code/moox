@@ -18,9 +18,10 @@ func TestBuildSchedulerTaskUsesRealtimeHalfOpenRange(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
-	require.NoError(t, db.Factors().Upsert(context.Background(), domain.FactorDef{
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
-		Periods: []int{20}, LookbackBars: 100, Status: domain.FactorStatusEnabled,
+		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
+		LookbackRows: 100, Status: domain.FactorStatusEnabled,
 	}))
 	at := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
 	task, ok, err := buildSchedulerTask(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
@@ -38,9 +39,10 @@ func TestDisabledFactorMakesRealtimeTaskNoop(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
-	require.NoError(t, db.Factors().Upsert(context.Background(), domain.FactorDef{
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
-		Periods: []int{20}, LookbackBars: 100, Status: domain.FactorStatusDisabled,
+		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
+		LookbackRows: 100, Status: domain.FactorStatusDisabled,
 	}))
 	_, ok, err := buildSchedulerTask(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
 		SpaceID: "crypto", SourceDataset: "bars", SubjectID: "BTC", Freq: "1m",
