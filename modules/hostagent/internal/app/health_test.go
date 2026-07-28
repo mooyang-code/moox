@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,6 +38,18 @@ func TestHealthHandler_ReadyAgent_ShouldReturnOK(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	assert.Equal(t, http.StatusOK, rr.Code)
+}
+
+func TestHealthHandler_RequiredCollectionFailureMakesAgentUnready(t *testing.T) {
+	a := testAgent(t)
+	a.publisher = &fakeEventPublisher{ready: true}
+	a.collector = fakeSnapshotCollector{err: errors.New("required host collectors failed: cpu")}
+	_, err := a.RunOnce(context.Background(), nil)
+	require.Error(t, err)
+
+	rr := httptest.NewRecorder()
+	healthHandler(a).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
 func TestRegisterHealth_NilService_ShouldReturnError(t *testing.T) {

@@ -66,6 +66,9 @@ message NetworkMetric {
   double receive_bytes_per_second = 9;
   double transmit_bytes_per_second = 10;
   bool rate_available = 11;
+  double receive_errors_per_second = 12;
+  double transmit_errors_per_second = 13;
+  bool error_rate_available = 14;
 }
 message CollectorStatus {
   string collector = 1;
