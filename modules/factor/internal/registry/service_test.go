@@ -33,7 +33,7 @@ func TestImportFactorFileUsesExplicitGenericDefinition(t *testing.T) {
 	require.NotEmpty(t, factor.SourcePath)
 }
 
-func TestImportFactorFileUpdatesMutableFieldsButRejectsOutputChanges(t *testing.T) {
+func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Generic.py")
 	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
@@ -53,6 +53,11 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsOutputChanges(t *testing.
 	updated, err := svc.ImportFactorFile(context.Background(), path, options)
 	require.NoError(t, err)
 	require.Equal(t, 3, updated.LookbackRows)
+
+	renamedPath := filepath.Join(dir, "Renamed.py")
+	require.NoError(t, os.WriteFile(renamedPath, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	_, err = svc.ImportFactorFile(context.Background(), renamedPath, options)
+	require.ErrorContains(t, err, "name is immutable")
 
 	options.Outputs = []string{"changed"}
 	_, err = svc.ImportFactorFile(context.Background(), path, options)

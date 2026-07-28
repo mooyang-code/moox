@@ -38,7 +38,7 @@ func TestFactorRepositoryUpdateNeverChangesOutputs(t *testing.T) {
 
 	got, err := repo.Get(context.Background(), factor.FactorID)
 	require.NoError(t, err)
-	require.Equal(t, "Renamed", got.Name)
+	require.Equal(t, "Factor_factor-1", got.Name)
 	require.Equal(t, []string{"bias_20", "bias_96"}, got.Outputs)
 	require.Equal(t, `{"windows":[10]}`, got.ParamsJSON)
 }

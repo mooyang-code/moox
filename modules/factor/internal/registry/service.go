@@ -83,6 +83,9 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string, options Imp
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
+		if existing != nil && existing.Name != factor.Name {
+			return nil, fmt.Errorf("factor name is immutable; create a new factor_id")
+		}
 		if existing != nil && !slices.Equal(existing.Outputs, factor.Outputs) {
 			return nil, fmt.Errorf("factor outputs are immutable; create a new factor_id")
 		}

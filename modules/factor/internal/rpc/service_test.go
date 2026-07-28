@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,6 +80,30 @@ func TestDeleteFactorRemovesDefinitionAndArtifacts(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(cacheDir, "First.cpython-311.pyc"))
 	require.NoFileExists(t, filepath.Join(cacheDir, "First.cpython-314.pyc"))
 	require.FileExists(t, filepath.Join(cacheDir, "Other.cpython-314.pyc"))
+}
+
+func TestDeleteFactorReportsStagedArtifactRemovalFailure(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	factorsDir := t.TempDir()
+	svc := NewWithRuntime(db, nil, WithFactorsDir(factorsDir))
+	factor := genericFactorPB("factor-1", "First", []string{"value"})
+	createRsp, err := svc.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: factor})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, createRsp.GetRetInfo().GetCode())
+	svc.removeStage = func(*factorArtifactStage) error {
+		return errors.New("injected remove failure")
+	}
+
+	deleteRsp, err := svc.DeleteFactor(ctx, &factorpb.DeleteFactorReq{FactorId: "factor-1"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, deleteRsp.GetRetInfo().GetCode())
+	require.Contains(t, deleteRsp.GetRetInfo().GetMsg(), "injected remove failure")
+	_, err = db.Factors().Get(ctx, "factor-1")
+	require.Error(t, err)
+	matches, globErr := filepath.Glob(filepath.Join(factorsDir, ".delete-First-*"))
+	require.NoError(t, globErr)
+	require.NotEmpty(t, matches)
 }
 
 func TestConcurrentDeleteFactorLeavesNoArtifacts(t *testing.T) {
@@ -178,12 +203,17 @@ func TestUpdateFactorRejectsOutputChangesButUpdatesMutableFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, updateRsp.GetRetInfo().GetCode())
 
-	mutable := genericFactorPB("factor-1", "Renamed", []string{"value"})
+	renamed := genericFactorPB("factor-1", "Renamed", []string{"value"})
+	updateRsp, err = svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{FactorId: "factor-1", Factor: renamed})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, updateRsp.GetRetInfo().GetCode())
+
+	mutable := genericFactorPB("factor-1", "First", []string{"value"})
 	mutable.ParamsJson = `{"window":10}`
 	updateRsp, err = svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{FactorId: "factor-1", Factor: mutable})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
-	require.Equal(t, "Renamed", updateRsp.GetFactor().GetName())
+	require.Equal(t, "First", updateRsp.GetFactor().GetName())
 	require.Equal(t, `{"window":10}`, updateRsp.GetFactor().GetParamsJson())
 }
 

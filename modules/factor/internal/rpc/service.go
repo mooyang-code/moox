@@ -21,7 +21,6 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var _ factorpb.FactorMgrService = (*Service)(nil)
@@ -54,13 +53,14 @@ func WithMetadataSync(syncer *registry.MetadataSync) Option {
 
 // Service implements FactorMgr.
 type Service struct {
-	factors    *store.FactorRepository
-	bindings   *store.BindingRepository
-	scheduler  schedulerRuntime
-	factorsDir string
-	publisher  *moduleregistry.SourcePublisher
-	meta       *registry.MetadataSync
-	mutationMu sync.Mutex
+	factors     *store.FactorRepository
+	bindings    *store.BindingRepository
+	scheduler   schedulerRuntime
+	factorsDir  string
+	publisher   *moduleregistry.SourcePublisher
+	meta        *registry.MetadataSync
+	mutationMu  sync.Mutex
+	removeStage func(*factorArtifactStage) error
 }
 
 // NewWithRuntime creates a FactorMgr service with an optional scheduler runtime.
@@ -70,6 +70,9 @@ func NewWithRuntime(persistence *store.Store, sched schedulerRuntime, opts ...Op
 		bindings:   persistence.Bindings(),
 		scheduler:  sched,
 		factorsDir: "./factors",
+		removeStage: func(stage *factorArtifactStage) error {
+			return stage.Remove()
+		},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -119,11 +122,11 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	if err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
+	if existing.Name != factor.Name {
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name is immutable; create a new factor_id"))}, nil
+	}
 	if !slices.Equal(existing.Outputs, factor.Outputs) {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor outputs are immutable; create a new factor_id"))}, nil
-	}
-	if sameName, err := s.factors.GetByName(ctx, factor.Name); err == nil && sameName.FactorID != factor.FactorID {
-		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name %q already exists", factor.Name))}, nil
 	}
 	if err := s.publishFactorSource(ctx, &factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
@@ -220,8 +223,8 @@ func (s *Service) DeleteFactor(ctx context.Context, req *factorpb.DeleteFactorRe
 	if err := s.factors.Delete(ctx, factor.FactorID); err != nil {
 		return &factorpb.DeleteFactorRsp{RetInfo: inner(errors.Join(err, stage.Restore()))}, nil
 	}
-	if err := stage.Remove(); err != nil {
-		log.Errorf("remove deleted factor %s staged artifacts: %v", factor.FactorID, err)
+	if err := s.removeStage(stage); err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(fmt.Errorf("remove factor %s staged artifacts: %w", factor.FactorID, err))}, nil
 	}
 	return &factorpb.DeleteFactorRsp{RetInfo: success()}, nil
 }

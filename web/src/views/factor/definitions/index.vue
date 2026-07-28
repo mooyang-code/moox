@@ -78,7 +78,7 @@
           <a-input v-model="form.factor_id" :disabled="editing" placeholder="bias" />
         </a-form-item>
         <a-form-item field="name" label="Python 模块名" required>
-          <a-input v-model="form.name" placeholder="Bias" />
+          <a-input v-model="form.name" :disabled="editing" placeholder="Bias" />
         </a-form-item>
         <a-form-item field="status" label="状态">
           <a-select v-model="form.status">

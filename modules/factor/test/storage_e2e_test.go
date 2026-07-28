@@ -424,6 +424,20 @@ func assertFactorArtifactsRemoved(t *testing.T, deployRoot, factorName string) {
 	if len(matches) != 0 {
 		reportCleanupFailure(t, "factor bytecode "+factorName, matches, nil)
 	}
+	for _, parent := range []string{
+		factorsDir,
+		filepath.Join(factorsDir, ".versions", "factor"),
+		filepath.Join(factorsDir, "__pycache__"),
+	} {
+		staged, globErr := filepath.Glob(filepath.Join(parent, ".delete-"+factorName+"-*"))
+		if globErr != nil {
+			reportCleanupFailure(t, "inspect staged factor artifacts "+factorName, nil, globErr)
+			continue
+		}
+		if len(staged) != 0 {
+			reportCleanupFailure(t, "staged factor artifacts "+factorName, staged, nil)
+		}
+	}
 }
 
 func reportCleanupFailure(t *testing.T, resource string, rsp any, err error) {

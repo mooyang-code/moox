@@ -42,7 +42,7 @@ func (r *FactorRepository) Create(ctx context.Context, factor domain.FactorDef) 
 	return r.db.WithContext(ctx).Create(&factor).Error
 }
 
-// Update changes mutable fields on an existing definition. Outputs are immutable.
+// Update changes mutable fields on an existing definition. Name and outputs are immutable.
 func (r *FactorRepository) Update(ctx context.Context, factor domain.FactorDef) error {
 	inputColumnsJSON, err := json.Marshal(factor.InputColumns)
 	if err != nil {
@@ -51,8 +51,8 @@ func (r *FactorRepository) Update(ctx context.Context, factor domain.FactorDef) 
 	result := r.db.WithContext(ctx).Model(&domain.FactorDef{}).
 		Where("c_factor_id = ?", strings.TrimSpace(factor.FactorID)).
 		Updates(map[string]any{
-			"c_name": factor.Name, "c_source_code": factor.SourceCode,
-			"c_source_hash": factor.SourceHash, "c_source_path": factor.SourcePath,
+			"c_source_code": factor.SourceCode, "c_source_hash": factor.SourceHash,
+			"c_source_path":        factor.SourcePath,
 			"c_input_columns_json": string(inputColumnsJSON), "c_params_json": factor.ParamsJSON,
 			"c_lookback_rows": factor.LookbackRows, "c_status": factor.Status,
 			"c_mtime": time.Now().UTC(),
