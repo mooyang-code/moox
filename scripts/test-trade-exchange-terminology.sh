@@ -23,6 +23,8 @@ type ExchangeOrder struct{}
 // OpenTelemetry TracerProvider is an unrelated third-party Provider type.
 type TracerProvider struct{}
 type ConfigProvider struct{}
+
+func NewTradeRuntime(tracerProvider TracerProvider, configProvider ConfigProvider) {}
 EOF
 
 cat >"${TMP}/modules/trade/internal/secretclient/client.go" <<'EOF'
@@ -51,6 +53,10 @@ cat >"${TMP}/web/src/api/trade/accepted.ts" <<'EOF'
 export interface ExchangeOrder {
   exchange: string;
 }
+
+export interface TradeClient {
+  configProvider?: ConfigProvider;
+}
 EOF
 
 cat >"${TMP}/web/src/api/trade/accepted.yaml" <<'EOF'
@@ -72,6 +78,37 @@ func SyncExchangeAccounts(provider string) string {
 }
 
 var providerName = "binance"
+EOF
+
+cat >"${TMP}/modules/trade/internal/bad_interface.go" <<'EOF'
+package trade
+
+type ExchangeAdapter interface {
+	Provider()
+	Broker()
+	Venue()
+	Platform()
+}
+EOF
+
+cat >"${TMP}/modules/trade/internal/bad_receiver.go" <<'EOF'
+package trade
+
+type ExchangeAccount struct{}
+
+func (*ExchangeAccount) Provider() {}
+func (*ExchangeAccount) Broker()   {}
+func (*ExchangeAccount) Venue()    {}
+func (*ExchangeAccount) Platform() {}
+EOF
+
+cat >"${TMP}/modules/trade/internal/bad_okx.go" <<'EOF'
+package trade
+
+type OKXProvider struct{}
+type OKXBroker struct{}
+type OKXVenue struct{}
+type OKXPlatform struct{}
 EOF
 
 cat >"${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" <<'EOF'
@@ -112,9 +149,23 @@ if (
   exit 1
 fi
 
-for fixture in bad.go bad_secretclient.go bad.proto bad.ts bad.yaml bad.md; do
-  rg -q --fixed-strings "${fixture}:" "${TMP}/bad.out" || {
+missing_fixture=false
+for fixture in bad.go bad_interface.go bad_receiver.go bad_okx.go bad_secretclient.go bad.proto bad.ts bad.yaml bad.md; do
+  if ! rg -q --fixed-strings "${fixture}:" "${TMP}/bad.out"; then
     echo "checker did not report ${fixture}" >&2
+    missing_fixture=true
+  fi
+done
+if [[ "${missing_fixture}" == true ]]; then
+  cat "${TMP}/bad.out" >&2
+  exit 1
+fi
+for expected in \
+  bad_interface.go:4 bad_interface.go:5 bad_interface.go:6 bad_interface.go:7 \
+  bad_receiver.go:5 bad_receiver.go:6 bad_receiver.go:7 bad_receiver.go:8 \
+  bad_okx.go:3 bad_okx.go:4 bad_okx.go:5 bad_okx.go:6; do
+  rg -q --fixed-strings "${expected}:" "${TMP}/bad.out" || {
+    echo "checker did not report ${expected}" >&2
     cat "${TMP}/bad.out" >&2
     exit 1
   }
@@ -122,6 +173,9 @@ done
 
 rm \
   "${TMP}/modules/trade/internal/bad.go" \
+  "${TMP}/modules/trade/internal/bad_interface.go" \
+  "${TMP}/modules/trade/internal/bad_receiver.go" \
+  "${TMP}/modules/trade/internal/bad_okx.go" \
   "${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" \
   "${TMP}/packages/tradeeventpb/bad.proto" \
   "${TMP}/web/src/api/trade/bad.ts" \

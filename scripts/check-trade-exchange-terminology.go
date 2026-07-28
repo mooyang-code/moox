@@ -18,6 +18,7 @@ import (
 )
 
 var declarationPattern = regexp.MustCompile(`(?i)^\s*(?:(?:export|declare)\s+)*(?:message|interface|type|class|enum|service)\s+([A-Za-z_][A-Za-z0-9_]*)`)
+var thirdPartyProviderFieldPattern = regexp.MustCompile(`^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?(TracerProvider|ConfigProvider)\s*[;,]?\s*$`)
 
 var defaultRoots = []string{
 	"modules/trade",
@@ -149,13 +150,18 @@ func (c *checker) scanGoDeclaration(path string, declaration ast.Decl) {
 
 func (c *checker) scanGoType(path string, spec *ast.TypeSpec) {
 	c.addText(path, c.fset.Position(spec.Name.Pos()).Line, spec.Name.Name)
-	structType, ok := spec.Type.(*ast.StructType)
-	if !ok {
+	var fields *ast.FieldList
+	switch value := spec.Type.(type) {
+	case *ast.StructType:
+		fields = value.Fields
+	case *ast.InterfaceType:
+		fields = value.Methods
+	default:
 		return
 	}
-	for _, field := range structType.Fields.List {
+	for _, field := range fields.List {
 		for _, name := range field.Names {
-			if allowedSecretClientProvider(path, field, name.Name) {
+			if allowedSecretClientProvider(path, field, name.Name) || allowedThirdPartyProvider(field, name.Name) {
 				continue
 			}
 			c.addText(path, c.fset.Position(name.Pos()).Line, spec.Name.Name+" "+name.Name)
@@ -165,12 +171,20 @@ func (c *checker) scanGoType(path string, spec *ast.TypeSpec) {
 
 func (c *checker) scanGoFunction(path string, function *ast.FuncDecl) {
 	c.addText(path, c.fset.Position(function.Name.Pos()).Line, function.Name.Name)
-	for _, fields := range []*ast.FieldList{function.Recv, function.Type.Params, function.Type.Results} {
+	if function.Recv != nil {
+		for _, field := range function.Recv.List {
+			c.addText(path, c.fset.Position(function.Name.Pos()).Line, nodeText(c.fset, field.Type)+" "+function.Name.Name)
+		}
+	}
+	for _, fields := range []*ast.FieldList{function.Type.Params, function.Type.Results} {
 		if fields == nil {
 			continue
 		}
 		for _, field := range fields.List {
 			for _, name := range field.Names {
+				if allowedThirdPartyProvider(field, name.Name) {
+					continue
+				}
 				c.addText(path, c.fset.Position(name.Pos()).Line, function.Name.Name+" "+name.Name)
 			}
 		}
@@ -188,12 +202,44 @@ func allowedSecretClientProvider(path string, field *ast.Field, name string) boo
 	return strings.Contains(field.Tag.Value, `json:"provider"`)
 }
 
-func (c *checker) addNode(path string, node ast.Node) {
-	var rendered bytes.Buffer
-	if err := format.Node(&rendered, c.fset, node); err != nil {
-		return
+func allowedThirdPartyProvider(field *ast.Field, name string) bool {
+	tokens := terminologyTokens(name)
+	if containsAny(tokens, "exchange", "trade", "binance", "okx") {
+		return false
 	}
-	c.addText(path, c.fset.Position(node.Pos()).Line, rendered.String())
+	switch goTypeIdentifier(field.Type) {
+	case "TracerProvider":
+		return contains(tokens, "tracer") && contains(tokens, "provider")
+	case "ConfigProvider":
+		return contains(tokens, "config") && contains(tokens, "provider")
+	default:
+		return false
+	}
+}
+
+func goTypeIdentifier(expression ast.Expr) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		return value.Name
+	case *ast.SelectorExpr:
+		return value.Sel.Name
+	case *ast.StarExpr:
+		return goTypeIdentifier(value.X)
+	default:
+		return ""
+	}
+}
+
+func (c *checker) addNode(path string, node ast.Node) {
+	c.addText(path, c.fset.Position(node.Pos()).Line, nodeText(c.fset, node))
+}
+
+func nodeText(fset *token.FileSet, node ast.Node) string {
+	var rendered bytes.Buffer
+	if err := format.Node(&rendered, fset, node); err != nil {
+		return ""
+	}
+	return rendered.String()
 }
 
 func (c *checker) scanText(path string) error {
@@ -209,7 +255,9 @@ func (c *checker) scanText(path string) error {
 			context = match[1]
 			depth = 0
 		}
-		c.addText(path, index+1, context+" "+line)
+		if !allowedThirdPartyProviderText(line) {
+			c.addText(path, index+1, context+" "+line)
+		}
 		if context != "" {
 			depth += strings.Count(line, "{") - strings.Count(line, "}")
 			if depth <= 0 && strings.Contains(line, "}") {
@@ -218,6 +266,25 @@ func (c *checker) scanText(path string) error {
 		}
 	}
 	return nil
+}
+
+func allowedThirdPartyProviderText(line string) bool {
+	match := thirdPartyProviderFieldPattern.FindStringSubmatch(line)
+	if len(match) != 3 {
+		return false
+	}
+	tokens := terminologyTokens(match[1])
+	if containsAny(tokens, "exchange", "trade", "binance", "okx") {
+		return false
+	}
+	switch match[2] {
+	case "TracerProvider":
+		return contains(tokens, "tracer") && contains(tokens, "provider")
+	case "ConfigProvider":
+		return contains(tokens, "config") && contains(tokens, "provider")
+	default:
+		return false
+	}
 }
 
 func (c *checker) addText(path string, line int, text string) {
@@ -258,24 +325,29 @@ func exchangeSynonym(text string) (string, bool) {
 func terminologyTokens(text string) []string {
 	var tokens []string
 	var token strings.Builder
-	previousLowerOrDigit := false
 	flush := func() {
 		if token.Len() > 0 {
 			tokens = append(tokens, strings.ToLower(token.String()))
 			token.Reset()
 		}
 	}
-	for _, character := range text {
+	characters := []rune(text)
+	for index, character := range characters {
 		if !unicode.IsLetter(character) && !unicode.IsDigit(character) {
 			flush()
-			previousLowerOrDigit = false
 			continue
 		}
-		if unicode.IsUpper(character) && previousLowerOrDigit {
+		if token.Len() > 0 && unicode.IsUpper(character) {
+			previous := characters[index-1]
+			nextIsLower := index+1 < len(characters) && unicode.IsLower(characters[index+1])
+			if unicode.IsLower(previous) || unicode.IsDigit(previous) || unicode.IsUpper(previous) && nextIsLower {
+				flush()
+			}
+		}
+		if token.Len() > 0 && unicode.IsDigit(character) && unicode.IsLetter(characters[index-1]) {
 			flush()
 		}
 		token.WriteRune(character)
-		previousLowerOrDigit = unicode.IsLower(character) || unicode.IsDigit(character)
 	}
 	flush()
 	return tokens
