@@ -1,13 +1,16 @@
 package tradepb
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 func TestTradeRPCContractHasOnlyApprovedServices(t *testing.T) {
@@ -335,6 +338,202 @@ func TestPublicRequestValidation(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestEveryPublicRPCRequestImplementsValidation(t *testing.T) {
+	services := File_trade_service_proto.Services()
+	for i := 0; i < services.Len(); i++ {
+		service := services.Get(i)
+		for j := 0; j < service.Methods().Len(); j++ {
+			method := service.Methods().Get(j)
+			messageType, err := protoregistry.GlobalTypes.FindMessageByName(method.Input().FullName())
+			if err != nil {
+				t.Fatalf("%s input type: %v", method.FullName(), err)
+			}
+			request := messageType.New().Interface()
+			if _, ok := request.(interface{ Validate() error }); !ok {
+				t.Errorf("%s input %T does not implement Validate() error", method.FullName(), request)
+			}
+		}
+	}
+}
+
+func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
+	requests := []any{
+		&UpdateAccountReq{},
+		&GetAccountReq{},
+		&SetLeverageReq{},
+		&PauseAccountReq{},
+		&SyncAccountReq{},
+		&CancelOrderReq{},
+		&CancelAllOrdersReq{},
+		&SubmitTargetReq{},
+		&GetExecutionReq{},
+		&ListExecutionsReq{},
+		&GetOrderReq{},
+		&ListOrdersReq{},
+		&ListFillsReq{},
+		&ListPositionsReq{},
+	}
+	for _, request := range requests {
+		t.Run(reflect.TypeOf(request).Elem().Name(), func(t *testing.T) {
+			if err := validateRequest(request); err == nil {
+				t.Fatal("zero request was accepted")
+			}
+		})
+	}
+
+	pagedRequests := []any{
+		&ListAccountsReq{Page: &Page{Size: 1001}},
+		&ListExecutionsReq{ExchangeAccountId: "account-1", Page: &Page{Size: 1001}},
+		&ListOrdersReq{ExchangeAccountId: "account-1", Page: &Page{Size: 1001}},
+		&ListFillsReq{ExchangeAccountId: "account-1", Page: &Page{Size: 1001}},
+	}
+	for _, request := range pagedRequests {
+		t.Run(reflect.TypeOf(request).Elem().Name()+"Page", func(t *testing.T) {
+			if err := validateRequest(request); err == nil {
+				t.Fatal("oversized page was accepted")
+			}
+		})
+	}
+	if err := validateRequest(&ListOrdersReq{
+		ExchangeAccountId: "account-1",
+		StartTime:         20,
+		EndTime:           10,
+	}); err == nil {
+		t.Fatal("reversed time range was accepted")
+	}
+}
+
+func TestPlaceOrderRejectsNonCanonicalOrNonPositiveDecimals(t *testing.T) {
+	newMarketOrder := func() *PlaceOrderReq {
+		return &PlaceOrderReq{
+			ExchangeAccountId: "account-1",
+			ClientOrderId:     "client-1",
+			Symbol:            "BTCUSDT",
+			OrderType:         OrderType_ORDER_TYPE_MARKET,
+			Side:              OrderSide_ORDER_SIDE_BUY,
+			Quantity:          "1",
+		}
+	}
+	for _, quantity := range []string{
+		"", "0", "-0", "-1", "+1", ".5", "1.", "01", "1e3",
+		"1/2", "NaN", "Inf", " 1", strings.Repeat("9", 257),
+	} {
+		t.Run("quantity "+quantity, func(t *testing.T) {
+			req := newMarketOrder()
+			req.Quantity = quantity
+			if err := req.Validate(); err == nil {
+				t.Fatalf("non-positive or non-canonical quantity %q was accepted", quantity)
+			}
+		})
+	}
+	for _, quantity := range []string{"0.0001", "1", "10.25"} {
+		t.Run("valid quantity "+quantity, func(t *testing.T) {
+			req := newMarketOrder()
+			req.Quantity = quantity
+			if err := req.Validate(); err != nil {
+				t.Fatalf("canonical quantity %q rejected: %v", quantity, err)
+			}
+		})
+	}
+
+	for _, price := range []string{
+		"", "0", "-1", "+1", ".5", "1.", "01", "1e3",
+		"1/2", "NaN", "Inf", " 1", strings.Repeat("9", 257),
+	} {
+		t.Run("limit price "+price, func(t *testing.T) {
+			req := newMarketOrder()
+			req.OrderType = OrderType_ORDER_TYPE_LIMIT
+			req.TimeInForce = TimeInForce_TIME_IN_FORCE_GTC
+			req.LimitPrice = &price
+			if err := req.Validate(); err == nil {
+				t.Fatalf("non-positive or non-canonical limit price %q was accepted", price)
+			}
+		})
+	}
+}
+
+func TestSubmitTargetMatchesEventTargetIntentValidation(t *testing.T) {
+	newRequest := func() *SubmitTargetReq {
+		return &SubmitTargetReq{
+			EventId:            "execution-1",
+			ExecutionId:        "execution-1",
+			StrategyRunId:      "run-1",
+			ExecutionBindingId: "binding-1",
+			ExchangeAccountId:  "account-1",
+			CommandSequence:    1,
+			NotAfter:           time.Now().Add(time.Hour).UnixMilli(),
+			DataRevision:       "revision-1",
+			Targets: []*TargetPosition{{
+				InstrumentId:   "BTC-USDT",
+				Symbol:         "BTCUSDT",
+				TargetQuantity: "1.25",
+			}},
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*SubmitTargetReq)
+	}{
+		{"empty event", func(req *SubmitTargetReq) { req.EventId = "" }},
+		{"event identity mismatch", func(req *SubmitTargetReq) { req.EventId = "other" }},
+		{"empty execution", func(req *SubmitTargetReq) { req.ExecutionId = "" }},
+		{"empty strategy run", func(req *SubmitTargetReq) { req.StrategyRunId = "" }},
+		{"empty binding", func(req *SubmitTargetReq) { req.ExecutionBindingId = "" }},
+		{"empty account", func(req *SubmitTargetReq) { req.ExchangeAccountId = "" }},
+		{"empty data revision", func(req *SubmitTargetReq) { req.DataRevision = "" }},
+		{"zero sequence", func(req *SubmitTargetReq) { req.CommandSequence = 0 }},
+		{"sequence overflow", func(req *SubmitTargetReq) { req.CommandSequence = uint64(math.MaxInt64) + 1 }},
+		{"non-positive expiry", func(req *SubmitTargetReq) { req.NotAfter = 0 }},
+		{"expired", func(req *SubmitTargetReq) { req.NotAfter = time.Now().Add(-time.Minute).UnixMilli() }},
+		{"empty targets", func(req *SubmitTargetReq) { req.Targets = nil }},
+		{"nil target", func(req *SubmitTargetReq) { req.Targets[0] = nil }},
+		{"blank instrument", func(req *SubmitTargetReq) { req.Targets[0].InstrumentId = " " }},
+		{"blank symbol", func(req *SubmitTargetReq) { req.Targets[0].Symbol = " " }},
+		{"duplicate symbol", func(req *SubmitTargetReq) {
+			req.Targets = append(req.Targets, &TargetPosition{
+				InstrumentId: "other", Symbol: req.Targets[0].Symbol, TargetQuantity: "2",
+			})
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := newRequest()
+			test.mutate(req)
+			if err := req.Validate(); err == nil {
+				t.Fatal("invalid target request was accepted")
+			}
+		})
+	}
+
+	for _, quantity := range []string{"", "+1", ".5", "1.", "01", "1e3", "1/2", "NaN", "Inf", " 1", strings.Repeat("9", 257)} {
+		t.Run("invalid quantity "+quantity, func(t *testing.T) {
+			req := newRequest()
+			req.Targets[0].TargetQuantity = quantity
+			if err := req.Validate(); err == nil {
+				t.Fatalf("non-canonical target quantity %q was accepted", quantity)
+			}
+		})
+	}
+	for _, quantity := range []string{"0", "-0", "1", "-1", "1.25", "-0.0001"} {
+		t.Run("valid quantity "+quantity, func(t *testing.T) {
+			req := newRequest()
+			req.CommandSequence = uint64(math.MaxInt64)
+			req.Targets[0].TargetQuantity = quantity
+			if err := req.Validate(); err != nil {
+				t.Fatalf("canonical target quantity %q rejected: %v", quantity, err)
+			}
+		})
+	}
+}
+
+func validateRequest(request any) error {
+	validator, ok := request.(interface{ Validate() error })
+	if !ok {
+		return nil
+	}
+	return validator.Validate()
 }
 
 func findMethod(name protoreflect.Name) protoreflect.MethodDescriptor {

@@ -2,7 +2,21 @@ package tradepb
 
 import (
 	"fmt"
+	"math"
+	"math/big"
+	"regexp"
 	"strings"
+	"time"
+)
+
+const (
+	maxDecimalLength = 256
+	maxPageSize      = 1000
+)
+
+var (
+	canonicalDecimalPattern         = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
+	canonicalUnsignedDecimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 )
 
 func (r *CreateAccountReq) Validate() error {
@@ -21,9 +35,23 @@ func (r *CreateAccountReq) Validate() error {
 	return nil
 }
 
+func (r *UpdateAccountReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
+		return fmt.Errorf("exchange_account_id is required")
+	}
+	return nil
+}
+
+func (r *GetAccountReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
+		return fmt.Errorf("exchange_account_id is required")
+	}
+	return nil
+}
+
 func (r *ListAccountsReq) Validate() error {
 	if r == nil {
-		return nil
+		return fmt.Errorf("request is required")
 	}
 	if r.Exchange != nil && !validExchange(r.GetExchange()) {
 		return fmt.Errorf("invalid exchange")
@@ -33,6 +61,35 @@ func (r *ListAccountsReq) Validate() error {
 	}
 	if r.ExecutionMode != nil && !validExecutionMode(r.GetExecutionMode()) {
 		return fmt.Errorf("invalid execution_mode")
+	}
+	return validatePage(r.Page)
+}
+
+func (r *SetLeverageReq) Validate() error {
+	if r == nil ||
+		strings.TrimSpace(r.ExchangeAccountId) == "" ||
+		strings.TrimSpace(r.Symbol) == "" {
+		return fmt.Errorf("exchange_account_id and symbol are required")
+	}
+	if !isCanonicalPositiveDecimal(r.Leverage) {
+		return fmt.Errorf("leverage must be a canonical positive decimal")
+	}
+	return nil
+}
+
+func (r *PauseAccountReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
+		return fmt.Errorf("exchange_account_id is required")
+	}
+	if r.Paused && strings.TrimSpace(r.Reason) == "" {
+		return fmt.Errorf("reason is required when pausing an account")
+	}
+	return nil
+}
+
+func (r *SyncAccountReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
+		return fmt.Errorf("exchange_account_id is required")
 	}
 	return nil
 }
@@ -53,8 +110,8 @@ func (r *PlaceOrderReq) Validate() error {
 	if !validPositionSide(r.PositionSide) {
 		return fmt.Errorf("invalid position_side")
 	}
-	if strings.TrimSpace(r.Quantity) == "" {
-		return fmt.Errorf("quantity is required")
+	if !isCanonicalPositiveDecimal(r.Quantity) {
+		return fmt.Errorf("quantity must be a canonical positive decimal")
 	}
 	switch r.OrderType {
 	case OrderType_ORDER_TYPE_MARKET:
@@ -65,8 +122,8 @@ func (r *PlaceOrderReq) Validate() error {
 			return fmt.Errorf("time_in_force must be unspecified for market orders")
 		}
 	case OrderType_ORDER_TYPE_LIMIT:
-		if r.LimitPrice == nil || strings.TrimSpace(r.GetLimitPrice()) == "" {
-			return fmt.Errorf("limit_price is required for limit orders")
+		if r.LimitPrice == nil || !isCanonicalPositiveDecimal(r.GetLimitPrice()) {
+			return fmt.Errorf("limit_price must be a canonical positive decimal for limit orders")
 		}
 		if r.TimeInForce == TimeInForce_TIME_IN_FORCE_UNSPECIFIED {
 			return fmt.Errorf("time_in_force is required for limit orders")
@@ -150,23 +207,145 @@ func (r *CancelOrderReq) Validate() error {
 	return nil
 }
 
+func (r *CancelAllOrdersReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
+		return fmt.Errorf("exchange_account_id is required")
+	}
+	return nil
+}
+
 func (r *SubmitTargetReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.EventId) == "" ||
 		strings.TrimSpace(r.ExecutionId) == "" ||
+		strings.TrimSpace(r.StrategyRunId) == "" ||
 		strings.TrimSpace(r.ExecutionBindingId) == "" ||
-		strings.TrimSpace(r.ExchangeAccountId) == "" {
-		return fmt.Errorf("event_id, execution_id, execution_binding_id and exchange_account_id are required")
+		strings.TrimSpace(r.ExchangeAccountId) == "" ||
+		strings.TrimSpace(r.DataRevision) == "" {
+		return fmt.Errorf("target identity and data_revision are required")
 	}
-	if r.CommandSequence == 0 || len(r.Targets) == 0 {
-		return fmt.Errorf("command_sequence and targets are required")
+	if r.EventId != r.ExecutionId {
+		return fmt.Errorf("event_id must equal execution_id")
 	}
+	if r.CommandSequence == 0 || r.CommandSequence > math.MaxInt64 {
+		return fmt.Errorf("command_sequence must be between 1 and MaxInt64")
+	}
+	if r.NotAfter <= 0 || r.NotAfter <= time.Now().UnixMilli() {
+		return fmt.Errorf("not_after must be in the future")
+	}
+	if len(r.Targets) == 0 {
+		return fmt.Errorf("targets are required")
+	}
+	seenSymbols := make(map[string]struct{}, len(r.Targets))
 	for i, target := range r.Targets {
-		if target == nil ||
-			strings.TrimSpace(target.Symbol) == "" ||
-			strings.TrimSpace(target.TargetQuantity) == "" {
-			return fmt.Errorf("targets[%d].symbol and target_quantity are required", i)
+		if target == nil {
+			return fmt.Errorf("targets[%d] is nil", i)
+		}
+		if strings.TrimSpace(target.InstrumentId) == "" {
+			return fmt.Errorf("targets[%d].instrument_id is required", i)
+		}
+		symbol := target.Symbol
+		if strings.TrimSpace(symbol) == "" {
+			return fmt.Errorf("targets[%d].symbol is required", i)
+		}
+		if _, exists := seenSymbols[symbol]; exists {
+			return fmt.Errorf("target symbol %q is duplicated", symbol)
+		}
+		seenSymbols[symbol] = struct{}{}
+		if !isCanonicalDecimal(target.TargetQuantity) {
+			return fmt.Errorf("targets[%d].target_quantity must be a canonical decimal", i)
 		}
 	}
 	return nil
+}
+
+func (r *GetExecutionReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExecutionId) == "" {
+		return fmt.Errorf("execution_id is required")
+	}
+	return nil
+}
+
+func (r *ListExecutionsReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
+		return fmt.Errorf("exchange_account_id is required")
+	}
+	return validatePage(r.Page)
+}
+
+func (r *GetOrderReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.OrderId) == "" {
+		return fmt.Errorf("order_id is required")
+	}
+	return nil
+}
+
+func (r *ListOrdersReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
+		return fmt.Errorf("exchange_account_id is required")
+	}
+	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
+		return err
+	}
+	return validatePage(r.Page)
+}
+
+func (r *ListFillsReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
+		return fmt.Errorf("exchange_account_id is required")
+	}
+	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
+		return err
+	}
+	return validatePage(r.Page)
+}
+
+func (r *ListPositionsReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
+		return fmt.Errorf("exchange_account_id is required")
+	}
+	return nil
+}
+
+func validatePage(page *Page) error {
+	if page == nil {
+		return nil
+	}
+	if page.Size > maxPageSize {
+		return fmt.Errorf("page.size must not exceed %d", maxPageSize)
+	}
+	if page.Cursor != strings.TrimSpace(page.Cursor) {
+		return fmt.Errorf("page.cursor must not have surrounding whitespace")
+	}
+	return nil
+}
+
+func validateTimeRange(startTime, endTime int64) error {
+	if startTime < 0 || endTime < 0 {
+		return fmt.Errorf("time range must not be negative")
+	}
+	if startTime > 0 && endTime > 0 && endTime < startTime {
+		return fmt.Errorf("end_time must not be before start_time")
+	}
+	return nil
+}
+
+func isCanonicalDecimal(value string) bool {
+	if len(value) == 0 ||
+		len(value) > maxDecimalLength ||
+		!canonicalDecimalPattern.MatchString(value) {
+		return false
+	}
+	_, ok := new(big.Rat).SetString(value)
+	return ok
+}
+
+func isCanonicalPositiveDecimal(value string) bool {
+	if len(value) == 0 ||
+		len(value) > maxDecimalLength ||
+		!canonicalUnsignedDecimalPattern.MatchString(value) {
+		return false
+	}
+	number, ok := new(big.Rat).SetString(value)
+	return ok && number.Sign() > 0
 }
