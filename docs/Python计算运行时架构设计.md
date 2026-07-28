@@ -74,6 +74,69 @@ starting -> handshaking -> ready -> busy -> ready
 单个 worker 同一时刻只执行一个业务任务。并行度来自多个 worker，而不是在
 一个 Python 解释器中并发运行任务。
 
+## Supervisor 职责边界
+
+Pool 的每个槽位持有一个 Supervisor，一个 Supervisor 在任意时刻最多拥有一个
+常驻 Worker。三者的边界是：
+
+| 组件 | 职责 |
+| --- | --- |
+| Pool | 依据 shard key 或轮询选择槽位，提供并行度和整体 readiness |
+| Supervisor | 管理单个槽位的 worker 创建、串行使用、状态、失败替换和关闭 |
+| StdioWorker | 启动实际 Python 子进程，完成握手、帧读写、超时终止和进程回收 |
+
+Supervisor 不是业务 scheduler，也不持久化或重新编排 Factor/Strategy 任务。业务模块
+决定任务范围、结果写回和任务级重试；Supervisor 只恢复执行进程。
+
+### 创建与复用
+
+`Ensure` 只复用 `ready` worker。已有 worker 处于 `busy/dead/starting` 等不可复用
+状态时，必须先调用 `Close` 完整回收旧进程，再通过 factory 创建新 worker。不能直接
+覆盖内存引用，否则旧 Python 进程可能继续存活。
+
+factory 连续创建失败时记录 failure count，并在超过阈值后进入 crash-loop failure；
+成功创建和握手后清零连续失败次数。重建之间使用有上限的指数 backoff，避免启动失败
+时快速空转。
+
+### 串行化
+
+Supervisor 使用独立执行锁包住 `LOAD + RUN`。同一 worker 上不允许出现：
+
+```text
+request A LOAD
+request B LOAD
+request A RUN
+```
+
+否则 A 可能执行 B 刚加载的模块版本。不同 Supervisor 可以并行，同一 Supervisor
+始终串行。
+
+### 失败与回收
+
+以下错误都使当前 worker 不再可信：
+
+- stdin/stdout 读写失败；
+- 请求超时或 context 取消；
+- Python 返回 ERROR；
+- 非预期 frame 或协议解码失败；
+- 子进程退出。
+
+StdioWorker 对 fatal error 和主动关闭采用同一个幂等终止路径：
+
+```text
+mark dead -> Kill -> Wait -> clear process reference
+```
+
+只调用 `Kill` 不足以完成回收；必须调用 `Wait`，否则宿主可能留下未回收子进程。
+Supervisor 随后清空 worker，并允许后续请求重新创建。
+
+共享运行时可以提供显式配置的进程级重试，但业务模块必须只有一个明确的任务级重试
+所有者。例如 Factor 由 Scheduler 的 `max_retry` 控制任务重试，Supervisor 只关闭和
+替换失败 worker，避免两层重试相乘。
+
+Pool 关闭时必须尝试关闭全部 Supervisor，再汇总错误；不能因为第一个槽位关闭失败就
+跳过其余槽位。
+
 ## 帧与握手
 
 帧由固定 magic、消息类型、meta 长度、meta JSON、payload 长度和 payload
