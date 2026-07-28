@@ -125,6 +125,7 @@ type privateOrderFields struct {
 	Fee           string      `json:"n"`
 	FeeAsset      string      `json:"N"`
 	RealizedPnL   string      `json:"rp"`
+	Maker         bool        `json:"m"`
 	TransactionAt int64       `json:"T"`
 }
 
@@ -221,9 +222,16 @@ func (a *Adapter) dispatchPrivate(
 		FeeAsset:        envelope.FeeAsset,
 		RealizedPnL:     pnl,
 		SettlementAsset: a.config.SettlementAsset,
-		LiquidityRole:   "",
+		LiquidityRole:   binanceLiquidityRole(envelope.Maker),
 		TradedAt:        millis(envelope.TransactionAt),
 	})
+}
+
+func binanceLiquidityRole(maker bool) string {
+	if maker {
+		return "MAKER"
+	}
+	return "TAKER"
 }
 
 func (a *Adapter) dispatchFuturesAccount(

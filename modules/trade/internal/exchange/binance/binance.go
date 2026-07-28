@@ -479,7 +479,7 @@ func (a *Adapter) PlaceOrder(
 	}
 	var payload orderPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return exchange.Order{}, typedRejected("decode placed order", err)
+		return exchange.Order{}, transportUnknown("decode placed order", err)
 	}
 	order, err := a.orderFromPayload(payload)
 	if err != nil {
@@ -511,7 +511,7 @@ func (a *Adapter) CancelOrder(
 	}
 	var payload orderPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return exchange.Order{}, typedRejected("decode canceled order", err)
+		return exchange.Order{}, transportUnknown("decode canceled order", err)
 	}
 	return a.orderFromPayload(payload)
 }
@@ -533,9 +533,13 @@ type tradePayload struct {
 
 func (a *Adapter) ListRecentFills(
 	ctx context.Context,
+	symbol string,
 	cursor string,
 ) ([]exchange.Fill, string, error) {
-	values := url.Values{}
+	if strings.TrimSpace(symbol) == "" {
+		return nil, cursor, typedRejected("symbol is required to list Binance fills", nil)
+	}
+	values := url.Values{"symbol": []string{symbol}}
 	if cursor != "" {
 		values.Set("fromId", cursor)
 	}
@@ -795,6 +799,15 @@ func typedRejected(message string, err error) error {
 		err = fmt.Errorf("%s: %w", message, err)
 	}
 	return &exchange.Error{Kind: exchange.ErrorRejected, Err: err}
+}
+
+func transportUnknown(message string, err error) error {
+	if err == nil {
+		err = errors.New(message)
+	} else {
+		err = fmt.Errorf("%s: %w", message, err)
+	}
+	return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 }
 
 func decimalOrZero(raw string) (shared.Decimal, error) {

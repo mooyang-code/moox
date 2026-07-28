@@ -105,6 +105,9 @@ func (a *Adapter) request(
 	}
 	var envelope response
 	if err := json.Unmarshal(raw, &envelope); err != nil {
+		if method != http.MethodGet {
+			return nil, transportUnknown("decode OKX mutation response", err)
+		}
 		return nil, rejected("decode OKX response", err)
 	}
 	if envelope.Code != "0" {
@@ -491,6 +494,13 @@ func (a *Adapter) PlaceOrder(
 		"ordType": strings.ToLower(string(request.OrderType)),
 		"sz":      quantity.String(),
 	}
+	if a.config.MarketType == exchange.MarketTypeSpot &&
+		request.OrderType == exchange.OrderTypeMarket &&
+		request.Side == exchange.SideBuy {
+		// Domain MARKET quantities are always base-asset quantities. OKX
+		// otherwise interprets a SPOT MARKET buy sz as quote currency.
+		body["tgtCcy"] = "base_ccy"
+	}
 	if request.OrderType == exchange.OrderTypeLimit {
 		body["px"] = request.LimitPrice.String()
 		body["ordType"] = mapOKXLimitType(request.TimeInForce)
@@ -508,7 +518,7 @@ func (a *Adapter) PlaceOrder(
 	}
 	var payload []orderPayload
 	if err := json.Unmarshal(data, &payload); err != nil || len(payload) == 0 {
-		return exchange.Order{}, rejected("decode placed order", err)
+		return exchange.Order{}, transportUnknown("decode placed order", err)
 	}
 	if payload[0].SCode != "" && payload[0].SCode != "0" {
 		return exchange.Order{}, classifyOKXCode(payload[0].SCode, payload[0].SMsg)
@@ -542,7 +552,7 @@ func (a *Adapter) CancelOrder(
 	}
 	var payload []orderPayload
 	if err := json.Unmarshal(data, &payload); err != nil || len(payload) == 0 {
-		return exchange.Order{}, rejected("decode canceled order", err)
+		return exchange.Order{}, transportUnknown("decode canceled order", err)
 	}
 	if payload[0].SCode != "" && payload[0].SCode != "0" {
 		return exchange.Order{}, classifyOKXCode(payload[0].SCode, payload[0].SMsg)
@@ -553,6 +563,7 @@ func (a *Adapter) CancelOrder(
 }
 
 type fillPayload struct {
+	BillID   string `json:"billId"`
 	InstID   string `json:"instId"`
 	TradeID  string `json:"tradeId"`
 	OrdID    string `json:"ordId"`
@@ -570,11 +581,21 @@ type fillPayload struct {
 
 func (a *Adapter) ListRecentFills(
 	ctx context.Context,
+	symbol string,
 	cursor string,
 ) ([]exchange.Fill, string, error) {
-	query := url.Values{"instType": []string{a.instrumentType()}, "limit": []string{"100"}}
+	if strings.TrimSpace(symbol) == "" {
+		return nil, cursor, rejected("symbol is required to list OKX fills", nil)
+	}
+	query := url.Values{
+		"instType": []string{a.instrumentType()},
+		"instId":   []string{symbol},
+		"limit":    []string{"100"},
+	}
 	if cursor != "" {
-		query.Set("after", cursor)
+		// OKX fill-history cursors are billId values. "before" returns rows
+		// newer than the supplied cursor; "after" paginates into older history.
+		query.Set("before", cursor)
 	}
 	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/fills-history", query, nil, true)
 	if err != nil {
@@ -586,14 +607,14 @@ func (a *Adapter) ListRecentFills(
 	}
 	out := make([]exchange.Fill, 0, len(payload))
 	next := cursor
-	for _, row := range payload {
+	for index, row := range payload {
 		fill, err := a.fill(row)
 		if err != nil {
 			return nil, cursor, err
 		}
 		out = append(out, fill)
-		if row.TradeID != "" {
-			next = row.TradeID
+		if index == 0 && row.BillID != "" {
+			next = row.BillID
 		}
 	}
 	return out, next, nil
@@ -713,7 +734,7 @@ func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
 		Quantity: quantity, Price: price, Fee: fee.Abs(), FeeAsset: row.FeeCcy,
 		RealizedPnL: pnl, SettlementAsset: a.config.SettlementAsset,
-		LiquidityRole: strings.ToUpper(row.ExecType), TradedAt: millisString(row.Ts),
+		LiquidityRole: liquidityRole(row.ExecType), TradedAt: millisString(row.Ts),
 	}, nil
 }
 
@@ -826,6 +847,26 @@ func rejected(message string, err error) error {
 		err = fmt.Errorf("%s: %w", message, err)
 	}
 	return &exchange.Error{Kind: exchange.ErrorRejected, Err: err}
+}
+
+func transportUnknown(message string, err error) error {
+	if err == nil {
+		err = errors.New(message)
+	} else {
+		err = fmt.Errorf("%s: %w", message, err)
+	}
+	return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+}
+
+func liquidityRole(value string) string {
+	switch strings.ToUpper(value) {
+	case "M", "MAKER":
+		return "MAKER"
+	case "T", "TAKER":
+		return "TAKER"
+	default:
+		return ""
+	}
 }
 
 func decimal(raw string) (shared.Decimal, error) {

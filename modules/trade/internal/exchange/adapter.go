@@ -12,7 +12,7 @@ type Adapter interface {
 	GetAccountSnapshot(context.Context) (AccountSnapshot, error)
 	ListPositionSnapshots(context.Context) ([]Position, error)
 	ListOpenOrders(context.Context) ([]Order, error)
-	ListRecentFills(context.Context, string) ([]Fill, string, error)
+	ListRecentFills(context.Context, string, string) ([]Fill, string, error)
 	GetOrder(context.Context, string, string) (Order, error)
 	PlaceOrder(context.Context, OrderRequest) (Order, error)
 	CancelOrder(context.Context, string, string) (Order, error)

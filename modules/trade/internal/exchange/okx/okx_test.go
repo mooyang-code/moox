@@ -69,6 +69,37 @@ func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 	}
 }
 
+func TestSpotMarketBuyUsesBaseQuantity(t *testing.T) {
+	var body map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v5/trade/order" {
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		ok(w, `[{"ordId":"42","clOrdId":"cid","sCode":"0"}]`)
+	}))
+	defer server.Close()
+	adapter := NewWithClient(exchange.AccountConfig{
+		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		SettlementAsset: "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
+		httpclient.New(server.URL))
+	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "cid", Symbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("0.01"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["sz"] != "0.01" || body["tgtCcy"] != "base_ccy" {
+		t.Fatalf("body = %+v", body)
+	}
+}
+
 func TestSwapLimitAndLotValidation(t *testing.T) {
 	var body map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -114,7 +145,12 @@ func TestRecentFillsAndPositionsConvertContracts(t *testing.T) {
 		case "/api/v5/public/instruments":
 			ok(w, `[{"instId":"BTC-USDT-SWAP","instType":"SWAP","baseCcy":"BTC","quoteCcy":"USDT","settleCcy":"USDT","tickSz":"0.1","lotSz":"1","minSz":"1","ctVal":"0.01","ctValCcy":"BTC","ctType":"linear","state":"live"}]`)
 		case "/api/v5/trade/fills-history":
-			ok(w, `[{"instId":"BTC-USDT-SWAP","tradeId":"7","ordId":"42","clOrdId":"cid","side":"sell","posSide":"net","fillSz":"3","fillPx":"100","fee":"-0.01","feeCcy":"USDT","fillPnl":"2","execType":"T","ts":"1700000000000"}]`)
+			if request.URL.Query().Get("instId") != "BTC-USDT-SWAP" ||
+				request.URL.Query().Get("before") != "99" ||
+				request.URL.Query().Has("after") {
+				t.Fatalf("query = %v", request.URL.Query())
+			}
+			ok(w, `[{"billId":"101","instId":"BTC-USDT-SWAP","tradeId":"7","ordId":"42","clOrdId":"cid","side":"sell","posSide":"net","fillSz":"3","fillPx":"100","fee":"-0.01","feeCcy":"USDT","fillPnl":"2","execType":"T","ts":"1700000000000"}]`)
 		case "/api/v5/account/positions":
 			ok(w, `[{"instId":"BTC-USDT-SWAP","posSide":"net","pos":"-4","avgPx":"100","markPx":"101","lever":"5","mgnMode":"cross","margin":"10","liqPx":"50","upl":"2","realizedPnl":"1","uTime":"1700000000000"}]`)
 		}
@@ -124,13 +160,15 @@ func TestRecentFillsAndPositionsConvertContracts(t *testing.T) {
 	if _, err := adapter.LoadInstruments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	fills, cursor, err := adapter.ListRecentFills(context.Background(), "")
+	fills, cursor, err := adapter.ListRecentFills(
+		context.Background(), "BTC-USDT-SWAP", "99",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(fills) != 1 || fills[0].Quantity.String() != "0.03" ||
 		fills[0].Fee.String() != "0.01" || fills[0].RealizedPnL.String() != "2" ||
-		cursor != "7" {
+		fills[0].LiquidityRole != "TAKER" || cursor != "101" {
 		t.Fatalf("fills=%+v cursor=%s", fills, cursor)
 	}
 	positions, err := adapter.ListPositionSnapshots(context.Background())
@@ -139,6 +177,23 @@ func TestRecentFillsAndPositionsConvertContracts(t *testing.T) {
 	}
 	if len(positions) != 1 || positions[0].SignedQuantity.String() != "-0.04" {
 		t.Fatalf("positions = %+v", positions)
+	}
+}
+
+func TestMutationWithMalformedSuccessResponseIsTransportUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"code":`)
+	}))
+	defer server.Close()
+	adapter := swapAdapter(server.URL)
+	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "cid", Symbol: "BTC-USDT-SWAP",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.01"),
+	})
+	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

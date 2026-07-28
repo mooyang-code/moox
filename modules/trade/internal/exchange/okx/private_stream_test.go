@@ -49,8 +49,37 @@ func TestDispatchPrivateConvertsSwapFill(t *testing.T) {
 		t.Fatalf("orders = %+v", handler.orders)
 	}
 	if len(handler.fills) != 1 || handler.fills[0].Quantity.String() != "0.02" ||
-		handler.fills[0].RealizedPnL.String() != "3" {
+		handler.fills[0].RealizedPnL.String() != "3" ||
+		handler.fills[0].LiquidityRole != "MAKER" {
 		t.Fatalf("fills = %+v", handler.fills)
+	}
+}
+
+func TestPrivateChannelsExcludeSpotPositions(t *testing.T) {
+	spot := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
+	channels := spot.privateChannels()
+	if len(channels) != 2 || channels[0]["channel"] != "orders" ||
+		channels[1]["channel"] != "account" {
+		t.Fatalf("SPOT channels = %+v", channels)
+	}
+	swap := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSwap}, exchange.Credential{})
+	channels = swap.privateChannels()
+	if len(channels) != 3 || channels[2]["channel"] != "positions" ||
+		channels[2]["instType"] != "SWAP" {
+		t.Fatalf("SWAP channels = %+v", channels)
+	}
+}
+
+func TestDispatchPrivateRejectsMalformedPositionDecimal(t *testing.T) {
+	adapter := swapAdapter("http://unused")
+	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	err := adapter.dispatchPrivate(context.Background(), []byte(`{
+		"arg":{"channel":"positions"},
+		"data":[{"instId":"BTC-USDT-SWAP","posSide":"net","pos":"1",
+			"avgPx":"not-a-number"}]
+	}`), &handler{})
+	if err == nil {
+		t.Fatal("malformed position decimal was accepted")
 	}
 }
 

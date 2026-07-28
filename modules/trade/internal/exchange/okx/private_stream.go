@@ -41,13 +41,12 @@ func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHa
 	if err := expectOKXAck(connection, "login"); err != nil {
 		return err
 	}
-	subscribe := map[string]any{"op": "subscribe", "args": []map[string]string{
-		{"channel": "orders", "instType": a.instrumentType()},
-		{"channel": "positions", "instType": a.instrumentType()},
-		{"channel": "account"},
-	}}
+	subscribe := map[string]any{"op": "subscribe", "args": a.privateChannels()}
 	if err := websocket.JSON.Send(connection, subscribe); err != nil {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	if err := expectOKXAck(connection, "subscribe"); err != nil {
+		return err
 	}
 
 	for {
@@ -72,6 +71,19 @@ func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHa
 			return err
 		}
 	}
+}
+
+func (a *Adapter) privateChannels() []map[string]string {
+	channels := []map[string]string{
+		{"channel": "orders", "instType": a.instrumentType()},
+		{"channel": "account"},
+	}
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		channels = append(channels, map[string]string{
+			"channel": "positions", "instType": "SWAP",
+		})
+	}
+	return channels
 }
 
 func expectOKXAck(connection *websocket.Conn, expected string) error {
@@ -176,13 +188,28 @@ func (a *Adapter) dispatchPrivate(
 				SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 				ExchangeUpdatedAt: millisString(row.UTime),
 			}
-			position.EntryPrice, _ = decimalOrZero(row.AvgPx)
-			position.MarkPrice, _ = decimalOrZero(row.MarkPx)
-			position.Leverage, _ = decimalOrZero(row.Lever)
-			position.UsedMargin, _ = decimalOrZero(row.Margin)
-			position.LiquidationPrice, _ = decimalOrZero(row.LiqPx)
-			position.UnrealizedPnL, _ = decimalOrZero(row.Upl)
-			position.RealizedPnL, _ = decimalOrZero(row.Realized)
+			position.EntryPrice, err = decimalOrZero(row.AvgPx)
+			if err == nil {
+				position.MarkPrice, err = decimalOrZero(row.MarkPx)
+			}
+			if err == nil {
+				position.Leverage, err = decimalOrZero(row.Lever)
+			}
+			if err == nil {
+				position.UsedMargin, err = decimalOrZero(row.Margin)
+			}
+			if err == nil {
+				position.LiquidationPrice, err = decimalOrZero(row.LiqPx)
+			}
+			if err == nil {
+				position.UnrealizedPnL, err = decimalOrZero(row.Upl)
+			}
+			if err == nil {
+				position.RealizedPnL, err = decimalOrZero(row.Realized)
+			}
+			if err != nil {
+				return err
+			}
 			if err := handler.OnPosition(ctx, position); err != nil {
 				return err
 			}
@@ -193,11 +220,32 @@ func (a *Adapter) dispatchPrivate(
 			return rejected("decode private account", err)
 		}
 		snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millisString(rows[0].UTime)}
-		snapshot.Equity, _ = decimalOrZero(rows[0].TotalEq)
+		equity, err := decimalOrZero(rows[0].TotalEq)
+		if err != nil {
+			return err
+		}
+		snapshot.Equity = equity
 		for _, detail := range rows[0].Details {
-			total, _ := decimalOrZero(detail.Eq)
-			available, _ := decimalOrZero(detail.AvailEq)
-			locked, _ := decimalOrZero(detail.FrozenBal)
+			totalRaw := detail.Eq
+			if totalRaw == "" {
+				totalRaw = detail.CashBal
+			}
+			total, err := decimalOrZero(totalRaw)
+			if err != nil {
+				return err
+			}
+			availableRaw := detail.AvailEq
+			if availableRaw == "" {
+				availableRaw = detail.AvailBal
+			}
+			available, err := decimalOrZero(availableRaw)
+			if err != nil {
+				return err
+			}
+			locked, err := decimalOrZero(detail.FrozenBal)
+			if err != nil {
+				return err
+			}
 			snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
 				Asset: detail.Ccy, Available: available, Locked: locked, Total: total,
 			})

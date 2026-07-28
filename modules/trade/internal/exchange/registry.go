@@ -73,6 +73,9 @@ func validateBinding(config AccountConfig, credential Credential) error {
 		if config.MarginMode != MarginModeCross {
 			return fmt.Errorf("exchange: SWAP account requires CROSS margin mode")
 		}
+		if !strings.EqualFold(strings.TrimSpace(config.SettlementAsset), "USDT") {
+			return fmt.Errorf("exchange: SWAP account requires USDT settlement")
+		}
 	}
 	if config.ExecutionMode == ExecutionModeLive &&
 		(strings.TrimSpace(credential.APIKey) == "" ||

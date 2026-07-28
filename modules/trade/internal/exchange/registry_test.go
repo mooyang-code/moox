@@ -25,7 +25,7 @@ func (*stubAdapter) ListPositionSnapshots(context.Context) ([]Position, error) {
 func (*stubAdapter) ListOpenOrders(context.Context) ([]Order, error) {
 	return nil, nil
 }
-func (*stubAdapter) ListRecentFills(context.Context, string) ([]Fill, string, error) {
+func (*stubAdapter) ListRecentFills(context.Context, string, string) ([]Fill, string, error) {
 	return nil, "", nil
 }
 func (*stubAdapter) GetOrder(_ context.Context, _ string, clientOrderID string) (Order, error) {
@@ -125,6 +125,17 @@ func TestRegistryRejectsInvalidBinding(t *testing.T) {
 				MarketType:        MarketTypeSpot,
 				ExecutionMode:     ExecutionModeLive,
 				SettlementAsset:   "USDT",
+			},
+		},
+		{
+			name: "non USDT SWAP settlement",
+			config: AccountConfig{
+				ExchangeAccountID: "account-1",
+				Exchange:          ExchangeOKX,
+				MarketType:        MarketTypeSwap,
+				ExecutionMode:     ExecutionModePaper,
+				SettlementAsset:   "USDC",
+				MarginMode:        MarginModeCross,
 			},
 		},
 	}
