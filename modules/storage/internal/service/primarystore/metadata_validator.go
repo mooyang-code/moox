@@ -131,10 +131,20 @@ func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUps
 		if column == nil {
 			return fmt.Errorf("field %q is not registered in dataset %q", field.GetFieldId(), key.GetDatasetId())
 		}
-		declared, actual := column.GetValueType(), typedValueType(field.GetValue())
+		declared := column.GetValueType()
 		if declared == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
 			return fmt.Errorf("field %q has no declared value type", field.GetFieldId())
 		}
+		if !validFieldValueType(declared) {
+			return fmt.Errorf("field %q has invalid declared value type %d", field.GetFieldId(), declared)
+		}
+		if nullValue, ok := field.GetValue().GetValue().(*pb.TypedValue_NullValue); ok {
+			if nullValue.NullValue != pb.NullValue_NULL_VALUE_NULL {
+				return fmt.Errorf("field %q has invalid null marker %s", field.GetFieldId(), nullValue.NullValue.String())
+			}
+			continue
+		}
+		actual := typedValueType(field.GetValue())
 		if actual == pb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED {
 			return fmt.Errorf("field %q has no value type", field.GetFieldId())
 		}
@@ -143,6 +153,21 @@ func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUps
 		}
 	}
 	return nil
+}
+
+func validFieldValueType(valueType pb.FieldValueType) bool {
+	switch valueType {
+	case pb.FieldValueType_FIELD_VALUE_TYPE_STRING,
+		pb.FieldValueType_FIELD_VALUE_TYPE_INT,
+		pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		pb.FieldValueType_FIELD_VALUE_TYPE_BOOL,
+		pb.FieldValueType_FIELD_VALUE_TYPE_TIME,
+		pb.FieldValueType_FIELD_VALUE_TYPE_JSON,
+		pb.FieldValueType_FIELD_VALUE_TYPE_BYTES:
+		return true
+	default:
+		return false
+	}
 }
 
 func typedValueType(value *pb.TypedValue) pb.FieldValueType {

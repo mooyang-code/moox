@@ -51,6 +51,51 @@ func TestMetadataValidatorReadsAllDatasetColumnPages(t *testing.T) {
 	}
 }
 
+func TestMetadataValidatorAcceptsExplicitNullForRegisteredDoubleColumn(t *testing.T) {
+	validator := NewMetadataValidator(&pagedMetadataReader{columns: []*pb.DatasetColumn{{
+		ColumnName: "value", OriginId: "value",
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
+	}}})
+	err := validator.ValidateRow(context.Background(), validatorRow("value", pb.NullValue_NULL_VALUE_NULL))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMetadataValidatorRejectsExplicitNullForUnknownColumn(t *testing.T) {
+	validator := NewMetadataValidator(&pagedMetadataReader{})
+	err := validator.ValidateRow(context.Background(), validatorRow("unknown", pb.NullValue_NULL_VALUE_NULL))
+	if err == nil {
+		t.Fatal("unknown null field was accepted")
+	}
+}
+
+func TestMetadataValidatorRejectsUnspecifiedNull(t *testing.T) {
+	validator := NewMetadataValidator(&pagedMetadataReader{columns: []*pb.DatasetColumn{{
+		ColumnName: "value", OriginId: "value",
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active",
+	}}})
+	err := validator.ValidateRow(context.Background(), validatorRow("value", pb.NullValue_NULL_VALUE_UNSPECIFIED))
+	if err == nil {
+		t.Fatal("unspecified null marker was accepted")
+	}
+}
+
+func validatorRow(fieldID string, nullValue pb.NullValue) *pb.RowFieldUpsert {
+	return &pb.RowFieldUpsert{
+		Key: &pb.RowKey{
+			SpaceId: "s", DatasetId: "d",
+			Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}},
+		},
+		Fields: []*pb.FieldValue{{
+			FieldId: fieldID,
+			Value: &pb.TypedValue{Value: &pb.TypedValue_NullValue{
+				NullValue: nullValue,
+			}},
+		}},
+	}
+}
+
 type snapshotOnlyMetadataReader struct {
 	snapshot metadata.RequestSnapshot
 }

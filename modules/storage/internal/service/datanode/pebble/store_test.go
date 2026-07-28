@@ -127,6 +127,41 @@ func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.
 	}
 }
 
+func TestUpsertFieldsExplicitNullReplacesStoredValue(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key := &pb.RowKey{
+		SpaceId: "s", DatasetId: "d",
+		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+			SubjectId: "x", Freq: "1m", DataTime: "2026-07-19T10:00:00Z",
+		}},
+	}
+	write := func(value *pb.TypedValue) {
+		t.Helper()
+		if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{
+			Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: value}},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(&pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}})
+	write(&pb.TypedValue{Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL}})
+
+	rows, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || len(rows[0].GetFields()) != 1 {
+		t.Fatalf("rows=%v", rows)
+	}
+	if got := rows[0].GetFields()[0].GetValue().GetNullValue(); got != pb.NullValue_NULL_VALUE_NULL {
+		t.Fatalf("null marker = %s; rows=%v", got, rows)
+	}
+}
+
 func TestHostMetricDimensionsKeepSameTimestampEntitiesDistinct(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
 	if err != nil {

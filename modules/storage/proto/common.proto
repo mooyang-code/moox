@@ -69,7 +69,7 @@ message TypedValue {
 // NullValue 是字段级显式空值标记，与未提供 FieldValue 区分。
 enum NullValue {
   NULL_VALUE_UNSPECIFIED = 0;
-  NULL_VALUE = 1;
+  NULL_VALUE_NULL = 1;
 }
 
 // SortSpec 表示排序条件。

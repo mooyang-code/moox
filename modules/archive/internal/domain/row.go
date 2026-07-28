@@ -106,7 +106,7 @@ func ScalarFromField(fieldID string, typed *storagepb.TypedValue) (Scalar, error
 	var s Scalar
 	switch value := typed.GetValue().(type) {
 	case *storagepb.TypedValue_NullValue:
-		if value.NullValue != storagepb.NullValue_NULL_VALUE {
+		if value.NullValue != storagepb.NullValue_NULL_VALUE_NULL {
 			return Scalar{}, fmt.Errorf("unspecified null value for %s", fieldID)
 		}
 		s.Null = true
