@@ -36,8 +36,7 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "moox_system" || cfg.Metrics.HostStorage.Frequency != "1m" {
 		t.Fatalf("host storage defaults = %+v", cfg.Metrics.HostStorage)
 	}
-	if !cfg.Observability.Enabled || cfg.Observability.Stream != ObservabilityStream ||
-		cfg.Observability.Consumer != ObservabilityConsumer || cfg.Observability.FilterSubject != ObservabilityFilter {
+	if !cfg.Observability.Enabled || len(cfg.Observability.EventBusURLs) == 0 {
 		t.Fatalf("observability defaults = %+v", cfg.Observability)
 	}
 }
@@ -154,12 +153,14 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if !strings.Contains(text, "credential_file: ~/.config/moox/eventbus/monitor-observability.yaml") ||
-		!strings.Contains(text, "consumer: monitor_observability_ingest_v1") ||
-		!strings.Contains(text, "filter_subject: moox.observability.>") {
-		t.Fatal("monitor app config must declare the unified observability consumer")
+	if !strings.Contains(text, "credential_file: ~/.config/moox/eventbus/monitor-observability.yaml") {
+		t.Fatal("monitor app config must declare the observability credential")
 	}
-	for _, retired := range []string{"eventbus_credential_file", "host_eventbus_credential_file", "monitor_metrics_ingest_v1", "monitor_hostmetrics_ingest_v1"} {
+	for _, retired := range []string{
+		"eventbus_credential_file", "host_eventbus_credential_file",
+		"monitor_metrics_ingest_v1", "monitor_hostmetrics_ingest_v1",
+		"stream:", "consumer:", "filter_subject:",
+	} {
 		if strings.Contains(text, retired) {
 			t.Fatalf("monitor app config contains retired field %q", retired)
 		}
@@ -171,14 +172,6 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 	}
 }
 
-func TestMonitorConfigRejectsObservabilityTopologyOverride(t *testing.T) {
-	cfg := Default()
-	cfg.Observability.Consumer = "another-consumer"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() accepted a second observability durable")
-	}
-}
-
 func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
 	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
@@ -186,6 +179,9 @@ func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
 		"metrics:\n  eventbus_credential_file: old.yaml\n",
 		"metrics:\n  host_eventbus_credential_file: old.yaml\n",
 		"metrics:\n  eventbus_url: nats://old:4222\n",
+		"observability:\n  stream: MOOX_OBSERVABILITY\n",
+		"observability:\n  consumer: another-consumer\n",
+		"observability:\n  filter_subject: moox.observability.>\n",
 	} {
 		if _, err := Load(writeConfig(t, content)); err == nil {
 			t.Fatalf("Load() accepted retired config: %s", content)

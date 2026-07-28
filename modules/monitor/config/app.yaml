@@ -38,9 +38,6 @@ observability:
   eventbus_urls:
     - nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/monitor-observability.yaml
-  stream: MOOX_OBSERVABILITY
-  consumer: monitor_observability_ingest_v1
-  filter_subject: moox.observability.>
 
 market_canary:
   enabled: true

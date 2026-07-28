@@ -148,9 +148,6 @@ func startObservabilityConsumer(
 				continue
 			}
 			consumerCfg := observabilityconsumer.DefaultConfig()
-			consumerCfg.Stream = cfg.Observability.Stream
-			consumerCfg.Consumer = cfg.Observability.Consumer
-			consumerCfg.FilterSubject = cfg.Observability.FilterSubject
 			consumer, bindErr := observabilityconsumer.NewConsumer(ctx, js, registry, consumerCfg, routes)
 			if bindErr != nil {
 				_ = js.Close()

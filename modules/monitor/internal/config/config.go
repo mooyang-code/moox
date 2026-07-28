@@ -81,9 +81,6 @@ type ObservabilityConfig struct {
 	Enabled        bool     `yaml:"enabled"`
 	EventBusURLs   []string `yaml:"eventbus_urls"`
 	CredentialFile string   `yaml:"credential_file"`
-	Stream         string   `yaml:"stream"`
-	Consumer       string   `yaml:"consumer"`
-	FilterSubject  string   `yaml:"filter_subject"`
 }
 
 type MarketCanaryConfig struct {
@@ -100,12 +97,6 @@ type MarketCanarySubject struct {
 	Symbol    string `yaml:"symbol"`
 	Frequency string `yaml:"frequency"`
 }
-
-const (
-	ObservabilityStream   = "MOOX_OBSERVABILITY"
-	ObservabilityConsumer = "monitor_observability_ingest_v1"
-	ObservabilityFilter   = "moox.observability.>"
-)
 
 type MetricsStorageConfig struct {
 	GatewayTarget              string        `yaml:"gateway_target"`
@@ -186,7 +177,7 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, Stream: ObservabilityStream, Consumer: ObservabilityConsumer, FilterSubject: ObservabilityFilter},
+		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}},
 		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "binance_spot_kline", Symbol: "BTC-USDT", Frequency: "1m"}}},
 		Metrics:       MetricsConfig{Enabled: true, PipelineConfigPath: "../config/monitor-pipelines.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
@@ -237,15 +228,6 @@ func (c *Config) applyDefaults() {
 	observabilityDefaults := Default().Observability
 	if len(c.Observability.EventBusURLs) == 0 {
 		c.Observability.EventBusURLs = observabilityDefaults.EventBusURLs
-	}
-	if c.Observability.Stream == "" {
-		c.Observability.Stream = observabilityDefaults.Stream
-	}
-	if c.Observability.Consumer == "" {
-		c.Observability.Consumer = observabilityDefaults.Consumer
-	}
-	if c.Observability.FilterSubject == "" {
-		c.Observability.FilterSubject = observabilityDefaults.FilterSubject
 	}
 	canaryDefaults := Default().MarketCanary
 	if c.MarketCanary.Freshness == 0 {
@@ -382,11 +364,6 @@ func (c *Config) Validate() error {
 			if strings.TrimSpace(url) == "" {
 				return fmt.Errorf("observability.eventbus_urls must not contain empty values")
 			}
-		}
-		if c.Observability.Stream != ObservabilityStream ||
-			c.Observability.Consumer != ObservabilityConsumer ||
-			c.Observability.FilterSubject != ObservabilityFilter {
-			return fmt.Errorf("observability topology must be stream=%s consumer=%s filter_subject=%s", ObservabilityStream, ObservabilityConsumer, ObservabilityFilter)
 		}
 	}
 	if c.MarketCanary.Enabled {
