@@ -22,7 +22,7 @@ reject 'streamcalc|TickReceived|MarketKlineClosed|MOOX_MARKET' \
   "legacy market event pipeline remains" "${production[@]}" modules packages
 reject 'packages/dlqpb|PublishRejected|MOOX_DLQ|dlq\.message\.rejected' \
   "shared EventBus DLQ remains" "${production[@]}" modules packages
-reject 'TradeOrder|TradeExecution|TradeFill|TradeReconciliation|TradeRebalanceCompleted|TradingSignal|t_trade_outbox|withTradeDLQ' \
+reject 'TradeOrder|TradeExecution|TradeFill|TradeReconciliation|TradeRebalanceCompleted|TradeRebalanceRequested|RebalanceRequested|RebalanceTarget|trade\.rebalance\.requested|TradingSignal|t_trade_outbox|withTradeDLQ' \
   "Trade self-consumption contract remains" "${production[@]}" modules/trade modules/strategy packages/events packages/tradeeventpb
 reject 'events\.EventType|EventDefinition|EventSchema|AllEventTypes' \
   "legacy event registry API remains" "${production[@]}" modules packages

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -18,14 +19,14 @@ func TestBuiltInEvents(t *testing.T) {
 		"metrics.host.reported@1",
 		"metrics.snapshot.reported@1",
 		"storage.dataset.rows.upserted@1",
-		"trade.rebalance.requested@1",
+		"trade.target.requested@1",
 	}
 	wantOwners := map[string]string{
 		"cloudnode.job.execution.requested@1": "cloudnode",
 		"metrics.host.reported@1":             "hostagent",
 		"metrics.snapshot.reported@1":         "service",
 		"storage.dataset.rows.upserted@1":     "storage",
-		"trade.rebalance.requested@1":         "strategy",
+		"trade.target.requested@1":            "strategy",
 	}
 	events := registry.Events()
 	if len(events) != len(want) {
@@ -86,10 +87,39 @@ func TestDatasetRowsRoundTrip(t *testing.T) {
 
 func TestEncodeRejectsWrongPayload(t *testing.T) {
 	registry, _ := DefaultRegistry()
-	_, err := registry.Encode(DatasetRowsUpserted, TradeRebalanceRequested.NewPayload(), PublishOptions{
+	_, err := registry.Encode(DatasetRowsUpserted, TradeTargetRequested.NewPayload(), PublishOptions{
 		EventID: "event-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "dataset",
 	})
 	if err == nil {
 		t.Fatal("wrong payload was accepted")
+	}
+}
+
+func TestTradeTargetRequestedContract(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, ok := registry.Lookup("trade.target.requested", 1)
+	if !ok {
+		t.Fatal("trade target event is not registered")
+	}
+	if event.Name() != TradeTargetRequested.Name() ||
+		event.Stream() != "MOOX_TRADE" ||
+		event.Owner() != "strategy" {
+		t.Fatalf("unexpected trade target event: name=%q stream=%q owner=%q", event.Name(), event.Stream(), event.Owner())
+	}
+	if _, ok := event.NewPayload().(*tradeeventpb.TargetIntent); !ok {
+		t.Fatalf("payload type = %T, want *tradeeventpb.TargetIntent", event.NewPayload())
+	}
+	subject, err := registry.RenderSubject(event, "space", "binding-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject != "moox.trade.target.requested.v1.onygcy3f.mjuw4zdjnzts2mi" {
+		t.Fatalf("subject = %q", subject)
+	}
+	if _, exists := registry.Lookup("trade.rebalance.requested", 1); exists {
+		t.Fatal("legacy trade rebalance event remains registered")
 	}
 }

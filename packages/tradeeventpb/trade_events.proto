@@ -4,23 +4,19 @@ package trpc.moox.trade.event;
 
 option go_package = "github.com/mooyang-code/moox/packages/tradeeventpb;tradeeventpb";
 
-message RebalanceTarget {
+message TargetPosition {
   string instrument_id = 1;
   string symbol = 2;
-  string market_type = 3;
-  string target_weight = 4;
+  string target_quantity = 3;
 }
 
-message RebalanceRequested {
-  string request_id = 1;
+message TargetIntent {
+  string execution_id = 1;
   string strategy_run_id = 2;
   string execution_binding_id = 3;
-  string account_id = 4;
-  string channel_id = 5;
-  string mode = 6;
-  string data_revision = 7;
-  string capital_amount = 8;
-  string quote_asset = 9;
-  repeated RebalanceTarget targets = 10;
-  uint64 command_sequence = 11;
+  string exchange_account_id = 4;
+  string data_revision = 5;
+  uint64 command_sequence = 6;
+  int64 not_after_unix_ms = 7;
+  repeated TargetPosition targets = 8;
 }
