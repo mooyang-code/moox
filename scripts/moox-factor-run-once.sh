@@ -17,14 +17,19 @@ require_executable() {
   }
 }
 
+require_directory() {
+  [[ -d "$1" ]] || {
+    echo "missing required directory: $1" >&2
+    exit 1
+  }
+}
+
 require_file "${ROOT}/factor/config/app.yaml"
 require_executable "${ROOT}/bin/moox-factor-cli"
 require_executable "${ROOT}/data/factor/venv/bin/python"
 require_file "${ROOT}/factor/pyworker/worker.py"
-[[ -d "${ROOT}/factor/factors" ]] || {
-  echo "missing factor directory: ${ROOT}/factor/factors" >&2
-  exit 1
-}
+require_directory "${ROOT}/factor/factors"
+require_directory "${ROOT}/python-runtime"
 require_file "${ROOT}/secrets/gateway-factor.key"
 require_file "${ROOT}/secrets/gateway-service.env"
 require_file "${ROOT}/certs/gateway/peers.pem"
@@ -53,6 +58,7 @@ export MOOX_FACTOR_DB_PATH="${ROOT}/data/factor/factor.db"
 export MOOX_FACTOR_ENGINE_PYTHON_BIN="${ROOT}/data/factor/venv/bin/python"
 export MOOX_FACTOR_ENGINE_WORKER_PATH="${ROOT}/factor/pyworker/worker.py"
 export MOOX_FACTOR_ENGINE_FACTORS_DIR="${ROOT}/factor/factors"
+export MOOX_PYTHON_RUNTIME_PATH="${ROOT}/python-runtime"
 export MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET="ip://127.0.0.1:11003"
 export MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID="${gateway_node_id}"
 export MOOX_GATEWAY_SERVICE_KEY_ID="factor"

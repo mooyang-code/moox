@@ -96,8 +96,10 @@ mkdir -p \
   "${tmp_factor}/factor/config" \
   "${tmp_factor}/factor/pyworker" \
   "${tmp_factor}/factor/factors" \
+  "${tmp_factor}/python-runtime" \
   "${tmp_factor}/secrets" \
   "${tmp_factor}/certs/gateway"
+cp -R "${ROOT}/packages/pyruntime/python/." "${tmp_factor}/python-runtime/"
 cp "${ROOT}/scripts/moox-factor-run-once.sh" "${tmp_factor}/bin/moox-factor-run-once"
 chmod +x "${tmp_factor}/bin/moox-factor-run-once"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${tmp_factor}/data/factor/venv/bin/python"
@@ -110,6 +112,7 @@ printf 'test-ca\n' >"${tmp_factor}/certs/gateway/peers.pem"
 cat >"${tmp_factor}/bin/moox-factor-cli" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+python3 -c 'import os, sys; sys.path.insert(0, os.environ["MOOX_PYTHON_RUNTIME_PATH"]); import moox_pyruntime'
 env | sort >"${tmp_factor}/captured.env"
 printf '%s\\n' "\$@" >"${tmp_factor}/captured.argv"
 EOF
@@ -127,6 +130,7 @@ grep -Fxq "MOOX_FACTOR_DB_PATH=${tmp_factor}/data/factor/factor.db" "${tmp_facto
 grep -Fxq "MOOX_FACTOR_ENGINE_PYTHON_BIN=${tmp_factor}/data/factor/venv/bin/python" "${tmp_factor}/captured.env"
 grep -Fxq "MOOX_FACTOR_ENGINE_WORKER_PATH=${tmp_factor}/factor/pyworker/worker.py" "${tmp_factor}/captured.env"
 grep -Fxq "MOOX_FACTOR_ENGINE_FACTORS_DIR=${tmp_factor}/factor/factors" "${tmp_factor}/captured.env"
+grep -Fxq "MOOX_PYTHON_RUNTIME_PATH=${tmp_factor}/python-runtime" "${tmp_factor}/captured.env"
 grep -Fxq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=ip://127.0.0.1:11003' "${tmp_factor}/captured.env"
 grep -Fxq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=test-node' "${tmp_factor}/captured.env"
 grep -Fxq 'MOOX_GATEWAY_SERVICE_KEY_ID=factor' "${tmp_factor}/captured.env"
@@ -151,6 +155,15 @@ BTC-USDT
 2026-07-28T00:01:00Z
 EOF
 cmp "${tmp_factor}/expected.argv" "${tmp_factor}/captured.argv"
+mv "${tmp_factor}/python-runtime" "${tmp_factor}/python-runtime.missing"
+if env -i HOME="${HOME}" PATH="${PATH}" "${tmp_factor}/bin/moox-factor-run-once" \
+  --space crypto --dataset prices --subject BTC-USDT --freq 1m \
+  --start-time 2026-07-28T00:00:00Z --end-time 2026-07-28T00:01:00Z \
+  >/dev/null 2>&1; then
+  echo "factor wrapper accepted a missing Python runtime directory" >&2
+  exit 1
+fi
+mv "${tmp_factor}/python-runtime.missing" "${tmp_factor}/python-runtime"
 printf 'line-one\nline-two\n' >"${tmp_factor}/secrets/gateway-factor.key"
 if env -i HOME="${HOME}" PATH="${PATH}" "${tmp_factor}/bin/moox-factor-run-once" \
   --space crypto --dataset prices --subject BTC-USDT --freq 1m \
