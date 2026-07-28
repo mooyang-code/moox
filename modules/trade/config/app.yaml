@@ -25,6 +25,7 @@ control_gateway:
 sync:
   enabled: true
   sync_balances: true
+  space_ids: [crypto]
   sync_positions: true
   sync_orders: true
   sync_trades: true

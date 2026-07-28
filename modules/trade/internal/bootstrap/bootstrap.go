@@ -90,6 +90,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		},
 	})
 	svc := service.New("trade", service.WithStore(store), service.WithExchangeFactory(exchange.New), service.WithExchangeSecretSource(secretSource))
+	if appCfg.Sync.Enabled && appCfg.Sync.SyncBalances {
+		if err := registerBalanceSyncTimer(s, svc, appCfg.Sync.SpaceIDs); err != nil {
+			return nil, err
+		}
+	}
 
 	// 4. 注册 9 个 tRPC service
 	rpc.RegisterAll(s, svc, kernel)
