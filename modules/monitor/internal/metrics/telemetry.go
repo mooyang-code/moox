@@ -18,24 +18,26 @@ func init() {
 	prometheus.MustRegister(ingestTotal, ingestLastSuccess, ingestLatency, consumerPending)
 }
 
-func recordIngest(result string, observed time.Time) {
+func recordIngest(moduleMetrics *report.ModuleMetrics, result string, observed time.Time) {
 	now := time.Now().UTC()
 	ingestTotal.WithLabelValues(result).Inc()
-	_ = report.ObserveModuleRun("monitor", "ingest", result, "monitor-metrics", now)
-	if !observed.IsZero() {
-		_ = report.ObserveModuleInputWatermark("monitor", "ingest", "monitor-metrics", observed)
+	if moduleMetrics != nil {
+		_ = moduleMetrics.ObserveRun("ingest", result, "monitor-metrics", now)
+	}
+	if moduleMetrics != nil && !observed.IsZero() {
+		_ = moduleMetrics.AdvanceInputWatermark("ingest", "monitor-metrics", observed)
 	}
 	if result == "success" {
 		ingestLastSuccess.Set(float64(now.Unix()))
 		if !observed.IsZero() && !observed.After(now) {
 			ingestLatency.Observe(now.Sub(observed).Seconds())
 		}
-		if !observed.IsZero() {
-			_ = report.ObserveModuleWatermark("monitor", "ingest", "monitor-metrics", observed)
+		if moduleMetrics != nil && !observed.IsZero() {
+			_ = moduleMetrics.AdvanceWatermark("ingest", "monitor-metrics", observed)
 		}
 	}
 }
 
-func RecordIngest(result string, observed time.Time) {
-	recordIngest(result, observed)
+func RecordIngest(moduleMetrics *report.ModuleMetrics, result string, observed time.Time) {
+	recordIngest(moduleMetrics, result, observed)
 }

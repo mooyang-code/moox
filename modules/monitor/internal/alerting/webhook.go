@@ -1,57 +1,55 @@
 package alerting
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/msgbox"
 )
 
 type WebhookNotifier struct {
-	Client  *http.Client
-	Timeout time.Duration
+	NewSender func(string) (msgbox.Sender, error)
 }
 
 func (n WebhookNotifier) Send(ctx context.Context, webhook domain.WebhookChannel, event Event) error {
-	method := webhook.Method
-	if method == "" {
-		method = http.MethodPost
-	}
-	body := renderTemplate(webhook.BodyTemplate, event)
-	req, err := http.NewRequestWithContext(ctx, method, webhook.URL, bytes.NewBufferString(body))
-	if err != nil {
-		return err
-	}
-	for k, v := range parseHeaders(webhook.Headers) {
-		req.Header.Set(k, v)
-	}
-	if req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	client := n.Client
-	if client == nil {
-		timeout := n.Timeout
-		if timeout <= 0 {
-			timeout = 10 * time.Second
+	factory := n.NewSender
+	if factory == nil {
+		factory = func(url string) (msgbox.Sender, error) {
+			return msgbox.NewWeComSender(url)
 		}
-		client = &http.Client{Timeout: timeout}
 	}
-	resp, err := client.Do(req)
+	sender, err := factory(webhook.URL)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("webhook returned HTTP %d", resp.StatusCode)
+	severity := msgbox.SeverityCritical
+	if event.EventType == domain.AlertEventResolved {
+		severity = msgbox.SeverityInfo
 	}
-	return nil
+	return sender.Send(ctx, msgbox.Message{
+		Key: event.DedupeKey, Severity: severity,
+		Title: firstText(event.Check.Name, event.Check.CheckID, "MooX alert"),
+		Body:  firstText(event.Message, event.Result.ErrorMessage, event.Status),
+		Labels: map[string]string{
+			"check_id": event.Check.CheckID, "event_type": event.EventType,
+			"status": event.Status, "instance_id": event.Result.InstanceID,
+		},
+	})
+}
+
+func firstText(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func renderTemplate(tpl string, event Event) string {

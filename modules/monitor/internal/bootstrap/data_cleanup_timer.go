@@ -14,12 +14,20 @@ import (
 
 const monitorDataCleanupTimerService = "trpc.moox.monitor.data_cleanup.timer"
 
+const (
+	monitorMetricEvaluationRetention = 14 * 24 * time.Hour
+	monitorCleanupBatchSize          = 500
+	monitorCleanupMaxBatches         = 10
+)
+
 type monitorDataCleanupOps struct {
-	retention     time.Duration
-	now           func() time.Time
-	deleteResults func(context.Context, time.Time) error
-	deleteAlerts  func(context.Context, time.Time) error
-	pruneDedupe   func(context.Context, time.Time) error
+	retention               time.Duration
+	evaluationRetention     time.Duration
+	now                     func() time.Time
+	deleteResults           func(context.Context, time.Time) error
+	deleteAlerts            func(context.Context, time.Time) error
+	deleteMetricEvaluations func(context.Context, time.Time, int) (int64, error)
+	pruneDedupe             func(context.Context, time.Time) error
 }
 
 func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error {
@@ -39,6 +47,19 @@ func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error
 			errs = append(errs, fmt.Errorf("delete monitor alert events: %w", err))
 		}
 	}
+	if ops.deleteMetricEvaluations != nil && ops.evaluationRetention > 0 {
+		evaluationCutoff := now.Add(-ops.evaluationRetention)
+		for batch := 0; batch < monitorCleanupMaxBatches; batch++ {
+			deleted, err := ops.deleteMetricEvaluations(ctx, evaluationCutoff, monitorCleanupBatchSize)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("delete monitor metric rule evaluations: %w", err))
+				break
+			}
+			if deleted < monitorCleanupBatchSize {
+				break
+			}
+		}
+	}
 	if ops.pruneDedupe != nil {
 		if err := ops.pruneDedupe(ctx, now); err != nil {
 			errs = append(errs, fmt.Errorf("prune metric message dedupe: %w", err))
@@ -55,7 +76,10 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	if service == nil {
 		return fmt.Errorf("monitor data cleanup timer service %q is not configured", monitorDataCleanupTimerService)
 	}
-	ops := monitorDataCleanupOps{now: func() time.Time { return time.Now().UTC() }}
+	ops := monitorDataCleanupOps{
+		now:                 func() time.Time { return time.Now().UTC() },
+		evaluationRetention: monitorMetricEvaluationRetention,
+	}
 	if cfg != nil {
 		ops.retention = time.Duration(cfg.Scheduler.ResultRetentionDays) * 24 * time.Hour
 	}
@@ -74,6 +98,9 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 			_, err := runtime.MetricStores.Messages.PruneDedupe(ctx, now)
 			return err
 		}
+	}
+	if runtime != nil && runtime.MetricStores != nil && runtime.MetricStores.Rules != nil {
+		ops.deleteMetricEvaluations = runtime.MetricStores.Rules.DeleteEvaluationsOlderThan
 	}
 	job, err := timerjob.New("monitor_data_cleanup", 2*time.Minute, func(ctx context.Context) error {
 		return runMonitorDataCleanup(ctx, ops)

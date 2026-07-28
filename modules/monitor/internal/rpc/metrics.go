@@ -162,7 +162,7 @@ func (s *Service) CreateMetricRule(ctx context.Context, req *monitorpb.CreateMet
 	if rule.GetRuleId() == "" {
 		rule.RuleId = newID("metric-rule")
 	}
-	if err := s.metricRules.CreateRule(ctx, rule, s.webhookEnabled); err != nil {
+	if err := s.metricRules.CreateRule(ctx, rule); err != nil {
 		return &monitorpb.CreateMetricRuleRsp{RetInfo: invalid(err)}, nil
 	}
 	return &monitorpb.CreateMetricRuleRsp{RetInfo: success(), Rule: rule}, nil
@@ -177,7 +177,7 @@ func (s *Service) UpdateMetricRule(ctx context.Context, req *monitorpb.UpdateMet
 	if err := monmetrics.ValidateMetricSpace(req.GetRule().GetSpaceId()); err != nil {
 		return &monitorpb.UpdateMetricRuleRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := s.metricRules.UpdateRule(ctx, req.GetRule(), s.webhookEnabled); err != nil {
+	if err := s.metricRules.UpdateRule(ctx, req.GetRule()); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &monitorpb.UpdateMetricRuleRsp{RetInfo: notFound("metric rule not found")}, nil
 		}
@@ -255,13 +255,6 @@ func (s *Service) GetMetricRuleState(ctx context.Context, req *monitorpb.GetMetr
 	return &monitorpb.GetMetricRuleStateRsp{RetInfo: success(), State: stateToPB(*row)}, nil
 }
 
-func (s *Service) webhookEnabled(ctx context.Context, spaceID, id string) (bool, error) {
-	found, err := s.alerts.GetWebhook(ctx, spaceID, id)
-	if err != nil {
-		return false, err
-	}
-	return found.Enabled, nil
-}
 func metricPage(page *commonpb.Page) (int, int) {
 	if page == nil {
 		return 0, 50

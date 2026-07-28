@@ -352,6 +352,67 @@ message ListResultsRsp { common.RetInfo ret_info = 1; repeated CheckResult resul
 message GetOverviewReq { string space_id = 1; }
 message GetOverviewRsp { common.RetInfo ret_info = 1; Overview overview = 2; }
 
+// Observability overview is a bounded operational projection. It keeps service,
+// host, SCF, dataset, and business-check state in one response without exposing
+// the underlying metric catalog.
+message ServiceObservabilityStatus {
+  string node_id = 1;
+  string service_name = 2;
+  string instance_id = 3;
+  string status = 4;
+  string reason = 5;
+  string last_seen_at = 6;
+}
+message HostObservabilityStatus {
+  string agent_id = 1;
+  string hostname = 2;
+  string status = 3;
+  string reason = 4;
+  string last_seen_at = 5;
+  double cpu_percent = 6;
+  double memory_percent = 7;
+  double filesystem_max_percent = 8;
+}
+message ScfObservabilitySummary {
+  int32 online_count = 1;
+  int32 timeout_count = 2;
+  int32 unknown_count = 3;
+  string oldest_heartbeat_at = 4;
+}
+message DatasetFrequencyStatus {
+  string producer = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  string freq = 4;
+  string status = 5;
+  string reason = 6;
+  string last_run_at = 7;
+  string last_success_at = 8;
+  string input_watermark_at = 9;
+  string output_watermark_at = 10;
+  int64 lag_seconds = 11;
+}
+message BusinessObservabilityStatus {
+  string kind = 1;
+  string module = 2;
+  string status = 3;
+  string reason = 4;
+  string last_checked_at = 5;
+}
+message ObservabilityOverview {
+  string generated_at = 1;
+  repeated ServiceObservabilityStatus services = 2;
+  repeated HostObservabilityStatus hosts = 3;
+  ScfObservabilitySummary scf = 4;
+  repeated DatasetFrequencyStatus datasets = 5;
+  repeated BusinessObservabilityStatus business_checks = 6;
+}
+message GetObservabilityOverviewReq { string space_id = 1; }
+message GetObservabilityOverviewRsp {
+  common.RetInfo ret_info = 1;
+  ObservabilityOverview overview = 2;
+}
+
 message ListWebhookChannelsReq { string space_id = 1; }
 message ListWebhookChannelsRsp { common.RetInfo ret_info = 1; repeated WebhookChannel channels = 2; }
 message CreateWebhookChannelReq { WebhookChannel channel = 1; }
@@ -471,6 +532,7 @@ service MonitorMgr {
   rpc RunCheckOnce(RunCheckOnceReq) returns (RunCheckOnceRsp);
   rpc ListResults(ListResultsReq) returns (ListResultsRsp);
   rpc GetOverview(GetOverviewReq) returns (GetOverviewRsp);
+  rpc GetObservabilityOverview(GetObservabilityOverviewReq) returns (GetObservabilityOverviewRsp);
   rpc ListWebhookChannels(ListWebhookChannelsReq) returns (ListWebhookChannelsRsp);
   rpc CreateWebhookChannel(CreateWebhookChannelReq) returns (CreateWebhookChannelRsp);
   rpc UpdateWebhookChannel(UpdateWebhookChannelReq) returns (UpdateWebhookChannelRsp);

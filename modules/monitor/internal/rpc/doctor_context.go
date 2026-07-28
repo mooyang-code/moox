@@ -64,7 +64,11 @@ func contextToPB(value monitordoctor.Context) *monitorpb.GetDoctorContextRsp {
 		rsp.Watermarks = append(rsp.Watermarks, &monitorpb.DoctorWatermark{Module: item.Module, Stage: item.Stage, Pipeline: item.Pipeline, ObservedAt: formatDoctorTime(item.ObservedAt), Value: item.Value, Status: item.Status})
 	}
 	for _, host := range value.Hosts {
-		rsp.HostResources = append(rsp.HostResources, &monitorpb.HostAgentInfo{AgentId: host.AgentID, Hostname: host.Hostname, BootId: host.BootID, LastSeenAt: host.LastSeenAt, Archived: host.Archived, Snapshot: host.Snapshot})
+		rsp.HostResources = append(rsp.HostResources, &monitorpb.HostAgentInfo{
+			AgentId: host.AgentID, Hostname: host.Hostname, BootId: host.BootID,
+			LastSeenAt: host.LastSeenAt, Archived: host.Archived, Snapshot: host.Snapshot,
+			Reachable: host.Reachable, StaleSeconds: host.StaleSeconds,
+		})
 		for _, forecast := range value.Forecasts[host.AgentID] {
 			rsp.DiskForecasts = append(rsp.DiskForecasts, &monitorpb.DoctorDiskForecast{NodeId: host.Hostname, AgentId: host.AgentID, Mountpoint: forecast.Mountpoint, Status: forecast.Status, GrowthBytesPerDay: forecast.GrowthBytesPerDay, RemainingDays: forecast.RemainingDays, ValidIntervals: uint32(forecast.ValidIntervals), Summary: forecast.Summary})
 		}

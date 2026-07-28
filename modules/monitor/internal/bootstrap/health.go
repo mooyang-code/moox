@@ -80,10 +80,10 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 		if runtime != nil && runtime.metricsReporterErrorMessage() != "" {
 			rsp.Details["metrics_reporter_error"] = runtime.metricsReporterErrorMessage()
 		}
-		ingestReady := !cfg.Metrics.Enabled || (runtime != nil && runtime.MetricsIngestReady.Load())
-		rsp.Details["metrics_ingest_ready"] = ingestReady
-		if runtime != nil && runtime.metricsIngestErrorMessage() != "" {
-			rsp.Details["metrics_ingest_error"] = runtime.metricsIngestErrorMessage()
+		ingestReady := !cfg.Observability.Enabled || (runtime != nil && runtime.ObservabilityIngestReady.Load())
+		rsp.Details["observability_ingest_ready"] = ingestReady
+		if runtime != nil && runtime.observabilityIngestErrorMessage() != "" {
+			rsp.Details["observability_ingest_error"] = runtime.observabilityIngestErrorMessage()
 		}
 		ready = databaseReady && schedulerReady && metricsReady && ingestReady && reporterReady
 		rsp.Ready = ready

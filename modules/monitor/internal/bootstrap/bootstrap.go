@@ -3,6 +3,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
@@ -45,6 +46,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
+	if err := registerExternalSentinelChecks(ctx, runtime.Repositories); err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("register external sentinel checks: %w", err)
+	}
+	runtime.ObservabilityHealthRoute = externalHealthRoute(
+		runtime.Repositories,
+		alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{Notifier: alerting.WebhookNotifier{}}),
+	)
 	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	if err != nil {
 		_ = runtime.Close()
@@ -142,7 +151,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore, Pipelines: pipelines,
 	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator, doctorContext)
-	registerMetricsReporter(s, runtime)
+	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
 		return nil, err
@@ -155,9 +164,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	startHostMetricsConsumer(runtimeCtx, cfg, runtime, hostStore)
 	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
-	startMetricsConsumer(runtimeCtx, cfg, runtime, metricsStorage)
+	startObservabilityConsumer(runtimeCtx, cfg, runtime, metricsStorage, hostStore)
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done

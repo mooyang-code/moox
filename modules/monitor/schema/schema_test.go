@@ -66,6 +66,11 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 				t.Fatalf("single-instance schema must not create %s.c_owner_instance_id", table)
 			}
 		}
+		for _, table := range []string{"t_monitor_checks", "t_monitor_webhooks", "t_monitor_alert_rules", "t_monitor_metric_rules"} {
+			if db.Migrator().HasColumn(table, "c_is_deleted") {
+				t.Fatalf("greenfield hard-delete schema must not create %s.c_is_deleted", table)
+			}
+		}
 		return struct{}{}
 	})
 	if err != nil {

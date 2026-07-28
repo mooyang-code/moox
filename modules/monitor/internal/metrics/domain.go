@@ -73,7 +73,6 @@ type MetricRuleRow struct {
 	DefinitionJSON            string    `gorm:"column:c_definition_json"`
 	EvaluationIntervalSeconds int       `gorm:"column:c_evaluation_interval_seconds"`
 	Enabled                   bool      `gorm:"column:c_enabled"`
-	IsDeleted                 bool      `gorm:"column:c_is_deleted"`
 	CreatedAt                 time.Time `gorm:"column:c_ctime"`
 	UpdatedAt                 time.Time `gorm:"column:c_mtime"`
 }

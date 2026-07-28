@@ -3,8 +3,8 @@ package domain
 import "time"
 
 const (
-	CheckKindHTTP = "http"
-	CheckKindTCP  = "tcp"
+	CheckKindHTTP     = "http"
+	CheckKindTCP      = "tcp"
 	CheckKindExternal = "external"
 
 	CheckSourceManual    = "manual"
@@ -35,7 +35,6 @@ type Check struct {
 	Description     string     `gorm:"column:c_description"`
 	LastCheckedAt   *time.Time `gorm:"column:c_last_checked_at"`
 	NextCheckAt     *time.Time `gorm:"column:c_next_check_at"`
-	IsDeleted       bool       `gorm:"column:c_is_deleted"`
 	CreatedAt       time.Time  `gorm:"column:c_ctime"`
 	UpdatedAt       time.Time  `gorm:"column:c_mtime"`
 }

@@ -33,14 +33,29 @@ sysdeploy:
 alert:
   send_timeout_seconds: 10
 
+observability:
+  enabled: true
+  eventbus_urls:
+    - nats://127.0.0.1:4222
+  credential_file: ~/.config/moox/eventbus/monitor-observability.yaml
+  stream: MOOX_OBSERVABILITY
+  consumer: monitor_observability_ingest_v1
+  filter_subject: moox.observability.>
+
+market_canary:
+  enabled: true
+  freshness: 3m
+  return_threshold: 0.05
+  volume_ratio_threshold: 5
+  subjects:
+    - space_id: crypto
+      dataset_id: binance_spot_kline
+      symbol: BTC-USDT
+      frequency: 1m
+
 metrics:
   enabled: true
-  eventbus_url: nats://127.0.0.1:4222
-  eventbus_credential_file: ~/.config/moox/eventbus/monitor-metrics-consumer.yaml
-  host_eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml
   pipeline_config_path: ../config/monitor-pipelines.yaml
-  fetch_batch_size: 64
-  fetch_max_wait: 1s
   no_data_intervals: 2
   storage:
     gateway_target: ip://127.0.0.1:11003

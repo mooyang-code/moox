@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -21,34 +23,36 @@ import (
 )
 
 type Options struct {
-	InstanceID       string
-	Runner           probe.Runner
-	OnResult         func(context.Context, domain.Check, domain.CheckResult)
-	SyncSystem       func(context.Context) (int, error)
-	MetricsQuery     *monmetrics.QueryService
-	MetricRules      *monmetrics.MetricRuleStore
-	MetricEvaluator  *monmetrics.MetricEvaluator
-	HostStore        *hostmetrics.Store
-	HostReader       *hostmetrics.StorageReader
-	HostStorageReady func() bool
-	DoctorContext    *monitordoctor.Builder
+	InstanceID            string
+	Runner                probe.Runner
+	OnResult              func(context.Context, domain.Check, domain.CheckResult)
+	SyncSystem            func(context.Context) (int, error)
+	MetricsQuery          *monmetrics.QueryService
+	MetricRules           *monmetrics.MetricRuleStore
+	MetricEvaluator       *monmetrics.MetricEvaluator
+	HostStore             *hostmetrics.Store
+	HostReader            *hostmetrics.StorageReader
+	HostStorageReady      func() bool
+	DoctorContext         *monitordoctor.Builder
+	ObservabilityOverview *monitorobservability.Builder
 }
 
 type Service struct {
-	checks           *store.CheckRepository
-	results          *store.ResultRepository
-	alerts           *store.AlertRepository
-	runner           probe.Runner
-	onResult         func(context.Context, domain.Check, domain.CheckResult)
-	syncSystem       func(context.Context) (int, error)
-	metricsQuery     *monmetrics.QueryService
-	metricRules      *monmetrics.MetricRuleStore
-	metricEvaluator  *monmetrics.MetricEvaluator
-	hostStore        *hostmetrics.Store
-	hostReader       *hostmetrics.StorageReader
-	hostStorageReady func() bool
-	doctorContext    *monitordoctor.Builder
-	instance         string
+	checks                *store.CheckRepository
+	results               *store.ResultRepository
+	alerts                *store.AlertRepository
+	runner                probe.Runner
+	onResult              func(context.Context, domain.Check, domain.CheckResult)
+	syncSystem            func(context.Context) (int, error)
+	metricsQuery          *monmetrics.QueryService
+	metricRules           *monmetrics.MetricRuleStore
+	metricEvaluator       *monmetrics.MetricEvaluator
+	hostStore             *hostmetrics.Store
+	hostReader            *hostmetrics.StorageReader
+	hostStorageReady      func() bool
+	doctorContext         *monitordoctor.Builder
+	observabilityOverview *monitorobservability.Builder
+	instance              string
 }
 
 func New(repos *store.Repositories, opts Options) *Service {
@@ -64,20 +68,21 @@ func New(repos *store.Repositories, opts Options) *Service {
 		repos = store.NewRepositories(nil)
 	}
 	return &Service{
-		checks:           repos.Checks,
-		results:          repos.Results,
-		alerts:           repos.Alerts,
-		runner:           runner,
-		onResult:         opts.OnResult,
-		syncSystem:       opts.SyncSystem,
-		metricsQuery:     opts.MetricsQuery,
-		metricRules:      opts.MetricRules,
-		metricEvaluator:  opts.MetricEvaluator,
-		hostStore:        opts.HostStore,
-		hostReader:       opts.HostReader,
-		hostStorageReady: opts.HostStorageReady,
-		doctorContext:    opts.DoctorContext,
-		instance:         instance,
+		checks:                repos.Checks,
+		results:               repos.Results,
+		alerts:                repos.Alerts,
+		runner:                runner,
+		onResult:              opts.OnResult,
+		syncSystem:            opts.SyncSystem,
+		metricsQuery:          opts.MetricsQuery,
+		metricRules:           opts.MetricRules,
+		metricEvaluator:       opts.MetricEvaluator,
+		hostStore:             opts.HostStore,
+		hostReader:            opts.HostReader,
+		hostStorageReady:      opts.HostStorageReady,
+		doctorContext:         opts.DoctorContext,
+		observabilityOverview: opts.ObservabilityOverview,
+		instance:              instance,
 	}
 }
 
@@ -153,6 +158,12 @@ func (s *Service) DeleteCheck(ctx context.Context, req *monitorpb.DeleteCheckReq
 		return &monitorpb.DeleteCheckRsp{RetInfo: invalid(fmt.Errorf("check_id is required"))}, nil
 	}
 	if err := s.checks.Delete(ctx, req.GetSpaceId(), req.GetCheckId()); err != nil {
+		if errors.Is(err, store.ErrResourceReferenced) {
+			return &monitorpb.DeleteCheckRsp{RetInfo: invalid(err)}, nil
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &monitorpb.DeleteCheckRsp{RetInfo: notFound("check not found")}, nil
+		}
 		return &monitorpb.DeleteCheckRsp{RetInfo: inner(err)}, nil
 	}
 	return &monitorpb.DeleteCheckRsp{RetInfo: success()}, nil
@@ -193,7 +204,8 @@ func (s *Service) ListResults(ctx context.Context, req *monitorpb.ListResultsReq
 }
 
 func (s *Service) GetOverview(ctx context.Context, req *monitorpb.GetOverviewReq) (*monitorpb.GetOverviewRsp, error) {
-	checks, err := s.checks.List(ctx, store.ListChecksOptions{SpaceID: req.GetSpaceId(), Page: store.Page{PageSize: 500}})
+	enabled := true
+	checks, err := s.checks.List(ctx, store.ListChecksOptions{SpaceID: req.GetSpaceId(), Enabled: &enabled, Page: store.Page{PageSize: 500}})
 	if err != nil {
 		return &monitorpb.GetOverviewRsp{RetInfo: inner(err)}, nil
 	}
@@ -290,6 +302,12 @@ func (s *Service) DeleteWebhookChannel(ctx context.Context, req *monitorpb.Delet
 		return &monitorpb.DeleteWebhookChannelRsp{RetInfo: invalid(fmt.Errorf("webhook_id is required"))}, nil
 	}
 	if err := s.alerts.DeleteWebhook(ctx, req.GetSpaceId(), req.GetWebhookId()); err != nil {
+		if errors.Is(err, store.ErrResourceReferenced) {
+			return &monitorpb.DeleteWebhookChannelRsp{RetInfo: invalid(err)}, nil
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &monitorpb.DeleteWebhookChannelRsp{RetInfo: notFound("webhook not found")}, nil
+		}
 		return &monitorpb.DeleteWebhookChannelRsp{RetInfo: inner(err)}, nil
 	}
 	return &monitorpb.DeleteWebhookChannelRsp{RetInfo: success()}, nil
@@ -301,6 +319,9 @@ func (s *Service) CreateAlertRule(ctx context.Context, req *monitorpb.CreateAler
 		return &monitorpb.CreateAlertRuleRsp{RetInfo: invalid(err)}, nil
 	}
 	if err := s.alerts.CreateRule(ctx, rule); err != nil {
+		if errors.Is(err, store.ErrInvalidReference) {
+			return &monitorpb.CreateAlertRuleRsp{RetInfo: invalid(err)}, nil
+		}
 		return &monitorpb.CreateAlertRuleRsp{RetInfo: inner(err)}, nil
 	}
 	return &monitorpb.CreateAlertRuleRsp{RetInfo: success(), Rule: ruleToPB(*rule)}, nil
@@ -312,6 +333,12 @@ func (s *Service) UpdateAlertRule(ctx context.Context, req *monitorpb.UpdateAler
 		return &monitorpb.UpdateAlertRuleRsp{RetInfo: invalid(err)}, nil
 	}
 	if err := s.alerts.UpdateRule(ctx, rule); err != nil {
+		if errors.Is(err, store.ErrInvalidReference) {
+			return &monitorpb.UpdateAlertRuleRsp{RetInfo: invalid(err)}, nil
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &monitorpb.UpdateAlertRuleRsp{RetInfo: notFound("alert rule not found")}, nil
+		}
 		return &monitorpb.UpdateAlertRuleRsp{RetInfo: inner(err)}, nil
 	}
 	return &monitorpb.UpdateAlertRuleRsp{RetInfo: success(), Rule: req.GetRule()}, nil
@@ -354,6 +381,9 @@ func (s *Service) DeleteAlertRule(ctx context.Context, req *monitorpb.DeleteAler
 		}
 	}
 	if err := s.alerts.DeleteRule(ctx, spaceID, req.GetRuleId()); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &monitorpb.DeleteAlertRuleRsp{RetInfo: notFound("alert rule not found")}, nil
+		}
 		return &monitorpb.DeleteAlertRuleRsp{RetInfo: inner(err)}, nil
 	}
 	return &monitorpb.DeleteAlertRuleRsp{RetInfo: success()}, nil

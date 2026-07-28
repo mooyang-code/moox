@@ -22,21 +22,15 @@ var (
 // no expression parser: a rule is only a bounded list of conditions and one
 // connector.
 func ValidateMetricRule(rule *monitorpb.MetricRule) error {
-	return validateMetricRule(rule, nil, false)
+	return validateMetricRule(rule, false)
 }
 
 // ValidateMetricRuleForPreview keeps structural validation while allowing an
 // unsaved rule without a rule ID or webhook bindings.
 func ValidateMetricRuleForPreview(rule *monitorpb.MetricRule) error {
-	return validateMetricRule(rule, nil, true)
+	return validateMetricRule(rule, true)
 }
-func ValidateMetricRuleWithWebhooks(rule *monitorpb.MetricRule, enabled func(context.Context, string, string) (bool, error), ctx context.Context) error {
-	if enabled == nil {
-		return ValidateMetricRule(rule)
-	}
-	return validateMetricRule(rule, func(id string) (bool, error) { return enabled(ctx, rule.GetSpaceId(), id) }, false)
-}
-func validateMetricRule(rule *monitorpb.MetricRule, webhook func(string) (bool, error), preview bool) error {
+func validateMetricRule(rule *monitorpb.MetricRule, preview bool) error {
 	if rule == nil {
 		return errors.New("rule is required")
 	}
@@ -74,15 +68,6 @@ func validateMetricRule(rule *monitorpb.MetricRule, webhook func(string) (bool, 
 			return fmt.Errorf("duplicate webhook_id %q", id)
 		}
 		seenWebhook[id] = struct{}{}
-		if webhook != nil {
-			ok, err := webhook(id)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return fmt.Errorf("webhook %q is missing or disabled", id)
-			}
-		}
 	}
 	seen := map[string]struct{}{}
 	for i, condition := range rule.GetConditions() {
@@ -174,11 +159,11 @@ type MetricRuleStore struct{ db *gorm.DB }
 
 func NewMetricRuleStore(db *gorm.DB) *MetricRuleStore { return &MetricRuleStore{db: db} }
 
-func (r *MetricRuleStore) CreateRule(ctx context.Context, rule *monitorpb.MetricRule, enabled func(context.Context, string, string) (bool, error)) error {
+func (r *MetricRuleStore) CreateRule(ctx context.Context, rule *monitorpb.MetricRule) error {
 	if r == nil || r.db == nil {
 		return ErrMetricsStoreUnavailable
 	}
-	if err := ValidateMetricRuleWithWebhooks(rule, enabled, ctx); err != nil {
+	if err := ValidateMetricRule(rule); err != nil {
 		return err
 	}
 	definition, err := marshalMetricRule(rule)
@@ -187,6 +172,9 @@ func (r *MetricRuleStore) CreateRule(ctx context.Context, rule *monitorpb.Metric
 	}
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := validateMetricRuleWebhooks(tx, rule); err != nil {
+			return err
+		}
 		row := &MetricRuleRow{SpaceID: rule.GetSpaceId(), RuleID: rule.GetRuleId(), Name: rule.GetName(), DefinitionJSON: definition, EvaluationIntervalSeconds: int(rule.GetEvaluationIntervalSeconds()), Enabled: rule.GetEnabled(), CreatedAt: now, UpdatedAt: now}
 		if err := tx.Create(row).Error; err != nil {
 			return err
@@ -194,11 +182,11 @@ func (r *MetricRuleStore) CreateRule(ctx context.Context, rule *monitorpb.Metric
 		return r.replaceChannels(tx, rule)
 	})
 }
-func (r *MetricRuleStore) UpdateRule(ctx context.Context, rule *monitorpb.MetricRule, enabled func(context.Context, string, string) (bool, error)) error {
+func (r *MetricRuleStore) UpdateRule(ctx context.Context, rule *monitorpb.MetricRule) error {
 	if r == nil || r.db == nil {
 		return ErrMetricsStoreUnavailable
 	}
-	if err := ValidateMetricRuleWithWebhooks(rule, enabled, ctx); err != nil {
+	if err := ValidateMetricRule(rule); err != nil {
 		return err
 	}
 	definition, err := marshalMetricRule(rule)
@@ -206,7 +194,10 @@ func (r *MetricRuleStore) UpdateRule(ctx context.Context, rule *monitorpb.Metric
 		return err
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&MetricRuleRow{}).Where("c_space_id = ? AND c_rule_id = ? AND c_is_deleted = 0", rule.GetSpaceId(), rule.GetRuleId()).Updates(map[string]any{"c_name": rule.GetName(), "c_definition_json": definition, "c_evaluation_interval_seconds": rule.GetEvaluationIntervalSeconds(), "c_enabled": rule.GetEnabled(), "c_mtime": time.Now().UTC()})
+		if err := validateMetricRuleWebhooks(tx, rule); err != nil {
+			return err
+		}
+		res := tx.Model(&MetricRuleRow{}).Where("c_space_id = ? AND c_rule_id = ?", rule.GetSpaceId(), rule.GetRuleId()).Updates(map[string]any{"c_name": rule.GetName(), "c_definition_json": definition, "c_evaluation_interval_seconds": rule.GetEvaluationIntervalSeconds(), "c_enabled": rule.GetEnabled(), "c_mtime": time.Now().UTC()})
 		if res.Error != nil {
 			return res.Error
 		}
@@ -215,6 +206,21 @@ func (r *MetricRuleStore) UpdateRule(ctx context.Context, rule *monitorpb.Metric
 		}
 		return r.replaceChannels(tx, rule)
 	})
+}
+
+func validateMetricRuleWebhooks(tx *gorm.DB, rule *monitorpb.MetricRule) error {
+	for _, webhookID := range rule.GetWebhookIds() {
+		var count int64
+		if err := tx.Table("t_monitor_webhooks").
+			Where("c_space_id = ? AND c_webhook_id = ? AND c_enabled = 1", rule.GetSpaceId(), webhookID).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("webhook %q is missing or disabled", webhookID)
+		}
+	}
+	return nil
 }
 func (r *MetricRuleStore) replaceChannels(tx *gorm.DB, rule *monitorpb.MetricRule) error {
 	if err := tx.Where("c_space_id = ? AND c_rule_id = ?", rule.GetSpaceId(), rule.GetRuleId()).Delete(&MetricRuleChannelRow{}).Error; err != nil {
@@ -229,7 +235,7 @@ func (r *MetricRuleStore) replaceChannels(tx *gorm.DB, rule *monitorpb.MetricRul
 }
 func (r *MetricRuleStore) GetRule(ctx context.Context, spaceID, ruleID string) (*monitorpb.MetricRule, error) {
 	var row MetricRuleRow
-	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_rule_id = ? AND c_is_deleted = 0", spaceID, ruleID).First(&row).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_rule_id = ?", spaceID, ruleID).First(&row).Error; err != nil {
 		return nil, err
 	}
 	rule, err := unmarshalMetricRule(row.DefinitionJSON)
@@ -242,7 +248,7 @@ func (r *MetricRuleStore) GetRule(ctx context.Context, spaceID, ruleID string) (
 }
 func (r *MetricRuleStore) ListRules(ctx context.Context, spaceID string, enabledOnly bool, offset, limit int) ([]*monitorpb.MetricRule, int64, error) {
 	offset, limit = boundedPage(offset, limit)
-	q := r.db.WithContext(ctx).Model(&MetricRuleRow{}).Where("c_is_deleted = 0")
+	q := r.db.WithContext(ctx).Model(&MetricRuleRow{})
 	if spaceID != "" {
 		q = q.Where("c_space_id = ?", spaceID)
 	}
@@ -270,14 +276,18 @@ func (r *MetricRuleStore) ListRules(ctx context.Context, spaceID string, enabled
 	return out, total, nil
 }
 func (r *MetricRuleStore) DeleteRule(ctx context.Context, spaceID, ruleID string) error {
-	res := r.db.WithContext(ctx).Model(&MetricRuleRow{}).Where("c_space_id = ? AND c_rule_id = ? AND c_is_deleted = 0", spaceID, ruleID).Update("c_is_deleted", true)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var rule MetricRuleRow
+		if err := tx.Where("c_space_id = ? AND c_rule_id = ?", spaceID, ruleID).First(&rule).Error; err != nil {
+			return err
+		}
+		for _, model := range []any{&MetricRuleStateRow{}, &MetricRuleChannelRow{}, &MetricRuleEvaluationRow{}} {
+			if err := tx.Where("c_space_id = ? AND c_rule_id = ?", spaceID, ruleID).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Delete(&rule).Error
+	})
 }
 func (r *MetricRuleStore) ListEnabled(ctx context.Context, spaceID string) ([]*monitorpb.MetricRule, error) {
 	rows, _, err := r.ListRules(ctx, spaceID, true, 0, 500)
@@ -307,4 +317,26 @@ func (r *MetricRuleStore) ListEvaluations(ctx context.Context, spaceID, ruleID s
 		return nil, 0, err
 	}
 	return rows, total, nil
+}
+
+func (r *MetricRuleStore) DeleteEvaluationsOlderThan(ctx context.Context, cutoff time.Time, batchSize int) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, ErrMetricsStoreUnavailable
+	}
+	if batchSize <= 0 || batchSize > 500 {
+		batchSize = 500
+	}
+	var ids []uint64
+	if err := r.db.WithContext(ctx).Model(&MetricRuleEvaluationRow{}).
+		Where("c_evaluated_at < ?", cutoff).
+		Order("c_evaluated_at ASC, c_id ASC").
+		Limit(batchSize).
+		Pluck("c_id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	deleted := r.db.WithContext(ctx).Where("c_id IN ?", ids).Delete(&MetricRuleEvaluationRow{})
+	return deleted.RowsAffected, deleted.Error
 }

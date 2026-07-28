@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,14 +11,21 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/msgbox"
 )
+
+type recordingSender struct{ messages []msgbox.Message }
+
+func (s *recordingSender) Send(_ context.Context, message msgbox.Message) error {
+	s.messages = append(s.messages, message)
+	return nil
+}
 
 func TestAlertEvaluatorThresholdReminderAndResolve(t *testing.T) {
 	ctx := context.Background()
 	mgr := openAlertDB(t)
-	alerts := mgr.Repositories().Alerts
 	check := testCheck()
-	createAlertFixture(t, alerts, domain.AlertRule{
+	createAlertFixture(t, mgr.Repositories(), domain.AlertRule{
 		SpaceID:                        "space-a",
 		RuleID:                         "rule-a",
 		CheckID:                        "check-a",
@@ -87,7 +92,7 @@ func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	mgr := openAlertDB(t)
 	alerts := mgr.Repositories().Alerts
 	check := testCheck()
-	createAlertFixture(t, alerts, domain.AlertRule{
+	createAlertFixture(t, mgr.Repositories(), domain.AlertRule{
 		SpaceID:          "space-a",
 		RuleID:           "rule-a",
 		CheckID:          "check-a",
@@ -102,8 +107,8 @@ func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	evaluator := NewEvaluator(mgr.Repositories().Alerts, Options{
 		Notifier: notifier,
 	})
-	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
-		t.Fatalf("trigger: %v", err)
+	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err == nil {
+		t.Fatal("notification failure was swallowed")
 	}
 	events, err := alerts.ListEvents(ctx, "space-a", 10)
 	if err != nil {
@@ -114,10 +119,13 @@ func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	}
 
 	notifier.fail = false
+	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
+		t.Fatalf("retry trigger: %v", err)
+	}
 	if err := evaluator.Evaluate(ctx, check, okResult(check)); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if notifier.Count() != 1 {
+	if notifier.Count() != 2 {
 		t.Fatalf("resolved should not send; notifier count = %d", notifier.Count())
 	}
 	events, _ = alerts.ListEvents(ctx, "space-a", 10)
@@ -126,33 +134,20 @@ func TestAlertEvaluatorSendOnResolvedFalseAndSendFailure(t *testing.T) {
 	}
 }
 
-func TestAlertEvaluatorRecordsLocalEventWithoutWebhook(t *testing.T) {
+func TestAlertRuleRejectsMissingWebhook(t *testing.T) {
 	ctx := context.Background()
 	mgr := openAlertDB(t)
 	alerts := mgr.Repositories().Alerts
 	check := testCheck()
+	check.Enabled = true
+	if err := mgr.Repositories().Checks.Create(ctx, &check); err != nil {
+		t.Fatalf("create check: %v", err)
+	}
 	if err := alerts.CreateRule(ctx, &domain.AlertRule{
 		SpaceID: "space-a", RuleID: "local-rule", CheckID: check.CheckID,
 		FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
-	}); err != nil {
-		t.Fatalf("create local rule: %v", err)
-	}
-
-	notifier := &recordingNotifier{}
-	evaluator := NewEvaluator(alerts, Options{Notifier: notifier})
-	if err := evaluator.Evaluate(ctx, check, failedResult(check)); err != nil {
-		t.Fatalf("evaluate local alert: %v", err)
-	}
-	if notifier.Count() != 0 {
-		t.Fatalf("local alert unexpectedly sent webhook count=%d", notifier.Count())
-	}
-	events, err := alerts.ListEvents(ctx, "space-a", 10)
-	if err != nil || len(events) != 1 || events[0].EventType != domain.AlertEventTriggered {
-		t.Fatalf("local events = %+v, err=%v", events, err)
-	}
-	state, err := alerts.GetState(ctx, "space-a", "local-rule", check.CheckID)
-	if err != nil || state.Status != domain.AlertStatusFiring {
-		t.Fatalf("local state = %+v, err=%v", state, err)
+	}); err == nil {
+		t.Fatal("alert rule without an enabled webhook was accepted")
 	}
 }
 
@@ -161,7 +156,7 @@ func TestAlertEvaluatorDoesNotDelegateToPeerOwner(t *testing.T) {
 	mgr := openAlertDB(t)
 	alerts := mgr.Repositories().Alerts
 	check := testCheck()
-	createAlertFixture(t, alerts, domain.AlertRule{
+	createAlertFixture(t, mgr.Repositories(), domain.AlertRule{
 		SpaceID: "space-a", RuleID: "single-instance", CheckID: check.CheckID,
 		WebhookID: "webhook-a", FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
 	})
@@ -224,10 +219,22 @@ func (n *recordingNotifier) Events() []string {
 	return append([]string(nil), n.events...)
 }
 
-func createAlertFixture(t *testing.T, alerts *store.AlertRepository, rule domain.AlertRule) {
+func createAlertFixture(t *testing.T, repos *store.Repositories, rule domain.AlertRule) {
 	t.Helper()
 	ctx := context.Background()
-	if err := alerts.CreateWebhook(ctx, &domain.WebhookChannel{
+	check := testCheck()
+	check.Enabled = true
+	check.IntervalSeconds = 30
+	check.TimeoutMS = 1000
+	check.Method = "GET"
+	check.Headers = "{}"
+	check.ExpectedStatus = "200-299"
+	check.Source = domain.CheckSourceManual
+	check.Labels = "{}"
+	if err := repos.Checks.Create(ctx, &check); err != nil {
+		t.Fatalf("create check: %v", err)
+	}
+	if err := repos.Alerts.CreateWebhook(ctx, &domain.WebhookChannel{
 		SpaceID:      "space-a",
 		WebhookID:    "webhook-a",
 		Name:         "Ops",
@@ -239,7 +246,7 @@ func createAlertFixture(t *testing.T, alerts *store.AlertRepository, rule domain
 	}); err != nil {
 		t.Fatalf("create webhook: %v", err)
 	}
-	if err := alerts.CreateRule(ctx, &rule); err != nil {
+	if err := repos.Alerts.CreateRule(ctx, &rule); err != nil {
 		t.Fatalf("create rule: %v", err)
 	}
 }
@@ -298,17 +305,17 @@ func TestJsonStringValueEscapesQuotes(t *testing.T) {
 	}
 }
 
-func TestWebhookNotifierSendUsesDefaultClient(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-	notifier := WebhookNotifier{}
-	err := notifier.Send(context.Background(), domain.WebhookChannel{URL: server.URL}, Event{
+func TestWebhookNotifierRoutesThroughMsgboxSender(t *testing.T) {
+	sender := &recordingSender{}
+	notifier := WebhookNotifier{NewSender: func(string) (msgbox.Sender, error) { return sender, nil }}
+	err := notifier.Send(context.Background(), domain.WebhookChannel{URL: "https://example.invalid"}, Event{
 		Check: testCheck(), Status: domain.AlertStatusFiring, EventType: domain.AlertEventTriggered,
 		Result: failedResult(testCheck()),
 	})
 	if err != nil {
 		t.Fatalf("Send returned %v", err)
+	}
+	if len(sender.messages) != 1 || sender.messages[0].Severity != msgbox.SeverityCritical {
+		t.Fatalf("messages = %#v", sender.messages)
 	}
 }

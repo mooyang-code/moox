@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
@@ -29,6 +30,10 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		SyncSystem: syncSystem, MetricsQuery: metricsQuery, MetricRules: metricRules, MetricEvaluator: metricEvaluator,
 		HostStore: hostStore, HostReader: hostReader, HostStorageReady: hostReady,
 		DoctorContext: doctorContext,
+		ObservabilityOverview: &monitorobservability.Builder{
+			Metrics: metricsQuery, Hosts: hostStore,
+			Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+		},
 	}))
 }
 

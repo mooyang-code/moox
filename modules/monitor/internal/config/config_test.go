@@ -36,6 +36,10 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "moox_system" || cfg.Metrics.HostStorage.Frequency != "1m" {
 		t.Fatalf("host storage defaults = %+v", cfg.Metrics.HostStorage)
 	}
+	if !cfg.Observability.Enabled || cfg.Observability.Stream != ObservabilityStream ||
+		cfg.Observability.Consumer != ObservabilityConsumer || cfg.Observability.FilterSubject != ObservabilityFilter {
+		t.Fatalf("observability defaults = %+v", cfg.Observability)
+	}
 }
 
 func TestMonitorConfigTRPCPort(t *testing.T) {
@@ -54,7 +58,7 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("parse trpc config: %v", err)
 	}
-	if len(cfg.Server.Service) != 7 {
+	if len(cfg.Server.Service) != 8 {
 		t.Fatalf("service count = %d", len(cfg.Server.Service))
 	}
 	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 {
@@ -88,15 +92,15 @@ instance:
 	}
 }
 
-func TestMonitorConfigKeepsExplicitEmptyEventBusCredentials(t *testing.T) {
+func TestMonitorConfigKeepsExplicitEmptyObservabilityCredential(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
 	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
-	cfg, err := Load(writeConfig(t, "metrics:\n  eventbus_credential_file: \"\"\n  host_eventbus_credential_file: \"\"\n"))
+	cfg, err := Load(writeConfig(t, "observability:\n  credential_file: \"\"\n"))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Metrics.EventBusCredentialFile != "" || cfg.Metrics.HostEventBusCredentialFile != "" {
-		t.Fatalf("explicit empty eventbus credentials were replaced: %q, %q", cfg.Metrics.EventBusCredentialFile, cfg.Metrics.HostEventBusCredentialFile)
+	if cfg.Observability.CredentialFile != "" {
+		t.Fatalf("explicit empty observability credential was replaced: %q", cfg.Observability.CredentialFile)
 	}
 }
 
@@ -150,15 +154,41 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if !strings.Contains(text, "eventbus_credential_file: ~/.config/moox/eventbus/monitor-metrics-consumer.yaml") || !strings.Contains(text, "host_eventbus_credential_file: ~/.config/moox/eventbus/monitor-eventbus.yaml") {
-		t.Fatal("monitor app config must keep separate hostmetrics and metrics credentials")
+	if !strings.Contains(text, "credential_file: ~/.config/moox/eventbus/monitor-observability.yaml") ||
+		!strings.Contains(text, "consumer: monitor_observability_ingest_v1") ||
+		!strings.Contains(text, "filter_subject: moox.observability.>") {
+		t.Fatal("monitor app config must declare the unified observability consumer")
 	}
-	if strings.Contains(text, "~/.config/moox/monitor/eventbus.yaml") {
-		t.Fatal("monitor app config contains the retired shared credential path")
+	for _, retired := range []string{"eventbus_credential_file", "host_eventbus_credential_file", "monitor_metrics_ingest_v1", "monitor_hostmetrics_ingest_v1"} {
+		if strings.Contains(text, retired) {
+			t.Fatalf("monitor app config contains retired field %q", retired)
+		}
 	}
 	for _, oldKey := range []string{"reload_interval_seconds", "pull_interval_seconds"} {
 		if strings.Contains(text, oldKey) {
 			t.Fatalf("app config still contains %q", oldKey)
+		}
+	}
+}
+
+func TestMonitorConfigRejectsObservabilityTopologyOverride(t *testing.T) {
+	cfg := Default()
+	cfg.Observability.Consumer = "another-consumer"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted a second observability durable")
+	}
+}
+
+func TestMonitorConfigRejectsLegacyEventBusFields(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	for _, content := range []string{
+		"metrics:\n  eventbus_credential_file: old.yaml\n",
+		"metrics:\n  host_eventbus_credential_file: old.yaml\n",
+		"metrics:\n  eventbus_url: nats://old:4222\n",
+	} {
+		if _, err := Load(writeConfig(t, content)); err == nil {
+			t.Fatalf("Load() accepted retired config: %s", content)
 		}
 	}
 }

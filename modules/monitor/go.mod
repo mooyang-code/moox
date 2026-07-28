@@ -15,6 +15,8 @@ require (
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/msgbox v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
@@ -40,7 +42,10 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
+	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -130,6 +135,16 @@ replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gate
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+
+replace github.com/mooyang-code/moox/packages/msgbox => ../../packages/msgbox
+
+replace github.com/mooyang-code/moox/packages/observabilitypb => ../../packages/observabilitypb
+
+replace github.com/mooyang-code/moox/packages/cloudjobpb => ../../packages/cloudjobpb
+
+replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
+
+replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
 
 replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
