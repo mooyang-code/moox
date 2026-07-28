@@ -120,6 +120,9 @@ func validateTradeTargetRequested(message *eventpb.EventMessage, value proto.Mes
 	if payload.GetNotAfterUnixMs() <= 0 || payload.GetNotAfterUnixMs() <= time.Now().UnixMilli() {
 		return fmt.Errorf("trade target not_after_unix_ms is expired")
 	}
+	if len(payload.GetTargets()) == 0 {
+		return fmt.Errorf("trade target positions are empty")
+	}
 	seenSymbols := make(map[string]struct{}, len(payload.GetTargets()))
 	for i, target := range payload.GetTargets() {
 		if target == nil {

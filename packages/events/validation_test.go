@@ -135,6 +135,7 @@ func TestTradeTargetRequestedRejectsInvalidPayload(t *testing.T) {
 		{name: "expired", mutate: func(value *tradeeventpb.TargetIntent) {
 			value.NotAfterUnixMs = time.Now().Add(-time.Minute).UnixMilli()
 		}},
+		{name: "empty targets", mutate: func(value *tradeeventpb.TargetIntent) { value.Targets = nil }},
 		{name: "duplicate symbol", mutate: func(value *tradeeventpb.TargetIntent) {
 			value.Targets = append(value.Targets, &tradeeventpb.TargetPosition{
 				InstrumentId: "BTC-USDT-SWAP", Symbol: value.Targets[0].GetSymbol(), TargetQuantity: "2",
