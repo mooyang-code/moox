@@ -21,6 +21,8 @@ var declarationPattern = regexp.MustCompile(`(?i)^\s*(?:(?:export|declare)\s+)*(
 var sourceIdentifierPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 var thirdPartyProviderFieldPattern = regexp.MustCompile(`^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:\s*(.+?)\s*[;,]?\s*$`)
 var structTagEntryPattern = regexp.MustCompile(`([A-Za-z0-9_-]+):"([^"]*)"`)
+var yamlMappingPattern = regexp.MustCompile(`^\s*(?:-\s*)?([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$`)
+var markdownHeadingPattern = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
 var defaultRoots = []string{
 	"modules/trade",
 	"packages/tradeeventpb",
@@ -132,8 +134,12 @@ func (c *checker) scanRoot(root string) error {
 		switch filepath.Ext(path) {
 		case ".go":
 			return c.scanGo(path)
-		case ".proto", ".ts", ".tsx", ".yaml", ".yml", ".md":
+		case ".proto", ".ts", ".tsx":
 			return c.scanText(path)
+		case ".yaml", ".yml":
+			return c.scanYAML(path)
+		case ".md":
+			return c.scanMarkdown(path)
 		default:
 			return nil
 		}
@@ -173,9 +179,20 @@ func (c *checker) scanGoDeclaration(path string, declaration ast.Decl, context [
 				c.scanGoType(path, spec, context)
 			case *ast.ValueSpec:
 				c.scanGoValueSpec(path, spec, context, nil)
+			case *ast.ImportSpec:
+				c.scanGoImportSpec(path, spec, context)
 			}
 		}
 	}
+}
+
+func (c *checker) scanGoImportSpec(path string, spec *ast.ImportSpec, context []string) {
+	var tokens []string
+	if spec.Name != nil {
+		tokens = append(tokens, sourceTokens(spec.Name.Name)...)
+	}
+	tokens = append(tokens, goNodeTokens(spec.Path)...)
+	c.addTokens(path, c.fset.Position(spec.Pos()).Line, context, tokens)
 }
 
 func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec, context []string, scope *providerScope) {
@@ -338,6 +355,43 @@ func (v *goBodyVisitor) Visit(node ast.Node) ast.Visitor {
 			v.checker.scanGoExpression(v.path, result, v.context, v.scope)
 		}
 		return v
+	case *ast.GoStmt:
+		v.checker.scanGoExpression(v.path, value.Call, v.context, v.scope)
+		return v
+	case *ast.DeferStmt:
+		v.checker.scanGoExpression(v.path, value.Call, v.context, v.scope)
+		return v
+	case *ast.SendStmt:
+		v.checker.scanGoExpressionGroup(
+			v.path,
+			value.Pos(),
+			v.context,
+			v.scope,
+			value.Chan,
+			value.Value,
+		)
+		return v
+	case *ast.IncDecStmt:
+		v.checker.scanGoExpression(v.path, value.X, v.context, v.scope)
+		return v
+	case *ast.BranchStmt:
+		if value.Label != nil {
+			v.checker.addTokens(
+				v.path,
+				v.checker.fset.Position(value.Label.Pos()).Line,
+				v.context,
+				sourceTokens(value.Label.Name),
+			)
+		}
+		return v
+	case *ast.LabeledStmt:
+		v.checker.addTokens(
+			v.path,
+			v.checker.fset.Position(value.Label.Pos()).Line,
+			v.context,
+			sourceTokens(value.Label.Name),
+		)
+		return v
 	case *ast.RangeStmt:
 		rangeVisitor := v.withScope(newProviderScope(v.scope))
 		v.checker.scanGoRange(v.path, value, v.context, rangeVisitor.scope)
@@ -375,6 +429,9 @@ func (v *goBodyVisitor) Visit(node ast.Node) ast.Visitor {
 		walkGoNode(switchVisitor, value.Body)
 		return nil
 	case *ast.CaseClause:
+		for _, expression := range value.List {
+			v.checker.scanGoExpression(v.path, expression, v.context, v.scope)
+		}
 		return v.withScope(newProviderScope(v.scope))
 	case *ast.CommClause:
 		return v.withScope(newProviderScope(v.scope))
@@ -414,6 +471,20 @@ func (c *checker) scanGoExpression(
 		context,
 		goNodeTokensInScope(expression, scope),
 	)
+}
+
+func (c *checker) scanGoExpressionGroup(
+	path string,
+	position token.Pos,
+	context []string,
+	scope *providerScope,
+	expressions ...ast.Expr,
+) {
+	var tokens []string
+	for _, expression := range expressions {
+		tokens = append(tokens, goNodeTokensInScope(expression, scope)...)
+	}
+	c.addTokens(path, c.fset.Position(position).Line, context, tokens)
 }
 
 func (c *checker) scanGoRange(
@@ -880,6 +951,116 @@ func (c *checker) scanText(path string) error {
 	return nil
 }
 
+type indentedDomainContext struct {
+	indent  int
+	domains []string
+}
+
+func (c *checker) scanYAML(path string) error {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var contexts []indentedDomainContext
+	for index, line := range strings.Split(string(contents), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		indent := leadingTextIndent(line)
+		for len(contexts) > 0 && contexts[len(contexts)-1].indent >= indent {
+			contexts = contexts[:len(contexts)-1]
+		}
+
+		var domains []string
+		if len(contexts) > 0 {
+			domains = contexts[len(contexts)-1].domains
+		}
+		c.addTextAllowingThirdPartyTypes(
+			path,
+			index+1,
+			strings.Join(domains, " ")+" "+line,
+		)
+
+		match := yamlMappingPattern.FindStringSubmatch(line)
+		if len(match) != 3 {
+			continue
+		}
+		value := strings.TrimSpace(match[2])
+		if value != "" && !strings.HasPrefix(value, "#") {
+			continue
+		}
+		contexts = append(contexts, indentedDomainContext{
+			indent:  indent,
+			domains: extendDomainContext(domains, sourceTokens(match[1])),
+		})
+	}
+	return nil
+}
+
+func leadingTextIndent(line string) int {
+	indent := 0
+	for _, character := range line {
+		switch character {
+		case ' ':
+			indent++
+		case '\t':
+			indent += 2
+		default:
+			return indent
+		}
+	}
+	return indent
+}
+
+type markdownDomainContext struct {
+	level   int
+	domains []string
+}
+
+func (c *checker) scanMarkdown(path string) error {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var contexts []markdownDomainContext
+	for index, line := range strings.Split(string(contents), "\n") {
+		match := markdownHeadingPattern.FindStringSubmatch(line)
+		if len(match) == 3 {
+			level := len(match[1])
+			for len(contexts) > 0 && contexts[len(contexts)-1].level >= level {
+				contexts = contexts[:len(contexts)-1]
+			}
+			var parentDomains []string
+			if len(contexts) > 0 {
+				parentDomains = contexts[len(contexts)-1].domains
+			}
+			c.addTextAllowingThirdPartyTypes(
+				path,
+				index+1,
+				strings.Join(parentDomains, " ")+" "+line,
+			)
+			contexts = append(contexts, markdownDomainContext{
+				level:   level,
+				domains: extendDomainContext(parentDomains, sourceTokens(match[2])),
+			})
+			continue
+		}
+
+		var domains []string
+		if len(contexts) > 0 {
+			domains = contexts[len(contexts)-1].domains
+		}
+		c.addTextAllowingThirdPartyTypes(
+			path,
+			index+1,
+			strings.Join(domains, " ")+" "+line,
+		)
+	}
+	return nil
+}
+
 func typeAliasAwaitsBody(line string) bool {
 	line, _, _ = strings.Cut(line, "//")
 	trimmed := strings.TrimSpace(line)
@@ -991,7 +1172,7 @@ func terminologyTokens(text string) []string {
 	var token strings.Builder
 	flush := func() {
 		if token.Len() > 0 {
-			tokens = append(tokens, strings.ToLower(token.String()))
+			tokens = append(tokens, splitVocabularyToken(strings.ToLower(token.String()))...)
 			token.Reset()
 		}
 	}
@@ -1014,6 +1195,38 @@ func terminologyTokens(text string) []string {
 		token.WriteRune(character)
 	}
 	flush()
+	return tokens
+}
+
+func splitVocabularyToken(value string) []string {
+	terms := []string{
+		"exchange", "trade", "binance", "okx",
+		"provider", "broker", "venue", "platform",
+	}
+	var tokens []string
+	for value != "" {
+		index := -1
+		term := ""
+		for _, candidate := range terms {
+			candidateIndex := strings.Index(value, candidate)
+			if candidateIndex < 0 ||
+				index >= 0 && candidateIndex > index ||
+				candidateIndex == index && len(candidate) <= len(term) {
+				continue
+			}
+			index = candidateIndex
+			term = candidate
+		}
+		if index < 0 {
+			tokens = append(tokens, value)
+			break
+		}
+		if index > 0 {
+			tokens = append(tokens, value[:index])
+		}
+		tokens = append(tokens, term)
+		value = value[index+len(term):]
+	}
 	return tokens
 }
 
