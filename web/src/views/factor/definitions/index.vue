@@ -109,6 +109,7 @@ import { Message } from "@arco-design/web-vue";
 import { createFactorDef, listFactorDefs, setFactorStatus, updateFactorDef } from "@/api/factor";
 import type { FactorDef } from "@/api/factor/types";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { validateFactorParamsJSON } from "./factor-form";
 
 defineOptions({ name: "FactorDefinitions" });
 
@@ -200,22 +201,18 @@ async function submit() {
     Message.warning("输入列和输出列不能为空");
     return;
   }
-  let params: unknown;
+  let paramsJSON: string;
   try {
-    params = JSON.parse(form.params_json || "{}");
-  } catch {
-    Message.warning("参数必须是合法 JSON");
-    return;
-  }
-  if (!params || Array.isArray(params) || typeof params !== "object") {
-    Message.warning("参数必须是 JSON object");
+    paramsJSON = validateFactorParamsJSON(form.params_json);
+  } catch (error) {
+    Message.warning(error instanceof SyntaxError ? "参数必须是合法 JSON" : "参数必须是 JSON object");
     return;
   }
   const payload = {
     ...form,
     input_columns: [...inputTags.value],
     outputs: [...outputTags.value],
-    params_json: JSON.stringify(params)
+    params_json: paramsJSON
   };
   if (editing.value) await updateFactorDef(payload);
   else await createFactorDef(payload);

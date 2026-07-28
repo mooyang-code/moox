@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -13,7 +14,8 @@ func TestEncodeJSONRequestMetaBuildsRangePayload(t *testing.T) {
 		TaskID: "t1", StartTime: start, EndTime: start.Add(time.Minute),
 		Factors: []FactorSpec{{
 			FactorID: "f1", Name: "Bias", InputColumns: []string{"close"},
-			Outputs: []string{"bias_20"}, ParamsJSON: `{"windows":[20]}`,
+			Outputs:    []string{"bias_20"},
+			ParamsJSON: `{"windows":[20],"large":9007199254740993,"huge":1e400}`,
 		}},
 	}
 	frame := &DataFrame{
@@ -26,7 +28,15 @@ func TestEncodeJSONRequestMetaBuildsRangePayload(t *testing.T) {
 	factors := meta["factors"].([]map[string]any)
 	require.Equal(t, []string{"close"}, factors[0]["input_columns"])
 	require.Equal(t, []string{"bias_20"}, factors[0]["outputs"])
-	require.Equal(t, map[string]any{"windows": []any{float64(20)}}, factors[0]["params"])
+	require.Equal(t, map[string]any{
+		"windows": []any{json.Number("20")},
+		"large":   json.Number("9007199254740993"),
+		"huge":    json.Number("1e400"),
+	}, factors[0]["params"])
+	encoded, err := json.Marshal(meta)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"large":9007199254740993`)
+	require.Contains(t, string(encoded), `"huge":1e400`)
 	df := meta["df"].(map[string]any)
 	require.Equal(t, []string{"2026-01-02T03:00:00.000000001Z"}, df["data_times"])
 }

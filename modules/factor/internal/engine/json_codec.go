@@ -2,7 +2,10 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 )
 
@@ -32,12 +35,9 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 	}
 	factors := make([]map[string]any, 0, len(task.Factors))
 	for _, factor := range task.Factors {
-		var params map[string]any
-		if err := json.Unmarshal([]byte(factor.ParamsJSON), &params); err != nil {
-			return nil, fmt.Errorf("decode params_json for factor %s: %w", factor.FactorID, err)
-		}
-		if params == nil {
-			return nil, fmt.Errorf("decode params_json for factor %s: expected object", factor.FactorID)
+		params, err := decodeParamsJSON(factor.FactorID, factor.ParamsJSON)
+		if err != nil {
+			return nil, err
 		}
 		factors = append(factors, map[string]any{
 			"factor_id": factor.FactorID, "name": factor.Name,
@@ -61,6 +61,26 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 			"columns": columns, "data_times": dataTimes,
 		},
 	}, nil
+}
+
+func decodeParamsJSON(factorID, raw string) (map[string]any, error) {
+	var params map[string]any
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&params); err != nil {
+		return nil, fmt.Errorf("decode params_json for factor %s: %w", factorID, err)
+	}
+	if params == nil {
+		return nil, fmt.Errorf("decode params_json for factor %s: expected object", factorID)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("decode params_json for factor %s: trailing JSON value", factorID)
+		}
+		return nil, fmt.Errorf("decode params_json for factor %s: %w", factorID, err)
+	}
+	return params, nil
 }
 
 func DecodeJSONResponse(meta map[string]any) (*FactorResult, error) {

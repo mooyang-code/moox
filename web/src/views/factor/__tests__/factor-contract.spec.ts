@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EngineStatus, FactorDef, RecalcFactorReq } from "@/api/factor/types";
+import { validateFactorParamsJSON } from "@/views/factor/definitions/factor-form";
 
 describe("factor management contract", () => {
   it("uses explicit generic time-series fields", () => {
@@ -36,5 +37,12 @@ describe("factor management contract", () => {
       queue_overflow_count: 1
     };
     expect(status).toEqual(expect.objectContaining({ queue_depth: 2, queue_overflow_count: 1 }));
+  });
+
+  it("validates params without rewriting large JSON numbers", () => {
+    const raw = ` { "large": 9007199254740993, "huge": 1e400 } `;
+    expect(validateFactorParamsJSON(raw)).toBe(raw.trim());
+    expect(validateFactorParamsJSON("  ")).toBe("{}");
+    expect(() => validateFactorParamsJSON("[]")).toThrow("JSON object");
   });
 });
