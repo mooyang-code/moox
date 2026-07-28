@@ -69,23 +69,25 @@ message ExchangeAccountSnapshot {
 
 message ExchangeAccount {
   string exchange_account_id = 1;
-  string name = 2;
-  Exchange exchange = 3;
-  MarketType market_type = 4;
-  ExecutionMode execution_mode = 5;
-  string credential_secret_id = 6;
-  string settlement_asset = 7;
-  string margin_mode = 8;
-  string status = 9;
-  bool paused = 10;
-  string pause_reason = 11;
-  map<string, string> leverage_settings = 12;
-  ExchangeAccountSnapshot snapshot = 13;
-  int64 last_sync_at = 14;
-  int64 last_ready_at = 15;
-  string last_error = 16;
-  int64 created_at = 17;
-  int64 updated_at = 18;
+  string space_id = 2;
+  string name = 3;
+  Exchange exchange = 4;
+  MarketType market_type = 5;
+  ExecutionMode execution_mode = 6;
+  string credential_secret_id = 7;
+  string settlement_asset = 8;
+  string margin_mode = 9;
+  string status = 10;
+  bool paused = 11;
+  string pause_reason = 12;
+  bool ready = 13;
+  map<string, string> leverage_settings = 14;
+  ExchangeAccountSnapshot snapshot = 15;
+  int64 last_sync_at = 16;
+  int64 last_ready_at = 17;
+  string last_error = 18;
+  int64 created_at = 19;
+  int64 updated_at = 20;
 }
 
 message Order {

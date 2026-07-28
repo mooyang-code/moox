@@ -97,6 +97,53 @@ func TestPlaceOrderRequestHasExactApprovedShape(t *testing.T) {
 	}
 }
 
+func TestExchangeAccountExposesOwnedIdentityAndReadiness(t *testing.T) {
+	fields := (&ExchangeAccount{}).ProtoReflect().Descriptor().Fields()
+	for name, number := range map[protoreflect.Name]protoreflect.FieldNumber{
+		"exchange_account_id": 1,
+		"space_id":            2,
+		"ready":               13,
+	} {
+		field := fields.ByName(name)
+		if field == nil || field.Number() != number {
+			t.Errorf("ExchangeAccount.%s = %v, want field %d", name, field, number)
+		}
+	}
+
+	// Space ownership always comes from authenticated context. Account responses
+	// expose it, but public requests must never accept a caller-supplied space.
+	requests := []protoreflect.MessageDescriptor{
+		(&CreateAccountReq{}).ProtoReflect().Descriptor(),
+		(&UpdateAccountReq{}).ProtoReflect().Descriptor(),
+		(&GetAccountReq{}).ProtoReflect().Descriptor(),
+		(&ListAccountsReq{}).ProtoReflect().Descriptor(),
+	}
+	for _, request := range requests {
+		if field := request.Fields().ByName("space_id"); field != nil {
+			t.Errorf("%s must not accept caller-supplied space_id", request.FullName())
+		}
+	}
+
+	accountDescriptor := (&ExchangeAccount{}).ProtoReflect().Descriptor()
+	responses := []struct {
+		message protoreflect.MessageDescriptor
+		field   protoreflect.Name
+	}{
+		{(&CreateAccountRsp{}).ProtoReflect().Descriptor(), "account"},
+		{(&UpdateAccountRsp{}).ProtoReflect().Descriptor(), "account"},
+		{(&GetAccountRsp{}).ProtoReflect().Descriptor(), "account"},
+		{(&ListAccountsRsp{}).ProtoReflect().Descriptor(), "accounts"},
+		{(&SetLeverageRsp{}).ProtoReflect().Descriptor(), "account"},
+		{(&PauseAccountRsp{}).ProtoReflect().Descriptor(), "account"},
+	}
+	for _, response := range responses {
+		field := response.message.Fields().ByName(response.field)
+		if field == nil || field.Message() != accountDescriptor {
+			t.Errorf("%s.%s must return the full ExchangeAccount entity", response.message.FullName(), response.field)
+		}
+	}
+}
+
 func TestTradeRPCContractDoesNotExposeRemovedVocabulary(t *testing.T) {
 	oldServices := []protoreflect.Name{
 		"AccountSvc", "BalanceSvc", "FundSvc", "ApiKeySvc", "ChannelSvc",
@@ -209,6 +256,83 @@ func TestPublicRequestValidation(t *testing.T) {
 		req.TimeInForce = TimeInForce_TIME_IN_FORCE_GTC
 		if err := req.Validate(); err != nil {
 			t.Fatalf("Validate() error = %v", err)
+		}
+	})
+
+	t.Run("rejects unknown enum numbers", func(t *testing.T) {
+		newValidAccount := func() *CreateAccountReq {
+			return &CreateAccountReq{
+				Name:               "primary",
+				Exchange:           Exchange_EXCHANGE_BINANCE,
+				MarketType:         MarketType_MARKET_TYPE_SPOT,
+				ExecutionMode:      ExecutionMode_EXECUTION_MODE_LIVE,
+				CredentialSecretId: "secret-1",
+			}
+		}
+		accountCases := []struct {
+			name   string
+			mutate func(*CreateAccountReq)
+		}{
+			{"exchange", func(req *CreateAccountReq) { req.Exchange = Exchange(99) }},
+			{"market type", func(req *CreateAccountReq) { req.MarketType = MarketType(99) }},
+			{"execution mode", func(req *CreateAccountReq) { req.ExecutionMode = ExecutionMode(99) }},
+			{"execution mode cannot bypass live credential guard", func(req *CreateAccountReq) {
+				req.ExecutionMode = ExecutionMode(99)
+				req.CredentialSecretId = ""
+			}},
+		}
+		for _, tc := range accountCases {
+			t.Run(tc.name, func(t *testing.T) {
+				req := newValidAccount()
+				tc.mutate(req)
+				if err := req.Validate(); err == nil {
+					t.Fatal("Validate() accepted unknown enum value")
+				}
+			})
+		}
+
+		newValidOrder := func() *PlaceOrderReq {
+			return &PlaceOrderReq{
+				ExchangeAccountId: "account-1",
+				ClientOrderId:     "client-1",
+				Symbol:            "BTCUSDT",
+				OrderType:         OrderType_ORDER_TYPE_MARKET,
+				Side:              OrderSide_ORDER_SIDE_BUY,
+				Quantity:          "0.1",
+			}
+		}
+		orderCases := []struct {
+			name   string
+			mutate func(*PlaceOrderReq)
+		}{
+			{"order type", func(req *PlaceOrderReq) { req.OrderType = OrderType(99) }},
+			{"side", func(req *PlaceOrderReq) { req.Side = OrderSide(99) }},
+			{"time in force", func(req *PlaceOrderReq) { req.TimeInForce = TimeInForce(99) }},
+			{"position side", func(req *PlaceOrderReq) { req.PositionSide = PositionSide(99) }},
+		}
+		for _, tc := range orderCases {
+			t.Run(tc.name, func(t *testing.T) {
+				req := newValidOrder()
+				tc.mutate(req)
+				if err := req.Validate(); err == nil {
+					t.Fatal("Validate() accepted unknown enum value")
+				}
+			})
+		}
+
+		exchange := Exchange(99)
+		marketType := MarketType(99)
+		executionMode := ExecutionMode(99)
+		for name, req := range map[string]*ListAccountsReq{
+			"list exchange":       {Exchange: &exchange},
+			"list market type":    {MarketType: &marketType},
+			"list execution mode": {ExecutionMode: &executionMode},
+		} {
+			t.Run(name, func(t *testing.T) {
+				if err := req.Validate(); err == nil {
+					t.Fatal("Validate() accepted unknown enum filter")
+				}
+			})
 		}
 	})
 }
