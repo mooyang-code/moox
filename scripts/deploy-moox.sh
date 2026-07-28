@@ -1212,7 +1212,7 @@ FACTOR_ENV=(
   "MOOX_FACTOR_ENGINE_FACTORS_DIR=${MOOX_FACTOR_ENGINE_FACTORS_DIR:-${ROOT}/factor/factors}"
   "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}"
   "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
-  "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}"
+  "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
 )
 
 MONITOR_ENV=(
@@ -1718,6 +1718,10 @@ start_factor() {
     echo "factor is disabled in this deployment package" >&2
     exit 2
   fi
+  [[ -n "${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" ]] || {
+    echo "Factor requires MOOX_STORAGE_PRIMARY_AUTH_SECRET" >&2
+    exit 1
+  }
   wait_factor_nats
   ensure_factor_python
   gateway_service_env_for factor
