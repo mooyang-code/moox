@@ -54,7 +54,9 @@ for contract in \
   }
 done
 tmp_strategy="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-release.XXXXXX")"
-trap 'rm -rf "${tmp_strategy}"' EXIT
+tmp_factor="$(mktemp -d "${TMPDIR:-/tmp}/moox-factor-wrapper.XXXXXX")"
+tmp_factor="$(cd "${tmp_factor}" && pwd -P)"
+trap 'rm -rf "${tmp_strategy}" "${tmp_factor}"' EXIT
 mkdir -p \
   "${tmp_strategy}/factor/python-runtime" \
   "${tmp_strategy}/strategy/pyworker" \
@@ -78,6 +80,7 @@ grep -q "name __pycache__ -o -name .pytest_cache" "${ROOT}/scripts/release.sh"
 grep -q "name '\*.pyc' -o -name '\*.sqlite' -o -name '\*.db'" "${ROOT}/scripts/release.sh"
 bash -n \
   "${ROOT}/scripts/build.sh" \
+  "${ROOT}/scripts/moox-factor-run-once.sh" \
   "${ROOT}/scripts/package-service.sh" \
   "${ROOT}/scripts/release.sh" \
   "${ROOT}/scripts/release-matrix.sh"
@@ -86,3 +89,74 @@ matrix_output="$(VERSION=test RELEASE_PLATFORMS=linux/amd64,darwin/arm64,windows
 grep -q 'release test (linux/amd64' <<<"${matrix_output}"
 grep -q 'release test (darwin/arm64' <<<"${matrix_output}"
 grep -q 'release test (windows/amd64' <<<"${matrix_output}"
+
+mkdir -p \
+  "${tmp_factor}/bin" \
+  "${tmp_factor}/data/factor/venv/bin" \
+  "${tmp_factor}/factor/config" \
+  "${tmp_factor}/factor/pyworker" \
+  "${tmp_factor}/factor/factors" \
+  "${tmp_factor}/secrets" \
+  "${tmp_factor}/certs/gateway"
+cp "${ROOT}/scripts/moox-factor-run-once.sh" "${tmp_factor}/bin/moox-factor-run-once"
+chmod +x "${tmp_factor}/bin/moox-factor-run-once"
+printf '#!/usr/bin/env bash\nexit 0\n' >"${tmp_factor}/data/factor/venv/bin/python"
+chmod +x "${tmp_factor}/data/factor/venv/bin/python"
+printf 'database: {}\n' >"${tmp_factor}/factor/config/app.yaml"
+printf '# worker\n' >"${tmp_factor}/factor/pyworker/worker.py"
+printf 'test-factor-secret\n' >"${tmp_factor}/secrets/gateway-factor.key"
+printf 'MOOX_GATEWAY_NODE_ID=test-node\n' >"${tmp_factor}/secrets/gateway-service.env"
+printf 'test-ca\n' >"${tmp_factor}/certs/gateway/peers.pem"
+cat >"${tmp_factor}/bin/moox-factor-cli" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+env | sort >"${tmp_factor}/captured.env"
+printf '%s\\n' "\$@" >"${tmp_factor}/captured.argv"
+EOF
+chmod +x "${tmp_factor}/bin/moox-factor-cli"
+
+env -i HOME="${HOME}" PATH="${PATH}" "${tmp_factor}/bin/moox-factor-run-once" \
+  --space crypto \
+  --dataset prices \
+  --subject BTC-USDT \
+  --freq 1m \
+  --start-time 2026-07-28T00:00:00Z \
+  --end-time 2026-07-28T00:01:00Z
+
+grep -Fxq "MOOX_FACTOR_DB_PATH=${tmp_factor}/data/factor/factor.db" "${tmp_factor}/captured.env"
+grep -Fxq "MOOX_FACTOR_ENGINE_PYTHON_BIN=${tmp_factor}/data/factor/venv/bin/python" "${tmp_factor}/captured.env"
+grep -Fxq "MOOX_FACTOR_ENGINE_WORKER_PATH=${tmp_factor}/factor/pyworker/worker.py" "${tmp_factor}/captured.env"
+grep -Fxq "MOOX_FACTOR_ENGINE_FACTORS_DIR=${tmp_factor}/factor/factors" "${tmp_factor}/captured.env"
+grep -Fxq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=ip://127.0.0.1:11003' "${tmp_factor}/captured.env"
+grep -Fxq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=test-node' "${tmp_factor}/captured.env"
+grep -Fxq 'MOOX_GATEWAY_SERVICE_KEY_ID=factor' "${tmp_factor}/captured.env"
+grep -Fxq 'MOOX_GATEWAY_CALLER=factor' "${tmp_factor}/captured.env"
+grep -Fxq 'MOOX_GATEWAY_SERVICE_SECRET_KEY=test-factor-secret' "${tmp_factor}/captured.env"
+grep -Fxq "MOOX_GATEWAY_CA_FILE=${tmp_factor}/certs/gateway/peers.pem" "${tmp_factor}/captured.env"
+cat >"${tmp_factor}/expected.argv" <<EOF
+run-once
+--config
+${tmp_factor}/factor/config/app.yaml
+--space
+crypto
+--dataset
+prices
+--subject
+BTC-USDT
+--freq
+1m
+--start-time
+2026-07-28T00:00:00Z
+--end-time
+2026-07-28T00:01:00Z
+EOF
+cmp "${tmp_factor}/expected.argv" "${tmp_factor}/captured.argv"
+printf 'line-one\nline-two\n' >"${tmp_factor}/secrets/gateway-factor.key"
+if env -i HOME="${HOME}" PATH="${PATH}" "${tmp_factor}/bin/moox-factor-run-once" \
+  --space crypto --dataset prices --subject BTC-USDT --freq 1m \
+  --start-time 2026-07-28T00:00:00Z --end-time 2026-07-28T00:01:00Z \
+  >/dev/null 2>&1; then
+  echo "factor wrapper accepted a multi-line Gateway secret" >&2
+  exit 1
+fi
+grep -q 'moox-factor-run-once.sh.*STAGE_DIR.*/bin/moox-factor-run-once' "${ROOT}/scripts/deploy-moox.sh"

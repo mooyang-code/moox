@@ -15,6 +15,7 @@ import (
 
 type cliConfig struct {
 	Command           string
+	ConfigPath        string
 	DBPath            string
 	FactorsDir        string
 	File              string
@@ -63,15 +64,18 @@ func parseArgs(args []string) (cliConfig, error) {
 	if len(args) == 0 {
 		return cliConfig{}, errors.New("command is required")
 	}
-	cfg := cliConfig{Command: args[0], DBPath: "./data/factor/factor.db", FactorsDir: "./factors", ParamsJSON: "{}", Status: "disabled"}
+	cfg := cliConfig{Command: args[0], ParamsJSON: "{}", Status: "disabled"}
 	switch args[0] {
 	case "init":
+		cfg.DBPath = "./data/factor/factor.db"
 		fs := newFlagSet("init")
 		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
 		if err := fs.Parse(args[1:]); err != nil {
 			return cliConfig{}, err
 		}
 	case "import":
+		cfg.DBPath = "./data/factor/factor.db"
+		cfg.FactorsDir = "./factors"
 		var inputColumns, outputs string
 		fs := newFlagSet("import")
 		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
@@ -96,11 +100,13 @@ func parseArgs(args []string) (cliConfig, error) {
 			return cliConfig{}, err
 		}
 	case "run-once":
+		cfg.ConfigPath = "./config/app.yaml"
 		var startTime, endTime string
 		var factors string
 		fs := newFlagSet("run-once")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "factor application config")
+		fs.StringVar(&cfg.DBPath, "db", "", "factor sqlite database (overrides config)")
+		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "factor source directory (overrides config)")
 		fs.StringVar(&cfg.SpaceID, "space", "", "space id")
 		fs.StringVar(&cfg.DatasetID, "dataset", "", "source dataset id")
 		fs.StringVar(&cfg.SubjectID, "subject", "", "subject id")

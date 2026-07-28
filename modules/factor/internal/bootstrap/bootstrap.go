@@ -102,7 +102,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials), authInfo)
 	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials, authInfo)
 	pythonExec, err = engine.NewPythonExecutor(ctx, cfg.Engine.Workers, process.Config{
-		PythonBin: cfg.Engine.PythonBin, WorkerPath: "./pyworker/worker.py",
+		PythonBin: cfg.Engine.PythonBin, WorkerPath: cfg.Engine.WorkerPath,
 		Args:        []string{"--factors-dir", cfg.Engine.FactorsDir},
 		TaskTimeout: time.Duration(cfg.Engine.TaskTimeoutMS) * time.Millisecond,
 		Limits:      process.DefaultLimits(),

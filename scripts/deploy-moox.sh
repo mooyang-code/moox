@@ -1207,7 +1207,9 @@ COLLECTOR_ENV=(
 
 FACTOR_ENV=(
   "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
-  "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-../data/factor/factor.db}"
+  "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor/factor.db}"
+  "MOOX_FACTOR_ENGINE_WORKER_PATH=${MOOX_FACTOR_ENGINE_WORKER_PATH:-${ROOT}/factor/pyworker/worker.py}"
+  "MOOX_FACTOR_ENGINE_FACTORS_DIR=${MOOX_FACTOR_ENGINE_FACTORS_DIR:-${ROOT}/factor/factors}"
   "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}"
   "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
 )
@@ -2522,6 +2524,7 @@ EOF
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
     copy_required_binary "moox-factor"
     copy_required_binary "moox-factor-cli"
+    install -m 0755 "${ROOT}/scripts/moox-factor-run-once.sh" "${STAGE_DIR}/bin/moox-factor-run-once"
   fi
   if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
     copy_required_binary "moox-strategy"
@@ -2704,7 +2707,7 @@ sync_local_stage() {
       rsync_excludes+=(--exclude '/collector/' --exclude '/bin/moox-collector' --exclude '/bin/moox-collector-cli' --exclude '/bin/moox-collector-scf')
     fi
     if [[ "${WITH_FACTOR}" -eq 0 ]]; then
-      rsync_excludes+=(--exclude '/factor/' --exclude '/bin/moox-factor' --exclude '/bin/moox-factor-cli')
+      rsync_excludes+=(--exclude '/factor/' --exclude '/bin/moox-factor' --exclude '/bin/moox-factor-cli' --exclude '/bin/moox-factor-run-once')
     fi
     if [[ "${WITH_STRATEGY}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/strategy/' --exclude '/bin/moox-strategy' --exclude '/bin/moox-strategy-cli')
@@ -2747,7 +2750,7 @@ sync_local_stage() {
     fi
     if [[ "${WITH_FACTOR}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/factor"
-      rm -f "${deploy_dir}/bin/moox-factor" "${deploy_dir}/bin/moox-factor-cli"
+      rm -f "${deploy_dir}/bin/moox-factor" "${deploy_dir}/bin/moox-factor-cli" "${deploy_dir}/bin/moox-factor-run-once"
     fi
     if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/strategy"
@@ -2981,7 +2984,7 @@ if [[ "${WITH_COLLECTOR}" == "1" ]]; then
 fi
 if [[ "${WITH_FACTOR}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/factor"
-  rm -f "${DEPLOY_DIR}/bin/moox-factor" "${DEPLOY_DIR}/bin/moox-factor-cli"
+  rm -f "${DEPLOY_DIR}/bin/moox-factor" "${DEPLOY_DIR}/bin/moox-factor-cli" "${DEPLOY_DIR}/bin/moox-factor-run-once"
 fi
 if [[ "${WITH_STRATEGY}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/strategy"
