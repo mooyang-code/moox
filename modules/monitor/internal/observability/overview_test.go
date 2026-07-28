@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -61,7 +62,7 @@ func TestDatasetTolerancesUseScheduleForRunsAndFrequencyForWatermark(t *testing.
 
 func TestDatasetStatusRejectsStaleInventory(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	got := datasetStatus(now, datasetKey{spaceID: "crypto", datasetID: "market_kline", freq: "1m"}, datasetValues{
+	got := datasetStatus(now, datasetKey{producer: "collector", spaceID: "crypto", datasetID: "market_kline", freq: "1m"}, datasetValues{
 		interval: 60, inventory: float64(now.Add(-11 * time.Minute).Unix()),
 		lastRun: float64(now.Unix()), lastSuccess: float64(now.Unix()),
 	}, testRealtimePolicy())
@@ -94,6 +95,104 @@ func TestOverviewSortsAbnormalRowsFirst(t *testing.T) {
 	}
 }
 
+func TestBuilderDeduplicatesServiceBootHistory(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, repositories := openOverviewState(t, func(db *gorm.DB) {
+		for _, service := range []monmetrics.MetricService{
+			{
+				ServiceName: "moox_collector", InstanceID: "collector@node-a", BootID: "boot-old",
+				NodeID: "node-a", LastSeenAt: now.Add(-10 * time.Minute),
+			},
+			{
+				ServiceName: "moox_collector", InstanceID: "collector@node-a", BootID: "boot-new",
+				NodeID: "node-a", LastSeenAt: now,
+			},
+		} {
+			if err := db.Create(&service).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	got, err := (Builder{
+		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+	}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Services) != 1 || got.Services[0].Status != "healthy" ||
+		!got.Services[0].LastSeenAt.Equal(now) {
+		t.Fatalf("services = %+v", got.Services)
+	}
+}
+
+func TestBuilderSysDeployFailureOverridesFreshReporter(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, repositories := openOverviewState(t, func(db *gorm.DB) {
+		if err := db.Create(&monmetrics.MetricService{
+			ServiceName: "moox_storage", InstanceID: "storage@node-a", BootID: "boot-a",
+			NodeID: "node-a", LastSeenAt: now,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	})
+	check := domain.Check{
+		SpaceID: "moox_system", CheckID: "sysdeploy:node-a:moox_storage",
+		Name: "moox_storage@node-a", Kind: domain.CheckKindHTTP,
+		Source: domain.CheckSourceSysDeploy, Enabled: true,
+		Labels: `{"node_id":"node-a","service_name":"moox_storage"}`,
+	}
+	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Results.Insert(t.Context(), &domain.CheckResult{
+		ResultID: "storage-down", SpaceID: check.SpaceID, CheckID: check.CheckID,
+		Status: domain.CheckStatusDown, ErrorMessage: "readyz failed", CheckedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (Builder{
+		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+	}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Services) != 1 || got.Services[0].Status != "down" ||
+		!strings.Contains(got.Services[0].Reason, "readyz failed") ||
+		got.Services[0].ReporterStatus != "healthy" {
+		t.Fatalf("services = %+v", got.Services)
+	}
+}
+
+func TestBuilderIncludesSysDeployServiceWithoutReporter(t *testing.T) {
+	query, repositories := openOverviewState(t, func(*gorm.DB) {})
+	check := domain.Check{
+		SpaceID: "moox_system", CheckID: "sysdeploy:node-b:moox_factor",
+		Name: "moox_factor@node-b", Kind: domain.CheckKindHTTP,
+		Source: domain.CheckSourceSysDeploy, Enabled: true,
+		Labels: `{"node_id":"node-b","service_name":"moox_factor"}`,
+	}
+	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Results.Insert(t.Context(), &domain.CheckResult{
+		ResultID: "factor-ready", SpaceID: check.SpaceID, CheckID: check.CheckID,
+		Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (Builder{
+		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+	}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Services) != 1 || got.Services[0].Status != "unknown" ||
+		got.Services[0].ReporterStatus != "missing" ||
+		!strings.Contains(got.Services[0].Reason, "reporter missing") {
+		t.Fatalf("services = %+v", got.Services)
+	}
+}
+
 func TestBuilderSummarizesAllSCFHeartbeatsFromCloudNodeMetrics(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
@@ -111,6 +210,112 @@ func TestBuilderSummarizesAllSCFHeartbeatsFromCloudNodeMetrics(t *testing.T) {
 	}
 	if !got.SCF.OldestHeartbeatAt.Equal(now.Add(-2 * time.Minute)) {
 		t.Fatalf("oldest heartbeat = %s", got.SCF.OldestHeartbeatAt)
+	}
+}
+
+func TestBuilderMarksBalanceDownAfterThreeFailures(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetric(t, db, "balance-success", "moox_trade_balance_sync_last_success_timestamp_seconds", `{}`, float64(now.Add(-8*time.Minute).Unix()), now)
+		seedOverviewMetric(t, db, "balance-run", "moox_trade_balance_sync_last_run_timestamp_seconds", `{}`, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "balance-failures", "moox_trade_balance_sync_consecutive_failures", `{}`, 3, now)
+		seedOverviewMetric(t, db, "balance-difference", "moox_trade_balance_sync_max_difference_ratio", `{}`, 0.01, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, BalanceDifferenceThreshold: 0.05}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.BusinessChecks) != 1 || got.BusinessChecks[0].Status != "down" ||
+		!strings.Contains(got.BusinessChecks[0].Reason, "3 consecutive") {
+		t.Fatalf("balance status = %+v", got.BusinessChecks)
+	}
+}
+
+func TestBuilderMarksBalanceDifferenceAboveThresholdDown(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetric(t, db, "balance-success", "moox_trade_balance_sync_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "balance-run", "moox_trade_balance_sync_last_run_timestamp_seconds", `{}`, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "balance-failures", "moox_trade_balance_sync_consecutive_failures", `{}`, 0, now)
+		seedOverviewMetric(t, db, "balance-difference", "moox_trade_balance_sync_max_difference_ratio", `{}`, 0.08, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, BalanceDifferenceThreshold: 0.05}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.BusinessChecks) != 1 || got.BusinessChecks[0].Status != "down" ||
+		!strings.Contains(got.BusinessChecks[0].Reason, "exceeds") {
+		t.Fatalf("balance status = %+v", got.BusinessChecks)
+	}
+}
+
+func TestBuilderIncludesStorageCommitFactsWithoutEnabledInventory(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	labels := `{"dataset_id":"market_kline","freq":"1m","space_id":"crypto"}`
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetric(t, db, "collector-enabled", "moox_collector_dataset_enabled", labels, 1, now)
+		seedOverviewMetric(t, db, "collector-interval", "moox_collector_dataset_expected_interval_seconds", labels, 300, now)
+		seedOverviewMetric(t, db, "collector-inventory", "moox_collector_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "collector-run", "moox_collector_dataset_last_run_timestamp_seconds", labels, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "collector-success", "moox_collector_dataset_last_success_timestamp_seconds", labels, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "collector-output", "moox_collector_dataset_output_watermark_timestamp_seconds", labels, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "factor-enabled", "moox_factor_dataset_enabled", labels, 1, now)
+		seedOverviewMetric(t, db, "factor-interval", "moox_factor_dataset_expected_interval_seconds", labels, 600, now)
+		seedOverviewMetric(t, db, "factor-inventory", "moox_factor_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "factor-run", "moox_factor_dataset_last_run_timestamp_seconds", labels, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "factor-success", "moox_factor_dataset_last_success_timestamp_seconds", labels, float64(now.Unix()), now)
+		seedOverviewMetric(t, db, "factor-output", "moox_factor_dataset_output_watermark_timestamp_seconds", labels, float64(now.Unix()), now)
+		storageAt := now.Add(-3 * time.Minute)
+		seedOverviewMetric(t, db, "storage-run", "moox_storage_dataset_last_run_timestamp_seconds", labels, float64(storageAt.Unix()), now)
+		seedOverviewMetric(t, db, "storage-success", "moox_storage_dataset_last_success_timestamp_seconds", labels, float64(storageAt.Unix()), now)
+		seedOverviewMetric(t, db, "storage-output", "moox_storage_dataset_output_watermark_timestamp_seconds", labels, float64(storageAt.Unix()), now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storageRow *DatasetFrequencyStatus
+	for i := range got.Datasets {
+		if got.Datasets[i].Producer == "storage" {
+			storageRow = &got.Datasets[i]
+		}
+	}
+	if len(got.Datasets) != 3 || storageRow == nil ||
+		storageRow.DatasetID != "market_kline" || storageRow.Status != "healthy" {
+		t.Fatalf("Storage fact row = %+v", got.Datasets)
+	}
+}
+
+func TestBuilderAggregatesDatasetInstances(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	labels := `{"dataset_id":"market_kline","freq":"1m","space_id":"crypto"}`
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		for _, instance := range []struct {
+			id        string
+			seenAt    time.Time
+			lastRun   time.Time
+			inventory time.Time
+		}{
+			{id: "collector-a", seenAt: now.Add(-10 * time.Minute), lastRun: now.Add(-10 * time.Minute), inventory: now.Add(-10 * time.Minute)},
+			{id: "collector-b", seenAt: now, lastRun: now, inventory: now},
+		} {
+			seedOverviewMetricForInstance(t, db, instance.id+"-enabled", "moox_collector", instance.id, "moox_collector_dataset_enabled", labels, 1, instance.seenAt)
+			seedOverviewMetricForInstance(t, db, instance.id+"-interval", "moox_collector", instance.id, "moox_collector_dataset_expected_interval_seconds", labels, 60, instance.seenAt)
+			seedOverviewMetricForInstance(t, db, instance.id+"-inventory", "moox_collector", instance.id, "moox_collector_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(instance.inventory.Unix()), instance.seenAt)
+			seedOverviewMetricForInstance(t, db, instance.id+"-run", "moox_collector", instance.id, "moox_collector_dataset_last_run_timestamp_seconds", labels, float64(instance.lastRun.Unix()), instance.seenAt)
+			seedOverviewMetricForInstance(t, db, instance.id+"-success", "moox_collector", instance.id, "moox_collector_dataset_last_success_timestamp_seconds", labels, float64(instance.lastRun.Unix()), instance.seenAt)
+			seedOverviewMetricForInstance(t, db, instance.id+"-output", "moox_collector", instance.id, "moox_collector_dataset_output_watermark_timestamp_seconds", labels, float64(instance.lastRun.Unix()), instance.seenAt)
+		}
+	})
+	got, err := (Builder{
+		Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy(),
+	}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Datasets) != 1 || got.Datasets[0].Status != "healthy" ||
+		!got.Datasets[0].LastRunAt.Equal(now) {
+		t.Fatalf("datasets = %+v", got.Datasets)
 	}
 }
 
@@ -134,6 +339,12 @@ func TestBuilderReturnsBoundedEmptyOverviewWhenSourcesAreDisabled(t *testing.T) 
 
 func openOverviewMetrics(t *testing.T, seed func(*gorm.DB)) *monmetrics.QueryService {
 	t.Helper()
+	query, _ := openOverviewState(t, seed)
+	return query
+}
+
+func openOverviewState(t *testing.T, seed func(*gorm.DB)) (*monmetrics.QueryService, *store.Repositories) {
+	t.Helper()
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -149,19 +360,30 @@ func openOverviewMetrics(t *testing.T, seed func(*gorm.DB)) *monmetrics.QuerySer
 	if err != nil {
 		t.Fatal(err)
 	}
-	return query
+	return query, manager.Repositories()
 }
 
 func seedOverviewMetric(t *testing.T, db *gorm.DB, id, name, labels string, value float64, observedAt time.Time) {
 	t.Helper()
+	seedOverviewMetricForInstance(t, db, id, "moox_cloudnode", "cloudnode@node-a", name, labels, value, observedAt)
+}
+
+func seedOverviewMetricForInstance(
+	t *testing.T,
+	db *gorm.DB,
+	id, serviceName, instanceID, name, labels string,
+	value float64,
+	observedAt time.Time,
+) {
+	t.Helper()
 	if err := db.Create(&monmetrics.MetricSeries{
-		ServiceName: "moox_cloudnode", InstanceID: "cloudnode@node-a", SeriesID: id,
+		ServiceName: serviceName, InstanceID: instanceID, SeriesID: id,
 		MetricName: name, MetricType: "gauge", LabelsJSON: labels, LastSeenAt: observedAt,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&monmetrics.MetricLatest{
-		SeriesID: id, ServiceName: "moox_cloudnode", InstanceID: "cloudnode@node-a",
+		SeriesID: id, ServiceName: serviceName, InstanceID: instanceID,
 		MetricName: name, MetricType: "gauge", LabelsJSON: labels, Value: value, ObservedAt: observedAt,
 	}).Error; err != nil {
 		t.Fatal(err)

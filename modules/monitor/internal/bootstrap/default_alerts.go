@@ -121,7 +121,7 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 			checkID := hostmetrics.HostRuleKey(agent.AgentID, metric)
 			rule := &domain.AlertRule{
 				SpaceID: hostmetrics.SpaceID, RuleID: "default:" + checkID, CheckID: checkID,
-				WebhookID: defaultWebhookID, FailureThreshold: 5, SuccessThreshold: 1,
+				WebhookID: defaultWebhookID, FailureThreshold: 20, SuccessThreshold: 1,
 				MinimumReminderIntervalSeconds: 300, SendOnResolved: true, Enabled: true,
 				Description: definition,
 			}

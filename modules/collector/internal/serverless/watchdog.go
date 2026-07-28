@@ -21,6 +21,7 @@ const (
 	maxWatchdogErrorRunes  = 256
 	defaultWatchdogTimeout = 20 * time.Second
 	defaultDirectCooldown  = 5 * time.Minute
+	directSendTimeout      = 5 * time.Second
 )
 
 type WatchdogCheck func(context.Context) CheckResult
@@ -126,7 +127,7 @@ func (h *WatchdogHandler) run(ctx context.Context) error {
 		if result.CheckID == "monitor_ready" && !result.Success {
 			monitorDown = true
 		}
-		if h.options.Events != nil {
+		if h.options.Events != nil && !publishFailed {
 			report := &observabilitypb.HealthCheckReport{
 				ObserverId:   h.options.ObserverID,
 				CheckId:      result.CheckID,
@@ -145,11 +146,16 @@ func (h *WatchdogHandler) run(ctx context.Context) error {
 		}
 	}
 	var metricsErr error
-	if h.options.Metrics != nil {
+	if h.options.Metrics != nil && !publishFailed {
 		metricsErr = h.options.Metrics.Handle(ctx)
+		if metricsErr != nil {
+			publishFailed = true
+		}
 	}
 	if monitorDown || publishFailed {
-		h.sendDirect(ctx, results, monitorDown, publishFailed)
+		directCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), directSendTimeout)
+		h.sendDirect(directCtx, results, monitorDown, publishFailed)
+		cancel()
 	}
 	if publishFailed {
 		return errors.New("SCF watchdog health event publish failed")

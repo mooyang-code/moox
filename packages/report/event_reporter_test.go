@@ -78,3 +78,28 @@ func TestEventReporterDoesNotLeakPublisherCredentials(t *testing.T) {
 		t.Fatalf("publisher credential leaked: %v", err)
 	}
 }
+
+func TestEventReporterConnectsLazily(t *testing.T) {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectCalls := 0
+	reporter := &EventReporter{
+		Registry: registry,
+		publisherFn: func(context.Context) (Publisher, error) {
+			connectCalls++
+			return nil, errors.New("eventbus unavailable")
+		},
+	}
+	if connectCalls != 0 {
+		t.Fatal("event reporter connected before the first publish")
+	}
+	err = reporter.ReportHealth(context.Background(), &observabilitypb.HealthCheckReport{
+		ObserverId: "scf-sentinel", CheckId: "monitor-ready", Kind: "http",
+		Success: false, CheckedAt: timestamppb.Now(),
+	}, "crypto")
+	if err == nil || connectCalls != 1 {
+		t.Fatalf("ReportHealth() error=%v connectCalls=%d", err, connectCalls)
+	}
+}

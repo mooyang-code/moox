@@ -33,7 +33,8 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		ObservabilityOverview: &monitorobservability.Builder{
 			Metrics: metricsQuery, Hosts: hostStore,
 			Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-			Policy: doctorContext.Pipelines.RealtimeTimeSeries,
+			Policy:                     doctorContext.Pipelines.RealtimeTimeSeries,
+			BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 		},
 	}))
 }
@@ -47,8 +48,8 @@ func buildProbeRunner(cfg *config.Config) probe.MultiRunner {
 	return runner
 }
 
-func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {
-	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{})
+func monitorResultHook(runtime *Runtime, notifier alerting.Notifier) func(context.Context, domain.Check, domain.CheckResult) {
+	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{Notifier: notifier})
 	return func(ctx context.Context, check domain.Check, result domain.CheckResult) {
 		if err := evaluator.Evaluate(ctx, check, result); err != nil {
 			log.ErrorContextf(ctx, "monitor alert evaluation failed: %v", err)

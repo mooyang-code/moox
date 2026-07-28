@@ -49,7 +49,7 @@ func TestStorageDatasetMetricsBoundActuallyAttemptedTupleUnion(t *testing.T) {
 		Result: "error", FinishedAt: finishedAt,
 	})
 	require.ErrorContains(t, err, "series limit 2")
-	require.Len(t, metrics.expected, 2)
+	require.Len(t, metrics.known, 2)
 }
 
 func TestStorageDatasetMetricsRejectInvalidFrequency(t *testing.T) {
@@ -62,7 +62,7 @@ func TestStorageDatasetMetricsRejectInvalidFrequency(t *testing.T) {
 		Result: "error", FinishedAt: time.Now(),
 	})
 	require.ErrorContains(t, err, "freq")
-	require.Empty(t, metrics.expected)
+	require.Empty(t, metrics.known)
 }
 
 func datasetGaugeValue(t *testing.T, registry *prometheus.Registry, name string) float64 {

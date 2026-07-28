@@ -26,6 +26,7 @@ const (
 type ServiceStatus struct {
 	NodeID, ServiceName, InstanceID, Status, Reason string
 	LastSeenAt                                      time.Time
+	ReporterStatus                                  string
 }
 
 type HostStatus struct {
@@ -61,12 +62,13 @@ type Overview struct {
 }
 
 type Builder struct {
-	Metrics *monmetrics.QueryService
-	Hosts   *hostmetrics.Store
-	Checks  *store.CheckRepository
-	Results *store.ResultRepository
-	Policy  report.RealtimeTimeSeriesPolicy
-	Now     func() time.Time
+	Metrics                    *monmetrics.QueryService
+	Hosts                      *hostmetrics.Store
+	Checks                     *store.CheckRepository
+	Results                    *store.ResultRepository
+	Policy                     report.RealtimeTimeSeriesPolicy
+	BalanceDifferenceThreshold float64
+	Now                        func() time.Time
 }
 
 func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
@@ -199,37 +201,157 @@ func nonNegativeMetricCount(value float64) (int, error) {
 }
 
 func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceStatus, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return []ServiceStatus{}, nil
-	}
-	rows, total, err := b.Metrics.Catalog().ListServices(ctx, spaceID, 0, 500)
-	if err != nil {
-		return nil, err
-	}
-	if total > maxOverviewServices {
-		return nil, fmt.Errorf("observability services exceed limit %d", maxOverviewServices)
-	}
-	if total > int64(len(rows)) {
-		more, _, err := b.Metrics.Catalog().ListServices(ctx, spaceID, len(rows), int(total)-len(rows))
+	services := make(map[string]ServiceStatus)
+	if b.Metrics != nil && b.Metrics.Catalog() != nil {
+		rows, total, err := b.Metrics.Catalog().ListServices(ctx, spaceID, 0, 500)
 		if err != nil {
 			return nil, err
 		}
-		rows = append(rows, more...)
-	}
-	out := make([]ServiceStatus, 0, len(rows))
-	for _, row := range rows {
-		status, reason := "healthy", "reporter fresh"
-		if row.LastSeenAt.IsZero() {
-			status, reason = "unknown", "尚未上报"
-		} else if row.IsStale {
-			status, reason = "stale", "producer stale"
+		if total > maxOverviewServices {
+			return nil, fmt.Errorf("observability services exceed limit %d", maxOverviewServices)
 		}
-		out = append(out, ServiceStatus{
-			NodeID: row.NodeID, ServiceName: row.ServiceName, InstanceID: row.InstanceID,
-			Status: status, Reason: reason, LastSeenAt: row.LastSeenAt.UTC(),
-		})
+		if total > int64(len(rows)) {
+			more, _, err := b.Metrics.Catalog().ListServices(ctx, spaceID, len(rows), int(total)-len(rows))
+			if err != nil {
+				return nil, err
+			}
+			rows = append(rows, more...)
+		}
+		for _, row := range rows {
+			key := serviceInstanceKey(row.NodeID, row.ServiceName, row.InstanceID)
+			if current, exists := services[key]; exists && !row.LastSeenAt.After(current.LastSeenAt) {
+				continue
+			}
+			status, reason := "healthy", "reporter fresh"
+			if row.LastSeenAt.IsZero() {
+				status, reason = "unknown", "尚未上报"
+			} else if row.IsStale {
+				status, reason = "stale", "producer stale"
+			}
+			services[key] = ServiceStatus{
+				NodeID: row.NodeID, ServiceName: row.ServiceName, InstanceID: row.InstanceID,
+				Status: status, ReporterStatus: status, Reason: reason, LastSeenAt: row.LastSeenAt.UTC(),
+			}
+		}
+	}
+
+	checks, err := b.listEnabledSysDeployChecks(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	for _, check := range checks {
+		labels, err := serviceCheckLabels(check.Labels)
+		if err != nil {
+			return nil, fmt.Errorf("sysdeploy check %q labels: %w", check.CheckID, err)
+		}
+		nodeID, serviceName := labels["node_id"], labels["service_name"]
+		matched := make([]string, 0, 1)
+		for key, item := range services {
+			if item.NodeID == nodeID && item.ServiceName == serviceName {
+				matched = append(matched, key)
+			}
+		}
+		if len(matched) == 0 {
+			key := serviceInstanceKey(nodeID, serviceName, "")
+			services[key] = ServiceStatus{
+				NodeID: nodeID, ServiceName: serviceName, Status: "unknown",
+				ReporterStatus: "missing", Reason: "reporter missing",
+			}
+			matched = append(matched, key)
+		}
+		var latest *domain.CheckResult
+		if b.Results != nil {
+			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
+			if err != nil {
+				return nil, err
+			}
+			if len(results) > 0 {
+				latest = &results[0]
+			}
+		}
+		for _, key := range matched {
+			services[key] = mergeServiceHealth(services[key], latest)
+		}
+	}
+
+	out := make([]ServiceStatus, 0, len(services))
+	for _, item := range services {
+		out = append(out, item)
 	}
 	return out, nil
+}
+
+func serviceInstanceKey(nodeID, serviceName, instanceID string) string {
+	return strings.Join([]string{nodeID, serviceName, instanceID}, "\x00")
+}
+
+func (b Builder) listEnabledSysDeployChecks(ctx context.Context, spaceID string) ([]domain.Check, error) {
+	if b.Checks == nil {
+		return []domain.Check{}, nil
+	}
+	enabled := true
+	out := make([]domain.Check, 0, 500)
+	for page := 1; len(out) < maxOverviewServices; page++ {
+		rows, err := b.Checks.List(ctx, store.ListChecksOptions{
+			SpaceID: spaceID, Source: domain.CheckSourceSysDeploy, Enabled: &enabled,
+			Page: store.Page{Page: page, PageSize: 500},
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		if len(rows) < 500 {
+			break
+		}
+	}
+	if len(out) >= maxOverviewServices {
+		total, err := b.Checks.Count(ctx, store.ListChecksOptions{
+			SpaceID: spaceID, Source: domain.CheckSourceSysDeploy, Enabled: &enabled,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if total > maxOverviewServices {
+			return nil, fmt.Errorf("sysdeploy checks exceed limit %d", maxOverviewServices)
+		}
+	}
+	return out, nil
+}
+
+func serviceCheckLabels(raw string) (map[string]string, error) {
+	labels := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &labels); err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"node_id", "service_name"} {
+		labels[key] = strings.TrimSpace(labels[key])
+		if labels[key] == "" {
+			return nil, fmt.Errorf("%s is required", key)
+		}
+	}
+	return labels, nil
+}
+
+func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) ServiceStatus {
+	healthStatus, healthReason := "unknown", "health not checked"
+	if result != nil {
+		switch {
+		case !result.Success:
+			healthStatus, healthReason = "down", strings.TrimSpace(result.ErrorMessage)
+			if healthReason == "" {
+				healthReason = "health check failed"
+			}
+		case result.Status == domain.CheckStatusDegraded:
+			healthStatus, healthReason = "degraded", "health check degraded"
+		default:
+			healthStatus, healthReason = "healthy", "health check ok"
+		}
+	}
+	if statusRank(healthStatus) < statusRank(service.Status) {
+		service.Status = healthStatus
+	}
+	service.Reason = strings.Join([]string{service.Reason, healthReason}, "; ")
+	return service
 }
 
 func (b Builder) buildHosts(ctx context.Context) ([]HostStatus, error) {
@@ -265,7 +387,7 @@ func (b Builder) buildHosts(ctx context.Context) ([]HostStatus, error) {
 }
 
 type datasetKey struct {
-	producer, instance, spaceID, datasetID, freq, labels string
+	service, producer, instance, spaceID, datasetID, freq, labels string
 }
 
 type datasetValues struct {
@@ -331,14 +453,124 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			continue
 		}
 		key := datasetKey{
-			producer: series.ServiceName, instance: series.InstanceID, spaceID: labels["space_id"],
+			service: series.ServiceName, producer: datasetModuleFromMetric(series.MetricName),
+			instance: series.InstanceID, spaceID: labels["space_id"],
 			datasetID: labels["dataset_id"], freq: labels["freq"], labels: series.LabelsJSON,
 		}
 		values[key] = datasetValues{reporterStale: series.IsStale}
 	}
-	if err := ensureDatasetLimit(len(values)); err != nil {
+	if err := b.populateDatasetValues(ctx, values, enabledSeries); err != nil {
 		return nil, err
 	}
+	expectedScopes := make(map[string]float64, len(values))
+	for key, current := range values {
+		scope := datasetScopeKey(key.spaceID, key.datasetID, key.freq)
+		if current.interval > 0 && (expectedScopes[scope] == 0 || current.interval < expectedScopes[scope]) {
+			expectedScopes[scope] = current.interval
+		}
+	}
+	storageValues := make(map[datasetKey]datasetValues)
+	for _, name := range names {
+		if datasetModuleFromMetric(name.MetricName) != "storage" ||
+			!strings.HasSuffix(name.MetricName, "_dataset_last_run_timestamp_seconds") {
+			continue
+		}
+		rows, total, err := b.Metrics.Catalog().ListSeries(ctx, name.ServiceName, name.MetricName, "", 0, MaxDatasetFrequencyStatuses+1)
+		if err != nil {
+			return nil, err
+		}
+		if total > MaxDatasetFrequencyStatuses {
+			return nil, datasetLimitError()
+		}
+		for _, series := range rows {
+			labels, err := datasetLabels(series.LabelsJSON)
+			if err != nil {
+				return nil, fmt.Errorf("dataset labels for %s: %w", series.SeriesID, err)
+			}
+			if labels["space_id"] == "" || labels["dataset_id"] == "" || labels["freq"] == "" {
+				return nil, fmt.Errorf("dataset labels for %s are incomplete", series.SeriesID)
+			}
+			if spaceID != "" && labels["space_id"] != spaceID {
+				continue
+			}
+			interval, expected := expectedScopes[datasetScopeKey(labels["space_id"], labels["dataset_id"], labels["freq"])]
+			if !expected {
+				continue
+			}
+			key := datasetKey{
+				service: series.ServiceName, producer: "storage", instance: series.InstanceID,
+				spaceID: labels["space_id"], datasetID: labels["dataset_id"],
+				freq: labels["freq"], labels: series.LabelsJSON,
+			}
+			if _, exists := storageValues[key]; !exists {
+				storageValues[key] = datasetValues{
+					interval:      interval,
+					reporterStale: series.IsStale,
+				}
+			}
+		}
+	}
+	if err := b.populateDatasetValues(ctx, storageValues, enabledSeries); err != nil {
+		return nil, err
+	}
+	if err := ensureDatasetLimit(len(values) + len(storageValues)); err != nil {
+		return nil, err
+	}
+	for key, current := range storageValues {
+		values[key] = current
+	}
+	type aggregatedDataset struct {
+		key   datasetKey
+		value datasetValues
+	}
+	aggregated := make(map[string]aggregatedDataset, len(values))
+	for key, value := range values {
+		identity := strings.Join([]string{key.producer, key.spaceID, key.datasetID, key.freq}, "\x00")
+		current, exists := aggregated[identity]
+		if !exists {
+			current = aggregatedDataset{
+				key: datasetKey{
+					producer: key.producer, spaceID: key.spaceID,
+					datasetID: key.datasetID, freq: key.freq,
+				},
+				value: value,
+			}
+		} else {
+			current.value.interval = minPositive(current.value.interval, value.interval)
+			current.value.inventory = max(current.value.inventory, value.inventory)
+			current.value.lastRun = max(current.value.lastRun, value.lastRun)
+			current.value.lastSuccess = max(current.value.lastSuccess, value.lastSuccess)
+			current.value.input = max(current.value.input, value.input)
+			current.value.output = max(current.value.output, value.output)
+			current.value.reporterStale = current.value.reporterStale && value.reporterStale
+		}
+		aggregated[identity] = current
+	}
+	out := make([]DatasetFrequencyStatus, 0, len(aggregated))
+	for _, current := range aggregated {
+		out = append(out, datasetStatus(now, current.key, current.value, b.Policy))
+	}
+	return out, nil
+}
+
+func minPositive(left, right float64) float64 {
+	switch {
+	case left <= 0:
+		return right
+	case right <= 0:
+		return left
+	case left < right:
+		return left
+	default:
+		return right
+	}
+}
+
+func (b Builder) populateDatasetValues(
+	ctx context.Context,
+	values map[datasetKey]datasetValues,
+	enabledSeries []monmetrics.MetricSeries,
+) error {
 	for key, current := range values {
 		prefix := strings.TrimSuffix(metricPrefixForDataset(key, enabledSeries), "enabled")
 		for suffix, target := range map[string]*float64{
@@ -348,9 +580,9 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			"input_watermark_timestamp_seconds":  &current.input,
 			"output_watermark_timestamp_seconds": &current.output,
 		} {
-			series, err := b.Metrics.Catalog().FindSeries(ctx, "", key.producer, prefix+suffix, key.labels, 500)
+			series, err := b.Metrics.Catalog().FindSeries(ctx, "", key.service, prefix+suffix, key.labels, 500)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			for _, item := range series {
 				if item.InstanceID != key.instance {
@@ -358,15 +590,19 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 				}
 				latest, err := b.Metrics.Latest(ctx, item.SeriesID)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				*target = latest.Value
 				break
 			}
 		}
-		inventorySeries, _, err := b.Metrics.Catalog().ListSeries(ctx, key.producer, prefix+"inventory_last_success_timestamp_seconds", "", 0, 100)
+		if !ownsExpectedDatasetInventory(key.producer) {
+			values[key] = current
+			continue
+		}
+		inventorySeries, _, err := b.Metrics.Catalog().ListSeries(ctx, key.service, prefix+"inventory_last_success_timestamp_seconds", "", 0, 100)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, item := range inventorySeries {
 			if item.InstanceID != key.instance {
@@ -374,27 +610,39 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			}
 			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			current.inventory = latest.Value
 			break
 		}
 		values[key] = current
 	}
-	out := make([]DatasetFrequencyStatus, 0, len(values))
-	for key, value := range values {
-		out = append(out, datasetStatus(now, key, value, b.Policy))
-	}
-	return out, nil
+	return nil
+}
+
+func datasetScopeKey(spaceID, datasetID, freq string) string {
+	return strings.Join([]string{spaceID, datasetID, freq}, "\x00")
 }
 
 func metricPrefixForDataset(key datasetKey, series []monmetrics.MetricSeries) string {
 	for _, item := range series {
-		if item.ServiceName == key.producer && item.InstanceID == key.instance && item.LabelsJSON == key.labels {
+		if item.ServiceName == key.service && item.InstanceID == key.instance && item.LabelsJSON == key.labels {
 			return strings.TrimSuffix(item.MetricName, "_dataset_enabled") + "_dataset_enabled"
 		}
 	}
-	return ""
+	return "moox_" + key.producer + "_dataset_"
+}
+
+func datasetModuleFromMetric(metricName string) string {
+	if !strings.HasPrefix(metricName, "moox_") {
+		return ""
+	}
+	rest := strings.TrimPrefix(metricName, "moox_")
+	module, _, ok := strings.Cut(rest, "_dataset_")
+	if !ok {
+		return ""
+	}
+	return module
 }
 
 func datasetLabels(raw string) (map[string]string, error) {
@@ -434,7 +682,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	switch {
 	case value.reporterStale:
 		item.Status, item.Reason = "stale", "producer stale"
-	case inventoryAt.IsZero() || now.Sub(inventoryAt) > 10*time.Minute:
+	case ownsExpectedDatasetInventory(key.producer) && (inventoryAt.IsZero() || now.Sub(inventoryAt) > 10*time.Minute):
 		item.Status, item.Reason = "unknown", "inventory_stale"
 	case item.LastRunAt.IsZero():
 		item.Status, item.Reason = "unknown", "尚未上报"
@@ -452,6 +700,10 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Status, item.Reason = "healthy", "normal"
 	}
 	return item
+}
+
+func ownsExpectedDatasetInventory(producer string) bool {
+	return producer == "collector" || producer == "factor"
 }
 
 func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeTimeSeriesPolicy) (time.Duration, time.Duration, time.Duration) {
@@ -531,38 +783,81 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
 	}
-	const metricName = "moox_trade_balance_sync_last_success_timestamp_seconds"
-	series, total, err := b.Metrics.Catalog().ListSeries(ctx, "", metricName, "", 0, 101)
+	lastSuccess, err := b.balanceMetricValues(ctx, "moox_trade_balance_sync_last_success_timestamp_seconds")
 	if err != nil {
 		return nil, err
 	}
-	if total > 100 {
-		return nil, fmt.Errorf("trade balance series exceed limit 100")
+	lastRun, err := b.balanceMetricValues(ctx, "moox_trade_balance_sync_last_run_timestamp_seconds")
+	if err != nil {
+		return nil, err
+	}
+	failures, err := b.balanceMetricValues(ctx, "moox_trade_balance_sync_consecutive_failures")
+	if err != nil {
+		return nil, err
+	}
+	differences, err := b.balanceMetricValues(ctx, "moox_trade_balance_sync_max_difference_ratio")
+	if err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	if b.Now != nil {
 		now = b.Now().UTC()
 	}
-	out := make([]BusinessStatus, 0, len(series))
+	threshold := b.BalanceDifferenceThreshold
+	if threshold <= 0 {
+		threshold = 0.05
+	}
+	out := make([]BusinessStatus, 0, len(lastSuccess))
+	for key, successValue := range lastSuccess {
+		lastSuccessAt := unixTime(successValue.value)
+		lastCheckedAt := lastSuccessAt
+		if runValue, ok := lastRun[key]; ok {
+			lastCheckedAt = unixTime(runValue.value)
+		}
+		status, reason := "healthy", "balance sync fresh"
+		switch {
+		case successValue.stale:
+			status, reason = "stale", "producer stale"
+		case failures[key].value >= 3:
+			status, reason = "down", "balance sync failed 3 consecutive runs"
+		case differences[key].value > threshold:
+			status, reason = "down", fmt.Sprintf("balance difference %.4f exceeds %.4f", differences[key].value, threshold)
+		case lastSuccessAt.IsZero():
+			status, reason = "unknown", "尚未上报"
+		case now.Sub(lastSuccessAt) > 15*time.Minute:
+			status, reason = "down", "balance sync stale"
+		}
+		out = append(out, BusinessStatus{
+			Kind: "balance", Module: successValue.serviceName, Status: status,
+			Reason: reason, LastCheckedAt: lastCheckedAt,
+		})
+	}
+	return out, nil
+}
+
+type balanceMetricValue struct {
+	serviceName string
+	value       float64
+	stale       bool
+}
+
+func (b Builder) balanceMetricValues(ctx context.Context, metricName string) (map[string]balanceMetricValue, error) {
+	series, total, err := b.Metrics.Catalog().ListSeries(ctx, "", metricName, "", 0, 101)
+	if err != nil {
+		return nil, err
+	}
+	if total > 100 {
+		return nil, fmt.Errorf("trade balance series exceed limit 100 for %s", metricName)
+	}
+	out := make(map[string]balanceMetricValue, len(series))
 	for _, item := range series {
 		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
 		if err != nil {
 			return nil, err
 		}
-		lastSuccess := unixTime(latest.Value)
-		status, reason := "healthy", "balance sync fresh"
-		switch {
-		case item.IsStale:
-			status, reason = "stale", "producer stale"
-		case lastSuccess.IsZero():
-			status, reason = "unknown", "尚未上报"
-		case now.Sub(lastSuccess) > 15*time.Minute:
-			status, reason = "down", "balance sync stale"
+		out[item.ServiceName+"\x00"+item.InstanceID] = balanceMetricValue{
+			serviceName: item.ServiceName, value: latest.Value, stale: item.IsStale,
 		}
-		out = append(out, BusinessStatus{
-			Kind: "balance", Module: item.ServiceName, Status: status,
-			Reason: reason, LastCheckedAt: lastSuccess,
-		})
 	}
 	return out, nil
 }

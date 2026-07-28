@@ -137,6 +137,31 @@ func TestDatasetMetricsRejectsUnknownDatasetAndLabels(t *testing.T) {
 	}
 }
 
+func TestDatasetMetricsObserveFactDoesNotDeclareEnabledInventory(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewDatasetMetrics(registry, "storage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := DatasetKey{SpaceID: "crypto", DatasetID: "market_kline", Freq: "1m"}
+	if err := metrics.ObserveFact(DatasetObservation{
+		Key: key, Result: "success", Rows: 1, FinishedAt: time.Now().UTC(),
+		OutputWatermark: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() == "moox_storage_dataset_enabled" {
+			t.Fatal("fact-only Storage observation declared an enabled Dataset")
+		}
+	}
+	requireMetricFamily(t, families, "moox_storage_dataset_output_watermark_timestamp_seconds")
+}
+
 func TestDatasetMetricsAcceptsEmptyWithoutExpandingModuleResults(t *testing.T) {
 	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "collector")
 	if err != nil {

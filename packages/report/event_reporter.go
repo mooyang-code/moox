@@ -11,16 +11,14 @@ import (
 )
 
 type EventReporter struct {
-	Registry  *events.Registry
-	Publisher Publisher
+	Registry    *events.Registry
+	Publisher   Publisher
+	publisherFn func(context.Context) (Publisher, error)
 }
 
 func (r *EventReporter) ReportHealth(ctx context.Context, report *observabilitypb.HealthCheckReport, spaceID string) error {
 	if r == nil || r.Registry == nil {
 		return fmt.Errorf("health event reporter registry is not initialized")
-	}
-	if r.Publisher == nil {
-		return fmt.Errorf("health event reporter publisher is not initialized")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -48,7 +46,18 @@ func (r *EventReporter) ReportHealth(ctx context.Context, report *observabilityp
 	if _, err := r.Registry.Encode(events.ObservabilityHealthCheckReported, report, options); err != nil {
 		return fmt.Errorf("validate health check report: %w", err)
 	}
-	if _, err := r.Publisher.Publish(ctx, events.ObservabilityHealthCheckReported, report, options); err != nil {
+	publisher := r.Publisher
+	if publisher == nil && r.publisherFn != nil {
+		var err error
+		publisher, err = r.publisherFn(ctx)
+		if err != nil {
+			return fmt.Errorf("publish health check report: eventbus unavailable")
+		}
+	}
+	if publisher == nil {
+		return fmt.Errorf("health event reporter publisher is not initialized")
+	}
+	if _, err := publisher.Publish(ctx, events.ObservabilityHealthCheckReported, report, options); err != nil {
 		// Transport implementations may include credential material in their
 		// errors. Keep this boundary useful to callers without relaying secrets.
 		return fmt.Errorf("publish health check report: eventbus publish failed")

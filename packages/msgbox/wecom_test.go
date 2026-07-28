@@ -162,6 +162,19 @@ func TestNewWeComSenderRequiresHTTPS(t *testing.T) {
 	}
 }
 
+func TestNewWeComSenderWithTimeoutUsesConfiguredValue(t *testing.T) {
+	sender, err := NewWeComSenderWithTimeout("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sender.timeout != 3*time.Second {
+		t.Fatalf("timeout = %s", sender.timeout)
+	}
+	if _, err := NewWeComSenderWithTimeout("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", 0); err == nil {
+		t.Fatal("zero timeout was accepted")
+	}
+}
+
 func TestWeComSenderErrorsDoNotLeakSecrets(t *testing.T) {
 	const secret = "super-secret-webhook-key"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

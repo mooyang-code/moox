@@ -192,6 +192,13 @@ func validateSnapshot(s *hostmetricpb.HostSnapshot) error {
 				}
 			}
 		}
+		if n.GetErrorRateAvailable() {
+			for _, value := range []float64{n.GetReceiveErrorsPerSecond(), n.GetTransmitErrorsPerSecond()} {
+				if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+					return errors.New("network error rate is invalid")
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -234,7 +241,7 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 		}
 		current = result.Current
 		if result.Transition != nil && s.presence != nil {
-			s.presence.HandlePresenceTransition(ctx, *result.Transition)
+			_ = s.presence.HandlePresenceTransition(ctx, *result.Transition)
 		}
 	}
 	if !current {

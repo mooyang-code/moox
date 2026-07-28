@@ -130,6 +130,11 @@ func networkColumns() []*storagepb.DatasetColumn {
 		activeColumn("receive_dropped_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
 		activeColumn("transmit_dropped_total", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT),
 		activeColumn("rate_available", storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL),
+		activeColumn("error_rate_available", storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL),
+		activeColumn("receive_bytes_per_second", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
+		activeColumn("transmit_bytes_per_second", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
+		activeColumn("receive_errors_per_second", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
+		activeColumn("transmit_errors_per_second", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE),
 	}
 }
 
@@ -302,22 +307,27 @@ func TestStorageWriterIncludesRateColumnsWhenAvailable(t *testing.T) {
 		}},
 		Networks: []*hostmetricpb.NetworkMetric{{
 			Device: "eth0", RateAvailable: true, ReceiveBytesPerSecond: 6, TransmitBytesPerSecond: 7,
+			ErrorRateAvailable: true, ReceiveErrorsPerSecond: 1.5, TransmitErrorsPerSecond: 0.5,
 		}},
 		Filesystems: []*hostmetricpb.FilesystemMetric{{Device: "sda1", Mountpoint: "/", FsType: "ext4"}},
 	}
 	require.NoError(t, writer.WriteSnapshot(context.Background(), snapshot, "agent-1", time.Now().UTC(), "event-1"))
 	require.Len(t, fake.requests, 4)
-	foundRate := false
+	foundRate, foundErrorRate := false, false
 	for _, req := range fake.requests {
 		for _, row := range req.GetRows() {
 			for _, field := range row.GetFields() {
 				if field.GetFieldId() == "read_bytes_per_second" || field.GetFieldId() == "receive_bytes_per_second" {
 					foundRate = true
 				}
+				if field.GetFieldId() == "receive_errors_per_second" {
+					foundErrorRate = true
+				}
 			}
 		}
 	}
 	assert.True(t, foundRate)
+	assert.True(t, foundErrorRate)
 }
 
 func TestStorageReaderValidationAndMerge(t *testing.T) {
@@ -338,7 +348,7 @@ func TestStorageReaderValidationAndMerge(t *testing.T) {
 			Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 40, AvailableBytes: 60, UsagePercent: 40},
 		}, "agent-1")),
 		readRow(diskRow(SpaceID, cfg.DiskDatasetID, "1m", at, &hostmetricpb.DiskMetric{Device: "sda", ReadBytesTotal: 9, RateAvailable: true}, "agent-1")),
-		readRow(networkRow(SpaceID, cfg.NetworkDatasetID, "1m", at, &hostmetricpb.NetworkMetric{Device: "eth0", Operstate: "up", ReceiveBytesTotal: 1}, "agent-1")),
+		readRow(networkRow(SpaceID, cfg.NetworkDatasetID, "1m", at, &hostmetricpb.NetworkMetric{Device: "eth0", Operstate: "up", ReceiveBytesTotal: 1, ErrorRateAvailable: true, ReceiveErrorsPerSecond: 1.5}, "agent-1")),
 	}}
 	points, err := NewStorageReader(fake, cfg).History(context.Background(), "agent-1", time.Now().Add(-time.Hour), time.Now().UTC(), 0)
 	require.NoError(t, err)
@@ -346,6 +356,8 @@ func TestStorageReaderValidationAndMerge(t *testing.T) {
 	assert.Equal(t, uint32(8), points[0].Snapshot.GetCpu().GetLogicalCores())
 	require.Len(t, points[0].Snapshot.GetDisks(), 1)
 	require.Len(t, points[0].Snapshot.GetNetworks(), 1)
+	assert.True(t, points[0].Snapshot.GetNetworks()[0].GetErrorRateAvailable())
+	assert.Equal(t, 1.5, points[0].Snapshot.GetNetworks()[0].GetReceiveErrorsPerSecond())
 
 	errFake := &readerAccessErrFake{err: errors.New("read fail")}
 	_, err = NewStorageReader(errFake, cfg).History(context.Background(), "agent-1", time.Now().Add(-time.Hour), time.Now().UTC(), 10)

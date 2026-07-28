@@ -52,8 +52,9 @@ func TestHostSilenceScanSurvivesMonitorRestartAndIsolatesSameNamedHosts(t *testi
 	scanner := hostmetrics.NewSilenceScanner(
 		restartedRegistry,
 		90*time.Second,
-		hostmetrics.PresenceTransitionFunc(func(_ context.Context, transition hostmetrics.PresenceTransition) {
+		hostmetrics.PresenceTransitionFunc(func(_ context.Context, transition hostmetrics.PresenceTransition) error {
 			transitions = append(transitions, transition)
+			return nil
 		}),
 	)
 	scanAt := startedAt.Add(91 * time.Second)

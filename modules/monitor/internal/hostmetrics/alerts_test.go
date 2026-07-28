@@ -13,13 +13,26 @@ func TestHostValuesAggregatesEntitiesAndUnavailableRates(t *testing.T) {
 		Memory:      &hostmetricpb.MemoryMetric{UsagePercent: 50},
 		Filesystems: []*hostmetricpb.FilesystemMetric{{UsagePercent: 40}, {UsagePercent: 90}},
 		Disks:       []*hostmetricpb.DiskMetric{{RateAvailable: true, UtilizationPercent: 20}, {RateAvailable: true, UtilizationPercent: 70}},
-		Networks:    []*hostmetricpb.NetworkMetric{{RateAvailable: true, ReceiveErrorsTotal: 2}, {RateAvailable: false, ReceiveErrorsTotal: 100}},
+		Networks: []*hostmetricpb.NetworkMetric{
+			{ErrorRateAvailable: true, ReceiveErrorsPerSecond: 1.25, TransmitErrorsPerSecond: 0.75},
+			{ErrorRateAvailable: false, ReceiveErrorsTotal: 100},
+		},
 	})
 	if values[HostMetricCPU].available {
 		t.Fatal("unavailable CPU was treated as available")
 	}
 	if values[HostMetricFilesystemUsage].value != 90 || values[HostMetricDiskUtilization].value != 70 || values[HostMetricNetworkErrors].value != 2 {
 		t.Fatalf("aggregated values=%v", values)
+	}
+}
+
+func TestHostValuesDoesNotTreatCumulativeNetworkErrorsAsARate(t *testing.T) {
+	values := hostValues(&hostmetricpb.HostSnapshot{Networks: []*hostmetricpb.NetworkMetric{{
+		RateAvailable: true, ReceiveErrorsTotal: 100, TransmitErrorsTotal: 50,
+		ErrorRateAvailable: false,
+	}}})
+	if values[HostMetricNetworkErrors].available {
+		t.Fatalf("cumulative network errors were treated as an interval rate: %+v", values)
 	}
 }
 

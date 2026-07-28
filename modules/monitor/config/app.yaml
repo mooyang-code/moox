@@ -38,6 +38,7 @@ observability:
   eventbus_urls:
     - nats://127.0.0.1:4222
   credential_file: ~/.config/moox/eventbus/monitor-observability.yaml
+  balance_difference_threshold: 0.05
 
 market_canary:
   enabled: true
@@ -52,7 +53,7 @@ market_canary:
 
 metrics:
   enabled: true
-  pipeline_config_path: ../config/monitor-pipelines.yaml
+  pipeline_config_path: ../../examples/monitor-pipelines.yaml
   no_data_intervals: 2
   storage:
     gateway_target: ip://127.0.0.1:11003

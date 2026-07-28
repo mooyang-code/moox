@@ -120,15 +120,11 @@ func (h *Handler) EventReporter(ctx context.Context) (*EventReporter, error) {
 	if h == nil {
 		return nil, fmt.Errorf("metrics reporter handler is nil")
 	}
-	publisher, err := h.publisher(ctx)
-	if err != nil {
-		return nil, err
-	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return nil, err
 	}
-	return &EventReporter{Registry: registry, Publisher: publisher}, nil
+	return &EventReporter{Registry: registry, publisherFn: h.publisher}, nil
 }
 
 func (h *Handler) reportError(ctx context.Context, err error) error {

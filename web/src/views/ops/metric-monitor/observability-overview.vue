@@ -33,7 +33,7 @@
     <section class="overview-section">
       <div class="section-head"><strong>服务</strong><span>健康检查与 Reporter freshness</span></div>
       <a-table
-        row-key="service_name"
+        :row-key="serviceRowKey"
         size="small"
         :loading="loading"
         :data="overview.services || []"
@@ -109,7 +109,7 @@
         </a-select>
       </div>
       <a-table
-        row-key="dataset_id"
+        :row-key="datasetRowKey"
         size="small"
         :loading="loading"
         :data="filteredDatasets"
@@ -153,7 +153,7 @@
     <section class="overview-section">
       <div class="section-head"><strong>Canary / Balance</strong><span>业务逻辑最后检查结果</span></div>
       <a-table
-        row-key="kind"
+        :row-key="businessRowKey"
         size="small"
         :loading="loading"
         :data="overview.business_checks || []"
@@ -208,7 +208,9 @@ const abnormalCount = computed(
       ...(overview.value.hosts || []),
       ...(overview.value.datasets || []),
       ...(overview.value.business_checks || [])
-    ].filter(item => item.status !== "healthy").length
+    ].filter(item => item.status !== "healthy").length +
+    (overview.value.scf?.timeout_count || 0) +
+    (overview.value.scf?.unknown_count || 0)
 );
 const datasetEmptyDescription = computed(() => {
   if ((overview.value.services || []).some(item => item.status === "stale")) return "producer stale";
@@ -230,6 +232,18 @@ async function loadOverview() {
 
 function unique(values: Array<string | undefined>) {
   return [...new Set(values.filter((value): value is string => Boolean(value)))].sort();
+}
+
+function serviceRowKey(record: NonNullable<ObservabilityOverview["services"]>[number]) {
+  return [record.node_id, record.service_name, record.instance_id].join("\u0000");
+}
+
+function datasetRowKey(record: NonNullable<ObservabilityOverview["datasets"]>[number]) {
+  return [record.producer, record.space_id, record.dataset_id, record.freq].join("\u0000");
+}
+
+function businessRowKey(record: NonNullable<ObservabilityOverview["business_checks"]>[number]) {
+  return [record.kind, record.module, record.last_checked_at].join("\u0000");
 }
 
 function statusColor(status?: string) {

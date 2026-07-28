@@ -13,12 +13,16 @@ import (
 
 type WebhookNotifier struct {
 	NewSender func(string) (msgbox.Sender, error)
+	Timeout   time.Duration
 }
 
 func (n WebhookNotifier) Send(ctx context.Context, webhook domain.WebhookChannel, event Event) error {
 	factory := n.NewSender
 	if factory == nil {
 		factory = func(url string) (msgbox.Sender, error) {
+			if n.Timeout > 0 {
+				return msgbox.NewWeComSenderWithTimeout(url, n.Timeout)
+			}
 			return msgbox.NewWeComSender(url)
 		}
 	}

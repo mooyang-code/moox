@@ -39,6 +39,9 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if !cfg.Observability.Enabled || len(cfg.Observability.EventBusURLs) == 0 {
 		t.Fatalf("observability defaults = %+v", cfg.Observability)
 	}
+	if cfg.Observability.BalanceDifferenceThreshold != 0.05 {
+		t.Fatalf("balance difference threshold = %v", cfg.Observability.BalanceDifferenceThreshold)
+	}
 }
 
 func TestMonitorConfigTRPCPort(t *testing.T) {
@@ -169,6 +172,14 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 		if strings.Contains(text, oldKey) {
 			t.Fatalf("app config still contains %q", oldKey)
 		}
+	}
+}
+
+func TestMonitorDefaultPipelinePathExistsFromModuleWorkingDirectory(t *testing.T) {
+	moduleRoot := filepath.Join("..", "..")
+	cfg := Default()
+	if _, err := os.Stat(filepath.Join(moduleRoot, cfg.Metrics.PipelineConfigPath)); err != nil {
+		t.Fatalf("pipeline_config_path %q is not usable from modules/monitor: %v", cfg.Metrics.PipelineConfigPath, err)
 	}
 }
 

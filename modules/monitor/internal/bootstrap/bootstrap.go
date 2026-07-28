@@ -49,6 +49,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
 		return nil, err
 	}
+	alertNotifier := alerting.WebhookNotifier{Timeout: time.Duration(cfg.Alert.SendTimeoutSeconds) * time.Second}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
 	if err := registerExternalSentinelChecks(ctx, runtime.Repositories); err != nil {
@@ -57,7 +58,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	runtime.ObservabilityHealthRoute = externalHealthRoute(
 		runtime.Repositories,
-		alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{Notifier: alerting.WebhookNotifier{}}),
+		alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{Notifier: alertNotifier}),
 	)
 	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	if err != nil {
@@ -66,7 +67,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	var presenceSender msgbox.Sender
 	if webhookURL := strings.TrimSpace(os.Getenv("MOOX_MSGBOX_WECOM_WEBHOOK")); webhookURL != "" {
-		presenceSender, err = msgbox.NewWeComSender(webhookURL)
+		presenceSender, err = msgbox.NewWeComSenderWithTimeout(webhookURL, alertNotifier.Timeout)
 		if err != nil {
 			_ = runtime.Close()
 			return nil, fmt.Errorf("initialize host presence notifier: %w", err)
@@ -104,7 +105,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
 			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
-			Notifier: alerting.WebhookNotifier{},
+			Notifier: alertNotifier,
 			Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
 				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, webhookID)
 			},
@@ -137,14 +138,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			Webhook: func(ctx context.Context, spaceID, id string) (*domain.WebhookChannel, error) {
 				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, id)
 			},
-			Notifier: monmetrics.WebhookMetricNotifier{},
+			Notifier: monmetrics.WebhookMetricNotifier{Sender: alertNotifier},
 		})
 	}
 	if err := registerHealth(s, cfg, runtime, metricsStorage); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	resultHook := monitorResultHook(runtime)
+	resultHook := monitorResultHook(runtime, alertNotifier)
 	probeRunner := buildProbeRunner(cfg)
 	marketCanary, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, resultHook)
 	if err != nil {
@@ -160,7 +161,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if hostGate != nil {
 		hostReady = hostGate.Ready
 	}
-	pipelines, pipelineErr := report.ValidatePipelineEnvironment()
+	pipelines, pipelineErr := loadMonitorPipelines(cfg)
 	if pipelineErr != nil {
 		_ = runtime.Close()
 		return nil, pipelineErr
@@ -172,7 +173,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	businessFreshness := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,
 		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-		Policy: doctorContext.Pipelines.RealtimeTimeSeries,
+		Policy:                     doctorContext.Pipelines.RealtimeTimeSeries,
+		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 	}, runtime.Repositories, resultHook)
 	watchdogRun := func(watchdogCtx context.Context) error {
 		var marketErr, freshnessErr error
@@ -211,4 +213,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
+}
+
+func loadMonitorPipelines(cfg *config.Config) (report.PipelineConfig, error) {
+	if strings.TrimSpace(os.Getenv("MOOX_PIPELINE_CONFIG")) != "" {
+		return report.ValidatePipelineEnvironment()
+	}
+	if cfg == nil || strings.TrimSpace(cfg.Metrics.PipelineConfigPath) == "" {
+		return report.PipelineConfig{}, fmt.Errorf("monitor pipeline config path is required")
+	}
+	return report.LoadPipelineAllowlist(cfg.Metrics.PipelineConfigPath)
 }

@@ -29,6 +29,17 @@ func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
 	assert.Equal(t, "monitor", runner.HTTP.HealthSigner.AccessKey)
 }
 
+func TestLoadMonitorPipelinesFallsBackToAppConfigPath(t *testing.T) {
+	t.Setenv("MOOX_PIPELINE_CONFIG", "")
+	t.Setenv("MOOX_PIPELINE_CONFIG_HASH", "")
+	cfg := config.Default()
+	cfg.Metrics.PipelineConfigPath = filepath.Join("..", "..", "..", "..", "examples", "monitor-pipelines.yaml")
+	pipelines, err := loadMonitorPipelines(cfg)
+	require.NoError(t, err)
+	require.Equal(t, 2, pipelines.Version)
+	require.Greater(t, pipelines.RealtimeTimeSeries.Defaults.RunMissedIntervals, 0)
+}
+
 func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
@@ -201,7 +212,7 @@ func TestMonitorResultHook(t *testing.T) {
 	require.NoError(t, rt.Repositories.Alerts.CreateEvent(context.Background(), &domain.AlertEvent{
 		EventID: "event-1", EventType: domain.AlertEventTriggered, CreatedAt: now,
 	}))
-	hook := monitorResultHook(rt)
+	hook := monitorResultHook(rt, nil)
 	require.NotNil(t, hook)
 	hook(context.Background(), domain.Check{SpaceID: "default", CheckID: "c1", Enabled: true}, domain.CheckResult{
 		SpaceID: "default", CheckID: "c1", Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now().UTC(),

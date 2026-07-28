@@ -155,6 +155,16 @@ func (m *DatasetMetrics) ObserveInventoryRefreshError() {
 }
 
 func (m *DatasetMetrics) ObserveRun(observation DatasetObservation) error {
+	return m.observeRun(observation, true)
+}
+
+// ObserveFact records an authoritative commit fact without declaring that the
+// reporting module owns the enabled Dataset inventory.
+func (m *DatasetMetrics) ObserveFact(observation DatasetObservation) error {
+	return m.observeRun(observation, false)
+}
+
+func (m *DatasetMetrics) observeRun(observation DatasetObservation, requireExpected bool) error {
 	if m == nil {
 		return fmt.Errorf("dataset metrics are nil")
 	}
@@ -170,7 +180,7 @@ func (m *DatasetMetrics) ObserveRun(observation DatasetObservation) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.expected[observation.Key]; !ok {
+	if _, ok := m.expected[observation.Key]; requireExpected && !ok {
 		return fmt.Errorf("dataset %s/%s/%s is not expected", observation.Key.SpaceID, observation.Key.DatasetID, observation.Key.Freq)
 	}
 	values := datasetLabelValues(observation.Key)

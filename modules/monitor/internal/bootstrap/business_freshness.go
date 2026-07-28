@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"gorm.io/gorm"
@@ -31,11 +32,38 @@ func buildBusinessFreshnessReporter(
 		if err != nil {
 			return err
 		}
-		items := make(map[string]businessFreshnessItem, len(overview.Datasets)+len(overview.BusinessChecks)+1)
+		items := make(map[string]businessFreshnessItem, len(overview.Services)+len(overview.Datasets)+len(overview.BusinessChecks)+1)
+		suppressed := make(map[string]struct{})
+		for _, service := range overview.Services {
+			if service.ReporterStatus == "" {
+				continue
+			}
+			checkID := strings.Join([]string{
+				"reporter", service.NodeID, service.ServiceName, service.InstanceID,
+			}, ":")
+			item := businessFreshnessItem{
+				spaceID: monmetrics.InternalMetricSpaceID,
+				checkID: checkID,
+				name:    strings.Join([]string{"Reporter", service.ServiceName, service.NodeID, service.InstanceID}, " "),
+				success: service.ReporterStatus == "healthy",
+				reason:  serviceReporterReason(service.ReporterStatus),
+			}
+			items[item.spaceID+"\x00"+item.checkID] = item
+		}
 		for _, dataset := range overview.Datasets {
+			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
+			if dataset.Producer == "storage" {
+				// Storage rows are commit facts, not an enabled inventory owned
+				// by Storage, so they never create independent freshness checks.
+				continue
+			}
+			if dataset.Reason == "producer stale" {
+				suppressed[dataset.SpaceID+"\x00"+checkID] = struct{}{}
+				continue
+			}
 			item := businessFreshnessItem{
 				spaceID: dataset.SpaceID,
-				checkID: strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":"),
+				checkID: checkID,
 				name:    strings.Join([]string{"Dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, " "),
 				success: dataset.Status == "healthy",
 				reason:  dataset.Reason,
@@ -91,6 +119,9 @@ func buildBusinessFreshnessReporter(
 		}
 		for _, check := range existing {
 			key := check.SpaceID + "\x00" + check.CheckID
+			if _, frozen := suppressed[key]; frozen {
+				continue
+			}
 			if _, ok := items[key]; !ok {
 				items[key] = businessFreshnessItem{
 					spaceID: check.SpaceID, checkID: check.CheckID, name: check.Name,
@@ -166,5 +197,18 @@ func buildBusinessFreshnessReporter(
 			}
 		}
 		return errors.Join(errs...)
+	}
+}
+
+func serviceReporterReason(status string) string {
+	switch status {
+	case "healthy":
+		return "reporter fresh"
+	case "stale":
+		return "producer stale"
+	case "missing":
+		return "reporter missing"
+	default:
+		return "reporter has not reported"
 	}
 }

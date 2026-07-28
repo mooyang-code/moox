@@ -56,6 +56,9 @@ for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do
   grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
   grep -q "dataset_id: ${dataset}.*status: disabled" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
 done
+for column in receive_errors_per_second transmit_errors_per_second error_rate_available; do
+  grep -q "dataset_id: host_net_v1, column_name: ${column}" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
+done
 grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
 grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-metrics.seed.yaml"
 

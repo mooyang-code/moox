@@ -125,7 +125,8 @@ func hasHostColumns(dataset string, cfg monconfig.HostStorageConfig, columns []*
 	case cfg.NetworkDatasetID:
 		add([]string{"device", "operstate"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING)
 		add([]string{"receive_bytes_total", "transmit_bytes_total", "receive_errors_total", "transmit_errors_total", "receive_dropped_total", "transmit_dropped_total"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_INT)
-		add([]string{"rate_available"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL)
+		add([]string{"receive_bytes_per_second", "transmit_bytes_per_second", "receive_errors_per_second", "transmit_errors_per_second"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE)
+		add([]string{"rate_available", "error_rate_available"}, storagepb.FieldValueType_FIELD_VALUE_TYPE_BOOL)
 	}
 	for _, column := range columns {
 		if column == nil || !strings.EqualFold(column.GetStatus(), "active") {

@@ -110,9 +110,12 @@ func hostValues(s *hostmetricpb.HostSnapshot) map[string]hostValue {
 		}
 	}
 	for _, network := range s.GetNetworks() {
-		if network.GetRateAvailable() {
+		if network.GetErrorRateAvailable() {
 			current := values[HostMetricNetworkErrors]
-			values[HostMetricNetworkErrors] = hostValue{current.value + float64(network.GetReceiveErrorsTotal()) + float64(network.GetTransmitErrorsTotal()), true}
+			values[HostMetricNetworkErrors] = hostValue{
+				current.value + network.GetReceiveErrorsPerSecond() + network.GetTransmitErrorsPerSecond(),
+				true,
+			}
 		}
 	}
 	return values

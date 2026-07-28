@@ -35,6 +35,25 @@ func (s *senderStub) Send(context.Context, msgbox.Message) error {
 	return nil
 }
 
+type blockingEventReporter struct{ calls atomic.Int32 }
+
+func (s *blockingEventReporter) ReportHealth(ctx context.Context, _ *observabilitypb.HealthCheckReport, _ string) error {
+	s.calls.Add(1)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type contextCheckingSender struct {
+	called   atomic.Bool
+	canceled atomic.Bool
+}
+
+func (s *contextCheckingSender) Send(ctx context.Context, _ msgbox.Message) error {
+	s.called.Store(true)
+	s.canceled.Store(ctx.Err() != nil)
+	return nil
+}
+
 func TestWatchdogDirectSendBoundariesAndCooldown(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
@@ -91,6 +110,24 @@ func TestWatchdogEventBusFailureDirectSendsOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Error(t, handler.Handle(context.Background()))
 	require.Equal(t, int32(1), sender.count.Load())
+}
+
+func TestWatchdogEventBusDeadlineStillUsesFreshDirectContext(t *testing.T) {
+	events, sender := &blockingEventReporter{}, &contextCheckingSender{}
+	handler, err := NewWatchdogHandler(WatchdogOptions{
+		Enabled: true, ObserverID: "scf-sentinel", SpaceID: "crypto",
+		Ready: func() bool { return true }, Timeout: 20 * time.Millisecond,
+		Checks: []WatchdogCheck{
+			func(context.Context) CheckResult { return CheckResult{CheckID: "monitor_ready", Success: true} },
+			func(context.Context) CheckResult { return CheckResult{CheckID: "gateway_ready", Success: true} },
+		},
+		Events: events, DirectSender: sender,
+	})
+	require.NoError(t, err)
+	require.Error(t, handler.Handle(context.Background()))
+	require.Equal(t, int32(1), events.calls.Load(), "publishing must stop after the first EventBus failure")
+	require.True(t, sender.called.Load())
+	require.False(t, sender.canceled.Load(), "direct fallback inherited the exhausted watchdog deadline")
 }
 
 func TestWatchdogSkipsNotReadyAndOverlap(t *testing.T) {

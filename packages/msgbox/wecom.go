@@ -37,6 +37,16 @@ func NewWeComSender(webhookURL string) (*WeComSender, error) {
 	return newWeComSender(webhookURL)
 }
 
+func NewWeComSenderWithTimeout(webhookURL string, timeout time.Duration) (*WeComSender, error) {
+	if timeout <= 0 {
+		return nil, errors.New("msgbox: WeCom timeout must be positive")
+	}
+	return newWeComSender(webhookURL, func(options *weComOptions) error {
+		options.timeout = timeout
+		return nil
+	})
+}
+
 func newWeComSender(webhookURL string, options ...weComOption) (*WeComSender, error) {
 	config := weComOptions{timeout: defaultTimeout}
 	for _, option := range options {

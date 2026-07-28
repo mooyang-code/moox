@@ -9,21 +9,23 @@ import (
 const DefaultHostStaleAfter = 90 * time.Second
 
 type PresenceTransitionSink interface {
-	HandlePresenceTransition(context.Context, PresenceTransition)
+	HandlePresenceTransition(context.Context, PresenceTransition) error
 }
 
-type PresenceTransitionFunc func(context.Context, PresenceTransition)
+type PresenceTransitionFunc func(context.Context, PresenceTransition) error
 
-func (f PresenceTransitionFunc) HandlePresenceTransition(ctx context.Context, transition PresenceTransition) {
+func (f PresenceTransitionFunc) HandlePresenceTransition(ctx context.Context, transition PresenceTransition) error {
 	if f != nil {
-		f(ctx, transition)
+		return f(ctx, transition)
 	}
+	return nil
 }
 
 type SilenceScanner struct {
 	registry   *Registry
 	staleAfter time.Duration
 	sink       PresenceTransitionSink
+	pending    []PresenceTransition
 }
 
 func NewSilenceScanner(registry *Registry, staleAfter time.Duration, sink PresenceTransitionSink) *SilenceScanner {
@@ -41,9 +43,13 @@ func (s *SilenceScanner) Scan(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	transitions = append(s.pending, transitions...)
+	s.pending = s.pending[:0]
 	for _, transition := range transitions {
 		if s.sink != nil {
-			s.sink.HandlePresenceTransition(ctx, transition)
+			if err := s.sink.HandlePresenceTransition(ctx, transition); err != nil {
+				s.pending = append(s.pending, transition)
+			}
 		}
 	}
 	return nil

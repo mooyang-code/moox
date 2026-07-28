@@ -2,6 +2,7 @@ package hostmetrics
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -21,8 +22,9 @@ func TestSilenceScannerTransitionsOnceAndSurvivesRestart(t *testing.T) {
 	require.NoError(t, err)
 
 	var got []PresenceTransition
-	scanner := NewSilenceScanner(NewRegistry(db), 90*time.Second, PresenceTransitionFunc(func(_ context.Context, transition PresenceTransition) {
+	scanner := NewSilenceScanner(NewRegistry(db), 90*time.Second, PresenceTransitionFunc(func(_ context.Context, transition PresenceTransition) error {
 		got = append(got, transition)
+		return nil
 	}))
 	require.NoError(t, scanner.Scan(ctx, t0.Add(90*time.Second)))
 	require.Empty(t, got, "an agent is stale only after the full threshold")
@@ -43,6 +45,32 @@ func TestSilenceScannerTransitionsOnceAndSurvivesRestart(t *testing.T) {
 	require.Equal(t, int64(121), rows[0].StaleSeconds)
 }
 
+func TestSilenceScannerRetriesFailedTransitionDelivery(t *testing.T) {
+	ctx := context.Background()
+	registry := NewRegistry(openRegistryTestDB(t))
+	t0 := time.Date(2026, 7, 28, 1, 2, 3, 0, time.UTC)
+	_, err := registry.Observe(ctx, HostObservation{
+		AgentID: "agent-a", Hostname: "host-a", BootID: "boot-a",
+		OccurredAt: t0, EventID: "event-0",
+	})
+	require.NoError(t, err)
+
+	attempts := 0
+	scanner := NewSilenceScanner(registry, 90*time.Second, PresenceTransitionFunc(func(context.Context, PresenceTransition) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("wecom unavailable")
+		}
+		return nil
+	}))
+	require.NoError(t, scanner.Scan(ctx, t0.Add(91*time.Second)))
+	require.Equal(t, 1, attempts)
+	require.Len(t, scanner.pending, 1)
+	require.NoError(t, scanner.Scan(ctx, t0.Add(121*time.Second)))
+	require.Equal(t, 2, attempts)
+	require.Empty(t, scanner.pending)
+}
+
 func TestStorePublishesRecoveryTransitionAndDoesNotRegressLatestView(t *testing.T) {
 	ctx := context.Background()
 	registry := NewRegistry(openRegistryTestDB(t))
@@ -58,8 +86,9 @@ func TestStorePublishesRecoveryTransitionAndDoesNotRegressLatestView(t *testing.
 	var got []PresenceTransition
 	store := NewStore(&fakeSnapshotWriter{}, nil)
 	store.SetRegistry(registry)
-	store.SetPresenceTransitionSink(PresenceTransitionFunc(func(_ context.Context, transition PresenceTransition) {
+	store.SetPresenceTransitionSink(PresenceTransitionFunc(func(_ context.Context, transition PresenceTransition) error {
 		got = append(got, transition)
+		return nil
 	}))
 
 	newer := validHostMessage(t)

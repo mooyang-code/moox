@@ -67,8 +67,11 @@ fields:
   - {space_id: moox_system, field_id: host_transmit_dropped_total, name: Network transmit dropped total, value_type: int, status: active}
   - {space_id: moox_system, field_id: host_receive_bytes_per_second, name: Network receive bytes per second, value_type: double, status: active}
   - {space_id: moox_system, field_id: host_transmit_bytes_per_second, name: Network transmit bytes per second, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_receive_errors_per_second, name: Network receive errors per second, value_type: double, status: active}
+  - {space_id: moox_system, field_id: host_transmit_errors_per_second, name: Network transmit errors per second, value_type: double, status: active}
   - {space_id: moox_system, field_id: host_operstate, name: Network operational state, value_type: string, status: active}
   - {space_id: moox_system, field_id: host_net_rate_available, name: Network rate available, value_type: bool, status: active}
+  - {space_id: moox_system, field_id: host_net_error_rate_available, name: Network error rate available, value_type: bool, status: active}
 
 dataset_columns:
   - {space_id: moox_system, dataset_id: host_resource_v1, column_name: agent_id, origin_type: field, origin_id: host_agent_id, value_type: string, required: true, status: active}
@@ -109,4 +112,7 @@ dataset_columns:
   - {space_id: moox_system, dataset_id: host_net_v1, column_name: transmit_dropped_total, origin_type: field, origin_id: host_transmit_dropped_total, value_type: int, status: active}
   - {space_id: moox_system, dataset_id: host_net_v1, column_name: receive_bytes_per_second, origin_type: field, origin_id: host_receive_bytes_per_second, value_type: double, status: active}
   - {space_id: moox_system, dataset_id: host_net_v1, column_name: transmit_bytes_per_second, origin_type: field, origin_id: host_transmit_bytes_per_second, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: receive_errors_per_second, origin_type: field, origin_id: host_receive_errors_per_second, value_type: double, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: transmit_errors_per_second, origin_type: field, origin_id: host_transmit_errors_per_second, value_type: double, status: active}
   - {space_id: moox_system, dataset_id: host_net_v1, column_name: rate_available, origin_type: field, origin_id: host_net_rate_available, value_type: bool, status: active}
+  - {space_id: moox_system, dataset_id: host_net_v1, column_name: error_rate_available, origin_type: field, origin_id: host_net_error_rate_available, value_type: bool, status: active}

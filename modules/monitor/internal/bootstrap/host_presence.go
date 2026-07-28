@@ -11,11 +11,11 @@ import (
 )
 
 func hostPresenceTransitionSink(sender msgbox.Sender) hostmetrics.PresenceTransitionFunc {
-	return func(ctx context.Context, transition hostmetrics.PresenceTransition) {
+	return func(ctx context.Context, transition hostmetrics.PresenceTransition) error {
 		log.InfoContextf(ctx, "host presence transition agent_id=%s from=%s to=%s observed_at=%s",
 			transition.AgentID, transition.From, transition.To, transition.ObservedAt.Format(time.RFC3339Nano))
 		if sender == nil {
-			return
+			return nil
 		}
 		severity := msgbox.SeverityCritical
 		title := "MooX host unreachable"
@@ -35,6 +35,8 @@ func hostPresenceTransitionSink(sender msgbox.Sender) hostmetrics.PresenceTransi
 			},
 		}); err != nil {
 			log.ErrorContextf(ctx, "host presence notification failed agent_id=%s: %v", transition.AgentID, err)
+			return err
 		}
+		return nil
 	}
 }

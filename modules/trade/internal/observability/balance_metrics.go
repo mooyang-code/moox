@@ -14,10 +14,11 @@ var (
 )
 
 type BalanceMetrics struct {
-	runs          *prometheus.CounterVec
-	lastRun       prometheus.Gauge
-	lastSuccess   prometheus.Gauge
-	maxDifference prometheus.Gauge
+	runs                *prometheus.CounterVec
+	lastRun             prometheus.Gauge
+	lastSuccess         prometheus.Gauge
+	maxDifference       prometheus.Gauge
+	consecutiveFailures prometheus.Gauge
 }
 
 func DefaultBalanceMetrics() (*BalanceMetrics, error) {
@@ -45,8 +46,12 @@ func NewBalanceMetrics(registerer prometheus.Registerer) (*BalanceMetrics, error
 			Name: "moox_trade_balance_sync_max_difference_ratio",
 			Help: "Maximum relative difference between the prior local and venue balances.",
 		}),
+		consecutiveFailures: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "moox_trade_balance_sync_consecutive_failures",
+			Help: "Number of consecutive failed balance synchronization runs.",
+		}),
 	}
-	for _, collector := range []prometheus.Collector{metrics.runs, metrics.lastRun, metrics.lastSuccess, metrics.maxDifference} {
+	for _, collector := range []prometheus.Collector{metrics.runs, metrics.lastRun, metrics.lastSuccess, metrics.maxDifference, metrics.consecutiveFailures} {
 		if err := registerer.Register(collector); err != nil {
 			return nil, err
 		}
@@ -68,5 +73,8 @@ func (m *BalanceMetrics) Observe(now time.Time, maxDifference float64, err error
 	if err == nil {
 		m.lastSuccess.Set(timestamp)
 		m.maxDifference.Set(max(maxDifference, 0))
+		m.consecutiveFailures.Set(0)
+	} else {
+		m.consecutiveFailures.Inc()
 	}
 }

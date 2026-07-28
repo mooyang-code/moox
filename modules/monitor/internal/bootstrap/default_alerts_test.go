@@ -88,7 +88,7 @@ func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
 	for _, rule := range rules {
 		if _, _, ok := hostmetrics.ParseHostRuleKey(rule.CheckID); ok {
 			hostRules++
-			if rule.FailureThreshold != 5 {
+			if rule.FailureThreshold != 20 {
 				t.Fatalf("host failure threshold = %d", rule.FailureThreshold)
 			}
 		}

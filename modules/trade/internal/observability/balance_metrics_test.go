@@ -22,6 +22,10 @@ func TestBalanceMetricsTracksSuccessAndFailureWithoutAccountLabels(t *testing.T)
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.runs.WithLabelValues("error")))
 	require.Equal(t, float64(now.Unix()), testutil.ToFloat64(metrics.lastSuccess))
 	require.InDelta(t, 0.03, testutil.ToFloat64(metrics.maxDifference), 0.0001)
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.consecutiveFailures))
+
+	metrics.Observe(now.Add(2*time.Minute), 0.01, nil)
+	require.Zero(t, testutil.ToFloat64(metrics.consecutiveFailures))
 
 	families, err := registry.Gather()
 	require.NoError(t, err)
