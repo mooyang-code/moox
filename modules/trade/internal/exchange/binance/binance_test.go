@@ -143,7 +143,11 @@ func TestListRecentFillsNormalizesSwap(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.URL.Query().Get("symbol") != "BTCUSDT" ||
 			request.URL.Query().Get("fromId") != "7" {
-			t.Fatalf("query = %v", request.URL.Query())
+			if request.URL.Query().Get("orderId") != "42" {
+				t.Fatalf("query = %v", request.URL.Query())
+			}
+			_, _ = io.WriteString(w, `{"orderId":42,"clientOrderId":"cid","symbol":"BTCUSDT"}`)
+			return
 		}
 		_, _ = io.WriteString(w, `[{"id":7,"orderId":42,"symbol":"BTCUSDT","price":"100","qty":"0.01","commission":"-0.001","commissionAsset":"USDT","realizedPnl":"2.5","time":1700000000000,"isBuyer":true,"isMaker":false,"positionSide":"BOTH"}]`)
 	}))
@@ -156,7 +160,8 @@ func TestListRecentFillsNormalizesSwap(t *testing.T) {
 	if len(fills) != 1 || fills[0].Quantity.String() != "0.01" ||
 		fills[0].Fee.String() != "0.001" ||
 		fills[0].PositionSide != exchange.PositionSideNet ||
-		fills[0].SettlementAsset != "USDT" || cursor != "7" {
+		fills[0].SettlementAsset != "USDT" ||
+		fills[0].ClientOrderID != "cid" || cursor != "7" {
 		t.Fatalf("fills=%+v cursor=%s", fills, cursor)
 	}
 }

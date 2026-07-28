@@ -123,6 +123,11 @@ func (a *Adapter) dispatchPrivate(
 	if message.Event == "error" {
 		return classifyOKXCode(message.Code, message.Msg)
 	}
+	// Login and subscribe acknowledgements do not carry channel data. OKX
+	// emits one subscribe acknowledgement per requested channel.
+	if message.Event != "" {
+		return nil
+	}
 	switch message.Arg.Channel {
 	case "orders":
 		var rows []struct {

@@ -564,17 +564,55 @@ func (a *Adapter) ListRecentFills(
 	}
 	out := make([]exchange.Fill, 0, len(payload))
 	next := cursor
+	clientOrderIDs := make(map[string]string)
 	for _, row := range payload {
 		fill, err := a.fillFromPayload(row)
 		if err != nil {
 			return nil, cursor, err
 		}
+		orderID := row.OrderID.String()
+		clientOrderID, found := clientOrderIDs[orderID]
+		if !found {
+			clientOrderID, err = a.clientOrderIDByExchangeOrderID(ctx, symbol, orderID)
+			if err != nil {
+				return nil, cursor, err
+			}
+			clientOrderIDs[orderID] = clientOrderID
+		}
+		fill.ClientOrderID = clientOrderID
 		out = append(out, fill)
 		if row.ID.String() != "" {
 			next = row.ID.String()
 		}
 	}
 	return out, next, nil
+}
+
+func (a *Adapter) clientOrderIDByExchangeOrderID(
+	ctx context.Context,
+	symbol string,
+	exchangeOrderID string,
+) (string, error) {
+	if exchangeOrderID == "" {
+		return "", typedRejected("Binance Fill is missing order id", nil)
+	}
+	raw, err := a.request(
+		ctx,
+		http.MethodGet,
+		a.path("/api/v3/order", "/fapi/v1/order"),
+		url.Values{"symbol": []string{symbol}, "orderId": []string{exchangeOrderID}},
+	)
+	if err != nil {
+		return "", classifyAPIError(err, raw)
+	}
+	var payload orderPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", typedRejected("decode Fill order", err)
+	}
+	if strings.TrimSpace(payload.ClientOrderID) == "" {
+		return "", typedRejected("Binance Fill order is missing client order id", nil)
+	}
+	return payload.ClientOrderID, nil
 }
 
 func (a *Adapter) SetLeverage(

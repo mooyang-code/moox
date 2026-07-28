@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -603,37 +604,78 @@ func (a *Adapter) ListRecentFills(
 	if strings.TrimSpace(symbol) == "" {
 		return nil, cursor, rejected("symbol is required to list OKX fills", nil)
 	}
-	query := url.Values{
-		"instType": []string{a.instrumentType()},
-		"instId":   []string{symbol},
-		"limit":    []string{"100"},
-	}
-	if cursor != "" {
-		// OKX fill-history cursors are billId values. "before" returns rows
-		// newer than the supplied cursor; "after" paginates into older history.
-		query.Set("before", cursor)
-	}
-	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/fills-history", query, nil, true)
+	const pageSize = 100
+	payload, err := a.fillPage(ctx, symbol, "before", cursor, pageSize)
 	if err != nil {
 		return nil, cursor, err
 	}
-	var payload []fillPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, cursor, rejected("decode fills", err)
-	}
-	out := make([]exchange.Fill, 0, len(payload))
 	next := cursor
-	for index, row := range payload {
+	if len(payload) != 0 && payload[0].BillID != "" {
+		next = payload[0].BillID
+	}
+	rows := append([]fillPayload(nil), payload...)
+	for len(payload) == pageSize && cursor != "" {
+		oldest := payload[len(payload)-1].BillID
+		if oldest == "" || compareBillID(oldest, cursor) <= 0 {
+			break
+		}
+		payload, err = a.fillPage(ctx, symbol, "after", oldest, pageSize)
+		if err != nil {
+			return nil, cursor, err
+		}
+		rows = append(rows, payload...)
+	}
+	// OKX returns newest first. Apply only rows newer than the stored cursor,
+	// oldest first, so a large synchronization gap cannot skip intermediate
+	// Fills and downstream reducers observe chronological facts.
+	out := make([]exchange.Fill, 0, len(rows))
+	for index := len(rows) - 1; index >= 0; index-- {
+		row := rows[index]
+		if cursor != "" && compareBillID(row.BillID, cursor) <= 0 {
+			continue
+		}
 		fill, err := a.fill(row)
 		if err != nil {
 			return nil, cursor, err
 		}
 		out = append(out, fill)
-		if index == 0 && row.BillID != "" {
-			next = row.BillID
-		}
 	}
 	return out, next, nil
+}
+
+func (a *Adapter) fillPage(
+	ctx context.Context,
+	symbol string,
+	direction string,
+	cursor string,
+	limit int,
+) ([]fillPayload, error) {
+	query := url.Values{
+		"instType": []string{a.instrumentType()},
+		"instId":   []string{symbol},
+		"limit":    []string{strconv.Itoa(limit)},
+	}
+	if cursor != "" {
+		query.Set(direction, cursor)
+	}
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/fills-history", query, nil, true)
+	if err != nil {
+		return nil, err
+	}
+	var payload []fillPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, rejected("decode fills", err)
+	}
+	return payload, nil
+}
+
+func compareBillID(left string, right string) int {
+	leftID, leftOK := new(big.Int).SetString(left, 10)
+	rightID, rightOK := new(big.Int).SetString(right, 10)
+	if !leftOK || !rightOK {
+		return strings.Compare(left, right)
+	}
+	return leftID.Cmp(rightID)
 }
 
 func (a *Adapter) SetLeverage(

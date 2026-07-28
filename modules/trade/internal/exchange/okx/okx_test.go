@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -183,6 +184,63 @@ func TestRecentFillsAndPositionsConvertContracts(t *testing.T) {
 	}
 	if len(positions) != 1 || positions[0].SignedQuantity.String() != "-0.04" {
 		t.Fatalf("positions = %+v", positions)
+	}
+}
+
+func TestRecentFillsPaginatesWithoutSkippingGap(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		var high, low int
+		switch {
+		case request.URL.Query().Get("before") == "99":
+			high, low = 300, 201
+		case request.URL.Query().Get("after") == "201":
+			high, low = 200, 101
+		case request.URL.Query().Get("after") == "101":
+			high, low = 100, 100
+		default:
+			t.Fatalf("query = %v", request.URL.Query())
+		}
+		rows := make([]fillPayload, 0, high-low+1)
+		for billID := high; billID >= low; billID-- {
+			id := strconv.Itoa(billID)
+			rows = append(rows, fillPayload{
+				BillID: id, InstID: "BTC-USDT", TradeID: id,
+				OrdID: "42", ClOrdID: "cid", Side: "buy",
+				FillSz: "1", FillPx: "100", Ts: "1700000000000",
+			})
+		}
+		data, err := json.Marshal(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok(w, string(data))
+	}))
+	defer server.Close()
+	adapter := NewWithClient(exchange.AccountConfig{
+		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		SettlementAsset: "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
+		httpclient.New(server.URL))
+	fills, cursor, err := adapter.ListRecentFills(
+		context.Background(), "BTC-USDT", "99",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 3 || len(fills) != 201 || cursor != "300" ||
+		fills[0].ExchangeTradeID != "100" ||
+		fills[len(fills)-1].ExchangeTradeID != "300" {
+		t.Fatalf(
+			"requests=%d fills=%d first=%s last=%s cursor=%s",
+			requests,
+			len(fills),
+			fills[0].ExchangeTradeID,
+			fills[len(fills)-1].ExchangeTradeID,
+			cursor,
+		)
 	}
 }
 

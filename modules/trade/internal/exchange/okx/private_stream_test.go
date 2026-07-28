@@ -70,6 +70,17 @@ func TestPrivateChannelsExcludeSpotPositions(t *testing.T) {
 	}
 }
 
+func TestDispatchPrivateIgnoresSubscriptionAcknowledgement(t *testing.T) {
+	err := New(exchange.AccountConfig{}, exchange.Credential{}).dispatchPrivate(
+		context.Background(),
+		[]byte(`{"event":"subscribe","arg":{"channel":"account"}}`),
+		&handler{},
+	)
+	if err != nil {
+		t.Fatalf("subscription acknowledgement error = %v", err)
+	}
+}
+
 func TestDispatchPrivateRejectsMalformedPositionDecimal(t *testing.T) {
 	adapter := swapAdapter("http://unused")
 	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
