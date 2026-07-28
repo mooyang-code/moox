@@ -9,8 +9,9 @@ import (
 )
 
 type handler struct {
-	orders []exchange.Order
-	fills  []exchange.Fill
+	orders    []exchange.Order
+	fills     []exchange.Fill
+	positions []exchange.Position
 }
 
 func (h *handler) OnOrder(_ context.Context, value exchange.Order) error {
@@ -21,7 +22,10 @@ func (h *handler) OnFill(_ context.Context, value exchange.Fill) error {
 	h.fills = append(h.fills, value)
 	return nil
 }
-func (*handler) OnPosition(context.Context, exchange.Position) error { return nil }
+func (h *handler) OnPosition(_ context.Context, value exchange.Position) error {
+	h.positions = append(h.positions, value)
+	return nil
+}
 func (*handler) OnAccountSnapshot(context.Context, exchange.AccountSnapshot) error {
 	return nil
 }
@@ -86,11 +90,39 @@ func TestDispatchPrivateRejectsMalformedPositionDecimal(t *testing.T) {
 	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
 	err := adapter.dispatchPrivate(context.Background(), []byte(`{
 		"arg":{"channel":"positions"},
-		"data":[{"instId":"BTC-USDT-SWAP","posSide":"net","pos":"1",
+		"data":[{"instId":"BTC-USDT-SWAP","posSide":"net","mgnMode":"cross","pos":"1",
 			"avgPx":"not-a-number"}]
 	}`), &handler{})
 	if err == nil {
 		t.Fatal("malformed position decimal was accepted")
+	}
+}
+
+func TestDispatchPrivatePositionRequiresCrossAndUsesIMR(t *testing.T) {
+	adapter := swapAdapter("http://unused")
+	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	recording := &handler{}
+	err := adapter.dispatchPrivate(context.Background(), []byte(`{
+		"arg":{"channel":"positions"},
+		"data":[{"instId":"BTC-USDT-SWAP","posSide":"net","mgnMode":"cross",
+			"pos":"2","avgPx":"100","markPx":"101","lever":"5",
+			"imr":"4","margin":"","liqPx":"50","upl":"1","realizedPnl":"2",
+			"uTime":"1700000000000"}]
+	}`), recording)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recording.positions) != 1 ||
+		recording.positions[0].UsedMargin.String() != "4" {
+		t.Fatalf("positions = %+v", recording.positions)
+	}
+
+	err = adapter.dispatchPrivate(context.Background(), []byte(`{
+		"arg":{"channel":"positions"},
+		"data":[{"instId":"BTC-USDT-SWAP","posSide":"net","mgnMode":"isolated","pos":"2"}]
+	}`), &handler{})
+	if err == nil {
+		t.Fatal("isolated position was accepted")
 	}
 }
 

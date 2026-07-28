@@ -387,21 +387,22 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 }
 
 type orderPayload struct {
-	OrderID       json.Number `json:"orderId"`
-	ClientOrderID string      `json:"clientOrderId"`
-	Symbol        string      `json:"symbol"`
-	Type          string      `json:"type"`
-	TimeInForce   string      `json:"timeInForce"`
-	Side          string      `json:"side"`
-	PositionSide  string      `json:"positionSide"`
-	OrigQty       string      `json:"origQty"`
-	ExecutedQty   string      `json:"executedQty"`
-	AvgPrice      string      `json:"avgPrice"`
-	Price         string      `json:"price"`
-	ReduceOnly    bool        `json:"reduceOnly"`
-	Status        string      `json:"status"`
-	Time          int64       `json:"time"`
-	UpdateTime    int64       `json:"updateTime"`
+	OrderID            json.Number `json:"orderId"`
+	ClientOrderID      string      `json:"clientOrderId"`
+	Symbol             string      `json:"symbol"`
+	Type               string      `json:"type"`
+	TimeInForce        string      `json:"timeInForce"`
+	Side               string      `json:"side"`
+	PositionSide       string      `json:"positionSide"`
+	OrigQty            string      `json:"origQty"`
+	ExecutedQty        string      `json:"executedQty"`
+	AvgPrice           string      `json:"avgPrice"`
+	CumulativeQuoteQty string      `json:"cummulativeQuoteQty"`
+	Price              string      `json:"price"`
+	ReduceOnly         bool        `json:"reduceOnly"`
+	Status             string      `json:"status"`
+	Time               int64       `json:"time"`
+	UpdateTime         int64       `json:"updateTime"`
 }
 
 func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
@@ -677,6 +678,15 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 	average, err := decimalOrZero(row.AvgPrice)
 	if err != nil {
 		return exchange.Order{}, err
+	}
+	if average.IsZero() && !filled.IsZero() {
+		cumulativeQuote, parseErr := decimalOrZero(row.CumulativeQuoteQty)
+		if parseErr != nil {
+			return exchange.Order{}, parseErr
+		}
+		if !cumulativeQuote.IsZero() {
+			average = cumulativeQuote.Div(filled)
+		}
 	}
 	positionSide := exchange.PositionSideUnspecified
 	if a.config.MarketType == exchange.MarketTypeSwap {

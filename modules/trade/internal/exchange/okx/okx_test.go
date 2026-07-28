@@ -20,6 +20,30 @@ func TestAdapterRequestValidationContract(t *testing.T) {
 	contracttest.RunRequestValidation(t, exchange.MarketTypeSpot, adapter.PlaceOrder)
 }
 
+func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(
+			w,
+			`{"code":"1","msg":"operation failed","data":[{"sCode":"51008","sMsg":"insufficient balance"}]}`,
+		)
+	}))
+	defer server.Close()
+	adapter := NewWithClient(exchange.AccountConfig{
+		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		SettlementAsset: "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
+		httpclient.New(server.URL))
+	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "cid", Symbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("0.01"),
+	})
+	if !exchange.IsKind(err, exchange.ErrorInsufficientBalance) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 	var orderBody map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

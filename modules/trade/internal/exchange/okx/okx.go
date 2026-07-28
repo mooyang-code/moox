@@ -116,6 +116,14 @@ func (a *Adapter) request(
 		return nil, rejected("decode OKX response", err)
 	}
 	if envelope.Code != "0" {
+		var details []struct {
+			Code    string `json:"sCode"`
+			Message string `json:"sMsg"`
+		}
+		if err := json.Unmarshal(envelope.Data, &details); err == nil &&
+			len(details) != 0 && details[0].Code != "" && details[0].Code != "0" {
+			return envelope.Data, classifyOKXCode(details[0].Code, details[0].Message)
+		}
 		return envelope.Data, classifyOKXCode(envelope.Code, envelope.Msg)
 	}
 	return envelope.Data, nil

@@ -105,12 +105,13 @@ func TestGetTerminalOrderAndTypedErrors(t *testing.T) {
 			if request.URL.Query().Get("origClientOrderId") != "cid" {
 				t.Fatalf("query = %v", request.URL.Query())
 			}
-			_, _ = io.WriteString(w, `{"orderId":42,"clientOrderId":"cid","symbol":"BTCUSDT","type":"MARKET","side":"BUY","origQty":"1","executedQty":"1","avgPrice":"100","status":"FILLED"}`)
+			_, _ = io.WriteString(w, `{"orderId":42,"clientOrderId":"cid","symbol":"BTCUSDT","type":"MARKET","side":"BUY","origQty":"1","executedQty":"1","cummulativeQuoteQty":"100","status":"FILLED"}`)
 		}))
 		defer server.Close()
 		order, err := testAdapter(exchange.MarketTypeSpot, server.URL).
 			GetOrder(context.Background(), "BTCUSDT", "cid")
-		if err != nil || order.Status != exchange.OrderStatusFilled {
+		if err != nil || order.Status != exchange.OrderStatusFilled ||
+			order.AveragePrice.String() != "100" {
 			t.Fatalf("order=%+v err=%v", order, err)
 		}
 	})

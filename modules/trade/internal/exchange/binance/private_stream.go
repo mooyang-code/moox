@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -20,11 +21,87 @@ type listenKeyResponse struct {
 	ListenKey string `json:"listenKey"`
 }
 
+type spotSubscriptionRequest struct {
+	ID     string         `json:"id"`
+	Method string         `json:"method"`
+	Params map[string]any `json:"params"`
+}
+
 func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHandler) error {
 	if handler == nil {
 		return typedRejected("private event handler is required", nil)
 	}
-	path := a.path("/api/v3/userDataStream", "/fapi/v1/listenKey")
+	if a.config.MarketType == exchange.MarketTypeSpot {
+		return a.subscribeSpotPrivate(ctx, handler)
+	}
+	return a.subscribeSwapPrivate(ctx, handler)
+}
+
+func (a *Adapter) subscribeSpotPrivate(
+	ctx context.Context,
+	handler exchange.EventHandler,
+) error {
+	config, err := websocket.NewConfig(
+		"wss://ws-api.binance.com:443/ws-api/v3",
+		"https://moox.local",
+	)
+	if err != nil {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	connection, err := websocket.DialConfig(config)
+	if err != nil {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	defer connection.Close()
+
+	request := a.newSpotSubscriptionRequest(time.Now().UnixMilli())
+	if err := websocket.JSON.Send(connection, request); err != nil {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	var acknowledgement struct {
+		Status int `json:"status"`
+		Result struct {
+			SubscriptionID *int `json:"subscriptionId"`
+		} `json:"result"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := websocket.JSON.Receive(connection, &acknowledgement); err != nil {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	if acknowledgement.Status != http.StatusOK ||
+		acknowledgement.Result.SubscriptionID == nil {
+		return typedRejected(
+			"private stream subscription rejected",
+			fmt.Errorf("status %d: %s", acknowledgement.Status, acknowledgement.Error),
+		)
+	}
+	return a.receivePrivate(ctx, connection, handler)
+}
+
+func (a *Adapter) newSpotSubscriptionRequest(timestamp int64) spotSubscriptionRequest {
+	params := url.Values{
+		"apiKey":     []string{a.credential.APIKey},
+		"recvWindow": []string{fmt.Sprint(recvWindow)},
+		"timestamp":  []string{fmt.Sprint(timestamp)},
+	}
+	params.Set("signature", fmt.Sprintf(
+		"%x",
+		hmacSha256([]byte(a.credential.APISecret), []byte(params.Encode())),
+	))
+	return spotSubscriptionRequest{
+		ID: "private-" + fmt.Sprint(timestamp), Method: "userDataStream.subscribe.signature",
+		Params: map[string]any{
+			"apiKey": a.credential.APIKey, "recvWindow": recvWindow,
+			"timestamp": timestamp, "signature": params.Get("signature"),
+		},
+	}
+}
+
+func (a *Adapter) subscribeSwapPrivate(
+	ctx context.Context,
+	handler exchange.EventHandler,
+) error {
+	path := "/fapi/v1/listenKey"
 	raw, err := a.client().Do(ctx, &httpclient.Request{
 		Method: http.MethodPost,
 		Path:   path,
@@ -39,10 +116,7 @@ func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHa
 	if err := json.Unmarshal(raw, &key); err != nil || key.ListenKey == "" {
 		return typedRejected("invalid private stream listen key", err)
 	}
-	endpoint := "wss://stream.binance.com:9443/ws/" + key.ListenKey
-	if a.config.MarketType == exchange.MarketTypeSwap {
-		endpoint = "wss://fstream.binance.com/ws/" + key.ListenKey
-	}
+	endpoint := "wss://fstream.binance.com/ws/" + key.ListenKey
 	config, err := websocket.NewConfig(endpoint, "https://moox.local")
 	if err != nil {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
@@ -53,14 +127,22 @@ func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHa
 	}
 	defer connection.Close()
 
-	go func() {
-		<-ctx.Done()
-		_ = connection.Close()
-	}()
 	keepaliveDone := make(chan struct{})
 	defer close(keepaliveDone)
 	go a.keepListenKeyAlive(ctx, path, key.ListenKey, connection, keepaliveDone)
 
+	return a.receivePrivate(ctx, connection, handler)
+}
+
+func (a *Adapter) receivePrivate(
+	ctx context.Context,
+	connection *websocket.Conn,
+	handler exchange.EventHandler,
+) error {
+	go func() {
+		<-ctx.Done()
+		_ = connection.Close()
+	}()
 	for {
 		var payload []byte
 		if err := websocket.Message.Receive(connection, &payload); err != nil {
@@ -106,27 +188,28 @@ func (a *Adapter) keepListenKeyAlive(
 }
 
 type privateOrderFields struct {
-	Execution     string      `json:"x"`
-	Symbol        string      `json:"s"`
-	Side          string      `json:"S"`
-	OrderType     string      `json:"o"`
-	TimeInForce   string      `json:"f"`
-	ClientID      string      `json:"c"`
-	OrderID       json.Number `json:"i"`
-	OrderStatus   string      `json:"X"`
-	PositionSide  string      `json:"ps"`
-	ReduceOnly    bool        `json:"R"`
-	OriginalQty   string      `json:"q"`
-	FilledQty     string      `json:"z"`
-	AveragePrice  string      `json:"ap"`
-	TradeID       json.Number `json:"t"`
-	LastQty       string      `json:"l"`
-	LastPrice     string      `json:"L"`
-	Fee           string      `json:"n"`
-	FeeAsset      string      `json:"N"`
-	RealizedPnL   string      `json:"rp"`
-	Maker         bool        `json:"m"`
-	TransactionAt int64       `json:"T"`
+	Execution       string      `json:"x"`
+	Symbol          string      `json:"s"`
+	Side            string      `json:"S"`
+	OrderType       string      `json:"o"`
+	TimeInForce     string      `json:"f"`
+	ClientID        string      `json:"c"`
+	OrderID         json.Number `json:"i"`
+	OrderStatus     string      `json:"X"`
+	PositionSide    string      `json:"ps"`
+	ReduceOnly      bool        `json:"R"`
+	OriginalQty     string      `json:"q"`
+	FilledQty       string      `json:"z"`
+	AveragePrice    string      `json:"ap"`
+	TradeID         json.Number `json:"t"`
+	LastQty         string      `json:"l"`
+	LastPrice       string      `json:"L"`
+	Fee             string      `json:"n"`
+	FeeAsset        string      `json:"N"`
+	RealizedPnL     string      `json:"rp"`
+	CumulativeQuote string      `json:"Z"`
+	Maker           bool        `json:"m"`
+	TransactionAt   int64       `json:"T"`
 }
 
 func (a *Adapter) dispatchPrivate(
@@ -134,6 +217,15 @@ func (a *Adapter) dispatchPrivate(
 	payload []byte,
 	handler exchange.EventHandler,
 ) error {
+	var wrapper struct {
+		Event json.RawMessage `json:"event"`
+	}
+	if err := json.Unmarshal(payload, &wrapper); err != nil {
+		return typedRejected("decode private event wrapper", err)
+	}
+	if len(wrapper.Event) != 0 && string(wrapper.Event) != "null" {
+		payload = wrapper.Event
+	}
 	var root struct {
 		Event   string          `json:"e"`
 		Time    int64           `json:"E"`
@@ -174,7 +266,8 @@ func (a *Adapter) dispatchPrivate(
 		TimeInForce: envelope.TimeInForce, Side: envelope.Side,
 		PositionSide: envelope.PositionSide, OrigQty: envelope.OriginalQty,
 		ExecutedQty: envelope.FilledQty, AvgPrice: envelope.AveragePrice,
-		ReduceOnly: envelope.ReduceOnly, Status: envelope.OrderStatus,
+		CumulativeQuoteQty: envelope.CumulativeQuote,
+		ReduceOnly:         envelope.ReduceOnly, Status: envelope.OrderStatus,
 		UpdateTime: envelope.TransactionAt,
 	})
 	if err != nil {
@@ -278,6 +371,9 @@ func (a *Adapter) dispatchFuturesAccount(
 	for _, row := range payload.Positions {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
 			return typedRejected("hedge position mode is unsupported", nil)
+		}
+		if !strings.EqualFold(row.MarginType, "cross") {
+			return typedRejected("isolated margin is unsupported", nil)
 		}
 		quantity, err := decimalOrZero(row.Quantity)
 		if err != nil {

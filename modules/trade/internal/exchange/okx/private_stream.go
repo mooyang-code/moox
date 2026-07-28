@@ -179,6 +179,9 @@ func (a *Adapter) dispatchPrivate(
 			if row.PosSide != "" && row.PosSide != "net" {
 				return rejected("hedge position mode is unsupported", nil)
 			}
+			if row.MgnMode != "cross" {
+				return rejected("isolated margin is unsupported", nil)
+			}
 			contracts, err := decimalOrZero(row.Pos)
 			if err != nil {
 				return err
@@ -201,7 +204,11 @@ func (a *Adapter) dispatchPrivate(
 				position.Leverage, err = decimalOrZero(row.Lever)
 			}
 			if err == nil {
-				position.UsedMargin, err = decimalOrZero(row.Margin)
+				usedMargin := row.IMR
+				if usedMargin == "" {
+					usedMargin = row.Margin
+				}
+				position.UsedMargin, err = decimalOrZero(usedMargin)
 			}
 			if err == nil {
 				position.LiquidationPrice, err = decimalOrZero(row.LiqPx)
