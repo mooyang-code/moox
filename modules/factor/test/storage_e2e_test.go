@@ -203,7 +203,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			SpaceId: spaceID, ViewId: sourceViewID, Name: "源视" + displaySuffix,
 			PrimaryDatasetId: sourceID, DatasetIds: []string{sourceID},
 			GrainKeys: []string{"subject_id", "freq", "data_time"}, Engine: "duckdb",
-			KeepDuration: "24h", Status: "active",
+			FilterJson: `{"freq":"1m"}`, KeepDuration: "24h", Status: "active",
 			Columns: []*storagepb.ViewColumn{
 				viewColumn(spaceID, sourceViewID, sourceID, "nav", "净值", 10),
 				viewColumn(spaceID, sourceViewID, sourceID, "benchmark_return", "基准收益", 20),
@@ -221,10 +221,17 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		},
 	})
 	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
-	sourceChunk, err := storage.ReadRangeChunk(ctx, storageio.WindowKey{
-		SpaceID: spaceID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
-	}, first, end, 1, 10, []string{"benchmark_return", "nav"})
-	require.NoError(t, err)
+	var sourceChunk *storageio.RangeChunk
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
+			SpaceID: spaceID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
+		}, first, end, 1, 10, []string{"benchmark_return", "nav"})
+		assert.NoError(collect, readErr)
+		if readErr == nil {
+			sourceChunk = chunk
+			assert.Equal(collect, []time.Time{first, second}, chunk.TargetTimes)
+		}
+	}, 20*time.Second, 250*time.Millisecond, "source rows were not materialized")
 	require.Equal(t, []time.Time{first, second}, sourceChunk.TargetTimes)
 	require.Equal(t, []string{"benchmark_return", "nav"}, sourceChunk.Frame.Columns)
 
@@ -270,7 +277,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			SpaceId: spaceID, ViewId: viewID, Name: "因视" + displaySuffix,
 			PrimaryDatasetId: targetID, DatasetIds: []string{targetID},
 			GrainKeys: []string{"subject_id", "freq", "data_time"}, Engine: "duckdb",
-			KeepDuration: "24h", Status: "active", Columns: viewColumns,
+			FilterJson: `{"freq":"1m"}`, KeepDuration: "24h", Status: "active", Columns: viewColumns,
 		},
 	})
 	requireStorageOK(t, "CreateView", createViewRsp, err)
