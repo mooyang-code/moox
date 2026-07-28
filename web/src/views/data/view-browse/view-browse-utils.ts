@@ -155,11 +155,11 @@ export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | u
     const valueType = filter.valueType || "FIELD_VALUE_TYPE_STRING";
 
     if (filter.operator === "empty") {
-      out.push({ column: fieldName, op: "FILTER_OP_EQ", values: [{ null_value: "NULL_VALUE" }] });
+      out.push({ column: fieldName, op: "FILTER_OP_EQ", values: [{ null_value: "NULL_VALUE_NULL" }] });
       continue;
     }
     if (filter.operator === "not_empty") {
-      out.push({ column: fieldName, op: "FILTER_OP_NE", values: [{ null_value: "NULL_VALUE" }] });
+      out.push({ column: fieldName, op: "FILTER_OP_NE", values: [{ null_value: "NULL_VALUE_NULL" }] });
       continue;
     }
     if (filter.operator === "range") {
