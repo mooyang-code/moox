@@ -11,7 +11,6 @@ import (
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/serverless"
-	"github.com/mooyang-code/moox/modules/collector/internal/taskrunner"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/msgbox"
@@ -57,15 +56,6 @@ func (f *sentinelFactory) Handle(ctx context.Context) error {
 func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 	nodeID, version := runtimeapp.GetNodeInfo()
 	registry := prometheus.NewRegistry()
-	pipelines, err := report.ValidatePipelineEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	moduleMetrics, err := report.NewModuleMetrics(registry, "collector", pipelines.IDsForModule("collector"))
-	if err != nil {
-		return nil, err
-	}
-	taskrunner.SetModuleMetrics(moduleMetrics)
 
 	cfg := report.DefaultConfig("collector", "moox_collector_scf")
 	cfg.InstanceID = firstNonEmpty(os.Getenv("MOOX_INSTANCE_ID"), nodeID)

@@ -53,6 +53,8 @@ type Pipeline struct {
 	OutputDataset          string        `yaml:"output_dataset" json:"output_dataset"`
 	LagTolerance           time.Duration `yaml:"lag_tolerance" json:"lag_tolerance"`
 	Enabled                bool          `yaml:"enabled" json:"enabled"`
+	FreshnessMonitoring    bool          `yaml:"freshness_monitoring" json:"freshness_monitoring"`
+	WatermarkMonitoring    bool          `yaml:"watermark_monitoring" json:"watermark_monitoring"`
 	CrossesStorageDeferred bool          `yaml:"crosses_storage_deferred" json:"crosses_storage_deferred"`
 }
 
@@ -83,7 +85,7 @@ var builtInPipelines = []Pipeline{
 	},
 	{
 		ID: "monitor-metrics", Module: "monitor", SpaceID: "moox_system",
-		InputDataset: "metric_snapshots", OutputDataset: "metric_samples", LagTolerance: 2 * time.Minute, Enabled: true,
+		InputDataset: "metric_snapshots", OutputDataset: "metric_samples", LagTolerance: 2 * time.Minute, Enabled: true, FreshnessMonitoring: true, WatermarkMonitoring: true,
 	},
 }
 

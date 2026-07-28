@@ -66,6 +66,27 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector dataset metrics: %w", err)
 	}
+	pipelines, err := report.ValidatePipelineEnvironment()
+	if err != nil {
+		return nil, fmt.Errorf("validate collector pipeline metrics: %w", err)
+	}
+	moduleMetrics, err := report.NewModuleMetrics(
+		prometheus.DefaultRegisterer,
+		"collector",
+		pipelines.IDsForModule("collector"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize collector module metrics: %w", err)
+	}
+	runMetrics, err := report.NewDatasetModuleObserver(
+		datasetMetrics,
+		moduleMetrics,
+		"collect",
+		"collector-market-data",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize collector run metrics: %w", err)
+	}
 	realtimeInventory := collectorobservability.NewRealtimeInventory(dbm.TaskRules(), datasetMetrics)
 	if err := realtimeInventory.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initialize collector realtime dataset inventory: %w", err)
@@ -75,7 +96,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		ServiceAuth:                    taskpublisherAuth(deps.ServiceAuth),
 		StorageRPCGatewayTarget:        deps.StorageRPCGatewayTarget,
 		PlannerStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
-		DatasetMetrics:                 datasetMetrics,
+		DatasetMetrics:                 runMetrics,
 		RealtimeInventory:              realtimeInventory,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)

@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
@@ -22,18 +21,10 @@ import (
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	mooxreport "github.com/mooyang-code/moox/packages/report"
 	"github.com/nats-io/nats.go"
 )
 
 var registerHandlersOnce sync.Once
-var collectorModuleMetrics atomic.Pointer[mooxreport.ModuleMetrics]
-
-// SetModuleMetrics injects the process-owned collector metrics registry.
-// The SCF bootstrap calls this before the resident task runner starts.
-func SetModuleMetrics(metrics *mooxreport.ModuleMetrics) {
-	collectorModuleMetrics.Store(metrics)
-}
 
 type queueBinding struct {
 	consumer   queueConsumer
@@ -343,7 +334,7 @@ func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nod
 	if err != nil {
 		return nodeRuntime.Result{}, nodeRuntime.Permanent(err, "INVALID_JOB_ITEM")
 	}
-	result, err := executor.ExecuteTask(execCtx, ctx, taskEvent, collectorModuleMetrics.Load())
+	result, err := executor.ExecuteTask(execCtx, ctx, taskEvent)
 	summary := map[string]any{}
 	if strings.TrimSpace(result) != "" {
 		_ = json.Unmarshal([]byte(result), &summary)

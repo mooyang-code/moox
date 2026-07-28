@@ -47,14 +47,16 @@ func TestRealV2ConfigEnablesBuiltInModuleMetrics(t *testing.T) {
 	}
 	cases := []struct {
 		module, pipeline, stage string
+		freshness               bool
+		watermark               bool
 	}{
-		{"archive", "archive-materialize", "materialize"},
-		{"cloudnode", "cloudnode-jobs", "dispatch"},
-		{"collector", "collector-market-data", "collect"},
-		{"factor", "factor-calculation", "calculate"},
-		{"monitor", "monitor-metrics", "ingest"},
-		{"strategy", "strategy-targets", "target_commit"},
-		{"trade", "trade-rebalance", "rebalance"},
+		{"archive", "archive-materialize", "materialize", false, false},
+		{"cloudnode", "cloudnode-jobs", "dispatch", false, false},
+		{"collector", "collector-market-data", "collect", false, false},
+		{"factor", "factor-calculation", "calculate", false, false},
+		{"monitor", "monitor-metrics", "ingest", true, true},
+		{"strategy", "strategy-targets", "target_commit", false, false},
+		{"trade", "trade-rebalance", "rebalance", false, false},
 	}
 	if len(cfg.Pipelines) != len(cases) {
 		t.Fatalf("built-in pipelines = %+v", cfg.Pipelines)
@@ -74,15 +76,37 @@ func TestRealV2ConfigEnablesBuiltInModuleMetrics(t *testing.T) {
 			if err := metrics.ObserveRun(test.stage, "success", test.pipeline, now); err != nil {
 				t.Fatal(err)
 			}
-			if err := metrics.AdvanceWatermark(test.stage, test.pipeline, now); err != nil {
-				t.Fatal(err)
+			if test.watermark {
+				if err := metrics.AdvanceInputWatermark(test.stage, test.pipeline, now); err != nil {
+					t.Fatal(err)
+				}
+				if err := metrics.AdvanceWatermark(test.stage, test.pipeline, now); err != nil {
+					t.Fatal(err)
+				}
 			}
 			families, err := registry.Gather()
 			if err != nil {
 				t.Fatal(err)
 			}
-			requireMetricFamily(t, families, "moox_"+test.module+"_runs_total")
-			requireMetricFamily(t, families, "moox_"+test.module+"_business_watermark_timestamp_seconds")
+			requireMetricFamily(t, families, ModuleMetricName(test.module, ModuleMetricRuns))
+			if test.watermark {
+				requireMetricFamily(t, families, ModuleMetricName(test.module, ModuleMetricBusinessWatermark))
+			}
+			found := false
+			for _, pipeline := range cfg.Pipelines {
+				if pipeline.ID == test.pipeline {
+					found = true
+					if pipeline.FreshnessMonitoring != test.freshness {
+						t.Fatalf("freshness monitoring = %v", pipeline.FreshnessMonitoring)
+					}
+					if pipeline.WatermarkMonitoring != test.watermark {
+						t.Fatalf("watermark monitoring = %v", pipeline.WatermarkMonitoring)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("pipeline %q not found", test.pipeline)
+			}
 		})
 	}
 }

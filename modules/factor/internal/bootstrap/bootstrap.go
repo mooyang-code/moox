@@ -119,6 +119,27 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize factor dataset metrics: %w", err)
 	}
+	pipelines, err := report.ValidatePipelineEnvironment()
+	if err != nil {
+		return nil, fmt.Errorf("validate factor pipeline metrics: %w", err)
+	}
+	moduleMetrics, err := report.NewModuleMetrics(
+		prometheus.DefaultRegisterer,
+		"factor",
+		pipelines.IDsForModule("factor"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize factor module metrics: %w", err)
+	}
+	runMetrics, err := report.NewDatasetModuleObserver(
+		datasetMetrics,
+		moduleMetrics,
+		"calculate",
+		"factor-calculation",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize factor run metrics: %w", err)
+	}
 	realtimeInventory := factorobservability.NewRealtimeInventory(bindingRepo, datasetMetrics)
 	if err := realtimeInventory.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initialize factor realtime dataset inventory: %w", err)
@@ -126,7 +147,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	sched = scheduler.NewService(scheduler.Config{
 		Workers: cfg.Engine.Workers, QueueCapacity: cfg.Scheduler.QueueCapacity,
 		MaxRetry: cfg.Scheduler.MaxRetry,
-	}, storage, pythonExec, scheduler.WithDatasetMetrics(datasetMetrics))
+	}, storage, pythonExec, scheduler.WithDatasetMetrics(runMetrics))
 	if err := sched.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start factor scheduler: %w", err)
 	}

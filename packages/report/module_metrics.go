@@ -21,6 +21,21 @@ var allowedStages = stringSet(
 )
 var allowedResults = stringSet("success", "error", "rejected")
 
+const (
+	ModuleMetricRuns              = "runs_total"
+	ModuleMetricLastSuccess       = "last_success_timestamp_seconds"
+	ModuleMetricLastError         = "last_error_timestamp_seconds"
+	ModuleMetricBusinessWatermark = "business_watermark_timestamp_seconds"
+	ModuleMetricInputWatermark    = "input_watermark_timestamp_seconds"
+	ModuleMetricErrors            = "metrics_errors_total"
+	ModuleMetricLastMetricsError  = "metrics_last_error_timestamp_seconds"
+)
+
+// ModuleMetricName returns the canonical metric family name for one module.
+func ModuleMetricName(module, metric string) string {
+	return "moox_" + module + "_" + metric
+}
+
 type ModuleMetrics struct {
 	module           string
 	allowedPipelines map[string]bool
@@ -58,14 +73,14 @@ func NewModuleMetrics(registerer prometheus.Registerer, module string, pipelines
 	}
 	m := &ModuleMetrics{
 		module: module, allowedPipelines: allowed, series: map[string]bool{}, watermarks: map[string]float64{}, inputWatermarks: map[string]float64{}, maxSeries: MaxModuleMetricSeries,
-		runs:           prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_" + module + "_runs_total", Help: "Completed module stage runs."}, []string{"stage", "result", "pipeline"}),
-		lastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_" + module + "_last_success_timestamp_seconds", Help: "Last successful module stage completion."}, []string{"stage", "pipeline"}),
-		lastError:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_" + module + "_last_error_timestamp_seconds", Help: "Last failed module stage completion."}, []string{"stage", "pipeline"}),
-		watermark:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_" + module + "_business_watermark_timestamp_seconds", Help: "Monotonic authoritative business output watermark."}, []string{"stage", "pipeline"}),
-		inputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_" + module + "_input_watermark_timestamp_seconds", Help: "Monotonic business timestamp accepted as pipeline input."}, []string{"stage", "pipeline"}),
-		errors:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_" + module + "_metrics_errors_total", Help: "Rejected module metric observations."}, []string{"operation"}),
+		runs:           prometheus.NewCounterVec(prometheus.CounterOpts{Name: ModuleMetricName(module, ModuleMetricRuns), Help: "Completed module stage runs."}, []string{"stage", "result", "pipeline"}),
+		lastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastSuccess), Help: "Last successful module stage completion."}, []string{"stage", "pipeline"}),
+		lastError:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastError), Help: "Last failed module stage completion."}, []string{"stage", "pipeline"}),
+		watermark:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricBusinessWatermark), Help: "Monotonic authoritative business output watermark."}, []string{"stage", "pipeline"}),
+		inputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricInputWatermark), Help: "Monotonic business timestamp accepted as pipeline input."}, []string{"stage", "pipeline"}),
+		errors:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: ModuleMetricName(module, ModuleMetricErrors), Help: "Rejected module metric observations."}, []string{"operation"}),
 		lastMetricError: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "moox_" + module + "_metrics_last_error_timestamp_seconds",
+			Name: ModuleMetricName(module, ModuleMetricLastMetricsError),
 			Help: "Unix timestamp of the latest rejected module metric observation.",
 		}),
 	}

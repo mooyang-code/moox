@@ -29,7 +29,7 @@ func (c e2eContextClient) GetDoctorContext(context.Context, *monitorpb.GetDoctor
 
 func TestDoctorDiagnoseDistinguishesBusinessHealthFromReporterFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("moox_module_runs_total 1\n"))
+		_, _ = w.Write([]byte("moox_factor_runs_total 1\n"))
 	}))
 	defer server.Close()
 	components := []*monitorpb.DoctorExpectedComponent{
@@ -77,7 +77,7 @@ func TestDoctorDiagnoseFailsClosedOnIdentityConflict(t *testing.T) {
 
 func TestDoctorDiagnoseEscalatesReporterThatNeverAppeared(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("moox_module_runs_total 1\n"))
+		_, _ = w.Write([]byte("moox_factor_runs_total 1\n"))
 	}))
 	defer server.Close()
 	snapshot := &monitorpb.GetDoctorContextRsp{

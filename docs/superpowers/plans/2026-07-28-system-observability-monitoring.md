@@ -94,6 +94,8 @@ moox_<module>_<subsystem>_<metric>_<unit>
 ```text
 result
 kind
+stage
+pipeline
 space_id
 dataset_id
 freq
@@ -418,6 +420,23 @@ func (m *DatasetMetrics) ObserveRun(observation DatasetObservation) error
 - [ ] **Step 3: 删除泛化 `moox_module_*` 指标**
 
 `ObserveModuleRun` 改为模块实例持有的 `ModuleMetrics.ObserveRun`；bootstrap 显式构造并注入，不能依靠 SCF 与服务进程不共享的全局内存。
+
+固定 family 为：
+
+```text
+moox_<module>_runs_total{stage,result,pipeline}
+moox_<module>_last_success_timestamp_seconds{stage,pipeline}
+moox_<module>_last_error_timestamp_seconds{stage,pipeline}
+moox_<module>_input_watermark_timestamp_seconds{stage,pipeline}
+moox_<module>_business_watermark_timestamp_seconds{stage,pipeline}
+moox_<module>_metrics_errors_total{operation}
+moox_<module>_metrics_last_error_timestamp_seconds
+```
+
+`packages/report` 暴露同一套 canonical name helper，Monitor Context、CLI Doctor 和
+`/metrics` fallback 不得再各自拼旧的 `moox_module_*` 名字。Collector、Factor 的服务进程在
+Dataset observation 被 Expected Dataset Registry 接受后，同时桥接一次低基数 `ObserveRun`；
+SCF 不持有另一份无法被 `moox_collector` Reporter 上报的 ModuleMetrics。
 
 - [ ] **Step 4: 把 Reporter 自身指标也改成模块前缀**
 
@@ -1134,7 +1153,29 @@ strategy/strategy-targets
 trade/trade-rebalance
 ```
 
-增加契约测试：加载真实 `examples/monitor-pipelines.yaml` 后，逐模块调用 `ObserveRun` 和 `AdvanceWatermark` 必须成功，并能从 Prometheus Registry Gather 到对应系列；不允许再次从 YAML `pipelines` 字段读取固定归属。
+增加契约测试：加载真实 `examples/monitor-pipelines.yaml` 后，逐模块调用 `ObserveRun` 必须成功，
+并能从 Prometheus Registry Gather 到对应系列；只有声明支持权威水位的 pipeline 才测试
+`AdvanceInputWatermark`/`AdvanceWatermark`。不允许再次从 YAML `pipelines` 字段读取固定归属。
+
+不能在契约测试中对所有 pipeline 人工调用 `AdvanceWatermark`。代码内 Registry 同时声明两种能力：
+
+- `freshness_monitoring`：只有能够证明“应持续有运行结果”的 pipeline 才生成
+  `module.freshness`；V1 仅 `monitor/monitor-metrics` 开启。事件驱动的 CloudNode、Trade、
+  Strategy、Archive 合法空闲时不能因 wall-clock last success 过期而告警。
+- `watermark_monitoring`：只有输入、输出来自同一权威业务时间域且输出位于提交边界之后才生成
+  `module.pipeline_lag`；V1 仅 `monitor/monitor-metrics` 开启。
+  Archive 在无 dirty journal 时会合法空闲且缺少 previous-input/backlog 事实，不能用旧 output 与当前
+  wall clock 比较；Strategy 也缺少 enabled-binding inventory，全部 binding 停用时不能硬编码
+  `EnabledWorkloads=1`。两者暂不生成 lag check，后续拥有权威 expected-workload/backlog 事实后再开启。
+
+Collector、Factor 的连续性由所有启用中的 `Dataset + Frequency` 独立判断，不把多个 tuple/freq
+折叠成一个 module watermark；CloudNode、Trade 当前没有可信业务水位，只保留 process/Reporter
+和真实终态 run 事实。契约测试分别断言上述 capability matrix，并以真实调用点测试为准。
+
+Monitor 为 Doctor 读取 ModuleMetrics 时，必须在 SQLite 查询层先按
+`service_name + canonical instance_id(service@node) + 7 个 canonical metric names` 过滤，
+再应用 256 条上限。不能先读取同一 service 的全部动态 Dataset series 再在内存筛选，否则启用
+Dataset 较多时会把 module facts 挤出结果；也不能混入服务迁移前其他 node 的旧 series。
 
 - [ ] **Step 7: 覆盖契约脚本**
 
@@ -1213,6 +1254,11 @@ type taskExecutionSummary struct {
 - [ ] **Step 5: 只在控制面接受当前 JobItem 后观测**
 
 `ReportTaskStatus` 先执行当前的 stale/delivery 检查和数据库更新；只有 `updated=true` 才解析 result 并调用 Collector 服务进程中的 `DatasetMetrics.ObserveRun`。旧 delivery、重复回调和未知 tuple 使用 `rejected`，不得推进 success/watermark。
+
+只有 `DatasetMetrics.ObserveRun` 成功接受该 tuple 后，才桥接
+`ModuleMetrics.ObserveRun("collect", ...)`；Dataset key 非法、未在 expected set 或被拒绝时，
+不能刷新 module last-success。桥接只记录终态，不把多个 Dataset 的 watermark 汇总到
+`collector-market-data`。
 
 - [ ] **Step 6: 空结果由 RowsWritten 推导**
 

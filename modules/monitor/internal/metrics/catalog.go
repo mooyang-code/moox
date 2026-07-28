@@ -300,6 +300,45 @@ func (c *MetricCatalog) FindSeriesAt(ctx context.Context, seriesID, serviceName,
 	return rows, nil
 }
 
+// FindSeriesByMetricNamesAt applies the finite metric-family filter before the
+// result limit. Doctor uses this to avoid dynamic Dataset series crowding out
+// the small module-level contract.
+func (c *MetricCatalog) FindSeriesByMetricNamesAt(
+	ctx context.Context,
+	serviceName string,
+	instanceID string,
+	metricNames []string,
+	limit int,
+	now time.Time,
+) ([]MetricSeries, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if len(metricNames) == 0 {
+		return []MetricSeries{}, nil
+	}
+	if len(metricNames) > 16 {
+		return nil, fmt.Errorf("metric name selection exceeds limit 16")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	q := c.messageStore.db.WithContext(ctx).Model(&MetricSeries{}).
+		Where("c_metric_name IN ?", metricNames)
+	if serviceName != "" {
+		q = q.Where("c_service_name = ?", serviceName)
+	}
+	if instanceID != "" {
+		q = q.Where("c_instance_id = ?", instanceID)
+	}
+	var rows []MetricSeries
+	if err := q.Order("c_series_id ASC").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	c.markSeriesStaleAt(rows, now)
+	return rows, nil
+}
+
 func boundedPage(offset, limit int) (int, int) {
 	if offset < 0 {
 		offset = 0

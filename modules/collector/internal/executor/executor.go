@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/reporter"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	mooxreport "github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -89,7 +87,6 @@ func buildCollectHandler(
 	c sources.Collector,
 	result *executeResult,
 	reportStatus taskStatusReporter,
-	moduleMetrics *mooxreport.ModuleMetrics,
 ) func() error {
 	return func() error {
 		params := &sources.CollectParams{
@@ -116,9 +113,6 @@ func buildCollectHandler(
 			err = sources.ValidateCollectResult(task.DataType, collectResult)
 		}
 		if err != nil {
-			if moduleMetrics != nil {
-				_ = moduleMetrics.ObserveRun("collect", "error", "collector-market-data", time.Now())
-			}
 			log.ErrorContextf(ctx, "采集失败: taskID=%s, interval=%s, error=%v",
 				task.TaskID, task.Interval, err)
 
@@ -150,14 +144,6 @@ func buildCollectHandler(
 			result.Tasks = append(result.Tasks, summary)
 			result.mu.Unlock()
 		}
-		now := time.Now().UTC()
-		if moduleMetrics != nil {
-			_ = moduleMetrics.ObserveRun("collect", "success", "collector-market-data", now)
-		}
-		// The Collector interface currently reports only terminal status. Do not
-		// use execution time as a business output watermark; a source-closed
-		// timestamp must be supplied by the source contract before this is wired.
-
 		// 定时任务场景：上报成功状态
 		if reportStatus != nil {
 			encoded, encodeErr := json.Marshal(summary)
@@ -180,7 +166,6 @@ func executeCollectTasks(
 	ctx context.Context,
 	tasks []*collectTask,
 	reportStatus taskStatusReporter,
-	moduleMetrics *mooxreport.ModuleMetrics,
 ) *executeResult {
 	if len(tasks) == 0 {
 		return &executeResult{}
@@ -211,7 +196,7 @@ func executeCollectTasks(
 		}
 
 		// 构建处理函数
-		handler := buildCollectHandler(ctx, task, c, result, reportStatus, moduleMetrics)
+		handler := buildCollectHandler(ctx, task, c, result, reportStatus)
 		handlers = append(handlers, handler)
 	}
 
@@ -233,7 +218,6 @@ func ExecuteTask(
 	workloadCtx context.Context,
 	reportCtx context.Context,
 	taskEvent *model.TaskExecuteEvent,
-	moduleMetrics *mooxreport.ModuleMetrics,
 ) (string, error) {
 	if taskEvent == nil {
 		return "", fmt.Errorf("taskEvent is nil")
@@ -279,7 +263,7 @@ func ExecuteTask(
 	}
 
 	// 执行采集任务，统一在最后上报状态。
-	result := executeCollectTasks(workloadCtx, collectTasks, nil, moduleMetrics)
+	result := executeCollectTasks(workloadCtx, collectTasks, nil)
 
 	// 根据执行结果上报状态
 	var resultMsg string

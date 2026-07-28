@@ -25,11 +25,52 @@ func embeddedManifestChecksum(t *testing.T) string {
 }
 
 func TestRunDiagnoseMissingPipelineInputIsUnknown(t *testing.T) {
-	pipeline := report.Pipeline{ID: "factor-calc", Module: "factor", LagTolerance: time.Minute, Enabled: true}
+	pipeline := report.Pipeline{ID: "factor-calc", Module: "factor", LagTolerance: time.Minute, Enabled: true, WatermarkMonitoring: true}
 	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t)}
 	reportValue, err := RunDiagnose(context.Background(), DiagnoseOptions{CheckIDs: []string{"module.pipeline_lag:factor:factor-calc"}, Client: contextClientStub{rsp: snapshot}, Pipelines: report.PipelineConfig{Version: 1, Pipelines: []report.Pipeline{pipeline}}})
 	require.NoError(t, err)
 	require.Equal(t, core.StatusUnknown, reportValue.CheckByID("module.pipeline_lag:factor:factor-calc").Status)
+}
+
+func TestDiagnoseSpecsOnlyCreateChecksSupportedByBuiltInSignals(t *testing.T) {
+	components := make([]*monitorpb.DoctorExpectedComponent, 0, len(report.BuiltInPipelines()))
+	seenModules := map[string]bool{}
+	for _, pipeline := range report.BuiltInPipelines() {
+		if seenModules[pipeline.Module] {
+			continue
+		}
+		seenModules[pipeline.Module] = true
+		components = append(components, &monitorpb.DoctorExpectedComponent{
+			ComponentId: "moox_" + pipeline.Module, NodeId: "node-a", Expected: true,
+			Transport: "reporter", FunctionalObservability: "active",
+		})
+	}
+	specs := diagnoseSpecs(
+		&monitorpb.GetDoctorContextRsp{ExpectedComponents: components},
+		report.PipelineConfig{Pipelines: report.BuiltInPipelines()},
+	)
+	ids := map[string]bool{}
+	for _, spec := range specs {
+		ids[spec.ID] = true
+	}
+	require.True(t, ids["module.freshness:moox_monitor@node-a"])
+	require.False(t, ids["module.freshness:moox_collector@node-a"])
+	require.False(t, ids["module.freshness:moox_factor@node-a"])
+	for _, id := range []string{
+		"module.pipeline_lag:monitor:monitor-metrics",
+	} {
+		require.True(t, ids[id], id)
+	}
+	for _, id := range []string{
+		"module.pipeline_lag:archive:archive-materialize",
+		"module.pipeline_lag:cloudnode:cloudnode-jobs",
+		"module.pipeline_lag:collector:collector-market-data",
+		"module.pipeline_lag:factor:factor-calculation",
+		"module.pipeline_lag:strategy:strategy-targets",
+		"module.pipeline_lag:trade:trade-rebalance",
+	} {
+		require.False(t, ids[id], id)
+	}
 }
 
 func TestRunDiagnoseRejectsManifestMismatch(t *testing.T) {
@@ -64,8 +105,8 @@ func TestRunDiagnoseSingleHealthFailureWarns(t *testing.T) {
 }
 
 func TestRunDiagnoseStalePipelineFactsNeverPass(t *testing.T) {
-	pipeline := report.Pipeline{ID: "factor-calc", Module: "factor", LagTolerance: time.Minute, Enabled: true}
-	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ModuleObservations: []*monitorpb.DoctorObservation{{Summary: "moox_module_input_watermark_timestamp_seconds", DetailsJson: `{"module":"factor","pipeline":"factor-calc"}`, Value: 100, Stale: true}}, Watermarks: []*monitorpb.DoctorWatermark{{Module: "factor", Pipeline: "factor-calc", Value: 100, Status: "STALE"}}}
+	pipeline := report.Pipeline{ID: "factor-calc", Module: "factor", LagTolerance: time.Minute, Enabled: true, WatermarkMonitoring: true}
+	snapshot := &monitorpb.GetDoctorContextRsp{ManifestChecksum: embeddedManifestChecksum(t), ModuleObservations: []*monitorpb.DoctorObservation{{Summary: "moox_factor_input_watermark_timestamp_seconds", DetailsJson: `{"stage":"calculate","pipeline":"factor-calc"}`, Value: 100, Stale: true}}, Watermarks: []*monitorpb.DoctorWatermark{{Module: "factor", Pipeline: "factor-calc", Value: 100, Status: "STALE"}}}
 	reportValue, err := RunDiagnose(context.Background(), DiagnoseOptions{CheckIDs: []string{"module.pipeline_lag:factor:factor-calc"}, Client: contextClientStub{rsp: snapshot}, Pipelines: report.PipelineConfig{Version: 1, Pipelines: []report.Pipeline{pipeline}}})
 	require.NoError(t, err)
 	require.Equal(t, core.StatusUnknown, reportValue.CheckByID("module.pipeline_lag:factor:factor-calc").Status)
@@ -78,21 +119,23 @@ func TestRunDiagnoseFreshScrapeDoesNotMaskStaleLastSuccess(t *testing.T) {
 		ExpectedComponents:   []*monitorpb.DoctorExpectedComponent{{ComponentId: "moox_factor", NodeId: "node-a", Expected: true, Transport: "reporter", FunctionalObservability: "active"}},
 		ReporterObservations: []*monitorpb.DoctorObservation{{Kind: "reporter", ComponentId: "moox_factor", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano)}},
 		ModuleObservations: []*monitorpb.DoctorObservation{
-			{Kind: "module", ComponentId: "moox_factor", Summary: "moox_module_backlog", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano), Value: 0},
-			{Kind: "module", ComponentId: "moox_factor", Summary: "moox_module_last_success_timestamp_seconds", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano), Value: float64(now.Add(-2 * time.Hour).Unix()), DetailsJson: `{"module":"factor","pipeline":"factor-calc"}`},
+			{Kind: "module", ComponentId: "moox_factor", Summary: "moox_factor_last_success_timestamp_seconds", Status: "FRESH", Stale: false, ObservedAt: now.Format(time.RFC3339Nano), Value: float64(now.Add(-2 * time.Hour).Unix()), DetailsJson: `{"stage":"calculate","pipeline":"factor-calc"}`},
 		},
 	}
-	result, err := RunDiagnose(context.Background(), DiagnoseOptions{Now: func() time.Time { return now }, CheckIDs: []string{"module.freshness:moox_factor@node-a"}, Client: contextClientStub{rsp: snapshot}})
+	pipelines := report.PipelineConfig{Pipelines: []report.Pipeline{{
+		ID: "factor-calc", Module: "factor", Enabled: true, FreshnessMonitoring: true,
+	}}}
+	result, err := RunDiagnose(context.Background(), DiagnoseOptions{Now: func() time.Time { return now }, CheckIDs: []string{"module.freshness:moox_factor@node-a"}, Client: contextClientStub{rsp: snapshot}, Pipelines: pipelines})
 	require.NoError(t, err)
 	require.NotEqual(t, core.StatusPass, result.CheckByID("module.freshness:moox_factor@node-a").Status)
 }
 
 func TestRunDiagnosePipelineDoesNotTreatOldEqualWatermarksAsIdle(t *testing.T) {
 	now := time.Unix(10_000, 0).UTC()
-	pipeline := report.Pipeline{ID: "factor-calc", Module: "factor", LagTolerance: time.Minute, Enabled: true}
+	pipeline := report.Pipeline{ID: "factor-calc", Module: "factor", LagTolerance: time.Minute, Enabled: true, WatermarkMonitoring: true}
 	snapshot := &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum:   embeddedManifestChecksum(t),
-		ModuleObservations: []*monitorpb.DoctorObservation{{Summary: "moox_module_input_watermark_timestamp_seconds", DetailsJson: `{"module":"factor","pipeline":"factor-calc"}`, Value: float64(now.Add(-10 * time.Minute).Unix())}},
+		ModuleObservations: []*monitorpb.DoctorObservation{{Summary: "moox_factor_input_watermark_timestamp_seconds", DetailsJson: `{"stage":"calculate","pipeline":"factor-calc"}`, Value: float64(now.Add(-10 * time.Minute).Unix())}},
 		Watermarks:         []*monitorpb.DoctorWatermark{{Module: "factor", Pipeline: "factor-calc", Value: float64(now.Add(-10 * time.Minute).Unix()), Status: "FRESH"}},
 	}
 	result, err := RunDiagnose(context.Background(), DiagnoseOptions{Now: func() time.Time { return now }, CheckIDs: []string{"module.pipeline_lag:factor:factor-calc"}, Client: contextClientStub{rsp: snapshot}, Pipelines: report.PipelineConfig{Version: 1, Pipelines: []report.Pipeline{pipeline}}})
@@ -121,7 +164,7 @@ func TestRunDiagnoseStorageChecksAreDeferred(t *testing.T) {
 }
 
 func TestRunDiagnoseDisabledModuleDoesNotFailPipeline(t *testing.T) {
-	pipeline := report.Pipeline{ID: "trade-rebalance", Module: "trade", LagTolerance: time.Minute, Enabled: true}
+	pipeline := report.Pipeline{ID: "trade-rebalance", Module: "trade", LagTolerance: time.Minute, Enabled: true, WatermarkMonitoring: true}
 	snapshot := &monitorpb.GetDoctorContextRsp{
 		ManifestChecksum:   embeddedManifestChecksum(t),
 		ExpectedComponents: []*monitorpb.DoctorExpectedComponent{{ComponentId: "moox_trade", NodeId: "node-a", Expected: false}},

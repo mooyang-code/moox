@@ -11,8 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/reporter"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	mooxreport "github.com/mooyang-code/moox/packages/report"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,7 +57,7 @@ func TestNormalizeMarket(t *testing.T) {
 }
 
 func TestExecuteTask_NilEvent(t *testing.T) {
-	_, err := ExecuteTask(context.Background(), context.Background(), nil, nil)
+	_, err := ExecuteTask(context.Background(), context.Background(), nil)
 	assert.Error(t, err)
 }
 
@@ -84,7 +82,7 @@ func TestExecuteTask_WithStubCollector(t *testing.T) {
 	msg, err := ExecuteTask(context.Background(), context.Background(), &model.TaskExecuteEvent{
 		SpaceID: "crypto", DatasetID: "symbols-custom", TaskID: "task-1", JobItemID: "item-1",
 		DeliveryCount: 3, DataSource: "stubex", DataType: "symbol", InstType: "SPOT", Symbol: "BTCUSDT",
-	}, nil)
+	})
 	require.NoError(t, err)
 	assert.Contains(t, msg, "成功")
 	assert.Contains(t, msg, `"rows_written":1`)
@@ -137,7 +135,7 @@ func TestBuildCollectHandlerScheduledSuccessReportsEncodedSummary(t *testing.T) 
 	handler := buildCollectHandler(context.Background(), task, collector, &executeResult{},
 		func(_ context.Context, _, _, _ string, _ uint64, gotStatus int, result string) {
 			status, encoded = gotStatus, result
-		}, nil)
+		})
 
 	require.NoError(t, handler())
 	assert.Equal(t, reporter.StatusSuccess, status)
@@ -159,7 +157,7 @@ func TestBuildCollectHandlerScheduledFailureReportsBoundedError(t *testing.T) {
 	}
 	var encoded string
 	handler := buildCollectHandler(context.Background(), task, collector, &executeResult{},
-		func(_ context.Context, _, _, _ string, _ uint64, _ int, result string) { encoded = result }, nil)
+		func(_ context.Context, _, _, _ string, _ uint64, _ int, result string) { encoded = result })
 
 	require.NoError(t, handler())
 	var payload map[string]string
@@ -167,33 +165,6 @@ func TestBuildCollectHandlerScheduledFailureReportsBoundedError(t *testing.T) {
 	assert.Equal(t, "COLLECTION_FAILED", payload["error_code"])
 	assert.LessOrEqual(t, len(payload["error_summary"]), 256)
 	assert.Len(t, payload, 2)
-}
-
-func TestBuildCollectHandlerUsesInjectedModuleMetrics(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	metrics, err := mooxreport.NewModuleMetrics(registry, "collector", []string{"collector-market-data"})
-	require.NoError(t, err)
-	collector := &stubCollector{result: sources.CollectResult{}}
-	handler := buildCollectHandler(
-		context.Background(),
-		&collectTask{DataType: "kline", DatasetID: "market_kline", Interval: "1m"},
-		collector,
-		&executeResult{},
-		nil,
-		metrics,
-	)
-
-	require.NoError(t, handler())
-	families, err := registry.Gather()
-	require.NoError(t, err)
-	for _, family := range families {
-		if family.GetName() == "moox_collector_runs_total" {
-			require.Len(t, family.GetMetric(), 1)
-			assert.Equal(t, float64(1), family.GetMetric()[0].GetCounter().GetValue())
-			return
-		}
-	}
-	t.Fatal("moox_collector_runs_total was not recorded")
 }
 
 func TestExecuteTaskReportsFailureOnlyOnFinalDeliveryWithReservedContext(t *testing.T) {
@@ -218,24 +189,24 @@ func TestExecuteTaskReportsFailureOnlyOnFinalDeliveryWithReservedContext(t *test
 	}
 	workloadCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := ExecuteTask(workloadCtx, context.Background(), event, nil)
+	_, err := ExecuteTask(workloadCtx, context.Background(), event)
 	require.Error(t, err)
 	assert.Equal(t, 0, reports)
 
 	event.DeliveryCount = 4
-	_, err = ExecuteTask(workloadCtx, context.Background(), event, nil)
+	_, err = ExecuteTask(workloadCtx, context.Background(), event)
 	require.Error(t, err)
 	assert.Equal(t, 1, reports)
 }
 
 func TestExecuteCollectTasks_EmptyAndMissingCollector(t *testing.T) {
-	assert.False(t, executeCollectTasks(context.Background(), nil, nil, nil).HasError)
+	assert.False(t, executeCollectTasks(context.Background(), nil, nil).HasError)
 
 	reports := 0
 	result := executeCollectTasks(context.Background(), []*collectTask{{
 		SpaceID: "crypto", TaskID: "t1", JobItemID: "item-1",
 		DataSource: "missing", Market: "spot", DataType: "kline",
-	}}, func(context.Context, string, string, string, uint64, int, string) { reports++ }, nil)
+	}}, func(context.Context, string, string, string, uint64, int, string) { reports++ })
 	assert.Equal(t, 1, reports)
 	assert.False(t, result.HasError) // reported via callback, no local error flag when reporter set
 }

@@ -308,12 +308,15 @@ func reporterHasRecentFailure(body []byte, now time.Time) bool {
 		if err != nil {
 			continue
 		}
+		name := strings.SplitN(fields[0], "{", 2)[0]
 		switch {
-		case strings.HasPrefix(line, "moox_metrics_report_errors_total"), strings.HasPrefix(line, "moox_module_metrics_errors_total"):
+		case strings.HasPrefix(name, "moox_") &&
+			(strings.HasSuffix(name, "_report_errors_total") || strings.HasSuffix(name, "_metrics_errors_total")):
 			if value > total {
 				total = value
 			}
-		case strings.HasPrefix(line, "moox_metrics_report_last_error_timestamp_seconds"), strings.HasPrefix(line, "moox_module_metrics_last_error_timestamp_seconds"):
+		case strings.HasPrefix(name, "moox_") &&
+			(strings.HasSuffix(name, "_report_last_error_timestamp_seconds") || strings.HasSuffix(name, "_metrics_last_error_timestamp_seconds")):
 			if value > lastError {
 				lastError = value
 			}
