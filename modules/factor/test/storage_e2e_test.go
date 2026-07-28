@@ -379,7 +379,7 @@ func doubleValue(id string, value float64) *storagepb.FieldValue {
 func viewColumn(spaceID, viewID, datasetID, output, display string, order uint32) *storagepb.ViewColumn {
 	qualified := datasetID + "." + output
 	return &storagepb.ViewColumn{
-		SpaceId: spaceID, ViewId: viewID, ColumnName: qualified,
+		SpaceId: spaceID, ViewId: viewID, ColumnName: output,
 		OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		OriginId:   qualified, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		SortOrder: order, Attributes: map[string]string{"display_name": display},
@@ -454,7 +454,7 @@ func waitForViewRows(
 ) []*storagepb.TimeSeriesRow {
 	t.Helper()
 	var rows []*storagepb.TimeSeriesRow
-	qualified := []string{targetID + ".excess_return", targetID + ".rolling_rank"}
+	outputs := []string{"excess_return", "rolling_rank"}
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		rsp, err := view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
 			AuthInfo: auth, SpaceId: spaceID, ViewId: viewID,
@@ -464,13 +464,13 @@ func waitForViewRows(
 			TimeRange: &storagepb.TimeRange{
 				StartTime: first.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano),
 			},
-			ColumnNames: qualified,
+			ColumnNames: outputs,
 			Sorts:       []*storagepb.SortSpec{{FieldName: "data_time"}},
 			Page:        &commonpb.Page{Page: 1, Size: 10},
 		})
 		require.NoError(collect, err)
 		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-		require.Equal(collect, qualified, columnNames(rsp.GetColumns()))
+		require.Equal(collect, outputs, columnNames(rsp.GetColumns()))
 		require.Len(collect, rsp.GetRows(), 2)
 		require.True(collect, factorRowsHaveExpectedValues(rsp.GetRows(), first, second, secondNull),
 			"View has not applied the expected factor patch yet")
