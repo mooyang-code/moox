@@ -183,10 +183,37 @@ func TestServiceDeploymentSeedExposesStorageSpaceCleanup(t *testing.T) {
 		}
 		methods, ok := item.ExtraConfig["gateway_methods"].([]any)
 		require.True(t, ok)
-		require.Contains(t, methods, "DeleteSpace")
-		return
+		require.NotContains(t, methods, "DeleteSpace")
+		routes, ok := item.ExtraConfig["gateway_routes"].([]any)
+		require.True(t, ok)
+		for _, raw := range routes {
+			route, ok := raw.(map[string]any)
+			require.True(t, ok)
+			if methods, _ := route["gateway_methods"].([]any); len(methods) == 1 && methods[0] == "DeleteSpace" {
+				require.Equal(t, []any{"admin-gateway", "moox-cli"}, route["gateway_callers"])
+				return
+			}
+		}
+		t.Fatal("storage-primary DeleteSpace route is missing")
 	}
 	t.Fatal("storage-primary deployment is missing")
+}
+
+func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	require.NoError(t, err)
+	for _, item := range seed.Services {
+		if item.Name != "moox_factor" {
+			continue
+		}
+		require.Equal(t, []any{
+			"CreateFactor", "UpdateFactor", "GetFactor", "ListFactors", "SetFactorStatus",
+			"UpsertBinding", "ListBindings", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
+		}, item.ExtraConfig["gateway_methods"])
+		require.Equal(t, []any{"admin-gateway", "moox-cli"}, item.ExtraConfig["gateway_callers"])
+		return
+	}
+	t.Fatal("moox_factor deployment is missing")
 }
 
 func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {

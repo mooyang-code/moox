@@ -33,6 +33,11 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	require.NotEmpty(t, credentials.KeyID)
 	require.NotEmpty(t, credentials.Caller)
 	require.NotEmpty(t, credentials.Secret)
+	factorCredentials := gatewayauth.Credentials{
+		KeyID:  requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_KEY_ID"),
+		Caller: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_CALLER"),
+		Secret: requiredEnv(t, "MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET"),
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -59,7 +64,16 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	metadata := storagepb.NewMetadataClientProxy(options...)
 	primary := storagepb.NewPrimaryStoreClientProxy(options...)
 	view := storagepb.NewDataViewClientProxy(options...)
-	factor := factorpb.NewFactorMgrClientProxy(options...)
+	factor := factorpb.NewFactorMgrClientProxy(gatewayauth.NewTRPCClientOptions(
+		gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(gatewayTarget, "11003")),
+		gatewayNodeID,
+		factorCredentials,
+	)...)
+	cleanupMetadata := storagepb.NewMetadataClientProxy(gatewayauth.NewTRPCClientOptions(
+		gatewayauth.ServiceGatewayTarget(storageio.NormalizeStorageTarget(gatewayTarget, "11003")),
+		gatewayNodeID,
+		factorCredentials,
+	)...)
 	storage := storageio.NewClientWithCredentials(gatewayTarget, gatewayNodeID, credentials, auth)
 
 	suffix := fmt.Sprintf("%x", time.Now().UnixNano())
@@ -102,13 +116,10 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			}
 		}
 		if spaceCreated {
-			if rsp, err := metadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
+			if rsp, err := cleanupMetadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
 				AuthInfo: auth, SpaceId: spaceID,
 			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-				// Storage currently rejects DeleteSpace while RESTRICT-owned
-				// metadata exists. Globally unique fixtures keep this cleanup
-				// limitation from contaminating later runs.
-				t.Logf("best-effort cleanup space %s failed: rsp=%v err=%v", spaceID, rsp, err)
+				reportCleanupFailure(t, "space "+spaceID, rsp, err)
 			} else {
 				t.Logf("cleanup space %s succeeded", spaceID)
 			}
@@ -497,6 +508,8 @@ func assertFactorRows(t *testing.T, rows []*storagepb.TimeSeriesRow, first, seco
 	require.Len(t, rows, 2)
 	require.Equal(t, first.Format(time.RFC3339Nano), rows[0].GetKey().GetDataTime())
 	require.Equal(t, second.Format(time.RFC3339Nano), rows[1].GetKey().GetDataTime())
+	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, rowFieldIDs(rows[0]))
+	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, rowFieldIDs(rows[1]))
 	firstValues := rowValues(rows[0])
 	require.InDelta(t, 1.04, firstValues["excess_return"].GetDoubleValue(), 1e-12)
 	require.InDelta(t, 1.0, firstValues["rolling_rank"].GetDoubleValue(), 1e-12)
@@ -508,6 +521,14 @@ func assertFactorRows(t *testing.T, rows []*storagepb.TimeSeriesRow, first, seco
 	}
 	require.InDelta(t, 1.16, secondValues["excess_return"].GetDoubleValue(), 1e-12)
 	require.InDelta(t, 2.0, secondValues["rolling_rank"].GetDoubleValue(), 1e-12)
+}
+
+func rowFieldIDs(row *storagepb.TimeSeriesRow) []string {
+	ids := make([]string, 0, len(row.GetFields()))
+	for _, field := range row.GetFields() {
+		ids = append(ids, field.GetFieldId())
+	}
+	return ids
 }
 
 func factorRowsHaveExpectedValues(rows []*storagepb.TimeSeriesRow, first, second time.Time, secondNull bool) bool {

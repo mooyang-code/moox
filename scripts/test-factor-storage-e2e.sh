@@ -40,6 +40,7 @@ require_executable "${DEPLOY_ROOT}/bin/moox-factor-run-once"
 require_executable "${DEPLOY_ROOT}/bin/moox-factor-cli"
 require_file "${DEPLOY_ROOT}/factor/config/app.yaml"
 require_file "${DEPLOY_ROOT}/secrets/gateway-factor.key"
+require_file "${DEPLOY_ROOT}/secrets/gateway-moox-cli.key"
 require_file "${DEPLOY_ROOT}/secrets/gateway-service.env"
 require_file "${DEPLOY_ROOT}/secrets/storage-internal-auth.env"
 require_file "${DEPLOY_ROOT}/certs/gateway/peers.pem"
@@ -53,6 +54,15 @@ else
 fi
 [[ -n "${secret}" && "${secret}" != *$'\n'* && "${secret}" != *$'\r'* ]] ||
   fail "gateway factor secret must contain exactly one non-empty line"
+factor_mgr_secret_raw="$(cat "${DEPLOY_ROOT}/secrets/gateway-moox-cli.key"; printf x)"
+factor_mgr_secret_raw="${factor_mgr_secret_raw%x}"
+if [[ "${factor_mgr_secret_raw}" == *$'\n' ]]; then
+  factor_mgr_secret="${factor_mgr_secret_raw%$'\n'}"
+else
+  factor_mgr_secret="${factor_mgr_secret_raw}"
+fi
+[[ -n "${factor_mgr_secret}" && "${factor_mgr_secret}" != *$'\n'* && "${factor_mgr_secret}" != *$'\r'* ]] ||
+  fail "gateway moox-cli secret must contain exactly one non-empty line"
 
 gateway_node_id="$(
   sed -n 's/^MOOX_GATEWAY_NODE_ID=//p' "${DEPLOY_ROOT}/secrets/gateway-service.env"
@@ -87,6 +97,9 @@ storage_view_secret="$(
   export MOOX_GATEWAY_CA_FILE="${DEPLOY_ROOT}/certs/gateway/peers.pem"
   export MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}"
   export MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}"
+  export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_KEY_ID="moox-cli"
+  export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_CALLER="moox-cli"
+  export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET="${factor_mgr_secret}"
 
   cd "${REPO_ROOT}/modules/factor"
   go test -tags=integration ./test -run '^TestFactorRealStorageE2E$' -count=1 -v

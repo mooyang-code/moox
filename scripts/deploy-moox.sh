@@ -2434,7 +2434,11 @@ prepare_stage() {
   if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_FACTOR}" -eq 1 ]]; then
     local storage_primary_auth_secret="${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
     if [[ -z "${storage_primary_auth_secret}" ]]; then
-      storage_primary_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-primary-auth)"
+      if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+        storage_primary_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-primary-auth)"
+      else
+        fail "MOOX_STORAGE_PRIMARY_AUTH_SECRET is required when packaging Factor without Storage"
+      fi
     fi
     [[ "${storage_primary_auth_secret}" != *$'\n'* && "${storage_primary_auth_secret}" != *$'\r'* ]] || \
       fail "storage Primary auth secret must contain exactly one line"

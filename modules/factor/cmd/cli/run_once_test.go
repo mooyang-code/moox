@@ -117,10 +117,10 @@ func TestRunOnceRequiresRange(t *testing.T) {
 }
 
 func TestRunOnceServiceAuthSignsPrimaryRequestFromRuntimeSecret(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", " primary-secret ")
 	auth := serviceAuth()
 	require.Equal(t, "moox-factor", auth.GetAppId())
-	require.Equal(t, mooxsecurity.HMACSHA256Hex("primary-secret", []byte("moox-factor")), auth.GetAppKey())
+	require.Equal(t, mooxsecurity.HMACSHA256Hex(" primary-secret ", []byte("moox-factor")), auth.GetAppKey())
 }
 
 func TestExecutableFactorGroupsHonorBindingScope(t *testing.T) {

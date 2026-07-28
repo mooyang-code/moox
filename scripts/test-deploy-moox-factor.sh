@@ -35,13 +35,23 @@ for command in ssh scp rsync; do
   chmod +x "${TMP_ROOT}/fake-path/${command}"
 done
 
-PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
+deploy_args=(
   --package-only --archive "${ARCHIVE}" --target localhost \
   --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
   --goos linux --goarch amd64 --skip-build --node-id factor-contract \
   --gateway-control-url http://127.0.0.1:11000 \
   --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode \
-  --no-collector --no-strategy --no-monitor >/dev/null
+  --no-collector --no-strategy --no-monitor
+)
+if PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" "${deploy_args[@]}" \
+  >/dev/null 2>&1; then
+  echo "factor-only package accepted a missing MOOX_STORAGE_PRIMARY_AUTH_SECRET" >&2
+  exit 1
+fi
+expected_storage_primary_secret="factor-storage-contract-secret"
+MOOX_STORAGE_PRIMARY_AUTH_SECRET="${expected_storage_primary_secret}" \
+  PATH="${TMP_ROOT}/fake-path:${PATH}" \
+  "${FIXTURE_ROOT}/scripts/deploy-moox.sh" "${deploy_args[@]}" >/dev/null
 
 mkdir "${TMP_ROOT}/unpacked"
 tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
@@ -78,6 +88,7 @@ storage_primary_secret="$(
     _ "${UNPACKED}/secrets/storage-internal-auth.env"
 )"
 [[ -n "${storage_primary_secret}" ]]
+[[ "${storage_primary_secret}" == "${expected_storage_primary_secret}" ]]
 grep -Fxq 'MOOX_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/secrets/gateway-service.env"
 grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}"' "${UNPACKED}/start.sh"
 

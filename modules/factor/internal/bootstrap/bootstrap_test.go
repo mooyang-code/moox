@@ -63,8 +63,8 @@ func TestRealtimeConsumerReadyWhenEventBusDisabled(t *testing.T) {
 }
 
 func TestFactorAuthInfoSignsPrimaryRequestFromRuntimeSecret(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", " primary-secret ")
 	auth := factorAuthInfo()
 	require.Equal(t, "moox-factor", auth.GetAppId())
-	require.Equal(t, mooxsecurity.HMACSHA256Hex("primary-secret", []byte("moox-factor")), auth.GetAppKey())
+	require.Equal(t, mooxsecurity.HMACSHA256Hex(" primary-secret ", []byte("moox-factor")), auth.GetAppKey())
 }
