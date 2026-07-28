@@ -22,6 +22,11 @@ func stageFactorArtifacts(factorsDir, name string) (*factorArtifactStage, error)
 		filepath.Join(factorsDir, name+".py"),
 		filepath.Join(factorsDir, ".versions", "factor", name),
 	}
+	bytecodePaths, err := filepath.Glob(filepath.Join(factorsDir, "__pycache__", name+".*.pyc"))
+	if err != nil {
+		return nil, err
+	}
+	paths = append(paths, bytecodePaths...)
 	for _, path := range paths {
 		artifact, exists, err := stageFactorArtifact(path, name)
 		if err != nil {

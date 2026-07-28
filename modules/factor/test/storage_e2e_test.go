@@ -127,6 +127,8 @@ func TestFactorRealStorageE2E(t *testing.T) {
 				FactorId: factorID,
 			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 				reportCleanupFailure(t, "factor "+factorID, rsp, err)
+			} else {
+				assertFactorArtifactsRemoved(t, deployRoot, factorName)
 			}
 		}
 		if spaceCreated {
@@ -399,6 +401,29 @@ func cleanupDatasetBuckets(
 		return
 	}
 	t.Logf("cleanup DataNode buckets %s/%s succeeded (%d buckets)", spaceID, datasetID, rsp.GetDeletedBuckets())
+}
+
+func assertFactorArtifactsRemoved(t *testing.T, deployRoot, factorName string) {
+	t.Helper()
+	factorsDir := filepath.Join(deployRoot, "factor", "factors")
+	for _, path := range []string{
+		filepath.Join(factorsDir, factorName+".py"),
+		filepath.Join(factorsDir, ".versions", "factor", factorName),
+	} {
+		if _, err := os.Lstat(path); err == nil {
+			reportCleanupFailure(t, "factor artifact "+path, "still exists", nil)
+		} else if !os.IsNotExist(err) {
+			reportCleanupFailure(t, "inspect factor artifact "+path, nil, err)
+		}
+	}
+	matches, err := filepath.Glob(filepath.Join(factorsDir, "__pycache__", factorName+".*.pyc"))
+	if err != nil {
+		reportCleanupFailure(t, "inspect factor bytecode "+factorName, nil, err)
+		return
+	}
+	if len(matches) != 0 {
+		reportCleanupFailure(t, "factor bytecode "+factorName, matches, nil)
+	}
 }
 
 func reportCleanupFailure(t *testing.T, resource string, rsp any, err error) {

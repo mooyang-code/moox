@@ -63,6 +63,11 @@ func TestDeleteFactorRemovesDefinitionAndArtifacts(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, createRsp.GetRetInfo().GetCode())
 	require.FileExists(t, filepath.Join(factorsDir, "First.py"))
 	require.DirExists(t, filepath.Join(factorsDir, ".versions", "factor", "First"))
+	cacheDir := filepath.Join(factorsDir, "__pycache__")
+	require.NoError(t, os.Mkdir(cacheDir, 0o755))
+	for _, name := range []string{"First.cpython-311.pyc", "First.cpython-314.pyc", "Other.cpython-314.pyc"} {
+		require.NoError(t, os.WriteFile(filepath.Join(cacheDir, name), []byte("bytecode"), 0o644))
+	}
 
 	deleteRsp, err := svc.DeleteFactor(ctx, &factorpb.DeleteFactorReq{FactorId: "factor-1"})
 	require.NoError(t, err)
@@ -71,6 +76,9 @@ func TestDeleteFactorRemovesDefinitionAndArtifacts(t *testing.T) {
 	require.Error(t, err)
 	require.NoFileExists(t, filepath.Join(factorsDir, "First.py"))
 	require.NoDirExists(t, filepath.Join(factorsDir, ".versions", "factor", "First"))
+	require.NoFileExists(t, filepath.Join(cacheDir, "First.cpython-311.pyc"))
+	require.NoFileExists(t, filepath.Join(cacheDir, "First.cpython-314.pyc"))
+	require.FileExists(t, filepath.Join(cacheDir, "Other.cpython-314.pyc"))
 }
 
 func TestConcurrentDeleteFactorLeavesNoArtifacts(t *testing.T) {
