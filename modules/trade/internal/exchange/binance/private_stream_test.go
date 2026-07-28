@@ -3,9 +3,14 @@ package binance
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
@@ -47,6 +52,58 @@ func TestSpotSubscriptionClassifiesIPBanAsRateLimited(t *testing.T) {
 	)
 	if !exchange.IsKind(err, exchange.ErrorRateLimited) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestReceivePrivateRefreshesLivenessOnControlPing(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := connection.WriteControl(
+				websocket.PingMessage,
+				[]byte("alive"),
+				time.Now().Add(time.Second),
+			); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	connection, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	err = testAdapter(exchange.MarketTypeSpot, "http://unused").
+		receivePrivateWithHeartbeat(ctx, connection, &recordingHandler{}, 30*time.Millisecond)
+	if err != context.DeadlineExceeded {
+		t.Fatalf("receive error = %v", err)
+	}
+}
+
+func TestPrivateHeartbeatTimeoutMatchesExchangeCadence(t *testing.T) {
+	spot := testAdapter(exchange.MarketTypeSpot, "http://unused")
+	swap := testAdapter(exchange.MarketTypeSwap, "http://unused")
+	if spot.privateHeartbeatTimeout() != time.Minute ||
+		swap.privateHeartbeatTimeout() <= 3*time.Minute {
+		t.Fatalf(
+			"spot=%s swap=%s",
+			spot.privateHeartbeatTimeout(),
+			swap.privateHeartbeatTimeout(),
+		)
 	}
 }
 
@@ -99,6 +156,28 @@ func TestDispatchPrivateRejectsIsolatedSwapPosition(t *testing.T) {
 	}`), &recordingHandler{})
 	if err == nil {
 		t.Fatal("isolated position was accepted")
+	}
+}
+
+func TestDispatchPrivateSwapPositionMarksPartialFields(t *testing.T) {
+	adapter := testAdapter(exchange.MarketTypeSwap, "http://unused")
+	handler := &recordingHandler{}
+	err := adapter.dispatchPrivate(context.Background(), []byte(`{
+		"e":"ACCOUNT_UPDATE","E":1700000000000,
+		"a":{"B":[],"P":[{"s":"BTCUSDT","pa":"1","ep":"100","up":"2",
+			"mt":"cross","ps":"BOTH"}]}
+	}`), handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.positions) != 1 {
+		t.Fatalf("positions = %+v", handler.positions)
+	}
+	position := handler.positions[0]
+	if !position.RequiresSync || !position.Present.SignedQuantity ||
+		!position.Present.EntryPrice || !position.Present.UnrealizedPnL ||
+		position.Present.Leverage || !position.Leverage.IsZero() {
+		t.Fatalf("position = %+v", position)
 	}
 }
 

@@ -29,8 +29,10 @@ type Account struct {
 	Paused             bool
 	PauseReason        string
 	Ready              bool
+	SyncSymbols        []string
 	LeverageSettings   map[string]shared.Decimal
 	Snapshot           exchange.AccountSnapshot
+	SnapshotSourceTime time.Time
 	LastSyncAt         time.Time
 	LastReadyAt        time.Time
 	LastError          string
@@ -66,12 +68,27 @@ func (a Account) Validate() error {
 			}
 		}
 	}
+	seenSymbols := make(map[string]struct{}, len(a.SyncSymbols))
+	for _, symbol := range a.SyncSymbols {
+		if blank(symbol) {
+			return invalidAccount("sync symbol cannot be empty")
+		}
+		if _, found := seenSymbols[symbol]; found {
+			return invalidAccount("sync symbols must be unique")
+		}
+		seenSymbols[symbol] = struct{}{}
+	}
 	return nil
 }
 
 func (a Account) ExecutionEligibility() error {
 	if err := a.Validate(); err != nil {
 		return err
+	}
+	if a.ExecutionMode == exchange.ExecutionModeLive &&
+		a.MarketType == exchange.MarketTypeSpot &&
+		len(a.SyncSymbols) == 0 {
+		return ErrAccountNotExecutable
 	}
 	if a.Status != exchange.AccountStatusEnabled || a.Paused || !a.Ready {
 		return ErrAccountNotExecutable

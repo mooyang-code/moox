@@ -28,6 +28,9 @@ type Adapter struct {
 
 	mu          sync.RWMutex
 	instruments map[string]exchange.Instrument
+
+	privateGateMu sync.Mutex
+	privateGate   chan struct{}
 }
 
 func init() {
@@ -64,6 +67,19 @@ func NewWithClient(
 }
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }
+
+func (a *Adapter) MarkPrivateStreamMetadataReady() {
+	a.privateGateMu.Lock()
+	gate := a.privateGate
+	if gate != nil {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	}
+	a.privateGateMu.Unlock()
+}
 
 type response struct {
 	Code string          `json:"code"`
@@ -502,6 +518,27 @@ func (a *Adapter) GetOrder(
 	return a.order(payload[0])
 }
 
+func (a *Adapter) GetOrderByExchangeID(
+	ctx context.Context,
+	symbol string,
+	exchangeOrderID string,
+) (exchange.Order, error) {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
+		"instId": []string{symbol},
+		"ordId":  []string{exchangeOrderID},
+	}, nil, true)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	var payload []orderPayload
+	if err := json.Unmarshal(data, &payload); err != nil || len(payload) == 0 {
+		return exchange.Order{}, &exchange.Error{
+			Kind: exchange.ErrorOrderNotFound, Err: errors.New("OKX order not found"),
+		}
+	}
+	return a.order(payload[0])
+}
+
 func (a *Adapter) PlaceOrder(
 	ctx context.Context,
 	request exchange.OrderRequest,
@@ -622,15 +659,21 @@ func (a *Adapter) ListRecentFills(
 		next = payload[0].BillID
 	}
 	rows := append([]fillPayload(nil), payload...)
-	for len(payload) == pageSize && cursor != "" {
+	for len(payload) == pageSize {
 		oldest := payload[len(payload)-1].BillID
-		if oldest == "" || compareBillID(oldest, cursor) <= 0 {
+		if oldest == "" ||
+			(cursor != "" && compareBillID(oldest, cursor) <= 0) {
 			break
 		}
-		payload, err = a.fillPage(ctx, symbol, "after", oldest, pageSize)
-		if err != nil {
-			return nil, cursor, err
+		nextPage, pageErr := a.fillPage(ctx, symbol, "after", oldest, pageSize)
+		if pageErr != nil {
+			return nil, cursor, pageErr
 		}
+		if len(nextPage) > 0 &&
+			nextPage[len(nextPage)-1].BillID == oldest {
+			return nil, cursor, rejected("OKX Fill page did not advance", nil)
+		}
+		payload = nextPage
 		rows = append(rows, payload...)
 	}
 	// OKX returns newest first. Apply only rows newer than the stored cursor,
@@ -749,6 +792,10 @@ func (a *Adapter) order(row orderPayload) (exchange.Order, error) {
 	if err != nil {
 		return exchange.Order{}, err
 	}
+	price, err := decimalOrZero(row.Px)
+	if err != nil {
+		return exchange.Order{}, err
+	}
 	positionSide := exchange.PositionSideUnspecified
 	if a.config.MarketType == exchange.MarketTypeSwap {
 		if row.PosSide != "" && row.PosSide != "net" {
@@ -757,11 +804,16 @@ func (a *Adapter) order(row orderPayload) (exchange.Order, error) {
 		positionSide = exchange.PositionSideNet
 	}
 	orderType, tif := parseOKXOrderType(row.OrdType)
+	var limitPrice *shared.Decimal
+	if orderType == exchange.OrderTypeLimit && price.Cmp(shared.Zero()) > 0 {
+		limitPrice = &price
+	}
 	return exchange.Order{
 		ExchangeOrderID: row.OrdID, ClientOrderID: row.ClOrdID,
 		Symbol: row.InstID, OrderType: orderType, TimeInForce: tif,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
-		Quantity: quantity, FilledQuantity: filled, AveragePrice: average,
+		Quantity: quantity, LimitPrice: limitPrice,
+		FilledQuantity: filled, AveragePrice: average,
 		ReduceOnly: row.ReduceOnly == "true",
 		Status:     mapStatus(row.State, filled),
 		CreatedAt:  millisString(row.CTime), UpdatedAt: millisString(row.UTime),

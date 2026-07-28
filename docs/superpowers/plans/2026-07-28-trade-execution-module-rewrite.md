@@ -568,11 +568,18 @@ error on the account row.
 Also store:
 
 ```text
+c_sync_symbols_json
 c_leverage_settings_json
+c_fill_cursors_json
 c_snapshot_json
 c_snapshot_source_time
 ```
 
+`c_sync_symbols_json` is the explicit SPOT synchronization universe. It lets
+first-start catch-up inspect a manually traded symbol even when its asset has
+already been sold to zero. Catch-up remains bounded by the history window the
+Exchange API exposes. `c_fill_cursors_json` stores one cursor per symbol on
+the same account row; it is not a separate table.
 `c_leverage_settings_json` is a canonical symbol-to-leverage object.
 `c_snapshot_json` contains only the latest typed ExchangeAccountSnapshot,
 including balances, equity, available funds, and margin values. Validate and
@@ -1232,6 +1239,14 @@ git commit -m "feat(trade): implement durable order execution"
 - Create: `modules/trade/internal/runtime/session_test.go`
 - Create: `modules/trade/internal/runtime/manager.go`
 - Create: `modules/trade/internal/runtime/manager_test.go`
+- Modify: `modules/trade/proto/trade_service.proto`
+- Regenerate: `modules/trade/proto/tradegen/trade_service.pb.go`
+- Modify: `modules/trade/internal/domain/exchangeaccount/account.go`
+- Modify: `modules/trade/internal/exchange/adapter.go`
+- Modify: Binance and OKX adapters and private-stream tests
+- Modify: `modules/trade/internal/infra/store/account.go`
+- Modify: `modules/trade/internal/infra/store/execution.go`
+- Modify: `modules/trade/internal/infra/store/fact.go`
 - Modify: `modules/trade/internal/health/state.go`
 - Modify: `modules/trade/internal/health/server.go`
 - Modify: corresponding health tests
@@ -1255,6 +1270,12 @@ ListRecentFills
 Apply snapshots and buffered events
 READY
 ```
+
+For an adapter such as OKX that needs instrument metadata to normalize SWAP
+contract quantities, subscribe and receive the acknowledgement first, then
+hold normalization behind a small adapter metadata gate until
+`LoadInstruments` completes. Do not move the subscription after the metadata
+request and do not issue the metadata request twice.
 
 Also prove that a private-stream disconnect immediately clears readiness and
 blocks Order submission.
@@ -1301,6 +1322,19 @@ sync cursor and readiness metadata
 ```
 
 Import unmanaged Exchange orders with source `EXTERNAL`. Do not cancel them.
+For SPOT, query every explicitly configured sync symbol, not only symbols
+inferred from current non-zero balances. Advance a fill cursor only after all
+pages in the adapter's documented recovery window have been ingested. V1 uses
+the Exchange's default bounded history where the API cannot page arbitrarily:
+Binance USD-M first-start recovery is the most recent seven days. Older
+one-off backfill is explicitly outside V1 rather than silently claimed as
+complete.
+
+Only a complete REST account snapshot advances the local full-snapshot
+watermark used to rebase reservations. Partial private account events merge
+their present fields but must not advance that watermark. Serialize full
+account synchronization with order submission through the Store's per-account
+lock.
 
 - [ ] **Step 3: Implement one session per enabled account**
 
@@ -1344,9 +1378,20 @@ reconnect, manual SyncAccount, external order import, and readiness gating.
 
 ```bash
 git add modules/trade/internal/application/accountsync \
+  modules/trade/internal/application/account \
+  modules/trade/internal/application/order \
+  modules/trade/internal/domain/exchangeaccount \
+  modules/trade/internal/domain/order \
+  modules/trade/internal/exchange \
+  modules/trade/internal/infra/store \
   modules/trade/internal/runtime \
   modules/trade/internal/health \
+  modules/trade/proto/trade_service.proto \
+  modules/trade/proto/tradegen/trade_service.pb.go \
+  modules/trade/schema/account.sql \
+  modules/trade/go.mod \
   modules/trade/internal/application/reconciliation \
+  modules/trade/internal/bootstrap/bootstrap.go \
   modules/trade/internal/bootstrap/kernel_timers.go \
   modules/trade/internal/bootstrap/kernel_timers_test.go
 git commit -m "feat(trade): add Exchange account synchronization"

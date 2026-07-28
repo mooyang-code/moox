@@ -88,6 +88,7 @@ message ExchangeAccount {
   string last_error = 18;
   int64 created_at = 19;
   int64 updated_at = 20;
+  repeated string sync_symbols = 21;
 }
 
 message Order {
@@ -194,6 +195,7 @@ message CreateAccountReq {
   string credential_secret_id = 5;
   string settlement_asset = 6;
   string margin_mode = 7;
+  repeated string sync_symbols = 8;
 }
 message CreateAccountRsp {
   common.RetInfo ret_info = 1;
@@ -207,6 +209,7 @@ message UpdateAccountReq {
   string settlement_asset = 4;
   string margin_mode = 5;
   string status = 6;
+  repeated string sync_symbols = 7;
 }
 message UpdateAccountRsp {
   common.RetInfo ret_info = 1;

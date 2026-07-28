@@ -2,10 +2,14 @@ package okx
 
 import (
 	"context"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"golang.org/x/net/websocket"
 )
 
 type handler struct {
@@ -71,6 +75,182 @@ func TestPrivateChannelsExcludeSpotPositions(t *testing.T) {
 	if len(channels) != 3 || channels[2]["channel"] != "positions" ||
 		channels[2]["instType"] != "SWAP" {
 		t.Fatalf("SWAP channels = %+v", channels)
+	}
+}
+
+func TestExpectSubscribeAcknowledgementsWaitsForEveryChannel(t *testing.T) {
+	channels := []map[string]string{
+		{"channel": "orders"},
+		{"channel": "account"},
+		{"channel": "positions"},
+	}
+	server := httptest.NewServer(websocket.Handler(func(connection *websocket.Conn) {
+		for _, channel := range []string{"account", "positions", "orders"} {
+			_ = websocket.JSON.Send(connection, map[string]any{
+				"event": "subscribe",
+				"arg":   map[string]string{"channel": channel},
+			})
+		}
+	}))
+	defer server.Close()
+	config, err := websocket.NewConfig(
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		"http://localhost",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := websocket.DialConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, err := expectOKXSubscribeAcks(connection, channels); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpectSubscribeAcknowledgementsRejectsDuplicate(t *testing.T) {
+	server := httptest.NewServer(websocket.Handler(func(connection *websocket.Conn) {
+		for range 2 {
+			_ = websocket.JSON.Send(connection, map[string]any{
+				"event": "subscribe",
+				"arg":   map[string]string{"channel": "orders"},
+			})
+		}
+	}))
+	defer server.Close()
+	config, err := websocket.NewConfig(
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		"http://localhost",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := websocket.DialConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_, err = expectOKXSubscribeAcks(connection, []map[string]string{
+		{"channel": "orders"},
+		{"channel": "account"},
+	})
+	if err == nil {
+		t.Fatal("duplicate acknowledgement was accepted")
+	}
+}
+
+func TestExpectSubscribeAcknowledgementsBuffersInterleavedData(t *testing.T) {
+	server := httptest.NewServer(websocket.Handler(func(connection *websocket.Conn) {
+		_ = websocket.JSON.Send(connection, map[string]any{
+			"event": "subscribe",
+			"arg":   map[string]string{"channel": "orders"},
+		})
+		_ = websocket.JSON.Send(connection, map[string]any{
+			"arg":  map[string]string{"channel": "account"},
+			"data": []map[string]any{{"uTime": "1", "details": []any{}}},
+		})
+		_ = websocket.JSON.Send(connection, map[string]any{
+			"event": "subscribe",
+			"arg":   map[string]string{"channel": "account"},
+		})
+	}))
+	defer server.Close()
+	config, err := websocket.NewConfig(
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		"http://localhost",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := websocket.DialConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	buffered, err := expectOKXSubscribeAcks(connection, []map[string]string{
+		{"channel": "orders"},
+		{"channel": "account"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(buffered) != 1 ||
+		!strings.Contains(string(buffered[0]), `"channel":"account"`) {
+		t.Fatalf("buffered = %s", buffered)
+	}
+}
+
+func TestReceivePrivateMessageRequiresPongAfterIdle(t *testing.T) {
+	server := httptest.NewServer(websocket.Handler(func(connection *websocket.Conn) {
+		var payload string
+		_ = websocket.Message.Receive(connection, &payload)
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+	config, err := websocket.NewConfig(
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		"http://localhost",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := websocket.DialConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	err = New(exchange.AccountConfig{}, exchange.Credential{}).
+		receivePrivateMessageWithTimeouts(
+			context.Background(),
+			connection,
+			&handler{},
+			20*time.Millisecond,
+			20*time.Millisecond,
+		)
+	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSwapPrivateMetadataGateDefersNormalizationUntilMarked(t *testing.T) {
+	adapter := New(
+		exchange.AccountConfig{MarketType: exchange.MarketTypeSwap},
+		exchange.Credential{},
+	)
+	gate := make(chan struct{})
+	adapter.privateGateMu.Lock()
+	adapter.privateGate = gate
+	adapter.privateGateMu.Unlock()
+	recording := &handler{}
+	done := make(chan error, 1)
+	go func() {
+		<-gate
+		done <- adapter.dispatchPrivate(context.Background(), []byte(`{
+			"arg":{"channel":"orders"},
+			"data":[{
+				"instId":"BTC-USDT-SWAP","ordId":"42","clOrdId":"cid",
+				"side":"buy","posSide":"net","ordType":"market","sz":"1",
+				"accFillSz":"0","state":"live","cTime":"1","uTime":"1"
+			}]
+		}`), recording)
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("normalization ran before metadata was ready: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	adapter.mu.Lock()
+	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	adapter.mu.Unlock()
+	adapter.MarkPrivateStreamMetadataReady()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(recording.orders) != 1 ||
+		recording.orders[0].Quantity.String() != "0.01" {
+		t.Fatalf("orders = %+v", recording.orders)
 	}
 }
 

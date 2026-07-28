@@ -268,6 +268,59 @@ func TestRecentFillsPaginatesWithoutSkippingGap(t *testing.T) {
 	}
 }
 
+func TestRecentFillsEmptyCursorConsumesAllAvailablePages(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		var high, low int
+		switch {
+		case !request.URL.Query().Has("before") && !request.URL.Query().Has("after"):
+			high, low = 150, 51
+		case request.URL.Query().Get("after") == "51":
+			high, low = 50, 1
+		default:
+			t.Fatalf("query = %v", request.URL.Query())
+		}
+		rows := make([]fillPayload, 0, high-low+1)
+		for billID := high; billID >= low; billID-- {
+			id := strconv.Itoa(billID)
+			rows = append(rows, fillPayload{
+				BillID: id, InstID: "BTC-USDT", TradeID: id,
+				OrdID: "42", ClOrdID: "cid", Side: "buy",
+				FillSz: "1", FillPx: "100", Ts: "1700000000000",
+			})
+		}
+		data, err := json.Marshal(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok(w, string(data))
+	}))
+	defer server.Close()
+	adapter := NewWithClient(exchange.AccountConfig{
+		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		SettlementAsset: "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
+		httpclient.New(server.URL))
+	fills, cursor, err := adapter.ListRecentFills(context.Background(), "BTC-USDT", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || len(fills) != 150 || cursor != "150" ||
+		fills[0].ExchangeTradeID != "1" ||
+		fills[len(fills)-1].ExchangeTradeID != "150" {
+		t.Fatalf(
+			"requests=%d fills=%d first=%s last=%s cursor=%s",
+			requests,
+			len(fills),
+			fills[0].ExchangeTradeID,
+			fills[len(fills)-1].ExchangeTradeID,
+			cursor,
+		)
+	}
+}
+
 func TestMutationWithMalformedSuccessResponseIsTransportUnknown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"code":`)

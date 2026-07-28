@@ -169,7 +169,15 @@ func (o *Order) ConfirmCancel() ([]Event, error) {
 	if !o.FilledQuantity.IsZero() {
 		to = PartiallyCanceled
 	}
-	return o.transition(to, Canceling, CancelUnknown)
+	return o.transition(
+		to,
+		Submitting,
+		SubmitUnknown,
+		Open,
+		PartiallyFilled,
+		Canceling,
+		CancelUnknown,
+	)
 }
 
 func (o *Order) transition(to State, allowed ...State) ([]Event, error) {

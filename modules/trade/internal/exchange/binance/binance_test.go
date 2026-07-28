@@ -2,6 +2,8 @@ package binance
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -178,6 +180,55 @@ func TestListRecentFillsNormalizesSwap(t *testing.T) {
 	}
 }
 
+func TestListRecentFillsConsumesEveryCatchUpPage(t *testing.T) {
+	pageCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		if request.URL.Path == "/api/v3/order" {
+			_, _ = io.WriteString(
+				writer,
+				`{"orderId":42,"clientOrderId":"cid","symbol":"BTCUSDT"}`,
+			)
+			return
+		}
+		pageCalls++
+		fromID := request.URL.Query().Get("fromId")
+		if request.URL.Query().Get("limit") != "1000" {
+			t.Fatalf("query = %v", request.URL.Query())
+		}
+		count := 1000
+		start := 0
+		if fromID == "1000" {
+			count = 1
+			start = 1000
+		} else if fromID != "0" {
+			t.Fatalf("fromId = %s", fromID)
+		}
+		rows := make([]tradePayload, 0, count)
+		for id := start; id < start+count; id++ {
+			rows = append(rows, tradePayload{
+				ID: json.Number(fmt.Sprint(id)), OrderID: json.Number("42"),
+				Symbol: "BTCUSDT", Price: "100", Qty: "0.01",
+				Commission: "0", CommissionAsset: "USDT", Time: 1,
+				IsBuyer: true,
+			})
+		}
+		_ = json.NewEncoder(writer).Encode(rows)
+	}))
+	defer server.Close()
+
+	fills, cursor, err := testAdapter(exchange.MarketTypeSpot, server.URL).
+		ListRecentFills(context.Background(), "BTCUSDT", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fills) != 1001 || cursor != "1000" || pageCalls != 2 {
+		t.Fatalf("fills=%d cursor=%s pageCalls=%d", len(fills), cursor, pageCalls)
+	}
+}
+
 func TestMutationWithMalformedSuccessResponseIsTransportUnknown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"orderId":`)
@@ -196,6 +247,66 @@ func TestRejectsHedgeModeAccount(t *testing.T) {
 			t.Fatalf("unexpected path %s", request.URL.Path)
 		}
 		_, _ = io.WriteString(w, `{"dualSidePosition":true}`)
+	}))
+	defer server.Close()
+	_, err := testAdapter(exchange.MarketTypeSwap, server.URL).
+		GetAccountSnapshot(context.Background())
+	if !exchange.IsKind(err, exchange.ErrorRejected) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSwapAccountSnapshotUsesAssetUpdateTime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		switch request.URL.Path {
+		case "/fapi/v1/positionSide/dual":
+			_, _ = io.WriteString(writer, `{"dualSidePosition":false}`)
+		case "/fapi/v1/multiAssetsMargin":
+			_, _ = io.WriteString(writer, `{"multiAssetsMargin":false}`)
+		case "/fapi/v3/account":
+			_, _ = io.WriteString(writer, `{
+				"totalWalletBalance":"100","totalMarginBalance":"90","availableBalance":"80",
+				"totalInitialMargin":"20","totalMaintMargin":"2",
+				"totalUnrealizedProfit":"-10",
+				"assets":[
+					{"asset":"USDT","walletBalance":"100","availableBalance":"80",
+					 "initialMargin":"20","unrealizedProfit":"1","updateTime":1700000000000}
+				]
+			}`)
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	snapshot, err := testAdapter(exchange.MarketTypeSwap, server.URL).
+		GetAccountSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ExchangeUpdatedAt.UnixMilli() != 1_700_000_000_000 ||
+		snapshot.AvailableFunds.String() != "80" ||
+		snapshot.Equity.String() != "90" ||
+		snapshot.UnrealizedPnL.String() != "-10" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
+func TestSwapAccountSnapshotRejectsMultiAssetsMode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		switch request.URL.Path {
+		case "/fapi/v1/positionSide/dual":
+			_, _ = io.WriteString(writer, `{"dualSidePosition":false}`)
+		case "/fapi/v1/multiAssetsMargin":
+			_, _ = io.WriteString(writer, `{"multiAssetsMargin":true}`)
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
 	}))
 	defer server.Close()
 	_, err := testAdapter(exchange.MarketTypeSwap, server.URL).

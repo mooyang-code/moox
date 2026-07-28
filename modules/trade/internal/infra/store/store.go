@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/trade/schema"
@@ -22,7 +23,8 @@ var (
 )
 
 type Store struct {
-	db *gorm.DB
+	db           *gorm.DB
+	accountLocks sync.Map
 }
 
 type Tx struct {
@@ -53,6 +55,13 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("apply trade schema: %w", err)
 	}
 	return &Store{db: db}, nil
+}
+
+func (s *Store) LockExchangeAccount(exchangeAccountID string) func() {
+	value, _ := s.accountLocks.LoadOrStore(exchangeAccountID, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
 }
 
 func validateExistingTradeSchema(db *gorm.DB) error {
@@ -90,6 +99,36 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 			if _, found := approved[table]; !found {
 				return fmt.Errorf("%w: unexpected Trade table %s", ErrIncompatibleSchema, table)
 			}
+		}
+	}
+	if containsString(tables, "t_exchange_accounts") {
+		var accountColumns []struct {
+			Name string `gorm:"column:name"`
+		}
+		if err := db.Raw(`PRAGMA table_info("t_exchange_accounts")`).
+			Scan(&accountColumns).Error; err != nil {
+			return fmt.Errorf("inspect Exchange account schema: %w", err)
+		}
+		got := make([]string, 0, len(accountColumns))
+		for _, column := range accountColumns {
+			got = append(got, column.Name)
+		}
+		sort.Strings(got)
+		want := []string{
+			"c_credential_secret_id", "c_ctime", "c_exchange",
+			"c_exchange_account_id", "c_execution_mode", "c_fill_cursors_json",
+			"c_last_error", "c_last_ready_at", "c_last_sync_at",
+			"c_leverage_settings_json", "c_margin_mode", "c_market_type",
+			"c_mtime", "c_name", "c_pause_reason", "c_paused", "c_ready",
+			"c_settlement_asset", "c_snapshot_json", "c_snapshot_source_time",
+			"c_space_id", "c_status", "c_sync_symbols_json",
+		}
+		sort.Strings(want)
+		if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			return fmt.Errorf(
+				"%w: t_exchange_accounts columns do not match current schema",
+				ErrIncompatibleSchema,
+			)
 		}
 	}
 	if !containsString(tables, "t_target_executions") {

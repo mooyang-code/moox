@@ -103,6 +103,7 @@ func TestExchangeAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *test
 	staleConfig := ExchangeAccountConfiguration{
 		Name: "renamed", CredentialSecretID: "secret-2",
 		SettlementAsset: "USDC", MarginMode: "CROSS", Status: "ENABLED",
+		SyncSymbols: []string{"BTCUSDT"},
 	}
 	syncState := ExchangeAccountSyncState{
 		Ready: true, LeverageSettings: LeverageSettings{"BTCUSDT": "5"},
@@ -135,6 +136,7 @@ func TestExchangeAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *test
 	require.Equal(t, "renamed", got.Name)
 	require.Equal(t, "secret-2", got.CredentialSecretID)
 	require.Equal(t, "USDC", got.SettlementAsset)
+	require.Equal(t, []string{"BTCUSDT"}, got.SyncSymbols)
 	require.True(t, got.Paused)
 	require.Equal(t, "manual", got.PauseReason)
 	require.False(t, got.Ready)

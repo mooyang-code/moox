@@ -90,6 +90,25 @@ func TestOpenRejectsIncompatibleTargetExecutionColumns(t *testing.T) {
 	require.ErrorIs(t, err, ErrIncompatibleSchema)
 }
 
+func TestOpenRejectsExchangeAccountWithoutCurrentCursorColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-account.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE t_exchange_accounts (
+			c_space_id TEXT NOT NULL,
+			c_exchange_account_id TEXT NOT NULL,
+			c_name TEXT NOT NULL
+		)
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+}
+
 func TestOpenAcceptsCurrentSchemaOnReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "current.db")
 	first, err := Open(path)

@@ -216,25 +216,28 @@ type spotAccount struct {
 }
 
 type swapAccount struct {
-	UpdateTime            int64  `json:"updateTime"`
 	TotalWalletBalance    string `json:"totalWalletBalance"`
+	TotalMarginBalance    string `json:"totalMarginBalance"`
 	AvailableBalance      string `json:"availableBalance"`
 	TotalInitialMargin    string `json:"totalInitialMargin"`
 	TotalMaintMargin      string `json:"totalMaintMargin"`
 	TotalUnrealizedProfit string `json:"totalUnrealizedProfit"`
-	MultiAssetsMargin     bool   `json:"multiAssetsMargin"`
 	Assets                []struct {
 		Asset            string `json:"asset"`
 		WalletBalance    string `json:"walletBalance"`
 		AvailableBalance string `json:"availableBalance"`
 		InitialMargin    string `json:"initialMargin"`
 		UnrealizedProfit string `json:"unrealizedProfit"`
+		UpdateTime       int64  `json:"updateTime"`
 	} `json:"assets"`
 }
 
 func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
 	if a.config.MarketType == exchange.MarketTypeSwap {
 		if err := a.ensureOneWayMode(ctx); err != nil {
+			return exchange.AccountSnapshot{}, err
+		}
+		if err := a.ensureSingleAssetMode(ctx); err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
 	}
@@ -248,7 +251,11 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return exchange.AccountSnapshot{}, typedRejected("decode account", err)
 		}
-		snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(payload.UpdateTime)}
+		snapshotTime := payload.UpdateTime
+		if snapshotTime <= 0 {
+			snapshotTime = time.Now().UTC().UnixMilli()
+		}
+		snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(snapshotTime)}
 		for _, balance := range payload.Balances {
 			available, err := decimalOrZero(balance.Free)
 			if err != nil {
@@ -268,11 +275,20 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return exchange.AccountSnapshot{}, typedRejected("decode futures account", err)
 	}
-	if payload.MultiAssetsMargin {
-		return exchange.AccountSnapshot{}, typedRejected("multi-assets margin is unsupported", nil)
+	snapshotTime := int64(0)
+	for _, asset := range payload.Assets {
+		if asset.UpdateTime > snapshotTime {
+			snapshotTime = asset.UpdateTime
+		}
 	}
-	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(payload.UpdateTime)}
-	snapshot.Equity, err = decimalOrZero(payload.TotalWalletBalance)
+	if snapshotTime == 0 {
+		// `/fapi/v3/account` has no top-level updateTime and may return no
+		// timestamp for an empty account. In that case the successful fetch
+		// completion is the authoritative observation boundary.
+		snapshotTime = time.Now().UTC().UnixMilli()
+	}
+	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(snapshotTime)}
+	snapshot.Equity, err = decimalOrZero(payload.TotalMarginBalance)
 	if err == nil {
 		snapshot.AvailableFunds, err = decimalOrZero(payload.AvailableBalance)
 	}
@@ -317,6 +333,23 @@ func (a *Adapter) ensureOneWayMode(ctx context.Context) error {
 	}
 	if payload.DualSidePosition {
 		return typedRejected("hedge position mode is unsupported", nil)
+	}
+	return nil
+}
+
+func (a *Adapter) ensureSingleAssetMode(ctx context.Context) error {
+	raw, err := a.request(ctx, http.MethodGet, "/fapi/v1/multiAssetsMargin", nil)
+	if err != nil {
+		return err
+	}
+	var payload struct {
+		MultiAssetsMargin bool `json:"multiAssetsMargin"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return typedRejected("decode multi-assets margin mode", err)
+	}
+	if payload.MultiAssetsMargin {
+		return typedRejected("multi-assets margin is unsupported", nil)
 	}
 	return nil
 }
@@ -444,6 +477,33 @@ func (a *Adapter) GetOrder(
 	return a.orderFromPayload(payload)
 }
 
+func (a *Adapter) GetOrderByExchangeID(
+	ctx context.Context,
+	symbol string,
+	exchangeOrderID string,
+) (exchange.Order, error) {
+	if strings.TrimSpace(symbol) == "" || strings.TrimSpace(exchangeOrderID) == "" {
+		return exchange.Order{}, typedRejected("symbol and Exchange order id are required", nil)
+	}
+	raw, err := a.request(
+		ctx,
+		http.MethodGet,
+		a.path("/api/v3/order", "/fapi/v1/order"),
+		url.Values{
+			"symbol":  []string{symbol},
+			"orderId": []string{exchangeOrderID},
+		},
+	)
+	if err != nil {
+		return exchange.Order{}, classifyAPIError(err, raw)
+	}
+	var payload orderPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return exchange.Order{}, typedRejected("decode order", err)
+	}
+	return a.orderFromPayload(payload)
+}
+
 func (a *Adapter) PlaceOrder(
 	ctx context.Context,
 	request exchange.OrderRequest,
@@ -540,7 +600,12 @@ func (a *Adapter) ListRecentFills(
 	if strings.TrimSpace(symbol) == "" {
 		return nil, cursor, typedRejected("symbol is required to list Binance fills", nil)
 	}
-	values := url.Values{"symbol": []string{symbol}}
+	const pageSize = 1000
+	values := url.Values{
+		"symbol": []string{symbol},
+		"limit":  []string{strconv.Itoa(pageSize)},
+	}
+	catchUp := true
 	if cursor != "" {
 		tradeID, err := strconv.ParseUint(cursor, 10, 64)
 		if err != nil || tradeID == ^uint64(0) {
@@ -549,42 +614,63 @@ func (a *Adapter) ListRecentFills(
 		// Binance fromId is inclusive. Advance past the last applied trade so
 		// an idle account does not return the same Fill on every sync.
 		values.Set("fromId", strconv.FormatUint(tradeID+1, 10))
+	} else {
+		// A configured symbol is an explicit request to recover every Fill the
+		// Exchange still exposes, including terminal manual orders from before
+		// MooX first started.
+		values.Set("fromId", "0")
 	}
-	raw, err := a.request(
-		ctx,
-		http.MethodGet,
-		a.path("/api/v3/myTrades", "/fapi/v1/userTrades"),
-		values,
-	)
-	if err != nil {
-		return nil, cursor, err
-	}
-	var payload []tradePayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, cursor, typedRejected("decode fills", err)
-	}
-	out := make([]exchange.Fill, 0, len(payload))
+	out := make([]exchange.Fill, 0)
 	next := cursor
 	clientOrderIDs := make(map[string]string)
-	for _, row := range payload {
-		fill, err := a.fillFromPayload(row)
+	for {
+		raw, err := a.request(
+			ctx,
+			http.MethodGet,
+			a.path("/api/v3/myTrades", "/fapi/v1/userTrades"),
+			values,
+		)
 		if err != nil {
 			return nil, cursor, err
 		}
-		orderID := row.OrderID.String()
-		clientOrderID, found := clientOrderIDs[orderID]
-		if !found {
-			clientOrderID, err = a.clientOrderIDByExchangeOrderID(ctx, symbol, orderID)
+		var payload []tradePayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, cursor, typedRejected("decode fills", err)
+		}
+		for _, row := range payload {
+			fill, err := a.fillFromPayload(row)
 			if err != nil {
 				return nil, cursor, err
 			}
-			clientOrderIDs[orderID] = clientOrderID
+			orderID := row.OrderID.String()
+			clientOrderID, found := clientOrderIDs[orderID]
+			if !found {
+				clientOrderID, err = a.clientOrderIDByExchangeOrderID(ctx, symbol, orderID)
+				if exchange.IsKind(err, exchange.ErrorOrderNotFound) {
+					clientOrderID = ""
+				} else if err != nil {
+					return nil, cursor, err
+				}
+				clientOrderIDs[orderID] = clientOrderID
+			}
+			fill.ClientOrderID = clientOrderID
+			out = append(out, fill)
+			if row.ID.String() != "" {
+				next = row.ID.String()
+			}
 		}
-		fill.ClientOrderID = clientOrderID
-		out = append(out, fill)
-		if row.ID.String() != "" {
-			next = row.ID.String()
+		if !catchUp || len(payload) < pageSize {
+			break
 		}
+		lastID, err := strconv.ParseUint(next, 10, 64)
+		if err != nil || lastID == ^uint64(0) {
+			return nil, cursor, typedRejected("invalid Binance fill page cursor", err)
+		}
+		fromID := strconv.FormatUint(lastID+1, 10)
+		if values.Get("fromId") == fromID {
+			return nil, cursor, typedRejected("Binance fill page did not advance", nil)
+		}
+		values.Set("fromId", fromID)
 	}
 	return out, next, nil
 }
@@ -688,6 +774,15 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 			average = cumulativeQuote.Div(filled)
 		}
 	}
+	price, err := decimalOrZero(row.Price)
+	if err != nil {
+		return exchange.Order{}, err
+	}
+	var limitPrice *shared.Decimal
+	if exchange.OrderType(row.Type) == exchange.OrderTypeLimit &&
+		price.Cmp(shared.Zero()) > 0 {
+		limitPrice = &price
+	}
 	positionSide := exchange.PositionSideUnspecified
 	if a.config.MarketType == exchange.MarketTypeSwap {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
@@ -704,6 +799,7 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 		Side:            exchange.Side(row.Side),
 		PositionSide:    positionSide,
 		Quantity:        quantity,
+		LimitPrice:      limitPrice,
 		FilledQuantity:  filled,
 		AveragePrice:    average,
 		ReduceOnly:      row.ReduceOnly,

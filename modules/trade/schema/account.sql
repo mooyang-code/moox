@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS t_exchange_accounts (
     c_paused INTEGER NOT NULL DEFAULT 0,
     c_pause_reason TEXT NOT NULL DEFAULT '',
     c_ready INTEGER NOT NULL DEFAULT 0,
+    c_sync_symbols_json TEXT NOT NULL DEFAULT '[]',
     c_leverage_settings_json TEXT NOT NULL DEFAULT '{}',
+    c_fill_cursors_json TEXT NOT NULL DEFAULT '{}',
     c_snapshot_json TEXT NOT NULL DEFAULT '{}',
     c_snapshot_source_time INTEGER NOT NULL DEFAULT 0,
     c_last_sync_at INTEGER NOT NULL DEFAULT 0,
@@ -26,6 +28,10 @@ CREATE TABLE IF NOT EXISTS t_exchange_accounts (
     UNIQUE (c_space_id, c_name),
     CHECK (json_valid(c_leverage_settings_json)),
     CHECK (json_type(c_leverage_settings_json) = 'object'),
+    CHECK (json_valid(c_sync_symbols_json)),
+    CHECK (json_type(c_sync_symbols_json) = 'array'),
+    CHECK (json_valid(c_fill_cursors_json)),
+    CHECK (json_type(c_fill_cursors_json) = 'object'),
     CHECK (json_valid(c_snapshot_json)),
     CHECK (json_type(c_snapshot_json) = 'object')
 );

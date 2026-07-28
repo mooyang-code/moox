@@ -164,6 +164,17 @@ type AccountSnapshot struct {
 	MaintenanceMargin shared.Decimal
 	UnrealizedPnL     shared.Decimal
 	ExchangeUpdatedAt time.Time
+	Present           AccountSnapshotPresence
+	RequiresSync      bool
+}
+
+type AccountSnapshotPresence struct {
+	Balances          bool
+	Equity            bool
+	AvailableFunds    bool
+	UsedMargin        bool
+	MaintenanceMargin bool
+	UnrealizedPnL     bool
 }
 
 type Position struct {
@@ -180,6 +191,20 @@ type Position struct {
 	UnrealizedPnL     shared.Decimal
 	RealizedPnL       shared.Decimal
 	ExchangeUpdatedAt time.Time
+	Present           PositionPresence
+	RequiresSync      bool
+}
+
+type PositionPresence struct {
+	SignedQuantity   bool
+	EntryPrice       bool
+	MarkPrice        bool
+	Leverage         bool
+	MarginMode       bool
+	UsedMargin       bool
+	LiquidationPrice bool
+	UnrealizedPnL    bool
+	RealizedPnL      bool
 }
 
 type OrderRequest struct {
@@ -203,6 +228,7 @@ type Order struct {
 	Side            Side
 	PositionSide    PositionSide
 	Quantity        shared.Decimal
+	LimitPrice      *shared.Decimal
 	FilledQuantity  shared.Decimal
 	AveragePrice    shared.Decimal
 	ReduceOnly      bool
@@ -233,4 +259,14 @@ type EventHandler interface {
 	OnFill(context.Context, Fill) error
 	OnPosition(context.Context, Position) error
 	OnAccountSnapshot(context.Context, AccountSnapshot) error
+}
+
+type PrivateReadyHandler interface {
+	OnPrivateReady()
+}
+
+func NotifyPrivateReady(handler EventHandler) {
+	if ready, ok := handler.(PrivateReadyHandler); ok {
+		ready.OnPrivateReady()
+	}
 }

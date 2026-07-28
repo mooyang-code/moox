@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
-	"golang.org/x/net/websocket"
 )
 
 var errListenKeyExpired = errors.New("binance: private stream listen key expired")
@@ -41,21 +41,22 @@ func (a *Adapter) subscribeSpotPrivate(
 	ctx context.Context,
 	handler exchange.EventHandler,
 ) error {
-	config, err := websocket.NewConfig(
+	connection, _, err := websocket.DefaultDialer.DialContext(
+		ctx,
 		"wss://ws-api.binance.com:443/ws-api/v3",
-		"https://moox.local",
+		http.Header{"Origin": []string{"https://moox.local"}},
 	)
 	if err != nil {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
-	connection, err := websocket.DialConfig(config)
-	if err != nil {
-		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
-	}
 	defer connection.Close()
+	go func() {
+		<-ctx.Done()
+		_ = connection.Close()
+	}()
 
 	request := a.newSpotSubscriptionRequest(time.Now().UnixMilli())
-	if err := websocket.JSON.Send(connection, request); err != nil {
+	if err := connection.WriteJSON(request); err != nil {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
 	var acknowledgement struct {
@@ -65,7 +66,7 @@ func (a *Adapter) subscribeSpotPrivate(
 		} `json:"result"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := websocket.JSON.Receive(connection, &acknowledgement); err != nil {
+	if err := connection.ReadJSON(&acknowledgement); err != nil {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
 	if acknowledgement.Status != http.StatusOK ||
@@ -75,6 +76,7 @@ func (a *Adapter) subscribeSpotPrivate(
 			acknowledgement.Error,
 		)
 	}
+	exchange.NotifyPrivateReady(handler)
 	return a.receivePrivate(ctx, connection, handler)
 }
 
@@ -150,11 +152,11 @@ func (a *Adapter) subscribeSwapPrivate(
 		return typedRejected("invalid private stream listen key", err)
 	}
 	endpoint := "wss://fstream.binance.com/ws/" + key.ListenKey
-	config, err := websocket.NewConfig(endpoint, "https://moox.local")
-	if err != nil {
-		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
-	}
-	connection, err := websocket.DialConfig(config)
+	connection, _, err := websocket.DefaultDialer.DialContext(
+		ctx,
+		endpoint,
+		http.Header{"Origin": []string{"https://moox.local"}},
+	)
 	if err != nil {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
@@ -164,6 +166,7 @@ func (a *Adapter) subscribeSwapPrivate(
 	defer close(keepaliveDone)
 	go a.keepListenKeyAlive(ctx, path, key.ListenKey, connection, keepaliveDone)
 
+	exchange.NotifyPrivateReady(handler)
 	return a.receivePrivate(ctx, connection, handler)
 }
 
@@ -172,16 +175,57 @@ func (a *Adapter) receivePrivate(
 	connection *websocket.Conn,
 	handler exchange.EventHandler,
 ) error {
+	return a.receivePrivateWithHeartbeat(
+		ctx,
+		connection,
+		handler,
+		a.privateHeartbeatTimeout(),
+	)
+}
+
+func (a *Adapter) privateHeartbeatTimeout() time.Duration {
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		// USD-M sends a server ping roughly every three minutes.
+		return 4 * time.Minute
+	}
+	return 60 * time.Second
+}
+
+func (a *Adapter) receivePrivateWithHeartbeat(
+	ctx context.Context,
+	connection *websocket.Conn,
+	handler exchange.EventHandler,
+	heartbeatTimeout time.Duration,
+) error {
 	go func() {
 		<-ctx.Done()
 		_ = connection.Close()
 	}()
+	refreshDeadline := func() error {
+		return connection.SetReadDeadline(time.Now().Add(heartbeatTimeout))
+	}
+	if err := refreshDeadline(); err != nil {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	connection.SetPingHandler(func(data string) error {
+		if err := refreshDeadline(); err != nil {
+			return err
+		}
+		return connection.WriteControl(
+			websocket.PongMessage,
+			[]byte(data),
+			time.Now().Add(5*time.Second),
+		)
+	})
 	for {
-		var payload []byte
-		if err := websocket.Message.Receive(connection, &payload); err != nil {
+		_, payload, err := connection.ReadMessage()
+		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+		}
+		if err := refreshDeadline(); err != nil {
 			return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 		}
 		if err := a.dispatchPrivate(ctx, payload, handler); err != nil {
@@ -384,7 +428,11 @@ func (a *Adapter) dispatchFuturesAccount(
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return typedRejected("decode futures account event", err)
 	}
-	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(eventTime)}
+	snapshot := exchange.AccountSnapshot{
+		ExchangeUpdatedAt: millis(eventTime),
+		Present:           exchange.AccountSnapshotPresence{Balances: true},
+		RequiresSync:      true,
+	}
 	for _, row := range payload.Balances {
 		total, err := decimalOrZero(row.Wallet)
 		if err != nil {
@@ -417,6 +465,13 @@ func (a *Adapter) dispatchFuturesAccount(
 			Symbol:            row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
+			Present: exchange.PositionPresence{
+				SignedQuantity: true,
+				EntryPrice:     true,
+				MarginMode:     true,
+				UnrealizedPnL:  true,
+			},
+			RequiresSync: true,
 		}
 		position.EntryPrice, err = decimalOrZero(row.EntryPrice)
 		if err == nil {
@@ -448,7 +503,10 @@ func (a *Adapter) dispatchSpotAccount(
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return typedRejected("decode spot account event", err)
 	}
-	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(payload.Time)}
+	snapshot := exchange.AccountSnapshot{
+		ExchangeUpdatedAt: millis(payload.Time),
+		Present:           exchange.AccountSnapshotPresence{Balances: true},
+	}
 	for _, row := range payload.Balances {
 		available, err := decimalOrZero(row.Free)
 		if err != nil {

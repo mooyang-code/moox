@@ -426,6 +426,59 @@ func TestUpsertSwapPositionRequiresPositiveLeverageAndAllowsSignedPnL(t *testing
 	require.Equal(t, "-2", row.UnrealizedPnL)
 }
 
+func TestReplacePositionsPreservesNewerPrivateUpdate(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	account := testAccount()
+	account.MarketType = "SWAP"
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		if err := tx.CreateExchangeAccount(account); err != nil {
+			return err
+		}
+		for _, position := range []PositionRecord{
+			{
+				SpaceID: "space-1", ExchangeAccountID: "account-1",
+				Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "2",
+				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_800,
+			},
+			{
+				SpaceID: "space-1", ExchangeAccountID: "account-1",
+				Symbol: "ETHUSDT", PositionSide: "NET", SignedQuantity: "1",
+				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_000,
+			},
+		} {
+			if err := tx.UpsertPosition(position); err != nil {
+				return err
+			}
+		}
+		return tx.ReplacePositionsForAccount(
+			"space-1",
+			"account-1",
+			[]PositionRecord{{
+				SpaceID: "space-1", ExchangeAccountID: "account-1",
+				Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_500,
+			}},
+			2_000,
+		)
+	}))
+	var btc PositionRecord
+	var found bool
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		var err error
+		btc, found, err = tx.GetPosition("space-1", "account-1", "BTCUSDT", "NET")
+		return err
+	}))
+	require.True(t, found)
+	require.Equal(t, "2", btc.SignedQuantity)
+	require.Equal(t, int64(1_800), btc.ExchangeUpdatedAt)
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		_, exists, err := tx.GetPosition("space-1", "account-1", "ETHUSDT", "NET")
+		require.False(t, exists)
+		return err
+	}))
+}
+
 func seedOrder(ctx context.Context, s *Store) error {
 	if err := seedAccountAndInstrument(ctx, s); err != nil {
 		return err

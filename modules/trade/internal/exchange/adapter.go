@@ -20,3 +20,13 @@ type Adapter interface {
 	SetMarginMode(context.Context, string, MarginMode) error
 	SubscribePrivate(context.Context, EventHandler) error
 }
+
+type ExchangeOrderLookup interface {
+	GetOrderByExchangeID(context.Context, string, string) (Order, error)
+}
+
+// PrivateStreamMetadataGate lets an adapter subscribe first while deferring
+// event normalization until the session has loaded required public metadata.
+type PrivateStreamMetadataGate interface {
+	MarkPrivateStreamMetadataReady()
+}

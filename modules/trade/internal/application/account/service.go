@@ -67,6 +67,7 @@ type UpdateCommand struct {
 	SettlementAsset    *string
 	MarginMode         *exchange.MarginMode
 	Status             *exchange.AccountStatus
+	SyncSymbols        *[]string
 }
 
 func (s *Service) Create(
@@ -236,5 +237,8 @@ func applyUpdate(value *exchangeaccount.Account, command UpdateCommand) {
 	}
 	if command.Status != nil {
 		value.Status = *command.Status
+	}
+	if command.SyncSymbols != nil {
+		value.SyncSymbols = append([]string(nil), (*command.SyncSymbols)...)
 	}
 }

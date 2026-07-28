@@ -298,6 +298,18 @@ func TestOrderRequiresPositiveQuantityAndIdentity(t *testing.T) {
 	}
 }
 
+func TestOrderAcceptsAuthoritativeExternalCancelWhileOpen(t *testing.T) {
+	value, _, _ := New("order-1", validSpec())
+	_, _ = value.BeginSubmit()
+	_, _ = value.Acknowledge("exchange-1")
+	if _, err := value.ConfirmCancel(); err != nil {
+		t.Fatalf("ConfirmCancel() error = %v", err)
+	}
+	if value.State != Canceled {
+		t.Fatalf("state = %s, want %s", value.State, Canceled)
+	}
+}
+
 func validSpec() OrderSpec {
 	return OrderSpec{
 		ExchangeAccountID: "account-1",

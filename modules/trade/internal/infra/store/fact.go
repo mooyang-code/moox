@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"gorm.io/gorm"
@@ -133,6 +134,52 @@ func (s *Store) GetInstrument(
 	symbol string,
 ) (InstrumentRecord, error) {
 	return getInstrument(s.db.WithContext(ctx), exchange, marketType, symbol)
+}
+
+func (s *Store) ListInstruments(
+	ctx context.Context,
+	exchange string,
+	marketType string,
+) ([]InstrumentRecord, error) {
+	var rows []struct {
+		Exchange             string `gorm:"column:c_exchange"`
+		MarketType           string `gorm:"column:c_market_type"`
+		Symbol               string `gorm:"column:c_symbol"`
+		InstrumentID         string `gorm:"column:c_instrument_id"`
+		BaseAsset            string `gorm:"column:c_base_asset"`
+		QuoteAsset           string `gorm:"column:c_quote_asset"`
+		SettlementAsset      string `gorm:"column:c_settlement_asset"`
+		Linear               bool   `gorm:"column:c_linear"`
+		ContractValue        string `gorm:"column:c_contract_value"`
+		ContractValueAsset   string `gorm:"column:c_contract_value_asset"`
+		ExchangeQuantityStep string `gorm:"column:c_exchange_quantity_step"`
+		MinExchangeQuantity  string `gorm:"column:c_min_exchange_quantity"`
+		PriceTick            string `gorm:"column:c_price_tick"`
+		MinNotional          string `gorm:"column:c_min_notional"`
+		Status               string `gorm:"column:c_status"`
+		ExchangeUpdatedAt    int64  `gorm:"column:c_exchange_updated_at"`
+	}
+	if err := s.db.WithContext(ctx).Table("t_exchange_instruments").
+		Where("c_exchange = ? AND c_market_type = ?", exchange, marketType).
+		Order("c_symbol").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]InstrumentRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, InstrumentRecord{
+			Exchange: row.Exchange, MarketType: row.MarketType, Symbol: row.Symbol,
+			InstrumentID: row.InstrumentID, BaseAsset: row.BaseAsset,
+			QuoteAsset: row.QuoteAsset, SettlementAsset: row.SettlementAsset,
+			Linear: row.Linear, ContractValue: row.ContractValue,
+			ContractValueAsset:   row.ContractValueAsset,
+			ExchangeQuantityStep: row.ExchangeQuantityStep,
+			MinExchangeQuantity:  row.MinExchangeQuantity,
+			PriceTick:            row.PriceTick, MinNotional: row.MinNotional,
+			Status: row.Status, ExchangeUpdatedAt: row.ExchangeUpdatedAt,
+		})
+	}
+	return records, nil
 }
 
 func (tx *Tx) GetInstrument(
@@ -332,6 +379,56 @@ func (s *Store) GetOrderByClientID(
 		).
 		Take(&row).Error
 	return orderRecordFromRow(row), err
+}
+
+func (s *Store) GetOrderByExchangeID(
+	ctx context.Context,
+	spaceID string,
+	exchangeAccountID string,
+	symbol string,
+	exchangeOrderID string,
+) (OrderRecord, error) {
+	var row orderRow
+	err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where(
+			"c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ? AND c_exchange_order_id = ?",
+			spaceID,
+			exchangeAccountID,
+			symbol,
+			exchangeOrderID,
+		).
+		Take(&row).Error
+	return orderRecordFromRow(row), err
+}
+
+func (s *Store) ListOrdersForAccount(
+	ctx context.Context,
+	spaceID string,
+	exchangeAccountID string,
+	terminalSince int64,
+) ([]OrderRecord, error) {
+	var rows []orderRow
+	query := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where("c_space_id = ? AND c_exchange_account_id = ?", spaceID, exchangeAccountID)
+	if terminalSince > 0 {
+		query = query.Where(
+			"c_state NOT IN (?, ?, ?, ?, ?) OR c_finished_at >= ?",
+			"FILLED",
+			"CANCELED",
+			"PARTIALLY_CANCELED",
+			"REJECTED",
+			"EXPIRED",
+			terminalSince,
+		)
+	}
+	if err := query.Order("c_order_id").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]OrderRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, orderRecordFromRow(row))
+	}
+	return records, nil
 }
 
 func (tx *Tx) GetOrder(spaceID string, orderID string) (OrderRecord, error) {
@@ -730,6 +827,8 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 			c_realized_pnl = excluded.c_realized_pnl,
 			c_exchange_updated_at = excluded.c_exchange_updated_at,
 			c_mtime = CURRENT_TIMESTAMP
+		WHERE excluded.c_exchange_updated_at >=
+			t_exchange_positions.c_exchange_updated_at
 	`,
 		record.SpaceID, record.ExchangeAccountID, record.Symbol, record.PositionSide,
 		record.SignedQuantity, record.EntryPrice,
@@ -738,6 +837,48 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 		record.UnrealizedPnL, record.RealizedPnL,
 		record.ExchangeUpdatedAt,
 	).Error
+}
+
+func (tx *Tx) ReplacePositionsForAccount(
+	spaceID string,
+	exchangeAccountID string,
+	records []PositionRecord,
+	snapshotAt int64,
+) error {
+	if blank(spaceID) || blank(exchangeAccountID) || snapshotAt <= 0 {
+		return fmt.Errorf("%w: incomplete position snapshot identity", ErrInvalidRecord)
+	}
+	for _, record := range records {
+		if record.SpaceID != spaceID || record.ExchangeAccountID != exchangeAccountID {
+			return fmt.Errorf("%w: conflicting position snapshot identity", ErrInvalidRecord)
+		}
+		if err := tx.UpsertPosition(record); err != nil {
+			return err
+		}
+	}
+	query := `
+		DELETE FROM t_exchange_positions
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+			AND c_exchange_updated_at <= ?
+	`
+	args := []any{spaceID, exchangeAccountID, snapshotAt}
+	if len(records) > 0 {
+		var retained strings.Builder
+		retained.WriteString(" AND NOT (")
+		for index, record := range records {
+			if index > 0 {
+				retained.WriteString(" OR ")
+			}
+			retained.WriteString("(c_symbol = ? AND c_position_side = ?)")
+			args = append(args, record.Symbol, record.PositionSide)
+		}
+		retained.WriteString(")")
+		query += retained.String()
+	}
+	if err := tx.db.Exec(query, args...).Error; err != nil {
+		return writeError(err)
+	}
+	return nil
 }
 
 func (tx *Tx) GetPosition(

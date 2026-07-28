@@ -59,6 +59,8 @@ func (s *Service) Place(
 	if s == nil || s.Store == nil {
 		return orderdomain.Order{}, ErrServiceConfig
 	}
+	unlock := s.Store.LockExchangeAccount(spec.ExchangeAccountID)
+	defer unlock()
 	if existing, err := s.Store.GetOrderByClientID(
 		ctx,
 		s.Validator.SpaceID,
@@ -85,11 +87,11 @@ func (s *Service) Place(
 	record := orderRecord(validation, *aggregate)
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if !validation.ReservedQuantity.IsZero() {
-			projected, err := tx.GetBalanceProjection(
+			unreflected, err := tx.GetUnreflectedReservation(
 				validation.Account.SpaceID,
 				spec.ExchangeAccountID,
 				validation.ReservedAsset,
-				"AVAILABLE",
+				validation.Account.LastSyncAt.UnixMilli(),
 			)
 			if err != nil {
 				return err
@@ -101,7 +103,8 @@ func (s *Service) Place(
 			if validation.Account.MarketType == exchange.MarketTypeSwap {
 				available = validation.Account.Snapshot.AvailableFunds
 			}
-			if available.Add(projected).Cmp(validation.ReservedQuantity) < 0 {
+			required := unreflected.Add(validation.ReservedQuantity)
+			if available.Cmp(required) < 0 {
 				return ErrInsufficientFunds
 			}
 			if err := tx.PostLedger(store.LedgerTransactionRecord{
@@ -155,6 +158,12 @@ func (s *Service) Submit(
 		return orderdomain.Order{}, ErrServiceConfig
 	}
 	record, err := s.Store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	unlock := s.Store.LockExchangeAccount(record.ExchangeAccountID)
+	defer unlock()
+	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}

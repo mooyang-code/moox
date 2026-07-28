@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 
 type LeverageSettings map[string]string
+type FillCursors map[string]string
 
 type AssetBalance struct {
 	Asset     string `json:"asset"`
@@ -41,7 +44,9 @@ type ExchangeAccountRecord struct {
 	Paused             bool
 	PauseReason        string
 	Ready              bool
+	SyncSymbols        []string
 	LeverageSettings   LeverageSettings
+	FillCursors        FillCursors
 	Snapshot           ExchangeAccountSnapshot
 	SnapshotSourceTime int64
 	LastSyncAt         int64
@@ -63,7 +68,9 @@ type exchangeAccountRow struct {
 	Paused               bool   `gorm:"column:c_paused"`
 	PauseReason          string `gorm:"column:c_pause_reason"`
 	Ready                bool   `gorm:"column:c_ready"`
+	SyncSymbolsJSON      string `gorm:"column:c_sync_symbols_json"`
 	LeverageSettingsJSON string `gorm:"column:c_leverage_settings_json"`
+	FillCursorsJSON      string `gorm:"column:c_fill_cursors_json"`
 	SnapshotJSON         string `gorm:"column:c_snapshot_json"`
 	SnapshotSourceTime   int64  `gorm:"column:c_snapshot_source_time"`
 	LastSyncAt           int64  `gorm:"column:c_last_sync_at"`
@@ -85,7 +92,15 @@ func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 	if err != nil {
 		return err
 	}
+	fillCursorsJSON, err := encodeFillCursors(record.FillCursors)
+	if err != nil {
+		return err
+	}
 	snapshotJSON, err := encodeSnapshot(record.Snapshot)
+	if err != nil {
+		return err
+	}
+	syncSymbolsJSON, err := encodeSyncSymbols(record.SyncSymbols)
 	if err != nil {
 		return err
 	}
@@ -95,7 +110,9 @@ func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 		ExecutionMode: record.ExecutionMode, CredentialSecretID: record.CredentialSecretID,
 		SettlementAsset: record.SettlementAsset, MarginMode: record.MarginMode,
 		Status: record.Status, Paused: record.Paused, PauseReason: record.PauseReason,
-		Ready: record.Ready, LeverageSettingsJSON: leverageJSON, SnapshotJSON: snapshotJSON,
+		Ready: record.Ready, SyncSymbolsJSON: syncSymbolsJSON,
+		LeverageSettingsJSON: leverageJSON,
+		FillCursorsJSON:      fillCursorsJSON, SnapshotJSON: snapshotJSON,
 		SnapshotSourceTime: record.SnapshotSourceTime, LastSyncAt: record.LastSyncAt,
 		LastReadyAt: record.LastReadyAt, LastError: record.LastError,
 	}
@@ -103,16 +120,19 @@ func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 		INSERT INTO t_exchange_accounts (
 			c_space_id, c_exchange_account_id, c_name, c_exchange, c_market_type,
 			c_execution_mode, c_credential_secret_id, c_settlement_asset, c_margin_mode,
-			c_status, c_paused, c_pause_reason, c_ready, c_leverage_settings_json,
-			c_snapshot_json, c_snapshot_source_time, c_last_sync_at, c_last_ready_at,
+			c_status, c_paused, c_pause_reason, c_ready, c_sync_symbols_json,
+			c_leverage_settings_json,
+			c_fill_cursors_json, c_snapshot_json, c_snapshot_source_time,
+			c_last_sync_at, c_last_ready_at,
 			c_last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		row.SpaceID, row.ExchangeAccountID, row.Name, row.Exchange, row.MarketType,
 		row.ExecutionMode, row.CredentialSecretID, row.SettlementAsset, row.MarginMode,
-		row.Status, row.Paused, row.PauseReason, row.Ready, row.LeverageSettingsJSON,
-		row.SnapshotJSON, row.SnapshotSourceTime, row.LastSyncAt, row.LastReadyAt,
-		row.LastError,
+		row.Status, row.Paused, row.PauseReason, row.Ready,
+		row.SyncSymbolsJSON, row.LeverageSettingsJSON,
+		row.FillCursorsJSON, row.SnapshotJSON,
+		row.SnapshotSourceTime, row.LastSyncAt, row.LastReadyAt, row.LastError,
 	).Error
 	return writeError(err)
 }
@@ -123,6 +143,7 @@ type ExchangeAccountConfiguration struct {
 	SettlementAsset    string
 	MarginMode         string
 	Status             string
+	SyncSymbols        []string
 }
 
 func (tx *Tx) UpdateExchangeAccountConfiguration(
@@ -135,13 +156,18 @@ func (tx *Tx) UpdateExchangeAccountConfiguration(
 		blank(config.Status) {
 		return fmt.Errorf("%w: incomplete Exchange account configuration", ErrInvalidRecord)
 	}
+	syncSymbolsJSON, err := encodeSyncSymbols(config.SyncSymbols)
+	if err != nil {
+		return err
+	}
 	result := tx.db.Exec(`
 		UPDATE t_exchange_accounts
 		SET c_name = ?, c_credential_secret_id = ?, c_settlement_asset = ?,
-			c_margin_mode = ?, c_status = ?, c_mtime = CURRENT_TIMESTAMP
+			c_margin_mode = ?, c_status = ?, c_sync_symbols_json = ?,
+			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_exchange_account_id = ?
 	`, config.Name, config.CredentialSecretID, config.SettlementAsset,
-		config.MarginMode, config.Status, spaceID, exchangeAccountID)
+		config.MarginMode, config.Status, syncSymbolsJSON, spaceID, exchangeAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account configuration")
 }
 
@@ -165,6 +191,7 @@ func (tx *Tx) SetExchangeAccountPause(
 type ExchangeAccountSyncState struct {
 	Ready              bool
 	LeverageSettings   LeverageSettings
+	FillCursors        FillCursors
 	Snapshot           ExchangeAccountSnapshot
 	SnapshotSourceTime int64
 	LastSyncAt         int64
@@ -184,19 +211,95 @@ func (tx *Tx) UpdateExchangeAccountSync(
 	if err != nil {
 		return err
 	}
+	fillCursorsJSON, err := encodeFillCursors(state.FillCursors)
+	if err != nil {
+		return err
+	}
 	snapshotJSON, err := encodeSnapshot(state.Snapshot)
 	if err != nil {
 		return err
 	}
 	result := tx.db.Exec(`
 		UPDATE t_exchange_accounts
-		SET c_ready = ?, c_leverage_settings_json = ?, c_snapshot_json = ?,
+		SET c_ready = ?, c_leverage_settings_json = ?, c_fill_cursors_json = ?,
+			c_snapshot_json = ?,
 			c_snapshot_source_time = ?, c_last_sync_at = ?, c_last_ready_at = ?,
 			c_last_error = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_exchange_account_id = ?
-	`, state.Ready, leverageJSON, snapshotJSON, state.SnapshotSourceTime,
+	`, state.Ready, leverageJSON, fillCursorsJSON, snapshotJSON, state.SnapshotSourceTime,
 		state.LastSyncAt, state.LastReadyAt, state.LastError, spaceID, exchangeAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account sync state")
+}
+
+func (tx *Tx) UpdateExchangeAccountFacts(
+	spaceID string,
+	exchangeAccountID string,
+	fillCursors FillCursors,
+	snapshot ExchangeAccountSnapshot,
+	snapshotSourceTime int64,
+	lastSyncAt int64,
+) error {
+	if blank(spaceID) || blank(exchangeAccountID) || lastSyncAt <= 0 {
+		return fmt.Errorf("%w: incomplete Exchange account facts", ErrInvalidRecord)
+	}
+	fillCursorsJSON, err := encodeFillCursors(fillCursors)
+	if err != nil {
+		return err
+	}
+	snapshotJSON, err := encodeSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	result := tx.db.Exec(`
+		UPDATE t_exchange_accounts
+		SET c_fill_cursors_json = ?, c_snapshot_json = ?,
+			c_snapshot_source_time = ?, c_last_sync_at = ?,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+	`, fillCursorsJSON, snapshotJSON, snapshotSourceTime, lastSyncAt,
+		spaceID, exchangeAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "Exchange account facts")
+}
+
+func (tx *Tx) UpdateExchangeAccountSnapshot(
+	spaceID string,
+	exchangeAccountID string,
+	snapshot ExchangeAccountSnapshot,
+) error {
+	if blank(spaceID) || blank(exchangeAccountID) || snapshot.ExchangeUpdatedAt <= 0 {
+		return fmt.Errorf("%w: incomplete Exchange account snapshot", ErrInvalidRecord)
+	}
+	snapshotJSON, err := encodeSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	result := tx.db.Exec(`
+		UPDATE t_exchange_accounts
+		SET c_snapshot_json = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+	`, snapshotJSON, spaceID, exchangeAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "Exchange account snapshot")
+}
+
+func (tx *Tx) UpdateExchangeAccountReadiness(
+	spaceID string,
+	exchangeAccountID string,
+	ready bool,
+	now int64,
+	lastError string,
+) error {
+	if blank(spaceID) || blank(exchangeAccountID) || now <= 0 {
+		return fmt.Errorf("%w: incomplete Exchange account readiness", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_exchange_accounts
+		SET c_ready = ?,
+			c_last_ready_at = CASE WHEN ? THEN ? ELSE c_last_ready_at END,
+			c_last_error = ?,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+	`, ready, ready, now, lastError, spaceID, exchangeAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "Exchange account readiness")
 }
 
 func requireUpdated(err error, rowsAffected int64, label string) error {
@@ -260,7 +363,58 @@ func (s *Store) ListExchangeAccounts(
 	return records, nil
 }
 
+func (s *Store) GetExchangeAccountByID(
+	ctx context.Context,
+	exchangeAccountID string,
+) (ExchangeAccountRecord, error) {
+	if blank(exchangeAccountID) {
+		return ExchangeAccountRecord{}, fmt.Errorf("%w: empty Exchange account ID", ErrInvalidRecord)
+	}
+	var rows []exchangeAccountRow
+	if err := s.db.WithContext(ctx).
+		Where("c_exchange_account_id = ?", exchangeAccountID).
+		Limit(2).
+		Find(&rows).Error; err != nil {
+		return ExchangeAccountRecord{}, err
+	}
+	if len(rows) != 1 {
+		return ExchangeAccountRecord{}, fmt.Errorf(
+			"%w: Exchange account ID must identify exactly one account",
+			ErrInvalidRecord,
+		)
+	}
+	return decodeAccountRow(rows[0])
+}
+
+func (s *Store) ListEnabledLiveExchangeAccounts(
+	ctx context.Context,
+) ([]ExchangeAccountRecord, error) {
+	var rows []exchangeAccountRow
+	if err := s.db.WithContext(ctx).
+		Where("c_status = ? AND c_execution_mode = ? AND c_paused = 0", "ENABLED", "LIVE").
+		Order("c_space_id, c_exchange_account_id").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]ExchangeAccountRecord, 0, len(rows))
+	for _, row := range rows {
+		record, err := decodeAccountRow(row)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
+}
+
 func decodeAccountRow(row exchangeAccountRow) (ExchangeAccountRecord, error) {
+	var syncSymbols []string
+	if err := json.Unmarshal([]byte(row.SyncSymbolsJSON), &syncSymbols); err != nil {
+		return ExchangeAccountRecord{}, fmt.Errorf("%w: sync symbols JSON: %v", ErrInvalidRecord, err)
+	}
+	if _, err := encodeSyncSymbols(syncSymbols); err != nil {
+		return ExchangeAccountRecord{}, err
+	}
 	var leverage LeverageSettings
 	if err := json.Unmarshal([]byte(row.LeverageSettingsJSON), &leverage); err != nil {
 		return ExchangeAccountRecord{}, fmt.Errorf("%w: leverage JSON: %v", ErrInvalidRecord, err)
@@ -272,6 +426,13 @@ func decodeAccountRow(row exchangeAccountRow) (ExchangeAccountRecord, error) {
 	if _, err := encodeLeverageSettings(leverage); err != nil {
 		return ExchangeAccountRecord{}, err
 	}
+	var fillCursors FillCursors
+	if err := json.Unmarshal([]byte(row.FillCursorsJSON), &fillCursors); err != nil {
+		return ExchangeAccountRecord{}, fmt.Errorf("%w: Fill cursors JSON: %v", ErrInvalidRecord, err)
+	}
+	if _, err := encodeFillCursors(fillCursors); err != nil {
+		return ExchangeAccountRecord{}, err
+	}
 	if _, err := encodeSnapshot(snapshot); err != nil {
 		return ExchangeAccountRecord{}, err
 	}
@@ -281,10 +442,52 @@ func decodeAccountRow(row exchangeAccountRow) (ExchangeAccountRecord, error) {
 		ExecutionMode: row.ExecutionMode, CredentialSecretID: row.CredentialSecretID,
 		SettlementAsset: row.SettlementAsset, MarginMode: row.MarginMode,
 		Status: row.Status, Paused: row.Paused, PauseReason: row.PauseReason,
-		Ready: row.Ready, LeverageSettings: leverage, Snapshot: snapshot,
+		Ready: row.Ready, SyncSymbols: syncSymbols,
+		LeverageSettings: leverage, FillCursors: fillCursors,
+		Snapshot:           snapshot,
 		SnapshotSourceTime: row.SnapshotSourceTime, LastSyncAt: row.LastSyncAt,
 		LastReadyAt: row.LastReadyAt, LastError: row.LastError,
 	}, nil
+}
+
+func encodeSyncSymbols(symbols []string) (string, error) {
+	canonical := make([]string, 0, len(symbols))
+	seen := make(map[string]struct{}, len(symbols))
+	for _, symbol := range symbols {
+		symbol = strings.TrimSpace(symbol)
+		if symbol == "" {
+			return "", fmt.Errorf("%w: empty sync symbol", ErrInvalidRecord)
+		}
+		if _, found := seen[symbol]; found {
+			continue
+		}
+		seen[symbol] = struct{}{}
+		canonical = append(canonical, symbol)
+	}
+	sort.Strings(canonical)
+	data, err := json.Marshal(canonical)
+	if err != nil {
+		return "", fmt.Errorf("%w: encode sync symbols: %v", ErrInvalidRecord, err)
+	}
+	return string(data), nil
+}
+
+func encodeFillCursors(cursors FillCursors) (string, error) {
+	if cursors == nil {
+		return "{}", nil
+	}
+	canonical := make(FillCursors, len(cursors))
+	for symbol, cursor := range cursors {
+		if blank(symbol) || blank(cursor) {
+			return "", fmt.Errorf("%w: incomplete Fill cursor", ErrInvalidRecord)
+		}
+		canonical[symbol] = cursor
+	}
+	data, err := json.Marshal(canonical)
+	if err != nil {
+		return "", fmt.Errorf("%w: encode Fill cursors: %v", ErrInvalidRecord, err)
+	}
+	return string(data), nil
 }
 
 func encodeLeverageSettings(settings LeverageSettings) (string, error) {

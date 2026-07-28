@@ -339,7 +339,8 @@ Each enabled ExchangeAccount owns one long-lived ExchangeSession:
 
 1. Load the account, credential, instrument rules, margin mode, and leverage.
 2. Connect the private stream and buffer incoming events.
-3. fetch Exchange Account, Positions, OpenOrders, and RecentFills snapshots.
+3. Load instrument metadata, then fetch Exchange Account, Positions,
+   OpenOrders, and RecentFills snapshots.
 4. Apply snapshots and buffered events through the same idempotent reducer.
 5. Mark the session ready only after state and settings are current.
 6. Mark it not ready immediately when the stream disconnects.
@@ -358,6 +359,17 @@ orders.
 - Replaces Position and Account projections with Exchange snapshots.
 - Imports unmanaged Exchange orders as `EXTERNAL`.
 - Returns counts, readiness, and warnings.
+
+SPOT accounts configure an explicit symbol synchronization universe. Current
+balances are not a sufficient substitute because an externally sold-to-zero
+asset would otherwise hide its terminal order and Fill on first startup.
+Per-symbol fill cursors live on the ExchangeAccount row. Recovery is complete
+within each adapter's documented bounded history window; Binance USD-M V1
+uses the most recent seven days, and older one-off backfill is out of scope.
+
+The local reservation rebase watermark advances only after a complete REST
+account snapshot. Partial private updates merge only fields explicitly present
+in the event and never advance that watermark.
 
 It never cancels an unmanaged order automatically.
 
@@ -406,9 +418,10 @@ t_trade_balance_projections
 The nine tables keep Order and Fill facts normalized while merging small,
 account-scoped configuration and single-record execution state:
 
-- `t_exchange_accounts` stores leverage settings as a symbol-keyed JSON object
-  and the latest ExchangeAccountSnapshot as typed JSON. Trade does not keep
-  historical account snapshots.
+- `t_exchange_accounts` stores the explicit SPOT sync symbols, per-symbol Fill
+  cursors, leverage settings as a symbol-keyed JSON object, and the latest
+  ExchangeAccountSnapshot as typed JSON. Trade does not keep historical
+  account snapshots.
 - `t_trade_orders` stores reservation totals and the remaining reservation.
   A separate reservation table is unnecessary because every reservation
   belongs to one Order.
