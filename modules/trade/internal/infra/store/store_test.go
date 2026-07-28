@@ -31,7 +31,7 @@ func TestOpenConfiguresSQLiteAndTransactionRollback(t *testing.T) {
 		require.NoError(t, tx.UpsertInstrument(InstrumentRecord{
 			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
 			BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: "0.01",
-			QuantityStep: "0.0001", ContractSize: "1", Status: "TRADING",
+			ExchangeQuantityStep: "0.0001", Status: "TRADING",
 		}))
 		return stop
 	})

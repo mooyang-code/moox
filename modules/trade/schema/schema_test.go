@@ -121,6 +121,26 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 	}
 }
 
+func TestInstrumentSchemaUsesApprovedSwapQuantityFields(t *testing.T) {
+	sql := AllSQL()
+	for _, column := range []string{
+		"c_linear",
+		"c_contract_value",
+		"c_contract_value_asset",
+		"c_exchange_quantity_step",
+		"c_min_exchange_quantity",
+	} {
+		require.Contains(t, sql, column)
+	}
+	for _, retired := range []string{
+		"c_contract_size",
+		"c_quantity_step",
+		"c_min_quantity",
+	} {
+		require.NotContains(t, sql, "\n    "+retired+" ")
+	}
+}
+
 func hasUniqueIndex(t *testing.T, db *gorm.DB, table string, want []string) bool {
 	t.Helper()
 	var indexes []struct {

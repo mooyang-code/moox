@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -14,22 +15,19 @@ func TestAcceptTargetComparesAndSetsBindingSequence(t *testing.T) {
 		return tx.UpsertExchangeAccount(testAccount())
 	}))
 
-	first := TargetExecutionRecord{
-		SpaceID: "space-1", ExecutionID: "execution-2", EventID: "event-2",
-		ExecutionBindingID: "binding-1", ExchangeAccountID: "account-1",
-		CommandSequence: 2, Targets: []TargetPosition{
-			{InstrumentID: "btc", Symbol: "BTCUSDT", TargetQuantity: "1"},
-		},
-		Status: "PENDING",
-	}
+	first := validTargetExecution()
+	first.ExecutionID = "execution-2"
+	first.EventID = first.ExecutionID
+	first.CommandSequence = 2
 	accepted, err := s.AcceptTarget(ctx, first)
 	require.NoError(t, err)
 	require.True(t, accepted)
 
 	stale := first
 	stale.ExecutionID = "execution-1"
-	stale.EventID = "event-1"
+	stale.EventID = stale.ExecutionID
 	stale.CommandSequence = 1
+	stale.Targets = append([]TargetPosition(nil), first.Targets...)
 	stale.Targets[0].TargetQuantity = "9"
 	accepted, err = s.AcceptTarget(ctx, stale)
 	require.NoError(t, err)
@@ -37,9 +35,10 @@ func TestAcceptTargetComparesAndSetsBindingSequence(t *testing.T) {
 
 	next := first
 	next.ExecutionID = "execution-3"
-	next.EventID = "event-3"
+	next.EventID = next.ExecutionID
 	next.CommandSequence = 3
-	next.Targets[0].TargetQuantity = "2"
+	next.Targets = append([]TargetPosition(nil), first.Targets...)
+	next.Targets[0].TargetQuantity = "2.0"
 	accepted, err = s.AcceptTarget(ctx, next)
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -61,21 +60,65 @@ func TestAcceptTargetDeduplicatesEvent(t *testing.T) {
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.UpsertExchangeAccount(testAccount())
 	}))
-	target := TargetExecutionRecord{
-		SpaceID: "space-1", ExecutionID: "execution-1", EventID: "event-1",
-		ExecutionBindingID: "binding-1", ExchangeAccountID: "account-1",
-		CommandSequence: 1,
-		Targets:         []TargetPosition{{Symbol: "BTCUSDT", TargetQuantity: "1"}},
-		Status:          "PENDING",
-	}
+	target := validTargetExecution()
 	accepted, err := s.AcceptTarget(ctx, target)
 	require.NoError(t, err)
 	require.True(t, accepted)
 
-	target.ExecutionID = "execution-2"
 	target.ExecutionBindingID = "binding-2"
 	target.CommandSequence = 2
 	accepted, err = s.AcceptTarget(ctx, target)
 	require.NoError(t, err)
 	require.False(t, accepted)
+}
+
+func TestAcceptTargetRejectsIncompleteOrContradictoryIntent(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.UpsertExchangeAccount(testAccount())
+	}))
+	tests := []struct {
+		name   string
+		mutate func(*TargetExecutionRecord)
+	}{
+		{"event identity", func(v *TargetExecutionRecord) { v.EventID = "other" }},
+		{"strategy run", func(v *TargetExecutionRecord) { v.StrategyRunID = "" }},
+		{"data revision", func(v *TargetExecutionRecord) { v.DataRevision = "" }},
+		{"sequence", func(v *TargetExecutionRecord) { v.CommandSequence = 0 }},
+		{"expiry", func(v *TargetExecutionRecord) {
+			v.NotAfter = time.Now().Add(-time.Second).UnixMilli()
+		}},
+		{"instrument", func(v *TargetExecutionRecord) { v.Targets[0].InstrumentID = "" }},
+		{"symbol", func(v *TargetExecutionRecord) { v.Targets[0].Symbol = "" }},
+		{"decimal", func(v *TargetExecutionRecord) { v.Targets[0].TargetQuantity = "many" }},
+		{"duplicate symbol", func(v *TargetExecutionRecord) {
+			v.Targets = append(v.Targets, TargetPosition{
+				InstrumentID: "btc-2", Symbol: "BTCUSDT", TargetQuantity: "2",
+			})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := validTargetExecution()
+			record.Targets = append([]TargetPosition(nil), record.Targets...)
+			tt.mutate(&record)
+			accepted, err := s.AcceptTarget(ctx, record)
+			require.ErrorIs(t, err, ErrInvalidRecord)
+			require.False(t, accepted)
+		})
+	}
+}
+
+func validTargetExecution() TargetExecutionRecord {
+	return TargetExecutionRecord{
+		SpaceID: "space-1", ExecutionID: "execution-1", EventID: "execution-1",
+		StrategyRunID: "strategy-run-1", DataRevision: "revision-1",
+		ExecutionBindingID: "binding-1", ExchangeAccountID: "account-1",
+		CommandSequence: 1, NotAfter: time.Now().Add(time.Minute).UnixMilli(),
+		Targets: []TargetPosition{{
+			InstrumentID: "btc", Symbol: "BTCUSDT", TargetQuantity: "1.0",
+		}},
+		Status: "PENDING",
+	}
 }
