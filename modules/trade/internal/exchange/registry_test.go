@@ -28,8 +28,22 @@ func (*stubAdapter) ListOpenOrders(context.Context) ([]Order, error) {
 func (*stubAdapter) ListRecentFills(context.Context, string) ([]Fill, string, error) {
 	return nil, "", nil
 }
-func (*stubAdapter) PlaceOrder(context.Context, OrderRequest) (Order, error) {
-	return Order{}, nil
+func (*stubAdapter) GetOrder(_ context.Context, _ string, clientOrderID string) (Order, error) {
+	if clientOrderID == "terminal-client" {
+		return Order{
+			ClientOrderID: clientOrderID,
+			Status:        OrderStatusFilled,
+			ReduceOnly:    true,
+		}, nil
+	}
+	return Order{}, &Error{Kind: ErrorOrderNotFound, Code: "missing"}
+}
+func (*stubAdapter) PlaceOrder(_ context.Context, request OrderRequest) (Order, error) {
+	return Order{
+		ClientOrderID: request.ClientOrderID,
+		Status:        OrderStatusOpen,
+		ReduceOnly:    request.ReduceOnly,
+	}, nil
 }
 func (*stubAdapter) CancelOrder(context.Context, string, string) (Order, error) {
 	return Order{}, nil
@@ -133,4 +147,76 @@ func TestRegistryRejectsDuplicateRegistration(t *testing.T) {
 		}
 	}()
 	registry.Register(ExchangeBinance, factory)
+}
+
+func TestAccountBoundAdapterLooksUpTerminalOrderByClientOrderID(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(ExchangeBinance, func(config AccountConfig, credential Credential) (Adapter, error) {
+		return &stubAdapter{config: config, credential: credential}, nil
+	})
+	adapter, err := registry.Bind(AccountConfig{
+		ExchangeAccountID: "account-1",
+		Exchange:          ExchangeBinance,
+		MarketType:        MarketTypeSpot,
+		ExecutionMode:     ExecutionModePaper,
+		SettlementAsset:   "USDT",
+	}, Credential{})
+	if err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+
+	order, err := adapter.GetOrder(context.Background(), "BTC-USDT", "terminal-client")
+	if err != nil {
+		t.Fatalf("GetOrder() error = %v", err)
+	}
+	if order.Status != OrderStatusFilled || order.ClientOrderID != "terminal-client" {
+		t.Fatalf("GetOrder() = %+v", order)
+	}
+	_, err = adapter.GetOrder(context.Background(), "BTC-USDT", "missing-client")
+	if !IsKind(err, ErrorOrderNotFound) {
+		t.Fatalf("GetOrder() error = %v, want ORDER_NOT_FOUND", err)
+	}
+}
+
+func TestReduceOnlySurvivesRequestResponseAndPrivateEventTypes(t *testing.T) {
+	adapter := &stubAdapter{config: AccountConfig{Exchange: ExchangeBinance}}
+	response, err := adapter.PlaceOrder(context.Background(), OrderRequest{
+		ClientOrderID: "reduce-client",
+		ReduceOnly:    true,
+	})
+	if err != nil {
+		t.Fatalf("PlaceOrder() error = %v", err)
+	}
+	if !response.ReduceOnly {
+		t.Fatal("PlaceOrder() response lost ReduceOnly")
+	}
+
+	handler := &recordingEventHandler{}
+	if err := handler.OnOrder(context.Background(), response); err != nil {
+		t.Fatalf("OnOrder() error = %v", err)
+	}
+	if !handler.order.ReduceOnly {
+		t.Fatal("private Order event lost ReduceOnly")
+	}
+}
+
+type recordingEventHandler struct {
+	order Order
+}
+
+func (h *recordingEventHandler) OnOrder(_ context.Context, order Order) error {
+	h.order = order
+	return nil
+}
+
+func (*recordingEventHandler) OnFill(context.Context, Fill) error {
+	return nil
+}
+
+func (*recordingEventHandler) OnPosition(context.Context, Position) error {
+	return nil
+}
+
+func (*recordingEventHandler) OnAccountSnapshot(context.Context, AccountSnapshot) error {
+	return nil
 }

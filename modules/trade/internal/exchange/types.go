@@ -205,6 +205,7 @@ type Order struct {
 	Quantity        shared.Decimal
 	FilledQuantity  shared.Decimal
 	AveragePrice    shared.Decimal
+	ReduceOnly      bool
 	Status          OrderStatus
 	CreatedAt       time.Time
 	UpdatedAt       time.Time

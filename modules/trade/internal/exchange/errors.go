@@ -55,5 +55,5 @@ func (e *Error) Unwrap() error {
 
 func IsKind(err error, kind ErrorKind) bool {
 	var exchangeErr *Error
-	return errors.As(err, &exchangeErr) && exchangeErr.Kind == kind
+	return errors.As(err, &exchangeErr) && exchangeErr != nil && exchangeErr.Kind == kind
 }

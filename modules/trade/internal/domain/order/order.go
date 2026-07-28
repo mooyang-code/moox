@@ -18,12 +18,18 @@ type Event struct {
 	Version uint64
 }
 
+type Fill struct {
+	ID       shared.FillID
+	Quantity shared.Decimal
+}
+
 type Order struct {
 	ID               shared.OrderID
 	Spec             OrderSpec
 	ExchangeOrderID  string
 	FilledQuantity   shared.Decimal
 	AverageFillPrice shared.Decimal
+	AppliedFills     map[shared.FillID]shared.Decimal
 	State            State
 	Version          uint64
 }
@@ -37,9 +43,10 @@ func New(id shared.OrderID, spec OrderSpec) (*Order, []Event, error) {
 		return nil, nil, ErrInvalidOrder
 	}
 	order := &Order{
-		ID:    id,
-		Spec:  spec,
-		State: Pending,
+		ID:           id,
+		Spec:         spec,
+		AppliedFills: make(map[shared.FillID]shared.Decimal),
+		State:        Pending,
 	}
 	return order, order.emit("OrderIntentCreated"), nil
 }
@@ -101,23 +108,43 @@ func (o *Order) CancelStillOpen() ([]Event, error) {
 	return o.transition(to, CancelUnknown)
 }
 
-func (o *Order) ApplyFill(quantity shared.Decimal) ([]Event, error) {
+func (o *Order) ApplyFill(fill Fill) ([]Event, error) {
+	if fill.ID == "" || fill.Quantity.Cmp(shared.Zero()) <= 0 {
+		return nil, ErrInvalidTransition
+	}
+	if applied, exists := o.AppliedFills[fill.ID]; exists {
+		if applied.Cmp(fill.Quantity) != 0 {
+			return nil, fmt.Errorf("%w: conflicting duplicate Fill", ErrInvalidTransition)
+		}
+		return nil, nil
+	}
 	switch o.State {
-	case Submitting, SubmitUnknown, Open, PartiallyFilled, Canceling, CancelUnknown:
+	case Submitting,
+		SubmitUnknown,
+		Open,
+		PartiallyFilled,
+		Canceling,
+		CancelUnknown,
+		Canceled,
+		PartiallyCanceled,
+		Rejected:
 	default:
 		return nil, ErrInvalidTransition
 	}
-	if quantity.Cmp(shared.Zero()) <= 0 {
-		return nil, ErrInvalidTransition
-	}
-	next := o.FilledQuantity.Add(quantity)
+	next := o.FilledQuantity.Add(fill.Quantity)
 	if next.Cmp(o.Spec.Quantity) > 0 {
 		return nil, fmt.Errorf("%w: Fill exceeds order quantity", ErrInvalidTransition)
 	}
+	if o.AppliedFills == nil {
+		o.AppliedFills = make(map[shared.FillID]shared.Decimal)
+	}
+	o.AppliedFills[fill.ID] = fill.Quantity
 	o.FilledQuantity = next
 	if next.Cmp(o.Spec.Quantity) == 0 {
 		o.State = Filled
-	} else {
+	} else if o.State == Canceled || o.State == PartiallyCanceled || o.State == Rejected {
+		o.State = PartiallyCanceled
+	} else if o.State != Canceling && o.State != CancelUnknown {
 		o.State = PartiallyFilled
 	}
 	return o.emit("FillApplied"), nil

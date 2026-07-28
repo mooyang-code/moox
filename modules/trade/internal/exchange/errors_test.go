@@ -2,6 +2,7 @@ package exchange
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -26,6 +27,25 @@ func TestErrorSupportsErrorsAsAndUnwrap(t *testing.T) {
 	var typed *Error
 	if !errors.As(err, &typed) || typed.HTTPStatus != 503 || typed.Code != "upstream" {
 		t.Fatalf("errors.As() = %+v", typed)
+	}
+}
+
+func TestIsKindHandlesNestedWrappingAndTypedNil(t *testing.T) {
+	nested := fmt.Errorf(
+		"session sync: %w",
+		fmt.Errorf("Exchange request: %w", &Error{Kind: ErrorRateLimited}),
+	)
+	if !IsKind(nested, ErrorRateLimited) {
+		t.Fatal("IsKind() did not traverse nested wrapping")
+	}
+
+	var typedNil *Error
+	var err error = typedNil
+	if IsKind(err, ErrorRateLimited) {
+		t.Fatal("typed-nil Error matched a kind")
+	}
+	if IsKind(nil, ErrorRateLimited) {
+		t.Fatal("nil error matched a kind")
 	}
 }
 
