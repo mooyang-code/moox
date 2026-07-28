@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/cloudjobqueue"
-	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -57,14 +56,18 @@ func (s *Service) submitJobItems(ctx context.Context, req *pb.SubmitJobItemsReq)
 		ack := &pb.JobItemAck{JobItemId: result.JobItemID, Status: result.Status, RejectReason: result.RejectReason}
 		if result.ShouldPublish {
 			if err := s.executionQueue.Publish(ctx, item); err != nil {
-				_ = report.ObserveModuleRun("cloudnode", "dispatch", "error", "cloudnode-jobs", time.Now())
+				if s.moduleMetrics != nil {
+					_ = s.moduleMetrics.ObserveRun("dispatch", "error", "cloudnode-jobs", time.Now())
+				}
 				if stateErr := s.jobState.MarkEnqueueFailed(ctx, item.GetSpaceId(), item.GetJobItemId(), err.Error()); stateErr != nil {
 					return &pb.SubmitJobItemsRsp{RetInfo: retFromError(errors.Join(err, stateErr))}, nil
 				}
 				ack.Status = pb.JobItemAckStatus_JOB_ITEM_ACK_STATUS_REJECTED
 				ack.RejectReason = err.Error()
 			} else {
-				_ = report.ObserveModuleRun("cloudnode", "dispatch", "success", "cloudnode-jobs", time.Now().UTC())
+				if s.moduleMetrics != nil {
+					_ = s.moduleMetrics.ObserveRun("dispatch", "success", "cloudnode-jobs", time.Now().UTC())
+				}
 			}
 		}
 		switch ack.GetStatus() {

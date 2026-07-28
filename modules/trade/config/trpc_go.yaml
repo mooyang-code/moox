@@ -121,6 +121,11 @@ server:
       network: "*/15 * * * * *?startAtOnce=1"
       protocol: timer
       timeout: 15000
+    - name: trpc.moox.trade.balance_sync.timer
+      port: 11215
+      network: "0 */5 * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 120000
 
 client:
   filter:

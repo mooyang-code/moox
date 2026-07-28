@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/health"
+	factorobservability "github.com/mooyang-code/moox/modules/factor/internal/observability"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	factorsvc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
@@ -26,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -113,10 +115,39 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "启动 factor Python worker 失败: %v", err)
 		return nil, err
 	}
+	datasetMetrics, err := factorobservability.NewDatasetMetrics(prometheus.DefaultRegisterer)
+	if err != nil {
+		return nil, fmt.Errorf("initialize factor dataset metrics: %w", err)
+	}
+	pipelines, err := report.ValidatePipelineEnvironment()
+	if err != nil {
+		return nil, fmt.Errorf("validate factor pipeline metrics: %w", err)
+	}
+	moduleMetrics, err := report.NewModuleMetrics(
+		prometheus.DefaultRegisterer,
+		"factor",
+		pipelines.IDsForModule("factor"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize factor module metrics: %w", err)
+	}
+	runMetrics, err := report.NewDatasetModuleObserver(
+		datasetMetrics,
+		moduleMetrics,
+		"calculate",
+		"factor-calculation",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize factor run metrics: %w", err)
+	}
+	realtimeInventory := factorobservability.NewRealtimeInventory(bindingRepo, datasetMetrics)
+	if err := realtimeInventory.Refresh(ctx); err != nil {
+		return nil, fmt.Errorf("initialize factor realtime dataset inventory: %w", err)
+	}
 	sched = scheduler.NewService(scheduler.Config{
 		Workers: cfg.Engine.Workers, QueueCapacity: cfg.Scheduler.QueueCapacity,
 		MaxRetry: cfg.Scheduler.MaxRetry,
-	}, storage, pythonExec)
+	}, storage, pythonExec, scheduler.WithDatasetMetrics(runMetrics))
 	if err := sched.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start factor scheduler: %w", err)
 	}
@@ -151,7 +182,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			eventBatchWindow: time.Duration(cfg.Scheduler.EventBatchWindowMS) * time.Millisecond,
 		})
 	}
-	registerMetricsReporter(s)
+	registerMetricsReporter(s, realtimeInventory)
 
 	service := s.Service("trpc.moox.factor.FactorMgr")
 	if service == nil {
@@ -162,6 +193,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			sched,
 			factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
 			factorsvc.WithMetadataSync(meta),
+			factorsvc.WithRealtimeInventory(realtimeInventory),
 		))
 	}
 	if err := registerHealth(s, cfg, dbm, sched, pythonExec, consumer); err != nil {
@@ -179,11 +211,20 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func registerMetricsReporter(s *server.Server) {
+type realtimeInventoryReconciler interface {
+	Due(time.Time) bool
+	Refresh(context.Context) error
+}
+
+type metricsReporter interface {
+	Handle(context.Context) error
+}
+
+func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler) {
 	if s == nil {
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("moox_factor"))
+	h, err := report.NewHandler(report.DefaultConfig("factor", "moox_factor"))
 	if err != nil {
 		log.Warnf("factor metrics reporter disabled: %v", err)
 		return
@@ -193,7 +234,18 @@ func registerMetricsReporter(s *server.Server) {
 		log.Warn("factor metrics timer service is not configured, skip register")
 		return
 	}
-	timer.RegisterHandlerService(service, h.Handle)
+	timer.RegisterHandlerService(service, metricsTimerHandler(inventory, h, time.Now))
+}
+
+func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metricsReporter, now func() time.Time) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if inventory != nil && inventory.Due(now()) {
+			if err := inventory.Refresh(ctx); err != nil {
+				log.WarnContextf(ctx, "factor realtime dataset inventory refresh failed: %v", err)
+			}
+		}
+		return reporter.Handle(ctx)
+	}
 }
 
 type realtimeStatus interface {

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,6 +16,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type inventoryStub struct {
+	dirty     int
+	refreshes int
+	err       error
+}
+
+func (s *inventoryStub) MarkDirty() { s.dirty++ }
+func (s *inventoryStub) Refresh(context.Context) error {
+	s.refreshes++
+	return s.err
+}
+
 func TestCreateFactorUsesPeriodsAndExtractedDepends(t *testing.T) {
 	svc := NewWithRuntime(openRPCTestDB(t), nil, WithFactorsDir(t.TempDir()))
 	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
@@ -25,6 +38,22 @@ func TestCreateFactorUsesPeriodsAndExtractedDepends(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, []string{"funding_rate"}, rsp.GetFactor().GetDepends())
+}
+
+func TestFactorMutationRefreshFailureDoesNotRollback(t *testing.T) {
+	db := openRPCTestDB(t)
+	inventory := &inventoryStub{err: errors.New("inventory unavailable")}
+	svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()), WithRealtimeInventory(inventory))
+	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
+		FactorId: "bias", Name: "Bias", SourceCode: "def signal(): return 1",
+		Periods: []int32{20}, Status: domain.FactorStatusEnabled,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	_, err = db.Factors().Get(context.Background(), "bias")
+	require.NoError(t, err)
+	require.Equal(t, 1, inventory.dirty)
+	require.Equal(t, 1, inventory.refreshes)
 }
 
 func TestRecalcFactorRunsSynchronousRange(t *testing.T) {

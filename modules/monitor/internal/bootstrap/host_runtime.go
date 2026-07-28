@@ -7,8 +7,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	hosteventconsumer "github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics/eventconsumer"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -40,52 +38,6 @@ func startHostStorageGate(ctx context.Context, cfg *config.Config, runtime *Runt
 			}
 		}
 	})
-}
-
-func startHostMetricsConsumer(ctx context.Context, cfg *config.Config, runtime *Runtime, store *hostmetrics.Store) {
-	if cfg == nil || !cfg.Metrics.Enabled || !cfg.Metrics.HostStorage.Enabled || store == nil {
-		return
-	}
-	runtime.Go(func() {
-		for ctx.Err() == nil {
-			urls := strings.Split(cfg.Metrics.EventBusURL, ",")
-			jc := jetstream.ConfigFromEnv(urls, "moox-monitor-hostmetrics")
-			if path := strings.TrimSpace(cfg.Metrics.HostEventBusCredentialFile); path != "" {
-				if err := jc.ApplyCredentialFile(jetstream.ExpandCredentialPath(path)); err != nil {
-					log.WarnContextf(ctx, "host metrics credential unavailable: %v", err)
-					waitHostMetrics(ctx)
-					continue
-				}
-			}
-			client, err := jetstream.Connect(ctx, jc)
-			if err != nil {
-				log.WarnContextf(ctx, "host metrics eventbus unavailable: %v", err)
-				waitHostMetrics(ctx)
-				continue
-			}
-			consumer, err := hosteventconsumer.Bind(ctx, client, store)
-			if err != nil {
-				_ = client.Close()
-				log.WarnContextf(ctx, "host metrics durable unavailable: %v", err)
-				waitHostMetrics(ctx)
-				continue
-			}
-			err = consumer.Run(ctx)
-			_ = consumer.Close()
-			_ = client.Close()
-			if err != nil && ctx.Err() == nil {
-				log.WarnContextf(ctx, "host metrics consumer stopped: %v", err)
-				waitHostMetrics(ctx)
-			}
-		}
-	})
-}
-
-func waitHostMetrics(ctx context.Context) {
-	select {
-	case <-ctx.Done():
-	case <-time.After(15 * time.Second):
-	}
 }
 
 func normalizeHostStorageTarget(raw string) string {

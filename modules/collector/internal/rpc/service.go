@@ -13,10 +13,12 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	mooxreport "github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -30,17 +32,32 @@ type Dependencies struct {
 	// PlannerStorageRPCGatewayTarget is the control-plane's local metadata target.
 	// It overrides the runtime Storage target when both are available.
 	PlannerStorageRPCGatewayTarget string
+	DatasetMetrics                 DatasetRunObserver
+	RealtimeInventory              RealtimeInventory
+}
+
+// DatasetRunObserver records accepted realtime Dataset results.
+type DatasetRunObserver interface {
+	ObserveRun(mooxreport.DatasetObservation) error
+}
+
+// RealtimeInventory reconciles the derived expected Dataset registry.
+type RealtimeInventory interface {
+	MarkDirty()
+	Refresh(context.Context) error
 }
 
 // Service implements the independent CollectMgr RPC service.
 type Service struct {
 	pb.UnimplementedCollectMgr
-	ruleRepo     *store.TaskRuleRepository
-	instanceRepo *store.TaskInstanceRepository
-	builder      *planner.TaskBuilder
-	datasetSrc   datasetSource
-	cloudJobs    *taskpublisher.Client
-	now          func() time.Time
+	ruleRepo       *store.TaskRuleRepository
+	instanceRepo   *store.TaskInstanceRepository
+	builder        *planner.TaskBuilder
+	datasetSrc     datasetSource
+	cloudJobs      *taskpublisher.Client
+	datasetMetrics DatasetRunObserver
+	inventory      RealtimeInventory
+	now            func() time.Time
 }
 
 type datasetSource interface {
@@ -63,7 +80,9 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 			ServiceGatewayTarget: deps.AdminGatewayURL,
 			Auth:                 deps.ServiceAuth,
 		}),
-		now: time.Now,
+		datasetMetrics: deps.DatasetMetrics,
+		inventory:      deps.RealtimeInventory,
+		now:            time.Now,
 	}
 }
 
@@ -170,6 +189,7 @@ func (s *Service) CreateTaskRule(ctx context.Context, req *pb.CreateTaskRuleReq)
 		log.ErrorContextf(ctx, "[Collector] create task rule failed: %v", err)
 		return &pb.CreateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	return &pb.CreateTaskRuleRsp{RetInfo: retOK(), RuleId: rule.RuleID}, nil
 }
 
@@ -205,6 +225,7 @@ func (s *Service) UpdateTaskRule(ctx context.Context, req *pb.UpdateTaskRuleReq)
 		log.ErrorContextf(ctx, "[Collector] update task rule failed: %v", err)
 		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	return &pb.UpdateTaskRuleRsp{RetInfo: retOK(), Rule: toPBRule(*updated)}, nil
 }
 
@@ -220,7 +241,18 @@ func (s *Service) DisableTaskRule(ctx context.Context, req *pb.DisableTaskRuleRe
 		log.ErrorContextf(ctx, "[Collector] disable task rule failed: %v", err)
 		return &pb.DisableTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	return &pb.DisableTaskRuleRsp{RetInfo: retOK()}, nil
+}
+
+func (s *Service) refreshRealtimeInventory(ctx context.Context) {
+	if s.inventory == nil {
+		return
+	}
+	s.inventory.MarkDirty()
+	if err := s.inventory.Refresh(ctx); err != nil {
+		log.WarnContextf(ctx, "[Collector] refresh realtime dataset inventory failed: %v", err)
+	}
 }
 
 // GetTaskInstanceList returns task instances from the new collector DB.
@@ -302,9 +334,119 @@ func (s *Service) ReportTaskStatus(ctx context.Context, req *pb.ReportInstanceSt
 		)
 		return &pb.ReportInstanceStatusRsp{RetInfo: retOK()}, nil
 	}
+	if err := s.observeAcceptedTaskResult(ctx, spaceID, taskID, status, result); err != nil {
+		log.WarnContextf(
+			ctx,
+			"[Collector] accepted task result metrics rejected space_id=%s task_id=%s job_item_id=%s error=%v",
+			spaceID, taskID, jobItemID, err,
+		)
+	}
 	log.InfoContextf(ctx, "[Collector] task status space_id=%s task_id=%s job_item_id=%s node_id=%s status=%d",
 		spaceID, taskID, jobItemID, nodeID, status)
 	return &pb.ReportInstanceStatusRsp{RetInfo: retOK()}, nil
+}
+
+type taskExecutionResult struct {
+	DataType  string `json:"data_type"`
+	DatasetID string `json:"dataset_id"`
+	Freq      string `json:"freq,omitempty"`
+	sources.CollectResult
+}
+
+type taskExecutionEnvelope struct {
+	Tasks []taskExecutionResult `json:"tasks"`
+}
+
+func (s *Service) observeAcceptedTaskResult(
+	ctx context.Context,
+	spaceID string,
+	taskID string,
+	status int,
+	raw string,
+) error {
+	if s == nil || s.datasetMetrics == nil {
+		return nil
+	}
+	finishedAt := time.Now().UTC()
+	if s.now != nil {
+		finishedAt = s.now().UTC()
+	}
+	if status == domain.InstanceStatusFailed {
+		instance, err := s.instanceRepo.Get(ctx, spaceID, taskID)
+		if err != nil {
+			return fmt.Errorf("load accepted failed task: %w", err)
+		}
+		if !strings.EqualFold(instance.DataType, "kline") {
+			return nil
+		}
+		freq, err := sources.NormalizeFreq(instance.Interval)
+		if err != nil {
+			return err
+		}
+		return s.datasetMetrics.ObserveRun(mooxreport.DatasetObservation{
+			Key: mooxreport.DatasetKey{
+				SpaceID: spaceID, DatasetID: instance.DatasetID, Freq: freq,
+			},
+			Result: "error", FinishedAt: finishedAt,
+		})
+	}
+	if status != domain.InstanceStatusSuccess {
+		return nil
+	}
+
+	var envelope taskExecutionEnvelope
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		return fmt.Errorf("decode accepted collection result: %w", err)
+	}
+	if len(envelope.Tasks) == 0 {
+		var single taskExecutionResult
+		if err := json.Unmarshal([]byte(raw), &single); err != nil {
+			return fmt.Errorf("decode accepted collection summary: %w", err)
+		}
+		if strings.TrimSpace(single.DataType) != "" {
+			envelope.Tasks = []taskExecutionResult{single}
+		}
+	}
+	if len(envelope.Tasks) == 0 {
+		return fmt.Errorf("accepted success result has no task summaries")
+	}
+	for i, summary := range envelope.Tasks {
+		if strings.TrimSpace(summary.DataType) == "" {
+			return fmt.Errorf("task summary %d data_type is required", i)
+		}
+		if strings.TrimSpace(summary.DatasetID) == "" {
+			return fmt.Errorf("task summary %d dataset_id is required", i)
+		}
+		if err := sources.ValidateCollectResult(summary.DataType, summary.CollectResult); err != nil {
+			return fmt.Errorf("task summary %d: %w", i, err)
+		}
+		if !strings.EqualFold(summary.DataType, "kline") {
+			continue
+		}
+		freq, err := sources.NormalizeFreq(summary.Freq)
+		if err != nil {
+			return fmt.Errorf("task summary %d frequency: %w", i, err)
+		}
+		observation := mooxreport.DatasetObservation{
+			Key: mooxreport.DatasetKey{
+				SpaceID: spaceID, DatasetID: strings.TrimSpace(summary.DatasetID), Freq: freq,
+			},
+			Result: "success", Rows: summary.RowsWritten, FinishedAt: finishedAt,
+		}
+		if summary.RowsWritten == 0 {
+			observation.Result = "empty"
+		} else {
+			outputWatermark, err := time.Parse(time.RFC3339Nano, summary.OutputWatermark)
+			if err != nil {
+				return fmt.Errorf("task summary %d output watermark: %w", i, err)
+			}
+			observation.OutputWatermark = outputWatermark
+		}
+		if err := s.datasetMetrics.ObserveRun(observation); err != nil {
+			return fmt.Errorf("task summary %d observe: %w", i, err)
+		}
+	}
+	return nil
 }
 
 // ScheduleTasks plans and submits the next execution of every enabled task in one space.

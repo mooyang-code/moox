@@ -114,7 +114,7 @@ func registerMetricsReporter(s *server.Server) {
 	}
 	// The reporter identity must match the SysDeploy service name so Monitor
 	// can authorize snapshots without a second, manually maintained registry.
-	h, err := report.NewHandler(report.DefaultConfig("eventbus"))
+	h, err := report.NewHandler(report.DefaultConfig("eventbus", "eventbus"))
 	if err != nil {
 		log.Warnf("eventbus metrics reporter disabled: %v", err)
 		return

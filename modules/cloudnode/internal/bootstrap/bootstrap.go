@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
+	cloudnodeobservability "github.com/mooyang-code/moox/modules/cloudnode/internal/observability"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
@@ -24,6 +25,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -115,9 +117,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	})
 	cloudnoderpc.SetDefaultJobHistoryMaintainer(historyStore)
 	registerJobHistorySchedule(s)
-	registerMetricsReporter(s)
+	moduleMetrics, err := registerMetricsReporter(s)
+	if err != nil {
+		return nil, err
+	}
 
-	opts := []cloudnoderpc.Option{}
+	opts := []cloudnoderpc.Option{cloudnoderpc.WithModuleMetrics(moduleMetrics)}
 	if cfg.Queue.Backend == "jetstream" && cfg.JetStream.Enabled {
 		rt, err := jobqueue.Connect(ctx, cfg.JetStream)
 		if err != nil {
@@ -170,7 +175,23 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
 	heartbeatMaintainer := cloudnoderpc.NewHeartbeatMaintainer(svc, scfHeartbeatTargetsFromEnv())
-	if err := registerSCFHeartbeatMaintainerHandler(s, heartbeatMaintainer.Handle); err != nil {
+	heartbeatHandler := heartbeatMaintainer.Handle
+	if scfMetrics, metricsErr := cloudnodeobservability.NewSCFMetrics(prometheus.DefaultRegisterer, dbm.Catalog()); metricsErr != nil {
+		log.WarnContextf(ctx, "cloudnode SCF metrics disabled: %v", metricsErr)
+	} else {
+		if refreshErr := scfMetrics.Refresh(ctx); refreshErr != nil {
+			log.WarnContextf(ctx, "initial cloudnode SCF metrics refresh failed: %v", refreshErr)
+		}
+		heartbeatHandler = func(runCtx context.Context) error {
+			runErr := heartbeatMaintainer.Handle(runCtx)
+			scfMetrics.ObserveKeepalive(runErr)
+			if refreshErr := scfMetrics.Refresh(runCtx); refreshErr != nil {
+				log.WarnContextf(runCtx, "cloudnode SCF metrics refresh failed: %v", refreshErr)
+			}
+			return runErr
+		}
+	}
+	if err := registerSCFHeartbeatMaintainerHandler(s, heartbeatHandler); err != nil {
 		return nil, err
 	}
 	if err := registerHealth(s, cfg, dbm); err != nil {
@@ -230,21 +251,28 @@ func registerSCFHeartbeatMaintainerHandler(s *server.Server, handler func(contex
 	return nil
 }
 
-func registerMetricsReporter(s *server.Server) {
+func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
 	if s == nil {
-		return
+		return nil, fmt.Errorf("cloudnode metrics reporter requires a tRPC server")
 	}
-	h, err := report.NewHandler(report.DefaultConfig("moox_cloudnode"))
+	pipelines, err := report.ValidatePipelineEnvironment()
 	if err != nil {
-		log.Warnf("cloudnode metrics reporter disabled: %v", err)
-		return
+		return nil, err
+	}
+	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "cloudnode", pipelines.IDsForModule("cloudnode"))
+	if err != nil {
+		return nil, err
+	}
+	h, err := report.NewHandler(report.DefaultConfig("cloudnode", "moox_cloudnode"))
+	if err != nil {
+		return nil, err
 	}
 	service := s.Service("trpc.moox.cloudnode.metrics.timer")
 	if service == nil {
-		log.Warn("cloudnode metrics timer service is not configured, skip register")
-		return
+		return nil, fmt.Errorf("cloudnode metrics timer service is not configured")
 	}
 	timer.RegisterHandlerService(service, h.Handle)
+	return moduleMetrics, nil
 }
 
 func registerHealth(s *server.Server, cfg *config.Config, dbm *store.Store) error {

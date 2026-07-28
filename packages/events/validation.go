@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
+	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
@@ -36,7 +37,7 @@ func validateCloudJobExecutionRequested(message *eventpb.EventMessage, value pro
 	return nil
 }
 
-func validateMetricsHostReported(message *eventpb.EventMessage, value proto.Message) error {
+func validateObservabilityHostSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*hostmetricpb.HostMetric)
 	if !ok {
 		return fmt.Errorf("host metric payload has type %T", value)
@@ -52,7 +53,7 @@ func validateMetricsHostReported(message *eventpb.EventMessage, value proto.Mess
 	return nil
 }
 
-func validateMetricsSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
+func validateObservabilityMetricsSnapshotReported(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*metricspb.MetricReport)
 	if !ok {
 		return fmt.Errorf("metric report payload has type %T", value)
@@ -64,6 +65,45 @@ func validateMetricsSnapshotReported(message *eventpb.EventMessage, value proto.
 	}
 	if message.GetSubjectId() != payload.GetServiceName()+"/"+payload.GetInstanceId() {
 		return fmt.Errorf("metric report producer does not match subject_id")
+	}
+	return nil
+}
+
+func validateObservabilityHealthCheckReported(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*observabilitypb.HealthCheckReport)
+	if !ok {
+		return fmt.Errorf("health check payload has type %T", value)
+	}
+	if strings.TrimSpace(payload.GetObserverId()) == "" ||
+		strings.TrimSpace(payload.GetCheckId()) == "" ||
+		strings.TrimSpace(payload.GetKind()) == "" {
+		return fmt.Errorf("health check observer_id, check_id, and kind are required")
+	}
+	if len(payload.GetTarget()) > 512 {
+		return fmt.Errorf("health check target exceeds 512 bytes")
+	}
+	if len(payload.GetErrorCode()) > 64 {
+		return fmt.Errorf("health check error_code exceeds 64 bytes")
+	}
+	if len(payload.GetErrorSummary()) > 256 {
+		return fmt.Errorf("health check error_summary exceeds 256 bytes")
+	}
+	if payload.GetLatencyMs() < 0 {
+		return fmt.Errorf("health check latency_ms must be non-negative")
+	}
+	checkedAt := payload.GetCheckedAt()
+	if checkedAt == nil {
+		return fmt.Errorf("health check checked_at is required")
+	}
+	if err := checkedAt.CheckValid(); err != nil {
+		return fmt.Errorf("health check checked_at: %w", err)
+	}
+	if message == nil || message.GetOccurredAt() == nil {
+		return fmt.Errorf("health check envelope occurred_at is required")
+	}
+	delta := checkedAt.AsTime().Sub(message.GetOccurredAt().AsTime())
+	if delta < -5*time.Minute || delta > 5*time.Minute {
+		return fmt.Errorf("health check checked_at differs from occurred_at by more than 5 minutes")
 	}
 	return nil
 }

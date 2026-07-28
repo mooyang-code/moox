@@ -29,7 +29,7 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 	require.Len(t, cfg.KV, 1)
 	want := map[string]string{
 		"MOOX_CLOUDNODE_EXEC": "work_queue",
-		"MOOX_METRICS":        "limits",
+		"MOOX_OBSERVABILITY":  "limits",
 		"MOOX_STORAGE":        "limits",
 		"MOOX_TRADE":          "work_queue",
 	}
@@ -42,6 +42,12 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 		delete(want, stream.Name)
 	}
 	assert.Empty(t, want, "missing streams")
+	for _, stream := range cfg.Streams {
+		assert.NotEqual(t, "MOOX_METRICS", stream.Name)
+		if stream.Name == "MOOX_OBSERVABILITY" {
+			assert.Equal(t, []string{"moox.observability.>"}, stream.Subjects)
+		}
+	}
 }
 
 func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
@@ -75,7 +81,7 @@ func TestRejectUnsafeAndInvalidConfiguration(t *testing.T) {
 		"bad auth":             func(c *Config) { c.Broker.Auth.Enabled = true },
 		"cluster default name": func(c *Config) { c.Broker.Cluster.Enabled = true },
 		"overlap": func(c *Config) {
-			c.Streams[0].Subjects = []string{"moox.metrics.>"}
+			c.Streams[0].Subjects = []string{"moox.observability.>"}
 		},
 		"negative duplicates": func(c *Config) { c.Streams[0].Duplicates = -time.Second },
 		"replicas":            func(c *Config) { c.Streams[0].Replicas = 2 },

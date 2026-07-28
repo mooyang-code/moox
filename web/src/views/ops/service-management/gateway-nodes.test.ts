@@ -29,10 +29,12 @@ const normalizeSource = (source: string) => source.replace(/\s+/g, "").replace(/
 describe("gateway node and service instance contracts", () => {
   beforeEach(() => mockedCallControl.mockReset());
 
-  it("keeps the four service management tabs in the required order", () => {
+  it("keeps the observability overview and service management tabs in the required order", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
-    const positions = ["网关节点", "服务实例", "可用性监控", "应用指标"].map(label => normalized.indexOf(`label:"${label}"`));
+    const positions = ["总览", "网关节点", "服务实例", "可用性监控", "应用指标"].map(label =>
+      normalized.indexOf(`label:"${label}"`)
+    );
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
   });

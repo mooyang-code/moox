@@ -2,12 +2,15 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+const scfHeartbeatTimeout = 90 * time.Second
 
 // ListSCFEventNodes returns every live catalog entry backed by Tencent SCF's
 // event invocation mode. Node status is intentionally not part of the filter:
@@ -23,6 +26,7 @@ func (r *CatalogRepository) ListSCFEventNodes(ctx context.Context) ([]CloudNode,
 
 func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *pb.GetNodeListReq) ([]CloudNode, int64, error) {
 	q := r.db.WithContext(ctx).Model(&CloudNode{}).Where("c_is_deleted = ?", false)
+	now := r.currentTime()
 	if spaceID != "" {
 		q = q.Where("c_space_id = ?", spaceID)
 	}
@@ -45,7 +49,13 @@ func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *
 		q = q.Where("json_extract(c_metadata, '$.biz_type') = ?", req.GetBizType())
 	}
 	if req.GetStatus() != pb.NodeStatusCode_NODE_STATUS_UNSPECIFIED {
-		if status := nodeStatusFromPB(req.GetStatus()); status != "" {
+		switch req.GetStatus() {
+		case pb.NodeStatusCode_NODE_STATUS_ONLINE:
+			q = q.Where("c_last_heartbeat_at IS NOT NULL AND c_last_heartbeat_at >= ?", now.Add(-scfHeartbeatTimeout))
+		case pb.NodeStatusCode_NODE_STATUS_TIMEOUT:
+			q = q.Where("c_last_heartbeat_at IS NOT NULL AND c_last_heartbeat_at < ?", now.Add(-scfHeartbeatTimeout))
+		default:
+			status := nodeStatusFromPB(req.GetStatus())
 			q = q.Where("c_status = ?", status)
 		}
 	}
@@ -60,6 +70,9 @@ func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *
 	page, size := pageFromCommon(req.GetPage())
 	var nodes []CloudNode
 	err := q.Order("c_id DESC").Limit(size).Offset((page - 1) * size).Find(&nodes).Error
+	for index := range nodes {
+		deriveSCFHeartbeatStatus(&nodes[index], now)
+	}
 	return nodes, total, err
 }
 
@@ -75,11 +88,12 @@ func (r *CatalogRepository) GetNode(ctx context.Context, spaceID string, nodeID 
 		}
 		return nil, err
 	}
+	deriveSCFHeartbeatStatus(&node, r.currentTime())
 	return &node, nil
 }
 
 func (r *CatalogRepository) UpsertNode(ctx context.Context, node CloudNode) error {
-	now := time.Now().UTC()
+	now := r.currentTime()
 	if node.CreateTime.IsZero() {
 		node.CreateTime = now
 	}
@@ -96,6 +110,7 @@ func (r *CatalogRepository) UpsertNode(ctx context.Context, node CloudNode) erro
 			"c_cloud_account_id", "c_package_id", "c_package_version", "c_deployment_id",
 			"c_node_type", "c_region", "c_namespace", "c_function_name", "c_provider",
 			"c_running_version", "c_supported_workloads", "c_metadata", "c_status", "c_is_deleted", "c_mtime",
+			"c_last_heartbeat_at",
 		}),
 	}).Create(&node).Error
 }
@@ -130,7 +145,7 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 }
 
 func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, version string, supported string, metadata string) error {
-	now := time.Now().UTC()
+	now := r.currentTime()
 	return r.db.WithContext(ctx).Model(&CloudNode{}).
 		Where("c_space_id = ? AND c_node_id = ? AND c_is_deleted = ?", spaceID, nodeID, false).
 		Updates(map[string]any{
@@ -144,6 +159,23 @@ func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string,
 			"c_last_heartbeat_at": now,
 			"c_mtime":             now,
 		}).Error
+}
+
+func deriveSCFHeartbeatStatus(node *CloudNode, now time.Time) {
+	if node == nil || strings.EqualFold(node.Status, "deleted") {
+		return
+	}
+	node.Status = SCFHeartbeatStatus(node.LastHeartbeatAt, now)
+}
+
+func SCFHeartbeatStatus(lastHeartbeat *time.Time, now time.Time) string {
+	if lastHeartbeat == nil || lastHeartbeat.IsZero() {
+		return "unknown"
+	}
+	if now.UTC().Sub(lastHeartbeat.UTC()) > scfHeartbeatTimeout {
+		return "timeout"
+	}
+	return "online"
 }
 
 func nodeStatusFromPB(status pb.NodeStatusCode) string {

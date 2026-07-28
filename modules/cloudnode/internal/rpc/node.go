@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
@@ -25,7 +27,20 @@ const (
 	scfOperationTimeout       = 5 * time.Minute
 	scfCreateAttemptTimeout   = 4 * time.Minute
 	scfCreateReconcileTimeout = 10 * time.Second
+	scfWatchdogEnvironmentKey = "MOOX_SCF_WATCHDOG_ENABLED"
+	scfWatchdogMetadataKey    = "scf_watchdog_enabled"
 )
+
+var scfWatchdogRuntimeEnvironment = map[string]string{
+	"MOOX_MONITOR_READY_URL":    "MOOX_MONITOR_READY_URL",
+	"MOOX_GATEWAY_READY_URL":    "MOOX_GATEWAY_READY_URL",
+	"MOOX_HEALTH_HMAC_VERSION":  "MOOX_HEALTH_AUTH_VERSION",
+	"MOOX_HEALTH_HMAC_KEY_ID":   "MOOX_HEALTH_AUTH_ACCESS_KEY",
+	"MOOX_HEALTH_HMAC_SECRET":   "MOOX_HEALTH_AUTH_SECRET_KEY",
+	"MOOX_MSGBOX_WECOM_WEBHOOK": "MOOX_MSGBOX_WECOM_WEBHOOK",
+}
+
+var scfWatchdogSelectionMu sync.Mutex
 
 func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.GetNodeListRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
@@ -84,6 +99,26 @@ func (s *Service) executeCreateNodeItem(
 		return "", fmt.Errorf("node item is required")
 	}
 	node := cloudNodeFromCreateItem(spaceID, item, index)
+	watchdogEnabled, _, err := requestedSCFWatchdog(item.GetEnvironment())
+	if err != nil {
+		return "", err
+	}
+	if watchdogEnabled && strings.EqualFold(strings.TrimSpace(node.Region), "local") {
+		return "", fmt.Errorf("SCF watchdog sentinel requires a cloud SCF node")
+	}
+	if watchdogEnabled {
+		// Node batch items execute concurrently. Serialize the small number of
+		// sentinel selections through provider acceptance and catalog persistence
+		// so two items in one batch cannot both pass the catalog check.
+		scfWatchdogSelectionMu.Lock()
+		defer scfWatchdogSelectionMu.Unlock()
+		if err := s.ensureSingleSCFWatchdog(ctx, spaceID, node.NodeID); err != nil {
+			return "", err
+		}
+		metadata := parseJSONMap(node.Metadata)
+		metadata[scfWatchdogMetadataKey] = true
+		node.Metadata = jsonString(metadata)
+	}
 	if strings.TrimSpace(node.CloudAccountID) == "" {
 		return "", fmt.Errorf("cloud_account_id is required")
 	}
@@ -165,10 +200,21 @@ func (s *Service) executeDeployNodeItem(
 	if pkg.Status != "available" {
 		return "", fmt.Errorf("package %s is not available", pkg.PackageID)
 	}
+	watchdogEnabled := metadataBool(parseJSONMap(node.Metadata), scfWatchdogMetadataKey)
+	requestedWatchdog, watchdogSpecified, err := requestedSCFWatchdog(item.GetEnvironment())
+	if err != nil {
+		return "", err
+	}
+	if watchdogSpecified && requestedWatchdog != watchdogEnabled {
+		return "", fmt.Errorf(
+			"SCF watchdog sentinel selection for node %s is immutable; delete and recreate the selected node",
+			node.NodeID,
+		)
+	}
 	if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
 		return "", err
 	}
-	if err := s.updateSCFFunctionCode(ctx, *node, *pkg, item.GetEnvironment(), item.GetConfig()); err != nil {
+	if err := s.updateSCFFunctionCode(ctx, *node, *pkg, item.GetEnvironment(), item.GetConfig(), watchdogEnabled); err != nil {
 		return "", err
 	}
 	persistCtx, persistCancel := acceptedSCFPersistenceContext(ctx)
@@ -250,6 +296,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 				pkg.PackageID,
 			)
 		}
+		if remoteSCFWatchdogEnabled(info.Environment) != metadataBool(parseJSONMap(node.Metadata), scfWatchdogMetadataKey) {
+			return fmt.Errorf("scf function %s watchdog selection does not match catalog", ref.FunctionName)
+		}
 		info, err = waitForSCFActive(ctx, client, ref, info)
 		if err != nil {
 			return err
@@ -263,9 +312,10 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	if !isSCFNotFound(err) {
 		return fmt.Errorf("get scf function %s: %w", ref.FunctionName, err)
 	}
-	environment := copyStringMap(item.GetEnvironment())
-	if environment == nil {
-		environment = make(map[string]string)
+	watchdogEnabled := metadataBool(parseJSONMap(node.Metadata), scfWatchdogMetadataKey)
+	environment, err := scfWatchdogEnvironment(item.GetEnvironment(), watchdogEnabled)
+	if err != nil {
+		return err
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	createCtx, createCancel := context.WithTimeout(ctx, scfCreateAttemptTimeout)
@@ -390,6 +440,7 @@ func (s *Service) updateSCFFunctionCode(
 	pkg store.FunctionPackage,
 	desiredEnvironment map[string]string,
 	desiredConfig map[string]string,
+	watchdogEnabled bool,
 ) error {
 	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 	if err != nil {
@@ -419,26 +470,25 @@ func (s *Service) updateSCFFunctionCode(
 	// and the desired configuration update has been accepted. It therefore
 	// doubles as the idempotency marker when the caller times out while Tencent
 	// is still returning Updating.
-	if strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"]) == pkg.PackageID {
-		_, err = waitForSCFActive(ctx, client, ref, info)
-		return err
-	}
+	codeCurrent := strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"]) == pkg.PackageID
 	info, err = waitForSCFActive(ctx, client, ref, info)
 	if err != nil {
 		return err
 	}
-	_, err = client.UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{
-		FunctionRef: ref,
-		Handler:     firstString(metadataString(metadata, "handler"), "main"),
-		COSBucket:   pkg.COSBucket,
-		COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
-		COSObject:   strings.TrimPrefix(pkg.COSPath, "/"),
-	})
-	if err != nil {
-		return fmt.Errorf("update scf function %s: %w", firstString(node.FunctionName, node.NodeID), err)
-	}
-	if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
-		return err
+	if !codeCurrent {
+		_, err = client.UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{
+			FunctionRef: ref,
+			Handler:     firstString(metadataString(metadata, "handler"), "main"),
+			COSBucket:   pkg.COSBucket,
+			COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
+			COSObject:   strings.TrimPrefix(pkg.COSPath, "/"),
+		})
+		if err != nil {
+			return fmt.Errorf("update scf function %s: %w", firstString(node.FunctionName, node.NodeID), err)
+		}
+		if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
+			return err
+		}
 	}
 	environment := copyStringMap(desiredEnvironment)
 	if len(environment) == 0 {
@@ -446,6 +496,10 @@ func (s *Service) updateSCFFunctionCode(
 		if environment == nil {
 			environment = make(map[string]string)
 		}
+	}
+	environment, err = scfWatchdogEnvironment(environment, watchdogEnabled)
+	if err != nil {
+		return err
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
@@ -460,6 +514,73 @@ func (s *Service) updateSCFFunctionCode(
 	}
 	_, err = waitForSCFActive(ctx, client, ref, nil)
 	return err
+}
+
+func (s *Service) ensureSingleSCFWatchdog(ctx context.Context, spaceID, nodeID string) error {
+	nodes, err := s.catalog.ListSCFEventNodes(ctx)
+	if err != nil {
+		return fmt.Errorf("list SCF nodes before watchdog selection: %w", err)
+	}
+	for _, node := range nodes {
+		if node.SpaceID != spaceID || node.NodeID == nodeID {
+			continue
+		}
+		if metadataBool(parseJSONMap(node.Metadata), scfWatchdogMetadataKey) {
+			return fmt.Errorf(
+				"space %s already has SCF watchdog sentinel node %s",
+				spaceID,
+				node.NodeID,
+			)
+		}
+	}
+	return nil
+}
+
+func requestedSCFWatchdog(environment map[string]string) (enabled bool, specified bool, err error) {
+	raw, ok := environment[scfWatchdogEnvironmentKey]
+	if !ok {
+		return false, false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true":
+		return true, true, nil
+	case "false":
+		return false, true, nil
+	default:
+		return false, true, fmt.Errorf("%s must be true or false", scfWatchdogEnvironmentKey)
+	}
+}
+
+func remoteSCFWatchdogEnabled(environment map[string]string) bool {
+	enabled, _, err := requestedSCFWatchdog(environment)
+	return err == nil && enabled
+}
+
+func scfWatchdogEnvironment(environment map[string]string, enabled bool) (map[string]string, error) {
+	result := copyStringMap(environment)
+	if result == nil {
+		result = make(map[string]string)
+	}
+	if !enabled {
+		delete(result, scfWatchdogEnvironmentKey)
+		for key := range scfWatchdogRuntimeEnvironment {
+			delete(result, key)
+		}
+		return result, nil
+	}
+	result[scfWatchdogEnvironmentKey] = "true"
+	for targetKey, sourceKey := range scfWatchdogRuntimeEnvironment {
+		value := strings.TrimSpace(os.Getenv(sourceKey))
+		if value == "" {
+			delete(result, targetKey)
+			if targetKey != "MOOX_MSGBOX_WECOM_WEBHOOK" {
+				return nil, fmt.Errorf("SCF watchdog runtime requires %s", sourceKey)
+			}
+			continue
+		}
+		result[targetKey] = value
+	}
+	return result, nil
 }
 
 func acceptedSCFPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {

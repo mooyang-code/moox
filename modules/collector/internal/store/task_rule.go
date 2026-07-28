@@ -3,12 +3,15 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"gorm.io/gorm"
 )
+
+const MaxEnabledTaskRules = 1000
 
 // TaskRuleFilter describes rule list filters.
 type TaskRuleFilter struct {
@@ -54,6 +57,27 @@ func (r *TaskRuleRepository) ListEnabled(ctx context.Context, spaceID string) ([
 		Order("c_id ASC").
 		Find(&rules).Error
 	return rules, err
+}
+
+// ListEnabledAll returns the complete enabled rule inventory. It fails rather
+// than returning a truncated snapshot because observability reconciliation must
+// never publish a partial expected set.
+func (r *TaskRuleRepository) ListEnabledAll(ctx context.Context, limit int) ([]domain.TaskRule, error) {
+	if limit <= 0 || limit > MaxEnabledTaskRules {
+		return nil, fmt.Errorf("enabled task rule limit must be between 1 and %d", MaxEnabledTaskRules)
+	}
+	var rules []domain.TaskRule
+	if err := r.db.WithContext(ctx).
+		Where("c_enabled = ?", true).
+		Order("c_id ASC").
+		Limit(limit + 1).
+		Find(&rules).Error; err != nil {
+		return nil, err
+	}
+	if len(rules) > limit {
+		return nil, fmt.Errorf("enabled task rule count exceeds limit %d", limit)
+	}
+	return rules, nil
 }
 
 // GetByRuleID returns a rule by its business id within a space.

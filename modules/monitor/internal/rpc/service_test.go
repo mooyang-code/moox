@@ -133,6 +133,14 @@ func TestMonitorRPCCRUD(t *testing.T) {
 func TestMonitorRPCWebhookAndRuleCRUD(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
+	checkRsp, err := svc.CreateCheck(ctx, &monitorpb.CreateCheckReq{Check: &monitorpb.MonitorCheck{
+		SpaceId: "space-a", CheckId: "api-health", Name: "API Health",
+		Kind: monitorpb.CheckKind_CHECK_KIND_HTTP, Url: "http://127.0.0.1/healthz",
+		IntervalSeconds: 30, TimeoutMs: 1000,
+	}})
+	if err != nil || checkRsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("check ret=%+v err=%v", checkRsp.GetRetInfo(), err)
+	}
 
 	webhook, err := svc.CreateWebhookChannel(ctx, &monitorpb.CreateWebhookChannelReq{Channel: &monitorpb.WebhookChannel{
 		SpaceId:   "space-a",
@@ -174,6 +182,57 @@ func TestMonitorRPCWebhookAndRuleCRUD(t *testing.T) {
 	rulesByCheck, _ := svc.ListAlertRules(ctx, &monitorpb.ListAlertRulesReq{SpaceId: "space-a", CheckId: "api-health"})
 	if len(rulesByCheck.GetRules()) != 2 {
 		t.Fatalf("rules by check len = %d", len(rulesByCheck.GetRules()))
+	}
+}
+
+func TestGetOverviewExcludesDisabledChecksAndTheirResults(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, check := range []*domain.Check{
+		{SpaceID: "space-a", CheckID: "enabled", Name: "enabled", Kind: domain.CheckKindHTTP, URL: "http://enabled", Method: "GET", Headers: "{}", ExpectedStatus: "200-299", IntervalSeconds: 30, TimeoutMS: 1000, Enabled: true, Source: domain.CheckSourceManual, Labels: "{}"},
+		{SpaceID: "space-a", CheckID: "disabled", Name: "disabled", Kind: domain.CheckKindHTTP, URL: "http://disabled", Method: "GET", Headers: "{}", ExpectedStatus: "200-299", IntervalSeconds: 30, TimeoutMS: 1000, Enabled: false, Source: domain.CheckSourceManual, Labels: "{}"},
+	} {
+		if err := svc.checks.Create(ctx, check); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, result := range []*domain.CheckResult{
+		{ResultID: "enabled-result", SpaceID: "space-a", CheckID: "enabled", InstanceID: "monitor", Success: true, Status: domain.CheckStatusOK, LatencyMS: 10, CheckedAt: now},
+		{ResultID: "disabled-result", SpaceID: "space-a", CheckID: "disabled", InstanceID: "monitor", Success: false, Status: domain.CheckStatusDown, LatencyMS: 100, CheckedAt: now},
+	} {
+		if err := svc.results.Insert(ctx, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rsp, err := svc.GetOverview(ctx, &monitorpb.GetOverviewReq{SpaceId: "space-a"})
+	if err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("overview ret=%+v err=%v", rsp.GetRetInfo(), err)
+	}
+	if got := rsp.GetOverview(); got.GetTotalChecks() != 1 || got.GetHealthyChecks() != 1 || got.GetDownChecks() != 0 || got.GetSuccessRate_24H() != 1 {
+		t.Fatalf("disabled check affected overview: %+v", got)
+	}
+}
+
+func TestDeleteRPCReportsReferenceConflict(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	if err := svc.checks.Create(ctx, &domain.Check{SpaceID: "space-a", CheckID: "check-a", Name: "check", Kind: domain.CheckKindHTTP, URL: "http://check", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.alerts.CreateWebhook(ctx, &domain.WebhookChannel{SpaceID: "space-a", WebhookID: "ops", Name: "ops", URL: "http://ops", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.alerts.CreateRule(ctx, &domain.AlertRule{SpaceID: "space-a", RuleID: "rule-a", CheckID: "check-a", WebhookID: "ops", FailureThreshold: 1, SuccessThreshold: 1, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	checkRsp, err := svc.DeleteCheck(ctx, &monitorpb.DeleteCheckReq{SpaceId: "space-a", CheckId: "check-a"})
+	if err != nil || checkRsp.GetRetInfo().GetCode() != commonpb.ErrorCode_INVALID_PARAM {
+		t.Fatalf("delete check ret=%+v err=%v", checkRsp.GetRetInfo(), err)
+	}
+	webhookRsp, err := svc.DeleteWebhookChannel(ctx, &monitorpb.DeleteWebhookChannelReq{SpaceId: "space-a", WebhookId: "ops"})
+	if err != nil || webhookRsp.GetRetInfo().GetCode() != commonpb.ErrorCode_INVALID_PARAM {
+		t.Fatalf("delete webhook ret=%+v err=%v", webhookRsp.GetRetInfo(), err)
 	}
 }
 

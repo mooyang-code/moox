@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	storagebootstrap "github.com/mooyang-code/moox/modules/storage/internal/bootstrap"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	storagehealth "github.com/mooyang-code/moox/modules/storage/internal/health"
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
@@ -31,6 +32,7 @@ import (
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
 	_ "trpc.group/trpc-go/trpc-database/timer"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
@@ -117,6 +119,10 @@ func runPrimaryRole() error {
 		}
 		return nil, "", fmt.Errorf("dataset %s/%s has no active view", spaceID, datasetID)
 	}
+	datasetMetrics, err := observability.NewDatasetMetrics(prometheus.DefaultRegisterer)
+	if err != nil {
+		return fmt.Errorf("initialize storage dataset metrics: %w", err)
+	}
 	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
@@ -130,7 +136,7 @@ func runPrimaryRole() error {
 		clone := proto.Clone(auth).(*pb.AuthInfo)
 		clone.AppKey = datanode.ServiceAuthKey(secret, clone.GetAppId())
 		return clone, nil
-	}})
+	}, DatasetMetrics: datasetMetrics})
 	if err != nil {
 		return err
 	}
@@ -152,6 +158,9 @@ func runPrimaryRole() error {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterMetadataService(listener, metadataSvc)
 		}
+	}
+	if err := storagebootstrap.RegisterMetricsReporter(s, "primary"); err != nil {
+		return err
 	}
 	if err := registerRoleHealth(s, "storage-primary"); err != nil {
 		return err
@@ -306,6 +315,9 @@ func runViewRole() error {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterDataViewService(listener, svc)
 		}
+	}
+	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
+		return err
 	}
 	if err := registerRoleHealth(s, "storage-view"); err != nil {
 		return err

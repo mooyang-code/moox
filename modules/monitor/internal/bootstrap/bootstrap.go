@@ -3,6 +3,10 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
@@ -11,11 +15,13 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/msgbox"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -43,8 +49,32 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
 		return nil, err
 	}
+	alertNotifier := alerting.WebhookNotifier{Timeout: time.Duration(cfg.Alert.SendTimeoutSeconds) * time.Second}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
+	if err := registerExternalSentinelChecks(ctx, runtime.Repositories); err != nil {
+		_ = runtime.Close()
+		return nil, fmt.Errorf("register external sentinel checks: %w", err)
+	}
+	runtime.ObservabilityHealthRoute = externalHealthRoute(
+		runtime.Repositories,
+		alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{Notifier: alertNotifier}),
+	)
+	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	var presenceSender msgbox.Sender
+	if webhookURL := strings.TrimSpace(os.Getenv("MOOX_MSGBOX_WECOM_WEBHOOK")); webhookURL != "" {
+		presenceSender, err = msgbox.NewWeComSenderWithTimeout(webhookURL, alertNotifier.Timeout)
+		if err != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("initialize host presence notifier: %w", err)
+		}
+	}
+	presenceSink := hostPresenceTransitionSink(presenceSender)
+	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceSink)
 
 	var hostStore *hostmetrics.Store
 	var hostReader *hostmetrics.StorageReader
@@ -75,7 +105,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
 			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
-			Notifier: alerting.WebhookNotifier{},
+			Notifier: alertNotifier,
 			Webhook: func(ctx context.Context, spaceID, webhookID string) (*domain.WebhookChannel, error) {
 				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, webhookID)
 			},
@@ -83,6 +113,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	} else {
 		hostStore = hostmetrics.NewStore(nil, nil)
 	}
+	hostStore.SetRegistry(hostRegistry)
+	hostStore.SetPresenceTransitionSink(presenceSink)
 
 	var metricsStorage *monmetrics.StorageAdapter
 	var metricsQuery *monmetrics.QueryService
@@ -106,21 +138,30 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			Webhook: func(ctx context.Context, spaceID, id string) (*domain.WebhookChannel, error) {
 				return runtime.Repositories.Alerts.GetWebhook(ctx, spaceID, id)
 			},
-			Notifier: monmetrics.WebhookMetricNotifier{},
+			Notifier: monmetrics.WebhookMetricNotifier{Sender: alertNotifier},
 		})
 	}
 	if err := registerHealth(s, cfg, runtime, metricsStorage); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	resultHook := monitorResultHook(runtime)
+	resultHook := monitorResultHook(runtime, alertNotifier)
 	probeRunner := buildProbeRunner(cfg)
+	marketCanary, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, resultHook)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	if err := ensureDefaultCheckAlertRules(runtimeCtx, runtime.Repositories); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
 	syncSystem := monitorSyncFunc(runtimeCtx, s, cfg, runtime)
 	hostReady := func() bool { return false }
 	if hostGate != nil {
 		hostReady = hostGate.Ready
 	}
-	pipelines, pipelineErr := report.ValidatePipelineEnvironment()
+	pipelines, pipelineErr := loadMonitorPipelines(cfg)
 	if pipelineErr != nil {
 		_ = runtime.Close()
 		return nil, pipelineErr
@@ -129,19 +170,40 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		Deployments: monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
 		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore, Pipelines: pipelines,
 	}
+	businessFreshness := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: metricsQuery, Hosts: hostStore,
+		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
+		Policy:                     doctorContext.Pipelines.RealtimeTimeSeries,
+		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
+	}, runtime.Repositories, resultHook)
+	watchdogRun := func(watchdogCtx context.Context) error {
+		var marketErr, freshnessErr error
+		if marketCanary != nil {
+			marketErr = marketCanary(watchdogCtx)
+		}
+		if businessFreshness != nil {
+			freshnessErr = businessFreshness(watchdogCtx)
+		}
+		return errors.Join(marketErr, freshnessErr)
+	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator, doctorContext)
-	registerMetricsReporter(s, runtime)
+	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, metricEvaluator, metricRules); err != nil {
+	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, metricEvaluator, metricRules, watchdogRun); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
-	startHostMetricsConsumer(runtimeCtx, cfg, runtime, hostStore)
+	if err := registerMonitorHostSilenceTimer(s, hostSilence, func(timerCtx context.Context) error {
+		return ensureDefaultHostAlertRules(timerCtx, runtime.Repositories, hostRegistry)
+	}); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
 	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
-	startMetricsConsumer(runtimeCtx, cfg, runtime, metricsStorage)
+	startObservabilityConsumer(runtimeCtx, cfg, runtime, metricsStorage, hostStore)
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done
@@ -151,4 +213,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "moox-monitor 初始化完成")
 	return s, nil
+}
+
+func loadMonitorPipelines(cfg *config.Config) (report.PipelineConfig, error) {
+	if strings.TrimSpace(os.Getenv("MOOX_PIPELINE_CONFIG")) != "" {
+		return report.ValidatePipelineEnvironment()
+	}
+	if cfg == nil || strings.TrimSpace(cfg.Metrics.PipelineConfigPath) == "" {
+		return report.PipelineConfig{}, fmt.Errorf("monitor pipeline config path is required")
+	}
+	return report.LoadPipelineAllowlist(cfg.Metrics.PipelineConfigPath)
 }

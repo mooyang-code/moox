@@ -12,6 +12,7 @@ import (
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
 
@@ -29,6 +30,7 @@ type Service struct {
 	scfClientFactory     func(cloudcredential.TencentCredential) scfProvisioner
 	executeNodeBatchItem func(context.Context, store.NodeBatchItem) (string, error)
 	nodeBatchTakenHook   func([]store.NodeBatchItem)
+	moduleMetrics        *report.ModuleMetrics
 }
 
 type scfProvisioner interface {
@@ -55,6 +57,10 @@ func WithJobHistoryStore(store *jobhistory.Store) Option {
 
 func WithHeartbeatSink(sink projection.HeartbeatSink) Option {
 	return func(s *Service) { s.heartbeatSink = sink }
+}
+
+func WithModuleMetrics(metrics *report.ModuleMetrics) Option {
+	return func(s *Service) { s.moduleMetrics = metrics }
 }
 
 func WithCredentialResolver(resolver interface {

@@ -162,7 +162,8 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 		if !expected.Expected {
 			continue
 		}
-		check, err := b.Checks.Get(ctx, "", expected.ServiceName)
+		checkID := sysDeployCheckID(expected.NodeID, expected.ServiceName)
+		check, err := b.Checks.Get(ctx, "", checkID)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health check is not registered"})
 			continue
@@ -170,7 +171,7 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 		if err != nil {
 			return err
 		}
-		results, err := b.Results.Recent(ctx, "", expected.ServiceName, 3)
+		results, err := b.Results.Recent(ctx, "", checkID, 3)
 		if err != nil {
 			return err
 		}
@@ -210,6 +211,10 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 		out.HealthObservations = append(out.HealthObservations, observation)
 	}
 	return nil
+}
+
+func sysDeployCheckID(nodeID, serviceName string) string {
+	return "sysdeploy:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
 }
 
 func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, pipelineIDs []string, now time.Time, out *Context) error {
@@ -285,36 +290,43 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 		if component.FunctionalObservability != doctor.FunctionalObservabilityActive {
 			continue
 		}
-		series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", component.ServiceName, "", "", MaxSeries+1, now)
+		module := strings.TrimPrefix(component.ComponentID, "moox_")
+		lastSuccessMetric := report.ModuleMetricName(module, report.ModuleMetricLastSuccess)
+		lastErrorMetric := report.ModuleMetricName(module, report.ModuleMetricLastError)
+		businessWatermarkMetric := report.ModuleMetricName(module, report.ModuleMetricBusinessWatermark)
+		inputWatermarkMetric := report.ModuleMetricName(module, report.ModuleMetricInputWatermark)
+		runsMetric := report.ModuleMetricName(module, report.ModuleMetricRuns)
+		metricErrorsMetric := report.ModuleMetricName(module, report.ModuleMetricErrors)
+		lastMetricErrorMetric := report.ModuleMetricName(module, report.ModuleMetricLastMetricsError)
+		metricNames := []string{
+			runsMetric, lastSuccessMetric, lastErrorMetric, businessWatermarkMetric,
+			inputWatermarkMetric, metricErrorsMetric, lastMetricErrorMetric,
+		}
+		instanceID := ""
+		if nodeID != "" {
+			instanceID = component.ServiceName + "@" + nodeID
+		}
+		series, err := b.Metrics.Catalog().FindSeriesByMetricNamesAt(
+			ctx,
+			component.ServiceName,
+			instanceID,
+			metricNames,
+			MaxSeries+1,
+			now,
+		)
 		if err != nil {
 			return err
 		}
 		if len(series) > MaxSeries {
 			return fmt.Errorf("Doctor metric series exceeds limit %d", MaxSeries)
 		}
-		canonicalWatermarks := map[string]bool{}
 		for _, item := range series {
-			if item.MetricName != "moox_business_watermark_timestamp_seconds" {
-				continue
-			}
-			labels := map[string]string{}
-			if json.Unmarshal([]byte(item.LabelsJSON), &labels) == nil {
-				canonicalWatermarks[watermarkKey(labels)] = true
-			}
-		}
-		for _, item := range series {
-			if !strings.HasPrefix(item.MetricName, "moox_module_") && item.MetricName != "moox_business_watermark_timestamp_seconds" {
-				continue
-			}
 			labels := map[string]string{}
 			if json.Unmarshal([]byte(item.LabelsJSON), &labels) != nil {
 				continue
 			}
-			if item.MetricName == "moox_module_watermark_timestamp_seconds" && canonicalWatermarks[watermarkKey(labels)] {
-				continue
-			}
 			pipeline := labels["pipeline"]
-			if item.MetricName != "moox_module_metrics_errors_total" && item.MetricName != "moox_module_metrics_last_error_timestamp_seconds" && len(selectedPipelines) > 0 && !selectedPipelines[pipeline] {
+			if item.MetricName != metricErrorsMetric && item.MetricName != lastMetricErrorMetric && len(selectedPipelines) > 0 && !selectedPipelines[pipeline] {
 				continue
 			}
 			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
@@ -324,16 +336,12 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 			age := observationAge(now, latest.ObservedAt)
 			observation := Observation{Kind: "module", ComponentID: component.ComponentID, ServiceName: component.ServiceName, InstanceID: latest.InstanceID, Status: map[bool]string{true: "STALE", false: "FRESH"}[item.IsStale], ObservedAt: latest.ObservedAt, Stale: item.IsStale, Value: latest.Value, AgeSeconds: age, IntervalSeconds: latest.IntervalSeconds, Summary: item.MetricName, DetailsJSON: item.LabelsJSON}
 			out.ModuleObservations = append(out.ModuleObservations, observation)
-			if item.MetricName == "moox_business_watermark_timestamp_seconds" || item.MetricName == "moox_module_watermark_timestamp_seconds" {
-				out.Watermarks = append(out.Watermarks, Watermark{Module: labels["module"], Stage: labels["stage"], Pipeline: pipeline, Value: latest.Value, ObservedAt: latest.ObservedAt, Status: observation.Status})
+			if item.MetricName == businessWatermarkMetric {
+				out.Watermarks = append(out.Watermarks, Watermark{Module: module, Stage: labels["stage"], Pipeline: pipeline, Value: latest.Value, ObservedAt: latest.ObservedAt, Status: observation.Status})
 			}
 		}
 	}
 	return nil
-}
-
-func watermarkKey(labels map[string]string) string {
-	return labels["module"] + "\x00" + labels["stage"] + "\x00" + labels["pipeline"]
 }
 
 func (b Builder) addHosts(ctx context.Context, nodeID string, now time.Time, out *Context) error {

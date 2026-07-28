@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/reporter"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
-	mooxreport "github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -43,9 +41,9 @@ type executeResult struct {
 }
 
 type taskExecutionSummary struct {
-	DataType string `json:"data_type"`
-	Symbol   string `json:"symbol"`
-	Interval string `json:"interval,omitempty"`
+	DataType  string `json:"data_type"`
+	DatasetID string `json:"dataset_id"`
+	Freq      string `json:"freq,omitempty"`
 	sources.CollectResult
 }
 
@@ -111,8 +109,10 @@ func buildCollectHandler(
 		} else {
 			err = c.Collect(ctx, params)
 		}
+		if err == nil {
+			err = sources.ValidateCollectResult(task.DataType, collectResult)
+		}
 		if err != nil {
-			_ = mooxreport.ObserveModuleRun("collector", "collect", "error", "collector-market-data", time.Now())
 			log.ErrorContextf(ctx, "采集失败: taskID=%s, interval=%s, error=%v",
 				task.TaskID, task.Interval, err)
 
@@ -128,7 +128,7 @@ func buildCollectHandler(
 			if reportStatus != nil {
 				reportStatus(
 					ctx, task.SpaceID, task.TaskID, task.JobItemID, task.DeliveryCount,
-					reporter.StatusFailed, err.Error(),
+					reporter.StatusFailed, encodeCollectionFailure(err),
 				)
 				return nil
 			}
@@ -138,25 +138,21 @@ func buildCollectHandler(
 		}
 
 		log.InfoContextf(ctx, "采集成功: taskID=%s, interval=%s", task.TaskID, task.Interval)
+		summary := newTaskExecutionSummary(task, collectResult)
 		if result != nil {
 			result.mu.Lock()
-			result.Tasks = append(result.Tasks, taskExecutionSummary{
-				DataType: task.DataType, Symbol: task.Symbol, Interval: task.Interval,
-				CollectResult: collectResult,
-			})
+			result.Tasks = append(result.Tasks, summary)
 			result.mu.Unlock()
 		}
-		now := time.Now().UTC()
-		_ = mooxreport.ObserveModuleRun("collector", "collect", "success", "collector-market-data", now)
-		// The Collector interface currently reports only terminal status. Do not
-		// use execution time as a business output watermark; a source-closed
-		// timestamp must be supplied by the source contract before this is wired.
-
 		// 定时任务场景：上报成功状态
 		if reportStatus != nil {
+			encoded, encodeErr := json.Marshal(summary)
+			if encodeErr != nil {
+				return fmt.Errorf("encode collection result: %w", encodeErr)
+			}
 			reportStatus(
 				ctx, task.SpaceID, task.TaskID, task.JobItemID, task.DeliveryCount,
-				reporter.StatusSuccess, "",
+				reporter.StatusSuccess, string(encoded),
 			)
 		}
 
@@ -186,7 +182,10 @@ func executeCollectTasks(
 				task.DataSource, task.Market, task.DataType, task.TaskID)
 			if reportStatus != nil {
 				reportStatus(ctx, task.SpaceID, task.TaskID, task.JobItemID, task.DeliveryCount, reporter.StatusFailed,
-					fmt.Sprintf("采集器未找到: source=%s, market=%s, dataType=%s", task.DataSource, task.Market, task.DataType))
+					encodeCollectionFailure(fmt.Errorf(
+						"采集器未找到: source=%s, market=%s, dataType=%s",
+						task.DataSource, task.Market, task.DataType,
+					)))
 			} else {
 				result.mu.Lock()
 				result.HasError = true
@@ -256,7 +255,7 @@ func ExecuteTask(
 		log.WarnContextf(workloadCtx, "[ExecuteTask] %s", errMsg)
 		if err := reportTaskStatus(
 			reportCtx, taskEvent.SpaceID, taskEvent.TaskID, taskEvent.JobItemID, taskEvent.DeliveryCount,
-			reporter.StatusFailed, errMsg,
+			reporter.StatusFailed, encodeCollectionFailure(errors.New(errMsg)),
 		); err != nil {
 			return "", err
 		}
@@ -272,7 +271,7 @@ func ExecuteTask(
 
 	if result.HasError {
 		status = reporter.StatusFailed
-		resultMsg = fmt.Sprintf("部分或全部任务执行失败, lastError=%s", result.LastError)
+		resultMsg = encodeCollectionFailure(errors.New(result.LastError))
 	} else {
 		status = reporter.StatusSuccess
 		payload, err := json.Marshal(map[string]any{
@@ -302,6 +301,38 @@ func ExecuteTask(
 	}
 
 	return resultMsg, nil
+}
+
+func newTaskExecutionSummary(task *collectTask, result sources.CollectResult) taskExecutionSummary {
+	summary := taskExecutionSummary{CollectResult: result}
+	if task == nil {
+		return summary
+	}
+	summary.DataType = strings.ToLower(strings.TrimSpace(task.DataType))
+	summary.DatasetID = strings.TrimSpace(task.DatasetID)
+	if summary.DataType == "kline" {
+		summary.Freq, _ = sources.NormalizeFreq(task.Interval)
+	}
+	return summary
+}
+
+func encodeCollectionFailure(err error) string {
+	summary := ""
+	if err != nil {
+		summary = strings.Join(strings.Fields(err.Error()), " ")
+	}
+	runes := []rune(summary)
+	if len(runes) > 256 {
+		summary = string(runes[:256])
+	}
+	raw, marshalErr := json.Marshal(map[string]string{
+		"error_code":    "COLLECTION_FAILED",
+		"error_summary": summary,
+	})
+	if marshalErr != nil {
+		return `{"error_code":"COLLECTION_FAILED","error_summary":"encode failure"}`
+	}
+	return string(raw)
 }
 
 func normalizeMarket(taskEvent *model.TaskExecuteEvent) string {

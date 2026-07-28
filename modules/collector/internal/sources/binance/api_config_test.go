@@ -47,13 +47,9 @@ func TestKlineCollectorCollectStartsAfterStorageWatermark(t *testing.T) {
 	assert.Equal(t, "space-custom", store.writes[0][0].GetKey().GetSpaceId())
 	assert.Equal(t, "kline-custom", store.writes[0][0].GetKey().GetDatasetId())
 	assert.Equal(t, "BTC-USDT", store.writes[0][0].GetKey().GetTimeSeries().GetSubjectId())
-	assert.Equal(t, 1, result.RowsWritten)
-	require.Len(t, result.WrittenRowKeySamples, 1)
-	assert.Equal(t, "BTC-USDT", result.WrittenRowKeySamples[0].SubjectID)
-	require.NotNil(t, result.StorageReadScope)
-	assert.Equal(t, "kline-custom", result.StorageReadScope.DatasetID)
-	assert.Equal(t, "1m", result.StorageReadScope.Freq)
-	assert.Empty(t, result.ZeroWriteReason)
+	assert.Equal(t, uint64(1), result.RowsWritten)
+	assert.Equal(t, formatKlineTime(watermark.Add(time.Minute)), result.OutputWatermark)
+	assert.Empty(t, result.SnapshotVersion)
 }
 
 func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
@@ -74,9 +70,8 @@ func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, store.writes)
 	assert.Zero(t, result.RowsWritten)
-	assert.Equal(t, "no_new_closed_kline", result.ZeroWriteReason)
-	require.NotNil(t, result.StorageReadScope)
-	assert.Equal(t, "BTC-USDT", result.StorageReadScope.SubjectID)
+	assert.Empty(t, result.OutputWatermark)
+	assert.Empty(t, result.SnapshotVersion)
 }
 
 type fakeKlineStorage struct {

@@ -35,6 +35,8 @@ type MonitorMgrService interface {
 
 	GetOverview(ctx context.Context, req *GetOverviewReq) (*GetOverviewRsp, error)
 
+	GetObservabilityOverview(ctx context.Context, req *GetObservabilityOverviewReq) (*GetObservabilityOverviewRsp, error)
+
 	ListWebhookChannels(ctx context.Context, req *ListWebhookChannelsReq) (*ListWebhookChannelsRsp, error)
 
 	CreateWebhookChannel(ctx context.Context, req *CreateWebhookChannelReq) (*CreateWebhookChannelRsp, error)
@@ -222,6 +224,24 @@ func MonitorMgrService_GetOverview_Handler(svr interface{}, ctx context.Context,
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MonitorMgrService).GetOverview(ctx, reqbody.(*GetOverviewReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_GetObservabilityOverview_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetObservabilityOverviewReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetObservabilityOverview(ctx, reqbody.(*GetObservabilityOverviewReq))
 	}
 
 	var rsp interface{}
@@ -738,6 +758,10 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_GetOverview_Handler,
 		},
 		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetObservabilityOverview",
+			Func: MonitorMgrService_GetObservabilityOverview_Handler,
+		},
+		{
 			Name: "/trpc.moox.monitor.MonitorMgr/ListWebhookChannels",
 			Func: MonitorMgrService_ListWebhookChannels_Handler,
 		},
@@ -879,6 +903,9 @@ func (s *UnimplementedMonitorMgr) ListResults(ctx context.Context, req *ListResu
 func (s *UnimplementedMonitorMgr) GetOverview(ctx context.Context, req *GetOverviewReq) (*GetOverviewRsp, error) {
 	return nil, errors.New("rpc GetOverview of service MonitorMgr is not implemented")
 }
+func (s *UnimplementedMonitorMgr) GetObservabilityOverview(ctx context.Context, req *GetObservabilityOverviewReq) (*GetObservabilityOverviewRsp, error) {
+	return nil, errors.New("rpc GetObservabilityOverview of service MonitorMgr is not implemented")
+}
 func (s *UnimplementedMonitorMgr) ListWebhookChannels(ctx context.Context, req *ListWebhookChannelsReq) (*ListWebhookChannelsRsp, error) {
 	return nil, errors.New("rpc ListWebhookChannels of service MonitorMgr is not implemented")
 }
@@ -981,6 +1008,8 @@ type MonitorMgrClientProxy interface {
 	ListResults(ctx context.Context, req *ListResultsReq, opts ...client.Option) (rsp *ListResultsRsp, err error)
 
 	GetOverview(ctx context.Context, req *GetOverviewReq, opts ...client.Option) (rsp *GetOverviewRsp, err error)
+
+	GetObservabilityOverview(ctx context.Context, req *GetObservabilityOverviewReq, opts ...client.Option) (rsp *GetObservabilityOverviewRsp, err error)
 
 	ListWebhookChannels(ctx context.Context, req *ListWebhookChannelsReq, opts ...client.Option) (rsp *ListWebhookChannelsRsp, err error)
 
@@ -1198,6 +1227,26 @@ func (c *MonitorMgrClientProxyImpl) GetOverview(ctx context.Context, req *GetOve
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetOverviewRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetObservabilityOverview(ctx context.Context, req *GetObservabilityOverviewReq, opts ...client.Option) (*GetObservabilityOverviewRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetObservabilityOverview")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetObservabilityOverview")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetObservabilityOverviewRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

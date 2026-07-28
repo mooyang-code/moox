@@ -892,53 +892,37 @@ export function collectStorageWriteEvidence(jobItems) {
     if (!Array.isArray(tasks) || tasks.length === 0) {
       throw new FatalAssertionError(`successful JobItem ${item.job_item_id || "unknown"} does not contain collection write evidence`);
     }
-    const expectedIntervals = Array.isArray(item.params?.intervals) && item.params.intervals.length > 0
-      ? item.params.intervals.map(String)
-      : [String(item.params?.interval || "")];
-    const actualIntervals = tasks.map((task) => String(task.interval || ""));
-    if (JSON.stringify([...actualIntervals].sort()) !== JSON.stringify([...expectedIntervals].sort())) {
-      throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} task evidence does not match requested intervals`);
+    const expectedFreqs = (Array.isArray(item.params?.intervals) && item.params.intervals.length > 0
+      ? item.params.intervals
+      : [item.params?.interval || ""]).map(expectedKlineFreq);
+    const actualFreqs = tasks.map((task) => String(task.freq || ""));
+    if (JSON.stringify([...actualFreqs].sort()) !== JSON.stringify([...expectedFreqs].sort())) {
+      throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} task evidence does not match requested frequencies`);
     }
     for (const task of tasks) {
       const expectedDataType = String(item.params?.data_type || "");
-      const expectedSymbol = String(item.params?.symbol || "");
-      if (String(task.data_type || "") !== expectedDataType || String(task.symbol || "") !== expectedSymbol) {
-        throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} task evidence does not match requested data_type/symbol`);
+      const expectedDatasetID = String(item.params?.dataset_id || "");
+      if (String(task.data_type || "") !== expectedDataType ||
+          String(task.dataset_id || "") !== expectedDatasetID) {
+        throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} task evidence does not match requested data_type/dataset`);
       }
       const expectedScope = {
         space_id: String(item.params?.space_id || item.space_id || ""),
-        dataset_id: String(item.params?.dataset_id || ""),
-        subject_id: String(item.params?.subject_id || expectedSymbol),
-        freq: expectedKlineFreq(task.interval),
+        dataset_id: expectedDatasetID,
+        subject_id: String(item.params?.subject_id || item.params?.symbol || ""),
+        freq: String(task.freq || ""),
       };
-      if (JSON.stringify(stableJSON(task.storage_read_scope || {})) !== JSON.stringify(stableJSON(expectedScope))) {
-        throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} Storage read scope does not match its request`);
-      }
       const count = Number(task.rows_written);
       if (!Number.isInteger(count) || count < 0) {
         throw new FatalAssertionError(`invalid rows_written in JobItem ${item.job_item_id || "unknown"}: ${task.rows_written}`);
       }
       rowsWritten += count;
-      if (count === 0 && task.zero_write_reason !== "no_new_closed_kline") {
-        throw new FatalAssertionError(`zero-write JobItem ${item.job_item_id || "unknown"} is missing an accepted reason`);
-      }
       if (count > 0) {
-        const samples = task.written_row_key_samples || [];
-        if (samples.length === 0) {
-          throw new FatalAssertionError(`positive JobItem ${item.job_item_id || "unknown"} does not contain written RowKey samples`);
+        const outputWatermark = String(task.output_watermark || "");
+        if (!outputWatermark || Number.isNaN(new Date(outputWatermark).getTime())) {
+          throw new FatalAssertionError(`positive JobItem ${item.job_item_id || "unknown"} is missing a valid output_watermark`);
         }
-        for (const key of samples) {
-          const scope = {
-            space_id: key.space_id,
-            dataset_id: key.dataset_id,
-            subject_id: key.subject_id,
-            freq: key.freq,
-          };
-          if (!key.data_time || JSON.stringify(stableJSON(scope)) !== JSON.stringify(stableJSON(expectedScope))) {
-            throw new FatalAssertionError(`JobItem ${item.job_item_id || "unknown"} contains an out-of-scope written RowKey`);
-          }
-        }
-        writtenKeys.push(...samples);
+        writtenKeys.push({ ...expectedScope, data_time: outputWatermark });
       }
     }
   }

@@ -1,6 +1,15 @@
 package store
 
-import "gorm.io/gorm"
+import (
+	"errors"
+
+	"gorm.io/gorm"
+)
+
+var (
+	ErrResourceReferenced = errors.New("resource is still referenced")
+	ErrInvalidReference   = errors.New("referenced resource is missing or disabled")
+)
 
 // Repositories is the monitor control-plane persistence graph. Bootstrap
 // creates it once and injects the individual capabilities into services,

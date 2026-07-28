@@ -133,7 +133,7 @@ func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID
 	}
 	if failed {
 		telemetry.Rebalances.WithLabelValues("failed").Inc()
-		telemetry.RecordModuleStage("rebalance", "error", time.Time{})
+		s.observeModuleStage("rebalance", "error", time.Time{})
 		_ = s.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpdateRebalanceRun(space, runID, "FAILED", "{}") })
 		return "FAILED", nil
 	}
@@ -173,7 +173,7 @@ func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID
 	if all {
 		status = "COMPLETED"
 		telemetry.Rebalances.WithLabelValues("completed").Inc()
-		telemetry.RecordModuleStage("rebalance", "success", time.Time{})
+		s.observeModuleStage("rebalance", "success", time.Time{})
 	}
 	_ = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		residual := "{}"
@@ -186,4 +186,18 @@ func (s Service) Advance(ctx context.Context, space, runID, accountID, channelID
 		return nil
 	})
 	return status, nil
+}
+
+func (s Service) observeModuleStage(stage, result string, watermark time.Time) {
+	if s.Store == nil || s.Store.ModuleMetrics() == nil {
+		return
+	}
+	metrics := s.Store.ModuleMetrics()
+	_ = metrics.ObserveRun(stage, result, "trade-rebalance", time.Now())
+	if !watermark.IsZero() {
+		_ = metrics.AdvanceInputWatermark(stage, "trade-rebalance", watermark)
+		if result == "success" {
+			_ = metrics.AdvanceWatermark(stage, "trade-rebalance", watermark)
+		}
+	}
 }

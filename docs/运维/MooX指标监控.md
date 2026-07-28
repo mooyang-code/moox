@@ -65,7 +65,11 @@ export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200
 
 发布使用一个共享 `metrics-publisher` 发布角色和一个独立 `monitor-metrics-consumer` 消费角色。Publisher 只能发布 metrics snapshot；Monitor consumer 只订阅固定 metrics/host topic 和 durable。Monitor 为单实例，不能复用 Publisher 凭据消费，也不通过多实例抢占 durable。
 
-Collector、CloudNode、Factor、Strategy、Trade、Archive 使用固定低基数 `moox_module_*` 指标和 `config/monitor-pipelines.yaml` 白名单水位。穿过 Storage 的功能 pipeline 当前显式延期，不从相邻模块水位推断 Storage 已正确处理。
+Collector、CloudNode、Factor、Strategy、Trade、Archive 使用固定低基数
+`moox_<module>_*` 指标和代码内置的 pipeline 注册表。只有具备同一业务时间域的权威输入、输出时间时
+才生成 pipeline lag 检查；Collector、Factor 的实时连续性按启用中的 Dataset + Frequency 独立判断，
+不把多个时序汇总成一个模块水位。穿过 Storage 的功能 pipeline 当前显式延期，不从相邻模块水位
+推断 Storage 已正确处理。
 
 ## 看板和规则
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -57,14 +58,15 @@ type ServiceAuthConfig struct {
 
 // SyncConfig 定时同步配置。
 type SyncConfig struct {
-	Enabled          bool `yaml:"enabled"`
-	SyncBalances     bool `yaml:"sync_balances"`
-	SyncPositions    bool `yaml:"sync_positions"`
-	SyncOrders       bool `yaml:"sync_orders"`
-	SyncTrades       bool `yaml:"sync_trades"`
-	WindowHours      int  `yaml:"window_hours"`
-	PageSize         int  `yaml:"page_size"`
-	MaxSymbolsPerRun int  `yaml:"max_symbols_per_run"`
+	Enabled          bool     `yaml:"enabled"`
+	SyncBalances     bool     `yaml:"sync_balances"`
+	SpaceIDs         []string `yaml:"space_ids"`
+	SyncPositions    bool     `yaml:"sync_positions"`
+	SyncOrders       bool     `yaml:"sync_orders"`
+	SyncTrades       bool     `yaml:"sync_trades"`
+	WindowHours      int      `yaml:"window_hours"`
+	PageSize         int      `yaml:"page_size"`
+	MaxSymbolsPerRun int      `yaml:"max_symbols_per_run"`
 }
 
 // LogConfig 日志配置。
@@ -114,6 +116,7 @@ func DefaultConfig() *AppConfig {
 		Sync: SyncConfig{
 			Enabled:          true,
 			SyncBalances:     true,
+			SpaceIDs:         []string{"crypto"},
 			SyncPositions:    true,
 			SyncOrders:       true,
 			SyncTrades:       true,
@@ -206,6 +209,25 @@ func (c *AppConfig) Validate() error {
 	}
 	if c.Sync.MaxSymbolsPerRun <= 0 {
 		c.Sync.MaxSymbolsPerRun = 10
+	}
+	if c.Sync.Enabled && c.Sync.SyncBalances {
+		spaces := make([]string, 0, len(c.Sync.SpaceIDs))
+		seen := map[string]struct{}{}
+		for _, spaceID := range c.Sync.SpaceIDs {
+			spaceID = strings.TrimSpace(spaceID)
+			if spaceID == "" {
+				continue
+			}
+			if _, ok := seen[spaceID]; ok {
+				continue
+			}
+			seen[spaceID] = struct{}{}
+			spaces = append(spaces, spaceID)
+		}
+		if len(spaces) == 0 {
+			return fmt.Errorf("sync space_ids are required when balance sync is enabled")
+		}
+		c.Sync.SpaceIDs = spaces
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":11210"

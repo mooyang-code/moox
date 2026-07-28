@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -15,17 +16,19 @@ func TestBuiltInEvents(t *testing.T) {
 	}
 	want := []string{
 		"cloudnode.job.execution.requested@1",
-		"metrics.host.reported@1",
-		"metrics.snapshot.reported@1",
+		"observability.health.check.reported@1",
+		"observability.host.snapshot.reported@1",
+		"observability.metrics.snapshot.reported@1",
 		"storage.dataset.rows.upserted@1",
 		"trade.rebalance.requested@1",
 	}
 	wantOwners := map[string]string{
-		"cloudnode.job.execution.requested@1": "cloudnode",
-		"metrics.host.reported@1":             "hostagent",
-		"metrics.snapshot.reported@1":         "service",
-		"storage.dataset.rows.upserted@1":     "storage",
-		"trade.rebalance.requested@1":         "strategy",
+		"cloudnode.job.execution.requested@1":       "cloudnode",
+		"observability.health.check.reported@1":     "watchdog",
+		"observability.host.snapshot.reported@1":    "hostagent",
+		"observability.metrics.snapshot.reported@1": "service",
+		"storage.dataset.rows.upserted@1":           "storage",
+		"trade.rebalance.requested@1":               "strategy",
 	}
 	events := registry.Events()
 	if len(events) != len(want) {
@@ -44,6 +47,26 @@ func TestBuiltInEvents(t *testing.T) {
 		if family, err := registry.FamilyPattern(event); err != nil || family == "" {
 			t.Fatalf("event %s family = %q, err=%v", want[i], family, err)
 		}
+	}
+}
+
+func TestObservabilityEventsShareOneStream(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	for _, event := range []Event{
+		ObservabilityMetricsSnapshotReported,
+		ObservabilityHostSnapshotReported,
+		ObservabilityHealthCheckReported,
+	} {
+		require.Equal(t, "MOOX_OBSERVABILITY", event.Stream())
+		family, err := registry.FamilyPattern(event)
+		require.NoError(t, err)
+		require.Contains(t, family, "moox.observability.")
+	}
+	for _, event := range registry.Events() {
+		require.NotEqual(t, "MOOX_METRICS", event.Stream())
+		require.NotEqual(t, "metrics.host.reported", event.Name())
+		require.NotEqual(t, "metrics.snapshot.reported", event.Name())
 	}
 }
 

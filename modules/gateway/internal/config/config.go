@@ -19,6 +19,7 @@ const (
 	NativeServiceAddress             = "127.0.0.1:11003"
 	PublicNativeServiceAddress       = "0.0.0.0:11003"
 	HealthAddress                    = "127.0.0.1:11012"
+	PublicHealthAddress              = "0.0.0.0:11012"
 	DefaultMaxBodyBytes        int64 = 4 << 20
 )
 
@@ -129,8 +130,8 @@ func Validate(cfg Config) error {
 	if cfg.Server.NativeAddr != NativeServiceAddress && cfg.Server.NativeAddr != PublicNativeServiceAddress {
 		return fmt.Errorf("server.native_addr must be %s or %s", NativeServiceAddress, PublicNativeServiceAddress)
 	}
-	if cfg.Server.HealthAddr != HealthAddress {
-		return fmt.Errorf("server.health_addr must be %s", HealthAddress)
+	if cfg.Server.HealthAddr != HealthAddress && cfg.Server.HealthAddr != PublicHealthAddress {
+		return fmt.Errorf("server.health_addr must be %s or %s", HealthAddress, PublicHealthAddress)
 	}
 	if cfg.ControlPlane.BaseURL == "" {
 		return errors.New("control_plane.base_url is required")

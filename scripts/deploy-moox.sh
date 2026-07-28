@@ -154,7 +154,7 @@ apply_profile() {
       WITH_COLLECTOR=1
       WITH_FACTOR=0
       WITH_STRATEGY=0
-      WITH_MONITOR=0
+      WITH_MONITOR=1
       ;;
     storage)
       WITH_ADMIN=0
@@ -848,7 +848,7 @@ patch_configs() {
   GATEWAY_CONTROL_URL_YAML="${gateway_control_url_yaml}" perl -0pi -e 's#id:\s*gateway-gz-122#id: '"${NODE_ID}"'#; s#base_url:\s*https://admin\.example\.com#base_url: $ENV{GATEWAY_CONTROL_URL_YAML}#; s#hmac_key_file:\s*\./secrets/gateway-control\.key#hmac_key_file: ../../secrets/gateway-control.key#; s#hmac_key_file:\s*\./secrets/gateway-service\.key#hmac_key_file: ../../secrets/gateway-service.key#; s#path:\s*\./data/gateway#path: ../../data/gateway#' \
     "${STAGE_DIR}/gateway/config/app.yaml"
   if [[ "${WITH_GATEWAY}" -eq 1 && "${WITH_CLOUDNODE}" -eq 1 ]]; then
-    perl -0pi -e 's#native_addr:\s*127\.0\.0\.1:11003#native_addr: 0.0.0.0:11003#' \
+    perl -0pi -e 's#native_addr:\s*127\.0\.0\.1:11003#native_addr: 0.0.0.0:11003#; s#health_addr:\s*127\.0\.0\.1:11012#health_addr: 0.0.0.0:11012#' \
       "${STAGE_DIR}/gateway/config/app.yaml"
   fi
   if grep -q '^  ca_file:' "${STAGE_DIR}/gateway/config/app.yaml"; then
@@ -1008,6 +1008,14 @@ read_env_value() {
   printf '%s' "${value}"
 }
 
+MSGBOX_ENV=()
+if [[ -r "${ROOT}/secrets/msgbox.env" ]]; then
+  msgbox_wecom_webhook=$(bash -c 'set -u; source "$1"; printf "%s" "${MOOX_MSGBOX_WECOM_WEBHOOK-}"' _ "${ROOT}/secrets/msgbox.env")
+  if [[ -n "${msgbox_wecom_webhook}" ]]; then
+    MSGBOX_ENV+=("MOOX_MSGBOX_WECOM_WEBHOOK=${msgbox_wecom_webhook}")
+  fi
+fi
+
 GATEWAY_CONTROL_ENV=(
   "MOOX_GATEWAY_CONTROL_KEY_ID=$(read_env_value "${ROOT}/secrets/gateway-control.env" MOOX_GATEWAY_CONTROL_KEY_ID)"
   "MOOX_GATEWAY_CONTROL_SECRET_KEY=$(read_env_value "${ROOT}/secrets/gateway-control.env" MOOX_GATEWAY_CONTROL_SECRET_KEY)"
@@ -1054,6 +1062,13 @@ WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
 PUBLIC_HOST="${MOOX_PUBLIC_HOST:-__PUBLIC_HOST__}"
+SCF_SENTINEL_ENV=()
+if [[ -n "${PUBLIC_HOST}" ]]; then
+  SCF_SENTINEL_ENV=(
+    "MOOX_MONITOR_READY_URL=http://${PUBLIC_HOST}:11409/readyz"
+    "MOOX_GATEWAY_READY_URL=http://${PUBLIC_HOST}:11012/readyz"
+  )
+fi
 SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-__SCF_SERVICE_GATEWAY_TARGET__}"
 SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-__SCF_STORAGE_RPC_GATEWAY_TARGET__}"
 if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
@@ -1498,12 +1513,14 @@ start_storage_process() {
 	local name="$1"
 	local binary="$2"
 	local trpc_conf="$3"
-	local storage_conf="$4"
-	gateway_service_env_for "${name}"
-	local role="${name#storage-}"
-	start_service "${name}" "${ROOT}/storage" \
-    env \
-      "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+		local storage_conf="$4"
+		gateway_service_env_for "${name}"
+		runtime_identity_env "${name}" "${ROOT}/storage/config/${trpc_conf}"
+		local role="${name#storage-}"
+		start_service "${name}" "${ROOT}/storage" \
+	    env \
+	      "${RUNTIME_IDENTITY_ENV[@]}" \
+	      "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_OTEL_SERVICE_NAME=moox-${name}" \
       "STORAGE_CONFIG_PATH=${ROOT}/storage/config" \
       "MOOX_STORAGE_CONFIG=${ROOT}/storage/config/${storage_conf}" \
@@ -1562,8 +1579,9 @@ start_storage_primary() {
 
 start_storage_view() {
   gateway_service_env_for storage-view
+  runtime_identity_env storage-view "${ROOT}/storage-view/config/trpc_go.yaml"
   start_service "storage-view" "${ROOT}/storage-view" \
-    env "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_OTEL_SERVICE_NAME=moox-storage-view" \
       "MOOX_GATEWAY_CALLER=storage-view" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
       "MOOX_SERVICE_GATEWAY_TARGET=ip://127.0.0.1:11003" \
@@ -1689,7 +1707,7 @@ start_cloudnode() {
   gateway_service_env_for cloudnode
   runtime_identity_env moox_cloudnode "${ROOT}/cloudnode/config/app.yaml"
   start_service "cloudnode" "${ROOT}/cloudnode" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "${MSGBOX_ENV[@]}" "${SCF_SENTINEL_ENV[@]}" \
       "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_SERVICE_GATEWAY_HTTP_URL=http://127.0.0.1:11002" \
       "MOOX_SCF_SERVICE_GATEWAY_TARGET=${SCF_SERVICE_GATEWAY_TARGET}" \
@@ -1749,7 +1767,7 @@ start_monitor() {
   gateway_service_env_for monitor
   runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"
   start_service "monitor" "${ROOT}/monitor" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "${MSGBOX_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
 
 start_web_host() {
@@ -2377,6 +2395,9 @@ prepare_stage() {
     "${STAGE_DIR}/logs" \
     "${STAGE_DIR}/run"
   mkdir -p "${STAGE_DIR}/secrets" "${STAGE_DIR}/certs/gateway"
+  if [[ -n "${MOOX_MSGBOX_WECOM_WEBHOOK+x}" ]]; then
+    (umask 077; printf 'MOOX_MSGBOX_WECOM_WEBHOOK=%q\n' "${MOOX_MSGBOX_WECOM_WEBHOOK}" >"${STAGE_DIR}/secrets/msgbox.env.next")
+  fi
   local gateway_control_secret gateway_service_secret
   if [[ "${AUTO_GATEWAY_INPUTS}" -eq 1 ]]; then
     gateway_control_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" gateway-control)"
@@ -2586,6 +2607,10 @@ EOF
   fi
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/monitor/config/." "${STAGE_DIR}/monitor/config/"
+    if [[ -n "${PUBLIC_HOST}" ]]; then
+      perl -pi -e 'if (/name:\s*trpc\.moox\.monitor\.Health/) { $health = 1 } elsif ($health && /ip:\s*127\.0\.0\.1/) { s#127\.0\.0\.1#0.0.0.0#; $health = 0 }' \
+        "${STAGE_DIR}/monitor/config/trpc_go.yaml"
+    fi
   fi
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/storage/config/." "${STAGE_DIR}/storage/config/"
@@ -2783,6 +2808,9 @@ sync_local_stage() {
   done
   install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
   install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/gateway-credentials.json"
+  if [[ -f "${STAGE_DIR}/secrets/msgbox.env.next" ]]; then
+    install -m 0600 "${STAGE_DIR}/secrets/msgbox.env.next" "${deploy_dir}/secrets/msgbox.env"
+  fi
   install -m 0644 "${STAGE_DIR}/certs/gateway/peers.pem" "${deploy_dir}/certs/gateway/peers.pem"
   if [[ "${WITH_ADMIN}" -eq 0 ]]; then
     rm -f "${deploy_dir}/secrets/admin-jwt.env"
@@ -2996,6 +3024,10 @@ if [[ "${WITH_STORAGE}" == "1" ]]; then
 fi
 tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"
+if [[ -f "${DEPLOY_DIR}/secrets/msgbox.env.next" ]]; then
+  mv -f "${DEPLOY_DIR}/secrets/msgbox.env.next" "${DEPLOY_DIR}/secrets/msgbox.env"
+  chmod 0600 "${DEPLOY_DIR}/secrets/msgbox.env"
+fi
 if [[ "${WITH_ADMIN}" == "0" ]]; then
   rm -f "${DEPLOY_DIR}/secrets/admin-jwt.env"
 fi

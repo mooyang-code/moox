@@ -32,6 +32,10 @@ public_address = ""
 port = 4222
 tls_enabled = true
 
+# 留空时仍采集和展示监控数据，但不发送站外告警。
+[monitoring]
+wecom_webhook = ""
+
 [control_host]
 name = "control"
 address = ""
@@ -58,12 +62,26 @@ password = ""
 TLS。用户不填写 EventBus 账号、token、CA 或私钥；MooX 在部署时生成这些材料以及
 `cloudnode-worker.yaml`。
 
+`monitoring.wecom_webhook` 是唯一需要用户提前填写的监控专用信息。填写企微群机器人
+HTTPS webhook 后，部署会以 mode `0600` 的运行时环境文件交给 Monitor；留空不会
+关闭监控采集、查询和规则计算，只是不发送站外告警。
+
+不在 `custom.toml` 中重复登记标准微服务、健康检查 URL、指标 subject 或实时
+Dataset + Frequency。标准服务由 SysDeploy 默认清单维护；所有启用中的实时
+TimeSeries Dataset + Frequency 由 Monitor 从 Collector 规则和 Factor binding
+自动刷新。用户自行增加的非标准服务，应在控制面就绪后注册到 SysDeploy，而不是写进
+初始化清单。
+
 Only `control_host` determines the first control-plane deployment. `compile_host`
 is optional, is used only by `scripts/build-storage-linux.sh` for native Linux
 CGO builds, and is not a service-placement target. The native builder uses the
 local SSH key/agent and the trusted host-key store; its `password` field is not
 used by the shell transport. `other_hosts` are imported as available hosts, but
-later service placement is decided after Admin is working.
+later service placement is decided after Admin is working. `control_host` and
+every `other_hosts` entry are also the physical-server inventory for monitoring;
+`compile_host` is not monitored unless it is also registered as a deployment host.
+注册主机不会代替安装 HostAgent；需要采集 CPU、内存、磁盘的部署主机仍应按
+`references/host-agent.md` 安装并启动 HostAgent。
 
 ## Phase 1: custom.toml And Control Initialization
 

@@ -20,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -65,9 +66,17 @@ func (a *App) Run(ctx context.Context) error {
 	if err := w.Recover(ctx); err != nil {
 		return err
 	}
+	var moduleMetrics *report.ModuleMetrics
+	if a.Server != nil {
+		moduleMetrics, err = registerMetricsReporter(a.Server)
+		if err != nil {
+			return err
+		}
+	}
 	materializer := writer.Scheduler{
 		Writer: w, PendingRows: a.Config.Archive.Materialize.PendingRows,
 		DedupeRetention: a.Config.Archive.EventBus.DedupeRetention,
+		ModuleMetrics:   moduleMetrics,
 	}
 	var cosSyncer archiveCOSSyncer
 	if a.Config.Archive.COS.Enabled {
@@ -82,9 +91,6 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if a.Server != nil {
 		if err := registerArchiveTimers(a.Server, materializer, cosSyncer); err != nil {
-			return err
-		}
-		if err := registerMetricsReporter(a.Server); err != nil {
 			return err
 		}
 	}

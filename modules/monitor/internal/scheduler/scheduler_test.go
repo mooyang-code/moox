@@ -10,7 +10,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestSchedulerRunDueOnce(t *testing.T) {
@@ -22,6 +24,7 @@ func TestSchedulerRunDueOnce(t *testing.T) {
 
 	createCheck(t, checkRepo, domain.Check{CheckID: "enabled", Enabled: true, NextCheckAt: &dueAt})
 	createCheck(t, checkRepo, domain.Check{CheckID: "disabled", Enabled: false, NextCheckAt: &dueAt})
+	createCheck(t, checkRepo, domain.Check{CheckID: "external", Kind: domain.CheckKindExternal, Enabled: true, NextCheckAt: &dueAt})
 
 	s := New(mgr.Repositories(), Options{
 		InstanceID:     "monitor-a",
@@ -86,6 +89,40 @@ func TestSchedulerConcurrencyCap(t *testing.T) {
 	}
 	if maxSeen > 2 {
 		t.Fatalf("max concurrency = %d, want <= 2", maxSeen)
+	}
+}
+
+func TestSchedulerUpdatesWatchdogMetricsAfterPersist(t *testing.T) {
+	ctx := context.Background()
+	mgr := openSchedulerDB(t)
+	dueAt := time.Now().Add(-time.Second)
+	createCheck(t, mgr.Repositories().Checks, domain.Check{CheckID: "ready", Kind: domain.CheckKindHTTP, Enabled: true, NextCheckAt: &dueAt})
+	registry := prometheus.NewRegistry()
+	metrics, err := watchdog.NewMetrics(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(mgr.Repositories(), Options{
+		Runner: runnerFunc(func(context.Context, domain.Check) domain.CheckResult {
+			return domain.CheckResult{Success: true, LatencyMS: 25}
+		}),
+		Watchdog: metrics,
+	})
+	if _, err := s.RunDueOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, family := range families {
+		if family.GetName() == "moox_monitor_watchdog_checks_total" && len(family.GetMetric()) == 1 && family.GetMetric()[0].GetCounter().GetValue() == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("watchdog success counter was not observed")
 	}
 }
 

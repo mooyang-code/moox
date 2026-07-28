@@ -39,7 +39,7 @@ func TestRunBootstrapInventory(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "components.yaml.sha256"), []byte(releaseManifest.Checksum), 0o600))
 	require.NoError(t, os.WriteFile(seedPath, []byte(seed), 0o600))
-	require.NoError(t, os.WriteFile(pipelinePath, []byte("version: 1\npipelines: []\n"), 0o600))
+	require.NoError(t, os.WriteFile(pipelinePath, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n  overrides: []\n"), 0o600))
 	report, err := RunBootstrap(context.Background(), BootstrapOptions{NodeID: "node-a", LocalNodeID: "node-a", ReleaseRoot: root, SeedPath: seedPath, PipelinePath: pipelinePath, CheckIDs: []string{"bootstrap.inventory"}, Client: deploymentClientStub{rows: rows}})
 	require.NoError(t, err)
 	require.Equal(t, core.ConclusionHealthy, report.Conclusion)
@@ -75,8 +75,10 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 
 func TestReporterFailureGateUsesRecentErrorTimestamp(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	body := []byte("moox_metrics_report_errors_total{service=\"moox_factor\"} 4\nmoox_metrics_report_last_error_timestamp_seconds{service=\"moox_factor\"} 800\n")
+	body := []byte("moox_factor_report_errors_total 4\nmoox_factor_report_last_error_timestamp_seconds 800\n")
 	require.False(t, reporterHasRecentFailure(body, now))
-	recent := []byte("moox_metrics_report_errors_total{service=\"moox_factor\"} 5\nmoox_metrics_report_last_error_timestamp_seconds{service=\"moox_factor\"} 999\n")
+	recent := []byte("moox_factor_report_errors_total 5\nmoox_factor_report_last_error_timestamp_seconds 999\n")
 	require.True(t, reporterHasRecentFailure(recent, now))
+	moduleRecent := []byte("moox_factor_metrics_errors_total{operation=\"run\"} 1\nmoox_factor_metrics_last_error_timestamp_seconds 999\n")
+	require.True(t, reporterHasRecentFailure(moduleRecent, now))
 }

@@ -56,6 +56,17 @@ func TestLoad_HostNameOverride_ShouldTrimValue(t *testing.T) {
 	assert.Equal(t, "腾讯云-香港", cfg.HostName)
 }
 
+func TestLoad_HealthAddressEnvironmentOverride(t *testing.T) {
+	t.Setenv("MOOX_HOST_AGENT_HEALTH_ADDR", " 0.0.0.0:11425 ")
+	path := filepath.Join(t.TempDir(), "hostagent.yaml")
+	content := "health_addr: 127.0.0.1:11425\nidentity_path: identity.yaml\neventbus_config: eventbus.yaml\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "0.0.0.0:11425", cfg.HealthAddr)
+}
+
 func TestLoad_MissingRequiredPaths_ShouldReturnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hostagent.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("identity_path: \"\"\neventbus_config: \"\"\n"), 0o600))

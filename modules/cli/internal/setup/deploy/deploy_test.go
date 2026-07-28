@@ -37,7 +37,7 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 	require.Equal(t, []string{
 		"package", "upload", "install", "start", "admin_ready", "setup_ready",
 		"gateway_ready", "eventbus_ready", "cloudnode_ready", "collector_ready",
-		"web_ready", "browser_https_ready", "ca", "finalize", "cleanup",
+		"monitor_ready", "web_ready", "browser_https_ready", "ca", "finalize", "cleanup",
 	}, events)
 	require.Equal(t, remoteArchiveNext, transport.uploadPath)
 	require.Equal(t, fs.FileMode(0o600), transport.uploadMode)
@@ -113,9 +113,43 @@ func TestEventBusCommandEnvPreservesBaseAndAddsEndpoint(t *testing.T) {
 	require.Contains(t, env, "MOOX_EVENTBUS_PORT=4333")
 }
 
+func TestMonitoringCommandEnvOverridesAmbientWebhook(t *testing.T) {
+	env := monitoringCommandEnv([]string{
+		"MOOX_MSGBOX_WECOM_WEBHOOK=https://example.test/ambient",
+		"PATH=/bin",
+	}, "")
+	require.NotContains(t, env, "MOOX_MSGBOX_WECOM_WEBHOOK=https://example.test/ambient")
+	require.Contains(t, env, "MOOX_MSGBOX_WECOM_WEBHOOK=")
+	require.Contains(t, env, "PATH=/bin")
+}
+
 func TestEventBusCommandEnvRejectsIncompleteEndpoint(t *testing.T) {
 	_, err := eventBusCommandEnv(nil, Options{EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222})
 	require.EqualError(t, err, "control_deploy_invalid")
+}
+
+func TestCommandPackagerPassesMonitoringWebhook(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts"), 0o700))
+	script := `#!/bin/sh
+set -eu
+test "$MOOX_MSGBOX_WECOM_WEBHOOK" = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --archive ]; then printf package >"$2"; exit 0; fi
+  shift
+done
+exit 2
+`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte(script), 0o700))
+
+	archive, err := (CommandPackager{}).Package(context.Background(), Options{
+		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
+		MonitoringWeComWebhook: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
+	})
+	require.NoError(t, err)
+	defer os.Remove(archive)
+	require.Equal(t, "package", string(requireFile(t, archive)))
 }
 
 func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {

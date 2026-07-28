@@ -2,10 +2,14 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
+	"github.com/mooyang-code/moox/modules/collector/internal/reporter"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,6 +35,7 @@ func TestReportTaskStatusReturnsReporterError(t *testing.T) {
 type stubCollector struct {
 	err    error
 	params *sources.CollectParams
+	result sources.CollectResult
 }
 
 func (s *stubCollector) Source() string   { return "stub" }
@@ -41,7 +46,7 @@ func (s *stubCollector) Collect(_ context.Context, params *sources.CollectParams
 }
 func (s *stubCollector) CollectWithResult(ctx context.Context, params *sources.CollectParams) (sources.CollectResult, error) {
 	err := s.Collect(ctx, params)
-	return sources.CollectResult{RowsWritten: 1}, err
+	return s.result, err
 }
 
 func TestNormalizeMarket(t *testing.T) {
@@ -67,7 +72,9 @@ func TestExecuteTask_WithStubCollector(t *testing.T) {
 	}
 	t.Cleanup(func() { sendTaskStatus = old })
 
-	collector := &stubCollector{}
+	collector := &stubCollector{result: sources.CollectResult{
+		RowsWritten: 1, SnapshotVersion: "snapshot-v1",
+	}}
 	require.NoError(t, sources.GetRegistry().Register(&sources.CollectorDescriptor{
 		Source: "stubex", Market: "spot", DataType: "symbol", Collector: collector,
 	}))
@@ -79,10 +86,85 @@ func TestExecuteTask_WithStubCollector(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, msg, "成功")
 	assert.Contains(t, msg, `"rows_written":1`)
+	assert.Contains(t, msg, `"data_type":"symbol"`)
+	assert.Contains(t, msg, `"dataset_id":"symbols-custom"`)
+	assert.NotContains(t, msg, `"symbol":`)
 	assert.Equal(t, "item-1", reportedJobItemID)
 	assert.Equal(t, uint64(3), reportedDeliveryCount)
 	require.NotNil(t, collector.params)
 	assert.Equal(t, "symbols-custom", collector.params.DatasetID)
+}
+
+func TestValidateCollectResultMatrix(t *testing.T) {
+	watermark := time.Date(2026, 7, 28, 1, 2, 3, 0, time.UTC).Format(time.RFC3339Nano)
+	for _, test := range []struct {
+		name     string
+		dataType string
+		result   sources.CollectResult
+		wantErr  string
+	}{
+		{name: "kline empty", dataType: "kline"},
+		{name: "kline write", dataType: "kline", result: sources.CollectResult{RowsWritten: 1, OutputWatermark: watermark}},
+		{name: "kline missing watermark", dataType: "kline", result: sources.CollectResult{RowsWritten: 1}, wantErr: "output_watermark"},
+		{name: "kline invalid watermark", dataType: "kline", result: sources.CollectResult{RowsWritten: 1, OutputWatermark: "yesterday"}, wantErr: "RFC3339"},
+		{name: "symbol write", dataType: "symbol", result: sources.CollectResult{RowsWritten: 1, SnapshotVersion: "snapshot-v1"}},
+		{name: "symbol missing version", dataType: "symbol", result: sources.CollectResult{RowsWritten: 1}, wantErr: "snapshot_version"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := sources.ValidateCollectResult(test.dataType, test.result)
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
+func TestBuildCollectHandlerScheduledSuccessReportsEncodedSummary(t *testing.T) {
+	watermark := time.Date(2026, 7, 28, 1, 2, 3, 0, time.UTC).Format(time.RFC3339Nano)
+	collector := &stubCollector{result: sources.CollectResult{
+		RowsWritten: 2, OutputWatermark: watermark,
+	}}
+	task := &collectTask{
+		SpaceID: "crypto", DatasetID: "market_kline", TaskID: "task-1", JobItemID: "item-1",
+		DataType: "kline", Interval: "1m",
+	}
+	var status int
+	var encoded string
+	handler := buildCollectHandler(context.Background(), task, collector, &executeResult{},
+		func(_ context.Context, _, _, _ string, _ uint64, gotStatus int, result string) {
+			status, encoded = gotStatus, result
+		})
+
+	require.NoError(t, handler())
+	assert.Equal(t, reporter.StatusSuccess, status)
+	assert.NotEmpty(t, encoded)
+	assert.JSONEq(t, `{
+		"data_type":"kline",
+		"dataset_id":"market_kline",
+		"freq":"1m",
+		"rows_written":2,
+		"output_watermark":"2026-07-28T01:02:03Z"
+	}`, encoded)
+}
+
+func TestBuildCollectHandlerScheduledFailureReportsBoundedError(t *testing.T) {
+	collector := &stubCollector{err: errors.New(strings.Repeat("secret ", 100))}
+	task := &collectTask{
+		SpaceID: "crypto", DatasetID: "market_kline", TaskID: "task-1", JobItemID: "item-1",
+		DataType: "kline", Interval: "1m",
+	}
+	var encoded string
+	handler := buildCollectHandler(context.Background(), task, collector, &executeResult{},
+		func(_ context.Context, _, _, _ string, _ uint64, _ int, result string) { encoded = result })
+
+	require.NoError(t, handler())
+	var payload map[string]string
+	require.NoError(t, json.Unmarshal([]byte(encoded), &payload))
+	assert.Equal(t, "COLLECTION_FAILED", payload["error_code"])
+	assert.LessOrEqual(t, len(payload["error_summary"]), 256)
+	assert.Len(t, payload, 2)
 }
 
 func TestExecuteTaskReportsFailureOnlyOnFinalDeliveryWithReservedContext(t *testing.T) {

@@ -33,6 +33,7 @@ var (
 	registerCloudFunction = serverless.RegisterCloudFunction
 	runTaskRunner         = taskrunner.Run
 	runConfiguredRunner   = taskrunner.RunConfigured
+	startObservability    = startSCFObservabilityServer
 )
 
 func main() {
@@ -118,6 +119,9 @@ func startProductionRuntime(ctx context.Context, cfg *runtimeapp.AppConfig) erro
 	}
 	if err := initializeRuntime(ctx, cfg); err != nil {
 		return err
+	}
+	if _, err := startObservability(ctx); err != nil {
+		return fmt.Errorf("start SCF observability timer: %w", err)
 	}
 	go func() {
 		runResidentTaskRunner(ctx, runTaskRunner, residentRunnerRetryDelay)

@@ -12,7 +12,12 @@ func (r *CatalogRepository) FindNodeForInvocation(ctx context.Context, spaceID s
 	if strings.TrimSpace(spaceID) == "" {
 		return nil, fmt.Errorf("space_id is required")
 	}
-	q := r.db.WithContext(ctx).Where("c_is_deleted = ? AND c_status != ? AND c_space_id = ?", false, "deleted", spaceID)
+	q := r.db.WithContext(ctx).Where(
+		"c_is_deleted = ? AND c_space_id = ? AND c_last_heartbeat_at IS NOT NULL AND c_last_heartbeat_at >= ?",
+		false,
+		spaceID,
+		r.currentTime().Add(-scfHeartbeatTimeout),
+	)
 	if deploymentID != "" {
 		q = q.Where("c_deployment_id = ?", deploymentID)
 	}

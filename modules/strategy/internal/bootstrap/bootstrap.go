@@ -74,11 +74,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
-	service := newRPCService(repo, eng, cfg)
-	strategypb.RegisterStrategyMgrService(s, service)
-	if err := registerMetricsReporter(s); err != nil {
+	moduleMetrics, err := registerMetricsReporter(s)
+	if err != nil {
 		return nil, nil, err
 	}
+	repo.SetModuleMetrics(moduleMetrics)
+	service := newRPCService(repo, eng, cfg)
+	strategypb.RegisterStrategyMgrService(s, service)
 	healthState := health.New("strategy", "strategy", "", "")
 	healthState.SnapshotFunc = strategyHealthSnapshot(db, eventRuntime, cfg.Workers, healthState)
 	healthState.SetReady(true)

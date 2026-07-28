@@ -34,6 +34,11 @@ moox-cli setup e2e-eventbus --file ./custom.toml
 `cloudnode-worker.yaml` 由部署流程生成，不写入 `custom.toml`。控制面部署单元包含
 Admin、Gateway、Web、EventBus、CloudNode 和 Collector。
 
+`[monitoring].wecom_webhook` 填写企微群机器人 HTTPS webhook；留空时 Monitor
+仍采集和计算状态，但不发送站外告警。标准服务、健康 URL 和实时 Dataset 清单不写入
+`custom.toml`：标准服务由 SysDeploy 维护，启用中的 TimeSeries Dataset + Frequency
+由运行时自动对账。需要 CPU、内存和磁盘监控的每台机器仍需部署 HostAgent。
+
 `deploy-control` 默认保留控制面数据。仅在允许删除 Admin、EventBus 等全部控制面
 数据并重新初始化时使用 `--reset-data`；凭据目录和部署密钥仍会保留。
 `e2e-eventbus` 从本机经公网 TLS 连接 EventBus，验证 CloudNode worker 只能绑定、

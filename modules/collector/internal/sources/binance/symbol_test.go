@@ -115,11 +115,10 @@ func TestSymbolCollectorCollectWithResultReportsCurrentWriteCount(t *testing.T) 
 	result, err := collector.CollectWithResult(context.Background(), symbolCollectParams())
 
 	require.NoError(t, err)
-	assert.Equal(t, 2, result.RowsWritten)
-	_, err = time.Parse(time.RFC3339Nano, result.RecordSnapshotVersion)
+	assert.Equal(t, uint64(2), result.RowsWritten)
+	_, err = time.Parse(time.RFC3339Nano, result.SnapshotVersion)
 	require.NoError(t, err)
-	assert.Nil(t, result.StorageReadScope)
-	assert.Empty(t, result.ZeroWriteReason)
+	assert.Empty(t, result.OutputWatermark)
 }
 
 func TestSymbolCollectorRejectsEmptyAuthoritativeSnapshot(t *testing.T) {

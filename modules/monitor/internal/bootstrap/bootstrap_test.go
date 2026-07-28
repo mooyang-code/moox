@@ -29,6 +29,17 @@ func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
 	assert.Equal(t, "monitor", runner.HTTP.HealthSigner.AccessKey)
 }
 
+func TestLoadMonitorPipelinesFallsBackToAppConfigPath(t *testing.T) {
+	t.Setenv("MOOX_PIPELINE_CONFIG", "")
+	t.Setenv("MOOX_PIPELINE_CONFIG_HASH", "")
+	cfg := config.Default()
+	cfg.Metrics.PipelineConfigPath = filepath.Join("..", "..", "..", "..", "examples", "monitor-pipelines.yaml")
+	pipelines, err := loadMonitorPipelines(cfg)
+	require.NoError(t, err)
+	require.Equal(t, 2, pipelines.Version)
+	require.Greater(t, pipelines.RealtimeTimeSeries.Defaults.RunMissedIntervals, 0)
+}
+
 func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
@@ -101,15 +112,13 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	disabled.Metrics.HostStorage.Enabled = false
 	startHostStorageGate(ctx, &disabled, rt, &hostmetrics.StorageGate{})
 
-	startHostMetricsConsumer(ctx, nil, rt, nil)
-	startHostMetricsConsumer(ctx, &disabled, rt, hostmetrics.NewStore(nil, nil))
-	cfg.Metrics.Enabled = false
-	startHostMetricsConsumer(ctx, cfg, rt, hostmetrics.NewStore(nil, nil))
-	cfg.Metrics.Enabled = true
-
-	startMetricsConsumer(ctx, nil, rt, nil)
-	startMetricsConsumer(ctx, cfg, nil, nil)
-	startMetricsConsumer(ctx, cfg, &Runtime{}, nil)
+	startObservabilityConsumer(ctx, nil, rt, nil, nil)
+	startObservabilityConsumer(ctx, &disabled, rt, nil, hostmetrics.NewStore(nil, nil))
+	cfg.Observability.Enabled = false
+	startObservabilityConsumer(ctx, cfg, rt, nil, hostmetrics.NewStore(nil, nil))
+	cfg.Observability.Enabled = true
+	startObservabilityConsumer(ctx, cfg, nil, nil, nil)
+	startObservabilityConsumer(ctx, cfg, &Runtime{}, nil, hostmetrics.NewStore(nil, nil))
 
 	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{SysDeploy: config.SysDeployConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
@@ -179,11 +188,11 @@ func TestMonitorTRPCConfigDeclaresSysDeployTimer(t *testing.T) {
 	t.Fatal("missing trpc.moox.monitor.sysdeploy.timer service")
 }
 
-func TestWaitHostMetricsRespectsCancel(t *testing.T) {
+func TestWaitObservabilityRespectsCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	waitHostMetrics(ctx)
+	waitObservabilityRetry(ctx)
 	assert.Less(t, time.Since(start), 2*time.Second)
 }
 
@@ -203,7 +212,7 @@ func TestMonitorResultHook(t *testing.T) {
 	require.NoError(t, rt.Repositories.Alerts.CreateEvent(context.Background(), &domain.AlertEvent{
 		EventID: "event-1", EventType: domain.AlertEventTriggered, CreatedAt: now,
 	}))
-	hook := monitorResultHook(rt)
+	hook := monitorResultHook(rt, nil)
 	require.NotNil(t, hook)
 	hook(context.Background(), domain.Check{SpaceID: "default", CheckID: "c1", Enabled: true}, domain.CheckResult{
 		SpaceID: "default", CheckID: "c1", Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now().UTC(),
@@ -221,10 +230,12 @@ func TestMonitorHealthSnapshotMetricsBranches(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-ready"
 	cfg.Metrics.Enabled = false
+	cfg.Observability.Enabled = false
 	rsp := monitorHealthSnapshot(cfg, rt, nil)(context.Background())
 	assert.True(t, rsp.Ready)
 
 	cfg.Metrics.Enabled = true
+	cfg.Observability.Enabled = true
 	rsp = monitorHealthSnapshot(cfg, rt, nil)(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Equal(t, "degraded", rsp.Status)

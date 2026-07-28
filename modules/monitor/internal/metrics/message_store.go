@@ -118,12 +118,13 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 }
 
 func monotonicMetric(name string) bool {
-	return name == "moox_business_watermark_timestamp_seconds" ||
-		name == "moox_module_watermark_timestamp_seconds" ||
-		name == "moox_module_input_watermark_timestamp_seconds" ||
-		name == "moox_module_metrics_errors_total" ||
-		name == "moox_module_metrics_last_error_timestamp_seconds" ||
-		name == "moox_module_last_error_timestamp_seconds"
+	return strings.HasSuffix(name, "_dataset_input_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_dataset_output_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_business_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_input_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_last_success_timestamp_seconds") ||
+		strings.HasSuffix(name, "_last_error_timestamp_seconds") ||
+		strings.HasSuffix(name, "_metrics_errors_total")
 }
 
 func (r *MetricMessageStore) PruneDedupe(ctx context.Context, now time.Time) (int64, error) {

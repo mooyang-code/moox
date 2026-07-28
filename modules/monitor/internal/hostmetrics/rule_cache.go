@@ -72,7 +72,7 @@ func (s hostRuleSource) Fetch(ctx context.Context) ([]domain.AlertRule, error) {
 	}
 	filtered := make([]domain.AlertRule, 0, len(rules))
 	for _, rule := range rules {
-		if rule.SpaceID != SpaceID || !rule.Enabled || rule.IsDeleted {
+		if rule.SpaceID != SpaceID || !rule.Enabled {
 			continue
 		}
 		if _, _, ok := ParseHostRuleKey(rule.CheckID); !ok {

@@ -20,9 +20,11 @@ import GatewayNodes from "./gateway-nodes.vue";
 import ServiceDeployments from "@/views/settings/service-deployments/index.vue";
 import ServiceMonitor from "@/views/ops/service-monitor/index.vue";
 import MetricMonitor from "@/views/ops/metric-monitor/index.vue";
+import ObservabilityOverview from "@/views/ops/metric-monitor/observability-overview.vue";
 
-type ServiceManagementTab = "nodes" | "instances" | "availability" | "metrics";
+type ServiceManagementTab = "overview" | "nodes" | "instances" | "availability" | "metrics";
 const tabs = [
+  { key: "overview", label: "总览" },
   { key: "nodes", label: "网关节点" },
   { key: "instances", label: "服务实例" },
   { key: "availability", label: "可用性监控" },
@@ -40,6 +42,7 @@ const activeComponent = computed(
   () =>
     ({
       nodes: GatewayNodes,
+      overview: ObservabilityOverview,
       instances: ServiceDeployments,
       availability: ServiceMonitor,
       metrics: MetricMonitor
@@ -47,7 +50,7 @@ const activeComponent = computed(
 );
 
 function normalizeTab(value: unknown): ServiceManagementTab {
-  return value === "instances" || value === "availability" || value === "metrics" ? value : "nodes";
+  return value === "nodes" || value === "instances" || value === "availability" || value === "metrics" ? value : "overview";
 }
 
 function onTabChange(value: string | number) {

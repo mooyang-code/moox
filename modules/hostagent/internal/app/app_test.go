@@ -60,9 +60,11 @@ type fakeEventPublisher struct {
 	err    error
 	ready  bool
 	closed bool
+	at     time.Time
 }
 
-func (f *fakeEventPublisher) PublishHostMetric(context.Context, string, *hostmetricpb.HostMetric, time.Time) error {
+func (f *fakeEventPublisher) PublishHostMetric(_ context.Context, _ string, _ *hostmetricpb.HostMetric, at time.Time) error {
+	f.at = at
 	return f.err
 }
 func (f *fakeEventPublisher) Ready() bool { return f.ready }
@@ -198,6 +200,19 @@ func TestAgent_RunOnce_PublishSuccess_ShouldUpdateCounters(t *testing.T) {
 	assert.Empty(t, a.lastErr)
 }
 
+func TestAgent_RunOnce_UsesCollectionCompletionAsOccurredAt(t *testing.T) {
+	a := testAgent(t)
+	var completedAt time.Time
+	a.collector = completionSnapshotCollector{snapshot: testSnapshot(), completedAt: &completedAt}
+	publisher := &fakeEventPublisher{}
+	a.publisher = publisher
+
+	_, err := a.RunOnce(context.Background(), &hostagentpb.RunOnceReq{})
+	require.NoError(t, err)
+	assert.False(t, publisher.at.Before(completedAt), "occurred_at=%s completion=%s", publisher.at, completedAt)
+	assert.Equal(t, publisher.at, a.lastCollect)
+}
+
 func TestAgent_RunOnce_PublishError_ShouldRecordFailure(t *testing.T) {
 	a := testAgent(t)
 	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
@@ -254,4 +269,15 @@ func TestAgent_RunOnceGuarded_ReleasesRunningFlag(t *testing.T) {
 	}()
 	wg.Wait()
 	assert.False(t, a.running.Load())
+}
+
+type completionSnapshotCollector struct {
+	snapshot    *hostmetricpb.HostSnapshot
+	completedAt *time.Time
+}
+
+func (c completionSnapshotCollector) Collect(context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error) {
+	time.Sleep(time.Millisecond)
+	*c.completedAt = time.Now().UTC()
+	return c.snapshot, nil, nil
 }

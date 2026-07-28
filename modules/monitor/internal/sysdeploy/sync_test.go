@@ -21,8 +21,8 @@ func TestSyncDeploymentsCreatesSystemChecks(t *testing.T) {
 	syncer := NewSyncer(checks, nil)
 
 	n, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
-		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/readyz","health_kind":"readiness","monitor_enabled":true}`},
-		{ServiceName: "moox_collector", Protocol: "http", Host: "127.0.0.1", Port: 11402, Status: "active", ExtraConfig: `{}`},
+		{NodeId: "node-a", ServiceName: "moox_cloudnode", Protocol: "http", Host: "10.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://10.0.0.1:11411/readyz","health_kind":"readiness","monitor_enabled":true}`},
+		{NodeId: "node-a", ServiceName: "moox_collector", Protocol: "http", Host: "10.0.0.1", Port: 11402, Status: "active", ExtraConfig: `{}`},
 		{ServiceName: "inactive", Protocol: "http", Host: "127.0.0.1", Port: 1, Status: "inactive", ExtraConfig: `{}`},
 	})
 	if err != nil {
@@ -31,34 +31,95 @@ func TestSyncDeploymentsCreatesSystemChecks(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("synced = %d, want 2", n)
 	}
-	httpCheck, err := checks.Get(ctx, "", "moox_cloudnode")
+	httpCheck, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_cloudnode")
 	if err != nil {
 		t.Fatalf("get cloudnode check: %v", err)
 	}
-	if httpCheck.Kind != domain.CheckKindHTTP || httpCheck.URL != "http://127.0.0.1:11411/readyz" || httpCheck.BodyContains != `"ready":true` {
+	if httpCheck.Kind != domain.CheckKindHTTP || httpCheck.URL != "http://10.0.0.1:11411/readyz" || httpCheck.BodyContains != `"ready":true` {
 		t.Fatalf("http check = %+v", httpCheck)
 	}
-	tcpCheck, err := checks.Get(ctx, "", "moox_collector")
+	tcpCheck, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_collector")
 	if err != nil {
 		t.Fatalf("get collector check: %v", err)
 	}
-	if tcpCheck.Kind != domain.CheckKindTCP || tcpCheck.TCPHost != "127.0.0.1" || tcpCheck.TCPPort != 11402 {
+	if tcpCheck.Kind != domain.CheckKindTCP || tcpCheck.TCPHost != "10.0.0.1" || tcpCheck.TCPPort != 11402 {
 		t.Fatalf("tcp check = %+v", tcpCheck)
 	}
 }
 
+func TestSyncDeploymentsKeepsSameServiceOnTwoNodes(t *testing.T) {
+	ctx := context.Background()
+	mgr := openSyncDB(t)
+	checks := mgr.Repositories().Checks
+	syncer := NewSyncer(checks, nil)
+
+	deployments := []*adminpb.ServiceDeployment{
+		{NodeId: "node-a", ServiceName: "moox_collector", Protocol: "http", Host: "10.0.0.1", Port: 11402, Status: "active"},
+		{NodeId: "node-b", ServiceName: "moox_collector", Protocol: "http", Host: "10.0.0.2", Port: 11402, Status: "active"},
+	}
+	requireSyncCount(t, syncer, deployments, 2)
+	for _, checkID := range []string{"sysdeploy:node-a:moox_collector", "sysdeploy:node-b:moox_collector"} {
+		check, err := checks.Get(ctx, "", checkID)
+		if err != nil {
+			t.Fatalf("get %s: %v", checkID, err)
+		}
+		if !check.Enabled {
+			t.Fatalf("%s unexpectedly disabled", checkID)
+		}
+	}
+
+	deployments[1].Status = "disabled"
+	requireSyncCount(t, syncer, deployments, 2)
+	nodeA, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_collector")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeB, err := checks.Get(ctx, "", "sysdeploy:node-b:moox_collector")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !nodeA.Enabled || nodeB.Enabled {
+		t.Fatalf("enabled states node-a=%v node-b=%v", nodeA.Enabled, nodeB.Enabled)
+	}
+}
+
+func requireSyncCount(t *testing.T, syncer *Syncer, deployments []*adminpb.ServiceDeployment, want int) {
+	t.Helper()
+	got, err := syncer.SyncDeployments(context.Background(), deployments)
+	if err != nil {
+		t.Fatalf("SyncDeployments: %v", err)
+	}
+	if got != want {
+		t.Fatalf("synced = %d, want %d", got, want)
+	}
+}
+
 func TestCheckFromDeploymentDoesNotAssertReadinessForLiveness(t *testing.T) {
-	check, ok := checkFromDeployment(&adminpb.ServiceDeployment{
+	check, err := checkFromDeployment(&adminpb.ServiceDeployment{
+		NodeId:      "node-a",
 		ServiceName: "web",
 		Protocol:    "http",
 		Status:      "active",
-		ExtraConfig: `{"health_url":"http://127.0.0.1:8080/healthz","health_kind":"liveness"}`,
+		ExtraConfig: `{"health_url":"http://10.0.0.1:8080/healthz","health_kind":"liveness"}`,
 	})
-	if !ok {
-		t.Fatal("checkFromDeployment returned ok=false")
+	if err != nil || check == nil {
+		t.Fatalf("checkFromDeployment = %+v, %v", check, err)
 	}
 	if check.BodyContains != "" {
 		t.Fatalf("liveness check body matcher = %q, want empty", check.BodyContains)
+	}
+}
+
+func TestCheckFromDeploymentRejectsRemoteLoopbackHealthURL(t *testing.T) {
+	check, err := checkFromDeployment(&adminpb.ServiceDeployment{
+		NodeId:      "node-b",
+		ServiceName: "web",
+		Protocol:    "http",
+		Status:      "active",
+		ExtraConfig: `{"health_url":"http://127.0.0.1:8080/readyz"}`,
+	})
+	if err == nil || check != nil {
+		t.Fatalf("checkFromDeployment = %+v, %v; want unreachable error", check, err)
 	}
 }
 
@@ -86,7 +147,7 @@ func TestSyncDeploymentsDoesNotTouchManualCheck(t *testing.T) {
 
 	syncer := NewSyncer(checks, nil)
 	_, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
-		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/healthz"}`},
+		{NodeId: "node-a", ServiceName: "moox_cloudnode", Protocol: "http", Host: "10.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://10.0.0.1:11411/healthz"}`},
 	})
 	if err != nil {
 		t.Fatalf("SyncDeployments: %v", err)
@@ -98,6 +159,10 @@ func TestSyncDeploymentsDoesNotTouchManualCheck(t *testing.T) {
 	if got.Source != domain.CheckSourceManual || got.URL != "http://manual" {
 		t.Fatalf("manual check was modified: %+v", got)
 	}
+	system, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_cloudnode")
+	if err != nil || system.Source != domain.CheckSourceSysDeploy {
+		t.Fatalf("system check = %+v, err = %v", system, err)
+	}
 }
 
 func TestSyncDeploymentsDisablesRemovedSystemChecks(t *testing.T) {
@@ -106,13 +171,13 @@ func TestSyncDeploymentsDisablesRemovedSystemChecks(t *testing.T) {
 	checks := mgr.Repositories().Checks
 	syncer := NewSyncer(checks, nil)
 	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
-		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/healthz","monitor_enabled":true}`},
-		{ServiceName: "moox_collector", Protocol: "http", Host: "127.0.0.1", Port: 11402, Status: "active", ExtraConfig: `{}`},
+		{NodeId: "node-a", ServiceName: "moox_cloudnode", Protocol: "http", Host: "10.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://10.0.0.1:11411/healthz","monitor_enabled":true}`},
+		{NodeId: "node-a", ServiceName: "moox_collector", Protocol: "http", Host: "10.0.0.1", Port: 11402, Status: "active", ExtraConfig: `{}`},
 	}); err != nil {
 		t.Fatalf("initial sync: %v", err)
 	}
 	n, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
-		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/healthz","monitor_enabled":false}`},
+		{NodeId: "node-a", ServiceName: "moox_cloudnode", Protocol: "http", Host: "10.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://10.0.0.1:11411/healthz","monitor_enabled":false}`},
 	})
 	if err != nil {
 		t.Fatalf("second sync: %v", err)
@@ -120,7 +185,7 @@ func TestSyncDeploymentsDisablesRemovedSystemChecks(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("synced = %d, want update count including two disables", n)
 	}
-	for _, checkID := range []string{"moox_cloudnode", "moox_collector"} {
+	for _, checkID := range []string{"sysdeploy:node-a:moox_cloudnode", "sysdeploy:node-a:moox_collector"} {
 		got, err := checks.Get(ctx, "", checkID)
 		if err != nil {
 			t.Fatalf("get %s: %v", checkID, err)
@@ -137,14 +202,14 @@ func TestSyncKeepsExistingChecksWhenAdminFails(t *testing.T) {
 	checks := mgr.Repositories().Checks
 	syncer := NewSyncer(checks, failingSource{})
 	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
-		{ServiceName: "moox_cloudnode", Protocol: "http", Host: "127.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11411/healthz"}`},
+		{NodeId: "node-a", ServiceName: "moox_cloudnode", Protocol: "http", Host: "10.0.0.1", Port: 11401, Status: "active", ExtraConfig: `{"health_url":"http://10.0.0.1:11411/healthz"}`},
 	}); err != nil {
 		t.Fatalf("initial sync: %v", err)
 	}
 	if _, err := syncer.Sync(ctx); err == nil {
 		t.Fatal("Sync() error = nil, want admin failure")
 	}
-	got, err := checks.Get(ctx, "", "moox_cloudnode")
+	got, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_cloudnode")
 	if err != nil {
 		t.Fatalf("get existing check: %v", err)
 	}

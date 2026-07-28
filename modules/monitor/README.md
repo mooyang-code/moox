@@ -27,6 +27,10 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 - `:11410`: tRPC/HTTP 管理 API `trpc.moox.monitor.MonitorMgr`
 - `:11409`: tRPC `http_no_protocol` 健康接口（`/healthz`、`/readyz`、`/metrics`）
 
+普通部署应将健康接口绑定在 loopback。control profile 为 SCF Sentinel 将
+`11409` 绑定到公网网卡；该端口只接受独立 health HMAC 签名，不经 Caddy，
+也不暴露 Monitor 管理 API。
+
 ## 定时任务
 
 检查调度和指标规则分别由 `check_schedule.timer`（30 秒）和 `metric_rule.timer`（60 秒）执行，均在启动时立即运行。所有维护 Handler 都同步返回错误、带显式超时并跳过同进程重入。Monitor 是单实例服务，不做跨实例 Owner 选举。

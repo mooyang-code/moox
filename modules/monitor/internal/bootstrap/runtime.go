@@ -10,26 +10,31 @@ import (
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/observabilitypb"
+	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 // Runtime owns monitor's process-scoped resources and shutdown ordering.
 type Runtime struct {
-	StartedAt            time.Time
-	cancel               context.CancelFunc
-	workers              sync.WaitGroup
-	closeOnce            sync.Once
-	closeErr             error
-	Store                *store.Store
-	Repositories         *store.Repositories
-	MetricStores         *monmetrics.Stores
-	HostRuleCache        *hostmetrics.RuleCache
-	Scheduler            *scheduler.Scheduler
-	MetricScheduler      *monmetrics.RuleScheduler
-	MetricsIngestReady   atomic.Bool
-	MetricsReporterReady atomic.Bool
-	metricsIngestError   atomic.Value
-	metricsReporterError atomic.Value
+	StartedAt                time.Time
+	cancel                   context.CancelFunc
+	workers                  sync.WaitGroup
+	closeOnce                sync.Once
+	closeErr                 error
+	Store                    *store.Store
+	Repositories             *store.Repositories
+	MetricStores             *monmetrics.Stores
+	HostRuleCache            *hostmetrics.RuleCache
+	Scheduler                *scheduler.Scheduler
+	MetricScheduler          *monmetrics.RuleScheduler
+	ObservabilityIngestReady atomic.Bool
+	MetricsReporterReady     atomic.Bool
+	observabilityIngestError atomic.Value
+	metricsReporterError     atomic.Value
+	ModuleMetrics            *report.ModuleMetrics
+	ObservabilityHealthRoute func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error
 }
 
 func (r *Runtime) setMetricsReporterState(ready bool, err error) {
@@ -44,23 +49,23 @@ func (r *Runtime) setMetricsReporterState(ready bool, err error) {
 	r.metricsReporterError.Store(message)
 }
 
-func (r *Runtime) setMetricsIngestState(ready bool, err error) {
+func (r *Runtime) setObservabilityIngestState(ready bool, err error) {
 	if r == nil {
 		return
 	}
-	r.MetricsIngestReady.Store(ready)
+	r.ObservabilityIngestReady.Store(ready)
 	message := ""
 	if err != nil {
 		message = sanitizedMetricsError(err)
 	}
-	r.metricsIngestError.Store(message)
+	r.observabilityIngestError.Store(message)
 }
 
-func (r *Runtime) metricsIngestErrorMessage() string {
+func (r *Runtime) observabilityIngestErrorMessage() string {
 	if r == nil {
 		return ""
 	}
-	message, _ := r.metricsIngestError.Load().(string)
+	message, _ := r.observabilityIngestError.Load().(string)
 	return message
 }
 

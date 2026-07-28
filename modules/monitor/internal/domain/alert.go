@@ -23,7 +23,6 @@ type WebhookChannel struct {
 	Headers      string    `gorm:"column:c_headers"`
 	BodyTemplate string    `gorm:"column:c_body_template"`
 	Enabled      bool      `gorm:"column:c_enabled"`
-	IsDeleted    bool      `gorm:"column:c_is_deleted"`
 	CreatedAt    time.Time `gorm:"column:c_ctime"`
 	UpdatedAt    time.Time `gorm:"column:c_mtime"`
 }
@@ -44,7 +43,6 @@ type AlertRule struct {
 	SendOnResolved                 bool      `gorm:"column:c_send_on_resolved"`
 	Enabled                        bool      `gorm:"column:c_enabled"`
 	Description                    string    `gorm:"column:c_description"`
-	IsDeleted                      bool      `gorm:"column:c_is_deleted"`
 	CreatedAt                      time.Time `gorm:"column:c_ctime"`
 	UpdatedAt                      time.Time `gorm:"column:c_mtime"`
 }

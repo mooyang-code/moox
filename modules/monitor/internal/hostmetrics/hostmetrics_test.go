@@ -26,7 +26,7 @@ func validHostMessage(t *testing.T) *eventpb.EventMessage {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	encoded, err := registry.Encode(events.MetricsHostReported, validHostMetric(), events.PublishOptions{EventID: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", OccurredAt: time.Now().UTC(), SpaceID: SpaceID, SubjectID: validHostMetric().GetAgentId()})
+	encoded, err := registry.Encode(events.ObservabilityHostSnapshotReported, validHostMetric(), events.PublishOptions{EventID: "0190f4d0-7b1c-7f45-9a3e-7c28f6479a73", OccurredAt: time.Now().UTC(), SpaceID: SpaceID, SubjectID: validHostMetric().GetAgentId()})
 	require.NoError(t, err)
 	return encoded.Message
 }
@@ -78,6 +78,24 @@ func TestStoreLeavesLatestUnchangedWhenStorageFails(t *testing.T) {
 	agents, err := store.ListAgents(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, agents)
+}
+
+func TestStorePersistsPresenceWhenSnapshotStorageFails(t *testing.T) {
+	registry := NewRegistry(openRegistryTestDB(t))
+	store := NewStore(&fakeSnapshotWriter{err: errors.New("storage unavailable")}, nil)
+	store.SetRegistry(registry)
+	message := validHostMessage(t)
+	metric, err := ValidateMessage(message)
+	require.NoError(t, err)
+	require.Error(t, store.Persist(context.Background(), message, metric))
+
+	restarted := NewStore(nil, nil)
+	restarted.SetRegistry(registry)
+	agents, err := restarted.ListAgents(context.Background())
+	require.NoError(t, err)
+	require.Len(t, agents, 1)
+	assert.True(t, agents[0].Reachable)
+	assert.Equal(t, message.GetOccurredAt().AsTime().UTC().Format(time.RFC3339Nano), agents[0].LastSeenAt)
 }
 
 func TestStoreHistoryIsOwnedByStorage(t *testing.T) {

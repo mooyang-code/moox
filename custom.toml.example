@@ -11,6 +11,10 @@ public_address = ""
 port = 4222
 tls_enabled = true
 
+# 留空时仍采集和展示监控数据，但不发送站外告警。
+[monitoring]
+wecom_webhook = ""
+
 [control_host]
 name = "control"
 address = ""

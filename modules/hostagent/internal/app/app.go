@@ -79,7 +79,6 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 	if a == nil {
 		return nil, fmt.Errorf("agent is nil")
 	}
-	now := time.Now().UTC()
 	snapshot, _, err := a.collector.Collect(ctx)
 	a.collected.Add(1)
 	if err != nil {
@@ -87,9 +86,10 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		a.dropped.Add(1)
 		return &hostagentpb.RunOnceRsp{PublishError: err.Error()}, err
 	}
+	occurredAt := time.Now().UTC()
 	a.latestMu.Lock()
 	a.latest = proto.Clone(snapshot).(*hostmetricpb.HostSnapshot)
-	a.lastCollect = now
+	a.lastCollect = occurredAt
 	a.latestMu.Unlock()
 	msgID, err := uuid.NewV7()
 	if err != nil {
@@ -102,7 +102,7 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 		a.recordError(err)
 		return &hostagentpb.RunOnceRsp{MessageId: msgID.String(), PublishError: err.Error(), Snapshot: snapshot}, err
 	}
-	err = publisher.PublishHostMetric(ctx, msgID.String(), &hostmetricpb.HostMetric{AgentId: a.id.AgentID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, now)
+	err = publisher.PublishHostMetric(ctx, msgID.String(), &hostmetricpb.HostMetric{AgentId: a.id.AgentID, Hostname: a.hostname, BootId: a.bootID, AgentVersion: a.version, Snapshot: snapshot}, occurredAt)
 	if err != nil {
 		a.dropped.Add(1)
 		a.recordError(err)

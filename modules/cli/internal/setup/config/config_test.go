@@ -51,8 +51,21 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.True(t, snapshot.Manifest.EventBus.TLSEnabled)
 	assert.Equal(t, "ap-guangzhou", snapshot.Manifest.TencentCloud.Region)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
+	assert.Empty(t, snapshot.Manifest.Monitoring.WeComWebhook)
 	assert.Empty(t, snapshot.Manifest.OtherHosts)
 	require.NoError(t, snapshot.VerifyUnchanged())
+}
+
+func TestLoadMonitoringWeComWebhook(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Replace(validManifest, "[control_host]", `[monitoring]
+wecom_webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
+
+[control_host]`, 1)
+
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", snapshot.Manifest.Monitoring.WeComWebhook)
 }
 
 func TestLoadDefaultsEventBusPort(t *testing.T) {
@@ -125,6 +138,8 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{name: "eventbus explicit zero port", body: strings.Replace(validManifest, "port = 4222", "port = 0", 1), want: "eventbus.port"},
 		{name: "eventbus invalid port", body: strings.Replace(validManifest, "port = 4222", "port = 70000", 1), want: "eventbus.port"},
 		{name: "eventbus tls disabled", body: strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), want: "eventbus.tls_enabled"},
+		{name: "monitoring webhook must use HTTPS", body: strings.Replace(validManifest, "[control_host]", "[monitoring]\nwecom_webhook = \"http://example.test/hook\"\n\n[control_host]", 1), want: "monitoring.wecom_webhook"},
+		{name: "monitoring webhook must be a URL", body: strings.Replace(validManifest, "[control_host]", "[monitoring]\nwecom_webhook = \"not-a-url\"\n\n[control_host]", 1), want: "monitoring.wecom_webhook"},
 		{name: "missing host address", body: strings.Replace(validManifest, `address = "192.0.2.10"`, `address = ""`, 1), want: "control_host.address"},
 		{name: "missing compile host address", body: validManifest + `
 [compile_host]

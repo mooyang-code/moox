@@ -112,18 +112,20 @@ func diagnoseSpecs(snapshot *monitorpb.GetDoctorContextRsp, pipelines report.Pip
 			reporterDependencies = []string{"diagnose.context"}
 		}
 		specs = append(specs, core.CheckSpec{ID: reporterID, RequiredDependencies: reporterDependencies, OptionalDependencies: []string{health[component.GetComponentId()]}})
-		if component.GetFunctionalObservability() != "not_applicable" {
+		module := strings.TrimPrefix(component.GetComponentId(), "moox_")
+		freshnessEnabled := component.GetFunctionalObservability() == "deferred" || moduleFreshnessEnabled(pipelines, module)
+		if component.GetFunctionalObservability() != "not_applicable" && freshnessEnabled {
 			freshnessDependencies := []string{reporterID}
 			if component.GetFunctionalObservability() == "deferred" {
 				freshnessDependencies = []string{"diagnose.context"}
 			}
 			freshnessID := "module.freshness:" + component.GetComponentId() + "@" + component.GetNodeId()
-			freshnessByModule[strings.TrimPrefix(component.GetComponentId(), "moox_")] = freshnessID
+			freshnessByModule[module] = freshnessID
 			specs = append(specs, core.CheckSpec{ID: freshnessID, RequiredDependencies: freshnessDependencies, OptionalDependencies: []string{health[component.GetComponentId()]}})
 		}
 	}
 	for _, pipeline := range pipelines.Pipelines {
-		if pipeline.Enabled {
+		if pipeline.Enabled && pipeline.WatermarkMonitoring {
 			dependencies := []string{"diagnose.context"}
 			if freshnessByModule[pipeline.Module] != "" {
 				dependencies = append(dependencies, freshnessByModule[pipeline.Module])
@@ -202,8 +204,10 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		if component.GetTransport() != "reporter" {
 			return checkResult(spec.ID, core.StatusSkipped, "component does not use Reporter transport", nil)
 		}
+		module := strings.TrimPrefix(component.GetComponentId(), "moox_")
+		metricErrorsName := report.ModuleMetricName(module, report.ModuleMetricErrors)
 		for _, metric := range r.context.GetModuleObservations() {
-			if metric.GetComponentId() == component.GetComponentId() && metric.GetSummary() == "moox_module_metrics_errors_total" && metric.GetValue() > 0 && recentMetricError(r.context.GetModuleObservations(), component.GetComponentId(), r.now()) {
+			if metric.GetComponentId() == component.GetComponentId() && metric.GetSummary() == metricErrorsName && metric.GetValue() > 0 && recentMetricError(r.context.GetModuleObservations(), component.GetComponentId(), r.now()) {
 				return checkResult(spec.ID, core.StatusFail, "module metric observations have been rejected", nil, "inspect_pipeline_input")
 			}
 		}
@@ -301,12 +305,13 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		}
 		var input time.Time
 		var inputObservation *monitorpb.DoctorObservation
+		inputMetric := report.ModuleMetricName(pipeline.Module, report.ModuleMetricInputWatermark)
 		for _, observation := range r.context.GetModuleObservations() {
-			if observation.GetSummary() != "moox_module_input_watermark_timestamp_seconds" {
+			if observation.GetSummary() != inputMetric {
 				continue
 			}
 			labels := map[string]string{}
-			if json.Unmarshal([]byte(observation.GetDetailsJson()), &labels) == nil && labels["pipeline"] == pipeline.ID && labels["module"] == pipeline.Module {
+			if json.Unmarshal([]byte(observation.GetDetailsJson()), &labels) == nil && labels["pipeline"] == pipeline.ID {
 				input = time.Unix(int64(observation.GetValue()), 0).UTC()
 				inputObservation = observation
 				break
@@ -361,8 +366,10 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 }
 
 func recentMetricError(observations []*monitorpb.DoctorObservation, componentID string, now time.Time) bool {
+	module := strings.TrimPrefix(componentID, "moox_")
+	metricName := report.ModuleMetricName(module, report.ModuleMetricLastMetricsError)
 	for _, metric := range observations {
-		if metric.GetComponentId() != componentID || metric.GetSummary() != "moox_module_metrics_last_error_timestamp_seconds" {
+		if metric.GetComponentId() != componentID || metric.GetSummary() != metricName {
 			continue
 		}
 		at := time.Unix(int64(metric.GetValue()), 0).UTC()
@@ -447,12 +454,13 @@ func findObservation(items []*monitorpb.DoctorObservation, componentID string) *
 func (r *diagnoseRunner) moduleSuccessObservations(componentID string) []*monitorpb.DoctorObservation {
 	result := make([]*monitorpb.DoctorObservation, 0)
 	module := strings.TrimPrefix(componentID, "moox_")
+	metricName := report.ModuleMetricName(module, report.ModuleMetricLastSuccess)
 	for _, item := range r.context.GetModuleObservations() {
-		if item.GetComponentId() != componentID || item.GetSummary() != "moox_module_last_success_timestamp_seconds" {
+		if item.GetComponentId() != componentID || item.GetSummary() != metricName {
 			continue
 		}
 		labels := map[string]string{}
-		if json.Unmarshal([]byte(item.GetDetailsJson()), &labels) != nil || labels["module"] != module {
+		if json.Unmarshal([]byte(item.GetDetailsJson()), &labels) != nil {
 			continue
 		}
 		pipeline := labels["pipeline"]
@@ -512,11 +520,20 @@ func findObservationKind(items []*monitorpb.DoctorObservation, componentID, kind
 func pipelineIDs(config report.PipelineConfig) []string {
 	ids := make([]string, 0, len(config.Pipelines))
 	for _, pipeline := range config.Pipelines {
-		if pipeline.Enabled {
+		if pipeline.Enabled && pipeline.WatermarkMonitoring {
 			ids = append(ids, pipeline.ID)
 		}
 	}
 	return ids
+}
+
+func moduleFreshnessEnabled(config report.PipelineConfig, module string) bool {
+	for _, pipeline := range config.Pipelines {
+		if pipeline.Enabled && pipeline.FreshnessMonitoring && pipeline.Module == module {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNode(snapshot *monitorpb.GetDoctorContextRsp) string {

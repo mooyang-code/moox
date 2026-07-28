@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type Validator interface {
@@ -21,6 +24,9 @@ type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
 type SnapshotProvider func() metadata.RequestSnapshot
 type routeKey struct{ spaceID, datasetID string }
+type DatasetRunObserver interface {
+	ObserveRun(report.DatasetObservation) error
+}
 
 type Service struct {
 	resolve   NodeResolver
@@ -29,16 +35,18 @@ type Service struct {
 	authorize Authorizer
 	view      ViewResolver
 	snapshot  SnapshotProvider
+	metrics   DatasetRunObserver
 }
 
 type Options struct {
-	Node       pb.DataNodeRuntimeService
-	Resolver   NodeResolver
-	Validator  Validator
-	AuthSigner AuthSigner
-	Authorizer Authorizer
-	View       ViewResolver
-	Snapshot   SnapshotProvider
+	Node           pb.DataNodeRuntimeService
+	Resolver       NodeResolver
+	Validator      Validator
+	AuthSigner     AuthSigner
+	Authorizer     Authorizer
+	View           ViewResolver
+	Snapshot       SnapshotProvider
+	DatasetMetrics DatasetRunObserver
 }
 
 func New(opts Options) (*Service, error) {
@@ -49,7 +57,10 @@ func New(opts Options) (*Service, error) {
 	if resolve == nil {
 		return nil, errors.New("data node resolver is required")
 	}
-	return &Service{resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer, view: opts.View, snapshot: opts.Snapshot}, nil
+	return &Service{
+		resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer,
+		view: opts.View, snapshot: opts.Snapshot, metrics: opts.DatasetMetrics,
+	}, nil
 }
 
 // requestContext captures one immutable metadata generation before a request
@@ -111,22 +122,79 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 		rows := groups[group]
 		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
 		if err != nil {
+			s.observeTimeSeriesRows(ctx, rows, "error", false)
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: route %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
 		auth, err := s.signAuth(req.GetAuthInfo())
 		if err != nil {
+			s.observeTimeSeriesRows(ctx, rows, "error", false)
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, fmt.Errorf("partial success after %d rows: %w", len(keys), err)), Keys: keys}, nil
 		}
 		rsp, err := node.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: auth, Rows: rows, SourceEventId: req.GetSourceEventId()})
 		if err != nil {
+			s.observeTimeSeriesRows(ctx, rows, "error", false)
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: write %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
 		}
 		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			s.observeTimeSeriesRows(ctx, rows, "error", false)
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(rsp.GetRetInfo().GetCode(), fmt.Errorf("partial success after %d rows: %s", len(keys), rsp.GetRetInfo().GetMsg())), Keys: keys}, nil
 		}
 		keys = append(keys, rsp.GetKeys()...)
+		s.observeTimeSeriesRows(ctx, rows, "success", true)
 	}
 	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+}
+
+func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed bool) {
+	if s == nil || s.metrics == nil {
+		return
+	}
+	type aggregate struct {
+		key       report.DatasetKey
+		rows      uint64
+		watermark time.Time
+	}
+	groups := make(map[report.DatasetKey]*aggregate)
+	for _, row := range rows {
+		key := row.GetKey()
+		timeSeries := key.GetTimeSeries()
+		if timeSeries == nil {
+			continue
+		}
+		datasetKey := report.DatasetKey{
+			SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), Freq: timeSeries.GetFreq(),
+		}
+		item := groups[datasetKey]
+		if item == nil {
+			item = &aggregate{key: datasetKey}
+			groups[datasetKey] = item
+		}
+		item.rows++
+		if !committed {
+			continue
+		}
+		dataTime, err := time.Parse(time.RFC3339Nano, timeSeries.GetDataTime())
+		if err != nil {
+			log.WarnContextf(ctx, "storage dataset metrics skipped invalid data_time=%q: %v", timeSeries.GetDataTime(), err)
+			continue
+		}
+		if item.watermark.IsZero() || dataTime.After(item.watermark) {
+			item.watermark = dataTime
+		}
+	}
+	finishedAt := time.Now().UTC()
+	for _, item := range groups {
+		observation := report.DatasetObservation{
+			Key: item.key, Result: result, FinishedAt: finishedAt,
+		}
+		if committed {
+			observation.Rows = item.rows
+			observation.OutputWatermark = item.watermark
+		}
+		if err := s.metrics.ObserveRun(observation); err != nil {
+			log.WarnContextf(ctx, "storage dataset metrics observe failed key=%+v result=%s: %v", item.key, result, err)
+		}
+	}
 }
 
 func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) (*pb.PrimaryReadFieldsRsp, error) {

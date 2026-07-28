@@ -4,6 +4,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,16 +20,23 @@ import (
 )
 
 type Collector struct {
-	mu        sync.Mutex
-	prevAt    time.Time
-	prevCPU   CPUStat
-	prevCPUOK bool
-	prevDisk  map[string]DiskStat
-	prevNet   map[string]NetworkStat
+	mu         sync.Mutex
+	readFile   func(string) ([]byte, error)
+	collectFS  func() ([]*hostmetricpb.FilesystemMetric, error)
+	now        func() time.Time
+	prevCPU    CPUStat
+	prevCPUOK  bool
+	prevDiskAt time.Time
+	prevDisk   map[string]DiskStat
+	prevNetAt  time.Time
+	prevNet    map[string]NetworkStat
 }
 
 func New() *Collector {
-	return &Collector{prevDisk: map[string]DiskStat{}, prevNet: map[string]NetworkStat{}}
+	return &Collector{
+		readFile: os.ReadFile, collectFS: filesystemMetrics, now: time.Now,
+		prevDisk: map[string]DiskStat{}, prevNet: map[string]NetworkStat{},
+	}
 }
 
 func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []*hostmetricpb.CollectorStatus, error) {
@@ -38,12 +46,12 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	now := time.Now()
+	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	statuses := make([]*hostmetricpb.CollectorStatus, 0, 5)
 	read := func(name, path string) ([]byte, error) {
-		b, err := os.ReadFile(path)
+		b, err := c.readFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
@@ -52,43 +60,36 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 
 	snap := &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: uint32(runtime.NumCPU())}, Memory: &hostmetricpb.MemoryMetric{}}
 	cpuData, cpuErr := read("cpu", "/proc/stat")
+	var currentCPU CPUStat
 	if cpuErr == nil {
-		stat, err := ParseCPUStat(cpuData)
-		if err == nil {
-			total := stat.User + stat.Nice + stat.System + stat.Idle + stat.IOWait + stat.IRQ + stat.SoftIRQ + stat.Steal
-			if c.prevCPUOK {
-				previous := c.prevCPU.User + c.prevCPU.Nice + c.prevCPU.System + c.prevCPU.Idle + c.prevCPU.IOWait + c.prevCPU.IRQ + c.prevCPU.SoftIRQ + c.prevCPU.Steal
-				busyTotal := stat.User + stat.Nice + stat.System + stat.IRQ + stat.SoftIRQ + stat.Steal
-				previousBusy := c.prevCPU.User + c.prevCPU.Nice + c.prevCPU.System + c.prevCPU.IRQ + c.prevCPU.SoftIRQ + c.prevCPU.Steal
-				if total >= previous && busyTotal >= previousBusy && total-previous > 0 {
-					delta := total - previous
-					snap.Cpu.UsagePercent = float64(busyTotal-previousBusy) * 100 / float64(delta)
-					snap.Cpu.UsageAvailable = true
-				}
-			}
-			c.prevCPU, c.prevCPUOK = stat, true
-			statuses = append(statuses, status("cpu", nil))
-		} else {
-			statuses = append(statuses, status("cpu", err))
-		}
-	} else {
-		statuses = append(statuses, status("cpu", cpuErr))
+		currentCPU, cpuErr = ParseCPUStat(cpuData)
 	}
+	statuses = append(statuses, status("cpu", cpuErr))
 
 	memData, memErr := read("memory", "/proc/meminfo")
+	var totalMemory, availableMemory uint64
 	if memErr == nil {
-		total, available, err := ParseMeminfo(memData)
-		if err == nil {
-			snap.Memory.TotalBytes, snap.Memory.AvailableBytes = total, available
-			snap.Memory.UsedBytes = total - available
-			snap.Memory.UsagePercent = float64(snap.Memory.UsedBytes) * 100 / float64(total)
-			statuses = append(statuses, status("memory", nil))
-		} else {
-			statuses = append(statuses, status("memory", err))
-		}
-	} else {
-		statuses = append(statuses, status("memory", memErr))
+		totalMemory, availableMemory, memErr = ParseMeminfo(memData)
 	}
+	statuses = append(statuses, status("memory", memErr))
+
+	if cpuErr != nil || memErr != nil {
+		return nil, statuses, fmt.Errorf("required host collectors failed: %w", errors.Join(cpuErr, memErr))
+	}
+	totalCPU := cpuTotal(currentCPU)
+	busyCPU := cpuBusy(currentCPU)
+	if c.prevCPUOK {
+		previousTotal := cpuTotal(c.prevCPU)
+		previousBusy := cpuBusy(c.prevCPU)
+		if cpuMonotonic(currentCPU, c.prevCPU) && totalCPU >= previousTotal && busyCPU >= previousBusy && totalCPU > previousTotal {
+			snap.Cpu.UsagePercent = float64(busyCPU-previousBusy) * 100 / float64(totalCPU-previousTotal)
+			snap.Cpu.UsageAvailable = true
+		}
+	}
+	c.prevCPU, c.prevCPUOK = currentCPU, true
+	snap.Memory.TotalBytes, snap.Memory.AvailableBytes = totalMemory, availableMemory
+	snap.Memory.UsedBytes = totalMemory - availableMemory
+	snap.Memory.UsagePercent = float64(snap.Memory.UsedBytes) * 100 / float64(totalMemory)
 
 	diskData, diskErr := read("disk", "/proc/diskstats")
 	if diskErr == nil {
@@ -100,8 +101,11 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 				}
 				metric := &hostmetricpb.DiskMetric{Device: d.Name, ReadBytesTotal: d.ReadSectors * 512, WriteBytesTotal: d.WriteSectors * 512, ReadOpsTotal: d.ReadOps, WriteOpsTotal: d.WriteOps, IoTimeMsTotal: d.IOTimeMS}
 				if previous, ok := c.prevDisk[d.Name]; ok {
-					elapsed := now.Sub(c.prevAt).Seconds()
-					if elapsed > 0 && d.ReadSectors >= previous.ReadSectors && d.WriteSectors >= previous.WriteSectors && d.IOTimeMS >= previous.IOTimeMS {
+					elapsed := now.Sub(c.prevDiskAt).Seconds()
+					if elapsed > 0 &&
+						d.ReadSectors >= previous.ReadSectors && d.WriteSectors >= previous.WriteSectors &&
+						d.ReadOps >= previous.ReadOps && d.WriteOps >= previous.WriteOps &&
+						d.IOTimeMS >= previous.IOTimeMS {
 						metric.ReadBytesPerSecond = float64(d.ReadSectors-previous.ReadSectors) * 512 / elapsed
 						metric.WriteBytesPerSecond = float64(d.WriteSectors-previous.WriteSectors) * 512 / elapsed
 						metric.ReadIops = float64(d.ReadOps-previous.ReadOps) / elapsed
@@ -119,6 +123,7 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 			for _, d := range stats {
 				c.prevDisk[d.Name] = d
 			}
+			c.prevDiskAt = now
 			statuses = append(statuses, status("disk", nil))
 		} else {
 			statuses = append(statuses, status("disk", err))
@@ -134,11 +139,16 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 			for _, n := range stats {
 				metric := &hostmetricpb.NetworkMetric{Device: n.Name, ReceiveBytesTotal: n.ReceiveBytes, TransmitBytesTotal: n.TransmitBytes, ReceiveErrorsTotal: n.ReceiveErrors, TransmitErrorsTotal: n.TransmitErrors, ReceiveDroppedTotal: n.ReceiveDropped, TransmitDroppedTotal: n.TransmitDropped, Operstate: readOperstate(n.Name)}
 				if previous, ok := c.prevNet[n.Name]; ok {
-					elapsed := now.Sub(c.prevAt).Seconds()
+					elapsed := now.Sub(c.prevNetAt).Seconds()
 					if elapsed > 0 && n.ReceiveBytes >= previous.ReceiveBytes && n.TransmitBytes >= previous.TransmitBytes {
 						metric.ReceiveBytesPerSecond = float64(n.ReceiveBytes-previous.ReceiveBytes) / elapsed
 						metric.TransmitBytesPerSecond = float64(n.TransmitBytes-previous.TransmitBytes) / elapsed
 						metric.RateAvailable = true
+					}
+					if elapsed > 0 && n.ReceiveErrors >= previous.ReceiveErrors && n.TransmitErrors >= previous.TransmitErrors {
+						metric.ReceiveErrorsPerSecond = float64(n.ReceiveErrors-previous.ReceiveErrors) / elapsed
+						metric.TransmitErrorsPerSecond = float64(n.TransmitErrors-previous.TransmitErrors) / elapsed
+						metric.ErrorRateAvailable = true
 					}
 				}
 				snap.Networks = append(snap.Networks, metric)
@@ -147,6 +157,7 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 			for _, n := range stats {
 				c.prevNet[n.Name] = n
 			}
+			c.prevNetAt = now
 			statuses = append(statuses, status("network", nil))
 		} else {
 			statuses = append(statuses, status("network", err))
@@ -155,19 +166,37 @@ func (c *Collector) Collect(ctx context.Context) (*hostmetricpb.HostSnapshot, []
 		statuses = append(statuses, status("network", netErr))
 	}
 
-	fs, fsErr := filesystemMetrics()
+	fs, fsErr := c.collectFS()
 	if fsErr != nil {
 		statuses = append(statuses, status("filesystem", fsErr))
 	} else {
 		snap.Filesystems = fs
 		statuses = append(statuses, status("filesystem", nil))
 	}
-	c.prevAt = now
 	sort.Slice(snap.Disks, func(i, j int) bool { return snap.Disks[i].Device < snap.Disks[j].Device })
 	sort.Slice(snap.Networks, func(i, j int) bool { return snap.Networks[i].Device < snap.Networks[j].Device })
 	sort.Slice(snap.Filesystems, func(i, j int) bool { return snap.Filesystems[i].Mountpoint < snap.Filesystems[j].Mountpoint })
 	snap.Collectors = statuses
 	return snap, statuses, nil
+}
+
+func cpuTotal(stat CPUStat) uint64 {
+	return stat.User + stat.Nice + stat.System + stat.Idle + stat.IOWait + stat.IRQ + stat.SoftIRQ + stat.Steal
+}
+
+func cpuBusy(stat CPUStat) uint64 {
+	return stat.User + stat.Nice + stat.System + stat.IRQ + stat.SoftIRQ + stat.Steal
+}
+
+func cpuMonotonic(current, previous CPUStat) bool {
+	return current.User >= previous.User &&
+		current.Nice >= previous.Nice &&
+		current.System >= previous.System &&
+		current.Idle >= previous.Idle &&
+		current.IOWait >= previous.IOWait &&
+		current.IRQ >= previous.IRQ &&
+		current.SoftIRQ >= previous.SoftIRQ &&
+		current.Steal >= previous.Steal
 }
 
 func status(name string, err error) *hostmetricpb.CollectorStatus {
@@ -199,34 +228,22 @@ func readOperstate(name string) string {
 }
 
 func filesystemMetrics() ([]*hostmetricpb.FilesystemMetric, error) {
-	b, err := os.ReadFile("/proc/self/mountinfo")
+	b, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return nil, err
+	}
+	mounts, err := ParseMounts(b)
 	if err != nil {
 		return nil, err
 	}
 	var out []*hostmetricpb.FilesystemMetric
-	for _, line := range strings.Split(string(b), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 10 {
+	for _, mount := range mounts {
+		if excludedFS(mount.FSType) {
 			continue
 		}
-		sep := -1
-		for i, f := range fields {
-			if f == "-" {
-				sep = i
-				break
-			}
-		}
-		if sep < 6 || sep+3 > len(fields) {
-			continue
-		}
-		fsType := fields[sep+1]
-		if excludedFS(fsType) {
-			continue
-		}
-		mount := strings.ReplaceAll(strings.ReplaceAll(fields[4], "\\040", " "), "\\011", "\t")
 		var st unix.Statfs_t
-		if err := unix.Statfs(mount, &st); err != nil {
-			continue
+		if err := unix.Statfs(mount.Mountpoint, &st); err != nil {
+			return nil, fmt.Errorf("statfs %q: %w", mount.Mountpoint, err)
 		}
 		blockSize := uint64(st.Bsize)
 		total := st.Blocks * blockSize
@@ -235,7 +252,10 @@ func filesystemMetrics() ([]*hostmetricpb.FilesystemMetric, error) {
 		if total >= available {
 			used = total - available
 		}
-		metric := &hostmetricpb.FilesystemMetric{Device: fields[sep+2], Mountpoint: mount, FsType: fsType, TotalBytes: total, UsedBytes: used, AvailableBytes: available, ReadOnly: strings.Contains(fields[5], "ro")}
+		metric := &hostmetricpb.FilesystemMetric{
+			Device: mount.Device, Mountpoint: mount.Mountpoint, FsType: mount.FSType,
+			TotalBytes: total, UsedBytes: used, AvailableBytes: available, ReadOnly: mount.ReadOnly,
+		}
 		if total > 0 {
 			metric.UsagePercent = float64(used) * 100 / float64(total)
 		}

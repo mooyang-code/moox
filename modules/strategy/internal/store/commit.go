@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -21,31 +20,34 @@ func (s *Store) Commit(ctx context.Context, task domain.Task, output domain.Outp
 	for attempt := 0; attempt < 4; attempt++ {
 		err = s.commitOnce(ctx, task, output, inputHash)
 		if !isRetryableLock(err) || attempt == 3 {
-			observeStrategyCommit(task, err)
+			s.observeCommit(task, err)
 			return err
 		}
 		select {
 		case <-ctx.Done():
-			observeStrategyCommit(task, ctx.Err())
+			s.observeCommit(task, ctx.Err())
 			return ctx.Err()
 		case <-time.After(time.Duration(1<<attempt) * time.Millisecond):
 		}
 	}
-	observeStrategyCommit(task, err)
+	s.observeCommit(task, err)
 	return err
 }
 
-func observeStrategyCommit(task domain.Task, err error) {
+func (s *Store) observeCommit(task domain.Task, err error) {
+	if s == nil || s.metrics == nil {
+		return
+	}
 	result := "success"
 	if err != nil {
 		result = "error"
 	}
-	_ = report.ObserveModuleRun("strategy", "target_commit", result, "strategy-targets", time.Now())
+	_ = s.metrics.ObserveRun("target_commit", result, "strategy-targets", time.Now())
 	watermark, parseErr := time.Parse(time.RFC3339Nano, task.TriggerBarTime)
 	if parseErr == nil {
-		_ = report.ObserveModuleInputWatermark("strategy", "target_commit", "strategy-targets", watermark)
+		_ = s.metrics.AdvanceInputWatermark("target_commit", "strategy-targets", watermark)
 		if err == nil {
-			_ = report.ObserveModuleWatermark("strategy", "target_commit", "strategy-targets", watermark)
+			_ = s.metrics.AdvanceWatermark("target_commit", "strategy-targets", watermark)
 		}
 	}
 }

@@ -32,12 +32,14 @@ type HistoryReader interface {
 }
 
 type Store struct {
-	writer SnapshotWriter
-	reader HistoryReader
-	alert  *AlertEvaluator
-	ready  func() bool
-	mu     sync.RWMutex
-	latest map[string]AgentView
+	writer   SnapshotWriter
+	reader   HistoryReader
+	alert    *AlertEvaluator
+	registry *Registry
+	presence PresenceTransitionSink
+	ready    func() bool
+	mu       sync.RWMutex
+	latest   map[string]AgentView
 }
 
 func NewStore(writer SnapshotWriter, reader HistoryReader) *Store {
@@ -47,6 +49,18 @@ func NewStore(writer SnapshotWriter, reader HistoryReader) *Store {
 func (s *Store) SetAlertEvaluator(evaluator *AlertEvaluator) {
 	if s != nil {
 		s.alert = evaluator
+	}
+}
+
+func (s *Store) SetRegistry(registry *Registry) {
+	if s != nil {
+		s.registry = registry
+	}
+}
+
+func (s *Store) SetPresenceTransitionSink(sink PresenceTransitionSink) {
+	if s != nil {
+		s.presence = sink
 	}
 }
 
@@ -62,7 +76,7 @@ func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error
 	if msg == nil {
 		return nil, errors.New("message is nil")
 	}
-	if msg.GetEventName() != events.MetricsHostReported.Name() || msg.GetEventVersion() != events.MetricsHostReported.Version() {
+	if msg.GetEventName() != events.ObservabilityHostSnapshotReported.Name() || msg.GetEventVersion() != events.ObservabilityHostSnapshotReported.Version() {
 		return nil, errors.New("host metric envelope contract mismatch")
 	}
 	if msg.GetSpaceId() != SpaceID || strings.TrimSpace(msg.GetSubjectId()) == "" {
@@ -178,6 +192,13 @@ func validateSnapshot(s *hostmetricpb.HostSnapshot) error {
 				}
 			}
 		}
+		if n.GetErrorRateAvailable() {
+			for _, value := range []float64{n.GetReceiveErrorsPerSecond(), n.GetTransmitErrorsPerSecond()} {
+				if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+					return errors.New("network error rate is invalid")
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -205,28 +226,53 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	if s == nil {
 		return errors.New("host metric store is nil")
 	}
-	if !s.StorageReady() {
-		return errors.New("host storage schema is not ready")
-	}
-	if s == nil || s.writer == nil {
-		return errors.New("host metric storage writer is not configured")
-	}
 	if msg == nil || metric == nil {
 		return errors.New("host metric event is incomplete")
 	}
-	if err := s.writer.WriteSnapshot(ctx, metric.GetSnapshot(), metric.GetAgentId(), msg.GetOccurredAt().AsTime(), msg.GetEventId()); err != nil {
+	occurredAt := msg.GetOccurredAt().AsTime().UTC()
+	current := true
+	if s.registry != nil {
+		result, err := s.registry.Observe(ctx, HostObservation{
+			AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
+			OccurredAt: occurredAt, EventID: msg.GetEventId(),
+		})
+		if err != nil {
+			return fmt.Errorf("update host agent registry: %w", err)
+		}
+		current = result.Current
+		if result.Transition != nil && s.presence != nil {
+			_ = s.presence.HandlePresenceTransition(ctx, *result.Transition)
+		}
+	}
+	if !current {
+		return nil
+	}
+	if !s.StorageReady() {
+		return errors.New("host storage schema is not ready")
+	}
+	if s.writer == nil {
+		return errors.New("host metric storage writer is not configured")
+	}
+	if err := s.writer.WriteSnapshot(ctx, metric.GetSnapshot(), metric.GetAgentId(), occurredAt, msg.GetEventId()); err != nil {
 		return fmt.Errorf("write host metric snapshot: %w", err)
 	}
-	now := time.Now().UTC()
-	view := AgentView{AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(), LastSeenAt: now.Format(time.RFC3339Nano), Snapshot: cloneSnapshot(metric.GetSnapshot())}
+	view := AgentView{
+		AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
+		LastSeenAt: occurredAt.Format(time.RFC3339Nano), Reachable: true,
+		Snapshot: cloneSnapshot(metric.GetSnapshot()),
+	}
 	s.mu.Lock()
 	if s.latest == nil {
 		s.latest = make(map[string]AgentView)
 	}
-	s.latest[view.AgentID] = view
+	previous, exists := s.latest[view.AgentID]
+	previousSeenAt, parseErr := time.Parse(time.RFC3339Nano, previous.LastSeenAt)
+	if !exists || parseErr != nil || occurredAt.After(previousSeenAt) {
+		s.latest[view.AgentID] = view
+	}
 	s.mu.Unlock()
 	if s.alert != nil {
-		_ = s.alert.Evaluate(ctx, metric.GetAgentId(), msg.GetEventId(), metric.GetSnapshot(), msg.GetOccurredAt().AsTime())
+		_ = s.alert.Evaluate(ctx, metric.GetAgentId(), msg.GetEventId(), metric.GetSnapshot(), occurredAt)
 	}
 	return nil
 }
@@ -234,6 +280,8 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 type AgentView struct {
 	AgentID, Hostname, BootID, LastSeenAt string
 	Archived                              bool
+	Reachable                             bool
+	StaleSeconds                          int64
 	Snapshot                              *hostmetricpb.HostSnapshot
 }
 
@@ -248,6 +296,27 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
 	}
 	if s == nil {
 		return nil, errors.New("host metric store is nil")
+	}
+	if s.registry != nil {
+		presence, err := s.registry.List(ctx, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		s.mu.RLock()
+		out := make([]AgentView, 0, len(presence))
+		for _, agent := range presence {
+			view := AgentView{
+				AgentID: agent.AgentID, Hostname: agent.Hostname, BootID: agent.BootID,
+				LastSeenAt: agent.LastSeenAt.Format(time.RFC3339Nano),
+				Reachable:  agent.Reachable, StaleSeconds: agent.StaleSeconds,
+			}
+			if latest, ok := s.latest[agent.AgentID]; ok {
+				view.Snapshot = cloneSnapshot(latest.Snapshot)
+			}
+			out = append(out, view)
+		}
+		s.mu.RUnlock()
+		return out, nil
 	}
 	s.mu.RLock()
 	out := make([]AgentView, 0, len(s.latest))

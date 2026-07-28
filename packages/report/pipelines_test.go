@@ -1,26 +1,17 @@
 package report
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-)
 
-func TestPipelineAllowlistRejectsThirtyThreePipelines(t *testing.T) {
-	cfg := PipelineConfig{Version: 1}
-	for i := 0; i < MaxPipelines+1; i++ {
-		cfg.Pipelines = append(cfg.Pipelines, Pipeline{ID: fmt.Sprintf("pipeline-%d", i), Module: "factor", SpaceID: "s", InputDataset: "i", OutputDataset: "o", LagTolerance: time.Second})
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("33 pipelines were accepted")
-	}
-}
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 func TestLoadPipelineAllowlistValidatesAndHashes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pipelines.yaml")
-	raw := "version: 1\npipelines:\n  - id: strategy-targets\n    module: strategy\n    space_id: crypto\n    input_dataset: factors\n    output_dataset: targets\n    lag_tolerance: 5m\n    enabled: true\n    crosses_storage_deferred: true\n"
+	raw := "version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n  overrides:\n    - space_id: crypto\n      dataset_id: market_kline\n      freq: 1m\n      canary_subject_id: BTC-USDT\n      watermark_lag: 5m\n"
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -28,15 +19,16 @@ func TestLoadPipelineAllowlistValidatesAndHashes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Pipelines) != 1 || len(cfg.IDsForModule("strategy")) != 1 || cfg.Checksum == "" {
+	if len(cfg.RealtimeTimeSeries.Overrides) != 1 || cfg.Checksum == "" {
 		t.Fatalf("config = %+v", cfg)
 	}
 }
 
 func TestPipelineAllowlistRejectsInvalidDefinitions(t *testing.T) {
 	for _, raw := range []string{
-		"version: 1\npipelines:\n  - id: duplicate\n    module: factor\n    space_id: s\n    input_dataset: i\n    output_dataset: o\n    lag_tolerance: 1s\n  - id: duplicate\n    module: factor\n    space_id: s\n    input_dataset: i\n    output_dataset: o\n    lag_tolerance: 1s\n",
-		"version: 1\npipelines:\n  - id: invalid\n    module: factor\n    space_id: ''\n    input_dataset: i\n    output_dataset: o\n    lag_tolerance: 0s\n",
+		"version: 1\npipelines: []\n",
+		"version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 0\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n",
+		"version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n  overrides:\n    - space_id: s\n      dataset_id: d\n      freq: bad\n",
 	} {
 		path := filepath.Join(t.TempDir(), "pipelines.yaml")
 		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
@@ -45,5 +37,88 @@ func TestPipelineAllowlistRejectsInvalidDefinitions(t *testing.T) {
 		if _, err := LoadPipelineAllowlist(path); err == nil {
 			t.Fatalf("invalid config accepted: %s", raw)
 		}
+	}
+}
+
+func TestRealV2ConfigEnablesBuiltInModuleMetrics(t *testing.T) {
+	cfg, err := LoadPipelineAllowlist(filepath.Join("..", "..", "examples", "monitor-pipelines.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		module, pipeline, stage string
+		freshness               bool
+		watermark               bool
+	}{
+		{"archive", "archive-materialize", "materialize", false, false},
+		{"cloudnode", "cloudnode-jobs", "dispatch", false, false},
+		{"collector", "collector-market-data", "collect", false, false},
+		{"factor", "factor-calculation", "calculate", false, false},
+		{"monitor", "monitor-metrics", "ingest", true, true},
+		{"strategy", "strategy-targets", "target_commit", false, false},
+		{"trade", "trade-rebalance", "rebalance", false, false},
+	}
+	if len(cfg.Pipelines) != len(cases) {
+		t.Fatalf("built-in pipelines = %+v", cfg.Pipelines)
+	}
+	now := time.Now().UTC()
+	for _, test := range cases {
+		t.Run(test.module, func(t *testing.T) {
+			ids := cfg.IDsForModule(test.module)
+			if len(ids) != 1 || ids[0] != test.pipeline {
+				t.Fatalf("pipeline IDs = %v", ids)
+			}
+			registry := prometheus.NewRegistry()
+			metrics, err := NewModuleMetrics(registry, test.module, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := metrics.ObserveRun(test.stage, "success", test.pipeline, now); err != nil {
+				t.Fatal(err)
+			}
+			if test.watermark {
+				if err := metrics.AdvanceInputWatermark(test.stage, test.pipeline, now); err != nil {
+					t.Fatal(err)
+				}
+				if err := metrics.AdvanceWatermark(test.stage, test.pipeline, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			families, err := registry.Gather()
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireMetricFamily(t, families, ModuleMetricName(test.module, ModuleMetricRuns))
+			if test.watermark {
+				requireMetricFamily(t, families, ModuleMetricName(test.module, ModuleMetricBusinessWatermark))
+			}
+			found := false
+			for _, pipeline := range cfg.Pipelines {
+				if pipeline.ID == test.pipeline {
+					found = true
+					if pipeline.FreshnessMonitoring != test.freshness {
+						t.Fatalf("freshness monitoring = %v", pipeline.FreshnessMonitoring)
+					}
+					if pipeline.WatermarkMonitoring != test.watermark {
+						t.Fatalf("watermark monitoring = %v", pipeline.WatermarkMonitoring)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("pipeline %q not found", test.pipeline)
+			}
+		})
+	}
+}
+
+func TestPipelineEnvironmentWithoutFileStillUsesBuiltInRegistry(t *testing.T) {
+	t.Setenv("MOOX_PIPELINE_CONFIG", "")
+	t.Setenv("MOOX_PIPELINE_CONFIG_HASH", "")
+	cfg, err := ValidatePipelineEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.IDsForModule("monitor"); len(got) != 1 || got[0] != "monitor-metrics" {
+		t.Fatalf("monitor pipelines = %v", got)
 	}
 }

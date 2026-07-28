@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,6 +37,10 @@ type EventBus struct {
 	TLSEnabled    bool   `toml:"tls_enabled"`
 }
 
+type Monitoring struct {
+	WeComWebhook string `toml:"wecom_webhook"`
+}
+
 type Host struct {
 	Name     string `toml:"name"`
 	Address  string `toml:"address"`
@@ -48,6 +53,7 @@ type Manifest struct {
 	Admin        Admin        `toml:"admin"`
 	TencentCloud TencentCloud `toml:"tencent_cloud"`
 	EventBus     EventBus     `toml:"eventbus"`
+	Monitoring   Monitoring   `toml:"monitoring"`
 	ControlHost  Host         `toml:"control_host"`
 	CompileHost  Host         `toml:"compile_host"`
 	OtherHosts   []Host       `toml:"other_hosts"`
@@ -210,6 +216,10 @@ func validate(manifest *Manifest) error {
 	if !manifest.EventBus.TLSEnabled {
 		return fmt.Errorf("config_invalid: eventbus.tls_enabled must be true")
 	}
+	manifest.Monitoring.WeComWebhook = strings.TrimSpace(manifest.Monitoring.WeComWebhook)
+	if manifest.Monitoring.WeComWebhook != "" && !validHTTPSWebhook(manifest.Monitoring.WeComWebhook) {
+		return fmt.Errorf("config_invalid: monitoring.wecom_webhook must be a valid HTTPS URL")
+	}
 
 	names := make(map[string]struct{}, 1+len(manifest.OtherHosts))
 	addresses := make(map[string]struct{}, 1+len(manifest.OtherHosts))
@@ -229,6 +239,12 @@ func validate(manifest *Manifest) error {
 		}
 	}
 	return nil
+}
+
+func validHTTPSWebhook(rawURL string) bool {
+	parsed, err := url.ParseRequestURI(rawURL)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" &&
+		parsed.User == nil && parsed.Fragment == ""
 }
 
 var dnsLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)

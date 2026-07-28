@@ -30,6 +30,19 @@ func TestMetricMessageStoreNilGuards(t *testing.T) {
 	assert.Equal(t, empty.DedupeRetention.Hours(), float64(7*24))
 }
 
+func TestMonotonicMetricRecognizesCanonicalModuleNames(t *testing.T) {
+	for _, name := range []string{
+		"moox_factor_last_success_timestamp_seconds",
+		"moox_monitor_business_watermark_timestamp_seconds",
+		"moox_strategy_input_watermark_timestamp_seconds",
+		"moox_trade_metrics_errors_total",
+		"moox_archive_metrics_last_error_timestamp_seconds",
+	} {
+		require.True(t, monotonicMetric(name), name)
+	}
+	require.False(t, monotonicMetric("moox_factor_runs_total"))
+}
+
 func metricMessageStoreForTest(t *testing.T, db *store.Store) *MetricMessageStore {
 	t.Helper()
 	result, err := store.WithDatabase(db, NewMetricMessageStore)

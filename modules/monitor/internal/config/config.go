@@ -12,14 +12,16 @@ import (
 )
 
 type Config struct {
-	Database   DatabaseConfig   `yaml:"database"`
-	Health     HealthConfig     `yaml:"health"`
-	HealthAuth HealthAuthConfig `yaml:"health_auth"`
-	Instance   InstanceConfig   `yaml:"instance"`
-	Scheduler  SchedulerConfig  `yaml:"scheduler"`
-	SysDeploy  SysDeployConfig  `yaml:"sysdeploy"`
-	Alert      AlertConfig      `yaml:"alert"`
-	Metrics    MetricsConfig    `yaml:"metrics"`
+	Database      DatabaseConfig      `yaml:"database"`
+	Health        HealthConfig        `yaml:"health"`
+	HealthAuth    HealthAuthConfig    `yaml:"health_auth"`
+	Instance      InstanceConfig      `yaml:"instance"`
+	Scheduler     SchedulerConfig     `yaml:"scheduler"`
+	SysDeploy     SysDeployConfig     `yaml:"sysdeploy"`
+	Alert         AlertConfig         `yaml:"alert"`
+	Observability ObservabilityConfig `yaml:"observability"`
+	Metrics       MetricsConfig       `yaml:"metrics"`
+	MarketCanary  MarketCanaryConfig  `yaml:"market_canary"`
 }
 
 type DatabaseConfig struct {
@@ -68,22 +70,34 @@ type AlertConfig struct {
 }
 
 type MetricsConfig struct {
-	Enabled                    bool                 `yaml:"enabled"`
-	EventBusURL                string               `yaml:"eventbus_url"`
-	EventBusCredentialFile     string               `yaml:"eventbus_credential_file"`
-	HostEventBusCredentialFile string               `yaml:"host_eventbus_credential_file"`
-	PipelineConfigPath         string               `yaml:"pipeline_config_path"`
-	Consumer                   string               `yaml:"-"`
-	FetchBatchSize             int                  `yaml:"fetch_batch_size"`
-	FetchMaxWait               time.Duration        `yaml:"fetch_max_wait"`
-	AckWait                    time.Duration        `yaml:"-"`
-	MaxAckPending              int                  `yaml:"-"`
-	NoDataIntervals            int                  `yaml:"no_data_intervals"`
-	Storage                    MetricsStorageConfig `yaml:"storage"`
-	HostStorage                HostStorageConfig    `yaml:"host_storage"`
+	Enabled            bool                 `yaml:"enabled"`
+	PipelineConfigPath string               `yaml:"pipeline_config_path"`
+	NoDataIntervals    int                  `yaml:"no_data_intervals"`
+	Storage            MetricsStorageConfig `yaml:"storage"`
+	HostStorage        HostStorageConfig    `yaml:"host_storage"`
 }
 
-const MetricsConsumer = "monitor_metrics_ingest_v1"
+type ObservabilityConfig struct {
+	Enabled                    bool     `yaml:"enabled"`
+	EventBusURLs               []string `yaml:"eventbus_urls"`
+	CredentialFile             string   `yaml:"credential_file"`
+	BalanceDifferenceThreshold float64  `yaml:"balance_difference_threshold"`
+}
+
+type MarketCanaryConfig struct {
+	Enabled              bool                  `yaml:"enabled"`
+	Freshness            time.Duration         `yaml:"freshness"`
+	ReturnThreshold      float64               `yaml:"return_threshold"`
+	VolumeRatioThreshold float64               `yaml:"volume_ratio_threshold"`
+	Subjects             []MarketCanarySubject `yaml:"subjects"`
+}
+
+type MarketCanarySubject struct {
+	SpaceID   string `yaml:"space_id"`
+	DatasetID string `yaml:"dataset_id"`
+	Symbol    string `yaml:"symbol"`
+	Frequency string `yaml:"frequency"`
+}
 
 type MetricsStorageConfig struct {
 	GatewayTarget              string        `yaml:"gateway_target"`
@@ -164,7 +178,9 @@ func Default() *Config {
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
-		Metrics: MetricsConfig{Enabled: true, EventBusURL: "nats://127.0.0.1:4222", PipelineConfigPath: "../config/monitor-pipelines.yaml", Consumer: MetricsConsumer, FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute, MaxAckPending: 256, NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
+		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
+		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "binance_spot_kline", Symbol: "BTC-USDT", Frequency: "1m"}}},
+		Metrics:       MetricsConfig{Enabled: true, PipelineConfigPath: "../../examples/monitor-pipelines.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
 
@@ -210,26 +226,28 @@ func (c *Config) applyDefaults() {
 		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
 	}
 	metricsDefaults := Default().Metrics
-	if c.Metrics.EventBusURL == "" {
-		c.Metrics.EventBusURL = metricsDefaults.EventBusURL
+	observabilityDefaults := Default().Observability
+	if len(c.Observability.EventBusURLs) == 0 {
+		c.Observability.EventBusURLs = observabilityDefaults.EventBusURLs
+	}
+	if c.Observability.BalanceDifferenceThreshold == 0 {
+		c.Observability.BalanceDifferenceThreshold = observabilityDefaults.BalanceDifferenceThreshold
+	}
+	canaryDefaults := Default().MarketCanary
+	if c.MarketCanary.Freshness == 0 {
+		c.MarketCanary.Freshness = canaryDefaults.Freshness
+	}
+	if c.MarketCanary.ReturnThreshold == 0 {
+		c.MarketCanary.ReturnThreshold = canaryDefaults.ReturnThreshold
+	}
+	if c.MarketCanary.VolumeRatioThreshold == 0 {
+		c.MarketCanary.VolumeRatioThreshold = canaryDefaults.VolumeRatioThreshold
+	}
+	if len(c.MarketCanary.Subjects) == 0 {
+		c.MarketCanary.Subjects = canaryDefaults.Subjects
 	}
 	if c.Metrics.PipelineConfigPath == "" {
 		c.Metrics.PipelineConfigPath = metricsDefaults.PipelineConfigPath
-	}
-	if c.Metrics.Consumer == "" {
-		c.Metrics.Consumer = metricsDefaults.Consumer
-	}
-	if c.Metrics.FetchBatchSize == 0 {
-		c.Metrics.FetchBatchSize = metricsDefaults.FetchBatchSize
-	}
-	if c.Metrics.FetchMaxWait == 0 {
-		c.Metrics.FetchMaxWait = metricsDefaults.FetchMaxWait
-	}
-	if c.Metrics.AckWait == 0 {
-		c.Metrics.AckWait = metricsDefaults.AckWait
-	}
-	if c.Metrics.MaxAckPending == 0 {
-		c.Metrics.MaxAckPending = metricsDefaults.MaxAckPending
 	}
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
@@ -315,8 +333,11 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_SYSDEPLOY_TARGET"); v != "" {
 		c.SysDeploy.Target = v
 	}
-	if v := firstEnv("MOOX_METRICS_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
-		c.Metrics.EventBusURL = v
+	if v := firstEnv("MOOX_OBSERVABILITY_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
+		c.Observability.EventBusURLs = strings.Split(v, ",")
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_CREDENTIAL_FILE")); v != "" {
+		c.Observability.CredentialFile = v
 	}
 	if v := strings.TrimSpace(os.Getenv("MOOX_PIPELINE_CONFIG")); v != "" {
 		c.Metrics.PipelineConfigPath = v
@@ -338,6 +359,36 @@ func (c *Config) applyEnv() {
 func (c *Config) Validate() error {
 	if c.Instance.InstanceID == "" {
 		return fmt.Errorf("instance.instance_id must not be empty")
+	}
+	if c.Alert.SendTimeoutSeconds <= 0 || c.Alert.SendTimeoutSeconds > 300 {
+		return fmt.Errorf("alert.send_timeout_seconds must be between 1 and 300")
+	}
+	if c.Observability.Enabled {
+		if len(c.Observability.EventBusURLs) == 0 {
+			return fmt.Errorf("observability.eventbus_urls must not be empty")
+		}
+		for _, url := range c.Observability.EventBusURLs {
+			if strings.TrimSpace(url) == "" {
+				return fmt.Errorf("observability.eventbus_urls must not contain empty values")
+			}
+		}
+		if c.Observability.BalanceDifferenceThreshold <= 0 || c.Observability.BalanceDifferenceThreshold > 1 {
+			return fmt.Errorf("observability.balance_difference_threshold must be in (0, 1]")
+		}
+	}
+	if c.MarketCanary.Enabled {
+		if c.MarketCanary.Freshness <= 0 || c.MarketCanary.ReturnThreshold <= 0 || c.MarketCanary.VolumeRatioThreshold <= 0 {
+			return fmt.Errorf("market_canary thresholds and freshness must be positive")
+		}
+		if len(c.MarketCanary.Subjects) == 0 || len(c.MarketCanary.Subjects) > 8 {
+			return fmt.Errorf("market_canary subjects must contain between 1 and 8 entries")
+		}
+		for _, subject := range c.MarketCanary.Subjects {
+			if strings.TrimSpace(subject.SpaceID) == "" || strings.TrimSpace(subject.DatasetID) == "" ||
+				strings.TrimSpace(subject.Symbol) == "" || strings.TrimSpace(subject.Frequency) == "" {
+				return fmt.Errorf("market_canary subject requires space_id, dataset_id, symbol, and frequency")
+			}
+		}
 	}
 	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
 		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")

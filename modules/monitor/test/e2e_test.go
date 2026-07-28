@@ -25,6 +25,12 @@ func TestSingleMonitorSchedulesEveryCheckAndOwnsEveryAlert(t *testing.T) {
 		t.Fatal(err)
 	}
 	repos := mgr.Repositories()
+	if err := repos.Alerts.CreateWebhook(ctx, &domain.WebhookChannel{
+		WebhookID: "ops", Name: "ops", URL: "http://127.0.0.1/webhook",
+		Method: "POST", Headers: "{}", BodyTemplate: "{}", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, id := range []string{"service-a", "service-b"} {
 		check := &domain.Check{
@@ -36,13 +42,14 @@ func TestSingleMonitorSchedulesEveryCheckAndOwnsEveryAlert(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := repos.Alerts.CreateRule(ctx, &domain.AlertRule{
-			RuleID: "rule-" + id, CheckID: id, FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
+			RuleID: "rule-" + id, CheckID: id, WebhookID: "ops",
+			FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	evaluator := alerting.NewEvaluator(repos.Alerts, alerting.Options{})
+	evaluator := alerting.NewEvaluator(repos.Alerts, alerting.Options{Notifier: noopNotifier{}})
 	sched := scheduler.New(repos, scheduler.Options{
 		InstanceID: "monitor-local",
 		Runner:     failingRunner{},
@@ -81,6 +88,10 @@ func TestSingleMonitorSchedulesEveryCheckAndOwnsEveryAlert(t *testing.T) {
 }
 
 type failingRunner struct{}
+
+type noopNotifier struct{}
+
+func (noopNotifier) Send(context.Context, domain.WebhookChannel, alerting.Event) error { return nil }
 
 func (failingRunner) Run(_ context.Context, check domain.Check) domain.CheckResult {
 	return domain.CheckResult{

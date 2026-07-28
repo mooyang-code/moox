@@ -138,9 +138,12 @@ func diskRow(space, dataset, freq, at string, disk *hostmetricpb.DiskMetric, age
 }
 
 func networkRow(space, dataset, freq, at string, network *hostmetricpb.NetworkMetric, agentID string) *storagepb.RowFieldUpsert {
-	fields := []*storagepb.FieldValue{stringColumn("device", network.GetDevice()), stringColumn("operstate", network.GetOperstate()), intColumn("receive_bytes_total", network.GetReceiveBytesTotal()), intColumn("transmit_bytes_total", network.GetTransmitBytesTotal()), intColumn("receive_errors_total", network.GetReceiveErrorsTotal()), intColumn("transmit_errors_total", network.GetTransmitErrorsTotal()), intColumn("receive_dropped_total", network.GetReceiveDroppedTotal()), intColumn("transmit_dropped_total", network.GetTransmitDroppedTotal()), boolColumn("rate_available", network.GetRateAvailable())}
+	fields := []*storagepb.FieldValue{stringColumn("device", network.GetDevice()), stringColumn("operstate", network.GetOperstate()), intColumn("receive_bytes_total", network.GetReceiveBytesTotal()), intColumn("transmit_bytes_total", network.GetTransmitBytesTotal()), intColumn("receive_errors_total", network.GetReceiveErrorsTotal()), intColumn("transmit_errors_total", network.GetTransmitErrorsTotal()), intColumn("receive_dropped_total", network.GetReceiveDroppedTotal()), intColumn("transmit_dropped_total", network.GetTransmitDroppedTotal()), boolColumn("rate_available", network.GetRateAvailable()), boolColumn("error_rate_available", network.GetErrorRateAvailable())}
 	if network.GetRateAvailable() {
 		fields = append(fields, doubleColumn("receive_bytes_per_second", network.GetReceiveBytesPerSecond()), doubleColumn("transmit_bytes_per_second", network.GetTransmitBytesPerSecond()))
+	}
+	if network.GetErrorRateAvailable() {
+		fields = append(fields, doubleColumn("receive_errors_per_second", network.GetReceiveErrorsPerSecond()), doubleColumn("transmit_errors_per_second", network.GetTransmitErrorsPerSecond()))
 	}
 	dimensions := map[string]string{"device": network.GetDevice()}
 	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Fields: fields}

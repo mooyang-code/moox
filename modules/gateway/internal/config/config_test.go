@@ -73,6 +73,7 @@ func TestLoadAcceptsExplicitPublicNativeListener(t *testing.T) {
 		"  service_addr: 127.0.0.1:11002\n  native_addr: 0.0.0.0:11003\n",
 		1,
 	)
+	yaml = strings.Replace(yaml, "health_addr: 127.0.0.1:11012", "health_addr: 0.0.0.0:11012", 1)
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +83,9 @@ func TestLoadAcceptsExplicitPublicNativeListener(t *testing.T) {
 	}
 	if cfg.Server.NativeAddr != PublicNativeServiceAddress {
 		t.Fatalf("native address = %s", cfg.Server.NativeAddr)
+	}
+	if cfg.Server.HealthAddr != PublicHealthAddress {
+		t.Fatalf("health address = %s", cfg.Server.HealthAddr)
 	}
 }
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -76,4 +77,24 @@ func TestCollectorRuleSchemaOmitsNodeAssignmentColumns(t *testing.T) {
 	} {
 		assert.False(t, columns[forbidden], "schema still contains %s", forbidden)
 	}
+}
+
+func TestTaskRuleRepository_ListEnabledAllRejectsPartialSnapshot(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.TaskRules()
+	ctx := context.Background()
+	for index := 0; index < 3; index++ {
+		require.NoError(t, repo.Create(ctx, domain.TaskRule{
+			SpaceID: "crypto", RuleID: fmt.Sprintf("rule-%d", index), Enabled: true,
+		}))
+	}
+	rows, err := repo.ListEnabledAll(ctx, 3)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+
+	rows, err = repo.ListEnabledAll(ctx, 2)
+	require.ErrorContains(t, err, "exceeds limit")
+	require.Nil(t, rows)
+	_, err = repo.ListEnabledAll(ctx, MaxEnabledTaskRules+1)
+	require.Error(t, err)
 }

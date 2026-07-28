@@ -87,7 +87,7 @@ func TestCommitIngestDoesNotMoveSeriesLastSeenBackwards(t *testing.T) {
 	}
 }
 
-func TestCommitIngestDoesNotMoveBusinessWatermarkBackwardsAfterRestart(t *testing.T) {
+func TestCommitIngestDoesNotMoveDatasetWatermarkBackwardsAfterRestart(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	requireNoError(t, err)
 	defer mgr.Close()
@@ -96,7 +96,7 @@ func TestCommitIngestDoesNotMoveBusinessWatermarkBackwardsAfterRestart(t *testin
 	newMessage := func(id string) (*eventpb.EventMessage, *metricspb.MetricReport) {
 		return &eventpb.EventMessage{EventId: id, OccurredAt: timestamppb.Now()}, &metricspb.MetricReport{ServiceName: "factor", InstanceId: "factor@node-a", BootId: "boot-a"}
 	}
-	name := "moox_module_input_watermark_timestamp_seconds"
+	name := "moox_factor_dataset_output_watermark_timestamp_seconds"
 	msg, report := newMessage("new")
 	if _, err := r.CommitIngest(context.Background(), msg, report, []Sample{{SeriesID: "watermark", ServiceName: "factor", InstanceID: "factor@node-a", MetricName: name, MetricType: "gauge", Value: 200, ObservedAt: time.Unix(20, 0).UTC(), MessageID: "new"}}); err != nil {
 		t.Fatal(err)

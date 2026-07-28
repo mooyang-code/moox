@@ -2,9 +2,7 @@ package telemetry
 
 import (
 	"sync"
-	"time"
 
-	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -24,16 +22,6 @@ var (
 
 func init() {
 	prometheus.MustRegister(Commands, Submissions, Fills, UnknownOrders, ReconciliationDifferences, Rebalances, OperationLatency)
-}
-
-func RecordModuleStage(stage, result string, watermark time.Time) {
-	_ = report.ObserveModuleRun("trade", stage, result, "trade-rebalance", time.Now())
-	if !watermark.IsZero() {
-		_ = report.ObserveModuleInputWatermark("trade", stage, "trade-rebalance", watermark)
-		if result == "success" {
-			_ = report.ObserveModuleWatermark("trade", stage, "trade-rebalance", watermark)
-		}
-	}
 }
 
 func SetPrivateExpected(keys map[string]bool) {

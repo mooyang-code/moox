@@ -23,4 +23,14 @@ func TestHostMetricContract(t *testing.T) {
 			t.Fatalf("removed field %s is present", name)
 		}
 	}
+	networkFields := (&NetworkMetric{}).ProtoReflect().Descriptor().Fields()
+	for name, number := range map[string]protoreflect.FieldNumber{
+		"receive_errors_per_second":  12,
+		"transmit_errors_per_second": 13,
+		"error_rate_available":       14,
+	} {
+		if field := networkFields.ByName(protoreflect.Name(name)); field == nil || field.Number() != number {
+			t.Fatalf("network field %s = %v, want %d", name, field, number)
+		}
+	}
 }

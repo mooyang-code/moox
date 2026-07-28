@@ -11,10 +11,11 @@ require (
 	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudjobqueue v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudruntime v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/msgbox v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/tencentyun/scf-go-lib v0.0.0-20230904103145-13c9a7eeca80
 	google.golang.org/protobuf v1.36.11
@@ -28,14 +29,23 @@ require (
 )
 
 require (
+	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
+	github.com/google/go-tpm v0.9.8 // indirect
+	github.com/minio/highwayhash v1.0.4 // indirect
+	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/nats-io/jwt/v2 v2.8.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )
 
 replace github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen => ../cloudnode/proto/cloudnodegen
@@ -59,6 +69,16 @@ replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+
+replace github.com/mooyang-code/moox/packages/msgbox => ../../packages/msgbox
+
+replace github.com/mooyang-code/moox/packages/observabilitypb => ../../packages/observabilitypb
+
+replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
+
+replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
+
+replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
@@ -86,11 +106,11 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/nats-io/nats-server/v2 v2.11.17 // indirect; test-only embedded broker
 	github.com/nats-io/nats.go v1.51.0
-	github.com/nats-io/nats-server/v2 v2.11.17 // test-only embedded broker
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -113,7 +133,7 @@ require (
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	modernc.org/libc v1.67.6 // indirect

@@ -209,3 +209,63 @@ export interface MetricQueryFilters {
   labels_json?: string;
   page?: PageRequest;
 }
+
+export type ObservabilityStatus = "healthy" | "stale" | "degraded" | "down" | "unknown" | string;
+
+export interface ServiceObservabilityStatus {
+  node_id?: string;
+  service_name?: string;
+  instance_id?: string;
+  status?: ObservabilityStatus;
+  reason?: string;
+  last_seen_at?: string;
+}
+
+export interface HostObservabilityStatus {
+  agent_id?: string;
+  hostname?: string;
+  status?: ObservabilityStatus;
+  reason?: string;
+  last_seen_at?: string;
+  cpu_percent?: number;
+  memory_percent?: number;
+  filesystem_max_percent?: number;
+}
+
+export interface ScfObservabilitySummary {
+  online_count?: number;
+  timeout_count?: number;
+  unknown_count?: number;
+  oldest_heartbeat_at?: string;
+}
+
+export interface DatasetFrequencyStatus {
+  producer?: string;
+  space_id?: string;
+  dataset_id?: string;
+  freq?: string;
+  status?: ObservabilityStatus;
+  reason?: string;
+  last_run_at?: string;
+  last_success_at?: string;
+  input_watermark_at?: string;
+  output_watermark_at?: string;
+  lag_seconds?: number;
+}
+
+export interface BusinessObservabilityStatus {
+  kind?: string;
+  module?: string;
+  status?: ObservabilityStatus;
+  reason?: string;
+  last_checked_at?: string;
+}
+
+export interface ObservabilityOverview {
+  generated_at?: string;
+  services?: ServiceObservabilityStatus[];
+  hosts?: HostObservabilityStatus[];
+  scf?: ScfObservabilitySummary;
+  datasets?: DatasetFrequencyStatus[];
+  business_checks?: BusinessObservabilityStatus[];
+}

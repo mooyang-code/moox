@@ -12,6 +12,7 @@ import {
   type MetricRuleState,
   type MetricSeriesInfo,
   type MetricServiceInfo,
+  type ObservabilityOverview,
   type PageRequest,
   type PageResult,
   type WebhookChannel
@@ -34,6 +35,14 @@ function boundedLimit(limit: number | undefined, max: number, fallback: number):
 }
 
 export const metricMonitorApi = {
+  getObservabilityOverview(req: { space_id?: string } = {}) {
+    return callControl<typeof req, { overview?: ObservabilityOverview }>(
+      METRIC_MONITOR_SERVICE,
+      "GetObservabilityOverview",
+      req
+    );
+  },
+
   listMetricServices(req: { space_id?: string; page?: PageRequest } = {}) {
     return callControl<typeof req, { services?: MetricServiceInfo[]; page_result?: PageResult }>(
       METRIC_MONITOR_SERVICE,

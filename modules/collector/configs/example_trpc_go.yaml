@@ -5,11 +5,11 @@ global: #全局配置
 server:
   timeout: 5000
   service:
-    - name: trpc.moox.collector.schedule.timer
-      port: 11403
-      network: "20 */1 * * * *?scheduler=collectorSchedule"
+    - name: trpc.moox.collector.scf_observability.timer
+      port: 8005
+      network: "*/30 * * * * *?scheduler=scfObservability&startAtOnce=1"
       protocol: timer
-      timeout: 60000
+      timeout: 20000
 
 plugins:
   log:

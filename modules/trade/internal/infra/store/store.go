@@ -14,15 +14,31 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/position"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/schema"
+	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
 
 var ErrConflict = errors.New("trade: store conflict")
 
 type Store struct {
-	db     *gorm.DB
-	wakeup atomic.Pointer[func()]
+	db      *gorm.DB
+	wakeup  atomic.Pointer[func()]
+	metrics *report.ModuleMetrics
 }
+
+func (s *Store) SetModuleMetrics(metrics *report.ModuleMetrics) {
+	if s != nil {
+		s.metrics = metrics
+	}
+}
+
+func (s *Store) ModuleMetrics() *report.ModuleMetrics {
+	if s == nil {
+		return nil
+	}
+	return s.metrics
+}
+
 type Tx struct {
 	db  *gorm.DB
 	ctx context.Context

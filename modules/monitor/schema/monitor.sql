@@ -22,15 +22,14 @@ CREATE TABLE IF NOT EXISTS t_monitor_checks (
     c_description TEXT NOT NULL DEFAULT '',
     c_last_checked_at DATETIME,
     c_next_check_at DATETIME,
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_checks_key
-ON t_monitor_checks (c_space_id, c_check_id, c_is_deleted);
+ON t_monitor_checks (c_space_id, c_check_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_checks_due
-ON t_monitor_checks (c_enabled, c_is_deleted, c_next_check_at);
+ON t_monitor_checks (c_enabled, c_next_check_at);
 
 CREATE TABLE IF NOT EXISTS t_monitor_check_results (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +53,17 @@ ON t_monitor_check_results (c_result_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_results_recent
 ON t_monitor_check_results (c_space_id, c_check_id, c_checked_at DESC);
 
+CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
+    c_agent_id TEXT PRIMARY KEY,
+    c_hostname TEXT NOT NULL,
+    c_boot_id TEXT NOT NULL,
+    c_last_seen_at DATETIME NOT NULL,
+    c_last_event_id TEXT NOT NULL,
+    c_status TEXT NOT NULL CHECK (c_status IN ('reachable', 'unreachable')),
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS t_monitor_webhooks (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
@@ -64,13 +74,12 @@ CREATE TABLE IF NOT EXISTS t_monitor_webhooks (
     c_headers TEXT NOT NULL DEFAULT '{}',
     c_body_template TEXT NOT NULL DEFAULT '{}',
     c_enabled INTEGER NOT NULL DEFAULT 1,
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_webhooks_key
-ON t_monitor_webhooks (c_space_id, c_webhook_id, c_is_deleted);
+ON t_monitor_webhooks (c_space_id, c_webhook_id);
 
 CREATE TABLE IF NOT EXISTS t_monitor_alert_rules (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,15 +93,14 @@ CREATE TABLE IF NOT EXISTS t_monitor_alert_rules (
     c_send_on_resolved INTEGER NOT NULL DEFAULT 1,
     c_enabled INTEGER NOT NULL DEFAULT 1,
     c_description TEXT NOT NULL DEFAULT '',
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_alert_rules_key
-ON t_monitor_alert_rules (c_space_id, c_rule_id, c_is_deleted);
+ON t_monitor_alert_rules (c_space_id, c_rule_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_alert_rules_check
-ON t_monitor_alert_rules (c_space_id, c_check_id, c_enabled, c_is_deleted);
+ON t_monitor_alert_rules (c_space_id, c_check_id, c_enabled);
 
 CREATE TABLE IF NOT EXISTS t_monitor_alert_states (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,12 +250,11 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_rules (
     c_definition_json TEXT NOT NULL DEFAULT '{}',
     c_evaluation_interval_seconds INTEGER NOT NULL DEFAULT 60,
     c_enabled INTEGER NOT NULL DEFAULT 1,
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_rules_key ON t_monitor_metric_rules (c_space_id, c_rule_id, c_is_deleted);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_rules_key ON t_monitor_metric_rules (c_space_id, c_rule_id);
 
 CREATE TABLE IF NOT EXISTS t_monitor_metric_rule_states (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,

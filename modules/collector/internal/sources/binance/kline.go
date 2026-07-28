@@ -118,9 +118,6 @@ func (c *KlineCollector) CollectWithResult(
 	if storageSubjectID == "" {
 		storageSubjectID = params.Symbol
 	}
-	result.StorageReadScope = &sources.StorageReadScope{
-		SpaceID: spaceID, DatasetID: datasetID, SubjectID: storageSubjectID, Freq: freq,
-	}
 	writer := c.storage
 	if writer == nil {
 		accessTarget := runtimeapp.GetStorageRPCGatewayTarget()
@@ -140,7 +137,8 @@ func (c *KlineCollector) CollectWithResult(
 		watermarkPtr = &watermark
 	}
 	cursor := newKlineCursor(watermarkPtr)
-	total := 0
+	var total uint64
+	var outputWatermark time.Time
 	for {
 		req, ok := cursor.NextRequest(params.Symbol, params.Interval)
 		if !ok {
@@ -164,17 +162,14 @@ func (c *KlineCollector) CollectWithResult(
 			if err := writer.UpsertFields(ctx, rows); err != nil {
 				return result, fmt.Errorf("K线写入存储失败: %w", err)
 			}
-			total += len(rows)
+			total += uint64(len(rows))
 			for _, row := range rows {
-				key := row.GetKey()
-				timeSeries := key.GetTimeSeries()
-				result.WrittenRowKeySamples = append(result.WrittenRowKeySamples, sources.WrittenRowKey{
-					SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(),
-					SubjectID: timeSeries.GetSubjectId(), Freq: timeSeries.GetFreq(),
-					DataTime: timeSeries.GetDataTime(),
-				})
-				if len(result.WrittenRowKeySamples) > 10 {
-					result.WrittenRowKeySamples = result.WrittenRowKeySamples[1:]
+				dataTime, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetTimeSeries().GetDataTime())
+				if parseErr != nil {
+					return result, fmt.Errorf("K线写入确认包含非法 data_time: %w", parseErr)
+				}
+				if outputWatermark.IsZero() || dataTime.After(outputWatermark) {
+					outputWatermark = dataTime
 				}
 			}
 		}
@@ -193,7 +188,13 @@ func (c *KlineCollector) CollectWithResult(
 	)
 	result.RowsWritten = total
 	if total == 0 {
-		result.ZeroWriteReason = "no_new_closed_kline"
+		log.InfoContextf(
+			ctx,
+			"event=%q space_id=%q dataset_id=%q subject_id=%q freq=%q rows_written=0",
+			"collector_kline_no_new_closed", spaceID, datasetID, storageSubjectID, freq,
+		)
+	} else {
+		result.OutputWatermark = outputWatermark.UTC().Format(time.RFC3339Nano)
 	}
 	return result, nil
 }
@@ -243,24 +244,7 @@ func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, inte
 }
 
 func normalizeFreq(interval string) (string, error) {
-	if interval == "" {
-		return "", fmt.Errorf("interval 不能为空")
-	}
-	unit := interval[len(interval)-1]
-	switch unit {
-	case 'h', 'H':
-		return interval[:len(interval)-1] + "H", nil
-	case 'd', 'D':
-		return interval[:len(interval)-1] + "D", nil
-	case 'w', 'W':
-		return interval[:len(interval)-1] + "W", nil
-	case 'y', 'Y':
-		return interval[:len(interval)-1] + "Y", nil
-	case 'm', 'M':
-		return interval, nil
-	default:
-		return interval, nil
-	}
+	return sources.NormalizeFreq(interval)
 }
 
 func buildKlineRows(klines []*market.Kline, spaceID string, datasetID string, symbol string, freq string) ([]*storagepb.RowFieldUpsert, error) {

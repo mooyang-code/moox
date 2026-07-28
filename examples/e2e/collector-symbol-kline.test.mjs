@@ -240,13 +240,12 @@ test("rejects inconsistent execute_at windows and unstable job ids", () => {
   ], subjects, "e2e_binance_kline_1m"), /job_item_id/);
 });
 
-test("accepts zero-write only with no_new_closed_kline", () => {
+test("derives empty from zero rows and requires a watermark for positive writes", () => {
+  assert.equal(acceptKlineWriteEvidence({ rows_written: 0 }), 0);
   assert.equal(acceptKlineWriteEvidence({
-    rows_written: 0,
-    zero_write_reason: "no_new_closed_kline",
-  }), 0);
-  assert.equal(acceptKlineWriteEvidence({ rows_written: 2 }), 2);
-  assert.throws(() => acceptKlineWriteEvidence({ rows_written: 0 }), /no_new_closed_kline/);
+    rows_written: 2, output_watermark: "2026-07-27T12:34:00Z",
+  }), 2);
+  assert.throws(() => acceptKlineWriteEvidence({ rows_written: 2 }), /output_watermark/);
 });
 
 test("collects positive Kline write evidence in the requested Storage scope", () => {
@@ -256,22 +255,10 @@ test("collects positive Kline write evidence in the requested Storage scope", ()
   item.result_summary = {
     tasks: [{
       data_type: "kline",
-      symbol: "BTCUSDT",
-      interval: "1m",
+      dataset_id: "e2e_binance_kline_1m",
+      freq: "1m",
       rows_written: 1,
-      storage_read_scope: {
-        space_id: "crypto",
-        dataset_id: "e2e_binance_kline_1m",
-        subject_id: "BTC-USDT",
-        freq: "1m",
-      },
-      written_row_key_samples: [{
-        space_id: "crypto",
-        dataset_id: "e2e_binance_kline_1m",
-        subject_id: "BTC-USDT",
-        freq: "1m",
-        data_time: "2026-07-27T12:34:00Z",
-      }],
+      output_watermark: "2026-07-27T12:34:00Z",
     }],
   };
   const evidence = collectKlineWriteEvidence([item], "crypto", "e2e_binance_kline_1m");
@@ -281,10 +268,10 @@ test("collects positive Kline write evidence in the requested Storage scope", ()
   assert.equal(evidence.samples[0].key.subject_id, "BTC-USDT");
   assert.deepEqual([...evidence.executionNodes], ["node-1"]);
 
-  item.result_summary.tasks[0].storage_read_scope.dataset_id = "e2e_binance_symbols";
+  item.result_summary.tasks[0].dataset_id = "e2e_binance_symbols";
   assert.throws(
     () => collectKlineWriteEvidence([item], "crypto", "e2e_binance_kline_1m"),
-    /Storage scope/,
+    /does not match its request/,
   );
 });
 
@@ -295,22 +282,10 @@ test("zero-write success does not count as a distinct writing SCF node", () => {
   positive.result_summary = {
     tasks: [{
       data_type: "kline",
-      symbol: "BTCUSDT",
-      interval: "1m",
+      dataset_id: "e2e_binance_kline_1m",
+      freq: "1m",
       rows_written: 1,
-      storage_read_scope: {
-        space_id: "crypto",
-        dataset_id: "e2e_binance_kline_1m",
-        subject_id: "BTC-USDT",
-        freq: "1m",
-      },
-      written_row_key_samples: [{
-        space_id: "crypto",
-        dataset_id: "e2e_binance_kline_1m",
-        subject_id: "BTC-USDT",
-        freq: "1m",
-        data_time: "2026-07-27T12:34:00Z",
-      }],
+      output_watermark: "2026-07-27T12:34:00Z",
     }],
   };
   const zero = job("ETH-USDT", "ETHUSDT");
@@ -319,16 +294,9 @@ test("zero-write success does not count as a distinct writing SCF node", () => {
   zero.result_summary = {
     tasks: [{
       data_type: "kline",
-      symbol: "ETHUSDT",
-      interval: "1m",
+      dataset_id: "e2e_binance_kline_1m",
+      freq: "1m",
       rows_written: 0,
-      zero_write_reason: "no_new_closed_kline",
-      storage_read_scope: {
-        space_id: "crypto",
-        dataset_id: "e2e_binance_kline_1m",
-        subject_id: "ETH-USDT",
-        freq: "1m",
-      },
     }],
   };
 

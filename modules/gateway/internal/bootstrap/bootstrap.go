@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/gateway/internal/store"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/healthz"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
 	trpcserver "trpc.group/trpc-go/trpc-go/server"
@@ -285,9 +286,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("listen health endpoint: %w", err)
 	}
 	defer healthListener.Close()
+	healthHandler, err := authenticatedHealthHandler(state.Handler())
+	if err != nil {
+		return fmt.Errorf("configure health authentication: %w", err)
+	}
 
 	serviceServer := newServiceHTTPServer(serviceHandler)
-	healthServer := newHealthHTTPServer(state.Handler())
+	healthServer := newHealthHTTPServer(healthHandler)
 	serverResults := make(chan serverResult, 4)
 	go serveHTTP("gateway service", serviceServer, serviceListener, serverResults)
 	go serveHTTP("gateway health", healthServer, healthListener, serverResults)
@@ -319,6 +324,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 		completed++
 	}
 	return errors.Join(firstErr, shutdownErr)
+}
+
+func authenticatedHealthHandler(next http.Handler) (http.Handler, error) {
+	return healthz.WrapFromEnv(next)
 }
 
 func newServiceHTTPServer(handler http.Handler) *http.Server {

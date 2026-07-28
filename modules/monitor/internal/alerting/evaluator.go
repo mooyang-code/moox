@@ -2,6 +2,7 @@ package alerting
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -150,7 +151,10 @@ func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, resul
 		return err
 	}
 	if err := e.notifier.Send(ctx, *webhook, event); err != nil {
-		return e.recordEvent(ctx, check, result, rule, state, domain.AlertEventSendFailed, err.Error())
+		if recordErr := e.recordEvent(ctx, check, result, rule, state, domain.AlertEventSendFailed, err.Error()); recordErr != nil {
+			return errors.Join(err, recordErr)
+		}
+		return fmt.Errorf("send alert notification: %w", err)
 	}
 	return nil
 }
