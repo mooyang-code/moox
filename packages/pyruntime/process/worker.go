@@ -158,9 +158,7 @@ func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error
 		return RunResult{}, err
 	}
 	if err := protocol.WriteFrame(w.in, w.cfg.Limits, protocol.Frame{Type: protocol.TypeRun, Meta: meta, Payload: req.Payload}); err != nil {
-		_ = w.kill()
-		w.state = StateDead
-		return RunResult{}, err
+		return RunResult{}, errors.Join(err, w.terminateLocked())
 	}
 	ch := make(chan struct {
 		f   protocol.Frame
@@ -175,22 +173,18 @@ func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error
 	}()
 	select {
 	case <-ctx.Done():
-		_ = w.kill()
-		w.state = StateDead
-		return RunResult{}, ctx.Err()
+		return RunResult{}, errors.Join(ctx.Err(), w.terminateLocked())
 	case result := <-ch:
 		if result.err != nil {
-			_ = w.kill()
-			w.state = StateDead
-			return RunResult{}, result.err
+			return RunResult{}, errors.Join(result.err, w.terminateLocked())
 		}
 		if result.f.Type == protocol.TypeError {
-			w.state = StateDead
-			return RunResult{}, fmt.Errorf("python worker error: %s", result.f.Meta)
+			err := fmt.Errorf("python worker error: %s", result.f.Meta)
+			return RunResult{}, errors.Join(err, w.terminateLocked())
 		}
 		if result.f.Type != protocol.TypeResult {
-			w.state = StateDead
-			return RunResult{}, fmt.Errorf("unexpected result frame: %d", result.f.Type)
+			err := fmt.Errorf("unexpected result frame: %d", result.f.Type)
+			return RunResult{}, errors.Join(err, w.terminateLocked())
 		}
 		return RunResult{Meta: result.f.Meta, Payload: result.f.Payload}, nil
 	}
@@ -203,9 +197,7 @@ func (w *StdioWorker) control(ctx context.Context, typ protocol.MessageType, met
 	}
 	b, _ := json.Marshal(meta)
 	if err := protocol.WriteFrame(w.in, w.cfg.Limits, protocol.Frame{Type: typ, Meta: b}); err != nil {
-		_ = w.kill()
-		w.state = StateDead
-		return err
+		return errors.Join(err, w.terminateLocked())
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -221,15 +213,12 @@ func (w *StdioWorker) control(ctx context.Context, typ protocol.MessageType, met
 	}()
 	select {
 	case <-ctx.Done():
-		_ = w.kill()
-		w.state = StateDead
-		return ctx.Err()
+		return errors.Join(ctx.Err(), w.terminateLocked())
 	case err := <-done:
 		if err != nil {
-			_ = w.kill()
-			w.state = StateDead
+			return errors.Join(err, w.terminateLocked())
 		}
-		return err
+		return nil
 	}
 }
 func (w *StdioWorker) State() State { w.mu.Lock(); defer w.mu.Unlock(); return w.state }
@@ -241,18 +230,30 @@ func (w *StdioWorker) Hello() protocol.Hello {
 func (w *StdioWorker) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.cmd == nil || w.cmd.Process == nil {
-		return nil
-	}
-	_ = w.kill()
-	w.state = StateDead
-	return w.cmd.Wait()
+	return w.terminateLocked()
 }
-func (w *StdioWorker) kill() error {
-	if w.cmd == nil || w.cmd.Process == nil {
+
+// terminateLocked requires w.mu and consumes the command so Wait is called once.
+func (w *StdioWorker) terminateLocked() error {
+	cmd := w.cmd
+	w.cmd = nil
+	w.in = nil
+	w.out = nil
+	w.state = StateDead
+	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	return w.cmd.Process.Kill()
+	killErr := cmd.Process.Kill()
+	killed := killErr == nil
+	if errors.Is(killErr, os.ErrProcessDone) {
+		killErr = nil
+	}
+	waitErr := cmd.Wait()
+	var exitErr *exec.ExitError
+	if killed && errors.As(waitErr, &exitErr) {
+		waitErr = nil
+	}
+	return errors.Join(killErr, waitErr)
 }
 func (w *StdioWorker) captureStderr(r io.Reader) {
 	buf := make([]byte, w.cfg.MaxLogBytes)

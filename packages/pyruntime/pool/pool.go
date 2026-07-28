@@ -124,10 +124,11 @@ func (p *Pool) pick(shardKey string) (int, error) {
 	return idx, nil
 }
 func (p *Pool) Close() error {
+	var errs []error
 	for _, w := range p.workers {
 		if err := w.Close(); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

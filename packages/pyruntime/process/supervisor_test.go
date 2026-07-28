@@ -65,9 +65,10 @@ func TestSupervisorRunLoadedExecutesLoadAndRun(t *testing.T) {
 
 type failingWorker struct {
 	memoryWorker
-	loadErr error
-	runErr  error
-	closed  bool
+	loadErr  error
+	runErr   error
+	closeErr error
+	closed   bool
 }
 
 func (f *failingWorker) Load(context.Context, LoadRequest) error {
@@ -86,7 +87,72 @@ func (f *failingWorker) Run(context.Context, RunRequest) (RunResult, error) {
 
 func (f *failingWorker) Close() error {
 	f.closed = true
-	return f.memoryWorker.Close()
+	return f.closeErr
+}
+
+func TestSupervisorEnsureClosesNonReadyWorkerBeforeReplacement(t *testing.T) {
+	first := &failingWorker{}
+	second := &memoryWorker{ready: true}
+	factoryCalls := 0
+	s := NewSupervisor(func(context.Context) (Worker, error) {
+		factoryCalls++
+		if factoryCalls == 1 {
+			return first, nil
+		}
+		assert.True(t, first.closed, "old worker must close before replacement is created")
+		return second, nil
+	}, SupervisorConfig{})
+
+	got, err := s.Ensure(context.Background())
+	require.NoError(t, err)
+	assert.Same(t, first, got)
+
+	got, err = s.Ensure(context.Background())
+	require.NoError(t, err)
+	assert.Same(t, second, got)
+	assert.True(t, first.closed)
+}
+
+func TestSupervisorEnsureReplacesNonReadyWorkerAfterCloseError(t *testing.T) {
+	first := &failingWorker{closeErr: errors.New("close failed")}
+	second := &memoryWorker{ready: true}
+	factoryCalls := 0
+	s := NewSupervisor(func(context.Context) (Worker, error) {
+		factoryCalls++
+		if factoryCalls == 1 {
+			return first, nil
+		}
+		assert.True(t, first.closed, "old worker must close before replacement is created")
+		return second, nil
+	}, SupervisorConfig{})
+
+	_, err := s.Ensure(context.Background())
+	require.NoError(t, err)
+	got, err := s.Ensure(context.Background())
+	require.NoError(t, err)
+	assert.Same(t, second, got)
+}
+
+func TestSupervisorRunLoadedManyRestartsAfterLoadError(t *testing.T) {
+	loadErr := errors.New("load failed")
+	w := &failingWorker{loadErr: loadErr}
+	s := NewSupervisor(func(context.Context) (Worker, error) { return w, nil }, SupervisorConfig{})
+
+	_, err := s.RunLoadedMany(context.Background(), []LoadRequest{{LogicalID: "a"}}, RunRequest{})
+	require.ErrorIs(t, err, loadErr)
+	assert.True(t, w.closed)
+	assert.Equal(t, StateStarting, s.State())
+}
+
+func TestSupervisorRunLoadedManyRestartsAfterRunError(t *testing.T) {
+	runErr := errors.New("run failed")
+	w := &failingWorker{runErr: runErr}
+	s := NewSupervisor(func(context.Context) (Worker, error) { return w, nil }, SupervisorConfig{})
+
+	_, err := s.RunLoadedMany(context.Background(), nil, RunRequest{})
+	require.ErrorIs(t, err, runErr)
+	assert.True(t, w.closed)
+	assert.Equal(t, StateStarting, s.State())
 }
 
 func TestSupervisorRestartIncrementsCounterAndClearsWorker(t *testing.T) {
@@ -126,18 +192,70 @@ func TestWaitBackoffCompletesAfterDelay(t *testing.T) {
 	assert.GreaterOrEqual(t, time.Since(start), 5*time.Millisecond)
 }
 
-func TestSupervisorRunRetriesAfterWorkerFailure(t *testing.T) {
+func TestSupervisorRunDoesNotRetryBusinessTaskAfterWorkerFailure(t *testing.T) {
 	attempts := 0
+	runErr := errors.New("run failed")
 	s := NewSupervisor(func(context.Context) (Worker, error) {
 		attempts++
 		if attempts == 1 {
-			return &failingWorker{runErr: errors.New("run failed")}, nil
+			return &failingWorker{runErr: runErr}, nil
 		}
 		return &memoryWorker{}, nil
 	}, SupervisorConfig{BackoffMin: time.Millisecond, MaxRetries: 1})
 
-	result, err := s.Run(context.Background(), RunRequest{RequestID: "retry"})
+	_, err := s.Run(context.Background(), RunRequest{RequestID: "no-retry"})
+	require.ErrorIs(t, err, runErr)
+	assert.Equal(t, 1, attempts)
+	assert.Equal(t, 1, s.Restarts())
+}
+
+func TestSupervisorRunRetriesTransientFactoryFailure(t *testing.T) {
+	attempts := 0
+	s := NewSupervisor(func(context.Context) (Worker, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("worker startup failed")
+		}
+		return &memoryWorker{}, nil
+	}, SupervisorConfig{BackoffMin: time.Millisecond, MaxRetries: 1})
+
+	result, err := s.Run(context.Background(), RunRequest{RequestID: "factory-retry"})
 	require.NoError(t, err)
 	assert.NotEmpty(t, result.Meta)
-	assert.Equal(t, 1, s.Restarts())
+	assert.Equal(t, 2, attempts)
+	assert.Equal(t, 0, s.Restarts())
+}
+
+func TestSupervisorRunLoadedManyRetriesTransientFactoryFailure(t *testing.T) {
+	attempts := 0
+	s := NewSupervisor(func(context.Context) (Worker, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("worker startup failed")
+		}
+		return &memoryWorker{}, nil
+	}, SupervisorConfig{BackoffMin: time.Millisecond, MaxRetries: 1})
+
+	result, err := s.RunLoadedMany(
+		context.Background(),
+		[]LoadRequest{{LogicalID: "factor"}},
+		RunRequest{RequestID: "factory-retry"},
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Meta)
+	assert.Equal(t, 2, attempts)
+}
+
+func TestSupervisorLoadRetriesTransientFactoryFailure(t *testing.T) {
+	attempts := 0
+	s := NewSupervisor(func(context.Context) (Worker, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("worker startup failed")
+		}
+		return &memoryWorker{}, nil
+	}, SupervisorConfig{BackoffMin: time.Millisecond, MaxRetries: 1})
+
+	require.NoError(t, s.Load(context.Background(), LoadRequest{LogicalID: "factor"}))
+	assert.Equal(t, 2, attempts)
 }
