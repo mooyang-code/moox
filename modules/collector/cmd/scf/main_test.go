@@ -9,6 +9,7 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/server"
 )
 
 func TestOnceOptionsFromEnv(t *testing.T) {
@@ -80,19 +81,26 @@ func TestStartProductionRuntimeRequiresSpaceID(t *testing.T) {
 	assert.Contains(t, err.Error(), "MOOX_SPACE_ID")
 }
 
-func TestStartProductionRuntimeStartsFunctionAndOneRunnerWithoutTRPCServer(t *testing.T) {
+func TestStartProductionRuntimeStartsFunctionRunnerAndObservabilityServer(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Chdir(t.TempDir())
 	oldRegisterFunction := registerCloudFunction
 	oldRun := runTaskRunner
+	oldStartObservability := startObservability
 	t.Cleanup(func() {
 		registerCloudFunction = oldRegisterFunction
 		runTaskRunner = oldRun
+		startObservability = oldStartObservability
 	})
 
 	functionStarts := make(chan struct{}, 1)
 	releaseFunction := make(chan struct{})
 	runnerStarts := make(chan struct{}, 2)
+	observabilityStarts := make(chan struct{}, 1)
+	startObservability = func(context.Context) (*server.Server, error) {
+		observabilityStarts <- struct{}{}
+		return nil, nil
+	}
 	registerCloudFunction = func() {
 		functionStarts <- struct{}{}
 		<-releaseFunction
@@ -118,6 +126,11 @@ func TestStartProductionRuntimeStartsFunctionAndOneRunnerWithoutTRPCServer(t *te
 	case <-runnerStarts:
 	case <-time.After(time.Second):
 		t.Fatal("resident taskrunner did not start before blocking function registration")
+	}
+	select {
+	case <-observabilityStarts:
+	case <-time.After(time.Second):
+		t.Fatal("SCF observability server did not start")
 	}
 	select {
 	case <-runnerStarts:

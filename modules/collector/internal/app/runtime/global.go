@@ -73,6 +73,16 @@ func SignalReadinessIfConfigured() bool {
 	return true
 }
 
+// IsReady returns a non-blocking snapshot for timer handlers. External
+// observability also needs Storage because its canary is a read-only query.
+func IsReady() bool {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return strings.TrimSpace(GlobalConfig.NodeInfo.NodeID) != "" &&
+		strings.TrimSpace(GlobalConfig.ServiceGatewayTarget) != "" &&
+		strings.TrimSpace(GlobalConfig.StorageRPCGatewayTarget) != ""
+}
+
 // WaitForReadiness waits until the first complete keepalive initializes the runtime.
 func WaitForReadiness(ctx context.Context) error {
 	return processReadiness.wait(ctx)

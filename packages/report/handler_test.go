@@ -45,7 +45,7 @@ func (f *fakePublisher) Publish(_ context.Context, event events.Event, payload p
 	f.events = append(f.events, event)
 	f.payloads = append(f.payloads, payload)
 	f.options = append(f.options, opts)
-	return &jetstream.PublishAck{Stream: "MOOX_METRICS", Sequence: uint64(len(f.events))}, nil
+	return &jetstream.PublishAck{Stream: "MOOX_OBSERVABILITY", Sequence: uint64(len(f.events))}, nil
 }
 
 func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {

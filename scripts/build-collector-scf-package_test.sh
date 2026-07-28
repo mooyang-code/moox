@@ -56,6 +56,11 @@ assert cls[0]["level"] == "info", cls
 assert cls[0]["remote_config"]["topic_id"] == "topic-contract-test", cls
 assert len(console) == 1, console
 assert console[0]["level"] == "info", console
+services = document["server"]["service"]
+sentinel = [service for service in services if service["name"] == "trpc.moox.collector.scf_observability.timer"]
+assert len(sentinel) == 1, sentinel
+assert sentinel[0]["timeout"] == 20000, sentinel
+assert "*/30" in sentinel[0]["network"], sentinel
 PY
 
 unzip -p "${package_path}" sources/market/binance.yaml >"${TMP_ROOT}/binance.yaml"
@@ -85,5 +90,13 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     )
 assert b"storage-secret" not in text
 PY
+
+unzip -p "${package_path}" observability.env.example >"${TMP_ROOT}/observability.env.example"
+for name in \
+  MOOX_SCF_WATCHDOG_ENABLED MOOX_MONITOR_READY_URL MOOX_GATEWAY_READY_URL \
+  MOOX_SCF_CANARY_URL MOOX_EVENTBUS_URL MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE \
+  MOOX_HEALTH_HMAC_KEY_ID MOOX_HEALTH_HMAC_SECRET MOOX_MSGBOX_WECOM_WEBHOOK; do
+  grep -q "^${name}=" "${TMP_ROOT}/observability.env.example"
+done
 
 echo "collector SCF package contract passed"
