@@ -2290,7 +2290,7 @@ git commit -m "test(trade): cover generic execution workflows"
 - Modify: generated protobuf files under `packages/tradeeventpb/`
 - Modify: any file required by a confirmed review finding
 
-- [ ] **Step 1: Regenerate protobuf deterministically**
+- [x] **Step 1: Regenerate protobuf deterministically**
 
 ```bash
 make proto
@@ -2307,7 +2307,7 @@ Expected: the first run updates generated outputs when necessary; the second
 run produces no additional diff. Review generated service names and JSON field
 names instead of assuming generation succeeded correctly.
 
-- [ ] **Step 2: Run focused verification**
+- [x] **Step 2: Run focused verification**
 
 ```bash
 cd modules/trade
@@ -2332,7 +2332,7 @@ pnpm run build:prod
 
 Expected: PASS.
 
-- [ ] **Step 3: Run repository contract and workspace verification**
+- [x] **Step 3: Run repository contract and workspace verification**
 
 ```bash
 cd ..
@@ -2348,7 +2348,7 @@ git diff --check
 
 Expected: PASS. `make verify-pr` may repeat earlier tests; do not skip it.
 
-- [ ] **Step 4: Request an independent `codeCR` review**
+- [x] **Step 4: Request an independent `codeCR` review**
 
 Ask the configured `codeCR` subagent to review the final diff for:
 
@@ -2367,7 +2367,7 @@ failing regression test first, and rerun Steps 2 and 3. If no issues remain,
 record the residual risk: real-Exchange behavior is only as strong as the
 testnet coverage performed.
 
-- [ ] **Step 5: Build the Trade artifacts and release contract**
+- [x] **Step 5: Build the Trade artifacts and release contract**
 
 ```bash
 bash scripts/build.sh trade
@@ -2380,7 +2380,7 @@ tar -tzf release/moox-trade-execution-verify-$(go env GOOS)-$(go env GOARCH).tar
 Expected: `bin/moox-trade`, `bin/moox-trade-cli`, and the final Trade config
 are present in the archive.
 
-- [ ] **Step 6: Perform the opt-in live boundary checks**
+- [x] **Step 6: Perform the opt-in live boundary checks**
 
 When testnet credentials are available:
 
@@ -2409,7 +2409,12 @@ Do not treat a process-only health response as execution acceptance. If
 credentials are unavailable, record this as an unexecuted opt-in gate, not as
 a passing test.
 
-- [ ] **Step 7: Commit generated or review fixes**
+**Recorded 2026-07-29:** no testnet credentials or configured local integration
+deployment were available. Neither live boundary command was executed; both
+remain explicit opt-in gates. The fail-closed testnet script was not reported
+as a passing smoke test.
+
+- [x] **Step 7: Commit generated or review fixes**
 
 ```bash
 git status --short
@@ -2426,12 +2431,12 @@ git commit -m "refactor(trade): complete generic execution kernel"
 Skip the commit when there are no remaining changes. Never stage unrelated
 pre-existing files.
 
-- [ ] **Step 8: Push and prove the exact remote revision**
+- [x] **Step 8: Push and prove the exact remote revision**
 
 ```bash
-git push origin feature/mooyang
+git push origin feature/trade-execution-rewrite
 local_sha="$(git rev-parse HEAD)"
-remote_sha="$(git ls-remote --heads origin feature/mooyang | awk '{print $1}')"
+remote_sha="$(git ls-remote --heads origin feature/trade-execution-rewrite | awk '{print $1}')"
 test "${local_sha}" = "${remote_sha}"
 git status --short
 ```
@@ -2441,30 +2446,30 @@ pre-existing changes, but none may be part of the Trade commits.
 
 ## Completion Checklist
 
-- [ ] `ExchangeAccountService` has only `CreateAccount`, `UpdateAccount`,
+- [x] `ExchangeAccountService` has only `CreateAccount`, `UpdateAccount`,
   `GetAccount`, `ListAccounts`, `SetLeverage`, `PauseAccount`, and
   `SyncAccount`.
-- [ ] `TradeExecutionService` has only `PlaceOrder`, `CancelOrder`,
+- [x] `TradeExecutionService` has only `PlaceOrder`, `CancelOrder`,
   `CancelAllOrders`, `SubmitTarget`, `GetExecution`, `ListExecutions`,
   `GetOrder`, `ListOrders`, `ListFills`, and `ListPositions`.
-- [ ] Binance and OKX both support SPOT/SWAP MARKET and LIMIT within the
+- [x] Binance and OKX both support SPOT/SWAP MARKET and LIMIT within the
   approved V1 scope.
-- [ ] Strategy publishes final base quantities; Trade does not consume
+- [x] Strategy publishes final base quantities; Trade does not consume
   weights, capital, or quote assets.
-- [ ] One ExchangeSession serializes command, Fill, snapshot, reconnect, and
+- [x] One ExchangeSession serializes command, Fill, snapshot, reconnect, and
   `SyncAccount` transitions per ExchangeAccount.
-- [ ] Uncertain submission is queried by client order ID before retry.
-- [ ] A delayed Fill can refine a canceled Order into
+- [x] Uncertain submission is queried by client order ID before retry.
+- [x] A delayed Fill can refine a canceled Order into
   `PARTIALLY_CANCELED`.
-- [ ] Startup and reconnect keep the account not ready until the full
+- [x] Startup and reconnect keep the account not ready until the full
   authoritative snapshot succeeds.
-- [ ] Schema inventory contains exactly nine tables, uses `t_order_fills`,
+- [x] Schema inventory contains exactly nine tables, uses `t_order_fills`,
   keeps the three-table double-entry ledger, and contains none of the six
   merged account, target, reservation, or event-state tables.
-- [ ] Obsolete services, Rebalance Legs, Saga, transfer, dust, and duplicate
+- [x] Obsolete services, Rebalance Legs, Saga, transfer, dust, and duplicate
   Exchange abstractions are deleted rather than deprecated.
-- [ ] Focused tests, race tests, E2E, workspace checks, Web build, protobuf
+- [x] Focused tests, race tests, E2E, workspace checks, Web build, protobuf
   regeneration, release packaging, and independent `codeCR` review pass.
-- [ ] Testnet smoke and local deployment checks are either passed or explicitly
+- [x] Testnet smoke and local deployment checks are either passed or explicitly
   recorded as opt-in gates not run because credentials/environment are absent.
-- [ ] Remote `feature/mooyang` points to the verified local HEAD.
+- [x] Remote `feature/trade-execution-rewrite` points to the verified local HEAD.
