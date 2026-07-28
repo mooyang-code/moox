@@ -17,8 +17,10 @@ import (
 	"unicode"
 )
 
-var declarationPattern = regexp.MustCompile(`(?i)^\s*(?:(?:export|declare)\s+)*(?:message|interface|type|class|enum|service)\s+([A-Za-z_][A-Za-z0-9_]*)`)
+var declarationPattern = regexp.MustCompile(`(?i)^\s*(?:(?:export|declare)\s+)*(message|interface|type|class|enum|service)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 var sourceIdentifierPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+var thirdPartyProviderFieldPattern = regexp.MustCompile(`^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:\s*(.+?)\s*[;,]?\s*$`)
+var structTagEntryPattern = regexp.MustCompile(`([A-Za-z0-9_-]+):"([^"]*)"`)
 var defaultRoots = []string{
 	"modules/trade",
 	"packages/tradeeventpb",
@@ -142,8 +144,15 @@ func (c *checker) scanGoDeclaration(path string, declaration ast.Decl, context [
 
 func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec, context []string) {
 	var declarationTokens []string
-	for _, name := range spec.Names {
-		declarationTokens = append(declarationTokens, sourceTokens(name.Name)...)
+	for index, name := range spec.Names {
+		allowed := allowedTypedProviderIdentifier(name.Name, spec.Type)
+		if !allowed && index < len(spec.Values) {
+			allowed = genericProviderIdentifier(name.Name) &&
+				explicitThirdPartyProviderValue(spec.Values[index])
+		}
+		if !allowed {
+			declarationTokens = append(declarationTokens, sourceTokens(name.Name)...)
+		}
 	}
 	if spec.Type != nil {
 		declarationTokens = append(declarationTokens, goNodeTokens(spec.Type)...)
@@ -160,7 +169,24 @@ func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec, context []st
 }
 
 func (c *checker) scanGoAssignment(path string, assignment *ast.AssignStmt, context []string) {
-	c.addTokens(path, c.fset.Position(assignment.Pos()).Line, context, goNodeTokens(assignment))
+	var statementTokens []string
+	for index, left := range assignment.Lhs {
+		allowed := false
+		if identifier, ok := left.(*ast.Ident); ok && genericProviderIdentifier(identifier.Name) {
+			if index < len(assignment.Rhs) {
+				allowed = explicitThirdPartyProviderValue(assignment.Rhs[index])
+			} else if len(assignment.Rhs) == 1 {
+				allowed = explicitThirdPartyProviderValue(assignment.Rhs[0])
+			}
+		}
+		if !allowed {
+			statementTokens = append(statementTokens, goNodeTokens(left)...)
+		}
+	}
+	for _, right := range assignment.Rhs {
+		statementTokens = append(statementTokens, goNodeTokens(right)...)
+	}
+	c.addTokens(path, c.fset.Position(assignment.Pos()).Line, context, statementTokens)
 }
 
 func (c *checker) scanGoType(path string, spec *ast.TypeSpec, context []string) {
@@ -243,22 +269,25 @@ func (c *checker) scanGoFieldList(path string, fields *ast.FieldList, context []
 func (c *checker) scanGoField(path string, field *ast.Field, context []string) {
 	typeTokens := goNodeTokens(field.Type)
 	if len(field.Names) == 0 {
+		c.addTokens(path, c.fset.Position(field.Pos()).Line, context, goStructTagTokens(field, false))
 		c.scanGoTypeExpression(path, field.Type, context)
 		return
 	}
 
 	for _, name := range field.Names {
 		nameTokens := sourceTokens(name.Name)
-		if allowedSecretClientProvider(path, field, name.Name) {
+		secretClientProvider := allowedSecretClientProvider(path, field, name.Name)
+		if secretClientProvider || allowedTypedProviderIdentifier(name.Name, field.Type) {
 			nameTokens = nil
 		}
+		tagTokens := goStructTagTokens(field, secretClientProvider)
 		c.addTokens(
 			path,
 			c.fset.Position(name.Pos()).Line,
 			context,
-			append(append([]string{}, nameTokens...), typeTokens...),
+			append(append(append([]string{}, nameTokens...), typeTokens...), tagTokens...),
 		)
-		fieldContext := extendDomainContext(context, nameTokens, typeTokens)
+		fieldContext := extendDomainContext(context, nameTokens, typeTokens, tagTokens)
 		c.scanGoTypeExpression(path, field.Type, fieldContext)
 	}
 }
@@ -331,6 +360,82 @@ func allowedSecretClientProvider(path string, field *ast.Field, name string) boo
 	return jsonName == "provider"
 }
 
+func allowedTypedProviderIdentifier(name string, expression ast.Expr) bool {
+	return genericProviderIdentifier(name) && explicitThirdPartyProviderType(expression)
+}
+
+func genericProviderIdentifier(name string) bool {
+	return strings.EqualFold(name, "provider") || strings.EqualFold(name, "providers")
+}
+
+func explicitThirdPartyProviderType(expression ast.Expr) bool {
+	if expression == nil {
+		return false
+	}
+	switch expression.(type) {
+	case *ast.FuncType, *ast.StructType, *ast.InterfaceType:
+		return false
+	}
+
+	found := false
+	safe := true
+	ast.Inspect(expression, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch identifier.Name {
+		case "TracerProvider", "ConfigProvider":
+			found = true
+			return true
+		}
+		if containsForbiddenToken(terminologyTokens(identifier.Name)) {
+			safe = false
+		}
+		return true
+	})
+	return found && safe
+}
+
+func explicitThirdPartyProviderValue(expression ast.Expr) bool {
+	switch value := expression.(type) {
+	case *ast.CallExpr:
+		return explicitThirdPartyProviderType(value.Fun)
+	case *ast.CompositeLit:
+		return explicitThirdPartyProviderType(value.Type)
+	default:
+		return false
+	}
+}
+
+func goStructTagTokens(field *ast.Field, allowedJSONProvider bool) []string {
+	if field.Tag == nil {
+		return nil
+	}
+	tag, err := strconv.Unquote(field.Tag.Value)
+	if err != nil {
+		return terminologyTokens(field.Tag.Value)
+	}
+	if !allowedJSONProvider {
+		return terminologyTokens(tag)
+	}
+
+	var tokens []string
+	matches := structTagEntryPattern.FindAllStringSubmatch(tag, -1)
+	if len(matches) == 0 {
+		return terminologyTokens(tag)
+	}
+	for _, match := range matches {
+		tokens = append(tokens, terminologyTokens(match[1])...)
+		name, options, _ := strings.Cut(match[2], ",")
+		if match[1] != "json" || name != "provider" {
+			tokens = append(tokens, terminologyTokens(name)...)
+		}
+		tokens = append(tokens, terminologyTokens(options)...)
+	}
+	return tokens
+}
+
 func goNodeTokens(node ast.Node) []string {
 	if node == nil {
 		return nil
@@ -362,7 +467,8 @@ func sourceTokens(text string) []string {
 		// Keep the narrow third-party compound while leaving standalone names
 		// such as provider or broker visible to the surrounding domain context.
 		if item == "provider" && index > 0 &&
-			(tokens[index-1] == "tracer" || tokens[index-1] == "config") {
+			(tokens[index-1] == "tracer" || tokens[index-1] == "config") &&
+			!containsAny(tokens, "exchange", "binance", "okx") {
 			continue
 		}
 		filtered = append(filtered, item)
@@ -410,24 +516,87 @@ func (c *checker) scanText(path string) error {
 
 	context := ""
 	depth := 0
+	awaitingBrace := false
+	awaitingTypeBody := false
 	for index, line := range strings.Split(string(contents), "\n") {
 		declaration := false
-		if match := declarationPattern.FindStringSubmatch(line); len(match) == 2 {
-			context = match[1]
+		if match := declarationPattern.FindStringSubmatch(line); len(match) == 3 {
+			kind := strings.ToLower(match[1])
+			context = match[2]
 			depth = 0
 			declaration = true
+			awaitingBrace = kind != "type" && !strings.Contains(line, "{")
+			awaitingTypeBody = kind == "type" &&
+				!strings.Contains(line, "{") &&
+				typeAliasAwaitsBody(line)
 		}
-		c.addTextAllowingThirdPartyTypes(path, index+1, context+" "+line)
-		if context != "" {
-			depth += strings.Count(line, "{") - strings.Count(line, "}")
-			if depth <= 0 && strings.Contains(line, "}") {
-				context = ""
-			} else if declaration && !strings.Contains(line, "{") {
+		c.addTextAllowingThirdPartyTypes(path, index+1, context+" "+textLineForScan(line))
+		if context == "" {
+			continue
+		}
+
+		openBraces := strings.Count(line, "{")
+		closeBraces := strings.Count(line, "}")
+		if openBraces > 0 || depth > 0 {
+			awaitingBrace = false
+			awaitingTypeBody = false
+			depth += openBraces - closeBraces
+			if depth <= 0 && closeBraces > 0 {
 				context = ""
 			}
+			continue
+		}
+		if declaration {
+			if !awaitingBrace && !awaitingTypeBody {
+				context = ""
+			}
+			continue
+		}
+		if awaitingTypeBody && !ignorableTextLine(line) {
+			context = ""
+			awaitingTypeBody = false
 		}
 	}
 	return nil
+}
+
+func typeAliasAwaitsBody(line string) bool {
+	line, _, _ = strings.Cut(line, "//")
+	return strings.HasSuffix(strings.TrimSpace(line), "=")
+}
+
+func ignorableTextLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return trimmed == "" ||
+		strings.HasPrefix(trimmed, "//") ||
+		strings.HasPrefix(trimmed, "/*") ||
+		strings.HasPrefix(trimmed, "*") ||
+		strings.HasPrefix(trimmed, "#")
+}
+
+func textLineForScan(line string) string {
+	match := thirdPartyProviderFieldPattern.FindStringSubmatch(line)
+	if len(match) != 3 ||
+		!genericProviderIdentifier(match[1]) ||
+		!explicitThirdPartyProviderText(match[2]) {
+		return line
+	}
+	return match[2]
+}
+
+func explicitThirdPartyProviderText(text string) bool {
+	found := false
+	for _, identifier := range sourceIdentifierPattern.FindAllString(text, -1) {
+		switch identifier {
+		case "TracerProvider", "ConfigProvider":
+			found = true
+		default:
+			if containsForbiddenToken(terminologyTokens(identifier)) {
+				return false
+			}
+		}
+	}
+	return found
 }
 
 func (c *checker) addTextAllowingThirdPartyTypes(path string, line int, text string) {
@@ -469,8 +638,8 @@ func exchangeSynonymTokens(tokens []string) (string, bool) {
 		return "", false
 	}
 	for _, token := range tokens {
-		if token == "provider" {
-			return token, true
+		if token == "provider" || token == "providers" {
+			return "provider", true
 		}
 		for _, term := range []string{"broker", "venue", "platform"} {
 			if token == term {
@@ -479,6 +648,10 @@ func exchangeSynonymTokens(tokens []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func containsForbiddenToken(tokens []string) bool {
+	return containsAny(tokens, "provider", "providers", "broker", "venue", "platform")
 }
 
 func terminologyTokens(text string) []string {
