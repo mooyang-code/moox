@@ -164,8 +164,9 @@ func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error
 		f   protocol.Frame
 		err error
 	}, 1)
+	out := w.out
 	go func() {
-		f, e := protocol.ReadFrame(w.out, w.cfg.Limits)
+		f, e := protocol.ReadFrame(out, w.cfg.Limits)
 		ch <- struct {
 			f   protocol.Frame
 			err error
@@ -200,8 +201,9 @@ func (w *StdioWorker) control(ctx context.Context, typ protocol.MessageType, met
 		return errors.Join(err, w.terminateLocked())
 	}
 	done := make(chan error, 1)
+	out := w.out
 	go func() {
-		f, e := protocol.ReadFrame(w.out, w.cfg.Limits)
+		f, e := protocol.ReadFrame(out, w.cfg.Limits)
 		if e == nil && f.Type != protocol.TypeResult {
 			if f.Type == protocol.TypeError {
 				e = fmt.Errorf("python worker error: %s", f.Meta)
