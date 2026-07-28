@@ -60,6 +60,20 @@ func TestCompileGatewaySnapshot_DefaultsInvalidExtraAndDisabledNode(t *testing.T
 	assert.NotEmpty(t, disabled.RouteHash)
 }
 
+func TestFactorGatewayRouteUsesNativeTRPCListener(t *testing.T) {
+	row := Deployment{
+		Host: "127.0.0.1", Port: 11404,
+		GatewayPath: "trpc.moox.factor.FactorMgr", GatewayServiceID: "factormgr",
+	}
+	routes, err := deploymentGatewayRoutes(row, routeExtraConfig{
+		GatewayMethods: []string{"*"},
+		GatewayCallers: []string{"*"},
+	})
+	require.NoError(t, err)
+	require.Len(t, routes, 1)
+	assert.Equal(t, "127.0.0.1:11403", routes[0].Address)
+}
+
 func TestReportGatewayStatus_UpdatesHeartbeat(t *testing.T) {
 	dao := NewDAO(setupSysDeployTestDB(t))
 	ctx := context.Background()

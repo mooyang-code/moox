@@ -154,16 +154,21 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	registerMetricsReporter(s)
 
-	service := s.Service("trpc.moox.factor.FactorMgr")
-	if service == nil {
+	factorService := factorsvc.NewWithRuntime(
+		dbm,
+		sched,
+		factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
+		factorsvc.WithMetadataSync(meta),
+	)
+	registered := false
+	for _, name := range []string{"trpc.moox.factor.FactorMgr", "trpc.moox.factor.FactorMgr.trpc"} {
+		if service := s.Service(name); service != nil {
+			factorpb.RegisterFactorMgrService(service, factorService)
+			registered = true
+		}
+	}
+	if !registered {
 		log.WarnContextf(ctx, "FactorMgr service is not configured, skip register")
-	} else {
-		factorpb.RegisterFactorMgrService(service, factorsvc.NewWithRuntime(
-			dbm,
-			sched,
-			factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
-			factorsvc.WithMetadataSync(meta),
-		))
 	}
 	if err := registerHealth(s, cfg, dbm, sched, pythonExec, consumer); err != nil {
 		return nil, err

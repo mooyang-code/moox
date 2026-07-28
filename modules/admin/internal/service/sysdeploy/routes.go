@@ -93,6 +93,8 @@ func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayp
 		basePort = 20100
 	case "storage-view":
 		basePort = 20103
+	case "factormgr":
+		basePort = 11403
 	}
 	base := gatewayproxy.Route{ServiceID: row.GatewayServiceID, Address: net.JoinHostPort(row.Host, strconv.Itoa(int(basePort))), ServicePath: row.GatewayPath, AllowedMethods: extra.GatewayMethods, AllowedCallers: extra.GatewayCallers}
 	if extra.TimeoutMS != nil {
