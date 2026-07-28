@@ -264,6 +264,7 @@ func TestNodeConversionHelpers(t *testing.T) {
 }
 
 func TestExecuteCreateNodeItemPreservesTencentSCFConfiguration(t *testing.T) {
+	setSCFWatchdogRuntimeEnvironment(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test")
 	db := newNodeSCFTestDB(t)
 	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
@@ -394,15 +395,59 @@ func TestSCFWatchdogEnvironmentOnlyEnablesExplicitSelection(t *testing.T) {
 	require.True(t, enabled)
 	require.True(t, specified)
 
-	environment := scfWatchdogEnvironment(map[string]string{
+	environment, err := scfWatchdogEnvironment(map[string]string{
 		"MOOX_ENV":                "prod",
 		scfWatchdogEnvironmentKey: "false",
 	}, false)
+	require.NoError(t, err)
 	require.Equal(t, "prod", environment["MOOX_ENV"])
 	require.NotContains(t, environment, scfWatchdogEnvironmentKey)
+	for key := range scfWatchdogRuntimeEnvironment {
+		require.NotContains(t, environment, key)
+	}
 
 	_, _, err = requestedSCFWatchdog(map[string]string{scfWatchdogEnvironmentKey: "yes"})
 	require.ErrorContains(t, err, "must be true or false")
+}
+
+func TestSCFWatchdogEnvironmentInjectsAndRotatesServerOwnedSecrets(t *testing.T) {
+	setSCFWatchdogRuntimeEnvironment(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=new")
+	environment, err := scfWatchdogEnvironment(map[string]string{
+		"MOOX_ENV":                  "prod",
+		"MOOX_MSGBOX_WECOM_WEBHOOK": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old",
+	}, true)
+	require.NoError(t, err)
+	require.Equal(t, "true", environment[scfWatchdogEnvironmentKey])
+	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=new", environment["MOOX_MSGBOX_WECOM_WEBHOOK"])
+	require.Equal(t, "monitor-secret", environment["MOOX_HEALTH_HMAC_SECRET"])
+	require.Equal(t, "http://monitor.example.test:11409/readyz", environment["MOOX_MONITOR_READY_URL"])
+}
+
+func TestSCFWatchdogEnvironmentAllowsNotificationsToBeDisabled(t *testing.T) {
+	setSCFWatchdogRuntimeEnvironment(t, "")
+	environment, err := scfWatchdogEnvironment(map[string]string{
+		"MOOX_MSGBOX_WECOM_WEBHOOK": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old",
+	}, true)
+	require.NoError(t, err)
+	require.NotContains(t, environment, "MOOX_MSGBOX_WECOM_WEBHOOK")
+}
+
+func TestSCFWatchdogEnvironmentRequiresReachableChecksAndHealthCredentials(t *testing.T) {
+	for _, sourceKey := range scfWatchdogRuntimeEnvironment {
+		t.Setenv(sourceKey, "")
+	}
+	_, err := scfWatchdogEnvironment(nil, true)
+	require.ErrorContains(t, err, "SCF watchdog runtime requires")
+}
+
+func setSCFWatchdogRuntimeEnvironment(t *testing.T, webhook string) {
+	t.Helper()
+	t.Setenv("MOOX_MONITOR_READY_URL", "http://monitor.example.test:11409/readyz")
+	t.Setenv("MOOX_GATEWAY_READY_URL", "http://gateway.example.test:11012/readyz")
+	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "monitor-secret")
+	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", webhook)
 }
 
 func TestExecuteDeployNodeItemCannotPromoteUnselectedWatchdog(t *testing.T) {
@@ -587,7 +632,8 @@ func TestExecuteDeployNodeItemReconcilesAcceptedSCFDeploymentAfterCallerTimeout(
 
 	require.NoError(t, err)
 	assert.Empty(t, fake.updated)
-	assert.Empty(t, fake.configured)
+	require.Len(t, fake.configured, 1)
+	assert.Equal(t, "moox-collector_dev", fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"])
 	node, err := catalog.GetNode(context.Background(), "crypto", "node-a")
 	require.NoError(t, err)
 	require.NotNil(t, node)
@@ -595,6 +641,7 @@ func TestExecuteDeployNodeItemReconcilesAcceptedSCFDeploymentAfterCallerTimeout(
 }
 
 func TestExecuteDeployNodeItemUpdatesConfigurationWhenPackageIsCurrent(t *testing.T) {
+	setSCFWatchdogRuntimeEnvironment(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=rotated")
 	db := newNodeSCFTestDB(t)
 	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
@@ -602,13 +649,16 @@ func TestExecuteDeployNodeItemUpdatesConfigurationWhenPackageIsCurrent(t *testin
 		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "account-a",
 		PackageID: "moox-collector_dev", NodeType: "scf-event", Provider: "tencent-scf",
 		Region: "ap-guangzhou", Namespace: "collector", FunctionName: "collector-0",
-		Metadata: `{"handler":"main"}`,
+		Metadata: `{"handler":"main","scf_watchdog_enabled":true}`,
 	}))
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
 		Status: "Active",
 		Environment: map[string]string{
-			"MOOX_CODE_PACKAGE_ID": "moox-collector_dev",
-			"MOOX_MONITOR_URL":     "https://old.example",
+			"MOOX_CODE_PACKAGE_ID":      "moox-collector_dev",
+			scfWatchdogEnvironmentKey:   "true",
+			"MOOX_MONITOR_READY_URL":    "https://old.example/readyz",
+			"MOOX_HEALTH_HMAC_SECRET":   "old-secret",
+			"MOOX_MSGBOX_WECOM_WEBHOOK": "https://old.example/webhook",
 		},
 	}}}}
 	svc := &Service{
@@ -621,13 +671,14 @@ func TestExecuteDeployNodeItemUpdatesConfigurationWhenPackageIsCurrent(t *testin
 
 	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{
 		NodeId: "node-a", PackageId: "moox-collector_dev",
-		Environment: map[string]string{"MOOX_MONITOR_URL": "https://new.example"},
 	})
 
 	require.NoError(t, err)
 	require.Empty(t, fake.updated)
 	require.Len(t, fake.configured, 1)
-	require.Equal(t, "https://new.example", fake.configured[0].Environment["MOOX_MONITOR_URL"])
+	require.Equal(t, "http://monitor.example.test:11409/readyz", fake.configured[0].Environment["MOOX_MONITOR_READY_URL"])
+	require.Equal(t, "monitor-secret", fake.configured[0].Environment["MOOX_HEALTH_HMAC_SECRET"])
+	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=rotated", fake.configured[0].Environment["MOOX_MSGBOX_WECOM_WEBHOOK"])
 	require.Equal(t, "moox-collector_dev", fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"])
 }
 

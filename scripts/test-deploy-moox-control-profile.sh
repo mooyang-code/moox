@@ -31,13 +31,15 @@ ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/modules/eventbus" "${FIXTURE_ROOT}/modules/eventbus"
 ln -s "${ROOT}/modules/cloudnode" "${FIXTURE_ROOT}/modules/cloudnode"
 ln -s "${ROOT}/modules/collector" "${FIXTURE_ROOT}/modules/collector"
+ln -s "${ROOT}/modules/monitor" "${FIXTURE_ROOT}/modules/monitor"
 ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 
 for binary in \
   moox-admin moox-cli moox-gateway moox-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli moox-collector-scf; do
+  moox-collector moox-collector-cli moox-collector-scf \
+  moox-monitor moox-monitor-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done
@@ -62,6 +64,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --target localhost --dir "${TMP_ROOT}/deploy" --stage "${TMP_ROOT}/stage" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
   --node-id control --gateway-control-url http://127.0.0.1:11000 \
+  --monitor-instance-id monitor-control \
   --public-host 106.53.107.122 --service-https-port 11001 >/dev/null
 
 [[ -f "${ARCHIVE}" ]]
@@ -73,10 +76,11 @@ tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
 for binary in \
   moox-admin moox-admin-cli moox-cli moox-gateway moox-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli moox-collector-scf; do
+  moox-collector moox-collector-cli moox-collector-scf \
+  moox-monitor moox-monitor-cli; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing control binary: ${binary}" >&2; exit 1; }
 done
-for binary in moox-storage moox-archive moox-factor moox-strategy moox-monitor; do
+for binary in moox-storage moox-archive moox-factor moox-strategy; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected control binary: ${binary}" >&2; exit 1; }
 done
 [[ -s "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" ]]
@@ -87,6 +91,9 @@ grep -q '^node_batch:' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
 grep -q '  batch_size: 3' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
 grep -q '  poll_interval: 500ms' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
 grep -q 'native_addr: 0.0.0.0:11003' "${TMP_ROOT}/unpacked/gateway/config/app.yaml"
+grep -q 'health_addr: 0.0.0.0:11012' "${TMP_ROOT}/unpacked/gateway/config/app.yaml"
+sed -n '/name: trpc.moox.monitor.Health/,/name:/p' "${TMP_ROOT}/unpacked/monitor/config/trpc_go.yaml" |
+  grep -q 'ip: 0.0.0.0'
 grep -Fq -- '--disable-storage-shard' "${TMP_ROOT}/unpacked/start.sh"
 ! grep -Fq -- '--disable-storage-node' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-https://106.53.107.122:11001}"' "${TMP_ROOT}/unpacked/start.sh"

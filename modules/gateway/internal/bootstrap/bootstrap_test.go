@@ -32,6 +32,23 @@ func TestInitializeLoadsCacheBeforeInitialPull(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedHealthHandlerRejectsUnsignedDiagnostics(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	handler, err := authenticatedHealthHandler(health.NewState().Handler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("%s status = %d, want %d", path, recorder.Code, http.StatusUnauthorized)
+		}
+	}
+}
+
 func TestInitializeRequiresCacheOrSuccessfulPull(t *testing.T) {
 	runtime := New(Options{NodeID: "node-a", Routes: &fakeRoutes{loadErr: errors.New("no cache")}, Control: &fakeControl{pullErr: errors.New("admin down")}, Health: health.NewState()})
 	if err := runtime.Initialize(context.Background()); err == nil {

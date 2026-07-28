@@ -27,7 +27,7 @@ macOS 不直接交叉编译启用 DuckDB CGO 的 Storage Linux 二进制。配�
 
 新系统初始化时，根目录 `custom.toml` 的 `[eventbus]` 只填写 SCF 可访问的公网
 IPv4/DNS、端口和 TLS 开关。`setup deploy-control` 在控制节点部署 Admin、Gateway、
-Web、EventBus、CloudNode 和 Collector；EventBus token、私有 CA 与
+Web、EventBus、CloudNode、Collector 和 Monitor；EventBus token、私有 CA 与
 `cloudnode-worker.yaml` 均由系统生成，不属于用户配置。
 
 部署必须显式提供节点 ID、中央控制面 URL、只含公钥证书的 peer CA bundle，以及权限为 `0600` 的集群 control/service key 文件。control key 在 Admin 和所有 Gateway 间相同，service key 在所有 Gateway 和调用方间相同。
@@ -38,7 +38,7 @@ Admin、CloudNode、Collector、Trade 的 SQLite schema 已内嵌进各自二进
 
 ## 管理面入口
 
-MooX 的公开入口由 EdgeOne 和部署内置的 Caddy 提供。中央站点把 `/api/admin/*` 和 `/api/gateway-control/*` 转发到 Admin `127.0.0.1:11000`；每台机器都把 `/api/service/*` 转发到本机独立 Gateway `127.0.0.1:11002`。Gateway 健康端口固定为 `127.0.0.1:11012`。`--no-admin` 节点只启用 service HTTPS site，不启用浏览器 site 或控制面路由。
+MooX 的公开入口由 EdgeOne 和部署内置的 Caddy 提供。中央站点把 `/api/admin/*` 和 `/api/gateway-control/*` 转发到 Admin `127.0.0.1:11000`；每台机器都把 `/api/service/*` 转发到本机独立 Gateway `127.0.0.1:11002`。Gateway 健康端口通常固定为 `127.0.0.1:11012`；control profile 为 SCF Sentinel 将它绑定到 `0.0.0.0:11012`，并仅依靠独立 health HMAC 接受签名诊断请求。`--no-admin` 节点只启用 service HTTPS site，不启用浏览器 site 或控制面路由。
 
 管理台登录使用 bcrypt 密码、一次性登录挑战、24 小时 JWT/session，登录后每个管理请求还必须带 nonce 防重放的会话 HMAC。后台接口使用独立 service HMAC，诊断端口使用独立 health HMAC。详见 [认证鉴权](docs/认证鉴权.md) 和 [管理台 HTTPS 与证书](docs/运维/管理台HTTPS与证书.md)。
 

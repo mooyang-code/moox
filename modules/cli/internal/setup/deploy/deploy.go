@@ -28,17 +28,18 @@ const (
 )
 
 type Options struct {
-	RepositoryRoot        string
-	PublicHost            string
-	BrowserPort           int
-	TargetGOOS            string
-	TargetGOARCH          string
-	ResetControlData      bool
-	ResetStorageData      bool
-	UseControlGateway     bool
-	EventBusPublicAddress string
-	EventBusPort          int
-	EventBusTLSEnabled    bool
+	RepositoryRoot         string
+	PublicHost             string
+	BrowserPort            int
+	TargetGOOS             string
+	TargetGOARCH           string
+	ResetControlData       bool
+	ResetStorageData       bool
+	UseControlGateway      bool
+	EventBusPublicAddress  string
+	EventBusPort           int
+	EventBusTLSEnabled     bool
+	MonitoringWeComWebhook string
 }
 
 type Packager interface {
@@ -54,6 +55,7 @@ const (
 	EventBusReady       ReadinessStage = "eventbus_ready"
 	CloudNodeReady      ReadinessStage = "cloudnode_ready"
 	CollectorReady      ReadinessStage = "collector_ready"
+	MonitorReady        ReadinessStage = "monitor_ready"
 	WebReady            ReadinessStage = "web_ready"
 	BrowserHTTPSReady   ReadinessStage = "browser_https_ready"
 	StoragePrimaryReady ReadinessStage = "storage_primary_ready"
@@ -214,7 +216,7 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}()
 	for _, stage := range []ReadinessStage{
 		AdminReady, SetupReady, GatewayReady, EventBusReady, CloudNodeReady,
-		CollectorReady, WebReady, BrowserHTTPSReady,
+		CollectorReady, MonitorReady, WebReady, BrowserHTTPSReady,
 	} {
 		if err := deps.Probe.Wait(ctx, transport, stage, opts); err != nil {
 			return fmt.Errorf("control_deploy_not_ready")
@@ -341,6 +343,7 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		"--target", "localhost", "--dir", "~/moox/prod", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
 		"--public-host", opts.PublicHost, "--browser-https-port", strconv.Itoa(opts.BrowserPort),
 		"--node-id", "control", "--gateway-control-url", "http://127.0.0.1:11000",
+		"--monitor-instance-id", "monitor-control",
 	)
 	command.Dir = root
 	command.Env, err = eventBusCommandEnv(os.Environ(), opts)
@@ -348,6 +351,7 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		_ = os.Remove(archive)
 		return "", err
 	}
+	command.Env = monitoringCommandEnv(command.Env, opts.MonitoringWeComWebhook)
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)
 		return "", err
@@ -378,6 +382,19 @@ func eventBusCommandEnv(base []string, opts Options) ([]string, error) {
 		addressKey+"="+address,
 		portKey+"="+strconv.Itoa(opts.EventBusPort),
 	), nil
+}
+
+func monitoringCommandEnv(base []string, webhook string) []string {
+	const key = "MOOX_MSGBOX_WECOM_WEBHOOK"
+	env := make([]string, 0, len(base)+1)
+	for _, entry := range base {
+		entryKey, _, found := strings.Cut(entry, "=")
+		if found && entryKey == key {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, key+"="+webhook)
 }
 
 type StoragePackager struct{}
@@ -527,6 +544,8 @@ func probeCommand(stage ReadinessStage) string {
 		return `"$HOME/moox/prod/status.sh" cloudnode >/dev/null`
 	case CollectorReady:
 		return `"$HOME/moox/prod/status.sh" collector >/dev/null`
+	case MonitorReady:
+		return `"$HOME/moox/prod/status.sh" monitor >/dev/null`
 	case WebReady:
 		return `"$HOME/moox/prod/status.sh" web-host >/dev/null`
 	case BrowserHTTPSReady:
@@ -624,6 +643,9 @@ install_control() {
   if [ "$reset_data" = 0 ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
   if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
   mkdir -p "$HOME/.config/moox/credentials" "$next/secrets"
+  if [ -f "$next/secrets/msgbox.env.next" ]; then
+    mv -f "$next/secrets/msgbox.env.next" "$next/secrets/msgbox.env"
+  fi
   chmod 700 "$HOME/.config/moox" "$HOME/.config/moox/credentials"
   encryption_key="$HOME/.config/moox/credentials/admin-encryption-key"
   if [ ! -s "$encryption_key" ]; then

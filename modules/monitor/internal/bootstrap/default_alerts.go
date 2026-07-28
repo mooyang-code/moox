@@ -22,34 +22,24 @@ const (
 
 func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repositories) error {
 	webhookURL := strings.TrimSpace(os.Getenv("MOOX_MSGBOX_WECOM_WEBHOOK"))
-	if webhookURL == "" {
-		return nil
-	}
 	if repositories == nil {
 		return fmt.Errorf("default alerts require repositories")
 	}
-	if _, err := msgbox.NewWeComSender(webhookURL); err != nil {
-		return fmt.Errorf("default WeCom webhook: %w", err)
-	}
-	checks := make([]domain.Check, 0, 500)
-	for page := 1; len(checks) < maxDefaultChecks; page++ {
-		batch, err := repositories.Checks.List(ctx, store.ListChecksOptions{Page: store.Page{Page: page, PageSize: 500}})
-		if err != nil {
-			return err
-		}
-		checks = append(checks, batch...)
-		if len(batch) < 500 {
-			break
+	if webhookURL != "" {
+		if _, err := msgbox.NewWeComSender(webhookURL); err != nil {
+			return fmt.Errorf("default WeCom webhook: %w", err)
 		}
 	}
-	if len(checks) >= maxDefaultChecks {
-		total, err := repositories.Checks.Count(ctx, store.ListChecksOptions{})
-		if err != nil {
-			return err
+	checks, err := listDefaultAlertChecks(ctx, repositories)
+	if err != nil {
+		return err
+	}
+	if webhookURL == "" {
+		spaces := make(map[string]struct{})
+		for _, check := range checks {
+			spaces[check.SpaceID] = struct{}{}
 		}
-		if total > maxDefaultChecks {
-			return fmt.Errorf("default alert checks exceed limit %d", maxDefaultChecks)
-		}
+		return disableDefaultAlerts(ctx, repositories, spaces)
 	}
 	webhookSpaces := make(map[string]struct{})
 	for _, check := range checks {
@@ -94,13 +84,76 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 	return nil
 }
 
+func listDefaultAlertChecks(ctx context.Context, repositories *store.Repositories) ([]domain.Check, error) {
+	if repositories == nil {
+		return nil, fmt.Errorf("default alerts require repositories")
+	}
+	checks := make([]domain.Check, 0, 500)
+	for page := 1; len(checks) < maxDefaultChecks; page++ {
+		batch, err := repositories.Checks.List(ctx, store.ListChecksOptions{Page: store.Page{Page: page, PageSize: 500}})
+		if err != nil {
+			return nil, err
+		}
+		checks = append(checks, batch...)
+		if len(batch) < 500 {
+			break
+		}
+	}
+	if len(checks) >= maxDefaultChecks {
+		total, err := repositories.Checks.Count(ctx, store.ListChecksOptions{})
+		if err != nil {
+			return nil, err
+		}
+		if total > maxDefaultChecks {
+			return nil, fmt.Errorf("default alert checks exceed limit %d", maxDefaultChecks)
+		}
+	}
+	return checks, nil
+}
+
+func disableDefaultAlerts(ctx context.Context, repositories *store.Repositories, spaces map[string]struct{}) error {
+	for spaceID := range spaces {
+		rules, err := repositories.Alerts.ListRules(ctx, spaceID)
+		if err != nil {
+			return err
+		}
+		for index := range rules {
+			rule := &rules[index]
+			if rule.WebhookID != defaultWebhookID || !strings.HasPrefix(rule.RuleID, "default:") || !rule.Enabled {
+				continue
+			}
+			rule.Enabled = false
+			if err := repositories.Alerts.UpdateRule(ctx, rule); err != nil {
+				return err
+			}
+		}
+		webhook, err := repositories.Alerts.GetWebhook(ctx, spaceID, defaultWebhookID)
+		switch {
+		case err == nil:
+			if webhook.Enabled {
+				webhook.Enabled = false
+				if err := repositories.Alerts.UpdateWebhook(ctx, webhook); err != nil {
+					return err
+				}
+			}
+		case errors.Is(err, gorm.ErrRecordNotFound):
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
 func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Repositories, registry *hostmetrics.Registry) error {
 	webhookURL := strings.TrimSpace(os.Getenv("MOOX_MSGBOX_WECOM_WEBHOOK"))
-	if webhookURL == "" {
-		return nil
-	}
 	if repositories == nil || registry == nil {
 		return fmt.Errorf("default host alerts require repositories and registry")
+	}
+	if webhookURL == "" {
+		return disableDefaultAlerts(ctx, repositories, map[string]struct{}{hostmetrics.SpaceID: {}})
+	}
+	if _, err := msgbox.NewWeComSender(webhookURL); err != nil {
+		return fmt.Errorf("default WeCom webhook: %w", err)
 	}
 	if err := ensureDefaultWebhook(ctx, repositories, hostmetrics.SpaceID, webhookURL); err != nil {
 		return err

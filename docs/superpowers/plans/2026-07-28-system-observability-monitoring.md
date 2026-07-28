@@ -213,6 +213,58 @@ moox_<module>_dataset_rows_total{space_id,dataset_id,freq,result}
 | 资产余额 | Trade balance sync 连续 3 次失败或超过 15 分钟 | 下一次成功 |
 | 市场异常 | 1m/5m 绝对涨跌幅或成交量比超过配置阈值 | 下一窗口回到阈值内 |
 
+### 1.7 `custom.toml` 的监控注册边界
+
+用户启用监控时，不在 `custom.toml` 再维护一份服务、检查项、subject 或 Dataset 清单。
+初始化文件只登记用户才能提供、且部署前必须知道的事实：
+
+| 信息 | 注册位置 | 用途 |
+| --- | --- | --- |
+| 控制节点 | `[control_host]` | 控制面、Monitor 的初始部署位置，也是主机清单的一部分 |
+| 其他业务服务器 | `[[other_hosts]]` | 可部署服务的物理主机清单；需要资源监控的机器后续逐台安装 HostAgent |
+| EventBus 公网 TLS 入口 | `[eventbus]` | HostAgent、远端服务和 SCF 上报 `moox.observability.>` |
+| 企业微信机器人 webhook | `[monitoring]` | Monitor 告警和 SCF Sentinel 的站外失联告警 |
+
+注册示例以仓库根目录 `custom.toml.example` 为唯一模板，监控相关部分为：
+
+```toml
+[eventbus]
+public_address = "eventbus.example.com"
+port = 4222
+tls_enabled = true
+
+[monitoring]
+wecom_webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<robot-key>"
+
+[control_host]
+name = "control"
+address = "203.0.113.10"
+port = 22
+username = "ubuntu"
+password = "<ssh-password>"
+
+[[other_hosts]]
+name = "compute-1"
+address = "203.0.113.11"
+port = 22
+username = "ubuntu"
+password = "<ssh-password>"
+```
+
+`monitoring.wecom_webhook` 留空时，采集、查询、状态计算和 Monitor 内部告警状态仍正常，
+但不会发送站外通知。`setup deploy-control` 把该值写入 mode `0600` 的独立运行时环境
+文件，不复制 `custom.toml`。SCF Sentinel 发布时复用同一 webhook，只向显式启用
+`MOOX_SCF_WATCHDOG_ENABLED=true` 的唯一节点注入。
+
+以下内容不得让用户在 `custom.toml` 重复登记：
+
+- 标准微服务及健康 URL：由 SysDeploy 默认服务清单维护。
+- 所有启用中的实时 TimeSeries Dataset + Frequency：由 Collector 规则和 Factor
+  binding 自动对账。
+- EventBus 账号、token、CA、私钥和 health HMAC：由部署流程生成。
+- 告警阈值和 Market Canary scope：放在 Monitor 的版本化策略配置中。
+- `compile_host`：只用于编译，不属于监控主机，除非它同时作为 deployment host 登记。
+
 ## 2. 当前代码评审结论
 
 以下问题是本计划的真实输入，不是为了“硬找茬”而新增的抽象：

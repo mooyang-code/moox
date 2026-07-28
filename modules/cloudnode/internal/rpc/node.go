@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,15 @@ const (
 	scfWatchdogEnvironmentKey = "MOOX_SCF_WATCHDOG_ENABLED"
 	scfWatchdogMetadataKey    = "scf_watchdog_enabled"
 )
+
+var scfWatchdogRuntimeEnvironment = map[string]string{
+	"MOOX_MONITOR_READY_URL":    "MOOX_MONITOR_READY_URL",
+	"MOOX_GATEWAY_READY_URL":    "MOOX_GATEWAY_READY_URL",
+	"MOOX_HEALTH_HMAC_VERSION":  "MOOX_HEALTH_AUTH_VERSION",
+	"MOOX_HEALTH_HMAC_KEY_ID":   "MOOX_HEALTH_AUTH_ACCESS_KEY",
+	"MOOX_HEALTH_HMAC_SECRET":   "MOOX_HEALTH_AUTH_SECRET_KEY",
+	"MOOX_MSGBOX_WECOM_WEBHOOK": "MOOX_MSGBOX_WECOM_WEBHOOK",
+}
 
 var scfWatchdogSelectionMu sync.Mutex
 
@@ -303,7 +313,10 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		return fmt.Errorf("get scf function %s: %w", ref.FunctionName, err)
 	}
 	watchdogEnabled := metadataBool(parseJSONMap(node.Metadata), scfWatchdogMetadataKey)
-	environment := scfWatchdogEnvironment(item.GetEnvironment(), watchdogEnabled)
+	environment, err := scfWatchdogEnvironment(item.GetEnvironment(), watchdogEnabled)
+	if err != nil {
+		return err
+	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	createCtx, createCancel := context.WithTimeout(ctx, scfCreateAttemptTimeout)
 	_, err = client.CreateFunction(createCtx, tencentscf.CreateFunctionRequest{
@@ -458,11 +471,6 @@ func (s *Service) updateSCFFunctionCode(
 	// doubles as the idempotency marker when the caller times out while Tencent
 	// is still returning Updating.
 	codeCurrent := strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"]) == pkg.PackageID
-	watchdogCurrent := remoteSCFWatchdogEnabled(info.Environment) == watchdogEnabled
-	if codeCurrent && watchdogCurrent && len(desiredEnvironment) == 0 && len(desiredConfig) == 0 {
-		_, err = waitForSCFActive(ctx, client, ref, info)
-		return err
-	}
 	info, err = waitForSCFActive(ctx, client, ref, info)
 	if err != nil {
 		return err
@@ -489,7 +497,10 @@ func (s *Service) updateSCFFunctionCode(
 			environment = make(map[string]string)
 		}
 	}
-	environment = scfWatchdogEnvironment(environment, watchdogEnabled)
+	environment, err = scfWatchdogEnvironment(environment, watchdogEnabled)
+	if err != nil {
+		return err
+	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
 		FunctionRef: ref,
@@ -545,17 +556,31 @@ func remoteSCFWatchdogEnabled(environment map[string]string) bool {
 	return err == nil && enabled
 }
 
-func scfWatchdogEnvironment(environment map[string]string, enabled bool) map[string]string {
+func scfWatchdogEnvironment(environment map[string]string, enabled bool) (map[string]string, error) {
 	result := copyStringMap(environment)
 	if result == nil {
 		result = make(map[string]string)
 	}
-	if enabled {
-		result[scfWatchdogEnvironmentKey] = "true"
-	} else {
+	if !enabled {
 		delete(result, scfWatchdogEnvironmentKey)
+		for key := range scfWatchdogRuntimeEnvironment {
+			delete(result, key)
+		}
+		return result, nil
 	}
-	return result
+	result[scfWatchdogEnvironmentKey] = "true"
+	for targetKey, sourceKey := range scfWatchdogRuntimeEnvironment {
+		value := strings.TrimSpace(os.Getenv(sourceKey))
+		if value == "" {
+			delete(result, targetKey)
+			if targetKey != "MOOX_MSGBOX_WECOM_WEBHOOK" {
+				return nil, fmt.Errorf("SCF watchdog runtime requires %s", sourceKey)
+			}
+			continue
+		}
+		result[targetKey] = value
+	}
+	return result, nil
 }
 
 func acceptedSCFPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {

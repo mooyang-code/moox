@@ -274,6 +274,7 @@ func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {
 	require.Equal(t, "eventbus.example.test", opts.EventBusPublicAddress)
 	require.Equal(t, 4333, opts.EventBusPort)
 	require.True(t, opts.EventBusTLSEnabled)
+	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", opts.MonitoringWeComWebhook)
 }
 
 func TestEventBusFirewallIPResolvesDNSWithoutChangingAdvertisedAddress(t *testing.T) {
@@ -295,13 +296,17 @@ func TestEventBusFirewallIPRejectsAmbiguousDNS(t *testing.T) {
 	require.ErrorContains(t, err, "exactly one IPv4")
 }
 
-func TestSetupControlFirewallRulesIncludeEventBusAndNativeGateway(t *testing.T) {
+func TestSetupControlFirewallRulesIncludeEventBusGatewayAndSentinelHealth(t *testing.T) {
 	rules := setupControlFirewallRules(4222)
-	require.Len(t, rules, 2)
+	require.Len(t, rules, 4)
 	assert.Equal(t, "4222", rules[0].Ports)
 	assert.Equal(t, "MooX EventBus TLS", rules[0].Description)
 	assert.Equal(t, "11003", rules[1].Ports)
 	assert.Equal(t, "MooX service gateway native", rules[1].Description)
+	assert.Equal(t, "11012", rules[2].Ports)
+	assert.Equal(t, "MooX SCF Gateway readiness", rules[2].Description)
+	assert.Equal(t, "11409", rules[3].Ports)
+	assert.Equal(t, "MooX SCF Monitor readiness", rules[3].Description)
 	for _, rule := range rules {
 		assert.Equal(t, "TCP", rule.Protocol)
 		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
@@ -394,6 +399,8 @@ secret_key = "cloud-test-secret"
 public_address = "eventbus.example.test"
 port = 4333
 tls_enabled = true
+[monitoring]
+wecom_webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
 [control_host]
 name = "control"
 address = "203.0.113.8"

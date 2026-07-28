@@ -74,6 +74,13 @@ inside the verified resident SCF process. If the platform freezes the process
 before the final resident window completes, one last external alert may be
 lost; V1 intentionally adds no lease or second scheduler.
 
+The control profile binds only the Gateway and Monitor readiness listeners to
+`0.0.0.0:11012` and `0.0.0.0:11409`. The setup command opens those two TCP
+ports because Tencent SCF does not have a stable egress CIDR in this deployment.
+They expose diagnostics only, reject unsigned requests through the dedicated
+health HMAC, and are not routed by Caddy. Business and management listeners
+remain loopback-only. Rotate `health-auth.env` if that credential is exposed.
+
 Direct SCF notification is reserved for failure of the central Monitor or
 EventBus path. Normal service, dataset, balance, and market-canary alerts remain
 owned by Monitor so cooldown and recovery state have one owner.

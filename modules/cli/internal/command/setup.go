@@ -556,6 +556,14 @@ func setupControlFirewallRules(eventBusPort int) []cloudtencent.CreateFirewallRu
 			Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0",
 			Action: "ACCEPT", Description: "MooX service gateway native",
 		},
+		{
+			Protocol: "TCP", Ports: "11012", CidrBlock: "0.0.0.0/0",
+			Action: "ACCEPT", Description: "MooX SCF Gateway readiness",
+		},
+		{
+			Protocol: "TCP", Ports: "11409", CidrBlock: "0.0.0.0/0",
+			Action: "ACCEPT", Description: "MooX SCF Monitor readiness",
+		},
 	}
 }
 
@@ -591,12 +599,13 @@ func eventBusFirewallIP(
 
 func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string) setupdeploy.Options {
 	return setupdeploy.Options{
-		RepositoryRoot:        repositoryRoot,
-		PublicHost:            snapshot.Manifest.ControlHost.Address,
-		BrowserPort:           9527,
-		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:          snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:    snapshot.Manifest.EventBus.TLSEnabled,
+		RepositoryRoot:         repositoryRoot,
+		PublicHost:             snapshot.Manifest.ControlHost.Address,
+		BrowserPort:            9527,
+		EventBusPublicAddress:  snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:           snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:     snapshot.Manifest.EventBus.TLSEnabled,
+		MonitoringWeComWebhook: snapshot.Manifest.Monitoring.WeComWebhook,
 	}
 }
 
@@ -664,6 +673,7 @@ func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	snapshot.Manifest.Admin.Password = ""
 	snapshot.Manifest.TencentCloud.SecretID = ""
 	snapshot.Manifest.TencentCloud.SecretKey = ""
+	snapshot.Manifest.Monitoring.WeComWebhook = ""
 	snapshot.Manifest.ControlHost.Password = ""
 	snapshot.Manifest.CompileHost.Password = ""
 	for index := range snapshot.Manifest.OtherHosts {

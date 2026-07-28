@@ -327,7 +327,8 @@ func TestExecuteDeployNodeItemReconcilesAcceptedTencentTimeout(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, fake.updated)
-	assert.Empty(t, fake.configured)
+	require.Len(t, fake.configured, 1)
+	assert.Equal(t, "moox-collector_dev", fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"])
 }
 
 func newNodeItemTestService(catalog *store.CatalogRepository, fake scfProvisioner) *Service {

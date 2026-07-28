@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SKILL="${ROOT}/skills/moox/SKILL.md"
 REFERENCE="${ROOT}/skills/moox/references/custom-setup.md"
 TEMPLATE="${ROOT}/custom.toml.example"
+DEPLOY="${ROOT}/scripts/deploy-moox.sh"
 
 [[ -f "${REFERENCE}" ]] || { echo 'missing custom setup reference' >&2; exit 1; }
 grep -Fq 'custom.toml.example' "${REFERENCE}"
@@ -16,6 +17,12 @@ grep -Fq '[eventbus]' "${REFERENCE}"
 grep -Fq 'public_address = ""' "${REFERENCE}"
 grep -Fq '公网连接事实' "${REFERENCE}"
 grep -Fq 'cloudnode-worker.yaml' "${REFERENCE}"
+grep -Fq '[monitoring]' "${REFERENCE}"
+grep -Fq 'wecom_webhook = ""' "${REFERENCE}"
+grep -Fq '唯一需要用户提前填写的监控专用信息' "${REFERENCE}"
+grep -Fq 'TimeSeries Dataset + Frequency' "${REFERENCE}"
+grep -Fq 'MOOX_MSGBOX_WECOM_WEBHOOK=%q' "${DEPLOY}"
+grep -Fq 'secrets/msgbox.env' "${DEPLOY}"
 
 validate_line=$(grep -nF './bin/moox-cli setup validate --file ./custom.toml' "${REFERENCE}" | cut -d: -f1)
 deploy_line=$(grep -nF './bin/moox-cli setup deploy-control --file ./custom.toml' "${REFERENCE}" | cut -d: -f1)
