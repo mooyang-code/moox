@@ -10,8 +10,14 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/contracttest"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 )
+
+func TestAdapterRequestValidationContract(t *testing.T) {
+	adapter := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
+	contracttest.RunRequestValidation(t, exchange.MarketTypeSpot, adapter.PlaceOrder)
+}
 
 func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 	var orderBody map[string]string

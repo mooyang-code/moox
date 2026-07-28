@@ -541,7 +541,13 @@ func (a *Adapter) ListRecentFills(
 	}
 	values := url.Values{"symbol": []string{symbol}}
 	if cursor != "" {
-		values.Set("fromId", cursor)
+		tradeID, err := strconv.ParseUint(cursor, 10, 64)
+		if err != nil || tradeID == ^uint64(0) {
+			return nil, cursor, typedRejected("invalid Binance fill cursor", err)
+		}
+		// Binance fromId is inclusive. Advance past the last applied trade so
+		// an idle account does not return the same Fill on every sync.
+		values.Set("fromId", strconv.FormatUint(tradeID+1, 10))
 	}
 	raw, err := a.request(
 		ctx,

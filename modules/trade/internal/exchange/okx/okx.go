@@ -34,6 +34,10 @@ func init() {
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (exchange.Adapter, error) {
+		if config.ExecutionMode == exchange.ExecutionModeLive &&
+			strings.TrimSpace(credential.Passphrase) == "" {
+			return nil, rejected("OKX live account requires passphrase", nil)
+		}
 		return New(config, credential), nil
 	})
 }
@@ -320,9 +324,16 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		})
 		if strings.EqualFold(detail.Ccy, a.config.SettlementAsset) {
 			snapshot.AvailableFunds = available
-			snapshot.UsedMargin, _ = decimalOrZero(detail.Imr)
-			snapshot.MaintenanceMargin, _ = decimalOrZero(detail.Mmr)
-			snapshot.UnrealizedPnL, _ = decimalOrZero(detail.Upl)
+			snapshot.UsedMargin, parseErr = decimalOrZero(detail.Imr)
+			if parseErr == nil {
+				snapshot.MaintenanceMargin, parseErr = decimalOrZero(detail.Mmr)
+			}
+			if parseErr == nil {
+				snapshot.UnrealizedPnL, parseErr = decimalOrZero(detail.Upl)
+			}
+			if parseErr != nil {
+				return exchange.AccountSnapshot{}, parseErr
+			}
 		}
 	}
 	return snapshot, nil
@@ -354,6 +365,7 @@ type positionPayload struct {
 	Lever    string `json:"lever"`
 	MgnMode  string `json:"mgnMode"`
 	Margin   string `json:"margin"`
+	IMR      string `json:"imr"`
 	LiqPx    string `json:"liqPx"`
 	Upl      string `json:"upl"`
 	Realized string `json:"realizedPnl"`
@@ -401,7 +413,11 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			position.Leverage, err = decimalOrZero(row.Lever)
 		}
 		if err == nil {
-			position.UsedMargin, err = decimalOrZero(row.Margin)
+			usedMargin := row.IMR
+			if usedMargin == "" {
+				usedMargin = row.Margin
+			}
+			position.UsedMargin, err = decimalOrZero(usedMargin)
 		}
 		if err == nil {
 			position.LiquidationPrice, err = decimalOrZero(row.LiqPx)
@@ -626,8 +642,10 @@ func (a *Adapter) SetLeverage(
 	leverage shared.Decimal,
 ) error {
 	if a.config.MarketType != exchange.MarketTypeSwap ||
-		leverage.Cmp(shared.Zero()) <= 0 {
-		return rejected("positive SWAP leverage is required", nil)
+		strings.TrimSpace(symbol) == "" ||
+		leverage.Cmp(shared.Zero()) <= 0 ||
+		strings.ContainsAny(leverage.String(), "./") {
+		return rejected("positive integer SWAP leverage is required", nil)
 	}
 	_, err := a.request(ctx, http.MethodPost, "/api/v5/account/set-leverage", nil, map[string]string{
 		"instId": symbol, "lever": leverage.String(), "mgnMode": "cross", "posSide": "net",

@@ -10,8 +10,14 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/contracttest"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 )
+
+func TestAdapterRequestValidationContract(t *testing.T) {
+	adapter := testAdapter(exchange.MarketTypeSpot, "http://unused")
+	contracttest.RunRequestValidation(t, exchange.MarketTypeSpot, adapter.PlaceOrder)
+}
 
 func TestAdapterOrderMappings(t *testing.T) {
 	tests := []struct {
@@ -135,14 +141,15 @@ func TestGetTerminalOrderAndTypedErrors(t *testing.T) {
 
 func TestListRecentFillsNormalizesSwap(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		if request.URL.Query().Get("symbol") != "BTCUSDT" {
+		if request.URL.Query().Get("symbol") != "BTCUSDT" ||
+			request.URL.Query().Get("fromId") != "7" {
 			t.Fatalf("query = %v", request.URL.Query())
 		}
 		_, _ = io.WriteString(w, `[{"id":7,"orderId":42,"symbol":"BTCUSDT","price":"100","qty":"0.01","commission":"-0.001","commissionAsset":"USDT","realizedPnl":"2.5","time":1700000000000,"isBuyer":true,"isMaker":false,"positionSide":"BOTH"}]`)
 	}))
 	defer server.Close()
 	fills, cursor, err := testAdapter(exchange.MarketTypeSwap, server.URL).
-		ListRecentFills(context.Background(), "BTCUSDT", "")
+		ListRecentFills(context.Background(), "BTCUSDT", "6")
 	if err != nil {
 		t.Fatal(err)
 	}

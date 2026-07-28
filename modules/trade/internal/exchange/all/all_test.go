@@ -21,3 +21,15 @@ func TestBlankImport_ShouldRegisterBuiltInExchanges(t *testing.T) {
 		require.Equal(t, name, adapter.Exchange())
 	}
 }
+
+func TestOKXLiveBindingRequiresPassphrase(t *testing.T) {
+	_, err := exchange.Bind(exchange.AccountConfig{
+		ExchangeAccountID: "account-1",
+		Exchange:          exchange.ExchangeOKX,
+		MarketType:        exchange.MarketTypeSpot,
+		ExecutionMode:     exchange.ExecutionModeLive,
+		SettlementAsset:   "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret"})
+	require.Error(t, err)
+	require.True(t, exchange.IsKind(err, exchange.ErrorRejected), "error = %v", err)
+}
