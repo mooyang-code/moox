@@ -54,6 +54,17 @@ ON t_monitor_check_results (c_result_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_results_recent
 ON t_monitor_check_results (c_space_id, c_check_id, c_checked_at DESC);
 
+CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
+    c_agent_id TEXT PRIMARY KEY,
+    c_hostname TEXT NOT NULL,
+    c_boot_id TEXT NOT NULL,
+    c_last_seen_at DATETIME NOT NULL,
+    c_last_event_id TEXT NOT NULL,
+    c_status TEXT NOT NULL CHECK (c_status IN ('reachable', 'unreachable')),
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS t_monitor_webhooks (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',

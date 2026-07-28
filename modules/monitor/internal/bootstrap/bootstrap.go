@@ -45,6 +45,16 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
+	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	presenceSink := hostmetrics.PresenceTransitionFunc(func(ctx context.Context, transition hostmetrics.PresenceTransition) {
+		log.InfoContextf(ctx, "host presence transition agent_id=%s from=%s to=%s observed_at=%s",
+			transition.AgentID, transition.From, transition.To, transition.ObservedAt.Format(time.RFC3339Nano))
+	})
+	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceSink)
 
 	var hostStore *hostmetrics.Store
 	var hostReader *hostmetrics.StorageReader
@@ -83,6 +93,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	} else {
 		hostStore = hostmetrics.NewStore(nil, nil)
 	}
+	hostStore.SetRegistry(hostRegistry)
+	hostStore.SetPresenceTransitionSink(presenceSink)
 
 	var metricsStorage *monmetrics.StorageAdapter
 	var metricsQuery *monmetrics.QueryService
@@ -136,6 +148,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	if err := registerMonitorScheduleTimers(s, cfg, runtime, probeRunner, resultHook, metricEvaluator, metricRules); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	if err := registerMonitorHostSilenceTimer(s, hostSilence); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}

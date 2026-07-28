@@ -382,6 +382,8 @@ message HostAgentInfo {
   string last_seen_at = 4;
   bool archived = 5;
   trpc.moox.hostagent.HostSnapshot snapshot = 6;
+  bool reachable = 7;
+  int64 stale_seconds = 8;
 }
 message ListHostAgentsReq {}
 message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; bool storage_available = 3; bool data_gap = 4; }
