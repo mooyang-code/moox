@@ -3,10 +3,8 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"go/ast"
-	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -20,8 +18,7 @@ import (
 )
 
 var declarationPattern = regexp.MustCompile(`(?i)^\s*(?:(?:export|declare)\s+)*(?:message|interface|type|class|enum|service)\s+([A-Za-z_][A-Za-z0-9_]*)`)
-var thirdPartyProviderFieldPattern = regexp.MustCompile(`^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:\s*(.+?)\s*[;,]?\s*$`)
-
+var sourceIdentifierPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 var defaultRoots = []string{
 	"modules/trade",
 	"packages/tradeeventpb",
@@ -67,6 +64,9 @@ func main() {
 	}
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].path == violations[j].path {
+			if violations[i].line == violations[j].line {
+				return violations[i].term < violations[j].term
+			}
 			return violations[i].line < violations[j].line
 		}
 		return violations[i].path < violations[j].path
@@ -119,148 +119,196 @@ func (c *checker) scanGo(path string) error {
 	}
 
 	for _, declaration := range file.Decls {
-		c.scanGoDeclaration(path, declaration)
+		c.scanGoDeclaration(path, declaration, nil)
 	}
 	return nil
 }
 
-func (c *checker) scanGoDeclaration(path string, declaration ast.Decl) {
-	if decl, ok := declaration.(*ast.FuncDecl); ok {
-		c.scanGoFunction(path, decl)
+func (c *checker) scanGoDeclaration(path string, declaration ast.Decl, context []string) {
+	switch value := declaration.(type) {
+	case *ast.FuncDecl:
+		c.scanGoFunction(path, value, context)
+	case *ast.GenDecl:
+		for _, spec := range value.Specs {
+			switch spec := spec.(type) {
+			case *ast.TypeSpec:
+				c.scanGoType(path, spec, context)
+			case *ast.ValueSpec:
+				c.scanGoValueSpec(path, spec, context)
+			}
+		}
+	}
+}
+
+func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec, context []string) {
+	var declarationTokens []string
+	for _, name := range spec.Names {
+		declarationTokens = append(declarationTokens, sourceTokens(name.Name)...)
+	}
+	if spec.Type != nil {
+		declarationTokens = append(declarationTokens, goNodeTokens(spec.Type)...)
+	}
+	for _, value := range spec.Values {
+		declarationTokens = append(declarationTokens, goNodeTokens(value)...)
 	}
 
-	ast.Inspect(declaration, func(node ast.Node) bool {
+	line := c.fset.Position(spec.Pos()).Line
+	c.addTokens(path, line, context, declarationTokens)
+	if spec.Type != nil {
+		c.scanGoTypeExpression(path, spec.Type, extendDomainContext(context, declarationTokens))
+	}
+}
+
+func (c *checker) scanGoAssignment(path string, assignment *ast.AssignStmt, context []string) {
+	c.addTokens(path, c.fset.Position(assignment.Pos()).Line, context, goNodeTokens(assignment))
+}
+
+func (c *checker) scanGoType(path string, spec *ast.TypeSpec, context []string) {
+	nameTokens := sourceTokens(spec.Name.Name)
+	c.addTokens(path, c.fset.Position(spec.Name.Pos()).Line, context, nameTokens)
+	typeContext := extendDomainContext(context, nameTokens)
+	c.scanGoFieldList(path, spec.TypeParams, typeContext)
+	c.scanGoTypeExpression(path, spec.Type, typeContext)
+}
+
+func (c *checker) scanGoFunction(path string, function *ast.FuncDecl, context []string) {
+	nameTokens := sourceTokens(function.Name.Name)
+	var receiverTokens []string
+	if function.Recv != nil {
+		receiverTokens = goNodeTokens(function.Recv)
+	}
+	c.addTokens(
+		path,
+		c.fset.Position(function.Name.Pos()).Line,
+		extendDomainContext(context, receiverTokens),
+		nameTokens,
+	)
+
+	functionContext := extendDomainContext(context, nameTokens, receiverTokens)
+	c.scanGoFieldList(path, function.Recv, extendDomainContext(context, nameTokens))
+	c.scanGoFieldList(path, function.Type.TypeParams, functionContext)
+	c.scanGoFieldList(path, function.Type.Params, functionContext)
+	c.scanGoFieldList(path, function.Type.Results, functionContext)
+	if function.Body != nil {
+		c.scanGoBody(path, function.Body, functionContext)
+	}
+}
+
+func (c *checker) scanGoBody(path string, body *ast.BlockStmt, context []string) {
+	ast.Inspect(body, func(node ast.Node) bool {
 		switch value := node.(type) {
 		case *ast.TypeSpec:
-			c.scanGoType(path, value)
+			c.scanGoType(path, value, context)
+			return false
 		case *ast.ValueSpec:
-			c.scanGoValueSpec(path, value)
+			c.scanGoValueSpec(path, value, context)
+			return true
 		case *ast.AssignStmt:
-			c.scanGoAssignment(path, value)
+			c.scanGoAssignment(path, value, context)
+			return true
+		case *ast.RangeStmt:
+			c.scanGoRange(path, value, context)
+			return true
+		case *ast.FuncLit:
+			c.scanGoFieldList(path, value.Type.TypeParams, context)
+			c.scanGoFieldList(path, value.Type.Params, context)
+			c.scanGoFieldList(path, value.Type.Results, context)
+			return true
 		}
 		return true
 	})
 }
 
-func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec) {
-	for index, name := range spec.Names {
-		c.scanGoIdentifier(path, c.fset.Position(name.Pos()).Line, "", name.Name, spec.Type)
-		if spec.Type != nil {
-			c.scanGoTypeExpression(path, c.fset.Position(name.Pos()).Line, name.Name, spec.Type)
-		}
-		if index < len(spec.Values) {
-			c.addText(path, c.fset.Position(name.Pos()).Line, name.Name+" "+nodeText(c.fset, spec.Values[index]))
-		}
+func (c *checker) scanGoRange(path string, statement *ast.RangeStmt, context []string) {
+	var headerTokens []string
+	if statement.Key != nil {
+		headerTokens = append(headerTokens, goNodeTokens(statement.Key)...)
 	}
-	if len(spec.Names) == 1 && len(spec.Values) > 1 {
-		for _, value := range spec.Values[1:] {
-			c.addText(path, c.fset.Position(spec.Names[0].Pos()).Line, spec.Names[0].Name+" "+nodeText(c.fset, value))
-		}
+	if statement.Value != nil {
+		headerTokens = append(headerTokens, goNodeTokens(statement.Value)...)
 	}
+	headerTokens = append(headerTokens, goNodeTokens(statement.X)...)
+	c.addTokens(path, c.fset.Position(statement.Pos()).Line, context, headerTokens)
 }
 
-func (c *checker) scanGoAssignment(path string, assignment *ast.AssignStmt) {
-	for index, left := range assignment.Lhs {
-		identifier, ok := left.(*ast.Ident)
-		if !ok {
-			c.addNode(path, assignment)
-			return
-		}
-		var right ast.Expr
-		if index < len(assignment.Rhs) {
-			right = assignment.Rhs[index]
-		} else if len(assignment.Rhs) == 1 {
-			right = assignment.Rhs[0]
-		}
-		c.scanGoIdentifier(path, c.fset.Position(identifier.Pos()).Line, "", identifier.Name, thirdPartyProviderConversionType(right))
-		if right != nil && !isThirdPartyProviderTypeExpression(thirdPartyProviderConversionType(right)) {
-			c.addText(path, c.fset.Position(identifier.Pos()).Line, identifier.Name+" "+nodeText(c.fset, right))
-		}
-	}
-}
-
-func (c *checker) scanGoType(path string, spec *ast.TypeSpec) {
-	c.addText(path, c.fset.Position(spec.Name.Pos()).Line, spec.Name.Name)
-	var fields *ast.FieldList
-	switch value := spec.Type.(type) {
-	case *ast.StructType:
-		fields = value.Fields
-	case *ast.InterfaceType:
-		fields = value.Methods
-	case *ast.FuncType:
-		c.scanGoParameters(path, spec.Name.Name, value.Params, value.Results)
-		return
-	default:
-		c.scanGoTypeExpression(path, c.fset.Position(spec.Name.Pos()).Line, spec.Name.Name, spec.Type)
+func (c *checker) scanGoFieldList(path string, fields *ast.FieldList, context []string) {
+	if fields == nil {
 		return
 	}
 	for _, field := range fields.List {
-		if len(field.Names) == 0 {
-			c.scanGoTypeExpression(path, c.fset.Position(field.Pos()).Line, spec.Name.Name, field.Type)
-			continue
-		}
-		for _, name := range field.Names {
-			context := spec.Name.Name
-			secretClientProvider := allowedSecretClientProvider(path, field, name.Name)
-			if !secretClientProvider {
-				c.scanGoIdentifier(path, c.fset.Position(name.Pos()).Line, context, name.Name, field.Type)
-				context += " " + name.Name
-			}
-			if functionType, ok := field.Type.(*ast.FuncType); ok {
-				c.scanGoParameters(path, context, functionType.Params, functionType.Results)
-			} else {
-				c.scanGoTypeExpression(path, c.fset.Position(name.Pos()).Line, context, field.Type)
-			}
-		}
+		c.scanGoField(path, field, context)
 	}
 }
 
-func (c *checker) scanGoFunction(path string, function *ast.FuncDecl) {
-	c.addText(path, c.fset.Position(function.Name.Pos()).Line, function.Name.Name)
-	context := function.Name.Name
-	if function.Recv != nil {
-		for _, field := range function.Recv.List {
-			context = nodeText(c.fset, field.Type) + " " + function.Name.Name
-			c.addText(path, c.fset.Position(function.Name.Pos()).Line, context)
-		}
-	}
-	c.scanGoParameters(path, context, function.Type.Params, function.Type.Results)
-}
-
-func (c *checker) scanGoParameters(path, context string, fieldLists ...*ast.FieldList) {
-	for _, fields := range fieldLists {
-		if fields == nil {
-			continue
-		}
-		for _, field := range fields.List {
-			if len(field.Names) == 0 {
-				c.scanGoTypeExpression(path, c.fset.Position(field.Pos()).Line, context, field.Type)
-				continue
-			}
-			for _, name := range field.Names {
-				c.scanGoIdentifier(path, c.fset.Position(name.Pos()).Line, context, name.Name, field.Type)
-				c.scanGoTypeExpression(path, c.fset.Position(name.Pos()).Line, context+" "+name.Name, field.Type)
-			}
-		}
-	}
-}
-
-func (c *checker) scanGoIdentifier(path string, line int, context, name string, expression ast.Expr) {
-	kinds, thirdPartyType := thirdPartyProviderTypeKinds(expression)
-	if thirdPartyType && thirdPartyProviderIdentifierAllowed(name, kinds) {
+func (c *checker) scanGoField(path string, field *ast.Field, context []string) {
+	typeTokens := goNodeTokens(field.Type)
+	if len(field.Names) == 0 {
+		c.scanGoTypeExpression(path, field.Type, context)
 		return
 	}
-	c.addText(path, line, name)
-	if context != "" {
-		c.addText(path, line, context+" "+name)
+
+	for _, name := range field.Names {
+		nameTokens := sourceTokens(name.Name)
+		if allowedSecretClientProvider(path, field, name.Name) {
+			nameTokens = nil
+		}
+		c.addTokens(
+			path,
+			c.fset.Position(name.Pos()).Line,
+			context,
+			append(append([]string{}, nameTokens...), typeTokens...),
+		)
+		fieldContext := extendDomainContext(context, nameTokens, typeTokens)
+		c.scanGoTypeExpression(path, field.Type, fieldContext)
 	}
 }
 
-func (c *checker) scanGoTypeExpression(path string, line int, context string, expression ast.Expr) {
-	if isThirdPartyProviderTypeExpression(expression) {
+func (c *checker) scanGoTypeExpression(path string, expression ast.Expr, context []string) {
+	if expression == nil {
 		return
 	}
-	c.addText(path, line, context+" "+nodeText(c.fset, expression))
+
+	switch value := expression.(type) {
+	case *ast.StructType:
+		c.scanGoFieldList(path, value.Fields, context)
+	case *ast.InterfaceType:
+		c.scanGoFieldList(path, value.Methods, context)
+	case *ast.FuncType:
+		c.scanGoFieldList(path, value.TypeParams, context)
+		c.scanGoFieldList(path, value.Params, context)
+		c.scanGoFieldList(path, value.Results, context)
+	default:
+		c.addTokens(
+			path,
+			c.fset.Position(expression.Pos()).Line,
+			context,
+			goNodeTokens(expression),
+		)
+		c.scanNestedGoTypeDeclarations(path, expression, context)
+	}
+}
+
+func (c *checker) scanNestedGoTypeDeclarations(path string, expression ast.Expr, context []string) {
+	ast.Inspect(expression, func(node ast.Node) bool {
+		if node == expression {
+			return true
+		}
+		switch value := node.(type) {
+		case *ast.StructType:
+			c.scanGoFieldList(path, value.Fields, context)
+			return false
+		case *ast.InterfaceType:
+			c.scanGoFieldList(path, value.Methods, context)
+			return false
+		case *ast.FuncType:
+			c.scanGoFieldList(path, value.TypeParams, context)
+			c.scanGoFieldList(path, value.Params, context)
+			c.scanGoFieldList(path, value.Results, context)
+			return false
+		default:
+			return true
+		}
+	})
 }
 
 func allowedSecretClientProvider(path string, field *ast.Field, name string) bool {
@@ -283,53 +331,75 @@ func allowedSecretClientProvider(path string, field *ast.Field, name string) boo
 	return jsonName == "provider"
 }
 
-func thirdPartyProviderConversionType(expression ast.Expr) ast.Expr {
-	call, ok := expression.(*ast.CallExpr)
-	if !ok {
+func goNodeTokens(node ast.Node) []string {
+	if node == nil {
 		return nil
 	}
-	return call.Fun
-}
 
-func isThirdPartyProviderTypeExpression(expression ast.Expr) bool {
-	_, ok := thirdPartyProviderTypeKinds(expression)
-	return ok
-}
-
-func thirdPartyProviderTypeKinds(expression ast.Expr) (map[string]bool, bool) {
-	kinds := make(map[string]bool)
-	if expression == nil {
-		return kinds, false
-	}
-	safe := true
-	ast.Inspect(expression, func(node ast.Node) bool {
-		identifier, ok := node.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		switch identifier.Name {
-		case "TracerProvider", "ConfigProvider":
-			kinds[identifier.Name] = true
-			return true
-		}
-		if containsAny(terminologyTokens(identifier.Name), "provider", "broker", "venue", "platform") {
-			safe = false
+	var tokens []string
+	ast.Inspect(node, func(node ast.Node) bool {
+		switch value := node.(type) {
+		case *ast.Ident:
+			tokens = append(tokens, sourceTokens(value.Name)...)
+		case *ast.BasicLit:
+			text := value.Value
+			if value.Kind == token.STRING || value.Kind == token.CHAR {
+				if unquoted, err := strconv.Unquote(value.Value); err == nil {
+					text = unquoted
+				}
+			}
+			tokens = append(tokens, sourceTokens(text)...)
 		}
 		return true
 	})
-	return kinds, safe && len(kinds) > 0
+	return tokens
 }
 
-func (c *checker) addNode(path string, node ast.Node) {
-	c.addText(path, c.fset.Position(node.Pos()).Line, nodeText(c.fset, node))
-}
-
-func nodeText(fset *token.FileSet, node ast.Node) string {
-	var rendered bytes.Buffer
-	if err := format.Node(&rendered, fset, node); err != nil {
-		return ""
+func sourceTokens(text string) []string {
+	tokens := terminologyTokens(text)
+	filtered := make([]string, 0, len(tokens))
+	for index, item := range tokens {
+		// Keep the narrow third-party compound while leaving standalone names
+		// such as provider or broker visible to the surrounding domain context.
+		if item == "provider" && index > 0 &&
+			(tokens[index-1] == "tracer" || tokens[index-1] == "config") {
+			continue
+		}
+		filtered = append(filtered, item)
 	}
-	return rendered.String()
+	return filtered
+}
+
+func extendDomainContext(context []string, tokenSets ...[]string) []string {
+	// Only domain markers propagate. A violation in one child must not make
+	// unrelated siblings look forbidden.
+	extended := append([]string{}, context...)
+	for _, tokens := range tokenSets {
+		for _, item := range tokens {
+			if !isDomainToken(item) || contains(extended, item) {
+				continue
+			}
+			extended = append(extended, item)
+		}
+	}
+	return extended
+}
+
+func isDomainToken(item string) bool {
+	switch item {
+	case "exchange", "trade", "binance", "okx":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *checker) addTokens(path string, line int, context, tokens []string) {
+	term, ok := exchangeSynonymTokens(append(append([]string{}, context...), tokens...))
+	if !ok {
+		return
+	}
+	c.addViolation(path, line, term)
 }
 
 func (c *checker) scanText(path string) error {
@@ -341,20 +411,18 @@ func (c *checker) scanText(path string) error {
 	context := ""
 	depth := 0
 	for index, line := range strings.Split(string(contents), "\n") {
+		declaration := false
 		if match := declarationPattern.FindStringSubmatch(line); len(match) == 2 {
 			context = match[1]
 			depth = 0
+			declaration = true
 		}
-		if !allowedThirdPartyProviderText(line) {
-			if filepath.Ext(path) == ".md" {
-				c.addTextAllowingThirdPartyTypes(path, index+1, context+" "+line)
-			} else {
-				c.addText(path, index+1, context+" "+line)
-			}
-		}
+		c.addTextAllowingThirdPartyTypes(path, index+1, context+" "+line)
 		if context != "" {
 			depth += strings.Count(line, "{") - strings.Count(line, "}")
 			if depth <= 0 && strings.Contains(line, "}") {
+				context = ""
+			} else if declaration && !strings.Contains(line, "{") {
 				context = ""
 			}
 		}
@@ -362,65 +430,15 @@ func (c *checker) scanText(path string) error {
 	return nil
 }
 
-func allowedThirdPartyProviderText(line string) bool {
-	match := thirdPartyProviderFieldPattern.FindStringSubmatch(line)
-	if len(match) != 3 {
-		return false
-	}
-	kinds, ok := thirdPartyProviderTextKinds(match[2])
-	return ok && thirdPartyProviderIdentifierAllowed(match[1], kinds)
-}
-
-func thirdPartyProviderIdentifierAllowed(name string, kinds map[string]bool) bool {
-	term, conflicts := exchangeSynonym(name)
-	if !conflicts {
-		return true
-	}
-	tokens := terminologyTokens(name)
-	if term != "provider" || containsAny(tokens, "exchange", "binance", "okx", "broker", "venue", "platform") {
-		return false
-	}
-	return kinds["TracerProvider"] && contains(tokens, "tracer") ||
-		kinds["ConfigProvider"] && contains(tokens, "config")
-}
-
-func thirdPartyProviderTextKinds(typeText string) (map[string]bool, bool) {
-	tokens := terminologyTokens(typeText)
-	kinds := make(map[string]bool)
-	safe := true
-	for index, token := range tokens {
-		if token == "provider" && index > 0 {
-			switch tokens[index-1] {
-			case "tracer":
-				kinds["TracerProvider"] = true
-				continue
-			case "config":
-				kinds["ConfigProvider"] = true
-				continue
-			}
-		}
-		if token == "provider" || token == "broker" || token == "venue" || token == "platform" {
-			safe = false
-		}
-	}
-	return kinds, safe && len(kinds) > 0
-}
-
-func (c *checker) addText(path string, line int, text string) {
-	term, ok := exchangeSynonym(text)
-	if !ok {
-		return
-	}
-	displayPath := displayPath(path)
-	key := fmt.Sprintf("%s:%d:%s", displayPath, line, term)
-	c.violations[key] = violation{path: displayPath, line: line, term: term}
-}
-
 func (c *checker) addTextAllowingThirdPartyTypes(path string, line int, text string) {
 	term, ok := exchangeSynonymWithThirdPartyTypes(text)
 	if !ok {
 		return
 	}
+	c.addViolation(path, line, term)
+}
+
+func (c *checker) addViolation(path string, line int, term string) {
 	displayPath := displayPath(path)
 	key := fmt.Sprintf("%s:%d:%s", displayPath, line, term)
 	c.violations[key] = violation{path: displayPath, line: line, term: term}
@@ -438,23 +456,20 @@ func displayPath(path string) string {
 	return filepath.ToSlash(relative)
 }
 
-func exchangeSynonym(text string) (string, bool) {
-	return exchangeSynonymTokens(terminologyTokens(text), false)
-}
-
 func exchangeSynonymWithThirdPartyTypes(text string) (string, bool) {
-	return exchangeSynonymTokens(terminologyTokens(text), true)
+	var tokens []string
+	for _, identifier := range sourceIdentifierPattern.FindAllString(text, -1) {
+		tokens = append(tokens, sourceTokens(identifier)...)
+	}
+	return exchangeSynonymTokens(tokens)
 }
 
-func exchangeSynonymTokens(tokens []string, allowThirdPartyTypes bool) (string, bool) {
+func exchangeSynonymTokens(tokens []string) (string, bool) {
 	if !containsAny(tokens, "exchange", "trade", "binance", "okx") {
 		return "", false
 	}
-	for index, token := range tokens {
+	for _, token := range tokens {
 		if token == "provider" {
-			if allowThirdPartyTypes && index > 0 && (tokens[index-1] == "tracer" || tokens[index-1] == "config") {
-				continue
-			}
 			return token, true
 		}
 		for _, term := range []string{"broker", "venue", "platform"} {
