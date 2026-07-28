@@ -30,6 +30,16 @@ func TestSpotSubscriptionUsesSignedWebSocketAPIRequest(t *testing.T) {
 	}
 }
 
+func TestSpotSubscriptionClassifiesAuthenticationFailure(t *testing.T) {
+	err := classifySpotSubscriptionError(
+		401,
+		[]byte(`{"code":-2015,"msg":"Invalid API-key"}`),
+	)
+	if !exchange.IsKind(err, exchange.ErrorAuthentication) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 type recordingHandler struct {
 	orders    []exchange.Order
 	fills     []exchange.Fill

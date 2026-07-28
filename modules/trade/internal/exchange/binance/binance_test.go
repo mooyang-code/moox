@@ -127,6 +127,17 @@ func TestGetTerminalOrderAndTypedErrors(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	})
+	t.Run("unavailable historical cumulative quote", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `{"orderId":42,"clientOrderId":"cid","symbol":"BTCUSDT","type":"MARKET","side":"BUY","origQty":"1","executedQty":"1","cummulativeQuoteQty":"-1","status":"FILLED"}`)
+		}))
+		defer server.Close()
+		order, err := testAdapter(exchange.MarketTypeSpot, server.URL).
+			GetOrder(context.Background(), "BTCUSDT", "cid")
+		if err != nil || !order.AveragePrice.IsZero() {
+			t.Fatalf("order=%+v err=%v", order, err)
+		}
+	})
 	t.Run("server ambiguity", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)

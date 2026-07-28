@@ -684,7 +684,7 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 		if parseErr != nil {
 			return exchange.Order{}, parseErr
 		}
-		if !cumulativeQuote.IsZero() {
+		if cumulativeQuote.Cmp(shared.Zero()) > 0 {
 			average = cumulativeQuote.Div(filled)
 		}
 	}

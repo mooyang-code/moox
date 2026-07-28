@@ -70,12 +70,43 @@ func (a *Adapter) subscribeSpotPrivate(
 	}
 	if acknowledgement.Status != http.StatusOK ||
 		acknowledgement.Result.SubscriptionID == nil {
-		return typedRejected(
-			"private stream subscription rejected",
-			fmt.Errorf("status %d: %s", acknowledgement.Status, acknowledgement.Error),
+		return classifySpotSubscriptionError(
+			acknowledgement.Status,
+			acknowledgement.Error,
 		)
 	}
 	return a.receivePrivate(ctx, connection, handler)
+}
+
+func classifySpotSubscriptionError(status int, raw json.RawMessage) error {
+	var payload struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	_ = json.Unmarshal(raw, &payload)
+	cause := fmt.Errorf("status %d, code %d: %s", status, payload.Code, payload.Msg)
+	switch {
+	case status == http.StatusUnauthorized || payload.Code == -2015:
+		return &exchange.Error{
+			Kind: exchange.ErrorAuthentication, HTTPStatus: status,
+			Code: fmt.Sprint(payload.Code), Err: cause,
+		}
+	case status == http.StatusTooManyRequests:
+		return &exchange.Error{
+			Kind: exchange.ErrorRateLimited, HTTPStatus: status,
+			Code: fmt.Sprint(payload.Code), Err: cause,
+		}
+	case status >= http.StatusInternalServerError:
+		return &exchange.Error{
+			Kind: exchange.ErrorTransportUnknown, HTTPStatus: status,
+			Code: fmt.Sprint(payload.Code), Err: cause,
+		}
+	default:
+		return &exchange.Error{
+			Kind: exchange.ErrorRejected, HTTPStatus: status,
+			Code: fmt.Sprint(payload.Code), Err: cause,
+		}
+	}
 }
 
 func (a *Adapter) newSpotSubscriptionRequest(timestamp int64) spotSubscriptionRequest {
