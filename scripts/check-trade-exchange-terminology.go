@@ -330,6 +330,14 @@ func (v *goBodyVisitor) Visit(node ast.Node) ast.Visitor {
 	case *ast.AssignStmt:
 		v.checker.scanGoAssignment(v.path, value, v.context, v.scope)
 		return v
+	case *ast.ExprStmt:
+		v.checker.scanGoExpression(v.path, value.X, v.context, v.scope)
+		return v
+	case *ast.ReturnStmt:
+		for _, result := range value.Results {
+			v.checker.scanGoExpression(v.path, result, v.context, v.scope)
+		}
+		return v
 	case *ast.RangeStmt:
 		rangeVisitor := v.withScope(newProviderScope(v.scope))
 		v.checker.scanGoRange(v.path, value, v.context, rangeVisitor.scope)
@@ -340,6 +348,7 @@ func (v *goBodyVisitor) Visit(node ast.Node) ast.Visitor {
 	case *ast.IfStmt:
 		branchVisitor := v.withScope(newProviderScope(v.scope))
 		walkGoNode(branchVisitor, value.Init)
+		v.checker.scanGoExpression(v.path, value.Cond, v.context, branchVisitor.scope)
 		walkGoNode(branchVisitor, value.Cond)
 		walkGoNode(branchVisitor, value.Body)
 		walkGoNode(branchVisitor, value.Else)
@@ -347,6 +356,7 @@ func (v *goBodyVisitor) Visit(node ast.Node) ast.Visitor {
 	case *ast.ForStmt:
 		loopVisitor := v.withScope(newProviderScope(v.scope))
 		walkGoNode(loopVisitor, value.Init)
+		v.checker.scanGoExpression(v.path, value.Cond, v.context, loopVisitor.scope)
 		walkGoNode(loopVisitor, value.Cond)
 		walkGoNode(loopVisitor, value.Post)
 		walkGoNode(loopVisitor, value.Body)
@@ -354,6 +364,7 @@ func (v *goBodyVisitor) Visit(node ast.Node) ast.Visitor {
 	case *ast.SwitchStmt:
 		switchVisitor := v.withScope(newProviderScope(v.scope))
 		walkGoNode(switchVisitor, value.Init)
+		v.checker.scanGoExpression(v.path, value.Tag, v.context, switchVisitor.scope)
 		walkGoNode(switchVisitor, value.Tag)
 		walkGoNode(switchVisitor, value.Body)
 		return nil
@@ -386,6 +397,23 @@ func walkGoNode(visitor ast.Visitor, node ast.Node) {
 	if node != nil {
 		ast.Walk(visitor, node)
 	}
+}
+
+func (c *checker) scanGoExpression(
+	path string,
+	expression ast.Expr,
+	context []string,
+	scope *providerScope,
+) {
+	if expression == nil {
+		return
+	}
+	c.addTokens(
+		path,
+		c.fset.Position(expression.Pos()).Line,
+		context,
+		goNodeTokensInScope(expression, scope),
+	)
 }
 
 func (c *checker) scanGoRange(

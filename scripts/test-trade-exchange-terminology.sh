@@ -43,8 +43,21 @@ func NewTradeRuntime(provider trace.TracerProvider) {
 func NewTradeConfig(provider ConfigProvider)         {}
 func TradeRun(provider trace.TracerProvider) error {
 	provider, err := Load()
+	use(provider)
+	if provider != nil {
+		use(provider)
+	}
+	switch provider {
+	case nil:
+	}
+	for provider != nil {
+		break
+	}
 	_ = provider
 	return err
+}
+func TradeTelemetryValue(provider trace.TracerProvider) trace.TracerProvider {
+	return provider
 }
 func NewTradeComposite(
 	providers []trace.TracerProvider,
@@ -276,6 +289,23 @@ func TradeShadow(provider trace.TracerProvider) {
 }
 EOF
 
+cat >"${TMP}/modules/trade/internal/bad_body_expressions.go" <<'EOF'
+package trade
+
+func CheckTrade() any {
+	binance.Provider()
+	use(exchangeProvider)
+	if binance.Provider() != nil {
+	}
+	switch exchangeProvider {
+	}
+	for exchangeProvider != nil {
+		break
+	}
+	return provider
+}
+EOF
+
 cat >"${TMP}/modules/trade/internal/bad_range.go" <<'EOF'
 package trade
 
@@ -401,7 +431,8 @@ for fixture in \
   bad.go bad_interface.go bad_receiver.go bad_okx.go bad_third_party_name.go \
   bad_third_party_identifier.go bad_type_expression.go bad_local_var.go \
   bad_type_specs.go bad_generic_constraints.go bad_recursive_types.go \
-  bad_results.go bad_short_decl.go bad_provider_shadow.go bad_range.go bad_secretclient.go \
+  bad_results.go bad_short_decl.go bad_provider_shadow.go bad_body_expressions.go \
+  bad_range.go bad_secretclient.go \
   bad_secret_wire.go bad_struct_tags.go bad.proto bad_multiline.proto bad.ts \
   bad_third_party_name.ts bad_multiline.ts bad_union.ts \
   bad.yaml bad.md; do
@@ -426,7 +457,10 @@ for expected in \
   bad_generic_constraints.go:5 bad_generic_constraints.go:7 \
   bad_recursive_types.go:8 bad_recursive_types.go:9 bad_recursive_types.go:10 \
   bad_recursive_types.go:11 bad_results.go:5 bad_results.go:6 \
-  bad_short_decl.go:4 bad_provider_shadow.go:5 bad_range.go:4 bad_secretclient.go:8 \
+  bad_short_decl.go:4 bad_provider_shadow.go:5 \
+  bad_body_expressions.go:4 bad_body_expressions.go:5 bad_body_expressions.go:6 \
+  bad_body_expressions.go:8 bad_body_expressions.go:10 bad_body_expressions.go:13 \
+  bad_range.go:4 bad_secretclient.go:8 \
   bad_secretclient.go:12 \
   bad_secret_wire.go:4 bad_struct_tags.go:4 bad_struct_tags.go:5 \
   bad_multiline.proto:5 \
@@ -456,6 +490,7 @@ rm \
   "${TMP}/modules/trade/internal/bad_results.go" \
   "${TMP}/modules/trade/internal/bad_short_decl.go" \
   "${TMP}/modules/trade/internal/bad_provider_shadow.go" \
+  "${TMP}/modules/trade/internal/bad_body_expressions.go" \
   "${TMP}/modules/trade/internal/bad_range.go" \
   "${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" \
   "${TMP}/modules/trade/internal/bad_secret_wire.go" \
