@@ -114,6 +114,56 @@ func TestUpsertDisabledBindingStillReconcilesFactorMetadata(t *testing.T) {
 	require.Zero(t, metadata.targetCalls)
 }
 
+func TestUpsertBindingDisablesLocallyBeforeMetadataFailure(t *testing.T) {
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinition(t, db, "factor")
+	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{
+		BindingID: "bind", FactorID: "factor", SpaceID: "space",
+		SourceDataset: "source", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+		SubjectsJSON: "[]", TargetDataset: "target", Status: domain.BindingStatusEnabled,
+	}))
+	metadata := newRecordingFactorMetadataClient("space", "factor")
+	metadata.getFactorRet = &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "metadata unavailable"}
+	svc := NewWithRuntime(db, nil,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+	)
+	binding := testBindingPB(domain.SubjectModeAll, `[]`)
+	binding.Status = domain.BindingStatusDisabled
+
+	rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{Binding: binding})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	rows, total, listErr := db.Bindings().List(context.Background(), store.BindingFilter{})
+	require.NoError(t, listErr)
+	require.EqualValues(t, 1, total)
+	require.Equal(t, domain.BindingStatusDisabled, rows[0].Status)
+	executable, listErr := db.Bindings().ListExecutable(context.Background())
+	require.NoError(t, listErr)
+	require.Empty(t, executable)
+}
+
+func TestUpsertEnabledBindingMetadataFailureDoesNotPersist(t *testing.T) {
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinition(t, db, "factor")
+	metadata := newRecordingFactorMetadataClient("space", "factor")
+	metadata.getFactorRet = &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "metadata unavailable"}
+	svc := NewWithRuntime(db, nil,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+	)
+	binding := testBindingPB(domain.SubjectModeAll, `[]`)
+	binding.Status = domain.BindingStatusEnabled
+
+	rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{Binding: binding})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	rows, total, listErr := db.Bindings().List(context.Background(), store.BindingFilter{})
+	require.NoError(t, listErr)
+	require.Zero(t, total)
+	require.Empty(t, rows)
+}
+
 func TestSetFactorStatusDisabledReconcilesStorageMetadata(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorDefinition(t, db, "factor")
@@ -309,6 +359,7 @@ type recordingFactorMetadataClient struct {
 	factors        map[string]*storagepb.Factor
 	updatedFactors []*storagepb.Factor
 	targetCalls    int
+	getFactorRet   *commonpb.RetInfo
 }
 
 func newRecordingFactorMetadataClient(spaceID, factorID string) *recordingFactorMetadataClient {
@@ -329,6 +380,9 @@ func (f *recordingFactorMetadataClient) UpdateFactor(_ context.Context, req *sto
 }
 
 func (f *recordingFactorMetadataClient) GetFactor(_ context.Context, req *storagepb.GetFactorReq) (*storagepb.GetFactorRsp, error) {
+	if f.getFactorRet != nil {
+		return &storagepb.GetFactorRsp{RetInfo: f.getFactorRet}, nil
+	}
 	factor := f.factors[req.GetSpaceId()+"/"+req.GetFactorId()]
 	if factor == nil {
 		return &storagepb.GetFactorRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_FACTOR_NOT_FOUND}}, nil

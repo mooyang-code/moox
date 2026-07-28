@@ -191,6 +191,15 @@ func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBinding
 	if err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}, nil
 	}
+	if binding.Status == domain.BindingStatusDisabled {
+		if err := s.bindings.Upsert(ctx, binding); err != nil {
+			return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
+		}
+		if err := s.syncBindingMetadata(ctx, binding); err != nil {
+			return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
+		}
+		return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}, nil
+	}
 	if err := s.syncBindingMetadata(ctx, binding); err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
 	}
