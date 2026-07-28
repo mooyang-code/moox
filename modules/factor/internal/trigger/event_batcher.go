@@ -80,6 +80,11 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 		if err != nil {
 			continue
 		}
+		dataTime = dataTime.UTC()
+		endTime := dataTime.Add(time.Nanosecond)
+		if dataTime.IsZero() || dataTime.Year() < 1 || dataTime.Year() > 9999 || endTime.Year() > 9999 {
+			continue
+		}
 		matches := d.matchBindings(key.GetSpaceId(), key.GetDatasetId(), rowKey.GetSubjectId(), rowKey.GetFreq())
 		if len(matches) == 0 {
 			continue
@@ -105,8 +110,8 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 						TargetDataset:   targetDataset,
 						SubjectID:       rowKey.GetSubjectId(),
 						Freq:            rowKey.GetFreq(),
-						StartTime:       dataTime.UTC(),
-						EndTime:         dataTime.UTC().Add(time.Nanosecond),
+						StartTime:       dataTime,
+						EndTime:         endTime,
 						FirstReceivedAt: now.UTC(),
 						LastReceivedAt:  now.UTC(),
 					},
@@ -116,11 +121,10 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 				d.buckets[bkey] = b
 			}
 			if dataTime.Before(b.task.StartTime) {
-				b.task.StartTime = dataTime.UTC()
+				b.task.StartTime = dataTime
 			}
-			end := dataTime.UTC().Add(time.Nanosecond)
-			if end.After(b.task.EndTime) {
-				b.task.EndTime = end
+			if endTime.After(b.task.EndTime) {
+				b.task.EndTime = endTime
 			}
 			if now.Before(b.task.FirstReceivedAt) {
 				b.task.FirstReceivedAt = now.UTC()

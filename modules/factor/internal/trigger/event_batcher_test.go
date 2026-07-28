@@ -171,6 +171,39 @@ func TestEventBatcherDuplicateRowDoesNotExpandRangeOrCreateTask(t *testing.T) {
 	}
 }
 
+func TestEventBatcherSkipsZeroTimeWithoutPoisoningNormalRange(t *testing.T) {
+	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	zero := time.Time{}
+	normal := now.Add(time.Minute)
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+
+	batcher.Add(multiRowEvent("crypto", "binance_spot_kline", "BTC-USDT", "1m", zero, normal), now)
+	tasks := flushPending(t, batcher, now.Add(time.Second))
+
+	if len(tasks) != 1 {
+		t.Fatalf("tasks=%+v, want only the normal timestamp", tasks)
+	}
+	if !tasks[0].StartTime.Equal(normal) || !tasks[0].EndTime.Equal(normal.Add(time.Nanosecond)) {
+		t.Fatalf("range=[%s,%s), want [%s,%s)", tasks[0].StartTime, tasks[0].EndTime, normal, normal.Add(time.Nanosecond))
+	}
+}
+
+func TestEventBatcherSkipsTimestampWhoseExclusiveEndExceedsRFC3339(t *testing.T) {
+	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	upper := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+
+	batcher.Add(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", upper), now)
+
+	if tasks := flushPending(t, batcher, now.Add(time.Second)); len(tasks) != 0 {
+		t.Fatalf("tasks=%+v, want invalid exclusive upper bound ignored", tasks)
+	}
+}
+
 func flushPending(t *testing.T, batcher *EventBatcher, now time.Time) []Task {
 	t.Helper()
 	return batcher.Flush(now)

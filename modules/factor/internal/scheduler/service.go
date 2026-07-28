@@ -93,9 +93,9 @@ func (s *Service) Enqueue(ctx context.Context, task Task) error {
 		if task.EndTime.After(current.EndTime) {
 			current.EndTime = task.EndTime
 		}
-		current.TaskID = task.TaskID
 		current.Factors = task.Factors
 		current.LookbackRows = task.LookbackRows
+		current.TaskID = DeterministicTaskID(current)
 		s.pending[key] = current
 		return nil
 	}

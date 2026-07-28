@@ -2,9 +2,7 @@ package bootstrap
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -395,34 +393,14 @@ func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, facto
 		return scheduler.Task{}, false, nil
 	}
 	built, err := scheduler.BuildTask(scheduler.TaskScope{
-		TaskID: deterministicTaskID(task), TriggerType: "event",
-		SpaceID: task.SpaceID, SourceDataset: task.SourceDataset,
+		TriggerType: "event",
+		SpaceID:     task.SpaceID, SourceDataset: task.SourceDataset,
 		TargetDataset: task.TargetDataset, SubjectID: task.SubjectID, Freq: task.Freq,
 		StartTime: task.StartTime, EndTime: task.EndTime,
 	}, factors, factorsDir)
-	return built, err == nil, err
-}
-
-func deterministicTaskID(task trigger.Task) string {
-	factorIDs := append([]string(nil), task.FactorIDs...)
-	sort.Strings(factorIDs)
-	h := sha256.New()
-	write := func(value string) {
-		_, _ = h.Write([]byte(fmt.Sprintf("%d:%s;", len(value), value)))
+	if err != nil {
+		return scheduler.Task{}, false, err
 	}
-	for _, value := range []string{
-		task.SpaceID,
-		task.SourceDataset,
-		task.TargetDataset,
-		task.SubjectID,
-		task.Freq,
-		task.StartTime.UTC().Format(time.RFC3339Nano),
-		task.EndTime.UTC().Format(time.RFC3339Nano),
-	} {
-		write(value)
-	}
-	for _, factorID := range factorIDs {
-		write("factor:" + factorID)
-	}
-	return fmt.Sprintf("ft-%x", h.Sum(nil)[:16])
+	built.TaskID = scheduler.DeterministicTaskID(built)
+	return built, true, nil
 }

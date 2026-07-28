@@ -50,9 +50,9 @@ func TestSchedulerSupersedeMergesPendingRanges(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, time.Unix(5, 0), queued.StartTime)
 	require.Equal(t, time.Unix(30, 0), queued.EndTime)
-	require.Equal(t, "third", queued.TaskID)
 	require.Equal(t, 11, queued.LookbackRows)
 	require.Equal(t, third.Factors, queued.Factors)
+	require.Equal(t, DeterministicTaskID(queued), queued.TaskID)
 }
 
 func TestSchedulerDoesNotMergeNewEventIntoRunningTask(t *testing.T) {
@@ -72,6 +72,29 @@ func TestSchedulerDoesNotMergeNewEventIntoRunningTask(t *testing.T) {
 	require.Equal(t, next.EndTime, queued.EndTime)
 	require.Equal(t, "next", queued.TaskID)
 	svc.running.Add(-1)
+}
+
+func TestSchedulerMergedTaskIDDescribesFinalUnionAndIgnoresArrivalOrder(t *testing.T) {
+	first := rangeTask("BTC", time.Unix(10, 0), time.Unix(20, 0))
+	first.TaskID = DeterministicTaskID(first)
+	second := rangeTask("BTC", time.Unix(5, 0), time.Unix(15, 0))
+	second.TaskID = DeterministicTaskID(second)
+	final := rangeTask("BTC", time.Unix(5, 0), time.Unix(20, 0))
+	wantID := DeterministicTaskID(final)
+
+	for _, tasks := range [][]Task{{first, second}, {second, first}} {
+		svc := NewService(Config{Workers: 1, QueueCapacity: 1}, nil, nil)
+		for _, task := range tasks {
+			require.NoError(t, svc.Enqueue(context.Background(), task))
+		}
+		queued, ok := svc.popShard(0, false)
+		require.True(t, ok)
+		require.Equal(t, final.StartTime, queued.StartTime)
+		require.Equal(t, final.EndTime, queued.EndTime)
+		require.Equal(t, wantID, queued.TaskID)
+	}
+	require.NotEqual(t, first.TaskID, wantID)
+	require.NotEqual(t, second.TaskID, wantID)
 }
 
 func TestSchedulerAcceptsConfiguredNumberOfScopes(t *testing.T) {
