@@ -245,6 +245,36 @@ func TestOrderUnknownStates(t *testing.T) {
 	}
 }
 
+func TestCancelRejectedRestoresExecutableState(t *testing.T) {
+	value, _, _ := New("order-1", validSpec())
+	_, _ = value.BeginSubmit()
+	_, _ = value.Acknowledge("exchange-1")
+	_, _ = value.ApplyFill(Fill{
+		ID: "fill-before-cancel", Quantity: shared.MustDecimal("0.2"),
+	})
+	_, _ = value.BeginCancel()
+	if _, err := value.CancelRejected(); err != nil {
+		t.Fatalf("CancelRejected() error = %v", err)
+	}
+	if value.State != PartiallyFilled {
+		t.Fatalf("state = %s", value.State)
+	}
+}
+
+func TestAcknowledgementCanFollowFillRace(t *testing.T) {
+	value, _, _ := New("order-1", validSpec())
+	_, _ = value.BeginSubmit()
+	_, _ = value.ApplyFill(Fill{
+		ID: "fill-before-ack", Quantity: shared.MustDecimal("1"),
+	})
+	if _, err := value.Acknowledge("exchange-1"); err != nil {
+		t.Fatalf("Acknowledge() error = %v", err)
+	}
+	if value.State != Filled || value.ExchangeOrderID != "exchange-1" {
+		t.Fatalf("order = %+v", value)
+	}
+}
+
 func TestOrderRequiresPositiveQuantityAndIdentity(t *testing.T) {
 	tests := []struct {
 		name   string

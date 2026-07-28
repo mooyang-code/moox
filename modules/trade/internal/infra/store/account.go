@@ -224,6 +224,20 @@ func (s *Store) GetExchangeAccount(
 	return decodeAccountRow(row)
 }
 
+func (tx *Tx) GetExchangeAccount(
+	spaceID string,
+	exchangeAccountID string,
+) (ExchangeAccountRecord, error) {
+	var row exchangeAccountRow
+	err := tx.db.
+		Where("c_space_id = ? AND c_exchange_account_id = ?", spaceID, exchangeAccountID).
+		Take(&row).Error
+	if err != nil {
+		return ExchangeAccountRecord{}, err
+	}
+	return decodeAccountRow(row)
+}
+
 func (s *Store) ListExchangeAccounts(
 	ctx context.Context,
 	spaceID string,

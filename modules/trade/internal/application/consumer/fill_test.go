@@ -4,8 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -14,212 +14,369 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func seedSpotBuyOrder(t *testing.T, s *store.Store, rec store.OrderRecord) {
+const (
+	testSpace   = "space-1"
+	testAccount = "account-1"
+	testSymbol  = "BTC-USDT"
+)
+
+func openFillStore(t *testing.T, market exchange.MarketType) *store.Store {
 	t.Helper()
-	ctx := context.Background()
-	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.PostLedger(rec.SpaceID, ledger.Transaction{
-			ID:      shared.LedgerTransactionID("seed:deposit"),
-			BizType: "seed",
-			RefType: "test",
-			RefID:   "deposit",
-			Entries: []ledger.Entry{
-				{AccountID: "exchange-clearing", Asset: "USDT", Bucket: "clearing", Amount: shared.MustDecimal("1000").Neg()},
-				{AccountID: rec.AccountID, Asset: "USDT", Bucket: "available", Amount: shared.MustDecimal("1000")},
+	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+
+	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
+			SpaceID: testSpace, ExchangeAccountID: testAccount, Name: "primary",
+			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
+			ExecutionMode:      string(exchange.ExecutionModePaper),
+			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
+			MarginMode: string(exchange.MarginModeCross), Status: string(exchange.AccountStatusEnabled),
+			LeverageSettings: store.LeverageSettings{testSymbol: "10"},
+		}); err != nil {
+			return err
+		}
+		return tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
+			Symbol: testSymbol, InstrumentID: testSymbol, BaseAsset: "BTC",
+			QuoteAsset: "USDT", SettlementAsset: "USDT", Linear: market == exchange.MarketTypeSwap,
+			ContractValue: "1", ContractValueAsset: "BTC", ExchangeQuantityStep: "0.001",
+			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
+		})
+	}))
+	return s
+}
+
+func seedFillOrder(
+	t *testing.T,
+	s *store.Store,
+	market exchange.MarketType,
+	state order.State,
+	quantity string,
+	reserved string,
+) store.OrderRecord {
+	t.Helper()
+	positionSide := ""
+	if market == exchange.MarketTypeSwap {
+		positionSide = string(exchange.PositionSideNet)
+	}
+	record := store.OrderRecord{
+		SpaceID: testSpace, OrderID: "order-1", ExchangeAccountID: testAccount,
+		ClientOrderID: "client-1", ExchangeOrderID: "exchange-order-1",
+		Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
+		Symbol: testSymbol, OrderType: string(exchange.OrderTypeMarket),
+		Side: string(exchange.SideBuy), PositionSide: positionSide,
+		Quantity: quantity, ReferencePrice: "100", ReferencePriceAt: time.Now().UnixMilli(),
+		Source: "TEST", State: string(state), ReservedAsset: "USDT",
+		ReservedQuantity: reserved, RemainingReservedQuantity: reserved, Version: 1,
+	}
+	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.PostLedger(store.LedgerTransactionRecord{
+			SpaceID: testSpace, TransactionID: "seed", ExchangeAccountID: testAccount,
+			TransactionType: store.LedgerSyncAdjustment, SourceType: "test", SourceID: "seed",
+			Entries: []store.LedgerEntryRecord{
+				{Asset: "USDT", Bucket: "CLEARING", Amount: shared.MustDecimal("-1000")},
+				{Asset: "USDT", Bucket: "AVAILABLE", Amount: shared.MustDecimal("1000")},
 			},
 		}); err != nil {
 			return err
 		}
-		freeze := ledger.Transaction{
-			ID:      shared.LedgerTransactionID("freeze:" + rec.OrderID),
-			BizType: "freeze",
-			RefType: "order",
-			RefID:   rec.OrderID,
-			Entries: []ledger.Entry{
-				{AccountID: rec.AccountID, Asset: "USDT", Bucket: "available", Amount: shared.MustDecimal("100").Neg()},
-				{AccountID: rec.AccountID, Asset: "USDT", Bucket: "frozen", Amount: shared.MustDecimal("100")},
+		if err := tx.PostLedger(store.LedgerTransactionRecord{
+			SpaceID: testSpace, TransactionID: "reserve", ExchangeAccountID: testAccount,
+			TransactionType: store.LedgerReservation, SourceType: "order", SourceID: record.OrderID,
+			Entries: []store.LedgerEntryRecord{
+				{Asset: "USDT", Bucket: "AVAILABLE", Amount: shared.MustDecimal(reserved).Neg()},
+				{Asset: "USDT", Bucket: "RESERVED", Amount: shared.MustDecimal(reserved)},
 			},
-		}
-		if err := tx.PostLedger(rec.SpaceID, freeze); err != nil {
+		}); err != nil {
 			return err
 		}
-		return tx.CreateOrder(&rec)
+		return tx.CreateOrder(record)
 	}))
+	return record
 }
 
-func TestFillHandler_HandleSource_SpotBuyPartialFill_ShouldApply(t *testing.T) {
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	require.NoError(t, err)
-	defer s.Close()
-
-	ctx := context.Background()
-	rec := store.OrderRecord{
-		SpaceID:          "space-1",
-		OrderID:          "order-1",
-		ClientOrderID:    "client-1",
-		AccountID:        "acct-1",
-		ChannelID:        "chan-1",
-		Symbol:           "BTC-USDT",
-		MarketType:       "spot",
-		BaseAsset:        "BTC",
-		QuoteAsset:       "USDT",
-		Side:             "BUY",
-		Quantity:         "1",
-		Price:            "100",
-		FilledQuantity:   "0",
-		ReservedAsset:    "USDT",
-		ReservedAmount:   "100",
-		ConsumedReserved: "0",
-		State:            string(order.Open),
-		Version:          1,
+func fillSource() Source {
+	return Source{
+		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: SourcePrivateStream,
 	}
-	seedSpotBuyOrder(t, s, rec)
+}
 
-	handler := FillHandler{Store: s}
-	applied, err := handler.HandleSource(ctx, "space-1", "acct-1", "order-1", "fill-1", exchange.FillEvent{
-		ExchangeTradeID: "trade-1",
-		Symbol:          "BTC-USDT",
-		Side:            "BUY",
-		BaseAsset:       "BTC",
-		QuoteAsset:      "USDT",
-		Quantity:        shared.MustDecimal("0.5"),
-		Price:           shared.MustDecimal("100"),
-		Fee:             shared.Zero(),
-	}, "test")
+func spotFill(id string, quantity string) exchange.Fill {
+	return exchange.Fill{
+		ExchangeTradeID: id, ExchangeOrderID: "exchange-order-1",
+		ClientOrderID: "client-1", Symbol: testSymbol, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal(quantity), Price: shared.MustDecimal("100"),
+		Fee: shared.MustDecimal("1"), FeeAsset: "USDT", TradedAt: time.Now(),
+	}
+}
+
+func TestReducerApplyFillSpotPostsAssetAndFeeLedgerOnce(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "1", "100")
+	reducer := Reducer{Store: s}
+	fill := spotFill("trade-1", "0.5")
+
+	applied, err := reducer.ApplyFill(context.Background(), fill, fillSource())
 	require.NoError(t, err)
 	assert.True(t, applied)
 
-	got, err := s.GetOrder(ctx, "space-1", "order-1")
-	require.NoError(t, err)
-	assert.Equal(t, "0.5", got.FilledQuantity)
+	var got struct {
+		State                     string `gorm:"column:c_state"`
+		FilledQuantity            string `gorm:"column:c_filled_quantity"`
+		AveragePrice              string `gorm:"column:c_average_price"`
+		RemainingReservedQuantity string `gorm:"column:c_remaining_reserved_quantity"`
+		Version                   uint64 `gorm:"column:c_version"`
+	}
+	require.NoError(t, s.DBForTest().Raw(`
+		SELECT c_state, c_filled_quantity, c_average_price,
+			c_remaining_reserved_quantity, c_version
+		FROM t_trade_orders WHERE c_space_id = ? AND c_order_id = ?
+	`, testSpace, "order-1").Scan(&got).Error)
 	assert.Equal(t, string(order.PartiallyFilled), got.State)
+	assert.Equal(t, "0.5", got.FilledQuantity)
+	assert.Equal(t, "100", got.AveragePrice)
+	assert.Equal(t, "50", got.RemainingReservedQuantity)
+	assert.Equal(t, uint64(2), got.Version)
+
+	balances, err := s.ListBalanceProjections(context.Background(), testSpace, testAccount)
+	require.NoError(t, err)
+	assert.Equal(t, "0.5", balanceAmount(balances, "BTC", "AVAILABLE"))
+	assert.Equal(t, "50", balanceAmount(balances, "USDT", "RESERVED"))
+	assert.Equal(t, "899", balanceAmount(balances, "USDT", "AVAILABLE"))
+
+	applied, err = reducer.ApplyFill(context.Background(), fill, Source{
+		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: SourceRESTSync,
+	})
+	require.NoError(t, err)
+	assert.False(t, applied)
+
+	var fillCount int64
+	require.NoError(t, s.DBForTest().Table("t_order_fills").Count(&fillCount).Error)
+	assert.Equal(t, int64(1), fillCount)
 }
 
-func TestFillHandler_HandleSource_DuplicateFill_ShouldReturnFalse(t *testing.T) {
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	require.NoError(t, err)
-	defer s.Close()
+func TestReducerApplyFillRepairsLateCanceledOrder(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Canceled, "1", "100")
+	reducer := Reducer{Store: s}
 
-	ctx := context.Background()
-	rec := store.OrderRecord{
-		SpaceID:          "space-1",
-		OrderID:          "order-1",
-		ClientOrderID:    "client-1",
-		AccountID:        "acct-1",
-		ChannelID:        "chan-1",
-		Symbol:           "BTC-USDT",
-		MarketType:       "spot",
-		BaseAsset:        "BTC",
-		QuoteAsset:       "USDT",
-		Side:             "BUY",
-		Quantity:         "1",
-		Price:            "100",
-		FilledQuantity:   "0",
-		ReservedAsset:    "USDT",
-		ReservedAmount:   "100",
-		ConsumedReserved: "0",
-		State:            string(order.Open),
-		Version:          1,
-	}
-	seedSpotBuyOrder(t, s, rec)
-
-	handler := FillHandler{Store: s}
-	event := exchange.FillEvent{
-		ExchangeTradeID: "trade-1",
-		Symbol:          "BTC-USDT",
-		Side:            "BUY",
-		BaseAsset:       "BTC",
-		QuoteAsset:      "USDT",
-		Quantity:        shared.MustDecimal("0.5"),
-		Price:           shared.MustDecimal("100"),
-		Fee:             shared.Zero(),
-	}
-	applied1, err := handler.HandleSource(ctx, "space-1", "acct-1", "order-1", "fill-1", event, "test")
-	require.NoError(t, err)
-	assert.True(t, applied1)
-
-	applied2, err := handler.HandleSource(ctx, "space-1", "acct-1", "order-1", "fill-1", event, "test")
-	require.NoError(t, err)
-	assert.False(t, applied2)
-}
-
-func TestFillHandler_HandleSource_FullFill_ShouldMarkFilled(t *testing.T) {
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	require.NoError(t, err)
-	defer s.Close()
-
-	ctx := context.Background()
-	rec := store.OrderRecord{
-		SpaceID:          "space-1",
-		OrderID:          "order-2",
-		ClientOrderID:    "client-2",
-		AccountID:        "acct-1",
-		ChannelID:        "chan-1",
-		Symbol:           "BTC-USDT",
-		MarketType:       "spot",
-		BaseAsset:        "BTC",
-		QuoteAsset:       "USDT",
-		Side:             "BUY",
-		Quantity:         "1",
-		Price:            "100",
-		FilledQuantity:   "0",
-		ReservedAsset:    "USDT",
-		ReservedAmount:   "100",
-		ConsumedReserved: "0",
-		State:            string(order.Open),
-		Version:          1,
-	}
-	seedSpotBuyOrder(t, s, rec)
-
-	handler := FillHandler{Store: s}
-	applied, err := handler.HandleSource(ctx, "space-1", "acct-1", "order-2", "fill-2", exchange.FillEvent{
-		ExchangeTradeID: "trade-2",
-		Symbol:          "BTC-USDT",
-		Side:            "BUY",
-		BaseAsset:       "BTC",
-		QuoteAsset:      "USDT",
-		Quantity:        shared.MustDecimal("1"),
-		Price:           shared.MustDecimal("100"),
-		Fee:             shared.Zero(),
-	}, "test")
+	applied, err := reducer.ApplyFill(
+		context.Background(), spotFill("late-trade", "0.25"), fillSource(),
+	)
 	require.NoError(t, err)
 	assert.True(t, applied)
 
-	got, err := s.GetOrder(ctx, "space-1", "order-2")
+	var got struct {
+		State          string `gorm:"column:c_state"`
+		FilledQuantity string `gorm:"column:c_filled_quantity"`
+	}
+	require.NoError(t, s.DBForTest().Raw(`
+		SELECT c_state, c_filled_quantity FROM t_trade_orders
+		WHERE c_space_id = ? AND c_order_id = ?
+	`, testSpace, "order-1").Scan(&got).Error)
+	assert.Equal(t, string(order.PartiallyCanceled), got.State)
+	assert.Equal(t, "0.25", got.FilledQuantity)
+}
+
+func TestReducerConfirmCancelAppliesFinalFillBeforeRelease(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Canceling, "1", "100")
+	reducer := Reducer{Store: s}
+
+	applied, err := reducer.ApplyFill(
+		context.Background(), spotFill("final-before-cancel", "0.25"), fillSource(),
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.NoError(t, reducer.ConfirmCancel(context.Background(), testSpace, "order-1"))
+
+	got, err := s.GetOrder(context.Background(), testSpace, "order-1")
+	require.NoError(t, err)
+	require.Equal(t, string(order.PartiallyCanceled), got.State)
+	require.Equal(t, "0.25", got.FilledQuantity)
+	require.Equal(t, "0", got.RemainingReservedQuantity)
+	require.Positive(t, got.FinishedAt)
+	balances, err := s.ListBalanceProjections(context.Background(), testSpace, testAccount)
+	require.NoError(t, err)
+	require.Equal(t, "0", balanceAmount(balances, "USDT", "RESERVED"))
+	require.Equal(t, "974", balanceAmount(balances, "USDT", "AVAILABLE"))
+}
+
+func TestReducerApplyFillReleasesUnusedReservationWhenFilled(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "1", "100")
+	reducer := Reducer{Store: s}
+	fill := spotFill("price-improvement", "1")
+	fill.Price = shared.MustDecimal("90")
+
+	applied, err := reducer.ApplyFill(context.Background(), fill, fillSource())
+	require.NoError(t, err)
+	assert.True(t, applied)
+
+	got, err := s.GetOrder(context.Background(), testSpace, "order-1")
 	require.NoError(t, err)
 	assert.Equal(t, string(order.Filled), got.State)
-	assert.Equal(t, "1", got.FilledQuantity)
+	assert.Equal(t, "0", got.RemainingReservedQuantity)
+	assert.Positive(t, got.FinishedAt)
+	balances, err := s.ListBalanceProjections(context.Background(), testSpace, testAccount)
+	require.NoError(t, err)
+	assert.Equal(t, "0", balanceAmount(balances, "USDT", "RESERVED"))
+	assert.Equal(t, "909", balanceAmount(balances, "USDT", "AVAILABLE"))
 }
 
-func TestFillHandler_Handle_IncompleteFill_ShouldReturnError(t *testing.T) {
-	s, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+func TestReducerApplyFillRoundsAveragePriceToInstrumentTickScale(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "3", "303")
+	reducer := Reducer{Store: s}
+	first := spotFill("average-1", "1")
+	second := spotFill("average-2", "2")
+	second.Price = shared.MustDecimal("101")
+
+	applied, err := reducer.ApplyFill(context.Background(), first, fillSource())
 	require.NoError(t, err)
-	defer s.Close()
+	assert.True(t, applied)
+	applied, err = reducer.ApplyFill(context.Background(), second, fillSource())
+	require.NoError(t, err)
+	assert.True(t, applied)
 
-	ctx := context.Background()
-	rec := store.OrderRecord{
-		SpaceID:        "space-1",
-		OrderID:        "order-1",
-		ClientOrderID:  "client-1",
-		AccountID:      "acct-1",
-		ChannelID:      "chan-1",
-		Symbol:         "BTC-USDT",
-		Quantity:       "1",
-		FilledQuantity: "0",
-		State:          string(order.Open),
-		Version:        1,
-	}
-	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.CreateOrder(&rec)
+	got, err := s.GetOrder(context.Background(), testSpace, "order-1")
+	require.NoError(t, err)
+	assert.Equal(t, "100.7", got.AveragePrice)
+}
+
+func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSwap)
+	seedFillOrder(t, s, exchange.MarketTypeSwap, order.Open, "2", "20")
+	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: testSpace, ExchangeAccountID: testAccount, Symbol: testSymbol,
+			PositionSide: string(exchange.PositionSideNet), SignedQuantity: "-1",
+			EntryPrice: "90", MarkPrice: "90", Leverage: "10",
+			MarginMode: string(exchange.MarginModeCross),
+		})
 	}))
+	fill := exchange.Fill{
+		ExchangeTradeID: "swap-trade", ExchangeOrderID: "exchange-order-1",
+		ClientOrderID: "client-1", Symbol: testSymbol, Side: exchange.SideBuy,
+		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("2"),
+		Price: shared.MustDecimal("100"), Fee: shared.MustDecimal("0.1"),
+		FeeAsset: "USDT", RealizedPnL: shared.MustDecimal("3"),
+		SettlementAsset: "USDT", TradedAt: time.Now(),
+	}
+	reducer := Reducer{Store: s}
 
-	handler := FillHandler{Store: s}
-	_, err = handler.HandleSource(ctx, "space-1", "acct-1", "order-1", "fill-1", exchange.FillEvent{
-		ExchangeTradeID: "trade-1",
-		Symbol:          "BTC-USDT",
-		Quantity:        shared.MustDecimal("0.5"),
-		Price:           shared.MustDecimal("100"),
-		Fee:             shared.Zero(),
-	}, "test")
-	assert.Error(t, err)
+	applied, err := reducer.ApplyFill(context.Background(), fill, fillSource())
+	require.NoError(t, err)
+	assert.True(t, applied)
+
+	var position struct {
+		SignedQuantity string `gorm:"column:c_signed_quantity"`
+		EntryPrice     string `gorm:"column:c_entry_price"`
+		RealizedPnL    string `gorm:"column:c_realized_pnl"`
+	}
+	require.NoError(t, s.DBForTest().Raw(`
+		SELECT c_signed_quantity, c_entry_price, c_realized_pnl
+		FROM t_exchange_positions
+		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+	`, testSpace, testAccount, testSymbol).Scan(&position).Error)
+	assert.Equal(t, "1", position.SignedQuantity)
+	assert.Equal(t, "100", position.EntryPrice)
+	assert.Equal(t, "3", position.RealizedPnL)
+
+	balances, err := s.ListBalanceProjections(context.Background(), testSpace, testAccount)
+	require.NoError(t, err)
+	assert.Equal(t, "0", balanceAmount(balances, "USDT", "RESERVED"))
+	assert.Equal(t, "0", balanceAmount(balances, "USDT", "MARGIN"))
+	assert.Equal(t, "1002.9", balanceAmount(balances, "USDT", "AVAILABLE"))
+}
+
+func TestReducerApplyFillCreatesFirstSwapPosition(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSwap)
+	seedFillOrder(t, s, exchange.MarketTypeSwap, order.Open, "1", "10")
+	fill := exchange.Fill{
+		ExchangeTradeID: "first-swap-trade", ExchangeOrderID: "exchange-order-1",
+		ClientOrderID: "client-1", Symbol: testSymbol, Side: exchange.SideBuy,
+		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
+		Price: shared.MustDecimal("100"), SettlementAsset: "USDT", TradedAt: time.Now(),
+	}
+
+	applied, err := (&Reducer{Store: s}).ApplyFill(
+		context.Background(),
+		fill,
+		fillSource(),
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	var position struct {
+		SignedQuantity string `gorm:"column:c_signed_quantity"`
+		EntryPrice     string `gorm:"column:c_entry_price"`
+		Leverage       string `gorm:"column:c_leverage"`
+	}
+	require.NoError(t, s.DBForTest().Raw(`
+		SELECT c_signed_quantity, c_entry_price, c_leverage
+		FROM t_exchange_positions
+		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+	`, testSpace, testAccount, testSymbol).Scan(&position).Error)
+	require.Equal(t, "1", position.SignedQuantity)
+	require.Equal(t, "100", position.EntryPrice)
+	require.Equal(t, "10", position.Leverage)
+}
+
+func TestReducerApplyFillRollsBackAllWritesOnError(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "1", "100")
+	reducer := Reducer{Store: s}
+
+	_, err := reducer.ApplyFill(
+		context.Background(), spotFill("overfill", "2"), fillSource(),
+	)
+	require.Error(t, err)
+
+	var fillCount int64
+	require.NoError(t, s.DBForTest().Table("t_order_fills").Count(&fillCount).Error)
+	assert.Zero(t, fillCount)
+	var got struct {
+		State          string `gorm:"column:c_state"`
+		FilledQuantity string `gorm:"column:c_filled_quantity"`
+	}
+	require.NoError(t, s.DBForTest().Raw(`
+		SELECT c_state, c_filled_quantity FROM t_trade_orders
+		WHERE c_space_id = ? AND c_order_id = ?
+	`, testSpace, "order-1").Scan(&got).Error)
+	assert.Equal(t, string(order.Open), got.State)
+	assert.Equal(t, "0", got.FilledQuantity)
+}
+
+func TestReducerApplyFillRejectsNonPositiveExchangeTimestampWithoutWrites(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSpot)
+	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "1", "100")
+	fill := spotFill("missing-time", "1")
+	fill.TradedAt = time.UnixMilli(0)
+
+	applied, err := (&Reducer{Store: s}).ApplyFill(
+		context.Background(), fill, fillSource(),
+	)
+	require.Error(t, err)
+	require.False(t, applied)
+
+	var fillCount int64
+	require.NoError(t, s.DBForTest().Table("t_order_fills").Count(&fillCount).Error)
+	require.Zero(t, fillCount)
+	got, getErr := s.GetOrder(context.Background(), testSpace, "order-1")
+	require.NoError(t, getErr)
+	require.Equal(t, string(order.Open), got.State)
+	require.Equal(t, "0", got.FilledQuantity)
+	require.Zero(t, got.FinishedAt)
+}
+
+func balanceAmount(records []store.BalanceProjectionRecord, asset string, bucket string) string {
+	for _, record := range records {
+		if record.Asset == asset && record.Bucket == bucket {
+			return record.Amount.String()
+		}
+	}
+	return "0"
 }

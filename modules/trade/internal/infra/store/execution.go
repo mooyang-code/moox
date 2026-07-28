@@ -46,6 +46,34 @@ type BalanceProjectionRecord struct {
 	Version           uint64
 }
 
+func (tx *Tx) GetBalanceProjection(
+	spaceID string,
+	exchangeAccountID string,
+	asset string,
+	bucket string,
+) (shared.Decimal, error) {
+	var row struct {
+		Amount string `gorm:"column:c_amount"`
+	}
+	result := tx.db.Raw(`
+		SELECT c_amount
+		FROM t_trade_balance_projections
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+			AND c_asset = ? AND c_bucket = ?
+	`, spaceID, exchangeAccountID, asset, bucket).Scan(&row)
+	if result.Error != nil {
+		return shared.Decimal{}, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return shared.Zero(), nil
+	}
+	amount, err := shared.ParseDecimal(row.Amount)
+	if err != nil {
+		return shared.Decimal{}, fmt.Errorf("%w: stored projection amount", ErrInvalidRecord)
+	}
+	return amount, nil
+}
+
 func (tx *Tx) PostLedger(record LedgerTransactionRecord) error {
 	if err := validateLedger(record); err != nil {
 		return err

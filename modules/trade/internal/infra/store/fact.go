@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"gorm.io/gorm"
 )
 
 type InstrumentRecord struct {
@@ -131,6 +132,23 @@ func (s *Store) GetInstrument(
 	marketType string,
 	symbol string,
 ) (InstrumentRecord, error) {
+	return getInstrument(s.db.WithContext(ctx), exchange, marketType, symbol)
+}
+
+func (tx *Tx) GetInstrument(
+	exchange string,
+	marketType string,
+	symbol string,
+) (InstrumentRecord, error) {
+	return getInstrument(tx.db, exchange, marketType, symbol)
+}
+
+func getInstrument(
+	db *gorm.DB,
+	exchange string,
+	marketType string,
+	symbol string,
+) (InstrumentRecord, error) {
 	var row struct {
 		Exchange             string `gorm:"column:c_exchange"`
 		MarketType           string `gorm:"column:c_market_type"`
@@ -149,7 +167,7 @@ func (s *Store) GetInstrument(
 		Status               string `gorm:"column:c_status"`
 		ExchangeUpdatedAt    int64  `gorm:"column:c_exchange_updated_at"`
 	}
-	err := s.db.WithContext(ctx).Table("t_exchange_instruments").
+	err := db.Table("t_exchange_instruments").
 		Where("c_exchange = ? AND c_market_type = ? AND c_symbol = ?", exchange, marketType, symbol).
 		Take(&row).Error
 	return InstrumentRecord{
@@ -195,6 +213,38 @@ type OrderRecord struct {
 	Version                   uint64
 	SubmittedAt               int64
 	FinishedAt                int64
+}
+
+type orderRow struct {
+	SpaceID                   string  `gorm:"column:c_space_id"`
+	OrderID                   string  `gorm:"column:c_order_id"`
+	ExchangeAccountID         string  `gorm:"column:c_exchange_account_id"`
+	ClientOrderID             string  `gorm:"column:c_client_order_id"`
+	ExchangeOrderID           string  `gorm:"column:c_exchange_order_id"`
+	Exchange                  string  `gorm:"column:c_exchange"`
+	MarketType                string  `gorm:"column:c_market_type"`
+	Symbol                    string  `gorm:"column:c_symbol"`
+	OrderType                 string  `gorm:"column:c_order_type"`
+	TimeInForce               string  `gorm:"column:c_time_in_force"`
+	Side                      string  `gorm:"column:c_side"`
+	PositionSide              string  `gorm:"column:c_position_side"`
+	Quantity                  string  `gorm:"column:c_quantity"`
+	LimitPrice                *string `gorm:"column:c_limit_price"`
+	ReferencePrice            string  `gorm:"column:c_reference_price"`
+	ReferencePriceAt          int64   `gorm:"column:c_reference_price_at"`
+	ReduceOnly                bool    `gorm:"column:c_reduce_only"`
+	Source                    string  `gorm:"column:c_source"`
+	StrategyExecutionID       string  `gorm:"column:c_strategy_execution_id"`
+	State                     string  `gorm:"column:c_state"`
+	FilledQuantity            string  `gorm:"column:c_filled_quantity"`
+	AveragePrice              string  `gorm:"column:c_average_price"`
+	ReservedAsset             string  `gorm:"column:c_reserved_asset"`
+	ReservedQuantity          string  `gorm:"column:c_reserved_quantity"`
+	RemainingReservedQuantity string  `gorm:"column:c_remaining_reserved_quantity"`
+	RejectReason              string  `gorm:"column:c_reject_reason"`
+	Version                   uint64  `gorm:"column:c_version"`
+	SubmittedAt               int64   `gorm:"column:c_submitted_at"`
+	FinishedAt                int64   `gorm:"column:c_finished_at"`
 }
 
 func (tx *Tx) CreateOrder(record OrderRecord) error {
@@ -252,6 +302,165 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 		record.RemainingReservedQuantity, record.RejectReason,
 		record.Version, record.SubmittedAt, record.FinishedAt,
 	).Error)
+}
+
+func (s *Store) GetOrder(
+	ctx context.Context,
+	spaceID string,
+	orderID string,
+) (OrderRecord, error) {
+	var row orderRow
+	err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where("c_space_id = ? AND c_order_id = ?", spaceID, orderID).
+		Take(&row).Error
+	return orderRecordFromRow(row), err
+}
+
+func (s *Store) GetOrderByClientID(
+	ctx context.Context,
+	spaceID string,
+	exchangeAccountID string,
+	clientOrderID string,
+) (OrderRecord, error) {
+	var row orderRow
+	err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where(
+			"c_space_id = ? AND c_exchange_account_id = ? AND c_client_order_id = ?",
+			spaceID,
+			exchangeAccountID,
+			clientOrderID,
+		).
+		Take(&row).Error
+	return orderRecordFromRow(row), err
+}
+
+func (tx *Tx) GetOrder(spaceID string, orderID string) (OrderRecord, error) {
+	var row orderRow
+	result := tx.db.Raw(`
+		SELECT * FROM t_trade_orders
+		WHERE c_space_id = ? AND c_order_id = ?
+	`, spaceID, orderID).Scan(&row)
+	if result.Error != nil {
+		return OrderRecord{}, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return OrderRecord{}, fmt.Errorf("%w: order not found", ErrInvalidRecord)
+	}
+	return orderRecordFromRow(row), nil
+}
+
+func (tx *Tx) FindOrderForFill(
+	spaceID string,
+	exchangeAccountID string,
+	clientOrderID string,
+	exchangeOrderID string,
+	symbol string,
+) (OrderRecord, error) {
+	if spaceID == "" || exchangeAccountID == "" || symbol == "" ||
+		(clientOrderID == "" && exchangeOrderID == "") {
+		return OrderRecord{}, fmt.Errorf("%w: incomplete Fill order identity", ErrInvalidRecord)
+	}
+	var row orderRow
+	query := `
+		SELECT * FROM t_trade_orders
+		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+	`
+	args := []any{spaceID, exchangeAccountID, symbol}
+	if clientOrderID != "" && exchangeOrderID != "" {
+		query += " AND (c_client_order_id = ? OR c_exchange_order_id = ?)"
+		args = append(args, clientOrderID, exchangeOrderID)
+	} else if clientOrderID != "" {
+		query += " AND c_client_order_id = ?"
+		args = append(args, clientOrderID)
+	} else {
+		query += " AND c_exchange_order_id = ?"
+		args = append(args, exchangeOrderID)
+	}
+	result := tx.db.Raw(query, args...).Scan(&row)
+	if result.Error != nil {
+		return OrderRecord{}, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return OrderRecord{}, fmt.Errorf("%w: Fill order not found", ErrInvalidRecord)
+	}
+	if clientOrderID != "" && row.ClientOrderID != clientOrderID {
+		return OrderRecord{}, fmt.Errorf("%w: conflicting Fill client order ID", ErrConflict)
+	}
+	if exchangeOrderID != "" && row.ExchangeOrderID != "" &&
+		row.ExchangeOrderID != exchangeOrderID {
+		return OrderRecord{}, fmt.Errorf("%w: conflicting Fill Exchange order ID", ErrConflict)
+	}
+	return orderRecordFromRow(row), nil
+}
+
+func (tx *Tx) UpdateOrder(record OrderRecord, expectedVersion uint64) error {
+	if record.SpaceID == "" || record.OrderID == "" || record.Version != expectedVersion+1 {
+		return fmt.Errorf("%w: invalid order update", ErrInvalidRecord)
+	}
+	if record.State == "" {
+		return fmt.Errorf("%w: empty order state", ErrInvalidRecord)
+	}
+	quantity, err := shared.ParseDecimal(record.Quantity)
+	if err != nil || quantity.Cmp(shared.Zero()) <= 0 {
+		return fmt.Errorf("%w: invalid order quantity", ErrInvalidRecord)
+	}
+	for label, value := range map[string]*string{
+		"filled quantity":             &record.FilledQuantity,
+		"average price":               &record.AveragePrice,
+		"reserved quantity":           &record.ReservedQuantity,
+		"remaining reserved quantity": &record.RemainingReservedQuantity,
+	} {
+		canonical, canonicalErr := canonicalDefaultZero(*value, label, decimalNonNegative)
+		if canonicalErr != nil {
+			return canonicalErr
+		}
+		*value = canonical
+	}
+	filled, _ := shared.ParseDecimal(record.FilledQuantity)
+	reserved, _ := shared.ParseDecimal(record.ReservedQuantity)
+	remaining, _ := shared.ParseDecimal(record.RemainingReservedQuantity)
+	if filled.Cmp(quantity) > 0 || remaining.Cmp(reserved) > 0 {
+		return fmt.Errorf("%w: inconsistent order quantities", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_trade_orders
+		SET c_exchange_order_id = ?, c_state = ?, c_filled_quantity = ?,
+			c_average_price = ?, c_remaining_reserved_quantity = ?,
+			c_reject_reason = ?, c_version = ?, c_submitted_at = ?,
+			c_finished_at = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?
+	`,
+		record.ExchangeOrderID, record.State, record.FilledQuantity,
+		record.AveragePrice, record.RemainingReservedQuantity,
+		record.RejectReason, record.Version, record.SubmittedAt,
+		record.FinishedAt, record.SpaceID, record.OrderID, expectedVersion,
+	)
+	if result.Error != nil {
+		return writeError(result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: stale order version", ErrConflict)
+	}
+	return nil
+}
+
+func orderRecordFromRow(row orderRow) OrderRecord {
+	return OrderRecord{
+		SpaceID: row.SpaceID, OrderID: row.OrderID,
+		ExchangeAccountID: row.ExchangeAccountID, ClientOrderID: row.ClientOrderID,
+		ExchangeOrderID: row.ExchangeOrderID, Exchange: row.Exchange,
+		MarketType: row.MarketType, Symbol: row.Symbol, OrderType: row.OrderType,
+		TimeInForce: row.TimeInForce, Side: row.Side, PositionSide: row.PositionSide,
+		Quantity: row.Quantity, LimitPrice: row.LimitPrice,
+		ReferencePrice: row.ReferencePrice, ReferencePriceAt: row.ReferencePriceAt,
+		ReduceOnly: row.ReduceOnly, Source: row.Source,
+		StrategyExecutionID: row.StrategyExecutionID, State: row.State,
+		FilledQuantity: row.FilledQuantity, AveragePrice: row.AveragePrice,
+		ReservedAsset: row.ReservedAsset, ReservedQuantity: row.ReservedQuantity,
+		RemainingReservedQuantity: row.RemainingReservedQuantity,
+		RejectReason:              row.RejectReason, Version: row.Version,
+		SubmittedAt: row.SubmittedAt, FinishedAt: row.FinishedAt,
+	}
 }
 
 type FillRecord struct {
@@ -529,6 +738,51 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 		record.UnrealizedPnL, record.RealizedPnL,
 		record.ExchangeUpdatedAt,
 	).Error
+}
+
+func (tx *Tx) GetPosition(
+	spaceID string,
+	exchangeAccountID string,
+	symbol string,
+	positionSide string,
+) (PositionRecord, bool, error) {
+	var row struct {
+		SpaceID           string `gorm:"column:c_space_id"`
+		ExchangeAccountID string `gorm:"column:c_exchange_account_id"`
+		Symbol            string `gorm:"column:c_symbol"`
+		PositionSide      string `gorm:"column:c_position_side"`
+		SignedQuantity    string `gorm:"column:c_signed_quantity"`
+		EntryPrice        string `gorm:"column:c_entry_price"`
+		MarkPrice         string `gorm:"column:c_mark_price"`
+		Leverage          string `gorm:"column:c_leverage"`
+		MarginMode        string `gorm:"column:c_margin_mode"`
+		UsedMargin        string `gorm:"column:c_used_margin"`
+		LiquidationPrice  string `gorm:"column:c_liquidation_price"`
+		UnrealizedPnL     string `gorm:"column:c_unrealized_pnl"`
+		RealizedPnL       string `gorm:"column:c_realized_pnl"`
+		ExchangeUpdatedAt int64  `gorm:"column:c_exchange_updated_at"`
+	}
+	result := tx.db.Raw(`
+		SELECT * FROM t_exchange_positions
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+			AND c_symbol = ? AND c_position_side = ?
+	`, spaceID, exchangeAccountID, symbol, positionSide).Scan(&row)
+	if result.Error != nil {
+		return PositionRecord{}, false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return PositionRecord{}, false, nil
+	}
+	return PositionRecord{
+		SpaceID: row.SpaceID, ExchangeAccountID: row.ExchangeAccountID,
+		Symbol: row.Symbol, PositionSide: row.PositionSide,
+		SignedQuantity: row.SignedQuantity, EntryPrice: row.EntryPrice,
+		MarkPrice: row.MarkPrice, Leverage: row.Leverage,
+		MarginMode: row.MarginMode, UsedMargin: row.UsedMargin,
+		LiquidationPrice: row.LiquidationPrice,
+		UnrealizedPnL:    row.UnrealizedPnL, RealizedPnL: row.RealizedPnL,
+		ExchangeUpdatedAt: row.ExchangeUpdatedAt,
+	}, true, nil
 }
 
 func canonicalizeOrder(record *OrderRecord) error {

@@ -67,12 +67,18 @@ func (o *Order) Acknowledge(exchangeOrderID string) ([]Event, error) {
 	if strings.TrimSpace(exchangeOrderID) == "" {
 		return nil, ErrInvalidTransition
 	}
-	events, err := o.transition(Open, Submitting, SubmitUnknown)
-	if err != nil {
-		return nil, err
+	if o.ExchangeOrderID != "" && o.ExchangeOrderID != exchangeOrderID {
+		return nil, fmt.Errorf("%w: conflicting Exchange order ID", ErrInvalidTransition)
+	}
+	switch o.State {
+	case Submitting, SubmitUnknown:
+		o.State = Open
+	case Open, PartiallyFilled, Filled, Canceling, CancelUnknown:
+	default:
+		return nil, ErrInvalidTransition
 	}
 	o.ExchangeOrderID = exchangeOrderID
-	return events, nil
+	return o.emit("OrderAcknowledged"), nil
 }
 
 func (o *Order) Reject() ([]Event, error) {
@@ -98,6 +104,14 @@ func (o *Order) BeginCancel() ([]Event, error) {
 
 func (o *Order) MarkCancelUnknown() ([]Event, error) {
 	return o.transition(CancelUnknown, Canceling)
+}
+
+func (o *Order) CancelRejected() ([]Event, error) {
+	to := Open
+	if !o.FilledQuantity.IsZero() {
+		to = PartiallyFilled
+	}
+	return o.transition(to, Canceling)
 }
 
 func (o *Order) CancelStillOpen() ([]Event, error) {

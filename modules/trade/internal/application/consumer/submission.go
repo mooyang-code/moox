@@ -2,27 +2,34 @@ package consumer
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/command"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 )
 
-// SubmissionWorker advances durable READY intents and resolves uncertain ones.
-type SubmissionWorker struct{ Engine *command.Engine }
+type SubmissionService interface {
+	Get(context.Context, string, string) (orderdomain.Order, error)
+	Submit(context.Context, string, string) (orderdomain.Order, error)
+	ResolveUnknown(context.Context, string, string) (orderdomain.Order, error)
+}
 
-func (w SubmissionWorker) Handle(ctx context.Context, space, orderID string) (store.OrderRecord, error) {
-	r, err := w.Engine.Store.GetOrder(ctx, space, orderID)
+// SubmissionWorker advances durable PENDING intents after Place has committed.
+type SubmissionWorker struct{ Service SubmissionService }
+
+func (w SubmissionWorker) Handle(
+	ctx context.Context,
+	spaceID string,
+	orderID string,
+) (orderdomain.Order, error) {
+	current, err := w.Service.Get(ctx, spaceID, orderID)
 	if err != nil {
-		return r, err
+		return orderdomain.Order{}, err
 	}
-	if r.State == string(order.SubmitUnknown) {
-		return w.Engine.ResolveUnknown(ctx, space, orderID)
+	if current.State != orderdomain.Pending {
+		if current.State == orderdomain.SubmitUnknown ||
+			current.State == orderdomain.Submitting {
+			return w.Service.ResolveUnknown(ctx, spaceID, orderID)
+		}
+		return current, nil
 	}
-	if r.State == string(order.Submitting) {
-		return w.Engine.RecoverSubmitting(ctx, space, orderID)
-	}
-	if r.State != string(order.Ready) {
-		return r, nil
-	}
-	return w.Engine.Submit(ctx, space, orderID, "")
+	return w.Service.Submit(ctx, spaceID, orderID)
 }
