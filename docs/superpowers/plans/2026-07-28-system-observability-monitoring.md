@@ -4,7 +4,7 @@
 
 **Goal:** 在不引入 Prometheus Server、Alertmanager、HA 或复杂规则平台的前提下，建立一条统一、可验证的 MooX 监控链路，覆盖所有独立微服务和 SCF 存活、全部服务器资源、所有启用中的实时 TimeSeries Dataset + Frequency，以及 K 线采集、因子计算、资产余额和最小市场异常检测。
 
-**Architecture:** 所有长驻 tRPC 服务通过 `packages/report` 在 tRPC timer 中采集进程内 Prometheus Registry，并把有界快照发布到统一 `moox.observability.>` subject；HostAgent 和 Watchdog 使用同一公共上报包发布强类型观测事件。单实例 Monitor 使用一个 JetStream durable 消费整个 observability 前缀，保存最新事实、执行简单阈值与静默检测并通过 `packages/msgbox` 告警。Monitor 是主 Watchdog，腾讯 SCF 独立定时触发器是外部哨兵；二者非对称互补，不做互相选主或完整双活。
+**Architecture:** 所有长驻 tRPC 服务通过 `packages/report` 在 tRPC timer 中采集进程内 Prometheus Registry，并把有界快照发布到统一 `moox.observability.>` subject；HostAgent 和 Watchdog 使用同一公共上报包发布强类型观测事件。单实例 Monitor 使用一个 JetStream durable 消费整个 observability 前缀，保存最新事实、执行简单阈值与静默检测并通过 `packages/msgbox` 告警。Monitor 是主 Watchdog；一个通过心跳保持常驻的 SCF 节点启动轻量 tRPC Server，并用 30 秒 timer handler 充当外部 Sentinel。二者非对称互补，不做互相选主或完整双活。
 
 **Tech Stack:** Go 1.25、tRPC-Go、Protocol Buffers、Prometheus client、NATS JetStream、SQLite/GORM、Vue 3、TypeScript、腾讯云 SCF、企业微信 Webhook、Shell。
 
@@ -19,6 +19,7 @@
 - 不实现通用告警 DSL、PromQL、动态脚本、机器学习异常检测、自动修复或自动重启。
 - EventBus 只承担观测数据传输，不把所有业务 Event 都交给 Monitor。
 - Monitor 与 SCF 不做完全重复的检查集：Monitor 负责全量内部检查，SCF 只负责少量外部哨兵检查。
+- 所有 SCF 都通过现有 heartbeat 判断存活；只有一个显式配置 `MOOX_SCF_WATCHDOG_ENABLED=true` 的 SCF 节点运行 Watchdog timer，避免重复探测和重复告警。
 - `packages/msgbox` 只封装通知通道，不保存告警状态，不做分布式去重；告警状态仍由 Monitor 管理。
 - 新项目不保留 `MOOX_METRICS`、`moox.metrics.>`、旧 durable、旧软删除 Schema 或旧 pipeline 配置的兼容路径。
 - 所有查询、消息、标签、错误摘要和内存快照必须有明确上限；不允许把 `subject_id`、`job_id`、`trace_id`、订单号、账户号或错误文本作为普通指标标签。
@@ -30,7 +31,7 @@ flowchart LR
   S["tRPC Services"] -->|"timer -> MetricSnapshot"| R["packages/report"]
   H["HostAgent"] -->|"HostSnapshot"| R
   MWD["Monitor Watchdog"] -->|"health result + metrics"| R
-  SCF["SCF External Sentinel"] -->|"HealthCheckReport"| R
+  SCF["Resident SCF tRPC Timer Sentinel"] -->|"HealthCheckReport"| R
   R -->|"moox.observability.>"| EB["EventBus / MOOX_OBSERVABILITY"]
   EB -->|"one durable"| MON["Single Monitor"]
   MON --> DB["SQLite latest state + bounded history"]
@@ -42,10 +43,10 @@ flowchart LR
 这套关系回答“Monitor 所在机器挂掉怎么办”：
 
 1. Monitor 进程退出但机器仍活着，由 systemd/cron 拉起。
-2. Monitor 所在机器不可达时，独立运行在腾讯 SCF 调度器中的 Sentinel 无法访问 Monitor `/readyz`，直接发送企业微信告警。
+2. Monitor 所在机器不可达时，常驻 SCF Sentinel 的 30 秒 tRPC timer 无法访问 Monitor `/readyz`，直接发送企业微信告警。
 3. 普通业务服务器不可达时，Monitor 通过服务健康检查失败或 HostAgent 快照静默感知。
 4. EventBus 不可用时，Monitor `/readyz` 必须失败；SCF 同样会直接告警。
-5. CloudNode 发起的 SCF keepalive 不能承担外部哨兵职责，因为 CloudNode 与 Monitor 同机故障时它也不会触发。Watchdog 必须由腾讯 SCF 自己的 timer trigger 独立调度。
+5. CloudNode 每 9 秒发起 keepalive，当前 invocation 最多继续驻留 1 分钟；Watchdog 每 30 秒执行一次，因此控制节点突然失联后，常驻 SCF 在最后一次驻留窗口内仍有机会告警。SCF 平台若提前冻结实例，外部告警可能丢失；个人量化 V1 接受这一 best-effort 边界，不再增加腾讯云 Timer Trigger。
 
 ### 1.3 观测 subject 契约
 
@@ -120,13 +121,15 @@ error_message
 
 ### 1.5 实时 TimeSeries 监控范围
 
-“所有启用中的实时 TimeSeries Dataset + Frequency”不维护第二份手工清单，由生产模块上报当前 inventory：
+“所有启用中的实时 TimeSeries Dataset + Frequency”不维护第二份手工清单，由生产模块维护 Expected Dataset Registry。它表达“哪些 Dataset + Frequency 当前应该持续运行”，解决新规则从未运行时没有 `last_run` 指标、Monitor 因而无法发现缺失的问题：
 
 - Collector：所有 `TaskRule.Enabled=true`、`data_type=kline`、`collector.live=true` 的 `target.dataset_id × collector.intervals[]`。
 - Factor：所有 binding 和 factor 都为 `enabled` 的 `target_dataset × freq`。
-- 后续新增实时 TimeSeries 生产模块时，必须通过同一个 `report.DatasetMetrics.ReplaceExpected` 注册 inventory，不修改 Monitor 发现逻辑。
+- 后续新增实时 TimeSeries 生产模块时，必须通过同一个 `report.DatasetMetrics.ReplaceExpected` 注册 expected set，不修改 Monitor 发现逻辑。
 - Storage 的提交水位只证明实际写入，不单独把一个 Dataset 判定为“应该实时运行”。
-- Monitor 对 inventory 做并集，按 `producer + space_id + dataset_id + freq` 展示；同一 Dataset 的 Collector、Storage、Factor 阶段分别保留，不互相覆盖。
+- Collector/Factor 启动时必须完成第一次加载；规则创建、更新、停用事务成功后立即刷新；现有 metrics timer 每 5 分钟做一次兜底对账。
+- 对账失败保留上一版完整 expected set，Reporter 继续上报，并记录 refresh error 与最后成功时间；不能因一次数据库读取失败发布错误的空集合。
+- Monitor 对 expected set 做并集，按 `producer + space_id + dataset_id + freq` 展示；同一 Dataset 的 Collector、Storage、Factor 阶段分别保留，不互相覆盖。
 
 配置文件只保存默认策略和小范围覆盖：
 
@@ -148,11 +151,13 @@ realtime_timeseries:
       market_volume_ratio: 5
 ```
 
-动态 inventory 指标：
+Expected Dataset Registry 指标：
 
 ```text
 moox_<module>_dataset_enabled{space_id,dataset_id,freq} 1
 moox_<module>_dataset_expected_interval_seconds{space_id,dataset_id,freq}
+moox_<module>_dataset_inventory_refresh_errors_total
+moox_<module>_dataset_inventory_last_success_timestamp_seconds
 ```
 
 运行和水位指标：
@@ -176,6 +181,7 @@ moox_<module>_dataset_rows_total{space_id,dataset_id,freq,result}
 - watermark 只能单调递增；重放旧消息不能让水位倒退。
 - Monitor 用当前时间减原始 timestamp 计算 lag，生产者不重复上报派生 lag。
 - `result` 只能是 `success|error|empty|rejected`。
+- expected set 超过 10 分钟未成功对账时，Monitor 标记为 `UNKNOWN/inventory_stale`，不把上一版清单误判为仍然可信。
 
 默认判定：
 
@@ -214,13 +220,13 @@ moox_<module>_dataset_rows_total{space_id,dataset_id,freq,result}
 | P1 | Metrics consumer 连接 NATS 后、durable 真正 bind 前就把 readiness 标为成功；Host consumer 不参与 readiness | 合并为一个 consumer，bind 并进入处理循环后才 ready |
 | P1 | SysDeploy 自动检查主要以 `service_name` 标识，多节点同名服务会覆盖；loopback health URL 不能跨主机访问 | 使用 `node_id + service_name`，校验 node-reachable URL |
 | P1 | SCF heartbeat 写成 online 后没有 freshness 派生，任务选择也没有排除过期节点 | 90 秒派生 timeout，调度只选 freshness 合格节点 |
-| P1 | SCF 进程内调用 `ObserveModuleRun`，但 SCF 没有长驻 Reporter；控制面的成功报告也缺少稳定的业务 watermark 字段 | SCF 回传有界结果，Collector 服务进程更新自己的 Registry |
+| P1 | SCF 进程内调用 `ObserveModuleRun`，但当前 serverless 路径没有真正启动 tRPC Server/Reporter；控制面的成功报告也缺少稳定的业务 watermark 字段 | Sentinel SCF 启动 tRPC timer reporter；Dataset 结果回传 Collector，由控制面 Registry 推进 watermark |
 | P1 | Monitor 和 HostAgent 使用不同 durable/consumer；subject 仍是 `moox.metrics.>`，无法表达统一观测边界 | 新建 `MOOX_OBSERVABILITY` 和单一 durable |
 | P2 | Monitor check/webhook/rule 的 `(space,id,is_deleted)` 唯一索引会在删除、重建、再次删除时冲突 | 新项目直接改为硬删除和引用约束 |
 | P2 | 创建告警规则时缺少 check、webhook 存在且启用的完整校验 | 写事务内校验，删除时 RESTRICT |
 | P2 | metric rule evaluation 没有纳入 retention；Overview 会计入 disabled check | 增加 14 天清理，只聚合 enabled |
 | P2 | 通知发送实现位于 Monitor 内部，SCF 无法安全复用 | 提取 `packages/msgbox` |
-| P2 | `examples/monitor-pipelines.yaml` 仍带 `crosses_storage_deferred` 和手工 pipeline 清单 | v2 改为动态 inventory + 默认策略 |
+| P2 | `examples/monitor-pipelines.yaml` 仍带 `crosses_storage_deferred` 和手工 pipeline 清单 | v2 改为 Expected Dataset Registry + 默认策略 |
 
 ## 3. 实施顺序
 
@@ -456,7 +462,7 @@ func (r *EventReporter) ReportHealth(
 - [ ] **Step 6: 保留两种合法运行方式**
 
 - 长驻 tRPC 服务：timer handler 定时调用 `Handler.Handle(ctx)`。
-- SCF：一次 invocation 更新专用 Registry 后调用一次 `Handler.Handle(ctx)` 或 `EventReporter.ReportHealth(ctx)`；不启动常驻 goroutine。
+- 常驻 SCF Sentinel：启动轻量 tRPC Server，由 30 秒 timer handler 更新专用 Registry，再调用 `Handler.Handle(ctx)` 和 `EventReporter.ReportHealth(ctx)`；handler 自身不再启动额外常驻 goroutine。非 Sentinel SCF 只保留现有 resident taskrunner 和 heartbeat。
 
 - [ ] **Step 7: Test and commit**
 
@@ -656,7 +662,7 @@ SCF 仅在以下情况直接调用 `msgbox.Sender`：
 - Monitor `/readyz` 不可达或返回非 2xx。
 - HealthCheckReport 无法发布到 EventBus。
 
-其他服务、Dataset、Canary 失败若 Monitor 和 EventBus 正常，只发事件，由 Monitor 告警。SCF 每次 invocation 最多直发一条合并消息；timer 每 5 分钟触发，因此不引入分布式去重存储。
+其他服务、Dataset、Canary 失败若 Monitor 和 EventBus 正常，只发事件，由 Monitor 告警。SCF 每次 timer tick 最多直发一条合并消息，并在 Sentinel 进程内使用 5 分钟 cooldown 抑制重复直发；进程回收后 cooldown 丢失是可接受的 best-effort 行为，不把去重状态放进 `packages/msgbox`。
 
 - [ ] **Step 5: Test and commit**
 
@@ -926,14 +932,15 @@ git commit -m "fix(cloudnode): expire stale scf heartbeats"
 - Modify: `modules/monitor/proto/monitor.proto`
 - Create: `modules/monitor/internal/watchdog/metrics.go`
 - Create: `modules/monitor/internal/watchdog/metrics_test.go`
-- Modify: `modules/collector/internal/model/types.go`
-- Modify: `modules/collector/internal/model/types_test.go`
 - Create: `modules/collector/internal/serverless/watchdog.go`
 - Create: `modules/collector/internal/serverless/watchdog_test.go`
-- Modify: `modules/collector/internal/serverless/handler.go`
-- Modify: `modules/collector/internal/serverless/handler_test.go`
-- Modify: `modules/cloudnode/internal/providers/tencentscf/client.go`
-- Modify: `modules/cloudnode/internal/providers/tencentscf/client_test.go`
+- Create: `modules/collector/internal/serverless/bootstrap/observability_timer.go`
+- Create: `modules/collector/internal/serverless/bootstrap/observability_timer_test.go`
+- Modify: `modules/collector/internal/app/runtime/global.go`
+- Modify: `modules/collector/internal/app/runtime/global_test.go`
+- Modify: `modules/collector/cmd/scf/main.go`
+- Modify: `modules/collector/cmd/scf/main_test.go`
+- Modify: `modules/collector/configs/trpc_go.yaml`
 - Modify: `modules/cloudnode/internal/rpc/node.go`
 - Modify: `modules/cloudnode/internal/rpc/node_item_test.go`
 - Modify: `scripts/build-collector-scf-package.sh`
@@ -952,9 +959,29 @@ moox_monitor_watchdog_latency_seconds{kind}
 
 service/node/check ID 留在 SQLite check result，不进入 metrics label。
 
-- [ ] **Step 2: 定义 SCF 最小检查集**
+- [ ] **Step 2: 在常驻 SCF 中真正启动 tRPC timer**
 
-每 5 分钟只执行：
+当前 SCF 只启动 resident taskrunner 和 `cloudfunction.Start`；`trpc_go.yaml` 中仅声明 timer 不会自动执行。`startProductionRuntime` 必须显式创建轻量 `trpc.Server`、注册 timer handler，并在独立 goroutine 中运行 Server，不能阻塞 CloudFunction handler 或 JobItem taskrunner。删除当前没有注册 handler 的 `trpc.heartbeat.timer` 和 `trpc.dnsresolve.timer` 声明：heartbeat 继续由 CloudNode keepalive event 负责，DNS 保持现有启动时刷新，不保留看似运行、实际未执行的 timer 配置。
+
+只新增一个 timer service：
+
+```yaml
+- name: trpc.moox.collector.scf_observability.timer
+  port: 8005
+  network: "*/30 * * * * *?scheduler=scfObservability&startAtOnce=1"
+  protocol: timer
+  timeout: 20000
+```
+
+`runtimeapp` 增加无阻塞 readiness snapshot。首次完整 heartbeat 尚未提供 `node_id`、Gateway 和 Storage target 时，handler 返回 `nil` 并记录 `not_ready`，不能等待到 timer timeout，也不能发送故障告警。
+
+- [ ] **Step 3: 只允许一个 SCF Sentinel**
+
+所有 SCF 仍通过 heartbeat 判断存活；只有环境变量 `MOOX_SCF_WATCHDOG_ENABLED=true` 的节点执行 observability handler，其他节点立即返回。CloudNode 发布配置拒绝在同一 space 中启用第二个 Sentinel，并只给被选中的节点注入该环境变量。
+
+- [ ] **Step 4: 定义 SCF 最小检查集**
+
+每 30 秒只执行：
 
 1. Monitor `/readyz`，5 秒 timeout。
 2. Gateway `/readyz`，5 秒 timeout。
@@ -962,19 +989,21 @@ service/node/check ID 留在 SQLite check result，不进入 metrics label。
 
 不调用交易下单、不写 Storage、不触发采集或因子重算。Canary 成功要求：至少一条闭合记录、字段可解码、最大 `data_time` 未超过配置 freshness。
 
-- [ ] **Step 3: 增加 `watchdog` SCF action**
+- [ ] **Step 5: 防止 timer 重入**
 
 ```go
-const EventActionWatchdog EventAction = "watchdog"
-
-type WatchdogResult struct {
-	Checks []WatchdogCheckResult `json:"checks"`
+func (h *Handler) Handle(ctx context.Context) error {
+	if !h.enabled || !h.running.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer h.running.Store(false)
+	return h.run(ctx)
 }
 ```
 
-结果最多 8 个 check；每个错误摘要最多 256 字符；任何 HTTP body 最多读 64 KiB。
+单轮总 timeout 为 20 秒；上一轮仍在执行时跳过新一轮并增加 `moox_collector_scf_watchdog_skipped_total{reason="overlap"}`。结果最多 8 个 check；每个错误摘要最多 256 字符；任何 HTTP body 最多读 64 KiB。
 
-- [ ] **Step 4: 把外部结果映射到现有告警状态机**
+- [ ] **Step 6: 把外部结果映射到现有告警状态机**
 
 在 Monitor `CheckKind` 增加 `CHECK_KIND_EXTERNAL`。外部 check 由 bootstrap 根据配置幂等创建，固定 ID：
 
@@ -986,39 +1015,40 @@ external:scf_sentinel:market_canary
 
 Scheduler 只调度 HTTP/TCP check，永远不主动执行 EXTERNAL check。Health route 仅接受配置 allowlist 中的 `observer_id + check_id`，把合法 report 转成现有 `domain.CheckResult`，`instance_id=observer_id`，然后复用现有 result repository 和 alert evaluator。未知 observer/check 执行 TERM 并记录固定错误码，不能动态创建任意告警项。
 
-- [ ] **Step 5: 正常结果通过公共 reporter**
+- [ ] **Step 7: 正常结果通过公共 reporter**
 
-每个检查调用 `report.EventReporter.ReportHealth`。Monitor 健康且 EventBus publish 成功时 SCF 不直发消息。
+每个检查调用 `report.EventReporter.ReportHealth`；同一 timer handler 最后调用一次 `report.Handler.Handle` 上报 SCF 进程指标。Reporter 使用 `module=collector`、`service_name=moox_collector_scf` 和稳定 node/boot identity。Monitor 健康且 EventBus publish 成功时 SCF 不直发消息。
 
-- [ ] **Step 6: 中央路径失败时直接 msgbox**
+- [ ] **Step 8: 中央路径失败时直接 msgbox**
 
 Monitor 失败或任一 health report publish 失败时，把本轮失败合并为一条 `critical` 消息。测试必须证明：
 
 - Monitor down：直接发送一次。
 - Monitor healthy + Canary stale：只发 EventBus，由 Monitor 发送。
 - EventBus down：直接发送一次。
-- 一次 invocation 多项失败：仍只发送一次。
+- 一个 timer tick 多项失败：仍只发送一次。
+- 5 分钟 cooldown 内连续失败：不重复直发；cooldown 后仍失败才再次提醒。
 
-- [ ] **Step 7: 使用腾讯 SCF timer trigger，而非 CloudNode keepalive**
+- [ ] **Step 9: 明确 best-effort 故障边界**
 
-在 Tencent SCF client 增加 idempotent `EnsureTimerTrigger`，trigger 名固定 `moox-observability-watchdog`，cron 固定每 5 分钟，argument 固定 `{"action":"watchdog","source":"scf_timer"}`。只有 metadata `watchdog_enabled=true` 的一个 SCF node 可以创建该 trigger；同一 space 配置第二个时拒绝。
+当前 keepalive 每 9 秒调用 SCF，单次 resident 最长 1 分钟。测试必须模拟停止 keepalive 后保留最后一次 resident context，证明 30 秒 timer 至少还能完成一次 Monitor 探测和直接 msgbox。若腾讯云在 context 结束前提前冻结进程，V1 允许丢失本次外部告警；不得为消除这一小概率风险再引入 Timer Trigger、Lease 或双 Sentinel。
 
-- [ ] **Step 8: 打包配置**
+- [ ] **Step 10: 打包配置**
 
-SCF 包必须包含 Watchdog 所需的 Gateway URL、Monitor URL、EventBus credential、health HMAC credential、Canary scope 和 msgbox webhook 的环境变量名，不把 secret 写入 zip。
+SCF 包必须包含 timer service 配置，以及 Watchdog 所需的 Gateway URL、Monitor URL、EventBus credential、health HMAC credential、Canary scope、`MOOX_SCF_WATCHDOG_ENABLED` 和 msgbox webhook 的环境变量名，不把 secret 写入 zip。
 
-- [ ] **Step 9: Test and commit**
+- [ ] **Step 11: Test and commit**
 
 ```bash
 cd modules/monitor && go test -race ./internal/scheduler/... ./internal/watchdog/...
-cd modules/collector && go test -race ./internal/serverless/... ./internal/model/...
-cd modules/cloudnode && go test -race ./internal/providers/tencentscf/... ./internal/rpc/...
+cd modules/collector && go test -race ./internal/serverless/... ./internal/app/runtime/... ./cmd/scf/...
+cd modules/cloudnode && go test -race ./internal/rpc/...
 bash scripts/build-collector-scf-package_test.sh
 git add modules/monitor modules/collector modules/cloudnode scripts
 git commit -m "feat(watchdog): add monitor checks and external scf sentinel"
 ```
 
-### Task 11: 自动发现全部启用的实时 Dataset + Frequency
+### Task 11: 对账全部启用的实时 Dataset + Frequency
 
 **Files:**
 
@@ -1028,10 +1058,14 @@ git commit -m "feat(watchdog): add monitor checks and external scf sentinel"
 - Modify: `modules/collector/internal/store/task_rule_test.go`
 - Modify: `modules/collector/internal/bootstrap/bootstrap.go`
 - Modify: `modules/collector/internal/bootstrap/bootstrap_test.go`
+- Modify: `modules/collector/internal/rpc/service.go`
+- Modify: `modules/collector/internal/rpc/service_test.go`
 - Create: `modules/factor/internal/observability/realtime_inventory.go`
 - Create: `modules/factor/internal/observability/realtime_inventory_test.go`
 - Modify: `modules/factor/internal/bootstrap/bootstrap.go`
 - Modify: `modules/factor/internal/bootstrap/bootstrap_test.go`
+- Modify: `modules/factor/internal/rpc/service.go`
+- Modify: `modules/factor/internal/rpc/service_test.go`
 - Modify: `examples/monitor-pipelines.yaml`
 - Modify: `scripts/test-monitor-coverage-contract.sh`
 
@@ -1052,32 +1086,42 @@ Factor 测试只选择 binding 与 factor 同时 enabled 的 `target_dataset + f
 
 `TaskRuleRepository.ListEnabledAll(ctx, limit)` 固定最大 1000；超过上限返回错误，不截断。解析使用现有 `domain.ParseCollectParams`。
 
-- [ ] **Step 3: 在 reporter timer 前刷新 inventory**
+- [ ] **Step 3: 启动时建立第一版 Expected Dataset Registry**
 
-Collector/Factor 的 metrics timer handler 顺序固定为：
+Collector/Factor bootstrap 在对外 ready 前调用一次 `Refresh`。首次加载失败直接终止启动，因为系统无法证明应该监控哪些实时 Dataset；不得以空 expected set 继续运行。
+
+Collector 的 `expected_interval_seconds` 使用 `schedule.interval`；Factor 没有独立 schedule，使用可严格解析的 `freq`。任何非正数或无法解析的 interval/freq 都使首次加载失败，不能回退成 0。
+
+- [ ] **Step 4: 规则变更后立即刷新**
+
+Collector TaskRule 和 Factor binding/factor 的创建、更新、启停事务成功后调用 `MarkDirty` 并立即尝试 `Refresh`。刷新属于观测派生，不回滚已成功提交的业务配置；失败时保留上一版 expected set，增加 refresh error，等待兜底对账恢复。
+
+- [ ] **Step 5: 用现有 metrics timer 每 5 分钟兜底对账**
+
+不增加新 timer。Collector/Factor 的 metrics timer 在 registry 到期或 dirty 时尝试 refresh，无论 refresh 是否成功都继续调用 Reporter：
 
 ```go
-if err := inventory.Refresh(ctx); err != nil {
-	metrics.ObserveInventoryRefresh("error")
-	return err
+if inventory.Due(now) {
+	if err := inventory.Refresh(ctx); err != nil {
+		metrics.ObserveInventoryRefresh("error")
+	} else {
+		metrics.ObserveInventoryRefresh("success")
+	}
 }
-metrics.ObserveInventoryRefresh("success")
 return reporter.Handle(ctx)
 ```
 
-inventory refresh 失败必须使 Reporter 本轮失败并反映到 health detail，不能上报一个错误的空集合。
+`Refresh` 必须先在临时集合中完成查询、解析、去重和校验，全部成功后才原子调用 `ReplaceExpected`。运行期失败不能清空旧集合，也不能阻断进程、业务调度或本轮 MetricSnapshot。
 
-Collector 的 `expected_interval_seconds` 使用 `schedule.interval`；Factor 没有独立 schedule，使用可严格解析的 `freq`。任何非正数或无法解析的 interval/freq 都使本轮 inventory refresh 失败，不能回退成 0。
-
-- [ ] **Step 4: v2 policy 不再手工枚举 pipeline**
+- [ ] **Step 6: v2 policy 不再手工枚举 pipeline**
 
 把 `examples/monitor-pipelines.yaml` 改为本计划 1.5 的 v2 结构，删除 `crosses_storage_deferred`。配置 loader 明确只接受 `version: 2`，旧版报错。
 
-- [ ] **Step 5: 覆盖契约脚本**
+- [ ] **Step 7: 覆盖契约脚本**
 
 `scripts/test-monitor-coverage-contract.sh` 增加静态断言：Collector、Factor 都注册 `DatasetMetrics`；不存在 `crosses_storage_deferred`；默认 policy 字段完整。
 
-- [ ] **Step 6: Test and commit**
+- [ ] **Step 8: Test and commit**
 
 ```bash
 cd modules/collector && go test -race ./internal/observability/... ./internal/store/... ./internal/bootstrap/...
@@ -1094,36 +1138,64 @@ git commit -m "feat(observability): discover enabled realtime datasets"
 - Modify: `modules/collector/internal/sources/interface.go`
 - Modify: `modules/collector/internal/sources/binance/kline.go`
 - Create: `modules/collector/internal/sources/binance/kline_test.go`
+- Modify: `modules/collector/internal/sources/binance/symbol.go`
+- Modify: `modules/collector/internal/sources/binance/symbol_test.go`
 - Modify: `modules/collector/internal/executor/executor.go`
 - Modify: `modules/collector/internal/executor/executor_test.go`
 - Modify: `modules/collector/internal/rpc/service.go`
 - Modify: `modules/collector/internal/rpc/service_test.go`
 - Modify: `modules/collector/internal/bootstrap/bootstrap.go`
+- Modify: `modules/collector/internal/model/types.go`
+- Modify: `modules/collector/internal/model/types_test.go`
 
-- [ ] **Step 1: 扩展有界 CollectResult**
+- [ ] **Step 1: 把 CollectResult 精简为三个字段**
 
 ```go
 type CollectResult struct {
-	RowsWritten           int               `json:"rows_written"`
-	OutputWatermark       string            `json:"output_watermark,omitempty"`
-	WrittenRowKeySamples  []WrittenRowKey   `json:"written_row_key_samples,omitempty"`
-	RecordSnapshotVersion string            `json:"record_snapshot_version,omitempty"`
-	ZeroWriteReason       string            `json:"zero_write_reason,omitempty"`
-	StorageReadScope      *StorageReadScope `json:"storage_read_scope,omitempty"`
+	RowsWritten      uint64 `json:"rows_written"`
+	OutputWatermark string `json:"output_watermark,omitempty"`
+	SnapshotVersion string `json:"snapshot_version,omitempty"`
 }
 ```
 
-`OutputWatermark` 必须为成功 Storage write ACK 的最大 RFC3339 `data_time`。样本 key 最多 8 个；完整结果 JSON 最大 16 KiB。
+删除 `WrittenRowKeySamples`、`StorageReadScope`、`RecordSnapshotVersion` 和 `ZeroWriteReason`；不增加 `EmptyReason`。TaskInstance/执行摘要已经拥有 space、dataset、subject 和 freq，结果不重复携带 scope。E2E 使用已知 TaskInstance scope 和 output watermark 查询 Storage，不依赖生产者自报的 RowKey 样本。
 
-- [ ] **Step 2: 修复成功状态证据**
+`OutputWatermark` 必须为成功 Storage write ACK 的最大 RFC3339 `data_time`；`SnapshotVersion` 只用于 Symbol 等 Record Dataset。完整 `CollectResult` JSON 最大 1 KiB。
+
+- [ ] **Step 2: 固定结果校验矩阵**
+
+| 数据类型 | 条件 | 判定 |
+| --- | --- | --- |
+| Kline | `error != nil` | `error`，不推进 watermark |
+| Kline | `error == nil && RowsWritten == 0` | `empty`，不要求原因字段，不推进 watermark |
+| Kline | `error == nil && RowsWritten > 0` | 必须有 `OutputWatermark` |
+| Symbol | `error != nil` | `error` |
+| Symbol | `error == nil && RowsWritten > 0` | 必须有 `SnapshotVersion` |
+
+具体“没有新的闭合 K 线”只写固定结构化日志，不进入跨模块结果契约。
+
+- [ ] **Step 3: 修复成功状态证据**
 
 所有 scheduled success 都必须回传编码后的 `CollectResult`，不能传空字符串。失败结果只保存固定 error code 和 256 字符摘要，不回传堆栈。
 
-- [ ] **Step 3: 只在控制面接受当前 JobItem 后观测**
+- [ ] **Step 4: 由外层执行摘要携带 Dataset/Frequency**
+
+```go
+type taskExecutionSummary struct {
+	DataType  string `json:"data_type"`
+	DatasetID string `json:"dataset_id"`
+	Freq      string `json:"freq,omitempty"`
+	CollectResult
+}
+```
+
+`space_id` 使用 ReportTaskStatus 请求中的值；`subject_id` 留在 TaskInstance，不进入监控结果或指标标签。
+
+- [ ] **Step 5: 只在控制面接受当前 JobItem 后观测**
 
 `ReportTaskStatus` 先执行当前的 stale/delivery 检查和数据库更新；只有 `updated=true` 才解析 result 并调用 Collector 服务进程中的 `DatasetMetrics.ObserveRun`。旧 delivery、重复回调和未知 tuple 使用 `rejected`，不得推进 success/watermark。
 
-- [ ] **Step 4: 空结果语义**
+- [ ] **Step 6: 空结果由 RowsWritten 推导**
 
 合法“没有新的闭合 K 线”：
 
@@ -1135,7 +1207,13 @@ watermark=unchanged
 rows=0
 ```
 
-- [ ] **Step 5: Test and commit**
+不保存 `EmptyReason`；当前异常空数据继续返回 error，合法零写入只有“没有新的闭合数据”，无需为未来原因预留协议字段。
+
+- [ ] **Step 7: 删除未使用的泛化 CollectResult**
+
+删除 `modules/collector/internal/model/types.go` 中仅被自身测试使用的 `CollectResult{Data, Count, Timestamp, Metadata}` 及对应测试，保留 Job registry 实际使用的 `jobs/kline.Result` 和 `jobs/symbol.Result`，避免三套同名结果模型继续混淆。
+
+- [ ] **Step 8: Test and commit**
 
 ```bash
 cd modules/collector && go test -race ./internal/sources/... ./internal/executor/... ./internal/rpc/...
@@ -1304,7 +1382,7 @@ message DatasetFrequencyStatus {
 1. 服务：`node_id + service_name` 健康和 reporter freshness。
 2. 主机：agent reachable、CPU、Memory、Filesystem。
 3. SCF：online/timeout/unknown 数量和最旧 heartbeat。
-4. Dataset：所有动态 inventory tuple 的 run/success/input/output watermark。
+4. Dataset：Expected Dataset Registry 中所有 tuple 的 run/success/input/output watermark。
 5. Canary/Balance：最后检查、状态、原因。
 
 - [ ] **Step 3: UI 使用现有运维页面**
@@ -1491,7 +1569,7 @@ Expected: 所有命令 PASS；第二次 `make proto` 无 diff；worktree 只含�
 - Consumer ACK/NAK/TERM、重启、并发和 close。
 - Prometheus label cardinality。
 - watermark 权威提交点和单调性。
-- SCF 外部调度是否独立于 CloudNode/Monitor。
+- SCF 是否真正启动 tRPC Server 并注册 30 秒 timer、只启用一个 Sentinel，以及停止 keepalive 后最后驻留窗口能否完成一次外部告警。
 - msgbox secret、timeout、response bound。
 - HostAgent Linux amd64/arm64 构建。
 - Monitor Schema 引用完整性和删除语义。
@@ -1507,7 +1585,7 @@ Expected: 所有命令 PASS；第二次 `make proto` 无 diff；worktree 只含�
 1. EventBus：删除旧 `MOOX_METRICS` 和旧 durable，创建 `MOOX_OBSERVABILITY`。
 2. Monitor：使用新 SQLite Schema；不迁移旧软删除记录。
 3. HostAgent：逐台部署并验证快照。
-4. Collector/CloudNode/SCF：发布新代码包，配置唯一 Watchdog trigger。
+4. Collector/CloudNode/SCF：发布新代码包，只给一个 SCF 节点配置 `MOOX_SCF_WATCHDOG_ENABLED=true`，验证 tRPC timer 已启动。
 5. Storage/Factor/Trade：启用 reporter 和业务水位。
 6. Gateway/Web：部署 Overview。
 
@@ -1557,6 +1635,7 @@ Expected: worktree clean，`git rev-parse HEAD` 与 `git ls-remote` 的远端 SH
 - 所有自定义指标满足 `moox_<module>_...` 命名和低基数规则。
 - Monitor readiness 能真实反映 EventBus durable 是否已绑定并工作。
 - systemd/cron 能恢复 Monitor 进程；Monitor 主机不可达时 SCF 能直接告警。
+- 常驻 SCF 确实启动 tRPC Server 和 30 秒 observability timer；同一 space 只有一个 Sentinel，停止 keepalive 后的最后驻留窗口仍能完成一次探测。
 - 每台服务器的 HostAgent 静默、CPU、内存、文件系统和网络错误速率可检测。
 - SCF heartbeat 能从 online 自动变为 timeout，过期 SCF 不再领取任务。
 - Collector 与 Factor 自动声明全部启用实时 TimeSeries Dataset + Frequency。
@@ -1573,7 +1652,7 @@ Expected: worktree clean，`git rev-parse HEAD` 与 `git ls-remote` 的远端 SH
 - Monitor 集群、跨机选主、Watchdog 双主仲裁。
 - 通用 PromQL、SLO、错误预算、告警编排平台。
 - 全量 subject/symbol 粒度指标。
-- 对每个 SCF 实例都创建 Watchdog trigger。
+- 腾讯云 Timer Trigger、双 Sentinel 或对每个 SCF 都启用 Watchdog timer。
 - 交易下单 Canary、自动修复、自动重启业务服务。
 - 市场异常机器学习、动态基线或跨市场相关性模型。
 - 多通知渠道编排；V1 只实现统一 Sender 和企业微信。
