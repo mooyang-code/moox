@@ -38,6 +38,42 @@ type checker struct {
 	violations map[string]violation
 }
 
+type providerScope struct {
+	parent   *providerScope
+	bindings map[string]bool
+}
+
+func newProviderScope(parent *providerScope) *providerScope {
+	return &providerScope{parent: parent, bindings: make(map[string]bool)}
+}
+
+func (s *providerScope) declare(name string, allowed bool) {
+	if s == nil || !genericProviderIdentifier(name) {
+		return
+	}
+	s.bindings[name] = allowed
+}
+
+func (s *providerScope) allowed(name string) bool {
+	if !genericProviderIdentifier(name) {
+		return false
+	}
+	for current := s; current != nil; current = current.parent {
+		if allowed, ok := current.bindings[name]; ok {
+			return allowed
+		}
+	}
+	return false
+}
+
+func (s *providerScope) declaredHere(name string) bool {
+	if s == nil {
+		return false
+	}
+	_, ok := s.bindings[name]
+	return ok
+}
+
 func main() {
 	roots := os.Args[1:]
 	if len(roots) == 0 {
@@ -136,20 +172,16 @@ func (c *checker) scanGoDeclaration(path string, declaration ast.Decl, context [
 			case *ast.TypeSpec:
 				c.scanGoType(path, spec, context)
 			case *ast.ValueSpec:
-				c.scanGoValueSpec(path, spec, context)
+				c.scanGoValueSpec(path, spec, context, nil)
 			}
 		}
 	}
 }
 
-func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec, context []string) {
+func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec, context []string, scope *providerScope) {
 	var declarationTokens []string
 	for index, name := range spec.Names {
-		allowed := allowedTypedProviderIdentifier(name.Name, spec.Type)
-		if !allowed && index < len(spec.Values) {
-			allowed = genericProviderIdentifier(name.Name) &&
-				explicitThirdPartyProviderValue(spec.Values[index])
-		}
+		allowed := providerValueSpecAllowed(spec, index)
 		if !allowed {
 			declarationTokens = append(declarationTokens, sourceTokens(name.Name)...)
 		}
@@ -158,7 +190,7 @@ func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec, context []st
 		declarationTokens = append(declarationTokens, goNodeTokens(spec.Type)...)
 	}
 	for _, value := range spec.Values {
-		declarationTokens = append(declarationTokens, goNodeTokens(value)...)
+		declarationTokens = append(declarationTokens, goNodeTokensInScope(value, scope)...)
 	}
 
 	line := c.fset.Position(spec.Pos()).Line
@@ -166,27 +198,44 @@ func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec, context []st
 	if spec.Type != nil {
 		c.scanGoTypeExpression(path, spec.Type, extendDomainContext(context, declarationTokens))
 	}
+	if scope != nil {
+		for index, name := range spec.Names {
+			scope.declare(name.Name, providerValueSpecAllowed(spec, index))
+		}
+	}
 }
 
-func (c *checker) scanGoAssignment(path string, assignment *ast.AssignStmt, context []string) {
+func (c *checker) scanGoAssignment(path string, assignment *ast.AssignStmt, context []string, scope *providerScope) {
 	var statementTokens []string
 	for index, left := range assignment.Lhs {
-		allowed := false
-		if identifier, ok := left.(*ast.Ident); ok && genericProviderIdentifier(identifier.Name) {
-			if index < len(assignment.Rhs) {
-				allowed = explicitThirdPartyProviderValue(assignment.Rhs[index])
-			} else if len(assignment.Rhs) == 1 {
-				allowed = explicitThirdPartyProviderValue(assignment.Rhs[0])
-			}
+		allowed := identifierAllowedInScope(left, scope)
+		if identifier, ok := left.(*ast.Ident); ok &&
+			assignment.Tok == token.DEFINE &&
+			genericProviderIdentifier(identifier.Name) &&
+			!scope.declaredHere(identifier.Name) {
+			allowed = explicitThirdPartyProviderValue(matchedAssignmentValue(assignment, index))
 		}
 		if !allowed {
-			statementTokens = append(statementTokens, goNodeTokens(left)...)
+			statementTokens = append(statementTokens, goNodeTokensInScope(left, scope)...)
 		}
 	}
 	for _, right := range assignment.Rhs {
-		statementTokens = append(statementTokens, goNodeTokens(right)...)
+		statementTokens = append(statementTokens, goNodeTokensInScope(right, scope)...)
 	}
 	c.addTokens(path, c.fset.Position(assignment.Pos()).Line, context, statementTokens)
+
+	if assignment.Tok == token.DEFINE && scope != nil {
+		for index, left := range assignment.Lhs {
+			identifier, ok := left.(*ast.Ident)
+			if !ok || !genericProviderIdentifier(identifier.Name) || scope.declaredHere(identifier.Name) {
+				continue
+			}
+			scope.declare(
+				identifier.Name,
+				explicitThirdPartyProviderValue(matchedAssignmentValue(assignment, index)),
+			)
+		}
+	}
 }
 
 func (c *checker) scanGoType(path string, spec *ast.TypeSpec, context []string) {
@@ -216,44 +265,140 @@ func (c *checker) scanGoFunction(path string, function *ast.FuncDecl, context []
 	c.scanGoFieldList(path, function.Type.Params, functionContext)
 	c.scanGoFieldList(path, function.Type.Results, functionContext)
 	if function.Body != nil {
-		c.scanGoBody(path, function.Body, functionContext)
+		scope := newProviderScope(nil)
+		bindProviderFields(scope, function.Recv)
+		bindProviderFields(scope, function.Type.TypeParams)
+		bindProviderFields(scope, function.Type.Params)
+		bindProviderFields(scope, function.Type.Results)
+		c.scanGoBody(path, function.Body, functionContext, scope)
 	}
 }
 
-func (c *checker) scanGoBody(path string, body *ast.BlockStmt, context []string) {
-	ast.Inspect(body, func(node ast.Node) bool {
-		switch value := node.(type) {
-		case *ast.TypeSpec:
-			c.scanGoType(path, value, context)
-			return false
-		case *ast.ValueSpec:
-			c.scanGoValueSpec(path, value, context)
-			return true
-		case *ast.AssignStmt:
-			c.scanGoAssignment(path, value, context)
-			return true
-		case *ast.RangeStmt:
-			c.scanGoRange(path, value, context)
-			return true
-		case *ast.FuncLit:
-			c.scanGoFieldList(path, value.Type.TypeParams, context)
-			c.scanGoFieldList(path, value.Type.Params, context)
-			c.scanGoFieldList(path, value.Type.Results, context)
-			return true
-		}
-		return true
-	})
+func (c *checker) scanGoBody(
+	path string,
+	body *ast.BlockStmt,
+	context []string,
+	scope *providerScope,
+) {
+	ast.Walk(&goBodyVisitor{
+		checker: c,
+		path:    path,
+		context: context,
+		scope:   scope,
+	}, body)
 }
 
-func (c *checker) scanGoRange(path string, statement *ast.RangeStmt, context []string) {
+type goBodyVisitor struct {
+	checker *checker
+	path    string
+	context []string
+	scope   *providerScope
+}
+
+func (v *goBodyVisitor) withScope(scope *providerScope) *goBodyVisitor {
+	return &goBodyVisitor{
+		checker: v.checker,
+		path:    v.path,
+		context: v.context,
+		scope:   scope,
+	}
+}
+
+func (v *goBodyVisitor) Visit(node ast.Node) ast.Visitor {
+	if node == nil {
+		return nil
+	}
+
+	switch value := node.(type) {
+	case *ast.BlockStmt:
+		return v.withScope(newProviderScope(v.scope))
+	case *ast.TypeSpec:
+		v.checker.scanGoType(v.path, value, v.context)
+		return nil
+	case *ast.ValueSpec:
+		v.checker.scanGoValueSpec(v.path, value, v.context, v.scope)
+		return v
+	case *ast.AssignStmt:
+		v.checker.scanGoAssignment(v.path, value, v.context, v.scope)
+		return v
+	case *ast.RangeStmt:
+		rangeVisitor := v.withScope(newProviderScope(v.scope))
+		v.checker.scanGoRange(v.path, value, v.context, rangeVisitor.scope)
+		bindUntypedRangeNames(rangeVisitor.scope, value)
+		walkGoNode(rangeVisitor, value.X)
+		walkGoNode(rangeVisitor, value.Body)
+		return nil
+	case *ast.IfStmt:
+		branchVisitor := v.withScope(newProviderScope(v.scope))
+		walkGoNode(branchVisitor, value.Init)
+		walkGoNode(branchVisitor, value.Cond)
+		walkGoNode(branchVisitor, value.Body)
+		walkGoNode(branchVisitor, value.Else)
+		return nil
+	case *ast.ForStmt:
+		loopVisitor := v.withScope(newProviderScope(v.scope))
+		walkGoNode(loopVisitor, value.Init)
+		walkGoNode(loopVisitor, value.Cond)
+		walkGoNode(loopVisitor, value.Post)
+		walkGoNode(loopVisitor, value.Body)
+		return nil
+	case *ast.SwitchStmt:
+		switchVisitor := v.withScope(newProviderScope(v.scope))
+		walkGoNode(switchVisitor, value.Init)
+		walkGoNode(switchVisitor, value.Tag)
+		walkGoNode(switchVisitor, value.Body)
+		return nil
+	case *ast.TypeSwitchStmt:
+		switchVisitor := v.withScope(newProviderScope(v.scope))
+		walkGoNode(switchVisitor, value.Init)
+		walkGoNode(switchVisitor, value.Assign)
+		walkGoNode(switchVisitor, value.Body)
+		return nil
+	case *ast.CaseClause:
+		return v.withScope(newProviderScope(v.scope))
+	case *ast.CommClause:
+		return v.withScope(newProviderScope(v.scope))
+	case *ast.FuncLit:
+		v.checker.scanGoFieldList(v.path, value.Type.TypeParams, v.context)
+		v.checker.scanGoFieldList(v.path, value.Type.Params, v.context)
+		v.checker.scanGoFieldList(v.path, value.Type.Results, v.context)
+		functionScope := newProviderScope(v.scope)
+		bindProviderFields(functionScope, value.Type.TypeParams)
+		bindProviderFields(functionScope, value.Type.Params)
+		bindProviderFields(functionScope, value.Type.Results)
+		v.checker.scanGoBody(v.path, value.Body, v.context, functionScope)
+		return nil
+	default:
+		return v
+	}
+}
+
+func walkGoNode(visitor ast.Visitor, node ast.Node) {
+	if node != nil {
+		ast.Walk(visitor, node)
+	}
+}
+
+func (c *checker) scanGoRange(
+	path string,
+	statement *ast.RangeStmt,
+	context []string,
+	scope *providerScope,
+) {
 	var headerTokens []string
 	if statement.Key != nil {
-		headerTokens = append(headerTokens, goNodeTokens(statement.Key)...)
+		headerTokens = append(
+			headerTokens,
+			goRangeBindingTokens(statement.Key, statement.Tok, scope)...,
+		)
 	}
 	if statement.Value != nil {
-		headerTokens = append(headerTokens, goNodeTokens(statement.Value)...)
+		headerTokens = append(
+			headerTokens,
+			goRangeBindingTokens(statement.Value, statement.Tok, scope)...,
+		)
 	}
-	headerTokens = append(headerTokens, goNodeTokens(statement.X)...)
+	headerTokens = append(headerTokens, goNodeTokensInScope(statement.X, scope)...)
 	c.addTokens(path, c.fset.Position(statement.Pos()).Line, context, headerTokens)
 }
 
@@ -400,12 +545,81 @@ func explicitThirdPartyProviderType(expression ast.Expr) bool {
 func explicitThirdPartyProviderValue(expression ast.Expr) bool {
 	switch value := expression.(type) {
 	case *ast.CallExpr:
+		if identifier, ok := value.Fun.(*ast.Ident); ok &&
+			(identifier.Name == "make" || identifier.Name == "new") &&
+			len(value.Args) > 0 {
+			return explicitThirdPartyProviderType(value.Args[0])
+		}
 		return explicitThirdPartyProviderType(value.Fun)
 	case *ast.CompositeLit:
 		return explicitThirdPartyProviderType(value.Type)
 	default:
 		return false
 	}
+}
+
+func providerValueSpecAllowed(spec *ast.ValueSpec, index int) bool {
+	if index >= len(spec.Names) || !genericProviderIdentifier(spec.Names[index].Name) {
+		return false
+	}
+	if explicitThirdPartyProviderType(spec.Type) {
+		return true
+	}
+	if index < len(spec.Values) {
+		return explicitThirdPartyProviderValue(spec.Values[index])
+	}
+	return false
+}
+
+func matchedAssignmentValue(assignment *ast.AssignStmt, index int) ast.Expr {
+	if index < len(assignment.Rhs) {
+		return assignment.Rhs[index]
+	}
+	if len(assignment.Rhs) == 1 {
+		return assignment.Rhs[0]
+	}
+	return nil
+}
+
+func identifierAllowedInScope(expression ast.Expr, scope *providerScope) bool {
+	identifier, ok := expression.(*ast.Ident)
+	return ok && scope.allowed(identifier.Name)
+}
+
+func bindProviderFields(scope *providerScope, fields *ast.FieldList) {
+	if scope == nil || fields == nil {
+		return
+	}
+	for _, field := range fields.List {
+		for _, name := range field.Names {
+			scope.declare(name.Name, allowedTypedProviderIdentifier(name.Name, field.Type))
+		}
+	}
+}
+
+func bindUntypedRangeNames(scope *providerScope, statement *ast.RangeStmt) {
+	if scope == nil || statement.Tok != token.DEFINE {
+		return
+	}
+	for _, expression := range []ast.Expr{statement.Key, statement.Value} {
+		if identifier, ok := expression.(*ast.Ident); ok {
+			scope.declare(identifier.Name, false)
+		}
+	}
+}
+
+func goRangeBindingTokens(
+	expression ast.Expr,
+	declaration token.Token,
+	scope *providerScope,
+) []string {
+	if declaration == token.DEFINE {
+		if identifier, ok := expression.(*ast.Ident); ok &&
+			genericProviderIdentifier(identifier.Name) {
+			return sourceTokens(identifier.Name)
+		}
+	}
+	return goNodeTokensInScope(expression, scope)
 }
 
 func goStructTagTokens(field *ast.Field, allowedJSONProvider bool) []string {
@@ -437,14 +651,40 @@ func goStructTagTokens(field *ast.Field, allowedJSONProvider bool) []string {
 }
 
 func goNodeTokens(node ast.Node) []string {
+	return goNodeTokensInScope(node, nil)
+}
+
+func goNodeTokensInScope(node ast.Node, scope *providerScope) []string {
 	if node == nil {
 		return nil
 	}
 
+	nonBindingPositions := make(map[token.Pos]bool)
+	ast.Inspect(node, func(current ast.Node) bool {
+		if literal, ok := current.(*ast.FuncLit); ok && ast.Node(literal) != node {
+			return false
+		}
+		switch value := current.(type) {
+		case *ast.SelectorExpr:
+			nonBindingPositions[value.Sel.Pos()] = true
+		case *ast.KeyValueExpr:
+			if identifier, ok := value.Key.(*ast.Ident); ok {
+				nonBindingPositions[identifier.Pos()] = true
+			}
+		}
+		return true
+	})
+
 	var tokens []string
-	ast.Inspect(node, func(node ast.Node) bool {
-		switch value := node.(type) {
+	ast.Inspect(node, func(current ast.Node) bool {
+		if literal, ok := current.(*ast.FuncLit); ok && ast.Node(literal) != node {
+			return false
+		}
+		switch value := current.(type) {
 		case *ast.Ident:
+			if !nonBindingPositions[value.Pos()] && scope.allowed(value.Name) {
+				return true
+			}
 			tokens = append(tokens, sourceTokens(value.Name)...)
 		case *ast.BasicLit:
 			text := value.Value
@@ -518,6 +758,8 @@ func (c *checker) scanText(path string) error {
 	depth := 0
 	awaitingBrace := false
 	awaitingTypeBody := false
+	typeAliasBranchSeen := false
+	typeAliasRequiresNext := false
 	for index, line := range strings.Split(string(contents), "\n") {
 		declaration := false
 		if match := declarationPattern.FindStringSubmatch(line); len(match) == 3 {
@@ -529,6 +771,17 @@ func (c *checker) scanText(path string) error {
 			awaitingTypeBody = kind == "type" &&
 				!strings.Contains(line, "{") &&
 				typeAliasAwaitsBody(line)
+			typeAliasBranchSeen = false
+			typeAliasRequiresNext = false
+		} else if awaitingTypeBody &&
+			typeAliasBranchSeen &&
+			!typeAliasRequiresNext &&
+			!ignorableTextLine(line) &&
+			!typeAliasContinuationLine(line) &&
+			!strings.Contains(line, "{") {
+			context = ""
+			awaitingTypeBody = false
+			typeAliasBranchSeen = false
 		}
 		c.addTextAllowingThirdPartyTypes(path, index+1, context+" "+textLineForScan(line))
 		if context == "" {
@@ -540,6 +793,8 @@ func (c *checker) scanText(path string) error {
 		if openBraces > 0 || depth > 0 {
 			awaitingBrace = false
 			awaitingTypeBody = false
+			typeAliasBranchSeen = false
+			typeAliasRequiresNext = false
 			depth += openBraces - closeBraces
 			if depth <= 0 && closeBraces > 0 {
 				context = ""
@@ -553,8 +808,22 @@ func (c *checker) scanText(path string) error {
 			continue
 		}
 		if awaitingTypeBody && !ignorableTextLine(line) {
-			context = ""
-			awaitingTypeBody = false
+			trimmed := strings.TrimSpace(line)
+			continuation := typeAliasContinuationLine(line) || typeAliasRequiresNext
+			if continuation {
+				typeAliasBranchSeen = true
+				typeAliasRequiresNext = strings.HasSuffix(trimmed, "|") ||
+					strings.HasSuffix(trimmed, "&")
+				if strings.HasSuffix(trimmed, ";") {
+					context = ""
+					awaitingTypeBody = false
+					typeAliasBranchSeen = false
+					typeAliasRequiresNext = false
+				}
+			} else {
+				context = ""
+				awaitingTypeBody = false
+			}
 		}
 	}
 	return nil
@@ -563,6 +832,11 @@ func (c *checker) scanText(path string) error {
 func typeAliasAwaitsBody(line string) bool {
 	line, _, _ = strings.Cut(line, "//")
 	return strings.HasSuffix(strings.TrimSpace(line), "=")
+}
+
+func typeAliasContinuationLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "|") || strings.HasPrefix(trimmed, "&")
 }
 
 func ignorableTextLine(line string) bool {

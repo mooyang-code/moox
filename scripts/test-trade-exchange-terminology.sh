@@ -30,7 +30,13 @@ type ConfigProvider struct{}
 // Trade runtime uses OpenTelemetry TracerProvider.
 var tradeTracerProvider trace.TracerProvider = trace.TracerProvider(nil)
 
-func NewTradeRuntime(provider trace.TracerProvider) {}
+func NewTradeRuntime(provider trace.TracerProvider) {
+	_ = provider
+	var runtime struct {
+		tracerProvider trace.TracerProvider
+	}
+	runtime.tracerProvider = provider
+}
 func NewTradeConfig(provider ConfigProvider)         {}
 func NewTradeComposite(
 	providers []trace.TracerProvider,
@@ -42,6 +48,8 @@ func NewTradeComposite(
 func BuildTradeRuntime() {
 	tradeTracerProvider := trace.TracerProvider(nil)
 	_ = tradeTracerProvider
+	providers := make([]trace.TracerProvider, 0)
+	_ = providers
 }
 
 type TradeTelemetry[T trace.TracerProvider] struct {
@@ -334,6 +342,16 @@ export type ExchangeRequest =
 }
 EOF
 
+cat >"${TMP}/web/src/api/trade/bad_union.ts" <<'EOF'
+export type ExchangeMode =
+  | "spot"
+  | Broker;
+
+export type ExchangeSource =
+  | "manual"
+  | Provider;
+EOF
+
 cat >"${TMP}/web/src/api/trade/bad.yaml" <<'EOF'
 trade_provider: binance
 EOF
@@ -357,7 +375,7 @@ for fixture in \
   bad_type_specs.go bad_generic_constraints.go bad_recursive_types.go \
   bad_results.go bad_short_decl.go bad_range.go bad_secretclient.go \
   bad_secret_wire.go bad_struct_tags.go bad.proto bad_multiline.proto bad.ts \
-  bad_third_party_name.ts bad_multiline.ts \
+  bad_third_party_name.ts bad_multiline.ts bad_union.ts \
   bad.yaml bad.md; do
   if ! rg -q --fixed-strings "${fixture}:" "${TMP}/bad.out"; then
     echo "checker did not report ${fixture}" >&2
@@ -386,7 +404,8 @@ for expected in \
   bad_multiline.proto:5 \
   bad_third_party_name.ts:2 bad_third_party_name.ts:3 \
   bad_third_party_name.ts:4 bad_third_party_name.ts:5 \
-  bad_multiline.ts:3 bad_multiline.ts:8; do
+  bad_multiline.ts:3 bad_multiline.ts:8 \
+  bad_union.ts:3 bad_union.ts:7; do
   rg -q --fixed-strings "${expected}:" "${TMP}/bad.out" || {
     echo "checker did not report ${expected}" >&2
     cat "${TMP}/bad.out" >&2
@@ -417,6 +436,7 @@ rm \
   "${TMP}/web/src/api/trade/bad.ts" \
   "${TMP}/web/src/api/trade/bad_third_party_name.ts" \
   "${TMP}/web/src/api/trade/bad_multiline.ts" \
+  "${TMP}/web/src/api/trade/bad_union.ts" \
   "${TMP}/web/src/api/trade/bad.yaml" \
   "${TMP}/web/src/api/trade/bad.md"
 
