@@ -99,7 +99,9 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	return nil
 }
 
-var decimalQuantityPattern = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
+const maxTargetQuantityLength = 256
+
+var decimalQuantityPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
 func validateTradeTargetRequested(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*tradeeventpb.TargetIntent)
@@ -111,7 +113,8 @@ func validateTradeTargetRequested(message *eventpb.EventMessage, value proto.Mes
 		strings.TrimSpace(payload.GetExecutionBindingId()) == "" ||
 		strings.TrimSpace(payload.GetExchangeAccountId()) == "" ||
 		strings.TrimSpace(payload.GetDataRevision()) == "" ||
-		payload.GetCommandSequence() == 0 {
+		payload.GetCommandSequence() == 0 ||
+		payload.GetCommandSequence() > math.MaxInt64 {
 		return fmt.Errorf("trade target identity or command_sequence is incomplete")
 	}
 	if payload.GetNotAfterUnixMs() <= 0 || payload.GetNotAfterUnixMs() <= time.Now().UnixMilli() {
@@ -122,6 +125,9 @@ func validateTradeTargetRequested(message *eventpb.EventMessage, value proto.Mes
 		if target == nil {
 			return fmt.Errorf("trade target %d is nil", i)
 		}
+		if strings.TrimSpace(target.GetInstrumentId()) == "" {
+			return fmt.Errorf("trade target %d instrument_id is empty", i)
+		}
 		symbol := target.GetSymbol()
 		if strings.TrimSpace(symbol) == "" {
 			return fmt.Errorf("trade target %d symbol is empty", i)
@@ -131,7 +137,7 @@ func validateTradeTargetRequested(message *eventpb.EventMessage, value proto.Mes
 		}
 		seenSymbols[symbol] = struct{}{}
 		quantity := target.GetTargetQuantity()
-		if !decimalQuantityPattern.MatchString(quantity) {
+		if len(quantity) > maxTargetQuantityLength || !decimalQuantityPattern.MatchString(quantity) {
 			return fmt.Errorf("trade target %d quantity is not decimal", i)
 		}
 		if _, ok := new(big.Rat).SetString(quantity); !ok {
