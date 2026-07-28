@@ -17,6 +17,9 @@ root = pathlib.Path(sys.argv[1])
 manifest = yaml.safe_load((root / "packages/doctor/components.yaml").read_text())
 seed = yaml.safe_load((root / "examples/service-deployments.seed.yaml").read_text())
 defaults = (root / "modules/admin/internal/service/sysdeploy/defaults.go").read_text()
+policy_path = root / "examples/monitor-pipelines.yaml"
+policy_text = policy_path.read_text()
+policy = yaml.safe_load(policy_text)
 
 components = {
     item["service_name"]: item
@@ -51,6 +54,30 @@ for name, component in components.items():
         raise SystemExit(f"{name}: seed monitoring must be enabled")
     if component["transport"] not in {"reporter", "host_snapshot", "health_only"}:
         raise SystemExit(f"{name}: unsupported transport {component['transport']!r}")
+
+if policy.get("version") != 2:
+    raise SystemExit("monitor policy must use version 2")
+if "crosses_storage_deferred" in policy_text:
+    raise SystemExit("monitor policy still contains crosses_storage_deferred")
+defaults_policy = ((policy.get("realtime_timeseries") or {}).get("defaults") or {})
+required_defaults = {
+    "run_missed_intervals",
+    "success_missed_intervals",
+    "watermark_periods",
+    "minimum_watermark_lag",
+}
+if set(defaults_policy) != required_defaults:
+    raise SystemExit(
+        f"monitor policy defaults mismatch: got={sorted(defaults_policy)}"
+    )
+
+for module in ("collector", "factor"):
+    bootstrap = (root / "modules" / module / "internal/bootstrap/bootstrap.go").read_text()
+    inventory = (root / "modules" / module / "internal/observability/realtime_inventory.go").read_text()
+    if "NewDatasetMetrics" not in bootstrap or "NewRealtimeInventory" not in bootstrap:
+        raise SystemExit(f"{module}: DatasetMetrics inventory is not registered")
+    if "ReplaceExpected" not in inventory:
+        raise SystemExit(f"{module}: realtime inventory does not replace expected datasets")
 
 print(f"monitor coverage contract: {len(components)} independent processes")
 PY

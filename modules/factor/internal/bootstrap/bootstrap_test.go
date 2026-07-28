@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,6 +13,25 @@ import (
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/stretchr/testify/require"
 )
+
+type inventoryReconcilerStub struct {
+	due       bool
+	refreshes int
+	err       error
+}
+
+func (s *inventoryReconcilerStub) Due(time.Time) bool { return s.due }
+func (s *inventoryReconcilerStub) Refresh(context.Context) error {
+	s.refreshes++
+	return s.err
+}
+
+type metricsReporterStub struct{ calls int }
+
+func (s *metricsReporterStub) Handle(context.Context) error {
+	s.calls++
+	return nil
+}
 
 func TestBuildSchedulerTaskUsesRealtimeHalfOpenRange(t *testing.T) {
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "factor.db")})
@@ -54,4 +74,14 @@ func TestRealtimeConsumerReadyWhenEventBusDisabled(t *testing.T) {
 	cfg := Default()
 	cfg.EventBus.URLs = nil
 	require.True(t, realtimeConsumerReady(cfg, nil))
+}
+
+func TestMetricsTimerRefreshFailureDoesNotBlockReporter(t *testing.T) {
+	inventory := &inventoryReconcilerStub{due: true, err: errors.New("refresh failed")}
+	reporter := &metricsReporterStub{}
+	handler := metricsTimerHandler(inventory, reporter, time.Now)
+
+	require.NoError(t, handler(context.Background()))
+	require.Equal(t, 1, inventory.refreshes)
+	require.Equal(t, 1, reporter.calls)
 }

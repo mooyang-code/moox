@@ -676,6 +676,42 @@ type recordingDatasetObserver struct {
 	observations []mooxreport.DatasetObservation
 }
 
+type inventoryStub struct {
+	dirty     int
+	refreshes int
+	err       error
+}
+
+func (s *inventoryStub) MarkDirty() { s.dirty++ }
+func (s *inventoryStub) Refresh(context.Context) error {
+	s.refreshes++
+	return s.err
+}
+
+func TestTaskRuleMutationRefreshFailureDoesNotRollback(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	mgr, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = mgr.Close() })
+	inventory := &inventoryStub{err: errors.New("inventory unavailable")}
+	svc := New(mgr, Dependencies{RealtimeInventory: inventory})
+	svc.datasetSrc = &fakeRuleDatasetSource{datasets: map[string]storagesource.DatasetInfo{
+		"ds-1": {DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active"},
+	}}
+
+	rsp, err := svc.CreateTaskRule(context.Background(), &pb.CreateTaskRuleReq{Rule: &pb.TaskRule{
+		SpaceId: "crypto", RuleId: "inventory-rule", DataType: "symbol", Exchange: "binance",
+		CollectParams: validCollectParams(t), Enabled: boolPtr(true),
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	_, err = mgr.TaskRules().GetByRuleID(context.Background(), "crypto", "inventory-rule")
+	require.NoError(t, err)
+	require.Equal(t, 1, inventory.dirty)
+	require.Equal(t, 1, inventory.refreshes)
+}
+
 func (o *recordingDatasetObserver) ObserveRun(observation mooxreport.DatasetObservation) error {
 	o.observations = append(o.observations, observation)
 	return nil

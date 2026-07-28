@@ -2,14 +2,17 @@ package primarystore
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/report"
 )
 
 type recordingNode struct {
@@ -98,6 +101,131 @@ func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 	}
 	if !reflect.DeepEqual(resolved, []string{"space-a/shared", "space-b/shared"}) {
 		t.Fatalf("resolved=%v", resolved)
+	}
+}
+
+type recordingDatasetMetrics struct {
+	observations []report.DatasetObservation
+}
+
+func (m *recordingDatasetMetrics) ObserveRun(observation report.DatasetObservation) error {
+	m.observations = append(m.observations, observation)
+	return nil
+}
+
+func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
+	node := &recordingNode{
+		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			keys := make([]*pb.RowKey, 0, len(req.GetRows()))
+			for _, row := range req.GetRows() {
+				keys = append(keys, row.GetKey())
+			}
+			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: keys}, nil
+		},
+	}
+	metrics := &recordingDatasetMetrics{}
+	svc, err := New(Options{Node: node, DatasetMetrics: metrics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := func(freq string, at time.Time) *pb.RowFieldUpsert {
+		return &pb.RowFieldUpsert{
+			Key: &pb.RowKey{
+				SpaceId: "crypto", DatasetId: "market_kline",
+				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+					SubjectId: "BTC-USDT", Freq: freq, DataTime: at.UTC().Format(time.RFC3339Nano),
+				}},
+			},
+			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{
+				Value: &pb.TypedValue_DoubleValue{DoubleValue: 1},
+			}}},
+		}
+	}
+	t1003 := time.Date(2026, 7, 28, 10, 3, 0, 0, time.UTC)
+	t1005 := t1003.Add(2 * time.Minute)
+	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"},
+		Rows:     []*pb.RowFieldUpsert{row("1m", t1003), row("1m", t1005), row("5m", t1003)},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("write rsp=%v err=%v", rsp, err)
+	}
+	if len(metrics.observations) != 2 {
+		t.Fatalf("observations=%v", metrics.observations)
+	}
+	got := map[string]report.DatasetObservation{}
+	for _, observation := range metrics.observations {
+		got[observation.Key.Freq] = observation
+	}
+	if got["1m"].Rows != 2 || !got["1m"].OutputWatermark.Equal(t1005) || got["1m"].Result != "success" {
+		t.Fatalf("1m observation=%+v", got["1m"])
+	}
+	if got["5m"].Rows != 1 || !got["5m"].OutputWatermark.Equal(t1003) || got["5m"].Result != "success" {
+		t.Fatalf("5m observation=%+v", got["5m"])
+	}
+}
+
+func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
+	node := &recordingNode{write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+		return nil, errors.New("write failed")
+	}}
+	metrics := &recordingDatasetMetrics{}
+	svc, err := New(Options{Node: node, DatasetMetrics: metrics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 7, 28, 10, 5, 0, 0, time.UTC)
+	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"},
+		Rows: []*pb.RowFieldUpsert{{
+			Key: &pb.RowKey{
+				SpaceId: "crypto", DatasetId: "market_kline",
+				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+					SubjectId: "BTC-USDT", Freq: "1m", DataTime: at.Format(time.RFC3339Nano),
+				}},
+			},
+			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{
+				Value: &pb.TypedValue_DoubleValue{DoubleValue: 1},
+			}}},
+		}}})
+	if err != nil || rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
+		t.Fatalf("write rsp=%v err=%v", rsp, err)
+	}
+	if len(metrics.observations) != 1 {
+		t.Fatalf("observations=%v", metrics.observations)
+	}
+	observation := metrics.observations[0]
+	if observation.Result != "error" || !observation.OutputWatermark.IsZero() {
+		t.Fatalf("observation=%+v", observation)
+	}
+}
+
+func TestPrimaryDoesNotObserveRecordDataset(t *testing.T) {
+	node := &recordingNode{write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+		return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
+	}}
+	metrics := &recordingDatasetMetrics{}
+	svc, err := New(Options{Node: node, DatasetMetrics: metrics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"},
+		Rows: []*pb.RowFieldUpsert{{
+			Key: &pb.RowKey{
+				SpaceId: "crypto", DatasetId: "symbols",
+				Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "BTC-USDT", Version: "1"}},
+			},
+			Fields: []*pb.FieldValue{{FieldId: "symbol", Value: &pb.TypedValue{
+				Value: &pb.TypedValue_StringValue{StringValue: "BTC-USDT"},
+			}}},
+		}},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("write rsp=%v err=%v", rsp, err)
+	}
+	if len(metrics.observations) != 0 {
+		t.Fatalf("record dataset observations=%v", metrics.observations)
 	}
 }
 

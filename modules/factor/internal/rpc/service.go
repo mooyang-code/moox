@@ -18,6 +18,7 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var _ factorpb.FactorMgrService = (*Service)(nil)
@@ -27,6 +28,11 @@ var pythonModuleNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 type schedulerRuntime interface {
 	Status() scheduler.Status
 	Run(context.Context, scheduler.Task) error
+}
+
+type realtimeInventory interface {
+	MarkDirty()
+	Refresh(context.Context) error
 }
 
 // Option customizes a FactorMgr service.
@@ -48,6 +54,14 @@ func WithMetadataSync(syncer *registry.MetadataSync) Option {
 	}
 }
 
+// WithRealtimeInventory refreshes the derived expected Dataset registry after
+// successful factor or binding mutations.
+func WithRealtimeInventory(inventory realtimeInventory) Option {
+	return func(s *Service) {
+		s.inventory = inventory
+	}
+}
+
 // Service implements FactorMgr.
 type Service struct {
 	factors    *store.FactorRepository
@@ -56,6 +70,7 @@ type Service struct {
 	factorsDir string
 	publisher  *moduleregistry.SourcePublisher
 	meta       *registry.MetadataSync
+	inventory  realtimeInventory
 }
 
 // NewWithRuntime creates a FactorMgr service with an optional scheduler runtime.
@@ -87,6 +102,7 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 	if err := s.factors.Upsert(ctx, factor); err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	if err := s.syncFactorBindings(ctx, factor.FactorID); err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
@@ -109,6 +125,7 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	if err := s.factors.Upsert(ctx, factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	if err := s.syncFactorBindings(ctx, factor.FactorID); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
@@ -162,6 +179,7 @@ func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorSt
 	if err := s.factors.SetStatus(ctx, req.GetFactorId(), req.GetStatus()); err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	got, err := s.factors.Get(ctx, req.GetFactorId())
 	if err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
@@ -183,6 +201,7 @@ func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBinding
 	if err := s.bindings.Upsert(ctx, binding); err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}, nil
 }
 
@@ -206,7 +225,20 @@ func (s *Service) DeleteBinding(ctx context.Context, req *factorpb.DeleteBinding
 	if err := s.bindings.Delete(ctx, req.GetBindingId()); err != nil {
 		return &factorpb.DeleteBindingRsp{RetInfo: inner(err)}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	return &factorpb.DeleteBindingRsp{RetInfo: success()}, nil
+}
+
+func (s *Service) refreshRealtimeInventory(ctx context.Context) {
+	if s.inventory == nil {
+		return
+	}
+	s.inventory.MarkDirty()
+	if err := s.inventory.Refresh(ctx); err != nil {
+		// Inventory is derived observability state. Keep the committed business
+		// mutation and let the metrics timer retry the dirty snapshot.
+		log.WarnContextf(ctx, "[Factor] refresh realtime dataset inventory failed: %v", err)
+	}
 }
 
 func (s *Service) GetEngineStatus(context.Context, *factorpb.GetEngineStatusReq) (*factorpb.GetEngineStatusRsp, error) {

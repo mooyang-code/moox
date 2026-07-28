@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
+	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
@@ -65,12 +66,17 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector dataset metrics: %w", err)
 	}
+	realtimeInventory := collectorobservability.NewRealtimeInventory(dbm.TaskRules(), datasetMetrics)
+	if err := realtimeInventory.Refresh(ctx); err != nil {
+		return nil, fmt.Errorf("initialize collector realtime dataset inventory: %w", err)
+	}
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
 		AdminGatewayURL:                deps.AdminGatewayURL,
 		ServiceAuth:                    taskpublisherAuth(deps.ServiceAuth),
 		StorageRPCGatewayTarget:        deps.StorageRPCGatewayTarget,
 		PlannerStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
 		DatasetMetrics:                 datasetMetrics,
+		RealtimeInventory:              realtimeInventory,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)
@@ -78,7 +84,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	registerCollectorSchedule(s)
-	registerMetricsReporter(s)
+	registerMetricsReporter(s, realtimeInventory)
 
 	keepDB = true
 	if done := ctx.Done(); done != nil {
@@ -91,7 +97,16 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func registerMetricsReporter(s *server.Server) {
+type realtimeInventoryReconciler interface {
+	Due(time.Time) bool
+	Refresh(context.Context) error
+}
+
+type metricsReporter interface {
+	Handle(context.Context) error
+}
+
+func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler) {
 	if s == nil {
 		return
 	}
@@ -105,7 +120,18 @@ func registerMetricsReporter(s *server.Server) {
 		log.Warn("collector metrics timer service is not configured, skip register")
 		return
 	}
-	timer.RegisterHandlerService(service, h.Handle)
+	timer.RegisterHandlerService(service, metricsTimerHandler(inventory, h, time.Now))
+}
+
+func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metricsReporter, now func() time.Time) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if inventory != nil && inventory.Due(now()) {
+			if err := inventory.Refresh(ctx); err != nil {
+				log.WarnContextf(ctx, "collector realtime dataset inventory refresh failed: %v", err)
+			}
+		}
+		return reporter.Handle(ctx)
+	}
 }
 
 func registerHealth(s *server.Server, cfg *Config, dbm *store.Store) error {

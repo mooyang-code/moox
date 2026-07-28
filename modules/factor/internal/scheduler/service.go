@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/report"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -26,7 +27,19 @@ type Config struct {
 
 type StorageIO interface {
 	ReadRangeChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, int, []string) (*storageio.RangeChunk, error)
-	WriteFactorPatch(context.Context, *engine.FactorTask, []time.Time, *engine.FactorResult) error
+	WriteFactorPatch(context.Context, *engine.FactorTask, []time.Time, *engine.FactorResult) (uint64, error)
+}
+
+type DatasetRunObserver interface {
+	ObserveRun(report.DatasetObservation) error
+}
+
+type Option func(*Service)
+
+func WithDatasetMetrics(metrics DatasetRunObserver) Option {
+	return func(service *Service) {
+		service.metrics = metrics
+	}
 }
 
 type Status struct {
@@ -38,6 +51,7 @@ type Service struct {
 	cfg          Config
 	storage      StorageIO
 	exec         engine.Executor
+	metrics      DatasetRunObserver
 	mu           sync.Mutex
 	queues       [][]taskKey
 	pending      map[taskKey]Task
@@ -50,7 +64,7 @@ type Service struct {
 	wake         []chan struct{}
 }
 
-func NewService(cfg Config, storage StorageIO, exec engine.Executor) *Service {
+func NewService(cfg Config, storage StorageIO, exec engine.Executor, opts ...Option) *Service {
 	if cfg.Workers <= 0 {
 		cfg.Workers = 1
 	}
@@ -68,6 +82,11 @@ func NewService(cfg Config, storage StorageIO, exec engine.Executor) *Service {
 	}
 	for i := range s.wake {
 		s.wake[i] = make(chan struct{}, 1)
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
 	}
 	return s
 }
@@ -230,6 +249,12 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 		status := "succeeded"
 		if runErr != nil {
 			status = "failed"
+			s.observeDatasetRun(ctx, report.DatasetObservation{
+				Key: report.DatasetKey{
+					SpaceID: task.SpaceID, DatasetID: task.TargetDataset, Freq: task.Freq,
+				},
+				Result: "error", FinishedAt: time.Now().UTC(),
+			})
 		}
 		log.InfoContextf(ctx, "factor_task_done task_id=%s trigger_type=%s space_id=%s source_dataset=%s target_dataset=%s subject_id=%s freq=%s start_time=%s end_time=%s factor_count=%d chunk_count=%d status=%s task_elapsed_ms=%d error=%q",
 			task.TaskID, task.TriggerType, task.SpaceID, task.SourceDataset, task.TargetDataset,
@@ -266,9 +291,24 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 			if err := validateFactorResult(task.Factors, len(chunk.TargetTimes), result); err != nil {
 				return engine.NonRetryableError{Err: err}
 			}
-			if err := s.storage.WriteFactorPatch(ctx, &chunkTask, chunk.TargetTimes, result); err != nil {
+			rowsWritten, err := s.storage.WriteFactorPatch(ctx, &chunkTask, chunk.TargetTimes, result)
+			if err != nil {
 				return engine.RetryableError{Err: err}
 			}
+			observation := report.DatasetObservation{
+				Key: report.DatasetKey{
+					SpaceID: task.SpaceID, DatasetID: task.TargetDataset, Freq: task.Freq,
+				},
+				Result: "success", Rows: rowsWritten, FinishedAt: time.Now().UTC(),
+			}
+			if rowsWritten == 0 {
+				observation.Result = "empty"
+			} else {
+				watermark := maxTime(chunk.TargetTimes)
+				observation.InputWatermark = watermark
+				observation.OutputWatermark = watermark
+			}
+			s.observeDatasetRun(ctx, observation)
 			return nil
 		})
 		if runErr != nil {
@@ -285,6 +325,29 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 		cursor = chunk.TargetTimes[len(chunk.TargetTimes)-1].Add(time.Nanosecond)
 	}
 	return nil
+}
+
+func (s *Service) observeDatasetRun(ctx context.Context, observation report.DatasetObservation) {
+	if s == nil || s.metrics == nil {
+		return
+	}
+	if err := s.metrics.ObserveRun(observation); err != nil {
+		log.WarnContextf(
+			ctx,
+			"factor dataset metrics observe failed space_id=%s dataset_id=%s freq=%s result=%s: %v",
+			observation.Key.SpaceID, observation.Key.DatasetID, observation.Key.Freq, observation.Result, err,
+		)
+	}
+}
+
+func maxTime(items []time.Time) time.Time {
+	var maximum time.Time
+	for _, item := range items {
+		if maximum.IsZero() || item.After(maximum) {
+			maximum = item
+		}
+	}
+	return maximum
 }
 
 func (s *Service) withRetry(ctx context.Context, fn func() error) error {

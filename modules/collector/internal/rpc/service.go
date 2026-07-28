@@ -33,11 +33,18 @@ type Dependencies struct {
 	// It overrides the runtime Storage target when both are available.
 	PlannerStorageRPCGatewayTarget string
 	DatasetMetrics                 DatasetRunObserver
+	RealtimeInventory              RealtimeInventory
 }
 
 // DatasetRunObserver records accepted realtime Dataset results.
 type DatasetRunObserver interface {
 	ObserveRun(mooxreport.DatasetObservation) error
+}
+
+// RealtimeInventory reconciles the derived expected Dataset registry.
+type RealtimeInventory interface {
+	MarkDirty()
+	Refresh(context.Context) error
 }
 
 // Service implements the independent CollectMgr RPC service.
@@ -49,6 +56,7 @@ type Service struct {
 	datasetSrc     datasetSource
 	cloudJobs      *taskpublisher.Client
 	datasetMetrics DatasetRunObserver
+	inventory      RealtimeInventory
 	now            func() time.Time
 }
 
@@ -73,6 +81,7 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 			Auth:                 deps.ServiceAuth,
 		}),
 		datasetMetrics: deps.DatasetMetrics,
+		inventory:      deps.RealtimeInventory,
 		now:            time.Now,
 	}
 }
@@ -180,6 +189,7 @@ func (s *Service) CreateTaskRule(ctx context.Context, req *pb.CreateTaskRuleReq)
 		log.ErrorContextf(ctx, "[Collector] create task rule failed: %v", err)
 		return &pb.CreateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	return &pb.CreateTaskRuleRsp{RetInfo: retOK(), RuleId: rule.RuleID}, nil
 }
 
@@ -215,6 +225,7 @@ func (s *Service) UpdateTaskRule(ctx context.Context, req *pb.UpdateTaskRuleReq)
 		log.ErrorContextf(ctx, "[Collector] update task rule failed: %v", err)
 		return &pb.UpdateTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	return &pb.UpdateTaskRuleRsp{RetInfo: retOK(), Rule: toPBRule(*updated)}, nil
 }
 
@@ -230,7 +241,18 @@ func (s *Service) DisableTaskRule(ctx context.Context, req *pb.DisableTaskRuleRe
 		log.ErrorContextf(ctx, "[Collector] disable task rule failed: %v", err)
 		return &pb.DisableTaskRuleRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	s.refreshRealtimeInventory(ctx)
 	return &pb.DisableTaskRuleRsp{RetInfo: retOK()}, nil
+}
+
+func (s *Service) refreshRealtimeInventory(ctx context.Context) {
+	if s.inventory == nil {
+		return
+	}
+	s.inventory.MarkDirty()
+	if err := s.inventory.Refresh(ctx); err != nil {
+		log.WarnContextf(ctx, "[Collector] refresh realtime dataset inventory failed: %v", err)
+	}
 }
 
 // GetTaskInstanceList returns task instances from the new collector DB.

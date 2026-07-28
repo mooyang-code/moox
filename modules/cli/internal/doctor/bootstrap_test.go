@@ -39,7 +39,7 @@ func TestRunBootstrapInventory(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "components.yaml.sha256"), []byte(releaseManifest.Checksum), 0o600))
 	require.NoError(t, os.WriteFile(seedPath, []byte(seed), 0o600))
-	require.NoError(t, os.WriteFile(pipelinePath, []byte("version: 1\npipelines: []\n"), 0o600))
+	require.NoError(t, os.WriteFile(pipelinePath, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n  overrides: []\n"), 0o600))
 	report, err := RunBootstrap(context.Background(), BootstrapOptions{NodeID: "node-a", LocalNodeID: "node-a", ReleaseRoot: root, SeedPath: seedPath, PipelinePath: pipelinePath, CheckIDs: []string{"bootstrap.inventory"}, Client: deploymentClientStub{rows: rows}})
 	require.NoError(t, err)
 	require.Equal(t, core.ConclusionHealthy, report.Conclusion)

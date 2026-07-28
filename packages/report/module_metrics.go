@@ -38,59 +38,6 @@ type ModuleMetrics struct {
 	maxSeries        int
 }
 
-var defaultModuleMetrics = struct {
-	sync.Mutex
-	items map[string]*ModuleMetrics
-}{items: map[string]*ModuleMetrics{}}
-
-func DefaultModuleMetrics(module string) (*ModuleMetrics, error) {
-	defaultModuleMetrics.Lock()
-	defer defaultModuleMetrics.Unlock()
-	if existing := defaultModuleMetrics.items[module]; existing != nil {
-		return existing, nil
-	}
-	cfg, err := ValidatePipelineEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	if len(cfg.Pipelines) == 0 {
-		return nil, fmt.Errorf("pipeline config is required for module metrics")
-	}
-	metrics, err := NewModuleMetrics(prometheus.DefaultRegisterer, module, cfg.IDsForModule(module))
-	if err != nil {
-		return nil, err
-	}
-	defaultModuleMetrics.items[module] = metrics
-	return metrics, nil
-}
-
-func ObserveModuleRun(module, stage, result, pipeline string, at time.Time) error {
-	metrics, err := DefaultModuleMetrics(module)
-	if err != nil {
-		return err
-	}
-	return metrics.ObserveRun(stage, result, pipeline, at)
-}
-
-func ObserveModuleWatermark(module, stage, pipeline string, at time.Time) error {
-	metrics, err := DefaultModuleMetrics(module)
-	if err != nil {
-		return err
-	}
-	return metrics.AdvanceWatermark(stage, pipeline, at)
-}
-
-// ObserveModuleInputWatermark records the latest business timestamp accepted
-// by a pipeline. It is intentionally separate from last-success and output
-// watermark metrics so Doctor never infers input progress from execution time.
-func ObserveModuleInputWatermark(module, stage, pipeline string, at time.Time) error {
-	metrics, err := DefaultModuleMetrics(module)
-	if err != nil {
-		return err
-	}
-	return metrics.AdvanceInputWatermark(stage, pipeline, at)
-}
-
 func NewModuleMetrics(registerer prometheus.Registerer, module string, pipelines []string) (*ModuleMetrics, error) {
 	if err := validateModuleName(module); err != nil {
 		return nil, err

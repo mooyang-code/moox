@@ -14,9 +14,9 @@ func (c *Client) WriteFactorPatch(
 	task *engine.FactorTask,
 	targetTimes []time.Time,
 	result *engine.FactorResult,
-) error {
+) (uint64, error) {
 	if task == nil || result == nil {
-		return fmt.Errorf("task and result are required")
+		return 0, fmt.Errorf("task and result are required")
 	}
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(targetTimes))
 	computedAt := time.Now().UTC().Format(time.RFC3339Nano)
@@ -40,7 +40,7 @@ func (c *Client) WriteFactorPatch(
 			}
 			value, ok := asFloat64(values[i])
 			if !ok {
-				return fmt.Errorf("factor column %s returned non-numeric value %T", name, values[i])
+				return 0, fmt.Errorf("factor column %s returned non-numeric value %T", name, values[i])
 			}
 			row.Fields = append(row.Fields, doubleField(name, value))
 		}
@@ -49,13 +49,16 @@ func (c *Client) WriteFactorPatch(
 		}
 	}
 	if len(rows) == 0 {
-		return nil
+		return 0, nil
 	}
 	rsp, err := c.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: c.auth, Rows: rows})
 	if err != nil {
-		return fmt.Errorf("write factor patch: %w", err)
+		return 0, fmt.Errorf("write factor patch: %w", err)
 	}
-	return ensureStorageOK("write factor patch", rsp.GetRetInfo())
+	if err := ensureStorageOK("write factor patch", rsp.GetRetInfo()); err != nil {
+		return 0, err
+	}
+	return uint64(len(rows)), nil
 }
 
 func stringValue(value string) *storagepb.TypedValue {

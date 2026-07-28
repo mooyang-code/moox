@@ -156,11 +156,11 @@ func (s *storageFake) ReadRangeChunk(context.Context, storageio.WindowKey, time.
 	}, nil
 }
 
-func (s *storageFake) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, times []time.Time, result *engine.FactorResult) error {
+func (s *storageFake) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, times []time.Time, result *engine.FactorResult) (uint64, error) {
 	s.writes++
 	s.result = result
 	if len(times) != 1 || !times[0].Equal(s.target) {
 		panic("unexpected target range")
 	}
-	return nil
+	return uint64(len(times)), nil
 }

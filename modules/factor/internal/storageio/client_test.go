@@ -34,13 +34,14 @@ func TestWriteFactorPatchSkipsNullCells(t *testing.T) {
 	access := &fakeAccessClient{}
 	c := &Client{access: access}
 	times := []time.Time{time.Unix(1, 0).UTC(), time.Unix(2, 0).UTC()}
-	err := c.WriteFactorPatch(context.Background(), &engine.FactorTask{
+	rowsWritten, err := c.WriteFactorPatch(context.Background(), &engine.FactorTask{
 		TaskID: "t", SpaceID: "crypto", TargetDataset: "factor",
 		SubjectID: "BTC", Freq: "1m",
 	}, times, &engine.FactorResult{Columns: map[string][]any{
 		"Bias_20": {nil, 2.0}, "Cci_14": {1.0, 3.0},
 	}})
 	require.NoError(t, err)
+	require.EqualValues(t, 2, rowsWritten)
 	require.Len(t, access.writeReqs, 1)
 	require.Len(t, access.writeReqs[0].GetRows(), 2)
 	require.Len(t, access.writeReqs[0].GetRows()[0].GetFields(), 1)

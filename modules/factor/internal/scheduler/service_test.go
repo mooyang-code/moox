@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/stretchr/testify/require"
 )
 
@@ -107,6 +108,58 @@ func TestRunHonorsCanceledContext(t *testing.T) {
 	require.ErrorIs(t, svc.Run(ctx, oneBarTask("BTC", time.Unix(1, 0))), context.Canceled)
 }
 
+type recordingDatasetObserver struct {
+	observations []report.DatasetObservation
+}
+
+func (o *recordingDatasetObserver) ObserveRun(observation report.DatasetObservation) error {
+	o.observations = append(o.observations, observation)
+	return nil
+}
+
+func TestRunObservesWatermarkOnlyAfterFactorPatchCommit(t *testing.T) {
+	base := time.Date(2026, 7, 28, 10, 3, 0, 0, time.UTC)
+	targetTimes := []time.Time{base, base.Add(2 * time.Minute)}
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{frameChunk(targetTimes)}}
+	observer := &recordingDatasetObserver{}
+	svc := NewService(Config{}, storage, &fakeExecutor{}, WithDatasetMetrics(observer))
+
+	require.NoError(t, svc.Run(context.Background(), oneBarTask("BTC", base)))
+	require.Len(t, observer.observations, 1)
+	observation := observer.observations[0]
+	require.Equal(t, report.DatasetKey{
+		SpaceID: "crypto", DatasetID: "bars_factor", Freq: "1m",
+	}, observation.Key)
+	require.Equal(t, "success", observation.Result)
+	require.EqualValues(t, 2, observation.Rows)
+	require.Equal(t, targetTimes[1], observation.InputWatermark)
+	require.Equal(t, targetTimes[1], observation.OutputWatermark)
+}
+
+func TestMaxTimeDoesNotAssumeTargetOrder(t *testing.T) {
+	base := time.Date(2026, 7, 28, 10, 3, 0, 0, time.UTC)
+	require.Equal(t, base.Add(2*time.Minute), maxTime([]time.Time{
+		base.Add(time.Minute), base.Add(2 * time.Minute), base,
+	}))
+}
+
+func TestRunWriteFailureDoesNotAdvanceFactorWatermark(t *testing.T) {
+	base := time.Date(2026, 7, 28, 10, 5, 0, 0, time.UTC)
+	storage := &fakeStorage{
+		chunks:   []*storageio.RangeChunk{frameChunk([]time.Time{base})},
+		writeErr: errors.New("storage unavailable"),
+	}
+	observer := &recordingDatasetObserver{}
+	svc := NewService(Config{}, storage, &fakeExecutor{}, WithDatasetMetrics(observer))
+
+	require.Error(t, svc.Run(context.Background(), oneBarTask("BTC", base)))
+	require.Len(t, observer.observations, 1)
+	observation := observer.observations[0]
+	require.Equal(t, "error", observation.Result)
+	require.True(t, observation.InputWatermark.IsZero())
+	require.True(t, observation.OutputWatermark.IsZero())
+}
+
 func oneBarTask(subject string, at time.Time) Task {
 	return Task{FactorTask: engine.FactorTask{
 		TaskID: "task-" + subject + at.String(), SpaceID: "crypto",
@@ -133,9 +186,12 @@ func (s *fakeStorage) ReadRangeChunk(context.Context, storageio.WindowKey, time.
 	}
 	return chunk, nil
 }
-func (s *fakeStorage) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, times []time.Time, _ *engine.FactorResult) error {
+func (s *fakeStorage) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, times []time.Time, _ *engine.FactorResult) (uint64, error) {
 	s.writeSizes = append(s.writeSizes, len(times))
-	return s.writeErr
+	if s.writeErr != nil {
+		return 0, s.writeErr
+	}
+	return uint64(len(times)), nil
 }
 
 type fakeExecutor struct {
