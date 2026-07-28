@@ -72,11 +72,7 @@ mkdir -p "${UNPACKED}/data/factor/venv/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${UNPACKED}/data/factor/venv/bin/python"
 chmod +x "${UNPACKED}/data/factor/venv/bin/python"
 factor_secret="$(tr -d '\r\n' <"${UNPACKED}/secrets/gateway-factor.key")"
-gateway_node_id="$(sed -n 's/^MOOX_GATEWAY_NODE_ID=//p' "${UNPACKED}/secrets/gateway-service.env")"
-[[ -n "${gateway_node_id}" ]] || {
-  echo "packaged gateway-service.env has no Gateway node id" >&2
-  exit 1
-}
+grep -Fxq 'MOOX_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/secrets/gateway-service.env"
 
 cat >"${UNPACKED}/bin/moox-factor-cli" <<EOF
 #!/usr/bin/env bash
@@ -101,7 +97,7 @@ grep -Fxq "MOOX_FACTOR_ENGINE_WORKER_PATH=${UNPACKED}/factor/pyworker/worker.py"
 grep -Fxq "MOOX_FACTOR_ENGINE_FACTORS_DIR=${UNPACKED}/factor/factors" "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_PYTHON_RUNTIME_PATH=${UNPACKED}/python-runtime" "${UNPACKED}/captured.env"
 grep -Fxq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=ip://127.0.0.1:11003' "${UNPACKED}/captured.env"
-grep -Fxq "MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${gateway_node_id}" "${UNPACKED}/captured.env"
+grep -Fxq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/captured.env"
 grep -Fxq 'MOOX_GATEWAY_SERVICE_KEY_ID=factor' "${UNPACKED}/captured.env"
 grep -Fxq 'MOOX_GATEWAY_CALLER=factor' "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_GATEWAY_SERVICE_SECRET_KEY=${factor_secret}" "${UNPACKED}/captured.env"
