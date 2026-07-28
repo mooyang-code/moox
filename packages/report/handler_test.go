@@ -24,7 +24,7 @@ type fakePublisher struct {
 }
 
 func validConfig(serviceName string) Config {
-	return Config{ServiceName: serviceName, InstanceID: serviceName + "@node-a", NodeID: "node-a", BootID: "boot-a"}
+	return Config{Module: "monitor", ServiceName: serviceName, InstanceID: serviceName + "@node-a", NodeID: "node-a", BootID: "boot-a"}
 }
 
 func NewHandlerWithPublisher(cfg Config, p Publisher, gatherer prometheus.Gatherer) (*Handler, error) {
@@ -126,10 +126,22 @@ func TestBuildSnapshotCountsFlattenedHistogramSamples(t *testing.T) {
 }
 
 func TestDefaultConfigUsesCentralEventBus(t *testing.T) {
-	cfg := DefaultConfig("monitor")
+	cfg := DefaultConfig("monitor", "moox_monitor")
 	if cfg.EventBusURL != DefaultBusURL || cfg.SpaceID != DefaultSpace {
 		t.Fatalf("defaults: %+v", cfg)
 	}
+}
+
+func TestNewHandlerWithRegistrySupportsDedicatedSCFMetrics(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	h, err := NewHandlerWithRegistry(validConfig("moox-collector-scf"), registry)
+	require.NoError(t, err)
+	require.Same(t, registry, h.gatherer)
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	requireMetricFamily(t, families, "moox_monitor_report_errors_total")
+	requireMetricFamily(t, families, "moox_monitor_report_last_error_timestamp_seconds")
+	requireNoLabels(t, families, "service", "module", "subject_id", "job_id", "error")
 }
 
 func TestHandlePublishesEventMessage(t *testing.T) {
@@ -151,8 +163,8 @@ func TestHandlePublishesEventMessage(t *testing.T) {
 	if len(publisher.events) != 1 {
 		t.Fatalf("published events = %d", len(publisher.events))
 	}
-	if publisher.events[0].Name() != events.MetricsSnapshotReported.Name() ||
-		publisher.events[0].Version() != events.MetricsSnapshotReported.Version() {
+	if publisher.events[0].Name() != events.ObservabilityMetricsSnapshotReported.Name() ||
+		publisher.events[0].Version() != events.ObservabilityMetricsSnapshotReported.Version() {
 		t.Fatalf("event = %+v", publisher.events[0])
 	}
 	report, ok := publisher.payloads[0].(*metricspb.MetricReport)

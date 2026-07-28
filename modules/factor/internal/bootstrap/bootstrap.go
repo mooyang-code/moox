@@ -183,7 +183,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("moox_factor"))
+	h, err := report.NewHandler(report.DefaultConfig("factor", "moox_factor"))
 	if err != nil {
 		log.Warnf("factor metrics reporter disabled: %v", err)
 		return

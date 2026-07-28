@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -23,21 +24,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-var (
-	reporterErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "moox_metrics_report_errors_total",
-		Help: "Metric snapshot reporting failures.",
-	}, []string{"service"})
-	reporterLastError = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "moox_metrics_report_last_error_timestamp_seconds",
-		Help: "Unix timestamp of the last metric snapshot reporting failure.",
-	}, []string{"service"})
-)
-
-func init() {
-	prometheus.MustRegister(reporterErrors, reporterLastError)
-}
-
 type Publisher interface {
 	Publish(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
 }
@@ -45,17 +31,36 @@ type Publisher interface {
 type Connector func(context.Context, Config) (Publisher, error)
 
 type Handler struct {
-	cfg       Config
-	gatherer  prometheus.Gatherer
-	connector Connector
-	mu        sync.Mutex
-	client    Publisher
-	sequence  atomic.Uint64
-	bootID    string
+	cfg             Config
+	gatherer        prometheus.Gatherer
+	connector       Connector
+	mu              sync.Mutex
+	client          Publisher
+	sequence        atomic.Uint64
+	bootID          string
+	reportErrors    prometheus.Counter
+	reportLastError prometheus.Gauge
 }
 
 func NewHandler(cfg Config) (*Handler, error) {
+	return newHandler(cfg, prometheus.DefaultRegisterer, prometheus.DefaultGatherer)
+}
+
+// NewHandlerWithRegistry is the SCF Sentinel mode: the caller owns the
+// process-local registry, updates it in a timer handler, and invokes Handle.
+// NewHandler remains the long-running service mode using Prometheus defaults.
+func NewHandlerWithRegistry(cfg Config, registry *prometheus.Registry) (*Handler, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("metrics reporter registry is required")
+	}
+	return newHandler(cfg, registry, registry)
+}
+
+func newHandler(cfg Config, registerer prometheus.Registerer, gatherer prometheus.Gatherer) (*Handler, error) {
 	cfg = cfg.withDefaults()
+	if err := validateModuleName(cfg.Module); err != nil {
+		return nil, fmt.Errorf("metrics reporter: %w", err)
+	}
 	if strings.TrimSpace(cfg.ServiceName) == "" {
 		return nil, fmt.Errorf("metrics reporter service name is required")
 	}
@@ -71,7 +76,24 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if _, err := regexp.Compile(cfg.ExcludeRegex); err != nil {
 		return nil, fmt.Errorf("exclude regex: %w", err)
 	}
-	return &Handler{cfg: cfg, gatherer: prometheus.DefaultGatherer, connector: connect, bootID: cfg.BootID}, nil
+	reportErrors, err := registerOrReuseCounter(registerer, prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "moox_" + cfg.Module + "_report_errors_total",
+		Help: "Metric snapshot reporting failures.",
+	}))
+	if err != nil {
+		return nil, err
+	}
+	reportLastError, err := registerOrReuseGauge(registerer, prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "moox_" + cfg.Module + "_report_last_error_timestamp_seconds",
+		Help: "Unix timestamp of the last metric snapshot reporting failure.",
+	}))
+	if err != nil {
+		return nil, err
+	}
+	return &Handler{
+		cfg: cfg, gatherer: gatherer, connector: connect, bootID: cfg.BootID,
+		reportErrors: reportErrors, reportLastError: reportLastError,
+	}, nil
 }
 
 func (h *Handler) Handle(ctx context.Context) error {
@@ -88,7 +110,7 @@ func (h *Handler) Handle(ctx context.Context) error {
 	if err != nil {
 		return h.reportError(ctx, err)
 	}
-	if _, err := client.Publish(ctx, events.MetricsSnapshotReported, &metricspb.MetricReport{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, ServiceVersion: h.cfg.Version, Sequence: seq, Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: h.cfg.SpaceID, SubjectID: h.cfg.ServiceName + "/" + h.cfg.InstanceID}); err != nil {
+	if _, err := client.Publish(ctx, events.ObservabilityMetricsSnapshotReported, &metricspb.MetricReport{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, ServiceVersion: h.cfg.Version, Sequence: seq, Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: h.cfg.SpaceID, SubjectID: h.cfg.ServiceName + "/" + h.cfg.InstanceID}); err != nil {
 		return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
 	}
 	return nil
@@ -96,11 +118,41 @@ func (h *Handler) Handle(ctx context.Context) error {
 
 func (h *Handler) reportError(ctx context.Context, err error) error {
 	if err != nil {
-		reporterErrors.WithLabelValues(h.cfg.ServiceName).Inc()
-		reporterLastError.WithLabelValues(h.cfg.ServiceName).Set(float64(time.Now().Unix()))
+		h.reportErrors.Inc()
+		h.reportLastError.Set(float64(time.Now().Unix()))
 		log.WarnContextf(ctx, "metrics snapshot report failed for %s: %v", h.cfg.ServiceName, err)
 	}
 	return err
+}
+
+func registerOrReuseCounter(registerer prometheus.Registerer, collector prometheus.Counter) (prometheus.Counter, error) {
+	if err := registerer.Register(collector); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if !errors.As(err, &already) {
+			return nil, fmt.Errorf("register reporter error counter: %w", err)
+		}
+		existing, ok := already.ExistingCollector.(prometheus.Counter)
+		if !ok {
+			return nil, fmt.Errorf("registered reporter error metric has type %T", already.ExistingCollector)
+		}
+		return existing, nil
+	}
+	return collector, nil
+}
+
+func registerOrReuseGauge(registerer prometheus.Registerer, collector prometheus.Gauge) (prometheus.Gauge, error) {
+	if err := registerer.Register(collector); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if !errors.As(err, &already) {
+			return nil, fmt.Errorf("register reporter error gauge: %w", err)
+		}
+		existing, ok := already.ExistingCollector.(prometheus.Gauge)
+		if !ok {
+			return nil, fmt.Errorf("registered reporter error metric has type %T", already.ExistingCollector)
+		}
+		return existing, nil
+	}
+	return collector, nil
 }
 
 func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {

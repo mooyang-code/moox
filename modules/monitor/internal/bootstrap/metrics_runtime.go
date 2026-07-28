@@ -24,7 +24,7 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) {
 		}
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("moox_monitor"))
+	h, err := report.NewHandler(report.DefaultConfig("monitor", "moox_monitor"))
 	if err != nil {
 		if runtime != nil {
 			runtime.setMetricsReporterState(false, err)

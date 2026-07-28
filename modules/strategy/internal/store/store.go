@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
 
@@ -20,9 +21,16 @@ var ErrIdempotencyConflict = errors.New("strategy: idempotency conflict")
 type Store struct {
 	db       *gorm.DB
 	commitMu sync.Mutex
+	metrics  *report.ModuleMetrics
 }
 
 func New(db *gorm.DB) *Store { return &Store{db: db} }
+
+func (s *Store) SetModuleMetrics(metrics *report.ModuleMetrics) {
+	if s != nil {
+		s.metrics = metrics
+	}
+}
 
 func (s *Store) CreateInitialState(ctx context.Context, state domain.State) error {
 	return s.db.WithContext(ctx).Create(&state).Error

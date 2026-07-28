@@ -14,6 +14,7 @@ import (
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -60,11 +61,16 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.WarnContextf(ctx, "[Collector] resolve dependencies from sysdeploy failed, use local defaults: %v", err)
 	}
 
+	datasetMetrics, err := report.NewDatasetMetrics(prometheus.DefaultRegisterer, "collector")
+	if err != nil {
+		return nil, fmt.Errorf("initialize collector dataset metrics: %w", err)
+	}
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
 		AdminGatewayURL:                deps.AdminGatewayURL,
 		ServiceAuth:                    taskpublisherAuth(deps.ServiceAuth),
 		StorageRPCGatewayTarget:        deps.StorageRPCGatewayTarget,
 		PlannerStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
+		DatasetMetrics:                 datasetMetrics,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	collectsvc.SetDefaultService(svc)
@@ -89,7 +95,7 @@ func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("moox_collector"))
+	h, err := report.NewHandler(report.DefaultConfig("collector", "moox_collector"))
 	if err != nil {
 		log.Warnf("collector metrics reporter disabled: %v", err)
 		return

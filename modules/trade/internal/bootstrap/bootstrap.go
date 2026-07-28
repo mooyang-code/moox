@@ -24,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -74,6 +75,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = tradeStore.Close()
 		_ = dm.Close()
 	})
+	tradeStore.SetModuleMetrics(registerMetricsReporter(s))
 	kernel := &command.Engine{Store: tradeStore, Resolver: exchangebridge.Resolver{Store: store, Factory: exchange.New}}
 
 	// 3. 装配领域服务
@@ -97,7 +99,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerKernelTimers(s, tradeStore, kernel); err != nil {
 		return nil, err
 	}
-	registerMetricsReporter(s)
 	if err := registerHealth(s, appCfg, tradeStore); err != nil {
 		return nil, err
 	}
@@ -106,21 +107,32 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func registerMetricsReporter(s *server.Server) {
+func registerMetricsReporter(s *server.Server) *report.ModuleMetrics {
 	if s == nil {
-		return
+		return nil
 	}
-	h, err := report.NewHandler(report.DefaultConfig("moox_trade"))
+	pipelines, err := report.ValidatePipelineEnvironment()
+	if err != nil {
+		log.Warnf("trade module metrics disabled: %v", err)
+		return nil
+	}
+	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "trade", pipelines.IDsForModule("trade"))
+	if err != nil {
+		log.Warnf("trade module metrics disabled: %v", err)
+		return nil
+	}
+	h, err := report.NewHandler(report.DefaultConfig("trade", "moox_trade"))
 	if err != nil {
 		log.Warnf("trade metrics reporter disabled: %v", err)
-		return
+		return moduleMetrics
 	}
 	service := s.Service("trpc.moox.trade.metrics.timer")
 	if service == nil {
 		log.Warn("trade metrics timer service is not configured, skip register")
-		return
+		return moduleMetrics
 	}
 	timer.RegisterHandlerService(service, h.Handle)
+	return moduleMetrics
 }
 
 func registerHealth(s *server.Server, cfg *config.AppConfig, store *kernelstore.Store) error {

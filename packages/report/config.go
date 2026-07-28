@@ -16,6 +16,7 @@ const (
 // Config controls one process-local metrics reporter. The timer schedule is
 // owned by tRPC; this config only controls gathering and publication.
 type Config struct {
+	Module         string
 	ServiceName    string
 	InstanceID     string
 	NodeID         string
@@ -38,8 +39,9 @@ type Config struct {
 	ExcludeRegex         string
 }
 
-func DefaultConfig(serviceName string) Config {
+func DefaultConfig(module, serviceName string) Config {
 	c := Config{
+		Module:               module,
 		ServiceName:          serviceName,
 		InstanceID:           firstEnv("MOOX_INSTANCE_ID"),
 		NodeID:               firstEnv("MOOX_NODE_ID"),
@@ -87,7 +89,7 @@ func DefaultConfig(serviceName string) Config {
 }
 
 func (c Config) withDefaults() Config {
-	d := DefaultConfig(c.ServiceName)
+	d := DefaultConfig(c.Module, c.ServiceName)
 	if c.InstanceID == "" {
 		c.InstanceID = d.InstanceID
 	}
