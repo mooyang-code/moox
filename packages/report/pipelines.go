@@ -18,8 +18,8 @@ type PipelineConfig struct {
 	RealtimeTimeSeries RealtimeTimeSeriesPolicy `yaml:"realtime_timeseries" json:"realtime_timeseries"`
 	Checksum           string                   `yaml:"-" json:"checksum"`
 
-	// Pipelines remains an in-process doctor model while callers migrate away
-	// from legacy pipeline checks. It is deliberately not accepted from YAML.
+	// Pipelines is the code-owned finite registry used by ModuleMetrics and
+	// Doctor. It is deliberately not accepted from YAML.
 	Pipelines []Pipeline `yaml:"-" json:"-"`
 }
 
@@ -56,6 +56,43 @@ type Pipeline struct {
 	CrossesStorageDeferred bool          `yaml:"crosses_storage_deferred" json:"crosses_storage_deferred"`
 }
 
+var builtInPipelines = []Pipeline{
+	{
+		ID: "cloudnode-jobs", Module: "cloudnode", SpaceID: "moox_system",
+		InputDataset: "job_items", OutputDataset: "job_results", LagTolerance: 5 * time.Minute, Enabled: true,
+	},
+	{
+		ID: "collector-market-data", Module: "collector", SpaceID: "crypto",
+		InputDataset: "collector_tasks", OutputDataset: "market_data", LagTolerance: 5 * time.Minute, Enabled: true,
+	},
+	{
+		ID: "factor-calculation", Module: "factor", SpaceID: "crypto",
+		InputDataset: "market_data", OutputDataset: "factor_results", LagTolerance: 10 * time.Minute, Enabled: true,
+	},
+	{
+		ID: "strategy-targets", Module: "strategy", SpaceID: "crypto",
+		InputDataset: "factor_results", OutputDataset: "strategy_targets", LagTolerance: 10 * time.Minute, Enabled: true,
+	},
+	{
+		ID: "trade-rebalance", Module: "trade", SpaceID: "crypto",
+		InputDataset: "strategy_targets", OutputDataset: "trade_orders", LagTolerance: 5 * time.Minute, Enabled: true,
+	},
+	{
+		ID: "archive-materialize", Module: "archive", SpaceID: "moox_system",
+		InputDataset: "archive_journal", OutputDataset: "archive_files", LagTolerance: 15 * time.Minute, Enabled: true,
+	},
+	{
+		ID: "monitor-metrics", Module: "monitor", SpaceID: "moox_system",
+		InputDataset: "metric_snapshots", OutputDataset: "metric_samples", LagTolerance: 2 * time.Minute, Enabled: true,
+	},
+}
+
+// BuiltInPipelines returns the finite, code-owned module pipeline registry.
+// Dataset expectations remain dynamic and are not part of this list.
+func BuiltInPipelines() []Pipeline {
+	return append([]Pipeline(nil), builtInPipelines...)
+}
+
 func LoadPipelineAllowlist(path string) (PipelineConfig, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -72,6 +109,7 @@ func LoadPipelineAllowlist(path string) (PipelineConfig, error) {
 	if err := cfg.Validate(); err != nil {
 		return PipelineConfig{}, err
 	}
+	cfg.Pipelines = BuiltInPipelines()
 	return cfg, nil
 }
 
@@ -133,7 +171,7 @@ func (c PipelineConfig) IDsForModule(module string) []string {
 func ValidatePipelineEnvironment() (PipelineConfig, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_PIPELINE_CONFIG"))
 	if path == "" {
-		return PipelineConfig{}, nil
+		return PipelineConfig{Pipelines: BuiltInPipelines()}, nil
 	}
 	cfg, err := LoadPipelineAllowlist(path)
 	if err != nil {

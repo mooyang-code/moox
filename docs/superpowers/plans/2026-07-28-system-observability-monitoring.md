@@ -730,6 +730,8 @@ bool error_rate_available = 14;
 
 HostAgent 使用相邻快照和实际 elapsed 计算；首次样本、计数器回绕或间隔非正时 `error_rate_available=false`。Monitor 删除累计 total 告警逻辑，只汇总可用 rate。
 
+Host 资源进入 firing 后必须复用 `MinimumReminderIntervalSeconds`：首次通知失败只记录 `send_failed`，但 firing 状态继续保留，并在 reminder 到期后的新样本上重试；通知成功后仍按相同间隔发送持续异常提醒。通知失败不能回滚 HostSnapshot，也不能永久吞掉本轮异常。
+
 - [ ] **Step 5: 增加两个架构发布门禁**
 
 ```bash
@@ -1120,6 +1122,20 @@ return reporter.Handle(ctx)
 
 把 `examples/monitor-pipelines.yaml` 改为本计划 1.5 的 v2 结构，删除 `crosses_storage_deferred`。配置 loader 明确只接受 `version: 2`，旧版报错。
 
+YAML 不再拥有模块 pipeline allowlist，但 `ModuleMetrics` 仍需要一个有限的低基数 pipeline 集合。把以下固定归属放入 `packages/report` 的代码内 Registry，并由 `LoadPipelineAllowlist` 与无环境配置的 `ValidatePipelineEnvironment` 自动附加：
+
+```text
+archive/archive-materialize
+cloudnode/cloudnode-jobs
+collector/collector-market-data
+factor/factor-calculation
+monitor/monitor-metrics
+strategy/strategy-targets
+trade/trade-rebalance
+```
+
+增加契约测试：加载真实 `examples/monitor-pipelines.yaml` 后，逐模块调用 `ObserveRun` 和 `AdvanceWatermark` 必须成功，并能从 Prometheus Registry Gather 到对应系列；不允许再次从 YAML `pipelines` 字段读取固定归属。
+
 - [ ] **Step 7: 覆盖契约脚本**
 
 `scripts/test-monitor-coverage-contract.sh` 增加静态断言：Collector、Factor 都注册 `DatasetMetrics`；不存在 `crosses_storage_deferred`；默认 policy 字段完整。
@@ -1384,7 +1400,7 @@ message DatasetFrequencyStatus {
 
 - [ ] **Step 2: 聚合固定五块内容**
 
-1. 服务：`node_id + service_name` 合并 SysDeploy 健康结果；Reporter 按 `node_id + service_name + instance_id` 取最新 boot，旧 boot 不产生重复行。健康检查失败优先显示 `down`，Reporter 过期显示 `stale`，只有检查没有 Reporter 时显示 `unknown/reporter missing`。
+1. 服务：`node_id + service_name` 合并 SysDeploy 健康结果；Reporter 按 `node_id + service_name + instance_id` 在 SQL 查询阶段取 `last_seen_at` 最新 boot，分页总数也只统计逻辑实例，旧 boot 不产生重复行或挤占 1000 项上限。健康检查失败优先显示 `down`，Reporter 过期显示 `stale`，只有检查没有 Reporter 时显示 `unknown/reporter missing`。
 2. 主机：agent reachable、CPU、Memory、Filesystem。
 3. SCF：online/timeout/unknown 数量和最旧 heartbeat。
 4. Dataset：Expected Dataset Registry 中所有 tuple 的 run/success/input/output watermark。

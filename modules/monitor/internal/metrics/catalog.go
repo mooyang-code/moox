@@ -36,16 +36,32 @@ func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset
 		return nil, 0, ErrMetricsStoreUnavailable
 	}
 	offset, limit = boundedPage(offset, limit)
-	var rows []MetricService
-	q := c.messageStore.db.WithContext(ctx).Model(&MetricService{})
+	where := ""
 	if strings.TrimSpace(spaceID) != "" {
-		q = q.Where("c_service_name <> ''")
+		where = " WHERE c_service_name <> ''"
 	}
+	rankedSQL := `WITH ranked_services AS (
+		SELECT *,
+			ROW_NUMBER() OVER (
+				PARTITION BY c_node_id, c_service_name, c_instance_id
+				ORDER BY c_last_seen_at DESC, c_id DESC
+			) AS logical_rank
+		FROM t_monitor_metric_services` + where + `
+	)`
 	var total int64
-	if err := q.Count(&total).Error; err != nil {
+	countSQL := rankedSQL + ` SELECT COUNT(*) FROM ranked_services WHERE logical_rank = 1`
+	if err := c.messageStore.db.WithContext(ctx).Raw(countSQL).Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := q.Order("c_service_name ASC, c_instance_id ASC, c_boot_id ASC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
+	var rows []MetricService
+	listSQL := rankedSQL + `
+		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
+			c_last_seen_at, c_is_stale, c_ctime, c_mtime
+		FROM ranked_services
+		WHERE logical_rank = 1
+		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC
+		LIMIT ? OFFSET ?`
+	if err := c.messageStore.db.WithContext(ctx).Raw(listSQL, limit, offset).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	c.markServicesStale(rows)
@@ -68,19 +84,41 @@ func (c *MetricCatalog) ListServicesForAt(ctx context.Context, serviceNames []st
 	if limit <= 0 {
 		return nil, fmt.Errorf("service limit must be positive")
 	}
-	q := c.messageStore.db.WithContext(ctx).Model(&MetricService{}).Where("c_service_name IN ?", serviceNames)
+	nodeFilter := ""
+	countArgs := []any{serviceNames}
+	listArgs := []any{serviceNames}
 	if nodeID != "" {
-		q = q.Where("c_node_id = ?", nodeID)
+		nodeFilter = " AND c_node_id = ?"
+		countArgs = append(countArgs, nodeID)
+		listArgs = append(listArgs, nodeID)
 	}
+	rankedSQL := `WITH ranked_services AS (
+		SELECT *,
+			ROW_NUMBER() OVER (
+				PARTITION BY c_node_id, c_service_name, c_instance_id
+				ORDER BY c_last_seen_at DESC, c_id DESC
+			) AS logical_rank
+		FROM t_monitor_metric_services
+		WHERE c_service_name IN ?` + nodeFilter + `
+	)`
 	var total int64
-	if err := q.Count(&total).Error; err != nil {
+	countSQL := rankedSQL + ` SELECT COUNT(*) FROM ranked_services WHERE logical_rank = 1`
+	if err := c.messageStore.db.WithContext(ctx).Raw(countSQL, countArgs...).Scan(&total).Error; err != nil {
 		return nil, err
 	}
 	if total > int64(limit) {
 		return nil, fmt.Errorf("selected metric services exceed limit %d", limit)
 	}
 	var rows []MetricService
-	if err := q.Order("c_service_name ASC, c_instance_id ASC, c_boot_id ASC").Limit(limit).Find(&rows).Error; err != nil {
+	listSQL := rankedSQL + `
+		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
+			c_last_seen_at, c_is_stale, c_ctime, c_mtime
+		FROM ranked_services
+		WHERE logical_rank = 1
+		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC
+		LIMIT ?`
+	listArgs = append(listArgs, limit)
+	if err := c.messageStore.db.WithContext(ctx).Raw(listSQL, listArgs...).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	c.markServicesStaleAt(rows, now)

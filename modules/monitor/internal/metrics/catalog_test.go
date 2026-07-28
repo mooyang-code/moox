@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -38,6 +39,36 @@ func TestListServicesForFiltersBeforeApplyingLimit(t *testing.T) {
 	require.Equal(t, "selected", rows[0].ServiceName)
 	_, err = NewCatalog(messageStore).ListServicesFor(context.Background(), []string{"selected"}, "node-a", 1)
 	require.Error(t, err)
+}
+
+func TestListServicesCountsLogicalInstancesInsteadOfBootHistory(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messageStore := metricMessageStoreForTest(t, mgr)
+	now := time.Now().UTC().Truncate(time.Second)
+	boots := make([]MetricService, 1001)
+	for i := range boots {
+		boots[i] = MetricService{
+			ServiceName: "moox_monitor", InstanceID: "monitor@node-a", NodeID: "node-a",
+			BootID: fmt.Sprintf("boot-%04d", i), LastSeenAt: now.Add(time.Duration(i) * time.Second),
+		}
+	}
+	require.NoError(t, messageStore.db.CreateInBatches(boots, 100).Error)
+
+	rows, total, err := NewCatalog(messageStore).ListServices(context.Background(), InternalMetricSpaceID, 0, 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, rows, 1)
+	require.Equal(t, "boot-1000", rows[0].BootID)
+
+	selected, err := NewCatalog(messageStore).ListServicesForAt(
+		context.Background(), []string{"moox_monitor"}, "node-a", 1, now.Add(1001*time.Second),
+	)
+	require.NoError(t, err)
+	require.Len(t, selected, 1)
+	require.Equal(t, "boot-1000", selected[0].BootID)
 }
 
 func TestCanonicalJSON(t *testing.T) {

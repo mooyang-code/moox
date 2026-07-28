@@ -156,7 +156,13 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 		if state.Status != domain.AlertStatusFiring && state.FailureCount >= positive(rule.FailureThreshold) {
 			state.Status = domain.AlertStatusFiring
 			state.TriggeredAt = &now
+			state.ResolvedAt = nil
+			state.LastReminderAt = &now
 			return e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventTriggered, now)
+		} else if state.Status == domain.AlertStatusFiring &&
+			reminderDue(state.LastReminderAt, now, rule.MinimumReminderIntervalSeconds) {
+			state.LastReminderAt = &now
+			return e.record(ctx, rule, agentID, messageID, state, value, domain.AlertEventReminder, now)
 		}
 	} else {
 		state.SuccessCount++
@@ -170,6 +176,16 @@ func (e *AlertEvaluator) transition(ctx context.Context, rule domain.AlertRule, 
 		}
 	}
 	return e.Repository.UpsertState(ctx, state)
+}
+
+func reminderDue(last *time.Time, now time.Time, intervalSeconds int) bool {
+	if intervalSeconds <= 0 {
+		return false
+	}
+	if last == nil {
+		return true
+	}
+	return now.Sub(*last) >= time.Duration(intervalSeconds)*time.Second
 }
 
 func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agentID, messageID string, state *domain.AlertState, value float64, eventType string, now time.Time) error {
