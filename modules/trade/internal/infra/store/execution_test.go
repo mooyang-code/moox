@@ -13,7 +13,7 @@ func TestPostLedgerRejectsUnbalancedTransaction(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpsertExchangeAccount(testAccount())
+		return tx.CreateExchangeAccount(testAccount())
 	}))
 
 	err := s.Transaction(ctx, func(tx *Tx) error {
@@ -38,7 +38,7 @@ func TestPostLedgerUpdatesProjectionsAtomically(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpsertExchangeAccount(testAccount())
+		return tx.CreateExchangeAccount(testAccount())
 	}))
 	transaction := LedgerTransactionRecord{
 		SpaceID: "space-1", TransactionID: "ledger-1",
@@ -70,4 +70,43 @@ func TestPostLedgerUpdatesProjectionsAtomically(t *testing.T) {
 	require.Len(t, projections, 2)
 	require.Equal(t, "-10.25", projections[0].Amount.String())
 	require.Equal(t, "10.25", projections[1].Amount.String())
+}
+
+func TestPostLedgerUpdatesExistingProjectionInSecondTransaction(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateExchangeAccount(testAccount())
+	}))
+	reservation := LedgerTransactionRecord{
+		SpaceID: "space-1", TransactionID: "reserve-1",
+		ExchangeAccountID: "account-1", TransactionType: LedgerReservation,
+		SourceType: "ORDER", SourceID: "order-1",
+		Entries: []LedgerEntryRecord{
+			{Asset: "USDT", Bucket: "AVAILABLE", Amount: shared.MustDecimal("-10")},
+			{Asset: "USDT", Bucket: "RESERVED", Amount: shared.MustDecimal("10")},
+		},
+	}
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.PostLedger(reservation)
+	}))
+	release := reservation
+	release.TransactionID = "release-1"
+	release.TransactionType = LedgerReservationRelease
+	release.SourceID = "order-1-release"
+	release.Entries = []LedgerEntryRecord{
+		{Asset: "USDT", Bucket: "AVAILABLE", Amount: shared.MustDecimal("10")},
+		{Asset: "USDT", Bucket: "RESERVED", Amount: shared.MustDecimal("-10")},
+	}
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.PostLedger(release)
+	}))
+
+	projections, err := s.ListBalanceProjections(ctx, "space-1", "account-1")
+	require.NoError(t, err)
+	require.Len(t, projections, 2)
+	for _, projection := range projections {
+		require.Equal(t, "0", projection.Amount.String())
+		require.Equal(t, uint64(2), projection.Version)
+	}
 }

@@ -12,7 +12,7 @@ func TestAcceptTargetComparesAndSetsBindingSequence(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpsertExchangeAccount(testAccount())
+		return tx.CreateExchangeAccount(testAccount())
 	}))
 
 	first := validTargetExecution()
@@ -58,7 +58,7 @@ func TestAcceptTargetDeduplicatesEvent(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpsertExchangeAccount(testAccount())
+		return tx.CreateExchangeAccount(testAccount())
 	}))
 	target := validTargetExecution()
 	accepted, err := s.AcceptTarget(ctx, target)
@@ -76,7 +76,7 @@ func TestAcceptTargetRejectsIncompleteOrContradictoryIntent(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpsertExchangeAccount(testAccount())
+		return tx.CreateExchangeAccount(testAccount())
 	}))
 	tests := []struct {
 		name   string

@@ -75,7 +75,7 @@ func (exchangeAccountRow) TableName() string {
 	return "t_exchange_accounts"
 }
 
-func (tx *Tx) UpsertExchangeAccount(record ExchangeAccountRecord) error {
+func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 	if record.SpaceID == "" || record.ExchangeAccountID == "" || record.Name == "" ||
 		record.Exchange == "" || record.MarketType == "" || record.ExecutionMode == "" ||
 		record.CredentialSecretID == "" || record.SettlementAsset == "" || record.Status == "" {
@@ -107,25 +107,6 @@ func (tx *Tx) UpsertExchangeAccount(record ExchangeAccountRecord) error {
 			c_snapshot_json, c_snapshot_source_time, c_last_sync_at, c_last_ready_at,
 			c_last_error
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_exchange_account_id) DO UPDATE SET
-			c_name = excluded.c_name,
-			c_exchange = excluded.c_exchange,
-			c_market_type = excluded.c_market_type,
-			c_execution_mode = excluded.c_execution_mode,
-			c_credential_secret_id = excluded.c_credential_secret_id,
-			c_settlement_asset = excluded.c_settlement_asset,
-			c_margin_mode = excluded.c_margin_mode,
-			c_status = excluded.c_status,
-			c_paused = excluded.c_paused,
-			c_pause_reason = excluded.c_pause_reason,
-			c_ready = excluded.c_ready,
-			c_leverage_settings_json = excluded.c_leverage_settings_json,
-			c_snapshot_json = excluded.c_snapshot_json,
-			c_snapshot_source_time = excluded.c_snapshot_source_time,
-			c_last_sync_at = excluded.c_last_sync_at,
-			c_last_ready_at = excluded.c_last_ready_at,
-			c_last_error = excluded.c_last_error,
-			c_mtime = CURRENT_TIMESTAMP
 	`,
 		row.SpaceID, row.ExchangeAccountID, row.Name, row.Exchange, row.MarketType,
 		row.ExecutionMode, row.CredentialSecretID, row.SettlementAsset, row.MarginMode,
@@ -134,6 +115,98 @@ func (tx *Tx) UpsertExchangeAccount(record ExchangeAccountRecord) error {
 		row.LastError,
 	).Error
 	return writeError(err)
+}
+
+type ExchangeAccountConfiguration struct {
+	Name               string
+	CredentialSecretID string
+	SettlementAsset    string
+	MarginMode         string
+	Status             string
+}
+
+func (tx *Tx) UpdateExchangeAccountConfiguration(
+	spaceID string,
+	exchangeAccountID string,
+	config ExchangeAccountConfiguration,
+) error {
+	if blank(spaceID) || blank(exchangeAccountID) || blank(config.Name) ||
+		blank(config.CredentialSecretID) || blank(config.SettlementAsset) ||
+		blank(config.Status) {
+		return fmt.Errorf("%w: incomplete Exchange account configuration", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_exchange_accounts
+		SET c_name = ?, c_credential_secret_id = ?, c_settlement_asset = ?,
+			c_margin_mode = ?, c_status = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+	`, config.Name, config.CredentialSecretID, config.SettlementAsset,
+		config.MarginMode, config.Status, spaceID, exchangeAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "Exchange account configuration")
+}
+
+func (tx *Tx) SetExchangeAccountPause(
+	spaceID string,
+	exchangeAccountID string,
+	paused bool,
+	reason string,
+) error {
+	if blank(spaceID) || blank(exchangeAccountID) || (paused && blank(reason)) {
+		return fmt.Errorf("%w: incomplete Exchange account pause", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_exchange_accounts
+		SET c_paused = ?, c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+	`, paused, reason, spaceID, exchangeAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "Exchange account pause")
+}
+
+type ExchangeAccountSyncState struct {
+	Ready              bool
+	LeverageSettings   LeverageSettings
+	Snapshot           ExchangeAccountSnapshot
+	SnapshotSourceTime int64
+	LastSyncAt         int64
+	LastReadyAt        int64
+	LastError          string
+}
+
+func (tx *Tx) UpdateExchangeAccountSync(
+	spaceID string,
+	exchangeAccountID string,
+	state ExchangeAccountSyncState,
+) error {
+	if blank(spaceID) || blank(exchangeAccountID) || state.LastSyncAt <= 0 {
+		return fmt.Errorf("%w: incomplete Exchange account sync state", ErrInvalidRecord)
+	}
+	leverageJSON, err := encodeLeverageSettings(state.LeverageSettings)
+	if err != nil {
+		return err
+	}
+	snapshotJSON, err := encodeSnapshot(state.Snapshot)
+	if err != nil {
+		return err
+	}
+	result := tx.db.Exec(`
+		UPDATE t_exchange_accounts
+		SET c_ready = ?, c_leverage_settings_json = ?, c_snapshot_json = ?,
+			c_snapshot_source_time = ?, c_last_sync_at = ?, c_last_ready_at = ?,
+			c_last_error = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+	`, state.Ready, leverageJSON, snapshotJSON, state.SnapshotSourceTime,
+		state.LastSyncAt, state.LastReadyAt, state.LastError, spaceID, exchangeAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "Exchange account sync state")
+}
+
+func requireUpdated(err error, rowsAffected int64, label string) error {
+	if err != nil {
+		return writeError(err)
+	}
+	if rowsAffected != 1 {
+		return fmt.Errorf("%w: missing %s", ErrInvalidRecord, label)
+	}
+	return nil
 }
 
 func (s *Store) GetExchangeAccount(

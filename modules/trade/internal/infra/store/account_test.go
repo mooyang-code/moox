@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUpsertExchangeAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
+func TestCreateExchangeAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	account := testAccount()
@@ -28,7 +28,7 @@ func TestUpsertExchangeAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
 	}
 
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpsertExchangeAccount(account)
+		return tx.CreateExchangeAccount(account)
 	}))
 
 	var row struct {
@@ -52,7 +52,7 @@ func TestUpsertExchangeAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
 	require.Equal(t, "-1.5", got.Snapshot.UnrealizedPnL)
 }
 
-func TestUpsertExchangeAccountRejectsMalformedTypedJSONValues(t *testing.T) {
+func TestCreateExchangeAccountRejectsMalformedTypedJSONValues(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*ExchangeAccountRecord)
@@ -85,11 +85,81 @@ func TestUpsertExchangeAccountRejectsMalformedTypedJSONValues(t *testing.T) {
 			tt.mutate(&account)
 
 			err := s.Transaction(context.Background(), func(tx *Tx) error {
-				return tx.UpsertExchangeAccount(account)
+				return tx.CreateExchangeAccount(account)
 			})
 			require.ErrorIs(t, err, ErrInvalidRecord)
 		})
 	}
+}
+
+func TestExchangeAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	account := testAccount()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateExchangeAccount(account)
+	}))
+
+	staleConfig := ExchangeAccountConfiguration{
+		Name: "renamed", CredentialSecretID: "secret-2",
+		SettlementAsset: "USDC", MarginMode: "CROSS", Status: "ENABLED",
+	}
+	syncState := ExchangeAccountSyncState{
+		Ready: true, LeverageSettings: LeverageSettings{"BTCUSDT": "5"},
+		Snapshot: ExchangeAccountSnapshot{
+			Equity: "100", AvailableFunds: "80", UsedMargin: "20",
+			MaintenanceMargin: "2", UnrealizedPnL: "-1",
+			ExchangeUpdatedAt: 1000,
+		},
+		SnapshotSourceTime: 1000, LastSyncAt: 1001, LastReadyAt: 1001,
+	}
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.UpdateExchangeAccountSync("space-1", "account-1", syncState)
+	}))
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.UpdateExchangeAccountConfiguration("space-1", "account-1", staleConfig)
+	}))
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.SetExchangeAccountPause("space-1", "account-1", true, "manual")
+	}))
+
+	syncState.Ready = false
+	syncState.LastSyncAt = 1002
+	syncState.LastError = "disconnected"
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.UpdateExchangeAccountSync("space-1", "account-1", syncState)
+	}))
+
+	got, err := s.GetExchangeAccount(ctx, "space-1", "account-1")
+	require.NoError(t, err)
+	require.Equal(t, "renamed", got.Name)
+	require.Equal(t, "secret-2", got.CredentialSecretID)
+	require.Equal(t, "USDC", got.SettlementAsset)
+	require.True(t, got.Paused)
+	require.Equal(t, "manual", got.PauseReason)
+	require.False(t, got.Ready)
+	require.Equal(t, "5", got.LeverageSettings["BTCUSDT"])
+	require.Equal(t, "100", got.Snapshot.Equity)
+	require.Equal(t, int64(1002), got.LastSyncAt)
+	require.Equal(t, "disconnected", got.LastError)
+}
+
+func TestCreateExchangeAccountIsExplicitAndRejectsDuplicate(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	account := testAccount()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateExchangeAccount(account)
+	}))
+	err := s.Transaction(ctx, func(tx *Tx) error {
+		account.Status = "DISABLED"
+		return tx.CreateExchangeAccount(account)
+	})
+	require.ErrorIs(t, err, ErrConflict)
+
+	got, err := s.GetExchangeAccount(ctx, account.SpaceID, account.ExchangeAccountID)
+	require.NoError(t, err)
+	require.Equal(t, "ENABLED", got.Status)
 }
 
 func testAccount() ExchangeAccountRecord {

@@ -2,8 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
@@ -34,13 +34,14 @@ func (tx *Tx) UpsertInstrument(record InstrumentRecord) error {
 		return fmt.Errorf("%w: incomplete instrument", ErrInvalidRecord)
 	}
 	var err error
-	record.PriceTick, err = canonicalPositiveDecimal(record.PriceTick, "price tick")
+	record.PriceTick, err = canonicalDecimal(record.PriceTick, "price tick", decimalPositive)
 	if err != nil {
 		return err
 	}
-	record.ExchangeQuantityStep, err = canonicalPositiveDecimal(
+	record.ExchangeQuantityStep, err = canonicalDecimal(
 		record.ExchangeQuantityStep,
 		"Exchange quantity step",
+		decimalPositive,
 	)
 	if err != nil {
 		return err
@@ -50,17 +51,46 @@ func (tx *Tx) UpsertInstrument(record InstrumentRecord) error {
 		return fmt.Errorf("%w: incomplete SWAP instrument", ErrInvalidRecord)
 	}
 	if record.MarketType == "SWAP" {
-		record.ContractValue, err = canonicalPositiveDecimal(record.ContractValue, "contract value")
-		if err != nil {
-			return err
-		}
-		record.MinExchangeQuantity, err = canonicalPositiveDecimal(
-			record.MinExchangeQuantity,
-			"minimum Exchange quantity",
+		record.ContractValue, err = canonicalDecimal(
+			record.ContractValue,
+			"contract value",
+			decimalPositive,
 		)
 		if err != nil {
 			return err
 		}
+		record.MinExchangeQuantity, err = canonicalDecimal(
+			record.MinExchangeQuantity,
+			"minimum Exchange quantity",
+			decimalPositive,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	record.ContractValue, err = canonicalDefaultZero(
+		record.ContractValue,
+		"contract value",
+		decimalNonNegative,
+	)
+	if err != nil {
+		return err
+	}
+	record.MinExchangeQuantity, err = canonicalDefaultZero(
+		record.MinExchangeQuantity,
+		"minimum Exchange quantity",
+		decimalNonNegative,
+	)
+	if err != nil {
+		return err
+	}
+	record.MinNotional, err = canonicalDefaultZero(
+		record.MinNotional,
+		"minimum notional",
+		decimalNonNegative,
+	)
+	if err != nil {
+		return err
 	}
 	return writeError(tx.db.Exec(`
 		INSERT INTO t_exchange_instruments (
@@ -88,9 +118,9 @@ func (tx *Tx) UpsertInstrument(record InstrumentRecord) error {
 	`,
 		record.Exchange, record.MarketType, record.Symbol, record.InstrumentID,
 		record.BaseAsset, record.QuoteAsset, record.SettlementAsset, record.Linear,
-		defaultDecimal(record.ContractValue), record.ContractValueAsset,
-		record.ExchangeQuantityStep, defaultDecimal(record.MinExchangeQuantity),
-		record.PriceTick, defaultDecimal(record.MinNotional), record.Status,
+		record.ContractValue, record.ContractValueAsset,
+		record.ExchangeQuantityStep, record.MinExchangeQuantity,
+		record.PriceTick, record.MinNotional, record.Status,
 		record.ExchangeUpdatedAt,
 	).Error)
 }
@@ -195,6 +225,9 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 	if instrumentCount != 1 {
 		return fmt.Errorf("%w: order instrument identity", ErrInvalidRecord)
 	}
+	if err := canonicalizeOrder(&record); err != nil {
+		return err
+	}
 	if record.Version == 0 {
 		record.Version = 1
 	}
@@ -214,9 +247,9 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 		record.OrderType, record.TimeInForce, record.Side, record.PositionSide,
 		record.Quantity, record.LimitPrice, record.ReferencePrice, record.ReferencePriceAt,
 		record.ReduceOnly, record.Source, record.StrategyExecutionID, record.State,
-		defaultDecimal(record.FilledQuantity), defaultDecimal(record.AveragePrice),
-		record.ReservedAsset, defaultDecimal(record.ReservedQuantity),
-		defaultDecimal(record.RemainingReservedQuantity), record.RejectReason,
+		record.FilledQuantity, record.AveragePrice,
+		record.ReservedAsset, record.ReservedQuantity,
+		record.RemainingReservedQuantity, record.RejectReason,
 		record.Version, record.SubmittedAt, record.FinishedAt,
 	).Error)
 }
@@ -245,8 +278,7 @@ type FillRecord struct {
 
 func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 	if record.SpaceID == "" || record.FillID == "" || record.ExchangeTradeID == "" ||
-		record.OrderID == "" || record.Side == "" || record.Price == "" ||
-		record.Quantity == "" {
+		record.OrderID == "" || record.Price == "" || record.Quantity == "" {
 		return false, fmt.Errorf("%w: incomplete Fill", ErrInvalidRecord)
 	}
 	var orderIdentity struct {
@@ -255,9 +287,12 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		Exchange          string `gorm:"column:c_exchange"`
 		MarketType        string `gorm:"column:c_market_type"`
 		Symbol            string `gorm:"column:c_symbol"`
+		Side              string `gorm:"column:c_side"`
+		PositionSide      string `gorm:"column:c_position_side"`
 	}
 	result := tx.db.Raw(`
-		SELECT c_exchange_account_id, c_exchange_order_id, c_exchange, c_market_type, c_symbol
+		SELECT c_exchange_account_id, c_exchange_order_id, c_exchange, c_market_type,
+			c_symbol, c_side, c_position_side
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_order_id = ?
 	`, record.SpaceID, record.OrderID).Scan(&orderIdentity)
@@ -281,11 +316,33 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 			return false, err
 		}
 	}
+	duplicate, err := tx.fillIdentityExists(record)
+	if err != nil {
+		return false, err
+	}
+	for _, values := range []struct {
+		actual   *string
+		expected string
+		label    string
+	}{
+		{&record.Side, orderIdentity.Side, "Fill side"},
+		{&record.PositionSide, orderIdentity.PositionSide, "Fill position side"},
+	} {
+		if err := validateOrDeriveIdentity(values.actual, values.expected, values.label); err != nil {
+			if duplicate {
+				return false, fmt.Errorf("%w: conflicting immutable %s", ErrConflict, values.label)
+			}
+			return false, err
+		}
+	}
 	if record.ExchangeOrderID == "" {
 		record.ExchangeOrderID = orderIdentity.ExchangeOrderID
 	} else if orderIdentity.ExchangeOrderID != "" &&
 		record.ExchangeOrderID != orderIdentity.ExchangeOrderID {
 		return false, fmt.Errorf("%w: Fill Exchange order", ErrInvalidRecord)
+	}
+	if err := canonicalizeFill(&record); err != nil {
+		return false, err
 	}
 	result = tx.db.Exec(`
 		INSERT INTO t_order_fills (
@@ -294,20 +351,93 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 			c_symbol, c_side, c_position_side, c_price, c_quantity, c_fee,
 			c_fee_asset, c_settlement_asset, c_realized_pnl, c_role, c_traded_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_exchange_account_id, c_symbol, c_exchange_trade_id)
-		DO NOTHING
 	`,
 		record.SpaceID, record.FillID, record.ExchangeTradeID, record.OrderID,
 		record.ExchangeOrderID, record.ExchangeAccountID, record.Exchange,
 		record.MarketType, record.Symbol, record.Side, record.PositionSide,
-		record.Price, record.Quantity, defaultDecimal(record.Fee), record.FeeAsset,
-		record.SettlementAsset, defaultDecimal(record.RealizedPnL), record.Role,
+		record.Price, record.Quantity, record.Fee, record.FeeAsset,
+		record.SettlementAsset, record.RealizedPnL, record.Role,
 		record.TradedAt,
 	)
 	if result.Error != nil {
-		return false, writeError(result.Error)
+		conflict := writeError(result.Error)
+		if errors.Is(conflict, ErrConflict) {
+			return tx.resolveDuplicateFill(record, conflict)
+		}
+		return false, conflict
 	}
-	return result.RowsAffected == 1, nil
+	return true, nil
+}
+
+func (tx *Tx) fillIdentityExists(record FillRecord) (bool, error) {
+	var count int64
+	err := tx.db.Raw(`
+		SELECT COUNT(*) FROM t_order_fills
+		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+			AND c_exchange_trade_id = ?
+	`, record.SpaceID, record.ExchangeAccountID, record.Symbol, record.ExchangeTradeID).
+		Scan(&count).Error
+	return count != 0, err
+}
+
+type fillRow struct {
+	SpaceID           string `gorm:"column:c_space_id"`
+	FillID            string `gorm:"column:c_fill_id"`
+	ExchangeTradeID   string `gorm:"column:c_exchange_trade_id"`
+	OrderID           string `gorm:"column:c_order_id"`
+	ExchangeOrderID   string `gorm:"column:c_exchange_order_id"`
+	ExchangeAccountID string `gorm:"column:c_exchange_account_id"`
+	Exchange          string `gorm:"column:c_exchange"`
+	MarketType        string `gorm:"column:c_market_type"`
+	Symbol            string `gorm:"column:c_symbol"`
+	Side              string `gorm:"column:c_side"`
+	PositionSide      string `gorm:"column:c_position_side"`
+	Price             string `gorm:"column:c_price"`
+	Quantity          string `gorm:"column:c_quantity"`
+	Fee               string `gorm:"column:c_fee"`
+	FeeAsset          string `gorm:"column:c_fee_asset"`
+	SettlementAsset   string `gorm:"column:c_settlement_asset"`
+	RealizedPnL       string `gorm:"column:c_realized_pnl"`
+	Role              string `gorm:"column:c_role"`
+	TradedAt          int64  `gorm:"column:c_traded_at"`
+}
+
+func (tx *Tx) resolveDuplicateFill(
+	record FillRecord,
+	conflict error,
+) (bool, error) {
+	var existing fillRow
+	result := tx.db.Raw(`
+		SELECT c_space_id, c_fill_id, c_exchange_trade_id, c_order_id,
+			c_exchange_order_id, c_exchange_account_id, c_exchange, c_market_type,
+			c_symbol, c_side, c_position_side, c_price, c_quantity, c_fee,
+			c_fee_asset, c_settlement_asset, c_realized_pnl, c_role, c_traded_at
+		FROM t_order_fills
+		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+			AND c_exchange_trade_id = ?
+	`, record.SpaceID, record.ExchangeAccountID, record.Symbol, record.ExchangeTradeID).
+		Scan(&existing)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected != 1 || existing != fillRowFromRecord(record) {
+		return false, fmt.Errorf("%w: conflicting immutable Fill replay", conflict)
+	}
+	return false, nil
+}
+
+func fillRowFromRecord(record FillRecord) fillRow {
+	return fillRow{
+		SpaceID: record.SpaceID, FillID: record.FillID,
+		ExchangeTradeID: record.ExchangeTradeID, OrderID: record.OrderID,
+		ExchangeOrderID:   record.ExchangeOrderID,
+		ExchangeAccountID: record.ExchangeAccountID, Exchange: record.Exchange,
+		MarketType: record.MarketType, Symbol: record.Symbol, Side: record.Side,
+		PositionSide: record.PositionSide, Price: record.Price,
+		Quantity: record.Quantity, Fee: record.Fee, FeeAsset: record.FeeAsset,
+		SettlementAsset: record.SettlementAsset, RealizedPnL: record.RealizedPnL,
+		Role: record.Role, TradedAt: record.TradedAt,
+	}
 }
 
 type exchangeAccountIdentity struct {
@@ -364,6 +494,13 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 		record.PositionSide == "" {
 		return fmt.Errorf("%w: incomplete position", ErrInvalidRecord)
 	}
+	identity, err := tx.accountIdentity(record.SpaceID, record.ExchangeAccountID)
+	if err != nil {
+		return err
+	}
+	if err := canonicalizePosition(&record, identity.MarketType); err != nil {
+		return err
+	}
 	return tx.db.Exec(`
 		INSERT INTO t_exchange_positions (
 			c_space_id, c_exchange_account_id, c_symbol, c_position_side,
@@ -386,25 +523,118 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 			c_mtime = CURRENT_TIMESTAMP
 	`,
 		record.SpaceID, record.ExchangeAccountID, record.Symbol, record.PositionSide,
-		defaultDecimal(record.SignedQuantity), defaultDecimal(record.EntryPrice),
-		defaultDecimal(record.MarkPrice), defaultDecimal(record.Leverage), record.MarginMode,
-		defaultDecimal(record.UsedMargin), defaultDecimal(record.LiquidationPrice),
-		defaultDecimal(record.UnrealizedPnL), defaultDecimal(record.RealizedPnL),
+		record.SignedQuantity, record.EntryPrice,
+		record.MarkPrice, record.Leverage, record.MarginMode,
+		record.UsedMargin, record.LiquidationPrice,
+		record.UnrealizedPnL, record.RealizedPnL,
 		record.ExchangeUpdatedAt,
 	).Error
 }
 
-func defaultDecimal(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return "0"
+func canonicalizeOrder(record *OrderRecord) error {
+	var err error
+	record.Quantity, err = canonicalDecimal(record.Quantity, "order quantity", decimalPositive)
+	if err != nil {
+		return err
 	}
-	return raw
+	record.ReferencePrice, err = canonicalDecimal(
+		record.ReferencePrice,
+		"order reference price",
+		decimalPositive,
+	)
+	if err != nil {
+		return err
+	}
+	if record.LimitPrice != nil {
+		value, err := canonicalDecimal(*record.LimitPrice, "order limit price", decimalPositive)
+		if err != nil {
+			return err
+		}
+		record.LimitPrice = &value
+	}
+	if record.OrderType == "LIMIT" && record.LimitPrice == nil {
+		return fmt.Errorf("%w: LIMIT order price", ErrInvalidRecord)
+	}
+	if record.OrderType == "MARKET" && record.LimitPrice != nil {
+		return fmt.Errorf("%w: MARKET order price", ErrInvalidRecord)
+	}
+	for _, field := range []struct {
+		value *string
+		label string
+	}{
+		{&record.FilledQuantity, "filled quantity"},
+		{&record.AveragePrice, "average price"},
+		{&record.ReservedQuantity, "reserved quantity"},
+		{&record.RemainingReservedQuantity, "remaining reserved quantity"},
+	} {
+		*field.value, err = canonicalDefaultZero(*field.value, field.label, decimalNonNegative)
+		if err != nil {
+			return err
+		}
+	}
+	if decimalGreater(record.FilledQuantity, record.Quantity) ||
+		decimalGreater(record.RemainingReservedQuantity, record.ReservedQuantity) {
+		return fmt.Errorf("%w: inconsistent order totals", ErrInvalidRecord)
+	}
+	return nil
 }
 
-func canonicalPositiveDecimal(raw string, label string) (string, error) {
-	value, err := shared.ParseDecimal(raw)
-	if err != nil || value.Cmp(shared.Zero()) <= 0 {
-		return "", fmt.Errorf("%w: %s", ErrInvalidRecord, label)
+func canonicalizeFill(record *FillRecord) error {
+	var err error
+	record.Price, err = canonicalDecimal(record.Price, "Fill price", decimalPositive)
+	if err != nil {
+		return err
 	}
-	return value.String(), nil
+	record.Quantity, err = canonicalDecimal(record.Quantity, "Fill quantity", decimalPositive)
+	if err != nil {
+		return err
+	}
+	record.Fee, err = canonicalDefaultZero(record.Fee, "Fill fee", decimalNonNegative)
+	if err != nil {
+		return err
+	}
+	record.RealizedPnL, err = canonicalDefaultZero(
+		record.RealizedPnL,
+		"Fill realized PnL",
+		decimalSigned,
+	)
+	return err
+}
+
+func canonicalizePosition(record *PositionRecord, marketType string) error {
+	var err error
+	for _, field := range []struct {
+		value *string
+		label string
+		sign  decimalSign
+	}{
+		{&record.SignedQuantity, "position signed quantity", decimalSigned},
+		{&record.EntryPrice, "position entry price", decimalNonNegative},
+		{&record.MarkPrice, "position mark price", decimalNonNegative},
+		{&record.UsedMargin, "position used margin", decimalNonNegative},
+		{&record.LiquidationPrice, "position liquidation price", decimalNonNegative},
+		{&record.UnrealizedPnL, "position unrealized PnL", decimalSigned},
+		{&record.RealizedPnL, "position realized PnL", decimalSigned},
+	} {
+		*field.value, err = canonicalDefaultZero(*field.value, field.label, field.sign)
+		if err != nil {
+			return err
+		}
+	}
+	leverageSign := decimalNonNegative
+	if marketType == "SWAP" {
+		leverageSign = decimalPositive
+	}
+	record.Leverage, err = canonicalDefaultZero(
+		record.Leverage,
+		"position leverage",
+		leverageSign,
+	)
+	return err
+}
+
+func decimalGreater(left string, right string) bool {
+	leftValue, _ := shared.ParseDecimal(left)
+	rightValue, _ := shared.ParseDecimal(right)
+	return leftValue.Cmp(rightValue) > 0
 }

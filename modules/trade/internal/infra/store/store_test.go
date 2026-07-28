@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -40,4 +42,61 @@ func TestOpenConfiguresSQLiteAndTransactionRollback(t *testing.T) {
 	var count int64
 	require.NoError(t, s.db.Table("t_exchange_instruments").Count(&count).Error)
 	require.Zero(t, count)
+}
+
+func TestOpenRejectsObsoleteTradeSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE t_trade_channels (c_channel_id TEXT PRIMARY KEY)
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+
+	check, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	var count int64
+	require.NoError(t, check.Raw(`
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+	`).Scan(&count).Error)
+	require.Equal(t, int64(1), count)
+	checkSQL, err := check.DB()
+	require.NoError(t, err)
+	require.NoError(t, checkSQL.Close())
+}
+
+func TestOpenRejectsIncompatibleTargetExecutionColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "incompatible.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE t_target_executions (
+			c_space_id TEXT NOT NULL,
+			c_execution_id TEXT NOT NULL,
+			c_targets_json TEXT NOT NULL
+		)
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+}
+
+func TestOpenAcceptsCurrentSchemaOnReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "current.db")
+	first, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+
+	second, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, second.Close())
 }

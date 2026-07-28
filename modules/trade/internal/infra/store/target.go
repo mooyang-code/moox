@@ -80,6 +80,14 @@ func (tx *Tx) AcceptTarget(record TargetExecutionRecord) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	record.ResidualQuantity, err = canonicalDefaultZero(
+		record.ResidualQuantity,
+		"target residual quantity",
+		decimalSigned,
+	)
+	if err != nil {
+		return false, err
+	}
 
 	var duplicateEvent int64
 	if err := tx.db.Raw(`
@@ -119,7 +127,7 @@ func (tx *Tx) AcceptTarget(record TargetExecutionRecord) (bool, error) {
 		record.SpaceID, record.ExecutionID, record.EventID, record.StrategyRunID,
 		record.ExecutionBindingID, record.ExchangeAccountID, record.CommandSequence,
 		record.NotAfter, record.DataRevision, targetsJSON, record.Status, record.Progress,
-		defaultDecimal(record.ResidualQuantity), record.LastError,
+		record.ResidualQuantity, record.LastError,
 	)
 	if result.Error != nil {
 		return false, writeError(result.Error)
