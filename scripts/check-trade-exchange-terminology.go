@@ -11,8 +11,10 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -164,19 +166,29 @@ func (c *checker) scanGoType(path string, spec *ast.TypeSpec) {
 			if allowedSecretClientProvider(path, field, name.Name) || allowedThirdPartyProvider(field, name.Name) {
 				continue
 			}
-			c.addText(path, c.fset.Position(name.Pos()).Line, spec.Name.Name+" "+name.Name)
+			context := spec.Name.Name + " " + name.Name
+			c.addText(path, c.fset.Position(name.Pos()).Line, context)
+			if functionType, ok := field.Type.(*ast.FuncType); ok {
+				c.scanGoParameters(path, context, functionType.Params, functionType.Results)
+			}
 		}
 	}
 }
 
 func (c *checker) scanGoFunction(path string, function *ast.FuncDecl) {
 	c.addText(path, c.fset.Position(function.Name.Pos()).Line, function.Name.Name)
+	context := function.Name.Name
 	if function.Recv != nil {
 		for _, field := range function.Recv.List {
-			c.addText(path, c.fset.Position(function.Name.Pos()).Line, nodeText(c.fset, field.Type)+" "+function.Name.Name)
+			context = nodeText(c.fset, field.Type) + " " + function.Name.Name
+			c.addText(path, c.fset.Position(function.Name.Pos()).Line, context)
 		}
 	}
-	for _, fields := range []*ast.FieldList{function.Type.Params, function.Type.Results} {
+	c.scanGoParameters(path, context, function.Type.Params, function.Type.Results)
+}
+
+func (c *checker) scanGoParameters(path, context string, fieldLists ...*ast.FieldList) {
+	for _, fields := range fieldLists {
 		if fields == nil {
 			continue
 		}
@@ -185,7 +197,7 @@ func (c *checker) scanGoFunction(path string, function *ast.FuncDecl) {
 				if allowedThirdPartyProvider(field, name.Name) {
 					continue
 				}
-				c.addText(path, c.fset.Position(name.Pos()).Line, function.Name.Name+" "+name.Name)
+				c.addText(path, c.fset.Position(name.Pos()).Line, context+" "+name.Name)
 			}
 		}
 	}
@@ -199,19 +211,22 @@ func allowedSecretClientProvider(path string, field *ast.Field, name string) boo
 	if !inSecretClient || !strings.EqualFold(name, "provider") || field.Tag == nil {
 		return false
 	}
-	return strings.Contains(field.Tag.Value, `json:"provider"`)
-}
-
-func allowedThirdPartyProvider(field *ast.Field, name string) bool {
-	tokens := terminologyTokens(name)
-	if containsAny(tokens, "exchange", "trade", "binance", "okx") {
+	tag, err := strconv.Unquote(field.Tag.Value)
+	if err != nil {
 		return false
 	}
+	jsonTag, ok := reflect.StructTag(tag).Lookup("json")
+	if !ok {
+		return false
+	}
+	jsonName, _, _ := strings.Cut(jsonTag, ",")
+	return jsonName == "provider"
+}
+
+func allowedThirdPartyProvider(field *ast.Field, _ string) bool {
 	switch goTypeIdentifier(field.Type) {
-	case "TracerProvider":
-		return contains(tokens, "tracer") && contains(tokens, "provider")
-	case "ConfigProvider":
-		return contains(tokens, "config") && contains(tokens, "provider")
+	case "TracerProvider", "ConfigProvider":
+		return true
 	default:
 		return false
 	}
@@ -273,15 +288,9 @@ func allowedThirdPartyProviderText(line string) bool {
 	if len(match) != 3 {
 		return false
 	}
-	tokens := terminologyTokens(match[1])
-	if containsAny(tokens, "exchange", "trade", "binance", "okx") {
-		return false
-	}
 	switch match[2] {
-	case "TracerProvider":
-		return contains(tokens, "tracer") && contains(tokens, "provider")
-	case "ConfigProvider":
-		return contains(tokens, "config") && contains(tokens, "provider")
+	case "TracerProvider", "ConfigProvider":
+		return true
 	default:
 		return false
 	}

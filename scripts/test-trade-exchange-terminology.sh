@@ -16,6 +16,8 @@ go build -o "${CHECKER}" "${ROOT}/scripts/check-trade-exchange-terminology.go"
 cat >"${TMP}/modules/trade/internal/accepted.go" <<'EOF'
 package trade
 
+import trace "example.com/trace"
+
 type ExchangeAccount struct{}
 type ExchangeAdapter struct{}
 type ExchangeOrder struct{}
@@ -24,14 +26,15 @@ type ExchangeOrder struct{}
 type TracerProvider struct{}
 type ConfigProvider struct{}
 
-func NewTradeRuntime(tracerProvider TracerProvider, configProvider ConfigProvider) {}
+func NewTradeRuntime(provider trace.TracerProvider) {}
+func NewTradeConfig(provider ConfigProvider)         {}
 EOF
 
 cat >"${TMP}/modules/trade/internal/secretclient/client.go" <<'EOF'
 package secretclient
 
 type ExchangeSecretWire struct {
-	Provider string `json:"provider"`
+	Provider string `json:"provider,omitempty"`
 }
 EOF
 
@@ -55,7 +58,7 @@ export interface ExchangeOrder {
 }
 
 export interface TradeClient {
-  configProvider?: ConfigProvider;
+  provider?: ConfigProvider;
 }
 EOF
 
@@ -88,6 +91,7 @@ type ExchangeAdapter interface {
 	Broker()
 	Venue()
 	Platform()
+	List(provider string)
 }
 EOF
 
@@ -100,6 +104,7 @@ func (*ExchangeAccount) Provider() {}
 func (*ExchangeAccount) Broker()   {}
 func (*ExchangeAccount) Venue()    {}
 func (*ExchangeAccount) Platform() {}
+func (*ExchangeAccount) Sync(provider string) {}
 EOF
 
 cat >"${TMP}/modules/trade/internal/bad_okx.go" <<'EOF'
@@ -161,8 +166,8 @@ if [[ "${missing_fixture}" == true ]]; then
   exit 1
 fi
 for expected in \
-  bad_interface.go:4 bad_interface.go:5 bad_interface.go:6 bad_interface.go:7 \
-  bad_receiver.go:5 bad_receiver.go:6 bad_receiver.go:7 bad_receiver.go:8 \
+  bad_interface.go:4 bad_interface.go:5 bad_interface.go:6 bad_interface.go:7 bad_interface.go:8 \
+  bad_receiver.go:5 bad_receiver.go:6 bad_receiver.go:7 bad_receiver.go:8 bad_receiver.go:9 \
   bad_okx.go:3 bad_okx.go:4 bad_okx.go:5 bad_okx.go:6; do
   rg -q --fixed-strings "${expected}:" "${TMP}/bad.out" || {
     echo "checker did not report ${expected}" >&2
