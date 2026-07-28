@@ -42,7 +42,8 @@ grep -q 'scp .*ca.pem.*ca.pem' "${HOSTAGENT_TEST_LOG}"
 grep -q 'scp .*health-auth.env.*health-auth.env' "${HOSTAGENT_TEST_LOG}"
 grep -q 'install\\ -m\\ 0600.*eventbus.yaml' "${HOSTAGENT_TEST_LOG}"
 grep -q 'MOOX_HOST_AGENT_HEALTH_ADDR=0.0.0.0:11425' "${HOSTAGENT_TEST_LOG}"
-grep -q 'systemctl\\ --user\\ enable\\ --now\\ moox-host-agent.service' "${HOSTAGENT_TEST_LOG}"
+grep -q 'systemctl\\ --user\\ enable\\ moox-host-agent.service' "${HOSTAGENT_TEST_LOG}"
+grep -q 'systemctl\\ --user\\ restart\\ moox-host-agent.service' "${HOSTAGENT_TEST_LOG}"
 
 : >"${HOSTAGENT_TEST_LOG}"
 if PATH="${TMP}/bin:${PATH}" bash "${SCRIPT}" user@example "${TMP}/release.tar.gz" \
