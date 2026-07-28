@@ -5,6 +5,7 @@ import "time"
 const (
 	CheckKindHTTP = "http"
 	CheckKindTCP  = "tcp"
+	CheckKindExternal = "external"
 
 	CheckSourceManual    = "manual"
 	CheckSourceSysDeploy = "sysdeploy"

@@ -51,6 +51,11 @@ server:
       network: "0 * * * * *?startAtOnce=1"
       protocol: timer
       timeout: 30000
+    - name: trpc.moox.monitor.host_silence.timer
+      port: 11503
+      network: "*/30 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 30000
 plugins:
   auth:
     validation:

@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 )
 
 type ResultHook func(context.Context, domain.Check, domain.CheckResult)
@@ -21,6 +22,7 @@ type Options struct {
 	Runner         probe.Runner
 	OnResult       ResultHook
 	DueBatchSize   int
+	Watchdog       *watchdog.Metrics
 }
 
 type Scheduler struct {
@@ -31,6 +33,7 @@ type Scheduler struct {
 	runner     probe.Runner
 	onResult   ResultHook
 	dueBatch   int
+	watchdog   *watchdog.Metrics
 }
 
 func New(repos *store.Repositories, opts Options) *Scheduler {
@@ -61,6 +64,7 @@ func New(repos *store.Repositories, opts Options) *Scheduler {
 		runner:     runner,
 		onResult:   opts.OnResult,
 		dueBatch:   dueBatch,
+		watchdog:   opts.Watchdog,
 	}
 }
 
@@ -106,6 +110,7 @@ func (s *Scheduler) runAndPersist(ctx context.Context, check domain.Check, advan
 	if s.onResult != nil {
 		s.onResult(ctx, check, result)
 	}
+	s.watchdog.Observe(check, result)
 	return result, nil
 }
 
