@@ -26,6 +26,9 @@ type ExchangeOrder struct{}
 type TracerProvider struct{}
 type ConfigProvider struct{}
 
+// Trade runtime uses OpenTelemetry TracerProvider.
+var tradeTracerProvider trace.TracerProvider
+
 func NewTradeRuntime(provider trace.TracerProvider) {}
 func NewTradeConfig(provider ConfigProvider)         {}
 EOF
@@ -69,6 +72,8 @@ EOF
 
 cat >"${TMP}/web/src/api/trade/accepted.md" <<'EOF'
 Vue ConfigProvider configures the view.
+Trade runtime uses OpenTelemetry TracerProvider.
+Trade UI uses Vue ConfigProvider.
 EOF
 
 cat >"${TMP}/modules/trade/internal/bad.go" <<'EOF'
@@ -116,6 +121,36 @@ type OKXVenue struct{}
 type OKXPlatform struct{}
 EOF
 
+cat >"${TMP}/modules/trade/internal/bad_third_party_name.go" <<'EOF'
+package trade
+
+type TracerProvider struct{}
+
+type ExchangeAccount struct {
+	ExchangeProvider TracerProvider
+}
+
+var ExchangeProvider TracerProvider
+
+func SyncExchange(exchangeProvider TracerProvider) {}
+EOF
+
+cat >"${TMP}/modules/trade/internal/bad_type_expression.go" <<'EOF'
+package trade
+
+type Provider interface{}
+
+type ExchangeAccount struct {
+	Source Provider
+}
+
+type ExchangeAdapter interface {
+	Provider
+}
+
+func SyncExchange(source Provider) {}
+EOF
+
 cat >"${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" <<'EOF'
 package secretclient
 
@@ -138,6 +173,12 @@ export interface ExchangeOrder {
 }
 EOF
 
+cat >"${TMP}/web/src/api/trade/bad_third_party_name.ts" <<'EOF'
+export interface TradeClient {
+  exchangeProvider?: ConfigProvider;
+}
+EOF
+
 cat >"${TMP}/web/src/api/trade/bad.yaml" <<'EOF'
 trade_provider: binance
 EOF
@@ -155,7 +196,10 @@ if (
 fi
 
 missing_fixture=false
-for fixture in bad.go bad_interface.go bad_receiver.go bad_okx.go bad_secretclient.go bad.proto bad.ts bad.yaml bad.md; do
+for fixture in \
+  bad.go bad_interface.go bad_receiver.go bad_okx.go bad_third_party_name.go \
+  bad_type_expression.go bad_secretclient.go bad.proto bad.ts bad_third_party_name.ts \
+  bad.yaml bad.md; do
   if ! rg -q --fixed-strings "${fixture}:" "${TMP}/bad.out"; then
     echo "checker did not report ${fixture}" >&2
     missing_fixture=true
@@ -168,7 +212,10 @@ fi
 for expected in \
   bad_interface.go:4 bad_interface.go:5 bad_interface.go:6 bad_interface.go:7 bad_interface.go:8 \
   bad_receiver.go:5 bad_receiver.go:6 bad_receiver.go:7 bad_receiver.go:8 bad_receiver.go:9 \
-  bad_okx.go:3 bad_okx.go:4 bad_okx.go:5 bad_okx.go:6; do
+  bad_okx.go:3 bad_okx.go:4 bad_okx.go:5 bad_okx.go:6 \
+  bad_third_party_name.go:6 bad_third_party_name.go:9 bad_third_party_name.go:11 \
+  bad_type_expression.go:6 bad_type_expression.go:10 bad_type_expression.go:13 \
+  bad_third_party_name.ts:2; do
   rg -q --fixed-strings "${expected}:" "${TMP}/bad.out" || {
     echo "checker did not report ${expected}" >&2
     cat "${TMP}/bad.out" >&2
@@ -181,9 +228,12 @@ rm \
   "${TMP}/modules/trade/internal/bad_interface.go" \
   "${TMP}/modules/trade/internal/bad_receiver.go" \
   "${TMP}/modules/trade/internal/bad_okx.go" \
+  "${TMP}/modules/trade/internal/bad_third_party_name.go" \
+  "${TMP}/modules/trade/internal/bad_type_expression.go" \
   "${TMP}/modules/trade/internal/secretclient/bad_secretclient.go" \
   "${TMP}/packages/tradeeventpb/bad.proto" \
   "${TMP}/web/src/api/trade/bad.ts" \
+  "${TMP}/web/src/api/trade/bad_third_party_name.ts" \
   "${TMP}/web/src/api/trade/bad.yaml" \
   "${TMP}/web/src/api/trade/bad.md"
 

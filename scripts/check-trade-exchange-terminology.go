@@ -114,7 +114,7 @@ func (c *checker) scanGo(path string) error {
 	}
 	for _, group := range file.Comments {
 		for _, comment := range group.List {
-			c.addText(path, c.fset.Position(comment.Pos()).Line, comment.Text)
+			c.addTextAllowingThirdPartyTypes(path, c.fset.Position(comment.Pos()).Line, comment.Text)
 		}
 	}
 
@@ -132,7 +132,7 @@ func (c *checker) scanGoDeclaration(path string, declaration ast.Decl) {
 			case *ast.TypeSpec:
 				c.scanGoType(path, value)
 			case *ast.ValueSpec:
-				c.addNode(path, value)
+				c.scanGoValueSpec(path, value)
 			}
 		}
 	case *ast.FuncDecl:
@@ -143,11 +143,26 @@ func (c *checker) scanGoDeclaration(path string, declaration ast.Decl) {
 		switch value := node.(type) {
 		case *ast.AssignStmt:
 			c.addNode(path, value)
-		case *ast.ValueSpec:
-			c.addNode(path, value)
 		}
 		return true
 	})
+}
+
+func (c *checker) scanGoValueSpec(path string, spec *ast.ValueSpec) {
+	for index, name := range spec.Names {
+		c.scanGoIdentifier(path, c.fset.Position(name.Pos()).Line, "", name.Name, spec.Type)
+		if spec.Type != nil {
+			c.scanGoTypeExpression(path, c.fset.Position(name.Pos()).Line, name.Name, spec.Type)
+		}
+		if index < len(spec.Values) {
+			c.addText(path, c.fset.Position(name.Pos()).Line, name.Name+" "+nodeText(c.fset, spec.Values[index]))
+		}
+	}
+	if len(spec.Names) == 1 && len(spec.Values) > 1 {
+		for _, value := range spec.Values[1:] {
+			c.addText(path, c.fset.Position(spec.Names[0].Pos()).Line, spec.Names[0].Name+" "+nodeText(c.fset, value))
+		}
+	}
 }
 
 func (c *checker) scanGoType(path string, spec *ast.TypeSpec) {
@@ -162,14 +177,21 @@ func (c *checker) scanGoType(path string, spec *ast.TypeSpec) {
 		return
 	}
 	for _, field := range fields.List {
+		if len(field.Names) == 0 {
+			c.scanGoTypeExpression(path, c.fset.Position(field.Pos()).Line, spec.Name.Name, field.Type)
+			continue
+		}
 		for _, name := range field.Names {
-			if allowedSecretClientProvider(path, field, name.Name) || allowedThirdPartyProvider(field, name.Name) {
-				continue
+			context := spec.Name.Name
+			secretClientProvider := allowedSecretClientProvider(path, field, name.Name)
+			if !secretClientProvider {
+				c.scanGoIdentifier(path, c.fset.Position(name.Pos()).Line, context, name.Name, field.Type)
+				context += " " + name.Name
 			}
-			context := spec.Name.Name + " " + name.Name
-			c.addText(path, c.fset.Position(name.Pos()).Line, context)
 			if functionType, ok := field.Type.(*ast.FuncType); ok {
 				c.scanGoParameters(path, context, functionType.Params, functionType.Results)
+			} else {
+				c.scanGoTypeExpression(path, c.fset.Position(name.Pos()).Line, context, field.Type)
 			}
 		}
 	}
@@ -193,14 +215,34 @@ func (c *checker) scanGoParameters(path, context string, fieldLists ...*ast.Fiel
 			continue
 		}
 		for _, field := range fields.List {
+			if len(field.Names) == 0 {
+				c.scanGoTypeExpression(path, c.fset.Position(field.Pos()).Line, context, field.Type)
+				continue
+			}
 			for _, name := range field.Names {
-				if allowedThirdPartyProvider(field, name.Name) {
-					continue
-				}
-				c.addText(path, c.fset.Position(name.Pos()).Line, context+" "+name.Name)
+				c.scanGoIdentifier(path, c.fset.Position(name.Pos()).Line, context, name.Name, field.Type)
+				c.scanGoTypeExpression(path, c.fset.Position(name.Pos()).Line, context+" "+name.Name, field.Type)
 			}
 		}
 	}
+}
+
+func (c *checker) scanGoIdentifier(path string, line int, context, name string, expression ast.Expr) {
+	typeName := goTypeIdentifier(expression)
+	if thirdPartyProviderIdentifierAllowed(name, typeName) {
+		return
+	}
+	c.addText(path, line, name)
+	if context != "" {
+		c.addText(path, line, context+" "+name)
+	}
+}
+
+func (c *checker) scanGoTypeExpression(path string, line int, context string, expression ast.Expr) {
+	if isThirdPartyProviderType(goTypeIdentifier(expression)) {
+		return
+	}
+	c.addText(path, line, context+" "+nodeText(c.fset, expression))
 }
 
 func allowedSecretClientProvider(path string, field *ast.Field, name string) bool {
@@ -221,15 +263,6 @@ func allowedSecretClientProvider(path string, field *ast.Field, name string) boo
 	}
 	jsonName, _, _ := strings.Cut(jsonTag, ",")
 	return jsonName == "provider"
-}
-
-func allowedThirdPartyProvider(field *ast.Field, _ string) bool {
-	switch goTypeIdentifier(field.Type) {
-	case "TracerProvider", "ConfigProvider":
-		return true
-	default:
-		return false
-	}
 }
 
 func goTypeIdentifier(expression ast.Expr) string {
@@ -271,7 +304,11 @@ func (c *checker) scanText(path string) error {
 			depth = 0
 		}
 		if !allowedThirdPartyProviderText(line) {
-			c.addText(path, index+1, context+" "+line)
+			if filepath.Ext(path) == ".md" {
+				c.addTextAllowingThirdPartyTypes(path, index+1, context+" "+line)
+			} else {
+				c.addText(path, index+1, context+" "+line)
+			}
 		}
 		if context != "" {
 			depth += strings.Count(line, "{") - strings.Count(line, "}")
@@ -288,16 +325,47 @@ func allowedThirdPartyProviderText(line string) bool {
 	if len(match) != 3 {
 		return false
 	}
-	switch match[2] {
-	case "TracerProvider", "ConfigProvider":
+	return thirdPartyProviderIdentifierAllowed(match[1], match[2])
+}
+
+func thirdPartyProviderIdentifierAllowed(name, typeName string) bool {
+	if !isThirdPartyProviderType(typeName) {
+		return false
+	}
+	term, conflicts := exchangeSynonym(name)
+	if !conflicts {
 		return true
+	}
+	tokens := terminologyTokens(name)
+	if term != "provider" || containsAny(tokens, "exchange", "binance", "okx", "broker", "venue", "platform") {
+		return false
+	}
+	switch typeName {
+	case "TracerProvider":
+		return contains(tokens, "tracer")
+	case "ConfigProvider":
+		return contains(tokens, "config")
 	default:
 		return false
 	}
 }
 
+func isThirdPartyProviderType(typeName string) bool {
+	return typeName == "TracerProvider" || typeName == "ConfigProvider"
+}
+
 func (c *checker) addText(path string, line int, text string) {
 	term, ok := exchangeSynonym(text)
+	if !ok {
+		return
+	}
+	displayPath := displayPath(path)
+	key := fmt.Sprintf("%s:%d:%s", displayPath, line, term)
+	c.violations[key] = violation{path: displayPath, line: line, term: term}
+}
+
+func (c *checker) addTextAllowingThirdPartyTypes(path string, line int, text string) {
+	term, ok := exchangeSynonymWithThirdPartyTypes(text)
 	if !ok {
 		return
 	}
@@ -319,13 +387,28 @@ func displayPath(path string) string {
 }
 
 func exchangeSynonym(text string) (string, bool) {
-	tokens := terminologyTokens(text)
+	return exchangeSynonymTokens(terminologyTokens(text), false)
+}
+
+func exchangeSynonymWithThirdPartyTypes(text string) (string, bool) {
+	return exchangeSynonymTokens(terminologyTokens(text), true)
+}
+
+func exchangeSynonymTokens(tokens []string, allowThirdPartyTypes bool) (string, bool) {
 	if !containsAny(tokens, "exchange", "trade", "binance", "okx") {
 		return "", false
 	}
-	for _, term := range []string{"provider", "broker", "venue", "platform"} {
-		if contains(tokens, term) {
-			return term, true
+	for index, token := range tokens {
+		if token == "provider" {
+			if allowThirdPartyTypes && index > 0 && (tokens[index-1] == "tracer" || tokens[index-1] == "config") {
+				continue
+			}
+			return token, true
+		}
+		for _, term := range []string{"broker", "venue", "platform"} {
+			if token == term {
+				return term, true
+			}
 		}
 	}
 	return "", false
