@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/bootstrap"
@@ -20,6 +22,7 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
 
 type runOnceRuntime struct {
@@ -208,8 +211,12 @@ func executableFactorGroups(
 }
 
 func serviceAuth() *commonpb.AuthInfo {
-	return &commonpb.AuthInfo{
+	auth := &commonpb.AuthInfo{
 		AppId: "moox-factor", Operator: "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}
+	if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
+		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
+	}
+	return auth
 }

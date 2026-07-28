@@ -63,6 +63,11 @@ reject 'NewDurableEventBatcher|PendingEventStore|t_factor_event_inbox|cross_sect
   "removed Factor capability remains" \
   --glob '*.go' --glob '*.proto' --glob '*.py' --glob '!**/*_test.go' \
   modules/factor/internal modules/factor/proto modules/factor/cmd modules/factor/pyworker
+reject 'KLineColumns|DependsFromSource|DefaultLookback|signal_multi_params|c_periods_json|c_depends_json' \
+  "legacy OHLCV/period Factor contract remains" \
+  --glob '*.go' --glob '*.proto' --glob '*.py' --glob '*.sql' --glob '!**/*_test.go' \
+  examples/factors modules/factor/internal modules/factor/proto modules/factor/schema \
+  modules/factor/cmd modules/factor/pyworker
 reject 'NATSURL|EmbeddedJetStreamConfig|yaml:"nats_url"|yaml:"embedded"' \
   "CloudNode still exposes duplicate or embedded JetStream settings" \
   --glob '*.go' modules/cloudnode/internal

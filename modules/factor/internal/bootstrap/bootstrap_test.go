@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,4 +60,11 @@ func TestRealtimeConsumerReadyWhenEventBusDisabled(t *testing.T) {
 	cfg := Default()
 	cfg.EventBus.URLs = nil
 	require.True(t, realtimeConsumerReady(cfg, nil))
+}
+
+func TestFactorAuthInfoSignsPrimaryRequestFromRuntimeSecret(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
+	auth := factorAuthInfo()
+	require.Equal(t, "moox-factor", auth.GetAppId())
+	require.Equal(t, mooxsecurity.HMACSHA256Hex("primary-secret", []byte("moox-factor")), auth.GetAppKey())
 }

@@ -60,6 +60,7 @@ for path in \
   python-runtime/moox_pyruntime/protocol.py \
   secrets/gateway-factor.key \
   secrets/gateway-service.env \
+  secrets/storage-internal-auth.env \
   certs/gateway/peers.pem
 do
   [[ -s "${UNPACKED}/${path}" ]] || {
@@ -72,6 +73,11 @@ mkdir -p "${UNPACKED}/data/factor/venv/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${UNPACKED}/data/factor/venv/bin/python"
 chmod +x "${UNPACKED}/data/factor/venv/bin/python"
 factor_secret="$(tr -d '\r\n' <"${UNPACKED}/secrets/gateway-factor.key")"
+storage_primary_secret="$(
+  bash -c 'source "$1"; printf "%s" "${MOOX_STORAGE_PRIMARY_AUTH_SECRET}"' \
+    _ "${UNPACKED}/secrets/storage-internal-auth.env"
+)"
+[[ -n "${storage_primary_secret}" ]]
 grep -Fxq 'MOOX_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/secrets/gateway-service.env"
 
 cat >"${UNPACKED}/bin/moox-factor-cli" <<EOF
@@ -102,6 +108,7 @@ grep -Fxq 'MOOX_GATEWAY_SERVICE_KEY_ID=factor' "${UNPACKED}/captured.env"
 grep -Fxq 'MOOX_GATEWAY_CALLER=factor' "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_GATEWAY_SERVICE_SECRET_KEY=${factor_secret}" "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_GATEWAY_CA_FILE=${UNPACKED}/certs/gateway/peers.pem" "${UNPACKED}/captured.env"
+grep -Fxq "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${storage_primary_secret}" "${UNPACKED}/captured.env"
 cat >"${UNPACKED}/expected.argv" <<EOF
 run-once
 --config
@@ -137,6 +144,15 @@ if env -i HOME="${HOME}" PATH="${PATH}" "${UNPACKED}/bin/moox-factor-run-once" \
   --start-time 2026-07-28T00:00:00Z --end-time 2026-07-28T00:01:00Z \
   >/dev/null 2>&1; then
   echo "packaged Factor wrapper accepted a multi-line Gateway secret" >&2
+  exit 1
+fi
+
+printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET=\n' >"${UNPACKED}/secrets/storage-internal-auth.env"
+if env -i HOME="${HOME}" PATH="${PATH}" "${UNPACKED}/bin/moox-factor-run-once" \
+  --space crypto --dataset prices --subject BTC-USDT --freq 1m \
+  --start-time 2026-07-28T00:00:00Z --end-time 2026-07-28T00:01:00Z \
+  >/dev/null 2>&1; then
+  echo "packaged Factor wrapper accepted an empty Storage Primary secret" >&2
   exit 1
 fi
 

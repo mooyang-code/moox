@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 )
 
@@ -113,6 +114,13 @@ func TestRunOnceRequiresRange(t *testing.T) {
 	err := runOnce(context.Background(), cliConfig{}, &bytes.Buffer{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "required")
+}
+
+func TestRunOnceServiceAuthSignsPrimaryRequestFromRuntimeSecret(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
+	auth := serviceAuth()
+	require.Equal(t, "moox-factor", auth.GetAppId())
+	require.Equal(t, mooxsecurity.HMACSHA256Hex("primary-secret", []byte("moox-factor")), auth.GetAppKey())
 }
 
 func TestExecutableFactorGroupsHonorBindingScope(t *testing.T) {

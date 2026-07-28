@@ -3,6 +3,8 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/mooyang-code/moox/packages/report"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -318,11 +321,15 @@ type realtimeLoopDeps struct {
 }
 
 func factorAuthInfo() *commonpb.AuthInfo {
-	return &commonpb.AuthInfo{
+	auth := &commonpb.AuthInfo{
 		AppId:     "moox-factor",
 		Operator:  "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}
+	if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
+		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
+	}
+	return auth
 }
 
 func listExecutableBindings(ctx context.Context, repo *store.BindingRepository) ([]domain.FactorBinding, error) {

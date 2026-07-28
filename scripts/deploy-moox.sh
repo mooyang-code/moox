@@ -1212,6 +1212,7 @@ FACTOR_ENV=(
   "MOOX_FACTOR_ENGINE_FACTORS_DIR=${MOOX_FACTOR_ENGINE_FACTORS_DIR:-${ROOT}/factor/factors}"
   "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}"
   "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
+  "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}"
 )
 
 MONITOR_ENV=(
@@ -2425,29 +2426,32 @@ prepare_stage() {
     printf 'MOOX_GATEWAY_CALLER=admin-gateway\n'
     printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_service_secret}"
   } >"${STAGE_DIR}/secrets/gateway-service.env"
-  if [[ "${WITH_STORAGE}" -eq 1 ]]; then
-    local storage_node_auth_secret="${MOOX_STORAGE_NODE_AUTH_SECRET:-}"
+  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_FACTOR}" -eq 1 ]]; then
     local storage_primary_auth_secret="${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
-    local storage_view_auth_secret="${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
-    if [[ -z "${storage_node_auth_secret}" ]]; then
-      storage_node_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-node-auth)"
-    fi
     if [[ -z "${storage_primary_auth_secret}" ]]; then
       storage_primary_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-primary-auth)"
     fi
-    if [[ -z "${storage_view_auth_secret}" ]]; then
-      storage_view_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-view-auth)"
-    fi
-    [[ "${storage_node_auth_secret}" != *$'\n'* && "${storage_node_auth_secret}" != *$'\r'* ]] || \
-      fail "storage DataNode auth secret must contain exactly one line"
-    [[ "${storage_primary_auth_secret}" != *$'\n'* && "${storage_primary_auth_secret}" != *$'\r'* && \
-       "${storage_view_auth_secret}" != *$'\n'* && "${storage_view_auth_secret}" != *$'\r'* ]] || \
-      fail "storage internal auth secrets must contain exactly one line"
-    (umask 077; printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%q\n' "${storage_node_auth_secret}" >"${STAGE_DIR}/secrets/storage-node-auth.env")
+    [[ "${storage_primary_auth_secret}" != *$'\n'* && "${storage_primary_auth_secret}" != *$'\r'* ]] || \
+      fail "storage Primary auth secret must contain exactly one line"
     {
       printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET=%q\n' "${storage_primary_auth_secret}"
-      printf 'MOOX_STORAGE_VIEW_AUTH_SECRET=%q\n' "${storage_view_auth_secret}"
     } >"${STAGE_DIR}/secrets/storage-internal-auth.env"
+    if [[ "${WITH_STORAGE}" -eq 1 ]]; then
+      local storage_node_auth_secret="${MOOX_STORAGE_NODE_AUTH_SECRET:-}"
+      local storage_view_auth_secret="${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
+      if [[ -z "${storage_node_auth_secret}" ]]; then
+        storage_node_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-node-auth)"
+      fi
+      if [[ -z "${storage_view_auth_secret}" ]]; then
+        storage_view_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-view-auth)"
+      fi
+      [[ "${storage_node_auth_secret}" != *$'\n'* && "${storage_node_auth_secret}" != *$'\r'* ]] || \
+        fail "storage DataNode auth secret must contain exactly one line"
+      [[ "${storage_view_auth_secret}" != *$'\n'* && "${storage_view_auth_secret}" != *$'\r'* ]] || \
+        fail "storage View auth secret must contain exactly one line"
+      (umask 077; printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%q\n' "${storage_node_auth_secret}" >"${STAGE_DIR}/secrets/storage-node-auth.env")
+      printf 'MOOX_STORAGE_VIEW_AUTH_SECRET=%q\n' "${storage_view_auth_secret}" >>"${STAGE_DIR}/secrets/storage-internal-auth.env"
+    fi
     chmod 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env"
   fi
   cat >"${STAGE_DIR}/secrets/gateway-credentials.json" <<'EOF'
@@ -2777,9 +2781,13 @@ sync_local_stage() {
   install -m 0600 "${STAGE_DIR}/secrets/gateway-service.env" "${deploy_dir}/secrets/gateway-service.env"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-node-auth.env"
+  else
+    rm -f "${deploy_dir}/secrets/storage-node-auth.env"
+  fi
+  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_FACTOR}" -eq 1 ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
   else
-    rm -f "${deploy_dir}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
+    rm -f "${deploy_dir}/secrets/storage-internal-auth.env"
   fi
   for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key; do
     install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"

@@ -32,6 +32,7 @@ require_directory "${ROOT}/factor/factors"
 require_directory "${ROOT}/python-runtime"
 require_file "${ROOT}/secrets/gateway-factor.key"
 require_file "${ROOT}/secrets/gateway-service.env"
+require_file "${ROOT}/secrets/storage-internal-auth.env"
 require_file "${ROOT}/certs/gateway/peers.pem"
 
 secret_raw="$(cat "${ROOT}/secrets/gateway-factor.key"; printf x)"
@@ -53,6 +54,14 @@ if [[ -z "${gateway_node_id}" || "${gateway_node_id}" == *$'\n'* || "${gateway_n
   echo "gateway-service.env must contain exactly one non-empty MOOX_GATEWAY_NODE_ID" >&2
   exit 1
 fi
+storage_primary_secret="$(
+  bash -c 'set -u; source "$1"; printf "%s" "${MOOX_STORAGE_PRIMARY_AUTH_SECRET-}"' \
+    _ "${ROOT}/secrets/storage-internal-auth.env"
+)"
+if [[ -z "${storage_primary_secret}" || "${storage_primary_secret}" == *$'\n'* || "${storage_primary_secret}" == *$'\r'* ]]; then
+  echo "storage-internal-auth.env must contain exactly one non-empty MOOX_STORAGE_PRIMARY_AUTH_SECRET" >&2
+  exit 1
+fi
 
 export MOOX_FACTOR_DB_PATH="${ROOT}/data/factor/factor.db"
 export MOOX_FACTOR_ENGINE_PYTHON_BIN="${ROOT}/data/factor/venv/bin/python"
@@ -65,6 +74,7 @@ export MOOX_GATEWAY_SERVICE_KEY_ID="factor"
 export MOOX_GATEWAY_CALLER="factor"
 export MOOX_GATEWAY_SERVICE_SECRET_KEY="${secret}"
 export MOOX_GATEWAY_CA_FILE="${ROOT}/certs/gateway/peers.pem"
+export MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}"
 
 exec "${ROOT}/bin/moox-factor-cli" run-once \
   --config "${ROOT}/factor/config/app.yaml" \
