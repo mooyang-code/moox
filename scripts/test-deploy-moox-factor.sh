@@ -79,6 +79,7 @@ storage_primary_secret="$(
 )"
 [[ -n "${storage_primary_secret}" ]]
 grep -Fxq 'MOOX_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/secrets/gateway-service.env"
+grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}"' "${UNPACKED}/start.sh"
 
 cat >"${UNPACKED}/bin/moox-factor-cli" <<EOF
 #!/usr/bin/env bash
