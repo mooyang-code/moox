@@ -41,6 +41,9 @@ func Load(path string) (*Config, error) {
 	if cfg.IdentityPath == "" || cfg.EventBusConfig == "" {
 		return nil, fmt.Errorf("identity_path and eventbus_config are required")
 	}
+	if healthAddr := strings.TrimSpace(os.Getenv("MOOX_HOST_AGENT_HEALTH_ADDR")); healthAddr != "" {
+		cfg.HealthAddr = healthAddr
+	}
 	cfg.IdentityPath, cfg.EventBusConfig = Expand(cfg.IdentityPath), Expand(cfg.EventBusConfig)
 	cfg.HostName = strings.TrimSpace(cfg.HostName)
 	return cfg, nil
