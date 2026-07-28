@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
+go run ./scripts/check-trade-exchange-terminology.go
+
 violations=()
 
 # Domain and core packages contain business rules and must not depend on delivery
