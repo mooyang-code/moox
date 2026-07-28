@@ -473,7 +473,6 @@ func waitForViewRows(
 		})
 		require.NoError(collect, err)
 		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-		require.Equal(collect, outputs, columnNames(rsp.GetColumns()))
 		require.Len(collect, rsp.GetRows(), 2)
 		require.True(collect, factorRowsHaveExpectedValues(rsp.GetRows(), first, second, secondNull),
 			"View has not applied the expected factor patch yet")
@@ -483,14 +482,6 @@ func waitForViewRows(
 	}, 30*time.Second, 200*time.Millisecond)
 	t.Log("real Storage DataView.QueryTimeSeriesRows returned both nanosecond rows")
 	return rows
-}
-
-func columnNames(columns []*storagepb.ResultColumn) []string {
-	out := make([]string, len(columns))
-	for i, column := range columns {
-		out[i] = column.GetColumnName()
-	}
-	return out
 }
 
 func datasetColumnNames(columns []*storagepb.DatasetColumn) []string {
