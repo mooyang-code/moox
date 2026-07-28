@@ -17,6 +17,7 @@ cat >"${TMP}/modules/trade/internal/accepted.go" <<'EOF'
 package trade
 
 import (
+	cfg "example.com/vue/config"
 	sdktrace "example.com/sdktrace"
 	trace "example.com/trace"
 )
@@ -41,6 +42,7 @@ func NewTradeRuntime(provider trace.TracerProvider) {
 	runtime.tracerProvider = provider
 }
 func NewTradeConfig(provider ConfigProvider)         {}
+func NewAliasedTradeConfig(provider cfg.ConfigProvider) {}
 func TradeRun(provider trace.TracerProvider) error {
 	provider, err := Load()
 	use(provider)
@@ -122,6 +124,10 @@ type ExchangeProvider struct{}
 EOF
 
 cat >"${TMP}/web/src/api/trade/accepted.ts" <<'EOF'
+import * as VueAlias from "vue";
+import { ConfigProvider as VueConfig } from "vue/config";
+import VueDefault from "vue/default"
+
 export interface ExchangeOrder {
   exchange: string;
 }
@@ -132,6 +138,8 @@ export interface TradeClient {
   vueConfig?: Vue.ConfigProvider;
   configList?: ReadonlyArray<ConfigProvider>;
   configPromise?: Promise<ConfigProvider[]>;
+  namedConfig?: VueConfig;
+  defaultConfig?: VueDefault.ConfigProvider;
 }
 
 export interface ExchangeBraceText {
@@ -144,6 +152,24 @@ export function configureTrade(
   provider: Vue.ConfigProvider,
 ) {}
 
+export async function configureAsyncTrade(
+  provider: VueAlias.ConfigProvider,
+) {}
+
+export const configureArrowTrade = (
+  provider: VueAlias.ConfigProvider,
+) => {};
+
+export const configureConciseTrade = (
+  provider: VueAlias.ConfigProvider,
+) => undefined;
+const providerAfterConciseArrow = "telemetry";
+
+export class ExchangeRegexText {
+  marker = /\{/;
+}
+const providerAfterRegex = "telemetry";
+
 export type ExchangeID = string;
 const provider = "telemetry";
 EOF
@@ -152,6 +178,8 @@ cat >"${TMP}/web/src/api/trade/accepted.yaml" <<'EOF'
 telemetry:
   tracer_provider: otel
 "telemetry":
+  provider: otel
+telemetry_anchor: &telemetry_config
   provider: otel
 EOF
 
@@ -272,6 +300,22 @@ type TradeTelemetry struct {
 }
 
 func SyncExchange(provider binance.ConfigProvider) {}
+EOF
+
+cat >"${TMP}/modules/trade/internal/bad_import_alias.go" <<'EOF'
+package trade
+
+import (
+	b "example.com/binance/sdk"
+	o "example.com/okx/config"
+)
+
+type TradeTelemetry struct {
+	Provider b.ConfigProvider
+	Source o.TracerProvider
+}
+
+func SyncExchange(provider b.ConfigProvider) {}
 EOF
 
 cat >"${TMP}/modules/trade/internal/bad_type_expression.go" <<'EOF'
@@ -482,6 +526,22 @@ export interface TradeClient {
 }
 EOF
 
+cat >"${TMP}/web/src/api/trade/bad_import_alias.ts" <<'EOF'
+import * as b from "@app/binance/sdk";
+import { ConfigProvider as ExchangeConfig } from "@app/exchange/config";
+import exchangeDefault from "@app/exchange/default"
+import {
+  ConfigProvider as MultiConfig,
+} from "@app/okx/config"
+
+export interface TradeClient {
+  provider?: b.ConfigProvider;
+  source?: ExchangeConfig;
+  defaultSource?: exchangeDefault.ConfigProvider;
+  multilineSource?: MultiConfig;
+}
+EOF
+
 cat >"${TMP}/web/src/api/trade/bad_braces.ts" <<'EOF'
 export interface ExchangeStringBrace {
   marker: "}";
@@ -494,6 +554,25 @@ export interface TradeCommentBrace {
 }
 EOF
 
+cat >"${TMP}/web/src/api/trade/bad_regex_braces.ts" <<'EOF'
+export class ExchangeRegexBrace {
+  marker = /}/;
+  provider = "otel";
+}
+
+export class TradeRegexClassBrace {
+  marker = /[}]/;
+  broker = "spot";
+}
+
+export class ExchangeReturnRegex {
+  pattern() {
+    return /}/;
+  }
+  provider = "otel";
+}
+EOF
+
 cat >"${TMP}/web/src/api/trade/bad_function.ts" <<'EOF'
 export function syncExchange(
   provider: string,
@@ -501,6 +580,17 @@ export function syncExchange(
   venue: string,
   platform: string,
 ) {}
+EOF
+
+cat >"${TMP}/web/src/api/trade/bad_async_arrow.ts" <<'EOF'
+export async function syncExchange(
+  provider: string,
+) {}
+
+export const rebalanceTrade = (
+  broker: string,
+  venue: string,
+) => {};
 EOF
 
 cat >"${TMP}/web/src/api/trade/bad_multiline.ts" <<'EOF'
@@ -555,6 +645,12 @@ exchangeprovider: binance
   broker: spot
   venue: spot
   platform: api
+exchange_anchor: &exchange_config
+  provider: otel
+trade_tagged: !trade_config
+  broker: spot
+exchange_tagged_anchor: !exchange_config &shared
+  venue: spot
 EOF
 
 cat >"${TMP}/web/src/api/trade/bad.md" <<'EOF'
@@ -584,14 +680,15 @@ missing_fixture=false
 for fixture in \
   bad.go bad_interface.go bad_receiver.go bad_okx.go bad_lowercase.go \
   bad_statements.go bad_third_party_name.go \
-  bad_third_party_identifier.go bad_provider_qualifier.go \
+  bad_third_party_identifier.go bad_provider_qualifier.go bad_import_alias.go \
   bad_type_expression.go bad_local_var.go \
   bad_type_specs.go bad_generic_constraints.go bad_recursive_types.go \
   bad_results.go bad_short_decl.go bad_provider_shadow.go bad_body_expressions.go \
   bad_range.go bad_secretclient.go \
   bad_secret_wire.go bad_struct_tags.go bad.proto bad_multiline.proto \
   bad_lowercase.proto bad_braces.proto bad.ts bad_third_party_name.ts \
-  bad_provider_qualifier.ts bad_braces.ts bad_function.ts bad_multiline.ts \
+  bad_provider_qualifier.ts bad_import_alias.ts bad_braces.ts \
+  bad_regex_braces.ts bad_function.ts bad_async_arrow.ts bad_multiline.ts \
   bad_union.ts bad_lowercase.ts \
   bad.yaml bad.md; do
   if ! rg -q --fixed-strings "${fixture}:" "${TMP}/bad.out"; then
@@ -616,6 +713,7 @@ for expected in \
   bad_third_party_identifier.go:10 \
   bad_provider_qualifier.go:4 bad_provider_qualifier.go:5 \
   bad_provider_qualifier.go:8 \
+  bad_import_alias.go:9 bad_import_alias.go:10 bad_import_alias.go:13 \
   bad_type_expression.go:6 bad_type_expression.go:10 bad_type_expression.go:13 \
   bad_local_var.go:4 bad_type_specs.go:5 bad_type_specs.go:6 \
   bad_generic_constraints.go:5 bad_generic_constraints.go:7 \
@@ -632,13 +730,18 @@ for expected in \
   bad_third_party_name.ts:2 bad_third_party_name.ts:3 \
   bad_third_party_name.ts:4 bad_third_party_name.ts:5 \
   bad_provider_qualifier.ts:2 bad_provider_qualifier.ts:3 \
+  bad_import_alias.ts:9 bad_import_alias.ts:10 \
+  bad_import_alias.ts:11 bad_import_alias.ts:12 \
   bad_braces.ts:3 bad_braces.ts:8 \
+  bad_regex_braces.ts:3 bad_regex_braces.ts:8 bad_regex_braces.ts:15 \
   bad_function.ts:2 bad_function.ts:3 bad_function.ts:4 bad_function.ts:5 \
+  bad_async_arrow.ts:2 bad_async_arrow.ts:6 bad_async_arrow.ts:7 \
   bad_multiline.ts:3 bad_multiline.ts:8 \
   bad_union.ts:3 bad_union.ts:7 bad_union.ts:11 bad_union.ts:14 \
   bad_lowercase.ts:2 bad_lowercase.ts:3 bad_lowercase.ts:4 \
   bad.yaml:3 bad.yaml:4 bad.yaml:5 bad.yaml:7 bad.yaml:8 \
   bad.yaml:10 bad.yaml:12 bad.yaml:13 bad.yaml:14 \
+  bad.yaml:16 bad.yaml:18 bad.yaml:20 \
   bad.md:4 bad.md:5 bad.md:6 bad.md:9 bad.md:12; do
   rg -q --fixed-strings "${expected}:" "${TMP}/bad.out" || {
     echo "checker did not report ${expected}" >&2
@@ -657,6 +760,7 @@ rm \
   "${TMP}/modules/trade/internal/bad_third_party_name.go" \
   "${TMP}/modules/trade/internal/bad_third_party_identifier.go" \
   "${TMP}/modules/trade/internal/bad_provider_qualifier.go" \
+  "${TMP}/modules/trade/internal/bad_import_alias.go" \
   "${TMP}/modules/trade/internal/bad_type_expression.go" \
   "${TMP}/modules/trade/internal/bad_local_var.go" \
   "${TMP}/modules/trade/internal/bad_type_specs.go" \
@@ -677,8 +781,11 @@ rm \
   "${TMP}/web/src/api/trade/bad.ts" \
   "${TMP}/web/src/api/trade/bad_third_party_name.ts" \
   "${TMP}/web/src/api/trade/bad_provider_qualifier.ts" \
+  "${TMP}/web/src/api/trade/bad_import_alias.ts" \
   "${TMP}/web/src/api/trade/bad_braces.ts" \
+  "${TMP}/web/src/api/trade/bad_regex_braces.ts" \
   "${TMP}/web/src/api/trade/bad_function.ts" \
+  "${TMP}/web/src/api/trade/bad_async_arrow.ts" \
   "${TMP}/web/src/api/trade/bad_multiline.ts" \
   "${TMP}/web/src/api/trade/bad_union.ts" \
   "${TMP}/web/src/api/trade/bad_lowercase.ts" \
