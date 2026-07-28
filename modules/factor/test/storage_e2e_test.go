@@ -59,6 +59,10 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	if len(suffix) > 8 {
 		suffix = suffix[len(suffix)-8:]
 	}
+	displaySuffix := suffix
+	if len(displaySuffix) > 4 {
+		displaySuffix = displaySuffix[len(displaySuffix)-4:]
+	}
 	spaceID := "factor_e2e_" + suffix
 	sourceID := "portfolio_" + suffix
 	targetID := "portfolio_factor_" + suffix
@@ -72,37 +76,47 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	first := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 	second := first.Add(time.Nanosecond)
 	end := second.Add(time.Nanosecond)
+	var spaceCreated, factorCreated, bindingCreated bool
 
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cleanupCancel()
-		if rsp, err := factor.DeleteBinding(cleanupCtx, &factorpb.DeleteBindingReq{BindingId: bindingID}); err != nil ||
-			rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-			t.Logf("cleanup binding %s failed: rsp=%v err=%v", bindingID, rsp, err)
+		if bindingCreated {
+			if rsp, err := factor.DeleteBinding(cleanupCtx, &factorpb.DeleteBindingReq{BindingId: bindingID}); err != nil ||
+				rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+				reportCleanupFailure(t, "binding "+bindingID, rsp, err)
+			}
 		}
-		if rsp, err := factor.SetFactorStatus(cleanupCtx, &factorpb.SetFactorStatusReq{
-			FactorId: factorID, Status: "disabled",
-		}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-			t.Logf("cleanup factor %s failed: rsp=%v err=%v", factorID, rsp, err)
+		if factorCreated {
+			if rsp, err := factor.SetFactorStatus(cleanupCtx, &factorpb.SetFactorStatusReq{
+				FactorId: factorID, Status: "disabled",
+			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+				reportCleanupFailure(t, "factor "+factorID, rsp, err)
+			}
 		}
-		if rsp, err := metadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
-			AuthInfo: auth, SpaceId: spaceID,
-		}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-			t.Logf("cleanup space %s failed: rsp=%v err=%v", spaceID, rsp, err)
+		if spaceCreated {
+			if rsp, err := metadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
+				AuthInfo: auth, SpaceId: spaceID,
+			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+				reportCleanupFailure(t, "space "+spaceID, rsp, err)
+			} else {
+				t.Logf("cleanup space %s succeeded", spaceID)
+			}
 		}
 	})
 
 	spaceRsp, err := metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{
 		AuthInfo: auth,
 		Space: &storagepb.Space{
-			SpaceId: spaceID, Name: "因子验收空间", Owner: "factor-storage-e2e", Status: "active",
+			SpaceId: spaceID, Name: "验收" + displaySuffix, Owner: "factor-storage-e2e", Status: "active",
 		},
 	})
 	requireStorageOK(t, "CreateSpace", spaceRsp, err)
+	spaceCreated = true
 	dataSourceRsp, err := metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{
 		AuthInfo: auth,
 		DataSource: &storagepb.DataSource{
-			SpaceId: spaceID, DataSourceId: "factor_e2e", Name: "因子验收源",
+			SpaceId: spaceID, DataSourceId: "factor_e2e", Name: "验源" + displaySuffix,
 			Kind: "internal", Timezone: "UTC", Status: "active",
 		},
 	})
@@ -111,14 +125,14 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		AuthInfo: auth,
 		Subject: &storagepb.Subject{
 			SpaceId: spaceID, SubjectId: subjectID, SubjectType: "custom",
-			Name: "验收组合", Timezone: "UTC", Status: "active",
+			Name: "组合" + displaySuffix, Timezone: "UTC", Status: "active",
 		},
 	})
 	requireStorageOK(t, "UpsertSubject", subjectRsp, err)
 	groupRsp, err := metadata.CreateFieldGroup(ctx, &storagepb.CreateFieldGroupReq{
 		AuthInfo: auth,
 		FieldGroup: &storagepb.FieldGroup{
-			SpaceId: spaceID, GroupId: "factor_e2e", Name: "因子验收", Status: "active",
+			SpaceId: spaceID, GroupId: "factor_e2e", Name: "验组" + displaySuffix, Status: "active",
 		},
 	})
 	requireStorageOK(t, "CreateFieldGroup", groupRsp, err)
@@ -141,7 +155,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		AuthInfo: auth,
 		Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: sourceID, DataSourceId: "factor_e2e",
-			Name: "组合时序", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			Name: "时序" + displaySuffix, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			Freqs: []string{freq}, DataNodeId: dataNodeID, KeepDuration: "24h", Status: "disabled",
 		},
 	})
@@ -186,7 +200,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	sourceViewRsp, err := metadata.CreateView(ctx, &storagepb.CreateViewReq{
 		AuthInfo: auth,
 		View: &storagepb.View{
-			SpaceId: spaceID, ViewId: sourceViewID, Name: "组合输入视图",
+			SpaceId: spaceID, ViewId: sourceViewID, Name: "源视" + displaySuffix,
 			PrimaryDatasetId: sourceID, DatasetIds: []string{sourceID},
 			GrainKeys: []string{"subject_id", "freq", "data_time"}, Engine: "duckdb",
 			KeepDuration: "24h", Status: "active",
@@ -229,6 +243,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	requireStorageRet(t, "FactorMgr.CreateFactor", createFactorRsp.GetRetInfo())
+	factorCreated = true
 	bindRsp, err := factor.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: &factorpb.FactorBinding{
 		BindingId: bindingID, FactorId: factorID, SpaceId: spaceID,
 		SourceDataset: sourceID, Freq: freq, SubjectMode: "all", SubjectsJson: "[]",
@@ -236,6 +251,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	requireStorageRet(t, "FactorMgr.UpsertBinding", bindRsp.GetRetInfo())
+	bindingCreated = true
 	targetColumnsRsp, err := metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{
 		AuthInfo: auth, SpaceId: spaceID, DatasetId: targetID,
 		Page: &commonpb.Page{Page: 1, Size: 10},
@@ -251,7 +267,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	createViewRsp, err := metadata.CreateView(ctx, &storagepb.CreateViewReq{
 		AuthInfo: auth,
 		View: &storagepb.View{
-			SpaceId: spaceID, ViewId: viewID, Name: "因子结果视图",
+			SpaceId: spaceID, ViewId: viewID, Name: "因视" + displaySuffix,
 			PrimaryDatasetId: targetID, DatasetIds: []string{targetID},
 			GrainKeys: []string{"subject_id", "freq", "data_time"}, Engine: "duckdb",
 			KeepDuration: "24h", Status: "active", Columns: viewColumns,
@@ -309,6 +325,15 @@ func requiredEnv(t *testing.T, name string) string {
 	value := strings.TrimSpace(os.Getenv(name))
 	require.NotEmpty(t, value, "%s is required", name)
 	return value
+}
+
+func reportCleanupFailure(t *testing.T, resource string, rsp any, err error) {
+	t.Helper()
+	if t.Failed() {
+		t.Logf("cleanup %s failed after primary failure: rsp=%v err=%v", resource, rsp, err)
+		return
+	}
+	t.Errorf("cleanup %s failed: rsp=%v err=%v", resource, rsp, err)
 }
 
 func inputRow(spaceID, datasetID, subjectID, freq string, at time.Time, nav, benchmark float64) *storagepb.RowFieldUpsert {
