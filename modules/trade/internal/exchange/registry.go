@@ -2,38 +2,92 @@ package exchange
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
-// Factory 创建某交易所 ExchangeAdapter 的工厂函数。
-type Factory func() ExchangeAdapter
+type Factory func(AccountConfig, Credential) (Adapter, error)
 
-var (
-	mu       sync.RWMutex
-	registry = make(map[string]Factory)
-)
-
-// Register 注册交易所适配器工厂。通常在各交易所包 init() 中调用。
-// 重复注册同名交易所会 panic，以便在启动期暴露冲突。
-func Register(name string, f Factory) {
-	if name == "" || f == nil {
-		panic("exchange: Register requires non-empty name and factory")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if _, dup := registry[name]; dup {
-		panic(fmt.Sprintf("exchange: duplicate registration for %q", name))
-	}
-	registry[name] = f
+type Registry struct {
+	mu        sync.RWMutex
+	factories map[Exchange]Factory
 }
 
-// New 按交易所名创建一个新的适配器实例。
-func New(name string) (ExchangeAdapter, error) {
-	mu.RLock()
-	f, ok := registry[name]
-	mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("exchange: unknown exchange %q", name)
+func NewRegistry() *Registry {
+	return &Registry{factories: make(map[Exchange]Factory)}
+}
+
+func (r *Registry) Register(name Exchange, factory Factory) {
+	if !name.Valid() || factory == nil {
+		panic("exchange: Register requires a supported Exchange and factory")
 	}
-	return f(), nil
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.factories[name]; exists {
+		panic(fmt.Sprintf("exchange: duplicate registration for %q", name))
+	}
+	r.factories[name] = factory
+}
+
+func (r *Registry) Bind(config AccountConfig, credential Credential) (Adapter, error) {
+	if err := validateBinding(config, credential); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	factory, ok := r.factories[config.Exchange]
+	r.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("exchange: unregistered Exchange %q", config.Exchange)
+	}
+	adapter, err := factory(config, credential)
+	if err != nil {
+		return nil, fmt.Errorf("exchange: bind %s account %q: %w", config.Exchange, config.ExchangeAccountID, err)
+	}
+	if adapter == nil {
+		return nil, fmt.Errorf("exchange: %s factory returned nil adapter", config.Exchange)
+	}
+	if adapter.Exchange() != config.Exchange {
+		return nil, fmt.Errorf(
+			"exchange: adapter identity %q does not match account Exchange %q",
+			adapter.Exchange(),
+			config.Exchange,
+		)
+	}
+	return adapter, nil
+}
+
+func validateBinding(config AccountConfig, credential Credential) error {
+	if strings.TrimSpace(config.ExchangeAccountID) == "" ||
+		!config.Exchange.Valid() ||
+		!config.MarketType.Valid() ||
+		!config.ExecutionMode.Valid() ||
+		strings.TrimSpace(config.SettlementAsset) == "" {
+		return fmt.Errorf("exchange: invalid account binding")
+	}
+	switch config.MarketType {
+	case MarketTypeSpot:
+		if config.MarginMode != MarginModeUnspecified {
+			return fmt.Errorf("exchange: SPOT account cannot configure margin mode")
+		}
+	case MarketTypeSwap:
+		if config.MarginMode != MarginModeCross {
+			return fmt.Errorf("exchange: SWAP account requires CROSS margin mode")
+		}
+	}
+	if config.ExecutionMode == ExecutionModeLive &&
+		(strings.TrimSpace(credential.APIKey) == "" ||
+			strings.TrimSpace(credential.APISecret) == "") {
+		return fmt.Errorf("exchange: live account requires credential")
+	}
+	return nil
+}
+
+var defaultRegistry = NewRegistry()
+
+func Register(name Exchange, factory Factory) {
+	defaultRegistry.Register(name, factory)
+}
+
+func Bind(config AccountConfig, credential Credential) (Adapter, error) {
+	return defaultRegistry.Bind(config, credential)
 }

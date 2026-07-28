@@ -1,160 +1,108 @@
 package order
 
 import (
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"errors"
 	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
-func TestOrderLifecycleAndTerminalProtection(t *testing.T) {
-	o, _, err := New("o1", "c1", shared.MustDecimal("10"))
+func TestOrderLifecycle(t *testing.T) {
+	order, events, err := New("order-1", validSpec())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("New() error = %v", err)
 	}
-	steps := []func() error{
-		func() error { _, e := o.MarkReady(); return e },
-		func() error { _, e := o.BeginSubmit(); return e },
-		func() error { _, e := o.Acknowledge(); return e },
-		func() error { _, e := o.ApplyFill(shared.MustDecimal("4")); return e },
-		func() error { _, e := o.ApplyFill(shared.MustDecimal("6")); return e },
+	if order.State != Pending || order.Version != 1 || len(events) != 1 {
+		t.Fatalf("new order = %+v, events = %+v", order, events)
+	}
+
+	steps := []struct {
+		name string
+		run  func() ([]Event, error)
+		want State
+	}{
+		{"begin submit", order.BeginSubmit, Submitting},
+		{"acknowledge", func() ([]Event, error) { return order.Acknowledge("exchange-1") }, Open},
+		{"partial fill", func() ([]Event, error) {
+			return order.ApplyFill(shared.MustDecimal("0.4"))
+		}, PartiallyFilled},
+		{"fill", func() ([]Event, error) {
+			return order.ApplyFill(shared.MustDecimal("0.6"))
+		}, Filled},
 	}
 	for _, step := range steps {
-		if err := step(); err != nil {
-			t.Fatal(err)
-		}
+		t.Run(step.name, func(t *testing.T) {
+			if _, err := step.run(); err != nil {
+				t.Fatalf("transition error = %v", err)
+			}
+			if order.State != step.want {
+				t.Fatalf("state = %s, want %s", order.State, step.want)
+			}
+		})
 	}
-	if o.State != Filled || o.Version != 6 {
-		t.Fatalf("order=%+v", o)
-	}
-	if _, err := o.BeginCancel(); err == nil {
-		t.Fatal("terminal state regressed")
-	}
-}
-
-func TestUnknownMustBeQueriedBeforeRetry(t *testing.T) {
-	o, _, _ := New("o1", "c1", shared.MustDecimal("1"))
-	o.MarkReady()
-	o.BeginSubmit()
-	o.MarkUnknown()
-	if o.State != SubmitUnknown {
-		t.Fatal(o.State)
-	}
-	if _, err := o.Acknowledge(); err != nil {
-		t.Fatal(err)
+	if _, err := order.BeginCancel(); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("terminal transition error = %v", err)
 	}
 }
 
-func TestRecoverSubmitting_FromSubmitting_ShouldMarkUnknown(t *testing.T) {
-	o, _, _ := New("o1", "c1", shared.MustDecimal("1"))
-	o.MarkReady()
-	o.BeginSubmit()
-	_, err := o.RecoverSubmitting()
-	if err != nil {
-		t.Fatal(err)
+func TestOrderUnknownStates(t *testing.T) {
+	order, _, _ := New("order-1", validSpec())
+	_, _ = order.BeginSubmit()
+	if _, err := order.MarkSubmitUnknown(); err != nil {
+		t.Fatalf("MarkSubmitUnknown() error = %v", err)
 	}
-	if o.State != SubmitUnknown {
-		t.Fatalf("state=%s", o.State)
+	if _, err := order.Acknowledge("exchange-1"); err != nil {
+		t.Fatalf("Acknowledge() error = %v", err)
 	}
-}
-
-func TestCancelFlow_PartialFill_ShouldEndPartiallyCanceled(t *testing.T) {
-	o, _, _ := New("o1", "c1", shared.MustDecimal("10"))
-	o.MarkReady()
-	o.BeginSubmit()
-	o.Acknowledge()
-	o.ApplyFill(shared.MustDecimal("3"))
-	o.BeginCancel()
-	o.ConfirmCancel()
-	if o.State != PartiallyCanceled {
-		t.Fatalf("state=%s", o.State)
+	if _, err := order.BeginCancel(); err != nil {
+		t.Fatalf("BeginCancel() error = %v", err)
+	}
+	if _, err := order.MarkCancelUnknown(); err != nil {
+		t.Fatalf("MarkCancelUnknown() error = %v", err)
+	}
+	if _, err := order.ConfirmCancel(); err != nil {
+		t.Fatalf("ConfirmCancel() error = %v", err)
+	}
+	if order.State != Canceled {
+		t.Fatalf("state = %s", order.State)
 	}
 }
 
-func TestReject_FromReady_ShouldSucceed(t *testing.T) {
-	o, _, _ := New("o1", "c1", shared.MustDecimal("1"))
-	o.MarkReady()
-	if _, err := o.Reject(); err != nil {
-		t.Fatal(err)
-	}
-	if o.State != Rejected {
-		t.Fatalf("state=%s", o.State)
-	}
-}
-
-func TestCancelRecoveryTransitions(t *testing.T) {
-	o, _, _ := New("o1", "c1", shared.MustDecimal("10"))
-	o.MarkReady()
-	o.BeginSubmit()
-	o.Acknowledge()
-	o.BeginCancel()
-
-	if _, err := o.RecoverCanceling(); err != nil {
-		t.Fatal(err)
-	}
-	if o.State != CancelUnknown {
-		t.Fatalf("state=%s, want %s", o.State, CancelUnknown)
-	}
-	if _, err := o.CancelStillOpen(); err != nil {
-		t.Fatal(err)
-	}
-	if o.State != Open {
-		t.Fatalf("state=%s, want %s", o.State, Open)
-	}
-}
-
-func TestCancelFailedRestoresStateByFillQuantity(t *testing.T) {
+func TestOrderRequiresPositiveQuantityAndIdentity(t *testing.T) {
 	tests := []struct {
-		name       string
-		fill       string
-		wantState  State
-		wantFilled string
+		name   string
+		id     shared.OrderID
+		mutate func(*OrderSpec)
 	}{
-		{name: "no_fill_returns_open", fill: "0", wantState: Open, wantFilled: "0"},
-		{name: "partial_fill_returns_partially_filled", fill: "3", wantState: PartiallyFilled, wantFilled: "3"},
+		{"missing ID", "", func(*OrderSpec) {}},
+		{"missing account", "order-1", func(spec *OrderSpec) { spec.ExchangeAccountID = "" }},
+		{"missing client ID", "order-1", func(spec *OrderSpec) { spec.ClientOrderID = "" }},
+		{"zero quantity", "order-1", func(spec *OrderSpec) { spec.Quantity = shared.Zero() }},
+		{"negative quantity", "order-1", func(spec *OrderSpec) { spec.Quantity = shared.MustDecimal("-1") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			o, _, _ := New("o1", "c1", shared.MustDecimal("10"))
-			o.MarkReady()
-			o.BeginSubmit()
-			o.Acknowledge()
-			if tt.fill != "0" {
-				if _, err := o.ApplyFill(shared.MustDecimal(tt.fill)); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if _, err := o.BeginCancel(); err != nil {
-				t.Fatal(err)
-			}
-
-			if _, err := o.CancelFailed(); err != nil {
-				t.Fatal(err)
-			}
-			if o.State != tt.wantState {
-				t.Fatalf("state=%s, want %s", o.State, tt.wantState)
-			}
-			if o.FilledQuantity.String() != tt.wantFilled {
-				t.Fatalf("filled=%s, want %s", o.FilledQuantity.String(), tt.wantFilled)
+			spec := validSpec()
+			tt.mutate(&spec)
+			if _, _, err := New(tt.id, spec); !errors.Is(err, ErrInvalidOrder) {
+				t.Fatalf("New() error = %v, want ErrInvalidOrder", err)
 			}
 		})
 	}
 }
 
-func TestNewRejectsInvalidInputs(t *testing.T) {
-	tests := []struct {
-		name     string
-		id       shared.OrderID
-		clientID string
-		qty      shared.Decimal
-	}{
-		{name: "empty_order_id", id: "", clientID: "c1", qty: shared.MustDecimal("1")},
-		{name: "empty_client_id", id: "o1", clientID: "", qty: shared.MustDecimal("1")},
-		{name: "zero_quantity", id: "o1", clientID: "c1", qty: shared.Zero()},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, _, err := New(tt.id, tt.clientID, tt.qty); err != ErrInvalidTransition {
-				t.Fatalf("err=%v, want %v", err, ErrInvalidTransition)
-			}
-		})
+func validSpec() OrderSpec {
+	return OrderSpec{
+		ExchangeAccountID: "account-1",
+		ClientOrderID:     "client-1",
+		Symbol:            "BTC-USDT",
+		OrderType:         exchange.OrderTypeMarket,
+		Side:              exchange.SideBuy,
+		Quantity:          shared.MustDecimal("1"),
+		ReferencePrice:    shared.MustDecimal("60000"),
+		ReferencePriceAt:  time.Now(),
+		Source:            "RPC",
 	}
 }
