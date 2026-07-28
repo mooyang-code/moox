@@ -328,6 +328,31 @@ func TestSetFactorStatusDisabledReconcilesStorageMetadata(t *testing.T) {
 	require.Zero(t, metadata.targetCalls)
 }
 
+func TestSetFactorStatusEnableReconciliationFailureRemainsNonExecutable(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorAndBinding(t, db, domain.FactorStatusDisabled)
+	metadata := newRecordingFactorMetadataClient("crypto", "bias")
+	metadata.createDatasetRet = &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "target unavailable"}
+	svc := NewWithRuntime(db, nil,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+	)
+
+	rsp, err := svc.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+		FactorId: "bias", Status: domain.FactorStatusEnabled,
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	factor, getErr := db.Factors().Get(ctx, "bias")
+	require.NoError(t, getErr)
+	require.Equal(t, domain.FactorStatusDisabled, factor.Status)
+	executable, listErr := db.Bindings().ListExecutable(ctx)
+	require.NoError(t, listErr)
+	require.Empty(t, executable)
+	require.NotZero(t, metadata.targetCalls)
+}
+
 func TestRecalcFactorRunsSynchronousRange(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
@@ -500,10 +525,11 @@ func seedRPCDisabledBindingWithScope(t *testing.T, db *store.Store, factorID, sp
 }
 
 type recordingFactorMetadataClient struct {
-	factors        map[string]*storagepb.Factor
-	updatedFactors []*storagepb.Factor
-	targetCalls    int
-	getFactorRet   *commonpb.RetInfo
+	factors          map[string]*storagepb.Factor
+	updatedFactors   []*storagepb.Factor
+	targetCalls      int
+	getFactorRet     *commonpb.RetInfo
+	createDatasetRet *commonpb.RetInfo
 }
 
 func newRecordingFactorMetadataClient(spaceID, factorID string) *recordingFactorMetadataClient {
@@ -536,6 +562,9 @@ func (f *recordingFactorMetadataClient) GetFactor(_ context.Context, req *storag
 
 func (f *recordingFactorMetadataClient) CreateDataset(context.Context, *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	f.targetCalls++
+	if f.createDatasetRet != nil {
+		return &storagepb.CreateDatasetRsp{RetInfo: f.createDatasetRet}, nil
+	}
 	return &storagepb.CreateDatasetRsp{RetInfo: success()}, nil
 }
 

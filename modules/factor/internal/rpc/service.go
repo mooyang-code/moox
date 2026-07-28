@@ -186,6 +186,20 @@ func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorSt
 	if req.GetFactorId() == "" || req.GetStatus() == "" {
 		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("factor_id and status are required"))}, nil
 	}
+	existing, err := s.factors.Get(ctx, req.GetFactorId())
+	if err != nil {
+		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+	}
+	if existing.Status == domain.FactorStatusEnabled && req.GetStatus() == domain.FactorStatusEnabled {
+		return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorToPB(*existing)}, nil
+	}
+	if req.GetStatus() == domain.FactorStatusEnabled {
+		candidate := *existing
+		candidate.Status = domain.FactorStatusEnabled
+		if err := s.syncFactorDefinitionBindings(ctx, candidate); err != nil {
+			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+		}
+	}
 	if err := s.factors.SetStatus(ctx, req.GetFactorId(), req.GetStatus()); err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 	}
@@ -193,8 +207,10 @@ func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorSt
 	if err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 	}
-	if err := s.syncFactorBindings(ctx, req.GetFactorId()); err != nil {
-		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+	if req.GetStatus() != domain.FactorStatusEnabled {
+		if err := s.syncFactorBindings(ctx, req.GetFactorId()); err != nil {
+			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+		}
 	}
 	return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorToPB(*got)}, nil
 }
@@ -370,7 +386,14 @@ func (s *Service) syncFactorBindings(ctx context.Context, factorID string) error
 	if err != nil {
 		return err
 	}
-	bindings, err := s.bindings.ListByFactor(ctx, factorID)
+	return s.syncFactorDefinitionBindings(ctx, *factor)
+}
+
+func (s *Service) syncFactorDefinitionBindings(ctx context.Context, factor domain.FactorDef) error {
+	if s.meta == nil {
+		return nil
+	}
+	bindings, err := s.bindings.ListByFactor(ctx, factor.FactorID)
 	if err != nil {
 		return err
 	}
@@ -385,7 +408,7 @@ func (s *Service) syncFactorBindings(ctx context.Context, factorID string) error
 	}
 	slices.Sort(spaces)
 	for _, spaceID := range spaces {
-		if err := s.meta.SyncFactorMetadata(ctx, spaceID, *factor); err != nil {
+		if err := s.meta.SyncFactorMetadata(ctx, spaceID, factor); err != nil {
 			return err
 		}
 	}
@@ -396,7 +419,7 @@ func (s *Service) syncFactorBindings(ctx context.Context, factorID string) error
 		if binding.Status != domain.BindingStatusEnabled {
 			continue
 		}
-		if err := s.syncEnabledBindingTarget(ctx, binding, *factor); err != nil {
+		if err := s.syncEnabledBindingTarget(ctx, binding, factor); err != nil {
 			return err
 		}
 	}
