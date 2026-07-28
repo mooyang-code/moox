@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -67,11 +68,12 @@ func (s *Store) AcceptTarget(
 }
 
 func (tx *Tx) AcceptTarget(record TargetExecutionRecord) (bool, error) {
-	if record.SpaceID == "" || record.ExecutionID == "" || record.EventID == "" ||
-		record.EventID != record.ExecutionID || record.StrategyRunID == "" ||
-		record.ExecutionBindingID == "" || record.ExchangeAccountID == "" ||
-		record.DataRevision == "" || record.CommandSequence == 0 ||
-		record.NotAfter <= time.Now().UnixMilli() || record.Status == "" {
+	if blank(record.SpaceID) || blank(record.ExecutionID) || blank(record.EventID) ||
+		record.EventID != record.ExecutionID || blank(record.StrategyRunID) ||
+		blank(record.ExecutionBindingID) ||
+		blank(record.ExchangeAccountID) || blank(record.DataRevision) ||
+		record.CommandSequence == 0 || record.NotAfter <= time.Now().UnixMilli() ||
+		blank(record.Status) {
 		return false, fmt.Errorf("%w: incomplete target execution", ErrInvalidRecord)
 	}
 	targetsJSON, err := encodeTargets(record.Targets)
@@ -160,7 +162,7 @@ func encodeTargets(targets []TargetPosition) (string, error) {
 	symbols := make(map[string]struct{}, len(canonical))
 	for i := range canonical {
 		target := &canonical[i]
-		if target.InstrumentID == "" || target.Symbol == "" {
+		if blank(target.InstrumentID) || blank(target.Symbol) {
 			return "", fmt.Errorf("%w: incomplete target identity", ErrInvalidRecord)
 		}
 		if _, duplicate := symbols[target.Symbol]; duplicate {
@@ -178,4 +180,8 @@ func encodeTargets(targets []TargetPosition) (string, error) {
 		return "", fmt.Errorf("%w: encode targets: %v", ErrInvalidRecord, err)
 	}
 	return string(data), nil
+}
+
+func blank(value string) bool {
+	return strings.TrimSpace(value) == ""
 }

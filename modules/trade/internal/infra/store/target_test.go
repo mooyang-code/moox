@@ -97,6 +97,18 @@ func TestAcceptTargetRejectsIncompleteOrContradictoryIntent(t *testing.T) {
 				InstrumentID: "btc-2", Symbol: "BTCUSDT", TargetQuantity: "2",
 			})
 		}},
+		{"whitespace space", func(v *TargetExecutionRecord) { v.SpaceID = " \t" }},
+		{"whitespace execution", func(v *TargetExecutionRecord) {
+			v.ExecutionID, v.EventID = "  ", "  "
+		}},
+		{"whitespace event", func(v *TargetExecutionRecord) { v.EventID = "\n" }},
+		{"whitespace strategy run", func(v *TargetExecutionRecord) { v.StrategyRunID = " " }},
+		{"whitespace binding", func(v *TargetExecutionRecord) { v.ExecutionBindingID = "\t" }},
+		{"whitespace account", func(v *TargetExecutionRecord) { v.ExchangeAccountID = "\n" }},
+		{"whitespace revision", func(v *TargetExecutionRecord) { v.DataRevision = "  " }},
+		{"whitespace status", func(v *TargetExecutionRecord) { v.Status = "\t" }},
+		{"whitespace instrument", func(v *TargetExecutionRecord) { v.Targets[0].InstrumentID = " " }},
+		{"whitespace symbol", func(v *TargetExecutionRecord) { v.Targets[0].Symbol = "\n" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
