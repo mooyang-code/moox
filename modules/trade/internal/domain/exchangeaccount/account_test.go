@@ -17,6 +17,20 @@ func TestAccountValidation(t *testing.T) {
 		{name: "valid SPOT", account: validSpotAccount()},
 		{name: "valid SWAP", account: validSwapAccount()},
 		{
+			name: "PAPER does not require credential",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.CredentialSecretID = ""
+			}),
+		},
+		{
+			name: "LIVE requires credential",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.ExecutionMode = exchange.ExecutionModeLive
+				account.CredentialSecretID = ""
+			}),
+			wantErr: true,
+		},
+		{
 			name: "SPOT rejects margin mode",
 			account: mutate(validSpotAccount(), func(account *Account) {
 				account.MarginMode = exchange.MarginModeCross

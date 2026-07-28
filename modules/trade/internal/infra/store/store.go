@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -81,19 +82,6 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 	`).Scan(&tables).Error; err != nil {
 		return fmt.Errorf("inspect trade schema: %w", err)
 	}
-	obsolete := map[string]struct{}{
-		"t_accounts": {}, "t_account_balances": {}, "t_account_fund_flows": {},
-		"t_account_api_keys": {}, "t_trade_channels": {}, "t_order_operations": {},
-		"t_exchange_account_leverage": {}, "t_exchange_account_snapshots": {},
-		"t_target_positions": {}, "t_trade_reservations": {},
-		"t_trade_command_offsets": {}, "t_trade_inbox": {},
-		"t_execution_plans": {}, "t_execution_slices": {}, "t_trade_sagas": {},
-		"t_rebalance_runs": {}, "t_rebalance_legs": {}, "t_rebalance_targets": {},
-		"t_trade_sync_cursors": {}, "t_trade_order_aggregates": {},
-		"t_trade_fill_events": {}, "t_trade_position_projections": {},
-		"t_trade_controls": {}, "t_reconciliation_runs": {},
-		"t_reconciliation_differences": {},
-	}
 	approved := map[string]struct{}{
 		"t_exchange_accounts": {}, "t_exchange_instruments": {},
 		"t_trade_orders": {}, "t_order_fills": {}, "t_exchange_positions": {},
@@ -101,95 +89,128 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_ledger_entries": {}, "t_trade_balance_projections": {},
 	}
 	for _, table := range tables {
-		if _, found := obsolete[table]; found {
-			return fmt.Errorf("%w: obsolete table %s", ErrIncompatibleSchema, table)
-		}
-		if tradeOwnedTable(table) {
-			if _, found := approved[table]; !found {
-				return fmt.Errorf("%w: unexpected Trade table %s", ErrIncompatibleSchema, table)
-			}
+		if _, found := approved[table]; !found {
+			return fmt.Errorf("%w: unexpected table %s", ErrIncompatibleSchema, table)
 		}
 	}
-	if containsString(tables, "t_exchange_accounts") {
-		var accountColumns []struct {
-			Name string `gorm:"column:name"`
+
+	reference, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		return fmt.Errorf("open schema reference: %w", err)
+	}
+	if err := reference.Exec(schema.AllSQL()).Error; err != nil {
+		return fmt.Errorf("apply schema reference: %w", err)
+	}
+	for _, table := range tables {
+		got, err := inspectTableShape(db, table)
+		if err != nil {
+			return err
 		}
-		if err := db.Raw(`PRAGMA table_info("t_exchange_accounts")`).
-			Scan(&accountColumns).Error; err != nil {
-			return fmt.Errorf("inspect Exchange account schema: %w", err)
+		want, err := inspectTableShape(reference, table)
+		if err != nil {
+			return err
 		}
-		got := make([]string, 0, len(accountColumns))
-		for _, column := range accountColumns {
-			got = append(got, column.Name)
-		}
-		sort.Strings(got)
-		want := []string{
-			"c_credential_secret_id", "c_ctime", "c_exchange",
-			"c_exchange_account_id", "c_execution_mode", "c_fill_cursors_json",
-			"c_last_error", "c_last_ready_at", "c_last_sync_at",
-			"c_leverage_settings_json", "c_margin_mode", "c_market_type",
-			"c_mtime", "c_name", "c_pause_reason", "c_paused", "c_ready",
-			"c_settlement_asset", "c_snapshot_json", "c_snapshot_source_time",
-			"c_space_id", "c_status", "c_sync_symbols_json",
-		}
-		sort.Strings(want)
-		if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		if !reflect.DeepEqual(got, want) {
 			return fmt.Errorf(
-				"%w: t_exchange_accounts columns do not match current schema",
+				"%w: %s does not match current columns and constraints",
 				ErrIncompatibleSchema,
+				table,
 			)
 		}
-	}
-	if !containsString(tables, "t_target_executions") {
-		return nil
-	}
-	var columns []struct {
-		Name string `gorm:"column:name"`
-	}
-	if err := db.Raw(`PRAGMA table_info("t_target_executions")`).Scan(&columns).Error; err != nil {
-		return fmt.Errorf("inspect target execution schema: %w", err)
-	}
-	got := make([]string, 0, len(columns))
-	for _, column := range columns {
-		got = append(got, column.Name)
-	}
-	sort.Strings(got)
-	want := []string{
-		"c_command_sequence", "c_ctime", "c_data_revision", "c_event_id",
-		"c_exchange_account_id", "c_execution_binding_id", "c_execution_id",
-		"c_last_error", "c_mtime", "c_not_after", "c_progress",
-		"c_residual_quantity", "c_space_id", "c_status", "c_strategy_run_id",
-		"c_targets_json",
-	}
-	sort.Strings(want)
-	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		return fmt.Errorf(
-			"%w: t_target_executions columns do not match current schema",
-			ErrIncompatibleSchema,
-		)
 	}
 	return nil
 }
 
-func tradeOwnedTable(table string) bool {
-	for _, prefix := range []string{
-		"t_exchange_", "t_trade_", "t_order_", "t_target_", "t_ledger_",
-		"t_execution_", "t_rebalance_", "t_reconciliation_", "t_account_",
-	} {
-		if strings.HasPrefix(table, prefix) {
-			return true
-		}
-	}
-	return table == "t_accounts"
+type tableShape struct {
+	Columns     []tableColumn
+	UniqueKeys  []string
+	ForeignKeys []tableForeignKey
+	SchemaSQL   []string
 }
 
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
+type tableColumn struct {
+	Name       string  `gorm:"column:name"`
+	Type       string  `gorm:"column:type"`
+	NotNull    int     `gorm:"column:notnull"`
+	DefaultSQL *string `gorm:"column:dflt_value"`
+	PrimaryKey int     `gorm:"column:pk"`
+}
+
+type tableForeignKey struct {
+	Table    string `gorm:"column:table"`
+	From     string `gorm:"column:from"`
+	To       string `gorm:"column:to"`
+	OnUpdate string `gorm:"column:on_update"`
+	OnDelete string `gorm:"column:on_delete"`
+	Match    string `gorm:"column:match"`
+}
+
+func inspectTableShape(db *gorm.DB, table string) (tableShape, error) {
+	var shape tableShape
+	quoted := strings.ReplaceAll(table, `"`, `""`)
+	if err := db.Raw(`PRAGMA table_info("` + quoted + `")`).Scan(&shape.Columns).Error; err != nil {
+		return tableShape{}, fmt.Errorf("inspect %s columns: %w", table, err)
 	}
-	return false
+	var indexes []struct {
+		Name   string `gorm:"column:name"`
+		Unique int    `gorm:"column:unique"`
+	}
+	if err := db.Raw(`PRAGMA index_list("` + quoted + `")`).Scan(&indexes).Error; err != nil {
+		return tableShape{}, fmt.Errorf("inspect %s indexes: %w", table, err)
+	}
+	for _, index := range indexes {
+		if index.Unique == 0 {
+			continue
+		}
+		indexName := strings.ReplaceAll(index.Name, `"`, `""`)
+		var columns []struct {
+			Sequence int    `gorm:"column:seqno"`
+			Name     string `gorm:"column:name"`
+		}
+		if err := db.Raw(`PRAGMA index_info("` + indexName + `")`).Scan(&columns).Error; err != nil {
+			return tableShape{}, fmt.Errorf("inspect %s index %s: %w", table, index.Name, err)
+		}
+		sort.Slice(columns, func(i, j int) bool { return columns[i].Sequence < columns[j].Sequence })
+		names := make([]string, 0, len(columns))
+		for _, column := range columns {
+			names = append(names, column.Name)
+		}
+		shape.UniqueKeys = append(shape.UniqueKeys, strings.Join(names, "\x00"))
+	}
+	sort.Strings(shape.UniqueKeys)
+	if err := db.Raw(`PRAGMA foreign_key_list("` + quoted + `")`).Scan(&shape.ForeignKeys).Error; err != nil {
+		return tableShape{}, fmt.Errorf("inspect %s foreign keys: %w", table, err)
+	}
+	sort.Slice(shape.ForeignKeys, func(i, j int) bool {
+		left := shape.ForeignKeys[i]
+		right := shape.ForeignKeys[j]
+		return left.Table+"\x00"+left.From+"\x00"+left.To <
+			right.Table+"\x00"+right.From+"\x00"+right.To
+	})
+	var objects []struct {
+		Type string `gorm:"column:type"`
+		Name string `gorm:"column:name"`
+		SQL  string `gorm:"column:sql"`
+	}
+	if err := db.Raw(`
+		SELECT type, name, sql FROM sqlite_master
+		WHERE (type = 'table' AND name = ?)
+			OR (type = 'index' AND tbl_name = ? AND sql IS NOT NULL)
+		ORDER BY type, name
+	`, table, table).Scan(&objects).Error; err != nil {
+		return tableShape{}, fmt.Errorf("inspect %s schema SQL: %w", table, err)
+	}
+	for _, object := range objects {
+		shape.SchemaSQL = append(
+			shape.SchemaSQL,
+			object.Type+"\x00"+object.Name+"\x00"+normalizeSchemaSQL(object.SQL),
+		)
+	}
+	return shape, nil
+}
+
+func normalizeSchemaSQL(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
 func (s *Store) Close() error {

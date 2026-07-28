@@ -164,6 +164,26 @@ func TestCreateExchangeAccountIsExplicitAndRejectsDuplicate(t *testing.T) {
 	require.Equal(t, "ENABLED", got.Status)
 }
 
+func TestExchangeAccountCredentialIsRequiredOnlyForLive(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	paper := testAccount()
+	paper.CredentialSecretID = ""
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateExchangeAccount(paper)
+	}))
+
+	live := testAccount()
+	live.ExchangeAccountID = "account-live"
+	live.Name = "live"
+	live.ExecutionMode = "LIVE"
+	live.CredentialSecretID = ""
+	err := s.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateExchangeAccount(live)
+	})
+	require.ErrorIs(t, err, ErrInvalidRecord)
+}
+
 func testAccount() ExchangeAccountRecord {
 	return ExchangeAccountRecord{
 		SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",

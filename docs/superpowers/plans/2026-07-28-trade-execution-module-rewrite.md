@@ -1971,7 +1971,7 @@ git commit -m "refactor(trade): collapse public service surface"
 - Modify: `scripts/check-package-boundaries.sh`
 - Modify: `scripts/verify-event-contracts.sh`
 
-- [ ] **Step 1: Write failing static-boundary assertions**
+- [x] **Step 1: Write failing static-boundary assertions**
 
 Extend the repository checks to reject:
 
@@ -2000,7 +2000,7 @@ bash scripts/verify-event-contracts.sh
 
 Expected: FAIL while legacy packages and declarations still exist.
 
-- [ ] **Step 2: Delete replaced code instead of wrapping it**
+- [x] **Step 2: Delete replaced code instead of wrapping it**
 
 Delete the old service/DAO/database layer, the second Exchange abstraction,
 fixed Rebalance planner, reconciliation package, cancel-replace Saga,
@@ -2018,7 +2018,7 @@ ExchangeSession
 After every package deletion, use `rg` to update direct callers rather than
 adding forwarding types.
 
-- [ ] **Step 3: Simplify runtime configuration**
+- [x] **Step 3: Simplify runtime configuration**
 
 Keep only configuration actually consumed by the final process:
 
@@ -2026,19 +2026,15 @@ Keep only configuration actually consumed by the final process:
 database:
 eventbus:
 admin:
-exchanges:
-  binance:
-  okx:
 runtime:
-telemetry:
 ```
 
-Exchange credentials remain references to Admin secrets, never values in
-YAML. Remove stale per-service configuration, unused HTTP health listeners,
-old reconciliation timers, and Saga settings. Register the two tRPC services
-in `trpc_go.yaml`.
+Live Exchange credentials remain references to Admin secrets, never values in
+YAML; PAPER accounts need no Secret. Remove stale per-service configuration,
+unused HTTP health listeners, old reconciliation timers, and Saga settings.
+Register the two tRPC services in `trpc_go.yaml`.
 
-- [ ] **Step 4: Rewrite documentation against the approved design**
+- [x] **Step 4: Rewrite documentation against the approved design**
 
 Document:
 
@@ -2053,7 +2049,7 @@ Document:
 
 Do not describe old APIs as deprecated. They no longer exist.
 
-- [ ] **Step 5: Prove the old surface is gone**
+- [x] **Step 5: Prove the old surface is gone**
 
 ```bash
 rg -n \
@@ -2077,7 +2073,7 @@ Expected: both `rg` commands return no matches and exit 1; all three scripts
 PASS. A legitimate unrelated use must be excluded by a narrow, documented
 checker rule rather than a broad directory exemption.
 
-- [ ] **Step 6: Run module tests after deletion**
+- [x] **Step 6: Run module tests after deletion**
 
 ```bash
 cd modules/trade
@@ -2090,7 +2086,7 @@ go test -count=1 ./...
 
 Expected: PASS without compatibility packages.
 
-- [ ] **Step 7: Commit the greenfield cleanup**
+- [x] **Step 7: Commit the greenfield cleanup**
 
 ```bash
 git add modules/trade modules/strategy packages/tradeeventpb \

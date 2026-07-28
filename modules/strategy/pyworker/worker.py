@@ -47,11 +47,16 @@ def validate_result(value):
     if value["action"] == "rebalance" and not targets:
         raise ValueError("strategy rebalance targets are required")
     seen=set()
+    allowed_target_fields={
+        "instrument_id","symbol","target_quantity",
+        "reason","source_time","data_revision",
+    }
     for target in targets:
         if not isinstance(target,dict):
             raise ValueError("strategy target must be an object")
-        if "target_weight" in target:
-            raise ValueError("strategy target_weight is not supported")
+        unknown_fields=set(target)-allowed_target_fields
+        if unknown_fields:
+            raise ValueError(f"unknown strategy target fields: {sorted(unknown_fields)}")
         instrument=target.get("instrument_id")
         symbol=target.get("symbol")
         if (

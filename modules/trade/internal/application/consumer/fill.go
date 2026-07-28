@@ -15,17 +15,17 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 )
 
-type SourceKind string
+type FillOrigin string
 
 const (
-	SourcePrivateStream SourceKind = "private_stream"
-	SourceRESTSync      SourceKind = "rest_sync"
+	OriginPrivateSocket FillOrigin = "private_stream"
+	OriginRESTSnapshot  FillOrigin = "rest_sync"
 )
 
 type Source struct {
 	SpaceID           string
 	ExchangeAccountID string
-	Kind              SourceKind
+	Kind              FillOrigin
 }
 
 type Reducer struct {
@@ -186,7 +186,7 @@ func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
 	}
 	if strings.TrimSpace(source.SpaceID) == "" ||
 		strings.TrimSpace(source.ExchangeAccountID) == "" ||
-		(source.Kind != SourcePrivateStream && source.Kind != SourceRESTSync) {
+		(source.Kind != OriginPrivateSocket && source.Kind != OriginRESTSnapshot) {
 		return errors.New("trade: invalid Fill source")
 	}
 	if strings.TrimSpace(fill.ExchangeTradeID) == "" ||
@@ -526,7 +526,7 @@ func divideRounded(
 	return shared.ParseDecimal(raw)
 }
 
-func recordFillResult(source SourceKind, applied bool, err error) {
+func recordFillResult(source FillOrigin, applied bool, err error) {
 	result := "duplicate"
 	if applied {
 		result = "applied"

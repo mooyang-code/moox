@@ -40,15 +40,15 @@ func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
 	if r.ConfigErrors != nil {
 		configErrors = append(configErrors, r.ConfigErrors()...)
 	}
-	sessionsReady := sessionSnapshot.Ready == sessionSnapshot.EnabledLive
+	sessionsReady := sessionSnapshot.Ready == sessionSnapshot.Enabled
 	ready := databaseReady && eventBusReady && sessionsReady && len(configErrors) == 0
 	return ready, map[string]any{
-		"database_ready":                 databaseReady,
-		"eventbus_enabled":               r.EventBusEnabled,
-		"eventbus_ready":                 eventBusReady,
-		"enabled_live_exchange_accounts": sessionSnapshot.EnabledLive,
-		"ready_exchange_sessions":        sessionSnapshot.Ready,
-		"configuration_errors":           configErrors,
+		"database_ready":            databaseReady,
+		"eventbus_enabled":          r.EventBusEnabled,
+		"eventbus_ready":            eventBusReady,
+		"enabled_exchange_accounts": sessionSnapshot.Enabled,
+		"ready_exchange_sessions":   sessionSnapshot.Ready,
+		"configuration_errors":      configErrors,
 	}
 }
 

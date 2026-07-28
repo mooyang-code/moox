@@ -17,11 +17,16 @@ def validate_output(value):
     if value["action"] == "rebalance" and not targets:
         raise ContractError("rebalance targets are required")
     seen = set()
+    allowed_target_fields = {
+        "instrument_id", "symbol", "target_quantity",
+        "reason", "source_time", "data_revision",
+    }
     for target in targets:
         if not isinstance(target, dict):
             raise ContractError("target must be an object")
-        if "target_weight" in target:
-            raise ContractError("target_weight is not supported")
+        unknown_fields = set(target) - allowed_target_fields
+        if unknown_fields:
+            raise ContractError(f"unknown target fields: {sorted(unknown_fields)}")
         instrument = target.get("instrument_id")
         symbol = target.get("symbol")
         if (

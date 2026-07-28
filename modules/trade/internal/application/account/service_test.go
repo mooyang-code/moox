@@ -19,10 +19,9 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		wantWrites int
 	}{
 		{
-			name: "valid SPOT paper account",
-			secret: ExchangeSecret{
-				SecretID: "secret-1", Category: "exchange",
-				Exchange: exchange.ExchangeBinance, Status: "active",
+			name: "valid SPOT paper account without credential",
+			mutate: func(value *exchangeaccount.Account) {
+				value.CredentialSecretID = ""
 			},
 			wantWrites: 1,
 		},
@@ -67,6 +66,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		{
 			name: "missing credential secret ID",
 			mutate: func(value *exchangeaccount.Account) {
+				value.ExecutionMode = exchange.ExecutionModeLive
 				value.CredentialSecretID = ""
 			},
 			secret: validSecret(),
@@ -82,6 +82,9 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name: "wrong credential category",
+			mutate: func(value *exchangeaccount.Account) {
+				value.ExecutionMode = exchange.ExecutionModeLive
+			},
 			secret: ExchangeSecret{
 				SecretID: "secret-1", Category: "cloud",
 				Exchange: exchange.ExchangeBinance, Status: "active",
@@ -90,6 +93,9 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name: "wrong credential Exchange",
+			mutate: func(value *exchangeaccount.Account) {
+				value.ExecutionMode = exchange.ExecutionModeLive
+			},
 			secret: ExchangeSecret{
 				SecretID: "secret-1", Category: "exchange",
 				Exchange: exchange.ExchangeOKX, Status: "active",
@@ -98,6 +104,9 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name: "inactive credential",
+			mutate: func(value *exchangeaccount.Account) {
+				value.ExecutionMode = exchange.ExecutionModeLive
+			},
 			secret: ExchangeSecret{
 				SecretID: "secret-1", Category: "exchange",
 				Exchange: exchange.ExchangeBinance, Status: "disabled",
@@ -194,6 +203,21 @@ func TestCreateLiveAccountFailsClosedBeforeReadingCredential(t *testing.T) {
 	}
 	if store.createCalls != 0 {
 		t.Fatalf("Create() writes = %d, want 0", store.createCalls)
+	}
+}
+
+func TestCreatePaperAccountDoesNotRequireSecretSource(t *testing.T) {
+	store := newMemoryStore()
+	value := validAccount()
+	value.CredentialSecretID = ""
+	service := Service{Store: store}
+
+	got, err := service.Create(context.Background(), value)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if got.CredentialSecretID != "" || store.createCalls != 1 {
+		t.Fatalf("Create() = %+v, writes = %d", got, store.createCalls)
 	}
 }
 

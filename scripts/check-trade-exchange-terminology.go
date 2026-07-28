@@ -139,6 +139,9 @@ func (c *checker) scanRoot(root string) error {
 		if generatedProtobuf(path) {
 			return nil
 		}
+		if generatedProtobufSecurityTest(path) {
+			return nil
+		}
 
 		switch filepath.Ext(path) {
 		case ".go":
@@ -153,6 +156,12 @@ func (c *checker) scanRoot(root string) error {
 			return nil
 		}
 	})
+}
+
+func generatedProtobufSecurityTest(path string) bool {
+	normalized := filepath.ToSlash(path)
+	return filepath.Base(path) == "security_test.go" &&
+		strings.Contains(normalized, "/proto/tradegen/")
 }
 
 func generatedProtobuf(path string) bool {

@@ -20,7 +20,7 @@ type managerAccountSource struct {
 	accounts []store.ExchangeAccountRecord
 }
 
-func (s *managerAccountSource) ListEnabledLiveExchangeAccounts(
+func (s *managerAccountSource) ListEnabledExchangeAccounts(
 	context.Context,
 ) ([]store.ExchangeAccountRecord, error) {
 	s.mu.Lock()
@@ -105,7 +105,7 @@ func (s *managedSessionStub) Run(ctx context.Context) error {
 
 func (s *managedSessionStub) Ready() bool { return s.ready.Load() }
 
-func TestManagerOwnsExactlyOneSessionPerEnabledLiveAccount(t *testing.T) {
+func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 	account := store.ExchangeAccountRecord{ExchangeAccountID: "account-1"}
 	source := &managerAccountSource{accounts: []store.ExchangeAccountRecord{account}}
 	session := &managedSessionStub{
@@ -130,13 +130,13 @@ func TestManagerOwnsExactlyOneSessionPerEnabledLiveAccount(t *testing.T) {
 		return manager.Ready("account-1")
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(1), factoryCalls.Load())
-	require.Equal(t, SessionSnapshot{EnabledLive: 1, Ready: 1}, manager.Snapshot())
+	require.Equal(t, SessionSnapshot{Enabled: 1, Ready: 1}, manager.Snapshot())
 
 	time.Sleep(30 * time.Millisecond)
 	require.Equal(t, int32(1), factoryCalls.Load(), "polling must not duplicate sessions")
 	source.set(nil)
 	require.Eventually(t, func() bool {
-		return manager.Snapshot().EnabledLive == 0
+		return manager.Snapshot().Enabled == 0
 	}, time.Second, 10*time.Millisecond)
 	<-session.stopped
 

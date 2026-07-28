@@ -14,7 +14,7 @@ import (
 )
 
 type AccountSource interface {
-	ListEnabledLiveExchangeAccounts(context.Context) ([]store.ExchangeAccountRecord, error)
+	ListEnabledExchangeAccounts(context.Context) ([]store.ExchangeAccountRecord, error)
 }
 
 type ManagedSession interface {
@@ -25,7 +25,7 @@ type ManagedSession interface {
 type SessionFactory func(store.ExchangeAccountRecord) (ManagedSession, error)
 
 type SessionSnapshot struct {
-	EnabledLive  int
+	Enabled      int
 	Ready        int
 	ConfigErrors []string
 }
@@ -149,7 +149,7 @@ func (m *Manager) Snapshot() SessionSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := SessionSnapshot{
-		EnabledLive:  len(m.sessions),
+		Enabled:      len(m.sessions),
 		ConfigErrors: append([]string(nil), m.configErrors...),
 	}
 	for _, entry := range m.sessions {
@@ -162,7 +162,7 @@ func (m *Manager) Snapshot() SessionSnapshot {
 }
 
 func (m *Manager) reconcile(ctx context.Context) error {
-	accounts, err := m.Accounts.ListEnabledLiveExchangeAccounts(ctx)
+	accounts, err := m.Accounts.ListEnabledExchangeAccounts(ctx)
 	if err != nil {
 		return err
 	}

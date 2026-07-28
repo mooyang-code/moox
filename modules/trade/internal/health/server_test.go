@@ -70,7 +70,7 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 		},
 		{
 			name: "all requirements ready", eventBusEnabled: true, eventBusReady: true,
-			sessions: traderuntime.SessionSnapshot{EnabledLive: 2, Ready: 2},
+			sessions: traderuntime.SessionSnapshot{Enabled: 2, Ready: 2},
 			want:     true,
 		},
 		{
@@ -81,7 +81,7 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 		},
 		{
 			name:     "one live session disconnected",
-			sessions: traderuntime.SessionSnapshot{EnabledLive: 2, Ready: 1},
+			sessions: traderuntime.SessionSnapshot{Enabled: 2, Ready: 1},
 		},
 		{
 			name:         "configuration error",
@@ -99,7 +99,7 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 			}
 			ready, details := readiness.Evaluate(context.Background())
 			require.Equal(t, tt.want, ready)
-			require.Equal(t, tt.sessions.EnabledLive, details["enabled_live_exchange_accounts"])
+			require.Equal(t, tt.sessions.Enabled, details["enabled_exchange_accounts"])
 		})
 	}
 }

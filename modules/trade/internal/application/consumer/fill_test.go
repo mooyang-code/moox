@@ -99,7 +99,7 @@ func seedFillOrder(
 
 func fillSource() Source {
 	return Source{
-		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: SourcePrivateStream,
+		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: OriginPrivateSocket,
 	}
 }
 
@@ -147,7 +147,7 @@ func TestReducerApplyFillSpotPostsAssetAndFeeLedgerOnce(t *testing.T) {
 	assert.Equal(t, "899", balanceAmount(balances, "USDT", "AVAILABLE"))
 
 	applied, err = reducer.ApplyFill(context.Background(), fill, Source{
-		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: SourceRESTSync,
+		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: OriginRESTSnapshot,
 	})
 	require.NoError(t, err)
 	assert.False(t, applied)

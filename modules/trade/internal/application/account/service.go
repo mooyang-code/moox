@@ -212,13 +212,14 @@ func (s *Service) validateCredential(
 	ctx context.Context,
 	value exchangeaccount.Account,
 ) error {
+	if value.ExecutionMode == exchange.ExecutionModePaper {
+		return nil
+	}
 	if s.Secrets == nil {
 		return ErrServiceNotConfigured
 	}
-	if value.ExecutionMode == exchange.ExecutionModeLive {
-		if err := s.Secrets.ValidateLiveCredentialAccess(); err != nil {
-			return fmt.Errorf("%w: %v", ErrLiveCredentialAccess, err)
-		}
+	if err := s.Secrets.ValidateLiveCredentialAccess(); err != nil {
+		return fmt.Errorf("%w: %v", ErrLiveCredentialAccess, err)
 	}
 	secrets, err := s.Secrets.ListExchangeSecrets(ctx, value.Exchange)
 	if err != nil {

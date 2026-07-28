@@ -91,7 +91,7 @@
               <a-radio :value="2">Live</a-radio>
             </a-radio-group>
           </a-form-item>
-          <a-form-item label="Credential Secret ID" required>
+          <a-form-item v-if="form.execution_mode === 2" label="Credential Secret ID" required>
             <a-input v-model="form.credential_secret_id" />
           </a-form-item>
           <a-form-item label="结算资产" required><a-input v-model="form.settlement_asset" /></a-form-item>
@@ -186,7 +186,8 @@ function togglePause(account: ExchangeAccount) {
 }
 
 async function create() {
-  if (!form.name.trim() || !form.credential_secret_id.trim() || !form.settlement_asset.trim()) {
+  const credentialMissing = form.execution_mode === 2 && !form.credential_secret_id.trim();
+  if (!form.name.trim() || credentialMissing || !form.settlement_asset.trim()) {
     Message.warning("请填写所有必填字段");
     return false;
   }

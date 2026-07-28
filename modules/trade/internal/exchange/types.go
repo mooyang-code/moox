@@ -208,15 +208,16 @@ type PositionPresence struct {
 }
 
 type OrderRequest struct {
-	ClientOrderID string
-	Symbol        string
-	OrderType     OrderType
-	TimeInForce   TimeInForce
-	Side          Side
-	PositionSide  PositionSide
-	Quantity      shared.Decimal
-	LimitPrice    *shared.Decimal
-	ReduceOnly    bool
+	ClientOrderID  string
+	Symbol         string
+	OrderType      OrderType
+	TimeInForce    TimeInForce
+	Side           Side
+	PositionSide   PositionSide
+	Quantity       shared.Decimal
+	LimitPrice     *shared.Decimal
+	ReferencePrice shared.Decimal
+	ReduceOnly     bool
 }
 
 type Order struct {

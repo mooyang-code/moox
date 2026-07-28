@@ -5,45 +5,40 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 
 // AppConfig Trade 应用配置。
 type AppConfig struct {
-	Database       DatabaseConfig       `yaml:"database"`
-	Security       SecurityConfig       `yaml:"security"`
-	ControlGateway ControlGatewayConfig `yaml:"control_gateway"`
-	Sync           SyncConfig           `yaml:"sync"`
-	Log            LogConfig            `yaml:"log"`
-	Health         HealthConfig         `yaml:"health"`
-	EventBus       EventBusConfig       `yaml:"eventbus"`
+	Database DatabaseConfig `yaml:"database"`
+	Admin    AdminConfig    `yaml:"admin"`
+	EventBus EventBusConfig `yaml:"eventbus"`
+	Runtime  RuntimeConfig  `yaml:"runtime"`
 }
 
 // DatabaseConfig 数据库配置（当前仅支持 sqlite）。
 type DatabaseConfig struct {
-	Type            string        `yaml:"type"`
-	Path            string        `yaml:"path"`
-	MaxIdleConns    int           `yaml:"max_idle_conns"`
-	MaxOpenConns    int           `yaml:"max_open_conns"`
-	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
-	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
+	Path string `yaml:"path"`
 }
 
-// SecurityConfig 安全配置（API 凭证加解密密钥）。
-type SecurityConfig struct {
-	EncryptionKey string `yaml:"encryption_key"`
+// RuntimeConfig contains process-local execution settings.
+type RuntimeConfig struct {
+	EncryptionKey       string `yaml:"encryption_key"`
+	PaperInitialBalance string `yaml:"paper_initial_balance"`
 }
 
 const rejectedEncryptionKey = "moox-cloud-secret-key-32bytes"
 
-// ControlGatewayConfig 配置 trade 调用 admin 网关的后台服务地址。
-type ControlGatewayConfig struct {
+// AdminConfig configures Trade access to Admin secrets.
+type AdminConfig struct {
 	BaseURL     string            `yaml:"base_url"`
 	ServiceAuth ServiceAuthConfig `yaml:"service_auth"`
 }
@@ -57,31 +52,6 @@ type ServiceAuthConfig struct {
 	ExpireSeconds int64  `yaml:"expire_seconds"`
 }
 
-// SyncConfig 定时同步配置。
-type SyncConfig struct {
-	Enabled          bool `yaml:"enabled"`
-	SyncBalances     bool `yaml:"sync_balances"`
-	SyncPositions    bool `yaml:"sync_positions"`
-	SyncOrders       bool `yaml:"sync_orders"`
-	SyncTrades       bool `yaml:"sync_trades"`
-	WindowHours      int  `yaml:"window_hours"`
-	PageSize         int  `yaml:"page_size"`
-	MaxSymbolsPerRun int  `yaml:"max_symbols_per_run"`
-}
-
-// LogConfig 日志配置。
-type LogConfig struct {
-	Level      string `yaml:"level"`
-	OutputPath string `yaml:"output_path"`
-	MaxSize    int    `yaml:"max_size"`
-	MaxBackups int    `yaml:"max_backups"`
-	MaxAge     int    `yaml:"max_age"`
-}
-
-// HealthConfig controls the lightweight HTTP health endpoint.
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
-}
 type EventBusConfig struct {
 	Enabled        bool     `yaml:"enabled"`
 	URLs           []string `yaml:"urls"`
@@ -95,41 +65,16 @@ const TargetConsumer = "trade_target_v1"
 func DefaultConfig() *AppConfig {
 	return &AppConfig{
 		Database: DatabaseConfig{
-			Type:            "sqlite",
-			Path:            "./data/moox_trade.db",
-			MaxIdleConns:    10,
-			MaxOpenConns:    100,
-			ConnMaxLifetime: time.Hour,
-			ConnMaxIdleTime: 10 * time.Minute,
+			Path: "./data/moox_trade.db",
 		},
-		Security: SecurityConfig{},
-		ControlGateway: ControlGatewayConfig{
+		Runtime: RuntimeConfig{PaperInitialBalance: "100000"},
+		Admin: AdminConfig{
 			BaseURL: "https://106.53.107.122:11001",
 			ServiceAuth: ServiceAuthConfig{
 				AccessKey:     "moox-service",
 				SecretKey:     "",
 				ExpireSeconds: 60,
 			},
-		},
-		Sync: SyncConfig{
-			Enabled:          true,
-			SyncBalances:     true,
-			SyncPositions:    true,
-			SyncOrders:       true,
-			SyncTrades:       true,
-			WindowHours:      24,
-			PageSize:         500,
-			MaxSymbolsPerRun: 10,
-		},
-		Log: LogConfig{
-			Level:      "info",
-			OutputPath: "./log/moox_trade.log",
-			MaxSize:    100,
-			MaxBackups: 10,
-			MaxAge:     30,
-		},
-		Health: HealthConfig{
-			Addr: ":11210",
 		},
 		EventBus: EventBusConfig{Enabled: true, URLs: []string{"nats://127.0.0.1:4222"}, TargetConsumer: TargetConsumer},
 	}
@@ -156,8 +101,12 @@ func Load(configPath string) (*AppConfig, error) {
 			if !os.IsNotExist(err) {
 				return nil, fmt.Errorf("failed to read config file: %w", err)
 			}
-		} else if err := yaml.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("failed to parse config file: %w", err)
+		} else {
+			decoder := yaml.NewDecoder(bytes.NewReader(data))
+			decoder.KnownFields(true)
+			if err := decoder.Decode(cfg); err != nil {
+				return nil, fmt.Errorf("failed to parse config file: %w", err)
+			}
 		}
 	}
 	cfg.applyEnv()
@@ -172,55 +121,33 @@ func (c *AppConfig) applyEnv() {
 		c.Database.Path = v
 	}
 	if v := os.Getenv("MOOX_TRADE_ENCRYPTION_KEY"); v != "" {
-		c.Security.EncryptionKey = v
+		c.Runtime.EncryptionKey = v
 	}
-	if v := os.Getenv("MOOX_TRADE_CONTROL_GATEWAY"); v != "" {
-		c.ControlGateway.BaseURL = v
+	if v := os.Getenv("MOOX_TRADE_ADMIN_URL"); v != "" {
+		c.Admin.BaseURL = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
-		c.ControlGateway.ServiceAuth.AccessKey = v
+		c.Admin.ServiceAuth.AccessKey = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
-		c.ControlGateway.ServiceAuth.SecretKey = v
+		c.Admin.ServiceAuth.SecretKey = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
-		c.ControlGateway.ServiceAuth.TargetNode = v
+		c.Admin.ServiceAuth.TargetNode = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
-		c.ControlGateway.ServiceAuth.CAFile = v
-	}
-	if v := os.Getenv("MOOX_TRADE_HEALTH_ADDR"); v != "" {
-		c.Health.Addr = v
+		c.Admin.ServiceAuth.CAFile = v
 	}
 }
 
 // Validate 校验配置并创建所需目录。
 func (c *AppConfig) Validate() error {
-	if c.Database.Type == "sqlite" {
-		if c.Database.Path == "" {
-			return fmt.Errorf("database path is required for SQLite")
-		}
-		dir := filepath.Dir(c.Database.Path)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("failed to create database directory: %w", err)
-		}
+	if c.Database.Path == "" {
+		return fmt.Errorf("database path is required")
 	}
-	if c.Log.OutputPath != "" {
-		if err := os.MkdirAll(filepath.Dir(c.Log.OutputPath), 0o755); err != nil {
-			return fmt.Errorf("failed to create log directory: %w", err)
-		}
-	}
-	if c.Sync.WindowHours <= 0 {
-		c.Sync.WindowHours = 24
-	}
-	if c.Sync.PageSize <= 0 || c.Sync.PageSize > 1000 {
-		c.Sync.PageSize = 500
-	}
-	if c.Sync.MaxSymbolsPerRun <= 0 {
-		c.Sync.MaxSymbolsPerRun = 10
-	}
-	if c.Health.Addr == "" {
-		c.Health.Addr = ":11210"
+	dir := filepath.Dir(c.Database.Path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create database directory: %w", err)
 	}
 	if c.EventBus.Enabled {
 		if len(c.EventBus.URLs) == 0 {
@@ -229,6 +156,10 @@ func (c *AppConfig) Validate() error {
 		if c.EventBus.TargetConsumer == "" {
 			return fmt.Errorf("eventbus target consumer is required")
 		}
+	}
+	paperBalance, err := shared.ParseDecimal(c.Runtime.PaperInitialBalance)
+	if err != nil || paperBalance.Cmp(shared.Zero()) <= 0 {
+		return fmt.Errorf("runtime paper_initial_balance must be a positive decimal")
 	}
 	return nil
 }

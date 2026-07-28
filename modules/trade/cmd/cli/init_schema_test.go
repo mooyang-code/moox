@@ -19,8 +19,8 @@ func TestRunInitCommandAppliesTradeSchema(t *testing.T) {
 	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &stdout, &stderr); err != nil {
 		t.Fatalf("runInitCommand() error = %v, stderr = %s", err, stderr.String())
 	}
-	assertTableExists(t, dbPath, "t_accounts")
-	assertTableExists(t, dbPath, "t_trade_sync_cursors")
+	assertTableExists(t, dbPath, "t_exchange_accounts")
+	assertTableExists(t, dbPath, "t_order_fills")
 	if stdout.String() == "" {
 		t.Fatalf("runInitCommand() wrote empty stdout")
 	}

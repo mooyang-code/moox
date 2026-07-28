@@ -56,6 +56,49 @@ for path in modules/storage/internal/eventcontract modules/archive/internal/cons
 	[[ ! -e "${path}" ]] || violations+=("${path}: legacy event interaction path is not allowed")
 done
 
+trade_obsolete_paths=(
+	modules/trade/internal/service
+	modules/trade/internal/infra/exchangebridge
+	modules/trade/internal/application/command
+	modules/trade/internal/application/rebalance
+	modules/trade/internal/application/reconciliation
+	modules/trade/internal/domain/rebalance
+)
+for path in "${trade_obsolete_paths[@]}"; do
+	[[ ! -e "${path}" ]] || violations+=("${path}: obsolete Trade execution path is not allowed")
+done
+
+while IFS= read -r match; do
+	violations+=("${match}: obsolete Trade execution vocabulary is not allowed")
+done < <(rg -n \
+	'TradeChannel|RebalanceRequested|RebalanceRun|RebalanceLeg|execution_plan|execution_slice|reconciliation|Saga' \
+	modules/trade packages/tradeeventpb web/src/api/trade \
+	--glob '*.{go,proto,ts,vue,yaml}' \
+	--glob '!**/*_test.go' --glob '!**/*.test.ts' || true)
+
+while IFS= read -r match; do
+	violations+=("${match}: Strategy-to-Trade contracts must carry final target quantities")
+done < <(rg -n 'target_weight|capital_amount|channel_id' \
+	modules/strategy packages/tradeeventpb modules/trade web/src/api/trade \
+	--glob '*.{go,proto,py,ts,vue,yaml}' \
+	--glob '!**/*_test.go' --glob '!**/test/**' --glob '!**/tests/**' \
+	--glob '!**/test_*.py' --glob '!**/*.test.ts' || true)
+
+# quote_asset remains valid Exchange instrument metadata; it is forbidden only
+# as a Strategy target-budget field by the typed TargetIntent contract.
+current_trade_docs=(
+	modules/trade/README.md
+	modules/trade/DESIGN.md
+	modules/trade/docs/exchange-apis.md
+	docs/架构总览.md
+	docs/策略模块架构设计.md
+)
+while IFS= read -r match; do
+	violations+=("${match}: current Trade documentation references removed architecture")
+done < <(rg -n \
+	'TradeChannel|RebalanceRequested|RebalanceRun|RebalanceLeg|execution_plan|execution_slice|reconciliation|Saga|trade\.rebalance\.requested|RebalanceSvc|channel_id|TargetWeights|GroupTargetWeights|ExecutionPort' \
+	"${current_trade_docs[@]}" || true)
+
 while IFS= read -r match; do
 	violations+=("${match}: package eventcontract hides a mapper, publisher, or consumer role")
 done < <(rg -n '^package eventcontract$' modules --glob '*.go' || true)
@@ -131,7 +174,6 @@ required_timer_services=(
 	"modules/admin/config/trpc_go.yaml:trpc.dnsproxy.timer"
 	"modules/admin/config/trpc_go.yaml:trpc.dnsprobe.timer"
 	"modules/collector/config/trpc_go.yaml:trpc.moox.collector.schedule.timer"
-	"modules/factor/config/trpc_go.yaml:trpc.moox.factor.reconcile.timer"
 )
 for required in "${required_timer_services[@]}"; do
 	file="${required%%:*}"

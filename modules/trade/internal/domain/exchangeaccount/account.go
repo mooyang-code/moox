@@ -45,10 +45,12 @@ func (a Account) Validate() error {
 		!a.Exchange.Valid() ||
 		!a.MarketType.Valid() ||
 		!a.ExecutionMode.Valid() ||
-		blank(a.CredentialSecretID) ||
 		blank(a.SettlementAsset) ||
 		!validStatus(a.Status) {
 		return invalidAccount("missing or unsupported required field")
+	}
+	if a.ExecutionMode == exchange.ExecutionModeLive && blank(a.CredentialSecretID) {
+		return invalidAccount("LIVE requires an Exchange credential")
 	}
 	if a.Paused && blank(a.PauseReason) {
 		return invalidAccount("paused account requires a reason")

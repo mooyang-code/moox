@@ -1,11 +1,15 @@
 package bootstrap
 
 import (
+	"context"
+	"errors"
 	"os"
 	"sort"
 	"strings"
 	"testing"
 
+	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,6 +47,38 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 			t.Fatalf("service names = %v, want %v", names, want)
 		}
 	}
+}
+
+func TestExchangeCredentialFailsClosedBeforeSecretReveal(t *testing.T) {
+	gateErr := errors.New("encryption key is not configured")
+	secrets := &bootstrapSecretSource{gateErr: gateErr}
+
+	_, err := exchangeCredential(
+		context.Background(), secrets, exchange.ExchangeBinance, "secret-1",
+	)
+	if !errors.Is(err, gateErr) {
+		t.Fatalf("exchangeCredential() error = %v", err)
+	}
+	if secrets.listCalls != 0 {
+		t.Fatalf("ListExchangeSecrets() calls = %d, want 0", secrets.listCalls)
+	}
+}
+
+type bootstrapSecretSource struct {
+	gateErr   error
+	listCalls int
+}
+
+func (s *bootstrapSecretSource) ValidateLiveCredentialAccess() error {
+	return s.gateErr
+}
+
+func (s *bootstrapSecretSource) ListExchangeSecrets(
+	context.Context,
+	exchange.Exchange,
+) ([]accountapp.ExchangeSecret, error) {
+	s.listCalls++
+	return nil, nil
 }
 
 func TestBootstrapOwnsOneStoreAndOneShutdownHook(t *testing.T) {

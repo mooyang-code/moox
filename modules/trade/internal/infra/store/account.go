@@ -90,7 +90,8 @@ func (exchangeAccountRow) TableName() string {
 func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 	if record.SpaceID == "" || record.ExchangeAccountID == "" || record.Name == "" ||
 		record.Exchange == "" || record.MarketType == "" || record.ExecutionMode == "" ||
-		record.CredentialSecretID == "" || record.SettlementAsset == "" || record.Status == "" {
+		record.SettlementAsset == "" || record.Status == "" ||
+		(record.ExecutionMode == "LIVE" && record.CredentialSecretID == "") {
 		return fmt.Errorf("%w: incomplete Exchange account", ErrInvalidRecord)
 	}
 	leverageJSON, err := encodeLeverageSettings(record.LeverageSettings)
@@ -157,15 +158,28 @@ func (tx *Tx) UpdateExchangeAccountConfiguration(
 	config ExchangeAccountConfiguration,
 ) error {
 	if blank(spaceID) || blank(exchangeAccountID) || blank(config.Name) ||
-		blank(config.CredentialSecretID) || blank(config.SettlementAsset) ||
-		blank(config.Status) {
+		blank(config.SettlementAsset) || blank(config.Status) {
 		return fmt.Errorf("%w: incomplete Exchange account configuration", ErrInvalidRecord)
+	}
+	var executionMode string
+	result := tx.db.Raw(`
+		SELECT c_execution_mode FROM t_exchange_accounts
+		WHERE c_space_id = ? AND c_exchange_account_id = ?
+	`, spaceID, exchangeAccountID).Scan(&executionMode)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: missing Exchange account configuration", ErrInvalidRecord)
+	}
+	if executionMode == "LIVE" && blank(config.CredentialSecretID) {
+		return fmt.Errorf("%w: LIVE requires an Exchange credential", ErrInvalidRecord)
 	}
 	syncSymbolsJSON, err := encodeSyncSymbols(config.SyncSymbols)
 	if err != nil {
 		return err
 	}
-	result := tx.db.Exec(`
+	result = tx.db.Exec(`
 		UPDATE t_exchange_accounts
 		SET c_name = ?, c_credential_secret_id = ?, c_settlement_asset = ?,
 			c_margin_mode = ?, c_status = ?, c_sync_symbols_json = ?,
@@ -424,12 +438,12 @@ func (s *Store) GetExchangeAccountByID(
 	return decodeAccountRow(rows[0])
 }
 
-func (s *Store) ListEnabledLiveExchangeAccounts(
+func (s *Store) ListEnabledExchangeAccounts(
 	ctx context.Context,
 ) ([]ExchangeAccountRecord, error) {
 	var rows []exchangeAccountRow
 	if err := s.db.WithContext(ctx).
-		Where("c_status = ? AND c_execution_mode = ? AND c_paused = 0", "ENABLED", "LIVE").
+		Where("c_status = ? AND c_paused = 0", "ENABLED").
 		Order("c_space_id, c_exchange_account_id").
 		Find(&rows).Error; err != nil {
 		return nil, err

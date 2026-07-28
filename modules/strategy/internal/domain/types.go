@@ -2,7 +2,7 @@ package domain
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"time"
 )
 
@@ -83,8 +83,14 @@ func (t *TargetPosition) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	if _, exists := fields["target_weight"]; exists {
-		return errors.New("target_weight is not supported")
+	allowed := map[string]struct{}{
+		"instrument_id": {}, "symbol": {}, "target_quantity": {},
+		"reason": {}, "source_time": {}, "data_revision": {},
+	}
+	for field := range fields {
+		if _, ok := allowed[field]; !ok {
+			return fmt.Errorf("unknown target field %q", field)
+		}
 	}
 	var decoded targetPosition
 	if err := json.Unmarshal(data, &decoded); err != nil {

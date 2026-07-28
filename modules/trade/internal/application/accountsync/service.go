@@ -198,7 +198,7 @@ func (s *Service) applySnapshot(
 			ctx,
 			account,
 			fill,
-			consumer.SourceRESTSync,
+			consumer.OriginRESTSnapshot,
 			batchQuantities[fillBatchKey(fill)],
 		)
 		if applyErr != nil {
@@ -331,7 +331,7 @@ func (s *Service) ApplyFill(
 		ctx,
 		account,
 		fill,
-		consumer.SourcePrivateStream,
+		consumer.OriginPrivateSocket,
 		shared.Zero(),
 	)
 }
@@ -467,7 +467,7 @@ func (s *Service) applyFill(
 	ctx context.Context,
 	account store.ExchangeAccountRecord,
 	fill exchange.Fill,
-	kind consumer.SourceKind,
+	kind consumer.FillOrigin,
 	syntheticQuantity shared.Decimal,
 ) (bool, error) {
 	if err := s.ensureOrderForFill(ctx, account, fill, syntheticQuantity); err != nil {

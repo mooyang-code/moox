@@ -161,31 +161,38 @@ func TestServiceDiscardPendingReleasesReservationWithoutExchangeCall(t *testing.
 	}
 }
 
-func TestServicePlaceTransportUnknownRetainsReservation(t *testing.T) {
-	service, tradeStore, adapter := newTestService(t)
-	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
+func TestServicePlaceUncertainResultRetainsReservation(t *testing.T) {
+	for _, kind := range []exchange.ErrorKind{
+		exchange.ErrorTransportUnknown,
+		exchange.ErrorRateLimited,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			service, tradeStore, adapter := newTestService(t)
+			adapter.placeErr = &exchange.Error{Kind: kind}
 
-	pending, err := service.Place(
-		context.Background(),
-		"space-1",
-		testSpec(time.Unix(1_700_000_000, 0)),
-	)
-	require.NoError(t, err)
-	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
-	require.Error(t, err)
-	require.Equal(t, "SUBMIT_UNKNOWN", string(got.State))
+			pending, err := service.Place(
+				context.Background(),
+				"space-1",
+				testSpec(time.Unix(1_700_000_000, 0)),
+			)
+			require.NoError(t, err)
+			got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+			require.Error(t, err)
+			require.Equal(t, "SUBMIT_UNKNOWN", string(got.State))
 
-	record, getErr := tradeStore.GetOrder(context.Background(), "space-1", "order-1")
-	require.NoError(t, getErr)
-	require.Equal(t, "SUBMIT_UNKNOWN", record.State)
-	require.Equal(t, "101", record.RemainingReservedQuantity)
-	projections, getErr := tradeStore.ListBalanceProjections(
-		context.Background(),
-		"space-1",
-		"account-1",
-	)
-	require.NoError(t, getErr)
-	require.Len(t, projections, 2)
+			record, getErr := tradeStore.GetOrder(context.Background(), "space-1", "order-1")
+			require.NoError(t, getErr)
+			require.Equal(t, "SUBMIT_UNKNOWN", record.State)
+			require.Equal(t, "101", record.RemainingReservedQuantity)
+			projections, getErr := tradeStore.ListBalanceProjections(
+				context.Background(),
+				"space-1",
+				"account-1",
+			)
+			require.NoError(t, getErr)
+			require.Len(t, projections, 2)
+		})
+	}
 }
 
 func TestServiceSubmitRevalidatesReadinessAndReferencePrice(t *testing.T) {

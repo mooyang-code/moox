@@ -162,12 +162,20 @@ func (s *Service) Submit(
 		return orderdomain.Order{}, err
 	}
 	unlock := s.Store.LockExchangeAccount(record.ExchangeAccountID)
-	defer unlock()
 	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
 	if err != nil {
+		unlock()
 		return orderdomain.Order{}, err
 	}
-	return s.submit(ctx, record)
+	result, synchronize, err := s.submit(ctx, record)
+	unlock()
+	if err != nil || !synchronize || s.Syncer == nil {
+		return result, err
+	}
+	if err := s.Syncer.SyncAccount(ctx, record.ExchangeAccountID); err != nil {
+		return result, err
+	}
+	return s.Get(ctx, record.SpaceID, record.OrderID)
 }
 
 func (s *Service) Cancel(
@@ -216,7 +224,7 @@ func (s *Service) Cancel(
 		return orderdomain.Order{}, getErr
 	}
 	expected = current.Version
-	if exchange.IsKind(callErr, exchange.ErrorTransportUnknown) {
+	if uncertainExchangeError(callErr) {
 		_, err = current.MarkCancelUnknown()
 	} else {
 		_, err = current.CancelRejected()
@@ -264,7 +272,7 @@ func (s *Service) RecoverCancel(
 		}
 		return s.Get(ctx, spaceID, orderID)
 	}
-	if !exchange.IsKind(callErr, exchange.ErrorTransportUnknown) {
+	if !uncertainExchangeError(callErr) {
 		if syncErr := s.Syncer.SyncAccount(ctx, record.ExchangeAccountID); syncErr == nil {
 			latest, getErr := s.Get(ctx, spaceID, orderID)
 			if getErr == nil {
@@ -283,10 +291,9 @@ func (s *Service) RecoverCancel(
 	}
 	expected := current.Version
 	switch {
-	case exchange.IsKind(callErr, exchange.ErrorTransportUnknown) &&
-		current.State == orderdomain.Canceling:
+	case uncertainExchangeError(callErr) && current.State == orderdomain.Canceling:
 		_, err = current.MarkCancelUnknown()
-	case exchange.IsKind(callErr, exchange.ErrorTransportUnknown):
+	case uncertainExchangeError(callErr):
 		return current, callErr
 	case current.State == orderdomain.Canceling:
 		_, err = current.CancelRejected()
@@ -449,31 +456,32 @@ func (s *Service) resolveUnknownFound(
 func (s *Service) submit(
 	ctx context.Context,
 	record store.OrderRecord,
-) (orderdomain.Order, error) {
+) (orderdomain.Order, bool, error) {
 	aggregate, err := domainOrder(record)
 	if err != nil {
-		return orderdomain.Order{}, err
+		return orderdomain.Order{}, false, err
 	}
 	if _, err := s.Validator.Validate(ctx, record.SpaceID, aggregate.Spec); err != nil {
 		if permanentValidationError(err) {
-			return s.rejectPending(ctx, record, aggregate, err)
+			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
+			return rejected, false, rejectErr
 		}
-		return orderdomain.Order{}, err
+		return orderdomain.Order{}, false, err
 	}
 	adapter, err := s.Adapters.Adapter(record.ExchangeAccountID)
 	if err != nil {
-		return orderdomain.Order{}, err
+		return orderdomain.Order{}, false, err
 	}
 	expected := aggregate.Version
 	if _, err = aggregate.BeginSubmit(); err != nil {
-		return orderdomain.Order{}, err
+		return orderdomain.Order{}, false, err
 	}
 	applyAggregate(&record, aggregate)
 	record.SubmittedAt = s.now().UnixMilli()
 	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateOrder(record, expected)
 	}); err != nil {
-		return orderdomain.Order{}, err
+		return orderdomain.Order{}, false, err
 	}
 
 	response, callErr := adapter.PlaceOrder(ctx, exchange.OrderRequest{
@@ -481,29 +489,30 @@ func (s *Service) submit(
 		Symbol:        aggregate.Spec.Symbol, OrderType: aggregate.Spec.OrderType,
 		TimeInForce: aggregate.Spec.TimeInForce, Side: aggregate.Spec.Side,
 		PositionSide: aggregate.Spec.PositionSide, Quantity: aggregate.Spec.Quantity,
-		LimitPrice: aggregate.Spec.LimitPrice, ReduceOnly: aggregate.Spec.ReduceOnly,
+		LimitPrice: aggregate.Spec.LimitPrice, ReferencePrice: aggregate.Spec.ReferencePrice,
+		ReduceOnly: aggregate.Spec.ReduceOnly,
 	})
 
 	latest, getErr := s.Store.GetOrder(ctx, record.SpaceID, record.OrderID)
 	if getErr != nil {
-		return orderdomain.Order{}, getErr
+		return orderdomain.Order{}, false, getErr
 	}
 	current, getErr := domainOrder(latest)
 	if getErr != nil {
-		return orderdomain.Order{}, getErr
+		return orderdomain.Order{}, false, getErr
 	}
 	expected = current.Version
 	switch {
 	case callErr == nil:
 		_, err = current.Acknowledge(response.ExchangeOrderID)
-	case exchange.IsKind(callErr, exchange.ErrorTransportUnknown):
+	case uncertainExchangeError(callErr):
 		_, err = current.MarkSubmitUnknown()
 	default:
 		_, err = current.Reject()
 		latest.RejectReason = callErr.Error()
 	}
 	if err != nil {
-		return orderdomain.Order{}, err
+		return orderdomain.Order{}, false, err
 	}
 	applyAggregate(&latest, current)
 	if callErr == nil {
@@ -523,9 +532,14 @@ func (s *Service) submit(
 		}
 		return nil
 	}); err != nil {
-		return orderdomain.Order{}, err
+		return orderdomain.Order{}, false, err
 	}
-	return current, callErr
+	return current, callErr == nil && response.Status == exchange.OrderStatusFilled, callErr
+}
+
+func uncertainExchangeError(err error) bool {
+	return exchange.IsKind(err, exchange.ErrorTransportUnknown) ||
+		exchange.IsKind(err, exchange.ErrorRateLimited)
 }
 
 func (s *Service) rejectPending(

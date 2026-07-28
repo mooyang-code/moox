@@ -21,6 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
@@ -63,15 +64,15 @@ func initialize(
 	}()
 
 	secrets := secretclient.New(secretclient.Config{
-		GatewayBaseURL: cfg.ControlGateway.BaseURL,
+		GatewayBaseURL: cfg.Admin.BaseURL,
 		ServiceAuth: secretclient.ServiceAuthConfig{
-			AccessKey:  cfg.ControlGateway.ServiceAuth.AccessKey,
-			SecretKey:  cfg.ControlGateway.ServiceAuth.SecretKey,
-			TargetNode: cfg.ControlGateway.ServiceAuth.TargetNode,
-			CAFile:     cfg.ControlGateway.ServiceAuth.CAFile,
-			ExpireSecs: cfg.ControlGateway.ServiceAuth.ExpireSeconds,
+			AccessKey:  cfg.Admin.ServiceAuth.AccessKey,
+			SecretKey:  cfg.Admin.ServiceAuth.SecretKey,
+			TargetNode: cfg.Admin.ServiceAuth.TargetNode,
+			CAFile:     cfg.Admin.ServiceAuth.CAFile,
+			ExpireSecs: cfg.Admin.ServiceAuth.ExpireSeconds,
 		},
-		EncryptionKey: cfg.Security.EncryptionKey,
+		EncryptionKey: cfg.Runtime.EncryptionKey,
 	})
 	registry := exchange.NewRegistry()
 	registerBuiltins(registry)
@@ -113,25 +114,43 @@ func initialize(
 		Store: tradeStore, Wake: targetWorker.Wake,
 	}
 	manager.NewSession = func(record store.ExchangeAccountRecord) (traderuntime.ManagedSession, error) {
-		credential, credentialErr := exchangeCredential(
-			context.Background(),
-			secrets,
-			exchange.Exchange(record.Exchange),
-			record.CredentialSecretID,
-		)
-		if credentialErr != nil {
-			return nil, credentialErr
+		credential := exchange.Credential{}
+		if exchange.ExecutionMode(record.ExecutionMode) == exchange.ExecutionModeLive {
+			var credentialErr error
+			credential, credentialErr = exchangeCredential(
+				context.Background(),
+				secrets,
+				exchange.Exchange(record.Exchange),
+				record.CredentialSecretID,
+			)
+			if credentialErr != nil {
+				return nil, credentialErr
+			}
 		}
-		adapter, bindErr := registry.Bind(exchange.AccountConfig{
+		accountConfig := exchange.AccountConfig{
 			ExchangeAccountID: record.ExchangeAccountID,
 			Exchange:          exchange.Exchange(record.Exchange),
 			MarketType:        exchange.MarketType(record.MarketType),
 			ExecutionMode:     exchange.ExecutionMode(record.ExecutionMode),
 			SettlementAsset:   record.SettlementAsset,
 			MarginMode:        exchange.MarginMode(record.MarginMode),
-		}, credential)
+		}
+		adapter, bindErr := registry.Bind(accountConfig, credential)
 		if bindErr != nil {
 			return nil, bindErr
+		}
+		if accountConfig.ExecutionMode == exchange.ExecutionModePaper {
+			adapter = paper.New(
+				adapter,
+				tradeStore,
+				record.SpaceID,
+				record.ExchangeAccountID,
+				exchange.MarketType(record.MarketType),
+				record.SettlementAsset,
+				decimal(cfg.Runtime.PaperInitialBalance),
+				exchange.MarginMode(record.MarginMode),
+				record.LeverageSettings,
+			)
 		}
 		return &traderuntime.ExchangeSession{
 			Account: record, Adapter: adapter, Sync: syncService,
@@ -244,6 +263,12 @@ func exchangeCredential(
 	exchangeName exchange.Exchange,
 	secretID string,
 ) (exchange.Credential, error) {
+	if err := secrets.ValidateLiveCredentialAccess(); err != nil {
+		return exchange.Credential{}, fmt.Errorf(
+			"trade bootstrap: live credential access: %w",
+			err,
+		)
+	}
 	values, err := secrets.ListExchangeSecrets(ctx, exchangeName)
 	if err != nil {
 		return exchange.Credential{}, err

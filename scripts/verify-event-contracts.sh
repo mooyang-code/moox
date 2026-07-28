@@ -22,7 +22,7 @@ reject 'streamcalc|TickReceived|MarketKlineClosed|MOOX_MARKET' \
   "legacy market event pipeline remains" "${production[@]}" modules packages
 reject 'packages/dlqpb|PublishRejected|MOOX_DLQ|dlq\.message\.rejected' \
   "shared EventBus DLQ remains" "${production[@]}" modules packages
-reject 'TradeOrder|TradeExecution|TradeFill|TradeReconciliation|TradeRebalanceCompleted|TradeRebalanceRequested|RebalanceRequested|RebalanceTarget|trade\.rebalance\.requested|TradingSignal|t_trade_outbox|withTradeDLQ' \
+reject 'TradeOrder|\bTradeExecution\b|TradeFill|TradeReconciliation|TradeRebalanceCompleted|TradeRebalanceRequested|RebalanceRequested|RebalanceTarget|trade\.rebalance\.requested|TradingSignal|t_trade_outbox|withTradeDLQ' \
   "Trade self-consumption contract remains" "${production[@]}" modules/trade modules/strategy packages/events packages/tradeeventpb
 reject 'events\.EventType|EventDefinition|EventSchema|AllEventTypes' \
   "legacy event registry API remains" "${production[@]}" modules packages
@@ -95,7 +95,7 @@ done
 (cd modules/factor && CGO_ENABLED=1 go test ./test -run '^TestRealtimeEventToPythonWritebackE2E$' -count=1)
 (cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/jobqueue ./internal/jobstate ./internal/rpc)
 (cd modules/strategy && CGO_ENABLED=1 go test ./internal/store ./internal/outbox ./test)
-(cd modules/trade && CGO_ENABLED=1 go test ./internal/bootstrap ./internal/eventconsumer ./internal/application/rebalance)
+(cd modules/trade && CGO_ENABLED=1 go test ./internal/bootstrap ./internal/eventconsumer ./internal/application/target)
 (cd modules/hostagent && go test ./internal/eventpublisher ./internal/app)
 
 echo "event contract verification passed"

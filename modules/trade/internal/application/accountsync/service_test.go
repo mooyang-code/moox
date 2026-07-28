@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -25,6 +26,27 @@ func (s readySessionState) Ready(string) bool { return bool(s) }
 
 func (s syncAdapterSource) Adapter(string) (exchange.Adapter, error) {
 	return s.adapter, nil
+}
+
+type paperPublicAdapter struct{ *syncAdapter }
+
+func (*paperPublicAdapter) LoadInstruments(context.Context) ([]exchange.Instrument, error) {
+	return []exchange.Instrument{{
+		Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot,
+		Symbol: "BTCUSDT", InstrumentID: "BTC-USDT",
+		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
+		ExchangeQuantityStep: shared.MustDecimal("0.0001"),
+		PriceTick:            shared.MustDecimal("0.01"), Status: "TRADING",
+	}}, nil
+}
+
+func (*paperPublicAdapter) GetReferencePrice(
+	context.Context,
+	string,
+) (exchange.ReferencePrice, error) {
+	return exchange.ReferencePrice{
+		Price: shared.MustDecimal("50000"), UpdatedAt: time.Now().UTC(),
+	}, nil
 }
 
 type syncAdapter struct {
@@ -157,6 +179,77 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	result, err = service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.Zero(t, result.FillsIngested, "replayed REST Fill must be idempotent")
+}
+
+func TestPaperSyncRecoversSubmittedOrderAndPersistsSpotFill(t *testing.T) {
+	ctx := context.Background()
+	tradeStore := openSyncStore(t)
+	submittedAt := time.Now().Add(-time.Second).UTC().UnixMilli()
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
+			SpaceID: "space-1", ExchangeAccountID: "paper-1", Name: "paper",
+			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
+			SettlementAsset: "USDT", Status: "ENABLED",
+			SyncSymbols: []string{"BTCUSDT"},
+		}); err != nil {
+			return err
+		}
+		if err := tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT",
+			SettlementAsset: "USDT", ExchangeQuantityStep: "0.0001",
+			PriceTick: "0.01", Status: "TRADING",
+		}); err != nil {
+			return err
+		}
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "order-1",
+			ExchangeAccountID: "paper-1", ClientOrderID: "client-1",
+			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			Quantity: "0.01", ReferencePrice: "50000",
+			ReferencePriceAt: submittedAt, Source: "MANUAL",
+			State: "SUBMITTING", FilledQuantity: "0",
+			ReservedAsset: "USDT", ReservedQuantity: "500",
+			RemainingReservedQuantity: "500", Version: 1,
+			SubmittedAt: submittedAt,
+		})
+	}))
+
+	adapter := paper.New(
+		&paperPublicAdapter{syncAdapter: &syncAdapter{}},
+		tradeStore,
+		"space-1",
+		"paper-1",
+		exchange.MarketTypeSpot,
+		"USDT",
+		shared.MustDecimal("100000"),
+		exchange.MarginModeUnspecified,
+		nil,
+	)
+	_, err := adapter.LoadInstruments(ctx)
+	require.NoError(t, err)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+	}
+
+	result, err := service.SyncAccount(ctx, "paper-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+
+	orderRecord, err := tradeStore.GetOrder(ctx, "space-1", "order-1")
+	require.NoError(t, err)
+	require.Equal(t, "FILLED", orderRecord.State)
+	require.NotEmpty(t, orderRecord.ExchangeOrderID)
+	fills, total, err := tradeStore.ListFills(ctx, "space-1", store.FillQuery{
+		ExchangeAccountID: "paper-1",
+		Limit:             10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, fills, 1)
+	require.Empty(t, fills[0].PositionSide)
 }
 
 func TestApplyPartialPositionUsesConfiguredLeverage(t *testing.T) {

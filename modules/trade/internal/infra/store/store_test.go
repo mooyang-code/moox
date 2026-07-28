@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/trade/schema"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -100,6 +101,45 @@ func TestOpenRejectsExchangeAccountWithoutCurrentCursorColumns(t *testing.T) {
 			c_exchange_account_id TEXT NOT NULL,
 			c_name TEXT NOT NULL
 		)
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+}
+
+func TestOpenRejectsCurrentTableWithoutRequiredUniqueConstraints(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid-fill.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE t_order_fills (
+			c_space_id TEXT NOT NULL
+		)
+	`).Error)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = Open(path)
+
+	require.ErrorIs(t, err, ErrIncompatibleSchema)
+}
+
+func TestOpenRejectsChangedPartialUniqueIndexPredicate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid-index.db")
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(schema.AllSQL()).Error)
+	require.NoError(t, db.Exec(`DROP INDEX uk_trade_orders_exchange_order`).Error)
+	require.NoError(t, db.Exec(`
+		CREATE UNIQUE INDEX uk_trade_orders_exchange_order
+		ON t_trade_orders (
+			c_space_id, c_exchange_account_id, c_symbol, c_exchange_order_id
+		)
+		WHERE c_exchange_order_id = ''
 	`).Error)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
