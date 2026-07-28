@@ -314,15 +314,33 @@ func (s *Service) syncFactorBindings(ctx context.Context, factorID string) error
 	if err != nil {
 		return err
 	}
-	if factor.Status != domain.FactorStatusEnabled {
-		return nil
-	}
-	bindings, err := s.bindings.ListEnabledByFactor(ctx, factorID)
+	bindings, err := s.bindings.ListByFactor(ctx, factorID)
 	if err != nil {
 		return err
 	}
+	spaces := make([]string, 0, len(bindings))
+	seenSpaces := make(map[string]struct{}, len(bindings))
 	for _, binding := range bindings {
-		if err := s.syncBindingMetadata(ctx, binding); err != nil {
+		if _, exists := seenSpaces[binding.SpaceID]; exists {
+			continue
+		}
+		seenSpaces[binding.SpaceID] = struct{}{}
+		spaces = append(spaces, binding.SpaceID)
+	}
+	slices.Sort(spaces)
+	for _, spaceID := range spaces {
+		if err := s.meta.SyncFactorMetadata(ctx, spaceID, *factor); err != nil {
+			return err
+		}
+	}
+	if factor.Status != domain.FactorStatusEnabled {
+		return nil
+	}
+	for _, binding := range bindings {
+		if binding.Status != domain.BindingStatusEnabled {
+			continue
+		}
+		if err := s.syncEnabledBindingTarget(ctx, binding, *factor); err != nil {
 			return err
 		}
 	}
@@ -330,21 +348,35 @@ func (s *Service) syncFactorBindings(ctx context.Context, factorID string) error
 }
 
 func (s *Service) syncBindingMetadata(ctx context.Context, binding domain.FactorBinding) error {
-	if s.meta == nil || binding.Status != domain.BindingStatusEnabled {
+	if s.meta == nil {
 		return nil
 	}
 	factor, err := s.factors.Get(ctx, binding.FactorID)
 	if err != nil {
 		return err
 	}
-	if factor.Status != domain.FactorStatusEnabled {
+	if err := s.meta.SyncFactorMetadata(ctx, binding.SpaceID, *factor); err != nil {
+		return err
+	}
+	if binding.Status != domain.BindingStatusEnabled || factor.Status != domain.FactorStatusEnabled {
 		return nil
 	}
+	return s.syncEnabledBindingTarget(ctx, binding, *factor)
+}
+
+func (s *Service) syncEnabledBindingTarget(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
 	targetDataset := binding.TargetDataset
 	if targetDataset == "" {
 		targetDataset = registry.ResultDataset(binding.SourceDataset)
 	}
-	return s.meta.SyncTargetDataset(ctx, binding.SpaceID, binding.SourceDataset, targetDataset, binding.Freq, []domain.FactorDef{*factor})
+	return s.meta.SyncTargetDatasetAfterFactorMetadata(
+		ctx,
+		binding.SpaceID,
+		binding.SourceDataset,
+		targetDataset,
+		binding.Freq,
+		[]domain.FactorDef{factor},
+	)
 }
 
 func success() *commonpb.RetInfo {

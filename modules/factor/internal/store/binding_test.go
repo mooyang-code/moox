@@ -38,6 +38,34 @@ func TestListExecutableExcludesDisabledFactor(t *testing.T) {
 	require.Len(t, rows, 1)
 }
 
+func TestListByFactorIncludesDisabledBindings(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, NewFactorRepository(db).Create(context.Background(), testFactor("bias", domain.FactorStatusEnabled)))
+	repo := NewBindingRepository(db)
+	for _, binding := range []domain.FactorBinding{
+		{
+			BindingID: "disabled", FactorID: "bias", SpaceID: "space-b",
+			SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+			SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusDisabled,
+		},
+		{
+			BindingID: "enabled", FactorID: "bias", SpaceID: "space-a",
+			SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+			SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
+		},
+	} {
+		require.NoError(t, repo.Upsert(context.Background(), binding))
+	}
+
+	rows, err := repo.ListByFactor(context.Background(), "bias")
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "space-a", rows[0].SpaceID)
+	require.Equal(t, domain.BindingStatusEnabled, rows[0].Status)
+	require.Equal(t, "space-b", rows[1].SpaceID)
+	require.Equal(t, domain.BindingStatusDisabled, rows[1].Status)
+}
+
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})

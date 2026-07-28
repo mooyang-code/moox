@@ -91,18 +91,22 @@ func TestSyncTargetDatasetCreatesMissingFactorMetadata(t *testing.T) {
 	require.Equal(t, "disabled", client.createdFactors[0].GetStatus())
 }
 
-func TestSyncTargetDatasetDoesNotCreateFactorWhenLookupFails(t *testing.T) {
-	client := newFakeMetadataClient()
-	client.getFactorRet = &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "lookup denied"}
-	syncer := NewMetadataSync(client, nil)
+func TestSyncTargetDatasetDoesNotCreateFactorForNonNotFoundRetInfo(t *testing.T) {
+	for _, code := range []commonpb.ErrorCode{commonpb.ErrorCode_INVALID_PARAM, commonpb.ErrorCode_INNER_ERR} {
+		t.Run(code.String(), func(t *testing.T) {
+			client := newFakeMetadataClient()
+			client.getFactorRet = &commonpb.RetInfo{Code: code, Msg: "factor not found"}
+			syncer := NewMetadataSync(client, nil)
 
-	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
-		FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav"},
-		Outputs: []string{"excess_return"}, ParamsJSON: `{}`, LookbackRows: 5,
-	}})
-	require.ErrorContains(t, err, "GetFactor")
-	require.Empty(t, client.createdFactors)
-	require.Empty(t, client.updatedFactors)
+			err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
+				FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav"},
+				Outputs: []string{"excess_return"}, ParamsJSON: `{}`, LookbackRows: 5,
+			}})
+			require.ErrorContains(t, err, "GetFactor")
+			require.Empty(t, client.createdFactors)
+			require.Empty(t, client.updatedFactors)
+		})
+	}
 }
 
 func TestSyncTargetDatasetRejectsNonTimeSeriesSource(t *testing.T) {
@@ -115,6 +119,28 @@ func TestSyncTargetDatasetRejectsNonTimeSeriesSource(t *testing.T) {
 	require.ErrorContains(t, err, "must be time-series")
 	require.Empty(t, client.updatedDatasets)
 	require.Empty(t, client.upsertedColumns)
+}
+
+func TestSyncTargetDatasetRejectsExistingNonTimeSeriesTargetBeforeMutation(t *testing.T) {
+	client := newFakeMetadataClient()
+	client.datasets["source"] = testSourceDataset()
+	client.datasets["target"] = &storagepb.Dataset{
+		SpaceId: "space", DatasetId: "target", DataSourceId: "market",
+		DataKind: storagepb.DataKind_DATA_KIND_RECORD, DataNodeId: "node-1",
+		KeepDuration: "30d", Status: "active", BindingLocked: true,
+	}
+	client.subjects["source"] = []*storagepb.DatasetSubject{{
+		SpaceId: "space", DatasetId: "source", SubjectId: "BTC-USDT",
+	}}
+	syncer := NewMetadataSync(client, nil)
+
+	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", nil)
+	require.ErrorContains(t, err, "target dataset space/target must be time-series")
+	require.Empty(t, client.updatedDatasets)
+	require.Empty(t, client.boundSubjects)
+	require.Empty(t, client.upsertedColumns)
+	require.Zero(t, client.checkActivationCalls)
+	require.Zero(t, client.activateCalls)
 }
 
 func testSourceDataset() *storagepb.Dataset {
@@ -296,7 +322,7 @@ func TestRetInfoHelpers(t *testing.T) {
 
 	assert.False(t, isFactorNotFoundRet(nil))
 	assert.True(t, isFactorNotFoundRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_FACTOR_NOT_FOUND}))
-	assert.True(t, isFactorNotFoundRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "factor not found"}))
+	assert.False(t, isFactorNotFoundRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "factor not found"}))
 
 	assert.False(t, isRefreshInProgressRet(nil))
 	assert.True(t, isRefreshInProgressRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "refresh already in progress"}))

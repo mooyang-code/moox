@@ -55,18 +55,39 @@ func (s *MetadataSync) SyncResultDataset(ctx context.Context, spaceID string, so
 	return s.SyncTargetDataset(ctx, spaceID, sourceDataset, ResultDataset(sourceDataset), freq, factors)
 }
 
+// SyncFactorMetadata reconciles one local factor definition into a Storage space.
+func (s *MetadataSync) SyncFactorMetadata(ctx context.Context, spaceID string, factor domain.FactorDef) error {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	return s.createFactor(ctx, spaceID, factor)
+}
+
 // SyncTargetDataset ensures factor, result dataset, and result columns exist.
 func (s *MetadataSync) SyncTargetDataset(ctx context.Context, spaceID string, sourceDataset string, targetDataset string, freq string, factors []domain.FactorDef) error {
 	if s == nil || s.client == nil {
 		return nil
 	}
-	if strings.TrimSpace(targetDataset) == "" {
-		targetDataset = ResultDataset(sourceDataset)
-	}
 	for _, factor := range factors {
-		if err := s.createFactor(ctx, spaceID, factor); err != nil {
+		if err := s.SyncFactorMetadata(ctx, spaceID, factor); err != nil {
 			return err
 		}
+	}
+	return s.syncTargetDatasetAfterFactorMetadata(ctx, spaceID, sourceDataset, targetDataset, freq, factors)
+}
+
+// SyncTargetDatasetAfterFactorMetadata reconciles a target after its factors have
+// already been synchronized into the same Storage space.
+func (s *MetadataSync) SyncTargetDatasetAfterFactorMetadata(ctx context.Context, spaceID string, sourceDataset string, targetDataset string, freq string, factors []domain.FactorDef) error {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	return s.syncTargetDatasetAfterFactorMetadata(ctx, spaceID, sourceDataset, targetDataset, freq, factors)
+}
+
+func (s *MetadataSync) syncTargetDatasetAfterFactorMetadata(ctx context.Context, spaceID string, sourceDataset string, targetDataset string, freq string, factors []domain.FactorDef) error {
+	if strings.TrimSpace(targetDataset) == "" {
+		targetDataset = ResultDataset(sourceDataset)
 	}
 	source, err := s.getDataset(ctx, spaceID, sourceDataset)
 	if err != nil {
@@ -358,6 +379,9 @@ func (s *MetadataSync) ensureFactorDatasetAttribution(ctx context.Context, space
 	if err != nil {
 		return err
 	}
+	if err := validateTargetDataset(dataset, spaceID, datasetID); err != nil {
+		return err
+	}
 	return s.updateFactorDatasetAttribution(ctx, dataset, datasetID, sourceDataset, freq)
 }
 
@@ -369,7 +393,17 @@ func (s *MetadataSync) ensureExistingFactorDataset(ctx context.Context, spaceID 
 	if !found {
 		return false, nil
 	}
+	if err := validateTargetDataset(dataset, spaceID, datasetID); err != nil {
+		return false, err
+	}
 	return true, s.updateFactorDatasetAttribution(ctx, dataset, datasetID, sourceDataset, freq)
+}
+
+func validateTargetDataset(dataset *storagepb.Dataset, spaceID, datasetID string) error {
+	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		return fmt.Errorf("target dataset %s/%s must be time-series", spaceID, datasetID)
+	}
+	return nil
 }
 
 func (s *MetadataSync) findDataset(ctx context.Context, spaceID string, datasetID string) (*storagepb.Dataset, bool, error) {
@@ -550,8 +584,7 @@ func isFactorNotFoundRet(ret *commonpb.RetInfo) bool {
 	if ret == nil || ret.GetCode() == commonpb.ErrorCode_SUCCESS {
 		return false
 	}
-	return ret.GetCode() == commonpb.ErrorCode_FACTOR_NOT_FOUND ||
-		strings.Contains(strings.ToLower(ret.GetMsg()), "factor not found")
+	return ret.GetCode() == commonpb.ErrorCode_FACTOR_NOT_FOUND
 }
 
 func isRefreshInProgressRet(ret *commonpb.RetInfo) bool {
