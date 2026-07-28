@@ -2,6 +2,10 @@ package sources
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 )
 
 // Collector 采集器接口（简化版）
@@ -23,29 +27,68 @@ type ResultCollector interface {
 	CollectWithResult(ctx context.Context, params *CollectParams) (CollectResult, error)
 }
 
-// CollectResult is persisted with the JobItem and TaskInstance so callers can
-// distinguish an intentional zero-write collection from a false success.
+// CollectResult contains only storage-acknowledged output evidence.
 type CollectResult struct {
-	RowsWritten           int               `json:"rows_written"`
-	WrittenRowKeySamples  []WrittenRowKey   `json:"written_row_key_samples,omitempty"`
-	RecordSnapshotVersion string            `json:"record_snapshot_version,omitempty"`
-	ZeroWriteReason       string            `json:"zero_write_reason,omitempty"`
-	StorageReadScope      *StorageReadScope `json:"storage_read_scope,omitempty"`
+	RowsWritten     uint64 `json:"rows_written"`
+	OutputWatermark string `json:"output_watermark,omitempty"`
+	SnapshotVersion string `json:"snapshot_version,omitempty"`
 }
 
-type StorageReadScope struct {
-	SpaceID   string `json:"space_id"`
-	DatasetID string `json:"dataset_id"`
-	SubjectID string `json:"subject_id"`
-	Freq      string `json:"freq"`
+// ValidateCollectResult enforces the result evidence required by each data type.
+func ValidateCollectResult(dataType string, result CollectResult) error {
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode collect result: %w", err)
+	}
+	if len(raw) > 1024 {
+		return fmt.Errorf("collect result exceeds 1 KiB")
+	}
+	switch strings.ToLower(strings.TrimSpace(dataType)) {
+	case "kline":
+		if result.RowsWritten == 0 {
+			return nil
+		}
+		if strings.TrimSpace(result.OutputWatermark) == "" {
+			return fmt.Errorf("kline output_watermark is required when rows_written is positive")
+		}
+		watermark, err := time.Parse(time.RFC3339Nano, result.OutputWatermark)
+		if err != nil {
+			return fmt.Errorf("kline output_watermark must be RFC3339: %w", err)
+		}
+		if watermark.IsZero() {
+			return fmt.Errorf("kline output_watermark must be a non-zero RFC3339 time")
+		}
+	case "symbol":
+		if result.RowsWritten > 0 && strings.TrimSpace(result.SnapshotVersion) == "" {
+			return fmt.Errorf("symbol snapshot_version is required when rows_written is positive")
+		}
+	default:
+		return fmt.Errorf("unsupported collector data_type %q", dataType)
+	}
+	return nil
 }
 
-type WrittenRowKey struct {
-	SpaceID   string `json:"space_id"`
-	DatasetID string `json:"dataset_id"`
-	SubjectID string `json:"subject_id"`
-	Freq      string `json:"freq"`
-	DataTime  string `json:"data_time"`
+// NormalizeFreq returns the canonical Storage frequency for a collector interval.
+func NormalizeFreq(interval string) (string, error) {
+	interval = strings.TrimSpace(interval)
+	if interval == "" {
+		return "", fmt.Errorf("interval 不能为空")
+	}
+	unit := interval[len(interval)-1]
+	switch unit {
+	case 'h', 'H':
+		return interval[:len(interval)-1] + "H", nil
+	case 'd', 'D':
+		return interval[:len(interval)-1] + "D", nil
+	case 'w', 'W':
+		return interval[:len(interval)-1] + "W", nil
+	case 'y', 'Y':
+		return interval[:len(interval)-1] + "Y", nil
+	case 'm', 'M':
+		return interval, nil
+	default:
+		return interval, nil
+	}
 }
 
 // CollectParams 采集参数

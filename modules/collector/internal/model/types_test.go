@@ -46,17 +46,13 @@ func TestHeartbeatPayload_JSONRoundTrip_ShouldPreserveFields(t *testing.T) {
 	assert.Equal(t, "task-1", decoded.RunningTasks[0].ID)
 }
 
-func TestCollectParams_AndCollectResult_ShouldMarshal(t *testing.T) {
+func TestCollectParams_ShouldMarshal(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	params := CollectParams{Symbol: "BTCUSDT", Interval: "1m", StartTime: &start, Limit: 100}
 	raw, err := json.Marshal(params)
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), "BTCUSDT")
 
-	result := CollectResult{Count: 2, Timestamp: start, Metadata: map[string]interface{}{"source": "binance"}}
-	raw, err = json.Marshal(result)
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), `"count":2`)
 }
 
 func TestCloudFunctionEvent_ServiceDeployment_ShouldMarshal(t *testing.T) {

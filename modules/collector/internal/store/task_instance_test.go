@@ -70,6 +70,12 @@ func TestTaskInstanceRepository_UpdateStatusMatchesCurrentJobItemID(t *testing.T
 	assert.Equal(t, "node-new", instances[0].LastExecNode)
 	assert.Equal(t, domain.InstanceStatusSuccess, instances[0].LastExecStatus)
 	assert.JSONEq(t, `{"state":"new"}`, instances[0].Result)
+
+	updated, err = repo.UpdateStatus(
+		ctx, "crypto", "task-1", "item-new", "node-duplicate", domain.InstanceStatusFailed, `{"state":"duplicate"}`,
+	)
+	require.NoError(t, err)
+	assert.False(t, updated)
 }
 
 func TestTaskInstanceRepository_UpdateStatusIgnoresStaleJobItemID(t *testing.T) {

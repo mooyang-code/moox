@@ -21,7 +21,9 @@ import (
 	nodeRuntime "github.com/mooyang-code/moox/packages/cloudruntime"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	mooxreport "github.com/mooyang-code/moox/packages/report"
 	"github.com/nats-io/nats.go"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var registerHandlersOnce sync.Once
@@ -334,7 +336,11 @@ func executeCollectorJobItem(ctx context.Context, item nodeRuntime.JobItem) (nod
 	if err != nil {
 		return nodeRuntime.Result{}, nodeRuntime.Permanent(err, "INVALID_JOB_ITEM")
 	}
-	result, err := executor.ExecuteTask(execCtx, ctx, taskEvent)
+	moduleMetrics, metricsErr := mooxreport.DefaultModuleMetrics("collector")
+	if metricsErr != nil {
+		log.WarnContextf(ctx, "collector module metrics unavailable: %v", metricsErr)
+	}
+	result, err := executor.ExecuteTask(execCtx, ctx, taskEvent, moduleMetrics)
 	summary := map[string]any{}
 	if strings.TrimSpace(result) != "" {
 		_ = json.Unmarshal([]byte(result), &summary)

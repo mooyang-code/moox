@@ -371,9 +371,13 @@ export function validateKlineJobs(jobItems, subjectSymbols, targetDatasetID) {
 
 export function acceptKlineWriteEvidence(task) {
   const rows = Number(task?.rows_written || 0);
-  if (rows > 0) return rows;
-  if (rows === 0 && task?.zero_write_reason === "no_new_closed_kline") return 0;
-  throw new Error("zero-write Kline result is missing no_new_closed_kline");
+  if (!Number.isInteger(rows) || rows < 0) throw new Error("invalid Kline rows_written");
+  if (rows === 0) return 0;
+  const watermark = String(task?.output_watermark || "");
+  if (!watermark || Number.isNaN(new Date(watermark).getTime())) {
+    throw new Error("positive Kline result is missing a valid output_watermark");
+  }
+  return rows;
 }
 
 export function collectKlineWriteEvidence(jobItems, spaceID, targetDatasetID) {
@@ -396,33 +400,17 @@ export function collectKlineWriteEvidence(jobItems, spaceID, targetDatasetID) {
       subject_id: item.params?.subject_id,
       freq: "1m",
     };
-    if (JSON.stringify(stableObject(task.storage_read_scope || {})) !== JSON.stringify(stableObject(expectedScope))) {
-      throw new Error(`Kline JobItem ${item.job_item_id || ""} has an invalid Storage scope`);
-    }
-    if (task.data_type !== "kline" || task.symbol !== item.params?.symbol || task.interval !== "1m") {
+    if (task.data_type !== "kline" || task.dataset_id !== targetDatasetID || task.freq !== "1m") {
       throw new Error(`Kline JobItem ${item.job_item_id || ""} result does not match its request`);
     }
     const count = acceptKlineWriteEvidence(task);
     rowsWritten += count;
     if (count > 0) {
       executionNodes.add(item.execution_node);
-      const taskSamples = task.written_row_key_samples || [];
-      if (taskSamples.length === 0) {
-        throw new Error(`positive Kline JobItem ${item.job_item_id || ""} has no RowKey sample`);
-      }
-      for (const key of taskSamples) {
-        const scope = {
-          space_id: key.space_id,
-          dataset_id: key.dataset_id,
-          subject_id: key.subject_id,
-          freq: key.freq,
-        };
-        if (!key.data_time ||
-            JSON.stringify(stableObject(scope)) !== JSON.stringify(stableObject(expectedScope))) {
-          throw new Error(`Kline JobItem ${item.job_item_id || ""} has an out-of-scope RowKey sample`);
-        }
-      }
-      samples.push(...taskSamples.map((key) => ({ key, executionNode: item.execution_node })));
+      samples.push({
+        key: { ...expectedScope, data_time: task.output_watermark },
+        executionNode: item.execution_node,
+      });
     }
   }
   return { rowsWritten, samples, executionNodes };
@@ -747,9 +735,9 @@ async function symbols(args) {
     return item;
   });
   const symbolResult = symbolTaskResult(jobItem);
-  const snapshotVersion = String(symbolResult.record_snapshot_version || "");
+  const snapshotVersion = String(symbolResult.snapshot_version || "");
   if (Number.isNaN(new Date(snapshotVersion).getTime())) {
-    throw new FatalAssertionError("Symbol Job result is missing a valid record_snapshot_version");
+    throw new FatalAssertionError("Symbol Job result is missing a valid snapshot_version");
   }
   const verifiedSymbols = await waitFor("complete indexed Symbol snapshot", 120_000, async () => {
     const [memberships, mappings] = await Promise.all([

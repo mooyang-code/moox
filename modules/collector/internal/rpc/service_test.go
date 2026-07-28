@@ -20,6 +20,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	mooxreport "github.com/mooyang-code/moox/packages/report"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -669,6 +670,127 @@ func TestCollectorService_TaskInstanceFlow(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, missingRsp.GetRetInfo().GetCode())
+}
+
+type recordingDatasetObserver struct {
+	observations []mooxreport.DatasetObservation
+}
+
+func (o *recordingDatasetObserver) ObserveRun(observation mooxreport.DatasetObservation) error {
+	o.observations = append(o.observations, observation)
+	return nil
+}
+
+func TestReportTaskStatusObservesOnlyAcceptedCurrentJobItem(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	mgr, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "task-1", CloudJobItemID: "item-current",
+		DataType: "kline", DatasetID: "market_kline", Interval: "1m",
+		LastExecStatus: domain.InstanceStatusPending,
+	}}))
+	observer := &recordingDatasetObserver{}
+	svc := New(mgr, Dependencies{DatasetMetrics: observer})
+	watermark := "2026-07-28T01:02:03Z"
+
+	current, err := svc.ReportTaskStatus(context.Background(), &pb.ReportInstanceStatusReq{
+		SpaceId: "crypto", TaskId: "task-1", JobItemId: "item-current", NodeId: "scf-1",
+		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+		Result: mustStruct(t, map[string]any{"tasks": []any{map[string]any{
+			"data_type": "kline", "dataset_id": "market_kline", "freq": "1m",
+			"rows_written": 2, "output_watermark": watermark,
+		}}}),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, current.GetRetInfo().GetCode())
+	require.Len(t, observer.observations, 1)
+	assert.Equal(t, "success", observer.observations[0].Result)
+	assert.Equal(t, uint64(2), observer.observations[0].Rows)
+	assert.Equal(t, watermark, observer.observations[0].OutputWatermark.Format(time.RFC3339))
+
+	duplicate, err := svc.ReportTaskStatus(context.Background(), &pb.ReportInstanceStatusReq{
+		SpaceId: "crypto", TaskId: "task-1", JobItemId: "item-current", NodeId: "scf-duplicate",
+		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+		Result: mustStruct(t, map[string]any{"tasks": []any{map[string]any{
+			"data_type": "kline", "dataset_id": "market_kline", "freq": "1m",
+			"rows_written": 50, "output_watermark": "2026-07-30T00:00:00Z",
+		}}}),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, duplicate.GetRetInfo().GetCode())
+	assert.Len(t, observer.observations, 1)
+
+	stale, err := svc.ReportTaskStatus(context.Background(), &pb.ReportInstanceStatusReq{
+		SpaceId: "crypto", TaskId: "task-1", JobItemId: "item-stale", NodeId: "scf-old",
+		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+		Result: mustStruct(t, map[string]any{"tasks": []any{map[string]any{
+			"data_type": "kline", "dataset_id": "market_kline", "freq": "1m",
+			"rows_written": 100, "output_watermark": "2026-07-29T00:00:00Z",
+		}}}),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, stale.GetRetInfo().GetCode())
+	assert.Len(t, observer.observations, 1)
+}
+
+func TestReportTaskStatusDerivesEmptyFromZeroRows(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	mgr, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "task-empty", CloudJobItemID: "item-empty",
+		DataType: "kline", DatasetID: "market_kline", Interval: "1m",
+		LastExecStatus: domain.InstanceStatusPending,
+	}}))
+	observer := &recordingDatasetObserver{}
+	svc := New(mgr, Dependencies{DatasetMetrics: observer})
+
+	_, err = svc.ReportTaskStatus(context.Background(), &pb.ReportInstanceStatusReq{
+		SpaceId: "crypto", TaskId: "task-empty", JobItemId: "item-empty",
+		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS,
+		Result: mustStruct(t, map[string]any{"tasks": []any{map[string]any{
+			"data_type": "kline", "dataset_id": "market_kline", "freq": "1m", "rows_written": 0,
+		}}}),
+	})
+	require.NoError(t, err)
+	require.Len(t, observer.observations, 1)
+	assert.Equal(t, "empty", observer.observations[0].Result)
+	assert.True(t, observer.observations[0].OutputWatermark.IsZero())
+}
+
+func TestReportTaskStatusObservesAcceptedFailure(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "collector.db")
+	mgr, err := store.Open(&store.Options{Path: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, mgr.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{
+		SpaceID: "crypto", TaskID: "task-failed", CloudJobItemID: "item-failed",
+		DataType: "kline", DatasetID: "market_kline", Interval: "1m",
+		LastExecStatus: domain.InstanceStatusPending,
+	}}))
+	observer := &recordingDatasetObserver{}
+	svc := New(mgr, Dependencies{DatasetMetrics: observer})
+
+	_, err = svc.ReportTaskStatus(context.Background(), &pb.ReportInstanceStatusReq{
+		SpaceId: "crypto", TaskId: "task-failed", JobItemId: "item-failed",
+		Status: pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED,
+		Result: mustStruct(t, map[string]any{
+			"error_code": "COLLECTION_FAILED", "error_summary": "upstream timeout",
+		}),
+	})
+	require.NoError(t, err)
+	require.Len(t, observer.observations, 1)
+	assert.Equal(t, "error", observer.observations[0].Result)
+	assert.Equal(t, mooxreport.DatasetKey{
+		SpaceID: "crypto", DatasetID: "market_kline", Freq: "1m",
+	}, observer.observations[0].Key)
+	assert.True(t, observer.observations[0].OutputWatermark.IsZero())
 }
 
 func boolPtr(v bool) *bool { return &v }

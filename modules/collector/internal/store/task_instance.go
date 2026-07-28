@@ -86,6 +86,9 @@ func (r *TaskInstanceRepository) ReserveMany(
 		if instances[i].CreateTime.IsZero() {
 			instances[i].CreateTime = now
 		}
+		if instances[i].LastExecStatus == 0 {
+			instances[i].LastExecStatus = domain.InstanceStatusPending
+		}
 		instances[i].ModifyTime = now
 	}
 	reserved := make([]domain.TaskInstance, 0, len(instances))
@@ -163,10 +166,11 @@ func (r *TaskInstanceRepository) UpdateStatus(
 	tx := r.db.WithContext(ctx).
 		Model(&domain.TaskInstance{}).
 		Where(
-			"c_space_id = ? AND c_task_id = ? AND c_cloud_job_item_id = ?",
+			"c_space_id = ? AND c_task_id = ? AND c_cloud_job_item_id = ? AND c_last_exec_status = ?",
 			spaceID,
 			taskID,
 			jobItemID,
+			domain.InstanceStatusPending,
 		).
 		Updates(updates)
 	if tx.Error != nil {

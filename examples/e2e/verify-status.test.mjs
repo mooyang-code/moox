@@ -43,7 +43,7 @@ test("storage snapshot queries the target View without an empty subject selector
   );
 });
 
-test("storage write evidence accepts only an explicit K-line zero-write result", () => {
+test("storage write evidence derives an empty K-line result from rows_written", () => {
   assert.deepEqual(collectStorageWriteEvidence([{
     job_item_id: "zero",
     space_id: "crypto",
@@ -53,30 +53,11 @@ test("storage write evidence accepts only an explicit K-line zero-write result",
     },
     result_summary: {
       tasks: [{
-        data_type: "kline", symbol: "BTCUSDT", interval: "1h", rows_written: 0,
-        zero_write_reason: "no_new_closed_kline",
-        storage_read_scope: {
-          space_id: "crypto", dataset_id: "binance_spot_kline_1h",
-          subject_id: "BTC-USDT", freq: "1H",
-        },
+        data_type: "kline", dataset_id: "binance_spot_kline_1h", freq: "1H",
+        rows_written: 0,
       }],
     },
   }]), { rowsWritten: 0, writtenKeys: [] });
-  assert.throws(() => collectStorageWriteEvidence([{
-    job_item_id: "bad-zero",
-    space_id: "crypto",
-    params: {
-      space_id: "crypto", dataset_id: "binance_spot_kline_1h", data_type: "kline",
-      symbol: "BTCUSDT", subject_id: "BTC-USDT", interval: "1h",
-    },
-    result_summary: { tasks: [{
-      data_type: "kline", symbol: "BTCUSDT", interval: "1h", rows_written: 0,
-      storage_read_scope: {
-        space_id: "crypto", dataset_id: "binance_spot_kline_1h",
-        subject_id: "BTC-USDT", freq: "1H",
-      },
-    }] },
-  }]), /missing an accepted reason/);
 });
 
 test("storage write evidence requires every successful JobItem and requested interval", () => {
@@ -96,12 +77,8 @@ test("storage write evidence requires every successful JobItem and requested int
     },
     result_summary: {
       tasks: [{
-        data_type: "kline", symbol: "BTCUSDT", interval: "1h", rows_written: 1,
-        storage_read_scope: {
-          space_id: "crypto", dataset_id: "binance_spot_kline_1h",
-          subject_id: "BTC-USDT", freq: "1H",
-        },
-        written_row_key_samples: [key],
+        data_type: "kline", dataset_id: "binance_spot_kline_1h", freq: "1H",
+        rows_written: 1, output_watermark: key.data_time,
       }],
     },
   }];
@@ -113,15 +90,17 @@ test("storage write evidence requires every successful JobItem and requested int
   assert.throws(() => collectStorageWriteEvidence([{
     ...jobItems[0],
     params: { interval: "5m" },
-  }]), /does not match requested intervals/);
+  }]), /does not match requested frequencies/);
   assert.throws(() => collectStorageWriteEvidence([{
     ...jobItems[0],
-    params: { ...jobItems[0].params, symbol: "ETHUSDT", subject_id: "ETH-USDT" },
-  }]), /does not match requested data_type\/symbol/);
+    params: { ...jobItems[0].params, dataset_id: "other_kline" },
+  }]), /does not match requested data_type\/dataset/);
 });
 
 test("TaskInstance persists the same write evidence as its JobItem", () => {
-  const tasks = [{ data_type: "kline", interval: "1h", rows_written: 0, zero_write_reason: "no_new_closed_kline" }];
+  const tasks = [{
+    data_type: "kline", dataset_id: "binance_spot_kline_1h", freq: "1H", rows_written: 0,
+  }];
   assert.doesNotThrow(() => assertTaskInstanceWriteEvidence(
     [{ task_id: "task-1", cloud_job_item_id: "item-1", result: { tasks } }],
     [{ job_item_id: "item-1", result_summary: { tasks } }],

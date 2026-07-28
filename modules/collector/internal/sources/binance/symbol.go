@@ -137,8 +137,8 @@ func (c *SymbolCollector) CollectWithResult(
 		spaceID, datasetID, params.InstType, jobcontext.JobItemID(ctx),
 	)
 	result := sources.CollectResult{
-		RowsWritten:           len(filteredSymbols),
-		RecordSnapshotVersion: snapshotVersion,
+		RowsWritten:     uint64(len(filteredSymbols)),
+		SnapshotVersion: snapshotVersion,
 	}
 	return result, nil
 }

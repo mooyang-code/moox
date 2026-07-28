@@ -178,11 +178,3 @@ type CollectParams struct {
 	Limit     int                    `json:"limit,omitempty"`
 	Options   map[string]interface{} `json:"options,omitempty"`
 }
-
-// CollectResult 采集结果
-type CollectResult struct {
-	Data      interface{}            `json:"data"`
-	Count     int                    `json:"count"`
-	Timestamp time.Time              `json:"timestamp"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
-}
