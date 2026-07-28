@@ -47,6 +47,22 @@ func TestOrderLifecycle(t *testing.T) {
 	}
 }
 
+func TestDiscardPendingIsLocalTerminalTransition(t *testing.T) {
+	value, _, err := New("order-1", validSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.DiscardPending(); err != nil {
+		t.Fatal(err)
+	}
+	if value.State != Canceled {
+		t.Fatalf("state = %s, want %s", value.State, Canceled)
+	}
+	if _, err := value.DiscardPending(); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("second DiscardPending() error = %v", err)
+	}
+}
+
 func TestCancelAndFillRaceMatrix(t *testing.T) {
 	tests := []struct {
 		name          string

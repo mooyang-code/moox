@@ -233,6 +233,47 @@ func (s *Service) Cancel(
 	return current, callErr
 }
 
+func (s *Service) DiscardPending(
+	ctx context.Context,
+	spaceID string,
+	orderID string,
+) (orderdomain.Order, error) {
+	if s == nil || s.Store == nil {
+		return orderdomain.Order{}, ErrServiceConfig
+	}
+	record, err := s.Store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	unlock := s.Store.LockExchangeAccount(record.ExchangeAccountID)
+	defer unlock()
+	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	current, err := domainOrder(record)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	expected := current.Version
+	if _, err := current.DiscardPending(); err != nil {
+		return orderdomain.Order{}, err
+	}
+	releaseRecord := record
+	applyAggregate(&record, current)
+	record.RemainingReservedQuantity = "0"
+	record.FinishedAt = s.now().UnixMilli()
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.UpdateOrder(record, expected); err != nil {
+			return err
+		}
+		return releaseReservation(tx, releaseRecord)
+	}); err != nil {
+		return orderdomain.Order{}, err
+	}
+	return current, nil
+}
+
 func (s *Service) ResolveUnknown(
 	ctx context.Context,
 	spaceID string,

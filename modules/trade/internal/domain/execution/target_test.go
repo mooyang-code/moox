@@ -2,6 +2,7 @@ package execution
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -32,6 +33,9 @@ func TestTargetIntentValidation(t *testing.T) {
 	}{
 		{"missing identity", func(intent *TargetIntent) { intent.ExecutionBindingID = "" }},
 		{"zero sequence", func(intent *TargetIntent) { intent.CommandSequence = 0 }},
+		{"sequence overflow", func(intent *TargetIntent) {
+			intent.CommandSequence = uint64(math.MaxInt64) + 1
+		}},
 		{"expired", func(intent *TargetIntent) { intent.NotAfter = now }},
 		{"missing target", func(intent *TargetIntent) { intent.Targets = nil }},
 		{"blank target identity", func(intent *TargetIntent) { intent.Targets[0].Symbol = "" }},

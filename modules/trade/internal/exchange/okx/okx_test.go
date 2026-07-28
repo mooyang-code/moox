@@ -44,6 +44,31 @@ func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
 	}
 }
 
+func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v5/market/ticker" ||
+			request.URL.Query().Get("instId") != "BTC-USDT" {
+			t.Fatalf("request = %s?%s", request.URL.Path, request.URL.RawQuery)
+		}
+		ok(w, `[{"instId":"BTC-USDT","last":"100.25","ts":"2000"}]`)
+	}))
+	defer server.Close()
+	adapter := NewWithClient(
+		exchange.AccountConfig{MarketType: exchange.MarketTypeSpot},
+		exchange.Credential{},
+		httpclient.New(server.URL),
+	)
+
+	quote, err := adapter.GetReferencePrice(context.Background(), "BTC-USDT")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quote.Price.String() != "100.25" || quote.UpdatedAt.UnixMilli() != 2000 {
+		t.Fatalf("quote = %+v", quote)
+	}
+}
+
 func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 	var orderBody map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

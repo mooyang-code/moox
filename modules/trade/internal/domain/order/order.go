@@ -102,6 +102,10 @@ func (o *Order) BeginCancel() ([]Event, error) {
 	return o.transition(Canceling, Open, PartiallyFilled, SubmitUnknown)
 }
 
+func (o *Order) DiscardPending() ([]Event, error) {
+	return o.transition(Canceled, Pending)
+}
+
 func (o *Order) MarkCancelUnknown() ([]Event, error) {
 	return o.transition(CancelUnknown, Canceling)
 }

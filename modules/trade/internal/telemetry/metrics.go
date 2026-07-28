@@ -9,13 +9,12 @@ import (
 )
 
 var (
-	Commands                  = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_commands_total", Help: "Trade commands by bounded command and result."}, []string{"command", "result"})
-	Submissions               = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_exchange_submissions_total", Help: "Exchange submissions by result."}, []string{"result"})
-	Fills                     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_fills_total", Help: "Private or reconciled fills by result."}, []string{"source", "result"})
-	UnknownOrders             = prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_trade_unknown_orders", Help: "Orders awaiting exchange truth."})
-	ReconciliationDifferences = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_reconciliation_differences_total", Help: "Reconciliation differences by kind."}, []string{"kind"})
-	Rebalances                = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_rebalances_total", Help: "Rebalance runs by result."}, []string{"result"})
-	OperationLatency          = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "moox_trade_operation_duration_seconds", Help: "Trade operation latency.", Buckets: prometheus.DefBuckets}, []string{"operation"})
+	Commands         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_commands_total", Help: "Trade commands by bounded command and result."}, []string{"command", "result"})
+	Submissions      = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_exchange_submissions_total", Help: "Exchange submissions by result."}, []string{"result"})
+	Fills            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_fills_total", Help: "Private or reconciled fills by result."}, []string{"source", "result"})
+	UnknownOrders    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "moox_trade_unknown_orders", Help: "Orders awaiting exchange truth."})
+	TargetExecutions = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_target_executions_total", Help: "Target execution transitions by status."}, []string{"status"})
+	OperationLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "moox_trade_operation_duration_seconds", Help: "Trade operation latency.", Buckets: prometheus.DefBuckets}, []string{"operation"})
 
 	privateMu        sync.RWMutex
 	privateConnected = map[string]bool{}
@@ -23,15 +22,15 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(Commands, Submissions, Fills, UnknownOrders, ReconciliationDifferences, Rebalances, OperationLatency)
+	prometheus.MustRegister(Commands, Submissions, Fills, UnknownOrders, TargetExecutions, OperationLatency)
 }
 
 func RecordModuleStage(stage, result string, watermark time.Time) {
-	_ = report.ObserveModuleRun("trade", stage, result, "trade-rebalance", time.Now())
+	_ = report.ObserveModuleRun("trade", stage, result, "trade-target", time.Now())
 	if !watermark.IsZero() {
-		_ = report.ObserveModuleInputWatermark("trade", stage, "trade-rebalance", watermark)
+		_ = report.ObserveModuleInputWatermark("trade", stage, "trade-target", watermark)
 		if result == "success" {
-			_ = report.ObserveModuleWatermark("trade", stage, "trade-rebalance", watermark)
+			_ = report.ObserveModuleWatermark("trade", stage, "trade-target", watermark)
 		}
 	}
 }

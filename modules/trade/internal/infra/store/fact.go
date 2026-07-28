@@ -431,6 +431,31 @@ func (s *Store) ListOrdersForAccount(
 	return records, nil
 }
 
+func (s *Store) ListOrdersForLane(
+	ctx context.Context,
+	spaceID string,
+	exchangeAccountID string,
+	symbol string,
+) ([]OrderRecord, error) {
+	var rows []orderRow
+	if err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where(
+			"c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?",
+			spaceID,
+			exchangeAccountID,
+			symbol,
+		).
+		Order("c_order_id").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]OrderRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, orderRecordFromRow(row))
+	}
+	return records, nil
+}
+
 func (tx *Tx) GetOrder(spaceID string, orderID string) (OrderRecord, error) {
 	var row orderRow
 	result := tx.db.Raw(`
@@ -924,6 +949,28 @@ func (tx *Tx) GetPosition(
 		UnrealizedPnL:    row.UnrealizedPnL, RealizedPnL: row.RealizedPnL,
 		ExchangeUpdatedAt: row.ExchangeUpdatedAt,
 	}, true, nil
+}
+
+func (s *Store) GetPosition(
+	ctx context.Context,
+	spaceID string,
+	exchangeAccountID string,
+	symbol string,
+	positionSide string,
+) (PositionRecord, bool, error) {
+	var record PositionRecord
+	var found bool
+	err := s.Transaction(ctx, func(tx *Tx) error {
+		var err error
+		record, found, err = tx.GetPosition(
+			spaceID,
+			exchangeAccountID,
+			symbol,
+			positionSide,
+		)
+		return err
+	})
+	return record, found, err
 }
 
 func canonicalizeOrder(record *OrderRecord) error {

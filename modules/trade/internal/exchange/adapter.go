@@ -2,6 +2,7 @@ package exchange
 
 import (
 	"context"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
@@ -23,6 +24,15 @@ type Adapter interface {
 
 type ExchangeOrderLookup interface {
 	GetOrderByExchangeID(context.Context, string, string) (Order, error)
+}
+
+type ReferencePrice struct {
+	Price     shared.Decimal
+	UpdatedAt time.Time
+}
+
+type ReferencePriceSource interface {
+	GetReferencePrice(context.Context, string) (ReferencePrice, error)
 }
 
 // PrivateStreamMetadataGate lets an adapter subscribe first while deferring

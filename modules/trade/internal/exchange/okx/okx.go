@@ -236,6 +236,41 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	return out, nil
 }
 
+func (a *Adapter) GetReferencePrice(
+	ctx context.Context,
+	symbol string,
+) (exchange.ReferencePrice, error) {
+	data, err := a.request(
+		ctx,
+		http.MethodGet,
+		"/api/v5/market/ticker",
+		url.Values{"instId": []string{symbol}},
+		nil,
+		false,
+	)
+	if err != nil {
+		return exchange.ReferencePrice{}, err
+	}
+	var rows []struct {
+		Last string `json:"last"`
+		TS   string `json:"ts"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 {
+		return exchange.ReferencePrice{}, rejected("decode reference price", err)
+	}
+	price, err := shared.ParseDecimal(rows[0].Last)
+	if err != nil || price.Cmp(shared.Zero()) <= 0 {
+		return exchange.ReferencePrice{}, rejected("invalid reference price", err)
+	}
+	timestamp, err := strconv.ParseInt(rows[0].TS, 10, 64)
+	if err != nil || timestamp <= 0 {
+		return exchange.ReferencePrice{}, rejected("invalid reference price timestamp", err)
+	}
+	return exchange.ReferencePrice{
+		Price: price, UpdatedAt: time.UnixMilli(timestamp),
+	}, nil
+}
+
 func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {
 	a.mu.RLock()
 	instrument, ok := a.instruments[symbol]

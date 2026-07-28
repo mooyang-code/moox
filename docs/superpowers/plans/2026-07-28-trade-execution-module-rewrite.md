@@ -1404,9 +1404,17 @@ git commit -m "feat(trade): add Exchange account synchronization"
 - Create: `modules/trade/internal/application/target/executor_test.go`
 - Create: `modules/trade/internal/runtime/target_worker.go`
 - Create: `modules/trade/internal/runtime/target_worker_test.go`
-- Rewrite: `modules/trade/internal/eventconsumer/target.go`
-- Rewrite: `modules/trade/internal/eventconsumer/target_test.go`
+- Create: `modules/trade/internal/eventconsumer/target.go`
+- Create: `modules/trade/internal/eventconsumer/target_test.go`
 - Modify: `modules/trade/internal/eventconsumer/jetstream.go`
+- Modify: `modules/trade/internal/domain/execution/target.go`
+- Modify: `modules/trade/internal/domain/order/order.go`
+- Modify: `modules/trade/internal/application/order/service.go`
+- Modify: `modules/trade/internal/infra/store/target.go`
+- Modify: `modules/trade/internal/infra/store/fact.go`
+- Modify: `modules/trade/internal/exchange/adapter.go`
+- Modify: `modules/trade/internal/exchange/binance/binance.go`
+- Modify: `modules/trade/internal/exchange/okx/okx.go`
 - Delete: `modules/trade/internal/eventconsumer/rebalance.go`
 - Delete: `modules/trade/internal/eventconsumer/rebalance_test.go`
 - Delete: `modules/trade/internal/eventconsumer/resolver.go`
@@ -1480,6 +1488,12 @@ one child Order per lane at a time.
 Apply optional `max_child_notional` as a deterministic quantity cap. This is
 not a pluggable algorithm.
 
+MARKET validation and reservation use a fresh reference price. Add one narrow
+optional `ReferencePriceSource` capability to the Exchange adapters:
+Binance uses the SPOT or USD-M ticker-price endpoint and OKX uses the market
+ticker endpoint. TargetExecutor must not substitute the instrument price tick
+for a market price.
+
 - [ ] **Step 4: Handle timeout and terminal status**
 
 When `not_after` passes:
@@ -1515,9 +1529,15 @@ Expected: PASS with no Rebalance Run, Leg, planner, or stale-target conflict.
 ```bash
 git add modules/trade/internal/application/target \
   modules/trade/internal/application/rebalance \
+  modules/trade/internal/application/order \
+  modules/trade/internal/domain/execution \
+  modules/trade/internal/domain/order \
   modules/trade/internal/runtime \
   modules/trade/internal/eventconsumer \
-  modules/trade/internal/telemetry
+  modules/trade/internal/exchange \
+  modules/trade/internal/infra/store \
+  modules/trade/internal/telemetry \
+  docs/superpowers/plans/2026-07-28-trade-execution-module-rewrite.md
 git commit -m "feat(trade): converge target positions"
 ```
 

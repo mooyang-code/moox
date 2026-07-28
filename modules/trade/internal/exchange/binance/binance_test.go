@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -98,6 +99,27 @@ func TestLoadSwapInstruments(t *testing.T) {
 		instruments[0].ContractValue.String() != "1" ||
 		instruments[0].SettlementAsset != "USDT" {
 		t.Fatalf("instrument = %+v", instruments)
+	}
+}
+
+func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v3/ticker/price" ||
+			request.URL.Query().Get("symbol") != "BTCUSDT" {
+			t.Fatalf("request = %s?%s", request.URL.Path, request.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"symbol":"BTCUSDT","price":"100.25"}`)
+	}))
+	defer server.Close()
+
+	before := time.Now()
+	quote, err := testAdapter(exchange.MarketTypeSpot, server.URL).
+		GetReferencePrice(context.Background(), "BTCUSDT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quote.Price.String() != "100.25" || quote.UpdatedAt.Before(before) {
+		t.Fatalf("quote = %+v", quote)
 	}
 }
 

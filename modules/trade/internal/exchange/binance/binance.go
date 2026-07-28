@@ -206,6 +206,36 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	return out, nil
 }
 
+func (a *Adapter) GetReferencePrice(
+	ctx context.Context,
+	symbol string,
+) (exchange.ReferencePrice, error) {
+	raw, err := a.client().Do(ctx, &httpclient.Request{
+		Method: http.MethodGet,
+		Path:   a.path("/api/v3/ticker/price", "/fapi/v1/ticker/price"),
+		Query:  url.Values{"symbol": []string{symbol}},
+	})
+	if err != nil {
+		return exchange.ReferencePrice{}, err
+	}
+	var payload struct {
+		Price string `json:"price"`
+		Time  int64  `json:"time"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return exchange.ReferencePrice{}, typedRejected("decode reference price", err)
+	}
+	price, err := shared.ParseDecimal(payload.Price)
+	if err != nil || price.Cmp(shared.Zero()) <= 0 {
+		return exchange.ReferencePrice{}, typedRejected("invalid reference price", err)
+	}
+	updatedAt := time.Now().UTC()
+	if payload.Time > 0 {
+		updatedAt = time.UnixMilli(payload.Time)
+	}
+	return exchange.ReferencePrice{Price: price, UpdatedAt: updatedAt}, nil
+}
+
 type spotAccount struct {
 	UpdateTime int64 `json:"updateTime"`
 	Balances   []struct {

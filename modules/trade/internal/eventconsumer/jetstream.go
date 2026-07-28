@@ -10,32 +10,32 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-func RunRebalance(ctx context.Context, opts RebalanceOptions) error {
+func RunTarget(ctx context.Context, opts TargetOptions) error {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return err
 	}
 	for ctx.Err() == nil {
 		consumer, openErr := events.NewConsumer(ctx, opts.Client, registry, events.ConsumerConfig{
-			Name: opts.ConsumerName, Event: events.TradeRebalanceRequested,
+			Name: opts.ConsumerName, Event: events.TradeTargetRequested,
 			AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 64,
 			FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
 			DeliverDecodeErrors: true,
 		})
 		if openErr != nil {
-			log.WarnContextf(ctx, "open trade rebalance consumer: %v", openErr)
+			log.WarnContextf(ctx, "open trade target consumer: %v", openErr)
 			if !sleepContext(ctx, time.Second) {
 				return ctx.Err()
 			}
 			continue
 		}
 		handler := jetstream.DeliveryHandlerFunc(func(handlerCtx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-			return HandleRebalance(handlerCtx, delivery, opts)
+			return HandleTarget(handlerCtx, delivery, opts)
 		})
 		runner := jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
 			BatchSize: 16,
 			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
-				log.WarnContextf(ctx, "trade rebalance delivery failed: %v", err)
+				log.WarnContextf(ctx, "trade target delivery failed: %v", err)
 			}),
 		})
 		runErr := runner.Run(ctx)
@@ -44,7 +44,7 @@ func RunRebalance(ctx context.Context, opts RebalanceOptions) error {
 			return ctx.Err()
 		}
 		if runErr != nil {
-			log.WarnContextf(ctx, "trade rebalance consumer stopped: %v", runErr)
+			log.WarnContextf(ctx, "trade target consumer stopped: %v", runErr)
 		}
 		if !sleepContext(ctx, time.Second) {
 			return ctx.Err()

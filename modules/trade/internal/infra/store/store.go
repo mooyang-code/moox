@@ -25,6 +25,7 @@ var (
 type Store struct {
 	db           *gorm.DB
 	accountLocks sync.Map
+	targetLocks  sync.Map
 }
 
 type Tx struct {
@@ -59,6 +60,14 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) LockExchangeAccount(exchangeAccountID string) func() {
 	value, _ := s.accountLocks.LoadOrStore(exchangeAccountID, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
+}
+
+func (s *Store) LockTargetBinding(spaceID string, executionBindingID string) func() {
+	key := spaceID + "\x00" + executionBindingID
+	value, _ := s.targetLocks.LoadOrStore(key, &sync.Mutex{})
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock

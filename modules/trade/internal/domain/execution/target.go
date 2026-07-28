@@ -3,6 +3,7 @@ package execution
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ func (i TargetIntent) Validate(now time.Time) error {
 		blank(i.ExecutionBindingID) ||
 		blank(i.ExchangeAccountID) ||
 		i.CommandSequence == 0 ||
+		i.CommandSequence > math.MaxInt64 ||
 		i.NotAfter.IsZero() ||
 		!i.NotAfter.After(now) ||
 		blank(i.DataRevision) ||

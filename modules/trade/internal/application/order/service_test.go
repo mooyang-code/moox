@@ -127,6 +127,37 @@ func TestServicePlacePersistsBeforeSubmissionAndIsIdempotent(t *testing.T) {
 	require.ErrorIs(t, err, ErrIdempotencyConflict)
 }
 
+func TestServiceDiscardPendingReleasesReservationWithoutExchangeCall(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	now := time.Unix(1_700_000_000, 0)
+	_, err := service.Place(context.Background(), testSpec(now))
+	require.NoError(t, err)
+
+	discarded, err := service.DiscardPending(
+		context.Background(),
+		"space-1",
+		"order-1",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Canceled, discarded.State)
+	require.Zero(t, adapter.placeCalls)
+	require.Zero(t, adapter.cancelCalls)
+	record, err := tradeStore.GetOrder(context.Background(), "space-1", "order-1")
+	require.NoError(t, err)
+	require.Equal(t, "CANCELED", record.State)
+	require.Equal(t, "0", record.RemainingReservedQuantity)
+	projections, err := tradeStore.ListBalanceProjections(
+		context.Background(),
+		"space-1",
+		"account-1",
+	)
+	require.NoError(t, err)
+	for _, projection := range projections {
+		require.True(t, projection.Amount.IsZero(), projection)
+	}
+}
+
 func TestServicePlaceTransportUnknownRetainsReservation(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}

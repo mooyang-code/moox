@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -58,6 +59,8 @@ func (s *Store) AcceptTarget(
 	ctx context.Context,
 	record TargetExecutionRecord,
 ) (bool, error) {
+	unlock := s.LockTargetBinding(record.SpaceID, record.ExecutionBindingID)
+	defer unlock()
 	var accepted bool
 	err := s.Transaction(ctx, func(tx *Tx) error {
 		var err error
@@ -72,8 +75,9 @@ func (tx *Tx) AcceptTarget(record TargetExecutionRecord) (bool, error) {
 		record.EventID != record.ExecutionID || blank(record.StrategyRunID) ||
 		blank(record.ExecutionBindingID) ||
 		blank(record.ExchangeAccountID) || blank(record.DataRevision) ||
-		record.CommandSequence == 0 || record.NotAfter <= time.Now().UnixMilli() ||
-		blank(record.Status) {
+		record.CommandSequence == 0 || record.CommandSequence > math.MaxInt64 ||
+		record.NotAfter <= time.Now().UnixMilli() ||
+		!validTargetExecutionStatus(record.Status) {
 		return false, fmt.Errorf("%w: incomplete target execution", ErrInvalidRecord)
 	}
 	targetsJSON, err := encodeTargets(record.Targets)
@@ -87,6 +91,22 @@ func (tx *Tx) AcceptTarget(record TargetExecutionRecord) (bool, error) {
 	)
 	if err != nil {
 		return false, err
+	}
+
+	var currentBinding struct {
+		ExchangeAccountID string `gorm:"column:c_exchange_account_id"`
+	}
+	bindingResult := tx.db.Raw(`
+		SELECT c_exchange_account_id
+		FROM t_target_executions
+		WHERE c_space_id = ? AND c_execution_binding_id = ?
+	`, record.SpaceID, record.ExecutionBindingID).Scan(&currentBinding)
+	if bindingResult.Error != nil {
+		return false, bindingResult.Error
+	}
+	if bindingResult.RowsAffected == 1 &&
+		currentBinding.ExchangeAccountID != record.ExchangeAccountID {
+		return false, fmt.Errorf("%w: target binding Exchange account", ErrConflict)
 	}
 
 	var duplicateEvent int64
@@ -123,6 +143,8 @@ func (tx *Tx) AcceptTarget(record TargetExecutionRecord) (bool, error) {
 			c_last_error = excluded.c_last_error,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE excluded.c_command_sequence > t_target_executions.c_command_sequence
+			AND excluded.c_exchange_account_id =
+				t_target_executions.c_exchange_account_id
 	`,
 		record.SpaceID, record.ExecutionID, record.EventID, record.StrategyRunID,
 		record.ExecutionBindingID, record.ExchangeAccountID, record.CommandSequence,
@@ -159,6 +181,105 @@ func (s *Store) GetTargetExecutionByBinding(
 		Status: row.Status, Progress: row.Progress,
 		ResidualQuantity: row.ResidualQuantity, LastError: row.LastError,
 	}, nil
+}
+
+func (s *Store) GetTargetExecution(
+	ctx context.Context,
+	spaceID string,
+	executionID string,
+) (TargetExecutionRecord, error) {
+	var row targetExecutionRow
+	err := s.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_execution_id = ?", spaceID, executionID).
+		Take(&row).Error
+	if err != nil {
+		return TargetExecutionRecord{}, err
+	}
+	var targets []TargetPosition
+	if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
+		return TargetExecutionRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
+	}
+	return targetExecutionRecordFromRow(row, targets), nil
+}
+
+func (s *Store) ListTargetExecutions(
+	ctx context.Context,
+	statuses ...string,
+) ([]TargetExecutionRecord, error) {
+	query := s.db.WithContext(ctx).Table("t_target_executions")
+	if len(statuses) > 0 {
+		query = query.Where("c_status IN ?", statuses)
+	}
+	var rows []targetExecutionRow
+	if err := query.Order("c_space_id, c_execution_binding_id").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]TargetExecutionRecord, 0, len(rows))
+	for _, row := range rows {
+		var targets []TargetPosition
+		if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
+			return nil, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
+		}
+		records = append(records, targetExecutionRecordFromRow(row, targets))
+	}
+	return records, nil
+}
+
+func (s *Store) UpdateTargetExecutionState(
+	ctx context.Context,
+	record TargetExecutionRecord,
+) (bool, error) {
+	if blank(record.SpaceID) || blank(record.ExecutionID) ||
+		blank(record.ExecutionBindingID) || record.CommandSequence == 0 ||
+		!validTargetExecutionStatus(record.Status) {
+		return false, fmt.Errorf("%w: invalid target execution update", ErrInvalidRecord)
+	}
+	residual, err := canonicalDefaultZero(
+		record.ResidualQuantity,
+		"target residual quantity",
+		decimalSigned,
+	)
+	if err != nil {
+		return false, err
+	}
+	result := s.db.WithContext(ctx).Exec(`
+		UPDATE t_target_executions
+		SET c_status = ?, c_progress = ?, c_residual_quantity = ?,
+			c_last_error = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_execution_binding_id = ?
+			AND c_execution_id = ? AND c_command_sequence = ?
+	`,
+		record.Status, record.Progress, residual, record.LastError,
+		record.SpaceID, record.ExecutionBindingID,
+		record.ExecutionID, record.CommandSequence,
+	)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+func targetExecutionRecordFromRow(
+	row targetExecutionRow,
+	targets []TargetPosition,
+) TargetExecutionRecord {
+	return TargetExecutionRecord{
+		SpaceID: row.SpaceID, ExecutionID: row.ExecutionID, EventID: row.EventID,
+		StrategyRunID: row.StrategyRunID, ExecutionBindingID: row.ExecutionBindingID,
+		ExchangeAccountID: row.ExchangeAccountID, CommandSequence: row.CommandSequence,
+		NotAfter: row.NotAfter, DataRevision: row.DataRevision, Targets: targets,
+		Status: row.Status, Progress: row.Progress,
+		ResidualQuantity: row.ResidualQuantity, LastError: row.LastError,
+	}
+}
+
+func validTargetExecutionStatus(status string) bool {
+	switch status {
+	case "RUNNING", "COMPLETED", "EXPIRED", "FAILED", "PAUSED":
+		return true
+	default:
+		return false
+	}
 }
 
 func encodeTargets(targets []TargetPosition) (string, error) {
