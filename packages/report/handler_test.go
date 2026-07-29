@@ -120,8 +120,8 @@ func TestBuildSnapshotCountsFlattenedHistogramSamples(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.GetSampleCount() != 4 { // sum, count, and two buckets
-		t.Fatalf("sample count = %d, want 4", snapshot.GetSampleCount())
+	if snapshot.GetSampleCount() != 5 { // sum, count, two finite buckets, and +Inf
+		t.Fatalf("sample count = %d, want 5", snapshot.GetSampleCount())
 	}
 }
 

@@ -28,7 +28,7 @@ server:
       timeout: 3000
     - name: trpc.moox.monitor.metrics.timer
       port: 11415
-      network: "*/30 * * * * *"
+      network: "*/30 * * * * *?startAtOnce=1"
       protocol: timer
       timeout: 10000
     - name: trpc.moox.monitor.sysdeploy.timer

@@ -141,6 +141,7 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{name: "monitoring webhook must use HTTPS", body: strings.Replace(validManifest, "[control_host]", "[monitoring]\nwecom_webhook = \"http://example.test/hook\"\n\n[control_host]", 1), want: "monitoring.wecom_webhook"},
 		{name: "monitoring webhook must be a URL", body: strings.Replace(validManifest, "[control_host]", "[monitoring]\nwecom_webhook = \"not-a-url\"\n\n[control_host]", 1), want: "monitoring.wecom_webhook"},
 		{name: "missing host address", body: strings.Replace(validManifest, `address = "192.0.2.10"`, `address = ""`, 1), want: "control_host.address"},
+		{name: "invalid host name", body: strings.Replace(validManifest, `name = "control"`, `name = "Storage A"`, 1), want: "control_host.name"},
 		{name: "missing compile host address", body: validManifest + `
 [compile_host]
 name = "compile"

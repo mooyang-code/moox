@@ -211,7 +211,7 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 			return c.reject(fmt.Errorf("metrics route payload has type %T", decoded.Payload))
 		}
 		if err := c.routes.Metrics(ctx, message, payload); err != nil {
-			return c.routeError("metrics", err, delivery.DeliveryCount)
+			return c.routeError(ctx, "metrics", err, delivery.DeliveryCount)
 		}
 	case matches(message, events.ObservabilityHostSnapshotReported):
 		payload, ok := decoded.Payload.(*hostmetricpb.HostMetric)
@@ -219,7 +219,7 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 			return c.reject(fmt.Errorf("host route payload has type %T", decoded.Payload))
 		}
 		if err := c.routes.Host(ctx, message, payload); err != nil {
-			return c.routeError("host", err, delivery.DeliveryCount)
+			return c.routeError(ctx, "host", err, delivery.DeliveryCount)
 		}
 	case matches(message, events.ObservabilityHealthCheckReported):
 		payload, ok := decoded.Payload.(*observabilitypb.HealthCheckReport)
@@ -227,7 +227,7 @@ func (c *Consumer) Handle(ctx context.Context, delivery *jetstream.Delivery) jet
 			return c.reject(fmt.Errorf("health route payload has type %T", decoded.Payload))
 		}
 		if err := c.routes.Health(ctx, message, payload); err != nil {
-			return c.routeError("health", err, delivery.DeliveryCount)
+			return c.routeError(ctx, "health", err, delivery.DeliveryCount)
 		}
 	default:
 		return c.reject(fmt.Errorf("unsupported observability event %s@%d", message.GetEventName(), message.GetEventVersion()))
@@ -253,11 +253,13 @@ func Permanent(err error) error {
 	return permanentError{err: err}
 }
 
-func (c *Consumer) routeError(route string, err error, deliveryCount uint64) jetstream.HandlerResult {
+func (c *Consumer) routeError(ctx context.Context, route string, err error, deliveryCount uint64) jetstream.HandlerResult {
 	var permanent permanentError
 	if errors.As(err, &permanent) {
+		log.WarnContextf(ctx, "monitor observability %s event rejected: %v", route, err)
 		return c.reject(fmt.Errorf("%s route: %w", route, err))
 	}
+	log.WarnContextf(ctx, "monitor observability %s event failed (delivery=%d): %v", route, deliveryCount, err)
 	return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay(deliveryCount), Err: err}
 }
 

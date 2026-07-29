@@ -91,6 +91,17 @@ func TestLoadEventBus_Valid_ShouldSucceed(t *testing.T) {
 	assert.NotContains(t, cfg.CAFile, "~")
 }
 
+func TestLoadEventBus_RelativeCA_ShouldResolveFromCredentialDirectory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "eventbus.yaml")
+	content := "urls: [nats://127.0.0.1:4222]\nusername: hostagent\neventbus_token: token\nca_file: ca.pem\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := LoadEventBus(path)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "ca.pem"), cfg.CAFile)
+}
+
 func TestLoadEventBus_BadPermission_ShouldReturnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "eventbus.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("urls: [a]\nusername: u\neventbus_token: t\n"), 0o644))

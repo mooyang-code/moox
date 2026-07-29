@@ -247,7 +247,10 @@ func validHTTPSWebhook(rawURL string) bool {
 		parsed.User == nil && parsed.Fragment == ""
 }
 
-var dnsLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+var (
+	dnsLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+	hostNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
+)
 
 func validEventBusAddress(address string) bool {
 	if address == "" {
@@ -282,6 +285,9 @@ func validateHost(path string, host *Host, names, addresses map[string]struct{},
 	host.Username = strings.TrimSpace(host.Username)
 	if host.Name == "" {
 		return fmt.Errorf("config_invalid: %s.name is required", path)
+	}
+	if !hostNamePattern.MatchString(host.Name) {
+		return fmt.Errorf("config_invalid: %s.name must use lowercase letters, digits, dash, or underscore", path)
 	}
 	if host.Address == "" {
 		return fmt.Errorf("config_invalid: %s.address is required", path)

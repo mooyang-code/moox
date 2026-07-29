@@ -7,7 +7,9 @@ import (
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -20,11 +22,12 @@ type hostStorageAccess interface {
 // datasets. Storage keys are minute-granular, so retries are idempotent.
 type StorageWriter struct {
 	access hostStorageAccess
+	auth   *commonpb.AuthInfo
 	cfg    monconfig.HostStorageConfig
 }
 
 func NewStorageWriter(access hostStorageAccess, cfg monconfig.HostStorageConfig) *StorageWriter {
-	return &StorageWriter{access: access, cfg: cfg}
+	return &StorageWriter{access: access, auth: storageauth.Primary(cfg.KeyID), cfg: cfg}
 }
 
 func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricpb.HostSnapshot, agentID string, observedAt time.Time, messageID string) error {
@@ -65,7 +68,7 @@ func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricp
 		if w.cfg.WriteTimeout > 0 {
 			writeCtx, cancel = context.WithTimeout(ctx, w.cfg.WriteTimeout)
 		}
-		rsp, err := w.access.UpsertFields(writeCtx, &storagepb.PrimaryUpsertFieldsReq{Rows: group, SourceEventId: messageID})
+		rsp, err := w.access.UpsertFields(writeCtx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: w.auth, Rows: group, SourceEventId: messageID})
 		cancel()
 		if err != nil {
 			return fmt.Errorf("write host dataset %q: %w", group[0].GetKey().GetDatasetId(), err)

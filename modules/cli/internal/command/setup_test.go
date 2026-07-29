@@ -228,6 +228,23 @@ func TestSetupDeployStorageRequiresAndPassesSelectedHost(t *testing.T) {
 	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":false}`, output.String())
 }
 
+func TestNormalizeStorageInternalAuthRejectsShellContent(t *testing.T) {
+	const valid = "MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary+/=\nMOOX_STORAGE_VIEW_AUTH_SECRET=view._-\n"
+	got, err := normalizeStorageInternalAuth(valid)
+	require.NoError(t, err)
+	assert.Equal(t, valid, got)
+
+	for _, raw := range []string{
+		valid + "touch /tmp/pwned\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=$(id)\nMOOX_STORAGE_VIEW_AUTH_SECRET=view\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=one\nMOOX_STORAGE_PRIMARY_AUTH_SECRET=two\nMOOX_STORAGE_VIEW_AUTH_SECRET=view\n",
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary\n",
+	} {
+		_, err := normalizeStorageInternalAuth(raw)
+		require.Error(t, err)
+	}
+}
+
 func TestSetupDeployControlWritesSanitizedValidationResultOnFailure(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)

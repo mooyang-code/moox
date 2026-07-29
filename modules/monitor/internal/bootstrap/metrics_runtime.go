@@ -79,6 +79,36 @@ func maxInt(a, b int) int {
 	return b
 }
 
+func startMetricsStorageGate(ctx context.Context, cfg *config.Config, runtime *Runtime, storage *monmetrics.StorageAdapter) {
+	if cfg == nil || runtime == nil || storage == nil || !cfg.Metrics.Enabled {
+		return
+	}
+	interval := cfg.Metrics.Storage.MetadataValidationInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	check := func() {
+		checkCtx, cancel := context.WithTimeout(ctx, interval)
+		defer cancel()
+		if err := storage.ValidateSchema(checkCtx); err != nil {
+			log.WarnContextf(ctx, "metrics storage schema check failed: %v", err)
+		}
+	}
+	runtime.Go(func() {
+		check()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				check()
+			}
+		}
+	})
+}
+
 func startObservabilityConsumer(
 	ctx context.Context,
 	cfg *config.Config,
@@ -106,8 +136,8 @@ func startObservabilityConsumer(
 			ExternalProducers: map[string]struct{}{
 				"moox_collector_scf": {},
 			},
-		}, runtime.ModuleMetrics, cfg.Metrics.Enabled),
-		Host: hostObservabilityRoute(hostStore, cfg.Metrics.HostStorage.Enabled),
+		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
+		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 		Health: func(routeCtx context.Context, message *eventpb.EventMessage, health *observabilitypb.HealthCheckReport) error {
 			if runtime.ObservabilityHealthRoute == nil {
 				return nil
@@ -180,6 +210,7 @@ func metricsObservabilityRoute(
 	messageStore *monmetrics.MetricMessageStore,
 	authorizer monmetrics.ProducerAuthorizer,
 	moduleMetrics *report.ModuleMetrics,
+	runtime *Runtime,
 	enabled bool,
 ) func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error {
 	return func(ctx context.Context, message *eventpb.EventMessage, metricReport *metricspb.MetricReport) error {
@@ -217,18 +248,23 @@ func metricsObservabilityRoute(
 		}
 		if err := storage.WriteSamples(ctx, samples); err != nil {
 			monmetrics.RecordIngest(moduleMetrics, "error", time.Time{})
+			runtime.recordObservabilityWriteFailure(err)
 			return err
 		}
 		duplicate, err = messageStore.CommitIngest(ctx, message, metricReport, samples)
 		if err != nil || duplicate {
+			if err != nil {
+				runtime.recordObservabilityWriteFailure(err)
+			}
 			return err
 		}
+		runtime.recordObservabilityWriteSuccess()
 		monmetrics.RecordIngest(moduleMetrics, "success", observed)
 		return nil
 	}
 }
 
-func hostObservabilityRoute(store *hostmetrics.Store, enabled bool) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
+func hostObservabilityRoute(store *hostmetrics.Store, runtime *Runtime, enabled bool) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
 	return func(ctx context.Context, message *eventpb.EventMessage, _ *hostmetricpb.HostMetric) error {
 		if !enabled {
 			return nil
@@ -238,9 +274,17 @@ func hostObservabilityRoute(store *hostmetrics.Store, enabled bool) func(context
 			return observabilityconsumer.Permanent(err)
 		}
 		if store == nil || !store.StorageReady() {
-			return errors.New("host metrics storage is unavailable")
+			err := errors.New("host metrics storage is unavailable")
+			runtime.recordHostWriteFailure(err)
+			return err
 		}
-		return store.Persist(ctx, message, metric)
+		err = store.Persist(ctx, message, metric)
+		if err != nil {
+			runtime.recordHostWriteFailure(err)
+		} else {
+			runtime.recordHostWriteSuccess()
+		}
+		return err
 	}
 }
 

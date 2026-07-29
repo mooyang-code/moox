@@ -141,7 +141,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			Notifier: monmetrics.WebhookMetricNotifier{Sender: alertNotifier},
 		})
 	}
-	if err := registerHealth(s, cfg, runtime, metricsStorage); err != nil {
+	if err := registerHealth(s, cfg, runtime, metricsStorage, hostStore); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
@@ -202,6 +202,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
+	startMetricsStorageGate(runtimeCtx, cfg, runtime, metricsStorage)
 	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
 	startObservabilityConsumer(runtimeCtx, cfg, runtime, metricsStorage, hostStore)
 	if done := ctx.Done(); done != nil {

@@ -69,6 +69,9 @@ func LoadEventBus(path string) (EventBusConfig, error) {
 		return cfg, fmt.Errorf("eventbus config requires urls, username, and eventbus_token")
 	}
 	cfg.CAFile = Expand(cfg.CAFile)
+	if cfg.CAFile != "" && !filepath.IsAbs(cfg.CAFile) {
+		cfg.CAFile = filepath.Join(filepath.Dir(path), cfg.CAFile)
+	}
 	return cfg, nil
 }
 func Expand(path string) string {

@@ -14,6 +14,9 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	if req == nil || len(req.GetKeys()) == 0 {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys are required"))}, nil
 	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	exact := len(req.GetColumnNames()) > 0 && req.GetTimeRange() == nil
 	keys := make([]*pb.RowKey, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
@@ -42,6 +45,9 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
 	if req == nil || len(req.GetKeys()) == 0 {
 		return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys are required"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.ReadRecordRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	exact := len(req.GetColumnNames()) > 0 && req.GetVersionRange() == nil
 	keys := make([]*pb.RowKey, 0, len(req.GetKeys()))

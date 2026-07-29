@@ -212,6 +212,18 @@ func TestBuildMetadataImportCallsBackfillsColumnDisplayName(t *testing.T) {
 	t.Fatal("dataset_columns call missing")
 }
 
+func TestBuildMetadataImportCallsBackfillsInternalViewColumnDisplayName(t *testing.T) {
+	seed := metadataSeed{ViewColumns: []seedViewColumn{{
+		SpaceID: "moox_system", ViewID: "host_resource_view", ColumnName: "cpu_usage_percent",
+		OriginType: "DATASET_COLUMN", OriginID: "host_resource_v1.cpu_usage_percent", ValueType: "DOUBLE",
+	}}}
+	calls, err := buildMetadataImportCalls(seed)
+	require.NoError(t, err)
+	require.Len(t, calls, 1)
+	column := calls[0].Request.(*pb.UpsertViewColumnReq).GetColumn()
+	assert.Equal(t, "cpu_usage_percent", column.GetAttributes()["display_name"])
+}
+
 func TestMetadataContractsEqualAllResources(t *testing.T) {
 	assert.True(t, metadataContractsEqual("data_sources",
 		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Kind: "exchange", Status: "active"},

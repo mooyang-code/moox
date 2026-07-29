@@ -116,6 +116,9 @@ func TestMonitorGatewayAuthEnvironment(t *testing.T) {
 	if cfg.SysDeploy.ServiceAuth.TargetNode != "gateway-hk-177" || cfg.SysDeploy.ServiceAuth.KeyID != "monitor-key" || cfg.SysDeploy.ServiceAuth.SecretKey != "monitor-secret" || cfg.SysDeploy.ServiceAuth.CAFile != "/tmp/peers.pem" {
 		t.Fatalf("gateway auth = %#v", cfg.SysDeploy.ServiceAuth)
 	}
+	if cfg.Metrics.Storage.GatewayNodeID != "gateway-hk-177" || cfg.Metrics.HostStorage.GatewayNodeID != "gateway-hk-177" {
+		t.Fatalf("metrics gateway nodes = storage %q host %q", cfg.Metrics.Storage.GatewayNodeID, cfg.Metrics.HostStorage.GatewayNodeID)
+	}
 }
 
 func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {

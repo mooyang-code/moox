@@ -11,6 +11,7 @@ import (
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -32,13 +33,14 @@ type MetadataClient interface {
 type StorageAdapter struct {
 	access   AccessClient
 	metadata MetadataClient
+	auth     *commonpb.AuthInfo
 	cfg      monconfig.MetricsStorageConfig
 	mu       sync.RWMutex
 	schema   SchemaStatus
 }
 
 func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return &StorageAdapter{access: access, metadata: metadata, cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}}
+	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}}
 }
 func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
 	target := gatewayauth.ServiceGatewayTarget(cfg.GatewayTarget)
@@ -245,7 +247,7 @@ func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) err
 			}
 			rows = append(rows, sampleRow(a.cfg, sample))
 		}
-		rsp, err := a.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{Rows: rows})
+		rsp, err := a.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: a.auth, Rows: rows})
 		if err != nil {
 			return fmt.Errorf("write metrics history: %w", err)
 		}
@@ -303,7 +305,8 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 	if !end.IsZero() {
 		tr.EndTime = end.UTC().Format(time.RFC3339Nano)
 	}
-	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{Keys: keys, TimeRange: tr, Order: order, ColumnNames: []string{"value", "labels_json", "message_id"}, Page: &commonpb.Page{Page: 1, Size: uint32(limit)}}, client.WithFilter(trpcretry.ReadOnly()))
+	columnPrefix := a.cfg.DatasetID + "."
+	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: a.auth, Keys: keys, TimeRange: tr, Order: order, ColumnNames: []string{columnPrefix + "value", columnPrefix + "labels_json", columnPrefix + "message_id"}, Page: &commonpb.Page{Page: 1, Size: uint32(limit)}}, client.WithFilter(trpcretry.ReadOnly()))
 	if err != nil {
 		return nil, fmt.Errorf("read metrics history: %w", err)
 	}
@@ -320,7 +323,7 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 			p.ObservedAt = t
 		}
 		for _, field := range row.GetFields() {
-			switch field.GetFieldId() {
+			switch strings.TrimPrefix(field.GetFieldId(), columnPrefix) {
 			case "value":
 				p.Value = field.GetValue().GetDoubleValue()
 			case "labels_json":

@@ -32,7 +32,7 @@ const (
 	adminSpaceRemoteAddress      = "127.0.0.1:11107"
 	storageBrowserRemoteAddress  = "127.0.0.1:9527"
 	storageAuthFile              = "$HOME/moox/storage/secrets/storage-node-auth.env"
-	storagePrimaryAuthFile       = "$HOME/moox/storage/secrets/gateway-storage-primary.key"
+	storagePrimaryAuthFile       = "$HOME/moox/storage/secrets/storage-internal-auth.env"
 	storageRemoteProvenanceFile  = "$HOME/moox/storage/build-provenance.json"
 	storageLocalProvenanceFile   = "release/deploy-stage/moox/build-provenance.json"
 	storageReleaseManifestFile   = "artifacts/storage-datanode-release-sha256.txt"
@@ -472,7 +472,7 @@ printf '%s' "$value"`}, nil)
 
 func readRemoteStoragePrimarySecret(ctx context.Context, transport setupssh.Client) (string, error) {
 	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-value=$(sed -n '1p' "` + storagePrimaryAuthFile + `" | tr -d '\r\n')
+value=$(sed -n 's/^MOOX_STORAGE_PRIMARY_AUTH_SECRET=//p' "` + storagePrimaryAuthFile + `" | head -n 1)
 test -n "$value"
 case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
 printf '%s' "$value"`}, nil)
@@ -902,9 +902,15 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 		return result, errors.New("storage_e2e_space_failed")
 	}
 	result.Assertions = append(result.Assertions, "space_created")
-	source = &storagepb.DataSource{SpaceId: spaceID, DataSourceId: sourceID, Name: "E2E 临时来源", Kind: "e2e", Status: "active"}
+	source = &storagepb.DataSource{SpaceId: spaceID, DataSourceId: sourceID, Name: "E2E 临时来源", Kind: "internal", Status: "active"}
 	sourceResponse, err := session.metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{AuthInfo: session.auth, DataSource: source})
 	if err != nil || sourceResponse == nil || sourceResponse.GetRetInfo() == nil || sourceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		if err != nil {
+			return result, fmt.Errorf("storage_e2e_data_source_failed: %w", err)
+		}
+		if sourceResponse != nil && sourceResponse.GetRetInfo() != nil {
+			return result, fmt.Errorf("storage_e2e_data_source_failed: %s", sourceResponse.GetRetInfo().GetMsg())
+		}
 		return result, errors.New("storage_e2e_data_source_failed")
 	}
 	result.Assertions = append(result.Assertions, "data_source_created")
@@ -951,6 +957,12 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 	result.Assertions = append(result.Assertions, "dataset_activated_locked")
 	writeResponse, err := session.primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: session.primaryAuth, Rows: []*storagepb.RowFieldUpsert{row}})
 	if err != nil || writeResponse == nil || writeResponse.GetRetInfo() == nil || writeResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || len(writeResponse.GetKeys()) != 1 {
+		if err != nil {
+			return result, fmt.Errorf("storage_e2e_write_failed: %w", err)
+		}
+		if writeResponse != nil && writeResponse.GetRetInfo() != nil {
+			return result, fmt.Errorf("storage_e2e_write_failed: %s", writeResponse.GetRetInfo().GetMsg())
+		}
 		return result, errors.New("storage_e2e_write_failed")
 	}
 	result.Assertions = append(result.Assertions, "row_written")

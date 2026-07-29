@@ -43,6 +43,19 @@ func TestCommitIngestDeduplicatesAndKeepsNewestLatest(t *testing.T) {
 	if latest.Value != 1 {
 		t.Fatalf("duplicate changed latest=%v", latest.Value)
 	}
+	msg = &eventpb.EventMessage{EventId: "m2"}
+	s.Value, s.ObservedAt, s.MessageID = 2, at.Add(2*time.Second), "m2"
+	dup, err = r.CommitIngest(context.Background(), msg, report, []Sample{s})
+	if err != nil || dup {
+		t.Fatalf("newer commit dup=%v err=%v", dup, err)
+	}
+	latest, err = r.GetLatest(context.Background(), "series")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Value != 2 || !latest.ObservedAt.Equal(s.ObservedAt) {
+		t.Fatalf("latest was not advanced: %+v", latest)
+	}
 }
 
 func TestCommitIngestDoesNotMoveSeriesLastSeenBackwards(t *testing.T) {

@@ -45,3 +45,10 @@ dataset_columns:
   - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: producer_node_id, origin_type: field, origin_id: monitor_metric_producer_node_id, value_type: string, status: active}
   - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: producer_version, origin_type: field, origin_id: monitor_metric_producer_version, value_type: string, status: active}
   - {space_id: moox_system, dataset_id: moox_service_metrics, column_name: message_id, origin_type: field, origin_id: monitor_metric_message_id, value_type: string, required: true, status: active}
+
+view_columns:
+  - {space_id: moox_system, view_id: moox_service_metrics_view, column_name: moox_service_metrics.value, origin_type: dataset_column, origin_id: moox_service_metrics.value, value_type: double, sort_order: 10}
+  - {space_id: moox_system, view_id: moox_service_metrics_view, column_name: moox_service_metrics.labels_json, origin_type: dataset_column, origin_id: moox_service_metrics.labels_json, value_type: json, sort_order: 20}
+  - {space_id: moox_system, view_id: moox_service_metrics_view, column_name: moox_service_metrics.producer_node_id, origin_type: dataset_column, origin_id: moox_service_metrics.producer_node_id, value_type: string, sort_order: 30}
+  - {space_id: moox_system, view_id: moox_service_metrics_view, column_name: moox_service_metrics.producer_version, origin_type: dataset_column, origin_id: moox_service_metrics.producer_version, value_type: string, sort_order: 40}
+  - {space_id: moox_system, view_id: moox_service_metrics_view, column_name: moox_service_metrics.message_id, origin_type: dataset_column, origin_id: moox_service_metrics.message_id, value_type: string, sort_order: 50}

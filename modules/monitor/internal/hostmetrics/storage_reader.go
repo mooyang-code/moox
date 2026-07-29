@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
@@ -18,11 +20,10 @@ type hostStorageRead interface {
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 
-// StorageReader reconstructs host history from Storage's four datasets. The
-// public access API supports bounded dataset scans; filtering by agent_id is
-// done locally so callers never need a second host-history database.
+// StorageReader reconstructs host history from Storage's four datasets.
 type StorageReader struct {
 	access hostStorageRead
+	auth   *commonpb.AuthInfo
 	cfg    monconfig.HostStorageConfig
 }
 
@@ -35,7 +36,7 @@ const ForecastHistoryLimit = 7*24*60 + 8
 const maxHistoryPageSize = 500
 
 func NewStorageReader(access hostStorageRead, cfg monconfig.HostStorageConfig) *StorageReader {
-	return &StorageReader{access: access, cfg: cfg}
+	return &StorageReader{access: access, auth: storageauth.Primary(cfg.KeyID), cfg: cfg}
 }
 
 func (r *StorageReader) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
@@ -124,13 +125,13 @@ func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start
 	if pageSize > maxHistoryPageSize {
 		pageSize = maxHistoryPageSize
 	}
-	cursor := ""
-	for pageNo := 1; pageNo <= (ForecastHistoryLimit/maxHistoryPageSize)+2; pageNo++ {
+	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := r.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+			AuthInfo:  r.auth,
 			Keys:      []*storagepb.TimeSeriesKey{{SpaceId: r.cfg.SpaceID, DatasetId: dataset, SubjectId: agentID, Freq: r.cfg.Frequency}},
 			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
-			Order:     storagepb.SortOrder_SORT_ORDER_ASC,
-			Page:      &commonpb.Page{Page: 1, Size: uint32(pageSize), Cursor: cursor},
+			Order:     storagepb.SortOrder_SORT_ORDER_DESC,
+			Page:      &commonpb.Page{Page: pageNo, Size: uint32(pageSize)},
 		}, client.WithFilter(trpcretry.ReadOnly()))
 		if err != nil {
 			return nil, fmt.Errorf("read host dataset %q: %w", dataset, err)
@@ -143,12 +144,11 @@ func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start
 		}
 		rows = append(rows, rsp.GetRows()...)
 		page := rsp.GetPageResult()
-		if page == nil || !page.GetHasMore() || page.GetNextCursor() == "" {
+		if page == nil || !page.GetHasMore() {
 			break
 		}
-		cursor = page.GetNextCursor()
-		if pageNo == (ForecastHistoryLimit/maxHistoryPageSize)+2 {
-			return nil, fmt.Errorf("host dataset %q exceeds bounded history scan", dataset)
+		if pageNo == ^uint32(0) {
+			return nil, fmt.Errorf("host dataset %q pagination overflow", dataset)
 		}
 	}
 	return rows, nil
@@ -158,7 +158,11 @@ func mergeRow(snapshot *hostmetricpb.HostSnapshot, dataset string, cfg monconfig
 	values := make(map[string]*storagepb.TypedValue, len(row.GetFields()))
 	for _, field := range row.GetFields() {
 		if field != nil {
-			values[field.GetFieldId()] = field.GetValue()
+			name := field.GetFieldId()
+			values[name] = field.GetValue()
+			if prefix := dataset + "."; strings.HasPrefix(name, prefix) {
+				values[strings.TrimPrefix(name, prefix)] = field.GetValue()
+			}
 		}
 	}
 	getInt := func(name string) uint64 { return uint64(values[name].GetIntValue()) }

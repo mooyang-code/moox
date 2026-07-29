@@ -20,6 +20,7 @@ type MarketCanaryConfig struct {
 	Freshness            time.Duration
 	ReturnThreshold      float64
 	VolumeRatioThreshold float64
+	AuthInfo             *storagepb.AuthInfo
 }
 
 type TimeSeriesReader interface {
@@ -44,12 +45,14 @@ func StorageMarketCanaryCheck(reader TimeSeriesReader, cfg MarketCanaryConfig) W
 		}
 		if reader == nil || strings.TrimSpace(cfg.SpaceID) == "" || strings.TrimSpace(cfg.DatasetID) == "" ||
 			strings.TrimSpace(cfg.SubjectID) == "" || strings.TrimSpace(cfg.Frequency) == "" ||
+			cfg.AuthInfo == nil || strings.TrimSpace(cfg.AuthInfo.GetAppId()) == "" || strings.TrimSpace(cfg.AuthInfo.GetAppKey()) == "" ||
 			cfg.Freshness <= 0 || cfg.ReturnThreshold <= 0 || cfg.VolumeRatioThreshold <= 0 {
 			result.ErrorCode, result.Error = "invalid_config", "market canary Storage scope and thresholds are required"
 			return result
 		}
 		rsp, err := reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-			SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID,
+			AuthInfo: cfg.AuthInfo,
+			SpaceId:  cfg.SpaceID, DatasetId: cfg.DatasetID,
 			Keys: []*storagepb.TimeSeriesKey{{
 				SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID,
 				SubjectId: cfg.SubjectID, Freq: cfg.Frequency,

@@ -93,7 +93,7 @@ password = "compute-e2e-password"
 	require.Equal(t, []setupdeploy.ReadinessStage{
 		setupdeploy.AdminReady, setupdeploy.SetupReady, setupdeploy.GatewayReady,
 		setupdeploy.EventBusReady, setupdeploy.CloudNodeReady, setupdeploy.CollectorReady,
-		setupdeploy.WebReady, setupdeploy.BrowserHTTPSReady,
+		setupdeploy.MonitorReady, setupdeploy.WebReady, setupdeploy.BrowserHTTPSReady,
 	}, events)
 
 	after, err := os.ReadFile(path)

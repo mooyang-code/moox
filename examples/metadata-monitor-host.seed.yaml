@@ -116,3 +116,47 @@ dataset_columns:
   - {space_id: moox_system, dataset_id: host_net_v1, column_name: transmit_errors_per_second, origin_type: field, origin_id: host_transmit_errors_per_second, value_type: double, status: active}
   - {space_id: moox_system, dataset_id: host_net_v1, column_name: rate_available, origin_type: field, origin_id: host_net_rate_available, value_type: bool, status: active}
   - {space_id: moox_system, dataset_id: host_net_v1, column_name: error_rate_available, origin_type: field, origin_id: host_net_error_rate_available, value_type: bool, status: active}
+
+view_columns:
+  - {space_id: moox_system, view_id: host_resource_view, column_name: host_resource_v1.agent_id, origin_type: dataset_column, origin_id: host_resource_v1.agent_id, value_type: string, sort_order: 10}
+  - {space_id: moox_system, view_id: host_resource_view, column_name: host_resource_v1.logical_cores, origin_type: dataset_column, origin_id: host_resource_v1.logical_cores, value_type: int, sort_order: 20}
+  - {space_id: moox_system, view_id: host_resource_view, column_name: host_resource_v1.cpu_usage_percent, origin_type: dataset_column, origin_id: host_resource_v1.cpu_usage_percent, value_type: double, sort_order: 30}
+  - {space_id: moox_system, view_id: host_resource_view, column_name: host_resource_v1.cpu_usage_available, origin_type: dataset_column, origin_id: host_resource_v1.cpu_usage_available, value_type: bool, sort_order: 40}
+  - {space_id: moox_system, view_id: host_resource_view, column_name: host_resource_v1.memory_total_bytes, origin_type: dataset_column, origin_id: host_resource_v1.memory_total_bytes, value_type: int, sort_order: 50}
+  - {space_id: moox_system, view_id: host_resource_view, column_name: host_resource_v1.memory_used_bytes, origin_type: dataset_column, origin_id: host_resource_v1.memory_used_bytes, value_type: int, sort_order: 60}
+  - {space_id: moox_system, view_id: host_resource_view, column_name: host_resource_v1.memory_available_bytes, origin_type: dataset_column, origin_id: host_resource_v1.memory_available_bytes, value_type: int, sort_order: 70}
+  - {space_id: moox_system, view_id: host_resource_view, column_name: host_resource_v1.memory_usage_percent, origin_type: dataset_column, origin_id: host_resource_v1.memory_usage_percent, value_type: double, sort_order: 80}
+  - {space_id: moox_system, view_id: host_fs_view, column_name: host_fs_v1.device, origin_type: dataset_column, origin_id: host_fs_v1.device, value_type: string, sort_order: 10}
+  - {space_id: moox_system, view_id: host_fs_view, column_name: host_fs_v1.mountpoint, origin_type: dataset_column, origin_id: host_fs_v1.mountpoint, value_type: string, sort_order: 20}
+  - {space_id: moox_system, view_id: host_fs_view, column_name: host_fs_v1.fs_type, origin_type: dataset_column, origin_id: host_fs_v1.fs_type, value_type: string, sort_order: 30}
+  - {space_id: moox_system, view_id: host_fs_view, column_name: host_fs_v1.total_bytes, origin_type: dataset_column, origin_id: host_fs_v1.total_bytes, value_type: int, sort_order: 40}
+  - {space_id: moox_system, view_id: host_fs_view, column_name: host_fs_v1.used_bytes, origin_type: dataset_column, origin_id: host_fs_v1.used_bytes, value_type: int, sort_order: 50}
+  - {space_id: moox_system, view_id: host_fs_view, column_name: host_fs_v1.available_bytes, origin_type: dataset_column, origin_id: host_fs_v1.available_bytes, value_type: int, sort_order: 60}
+  - {space_id: moox_system, view_id: host_fs_view, column_name: host_fs_v1.usage_percent, origin_type: dataset_column, origin_id: host_fs_v1.usage_percent, value_type: double, sort_order: 70}
+  - {space_id: moox_system, view_id: host_fs_view, column_name: host_fs_v1.read_only, origin_type: dataset_column, origin_id: host_fs_v1.read_only, value_type: bool, sort_order: 80}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.device, origin_type: dataset_column, origin_id: host_disk_v1.device, value_type: string, sort_order: 10}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.read_bytes_total, origin_type: dataset_column, origin_id: host_disk_v1.read_bytes_total, value_type: int, sort_order: 20}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.write_bytes_total, origin_type: dataset_column, origin_id: host_disk_v1.write_bytes_total, value_type: int, sort_order: 30}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.read_ops_total, origin_type: dataset_column, origin_id: host_disk_v1.read_ops_total, value_type: int, sort_order: 40}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.write_ops_total, origin_type: dataset_column, origin_id: host_disk_v1.write_ops_total, value_type: int, sort_order: 50}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.io_time_ms_total, origin_type: dataset_column, origin_id: host_disk_v1.io_time_ms_total, value_type: int, sort_order: 60}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.read_bytes_per_second, origin_type: dataset_column, origin_id: host_disk_v1.read_bytes_per_second, value_type: double, sort_order: 70}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.write_bytes_per_second, origin_type: dataset_column, origin_id: host_disk_v1.write_bytes_per_second, value_type: double, sort_order: 80}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.read_iops, origin_type: dataset_column, origin_id: host_disk_v1.read_iops, value_type: double, sort_order: 90}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.write_iops, origin_type: dataset_column, origin_id: host_disk_v1.write_iops, value_type: double, sort_order: 100}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.utilization_percent, origin_type: dataset_column, origin_id: host_disk_v1.utilization_percent, value_type: double, sort_order: 110}
+  - {space_id: moox_system, view_id: host_disk_view, column_name: host_disk_v1.rate_available, origin_type: dataset_column, origin_id: host_disk_v1.rate_available, value_type: bool, sort_order: 120}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.device, origin_type: dataset_column, origin_id: host_net_v1.device, value_type: string, sort_order: 10}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.operstate, origin_type: dataset_column, origin_id: host_net_v1.operstate, value_type: string, sort_order: 20}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.receive_bytes_total, origin_type: dataset_column, origin_id: host_net_v1.receive_bytes_total, value_type: int, sort_order: 30}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.transmit_bytes_total, origin_type: dataset_column, origin_id: host_net_v1.transmit_bytes_total, value_type: int, sort_order: 40}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.receive_errors_total, origin_type: dataset_column, origin_id: host_net_v1.receive_errors_total, value_type: int, sort_order: 50}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.transmit_errors_total, origin_type: dataset_column, origin_id: host_net_v1.transmit_errors_total, value_type: int, sort_order: 60}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.receive_dropped_total, origin_type: dataset_column, origin_id: host_net_v1.receive_dropped_total, value_type: int, sort_order: 70}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.transmit_dropped_total, origin_type: dataset_column, origin_id: host_net_v1.transmit_dropped_total, value_type: int, sort_order: 80}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.receive_bytes_per_second, origin_type: dataset_column, origin_id: host_net_v1.receive_bytes_per_second, value_type: double, sort_order: 90}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.transmit_bytes_per_second, origin_type: dataset_column, origin_id: host_net_v1.transmit_bytes_per_second, value_type: double, sort_order: 100}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.receive_errors_per_second, origin_type: dataset_column, origin_id: host_net_v1.receive_errors_per_second, value_type: double, sort_order: 110}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.transmit_errors_per_second, origin_type: dataset_column, origin_id: host_net_v1.transmit_errors_per_second, value_type: double, sort_order: 120}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.rate_available, origin_type: dataset_column, origin_id: host_net_v1.rate_available, value_type: bool, sort_order: 130}
+  - {space_id: moox_system, view_id: host_net_view, column_name: host_net_v1.error_rate_available, origin_type: dataset_column, origin_id: host_net_v1.error_rate_available, value_type: bool, sort_order: 140}

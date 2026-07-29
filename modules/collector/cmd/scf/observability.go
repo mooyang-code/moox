@@ -102,6 +102,10 @@ func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 			Freshness:            durationEnv("MOOX_SCF_CANARY_FRESHNESS", 3*time.Minute),
 			ReturnThreshold:      envFloat("MOOX_SCF_CANARY_RETURN_THRESHOLD", 0.05),
 			VolumeRatioThreshold: envFloat("MOOX_SCF_CANARY_VOLUME_RATIO_THRESHOLD", 5),
+			AuthInfo: &storagepb.AuthInfo{
+				AppId:  strings.TrimSpace(os.Getenv("MOOX_SCF_STORAGE_AUTH_APP_ID")),
+				AppKey: strings.TrimSpace(os.Getenv("MOOX_SCF_STORAGE_AUTH_APP_KEY")),
+			},
 		}))
 	}
 

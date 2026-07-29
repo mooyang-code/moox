@@ -20,20 +20,22 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/security"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type cliConfig struct {
-	Command    string
-	ConfigPath string
-	Space      string
-	Dataset    string
-	Subject    string
-	Freq       string
-	Start      string
-	End        string
-	Confirm    bool
-	Month      string
+	Command         string
+	ConfigPath      string
+	Space           string
+	Dataset         string
+	Subject         string
+	Freq            string
+	Start           string
+	End             string
+	Confirm         bool
+	Month           string
+	StorageAuthFile string
 }
 
 func main() {
@@ -58,6 +60,7 @@ func parseArgs(args []string) (cliConfig, error) {
 	fs.StringVar(&cfg.End, "end", "", "end RFC3339")
 	fs.BoolVar(&cfg.Confirm, "confirm", false, "confirm backfill")
 	fs.StringVar(&cfg.Month, "month", "", "month YYYYMM")
+	fs.StringVar(&cfg.StorageAuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage internal auth file")
 	if err := fs.Parse(args[1:]); err != nil {
 		return cliConfig{}, err
 	}
@@ -133,12 +136,47 @@ func runBackfill(ctx context.Context, cli cliConfig, cfg *config.Config, out io.
 	options := gatewayauth.NewTRPCClientOptions(backfill.NormalizeTarget(target, "11003"), cfg.Archive.StorageRPC.GatewayNodeID, credentials)
 	access := storagepb.NewPrimaryStoreClientProxy(options...)
 	metadata := storagepb.NewMetadataClientProxy(options...)
-	count, err := backfill.New(access, metadata, store, w).Run(ctx, plan)
+	const appID = "archive-backfill"
+	primarySecret, err := archivePrimarySecret(cli.StorageAuthFile)
+	if err != nil {
+		return err
+	}
+	auth := &storagepb.AuthInfo{AppId: appID, AppKey: security.HMACSHA256Hex(primarySecret, []byte(appID))}
+	count, err := backfill.New(access, metadata, auth, store, w).Run(ctx, plan)
 	if err != nil {
 		return err
 	}
 	return json.NewEncoder(out).Encode(map[string]any{"ok": true, "rows": count})
 }
+
+func archivePrimarySecret(path string) (string, error) {
+	if secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")); secret != "" {
+		return secret, nil
+	}
+	raw, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return "", fmt.Errorf("read Storage auth file: %w", err)
+	}
+	if len(raw) == 0 || len(raw) > 4096 {
+		return "", errors.New("invalid Storage auth file")
+	}
+	const prefix = "MOOX_STORAGE_PRIMARY_AUTH_SECRET="
+	var secret string
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(line, prefix); ok {
+			if secret != "" || value == "" || strings.ContainsAny(value, " \t\r") {
+				return "", errors.New("invalid Storage auth file")
+			}
+			secret = value
+		}
+	}
+	if secret == "" {
+		return "", errors.New("Storage auth file is missing primary secret")
+	}
+	return secret, nil
+}
+
 func runCompact(ctx context.Context, cli cliConfig, cfg *config.Config, out io.Writer) error {
 	store, w, err := openLocal(cfg)
 	if err != nil {

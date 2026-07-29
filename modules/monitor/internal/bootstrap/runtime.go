@@ -32,9 +32,63 @@ type Runtime struct {
 	ObservabilityIngestReady atomic.Bool
 	MetricsReporterReady     atomic.Bool
 	observabilityIngestError atomic.Value
+	observabilityWriteError  atomic.Value
+	observabilityWriteFailed atomic.Int64
+	observabilityWriteOK     atomic.Int64
+	hostWriteError           atomic.Value
+	hostWriteFailed          atomic.Int64
+	hostWriteOK              atomic.Int64
 	metricsReporterError     atomic.Value
 	ModuleMetrics            *report.ModuleMetrics
 	ObservabilityHealthRoute func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error
+}
+
+func (r *Runtime) recordObservabilityWriteFailure(err error) {
+	if r == nil || err == nil {
+		return
+	}
+	r.observabilityWriteFailed.Store(time.Now().UTC().UnixNano())
+	r.observabilityWriteError.Store(sanitizedMetricsError(err))
+}
+
+func (r *Runtime) recordObservabilityWriteSuccess() {
+	if r == nil {
+		return
+	}
+	r.observabilityWriteOK.Store(time.Now().UTC().UnixNano())
+}
+
+func (r *Runtime) recordHostWriteFailure(err error) {
+	if r == nil || err == nil {
+		return
+	}
+	r.hostWriteFailed.Store(time.Now().UTC().UnixNano())
+	r.hostWriteError.Store(sanitizedMetricsError(err))
+}
+
+func (r *Runtime) recordHostWriteSuccess() {
+	if r == nil {
+		return
+	}
+	r.hostWriteOK.Store(time.Now().UTC().UnixNano())
+}
+
+func (r *Runtime) observabilityWriteReady(now time.Time) (bool, string) {
+	if r == nil {
+		return false, "observability runtime is unavailable"
+	}
+	if ready, reason := writeStateReady(r.observabilityWriteFailed.Load(), r.observabilityWriteOK.Load(), &r.observabilityWriteError); !ready {
+		return false, reason
+	}
+	return writeStateReady(r.hostWriteFailed.Load(), r.hostWriteOK.Load(), &r.hostWriteError)
+}
+
+func writeStateReady(failedAt, succeededAt int64, messageValue *atomic.Value) (bool, string) {
+	if failedAt == 0 || succeededAt > failedAt {
+		return true, ""
+	}
+	message, _ := messageValue.Load().(string)
+	return false, message
 }
 
 func (r *Runtime) setMetricsReporterState(ready bool, err error) {

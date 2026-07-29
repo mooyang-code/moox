@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -411,31 +412,113 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		return err
 	}
 	defer transport.Close()
+	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	if err != nil {
+		return err
+	}
+	defer control.Close()
+	primarySecret, viewSecret, err := controlStorageInternalAuth(ctx, control)
+	if err != nil {
+		return err
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
 	}
 	useControlGateway := host.Name == snapshot.Manifest.ControlHost.Name
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
-		RepositoryRoot: root, PublicHost: host.Address, ResetStorageData: resetStorageData,
+		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData,
 		UseControlGateway:     useControlGateway,
 		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
 		EventBusPort:          snapshot.Manifest.EventBus.Port,
 		EventBusTLSEnabled:    snapshot.Manifest.EventBus.TLSEnabled,
+		StoragePrimarySecret:  primarySecret,
+		StorageViewSecret:     viewSecret,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
-	if err != nil {
-		return err
-	}
-	defer control.Close()
 	placementHost := host.Address
 	if useControlGateway {
 		placementHost = "127.0.0.1"
 	}
-	_, err = setupclient.New(control).ApplyStoragePlacement(ctx, placementHost)
-	return err
+	if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, placementHost); err != nil {
+		return err
+	}
+	return restartStorageClients(ctx, control)
+}
+
+func controlStorageInternalAuth(ctx context.Context, control setupssh.Client) (string, string, error) {
+	if control == nil {
+		return "", "", fmt.Errorf("storage_secret_prepare_failed")
+	}
+	result, err := control.Run(ctx, []string{
+		"sh", "-lc", `set -eu
+secret_file="$HOME/moox/prod/secrets/storage-internal-auth.env"
+test -s "${secret_file}"
+awk '/^MOOX_STORAGE_(PRIMARY|VIEW)_AUTH_SECRET=/{print}' "${secret_file}"`,
+	}, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("storage_secret_prepare_failed")
+	}
+	secretEnv, err := normalizeStorageInternalAuth(result.Stdout)
+	if err != nil {
+		return "", "", fmt.Errorf("storage_secret_prepare_failed")
+	}
+	values := make(map[string]string, 2)
+	for _, line := range strings.Split(secretEnv, "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	return values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"], values["MOOX_STORAGE_VIEW_AUTH_SECRET"], nil
+}
+
+func restartStorageClients(ctx context.Context, control setupssh.Client) error {
+	if control == nil {
+		return fmt.Errorf("storage_client_restart_failed")
+	}
+	if _, err := control.Run(ctx, []string{
+		"sh", "-lc",
+		`set -eu
+for service in monitor cloudnode; do
+  if "$HOME/moox/prod/status.sh" "$service" >/dev/null 2>&1; then
+    "$HOME/moox/prod/restart.sh" "$service"
+  fi
+done`,
+	}, nil); err != nil {
+		return fmt.Errorf("storage_client_restart_failed")
+	}
+	return nil
+}
+
+var storageSecretValuePattern = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
+
+func normalizeStorageInternalAuth(raw string) (string, error) {
+	if len(raw) == 0 || len(raw) > 4096 {
+		return "", fmt.Errorf("invalid storage auth file")
+	}
+	const primaryKey = "MOOX_STORAGE_PRIMARY_AUTH_SECRET"
+	const viewKey = "MOOX_STORAGE_VIEW_AUTH_SECRET"
+	values := make(map[string]string, 2)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || (key != primaryKey && key != viewKey) || value == "" || !storageSecretValuePattern.MatchString(value) {
+			return "", fmt.Errorf("invalid storage auth entry")
+		}
+		if _, exists := values[key]; exists {
+			return "", fmt.Errorf("duplicate storage auth entry")
+		}
+		values[key] = value
+	}
+	if values[primaryKey] == "" || values[viewKey] == "" {
+		return "", fmt.Errorf("missing storage auth entry")
+	}
+	return primaryKey + "=" + values[primaryKey] + "\n" + viewKey + "=" + values[viewKey] + "\n", nil
 }
 
 func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, seedPath string, spaces []string) (metadataImportSummary, error) {

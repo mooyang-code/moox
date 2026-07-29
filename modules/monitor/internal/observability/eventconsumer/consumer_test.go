@@ -31,7 +31,7 @@ func TestPermanentRouteErrorTerms(t *testing.T) {
 			return Permanent(errors.New("invalid snapshot"))
 		},
 	}}
-	result := consumer.routeError("metrics", Permanent(errors.New("invalid snapshot")), 1)
+	result := consumer.routeError(context.Background(), "metrics", Permanent(errors.New("invalid snapshot")), 1)
 	if result.Decision != jetstream.TERM {
 		t.Fatalf("decision = %v, want TERM", result.Decision)
 	}

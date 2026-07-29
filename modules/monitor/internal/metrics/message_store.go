@@ -86,9 +86,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 			find := tx.Where("c_series_id = ?", sample.SeriesID).First(&latest)
 			if errors.Is(find.Error, gorm.ErrRecordNotFound) {
 				latest = MetricLatest{SeriesID: sample.SeriesID}
-				find = nil
-			}
-			if find != nil {
+			} else if find.Error != nil {
 				return find.Error
 			}
 			if latest.ID != 0 && !sample.ObservedAt.After(latest.ObservedAt) {
@@ -105,7 +103,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 				if err := tx.Create(&latest).Error; err != nil {
 					return err
 				}
-			} else if err := tx.Model(&MetricLatest{}).Where("c_series_id = ? AND c_observed_at < ?", latest.SeriesID, sample.ObservedAt).Updates(map[string]any{"c_value": latest.Value, "c_service_name": latest.ServiceName, "c_instance_id": latest.InstanceID, "c_metric_name": latest.MetricName, "c_metric_type": latest.MetricType, "c_labels_json": latest.LabelsJSON, "c_observed_at": latest.ObservedAt, "c_interval_seconds": latest.IntervalSeconds, "c_message_id": latest.MessageID, "c_producer_node_id": latest.ProducerNodeID, "c_producer_version": latest.ProducerVersion}).Error; err != nil {
+			} else if err := tx.Save(&latest).Error; err != nil {
 				return err
 			}
 		}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -33,19 +34,21 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
 	}
-	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+	auth := &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "derived-key"}
+	result := (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.True(t, result.Success)
 	require.Equal(t, "market_canary:market_kline:BTC-USDT:1m", result.CheckID)
 	require.Equal(t, "crypto", reader.request.GetSpaceId())
 	require.Equal(t, "market_kline", reader.request.GetDatasetId())
 	require.Equal(t, "BTC-USDT", reader.request.GetKeys()[0].GetSubjectId())
 	require.Equal(t, uint32(2), reader.request.GetPage().GetSize())
+	require.Equal(t, auth, reader.request.GetAuthInfo())
 
 	reader.rows = []*storagepb.TimeSeriesRow{
 		marketCanaryRow(now.Add(-2*time.Minute), 100, 10),
 		marketCanaryRow(now.Add(-time.Minute), 110, 12),
 	}
-	result = (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+	result = (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.False(t, result.Success)
 	require.Equal(t, "threshold_exceeded", result.ErrorMessage)
 }

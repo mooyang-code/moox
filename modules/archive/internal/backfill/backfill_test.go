@@ -1,11 +1,15 @@
 package backfill
 
 import (
+	"context"
+	"errors"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+	"trpc.group/trpc-go/trpc-go/client"
 )
 
 func TestPlanRequiresExplicitConfirmation(t *testing.T) {
@@ -53,8 +57,29 @@ func TestPlanPartitions(t *testing.T) {
 }
 
 func TestBackfillerRunRequiresConfirm(t *testing.T) {
-	b := New(nil, nil, nil, nil)
+	b := New(nil, nil, nil, nil, nil)
 	_, err := b.Run(nil, Plan{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "confirm")
+}
+
+type captureAccess struct {
+	request *storagepb.ReadTimeSeriesRowsReq
+}
+
+func (c *captureAccess) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	c.request = request
+	return nil, errors.New("stop after request capture")
+}
+
+func TestBackfillerCarriesPrimaryAuth(t *testing.T) {
+	access := &captureAccess{}
+	auth := &commonpb.AuthInfo{AppId: "archive-backfill", AppKey: "derived-key"}
+	b := New(access, nil, auth, nil, nil)
+	_, err := b.Run(t.Context(), Plan{
+		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC-USDT", Freq: "1m",
+		Start: "2026-07-29T00:00:00Z", End: "2026-07-29T01:00:00Z", Confirm: true,
+	})
+	require.ErrorContains(t, err, "request capture")
+	require.Equal(t, auth, access.request.GetAuthInfo())
 }

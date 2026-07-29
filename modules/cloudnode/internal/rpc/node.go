@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/cloudjobqueue"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"google.golang.org/protobuf/types/known/structpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -29,6 +30,7 @@ const (
 	scfCreateReconcileTimeout = 10 * time.Second
 	scfWatchdogEnvironmentKey = "MOOX_SCF_WATCHDOG_ENABLED"
 	scfWatchdogMetadataKey    = "scf_watchdog_enabled"
+	scfStorageAuthAppID       = "scf-market-canary"
 )
 
 var scfWatchdogRuntimeEnvironment = map[string]string{
@@ -566,6 +568,8 @@ func scfWatchdogEnvironment(environment map[string]string, enabled bool) (map[st
 		for key := range scfWatchdogRuntimeEnvironment {
 			delete(result, key)
 		}
+		delete(result, "MOOX_SCF_STORAGE_AUTH_APP_ID")
+		delete(result, "MOOX_SCF_STORAGE_AUTH_APP_KEY")
 		return result, nil
 	}
 	result[scfWatchdogEnvironmentKey] = "true"
@@ -580,6 +584,12 @@ func scfWatchdogEnvironment(environment map[string]string, enabled bool) (map[st
 		}
 		result[targetKey] = value
 	}
+	primarySecret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
+	if primarySecret == "" {
+		return nil, fmt.Errorf("SCF watchdog runtime requires MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+	}
+	result["MOOX_SCF_STORAGE_AUTH_APP_ID"] = scfStorageAuthAppID
+	result["MOOX_SCF_STORAGE_AUTH_APP_KEY"] = mooxsecurity.HMACSHA256Hex(primarySecret, []byte(scfStorageAuthAppID))
 	return result, nil
 }
 

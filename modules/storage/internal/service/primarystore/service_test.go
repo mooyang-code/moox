@@ -59,6 +59,63 @@ func TestPrimaryRoutesAndValidatesBeforeDataNode(t *testing.T) {
 	}
 }
 
+func TestPrimaryRangeReadsRequireCallerAuthorization(t *testing.T) {
+	svc, err := New(Options{
+		Node: &recordingNode{
+			write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+				return &pb.UpsertFieldsRsp{}, nil
+			},
+			read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+				return &pb.ReadFieldsRsp{}, nil
+			},
+		},
+		Authorizer: func(*pb.AuthInfo) error { return errors.New("denied") },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeSeries, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		Keys:      []*pb.TimeSeriesKey{{SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1m"}},
+		TimeRange: &pb.TimeRange{},
+	})
+	if err != nil || timeSeries.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
+		t.Fatalf("time-series range read rsp=%v err=%v", timeSeries, err)
+	}
+	records, err := svc.ReadRecordRows(context.Background(), &pb.ReadRecordRowsReq{
+		Keys:         []*pb.RecordKey{{SpaceId: "space", DatasetId: "dataset", RecordId: "record"}},
+		VersionRange: &pb.VersionRange{},
+	})
+	if err != nil || records.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
+		t.Fatalf("record range read rsp=%v err=%v", records, err)
+	}
+}
+
+func TestPrimaryRejectsWritesFromSCFMarketCanaryCredential(t *testing.T) {
+	svc, err := New(Options{
+		Node: &recordingNode{
+			write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+				t.Fatal("read-only SCF credential reached DataNode")
+				return nil, nil
+			},
+			read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+				return &pb.ReadFieldsRsp{}, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "scf-market-canary", AppKey: "valid"},
+		Rows: []*pb.RowFieldUpsert{{
+			Key: &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
+		}},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
+		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+}
+
 func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 	var resolved []string
 	node := &recordingNode{

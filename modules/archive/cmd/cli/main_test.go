@@ -34,6 +34,17 @@ func TestParseArgsAcceptsKnownCommands(t *testing.T) {
 	}
 }
 
+func TestArchivePrimarySecretUsesFile(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
+	path := filepath.Join(t.TempDir(), "storage-auth.env")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-secret\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n",
+	), 0o600))
+	secret, err := archivePrimarySecret(path)
+	require.NoError(t, err)
+	assert.Equal(t, "primary-secret", secret)
+}
+
 func TestParseArgsRejectsUnknownCommand(t *testing.T) {
 	if _, err := parseArgs([]string{"unknown"}); err == nil {
 		t.Fatal("expected unknown command error")

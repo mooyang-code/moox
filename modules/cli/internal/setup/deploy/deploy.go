@@ -30,6 +30,7 @@ const (
 type Options struct {
 	RepositoryRoot         string
 	PublicHost             string
+	NodeID                 string
 	BrowserPort            int
 	TargetGOOS             string
 	TargetGOARCH           string
@@ -40,6 +41,8 @@ type Options struct {
 	EventBusPort           int
 	EventBusTLSEnabled     bool
 	MonitoringWeComWebhook string
+	StoragePrimarySecret   string
+	StorageViewSecret      string
 }
 
 type Packager interface {
@@ -346,6 +349,8 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		"--monitor-instance-id", "monitor-control",
 	)
 	command.Dir = root
+	command.Stdout = os.Stderr
+	command.Stderr = os.Stderr
 	command.Env, err = eventBusCommandEnv(os.Environ(), opts)
 	if err != nil {
 		_ = os.Remove(archive)
@@ -433,7 +438,7 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	args := []string{
 		"--profile", "storage", "--package-only", "--archive", archive,
 		"--target", "localhost", "--dir", "~/moox/storage", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
-		"--public-host", opts.PublicHost, "--node-id", "storage", "--gateway-control-url", "http://127.0.0.1:11000",
+		"--public-host", opts.PublicHost, "--node-id", storageNodeID(opts.NodeID), "--gateway-control-url", "http://127.0.0.1:11000",
 	}
 	if skipBuild {
 		args = append(args, "--skip-build")
@@ -448,11 +453,26 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		_ = os.Remove(archive)
 		return "", err
 	}
+	if strings.TrimSpace(opts.StoragePrimarySecret) == "" || strings.TrimSpace(opts.StorageViewSecret) == "" {
+		_ = os.Remove(archive)
+		return "", fmt.Errorf("storage package requires control-owned internal auth secrets")
+	}
+	command.Env = append(command.Env,
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET="+opts.StoragePrimarySecret,
+		"MOOX_STORAGE_VIEW_AUTH_SECRET="+opts.StorageViewSecret,
+	)
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)
 		return "", err
 	}
 	return archive, nil
+}
+
+func storageNodeID(nodeID string) string {
+	if nodeID = strings.TrimSpace(nodeID); nodeID != "" {
+		return nodeID
+	}
+	return "storage"
 }
 
 type FileCAStore struct{}
@@ -575,7 +595,13 @@ install_storage() {
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
   if [ "$reset_storage_data" = "0" ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
-  if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
+  if [ -d "$deploy/secrets" ]; then
+    for secret in "$deploy/secrets/"*; do
+      [ -e "$secret" ] || continue
+      [ "$(basename "$secret")" = "storage-internal-auth.env" ] && continue
+      cp -R "$secret" "$next/secrets/"
+    done
+  fi
   mkdir -p "$next/secrets"
   if [ "$use_control_gateway" = "1" ]; then
     control_secrets="$root/prod/secrets"

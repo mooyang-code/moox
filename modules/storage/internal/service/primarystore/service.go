@@ -91,6 +91,9 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
+	if req.GetAuthInfo().GetAppId() == "scf-market-canary" {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("read-only primary credential"))}, nil
+	}
 	ctx = s.requestContext(ctx)
 	groups := make(map[routeKey][]*pb.RowFieldUpsert)
 	order := make([]routeKey, 0)

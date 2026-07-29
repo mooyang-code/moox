@@ -344,6 +344,8 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.TargetNode = v
+		c.Metrics.Storage.GatewayNodeID = v
+		c.Metrics.HostStorage.GatewayNodeID = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.KeyID = v

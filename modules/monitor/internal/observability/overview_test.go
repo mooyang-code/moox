@@ -193,6 +193,32 @@ func TestBuilderIncludesSysDeployServiceWithoutReporter(t *testing.T) {
 	}
 }
 
+func TestBuilderDoesNotRequireReporterFromHealthOnlyService(t *testing.T) {
+	query, repositories := openOverviewState(t, func(*gorm.DB) {})
+	check := domain.Check{
+		SpaceID: "moox_system", CheckID: "sysdeploy:node-b:web_host",
+		Name: "web_host@node-b", Kind: domain.CheckKindHTTP,
+		Source: domain.CheckSourceSysDeploy, Enabled: true,
+		Labels: `{"node_id":"node-b","service_name":"web_host"}`,
+	}
+	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
+		t.Fatal(err)
+	}
+	if err := repositories.Results.Insert(t.Context(), &domain.CheckResult{
+		ResultID: "web-ready", SpaceID: check.SpaceID, CheckID: check.CheckID,
+		Success: true, Status: domain.CheckStatusOK, CheckedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (Builder{Metrics: query, Checks: repositories.Checks, Results: repositories.Results}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Services) != 1 || got.Services[0].Status != "healthy" || got.Services[0].ReporterStatus != "" {
+		t.Fatalf("services = %+v", got.Services)
+	}
+}
+
 func TestBuilderSummarizesAllSCFHeartbeatsFromCloudNodeMetrics(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {

@@ -189,7 +189,9 @@ func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {
 			generatedLabels := 0
 			switch family.GetType() {
 			case io_prometheus_client.MetricType_HISTOGRAM:
-				sampleCount += 2 + len(sample.GetHistogram().GetBucket())
+				// Prometheus text exposition emits the implicit +Inf bucket in
+				// addition to the finite buckets held by the DTO.
+				sampleCount += 3 + len(sample.GetHistogram().GetBucket())
 				if len(sample.GetHistogram().GetBucket()) > 0 {
 					generatedLabels = 1
 				}

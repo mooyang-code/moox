@@ -57,7 +57,7 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-test"
 	cfg.Metrics.Enabled = false
-	rsp := monitorHealthSnapshot(cfg, runtime, nil)(context.Background())
+	rsp := monitorHealthSnapshot(cfg, runtime, nil, nil)(context.Background())
 	if rsp.Ready {
 		t.Fatalf("health response = %+v, want not ready", rsp)
 	}
@@ -124,7 +124,7 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
 	registerMetricsReporter(nil, nil)
-	assert.NoError(t, registerHealth(nil, nil, rt, nil))
+	assert.NoError(t, registerHealth(nil, nil, rt, nil, nil))
 }
 
 func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {
@@ -230,20 +230,67 @@ func TestMonitorHealthSnapshotMetricsBranches(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-ready"
 	cfg.Metrics.Enabled = false
+	cfg.Metrics.HostStorage.Enabled = false
 	cfg.Observability.Enabled = false
-	rsp := monitorHealthSnapshot(cfg, rt, nil)(context.Background())
+	rsp := monitorHealthSnapshot(cfg, rt, nil, nil)(context.Background())
 	assert.True(t, rsp.Ready)
 
 	cfg.Metrics.Enabled = true
 	cfg.Observability.Enabled = true
-	rsp = monitorHealthSnapshot(cfg, rt, nil)(context.Background())
+	rsp = monitorHealthSnapshot(cfg, rt, nil, nil)(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Equal(t, "degraded", rsp.Status)
 
 	adapter := monmetrics.NewStorageAdapter(nil, nil, cfg.Metrics.Storage)
-	rsp = monitorHealthSnapshot(cfg, rt, adapter)(context.Background())
+	rsp = monitorHealthSnapshot(cfg, rt, adapter, nil)(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Contains(t, rsp.Details["metrics_schema_reason"], "checked")
+}
+
+func TestObservabilityWriteFailureRequiresSubsequentSuccess(t *testing.T) {
+	rt := &Runtime{}
+	rt.recordObservabilityWriteFailure(errors.New("storage unavailable"))
+
+	ready, _ := rt.observabilityWriteReady(time.Now().Add(24 * time.Hour))
+	assert.False(t, ready)
+
+	rt.recordObservabilityWriteSuccess()
+	ready, reason := rt.observabilityWriteReady(time.Now())
+	assert.True(t, ready)
+	assert.Empty(t, reason)
+}
+
+func TestHostWriteFailureIsNotClearedByMetricsSuccess(t *testing.T) {
+	rt := &Runtime{}
+	rt.recordHostWriteFailure(errors.New("host storage unavailable"))
+	rt.recordObservabilityWriteSuccess()
+
+	ready, _ := rt.observabilityWriteReady(time.Now())
+	assert.False(t, ready)
+
+	rt.recordHostWriteSuccess()
+	ready, reason := rt.observabilityWriteReady(time.Now())
+	assert.True(t, ready)
+	assert.Empty(t, reason)
+}
+
+func TestMonitorHealthSnapshotRequiresHostStorageSchema(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+
+	cfg := config.Default()
+	cfg.Metrics.Enabled = false
+	cfg.Observability.Enabled = false
+	cfg.Metrics.HostStorage.Enabled = true
+	rt := &Runtime{StartedAt: time.Now().UTC(), Store: mgr, Repositories: mgr.Repositories(), Scheduler: scheduler.New(mgr.Repositories(), scheduler.Options{})}
+	hostStore := hostmetrics.NewStore(nil, nil)
+	hostStore.SetStorageReady(func() bool { return false })
+
+	rsp := monitorHealthSnapshot(cfg, rt, nil, hostStore)(context.Background())
+	assert.False(t, rsp.Ready)
+	assert.Equal(t, false, rsp.Details["host_storage_schema_ready"])
 }
 
 func TestRegisterMonitorServiceSkipsMissingService(t *testing.T) {

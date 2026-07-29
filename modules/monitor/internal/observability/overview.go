@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -202,6 +203,10 @@ func nonNegativeMetricCount(value float64) (int, error) {
 
 func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceStatus, error) {
 	services := make(map[string]ServiceStatus)
+	reporterServices, err := expectedReporterServices()
+	if err != nil {
+		return nil, err
+	}
 	if b.Metrics != nil && b.Metrics.Catalog() != nil {
 		rows, total, err := b.Metrics.Catalog().ListServices(ctx, spaceID, 0, 500)
 		if err != nil {
@@ -253,10 +258,12 @@ func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceSt
 		}
 		if len(matched) == 0 {
 			key := serviceInstanceKey(nodeID, serviceName, "")
-			services[key] = ServiceStatus{
-				NodeID: nodeID, ServiceName: serviceName, Status: "unknown",
-				ReporterStatus: "missing", Reason: "reporter missing",
+			service := ServiceStatus{NodeID: nodeID, ServiceName: serviceName, Status: "unknown", Reason: "health not checked"}
+			if reporterServices[serviceName] {
+				service.ReporterStatus = "missing"
+				service.Reason = "reporter missing"
 			}
+			services[key] = service
 			matched = append(matched, key)
 		}
 		var latest *domain.CheckResult
@@ -277,6 +284,20 @@ func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceSt
 	out := make([]ServiceStatus, 0, len(services))
 	for _, item := range services {
 		out = append(out, item)
+	}
+	return out, nil
+}
+
+func expectedReporterServices() (map[string]bool, error) {
+	manifest, err := doctor.LoadEmbeddedManifest()
+	if err != nil {
+		return nil, fmt.Errorf("load observability component manifest: %w", err)
+	}
+	out := make(map[string]bool, len(manifest.Components))
+	for _, component := range manifest.Components {
+		if component.Transport == doctor.TransportReporter {
+			out[component.ServiceName] = true
+		}
 	}
 	return out, nil
 }
@@ -346,6 +367,11 @@ func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) Servi
 		default:
 			healthStatus, healthReason = "healthy", "health check ok"
 		}
+	}
+	if service.ReporterStatus == "" {
+		service.Status = healthStatus
+		service.Reason = healthReason
+		return service
 	}
 	if statusRank(healthStatus) < statusRank(service.Status) {
 		service.Status = healthStatus

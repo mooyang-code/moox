@@ -70,3 +70,15 @@ func TestImportEntitiesValidatesDatasetBindingBeforeWrites(t *testing.T) {
 	_, err = store.GetSpace(ctx, "space")
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
+
+func TestSeedViewColumnAttributesDefaultsInternalDisplayName(t *testing.T) {
+	got := seedViewColumnAttributes(seedViewColumn{
+		SpaceID: "moox_system", ColumnName: "cpu_usage_percent",
+	})
+	require.Equal(t, "cpu_usage_percent", got["display_name"])
+
+	external := seedViewColumnAttributes(seedViewColumn{
+		SpaceID: "crypto", ColumnName: "close",
+	})
+	require.NotContains(t, external, "display_name")
+}

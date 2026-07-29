@@ -28,6 +28,7 @@ func TestStorageMarketCanaryCheckEvaluatesRealRows(t *testing.T) {
 	cfg := MarketCanaryConfig{
 		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+		AuthInfo: &storagepb.AuthInfo{AppId: "canary", AppKey: "key"},
 	}
 	require.True(t, StorageMarketCanaryCheck(reader, cfg)(t.Context()).Success)
 	cfg.Freshness = time.Second

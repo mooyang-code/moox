@@ -1274,6 +1274,14 @@ type CollectResult struct {
 
 三个字段分别只回答“写了多少”“TimeSeries 写到哪里”“Record 快照版本是什么”。`OutputWatermark` 必须为成功 Storage write ACK 的最大 RFC3339 `data_time`；`SnapshotVersion` 只用于 Symbol 等 Record Dataset。二者按数据类型互斥，不再增加 scope、样本行键或原因字段。由于 source executor 共用一个结果接口，为少一个可选字符串再拆两套传输结构收益很小，V1 保留这一三个字段的最小公共结果。完整 `CollectResult` JSON 最大 1 KiB。
 
+三个字段分别只表达跨进程确实需要的写入证据：
+
+- `RowsWritten`：区分有写入的成功和合法空结果。
+- `OutputWatermark`：TimeSeries Dataset 成功写入后的最大业务时间。
+- `SnapshotVersion`：Record Dataset 成功写入后的快照版本。
+
+`EmptyReason` 在 V1 没有稳定消费者：Monitor 只需根据 `RowsWritten == 0` 生成 `result=empty`，不根据原因采取不同告警动作；EventBus、Storage 和 Overview 也无需保存或展示它。若具体采集器需要排障信息，只写固定、低基数的结构化日志。异常空结果继续返回 error，不能借 `EmptyReason` 把异常伪装成成功。以后只有在出现两个以上需要不同监控策略的合法空结果，而且确有消费方时，才重新评估是否增加该字段。
+
 - [ ] **Step 2: 固定结果校验矩阵**
 
 | 数据类型 | 条件 | 判定 |

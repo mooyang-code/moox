@@ -421,6 +421,9 @@ func TestSCFWatchdogEnvironmentInjectsAndRotatesServerOwnedSecrets(t *testing.T)
 	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=new", environment["MOOX_MSGBOX_WECOM_WEBHOOK"])
 	require.Equal(t, "monitor-secret", environment["MOOX_HEALTH_HMAC_SECRET"])
 	require.Equal(t, "http://monitor.example.test:11409/readyz", environment["MOOX_MONITOR_READY_URL"])
+	require.Equal(t, scfStorageAuthAppID, environment["MOOX_SCF_STORAGE_AUTH_APP_ID"])
+	require.NotEmpty(t, environment["MOOX_SCF_STORAGE_AUTH_APP_KEY"])
+	require.NotEqual(t, "primary-secret", environment["MOOX_SCF_STORAGE_AUTH_APP_KEY"])
 }
 
 func TestSCFWatchdogEnvironmentAllowsNotificationsToBeDisabled(t *testing.T) {
@@ -448,6 +451,7 @@ func setSCFWatchdogRuntimeEnvironment(t *testing.T, webhook string) {
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
 	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "monitor-secret")
 	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", webhook)
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 }
 
 func TestExecuteDeployNodeItemCannotPromoteUnselectedWatchdog(t *testing.T) {

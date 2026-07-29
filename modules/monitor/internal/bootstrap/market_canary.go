@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -62,7 +63,9 @@ func buildMonitorMarketCanary(
 		default:
 			return nil, getErr
 		}
-		canaries = append(canaries, watchdog.MarketCanary{Reader: reader, Config: canaryConfig})
+		canaries = append(canaries, watchdog.MarketCanary{
+			Reader: reader, AuthInfo: storageauth.Primary("monitor-market-canary"), Config: canaryConfig,
+		})
 	}
 	return func(runCtx context.Context) error {
 		var errs []error

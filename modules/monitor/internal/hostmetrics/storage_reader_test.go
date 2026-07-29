@@ -28,20 +28,18 @@ func (f *readerAccessFake) ReadTimeSeriesRows(_ context.Context, req *storagepb.
 			rows = append(rows, row)
 		}
 	}
-	start, end := 0, len(rows)
-	if req.GetPage().GetCursor() == "cursor-1" {
-		start = 1
+	pageNo := int(req.GetPage().GetPage())
+	if pageNo <= 0 {
+		pageNo = 1
 	}
+	start, end := pageNo-1, len(rows)
 	if start >= len(rows) {
 		return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 	}
 	if end > start+1 {
 		end = start + 1
 	}
-	page := &storagepb.PageResult{HasMore: end < len(rows)}
-	if page.HasMore {
-		page.NextCursor = "cursor-1"
-	}
+	page := &storagepb.PageResult{Page: uint32(pageNo), Size: 1, HasMore: end < len(rows)}
 	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Rows: rows[start:end], PageResult: page}, nil
 }
 
@@ -65,6 +63,31 @@ func TestStorageReaderPaginatesAndRebuildsEntities(t *testing.T) {
 	end, _ := time.Parse(time.RFC3339Nano, fake.lastEnd)
 	if end.Sub(start) > 7*24*time.Hour {
 		t.Fatalf("reader exceeded seven-day bound: %s to %s", fake.lastStart, fake.lastEnd)
+	}
+}
+
+func TestStorageReaderDoesNotTruncateLongMultiEntityHistory(t *testing.T) {
+	cfg := monconfig.Default().Metrics.HostStorage
+	now := time.Now().UTC().Truncate(time.Minute)
+	rows := make([]*storagepb.TimeSeriesRow, 0, 30)
+	for minute := 0; minute < 30; minute++ {
+		at := now.Add(time.Duration(minute-30) * time.Minute).Format(time.RFC3339Nano)
+		rows = append(rows, readRow(resourceRow(SpaceID, cfg.ResourceDatasetID, "1m", at, &hostmetricpb.HostSnapshot{
+			Cpu: &hostmetricpb.CpuMetric{LogicalCores: 4}, Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100},
+		}, "agent-1")))
+	}
+	fake := &readerAccessFake{rows: rows}
+	points, err := NewStorageReader(fake, cfg).History(
+		context.Background(), "agent-1",
+		now.Add(-time.Hour),
+		now,
+		100,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(points) != 30 {
+		t.Fatalf("points=%d, want 30", len(points))
 	}
 }
 

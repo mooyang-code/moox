@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -78,6 +79,7 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	publicHost := ""
 	withStorageShard := false
 	disableStorageShard := false
+	disabledServices := ""
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&seedPath, "file", seedPath, "service deployment seed YAML")
 	fs.StringVar(&nodeID, "node-id", nodeID, "override the seed node ID")
@@ -85,6 +87,7 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	fs.StringVar(&publicHost, "public-host", "", "public IP or DNS name for public endpoints")
 	fs.BoolVar(&withStorageShard, "with-storage-shard", false, "enable the independent DataShard route")
 	fs.BoolVar(&disableStorageShard, "disable-storage-shard", false, "disable the independent DataShard route")
+	fs.StringVar(&disabledServices, "disabled-services", "", "comma-separated services omitted from this deployment")
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
 	}
@@ -128,6 +131,9 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 			return err
 		}
 	}
+	if err := disableSeedServices(&seed, disabledServices); err != nil {
+		return err
+	}
 	if err := ensureAdminSchema(dbPath); err != nil {
 		return err
 	}
@@ -144,6 +150,38 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 		"status": "ok", "command": "service-deployments.import", "node_id": seed.Node.ID,
 		"created": created, "updated": updated, "services": len(seed.Services),
 	})
+}
+
+func disableSeedServices(seed *serviceDeploymentSeed, raw string) error {
+	if seed == nil {
+		return errors.New("service deployment seed is required")
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	requested := make(map[string]bool)
+	for _, name := range strings.Split(raw, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return errors.New("--disabled-services contains an empty service name")
+		}
+		requested[name] = true
+	}
+	for i := range seed.Services {
+		if requested[seed.Services[i].Name] {
+			seed.Services[i].Status = "disabled"
+			delete(requested, seed.Services[i].Name)
+		}
+	}
+	if len(requested) > 0 {
+		names := make([]string, 0, len(requested))
+		for name := range requested {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return fmt.Errorf("--disabled-services contains unknown services: %s", strings.Join(names, ","))
+	}
+	return nil
 }
 
 func validateEventBusNATSURL(raw string) (*url.URL, error) {

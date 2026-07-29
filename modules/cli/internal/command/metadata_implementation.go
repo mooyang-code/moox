@@ -637,7 +637,11 @@ func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.ViewColumn{SpaceId: s.SpaceID, ViewId: s.ViewID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, OnlineTime: s.OnlineTime, SortOrder: s.SortOrder, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	attributes := cloneStringMap(s.Attributes)
+	if s.SpaceID == "moox_system" && strings.TrimSpace(attributes["display_name"]) == "" {
+		attributes["display_name"] = s.ColumnName
+	}
+	return &pb.ViewColumn{SpaceId: s.SpaceID, ViewId: s.ViewID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, OnlineTime: s.OnlineTime, SortOrder: s.SortOrder, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: attributes}, nil
 }
 
 func (s seedDevice) toPB() *pb.Device {

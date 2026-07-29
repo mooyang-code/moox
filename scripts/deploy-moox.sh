@@ -1660,6 +1660,19 @@ start_admin() {
     else
       service_seed_args+=(--disable-storage-shard)
     fi
+    local disabled_services=()
+    [[ "${WITH_ARCHIVE}" == "1" ]] || disabled_services+=(moox_archive)
+    [[ "${WITH_CLOUDNODE}" == "1" ]] || disabled_services+=(moox_cloudnode)
+    [[ "${WITH_COLLECTOR}" == "1" ]] || disabled_services+=(moox_collector)
+    [[ "${WITH_FACTOR}" == "1" ]] || disabled_services+=(moox_factor)
+    [[ "${WITH_MONITOR}" == "1" ]] || disabled_services+=(moox_monitor)
+    [[ "${WITH_STRATEGY}" == "1" ]] || disabled_services+=(moox_strategy)
+    [[ "${WITH_WEB_HOST}" == "1" ]] || disabled_services+=(web_host)
+    if (( ${#disabled_services[@]} > 0 )); then
+      local disabled_services_csv
+      disabled_services_csv=$(IFS=,; printf '%s' "${disabled_services[*]}")
+      service_seed_args+=(--disabled-services "${disabled_services_csv}")
+    fi
     "${ROOT}/bin/moox-admin-cli" "${service_seed_args[@]}" >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
         echo "Storage shard service deployment import failed" >&2
         exit 1
@@ -1707,7 +1720,8 @@ start_cloudnode() {
   gateway_service_env_for cloudnode
   runtime_identity_env moox_cloudnode "${ROOT}/cloudnode/config/app.yaml"
   start_service "cloudnode" "${ROOT}/cloudnode" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "${MSGBOX_ENV[@]}" "${SCF_SENTINEL_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+      "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "${SCF_SENTINEL_ENV[@]+"${SCF_SENTINEL_ENV[@]}"}" \
       "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_SERVICE_GATEWAY_HTTP_URL=http://127.0.0.1:11002" \
       "MOOX_SCF_SERVICE_GATEWAY_TARGET=${SCF_SERVICE_GATEWAY_TARGET}" \
@@ -1767,7 +1781,9 @@ start_monitor() {
   gateway_service_env_for monitor
   runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"
   start_service "monitor" "${ROOT}/monitor" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "${MSGBOX_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+      "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
+      "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
 
 start_web_host() {
@@ -2446,23 +2462,25 @@ prepare_stage() {
   } >"${STAGE_DIR}/secrets/gateway-service.env"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     local storage_node_auth_secret="${MOOX_STORAGE_NODE_AUTH_SECRET:-}"
-    local storage_primary_auth_secret="${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
-    local storage_view_auth_secret="${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
     if [[ -z "${storage_node_auth_secret}" ]]; then
       storage_node_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-node-auth)"
     fi
+    [[ "${storage_node_auth_secret}" != *$'\n'* && "${storage_node_auth_secret}" != *$'\r'* ]] || \
+      fail "storage DataNode auth secret must contain exactly one line"
+    (umask 077; printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%q\n' "${storage_node_auth_secret}" >"${STAGE_DIR}/secrets/storage-node-auth.env")
+  fi
+  if [[ "${WITH_STORAGE}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
+    local storage_primary_auth_secret="${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
+    local storage_view_auth_secret="${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
     if [[ -z "${storage_primary_auth_secret}" ]]; then
       storage_primary_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-primary-auth)"
     fi
     if [[ -z "${storage_view_auth_secret}" ]]; then
       storage_view_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-view-auth)"
     fi
-    [[ "${storage_node_auth_secret}" != *$'\n'* && "${storage_node_auth_secret}" != *$'\r'* ]] || \
-      fail "storage DataNode auth secret must contain exactly one line"
     [[ "${storage_primary_auth_secret}" != *$'\n'* && "${storage_primary_auth_secret}" != *$'\r'* && \
        "${storage_view_auth_secret}" != *$'\n'* && "${storage_view_auth_secret}" != *$'\r'* ]] || \
       fail "storage internal auth secrets must contain exactly one line"
-    (umask 077; printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%q\n' "${storage_node_auth_secret}" >"${STAGE_DIR}/secrets/storage-node-auth.env")
     {
       printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET=%q\n' "${storage_primary_auth_secret}"
       printf 'MOOX_STORAGE_VIEW_AUTH_SECRET=%q\n' "${storage_view_auth_secret}"
@@ -2810,9 +2828,9 @@ sync_local_stage() {
   install -m 0600 "${STAGE_DIR}/secrets/gateway-service.env" "${deploy_dir}/secrets/gateway-service.env"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-node-auth.env"
+  fi
+  if [[ -f "${STAGE_DIR}/secrets/storage-internal-auth.env" ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
-  else
-    rm -f "${deploy_dir}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
   fi
   for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key; do
     install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
@@ -2953,28 +2971,16 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
   if [[ "${WITH_STORAGE}" == "1" ]]; then
     MOOX_WITH_EVENTBUS="${WITH_EVENTBUS}" MOOX_WITH_ARCHIVE="${WITH_ARCHIVE}" "${DEPLOY_DIR}/stop.sh" || true
   else
-    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_COLLECTOR}" == "1" ]]; then
-      "${DEPLOY_DIR}/stop.sh" collector || true
-    fi
-    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_FACTOR}" == "1" ]]; then
-      "${DEPLOY_DIR}/stop.sh" factor || true
-    fi
-    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_STRATEGY}" == "1" ]]; then
-      "${DEPLOY_DIR}/stop.sh" strategy || true
-    fi
-    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_MONITOR}" == "1" ]]; then
-      "${DEPLOY_DIR}/stop.sh" monitor || true
-    fi
-    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_CLOUDNODE}" == "1" ]]; then
-      "${DEPLOY_DIR}/stop.sh" cloudnode || true
-    fi
-    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_EVENTBUS}" == "1" ]]; then
-      "${DEPLOY_DIR}/stop.sh" eventbus || true
-    fi
-    if [[ -x "${DEPLOY_DIR}/stop.sh" && "${WITH_WEB_HOST}" == "1" ]]; then
-      "${DEPLOY_DIR}/stop.sh" web-host || true
-    fi
-    "${DEPLOY_DIR}/stop.sh" admin || true
+    [[ "${WITH_ARCHIVE}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" archive || true
+    [[ "${WITH_COLLECTOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" collector || true
+    [[ "${WITH_FACTOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" factor || true
+    [[ "${WITH_STRATEGY}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" strategy || true
+    [[ "${WITH_MONITOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" monitor || true
+    [[ "${WITH_CLOUDNODE}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" cloudnode || true
+    [[ "${WITH_EVENTBUS}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" eventbus || true
+    [[ "${WITH_GATEWAY}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" gateway || true
+    [[ "${WITH_WEB_HOST}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" web-host || true
+    [[ "${WITH_ADMIN}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" admin || true
   fi
 fi
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -25,9 +26,10 @@ type TimeSeriesReader interface {
 }
 
 type MarketCanary struct {
-	Reader TimeSeriesReader
-	Config MarketCanaryConfig
-	Now    func() time.Time
+	Reader   TimeSeriesReader
+	AuthInfo *commonpb.AuthInfo
+	Config   MarketCanaryConfig
+	Now      func() time.Time
 }
 
 type marketBar struct {
@@ -63,7 +65,8 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	}
 	startedAt := time.Now()
 	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		SpaceId: config.SpaceID, DatasetId: config.DatasetID,
+		AuthInfo: c.AuthInfo,
+		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
 		Keys: []*storagepb.TimeSeriesKey{{
 			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
 			SubjectId: config.SubjectID, Freq: config.Frequency,

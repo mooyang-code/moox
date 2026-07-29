@@ -185,6 +185,21 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 	require.Equal(t, "disabled", shard.Status)
 }
 
+func TestDisableSeedServicesUsesDeploymentProfile(t *testing.T) {
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	require.NoError(t, err)
+	require.NoError(t, disableSeedServices(&seed, "moox_archive, moox_factor,moox_strategy"))
+	statuses := map[string]string{}
+	for _, service := range seed.Services {
+		statuses[service.Name] = service.Status
+	}
+	require.Equal(t, "disabled", statuses["moox_archive"])
+	require.Equal(t, "disabled", statuses["moox_factor"])
+	require.Equal(t, "disabled", statuses["moox_strategy"])
+	require.Equal(t, "active", statuses["moox_monitor"])
+	require.ErrorContains(t, disableSeedServices(&seed, "missing"), "unknown services")
+}
+
 func TestImportWithOptionalStorageShardCompilesOnlyIndependentDataShardRoute(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "admin.db")

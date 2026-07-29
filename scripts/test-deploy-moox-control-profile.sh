@@ -84,6 +84,9 @@ for binary in moox-storage moox-archive moox-factor moox-strategy; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected control binary: ${binary}" >&2; exit 1; }
 done
 [[ -s "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" ]]
+[[ -s "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env" ]]
+grep -Eq '^MOOX_STORAGE_PRIMARY_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
+grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
 [[ ! -e "${TMP_ROOT}/unpacked/storage" ]]
 [[ -d "${TMP_ROOT}/unpacked/cloudnode" ]]
 [[ -d "${TMP_ROOT}/unpacked/collector" ]]
