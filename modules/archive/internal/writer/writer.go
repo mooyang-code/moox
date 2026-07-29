@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
+	"github.com/mooyang-code/moox/modules/archive/internal/partitionlock"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -24,7 +25,7 @@ type Writer struct {
 	root         string
 	rowGroupRows int64
 	workers      int
-	locks        sync.Map
+	locks        *partitionlock.Locker
 	registry     Registry
 }
 
@@ -34,7 +35,7 @@ func New(store *journal.Store, root string, rowGroupRows int64) *Writer {
 	if rowGroupRows <= 0 {
 		rowGroupRows = 65536
 	}
-	return &Writer{journal: store, root: root, rowGroupRows: rowGroupRows, workers: 1}
+	return &Writer{journal: store, root: root, rowGroupRows: rowGroupRows, workers: 1, locks: partitionlock.New()}
 }
 
 func (w *Writer) SetWorkers(workers int) {
@@ -43,10 +44,15 @@ func (w *Writer) SetWorkers(workers int) {
 	}
 }
 
+func (w *Writer) SetPartitionLocker(locks *partitionlock.Locker) {
+	if locks != nil {
+		w.locks = locks
+	}
+}
+
 func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (domain.Manifest, error) {
-	lock := w.partitionLock(domain.PartitionID(key))
-	lock.Lock()
-	defer lock.Unlock()
+	unlock := w.locks.Lock(domain.PartitionID(key))
+	defer unlock()
 	attempt, err := w.journal.BeginMaterialization(ctx, key)
 	if err != nil {
 		return domain.Manifest{}, err
@@ -58,12 +64,19 @@ func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (d
 	rows := map[string]domain.ArchiveRow{}
 	schema := map[string]storagepb.FieldValueType{}
 	if _, err := os.Stat(basePath); err == nil {
+		parsed, parseErr := domain.ParseArchivePath(basePath)
+		if parseErr != nil {
+			return domain.Manifest{}, fmt.Errorf("archive path identity mismatch: %w", parseErr)
+		}
+		if parsed != key {
+			return domain.Manifest{}, fmt.Errorf("archive path identity mismatch")
+		}
 		existing, existingSchema, _, readErr := parquetio.Read(basePath)
 		if readErr != nil {
 			return domain.Manifest{}, readErr
 		}
 		for _, row := range existing {
-			rows[domain.LogicalRowID(row.DataTime, row.DimensionsJSON)] = row
+			rows[domain.LogicalRowID(row.DataTime)] = row
 		}
 		for name, kind := range existingSchema {
 			schema[name] = kind
@@ -77,7 +90,7 @@ func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (d
 	for _, item := range pending {
 		row, ok := rows[item.RowID]
 		if !ok {
-			row = domain.ArchiveRow{Partition: key, DataTime: item.Patch.DataTime, DimensionsJSON: item.Patch.DimensionsJSON, Attributes: map[string]string{}, Columns: map[string]domain.Scalar{}}
+			row = domain.ArchiveRow{Partition: key, DataTime: item.Patch.DataTime, Attributes: map[string]string{}, Columns: map[string]domain.Scalar{}}
 		}
 		row = domain.MergePatch(row, item.Patch)
 		rows[item.RowID] = row
@@ -92,12 +105,7 @@ func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (d
 	for _, row := range rows {
 		ordered = append(ordered, row)
 	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].DataTime.Equal(ordered[j].DataTime) {
-			return ordered[i].DimensionsJSON < ordered[j].DimensionsJSON
-		}
-		return ordered[i].DataTime.Before(ordered[j].DataTime)
-	})
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].DataTime.Before(ordered[j].DataTime) })
 	if len(ordered) == 0 {
 		return domain.Manifest{}, fmt.Errorf("partition has no rows")
 	}
@@ -127,6 +135,13 @@ func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (d
 	if err := syncDir(dir); err != nil {
 		return domain.Manifest{}, err
 	}
+	parsed, err := domain.ParseArchivePath(basePath)
+	if err != nil {
+		return domain.Manifest{}, fmt.Errorf("archive path identity mismatch: %w", err)
+	}
+	if parsed != key {
+		return domain.Manifest{}, fmt.Errorf("archive path identity mismatch")
+	}
 	manifest.Path = basePath
 	if err := w.journal.MarkLocalCommitted(ctx, key, manifest); err != nil {
 		return domain.Manifest{}, err
@@ -146,7 +161,19 @@ func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (d
 }
 
 func (w *Writer) WriteDirty(ctx context.Context, limit int) error {
-	states, err := w.journal.DirtyPartitions(ctx, limit)
+	return w.WriteDirtyMatching(ctx, limit, nil)
+}
+
+// WriteDirtyMatching materializes all tags when seriesTag is nil, or exactly
+// the selected tag (including the empty tag) when it is present.
+func (w *Writer) WriteDirtyMatching(ctx context.Context, limit int, seriesTag *string) error {
+	var states []journal.PartitionState
+	var err error
+	if seriesTag == nil {
+		states, err = w.journal.DirtyPartitions(ctx, limit)
+	} else {
+		states, err = w.journal.DirtyPartitionsBySeriesTag(ctx, limit, *seriesTag)
+	}
 	if err != nil {
 		return err
 	}
@@ -272,10 +299,6 @@ func containsTempMarker(name string) bool {
 		}
 	}
 	return false
-}
-func (w *Writer) partitionLock(id string) *sync.Mutex {
-	value, _ := w.locks.LoadOrStore(id, &sync.Mutex{})
-	return value.(*sync.Mutex)
 }
 func syncFile(path string) error {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)

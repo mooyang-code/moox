@@ -29,7 +29,7 @@ space_id + dataset_id + record_id + version
 
 - `series_tag` 是一个可选、不透明的标量字符串，空字符串表示默认序列。
 - 推荐使用 `venue:binance`、`device:sdb` 等约定，但 Storage 不解析冒号。
-- 不支持 Dimensions Map、多 tag、`series_tag_name` 或允许值注册；业务属性继续使用
+- 不支持通用键值 Map、多 tag、额外标签名称元数据或允许值注册；业务属性继续使用
   Field/Attribute。
 - 精确 Key 的空 tag 只匹配默认序列；范围 selector 未设置 tag 才表示全部序列。
 - `data_time` 接受 RFC3339/RFC3339Nano，服务端统一保存为 UTC 固定 9 位纳秒。

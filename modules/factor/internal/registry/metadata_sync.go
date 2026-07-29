@@ -248,7 +248,7 @@ func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor 
 		Attributes: map[string]string{
 			"input_columns_json": string(inputColumnsJSON),
 			"outputs_json":       string(outputsJSON),
-			"lookback_rows":      strconv.Itoa(factor.LookbackRows),
+			"lookback_periods":   strconv.Itoa(factor.LookbackPeriods),
 		},
 	}
 

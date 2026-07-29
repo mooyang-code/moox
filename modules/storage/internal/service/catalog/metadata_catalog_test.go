@@ -11,6 +11,7 @@ import (
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type activationMetadataStore struct {
@@ -200,4 +201,78 @@ func TestActivateDatasetReadinessFailureDoesNotWrite(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 	require.Zero(t, store.commitCalls)
 	require.Equal(t, "disabled", store.dataset.GetStatus())
+}
+
+func TestTimeSeriesViewGrainIncludesSeriesTag(t *testing.T) {
+	require.Equal(t,
+		[]string{"subject_id", "freq", "data_time", "series_tag"},
+		defaultViewGrainKeys(pb.DataKind_DATA_KIND_TIME_SERIES),
+	)
+}
+
+func TestReservedTimeSeriesSystemColumnNamesAreRejected(t *testing.T) {
+	svc := &Service{}
+	for _, name := range []string{
+		"subject_id", "freq", "data_time", "series_tag",
+		"Subject_ID", "FREQ", "Data_Time", "Series_Tag",
+	} {
+		t.Run("field/"+name, func(t *testing.T) {
+			field := &pb.Field{SpaceId: "space", GroupId: "group", FieldId: name}
+			createRsp, err := svc.CreateField(context.Background(), &pb.CreateFieldReq{Field: field})
+			require.NoError(t, err)
+			require.Equal(t, pb.ErrorCode_INVALID_PARAM, createRsp.GetRetInfo().GetCode())
+			require.Contains(t, createRsp.GetRetInfo().GetMsg(), "reserved system column")
+
+			updateRsp, err := svc.UpdateField(context.Background(), &pb.UpdateFieldReq{Field: field})
+			require.NoError(t, err)
+			require.Equal(t, pb.ErrorCode_INVALID_PARAM, updateRsp.GetRetInfo().GetCode())
+			require.Contains(t, updateRsp.GetRetInfo().GetMsg(), "reserved system column")
+		})
+		t.Run("view_column/"+name, func(t *testing.T) {
+			column := &pb.ViewColumn{
+				SpaceId:    "moox_system",
+				ViewId:     "view",
+				ColumnName: name,
+				OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION,
+				Attributes: map[string]string{"display_name": name},
+			}
+			rsp, err := svc.UpsertViewColumn(context.Background(), &pb.UpsertViewColumnReq{Column: column})
+			require.NoError(t, err)
+			require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+			require.Contains(t, rsp.GetRetInfo().GetMsg(), "reserved system column")
+		})
+	}
+}
+
+func TestCreateAndUpdateViewRejectEmbeddedReservedColumns(t *testing.T) {
+	svc := &Service{}
+	newView := func() *pb.View {
+		return &pb.View{
+			SpaceId:          "space",
+			ViewId:           "view",
+			Name:             "测试视图",
+			PrimaryDatasetId: "dataset",
+			Columns: []*pb.ViewColumn{
+				nil,
+				{ColumnName: "Series_Tag", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION},
+			},
+		}
+	}
+
+	createRsp, err := svc.CreateView(context.Background(), &pb.CreateViewReq{View: newView()})
+	require.NoError(t, err)
+	require.NotEqual(t, pb.ErrorCode_SUCCESS, createRsp.GetRetInfo().GetCode())
+	require.Contains(t, createRsp.GetRetInfo().GetMsg(), "reserved system column")
+
+	updateRsp, err := svc.UpdateView(context.Background(), &pb.UpdateViewReq{View: newView()})
+	require.NoError(t, err)
+	require.NotEqual(t, pb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
+	require.Contains(t, updateRsp.GetRetInfo().GetMsg(), "reserved system column")
+}
+
+func TestDatasetMetadataHasNoSeriesTagRegistry(t *testing.T) {
+	fields := (&pb.Dataset{}).ProtoReflect().Descriptor().Fields()
+	for _, forbidden := range []string{"series_tag_" + "name", "series_tag_allowed_values", "series_tag_registry"} {
+		require.Nil(t, fields.ByName(protoreflect.Name(forbidden)), forbidden)
+	}
 }

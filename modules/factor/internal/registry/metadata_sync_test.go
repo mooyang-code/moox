@@ -32,7 +32,7 @@ func TestSyncTargetDatasetReconcilesOutputsForActiveLockedTarget(t *testing.T) {
 	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
 		FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav", "benchmark_return"},
 		Outputs: []string{"excess_return", "rolling_rank"}, ParamsJSON: `{}`,
-		LookbackRows: 20, Status: domain.FactorStatusEnabled,
+		LookbackPeriods: 20, Status: domain.FactorStatusEnabled,
 	}})
 	require.NoError(t, err)
 	require.Equal(t, []string{"excess_return", "rolling_rank"}, client.upsertedColumnNames())
@@ -55,7 +55,7 @@ func TestSyncTargetDatasetUpdatesExistingFactorMetadata(t *testing.T) {
 	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
 		FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav", "benchmark_return"},
 		Outputs: []string{"excess_return", "rolling_rank"}, ParamsJSON: `{"window":20}`,
-		LookbackRows: 21, Status: domain.FactorStatusEnabled,
+		LookbackPeriods: 21, Status: domain.FactorStatusEnabled,
 	}})
 	require.NoError(t, err)
 	require.Empty(t, client.createdFactors)
@@ -63,7 +63,7 @@ func TestSyncTargetDatasetUpdatesExistingFactorMetadata(t *testing.T) {
 	updated := client.updatedFactors[0]
 	require.Equal(t, `["nav","benchmark_return"]`, updated.GetAttributes()["input_columns_json"])
 	require.Equal(t, `["excess_return","rolling_rank"]`, updated.GetAttributes()["outputs_json"])
-	require.Equal(t, "21", updated.GetAttributes()["lookback_rows"])
+	require.Equal(t, "21", updated.GetAttributes()["lookback_periods"])
 	require.Equal(t, `{"window":20}`, updated.GetParamsJson())
 	require.Equal(t, "active", updated.GetStatus())
 	require.Len(t, client.upsertedColumns, 2)
@@ -82,7 +82,7 @@ func TestSyncTargetDatasetCreatesMissingFactorMetadata(t *testing.T) {
 
 	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
 		FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav"},
-		Outputs: []string{"excess_return"}, ParamsJSON: `{}`, LookbackRows: 5,
+		Outputs: []string{"excess_return"}, ParamsJSON: `{}`, LookbackPeriods: 5,
 		Status: domain.FactorStatusDisabled,
 	}})
 	require.NoError(t, err)
@@ -100,7 +100,7 @@ func TestSyncTargetDatasetDoesNotCreateFactorForNonNotFoundRetInfo(t *testing.T)
 
 			err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
 				FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav"},
-				Outputs: []string{"excess_return"}, ParamsJSON: `{}`, LookbackRows: 5,
+				Outputs: []string{"excess_return"}, ParamsJSON: `{}`, LookbackPeriods: 5,
 			}})
 			require.ErrorContains(t, err, "GetFactor")
 			require.Empty(t, client.createdFactors)

@@ -59,9 +59,12 @@ type EngineConfig struct {
 
 // SchedulerConfig describes runtime scheduling behavior.
 type SchedulerConfig struct {
-	EventBatchWindowMS int `yaml:"event_batch_window_ms"`
-	QueueCapacity      int `yaml:"queue_capacity"`
-	MaxRetry           int `yaml:"max_retry"`
+	EventBatchWindowMS     int           `yaml:"event_batch_window_ms"`
+	QueueCapacity          int           `yaml:"queue_capacity"`
+	MaxRetry               int           `yaml:"max_retry"`
+	ViewSettleDelay        time.Duration `yaml:"view_settle_delay"`
+	EventReadRetry         int           `yaml:"event_read_retry"`
+	EventReadRetryInterval time.Duration `yaml:"event_read_retry_interval"`
 }
 
 // Load reads YAML config from path and applies factor-specific env overrides.
@@ -109,6 +112,8 @@ func Default() *Config {
 		},
 		Scheduler: SchedulerConfig{
 			EventBatchWindowMS: 2000, QueueCapacity: 2048, MaxRetry: 1,
+			ViewSettleDelay: 300 * time.Millisecond, EventReadRetry: 3,
+			EventReadRetryInterval: 500 * time.Millisecond,
 		},
 	}
 }
@@ -162,6 +167,15 @@ func (c *Config) applyDefaults() {
 	if c.Scheduler.QueueCapacity <= 0 {
 		c.Scheduler.QueueCapacity = 2048
 	}
+	if c.Scheduler.ViewSettleDelay == 0 {
+		c.Scheduler.ViewSettleDelay = 300 * time.Millisecond
+	}
+	if c.Scheduler.EventReadRetryInterval == 0 {
+		c.Scheduler.EventReadRetryInterval = 500 * time.Millisecond
+	}
+	if c.Scheduler.EventReadRetry == 0 {
+		c.Scheduler.EventReadRetry = 3
+	}
 }
 
 func (c *Config) applyEnv() {
@@ -213,6 +227,15 @@ func splitEventBusURLs(value string) []string {
 func (c *Config) validateStorageTargets() error {
 	if c.Scheduler.MaxRetry < 0 {
 		return fmt.Errorf("scheduler.max_retry must be non-negative")
+	}
+	if c.Scheduler.ViewSettleDelay < 0 {
+		return fmt.Errorf("scheduler.view_settle_delay must be non-negative")
+	}
+	if c.Scheduler.EventReadRetry < 0 {
+		return fmt.Errorf("scheduler.event_read_retry must be non-negative")
+	}
+	if c.Scheduler.EventReadRetryInterval < 0 {
+		return fmt.Errorf("scheduler.event_read_retry_interval must be non-negative")
 	}
 	if !isTRPCTarget(c.Storage.GatewayTarget) {
 		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)

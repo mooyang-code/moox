@@ -89,6 +89,10 @@ func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 		serverless.SignedHTTPReadyCheck("gateway_ready", gatewayURL, nil, healthAuth),
 	}
 	if envDefaultTrue("MOOX_SCF_CANARY_ENABLED") {
+		seriesTag, err := scfCanarySeriesTag()
+		if err != nil {
+			return nil, err
+		}
 		storageOptions := gatewayauth.NewTRPCClientOptions(
 			runtimeapp.GetStorageRPCGatewayTarget(),
 			strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")),
@@ -96,9 +100,10 @@ func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 		)
 		checks = append(checks, serverless.StorageMarketCanaryCheck(storagepb.NewPrimaryStoreClientProxy(storageOptions...), serverless.MarketCanaryConfig{
 			SpaceID:              firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_SPACE_ID"), "crypto"),
-			DatasetID:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_DATASET_ID"), "binance_spot_kline_1h"),
+			DatasetID:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_DATASET_ID"), "spot_kline_1h"),
 			SubjectID:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_SUBJECT_ID"), "BTC-USDT"),
 			Frequency:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_FREQUENCY"), "1h"),
+			SeriesTag:            &seriesTag,
 			Freshness:            durationEnv("MOOX_SCF_CANARY_FRESHNESS", 150*time.Minute),
 			ReturnThreshold:      envFloat("MOOX_SCF_CANARY_RETURN_THRESHOLD", 0.05),
 			VolumeRatioThreshold: envFloat("MOOX_SCF_CANARY_VOLUME_RATIO_THRESHOLD", 5),
@@ -120,6 +125,14 @@ func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 		Enabled: true, ObserverID: "scf_sentinel", SpaceID: firstNonEmpty(os.Getenv("MOOX_SPACE_ID"), "crypto"),
 		Ready: runtimeapp.IsReady, Checks: checks, Events: events, Metrics: reporter, DirectSender: sender,
 	})
+}
+
+func scfCanarySeriesTag() (string, error) {
+	seriesTag, configured := os.LookupEnv("MOOX_SCF_CANARY_SERIES_TAG")
+	if !configured {
+		return "", fmt.Errorf("SCF watchdog requires MOOX_SCF_CANARY_SERIES_TAG")
+	}
+	return seriesTag, nil
 }
 
 func startSCFObservabilityServer(ctx context.Context) (*server.Server, error) {

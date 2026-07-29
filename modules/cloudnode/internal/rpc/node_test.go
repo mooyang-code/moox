@@ -405,6 +405,9 @@ func TestSCFWatchdogEnvironmentOnlyEnablesExplicitSelection(t *testing.T) {
 	for key := range scfWatchdogRuntimeEnvironment {
 		require.NotContains(t, environment, key)
 	}
+	for key := range scfCanaryRuntimeDefaults {
+		require.NotContains(t, environment, key)
+	}
 
 	_, _, err = requestedSCFWatchdog(map[string]string{scfWatchdogEnvironmentKey: "yes"})
 	require.ErrorContains(t, err, "must be true or false")
@@ -424,6 +427,34 @@ func TestSCFWatchdogEnvironmentInjectsAndRotatesServerOwnedSecrets(t *testing.T)
 	require.Equal(t, scfStorageAuthAppID, environment["MOOX_SCF_STORAGE_AUTH_APP_ID"])
 	require.NotEmpty(t, environment["MOOX_SCF_STORAGE_AUTH_APP_KEY"])
 	require.NotEqual(t, "primary-secret", environment["MOOX_SCF_STORAGE_AUTH_APP_KEY"])
+	require.Equal(t, "spot_kline_1h", environment["MOOX_SCF_CANARY_DATASET_ID"])
+	require.Equal(t, "1h", environment["MOOX_SCF_CANARY_FREQUENCY"])
+	require.Equal(t, "venue:binance", environment["MOOX_SCF_CANARY_SERIES_TAG"])
+}
+
+func TestSCFWatchdogEnvironmentSynchronizesConfiguredCanaryIdentity(t *testing.T) {
+	setSCFWatchdogRuntimeEnvironment(t, "")
+	t.Setenv("MOOX_SCF_CANARY_DATASET_ID", "perpetual_kline_1h")
+	t.Setenv("MOOX_SCF_CANARY_FREQUENCY", "4h")
+	t.Setenv("MOOX_SCF_CANARY_SERIES_TAG", "venue:okx")
+
+	environment, err := scfWatchdogEnvironment(nil, true)
+	require.NoError(t, err)
+	require.Equal(t, "perpetual_kline_1h", environment["MOOX_SCF_CANARY_DATASET_ID"])
+	require.Equal(t, "4h", environment["MOOX_SCF_CANARY_FREQUENCY"])
+	require.Equal(t, "venue:okx", environment["MOOX_SCF_CANARY_SERIES_TAG"])
+}
+
+func TestSCFWatchdogEnvironmentPreservesExplicitDefaultSeriesTag(t *testing.T) {
+	setSCFWatchdogRuntimeEnvironment(t, "")
+	t.Setenv("MOOX_SCF_CANARY_SERIES_TAG", "")
+
+	environment, err := scfWatchdogEnvironment(nil, true)
+	require.NoError(t, err)
+	require.Contains(t, environment, "MOOX_SCF_CANARY_SERIES_TAG")
+	require.Equal(t, "", environment["MOOX_SCF_CANARY_SERIES_TAG"])
+	require.Equal(t, "spot_kline_1h", environment["MOOX_SCF_CANARY_DATASET_ID"])
+	require.Equal(t, "1h", environment["MOOX_SCF_CANARY_FREQUENCY"])
 }
 
 func TestSCFWatchdogEnvironmentAllowsNotificationsToBeDisabled(t *testing.T) {

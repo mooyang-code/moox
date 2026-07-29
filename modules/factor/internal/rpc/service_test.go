@@ -579,7 +579,7 @@ func seedRPCFactorAndBinding(t *testing.T, db *store.Store, status string) {
 	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
-		LookbackRows: 20, Status: status,
+		LookbackPeriods: 20, Status: status,
 	}))
 	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{
 		BindingID: "bind", FactorID: "bias", SpaceID: "crypto", SourceDataset: "bars",
@@ -593,7 +593,7 @@ func seedRPCFactorDefinition(t *testing.T, db *store.Store, factorID string) {
 	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: factorID, Name: "TestFactor", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
-		LookbackRows: 2, Status: domain.FactorStatusEnabled,
+		LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
 	}))
 }
 
@@ -684,6 +684,6 @@ func genericFactorPB(id, name string, outputs []string) *factorpb.FactorDef {
 	return &factorpb.FactorDef{
 		FactorId: id, Name: name, SourceCode: "def compute(df, params): return {}",
 		InputColumns: []string{"close"}, Outputs: outputs, ParamsJson: `{}`,
-		LookbackRows: 20, Status: domain.FactorStatusEnabled,
+		LookbackPeriods: 20, Status: domain.FactorStatusEnabled,
 	}
 }

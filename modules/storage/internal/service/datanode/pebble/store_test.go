@@ -19,6 +19,7 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 	newer := "2026-07-19T00:00:00Z"
 	rows := []*pb.RowFieldUpsert{
 		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: old}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{}}}},
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: old, SeriesTag: "venue:okx"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{}}}},
 		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "x", Freq: "1d", DataTime: newer}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{}}}},
 	}
 	if err := s.UpsertFields(context.Background(), rows); err != nil {
@@ -27,6 +28,14 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 	deleted, err := s.CleanupExpiredBuckets(context.Background(), "s", "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
 	if err != nil || deleted != 1 {
 		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	}
+	removed, err := s.ReadFields(context.Background(), []*pb.RowKey{rows[0].GetKey(), rows[1].GetKey()}, []string{"f"}, nil)
+	if err != nil || len(removed) != 2 || len(removed[0].GetFields()) != 0 || len(removed[1].GetFields()) != 0 {
+		t.Fatalf("old bucket series were not removed: rows=%v err=%v", removed, err)
+	}
+	remaining, err := s.ReadFields(context.Background(), []*pb.RowKey{rows[2].GetKey()}, []string{"f"}, nil)
+	if err != nil || len(remaining) != 1 || len(remaining[0].GetFields()) != 1 {
+		t.Fatalf("newer bucket was removed: rows=%v err=%v", remaining, err)
 	}
 }
 
@@ -162,40 +171,67 @@ func TestUpsertFieldsExplicitNullReplacesStoredValue(t *testing.T) {
 	}
 }
 
-func TestHostMetricDimensionsKeepSameTimestampEntitiesDistinct(t *testing.T) {
+func TestSeriesTagsKeepSameTimestampRowsDistinct(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	key := func(device string) *pb.RowKey {
+	key := func(tag string) *pb.RowKey {
 		return &pb.RowKey{
-			SpaceId:   "moox_system",
-			DatasetId: "monitor_host_disk",
+			SpaceId:   "crypto",
+			DatasetId: "prices",
 			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-				SubjectId: "agent-1",
+				SubjectId: "BTC-USDT",
 				Freq:      "1m",
 				DataTime:  "2026-07-26T01:02:00Z",
-				Dimensions: map[string]string{
-					"device": device,
-				},
+				SeriesTag: tag,
 			}},
 		}
 	}
 	rows := []*pb.RowFieldUpsert{
-		{Key: key("disk0"), Fields: []*pb.FieldValue{{FieldId: "device", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "disk0"}}}}},
-		{Key: key("disk1"), Fields: []*pb.FieldValue{{FieldId: "device", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "disk1"}}}}},
+		{Key: key(""), Fields: []*pb.FieldValue{{FieldId: "venue", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "default"}}}}},
+		{Key: key("venue:binance"), Fields: []*pb.FieldValue{{FieldId: "venue", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "binance"}}}}, Attributes: map[string]*pb.TypedValue{"source": {Value: &pb.TypedValue_StringValue{StringValue: "stream-binance"}}}},
+		{Key: key("venue:okx"), Fields: []*pb.FieldValue{{FieldId: "venue", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "okx"}}}}},
 	}
 	if err := store.UpsertFields(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.ReadFields(context.Background(), []*pb.RowKey{key("disk0"), key("disk1")}, []string{"device"}, nil)
+	got, err := store.ReadFields(context.Background(), []*pb.RowKey{key(""), key("venue:binance"), key("venue:okx")}, []string{"venue"}, []string{"source"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].GetFields()[0].GetValue().GetStringValue() != "disk0" || got[1].GetFields()[0].GetValue().GetStringValue() != "disk1" {
-		t.Fatalf("dimensioned rows collided: %v", got)
+	if len(got) != 3 ||
+		got[0].GetFields()[0].GetValue().GetStringValue() != "default" ||
+		got[1].GetFields()[0].GetValue().GetStringValue() != "binance" ||
+		got[1].GetAttributes()["source"].GetStringValue() != "stream-binance" ||
+		got[2].GetFields()[0].GetValue().GetStringValue() != "okx" {
+		t.Fatalf("series-tagged rows collided: %v", got)
+	}
+}
+
+func TestSeriesTagSymbolsRoundTripWithoutRewriting(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for _, tag := range []string{"市场:现货", "venue/binance@spot+v2"} {
+		key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+			SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-26T01:02:00Z", SeriesTag: tag,
+		}}}
+		if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{
+			Key: key, Fields: []*pb.FieldValue{{FieldId: "tag", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: tag}}}},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"tag"}, nil)
+		if err != nil || len(got) != 1 || got[0].GetKey().GetTimeSeries().GetSeriesTag() != tag ||
+			got[0].GetFields()[0].GetValue().GetStringValue() != tag {
+			t.Fatalf("tag %q round trip: rows=%v err=%v", tag, got, err)
+		}
 	}
 }
 

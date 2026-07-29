@@ -79,6 +79,6 @@ func testFactor(id, status string) domain.FactorDef {
 		FactorID: id, Name: "Factor_" + id, SourceCode: "def compute(df, params): return {}",
 		SourceHash: "hash", InputColumns: []string{"close", "funding_rate"},
 		Outputs: []string{"bias_20", "bias_96"}, ParamsJSON: `{"windows":[20,96]}`,
-		LookbackRows: 200, Status: status,
+		LookbackPeriods: 200, Status: status,
 	}
 }

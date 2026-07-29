@@ -40,12 +40,13 @@ func buildMonitorMarketCanary(
 	for _, subject := range cfg.MarketCanary.Subjects {
 		canaryConfig := watchdog.MarketCanaryConfig{
 			SpaceID: subject.SpaceID, DatasetID: subject.DatasetID, SubjectID: subject.Symbol, Frequency: subject.Frequency,
+			SeriesTag: subject.SeriesTag,
 			Freshness: cfg.MarketCanary.Freshness, ReturnThreshold: cfg.MarketCanary.ReturnThreshold,
 			VolumeRatioThreshold: cfg.MarketCanary.VolumeRatioThreshold,
 		}
 		check := domain.Check{
 			SpaceID: canaryConfig.SpaceID, CheckID: watchdog.MarketCanaryCheckID(canaryConfig),
-			Name:      "Market canary " + strings.Join([]string{canaryConfig.DatasetID, canaryConfig.SubjectID, canaryConfig.Frequency}, "/"),
+			Name:      "Market canary " + watchdog.MarketCanaryTarget(canaryConfig),
 			GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceManual,
 			Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000,
 		}

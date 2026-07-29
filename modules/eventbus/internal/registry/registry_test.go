@@ -51,13 +51,13 @@ func TestReconcileCreateNoOpAndUnsafeChanges(t *testing.T) {
 	if _, err := r.Reconcile(ctx); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
-	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.storage.dataset.rows.upserted.v1.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
+	if _, err := js.AddConsumer("MOOX_CLOUDNODE_EXEC", &nats.ConsumerConfig{Name: "keep", Durable: "keep", FilterSubject: "moox.cloudnode.synthetic.obsolete.v1.>", AckPolicy: nats.AckExplicitPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Reconcile(ctx); err != nil {
 		t.Fatalf("reconcile with consumer: %v", err)
 	}
-	if _, err := js.ConsumerInfo("MOOX_STORAGE", "keep"); err != nil {
+	if _, err := js.ConsumerInfo("MOOX_CLOUDNODE_EXEC", "keep"); err != nil {
 		t.Fatalf("consumer state was not preserved: %v", err)
 	}
 	originalTTL := c.KV[0].MaxAge

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var stableIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
@@ -19,17 +20,19 @@ type PartitionKey struct {
 	DatasetID string `json:"dataset_id"`
 	SubjectID string `json:"subject_id"`
 	Freq      string `json:"freq"`
+	SeriesTag string `json:"series_tag"`
 	Month     string `json:"month"`
 }
 
 func EncodeIdentity(raw string) string {
-	if raw == "." || raw == ".." {
-		raw = strings.ReplaceAll(raw, ".", "%2E")
-	}
+	encodeDots := raw == "." || raw == ".."
 	var b strings.Builder
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
 		allowed := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.'
+		if encodeDots && c == '.' {
+			allowed = false
+		}
 		if c == '_' && i+1 < len(raw) && raw[i+1] == '_' {
 			allowed = false
 		}
@@ -53,6 +56,9 @@ func (k PartitionKey) Validate() error {
 	if k.SubjectID == "" || strings.ContainsRune(k.SubjectID, 0) {
 		return fmt.Errorf("subject_id is required")
 	}
+	if err := ValidateSeriesTag(k.SeriesTag); err != nil {
+		return err
+	}
 	if !monthPattern.MatchString(k.Month) {
 		return fmt.Errorf("invalid partition month %q", k.Month)
 	}
@@ -63,11 +69,36 @@ func (k PartitionKey) Validate() error {
 	return nil
 }
 
+func ValidateSeriesTag(tag string) error {
+	if !utf8.ValidString(tag) {
+		return fmt.Errorf("series_tag must be valid UTF-8")
+	}
+	if len(tag) > 128 {
+		return fmt.Errorf("series_tag must not exceed 128 bytes")
+	}
+	if strings.TrimSpace(tag) != tag {
+		return fmt.Errorf("series_tag must not have leading or trailing whitespace")
+	}
+	for i := 0; i < len(tag); i++ {
+		if tag[i] < 0x20 || tag[i] == 0x7f {
+			return fmt.Errorf("series_tag must not contain ASCII control characters")
+		}
+	}
+	return nil
+}
+
 func (k PartitionKey) FileName() (string, error) {
 	if err := k.Validate(); err != nil {
 		return "", err
 	}
-	return strings.Join([]string{EncodeIdentity(k.SpaceID), EncodeIdentity(k.DatasetID), EncodeIdentity(k.SubjectID), EncodeIdentity(k.Freq), k.Month}, "__") + ".parquet", nil
+	return strings.Join([]string{
+		EncodeIdentity(k.SpaceID),
+		EncodeIdentity(k.DatasetID),
+		EncodeIdentity(k.SubjectID),
+		EncodeIdentity(k.Freq),
+		"series_tag=" + EncodeIdentity(k.SeriesTag),
+		k.Month,
+	}, "__") + ".parquet", nil
 }
 
 func (k PartitionKey) RelativePath() (string, error) {
@@ -75,7 +106,14 @@ func (k PartitionKey) RelativePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(EncodeIdentity(k.SpaceID), EncodeIdentity(k.DatasetID), EncodeIdentity(k.Freq), EncodeIdentity(k.SubjectID), name), nil
+	return filepath.Join(
+		EncodeIdentity(k.SpaceID),
+		EncodeIdentity(k.DatasetID),
+		EncodeIdentity(k.Freq),
+		EncodeIdentity(k.SubjectID),
+		"series_tag="+EncodeIdentity(k.SeriesTag),
+		name,
+	), nil
 }
 
 func (k PartitionKey) AbsolutePath(root string) (string, error) {
@@ -100,8 +138,8 @@ func ParseFileName(name string) (PartitionKey, error) {
 		return PartitionKey{}, fmt.Errorf("not a parquet archive filename")
 	}
 	parts := strings.Split(strings.TrimSuffix(name, ".parquet"), "__")
-	if len(parts) != 5 {
-		return PartitionKey{}, fmt.Errorf("archive filename must contain five fields")
+	if len(parts) != 6 {
+		return PartitionKey{}, fmt.Errorf("archive v2 filename must contain six fields including series_tag")
 	}
 	space, err := DecodeIdentity(parts[0])
 	if err != nil {
@@ -119,7 +157,18 @@ func ParseFileName(name string) (PartitionKey, error) {
 	if err != nil {
 		return PartitionKey{}, err
 	}
-	k := PartitionKey{SpaceID: space, DatasetID: dataset, SubjectID: subject, Freq: freq, Month: parts[4]}
+	if !strings.HasPrefix(parts[4], "series_tag=") {
+		return PartitionKey{}, fmt.Errorf("archive v2 filename is missing series_tag")
+	}
+	tagEncoded := strings.TrimPrefix(parts[4], "series_tag=")
+	tag, err := DecodeIdentity(tagEncoded)
+	if err != nil {
+		return PartitionKey{}, err
+	}
+	if EncodeIdentity(tag) != tagEncoded {
+		return PartitionKey{}, fmt.Errorf("non-canonical series_tag encoding")
+	}
+	k := PartitionKey{SpaceID: space, DatasetID: dataset, SubjectID: subject, Freq: freq, SeriesTag: tag, Month: parts[5]}
 	if err := k.Validate(); err != nil {
 		return PartitionKey{}, err
 	}
@@ -127,9 +176,46 @@ func ParseFileName(name string) (PartitionKey, error) {
 }
 
 func PartitionID(k PartitionKey) string {
-	return digest(strings.Join([]string{k.SpaceID, k.DatasetID, k.SubjectID, k.Freq, k.Month}, "\n"))
+	return digest(strings.Join([]string{k.SpaceID, k.DatasetID, k.Freq, k.SubjectID, k.SeriesTag, k.Month}, "\n"))
 }
-func LogicalRowID(t time.Time, dimensionsJSON string) string {
-	return digest(fmt.Sprintf("%d\n%s", t.UTC().UnixNano(), dimensionsJSON))
+func LogicalRowID(t time.Time) string {
+	return digest(fmt.Sprintf("%d", t.UTC().UnixNano()))
 }
 func digest(raw string) string { sum := sha256.Sum256([]byte(raw)); return hex.EncodeToString(sum[:]) }
+
+func ParseArchivePath(path string) (PartitionKey, error) {
+	key, err := ParseFileName(filepath.Base(path))
+	if err != nil {
+		return PartitionKey{}, err
+	}
+	canonicalName, err := key.FileName()
+	if err != nil {
+		return PartitionKey{}, err
+	}
+	if filepath.Base(path) != canonicalName {
+		return PartitionKey{}, fmt.Errorf("archive filename is not canonically encoded")
+	}
+	expected := []string{
+		EncodeIdentity(key.SpaceID),
+		EncodeIdentity(key.DatasetID),
+		EncodeIdentity(key.Freq),
+		EncodeIdentity(key.SubjectID),
+		"series_tag=" + EncodeIdentity(key.SeriesTag),
+	}
+	dir := filepath.Dir(filepath.Clean(path))
+	actual := make([]string, len(expected))
+	for i := len(actual) - 1; i >= 0; i-- {
+		base := filepath.Base(dir)
+		if base == "." || base == string(filepath.Separator) || base == "" {
+			return PartitionKey{}, fmt.Errorf("archive v2 path is missing partition directories")
+		}
+		actual[i] = base
+		dir = filepath.Dir(dir)
+	}
+	for i := range expected {
+		if actual[i] != expected[i] {
+			return PartitionKey{}, fmt.Errorf("archive path parent identity mismatch: got %q, want %q", actual[i], expected[i])
+		}
+	}
+	return key, nil
+}

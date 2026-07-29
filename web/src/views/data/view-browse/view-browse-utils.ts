@@ -45,6 +45,7 @@ export interface KlineTableRow {
   key: string;
   version: string;
   freq?: string;
+  seriesTag?: string;
   values: Record<string, string>;
 }
 
@@ -155,7 +156,11 @@ export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | u
     const valueType = filter.valueType || "FIELD_VALUE_TYPE_STRING";
 
     if (filter.operator === "empty") {
-      out.push({ column: fieldName, op: "FILTER_OP_EQ", values: [{ null_value: "NULL_VALUE_NULL" }] });
+      out.push({
+        column: fieldName,
+        op: "FILTER_OP_EQ",
+        values: [fieldName === "series_tag" ? { string_value: "" } : { null_value: "NULL_VALUE_NULL" }]
+      });
       continue;
     }
     if (filter.operator === "not_empty") {
@@ -216,8 +221,17 @@ export function klineRowsHaveFreq(rows: KlineTableRow[]) {
   return rows.some(row => isMeaningfulKlineText(row.freq));
 }
 
-export function buildKlineChartRecords(rows: KlineTableRow[], subjectId = ""): KlineChartRecord[] {
-  return buildKlineRecords(rows, subjectId).map(item => item.record);
+export function buildKlineChartRecords(rows: KlineTableRow[], subjectId: string, seriesTag: string): KlineChartRecord[] {
+  return buildKlineRecords(rows, subjectId, seriesTag).map(item => item.record);
+}
+
+export function exactSeriesTagFromFilters(filters: ViewFilterState[]) {
+  const filter = filters.find(item => item.fieldName.trim() === "series_tag");
+  if (!filter) return undefined;
+  if (filter.operator === "empty") return "";
+  if (filter.operator !== "eq") return undefined;
+  const value = (filter.value || "").trim();
+  return value || undefined;
 }
 
 function readableViewColumnLabel(columnName: string) {
@@ -329,10 +343,11 @@ function parseKlineTimestamp(value: string) {
   return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
-function buildKlineRecords(rows: KlineTableRow[], subjectId = "") {
-  const exactRows = subjectId ? rows.filter(row => row.key === subjectId) : [];
-  const fuzzyRows = subjectId ? rows.filter(row => row.key.includes(subjectId)) : [];
-  const sourceRows = exactRows.length > 0 ? exactRows : fuzzyRows.length > 0 ? fuzzyRows : rows;
+function buildKlineRecords(rows: KlineTableRow[], subjectId: string, seriesTag: string) {
+  const taggedRows = rows.filter(row => row.seriesTag === seriesTag);
+  const exactRows = subjectId ? taggedRows.filter(row => row.key === subjectId) : [];
+  const fuzzyRows = subjectId ? taggedRows.filter(row => row.key.includes(subjectId)) : [];
+  const sourceRows = exactRows.length > 0 ? exactRows : fuzzyRows.length > 0 ? fuzzyRows : taggedRows;
   const recordsByTime = new Map<number, { record: KlineChartRecord }>();
 
   for (const row of sourceRows) {

@@ -20,17 +20,18 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	if cfg.Archive.DeviceID != "parquet-local" || cfg.Health.Addr != "127.0.0.1:11416" {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
-	if cfg.Archive.EventBus.Consumer != "moox_archive_kline_v1" {
+	if cfg.Archive.EventBus.Consumer != "moox_archive_kline_v2" {
 		t.Fatalf("eventbus topology reference = %#v", cfg.Archive.EventBus)
 	}
 	if cfg.Archive.EventBus.CredentialFile != "" {
 		t.Fatalf("default eventbus credential file = %q, want empty for development", cfg.Archive.EventBus.CredentialFile)
 	}
-	want := []string{"crypto_binance", "crypto_okx", "stock_cn", "stock_us"}
+	want := []string{"crypto", "stock_cn", "stock_us"}
 	got := cfg.SourceSpaceIDs()
 	if len(got) != len(want) {
 		t.Fatalf("SourceSpaceIDs() = %v, want %v", got, want)
 	}
+	assert.Equal(t, []string{"spot_kline_1h", "perpetual_kline_1h"}, cfg.Archive.Sources["crypto"].Datasets)
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("SourceSpaceIDs() = %v, want %v", got, want)
@@ -79,6 +80,16 @@ func TestAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml") {
 		t.Fatal("app config does not name the archive EventBus credential file")
+	}
+}
+
+func TestCheckedInAppConfigLoadsWithV2Defaults(t *testing.T) {
+	cfg, err := Load("../../config/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Archive.EventBus.Consumer != ArchiveConsumer || len(cfg.Archive.Sources["crypto"].Datasets) != 2 {
+		t.Fatalf("checked-in config is not v2-ready: %#v", cfg.Archive)
 	}
 }
 

@@ -20,7 +20,7 @@ import (
 )
 
 func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
-	storageSubject := "moox.storage.dataset.rows.upserted.v1.>"
+	storageSubject := "moox.storage.dataset.rows.upserted.v2.>"
 	ns, err := server.NewServer(&server.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -76,33 +76,44 @@ func TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pull.Close()
-	h := eventconsumer.NewHandler(eventconsumer.NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}}), store, nil)
+	h := eventconsumer.NewHandler(eventconsumer.NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}}), store, nil)
 	runner := eventconsumer.NewRunner(pull, h, 16)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runErr := make(chan error, 1)
 	go func() { runErr <- runner.Run(ctx) }()
 
-	publish := func(id, dataTime, close string) {
-		event := &sharedpb.DatasetRowsUpserted{SpaceId: "crypto_binance", DatasetId: "spot_kline", Rows: []*sharedpb.RowUpsert{{Key: &sharedpb.RowKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", Kind: &sharedpb.RowKey_TimeSeries{TimeSeries: &sharedpb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: dataTime}}}, Fields: []*sharedpb.FieldValue{{FieldId: "close", Value: &sharedpb.TypedValue{Value: &sharedpb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}
+	publish := func(id, dataTime, tag, close string) {
+		event := &sharedpb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "spot_kline_1h", Rows: []*sharedpb.RowUpsert{{Key: &sharedpb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline_1h", Kind: &sharedpb.RowKey_TimeSeries{TimeSeries: &sharedpb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1h", DataTime: dataTime, SeriesTag: tag}}}, Fields: []*sharedpb.FieldValue{{FieldId: "close", Value: &sharedpb.TypedValue{Value: &sharedpb.TypedValue_DoubleValue{DoubleValue: parseFloat(t, close)}}}}}}}
 		_, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, event, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: event.GetSpaceId(), SubjectID: event.GetDatasetId()})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	publish("e1", "2026-06-30T23:59:00Z", "100")
-	publish("e2", "2026-06-30T23:59:00Z", "101")
-	publish("e3", "2026-07-01T00:00:00Z", "102")
+	publish("e1", "2026-06-30T23:59:00Z", "venue:binance", "100")
+	publish("e2", "2026-06-30T23:59:00Z", "venue:okx", "200")
+	publish("e3", "2026-06-30T23:59:00Z", "", "300")
+	publish("e4", "2026-06-30T23:59:00Z", "venue:binance", "101")
+	publish("e5", "2026-07-01T00:00:00Z", "venue:binance", "102")
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if err := w.WriteDirty(context.Background(), 100); err == nil {
-			june := domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", Freq: "1m", Month: "202606"}
-			july := domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", Freq: "1m", Month: "202607"}
+			june := domain.PartitionKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202606"}
+			okx := june
+			okx.SeriesTag = "venue:okx"
+			defaultTag := june
+			defaultTag.SeriesTag = ""
+			july := june
+			july.Month = "202607"
 			jp, _ := june.AbsolutePath(root)
+			op, _ := okx.AbsolutePath(root)
+			dp, _ := defaultTag.AbsolutePath(root)
 			yp, _ := july.AbsolutePath(root)
 			jr, _, _, je := parquetio.Read(jp)
+			or, _, _, oe := parquetio.Read(op)
+			dr, _, _, de := parquetio.Read(dp)
 			yr, _, _, ye := parquetio.Read(yp)
-			if je == nil && ye == nil && len(jr) == 1 && len(yr) == 1 {
+			if je == nil && oe == nil && de == nil && ye == nil && len(jr) == 1 && len(or) == 1 && len(dr) == 1 && len(yr) == 1 && *jr[0].Columns["close"].Double == 101 && *or[0].Columns["close"].Double == 200 {
 				return
 			}
 		}

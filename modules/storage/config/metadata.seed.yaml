@@ -86,7 +86,7 @@ views:
     name: 现货行情视图
     primary_dataset_id: binance_spot_kline
     dataset_ids: [binance_spot_kline]
-    grain_keys: [subject_id, freq, data_time]
+    grain_keys: [subject_id, freq, data_time, series_tag]
     engine: duckdb
     keep_duration: 4320h
     status: active

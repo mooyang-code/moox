@@ -14,6 +14,7 @@ import (
 	eventconsumer "github.com/mooyang-code/moox/modules/archive/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/archive/internal/health"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
+	"github.com/mooyang-code/moox/modules/archive/internal/partitionlock"
 	"github.com/mooyang-code/moox/modules/archive/internal/registry"
 	"github.com/mooyang-code/moox/modules/archive/internal/writer"
 	"github.com/mooyang-code/moox/packages/events"
@@ -49,13 +50,17 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.State = state
 	state.CosEnabled = a.Config.Archive.COS.Enabled
+	if err := validateArchivePaths(ctx, a.Config.Archive.RootDir); err != nil {
+		return fmt.Errorf("validate archive root: %w", err)
+	}
 	store, err := journal.Open(a.Config.Archive.StateDir)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
-	state.JournalReady.Store(true)
+	partitionLocks := partitionlock.New()
 	w := writer.New(store, a.Config.Archive.RootDir, a.Config.Archive.Materialize.RowGroupRows)
+	w.SetPartitionLocker(partitionLocks)
 	w.SetWorkers(a.Config.Archive.Materialize.Workers)
 	storageCredentials, err := gatewayauth.ResolveCredentials(a.Config.Archive.StorageRPC.KeyID, a.Config.Archive.StorageRPC.HMACKeyFile)
 	if err != nil {
@@ -66,6 +71,10 @@ func (a *App) Run(ctx context.Context) error {
 	if err := w.Recover(ctx); err != nil {
 		return err
 	}
+	if err := validateArchiveRoot(ctx, a.Config.Archive.RootDir, store); err != nil {
+		return fmt.Errorf("validate archive root: %w", err)
+	}
+	state.JournalReady.Store(true)
 	var moduleMetrics *report.ModuleMetrics
 	if a.Server != nil {
 		moduleMetrics, err = registerMetricsReporter(a.Server)
@@ -87,6 +96,8 @@ func (a *App) Run(ctx context.Context) error {
 		cosSyncer = &cosstore.Syncer{
 			Client: cosClient, Root: a.Config.Archive.RootDir, Prefix: a.Config.Archive.COS.Prefix,
 			Workers: a.Config.Archive.COS.Workers, SyncOpenPartitions: a.Config.Archive.COS.SyncOpenPartitions,
+			Journal: store, Registry: registry.PartitionRegistry{Client: metadataRegistry, DeviceID: a.Config.Archive.DeviceID},
+			PartitionLocks: partitionLocks,
 		}
 	}
 	if a.Server != nil {

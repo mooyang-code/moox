@@ -39,8 +39,8 @@ func NormalizeFactorDefinition(factor FactorDef) (FactorDef, error) {
 	if err != nil {
 		return FactorDef{}, err
 	}
-	if factor.LookbackRows < 1 {
-		return FactorDef{}, fmt.Errorf("lookback_rows must be at least 1")
+	if factor.LookbackPeriods < 1 {
+		return FactorDef{}, fmt.Errorf("lookback_periods must be at least 1")
 	}
 	return factor, nil
 }
@@ -56,8 +56,8 @@ func normalizeColumns(field string, values []string) ([]string, error) {
 		if value == "" {
 			return nil, fmt.Errorf("%s contains an empty column", field)
 		}
-		if value == "data_time" {
-			return nil, fmt.Errorf("%s contains reserved column data_time", field)
+		if value == "data_time" || value == "series_tag" {
+			return nil, fmt.Errorf("%s contains reserved column %s", field, value)
 		}
 		if _, ok := seen[value]; ok {
 			continue

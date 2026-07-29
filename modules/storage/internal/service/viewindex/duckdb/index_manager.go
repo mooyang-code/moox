@@ -5,7 +5,6 @@ package duckdb
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -18,7 +17,6 @@ import (
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb/v2"
-	"github.com/mooyang-code/moox/modules/storage/internal/rowidentity"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -42,6 +40,29 @@ func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 	}
 	if err := os.MkdirAll(opts.Root, 0o755); err != nil {
 		return nil, err
+	}
+	entries, err := os.ReadDir(opts.Root)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".duckdb") {
+			continue
+		}
+		db, err := open(filepath.Join(opts.Root, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("open existing duckdb view %q: %w", entry.Name(), err)
+		}
+		validateCtx, cancelValidate := context.WithTimeout(context.TODO(), 30*time.Second)
+		validateErr := validateSystemSchema(validateCtx, db)
+		cancelValidate()
+		closeErr := db.Close()
+		if validateErr != nil {
+			return nil, fmt.Errorf("validate existing duckdb view %q: %w", entry.Name(), validateErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close existing duckdb view %q: %w", entry.Name(), closeErr)
+		}
 	}
 	return &IndexManager{root: opts.Root, dbs: make(map[string]*sql.DB), schema: make(map[string]map[string]pb.FieldValueType), dataset: make(map[string]string), space: make(map[string]string)}, nil
 }
@@ -68,7 +89,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		"subject_id VARCHAR NOT NULL",
 		"freq VARCHAR NOT NULL",
 		"data_time TIMESTAMP_NS NOT NULL",
-		"dimensions_json VARCHAR NOT NULL",
+		"series_tag VARCHAR NOT NULL",
 	}
 	for name, valueType := range columns {
 		if isSystemColumn(name) {
@@ -79,7 +100,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 	statement := fmt.Sprintf(`
 		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL);
 		CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
-		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, dimensions_json));
+		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
 		CREATE INDEX idx_view_rows_data_time ON view_rows (data_time);`, strings.Join(createColumns, ", "))
 	if _, err := db.ExecContext(ctx, statement); err != nil {
 		_ = db.Close()
@@ -150,7 +171,7 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 }
 
 func upsertColumnNames(columns map[string]pb.FieldValueType) []string {
-	names := []string{"subject_id", "freq", "data_time", "dimensions_json"}
+	names := []string{"subject_id", "freq", "data_time", "series_tag"}
 	for name := range columns {
 		if isSystemColumn(name) {
 			continue
@@ -172,9 +193,9 @@ func upsertSQL(names []string, mode viewindex.WriteMode) string {
 		}
 		sets = append(sets, set)
 	}
-	conflict := "ON CONFLICT (subject_id, freq, data_time, dimensions_json) DO NOTHING"
+	conflict := "ON CONFLICT (subject_id, freq, data_time, series_tag) DO NOTHING"
 	if len(sets) > 0 {
-		conflict = "ON CONFLICT (subject_id, freq, data_time, dimensions_json) DO UPDATE SET " + strings.Join(sets, ", ")
+		conflict = "ON CONFLICT (subject_id, freq, data_time, series_tag) DO UPDATE SET " + strings.Join(sets, ", ")
 	}
 	return fmt.Sprintf("INSERT INTO view_rows (%s) VALUES (%s) %s", joinQuoted(names), placeholders, conflict)
 }
@@ -187,10 +208,6 @@ func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewind
 	when, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
 	if err != nil {
 		return nil, fmt.Errorf("invalid data_time: %w", err)
-	}
-	dimensions, err := rowidentity.CanonicalDimensions(key.GetDimensions())
-	if err != nil {
-		return nil, fmt.Errorf("invalid dimensions: %w", err)
 	}
 	values := make(map[string]any, len(write.Fields)+len(write.Attributes))
 	for _, field := range write.Fields {
@@ -217,7 +234,7 @@ func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewind
 		values[name] = value
 	}
 	args := make([]any, 0, len(names))
-	args = append(args, key.GetSubjectId(), key.GetFreq(), when, dimensions)
+	args = append(args, key.GetSubjectId(), key.GetFreq(), when, key.GetSeriesTag())
 	for _, name := range names[4:] {
 		args = append(args, values[name])
 	}
@@ -253,7 +270,7 @@ type whereClause struct {
 }
 
 func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[string]pb.FieldValueType, spaceID, datasetID string, spec viewindex.QuerySpec, where string, args []any) ([]*pb.RowFieldValues, error) {
-	selectColumns := []string{"subject_id", "freq", "data_time", "dimensions_json"}
+	selectColumns := []string{"subject_id", "freq", "data_time", "series_tag"}
 	for name := range columns {
 		if !isSystemColumn(name) && (len(spec.Includes) == 0 || contains(spec.Includes, name)) {
 			selectColumns = append(selectColumns, name)
@@ -261,7 +278,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 	}
 	sort.Strings(selectColumns[4:])
 	query := "SELECT " + joinQuoted(selectColumns) + " FROM view_rows" + where
-	query += orderSQL(spec.Sorts, columns)
+	query += orderSQL(spec.Sorts, spec.Order, columns)
 	limit := spec.Limit
 	if limit <= 0 {
 		limit = 1000
@@ -290,11 +307,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		if err != nil {
 			return nil, err
 		}
-		dimensions, err := parseDimensions(valueString(values[3]))
-		if err != nil {
-			return nil, err
-		}
-		row := &pb.RowFieldValues{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Freq: valueString(values[1]), DataTime: dataTime, Dimensions: dimensions}}}}
+		row := &pb.RowFieldValues{Key: &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: valueString(values[0]), Freq: valueString(values[1]), DataTime: dataTime, SeriesTag: valueString(values[3])}}}}
 		for index, name := range selectColumns[4:] {
 			value := values[index+4]
 			if value == nil {
@@ -309,22 +322,6 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		result = append(result, row)
 	}
 	return result, rows.Err()
-}
-
-func parseDimensions(raw string) (map[string]string, error) {
-	if raw == "" || raw == "{}" {
-		return nil, nil
-	}
-	var dimensions map[string]string
-	if err := json.Unmarshal([]byte(raw), &dimensions); err != nil {
-		return nil, fmt.Errorf("parse dimensions: %w", err)
-	}
-	for key := range dimensions {
-		if strings.TrimSpace(key) == "" {
-			return nil, errors.New("dimension names must not be empty")
-		}
-	}
-	return dimensions, nil
 }
 
 func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, error) {
@@ -426,6 +423,10 @@ func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[st
 	if err != nil {
 		return nil, nil, "", "", err
 	}
+	if err := validateSystemSchema(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, nil, "", "", err
+	}
 	columns := make(map[string]pb.FieldValueType)
 	rows, err := db.QueryContext(ctx, `SELECT column_name, value_type FROM view_columns`)
 	if err != nil {
@@ -479,6 +480,60 @@ func open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
+func validateSystemSchema(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info('view_rows')`)
+	if err != nil {
+		return invalidSchemaError(err)
+	}
+	defer rows.Close()
+	found := make(map[string]bool)
+	systemTypes := map[string]string{
+		"subject_id": "VARCHAR",
+		"freq":       "VARCHAR",
+		"data_time":  "TIMESTAMP_NS",
+		"series_tag": "VARCHAR",
+	}
+	for rows.Next() {
+		var cid int
+		var notNull, primary bool
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primary); err != nil {
+			return invalidSchemaError(err)
+		}
+		_, _ = cid, primary
+		if isSystemColumn(name) {
+			if !strings.EqualFold(columnType, systemTypes[name]) {
+				return invalidSchemaError(fmt.Errorf("system column %q has type %s, want %s", name, columnType, systemTypes[name]))
+			}
+			found[name] = notNull
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return invalidSchemaError(err)
+	}
+	for _, name := range []string{"subject_id", "freq", "data_time", "series_tag"} {
+		if !found[name] {
+			return invalidSchemaError(fmt.Errorf("required NOT NULL system column %q is missing", name))
+		}
+	}
+	var primaryKey string
+	if err := db.QueryRowContext(ctx, `
+		SELECT array_to_string(constraint_column_names, ',')
+		FROM duckdb_constraints()
+		WHERE table_name = 'view_rows' AND constraint_type = 'PRIMARY KEY'`).Scan(&primaryKey); err != nil {
+		return invalidSchemaError(err)
+	}
+	if primaryKey != "subject_id,freq,data_time,series_tag" {
+		return invalidSchemaError(fmt.Errorf("primary key is (%s), want (subject_id,freq,data_time,series_tag)", primaryKey))
+	}
+	return nil
+}
+
+func invalidSchemaError(cause error) error {
+	return fmt.Errorf("duckdb view schema is incompatible; clean the index and rebuild it: %w", cause)
+}
+
 func schemaColumns(columns []*pb.ViewColumn) map[string]pb.FieldValueType {
 	out := make(map[string]pb.FieldValueType, len(columns))
 	for _, column := range columns {
@@ -491,7 +546,7 @@ func schemaColumns(columns []*pb.ViewColumn) map[string]pb.FieldValueType {
 }
 
 func isSystemColumn(name string) bool {
-	return name == "subject_id" || name == "freq" || name == "data_time" || name == "dimensions_json"
+	return name == "subject_id" || name == "freq" || name == "data_time" || name == "series_tag"
 }
 
 func duckType(valueType pb.FieldValueType) string {
@@ -647,33 +702,33 @@ func buildWhere(spec viewindex.QuerySpec, columns map[string]pb.FieldValueType) 
 				return whereClause{}, nil, errors.New("duckdb query key must be time-series")
 			}
 			row := key.GetTimeSeries()
-			dimensions, err := rowidentity.CanonicalDimensions(row.GetDimensions())
-			if err != nil {
-				return whereClause{}, nil, err
-			}
 			if row.GetDataTime() == "" {
-				if len(row.GetDimensions()) == 0 {
-					keys = append(keys, "(subject_id = ? AND freq = ?)")
-					args = append(args, row.GetSubjectId(), row.GetFreq())
-				} else {
-					keys = append(keys, "(subject_id = ? AND freq = ? AND dimensions_json = ?)")
-					args = append(args, row.GetSubjectId(), row.GetFreq(), dimensions)
-				}
-				continue
+				return whereClause{}, nil, errors.New("duckdb exact query key data_time is required")
 			}
 			when, err := time.Parse(time.RFC3339Nano, row.GetDataTime())
 			if err != nil {
 				return whereClause{}, nil, err
 			}
-			if len(row.GetDimensions()) == 0 {
-				keys = append(keys, "(subject_id = ? AND freq = ? AND data_time = ?)")
-				args = append(args, row.GetSubjectId(), row.GetFreq(), when)
-			} else {
-				keys = append(keys, "(subject_id = ? AND freq = ? AND data_time = ? AND dimensions_json = ?)")
-				args = append(args, row.GetSubjectId(), row.GetFreq(), when, dimensions)
-			}
+			keys = append(keys, "(subject_id = ? AND freq = ? AND data_time = ? AND series_tag = ?)")
+			args = append(args, row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag())
 		}
 		parts = append(parts, "("+strings.Join(keys, " OR ")+")")
+	}
+	if len(spec.Selectors) != 0 {
+		selectors := make([]string, 0, len(spec.Selectors))
+		for _, selector := range spec.Selectors {
+			if selector.SubjectID == "" || selector.Freq == "" {
+				return whereClause{}, nil, errors.New("duckdb selector subject_id and freq are required")
+			}
+			part := "(subject_id = ? AND freq = ?"
+			args = append(args, selector.SubjectID, selector.Freq)
+			if selector.SeriesTag != nil {
+				part += " AND series_tag = ?"
+				args = append(args, *selector.SeriesTag)
+			}
+			selectors = append(selectors, part+")")
+		}
+		parts = append(parts, "("+strings.Join(selectors, " OR ")+")")
 	}
 	if spec.TimeRange != nil {
 		if value := spec.TimeRange.GetStartTime(); value != "" {
@@ -702,16 +757,12 @@ func buildWhere(spec viewindex.QuerySpec, columns map[string]pb.FieldValueType) 
 		if err != nil {
 			return whereClause{}, nil, err
 		}
-		dimensions, err := rowidentity.CanonicalDimensions(row.GetDimensions())
-		if err != nil {
-			return whereClause{}, nil, err
-		}
-		parts = append(parts, "(subject_id > ? OR (subject_id = ? AND freq > ?) OR (subject_id = ? AND freq = ? AND data_time > ?) OR (subject_id = ? AND freq = ? AND data_time = ? AND dimensions_json > ?))")
+		parts = append(parts, "(subject_id > ? OR (subject_id = ? AND freq > ?) OR (subject_id = ? AND freq = ? AND data_time > ?) OR (subject_id = ? AND freq = ? AND data_time = ? AND series_tag > ?))")
 		args = append(args,
 			row.GetSubjectId(),
 			row.GetSubjectId(), row.GetFreq(),
 			row.GetSubjectId(), row.GetFreq(), when,
-			row.GetSubjectId(), row.GetFreq(), when, dimensions,
+			row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag(),
 		)
 	}
 	filter, filterArgs, err := filterSQL(spec.Groups, spec.GroupLogical, columns)
@@ -828,8 +879,21 @@ func conditionSQL(cond viewindex.Filter, valueType pb.FieldValueType) (string, [
 	}
 }
 
-func orderSQL(sorts []*pb.SortSpec, columns map[string]pb.FieldValueType) string {
-	parts := make([]string, 0, len(sorts))
+func orderSQL(sorts []*pb.SortSpec, order pb.SortOrder, columns map[string]pb.FieldValueType) string {
+	identity := []string{"subject_id", "freq", "data_time", "series_tag"}
+	if len(sorts) == 0 {
+		direction := "ASC"
+		if order == pb.SortOrder_SORT_ORDER_DESC {
+			direction = "DESC"
+		}
+		parts := make([]string, 0, len(identity))
+		for _, name := range identity {
+			parts = append(parts, quote(name)+" "+direction)
+		}
+		return " ORDER BY " + strings.Join(parts, ", ")
+	}
+	parts := make([]string, 0, len(sorts)+len(identity))
+	seen := make(map[string]struct{}, len(sorts))
 	for _, sortSpec := range sorts {
 		if sortSpec == nil || !identifierRE.MatchString(sortSpec.GetFieldName()) {
 			continue
@@ -837,14 +901,20 @@ func orderSQL(sorts []*pb.SortSpec, columns map[string]pb.FieldValueType) string
 		if !isSystemColumn(sortSpec.GetFieldName()) && !containsKey(columns, sortSpec.GetFieldName()) {
 			continue
 		}
+		if _, exists := seen[sortSpec.GetFieldName()]; exists {
+			continue
+		}
 		direction := "ASC"
 		if sortSpec.GetDesc() {
 			direction = "DESC"
 		}
 		parts = append(parts, quote(sortSpec.GetFieldName())+" "+direction)
+		seen[sortSpec.GetFieldName()] = struct{}{}
 	}
-	if len(parts) == 0 {
-		parts = append(parts, `"data_time" ASC`)
+	for _, name := range identity {
+		if _, exists := seen[name]; !exists {
+			parts = append(parts, quote(name)+" ASC")
+		}
 	}
 	return " ORDER BY " + strings.Join(parts, ", ")
 }

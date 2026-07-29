@@ -2,12 +2,33 @@ package journal
 
 import (
 	"context"
+	"encoding/binary"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 )
+
+func TestOpenRejectsV1Journal(t *testing.T) {
+	dir := t.TempDir()
+	db, err := pebble.Open(dir, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := make([]byte, 4)
+	binary.BigEndian.PutUint32(raw, 1)
+	if err := db.Set([]byte("meta/version"), raw, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("expected v1 journal rejection")
+	}
+}
 
 func TestAppendEventIsAtomicAndSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
@@ -83,18 +104,20 @@ func openTestStore(t *testing.T, path string) *Store {
 }
 
 func fixturePartition() domain.PartitionKey {
-	return domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", Freq: "1m", Month: "202606"}
+	return domain.PartitionKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202606"}
 }
 
 func twoPartitions() []domain.PartitionKey {
-	return []domain.PartitionKey{fixturePartition(), {SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", Freq: "1h", Month: "202606"}}
+	other := fixturePartition()
+	other.SeriesTag = "venue:okx"
+	return []domain.PartitionKey{fixturePartition(), other}
 }
 
 func fixtureBatch(messageID string, partitions []domain.PartitionKey) domain.EventBatch {
 	rows := make([]domain.RowPatch, 0, len(partitions))
 	for i, partition := range partitions {
 		value := float64(i + 1)
-		rows = append(rows, domain.RowPatch{Partition: partition, DataTime: time.Date(2026, 6, 1, 0, i, 0, 0, time.UTC), DimensionsJSON: "{}", Attributes: map[string]string{}, WrittenAt: time.Now().UTC(), Columns: map[string]domain.Scalar{"close": {Type: 3, Double: &value}}})
+		rows = append(rows, domain.RowPatch{Partition: partition, DataTime: time.Date(2026, 6, 1, 0, i, 0, 0, time.UTC), Attributes: map[string]string{}, WrittenAt: time.Now().UTC(), Columns: map[string]domain.Scalar{"close": {Type: 3, Double: &value}}})
 	}
 	return domain.EventBatch{MessageID: messageID, Rows: rows}
 }

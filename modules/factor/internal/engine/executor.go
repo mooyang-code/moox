@@ -104,14 +104,13 @@ func (e *PythonExecutor) Execute(ctx context.Context, task *FactorTask, frame *D
 		Encoding:   protocol.EncodingJSON,
 		Meta:       raw,
 	}
-	loads := make([]process.LoadRequest, 0, len(task.Factors))
-	for _, factor := range task.Factors {
-		if factor.SourcePath != "" {
-			loads = append(loads, process.LoadRequest{
-				LogicalID: factor.Name, SourceHash: factor.SourceHash,
-				Path: factor.SourcePath, ModuleType: "factor",
-			})
-		}
+	factor := task.Factor
+	var loads []process.LoadRequest
+	if factor.SourcePath != "" {
+		loads = append(loads, process.LoadRequest{
+			LogicalID: factor.Name, SourceHash: factor.SourceHash,
+			Path: factor.SourcePath, ModuleType: "factor",
+		})
 	}
 	var response process.RunResult
 	if len(loads) > 0 {

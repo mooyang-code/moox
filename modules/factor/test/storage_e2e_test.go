@@ -269,10 +269,10 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		assert.NoError(collect, readErr)
 		if readErr == nil {
 			sourceChunk = chunk
-			assert.Equal(collect, []time.Time{first, second}, chunk.TargetTimes)
+			assert.Equal(collect, []time.Time{first, second}, chunk.TargetPeriods)
 		}
 	}, 20*time.Second, 250*time.Millisecond, "source rows were not materialized")
-	require.Equal(t, []time.Time{first, second}, sourceChunk.TargetTimes)
+	require.Equal(t, []time.Time{first, second}, sourceChunk.TargetPeriods)
 	require.Equal(t, []string{"benchmark_return", "nav"}, sourceChunk.Frame.Columns)
 
 	sourceCode := `def compute(df, params):
@@ -286,7 +286,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		FactorId: factorID, Name: factorName, SourceCode: sourceCode,
 		InputColumns: []string{"nav", "benchmark_return"},
 		Outputs:      []string{"excess_return", "rolling_rank"},
-		ParamsJson:   `{"window":2}`, LookbackRows: 2, Status: "disabled",
+		ParamsJson:   `{"window":2}`, LookbackPeriods: 2, Status: "disabled",
 	}})
 	require.NoError(t, err)
 	requireStorageRet(t, "FactorMgr.CreateFactor", createFactorRsp.GetRetInfo())
@@ -347,7 +347,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			FactorId: factorID, Name: factorName, SourceCode: nullSource,
 			InputColumns: []string{"nav", "benchmark_return"},
 			Outputs:      []string{"excess_return", "rolling_rank"},
-			ParamsJson:   `{"window":2}`, LookbackRows: 2, Status: "enabled",
+			ParamsJson:   `{"window":2}`, LookbackPeriods: 2, Status: "enabled",
 		},
 	})
 	require.NoError(t, err)
@@ -513,7 +513,7 @@ func waitForViewQueryable(
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		rsp, err := view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
 			AuthInfo: auth, SpaceId: spaceID, ViewId: viewID,
-			Keys: []*storagepb.TimeSeriesKey{{
+			Selectors: []*storagepb.TimeSeriesSelector{{
 				SpaceId: spaceID, DatasetId: datasetID, SubjectId: subjectID, Freq: freq,
 			}},
 			TimeRange: &storagepb.TimeRange{
@@ -561,7 +561,7 @@ func waitForViewRows(
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		rsp, err := view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
 			AuthInfo: auth, SpaceId: spaceID, ViewId: viewID,
-			Keys: []*storagepb.TimeSeriesKey{{
+			Selectors: []*storagepb.TimeSeriesSelector{{
 				SpaceId: spaceID, DatasetId: targetID, SubjectId: subjectID, Freq: freq,
 			}},
 			TimeRange: &storagepb.TimeRange{

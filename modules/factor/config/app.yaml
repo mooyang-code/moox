@@ -29,3 +29,6 @@ scheduler:
   event_batch_window_ms: 2000
   queue_capacity: 2048
   max_retry: 1
+  view_settle_delay: 300ms
+  event_read_retry: 3
+  event_read_retry_interval: 500ms

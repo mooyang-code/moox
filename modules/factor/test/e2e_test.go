@@ -31,13 +31,13 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 	factorPath := filepath.Join(factorsDir, "ExcessReturn.py")
 	source := []byte(`def compute(df, params):
     excess = df["nav"] - df["benchmark_return"]
-    return {
-        "excess_return": excess,
-        "rolling_rank": excess.rolling(
-            int(params["window"]),
-            min_periods=1,
-        ).rank(),
-    }
+    result = df[["data_time", "series_tag"]].copy()
+    result["excess_return"] = excess
+    result["rolling_rank"] = excess.rolling(
+        int(params["window"]),
+        min_periods=1,
+    ).rank()
+    return result
 `)
 	require.NoError(t, os.WriteFile(factorPath, source, 0o600))
 	sum := sha256.Sum256(source)
@@ -126,12 +126,12 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 		SourceDataset: requests[0].SourceDataset, TargetDataset: requests[0].TargetDataset,
 		SubjectID: requests[0].SubjectID, Freq: requests[0].Freq,
 		StartTime: requests[0].StartTime, EndTime: requests[0].EndTime,
-	}, []domain.FactorDef{{
+	}, domain.FactorDef{
 		FactorID: "excess-return", Name: "ExcessReturn", SourceHash: hex.EncodeToString(sum[:]),
 		SourcePath: factorPath, InputColumns: []string{"nav", "benchmark_return"},
 		Outputs: []string{"excess_return", "rolling_rank"}, ParamsJSON: `{"window":2}`,
-		LookbackRows: 2, Status: domain.FactorStatusEnabled,
-	}}, factorsDir)
+		LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
+	}, factorsDir)
 	require.NoError(t, err)
 
 	pythonExec, err := engine.NewPythonExecutor(context.Background(), 1, process.Config{
@@ -146,14 +146,16 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 	require.NoError(t, service.Drain(context.Background()))
 
 	require.Equal(t, 1, storage.writes)
-	require.Equal(t, []string{"benchmark_return", "nav"}, storage.requestedColumns)
+	require.ElementsMatch(t, []string{"benchmark_return", "nav"}, storage.requestedColumns)
 	for _, forbidden := range []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"} {
 		require.False(t, slices.Contains(storage.requestedColumns, forbidden), "implicit OHLCV column %q", forbidden)
 	}
-	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, mapKeys(storage.result.Columns))
+	require.Len(t, storage.result.Rows, 2)
 	require.Equal(t, []time.Time{first, second}, storage.writtenTimes)
-	require.Equal(t, []any{0.04, 0.16}, storage.result.Columns["excess_return"])
-	require.Equal(t, []any{1.0, 2.0}, storage.result.Columns["rolling_rank"])
+	require.Equal(t, 0.04, storage.result.Rows[0].Values["excess_return"])
+	require.Equal(t, 1.0, storage.result.Rows[0].Values["rolling_rank"])
+	require.Equal(t, 0.16, storage.result.Rows[1].Values["excess_return"])
+	require.Equal(t, 2.0, storage.result.Rows[1].Values["rolling_rank"])
 }
 
 func eventRow(spaceID, datasetID, subjectID, freq string, at time.Time) *storagepb.RowUpsert {
@@ -185,17 +187,30 @@ func (s *storageFake) ReadRangeChunk(_ context.Context, _ storageio.WindowKey, s
 				valuesFor(columns, map[string]any{"nav": 0.05, "benchmark_return": 0.01}),
 				valuesFor(columns, map[string]any{"nav": 0.18, "benchmark_return": 0.02}),
 			},
-			DataTimes: append([]time.Time(nil), s.targets...),
+			DataTimes:  append([]time.Time(nil), s.targets...),
+			SeriesTags: []string{"venue:binance", "venue:binance"},
 		},
-		TargetTimes: append([]time.Time(nil), s.targets...),
+		TargetPeriods: append([]time.Time(nil), s.targets...), Complete: true,
 	}, nil
 }
 
-func (s *storageFake) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, times []time.Time, result *engine.FactorResult) (uint64, error) {
+func (s *storageFake) ExpandEndByPeriods(
+	_ context.Context,
+	_ storageio.WindowKey,
+	end time.Time,
+	_ int,
+) (time.Time, error) {
+	return end, nil
+}
+
+func (s *storageFake) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, result *engine.FactorResult) (uint64, error) {
 	s.writes++
-	s.writtenTimes = append([]time.Time(nil), times...)
+	s.writtenTimes = make([]time.Time, 0, len(result.Rows))
+	for _, row := range result.Rows {
+		s.writtenTimes = append(s.writtenTimes, row.DataTime)
+	}
 	s.result = result
-	return uint64(len(times)), nil
+	return uint64(len(result.Rows)), nil
 }
 
 func valuesFor(columns []string, values map[string]any) []any {
@@ -204,12 +219,4 @@ func valuesFor(columns []string, values map[string]any) []any {
 		row[i] = values[column]
 	}
 	return row
-}
-
-func mapKeys(values map[string][]any) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	return keys
 }

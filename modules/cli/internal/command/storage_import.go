@@ -36,7 +36,8 @@ var storageImportCmd = &cobra.Command{
 示例:
   moox-cli storage import --format csv --file ~/Downloads/ARB-USDT.csv \
     --access-url http://127.0.0.1:20201 --metadata-url http://127.0.0.1:20200 \
-    --space crypto --dataset binance_spot_kline --subject ARB-USDT --freq 1m \
+    --space crypto --dataset spot_kline_1h --subject ARB-USDT --freq 1m \
+    --series-tag venue:binance \
     --time-column candle_begin_time
 
   moox-cli storage import --file ~/Downloads/ARB-USDT.csv --dry-run \
@@ -72,7 +73,7 @@ type storageImportOptions struct {
 	DataSourceID string
 	Freq         string
 	TimeColumn   string
-	Dimensions   []string
+	SeriesTag    string
 	BatchSize    int
 	DryRun       bool
 }
@@ -107,6 +108,7 @@ type storageImportSummary struct {
 	DatasetID         string `json:"dataset"`
 	SubjectID         string `json:"subject"`
 	Freq              string `json:"freq,omitempty"`
+	SeriesTag         string `json:"series_tag"`
 	ValidatedRows     int    `json:"validated_rows"`
 	WrittenRows       int    `json:"written_rows,omitempty"`
 	WouldUpsertFields int    `json:"would_upsert_fields,omitempty"`
@@ -226,6 +228,7 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		DatasetID:     opts.DatasetID,
 		SubjectID:     opts.SubjectID,
 		Freq:          opts.Freq,
+		SeriesTag:     opts.SeriesTag,
 		ValidatedRows: result.Stats.ValidatedRows,
 	}
 	if opts.DryRun {
@@ -449,10 +452,6 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 	if err != nil {
 		return storageImportParseResult{}, err
 	}
-	dimensions, err := parseStorageImportDimensions(ctx.Options.Dimensions)
-	if err != nil {
-		return storageImportParseResult{}, err
-	}
 	var result storageImportParseResult
 	line := 1
 	for {
@@ -482,11 +481,20 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 				SubjectId: ctx.Options.SubjectID,
 				Freq:      ctx.Options.Freq,
 				DataTime:  dataTime,
+				SeriesTag: ctx.Options.SeriesTag,
 			},
-			Attributes: dimensions,
 		}
 		for index, name := range normalizedHeader {
 			if name == "" || name == ctx.Options.TimeColumn {
+				continue
+			}
+			if isStorageImportKeyColumn(name) {
+				if name == "series_tag" && index < len(record) && record[index] != ctx.Options.SeriesTag {
+					return storageImportParseResult{}, fmt.Errorf(
+						"row %d series_tag %q does not match --series-tag %q",
+						line, record[index], ctx.Options.SeriesTag,
+					)
+				}
 				continue
 			}
 			column := ctx.Columns[name]
@@ -516,36 +524,6 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 		return storageImportParseResult{}, fmt.Errorf("CSV %s has no data rows", path)
 	}
 	return result, nil
-}
-
-func parseStorageImportDimensions(values []string) (map[string]string, error) {
-	if len(values) == 0 {
-		return nil, nil
-	}
-	dimensions := make(map[string]string, len(values))
-	for _, raw := range values {
-		item := strings.TrimSpace(raw)
-		if item == "" {
-			continue
-		}
-		parts := strings.SplitN(item, "=", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("dimension %q must use name=value format", raw)
-		}
-		name := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		if name == "" || value == "" {
-			return nil, fmt.Errorf("dimension %q must use non-empty name=value format", raw)
-		}
-		if _, ok := dimensions[name]; ok {
-			return nil, fmt.Errorf("duplicate dimension %s", name)
-		}
-		dimensions[name] = value
-	}
-	if len(dimensions) == 0 {
-		return nil, nil
-	}
-	return dimensions, nil
 }
 
 func readStorageCSVHeader(reader *csv.Reader, timeColumn string) ([]string, error) {
@@ -583,6 +561,9 @@ func validateStorageCSVHeader(header []string, ctx storageImportContext) ([]stri
 			timeIndex = index
 			continue
 		}
+		if isStorageImportKeyColumn(name) {
+			continue
+		}
 		if _, ok := ctx.Columns[name]; !ok {
 			return nil, -1, fmt.Errorf("CSV column %s is not registered in dataset %s", name, ctx.Options.DatasetID)
 		}
@@ -598,6 +579,15 @@ func validateStorageCSVHeader(header []string, ctx storageImportContext) ([]stri
 		}
 	}
 	return normalized, timeIndex, nil
+}
+
+func isStorageImportKeyColumn(name string) bool {
+	switch name {
+	case "space_id", "dataset_id", "subject_id", "freq", "data_time", "series_tag":
+		return true
+	default:
+		return false
+	}
 }
 
 func emptyCSVRecord(record []string) bool {
@@ -759,7 +749,9 @@ func storageImportUpserts(rows []*pb.TimeSeriesRow) []*pb.RowFieldUpsert {
 			attributes[name] = &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}
 		}
 		out = append(out, &pb.RowFieldUpsert{
-			Key:    &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime()}}},
+			Key: &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
+			}}},
 			Fields: row.GetFields(), Attributes: attributes,
 		})
 	}
@@ -779,7 +771,7 @@ func init() {
 	storageImportCmd.Flags().StringVar(&storageImportFlags.DataSourceID, "data-source", "", "可选 DataSource ID；传入时校验 dataset 归属")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.Freq, "freq", "", "时序频率，例如 1m/1h/1d")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.TimeColumn, "time-column", "candle_begin_time", "CSV 时间列名")
-	storageImportCmd.Flags().StringArrayVar(&storageImportFlags.Dimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.SeriesTag, "series-tag", "", "序列标签；为空表示默认序列")
 	storageImportCmd.Flags().IntVar(&storageImportFlags.BatchSize, "batch-size", defaultStorageImportBatchSize, "每批写入行数")
 	storageImportCmd.Flags().BoolVar(&storageImportFlags.DryRun, "dry-run", false, "只校验并输出导入计划，不绑定 subject，不写入数据")
 }

@@ -43,16 +43,17 @@ func TestBuildSchedulerTaskUsesRealtimeHalfOpenRange(t *testing.T) {
 	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
-		LookbackRows: 100, Status: domain.FactorStatusEnabled,
+		LookbackPeriods: 100, Status: domain.FactorStatusEnabled,
 	}))
 	at := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
 	end := at.Add(3*time.Minute + time.Nanosecond)
-	task, ok, err := buildSchedulerTask(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
+	tasks, err := buildSchedulerTasks(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: end, FactorIDs: []string{"bias"},
 	})
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.Len(t, tasks, 1)
+	task := tasks[0]
 	require.Equal(t, at, task.StartTime)
 	require.Equal(t, end, task.EndTime)
 	require.Equal(t, scheduler.DeterministicTaskID(task), task.TaskID)
@@ -66,14 +67,14 @@ func TestDisabledFactorMakesRealtimeTaskNoop(t *testing.T) {
 	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
-		LookbackRows: 100, Status: domain.FactorStatusDisabled,
+		LookbackPeriods: 100, Status: domain.FactorStatusDisabled,
 	}))
-	_, ok, err := buildSchedulerTask(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
+	tasks, err := buildSchedulerTasks(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
 		SpaceID: "crypto", SourceDataset: "bars", SubjectID: "BTC", Freq: "1m",
 		StartTime: time.Now(), EndTime: time.Now().Add(time.Nanosecond), FactorIDs: []string{"bias"},
 	})
 	require.NoError(t, err)
-	require.False(t, ok)
+	require.Empty(t, tasks)
 }
 
 func TestRealtimeConsumerReadyWhenEventBusDisabled(t *testing.T) {

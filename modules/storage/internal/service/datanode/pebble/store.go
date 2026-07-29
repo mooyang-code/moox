@@ -78,6 +78,9 @@ func Open(opts Options) (*Store, error) {
 	if opts.ProcessedEventRetention <= 0 {
 		opts.ProcessedEventRetention = defaultProcessedEventRetention
 	}
+	if err := ensureLayout(opts.Path); err != nil {
+		return nil, err
+	}
 	db, err := cpebble.Open(opts.Path, &cpebble.Options{})
 	if err != nil {
 		return nil, err

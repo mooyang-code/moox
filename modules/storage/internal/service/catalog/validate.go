@@ -15,6 +15,13 @@ var lowerSnakeIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 const maxChineseDisplayNameRunes = 10
 
+var reservedTimeSeriesSystemColumns = map[string]struct{}{
+	"subject_id": {},
+	"freq":       {},
+	"data_time":  {},
+	"series_tag": {},
+}
+
 func datasetSupportsFreq(dataset *pb.Dataset, freq string) bool {
 	for _, item := range dataset.GetFreqs() {
 		if strings.TrimSpace(item) == freq {
@@ -26,7 +33,7 @@ func datasetSupportsFreq(dataset *pb.Dataset, freq string) bool {
 
 func defaultViewGrainKeys(kind pb.DataKind) []string {
 	if kind == pb.DataKind_DATA_KIND_TIME_SERIES {
-		return []string{"subject_id", "freq", "data_time"}
+		return []string{"subject_id", "freq", "data_time", "series_tag"}
 	}
 	return []string{"record_id", "version"}
 }
@@ -90,6 +97,9 @@ func validateLowerSnakeID(field string, value string, maxLen int) error {
 }
 
 func validateViewColumnName(column *pb.ViewColumn) error {
+	if err := validateUserColumnName("view column_name", column.GetColumnName()); err != nil {
+		return err
+	}
 	if column.GetOriginType() != pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
 		return nil
 	}
@@ -104,6 +114,26 @@ func validateViewColumnName(column *pb.ViewColumn) error {
 	}
 	if columnName != originID {
 		return errors.New("dataset view column column_name must equal origin_id and use dataset_id.column_name")
+	}
+	return nil
+}
+
+func validateUserColumnName(field string, name string) error {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if _, reserved := reservedTimeSeriesSystemColumns[name]; reserved {
+		return fmt.Errorf("%s %q is a reserved system column", field, name)
+	}
+	return nil
+}
+
+func validateViewColumns(columns []*pb.ViewColumn) error {
+	for _, column := range columns {
+		if column == nil {
+			continue
+		}
+		if err := validateViewColumnName(column); err != nil {
+			return err
+		}
 	}
 	return nil
 }

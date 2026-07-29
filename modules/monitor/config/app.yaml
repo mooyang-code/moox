@@ -47,9 +47,10 @@ market_canary:
   volume_ratio_threshold: 5
   subjects:
     - space_id: crypto
-      dataset_id: binance_spot_kline_1h
+      dataset_id: spot_kline_1h
       symbol: BTC-USDT
       frequency: 1h
+      series_tag: venue:binance
 
 metrics:
   enabled: true

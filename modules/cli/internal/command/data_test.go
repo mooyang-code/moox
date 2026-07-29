@@ -28,6 +28,25 @@ func TestDefaultAndRequiredFlagValue(t *testing.T) {
 	assert.Equal(t, "dataset-a", value)
 }
 
+func TestTimeSeriesSelectorSeriesTagPresence(t *testing.T) {
+	oldSpaceID, oldSubjectID, oldFreq, oldSeriesTag := dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag
+	t.Cleanup(func() {
+		dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag = oldSpaceID, oldSubjectID, oldFreq, oldSeriesTag
+	})
+	dataSpaceID, dataSubjectID, dataFreq, dataSeriesTag = "crypto", "BTC-USDT", "1h", ""
+	all := timeSeriesSelectorForExport("spot_kline_1h", false)
+	require.Nil(t, all.SeriesTag)
+
+	defaultSeries := timeSeriesSelectorForExport("spot_kline_1h", true)
+	require.NotNil(t, defaultSeries.SeriesTag)
+	assert.Equal(t, "", defaultSeries.GetSeriesTag())
+
+	dataSeriesTag = "venue:binance"
+	exact := timeSeriesSelectorForExport("spot_kline_1h", true)
+	require.NotNil(t, exact.SeriesTag)
+	assert.Equal(t, "venue:binance", exact.GetSeriesTag())
+}
+
 func TestDataPrimaryAuthUsesSecretFile(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "")
 	path := filepath.Join(t.TempDir(), "storage-auth.env")

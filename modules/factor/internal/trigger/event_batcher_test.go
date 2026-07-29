@@ -151,6 +151,30 @@ func TestEventBatcherMergesMultiRowEventIntoHalfOpenRange(t *testing.T) {
 	}
 }
 
+func TestEventBatcherMergesDifferentTagsWithoutAddingTagToTaskScope(t *testing.T) {
+	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	payload := multiRowEvent(
+		"crypto", "binance_spot_kline", "BTC-USDT", "1m",
+		now, now.Add(time.Minute),
+	)
+	payload.Rows[0].Key.GetTimeSeries().SeriesTag = "venue:binance"
+	payload.Rows[1].Key.GetTimeSeries().SeriesTag = "venue:okx"
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+
+	batcher.Add(payload, now)
+	tasks := flushPending(t, batcher, now.Add(time.Second))
+
+	if len(tasks) != 1 {
+		t.Fatalf("tasks=%+v, want one task across tags", tasks)
+	}
+	if !tasks[0].StartTime.Equal(now) ||
+		!tasks[0].EndTime.Equal(now.Add(time.Minute).Add(time.Nanosecond)) {
+		t.Fatalf("range=[%s,%s), want tag-independent event range", tasks[0].StartTime, tasks[0].EndTime)
+	}
+}
+
 func TestEventBatcherDuplicateRowDoesNotExpandRangeOrCreateTask(t *testing.T) {
 	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{

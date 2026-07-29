@@ -35,7 +35,18 @@ test("storage snapshot queries the target View without an empty subject selector
     verify.datasetSnapshotRequest({ space: "crypto" }),
     {
       space_id: "crypto",
-      view_id: "binance_spot_1h_view",
+      view_id: "spot_kline_1h_view",
+      filter: {
+        groups: [{
+          conds: [{
+            column: "series_tag",
+            op: "FILTER_OP_EQ",
+            values: [{ string_value: "venue:binance" }],
+          }],
+          logical: "FILTER_LOGICAL_AND",
+        }],
+        group_logical: "FILTER_LOGICAL_AND",
+      },
       time_range: { start_time: "1970-01-01T00:00:00Z" },
       sorts: [{ field_name: "data_time", desc: true }],
       page: { page: 1, size: 200 },
@@ -48,12 +59,12 @@ test("storage write evidence derives an empty K-line result from rows_written", 
     job_item_id: "zero",
     space_id: "crypto",
     params: {
-      space_id: "crypto", dataset_id: "binance_spot_kline_1h", data_type: "kline",
+      space_id: "crypto", dataset_id: "spot_kline_1h", data_type: "kline",
       symbol: "BTCUSDT", subject_id: "BTC-USDT", interval: "1h",
     },
     result_summary: {
       tasks: [{
-        data_type: "kline", dataset_id: "binance_spot_kline_1h", freq: "1H",
+        data_type: "kline", dataset_id: "spot_kline_1h", freq: "1H",
         rows_written: 0,
       }],
     },
@@ -63,21 +74,22 @@ test("storage write evidence derives an empty K-line result from rows_written", 
 test("storage write evidence requires every successful JobItem and requested interval", () => {
   const key = {
     space_id: "crypto",
-    dataset_id: "binance_spot_kline_1h",
+    dataset_id: "spot_kline_1h",
     subject_id: "BTC-USDT",
     freq: "1H",
     data_time: "2026-07-27T06:00:00Z",
+    series_tag: "venue:binance",
   };
   const jobItems = [{
     job_item_id: "positive",
     space_id: "crypto",
     params: {
-      space_id: "crypto", dataset_id: "binance_spot_kline_1h", data_type: "kline",
+      space_id: "crypto", dataset_id: "spot_kline_1h", data_type: "kline",
       symbol: "BTCUSDT", subject_id: "BTC-USDT", interval: "1h",
     },
     result_summary: {
       tasks: [{
-        data_type: "kline", dataset_id: "binance_spot_kline_1h", freq: "1H",
+        data_type: "kline", dataset_id: "spot_kline_1h", freq: "1H",
         rows_written: 1, output_watermark: key.data_time,
       }],
     },
@@ -99,7 +111,7 @@ test("storage write evidence requires every successful JobItem and requested int
 
 test("TaskInstance persists the same write evidence as its JobItem", () => {
   const tasks = [{
-    data_type: "kline", dataset_id: "binance_spot_kline_1h", freq: "1H", rows_written: 0,
+    data_type: "kline", dataset_id: "spot_kline_1h", freq: "1H", rows_written: 0,
   }];
   assert.doesNotThrow(() => assertTaskInstanceWriteEvidence(
     [{ task_id: "task-1", cloud_job_item_id: "item-1", result: { tasks } }],
@@ -113,28 +125,40 @@ test("TaskInstance persists the same write evidence as its JobItem", () => {
 
 test("exact written RowKey read is forced through Storage Primary", () => {
   const key = {
-    space_id: "crypto", dataset_id: "binance_spot_kline_1h",
+    space_id: "crypto", dataset_id: "spot_kline_1h",
     subject_id: "BTC-USDT", freq: "1H", data_time: "2026-07-27T06:00:00Z",
+    series_tag: "venue:binance",
   };
   assert.deepEqual(primaryWrittenRowsRequest(
-    { space: "crypto", dataset: "binance_spot_kline_1h" },
-    [key],
+    { space: "crypto", dataset: "spot_kline_1h" },
+    key,
   ), {
-    space_id: "crypto",
-    dataset_id: "binance_spot_kline_1h",
-    keys: [key],
-    column_names: ["close"],
-    page: { page: 1, size: 1 },
+    keys: [{
+      space_id: key.space_id,
+      dataset_id: key.dataset_id,
+      time_series: {
+        subject_id: key.subject_id,
+        freq: key.freq,
+        data_time: key.data_time,
+        series_tag: key.series_tag,
+      },
+    }],
+    field_ids: ["close"],
   });
   assert.deepEqual(
     [...primaryRowsWithField([
-      { key, fields: [] },
-      { key: { ...key, subject_id: "ETH-USDT" }, fields: [{ field_id: "close", value: { double_value: 0 } }] },
+      { key: { space_id: key.space_id, dataset_id: key.dataset_id, time_series: {
+        subject_id: key.subject_id, freq: key.freq, data_time: key.data_time, series_tag: key.series_tag,
+      } }, fields: [] },
+      { key: { space_id: key.space_id, dataset_id: key.dataset_id, time_series: {
+        subject_id: "ETH-USDT", freq: key.freq, data_time: key.data_time, series_tag: key.series_tag,
+      } }, fields: [{ field_id: "close", value: { double_value: 0 } }] },
     ], "close")],
     [JSON.stringify({
       data_time: key.data_time,
       dataset_id: key.dataset_id,
       freq: key.freq,
+      series_tag: key.series_tag,
       space_id: key.space_id,
       subject_id: "ETH-USDT",
     })],

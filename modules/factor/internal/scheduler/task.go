@@ -19,35 +19,20 @@ type Task struct {
 
 // DeterministicTaskID identifies the executable task snapshot, independent of enqueue order.
 func DeterministicTaskID(task Task) string {
-	type encodedFactor struct {
-		factorID string
-		payload  string
-	}
-	factors := make([]encodedFactor, 0, len(task.Factors))
-	for _, factor := range task.Factors {
-		inputs := append([]string(nil), factor.InputColumns...)
-		outputs := append([]string(nil), factor.Outputs...)
-		sort.Strings(inputs)
-		sort.Strings(outputs)
-		factors = append(factors, encodedFactor{
-			factorID: factor.FactorID,
-			payload: encodeTaskIDParts(
-				factor.FactorID,
-				factor.Name,
-				factor.SourceHash,
-				factor.SourcePath,
-				encodeTaskIDParts(inputs...),
-				encodeTaskIDParts(outputs...),
-				factor.ParamsJSON,
-			),
-		})
-	}
-	sort.Slice(factors, func(i, j int) bool {
-		if factors[i].factorID != factors[j].factorID {
-			return factors[i].factorID < factors[j].factorID
-		}
-		return factors[i].payload < factors[j].payload
-	})
+	factor := task.Factor
+	inputs := append([]string(nil), factor.InputColumns...)
+	outputs := append([]string(nil), factor.Outputs...)
+	sort.Strings(inputs)
+	sort.Strings(outputs)
+	factorPayload := encodeTaskIDParts(
+		factor.FactorID,
+		factor.Name,
+		factor.SourceHash,
+		factor.SourcePath,
+		encodeTaskIDParts(inputs...),
+		encodeTaskIDParts(outputs...),
+		factor.ParamsJSON,
+	)
 
 	h := sha256.New()
 	write := func(value string) {
@@ -62,13 +47,11 @@ func DeterministicTaskID(task Task) string {
 		task.StartTime.UTC().Format(time.RFC3339Nano),
 		task.EndTime.UTC().Format(time.RFC3339Nano),
 		task.TriggerType,
-		strconv.Itoa(task.LookbackRows),
+		strconv.Itoa(task.LookbackPeriods),
 	} {
 		write(value)
 	}
-	for _, factor := range factors {
-		write("factor:" + factor.payload)
-	}
+	write("factor:" + factorPayload)
 	return fmt.Sprintf("ft-%x", h.Sum(nil)[:16])
 }
 
@@ -86,6 +69,7 @@ type taskKey struct {
 	targetDataset string
 	subjectID     string
 	freq          string
+	factorID      string
 }
 
 func keyOf(task Task) taskKey {
@@ -95,5 +79,6 @@ func keyOf(task Task) taskKey {
 		targetDataset: task.TargetDataset,
 		subjectID:     task.SubjectID,
 		freq:          task.Freq,
+		factorID:      task.Factor.FactorID,
 	}
 }

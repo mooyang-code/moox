@@ -65,7 +65,7 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const subject = "moox.storage.dataset.rows.upserted.v1.>"
+	const subject = "moox.storage.dataset.rows.upserted.v2.>"
 	if _, err := js.AddStream(&nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{subject}, Storage: nats.MemoryStorage}); err != nil {
 		t.Fatal(err)
 	}

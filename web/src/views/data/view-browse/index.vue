@@ -142,6 +142,18 @@
                       ></template
                     >
                   </a-table-column>
+                  <a-table-column data-index="seriesTag" :width="180">
+                    <template #title
+                      ><span class="sortable-title"
+                        >序列标签<span class="sort-arrows"
+                          ><button :class="sortArrowClass('series_tag', 'asc')" @click.stop="setSort('series_tag', 'asc')">▲</button
+                          ><button :class="sortArrowClass('series_tag', 'desc')" @click.stop="setSort('series_tag', 'desc')">
+                            ▼
+                          </button></span
+                        ></span
+                      ></template
+                    >
+                  </a-table-column>
                   <a-table-column data-index="version" :width="230">
                     <template #title
                       ><span class="sortable-title"
@@ -341,6 +353,7 @@ import {
   buildViewFilterExprs,
   buildViewSorts,
   DEFAULT_KLINE_LIMIT,
+  exactSeriesTagFromFilters,
   klineRowsHaveFreq,
   klineSubjectIdFromFilters,
   normalizeKlineLimit,
@@ -542,6 +555,7 @@ const filterFieldOptions = computed(() => {
   if (mode.value === "time_series") {
     push("subject_id", "数据ID", "FIELD_VALUE_TYPE_STRING");
     push("freq", "频率", "FIELD_VALUE_TYPE_STRING");
+    push("series_tag", "序列标签", "FIELD_VALUE_TYPE_STRING");
     push("data_time", "时间", "FIELD_VALUE_TYPE_TIME");
   } else if (mode.value === "record") {
     push("record_id", "记录ID", "FIELD_VALUE_TYPE_STRING");
@@ -723,7 +737,8 @@ async function loadTimeSeriesViewRows() {
     const rows = rsp.rows || [];
     tableRows.value = timeSeriesRowsToTableRows(rows).map((row, index) => ({
       ...row,
-      freq: rows[index]?.key?.freq || "-"
+      freq: rows[index]?.key?.freq || "-",
+      seriesTag: rows[index]?.key?.series_tag || ""
     }));
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
     timeSeriesPageResult.value = rsp.page_result;
@@ -808,7 +823,7 @@ function resetFilterRows() {
 function createFilterState(option?: FilterFieldOption): ViewFilterState {
   return {
     fieldName: option?.value || "",
-    operator: "contains",
+    operator: option?.value === "series_tag" ? "eq" : "contains",
     valueType: option?.valueType || "FIELD_VALUE_TYPE_STRING",
     value: "",
     startValue: "",
@@ -946,9 +961,14 @@ async function openKlineModal() {
     Message.warning("请先在数据ID检索框输入要查看的标的");
     return;
   }
+  const seriesTag = exactSeriesTagFromFilters(filters.value);
+  if (seriesTag === undefined) {
+    Message.warning("请先精确选择序列标签；默认序列请选择为空");
+    return;
+  }
 
   klineSubjectId.value = subjectId;
-  const ok = await loadKlineRecords(subjectId);
+  const ok = await loadKlineRecords(subjectId, seriesTag);
   if (!ok) return;
   klineVisible.value = true;
 }
@@ -959,11 +979,16 @@ async function reloadKlineRecords() {
     Message.warning("请先在数据ID检索框输入要查看的标的");
     return;
   }
+  const seriesTag = exactSeriesTagFromFilters(filters.value);
+  if (seriesTag === undefined) {
+    Message.warning("请先精确选择序列标签；默认序列请选择为空");
+    return;
+  }
   klineSubjectId.value = subjectId;
-  await loadKlineRecords(subjectId);
+  await loadKlineRecords(subjectId, seriesTag);
 }
 
-async function loadKlineRecords(subjectId: string) {
+async function loadKlineRecords(subjectId: string, seriesTag: string) {
   const view = activeView.value;
   if (!view) return false;
   klineLoading.value = true;
@@ -974,7 +999,7 @@ async function loadKlineRecords(subjectId: string) {
       return false;
     }
 
-    const records = buildKlineChartRecords(rows, subjectId);
+    const records = buildKlineChartRecords(rows, subjectId, seriesTag);
     if (records.length === 0) {
       Message.warning("当前结果缺少 open/high/low/close 字段，无法生成K线图");
       return false;
@@ -1015,7 +1040,8 @@ async function fetchKlineTableRows(viewId: string): Promise<ViewBrowseTableRow[]
   }
   return timeSeriesRowsToTableRows(rows).map((row, index) => ({
     ...row,
-    freq: rows[index]?.key?.freq || "-"
+    freq: rows[index]?.key?.freq || "-",
+    seriesTag: rows[index]?.key?.series_tag || ""
   }));
 }
 

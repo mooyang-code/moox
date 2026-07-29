@@ -13,7 +13,8 @@ func TestFactorSchemaContainsOnlyDefinitionAndBindingState(t *testing.T) {
 		"c_input_columns_json TEXT NOT NULL",
 		"c_outputs_json TEXT NOT NULL",
 		"c_params_json TEXT NOT NULL DEFAULT '{}'",
-		"CHECK (c_lookback_rows >= 1)",
+		"c_lookback_periods INTEGER NOT NULL",
+		"CHECK (c_lookback_periods >= 1)",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("AllSQL() missing %q", want)
@@ -27,6 +28,7 @@ func TestFactorSchemaContainsOnlyDefinitionAndBindingState(t *testing.T) {
 		"t_factor_event_processed",
 		"t_factor_replay_tasks",
 		"t_factor_runs",
+		"c_lookback_rows",
 	} {
 		if strings.Contains(sql, removed) {
 			t.Fatalf("factor schema still contains retired state %q", removed)

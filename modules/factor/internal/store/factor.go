@@ -54,8 +54,8 @@ func (r *FactorRepository) Update(ctx context.Context, factor domain.FactorDef) 
 			"c_source_code": factor.SourceCode, "c_source_hash": factor.SourceHash,
 			"c_source_path":        factor.SourcePath,
 			"c_input_columns_json": string(inputColumnsJSON), "c_params_json": factor.ParamsJSON,
-			"c_lookback_rows": factor.LookbackRows,
-			"c_mtime":         time.Now().UTC(),
+			"c_lookback_periods": factor.LookbackPeriods,
+			"c_mtime":            time.Now().UTC(),
 		})
 	if result.Error != nil {
 		return result.Error

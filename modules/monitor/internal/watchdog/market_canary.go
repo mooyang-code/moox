@@ -19,6 +19,7 @@ import (
 
 type MarketCanaryConfig struct {
 	SpaceID, DatasetID, SubjectID, Frequency string
+	SeriesTag                                *string
 	Freshness                                time.Duration
 	ReturnThreshold, VolumeRatioThreshold    float64
 }
@@ -48,7 +49,19 @@ var (
 )
 
 func MarketCanaryCheckID(config MarketCanaryConfig) string {
-	return strings.Join([]string{"market_canary", config.DatasetID, config.SubjectID, config.Frequency}, ":")
+	tag := "<missing>"
+	if config.SeriesTag != nil {
+		tag = *config.SeriesTag
+	}
+	return strings.Join([]string{"market_canary", config.DatasetID, config.SubjectID, config.Frequency, tag}, ":")
+}
+
+func MarketCanaryTarget(config MarketCanaryConfig) string {
+	tag := "<missing>"
+	if config.SeriesTag != nil {
+		tag = *config.SeriesTag
+	}
+	return strings.Join([]string{config.SpaceID, config.DatasetID, config.SubjectID, config.Frequency, tag}, "/")
 }
 
 func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
@@ -68,6 +81,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	}
 	if c.Reader == nil || strings.TrimSpace(config.SpaceID) == "" || strings.TrimSpace(config.DatasetID) == "" ||
 		strings.TrimSpace(config.SubjectID) == "" || strings.TrimSpace(config.Frequency) == "" ||
+		config.SeriesTag == nil ||
 		config.Freshness <= 0 || config.ReturnThreshold <= 0 || config.VolumeRatioThreshold <= 0 {
 		result.ErrorMessage = "invalid_config"
 		return result
@@ -81,9 +95,9 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 		AuthInfo: c.AuthInfo,
 		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
-		Keys: []*storagepb.TimeSeriesKey{{
+		Selectors: []*storagepb.TimeSeriesSelector{{
 			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
-			SubjectId: config.SubjectID, Freq: storageFrequency,
+			SubjectId: config.SubjectID, Freq: storageFrequency, SeriesTag: config.SeriesTag,
 		}},
 		Order:       storagepb.SortOrder_SORT_ORDER_DESC,
 		ColumnNames: []string{config.DatasetID + ".close", config.DatasetID + ".volume"},

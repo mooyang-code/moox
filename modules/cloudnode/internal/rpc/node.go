@@ -42,6 +42,12 @@ var scfWatchdogRuntimeEnvironment = map[string]string{
 	"MOOX_MSGBOX_WECOM_WEBHOOK": "MOOX_MSGBOX_WECOM_WEBHOOK",
 }
 
+var scfCanaryRuntimeDefaults = map[string]string{
+	"MOOX_SCF_CANARY_DATASET_ID": "spot_kline_1h",
+	"MOOX_SCF_CANARY_FREQUENCY":  "1h",
+	"MOOX_SCF_CANARY_SERIES_TAG": "venue:binance",
+}
+
 var scfWatchdogSelectionMu sync.Mutex
 
 func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.GetNodeListRsp, error) {
@@ -568,6 +574,9 @@ func scfWatchdogEnvironment(environment map[string]string, enabled bool) (map[st
 		for key := range scfWatchdogRuntimeEnvironment {
 			delete(result, key)
 		}
+		for key := range scfCanaryRuntimeDefaults {
+			delete(result, key)
+		}
 		delete(result, "MOOX_SCF_STORAGE_AUTH_APP_ID")
 		delete(result, "MOOX_SCF_STORAGE_AUTH_APP_KEY")
 		return result, nil
@@ -583,6 +592,21 @@ func scfWatchdogEnvironment(environment map[string]string, enabled bool) (map[st
 			continue
 		}
 		result[targetKey] = value
+	}
+	for targetKey, fallback := range scfCanaryRuntimeDefaults {
+		if targetKey == "MOOX_SCF_CANARY_SERIES_TAG" {
+			value, configured := os.LookupEnv(targetKey)
+			if configured {
+				result[targetKey] = value
+			} else {
+				result[targetKey] = fallback
+			}
+			continue
+		}
+		result[targetKey] = strings.TrimSpace(os.Getenv(targetKey))
+		if result[targetKey] == "" {
+			result[targetKey] = fallback
+		}
 	}
 	primarySecret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
 	if primarySecret == "" {

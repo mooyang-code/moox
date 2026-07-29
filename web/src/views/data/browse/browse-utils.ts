@@ -8,6 +8,7 @@ import type {
   RecordRow,
   DatasetSubject,
   Subject,
+  TimeSeriesSelector,
   TimeSeriesRow,
   TypedValue
 } from "@/api/storage/types";
@@ -22,6 +23,7 @@ export interface BrowseTableRow {
   id: string;
   key: string;
   version: string;
+  seriesTag?: string;
   values: Record<string, string>;
 }
 
@@ -35,6 +37,7 @@ const systemColumnLabels: Record<string, string> = {
   record_id: "记录ID",
   freq: "频率",
   data_time: "时间",
+  series_tag: "序列标签",
   version: "版本"
 };
 
@@ -166,12 +169,30 @@ export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, prefer
 }
 
 export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[]): BrowseTableRow[] {
-  return rows.map((row, index) => ({
-    id: `ts-${index}-${row.key?.subject_id || ""}-${row.key?.data_time || ""}`,
+  return rows.map(row => ({
+    id: `ts-${row.key?.subject_id || ""}-${row.key?.freq || ""}-${row.key?.series_tag || ""}-${row.key?.data_time || ""}`,
     key: row.key?.subject_id || "-",
     version: row.key?.data_time || "-",
+    seriesTag: row.key?.series_tag || "",
     values: fieldsToValueMap(row.fields || [])
   }));
+}
+
+export function buildTimeSeriesBrowseSelector(
+  spaceId: string,
+  datasetId: string,
+  subjectId: string,
+  freq: string,
+  seriesTag: string,
+  exactSeriesTag: boolean
+): TimeSeriesSelector {
+  return {
+    space_id: spaceId,
+    dataset_id: datasetId,
+    subject_id: subjectId,
+    freq,
+    ...(exactSeriesTag ? { series_tag: seriesTag.trim() } : {})
+  };
 }
 
 export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
@@ -196,6 +217,7 @@ export function sortBrowseTableRows(rows: BrowseTableRow[], fieldName: string, d
 function browseSortValue(row: BrowseTableRow, fieldName: string) {
   if (fieldName === "subject_id" || fieldName === "record_id") return row.key;
   if (fieldName === "data_time" || fieldName === "version") return row.version;
+  if (fieldName === "series_tag") return row.seriesTag || "";
   return row.values[fieldName] || "";
 }
 

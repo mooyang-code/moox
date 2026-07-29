@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,16 +18,21 @@ import (
 const maxTargetRowsPerChunk = 2000
 
 var ErrQueueFull = errors.New("factor scheduler queue is full")
+var ErrViewIncomplete = errors.New("factor source view is incomplete")
 
 type Config struct {
-	Workers       int
-	QueueCapacity int
-	MaxRetry      int
+	Workers                int
+	QueueCapacity          int
+	MaxRetry               int
+	ViewSettleDelay        time.Duration
+	EventReadRetry         int
+	EventReadRetryInterval time.Duration
 }
 
 type StorageIO interface {
 	ReadRangeChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, int, []string) (*storageio.RangeChunk, error)
-	WriteFactorPatch(context.Context, *engine.FactorTask, []time.Time, *engine.FactorResult) (uint64, error)
+	ExpandEndByPeriods(context.Context, storageio.WindowKey, time.Time, int) (time.Time, error)
+	WriteFactorPatch(context.Context, *engine.FactorTask, *engine.FactorResult) (uint64, error)
 }
 
 type DatasetRunObserver interface {
@@ -75,6 +79,15 @@ func NewService(cfg Config, storage StorageIO, exec engine.Executor, opts ...Opt
 	if cfg.MaxRetry < 0 {
 		cfg.MaxRetry = 0
 	}
+	if cfg.EventReadRetry < 0 {
+		cfg.EventReadRetry = 0
+	}
+	if cfg.ViewSettleDelay < 0 {
+		cfg.ViewSettleDelay = 0
+	}
+	if cfg.EventReadRetryInterval < 0 {
+		cfg.EventReadRetryInterval = 0
+	}
 	s := &Service{
 		cfg: cfg, storage: storage, exec: exec,
 		queues:  make([][]taskKey, cfg.Workers),
@@ -112,8 +125,8 @@ func (s *Service) Enqueue(ctx context.Context, task Task) error {
 		if task.EndTime.After(current.EndTime) {
 			current.EndTime = task.EndTime
 		}
-		current.Factors = task.Factors
-		current.LookbackRows = task.LookbackRows
+		current.Factor = task.Factor
+		current.LookbackPeriods = task.LookbackPeriods
 		current.TaskID = DeterministicTaskID(current)
 		s.pending[key] = current
 		return nil
@@ -250,44 +263,72 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 		return errors.New("valid start_time and end_time are required")
 	}
 	started := time.Now()
-	cursor := task.StartTime
 	chunks := 0
 	var runErr error
 	defer func() {
 		status := "succeeded"
 		if runErr != nil {
 			status = "failed"
+			result := "error"
+			if errors.Is(runErr, ErrViewIncomplete) {
+				result = "incomplete"
+			}
 			s.observeDatasetRun(ctx, report.DatasetObservation{
 				Key: report.DatasetKey{
 					SpaceID: task.SpaceID, DatasetID: task.TargetDataset, Freq: task.Freq,
 				},
-				Result: "error", FinishedAt: time.Now().UTC(),
+				Result: result, FinishedAt: time.Now().UTC(),
 			})
 		}
-		log.InfoContextf(ctx, "factor_task_done task_id=%s trigger_type=%s space_id=%s source_dataset=%s target_dataset=%s subject_id=%s freq=%s start_time=%s end_time=%s factor_count=%d chunk_count=%d status=%s task_elapsed_ms=%d error=%q",
+		log.InfoContextf(ctx, "factor_task_done task_id=%s trigger_type=%s space_id=%s source_dataset=%s target_dataset=%s subject_id=%s freq=%s start_time=%s end_time=%s factor_id=%s chunk_count=%d status=%s task_elapsed_ms=%d error=%q",
 			task.TaskID, task.TriggerType, task.SpaceID, task.SourceDataset, task.TargetDataset,
 			task.SubjectID, task.Freq, task.StartTime.UTC().Format(time.RFC3339Nano),
-			task.EndTime.UTC().Format(time.RFC3339Nano), len(task.Factors), chunks, status,
+			task.EndTime.UTC().Format(time.RFC3339Nano), task.Factor.FactorID, chunks, status,
 			time.Since(started).Milliseconds(), errorString(runErr))
 	}()
-	for cursor.Before(task.EndTime) {
-		var chunk *storageio.RangeChunk
-		var result *engine.FactorResult
+	if task.TriggerType == "event" {
+		if err := sleepContext(ctx, s.cfg.ViewSettleDelay); err != nil {
+			runErr = err
+			return runErr
+		}
 		runErr = s.withRetry(ctx, func() error {
-			var err error
-			chunk, err = s.storage.ReadRangeChunk(ctx, storageio.WindowKey{
+			expanded, err := s.storage.ExpandEndByPeriods(ctx, storageio.WindowKey{
 				SpaceID: task.SpaceID, SourceDataset: task.SourceDataset,
 				SubjectID: task.SubjectID, Freq: task.Freq,
-			}, cursor, task.EndTime, task.LookbackRows, maxTargetRowsPerChunk, inputColumns(task.Factors))
+			}, task.EndTime, task.LookbackPeriods-1)
 			if err != nil {
 				return engine.RetryableError{Err: err}
 			}
-			if chunk == nil || len(chunk.TargetTimes) == 0 {
-				return nil
+			if expanded.After(task.EndTime) {
+				task.EndTime = expanded
 			}
+			return nil
+		})
+		if runErr != nil {
+			return runErr
+		}
+	}
+	cursor := task.StartTime
+	for cursor.Before(task.EndTime) {
+		chunk, err := s.readReadyChunk(ctx, task, cursor)
+		if err != nil {
+			runErr = err
+			return runErr
+		}
+		if chunk == nil || len(chunk.TargetPeriods) == 0 {
+			s.observeDatasetRun(ctx, report.DatasetObservation{
+				Key: report.DatasetKey{
+					SpaceID: task.SpaceID, DatasetID: task.TargetDataset, Freq: task.Freq,
+				},
+				Result: "empty", FinishedAt: time.Now().UTC(),
+			})
+			return nil
+		}
+		var result *engine.FactorResult
+		runErr = s.withRetry(ctx, func() error {
 			chunkTask := task.FactorTask
-			chunkTask.StartTime = chunk.TargetTimes[0]
-			chunkTask.EndTime = chunk.TargetTimes[len(chunk.TargetTimes)-1].Add(time.Nanosecond)
+			chunkTask.StartTime = chunk.TargetPeriods[0]
+			chunkTask.EndTime = chunk.TargetPeriods[len(chunk.TargetPeriods)-1].Add(time.Nanosecond)
 			result, err = s.exec.Execute(ctx, &chunkTask, chunk.Frame)
 			if err != nil {
 				var nonRetryable engine.NonRetryableError
@@ -296,10 +337,10 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 				}
 				return engine.RetryableError{Err: err}
 			}
-			if err := validateFactorResult(task.Factors, len(chunk.TargetTimes), result); err != nil {
+			if err := validateFactorResult(task.Factor, chunkTask.StartTime, chunkTask.EndTime, result); err != nil {
 				return engine.NonRetryableError{Err: err}
 			}
-			rowsWritten, err := s.storage.WriteFactorPatch(ctx, &chunkTask, chunk.TargetTimes, result)
+			rowsWritten, err := s.storage.WriteFactorPatch(ctx, &chunkTask, result)
 			if err != nil {
 				return engine.RetryableError{Err: err}
 			}
@@ -312,7 +353,7 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 			if rowsWritten == 0 {
 				observation.Result = "empty"
 			} else {
-				watermark := maxTime(chunk.TargetTimes)
+				watermark := maxTime(chunk.TargetPeriods)
 				observation.InputWatermark = watermark
 				observation.OutputWatermark = watermark
 			}
@@ -322,17 +363,64 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 		if runErr != nil {
 			return runErr
 		}
-		if chunk == nil || len(chunk.TargetTimes) == 0 {
-			if chunks == 0 {
-				runErr = errors.New("no target rows in requested range")
-				return runErr
-			}
-			return nil
-		}
 		chunks++
-		cursor = chunk.TargetTimes[len(chunk.TargetTimes)-1].Add(time.Nanosecond)
+		cursor = chunk.TargetPeriods[len(chunk.TargetPeriods)-1].Add(time.Nanosecond)
 	}
 	return nil
+}
+
+func (s *Service) readReadyChunk(ctx context.Context, task Task, cursor time.Time) (*storageio.RangeChunk, error) {
+	attempts := 1
+	if task.TriggerType == "event" {
+		attempts += s.cfg.EventReadRetry
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		var chunk *storageio.RangeChunk
+		err := s.withRetry(ctx, func() error {
+			var readErr error
+			chunk, readErr = s.storage.ReadRangeChunk(ctx, storageio.WindowKey{
+				SpaceID: task.SpaceID, SourceDataset: task.SourceDataset,
+				SubjectID: task.SubjectID, Freq: task.Freq,
+			}, cursor, task.EndTime, task.LookbackPeriods, maxTargetRowsPerChunk,
+				append([]string(nil), task.Factor.InputColumns...))
+			if readErr != nil {
+				return engine.RetryableError{Err: readErr}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if task.TriggerType != "event" {
+			if chunk != nil && !chunk.Complete && len(chunk.TargetPeriods) > 0 {
+				return nil, ErrViewIncomplete
+			}
+			return chunk, nil
+		}
+		if chunk != nil && chunk.Complete {
+			return chunk, nil
+		}
+		if attempt+1 < attempts {
+			if err := sleepContext(ctx, s.cfg.EventReadRetryInterval); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return nil, ErrViewIncomplete
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *Service) observeDatasetRun(ctx context.Context, observation report.DatasetObservation) {
@@ -372,32 +460,38 @@ func (s *Service) withRetry(ctx context.Context, fn func() error) error {
 	return last
 }
 
-func validateFactorResult(specs []engine.FactorSpec, targetRows int, result *engine.FactorResult) error {
+func validateFactorResult(
+	spec engine.FactorSpec,
+	startTime, endTime time.Time,
+	result *engine.FactorResult,
+) error {
 	if result == nil {
 		return errors.New("nil factor result")
 	}
-	expected := map[string]struct{}{}
-	for _, spec := range specs {
-		for _, output := range spec.Outputs {
-			if _, exists := expected[output]; exists {
-				return fmt.Errorf("duplicate expected factor output column %s", output)
+	expected := make(map[string]struct{}, len(spec.Outputs))
+	for _, output := range spec.Outputs {
+		expected[output] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(result.Rows))
+	for rowIndex, row := range result.Rows {
+		if row.DataTime.Before(startTime) || !row.DataTime.Before(endTime) {
+			return fmt.Errorf("factor result row %d is outside target range", rowIndex)
+		}
+		identity := fmt.Sprintf("%d\x00%s", row.DataTime.UTC().UnixNano(), row.SeriesTag)
+		if _, exists := seen[identity]; exists {
+			return fmt.Errorf("duplicate factor result identity data_time=%s series_tag=%q",
+				row.DataTime.UTC().Format(time.RFC3339Nano), row.SeriesTag)
+		}
+		seen[identity] = struct{}{}
+		if len(row.Values) != len(expected) {
+			return fmt.Errorf("factor result row %d outputs=%d expected=%d", rowIndex, len(row.Values), len(expected))
+		}
+		for name, value := range row.Values {
+			if _, ok := expected[name]; !ok {
+				return fmt.Errorf("unexpected factor output column %s", name)
 			}
-			expected[output] = struct{}{}
-		}
-	}
-	if len(result.Columns) != len(expected) {
-		return fmt.Errorf("factor result columns=%d expected=%d", len(result.Columns), len(expected))
-	}
-	for name, values := range result.Columns {
-		if _, ok := expected[name]; !ok {
-			return fmt.Errorf("unexpected factor output column %s", name)
-		}
-		if len(values) != targetRows {
-			return fmt.Errorf("factor column %s values=%d target_rows=%d", name, len(values), targetRows)
-		}
-		for i, value := range values {
 			if !validFactorValue(value) {
-				return fmt.Errorf("factor column %s value[%d] is not finite numeric or null", name, i)
+				return fmt.Errorf("factor output %s row[%d] is not finite numeric or null", name, rowIndex)
 			}
 		}
 	}
@@ -418,21 +512,6 @@ func validFactorValue(value any) bool {
 	default:
 		return false
 	}
-}
-
-func inputColumns(specs []engine.FactorSpec) []string {
-	seen := make(map[string]struct{})
-	for _, spec := range specs {
-		for _, column := range spec.InputColumns {
-			seen[column] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for column := range seen {
-		out = append(out, column)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func (s *Service) Status() Status {

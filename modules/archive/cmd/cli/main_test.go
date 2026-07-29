@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/mooyang-code/moox/modules/archive/internal/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
@@ -32,6 +33,19 @@ func TestParseArgsAcceptsKnownCommands(t *testing.T) {
 	if cfg.Command != "status" || cfg.Space != "crypto" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
+}
+
+func TestParseArgsSeriesTagPresence(t *testing.T) {
+	absent, err := parseArgs([]string{"verify"})
+	require.NoError(t, err)
+	require.Nil(t, absent.SeriesTag)
+	empty, err := parseArgs([]string{"verify", "--series-tag", ""})
+	require.NoError(t, err)
+	require.NotNil(t, empty.SeriesTag)
+	assert.Empty(t, *empty.SeriesTag)
+	exact, err := parseArgs([]string{"verify", "--series-tag", "venue:binance"})
+	require.NoError(t, err)
+	require.Equal(t, "venue:binance", *exact.SeriesTag)
 }
 
 func TestArchivePrimarySecretUsesFile(t *testing.T) {
@@ -65,7 +79,7 @@ func writeTestConfig(t *testing.T) (string, *configPaths) {
 			"state_dir": state,
 			"device_id": "test-device",
 			"sources": map[string]any{
-				"crypto_binance": map[string]any{"datasets": []string{"spot_kline"}},
+				"crypto": map[string]any{"datasets": []string{"spot_kline_1h"}},
 			},
 		},
 	})
@@ -84,7 +98,7 @@ func TestRunStatusReportsJournalState(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.Append(context.Background(), domain.EventBatch{
 		MessageID: "m1",
-		Rows:      []domain.RowPatch{{Partition: domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC", Freq: "1m", Month: "202601"}}},
+		Rows:      []domain.RowPatch{{Partition: domain.PartitionKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC", Freq: "1h", Month: "202601"}}},
 	})
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
@@ -103,8 +117,8 @@ func TestRunBackfillRequiresConfirm(t *testing.T) {
 	var out bytes.Buffer
 	err := run(context.Background(), []string{
 		"backfill", "--config", cfgPath,
-		"--space", "crypto_binance", "--dataset", "spot_kline", "--subject", "BTC-USDT",
-		"--freq", "1m", "--start", "2026-01-01T00:00:00Z", "--end", "2026-01-02T00:00:00Z",
+		"--space", "crypto", "--dataset", "spot_kline_1h", "--subject", "BTC-USDT",
+		"--freq", "1h", "--series-tag", "", "--start", "2026-01-01T00:00:00Z", "--end", "2026-01-02T00:00:00Z",
 	}, &out)
 	require.NoError(t, err)
 	var payload map[string]any
@@ -120,7 +134,7 @@ func TestRunCompactMaterializesDirtyRows(t *testing.T) {
 	_, err = store.Append(context.Background(), domain.EventBatch{
 		MessageID: "m1",
 		Rows: []domain.RowPatch{{
-			Partition: domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", Freq: "1m", Month: "202601"},
+			Partition: domain.PartitionKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202601"},
 			DataTime:  time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 			Columns:   map[string]domain.Scalar{"close": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: &closeVal}},
 			WrittenAt: time.Now().UTC(),
@@ -136,22 +150,58 @@ func TestRunCompactMaterializesDirtyRows(t *testing.T) {
 	assert.NotEmpty(t, entries)
 }
 
+func TestRunCompactSeriesTagPresenceSelectsExactIncludingEmpty(t *testing.T) {
+	cfgPath, paths := writeTestConfig(t)
+	store, err := journal.Open(paths.state)
+	require.NoError(t, err)
+	closeVal := 1.25
+	for i, tag := range []string{"", "venue:binance"} {
+		_, err = store.Append(t.Context(), domain.EventBatch{
+			MessageID: fmt.Sprintf("m%d", i),
+			Rows: []domain.RowPatch{{
+				Partition: domain.PartitionKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: tag, Month: "202601"},
+				DataTime:  time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), WrittenAt: time.Now().UTC(),
+				Columns: map[string]domain.Scalar{"close": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: &closeVal}},
+			}},
+		})
+		require.NoError(t, err)
+	}
+	require.NoError(t, store.Close())
+
+	require.NoError(t, run(t.Context(), []string{"compact", "--config", cfgPath, "--series-tag", ""}, &bytes.Buffer{}))
+	store, err = journal.Open(paths.state)
+	require.NoError(t, err)
+	dirty, err := store.DirtyPartitions(t.Context(), 10)
+	require.NoError(t, err)
+	require.Len(t, dirty, 1)
+	assert.Equal(t, "venue:binance", dirty[0].Key.SeriesTag)
+	require.NoError(t, store.Close())
+
+	require.NoError(t, run(t.Context(), []string{"compact", "--config", cfgPath}, &bytes.Buffer{}))
+	store, err = journal.Open(paths.state)
+	require.NoError(t, err)
+	dirty, err = store.DirtyPartitions(t.Context(), 10)
+	require.NoError(t, err)
+	assert.Empty(t, dirty)
+	require.NoError(t, store.Close())
+}
+
 func TestRunVerifyChecksParquetFiles(t *testing.T) {
 	cfgPath, paths := writeTestConfig(t)
-	key := domain.PartitionKey{SpaceID: "crypto_binance", DatasetID: "spot_kline", SubjectID: "BTC-USDT", Freq: "1m", Month: "202601"}
+	key := domain.PartitionKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202601"}
 	abs, err := key.AbsolutePath(paths.root)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o755))
 	closeVal := 1.0
 	_, err = parquetio.Write(abs, []domain.ArchiveRow{{
 		Partition: key, DataTime: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
-		DimensionsJSON: "{}", WrittenAt: time.Now().UTC(),
-		Columns: map[string]domain.Scalar{"close": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: &closeVal}},
+		WrittenAt: time.Now().UTC(),
+		Columns:   map[string]domain.Scalar{"close": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: &closeVal}},
 	}}, parquetio.WriteOptions{Generation: 1, MaterializedAt: time.Now().UTC(), RowGroupRows: 1024})
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, run(context.Background(), []string{"verify", "--config", cfgPath, "--space", "crypto_binance"}, &out))
+	require.NoError(t, run(context.Background(), []string{"verify", "--config", cfgPath, "--space", "crypto", "--series-tag", "venue:binance"}, &out))
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
 	assert.Equal(t, float64(1), payload["files"])

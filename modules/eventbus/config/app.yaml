@@ -33,7 +33,7 @@ health:
 
 streams:
   - name: MOOX_STORAGE
-    subjects: ["moox.storage.dataset.rows.upserted.v1.>"]
+    subjects: ["moox.storage.dataset.rows.upserted.v2.>"]
     retention: limits
     discard: old
     storage: file

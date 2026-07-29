@@ -42,20 +42,24 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 		targets = append(targets, targetDataset)
 	}
 	sort.Strings(targets)
-	for taskIndex, targetDataset := range targets {
+	taskIndex := 0
+	for _, targetDataset := range targets {
 		factors := groups[targetDataset]
-		task, buildErr := scheduler.BuildTask(scheduler.TaskScope{
-			TaskID:      fmt.Sprintf("recalc-%d-%d", time.Now().UnixNano(), taskIndex+1),
-			TriggerType: "recalc", SpaceID: req.GetSpaceId(),
-			SourceDataset: req.GetSourceDataset(), TargetDataset: targetDataset,
-			SubjectID: req.GetSubjectId(), Freq: req.GetFreq(),
-			StartTime: start, EndTime: end,
-		}, factors, s.factorsDir)
-		if buildErr != nil {
-			return &factorpb.RecalcFactorRsp{RetInfo: invalid(buildErr)}, nil
-		}
-		if runErr := s.scheduler.Run(ctx, task); runErr != nil {
-			return &factorpb.RecalcFactorRsp{RetInfo: inner(runErr)}, nil
+		for _, factor := range factors {
+			taskIndex++
+			task, buildErr := scheduler.BuildTask(scheduler.TaskScope{
+				TaskID:      fmt.Sprintf("recalc-%d-%d", time.Now().UnixNano(), taskIndex),
+				TriggerType: "recalc", SpaceID: req.GetSpaceId(),
+				SourceDataset: req.GetSourceDataset(), TargetDataset: targetDataset,
+				SubjectID: req.GetSubjectId(), Freq: req.GetFreq(),
+				StartTime: start, EndTime: end,
+			}, factor, s.factorsDir)
+			if buildErr != nil {
+				return &factorpb.RecalcFactorRsp{RetInfo: invalid(buildErr)}, nil
+			}
+			if runErr := s.scheduler.Run(ctx, task); runErr != nil {
+				return &factorpb.RecalcFactorRsp{RetInfo: inner(runErr)}, nil
+			}
 		}
 	}
 	return &factorpb.RecalcFactorRsp{RetInfo: success()}, nil

@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,8 +15,10 @@ import (
 )
 
 type reconcileMetadata struct {
-	view      *pb.View
-	activated bool
+	view         *pb.View
+	activated    bool
+	claims       int
+	claimedIndex string
 }
 
 func (m *reconcileMetadata) ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error) {
@@ -32,6 +35,8 @@ func (m *reconcileMetadata) ListDatasetColumns(context.Context, *pb.ListDatasetC
 	return &pb.ListDatasetColumnsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
 }
 func (m *reconcileMetadata) ClaimViewIndexBuild(_ context.Context, req *pb.ClaimViewIndexBuildReq, _ ...client.Option) (*pb.ClaimViewIndexBuildRsp, error) {
+	m.claims++
+	m.claimedIndex = req.GetIndexId()
 	return &pb.ClaimViewIndexBuildRsp{RetInfo: successRetInfo(), Build: &pb.ViewIndexBuild{BuildId: req.GetBuildId(), State: pb.ViewIndexBuild_PREPARING}}, nil
 }
 func (m *reconcileMetadata) UpdateViewIndexBuild(_ context.Context, req *pb.UpdateViewIndexBuildReq, _ ...client.Option) (*pb.UpdateViewIndexBuildRsp, error) {
@@ -39,7 +44,11 @@ func (m *reconcileMetadata) UpdateViewIndexBuild(_ context.Context, req *pb.Upda
 }
 func (m *reconcileMetadata) ActivateViewIndex(context.Context, *pb.ActivateViewIndexReq, ...client.Option) (*pb.ActivateViewIndexRsp, error) {
 	m.activated = true
-	return &pb.ActivateViewIndexRsp{RetInfo: successRetInfo(), View: m.view}, nil
+	view := proto.Clone(m.view).(*pb.View)
+	if m.claimedIndex != "" {
+		view.ActiveIndexId = m.claimedIndex
+	}
+	return &pb.ActivateViewIndexRsp{RetInfo: successRetInfo(), View: view}, nil
 }
 func (m *reconcileMetadata) FailViewIndexBuild(context.Context, *pb.FailViewIndexBuildReq, ...client.Option) (*pb.FailViewIndexBuildRsp, error) {
 	return &pb.FailViewIndexBuildRsp{RetInfo: successRetInfo()}, nil
@@ -133,5 +142,78 @@ func TestReconcilerUsesDatasetKindForTimeSeriesWithoutGrainKeys(t *testing.T) {
 	rows, _, err := engine.Query(context.Background(), indexID, viewindex.QuerySpec{Limit: 10})
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("time-series rows=%v err=%v", rows, err)
+	}
+}
+
+func TestReconcileStatsActiveIndexBeforeAttachingIt(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statErr := errors.New("legacy duckdb schema requires cleanup and rebuild")
+	engine := &queryEngine{statErr: statErr}
+	svc.engines["duckdb"] = engine
+	view := &pb.View{
+		SpaceId: "space", ViewId: "prices", Engine: "duckdb", PrimaryDatasetId: "prices",
+		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
+	}
+	err = svc.reconcileView(context.Background(), ReconcilerOptions{}, svc.internalAuth(), view)
+	if !errors.Is(err, statErr) {
+		t.Fatalf("reconcile error=%v want=%v", err, statErr)
+	}
+	svc.mu.RLock()
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
+	svc.mu.RUnlock()
+	if runtime != nil {
+		runtime.mu.Lock()
+		active := runtime.active
+		runtime.mu.Unlock()
+		if active != "" {
+			t.Fatalf("invalid active index attached before schema validation: %q", active)
+		}
+	}
+	if _, exists := svc.indexEngine["prices-a"]; exists {
+		t.Fatal("invalid active index mapping remains attached")
+	}
+}
+
+func TestReconcileRebuildsMissingPhysicalActiveIndex(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: false}}
+	svc.engines["duckdb"] = engine
+	metadata := &reconcileMetadata{view: &pb.View{
+		SpaceId: "space", ViewId: "prices", Engine: "duckdb", PrimaryDatasetId: "prices",
+		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
+	}}
+	err = svc.reconcileView(context.Background(), ReconcilerOptions{
+		Metadata: metadata, OwnerID: "owner",
+	}, svc.internalAuth(), metadata.view)
+	if err != nil {
+		t.Fatalf("reconcile missing active: %v", err)
+	}
+	if metadata.claims != 1 || !metadata.activated {
+		t.Fatalf("claims=%d activated=%v", metadata.claims, metadata.activated)
+	}
+	if metadata.claimedIndex == "" || metadata.claimedIndex == "prices-a" {
+		t.Fatalf("replacement index=%q", metadata.claimedIndex)
+	}
+	svc.mu.RLock()
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
+	_, staleAttached := svc.indexEngine["prices-a"]
+	svc.mu.RUnlock()
+	if staleAttached {
+		t.Fatal("missing physical active index was attached")
+	}
+	if runtime == nil {
+		t.Fatal("replacement runtime was not attached")
+	}
+	runtime.mu.Lock()
+	active := runtime.active
+	runtime.mu.Unlock()
+	if active != metadata.claimedIndex {
+		t.Fatalf("active=%q want replacement %q", active, metadata.claimedIndex)
 	}
 }

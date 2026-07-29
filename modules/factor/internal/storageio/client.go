@@ -43,10 +43,14 @@ func NewClientWithCredentials(accessTarget, targetNode string, credentials gatew
 	}
 }
 
-// RangeChunk contains history plus target rows and the exact target timestamps.
+const rangeReadPageSize = 2000
+
+// RangeChunk contains history plus target rows and the distinct target periods.
 type RangeChunk struct {
-	Frame       *engine.DataFrame
-	TargetTimes []time.Time
+	Frame         *engine.DataFrame
+	TargetPeriods []time.Time
+	Complete      bool
+	IndexedTo     time.Time
 }
 
 // ReadRangeChunk reads a bounded target range and prepends the required history.
@@ -54,13 +58,13 @@ func (c *Client) ReadRangeChunk(
 	ctx context.Context,
 	key WindowKey,
 	startTime, endTime time.Time,
-	lookbackBars, targetLimit int,
+	lookbackPeriods, targetLimit int,
 	columns []string,
 ) (*RangeChunk, error) {
 	if targetLimit <= 0 {
 		targetLimit = 2000
 	}
-	targetRows, err := c.readRows(ctx, key, &storagepb.TimeRange{
+	targetRows, targetPeriods, complete, indexedTo, err := c.readPeriods(ctx, key, &storagepb.TimeRange{
 		StartTime: startTime.UTC().Format(time.RFC3339Nano),
 		EndTime:   endTime.UTC().Format(time.RFC3339Nano),
 	}, storagepb.SortOrder_SORT_ORDER_ASC, targetLimit, columns)
@@ -72,12 +76,12 @@ func (c *Client) ReadRangeChunk(
 		return nil, err
 	}
 	if len(targetFrame.DataTimes) == 0 {
-		return &RangeChunk{Frame: targetFrame}, nil
+		return &RangeChunk{Frame: targetFrame, Complete: complete, IndexedTo: indexedTo}, nil
 	}
-	historyLimit := lookbackBars - 1
+	historyLimit := lookbackPeriods - 1
 	var historyFrame *engine.DataFrame
 	if historyLimit > 0 {
-		historyRows, readErr := c.readRows(ctx, key, &storagepb.TimeRange{
+		historyRows, _, _, _, readErr := c.readPeriods(ctx, key, &storagepb.TimeRange{
 			EndTime: targetFrame.DataTimes[0].UTC().Format(time.RFC3339Nano),
 		}, storagepb.SortOrder_SORT_ORDER_DESC, historyLimit, columns)
 		if readErr != nil {
@@ -91,24 +95,114 @@ func (c *Client) ReadRangeChunk(
 		historyFrame = &engine.DataFrame{Columns: append([]string(nil), columns...)}
 	}
 	frame := &engine.DataFrame{
-		Columns:   append([]string(nil), columns...),
-		Rows:      append(append([][]any(nil), historyFrame.Rows...), targetFrame.Rows...),
-		DataTimes: append(append([]time.Time(nil), historyFrame.DataTimes...), targetFrame.DataTimes...),
+		Columns:    append([]string(nil), columns...),
+		Rows:       append(append([][]any(nil), historyFrame.Rows...), targetFrame.Rows...),
+		DataTimes:  append(append([]time.Time(nil), historyFrame.DataTimes...), targetFrame.DataTimes...),
+		SeriesTags: append(append([]string(nil), historyFrame.SeriesTags...), targetFrame.SeriesTags...),
 	}
-	return &RangeChunk{Frame: frame, TargetTimes: append([]time.Time(nil), targetFrame.DataTimes...)}, nil
+	return &RangeChunk{
+		Frame: frame, TargetPeriods: append([]time.Time(nil), targetPeriods...),
+		Complete: complete, IndexedTo: indexedTo,
+	}, nil
 }
 
-func (c *Client) readRows(
+// ExpandEndByPeriods advances an event range over the next actual data periods.
+func (c *Client) ExpandEndByPeriods(
+	ctx context.Context,
+	key WindowKey,
+	endTime time.Time,
+	periods int,
+) (time.Time, error) {
+	if periods <= 0 {
+		return endTime, nil
+	}
+	_, nextPeriods, _, _, err := c.readPeriods(ctx, key, &storagepb.TimeRange{
+		StartTime: endTime.UTC().Format(time.RFC3339Nano),
+	}, storagepb.SortOrder_SORT_ORDER_ASC, periods, nil)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if len(nextPeriods) == 0 {
+		return endTime, nil
+	}
+	return nextPeriods[len(nextPeriods)-1].Add(time.Nanosecond), nil
+}
+
+func (c *Client) readPeriods(
 	ctx context.Context,
 	key WindowKey,
 	timeRange *storagepb.TimeRange,
 	order storagepb.SortOrder,
-	limit int,
+	periodLimit int,
 	columns []string,
-) ([]*storagepb.TimeSeriesRow, error) {
+) ([]*storagepb.TimeSeriesRow, []time.Time, bool, time.Time, error) {
+	if periodLimit <= 0 {
+		return nil, nil, true, time.Time{}, nil
+	}
+	var rows []*storagepb.TimeSeriesRow
+	periods := make([]time.Time, 0, periodLimit)
+	seen := make(map[int64]struct{}, periodLimit+1)
+	complete := true
+	var indexedTo time.Time
+	for page := uint32(1); ; page++ {
+		rsp, err := c.readRowsPage(ctx, key, timeRange, order, page, rangeReadPageSize, columns)
+		if err != nil {
+			return nil, nil, false, time.Time{}, err
+		}
+		complete = complete && rsp.GetComplete()
+		if raw := rsp.GetServedIndexedTo(); raw != "" {
+			parsed, parseErr := time.Parse(time.RFC3339Nano, raw)
+			if parseErr != nil {
+				return nil, nil, false, time.Time{}, fmt.Errorf("parse served_indexed_to %q: %w", raw, parseErr)
+			}
+			if parsed.After(indexedTo) {
+				indexedTo = parsed.UTC()
+			}
+		}
+		pageRows := rsp.GetRows()
+		reachedNextPeriod := false
+		for _, row := range pageRows {
+			dataTime, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+			if parseErr != nil {
+				return nil, nil, false, time.Time{}, fmt.Errorf("parse data_time %q: %w", row.GetKey().GetDataTime(), parseErr)
+			}
+			nanos := dataTime.UTC().UnixNano()
+			if _, exists := seen[nanos]; !exists {
+				if len(periods) == periodLimit {
+					reachedNextPeriod = true
+					break
+				}
+				seen[nanos] = struct{}{}
+				periods = append(periods, dataTime.UTC())
+			}
+			rows = append(rows, row)
+		}
+		if reachedNextPeriod || len(pageRows) == 0 || !responseHasMore(rsp, len(pageRows)) {
+			break
+		}
+	}
+	return rows, periods, complete, indexedTo, nil
+}
+
+func responseHasMore(rsp *storagepb.ReadTimeSeriesRowsRsp, rowCount int) bool {
+	if rsp.GetPageResult() != nil {
+		return rsp.GetPageResult().GetHasMore()
+	}
+	return rowCount == rangeReadPageSize
+}
+
+func (c *Client) readRowsPage(
+	ctx context.Context,
+	key WindowKey,
+	timeRange *storagepb.TimeRange,
+	order storagepb.SortOrder,
+	page uint32,
+	size uint32,
+	columns []string,
+) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	req := &storagepb.ReadTimeSeriesRowsReq{
 		AuthInfo: c.auth,
-		Keys: []*storagepb.TimeSeriesKey{
+		Selectors: []*storagepb.TimeSeriesSelector{
 			{
 				SpaceId:   key.SpaceID,
 				DatasetId: key.SourceDataset,
@@ -119,7 +213,7 @@ func (c *Client) readRows(
 		TimeRange:   timeRange,
 		Order:       order,
 		ColumnNames: columns,
-		Page:        &commonpb.Page{Page: 1, Size: uint32(limit)},
+		Page:        &commonpb.Page{Page: page, Size: size},
 	}
 	// Retry is deliberately attached to this idempotent read call only. The
 	// shared proxy also performs writes, which must never inherit this policy.
@@ -130,7 +224,7 @@ func (c *Client) readRows(
 	if err := ensureStorageOK("read time-series rows", rsp.GetRetInfo()); err != nil {
 		return nil, err
 	}
-	return rsp.GetRows(), nil
+	return rsp, nil
 }
 
 // NormalizeStorageTarget normalizes bare host:port targets to tRPC ip:// targets.

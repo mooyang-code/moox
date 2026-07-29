@@ -26,11 +26,11 @@ type Options struct {
 }
 
 type ImportOptions struct {
-	FactorID     string
-	InputColumns []string
-	Outputs      []string
-	ParamsJSON   string
-	LookbackRows int
+	FactorID        string
+	InputColumns    []string
+	Outputs         []string
+	ParamsJSON      string
+	LookbackPeriods int
 }
 
 // Service manages local factor definitions.
@@ -60,14 +60,14 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string, options Imp
 		return nil, fmt.Errorf("read factor file %s: %w", path, err)
 	}
 	factor := domain.FactorDef{
-		FactorID:     options.FactorID,
-		Name:         name,
-		SourceCode:   string(raw),
-		InputColumns: options.InputColumns,
-		Outputs:      options.Outputs,
-		ParamsJSON:   options.ParamsJSON,
-		LookbackRows: options.LookbackRows,
-		Status:       domain.FactorStatusDisabled,
+		FactorID:        options.FactorID,
+		Name:            name,
+		SourceCode:      string(raw),
+		InputColumns:    options.InputColumns,
+		Outputs:         options.Outputs,
+		ParamsJSON:      options.ParamsJSON,
+		LookbackPeriods: options.LookbackPeriods,
+		Status:          domain.FactorStatusDisabled,
 	}
 	factor, err = domain.NormalizeFactorDefinition(factor)
 	if err != nil {

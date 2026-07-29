@@ -20,6 +20,18 @@ type recordingNode struct {
 	read  func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
 }
 
+type recordingView struct {
+	query func(context.Context, *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error)
+}
+
+func (v *recordingView) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
+	return v.query(ctx, req)
+}
+
+func (*recordingView) SearchRecordRows(context.Context, *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
+	return nil, errors.New("unexpected record query")
+}
+
 func (n *recordingNode) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	return n.write(ctx, req)
 }
@@ -74,19 +86,95 @@ func TestPrimaryRangeReadsRequireCallerAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	timeSeries, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		Keys:      []*pb.TimeSeriesKey{{SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1m"}},
-		TimeRange: &pb.TimeRange{},
-	})
-	if err != nil || timeSeries.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("time-series range read rsp=%v err=%v", timeSeries, err)
-	}
 	records, err := svc.ReadRecordRows(context.Background(), &pb.ReadRecordRowsReq{
 		Keys:         []*pb.RecordKey{{SpaceId: "space", DatasetId: "dataset", RecordId: "record"}},
 		VersionRange: &pb.VersionRange{},
 	})
 	if err != nil || records.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("record range read rsp=%v err=%v", records, err)
+	}
+	timeSeries, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		SpaceId:   "space",
+		DatasetId: "dataset",
+		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1m"}},
+		TimeRange: &pb.TimeRange{},
+	})
+	if err != nil || timeSeries.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
+		t.Fatalf("time-series range read rsp=%v err=%v", timeSeries, err)
+	}
+}
+
+func TestReadTimeSeriesRowsUsesSelectorsAndCopiesViewCompleteness(t *testing.T) {
+	var captured *pb.QueryTimeSeriesRowsReq
+	view := &recordingView{query: func(_ context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
+		captured = req
+		return &pb.QueryTimeSeriesRowsRsp{
+			RetInfo:           successRetInfo(),
+			Rows:              []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-29T00:00:00Z", SeriesTag: "venue:okx"}}},
+			ServedIndexedFrom: "2026-07-29T00:00:00Z",
+			ServedIndexedTo:   "2026-07-29T00:01:00Z",
+			Complete:          true,
+		}, nil
+	}}
+	node := &recordingNode{
+		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			return nil, errors.New("unexpected write")
+		},
+		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+			return nil, errors.New("ReadTimeSeriesRows must not use point ReadFields")
+		},
+	}
+	svc, err := New(Options{
+		Node: node,
+		View: func(_ context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
+			if spaceID != "space" || datasetID != "market" {
+				t.Fatalf("resolved scope=%s/%s", spaceID, datasetID)
+			}
+			return view, "prices", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := ""
+	okx := "venue:okx"
+	selectors := []*pb.TimeSeriesSelector{
+		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"},
+		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty},
+		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &okx},
+	}
+	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		SpaceId:  "space", DatasetId: "market", Selectors: selectors,
+		Order: pb.SortOrder_SORT_ORDER_DESC,
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+	if rsp.GetServedIndexedFrom() != "2026-07-29T00:00:00Z" ||
+		rsp.GetServedIndexedTo() != "2026-07-29T00:01:00Z" || !rsp.GetComplete() {
+		t.Fatalf("view completeness was not copied: %v", rsp)
+	}
+	if captured == nil || len(captured.GetSelectors()) != 3 {
+		t.Fatalf("selectors not forwarded: %v", captured)
+	}
+	for i := range selectors {
+		if (captured.GetSelectors()[i].SeriesTag == nil) != (selectors[i].SeriesTag == nil) ||
+			captured.GetSelectors()[i].GetSeriesTag() != selectors[i].GetSeriesTag() {
+			t.Fatalf("selector %d presence changed: got=%v want=%v", i, captured.GetSelectors()[i], selectors[i])
+		}
+	}
+	wantSorts := []string{"subject_id", "freq", "data_time", "series_tag"}
+	if len(captured.GetSorts()) != len(wantSorts) {
+		t.Fatalf("sorts=%v", captured.GetSorts())
+	}
+	for i, field := range wantSorts {
+		if captured.GetSorts()[i].GetFieldName() != field || !captured.GetSorts()[i].GetDesc() {
+			t.Fatalf("sort %d=%v", i, captured.GetSorts()[i])
+		}
+	}
+	if len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetSeriesTag() != "venue:okx" {
+		t.Fatalf("exact result tag lost: %v", rsp.GetRows())
 	}
 }
 

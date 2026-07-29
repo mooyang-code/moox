@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '5')
+VALUES ('schema_version', '6')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************

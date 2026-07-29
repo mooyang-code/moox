@@ -26,10 +26,10 @@ datasets:
   - {space_id: moox_system, dataset_id: host_net_v1, data_source_id: moox_host_agent, name: 主机网络, description: Per-minute network counters and rates, data_kind: time_series, data_node_id: storage-node-0, keep_duration: 4320h, freqs: ["1m"], status: disabled}
 
 views:
-  - {space_id: moox_system, view_id: host_resource_view, name: 主机资源视图, primary_dataset_id: host_resource_v1, dataset_ids: [host_resource_v1], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1m"}', engine: duckdb, keep_duration: 4320h, status: active}
-  - {space_id: moox_system, view_id: host_fs_view, name: 文件系统视图, primary_dataset_id: host_fs_v1, dataset_ids: [host_fs_v1], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1m"}', engine: duckdb, keep_duration: 4320h, status: active}
-  - {space_id: moox_system, view_id: host_disk_view, name: 主机磁盘视图, primary_dataset_id: host_disk_v1, dataset_ids: [host_disk_v1], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1m"}', engine: duckdb, keep_duration: 4320h, status: active}
-  - {space_id: moox_system, view_id: host_net_view, name: 主机网络视图, primary_dataset_id: host_net_v1, dataset_ids: [host_net_v1], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"1m"}', engine: duckdb, keep_duration: 4320h, status: active}
+  - {space_id: moox_system, view_id: host_resource_view, name: 主机资源视图, primary_dataset_id: host_resource_v1, dataset_ids: [host_resource_v1], grain_keys: [subject_id, freq, data_time, series_tag], filter_json: '{"freq":"1m"}', engine: duckdb, keep_duration: 4320h, status: active}
+  - {space_id: moox_system, view_id: host_fs_view, name: 文件系统视图, primary_dataset_id: host_fs_v1, dataset_ids: [host_fs_v1], grain_keys: [subject_id, freq, data_time, series_tag], filter_json: '{"freq":"1m"}', engine: duckdb, keep_duration: 4320h, status: active}
+  - {space_id: moox_system, view_id: host_disk_view, name: 主机磁盘视图, primary_dataset_id: host_disk_v1, dataset_ids: [host_disk_v1], grain_keys: [subject_id, freq, data_time, series_tag], filter_json: '{"freq":"1m"}', engine: duckdb, keep_duration: 4320h, status: active}
+  - {space_id: moox_system, view_id: host_net_view, name: 主机网络视图, primary_dataset_id: host_net_v1, dataset_ids: [host_net_v1], grain_keys: [subject_id, freq, data_time, series_tag], filter_json: '{"freq":"1m"}', engine: duckdb, keep_duration: 4320h, status: active}
 
 fields:
   - {space_id: moox_system, field_id: host_agent_id, name: Host agent ID, value_type: string, status: active}

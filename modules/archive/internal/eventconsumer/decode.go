@@ -63,7 +63,7 @@ func (d *Decoder) decodeRows(messageID, spaceID, datasetID string, event *shared
 		if err != nil {
 			return domain.EventBatch{}, DecisionReject, err
 		}
-		id := domain.PartitionID(patch.Partition) + "/" + domain.LogicalRowID(patch.DataTime, patch.DimensionsJSON)
+		id := domain.PartitionID(patch.Partition) + "/" + domain.LogicalRowID(patch.DataTime)
 		if previous, ok := rows[id]; ok {
 			rows[id] = mergePatch(previous, patch)
 		} else {
@@ -98,10 +98,6 @@ func decodeRow(event *sharedpb.DatasetRowsUpserted, row *sharedpb.RowUpsert, wri
 	if key.GetSubjectId() == "" || key.GetFreq() == "" {
 		return domain.RowPatch{}, fmt.Errorf("subject_id and freq are required")
 	}
-	dimensions, err := domain.CanonicalStringMap(nil)
-	if err != nil {
-		return domain.RowPatch{}, err
-	}
 	columns := make(map[string]domain.Scalar, len(row.GetFields()))
 	for _, field := range row.GetFields() {
 		if _, exists := columns[field.GetFieldId()]; exists {
@@ -117,7 +113,7 @@ func decodeRow(event *sharedpb.DatasetRowsUpserted, row *sharedpb.RowUpsert, wri
 	for k, v := range row.GetAttributes() {
 		attributes[k] = typedValueString(v)
 	}
-	return domain.RowPatch{Partition: domain.PartitionKey{SpaceID: event.GetSpaceId(), DatasetID: event.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), Month: domain.MonthOf(dataTime)}, DataTime: dataTime, DimensionsJSON: dimensions, Attributes: attributes, WrittenAt: writtenAt, Columns: columns}, nil
+	return domain.RowPatch{Partition: domain.PartitionKey{SpaceID: event.GetSpaceId(), DatasetID: event.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), SeriesTag: key.GetSeriesTag(), Month: domain.MonthOf(dataTime)}, DataTime: dataTime, Attributes: attributes, WrittenAt: writtenAt, Columns: columns}, nil
 }
 
 func typedValueString(value *sharedpb.TypedValue) string {

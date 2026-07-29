@@ -399,6 +399,7 @@ export function collectKlineWriteEvidence(jobItems, spaceID, targetDatasetID) {
       dataset_id: targetDatasetID,
       subject_id: item.params?.subject_id,
       freq: "1m",
+      series_tag: "venue:binance",
     };
     if (task.data_type !== "kline" || task.dataset_id !== targetDatasetID || task.freq !== "1m") {
       throw new Error(`Kline JobItem ${item.job_item_id || ""} result does not match its request`);
@@ -451,11 +452,7 @@ function stableObject(value) {
 }
 
 function normalizedKlineKey(key) {
-  const normalized = { ...(key || {}) };
-  if (normalized.dimensions && Object.keys(normalized.dimensions).length === 0) {
-    delete normalized.dimensions;
-  }
-  return stableObject(normalized);
+  return stableObject(key || {});
 }
 
 export function hasMorePages(pageInfo, collectedCount, returnedCount, requestedSize) {
@@ -970,25 +967,53 @@ function selectKlineVerificationSamples(samples) {
 }
 
 async function verifyWrittenKlineRows(args, token, keys) {
-  const rsp = await storagePost(args, token, "access", "ReadTimeSeriesRows", {
-    space_id: args.space,
-    dataset_id: args.klineDataset,
-    keys,
-    column_names: KLINE_COLUMNS.map(([name]) => name),
-    page: { page: 1, size: keys.length },
-  });
-  const byKey = new Map((rsp.rows || []).map((row) => [JSON.stringify(normalizedKlineKey(row.key)), row]));
   for (const key of keys) {
-    const row = byKey.get(JSON.stringify(normalizedKlineKey(key)));
+    const rsp = await storagePost(
+      args,
+      token,
+      "access",
+      "ReadFields",
+      exactKlinePointReadRequest(key, KLINE_COLUMNS.map(([name]) => name)),
+    );
+    const row = (rsp.rows || [])
+      .map(timeSeriesRowFromFieldValues)
+      .find((item) => JSON.stringify(normalizedKlineKey(item.key)) === JSON.stringify(normalizedKlineKey(key)));
     if (!row) {
-      const received = (rsp.rows || []).slice(0, 3).map((item) => item.key || {});
       throw new Error(
         `written Kline RowKey is not readable: ${JSON.stringify(key)}; ` +
-        `received=${JSON.stringify(received)}`,
+        `received=${JSON.stringify((rsp.rows || []).slice(0, 3).map((item) => item.key || {}))}`,
       );
     }
     validateKlineStorageRow(row, key);
   }
+}
+
+export function exactKlinePointReadRequest(key, fieldIds) {
+  return {
+    keys: [{
+      space_id: key.space_id,
+      dataset_id: key.dataset_id,
+      time_series: {
+        subject_id: key.subject_id,
+        freq: key.freq,
+        data_time: key.data_time,
+        series_tag: key.series_tag,
+      },
+    }],
+    field_ids: fieldIds,
+  };
+}
+
+function timeSeriesRowFromFieldValues(row) {
+  return {
+    key: {
+      space_id: row?.key?.space_id || "",
+      dataset_id: row?.key?.dataset_id || "",
+      ...(row?.key?.time_series || {}),
+    },
+    fields: row?.fields || [],
+    attributes: row?.attributes || {},
+  };
 }
 
 function jobDistribution(jobs) {

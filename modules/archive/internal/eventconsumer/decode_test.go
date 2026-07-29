@@ -13,7 +13,7 @@ import (
 )
 
 func TestDecoderBuildsMonthlyPatches(t *testing.T) {
-	decoder := NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}})
+	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
 	event := validStorageEvent()
 	event.Rows[0].Key.GetTimeSeries().DataTime = "2026-06-30T23:59:00Z"
 	raw, subject, messageID := marshalEvent(t, event)
@@ -22,10 +22,25 @@ func TestDecoderBuildsMonthlyPatches(t *testing.T) {
 		t.Fatalf("DecodeEvent() = %#v, %d, %v", batch, decision, err)
 	}
 	assert.Equal(t, "202606", batch.Rows[0].Partition.Month)
+	assert.Equal(t, "venue:binance", batch.Rows[0].Partition.SeriesTag)
+}
+
+func TestDecoderKeepsSameTimestampDifferentTagsInDistinctPartitions(t *testing.T) {
+	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
+	event := validStorageEvent()
+	okx := proto.Clone(event.Rows[0]).(*storagepb.RowUpsert)
+	okx.Key.GetTimeSeries().SeriesTag = "venue:okx"
+	event.Rows = append(event.Rows, okx)
+	raw, subject, messageID := marshalEvent(t, event)
+	batch, decision, err := decoder.DecodeEvent(raw, subject, messageID)
+	require.NoError(t, err)
+	require.Equal(t, DecisionArchive, decision)
+	require.Len(t, batch.Rows, 2)
+	assert.NotEqual(t, domain.PartitionID(batch.Rows[0].Partition), domain.PartitionID(batch.Rows[1].Partition))
 }
 
 func TestDecoderRejectsInvalidRow(t *testing.T) {
-	decoder := NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}})
+	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
 	event := validStorageEvent()
 	event.Rows[0].Key.GetTimeSeries().DataTime = "not-time"
 	raw, subject, messageID := marshalUncheckedEvent(t, event)
@@ -36,7 +51,7 @@ func TestDecoderRejectsInvalidRow(t *testing.T) {
 }
 
 func TestDecoderIgnoresUnknownSource(t *testing.T) {
-	decoder := NewDecoder(map[string][]string{"crypto_binance": {"spot_kline"}})
+	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
 	event := validStorageEvent()
 	event.SpaceId = "stock_us"
 	event.DatasetId = "equity_kline"
@@ -66,7 +81,7 @@ func TestParseTimeAndMergePatch(t *testing.T) {
 }
 
 func validStorageEvent() *storagepb.DatasetRowsUpserted {
-	return &storagepb.DatasetRowsUpserted{SpaceId: "crypto_binance", DatasetId: "spot_kline", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto_binance", DatasetId: "spot_kline", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-06-30T23:59:00Z"}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100.25}}}}}}}
+	return &storagepb.DatasetRowsUpserted{SpaceId: "crypto", DatasetId: "spot_kline_1h", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline_1h", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-06-30T23:59:00Z", SeriesTag: "venue:binance"}}}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100.25}}}}}}}
 }
 
 func marshalEvent(t *testing.T, payload *storagepb.DatasetRowsUpserted) ([]byte, string, string) {

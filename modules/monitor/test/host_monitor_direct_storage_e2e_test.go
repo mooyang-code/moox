@@ -33,7 +33,10 @@ func (f *fakeStorage) UpsertFields(_ context.Context, req *storagepb.PrimaryUpse
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 func (f *fakeStorage) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	dataset := req.GetKeys()[0].GetDatasetId()
+	if len(req.GetSelectors()) != 1 || req.GetSelectors()[0].SeriesTag != nil {
+		panic("host reader must request all entity tags")
+	}
+	dataset := req.GetSelectors()[0].GetDatasetId()
 	rows := make([]*storagepb.TimeSeriesRow, 0)
 	for _, row := range f.rows {
 		if row.GetKey().GetDatasetId() == dataset {
@@ -45,7 +48,7 @@ func (f *fakeStorage) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadT
 			rows = append(rows, &storagepb.TimeSeriesRow{
 				Key: &storagepb.TimeSeriesKey{
 					SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
-					SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime(),
+					SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime(), SeriesTag: key.GetTimeSeries().GetSeriesTag(),
 				},
 				Fields: row.GetFields(), Attributes: attributes,
 			})
@@ -60,28 +63,37 @@ func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 	writer := hostmetrics.NewStorageWriter(fake, cfg)
 	observed := time.Now().UTC().Truncate(time.Minute)
 	snapshot := &hostmetricpb.HostSnapshot{
-		Cpu:         &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: 25},
-		Memory:      &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 50, AvailableBytes: 50, UsagePercent: 50},
-		Filesystems: []*hostmetricpb.FilesystemMetric{{Device: "/dev/sda1", Mountpoint: "/", TotalBytes: 1000, UsedBytes: 500, AvailableBytes: 500, UsagePercent: 50}},
-		Disks:       []*hostmetricpb.DiskMetric{{Device: "sda", ReadBytesTotal: 10, WriteBytesTotal: 20, RateAvailable: true, UtilizationPercent: 10}},
-		Networks:    []*hostmetricpb.NetworkMetric{{Device: "eth0", Operstate: "up", ReceiveBytesTotal: 30, TransmitBytesTotal: 40, RateAvailable: true}},
+		Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: 25},
+		Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 50, AvailableBytes: 50, UsagePercent: 50},
+		Filesystems: []*hostmetricpb.FilesystemMetric{
+			{Device: "/dev/sda1", Mountpoint: "/", TotalBytes: 1000, UsedBytes: 500, AvailableBytes: 500, UsagePercent: 50},
+			{Device: "/dev/sda1", Mountpoint: "/data|热", TotalBytes: 2000, UsedBytes: 500, AvailableBytes: 1500, UsagePercent: 25},
+		},
+		Disks: []*hostmetricpb.DiskMetric{
+			{Device: "sda", ReadBytesTotal: 10, WriteBytesTotal: 20, RateAvailable: true, UtilizationPercent: 10},
+			{Device: "disk:二", ReadBytesTotal: 30, WriteBytesTotal: 40},
+		},
+		Networks: []*hostmetricpb.NetworkMetric{
+			{Device: "eth0", Operstate: "up", ReceiveBytesTotal: 30, TransmitBytesTotal: 40, RateAvailable: true},
+			{Device: "网卡/一", Operstate: "up", ReceiveBytesTotal: 50, TransmitBytesTotal: 60},
+		},
 	}
 	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed, "event-1"); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.rows) != 4 {
-		t.Fatalf("stored rows=%d, want four datasets", len(fake.rows))
+	if len(fake.rows) != 7 {
+		t.Fatalf("stored rows=%d, want all seven entities", len(fake.rows))
 	}
 	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed.Add(2*time.Minute), "event-2"); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.rows) != 8 {
-		t.Fatalf("different minute should add four rows, got %d", len(fake.rows))
+	if len(fake.rows) != 14 {
+		t.Fatalf("different minute should add seven rows, got %d", len(fake.rows))
 	}
 	if err := writer.WriteSnapshot(context.Background(), snapshot, "agent-1", observed, "event-1"); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.rows) != 8 {
+	if len(fake.rows) != 14 {
 		t.Fatalf("same minute duplicate changed row count: %d", len(fake.rows))
 	}
 	reader := hostmetrics.NewStorageReader(fake, cfg)
@@ -89,7 +101,7 @@ func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(points) != 2 || points[0].Snapshot.GetCpu().GetLogicalCores() != 4 || len(points[0].Snapshot.GetFilesystems()) != 1 || len(points[0].Snapshot.GetDisks()) != 1 || len(points[0].Snapshot.GetNetworks()) != 1 {
+	if len(points) != 2 || points[0].Snapshot.GetCpu().GetLogicalCores() != 4 || len(points[0].Snapshot.GetFilesystems()) != 2 || len(points[0].Snapshot.GetDisks()) != 2 || len(points[0].Snapshot.GetNetworks()) != 2 {
 		t.Fatalf("round-trip points=%+v", points)
 	}
 }

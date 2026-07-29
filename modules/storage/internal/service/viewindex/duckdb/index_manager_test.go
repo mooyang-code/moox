@@ -4,7 +4,10 @@ package duckdb
 
 import (
 	"context"
+	"database/sql"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +15,366 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
+
+func duckRowKey(space, dataset, subject, freq, at, tag string) *pb.RowKey {
+	return &pb.RowKey{
+		SpaceId: space, DatasetId: dataset,
+		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+			SubjectId: subject, Freq: freq, DataTime: at, SeriesTag: tag,
+		}},
+	}
+}
+
+func stringPtr(value string) *string { return &value }
+
+func rowTags(rows []*pb.RowFieldValues) []string {
+	tags := make([]string, 0, len(rows))
+	for _, row := range rows {
+		tags = append(tags, row.GetKey().GetTimeSeries().GetSeriesTag())
+	}
+	return tags
+}
+
+func fieldDouble(row *pb.RowFieldValues, fieldID string) float64 {
+	for _, field := range row.GetFields() {
+		if field.GetFieldId() == fieldID {
+			return field.GetValue().GetDoubleValue()
+		}
+	}
+	return 0
+}
+
+func TestDuckDBSeriesTagSchemaIdentitySelectorsAndUpsert(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{
+		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1,
+		Engine: "duckdb", SchemaHash: "hash",
+		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+	}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	db, _, _, _, err := manager.getIndex(context.Background(), "idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tableSQL string
+	if err := db.QueryRowContext(context.Background(), `SELECT sql FROM duckdb_tables() WHERE table_name = 'view_rows'`).Scan(&tableSQL); err != nil {
+		t.Fatal(err)
+	}
+	normalized := strings.Join(strings.Fields(strings.ToLower(tableSQL)), " ")
+	if !strings.Contains(normalized, "series_tag varchar") {
+		t.Fatalf("series_tag is not a scalar system column: %s", tableSQL)
+	}
+	var seriesTagNotNull bool
+	infoRows, err := db.QueryContext(context.Background(), `PRAGMA table_info('view_rows')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for infoRows.Next() {
+		var cid int
+		var notNull, primary bool
+		var name, columnType string
+		var defaultValue any
+		if err := infoRows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primary); err != nil {
+			t.Fatal(err)
+		}
+		if name == "series_tag" {
+			seriesTagNotNull = notNull
+		}
+	}
+	if err := infoRows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !seriesTagNotNull {
+		t.Fatalf("series_tag is nullable: %s", tableSQL)
+	}
+	if !strings.Contains(normalized, "primary key(subject_id, freq, data_time, series_tag)") &&
+		!strings.Contains(normalized, "primary key (subject_id, freq, data_time, series_tag)") {
+		t.Fatalf("unexpected primary key: %s", tableSQL)
+	}
+	at := "2026-07-29T00:00:00Z"
+	write := func(tag string, close float64) viewindex.RowWrite {
+		return viewindex.RowWrite{
+			Key: viewindex.RowKey{Key: duckRowKey("s", "prices", "BTC-USDT", "1m", at, tag)},
+			Fields: []*pb.FieldValue{{
+				FieldId: "close",
+				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: close}},
+			}},
+		}
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites:      []viewindex.RowWrite{write("", 1), write("venue:binance", 2), write("venue:okx", 3)},
+		ViewRevision:   1,
+		ViewSchemaHash: "hash",
+		WriteMode:      viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites:      []viewindex.RowWrite{write("venue:okx", 30)},
+		ViewRevision:   1,
+		ViewSchemaHash: "hash",
+		WriteMode:      viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		tag  *string
+		want []string
+	}{
+		{name: "absent", want: []string{"", "venue:binance", "venue:okx"}},
+		{name: "present empty", tag: stringPtr(""), want: []string{""}},
+		{name: "present value", tag: stringPtr("venue:okx"), want: []string{"venue:okx"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{
+				Selectors: []viewindex.TimeSeriesSelector{{
+					SpaceID: "s", DatasetID: "prices", SubjectID: "BTC-USDT", Freq: "1m", SeriesTag: tc.tag,
+				}},
+				Limit: 10,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := rowTags(rows); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("tags=%v want=%v", got, tc.want)
+			}
+			if tc.name == "absent" {
+				wantClose := map[string]float64{"": 1, "venue:binance": 2, "venue:okx": 30}
+				for _, row := range rows {
+					tag := row.GetKey().GetTimeSeries().GetSeriesTag()
+					if got := fieldDouble(row, "close"); got != wantClose[tag] {
+						t.Fatalf("%q close=%v want=%v", tag, got, wantClose[tag])
+					}
+				}
+			}
+		})
+	}
+	rows, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{
+		Keys:  []*pb.RowKey{duckRowKey("s", "prices", "BTC-USDT", "1m", at, "venue:okx")},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rowTags(rows); !reflect.DeepEqual(got, []string{"venue:okx"}) {
+		t.Fatalf("exact key tags=%v", got)
+	}
+}
+
+func TestDuckDBStableTotalOrderAndPagination(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{
+		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1,
+		Engine: "duckdb", SchemaHash: "hash",
+		Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+	}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	at := "2026-07-29T00:00:00Z"
+	writes := []viewindex.RowWrite{
+		{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", "BTC", "1m", at, "venue:binance")}},
+		{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", "BTC", "1m", at, "venue:okx")}},
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites: writes, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryPages := func(order pb.SortOrder) []string {
+		t.Helper()
+		var tags []string
+		for offset := 0; offset < 2; offset++ {
+			rows, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{
+				Order: order, Limit: 1, Offset: offset,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("offset %d returned %d rows", offset, len(rows))
+			}
+			tags = append(tags, rows[0].GetKey().GetTimeSeries().GetSeriesTag())
+		}
+		return tags
+	}
+	asc := queryPages(pb.SortOrder_SORT_ORDER_ASC)
+	desc := queryPages(pb.SortOrder_SORT_ORDER_DESC)
+	if !reflect.DeepEqual(asc, []string{"venue:binance", "venue:okx"}) {
+		t.Fatalf("asc=%v", asc)
+	}
+	if !reflect.DeepEqual(desc, []string{"venue:okx", "venue:binance"}) {
+		t.Fatalf("desc=%v", desc)
+	}
+
+	if got := orderSQL(nil, pb.SortOrder_SORT_ORDER_ASC, map[string]pb.FieldValueType{}); got !=
+		` ORDER BY "subject_id" ASC, "freq" ASC, "data_time" ASC, "series_tag" ASC` {
+		t.Fatalf("default order=%q", got)
+	}
+	if got := orderSQL(nil, pb.SortOrder_SORT_ORDER_DESC, map[string]pb.FieldValueType{}); got !=
+		` ORDER BY "subject_id" DESC, "freq" DESC, "data_time" DESC, "series_tag" DESC` {
+		t.Fatalf("desc order=%q", got)
+	}
+	if got := orderSQL([]*pb.SortSpec{{FieldName: "close", Desc: true}, {FieldName: "data_time", Desc: true}}, pb.SortOrder_SORT_ORDER_ASC, map[string]pb.FieldValueType{"close": pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}); got !=
+		` ORDER BY "close" DESC, "data_time" DESC, "subject_id" ASC, "freq" ASC, "series_tag" ASC` {
+		t.Fatalf("custom order=%q", got)
+	}
+}
+
+func TestDuckDBAfterCursorIncludesSeriesTag(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{
+		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1,
+		Engine: "duckdb", SchemaHash: "hash",
+	}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	at := "2026-07-29T00:00:00Z"
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites: []viewindex.RowWrite{
+			{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", "BTC", "1m", at, "a")}},
+			{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", "BTC", "1m", at, "b")}},
+		},
+		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{Limit: 1})
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first=%v err=%v", first, err)
+	}
+	second, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{
+		AfterKey: first[0].GetKey(), Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rowTags(second); !reflect.DeepEqual(got, []string{"b"}) {
+		t.Fatalf("cursor skipped same-timestamp tag: %v", got)
+	}
+}
+
+func TestDuckDBExactKeyRequiresDataTimeAndAllowsEmptySeriesTag(t *testing.T) {
+	columns := map[string]pb.FieldValueType{}
+	_, _, err := buildWhere(viewindex.QuerySpec{Keys: []*pb.RowKey{
+		duckRowKey("s", "prices", "BTC", "1m", "", ""),
+	}}, columns)
+	if err == nil || !strings.Contains(err.Error(), "data_time") {
+		t.Fatalf("empty data_time error=%v", err)
+	}
+
+	where, args, err := buildWhere(viewindex.QuerySpec{Keys: []*pb.RowKey{
+		duckRowKey("s", "prices", "BTC", "1m", "2026-07-29T00:00:00Z", ""),
+	}}, columns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(where.sql, "data_time = ? AND series_tag = ?") {
+		t.Fatalf("exact default-tag where=%q", where.sql)
+	}
+	if got := args[len(args)-1]; got != "" {
+		t.Fatalf("default series_tag arg=%v", got)
+	}
+}
+
+func TestDuckDBRejectsMalformedSystemSchema(t *testing.T) {
+	cases := []struct {
+		name string
+		ddl  string
+	}{
+		{
+			name: "missing series tag",
+			ddl:  `CREATE TABLE view_rows (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, data_time TIMESTAMP_NS NOT NULL, PRIMARY KEY(subject_id, freq, data_time))`,
+		},
+		{
+			name: "wrong primary key",
+			ddl:  `CREATE TABLE view_rows (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, data_time TIMESTAMP_NS NOT NULL, series_tag VARCHAR NOT NULL, PRIMARY KEY(subject_id, freq, data_time))`,
+		},
+		{
+			name: "wrong series tag type",
+			ddl:  `CREATE TABLE view_rows (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, data_time TIMESTAMP_NS NOT NULL, series_tag BIGINT NOT NULL, PRIMARY KEY(subject_id, freq, data_time, series_tag))`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "duckdb")
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			manager, err := OpenIndexManager(IndexManagerOptions{Root: root})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer manager.Close()
+			path := filepath.Join(root, "idx.duckdb")
+			db, err := sql.Open("duckdb", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = db.Exec(`
+				CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL);
+				INSERT INTO view_meta VALUES (1, 1, 'hash', 'prices', 's', 'now');
+				CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
+				` + tc.ddl)
+			closeErr := db.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			_, err = manager.Stat(context.Background(), "idx")
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), "clean") || !strings.Contains(strings.ToLower(err.Error()), "rebuild") {
+				t.Fatalf("Stat error=%v, want cleanup/rebuild instruction", err)
+			}
+		})
+	}
+}
+
+func TestOpenIndexManagerAcceptsCurrentSchema(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "duckdb")
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Prepare(context.Background(), "current", viewindex.ViewIndexSchema{
+		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices",
+		ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenIndexManager(IndexManagerOptions{Root: root})
+	if err != nil {
+		t.Fatalf("reopen current schema: %v", err)
+	}
+	defer reopened.Close()
+	stats, err := reopened.Stat(context.Background(), "current")
+	if err != nil || !stats.Exists {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+}
 
 func TestDuckDBPrepareWriteAndPushdownQuery(t *testing.T) {
 	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})

@@ -20,7 +20,7 @@ func TestBuiltInEvents(t *testing.T) {
 		"observability.health.check.reported@1",
 		"observability.host.snapshot.reported@1",
 		"observability.metrics.snapshot.reported@1",
-		"storage.dataset.rows.upserted@1",
+		"storage.dataset.rows.upserted@2",
 		"trade.target.requested@1",
 	}
 	wantOwners := map[string]string{
@@ -28,7 +28,7 @@ func TestBuiltInEvents(t *testing.T) {
 		"observability.health.check.reported@1":     "watchdog",
 		"observability.host.snapshot.reported@1":    "hostagent",
 		"observability.metrics.snapshot.reported@1": "service",
-		"storage.dataset.rows.upserted@1":           "storage",
+		"storage.dataset.rows.upserted@2":           "storage",
 		"trade.target.requested@1":                  "strategy",
 	}
 	events := registry.Events()

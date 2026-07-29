@@ -152,8 +152,9 @@ func TestLatestTimeSeriesTimeReadsNewestStorageRow(t *testing.T) {
 	}}
 	writer := &storageWriter{access: proxy}
 
-	got, found, err := writer.LatestTimeSeriesTime(context.Background(), &storagepb.TimeSeriesKey{
-		SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1m",
+	tag := binanceSeriesTag
+	got, found, err := writer.LatestTimeSeriesTime(context.Background(), &storagepb.TimeSeriesSelector{
+		SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &tag,
 	})
 	require.NoError(t, err)
 	require.True(t, found)
@@ -161,6 +162,9 @@ func TestLatestTimeSeriesTimeReadsNewestStorageRow(t *testing.T) {
 	require.NotNil(t, proxy.req)
 	assert.Equal(t, storagepb.SortOrder_SORT_ORDER_DESC, proxy.req.GetOrder())
 	assert.Equal(t, uint32(1), proxy.req.GetPage().GetSize())
+	require.Len(t, proxy.req.GetSelectors(), 1)
+	require.NotNil(t, proxy.req.GetSelectors()[0].SeriesTag)
+	assert.Equal(t, binanceSeriesTag, proxy.req.GetSelectors()[0].GetSeriesTag())
 }
 
 func TestStorageWriterRetriesInnerErrorThreeTimes(t *testing.T) {
@@ -172,7 +176,7 @@ func TestStorageWriterRetriesInnerErrorThreeTimes(t *testing.T) {
 	}
 	writer := &storageWriter{access: proxy}
 
-	_, _, err := writer.LatestTimeSeriesTime(context.Background(), &storagepb.TimeSeriesKey{})
+	_, _, err := writer.LatestTimeSeriesTime(context.Background(), &storagepb.TimeSeriesSelector{})
 
 	require.NoError(t, err)
 	assert.Equal(t, outboundAttempts, proxy.calls)
@@ -184,7 +188,7 @@ func TestStorageWriterDoesNotRetryInvalidParam(t *testing.T) {
 	}}
 	writer := &storageWriter{access: proxy}
 
-	_, _, err := writer.LatestTimeSeriesTime(context.Background(), &storagepb.TimeSeriesKey{})
+	_, _, err := writer.LatestTimeSeriesTime(context.Background(), &storagepb.TimeSeriesSelector{})
 
 	require.Error(t, err)
 	assert.Equal(t, 1, proxy.calls)

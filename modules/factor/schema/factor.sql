@@ -9,11 +9,11 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_input_columns_json TEXT NOT NULL,
     c_outputs_json TEXT NOT NULL,
     c_params_json TEXT NOT NULL DEFAULT '{}',
-    c_lookback_rows INTEGER NOT NULL,
+    c_lookback_periods INTEGER NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'disabled',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_lookback_rows >= 1),
+    CHECK (c_lookback_periods >= 1),
     CHECK (c_status IN ('enabled', 'disabled')),
     UNIQUE (c_name)
 );

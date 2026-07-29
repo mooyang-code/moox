@@ -62,7 +62,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 		t.Fatal(err)
 	}
 	consumers := make(map[string]*events.Consumer, 3)
-	for _, durable := range []string{"storage_view", "factor_calc", "moox_archive_kline_v1"} {
+	for _, durable := range []string{"storage_view", "factor_calc", "moox_archive_kline_v2"} {
 		consumer, err := events.NewConsumer(context.Background(), client, registry, events.ConsumerConfig{
 			Name: durable, Event: events.DatasetRowsUpserted, AckWait: time.Minute,
 			MaxDeliver: 5, MaxAckPending: 256, FetchMaxWait: 100 * time.Millisecond,

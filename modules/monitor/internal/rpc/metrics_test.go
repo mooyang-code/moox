@@ -266,12 +266,12 @@ func (f *hostReaderAccessFake) ReadTimeSeriesRows(_ context.Context, req *storag
 	cfg := monconfig.Default().Metrics.HostStorage
 	at := time.Now().UTC().Truncate(time.Minute).Format(time.RFC3339Nano)
 	agentID := "agent-1"
-	if len(req.GetKeys()) > 0 {
-		agentID = req.GetKeys()[0].GetSubjectId()
+	if len(req.GetSelectors()) > 0 {
+		agentID = req.GetSelectors()[0].GetSubjectId()
 	}
 	dataset := cfg.ResourceDatasetID
-	if len(req.GetKeys()) > 0 {
-		dataset = req.GetKeys()[0].GetDatasetId()
+	if len(req.GetSelectors()) > 0 {
+		dataset = req.GetSelectors()[0].GetDatasetId()
 	}
 	var rows []*storagepb.TimeSeriesRow
 	if dataset == cfg.ResourceDatasetID {

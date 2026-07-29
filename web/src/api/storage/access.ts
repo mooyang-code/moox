@@ -8,13 +8,15 @@ import type {
   RowFieldUpsert,
   SortOrder,
   TimeRange,
-  TimeSeriesKey,
+  TimeSeriesSelector,
   TimeSeriesRow,
   VersionRange
 } from "./types";
 
 export interface ReadTimeSeriesRowsReq {
-  keys: TimeSeriesKey[];
+  space_id: string;
+  dataset_id: string;
+  selectors: TimeSeriesSelector[];
   time_range?: TimeRange;
   order?: SortOrder;
   column_names?: string[];

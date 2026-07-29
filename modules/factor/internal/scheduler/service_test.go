@@ -29,20 +29,30 @@ func TestSchedulerSupersedeDoesNotGrowQueue(t *testing.T) {
 	require.Equal(t, 1, svc.Status().QueueDepth)
 }
 
+func TestSchedulerDoesNotMergeDifferentFactorsInSameDatasetScope(t *testing.T) {
+	svc := NewService(Config{Workers: 1, QueueCapacity: 2}, nil, nil)
+	first := oneBarTask("BTC", time.Unix(1, 0))
+	second := oneBarTask("BTC", time.Unix(1, 0))
+	second.Factor.FactorID = "cci"
+	require.NoError(t, svc.Enqueue(context.Background(), first))
+	require.NoError(t, svc.Enqueue(context.Background(), second))
+	require.Equal(t, 2, svc.Status().QueueDepth)
+}
+
 func TestSchedulerSupersedeMergesPendingRanges(t *testing.T) {
 	svc := NewService(Config{Workers: 1, QueueCapacity: 1}, nil, nil)
 	first := rangeTask("BTC", time.Unix(10, 0), time.Unix(20, 0))
 	first.TaskID = "first"
-	first.LookbackRows = 2
-	first.Factors = []engine.FactorSpec{{FactorID: "old", Outputs: []string{"old"}}}
+	first.LookbackPeriods = 2
+	first.Factor = engine.FactorSpec{FactorID: "bias", Name: "Old", Outputs: []string{"old"}}
 	second := rangeTask("BTC", time.Unix(5, 0), time.Unix(15, 0))
 	second.TaskID = "second"
-	second.LookbackRows = 7
-	second.Factors = []engine.FactorSpec{{FactorID: "new", Outputs: []string{"new"}}}
+	second.LookbackPeriods = 7
+	second.Factor = engine.FactorSpec{FactorID: "bias", Name: "New", Outputs: []string{"new"}}
 	third := rangeTask("BTC", time.Unix(12, 0), time.Unix(30, 0))
 	third.TaskID = "third"
-	third.LookbackRows = 11
-	third.Factors = []engine.FactorSpec{{FactorID: "latest", Outputs: []string{"latest"}}}
+	third.LookbackPeriods = 11
+	third.Factor = engine.FactorSpec{FactorID: "bias", Name: "Latest", Outputs: []string{"latest"}}
 
 	require.NoError(t, svc.Enqueue(context.Background(), first))
 	require.NoError(t, svc.Enqueue(context.Background(), second))
@@ -51,8 +61,8 @@ func TestSchedulerSupersedeMergesPendingRanges(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, time.Unix(5, 0), queued.StartTime)
 	require.Equal(t, time.Unix(30, 0), queued.EndTime)
-	require.Equal(t, 11, queued.LookbackRows)
-	require.Equal(t, third.Factors, queued.Factors)
+	require.Equal(t, 11, queued.LookbackPeriods)
+	require.Equal(t, third.Factor, queued.Factor)
 	require.Equal(t, DeterministicTaskID(queued), queued.TaskID)
 }
 
@@ -100,18 +110,18 @@ func TestSchedulerMergedTaskIDDescribesFinalUnionAndIgnoresArrivalOrder(t *testi
 
 func TestSchedulerMergedTaskIDUsesLatestExecutableFactorSnapshot(t *testing.T) {
 	old := rangeTask("BTC", time.Unix(10, 0), time.Unix(20, 0))
-	old.LookbackRows = 2
-	old.Factors = []engine.FactorSpec{{
+	old.LookbackPeriods = 2
+	old.Factor = engine.FactorSpec{
 		FactorID: "factor", Name: "Factor", SourceHash: "old-hash", SourcePath: "/old/module.py",
 		InputColumns: []string{"old_input"}, Outputs: []string{"old_output"}, ParamsJSON: `{"version":1}`,
-	}}
+	}
 	old.TaskID = DeterministicTaskID(old)
 	latest := rangeTask("BTC", time.Unix(5, 0), time.Unix(15, 0))
-	latest.LookbackRows = 7
-	latest.Factors = []engine.FactorSpec{{
+	latest.LookbackPeriods = 7
+	latest.Factor = engine.FactorSpec{
 		FactorID: "factor", Name: "FactorV2", SourceHash: "new-hash", SourcePath: "/new/module.py",
 		InputColumns: []string{"input_b", "input_a"}, Outputs: []string{"output_b", "output_a"}, ParamsJSON: `{"version":2}`,
-	}}
+	}
 	latest.TaskID = DeterministicTaskID(latest)
 	want := latest
 	want.EndTime = old.EndTime
@@ -132,40 +142,34 @@ func TestSchedulerMergedTaskIDUsesLatestExecutableFactorSnapshot(t *testing.T) {
 
 func TestDeterministicTaskIDCoversFactorSnapshotAndNormalizesSliceOrder(t *testing.T) {
 	base := rangeTask("BTC", time.Unix(5, 0), time.Unix(20, 0))
-	base.LookbackRows = 7
-	base.Factors = []engine.FactorSpec{{
+	base.LookbackPeriods = 7
+	base.Factor = engine.FactorSpec{
 		FactorID: "factor", Name: "Factor", SourceHash: "hash", SourcePath: "/module.py",
 		InputColumns: []string{"input_a", "input_b"}, Outputs: []string{"output_a", "output_b"}, ParamsJSON: `{"version":1}`,
-	}, {
-		FactorID: "other", Name: "Other", SourceHash: "other-hash", SourcePath: "/other.py",
-		InputColumns: []string{"other_input"}, Outputs: []string{"other_output"}, ParamsJSON: `{}`,
-	}}
+	}
 	baseID := DeterministicTaskID(base)
 
 	mutations := map[string]func(*Task){
-		"lookback":    func(task *Task) { task.LookbackRows++ },
-		"factor id":   func(task *Task) { task.Factors[0].FactorID = "changed" },
-		"name":        func(task *Task) { task.Factors[0].Name = "Changed" },
-		"source hash": func(task *Task) { task.Factors[0].SourceHash = "changed" },
-		"source path": func(task *Task) { task.Factors[0].SourcePath = "/changed.py" },
-		"inputs":      func(task *Task) { task.Factors[0].InputColumns = []string{"different"} },
-		"outputs":     func(task *Task) { task.Factors[0].Outputs = []string{"different"} },
-		"params":      func(task *Task) { task.Factors[0].ParamsJSON = `{"version":2}` },
+		"lookback":    func(task *Task) { task.LookbackPeriods++ },
+		"factor id":   func(task *Task) { task.Factor.FactorID = "changed" },
+		"name":        func(task *Task) { task.Factor.Name = "Changed" },
+		"source hash": func(task *Task) { task.Factor.SourceHash = "changed" },
+		"source path": func(task *Task) { task.Factor.SourcePath = "/changed.py" },
+		"inputs":      func(task *Task) { task.Factor.InputColumns = []string{"different"} },
+		"outputs":     func(task *Task) { task.Factor.Outputs = []string{"different"} },
+		"params":      func(task *Task) { task.Factor.ParamsJSON = `{"version":2}` },
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
 			changed := base
-			changed.Factors = append([]engine.FactorSpec(nil), base.Factors...)
 			mutate(&changed)
 			require.NotEqual(t, baseID, DeterministicTaskID(changed))
 		})
 	}
 
 	reordered := base
-	reordered.Factors = append([]engine.FactorSpec(nil), base.Factors...)
-	reordered.Factors[0].InputColumns = []string{"input_b", "input_a"}
-	reordered.Factors[0].Outputs = []string{"output_b", "output_a"}
-	reordered.Factors[0], reordered.Factors[1] = reordered.Factors[1], reordered.Factors[0]
+	reordered.Factor.InputColumns = []string{"input_b", "input_a"}
+	reordered.Factor.Outputs = []string{"output_b", "output_a"}
 	require.Equal(t, baseID, DeterministicTaskID(reordered))
 }
 
@@ -181,26 +185,38 @@ func TestSchedulerAcceptsConfiguredNumberOfScopes(t *testing.T) {
 }
 
 func TestValidateFactorResultNullAndFiniteContract(t *testing.T) {
-	specs := []engine.FactorSpec{{Name: "Cci", Outputs: []string{"cci"}}}
-	require.NoError(t, validateFactorResult(specs, 2, &engine.FactorResult{
-		Columns: map[string][]any{"cci": {nil, 1.25}},
+	start := time.Unix(1, 0).UTC()
+	end := time.Unix(3, 0).UTC()
+	spec := engine.FactorSpec{Name: "Cci", Outputs: []string{"cci"}}
+	require.NoError(t, validateFactorResult(spec, start, end, &engine.FactorResult{
+		Rows: []engine.FactorResultRow{
+			{DataTime: start, SeriesTag: "", Values: map[string]any{"cci": nil}},
+			{DataTime: time.Unix(2, 0).UTC(), SeriesTag: "venue:binance", Values: map[string]any{"cci": 1.25}},
+		},
 	}))
 	for _, value := range []any{"bad", math.NaN(), math.Inf(1)} {
-		require.Error(t, validateFactorResult(specs, 1, &engine.FactorResult{
-			Columns: map[string][]any{"cci": {value}},
+		require.Error(t, validateFactorResult(spec, start, end, &engine.FactorResult{
+			Rows: []engine.FactorResultRow{{
+				DataTime: start, Values: map[string]any{"cci": value},
+			}},
 		}))
 	}
-	require.Error(t, validateFactorResult(specs, 2, &engine.FactorResult{
-		Columns: map[string][]any{"cci": {1.0}},
+	require.Error(t, validateFactorResult(spec, start, end, &engine.FactorResult{
+		Rows: []engine.FactorResultRow{{
+			DataTime: start, Values: map[string]any{"extra": 1.0},
+		}},
 	}))
-	require.Error(t, validateFactorResult(specs, 1, &engine.FactorResult{
-		Columns: map[string][]any{"extra": {1.0}},
+	require.Error(t, validateFactorResult(spec, start, end, &engine.FactorResult{
+		Rows: []engine.FactorResultRow{{
+			DataTime: end, Values: map[string]any{"cci": 1.0},
+		}},
 	}))
-	require.Error(t, validateFactorResult(
-		[]engine.FactorSpec{{Outputs: []string{"shared"}}, {Outputs: []string{"shared"}}},
-		1,
-		&engine.FactorResult{Columns: map[string][]any{"shared": {1.0}}},
-	))
+	require.Error(t, validateFactorResult(spec, start, end, &engine.FactorResult{
+		Rows: []engine.FactorResultRow{
+			{DataTime: start, Values: map[string]any{"cci": 1.0}},
+			{DataTime: start, Values: map[string]any{"cci": 2.0}},
+		},
+	}))
 }
 
 func TestRunChunksRangeAndWritesInOrder(t *testing.T) {
@@ -219,9 +235,116 @@ func TestRunChunksRangeAndWritesInOrder(t *testing.T) {
 	require.Equal(t, []int{2000, 1}, storage.writeSizes)
 }
 
-func TestRunFailsWithoutTargetRows(t *testing.T) {
-	svc := NewService(Config{}, &fakeStorage{chunks: []*storageio.RangeChunk{{Frame: &engine.DataFrame{}}}}, &fakeExecutor{})
-	require.Error(t, svc.Run(context.Background(), oneBarTask("BTC", time.Unix(1, 0))))
+func TestRunAcceptsCompleteEmptyRange(t *testing.T) {
+	exec := &fakeExecutor{}
+	svc := NewService(Config{}, &fakeStorage{chunks: []*storageio.RangeChunk{{
+		Frame: &engine.DataFrame{}, Complete: true,
+	}}}, exec)
+	require.NoError(t, svc.Run(context.Background(), oneBarTask("BTC", time.Unix(1, 0))))
+	require.Zero(t, exec.calls)
+}
+
+func TestEventRunRetriesIncompleteEmptyRead(t *testing.T) {
+	base := time.Unix(1, 0).UTC()
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{
+		{Frame: &engine.DataFrame{}, Complete: false},
+		frameChunk([]time.Time{base}),
+	}}
+	exec := &fakeExecutor{}
+	svc := NewService(Config{EventReadRetry: 1}, storage, exec)
+
+	require.NoError(t, svc.Run(context.Background(), oneBarTask("BTC", base)))
+	require.Equal(t, 2, storage.readCalls)
+	require.Equal(t, 1, exec.calls)
+}
+
+func TestEventRunDoesNotExecuteIncompleteRows(t *testing.T) {
+	base := time.Unix(1, 0).UTC()
+	incomplete := frameChunk([]time.Time{base})
+	incomplete.Complete = false
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{
+		incomplete,
+		frameChunk([]time.Time{base}),
+	}}
+	exec := &fakeExecutor{}
+	svc := NewService(Config{EventReadRetry: 1}, storage, exec)
+
+	require.NoError(t, svc.Run(context.Background(), oneBarTask("BTC", base)))
+	require.Equal(t, 2, storage.readCalls)
+	require.Equal(t, 1, exec.calls)
+}
+
+func TestManualRunAcceptsIncompleteEmptyRangeWithoutEventRetry(t *testing.T) {
+	task := oneBarTask("BTC", time.Unix(1, 0))
+	task.TriggerType = "manual"
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{{
+		Frame: &engine.DataFrame{}, Complete: false,
+	}}}
+	exec := &fakeExecutor{}
+	svc := NewService(Config{EventReadRetry: 3}, storage, exec)
+
+	require.NoError(t, svc.Run(context.Background(), task))
+	require.Equal(t, 1, storage.readCalls)
+	require.Zero(t, exec.calls)
+}
+
+func TestManualRunRejectsIncompleteNonEmptyRangeWithoutRetryOrWrite(t *testing.T) {
+	base := time.Unix(1, 0).UTC()
+	incomplete := frameChunk([]time.Time{base})
+	incomplete.Complete = false
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{incomplete}}
+	exec := &fakeExecutor{}
+	task := oneBarTask("BTC", base)
+	task.TriggerType = "recalc"
+	svc := NewService(Config{EventReadRetry: 3}, storage, exec)
+
+	require.ErrorIs(t, svc.Run(context.Background(), task), ErrViewIncomplete)
+	require.Equal(t, 1, storage.readCalls)
+	require.Zero(t, exec.calls)
+	require.Empty(t, storage.writeSizes)
+}
+
+func TestEventRunReportsIncompleteAfterRetryExhaustionAndCanRunAgain(t *testing.T) {
+	base := time.Unix(1, 0).UTC()
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{
+		{Frame: &engine.DataFrame{}, Complete: false},
+		{Frame: &engine.DataFrame{}, Complete: false},
+		frameChunk([]time.Time{base}),
+	}}
+	exec := &fakeExecutor{}
+	observer := &recordingDatasetObserver{}
+	svc := NewService(
+		Config{EventReadRetry: 1},
+		storage,
+		exec,
+		WithDatasetMetrics(observer),
+	)
+
+	require.ErrorIs(t, svc.Run(context.Background(), oneBarTask("BTC", base)), ErrViewIncomplete)
+	require.Len(t, observer.observations, 1)
+	require.Equal(t, "incomplete", observer.observations[0].Result)
+	require.NoError(t, svc.Run(context.Background(), oneBarTask("BTC", base)))
+	require.Equal(t, 1, exec.calls)
+}
+
+func TestEventRunExpandsCorrectionThroughDependentPeriods(t *testing.T) {
+	base := time.Unix(1, 0).UTC()
+	expandedEnd := base.Add(3 * time.Minute)
+	storage := &fakeStorage{
+		chunks: []*storageio.RangeChunk{
+			frameChunk([]time.Time{base, base.Add(time.Minute), base.Add(2 * time.Minute)}),
+		},
+		expandedEnd: expandedEnd,
+	}
+	exec := &fakeExecutor{}
+	svc := NewService(Config{}, storage, exec)
+	task := oneBarTask("BTC", base)
+	task.LookbackPeriods = 3
+
+	require.NoError(t, svc.Run(context.Background(), task))
+	require.Equal(t, 1, storage.expandCalls)
+	require.Equal(t, expandedEnd, storage.readEnds[0])
+	require.Equal(t, []int{3}, storage.writeSizes)
 }
 
 func TestRunSecondChunkFailureLeavesFirstChunkWritten(t *testing.T) {
@@ -317,7 +440,8 @@ func rangeTask(subject string, start, end time.Time) Task {
 		TaskID: "task-" + subject, SpaceID: "crypto",
 		SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: subject, Freq: "1m", StartTime: start, EndTime: end,
-		LookbackRows: 20, Factors: []engine.FactorSpec{{FactorID: "bias", Name: "Bias", Outputs: []string{"bias"}}},
+		LookbackPeriods: 20,
+		Factor:          engine.FactorSpec{FactorID: "bias", Name: "Bias", Outputs: []string{"bias"}},
 	}, TriggerType: "event"}
 }
 
@@ -326,11 +450,26 @@ type fakeStorage struct {
 	writeSizes  []int
 	writeErr    error
 	repeatFirst bool
+	expandedEnd time.Time
+	expandErr   error
+	expandCalls int
+	readCalls   int
+	readEnds    []time.Time
 }
 
-func (s *fakeStorage) ReadRangeChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, int, []string) (*storageio.RangeChunk, error) {
+func (s *fakeStorage) ReadRangeChunk(
+	_ context.Context,
+	_ storageio.WindowKey,
+	_ time.Time,
+	end time.Time,
+	_ int,
+	_ int,
+	_ []string,
+) (*storageio.RangeChunk, error) {
+	s.readCalls++
+	s.readEnds = append(s.readEnds, end)
 	if len(s.chunks) == 0 {
-		return &storageio.RangeChunk{Frame: &engine.DataFrame{}}, nil
+		return &storageio.RangeChunk{Frame: &engine.DataFrame{}, Complete: true}, nil
 	}
 	chunk := s.chunks[0]
 	if !s.repeatFirst {
@@ -338,12 +477,28 @@ func (s *fakeStorage) ReadRangeChunk(context.Context, storageio.WindowKey, time.
 	}
 	return chunk, nil
 }
-func (s *fakeStorage) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, times []time.Time, _ *engine.FactorResult) (uint64, error) {
-	s.writeSizes = append(s.writeSizes, len(times))
+func (s *fakeStorage) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, result *engine.FactorResult) (uint64, error) {
+	s.writeSizes = append(s.writeSizes, len(result.Rows))
 	if s.writeErr != nil {
 		return 0, s.writeErr
 	}
-	return uint64(len(times)), nil
+	return uint64(len(result.Rows)), nil
+}
+
+func (s *fakeStorage) ExpandEndByPeriods(
+	_ context.Context,
+	_ storageio.WindowKey,
+	end time.Time,
+	_ int,
+) (time.Time, error) {
+	s.expandCalls++
+	if s.expandErr != nil {
+		return time.Time{}, s.expandErr
+	}
+	if s.expandedEnd.After(end) {
+		return s.expandedEnd, nil
+	}
+	return end, nil
 }
 
 type fakeExecutor struct {
@@ -365,19 +520,17 @@ func (e *fakeExecutor) Execute(_ context.Context, _ *engine.FactorTask, frame *e
 	if e.err != nil {
 		return nil, e.err
 	}
-	targetRows := 0
-	for range frame.DataTimes {
-		targetRows++
+	rows := make([]engine.FactorResultRow, 0, len(frame.DataTimes))
+	for i, dataTime := range frame.DataTimes {
+		tag := ""
+		if i < len(frame.SeriesTags) {
+			tag = frame.SeriesTags[i]
+		}
+		rows = append(rows, engine.FactorResultRow{
+			DataTime: dataTime, SeriesTag: tag, Values: map[string]any{"bias": nil},
+		})
 	}
-	return &engine.FactorResult{Columns: map[string][]any{"bias": make([]any, targetRows)}}, nil
-}
-
-func TestInputColumnsUsesOnlyDeclaredColumns(t *testing.T) {
-	specs := []engine.FactorSpec{
-		{InputColumns: []string{"nav", "benchmark_return"}},
-		{InputColumns: []string{"nav", "risk_free_rate"}},
-	}
-	require.Equal(t, []string{"benchmark_return", "nav", "risk_free_rate"}, inputColumns(specs))
+	return &engine.FactorResult{Rows: rows}, nil
 }
 func (*fakeExecutor) Close() error { return nil }
 
@@ -389,5 +542,10 @@ func makeTimes(start time.Time, count int) []time.Time {
 	return out
 }
 func frameChunk(times []time.Time) *storageio.RangeChunk {
-	return &storageio.RangeChunk{Frame: &engine.DataFrame{DataTimes: times}, TargetTimes: times}
+	return &storageio.RangeChunk{
+		Frame: &engine.DataFrame{
+			DataTimes: times, SeriesTags: make([]string, len(times)),
+		},
+		TargetPeriods: times, Complete: true,
+	}
 }

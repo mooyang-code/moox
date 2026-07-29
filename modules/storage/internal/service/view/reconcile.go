@@ -101,16 +101,20 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	}
 	var stats viewindex.ViewIndexStats
 	if view.GetActiveIndexId() != "" {
-		if err := s.AttachActiveView(view); err != nil {
-			return err
+		engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
+		engine := s.engines[engineName]
+		if engine == nil {
+			return fmt.Errorf("view engine %q is unavailable", engineName)
 		}
-		engine, err := s.engineFor(view.GetActiveIndexId())
-		if err != nil {
-			return err
-		}
+		var err error
 		stats, err = engine.Stat(ctx, view.GetActiveIndexId())
 		if err != nil {
 			return err
+		}
+		if stats.Exists {
+			if err := s.AttachActiveView(view); err != nil {
+				return err
+			}
 		}
 	}
 	failedBuild := false
@@ -190,11 +194,6 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	if err := requireSuccess(claim.GetRetInfo()); err != nil {
 		return err
 	}
-	if view.GetActiveIndexId() != "" {
-		if err := s.TrackViewBuild(view.GetSpaceId(), view.GetViewId(), buildID, opts.OwnerID, opts.Metadata, auth); err != nil {
-			return err
-		}
-	}
 	prepared, err := s.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
 		AuthInfo: auth, IndexId: indexID, Engine: schema.Engine,
 		Schema: &pb.ViewIndexSchema{
@@ -210,6 +209,11 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, fmt.Errorf("prepare view index: %w", prepareErr))
 		return prepareErr
 	}
+	if view.GetActiveIndexId() != "" {
+		if err := s.TrackViewBuild(view.GetSpaceId(), view.GetViewId(), buildID, opts.OwnerID, opts.Metadata, auth); err != nil {
+			return err
+		}
+	}
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, 0); err != nil {
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 		return err
@@ -224,6 +228,10 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		// DataNode deliberately exposes no range scan API.
 	}
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_READY, uint64(stats.EntryCount)); err != nil {
+		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
+		return err
+	}
+	if err := s.MarkViewBuildReady(view.GetSpaceId(), view.GetViewId()); err != nil {
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 		return err
 	}

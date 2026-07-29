@@ -11,7 +11,7 @@ import (
 
 const MaxDatasetMetricSeries = 1000
 
-var allowedDatasetResults = stringSet("success", "error", "empty", "rejected")
+var allowedDatasetResults = stringSet("success", "error", "empty", "rejected", "incomplete")
 
 type DatasetKey struct {
 	SpaceID   string

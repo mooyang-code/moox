@@ -14,7 +14,7 @@ message FactorDef {
   repeated string input_columns = 5;
   repeated string outputs = 6;
   string params_json = 7;
-  int32 lookback_rows = 8;
+  int32 lookback_periods = 8;
   string status = 9;
   string created_at = 10;
   string updated_at = 11;

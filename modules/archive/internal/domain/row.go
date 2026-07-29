@@ -22,12 +22,11 @@ type Scalar struct {
 }
 
 type RowPatch struct {
-	Partition      PartitionKey      `json:"partition"`
-	DataTime       time.Time         `json:"data_time"`
-	DimensionsJSON string            `json:"dimensions_json"`
-	Attributes     map[string]string `json:"attributes"`
-	WrittenAt      time.Time         `json:"written_at"`
-	Columns        map[string]Scalar `json:"columns"`
+	Partition  PartitionKey      `json:"partition"`
+	DataTime   time.Time         `json:"data_time"`
+	Attributes map[string]string `json:"attributes"`
+	WrittenAt  time.Time         `json:"written_at"`
+	Columns    map[string]Scalar `json:"columns"`
 }
 
 type EventBatch struct {
@@ -36,12 +35,11 @@ type EventBatch struct {
 }
 
 type ArchiveRow struct {
-	Partition      PartitionKey
-	DataTime       time.Time
-	DimensionsJSON string
-	Attributes     map[string]string
-	WrittenAt      time.Time
-	Columns        map[string]Scalar
+	Partition  PartitionKey
+	DataTime   time.Time
+	Attributes map[string]string
+	WrittenAt  time.Time
+	Columns    map[string]Scalar
 }
 
 type Manifest struct {
@@ -185,7 +183,6 @@ func MergePatch(base ArchiveRow, patch RowPatch) ArchiveRow {
 	out := base
 	out.DataTime = patch.DataTime
 	out.Partition = patch.Partition
-	out.DimensionsJSON = patch.DimensionsJSON
 	out.WrittenAt = patch.WrittenAt
 	out.Attributes = cloneStrings(base.Attributes)
 	if out.Attributes == nil {

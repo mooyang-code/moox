@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestViewMetricsRecordFixedOutcomeDimensions(t *testing.T) {
+func TestViewMetricsRecordFixedOutcomeLabels(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewViewMetrics(registry)
 	require.NoError(t, err)

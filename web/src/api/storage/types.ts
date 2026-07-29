@@ -370,8 +370,16 @@ export interface TimeSeriesKey {
   dataset_id: string;
   subject_id: string;
   freq: string;
-  dimensions?: Record<string, string>;
+  series_tag?: string;
   data_time?: string;
+}
+
+export interface TimeSeriesSelector {
+  space_id: string;
+  dataset_id: string;
+  subject_id: string;
+  freq: string;
+  series_tag?: string;
 }
 
 export interface TimeSeriesRow {
@@ -397,7 +405,7 @@ export interface TimeSeriesRowKey {
   subject_id: string;
   freq: string;
   data_time: string;
-  dimensions?: Record<string, string>;
+  series_tag?: string;
 }
 
 export interface RecordRowKey {

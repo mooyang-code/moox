@@ -58,3 +58,41 @@ func TestApplySchemaRejectsObsoleteDatabase(t *testing.T) {
 	err = db.ApplySchema(factorschema.AllSQL())
 	require.ErrorContains(t, err, "fresh database")
 }
+
+func TestApplySchemaRejectsLookbackRowsDatabase(t *testing.T) {
+	db, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.db.Exec(`
+		CREATE TABLE t_factor_defs (
+			c_factor_id TEXT NOT NULL PRIMARY KEY,
+			c_name TEXT NOT NULL,
+			c_source_code TEXT NOT NULL,
+			c_source_hash TEXT NOT NULL,
+			c_source_path TEXT NOT NULL DEFAULT '',
+			c_input_columns_json TEXT NOT NULL,
+			c_outputs_json TEXT NOT NULL,
+			c_params_json TEXT NOT NULL DEFAULT '{}',
+			c_lookback_rows INTEGER NOT NULL,
+			c_status TEXT NOT NULL,
+			c_ctime DATETIME NOT NULL,
+			c_mtime DATETIME NOT NULL
+		);
+		CREATE TABLE t_factor_bindings (
+			c_binding_id TEXT NOT NULL PRIMARY KEY,
+			c_factor_id TEXT NOT NULL,
+			c_space_id TEXT NOT NULL,
+			c_source_dataset TEXT NOT NULL,
+			c_freq TEXT NOT NULL,
+			c_subject_mode TEXT NOT NULL,
+			c_subjects_json TEXT NOT NULL,
+			c_target_dataset TEXT NOT NULL,
+			c_status TEXT NOT NULL,
+			c_ctime DATETIME NOT NULL,
+			c_mtime DATETIME NOT NULL
+		);
+	`).Error)
+
+	err = db.ApplySchema(factorschema.AllSQL())
+	require.ErrorContains(t, err, "fresh database")
+}
