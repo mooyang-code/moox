@@ -142,6 +142,25 @@ func TestAdapterFillsOrderAndExposesSnapshots(t *testing.T) {
 	require.Equal(t, "0", balance(snapshot, "BTC").Available.String())
 }
 
+func TestPaperAdapterRejectsLimitAsDefenseInDepth(t *testing.T) {
+	adapter := New(
+		publicExchangeStub{}, nil, "space-1", "account-1",
+		exchange.MarketTypeSpot, "USDT", shared.MustDecimal("100000"),
+		exchange.MarginModeUnspecified, nil,
+	)
+	price := shared.MustDecimal("100")
+
+	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
+		ClientOrderID: "paper-limit", Symbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeLimit, FillPolicy: exchange.FillPolicyGTC,
+		Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
+		LimitPrice: &price, ReferencePrice: price,
+	})
+
+	require.Error(t, err)
+	require.True(t, exchange.IsKind(err, exchange.ErrorRejected))
+}
+
 func TestAdapterBuildsSwapPositionAndMargin(t *testing.T) {
 	adapter := New(
 		publicExchangeStub{}, nil, "space-1", "account-1",

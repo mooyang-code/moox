@@ -21,6 +21,7 @@ var (
 	ErrInsufficientFunds  = errors.New("trade order: insufficient available funds")
 	ErrLeverageLimit      = errors.New("trade order: leverage exceeds configured ceiling")
 	ErrReduceOnly         = errors.New("trade order: invalid reduce-only direction")
+	ErrPaperLimit         = errors.New("trade order: paper mode supports MARKET orders only")
 	ErrValidatorConfig    = errors.New("trade order: validator is not configured")
 )
 
@@ -75,6 +76,10 @@ func (v Validator) Validate(
 	if account.SpaceID != spaceID {
 		return Validation{}, ErrAccountOwnership
 	}
+	if account.ExecutionMode == exchange.ExecutionModePaper &&
+		spec.Type == exchange.OrderTypeLimit {
+		return Validation{}, ErrPaperLimit
+	}
 	if err := spec.Validate(account.MarketType, now, v.MaxReferenceAge); err != nil {
 		return Validation{}, err
 	}
@@ -82,7 +87,7 @@ func (v Validator) Validate(
 		ctx,
 		account.Exchange,
 		account.MarketType,
-		spec.Symbol,
+		spec.InstrumentID,
 	)
 	if err != nil {
 		return Validation{}, err
@@ -107,7 +112,7 @@ func (v Validator) Validate(
 
 	referenceNotional := spec.Quantity.Mul(spec.ReferencePrice)
 	orderNotional := referenceNotional
-	if spec.OrderType == exchange.OrderTypeLimit {
+	if spec.Type == exchange.OrderTypeLimit {
 		orderNotional = spec.Quantity.Mul(*spec.LimitPrice)
 	}
 	if instrument.MinNotional.Cmp(shared.Zero()) > 0 &&
@@ -128,7 +133,7 @@ func (v Validator) Validate(
 		if spec.Side == exchange.SideBuy {
 			result.ReservedAsset = instrument.QuoteAsset
 			result.ReservedQuantity = withFeeBuffer(referenceNotional, v.FeeBufferRate)
-			if spec.OrderType == exchange.OrderTypeLimit {
+			if spec.Type == exchange.OrderTypeLimit {
 				result.ReservedQuantity = orderNotional
 			}
 		} else {
@@ -139,7 +144,7 @@ func (v Validator) Validate(
 			return Validation{}, ErrInsufficientFunds
 		}
 	case exchange.MarketTypeSwap:
-		leverage, found := account.LeverageSettings[spec.Symbol]
+		leverage, found := account.LeverageSettings[spec.InstrumentID]
 		if !found || leverage.Cmp(shared.Zero()) <= 0 {
 			return Validation{}, fmt.Errorf("%w: missing symbol leverage", ErrLeverageLimit)
 		}
@@ -148,7 +153,7 @@ func (v Validator) Validate(
 		}
 		result.Leverage = leverage
 		result.ReservedAsset = account.SettlementAsset
-		if spec.ReduceOnly {
+		if spec.ReducePositionOnly {
 			if err := v.validateReduceOnly(ctx, spec); err != nil {
 				return Validation{}, err
 			}
@@ -169,7 +174,7 @@ func (v Validator) validateReduceOnly(ctx context.Context, spec orderdomain.Orde
 	if v.Positions == nil {
 		return ErrReduceOnly
 	}
-	position, err := v.Positions.GetPosition(ctx, spec.ExchangeAccountID, spec.Symbol)
+	position, err := v.Positions.GetPosition(ctx, spec.ExchangeAccountID, spec.InstrumentID)
 	if err != nil {
 		return err
 	}

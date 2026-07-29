@@ -376,24 +376,23 @@ func (e *Executor) convergeLane(
 		return laneResult{progress: progress}, nil
 	}
 	spec := orderdomain.OrderSpec{
-		ExchangeAccountID: execution.ExchangeAccountID,
-		ClientOrderID: childClientOrderID(
-			execution.ExecutionID,
-			target.Symbol,
-			execution.CommandSequence,
-			countTargetOrders(orders)+1,
-		),
-		Symbol:              target.Symbol,
-		OrderType:           exchange.OrderTypeMarket,
-		TimeInForce:         exchange.TimeInForceUnspecified,
-		Side:                sideForDelta(action),
-		PositionSide:        exchange.PositionSideUnspecified,
-		Quantity:            childQuantity,
-		ReferencePrice:      quote.Price,
-		ReferencePriceAt:    quote.UpdatedAt,
-		ReduceOnly:          reduceOnly,
-		Source:              "TARGET",
-		StrategyExecutionID: execution.ExecutionID,
+		ClientOrderSpec: orderdomain.ClientOrderSpec{
+			ExchangeAccountID: execution.ExchangeAccountID,
+			ClientOrderID: childClientOrderID(
+				execution.ExecutionID,
+				target.Symbol,
+				execution.CommandSequence,
+				countTargetOrders(orders)+1,
+			),
+			InstrumentID: target.Symbol, Type: exchange.OrderTypeMarket,
+			Side: sideForDelta(action), PositionSide: exchange.PositionSideUnspecified,
+			Quantity: childQuantity,
+		},
+		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
+		ReducePositionOnly: reduceOnly,
+		Owner: orderdomain.OrderOwner{
+			Type: "TARGET", StrategyExecutionID: execution.ExecutionID,
+		},
 	}
 	if account.MarketType == string(exchange.MarketTypeSwap) {
 		spec.PositionSide = exchange.PositionSideNet

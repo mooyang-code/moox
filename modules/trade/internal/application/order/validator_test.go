@@ -127,10 +127,10 @@ func TestValidatorReservationMatrix(t *testing.T) {
 				FeeBufferRate:    shared.MustDecimal("0.01"),
 			}
 			spec := testSpec(now)
-			spec.OrderType, spec.Side, spec.ReduceOnly = tt.orderType, tt.side, tt.reduceOnly
+			spec.Type, spec.Side, spec.ReducePositionOnly = tt.orderType, tt.side, tt.reduceOnly
 			spec.LimitPrice = tt.limit
 			if tt.orderType == exchange.OrderTypeLimit {
-				spec.TimeInForce = exchange.TimeInForceGTC
+				spec.FillPolicy = exchange.FillPolicyGTC
 			}
 			if tt.market == exchange.MarketTypeSwap {
 				spec.PositionSide = exchange.PositionSideNet
@@ -270,13 +270,13 @@ func TestValidatorRejectsInvalidLeverage(t *testing.T) {
 	spec.PositionSide = exchange.PositionSideNet
 
 	account := executableAccount(exchange.MarketTypeSwap)
-	delete(account.LeverageSettings, spec.Symbol)
+	delete(account.LeverageSettings, spec.InstrumentID)
 	validator := testValidator(now, account, instrument)
 	_, err := validator.Validate(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrLeverageLimit)
 
 	account = executableAccount(exchange.MarketTypeSwap)
-	account.LeverageSettings[spec.Symbol] = shared.MustDecimal("11")
+	account.LeverageSettings[spec.InstrumentID] = shared.MustDecimal("11")
 	validator = testValidator(now, account, instrument)
 	_, err = validator.Validate(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrLeverageLimit)
@@ -286,7 +286,7 @@ func TestValidatorRejectsInvalidReduceOnlyOrder(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	spec := testSpec(now)
 	spec.PositionSide = exchange.PositionSideNet
-	spec.ReduceOnly = true
+	spec.ReducePositionOnly = true
 
 	tests := []struct {
 		name     string
@@ -314,6 +314,57 @@ func TestValidatorRejectsInvalidReduceOnlyOrder(t *testing.T) {
 			require.ErrorIs(t, err, ErrReduceOnly)
 		})
 	}
+}
+
+func TestValidatorRejectsPaperLimitBeforeReservation(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	account := executableAccount(exchange.MarketTypeSpot)
+	account.ExecutionMode = exchange.ExecutionModePaper
+	validator := testValidator(now, account, testInstrument(exchange.MarketTypeSpot))
+	spec := testSpec(now)
+	spec.Type = exchange.OrderTypeLimit
+	spec.FillPolicy = exchange.FillPolicyGTC
+	spec.LimitPrice = decimalPointer("100")
+
+	_, err := validator.Validate(context.Background(), "space-1", spec)
+	require.ErrorIs(t, err, ErrPaperLimit)
+}
+
+func TestValidatorAcceptsPaperMarket(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	account := executableAccount(exchange.MarketTypeSpot)
+	account.ExecutionMode = exchange.ExecutionModePaper
+	validator := testValidator(now, account, testInstrument(exchange.MarketTypeSpot))
+
+	_, err := validator.Validate(context.Background(), "space-1", testSpec(now))
+	require.NoError(t, err)
+}
+
+func TestValidatorRequiresFillPolicyForLimit(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	spec := testSpec(now)
+	spec.Type = exchange.OrderTypeLimit
+	spec.LimitPrice = decimalPointer("100")
+
+	_, err := testValidator(
+		now,
+		executableAccount(exchange.MarketTypeSpot),
+		testInstrument(exchange.MarketTypeSpot),
+	).Validate(context.Background(), "space-1", spec)
+	require.ErrorIs(t, err, orderdomain.ErrInvalidSpec)
+}
+
+func TestValidatorRejectsFillPolicyForMarket(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	spec := testSpec(now)
+	spec.FillPolicy = exchange.FillPolicyIOC
+
+	_, err := testValidator(
+		now,
+		executableAccount(exchange.MarketTypeSpot),
+		testInstrument(exchange.MarketTypeSpot),
+	).Validate(context.Background(), "space-1", spec)
+	require.ErrorIs(t, err, orderdomain.ErrInvalidSpec)
 }
 
 func testValidator(
@@ -377,11 +428,13 @@ func testInstrument(market exchange.MarketType) exchange.Instrument {
 
 func testSpec(referenceAt time.Time) orderdomain.OrderSpec {
 	return orderdomain.OrderSpec{
-		ExchangeAccountID: "account-1", ClientOrderID: "client-1",
-		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
-		Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
+		ClientOrderSpec: orderdomain.ClientOrderSpec{
+			ExchangeAccountID: "account-1", ClientOrderID: "client-1",
+			InstrumentID: "BTC-USDT", Type: exchange.OrderTypeMarket,
+			Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
+		},
 		ReferencePrice: shared.MustDecimal("100"), ReferencePriceAt: referenceAt,
-		Source: "test",
+		Owner: orderdomain.OrderOwner{Type: "test"},
 	}
 }
 

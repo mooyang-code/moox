@@ -258,6 +258,7 @@ type OrderRecord struct {
 	ReservedQuantity          string
 	RemainingReservedQuantity string
 	RejectReason              string
+	ExchangeUpdatedAt         int64
 	Version                   uint64
 	SubmittedAt               int64
 	FinishedAt                int64
@@ -292,6 +293,7 @@ type orderRow struct {
 	ReservedQuantity          string    `gorm:"column:c_reserved_quantity"`
 	RemainingReservedQuantity string    `gorm:"column:c_remaining_reserved_quantity"`
 	RejectReason              string    `gorm:"column:c_reject_reason"`
+	ExchangeUpdatedAt         int64     `gorm:"column:c_exchange_updated_at"`
 	Version                   uint64    `gorm:"column:c_version"`
 	SubmittedAt               int64     `gorm:"column:c_submitted_at"`
 	FinishedAt                int64     `gorm:"column:c_finished_at"`
@@ -341,8 +343,8 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 			c_reference_price, c_reference_price_at, c_reduce_only, c_source,
 			c_strategy_execution_id, c_state, c_filled_quantity, c_average_price,
 			c_reserved_asset, c_reserved_quantity, c_remaining_reserved_quantity,
-			c_reject_reason, c_version, c_submitted_at, c_finished_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			c_reject_reason, c_exchange_updated_at, c_version, c_submitted_at, c_finished_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.SpaceID, record.OrderID, record.ExchangeAccountID, record.ClientOrderID,
 		record.ExchangeOrderID, record.Exchange, record.MarketType, record.Symbol,
@@ -351,7 +353,7 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 		record.ReduceOnly, record.Source, record.StrategyExecutionID, record.State,
 		record.FilledQuantity, record.AveragePrice,
 		record.ReservedAsset, record.ReservedQuantity,
-		record.RemainingReservedQuantity, record.RejectReason,
+		record.RemainingReservedQuantity, record.RejectReason, record.ExchangeUpdatedAt,
 		record.Version, record.SubmittedAt, record.FinishedAt,
 	).Error)
 }
@@ -607,13 +609,13 @@ func (tx *Tx) UpdateOrder(record OrderRecord, expectedVersion uint64) error {
 		UPDATE t_trade_orders
 		SET c_exchange_order_id = ?, c_state = ?, c_filled_quantity = ?,
 			c_average_price = ?, c_remaining_reserved_quantity = ?,
-			c_reject_reason = ?, c_version = ?, c_submitted_at = ?,
+			c_reject_reason = ?, c_exchange_updated_at = ?, c_version = ?, c_submitted_at = ?,
 			c_finished_at = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?
 	`,
 		record.ExchangeOrderID, record.State, record.FilledQuantity,
 		record.AveragePrice, record.RemainingReservedQuantity,
-		record.RejectReason, record.Version, record.SubmittedAt,
+		record.RejectReason, record.ExchangeUpdatedAt, record.Version, record.SubmittedAt,
 		record.FinishedAt, record.SpaceID, record.OrderID, expectedVersion,
 	)
 	if result.Error != nil {
@@ -639,7 +641,8 @@ func orderRecordFromRow(row orderRow) OrderRecord {
 		FilledQuantity: row.FilledQuantity, AveragePrice: row.AveragePrice,
 		ReservedAsset: row.ReservedAsset, ReservedQuantity: row.ReservedQuantity,
 		RemainingReservedQuantity: row.RemainingReservedQuantity,
-		RejectReason:              row.RejectReason, Version: row.Version,
+		RejectReason:              row.RejectReason, ExchangeUpdatedAt: row.ExchangeUpdatedAt,
+		Version:     row.Version,
 		SubmittedAt: row.SubmittedAt, FinishedAt: row.FinishedAt,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}

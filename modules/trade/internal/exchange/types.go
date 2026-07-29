@@ -71,6 +71,21 @@ func (t TimeInForce) ValidForLimit() bool {
 	return t == TimeInForceGTC || t == TimeInForceIOC || t == TimeInForceFOK
 }
 
+// FillPolicy is the domain-level lifetime policy for a LIMIT order. Adapters
+// translate it to their Exchange-native time-in-force or order-type field.
+type FillPolicy string
+
+const (
+	FillPolicyUnspecified FillPolicy = ""
+	FillPolicyGTC         FillPolicy = "GTC"
+	FillPolicyIOC         FillPolicy = "IOC"
+	FillPolicyFOK         FillPolicy = "FOK"
+)
+
+func (p FillPolicy) ValidForLimit() bool {
+	return p == FillPolicyGTC || p == FillPolicyIOC || p == FillPolicyFOK
+}
+
 type Side string
 
 const (
@@ -211,13 +226,21 @@ type OrderRequest struct {
 	ClientOrderID  string
 	Symbol         string
 	OrderType      OrderType
-	TimeInForce    TimeInForce
+	FillPolicy     FillPolicy
 	Side           Side
 	PositionSide   PositionSide
 	Quantity       shared.Decimal
 	LimitPrice     *shared.Decimal
 	ReferencePrice shared.Decimal
 	ReduceOnly     bool
+}
+
+func (r OrderRequest) EffectiveFillPolicy() FillPolicy {
+	return r.FillPolicy
+}
+
+func (r OrderRequest) NativeTimeInForce() TimeInForce {
+	return TimeInForce(r.EffectiveFillPolicy())
 }
 
 type Order struct {

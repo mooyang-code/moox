@@ -190,7 +190,7 @@ func (f *fakeExchange) PlaceOrder(_ context.Context, request exchange.OrderReque
 	current := exchange.Order{
 		ExchangeOrderID: fmt.Sprintf("exchange-%d", f.placeCalls),
 		ClientOrderID:   request.ClientOrderID, Symbol: request.Symbol,
-		OrderType: request.OrderType, TimeInForce: request.TimeInForce,
+		OrderType: request.OrderType, TimeInForce: request.NativeTimeInForce(),
 		Side: request.Side, PositionSide: request.PositionSide,
 		Quantity: request.Quantity, ReduceOnly: request.ReduceOnly,
 		Status: exchange.OrderStatusOpen, CreatedAt: now, UpdatedAt: now,
@@ -483,17 +483,20 @@ func (f *fixture) close(t *testing.T) {
 
 func marketSpec(clientID string, side exchange.Side, quantity string) orderdomain.OrderSpec {
 	return orderdomain.OrderSpec{
-		ExchangeAccountID: testAccount, ClientOrderID: clientID, Symbol: testSymbol,
-		OrderType: exchange.OrderTypeMarket, Side: side,
-		Quantity: shared.MustDecimal(quantity), ReferencePrice: shared.MustDecimal("50000"),
-		ReferencePriceAt: testNow, Source: "E2E",
+		ClientOrderSpec: orderdomain.ClientOrderSpec{
+			ExchangeAccountID: testAccount, ClientOrderID: clientID,
+			InstrumentID: testSymbol, Type: exchange.OrderTypeMarket, Side: side,
+			Quantity: shared.MustDecimal(quantity),
+		},
+		ReferencePrice: shared.MustDecimal("50000"), ReferencePriceAt: testNow,
+		Owner: orderdomain.OrderOwner{Type: "E2E"},
 	}
 }
 
 func swapSpec(clientID string, side exchange.Side, quantity string, reduceOnly bool) orderdomain.OrderSpec {
 	spec := marketSpec(clientID, side, quantity)
 	spec.PositionSide = exchange.PositionSideNet
-	spec.ReduceOnly = reduceOnly
+	spec.ReducePositionOnly = reduceOnly
 	return spec
 }
 

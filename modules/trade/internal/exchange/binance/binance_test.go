@@ -28,11 +28,11 @@ func TestAdapterRequestValidationContract(t *testing.T) {
 			request.LimitPrice = &price
 		}},
 		{"MARKET rejects time in force", func(request *exchange.OrderRequest) {
-			request.TimeInForce = exchange.TimeInForceGTC
+			request.FillPolicy = exchange.FillPolicyGTC
 		}},
 		{"LIMIT requires price", func(request *exchange.OrderRequest) {
 			request.OrderType = exchange.OrderTypeLimit
-			request.TimeInForce = exchange.TimeInForceGTC
+			request.FillPolicy = exchange.FillPolicyGTC
 		}},
 		{"SPOT rejects reduce only", func(request *exchange.OrderRequest) {
 			request.ReduceOnly = true
@@ -406,6 +406,6 @@ func limitOrderRequest() exchange.OrderRequest {
 	request := orderRequest(exchange.OrderTypeLimit)
 	price := shared.MustDecimal("100.5")
 	request.LimitPrice = &price
-	request.TimeInForce = exchange.TimeInForceIOC
+	request.FillPolicy = exchange.FillPolicyIOC
 	return request
 }

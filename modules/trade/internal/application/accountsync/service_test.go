@@ -181,6 +181,72 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	require.Zero(t, result.FillsIngested, "replayed REST Fill must be idempotent")
 }
 
+func TestOrderReducerIgnoresOlderExchangeUpdateAndAggregateFill(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Now:   func() time.Time { return time.UnixMilli(3_000) },
+	}
+	open := exchange.Order{
+		ExchangeOrderID: "exchange-monotonic", ClientOrderID: "client-monotonic",
+		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", open))
+
+	aggregateWithoutFill := open
+	aggregateWithoutFill.Status = exchange.OrderStatusFilled
+	aggregateWithoutFill.FilledQuantity = shared.MustDecimal("1")
+	aggregateWithoutFill.UpdatedAt = time.UnixMilli(3_000)
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", aggregateWithoutFill))
+	olderTerminal := open
+	olderTerminal.Status = exchange.OrderStatusRejected
+	olderTerminal.UpdatedAt = time.UnixMilli(1_000)
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", olderTerminal))
+
+	record, err := tradeStore.GetOrderByClientID(
+		context.Background(), "space-1", "account-1", open.ClientOrderID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "OPEN", record.State)
+	require.Equal(t, "0", record.FilledQuantity)
+	require.Equal(t, int64(3_000), record.ExchangeUpdatedAt)
+}
+
+func TestOrderReducerDoesNotRegressTerminalState(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Now:   func() time.Time { return time.UnixMilli(4_000) },
+	}
+	current := exchange.Order{
+		ExchangeOrderID: "exchange-terminal", ClientOrderID: "client-terminal",
+		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	current.Status = exchange.OrderStatusRejected
+	current.UpdatedAt = time.UnixMilli(3_000)
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	current.Status = exchange.OrderStatusOpen
+	current.UpdatedAt = time.UnixMilli(4_000)
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+
+	record, err := tradeStore.GetOrderByClientID(
+		context.Background(), "space-1", "account-1", current.ClientOrderID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "REJECTED", record.State)
+}
+
 func TestPaperSyncRecoversSubmittedOrderAndPersistsSpotFill(t *testing.T) {
 	ctx := context.Background()
 	tradeStore := openSyncStore(t)
