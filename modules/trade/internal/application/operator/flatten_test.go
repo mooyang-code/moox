@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -31,7 +32,10 @@ func TestFlattenFreshSyncsBeforeCancelAndClose(t *testing.T) {
 		"sync:account-a",
 		"cancel:active-order",
 		"sync:account-a",
-		"place:" + flattenClientOrderID("flatten-1", "account-a", "BTCUSDT"),
+		"place:" + flattenClientOrderIDForSpec(
+			"flatten-1", "account-a", "BTCUSDT", exchange.SideSell,
+			shared.MustDecimal("2"),
+		),
 		"submit:child-account-a-BTCUSDT",
 		"sync:account-a",
 		"sync:account-b",
@@ -73,6 +77,30 @@ func TestFlattenUsesPausedAutomationStateAndRunningAction(t *testing.T) {
 	)
 
 	require.NoError(t, err)
+}
+
+func TestFlattenCompletedReplayDoesNotPauseAfterResume(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
+	command := FlattenCommand{
+		SpaceID: "space-1", ActionID: "flatten-1",
+		LogicalAccountID: "logical-1", Reason: "close risk",
+	}
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation(
+			"space-1", "logical-1", "ACTIVE", "",
+		)
+	}))
+
+	_, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+
+	account, err := fixture.store.GetLogicalAccount(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "ACTIVE", account.AutomationState)
 }
 
 func TestFlattenWaitsForCancellationConfirmation(t *testing.T) {
@@ -299,4 +327,127 @@ func TestFlattenDoesNotNetOpposingPhysicalAccounts(t *testing.T) {
 	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
 	require.Equal(t, shared.MustDecimal("2").String(), fixture.orders.specs[1].Quantity.String())
 	require.Equal(t, exchange.SideBuy, fixture.orders.specs[1].Side)
+}
+
+func TestFlattenRetriesDelayedFillUntilPositionIsZero(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.orders.leaveOpen = map[string]bool{
+		"child-account-a-BTCUSDT": true,
+	}
+	fixture.position(t, "account-a", "BTCUSDT", "2")
+	fixture.syncer.onSync = func(ctx context.Context, accountID string, call int) error {
+		if accountID != "account-a" || call != 4 {
+			return nil
+		}
+		require.NoError(t, setOperatorOrderState(
+			ctx,
+			fixture.store,
+			"space-1",
+			"child-account-a-BTCUSDT",
+			"FILLED",
+		))
+		fixture.position(t, "account-a", "BTCUSDT", "0")
+		return nil
+	}
+	service := fixture.service()
+	service.FlattenMaxAttempts = 2
+
+	result, err := service.FlattenLogicalAccount(
+		context.Background(),
+		FlattenCommand{
+			SpaceID: "space-1", ActionID: "flatten-1",
+			LogicalAccountID: "logical-1", Reason: "close risk",
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Empty(t, result.Accounts[0].Remaining)
+}
+
+func TestFlattenRetryStopsAtDeadline(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.orders.leaveOpen = map[string]bool{
+		"child-account-a-BTCUSDT": true,
+	}
+	fixture.position(t, "account-a", "BTCUSDT", "2")
+	service := fixture.service()
+	service.FlattenMaxAttempts = 2
+	service.FlattenRetryInterval = time.Second
+	service.FlattenTimeout = 20 * time.Millisecond
+
+	started := time.Now()
+	result, err := service.FlattenLogicalAccount(
+		context.Background(),
+		FlattenCommand{
+			SpaceID: "space-1", ActionID: "flatten-1",
+			LogicalAccountID: "logical-1", Reason: "close risk",
+		},
+	)
+
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 500*time.Millisecond)
+	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, 3, fixture.syncer.callsFor("account-a"))
+}
+
+func TestFlattenRecoveryCallsReceiveDeadlineContext(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
+	allCallsBounded := true
+	fixture.syncer.onSync = func(ctx context.Context, _ string, _ int) error {
+		if _, ok := ctx.Deadline(); !ok {
+			allCallsBounded = false
+		}
+		return nil
+	}
+	service := fixture.service()
+	service.FlattenTimeout = time.Second
+
+	_, err := service.FlattenLogicalAccount(
+		context.Background(),
+		FlattenCommand{
+			SpaceID: "space-1", ActionID: "flatten-1",
+			LogicalAccountID: "logical-1", Reason: "close risk",
+		},
+	)
+
+	require.NoError(t, err)
+	require.True(t, allCallsBounded)
+}
+
+func TestFlattenPartialReplayContinuesSameActionWithoutDuplicateChild(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.orders.leaveOpen = map[string]bool{
+		"child-account-a-BTCUSDT": true,
+	}
+	fixture.position(t, "account-a", "BTCUSDT", "2")
+	command := FlattenCommand{
+		SpaceID: "space-1", ActionID: "flatten-1",
+		LogicalAccountID: "logical-1", Reason: "close risk",
+	}
+	first, err := fixture.service().FlattenLogicalAccount(
+		context.Background(), command,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "PARTIAL", first.Action.Status)
+	require.NoError(t, setOperatorOrderState(
+		context.Background(),
+		fixture.store,
+		"space-1",
+		"child-account-a-BTCUSDT",
+		"FILLED",
+	))
+	fixture.position(t, "account-a", "BTCUSDT", "0")
+
+	replayed, err := fixture.service().FlattenLogicalAccount(
+		context.Background(), command,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "COMPLETED", replayed.Action.Status)
+	require.Len(t, fixture.orders.specs, 1)
 }

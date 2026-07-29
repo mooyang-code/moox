@@ -41,8 +41,11 @@ func TestManualOrderPausesAndCancelsTargetsBeforeSubmit(t *testing.T) {
 	require.Equal(t, "COMPLETED", result.Action.Status)
 	require.Equal(t, "manual-order-1", result.Order.OrderID)
 	require.Equal(t, []string{
+		"sync:account-a",
 		"cancel:target-child",
 		"sync:account-a",
+		"sync:account-b",
+		"sync:account-b",
 		"place:manual-client",
 		"submit:manual-order-1",
 	}, fixture.trace)
@@ -84,6 +87,101 @@ func TestManualOrderActionIDIsIdempotent(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrConflict)
 }
 
+func TestManualOrderTerminalReplayDoesNotPauseAfterResume(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
+	command := ManualOrderCommand{
+		SpaceID: "space-1", ActionID: "manual-1",
+		ExchangeAccountID: "account-a", ClientOrderID: "manual-client",
+		InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.1"),
+		Reason: "operator override",
+	}
+	_, err := fixture.service().PlaceManualOrder(context.Background(), command)
+	require.NoError(t, err)
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation(
+			"space-1", "logical-1", "ACTIVE", "",
+		)
+	}))
+
+	_, err = fixture.service().PlaceManualOrder(context.Background(), command)
+	require.NoError(t, err)
+
+	account, err := fixture.store.GetLogicalAccount(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "ACTIVE", account.AutomationState)
+}
+
+func TestManualOrderFreshSyncsTargetWithoutKnownTargetOrders(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+
+	_, err := fixture.service().PlaceManualOrder(
+		context.Background(),
+		ManualOrderCommand{
+			SpaceID: "space-1", ActionID: "manual-1",
+			ExchangeAccountID: "account-a", ClientOrderID: "manual-client",
+			InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+			Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), Reason: "operator override",
+		},
+	)
+
+	require.NoError(t, err)
+	placeIndex := traceIndex(fixture.trace, "place:manual-client")
+	require.GreaterOrEqual(t, placeIndex, 0)
+	require.Less(t, traceIndex(fixture.trace, "sync:account-a"), placeIndex)
+}
+
+func TestManualLogicalAccountLockRevalidatesMovedEnabledMembership(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
+	held := fixture.store.LockLogicalAccount("space-1", "logical-1")
+	type lockResult struct {
+		account store.LogicalAccountRecord
+		unlock  func()
+		err     error
+	}
+	resultCh := make(chan lockResult, 1)
+	go func() {
+		account, unlock, err := fixture.service().lockCurrentLogicalAccount(
+			context.Background(), "space-1", "account-a",
+		)
+		resultCh <- lockResult{account: account, unlock: unlock, err: err}
+	}()
+	time.Sleep(20 * time.Millisecond)
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.SetLogicalAccountAutomation(
+			"space-1", "logical-1", "PAUSED", "move member",
+		); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			ExchangeAccountID: "account-a", Enabled: false, Priority: 1,
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "logical-2",
+			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-2",
+			ExchangeAccountID: "account-a", Enabled: true, Priority: 1,
+		})
+	}))
+	held()
+
+	result := <-resultCh
+	require.NoError(t, result.err)
+	require.Equal(t, "logical-2", result.account.LogicalAccountID)
+	result.unlock()
+}
+
 func TestManualOrderDoesNotCancelNonTargetOrders(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
 	fixture.order(t, store.OrderRecord{
@@ -115,7 +213,7 @@ func TestManualOrderRejectsTargetDiscoveredDuringCancellationSync(t *testing.T) 
 	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
 	fixture.order(t, activeOrder(fixture, "target-child", "TARGET"))
 	fixture.syncer.onSync = func(ctx context.Context, accountID string, call int) error {
-		if accountID != "account-a" || call != 1 {
+		if accountID != "account-a" || call != 2 {
 			return nil
 		}
 		fixture.order(t, store.OrderRecord{
@@ -144,6 +242,35 @@ func TestManualOrderRejectsTargetDiscoveredDuringCancellationSync(t *testing.T) 
 
 	require.ErrorIs(t, err, ErrCancelUnconfirmed)
 	require.Empty(t, fixture.orders.specs)
+}
+
+func TestManualOrderCancelsEveryMemberAndReturnsPerAccountErrors(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.order(t, activeOrder(fixture, "target-a", "TARGET"))
+	orderB := activeOrder(fixture, "target-b", "TARGET")
+	orderB.ExchangeAccountID = "account-b"
+	orderB.Symbol = "BTC-USDT-SWAP"
+	fixture.order(t, orderB)
+	fixture.orders.leaveOpen = map[string]bool{"target-a": true}
+
+	result, err := fixture.service().PlaceManualOrder(
+		context.Background(),
+		ManualOrderCommand{
+			SpaceID: "space-1", ActionID: "manual-1",
+			ExchangeAccountID: "account-a", ClientOrderID: "manual-client",
+			InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+			Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), Reason: "operator override",
+		},
+	)
+
+	require.Error(t, err)
+	require.Contains(t, fixture.trace, "cancel:target-a")
+	require.Contains(t, fixture.trace, "cancel:target-b")
+	require.Empty(t, fixture.orders.specs)
+	require.NotEmpty(t, result.Accounts)
+	require.Equal(t, "account-a", result.Accounts[0].ExchangeAccountID)
+	require.ErrorIs(t, err, ErrCancelUnconfirmed)
 }
 
 func TestCancelOrderPausesLogicalAccountAndIsIdempotent(t *testing.T) {
@@ -350,7 +477,8 @@ func (f *operatorFixture) position(t *testing.T, accountID, symbol, quantity str
 func (f *operatorFixture) service() *Service {
 	return &Service{
 		Store: f.store, Orders: f.orders, Syncer: f.syncer, Prices: f.prices,
-		Now: func() time.Time { return f.now },
+		Now: func() time.Time { return f.now }, FlattenMaxAttempts: 1,
+		FlattenRetryInterval: -1,
 	}
 }
 
@@ -520,4 +648,13 @@ func (s operatorPriceStub) LatestPrice(
 	string,
 ) (Quote, error) {
 	return s.quote, s.err
+}
+
+func traceIndex(trace []string, expected string) int {
+	for index, current := range trace {
+		if current == expected {
+			return index
+		}
+	}
+	return -1
 }

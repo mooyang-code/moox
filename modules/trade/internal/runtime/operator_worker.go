@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -26,6 +27,15 @@ type OperatorWorker struct {
 	Actions  RunningActionSource
 	Resumer  OperatorActionResumer
 	Interval time.Duration
+
+	mu        sync.RWMutex
+	ready     bool
+	lastError string
+}
+
+type OperatorWorkerSnapshot struct {
+	Ready     bool
+	LastError string
 }
 
 func (w *OperatorWorker) Run(ctx context.Context) error {
@@ -38,14 +48,35 @@ func (w *OperatorWorker) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	_ = w.runOnce(ctx)
+	w.setResult(w.runOnce(ctx))
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			_ = w.runOnce(ctx)
+			w.setResult(w.runOnce(ctx))
 		}
+	}
+}
+
+func (w *OperatorWorker) Snapshot() OperatorWorkerSnapshot {
+	if w == nil {
+		return OperatorWorkerSnapshot{}
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return OperatorWorkerSnapshot{
+		Ready: w.ready, LastError: w.lastError,
+	}
+}
+
+func (w *OperatorWorker) setResult(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ready = err == nil
+	w.lastError = ""
+	if err != nil {
+		w.lastError = err.Error()
 	}
 }
 

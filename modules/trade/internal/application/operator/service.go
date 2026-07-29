@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 var (
@@ -46,6 +48,10 @@ type Service struct {
 	Syncer AccountSyncer
 	Prices PriceSource
 	Now    func() time.Time
+
+	FlattenMaxAttempts   int
+	FlattenRetryInterval time.Duration
+	FlattenTimeout       time.Duration
 }
 
 type ManualOrderCommand struct {
@@ -64,8 +70,15 @@ type ManualOrderCommand struct {
 }
 
 type ManualOrderResult struct {
-	Action store.OperatorActionRecord
-	Order  store.OrderRecord
+	Action   store.OperatorActionRecord
+	Order    store.OrderRecord
+	Accounts []OperatorAccountError
+}
+
+type OperatorAccountError struct {
+	ExchangeAccountID string `json:"exchange_account_id"`
+	Error             string `json:"error"`
+	cause             error
 }
 
 type manualOrderRequest struct {
@@ -81,7 +94,8 @@ type manualOrderRequest struct {
 }
 
 type manualOrderActionResult struct {
-	OrderID string `json:"order_id"`
+	OrderID  string                 `json:"order_id,omitempty"`
+	Accounts []OperatorAccountError `json:"accounts,omitempty"`
 }
 
 func (s *Service) PlaceManualOrder(
@@ -95,19 +109,28 @@ func (s *Service) PlaceManualOrder(
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
-	logicalAccount, _, err := s.Store.FindLogicalAccountByExchangeAccount(
+	logicalAccount, unlock, err := s.lockCurrentLogicalAccount(
 		ctx, command.SpaceID, command.ExchangeAccountID,
 	)
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
-	unlock := s.Store.LockLogicalAccount(
-		command.SpaceID, logicalAccount.LogicalAccountID,
-	)
 	defer unlock()
 
+	expectedAction := store.OperatorActionRecord{
+		SpaceID: command.SpaceID, ActionID: command.ActionID,
+		LogicalAccountID: logicalAccount.LogicalAccountID,
+		ActionType:       "MANUAL_ORDER", Reason: strings.TrimSpace(command.Reason),
+		RequestJSON: requestJSON, Status: "RUNNING",
+	}
+	existing, found, err := s.existingAction(ctx, expectedAction)
+	if err != nil {
+		return ManualOrderResult{}, err
+	}
+	if found && existing.Status != "RUNNING" {
+		return s.loadManualOrderResult(ctx, existing)
+	}
 	var action store.OperatorActionRecord
-	var created bool
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.SetLogicalAccountAutomation(
 			command.SpaceID,
@@ -118,37 +141,32 @@ func (s *Service) PlaceManualOrder(
 			return err
 		}
 		var ensureErr error
-		action, created, ensureErr = tx.EnsureOperatorAction(
-			store.OperatorActionRecord{
-				SpaceID: command.SpaceID, ActionID: command.ActionID,
-				LogicalAccountID: logicalAccount.LogicalAccountID,
-				ActionType:       "MANUAL_ORDER", Reason: strings.TrimSpace(command.Reason),
-				RequestJSON: requestJSON, Status: "RUNNING",
-			},
-		)
+		action, _, ensureErr = tx.EnsureOperatorAction(expectedAction)
 		return ensureErr
 	})
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
-	if !created && action.Status != "RUNNING" {
-		return s.loadManualOrderResult(ctx, action)
-	}
-
-	if err := s.cancelLogicalAccountOrders(
+	accountErrors := s.cancelLogicalAccountOrders(
 		ctx,
 		command.SpaceID,
 		logicalAccount.LogicalAccountID,
 		command.ActionID,
 		true,
-	); err != nil {
-		return s.failManualAction(ctx, action, err)
+	)
+	if len(accountErrors) > 0 {
+		return s.failManualAction(
+			ctx,
+			action,
+			errors.Join(accountErrorsAsErrors(accountErrors)...),
+			accountErrors,
+		)
 	}
 	quote, err := s.Prices.LatestPrice(
 		ctx, command.ExchangeAccountID, command.InstrumentID,
 	)
 	if err != nil {
-		return s.failManualAction(ctx, action, err)
+		return s.failManualAction(ctx, action, err, nil)
 	}
 	spec := orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
@@ -169,15 +187,17 @@ func (s *Service) PlaceManualOrder(
 		_, err = s.Orders.Submit(ctx, command.SpaceID, string(placed.ID))
 	}
 	if err != nil {
-		return s.failManualAction(ctx, action, err)
+		return s.failManualAction(ctx, action, err, nil)
 	}
 	orderRecord, err := s.Store.GetOrder(ctx, command.SpaceID, string(placed.ID))
 	if err != nil {
-		return s.failManualAction(ctx, action, err)
+		return s.failManualAction(ctx, action, err, nil)
 	}
-	resultJSON, err := json.Marshal(manualOrderActionResult{OrderID: orderRecord.OrderID})
+	resultJSON, err := json.Marshal(manualOrderActionResult{
+		OrderID: orderRecord.OrderID,
+	})
 	if err != nil {
-		return s.failManualAction(ctx, action, err)
+		return s.failManualAction(ctx, action, err, nil)
 	}
 	resultRaw := string(resultJSON)
 	action.Status = "COMPLETED"
@@ -298,25 +318,35 @@ func (s *Service) loadManualOrderResult(
 	}
 	if result.OrderID == "" {
 		if action.LastError != "" {
-			return ManualOrderResult{Action: action}, errors.New(action.LastError)
+			return ManualOrderResult{
+				Action: action, Accounts: result.Accounts,
+			}, errors.New(action.LastError)
 		}
-		return ManualOrderResult{Action: action}, ErrInvalidCommand
+		return ManualOrderResult{
+			Action: action, Accounts: result.Accounts,
+		}, ErrInvalidCommand
 	}
 	current, err := s.Store.GetOrder(ctx, action.SpaceID, result.OrderID)
 	if err == nil && action.LastError != "" {
 		err = errors.New(action.LastError)
 	}
-	return ManualOrderResult{Action: action, Order: current}, err
+	return ManualOrderResult{
+		Action: action, Order: current, Accounts: result.Accounts,
+	}, err
 }
 
 func (s *Service) failManualAction(
 	ctx context.Context,
 	action store.OperatorActionRecord,
 	cause error,
+	accounts []OperatorAccountError,
 ) (ManualOrderResult, error) {
 	action.Status = "FAILED"
 	action.LastError = cause.Error()
-	result, marshalErr := json.Marshal(map[string]string{"error": cause.Error()})
+	result, marshalErr := json.Marshal(struct {
+		Error    string                 `json:"error"`
+		Accounts []OperatorAccountError `json:"accounts,omitempty"`
+	}{Error: cause.Error(), Accounts: accounts})
 	if marshalErr == nil {
 		raw := string(result)
 		action.ResultJSON = &raw
@@ -325,7 +355,7 @@ func (s *Service) failManualAction(
 		return ManualOrderResult{}, errors.Join(cause, err)
 	}
 	current, _ := s.Store.GetOperatorAction(ctx, action.SpaceID, action.ActionID)
-	return ManualOrderResult{Action: current}, cause
+	return ManualOrderResult{Action: current, Accounts: accounts}, cause
 }
 
 func (s *Service) validate() error {
@@ -351,19 +381,28 @@ func (s *Service) cancelLogicalAccountOrders(
 	logicalAccountID string,
 	actionID string,
 	targetOnly bool,
-) error {
+) []OperatorAccountError {
 	members, err := s.Store.ListLogicalAccountMembers(
 		ctx, spaceID, logicalAccountID, true,
 	)
 	if err != nil {
-		return err
+		return []OperatorAccountError{{Error: err.Error()}}
 	}
+	var accountErrors []OperatorAccountError
 	for _, member := range members {
+		var currentErrors []error
+		if err := s.Syncer.SyncAccount(ctx, member.ExchangeAccountID); err != nil {
+			currentErrors = append(currentErrors, fmt.Errorf("fresh sync: %w", err))
+		}
 		records, err := s.Store.ListOrdersForAccount(
 			ctx, spaceID, member.ExchangeAccountID, 1,
 		)
 		if err != nil {
-			return err
+			currentErrors = append(currentErrors, err)
+			accountErrors = appendAccountErrors(
+				accountErrors, member.ExchangeAccountID, currentErrors,
+			)
+			continue
 		}
 		var selected []store.OrderRecord
 		for _, current := range records {
@@ -380,22 +419,26 @@ func (s *Service) cancelLogicalAccountOrders(
 			}
 			selected = append(selected, current)
 		}
-		if len(selected) == 0 {
-			continue
-		}
 		for _, current := range selected {
 			if err := s.stopOrder(ctx, current); err != nil {
-				return fmt.Errorf("%s: %w", member.ExchangeAccountID, err)
+				currentErrors = append(
+					currentErrors,
+					fmt.Errorf("stop order %s: %w", current.OrderID, err),
+				)
 			}
 		}
 		if err := s.Syncer.SyncAccount(ctx, member.ExchangeAccountID); err != nil {
-			return fmt.Errorf("%s: %w", member.ExchangeAccountID, err)
+			currentErrors = append(currentErrors, fmt.Errorf("confirm sync: %w", err))
 		}
 		confirmed, err := s.Store.ListOrdersForAccount(
 			ctx, spaceID, member.ExchangeAccountID, 1,
 		)
 		if err != nil {
-			return err
+			currentErrors = append(currentErrors, err)
+			accountErrors = appendAccountErrors(
+				accountErrors, member.ExchangeAccountID, currentErrors,
+			)
+			continue
 		}
 		for _, latest := range confirmed {
 			if orderdomain.State(latest.State).Terminal() {
@@ -409,16 +452,114 @@ func (s *Service) cancelLogicalAccountOrders(
 				latest.OwnerID == actionID {
 				continue
 			}
-			return fmt.Errorf(
-				"%w: account %s order %s remains %s",
-				ErrCancelUnconfirmed,
-				member.ExchangeAccountID,
-				latest.OrderID,
-				latest.State,
+			currentErrors = append(
+				currentErrors,
+				fmt.Errorf(
+					"%w: order %s remains %s",
+					ErrCancelUnconfirmed,
+					latest.OrderID,
+					latest.State,
+				),
 			)
 		}
+		accountErrors = appendAccountErrors(
+			accountErrors, member.ExchangeAccountID, currentErrors,
+		)
 	}
-	return nil
+	return accountErrors
+}
+
+func (s *Service) existingAction(
+	ctx context.Context,
+	expected store.OperatorActionRecord,
+) (store.OperatorActionRecord, bool, error) {
+	current, err := s.Store.GetOperatorAction(
+		ctx, expected.SpaceID, expected.ActionID,
+	)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return store.OperatorActionRecord{}, false, nil
+	}
+	if err != nil {
+		return store.OperatorActionRecord{}, false, err
+	}
+	if current.SpaceID != expected.SpaceID ||
+		current.ActionID != expected.ActionID ||
+		current.LogicalAccountID != expected.LogicalAccountID ||
+		current.ActionType != expected.ActionType ||
+		current.Reason != expected.Reason ||
+		!equalJSON(current.RequestJSON, expected.RequestJSON) {
+		return store.OperatorActionRecord{}, false, store.ErrConflict
+	}
+	return current, true, nil
+}
+
+func (s *Service) lockCurrentLogicalAccount(
+	ctx context.Context,
+	spaceID string,
+	exchangeAccountID string,
+) (store.LogicalAccountRecord, func(), error) {
+	for attempts := 0; attempts < 4; attempts++ {
+		current, member, err := s.Store.FindLogicalAccountByExchangeAccount(
+			ctx, spaceID, exchangeAccountID,
+		)
+		if err != nil {
+			return store.LogicalAccountRecord{}, nil, err
+		}
+		if !member.Enabled {
+			return store.LogicalAccountRecord{}, nil, ErrInvalidCommand
+		}
+		unlock := s.Store.LockLogicalAccount(spaceID, current.LogicalAccountID)
+		confirmed, confirmedMember, err := s.Store.FindLogicalAccountByExchangeAccount(
+			ctx, spaceID, exchangeAccountID,
+		)
+		if err == nil && confirmedMember.Enabled &&
+			confirmed.LogicalAccountID == current.LogicalAccountID {
+			return confirmed, unlock, nil
+		}
+		unlock()
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return store.LogicalAccountRecord{}, nil, err
+		}
+	}
+	return store.LogicalAccountRecord{}, nil,
+		fmt.Errorf("%w: logical account membership changed", store.ErrConflict)
+}
+
+func appendAccountErrors(
+	values []OperatorAccountError,
+	exchangeAccountID string,
+	errs []error,
+) []OperatorAccountError {
+	if len(errs) == 0 {
+		return values
+	}
+	return append(values, OperatorAccountError{
+		ExchangeAccountID: exchangeAccountID,
+		Error:             errors.Join(errs...).Error(),
+		cause:             errors.Join(errs...),
+	})
+}
+
+func accountErrorsAsErrors(values []OperatorAccountError) []error {
+	errs := make([]error, 0, len(values))
+	for _, value := range values {
+		cause := value.cause
+		if cause == nil {
+			cause = errors.New(value.Error)
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", value.ExchangeAccountID, cause))
+	}
+	return errs
+}
+
+func equalJSON(left, right string) bool {
+	var leftValue any
+	var rightValue any
+	if json.Unmarshal([]byte(left), &leftValue) != nil ||
+		json.Unmarshal([]byte(right), &rightValue) != nil {
+		return left == right
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
 }
 
 func (s *Service) stopOrder(ctx context.Context, current store.OrderRecord) error {

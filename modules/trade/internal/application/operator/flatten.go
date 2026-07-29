@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"time"
 
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
@@ -63,8 +64,20 @@ func (s *Service) FlattenLogicalAccount(
 	unlock := s.Store.LockLogicalAccount(command.SpaceID, command.LogicalAccountID)
 	defer unlock()
 
+	expectedAction := store.OperatorActionRecord{
+		SpaceID: command.SpaceID, ActionID: command.ActionID,
+		LogicalAccountID: command.LogicalAccountID,
+		ActionType:       "FLATTEN", Reason: strings.TrimSpace(command.Reason),
+		RequestJSON: requestJSON, Status: "RUNNING",
+	}
+	existing, found, err := s.existingAction(ctx, expectedAction)
+	if err != nil {
+		return FlattenResult{}, err
+	}
+	if found && existing.Status == string(operatordomain.StatusCompleted) {
+		return decodeFlattenResult(existing)
+	}
 	var action store.OperatorActionRecord
-	var created bool
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.SetLogicalAccountAutomation(
 			command.SpaceID,
@@ -75,21 +88,19 @@ func (s *Service) FlattenLogicalAccount(
 			return err
 		}
 		var ensureErr error
-		action, created, ensureErr = tx.EnsureOperatorAction(
-			store.OperatorActionRecord{
-				SpaceID: command.SpaceID, ActionID: command.ActionID,
-				LogicalAccountID: command.LogicalAccountID,
-				ActionType:       "FLATTEN", Reason: strings.TrimSpace(command.Reason),
-				RequestJSON: requestJSON, Status: "RUNNING",
-			},
-		)
-		return ensureErr
+		action, _, ensureErr = tx.EnsureOperatorAction(expectedAction)
+		if ensureErr != nil {
+			return ensureErr
+		}
+		if action.Status != string(operatordomain.StatusRunning) {
+			action.Status = string(operatordomain.StatusRunning)
+			action.LastError = ""
+			return tx.UpdateOperatorAction(action)
+		}
+		return nil
 	})
 	if err != nil {
 		return FlattenResult{}, err
-	}
-	if !created && action.Status != string(operatordomain.StatusRunning) {
-		return decodeFlattenResult(action)
 	}
 	members, err := s.Store.ListLogicalAccountMembers(
 		ctx, command.SpaceID, command.LogicalAccountID, true,
@@ -101,10 +112,11 @@ func (s *Service) FlattenLogicalAccount(
 		Action:   action,
 		Accounts: make([]FlattenAccountResult, 0, len(members)),
 	}
+	deadline := time.Now().Add(s.flattenTimeout())
 	executable := 0
 	for _, member := range members {
 		accountResult, wasExecutable := s.flattenAccount(
-			ctx, command, member.ExchangeAccountID,
+			ctx, command, member.ExchangeAccountID, deadline,
 		)
 		if wasExecutable {
 			executable++
@@ -139,11 +151,15 @@ func (s *Service) flattenAccount(
 	ctx context.Context,
 	command FlattenCommand,
 	exchangeAccountID string,
+	deadline time.Time,
 ) (FlattenAccountResult, bool) {
 	result := FlattenAccountResult{
 		ExchangeAccountID: exchangeAccountID,
 		Status:            "RUNNING",
 	}
+	recoveryCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	ctx = recoveryCtx
 	if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
 		result.Status = "FAILED"
 		result.Error = err.Error()
@@ -188,27 +204,66 @@ func (s *Service) flattenAccount(
 		result.Error = err.Error()
 		return result, false
 	}
-	reasons := make(map[string]string)
-	switch exchange.MarketType(account.MarketType) {
-	case exchange.MarketTypeSwap:
-		s.flattenSwap(ctx, command, account, &result, reasons)
-	case exchange.MarketTypeSpot:
-		s.flattenSpot(ctx, command, account, &result, reasons)
-	default:
-		result.Error = "unsupported market type " + account.MarketType
+	attempts := s.flattenAttempts()
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 && !time.Now().Before(deadline) {
+			break
+		}
+		if attempt > 0 {
+			if err := s.waitFlattenRetry(ctx); err != nil {
+				result.Error = err.Error()
+				break
+			}
+			if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+				result.Error = err.Error()
+				break
+			}
+			if err := s.cancelAccountOrders(
+				ctx, command.SpaceID, exchangeAccountID, command.ActionID,
+			); err != nil {
+				result.Error = err.Error()
+				break
+			}
+			if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+				result.Error = err.Error()
+				break
+			}
+			if err := s.confirmAccountCancellations(
+				ctx, command.SpaceID, exchangeAccountID, command.ActionID,
+			); err != nil {
+				result.Error = err.Error()
+				break
+			}
+			account, err = s.Store.GetExchangeAccount(
+				ctx, command.SpaceID, exchangeAccountID,
+			)
+			if err != nil {
+				result.Error = err.Error()
+				break
+			}
+		}
+		result.Error = ""
+		reasons := make(map[string]string)
+		switch exchange.MarketType(account.MarketType) {
+		case exchange.MarketTypeSwap:
+			s.flattenSwap(ctx, command, account, &result, reasons)
+		case exchange.MarketTypeSpot:
+			s.flattenSpot(ctx, command, account, &result, reasons)
+		default:
+			result.Error = "unsupported market type " + account.MarketType
+		}
+		if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+			result.Error = joinError(result.Error, err.Error())
+		}
+		result.Remaining = s.remainingForAccount(
+			ctx, command.SpaceID, exchangeAccountID, reasons,
+		)
+		if result.Error == "" && len(result.Remaining) == 0 {
+			result.Status = "COMPLETED"
+			return result, true
+		}
 	}
-	if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
-		result.Error = joinError(result.Error, err.Error())
-	}
-	result.Remaining = s.remainingForAccount(
-		ctx, command.SpaceID, exchangeAccountID, reasons,
-	)
-	switch {
-	case result.Error != "" || len(result.Remaining) > 0:
-		result.Status = "PARTIAL"
-	default:
-		result.Status = "COMPLETED"
-	}
+	result.Status = "PARTIAL"
 	return result, true
 }
 
@@ -435,15 +490,24 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	quote Quote,
 	result *FlattenAccountResult,
 ) error {
+	clientOrderID := flattenClientOrderIDForSpec(
+		command.ActionID,
+		account.ExchangeAccountID,
+		instrument.Symbol,
+		side,
+		quantity,
+	)
 	existing, found, err := s.flattenChild(
 		ctx, command.SpaceID, account.ExchangeAccountID,
-		command.ActionID, instrument.Symbol,
+		command.ActionID, instrument.Symbol, clientOrderID,
 	)
 	if err != nil {
 		return err
 	}
 	if found {
-		result.ChildOrderIDs = append(result.ChildOrderIDs, existing.OrderID)
+		result.ChildOrderIDs = appendUnique(
+			result.ChildOrderIDs, existing.OrderID,
+		)
 		switch orderdomain.State(existing.State) {
 		case orderdomain.Pending:
 			_, err = s.Orders.Submit(ctx, command.SpaceID, existing.OrderID)
@@ -464,10 +528,8 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	spec := orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
 			ExchangeAccountID: account.ExchangeAccountID,
-			ClientOrderID: flattenClientOrderID(
-				command.ActionID, account.ExchangeAccountID, instrument.Symbol,
-			),
-			InstrumentID: instrument.Symbol, Type: exchange.OrderTypeMarket,
+			ClientOrderID:     clientOrderID,
+			InstrumentID:      instrument.Symbol, Type: exchange.OrderTypeMarket,
 			Side: side, Quantity: quantity,
 		},
 		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
@@ -484,7 +546,9 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	if err != nil {
 		return err
 	}
-	result.ChildOrderIDs = append(result.ChildOrderIDs, string(placed.ID))
+	result.ChildOrderIDs = appendUnique(
+		result.ChildOrderIDs, string(placed.ID),
+	)
 	_, err = s.Orders.Submit(ctx, command.SpaceID, string(placed.ID))
 	return err
 }
@@ -495,6 +559,7 @@ func (s *Service) flattenChild(
 	exchangeAccountID string,
 	actionID string,
 	symbol string,
+	clientOrderID string,
 ) (store.OrderRecord, bool, error) {
 	records, err := s.Store.ListOrdersForLane(
 		ctx, spaceID, exchangeAccountID, symbol,
@@ -502,21 +567,31 @@ func (s *Service) flattenChild(
 	if err != nil {
 		return store.OrderRecord{}, false, err
 	}
-	var children []store.OrderRecord
+	var active []store.OrderRecord
+	var matching *store.OrderRecord
 	for _, current := range records {
 		if current.OwnerType == string(orderdomain.OwnerOperator) &&
 			current.OwnerID == actionID {
-			children = append(children, current)
+			if !orderdomain.State(current.State).Terminal() {
+				active = append(active, current)
+			}
+			if current.ClientOrderID == clientOrderID {
+				value := current
+				matching = &value
+			}
 		}
 	}
-	if len(children) > 1 {
+	if len(active) > 1 {
 		return store.OrderRecord{}, false,
-			fmt.Errorf("multiple flatten children exist for %s", symbol)
+			fmt.Errorf("multiple active flatten children exist for %s", symbol)
 	}
-	if len(children) == 0 {
-		return store.OrderRecord{}, false, nil
+	if len(active) == 1 {
+		return active[0], true, nil
 	}
-	return children[0], true, nil
+	if matching != nil {
+		return *matching, true, nil
+	}
+	return store.OrderRecord{}, false, nil
 }
 
 func (s *Service) remainingForAccount(
@@ -636,6 +711,52 @@ func flattenClientOrderID(actionID, accountID, symbol string) string {
 	return "mf" + hex.EncodeToString(sum[:15])
 }
 
+func flattenClientOrderIDForSpec(
+	actionID string,
+	accountID string,
+	symbol string,
+	side exchange.Side,
+	quantity shared.Decimal,
+) string {
+	sum := sha256.Sum256([]byte(
+		actionID + "\x00" + accountID + "\x00" + symbol + "\x00" +
+			string(side) + "\x00" + quantity.String(),
+	))
+	return "mf" + hex.EncodeToString(sum[:15])
+}
+
+func (s *Service) flattenAttempts() int {
+	if s.FlattenMaxAttempts > 0 {
+		return s.FlattenMaxAttempts
+	}
+	return int(^uint(0) >> 1)
+}
+
+func (s *Service) waitFlattenRetry(ctx context.Context) error {
+	interval := s.FlattenRetryInterval
+	if interval < 0 {
+		return nil
+	}
+	if interval == 0 {
+		interval = 200 * time.Millisecond
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (s *Service) flattenTimeout() time.Duration {
+	if s.FlattenTimeout > 0 {
+		return s.FlattenTimeout
+	}
+	return 5 * time.Second
+}
+
 func quantityRuleReason(
 	quantity shared.Decimal,
 	instrument store.InstrumentRecord,
@@ -724,4 +845,13 @@ func joinError(current, next string) string {
 		return current
 	}
 	return current + "; " + next
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, current := range values {
+		if current == value {
+			return values
+		}
+	}
+	return append(values, value)
 }

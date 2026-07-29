@@ -44,6 +44,19 @@ func (s *actionResumerStub) snapshot() []string {
 	return append([]string(nil), s.resumed...)
 }
 
+func (s *actionResumerStub) setFailure(actionID string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err == nil {
+		delete(s.fail, actionID)
+		return
+	}
+	if s.fail == nil {
+		s.fail = make(map[string]error)
+	}
+	s.fail[actionID] = err
+}
+
 func TestOperatorWorkerRecoversEveryPersistedRunningAction(t *testing.T) {
 	resumer := &actionResumerStub{fail: map[string]error{
 		"action-b": errors.New("still unavailable"),
@@ -80,6 +93,40 @@ func TestOperatorWorkerRunsImmediatelyAndStopsOnCancellation(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(resumer.snapshot()) == 1
 	}, time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestOperatorWorkerSurfacesRecoveryFailureAndReadiness(t *testing.T) {
+	resumer := &actionResumerStub{fail: map[string]error{
+		"action-a": errors.New("recovery failed"),
+	}}
+	worker := &OperatorWorker{
+		Actions: runningActionSourceStub{actions: []store.OperatorActionRecord{{
+			SpaceID: "space-1", ActionID: "action-a", Status: "RUNNING",
+		}}},
+		Resumer: resumer, Interval: 5 * time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	require.Eventually(t, func() bool {
+		snapshot := worker.Snapshot()
+		return !snapshot.Ready &&
+			len(resumer.snapshot()) >= 1 &&
+			snapshot.LastError != ""
+	}, time.Second, time.Millisecond)
+	require.Contains(t, worker.Snapshot().LastError, "recovery failed")
+	resumer.setFailure("action-a", nil)
+	require.Eventually(t, func() bool {
+		return worker.Snapshot().Ready && len(resumer.snapshot()) >= 2
+	}, time.Second, time.Millisecond)
+	select {
+	case err := <-done:
+		require.Failf(t, "worker exited after transient error", "error: %v", err)
+	default:
+	}
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 }
