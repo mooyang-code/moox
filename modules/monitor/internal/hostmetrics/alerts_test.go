@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHostValuesAggregatesEntitiesAndUnavailableRates(t *testing.T) {
@@ -62,15 +63,44 @@ type retryingHostNotifier struct {
 	attempts int
 	fail     bool
 	events   []string
+	last     alerting.Event
 }
 
 func (n *retryingHostNotifier) Send(_ context.Context, _ domain.WebhookChannel, event alerting.Event) error {
 	n.attempts++
 	n.events = append(n.events, event.EventType)
+	n.last = event
 	if n.fail {
 		return errors.New("temporary webhook failure")
 	}
 	return nil
+}
+
+func TestHostAlertNotificationIdentifiesHostAndMetric(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &retryingHostNotifier{}
+	evaluator := &AlertEvaluator{
+		Repository: manager.Repositories().Alerts,
+		Notifier:   notifier,
+		Webhook: func(context.Context, string, string) (*domain.WebhookChannel, error) {
+			return &domain.WebhookChannel{Enabled: true}, nil
+		},
+	}
+	rule := domain.AlertRule{
+		SpaceID: SpaceID, RuleID: "cpu-rule", CheckID: HostRuleKey("control", HostMetricCPU),
+		WebhookID: "wecom", FailureThreshold: 1, SuccessThreshold: 1,
+	}
+	require.NoError(t, evaluator.transition(t.Context(), rule, "control", "message-host", true, 80, time.Now().UTC(), 95))
+	require.Equal(t, "control", notifier.last.Result.InstanceID)
+	require.Contains(t, notifier.last.Check.Name, "control")
+	require.Contains(t, notifier.last.Check.Name, HostMetricCPU)
 }
 
 func TestHostAlertRetriesFailedNotificationAsReminder(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -37,6 +38,13 @@ type marketBar struct {
 	Close    float64
 	Volume   float64
 }
+
+var (
+	sensitiveStorageKeyPattern = regexp.MustCompile(
+		`(?i)(token|secret|password|credential|api[_-]?key|app[_-]?key)\s*[:=]`,
+	)
+	absoluteStoragePathPattern = regexp.MustCompile(`(?i)(/[a-z0-9._-]+){2,}|[a-z]:[\\/]`)
+)
 
 func MarketCanaryCheckID(config MarketCanaryConfig) string {
 	return strings.Join([]string{"market_canary", config.DatasetID, config.SubjectID, config.Frequency}, ":")
@@ -81,7 +89,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		return result
 	}
 	if rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != 0 {
-		result.ErrorMessage = "storage_rejected_query"
+		result.ErrorMessage = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
 	bars, err := decodeMarketBars(rsp.GetRows())
@@ -109,6 +117,32 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	result.Connected = true
 	result.Status = domain.CheckStatusOK
 	return result
+}
+
+func storageRejectionError(retInfo *storagepb.RetInfo) string {
+	if retInfo == nil {
+		return "storage_rejected_query:missing_ret_info"
+	}
+	rawMessage := strings.TrimSpace(retInfo.GetMsg())
+	message := strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\n', '\t', ':':
+			return ' '
+		default:
+			return r
+		}
+	}, rawMessage)
+	if sensitiveStorageKeyPattern.MatchString(rawMessage) || absoluteStoragePathPattern.MatchString(rawMessage) {
+		message = "details_redacted"
+	}
+	runes := []rune(message)
+	if len(runes) > 160 {
+		message = string(runes[:160])
+	}
+	if message == "" {
+		return fmt.Sprintf("storage_rejected_query:%d", retInfo.GetCode())
+	}
+	return fmt.Sprintf("storage_rejected_query:%d:%s", retInfo.GetCode(), message)
 }
 
 func decodeMarketBars(rows []*storagepb.TimeSeriesRow) ([]marketBar, error) {

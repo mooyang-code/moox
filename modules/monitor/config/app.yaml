@@ -42,14 +42,14 @@ observability:
 
 market_canary:
   enabled: true
-  freshness: 3m
+  freshness: 150m
   return_threshold: 0.05
   volume_ratio_threshold: 5
   subjects:
     - space_id: crypto
-      dataset_id: binance_spot_kline
+      dataset_id: binance_spot_kline_1h
       symbol: BTC-USDT
-      frequency: 1m
+      frequency: 1h
 
 metrics:
   enabled: true

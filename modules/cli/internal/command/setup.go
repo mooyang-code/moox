@@ -421,6 +421,10 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return err
 	}
+	healthVersion, healthAccessKey, healthSecret, err := controlHealthAuth(ctx, control)
+	if err != nil {
+		return err
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
@@ -434,6 +438,9 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		EventBusTLSEnabled:    snapshot.Manifest.EventBus.TLSEnabled,
 		StoragePrimarySecret:  primarySecret,
 		StorageViewSecret:     viewSecret,
+		HealthAuthVersion:     healthVersion,
+		HealthAuthAccessKey:   healthAccessKey,
+		HealthAuthSecretKey:   healthSecret,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
@@ -445,6 +452,33 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		return err
 	}
 	return restartStorageClients(ctx, control)
+}
+
+func controlHealthAuth(ctx context.Context, control setupssh.Client) (string, string, string, error) {
+	if control == nil {
+		return "", "", "", fmt.Errorf("health_secret_prepare_failed")
+	}
+	result, err := control.Run(ctx, []string{
+		"sh", "-lc", `set -eu
+secret_file="$HOME/moox/prod/secrets/health-auth.env"
+test -s "${secret_file}"
+awk '/^MOOX_HEALTH_AUTH_(VERSION|ACCESS_KEY|SECRET_KEY)=/{print}' "${secret_file}"`,
+	}, nil)
+	if err != nil {
+		return "", "", "", fmt.Errorf("health_secret_prepare_failed")
+	}
+	normalized, err := normalizeHealthAuth(result.Stdout)
+	if err != nil {
+		return "", "", "", fmt.Errorf("health_secret_prepare_failed")
+	}
+	values := make(map[string]string, 3)
+	for _, line := range strings.Split(normalized, "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	return values["MOOX_HEALTH_AUTH_VERSION"], values["MOOX_HEALTH_AUTH_ACCESS_KEY"], values["MOOX_HEALTH_AUTH_SECRET_KEY"], nil
 }
 
 func controlStorageInternalAuth(ctx context.Context, control setupssh.Client) (string, string, error) {
@@ -494,31 +528,56 @@ done`,
 
 var storageSecretValuePattern = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
 
-func normalizeStorageInternalAuth(raw string) (string, error) {
-	if len(raw) == 0 || len(raw) > 4096 {
-		return "", fmt.Errorf("invalid storage auth file")
+func normalizeHealthAuth(raw string) (string, error) {
+	keys := []string{
+		"MOOX_HEALTH_AUTH_VERSION",
+		"MOOX_HEALTH_AUTH_ACCESS_KEY",
+		"MOOX_HEALTH_AUTH_SECRET_KEY",
 	}
-	const primaryKey = "MOOX_STORAGE_PRIMARY_AUTH_SECRET"
-	const viewKey = "MOOX_STORAGE_VIEW_AUTH_SECRET"
-	values := make(map[string]string, 2)
+	return normalizeSecretEnv(raw, keys)
+}
+
+func normalizeStorageInternalAuth(raw string) (string, error) {
+	return normalizeSecretEnv(raw, []string{
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET",
+		"MOOX_STORAGE_VIEW_AUTH_SECRET",
+	})
+}
+
+func normalizeSecretEnv(raw string, keys []string) (string, error) {
+	if len(raw) == 0 || len(raw) > 4096 {
+		return "", fmt.Errorf("invalid auth file")
+	}
+	allowed := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		allowed[key] = struct{}{}
+	}
+	values := make(map[string]string, len(keys))
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
-		if !ok || (key != primaryKey && key != viewKey) || value == "" || !storageSecretValuePattern.MatchString(value) {
-			return "", fmt.Errorf("invalid storage auth entry")
+		if _, accepted := allowed[key]; !ok || !accepted || value == "" || !storageSecretValuePattern.MatchString(value) {
+			return "", fmt.Errorf("invalid auth entry")
 		}
 		if _, exists := values[key]; exists {
-			return "", fmt.Errorf("duplicate storage auth entry")
+			return "", fmt.Errorf("duplicate auth entry")
 		}
 		values[key] = value
 	}
-	if values[primaryKey] == "" || values[viewKey] == "" {
-		return "", fmt.Errorf("missing storage auth entry")
+	var output strings.Builder
+	for _, key := range keys {
+		if values[key] == "" {
+			return "", fmt.Errorf("missing auth entry")
+		}
+		output.WriteString(key)
+		output.WriteByte('=')
+		output.WriteString(values[key])
+		output.WriteByte('\n')
 	}
-	return primaryKey + "=" + values[primaryKey] + "\n" + viewKey + "=" + values[viewKey] + "\n", nil
+	return output.String(), nil
 }
 
 func defaultSetupImportMetadata(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, seedPath string, spaces []string) (metadataImportSummary, error) {

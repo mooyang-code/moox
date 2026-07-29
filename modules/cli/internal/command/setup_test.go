@@ -245,6 +245,22 @@ func TestNormalizeStorageInternalAuthRejectsShellContent(t *testing.T) {
 	}
 }
 
+func TestNormalizeHealthAuthRejectsShellContent(t *testing.T) {
+	const valid = "MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=health+/=\n"
+	got, err := normalizeHealthAuth(valid)
+	require.NoError(t, err)
+	assert.Equal(t, valid, got)
+
+	for _, raw := range []string{
+		valid + "touch /tmp/pwned\n",
+		"MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=$(id)\n",
+		"MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\n",
+	} {
+		_, err := normalizeHealthAuth(raw)
+		require.Error(t, err)
+	}
+}
+
 func TestSetupDeployControlWritesSanitizedValidationResultOnFailure(t *testing.T) {
 	t.Parallel()
 	snapshot := setupSnapshot(t)

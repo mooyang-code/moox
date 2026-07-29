@@ -203,7 +203,17 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, agen
 	if err != nil || webhook == nil {
 		return nil
 	}
-	event := alerting.Event{EventID: uuid.NewString(), EventType: eventType, Status: state.Status, Message: fmt.Sprintf("%s host metric %s=%v", agentID, strings.TrimPrefix(rule.CheckID, HostRulePrefix), value), Check: domain.Check{SpaceID: SpaceID, CheckID: rule.CheckID, Name: "Host metric"}, Result: domain.CheckResult{SpaceID: SpaceID, CheckID: rule.CheckID, Success: state.Status != domain.AlertStatusFiring, ErrorMessage: fmt.Sprintf("value=%v", value), CheckedAt: now}, Rule: rule, DedupeKey: rule.RuleID + ":" + rule.CheckID}
+	metric := strings.TrimPrefix(rule.CheckID, HostRulePrefix)
+	event := alerting.Event{
+		EventID: uuid.NewString(), EventType: eventType, Status: state.Status,
+		Message: fmt.Sprintf("%s host metric %s=%v", agentID, metric, value),
+		Check:   domain.Check{SpaceID: SpaceID, CheckID: rule.CheckID, Name: fmt.Sprintf("主机 %s 的 %s 指标", agentID, metric)},
+		Result: domain.CheckResult{
+			SpaceID: SpaceID, CheckID: rule.CheckID, InstanceID: agentID,
+			Success: state.Status != domain.AlertStatusFiring, ErrorMessage: fmt.Sprintf("当前值：%v", value), CheckedAt: now,
+		},
+		Rule: rule, DedupeKey: rule.RuleID + ":" + rule.CheckID,
+	}
 	if err := e.Notifier.Send(ctx, *webhook, event); err != nil {
 		// Notification failure is recorded best-effort and never rolls back the sample.
 		_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})

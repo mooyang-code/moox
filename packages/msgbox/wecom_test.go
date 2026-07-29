@@ -206,6 +206,13 @@ func validMessage() Message {
 	}
 }
 
+func TestRenderMarkdownUsesChineseSeverity(t *testing.T) {
+	content := renderMarkdown(Message{Severity: SeverityCritical, Title: "服务异常", Body: "健康检查失败"})
+	if !strings.Contains(content, "**[严重] 服务异常**") {
+		t.Fatalf("renderMarkdown() = %q", content)
+	}
+}
+
 func labels(count int) map[string]string {
 	out := make(map[string]string, count)
 	for i := 0; i < count; i++ {

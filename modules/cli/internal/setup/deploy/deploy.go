@@ -43,6 +43,9 @@ type Options struct {
 	MonitoringWeComWebhook string
 	StoragePrimarySecret   string
 	StorageViewSecret      string
+	HealthAuthVersion      string
+	HealthAuthAccessKey    string
+	HealthAuthSecretKey    string
 }
 
 type Packager interface {
@@ -461,6 +464,17 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		"MOOX_STORAGE_PRIMARY_AUTH_SECRET="+opts.StoragePrimarySecret,
 		"MOOX_STORAGE_VIEW_AUTH_SECRET="+opts.StorageViewSecret,
 	)
+	if strings.TrimSpace(opts.HealthAuthVersion) == "" ||
+		strings.TrimSpace(opts.HealthAuthAccessKey) == "" ||
+		strings.TrimSpace(opts.HealthAuthSecretKey) == "" {
+		_ = os.Remove(archive)
+		return "", fmt.Errorf("storage package requires control-owned health auth secrets")
+	}
+	command.Env = append(command.Env,
+		"MOOX_HEALTH_AUTH_VERSION="+opts.HealthAuthVersion,
+		"MOOX_HEALTH_AUTH_ACCESS_KEY="+opts.HealthAuthAccessKey,
+		"MOOX_HEALTH_AUTH_SECRET_KEY="+opts.HealthAuthSecretKey,
+	)
 	if err := command.Run(); err != nil {
 		_ = os.Remove(archive)
 		return "", err
@@ -598,7 +612,10 @@ install_storage() {
   if [ -d "$deploy/secrets" ]; then
     for secret in "$deploy/secrets/"*; do
       [ -e "$secret" ] || continue
-      [ "$(basename "$secret")" = "storage-internal-auth.env" ] && continue
+      case "$(basename "$secret")" in
+        storage-internal-auth.env) continue ;;
+        health-auth.env) [ -s "$next/secrets/health-auth.env" ] && continue ;;
+      esac
       cp -R "$secret" "$next/secrets/"
     done
   fi

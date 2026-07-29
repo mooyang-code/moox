@@ -11,6 +11,8 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/msgbox"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type recordingSender struct{ messages []msgbox.Message }
@@ -267,4 +269,39 @@ func TestWebhookNotifierRoutesThroughMsgboxSender(t *testing.T) {
 	if len(sender.messages) != 1 || sender.messages[0].Severity != msgbox.SeverityCritical {
 		t.Fatalf("messages = %#v", sender.messages)
 	}
+}
+
+func TestWebhookNotifierExplainsKnownFailuresInChinese(t *testing.T) {
+	sender := &recordingSender{}
+	notifier := WebhookNotifier{NewSender: func(string) (msgbox.Sender, error) { return sender, nil }}
+	check := domain.Check{
+		CheckID: "sysdeploy:control:storage-primary",
+		Name:    "storage-primary@control",
+		Source:  domain.CheckSourceSysDeploy,
+	}
+	err := notifier.Send(context.Background(), domain.WebhookChannel{URL: "https://example.invalid"}, Event{
+		Check: check, Status: domain.AlertStatusFiring, EventType: domain.AlertEventReminder,
+		Result: domain.CheckResult{
+			InstanceID: "monitor-control", ErrorMessage: "unexpected HTTP status 401",
+			HTTPStatus: 401, CheckedAt: time.Date(2026, 7, 29, 9, 30, 0, 0, time.UTC),
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, sender.messages, 1)
+	message := sender.messages[0]
+	assert.Equal(t, "持续告警：storage-primary@control", message.Title)
+	assert.Contains(t, message.Body, "异常原因：目标服务拒绝了健康检查鉴权（HTTP 401）")
+	assert.Contains(t, message.Body, "建议处理：检查 Monitor 与 storage-primary 使用的 health-auth 密钥是否一致")
+	assert.Contains(t, message.Body, "检查时间：2026-07-29 17:30:00 CST")
+	assert.Equal(t, "持续告警", message.Labels["事件"])
+	assert.Equal(t, "异常中", message.Labels["状态"])
+}
+
+func TestLocalizedReasonExplainsMarketCanaryStorageRejection(t *testing.T) {
+	reason, action := localizedReason(
+		domain.Check{CheckID: "market_canary:binance_spot_kline:BTC-USDT:1m"},
+		domain.CheckResult{ErrorMessage: "storage_rejected_query:7:dataset disabled"},
+	)
+	assert.Equal(t, "Storage 拒绝了行情查询请求（返回码 7：dataset disabled）", reason)
+	assert.Contains(t, action, "Dataset、Symbol、Frequency")
 }

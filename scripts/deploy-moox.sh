@@ -2422,6 +2422,18 @@ prepare_stage() {
   if [[ -n "${MOOX_MSGBOX_WECOM_WEBHOOK+x}" ]]; then
     (umask 077; printf 'MOOX_MSGBOX_WECOM_WEBHOOK=%q\n' "${MOOX_MSGBOX_WECOM_WEBHOOK}" >"${STAGE_DIR}/secrets/msgbox.env.next")
   fi
+  if [[ -n "${MOOX_HEALTH_AUTH_VERSION:-}${MOOX_HEALTH_AUTH_ACCESS_KEY:-}${MOOX_HEALTH_AUTH_SECRET_KEY:-}" ]]; then
+    [[ -n "${MOOX_HEALTH_AUTH_VERSION:-}" && -n "${MOOX_HEALTH_AUTH_ACCESS_KEY:-}" && -n "${MOOX_HEALTH_AUTH_SECRET_KEY:-}" ]] || \
+      fail "health auth requires version, access key, and secret key"
+    [[ "${MOOX_HEALTH_AUTH_VERSION}" != *$'\n'* && "${MOOX_HEALTH_AUTH_ACCESS_KEY}" != *$'\n'* && "${MOOX_HEALTH_AUTH_SECRET_KEY}" != *$'\n'* ]] || \
+      fail "health auth values must contain exactly one line"
+    (umask 077; {
+      printf 'MOOX_HEALTH_AUTH_VERSION=%q\n' "${MOOX_HEALTH_AUTH_VERSION}"
+      printf 'MOOX_HEALTH_AUTH_ACCESS_KEY=%q\n' "${MOOX_HEALTH_AUTH_ACCESS_KEY}"
+      printf 'MOOX_HEALTH_AUTH_SECRET_KEY=%q\n' "${MOOX_HEALTH_AUTH_SECRET_KEY}"
+    } >"${STAGE_DIR}/secrets/health-auth.env")
+    chmod 0600 "${STAGE_DIR}/secrets/health-auth.env"
+  fi
   local gateway_control_secret gateway_service_secret
   if [[ "${AUTO_GATEWAY_INPUTS}" -eq 1 ]]; then
     gateway_control_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" gateway-control)"
@@ -2851,6 +2863,9 @@ sync_local_stage() {
     install -m 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
   else
     rm -f "${deploy_dir}/secrets/storage-internal-auth.env"
+  fi
+  if [[ -f "${STAGE_DIR}/secrets/health-auth.env" ]]; then
+    install -m 0600 "${STAGE_DIR}/secrets/health-auth.env" "${deploy_dir}/secrets/health-auth.env"
   fi
   for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key; do
     install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"

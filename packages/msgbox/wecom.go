@@ -161,10 +161,10 @@ func validateWebhookURL(rawURL string, allowHTTP bool) error {
 func renderMarkdown(message Message) string {
 	var content strings.Builder
 	if message.Title != "" {
-		fmt.Fprintf(&content, "**[%s] %s**", strings.ToUpper(string(message.Severity)), message.Title)
+		fmt.Fprintf(&content, "**[%s] %s**", localizedSeverity(message.Severity), message.Title)
 	}
 	if message.Key != "" {
-		appendLine(&content, "> key: "+message.Key)
+		appendLine(&content, "> 告警标识："+message.Key)
 	}
 	if message.Body != "" {
 		appendLine(&content, message.Body)
@@ -178,6 +178,19 @@ func renderMarkdown(message Message) string {
 		appendLine(&content, fmt.Sprintf("> %s: %s", key, message.Labels[key]))
 	}
 	return content.String()
+}
+
+func localizedSeverity(severity Severity) string {
+	switch severity {
+	case SeverityCritical:
+		return "严重"
+	case SeverityWarning:
+		return "警告"
+	case SeverityInfo:
+		return "提示"
+	default:
+		return strings.ToUpper(string(severity))
+	}
 }
 
 func appendLine(content *strings.Builder, line string) {

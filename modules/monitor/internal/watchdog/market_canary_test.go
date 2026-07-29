@@ -2,8 +2,10 @@ package watchdog
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -14,12 +16,17 @@ import (
 type canaryReader struct {
 	rows    []*storagepb.TimeSeriesRow
 	request *storagepb.ReadTimeSeriesRowsReq
+	retInfo *storagepb.RetInfo
 }
 
 func (r *canaryReader) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	r.request = request
+	retInfo := r.retInfo
+	if retInfo == nil {
+		retInfo = &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}
+	}
 	return &storagepb.ReadTimeSeriesRowsRsp{
-		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
+		RetInfo: retInfo,
 		Rows:    r.rows,
 	}, nil
 }
@@ -51,6 +58,42 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	result = (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.False(t, result.Success)
 	require.Equal(t, "threshold_exceeded", result.ErrorMessage)
+}
+
+func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
+	reader := &canaryReader{retInfo: &storagepb.RetInfo{Code: 7, Msg: "dataset disabled"}}
+	result := (MarketCanary{
+		Reader: reader,
+		Config: MarketCanaryConfig{
+			SpaceID: "crypto", DatasetID: "binance_spot_kline",
+			SubjectID: "BTC-USDT", Frequency: "1m",
+			Freshness: time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+		},
+	}).Run(t.Context())
+
+	require.Equal(t, "storage_rejected_query:7:dataset disabled", result.ErrorMessage)
+}
+
+func TestMarketCanaryStorageRejectionKeepsValidUTF8(t *testing.T) {
+	message := strings.Repeat("数据集不可用", 40)
+	got := storageRejectionError(&storagepb.RetInfo{Code: 7, Msg: message})
+	require.True(t, utf8.ValidString(got))
+	require.LessOrEqual(t, len([]rune(got)), len([]rune("storage_rejected_query:7:"))+160)
+}
+
+func TestMarketCanaryStorageRejectionRedactsSensitiveDetail(t *testing.T) {
+	for _, message := range []string{
+		"query failed token=super-secret-value",
+		"query failed secret: super-secret-value",
+		"open /home/ubuntu/moox/storage/data/private.db: permission denied",
+		"open /root/moox/storage/private.db: permission denied",
+		`open C:\moox\storage\private.db: permission denied`,
+	} {
+		got := storageRejectionError(&storagepb.RetInfo{Code: 7, Msg: message})
+		require.NotContains(t, got, "super-secret-value")
+		require.NotContains(t, got, "/home/ubuntu")
+		require.Contains(t, got, "details_redacted")
+	}
 }
 
 func marketCanaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.TimeSeriesRow {

@@ -96,10 +96,10 @@ func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 		)
 		checks = append(checks, serverless.StorageMarketCanaryCheck(storagepb.NewPrimaryStoreClientProxy(storageOptions...), serverless.MarketCanaryConfig{
 			SpaceID:              firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_SPACE_ID"), "crypto"),
-			DatasetID:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_DATASET_ID"), "binance_spot_kline"),
+			DatasetID:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_DATASET_ID"), "binance_spot_kline_1h"),
 			SubjectID:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_SUBJECT_ID"), "BTC-USDT"),
-			Frequency:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_FREQUENCY"), "1m"),
-			Freshness:            durationEnv("MOOX_SCF_CANARY_FRESHNESS", 3*time.Minute),
+			Frequency:            firstNonEmpty(os.Getenv("MOOX_SCF_CANARY_FREQUENCY"), "1h"),
+			Freshness:            durationEnv("MOOX_SCF_CANARY_FRESHNESS", 150*time.Minute),
 			ReturnThreshold:      envFloat("MOOX_SCF_CANARY_RETURN_THRESHOLD", 0.05),
 			VolumeRatioThreshold: envFloat("MOOX_SCF_CANARY_VOLUME_RATIO_THRESHOLD", 5),
 			AuthInfo: &storagepb.AuthInfo{
