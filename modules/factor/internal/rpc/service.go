@@ -189,32 +189,37 @@ func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq)
 func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorStatusReq) (*factorpb.SetFactorStatusRsp, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
-	if req.GetFactorId() == "" || req.GetStatus() == "" {
+	factorID := strings.TrimSpace(req.GetFactorId())
+	status := strings.TrimSpace(req.GetStatus())
+	if factorID == "" || status == "" {
 		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("factor_id and status are required"))}, nil
 	}
-	existing, err := s.factors.Get(ctx, req.GetFactorId())
+	if status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled {
+		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("invalid factor status %q", status))}, nil
+	}
+	existing, err := s.factors.Get(ctx, factorID)
 	if err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 	}
-	if existing.Status == domain.FactorStatusEnabled && req.GetStatus() == domain.FactorStatusEnabled {
+	if existing.Status == domain.FactorStatusEnabled && status == domain.FactorStatusEnabled {
 		return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorToPB(*existing)}, nil
 	}
-	if req.GetStatus() == domain.FactorStatusEnabled {
+	if status == domain.FactorStatusEnabled {
 		candidate := *existing
 		candidate.Status = domain.FactorStatusEnabled
 		if err := s.syncFactorDefinitionBindings(ctx, candidate); err != nil {
 			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 		}
 	}
-	if err := s.factors.SetStatus(ctx, req.GetFactorId(), req.GetStatus()); err != nil {
+	if err := s.factors.SetStatus(ctx, factorID, status); err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 	}
-	got, err := s.factors.Get(ctx, req.GetFactorId())
+	got, err := s.factors.Get(ctx, factorID)
 	if err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 	}
-	if req.GetStatus() != domain.FactorStatusEnabled {
-		if err := s.syncFactorBindings(ctx, req.GetFactorId()); err != nil {
+	if status != domain.FactorStatusEnabled {
+		if err := s.syncFactorBindings(ctx, factorID); err != nil {
 			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 		}
 	}

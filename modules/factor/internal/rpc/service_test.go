@@ -368,7 +368,7 @@ func TestSetFactorStatusEnableReconciliationFailureRemainsNonExecutable(t *testi
 	)
 
 	rsp, err := svc.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
-		FactorId: "bias", Status: domain.FactorStatusEnabled,
+		FactorId: "bias", Status: " " + domain.FactorStatusEnabled + " ",
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
@@ -379,6 +379,28 @@ func TestSetFactorStatusEnableReconciliationFailureRemainsNonExecutable(t *testi
 	require.NoError(t, listErr)
 	require.Empty(t, executable)
 	require.NotZero(t, metadata.targetCalls)
+}
+
+func TestSetFactorStatusRejectsInvalidStatusWithoutMutationOrSync(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorAndBinding(t, db, domain.FactorStatusDisabled)
+	metadata := newRecordingFactorMetadataClient("crypto", "bias")
+	svc := NewWithRuntime(db, nil,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+	)
+
+	rsp, err := svc.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+		FactorId: "bias", Status: "paused",
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	factor, getErr := db.Factors().Get(ctx, "bias")
+	require.NoError(t, getErr)
+	require.Equal(t, domain.FactorStatusDisabled, factor.Status)
+	require.Empty(t, metadata.updatedFactors)
+	require.Zero(t, metadata.targetCalls)
 }
 
 func TestRecalcFactorRunsSynchronousRange(t *testing.T) {
