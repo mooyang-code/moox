@@ -150,14 +150,6 @@ func (s *Service) UpdateRunner(
 		if _, err := s.Repo.GetStrategy(ctx, updated.StrategyID); err != nil {
 			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
 		}
-		if err := s.Repo.SwitchRunnerStrategy(
-			ctx,
-			current.ID,
-			updated.StrategyID,
-			now,
-		); err != nil {
-			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
-		}
 	}
 	if err := s.Repo.UpdateRunner(ctx, updated); err != nil {
 		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil

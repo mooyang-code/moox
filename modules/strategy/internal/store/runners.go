@@ -35,37 +35,26 @@ func (s *Store) CreateRunner(ctx context.Context, runner domain.StrategyRunner) 
 func (s *Store) UpdateRunner(ctx context.Context, runner domain.StrategyRunner) error {
 	result := s.db.WithContext(ctx).Exec(`
 		UPDATE t_strategy_runners
-		SET space_id = ?, view_id = ?, frequency = ?, params_json = ?,
-		    logical_account_id = ?, updated_at = ?
+		SET strategy_id = ?,
+		    space_id = ?,
+		    view_id = ?,
+		    frequency = ?,
+		    params_json = ?,
+		    logical_account_id = ?,
+		    last_result_id = CASE WHEN strategy_id <> ? THEN NULL ELSE last_result_id END,
+		    last_success_at = CASE WHEN strategy_id <> ? THEN NULL ELSE last_success_at END,
+		    last_error = CASE WHEN strategy_id <> ? THEN NULL ELSE last_error END,
+		    updated_at = ?
 		WHERE runner_id = ? AND status = ?
-	`, runner.SpaceID, runner.ViewID, runner.Frequency, string(runner.ParamsJSON),
-		stringValue(runner.LogicalAccountID), runner.UpdatedAt.UTC().UnixMilli(),
-		runner.ID, domain.RunnerStatusDisabled)
+	`, runner.StrategyID, runner.SpaceID, runner.ViewID, runner.Frequency,
+		string(runner.ParamsJSON), stringValue(runner.LogicalAccountID),
+		runner.StrategyID, runner.StrategyID, runner.StrategyID,
+		runner.UpdatedAt.UTC().UnixMilli(), runner.ID, domain.RunnerStatusDisabled)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
 		return runnerMutationError(ctx, s.db, runner.ID)
-	}
-	return nil
-}
-
-func (s *Store) SwitchRunnerStrategy(
-	ctx context.Context,
-	runnerID, strategyID string,
-	updatedAt time.Time,
-) error {
-	result := s.db.WithContext(ctx).Exec(`
-		UPDATE t_strategy_runners
-		SET strategy_id = ?, last_result_id = NULL, last_success_at = NULL,
-		    last_error = NULL, updated_at = ?
-		WHERE runner_id = ? AND status = ?
-	`, strategyID, updatedAt.UTC().UnixMilli(), runnerID, domain.RunnerStatusDisabled)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return runnerMutationError(ctx, s.db, runnerID)
 	}
 	return nil
 }

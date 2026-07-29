@@ -84,7 +84,7 @@ func TestUpdateRunnerRequiresDisabledStatus(t *testing.T) {
 	}
 }
 
-func TestSwitchRunnerStrategyPreservesTargetAndSequence(t *testing.T) {
+func TestUpdateRunnerSwitchesStrategyWhilePreservingTargetAndSequence(t *testing.T) {
 	repo := openCurrentStore(t)
 	seedStrategy(t, repo, "strategy-1")
 	seedStrategy(t, repo, "strategy-2")
@@ -106,7 +106,10 @@ func TestSwitchRunnerStrategyPreservesTargetAndSequence(t *testing.T) {
 		success.UnixMilli(), lastError, runner.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SwitchRunnerStrategy(context.Background(), runner.ID, "strategy-2", time.UnixMilli(9000)); err != nil {
+	runner.StrategyID = "strategy-2"
+	runner.ViewID = "view-2"
+	runner.UpdatedAt = time.UnixMilli(9000)
+	if err := repo.UpdateRunner(context.Background(), runner); err != nil {
 		t.Fatal(err)
 	}
 	got, err := repo.GetRunner(context.Background(), runner.ID)
@@ -121,7 +124,7 @@ func TestSwitchRunnerStrategyPreservesTargetAndSequence(t *testing.T) {
 	}
 }
 
-func TestSwitchRunnerStrategyRequiresDisabledStatus(t *testing.T) {
+func TestUpdateRunnerStrategySwitchRequiresDisabledStatus(t *testing.T) {
 	repo := openCurrentStore(t)
 	seedStrategy(t, repo, "strategy-1")
 	seedStrategy(t, repo, "strategy-2")
@@ -129,8 +132,10 @@ func TestSwitchRunnerStrategyRequiresDisabledStatus(t *testing.T) {
 	if err := repo.CreateRunner(context.Background(), runner); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SwitchRunnerStrategy(context.Background(), runner.ID, "strategy-2", time.Now()); !errors.Is(err, ErrRunnerEnabled) {
-		t.Fatalf("SwitchRunnerStrategy() error = %v", err)
+	runner.StrategyID = "strategy-2"
+	runner.UpdatedAt = time.Now()
+	if err := repo.UpdateRunner(context.Background(), runner); !errors.Is(err, ErrRunnerEnabled) {
+		t.Fatalf("UpdateRunner() error = %v", err)
 	}
 }
 
