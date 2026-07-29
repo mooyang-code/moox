@@ -23,6 +23,7 @@ type fakeRuntime struct {
 	hash   string
 	err    error
 	loads  int
+	ready  int
 	last   domain.ExecutionRequest
 }
 
@@ -38,6 +39,10 @@ func (f *fakeRuntime) Run(
 ) (domain.Output, string, error) {
 	f.last = request
 	return f.output, f.hash, f.err
+}
+
+func (f *fakeRuntime) ReadyWorkers() int {
+	return f.ready
 }
 
 type fakeLogicalAccountOwner struct {
@@ -90,6 +95,26 @@ func TestCreateStrategyStoresImmutableArtifact(t *testing.T) {
 	}
 	if stored.SourceHash != first.GetStrategy().GetSourceHash() || runtime.loads != 2 {
 		t.Fatalf("stored=%+v loads=%d", stored, runtime.loads)
+	}
+}
+
+func TestGetEngineStatusUsesCurrentRuntimeReadiness(t *testing.T) {
+	service, _, runtime := newRPCServiceForTest(t)
+	runtime.ready = 2
+	response, err := service.GetEngineStatus(
+		context.Background(),
+		&strategypb.GetEngineStatusReq{},
+	)
+	if err != nil || response.GetWorkers() != 2 || response.GetReadyWorkers() != 2 {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	runtime.ready = 0
+	response, err = service.GetEngineStatus(
+		context.Background(),
+		&strategypb.GetEngineStatusReq{},
+	)
+	if err != nil || response.GetReadyWorkers() != 0 {
+		t.Fatalf("degraded response=%+v err=%v", response, err)
 	}
 }
 
@@ -227,6 +252,7 @@ func newRPCServiceForTest(t *testing.T) (*Service, *store.Store, *fakeRuntime) {
 	service := &Service{
 		Repo: repo, Registry: &registry.Service{Repo: repo}, Runtime: runtime,
 		Results: &strategyaction.Service{Repo: repo},
+		Workers: 2,
 		Now:     func() time.Time { return time.UnixMilli(20_000).UTC() },
 		NewID:   func() string { return "result-generated" },
 	}

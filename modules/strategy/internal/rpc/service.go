@@ -50,7 +50,6 @@ type Service struct {
 	Results         ResultActions
 	LogicalAccounts LogicalAccountOwner
 	Workers         int
-	ReadyWorkers    int
 	Now             func() time.Time
 	NewID           func() string
 	runnerLocks     sync.Map
@@ -244,8 +243,12 @@ func (s *Service) GetEngineStatus(
 	context.Context,
 	*strategypb.GetEngineStatusReq,
 ) (*strategypb.GetEngineStatusRsp, error) {
+	readyWorkers := 0
+	if status, ok := s.Runtime.(interface{ ReadyWorkers() int }); ok {
+		readyWorkers = status.ReadyWorkers()
+	}
 	return &strategypb.GetEngineStatusRsp{
-		RetInfo: success(), Workers: int32(s.Workers), ReadyWorkers: int32(s.ReadyWorkers),
+		RetInfo: success(), Workers: int32(s.Workers), ReadyWorkers: int32(readyWorkers),
 	}, nil
 }
 

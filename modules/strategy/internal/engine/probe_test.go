@@ -7,7 +7,7 @@ import (
 )
 
 func TestProbeCompletesRealWorkerHandshake(t *testing.T) {
-	engine, err := NewWithWorkers(context.Background(), "python3", "../../pyworker/worker.py", 1)
+	engine, err := NewWithWorkers(context.Background(), "python3", "../../pyworker/worker.py", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,6 +16,9 @@ func TestProbeCompletesRealWorkerHandshake(t *testing.T) {
 	defer cancel()
 	if err := engine.Probe(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if ready := engine.ReadyWorkers(); ready != 2 {
+		t.Fatalf("ReadyWorkers() = %d, want 2", ready)
 	}
 }
 

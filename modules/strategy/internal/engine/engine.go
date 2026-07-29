@@ -26,8 +26,8 @@ import (
 
 type Engine struct {
 	pool       *pool.Pool
-	factory    pool.Factory
 	publisher  *moduleregistry.SourcePublisher
+	workers    int
 	mu         sync.RWMutex
 	strategies map[string]process.LoadRequest
 }
@@ -45,6 +45,9 @@ func New(ctx context.Context, python, workerPath string) (*Engine, error) {
 
 func NewWithWorkers(ctx context.Context, python, workerPath string, workers int) (*Engine, error) {
 	_ = ctx
+	if workers < 1 {
+		workers = 1
+	}
 	root := filepath.Join(os.TempDir(), "moox-strategy")
 	factory := func(start context.Context) (process.Worker, error) {
 		return process.NewStdioWorker(start, process.Config{
@@ -54,21 +57,27 @@ func NewWithWorkers(ctx context.Context, python, workerPath string, workers int)
 		})
 	}
 	return &Engine{
-		pool: pool.New(workers, factory), factory: factory,
+		pool: pool.New(workers, factory), workers: workers,
 		publisher:  moduleregistry.NewSourcePublisher(root),
 		strategies: make(map[string]process.LoadRequest),
 	}, nil
 }
 
 func (e *Engine) Probe(ctx context.Context) error {
-	if e == nil || e.factory == nil {
+	if e == nil || e.pool == nil {
 		return errors.New("strategy engine unavailable")
 	}
-	worker, err := e.factory(ctx)
-	if err != nil {
+	if _, err := e.pool.Warmup(ctx); err != nil {
 		return fmt.Errorf("strategy worker handshake: %w", err)
 	}
-	return worker.Close()
+	return nil
+}
+
+func (e *Engine) ReadyWorkers() int {
+	if e == nil || e.pool == nil || !e.pool.Ready() {
+		return 0
+	}
+	return e.workers
 }
 
 func strategyKey(strategyID string) string {
