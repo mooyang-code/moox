@@ -779,28 +779,9 @@ func (s *Service) terminalize(
 	} else {
 		record.State = string(orderdomain.Expired)
 	}
-	remaining, err := shared.ParseDecimal(record.RemainingReservedQuantity)
-	if err != nil {
-		return err
-	}
 	record.RemainingReservedQuantity = "0"
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.UpdateOrder(record, expected); err != nil {
-			return err
-		}
-		if remaining.IsZero() {
-			return nil
-		}
-		return tx.PostLedger(store.LedgerTransactionRecord{
-			SpaceID: record.SpaceID, TransactionID: "terminal-release:" + record.OrderID,
-			ExchangeAccountID: record.ExchangeAccountID,
-			TransactionType:   store.LedgerReservationRelease,
-			SourceType:        "ORDER_TERMINAL", SourceID: record.OrderID,
-			Entries: []store.LedgerEntryRecord{
-				{Asset: record.ReservedAsset, Bucket: "RESERVED", Amount: remaining.Neg()},
-				{Asset: record.ReservedAsset, Bucket: "AVAILABLE", Amount: remaining},
-			},
-		})
+		return tx.UpdateOrder(record, expected)
 	})
 }
 

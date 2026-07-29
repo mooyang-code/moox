@@ -26,8 +26,6 @@ type Account struct {
 	SettlementAsset    string
 	MarginMode         exchange.MarginMode
 	Status             exchange.AccountStatus
-	Paused             bool
-	PauseReason        string
 	Ready              bool
 	SyncSymbols        []string
 	LeverageSettings   map[string]shared.Decimal
@@ -51,9 +49,6 @@ func (a Account) Validate() error {
 	}
 	if a.ExecutionMode == exchange.ExecutionModeLive && blank(a.CredentialSecretID) {
 		return invalidAccount("LIVE requires an Exchange credential")
-	}
-	if a.Paused && blank(a.PauseReason) {
-		return invalidAccount("paused account requires a reason")
 	}
 	switch a.MarketType {
 	case exchange.MarketTypeSpot:
@@ -92,7 +87,7 @@ func (a Account) ExecutionEligibility() error {
 		len(a.SyncSymbols) == 0 {
 		return ErrAccountNotExecutable
 	}
-	if a.Status != exchange.AccountStatusEnabled || a.Paused || !a.Ready {
+	if a.Status != exchange.AccountStatusEnabled || !a.Ready {
 		return ErrAccountNotExecutable
 	}
 	return nil

@@ -113,38 +113,3 @@ CREATE TABLE IF NOT EXISTS t_exchange_positions (
     FOREIGN KEY (c_space_id, c_exchange_account_id)
         REFERENCES t_exchange_accounts (c_space_id, c_exchange_account_id)
 );
-
-CREATE TABLE IF NOT EXISTS t_target_executions (
-    c_space_id TEXT NOT NULL,
-    c_execution_id TEXT NOT NULL,
-    c_event_id TEXT NOT NULL,
-    c_strategy_run_id TEXT NOT NULL DEFAULT '',
-    c_execution_binding_id TEXT NOT NULL,
-    c_exchange_account_id TEXT NOT NULL,
-    c_command_sequence INTEGER NOT NULL,
-    c_not_after INTEGER NOT NULL DEFAULT 0,
-    c_data_revision TEXT NOT NULL DEFAULT '',
-    c_targets_json TEXT NOT NULL,
-    c_status TEXT NOT NULL,
-    c_progress TEXT NOT NULL DEFAULT '',
-    c_residual_quantity TEXT NOT NULL DEFAULT '0',
-    c_last_error TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (c_space_id, c_execution_id),
-    UNIQUE (c_space_id, c_execution_binding_id, c_command_sequence),
-    UNIQUE (c_space_id, c_event_id),
-    UNIQUE (c_space_id, c_execution_binding_id),
-    FOREIGN KEY (c_space_id, c_exchange_account_id)
-        REFERENCES t_exchange_accounts (c_space_id, c_exchange_account_id),
-    CHECK (json_valid(c_targets_json)),
-    CHECK (json_type(c_targets_json) = 'array')
-);
-
-CREATE INDEX IF NOT EXISTS idx_target_executions_account_status
-ON t_target_executions (
-    c_space_id,
-    c_exchange_account_id,
-    c_status,
-    c_mtime
-);

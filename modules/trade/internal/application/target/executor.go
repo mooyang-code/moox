@@ -321,7 +321,7 @@ func (e *Executor) convergeLane(
 	if remaining.IsZero() {
 		return laneResult{progress: progress, complete: true, residual: shared.Zero()}, nil
 	}
-	if account.Status != "ENABLED" || account.Paused || !account.Ready {
+	if account.Status != "ENABLED" || !account.Ready {
 		return laneResult{}, ErrExecutionPaused
 	}
 

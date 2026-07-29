@@ -11,8 +11,6 @@ CREATE TABLE IF NOT EXISTS t_exchange_accounts (
     c_settlement_asset TEXT NOT NULL,
     c_margin_mode TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL,
-    c_paused INTEGER NOT NULL DEFAULT 0,
-    c_pause_reason TEXT NOT NULL DEFAULT '',
     c_ready INTEGER NOT NULL DEFAULT 0,
     c_sync_symbols_json TEXT NOT NULL DEFAULT '[]',
     c_leverage_settings_json TEXT NOT NULL DEFAULT '{}',

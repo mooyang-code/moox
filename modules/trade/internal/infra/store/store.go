@@ -27,7 +27,7 @@ var (
 type Store struct {
 	db           *gorm.DB
 	accountLocks sync.Map
-	targetLocks  sync.Map
+	logicalLocks sync.Map
 	metrics      *report.ModuleMetrics
 }
 
@@ -81,9 +81,9 @@ func (s *Store) LockExchangeAccount(exchangeAccountID string) func() {
 	return mutex.Unlock
 }
 
-func (s *Store) LockTargetBinding(spaceID string, executionBindingID string) func() {
-	key := spaceID + "\x00" + executionBindingID
-	value, _ := s.targetLocks.LoadOrStore(key, &sync.Mutex{})
+func (s *Store) LockLogicalAccount(spaceID string, logicalAccountID string) func() {
+	key := spaceID + "\x00" + logicalAccountID
+	value, _ := s.logicalLocks.LoadOrStore(key, &sync.Mutex{})
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock
@@ -100,8 +100,8 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 	approved := map[string]struct{}{
 		"t_exchange_accounts": {}, "t_exchange_instruments": {},
 		"t_trade_orders": {}, "t_order_fills": {}, "t_exchange_positions": {},
-		"t_target_executions": {}, "t_ledger_transactions": {},
-		"t_ledger_entries": {}, "t_trade_balance_projections": {},
+		"t_logical_accounts": {}, "t_logical_account_members": {},
+		"t_logical_account_targets": {}, "t_operator_actions": {},
 	}
 	for _, table := range tables {
 		if _, found := approved[table]; !found {
@@ -265,4 +265,8 @@ func writeError(err error) error {
 		return fmt.Errorf("%w: %v", ErrConflict, err)
 	}
 	return err
+}
+
+func blank(value string) bool {
+	return strings.TrimSpace(value) == ""
 }

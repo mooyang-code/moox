@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestAllSQLCreatesOnlyExecutionTables(t *testing.T) {
+func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(AllSQL()).Error)
@@ -27,11 +27,11 @@ func TestAllSQLCreatesOnlyExecutionTables(t *testing.T) {
 		"t_exchange_accounts",
 		"t_exchange_instruments",
 		"t_exchange_positions",
-		"t_ledger_entries",
-		"t_ledger_transactions",
+		"t_logical_account_members",
+		"t_logical_account_targets",
+		"t_logical_accounts",
+		"t_operator_actions",
 		"t_order_fills",
-		"t_target_executions",
-		"t_trade_balance_projections",
 		"t_trade_orders",
 	}
 	sort.Strings(want)
@@ -58,6 +58,10 @@ func TestAllSQLHasNoRetiredTables(t *testing.T) {
 		"t_rebalance_runs",
 		"t_rebalance_legs",
 		"t_trade_sync_cursors",
+		"t_target_executions",
+		"t_ledger_transactions",
+		"t_ledger_entries",
+		"t_trade_balance_projections",
 	}
 	for _, table := range retired {
 		var count int64
@@ -107,13 +111,13 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		{"t_trade_orders", []string{"c_space_id", "c_exchange_account_id", "c_client_order_id"}},
 		{"t_order_fills", []string{"c_space_id", "c_exchange_account_id", "c_symbol", "c_exchange_trade_id"}},
 		{"t_exchange_positions", []string{"c_space_id", "c_exchange_account_id", "c_symbol", "c_position_side"}},
-		{"t_target_executions", []string{"c_space_id", "c_execution_id"}},
-		{"t_target_executions", []string{"c_space_id", "c_execution_binding_id", "c_command_sequence"}},
-		{"t_target_executions", []string{"c_space_id", "c_event_id"}},
-		{"t_ledger_transactions", []string{"c_space_id", "c_transaction_id"}},
-		{"t_ledger_transactions", []string{"c_space_id", "c_exchange_account_id", "c_source_type", "c_source_id"}},
-		{"t_ledger_entries", []string{"c_space_id", "c_transaction_id", "c_entry_no"}},
-		{"t_trade_balance_projections", []string{"c_space_id", "c_exchange_account_id", "c_asset", "c_bucket"}},
+		{"t_logical_accounts", []string{"c_space_id", "c_logical_account_id"}},
+		{"t_logical_accounts", []string{"c_space_id", "c_name"}},
+		{"t_logical_account_members", []string{"c_space_id", "c_logical_account_id", "c_exchange_account_id"}},
+		{"t_logical_account_members", []string{"c_space_id", "c_exchange_account_id"}},
+		{"t_logical_account_targets", []string{"c_space_id", "c_logical_account_id"}},
+		{"t_logical_account_targets", []string{"c_space_id", "c_target_id"}},
+		{"t_operator_actions", []string{"c_space_id", "c_action_id"}},
 	}
 	for _, tt := range tests {
 		require.True(t, hasUniqueIndex(t, db, tt.table, tt.columns),
@@ -139,6 +143,15 @@ func TestInstrumentSchemaUsesApprovedSwapQuantityFields(t *testing.T) {
 	} {
 		require.NotContains(t, sql, "\n    "+retired+" ")
 	}
+}
+
+func TestLogicalAccountSchemaKeepsSettlementAssetAndUsesAutomationState(t *testing.T) {
+	sql := AllSQL()
+	require.Contains(t, sql, "c_settlement_asset TEXT NOT NULL")
+	require.Contains(t, sql, "c_automation_state TEXT NOT NULL")
+	require.NotContains(t, sql, "c_control_state")
+	require.NotContains(t, sql, "c_control_revision")
+	require.NotContains(t, sql, "c_paused INTEGER")
 }
 
 func hasUniqueIndex(t *testing.T, db *gorm.DB, table string, want []string) bool {

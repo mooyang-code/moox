@@ -42,7 +42,6 @@ type Store interface {
 	Get(context.Context, string) (exchangeaccount.Account, error)
 	Update(context.Context, UpdateCommand) error
 	SetLeverage(context.Context, string, string, shared.Decimal) error
-	SetPause(context.Context, string, bool, string) error
 }
 
 type SecretSource interface {
@@ -146,39 +145,6 @@ func (s *Service) SetLeverage(
 		return exchangeaccount.ErrInvalidAccount
 	}
 	if err := s.Store.SetLeverage(ctx, exchangeAccountID, symbol, leverage); err != nil {
-		return err
-	}
-	if s.SessionState != nil {
-		s.SessionState.Invalidate(exchangeAccountID)
-	}
-	return nil
-}
-
-func (s *Service) Pause(
-	ctx context.Context,
-	exchangeAccountID string,
-	paused bool,
-	reason string,
-) error {
-	if s == nil || s.Store == nil {
-		return ErrServiceNotConfigured
-	}
-	if strings.TrimSpace(exchangeAccountID) == "" {
-		return exchangeaccount.ErrInvalidAccount
-	}
-	if !paused {
-		reason = ""
-	}
-	current, err := s.Store.Get(ctx, exchangeAccountID)
-	if err != nil {
-		return err
-	}
-	current.Paused = paused
-	current.PauseReason = reason
-	if err := current.Validate(); err != nil {
-		return err
-	}
-	if err := s.Store.SetPause(ctx, exchangeAccountID, paused, reason); err != nil {
 		return err
 	}
 	if s.SessionState != nil {

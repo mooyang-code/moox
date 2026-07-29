@@ -118,24 +118,6 @@ func (s *Service) Place(
 			if available.Cmp(required) < 0 {
 				return ErrInsufficientFunds
 			}
-			if err := tx.PostLedger(store.LedgerTransactionRecord{
-				SpaceID: validation.Account.SpaceID, TransactionID: "reserve:" + id,
-				ExchangeAccountID: spec.ExchangeAccountID,
-				TransactionType:   store.LedgerReservation,
-				SourceType:        "ORDER_RESERVATION", SourceID: id,
-				Entries: []store.LedgerEntryRecord{
-					{
-						Asset: validation.ReservedAsset, Bucket: "AVAILABLE",
-						Amount: validation.ReservedQuantity.Neg(),
-					},
-					{
-						Asset: validation.ReservedAsset, Bucket: "RESERVED",
-						Amount: validation.ReservedQuantity,
-					},
-				},
-			}); err != nil {
-				return err
-			}
 		}
 		return tx.CreateOrder(record)
 	})
@@ -440,15 +422,11 @@ func (s *Service) DiscardPending(
 	if _, err := current.DiscardPending(); err != nil {
 		return orderdomain.Order{}, err
 	}
-	releaseRecord := record
 	applyAggregate(&record, current)
 	record.RemainingReservedQuantity = "0"
 	record.FinishedAt = s.now().UnixMilli()
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.UpdateOrder(record, expected); err != nil {
-			return err
-		}
-		return releaseReservation(tx, releaseRecord)
+		return tx.UpdateOrder(record, expected)
 	}); err != nil {
 		return orderdomain.Order{}, err
 	}
@@ -683,7 +661,6 @@ func (s *Service) submit(
 			latest.ExchangeUpdatedAt = response.CreatedAt.UnixMilli()
 		}
 	}
-	releaseRecord := latest
 	if current.State == orderdomain.Rejected {
 		latest.RemainingReservedQuantity = "0"
 		latest.FinishedAt = s.now().UnixMilli()
@@ -691,9 +668,6 @@ func (s *Service) submit(
 	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.UpdateOrder(latest, expected); err != nil {
 			return err
-		}
-		if current.State == orderdomain.Rejected {
-			return releaseReservation(tx, releaseRecord)
 		}
 		return nil
 	}); err != nil {
@@ -719,16 +693,12 @@ func (s *Service) rejectPending(
 	if _, err := current.Reject(); err != nil {
 		return orderdomain.Order{}, err
 	}
-	releaseRecord := record
 	applyAggregate(&record, current)
 	record.RejectReason = cause.Error()
 	record.RemainingReservedQuantity = "0"
 	record.FinishedAt = s.now().UnixMilli()
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.UpdateOrder(record, expected); err != nil {
-			return err
-		}
-		return releaseReservation(tx, releaseRecord)
+		return tx.UpdateOrder(record, expected)
 	}); err != nil {
 		return orderdomain.Order{}, err
 	}
@@ -753,26 +723,6 @@ func permanentValidationError(err error) bool {
 		}
 	}
 	return false
-}
-
-func releaseReservation(tx *store.Tx, record store.OrderRecord) error {
-	remaining, err := shared.ParseDecimal(record.RemainingReservedQuantity)
-	if err != nil {
-		return err
-	}
-	if remaining.IsZero() {
-		return nil
-	}
-	return tx.PostLedger(store.LedgerTransactionRecord{
-		SpaceID: record.SpaceID, TransactionID: "release:" + record.OrderID,
-		ExchangeAccountID: record.ExchangeAccountID,
-		TransactionType:   store.LedgerReservationRelease,
-		SourceType:        "ORDER_RESERVATION_RELEASE", SourceID: record.OrderID,
-		Entries: []store.LedgerEntryRecord{
-			{Asset: record.ReservedAsset, Bucket: "RESERVED", Amount: remaining.Neg()},
-			{Asset: record.ReservedAsset, Bucket: "AVAILABLE", Amount: remaining},
-		},
-	})
 }
 
 func orderRecord(validation Validation, value orderdomain.Order) store.OrderRecord {

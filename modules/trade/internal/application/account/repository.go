@@ -77,18 +77,6 @@ func (r Repository) SetLeverage(
 	})
 }
 
-func (r Repository) SetPause(ctx context.Context, id string, paused bool, reason string) error {
-	unlock := r.Store.LockExchangeAccount(id)
-	defer unlock()
-	current, err := r.Store.GetExchangeAccountByID(ctx, id)
-	if err != nil {
-		return err
-	}
-	return r.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetExchangeAccountPause(current.SpaceID, id, paused, reason)
-	})
-}
-
 func accountRecord(value exchangeaccount.Account) store.ExchangeAccountRecord {
 	leverage := make(store.LeverageSettings, len(value.LeverageSettings))
 	for symbol, amount := range value.LeverageSettings {
@@ -100,8 +88,7 @@ func accountRecord(value exchangeaccount.Account) store.ExchangeAccountRecord {
 		ExecutionMode:      string(value.ExecutionMode),
 		CredentialSecretID: value.CredentialSecretID,
 		SettlementAsset:    value.SettlementAsset, MarginMode: string(value.MarginMode),
-		Status: string(value.Status), Paused: value.Paused,
-		PauseReason: value.PauseReason, Ready: value.Ready,
+		Status: string(value.Status), Ready: value.Ready,
 		SyncSymbols:      append([]string(nil), value.SyncSymbols...),
 		LeverageSettings: leverage, FillCursors: store.FillCursors{},
 		Snapshot:           snapshotRecord(value.Snapshot),
@@ -128,8 +115,7 @@ func accountDomain(record store.ExchangeAccountRecord) (exchangeaccount.Account,
 		CredentialSecretID: record.CredentialSecretID,
 		SettlementAsset:    record.SettlementAsset,
 		MarginMode:         exchange.MarginMode(record.MarginMode),
-		Status:             exchange.AccountStatus(record.Status), Paused: record.Paused,
-		PauseReason: record.PauseReason, Ready: record.Ready,
+		Status:             exchange.AccountStatus(record.Status), Ready: record.Ready,
 		SyncSymbols:      append([]string(nil), record.SyncSymbols...),
 		LeverageSettings: leverage, Snapshot: snapshotDomain(record.Snapshot),
 		SnapshotSourceTime: millisTime(record.SnapshotSourceTime),

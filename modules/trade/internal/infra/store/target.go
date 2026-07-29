@@ -3,304 +3,232 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
-	"strings"
+	"sort"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"gorm.io/gorm"
 )
 
-type TargetPosition struct {
-	InstrumentID   string `json:"instrument_id"`
-	Symbol         string `json:"symbol"`
-	TargetQuantity string `json:"target_quantity"`
+type InstrumentTarget struct {
+	InstrumentID string `json:"instrument_id"`
+	Quantity     string `json:"quantity"`
 }
 
-type TargetExecutionRecord struct {
-	SpaceID            string
-	ExecutionID        string
-	EventID            string
-	StrategyRunID      string
-	ExecutionBindingID string
-	ExchangeAccountID  string
-	CommandSequence    uint64
-	NotAfter           int64
-	DataRevision       string
-	Targets            []TargetPosition
-	Status             string
-	Progress           string
-	ResidualQuantity   string
-	LastError          string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+type BlockedTarget struct {
+	InstrumentID string `json:"instrument_id"`
+	Quantity     string `json:"quantity"`
+	Reason       string `json:"reason"`
 }
 
-type targetExecutionRow struct {
+type LogicalAccountTargetRecord struct {
+	SpaceID          string
+	LogicalAccountID string
+	TargetID         string
+	RunnerID         string
+	CommandSequence  uint64
+	Targets          []InstrumentTarget
+	Status           string
+	BlockedTargets   []BlockedTarget
+	LastError        string
+	AcceptedAt       int64
+	UpdatedAt        time.Time
+}
+
+type logicalAccountTargetRow struct {
 	SpaceID            string    `gorm:"column:c_space_id"`
-	ExecutionID        string    `gorm:"column:c_execution_id"`
-	EventID            string    `gorm:"column:c_event_id"`
-	StrategyRunID      string    `gorm:"column:c_strategy_run_id"`
-	ExecutionBindingID string    `gorm:"column:c_execution_binding_id"`
-	ExchangeAccountID  string    `gorm:"column:c_exchange_account_id"`
+	LogicalAccountID   string    `gorm:"column:c_logical_account_id"`
+	TargetID           string    `gorm:"column:c_target_id"`
+	RunnerID           string    `gorm:"column:c_runner_id"`
 	CommandSequence    uint64    `gorm:"column:c_command_sequence"`
-	NotAfter           int64     `gorm:"column:c_not_after"`
-	DataRevision       string    `gorm:"column:c_data_revision"`
 	TargetsJSON        string    `gorm:"column:c_targets_json"`
 	Status             string    `gorm:"column:c_status"`
-	Progress           string    `gorm:"column:c_progress"`
-	ResidualQuantity   string    `gorm:"column:c_residual_quantity"`
+	BlockedTargetsJSON string    `gorm:"column:c_blocked_targets_json"`
 	LastError          string    `gorm:"column:c_last_error"`
-	CreatedAt          time.Time `gorm:"column:c_ctime"`
+	AcceptedAt         int64     `gorm:"column:c_accepted_at"`
 	UpdatedAt          time.Time `gorm:"column:c_mtime"`
 }
 
-func (targetExecutionRow) TableName() string {
-	return "t_target_executions"
+func (logicalAccountTargetRow) TableName() string {
+	return "t_logical_account_targets"
 }
 
-func (s *Store) AcceptTarget(
+func (s *Store) AcceptLogicalAccountTarget(
 	ctx context.Context,
-	record TargetExecutionRecord,
-) (bool, error) {
-	unlock := s.LockTargetBinding(record.SpaceID, record.ExecutionBindingID)
+	record LogicalAccountTargetRecord,
+) (LogicalAccountTargetRecord, bool, error) {
+	unlock := s.LockLogicalAccount(record.SpaceID, record.LogicalAccountID)
 	defer unlock()
+	var current LogicalAccountTargetRecord
 	var accepted bool
 	err := s.Transaction(ctx, func(tx *Tx) error {
 		var err error
-		accepted, err = tx.AcceptTarget(record)
+		current, accepted, err = tx.AcceptLogicalAccountTarget(record)
 		return err
 	})
-	return accepted, err
+	return current, accepted, err
 }
 
-func (tx *Tx) AcceptTarget(record TargetExecutionRecord) (bool, error) {
-	if blank(record.SpaceID) || blank(record.ExecutionID) || blank(record.EventID) ||
-		record.EventID != record.ExecutionID || blank(record.StrategyRunID) ||
-		blank(record.ExecutionBindingID) ||
-		blank(record.ExchangeAccountID) || blank(record.DataRevision) ||
+func (tx *Tx) AcceptLogicalAccountTarget(
+	record LogicalAccountTargetRecord,
+) (LogicalAccountTargetRecord, bool, error) {
+	targetsJSON, err := encodeInstrumentTargets(record.Targets)
+	if err != nil {
+		return LogicalAccountTargetRecord{}, false, err
+	}
+	blockedJSON, err := encodeBlockedTargets(record.BlockedTargets)
+	if err != nil {
+		return LogicalAccountTargetRecord{}, false, err
+	}
+	if blank(record.SpaceID) || blank(record.LogicalAccountID) ||
+		blank(record.TargetID) || blank(record.RunnerID) ||
 		record.CommandSequence == 0 || record.CommandSequence > math.MaxInt64 ||
-		record.NotAfter <= time.Now().UnixMilli() ||
-		!validTargetExecutionStatus(record.Status) {
-		return false, fmt.Errorf("%w: incomplete target execution", ErrInvalidRecord)
+		record.AcceptedAt <= 0 || !validLogicalAccountTargetStatus(record.Status) {
+		return LogicalAccountTargetRecord{}, false,
+			fmt.Errorf("%w: incomplete logical account target", ErrInvalidRecord)
 	}
-	targetsJSON, err := encodeTargets(record.Targets)
+	account, err := tx.GetLogicalAccount(record.SpaceID, record.LogicalAccountID)
 	if err != nil {
-		return false, err
+		return LogicalAccountTargetRecord{}, false, err
 	}
-	record.ResidualQuantity, err = canonicalDefaultZero(
-		record.ResidualQuantity,
-		"target residual quantity",
-		decimalSigned,
-	)
-	if err != nil {
-		return false, err
+	if account.OwnerRunnerID != record.RunnerID {
+		return LogicalAccountTargetRecord{}, false,
+			fmt.Errorf("%w: logical account target runner ownership", ErrConflict)
 	}
 
-	var currentBinding struct {
-		ExchangeAccountID string `gorm:"column:c_exchange_account_id"`
-	}
-	bindingResult := tx.db.Raw(`
-		SELECT c_exchange_account_id
-		FROM t_target_executions
-		WHERE c_space_id = ? AND c_execution_binding_id = ?
-	`, record.SpaceID, record.ExecutionBindingID).Scan(&currentBinding)
-	if bindingResult.Error != nil {
-		return false, bindingResult.Error
-	}
-	if bindingResult.RowsAffected == 1 &&
-		currentBinding.ExchangeAccountID != record.ExchangeAccountID {
-		return false, fmt.Errorf("%w: target binding Exchange account", ErrConflict)
-	}
-
-	var duplicateEvent int64
-	if err := tx.db.Raw(`
-		SELECT COUNT(*)
-		FROM t_target_executions
-		WHERE c_space_id = ? AND c_event_id = ?
-	`, record.SpaceID, record.EventID).Scan(&duplicateEvent).Error; err != nil {
-		return false, err
-	}
-	if duplicateEvent != 0 {
-		return false, nil
+	var row logicalAccountTargetRow
+	query := tx.db.
+		Where("c_space_id = ? AND c_logical_account_id = ?",
+			record.SpaceID, record.LogicalAccountID).
+		Take(&row)
+	switch {
+	case query.Error == nil:
+		current, decodeErr := logicalAccountTargetRecord(row)
+		if decodeErr != nil {
+			return LogicalAccountTargetRecord{}, false, decodeErr
+		}
+		same := current.TargetID == record.TargetID &&
+			current.RunnerID == record.RunnerID &&
+			current.CommandSequence == record.CommandSequence &&
+			row.TargetsJSON == targetsJSON
+		if same {
+			return current, false, nil
+		}
+		if record.CommandSequence <= current.CommandSequence ||
+			record.TargetID == current.TargetID {
+			return current, false, fmt.Errorf("%w: stale or conflicting logical account target", ErrConflict)
+		}
+	case query.Error != nil && !errors.Is(query.Error, gorm.ErrRecordNotFound):
+		return LogicalAccountTargetRecord{}, false, query.Error
 	}
 
 	result := tx.db.Exec(`
-		INSERT INTO t_target_executions (
-			c_space_id, c_execution_id, c_event_id, c_strategy_run_id,
-			c_execution_binding_id, c_exchange_account_id, c_command_sequence,
-			c_not_after, c_data_revision, c_targets_json, c_status, c_progress,
-			c_residual_quantity, c_last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_execution_binding_id) DO UPDATE SET
-			c_execution_id = excluded.c_execution_id,
-			c_event_id = excluded.c_event_id,
-			c_strategy_run_id = excluded.c_strategy_run_id,
-			c_exchange_account_id = excluded.c_exchange_account_id,
+		INSERT INTO t_logical_account_targets (
+			c_space_id, c_logical_account_id, c_target_id, c_runner_id,
+			c_command_sequence, c_targets_json, c_status,
+			c_blocked_targets_json, c_last_error, c_accepted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(c_space_id, c_logical_account_id) DO UPDATE SET
+			c_target_id = excluded.c_target_id,
+			c_runner_id = excluded.c_runner_id,
 			c_command_sequence = excluded.c_command_sequence,
-			c_not_after = excluded.c_not_after,
-			c_data_revision = excluded.c_data_revision,
 			c_targets_json = excluded.c_targets_json,
 			c_status = excluded.c_status,
-			c_progress = excluded.c_progress,
-			c_residual_quantity = excluded.c_residual_quantity,
+			c_blocked_targets_json = excluded.c_blocked_targets_json,
 			c_last_error = excluded.c_last_error,
+			c_accepted_at = excluded.c_accepted_at,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE excluded.c_command_sequence > t_target_executions.c_command_sequence
-			AND excluded.c_exchange_account_id =
-				t_target_executions.c_exchange_account_id
+		WHERE excluded.c_command_sequence >
+			t_logical_account_targets.c_command_sequence
 	`,
-		record.SpaceID, record.ExecutionID, record.EventID, record.StrategyRunID,
-		record.ExecutionBindingID, record.ExchangeAccountID, record.CommandSequence,
-		record.NotAfter, record.DataRevision, targetsJSON, record.Status, record.Progress,
-		record.ResidualQuantity, record.LastError,
+		record.SpaceID, record.LogicalAccountID, record.TargetID, record.RunnerID,
+		record.CommandSequence, targetsJSON, record.Status,
+		blockedJSON, record.LastError, record.AcceptedAt,
 	)
 	if result.Error != nil {
-		return false, writeError(result.Error)
+		return LogicalAccountTargetRecord{}, false, writeError(result.Error)
 	}
-	return result.RowsAffected == 1, nil
+	if result.RowsAffected != 1 {
+		return LogicalAccountTargetRecord{}, false,
+			fmt.Errorf("%w: stale logical account target", ErrConflict)
+	}
+	row = logicalAccountTargetRow{}
+	if err := tx.db.
+		Where("c_space_id = ? AND c_logical_account_id = ?",
+			record.SpaceID, record.LogicalAccountID).
+		Take(&row).Error; err != nil {
+		return LogicalAccountTargetRecord{}, false, err
+	}
+	current, err := logicalAccountTargetRecord(row)
+	return current, true, err
 }
 
-func (s *Store) GetTargetExecutionByBinding(
+func (s *Store) GetLogicalAccountTarget(
 	ctx context.Context,
 	spaceID string,
-	executionBindingID string,
-) (TargetExecutionRecord, error) {
-	var row targetExecutionRow
+	logicalAccountID string,
+) (LogicalAccountTargetRecord, error) {
+	var row logicalAccountTargetRow
 	err := s.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_execution_binding_id = ?", spaceID, executionBindingID).
+		Where("c_space_id = ? AND c_logical_account_id = ?", spaceID, logicalAccountID).
 		Take(&row).Error
 	if err != nil {
-		return TargetExecutionRecord{}, err
+		return LogicalAccountTargetRecord{}, err
 	}
-	var targets []TargetPosition
-	if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
-		return TargetExecutionRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
-	}
-	return TargetExecutionRecord{
-		SpaceID: row.SpaceID, ExecutionID: row.ExecutionID, EventID: row.EventID,
-		StrategyRunID: row.StrategyRunID, ExecutionBindingID: row.ExecutionBindingID,
-		ExchangeAccountID: row.ExchangeAccountID, CommandSequence: row.CommandSequence,
-		NotAfter: row.NotAfter, DataRevision: row.DataRevision, Targets: targets,
-		Status: row.Status, Progress: row.Progress,
-		ResidualQuantity: row.ResidualQuantity, LastError: row.LastError,
-		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
-	}, nil
+	return logicalAccountTargetRecord(row)
 }
 
-func (s *Store) GetTargetExecution(
-	ctx context.Context,
-	spaceID string,
-	executionID string,
-) (TargetExecutionRecord, error) {
-	var row targetExecutionRow
-	err := s.db.WithContext(ctx).
-		Where("c_space_id = ? AND c_execution_id = ?", spaceID, executionID).
-		Take(&row).Error
-	if err != nil {
-		return TargetExecutionRecord{}, err
-	}
-	var targets []TargetPosition
-	if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
-		return TargetExecutionRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
-	}
-	return targetExecutionRecordFromRow(row, targets), nil
-}
-
-func (s *Store) ListTargetExecutions(
+func (s *Store) ListLogicalAccountTargets(
 	ctx context.Context,
 	statuses ...string,
-) ([]TargetExecutionRecord, error) {
-	query := s.db.WithContext(ctx).Table("t_target_executions")
+) ([]LogicalAccountTargetRecord, error) {
+	query := s.db.WithContext(ctx).Table("t_logical_account_targets")
 	if len(statuses) > 0 {
 		query = query.Where("c_status IN ?", statuses)
 	}
-	var rows []targetExecutionRow
-	if err := query.Order("c_space_id, c_execution_binding_id").Find(&rows).Error; err != nil {
+	var rows []logicalAccountTargetRow
+	if err := query.
+		Order("c_space_id, c_logical_account_id").
+		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	records := make([]TargetExecutionRecord, 0, len(rows))
+	records := make([]LogicalAccountTargetRecord, 0, len(rows))
 	for _, row := range rows {
-		var targets []TargetPosition
-		if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
-			return nil, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
+		record, err := logicalAccountTargetRecord(row)
+		if err != nil {
+			return nil, err
 		}
-		records = append(records, targetExecutionRecordFromRow(row, targets))
+		records = append(records, record)
 	}
 	return records, nil
 }
 
-type TargetExecutionQuery struct {
-	ExchangeAccountID  string
-	ExecutionBindingID string
-	Status             string
-	Offset             int
-	Limit              int
-}
-
-func (s *Store) QueryTargetExecutions(
+func (s *Store) UpdateLogicalAccountTargetState(
 	ctx context.Context,
-	spaceID string,
-	query TargetExecutionQuery,
-) ([]TargetExecutionRecord, int64, error) {
-	db := s.db.WithContext(ctx).Table("t_target_executions").
-		Where("c_space_id = ?", spaceID)
-	if query.ExchangeAccountID != "" {
-		db = db.Where("c_exchange_account_id = ?", query.ExchangeAccountID)
-	}
-	if query.ExecutionBindingID != "" {
-		db = db.Where("c_execution_binding_id = ?", query.ExecutionBindingID)
-	}
-	if query.Status != "" {
-		db = db.Where("c_status = ?", query.Status)
-	}
-	var total int64
-	if err := db.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	var rows []targetExecutionRow
-	if err := db.Order("c_mtime DESC, c_execution_id DESC").
-		Offset(query.Offset).Limit(query.Limit).Find(&rows).Error; err != nil {
-		return nil, 0, err
-	}
-	records := make([]TargetExecutionRecord, 0, len(rows))
-	for _, row := range rows {
-		var targets []TargetPosition
-		if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
-			return nil, 0, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
-		}
-		records = append(records, targetExecutionRecordFromRow(row, targets))
-	}
-	return records, total, nil
-}
-
-func (s *Store) UpdateTargetExecutionState(
-	ctx context.Context,
-	record TargetExecutionRecord,
+	record LogicalAccountTargetRecord,
 ) (bool, error) {
-	if blank(record.SpaceID) || blank(record.ExecutionID) ||
-		blank(record.ExecutionBindingID) || record.CommandSequence == 0 ||
-		!validTargetExecutionStatus(record.Status) {
-		return false, fmt.Errorf("%w: invalid target execution update", ErrInvalidRecord)
+	if blank(record.SpaceID) || blank(record.LogicalAccountID) ||
+		blank(record.TargetID) || record.CommandSequence == 0 ||
+		!validLogicalAccountTargetStatus(record.Status) {
+		return false, fmt.Errorf("%w: invalid logical account target update", ErrInvalidRecord)
 	}
-	residual, err := canonicalDefaultZero(
-		record.ResidualQuantity,
-		"target residual quantity",
-		decimalSigned,
-	)
+	blockedJSON, err := encodeBlockedTargets(record.BlockedTargets)
 	if err != nil {
 		return false, err
 	}
 	result := s.db.WithContext(ctx).Exec(`
-		UPDATE t_target_executions
-		SET c_status = ?, c_progress = ?, c_residual_quantity = ?,
-			c_last_error = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_execution_binding_id = ?
-			AND c_execution_id = ? AND c_command_sequence = ?
+		UPDATE t_logical_account_targets
+		SET c_status = ?, c_blocked_targets_json = ?, c_last_error = ?,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+			AND c_target_id = ? AND c_command_sequence = ?
 	`,
-		record.Status, record.Progress, residual, record.LastError,
-		record.SpaceID, record.ExecutionBindingID,
-		record.ExecutionID, record.CommandSequence,
+		record.Status, blockedJSON, record.LastError,
+		record.SpaceID, record.LogicalAccountID,
+		record.TargetID, record.CommandSequence,
 	)
 	if result.Error != nil {
 		return false, result.Error
@@ -308,52 +236,59 @@ func (s *Store) UpdateTargetExecutionState(
 	return result.RowsAffected == 1, nil
 }
 
-func targetExecutionRecordFromRow(
-	row targetExecutionRow,
-	targets []TargetPosition,
-) TargetExecutionRecord {
-	return TargetExecutionRecord{
-		SpaceID: row.SpaceID, ExecutionID: row.ExecutionID, EventID: row.EventID,
-		StrategyRunID: row.StrategyRunID, ExecutionBindingID: row.ExecutionBindingID,
-		ExchangeAccountID: row.ExchangeAccountID, CommandSequence: row.CommandSequence,
-		NotAfter: row.NotAfter, DataRevision: row.DataRevision, Targets: targets,
-		Status: row.Status, Progress: row.Progress,
-		ResidualQuantity: row.ResidualQuantity, LastError: row.LastError,
-		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+func logicalAccountTargetRecord(
+	row logicalAccountTargetRow,
+) (LogicalAccountTargetRecord, error) {
+	var targets []InstrumentTarget
+	if err := json.Unmarshal([]byte(row.TargetsJSON), &targets); err != nil {
+		return LogicalAccountTargetRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
 	}
+	var blocked []BlockedTarget
+	if err := json.Unmarshal([]byte(row.BlockedTargetsJSON), &blocked); err != nil {
+		return LogicalAccountTargetRecord{}, fmt.Errorf("%w: blocked target JSON: %v", ErrInvalidRecord, err)
+	}
+	return LogicalAccountTargetRecord{
+		SpaceID: row.SpaceID, LogicalAccountID: row.LogicalAccountID,
+		TargetID: row.TargetID, RunnerID: row.RunnerID,
+		CommandSequence: row.CommandSequence, Targets: targets,
+		Status: row.Status, BlockedTargets: blocked,
+		LastError: row.LastError, AcceptedAt: row.AcceptedAt,
+		UpdatedAt: row.UpdatedAt,
+	}, nil
 }
 
-func validTargetExecutionStatus(status string) bool {
+func validLogicalAccountTargetStatus(status string) bool {
 	switch status {
-	case "RUNNING", "COMPLETED", "EXPIRED", "FAILED", "PAUSED":
+	case "PENDING", "CONVERGING", "CONVERGED", "BLOCKED":
 		return true
 	default:
 		return false
 	}
 }
 
-func encodeTargets(targets []TargetPosition) (string, error) {
-	if len(targets) == 0 {
-		return "", fmt.Errorf("%w: target positions are required", ErrInvalidRecord)
-	}
-	canonical := make([]TargetPosition, len(targets))
+func encodeInstrumentTargets(targets []InstrumentTarget) (string, error) {
+	canonical := make([]InstrumentTarget, len(targets))
 	copy(canonical, targets)
-	symbols := make(map[string]struct{}, len(canonical))
+	seen := make(map[string]struct{}, len(canonical))
 	for i := range canonical {
 		target := &canonical[i]
-		if blank(target.InstrumentID) || blank(target.Symbol) {
+		if blank(target.InstrumentID) {
 			return "", fmt.Errorf("%w: incomplete target identity", ErrInvalidRecord)
 		}
-		if _, duplicate := symbols[target.Symbol]; duplicate {
-			return "", fmt.Errorf("%w: duplicate target symbol %s", ErrInvalidRecord, target.Symbol)
+		if _, duplicate := seen[target.InstrumentID]; duplicate {
+			return "", fmt.Errorf("%w: duplicate target instrument %s",
+				ErrInvalidRecord, target.InstrumentID)
 		}
-		symbols[target.Symbol] = struct{}{}
-		quantity, err := shared.ParseDecimal(target.TargetQuantity)
+		seen[target.InstrumentID] = struct{}{}
+		quantity, err := shared.ParseDecimal(target.Quantity)
 		if err != nil {
 			return "", fmt.Errorf("%w: target quantity", ErrInvalidRecord)
 		}
-		target.TargetQuantity = quantity.String()
+		target.Quantity = quantity.String()
 	}
+	sort.Slice(canonical, func(i, j int) bool {
+		return canonical[i].InstrumentID < canonical[j].InstrumentID
+	})
 	data, err := json.Marshal(canonical)
 	if err != nil {
 		return "", fmt.Errorf("%w: encode targets: %v", ErrInvalidRecord, err)
@@ -361,6 +296,32 @@ func encodeTargets(targets []TargetPosition) (string, error) {
 	return string(data), nil
 }
 
-func blank(value string) bool {
-	return strings.TrimSpace(value) == ""
+func encodeBlockedTargets(targets []BlockedTarget) (string, error) {
+	canonical := make([]BlockedTarget, len(targets))
+	copy(canonical, targets)
+	seen := make(map[string]struct{}, len(canonical))
+	for i := range canonical {
+		target := &canonical[i]
+		if blank(target.InstrumentID) || blank(target.Reason) {
+			return "", fmt.Errorf("%w: incomplete blocked target", ErrInvalidRecord)
+		}
+		if _, duplicate := seen[target.InstrumentID]; duplicate {
+			return "", fmt.Errorf("%w: duplicate blocked target %s",
+				ErrInvalidRecord, target.InstrumentID)
+		}
+		seen[target.InstrumentID] = struct{}{}
+		quantity, err := shared.ParseDecimal(target.Quantity)
+		if err != nil {
+			return "", fmt.Errorf("%w: blocked target quantity", ErrInvalidRecord)
+		}
+		target.Quantity = quantity.String()
+	}
+	sort.Slice(canonical, func(i, j int) bool {
+		return canonical[i].InstrumentID < canonical[j].InstrumentID
+	})
+	data, err := json.Marshal(canonical)
+	if err != nil {
+		return "", fmt.Errorf("%w: encode blocked targets: %v", ErrInvalidRecord, err)
+	}
+	return string(data), nil
 }

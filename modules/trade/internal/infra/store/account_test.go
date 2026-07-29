@@ -120,10 +120,6 @@ func TestExchangeAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *test
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.UpdateExchangeAccountConfiguration("space-1", "account-1", staleConfig)
 	}))
-	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.SetExchangeAccountPause("space-1", "account-1", true, "manual")
-	}))
-
 	syncState.Ready = false
 	syncState.LastSyncAt = 1002
 	syncState.LastError = "disconnected"
@@ -137,8 +133,6 @@ func TestExchangeAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *test
 	require.Equal(t, "secret-2", got.CredentialSecretID)
 	require.Equal(t, "USDC", got.SettlementAsset)
 	require.Equal(t, []string{"BTCUSDT"}, got.SyncSymbols)
-	require.True(t, got.Paused)
-	require.Equal(t, "manual", got.PauseReason)
 	require.False(t, got.Ready)
 	require.Equal(t, "5", got.LeverageSettings["BTCUSDT"])
 	require.Equal(t, "100", got.Snapshot.Equity)

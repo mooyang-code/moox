@@ -70,28 +70,10 @@ func (r *Reducer) ConfirmCancel(
 		if _, err := aggregate.ConfirmCancel(); err != nil {
 			return err
 		}
-		remaining, err := shared.ParseDecimal(record.RemainingReservedQuantity)
-		if err != nil {
-			return fmt.Errorf("trade: corrupted remaining reservation")
-		}
 		record.State = string(aggregate.State)
 		record.Version = aggregate.Version
 		record.RemainingReservedQuantity = "0"
 		record.FinishedAt = r.now().UnixMilli()
-		if !remaining.IsZero() {
-			if err := tx.PostLedger(store.LedgerTransactionRecord{
-				SpaceID: record.SpaceID, TransactionID: "cancel-release:" + record.OrderID,
-				ExchangeAccountID: record.ExchangeAccountID,
-				TransactionType:   store.LedgerReservationRelease,
-				SourceType:        "ORDER_CANCEL", SourceID: record.OrderID,
-				Entries: []store.LedgerEntryRecord{
-					ledgerEntry(record.ReservedAsset, "RESERVED", remaining.Neg()),
-					ledgerEntry(record.ReservedAsset, "AVAILABLE", remaining),
-				},
-			}); err != nil {
-				return err
-			}
-		}
 		return tx.UpdateOrder(record, expectedVersion)
 	})
 }
@@ -154,17 +136,10 @@ func (r *Reducer) ApplyFill(
 		if order.State(record.State).Terminal() && record.FinishedAt == 0 {
 			record.FinishedAt = fill.TradedAt.UnixMilli()
 		}
-		usedReservation, err := consumeReservation(&record, fill)
-		if err != nil {
+		if _, err := consumeReservation(&record, fill); err != nil {
 			return err
 		}
-		unusedReservation, err := takeUnusedReservation(&record)
-		if err != nil {
-			return err
-		}
-		if err := postFillLedger(
-			tx, record, instrument, fillID, fill, usedReservation, unusedReservation,
-		); err != nil {
+		if _, err := takeUnusedReservation(&record); err != nil {
 			return err
 		}
 		if record.MarketType == string(exchange.MarketTypeSwap) {
@@ -300,95 +275,6 @@ func consumeReservation(
 	}
 	record.RemainingReservedQuantity = remaining.Sub(used).String()
 	return used, nil
-}
-
-func postFillLedger(
-	tx *store.Tx,
-	record store.OrderRecord,
-	instrument store.InstrumentRecord,
-	fillID string,
-	fill exchange.Fill,
-	usedReservation shared.Decimal,
-	unusedReservation shared.Decimal,
-) error {
-	entries := make([]store.LedgerEntryRecord, 0, 8)
-	if record.MarketType == string(exchange.MarketTypeSpot) {
-		amount := fill.Quantity.Mul(fill.Price)
-		if fill.Side == exchange.SideBuy {
-			entries = append(entries, settlementDebitEntries(
-				instrument.QuoteAsset, amount, usedReservation,
-			)...)
-			entries = append(entries,
-				ledgerEntry(instrument.QuoteAsset, "CLEARING", amount),
-				ledgerEntry(instrument.BaseAsset, "CLEARING", fill.Quantity.Neg()),
-				ledgerEntry(instrument.BaseAsset, "AVAILABLE", fill.Quantity),
-			)
-		} else {
-			entries = append(entries, settlementDebitEntries(
-				instrument.BaseAsset, fill.Quantity, usedReservation,
-			)...)
-			entries = append(entries,
-				ledgerEntry(instrument.BaseAsset, "CLEARING", fill.Quantity),
-				ledgerEntry(instrument.QuoteAsset, "CLEARING", amount.Neg()),
-				ledgerEntry(instrument.QuoteAsset, "AVAILABLE", amount),
-			)
-		}
-	} else if !record.ReduceOnly && !usedReservation.IsZero() {
-		entries = append(entries,
-			ledgerEntry(record.ReservedAsset, "RESERVED", usedReservation.Neg()),
-			ledgerEntry(record.ReservedAsset, "AVAILABLE", usedReservation),
-		)
-	}
-	if !fill.RealizedPnL.IsZero() {
-		asset := fill.SettlementAsset
-		if asset == "" {
-			asset = instrument.SettlementAsset
-		}
-		entries = append(entries,
-			ledgerEntry(asset, "CLEARING", fill.RealizedPnL.Neg()),
-			ledgerEntry(asset, "AVAILABLE", fill.RealizedPnL),
-		)
-	}
-	if !fill.Fee.IsZero() {
-		entries = append(entries,
-			ledgerEntry(fill.FeeAsset, "AVAILABLE", fill.Fee.Neg()),
-			ledgerEntry(fill.FeeAsset, "FEES", fill.Fee),
-		)
-	}
-	if !unusedReservation.IsZero() {
-		entries = append(entries,
-			ledgerEntry(record.ReservedAsset, "RESERVED", unusedReservation.Neg()),
-			ledgerEntry(record.ReservedAsset, "AVAILABLE", unusedReservation),
-		)
-	}
-	if len(entries) == 0 {
-		return nil
-	}
-	return tx.PostLedger(store.LedgerTransactionRecord{
-		SpaceID: record.SpaceID, TransactionID: "fill:" + fillID,
-		ExchangeAccountID: record.ExchangeAccountID,
-		TransactionType:   store.LedgerFillSettlement,
-		SourceType:        "fill", SourceID: fillID, Entries: entries,
-	})
-}
-
-func ledgerEntry(asset string, bucket string, amount shared.Decimal) store.LedgerEntryRecord {
-	return store.LedgerEntryRecord{Asset: asset, Bucket: bucket, Amount: amount}
-}
-
-func settlementDebitEntries(
-	asset string,
-	total shared.Decimal,
-	fromFrozen shared.Decimal,
-) []store.LedgerEntryRecord {
-	entries := make([]store.LedgerEntryRecord, 0, 2)
-	if !fromFrozen.IsZero() {
-		entries = append(entries, ledgerEntry(asset, "RESERVED", fromFrozen.Neg()))
-	}
-	if remainder := total.Sub(fromFrozen); !remainder.IsZero() {
-		entries = append(entries, ledgerEntry(asset, "AVAILABLE", remainder.Neg()))
-	}
-	return entries
 }
 
 func takeUnusedReservation(record *store.OrderRecord) (shared.Decimal, error) {

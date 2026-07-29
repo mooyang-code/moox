@@ -106,7 +106,7 @@ func (m *Manager) ReadyFor(account exchangeaccount.Account) bool {
 		ExecutionMode:      string(account.ExecutionMode),
 		CredentialSecretID: account.CredentialSecretID,
 		SettlementAsset:    account.SettlementAsset, MarginMode: string(account.MarginMode),
-		Status: string(account.Status), Paused: account.Paused,
+		Status:           string(account.Status),
 		SyncSymbols:      append([]string(nil), account.SyncSymbols...),
 		LeverageSettings: leverage,
 	}
@@ -249,7 +249,6 @@ func sameSessionConfig(
 		left.SettlementAsset == right.SettlementAsset &&
 		left.MarginMode == right.MarginMode &&
 		left.Status == right.Status &&
-		left.Paused == right.Paused &&
 		reflect.DeepEqual(left.SyncSymbols, right.SyncSymbols) &&
 		reflect.DeepEqual(left.LeverageSettings, right.LeverageSettings)
 }
