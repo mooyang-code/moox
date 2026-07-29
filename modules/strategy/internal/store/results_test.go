@@ -13,27 +13,26 @@ func TestResultStoreRoundTrip(t *testing.T) {
 	repo := openCurrentStore(t)
 	seedStrategy(t, repo, "strategy-1")
 	seedRunner(t, repo, "runner-1", "strategy-1", domain.RunnerStatusDisabled)
-	sequence := int64(4)
 	want := domain.StrategyResult{
-		ID:              "result-1",
-		RunnerID:        "runner-1",
-		StrategyID:      "strategy-1",
-		TriggerBarTime:  time.UnixMilli(4000).UTC(),
-		Namespace:       "default",
-		InputHash:       "input-hash",
-		Action:          domain.ActionRebalance,
-		OutputJSON:      json.RawMessage(`{"targets":[]}`),
-		CommandSequence: &sequence,
-		CreatedAt:       time.UnixMilli(5000).UTC(),
+		ID: "result-1", RunnerID: "runner-1", StrategyID: "strategy-1",
+		TriggerBarTime: time.UnixMilli(4000).UTC(), Namespace: "default",
+		InputHash: "input-hash", Action: domain.ActionRebalance,
+		CreatedAt: time.UnixMilli(5000).UTC(),
 	}
-	if err := repo.SaveResult(context.Background(), want); err != nil {
+	if _, err := repo.CommitResult(context.Background(), CommitResultRequest{
+		Result: want,
+		Output: domain.Output{
+			Action:  domain.ActionRebalance,
+			Targets: []domain.InstrumentTarget{},
+		},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := repo.GetResult(context.Background(), want.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CommandSequence == nil || *got.CommandSequence != sequence {
+	if got.CommandSequence == nil || *got.CommandSequence != 1 {
 		t.Fatalf("CommandSequence = %v", got.CommandSequence)
 	}
 	if got.Action != want.Action || !got.TriggerBarTime.Equal(want.TriggerBarTime) {

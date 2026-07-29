@@ -30,19 +30,6 @@ type ResultFilter struct {
 	RunnerID string
 }
 
-func (s *Store) SaveResult(ctx context.Context, result domain.StrategyResult) error {
-	return s.db.WithContext(ctx).Exec(`
-		INSERT INTO t_strategy_results (
-			result_id, runner_id, strategy_id, trigger_bar_time, namespace,
-			input_hash, action, output_json, command_sequence, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
-		result.ID, result.RunnerID, result.StrategyID, result.TriggerBarTime.UTC().UnixMilli(),
-		result.Namespace, result.InputHash, result.Action, string(result.OutputJSON),
-		int64Value(result.CommandSequence), result.CreatedAt.UTC().UnixMilli(),
-	).Error
-}
-
 func (s *Store) CommitResult(
 	ctx context.Context,
 	request CommitResultRequest,
