@@ -18,6 +18,8 @@ import (
 type managerAccountSource struct {
 	mu       sync.Mutex
 	accounts []store.ExchangeAccountRecord
+	failures int
+	calls    int
 }
 
 func (s *managerAccountSource) ListEnabledExchangeAccounts(
@@ -25,6 +27,11 @@ func (s *managerAccountSource) ListEnabledExchangeAccounts(
 ) ([]store.ExchangeAccountRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.calls++
+	if s.failures > 0 {
+		s.failures--
+		return nil, errors.New("temporary account enumeration failure")
+	}
 	return append([]store.ExchangeAccountRecord(nil), s.accounts...), nil
 }
 
@@ -32,6 +39,41 @@ func (s *managerAccountSource) set(accounts []store.ExchangeAccountRecord) {
 	s.mu.Lock()
 	s.accounts = append([]store.ExchangeAccountRecord(nil), accounts...)
 	s.mu.Unlock()
+}
+
+func TestManagerRetriesInitialReconcileAndGatesReadiness(t *testing.T) {
+	account := store.ExchangeAccountRecord{ExchangeAccountID: "account-1"}
+	source := &managerAccountSource{
+		accounts: []store.ExchangeAccountRecord{account},
+		failures: 1,
+	}
+	session := &managedSessionStub{
+		started: make(chan struct{}),
+		stopped: make(chan struct{}),
+	}
+	manager := &Manager{
+		Accounts: source,
+		NewSession: func(store.ExchangeAccountRecord) (ManagedSession, error) {
+			return session, nil
+		},
+		PollInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(ctx) }()
+
+	require.Eventually(t, func() bool {
+		return manager.Snapshot().Reconciled
+	}, time.Second, time.Millisecond)
+	<-session.started
+	require.Eventually(t, func() bool {
+		snapshot := manager.Snapshot()
+		return snapshot.Reconciled && snapshot.Enabled == 1 && snapshot.Ready == 1
+	}, time.Second, time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	require.GreaterOrEqual(t, source.calls, 2)
 }
 
 type managedSessionStub struct {
@@ -132,7 +174,9 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 		return manager.Ready("account-1")
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(1), factoryCalls.Load())
-	require.Equal(t, SessionSnapshot{Enabled: 1, Ready: 1}, manager.Snapshot())
+	require.Equal(t, SessionSnapshot{
+		Enabled: 1, Ready: 1, Reconciled: true,
+	}, manager.Snapshot())
 
 	time.Sleep(30 * time.Millisecond)
 	require.Equal(t, int32(1), factoryCalls.Load(), "polling must not duplicate sessions")

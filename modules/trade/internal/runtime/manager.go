@@ -27,6 +27,7 @@ type SessionFactory func(store.ExchangeAccountRecord) (ManagedSession, error)
 type SessionSnapshot struct {
 	Enabled      int
 	Ready        int
+	Reconciled   bool
 	ConfigErrors []string
 }
 
@@ -41,6 +42,7 @@ type Manager struct {
 	mu           sync.RWMutex
 	sessions     map[string]*managedEntry
 	configErrors []string
+	reconciled   bool
 }
 
 type managedEntry struct {
@@ -60,16 +62,27 @@ func (m *Manager) Run(ctx context.Context) error {
 		m.sessions = make(map[string]*managedEntry)
 	}
 	m.mu.Unlock()
-	if err := m.reconcile(ctx); err != nil {
-		return err
-	}
 	interval := m.PollInterval
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
+	defer m.stopAll()
+	for {
+		if err := m.reconcile(ctx); err == nil {
+			break
+		} else {
+			m.setConfigErrors([]string{err.Error()})
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	defer m.stopAll()
 	for {
 		select {
 		case <-ctx.Done():
@@ -152,6 +165,7 @@ func (m *Manager) Snapshot() SessionSnapshot {
 	defer m.mu.RUnlock()
 	result := SessionSnapshot{
 		Enabled:      len(m.sessions),
+		Reconciled:   m.reconciled,
 		ConfigErrors: append([]string(nil), m.configErrors...),
 	}
 	for _, entry := range m.sessions {
@@ -233,6 +247,7 @@ func (m *Manager) reconcile(ctx context.Context) error {
 		}()
 	}
 	m.configErrors = configErrors
+	m.reconciled = true
 	m.mu.Unlock()
 	return nil
 }

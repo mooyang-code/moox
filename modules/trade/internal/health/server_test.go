@@ -65,13 +65,17 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 		want            bool
 	}{
 		{
-			name: "EventBus disabled and no live accounts",
-			want: true,
+			name:     "EventBus disabled and initial account enumeration succeeded",
+			sessions: traderuntime.SessionSnapshot{Reconciled: true},
+			want:     true,
 		},
 		{
 			name: "all requirements ready", eventBusEnabled: true, eventBusReady: true,
-			sessions: traderuntime.SessionSnapshot{Enabled: 2, Ready: 2},
+			sessions: traderuntime.SessionSnapshot{Enabled: 2, Ready: 2, Reconciled: true},
 			want:     true,
+		},
+		{
+			name: "account enumeration has never succeeded",
 		},
 		{
 			name: "database unavailable", databaseErr: errors.New("database down"),
@@ -81,10 +85,11 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 		},
 		{
 			name:     "one live session disconnected",
-			sessions: traderuntime.SessionSnapshot{Enabled: 2, Ready: 1},
+			sessions: traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true},
 		},
 		{
 			name:         "configuration error",
+			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
 			configErrors: []string{"invalid account"},
 		},
 	}

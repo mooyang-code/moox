@@ -230,6 +230,7 @@ func seedRuntimeAccount(
 	account := store.ExchangeAccountRecord{
 		SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",
 		Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE",
+		Environment:        "TESTNET",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		MarginMode: "CROSS", Status: "ENABLED",
 		LeverageSettings: store.LeverageSettings{"BTC-USDT": "5"},
