@@ -13,6 +13,7 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
@@ -121,9 +122,7 @@ func initialize(
 		Store: tradeStore, Executor: targetExecutor, Interval: time.Second,
 		Gate: targetGate, Metrics: tradeStore.ModuleMetrics(),
 	}
-	targetSubmission := targetapp.Submission{
-		Store: tradeStore, Wake: targetWorker.Wake, Gate: targetGate,
-	}
+	logicalAccounts := &logicalapp.Service{Store: tradeStore}
 	manager.NewSession = func(record store.ExchangeAccountRecord) (traderuntime.ManagedSession, error) {
 		credential := exchange.Credential{}
 		if exchange.ExecutionMode(record.ExecutionMode) == exchange.ExecutionModeLive {
@@ -214,11 +213,11 @@ func initialize(
 	rpc.RegisterAll(
 		serverInstance,
 		&rpc.AccountServer{Accounts: accounts, Sync: syncService, Store: tradeStore},
-		&rpc.ExecutionServer{
-			Orders: orderService, Targets: targetSubmission,
-			Prices: targetapp.ExchangePriceSource{Adapters: manager},
-			Store:  tradeStore,
+		&rpc.LogicalAccountServer{
+			LogicalAccounts: logicalAccounts,
+			Store:           tradeStore,
 		},
+		&rpc.ExecutionServer{Store: tradeStore},
 	)
 	if err := registerHealth(
 		serverInstance,

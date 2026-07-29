@@ -26,17 +26,24 @@ enum ExecutionMode {
   EXECUTION_MODE_LIVE = 2;
 }
 
+enum AccountEnvironment {
+  ACCOUNT_ENVIRONMENT_UNSPECIFIED = 0;
+  ACCOUNT_ENVIRONMENT_PAPER = 1;
+  ACCOUNT_ENVIRONMENT_TESTNET = 2;
+  ACCOUNT_ENVIRONMENT_PRODUCTION = 3;
+}
+
 enum OrderType {
   ORDER_TYPE_UNSPECIFIED = 0;
   ORDER_TYPE_MARKET = 1;
   ORDER_TYPE_LIMIT = 2;
 }
 
-enum TimeInForce {
-  TIME_IN_FORCE_UNSPECIFIED = 0;
-  TIME_IN_FORCE_GTC = 1;
-  TIME_IN_FORCE_IOC = 2;
-  TIME_IN_FORCE_FOK = 3;
+enum FillPolicy {
+  FILL_POLICY_UNSPECIFIED = 0;
+  FILL_POLICY_GTC = 1;
+  FILL_POLICY_IOC = 2;
+  FILL_POLICY_FOK = 3;
 }
 
 enum PositionSide {
@@ -74,21 +81,43 @@ message ExchangeAccount {
   Exchange exchange = 4;
   MarketType market_type = 5;
   ExecutionMode execution_mode = 6;
-  string credential_secret_id = 7;
-  string settlement_asset = 8;
-  string margin_mode = 9;
-  string status = 10;
-  bool paused = 11;
-  string pause_reason = 12;
-  bool ready = 13;
-  map<string, string> leverage_settings = 14;
-  ExchangeAccountSnapshot snapshot = 15;
-  int64 last_sync_at = 16;
-  int64 last_ready_at = 17;
-  string last_error = 18;
-  int64 created_at = 19;
-  int64 updated_at = 20;
-  repeated string sync_symbols = 21;
+  AccountEnvironment environment = 7;
+  string credential_secret_id = 8;
+  string settlement_asset = 9;
+  string margin_mode = 10;
+  string status = 11;
+  bool ready = 12;
+  map<string, string> leverage_settings = 13;
+  ExchangeAccountSnapshot snapshot = 14;
+  int64 last_sync_at = 15;
+  int64 last_ready_at = 16;
+  string last_error = 17;
+  int64 created_at = 18;
+  int64 updated_at = 19;
+  repeated string sync_symbols = 20;
+}
+
+message LogicalAccountMember {
+  string exchange_account_id = 1;
+  bool enabled = 2;
+  int32 priority = 3;
+}
+
+message LogicalAccount {
+  string logical_account_id = 1;
+  string space_id = 2;
+  string name = 3;
+  string owner_runner_id = 4;
+  ExecutionMode execution_mode = 5;
+  MarketType market_type = 6;
+  string settlement_asset = 7;
+  string automation_state = 8;
+  string pause_reason = 9;
+  repeated LogicalAccountMember members = 10;
+  bool ready = 11;
+  repeated string readiness_reasons = 12;
+  int64 created_at = 13;
+  int64 updated_at = 14;
 }
 
 message Order {
@@ -100,28 +129,30 @@ message Order {
   MarketType market_type = 6;
   string symbol = 7;
   OrderType order_type = 8;
-  TimeInForce time_in_force = 9;
+  FillPolicy fill_policy = 9;
   OrderSide side = 10;
   PositionSide position_side = 11;
   string quantity = 12;
   optional string limit_price = 13;
   string reference_price = 14;
   int64 reference_price_at = 15;
-  bool reduce_only = 16;
-  string source = 17;
-  string strategy_execution_id = 18;
-  string state = 19;
-  string filled_quantity = 20;
-  string average_price = 21;
-  string reserved_asset = 22;
-  string reserved_quantity = 23;
-  string remaining_reserved_quantity = 24;
-  string reject_reason = 25;
-  uint64 version = 26;
-  int64 submitted_at = 27;
-  int64 finished_at = 28;
-  int64 created_at = 29;
-  int64 updated_at = 30;
+  bool reduce_position_only = 16;
+  string owner_type = 17;
+  string owner_id = 18;
+  string logical_account_id = 19;
+  string runner_id = 20;
+  string state = 21;
+  string filled_quantity = 22;
+  string average_price = 23;
+  string reserved_asset = 24;
+  string reserved_quantity = 25;
+  string remaining_reserved_quantity = 26;
+  string reject_reason = 27;
+  uint64 version = 28;
+  int64 submitted_at = 29;
+  int64 finished_at = 30;
+  int64 created_at = 31;
+  int64 updated_at = 32;
 }
 
 message Fill {
@@ -163,28 +194,40 @@ message Position {
   int64 updated_at = 14;
 }
 
-message TargetPosition {
+message InstrumentTarget {
   string instrument_id = 1;
-  string symbol = 2;
-  string target_quantity = 3;
+  string quantity = 2;
 }
 
-message TargetExecution {
-  string execution_id = 1;
-  string event_id = 2;
-  string strategy_run_id = 3;
-  string execution_binding_id = 4;
-  string exchange_account_id = 5;
-  uint64 command_sequence = 6;
-  int64 not_after = 7;
-  string data_revision = 8;
-  repeated TargetPosition targets = 9;
-  string status = 10;
-  string progress = 11;
-  string residual_quantity = 12;
-  string last_error = 13;
-  int64 created_at = 14;
-  int64 updated_at = 15;
+message BlockedTarget {
+  string instrument_id = 1;
+  string quantity = 2;
+  string reason = 3;
+}
+
+message LogicalAccountTarget {
+  string target_id = 1;
+  string logical_account_id = 2;
+  string runner_id = 3;
+  uint64 command_sequence = 4;
+  repeated InstrumentTarget targets = 5;
+  string status = 6;
+  repeated BlockedTarget blocked_targets = 7;
+  string last_error = 8;
+  int64 accepted_at = 9;
+  int64 updated_at = 10;
+}
+
+message OperatorAction {
+  string action_id = 1;
+  string logical_account_id = 2;
+  string action_type = 3;
+  string reason = 4;
+  string status = 5;
+  string result_json = 6;
+  string last_error = 7;
+  int64 created_at = 8;
+  int64 updated_at = 9;
 }
 
 message CreateAccountReq {
@@ -192,10 +235,11 @@ message CreateAccountReq {
   Exchange exchange = 2;
   MarketType market_type = 3;
   ExecutionMode execution_mode = 4;
-  string credential_secret_id = 5;
-  string settlement_asset = 6;
-  string margin_mode = 7;
-  repeated string sync_symbols = 8;
+  AccountEnvironment environment = 5;
+  string credential_secret_id = 6;
+  string settlement_asset = 7;
+  string margin_mode = 8;
+  repeated string sync_symbols = 9;
 }
 message CreateAccountRsp {
   common.RetInfo ret_info = 1;
@@ -228,8 +272,9 @@ message ListAccountsReq {
   optional Exchange exchange = 1;
   optional MarketType market_type = 2;
   optional ExecutionMode execution_mode = 3;
-  string status = 4;
-  common.Page page = 5;
+  optional AccountEnvironment environment = 4;
+  string status = 5;
+  common.Page page = 6;
 }
 message ListAccountsRsp {
   common.RetInfo ret_info = 1;
@@ -243,16 +288,6 @@ message SetLeverageReq {
   string leverage = 3;
 }
 message SetLeverageRsp {
-  common.RetInfo ret_info = 1;
-  ExchangeAccount account = 2;
-}
-
-message PauseAccountReq {
-  string exchange_account_id = 1;
-  bool paused = 2;
-  string reason = 3;
-}
-message PauseAccountRsp {
   common.RetInfo ret_info = 1;
   ExchangeAccount account = 2;
 }
@@ -271,76 +306,154 @@ message SyncAccountRsp {
   repeated string warnings = 8;
 }
 
-message PlaceOrderReq {
-  string exchange_account_id = 1;
-  string client_order_id = 2;
-  string symbol = 3;
-  OrderType order_type = 4;
-  TimeInForce time_in_force = 5;
-  OrderSide side = 6;
-  PositionSide position_side = 7;
-  string quantity = 8;
-  optional string limit_price = 9;
-  bool reduce_only = 10;
-  string source = 11;
-  string strategy_execution_id = 12;
+message CreateLogicalAccountReq {
+  string name = 1;
+  ExecutionMode execution_mode = 2;
+  MarketType market_type = 3;
+  string settlement_asset = 4;
 }
-message PlaceOrderRsp {
+message CreateLogicalAccountRsp {
   common.RetInfo ret_info = 1;
-  Order order = 2;
+  LogicalAccount logical_account = 2;
+}
+
+message GetLogicalAccountReq {
+  string logical_account_id = 1;
+}
+message GetLogicalAccountRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
+message ListLogicalAccountsReq {
+  common.Page page = 1;
+}
+message ListLogicalAccountsRsp {
+  common.RetInfo ret_info = 1;
+  repeated LogicalAccount logical_accounts = 2;
+  common.PageResult page_result = 3;
+}
+
+message UpdateLogicalAccountReq {
+  string logical_account_id = 1;
+  string name = 2;
+}
+message UpdateLogicalAccountRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
+message AddLogicalAccountMemberReq {
+  string logical_account_id = 1;
+  string exchange_account_id = 2;
+  bool enabled = 3;
+  int32 priority = 4;
+  bool adopt_existing_exposure = 5;
+}
+message AddLogicalAccountMemberRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
+message RemoveLogicalAccountMemberReq {
+  string logical_account_id = 1;
+  string exchange_account_id = 2;
+}
+message RemoveLogicalAccountMemberRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
+message ClaimLogicalAccountOwnerReq {
+  string logical_account_id = 1;
+  string runner_id = 2;
+}
+message ClaimLogicalAccountOwnerRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
+message ReleaseLogicalAccountOwnerReq {
+  string logical_account_id = 1;
+  string runner_id = 2;
+}
+message ReleaseLogicalAccountOwnerRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
+message PauseLogicalAccountReq {
+  string logical_account_id = 1;
+  string reason = 2;
+}
+message PauseLogicalAccountRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
+message ResumeLogicalAccountReq {
+  string logical_account_id = 1;
+}
+message ResumeLogicalAccountRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+  string warning = 3;
+}
+
+message FlattenLogicalAccountReq {
+  string action_id = 1;
+  string logical_account_id = 2;
+  string reason = 3;
+}
+message FlattenLogicalAccountRsp {
+  common.RetInfo ret_info = 1;
+  OperatorAction action = 2;
+}
+
+message PlaceManualOrderReq {
+  string action_id = 1;
+  string exchange_account_id = 2;
+  string client_order_id = 3;
+  string symbol = 4;
+  OrderType order_type = 5;
+  FillPolicy fill_policy = 6;
+  OrderSide side = 7;
+  PositionSide position_side = 8;
+  string quantity = 9;
+  optional string limit_price = 10;
+  string reason = 11;
+}
+message PlaceManualOrderRsp {
+  common.RetInfo ret_info = 1;
+  OperatorAction action = 2;
+  Order order = 3;
 }
 
 message CancelOrderReq {
-  string order_id = 1;
+  string action_id = 1;
+  string order_id = 2;
+  string reason = 3;
 }
 message CancelOrderRsp {
   common.RetInfo ret_info = 1;
-  Order order = 2;
+  OperatorAction action = 2;
+  Order order = 3;
 }
 
-message CancelAllOrdersReq {
-  string exchange_account_id = 1;
-  string symbol = 2;
+message GetOperatorActionReq {
+  string action_id = 1;
 }
-message CancelAllOrdersRsp {
+message GetOperatorActionRsp {
   common.RetInfo ret_info = 1;
-  int32 canceled_count = 2;
+  OperatorAction action = 2;
 }
 
-message SubmitTargetReq {
-  string event_id = 1;
-  string execution_id = 2;
-  string strategy_run_id = 3;
-  string execution_binding_id = 4;
-  string exchange_account_id = 5;
-  uint64 command_sequence = 6;
-  int64 not_after = 7;
-  string data_revision = 8;
-  repeated TargetPosition targets = 9;
+message GetLogicalAccountTargetReq {
+  string logical_account_id = 1;
 }
-message SubmitTargetRsp {
+message GetLogicalAccountTargetRsp {
   common.RetInfo ret_info = 1;
-  TargetExecution execution = 2;
-}
-
-message GetExecutionReq {
-  string execution_id = 1;
-}
-message GetExecutionRsp {
-  common.RetInfo ret_info = 1;
-  TargetExecution execution = 2;
-}
-
-message ListExecutionsReq {
-  string exchange_account_id = 1;
-  string execution_binding_id = 2;
-  string status = 3;
-  common.Page page = 4;
-}
-message ListExecutionsRsp {
-  common.RetInfo ret_info = 1;
-  repeated TargetExecution executions = 2;
-  common.PageResult page_result = 3;
+  LogicalAccountTarget target = 2;
 }
 
 message GetOrderReq {
@@ -352,13 +465,14 @@ message GetOrderRsp {
 }
 
 message ListOrdersReq {
-  string exchange_account_id = 1;
-  string symbol = 2;
-  string state = 3;
-  bool only_open = 4;
-  int64 start_time = 5;
-  int64 end_time = 6;
-  common.Page page = 7;
+  string logical_account_id = 1;
+  string exchange_account_id = 2;
+  string symbol = 3;
+  string state = 4;
+  bool only_open = 5;
+  int64 start_time = 6;
+  int64 end_time = 7;
+  common.Page page = 8;
 }
 message ListOrdersRsp {
   common.RetInfo ret_info = 1;
@@ -381,8 +495,9 @@ message ListFillsRsp {
 }
 
 message ListPositionsReq {
-  string exchange_account_id = 1;
-  string symbol = 2;
+  string logical_account_id = 1;
+  string exchange_account_id = 2;
+  string symbol = 3;
 }
 message ListPositionsRsp {
   common.RetInfo ret_info = 1;
@@ -395,17 +510,28 @@ service ExchangeAccountService {
   rpc GetAccount(GetAccountReq) returns (GetAccountRsp);
   rpc ListAccounts(ListAccountsReq) returns (ListAccountsRsp);
   rpc SetLeverage(SetLeverageReq) returns (SetLeverageRsp);
-  rpc PauseAccount(PauseAccountReq) returns (PauseAccountRsp);
   rpc SyncAccount(SyncAccountReq) returns (SyncAccountRsp);
 }
 
+service LogicalAccountService {
+  rpc CreateLogicalAccount(CreateLogicalAccountReq) returns (CreateLogicalAccountRsp);
+  rpc GetLogicalAccount(GetLogicalAccountReq) returns (GetLogicalAccountRsp);
+  rpc ListLogicalAccounts(ListLogicalAccountsReq) returns (ListLogicalAccountsRsp);
+  rpc UpdateLogicalAccount(UpdateLogicalAccountReq) returns (UpdateLogicalAccountRsp);
+  rpc AddLogicalAccountMember(AddLogicalAccountMemberReq) returns (AddLogicalAccountMemberRsp);
+  rpc RemoveLogicalAccountMember(RemoveLogicalAccountMemberReq) returns (RemoveLogicalAccountMemberRsp);
+  rpc ClaimLogicalAccountOwner(ClaimLogicalAccountOwnerReq) returns (ClaimLogicalAccountOwnerRsp);
+  rpc ReleaseLogicalAccountOwner(ReleaseLogicalAccountOwnerReq) returns (ReleaseLogicalAccountOwnerRsp);
+  rpc PauseLogicalAccount(PauseLogicalAccountReq) returns (PauseLogicalAccountRsp);
+  rpc ResumeLogicalAccount(ResumeLogicalAccountReq) returns (ResumeLogicalAccountRsp);
+  rpc FlattenLogicalAccount(FlattenLogicalAccountReq) returns (FlattenLogicalAccountRsp);
+}
+
 service TradeExecutionService {
-  rpc PlaceOrder(PlaceOrderReq) returns (PlaceOrderRsp);
+  rpc PlaceManualOrder(PlaceManualOrderReq) returns (PlaceManualOrderRsp);
   rpc CancelOrder(CancelOrderReq) returns (CancelOrderRsp);
-  rpc CancelAllOrders(CancelAllOrdersReq) returns (CancelAllOrdersRsp);
-  rpc SubmitTarget(SubmitTargetReq) returns (SubmitTargetRsp);
-  rpc GetExecution(GetExecutionReq) returns (GetExecutionRsp);
-  rpc ListExecutions(ListExecutionsReq) returns (ListExecutionsRsp);
+  rpc GetOperatorAction(GetOperatorActionReq) returns (GetOperatorActionRsp);
+  rpc GetLogicalAccountTarget(GetLogicalAccountTargetReq) returns (GetLogicalAccountTargetRsp);
   rpc GetOrder(GetOrderReq) returns (GetOrderRsp);
   rpc ListOrders(ListOrdersReq) returns (ListOrdersRsp);
   rpc ListFills(ListFillsReq) returns (ListFillsRsp);

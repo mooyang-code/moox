@@ -46,6 +46,7 @@ func (h *AccountServer) CreateAccount(
 		Exchange:           exchangeFromPB(req.GetExchange()),
 		MarketType:         marketFromPB(req.GetMarketType()),
 		ExecutionMode:      executionModeFromPB(req.GetExecutionMode()),
+		Environment:        environmentFromPB(req.GetEnvironment()),
 		CredentialSecretID: strings.TrimSpace(req.GetCredentialSecretId()),
 		SettlementAsset:    normalized(req.GetSettlementAsset()), MarginMode: marginMode,
 		Status:           exchange.AccountStatusEnabled,
@@ -145,6 +146,10 @@ func (h *AccountServer) ListAccounts(
 			record.ExecutionMode != string(executionModeFromPB(req.GetExecutionMode())) {
 			continue
 		}
+		if req.Environment != nil &&
+			record.Environment != string(environmentFromPB(req.GetEnvironment())) {
+			continue
+		}
 		if status := normalized(req.GetStatus()); status != "" && record.Status != status {
 			continue
 		}
@@ -191,28 +196,6 @@ func (h *AccountServer) SetLeverage(
 		err = getErr
 	}
 	return &tradepb.SetLeverageRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
-}
-
-func (h *AccountServer) PauseAccount(
-	ctx context.Context,
-	req *tradepb.PauseAccountReq,
-) (*tradepb.PauseAccountRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.PauseAccountRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
-		return &tradepb.PauseAccountRsp{RetInfo: errorInfo(err)}, nil
-	}
-	err = h.Accounts.Pause(ctx, req.GetExchangeAccountId(), req.GetPaused(), req.GetReason())
-	record, getErr := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId())
-	if err == nil {
-		err = getErr
-	}
-	return &tradepb.PauseAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
 }
 
 func (h *AccountServer) SyncAccount(

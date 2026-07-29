@@ -2,79 +2,92 @@ package rpc
 
 import (
 	"context"
-	"time"
+	"fmt"
 
-	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
-	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/execution"
-	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
 
-type ExecutionServer struct {
-	Orders  *orderapp.Service
-	Targets targetapp.Submission
-	Prices  targetapp.PriceSource
-	Store   *store.Store
+type ManualOrderCommand struct {
+	SpaceID           string
+	ActionID          string
+	ExchangeAccountID string
+	ClientOrderID     string
+	Symbol            string
+	OrderType         exchange.OrderType
+	FillPolicy        exchange.FillPolicy
+	Side              exchange.Side
+	PositionSide      exchange.PositionSide
+	Quantity          shared.Decimal
+	LimitPrice        *shared.Decimal
+	Reason            string
 }
 
-func (h *ExecutionServer) PlaceOrder(
+type ExecutionServer struct {
+	Store       *store.Store
+	PlaceManual func(
+		context.Context,
+		ManualOrderCommand,
+	) (store.OperatorActionRecord, store.OrderRecord, error)
+	Cancel func(
+		context.Context,
+		string,
+		string,
+		string,
+		string,
+	) (store.OperatorActionRecord, store.OrderRecord, error)
+}
+
+func (h *ExecutionServer) PlaceManualOrder(
 	ctx context.Context,
-	req *tradepb.PlaceOrderReq,
-) (*tradepb.PlaceOrderRsp, error) {
+	req *tradepb.PlaceManualOrderReq,
+) (*tradepb.PlaceManualOrderRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err == nil {
 		err = validatePB(req)
 	}
 	if err != nil {
-		return &tradepb.PlaceOrderRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
-		return &tradepb.PlaceOrderRsp{RetInfo: errorInfo(err)}, nil
+		return &tradepb.PlaceManualOrderRsp{
+			RetInfo: invalidOrErrorInfo(err),
+		}, nil
 	}
 	quantity, err := shared.ParseDecimal(req.GetQuantity())
 	if err != nil {
-		return &tradepb.PlaceOrderRsp{RetInfo: invalidInfo(err)}, nil
-	}
-	quote, err := h.Prices.LatestPrice(ctx, req.GetExchangeAccountId(), req.GetSymbol())
-	if err != nil {
-		return &tradepb.PlaceOrderRsp{RetInfo: errorInfo(err)}, nil
+		return &tradepb.PlaceManualOrderRsp{RetInfo: invalidInfo(err)}, nil
 	}
 	var limitPrice *shared.Decimal
 	if req.LimitPrice != nil {
 		value, parseErr := shared.ParseDecimal(req.GetLimitPrice())
 		if parseErr != nil {
-			return &tradepb.PlaceOrderRsp{RetInfo: invalidInfo(parseErr)}, nil
+			return &tradepb.PlaceManualOrderRsp{
+				RetInfo: invalidInfo(parseErr),
+			}, nil
 		}
 		limitPrice = &value
 	}
-	spec := orderdomain.OrderSpec{
-		ClientOrderSpec: orderdomain.ClientOrderSpec{
+	if h.PlaceManual == nil {
+		err = fmt.Errorf("trade RPC: manual order service is not configured")
+	}
+	var action store.OperatorActionRecord
+	var order store.OrderRecord
+	if err == nil {
+		action, order, err = h.PlaceManual(ctx, ManualOrderCommand{
+			SpaceID: spaceID, ActionID: req.GetActionId(),
 			ExchangeAccountID: req.GetExchangeAccountId(),
-			ClientOrderID:     req.GetClientOrderId(),
-			InstrumentID:      req.GetSymbol(),
-			Type:              orderTypeFromPB(req.GetOrderType()),
-			FillPolicy:        exchange.FillPolicy(timeInForceFromPB(req.GetTimeInForce())),
-			Side:              sideFromPB(req.GetSide()),
-			PositionSide:      positionSideFromPB(req.GetPositionSide()),
-			Quantity:          quantity,
-			LimitPrice:        limitPrice,
-		},
-		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
-		Owner: orderdomain.OrderOwner{Type: "RPC"},
+			ClientOrderID:     req.GetClientOrderId(), Symbol: req.GetSymbol(),
+			OrderType:    orderTypeFromPB(req.GetOrderType()),
+			FillPolicy:   fillPolicyFromPB(req.GetFillPolicy()),
+			Side:         sideFromPB(req.GetSide()),
+			PositionSide: positionSideFromPB(req.GetPositionSide()),
+			Quantity:     quantity, LimitPrice: limitPrice, Reason: req.GetReason(),
+		})
 	}
-	placed, err := h.Orders.Place(ctx, spaceID, spec)
-	if err == nil {
-		placed, err = h.Orders.Submit(ctx, spaceID, string(placed.ID))
-	}
-	record, getErr := h.Store.GetOrder(ctx, spaceID, string(placed.ID))
-	if err == nil {
-		err = getErr
-	}
-	return &tradepb.PlaceOrderRsp{RetInfo: errorInfo(err), Order: orderToPB(record)}, nil
+	return &tradepb.PlaceManualOrderRsp{
+		RetInfo: errorInfo(err), Action: operatorActionToPB(action),
+		Order: orderToPB(order),
+	}, nil
 }
 
 func (h *ExecutionServer) CancelOrder(
@@ -88,172 +101,65 @@ func (h *ExecutionServer) CancelOrder(
 	if err != nil {
 		return &tradepb.CancelOrderRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	if _, err := h.Store.GetOrder(ctx, spaceID, req.GetOrderId()); err != nil {
-		return &tradepb.CancelOrderRsp{RetInfo: errorInfo(err)}, nil
+	if h.Cancel == nil {
+		err = fmt.Errorf("trade RPC: cancel service is not configured")
 	}
-	err = h.cancelStoredOrder(ctx, spaceID, req.GetOrderId())
-	record, getErr := h.Store.GetOrder(ctx, spaceID, req.GetOrderId())
+	var action store.OperatorActionRecord
+	var order store.OrderRecord
 	if err == nil {
-		err = getErr
+		action, order, err = h.Cancel(
+			ctx,
+			spaceID,
+			req.GetActionId(),
+			req.GetOrderId(),
+			req.GetReason(),
+		)
 	}
-	return &tradepb.CancelOrderRsp{RetInfo: errorInfo(err), Order: orderToPB(record)}, nil
+	return &tradepb.CancelOrderRsp{
+		RetInfo: errorInfo(err), Action: operatorActionToPB(action),
+		Order: orderToPB(order),
+	}, nil
 }
 
-func (h *ExecutionServer) CancelAllOrders(
+func (h *ExecutionServer) GetOperatorAction(
 	ctx context.Context,
-	req *tradepb.CancelAllOrdersReq,
-) (*tradepb.CancelAllOrdersRsp, error) {
+	req *tradepb.GetOperatorActionReq,
+) (*tradepb.GetOperatorActionRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err == nil {
 		err = validatePB(req)
 	}
 	if err != nil {
-		return &tradepb.CancelAllOrdersRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
-		return &tradepb.CancelAllOrdersRsp{RetInfo: errorInfo(err)}, nil
-	}
-	var canceled int32
-	records, _, listErr := h.Store.ListOrders(ctx, spaceID, store.OrderQuery{
-		ExchangeAccountID: req.GetExchangeAccountId(), Symbol: req.GetSymbol(),
-		OnlyOpen: true, Limit: 1000,
-	})
-	if listErr != nil {
-		return &tradepb.CancelAllOrdersRsp{
-			RetInfo: errorInfo(listErr), CanceledCount: canceled,
+		return &tradepb.GetOperatorActionRsp{
+			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	for _, record := range records {
-		if cancelErr := h.cancelStoredOrder(ctx, spaceID, record.OrderID); cancelErr != nil {
-			return &tradepb.CancelAllOrdersRsp{
-				RetInfo: errorInfo(cancelErr), CanceledCount: canceled,
-			}, nil
-		}
-		canceled++
-	}
-	return &tradepb.CancelAllOrdersRsp{RetInfo: success(), CanceledCount: canceled}, nil
-}
-
-func (h *ExecutionServer) cancelStoredOrder(
-	ctx context.Context,
-	spaceID string,
-	orderID string,
-) error {
-	record, err := h.Store.GetOrder(ctx, spaceID, orderID)
-	if err != nil {
-		return err
-	}
-	state := orderdomain.State(record.State)
-	if state.Terminal() {
-		return nil
-	}
-	switch state {
-	case orderdomain.Pending:
-		_, err = h.Orders.DiscardPending(ctx, spaceID, orderID)
-		return err
-	case orderdomain.Submitting, orderdomain.SubmitUnknown:
-		resolved, resolveErr := h.Orders.ResolveUnknown(ctx, spaceID, orderID)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		if resolved.State.Terminal() {
-			return nil
-		}
-		if resolved.State == orderdomain.Pending {
-			_, err = h.Orders.DiscardPending(ctx, spaceID, orderID)
-			return err
-		}
-	case orderdomain.Canceling, orderdomain.CancelUnknown:
-		_, err = h.Orders.RecoverCancel(ctx, spaceID, orderID)
-		return err
-	}
-	_, err = h.Orders.Cancel(ctx, spaceID, orderID)
-	return err
-}
-
-func (h *ExecutionServer) SubmitTarget(
-	ctx context.Context,
-	req *tradepb.SubmitTargetReq,
-) (*tradepb.SubmitTargetRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.SubmitTargetRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	targets := make([]execution.Target, 0, len(req.GetTargets()))
-	for _, target := range req.GetTargets() {
-		quantity, parseErr := shared.ParseDecimal(target.GetTargetQuantity())
-		if parseErr != nil {
-			return &tradepb.SubmitTargetRsp{RetInfo: invalidInfo(parseErr)}, nil
-		}
-		targets = append(targets, execution.Target{
-			InstrumentID: target.GetInstrumentId(), Symbol: target.GetSymbol(),
-			TargetQuantity: quantity,
-		})
-	}
-	record, _, err := h.Targets.Accept(ctx, spaceID, execution.TargetIntent{
-		ExecutionID: req.GetExecutionId(), StrategyRunID: req.GetStrategyRunId(),
-		ExecutionBindingID: req.GetExecutionBindingId(),
-		ExchangeAccountID:  req.GetExchangeAccountId(),
-		CommandSequence:    req.GetCommandSequence(),
-		NotAfter:           time.UnixMilli(req.GetNotAfter()).UTC(),
-		DataRevision:       req.GetDataRevision(), Targets: targets,
-	})
-	return &tradepb.SubmitTargetRsp{
-		RetInfo: errorInfo(err), Execution: targetToPB(record),
+	record, err := h.Store.GetOperatorAction(ctx, spaceID, req.GetActionId())
+	return &tradepb.GetOperatorActionRsp{
+		RetInfo: errorInfo(err), Action: operatorActionToPB(record),
 	}, nil
 }
 
-func (h *ExecutionServer) GetExecution(
+func (h *ExecutionServer) GetLogicalAccountTarget(
 	ctx context.Context,
-	req *tradepb.GetExecutionReq,
-) (*tradepb.GetExecutionRsp, error) {
+	req *tradepb.GetLogicalAccountTargetReq,
+) (*tradepb.GetLogicalAccountTargetRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err == nil {
 		err = validatePB(req)
 	}
 	if err != nil {
-		return &tradepb.GetExecutionRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+		return &tradepb.GetLogicalAccountTargetRsp{
+			RetInfo: invalidOrErrorInfo(err),
+		}, nil
 	}
-	record, err := h.Store.GetTargetExecution(ctx, spaceID, req.GetExecutionId())
-	return &tradepb.GetExecutionRsp{
-		RetInfo: errorInfo(err), Execution: targetToPB(record),
-	}, nil
-}
-
-func (h *ExecutionServer) ListExecutions(
-	ctx context.Context,
-	req *tradepb.ListExecutionsReq,
-) (*tradepb.ListExecutionsRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.ListExecutionsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
-		return &tradepb.ListExecutionsRsp{RetInfo: errorInfo(err)}, nil
-	}
-	page := pageFromPB(req.GetPage())
-	records, total, err := h.Store.QueryTargetExecutions(
+	record, err := h.Store.GetLogicalAccountTarget(
 		ctx,
 		spaceID,
-		store.TargetExecutionQuery{
-			ExchangeAccountID:  req.GetExchangeAccountId(),
-			ExecutionBindingID: req.GetExecutionBindingId(),
-			Status:             normalized(req.GetStatus()), Offset: page.offset, Limit: page.size,
-		},
+		req.GetLogicalAccountId(),
 	)
-	executions := make([]*tradepb.TargetExecution, 0, len(records))
-	for _, record := range records {
-		executions = append(executions, targetToPB(record))
-	}
-	return &tradepb.ListExecutionsRsp{
-		RetInfo: errorInfo(err), Executions: executions,
-		PageResult: pageResult(page, total),
+	return &tradepb.GetLogicalAccountTargetRsp{
+		RetInfo: errorInfo(err), Target: logicalAccountTargetToPB(record),
 	}, nil
 }
 
@@ -283,22 +189,39 @@ func (h *ExecutionServer) ListOrders(
 	if err != nil {
 		return &tradepb.ListOrdersRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
-		return &tradepb.ListOrdersRsp{RetInfo: errorInfo(err)}, nil
+	if req.GetLogicalAccountId() != "" {
+		if _, err = h.Store.GetLogicalAccount(
+			ctx,
+			spaceID,
+			req.GetLogicalAccountId(),
+		); err != nil {
+			return &tradepb.ListOrdersRsp{RetInfo: errorInfo(err)}, nil
+		}
+	}
+	if req.GetExchangeAccountId() != "" {
+		if _, err = h.Store.GetExchangeAccount(
+			ctx,
+			spaceID,
+			req.GetExchangeAccountId(),
+		); err != nil {
+			return &tradepb.ListOrdersRsp{RetInfo: errorInfo(err)}, nil
+		}
 	}
 	page := pageFromPB(req.GetPage())
 	records, total, err := h.Store.ListOrders(ctx, spaceID, store.OrderQuery{
-		ExchangeAccountID: req.GetExchangeAccountId(), Symbol: req.GetSymbol(),
-		State: normalized(req.GetState()), OnlyOpen: req.GetOnlyOpen(),
-		StartTime: req.GetStartTime(), EndTime: req.GetEndTime(),
-		Offset: page.offset, Limit: page.size,
+		LogicalAccountID:  req.GetLogicalAccountId(),
+		ExchangeAccountID: req.GetExchangeAccountId(),
+		Symbol:            req.GetSymbol(), State: normalized(req.GetState()),
+		OnlyOpen: req.GetOnlyOpen(), StartTime: req.GetStartTime(),
+		EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,
 	})
 	orders := make([]*tradepb.Order, 0, len(records))
 	for _, record := range records {
 		orders = append(orders, orderToPB(record))
 	}
 	return &tradepb.ListOrdersRsp{
-		RetInfo: errorInfo(err), Orders: orders, PageResult: pageResult(page, total),
+		RetInfo: errorInfo(err), Orders: orders,
+		PageResult: pageResult(page, total),
 	}, nil
 }
 
@@ -313,7 +236,11 @@ func (h *ExecutionServer) ListFills(
 	if err != nil {
 		return &tradepb.ListFillsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
+	if _, err := h.Store.GetExchangeAccount(
+		ctx,
+		spaceID,
+		req.GetExchangeAccountId(),
+	); err != nil {
 		return &tradepb.ListFillsRsp{RetInfo: errorInfo(err)}, nil
 	}
 	page := pageFromPB(req.GetPage())
@@ -327,7 +254,8 @@ func (h *ExecutionServer) ListFills(
 		fills = append(fills, fillToPB(record))
 	}
 	return &tradepb.ListFillsRsp{
-		RetInfo: errorInfo(err), Fills: fills, PageResult: pageResult(page, total),
+		RetInfo: errorInfo(err), Fills: fills,
+		PageResult: pageResult(page, total),
 	}, nil
 }
 
@@ -340,20 +268,81 @@ func (h *ExecutionServer) ListPositions(
 		err = validatePB(req)
 	}
 	if err != nil {
-		return &tradepb.ListPositionsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+		return &tradepb.ListPositionsRsp{
+			RetInfo: invalidOrErrorInfo(err),
+		}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
+	accountIDs, err := h.positionAccountIDs(ctx, spaceID, req)
+	if err != nil {
 		return &tradepb.ListPositionsRsp{RetInfo: errorInfo(err)}, nil
 	}
-	records, err := h.Store.ListPositions(
+	positions := make([]*tradepb.Position, 0)
+	for _, accountID := range accountIDs {
+		records, listErr := h.Store.ListPositions(
+			ctx,
+			spaceID,
+			accountID,
+			req.GetSymbol(),
+		)
+		if listErr != nil {
+			return &tradepb.ListPositionsRsp{
+				RetInfo: errorInfo(listErr),
+			}, nil
+		}
+		for _, record := range records {
+			positions = append(positions, positionToPB(record))
+		}
+	}
+	return &tradepb.ListPositionsRsp{
+		RetInfo: success(), Positions: positions,
+	}, nil
+}
+
+func (h *ExecutionServer) positionAccountIDs(
+	ctx context.Context,
+	spaceID string,
+	req *tradepb.ListPositionsReq,
+) ([]string, error) {
+	if req.GetLogicalAccountId() == "" {
+		if _, err := h.Store.GetExchangeAccount(
+			ctx,
+			spaceID,
+			req.GetExchangeAccountId(),
+		); err != nil {
+			return nil, err
+		}
+		return []string{req.GetExchangeAccountId()}, nil
+	}
+	if _, err := h.Store.GetLogicalAccount(
 		ctx,
 		spaceID,
-		req.GetExchangeAccountId(),
-		req.GetSymbol(),
-	)
-	positions := make([]*tradepb.Position, 0, len(records))
-	for _, record := range records {
-		positions = append(positions, positionToPB(record))
+		req.GetLogicalAccountId(),
+	); err != nil {
+		return nil, err
 	}
-	return &tradepb.ListPositionsRsp{RetInfo: errorInfo(err), Positions: positions}, nil
+	members, err := h.Store.ListLogicalAccountMembers(
+		ctx,
+		spaceID,
+		req.GetLogicalAccountId(),
+		true,
+	)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(members))
+	for _, member := range members {
+		if req.GetExchangeAccountId() != "" &&
+			member.ExchangeAccountID != req.GetExchangeAccountId() {
+			continue
+		}
+		ids = append(ids, member.ExchangeAccountID)
+	}
+	if req.GetExchangeAccountId() != "" && len(ids) == 0 {
+		return nil, fmt.Errorf(
+			"exchange account %s is not a member of logical account %s",
+			req.GetExchangeAccountId(),
+			req.GetLogicalAccountId(),
+		)
+	}
+	return ids, nil
 }

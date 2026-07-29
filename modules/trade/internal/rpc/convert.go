@@ -6,6 +6,7 @@ import (
 	"time"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
+	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
@@ -36,10 +37,14 @@ func errorInfo(err error) *tradepb.RetInfo {
 		code = tradepb.ErrorCode_NOT_FOUND
 	case errors.Is(err, store.ErrConflict),
 		errors.Is(err, accountapp.ErrAccountConflict),
+		errors.Is(err, logicalapp.ErrOwnerConflict),
 		errors.Is(err, orderapp.ErrIdempotencyConflict):
 		code = tradepb.ErrorCode_CONFLICT
 	case errors.Is(err, store.ErrInvalidRecord),
 		errors.Is(err, exchangeaccount.ErrInvalidAccount),
+		errors.Is(err, logicalapp.ErrAdoptionRequired),
+		errors.Is(err, logicalapp.ErrMemberHasExposure),
+		errors.Is(err, logicalapp.ErrNotReady),
 		errors.Is(err, accountapp.ErrInvalidCredential),
 		errors.Is(err, orderdomain.ErrInvalidOrder),
 		errors.Is(err, orderdomain.ErrInvalidSpec),
@@ -150,6 +155,32 @@ func executionModeToPB(value string) tradepb.ExecutionMode {
 	}
 }
 
+func environmentFromPB(value tradepb.AccountEnvironment) exchange.AccountEnvironment {
+	switch value {
+	case tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER:
+		return exchange.AccountEnvironmentPaper
+	case tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET:
+		return exchange.AccountEnvironmentTestnet
+	case tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION:
+		return exchange.AccountEnvironmentProduction
+	default:
+		return exchange.AccountEnvironmentUnspecified
+	}
+}
+
+func environmentToPB(value string) tradepb.AccountEnvironment {
+	switch exchange.AccountEnvironment(value) {
+	case exchange.AccountEnvironmentPaper:
+		return tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER
+	case exchange.AccountEnvironmentTestnet:
+		return tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET
+	case exchange.AccountEnvironmentProduction:
+		return tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION
+	default:
+		return tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_UNSPECIFIED
+	}
+}
+
 func orderTypeFromPB(value tradepb.OrderType) exchange.OrderType {
 	switch value {
 	case tradepb.OrderType_ORDER_TYPE_MARKET:
@@ -172,29 +203,29 @@ func orderTypeToPB(value string) tradepb.OrderType {
 	}
 }
 
-func timeInForceFromPB(value tradepb.TimeInForce) exchange.TimeInForce {
+func fillPolicyFromPB(value tradepb.FillPolicy) exchange.FillPolicy {
 	switch value {
-	case tradepb.TimeInForce_TIME_IN_FORCE_GTC:
-		return exchange.TimeInForceGTC
-	case tradepb.TimeInForce_TIME_IN_FORCE_IOC:
-		return exchange.TimeInForceIOC
-	case tradepb.TimeInForce_TIME_IN_FORCE_FOK:
-		return exchange.TimeInForceFOK
+	case tradepb.FillPolicy_FILL_POLICY_GTC:
+		return exchange.FillPolicyGTC
+	case tradepb.FillPolicy_FILL_POLICY_IOC:
+		return exchange.FillPolicyIOC
+	case tradepb.FillPolicy_FILL_POLICY_FOK:
+		return exchange.FillPolicyFOK
 	default:
-		return exchange.TimeInForceUnspecified
+		return exchange.FillPolicyUnspecified
 	}
 }
 
-func timeInForceToPB(value string) tradepb.TimeInForce {
-	switch exchange.TimeInForce(value) {
-	case exchange.TimeInForceGTC:
-		return tradepb.TimeInForce_TIME_IN_FORCE_GTC
-	case exchange.TimeInForceIOC:
-		return tradepb.TimeInForce_TIME_IN_FORCE_IOC
-	case exchange.TimeInForceFOK:
-		return tradepb.TimeInForce_TIME_IN_FORCE_FOK
+func fillPolicyToPB(value string) tradepb.FillPolicy {
+	switch exchange.FillPolicy(value) {
+	case exchange.FillPolicyGTC:
+		return tradepb.FillPolicy_FILL_POLICY_GTC
+	case exchange.FillPolicyIOC:
+		return tradepb.FillPolicy_FILL_POLICY_IOC
+	case exchange.FillPolicyFOK:
+		return tradepb.FillPolicy_FILL_POLICY_FOK
 	default:
-		return tradepb.TimeInForce_TIME_IN_FORCE_UNSPECIFIED
+		return tradepb.FillPolicy_FILL_POLICY_UNSPECIFIED
 	}
 }
 
@@ -250,10 +281,11 @@ func accountToPB(value store.ExchangeAccountRecord) *tradepb.ExchangeAccount {
 		Name: value.Name, Exchange: exchangeToPB(value.Exchange),
 		MarketType:         marketToPB(value.MarketType),
 		ExecutionMode:      executionModeToPB(value.ExecutionMode),
+		Environment:        environmentToPB(value.Environment),
 		CredentialSecretId: value.CredentialSecretID,
 		SettlementAsset:    value.SettlementAsset, MarginMode: value.MarginMode,
-		Status: value.Status, Paused: value.Paused, PauseReason: value.PauseReason,
-		Ready: value.Ready, SyncSymbols: append([]string(nil), value.SyncSymbols...),
+		Status: value.Status, Ready: value.Ready,
+		SyncSymbols:      append([]string(nil), value.SyncSymbols...),
 		LeverageSettings: mapCopy(value.LeverageSettings),
 		Snapshot: &tradepb.ExchangeAccountSnapshot{
 			Balances: balances, Equity: value.Snapshot.Equity,
@@ -269,6 +301,40 @@ func accountToPB(value store.ExchangeAccountRecord) *tradepb.ExchangeAccount {
 	}
 }
 
+func logicalAccountToPB(
+	value store.LogicalAccountRecord,
+	members []store.LogicalAccountMemberRecord,
+	readiness logicalapp.Readiness,
+) *tradepb.LogicalAccount {
+	if value.LogicalAccountID == "" {
+		return nil
+	}
+	pbMembers := make([]*tradepb.LogicalAccountMember, 0, len(members))
+	for _, member := range members {
+		pbMembers = append(pbMembers, &tradepb.LogicalAccountMember{
+			ExchangeAccountId: member.ExchangeAccountID,
+			Enabled:           member.Enabled,
+			Priority:          int32(member.Priority),
+		})
+	}
+	return &tradepb.LogicalAccount{
+		LogicalAccountId: value.LogicalAccountID,
+		SpaceId:          value.SpaceID,
+		Name:             value.Name,
+		OwnerRunnerId:    value.OwnerRunnerID,
+		ExecutionMode:    executionModeToPB(value.ExecutionMode),
+		MarketType:       marketToPB(value.MarketType),
+		SettlementAsset:  value.SettlementAsset,
+		AutomationState:  value.AutomationState,
+		PauseReason:      value.PauseReason,
+		Members:          pbMembers,
+		Ready:            readiness.Ready,
+		ReadinessReasons: append([]string(nil), readiness.Reasons...),
+		CreatedAt:        unixMilli(value.CreatedAt),
+		UpdatedAt:        unixMilli(value.UpdatedAt),
+	}
+}
+
 func orderToPB(value store.OrderRecord) *tradepb.Order {
 	if value.OrderID == "" {
 		return nil
@@ -278,11 +344,13 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 		ClientOrderId: value.ClientOrderID, ExchangeOrderId: value.ExchangeOrderID,
 		Exchange: exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
 		Symbol: value.Symbol, OrderType: orderTypeToPB(value.OrderType),
-		TimeInForce: timeInForceToPB(value.TimeInForce), Side: sideToPB(value.Side),
+		FillPolicy: fillPolicyToPB(value.TimeInForce), Side: sideToPB(value.Side),
 		PositionSide: positionSideToPB(value.PositionSide), Quantity: value.Quantity,
 		LimitPrice: value.LimitPrice, ReferencePrice: value.ReferencePrice,
-		ReferencePriceAt: value.ReferencePriceAt, ReduceOnly: value.ReduceOnly,
-		Source: value.Source, StrategyExecutionId: value.StrategyExecutionID,
+		ReferencePriceAt:   value.ReferencePriceAt,
+		ReducePositionOnly: value.ReduceOnly,
+		OwnerType:          value.OwnerType, OwnerId: value.OwnerID,
+		LogicalAccountId: value.LogicalAccountID, RunnerId: value.RunnerID,
 		State: value.State, FilledQuantity: value.FilledQuantity,
 		AveragePrice: value.AveragePrice, ReservedAsset: value.ReservedAsset,
 		ReservedQuantity:          value.ReservedQuantity,
@@ -321,24 +389,49 @@ func positionToPB(value store.PositionRecord) *tradepb.Position {
 	}
 }
 
-func targetToPB(value store.TargetExecutionRecord) *tradepb.TargetExecution {
-	targets := make([]*tradepb.TargetPosition, 0, len(value.Targets))
+func logicalAccountTargetToPB(
+	value store.LogicalAccountTargetRecord,
+) *tradepb.LogicalAccountTarget {
+	if value.LogicalAccountID == "" {
+		return nil
+	}
+	targets := make([]*tradepb.InstrumentTarget, 0, len(value.Targets))
 	for _, target := range value.Targets {
-		targets = append(targets, &tradepb.TargetPosition{
-			InstrumentId: target.InstrumentID, Symbol: target.Symbol,
-			TargetQuantity: target.TargetQuantity,
+		targets = append(targets, &tradepb.InstrumentTarget{
+			InstrumentId: target.InstrumentID,
+			Quantity:     target.Quantity,
 		})
 	}
-	return &tradepb.TargetExecution{
-		ExecutionId: value.ExecutionID, EventId: value.EventID,
-		StrategyRunId:      value.StrategyRunID,
-		ExecutionBindingId: value.ExecutionBindingID,
-		ExchangeAccountId:  value.ExchangeAccountID,
-		CommandSequence:    value.CommandSequence, NotAfter: value.NotAfter,
-		DataRevision: value.DataRevision, Targets: targets, Status: value.Status,
-		Progress: value.Progress, ResidualQuantity: value.ResidualQuantity,
-		LastError: value.LastError, CreatedAt: unixMilli(value.CreatedAt),
+	blocked := make([]*tradepb.BlockedTarget, 0, len(value.BlockedTargets))
+	for _, target := range value.BlockedTargets {
+		blocked = append(blocked, &tradepb.BlockedTarget{
+			InstrumentId: target.InstrumentID,
+			Quantity:     target.Quantity,
+			Reason:       target.Reason,
+		})
+	}
+	return &tradepb.LogicalAccountTarget{
+		TargetId: value.TargetID, LogicalAccountId: value.LogicalAccountID,
+		RunnerId: value.RunnerID, CommandSequence: value.CommandSequence,
+		Targets: targets, Status: value.Status, BlockedTargets: blocked,
+		LastError: value.LastError, AcceptedAt: value.AcceptedAt,
 		UpdatedAt: unixMilli(value.UpdatedAt),
+	}
+}
+
+func operatorActionToPB(value store.OperatorActionRecord) *tradepb.OperatorAction {
+	if value.ActionID == "" {
+		return nil
+	}
+	var result string
+	if value.ResultJSON != nil {
+		result = *value.ResultJSON
+	}
+	return &tradepb.OperatorAction{
+		ActionId: value.ActionID, LogicalAccountId: value.LogicalAccountID,
+		ActionType: value.ActionType, Reason: value.Reason, Status: value.Status,
+		ResultJson: result, LastError: value.LastError,
+		CreatedAt: unixMilli(value.CreatedAt), UpdatedAt: unixMilli(value.UpdatedAt),
 	}
 }
 

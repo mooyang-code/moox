@@ -187,6 +187,23 @@ func (s *Store) ListRunningOperatorActions(
 	return records, nil
 }
 
+func (s *Store) ListAllRunningOperatorActions(
+	ctx context.Context,
+) ([]OperatorActionRecord, error) {
+	var rows []operatorActionRow
+	if err := s.db.WithContext(ctx).
+		Where("c_status = ?", operatordomain.StatusRunning).
+		Order("c_space_id, c_ctime, c_action_id").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]OperatorActionRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, operatorActionRecord(row))
+	}
+	return records, nil
+}
+
 func (tx *Tx) UpdateOperatorAction(
 	record OperatorActionRecord,
 ) error {

@@ -517,6 +517,7 @@ func (s *Store) ListOrdersForLane(
 }
 
 type OrderQuery struct {
+	LogicalAccountID  string
 	ExchangeAccountID string
 	Symbol            string
 	State             string
@@ -534,6 +535,9 @@ func (s *Store) ListOrders(
 ) ([]OrderRecord, int64, error) {
 	db := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where("c_space_id = ?", spaceID)
+	if query.LogicalAccountID != "" {
+		db = db.Where("c_logical_account_id = ?", query.LogicalAccountID)
+	}
 	if query.ExchangeAccountID != "" {
 		db = db.Where("c_exchange_account_id = ?", query.ExchangeAccountID)
 	}

@@ -29,8 +29,6 @@ type ExchangeAccountServiceService interface {
 
 	SetLeverage(ctx context.Context, req *SetLeverageReq) (*SetLeverageRsp, error)
 
-	PauseAccount(ctx context.Context, req *PauseAccountReq) (*PauseAccountRsp, error)
-
 	SyncAccount(ctx context.Context, req *SyncAccountReq) (*SyncAccountRsp, error)
 }
 
@@ -124,24 +122,6 @@ func ExchangeAccountServiceService_SetLeverage_Handler(svr interface{}, ctx cont
 	return rsp, nil
 }
 
-func ExchangeAccountServiceService_PauseAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PauseAccountReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(ExchangeAccountServiceService).PauseAccount(ctx, reqbody.(*PauseAccountReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func ExchangeAccountServiceService_SyncAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &SyncAccountReq{}
 	filters, err := f(req)
@@ -186,10 +166,6 @@ var ExchangeAccountServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: ExchangeAccountServiceService_SetLeverage_Handler,
 		},
 		{
-			Name: "/trpc.moox.trade.ExchangeAccountService/PauseAccount",
-			Func: ExchangeAccountServiceService_PauseAccount_Handler,
-		},
-		{
 			Name: "/trpc.moox.trade.ExchangeAccountService/SyncAccount",
 			Func: ExchangeAccountServiceService_SyncAccount_Handler,
 		},
@@ -203,19 +179,297 @@ func RegisterExchangeAccountServiceService(s server.Service, svr ExchangeAccount
 	}
 }
 
+// LogicalAccountServiceService defines service.
+type LogicalAccountServiceService interface {
+	CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq) (*CreateLogicalAccountRsp, error)
+
+	GetLogicalAccount(ctx context.Context, req *GetLogicalAccountReq) (*GetLogicalAccountRsp, error)
+
+	ListLogicalAccounts(ctx context.Context, req *ListLogicalAccountsReq) (*ListLogicalAccountsRsp, error)
+
+	UpdateLogicalAccount(ctx context.Context, req *UpdateLogicalAccountReq) (*UpdateLogicalAccountRsp, error)
+
+	AddLogicalAccountMember(ctx context.Context, req *AddLogicalAccountMemberReq) (*AddLogicalAccountMemberRsp, error)
+
+	RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq) (*RemoveLogicalAccountMemberRsp, error)
+
+	ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq) (*ClaimLogicalAccountOwnerRsp, error)
+
+	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error)
+
+	PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq) (*PauseLogicalAccountRsp, error)
+
+	ResumeLogicalAccount(ctx context.Context, req *ResumeLogicalAccountReq) (*ResumeLogicalAccountRsp, error)
+
+	FlattenLogicalAccount(ctx context.Context, req *FlattenLogicalAccountReq) (*FlattenLogicalAccountRsp, error)
+}
+
+func LogicalAccountServiceService_CreateLogicalAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateLogicalAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).CreateLogicalAccount(ctx, reqbody.(*CreateLogicalAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_GetLogicalAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetLogicalAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).GetLogicalAccount(ctx, reqbody.(*GetLogicalAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_ListLogicalAccounts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListLogicalAccountsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).ListLogicalAccounts(ctx, reqbody.(*ListLogicalAccountsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_UpdateLogicalAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateLogicalAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).UpdateLogicalAccount(ctx, reqbody.(*UpdateLogicalAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_AddLogicalAccountMember_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AddLogicalAccountMemberReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).AddLogicalAccountMember(ctx, reqbody.(*AddLogicalAccountMemberReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_RemoveLogicalAccountMember_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RemoveLogicalAccountMemberReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).RemoveLogicalAccountMember(ctx, reqbody.(*RemoveLogicalAccountMemberReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_ClaimLogicalAccountOwner_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ClaimLogicalAccountOwnerReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).ClaimLogicalAccountOwner(ctx, reqbody.(*ClaimLogicalAccountOwnerReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_ReleaseLogicalAccountOwner_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReleaseLogicalAccountOwnerReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).ReleaseLogicalAccountOwner(ctx, reqbody.(*ReleaseLogicalAccountOwnerReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_PauseLogicalAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PauseLogicalAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).PauseLogicalAccount(ctx, reqbody.(*PauseLogicalAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_ResumeLogicalAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ResumeLogicalAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).ResumeLogicalAccount(ctx, reqbody.(*ResumeLogicalAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func LogicalAccountServiceService_FlattenLogicalAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &FlattenLogicalAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(LogicalAccountServiceService).FlattenLogicalAccount(ctx, reqbody.(*FlattenLogicalAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// LogicalAccountServiceServer_ServiceDesc descriptor for server.RegisterService.
+var LogicalAccountServiceServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.trade.LogicalAccountService",
+	HandlerType: ((*LogicalAccountServiceService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/CreateLogicalAccount",
+			Func: LogicalAccountServiceService_CreateLogicalAccount_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/GetLogicalAccount",
+			Func: LogicalAccountServiceService_GetLogicalAccount_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/ListLogicalAccounts",
+			Func: LogicalAccountServiceService_ListLogicalAccounts_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/UpdateLogicalAccount",
+			Func: LogicalAccountServiceService_UpdateLogicalAccount_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/AddLogicalAccountMember",
+			Func: LogicalAccountServiceService_AddLogicalAccountMember_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/RemoveLogicalAccountMember",
+			Func: LogicalAccountServiceService_RemoveLogicalAccountMember_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/ClaimLogicalAccountOwner",
+			Func: LogicalAccountServiceService_ClaimLogicalAccountOwner_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/ReleaseLogicalAccountOwner",
+			Func: LogicalAccountServiceService_ReleaseLogicalAccountOwner_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/PauseLogicalAccount",
+			Func: LogicalAccountServiceService_PauseLogicalAccount_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/ResumeLogicalAccount",
+			Func: LogicalAccountServiceService_ResumeLogicalAccount_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.LogicalAccountService/FlattenLogicalAccount",
+			Func: LogicalAccountServiceService_FlattenLogicalAccount_Handler,
+		},
+	},
+}
+
+// RegisterLogicalAccountServiceService registers service.
+func RegisterLogicalAccountServiceService(s server.Service, svr LogicalAccountServiceService) {
+	if err := s.Register(&LogicalAccountServiceServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("LogicalAccountService register error:%v", err))
+	}
+}
+
 // TradeExecutionServiceService defines service.
 type TradeExecutionServiceService interface {
-	PlaceOrder(ctx context.Context, req *PlaceOrderReq) (*PlaceOrderRsp, error)
+	PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq) (*PlaceManualOrderRsp, error)
 
 	CancelOrder(ctx context.Context, req *CancelOrderReq) (*CancelOrderRsp, error)
 
-	CancelAllOrders(ctx context.Context, req *CancelAllOrdersReq) (*CancelAllOrdersRsp, error)
+	GetOperatorAction(ctx context.Context, req *GetOperatorActionReq) (*GetOperatorActionRsp, error)
 
-	SubmitTarget(ctx context.Context, req *SubmitTargetReq) (*SubmitTargetRsp, error)
-
-	GetExecution(ctx context.Context, req *GetExecutionReq) (*GetExecutionRsp, error)
-
-	ListExecutions(ctx context.Context, req *ListExecutionsReq) (*ListExecutionsRsp, error)
+	GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq) (*GetLogicalAccountTargetRsp, error)
 
 	GetOrder(ctx context.Context, req *GetOrderReq) (*GetOrderRsp, error)
 
@@ -226,14 +480,14 @@ type TradeExecutionServiceService interface {
 	ListPositions(ctx context.Context, req *ListPositionsReq) (*ListPositionsRsp, error)
 }
 
-func TradeExecutionServiceService_PlaceOrder_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PlaceOrderReq{}
+func TradeExecutionServiceService_PlaceManualOrder_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PlaceManualOrderReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeExecutionServiceService).PlaceOrder(ctx, reqbody.(*PlaceOrderReq))
+		return svr.(TradeExecutionServiceService).PlaceManualOrder(ctx, reqbody.(*PlaceManualOrderReq))
 	}
 
 	var rsp interface{}
@@ -262,14 +516,14 @@ func TradeExecutionServiceService_CancelOrder_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
-func TradeExecutionServiceService_CancelAllOrders_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CancelAllOrdersReq{}
+func TradeExecutionServiceService_GetOperatorAction_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetOperatorActionReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeExecutionServiceService).CancelAllOrders(ctx, reqbody.(*CancelAllOrdersReq))
+		return svr.(TradeExecutionServiceService).GetOperatorAction(ctx, reqbody.(*GetOperatorActionReq))
 	}
 
 	var rsp interface{}
@@ -280,50 +534,14 @@ func TradeExecutionServiceService_CancelAllOrders_Handler(svr interface{}, ctx c
 	return rsp, nil
 }
 
-func TradeExecutionServiceService_SubmitTarget_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SubmitTargetReq{}
+func TradeExecutionServiceService_GetLogicalAccountTarget_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetLogicalAccountTargetReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeExecutionServiceService).SubmitTarget(ctx, reqbody.(*SubmitTargetReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func TradeExecutionServiceService_GetExecution_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetExecutionReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeExecutionServiceService).GetExecution(ctx, reqbody.(*GetExecutionReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func TradeExecutionServiceService_ListExecutions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListExecutionsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(TradeExecutionServiceService).ListExecutions(ctx, reqbody.(*ListExecutionsReq))
+		return svr.(TradeExecutionServiceService).GetLogicalAccountTarget(ctx, reqbody.(*GetLogicalAccountTargetReq))
 	}
 
 	var rsp interface{}
@@ -412,28 +630,20 @@ var TradeExecutionServiceServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*TradeExecutionServiceService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.trade.TradeExecutionService/PlaceOrder",
-			Func: TradeExecutionServiceService_PlaceOrder_Handler,
+			Name: "/trpc.moox.trade.TradeExecutionService/PlaceManualOrder",
+			Func: TradeExecutionServiceService_PlaceManualOrder_Handler,
 		},
 		{
 			Name: "/trpc.moox.trade.TradeExecutionService/CancelOrder",
 			Func: TradeExecutionServiceService_CancelOrder_Handler,
 		},
 		{
-			Name: "/trpc.moox.trade.TradeExecutionService/CancelAllOrders",
-			Func: TradeExecutionServiceService_CancelAllOrders_Handler,
+			Name: "/trpc.moox.trade.TradeExecutionService/GetOperatorAction",
+			Func: TradeExecutionServiceService_GetOperatorAction_Handler,
 		},
 		{
-			Name: "/trpc.moox.trade.TradeExecutionService/SubmitTarget",
-			Func: TradeExecutionServiceService_SubmitTarget_Handler,
-		},
-		{
-			Name: "/trpc.moox.trade.TradeExecutionService/GetExecution",
-			Func: TradeExecutionServiceService_GetExecution_Handler,
-		},
-		{
-			Name: "/trpc.moox.trade.TradeExecutionService/ListExecutions",
-			Func: TradeExecutionServiceService_ListExecutions_Handler,
+			Name: "/trpc.moox.trade.TradeExecutionService/GetLogicalAccountTarget",
+			Func: TradeExecutionServiceService_GetLogicalAccountTarget_Handler,
 		},
 		{
 			Name: "/trpc.moox.trade.TradeExecutionService/GetOrder",
@@ -480,32 +690,59 @@ func (s *UnimplementedExchangeAccountService) ListAccounts(ctx context.Context, 
 func (s *UnimplementedExchangeAccountService) SetLeverage(ctx context.Context, req *SetLeverageReq) (*SetLeverageRsp, error) {
 	return nil, errors.New("rpc SetLeverage of service ExchangeAccountService is not implemented")
 }
-func (s *UnimplementedExchangeAccountService) PauseAccount(ctx context.Context, req *PauseAccountReq) (*PauseAccountRsp, error) {
-	return nil, errors.New("rpc PauseAccount of service ExchangeAccountService is not implemented")
-}
 func (s *UnimplementedExchangeAccountService) SyncAccount(ctx context.Context, req *SyncAccountReq) (*SyncAccountRsp, error) {
 	return nil, errors.New("rpc SyncAccount of service ExchangeAccountService is not implemented")
 }
 
+type UnimplementedLogicalAccountService struct{}
+
+func (s *UnimplementedLogicalAccountService) CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq) (*CreateLogicalAccountRsp, error) {
+	return nil, errors.New("rpc CreateLogicalAccount of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) GetLogicalAccount(ctx context.Context, req *GetLogicalAccountReq) (*GetLogicalAccountRsp, error) {
+	return nil, errors.New("rpc GetLogicalAccount of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) ListLogicalAccounts(ctx context.Context, req *ListLogicalAccountsReq) (*ListLogicalAccountsRsp, error) {
+	return nil, errors.New("rpc ListLogicalAccounts of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) UpdateLogicalAccount(ctx context.Context, req *UpdateLogicalAccountReq) (*UpdateLogicalAccountRsp, error) {
+	return nil, errors.New("rpc UpdateLogicalAccount of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) AddLogicalAccountMember(ctx context.Context, req *AddLogicalAccountMemberReq) (*AddLogicalAccountMemberRsp, error) {
+	return nil, errors.New("rpc AddLogicalAccountMember of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq) (*RemoveLogicalAccountMemberRsp, error) {
+	return nil, errors.New("rpc RemoveLogicalAccountMember of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq) (*ClaimLogicalAccountOwnerRsp, error) {
+	return nil, errors.New("rpc ClaimLogicalAccountOwner of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq) (*ReleaseLogicalAccountOwnerRsp, error) {
+	return nil, errors.New("rpc ReleaseLogicalAccountOwner of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq) (*PauseLogicalAccountRsp, error) {
+	return nil, errors.New("rpc PauseLogicalAccount of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) ResumeLogicalAccount(ctx context.Context, req *ResumeLogicalAccountReq) (*ResumeLogicalAccountRsp, error) {
+	return nil, errors.New("rpc ResumeLogicalAccount of service LogicalAccountService is not implemented")
+}
+func (s *UnimplementedLogicalAccountService) FlattenLogicalAccount(ctx context.Context, req *FlattenLogicalAccountReq) (*FlattenLogicalAccountRsp, error) {
+	return nil, errors.New("rpc FlattenLogicalAccount of service LogicalAccountService is not implemented")
+}
+
 type UnimplementedTradeExecutionService struct{}
 
-func (s *UnimplementedTradeExecutionService) PlaceOrder(ctx context.Context, req *PlaceOrderReq) (*PlaceOrderRsp, error) {
-	return nil, errors.New("rpc PlaceOrder of service TradeExecutionService is not implemented")
+func (s *UnimplementedTradeExecutionService) PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq) (*PlaceManualOrderRsp, error) {
+	return nil, errors.New("rpc PlaceManualOrder of service TradeExecutionService is not implemented")
 }
 func (s *UnimplementedTradeExecutionService) CancelOrder(ctx context.Context, req *CancelOrderReq) (*CancelOrderRsp, error) {
 	return nil, errors.New("rpc CancelOrder of service TradeExecutionService is not implemented")
 }
-func (s *UnimplementedTradeExecutionService) CancelAllOrders(ctx context.Context, req *CancelAllOrdersReq) (*CancelAllOrdersRsp, error) {
-	return nil, errors.New("rpc CancelAllOrders of service TradeExecutionService is not implemented")
+func (s *UnimplementedTradeExecutionService) GetOperatorAction(ctx context.Context, req *GetOperatorActionReq) (*GetOperatorActionRsp, error) {
+	return nil, errors.New("rpc GetOperatorAction of service TradeExecutionService is not implemented")
 }
-func (s *UnimplementedTradeExecutionService) SubmitTarget(ctx context.Context, req *SubmitTargetReq) (*SubmitTargetRsp, error) {
-	return nil, errors.New("rpc SubmitTarget of service TradeExecutionService is not implemented")
-}
-func (s *UnimplementedTradeExecutionService) GetExecution(ctx context.Context, req *GetExecutionReq) (*GetExecutionRsp, error) {
-	return nil, errors.New("rpc GetExecution of service TradeExecutionService is not implemented")
-}
-func (s *UnimplementedTradeExecutionService) ListExecutions(ctx context.Context, req *ListExecutionsReq) (*ListExecutionsRsp, error) {
-	return nil, errors.New("rpc ListExecutions of service TradeExecutionService is not implemented")
+func (s *UnimplementedTradeExecutionService) GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq) (*GetLogicalAccountTargetRsp, error) {
+	return nil, errors.New("rpc GetLogicalAccountTarget of service TradeExecutionService is not implemented")
 }
 func (s *UnimplementedTradeExecutionService) GetOrder(ctx context.Context, req *GetOrderReq) (*GetOrderRsp, error) {
 	return nil, errors.New("rpc GetOrder of service TradeExecutionService is not implemented")
@@ -537,8 +774,6 @@ type ExchangeAccountServiceClientProxy interface {
 	ListAccounts(ctx context.Context, req *ListAccountsReq, opts ...client.Option) (rsp *ListAccountsRsp, err error)
 
 	SetLeverage(ctx context.Context, req *SetLeverageReq, opts ...client.Option) (rsp *SetLeverageRsp, err error)
-
-	PauseAccount(ctx context.Context, req *PauseAccountReq, opts ...client.Option) (rsp *PauseAccountRsp, err error)
 
 	SyncAccount(ctx context.Context, req *SyncAccountReq, opts ...client.Option) (rsp *SyncAccountRsp, err error)
 }
@@ -652,26 +887,6 @@ func (c *ExchangeAccountServiceClientProxyImpl) SetLeverage(ctx context.Context,
 	return rsp, nil
 }
 
-func (c *ExchangeAccountServiceClientProxyImpl) PauseAccount(ctx context.Context, req *PauseAccountReq, opts ...client.Option) (*PauseAccountRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.ExchangeAccountService/PauseAccount")
-	msg.WithCalleeServiceName(ExchangeAccountServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("ExchangeAccountService")
-	msg.WithCalleeMethod("PauseAccount")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &PauseAccountRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *ExchangeAccountServiceClientProxyImpl) SyncAccount(ctx context.Context, req *SyncAccountReq, opts ...client.Option) (*SyncAccountRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -692,19 +907,269 @@ func (c *ExchangeAccountServiceClientProxyImpl) SyncAccount(ctx context.Context,
 	return rsp, nil
 }
 
+// LogicalAccountServiceClientProxy defines service client proxy
+type LogicalAccountServiceClientProxy interface {
+	CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq, opts ...client.Option) (rsp *CreateLogicalAccountRsp, err error)
+
+	GetLogicalAccount(ctx context.Context, req *GetLogicalAccountReq, opts ...client.Option) (rsp *GetLogicalAccountRsp, err error)
+
+	ListLogicalAccounts(ctx context.Context, req *ListLogicalAccountsReq, opts ...client.Option) (rsp *ListLogicalAccountsRsp, err error)
+
+	UpdateLogicalAccount(ctx context.Context, req *UpdateLogicalAccountReq, opts ...client.Option) (rsp *UpdateLogicalAccountRsp, err error)
+
+	AddLogicalAccountMember(ctx context.Context, req *AddLogicalAccountMemberReq, opts ...client.Option) (rsp *AddLogicalAccountMemberRsp, err error)
+
+	RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq, opts ...client.Option) (rsp *RemoveLogicalAccountMemberRsp, err error)
+
+	ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq, opts ...client.Option) (rsp *ClaimLogicalAccountOwnerRsp, err error)
+
+	ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq, opts ...client.Option) (rsp *ReleaseLogicalAccountOwnerRsp, err error)
+
+	PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq, opts ...client.Option) (rsp *PauseLogicalAccountRsp, err error)
+
+	ResumeLogicalAccount(ctx context.Context, req *ResumeLogicalAccountReq, opts ...client.Option) (rsp *ResumeLogicalAccountRsp, err error)
+
+	FlattenLogicalAccount(ctx context.Context, req *FlattenLogicalAccountReq, opts ...client.Option) (rsp *FlattenLogicalAccountRsp, err error)
+}
+
+type LogicalAccountServiceClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewLogicalAccountServiceClientProxy = func(opts ...client.Option) LogicalAccountServiceClientProxy {
+	return &LogicalAccountServiceClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq, opts ...client.Option) (*CreateLogicalAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/CreateLogicalAccount")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("CreateLogicalAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateLogicalAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) GetLogicalAccount(ctx context.Context, req *GetLogicalAccountReq, opts ...client.Option) (*GetLogicalAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/GetLogicalAccount")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("GetLogicalAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetLogicalAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) ListLogicalAccounts(ctx context.Context, req *ListLogicalAccountsReq, opts ...client.Option) (*ListLogicalAccountsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/ListLogicalAccounts")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("ListLogicalAccounts")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListLogicalAccountsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) UpdateLogicalAccount(ctx context.Context, req *UpdateLogicalAccountReq, opts ...client.Option) (*UpdateLogicalAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/UpdateLogicalAccount")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("UpdateLogicalAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateLogicalAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) AddLogicalAccountMember(ctx context.Context, req *AddLogicalAccountMemberReq, opts ...client.Option) (*AddLogicalAccountMemberRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/AddLogicalAccountMember")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("AddLogicalAccountMember")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &AddLogicalAccountMemberRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq, opts ...client.Option) (*RemoveLogicalAccountMemberRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/RemoveLogicalAccountMember")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("RemoveLogicalAccountMember")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RemoveLogicalAccountMemberRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) ClaimLogicalAccountOwner(ctx context.Context, req *ClaimLogicalAccountOwnerReq, opts ...client.Option) (*ClaimLogicalAccountOwnerRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/ClaimLogicalAccountOwner")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("ClaimLogicalAccountOwner")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ClaimLogicalAccountOwnerRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) ReleaseLogicalAccountOwner(ctx context.Context, req *ReleaseLogicalAccountOwnerReq, opts ...client.Option) (*ReleaseLogicalAccountOwnerRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/ReleaseLogicalAccountOwner")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("ReleaseLogicalAccountOwner")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReleaseLogicalAccountOwnerRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) PauseLogicalAccount(ctx context.Context, req *PauseLogicalAccountReq, opts ...client.Option) (*PauseLogicalAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/PauseLogicalAccount")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("PauseLogicalAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PauseLogicalAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) ResumeLogicalAccount(ctx context.Context, req *ResumeLogicalAccountReq, opts ...client.Option) (*ResumeLogicalAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/ResumeLogicalAccount")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("ResumeLogicalAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ResumeLogicalAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *LogicalAccountServiceClientProxyImpl) FlattenLogicalAccount(ctx context.Context, req *FlattenLogicalAccountReq, opts ...client.Option) (*FlattenLogicalAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.LogicalAccountService/FlattenLogicalAccount")
+	msg.WithCalleeServiceName(LogicalAccountServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("LogicalAccountService")
+	msg.WithCalleeMethod("FlattenLogicalAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &FlattenLogicalAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // TradeExecutionServiceClientProxy defines service client proxy
 type TradeExecutionServiceClientProxy interface {
-	PlaceOrder(ctx context.Context, req *PlaceOrderReq, opts ...client.Option) (rsp *PlaceOrderRsp, err error)
+	PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq, opts ...client.Option) (rsp *PlaceManualOrderRsp, err error)
 
 	CancelOrder(ctx context.Context, req *CancelOrderReq, opts ...client.Option) (rsp *CancelOrderRsp, err error)
 
-	CancelAllOrders(ctx context.Context, req *CancelAllOrdersReq, opts ...client.Option) (rsp *CancelAllOrdersRsp, err error)
+	GetOperatorAction(ctx context.Context, req *GetOperatorActionReq, opts ...client.Option) (rsp *GetOperatorActionRsp, err error)
 
-	SubmitTarget(ctx context.Context, req *SubmitTargetReq, opts ...client.Option) (rsp *SubmitTargetRsp, err error)
-
-	GetExecution(ctx context.Context, req *GetExecutionReq, opts ...client.Option) (rsp *GetExecutionRsp, err error)
-
-	ListExecutions(ctx context.Context, req *ListExecutionsReq, opts ...client.Option) (rsp *ListExecutionsRsp, err error)
+	GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq, opts ...client.Option) (rsp *GetLogicalAccountTargetRsp, err error)
 
 	GetOrder(ctx context.Context, req *GetOrderReq, opts ...client.Option) (rsp *GetOrderRsp, err error)
 
@@ -724,20 +1189,20 @@ var NewTradeExecutionServiceClientProxy = func(opts ...client.Option) TradeExecu
 	return &TradeExecutionServiceClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *TradeExecutionServiceClientProxyImpl) PlaceOrder(ctx context.Context, req *PlaceOrderReq, opts ...client.Option) (*PlaceOrderRsp, error) {
+func (c *TradeExecutionServiceClientProxyImpl) PlaceManualOrder(ctx context.Context, req *PlaceManualOrderReq, opts ...client.Option) (*PlaceManualOrderRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeExecutionService/PlaceOrder")
+	msg.WithClientRPCName("/trpc.moox.trade.TradeExecutionService/PlaceManualOrder")
 	msg.WithCalleeServiceName(TradeExecutionServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("trade")
 	msg.WithCalleeService("TradeExecutionService")
-	msg.WithCalleeMethod("PlaceOrder")
+	msg.WithCalleeMethod("PlaceManualOrder")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &PlaceOrderRsp{}
+	rsp := &PlaceManualOrderRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -764,80 +1229,40 @@ func (c *TradeExecutionServiceClientProxyImpl) CancelOrder(ctx context.Context, 
 	return rsp, nil
 }
 
-func (c *TradeExecutionServiceClientProxyImpl) CancelAllOrders(ctx context.Context, req *CancelAllOrdersReq, opts ...client.Option) (*CancelAllOrdersRsp, error) {
+func (c *TradeExecutionServiceClientProxyImpl) GetOperatorAction(ctx context.Context, req *GetOperatorActionReq, opts ...client.Option) (*GetOperatorActionRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeExecutionService/CancelAllOrders")
+	msg.WithClientRPCName("/trpc.moox.trade.TradeExecutionService/GetOperatorAction")
 	msg.WithCalleeServiceName(TradeExecutionServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("trade")
 	msg.WithCalleeService("TradeExecutionService")
-	msg.WithCalleeMethod("CancelAllOrders")
+	msg.WithCalleeMethod("GetOperatorAction")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CancelAllOrdersRsp{}
+	rsp := &GetOperatorActionRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *TradeExecutionServiceClientProxyImpl) SubmitTarget(ctx context.Context, req *SubmitTargetReq, opts ...client.Option) (*SubmitTargetRsp, error) {
+func (c *TradeExecutionServiceClientProxyImpl) GetLogicalAccountTarget(ctx context.Context, req *GetLogicalAccountTargetReq, opts ...client.Option) (*GetLogicalAccountTargetRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeExecutionService/SubmitTarget")
+	msg.WithClientRPCName("/trpc.moox.trade.TradeExecutionService/GetLogicalAccountTarget")
 	msg.WithCalleeServiceName(TradeExecutionServiceServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("trade")
 	msg.WithCalleeService("TradeExecutionService")
-	msg.WithCalleeMethod("SubmitTarget")
+	msg.WithCalleeMethod("GetLogicalAccountTarget")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &SubmitTargetRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeExecutionServiceClientProxyImpl) GetExecution(ctx context.Context, req *GetExecutionReq, opts ...client.Option) (*GetExecutionRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeExecutionService/GetExecution")
-	msg.WithCalleeServiceName(TradeExecutionServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeExecutionService")
-	msg.WithCalleeMethod("GetExecution")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetExecutionRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *TradeExecutionServiceClientProxyImpl) ListExecutions(ctx context.Context, req *ListExecutionsReq, opts ...client.Option) (*ListExecutionsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.trade.TradeExecutionService/ListExecutions")
-	msg.WithCalleeServiceName(TradeExecutionServiceServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("trade")
-	msg.WithCalleeService("TradeExecutionService")
-	msg.WithCalleeMethod("ListExecutions")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListExecutionsRsp{}
+	rsp := &GetLogicalAccountTargetRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
