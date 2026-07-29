@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-type RevealedSecret struct {
+type SecretMaterial struct {
 	SecretID    string `json:"secret_id"`
 	Category    string `json:"category"`
 	Provider    string `json:"provider"`
@@ -16,23 +16,23 @@ type RevealedSecret struct {
 	SecretValue string `json:"secret_value"`
 }
 
-func (c *Client) RevealSecret(ctx context.Context, secretID string) (*RevealedSecret, error) {
+func (c *Client) GetSecretValue(ctx context.Context, secretID string) (*SecretMaterial, error) {
 	if c.ServiceAuth == nil {
 		return nil, fmt.Errorf("service authentication is required to reveal secrets")
 	}
-	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/secret/RevealSecret", map[string]any{"secret_id": secretID})
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/secret/GetSecretValue", map[string]any{"secret_id": secretID})
 	if err != nil {
 		return nil, err
 	}
 	var response struct {
 		RetInfo *retInfo        `json:"ret_info"`
-		Secret  *RevealedSecret `json:"secret"`
+		Secret  *SecretMaterial `json:"secret"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return nil, err
 	}
 	if response.RetInfo == nil || !isRetInfoSuccess(response.RetInfo.Code) || response.Secret == nil {
-		return nil, fmt.Errorf("RevealSecret rejected")
+		return nil, fmt.Errorf("GetSecretValue rejected")
 	}
 	if response.Secret.Status != "active" || response.Secret.Category != "cloud" || response.Secret.Provider != "tencent" {
 		return nil, fmt.Errorf("secret must be active category=cloud provider=tencent")

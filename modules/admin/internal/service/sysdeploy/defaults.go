@@ -80,7 +80,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 			rows[i].ExtraConfig = `{"gateway_methods":["ListActiveServiceDeployments","ListServiceDeployments"],"gateway_callers":["admin-gateway","collector","monitor","moox-cli"]}`
 		}
 		if rows[i].ServiceName == "secret" {
-			rows[i].ExtraConfig = `{"gateway_methods":["ListSecrets","RevealSecret"],"gateway_callers":["admin-gateway","cloudnode","moox-cli"]}`
+			rows[i].ExtraConfig = `{"gateway_methods":["ListSecrets","GetSecretValue"],"gateway_callers":["admin-gateway","cloudnode","moox-cli","trade"]}`
 		}
 		if rows[i].GatewayEnabled && !strings.Contains(rows[i].ExtraConfig, `"gateway_methods"`) {
 			rows[i].ExtraConfig = strings.TrimSuffix(rows[i].ExtraConfig, "}") + `,"gateway_methods":["*"],"gateway_callers":["*"]}`

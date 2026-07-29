@@ -158,11 +158,11 @@ func TestHandleGatewayRequest_ForwardMissingResolver_ShouldReturnForwardError(t 
 	assert.Contains(t, rr.Body.String(), "ret_info")
 }
 
-func TestAdminRouterDeniesMachineOnlyRevealSecretAliases(t *testing.T) {
-	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/secret/RevealSecret", "/api/admin/SecretMgr/revealsecret"}}})
+func TestAdminRouterDeniesMachineOnlyGetSecretValueAliases(t *testing.T) {
+	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/secret/GetSecretValue", "/api/admin/SecretMgr/getsecretvalue"}}})
 	provider := &fakeGatewayControlProvider{}
 	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
-	for _, path := range []string{"/api/admin/secret/RevealSecret", "/api/admin/SecretMgr/revealsecret", "/api/admin/trpc.moox.ops.SecretMgr/REVEALSECRET"} {
+	for _, path := range []string{"/api/admin/secret/GetSecretValue", "/api/admin/SecretMgr/getsecretvalue", "/api/admin/trpc.moox.ops.SecretMgr/GETSECRETVALUE"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{"secret_id":"s1"}`))))
 		assert.Equal(t, http.StatusNotFound, recorder.Code, path)
@@ -170,9 +170,9 @@ func TestAdminRouterDeniesMachineOnlyRevealSecretAliases(t *testing.T) {
 	assert.Empty(t, provider.lastNode)
 }
 
-func TestAdminRouterDeniesRevealSecretThroughDeploymentAlias(t *testing.T) {
+func TestAdminRouterDeniesGetSecretValueThroughDeploymentAlias(t *testing.T) {
 	SetConfig(&Config{Gateway: GatewayConfig{NoAuthMethods: []string{
-		"/api/admin/secret_alias/RevealSecret",
+		"/api/admin/secret_alias/GetSecretValue",
 		"/api/admin/secret_alias/ListSecrets",
 	}}})
 	upstreamCalls := 0
@@ -191,7 +191,7 @@ func TestAdminRouterDeniesRevealSecretThroughDeploymentAlias(t *testing.T) {
 	router := NewHTTPRouter(NewGatewayHandle(), provider, "admin-node-test").buildControlRouter()
 
 	denied := httptest.NewRecorder()
-	router.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/admin/secret_alias/RevealSecret", bytes.NewReader([]byte(`{"secret_id":"s1"}`))))
+	router.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/admin/secret_alias/GetSecretValue", bytes.NewReader([]byte(`{"secret_id":"s1"}`))))
 	assert.Equal(t, http.StatusNotFound, denied.Code)
 	assert.Equal(t, 0, upstreamCalls)
 	assert.Equal(t, "admin-node-test", provider.lastNode)

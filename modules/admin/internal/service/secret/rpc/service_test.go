@@ -106,19 +106,19 @@ func TestSecretModelConversions(t *testing.T) {
 	assert.Equal(t, pbSecret.SecretValue, back.SecretValue)
 }
 
-type revealSecretFakeService struct {
+type getSecretValueFakeService struct {
 	secret.Service
 	gotSecretID string
 	record      *model.Secret
 }
 
-func (f *revealSecretFakeService) GetSecret(ctx context.Context, secretID string) (*model.Secret, error) {
+func (f *getSecretValueFakeService) GetSecret(ctx context.Context, secretID string) (*model.Secret, error) {
 	f.gotSecretID = secretID
 	return f.record, nil
 }
 
-func TestRevealSecretReturnsPlainValueForServiceCall(t *testing.T) {
-	fake := &revealSecretFakeService{
+func TestGetSecretValueReturnsPlainValueForServiceCall(t *testing.T) {
+	fake := &getSecretValueFakeService{
 		record: &model.Secret{
 			SecretID:    "sec_binance",
 			Name:        "binance-main",
@@ -133,12 +133,12 @@ func TestRevealSecretReturnsPlainValueForServiceCall(t *testing.T) {
 	}
 	svc := NewService(fake)
 
-	rsp, err := svc.RevealSecret(serviceAuthCtx(), &pb.RevealSecretReq{SecretId: "sec_binance"})
+	rsp, err := svc.GetSecretValue(serviceAuthCtx(), &pb.GetSecretValueReq{SecretId: "sec_binance"})
 	if err != nil {
-		t.Fatalf("RevealSecret returned transport error: %v", err)
+		t.Fatalf("GetSecretValue returned transport error: %v", err)
 	}
 	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("RevealSecret ret_info = %v", rsp.GetRetInfo())
+		t.Fatalf("GetSecretValue ret_info = %v", rsp.GetRetInfo())
 	}
 	if fake.gotSecretID != "sec_binance" {
 		t.Fatalf("GetSecret called with %q, want sec_binance", fake.gotSecretID)
@@ -151,8 +151,8 @@ func TestRevealSecretReturnsPlainValueForServiceCall(t *testing.T) {
 	}
 }
 
-func TestRevealSecretRejectsInactiveSecret(t *testing.T) {
-	svc := NewService(&revealSecretFakeService{
+func TestGetSecretValueRejectsInactiveSecret(t *testing.T) {
+	svc := NewService(&getSecretValueFakeService{
 		record: &model.Secret{
 			SecretID:    "sec_disabled",
 			Name:        "disabled",
@@ -165,17 +165,17 @@ func TestRevealSecretRejectsInactiveSecret(t *testing.T) {
 		},
 	})
 
-	rsp, err := svc.RevealSecret(serviceAuthCtx(), &pb.RevealSecretReq{SecretId: "sec_disabled"})
+	rsp, err := svc.GetSecretValue(serviceAuthCtx(), &pb.GetSecretValueReq{SecretId: "sec_disabled"})
 	if err != nil {
-		t.Fatalf("RevealSecret returned transport error: %v", err)
+		t.Fatalf("GetSecretValue returned transport error: %v", err)
 	}
 	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
-		t.Fatalf("RevealSecret code = %v, want INVALID_PARAM", rsp.GetRetInfo().GetCode())
+		t.Fatalf("GetSecretValue code = %v, want INVALID_PARAM", rsp.GetRetInfo().GetCode())
 	}
 }
 
-func TestRevealSecretReliesOnGatewayMethodAllowlist(t *testing.T) {
-	svc := NewService(&revealSecretFakeService{
+func TestGetSecretValueReliesOnGatewayMethodAllowlist(t *testing.T) {
+	svc := NewService(&getSecretValueFakeService{
 		record: &model.Secret{
 			SecretID:    "sec_binance",
 			Name:        "binance-main",
@@ -188,26 +188,26 @@ func TestRevealSecretReliesOnGatewayMethodAllowlist(t *testing.T) {
 		},
 	})
 
-	rsp, err := svc.RevealSecret(context.Background(), &pb.RevealSecretReq{SecretId: "sec_binance"})
+	rsp, err := svc.GetSecretValue(context.Background(), &pb.GetSecretValueReq{SecretId: "sec_binance"})
 	if err != nil {
-		t.Fatalf("RevealSecret returned transport error: %v", err)
+		t.Fatalf("GetSecretValue returned transport error: %v", err)
 	}
 	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || rsp.GetSecret().GetSecretValue() != "secret" {
-		t.Fatalf("RevealSecret response = %#v, want plaintext success", rsp)
+		t.Fatalf("GetSecretValue response = %#v, want plaintext success", rsp)
 	}
 }
 
-func TestRevealSecretMapsMissingSecret(t *testing.T) {
-	svc := NewService(&revealSecretFakeService{
+func TestGetSecretValueMapsMissingSecret(t *testing.T) {
+	svc := NewService(&getSecretValueFakeService{
 		Service: secret.NewService(&dao.SecretDAO{}),
 	})
 
-	rsp, err := svc.RevealSecret(context.Background(), &pb.RevealSecretReq{})
+	rsp, err := svc.GetSecretValue(context.Background(), &pb.GetSecretValueReq{})
 	if err != nil {
-		t.Fatalf("RevealSecret returned transport error: %v", err)
+		t.Fatalf("GetSecretValue returned transport error: %v", err)
 	}
 	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
-		t.Fatalf("RevealSecret code = %v, want INVALID_PARAM", rsp.GetRetInfo().GetCode())
+		t.Fatalf("GetSecretValue code = %v, want INVALID_PARAM", rsp.GetRetInfo().GetCode())
 	}
 }
 

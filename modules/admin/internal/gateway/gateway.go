@@ -236,7 +236,7 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 }
 
 func isMachineOnlyAdminMethod(serviceID, method string) bool {
-	if canonicalAdminSegment(method) != "revealsecret" {
+	if canonicalAdminSegment(method) != "getsecretvalue" {
 		return false
 	}
 	switch canonicalAdminSegment(serviceID) {
@@ -248,7 +248,7 @@ func isMachineOnlyAdminMethod(serviceID, method string) bool {
 }
 
 func isMachineOnlyResolvedMethod(detail ServiceDetail, method string) bool {
-	return canonicalAdminSegment(method) == "revealsecret" &&
+	return canonicalAdminSegment(method) == "getsecretvalue" &&
 		canonicalAdminSegment(detail.Path) == "trpcmooxopssecretmgr"
 }
 

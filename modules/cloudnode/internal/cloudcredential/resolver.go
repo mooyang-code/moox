@@ -23,7 +23,7 @@ type TencentCredential struct {
 
 // Resolver resolves cloud account references through SecretMgr on every operation.
 type Resolver struct {
-	reveal func(context.Context, *adminpb.RevealSecretReq) (*adminpb.RevealSecretRsp, error)
+	getValue func(context.Context, *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error)
 }
 
 func NewFromEnv() (*Resolver, error) {
@@ -40,70 +40,70 @@ func NewFromEnv() (*Resolver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create cloud credential gateway client: %w", err)
 	}
-	return &Resolver{reveal: func(ctx context.Context, req *adminpb.RevealSecretReq) (*adminpb.RevealSecretRsp, error) {
-		return revealSecret(ctx, client, baseURL, targetNode, credentials, req)
+	return &Resolver{getValue: func(ctx context.Context, req *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error) {
+		return getSecretValue(ctx, client, baseURL, targetNode, credentials, req)
 	}}, nil
 }
 
-func revealSecret(
+func getSecretValue(
 	ctx context.Context,
 	client *http.Client,
 	baseURL string,
 	targetNode string,
 	credentials gatewayauth.Credentials,
-	req *adminpb.RevealSecretReq,
-) (*adminpb.RevealSecretRsp, error) {
+	req *adminpb.GetSecretValueReq,
+) (*adminpb.GetSecretValueRsp, error) {
 	body, err := protojson.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal reveal secret request: %w", err)
+		return nil, fmt.Errorf("marshal getValue secret request: %w", err)
 	}
-	const path = "/api/service/secret/RevealSecret"
+	const path = "/api/service/secret/GetSecretValue"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("create reveal secret request: %w", err)
+		return nil, fmt.Errorf("create getValue secret request: %w", err)
 	}
 	headers, err := gatewayauth.Sign(credentials, gatewayauth.Request{
 		Method: http.MethodPost, Path: path, Body: body,
 		TargetNode: targetNode, Caller: credentials.Caller,
 	}, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("sign reveal secret request: %w", err)
+		return nil, fmt.Errorf("sign getValue secret request: %w", err)
 	}
 	httpReq.Header = headers
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpRsp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("send reveal secret request: %w", err)
+		return nil, fmt.Errorf("send getValue secret request: %w", err)
 	}
 	defer httpRsp.Body.Close()
 	if httpRsp.StatusCode < 200 || httpRsp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(httpRsp.Body, 4096))
-		return nil, fmt.Errorf("reveal secret HTTP %d", httpRsp.StatusCode)
+		return nil, fmt.Errorf("getValue secret HTTP %d", httpRsp.StatusCode)
 	}
-	var rsp adminpb.RevealSecretRsp
+	var rsp adminpb.GetSecretValueRsp
 	raw, err := io.ReadAll(io.LimitReader(httpRsp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("read reveal secret response: %w", err)
+		return nil, fmt.Errorf("read getValue secret response: %w", err)
 	}
 	if err := protojson.Unmarshal(raw, &rsp); err != nil {
-		return nil, fmt.Errorf("decode reveal secret response: %w", err)
+		return nil, fmt.Errorf("decode getValue secret response: %w", err)
 	}
 	return &rsp, nil
 }
 
 func (r *Resolver) Resolve(ctx context.Context, account store.CloudAccount) (TencentCredential, error) {
-	if r == nil || r.reveal == nil {
+	if r == nil || r.getValue == nil {
 		return TencentCredential{}, fmt.Errorf("cloud credential resolver is not configured")
 	}
 	if account.Provider != "tencent" || strings.TrimSpace(account.CredentialSecretID) == "" {
 		return TencentCredential{}, fmt.Errorf("cloud account requires tencent provider and credential_secret_id")
 	}
-	response, err := r.reveal(ctx, &adminpb.RevealSecretReq{SecretId: account.CredentialSecretID})
+	response, err := r.getValue(ctx, &adminpb.GetSecretValueReq{SecretId: account.CredentialSecretID})
 	if err != nil {
-		return TencentCredential{}, fmt.Errorf("reveal cloud credential: %w", err)
+		return TencentCredential{}, fmt.Errorf("getValue cloud credential: %w", err)
 	}
 	if response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS || response.GetSecret() == nil {
-		return TencentCredential{}, fmt.Errorf("reveal cloud credential rejected")
+		return TencentCredential{}, fmt.Errorf("getValue cloud credential rejected")
 	}
 	secret := response.GetSecret()
 	if secret.GetStatus() != "active" || secret.GetCategory() != "cloud" || secret.GetProvider() != "tencent" {

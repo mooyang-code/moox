@@ -16,7 +16,7 @@ import (
 
 type fakeAccounts struct {
 	items     []adminclient.CloudAccount
-	secrets   map[string]*adminclient.RevealedSecret
+	secrets   map[string]*adminclient.SecretMaterial
 	revealed  string
 	listErr   error
 	revealErr error
@@ -26,7 +26,7 @@ func (f *fakeAccounts) ListCloudAccounts(context.Context, string) ([]adminclient
 	return f.items, f.listErr
 }
 
-func (f *fakeAccounts) RevealSecret(_ context.Context, secretID string) (*adminclient.RevealedSecret, error) {
+func (f *fakeAccounts) GetSecretValue(_ context.Context, secretID string) (*adminclient.SecretMaterial, error) {
 	f.revealed = secretID
 	return f.secrets[secretID], f.revealErr
 }
@@ -83,7 +83,7 @@ func testSource() *fakeAccounts {
 			{AccountID: "newest", Provider: "tencent", CredentialSecretID: "newest"},
 			{AccountID: "older", Provider: "tencent", CredentialSecretID: "older"},
 		},
-		secrets: map[string]*adminclient.RevealedSecret{
+		secrets: map[string]*adminclient.SecretMaterial{
 			"newest": {Category: "cloud", Provider: "tencent", Status: "active", KeyID: "sid-new", SecretValue: "skey-new"},
 			"older":  {Category: "cloud", Provider: "tencent", Status: "active", KeyID: "sid-old", SecretValue: "skey-old"},
 		},
@@ -185,7 +185,7 @@ func TestPrepareQuotesCredentialValuesForShellEnv(t *testing.T) {
 
 func TestPrepareRejectsIncompleteCredentialsBeforeCallingCLS(t *testing.T) {
 	source := testSource()
-	source.secrets["newest"] = &adminclient.RevealedSecret{Category: "cloud", Provider: "tencent", Status: "active"}
+	source.secrets["newest"] = &adminclient.SecretMaterial{Category: "cloud", Provider: "tencent", Status: "active"}
 	called := false
 	_, err := Prepare(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
 		called = true

@@ -93,23 +93,23 @@ func (s *Service) GetSecret(ctx context.Context, req *pb.GetSecretReq) (*pb.GetS
 	return &pb.GetSecretRsp{RetInfo: retOK(), Secret: secretModelToPB(secretRecord)}, nil
 }
 
-// RevealSecret returns the plaintext value. Gateway route method allowlists protect machine access.
-func (s *Service) RevealSecret(ctx context.Context, req *pb.RevealSecretReq) (*pb.RevealSecretRsp, error) {
+// GetSecretValue returns the plaintext value. Gateway route method allowlists protect machine access.
+func (s *Service) GetSecretValue(ctx context.Context, req *pb.GetSecretValueReq) (*pb.GetSecretValueRsp, error) {
 	if req.GetSecretId() == "" {
-		return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
+		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "secret_id不能为空")}, nil
 	}
 	secretRecord, err := s.svc.GetSecret(ctx, req.GetSecretId())
 	if err != nil {
-		log.ErrorContextf(ctx, "[Secret] RevealSecret failed: %v", err)
+		log.ErrorContextf(ctx, "[Secret] GetSecretValue failed: %v", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在")}, nil
+			return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "秘钥不存在")}, nil
 		}
-		return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥失败")}, nil
+		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询秘钥失败")}, nil
 	}
 	if secretRecord.Status != "" && secretRecord.Status != "active" {
-		return &pb.RevealSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥未启用")}, nil
+		return &pb.GetSecretValueRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "秘钥未启用")}, nil
 	}
-	return &pb.RevealSecretRsp{RetInfo: retOK(), Secret: secretModelToPlainPB(secretRecord)}, nil
+	return &pb.GetSecretValueRsp{RetInfo: retOK(), Secret: secretModelToPlainPB(secretRecord)}, nil
 }
 
 // CreateSecret 创建秘钥。
@@ -303,11 +303,11 @@ func secretModelToPB(s *model.Secret) *pb.Secret {
 	}
 }
 
-func secretModelToPlainPB(s *model.Secret) *pb.RevealedSecret {
+func secretModelToPlainPB(s *model.Secret) *pb.SecretMaterial {
 	if s == nil {
 		return nil
 	}
-	return &pb.RevealedSecret{
+	return &pb.SecretMaterial{
 		SecretId: s.SecretID, Name: s.Name, Description: s.Description,
 		Category: s.Category, Provider: s.Provider, SecretType: s.SecretType,
 		KeyId: s.KeyID, SecretValue: s.SecretValue, ExtraConfig: s.ExtraConfig, Status: s.Status,

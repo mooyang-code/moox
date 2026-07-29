@@ -15,10 +15,10 @@ import (
 )
 
 func TestResolverAcceptsActiveTencentCloudSecret(t *testing.T) {
-	resolver := &Resolver{reveal: func(context.Context, *adminpb.RevealSecretReq) (*adminpb.RevealSecretRsp, error) {
-		return &adminpb.RevealSecretRsp{
+	resolver := &Resolver{getValue: func(context.Context, *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error) {
+		return &adminpb.GetSecretValueRsp{
 			RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS},
-			Secret: &adminpb.RevealedSecret{
+			Secret: &adminpb.SecretMaterial{
 				Category: "cloud", Provider: "tencent", Status: "active", KeyId: "sid", SecretValue: "skey",
 			},
 		}, nil
@@ -32,10 +32,10 @@ func TestResolverAcceptsActiveTencentCloudSecret(t *testing.T) {
 }
 
 func TestResolverRejectsInactiveOrWrongCategory(t *testing.T) {
-	resolver := &Resolver{reveal: func(context.Context, *adminpb.RevealSecretReq) (*adminpb.RevealSecretRsp, error) {
-		return &adminpb.RevealSecretRsp{
+	resolver := &Resolver{getValue: func(context.Context, *adminpb.GetSecretValueReq) (*adminpb.GetSecretValueRsp, error) {
+		return &adminpb.GetSecretValueRsp{
 			RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS},
-			Secret: &adminpb.RevealedSecret{
+			Secret: &adminpb.SecretMaterial{
 				Category: "exchange", Provider: "tencent", Status: "inactive", KeyId: "sid", SecretValue: "skey",
 			},
 		}, nil
@@ -47,7 +47,7 @@ func TestResolverRejectsInactiveOrWrongCategory(t *testing.T) {
 	}
 }
 
-func TestNewFromEnvRevealsSecretThroughHTTPServiceGateway(t *testing.T) {
+func TestNewFromEnvretrievesSecretThroughHTTPServiceGateway(t *testing.T) {
 	const (
 		keyID      = "cloudnode"
 		secretKey  = "gateway-secret"
@@ -75,15 +75,15 @@ func TestNewFromEnvRevealsSecretThroughHTTPServiceGateway(t *testing.T) {
 			http.Error(w, "auth", http.StatusUnauthorized)
 			return
 		}
-		var input adminpb.RevealSecretReq
+		var input adminpb.GetSecretValueReq
 		if err := protojson.Unmarshal(body, &input); err != nil || input.GetSecretId() != "cloud-secret" {
 			t.Errorf("secret_id=%q err=%v", input.GetSecretId(), err)
 			http.Error(w, "input", http.StatusBadRequest)
 			return
 		}
-		raw, err := protojson.Marshal(&adminpb.RevealSecretRsp{
+		raw, err := protojson.Marshal(&adminpb.GetSecretValueRsp{
 			RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS},
-			Secret: &adminpb.RevealedSecret{
+			Secret: &adminpb.SecretMaterial{
 				Category: "cloud", Provider: "tencent", Status: "active",
 				KeyId: "sid", SecretValue: "skey",
 			},

@@ -344,8 +344,8 @@ services:
     extra_config:
       gateway_methods:
         - ListSecrets
-        - RevealSecret
-      gateway_callers: [admin-gateway, cloudnode, moox-cli]
+        - GetSecretValue
+      gateway_callers: [admin-gateway, cloudnode, moox-cli, trade]
   - name: sysdeploy
     kind: admin_rpc
     deployment_mode: endpoint

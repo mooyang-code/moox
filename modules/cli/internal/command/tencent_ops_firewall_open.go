@@ -106,7 +106,7 @@ func runLighthouseFirewallOpen(cmd *cobra.Command, opts lighthouseFirewallOpenOp
 	if selected == nil || selected.CredentialSecretID == "" {
 		return fmt.Errorf("no valid cloud account found in control plane")
 	}
-	info, err := client.RevealSecret(ctx, selected.CredentialSecretID)
+	info, err := client.GetSecretValue(ctx, selected.CredentialSecretID)
 	if err != nil {
 		return fmt.Errorf("get cloud account credentials: %w", err)
 	}

@@ -341,9 +341,10 @@ func TestDefaultSysdeployRouteAllowsBoundedInventoryLookup(t *testing.T) {
 		}
 	}
 	require.Equal(t, "secret", secretRoute.ServiceID)
-	assert.Equal(t, []string{"ListSecrets", "RevealSecret"}, secretRoute.AllowedMethods)
+	assert.Equal(t, []string{"GetSecretValue", "ListSecrets"}, secretRoute.AllowedMethods)
 	assert.True(t, secretRoute.AllowsMethod("ListSecrets"))
-	assert.True(t, secretRoute.AllowsMethod("RevealSecret"))
+	assert.True(t, secretRoute.AllowsMethod("GetSecretValue"))
+	assert.True(t, secretRoute.AllowsCaller("trade"))
 	assert.False(t, secretRoute.AllowsMethod("DeleteSecret"))
 	assert.False(t, secretRoute.AllowsMethod("CreateSecret"))
 }

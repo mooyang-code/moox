@@ -22,21 +22,21 @@ func TestMaskingFilterRedactsNormalSecretResponses(t *testing.T) {
 	}
 }
 
-func TestMaskingFilterPreservesExplicitRevealResponse(t *testing.T) {
+func TestMaskingFilterPreservesServiceOnlyPlaintextResponse(t *testing.T) {
 	filter := masking.ServerFilter()
 	rsp, err := filter(context.Background(), nil, func(context.Context, interface{}) (interface{}, error) {
-		return &RevealSecretRsp{Secret: &RevealedSecret{SecretValue: "plain-sensitive-value"}}, nil
+		return &GetSecretValueRsp{Secret: &SecretMaterial{SecretValue: "plain-sensitive-value"}}, nil
 	})
 	if err != nil {
 		t.Fatalf("filter error = %v", err)
 	}
-	if got := rsp.(*RevealSecretRsp).GetSecret().GetSecretValue(); got != "plain-sensitive-value" {
-		t.Fatalf("reveal response was modified: %q", got)
+	if got := rsp.(*GetSecretValueRsp).GetSecret().GetSecretValue(); got != "plain-sensitive-value" {
+		t.Fatalf("service-only plaintext response was modified: %q", got)
 	}
 }
 
-func TestRevealedSecretUsesContiguousWireTags(t *testing.T) {
-	fields := (&RevealedSecret{}).ProtoReflect().Descriptor().Fields()
+func TestSecretMaterialUsesContiguousWireTags(t *testing.T) {
+	fields := (&SecretMaterial{}).ProtoReflect().Descriptor().Fields()
 	want := map[string]int32{
 		"secret_id": 1, "name": 2, "description": 3, "category": 4,
 		"provider": 5, "secret_type": 6, "key_id": 7, "secret_value": 8,

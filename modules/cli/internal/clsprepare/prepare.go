@@ -21,7 +21,7 @@ const (
 
 type AccountSource interface {
 	ListCloudAccounts(context.Context, string) ([]adminclient.CloudAccount, error)
-	RevealSecret(context.Context, string) (*adminclient.RevealedSecret, error)
+	GetSecretValue(context.Context, string) (*adminclient.SecretMaterial, error)
 }
 
 type Factory func(secretID, secretKey string) (tencent.CLSAPI, error)
@@ -62,7 +62,7 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 	if err != nil {
 		return Result{}, err
 	}
-	secret, err := source.RevealSecret(ctx, account.CredentialSecretID)
+	secret, err := source.GetSecretValue(ctx, account.CredentialSecretID)
 	if err != nil {
 		return Result{}, safeUpstreamError(fmt.Sprintf("reveal cloud account %q", account.AccountID), err)
 	}
