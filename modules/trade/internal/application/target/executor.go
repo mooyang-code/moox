@@ -2,13 +2,10 @@ package target
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
+	"github.com/rs/xid"
 )
 
 var (
@@ -378,13 +376,8 @@ func (e *Executor) convergeLane(
 	spec := orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
 			ExchangeAccountID: execution.ExchangeAccountID,
-			ClientOrderID: childClientOrderID(
-				execution.ExecutionID,
-				target.Symbol,
-				execution.CommandSequence,
-				countTargetOrders(orders)+1,
-			),
-			InstrumentID: target.Symbol, Type: exchange.OrderTypeMarket,
+			ClientOrderID:     childClientOrderID(),
+			InstrumentID:      target.Symbol, Type: exchange.OrderTypeMarket,
 			Side: sideForDelta(action), PositionSide: exchange.PositionSideUnspecified,
 			Quantity: childQuantity,
 		},
@@ -561,27 +554,8 @@ func sideForDelta(delta shared.Decimal) exchange.Side {
 	return exchange.SideBuy
 }
 
-func countTargetOrders(orders []store.OrderRecord) int {
-	count := 0
-	for _, current := range orders {
-		if current.Source == "TARGET" {
-			count++
-		}
-	}
-	return count
-}
-
-func childClientOrderID(
-	executionID string,
-	symbol string,
-	commandSequence uint64,
-	attempt int,
-) string {
-	sum := sha256.Sum256([]byte(
-		executionID + "\x00" + symbol + "\x00" +
-			strconv.FormatUint(commandSequence, 10) + "\x00" + strconv.Itoa(attempt),
-	))
-	return "mt-" + hex.EncodeToString(sum[:12])
+func childClientOrderID() string {
+	return "mt" + xid.New().String()
 }
 
 func encodeProgress(progress Progress) string {

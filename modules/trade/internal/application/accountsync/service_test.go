@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/paper"
@@ -245,6 +246,96 @@ func TestOrderReducerDoesNotRegressTerminalState(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "REJECTED", record.State)
+}
+
+func TestOrderReducerIgnoresRegressingCumulativeFillSnapshot(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Now:   func() time.Time { return time.UnixMilli(5_000) },
+	}
+	current := exchange.Order{
+		ExchangeOrderID: "exchange-fill-regression", ClientOrderID: "client-fill-regression",
+		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("2"), Status: exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	record, err := tradeStore.GetOrderByClientID(
+		context.Background(), "space-1", "account-1", current.ClientOrderID,
+	)
+	require.NoError(t, err)
+	expected := record.Version
+	record.FilledQuantity = "1"
+	record.State = "PARTIALLY_FILLED"
+	record.ExchangeUpdatedAt = 3_000
+	record.Version++
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateOrder(record, expected)
+	}))
+
+	regressing := current
+	regressing.Status = exchange.OrderStatusRejected
+	regressing.FilledQuantity = shared.MustDecimal("0.5")
+	regressing.UpdatedAt = time.UnixMilli(4_000)
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", regressing))
+
+	record, err = tradeStore.GetOrderByClientID(
+		context.Background(), "space-1", "account-1", current.ClientOrderID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "PARTIALLY_FILLED", record.State)
+	require.Equal(t, "1", record.FilledQuantity)
+	require.Equal(t, int64(3_000), record.ExchangeUpdatedAt)
+}
+
+func TestApplySnapshotResolvesUnknownWithoutReenteringAccountLock(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	now := time.UnixMilli(3_000)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "unknown-order",
+			ExchangeAccountID: "account-1", ClientOrderID: "unknown-client",
+			Symbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY",
+			PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
+			ReferencePriceAt: 1_000, Source: "TARGET", State: "SUBMIT_UNKNOWN",
+			FilledQuantity: "0", ReservedAsset: "USDT", ReservedQuantity: "100",
+			RemainingReservedQuantity: "100", Version: 1, SubmittedAt: 1_000,
+		})
+	}))
+	adapter := &syncAdapter{order: exchange.Order{
+		ExchangeOrderID: "exchange-unknown", ClientOrderID: "unknown-client",
+		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}}
+	adapters := syncAdapterSource{adapter: adapter}
+	orders := &orderapp.Service{
+		Store: tradeStore, Adapters: adapters, Now: func() time.Time { return now },
+	}
+	service := Service{
+		Store: tradeStore, Adapters: adapters, Fills: &consumer.Reducer{Store: tradeStore},
+		Orders: orders, Now: func() time.Time { return now },
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.ApplySnapshot(context.Background(), "account-1", Snapshot{
+			Account: exchange.AccountSnapshot{ExchangeUpdatedAt: time.UnixMilli(2_000)},
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ApplySnapshot deadlocked while resolving an unknown order")
+	}
 }
 
 func TestPaperSyncRecoversSubmittedOrderAndPersistsSpotFill(t *testing.T) {

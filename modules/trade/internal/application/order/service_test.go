@@ -327,6 +327,37 @@ func TestOrderServiceRejectsManualOrderThatWouldCrossZero(t *testing.T) {
 	require.ErrorIs(t, err, ErrCrossZero)
 }
 
+func TestOrderServiceRejectsTargetOrderThatWouldCrossZero(t *testing.T) {
+	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	service.Validator.Positions = positionSourceStub{
+		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+	}
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideSell
+	spec.Quantity = shared.MustDecimal("3")
+	spec.Owner.Type = "TARGET"
+
+	_, err := service.Place(context.Background(), "space-1", spec)
+	require.ErrorIs(t, err, ErrCrossZero)
+}
+
+func TestOrderServiceFlattenOversizeRemainsReducePositionOnly(t *testing.T) {
+	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	service.Validator.Positions = positionSourceStub{
+		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+	}
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideSell
+	spec.Quantity = shared.MustDecimal("3")
+	spec.Owner.Type = "FLATTEN"
+
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.True(t, placed.Spec.ReducePositionOnly)
+}
+
 func TestOrderServiceNeverSetsReducePositionOnlyForSpot(t *testing.T) {
 	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSpot)
 	spec := testSpec(service.now())
@@ -512,6 +543,72 @@ func TestServiceResolveUnknownFindsOrderOrReturnsPendingAfterWindow(t *testing.T
 	resolved, err = service.ResolveUnknown(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
 	require.Equal(t, "PENDING", string(resolved.State))
+}
+
+func TestServiceResolveUnknownFoundSynchronizesAuthoritativeState(t *testing.T) {
+	service, _, adapter := newTestService(t)
+	syncer := &syncerStub{}
+	service.Syncer = syncer
+	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
+	pending, err := service.Place(
+		context.Background(),
+		"space-1",
+		testSpec(time.Unix(1_700_000_000, 0)),
+	)
+	require.NoError(t, err)
+	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.Error(t, err)
+
+	adapter.getErr = nil
+	adapter.getResult = exchange.Order{
+		ExchangeOrderID: "recovered-order",
+		Status:          exchange.OrderStatusFilled,
+		FilledQuantity:  shared.MustDecimal("1"),
+		UpdatedAt:       service.now(),
+	}
+	resolved, err := service.ResolveUnknown(
+		context.Background(),
+		"space-1",
+		string(pending.ID),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, syncer.calls)
+	require.Equal(t, orderdomain.Open, resolved.State)
+	require.Equal(t, "recovered-order", resolved.ExchangeOrderID)
+}
+
+func TestServiceSubmitUnknownFoundSynchronizesAuthoritativeState(t *testing.T) {
+	service, _, adapter := newTestService(t)
+	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
+	pending, err := service.Place(
+		context.Background(),
+		"space-1",
+		testSpec(time.Unix(1_700_000_000, 0)),
+	)
+	require.NoError(t, err)
+	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.Error(t, err)
+
+	syncer := &syncerStub{}
+	service.Syncer = syncer
+	adapter.getErr = nil
+	adapter.getResult = exchange.Order{
+		ExchangeOrderID: "recovered-order",
+		Status:          exchange.OrderStatusFilled,
+		FilledQuantity:  shared.MustDecimal("1"),
+		UpdatedAt:       service.now(),
+	}
+	resolved, err := service.Submit(
+		context.Background(),
+		"space-1",
+		string(pending.ID),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, syncer.calls)
+	require.Equal(t, orderdomain.Open, resolved.State)
+	require.Equal(t, "recovered-order", resolved.ExchangeOrderID)
 }
 
 func TestServiceSubmitAcceptsFillThatRacesWithAcknowledgement(t *testing.T) {
