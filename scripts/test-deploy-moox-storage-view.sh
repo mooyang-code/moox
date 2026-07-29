@@ -123,7 +123,7 @@ MOOX_EVENTBUS_ENABLE_TLS=1 "${ROOT}/scripts/deploy-moox.sh" \
   --no-web-host \
   --no-cloudnode \
   --no-collector \
-  --no-factor --no-strategy \
+  --no-factor --no-strategy --no-trade \
   --no-monitor \
   "${GATEWAY_ARGS[@]}" >/dev/null
 
@@ -148,7 +148,7 @@ assert_grep '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${DEPLOY_DIR}/secret
 assert_grep '^MOOX_HEALTH_AUTH_VERSION=moox-health-v1$' "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/health-auth.env"
 secret_before=$(cat "${DEPLOY_DIR}/secrets/health-auth.env")
-MOOX_EVENTBUS_ENABLE_TLS=1 "${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --with-storage-node --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
+MOOX_EVENTBUS_ENABLE_TLS=1 "${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --with-storage-node --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
 [[ $(cat "${DEPLOY_DIR}/secrets/health-auth.env") == "${secret_before}" ]] || { echo 'health auth secret changed on redeploy' >&2; exit 1; }
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/healthcheck.sh"

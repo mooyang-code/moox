@@ -273,8 +273,8 @@ services:
     port: 11210
     gateway_enabled: false
     scope: internal
-    status: disabled
-    description: 交易执行和账本服务
+    status: active
+    description: 量化交易执行服务
     extra_config:
       health_url: http://127.0.0.1:11210/readyz
       health_kind: readiness

@@ -21,6 +21,7 @@ WITH_CLOUDNODE=1
 WITH_COLLECTOR=1
 WITH_FACTOR=1
 WITH_STRATEGY=1
+WITH_TRADE=1
 WITH_MONITOR=1
 WITH_ADMIN=1
 WITH_GATEWAY=1
@@ -110,6 +111,7 @@ Options:
   --no-collector                  Do not package/start moox-collector.
   --no-factor                     Do not package/start moox-factor.
   --no-strategy                   Do not package/start moox-strategy.
+  --no-trade                      Do not package/start moox-trade.
   --no-monitor                    Do not package/start moox-monitor.
   --no-gateway                    Do not package/start moox-gateway; use an existing same-host gateway.
   --no-admin                      Build a data-plane node without Admin, browser assets, schema, or credentials.
@@ -153,7 +155,8 @@ apply_profile() {
       WITH_CLOUDNODE=1
       WITH_COLLECTOR=1
       WITH_FACTOR=0
-      WITH_STRATEGY=0
+      WITH_STRATEGY=1
+      WITH_TRADE=1
       WITH_MONITOR=1
       ;;
     storage)
@@ -169,6 +172,7 @@ apply_profile() {
       WITH_COLLECTOR=0
       WITH_FACTOR=0
       WITH_STRATEGY=0
+      WITH_TRADE=0
       WITH_MONITOR=0
       STORAGE_EXTERNAL_LISTEN=1
       ;;
@@ -465,6 +469,10 @@ while [[ $# -gt 0 ]]; do
       WITH_STRATEGY=0
       shift
       ;;
+    --no-trade)
+      WITH_TRADE=0
+      shift
+      ;;
     --no-monitor)
       WITH_MONITOR=0
       shift
@@ -736,6 +744,10 @@ build_core_binaries() {
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" strategy
   fi
+  if [[ "${WITH_TRADE}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" trade
+  fi
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" monitor
@@ -876,6 +888,12 @@ patch_configs() {
     perl -0pi -e 's#database:\s*\./data/strategy\.sqlite#database: ../data/strategy/strategy.sqlite#g; s#python_bin:\s*python3#python_bin: ../data/strategy/venv/bin/python#g' \
       "${STAGE_DIR}/strategy/config/app.yaml"
   fi
+  if [[ "${WITH_TRADE}" -eq 1 ]]; then
+    perl -0pi -e 's#path:\s*\./data/moox_trade\.db#path: ../data/trade/moox_trade.db#g' \
+      "${STAGE_DIR}/trade/config/app.yaml"
+    perl -0pi -e 's#log_path:\s*\./log#log_path: ../logs/trade#g' \
+      "${STAGE_DIR}/trade/config/trpc_go.yaml"
+  fi
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/monitor/monitor\.db#path: ../data/monitor/monitor.db#g' \
       "${STAGE_DIR}/monitor/config/app.yaml"
@@ -911,12 +929,14 @@ PY
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/cloudnode-eventbus.yaml#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/factor-eventbus.yaml#' "${STAGE_DIR}/factor/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/strategy-eventbus.yaml#' "${STAGE_DIR}/strategy/config/app.yaml"
+    [[ "${WITH_TRADE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/trade-eventbus.yaml#' "${STAGE_DIR}/trade/config/app.yaml"
     [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ~/.config/moox/eventbus/monitor-observability.yaml#' "${STAGE_DIR}/monitor/config/app.yaml"
   else
     [[ "${WITH_ARCHIVE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/archive/config/app.yaml"
     [[ "${WITH_CLOUDNODE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/cloudnode/config/app.yaml"
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/factor/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/strategy/config/app.yaml"
+    [[ "${WITH_TRADE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/trade/config/app.yaml"
     [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/monitor/config/app.yaml"
   fi
 
@@ -1057,6 +1077,7 @@ WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
+WITH_TRADE="${MOOX_WITH_TRADE:-__WITH_TRADE__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
@@ -1094,7 +1115,7 @@ if [[ "${WITH_ADMIN}" == "1" ]]; then
   MOOX_ADMIN_NODE_ID="${MOOX_ADMIN_NODE_ID:-__NODE_ID__}"
 fi
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
-mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/gateway" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/strategy" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/gateway" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-primary" "${ROOT}/logs/storage-view" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/strategy" "${ROOT}/logs/monitor"
+mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/gateway" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/strategy" "${ROOT}/data/trade" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/gateway" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-primary" "${ROOT}/logs/storage-view" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/strategy" "${ROOT}/logs/trade" "${ROOT}/logs/monitor"
 chmod 0700 "${ROOT}/data/gateway"
 
 source "${ROOT}/lib/loopback-listeners.sh"
@@ -1360,6 +1381,7 @@ probe_service() {
     eventbus) url=http://127.0.0.1:11419/readyz ;;
     factor) url=http://127.0.0.1:11414/readyz ;;
     strategy) url=http://127.0.0.1:11431/readyz ;;
+    trade) url=http://127.0.0.1:11210/readyz ;;
     monitor) url=http://127.0.0.1:11409/readyz ;;
     web-host) url=http://127.0.0.1:19527/readyz ;;
     storage-primary) url=http://127.0.0.1:20210/readyz ;;
@@ -1501,6 +1523,15 @@ init_collector_schema() {
   (
     cd "${ROOT}/collector"
     "${ROOT}/bin/moox-collector-cli" init --db-path ../data/collector/moox_collector.db >> "${ROOT}/logs/collector/stdout.log" 2>&1
+  )
+}
+
+init_trade_schema() {
+  echo "initializing trade schema"
+  mkdir -p "${ROOT}/logs/trade"
+  (
+    cd "${ROOT}/trade"
+    "${ROOT}/bin/moox-trade-cli" init --db-path ../data/trade/moox_trade.db >> "${ROOT}/logs/trade/stdout.log" 2>&1
   )
 }
 
@@ -1671,6 +1702,7 @@ start_admin() {
     [[ "${WITH_FACTOR}" == "1" ]] || disabled_services+=(moox_factor)
     [[ "${WITH_MONITOR}" == "1" ]] || disabled_services+=(moox_monitor)
     [[ "${WITH_STRATEGY}" == "1" ]] || disabled_services+=(moox_strategy)
+    [[ "${WITH_TRADE}" == "1" ]] || disabled_services+=(moox_trade)
     [[ "${WITH_WEB_HOST}" == "1" ]] || disabled_services+=(web_host)
     if (( ${#disabled_services[@]} > 0 )); then
       local disabled_services_csv
@@ -1778,6 +1810,23 @@ start_strategy() {
       "${ROOT}/bin/moox-strategy" -conf=config/trpc_go.yaml
 }
 
+start_trade() {
+  if [[ "${WITH_TRADE}" != "1" ]]; then
+    echo "trade is disabled in this deployment package" >&2
+    exit 2
+  fi
+  init_trade_schema
+  wait_nats trade "${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" "${MOOX_WAIT_TRADE_NATS_SECONDS:-60}"
+  gateway_service_env_for trade
+  runtime_identity_env moox_trade "${ROOT}/trade/config/app.yaml"
+  start_service "trade" "${ROOT}/trade" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+      "MOOX_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" \
+      "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
+      "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+      "${ROOT}/bin/moox-trade" -conf=config/trpc_go.yaml
+}
+
 start_monitor() {
   if [[ "${WITH_MONITOR}" != "1" ]]; then
     echo "monitor is disabled in this deployment package" >&2
@@ -1848,6 +1897,9 @@ case "${SERVICE}" in
     if [[ "${WITH_STRATEGY}" == "1" ]]; then
       start_strategy
     fi
+    if [[ "${WITH_TRADE}" == "1" ]]; then
+      start_trade
+    fi
     if [[ "${WITH_WEB_HOST}" == "1" ]]; then
       start_web_host
     fi
@@ -1893,12 +1945,13 @@ case "${SERVICE}" in
   collector) start_collector ;;
   factor) start_factor ;;
   strategy) start_strategy ;;
+  trade) start_trade ;;
   monitor) start_monitor ;;
   gateway) start_gateway ;;
   admin) start_admin ;;
   web-host) start_web_host ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-primary storage-view storage-node cloudnode collector factor strategy monitor admin gateway web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-primary storage-view storage-node cloudnode collector factor strategy trade monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -1923,6 +1976,7 @@ WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
+WITH_TRADE="${MOOX_WITH_TRADE:-__WITH_TRADE__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
@@ -2039,6 +2093,9 @@ case "${SERVICE}" in
     if [[ "${WITH_STRATEGY}" == "1" ]]; then
       stop_service "strategy"
     fi
+    if [[ "${WITH_TRADE}" == "1" ]]; then
+      stop_service "trade"
+    fi
     if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
       stop_service "cloudnode"
     fi
@@ -2126,6 +2183,13 @@ case "${SERVICE}" in
     fi
     stop_service "${SERVICE}"
     ;;
+  trade)
+    if [[ "${WITH_TRADE}" != "1" ]]; then
+      echo "trade is disabled in this deployment package" >&2
+      exit 2
+    fi
+    stop_service "${SERVICE}"
+    ;;
   monitor)
     if [[ "${WITH_MONITOR}" != "1" ]]; then
       echo "monitor is disabled in this deployment package" >&2
@@ -2134,7 +2198,7 @@ case "${SERVICE}" in
     stop_service "${SERVICE}"
     ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-primary storage-view storage-node cloudnode collector factor strategy monitor admin gateway web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-primary storage-view storage-node cloudnode collector factor strategy trade monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -2170,6 +2234,7 @@ WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
+WITH_TRADE="${MOOX_WITH_TRADE:-__WITH_TRADE__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
@@ -2224,6 +2289,9 @@ fi
 if [[ "${WITH_STRATEGY}" == "1" ]]; then
   services=(strategy "${services[@]}")
 fi
+if [[ "${WITH_TRADE}" == "1" ]]; then
+  services=(trade "${services[@]}")
+fi
 
 for name in "${services[@]}"; do
   pid_file="${ROOT}/run/${name}.pid"
@@ -2256,6 +2324,7 @@ WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
 WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
+WITH_TRADE="${MOOX_WITH_TRADE:-__WITH_TRADE__}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
@@ -2296,6 +2365,7 @@ probe_service() {
     eventbus) url=http://127.0.0.1:11419/readyz ;;
     factor) url=http://127.0.0.1:11414/readyz ;;
     strategy) url=http://127.0.0.1:11431/readyz ;;
+    trade) url=http://127.0.0.1:11210/readyz ;;
     monitor) url=http://127.0.0.1:11409/readyz ;;
     web-host) url=http://127.0.0.1:19527/readyz ;;
     storage-primary) url=http://127.0.0.1:20210/readyz ;;
@@ -2339,6 +2409,9 @@ if [[ "${WITH_FACTOR}" == "1" ]]; then
 fi
 if [[ "${WITH_STRATEGY}" == "1" ]]; then
   default_services+=(strategy)
+fi
+if [[ "${WITH_TRADE}" == "1" ]]; then
+  default_services+=(trade)
 fi
 if [[ "${WITH_WEB_HOST}" == "1" ]]; then
   default_services+=(web-host)
@@ -2391,7 +2464,7 @@ ensure_service() {
 ) 9>"${ROOT}/run/healthcheck.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g; s#__PUBLIC_HOST__#${PUBLIC_HOST}#g; s#__SCF_SERVICE_GATEWAY_TARGET__#${scf_service_gateway_target}#g; s#__SCF_STORAGE_RPC_GATEWAY_TARGET__#${scf_storage_rpc_gateway_target}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_TRADE__#${WITH_TRADE}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g; s#__PUBLIC_HOST__#${PUBLIC_HOST}#g; s#__SCF_SERVICE_GATEWAY_TARGET__#${scf_service_gateway_target}#g; s#__SCF_STORAGE_RPC_GATEWAY_TARGET__#${scf_storage_rpc_gateway_target}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -2412,6 +2485,7 @@ prepare_stage() {
     "${STAGE_DIR}/strategy/pyworker" \
     "${STAGE_DIR}/strategy/pysdk" \
     "${STAGE_DIR}/strategy/strategies/example" \
+    "${STAGE_DIR}/trade/config" \
     "${STAGE_DIR}/python-runtime" \
     "${STAGE_DIR}/monitor/config" \
     "${STAGE_DIR}/examples" \
@@ -2465,7 +2539,7 @@ prepare_stage() {
   (umask 077; printf '%s\n' "${gateway_service_secret}" >"${STAGE_DIR}/secrets/gateway-service.key")
   command -v openssl >/dev/null 2>&1 || fail "openssl is required to derive Gateway service credentials"
   local caller derived_secret
-  for caller in collector factor monitor archive storage-view storage-primary strategy cloudnode moox-cli; do
+  for caller in collector factor monitor archive storage-view storage-primary strategy trade cloudnode moox-cli; do
     derived_secret=$(printf 'moox-gateway-service-v1:%s' "${caller}" | openssl dgst -sha256 -hmac "${gateway_service_secret}" -r | awk '{print $1}')
     [[ -n "${derived_secret}" ]] || fail "failed to derive Gateway credential for ${caller}"
     (umask 077; printf '%s\n' "${derived_secret}" >"${STAGE_DIR}/secrets/gateway-${caller}.key")
@@ -2515,7 +2589,7 @@ prepare_stage() {
     chmod 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env"
   fi
   cat >"${STAGE_DIR}/secrets/gateway-credentials.json" <<'EOF'
-{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"},{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"monitor","caller":"monitor","secret_file":"gateway-monitor.key"},{"key_id":"archive","caller":"archive","secret_file":"gateway-archive.key"},{"key_id":"storage-view","caller":"storage-view","secret_file":"gateway-storage-view.key"},{"key_id":"storage-primary","caller":"storage-primary","secret_file":"gateway-storage-primary.key"},{"key_id":"strategy","caller":"strategy","secret_file":"gateway-strategy.key"},{"key_id":"cloudnode","caller":"cloudnode","secret_file":"gateway-cloudnode.key"},{"key_id":"moox-cli","caller":"moox-cli","secret_file":"gateway-moox-cli.key"}]}
+{"version":1,"credentials":[{"key_id":"moox-gateway-service","caller":"admin-gateway","secret_file":"gateway-service.key"},{"key_id":"collector","caller":"collector","secret_file":"gateway-collector.key"},{"key_id":"factor","caller":"factor","secret_file":"gateway-factor.key"},{"key_id":"monitor","caller":"monitor","secret_file":"gateway-monitor.key"},{"key_id":"archive","caller":"archive","secret_file":"gateway-archive.key"},{"key_id":"storage-view","caller":"storage-view","secret_file":"gateway-storage-view.key"},{"key_id":"storage-primary","caller":"storage-primary","secret_file":"gateway-storage-primary.key"},{"key_id":"strategy","caller":"strategy","secret_file":"gateway-strategy.key"},{"key_id":"trade","caller":"trade","secret_file":"gateway-trade.key"},{"key_id":"cloudnode","caller":"cloudnode","secret_file":"gateway-cloudnode.key"},{"key_id":"moox-cli","caller":"moox-cli","secret_file":"gateway-moox-cli.key"}]}
 EOF
   {
     printf 'MOOX_GATEWAY_SERVICE_KEY_ID=moox-cli\n'
@@ -2605,6 +2679,10 @@ EOF
     copy_required_binary "moox-strategy"
     copy_required_binary "moox-strategy-cli"
   fi
+  if [[ "${WITH_TRADE}" -eq 1 ]]; then
+    copy_required_binary "moox-trade"
+    copy_required_binary "moox-trade-cli"
+  fi
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     copy_required_binary "moox-monitor"
     copy_required_binary "moox-monitor-cli"
@@ -2656,6 +2734,9 @@ EOF
     cp -R "${ROOT}/modules/strategy/strategies/example/." "${STAGE_DIR}/strategy/strategies/example/"
     find "${STAGE_DIR}/strategy" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
     find "${STAGE_DIR}/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o -name '*.db' \) -delete
+  fi
+  if [[ "${WITH_TRADE}" -eq 1 ]]; then
+    cp -R "${ROOT}/modules/trade/config/." "${STAGE_DIR}/trade/config/"
   fi
   if [[ "${WITH_FACTOR}" -eq 1 || "${WITH_STRATEGY}" -eq 1 ]]; then
     cp -R "${ROOT}/packages/pyruntime/python/." "${STAGE_DIR}/python-runtime/"
@@ -2736,6 +2817,9 @@ sync_local_stage() {
       if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" strategy || true
       fi
+      if [[ "${WITH_TRADE}" -eq 1 ]]; then
+        "${deploy_dir}/stop.sh" trade || true
+      fi
       if [[ "${WITH_MONITOR}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" monitor || true
       fi
@@ -2791,6 +2875,9 @@ sync_local_stage() {
     if [[ "${WITH_STRATEGY}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/strategy/' --exclude '/bin/moox-strategy' --exclude '/bin/moox-strategy-cli')
     fi
+    if [[ "${WITH_TRADE}" -eq 0 ]]; then
+      rsync_excludes+=(--exclude '/trade/' --exclude '/bin/moox-trade' --exclude '/bin/moox-trade-cli')
+    fi
     if [[ "${WITH_FACTOR}" -eq 0 && "${WITH_STRATEGY}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/python-runtime/')
     fi
@@ -2835,6 +2922,10 @@ sync_local_stage() {
       rm -rf "${deploy_dir}/strategy"
       rm -f "${deploy_dir}/bin/moox-strategy" "${deploy_dir}/bin/moox-strategy-cli"
     fi
+    if [[ "${WITH_TRADE}" -eq 1 ]]; then
+      rm -rf "${deploy_dir}/trade"
+      rm -f "${deploy_dir}/bin/moox-trade" "${deploy_dir}/bin/moox-trade-cli"
+    fi
     if [[ "${WITH_MONITOR}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/monitor"
       rm -f "${deploy_dir}/bin/moox-monitor" "${deploy_dir}/bin/moox-monitor-cli"
@@ -2867,7 +2958,7 @@ sync_local_stage() {
   if [[ -f "${STAGE_DIR}/secrets/health-auth.env" ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/health-auth.env" "${deploy_dir}/secrets/health-auth.env"
   fi
-  for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key; do
+  for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-trade.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key; do
     install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
   done
   install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
@@ -2933,7 +3024,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -2945,6 +3036,7 @@ sync_remote_stage() {
   quoted_with_collector="$(shell_quote "${WITH_COLLECTOR}")"
   quoted_with_factor="$(shell_quote "${WITH_FACTOR}")"
   quoted_with_strategy="$(shell_quote "${WITH_STRATEGY}")"
+  quoted_with_trade="$(shell_quote "${WITH_TRADE}")"
   quoted_with_monitor="$(shell_quote "${WITH_MONITOR}")"
   quoted_with_web_host="$(shell_quote "${WITH_WEB_HOST}")"
   quoted_with_admin="$(shell_quote "${WITH_ADMIN}")"
@@ -2962,7 +3054,7 @@ sync_remote_stage() {
   quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
   quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
@@ -3010,6 +3102,7 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     [[ "${WITH_COLLECTOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" collector || true
     [[ "${WITH_FACTOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" factor || true
     [[ "${WITH_STRATEGY}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" strategy || true
+    [[ "${WITH_TRADE}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" trade || true
     [[ "${WITH_MONITOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" monitor || true
     [[ "${WITH_CLOUDNODE}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" cloudnode || true
     [[ "${WITH_EVENTBUS}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" eventbus || true
@@ -3066,6 +3159,10 @@ fi
 if [[ "${WITH_STRATEGY}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/strategy"
   rm -f "${DEPLOY_DIR}/bin/moox-strategy" "${DEPLOY_DIR}/bin/moox-strategy-cli"
+fi
+if [[ "${WITH_TRADE}" == "1" ]]; then
+  rm -rf "${DEPLOY_DIR}/trade"
+  rm -f "${DEPLOY_DIR}/bin/moox-trade" "${DEPLOY_DIR}/bin/moox-trade-cli"
 fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/storage" "${DEPLOY_DIR}/storage-view" "${DEPLOY_DIR}/storage-node"

@@ -40,7 +40,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --goos linux --goarch amd64 --skip-build --node-id strategy \
   --gateway-control-url http://127.0.0.1:11000 \
   --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode \
-  --no-collector --no-factor --no-monitor >/dev/null
+  --no-collector --no-factor --no-trade --no-monitor >/dev/null
 
 mkdir "${TMP_ROOT}/unpacked"
 tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"

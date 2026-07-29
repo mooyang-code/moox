@@ -68,6 +68,7 @@ seed_disabled_component cloudnode moox-cloudnode moox-cloudnode-cli
 seed_disabled_component collector moox-collector moox-collector-cli moox-collector-scf
 seed_disabled_component factor moox-factor moox-factor-cli
 seed_disabled_component strategy moox-strategy moox-strategy-cli
+seed_disabled_component trade moox-trade moox-trade-cli
 seed_disabled_component storage moox-storage moox-storage-cli
 mkdir -p "${DEPLOY_DIR}/python-runtime/moox_pyruntime"
 printf 'keep-runtime\n' >"${DEPLOY_DIR}/python-runtime/moox_pyruntime/keep.txt"
@@ -91,7 +92,7 @@ cat "${TMP_ROOT}/ca-one.crt" "${TMP_ROOT}/ca-two.crt" >"${TMP_ROOT}/peers.pem"
   --no-web-host \
   --no-cloudnode \
   --no-collector \
-  --no-factor --no-strategy \
+  --no-factor --no-strategy --no-trade \
   --no-monitor \
   --node-id preserve-test \
   --gateway-control-url http://127.0.0.1:11000 \
@@ -104,6 +105,7 @@ for path in \
   collector/config/keep.txt \
   factor/config/keep.txt \
   strategy/config/keep.txt \
+  trade/config/keep.txt \
   python-runtime/moox_pyruntime/keep.txt \
   storage/config/keep.txt \
   bin/moox-cloudnode \
@@ -115,6 +117,8 @@ for path in \
   bin/moox-factor-cli \
   bin/moox-strategy \
   bin/moox-strategy-cli \
+  bin/moox-trade \
+  bin/moox-trade-cli \
   bin/moox-storage \
   bin/moox-storage-cli
 do

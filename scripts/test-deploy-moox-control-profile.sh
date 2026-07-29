@@ -32,13 +32,17 @@ ln -s "${ROOT}/modules/eventbus" "${FIXTURE_ROOT}/modules/eventbus"
 ln -s "${ROOT}/modules/cloudnode" "${FIXTURE_ROOT}/modules/cloudnode"
 ln -s "${ROOT}/modules/collector" "${FIXTURE_ROOT}/modules/collector"
 ln -s "${ROOT}/modules/monitor" "${FIXTURE_ROOT}/modules/monitor"
+ln -s "${ROOT}/modules/strategy" "${FIXTURE_ROOT}/modules/strategy"
+ln -s "${ROOT}/modules/trade" "${FIXTURE_ROOT}/modules/trade"
 ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
+ln -s "${ROOT}/packages/pyruntime" "${FIXTURE_ROOT}/packages/pyruntime"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 
 for binary in \
   moox-admin moox-cli moox-gateway moox-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
   moox-collector moox-collector-cli moox-collector-scf \
+  moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
@@ -77,10 +81,11 @@ for binary in \
   moox-admin moox-admin-cli moox-cli moox-gateway moox-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
   moox-collector moox-collector-cli moox-collector-scf \
+  moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing control binary: ${binary}" >&2; exit 1; }
 done
-for binary in moox-storage moox-archive moox-factor moox-strategy; do
+for binary in moox-storage moox-archive moox-factor; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected control binary: ${binary}" >&2; exit 1; }
 done
 [[ -s "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" ]]
@@ -90,6 +95,23 @@ grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/se
 [[ ! -e "${TMP_ROOT}/unpacked/storage" ]]
 [[ -d "${TMP_ROOT}/unpacked/cloudnode" ]]
 [[ -d "${TMP_ROOT}/unpacked/collector" ]]
+[[ -d "${TMP_ROOT}/unpacked/strategy" ]]
+[[ -d "${TMP_ROOT}/unpacked/trade" ]]
+grep -Fq 'WITH_STRATEGY="${MOOX_WITH_STRATEGY:-1}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'WITH_TRADE="${MOOX_WITH_TRADE:-1}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'start_strategy' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'start_trade' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'trade) url=http://127.0.0.1:11210/readyz' "${TMP_ROOT}/unpacked/healthcheck.sh"
+grep -Fq 'path: ../data/trade/moox_trade.db' "${TMP_ROOT}/unpacked/trade/config/app.yaml"
+grep -Fq 'log_path: ../logs/trade' "${TMP_ROOT}/unpacked/trade/config/trpc_go.yaml"
+grep -Fq '"caller":"trade","secret_file":"gateway-trade.key"' \
+  "${TMP_ROOT}/unpacked/secrets/gateway-credentials.json"
+[[ -s "${TMP_ROOT}/unpacked/secrets/gateway-trade.key" ]]
+grep -Fq 'services=(trade "${services[@]}")' "${TMP_ROOT}/unpacked/status.sh"
+grep -Fq 'stop_service "trade"' "${TMP_ROOT}/unpacked/stop.sh"
+! rg -n '__WITH_(STRATEGY|TRADE)__' "${TMP_ROOT}/unpacked/start.sh" \
+  "${TMP_ROOT}/unpacked/stop.sh" "${TMP_ROOT}/unpacked/status.sh" \
+  "${TMP_ROOT}/unpacked/healthcheck.sh"
 grep -q '^node_batch:' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
 grep -q '  batch_size: 3' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
 grep -q '  poll_interval: 500ms' "${TMP_ROOT}/unpacked/cloudnode/config/app.yaml"
@@ -108,7 +130,7 @@ PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --package-only --archive "${DEFAULT_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-default" --stage "${TMP_ROOT}/stage-default" \
   --goos linux --goarch amd64 --skip-build --reuse-web-assets \
-  --no-storage --no-archive --no-factor --no-strategy --no-monitor \
+  --no-storage --no-archive --no-factor --no-strategy --no-trade --no-monitor \
   --node-id control --gateway-control-url http://127.0.0.1:11000 >/dev/null
 
 mkdir "${TMP_ROOT}/unpacked-default"

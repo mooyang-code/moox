@@ -49,7 +49,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		withExtra(deployment("moox_strategy", "strategy", "http", "127.0.0.1", 11430, "trpc.moox.strategy.StrategyMgr", "internal", "交易策略运行、目标和绩效查询服务"), `{"health_url":"http://127.0.0.1:11431/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_archive", "archive", "http", "127.0.0.1", 11416, "", "internal", "事件归档和物化服务"), `{"health_url":"http://127.0.0.1:11416/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		withExtra(deployment("moox_hostagent", "hostagent", "http", "127.0.0.1", 11426, "trpc.moox.hostagent.HostAgentMgr", "internal", "主机指标采集代理"), `{"health_url":"http://127.0.0.1:11425/readyz","health_kind":"readiness","monitor_enabled":true}`),
-		withExtra(deployment("moox_trade", "trade", "http", "127.0.0.1", 11210, "", "internal", "交易执行和账本服务"), `{"health_url":"http://127.0.0.1:11210/readyz","health_kind":"readiness","monitor_enabled":true}`),
+		withExtra(deployment("moox_trade", "trade", "http", "127.0.0.1", 11210, "", "internal", "量化交易执行服务"), `{"health_url":"http://127.0.0.1:11210/readyz","health_kind":"readiness","monitor_enabled":true}`),
 		deployment("ssh", "admin_rpc", "http", "127.0.0.1", 11106, "trpc.moox.ops.Ssh", "internal", "SSH 管理 RPC 服务"),
 		deployment("space", "admin_rpc", "http", "127.0.0.1", 11107, "trpc.moox.admin.SpaceMgr", "internal", "空间管理 RPC 服务"),
 		deployment("secret", "admin_rpc", "http", "127.0.0.1", 11108, "trpc.moox.ops.SecretMgr", "internal", "秘钥管理 RPC 服务"),
@@ -63,7 +63,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 	}
 	for i := range rows {
 		rows[i].NodeID = nodeID
-		if rows[i].ServiceName == "moox_hostagent" || rows[i].ServiceName == "moox_trade" {
+		if rows[i].ServiceName == "moox_hostagent" {
 			rows[i].Status = "disabled"
 		}
 		switch rows[i].ServiceName {
