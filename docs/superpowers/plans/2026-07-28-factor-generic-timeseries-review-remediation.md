@@ -37,7 +37,7 @@ date:       2026-07-28
 | --- | --- |
 | worker 生命周期 | `947d457a`、`b28f66d7`、`64aac8be`、`8cef9002`、`856f6f4d` |
 | null 清值 | `b82cd977` |
-| 通用时序契约 | `a24b1b6b`、`cde53019`、`cce11d51`、`9f3b125e`、`fe1c3503` |
+| 通用时序契约 | `a24b1b6b`、`cde53019`、`cce11d51`、`9f3b125e`、`fe1c3503`、`2eb5943a` |
 | metadata 与启用顺序 | `1eca9599`、`0968fb5e`、`28b084f2`、`d9925c7b` |
 | realtime 范围合并 | `5a32d210`、`ae6b39be`、`7a13b86d`、`8efd4754` |
 | run-once 与发布 | `28fd1e54`、`71dd1fe9`、`18cabe65`、`d2c8e67c`、`e566a91e` |
@@ -1997,7 +1997,7 @@ worker lifecycle: go test -race ./process -count=10
 web: 39 files / 127 tests; production build; ESLint; Prettier
 workspace: ./scripts/test-go-workspace.sh
 contracts: make proto-check; verify-event-contracts; release/deploy factor contracts
-real E2E: /tmp/moox-factor-storage-e2e-run12, TestFactorRealStorageE2E passed
+real E2E: /tmp/moox-factor-storage-e2e-run13, TestFactorRealStorageE2E passed
 ```
 
 真实 E2E 使用最终分支重新构建并部署 Admin、Gateway、EventBus、Storage、Factor，
