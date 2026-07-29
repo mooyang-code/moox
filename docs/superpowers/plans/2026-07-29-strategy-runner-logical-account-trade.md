@@ -4,7 +4,7 @@
 
 **目标：** 将 Strategy 与 Trade 收敛为适合个人量化的通用执行链：不可变 Strategy、可运行的 StrategyRunner、同质 LogicalAccount、FULL 组合目标、动态择优执行，以及可暂停、人工下单和一键清仓的操作入口。
 
-**架构：** Strategy 是只基于完整历史窗口和参数的无状态函数，只产生按 `instrument_id` 表达的完整理论组合；Trade 以 LogicalAccount 独占执行 ownership，串行 TargetExecutor 每轮最多做一个外部动作。自动执行和人工干预共享订单服务，但 ownership 由服务端赋值。账户私有流和定期同步仍以物理 ExchangeAccount 为边界，LogicalAccount 只聚合控制状态、就绪度和执行选择。
+**架构：** Strategy 是只基于完整历史窗口和参数的无状态函数，只产生按 `instrument_id` 表达的完整理论组合；Trade 以 LogicalAccount 独占执行 ownership，串行 TargetExecutor 每轮最多做一个外部动作。自动执行和人工干预共享订单服务，但 ownership 由服务端赋值。账户私有流和定期同步仍以物理 ExchangeAccount 为边界，LogicalAccount 只聚合自动执行状态、就绪度和执行选择。
 
 **技术栈：** Go、tRPC/Protobuf、SQLite、JetStream、Python Strategy SDK/Worker、Vue/TypeScript、Binance/OKX API。
 
@@ -16,7 +16,7 @@
 
 - 新项目不迁移旧 Strategy/Trade schema，不做双写、双读或兼容别名；检测到旧表或旧列时拒绝启动，并给出重建数据库的明确错误。
 - 不引入 Saga、分布式锁、通用任务引擎、算法插件体系、账户内虚拟仓位或多 Runner 组合聚合层。
-- 一个启用的 LogicalAccount 最多由一个启用的 StrategyRunner 控制；一个物理 ExchangeAccount 最多属于一个启用的 LogicalAccount。
+- 一个 LogicalAccount 最多由一个启用的 StrategyRunner 控制；一个物理 ExchangeAccount 最多在一个 LogicalAccount 中拥有 enabled 成员关系。
 - StrategyRunner 可以没有 LogicalAccount，此时为观察模式；一个 StrategyRunner 只控制一个 LogicalAccount，一个 Strategy 可创建多个 Runner。
 - LogicalAccount 成员必须同为 paper 或 live、同为 SPOT 或 SWAP、同一 settlement asset；允许来自不同 Exchange，自动执行时动态择优。
 - LogicalAccount 处于 `PAUSED` 时继续维护物理账户 session、私有流和同步，只禁止新的自动 TARGET 子订单。
@@ -621,6 +621,8 @@ git commit -m "feat(strategy): define stateless full target contract"
 ```text
 TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger
 TestOpenRejectsSingleAccountTargetAndLedgerSchema
+TestLogicalAccountSchemaKeepsSettlementAssetAndUsesAutomationState
+TestLogicalAccountSchemaHasNoControlRevision
 TestLogicalAccountMembershipEnforcesOneEnabledMembershipPerPhysicalAccount
 TestAcceptLogicalAccountTargetUsesOwnerAndKeepsMaximumSequence
 TestAcceptLogicalAccountTargetAllowsEmptyFullWhilePaused
@@ -650,8 +652,7 @@ CREATE TABLE t_logical_accounts (
     execution_mode     TEXT NOT NULL,
     market_type        TEXT NOT NULL,
     settlement_asset   TEXT NOT NULL,
-    control_state      TEXT NOT NULL,
-    control_revision   INTEGER NOT NULL,
+    automation_state   TEXT NOT NULL,
     pause_reason       TEXT,
     created_at         INTEGER NOT NULL,
     updated_at         INTEGER NOT NULL,
@@ -674,7 +675,9 @@ ON t_logical_account_members(space_id, exchange_account_id)
 WHERE enabled = 1;
 ```
 
-`execution_mode` 只允许 `PAPER|LIVE`；`control_state` 只允许 `ACTIVE|PAUSED|FLATTENING|DISABLED`。ExchangeAccount 另存静态 `PAPER|TESTNET|PRODUCTION` 环境 profile。成员的 execution mode、环境 profile、market type 和 settlement asset 必须同质；`priority` 只是稳定选择顺序，实时容量从账户快照和 Exchange 约束计算，不存分配权重。
+`execution_mode` 只允许 `PAPER|LIVE`；`automation_state` 只允许 `ACTIVE|PAUSED`，新建 LogicalAccount 初始为 `PAUSED`。`settlement_asset` 保持与 ExchangeAccount、Instrument 的领域术语一致，它定义同质账户组统一的结算/保证金资产，并用于 SPOT 清仓时识别应保留的结算现金。ExchangeAccount 另存静态 `PAPER|TESTNET|PRODUCTION` 环境 profile。成员的 execution mode、环境 profile、market type 和 settlement asset 必须同质；`priority` 只是稳定选择顺序，实时容量从账户快照和 Exchange 约束计算，不存分配权重。
+
+不保存 `control_revision`。V1 是单进程、每个 LogicalAccount 串行执行；Pause、Resume、成员变更和 TARGET 子订单提交共享同一把 LogicalAccount 锁。TargetExecutor 从最终确认 `automation_state=ACTIVE`、创建订单到持久化 Submit 响应期间持续持有 LogicalAccount 锁；随后发生的 Pause 会取消刚形成的活动 TARGET 订单。`t_operator_actions` 已独立持久化人工操作状态，不再把 `FLATTENING` 重复编码进 LogicalAccount。
 
 - [ ] **5.4 将 TargetExecution 改为单行 LogicalAccountTarget**
 
@@ -914,7 +917,8 @@ git commit -m "feat(trade): route full targets through logical accounts"
 
 ```text
 TestLogicalAccountRejectsHeterogeneousMembers
-TestLogicalAccountMembershipChangeRequiresPausedOrDisabled
+TestLogicalAccountStartsPaused
+TestLogicalAccountMembershipChangeRequiresPaused
 TestRemoveMemberRejectsActiveOrdersOrPositions
 TestAddMemberRequiresAdoptionForExistingExposure
 TestLogicalAccountOwnerRunnerIsExclusive
@@ -932,18 +936,20 @@ go test -count=1 ./internal/application/logicalaccount ./internal/runtime ./inte
 
 - [ ] **7.3 实现同质性、成员变更和 owner 约束**
 
-LogicalAccount 只有在 PAUSED 或 DISABLED 时允许增删成员。加入已有订单/持仓/非 settlement SPOT 余额的账户必须显式 adoption；移除仍有活动订单或 exposure 的成员必须拒绝。
+LogicalAccount 只有在 `PAUSED` 时允许增删成员。加入已有订单/持仓/非 settlement SPOT 余额的账户必须显式 adoption；移除仍有活动订单或 exposure 的成员必须拒绝。
 
-控制状态：
+自动执行状态：
 
 ```go
+type AutomationState string
+
 const (
-    ControlActive   ControlState = "ACTIVE"
-    ControlPaused   ControlState = "PAUSED"
-    ControlFlattening ControlState = "FLATTENING"
-    ControlDisabled ControlState = "DISABLED"
+    AutomationActive AutomationState = "ACTIVE"
+    AutomationPaused AutomationState = "PAUSED"
 )
 ```
+
+不实现 LogicalAccount `DISABLED` 或 `FLATTENING` 状态：配置维护使用 `PAUSED`；清仓是否正在进行从 `t_operator_actions` 中 `action_type=FLATTEN AND status=RUNNING` 推导。
 
 - [ ] **7.4 实现聚合 readiness**
 
@@ -958,7 +964,7 @@ instrument metadata available
 no unresolved submit
 ```
 
-此外，当前 LogicalAccountTarget 的每个 `instrument_id` 都必须至少有一个 Ready member 可执行。任一成员 Not Ready 或目标无临时候选时，LogicalAccount readiness 为 false，自动执行门禁关闭并写明 member/instrument/reason；不要自动修改 operator control state，不要删除 session，不要引入 supervisor。
+此外，当前 LogicalAccountTarget 的每个 `instrument_id` 都必须至少有一个 Ready member 可执行。任一成员 Not Ready 或目标无临时候选时，LogicalAccount readiness 为 false，自动执行门禁关闭并写明 member/instrument/reason；不要自动修改 `automation_state`，不要删除 session，不要引入 supervisor。
 
 `ResumeLogicalAccount` 只有在没有 RUNNING OperatorAction、没有未解决 EXTERNAL 冲突、全部 enabled member Ready 且当前 targets 可解析时成功。恢复后从最新 LogicalAccountTarget 重新收敛，响应必须明确提示人工清仓后的旧 target 可能重新开仓。
 
@@ -1015,6 +1021,7 @@ TestTargetExecutorSubmitsOnlyOneChildPerPassAndRestoresAfterRestart
 TestTargetExecutorFullOmissionClosesPositionAndOwnedOrder
 TestTargetExecutorPausesWhenAnyMemberNotReady
 TestTargetExecutorPausesOnExternalOrderWithoutCancel
+TestTargetExecutorRechecksAutomationStateUnderLogicalLock
 TestTargetExecutorRecordsBelowMinimumBlockedTarget
 TestTargetExecutorInsufficientCapacityRecordsBlockedTarget
 TestListTargetLanesIncludesSpotBalancesAndUnmappedPositions
@@ -1045,7 +1052,7 @@ SPOT 余额用 base asset、LogicalAccount settlement asset 和 Instrument Regis
 固定决策顺序：
 
 ```text
-1. LogicalAccount 非 ACTIVE 或成员 Not Ready -> 不下单
+1. LogicalAccount automation_state 非 ACTIVE 或成员 Not Ready -> 不下单
 2. 非当前 runner 的 TARGET、OPERATOR、EXTERNAL 活动订单 -> PAUSED
 3. 待 cancel 的旧 TARGET -> cancel 一个并立即 return
 4. SUBMIT_UNKNOWN -> resolve 一个并立即 return
@@ -1057,6 +1064,8 @@ SPOT 余额用 base asset、LogicalAccount settlement asset 和 Instrument Regis
 ```
 
 动态择优只在同质成员间做；若第一候选容量不足，按稳定顺序落到下一候选。不能跨账户净掉相反仓位。
+
+步骤 5、6、7 的最终 ACTIVE 检查、订单创建、Exchange Submit 和响应持久化必须处于同一次 LogicalAccount 临界区内，并遵守 `LogicalAccount lock -> ExchangeAccount lock` 顺序。不得在释放 LogicalAccount 锁后把待提交订单交给异步任务，否则 Pause 之后仍可能产生新委托。
 
 - [ ] **8.5 实现 restart 恢复**
 
@@ -1186,6 +1195,7 @@ git commit -m "feat(trade): enforce trusted order ownership"
 TestManualOrderPausesAndCancelsTargetsBeforeSubmit
 TestManualOrderActionIDIsIdempotent
 TestFlattenFreshSyncsBeforeCancelAndClose
+TestFlattenUsesPausedAutomationStateAndRunningAction
 TestFlattenWaitsForCancellationConfirmation
 TestFlattenSkipsStaleFailedAccountAndContinuesOthers
 TestFlattenReportsPartialRemainingPositionsAndEndsPaused
@@ -1216,7 +1226,7 @@ Flatten 的含义是：将 LogicalAccount 每个物理成员的可交易风险�
 固定步骤：
 
 ```text
-1. 原子写入 FLATTENING、递增 control_revision，并读取全部成员，包括 disabled member
+1. 原子写入 LogicalAccount `automation_state=PAUSED` 和 `OperatorAction status=RUNNING`，并读取全部成员，包括 disabled member
 2. 对每个成员做 fresh SyncAccount；同步失败记录并继续其他成员
 3. 取消该成员所有 TARGET、OPERATOR、EXTERNAL 活动订单
 4. 再次同步，确认 cancel 已终态
@@ -1225,7 +1235,7 @@ Flatten 的含义是：将 LogicalAccount 每个物理成员的可交易风险�
 7. unmapped asset、dust、minimum violation 写入逐账户 remaining positions
 8. final sync
 9. COMPLETED：全部归零；PARTIAL：有 remaining position/账户失败；FAILED：没有任何成员可执行
-10. 无论 COMPLETED、PARTIAL 或 FAILED，最终都写回 PAUSED；执行期间保持 FLATTENING
+10. 无论 COMPLETED、PARTIAL 或 FAILED，LogicalAccount 始终保持 PAUSED；执行进度只由 OperatorAction 表达
 ```
 
 相同 `action_id` 重启或重试时，通过 `owner_id=action_id` 找回已有 child，禁止重复下单。
@@ -1341,6 +1351,8 @@ TradeExecutionService:
   ListFills
   ListPositions
 ```
+
+LogicalAccount 公共模型包含 `settlement_asset`、`automation_state` 和 `pause_reason`；不暴露 `control_state`、`control_revision`、`FLATTENING` 或 `DISABLED`。Flatten 的运行状态通过 `GetOperatorAction` 返回。
 
 删除公开的 `PauseAccount`、`PlaceOrder`、`SubmitTarget`。`PlaceManualOrder` 请求只含 `action_id`、目标 `exchange_account_id`、订单客户端字段、`fill_policy` 和 reason；服务端由物理账户反查所属 LogicalAccount，再暂停整个 LogicalAccount。请求不含 source、owner、strategy result、runner 或 `reduce_position_only`。
 
@@ -1510,7 +1522,7 @@ git commit -m "fix(trade): gate live trading and runtime readiness"
 
 - [ ] **13.1 先改 Web 测试**
 
-Web 只展示 Strategy、Runner、StrategyResult、当前完整 targets、LogicalAccount control/readiness 和 OperatorAction。删除 state summary 和无生产写入来源的 performance UI。
+Web 只展示 Strategy、Runner、StrategyResult、当前完整 targets、LogicalAccount `automation_state`/readiness 和 OperatorAction。删除 state summary 和无生产写入来源的 performance UI。
 
 ```text
 strategy API 返回 runner/result 字段
@@ -1533,7 +1545,7 @@ default port: 11202
 
 - [ ] **13.3 更新权威文档**
 
-`modules/trade/README.md + DESIGN.md` 作为 Trade 唯一事实源；Strategy 接入手册使用 `Strategy`、`StrategyRunner`、`StrategyResult`、LogicalAccount 和空 FULL 全平语义，并只描述三参数、完整历史窗口 Python entrypoint。删除 Saga、RebalanceSvc、Inbox、ExecutionBinding、StrategyDefinition/Run、state/next_state 和 state-format migration 的现役描述。
+`modules/trade/README.md + DESIGN.md` 作为 Trade 唯一事实源；Strategy 接入手册使用 `Strategy`、`StrategyRunner`、`StrategyResult`、LogicalAccount 和空 FULL 全平语义，并只描述三参数、完整历史窗口 Python entrypoint。删除 Saga、RebalanceSvc、Inbox、ExecutionBinding、StrategyDefinition/Run、state/next_state、state-format migration，以及 LogicalAccount `control_state`、`control_revision`、`FLATTENING`、`DISABLED` 的现役描述。
 
 历史 `docs/superpowers/plans/*` 不回写。
 
@@ -1687,7 +1699,7 @@ git status --short
 ```bash
 bash scripts/verify-event-contracts.sh
 bash scripts/test-greenfield-contract.sh
-rg -n 'StrategyDefinition|StrategyBinding|ExecutionBinding|StrategyRun|strategy_version|state_schema_version|state_format_version|state_json|state_revision|next_state|data_revision|not_after|TargetState|PortfolioExecutor|PortfolioWorker' \
+rg -n 'StrategyDefinition|StrategyBinding|ExecutionBinding|StrategyRun|strategy_version|state_schema_version|state_format_version|state_json|state_revision|next_state|data_revision|not_after|TargetState|PortfolioExecutor|PortfolioWorker|control_state|control_revision|ControlFlattening|ControlDisabled' \
   modules/strategy modules/trade packages web/src docs \
   --glob '!docs/superpowers/plans/**' \
   --glob '!docs/superpowers/specs/**'
@@ -1718,7 +1730,7 @@ pnpm docs:build
 Strategy 四表和不可变 artifact
 无状态完整历史窗口、input hash、Result/outbox 原子性
 空 FULL 跨 Go/Python/Event/Trade 的一致性
-LogicalAccount 同质性、ownership 和 readiness
+LogicalAccount 同质性、automation_state、ownership、锁门禁和 readiness
 TargetExecutor 一轮一个动作及 SPOT/SWAP FULL union
 OperatorAction 幂等、Flatten 重启和逐账户 remaining position
 OrderService unknown submit 恢复与 reducer 单调性
@@ -1785,6 +1797,7 @@ git status --short
 - Strategy 生产 schema 恰好四表，旧 schema 明确拒绝。
 - Strategy schema、Proto、Go、Python、manifest 和现役文档不存在 `state_json`、`state_revision`、`next_state`、`state_format_version` 或 `data_revision`。
 - Strategy/Trade/Web 只使用 Strategy、StrategyRunner、StrategyResult、LogicalAccount、LogicalAccountTarget、OperatorAction 术语。
+- LogicalAccount 保留 `settlement_asset`，只持久化 `automation_state=ACTIVE|PAUSED`，不存在 `control_revision`、`FLATTENING` 或 `DISABLED`。
 - 空 `rebalance` 从 Python 到 Trade LogicalAccountTarget 全链合法，并在 E2E 中让全部物理仓位归零。
 - 一个 LogicalAccount 的自动 TARGET 执行严格串行，每轮最多一个外部动作。
 - 人工 RPC 无法伪造 ownership，人工下单和一键清仓都会先暂停整个 LogicalAccount。

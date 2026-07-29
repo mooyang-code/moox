@@ -244,8 +244,7 @@ t_logical_accounts
   execution_mode          PAPER | LIVE
   market_type             SPOT | SWAP
   settlement_asset
-  control_state           ACTIVE | PAUSED | FLATTENING | DISABLED
-  control_revision
+  automation_state        ACTIVE | PAUSED
   pause_reason
   ctime + mtime
 
@@ -300,7 +299,8 @@ All enabled members must have the same:
 They may use different Exchanges. `priority` is a deterministic selection
 order, not an allocation weight.
 
-Membership changes require the logical account to be `PAUSED` or `DISABLED`.
+New logical accounts start `PAUSED`. Membership changes require the logical
+account to remain `PAUSED`.
 Removing a member with active orders or nonzero positions is rejected.
 Adding a member with active orders or nonzero positions requires an explicit
 operator adoption request. Without that request, Trade rejects the membership
@@ -313,18 +313,17 @@ Logical-account readiness is computed, not persisted:
 
 ```text
 logical_account_ready =
-    control_state == ACTIVE
+    automation_state == ACTIVE
     AND every enabled member session is Ready
     AND every target instrument has at least one eligible member
 ```
 
 If any member becomes Not Ready, the `TargetExecutor` stops creating new
 orders. Private events and account synchronization continue. Execution resumes
-automatically when all members are Ready and the control state remains
+automatically when all members are Ready and `automation_state` remains
 `ACTIVE`.
 
-Operator `PAUSED`, `FLATTENING`, and `DISABLED` states never resume
-automatically.
+A logical account in `PAUSED` never resumes automatically.
 
 ## Target Contract
 
@@ -354,8 +353,8 @@ Every command is a FULL replacement for the logical account:
 
 Trade persists the latest target as `LogicalAccountTarget`, not as execution
 history. Targets received during an operator pause still replace the stored
-target, but they never change `control_state` or create orders. Only an operator
-Resume reactivates convergence.
+target, but they never change `automation_state` or create orders. Only an
+operator Resume reactivates convergence.
 The convergence input is the union of:
 
 - Current FULL target instruments.
@@ -464,7 +463,7 @@ Every modifying request requires an idempotent `action_id` and reason.
 
 1. Resolves the physical account's logical account.
 2. Acquires the logical-account lock.
-3. Persists `PAUSED`, increments `control_revision`, and records the reason.
+3. Persists `automation_state=PAUSED` and records the reason.
 4. Stops new target children and cancels every active owned target order in the
    logical account.
 5. Creates an `OPERATOR` order through the shared `OrderService`.
@@ -477,7 +476,7 @@ The latest Strategy target remains stored. Only an explicit
 
 `FlattenLogicalAccount`:
 
-1. Persists `FLATTENING`, increments `control_revision`, and records the
+1. Atomically persists `automation_state=PAUSED` and a RUNNING
    `OperatorAction`.
 2. Performs a fresh Exchange synchronization for every attached member,
    including disabled members that still belong to the logical account.
@@ -495,6 +494,14 @@ Flatten is an operator override. It attempts every member independently even
 when the aggregate logical account is Not Ready. Failures and remaining
 positions are returned per account, and repeated use of the same `action_id`
 continues the same action without duplicating child orders.
+
+LogicalAccount does not duplicate the running action as a `FLATTENING` state.
+The RUNNING `OperatorAction` is the durable progress and restart identity.
+There is no `control_revision`: the single-process serial executor, operator
+path, and membership changes share the same logical-account lock. The
+TargetExecutor holds that lock from its final ACTIVE check through Order
+creation, Exchange submission, and response persistence; a later Pause then
+cancels any active TARGET order created immediately before it.
 
 Not Ready does not permit stale-position trading. If fresh synchronization
 fails for one account, Flatten reports that account and does not guess a closing
@@ -624,9 +631,9 @@ algorithm registry, or second event workflow.
 - A member Not Ready stops automatic orders for the whole logical account.
 - Unsupported instruments fail target validation.
 - Insufficient capacity leaves a visible `BLOCKED` target with reasons; it does
-  not change operator control state or over-allocate another account.
+  not change `automation_state` or over-allocate another account.
 - An external order or fill pauses automation.
-- Operator actions remain paused after completion or failure.
+- Logical accounts remain paused after operator actions complete or fail.
 - Restart restores current target, operator action, logical-account state,
   unknown orders, and Exchange sessions from SQLite.
 
@@ -657,8 +664,9 @@ algorithm registry, or second event workflow.
 ### Logical Account
 
 - Homogeneous member validation.
-- Physical account cannot join two enabled logical accounts.
-- Membership changes require paused/disabled state.
+- A physical account cannot have enabled membership in two logical accounts.
+- New logical accounts start paused.
+- Membership changes require paused state.
 - Removing a member with positions or orders is rejected.
 - One owner runner per logical account.
 - Any member Not Ready gates automatic execution.
@@ -671,6 +679,8 @@ algorithm registry, or second event workflow.
 - Reduction selects the largest reducible position.
 - Increase falls through priority members when capacity is insufficient.
 - One child at a time survives restart and Fill updates.
+- Final pre-submit validation under the logical-account lock prevents a child
+  from being created after Pause.
 - Unsupported instruments and below-minimum blocked targets terminate predictably.
 - FULL omission closes current positions and stale owned orders.
 
@@ -684,6 +694,8 @@ algorithm registry, or second event workflow.
 - Flatten does not trade from stale snapshots after synchronization failure.
 - Partial flatten failure reports per-account remaining positions and remains paused.
 - Repeated `action_id` does not create duplicate child orders.
+- A running Flatten is represented by the OperatorAction while the logical
+  account remains paused.
 - Flatten handles disabled attached members, SPOT settlement cash, dust, and
   bounded retries.
 - Resume requires Ready members and makes reopening the latest target explicit.
@@ -725,6 +737,8 @@ Strategy documents that describe:
 - Inbox/Saga/Rebalance legs.
 - Single-account TargetIntent.
 - Stateful Strategy input/output and state-format migration.
+- LogicalAccount control revisions or duplicate `FLATTENING`/`DISABLED`
+  automation states.
 - Paper LIMIT support.
 - The local double-entry balance projection.
 - Bulk secret reveal.
