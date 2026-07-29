@@ -19,9 +19,19 @@ type storageCanaryFixture struct {
 
 func (f *storageCanaryFixture) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	f.request = request
+	wanted := make(map[string]struct{}, len(request.GetKeys()))
+	for _, key := range request.GetKeys() {
+		wanted[key.GetDataTime()] = struct{}{}
+	}
+	rows := make([]*storagepb.TimeSeriesRow, 0, len(f.rows))
+	for _, row := range f.rows {
+		if _, ok := wanted[row.GetKey().GetDataTime()]; ok {
+			rows = append(rows, row)
+		}
+	}
 	return &storagepb.ReadTimeSeriesRowsRsp{
 		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
-		Rows:    f.rows,
+		Rows:    rows,
 	}, nil
 }
 
@@ -42,13 +52,14 @@ func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 
 	require.True(t, result.Success)
 	require.NotNil(t, fixture.request)
-	require.Equal(t, storagepb.SortOrder_SORT_ORDER_DESC, fixture.request.GetOrder())
-	require.Equal(t, []string{"market_kline.close", "market_kline.volume"}, fixture.request.GetColumnNames())
-	require.Equal(t, uint32(2), fixture.request.GetPage().GetSize())
+	require.Equal(t, []string{"close", "volume"}, fixture.request.GetColumnNames())
+	require.Len(t, fixture.request.GetKeys(), 24)
+	require.Nil(t, fixture.request.GetTimeRange())
 	require.Equal(t, "crypto", fixture.request.GetKeys()[0].GetSpaceId())
 	require.Equal(t, "market_kline", fixture.request.GetKeys()[0].GetDatasetId())
 	require.Equal(t, "BTC-USDT", fixture.request.GetKeys()[0].GetSubjectId())
 	require.Equal(t, "1m", fixture.request.GetKeys()[0].GetFreq())
+	require.Equal(t, now.Format(time.RFC3339Nano), fixture.request.GetKeys()[0].GetDataTime())
 	require.Equal(t, "monitor-market-canary", fixture.request.GetAuthInfo().GetAppId())
 	require.NotEmpty(t, fixture.request.GetAuthInfo().GetAppKey())
 }

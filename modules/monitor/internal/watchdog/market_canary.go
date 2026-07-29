@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -77,17 +78,27 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
+	interval, err := report.ParseDatasetFrequency(storageFrequency)
+	if err != nil {
+		result.ErrorMessage = "invalid_config"
+		return result
+	}
+	candidateCount, err := marketCanaryCandidateCount(config.Freshness, interval)
+	if err != nil {
+		result.ErrorMessage = "invalid_config"
+		return result
+	}
+	candidateTimes, err := report.RecentDatasetTimes(storageFrequency, now, candidateCount)
+	if err != nil {
+		result.ErrorMessage = "invalid_config"
+		return result
+	}
 	startedAt := time.Now()
 	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 		AuthInfo: c.AuthInfo,
 		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
-		Keys: []*storagepb.TimeSeriesKey{{
-			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
-			SubjectId: config.SubjectID, Freq: storageFrequency,
-		}},
-		Order:       storagepb.SortOrder_SORT_ORDER_DESC,
-		ColumnNames: []string{config.DatasetID + ".close", config.DatasetID + ".volume"},
-		Page:        &storagepb.Page{Page: 1, Size: 2},
+		Keys:        recentMarketCanaryKeys(config, storageFrequency, candidateTimes),
+		ColumnNames: []string{"close", "volume"},
 	}, client.WithFilter(trpcretry.ReadOnly()))
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
@@ -123,6 +134,30 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	result.Connected = true
 	result.Status = domain.CheckStatusOK
 	return result
+}
+
+func recentMarketCanaryKeys(config MarketCanaryConfig, frequency string, times []time.Time) []*storagepb.TimeSeriesKey {
+	keys := make([]*storagepb.TimeSeriesKey, 0, len(times))
+	for _, at := range times {
+		keys = append(keys, &storagepb.TimeSeriesKey{
+			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
+			SubjectId: config.SubjectID, Freq: frequency,
+			DataTime: at.Format(time.RFC3339Nano),
+		})
+	}
+	return keys
+}
+
+func marketCanaryCandidateCount(freshness, interval time.Duration) (int, error) {
+	const minCandidates, maxCandidates = 24, 512
+	count := int((freshness-1)/interval) + 3
+	if count < minCandidates {
+		count = minCandidates
+	}
+	if count > maxCandidates {
+		return 0, fmt.Errorf("market canary freshness requires more than %d exact keys", maxCandidates)
+	}
+	return count, nil
 }
 
 func canonicalStorageFrequency(frequency string) (string, error) {
