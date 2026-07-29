@@ -24,8 +24,9 @@ name as a Prometheus metric name.
 
 The expected realtime dataset registry is derived from business configuration:
 
-- Collector includes every enabled, live K-line rule and every configured
-  frequency. Disabled, non-live, and record datasets are excluded.
+- Collector includes every enabled scheduled K-line rule and every configured
+  frequency. The `live` execution hint does not change monitoring inventory;
+  disabled, symbol, and record datasets are excluded.
 - Factor includes a target dataset and frequency only while both its binding
   and referenced factor are enabled.
 - Duplicate `(space_id, dataset_id, freq)` tuples are collapsed.
