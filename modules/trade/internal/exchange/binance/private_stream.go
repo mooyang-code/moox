@@ -43,7 +43,7 @@ func (a *Adapter) subscribeSpotPrivate(
 ) error {
 	connection, _, err := websocket.DefaultDialer.DialContext(
 		ctx,
-		"wss://ws-api.binance.com:443/ws-api/v3",
+		privateStreamEndpoint(a.config),
 		http.Header{"Origin": []string{"https://moox.local"}},
 	)
 	if err != nil {
@@ -151,7 +151,7 @@ func (a *Adapter) subscribeSwapPrivate(
 	if err := json.Unmarshal(raw, &key); err != nil || key.ListenKey == "" {
 		return typedRejected("invalid private stream listen key", err)
 	}
-	endpoint := "wss://fstream.binance.com/ws/" + key.ListenKey
+	endpoint := privateStreamEndpoint(a.config) + key.ListenKey
 	connection, _, err := websocket.DefaultDialer.DialContext(
 		ctx,
 		endpoint,

@@ -27,7 +27,10 @@ func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHa
 		}
 		a.privateGateMu.Unlock()
 	}()
-	config, err := websocket.NewConfig("wss://ws.okx.com:8443/ws/v5/private", "https://moox.local")
+	config, err := websocket.NewConfig(
+		privateStreamEndpoint(a.config.Environment),
+		"https://moox.local",
+	)
 	if err != nil {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}

@@ -19,7 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 )
 
-const defaultBaseURL = "https://www.okx.com"
+const defaultBaseURL = "https://openapi.okx.com"
 
 type Adapter struct {
 	config     exchange.AccountConfig
@@ -93,6 +93,9 @@ func (a *Adapter) request(
 			"Content-Type":         "application/json",
 		}
 	}
+	if a.config.Environment == exchange.AccountEnvironmentTestnet {
+		headers["x-simulated-trading"] = "1"
+	}
 	raw, err := a.client.Do(ctx, &httpclient.Request{
 		Method: method, Path: fullPath, Body: rawBody, Headers: headers,
 	})
@@ -118,6 +121,15 @@ func (a *Adapter) request(
 		return envelope.Data, classifyOKXCode(envelope.Code, envelope.Msg)
 	}
 	return envelope.Data, nil
+}
+
+func privateStreamEndpoint(
+	environment exchange.AccountEnvironment,
+) string {
+	if environment == exchange.AccountEnvironmentTestnet {
+		return "wss://wspap.okx.com:8443/ws/v5/private"
+	}
+	return "wss://ws.okx.com:8443/ws/v5/private"
 }
 
 func signature(secret, timestamp, method, path, body string) string {

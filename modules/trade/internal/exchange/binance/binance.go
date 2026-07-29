@@ -19,9 +19,11 @@ import (
 )
 
 const (
-	defaultSpotURL = "https://api.binance.com"
-	defaultSwapURL = "https://fapi.binance.com"
-	recvWindow     = 5000
+	productionSpotURL = "https://api.binance.com"
+	testnetSpotURL    = "https://testnet.binance.vision"
+	productionSwapURL = "https://fapi.binance.com"
+	testnetSwapURL    = "https://demo-fapi.binance.com"
+	recvWindow        = 5000
 )
 
 type Adapter struct {
@@ -35,13 +37,36 @@ type Adapter struct {
 }
 
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
+	spotURL, swapURL := restEndpoints(config.Environment)
 	return &Adapter{
 		config:      config,
 		credential:  credential,
-		spot:        httpclient.New(defaultSpotURL),
-		swap:        httpclient.New(defaultSwapURL),
+		spot:        httpclient.New(spotURL),
+		swap:        httpclient.New(swapURL),
 		instruments: make(map[string]exchange.Instrument),
 	}
+}
+
+func restEndpoints(
+	environment exchange.AccountEnvironment,
+) (spot string, swap string) {
+	if environment == exchange.AccountEnvironmentTestnet {
+		return testnetSpotURL, testnetSwapURL
+	}
+	return productionSpotURL, productionSwapURL
+}
+
+func privateStreamEndpoint(config exchange.AccountConfig) string {
+	if config.MarketType == exchange.MarketTypeSpot {
+		if config.Environment == exchange.AccountEnvironmentTestnet {
+			return "wss://ws-api.testnet.binance.vision/ws-api/v3"
+		}
+		return "wss://ws-api.binance.com:443/ws-api/v3"
+	}
+	if config.Environment == exchange.AccountEnvironmentTestnet {
+		return "wss://demo-fstream.binance.com/ws/"
+	}
+	return "wss://fstream.binance.com/ws/"
 }
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeBinance }

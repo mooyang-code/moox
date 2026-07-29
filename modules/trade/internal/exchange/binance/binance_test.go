@@ -16,6 +16,51 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 )
 
+func TestNewUsesFixedEnvironmentEndpoints(t *testing.T) {
+	tests := []struct {
+		name        string
+		environment exchange.AccountEnvironment
+		spot        string
+		swap        string
+		spotStream  string
+		swapStream  string
+	}{
+		{
+			name: "production", environment: exchange.AccountEnvironmentProduction,
+			spot: productionSpotURL, swap: productionSwapURL,
+			spotStream: "wss://ws-api.binance.com:443/ws-api/v3",
+			swapStream: "wss://fstream.binance.com/ws/",
+		},
+		{
+			name: "testnet", environment: exchange.AccountEnvironmentTestnet,
+			spot: testnetSpotURL, swap: testnetSwapURL,
+			spotStream: "wss://ws-api.testnet.binance.vision/ws-api/v3",
+			swapStream: "wss://demo-fstream.binance.com/ws/",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := exchange.AccountConfig{
+				Environment: test.environment, MarketType: exchange.MarketTypeSpot,
+			}
+			adapter := New(config, exchange.Credential{})
+			if adapter.spot.BaseURL != test.spot || adapter.swap.BaseURL != test.swap {
+				t.Fatalf(
+					"REST endpoints = %q, %q; want %q, %q",
+					adapter.spot.BaseURL, adapter.swap.BaseURL, test.spot, test.swap,
+				)
+			}
+			if got := privateStreamEndpoint(config); got != test.spotStream {
+				t.Fatalf("SPOT stream = %q, want %q", got, test.spotStream)
+			}
+			config.MarketType = exchange.MarketTypeSwap
+			if got := privateStreamEndpoint(config); got != test.swapStream {
+				t.Fatalf("SWAP stream = %q, want %q", got, test.swapStream)
+			}
+		})
+	}
+}
+
 func TestAdapterRequestValidationContract(t *testing.T) {
 	adapter := testAdapter(exchange.MarketTypeSpot, "http://unused")
 	base := orderRequest(exchange.OrderTypeMarket)

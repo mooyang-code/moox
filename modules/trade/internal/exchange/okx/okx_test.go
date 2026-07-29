@@ -16,6 +16,55 @@ import (
 	"github.com/rs/xid"
 )
 
+func TestNewUsesFixedEnvironmentEndpoints(t *testing.T) {
+	production := New(exchange.AccountConfig{
+		Environment: exchange.AccountEnvironmentProduction,
+	}, exchange.Credential{})
+	testnet := New(exchange.AccountConfig{
+		Environment: exchange.AccountEnvironmentTestnet,
+	}, exchange.Credential{})
+	if production.client.BaseURL != defaultBaseURL ||
+		testnet.client.BaseURL != defaultBaseURL {
+		t.Fatalf(
+			"REST endpoints = %q, %q; want %q",
+			production.client.BaseURL, testnet.client.BaseURL, defaultBaseURL,
+		)
+	}
+	if got := privateStreamEndpoint(
+		exchange.AccountEnvironmentProduction,
+	); got != "wss://ws.okx.com:8443/ws/v5/private" {
+		t.Fatalf("production private stream = %q", got)
+	}
+	if got := privateStreamEndpoint(
+		exchange.AccountEnvironmentTestnet,
+	); got != "wss://wspap.okx.com:8443/ws/v5/private" {
+		t.Fatalf("testnet private stream = %q", got)
+	}
+}
+
+func TestTestnetRequestAddsSimulationHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		if request.Header.Get("x-simulated-trading") != "1" {
+			t.Fatalf("x-simulated-trading = %q", request.Header.Get("x-simulated-trading"))
+		}
+		ok(writer, `[]`)
+	}))
+	defer server.Close()
+
+	adapter := newWithClient(exchange.AccountConfig{
+		Environment: exchange.AccountEnvironmentTestnet,
+	}, exchange.Credential{}, httpclient.New(server.URL))
+	if _, err := adapter.request(
+		context.Background(), http.MethodGet, "/api/v5/public/instruments",
+		nil, nil, false,
+	); err != nil {
+		t.Fatalf("request() error = %v", err)
+	}
+}
+
 func TestAdapterRequestValidationContract(t *testing.T) {
 	adapter := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
 	base := exchange.OrderRequest{
