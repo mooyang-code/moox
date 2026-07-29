@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	strategyaction "github.com/mooyang-code/moox/modules/strategy/internal/action"
@@ -52,6 +53,14 @@ type Service struct {
 	ReadyWorkers    int
 	Now             func() time.Time
 	NewID           func() string
+	runnerLocks     sync.Map
+}
+
+func (s *Service) lockRunner(runnerID string) func() {
+	value, _ := s.runnerLocks.LoadOrStore(runnerID, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
 }
 
 func (s *Service) CreateStrategy(

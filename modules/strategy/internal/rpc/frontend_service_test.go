@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
@@ -192,4 +193,90 @@ func runnerUpdateRequest(logicalAccountID string) *strategypb.UpdateRunnerReq {
 		ViewId: "view-2", Frequency: "5m", ParamsJson: "{}",
 		LogicalAccountId: logicalAccountID,
 	}}
+}
+
+type blockingLogicalAccountOwner struct {
+	releaseStarted chan struct{}
+	allowRelease   chan struct{}
+	claimed        chan string
+}
+
+func (o *blockingLogicalAccountOwner) Validate(
+	context.Context,
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (o *blockingLogicalAccountOwner) Claim(
+	_ context.Context,
+	_ string,
+	logicalAccountID string,
+	_ string,
+) error {
+	o.claimed <- logicalAccountID
+	return nil
+}
+
+func (o *blockingLogicalAccountOwner) Release(
+	context.Context,
+	string,
+	string,
+	string,
+) error {
+	close(o.releaseStarted)
+	<-o.allowRelease
+	return nil
+}
+
+func TestRunnerOwnershipChangesAreSerializedPerRunner(t *testing.T) {
+	service, _, _ := newRPCServiceForTest(t)
+	createRPCStrategy(t, service, "strategy-1")
+	owner := &blockingLogicalAccountOwner{
+		releaseStarted: make(chan struct{}),
+		allowRelease:   make(chan struct{}),
+		claimed:        make(chan string, 1),
+	}
+	service.LogicalAccounts = owner
+	createRPCRunner(t, service, "runner-1", "strategy-1", "crypto", "logical-old")
+
+	updateDone := make(chan *strategypb.UpdateRunnerRsp, 1)
+	go func() {
+		response, _ := service.UpdateRunner(
+			context.Background(),
+			runnerUpdateRequest("logical-new"),
+		)
+		updateDone <- response
+	}()
+	<-owner.releaseStarted
+
+	enableDone := make(chan *strategypb.SetRunnerStatusRsp, 1)
+	go func() {
+		response, _ := service.SetRunnerStatus(
+			context.Background(),
+			&strategypb.SetRunnerStatusReq{
+				RunnerId: "runner-1",
+				Status:   string(domain.RunnerStatusEnabled),
+			},
+		)
+		enableDone <- response
+	}()
+
+	select {
+	case claimed := <-owner.claimed:
+		close(owner.allowRelease)
+		t.Fatalf("enable raced with update and claimed %q", claimed)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(owner.allowRelease)
+	if response := <-updateDone; response.GetRetInfo().GetCode() != 0 {
+		t.Fatalf("update=%+v", response)
+	}
+	if response := <-enableDone; response.GetRetInfo().GetCode() != 0 {
+		t.Fatalf("enable=%+v", response)
+	}
+	if claimed := <-owner.claimed; claimed != "logical-new" {
+		t.Fatalf("claimed=%q, want logical-new", claimed)
+	}
 }

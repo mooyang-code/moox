@@ -109,6 +109,8 @@ func (s *Service) UpdateRunner(
 		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(errors.New("runner is required"))}, nil
 	}
 	value := req.GetRunner()
+	unlock := s.lockRunner(value.GetRunnerId())
+	defer unlock()
 	if err := validateRunnerInput(value); err != nil {
 		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
 	}
@@ -181,6 +183,8 @@ func (s *Service) SetRunnerStatus(
 			RetInfo: invalid(errors.New("runner_id and status are required")),
 		}, nil
 	}
+	unlock := s.lockRunner(req.GetRunnerId())
+	defer unlock()
 	status := domain.RunnerStatus(req.GetStatus())
 	if status != domain.RunnerStatusEnabled && status != domain.RunnerStatusDisabled {
 		return &strategypb.SetRunnerStatusRsp{
