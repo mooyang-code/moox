@@ -47,10 +47,16 @@ func TestCreateRunnerInitializesTargetSequenceAndHealth(t *testing.T) {
 	repo := openCurrentStore(t)
 	seedStrategy(t, repo, "strategy-1")
 	now := time.UnixMilli(4000).UTC()
+	resultID, lastError := "caller-result", "caller-error"
+	lastSuccess := time.UnixMilli(3000).UTC()
 	runner := domain.StrategyRunner{
 		ID: "runner-1", StrategyID: "strategy-1", SpaceID: "space-1", ViewID: "view-1",
 		Frequency: "1m", ParamsJSON: json.RawMessage(`{}`), Status: domain.RunnerStatusDisabled,
-		CreatedAt: now, UpdatedAt: now,
+		CurrentTargetsJSON: json.RawMessage(
+			`[{"instrument_id":"BTC-USDT-SPOT","quantity":"2"}]`,
+		),
+		CommandSequence: 9, LastResultID: &resultID, LastSuccessAt: &lastSuccess,
+		LastError: &lastError, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := repo.CreateRunner(context.Background(), runner); err != nil {
 		t.Fatal(err)

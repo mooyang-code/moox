@@ -189,40 +189,61 @@ func (m *Store) validateSchemaTables(tables []string) error {
 }
 
 func (m *Store) validateRunnerOwnerIndex() error {
-	var sql string
+	const indexName = "ux_strategy_runners_enabled_logical_account"
+	var index struct {
+		Name    string `gorm:"column:name"`
+		Unique  int    `gorm:"column:unique"`
+		Partial int    `gorm:"column:partial"`
+	}
 	if err := m.db.Raw(`
-		SELECT sql
-		FROM sqlite_master
-		WHERE type = 'index'
-		  AND name = 'ux_strategy_runners_enabled_logical_account'
-	`).Scan(&sql).Error; err != nil {
+		SELECT name, [unique], partial
+		FROM pragma_index_list('t_strategy_runners')
+		WHERE name = ?
+	`, indexName).Scan(&index).Error; err != nil {
 		return fmt.Errorf("inspect Strategy runner owner index: %w", err)
 	}
-	normalized := strings.ToUpper(strings.Join(strings.Fields(sql), " "))
-	for _, required := range []string{
-		"CREATE UNIQUE INDEX",
-		"ON T_STRATEGY_RUNNERS (LOGICAL_ACCOUNT_ID)",
-		"WHERE LOGICAL_ACCOUNT_ID IS NOT NULL AND STATUS = 'ENABLED'",
-	} {
-		if !strings.Contains(normalized, required) {
-			return obsoleteSchemaError("t_strategy_runners")
-		}
+	if index.Name != indexName || index.Unique != 1 || index.Partial != 1 {
+		return obsoleteSchemaError("t_strategy_runners")
+	}
+	var columns []string
+	if err := m.db.Raw(
+		"SELECT name FROM pragma_index_info(?) ORDER BY seqno",
+		indexName,
+	).Scan(&columns).Error; err != nil {
+		return fmt.Errorf("inspect Strategy runner owner index columns: %w", err)
+	}
+	if strings.Join(columns, "\x00") != "logical_account_id" {
+		return obsoleteSchemaError("t_strategy_runners")
+	}
+	var sql string
+	if err := m.db.Raw(
+		"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+		indexName,
+	).Scan(&sql).Error; err != nil {
+		return fmt.Errorf("inspect Strategy runner owner index SQL: %w", err)
+	}
+	const expected = "CREATE UNIQUE INDEX ux_strategy_runners_enabled_logical_account " +
+		"ON t_strategy_runners (logical_account_id) " +
+		"WHERE logical_account_id IS NOT NULL AND status = 'ENABLED'"
+	if strings.Join(strings.Fields(sql), " ") != expected {
+		return obsoleteSchemaError("t_strategy_runners")
 	}
 	return nil
 }
 
 func (m *Store) validateResultLogicalUnique() error {
 	var indexes []struct {
-		Name   string `gorm:"column:name"`
-		Unique int    `gorm:"column:unique"`
+		Name    string `gorm:"column:name"`
+		Unique  int    `gorm:"column:unique"`
+		Partial int    `gorm:"column:partial"`
 	}
-	if err := m.db.Raw("SELECT name, [unique] FROM pragma_index_list('t_strategy_results')").
+	if err := m.db.Raw("SELECT name, [unique], partial FROM pragma_index_list('t_strategy_results')").
 		Scan(&indexes).Error; err != nil {
 		return fmt.Errorf("inspect Strategy result indexes: %w", err)
 	}
 	want := "runner_id\x00strategy_id\x00namespace\x00trigger_bar_time"
 	for _, index := range indexes {
-		if index.Unique != 1 {
+		if index.Unique != 1 || index.Partial != 0 {
 			continue
 		}
 		var columns []string

@@ -166,6 +166,9 @@ func buildInput(request domain.ExecutionRequest) ([]byte, string, error) {
 		strings.TrimSpace(request.Namespace) == "" {
 		return nil, "", errors.New("strategy, runner, trigger time and namespace are required")
 	}
+	if err := validateHistoryWindow(request.Data, request.TriggerBarTime); err != nil {
+		return nil, "", err
+	}
 	contextValue := struct {
 		StrategyID     string `json:"strategy_id"`
 		RunnerID       string `json:"runner_id"`
@@ -198,6 +201,50 @@ func buildInput(request domain.ExecutionRequest) ([]byte, string, error) {
 	}
 	sum := sha256.Sum256(rawHashInput)
 	return meta, hex.EncodeToString(sum[:]), nil
+}
+
+func validateHistoryWindow(data any, triggerBarTime string) error {
+	trigger, err := time.Parse(time.RFC3339Nano, triggerBarTime)
+	if err != nil {
+		return fmt.Errorf("invalid trigger_bar_time: %w", err)
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("encode strategy history: %w", err)
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return errors.New("strategy history must be an array of objects")
+	}
+	if len(rows) == 0 {
+		return errors.New("strategy history must not be empty")
+	}
+	var previous time.Time
+	for index, row := range rows {
+		rawTime, ok := row["time"]
+		if !ok {
+			return fmt.Errorf("strategy history row %d is missing time", index)
+		}
+		var value string
+		if err := json.Unmarshal(rawTime, &value); err != nil {
+			return fmt.Errorf("strategy history row %d time must be an RFC3339 string", index)
+		}
+		current, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			return fmt.Errorf("strategy history row %d has invalid time: %w", index, err)
+		}
+		if index > 0 && !current.After(previous) {
+			return fmt.Errorf("strategy history times must be strictly increasing at row %d", index)
+		}
+		previous = current
+	}
+	if !previous.Equal(trigger) {
+		if previous.After(trigger) {
+			return errors.New("strategy history contains a future final bar")
+		}
+		return errors.New("strategy history final bar is stale")
+	}
+	return nil
 }
 
 func historyLength(data any) int {
