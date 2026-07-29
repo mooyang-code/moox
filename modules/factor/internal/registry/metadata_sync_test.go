@@ -1,12 +1,258 @@
 package registry
 
 import (
+	"context"
+	"sort"
+	"testing"
+
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
+
+func TestSyncTargetDatasetReconcilesOutputsForActiveLockedTarget(t *testing.T) {
+	client := newFakeMetadataClient()
+	client.datasets["source"] = &storagepb.Dataset{
+		SpaceId: "space", DatasetId: "source", DataSourceId: "market",
+		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, DataNodeId: "node-1",
+		KeepDuration: "30d", Status: "active",
+	}
+	client.datasets["target"] = &storagepb.Dataset{
+		SpaceId: "space", DatasetId: "target", DataSourceId: "market",
+		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, DataNodeId: "node-1",
+		KeepDuration: "30d", Status: "active", BindingLocked: true,
+	}
+	client.subjects["source"] = []*storagepb.DatasetSubject{{
+		SpaceId: "space", DatasetId: "source", SubjectId: "BTC-USDT",
+	}}
+	syncer := NewMetadataSync(client, nil)
+
+	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
+		FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav", "benchmark_return"},
+		Outputs: []string{"excess_return", "rolling_rank"}, ParamsJSON: `{}`,
+		LookbackRows: 20, Status: domain.FactorStatusEnabled,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"excess_return", "rolling_rank"}, client.upsertedColumnNames())
+	require.Zero(t, client.checkActivationCalls)
+	require.Zero(t, client.activateCalls)
+	require.Len(t, client.updatedDatasets, 1)
+	require.Equal(t, "factor_result", client.updatedDatasets[0].GetAttributes()["dataset_role"])
+	require.Equal(t, []string{"1m"}, client.updatedDatasets[0].GetFreqs())
+	require.Len(t, client.boundSubjects, 1)
+	require.Equal(t, "target", client.boundSubjects[0].GetDatasetId())
+	require.Equal(t, "BTC-USDT", client.boundSubjects[0].GetSubjectId())
+}
+
+func TestSyncTargetDatasetUpdatesExistingFactorMetadata(t *testing.T) {
+	client := newFakeMetadataClient()
+	client.datasets["source"] = testSourceDataset()
+	client.factors["excess"] = &storagepb.Factor{SpaceId: "space", FactorId: "excess", Name: "Old"}
+	syncer := NewMetadataSync(client, nil)
+
+	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
+		FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav", "benchmark_return"},
+		Outputs: []string{"excess_return", "rolling_rank"}, ParamsJSON: `{"window":20}`,
+		LookbackRows: 21, Status: domain.FactorStatusEnabled,
+	}})
+	require.NoError(t, err)
+	require.Empty(t, client.createdFactors)
+	require.Len(t, client.updatedFactors, 1)
+	updated := client.updatedFactors[0]
+	require.Equal(t, `["nav","benchmark_return"]`, updated.GetAttributes()["input_columns_json"])
+	require.Equal(t, `["excess_return","rolling_rank"]`, updated.GetAttributes()["outputs_json"])
+	require.Equal(t, "21", updated.GetAttributes()["lookback_rows"])
+	require.Equal(t, `{"window":20}`, updated.GetParamsJson())
+	require.Equal(t, "active", updated.GetStatus())
+	require.Len(t, client.upsertedColumns, 2)
+	require.Equal(t, "excess.excess_return", client.upsertedColumns[0].GetOriginId())
+	require.Equal(t, map[string]string{
+		"display_name":     columnDisplayName("excess_return"),
+		"origin_factor_id": "excess",
+		"factor_output":    "excess_return",
+	}, client.upsertedColumns[0].GetAttributes())
+}
+
+func TestSyncTargetDatasetCreatesMissingFactorMetadata(t *testing.T) {
+	client := newFakeMetadataClient()
+	client.datasets["source"] = testSourceDataset()
+	syncer := NewMetadataSync(client, nil)
+
+	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
+		FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav"},
+		Outputs: []string{"excess_return"}, ParamsJSON: `{}`, LookbackRows: 5,
+		Status: domain.FactorStatusDisabled,
+	}})
+	require.NoError(t, err)
+	require.Len(t, client.createdFactors, 1)
+	require.Empty(t, client.updatedFactors)
+	require.Equal(t, "disabled", client.createdFactors[0].GetStatus())
+}
+
+func TestSyncTargetDatasetDoesNotCreateFactorForNonNotFoundRetInfo(t *testing.T) {
+	for _, code := range []commonpb.ErrorCode{commonpb.ErrorCode_INVALID_PARAM, commonpb.ErrorCode_INNER_ERR} {
+		t.Run(code.String(), func(t *testing.T) {
+			client := newFakeMetadataClient()
+			client.getFactorRet = &commonpb.RetInfo{Code: code, Msg: "factor not found"}
+			syncer := NewMetadataSync(client, nil)
+
+			err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", []domain.FactorDef{{
+				FactorID: "excess", Name: "ExcessReturn", InputColumns: []string{"nav"},
+				Outputs: []string{"excess_return"}, ParamsJSON: `{}`, LookbackRows: 5,
+			}})
+			require.ErrorContains(t, err, "GetFactor")
+			require.Empty(t, client.createdFactors)
+			require.Empty(t, client.updatedFactors)
+		})
+	}
+}
+
+func TestSyncTargetDatasetRejectsNonTimeSeriesSource(t *testing.T) {
+	client := newFakeMetadataClient()
+	client.datasets["source"] = testSourceDataset()
+	client.datasets["source"].DataKind = storagepb.DataKind_DATA_KIND_RECORD
+	syncer := NewMetadataSync(client, nil)
+
+	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", nil)
+	require.ErrorContains(t, err, "must be time-series")
+	require.Empty(t, client.updatedDatasets)
+	require.Empty(t, client.upsertedColumns)
+}
+
+func TestSyncTargetDatasetRejectsExistingNonTimeSeriesTargetBeforeMutation(t *testing.T) {
+	client := newFakeMetadataClient()
+	client.datasets["source"] = testSourceDataset()
+	client.datasets["target"] = &storagepb.Dataset{
+		SpaceId: "space", DatasetId: "target", DataSourceId: "market",
+		DataKind: storagepb.DataKind_DATA_KIND_RECORD, DataNodeId: "node-1",
+		KeepDuration: "30d", Status: "active", BindingLocked: true,
+	}
+	client.subjects["source"] = []*storagepb.DatasetSubject{{
+		SpaceId: "space", DatasetId: "source", SubjectId: "BTC-USDT",
+	}}
+	syncer := NewMetadataSync(client, nil)
+
+	err := syncer.SyncTargetDataset(context.Background(), "space", "source", "target", "1m", nil)
+	require.ErrorContains(t, err, "target dataset space/target must be time-series")
+	require.Empty(t, client.updatedDatasets)
+	require.Empty(t, client.boundSubjects)
+	require.Empty(t, client.upsertedColumns)
+	require.Zero(t, client.checkActivationCalls)
+	require.Zero(t, client.activateCalls)
+}
+
+func testSourceDataset() *storagepb.Dataset {
+	return &storagepb.Dataset{
+		SpaceId: "space", DatasetId: "source", DataSourceId: "market",
+		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, DataNodeId: "node-1",
+		KeepDuration: "30d", Status: "active",
+	}
+}
+
+type fakeMetadataClient struct {
+	datasets             map[string]*storagepb.Dataset
+	factors              map[string]*storagepb.Factor
+	subjects             map[string][]*storagepb.DatasetSubject
+	upsertedColumns      []*storagepb.DatasetColumn
+	updatedDatasets      []*storagepb.Dataset
+	boundSubjects        []*storagepb.DatasetSubject
+	createdFactors       []*storagepb.Factor
+	updatedFactors       []*storagepb.Factor
+	getFactorRet         *commonpb.RetInfo
+	checkActivationCalls int
+	activateCalls        int
+}
+
+func newFakeMetadataClient() *fakeMetadataClient {
+	return &fakeMetadataClient{
+		datasets: map[string]*storagepb.Dataset{},
+		factors:  map[string]*storagepb.Factor{},
+		subjects: map[string][]*storagepb.DatasetSubject{},
+	}
+}
+
+func (f *fakeMetadataClient) upsertedColumnNames() []string {
+	names := make([]string, 0, len(f.upsertedColumns))
+	for _, column := range f.upsertedColumns {
+		names = append(names, column.GetColumnName())
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (f *fakeMetadataClient) CreateFactor(_ context.Context, req *storagepb.CreateFactorReq) (*storagepb.CreateFactorRsp, error) {
+	f.createdFactors = append(f.createdFactors, req.GetFactor())
+	f.factors[req.GetFactor().GetFactorId()] = req.GetFactor()
+	return &storagepb.CreateFactorRsp{RetInfo: successRet()}, nil
+}
+
+func (f *fakeMetadataClient) UpdateFactor(_ context.Context, req *storagepb.UpdateFactorReq) (*storagepb.UpdateFactorRsp, error) {
+	f.updatedFactors = append(f.updatedFactors, req.GetFactor())
+	f.factors[req.GetFactor().GetFactorId()] = req.GetFactor()
+	return &storagepb.UpdateFactorRsp{RetInfo: successRet()}, nil
+}
+
+func (f *fakeMetadataClient) GetFactor(_ context.Context, req *storagepb.GetFactorReq) (*storagepb.GetFactorRsp, error) {
+	if f.getFactorRet != nil {
+		return &storagepb.GetFactorRsp{RetInfo: f.getFactorRet}, nil
+	}
+	factor := f.factors[req.GetFactorId()]
+	if factor == nil {
+		return &storagepb.GetFactorRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_FACTOR_NOT_FOUND}}, nil
+	}
+	return &storagepb.GetFactorRsp{RetInfo: successRet(), Factor: factor}, nil
+}
+
+func (f *fakeMetadataClient) CreateDataset(_ context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
+	f.datasets[req.GetDataset().GetDatasetId()] = req.GetDataset()
+	return &storagepb.CreateDatasetRsp{RetInfo: successRet()}, nil
+}
+
+func (f *fakeMetadataClient) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
+	f.updatedDatasets = append(f.updatedDatasets, req.GetDataset())
+	f.datasets[req.GetDataset().GetDatasetId()] = req.GetDataset()
+	return &storagepb.UpdateDatasetRsp{RetInfo: successRet()}, nil
+}
+
+func (f *fakeMetadataClient) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
+	dataset := f.datasets[req.GetDatasetId()]
+	if dataset == nil {
+		return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}}, nil
+	}
+	return &storagepb.GetDatasetRsp{RetInfo: successRet(), Dataset: dataset}, nil
+}
+
+func (f *fakeMetadataClient) CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
+	f.checkActivationCalls++
+	return &storagepb.CheckDatasetActivationRsp{RetInfo: successRet(), Ready: true}, nil
+}
+
+func (f *fakeMetadataClient) ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
+	f.activateCalls++
+	return &storagepb.ActivateDatasetRsp{RetInfo: successRet()}, nil
+}
+
+func (f *fakeMetadataClient) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
+	f.upsertedColumns = append(f.upsertedColumns, req.GetColumn())
+	return &storagepb.UpsertDatasetColumnRsp{RetInfo: successRet()}, nil
+}
+
+func (f *fakeMetadataClient) ListDatasetSubjects(_ context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
+	return &storagepb.ListDatasetSubjectsRsp{
+		RetInfo: successRet(), DatasetSubjects: f.subjects[req.GetDatasetId()],
+	}, nil
+}
+
+func (f *fakeMetadataClient) BindDatasetSubject(_ context.Context, req *storagepb.BindDatasetSubjectReq) (*storagepb.BindDatasetSubjectRsp, error) {
+	f.boundSubjects = append(f.boundSubjects, req.GetDatasetSubject())
+	return &storagepb.BindDatasetSubjectRsp{RetInfo: successRet()}, nil
+}
+
+func successRet() *commonpb.RetInfo {
+	return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+}
 
 func TestDataSourceIDFromDataset(t *testing.T) {
 	assert.Equal(t, "binance", DataSourceIDFromDataset("binance_spot_kline"))
@@ -55,7 +301,7 @@ func TestMergeDatasetFreq(t *testing.T) {
 }
 
 func TestFactorColumnOriginAndStatus(t *testing.T) {
-	assert.Equal(t, "sma_14", factorColumnOriginID("sma", 14))
+	assert.Equal(t, "sma.output", factorColumnOriginID("sma", "output"))
 	assert.Equal(t, "disabled", storageFactorStatus(domain.FactorStatusDisabled))
 	assert.Equal(t, "active", storageFactorStatus("enabled"))
 }
@@ -73,6 +319,10 @@ func TestRetInfoHelpers(t *testing.T) {
 	assert.False(t, isDatasetNotFoundRet(nil))
 	assert.True(t, isDatasetNotFoundRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}))
 	assert.True(t, isDatasetNotFoundRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "dataset not found"}))
+
+	assert.False(t, isFactorNotFoundRet(nil))
+	assert.True(t, isFactorNotFoundRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_FACTOR_NOT_FOUND}))
+	assert.False(t, isFactorNotFoundRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "factor not found"}))
 
 	assert.False(t, isRefreshInProgressRet(nil))
 	assert.True(t, isRefreshInProgressRet(&commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: "refresh already in progress"}))

@@ -39,6 +39,39 @@ func TestRowsBoundaryConversionPreservesStructuredDelta(t *testing.T) {
 	}
 }
 
+func TestRowsBoundaryConversionPreservesExplicitNull(t *testing.T) {
+	in := &localpb.RowsUpserted{
+		SpaceId: "crypto", DatasetId: "prices",
+		Rows: []*localpb.RowFieldUpsert{{
+			Key: &localpb.RowKey{
+				SpaceId: "crypto", DatasetId: "prices",
+				Kind: &localpb.RowKey_Record{Record: &localpb.RecordRowKey{RecordId: "r-1", Version: "v1"}},
+			},
+			Fields: []*localpb.FieldValue{{
+				FieldId: "close",
+				Value: &localpb.TypedValue{Value: &localpb.TypedValue_NullValue{
+					NullValue: localpb.NullValue_NULL_VALUE_NULL,
+				}},
+			}},
+		}},
+	}
+
+	shared, err := ToEventRows(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := shared.GetRows()[0].GetFields()[0].GetValue().GetNullValue(); got != sharedpb.NullValue_NULL_VALUE_NULL {
+		t.Fatalf("shared null marker = %s", got)
+	}
+	local, err := ToStorageRows(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := local.GetRows()[0].GetFields()[0].GetValue().GetNullValue(); got != localpb.NullValue_NULL_VALUE_NULL {
+		t.Fatalf("local null marker = %s", got)
+	}
+}
+
 func TestToEventRowsRejectsRowIdentityMismatch(t *testing.T) {
 	_, err := ToEventRows(&localpb.RowsUpserted{SpaceId: "crypto", DatasetId: "prices", Rows: []*localpb.RowFieldUpsert{{Key: &localpb.RowKey{SpaceId: "other", DatasetId: "prices"}}}})
 	if err == nil {

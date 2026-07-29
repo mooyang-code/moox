@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -64,13 +67,15 @@ func WithRealtimeInventory(inventory realtimeInventory) Option {
 
 // Service implements FactorMgr.
 type Service struct {
-	factors    *store.FactorRepository
-	bindings   *store.BindingRepository
-	scheduler  schedulerRuntime
-	factorsDir string
-	publisher  *moduleregistry.SourcePublisher
-	meta       *registry.MetadataSync
-	inventory  realtimeInventory
+	factors     *store.FactorRepository
+	bindings    *store.BindingRepository
+	scheduler   schedulerRuntime
+	factorsDir  string
+	publisher   *moduleregistry.SourcePublisher
+	meta        *registry.MetadataSync
+	inventory   realtimeInventory
+	mutationMu  sync.Mutex
+	removeStage func(*factorArtifactStage) error
 }
 
 // NewWithRuntime creates a FactorMgr service with an optional scheduler runtime.
@@ -80,6 +85,9 @@ func NewWithRuntime(persistence *store.Store, sched schedulerRuntime, opts ...Op
 		bindings:   persistence.Bindings(),
 		scheduler:  sched,
 		factorsDir: "./factors",
+		removeStage: func(stage *factorArtifactStage) error {
+			return stage.Remove()
+		},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -89,17 +97,25 @@ func NewWithRuntime(persistence *store.Store, sched schedulerRuntime, opts ...Op
 }
 
 func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorReq) (*factorpb.CreateFactorRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	factor, err := s.normalizeFactor(req.GetFactor())
 	if err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	if existing, err := s.factors.GetByName(ctx, factor.Name); err == nil && existing.FactorID != factor.FactorID {
+	// Definitions are always created disabled. SetFactorStatus is the only
+	// entry point that may enable a factor after Storage reconciliation.
+	factor.Status = domain.FactorStatusDisabled
+	if _, err := s.factors.Get(ctx, factor.FactorID); err == nil {
+		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id %q already exists", factor.FactorID))}, nil
+	}
+	if _, err := s.factors.GetByName(ctx, factor.Name); err == nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name %q already exists", factor.Name))}, nil
 	}
 	if err := s.publishFactorSource(ctx, &factor); err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
-	if err := s.factors.Upsert(ctx, factor); err != nil {
+	if err := s.factors.Create(ctx, factor); err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: inner(err)}, nil
 	}
 	s.refreshRealtimeInventory(ctx)
@@ -111,6 +127,8 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 }
 
 func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorReq) (*factorpb.UpdateFactorRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	factorPB := req.GetFactor()
 	if factorPB != nil && factorPB.GetFactorId() == "" {
 		factorPB.FactorId = req.GetFactorId()
@@ -119,10 +137,23 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	if err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(err)}, nil
 	}
+	existing, err := s.factors.Get(ctx, factor.FactorID)
+	if err != nil {
+		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
+	}
+	if existing.Name != factor.Name {
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name is immutable; create a new factor_id"))}, nil
+	}
+	if !slices.Equal(existing.Outputs, factor.Outputs) {
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor outputs are immutable; create a new factor_id"))}, nil
+	}
+	if existing.Status != factor.Status {
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor status must be changed through SetFactorStatus"))}, nil
+	}
 	if err := s.publishFactorSource(ctx, &factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
-	if err := s.factors.Upsert(ctx, factor); err != nil {
+	if err := s.factors.Update(ctx, factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
 	}
 	s.refreshRealtimeInventory(ctx)
@@ -173,27 +204,93 @@ func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq)
 }
 
 func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorStatusReq) (*factorpb.SetFactorStatusRsp, error) {
-	if req.GetFactorId() == "" || req.GetStatus() == "" {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	factorID := strings.TrimSpace(req.GetFactorId())
+	status := strings.TrimSpace(req.GetStatus())
+	if factorID == "" || status == "" {
 		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("factor_id and status are required"))}, nil
 	}
-	if err := s.factors.SetStatus(ctx, req.GetFactorId(), req.GetStatus()); err != nil {
-		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+	if status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled {
+		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("invalid factor status %q", status))}, nil
 	}
-	s.refreshRealtimeInventory(ctx)
-	got, err := s.factors.Get(ctx, req.GetFactorId())
+	existing, err := s.factors.Get(ctx, factorID)
 	if err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
 	}
-	if err := s.syncFactorBindings(ctx, req.GetFactorId()); err != nil {
+	if existing.Status == domain.FactorStatusEnabled && status == domain.FactorStatusEnabled {
+		return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorToPB(*existing)}, nil
+	}
+	if status == domain.FactorStatusEnabled {
+		candidate := *existing
+		candidate.Status = domain.FactorStatusEnabled
+		if err := s.syncFactorDefinitionBindings(ctx, candidate); err != nil {
+			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+		}
+	}
+	if err := s.factors.SetStatus(ctx, factorID, status); err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+	}
+	s.refreshRealtimeInventory(ctx)
+	got, err := s.factors.Get(ctx, factorID)
+	if err != nil {
+		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+	}
+	if status != domain.FactorStatusEnabled {
+		if err := s.syncFactorBindings(ctx, factorID); err != nil {
+			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+		}
 	}
 	return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorToPB(*got)}, nil
 }
 
+func (s *Service) DeleteFactor(ctx context.Context, req *factorpb.DeleteFactorReq) (*factorpb.DeleteFactorRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	if strings.TrimSpace(req.GetFactorId()) == "" {
+		return &factorpb.DeleteFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id is required"))}, nil
+	}
+	factor, err := s.factors.Get(ctx, req.GetFactorId())
+	if err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}, nil
+	}
+	bindings, err := s.bindings.ListByFactor(ctx, factor.FactorID)
+	if err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}, nil
+	}
+	if len(bindings) != 0 {
+		return &factorpb.DeleteFactorRsp{RetInfo: invalid(fmt.Errorf("factor %q still has bindings; delete them first", factor.FactorID))}, nil
+	}
+	stage, err := stageFactorArtifacts(s.factorsDir, factor.Name)
+	if err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}, nil
+	}
+	if err := s.factors.Delete(ctx, factor.FactorID); err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(errors.Join(err, stage.Restore()))}, nil
+	}
+	s.refreshRealtimeInventory(ctx)
+	if err := s.removeStage(stage); err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(fmt.Errorf("remove factor %s staged artifacts: %w", factor.FactorID, err))}, nil
+	}
+	return &factorpb.DeleteFactorRsp{RetInfo: success()}, nil
+}
+
 func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBindingReq) (*factorpb.UpsertBindingRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	binding, err := s.normalizeBinding(req.GetBinding())
 	if err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}, nil
+	}
+	if binding.Status == domain.BindingStatusDisabled {
+		if err := s.bindings.Upsert(ctx, binding); err != nil {
+			return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
+		}
+		s.refreshRealtimeInventory(ctx)
+		if err := s.syncBindingMetadata(ctx, binding); err != nil {
+			return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
+		}
+		return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}, nil
 	}
 	if err := s.syncBindingMetadata(ctx, binding); err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
@@ -219,6 +316,8 @@ func (s *Service) ListBindings(ctx context.Context, req *factorpb.ListBindingsRe
 }
 
 func (s *Service) DeleteBinding(ctx context.Context, req *factorpb.DeleteBindingReq) (*factorpb.DeleteBindingRsp, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
 	if req.GetBindingId() == "" {
 		return &factorpb.DeleteBindingRsp{RetInfo: invalid(fmt.Errorf("binding_id is required"))}, nil
 	}
@@ -262,14 +361,8 @@ func (s *Service) normalizeFactor(pb *factorpb.FactorDef) (domain.FactorDef, err
 	if !pythonModuleNamePattern.MatchString(factor.Name) {
 		return domain.FactorDef{}, fmt.Errorf("factor name %q must be a valid Python module name", factor.Name)
 	}
-	factor.Depends = registry.DependsFromSource(factor.SourceCode)
-	if factor.LookbackBars == 0 {
-		factor.LookbackBars = registry.DefaultLookback(factor.Periods)
-	}
-	if factor.SourceHash == "" {
-		sum := sha256.Sum256([]byte(factor.SourceCode))
-		factor.SourceHash = hex.EncodeToString(sum[:])
-	}
+	sum := sha256.Sum256([]byte(factor.SourceCode))
+	factor.SourceHash = hex.EncodeToString(sum[:])
 	return domain.NormalizeFactorDefinition(factor)
 }
 
@@ -287,9 +380,11 @@ func (s *Service) normalizeBinding(pb *factorpb.FactorBinding) (domain.FactorBin
 	if binding.SubjectMode == "" {
 		binding.SubjectMode = domain.SubjectModeAll
 	}
-	if binding.SubjectsJSON == "" {
-		binding.SubjectsJSON = "[]"
+	subjectsJSON, err := domain.NormalizeBindingSubjects(binding.SubjectMode, binding.SubjectsJSON)
+	if err != nil {
+		return domain.FactorBinding{}, err
 	}
+	binding.SubjectsJSON = subjectsJSON
 	if binding.TargetDataset == "" {
 		binding.TargetDataset = registry.ResultDataset(binding.SourceDataset)
 	}
@@ -336,15 +431,40 @@ func (s *Service) syncFactorBindings(ctx context.Context, factorID string) error
 	if err != nil {
 		return err
 	}
-	if factor.Status != domain.FactorStatusEnabled {
+	return s.syncFactorDefinitionBindings(ctx, *factor)
+}
+
+func (s *Service) syncFactorDefinitionBindings(ctx context.Context, factor domain.FactorDef) error {
+	if s.meta == nil {
 		return nil
 	}
-	bindings, err := s.bindings.ListEnabledByFactor(ctx, factorID)
+	bindings, err := s.bindings.ListByFactor(ctx, factor.FactorID)
 	if err != nil {
 		return err
 	}
+	spaces := make([]string, 0, len(bindings))
+	seenSpaces := make(map[string]struct{}, len(bindings))
 	for _, binding := range bindings {
-		if err := s.syncBindingMetadata(ctx, binding); err != nil {
+		if _, exists := seenSpaces[binding.SpaceID]; exists {
+			continue
+		}
+		seenSpaces[binding.SpaceID] = struct{}{}
+		spaces = append(spaces, binding.SpaceID)
+	}
+	slices.Sort(spaces)
+	for _, spaceID := range spaces {
+		if err := s.meta.SyncFactorMetadata(ctx, spaceID, factor); err != nil {
+			return err
+		}
+	}
+	if factor.Status != domain.FactorStatusEnabled {
+		return nil
+	}
+	for _, binding := range bindings {
+		if binding.Status != domain.BindingStatusEnabled {
+			continue
+		}
+		if err := s.syncEnabledBindingTarget(ctx, binding, factor); err != nil {
 			return err
 		}
 	}
@@ -352,21 +472,35 @@ func (s *Service) syncFactorBindings(ctx context.Context, factorID string) error
 }
 
 func (s *Service) syncBindingMetadata(ctx context.Context, binding domain.FactorBinding) error {
-	if s.meta == nil || binding.Status != domain.BindingStatusEnabled {
+	if s.meta == nil {
 		return nil
 	}
 	factor, err := s.factors.Get(ctx, binding.FactorID)
 	if err != nil {
 		return err
 	}
-	if factor.Status != domain.FactorStatusEnabled {
+	if err := s.meta.SyncFactorMetadata(ctx, binding.SpaceID, *factor); err != nil {
+		return err
+	}
+	if binding.Status != domain.BindingStatusEnabled || factor.Status != domain.FactorStatusEnabled {
 		return nil
 	}
+	return s.syncEnabledBindingTarget(ctx, binding, *factor)
+}
+
+func (s *Service) syncEnabledBindingTarget(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
 	targetDataset := binding.TargetDataset
 	if targetDataset == "" {
 		targetDataset = registry.ResultDataset(binding.SourceDataset)
 	}
-	return s.meta.SyncTargetDataset(ctx, binding.SpaceID, binding.SourceDataset, targetDataset, binding.Freq, []domain.FactorDef{*factor})
+	return s.meta.SyncTargetDatasetAfterFactorMetadata(
+		ctx,
+		binding.SpaceID,
+		binding.SourceDataset,
+		targetDataset,
+		binding.Freq,
+		[]domain.FactorDef{factor},
+	)
 }
 
 func success() *commonpb.RetInfo {

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,9 +15,15 @@ import (
 
 type cliConfig struct {
 	Command           string
+	ConfigPath        string
 	DBPath            string
 	FactorsDir        string
-	DefaultPeriods    []int
+	File              string
+	FactorID          string
+	InputColumns      []string
+	Outputs           []string
+	ParamsJSON        string
+	LookbackRows      int
 	SpaceID           string
 	DatasetID         string
 	SubjectID         string
@@ -58,34 +63,48 @@ func parseArgs(args []string) (cliConfig, error) {
 	if len(args) == 0 {
 		return cliConfig{}, errors.New("command is required")
 	}
-	cfg := cliConfig{Command: args[0], DBPath: "./data/factor/factor.db", FactorsDir: "./factors", DefaultPeriods: []int{20}}
+	cfg := cliConfig{Command: args[0], ParamsJSON: "{}"}
 	switch args[0] {
 	case "init":
+		cfg.DBPath = "./data/factor/factor.db"
 		fs := newFlagSet("init")
 		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
 		if err := fs.Parse(args[1:]); err != nil {
 			return cliConfig{}, err
 		}
 	case "import":
-		var params string
+		cfg.DBPath = "./data/factor/factor.db"
+		cfg.FactorsDir = "./factors"
+		var inputColumns, outputs string
 		fs := newFlagSet("import")
 		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
 		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
-		fs.StringVar(&params, "default-periods", "20", "comma-separated default periods")
+		fs.StringVar(&cfg.File, "file", "", "single Python factor file")
+		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
+		fs.StringVar(&inputColumns, "input-columns", "", "comma-separated input columns")
+		fs.StringVar(&outputs, "outputs", "", "comma-separated output columns")
+		fs.StringVar(&cfg.ParamsJSON, "params-json", "{}", "factor parameter JSON object")
+		fs.IntVar(&cfg.LookbackRows, "lookback-rows", 0, "input lookback rows")
 		if err := fs.Parse(args[1:]); err != nil {
 			return cliConfig{}, err
 		}
-		parsed, err := parseIntCSV(params)
+		var err error
+		cfg.InputColumns, err = parseImportCSV("--input-columns", inputColumns)
 		if err != nil {
 			return cliConfig{}, err
 		}
-		cfg.DefaultPeriods = parsed
+		cfg.Outputs, err = parseImportCSV("--outputs", outputs)
+		if err != nil {
+			return cliConfig{}, err
+		}
 	case "run-once":
+		cfg.ConfigPath = "./config/app.yaml"
 		var startTime, endTime string
 		var factors string
 		fs := newFlagSet("run-once")
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "factor sqlite database")
-		fs.StringVar(&cfg.FactorsDir, "factors-dir", cfg.FactorsDir, "factor source directory")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "factor application config")
+		fs.StringVar(&cfg.DBPath, "db", "", "factor sqlite database (overrides config)")
+		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "factor source directory (overrides config)")
 		fs.StringVar(&cfg.SpaceID, "space", "", "space id")
 		fs.StringVar(&cfg.DatasetID, "dataset", "", "source dataset id")
 		fs.StringVar(&cfg.SubjectID, "subject", "", "subject id")
@@ -119,19 +138,6 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-func parseIntCSV(raw string) ([]int, error) {
-	parts := parseStringCSV(raw)
-	out := make([]int, 0, len(parts))
-	for _, part := range parts {
-		v, err := strconv.Atoi(part)
-		if err != nil {
-			return nil, fmt.Errorf("parse int %q: %w", part, err)
-		}
-		out = append(out, v)
-	}
-	return out, nil
-}
-
 func parseStringCSV(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
@@ -144,4 +150,16 @@ func parseStringCSV(raw string) []string {
 		}
 	}
 	return out
+}
+
+func parseImportCSV(flagName, raw string) ([]string, error) {
+	parts := strings.Split(raw, ",")
+	out := make([]string, len(parts))
+	for i, part := range parts {
+		out[i] = strings.TrimSpace(part)
+		if out[i] == "" {
+			return nil, fmt.Errorf("%s contains an empty value", flagName)
+		}
+	}
+	return out, nil
 }

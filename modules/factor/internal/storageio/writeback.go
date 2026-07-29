@@ -18,6 +18,14 @@ func (c *Client) WriteFactorPatch(
 	if task == nil || result == nil {
 		return 0, fmt.Errorf("task and result are required")
 	}
+	if len(result.Columns) == 0 {
+		return 0, nil
+	}
+	for name, values := range result.Columns {
+		if len(values) < len(targetTimes) {
+			return 0, fmt.Errorf("factor column %s has %d values for %d target rows", name, len(values), len(targetTimes))
+		}
+	}
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(targetTimes))
 	computedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	for i, targetTime := range targetTimes {
@@ -35,7 +43,13 @@ func (c *Client) WriteFactorPatch(
 			},
 		}
 		for name, values := range result.Columns {
-			if i >= len(values) || values[i] == nil {
+			if values[i] == nil {
+				row.Fields = append(row.Fields, &storagepb.FieldValue{
+					FieldId: name,
+					Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{
+						NullValue: storagepb.NullValue_NULL_VALUE_NULL,
+					}},
+				})
 				continue
 			}
 			value, ok := asFloat64(values[i])
@@ -44,9 +58,7 @@ func (c *Client) WriteFactorPatch(
 			}
 			row.Fields = append(row.Fields, doubleField(name, value))
 		}
-		if len(row.Fields) > 0 {
-			rows = append(rows, row)
-		}
+		rows = append(rows, row)
 	}
 	if len(rows) == 0 {
 		return 0, nil

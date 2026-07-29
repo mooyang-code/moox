@@ -1,7 +1,11 @@
 package engine
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 )
 
@@ -25,18 +29,21 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 		}
 		columns[name] = values
 	}
-	indexMS := make([]int64, 0, len(frame.DataTimes))
+	dataTimes := make([]string, 0, len(frame.DataTimes))
 	for _, t := range frame.DataTimes {
-		indexMS = append(indexMS, t.UTC().UnixMilli())
+		dataTimes = append(dataTimes, t.UTC().Format(time.RFC3339Nano))
 	}
 	factors := make([]map[string]any, 0, len(task.Factors))
 	for _, factor := range task.Factors {
+		params, err := decodeParamsJSON(factor.FactorID, factor.ParamsJSON)
+		if err != nil {
+			return nil, err
+		}
 		factors = append(factors, map[string]any{
-			"factor_id":   factor.FactorID,
-			"name":        factor.Name,
-			"source_hash": factor.SourceHash,
-			"source_path": factor.SourcePath,
-			"periods":     factor.Periods,
+			"factor_id": factor.FactorID, "name": factor.Name,
+			"source_hash": factor.SourceHash, "source_path": factor.SourcePath,
+			"input_columns": factor.InputColumns, "outputs": factor.Outputs,
+			"params": params,
 		})
 	}
 	return map[string]any{
@@ -51,10 +58,29 @@ func EncodeJSONRequestMeta(task *FactorTask, frame *DataFrame) (map[string]any, 
 		"target_end_time":   task.EndTime.UTC().Format(time.RFC3339Nano),
 		"factors":           factors,
 		"df": map[string]any{
-			"columns":  columns,
-			"index_ms": indexMS,
+			"columns": columns, "data_times": dataTimes,
 		},
 	}, nil
+}
+
+func decodeParamsJSON(factorID, raw string) (map[string]any, error) {
+	var params map[string]any
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&params); err != nil {
+		return nil, fmt.Errorf("decode params_json for factor %s: %w", factorID, err)
+	}
+	if params == nil {
+		return nil, fmt.Errorf("decode params_json for factor %s: expected object", factorID)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("decode params_json for factor %s: trailing JSON value", factorID)
+		}
+		return nil, fmt.Errorf("decode params_json for factor %s: %w", factorID, err)
+	}
+	return params, nil
 }
 
 func DecodeJSONResponse(meta map[string]any) (*FactorResult, error) {

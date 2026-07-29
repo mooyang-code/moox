@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -16,16 +17,14 @@ import (
 // MetadataClient is the Storage Metadata subset required by factor registry sync.
 type MetadataClient interface {
 	CreateFactor(ctx context.Context, req *storagepb.CreateFactorReq) (*storagepb.CreateFactorRsp, error)
+	UpdateFactor(ctx context.Context, req *storagepb.UpdateFactorReq) (*storagepb.UpdateFactorRsp, error)
+	GetFactor(ctx context.Context, req *storagepb.GetFactorReq) (*storagepb.GetFactorRsp, error)
 	CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error)
 	UpdateDataset(ctx context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error)
 	GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error)
 	CheckDatasetActivation(ctx context.Context, req *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
 	ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
 	UpsertDatasetColumn(ctx context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
-}
-
-type factorGetter interface {
-	GetFactor(ctx context.Context, req *storagepb.GetFactorReq) (*storagepb.GetFactorRsp, error)
 }
 
 type columnLister interface {
@@ -56,22 +55,46 @@ func (s *MetadataSync) SyncResultDataset(ctx context.Context, spaceID string, so
 	return s.SyncTargetDataset(ctx, spaceID, sourceDataset, ResultDataset(sourceDataset), freq, factors)
 }
 
+// SyncFactorMetadata reconciles one local factor definition into a Storage space.
+func (s *MetadataSync) SyncFactorMetadata(ctx context.Context, spaceID string, factor domain.FactorDef) error {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	return s.createFactor(ctx, spaceID, factor)
+}
+
 // SyncTargetDataset ensures factor, result dataset, and result columns exist.
 func (s *MetadataSync) SyncTargetDataset(ctx context.Context, spaceID string, sourceDataset string, targetDataset string, freq string, factors []domain.FactorDef) error {
 	if s == nil || s.client == nil {
 		return nil
 	}
-	if strings.TrimSpace(targetDataset) == "" {
-		targetDataset = ResultDataset(sourceDataset)
-	}
 	for _, factor := range factors {
-		if err := s.createFactor(ctx, spaceID, factor); err != nil {
+		if err := s.SyncFactorMetadata(ctx, spaceID, factor); err != nil {
 			return err
 		}
+	}
+	return s.syncTargetDatasetAfterFactorMetadata(ctx, spaceID, sourceDataset, targetDataset, freq, factors)
+}
+
+// SyncTargetDatasetAfterFactorMetadata reconciles a target after its factors have
+// already been synchronized into the same Storage space.
+func (s *MetadataSync) SyncTargetDatasetAfterFactorMetadata(ctx context.Context, spaceID string, sourceDataset string, targetDataset string, freq string, factors []domain.FactorDef) error {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	return s.syncTargetDatasetAfterFactorMetadata(ctx, spaceID, sourceDataset, targetDataset, freq, factors)
+}
+
+func (s *MetadataSync) syncTargetDatasetAfterFactorMetadata(ctx context.Context, spaceID string, sourceDataset string, targetDataset string, freq string, factors []domain.FactorDef) error {
+	if strings.TrimSpace(targetDataset) == "" {
+		targetDataset = ResultDataset(sourceDataset)
 	}
 	source, err := s.getDataset(ctx, spaceID, sourceDataset)
 	if err != nil {
 		return fmt.Errorf("load source dataset %s/%s: %w", spaceID, sourceDataset, err)
+	}
+	if source.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		return fmt.Errorf("source dataset %s/%s must be time-series", spaceID, sourceDataset)
 	}
 	dataSourceID := source.GetDataSourceId()
 	if strings.TrimSpace(dataSourceID) == "" {
@@ -80,11 +103,6 @@ func (s *MetadataSync) SyncTargetDataset(ctx context.Context, spaceID string, so
 	if strings.TrimSpace(source.GetDataNodeId()) == "" || strings.TrimSpace(source.GetKeepDuration()) == "" {
 		return fmt.Errorf("source dataset %s/%s must define data_node_id and keep_duration", spaceID, sourceDataset)
 	}
-	if existing, found, err := s.findDataset(ctx, spaceID, targetDataset); err != nil {
-		return err
-	} else if found && existing.GetStatus() == "active" && existing.GetBindingLocked() {
-		return nil
-	}
 	if err := s.createDataset(ctx, spaceID, sourceDataset, targetDataset, dataSourceID, source, freq); err != nil {
 		return err
 	}
@@ -92,9 +110,8 @@ func (s *MetadataSync) SyncTargetDataset(ctx context.Context, spaceID string, so
 		return err
 	}
 	for _, factor := range factors {
-		for _, period := range factor.Periods {
-			columnName := fmt.Sprintf("%s_%d", factor.Name, period)
-			if err := s.upsertColumn(ctx, spaceID, targetDataset, factor, period, columnName); err != nil {
+		for _, output := range factor.Outputs {
+			if err := s.upsertColumn(ctx, spaceID, targetDataset, factor, output); err != nil {
 				return err
 			}
 		}
@@ -212,34 +229,61 @@ func (s *MetadataSync) bindDatasetSubject(ctx context.Context, binder datasetSub
 }
 
 func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor domain.FactorDef) error {
-	periods, err := json.Marshal(factor.Periods)
+	inputColumnsJSON, err := json.Marshal(factor.InputColumns)
 	if err != nil {
-		return fmt.Errorf("marshal periods for factor %s: %w", factor.FactorID, err)
+		return fmt.Errorf("marshal input columns for factor %s: %w", factor.FactorID, err)
 	}
-	req := &storagepb.CreateFactorReq{
-		AuthInfo: s.auth,
-		Factor: &storagepb.Factor{
-			SpaceId:    spaceID,
-			FactorId:   factor.FactorID,
-			Name:       factor.Name,
-			Algorithm:  factor.Name,
-			ParamsJson: string(periods),
-			ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			Status:     storageFactorStatus(factor.Status),
+	outputsJSON, err := json.Marshal(factor.Outputs)
+	if err != nil {
+		return fmt.Errorf("marshal outputs for factor %s: %w", factor.FactorID, err)
+	}
+	storageFactor := &storagepb.Factor{
+		SpaceId:    spaceID,
+		FactorId:   factor.FactorID,
+		Name:       factor.Name,
+		Algorithm:  factor.Name,
+		ParamsJson: factor.ParamsJSON,
+		ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Status:     storageFactorStatus(factor.Status),
+		Attributes: map[string]string{
+			"input_columns_json": string(inputColumnsJSON),
+			"outputs_json":       string(outputsJSON),
+			"lookback_rows":      strconv.Itoa(factor.LookbackRows),
 		},
 	}
-	rsp, err := s.client.CreateFactor(ctx, req)
+
+	getRsp, err := s.client.GetFactor(ctx, &storagepb.GetFactorReq{
+		AuthInfo: s.auth, SpaceId: spaceID, FactorId: factor.FactorID,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("get factor %s/%s: %w", spaceID, factor.FactorID, err)
 	}
-	if retOK(rsp.GetRetInfo()) {
+	if retOK(getRsp.GetRetInfo()) {
+		if getRsp.GetFactor() == nil {
+			return fmt.Errorf("GetFactor succeeded without factor %s/%s", spaceID, factor.FactorID)
+		}
+		rsp, updateErr := s.client.UpdateFactor(ctx, &storagepb.UpdateFactorReq{
+			AuthInfo: s.auth, Factor: storageFactor,
+		})
+		if updateErr != nil {
+			return fmt.Errorf("update factor %s/%s: %w", spaceID, factor.FactorID, updateErr)
+		}
+		if retOK(rsp.GetRetInfo()) || isRefreshInProgressRet(rsp.GetRetInfo()) {
+			return nil
+		}
+		return retInfoError("UpdateFactor", rsp.GetRetInfo())
+	}
+	if !isFactorNotFoundRet(getRsp.GetRetInfo()) {
+		return retInfoError("GetFactor", getRsp.GetRetInfo())
+	}
+	rsp, err := s.client.CreateFactor(ctx, &storagepb.CreateFactorReq{
+		AuthInfo: s.auth, Factor: storageFactor,
+	})
+	if err != nil {
+		return fmt.Errorf("create factor %s/%s: %w", spaceID, factor.FactorID, err)
+	}
+	if retOK(rsp.GetRetInfo()) || isRefreshInProgressRet(rsp.GetRetInfo()) {
 		return nil
-	}
-	if isRefreshInProgressRet(rsp.GetRetInfo()) {
-		return nil
-	}
-	if isDuplicateRet(rsp.GetRetInfo()) {
-		return s.confirmFactorExists(ctx, spaceID, factor.FactorID)
 	}
 	return retInfoError("CreateFactor", rsp.GetRetInfo())
 }
@@ -284,7 +328,7 @@ func (s *MetadataSync) createDataset(ctx context.Context, spaceID string, source
 	return retInfoError("CreateDataset", rsp.GetRetInfo())
 }
 
-func (s *MetadataSync) upsertColumn(ctx context.Context, spaceID string, datasetID string, factor domain.FactorDef, param int, columnName string) error {
+func (s *MetadataSync) upsertColumn(ctx context.Context, spaceID string, datasetID string, factor domain.FactorDef, columnName string) error {
 	req := &storagepb.UpsertDatasetColumnReq{
 		AuthInfo: s.auth,
 		Column: &storagepb.DatasetColumn{
@@ -292,14 +336,14 @@ func (s *MetadataSync) upsertColumn(ctx context.Context, spaceID string, dataset
 			DatasetId:  datasetID,
 			ColumnName: columnName,
 			OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
-			OriginId:   factorColumnOriginID(factor.FactorID, param),
+			OriginId:   factorColumnOriginID(factor.FactorID, columnName),
 			ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			Required:   false,
 			Status:     "active",
 			Attributes: map[string]string{
 				"display_name":     columnDisplayName(columnName),
 				"origin_factor_id": factor.FactorID,
-				"factor_param":     fmt.Sprintf("%d", param),
+				"factor_output":    columnName,
 			},
 		},
 	}
@@ -319,21 +363,6 @@ func (s *MetadataSync) upsertColumn(ctx context.Context, spaceID string, dataset
 	return retInfoError("UpsertDatasetColumn", rsp.GetRetInfo())
 }
 
-func (s *MetadataSync) confirmFactorExists(ctx context.Context, spaceID string, factorID string) error {
-	getter, ok := s.client.(factorGetter)
-	if !ok {
-		return fmt.Errorf("CreateFactor duplicate for %s but MetadataClient cannot confirm existence", factorID)
-	}
-	rsp, err := getter.GetFactor(ctx, &storagepb.GetFactorReq{AuthInfo: s.auth, SpaceId: spaceID, FactorId: factorID})
-	if err != nil {
-		return err
-	}
-	if retOK(rsp.GetRetInfo()) && rsp.GetFactor() != nil {
-		return nil
-	}
-	return retInfoError("GetFactor", rsp.GetRetInfo())
-}
-
 func (s *MetadataSync) getDataset(ctx context.Context, spaceID string, datasetID string) (*storagepb.Dataset, error) {
 	rsp, err := s.client.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: s.auth, SpaceId: spaceID, DatasetId: datasetID})
 	if err != nil {
@@ -350,6 +379,9 @@ func (s *MetadataSync) ensureFactorDatasetAttribution(ctx context.Context, space
 	if err != nil {
 		return err
 	}
+	if err := validateTargetDataset(dataset, spaceID, datasetID); err != nil {
+		return err
+	}
 	return s.updateFactorDatasetAttribution(ctx, dataset, datasetID, sourceDataset, freq)
 }
 
@@ -361,7 +393,17 @@ func (s *MetadataSync) ensureExistingFactorDataset(ctx context.Context, spaceID 
 	if !found {
 		return false, nil
 	}
+	if err := validateTargetDataset(dataset, spaceID, datasetID); err != nil {
+		return false, err
+	}
 	return true, s.updateFactorDatasetAttribution(ctx, dataset, datasetID, sourceDataset, freq)
+}
+
+func validateTargetDataset(dataset *storagepb.Dataset, spaceID, datasetID string) error {
+	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		return fmt.Errorf("target dataset %s/%s must be time-series", spaceID, datasetID)
+	}
+	return nil
 }
 
 func (s *MetadataSync) findDataset(ctx context.Context, spaceID string, datasetID string) (*storagepb.Dataset, bool, error) {
@@ -512,8 +554,8 @@ func mergeDatasetFreq(freqs []string, freq string) []string {
 	return append(out, normalized)
 }
 
-func factorColumnOriginID(factorID string, param int) string {
-	return fmt.Sprintf("%s_%d", strings.TrimSpace(factorID), param)
+func factorColumnOriginID(factorID string, output string) string {
+	return strings.TrimSpace(factorID) + "." + strings.TrimSpace(output)
 }
 
 func retOK(ret *commonpb.RetInfo) bool {
@@ -536,6 +578,13 @@ func isDatasetNotFoundRet(ret *commonpb.RetInfo) bool {
 	}
 	return ret.GetCode() == commonpb.ErrorCode_DATASET_NOT_FOUND ||
 		strings.Contains(strings.ToLower(ret.GetMsg()), "dataset not found")
+}
+
+func isFactorNotFoundRet(ret *commonpb.RetInfo) bool {
+	if ret == nil || ret.GetCode() == commonpb.ErrorCode_SUCCESS {
+		return false
+	}
+	return ret.GetCode() == commonpb.ErrorCode_FACTOR_NOT_FOUND
 }
 
 func isRefreshInProgressRet(ret *commonpb.RetInfo) bool {

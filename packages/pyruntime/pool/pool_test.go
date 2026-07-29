@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -9,7 +10,9 @@ import (
 )
 
 type stubWorker struct {
-	state process.State
+	state    process.State
+	closeErr error
+	closed   bool
 }
 
 func (s *stubWorker) Load(context.Context, process.LoadRequest) error { return nil }
@@ -17,7 +20,37 @@ func (s *stubWorker) Run(context.Context, process.RunRequest) (process.RunResult
 	return process.RunResult{Meta: []byte(`{"ok":true}`)}, nil
 }
 func (s *stubWorker) State() process.State { return s.state }
-func (s *stubWorker) Close() error         { return nil }
+func (s *stubWorker) Close() error {
+	s.closed = true
+	return s.closeErr
+}
+
+func TestPoolCloseClosesEveryWorkerAndJoinsErrors(t *testing.T) {
+	firstErr := errors.New("first close failed")
+	secondErr := errors.New("second close failed")
+	workers := []*stubWorker{
+		{state: process.StateReady, closeErr: firstErr},
+		{state: process.StateReady, closeErr: secondErr},
+		{state: process.StateReady},
+	}
+	next := 0
+	p := New(len(workers), func(context.Context) (process.Worker, error) {
+		w := workers[next]
+		next++
+		return w, nil
+	})
+	for _, supervisor := range p.workers {
+		_, err := supervisor.Ensure(context.Background())
+		require.NoError(t, err)
+	}
+
+	err := p.Close()
+	require.ErrorIs(t, err, firstErr)
+	require.ErrorIs(t, err, secondErr)
+	for _, worker := range workers {
+		assert.True(t, worker.closed)
+	}
+}
 
 func TestPoolRejectsNilFactoryResult(t *testing.T) {
 	p := New(1, func(context.Context) (process.Worker, error) { return nil, context.Canceled })

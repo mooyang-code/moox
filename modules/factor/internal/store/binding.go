@@ -94,11 +94,11 @@ func (r *BindingRepository) ListExecutable(ctx context.Context) ([]domain.Factor
 	return rows, err
 }
 
-// ListEnabledByFactor returns enabled bindings for one factor.
-func (r *BindingRepository) ListEnabledByFactor(ctx context.Context, factorID string) ([]domain.FactorBinding, error) {
+// ListByFactor returns all bindings for one factor.
+func (r *BindingRepository) ListByFactor(ctx context.Context, factorID string) ([]domain.FactorBinding, error) {
 	var rows []domain.FactorBinding
 	err := r.db.WithContext(ctx).
-		Where("c_factor_id = ? AND c_status = ?", strings.TrimSpace(factorID), domain.BindingStatusEnabled).
+		Where("c_factor_id = ?", strings.TrimSpace(factorID)).
 		Order("c_space_id ASC, c_source_dataset ASC, c_freq ASC").
 		Find(&rows).Error
 	return rows, err

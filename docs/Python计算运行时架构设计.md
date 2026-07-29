@@ -130,6 +130,10 @@ mark dead -> Kill -> Wait -> clear process reference
 只调用 `Kill` 不足以完成回收；必须调用 `Wait`，否则宿主可能留下未回收子进程。
 Supervisor 随后清空 worker，并允许后续请求重新创建。
 
+`TaskTimeout` 统一约束 HELLO、LOAD 和 RUN。即使调用方传入 `context.Background()`，
+握手或任务帧永久不返回也会在超时后进入同一 `Kill -> Wait` 回收路径，不依赖调用方
+额外设置 deadline。
+
 共享运行时可以提供显式配置的进程级重试，但业务模块必须只有一个明确的任务级重试
 所有者。例如 Factor 由 Scheduler 的 `max_retry` 控制任务重试，Supervisor 只关闭和
 替换失败 worker，避免两层重试相乘。

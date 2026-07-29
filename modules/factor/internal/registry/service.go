@@ -4,23 +4,33 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
+	"gorm.io/gorm"
 )
 
 var factorFilePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*\.py$`)
 
 // Options controls registry source import behavior.
 type Options struct {
-	FactorsDir     string
-	DefaultPeriods []int
+	FactorsDir string
+}
+
+type ImportOptions struct {
+	FactorID     string
+	InputColumns []string
+	Outputs      []string
+	ParamsJSON   string
+	LookbackRows int
 }
 
 // Service manages local factor definitions.
@@ -36,14 +46,11 @@ func NewService(factors *store.FactorRepository, meta *MetadataSync, opts Option
 	if opts.FactorsDir == "" {
 		opts.FactorsDir = "./factors"
 	}
-	if len(opts.DefaultPeriods) == 0 {
-		opts.DefaultPeriods = []int{20}
-	}
 	return &Service{factors: factors, meta: meta, opts: opts, publisher: moduleregistry.NewSourcePublisher(filepath.Join(opts.FactorsDir, ".versions"))}
 }
 
 // ImportFactorFile imports one trusted Python factor source file into SQLite.
-func (s *Service) ImportFactorFile(ctx context.Context, path string) (*domain.FactorDef, error) {
+func (s *Service) ImportFactorFile(ctx context.Context, path string, options ImportOptions) (*domain.FactorDef, error) {
 	name, err := factorNameFromPath(path)
 	if err != nil {
 		return nil, err
@@ -52,24 +59,38 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string) (*domain.Fa
 	if err != nil {
 		return nil, fmt.Errorf("read factor file %s: %w", path, err)
 	}
-	periods := append([]int(nil), s.opts.DefaultPeriods...)
-	sum := sha256.Sum256(raw)
 	factor := domain.FactorDef{
-		FactorID:     strings.ToLower(name),
+		FactorID:     options.FactorID,
 		Name:         name,
 		SourceCode:   string(raw),
-		SourceHash:   hex.EncodeToString(sum[:]),
-		Periods:      periods,
-		LookbackBars: DefaultLookback(periods),
-		Depends:      DependsFromSource(string(raw)),
-		Status:       domain.FactorStatusEnabled,
+		InputColumns: options.InputColumns,
+		Outputs:      options.Outputs,
+		ParamsJSON:   options.ParamsJSON,
+		LookbackRows: options.LookbackRows,
+		Status:       domain.FactorStatusDisabled,
 	}
 	factor, err = domain.NormalizeFactorDefinition(factor)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.writeSourceBack(name, raw); err != nil {
-		return nil, err
+	raw = []byte(factor.SourceCode)
+	sum := sha256.Sum256(raw)
+	factor.SourceHash = hex.EncodeToString(sum[:])
+	var existing *domain.FactorDef
+	if s.factors != nil {
+		existing, err = s.factors.Get(ctx, factor.FactorID)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		if existing != nil && existing.Name != factor.Name {
+			return nil, fmt.Errorf("factor name is immutable; create a new factor_id")
+		}
+		if existing != nil && !slices.Equal(existing.Outputs, factor.Outputs) {
+			return nil, fmt.Errorf("factor outputs are immutable; create a new factor_id")
+		}
+		if existing != nil {
+			factor.Status = existing.Status
+		}
 	}
 	if s.publisher != nil {
 		version, err := s.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "factor", LogicalID: name, Source: raw})
@@ -79,9 +100,17 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string) (*domain.Fa
 		factor.SourcePath = version.Path
 	}
 	if s.factors != nil {
-		if err := s.factors.Upsert(ctx, factor); err != nil {
+		if existing == nil {
+			err = s.factors.Create(ctx, factor)
+		} else {
+			err = s.factors.Update(ctx, factor)
+		}
+		if err != nil {
 			return nil, err
 		}
+	}
+	if err := s.writeSourceBack(name, raw); err != nil {
+		return nil, err
 	}
 	return &factor, nil
 }

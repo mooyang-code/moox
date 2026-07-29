@@ -30,13 +30,13 @@
         <template #columns>
           <a-table-column title="因子ID" data-index="factor_id" :width="150" />
           <a-table-column title="模块名" data-index="name" :width="130" />
-          <a-table-column title="周期" :width="180">
-            <template #cell="{ record }">{{ record.periods.join(", ") }}</template>
+          <a-table-column title="输入列" :width="180" :ellipsis="true" :tooltip="true">
+            <template #cell="{ record }">{{ record.input_columns.join(", ") }}</template>
           </a-table-column>
-          <a-table-column title="回看" data-index="lookback_bars" :width="90" />
-          <a-table-column title="依赖列" :width="180" :ellipsis="true" :tooltip="true">
-            <template #cell="{ record }">{{ record.depends.join(", ") || "-" }}</template>
+          <a-table-column title="输出列" :width="180" :ellipsis="true" :tooltip="true">
+            <template #cell="{ record }">{{ record.outputs.join(", ") }}</template>
           </a-table-column>
+          <a-table-column title="回看行数" data-index="lookback_rows" :width="100" />
           <a-table-column title="源码Hash" data-index="source_hash" :width="220" :ellipsis="true" :tooltip="true" />
           <a-table-column title="状态" :width="100">
             <template #cell="{ record }">
@@ -46,13 +46,16 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="230" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
                 <a-button size="mini" type="text" @click="toggleStatus(record)">
                   {{ record.status === "enabled" ? "禁用" : "启用" }}
                 </a-button>
+                <a-popconfirm content="仅无绑定因子可删除，确认继续？" @ok="remove(record)">
+                  <a-button size="mini" type="text" status="danger">删除</a-button>
+                </a-popconfirm>
               </a-space>
             </template>
           </a-table-column>
@@ -75,19 +78,25 @@
           <a-input v-model="form.factor_id" :disabled="editing" placeholder="bias" />
         </a-form-item>
         <a-form-item field="name" label="Python 模块名" required>
-          <a-input v-model="form.name" placeholder="Bias" />
+          <a-input v-model="form.name" :disabled="editing" placeholder="Bias" />
         </a-form-item>
         <a-form-item field="status" label="状态">
-          <a-select v-model="form.status">
+          <a-select v-model="form.status" disabled>
             <a-option value="enabled">enabled</a-option>
             <a-option value="disabled">disabled</a-option>
           </a-select>
         </a-form-item>
-        <a-form-item field="lookback_bars" label="回看K线数" required>
-          <a-input-number v-model="form.lookback_bars" :min="1" />
+        <a-form-item field="lookback_rows" label="回看行数" required>
+          <a-input-number v-model="form.lookback_rows" :min="1" />
         </a-form-item>
-        <a-form-item class="form-span-2" field="periods" label="计算周期" required>
-          <a-input-tag v-model="periodTags" allow-clear placeholder="输入正整数后回车，例如 20、96" />
+        <a-form-item class="form-span-2" field="input_columns" label="输入列" required>
+          <a-input-tag v-model="inputTags" allow-clear placeholder="输入列名后回车" />
+        </a-form-item>
+        <a-form-item class="form-span-2" field="outputs" label="输出列" required>
+          <a-input-tag v-model="outputTags" :disabled="editing" allow-clear placeholder="输入输出列名后回车" />
+        </a-form-item>
+        <a-form-item class="form-span-2" field="params_json" label="参数 JSON" required>
+          <a-textarea v-model="form.params_json" :auto-size="{ minRows: 4, maxRows: 10 }" />
         </a-form-item>
         <a-form-item class="form-span-2" field="source_code" label="源码" required>
           <a-textarea class="code-editor" v-model="form.source_code" :auto-size="{ minRows: 16, maxRows: 28 }" />
@@ -100,9 +109,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { createFactorDef, listFactorDefs, setFactorStatus, updateFactorDef } from "@/api/factor";
+import { createFactorDef, deleteFactorDef, listFactorDefs, setFactorStatus, updateFactorDef } from "@/api/factor";
 import type { FactorDef } from "@/api/factor/types";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { validateFactorParamsJSON } from "./factor-form";
 
 defineOptions({ name: "FactorDefinitions" });
 
@@ -112,15 +122,17 @@ const visible = ref(false);
 const editing = ref(false);
 const pagination = reactive(defaultPagination());
 const filters = reactive({ status: "" });
-const periodTags = ref<string[]>(["20"]);
+const inputTags = ref<string[]>(["close"]);
+const outputTags = ref<string[]>(["bias_20"]);
 
 const form = reactive<FactorDef>({
   factor_id: "",
   name: "",
   source_code: "",
-  periods: [20],
-  lookback_bars: 200,
-  depends: [],
+  input_columns: ["close"],
+  outputs: ["bias_20"],
+  params_json: `{"windows":[20]}`,
+  lookback_rows: 200,
   status: "disabled"
 });
 
@@ -150,20 +162,23 @@ function resetForm() {
     factor_id: "",
     name: "",
     source_code: [
-      "def signal(*args):",
-      "    df = args[0]",
-      "    n = args[1]",
-      "    factor_name = args[2]",
-      "    df[factor_name] = df['close'].rolling(n, min_periods=1).mean()",
-      "    return df",
+      "def compute(df, params):",
+      "    close = df['close']",
+      "    outputs = {}",
+      "    for window in params['windows']:",
+      "        average = close.rolling(window, min_periods=1).mean()",
+      "        outputs[f'bias_{window}'] = close / average - 1",
+      "    return outputs",
       ""
     ].join("\n"),
-    periods: [20],
-    lookback_bars: 200,
-    depends: [],
+    input_columns: ["close"],
+    outputs: ["bias_20"],
+    params_json: `{"windows":[20]}`,
+    lookback_rows: 200,
     status: "disabled"
   });
-  periodTags.value = ["20"];
+  inputTags.value = ["close"];
+  outputTags.value = ["bias_20"];
 }
 
 function openCreate() {
@@ -175,7 +190,8 @@ function openCreate() {
 function openEdit(record: FactorDef) {
   editing.value = true;
   Object.assign(form, record);
-  periodTags.value = (record.periods || []).map(String);
+  inputTags.value = [...(record.input_columns || [])];
+  outputTags.value = [...(record.outputs || [])];
   visible.value = true;
 }
 
@@ -184,12 +200,23 @@ async function submit() {
     Message.warning("请补全因子ID、模块名和源码");
     return;
   }
-  const periods = periodTags.value.map(Number);
-  if (!periods.length || periods.some(period => !Number.isInteger(period) || period <= 0)) {
-    Message.warning("计算周期必须是正整数");
+  if (!inputTags.value.length || !outputTags.value.length) {
+    Message.warning("输入列和输出列不能为空");
     return;
   }
-  const payload = { ...form, periods };
+  let paramsJSON: string;
+  try {
+    paramsJSON = validateFactorParamsJSON(form.params_json);
+  } catch (error) {
+    Message.warning(error instanceof SyntaxError ? "参数必须是合法 JSON" : "参数必须是 JSON object");
+    return;
+  }
+  const payload = {
+    ...form,
+    input_columns: [...inputTags.value],
+    outputs: [...outputTags.value],
+    params_json: paramsJSON
+  };
   if (editing.value) await updateFactorDef(payload);
   else await createFactorDef(payload);
   Message.success("因子已保存");
@@ -202,6 +229,16 @@ async function toggleStatus(record: FactorDef) {
   await setFactorStatus(record.factor_id, next);
   Message.success("状态已更新");
   await load();
+}
+
+async function remove(record: FactorDef) {
+  try {
+    await deleteFactorDef(record.factor_id);
+    Message.success("因子已删除");
+    await load();
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "删除因子失败");
+  }
 }
 
 function onPageChange(page: number) {

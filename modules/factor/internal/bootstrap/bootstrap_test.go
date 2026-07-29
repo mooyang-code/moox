@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,19 +40,22 @@ func TestBuildSchedulerTaskUsesRealtimeHalfOpenRange(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
-	require.NoError(t, db.Factors().Upsert(context.Background(), domain.FactorDef{
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
-		Periods: []int{20}, LookbackBars: 100, Status: domain.FactorStatusEnabled,
+		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
+		LookbackRows: 100, Status: domain.FactorStatusEnabled,
 	}))
 	at := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
+	end := at.Add(3*time.Minute + time.Nanosecond)
 	task, ok, err := buildSchedulerTask(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
-		SubjectID: "BTC", Freq: "1m", BarTime: at, FactorIDs: []string{"bias"},
+		SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: end, FactorIDs: []string{"bias"},
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, at, task.StartTime)
-	require.Equal(t, at.Add(time.Nanosecond), task.EndTime)
+	require.Equal(t, end, task.EndTime)
+	require.Equal(t, scheduler.DeterministicTaskID(task), task.TaskID)
 }
 
 func TestDisabledFactorMakesRealtimeTaskNoop(t *testing.T) {
@@ -58,13 +63,14 @@ func TestDisabledFactorMakesRealtimeTaskNoop(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
-	require.NoError(t, db.Factors().Upsert(context.Background(), domain.FactorDef{
+	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
-		Periods: []int{20}, LookbackBars: 100, Status: domain.FactorStatusDisabled,
+		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
+		LookbackRows: 100, Status: domain.FactorStatusDisabled,
 	}))
 	_, ok, err := buildSchedulerTask(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
 		SpaceID: "crypto", SourceDataset: "bars", SubjectID: "BTC", Freq: "1m",
-		BarTime: time.Now(), FactorIDs: []string{"bias"},
+		StartTime: time.Now(), EndTime: time.Now().Add(time.Nanosecond), FactorIDs: []string{"bias"},
 	})
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -84,4 +90,11 @@ func TestMetricsTimerRefreshFailureDoesNotBlockReporter(t *testing.T) {
 	require.NoError(t, handler(context.Background()))
 	require.Equal(t, 1, inventory.refreshes)
 	require.Equal(t, 1, reporter.calls)
+}
+
+func TestFactorAuthInfoSignsPrimaryRequestFromRuntimeSecret(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", " primary-secret ")
+	auth := factorAuthInfo()
+	require.Equal(t, "moox-factor", auth.GetAppId())
+	require.Equal(t, mooxsecurity.HMACSHA256Hex(" primary-secret ", []byte("moox-factor")), auth.GetAppKey())
 }

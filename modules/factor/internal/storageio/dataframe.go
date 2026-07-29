@@ -9,34 +9,39 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// KLineColumns is the canonical V1 OHLCV input order.
-var KLineColumns = []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"}
-
 // RowsToDataFrame converts Storage rows into an engine DataFrame sorted by data_time ASC.
 func RowsToDataFrame(rows []*storagepb.TimeSeriesRow, columns []string) (*engine.DataFrame, error) {
-	ordered := append([]*storagepb.TimeSeriesRow(nil), rows...)
+	type timedRow struct {
+		row      *storagepb.TimeSeriesRow
+		dataTime time.Time
+	}
+	ordered := make([]timedRow, 0, len(rows))
+	for _, row := range rows {
+		raw := row.GetKey().GetDataTime()
+		dataTime, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse data_time %q: %w", raw, err)
+		}
+		ordered = append(ordered, timedRow{row: row, dataTime: dataTime.UTC()})
+	}
 	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].GetKey().GetDataTime() < ordered[j].GetKey().GetDataTime()
+		return ordered[i].dataTime.Before(ordered[j].dataTime)
 	})
 	frame := &engine.DataFrame{
 		Columns:   append([]string(nil), columns...),
 		Rows:      make([][]any, 0, len(ordered)),
 		DataTimes: make([]time.Time, 0, len(ordered)),
 	}
-	for _, row := range ordered {
-		dataTime, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
-		if err != nil {
-			return nil, fmt.Errorf("parse data_time %q: %w", row.GetKey().GetDataTime(), err)
-		}
-		valuesByName := make(map[string]any, len(row.GetFields()))
-		for _, field := range row.GetFields() {
+	for _, item := range ordered {
+		valuesByName := make(map[string]any, len(item.row.GetFields()))
+		for _, field := range item.row.GetFields() {
 			valuesByName[field.GetFieldId()] = typedValueToAny(field.GetValue())
 		}
 		out := make([]any, 0, len(columns))
 		for _, name := range columns {
 			out = append(out, valuesByName[name])
 		}
-		frame.DataTimes = append(frame.DataTimes, dataTime.UTC())
+		frame.DataTimes = append(frame.DataTimes, item.dataTime)
 		frame.Rows = append(frame.Rows, out)
 	}
 	return frame, nil

@@ -7,36 +7,99 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
-func TestImportFactorFileUsesPeriodsAndDepends(t *testing.T) {
+func TestImportFactorFileUsesExplicitGenericDefinition(t *testing.T) {
 	dir := t.TempDir()
-	source := "extra_data_dict = {'x': ['funding_rate']}\ndef signal(*args): return args[0]\n"
+	source := "def compute(df, params): return {'bias': df['close']}\n"
 	path := filepath.Join(dir, "Bias.py")
 	require.NoError(t, os.WriteFile(path, []byte(source), 0o644))
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
-	svc := NewService(store.NewFactorRepository(db), nil, Options{
-		FactorsDir: dir, DefaultPeriods: []int{20},
+	svc := NewService(store.NewFactorRepository(db), nil, Options{FactorsDir: dir})
+	factor, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{
+		FactorID: "bias", InputColumns: []string{"close"}, Outputs: []string{"bias"},
+		ParamsJSON: `{"window":20}`, LookbackRows: 20,
 	})
-	factor, err := svc.ImportFactorFile(context.Background(), path)
 	require.NoError(t, err)
-	require.Equal(t, []int{20}, factor.Periods)
-	require.Equal(t, []string{"funding_rate"}, factor.Depends)
-	require.GreaterOrEqual(t, factor.LookbackBars, 20)
+	require.Equal(t, []string{"close"}, factor.InputColumns)
+	require.Equal(t, []string{"bias"}, factor.Outputs)
+	require.Equal(t, 20, factor.LookbackRows)
 	require.NotEmpty(t, factor.SourcePath)
+	require.Equal(t, "disabled", factor.Status)
 }
 
-func TestDefaultLookback(t *testing.T) {
-	require.Equal(t, 200, DefaultLookback(nil))
-	require.Equal(t, 864, DefaultLookback([]int{20, 96, 288}))
+func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Generic.py")
+	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
+	repo := store.NewFactorRepository(db)
+	svc := NewService(repo, nil, Options{FactorsDir: dir})
+	options := ImportOptions{
+		FactorID: "generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
+		ParamsJSON: `{}`, LookbackRows: 2,
+	}
+	_, err = svc.ImportFactorFile(context.Background(), path, options)
+	require.NoError(t, err)
+
+	options.LookbackRows = 3
+	updated, err := svc.ImportFactorFile(context.Background(), path, options)
+	require.NoError(t, err)
+	require.Equal(t, 3, updated.LookbackRows)
+	require.Equal(t, "disabled", updated.Status)
+
+	renamedPath := filepath.Join(dir, "Renamed.py")
+	require.NoError(t, os.WriteFile(renamedPath, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	_, err = svc.ImportFactorFile(context.Background(), renamedPath, options)
+	require.ErrorContains(t, err, "name is immutable")
+
+	options.Outputs = []string{"changed"}
+	_, err = svc.ImportFactorFile(context.Background(), path, options)
+	require.ErrorContains(t, err, "immutable")
+	stored, err := repo.Get(context.Background(), "generic")
+	require.NoError(t, err)
+	require.Equal(t, []string{"value"}, stored.Outputs)
+}
+
+func TestImportFactorFilePreservesExistingEnabledStatus(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Generic.py")
+	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
+	repo := store.NewFactorRepository(db)
+	require.NoError(t, repo.Create(context.Background(), domain.FactorDef{
+		FactorID: "generic", Name: "Generic", SourceCode: "old", SourceHash: "old",
+		InputColumns: []string{"value"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
+		LookbackRows: 2, Status: domain.FactorStatusEnabled,
+	}))
+	svc := NewService(repo, nil, Options{FactorsDir: dir})
+
+	updated, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{
+		FactorID: "generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
+		ParamsJSON: `{"window":2}`, LookbackRows: 3,
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorStatusEnabled, updated.Status)
+	stored, err := repo.Get(context.Background(), "generic")
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorStatusEnabled, stored.Status)
 }
 
 func TestResultDataset(t *testing.T) {
-	require.Equal(t, "binance_spot_factor", ResultDataset("binance_spot_kline"))
+	require.Equal(t, "foo_kline_factor", ResultDataset("foo_kline"))
+	require.NotEqual(t, ResultDataset("foo"), ResultDataset("foo_kline"))
+	require.NotEqual(t, ResultDataset("same-long-readable-prefix-one"), ResultDataset("same-long-readable-prefix-two"))
+	require.NotEqual(t, ResultDataset("same-long-prefix-138"), ResultDataset("same-long-prefix-489"))
+	require.LessOrEqual(t, len(ResultDataset("same-long-prefix-138")), 20)
 }

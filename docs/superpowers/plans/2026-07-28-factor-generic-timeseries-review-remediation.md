@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将 `modules/factor` 收敛为简单、通用的时序数值因子模块，移除核心层对 OHLCV、整数 period 和邢不行 `signal` 协议的强制假设，同时修复本轮 review 识别出的 5 个真实正确性问题。
+**Goal:** 将 `modules/factor` 收敛为简单、通用的时序数值因子模块，移除核心层对 OHLCV、整数 period 和旧 `signal` 协议的强制假设，同时修复本轮 review 识别出的 5 个真实正确性问题。
 
 **Architecture:** 保留当前单实例、进程内 scheduler、best-effort realtime、Storage 事实源和 Go 调度 Python 的边界。Factor 定义显式声明输入列、输出列、静态 JSON 参数和回看行数；Python 统一执行 `compute(df, params)`，K 线只作为管理台初始模板和示例存在。实时事件按完整 scope 合并成半开时间范围，补算和实时继续复用同一个 range runner。
 
@@ -23,6 +23,32 @@ date:       2026-07-28
 ```
 
 实施开始时必须重新记录 HEAD。如果代码已变化，先逐项复核本计划中的文件和符号，不允许机械套用旧行号。
+
+### 1.1 实施状态（2026-07-29）
+
+本计划已在独立 worktree
+`/Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries`
+和分支 `feature/factor-generic-timeseries` 中完成。修改前基线测试由最初实施会话执行；
+后续每个任务均先建立失败用例，再提交实现，不以最终绿灯反推修改前状态。
+
+关键提交按职责归档如下：
+
+| 范围 | 关键提交 |
+| --- | --- |
+| worker 生命周期 | `947d457a`、`b28f66d7`、`64aac8be`、`8cef9002`、`856f6f4d` |
+| null 清值 | `b82cd977` |
+| 通用时序契约 | `a24b1b6b`、`cde53019`、`cce11d51`、`9f3b125e`、`fe1c3503`、`2eb5943a` |
+| metadata 与启用顺序 | `1eca9599`、`0968fb5e`、`28b084f2`、`d9925c7b` |
+| realtime 范围合并 | `5a32d210`、`ae6b39be`、`7a13b86d`、`8efd4754` |
+| run-once 与发布 | `28fd1e54`、`71dd1fe9`、`18cabe65`、`d2c8e67c`、`e566a91e` |
+| 真实 Storage E2E | `dd84aab3` 至 `158272ca` 的 E2E 收敛提交 |
+
+后续 review 补充的三个不变量也已经纳入实现：
+
+1. `name` 与 `outputs` 均不可通过 Update 或再次 import 修改。
+2. `SetFactorStatus` 是唯一状态写入口；Create/import 固定 disabled，普通 Update 保留状态。
+3. `TaskTimeout` 覆盖 HELLO、LOAD、RUN、阻塞写帧和等待响应，fatal path 全部
+   `Kill + Wait`。
 
 ## 2. 已确认的设计决策
 
@@ -66,7 +92,14 @@ message FactorDef {
 
 如果同一算法需要不同参数，创建不同 `factor_id`，不增加 binding 级参数覆盖。
 
-`outputs` 创建后不可修改。需要重命名或删除输出时创建新的 Factor 定义，避免个人项目为了列迁移引入复杂状态机。`source_code`、`input_columns`、`params_json` 和 `lookback_rows` 可以更新。
+`name` 和 `outputs` 创建后不可修改。需要修改 Python 模块名、重命名或删除输出时创建
+新的 Factor 定义，避免个人项目为了文件迁移和列迁移引入复杂状态机。
+`source_code`、`input_columns`、`params_json` 和 `lookback_rows` 可以更新。
+
+新建 Factor 和 CLI import 一律以 `disabled` 落库。普通 `UpdateFactor`、repository
+`Update` 和再次 import 只更新可变定义字段并保留既有状态；`SetFactorStatus` 是唯一
+状态写入口。启用时先完成 Storage metadata 与全部 enabled Binding target 的
+reconciliation，全部成功后才持久化 `enabled`。
 
 ### 2.3 Python 最终契约
 
@@ -168,15 +201,15 @@ candle_begin_time
 **Files:**
 - No code changes
 
-- [ ] **Step 1: 创建独立 worktree**
+- [x] **Step 1: 创建独立 worktree**
 
 Run:
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
 git status --short --branch
-git worktree add ../moox-factor-generic-timeseries -b feature/factor-generic-timeseries
-cd ../moox-factor-generic-timeseries
+git worktree add .worktrees/factor-generic-timeseries -b feature/factor-generic-timeseries
+cd .worktrees/factor-generic-timeseries
 git rev-parse HEAD
 ```
 
@@ -187,12 +220,12 @@ Expected:
 新 worktree HEAD 等于执行时记录的基线 SHA
 ```
 
-- [ ] **Step 2: 运行修改前证明集**
+- [x] **Step 2: 运行修改前证明集**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./... -count=1
 go test -race ./... -count=1
 go vet ./...
@@ -201,19 +234,19 @@ go vet ./...
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/packages/pyruntime
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/packages/pyruntime
 go test ./... -count=1
 go test -race ./... -count=1
 ```
 
 Expected: all PASS. 若失败，先确认是基线问题还是环境依赖问题，并把原始失败记录到实施日志，不得把基线失败归因于后续改动。
 
-- [ ] **Step 3: 运行 Python 基线**
+- [x] **Step 3: 运行 Python 基线**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 PYTHONPATH="$PWD/../../packages/pyruntime/python" \
   uv run --with-requirements pyworker/requirements.txt \
   python -m pytest pyworker -q
@@ -233,7 +266,7 @@ Expected: current Python tests PASS.
 - Modify: `packages/pyruntime/pool/pool.go`
 - Modify: `packages/pyruntime/pool/pool_test.go`
 
-- [ ] **Step 1: 为 dead worker 替换和多 worker Close 写失败测试**
+- [x] **Step 1: 为 dead worker 替换和多 worker Close 写失败测试**
 
 在 `supervisor_test.go` 增加：
 
@@ -284,13 +317,13 @@ func TestStdioWorkerCloseReapsProcessAndIsIdempotent(t *testing.T) {
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/packages/pyruntime
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/packages/pyruntime
 go test ./process ./pool -run 'TestSupervisorEnsureClosesDeadWorkerBeforeReplacement|TestPoolCloseContinuesAfterWorkerError' -count=1
 ```
 
 Expected: FAIL，证明当前 `RunLoadedMany` 和 `Pool.Close` 会遗留 worker。
 
-- [ ] **Step 2: 增加幂等 terminate helper**
+- [x] **Step 2: 增加幂等 terminate helper**
 
 在 `worker.go` 增加仅在持有 `w.mu` 时调用的 helper：
 
@@ -322,7 +355,7 @@ func (w *StdioWorker) terminateLocked() error {
 
 将 `Run` 和 `control` 中写失败、超时、读失败、`TYPE_ERROR`、意外 frame 的 fatal 分支统一调用 `terminateLocked()`。`Close()` 只加锁后调用该 helper，二次 Close 必须返回 nil。
 
-- [ ] **Step 3: Supervisor 不得覆盖未关闭 worker**
+- [x] **Step 3: Supervisor 不得覆盖未关闭 worker**
 
 修改 `Supervisor.Ensure`：
 
@@ -348,7 +381,7 @@ return result, nil
 
 不在 Supervisor 内额外重试 Factor Run；现有 scheduler 的 `max_retry` 仍是任务级唯一重试策略。
 
-- [ ] **Step 4: Pool 关闭全部 supervisor**
+- [x] **Step 4: Pool 关闭全部 supervisor**
 
 修改 `pool.Close`：
 
@@ -364,12 +397,12 @@ func (p *Pool) Close() error {
 }
 ```
 
-- [ ] **Step 5: 运行共享 runtime 和 Strategy 回归**
+- [x] **Step 5: 运行共享 runtime 和 Strategy 回归**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/packages/pyruntime
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/packages/pyruntime
 go test ./... -count=1
 go test -race ./... -count=1
 ```
@@ -377,13 +410,13 @@ go test -race ./... -count=1
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/strategy
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/strategy
 go test ./internal/engine/... -count=1
 ```
 
 Expected: PASS；错误 Factor 不再遗留可继续循环的 Python 子进程，Strategy 共享调用不回归。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add packages/pyruntime/process packages/pyruntime/pool
@@ -405,7 +438,7 @@ git commit -m "fix(pyruntime): reap failed python workers"
 - Modify: `modules/factor/internal/storageio/writeback.go`
 - Modify: `modules/factor/internal/storageio/client_test.go`
 
-- [ ] **Step 1: 写 null 覆盖旧值的失败测试**
+- [x] **Step 1: 写 null 覆盖旧值的失败测试**
 
 将 `TestWriteFactorPatchSkipsNullCells` 改名为 `TestWriteFactorPatchWritesExplicitNullCells`，核心断言：
 
@@ -448,13 +481,13 @@ func TestMetadataValidatorAcceptsExplicitNullForRegisteredColumn(t *testing.T) {
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./internal/storageio -run TestWriteFactorPatchWritesExplicitNullCells -count=1
 ```
 
 Expected: FAIL，当前代码会跳过 null。
 
-- [ ] **Step 2: 统一本地和公共事件 enum 名称**
+- [x] **Step 2: 统一本地和公共事件 enum 名称**
 
 将 `modules/storage/proto/common.proto` 改为：
 
@@ -470,13 +503,13 @@ wire number 保持 `1`，只是让 Storage 本地 Proto 与 `packages/storagepb/
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 make -C modules/storage/proto all
 ```
 
 更新 `modules/archive/internal/domain/row.go` 中生成符号引用。不得手改生成的 `.pb.go`。
 
-- [ ] **Step 3: Metadata validator 允许已注册列写有效 null**
+- [x] **Step 3: Metadata validator 允许已注册列写有效 null**
 
 在字段循环中先确认列存在，再处理 null：
 
@@ -491,7 +524,7 @@ if typed, ok := field.GetValue().GetValue().(*pb.TypedValue_NullValue); ok {
 
 只有非 null 才继续执行 declared/actual 类型相等校验。未知列仍必须在 null 判断前失败。
 
-- [ ] **Step 4: Factor 写回 null marker**
+- [x] **Step 4: Factor 写回 null marker**
 
 在 `writeback.go` 增加：
 
@@ -522,34 +555,34 @@ if values[i] == nil {
 
 每个结果行都包含所有声明输出的 double 或 null，不再通过省略字段表达计算结果。
 
-- [ ] **Step 5: 验证 null 跨边界保留**
+- [x] **Step 5: 验证 null 跨边界保留**
 
 在 `eventmapper/rows_test.go` 的输入中加入本地 `NULL_VALUE_NULL`，断言 `ToEventRows` 和 `ToStorageRows` 往返后仍为 null。
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/storage
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/storage
 go test ./internal/eventmapper ./internal/service/primarystore ./internal/service/datanode/pebble -count=1
 ```
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./internal/storageio -count=1
 ```
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/archive
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/archive
 go test ./... -count=1
 ```
 
 Expected: PASS；旧 double 被显式 null 覆盖，事件转换和 Archive 编译均正常。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules/storage/proto modules/storage/internal modules/archive/internal/domain/row.go modules/factor/internal/storageio
@@ -611,7 +644,7 @@ git commit -m "fix(storage): honor explicit null field updates"
 - Modify: `web/src/views/factor/definitions/index.vue`
 - Modify: `web/src/views/factor/__tests__/factor-contract.spec.ts`
 
-- [ ] **Step 1: 先写新的 Domain 和 scheduler 失败测试**
+- [x] **Step 1: 先写新的 Domain 和 scheduler 失败测试**
 
 `validation_test.go` 使用：
 
@@ -666,20 +699,20 @@ func TestInputColumnsUsesOnlyDeclaredColumns(t *testing.T) {
 
 并增加两个 Factor 声明同一 output 时 `BuildTask` 返回错误的测试。
 
-- [ ] **Step 2: 替换 Proto 并生成 factorgen**
+- [x] **Step 2: 替换 Proto 并生成 factorgen**
 
 将 `FactorDef` 替换为本计划 2.2 的最终定义，不 `reserved` 旧字段，不保留旧 tag 别名。
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 make -C modules/factor/proto all
 ```
 
 Expected: `factor.pb.go` 和 `factor.trpc.go` 只出现新字段。
 
-- [ ] **Step 3: 替换 SQLite 和 Domain**
+- [x] **Step 3: 替换 SQLite 和 Domain**
 
 `t_factor_defs` 最终列：
 
@@ -730,7 +763,7 @@ factor database uses an obsolete schema; create a fresh database
 
 不写 `ALTER TABLE`、复制脚本或双读逻辑。
 
-- [ ] **Step 4: 实现通用定义归一化**
+- [x] **Step 4: 实现通用定义归一化**
 
 `NormalizeFactorDefinition` 必须：
 
@@ -771,7 +804,7 @@ func normalizeParamsJSON(raw string) (string, error) {
 
 实现时使用第二次 decode 或检查 EOF 来拒绝尾随 JSON；不要只依赖 `dec.More()`。
 
-- [ ] **Step 5: 更新 RPC 转换，并让所有写入口维护 outputs 不变量**
+- [x] **Step 5: 更新 RPC 转换，并让所有写入口维护 outputs 不变量**
 
 `factorToPB`/`factorFromPB` 映射新字段。
 
@@ -814,7 +847,7 @@ UpdateFactor 修改 outputs -> 拒绝
 
 registry import 在不存在时调用 Create，已存在时先应用相同的 outputs 不可变校验再调用 Update。
 
-- [ ] **Step 6: 删除源码猜测，改为显式单文件 import**
+- [x] **Step 6: 删除源码猜测，改为显式单文件 import**
 
 删除 `DefaultLookback`、`DependsFromSource` 和三个源码正则。
 
@@ -850,7 +883,7 @@ CLI `import` 改为一次导入一个文件：
 
 删除 `--default-periods`、目录扫描和 `parseIntCSV`。输入/输出继续复用 `parseStringCSV`。
 
-- [ ] **Step 7: 删除默认 target 命名中的 K 线特判**
+- [x] **Step 7: 删除默认 target 命名中的 K 线特判**
 
 `ResultDataset` 不得再删除 source dataset 的 `_kline` 后缀。最终规则：
 
@@ -869,7 +902,7 @@ ResultDataset("foo_kline") == "foo_kline_factor"
 两个超过 20 字符但前缀相同的 source 不碰撞
 ```
 
-- [ ] **Step 8: 替换 Engine 和 scheduler 类型**
+- [x] **Step 8: 替换 Engine 和 scheduler 类型**
 
 最终类型：
 
@@ -927,7 +960,7 @@ func inputColumns(specs []engine.FactorSpec) []string {
 
 `validateFactorResult` 的 expected set 来自 `spec.Outputs`，不再拼接 `Name_period`。
 
-- [ ] **Step 9: 改为纳秒时间和 params object 请求**
+- [x] **Step 9: 改为纳秒时间和 params object 请求**
 
 `EncodeJSONRequestMeta` 使用 RFC3339Nano 字符串，避免 UnixMilli 截断：
 
@@ -965,7 +998,7 @@ DataFrame meta：
 },
 ```
 
-- [ ] **Step 10: 替换 Python codec 和 worker**
+- [x] **Step 10: 替换 Python codec 和 worker**
 
 `decode_json_df`：
 
@@ -1029,7 +1062,7 @@ for factor in meta.get("factors", []):
 
 `target_mask` 使用 `df["data_time"]`。删除全部 `signal*` 和 `candle_begin_time` 分支。
 
-- [ ] **Step 11: 迁移并收敛所有公开示例**
+- [x] **Step 11: 迁移并收敛所有公开示例**
 
 `Bias.py`：
 
@@ -1060,7 +1093,7 @@ K 线只是这两个文件的业务输入，不进入框架判断。
 
 其余旧 `timeseries` 文件仍依赖 `signal`、隐式 period 或特定交易数据列；绿地项目不保留失效样例，直接删除。`examples/factors/sections/` 属于本模块明确不支持的截面协议，也直接删除。更新 `examples/factors/README.md`，只列出仍可被当前 CLI 导入并执行的三个文件。
 
-- [ ] **Step 12: 更新管理台契约**
+- [x] **Step 12: 更新管理台契约**
 
 TypeScript：
 
@@ -1109,12 +1142,12 @@ if (!params || Array.isArray(params) || typeof params !== "object") {
 
 新建表单可以预填 K 线 Bias 草稿，但不得增加 `kind: "kline"` 或后端模板字段。
 
-- [ ] **Step 13: 运行原子契约验证**
+- [x] **Step 13: 运行原子契约验证**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./... -count=1
 go test -race ./internal/domain ./internal/registry ./internal/engine ./internal/scheduler ./internal/rpc ./internal/store -count=1
 go vet ./...
@@ -1123,7 +1156,7 @@ go vet ./...
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 PYTHONPATH="$PWD/../../packages/pyruntime/python" \
   uv run --with-requirements pyworker/requirements.txt \
   python -m pytest pyworker -q
@@ -1132,7 +1165,7 @@ PYTHONPATH="$PWD/../../packages/pyruntime/python" \
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 pnpm --dir web exec vitest run \
   --config vitest.config.ts \
   src/views/factor/__tests__/factor-contract.spec.ts
@@ -1141,12 +1174,12 @@ pnpm --dir web run build:prod
 
 Expected: PASS。Python 测试必须证明双输出、缺失/多余输出、错位 Series、旧 `signal` 拒绝和纳秒 `data_time`。
 
-- [ ] **Step 14: 扫描核心假设残留**
+- [x] **Step 14: 扫描核心假设残留**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 rg -n \
   'DefaultPeriods|DefaultLookback|DependsFromSource|KLineColumns|signal_multi_params|c_periods_json|c_depends_json|candle_begin_time|TrimSuffix\([^[:cntrl:]]*_kline' \
   examples/factors \
@@ -1161,7 +1194,7 @@ rg -n \
 
 Expected: no matches。历史计划文档不在这个静态扫描范围内。
 
-- [ ] **Step 15: 提交**
+- [x] **Step 15: 提交**
 
 ```bash
 git add modules/factor web/src/api/factor web/src/views/factor
@@ -1180,7 +1213,7 @@ git commit -m "refactor(factor): generalize time-series factor contract"
 - Modify: `modules/factor/internal/domain/factor.go`
 - Modify: `modules/factor/internal/domain/binding_test.go`
 
-- [ ] **Step 1: 写 active target 扩列失败测试**
+- [x] **Step 1: 写 active target 扩列失败测试**
 
 在 fake MetadataClient 中配置：
 
@@ -1218,13 +1251,13 @@ func (f *fakeMetadataClient) upsertedColumnNames() []string {
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./internal/registry -run TestSyncTargetDatasetReconcilesOutputsForActiveLockedTarget -count=1
 ```
 
 Expected: FAIL，当前 `SyncTargetDataset` 在列同步前返回。
 
-- [ ] **Step 2: 重排 SyncTargetDataset**
+- [x] **Step 2: 重排 SyncTargetDataset**
 
 最终顺序：
 
@@ -1262,7 +1295,7 @@ map[string]string{
 
 不再写 `factor_param`。
 
-- [ ] **Step 3: Storage Factor metadata 使用 Create-or-Update**
+- [x] **Step 3: Storage Factor metadata 使用 Create-or-Update**
 
 扩展 `MetadataClient` 加入 `UpdateFactor`。逻辑：
 
@@ -1302,7 +1335,7 @@ if err != nil {
 
 Factor 定义已在 Domain 归一化，slice marshal 通常不会失败；实现仍必须返回 marshal error，不使用 panic。
 
-- [ ] **Step 4: 校验并规范化 subjects_json**
+- [x] **Step 4: 校验并规范化 subjects_json**
 
 `subject_mode=all` 时固定保存 `[]`。
 
@@ -1321,19 +1354,19 @@ func NormalizeBindingSubjects(mode, raw string) (string, error)
 
 `normalizeBinding` 在持久化和 Metadata 同步前调用。`BindingAllowsSubject` 可以继续做防御性解析，但非法 RPC 输入必须返回 `INVALID_PARAM`，不能成功落库后永远不匹配。
 
-- [ ] **Step 5: 验证**
+- [x] **Step 5: 验证**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./internal/registry ./internal/rpc ./internal/domain -count=1
 go test -race ./internal/registry ./internal/rpc -count=1
 ```
 
 Expected: PASS；active target 可以增加第二个 Factor 的输出列，且不重复 activation。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules/factor/internal/registry modules/factor/internal/rpc modules/factor/internal/domain
@@ -1352,7 +1385,7 @@ git commit -m "fix(factor): reconcile active result datasets"
 - Modify: `modules/factor/internal/scheduler/service.go`
 - Modify: `modules/factor/internal/scheduler/service_test.go`
 
-- [ ] **Step 1: 写多行范围失败测试**
+- [x] **Step 1: 写多行范围失败测试**
 
 测试一个 event 同一 scope 包含：
 
@@ -1415,7 +1448,7 @@ func rangeTask(subject string, start, end time.Time) Task {
 
 Expected: FAIL。
 
-- [ ] **Step 2: EventBatcher 持有半开范围**
+- [x] **Step 2: EventBatcher 持有半开范围**
 
 `trigger.Task`：
 
@@ -1456,7 +1489,7 @@ if end.After(bucket.task.EndTime) {
 
 不保存每个 bar 的集合，不生成每 bar 一个 scheduler task。范围中的实际目标行由 `ReadRangeChunk` 从 Storage 返回，天然跳过不存在的时间点。
 
-- [ ] **Step 3: bootstrap 直接提交范围**
+- [x] **Step 3: bootstrap 直接提交范围**
 
 `buildSchedulerTask`：
 
@@ -1467,7 +1500,7 @@ EndTime:   task.EndTime,
 
 `deterministicTaskID` 同时写入 RFC3339Nano 的 start/end。删除所有 `BarTime` 引用。
 
-- [ ] **Step 4: pending task 合并范围而不是替换**
+- [x] **Step 4: pending task 合并范围而不是替换**
 
 `Enqueue` 的同 key 分支：
 
@@ -1489,19 +1522,19 @@ if current, ok := s.pending[key]; ok {
 
 使用最新 Factor snapshot，但保留两个 pending task 的范围并集。running task 不做在线合并；其间到达的新事件进入下一批，仍符合 best-effort 边界。
 
-- [ ] **Step 5: 验证多行 Collector 语义**
+- [x] **Step 5: 验证多行 Collector 语义**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./internal/trigger ./internal/bootstrap ./internal/scheduler -count=1
 go test -race ./internal/trigger ./internal/scheduler -count=1
 ```
 
 Expected: PASS；一个 Collector catch-up batch 不再只计算最大 data_time。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules/factor/internal/trigger modules/factor/internal/bootstrap modules/factor/internal/scheduler
@@ -1525,7 +1558,7 @@ git commit -m "fix(factor): preserve realtime event ranges"
 - Modify: `scripts/deploy-moox.sh`
 - Modify: `scripts/test-release-contract.sh`
 
-- [ ] **Step 1: 写 config precedence 失败测试**
+- [x] **Step 1: 写 config precedence 失败测试**
 
 临时 YAML 包含非默认值：
 
@@ -1558,13 +1591,13 @@ timeout/max_retry 来自配置
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./cmd/cli -run 'TestRunOnceLoadsAppConfig|TestRunOnceCLIOverridesAppConfig' -count=1
 ```
 
 Expected: FAIL，当前使用 `bootstrap.Default()`。
 
-- [ ] **Step 2: 配置 worker_path**
+- [x] **Step 2: 配置 worker_path**
 
 `EngineConfig` 增加：
 
@@ -1589,7 +1622,7 @@ MOOX_FACTOR_ENGINE_WORKER_PATH
 
 服务 bootstrap 和 run-once 都使用 `cfg.Engine.WorkerPath`，删除两处硬编码。
 
-- [ ] **Step 3: CLI 增加 --config 并实现优先级**
+- [x] **Step 3: CLI 增加 --config 并实现优先级**
 
 `cliConfig` 增加：
 
@@ -1622,7 +1655,7 @@ if cli.FactorsDir != "" {
 
 根据 `<factor-runtime>/config/app.yaml` 布局，把相对的 DB、factor dir 和 worker path 解析到 config 目录的父目录。绝对路径保持不变。
 
-- [ ] **Step 4: 提供可从干净 shell 执行的部署 wrapper**
+- [x] **Step 4: 提供可从干净 shell 执行的部署 wrapper**
 
 服务进程仍通过 `FACTOR_ENV` 启动；同时新增 `scripts/moox-factor-run-once.sh` 并在发布包安装为 `${ROOT}/bin/moox-factor-run-once`。wrapper 自己解析 `${ROOT}`，不能依赖 `start_factor` 函数执行后留在父 shell 的数组或变量。
 
@@ -1663,19 +1696,19 @@ exec "${ROOT}/bin/moox-factor-cli" run-once \
   --end-time 2026-07-28T01:00:00Z
 ```
 
-- [ ] **Step 5: 验证配置和发布 wrapper**
+- [x] **Step 5: 验证配置和发布 wrapper**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./internal/bootstrap ./cmd/cli -count=1
 ```
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 ./scripts/build.sh factor
 bash scripts/test-release-contract.sh
 ```
@@ -1692,7 +1725,7 @@ node id、target 和 CA 均已设置
 
 再补一个真实部署 smoke：服务启动后从干净 shell 调用 wrapper 对两行临时时序数据执行 `run-once`，退出码必须为 0。Expected: PASS；两个 Factor 二进制生成，发布包包含 wrapper、worker、factors 和 Python runtime。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules/factor/internal/bootstrap modules/factor/config modules/factor/cmd/cli scripts
@@ -1713,7 +1746,7 @@ git commit -m "fix(factor): load runtime config for run-once"
 - Add: `scripts/test-factor-storage-e2e.sh`
 - Modify: `scripts/verify-event-contracts.sh`
 
-- [ ] **Step 1: 将现有组件集成测试改为非 K 线输入和多行事件**
+- [x] **Step 1: 将现有组件集成测试改为非 K 线输入和多行事件**
 
 E2E Factor source：
 
@@ -1757,7 +1790,7 @@ Python 一次调用返回两个 output
 
 这个测试继续保留 NATS、scheduler 和真实 Python，但 Storage 是 fake，因此准确定位为“Factor pipeline component integration”，不能作为真实 Storage E2E 的唯一证据。
 
-- [ ] **Step 2: 增加穿过真实 Storage 的验收**
+- [x] **Step 2: 增加穿过真实 Storage 的验收**
 
 `storage_e2e_test.go` 使用 `//go:build integration`，只使用公开 Storage Metadata/Primary/View RPC client 和真实 `storageio.Client`，禁止定义 `storageFake`、`fakeAccessClient` 或直接构造 DataFrame。
 
@@ -1786,7 +1819,7 @@ Python 一次调用返回两个 output
 
 脚本缺少任一服务或凭证时必须 fail，不得 skip 成功。该脚本加入最终本地部署验收；普通 `go test ./...` 不依赖运行中的服务。
 
-- [ ] **Step 3: 文档写清最终契约**
+- [x] **Step 3: 文档写清最终契约**
 
 README 必须包含：
 
@@ -1804,7 +1837,7 @@ realtime best-effort 边界
 
 不恢复旧计划中的 durable inbox、FactorRun、Arrow、截面因子或多实例分片。
 
-- [ ] **Step 4: 更新静态边界检查**
+- [x] **Step 4: 更新静态边界检查**
 
 `verify-event-contracts.sh` 增加对 active Factor 代码的拒绝项：
 
@@ -1819,12 +1852,12 @@ c_depends_json
 
 同时保留现有对 Inbox、replay、cross_section、Arrow 和异步补算状态的拒绝。
 
-- [ ] **Step 5: 运行 Factor 完整验收**
+- [x] **Step 5: 运行 Factor 完整验收**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 go test ./... -count=1
 go test -race ./... -count=1
 go vet ./...
@@ -1833,7 +1866,7 @@ go vet ./...
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries/modules/factor
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries/modules/factor
 PYTHONPATH="$PWD/../../packages/pyruntime/python" \
   uv run --with-requirements pyworker/requirements.txt \
   python -m pytest pyworker -q
@@ -1842,31 +1875,31 @@ PYTHONPATH="$PWD/../../packages/pyruntime/python" \
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 ./scripts/verify-event-contracts.sh
 ./scripts/build.sh factor
 ```
 
 Expected: all PASS。
 
-- [ ] **Step 6: 运行真实 Storage E2E**
+- [x] **Step 6: 运行真实 Storage E2E**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 MOOX_DEPLOY_ROOT=/absolute/path/to/running/moox \
   ./scripts/test-factor-storage-e2e.sh
 ```
 
 Expected: PASS；日志明确显示真实 Metadata/Primary/View/DataNode RPC 均被调用，且没有 fake Storage 实现。
 
-- [ ] **Step 7: 运行跨模块和 Web 验收**
+- [x] **Step 7: 运行跨模块和 Web 验收**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 ./scripts/test-go-workspace.sh
 make proto-check
 ```
@@ -1874,7 +1907,7 @@ make proto-check
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 pnpm --dir web test
 pnpm --dir web run build:prod
 pnpm --dir web run lint:eslint:check
@@ -1883,12 +1916,12 @@ pnpm --dir web run lint:prettier:check
 
 Expected: PASS；`make proto-check` 后 worktree 没有生成代码漂移。
 
-- [ ] **Step 8: 运行格式和残留扫描**
+- [x] **Step 8: 运行格式和残留扫描**
 
 Run:
 
 ```bash
-cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox-factor-generic-timeseries
+cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox/.worktrees/factor-generic-timeseries
 git diff --name-only -- '*.go' | xargs gofmt -w
 git diff --check
 ```
@@ -1910,7 +1943,7 @@ rg -n \
 
 Expected: no matches and no whitespace errors。
 
-- [ ] **Step 9: 请求独立 codeCR 审查**
+- [x] **Step 9: 请求独立 codeCR 审查**
 
 审查范围必须包含：
 
@@ -1927,14 +1960,14 @@ best-effort 边界是否被无意升级或削弱
 
 codeCR 返回必须带文件和行号。主 Agent 逐条独立复核；确认的 finding 修复后重新运行受影响测试。
 
-- [ ] **Step 10: 提交最终文档和测试**
+- [x] **Step 10: 提交最终文档和测试**
 
 ```bash
 git add modules/factor docs scripts/verify-event-contracts.sh web
 git commit -m "test(factor): prove generic time-series execution"
 ```
 
-- [ ] **Step 11: 最终 Git 验收**
+- [x] **Step 11: 最终 Git 验收**
 
 Run:
 
@@ -1952,7 +1985,31 @@ worktree clean
 不存在未生成 Proto、临时测试文件或未追踪产物
 ```
 
-## 4. 最终验收矩阵
+## 4. 完成证据
+
+2026-07-29 在最终代码与文档上执行：
+
+```text
+modules/factor: go test ./...; go test -race ./...; go vet ./...
+factor pyworker: 13 passed
+packages/pyruntime: go test ./...; go test -race ./...; go vet ./...
+worker lifecycle: go test -race ./process -count=10
+web: 39 files / 127 tests; production build; ESLint; Prettier
+workspace: ./scripts/test-go-workspace.sh
+contracts: make proto-check; verify-event-contracts; release/deploy factor contracts
+real E2E: /tmp/moox-factor-storage-e2e-run13, TestFactorRealStorageE2E passed
+```
+
+真实 E2E 使用最终分支重新构建并部署 Admin、Gateway、EventBus、Storage、Factor，
+通过真实 RPC 创建非 K 线 `nav/benchmark_return` Dataset，执行双输出因子计算，
+读取两个纳秒时间点，再更新 Factor 产生 null 并确认旧值被清除；测试结束后清理
+DataNode bucket、Space 和全部部署进程。
+
+codeCR 对状态唯一入口和 worker timeout 分别完成 SPEC/QUALITY 两阶段审查。质量审查
+发现的阻塞 stdin 写无法响应 timeout 问题已由 `856f6f4d` 修复，并通过真实非读取
+Python 子进程的 RUN/LOAD 阻塞写测试。
+
+## 5. 最终验收矩阵
 
 | 能力 | 必须证明 |
 | --- | --- |
@@ -1964,12 +2021,12 @@ worktree clean
 | Metadata | active+locked target 可新增第二个 Factor 的输出列，不重复 activation |
 | null | 重算 null 后旧 double 不再可读，事件边界保留 null marker |
 | realtime | 一个多行事件形成完整范围；pending 同 scope 合并范围而不是只保留最新行 |
-| worker | Factor error、timeout、read/write failure 后进程被 Kill+Wait，pool 全量关闭 |
+| worker | HELLO/LOAD/RUN、阻塞写、read/write failure 后进程被 Kill+Wait，pool 全量关闭 |
 | run-once | 干净 shell 通过部署 wrapper 获得 Storage target、factor 凭证、DB、Python、worker、factors、timeout、retry；CLI 显式值优先 |
 | 真实链路 | 非 K 线输入穿过真实 Metadata/Primary/View/DataNode，双输出可读且 null 可清旧值 |
 | 简洁边界 | 无 Inbox、DLQ、Exactly-once、分布式、DAG、参数 Schema、FactorKind 或旧协议兼容 |
 
-## 5. 实施完成定义
+## 6. 实施完成定义
 
 只有同时满足以下条件才可以声明完成：
 

@@ -1,7 +1,6 @@
-def signal(df, n, factor_name):
-    n = int(n)
+def compute(df, params):
+    window = int(params["window"])
     typical = (df["high"] + df["low"] + df["close"]) / 3
-    mean = typical.rolling(n, min_periods=1).mean()
-    deviation = (typical - mean).abs().rolling(n, min_periods=1).mean()
-    df[factor_name] = (typical - mean) / (0.015 * deviation)
-    return df
+    mean = typical.rolling(window, min_periods=1).mean()
+    deviation = (typical - mean).abs().rolling(window, min_periods=1).mean()
+    return {"cci": (typical - mean) / (0.015 * deviation)}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -99,12 +100,87 @@ func TestDuckDBQualifiedViewColumn(t *testing.T) {
 	}
 }
 
+func TestDuckDBNanosecondDataTimeIdentityAndRange(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{
+		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices",
+		ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
+		Columns: []*pb.ViewColumn{{ColumnName: "value", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
+	}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	first := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	second := first.Add(time.Nanosecond)
+	write := func(at time.Time, value float64) viewindex.RowWrite {
+		return viewindex.RowWrite{
+			Key: viewindex.RowKey{Key: &pb.RowKey{
+				SpaceId: "s", DatasetId: "prices",
+				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+					SubjectId: "BTC", Freq: "1m", DataTime: at.Format(time.RFC3339Nano),
+				}},
+			}},
+			Fields: []*pb.FieldValue{{
+				FieldId: "value",
+				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: value}},
+			}},
+		}
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites:      []viewindex.RowWrite{write(first, 1), write(second, 2)},
+		ViewRevision:   1,
+		ViewSchemaHash: "hash",
+		WriteMode:      viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, total, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{
+		TimeRange: &pb.TimeRange{
+			StartTime: first.Format(time.RFC3339Nano),
+			EndTime:   second.Add(time.Nanosecond).Format(time.RFC3339Nano),
+		},
+		Sorts:     []*pb.SortSpec{{FieldName: "data_time"}},
+		Limit:     10,
+		TotalMode: pb.TotalMode_FORCE_EXACT,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(rows) != 2 {
+		t.Fatalf("nanosecond-distinct rows collapsed: total=%d rows=%v", total, rows)
+	}
+	if got := rows[0].GetKey().GetTimeSeries().GetDataTime(); got != first.Format(time.RFC3339Nano) {
+		t.Fatalf("first data_time=%q", got)
+	}
+	if got := rows[1].GetKey().GetTimeSeries().GetDataTime(); got != second.Format(time.RFC3339Nano) {
+		t.Fatalf("second data_time=%q", got)
+	}
+	rows, total, err = manager.Query(context.Background(), "idx", viewindex.QuerySpec{
+		TimeRange: &pb.TimeRange{
+			StartTime: first.Format(time.RFC3339Nano),
+			EndTime:   second.Format(time.RFC3339Nano),
+		},
+		Limit:     10,
+		TotalMode: pb.TotalMode_FORCE_EXACT,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(rows) != 1 || rows[0].GetKey().GetTimeSeries().GetDataTime() != first.Format(time.RFC3339Nano) {
+		t.Fatalf("half-open nanosecond range mismatch: total=%d rows=%v", total, rows)
+	}
+}
+
 func TestDuckTypeMapping(t *testing.T) {
 	cases := map[pb.FieldValueType]string{
 		pb.FieldValueType_FIELD_VALUE_TYPE_INT:         "BIGINT",
 		pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE:      "DOUBLE",
 		pb.FieldValueType_FIELD_VALUE_TYPE_BOOL:        "BOOLEAN",
-		pb.FieldValueType_FIELD_VALUE_TYPE_TIME:        "TIMESTAMP",
+		pb.FieldValueType_FIELD_VALUE_TYPE_TIME:        "TIMESTAMP_NS",
 		pb.FieldValueType_FIELD_VALUE_TYPE_BYTES:       "BLOB",
 		pb.FieldValueType_FIELD_VALUE_TYPE_JSON:        "JSON",
 		pb.FieldValueType_FIELD_VALUE_TYPE_STRING:      "VARCHAR",

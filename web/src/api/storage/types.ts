@@ -74,7 +74,7 @@ export interface TypedValue {
   json_value?: string;
   bytes_value?: string;
   list_value?: TypedValueList;
-  null_value?: "NULL_VALUE_UNSPECIFIED" | "NULL_VALUE" | number;
+  null_value?: "NULL_VALUE_UNSPECIFIED" | "NULL_VALUE_NULL" | number;
 }
 
 export interface FieldValue {

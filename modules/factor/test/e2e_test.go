@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -26,22 +27,28 @@ import (
 
 func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 	root := ".."
-	factorPath := filepath.Join(root, "factors", "Bias.py")
-	source, err := os.ReadFile(factorPath)
-	require.NoError(t, err)
+	factorsDir := t.TempDir()
+	factorPath := filepath.Join(factorsDir, "ExcessReturn.py")
+	source := []byte(`def compute(df, params):
+    excess = df["nav"] - df["benchmark_return"]
+    return {
+        "excess_return": excess,
+        "rolling_rank": excess.rolling(
+            int(params["window"]),
+            min_periods=1,
+        ).rank(),
+    }
+`)
+	require.NoError(t, os.WriteFile(factorPath, source, 0o600))
 	sum := sha256.Sum256(source)
-	at := time.Date(2026, 7, 26, 0, 2, 0, 0, time.UTC)
+	first := time.Date(2026, 7, 26, 0, 2, 0, 0, time.UTC)
+	second := first.Add(time.Nanosecond)
 
 	batcher := trigger.NewEventBatcher(20*time.Millisecond, []domain.FactorBinding{
 		{
-			BindingID: "bind-bias", FactorID: "bias", SpaceID: "crypto",
-			SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
-			SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
-		},
-		{
-			BindingID: "bind-cci", FactorID: "cci", SpaceID: "crypto",
-			SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
-			SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusDisabled,
+			BindingID: "bind-excess", FactorID: "excess-return", SpaceID: "quant",
+			SourceDataset: "portfolio", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+			SubjectsJSON: "[]", TargetDataset: "portfolio_factor", Status: domain.BindingStatusEnabled,
 		},
 	})
 	ns, err := natsserver.NewServer(&natsserver.Options{
@@ -84,16 +91,14 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 	publisher, err := events.NewPublisher(client, registry)
 	require.NoError(t, err)
 	payload := &storagepb.DatasetRowsUpserted{
-		SpaceId: "crypto", DatasetId: "bars",
-		Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{
-			SpaceId: "crypto", DatasetId: "bars",
-			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: "BTC-USDT", Freq: "1m", DataTime: at.Format(time.RFC3339Nano),
-			}},
-		}}},
+		SpaceId: "quant", DatasetId: "portfolio",
+		Rows: []*storagepb.RowUpsert{
+			eventRow("quant", "portfolio", "fund-a", "1m", first),
+			eventRow("quant", "portfolio", "fund-a", "1m", second),
+		},
 	}
 	_, err = publisher.Publish(ctx, events.DatasetRowsUpserted, payload, events.PublishOptions{
-		EventID: "factor-e2e-1", OccurredAt: at, SpaceID: "crypto", SubjectID: "bars",
+		EventID: "factor-e2e-1", OccurredAt: first, SpaceID: "quant", SubjectID: "portfolio",
 	})
 	require.NoError(t, err)
 	var requests []trigger.Task
@@ -102,7 +107,10 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 		return len(requests) == 1
 	}, 5*time.Second, 20*time.Millisecond)
 	require.Len(t, requests, 1)
-	require.Equal(t, []string{"bias"}, requests[0].FactorIDs)
+	require.Equal(t, []string{"excess-return"}, requests[0].FactorIDs)
+	require.Equal(t, first, requests[0].StartTime)
+	require.Equal(t, second.Add(time.Nanosecond), requests[0].EndTime)
+
 	ackConn, err := nats.Connect(ns.ClientURL())
 	require.NoError(t, err)
 	defer ackConn.Close()
@@ -117,50 +125,91 @@ func TestRealtimeEventToPythonWritebackE2E(t *testing.T) {
 		TaskID: "e2e-factor", TriggerType: "event", SpaceID: requests[0].SpaceID,
 		SourceDataset: requests[0].SourceDataset, TargetDataset: requests[0].TargetDataset,
 		SubjectID: requests[0].SubjectID, Freq: requests[0].Freq,
-		StartTime: requests[0].BarTime, EndTime: requests[0].BarTime.Add(time.Nanosecond),
+		StartTime: requests[0].StartTime, EndTime: requests[0].EndTime,
 	}, []domain.FactorDef{{
-		FactorID: "bias", Name: "Bias", SourceHash: hex.EncodeToString(sum[:]),
-		SourcePath: factorPath, Periods: []int{2}, LookbackBars: 3,
-		Status: domain.FactorStatusEnabled,
-	}}, filepath.Join(root, "factors"))
+		FactorID: "excess-return", Name: "ExcessReturn", SourceHash: hex.EncodeToString(sum[:]),
+		SourcePath: factorPath, InputColumns: []string{"nav", "benchmark_return"},
+		Outputs: []string{"excess_return", "rolling_rank"}, ParamsJSON: `{"window":2}`,
+		LookbackRows: 2, Status: domain.FactorStatusEnabled,
+	}}, factorsDir)
 	require.NoError(t, err)
 
 	pythonExec, err := engine.NewPythonExecutor(context.Background(), 1, process.Config{
 		PythonBin: "python3", WorkerPath: filepath.Join(root, "pyworker", "worker.py"),
-		Args:   []string{"--factors-dir", filepath.Join(root, "factors")},
-		Limits: process.DefaultLimits(),
+		Args: []string{"--factors-dir", factorsDir}, Limits: process.DefaultLimits(),
 	})
 	require.NoError(t, err)
 	defer pythonExec.Close()
-	storage := &storageFake{target: at}
+	storage := &storageFake{targets: []time.Time{first, second}}
 	service := scheduler.NewService(scheduler.Config{Workers: 1, QueueCapacity: 8}, storage, pythonExec)
 	require.NoError(t, service.Enqueue(context.Background(), task))
 	require.NoError(t, service.Drain(context.Background()))
+
 	require.Equal(t, 1, storage.writes)
-	require.Equal(t, []any{101.0 / 100.5}, storage.result.Columns["Bias_2"])
+	require.Equal(t, []string{"benchmark_return", "nav"}, storage.requestedColumns)
+	for _, forbidden := range []string{"open", "high", "low", "close", "volume", "quote_volume", "trade_num"} {
+		require.False(t, slices.Contains(storage.requestedColumns, forbidden), "implicit OHLCV column %q", forbidden)
+	}
+	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, mapKeys(storage.result.Columns))
+	require.Equal(t, []time.Time{first, second}, storage.writtenTimes)
+	require.Equal(t, []any{0.04, 0.16}, storage.result.Columns["excess_return"])
+	require.Equal(t, []any{1.0, 2.0}, storage.result.Columns["rolling_rank"])
+}
+
+func eventRow(spaceID, datasetID, subjectID, freq string, at time.Time) *storagepb.RowUpsert {
+	return &storagepb.RowUpsert{Key: &storagepb.RowKey{
+		SpaceId: spaceID, DatasetId: datasetID,
+		Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+			SubjectId: subjectID, Freq: freq, DataTime: at.Format(time.RFC3339Nano),
+		}},
+	}}
 }
 
 type storageFake struct {
-	target time.Time
-	writes int
-	result *engine.FactorResult
+	targets          []time.Time
+	requestedColumns []string
+	writtenTimes     []time.Time
+	writes           int
+	result           *engine.FactorResult
 }
 
-func (s *storageFake) ReadRangeChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, int, []string) (*storageio.RangeChunk, error) {
-	times := []time.Time{s.target.Add(-time.Minute), s.target}
+func (s *storageFake) ReadRangeChunk(_ context.Context, _ storageio.WindowKey, start, end time.Time, _ int, _ int, columns []string) (*storageio.RangeChunk, error) {
+	s.requestedColumns = append([]string(nil), columns...)
+	if !start.Equal(s.targets[0]) || !end.Equal(s.targets[1].Add(time.Nanosecond)) {
+		panic("unexpected requested range")
+	}
 	return &storageio.RangeChunk{
 		Frame: &engine.DataFrame{
-			Columns: []string{"close"}, Rows: [][]any{{100.0}, {101.0}}, DataTimes: times,
+			Columns: columns,
+			Rows: [][]any{
+				valuesFor(columns, map[string]any{"nav": 0.05, "benchmark_return": 0.01}),
+				valuesFor(columns, map[string]any{"nav": 0.18, "benchmark_return": 0.02}),
+			},
+			DataTimes: append([]time.Time(nil), s.targets...),
 		},
-		TargetTimes: []time.Time{s.target},
+		TargetTimes: append([]time.Time(nil), s.targets...),
 	}, nil
 }
 
 func (s *storageFake) WriteFactorPatch(_ context.Context, _ *engine.FactorTask, times []time.Time, result *engine.FactorResult) (uint64, error) {
 	s.writes++
+	s.writtenTimes = append([]time.Time(nil), times...)
 	s.result = result
-	if len(times) != 1 || !times[0].Equal(s.target) {
-		panic("unexpected target range")
-	}
 	return uint64(len(times)), nil
+}
+
+func valuesFor(columns []string, values map[string]any) []any {
+	row := make([]any, len(columns))
+	for i, column := range columns {
+		row[i] = values[column]
+	}
+	return row
+}
+
+func mapKeys(values map[string][]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	return keys
 }

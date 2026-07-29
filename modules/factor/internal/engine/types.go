@@ -19,18 +19,19 @@ type FactorTask struct {
 	Freq          string
 	StartTime     time.Time
 	EndTime       time.Time
-	LookbackBars  int
+	LookbackRows  int
 	Factors       []FactorSpec
 }
 
 // FactorSpec describes one Python factor module invocation.
 type FactorSpec struct {
-	FactorID   string
-	Name       string
-	SourceHash string
-	SourcePath string
-	Periods    []int
-	Depends    []string
+	FactorID     string
+	Name         string
+	SourceHash   string
+	SourcePath   string
+	InputColumns []string
+	Outputs      []string
+	ParamsJSON   string
 }
 
 // FactorResult contains values aligned with the task's target rows.

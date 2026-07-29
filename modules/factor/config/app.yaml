@@ -20,6 +20,7 @@ eventbus:
 
 engine:
   python_bin: python3
+  worker_path: ./pyworker/worker.py
   factors_dir: ./factors
   workers: 8
   task_timeout_ms: 30000

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/bootstrap"
@@ -20,14 +22,72 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 )
+
+type runOnceRuntime struct {
+	DBPath        string
+	FactorsDir    string
+	PythonBin     string
+	WorkerPath    string
+	GatewayTarget string
+	GatewayNodeID string
+	Credentials   gatewayauth.Credentials
+	Workers       int
+	TaskTimeout   time.Duration
+	MaxRetry      int
+}
+
+func resolveRunOnceRuntime(cli cliConfig) (runOnceRuntime, error) {
+	appCfg, err := bootstrap.Load(cli.ConfigPath)
+	if err != nil {
+		return runOnceRuntime{}, err
+	}
+	if cli.DBPath != "" {
+		appCfg.Database.Path = cli.DBPath
+	}
+	if cli.FactorsDir != "" {
+		appCfg.Engine.FactorsDir = cli.FactorsDir
+	}
+	configPath, err := filepath.Abs(cli.ConfigPath)
+	if err != nil {
+		return runOnceRuntime{}, fmt.Errorf("resolve config path: %w", err)
+	}
+	runtimeRoot := filepath.Dir(filepath.Dir(configPath))
+	resolveRuntimePath := func(path string) string {
+		if filepath.IsAbs(path) {
+			return filepath.Clean(path)
+		}
+		return filepath.Clean(filepath.Join(runtimeRoot, path))
+	}
+	credentials, err := gatewayauth.ResolveCredentials(appCfg.Storage.KeyID, appCfg.Storage.HMACKeyFile)
+	if err != nil {
+		return runOnceRuntime{}, err
+	}
+	return runOnceRuntime{
+		DBPath:        resolveRuntimePath(appCfg.Database.Path),
+		FactorsDir:    resolveRuntimePath(appCfg.Engine.FactorsDir),
+		PythonBin:     appCfg.Engine.PythonBin,
+		WorkerPath:    resolveRuntimePath(appCfg.Engine.WorkerPath),
+		GatewayTarget: appCfg.Storage.GatewayTarget,
+		GatewayNodeID: appCfg.Storage.GatewayNodeID,
+		Credentials:   credentials,
+		Workers:       1,
+		TaskTimeout:   time.Duration(appCfg.Engine.TaskTimeoutMS) * time.Millisecond,
+		MaxRetry:      appCfg.Scheduler.MaxRetry,
+	}, nil
+}
 
 func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if cfg.SpaceID == "" || cfg.DatasetID == "" || cfg.SubjectID == "" || cfg.Freq == "" ||
 		cfg.StartTime.IsZero() || cfg.EndTime.IsZero() || !cfg.StartTime.Before(cfg.EndTime) {
 		return fmt.Errorf("--space, --dataset, --subject, --freq, --start-time and --end-time are required")
 	}
-	db, err := store.Open(&store.Options{Path: cfg.DBPath})
+	runtimeCfg, err := resolveRunOnceRuntime(cfg)
+	if err != nil {
+		return err
+	}
+	db, err := store.Open(&store.Options{Path: runtimeCfg.DBPath})
 	if err != nil {
 		return err
 	}
@@ -53,31 +113,28 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return fmt.Errorf("no executable factors selected for the requested scope")
 	}
 
-	appCfg := bootstrap.Default()
 	auth := serviceAuth()
-	credentials, err := gatewayauth.ResolveCredentials(appCfg.Storage.KeyID, appCfg.Storage.HMACKeyFile)
-	if err != nil {
-		return err
-	}
 	taskID := cfg.TaskID
 	if taskID == "" {
 		taskID = fmt.Sprintf("manual-%d", time.Now().UnixNano())
 	}
 	storageClient := storageio.NewClientWithCredentials(
-		appCfg.Storage.GatewayTarget, appCfg.Storage.GatewayNodeID, credentials, auth,
+		runtimeCfg.GatewayTarget, runtimeCfg.GatewayNodeID, runtimeCfg.Credentials, auth,
 	)
-	pythonExec, err := engine.NewPythonExecutor(ctx, 1, process.Config{
-		PythonBin:   appCfg.Engine.PythonBin,
-		WorkerPath:  filepath.Join("pyworker", "worker.py"),
-		Args:        []string{"--factors-dir", cfg.FactorsDir},
-		TaskTimeout: time.Duration(appCfg.Engine.TaskTimeoutMS) * time.Millisecond,
+	pythonExec, err := engine.NewPythonExecutor(ctx, runtimeCfg.Workers, process.Config{
+		PythonBin:   runtimeCfg.PythonBin,
+		WorkerPath:  runtimeCfg.WorkerPath,
+		Args:        []string{"--factors-dir", runtimeCfg.FactorsDir},
+		TaskTimeout: runtimeCfg.TaskTimeout,
 		Limits:      process.DefaultLimits(),
 	})
 	if err != nil {
 		return err
 	}
 	defer pythonExec.Close()
-	runner := scheduler.NewService(scheduler.Config{Workers: 1, QueueCapacity: 1, MaxRetry: appCfg.Scheduler.MaxRetry}, storageClient, pythonExec)
+	runner := scheduler.NewService(scheduler.Config{
+		Workers: runtimeCfg.Workers, QueueCapacity: 1, MaxRetry: runtimeCfg.MaxRetry,
+	}, storageClient, pythonExec)
 	started := time.Now()
 	targets := make([]string, 0, len(groups))
 	for target := range groups {
@@ -95,7 +152,7 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			SourceDataset: cfg.DatasetID, TargetDataset: target,
 			SubjectID: cfg.SubjectID, Freq: cfg.Freq,
 			StartTime: cfg.StartTime, EndTime: cfg.EndTime,
-		}, groups[target], cfg.FactorsDir)
+		}, groups[target], runtimeCfg.FactorsDir)
 		if buildErr != nil {
 			return buildErr
 		}
@@ -154,8 +211,12 @@ func executableFactorGroups(
 }
 
 func serviceAuth() *commonpb.AuthInfo {
-	return &commonpb.AuthInfo{
+	auth := &commonpb.AuthInfo{
 		AppId: "moox-factor", Operator: "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}
+	if secret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"); strings.TrimSpace(secret) != "" {
+		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
+	}
+	return auth
 }

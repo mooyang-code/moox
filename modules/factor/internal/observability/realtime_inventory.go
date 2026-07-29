@@ -109,18 +109,33 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 }
 
 func parseFrequency(raw string) (time.Duration, error) {
-	if strings.HasSuffix(raw, "d") {
-		days, err := strconv.ParseUint(strings.TrimSuffix(raw, "d"), 10, 64)
-		maxDays := uint64((time.Duration(1<<63 - 1)) / (24 * time.Hour))
-		if err != nil || days == 0 || days > maxDays {
-			return 0, fmt.Errorf("frequency must be a positive duration")
-		}
-		interval := time.Duration(days) * 24 * time.Hour
-		return interval, nil
-	}
-	interval, err := time.ParseDuration(raw)
-	if err != nil || interval <= 0 {
+	raw = strings.TrimSpace(raw)
+	if len(raw) < 2 {
 		return 0, fmt.Errorf("frequency must be a positive duration")
 	}
-	return interval, nil
+	count, err := strconv.ParseUint(raw[:len(raw)-1], 10, 64)
+	if err != nil || count == 0 {
+		return 0, fmt.Errorf("frequency must be a positive duration")
+	}
+	var unit time.Duration
+	switch raw[len(raw)-1] {
+	case 'm':
+		unit = time.Minute
+	case 'h', 'H':
+		unit = time.Hour
+	case 'd', 'D':
+		unit = 24 * time.Hour
+	case 'w', 'W':
+		unit = 7 * 24 * time.Hour
+	case 'M':
+		unit = 30 * 24 * time.Hour
+	case 'y', 'Y':
+		unit = 365 * 24 * time.Hour
+	default:
+		return 0, fmt.Errorf("frequency must be a positive duration")
+	}
+	if count > uint64((1<<63-1)/unit) {
+		return 0, fmt.Errorf("frequency must be a positive duration")
+	}
+	return time.Duration(count) * unit, nil
 }

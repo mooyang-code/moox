@@ -133,6 +133,9 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("storage-primary gateway methods missing %s: %v", method, storageExtra.GatewayMethods)
 		}
 	}
+	if containsString(storageExtra.GatewayMethods, "DeleteSpace") {
+		t.Fatalf("storage-primary general gateway methods expose DeleteSpace: %v", storageExtra.GatewayMethods)
+	}
 	for _, method := range []string{
 		"Register" + "DataNode",
 		"Create" + "PrimaryStore" + "Node",
@@ -144,17 +147,25 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("storage-primary gateway methods must not include %s: %v", method, storageExtra.GatewayMethods)
 		}
 	}
-	var metadataRoute *struct {
+	var metadataRoute, deleteSpaceRoute *struct {
 		ServicePath    string   `json:"service_path"`
 		Port           int32    `json:"port"`
 		GatewayMethods []string `json:"gateway_methods"`
 		GatewayCallers []string `json:"gateway_callers"`
 	}
 	for i := range storageExtra.GatewayRoutes {
-		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.Metadata" {
-			metadataRoute = &storageExtra.GatewayRoutes[i]
-			break
+		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.Metadata" &&
+			reflect.DeepEqual(storageExtra.GatewayRoutes[i].GatewayMethods, []string{"DeleteSpace"}) {
+			deleteSpaceRoute = &storageExtra.GatewayRoutes[i]
 		}
+		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.Metadata" &&
+			containsString(storageExtra.GatewayRoutes[i].GatewayMethods, "ClaimViewIndexBuild") {
+			metadataRoute = &storageExtra.GatewayRoutes[i]
+		}
+	}
+	if deleteSpaceRoute == nil || deleteSpaceRoute.Port != 20100 ||
+		!reflect.DeepEqual(deleteSpaceRoute.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
+		t.Fatalf("DeleteSpace gateway route = %+v", deleteSpaceRoute)
 	}
 	if metadataRoute == nil || metadataRoute.Port != 20100 || !reflect.DeepEqual(metadataRoute.GatewayMethods, []string{"ClaimViewIndexBuild", "UpdateViewIndexBuild", "ActivateViewIndex", "FailViewIndexBuild"}) || !reflect.DeepEqual(metadataRoute.GatewayCallers, []string{"storage-view"}) {
 		t.Fatalf("storage-view metadata gateway route = %+v", metadataRoute)
@@ -197,6 +208,31 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("obsolete Trade deployment %s must not be registered", name)
 		}
 	}
+}
+
+func TestDefaultFactorGatewayCallersAreAdministrative(t *testing.T) {
+	for _, item := range DefaultDeployments(testAdminNodeID) {
+		if item.ServiceName != "moox_factor" {
+			continue
+		}
+		var extra struct {
+			GatewayMethods []string `json:"gateway_methods"`
+			GatewayCallers []string `json:"gateway_callers"`
+		}
+		if err := json.Unmarshal([]byte(item.ExtraConfig), &extra); err != nil {
+			t.Fatal(err)
+		}
+		wantMethods := []string{
+			"CreateFactor", "UpdateFactor", "GetFactor", "ListFactors", "SetFactorStatus", "DeleteFactor",
+			"UpsertBinding", "ListBindings", "DeleteBinding", "RecalcFactor", "GetEngineStatus",
+		}
+		if !reflect.DeepEqual(extra.GatewayMethods, wantMethods) ||
+			!reflect.DeepEqual(extra.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
+			t.Fatalf("moox_factor gateway contract = methods %v callers %v", extra.GatewayMethods, extra.GatewayCallers)
+		}
+		return
+	}
+	t.Fatal("moox_factor deployment is missing")
 }
 
 func containsString(items []string, want string) bool {

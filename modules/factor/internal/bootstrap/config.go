@@ -51,6 +51,7 @@ type EventBusConfig struct {
 // EngineConfig describes the local Python factor engine.
 type EngineConfig struct {
 	PythonBin     string `yaml:"python_bin"`
+	WorkerPath    string `yaml:"worker_path"`
 	FactorsDir    string `yaml:"factors_dir"`
 	Workers       int    `yaml:"workers"`
 	TaskTimeoutMS int    `yaml:"task_timeout_ms"`
@@ -103,7 +104,7 @@ func Default() *Config {
 			FetchMaxWait: time.Second,
 		},
 		Engine: EngineConfig{
-			PythonBin: "python3", FactorsDir: "./factors",
+			PythonBin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./factors",
 			Workers: workers, TaskTimeoutMS: 30000,
 		},
 		Scheduler: SchedulerConfig{
@@ -143,6 +144,9 @@ func (c *Config) applyDefaults() {
 	if c.Engine.PythonBin == "" {
 		c.Engine.PythonBin = "python3"
 	}
+	if c.Engine.WorkerPath == "" {
+		c.Engine.WorkerPath = "./pyworker/worker.py"
+	}
 	if c.Engine.FactorsDir == "" {
 		c.Engine.FactorsDir = "./factors"
 	}
@@ -181,6 +185,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MOOX_FACTOR_ENGINE_PYTHON_BIN"); v != "" {
 		c.Engine.PythonBin = v
+	}
+	if v := os.Getenv("MOOX_FACTOR_ENGINE_WORKER_PATH"); v != "" {
+		c.Engine.WorkerPath = v
 	}
 	if v := os.Getenv("MOOX_FACTOR_ENGINE_FACTORS_DIR"); v != "" {
 		c.Engine.FactorsDir = v

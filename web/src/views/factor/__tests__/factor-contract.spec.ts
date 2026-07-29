@@ -1,18 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { EngineStatus, FactorDef, RecalcFactorReq } from "@/api/factor/types";
+import { validateFactorParamsJSON } from "@/views/factor/definitions/factor-form";
+import factorDefinitionsView from "@/views/factor/definitions/index.vue?raw";
 
 describe("factor management contract", () => {
-  it("uses explicit periods and source-derived depends", () => {
+  it("uses explicit generic time-series fields", () => {
     const factor: FactorDef = {
       factor_id: "bias",
       name: "Bias",
-      source_code: "def signal(): pass",
-      periods: [5, 20],
-      lookback_bars: 100,
-      depends: ["funding_rate"],
+      source_code: "def compute(df, params): return {}",
+      input_columns: ["nav", "benchmark_return"],
+      outputs: ["excess_return", "rolling_rank"],
+      params_json: `{"window":20}`,
+      lookback_rows: 100,
       status: "enabled"
     };
-    expect(factor.periods).toEqual([5, 20]);
+    expect(factor.input_columns).toEqual(["nav", "benchmark_return"]);
+    expect(factor.outputs).toEqual(["excess_return", "rolling_rank"]);
   });
 
   it("uses synchronous half-open range recalc", () => {
@@ -34,5 +38,17 @@ describe("factor management contract", () => {
       queue_overflow_count: 1
     };
     expect(status).toEqual(expect.objectContaining({ queue_depth: 2, queue_overflow_count: 1 }));
+  });
+
+  it("validates params without rewriting large JSON numbers", () => {
+    const raw = ` { "large": 9007199254740993, "huge": 1e400 } `;
+    expect(validateFactorParamsJSON(raw)).toBe(raw.trim());
+    expect(validateFactorParamsJSON("  ")).toBe("{}");
+    expect(() => validateFactorParamsJSON("[]")).toThrow("JSON object");
+  });
+
+  it("changes status only through SetFactorStatus", () => {
+    expect(factorDefinitionsView).toContain('<a-select v-model="form.status" disabled>');
+    expect(factorDefinitionsView).toContain("await setFactorStatus(record.factor_id, next)");
   });
 });

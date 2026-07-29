@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Task is an event-batched scheduler request.
@@ -18,7 +19,8 @@ type Task struct {
 	TargetDataset   string
 	SubjectID       string
 	Freq            string
-	BarTime         time.Time
+	StartTime       time.Time
+	EndTime         time.Time
 	FirstReceivedAt time.Time
 	LastReceivedAt  time.Time
 	TriggerType     string
@@ -31,6 +33,8 @@ type EventBatcher struct {
 	window   time.Duration
 	bindings []domain.FactorBinding
 	buckets  map[bucketKey]*bucket
+	// rejectedTimeCount counts parsed timestamps that cannot form a supported half-open range.
+	rejectedTimeCount uint64
 }
 
 type bucketKey struct {
@@ -79,6 +83,16 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 		if err != nil {
 			continue
 		}
+		dataTime = dataTime.UTC()
+		endTime := dataTime.Add(time.Nanosecond)
+		if dataTime.IsZero() || dataTime.Year() < 1 || dataTime.Year() > 9999 || endTime.Year() > 9999 {
+			d.rejectedTimeCount++
+			log.Warnf(
+				"factor realtime event row rejected: unsupported data_time space_id=%q dataset_id=%q subject_id=%q freq=%q data_time=%q",
+				key.GetSpaceId(), key.GetDatasetId(), rowKey.GetSubjectId(), rowKey.GetFreq(), rowKey.GetDataTime(),
+			)
+			continue
+		}
 		matches := d.matchBindings(key.GetSpaceId(), key.GetDatasetId(), rowKey.GetSubjectId(), rowKey.GetFreq())
 		if len(matches) == 0 {
 			continue
@@ -104,7 +118,8 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 						TargetDataset:   targetDataset,
 						SubjectID:       rowKey.GetSubjectId(),
 						Freq:            rowKey.GetFreq(),
-						BarTime:         dataTime.UTC(),
+						StartTime:       dataTime,
+						EndTime:         endTime,
 						FirstReceivedAt: now.UTC(),
 						LastReceivedAt:  now.UTC(),
 					},
@@ -113,8 +128,11 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 				}
 				d.buckets[bkey] = b
 			}
-			if dataTime.After(b.task.BarTime) {
-				b.task.BarTime = dataTime.UTC()
+			if dataTime.Before(b.task.StartTime) {
+				b.task.StartTime = dataTime
+			}
+			if endTime.After(b.task.EndTime) {
+				b.task.EndTime = endTime
 			}
 			if now.Before(b.task.FirstReceivedAt) {
 				b.task.FirstReceivedAt = now.UTC()
@@ -125,6 +143,17 @@ func (d *EventBatcher) Add(event *storagepb.DatasetRowsUpserted, now time.Time) 
 			b.factors[binding.FactorID] = struct{}{}
 		}
 	}
+}
+
+// RejectedTimeCount reports parsed timestamps rejected because they cannot form a supported range.
+// Malformed timestamp strings are ignored separately and do not increment this counter.
+func (d *EventBatcher) RejectedTimeCount() uint64 {
+	if d == nil {
+		return 0
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.rejectedTimeCount
 }
 
 // Flush removes and returns buckets whose fixed window has elapsed.

@@ -14,16 +14,16 @@ import (
 func TestFactorRepositoryRoundTrip(t *testing.T) {
 	repo := NewFactorRepository(openTestDB(t))
 	factor := testFactor("bias", domain.FactorStatusEnabled)
-	require.NoError(t, repo.Upsert(context.Background(), factor))
+	require.NoError(t, repo.Create(context.Background(), factor))
 	got, err := repo.Get(context.Background(), factor.FactorID)
 	require.NoError(t, err)
-	require.Equal(t, []int{20, 96}, got.Periods)
-	require.Equal(t, []string{"funding_rate"}, got.Depends)
+	require.Equal(t, []string{"close", "funding_rate"}, got.InputColumns)
+	require.Equal(t, []string{"bias_20", "bias_96"}, got.Outputs)
 }
 
 func TestListExecutableExcludesDisabledFactor(t *testing.T) {
 	db := openTestDB(t)
-	require.NoError(t, NewFactorRepository(db).Upsert(context.Background(), testFactor("bias", domain.FactorStatusDisabled)))
+	require.NoError(t, NewFactorRepository(db).Create(context.Background(), testFactor("bias", domain.FactorStatusDisabled)))
 	require.NoError(t, NewBindingRepository(db).Upsert(context.Background(), domain.FactorBinding{
 		BindingID: "bind-bias", FactorID: "bias", SpaceID: "crypto",
 		SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
@@ -38,6 +38,34 @@ func TestListExecutableExcludesDisabledFactor(t *testing.T) {
 	require.Len(t, rows, 1)
 }
 
+func TestListByFactorIncludesDisabledBindings(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, NewFactorRepository(db).Create(context.Background(), testFactor("bias", domain.FactorStatusEnabled)))
+	repo := NewBindingRepository(db)
+	for _, binding := range []domain.FactorBinding{
+		{
+			BindingID: "disabled", FactorID: "bias", SpaceID: "space-b",
+			SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+			SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusDisabled,
+		},
+		{
+			BindingID: "enabled", FactorID: "bias", SpaceID: "space-a",
+			SourceDataset: "bars", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+			SubjectsJSON: "[]", TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
+		},
+	} {
+		require.NoError(t, repo.Upsert(context.Background(), binding))
+	}
+
+	rows, err := repo.ListByFactor(context.Background(), "bias")
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "space-a", rows[0].SpaceID)
+	require.Equal(t, domain.BindingStatusEnabled, rows[0].Status)
+	require.Equal(t, "space-b", rows[1].SpaceID)
+	require.Equal(t, domain.BindingStatusDisabled, rows[1].Status)
+}
+
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -48,8 +76,9 @@ func openTestDB(t *testing.T) *gorm.DB {
 
 func testFactor(id, status string) domain.FactorDef {
 	return domain.FactorDef{
-		FactorID: id, Name: "Factor_" + id, SourceCode: "def signal(): pass",
-		SourceHash: "hash", Periods: []int{20, 96}, LookbackBars: 200,
-		Depends: []string{"funding_rate"}, Status: status,
+		FactorID: id, Name: "Factor_" + id, SourceCode: "def compute(df, params): return {}",
+		SourceHash: "hash", InputColumns: []string{"close", "funding_rate"},
+		Outputs: []string{"bias_20", "bias_96"}, ParamsJSON: `{"windows":[20,96]}`,
+		LookbackRows: 200, Status: status,
 	}
 }

@@ -44,6 +44,10 @@ func (s *Supervisor) Ensure(ctx context.Context) (Worker, error) {
 	if s.worker != nil && s.worker.State() == StateReady {
 		return s.worker, nil
 	}
+	if s.worker != nil {
+		_ = s.worker.Close()
+		s.worker = nil
+	}
 	if s.failed {
 		return nil, errors.New("pyruntime: supervisor is in crash-loop failure")
 	}
@@ -77,7 +81,7 @@ func (s *Supervisor) RunLoaded(ctx context.Context, load LoadRequest, req RunReq
 func (s *Supervisor) RunLoadedMany(ctx context.Context, loads []LoadRequest, req RunRequest) (RunResult, error) {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
-	w, err := s.Ensure(ctx)
+	w, err := s.ensureWithRetry(ctx)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -86,13 +90,17 @@ func (s *Supervisor) RunLoadedMany(ctx context.Context, loads []LoadRequest, req
 			return RunResult{}, s.restart(w, err)
 		}
 	}
-	return w.Run(ctx, req)
+	result, err := w.Run(ctx, req)
+	if err != nil {
+		return RunResult{}, s.restart(w, err)
+	}
+	return result, nil
 }
 
 func (s *Supervisor) Load(ctx context.Context, req LoadRequest) error {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
-	w, err := s.Ensure(ctx)
+	w, err := s.ensureWithRetry(ctx)
 	if err != nil {
 		return err
 	}
@@ -103,29 +111,38 @@ func (s *Supervisor) Load(ctx context.Context, req LoadRequest) error {
 }
 
 func (s *Supervisor) runLocked(ctx context.Context, load *LoadRequest, req RunRequest) (RunResult, error) {
+	w, err := s.ensureWithRetry(ctx)
+	if err != nil {
+		return RunResult{}, err
+	}
+	if load != nil {
+		if err := w.Load(ctx, *load); err != nil {
+			return RunResult{}, s.restart(w, err)
+		}
+	}
+	result, err := w.Run(ctx, req)
+	if err != nil {
+		return RunResult{}, s.restart(w, err)
+	}
+	return result, nil
+}
+
+func (s *Supervisor) ensureWithRetry(ctx context.Context) (Worker, error) {
 	var lastErr error
 	for attempt := 0; attempt <= s.cfg.MaxRetries; attempt++ {
 		w, err := s.Ensure(ctx)
-		if err == nil && load != nil {
-			err = w.Load(ctx, *load)
-		}
 		if err == nil {
-			var result RunResult
-			result, err = w.Run(ctx, req)
-			if err == nil {
-				return result, nil
-			}
+			return w, nil
 		}
 		lastErr = err
 		if attempt == s.cfg.MaxRetries {
 			break
 		}
-		_ = s.restart(w, err)
 		if err := waitBackoff(ctx, s.cfg.BackoffMin, s.cfg.BackoffMax, attempt); err != nil {
-			return RunResult{}, err
+			return nil, err
 		}
 	}
-	return RunResult{}, lastErr
+	return nil, lastErr
 }
 
 func (s *Supervisor) restart(w Worker, cause error) error {

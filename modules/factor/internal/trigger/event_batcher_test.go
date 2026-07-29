@@ -68,7 +68,7 @@ func TestEventBatcherKeepsCompleteScopeSeparate(t *testing.T) {
 	}
 }
 
-func TestEventBatcherSchedulesOlderBarWithoutExtraLateState(t *testing.T) {
+func TestEventBatcherSchedulesOlderRowWithoutExtraLateState(t *testing.T) {
 	start := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
 	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]")})
 	batcher.Add(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", start), start)
@@ -78,8 +78,8 @@ func TestEventBatcherSchedulesOlderBarWithoutExtraLateState(t *testing.T) {
 	older := start.Add(-time.Minute)
 	batcher.Add(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", older), start.Add(2*time.Second))
 	tasks := flushPending(t, batcher, start.Add(3*time.Second))
-	if len(tasks) != 1 || !tasks[0].BarTime.Equal(older) {
-		t.Fatalf("older-bar tasks=%+v", tasks)
+	if len(tasks) != 1 || !tasks[0].StartTime.Equal(older) || !tasks[0].EndTime.Equal(older.Add(time.Nanosecond)) {
+		t.Fatalf("older-row tasks=%+v", tasks)
 	}
 }
 
@@ -126,8 +126,105 @@ func TestEventBatcherUsesFixedWindowFromFirstEvent(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("tasks len = %d, want 1", len(tasks))
 	}
-	if tasks[0].BarTime != now.Add(time.Minute) {
-		t.Fatalf("bar time = %s", tasks[0].BarTime)
+	if !tasks[0].StartTime.Equal(now) || !tasks[0].EndTime.Equal(now.Add(time.Minute).Add(time.Nanosecond)) {
+		t.Fatalf("range = [%s,%s)", tasks[0].StartTime, tasks[0].EndTime)
+	}
+}
+
+func TestEventBatcherMergesMultiRowEventIntoHalfOpenRange(t *testing.T) {
+	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	first := now
+	middle := now.Add(time.Minute)
+	last := now.Add(2 * time.Minute)
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+
+	batcher.Add(multiRowEvent("crypto", "binance_spot_kline", "BTC-USDT", "1m", first, middle, last), now)
+	tasks := flushPending(t, batcher, now.Add(time.Second))
+
+	if len(tasks) != 1 {
+		t.Fatalf("tasks=%+v, want one merged range", tasks)
+	}
+	if !tasks[0].StartTime.Equal(first) || !tasks[0].EndTime.Equal(last.Add(time.Nanosecond)) {
+		t.Fatalf("range=[%s,%s), want [%s,%s)", tasks[0].StartTime, tasks[0].EndTime, first, last.Add(time.Nanosecond))
+	}
+}
+
+func TestEventBatcherDuplicateRowDoesNotExpandRangeOrCreateTask(t *testing.T) {
+	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+
+	batcher.Add(multiRowEvent("crypto", "binance_spot_kline", "BTC-USDT", "1m", now, now), now)
+	tasks := flushPending(t, batcher, now.Add(time.Second))
+
+	if len(tasks) != 1 {
+		t.Fatalf("tasks=%+v, want one task", tasks)
+	}
+	if !tasks[0].StartTime.Equal(now) || !tasks[0].EndTime.Equal(now.Add(time.Nanosecond)) {
+		t.Fatalf("range=[%s,%s), want duplicate timestamp not to expand it", tasks[0].StartTime, tasks[0].EndTime)
+	}
+	if extra := flushPending(t, batcher, now.Add(2*time.Second)); len(extra) != 0 {
+		t.Fatalf("extra tasks=%+v", extra)
+	}
+}
+
+func TestEventBatcherSkipsZeroTimeWithoutPoisoningNormalRange(t *testing.T) {
+	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	zero := time.Time{}
+	normal := now.Add(time.Minute)
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+
+	batcher.Add(multiRowEvent("crypto", "binance_spot_kline", "BTC-USDT", "1m", zero, normal), now)
+	tasks := flushPending(t, batcher, now.Add(time.Second))
+
+	if len(tasks) != 1 {
+		t.Fatalf("tasks=%+v, want only the normal timestamp", tasks)
+	}
+	if !tasks[0].StartTime.Equal(normal) || !tasks[0].EndTime.Equal(normal.Add(time.Nanosecond)) {
+		t.Fatalf("range=[%s,%s), want [%s,%s)", tasks[0].StartTime, tasks[0].EndTime, normal, normal.Add(time.Nanosecond))
+	}
+	if got := batcher.RejectedTimeCount(); got != 1 {
+		t.Fatalf("rejected time count=%d, want 1", got)
+	}
+}
+
+func TestEventBatcherSkipsTimestampWhoseExclusiveEndExceedsRFC3339(t *testing.T) {
+	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	upper := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+
+	batcher.Add(event("crypto", "binance_spot_kline", "BTC-USDT", "1m", upper), now)
+
+	if tasks := flushPending(t, batcher, now.Add(time.Second)); len(tasks) != 0 {
+		t.Fatalf("tasks=%+v, want invalid exclusive upper bound ignored", tasks)
+	}
+	if got := batcher.RejectedTimeCount(); got != 1 {
+		t.Fatalf("rejected time count=%d, want 1", got)
+	}
+}
+
+func TestEventBatcherDoesNotCountMalformedTimestampAsUnsupportedTime(t *testing.T) {
+	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	batcher := NewEventBatcher(time.Second, []domain.FactorBinding{
+		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+	})
+	payload := event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now)
+	payload.Rows[0].GetKey().GetTimeSeries().DataTime = "not-a-time"
+
+	batcher.Add(payload, now)
+
+	if tasks := flushPending(t, batcher, now.Add(time.Second)); len(tasks) != 0 {
+		t.Fatalf("tasks=%+v, want malformed timestamp ignored", tasks)
+	}
+	if got := batcher.RejectedTimeCount(); got != 0 {
+		t.Fatalf("rejected time count=%d, want malformed input excluded from supported-time counter", got)
 	}
 }
 
@@ -151,5 +248,18 @@ func binding(factorID string, sourceDataset string, subjectMode string, subjects
 }
 
 func event(spaceID string, datasetID string, subjectID string, freq string, dataTime time.Time) *storagepb.DatasetRowsUpserted {
-	return &storagepb.DatasetRowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subjectID, Freq: freq, DataTime: dataTime.Format(time.RFC3339)}}}}}}
+	return multiRowEvent(spaceID, datasetID, subjectID, freq, dataTime)
+}
+
+func multiRowEvent(spaceID string, datasetID string, subjectID string, freq string, dataTimes ...time.Time) *storagepb.DatasetRowsUpserted {
+	rows := make([]*storagepb.RowUpsert, 0, len(dataTimes))
+	for _, dataTime := range dataTimes {
+		rows = append(rows, &storagepb.RowUpsert{Key: &storagepb.RowKey{
+			SpaceId: spaceID, DatasetId: datasetID,
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: subjectID, Freq: freq, DataTime: dataTime.Format(time.RFC3339Nano),
+			}},
+		}})
+	}
+	return &storagepb.DatasetRowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: rows}
 }

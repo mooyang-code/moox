@@ -2,12 +2,12 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // FactorRepository persists factor definitions.
@@ -26,33 +26,44 @@ func NewFactorRepository(db *gorm.DB) *FactorRepository {
 	return &FactorRepository{db: db}
 }
 
-// Upsert inserts or updates a factor by factor_id.
-func (r *FactorRepository) Upsert(ctx context.Context, factor domain.FactorDef) error {
+// Create inserts a new factor definition without replacing existing rows.
+func (r *FactorRepository) Create(ctx context.Context, factor domain.FactorDef) error {
 	now := time.Now().UTC()
-	if factor.Periods == nil {
-		factor.Periods = []int{}
+	if factor.InputColumns == nil {
+		factor.InputColumns = []string{}
 	}
-	if factor.Depends == nil {
-		factor.Depends = []string{}
+	if factor.Outputs == nil {
+		factor.Outputs = []string{}
 	}
 	if factor.CreateTime.IsZero() {
 		factor.CreateTime = now
 	}
 	factor.ModifyTime = now
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "c_factor_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"c_name",
-			"c_source_code",
-			"c_source_hash",
-			"c_source_path",
-			"c_periods_json",
-			"c_lookback_bars",
-			"c_depends_json",
-			"c_status",
-			"c_mtime",
-		}),
-	}).Create(&factor).Error
+	return r.db.WithContext(ctx).Create(&factor).Error
+}
+
+// Update changes definition content. Name, outputs, and lifecycle status are immutable here.
+func (r *FactorRepository) Update(ctx context.Context, factor domain.FactorDef) error {
+	inputColumnsJSON, err := json.Marshal(factor.InputColumns)
+	if err != nil {
+		return err
+	}
+	result := r.db.WithContext(ctx).Model(&domain.FactorDef{}).
+		Where("c_factor_id = ?", strings.TrimSpace(factor.FactorID)).
+		Updates(map[string]any{
+			"c_source_code": factor.SourceCode, "c_source_hash": factor.SourceHash,
+			"c_source_path":        factor.SourcePath,
+			"c_input_columns_json": string(inputColumnsJSON), "c_params_json": factor.ParamsJSON,
+			"c_lookback_rows": factor.LookbackRows,
+			"c_mtime":         time.Now().UTC(),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // Get returns a factor by id.
@@ -70,6 +81,20 @@ func (r *FactorRepository) GetByName(ctx context.Context, name string) (*domain.
 		return nil, err
 	}
 	return &factor, nil
+}
+
+// Delete removes one factor definition.
+func (r *FactorRepository) Delete(ctx context.Context, factorID string) error {
+	result := r.db.WithContext(ctx).
+		Where("c_factor_id = ?", strings.TrimSpace(factorID)).
+		Delete(&domain.FactorDef{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // List returns factor definitions matching the filter.

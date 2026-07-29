@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-const maxTargetBarsPerChunk = 2000
+const maxTargetRowsPerChunk = 2000
 
 var ErrQueueFull = errors.New("factor scheduler queue is full")
 
@@ -105,9 +106,16 @@ func (s *Service) Enqueue(ctx context.Context, task Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if current, ok := s.pending[key]; ok {
-		if !task.EndTime.Before(current.EndTime) {
-			s.pending[key] = task
+		if task.StartTime.Before(current.StartTime) {
+			current.StartTime = task.StartTime
 		}
+		if task.EndTime.After(current.EndTime) {
+			current.EndTime = task.EndTime
+		}
+		current.Factors = task.Factors
+		current.LookbackRows = task.LookbackRows
+		current.TaskID = DeterministicTaskID(current)
+		s.pending[key] = current
 		return nil
 	}
 	if len(s.pending) >= s.cfg.QueueCapacity {
@@ -270,7 +278,7 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 			chunk, err = s.storage.ReadRangeChunk(ctx, storageio.WindowKey{
 				SpaceID: task.SpaceID, SourceDataset: task.SourceDataset,
 				SubjectID: task.SubjectID, Freq: task.Freq,
-			}, cursor, task.EndTime, task.LookbackBars, maxTargetBarsPerChunk, inputColumns(task.Factors))
+			}, cursor, task.EndTime, task.LookbackRows, maxTargetRowsPerChunk, inputColumns(task.Factors))
 			if err != nil {
 				return engine.RetryableError{Err: err}
 			}
@@ -370,8 +378,11 @@ func validateFactorResult(specs []engine.FactorSpec, targetRows int, result *eng
 	}
 	expected := map[string]struct{}{}
 	for _, spec := range specs {
-		for _, period := range spec.Periods {
-			expected[fmt.Sprintf("%s_%d", spec.Name, period)] = struct{}{}
+		for _, output := range spec.Outputs {
+			if _, exists := expected[output]; exists {
+				return fmt.Errorf("duplicate expected factor output column %s", output)
+			}
+			expected[output] = struct{}{}
 		}
 	}
 	if len(result.Columns) != len(expected) {
@@ -410,20 +421,17 @@ func validFactorValue(value any) bool {
 }
 
 func inputColumns(specs []engine.FactorSpec) []string {
-	out := append([]string(nil), storageio.KLineColumns...)
-	seen := make(map[string]struct{}, len(out))
-	for _, column := range out {
-		seen[column] = struct{}{}
-	}
+	seen := make(map[string]struct{})
 	for _, spec := range specs {
-		for _, column := range spec.Depends {
-			if _, ok := seen[column]; ok {
-				continue
-			}
+		for _, column := range spec.InputColumns {
 			seen[column] = struct{}{}
-			out = append(out, column)
 		}
 	}
+	out := make([]string, 0, len(seen))
+	for column := range seen {
+		out = append(out, column)
+	}
+	sort.Strings(out)
 	return out
 }
 

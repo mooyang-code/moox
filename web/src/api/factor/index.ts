@@ -36,6 +36,10 @@ export async function setFactorStatus(factor_id: string, status: string) {
   return rsp.factor;
 }
 
+export function deleteFactorDef(factor_id: string) {
+  return callFactor<{ factor_id: string }, FactorRetRsp>("DeleteFactor", { factor_id });
+}
+
 export async function upsertFactorBinding(binding: FactorBinding) {
   const rsp = await callFactor<{ binding: FactorBinding }, FactorRetRsp<{ binding: FactorBinding }>>("UpsertBinding", {
     binding

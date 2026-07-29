@@ -62,3 +62,21 @@ func TestRealtimeInventoryInvalidFreqRetainsPreviousSnapshot(t *testing.T) {
 	require.Equal(t, 1, registry.errors)
 	require.True(t, inventory.Due(time.Now()))
 }
+
+func TestParseFrequencyMatchesStorageFrequencyContract(t *testing.T) {
+	tests := map[string]time.Duration{
+		"1m": time.Minute,
+		"1H": time.Hour,
+		"1d": 24 * time.Hour,
+		"1w": 7 * 24 * time.Hour,
+		"1M": 30 * 24 * time.Hour,
+		"1y": 365 * 24 * time.Hour,
+	}
+	for freq, expected := range tests {
+		t.Run(freq, func(t *testing.T) {
+			actual, err := parseFrequency(freq)
+			require.NoError(t, err)
+			require.Equal(t, expected, actual)
+		})
+	}
+}

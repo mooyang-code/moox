@@ -10,8 +10,10 @@ func TestFactorSchemaContainsOnlyDefinitionAndBindingState(t *testing.T) {
 	for _, want := range []string{
 		"CREATE TABLE IF NOT EXISTS t_factor_defs",
 		"CREATE TABLE IF NOT EXISTS t_factor_bindings",
-		"c_periods_json TEXT NOT NULL",
-		"c_depends_json TEXT NOT NULL",
+		"c_input_columns_json TEXT NOT NULL",
+		"c_outputs_json TEXT NOT NULL",
+		"c_params_json TEXT NOT NULL DEFAULT '{}'",
+		"CHECK (c_lookback_rows >= 1)",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("AllSQL() missing %q", want)
@@ -19,7 +21,6 @@ func TestFactorSchemaContainsOnlyDefinitionAndBindingState(t *testing.T) {
 	}
 	for _, removed := range []string{
 		"c_kind",
-		"c_params_json",
 		"c_avg_runtime_ms",
 		"c_writeback_bars",
 		"t_factor_event_inbox",

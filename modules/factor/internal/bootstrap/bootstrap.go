@@ -2,9 +2,9 @@ package bootstrap
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"sort"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/mooyang-code/moox/packages/report"
+	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -106,7 +107,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials), authInfo)
 	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials, authInfo)
 	pythonExec, err = engine.NewPythonExecutor(ctx, cfg.Engine.Workers, process.Config{
-		PythonBin: cfg.Engine.PythonBin, WorkerPath: "./pyworker/worker.py",
+		PythonBin: cfg.Engine.PythonBin, WorkerPath: cfg.Engine.WorkerPath,
 		Args:        []string{"--factors-dir", cfg.Engine.FactorsDir},
 		TaskTimeout: time.Duration(cfg.Engine.TaskTimeoutMS) * time.Millisecond,
 		Limits:      process.DefaultLimits(),
@@ -184,17 +185,22 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	registerMetricsReporter(s, realtimeInventory)
 
-	service := s.Service("trpc.moox.factor.FactorMgr")
-	if service == nil {
+	factorService := factorsvc.NewWithRuntime(
+		dbm,
+		sched,
+		factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
+		factorsvc.WithMetadataSync(meta),
+		factorsvc.WithRealtimeInventory(realtimeInventory),
+	)
+	registered := false
+	for _, name := range []string{"trpc.moox.factor.FactorMgr", "trpc.moox.factor.FactorMgr.trpc"} {
+		if service := s.Service(name); service != nil {
+			factorpb.RegisterFactorMgrService(service, factorService)
+			registered = true
+		}
+	}
+	if !registered {
 		log.WarnContextf(ctx, "FactorMgr service is not configured, skip register")
-	} else {
-		factorpb.RegisterFactorMgrService(service, factorsvc.NewWithRuntime(
-			dbm,
-			sched,
-			factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
-			factorsvc.WithMetadataSync(meta),
-			factorsvc.WithRealtimeInventory(realtimeInventory),
-		))
 	}
 	if err := registerHealth(s, cfg, dbm, sched, pythonExec, consumer); err != nil {
 		return nil, err
@@ -317,6 +323,10 @@ func (c *metadataClientAdapter) CreateFactor(ctx context.Context, req *storagepb
 	return c.client.CreateFactor(ctx, req)
 }
 
+func (c *metadataClientAdapter) UpdateFactor(ctx context.Context, req *storagepb.UpdateFactorReq) (*storagepb.UpdateFactorRsp, error) {
+	return c.client.UpdateFactor(ctx, req)
+}
+
 func (c *metadataClientAdapter) CreateDataset(ctx context.Context, req *storagepb.CreateDatasetReq) (*storagepb.CreateDatasetRsp, error) {
 	return c.client.CreateDataset(ctx, req)
 }
@@ -368,11 +378,15 @@ type realtimeLoopDeps struct {
 }
 
 func factorAuthInfo() *commonpb.AuthInfo {
-	return &commonpb.AuthInfo{
+	auth := &commonpb.AuthInfo{
 		AppId:     "moox-factor",
 		Operator:  "moox-factor",
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}
+	if secret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"); strings.TrimSpace(secret) != "" {
+		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
+	}
+	return auth
 }
 
 func listExecutableBindings(ctx context.Context, repo *store.BindingRepository) ([]domain.FactorBinding, error) {
@@ -443,33 +457,14 @@ func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, facto
 		return scheduler.Task{}, false, nil
 	}
 	built, err := scheduler.BuildTask(scheduler.TaskScope{
-		TaskID: deterministicTaskID(task), TriggerType: "event",
-		SpaceID: task.SpaceID, SourceDataset: task.SourceDataset,
+		TriggerType: "event",
+		SpaceID:     task.SpaceID, SourceDataset: task.SourceDataset,
 		TargetDataset: task.TargetDataset, SubjectID: task.SubjectID, Freq: task.Freq,
-		StartTime: task.BarTime, EndTime: task.BarTime.Add(time.Nanosecond),
+		StartTime: task.StartTime, EndTime: task.EndTime,
 	}, factors, factorsDir)
-	return built, err == nil, err
-}
-
-func deterministicTaskID(task trigger.Task) string {
-	factorIDs := append([]string(nil), task.FactorIDs...)
-	sort.Strings(factorIDs)
-	h := sha256.New()
-	write := func(value string) {
-		_, _ = h.Write([]byte(fmt.Sprintf("%d:%s;", len(value), value)))
+	if err != nil {
+		return scheduler.Task{}, false, err
 	}
-	for _, value := range []string{
-		task.SpaceID,
-		task.SourceDataset,
-		task.TargetDataset,
-		task.SubjectID,
-		task.Freq,
-		task.BarTime.UTC().Format(time.RFC3339Nano),
-	} {
-		write(value)
-	}
-	for _, factorID := range factorIDs {
-		write("factor:" + factorID)
-	}
-	return fmt.Sprintf("ft-%x", h.Sum(nil)[:16])
+	built.TaskID = scheduler.DeterministicTaskID(built)
+	return built, true, nil
 }

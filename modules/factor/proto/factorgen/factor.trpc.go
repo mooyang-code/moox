@@ -29,6 +29,8 @@ type FactorMgrService interface {
 
 	SetFactorStatus(ctx context.Context, req *SetFactorStatusReq) (*SetFactorStatusRsp, error)
 
+	DeleteFactor(ctx context.Context, req *DeleteFactorReq) (*DeleteFactorRsp, error)
+
 	UpsertBinding(ctx context.Context, req *UpsertBindingReq) (*UpsertBindingRsp, error)
 
 	ListBindings(ctx context.Context, req *ListBindingsReq) (*ListBindingsRsp, error)
@@ -120,6 +122,24 @@ func FactorMgrService_SetFactorStatus_Handler(svr interface{}, ctx context.Conte
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(FactorMgrService).SetFactorStatus(ctx, reqbody.(*SetFactorStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_DeleteFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteFactorReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).DeleteFactor(ctx, reqbody.(*DeleteFactorReq))
 	}
 
 	var rsp interface{}
@@ -246,6 +266,10 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_SetFactorStatus_Handler,
 		},
 		{
+			Name: "/trpc.moox.factor.FactorMgr/DeleteFactor",
+			Func: FactorMgrService_DeleteFactor_Handler,
+		},
+		{
 			Name: "/trpc.moox.factor.FactorMgr/UpsertBinding",
 			Func: FactorMgrService_UpsertBinding_Handler,
 		},
@@ -294,6 +318,9 @@ func (s *UnimplementedFactorMgr) ListFactors(ctx context.Context, req *ListFacto
 func (s *UnimplementedFactorMgr) SetFactorStatus(ctx context.Context, req *SetFactorStatusReq) (*SetFactorStatusRsp, error) {
 	return nil, errors.New("rpc SetFactorStatus of service FactorMgr is not implemented")
 }
+func (s *UnimplementedFactorMgr) DeleteFactor(ctx context.Context, req *DeleteFactorReq) (*DeleteFactorRsp, error) {
+	return nil, errors.New("rpc DeleteFactor of service FactorMgr is not implemented")
+}
 func (s *UnimplementedFactorMgr) UpsertBinding(ctx context.Context, req *UpsertBindingReq) (*UpsertBindingRsp, error) {
 	return nil, errors.New("rpc UpsertBinding of service FactorMgr is not implemented")
 }
@@ -327,6 +354,8 @@ type FactorMgrClientProxy interface {
 	ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (rsp *ListFactorsRsp, err error)
 
 	SetFactorStatus(ctx context.Context, req *SetFactorStatusReq, opts ...client.Option) (rsp *SetFactorStatusRsp, err error)
+
+	DeleteFactor(ctx context.Context, req *DeleteFactorReq, opts ...client.Option) (rsp *DeleteFactorRsp, err error)
 
 	UpsertBinding(ctx context.Context, req *UpsertBindingReq, opts ...client.Option) (rsp *UpsertBindingRsp, err error)
 
@@ -442,6 +471,26 @@ func (c *FactorMgrClientProxyImpl) SetFactorStatus(ctx context.Context, req *Set
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SetFactorStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) DeleteFactor(ctx context.Context, req *DeleteFactorReq, opts ...client.Option) (*DeleteFactorRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/DeleteFactor")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("DeleteFactor")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteFactorRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

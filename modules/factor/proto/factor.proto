@@ -11,12 +11,13 @@ message FactorDef {
   string name = 2;
   string source_code = 3;
   string source_hash = 4;
-  repeated int32 periods = 5;
-  int32 lookback_bars = 6;
-  repeated string depends = 7;
-  string status = 8;
-  string created_at = 9;
-  string updated_at = 10;
+  repeated string input_columns = 5;
+  repeated string outputs = 6;
+  string params_json = 7;
+  int32 lookback_rows = 8;
+  string status = 9;
+  string created_at = 10;
+  string updated_at = 11;
 }
 
 message FactorBinding {
@@ -73,6 +74,9 @@ message SetFactorStatusRsp {
   FactorDef factor = 2;
 }
 
+message DeleteFactorReq { string factor_id = 1; }
+message DeleteFactorRsp { common.RetInfo ret_info = 1; }
+
 message UpsertBindingReq { FactorBinding binding = 1; }
 message UpsertBindingRsp {
   common.RetInfo ret_info = 1;
@@ -121,6 +125,7 @@ service FactorMgr {
   rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
   rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
   rpc SetFactorStatus(SetFactorStatusReq) returns (SetFactorStatusRsp);
+  rpc DeleteFactor(DeleteFactorReq) returns (DeleteFactorRsp);
   rpc UpsertBinding(UpsertBindingReq) returns (UpsertBindingRsp);
   rpc ListBindings(ListBindingsReq) returns (ListBindingsRsp);
   rpc DeleteBinding(DeleteBindingReq) returns (DeleteBindingRsp);
