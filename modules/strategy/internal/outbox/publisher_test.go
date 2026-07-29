@@ -2,7 +2,6 @@ package outbox
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -40,45 +39,42 @@ func (c *captureEventPublisher) PublishMessage(_ context.Context, message *event
 
 func TestJetStreamPublisherBuildsEventMessage(t *testing.T) {
 	client := &captureEventPublisher{}
-	publisher := &JetStreamPublisher{Publisher: client, InstanceID: "strategy-1", Now: func() time.Time { return time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC) }}
+	publisher := &JetStreamPublisher{Publisher: client, InstanceID: "strategy-1"}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	data, err := registry.MarshalMessage(events.TradeTargetRequested, &tradeeventpb.TargetIntent{
-		ExecutionId: "request-1", StrategyRunId: "run-1", ExecutionBindingId: "execution-1",
-		ExchangeAccountId: "account-1", DataRevision: "revision-1", CommandSequence: 1,
-		NotAfterUnixMs: time.Now().Add(time.Minute).UnixMilli(),
-		Targets:        []*tradeeventpb.TargetPosition{{InstrumentId: "BTC-USDT", Symbol: "BTCUSDT", TargetQuantity: "1"}},
-	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "execution-1"})
+	data, err := registry.MarshalMessage(events.LogicalAccountTargetRequested, &tradeeventpb.LogicalAccountTargetRequested{
+		TargetId: "request-1", RunnerId: "runner-1", LogicalAccountId: "logical-1",
+		CommandSequence: 1,
+		Targets: []*tradeeventpb.InstrumentTarget{{
+			InstrumentId: "BTC-USDT-SPOT", Quantity: "1",
+		}},
+	}, events.PublishOptions{EventID: "request-1", OccurredAt: time.Now().UTC(), SpaceID: "crypto", SubjectID: "logical-1"})
 	require.NoError(t, err)
 	require.NoError(t, publisher.Publish(context.Background(), domain.OutboxMessage{MessageID: "request-1", EventData: data}))
 	registry, err = events.DefaultRegistry()
 	require.NoError(t, err)
 	_, payload, err := events.DecodeRaw(registry, client.body, client.subject, client.id, events.ContentType)
 	require.NoError(t, err)
-	if payload.ProtoReflect().Descriptor().FullName() != "trpc.moox.trade.event.TargetIntent" {
+	if payload.ProtoReflect().Descriptor().FullName() != "trpc.moox.trade.event.LogicalAccountTargetRequested" {
 		t.Fatalf("payload type = %s", payload.ProtoReflect().Descriptor().FullName())
 	}
 }
 
-func TestJetStreamPublisherClassifiesExpiredTargetIntent(t *testing.T) {
+func TestJetStreamPublisherAcceptsEmptyFullTargetWithoutExpiry(t *testing.T) {
 	now := time.Now().UTC()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	data, err := registry.MarshalMessage(events.TradeTargetRequested, &tradeeventpb.TargetIntent{
-		ExecutionId: "expired-1", StrategyRunId: "run-1", ExecutionBindingId: "execution-1",
-		ExchangeAccountId: "account-1", DataRevision: "revision-1", CommandSequence: 1,
-		NotAfterUnixMs: now.Add(time.Minute).UnixMilli(),
-		Targets:        []*tradeeventpb.TargetPosition{{InstrumentId: "BTC-USDT", Symbol: "BTCUSDT", TargetQuantity: "1"}},
+	data, err := registry.MarshalMessage(events.LogicalAccountTargetRequested, &tradeeventpb.LogicalAccountTargetRequested{
+		TargetId: "target-empty", RunnerId: "runner-1", LogicalAccountId: "logical-1",
+		CommandSequence: 1, Targets: []*tradeeventpb.InstrumentTarget{},
 	}, events.PublishOptions{
-		EventID: "expired-1", OccurredAt: now, SpaceID: "crypto", SubjectID: "execution-1",
+		EventID: "target-empty", OccurredAt: now, SpaceID: "crypto", SubjectID: "logical-1",
 	})
 	require.NoError(t, err)
 	publisher := &JetStreamPublisher{
 		Publisher: &captureEventPublisher{},
-		Now:       func() time.Time { return now.Add(2 * time.Minute) },
 	}
-	err = publisher.Publish(context.Background(), domain.OutboxMessage{
-		MessageID: "expired-1", EventData: data,
-	})
-	require.True(t, errors.Is(err, ErrExpiredOutboxMessage), "error=%v", err)
+	require.NoError(t, publisher.Publish(context.Background(), domain.OutboxMessage{
+		MessageID: "target-empty", EventData: data,
+	}))
 }

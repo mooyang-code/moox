@@ -3,17 +3,13 @@ package outbox
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
 )
-
-var ErrExpiredOutboxMessage = errors.New("strategy outbox target intent expired")
 
 func ValidateJetStreamPublisher(_ context.Context, client JetStreamClient, _ string) error {
 	if client == nil || !client.Ready() {
@@ -55,7 +51,6 @@ func (c *managedClient) EventPublisher() EventPublisher { return c.publisher }
 type JetStreamPublisher struct {
 	Publisher  EventPublisher
 	InstanceID string
-	Now        func() time.Time
 }
 
 type EventPublisher interface {
@@ -73,19 +68,6 @@ func (p *JetStreamPublisher) Publish(ctx context.Context, row domain.OutboxMessa
 	rawMessage := new(eventpb.EventMessage)
 	if err := proto.Unmarshal(row.EventData, rawMessage); err != nil {
 		return err
-	}
-	now := time.Now()
-	if p.Now != nil {
-		now = p.Now()
-	}
-	if rawMessage.GetEventName() == events.TradeTargetRequested.Name() {
-		intent := new(tradeeventpb.TargetIntent)
-		if err := proto.Unmarshal(rawMessage.GetPayload(), intent); err != nil {
-			return err
-		}
-		if intent.GetNotAfterUnixMs() <= now.UnixMilli() {
-			return ErrExpiredOutboxMessage
-		}
 	}
 	message, err := registry.UnmarshalMessage(row.EventData)
 	if err != nil {

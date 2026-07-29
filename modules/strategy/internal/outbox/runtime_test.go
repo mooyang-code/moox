@@ -72,12 +72,13 @@ func strategyEventData(id string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return registry.MarshalMessage(events.TradeTargetRequested, &tradeeventpb.TargetIntent{
-		ExecutionId: id, StrategyRunId: "strategy-" + id, ExecutionBindingId: "execution-1",
-		ExchangeAccountId: "account-1", DataRevision: "revision-1", CommandSequence: 1,
-		NotAfterUnixMs: time.Now().Add(time.Minute).UnixMilli(),
-		Targets:        []*tradeeventpb.TargetPosition{{InstrumentId: "BTC-USDT", Symbol: "BTCUSDT", TargetQuantity: "1"}},
-	}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "execution-1"})
+	return registry.MarshalMessage(events.LogicalAccountTargetRequested, &tradeeventpb.LogicalAccountTargetRequested{
+		TargetId: id, RunnerId: "runner-1", LogicalAccountId: "logical-1",
+		CommandSequence: 1,
+		Targets: []*tradeeventpb.InstrumentTarget{{
+			InstrumentId: "BTC-USDT-SPOT", Quantity: "1",
+		}},
+	}, events.PublishOptions{EventID: id, OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "logical-1"})
 }
 
 func (p runtimeEventPublisher) PublishMessage(_ context.Context, message *eventpb.EventMessage) (*jetstream.PublishAck, error) {
