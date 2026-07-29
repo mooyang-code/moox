@@ -32,9 +32,11 @@ type adapterStub struct {
 	cancelCalls int
 	getResult   exchange.Order
 	getErr      error
+	getCalls    int
 	fills       []exchange.Fill
 	fillsErr    error
 	placeHook   func()
+	placed      exchange.OrderRequest
 }
 
 func (a *adapterStub) Exchange() exchange.Exchange { return exchange.ExchangeBinance }
@@ -58,10 +60,12 @@ func (a *adapterStub) ListRecentFills(
 	return a.fills, "", a.fillsErr
 }
 func (a *adapterStub) GetOrder(context.Context, string, string) (exchange.Order, error) {
+	a.getCalls++
 	return a.getResult, a.getErr
 }
-func (a *adapterStub) PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error) {
+func (a *adapterStub) PlaceOrder(_ context.Context, request exchange.OrderRequest) (exchange.Order, error) {
 	a.placeCalls++
+	a.placed = request
 	if a.placeHook != nil {
 		a.placeHook()
 	}
@@ -128,6 +132,230 @@ func TestServicePlacePersistsBeforeSubmissionAndIsIdempotent(t *testing.T) {
 	conflict.Quantity = shared.MustDecimal("2")
 	_, err = service.Place(context.Background(), "space-1", conflict)
 	require.ErrorIs(t, err, ErrIdempotencyConflict)
+}
+
+func TestSubmitPendingSubmitsOnce(t *testing.T) {
+	service, _, adapter := newTestService(t)
+	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+	require.NoError(t, err)
+
+	submitted, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Open, submitted.State)
+	require.Equal(t, 1, adapter.placeCalls)
+
+	replayed, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, submitted.State, replayed.State)
+	require.Equal(t, 1, adapter.placeCalls)
+}
+
+func TestSubmitSubmittingQueriesExchangeBeforeRetry(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+	require.NoError(t, err)
+	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.Submitting, service.now())
+	adapter.getResult = exchange.Order{ExchangeOrderID: "found-1", Status: exchange.OrderStatusOpen}
+
+	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Open, got.State)
+	require.Equal(t, 1, adapter.getCalls)
+	require.Zero(t, adapter.placeCalls)
+}
+
+func TestSubmitUnknownQueriesExchangeBeforeRetry(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+	require.NoError(t, err)
+	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.SubmitUnknown, service.now())
+	adapter.getResult = exchange.Order{ExchangeOrderID: "found-1", Status: exchange.OrderStatusOpen}
+
+	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Open, got.State)
+	require.Equal(t, 1, adapter.getCalls)
+	require.Zero(t, adapter.placeCalls)
+}
+
+func TestSubmitUnknownResetsToPendingOnlyAfterConfirmedAbsentAndWindowExpired(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+	require.NoError(t, err)
+	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.SubmitUnknown, service.now())
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	service.UnknownLookupWindow = time.Minute
+
+	withinWindow, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.SubmitUnknown, withinWindow.State)
+	require.Zero(t, adapter.placeCalls)
+
+	service.Now = func() time.Time { return time.Unix(1_700_000_061, 0) }
+	service.Validator.Now = service.Now
+	expired, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Pending, expired.State)
+	require.Zero(t, adapter.placeCalls)
+
+	retried, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Open, retried.State)
+	require.Equal(t, 1, adapter.placeCalls)
+	require.Equal(t, "client-1", adapter.placed.ClientOrderID)
+}
+
+func TestSubmitOpenPartialOrTerminalReturnsStoredOrder(t *testing.T) {
+	for _, state := range []orderdomain.State{
+		orderdomain.Open,
+		orderdomain.PartiallyFilled,
+		orderdomain.Filled,
+		orderdomain.Canceled,
+		orderdomain.PartiallyCanceled,
+		orderdomain.Expired,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			service, tradeStore, adapter := newTestService(t)
+			pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+			require.NoError(t, err)
+			setStoredOrderState(t, tradeStore, string(pending.ID), state, service.now())
+
+			got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+			require.NoError(t, err)
+			require.Equal(t, state, got.State)
+			require.Zero(t, adapter.placeCalls)
+			require.Zero(t, adapter.getCalls)
+		})
+	}
+}
+
+func TestSubmitRejectedReturnsStableRejection(t *testing.T) {
+	service, _, adapter := newTestService(t)
+	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("stable reason")}
+	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+	require.NoError(t, err)
+	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.EqualError(t, err, "REJECTED: stable reason")
+
+	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.EqualError(t, err, "REJECTED: stable reason")
+	require.Equal(t, orderdomain.Rejected, got.State)
+	require.Equal(t, 1, adapter.placeCalls)
+}
+
+func TestSubmitSameClientFieldsIgnoresServerReferencePriceAndTime(t *testing.T) {
+	service, _, _ := newTestService(t)
+	spec := testSpec(service.now())
+	first, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+
+	spec.ReferencePrice = shared.MustDecimal("101")
+	spec.ReferencePriceAt = service.now().Add(500 * time.Millisecond)
+	replayed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.Equal(t, first.ID, replayed.ID)
+}
+
+func TestSubmitSameClientIDWithDifferentClientFieldsConflicts(t *testing.T) {
+	service, _, _ := newTestService(t)
+	spec := testSpec(service.now())
+	_, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+
+	spec.Side = exchange.SideSell
+	_, err = service.Place(context.Background(), "space-1", spec)
+	require.ErrorIs(t, err, ErrIdempotencyConflict)
+}
+
+func TestPlaceGeneratesAndPersistsClientOrderIDOnce(t *testing.T) {
+	service, _, adapter := newTestService(t)
+	spec := testSpec(service.now())
+	spec.ClientOrderID = ""
+
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.Len(t, placed.Spec.ClientOrderID, 20)
+	require.Regexp(t, `^[a-z0-9]+$`, placed.Spec.ClientOrderID)
+
+	submitted, err := service.Submit(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	require.Equal(t, placed.Spec.ClientOrderID, submitted.Spec.ClientOrderID)
+	require.Equal(t, 1, adapter.placeCalls)
+}
+
+func TestOrderServiceDerivesReducePositionOnlyForSwapReduction(t *testing.T) {
+	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	service.Validator.Positions = positionSourceStub{
+		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+	}
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideSell
+
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.True(t, placed.Spec.ReducePositionOnly)
+}
+
+func TestOrderServiceLeavesReducePositionOnlyFalseForSwapIncrease(t *testing.T) {
+	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	service.Validator.Positions = positionSourceStub{
+		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+	}
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideBuy
+	spec.ReducePositionOnly = true
+
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.False(t, placed.Spec.ReducePositionOnly)
+}
+
+func TestOrderServiceRejectsManualOrderThatWouldCrossZero(t *testing.T) {
+	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	service.Validator.Positions = positionSourceStub{
+		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+	}
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideSell
+	spec.Quantity = shared.MustDecimal("3")
+	spec.Owner.Type = "RPC"
+
+	_, err := service.Place(context.Background(), "space-1", spec)
+	require.ErrorIs(t, err, ErrCrossZero)
+}
+
+func TestOrderServiceNeverSetsReducePositionOnlyForSpot(t *testing.T) {
+	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSpot)
+	spec := testSpec(service.now())
+	spec.ReducePositionOnly = true
+
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.False(t, placed.Spec.ReducePositionOnly)
+}
+
+func TestSubmitNonOpenSuccessSyncsWithoutSettlingAggregateResponse(t *testing.T) {
+	service, _, adapter := newTestService(t)
+	syncer := &syncerStub{}
+	service.Syncer = syncer
+	adapter.placeResult = exchange.Order{
+		ExchangeOrderID: "exchange-order-1",
+		Status:          exchange.OrderStatusFilled,
+		FilledQuantity:  shared.MustDecimal("1"),
+		AveragePrice:    shared.MustDecimal("100"),
+		UpdatedAt:       service.now(),
+	}
+	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+	require.NoError(t, err)
+
+	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, 1, syncer.calls)
+	require.Equal(t, orderdomain.Open, got.State)
+	require.True(t, got.FilledQuantity.IsZero())
 }
 
 func TestServiceDiscardPendingReleasesReservationWithoutExchangeCall(t *testing.T) {
@@ -512,12 +740,19 @@ func TestServiceConcurrentPlaceCannotOverReserveSnapshot(t *testing.T) {
 }
 
 func newTestService(t *testing.T) (*Service, *store.Store, *adapterStub) {
+	return newTestServiceForMarket(t, exchange.MarketTypeSpot)
+}
+
+func newTestServiceForMarket(
+	t *testing.T,
+	market exchange.MarketType,
+) (*Service, *store.Store, *adapterStub) {
 	t.Helper()
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
-	account := executableAccount(exchange.MarketTypeSpot)
-	instrument := testInstrument(exchange.MarketTypeSpot)
+	account := executableAccount(market)
+	instrument := testInstrument(market)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
 			SpaceID: account.SpaceID, ExchangeAccountID: account.ID, Name: account.Name,
@@ -534,6 +769,9 @@ func newTestService(t *testing.T) (*Service, *store.Store, *adapterStub) {
 			Symbol: instrument.Symbol, InstrumentID: "BTCUSDT",
 			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 			SettlementAsset:      instrument.SettlementAsset,
+			Linear:               instrument.Linear,
+			ContractValue:        instrument.ContractValue.String(),
+			ContractValueAsset:   instrument.ContractValueAsset,
 			ExchangeQuantityStep: instrument.ExchangeQuantityStep.String(),
 			MinExchangeQuantity:  instrument.MinExchangeQuantity.String(),
 			PriceTick:            instrument.PriceTick.String(), MinNotional: instrument.MinNotional.String(),
@@ -548,6 +786,7 @@ func newTestService(t *testing.T) (*Service, *store.Store, *adapterStub) {
 		Validator: Validator{
 			Accounts:         accountEligibilityStub{account: account},
 			Instruments:      instrumentSourceStub{instrument: instrument},
+			Positions:        positionSourceStub{},
 			Now:              func() time.Time { return time.Unix(1_700_000_000, 0) },
 			MaxReferenceAge:  time.Second,
 			MaxChildNotional: shared.MustDecimal("1000"),
@@ -558,4 +797,26 @@ func newTestService(t *testing.T) (*Service, *store.Store, *adapterStub) {
 		Now:        func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}
 	return service, tradeStore, adapter
+}
+
+func setStoredOrderState(
+	t *testing.T,
+	tradeStore *store.Store,
+	orderID string,
+	state orderdomain.State,
+	submittedAt time.Time,
+) {
+	t.Helper()
+	record, err := tradeStore.GetOrder(context.Background(), "space-1", orderID)
+	require.NoError(t, err)
+	expected := record.Version
+	record.State = string(state)
+	record.SubmittedAt = submittedAt.UnixMilli()
+	record.Version++
+	if state == orderdomain.Rejected {
+		record.RejectReason = "stable reason"
+	}
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateOrder(record, expected)
+	}))
 }

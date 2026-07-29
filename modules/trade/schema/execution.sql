@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_reserved_quantity TEXT NOT NULL DEFAULT '0',
     c_remaining_reserved_quantity TEXT NOT NULL DEFAULT '0',
     c_reject_reason TEXT NOT NULL DEFAULT '',
+    c_exchange_updated_at INTEGER NOT NULL DEFAULT 0,
     c_version INTEGER NOT NULL DEFAULT 1,
     c_submitted_at INTEGER NOT NULL DEFAULT 0,
     c_finished_at INTEGER NOT NULL DEFAULT 0,

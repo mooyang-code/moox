@@ -3,6 +3,7 @@ package order
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -10,12 +11,14 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/rs/xid"
 	"gorm.io/gorm"
 )
 
 var (
 	ErrIdempotencyConflict = errors.New("trade order: idempotency conflict")
 	ErrServiceConfig       = errors.New("trade order: service is not configured")
+	ErrCrossZero           = errors.New("trade order: manual order cannot cross zero")
 )
 
 type AdapterSource interface {
@@ -59,6 +62,10 @@ func (s *Service) Place(
 	if s == nil || s.Store == nil {
 		return orderdomain.Order{}, ErrServiceConfig
 	}
+	if spec.ClientOrderID == "" {
+		spec.ClientOrderID = xid.New().String()
+		spec.ClientOrderSpec.ClientOrderID = spec.ClientOrderID
+	}
 	unlock := s.Store.LockExchangeAccount(spec.ExchangeAccountID)
 	defer unlock()
 	if existing, err := s.Store.GetOrderByClientID(
@@ -72,6 +79,10 @@ func (s *Service) Place(
 		}
 		return domainOrder(existing)
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return orderdomain.Order{}, err
+	}
+	spec, err := s.deriveReducePositionOnly(ctx, spec)
+	if err != nil {
 		return orderdomain.Order{}, err
 	}
 	validation, err := s.Validator.Validate(ctx, spaceID, spec)
@@ -149,6 +160,57 @@ func (s *Service) Place(
 	return domainOrder(record)
 }
 
+func (s *Service) deriveReducePositionOnly(
+	ctx context.Context,
+	spec orderdomain.OrderSpec,
+) (orderdomain.OrderSpec, error) {
+	if s.Validator.Accounts == nil {
+		return spec, ErrServiceConfig
+	}
+	account, err := s.Validator.Accounts.ExecutionEligibility(ctx, spec.ExchangeAccountID)
+	if err != nil {
+		return spec, err
+	}
+	spec.ReducePositionOnly = false
+	if account.MarketType == exchange.MarketTypeSpot {
+		return spec, nil
+	}
+	if s.Validator.Positions == nil {
+		return spec, ErrServiceConfig
+	}
+	position, err := s.Validator.Positions.GetPosition(
+		ctx,
+		spec.ExchangeAccountID,
+		spec.InstrumentID,
+	)
+	if err != nil {
+		return spec, err
+	}
+	current := position.SignedQuantity
+	if current.IsZero() {
+		return spec, nil
+	}
+	reducing := (current.Cmp(shared.Zero()) > 0 && spec.Side == exchange.SideSell) ||
+		(current.Cmp(shared.Zero()) < 0 && spec.Side == exchange.SideBuy)
+	if !reducing {
+		return spec, nil
+	}
+	if spec.Quantity.Cmp(current.Abs()) > 0 {
+		if strings.EqualFold(spec.Owner.Type, "FLATTEN") {
+			spec.ReducePositionOnly = true
+			return spec, nil
+		}
+		if strings.EqualFold(spec.Owner.Type, "RPC") ||
+			strings.EqualFold(spec.Owner.Type, "MANUAL") ||
+			strings.EqualFold(spec.Owner.Type, "OPERATOR") {
+			return spec, ErrCrossZero
+		}
+		return spec, nil
+	}
+	spec.ReducePositionOnly = true
+	return spec, nil
+}
+
 func (s *Service) Submit(
 	ctx context.Context,
 	spaceID string,
@@ -167,7 +229,24 @@ func (s *Service) Submit(
 		unlock()
 		return orderdomain.Order{}, err
 	}
-	result, synchronize, err := s.submit(ctx, record)
+	current, err := domainOrder(record)
+	if err != nil {
+		unlock()
+		return orderdomain.Order{}, err
+	}
+	var result orderdomain.Order
+	var synchronize bool
+	switch current.State {
+	case orderdomain.Pending:
+		result, synchronize, err = s.submit(ctx, record)
+	case orderdomain.Submitting, orderdomain.SubmitUnknown:
+		result, err = s.resolveUnknown(ctx, record, current)
+	case orderdomain.Rejected:
+		result = current
+		err = errors.New(record.RejectReason)
+	default:
+		result = current
+	}
 	unlock()
 	if err != nil || !synchronize || s.Syncer == nil {
 		return result, err
@@ -365,10 +444,24 @@ func (s *Service) ResolveUnknown(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
+	unlock := s.Store.LockExchangeAccount(record.ExchangeAccountID)
+	defer unlock()
+	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
 	current, err := domainOrder(record)
 	if err != nil {
 		return current, err
 	}
+	return s.resolveUnknown(ctx, record, current)
+}
+
+func (s *Service) resolveUnknown(
+	ctx context.Context,
+	record store.OrderRecord,
+	current orderdomain.Order,
+) (orderdomain.Order, error) {
 	if current.State == orderdomain.Submitting {
 		expected := current.Version
 		if _, err := current.MarkSubmitUnknown(); err != nil {
@@ -461,7 +554,16 @@ func (s *Service) submit(
 	if err != nil {
 		return orderdomain.Order{}, false, err
 	}
-	if _, err := s.Validator.Validate(ctx, record.SpaceID, aggregate.Spec); err != nil {
+	validator := s.Validator
+	if record.SubmittedAt > 0 {
+		// A confirmed-absent retry reuses the already validated server quote.
+		// Revalidate account and instrument safety without making the unknown
+		// lookup window itself turn every controlled retry into a stale quote.
+		now := s.now()
+		validator.Now = func() time.Time { return now }
+		validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
+	}
+	if _, err := validator.Validate(ctx, record.SpaceID, aggregate.Spec); err != nil {
 		if permanentValidationError(err) {
 			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
 			return rejected, false, rejectErr
@@ -486,11 +588,11 @@ func (s *Service) submit(
 
 	response, callErr := adapter.PlaceOrder(ctx, exchange.OrderRequest{
 		ClientOrderID: aggregate.Spec.ClientOrderID,
-		Symbol:        aggregate.Spec.Symbol, OrderType: aggregate.Spec.OrderType,
-		TimeInForce: aggregate.Spec.TimeInForce, Side: aggregate.Spec.Side,
+		Symbol:        aggregate.Spec.InstrumentID, OrderType: aggregate.Spec.Type,
+		FillPolicy: aggregate.Spec.FillPolicy, Side: aggregate.Spec.Side,
 		PositionSide: aggregate.Spec.PositionSide, Quantity: aggregate.Spec.Quantity,
 		LimitPrice: aggregate.Spec.LimitPrice, ReferencePrice: aggregate.Spec.ReferencePrice,
-		ReduceOnly: aggregate.Spec.ReduceOnly,
+		ReduceOnly: aggregate.Spec.ReducePositionOnly,
 	})
 
 	latest, getErr := s.Store.GetOrder(ctx, record.SpaceID, record.OrderID)
@@ -517,6 +619,10 @@ func (s *Service) submit(
 	applyAggregate(&latest, current)
 	if callErr == nil {
 		latest.ExchangeOrderID = response.ExchangeOrderID
+		latest.ExchangeUpdatedAt = response.UpdatedAt.UnixMilli()
+		if latest.ExchangeUpdatedAt <= 0 {
+			latest.ExchangeUpdatedAt = response.CreatedAt.UnixMilli()
+		}
 	}
 	releaseRecord := latest
 	if current.State == orderdomain.Rejected {
@@ -534,7 +640,9 @@ func (s *Service) submit(
 	}); err != nil {
 		return orderdomain.Order{}, false, err
 	}
-	return current, callErr == nil && response.Status == exchange.OrderStatusFilled, callErr
+	return current, callErr == nil &&
+		response.Status != "" &&
+		response.Status != exchange.OrderStatusOpen, callErr
 }
 
 func uncertainExchangeError(err error) bool {
@@ -578,6 +686,7 @@ func permanentValidationError(err error) bool {
 		ErrInsufficientFunds,
 		ErrLeverageLimit,
 		ErrReduceOnly,
+		ErrPaperLimit,
 	} {
 		if errors.Is(err, target) {
 			return true
@@ -617,14 +726,14 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 		ExchangeAccountID: value.Spec.ExchangeAccountID,
 		ClientOrderID:     value.Spec.ClientOrderID,
 		Exchange:          string(validation.Account.Exchange),
-		MarketType:        string(validation.Account.MarketType), Symbol: value.Spec.Symbol,
-		OrderType: string(value.Spec.OrderType), TimeInForce: string(value.Spec.TimeInForce),
+		MarketType:        string(validation.Account.MarketType), Symbol: value.Spec.InstrumentID,
+		OrderType: string(value.Spec.Type), TimeInForce: string(value.Spec.FillPolicy),
 		Side: string(value.Spec.Side), PositionSide: string(value.Spec.PositionSide),
 		Quantity: value.Spec.Quantity.String(), LimitPrice: limitPrice,
 		ReferencePrice:   value.Spec.ReferencePrice.String(),
 		ReferencePriceAt: value.Spec.ReferencePriceAt.UnixMilli(),
-		ReduceOnly:       value.Spec.ReduceOnly, Source: value.Spec.Source,
-		StrategyExecutionID: value.Spec.StrategyExecutionID,
+		ReduceOnly:       value.Spec.ReducePositionOnly, Source: value.Spec.Owner.Type,
+		StrategyExecutionID: value.Spec.Owner.StrategyExecutionID,
 		State:               string(value.State), FilledQuantity: "0", AveragePrice: "0",
 		ReservedAsset:             validation.ReservedAsset,
 		ReservedQuantity:          validation.ReservedQuantity.String(),
@@ -661,16 +770,23 @@ func domainOrder(record store.OrderRecord) (orderdomain.Order, error) {
 	return orderdomain.Order{
 		ID: shared.OrderID(record.OrderID),
 		Spec: orderdomain.OrderSpec{
-			ExchangeAccountID: record.ExchangeAccountID,
-			ClientOrderID:     record.ClientOrderID, Symbol: record.Symbol,
-			OrderType:    exchange.OrderType(record.OrderType),
-			TimeInForce:  exchange.TimeInForce(record.TimeInForce),
-			Side:         exchange.Side(record.Side),
-			PositionSide: exchange.PositionSide(record.PositionSide),
-			Quantity:     quantity, LimitPrice: limitPrice, ReferencePrice: referencePrice,
-			ReferencePriceAt: time.UnixMilli(record.ReferencePriceAt),
-			ReduceOnly:       record.ReduceOnly, Source: record.Source,
-			StrategyExecutionID: record.StrategyExecutionID,
+			ClientOrderSpec: orderdomain.ClientOrderSpec{
+				ExchangeAccountID: record.ExchangeAccountID,
+				ClientOrderID:     record.ClientOrderID,
+				InstrumentID:      record.Symbol,
+				Type:              exchange.OrderType(record.OrderType),
+				FillPolicy:        exchange.FillPolicy(record.TimeInForce),
+				Side:              exchange.Side(record.Side),
+				PositionSide:      exchange.PositionSide(record.PositionSide),
+				Quantity:          quantity,
+				LimitPrice:        limitPrice,
+			},
+			ReferencePrice:     referencePrice,
+			ReferencePriceAt:   time.UnixMilli(record.ReferencePriceAt),
+			ReducePositionOnly: record.ReduceOnly,
+			Owner: orderdomain.OrderOwner{
+				Type: record.Source, StrategyExecutionID: record.StrategyExecutionID,
+			},
 		},
 		ExchangeOrderID: record.ExchangeOrderID,
 		FilledQuantity:  filled, AverageFillPrice: average,
@@ -694,18 +810,13 @@ func sameSpec(record store.OrderRecord, spec orderdomain.OrderSpec) bool {
 	}
 	return stored.Spec.ExchangeAccountID == spec.ExchangeAccountID &&
 		stored.Spec.ClientOrderID == spec.ClientOrderID &&
-		stored.Spec.Symbol == spec.Symbol &&
-		stored.Spec.OrderType == spec.OrderType &&
-		stored.Spec.TimeInForce == spec.TimeInForce &&
+		stored.Spec.InstrumentID == spec.InstrumentID &&
+		stored.Spec.Type == spec.Type &&
+		stored.Spec.FillPolicy == spec.FillPolicy &&
 		stored.Spec.Side == spec.Side &&
 		stored.Spec.PositionSide == spec.PositionSide &&
 		stored.Spec.Quantity.Cmp(spec.Quantity) == 0 &&
-		equalOptionalDecimal(stored.Spec.LimitPrice, spec.LimitPrice) &&
-		stored.Spec.ReferencePrice.Cmp(spec.ReferencePrice) == 0 &&
-		stored.Spec.ReferencePriceAt.UnixMilli() == spec.ReferencePriceAt.UnixMilli() &&
-		stored.Spec.ReduceOnly == spec.ReduceOnly &&
-		stored.Spec.Source == spec.Source &&
-		stored.Spec.StrategyExecutionID == spec.StrategyExecutionID
+		equalOptionalDecimal(stored.Spec.LimitPrice, spec.LimitPrice)
 }
 
 func equalOptionalDecimal(left, right *shared.Decimal) bool {

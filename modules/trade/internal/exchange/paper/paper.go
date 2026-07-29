@@ -269,6 +269,12 @@ func (a *Adapter) PlaceOrder(
 	ctx context.Context,
 	request exchange.OrderRequest,
 ) (exchange.Order, error) {
+	if request.OrderType != exchange.OrderTypeMarket {
+		return exchange.Order{}, &exchange.Error{
+			Kind: exchange.ErrorRejected,
+			Err:  fmt.Errorf("paper: only MARKET orders are supported"),
+		}
+	}
 	price := request.ReferencePrice
 	if request.LimitPrice != nil {
 		price = *request.LimitPrice
@@ -322,8 +328,9 @@ func (a *Adapter) PlaceOrder(
 	)
 	order := exchange.Order{
 		ExchangeOrderID: exchangeOrderID, ClientOrderID: request.ClientOrderID,
-		Symbol: request.Symbol, OrderType: request.OrderType, TimeInForce: request.TimeInForce,
-		Side: request.Side, PositionSide: request.PositionSide, Quantity: request.Quantity,
+		Symbol: request.Symbol, OrderType: request.OrderType,
+		TimeInForce: request.NativeTimeInForce(),
+		Side:        request.Side, PositionSide: request.PositionSide, Quantity: request.Quantity,
 		LimitPrice: request.LimitPrice, FilledQuantity: request.Quantity,
 		AveragePrice: price, ReduceOnly: request.ReduceOnly,
 		Status: exchange.OrderStatusFilled, CreatedAt: now, UpdatedAt: now,

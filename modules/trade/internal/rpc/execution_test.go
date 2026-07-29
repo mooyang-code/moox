@@ -214,7 +214,8 @@ func TestPlaceOrderSubmitsMarketFieldsThroughOneOrderSpec(t *testing.T) {
 		&tradepb.PlaceOrderReq{
 			ExchangeAccountId: "account-1", ClientOrderId: "client-1",
 			Symbol: "BTCUSDT", OrderType: tradepb.OrderType_ORDER_TYPE_MARKET,
-			Side: tradepb.OrderSide_ORDER_SIDE_BUY, Quantity: "1",
+			Side: tradepb.OrderSide_ORDER_SIDE_BUY, Quantity: "1", ReduceOnly: true,
+			Source: "TARGET", StrategyExecutionId: "forged",
 		},
 	)
 	if err != nil {
@@ -223,9 +224,16 @@ func TestPlaceOrderSubmitsMarketFieldsThroughOneOrderSpec(t *testing.T) {
 	if response.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS ||
 		response.GetOrder().GetOrderType() != tradepb.OrderType_ORDER_TYPE_MARKET ||
 		adapter.placed.OrderType != exchange.OrderTypeMarket ||
+		adapter.placed.ReduceOnly ||
 		adapter.placed.LimitPrice != nil {
 		t.Fatalf("place response = %+v, adapter request = %+v", response, adapter.placed)
 	}
+}
+
+func TestManualOrderRPCCannotSetReducePositionOnly(t *testing.T) {
+	// The full request-path assertion lives in
+	// TestPlaceOrderSubmitsMarketFieldsThroughOneOrderSpec.
+	t.Run("caller flag ignored", TestPlaceOrderSubmitsMarketFieldsThroughOneOrderSpec)
 }
 
 func TestSubmitTargetUsesSharedSubmissionPath(t *testing.T) {

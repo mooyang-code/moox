@@ -657,17 +657,28 @@ func (s *Service) applyOrderState(
 	record store.OrderRecord,
 	current exchange.Order,
 ) error {
+	exchangeUpdatedAt := current.UpdatedAt.UnixMilli()
+	if exchangeUpdatedAt <= 0 {
+		exchangeUpdatedAt = current.CreatedAt.UnixMilli()
+	}
+	if exchangeUpdatedAt > 0 && record.ExchangeUpdatedAt > exchangeUpdatedAt {
+		return nil
+	}
 	if current.ExchangeOrderID != "" && record.ExchangeOrderID != "" &&
 		record.ExchangeOrderID != current.ExchangeOrderID {
 		return fmt.Errorf("trade account sync: conflicting Exchange order ID")
+	}
+	state := orderdomain.State(record.State)
+	if state.Terminal() {
+		return nil
 	}
 	switch current.Status {
 	case exchange.OrderStatusCanceled, exchange.OrderStatusPartiallyCanceled:
 		return s.Fills.ConfirmCancel(ctx, record.SpaceID, record.OrderID)
 	case exchange.OrderStatusRejected, exchange.OrderStatusExpired:
+		record.ExchangeUpdatedAt = exchangeUpdatedAt
 		return s.terminalize(ctx, record, current.Status)
 	}
-	state := orderdomain.State(record.State)
 	next := state
 	switch current.Status {
 	case exchange.OrderStatusOpen:
@@ -689,12 +700,14 @@ func (s *Service) applyOrderState(
 	if exchangeOrderID == "" {
 		exchangeOrderID = current.ExchangeOrderID
 	}
-	if next == state && exchangeOrderID == record.ExchangeOrderID {
+	if next == state && exchangeOrderID == record.ExchangeOrderID &&
+		exchangeUpdatedAt <= record.ExchangeUpdatedAt {
 		return nil
 	}
 	expected := record.Version
 	record.State = string(next)
 	record.ExchangeOrderID = exchangeOrderID
+	record.ExchangeUpdatedAt = max(record.ExchangeUpdatedAt, exchangeUpdatedAt)
 	record.Version++
 	if next.Terminal() && record.FinishedAt == 0 {
 		record.FinishedAt = s.now().UnixMilli()
@@ -826,7 +839,9 @@ func (s *Service) importExternalOrder(
 		ReferencePriceAt: referenceAt.UnixMilli(), ReduceOnly: current.ReduceOnly,
 		Source: "EXTERNAL", State: string(orderdomain.Open),
 		FilledQuantity: "0", AveragePrice: "0", ReservedQuantity: "0",
-		RemainingReservedQuantity: "0", Version: 1,
+		RemainingReservedQuantity: "0",
+		ExchangeUpdatedAt:         current.UpdatedAt.UnixMilli(),
+		Version:                   1,
 	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateOrder(record)

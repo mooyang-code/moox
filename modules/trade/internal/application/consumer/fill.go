@@ -60,8 +60,10 @@ func (r *Reducer) ConfirmCancel(
 			return fmt.Errorf("trade: corrupted filled quantity")
 		}
 		aggregate := order.Order{
-			ID:             shared.OrderID(record.OrderID),
-			Spec:           order.OrderSpec{Quantity: quantity},
+			ID: shared.OrderID(record.OrderID),
+			Spec: order.OrderSpec{
+				ClientOrderSpec: order.ClientOrderSpec{Quantity: quantity},
+			},
 			FilledQuantity: filled, State: state, Version: record.Version,
 		}
 		expectedVersion := aggregate.Version
@@ -233,7 +235,7 @@ func applyOrderFill(
 	aggregate := order.Order{
 		ID: shared.OrderID(record.OrderID),
 		Spec: order.OrderSpec{
-			Quantity: quantity,
+			ClientOrderSpec: order.ClientOrderSpec{Quantity: quantity},
 		},
 		FilledQuantity:   filled,
 		AverageFillPrice: averagePrice,

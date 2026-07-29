@@ -12,21 +12,29 @@ import (
 
 var ErrInvalidSpec = errors.New("trade: invalid order specification")
 
-type OrderSpec struct {
-	ExchangeAccountID   string
-	ClientOrderID       string
-	Symbol              string
-	OrderType           exchange.OrderType
-	TimeInForce         exchange.TimeInForce
-	Side                exchange.Side
-	PositionSide        exchange.PositionSide
-	Quantity            shared.Decimal
-	LimitPrice          *shared.Decimal
-	ReferencePrice      shared.Decimal
-	ReferencePriceAt    time.Time
-	ReduceOnly          bool
-	Source              string
+type ClientOrderSpec struct {
+	ExchangeAccountID string
+	ClientOrderID     string
+	InstrumentID      string
+	Side              exchange.Side
+	PositionSide      exchange.PositionSide
+	Type              exchange.OrderType
+	FillPolicy        exchange.FillPolicy
+	Quantity          shared.Decimal
+	LimitPrice        *shared.Decimal
+}
+
+type OrderOwner struct {
+	Type                string
 	StrategyExecutionID string
+}
+
+type OrderSpec struct {
+	ClientOrderSpec
+	ReferencePrice     shared.Decimal
+	ReferencePriceAt   time.Time
+	ReducePositionOnly bool
+	Owner              OrderOwner
 }
 
 func (s OrderSpec) Validate(
@@ -36,8 +44,8 @@ func (s OrderSpec) Validate(
 ) error {
 	if strings.TrimSpace(s.ExchangeAccountID) == "" ||
 		strings.TrimSpace(s.ClientOrderID) == "" ||
-		strings.TrimSpace(s.Symbol) == "" ||
-		strings.TrimSpace(s.Source) == "" {
+		strings.TrimSpace(s.InstrumentID) == "" ||
+		strings.TrimSpace(s.Owner.Type) == "" {
 		return invalidSpec("missing identity")
 	}
 	if !market.Valid() {
@@ -57,16 +65,16 @@ func (s OrderSpec) Validate(
 		return invalidSpec("reference price is stale")
 	}
 
-	switch s.OrderType {
+	switch s.Type {
 	case exchange.OrderTypeMarket:
-		if s.LimitPrice != nil || s.TimeInForce != exchange.TimeInForceUnspecified {
+		if s.LimitPrice != nil || s.FillPolicy != exchange.FillPolicyUnspecified {
 			return invalidSpec("MARKET cannot have limit price or time in force")
 		}
 	case exchange.OrderTypeLimit:
 		if s.LimitPrice == nil || s.LimitPrice.Cmp(shared.Zero()) <= 0 {
 			return invalidSpec("LIMIT requires a positive limit price")
 		}
-		if !s.TimeInForce.ValidForLimit() {
+		if !s.FillPolicy.ValidForLimit() {
 			return invalidSpec("LIMIT requires GTC, IOC, or FOK")
 		}
 	default:
@@ -75,7 +83,7 @@ func (s OrderSpec) Validate(
 
 	switch market {
 	case exchange.MarketTypeSpot:
-		if s.PositionSide != exchange.PositionSideUnspecified || s.ReduceOnly {
+		if s.PositionSide != exchange.PositionSideUnspecified || s.ReducePositionOnly {
 			return invalidSpec("SPOT cannot have position side or reduce-only")
 		}
 	case exchange.MarketTypeSwap:

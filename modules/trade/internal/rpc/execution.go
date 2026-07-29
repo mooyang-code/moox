@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
@@ -10,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/execution"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
@@ -51,21 +51,20 @@ func (h *ExecutionServer) PlaceOrder(
 		}
 		limitPrice = &value
 	}
-	source := strings.TrimSpace(req.GetSource())
-	if source == "" {
-		source = "RPC"
-	}
 	spec := orderdomain.OrderSpec{
-		ExchangeAccountID: req.GetExchangeAccountId(),
-		ClientOrderID:     req.GetClientOrderId(), Symbol: req.GetSymbol(),
-		OrderType:    orderTypeFromPB(req.GetOrderType()),
-		TimeInForce:  timeInForceFromPB(req.GetTimeInForce()),
-		Side:         sideFromPB(req.GetSide()),
-		PositionSide: positionSideFromPB(req.GetPositionSide()),
-		Quantity:     quantity, LimitPrice: limitPrice,
+		ClientOrderSpec: orderdomain.ClientOrderSpec{
+			ExchangeAccountID: req.GetExchangeAccountId(),
+			ClientOrderID:     req.GetClientOrderId(),
+			InstrumentID:      req.GetSymbol(),
+			Type:              orderTypeFromPB(req.GetOrderType()),
+			FillPolicy:        exchange.FillPolicy(timeInForceFromPB(req.GetTimeInForce())),
+			Side:              sideFromPB(req.GetSide()),
+			PositionSide:      positionSideFromPB(req.GetPositionSide()),
+			Quantity:          quantity,
+			LimitPrice:        limitPrice,
+		},
 		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
-		ReduceOnly: req.GetReduceOnly(), Source: source,
-		StrategyExecutionID: req.GetStrategyExecutionId(),
+		Owner: orderdomain.OrderOwner{Type: "RPC"},
 	}
 	placed, err := h.Orders.Place(ctx, spaceID, spec)
 	if err == nil {

@@ -328,14 +328,13 @@ func TestOrderAcceptsAuthoritativeExternalCancelWhileOpen(t *testing.T) {
 
 func validSpec() OrderSpec {
 	return OrderSpec{
-		ExchangeAccountID: "account-1",
-		ClientOrderID:     "client-1",
-		Symbol:            "BTC-USDT",
-		OrderType:         exchange.OrderTypeMarket,
-		Side:              exchange.SideBuy,
-		Quantity:          shared.MustDecimal("1"),
-		ReferencePrice:    shared.MustDecimal("60000"),
-		ReferencePriceAt:  time.Now(),
-		Source:            "RPC",
+		ClientOrderSpec: ClientOrderSpec{
+			ExchangeAccountID: "account-1", ClientOrderID: "client-1",
+			InstrumentID: "BTC-USDT", Type: exchange.OrderTypeMarket,
+			Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
+		},
+		ReferencePrice:   shared.MustDecimal("60000"),
+		ReferencePriceAt: time.Now(),
+		Owner:            OrderOwner{Type: "RPC"},
 	}
 }

@@ -524,7 +524,7 @@ func (a *Adapter) PlaceOrder(
 		"newOrderRespType": []string{"RESULT"},
 	}
 	if request.OrderType == exchange.OrderTypeLimit {
-		values.Set("timeInForce", string(request.TimeInForce))
+		values.Set("timeInForce", string(request.EffectiveFillPolicy()))
 		values.Set("price", request.LimitPrice.String())
 	}
 	if a.config.MarketType == exchange.MarketTypeSwap {
@@ -554,7 +554,7 @@ func (a *Adapter) PlaceOrder(
 	order.ClientOrderID = request.ClientOrderID
 	order.Symbol = request.Symbol
 	order.OrderType = request.OrderType
-	order.TimeInForce = request.TimeInForce
+	order.TimeInForce = request.NativeTimeInForce()
 	order.Side = request.Side
 	order.PositionSide = request.PositionSide
 	order.Quantity = request.Quantity
@@ -871,13 +871,14 @@ func validateOrderRequest(request exchange.OrderRequest, market exchange.MarketT
 	}
 	switch request.OrderType {
 	case exchange.OrderTypeMarket:
-		if request.LimitPrice != nil || request.TimeInForce != exchange.TimeInForceUnspecified {
+		if request.LimitPrice != nil ||
+			request.EffectiveFillPolicy() != exchange.FillPolicyUnspecified {
 			return typedRejected("MARKET order cannot carry price or TimeInForce", nil)
 		}
 	case exchange.OrderTypeLimit:
 		if request.LimitPrice == nil ||
 			request.LimitPrice.Cmp(shared.Zero()) <= 0 ||
-			!request.TimeInForce.ValidForLimit() {
+			!request.EffectiveFillPolicy().ValidForLimit() {
 			return typedRejected("invalid LIMIT order", nil)
 		}
 	default:

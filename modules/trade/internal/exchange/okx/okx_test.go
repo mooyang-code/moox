@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
+	"github.com/rs/xid"
 )
 
 func TestAdapterRequestValidationContract(t *testing.T) {
@@ -32,11 +34,11 @@ func TestAdapterRequestValidationContract(t *testing.T) {
 			request.LimitPrice = &price
 		}},
 		{"MARKET rejects time in force", func(request *exchange.OrderRequest) {
-			request.TimeInForce = exchange.TimeInForceGTC
+			request.FillPolicy = exchange.FillPolicyGTC
 		}},
 		{"LIMIT requires price", func(request *exchange.OrderRequest) {
 			request.OrderType = exchange.OrderTypeLimit
-			request.TimeInForce = exchange.TimeInForceGTC
+			request.FillPolicy = exchange.FillPolicyGTC
 		}},
 		{"SPOT rejects reduce only", func(request *exchange.OrderRequest) {
 			request.ReduceOnly = true
@@ -49,6 +51,61 @@ func TestAdapterRequestValidationContract(t *testing.T) {
 			_, err := adapter.PlaceOrder(context.Background(), request)
 			if !exchange.IsKind(err, exchange.ErrorRejected) {
 				t.Fatalf("PlaceOrder() error = %v, want REJECTED", err)
+			}
+		})
+	}
+}
+
+func TestOKXRejectsClientOrderIDWithDash(t *testing.T) {
+	err := validateRequest(exchange.OrderRequest{
+		ClientOrderID: "contains-dash", Symbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("1"),
+	}, exchange.MarketTypeSpot)
+	if !exchange.IsKind(err, exchange.ErrorRejected) {
+		t.Fatalf("validateRequest() error = %v, want REJECTED", err)
+	}
+}
+
+func TestOKXRejectsClientOrderIDLongerThan32(t *testing.T) {
+	err := validateRequest(exchange.OrderRequest{
+		ClientOrderID: strings.Repeat("a", 33), Symbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("1"),
+	}, exchange.MarketTypeSpot)
+	if !exchange.IsKind(err, exchange.ErrorRejected) {
+		t.Fatalf("validateRequest() error = %v, want REJECTED", err)
+	}
+}
+
+func TestOKXAcceptsGeneratedClientOrderID(t *testing.T) {
+	clientOrderID := xid.New().String()
+	err := validateRequest(exchange.OrderRequest{
+		ClientOrderID: clientOrderID, Symbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
+		Quantity: shared.MustDecimal("1"),
+	}, exchange.MarketTypeSpot)
+	if err != nil {
+		t.Fatalf("validateRequest() error = %v", err)
+	}
+	if len(clientOrderID) != 20 {
+		t.Fatalf("generated client order ID length = %d, want 20", len(clientOrderID))
+	}
+}
+
+func TestExchangeAdaptersMapFillPolicy(t *testing.T) {
+	tests := []struct {
+		policy exchange.FillPolicy
+		want   string
+	}{
+		{exchange.FillPolicyGTC, "limit"},
+		{exchange.FillPolicyIOC, "ioc"},
+		{exchange.FillPolicyFOK, "fok"},
+	}
+	for _, test := range tests {
+		t.Run(string(test.policy), func(t *testing.T) {
+			if got := mapOKXLimitType(test.policy); got != test.want {
+				t.Fatalf("mapOKXLimitType(%q) = %q, want %q", test.policy, got, test.want)
 			}
 		})
 	}
@@ -209,7 +266,7 @@ func TestSwapLimitAndLotValidation(t *testing.T) {
 	price := shared.MustDecimal("100")
 	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
 		ClientOrderID: "cid", Symbol: "BTC-USDT-SWAP",
-		OrderType: exchange.OrderTypeLimit, TimeInForce: exchange.TimeInForceFOK,
+		OrderType: exchange.OrderTypeLimit, FillPolicy: exchange.FillPolicyFOK,
 		Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("0.04"), LimitPrice: &price,
 	})

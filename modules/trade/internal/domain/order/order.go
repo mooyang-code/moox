@@ -38,7 +38,7 @@ func New(id shared.OrderID, spec OrderSpec) (*Order, []Event, error) {
 	if id == "" ||
 		strings.TrimSpace(spec.ExchangeAccountID) == "" ||
 		strings.TrimSpace(spec.ClientOrderID) == "" ||
-		strings.TrimSpace(spec.Symbol) == "" ||
+		strings.TrimSpace(spec.InstrumentID) == "" ||
 		spec.Quantity.Cmp(shared.Zero()) <= 0 {
 		return nil, nil, ErrInvalidOrder
 	}

@@ -344,11 +344,11 @@ func TestConvergePlacesMarketChildAndCapsNotional(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StatusRunning, result.Status)
 	require.Len(t, orders.placed, 1)
-	require.Equal(t, exchange.OrderTypeMarket, orders.placed[0].OrderType)
-	require.Equal(t, exchange.TimeInForceUnspecified, orders.placed[0].TimeInForce)
+	require.Equal(t, exchange.OrderTypeMarket, orders.placed[0].Type)
+	require.Equal(t, exchange.FillPolicyUnspecified, orders.placed[0].FillPolicy)
 	require.Equal(t, exchange.SideBuy, orders.placed[0].Side)
 	require.Equal(t, "2", orders.placed[0].Quantity.String())
-	require.False(t, orders.placed[0].ReduceOnly)
+	require.False(t, orders.placed[0].ReducePositionOnly)
 	require.Equal(t, []string{"child-order"}, orders.submitted)
 }
 
@@ -435,7 +435,7 @@ func TestConvergeSwapActions(t *testing.T) {
 			spec := orders.placed[0]
 			require.Equal(t, test.side, spec.Side)
 			require.Equal(t, test.quantity, spec.Quantity.String())
-			require.Equal(t, test.reduceOnly, spec.ReduceOnly)
+			require.Equal(t, test.reduceOnly, spec.ReducePositionOnly)
 			require.Equal(t, exchange.PositionSideNet, spec.PositionSide)
 		})
 	}

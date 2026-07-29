@@ -575,7 +575,7 @@ func (a *Adapter) PlaceOrder(
 	}
 	if request.OrderType == exchange.OrderTypeLimit {
 		body["px"] = request.LimitPrice.String()
-		body["ordType"] = mapOKXLimitType(request.TimeInForce)
+		body["ordType"] = mapOKXLimitType(request.EffectiveFillPolicy())
 	}
 	if a.config.MarketType == exchange.MarketTypeSwap {
 		body["tdMode"] = "cross"
@@ -600,7 +600,7 @@ func (a *Adapter) PlaceOrder(
 		ClientOrderID:   request.ClientOrderID,
 		Symbol:          request.Symbol,
 		OrderType:       request.OrderType,
-		TimeInForce:     request.TimeInForce,
+		TimeInForce:     request.NativeTimeInForce(),
 		Side:            request.Side,
 		PositionSide:    request.PositionSide,
 		Quantity:        request.Quantity,
@@ -875,14 +875,18 @@ func validateRequest(request exchange.OrderRequest, market exchange.MarketType) 
 		request.Quantity.Cmp(shared.Zero()) <= 0 {
 		return rejected("invalid order request", nil)
 	}
+	if !validClientOrderID(request.ClientOrderID) {
+		return rejected("client order ID must be 1-32 ASCII alphanumeric characters", nil)
+	}
 	switch request.OrderType {
 	case exchange.OrderTypeMarket:
-		if request.LimitPrice != nil || request.TimeInForce != exchange.TimeInForceUnspecified {
+		if request.LimitPrice != nil ||
+			request.EffectiveFillPolicy() != exchange.FillPolicyUnspecified {
 			return rejected("MARKET order cannot carry price or TimeInForce", nil)
 		}
 	case exchange.OrderTypeLimit:
 		if request.LimitPrice == nil || request.LimitPrice.Cmp(shared.Zero()) <= 0 ||
-			!request.TimeInForce.ValidForLimit() {
+			!request.EffectiveFillPolicy().ValidForLimit() {
 			return rejected("invalid LIMIT order", nil)
 		}
 	default:
@@ -898,11 +902,25 @@ func validateRequest(request exchange.OrderRequest, market exchange.MarketType) 
 	return nil
 }
 
-func mapOKXLimitType(tif exchange.TimeInForce) string {
-	switch tif {
-	case exchange.TimeInForceIOC:
+func validClientOrderID(value string) bool {
+	if len(value) == 0 || len(value) > 32 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') &&
+			(char < 'A' || char > 'Z') &&
+			(char < 'a' || char > 'z') {
+			return false
+		}
+	}
+	return true
+}
+
+func mapOKXLimitType(policy exchange.FillPolicy) string {
+	switch policy {
+	case exchange.FillPolicyIOC:
 		return "ioc"
-	case exchange.TimeInForceFOK:
+	case exchange.FillPolicyFOK:
 		return "fok"
 	default:
 		return "limit"
