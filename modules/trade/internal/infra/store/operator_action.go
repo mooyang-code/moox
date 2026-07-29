@@ -3,10 +3,12 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
+	"gorm.io/gorm"
 )
 
 type OperatorActionRecord struct {
@@ -50,28 +52,39 @@ func (s *Store) CreateOperatorAction(
 		return OperatorActionRecord{}, false, err
 	}
 	var created bool
+	var current OperatorActionRecord
 	err = s.Transaction(ctx, func(tx *Tx) error {
-		var createErr error
-		created, createErr = tx.CreateOperatorAction(record)
-		return createErr
+		var ensureErr error
+		current, created, ensureErr = tx.EnsureOperatorAction(record)
+		return ensureErr
 	})
 	if err != nil {
 		return OperatorActionRecord{}, false, err
-	}
-	current, err := s.GetOperatorAction(ctx, record.SpaceID, record.ActionID)
-	if err != nil {
-		return OperatorActionRecord{}, false, err
-	}
-	if !sameOperatorRequest(current, record) {
-		return OperatorActionRecord{}, false, ErrConflict
 	}
 	return current, created, nil
 }
 
 func (tx *Tx) CreateOperatorAction(record OperatorActionRecord) (bool, error) {
+	_, created, err := tx.EnsureOperatorAction(record)
+	return created, err
+}
+
+func (tx *Tx) EnsureOperatorAction(
+	record OperatorActionRecord,
+) (OperatorActionRecord, bool, error) {
 	record, err := normalizeOperatorAction(record)
 	if err != nil {
-		return false, err
+		return OperatorActionRecord{}, false, err
+	}
+	current, err := tx.GetOperatorAction(record.SpaceID, record.ActionID)
+	if err == nil {
+		if !sameOperatorRequest(current, record) {
+			return OperatorActionRecord{}, false, ErrConflict
+		}
+		return current, false, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return OperatorActionRecord{}, false, err
 	}
 	result := tx.db.Exec(`
 		INSERT INTO t_operator_actions (
@@ -85,9 +98,20 @@ func (tx *Tx) CreateOperatorAction(record OperatorActionRecord) (bool, error) {
 		record.Status, record.ResultJSON, record.LastError,
 	)
 	if result.Error != nil {
-		return false, writeError(result.Error)
+		return OperatorActionRecord{}, false, writeError(result.Error)
 	}
-	return result.RowsAffected == 1, nil
+	if result.RowsAffected != 1 {
+		current, err = tx.GetOperatorAction(record.SpaceID, record.ActionID)
+		if err != nil {
+			return OperatorActionRecord{}, false, err
+		}
+		if !sameOperatorRequest(current, record) {
+			return OperatorActionRecord{}, false, ErrConflict
+		}
+		return current, false, nil
+	}
+	current, err = tx.GetOperatorAction(record.SpaceID, record.ActionID)
+	return current, true, err
 }
 
 func normalizeOperatorAction(
@@ -121,6 +145,20 @@ func (s *Store) GetOperatorAction(
 ) (OperatorActionRecord, error) {
 	var row operatorActionRow
 	err := s.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_action_id = ?", spaceID, actionID).
+		Take(&row).Error
+	if err != nil {
+		return OperatorActionRecord{}, err
+	}
+	return operatorActionRecord(row), nil
+}
+
+func (tx *Tx) GetOperatorAction(
+	spaceID string,
+	actionID string,
+) (OperatorActionRecord, error) {
+	var row operatorActionRow
+	err := tx.db.
 		Where("c_space_id = ? AND c_action_id = ?", spaceID, actionID).
 		Take(&row).Error
 	if err != nil {

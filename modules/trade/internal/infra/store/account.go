@@ -38,6 +38,7 @@ type ExchangeAccountRecord struct {
 	Exchange           string
 	MarketType         string
 	ExecutionMode      string
+	Environment        string
 	CredentialSecretID string
 	SettlementAsset    string
 	MarginMode         string
@@ -62,6 +63,7 @@ type exchangeAccountRow struct {
 	Exchange             string    `gorm:"column:c_exchange"`
 	MarketType           string    `gorm:"column:c_market_type"`
 	ExecutionMode        string    `gorm:"column:c_execution_mode"`
+	Environment          string    `gorm:"column:c_environment"`
 	CredentialSecretID   string    `gorm:"column:c_credential_secret_id"`
 	SettlementAsset      string    `gorm:"column:c_settlement_asset"`
 	MarginMode           string    `gorm:"column:c_margin_mode"`
@@ -86,6 +88,7 @@ func (exchangeAccountRow) TableName() string {
 func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 	if record.SpaceID == "" || record.ExchangeAccountID == "" || record.Name == "" ||
 		record.Exchange == "" || record.MarketType == "" || record.ExecutionMode == "" ||
+		record.Environment == "" ||
 		record.SettlementAsset == "" || record.Status == "" ||
 		(record.ExecutionMode == "LIVE" && record.CredentialSecretID == "") {
 		return fmt.Errorf("%w: incomplete Exchange account", ErrInvalidRecord)
@@ -109,8 +112,9 @@ func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 	row := exchangeAccountRow{
 		SpaceID: record.SpaceID, ExchangeAccountID: record.ExchangeAccountID,
 		Name: record.Name, Exchange: record.Exchange, MarketType: record.MarketType,
-		ExecutionMode: record.ExecutionMode, CredentialSecretID: record.CredentialSecretID,
-		SettlementAsset: record.SettlementAsset, MarginMode: record.MarginMode,
+		ExecutionMode: record.ExecutionMode, Environment: record.Environment,
+		CredentialSecretID: record.CredentialSecretID,
+		SettlementAsset:    record.SettlementAsset, MarginMode: record.MarginMode,
 		Status: record.Status,
 		Ready:  record.Ready, SyncSymbolsJSON: syncSymbolsJSON,
 		LeverageSettingsJSON: leverageJSON,
@@ -121,16 +125,18 @@ func (tx *Tx) CreateExchangeAccount(record ExchangeAccountRecord) error {
 	err = tx.db.Exec(`
 		INSERT INTO t_exchange_accounts (
 			c_space_id, c_exchange_account_id, c_name, c_exchange, c_market_type,
-			c_execution_mode, c_credential_secret_id, c_settlement_asset, c_margin_mode,
+			c_execution_mode, c_environment, c_credential_secret_id,
+			c_settlement_asset, c_margin_mode,
 			c_status, c_ready, c_sync_symbols_json,
 			c_leverage_settings_json,
 			c_fill_cursors_json, c_snapshot_json, c_snapshot_source_time,
 			c_last_sync_at, c_last_ready_at,
 			c_last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		row.SpaceID, row.ExchangeAccountID, row.Name, row.Exchange, row.MarketType,
-		row.ExecutionMode, row.CredentialSecretID, row.SettlementAsset, row.MarginMode,
+		row.ExecutionMode, row.Environment, row.CredentialSecretID,
+		row.SettlementAsset, row.MarginMode,
 		row.Status, row.Ready,
 		row.SyncSymbolsJSON, row.LeverageSettingsJSON,
 		row.FillCursorsJSON, row.SnapshotJSON,
@@ -470,8 +476,9 @@ func decodeAccountRow(row exchangeAccountRow) (ExchangeAccountRecord, error) {
 	return ExchangeAccountRecord{
 		SpaceID: row.SpaceID, ExchangeAccountID: row.ExchangeAccountID,
 		Name: row.Name, Exchange: row.Exchange, MarketType: row.MarketType,
-		ExecutionMode: row.ExecutionMode, CredentialSecretID: row.CredentialSecretID,
-		SettlementAsset: row.SettlementAsset, MarginMode: row.MarginMode,
+		ExecutionMode: row.ExecutionMode, Environment: row.Environment,
+		CredentialSecretID: row.CredentialSecretID,
+		SettlementAsset:    row.SettlementAsset, MarginMode: row.MarginMode,
 		Status: row.Status,
 		Ready:  row.Ready, SyncSymbols: syncSymbols,
 		LeverageSettings: leverage, FillCursors: fillCursors,

@@ -23,6 +23,7 @@ func TestRepositoryPersistsAccountAndLeverage(t *testing.T) {
 		ID: "account-1", SpaceID: "space-1", Name: "main",
 		Exchange: exchange.ExchangeOKX, MarketType: exchange.MarketTypeSwap,
 		ExecutionMode:      exchange.ExecutionModeLive,
+		Environment:        exchange.AccountEnvironmentTestnet,
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		MarginMode: exchange.MarginModeCross, Status: exchange.AccountStatusEnabled,
 		LeverageSettings: map[string]shared.Decimal{},

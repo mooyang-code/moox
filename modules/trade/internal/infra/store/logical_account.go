@@ -201,6 +201,25 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 		physical.SettlementAsset != account.SettlementAsset {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrInhomogeneous)
 	}
+	var environments []string
+	if err := tx.db.Raw(`
+		SELECT DISTINCT a.c_environment
+		FROM t_logical_account_members AS m
+		JOIN t_exchange_accounts AS a
+			ON a.c_space_id = m.c_space_id
+			AND a.c_exchange_account_id = m.c_exchange_account_id
+		WHERE m.c_space_id = ? AND m.c_logical_account_id = ?
+			AND m.c_exchange_account_id <> ?
+	`,
+		record.SpaceID, record.LogicalAccountID, record.ExchangeAccountID,
+	).Scan(&environments).Error; err != nil {
+		return err
+	}
+	for _, environment := range environments {
+		if environment != physical.Environment {
+			return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrInhomogeneous)
+		}
+	}
 	err = tx.db.Exec(`
 		INSERT INTO t_logical_account_members (
 			c_space_id, c_logical_account_id, c_exchange_account_id,

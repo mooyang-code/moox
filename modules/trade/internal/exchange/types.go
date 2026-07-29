@@ -43,6 +43,21 @@ func (m ExecutionMode) Valid() bool {
 	return m == ExecutionModePaper || m == ExecutionModeLive
 }
 
+type AccountEnvironment string
+
+const (
+	AccountEnvironmentUnspecified AccountEnvironment = ""
+	AccountEnvironmentPaper       AccountEnvironment = "PAPER"
+	AccountEnvironmentTestnet     AccountEnvironment = "TESTNET"
+	AccountEnvironmentProduction  AccountEnvironment = "PRODUCTION"
+)
+
+func (e AccountEnvironment) Valid() bool {
+	return e == AccountEnvironmentPaper ||
+		e == AccountEnvironmentTestnet ||
+		e == AccountEnvironmentProduction
+}
+
 type MarginMode string
 
 const (
@@ -141,6 +156,7 @@ type AccountConfig struct {
 	Exchange          Exchange
 	MarketType        MarketType
 	ExecutionMode     ExecutionMode
+	Environment       AccountEnvironment
 	SettlementAsset   string
 	MarginMode        MarginMode
 }

@@ -387,8 +387,9 @@ func executableAccount(market exchange.MarketType) exchangeaccount.Account {
 	account := exchangeaccount.Account{
 		ID: "account-1", SpaceID: "space-1", Name: "main",
 		Exchange: exchange.ExchangeBinance, MarketType: market,
-		ExecutionMode: exchange.ExecutionModeLive, CredentialSecretID: "secret-1",
-		SettlementAsset: "USDT", Status: exchange.AccountStatusEnabled, Ready: true,
+		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet,
+		CredentialSecretID: "secret-1",
+		SettlementAsset:    "USDT", Status: exchange.AccountStatusEnabled, Ready: true,
 		SyncSymbols: []string{"BTC-USDT"},
 		Snapshot: exchange.AccountSnapshot{
 			Balances: []exchange.AssetBalance{

@@ -104,6 +104,7 @@ func (m *Manager) ReadyFor(account exchangeaccount.Account) bool {
 		SpaceID: account.SpaceID, ExchangeAccountID: account.ID,
 		Exchange: string(account.Exchange), MarketType: string(account.MarketType),
 		ExecutionMode:      string(account.ExecutionMode),
+		Environment:        string(account.Environment),
 		CredentialSecretID: account.CredentialSecretID,
 		SettlementAsset:    account.SettlementAsset, MarginMode: string(account.MarginMode),
 		Status:           string(account.Status),
@@ -245,6 +246,7 @@ func sameSessionConfig(
 		left.Exchange == right.Exchange &&
 		left.MarketType == right.MarketType &&
 		left.ExecutionMode == right.ExecutionMode &&
+		left.Environment == right.Environment &&
 		left.CredentialSecretID == right.CredentialSecretID &&
 		left.SettlementAsset == right.SettlementAsset &&
 		left.MarginMode == right.MarginMode &&

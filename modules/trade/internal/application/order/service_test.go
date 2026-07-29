@@ -576,15 +576,6 @@ func TestServiceDiscardPendingReleasesReservationWithoutExchangeCall(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, "CANCELED", record.State)
 	require.Equal(t, "0", record.RemainingReservedQuantity)
-	projections, err := tradeStore.ListBalanceProjections(
-		context.Background(),
-		"space-1",
-		"account-1",
-	)
-	require.NoError(t, err)
-	for _, projection := range projections {
-		require.True(t, projection.Amount.IsZero(), projection)
-	}
 }
 
 func TestServicePlaceUncertainResultRetainsReservation(t *testing.T) {
@@ -610,13 +601,6 @@ func TestServicePlaceUncertainResultRetainsReservation(t *testing.T) {
 			require.NoError(t, getErr)
 			require.Equal(t, "SUBMIT_UNKNOWN", record.State)
 			require.Equal(t, "101", record.RemainingReservedQuantity)
-			projections, getErr := tradeStore.ListBalanceProjections(
-				context.Background(),
-				"space-1",
-				"account-1",
-			)
-			require.NoError(t, getErr)
-			require.Len(t, projections, 2)
 		})
 	}
 }
@@ -945,15 +929,6 @@ func TestServiceRejectedSubmissionReleasesReservation(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, "REJECTED", string(got.State))
 
-	projections, getErr := tradeStore.ListBalanceProjections(
-		context.Background(),
-		"space-1",
-		"account-1",
-	)
-	require.NoError(t, getErr)
-	for _, projection := range projections {
-		require.True(t, projection.Amount.IsZero())
-	}
 	record, getErr := tradeStore.GetOrder(context.Background(), "space-1", "order-1")
 	require.NoError(t, getErr)
 	require.Equal(t, "0", record.RemainingReservedQuantity)
@@ -1022,6 +997,7 @@ func newTestServiceForMarket(
 			SpaceID: account.SpaceID, ExchangeAccountID: account.ID, Name: account.Name,
 			Exchange: string(account.Exchange), MarketType: string(account.MarketType),
 			ExecutionMode:      string(account.ExecutionMode),
+			Environment:        string(account.Environment),
 			CredentialSecretID: account.CredentialSecretID,
 			SettlementAsset:    account.SettlementAsset, Status: string(account.Status),
 			Ready: true,

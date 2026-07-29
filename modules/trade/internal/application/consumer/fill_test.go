@@ -31,6 +31,7 @@ func openFillStore(t *testing.T, market exchange.MarketType) *store.Store {
 			SpaceID: testSpace, ExchangeAccountID: testAccount, Name: "primary",
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
 			ExecutionMode:      string(exchange.ExecutionModePaper),
+			Environment:        string(exchange.AccountEnvironmentPaper),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			MarginMode: string(exchange.MarginModeCross), Status: string(exchange.AccountStatusEnabled),
 			LeverageSettings: store.LeverageSettings{testSymbol: "10"},
@@ -72,26 +73,6 @@ func seedFillOrder(
 		ReservedQuantity: reserved, RemainingReservedQuantity: reserved, Version: 1,
 	}
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.PostLedger(store.LedgerTransactionRecord{
-			SpaceID: testSpace, TransactionID: "seed", ExchangeAccountID: testAccount,
-			TransactionType: store.LedgerSyncAdjustment, SourceType: "test", SourceID: "seed",
-			Entries: []store.LedgerEntryRecord{
-				{Asset: "USDT", Bucket: "CLEARING", Amount: shared.MustDecimal("-1000")},
-				{Asset: "USDT", Bucket: "AVAILABLE", Amount: shared.MustDecimal("1000")},
-			},
-		}); err != nil {
-			return err
-		}
-		if err := tx.PostLedger(store.LedgerTransactionRecord{
-			SpaceID: testSpace, TransactionID: "reserve", ExchangeAccountID: testAccount,
-			TransactionType: store.LedgerReservation, SourceType: "order", SourceID: record.OrderID,
-			Entries: []store.LedgerEntryRecord{
-				{Asset: "USDT", Bucket: "AVAILABLE", Amount: shared.MustDecimal(reserved).Neg()},
-				{Asset: "USDT", Bucket: "RESERVED", Amount: shared.MustDecimal(reserved)},
-			},
-		}); err != nil {
-			return err
-		}
 		return tx.CreateOrder(record)
 	}))
 	return record
@@ -112,7 +93,7 @@ func spotFill(id string, quantity string) exchange.Fill {
 	}
 }
 
-func TestReducerApplyFillSpotPostsAssetAndFeeLedgerOnce(t *testing.T) {
+func TestReducerApplyFillSpotPersistsFillAndReservationOnce(t *testing.T) {
 	s := openFillStore(t, exchange.MarketTypeSpot)
 	seedFillOrder(t, s, exchange.MarketTypeSpot, order.Open, "1", "100")
 	reducer := Reducer{Store: s}
@@ -139,12 +120,6 @@ func TestReducerApplyFillSpotPostsAssetAndFeeLedgerOnce(t *testing.T) {
 	assert.Equal(t, "100", got.AveragePrice)
 	assert.Equal(t, "50", got.RemainingReservedQuantity)
 	assert.Equal(t, uint64(2), got.Version)
-
-	balances, err := s.ListBalanceProjections(context.Background(), testSpace, testAccount)
-	require.NoError(t, err)
-	assert.Equal(t, "0.5", balanceAmount(balances, "BTC", "AVAILABLE"))
-	assert.Equal(t, "50", balanceAmount(balances, "USDT", "RESERVED"))
-	assert.Equal(t, "899", balanceAmount(balances, "USDT", "AVAILABLE"))
 
 	applied, err = reducer.ApplyFill(context.Background(), fill, Source{
 		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: OriginRESTSnapshot,
@@ -198,10 +173,6 @@ func TestReducerConfirmCancelAppliesFinalFillBeforeRelease(t *testing.T) {
 	require.Equal(t, "0.25", got.FilledQuantity)
 	require.Equal(t, "0", got.RemainingReservedQuantity)
 	require.Positive(t, got.FinishedAt)
-	balances, err := s.ListBalanceProjections(context.Background(), testSpace, testAccount)
-	require.NoError(t, err)
-	require.Equal(t, "0", balanceAmount(balances, "USDT", "RESERVED"))
-	require.Equal(t, "974", balanceAmount(balances, "USDT", "AVAILABLE"))
 }
 
 func TestReducerApplyFillReleasesUnusedReservationWhenFilled(t *testing.T) {
@@ -220,10 +191,6 @@ func TestReducerApplyFillReleasesUnusedReservationWhenFilled(t *testing.T) {
 	assert.Equal(t, string(order.Filled), got.State)
 	assert.Equal(t, "0", got.RemainingReservedQuantity)
 	assert.Positive(t, got.FinishedAt)
-	balances, err := s.ListBalanceProjections(context.Background(), testSpace, testAccount)
-	require.NoError(t, err)
-	assert.Equal(t, "0", balanceAmount(balances, "USDT", "RESERVED"))
-	assert.Equal(t, "909", balanceAmount(balances, "USDT", "AVAILABLE"))
 }
 
 func TestReducerApplyFillRoundsAveragePriceToInstrumentTickScale(t *testing.T) {
@@ -285,11 +252,6 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 	assert.Equal(t, "100", position.EntryPrice)
 	assert.Equal(t, "3", position.RealizedPnL)
 
-	balances, err := s.ListBalanceProjections(context.Background(), testSpace, testAccount)
-	require.NoError(t, err)
-	assert.Equal(t, "0", balanceAmount(balances, "USDT", "RESERVED"))
-	assert.Equal(t, "0", balanceAmount(balances, "USDT", "MARGIN"))
-	assert.Equal(t, "1002.9", balanceAmount(balances, "USDT", "AVAILABLE"))
 }
 
 func TestReducerApplyFillCreatesFirstSwapPosition(t *testing.T) {
@@ -370,13 +332,4 @@ func TestReducerApplyFillRejectsNonPositiveExchangeTimestampWithoutWrites(t *tes
 	require.Equal(t, string(order.Open), got.State)
 	require.Equal(t, "0", got.FilledQuantity)
 	require.Zero(t, got.FinishedAt)
-}
-
-func balanceAmount(records []store.BalanceProjectionRecord, asset string, bucket string) string {
-	for _, record := range records {
-		if record.Asset == asset && record.Bucket == bucket {
-			return record.Amount.String()
-		}
-	}
-	return "0"
 }

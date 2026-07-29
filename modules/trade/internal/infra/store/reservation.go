@@ -25,7 +25,7 @@ func (tx *Tx) GetUnreflectedReservation(
 			AND c_remaining_reserved_quantity != '0'
 			AND (
 				c_state IN ('PENDING', 'SUBMITTING', 'SUBMIT_UNKNOWN')
-				OR c_submitted_at > ?
+				OR c_submitted_at >= ?
 			)
 	`, spaceID, exchangeAccountID, asset, snapshotSourceTime).Scan(&rows).Error; err != nil {
 		return shared.Decimal{}, err

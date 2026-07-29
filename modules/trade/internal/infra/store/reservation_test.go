@@ -29,6 +29,7 @@ func TestGetUnreflectedReservationUsesOrderFactsWithoutLedger(t *testing.T) {
 			reserved    string
 		}{
 			{state: "OPEN", submittedAt: 100, reserved: "40"},
+			{state: "OPEN", submittedAt: 200, reserved: "20"},
 			{state: "OPEN", submittedAt: 300, reserved: "50"},
 			{state: "PENDING", reserved: "30"},
 		} {
@@ -53,7 +54,7 @@ func TestGetUnreflectedReservationUsesOrderFactsWithoutLedger(t *testing.T) {
 			200,
 		)
 		require.NoError(t, err)
-		require.Equal(t, "80", total.String())
+		require.Equal(t, "100", total.String())
 		return nil
 	}))
 }

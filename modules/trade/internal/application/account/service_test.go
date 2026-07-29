@@ -67,6 +67,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 			name: "missing credential secret ID",
 			mutate: func(value *exchangeaccount.Account) {
 				value.ExecutionMode = exchange.ExecutionModeLive
+				value.Environment = exchange.AccountEnvironmentTestnet
 				value.CredentialSecretID = ""
 			},
 			secret: validSecret(),
@@ -84,6 +85,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 			name: "wrong credential category",
 			mutate: func(value *exchangeaccount.Account) {
 				value.ExecutionMode = exchange.ExecutionModeLive
+				value.Environment = exchange.AccountEnvironmentTestnet
 			},
 			secret: ExchangeSecret{
 				SecretID: "secret-1", Category: "cloud",
@@ -95,6 +97,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 			name: "wrong credential Exchange",
 			mutate: func(value *exchangeaccount.Account) {
 				value.ExecutionMode = exchange.ExecutionModeLive
+				value.Environment = exchange.AccountEnvironmentTestnet
 			},
 			secret: ExchangeSecret{
 				SecretID: "secret-1", Category: "exchange",
@@ -106,6 +109,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 			name: "inactive credential",
 			mutate: func(value *exchangeaccount.Account) {
 				value.ExecutionMode = exchange.ExecutionModeLive
+				value.Environment = exchange.AccountEnvironmentTestnet
 			},
 			secret: ExchangeSecret{
 				SecretID: "secret-1", Category: "exchange",
@@ -167,6 +171,7 @@ func TestCreateDoesNotAliasSameNameAcrossExecutionModes(t *testing.T) {
 	live := paper
 	live.ID = "account-live"
 	live.ExecutionMode = exchange.ExecutionModeLive
+	live.Environment = exchange.AccountEnvironmentTestnet
 	secrets := &fakeSecrets{
 		secrets: []ExchangeSecret{validSecret()},
 	}
@@ -188,6 +193,7 @@ func TestCreateLiveAccountFailsClosedBeforeReadingCredential(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = exchange.AccountEnvironmentTestnet
 	secrets := &fakeSecrets{
 		secrets:    []ExchangeSecret{validSecret()},
 		liveKeyErr: ErrLiveCredentialAccess,
@@ -262,6 +268,7 @@ func TestUpdateEnablingLiveAccountFailsClosed(t *testing.T) {
 			store := newMemoryStore()
 			value := validAccount()
 			value.ExecutionMode = exchange.ExecutionModeLive
+			value.Environment = exchange.AccountEnvironmentTestnet
 			value.Status = exchange.AccountStatusDisabled
 			store.accounts[value.ID] = value
 			status := exchange.AccountStatusEnabled
@@ -291,13 +298,11 @@ func TestExecutionEligibilityUsesCurrentSessionState(t *testing.T) {
 	tests := []struct {
 		name    string
 		status  exchange.AccountStatus
-		paused  bool
 		ready   bool
 		wantErr bool
 	}{
 		{name: "enabled ready", status: exchange.AccountStatusEnabled, ready: true},
 		{name: "disabled", status: exchange.AccountStatusDisabled, ready: true, wantErr: true},
-		{name: "paused", status: exchange.AccountStatusEnabled, paused: true, ready: true, wantErr: true},
 		{name: "not ready", status: exchange.AccountStatusEnabled, ready: false, wantErr: true},
 	}
 	for _, tt := range tests {
@@ -305,10 +310,6 @@ func TestExecutionEligibilityUsesCurrentSessionState(t *testing.T) {
 			store := newMemoryStore()
 			value := validAccount()
 			value.Status = tt.status
-			value.Paused = tt.paused
-			if tt.paused {
-				value.PauseReason = "manual"
-			}
 			store.accounts[value.ID] = value
 			service := Service{
 				Store:        store,
@@ -356,12 +357,6 @@ func TestSetLeverageAndPauseUseCommandSpecificWrites(t *testing.T) {
 	if store.leverageCalls != 1 || store.updateCalls != 0 {
 		t.Fatalf("leverage writes=%d aggregate writes=%d", store.leverageCalls, store.updateCalls)
 	}
-	if err := service.Pause(context.Background(), value.ID, true, "manual"); err != nil {
-		t.Fatalf("Pause() error = %v", err)
-	}
-	if store.pauseCalls != 1 || store.updateCalls != 0 {
-		t.Fatalf("pause writes=%d aggregate writes=%d", store.pauseCalls, store.updateCalls)
-	}
 }
 
 func validAccount() exchangeaccount.Account {
@@ -372,6 +367,7 @@ func validAccount() exchangeaccount.Account {
 		Exchange:           exchange.ExchangeBinance,
 		MarketType:         exchange.MarketTypeSpot,
 		ExecutionMode:      exchange.ExecutionModePaper,
+		Environment:        exchange.AccountEnvironmentPaper,
 		CredentialSecretID: "secret-1",
 		SettlementAsset:    "USDT",
 		Status:             exchange.AccountStatusEnabled,
@@ -401,7 +397,6 @@ type memoryStore struct {
 	createCalls   int
 	updateCalls   int
 	leverageCalls int
-	pauseCalls    int
 }
 
 func newMemoryStore() *memoryStore {
@@ -456,23 +451,6 @@ func (s *memoryStore) SetLeverage(
 		value.LeverageSettings = make(map[string]shared.Decimal)
 	}
 	value.LeverageSettings[symbol] = leverage
-	s.accounts[id] = value
-	return nil
-}
-
-func (s *memoryStore) SetPause(
-	_ context.Context,
-	id string,
-	paused bool,
-	reason string,
-) error {
-	s.pauseCalls++
-	value, found := s.accounts[id]
-	if !found {
-		return ErrAccountNotFound
-	}
-	value.Paused = paused
-	value.PauseReason = reason
 	s.accounts[id] = value
 	return nil
 }

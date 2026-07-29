@@ -346,6 +346,7 @@ func TestPaperSyncRecoversSubmittedOrderAndPersistsSpotFill(t *testing.T) {
 		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
 			SpaceID: "space-1", ExchangeAccountID: "paper-1", Name: "paper",
 			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
+			Environment:     "PAPER",
 			SettlementAsset: "USDT", Status: "ENABLED",
 			SyncSymbols: []string{"BTCUSDT"},
 		}); err != nil {
@@ -805,6 +806,7 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
 			SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",
 			Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE",
+			Environment:        "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			MarginMode: "CROSS", Status: "ENABLED",
 			LeverageSettings: store.LeverageSettings{"BTC-USDT": "5"},

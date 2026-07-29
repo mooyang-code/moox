@@ -148,6 +148,8 @@ func TestInstrumentSchemaUsesApprovedSwapQuantityFields(t *testing.T) {
 func TestLogicalAccountSchemaKeepsSettlementAssetAndUsesAutomationState(t *testing.T) {
 	sql := AllSQL()
 	require.Contains(t, sql, "c_settlement_asset TEXT NOT NULL")
+	require.Contains(t, sql, "c_environment TEXT NOT NULL")
+	require.Contains(t, sql, "'PAPER', 'TESTNET', 'PRODUCTION'")
 	require.Contains(t, sql, "c_automation_state TEXT NOT NULL")
 	require.NotContains(t, sql, "c_control_state")
 	require.NotContains(t, sql, "c_control_revision")

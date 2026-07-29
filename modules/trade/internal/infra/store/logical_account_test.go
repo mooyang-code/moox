@@ -86,6 +86,46 @@ func TestLogicalAccountMembershipRejectsInhomogeneousAccount(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
+func TestLogicalAccountMembershipRejectsMixedEnvironmentProfiles(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	testnet := testAccount()
+	testnet.ExchangeAccountID = "testnet-1"
+	testnet.Name = "testnet"
+	testnet.ExecutionMode = "LIVE"
+	testnet.Environment = "TESTNET"
+	production := testnet
+	production.ExchangeAccountID = "production-1"
+	production.Name = "production"
+	production.Environment = "PRODUCTION"
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		for _, account := range []ExchangeAccountRecord{testnet, production} {
+			if err := tx.CreateExchangeAccount(account); err != nil {
+				return err
+			}
+		}
+		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "live",
+			ExecutionMode: "LIVE", MarketType: "SPOT", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			ExchangeAccountID: "testnet-1", Enabled: true,
+		})
+	}))
+
+	err := s.Transaction(ctx, func(tx *Tx) error {
+		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			ExchangeAccountID: "production-1", Enabled: true,
+		})
+	})
+	require.ErrorIs(t, err, ErrInvalidRecord)
+}
+
 func TestLogicalAccountMembershipChangeRequiresPause(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

@@ -171,6 +171,7 @@ func TestExchangeAccountCredentialIsRequiredOnlyForLive(t *testing.T) {
 	live.ExchangeAccountID = "account-live"
 	live.Name = "live"
 	live.ExecutionMode = "LIVE"
+	live.Environment = "TESTNET"
 	live.CredentialSecretID = ""
 	err := s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateExchangeAccount(live)
@@ -182,6 +183,7 @@ func testAccount() ExchangeAccountRecord {
 	return ExchangeAccountRecord{
 		SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",
 		Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
+		Environment:        "PAPER",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		Status: "ENABLED",
 	}

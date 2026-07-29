@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS t_exchange_accounts (
     c_exchange TEXT NOT NULL,
     c_market_type TEXT NOT NULL,
     c_execution_mode TEXT NOT NULL,
+    c_environment TEXT NOT NULL,
     c_credential_secret_id TEXT NOT NULL,
     c_settlement_asset TEXT NOT NULL,
     c_margin_mode TEXT NOT NULL DEFAULT '',
@@ -31,7 +32,17 @@ CREATE TABLE IF NOT EXISTS t_exchange_accounts (
     CHECK (json_valid(c_fill_cursors_json)),
     CHECK (json_type(c_fill_cursors_json) = 'object'),
     CHECK (json_valid(c_snapshot_json)),
-    CHECK (json_type(c_snapshot_json) = 'object')
+    CHECK (json_type(c_snapshot_json) = 'object'),
+    CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
+    CHECK (c_environment IN ('PAPER', 'TESTNET', 'PRODUCTION')),
+    CHECK (
+        (c_execution_mode = 'PAPER' AND c_environment = 'PAPER')
+        OR
+        (
+            c_execution_mode = 'LIVE'
+            AND c_environment IN ('TESTNET', 'PRODUCTION')
+        )
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_exchange_accounts_status

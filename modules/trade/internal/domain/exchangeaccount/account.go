@@ -22,6 +22,7 @@ type Account struct {
 	Exchange           exchange.Exchange
 	MarketType         exchange.MarketType
 	ExecutionMode      exchange.ExecutionMode
+	Environment        exchange.AccountEnvironment
 	CredentialSecretID string
 	SettlementAsset    string
 	MarginMode         exchange.MarginMode
@@ -43,9 +44,17 @@ func (a Account) Validate() error {
 		!a.Exchange.Valid() ||
 		!a.MarketType.Valid() ||
 		!a.ExecutionMode.Valid() ||
+		!a.Environment.Valid() ||
 		blank(a.SettlementAsset) ||
 		!validStatus(a.Status) {
 		return invalidAccount("missing or unsupported required field")
+	}
+	if (a.ExecutionMode == exchange.ExecutionModePaper &&
+		a.Environment != exchange.AccountEnvironmentPaper) ||
+		(a.ExecutionMode == exchange.ExecutionModeLive &&
+			a.Environment != exchange.AccountEnvironmentTestnet &&
+			a.Environment != exchange.AccountEnvironmentProduction) {
+		return invalidAccount("execution mode and environment disagree")
 	}
 	if a.ExecutionMode == exchange.ExecutionModeLive && blank(a.CredentialSecretID) {
 		return invalidAccount("LIVE requires an Exchange credential")

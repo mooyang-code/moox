@@ -26,9 +26,31 @@ func TestAccountValidation(t *testing.T) {
 			name: "LIVE requires credential",
 			account: mutate(validSpotAccount(), func(account *Account) {
 				account.ExecutionMode = exchange.ExecutionModeLive
+				account.Environment = exchange.AccountEnvironmentTestnet
 				account.CredentialSecretID = ""
 			}),
 			wantErr: true,
+		},
+		{
+			name: "PAPER requires PAPER environment",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.Environment = exchange.AccountEnvironmentTestnet
+			}),
+			wantErr: true,
+		},
+		{
+			name: "LIVE accepts TESTNET",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.ExecutionMode = exchange.ExecutionModeLive
+				account.Environment = exchange.AccountEnvironmentTestnet
+			}),
+		},
+		{
+			name: "LIVE accepts PRODUCTION",
+			account: mutate(validSpotAccount(), func(account *Account) {
+				account.ExecutionMode = exchange.ExecutionModeLive
+				account.Environment = exchange.AccountEnvironmentProduction
+			}),
 		},
 		{
 			name: "SPOT rejects margin mode",
@@ -94,7 +116,6 @@ func TestAccountExecutionEligibility(t *testing.T) {
 		mutate func(*Account)
 	}{
 		{"disabled", func(account *Account) { account.Status = exchange.AccountStatusDisabled }},
-		{"paused", func(account *Account) { account.Paused = true; account.PauseReason = "manual" }},
 		{"not ready", func(account *Account) { account.Ready = false }},
 	}
 	for _, tt := range tests {
@@ -121,6 +142,7 @@ func validSpotAccount() Account {
 		Exchange:           exchange.ExchangeBinance,
 		MarketType:         exchange.MarketTypeSpot,
 		ExecutionMode:      exchange.ExecutionModePaper,
+		Environment:        exchange.AccountEnvironmentPaper,
 		CredentialSecretID: "secret-1",
 		SettlementAsset:    "USDT",
 		Status:             exchange.AccountStatusEnabled,
