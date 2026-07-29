@@ -53,6 +53,12 @@ reject 'strategy_run_id|strategy_result_id|execution_id|execution_binding_id|exc
   packages/events/registry.go \
   packages/events/validation.go \
   packages/tradeeventpb/trade_events.proto
+reject 'strategy_run_id|strategy_result_id|execution_id|execution_binding_id|data_revision|not_after|TargetIntent|TargetPosition|TradeTarget|TradeTargetRequested|target_quantity' \
+  "Trade target consumer or persisted LogicalAccount target still uses the obsolete target contract" \
+  "${production[@]}" \
+  modules/trade/internal/eventconsumer/target.go \
+  modules/trade/internal/infra/store/target.go \
+  modules/trade/internal/runtime/target_worker.go
 reject 'NATSURL|StreamName|SubjectPrefix|MaxMsgs|MaxInFlight|MaxDeliver|StorageEmbeddedEventBus' \
   "Storage still exposes EventBus topology or compatibility settings" \
   --glob '*.go' modules/storage/internal/config modules/storage/cmd/server/main.go

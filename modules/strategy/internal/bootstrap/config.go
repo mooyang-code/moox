@@ -19,13 +19,14 @@ type EventBusConfig struct {
 }
 
 type Config struct {
-	PythonBin            string         `yaml:"python_bin"`
-	WorkerPath           string         `yaml:"worker_path"`
-	Database             string         `yaml:"database"`
-	LogicalAccountTarget string         `yaml:"logical_account_target"`
-	Workers              int            `yaml:"workers"`
-	InstanceID           string         `yaml:"instance_id"`
-	EventBus             EventBusConfig `yaml:"eventbus"`
+	PythonBin             string         `yaml:"python_bin"`
+	WorkerPath            string         `yaml:"worker_path"`
+	Database              string         `yaml:"database"`
+	LogicalAccountTarget  string         `yaml:"logical_account_target"`
+	LogicalAccountTimeout time.Duration  `yaml:"logical_account_timeout"`
+	Workers               int            `yaml:"workers"`
+	InstanceID            string         `yaml:"instance_id"`
+	EventBus              EventBusConfig `yaml:"eventbus"`
 }
 
 func Load(path string) (Config, error) {
@@ -47,7 +48,10 @@ func Load(path string) (Config, error) {
 		c.InstanceID = "strategy-1"
 	}
 	if strings.TrimSpace(c.LogicalAccountTarget) == "" {
-		c.LogicalAccountTarget = "ip://127.0.0.1:11200"
+		c.LogicalAccountTarget = "ip://127.0.0.1:11202"
+	}
+	if c.LogicalAccountTimeout == 0 {
+		c.LogicalAccountTimeout = defaultLogicalAccountTimeout
 	}
 	if len(c.EventBus.URLs) == 0 {
 		c.EventBus.URLs = []string{"nats://127.0.0.1:4222"}
@@ -74,6 +78,9 @@ func Load(path string) (Config, error) {
 	}
 	if c.EventBus.RelayInterval <= 0 || c.EventBus.RelayBatchSize <= 0 || c.EventBus.ReconnectInterval <= 0 || c.EventBus.ConnectTimeout <= 0 {
 		return Config{}, fmt.Errorf("strategy eventbus durations and batch size must be positive")
+	}
+	if c.LogicalAccountTimeout <= 0 {
+		return Config{}, fmt.Errorf("logical_account_timeout must be positive")
 	}
 	return c, nil
 }

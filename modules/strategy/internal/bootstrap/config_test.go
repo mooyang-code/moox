@@ -22,8 +22,9 @@ func TestLoadAppliesSafeDefaults(t *testing.T) {
 	if cfg.InstanceID != "strategy-1" || cfg.EventBus.RelayInterval != time.Second || cfg.EventBus.RelayBatchSize != 100 || cfg.EventBus.ConnectTimeout != 3*time.Second {
 		t.Fatalf("eventbus defaults=%+v", cfg)
 	}
-	if cfg.LogicalAccountTarget != "ip://127.0.0.1:11200" {
-		t.Fatalf("logical account target=%q", cfg.LogicalAccountTarget)
+	if cfg.LogicalAccountTarget != "ip://127.0.0.1:11202" ||
+		cfg.LogicalAccountTimeout != defaultLogicalAccountTimeout {
+		t.Fatalf("logical account config=%+v", cfg)
 	}
 }
 
@@ -44,6 +45,20 @@ func TestWorkerPathIsAlwaysRequired(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected worker path validation")
+	}
+}
+
+func TestLoadRejectsInvalidLogicalAccountTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	if err := os.WriteFile(
+		path,
+		[]byte("worker_path: ./worker.py\nlogical_account_timeout: -1s\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected invalid LogicalAccount timeout to fail")
 	}
 }
 

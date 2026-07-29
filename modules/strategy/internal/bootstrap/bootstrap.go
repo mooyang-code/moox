@@ -138,9 +138,12 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 func newRPCService(repo *store.Store, eng *engine.Engine, cfg Config) *rpc.Service {
 	return &rpc.Service{
 		Repo: repo, Registry: &registry.Service{Repo: repo}, Runtime: eng,
-		Results:         &strategyaction.Service{Repo: repo},
-		Workers:         cfg.Workers,
-		LogicalAccounts: newLogicalAccountOwnerClient(cfg.LogicalAccountTarget),
+		Results: &strategyaction.Service{Repo: repo},
+		Workers: cfg.Workers,
+		LogicalAccounts: newLogicalAccountOwnerClient(
+			cfg.LogicalAccountTarget,
+			cfg.LogicalAccountTimeout,
+		),
 	}
 }
 
