@@ -43,6 +43,16 @@ reject 'wrapperspb\.BytesValue|google\.protobuf\.BytesValue' \
   "legacy BytesValue event wrappers remain" --glob '*.go' --glob '*.proto' --glob '!**/*_test.go' .
 reject 'c_topic|c_payload' \
   "an outbox still persists split topic or payload columns" modules/strategy/schema/strategy.sql
+reject 'strategy_run_id|strategy_result_id|execution_id|execution_binding_id|exchange_account_id|data_revision|not_after|(^|[^A-Za-z0-9_])symbol([^A-Za-z0-9_]|$)|TargetIntent|TargetPosition|TradeTarget|TradeTargetRequested|target_quantity' \
+  "Strategy target publisher or public event still uses the obsolete target contract" \
+  "${production[@]}" \
+  modules/strategy/internal/store/results.go \
+  modules/strategy/internal/action \
+  modules/strategy/internal/outbox \
+  modules/strategy/internal/rpc/service.go \
+  packages/events/registry.go \
+  packages/events/validation.go \
+  packages/tradeeventpb/trade_events.proto
 reject 'NATSURL|StreamName|SubjectPrefix|MaxMsgs|MaxInFlight|MaxDeliver|StorageEmbeddedEventBus' \
   "Storage still exposes EventBus topology or compatibility settings" \
   --glob '*.go' modules/storage/internal/config modules/storage/cmd/server/main.go
