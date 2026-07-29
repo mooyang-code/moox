@@ -286,7 +286,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		FactorId: factorID, Name: factorName, SourceCode: sourceCode,
 		InputColumns: []string{"nav", "benchmark_return"},
 		Outputs:      []string{"excess_return", "rolling_rank"},
-		ParamsJson:   `{"window":2}`, LookbackRows: 2, Status: "enabled",
+		ParamsJson:   `{"window":2}`, LookbackRows: 2, Status: "disabled",
 	}})
 	require.NoError(t, err)
 	requireStorageRet(t, "FactorMgr.CreateFactor", createFactorRsp.GetRetInfo())
@@ -299,6 +299,12 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	require.NoError(t, err)
 	requireStorageRet(t, "FactorMgr.UpsertBinding", bindRsp.GetRetInfo())
 	bindingCreated = true
+	enableRsp, err := factor.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+		FactorId: factorID,
+		Status:   "enabled",
+	})
+	require.NoError(t, err)
+	requireStorageRet(t, "FactorMgr.SetFactorStatus", enableRsp.GetRetInfo())
 	targetColumnsRsp, err := metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{
 		AuthInfo: auth, SpaceId: spaceID, DatasetId: targetID,
 		Page: &commonpb.Page{Page: 1, Size: 10},

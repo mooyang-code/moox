@@ -15,8 +15,7 @@ go run ./cmd/cli import \
   --input-columns nav,benchmark_return \
   --outputs excess_return,rolling_rank \
   --params-json '{"window":2}' \
-  --lookback-rows 2 \
-  --status enabled
+  --lookback-rows 2
 go run ./cmd/cli run-once \
   --config ./config/app.yaml \
   --space quant \

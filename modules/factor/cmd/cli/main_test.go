@@ -38,13 +38,22 @@ func TestParseImportGenericDefinition(t *testing.T) {
 	cfg, err := parseArgs([]string{
 		"import", "--file", "./Bias.py", "--factor-id", "bias",
 		"--input-columns", "close, benchmark_return", "--outputs", "bias_20,bias_96",
-		"--params-json", `{"windows":[20,96]}`, "--lookback-rows", "200", "--status", "enabled",
+		"--params-json", `{"windows":[20,96]}`, "--lookback-rows", "200",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "./Bias.py", cfg.File)
 	require.Equal(t, []string{"close", "benchmark_return"}, cfg.InputColumns)
 	require.Equal(t, []string{"bias_20", "bias_96"}, cfg.Outputs)
 	require.Equal(t, 200, cfg.LookbackRows)
+}
+
+func TestParseImportRejectsStatusFlag(t *testing.T) {
+	_, err := parseArgs([]string{
+		"import", "--file", "./Bias.py", "--factor-id", "bias",
+		"--input-columns", "close", "--outputs", "bias",
+		"--lookback-rows", "20", "--status", "enabled",
+	})
+	require.Error(t, err)
 }
 
 func TestParseImportRejectsBlankColumnTokens(t *testing.T) {

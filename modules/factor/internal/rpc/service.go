@@ -88,6 +88,9 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 	if err != nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(err)}, nil
 	}
+	// Definitions are always created disabled. SetFactorStatus is the only
+	// entry point that may enable a factor after Storage reconciliation.
+	factor.Status = domain.FactorStatusDisabled
 	if _, err := s.factors.Get(ctx, factor.FactorID); err == nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id %q already exists", factor.FactorID))}, nil
 	}
@@ -127,6 +130,9 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	}
 	if !slices.Equal(existing.Outputs, factor.Outputs) {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor outputs are immutable; create a new factor_id"))}, nil
+	}
+	if existing.Status != factor.Status {
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor status must be changed through SetFactorStatus"))}, nil
 	}
 	if err := s.publishFactorSource(ctx, &factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil

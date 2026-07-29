@@ -81,7 +81,7 @@
           <a-input v-model="form.name" :disabled="editing" placeholder="Bias" />
         </a-form-item>
         <a-form-item field="status" label="状态">
-          <a-select v-model="form.status">
+          <a-select v-model="form.status" disabled>
             <a-option value="enabled">enabled</a-option>
             <a-option value="disabled">disabled</a-option>
           </a-select>

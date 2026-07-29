@@ -24,7 +24,6 @@ type cliConfig struct {
 	Outputs           []string
 	ParamsJSON        string
 	LookbackRows      int
-	Status            string
 	SpaceID           string
 	DatasetID         string
 	SubjectID         string
@@ -64,7 +63,7 @@ func parseArgs(args []string) (cliConfig, error) {
 	if len(args) == 0 {
 		return cliConfig{}, errors.New("command is required")
 	}
-	cfg := cliConfig{Command: args[0], ParamsJSON: "{}", Status: "disabled"}
+	cfg := cliConfig{Command: args[0], ParamsJSON: "{}"}
 	switch args[0] {
 	case "init":
 		cfg.DBPath = "./data/factor/factor.db"
@@ -86,7 +85,6 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&outputs, "outputs", "", "comma-separated output columns")
 		fs.StringVar(&cfg.ParamsJSON, "params-json", "{}", "factor parameter JSON object")
 		fs.IntVar(&cfg.LookbackRows, "lookback-rows", 0, "input lookback rows")
-		fs.StringVar(&cfg.Status, "status", cfg.Status, "factor status")
 		if err := fs.Parse(args[1:]); err != nil {
 			return cliConfig{}, err
 		}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EngineStatus, FactorDef, RecalcFactorReq } from "@/api/factor/types";
 import { validateFactorParamsJSON } from "@/views/factor/definitions/factor-form";
+import factorDefinitionsView from "@/views/factor/definitions/index.vue?raw";
 
 describe("factor management contract", () => {
   it("uses explicit generic time-series fields", () => {
@@ -44,5 +45,10 @@ describe("factor management contract", () => {
     expect(validateFactorParamsJSON(raw)).toBe(raw.trim());
     expect(validateFactorParamsJSON("  ")).toBe("{}");
     expect(() => validateFactorParamsJSON("[]")).toThrow("JSON object");
+  });
+
+  it("changes status only through SetFactorStatus", () => {
+    expect(factorDefinitionsView).toContain('<a-select v-model="form.status" disabled>');
+    expect(factorDefinitionsView).toContain("await setFactorStatus(record.factor_id, next)");
   });
 });

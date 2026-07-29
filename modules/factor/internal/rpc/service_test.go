@@ -29,6 +29,7 @@ func TestCreateFactorUsesGenericContractAndComputedSourceHash(t *testing.T) {
 	require.Equal(t, []string{"close"}, rsp.GetFactor().GetInputColumns())
 	require.Equal(t, []string{"bias"}, rsp.GetFactor().GetOutputs())
 	require.NotEqual(t, "untrusted", rsp.GetFactor().GetSourceHash())
+	require.Equal(t, domain.FactorStatusDisabled, rsp.GetFactor().GetStatus())
 }
 
 func TestCreateFactorRejectsDuplicateIDOrNameWithoutOverwritingOutputs(t *testing.T) {
@@ -199,22 +200,49 @@ func TestUpdateFactorRejectsOutputChangesButUpdatesMutableFields(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 
 	changed := genericFactorPB("factor-1", "First", []string{"changed"})
+	changed.Status = domain.FactorStatusDisabled
 	updateRsp, err := svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{FactorId: "factor-1", Factor: changed})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, updateRsp.GetRetInfo().GetCode())
 
 	renamed := genericFactorPB("factor-1", "Renamed", []string{"value"})
+	renamed.Status = domain.FactorStatusDisabled
 	updateRsp, err = svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{FactorId: "factor-1", Factor: renamed})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, updateRsp.GetRetInfo().GetCode())
 
 	mutable := genericFactorPB("factor-1", "First", []string{"value"})
+	mutable.Status = domain.FactorStatusDisabled
 	mutable.ParamsJson = `{"window":10}`
 	updateRsp, err = svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{FactorId: "factor-1", Factor: mutable})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
 	require.Equal(t, "First", updateRsp.GetFactor().GetName())
 	require.Equal(t, `{"window":10}`, updateRsp.GetFactor().GetParamsJson())
+}
+
+func TestUpdateFactorCannotEnableDisabledDefinition(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorAndBinding(t, db, domain.FactorStatusDisabled)
+	svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+	updated := genericFactorPB("bias", "Bias", []string{"bias"})
+	updated.Status = domain.FactorStatusEnabled
+
+	rsp, err := svc.UpdateFactor(ctx, &factorpb.UpdateFactorReq{
+		FactorId: "bias",
+		Factor:   updated,
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "SetFactorStatus")
+
+	stored, err := db.Factors().Get(ctx, "bias")
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorStatusDisabled, stored.Status)
+	executable, err := db.Bindings().ListExecutable(ctx)
+	require.NoError(t, err)
+	require.Empty(t, executable)
 }
 
 func TestUpdateFactorReconcilesStorageMetadataWithOnlyDisabledBinding(t *testing.T) {

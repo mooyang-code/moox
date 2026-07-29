@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/stretchr/testify/require"
@@ -24,13 +25,14 @@ func TestImportFactorFileUsesExplicitGenericDefinition(t *testing.T) {
 	svc := NewService(store.NewFactorRepository(db), nil, Options{FactorsDir: dir})
 	factor, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{
 		FactorID: "bias", InputColumns: []string{"close"}, Outputs: []string{"bias"},
-		ParamsJSON: `{"window":20}`, LookbackRows: 20, Status: "enabled",
+		ParamsJSON: `{"window":20}`, LookbackRows: 20,
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"close"}, factor.InputColumns)
 	require.Equal(t, []string{"bias"}, factor.Outputs)
 	require.Equal(t, 20, factor.LookbackRows)
 	require.NotEmpty(t, factor.SourcePath)
+	require.Equal(t, "disabled", factor.Status)
 }
 
 func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *testing.T) {
@@ -44,7 +46,7 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 	svc := NewService(repo, nil, Options{FactorsDir: dir})
 	options := ImportOptions{
 		FactorID: "generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
-		ParamsJSON: `{}`, LookbackRows: 2, Status: "enabled",
+		ParamsJSON: `{}`, LookbackRows: 2,
 	}
 	_, err = svc.ImportFactorFile(context.Background(), path, options)
 	require.NoError(t, err)
@@ -53,6 +55,7 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 	updated, err := svc.ImportFactorFile(context.Background(), path, options)
 	require.NoError(t, err)
 	require.Equal(t, 3, updated.LookbackRows)
+	require.Equal(t, "disabled", updated.Status)
 
 	renamedPath := filepath.Join(dir, "Renamed.py")
 	require.NoError(t, os.WriteFile(renamedPath, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
@@ -65,6 +68,32 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 	stored, err := repo.Get(context.Background(), "generic")
 	require.NoError(t, err)
 	require.Equal(t, []string{"value"}, stored.Outputs)
+}
+
+func TestImportFactorFilePreservesExistingEnabledStatus(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Generic.py")
+	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
+	repo := store.NewFactorRepository(db)
+	require.NoError(t, repo.Create(context.Background(), domain.FactorDef{
+		FactorID: "generic", Name: "Generic", SourceCode: "old", SourceHash: "old",
+		InputColumns: []string{"value"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
+		LookbackRows: 2, Status: domain.FactorStatusEnabled,
+	}))
+	svc := NewService(repo, nil, Options{FactorsDir: dir})
+
+	updated, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{
+		FactorID: "generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
+		ParamsJSON: `{"window":2}`, LookbackRows: 3,
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorStatusEnabled, updated.Status)
+	stored, err := repo.Get(context.Background(), "generic")
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorStatusEnabled, stored.Status)
 }
 
 func TestResultDataset(t *testing.T) {

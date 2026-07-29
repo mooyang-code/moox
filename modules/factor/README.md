@@ -20,8 +20,7 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
   --input-columns close \
   --outputs bias_20,bias_96 \
   --params-json '{"windows":[20,96]}' \
-  --lookback-rows 200 \
-  --status enabled
+  --lookback-rows 200
 
 ./bin/moox-factor-cli run-once \
   --config ./factor/config/app.yaml \
@@ -53,6 +52,9 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
 - `run-once --config /absolute/path/to/app.yaml` 复用服务配置中的 DB、Python worker、
   factors、Storage Gateway、timeout 和 retry；CLI 显式 `--db/--factors-dir` 优先。
   部署包应从干净 shell 使用 `bin/moox-factor-run-once`，由 wrapper 注入绝对路径和凭证。
+- 新建和 CLI import 的 Factor 一律为 `disabled`；更新定义和再次 import 都保留现有
+  状态。`SetFactorStatus` 是唯一启用/禁用入口，启用时会先完成 Storage metadata
+  reconciliation，失败则保持 disabled。
 
 ```python
 def compute(df, params):

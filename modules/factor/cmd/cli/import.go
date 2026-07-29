@@ -26,7 +26,7 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	svc := registry.NewService(db.Factors(), nil, registry.Options{FactorsDir: cfg.FactorsDir})
 	factor, err := svc.ImportFactorFile(ctx, cfg.File, registry.ImportOptions{
 		FactorID: cfg.FactorID, InputColumns: cfg.InputColumns, Outputs: cfg.Outputs,
-		ParamsJSON: cfg.ParamsJSON, LookbackRows: cfg.LookbackRows, Status: cfg.Status,
+		ParamsJSON: cfg.ParamsJSON, LookbackRows: cfg.LookbackRows,
 	})
 	if err != nil {
 		return err

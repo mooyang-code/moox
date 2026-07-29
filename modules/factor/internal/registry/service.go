@@ -31,7 +31,6 @@ type ImportOptions struct {
 	Outputs      []string
 	ParamsJSON   string
 	LookbackRows int
-	Status       string
 }
 
 // Service manages local factor definitions.
@@ -68,7 +67,7 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string, options Imp
 		Outputs:      options.Outputs,
 		ParamsJSON:   options.ParamsJSON,
 		LookbackRows: options.LookbackRows,
-		Status:       options.Status,
+		Status:       domain.FactorStatusDisabled,
 	}
 	factor, err = domain.NormalizeFactorDefinition(factor)
 	if err != nil {
@@ -88,6 +87,9 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string, options Imp
 		}
 		if existing != nil && !slices.Equal(existing.Outputs, factor.Outputs) {
 			return nil, fmt.Errorf("factor outputs are immutable; create a new factor_id")
+		}
+		if existing != nil {
+			factor.Status = existing.Status
 		}
 	}
 	if s.publisher != nil {
