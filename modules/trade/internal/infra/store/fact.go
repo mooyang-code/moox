@@ -608,15 +608,17 @@ func (tx *Tx) UpdateOrder(record OrderRecord, expectedVersion uint64) error {
 	result := tx.db.Exec(`
 		UPDATE t_trade_orders
 		SET c_exchange_order_id = ?, c_state = ?, c_filled_quantity = ?,
-			c_average_price = ?, c_remaining_reserved_quantity = ?,
-			c_reject_reason = ?, c_exchange_updated_at = ?, c_version = ?, c_submitted_at = ?,
-			c_finished_at = ?, c_mtime = CURRENT_TIMESTAMP
+			c_average_price = ?, c_reduce_only = ?, c_reserved_asset = ?,
+			c_reserved_quantity = ?, c_remaining_reserved_quantity = ?,
+			c_reject_reason = ?, c_exchange_updated_at = ?, c_version = ?,
+			c_submitted_at = ?, c_finished_at = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?
-	`,
+		`,
 		record.ExchangeOrderID, record.State, record.FilledQuantity,
-		record.AveragePrice, record.RemainingReservedQuantity,
-		record.RejectReason, record.ExchangeUpdatedAt, record.Version, record.SubmittedAt,
-		record.FinishedAt, record.SpaceID, record.OrderID, expectedVersion,
+		record.AveragePrice, record.ReduceOnly, record.ReservedAsset,
+		record.ReservedQuantity, record.RemainingReservedQuantity,
+		record.RejectReason, record.ExchangeUpdatedAt, record.Version,
+		record.SubmittedAt, record.FinishedAt, record.SpaceID, record.OrderID, expectedVersion,
 	)
 	if result.Error != nil {
 		return writeError(result.Error)
