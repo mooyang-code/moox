@@ -79,7 +79,9 @@ func externalHealthRoute(repos *store.Repositories, evaluator *alerting.Evaluato
 			SpaceID:  message.GetSpaceId(), CheckID: checkID, InstanceID: observerID,
 			Success: report.GetSuccess(), Status: status, HTTPStatus: int(report.GetStatusCode()),
 			Connected: report.GetSuccess(), LatencyMS: report.GetLatencyMs(),
-			ErrorMessage: strings.TrimSpace(report.GetErrorSummary()), CheckedAt: checkedAt, CreatedAt: time.Now().UTC(),
+			ErrorMessage: externalErrorMessage(report),
+			BodyExcerpt:  externalDiagnostic(rawCheckID, report),
+			CheckedAt:    checkedAt, CreatedAt: time.Now().UTC(),
 		}
 		inserted, err := repos.Results.InsertIfAbsent(ctx, result)
 		if err != nil {
@@ -110,6 +112,48 @@ func externalHealthRoute(repos *store.Repositories, evaluator *alerting.Evaluato
 		}
 		return nil
 	}
+}
+
+func externalErrorMessage(report *observabilitypb.HealthCheckReport) string {
+	if report == nil || report.GetSuccess() {
+		return ""
+	}
+	if code := strings.TrimSpace(report.GetErrorCode()); code != "" {
+		return code
+	}
+	return strings.TrimSpace(report.GetErrorSummary())
+}
+
+func externalDiagnostic(checkID string, report *observabilitypb.HealthCheckReport) string {
+	if report == nil || report.GetSuccess() || checkID != "market_canary" {
+		return ""
+	}
+	target := oneLineDiagnostic(report.GetTarget(), 160)
+	summary := oneLineDiagnostic(report.GetErrorSummary(), 256)
+	switch {
+	case target != "" && summary != "":
+		return "查询范围：" + target + "；SCF 上报：" + summary
+	case target != "":
+		return "查询范围：" + target
+	default:
+		return summary
+	}
+}
+
+func oneLineDiagnostic(value string, limit int) string {
+	value = strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\n', '\t':
+			return ' '
+		default:
+			return r
+		}
+	}, strings.TrimSpace(value))
+	runes := []rune(value)
+	if limit > 0 && len(runes) > limit {
+		value = string(runes[:limit])
+	}
+	return value
 }
 
 func externalCheckID(observerID, checkID string) string {

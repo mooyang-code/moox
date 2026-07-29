@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -74,6 +75,10 @@ func NormalizeFreq(interval string) (string, error) {
 	if interval == "" {
 		return "", fmt.Errorf("interval 不能为空")
 	}
+	count, err := strconv.ParseUint(interval[:len(interval)-1], 10, 64)
+	if err != nil || count == 0 {
+		return "", fmt.Errorf("interval %q 无效", interval)
+	}
 	unit := interval[len(interval)-1]
 	switch unit {
 	case 'h', 'H':
@@ -87,7 +92,7 @@ func NormalizeFreq(interval string) (string, error) {
 	case 'm', 'M':
 		return interval, nil
 	default:
-		return interval, nil
+		return "", fmt.Errorf("interval %q 的单位不受支持", interval)
 	}
 }
 

@@ -62,6 +62,14 @@ func notificationBody(event Event) string {
 	if action != "" {
 		lines = append(lines, "建议处理："+action)
 	}
+	if strings.HasPrefix(event.Check.CheckID, "external:scf_sentinel:") {
+		if diagnostic := strings.TrimSpace(event.Result.BodyExcerpt); diagnostic != "" {
+			lines = append(lines, "诊断信息："+diagnostic)
+		}
+		if resultID := strings.TrimSpace(event.Result.ResultID); resultID != "" {
+			lines = append(lines, "诊断编号："+resultID)
+		}
+	}
 	lines = append(lines,
 		"检查对象："+firstText(event.Check.Name, event.Check.CheckID),
 		"检查时间："+event.Result.CheckedAt.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02 15:04:05 MST"),
@@ -99,6 +107,25 @@ func localizedReason(check domain.Check, result domain.CheckResult) (string, str
 	case raw == "invalid_config":
 		return "监控项配置不完整或阈值无效",
 			"检查 Market Canary 的 Dataset、Symbol、Frequency 和阈值配置"
+	case raw == "unreachable":
+		return "SCF 无法连接目标服务",
+			"检查目标服务进程、服务路由和网络连通性"
+	case raw == "storage_error":
+		return "Storage 拒绝了 SCF 的行情查询",
+			"检查 Dataset 是否启用，以及 SCF 使用的 Storage 鉴权凭据"
+	case raw == "decode":
+		return "SCF 无法解析 Storage 返回的行情数据",
+			"根据诊断编号查询 SCF 日志，并检查 K 线时间、收盘价和成交量字段"
+	case raw == "http_status":
+		if result.HTTPStatus > 0 {
+			return fmt.Sprintf("目标服务返回异常状态（HTTP %d）", result.HTTPStatus),
+				"检查目标服务健康状态和健康检查鉴权配置"
+		}
+		return "目标服务返回异常 HTTP 状态", "检查目标服务健康状态和健康检查鉴权配置"
+	case raw == "invalid_target":
+		return "SCF 健康检查地址无效", "检查 SCF 中配置的 Monitor 和 Gateway 健康检查地址"
+	case raw == "auth_nonce" || raw == "auth_sign":
+		return "SCF 生成健康检查签名失败", "检查 SCF 的 health-auth 配置，并根据诊断编号查询 SCF 日志"
 	}
 	if strings.HasPrefix(raw, "unexpected HTTP status ") {
 		codeText := strings.TrimSpace(strings.TrimPrefix(raw, "unexpected HTTP status "))

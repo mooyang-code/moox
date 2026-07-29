@@ -43,7 +43,7 @@ func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 	require.True(t, result.Success)
 	require.NotNil(t, fixture.request)
 	require.Equal(t, storagepb.SortOrder_SORT_ORDER_DESC, fixture.request.GetOrder())
-	require.Equal(t, []string{"close", "volume"}, fixture.request.GetColumnNames())
+	require.Equal(t, []string{"market_kline.close", "market_kline.volume"}, fixture.request.GetColumnNames())
 	require.Equal(t, uint32(2), fixture.request.GetPage().GetSize())
 	require.Equal(t, "crypto", fixture.request.GetKeys()[0].GetSpaceId())
 	require.Equal(t, "market_kline", fixture.request.GetKeys()[0].GetDatasetId())
@@ -57,8 +57,8 @@ func canaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.TimeSer
 	return &storagepb.TimeSeriesRow{
 		Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano)},
 		Fields: []*storagepb.FieldValue{
-			{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: closeValue}}},
-			{FieldId: "volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: volumeValue}}},
+			{FieldId: "market_kline.close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: closeValue}}},
+			{FieldId: "market_kline.volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: volumeValue}}},
 		},
 	}
 }

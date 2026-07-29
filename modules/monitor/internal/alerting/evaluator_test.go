@@ -305,3 +305,30 @@ func TestLocalizedReasonExplainsMarketCanaryStorageRejection(t *testing.T) {
 	assert.Equal(t, "Storage 拒绝了行情查询请求（返回码 7：dataset disabled）", reason)
 	assert.Contains(t, action, "Dataset、Symbol、Frequency")
 }
+
+func TestWebhookNotifierIncludesChineseSCFSentinelDiagnostic(t *testing.T) {
+	sender := &recordingSender{}
+	notifier := WebhookNotifier{NewSender: func(string) (msgbox.Sender, error) { return sender, nil }}
+	check := domain.Check{
+		CheckID: "external:scf_sentinel:market_canary",
+		Name:    "SCF sentinel market canary",
+		Kind:    domain.CheckKindExternal,
+	}
+	err := notifier.Send(context.Background(), domain.WebhookChannel{URL: "https://example.invalid"}, Event{
+		Check: check, Status: domain.AlertStatusFiring, EventType: domain.AlertEventReminder,
+		Result: domain.CheckResult{
+			ResultID:   "external:scf_sentinel:market_canary-123",
+			InstanceID: "scf_sentinel", ErrorMessage: "insufficient_closed_bars",
+			BodyExcerpt: "查询范围：crypto/binance_spot_kline_1h/BTC-USDT/1H；SCF 上报：Storage 查询只返回 0 根已收盘 K 线，至少需要 2 根",
+			LatencyMS:   23, CheckedAt: time.Date(2026, 7, 29, 10, 4, 30, 0, time.UTC),
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, sender.messages, 1)
+	message := sender.messages[0]
+	assert.Contains(t, message.Body, "异常原因：可用的已收盘 K 线不足两根")
+	assert.Contains(t, message.Body, "建议处理：检查采集任务是否持续写入该 Dataset、Symbol 和 Frequency")
+	assert.Contains(t, message.Body, "诊断信息：查询范围：crypto/binance_spot_kline_1h/BTC-USDT/1H；SCF 上报：Storage 查询只返回 0 根已收盘 K 线，至少需要 2 根")
+	assert.Contains(t, message.Body, "诊断编号：external:scf_sentinel:market_canary-123")
+	assert.NotContains(t, message.Body, "fewer than two closed bars")
+}

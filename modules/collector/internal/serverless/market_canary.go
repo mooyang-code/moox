@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -50,15 +51,21 @@ func StorageMarketCanaryCheck(reader TimeSeriesReader, cfg MarketCanaryConfig) W
 			result.ErrorCode, result.Error = "invalid_config", "market canary Storage scope and thresholds are required"
 			return result
 		}
+		frequency, err := sources.NormalizeFreq(cfg.Frequency)
+		if err != nil {
+			result.ErrorCode, result.Error = "invalid_config", "market canary frequency is invalid"
+			return result
+		}
+		result.Target = strings.Join([]string{cfg.SpaceID, cfg.DatasetID, cfg.SubjectID, frequency}, "/")
 		rsp, err := reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 			AuthInfo: cfg.AuthInfo,
 			SpaceId:  cfg.SpaceID, DatasetId: cfg.DatasetID,
 			Keys: []*storagepb.TimeSeriesKey{{
 				SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID,
-				SubjectId: cfg.SubjectID, Freq: cfg.Frequency,
+				SubjectId: cfg.SubjectID, Freq: frequency,
 			}},
 			Order:       storagepb.SortOrder_SORT_ORDER_DESC,
-			ColumnNames: []string{"close", "volume"},
+			ColumnNames: []string{cfg.DatasetID + ".close", cfg.DatasetID + ".volume"},
 			Page:        &storagepb.Page{Page: 1, Size: 2},
 		})
 		result.Latency = time.Since(startedAt)
@@ -76,13 +83,18 @@ func StorageMarketCanaryCheck(reader TimeSeriesReader, cfg MarketCanaryConfig) W
 			return result
 		}
 		if len(bars) < 2 {
-			result.ErrorCode, result.Error = "insufficient_closed_bars", "fewer than two closed bars"
+			result.ErrorCode = "insufficient_closed_bars"
+			result.Error = fmt.Sprintf("Storage 查询只返回 %d 根已收盘 K 线，至少需要 2 根", len(bars))
 			return result
 		}
 		sort.Slice(bars, func(i, j int) bool { return bars[i].DataTime.Before(bars[j].DataTime) })
 		previous, current := bars[len(bars)-2], bars[len(bars)-1]
-		if age := time.Now().UTC().Sub(current.DataTime); age < 0 || age > cfg.Freshness {
-			result.ErrorCode, result.Error = "stale_watermark", "latest closed bar is stale"
+		if age := startedAt.Sub(current.DataTime); age < 0 || age > cfg.Freshness {
+			result.ErrorCode = "stale_watermark"
+			result.Error = fmt.Sprintf(
+				"最新已收盘 K 线时间为 %s，距检查时间 %s，超过允许的 %s",
+				current.DataTime.Format(time.RFC3339), age.Round(time.Second), cfg.Freshness,
+			)
 			return result
 		}
 		priceReturn := math.Abs(current.Close/previous.Close - 1)
@@ -109,7 +121,11 @@ func decodeMarketBars(rows []*storagepb.TimeSeriesRow) ([]marketBar, error) {
 		var closeValue, volumeValue float64
 		var haveClose, haveVolume bool
 		for _, field := range row.GetFields() {
-			switch field.GetFieldId() {
+			fieldID := field.GetFieldId()
+			if index := strings.LastIndexByte(fieldID, '.'); index >= 0 {
+				fieldID = fieldID[index+1:]
+			}
+			switch fieldID {
 			case "close":
 				closeValue, haveClose = field.GetValue().GetDoubleValue(), field.GetValue() != nil
 			case "volume":

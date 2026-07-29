@@ -6,6 +6,7 @@ import (
 	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,16 +72,21 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
+	storageFrequency, err := canonicalStorageFrequency(config.Frequency)
+	if err != nil {
+		result.ErrorMessage = "invalid_config"
+		return result
+	}
 	startedAt := time.Now()
 	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 		AuthInfo: c.AuthInfo,
 		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
 		Keys: []*storagepb.TimeSeriesKey{{
 			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
-			SubjectId: config.SubjectID, Freq: config.Frequency,
+			SubjectId: config.SubjectID, Freq: storageFrequency,
 		}},
 		Order:       storagepb.SortOrder_SORT_ORDER_DESC,
-		ColumnNames: []string{"close", "volume"},
+		ColumnNames: []string{config.DatasetID + ".close", config.DatasetID + ".volume"},
 		Page:        &storagepb.Page{Page: 1, Size: 2},
 	}, client.WithFilter(trpcretry.ReadOnly()))
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
@@ -117,6 +123,31 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	result.Connected = true
 	result.Status = domain.CheckStatusOK
 	return result
+}
+
+func canonicalStorageFrequency(frequency string) (string, error) {
+	frequency = strings.TrimSpace(frequency)
+	if len(frequency) < 2 {
+		return "", fmt.Errorf("frequency %q is invalid", frequency)
+	}
+	count, err := strconv.ParseUint(frequency[:len(frequency)-1], 10, 64)
+	if err != nil || count == 0 {
+		return "", fmt.Errorf("frequency %q is invalid", frequency)
+	}
+	switch frequency[len(frequency)-1] {
+	case 'h', 'H':
+		return frequency[:len(frequency)-1] + "H", nil
+	case 'd', 'D':
+		return frequency[:len(frequency)-1] + "D", nil
+	case 'w', 'W':
+		return frequency[:len(frequency)-1] + "W", nil
+	case 'y', 'Y':
+		return frequency[:len(frequency)-1] + "Y", nil
+	case 'm', 'M':
+		return frequency, nil
+	default:
+		return "", fmt.Errorf("frequency %q has an unsupported unit", frequency)
+	}
 }
 
 func storageRejectionError(retInfo *storagepb.RetInfo) string {
@@ -161,7 +192,11 @@ func decodeMarketBars(rows []*storagepb.TimeSeriesRow) ([]marketBar, error) {
 			if field.GetValue() == nil {
 				continue
 			}
-			switch field.GetFieldId() {
+			fieldID := field.GetFieldId()
+			if index := strings.LastIndexByte(fieldID, '.'); index >= 0 {
+				fieldID = fieldID[index+1:]
+			}
+			switch fieldID {
 			case "close":
 				closeValue, haveClose = field.GetValue().GetDoubleValue(), true
 			case "volume":

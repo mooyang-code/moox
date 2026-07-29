@@ -38,16 +38,18 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 		marketCanaryRow(now.Add(-time.Minute), 101, 12),
 	}}
 	config := MarketCanaryConfig{
-		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
+		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1h",
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
 	}
 	auth := &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "derived-key"}
 	result := (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.True(t, result.Success)
-	require.Equal(t, "market_canary:market_kline:BTC-USDT:1m", result.CheckID)
+	require.Equal(t, "market_canary:market_kline:BTC-USDT:1h", result.CheckID)
 	require.Equal(t, "crypto", reader.request.GetSpaceId())
 	require.Equal(t, "market_kline", reader.request.GetDatasetId())
 	require.Equal(t, "BTC-USDT", reader.request.GetKeys()[0].GetSubjectId())
+	require.Equal(t, "1H", reader.request.GetKeys()[0].GetFreq())
+	require.Equal(t, []string{"market_kline.close", "market_kline.volume"}, reader.request.GetColumnNames())
 	require.Equal(t, uint32(2), reader.request.GetPage().GetSize())
 	require.Equal(t, auth, reader.request.GetAuthInfo())
 
@@ -72,6 +74,21 @@ func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
 	}).Run(t.Context())
 
 	require.Equal(t, "storage_rejected_query:7:dataset disabled", result.ErrorMessage)
+}
+
+func TestMarketCanaryRejectsInvalidFrequency(t *testing.T) {
+	reader := &canaryReader{}
+	result := (MarketCanary{
+		Reader: reader,
+		Config: MarketCanaryConfig{
+			SpaceID: "crypto", DatasetID: "binance_spot_kline",
+			SubjectID: "BTC-USDT", Frequency: "garbage",
+			Freshness: time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+		},
+	}).Run(t.Context())
+
+	require.Equal(t, "invalid_config", result.ErrorMessage)
+	require.Nil(t, reader.request)
 }
 
 func TestMarketCanaryStorageRejectionKeepsValidUTF8(t *testing.T) {
@@ -100,8 +117,8 @@ func marketCanaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.T
 	return &storagepb.TimeSeriesRow{
 		Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano)},
 		Fields: []*storagepb.FieldValue{
-			{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: closeValue}}},
-			{FieldId: "volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: volumeValue}}},
+			{FieldId: "market_kline.close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: closeValue}}},
+			{FieldId: "market_kline.volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: volumeValue}}},
 		},
 	}
 }
