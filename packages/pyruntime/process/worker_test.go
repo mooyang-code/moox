@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +62,92 @@ func TestStdioWorkerLoadCancellationReapsProcess(t *testing.T) {
 	assert.Nil(t, w.cmd)
 	assert.NotNil(t, cmd.ProcessState)
 	require.NoError(t, w.Close())
+}
+
+func TestNewStdioWorkerTaskTimeoutReapsHungHelloProcess(t *testing.T) {
+	script := writeWorkerScript(t, "import time\ntime.sleep(60)\n")
+	type startedWorker struct {
+		worker *StdioWorker
+		cmd    *exec.Cmd
+	}
+	started := make(chan startedWorker, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, err := newStdioWorker(context.Background(), Config{
+			PythonBin: "python3", WorkerPath: script, TaskTimeout: 40 * time.Millisecond,
+		}, func(worker *StdioWorker) {
+			started <- startedWorker{worker: worker, cmd: worker.cmd}
+		})
+		done <- err
+	}()
+	observed := <-started
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(500 * time.Millisecond):
+		_ = observed.worker.Close()
+		<-done
+		t.Fatal("HELLO did not honor TaskTimeout with a background caller")
+	}
+	assertReapedWorker(t, observed.worker, observed.cmd)
+}
+
+func TestStdioWorkerLoadTaskTimeoutReapsHungProcess(t *testing.T) {
+	script := writeWorkerScript(t, `
+import json
+import struct
+import sys
+import time
+
+meta = json.dumps({
+    "protocol_version": "moox.py/v1",
+    "worker_version": "test",
+    "python_version": sys.version.split()[0],
+    "runtime_env_hash": "",
+    "encodings": ["json"],
+}).encode()
+sys.stdout.buffer.write(b"MX" + bytes([1]) + struct.pack(">I", len(meta)) + meta + struct.pack(">Q", 0))
+sys.stdout.buffer.flush()
+time.sleep(60)
+`)
+	worker, err := NewStdioWorker(context.Background(), Config{
+		PythonBin: "python3", WorkerPath: script, TaskTimeout: 40 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	cmd := worker.cmd
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.Load(context.Background(), LoadRequest{LogicalID: "hung-load"})
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(500 * time.Millisecond):
+		require.NoError(t, cmd.Process.Kill())
+		<-done
+		t.Fatal("LOAD did not honor TaskTimeout with a background caller")
+	}
+	assertReapedWorker(t, worker, cmd)
+}
+
+func TestStdioWorkerFrameWriteFailureReapsProcess(t *testing.T) {
+	worker, cmd := newSilentStdioWorker(t)
+	require.NoError(t, worker.in.Close())
+
+	_, err := worker.Run(context.Background(), RunRequest{RequestID: "write-failure"})
+	require.Error(t, err)
+	assertReapedWorker(t, worker, cmd)
+}
+
+func TestStdioWorkerResponseReadFailureReapsProcess(t *testing.T) {
+	worker, cmd := newSilentStdioWorker(t)
+	require.NoError(t, worker.out.Close())
+
+	_, err := worker.Run(context.Background(), RunRequest{RequestID: "read-failure"})
+	require.Error(t, err)
+	assertReapedWorker(t, worker, cmd)
 }
 
 func TestStdioWorkerRunPreservesLargeMetaNumbers(t *testing.T) {
@@ -139,4 +227,19 @@ func newSilentStdioWorker(t *testing.T) (*StdioWorker, *exec.Cmd) {
 		out:   out,
 		state: StateReady,
 	}, cmd
+}
+
+func writeWorkerScript(t *testing.T, source string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "worker.py")
+	require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
+	return path
+}
+
+func assertReapedWorker(t *testing.T, worker *StdioWorker, cmd *exec.Cmd) {
+	t.Helper()
+	assert.Equal(t, StateDead, worker.State())
+	assert.Nil(t, worker.cmd)
+	assert.NotNil(t, cmd.ProcessState)
+	require.NoError(t, worker.Close())
 }

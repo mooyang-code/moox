@@ -62,6 +62,10 @@ type StdioWorker struct {
 }
 
 func NewStdioWorker(ctx context.Context, cfg Config) (*StdioWorker, error) {
+	return newStdioWorker(ctx, cfg, nil)
+}
+
+func newStdioWorker(ctx context.Context, cfg Config, observeStarted func(*StdioWorker)) (*StdioWorker, error) {
 	cfg.defaults()
 	if cfg.WorkerPath == "" {
 		return nil, errors.New("pyruntime: worker path is required")
@@ -90,6 +94,9 @@ func NewStdioWorker(ctx context.Context, cfg Config) (*StdioWorker, error) {
 		return nil, err
 	}
 	w := &StdioWorker{cfg: cfg, cmd: cmd, in: in, out: out, state: StateStarting, logs: make(chan LogRecord, 32)}
+	if observeStarted != nil {
+		observeStarted(w)
+	}
 	go w.captureStderr(errOut)
 	type helloResult struct {
 		frame protocol.Frame
@@ -100,11 +107,13 @@ func NewStdioWorker(ctx context.Context, cfg Config) (*StdioWorker, error) {
 		frame, err := protocol.ReadFrame(out, cfg.Limits)
 		helloCh <- helloResult{frame: frame, err: err}
 	}()
+	startupCtx, cancelStartup := context.WithTimeout(ctx, cfg.TaskTimeout)
+	defer cancelStartup()
 	var frame protocol.Frame
 	select {
-	case <-ctx.Done():
+	case <-startupCtx.Done():
 		_ = w.Close()
-		return nil, ctx.Err()
+		return nil, startupCtx.Err()
 	case result := <-helloCh:
 		frame, err = result.frame, result.err
 	}
@@ -219,6 +228,8 @@ func (w *StdioWorker) control(ctx context.Context, typ protocol.MessageType, met
 	if w.state == StateDead {
 		return errors.New("pyruntime: worker dead")
 	}
+	ctx, cancel := context.WithTimeout(ctx, w.cfg.TaskTimeout)
+	defer cancel()
 	b, _ := json.Marshal(meta)
 	if err := protocol.WriteFrame(w.in, w.cfg.Limits, protocol.Frame{Type: typ, Meta: b}); err != nil {
 		return errors.Join(err, w.terminateLocked())
