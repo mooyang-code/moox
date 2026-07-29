@@ -36,9 +36,92 @@ type ImportOptions struct {
 // Service manages local factor definitions.
 type Service struct {
 	factors   *store.FactorRepository
+	bindings  *store.BindingRepository
 	meta      *MetadataSync
 	opts      Options
 	publisher *moduleregistry.SourcePublisher
+}
+
+// WithBindings adds binding persistence for lifecycle contract validation.
+func (s *Service) WithBindings(bindings *store.BindingRepository) *Service {
+	s.bindings = bindings
+	return s
+}
+
+// SaveFactorDefinition persists a disabled definition after enforcing the same
+// lifecycle rules used by CLI import and RPC updates.
+func (s *Service) SaveFactorDefinition(ctx context.Context, factor domain.FactorDef) error {
+	existing, err := s.validateDefinitionWrite(ctx, factor)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return s.factors.Create(ctx, factor)
+	}
+	return s.factors.Update(ctx, factor)
+}
+
+func (s *Service) validateDefinitionWrite(ctx context.Context, factor domain.FactorDef) (*domain.FactorDef, error) {
+	if s.factors == nil {
+		return nil, fmt.Errorf("factor repository is required")
+	}
+	existing, err := s.factors.Get(ctx, factor.FactorID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if factor.Status != domain.FactorStatusDisabled {
+			return nil, fmt.Errorf("new factor definitions must be disabled")
+		}
+		if byName, nameErr := s.factors.GetByName(ctx, factor.Name); nameErr == nil && byName.FactorID != factor.FactorID {
+			return nil, fmt.Errorf("factor name %q already exists", factor.Name)
+		} else if nameErr != nil && !errors.Is(nameErr, gorm.ErrRecordNotFound) {
+			return nil, nameErr
+		}
+		return nil, nil
+	}
+	if existing.Status == domain.FactorStatusEnabled {
+		return nil, fmt.Errorf("disable factor %q before updating its definition", factor.FactorID)
+	}
+	if factor.Status != domain.FactorStatusDisabled {
+		return nil, fmt.Errorf("factor status must be changed through SetFactorStatus")
+	}
+	if existing.Name != factor.Name {
+		return nil, fmt.Errorf("factor name is immutable; create a new factor_id")
+	}
+	if !slices.Equal(existing.Outputs, factor.Outputs) {
+		return nil, fmt.Errorf("factor outputs are immutable; create a new factor_id")
+	}
+	return existing, nil
+}
+
+// ValidateEnabledBinding validates one binding through the configured Storage client.
+func (s *Service) ValidateEnabledBinding(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
+	if s.meta == nil {
+		return fmt.Errorf("Storage metadata is required to enable binding %q", binding.BindingID)
+	}
+	return s.meta.ValidateEnabledBinding(ctx, binding, factor)
+}
+
+// ValidateEnabledBindingsForFactor validates every binding that would become
+// executable before any runtime metadata or local status is changed.
+func (s *Service) ValidateEnabledBindingsForFactor(ctx context.Context, factor domain.FactorDef) error {
+	if s.bindings == nil {
+		return nil
+	}
+	bindings, err := s.bindings.ListByFactor(ctx, factor.FactorID)
+	if err != nil {
+		return err
+	}
+	for _, binding := range bindings {
+		if binding.Status != domain.BindingStatusEnabled {
+			continue
+		}
+		if err := s.ValidateEnabledBinding(ctx, binding, factor); err != nil {
+			return fmt.Errorf("binding %q: %w", binding.BindingID, err)
+		}
+	}
+	return nil
 }
 
 // NewService creates a registry service.
@@ -76,20 +159,10 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string, options Imp
 	raw = []byte(factor.SourceCode)
 	sum := sha256.Sum256(raw)
 	factor.SourceHash = hex.EncodeToString(sum[:])
-	var existing *domain.FactorDef
 	if s.factors != nil {
-		existing, err = s.factors.Get(ctx, factor.FactorID)
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		_, err = s.validateDefinitionWrite(ctx, factor)
+		if err != nil {
 			return nil, err
-		}
-		if existing != nil && existing.Name != factor.Name {
-			return nil, fmt.Errorf("factor name is immutable; create a new factor_id")
-		}
-		if existing != nil && !slices.Equal(existing.Outputs, factor.Outputs) {
-			return nil, fmt.Errorf("factor outputs are immutable; create a new factor_id")
-		}
-		if existing != nil {
-			factor.Status = existing.Status
 		}
 	}
 	if s.publisher != nil {
@@ -100,12 +173,7 @@ func (s *Service) ImportFactorFile(ctx context.Context, path string, options Imp
 		factor.SourcePath = version.Path
 	}
 	if s.factors != nil {
-		if existing == nil {
-			err = s.factors.Create(ctx, factor)
-		} else {
-			err = s.factors.Update(ctx, factor)
-		}
-		if err != nil {
+		if err = s.SaveFactorDefinition(ctx, factor); err != nil {
 			return nil, err
 		}
 	}

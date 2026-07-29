@@ -161,6 +161,7 @@ func (s *Store) Close() error {
 
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
+		"_pragma=foreign_keys(ON)",
 		"_pragma=journal_mode(WAL)",
 		"_pragma=synchronous(NORMAL)",
 		"_pragma=busy_timeout(5000)",

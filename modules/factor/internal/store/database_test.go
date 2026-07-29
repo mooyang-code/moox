@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,11 +23,43 @@ func TestOpenAndClose(t *testing.T) {
 	}
 }
 
+func TestForeignKeysAreEnabledOnEveryPooledConnection(t *testing.T) {
+	db, err := Open(&Options{
+		Path: filepath.Join(t.TempDir(), "factor.db"), MaxOpenConns: 4, MaxIdleConns: 4,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
+
+	sqlDB, err := db.db.DB()
+	require.NoError(t, err)
+	conns := make([]interface{ Close() error }, 0, 4)
+	for index := range 4 {
+		conn, connErr := sqlDB.Conn(context.Background())
+		require.NoError(t, connErr)
+		conns = append(conns, conn)
+		var enabled int
+		require.NoError(t, conn.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&enabled))
+		require.Equal(t, 1, enabled)
+		_, insertErr := conn.ExecContext(context.Background(), `
+			INSERT INTO t_factor_bindings (
+				c_binding_id, c_factor_id, c_space_id, c_source_dataset, c_freq,
+				c_subject_mode, c_subjects_json, c_target_dataset, c_status
+			) VALUES (?, 'missing', 'space', 'source', '1m', 'all', '[]', 'target', 'disabled')
+		`, "orphan-"+string(rune('a'+index)))
+		require.ErrorContains(t, insertErr, "FOREIGN KEY constraint failed")
+	}
+	for _, conn := range conns {
+		require.NoError(t, conn.Close())
+	}
+}
+
 func TestBuildSQLiteDSNUsesDurablePragmas(t *testing.T) {
 	dsn := buildSQLiteDSN("./data/factor/factor.db")
 
 	for _, want := range []string{
 		"_pragma=journal_mode(WAL)",
+		"_pragma=foreign_keys(ON)",
 		"_pragma=synchronous(NORMAL)",
 		"_pragma=busy_timeout(5000)",
 		"_pragma=temp_store(MEMORY)",

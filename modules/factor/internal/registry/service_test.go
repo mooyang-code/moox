@@ -70,7 +70,7 @@ func TestImportFactorFileUpdatesMutableFieldsButRejectsNameOrOutputChanges(t *te
 	require.Equal(t, []string{"value"}, stored.Outputs)
 }
 
-func TestImportFactorFilePreservesExistingEnabledStatus(t *testing.T) {
+func TestImportFactorFileRejectsEnabledDefinitionUpdate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Generic.py")
 	require.NoError(t, os.WriteFile(path, []byte("def compute(df, params): return {'value': df['value']}\n"), 0o644))
@@ -85,15 +85,16 @@ func TestImportFactorFilePreservesExistingEnabledStatus(t *testing.T) {
 	}))
 	svc := NewService(repo, nil, Options{FactorsDir: dir})
 
-	updated, err := svc.ImportFactorFile(context.Background(), path, ImportOptions{
+	_, err = svc.ImportFactorFile(context.Background(), path, ImportOptions{
 		FactorID: "generic", InputColumns: []string{"value"}, Outputs: []string{"value"},
 		ParamsJSON: `{"window":2}`, LookbackPeriods: 3,
 	})
-	require.NoError(t, err)
-	require.Equal(t, domain.FactorStatusEnabled, updated.Status)
+	require.ErrorContains(t, err, "disable")
 	stored, err := repo.Get(context.Background(), "generic")
 	require.NoError(t, err)
 	require.Equal(t, domain.FactorStatusEnabled, stored.Status)
+	require.Equal(t, "old", stored.SourceCode)
+	require.Equal(t, 2, stored.LookbackPeriods)
 }
 
 func TestResultDataset(t *testing.T) {

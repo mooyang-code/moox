@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -49,7 +50,11 @@ func (r *FactorRepository) Update(ctx context.Context, factor domain.FactorDef) 
 		return err
 	}
 	result := r.db.WithContext(ctx).Model(&domain.FactorDef{}).
-		Where("c_factor_id = ?", strings.TrimSpace(factor.FactorID)).
+		Where(
+			"c_factor_id = ? AND c_status = ?",
+			strings.TrimSpace(factor.FactorID),
+			domain.FactorStatusDisabled,
+		).
 		Updates(map[string]any{
 			"c_source_code": factor.SourceCode, "c_source_hash": factor.SourceHash,
 			"c_source_path":        factor.SourcePath,
@@ -61,7 +66,11 @@ func (r *FactorRepository) Update(ctx context.Context, factor domain.FactorDef) 
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+		current, err := r.Get(ctx, factor.FactorID)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("disable factor %q before updating its definition (current status %q)", current.FactorID, current.Status)
 	}
 	return nil
 }

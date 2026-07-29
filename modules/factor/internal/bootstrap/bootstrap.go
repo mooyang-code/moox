@@ -362,6 +362,10 @@ func (c *metadataClientAdapter) ListDatasetColumns(ctx context.Context, req *sto
 	return c.client.ListDatasetColumns(ctx, req)
 }
 
+func (c *metadataClientAdapter) ListViews(ctx context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
+	return c.client.ListViews(ctx, req)
+}
+
 func (c *metadataClientAdapter) ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
 	return c.client.ListDatasetSubjects(ctx, req)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +259,32 @@ func TestUpdateFactorRejectsOutputChangesButUpdatesMutableFields(t *testing.T) {
 	require.Equal(t, `{"window":10}`, updateRsp.GetFactor().GetParamsJson())
 }
 
+func TestUpdateFactorRejectsEveryDefinitionChangeWhileEnabled(t *testing.T) {
+	for name, mutate := range map[string]func(*factorpb.FactorDef){
+		"source":   func(factor *factorpb.FactorDef) { factor.SourceCode += "\n# changed" },
+		"inputs":   func(factor *factorpb.FactorDef) { factor.InputColumns = []string{"open"} },
+		"params":   func(factor *factorpb.FactorDef) { factor.ParamsJson = `{"window":10}` },
+		"lookback": func(factor *factorpb.FactorDef) { factor.LookbackPeriods++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			db := openRPCTestDB(t)
+			seedRPCFactorDefinition(t, db, "factor")
+			svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+			candidate := genericFactorPB("factor", "TestFactor", []string{"value"})
+			candidate.Status = domain.FactorStatusEnabled
+			candidate.LookbackPeriods = 2
+			candidate.SourceCode = "x"
+			mutate(candidate)
+
+			rsp, err := svc.UpdateFactor(ctx, &factorpb.UpdateFactorReq{FactorId: "factor", Factor: candidate})
+			require.NoError(t, err)
+			require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+			require.Contains(t, rsp.GetRetInfo().GetMsg(), "disable")
+		})
+	}
+}
+
 func TestUpdateFactorCannotEnableDisabledDefinition(t *testing.T) {
 	ctx := context.Background()
 	db := openRPCTestDB(t)
@@ -282,9 +309,9 @@ func TestUpdateFactorCannotEnableDisabledDefinition(t *testing.T) {
 	require.Empty(t, executable)
 }
 
-func TestUpdateFactorReconcilesStorageMetadataWithOnlyDisabledBinding(t *testing.T) {
+func TestUpdateDisabledFactorDoesNotSyncRuntimeMetadata(t *testing.T) {
 	db := openRPCTestDB(t)
-	seedRPCFactorDefinition(t, db, "factor")
+	seedRPCFactorDefinitionWithStatus(t, db, "factor", domain.FactorStatusDisabled)
 	seedRPCDisabledBinding(t, db, "factor", "space")
 	seedRPCDisabledBindingWithScope(t, db, "factor", "space", "second-binding", "source-2")
 	metadata := newRecordingFactorMetadataClient("space", "factor")
@@ -294,18 +321,19 @@ func TestUpdateFactorReconcilesStorageMetadataWithOnlyDisabledBinding(t *testing
 	)
 	updated := genericFactorPB("factor", "TestFactor", []string{"value"})
 	updated.ParamsJson = `{"window":10}`
+	updated.Status = domain.FactorStatusDisabled
+	updated.LookbackPeriods = 2
 
 	rsp, err := svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{
 		FactorId: "factor", Factor: updated,
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Len(t, metadata.updatedFactors, 1)
-	require.Equal(t, `{"window":10}`, metadata.updatedFactors[0].GetParamsJson())
+	require.Empty(t, metadata.updatedFactors)
 	require.Zero(t, metadata.targetCalls)
 }
 
-func TestUpsertDisabledBindingStillReconcilesFactorMetadata(t *testing.T) {
+func TestUpsertDisabledBindingDoesNotAccessStorageMetadata(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorDefinition(t, db, "factor")
 	metadata := newRecordingFactorMetadataClient("space", "factor")
@@ -319,11 +347,12 @@ func TestUpsertDisabledBindingStillReconcilesFactorMetadata(t *testing.T) {
 	rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{Binding: binding})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Len(t, metadata.updatedFactors, 1)
+	require.Empty(t, metadata.updatedFactors)
 	require.Zero(t, metadata.targetCalls)
+	require.Zero(t, metadata.listViewsCalls)
 }
 
-func TestUpsertBindingDisablesLocallyBeforeMetadataFailure(t *testing.T) {
+func TestUpsertBindingDisablesLocallyWithoutMetadataAccess(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorDefinition(t, db, "factor")
 	require.NoError(t, db.Bindings().Upsert(context.Background(), domain.FactorBinding{
@@ -342,7 +371,7 @@ func TestUpsertBindingDisablesLocallyBeforeMetadataFailure(t *testing.T) {
 
 	rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{Binding: binding})
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	rows, total, listErr := db.Bindings().List(context.Background(), store.BindingFilter{})
 	require.NoError(t, listErr)
 	require.EqualValues(t, 1, total)
@@ -371,6 +400,50 @@ func TestUpsertEnabledBindingMetadataFailureDoesNotPersist(t *testing.T) {
 	require.NoError(t, listErr)
 	require.Zero(t, total)
 	require.Empty(t, rows)
+}
+
+func TestUpsertEnabledBindingValidatesContractBeforePersisting(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinitionWithStatus(t, db, "factor", domain.FactorStatusDisabled)
+	metadata := newRecordingFactorMetadataClient("space", "factor")
+	svc := NewWithRuntime(db, nil,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+	)
+	binding := testBindingPB(domain.SubjectModeAll, `[]`)
+	binding.Status = domain.BindingStatusEnabled
+
+	rsp, err := svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: binding})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, 1, metadata.listViewsCalls)
+	rows, total, listErr := db.Bindings().List(ctx, store.BindingFilter{})
+	require.NoError(t, listErr)
+	require.EqualValues(t, 1, total)
+	require.Equal(t, domain.BindingStatusEnabled, rows[0].Status)
+}
+
+func TestUpsertEnabledBindingRejectsFactorResultSourceWithoutPersisting(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinitionWithStatus(t, db, "factor", domain.FactorStatusDisabled)
+	metadata := newRecordingFactorMetadataClient("space", "factor")
+	metadata.sourceRole = "factor_result"
+	svc := NewWithRuntime(db, nil,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+	)
+	binding := testBindingPB(domain.SubjectModeAll, `[]`)
+	binding.Status = domain.BindingStatusEnabled
+
+	rsp, err := svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: binding})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "factor_result")
+	_, total, listErr := db.Bindings().List(ctx, store.BindingFilter{})
+	require.NoError(t, listErr)
+	require.Zero(t, total)
 }
 
 func TestSetFactorStatusDisabledReconcilesStorageMetadata(t *testing.T) {
@@ -589,11 +662,15 @@ func seedRPCFactorAndBinding(t *testing.T, db *store.Store, status string) {
 }
 
 func seedRPCFactorDefinition(t *testing.T, db *store.Store, factorID string) {
+	seedRPCFactorDefinitionWithStatus(t, db, factorID, domain.FactorStatusEnabled)
+}
+
+func seedRPCFactorDefinitionWithStatus(t *testing.T, db *store.Store, factorID, status string) {
 	t.Helper()
 	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
 		FactorID: factorID, Name: "TestFactor", SourceCode: "x", SourceHash: "hash",
 		InputColumns: []string{"close"}, Outputs: []string{"value"}, ParamsJSON: `{}`,
-		LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
+		LookbackPeriods: 2, Status: status,
 	}))
 }
 
@@ -617,6 +694,8 @@ type recordingFactorMetadataClient struct {
 	targetCalls      int
 	getFactorRet     *commonpb.RetInfo
 	createDatasetRet *commonpb.RetInfo
+	listViewsCalls   int
+	sourceRole       string
 }
 
 func newRecordingFactorMetadataClient(spaceID, factorID string) *recordingFactorMetadataClient {
@@ -660,9 +739,27 @@ func (f *recordingFactorMetadataClient) UpdateDataset(context.Context, *storagep
 	return &storagepb.UpdateDatasetRsp{RetInfo: success()}, nil
 }
 
-func (f *recordingFactorMetadataClient) GetDataset(context.Context, *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
+func (f *recordingFactorMetadataClient) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	f.targetCalls++
-	return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}}, nil
+	if req.GetDatasetId() == "target" || strings.HasSuffix(req.GetDatasetId(), "_factor") {
+		return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}}, nil
+	}
+	return &storagepb.GetDatasetRsp{RetInfo: success(), Dataset: &storagepb.Dataset{
+		SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Status: "active",
+		DataKind:   storagepb.DataKind_DATA_KIND_TIME_SERIES,
+		DataNodeId: "data-node", KeepDuration: "30d",
+		Attributes: map[string]string{"dataset_role": f.sourceRole},
+	}}, nil
+}
+
+func (f *recordingFactorMetadataClient) ListViews(_ context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
+	f.listViewsCalls++
+	return &storagepb.ListViewsRsp{RetInfo: success(), Views: []*storagepb.View{{
+		SpaceId: req.GetSpaceId(), ViewId: "source_view", Status: "active",
+		ActiveIndexId: "index-a", ActiveColumns: []*storagepb.ViewColumn{
+			{ColumnName: req.GetDatasetId() + ".close", OriginId: req.GetDatasetId() + ".close"},
+		},
+	}}}, nil
 }
 
 func (f *recordingFactorMetadataClient) CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {

@@ -121,6 +121,18 @@ func TestSyncTargetDatasetRejectsNonTimeSeriesSource(t *testing.T) {
 	require.Empty(t, client.upsertedColumns)
 }
 
+func TestSyncTargetDatasetRequiresExplicitSourceDataSourceID(t *testing.T) {
+	client := newFakeMetadataClient()
+	client.datasets["source"] = testSourceDataset()
+	client.datasets["source"].DataSourceId = ""
+
+	err := NewMetadataSync(client, nil).SyncTargetDataset(
+		context.Background(), "space", "source", "target", "1m", nil,
+	)
+	require.ErrorContains(t, err, "data_source_id")
+	require.Empty(t, client.updatedDatasets)
+}
+
 func TestSyncTargetDatasetRejectsExistingNonTimeSeriesTargetBeforeMutation(t *testing.T) {
 	client := newFakeMetadataClient()
 	client.datasets["source"] = testSourceDataset()
@@ -254,16 +266,10 @@ func successRet() *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
 }
 
-func TestDataSourceIDFromDataset(t *testing.T) {
-	assert.Equal(t, "binance", DataSourceIDFromDataset("binance_spot_kline"))
-	assert.Equal(t, "alone", DataSourceIDFromDataset("alone"))
-	assert.Equal(t, "", DataSourceIDFromDataset(""))
-}
-
 func TestColumnAndDatasetDisplayName(t *testing.T) {
 	assert.Equal(t, "因子14", columnDisplayName("sma_14"))
 	assert.Equal(t, "因子", columnDisplayName("nounderscore"))
-	name := datasetDisplayName("binance_spot_kline")
+	name := datasetDisplayName("spot_kline_1h")
 	assert.Contains(t, name, "因子")
 	assert.LessOrEqual(t, len([]rune(name)), 10)
 }
