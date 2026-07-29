@@ -13,7 +13,7 @@ types, and compatibility paths instead of migrating them.
 
 Build a small execution model for personal quantitative trading in which:
 
-- A versioned `Strategy` can have multiple independent `StrategyRunner`
+- An immutable `Strategy` can have multiple independent `StrategyRunner`
   instances.
 - Each `StrategyRunner` controls one `LogicalAccount`.
 - A `LogicalAccount` combines one or more physical `ExchangeAccount` records
@@ -44,8 +44,9 @@ optimizers, distributed coordination, or institutional reliability.
 
 | Name | Meaning |
 | --- | --- |
-| `Strategy` | Versioned strategy code, manifest, parameter schema, and state schema |
+| `Strategy` | Immutable strategy code, manifest, parameter schema, and state schema |
 | `StrategyRunner` | One independently configured and stateful deployment of a Strategy |
+| `StrategyResult` | One validated and atomically accepted Strategy output |
 | `LogicalAccount` | One total execution account composed of physical Exchange accounts |
 | `ExchangeAccount` | One credential-bound paper or live account on one Exchange |
 | `PortfolioExecutor` | Trade component that converges a LogicalAccount to a FULL target |
@@ -106,58 +107,100 @@ account requires disabling the old association and creating a new runner.
 
 ## Strategy Persistence
 
-The Strategy schema becomes:
+The Strategy schema becomes four tables:
 
 ```text
 t_strategies
-  strategy_id + version
+  strategy_id                  immutable primary key
+  name
   api_version
   manifest_yaml
   source_code + source_hash
   state_schema_version
-  status
+  ctime
 
 t_strategy_runners
   runner_id
-  strategy_id + strategy_version
+  strategy_id
   space_id
   view_id
   freq
   params_json
   logical_account_id       nullable for observe-only
-  status
-
-t_strategy_states
-  runner_id
-  strategy_version
   state_revision
   state_json
-  previous_targets_json
-  last_run_id
+  current_targets_json
+  command_sequence
+  last_result_id
+  last_success_at
+  last_error
+  status
 
-t_strategy_runs
-  run_id
+t_strategy_results
+  result_id
   runner_id
-  strategy_version
-  trigger and input identity
+  strategy_id
+  namespace
+  trigger_bar_time
+  data_revision
+  input_hash
   action + output_json
+  command_sequence            nullable when no Trade command is emitted
+  ctime
+  unique(runner_id, strategy_id, namespace, trigger_bar_time)
 
-t_strategy_command_sequences
-  runner_id
-  last_sequence
+t_strategy_outbox
+  message_id
+  event_data
+  ctime
 ```
 
-The implementation removes:
+`strategy_id` identifies one immutable Strategy artifact. Editing source code,
+the manifest, or either schema creates a new `strategy_id`; IDs never point to
+mutable code. `name` is a display label and need not be unique. A
+`StrategyResult` stores its `strategy_id` directly so it remains attributable
+after its runner changes Strategy.
+
+Changing a runner's `strategy_id` requires the runner to be disabled. When the
+old and new Strategies declare the same `state_schema_version`, the runner
+retains its state, current target, and command sequence. A different state
+schema requires creating a new runner rather than adding a state-migration
+framework.
+
+`t_strategy_results` contains only validated, accepted results. Failed attempts
+update the runner's `last_error` and operational logs but do not create a
+result. `output_json` preserves the accepted `targets`,
+`next_state`, and `debug_info`. The uniqueness constraint is the logical-trigger
+idempotency key. Reusing the key with a different `input_hash` is a conflict.
+
+The implementation removes or folds into the four tables:
 
 - `t_strategy_bindings`.
+- `t_strategy_states`.
+- `t_strategy_runs`.
+- `t_strategy_command_sequences`.
 - `t_strategy_execution_bindings`.
+- `t_strategy_run_metrics`.
+- `t_strategy_binding_health`.
+- `t_strategy_performance_points`.
+- `t_strategy_performance_daily`.
+- `t_strategy_operation_audits`.
 - `group_id`.
 - `capital_weight`.
 - The current shared execution-binding routing behavior.
 
-`hold` retains `previous_targets_json` and emits no command. `rebalance`
-atomically stores the new FULL target with state and writes one Trade outbox
-message. Empty `rebalance.targets` is valid and means complete liquidation.
+`current_targets_json` is the materialized latest accepted FULL theoretical
+target. Strategy passes it to Python as `context.previous_targets`; it is not an
+account-position or Trade-progress snapshot.
+
+Every accepted result atomically inserts `t_strategy_results` and updates the
+runner state. `hold` retains `current_targets_json`, does not increment
+`command_sequence`, and emits no command. `rebalance` replaces
+`current_targets_json`; an executing runner also increments
+`command_sequence` and writes one Trade outbox message in the same transaction.
+An observe-only runner stores its theoretical result and target but writes no
+Trade outbox message. Empty `rebalance.targets` is valid and means complete
+liquidation.
 
 ## Logical Account Persistence
 
@@ -228,7 +271,7 @@ automatically.
 
 ```text
 execution_id
-strategy_run_id
+strategy_result_id
 runner_id
 logical_account_id
 command_sequence
@@ -376,18 +419,29 @@ The latest Strategy target remains stored. Only an explicit
 
 1. Persists `FLATTENING`, increments `control_revision`, and records the
    `OperatorAction`.
-2. Cancels every open order on every member account.
-3. Synchronizes each member.
-4. Closes each physical position on its exact account. It does not use
+2. Performs a fresh Exchange synchronization for every attached member,
+   including disabled members that still belong to the logical account.
+3. Cancels every open order found by synchronization, including `TARGET`,
+   `OPERATOR`, and `EXTERNAL` orders.
+4. Synchronizes again and does not submit a closing order on an account until
+   its cancellations are confirmed terminal.
+5. Closes each physical position on its exact account. It does not use
    cross-account net quantity.
-5. Repeats synchronization until all known positions are zero or an account
-   reports an error.
-6. Finishes in `PAUSED`, never `ACTIVE`.
+6. Repeats synchronization until all known positions are zero, the bounded
+   action deadline expires, or an account reports an error.
+7. Finishes in `PAUSED`, never `ACTIVE`.
 
 Flatten is an operator override. It attempts every member independently even
 when the aggregate logical account is Not Ready. Failures and residual
 positions are returned per account, and repeated use of the same `action_id`
 continues the same action without duplicating child orders.
+
+Not Ready does not permit stale-position trading. If fresh synchronization
+fails for one account, Flatten reports that account and does not guess a closing
+quantity from an old snapshot; it continues with other accounts. SWAP closing
+orders are reduce-only. SPOT closes supported non-settlement positive balances;
+settlement cash is retained, and dust or unmapped assets are reported as
+residuals.
 
 `ResumeLogicalAccount` requires:
 
@@ -501,11 +555,21 @@ algorithm registry, or second event workflow.
 ### Strategy
 
 - Strategy and runner CRUD, validation, and strict schema.
+- Strategy IDs identify immutable artifacts; source changes create new IDs.
+- A disabled runner can switch to a Strategy with the same state schema without
+  resetting state, target, or sequence; a different state schema requires a new
+  runner.
 - One active runner per logical account.
-- Runner state and FULL target commit in one transaction.
-- `hold` preserves previous target and emits no command.
+- Accepted Result, runner state, FULL target, sequence, and outbox changes are
+  atomic.
+- Failed attempts do not create Strategy Results.
+- `hold` preserves `current_targets_json` and emits no command.
+- Observe-only `rebalance` updates its theoretical target without an outbox
+  message.
 - Empty `rebalance` publishes an empty FULL target.
 - Command sequence is monotonic per runner.
+- Stale state CAS or transaction failure cannot overwrite runner state or
+  current target.
 - Removed `group_id`, capital weight, Binding, and ExecutionBinding fields are
   rejected.
 
@@ -534,8 +598,13 @@ algorithm registry, or second event workflow.
 - Manual order pauses before submission and remains paused after settlement.
 - Operator fields cannot be forged through public RPC.
 - Flatten cancels orders and closes every member position.
+- Flatten synchronizes before cancellation and never closes an account while
+  cancellation is unconfirmed.
+- Flatten does not trade from stale snapshots after synchronization failure.
 - Partial flatten failure reports per-account residuals and remains paused.
 - Repeated `action_id` does not create duplicate child orders.
+- Flatten handles disabled attached members, SPOT settlement cash, dust, and
+  bounded retries.
 - Resume requires Ready members and makes reopening the latest target explicit.
 - External orders pause the logical account and are never auto-canceled.
 
