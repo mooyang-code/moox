@@ -78,4 +78,5 @@ seed，并通过 Metadata API 动态登记测试 Subject 和 DatasetSubject。
 ## K 线测试数据
 
 A 股与加密货币的真实行情抽样见 [data/kline/README.md](./data/kline/README.md)。
-样本已经按当前量化元数据中的 Space、Dataset 和 TimeSeriesKey 约定标准化。
+该文档同时记录改造后的 `series_tag` 目标契约；实际 CSV 转换由实施计划跟踪，不能
+在改造完成前当作新协议验收样本。

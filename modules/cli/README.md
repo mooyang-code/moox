@@ -102,9 +102,9 @@ moox-cli setup metadata-import \
 二进制后再打包。业务空间选择不写入 `custom.toml`；用户可以导入全部、部分或暂不导入。
 自然语言理解由 MooX Skill 负责，CLI 始终接收明确的主机名和稳定 Space ID。
 
-### Storage Schema v5 验证
+### Storage Schema v6 验证
 
-Schema v5 替换尚未上线的旧 Storage 数据时，只有在用户明确确认预发布环境后才允许
+`series_tag` 切换到目标 Schema v6 时，只有在用户明确确认预发布环境后才允许
 使用 `--reset-storage-data`：
 
 ```bash
@@ -125,7 +125,7 @@ moox-cli setup e2e-storage --file ./custom.toml --host compute --namespace codex
 moox-cli setup browser-e2e-storage --file ./custom.toml --host compute --repo-root .
 ```
 
-`verify-storage` 通过 CLI 管理的 SSH 隧道检查组件就绪、Schema v5、二进制哈希、
+`verify-storage` 通过 CLI 管理的 SSH 隧道检查组件就绪、Schema v6、二进制哈希、
 签名 DataNode 身份以及 Dataset 汇总，并只输出脱敏的状态、ID、数量和版本信息。
 `e2e-storage` 使用调用方提供的短命名空间创建禁用 Dataset，执行激活自检和 revision
 激活，再通过支持的接口清理临时 Space、DataSource 和 Dataset；即使断言失败也会报告
@@ -197,6 +197,8 @@ seed 只声明 Dataset 的直接绑定，不再单独维护节点或路由 seed�
 
 ### 历史 CSV 导入
 
+> 以下 `series_tag` 参数是统一改造后的目标命令，实施前当前 CLI 尚不支持。
+
 ```bash
 moox-cli storage import \
   --format csv \
@@ -205,9 +207,10 @@ moox-cli storage import \
   --metadata-url http://127.0.0.1:20200 \
   --space crypto \
   --view ar_usdt_close_view \
-  --dataset binance_spot_kline_1h \
+  --dataset spot_kline_1h \
   --subject ARB-USDT \
-  --data-source binance \
+  --data-source crypto_market \
+  --series-tag venue:binance \
   --freq 1h \
   --time-column candle_begin_time
 ```

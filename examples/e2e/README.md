@@ -75,7 +75,8 @@ GOWORK=off go run ./cmd/moox-cli metadata import \
   --if-not-exists
 ```
 
-Storage metadata seed 使用 Schema v5。DataNode 不是逻辑 seed 的隐含路由；部署流程先执行：
+Storage metadata seed 目标使用 Schema v6。DataNode 不是逻辑 seed 的隐含路由；
+部署流程先执行：
 
 ```bash
 moox-storage-cli register-node \
@@ -107,7 +108,7 @@ Collector schema 不内置运行态采集规则。删库后需要通过管理台
     "biz_type": "data_collector",
     "data_type": "kline",
     "data_source": "binance",
-    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_symbols\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"binance_spot_kline_1h\"},\"schedule\":{\"interval\":\"1h\"}}",
+    "collect_params": "{\"source\":{\"kind\":\"dataset_subjects\",\"dataset_id\":\"binance_spot_symbols\"},\"collector\":{\"exchange\":\"binance\",\"market\":\"spot\",\"data_type\":\"kline\",\"intervals\":[\"1h\"]},\"target\":{\"dataset_id\":\"spot_kline_1h\"},\"schedule\":{\"interval\":\"1h\"}}",
     "enabled": "true",
     "creator": "system"
   }
@@ -126,9 +127,12 @@ CloudNode JobItem。`execute_at` 缺失或已到期时立即执行。
 2. `moox-storage` 的 `storage-primary`、`storage-node` 和 `storage-view` 进程启动后，先注册 DataNode，再导入 `platform-local.seed.yaml` 和 `metadata-quant-initial.seed.yaml` 的 `crypto` Space，并完成 Doctor 检查与显式激活。
 3. `moox-cloudnode` 启动后，通过云账户页面重新创建 Tencent Cloud 账号；密钥不进入 examples。
 4. 使用 collector 打包/发布流程上传 `moox-collector` SCF 包，并通过 cloudnode 批量创建/部署云节点。
-5. `moox-collector` 启动后，E2E 注册 `BTC-USDT`，再创建 Binance 现货 1H K 线规则；规则根据 `binance_spot_kline_1h` 数据集里的 Subject 生成 task instances。
+5. `moox-collector` 启动后，E2E 注册 `BTC-USDT`，再创建 Binance 现货 1H K 线规则；
+   规则根据 `binance_spot_symbols` 的 active Subject 生成 task instances，并写入共享
+   `spot_kline_1h` Dataset 的 `venue:binance` 序列。
 6. SCF runtime 直接消费 Job Execution Queue，执行后通过 Node Service Gateway 的 Storage PrimaryStore RPC 写入 K 线，并通过 CloudNode service route 上报 JobItem 终态。
-7. 通过数据浏览或视图浏览页面确认 `binance_spot_1h_view` 能看到最新现货 K 线。
+7. 通过数据浏览或视图浏览页面确认 `spot_kline_1h_view` 能看到
+   `venue:binance` 的最新现货 K 线。
 
 如果第 7 步没有数据，不要回写 SQLite。按链路依次检查：服务部署地址、SCF 心跳、collector 任务实例、CloudNode JobItem、storage 写入、view rebuild/事件更新。
 
@@ -259,7 +263,8 @@ examples/metadata-quant-initial.seed.yaml --spaces crypto
 - 到期后 scheduled JobItem 全部成功，task instance 的 `cloud_job_item_id` 仍对应本次执行；
 - 另行提交一个缺失 `execute_at` 的诊断 JobItem，确认其立即进入同一执行链路；该 JobItem
   使用独立 `task_id`，不声称更新 scheduled TaskInstance；
-- K 线严格写入规则指定的 `crypto/binance_spot_kline_1h`，并可经 DataNode Snapshot 和 View 查询；
+- K 线严格写入规则指定的 `crypto/spot_kline_1h` 和 `venue:binance`，并可经
+  DataNode Snapshot 和 View 查询；
 - 输出 scheduled/immediate `job_item_id`、预期生命周期事件和对应 CLS 查询条件。
 
 SCF 步骤从部署目录的 `secrets/gateway-service.env` 读取节点和服务身份，将公开 CA 证书以 `MOOX_GATEWAY_CA_PEM_B64` 传入运行时，并通过独立 Gateway `127.0.0.1:11002` 访问 `/api/service/*`。任一身份或 CA 配置缺失时会在调用前失败，不会打印密钥。

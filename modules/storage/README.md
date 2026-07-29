@@ -1,10 +1,13 @@
 # MooX Storage
 
+> `series_tag` 是已确认但尚待实施的目标契约；实施进度见
+> [实施计划](../../docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.md)。
+
 MooX Storage 是字段级事实存储和可重建 View 服务。当前实现只有三种进程角色：
 
 | 角色 | 职责 |
 | --- | --- |
-| `primary` | Metadata SQLite v4、snapshotcache、PrimaryStore 校验与 Dataset 路由 |
+| `primary` | Metadata SQLite v6、snapshotcache、PrimaryStore 校验与 Dataset 路由 |
 | `node` | 单个 DataNode 的 Pebble 字段存储、原子 Outbox、过期时间桶清理 |
 | `view` | 单 JetStream Consumer、DuckDB/Bleve ViewIndex、A/B 重建与 DataView 查询 |
 
@@ -15,7 +18,7 @@ Dataset 创建时直接绑定不可修改的 `data_node_id`。
 TimeSeries RowKey：
 
 ```text
-space_id + dataset_id + subject_id + freq + data_time
+space_id + dataset_id + subject_id + freq + data_time + series_tag
 ```
 
 Record RowKey：
@@ -24,7 +27,11 @@ Record RowKey：
 space_id + dataset_id + record_id + version
 ```
 
-- TimeSeries 不包含 Dimensions。业务维度应建模为 Field 或 Attribute。
+- `series_tag` 是一个可选、不透明的标量字符串，空字符串表示默认序列。
+- 推荐使用 `venue:binance`、`device:sdb` 等约定，但 Storage 不解析冒号。
+- 不支持 Dimensions Map、多 tag、`series_tag_name` 或允许值注册；业务属性继续使用
+  Field/Attribute。
+- 精确 Key 的空 tag 只匹配默认序列；范围 selector 未设置 tag 才表示全部序列。
 - `data_time` 接受 RFC3339/RFC3339Nano，服务端统一保存为 UTC 固定 9 位纳秒。
 - Record 写入必须提供非空 `version`。
 - Record 读取时 version 为空表示读取 UTF-8 字节顺序最大的版本。
@@ -38,7 +45,7 @@ space_id + dataset_id + record_id + version
 TimeSeries 物理键按以下顺序编码：
 
 ```text
-value_kind | time_series | space | dataset | bucket_start | subject | freq | data_time | field
+value_kind | time_series | space | dataset | bucket_start | subject | freq | data_time | series_tag | field
 ```
 
 Tuple codec 保持 UTF-8 字节顺序并支持 NUL。过期清理以
@@ -59,6 +66,8 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 ### ViewIndex
 
 - TimeSeries View 使用真实 DuckDB 文件。
+- 系统列 `series_tag VARCHAR NOT NULL` 参与
+  `(subject_id, freq, data_time, series_tag)` 主键和稳定排序。
 - Record View 使用真实 Bleve 索引并支持全文搜索。
 - 每个 View 使用 A/B 两个独立索引。
 - 重建期间实时消息同时写 Active 和 New。
@@ -71,7 +80,7 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 每个 Dataset 使用一个 Subject：
 
 ```text
-moox.storage.dataset.rows.upserted.v1.<space-token>.<dataset-token>
+moox.storage.dataset.rows.upserted.v2.<space-token>.<dataset-token>
 ```
 
 Token 是可逆的小写无 Padding Base32。View 使用唯一 Consumer
@@ -115,7 +124,7 @@ MOOX_STORAGE_ROLE=node
 MOOX_STORAGE_ROLE=view
 ```
 
-Schema v5 中，Primary 只从同一份 Metadata Snapshot 解析
+目标 Schema v6 中，Primary 只从同一份 Metadata Snapshot 解析
 `Dataset.data_node_id -> DataNode.service_target`，不读取路由表、节点 attributes
 或环境变量兜底。Dataset 创建后默认为 disabled/unlocked；Doctor 只读检查就绪，
 部署或管理员随后显式激活，激活成功后绑定永久锁定。
