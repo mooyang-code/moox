@@ -2,10 +2,10 @@ package target
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,22 +14,20 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/rs/xid"
 )
 
 var (
-	ErrExecutorConfig  = errors.New("trade target: executor is not configured")
-	ErrInvalidTarget   = errors.New("trade target: invalid target")
-	ErrExecutionPaused = errors.New("trade target: execution is paused")
+	ErrExecutorConfig = errors.New("trade target: executor is not configured")
+	ErrInvalidTarget  = errors.New("trade target: invalid target")
 )
 
 const (
-	StatusRunning   = "RUNNING"
-	StatusCompleted = "COMPLETED"
-	StatusExpired   = "EXPIRED"
-	StatusFailed    = "FAILED"
-	StatusPaused    = "PAUSED"
+	StatusPending    = "PENDING"
+	StatusConverging = "CONVERGING"
+	StatusConverged  = "CONVERGED"
+	StatusBlocked    = "BLOCKED"
+	StatusPaused     = "PAUSED"
 )
 
 type Quote struct {
@@ -41,16 +39,6 @@ type PriceSource interface {
 	LatestPrice(context.Context, string, string) (Quote, error)
 }
 
-type StateStore interface {
-	LockTargetBinding(string, string) func()
-	GetTargetExecutionByBinding(context.Context, string, string) (store.TargetExecutionRecord, error)
-	GetExchangeAccountByID(context.Context, string) (store.ExchangeAccountRecord, error)
-	GetInstrument(context.Context, string, string, string) (store.InstrumentRecord, error)
-	GetPosition(context.Context, string, string, string, string) (store.PositionRecord, bool, error)
-	ListOrdersForLane(context.Context, string, string, string) ([]store.OrderRecord, error)
-	UpdateTargetExecutionState(context.Context, store.TargetExecutionRecord) (bool, error)
-}
-
 type OrderService interface {
 	Place(context.Context, string, orderdomain.OrderSpec) (orderdomain.Order, error)
 	Submit(context.Context, string, string) (orderdomain.Order, error)
@@ -60,413 +48,579 @@ type OrderService interface {
 }
 
 type Executor struct {
-	Store            StateStore
+	Store            *store.Store
 	Orders           OrderService
 	Prices           PriceSource
 	Now              func() time.Time
 	MaxChildNotional shared.Decimal
 }
 
-type SymbolProgress struct {
-	Target        string `json:"target"`
-	Confirmed     string `json:"confirmed"`
-	Effective     string `json:"effective"`
-	Residual      string `json:"residual"`
-	ActiveOrderID string `json:"active_order_id,omitempty"`
-}
-
-type Progress struct {
-	Symbols map[string]SymbolProgress `json:"symbols"`
-}
-
 type Result struct {
-	Status   string
-	Progress Progress
+	Status string
+	Action string
 }
 
-type laneResult struct {
-	progress SymbolProgress
-	complete bool
-	residual shared.Decimal
+type memberState struct {
+	member      store.LogicalAccountMemberRecord
+	account     store.ExchangeAccountRecord
+	instruments map[string]store.InstrumentRecord
+	positions   map[string]shared.Decimal
+}
+
+type laneAction struct {
+	member     memberState
+	instrument store.InstrumentRecord
+	delta      shared.Decimal
+	reducing   bool
 }
 
 func (e *Executor) Converge(
 	ctx context.Context,
 	spaceID string,
-	executionBindingID string,
+	logicalAccountID string,
 ) (Result, error) {
 	if e == nil || e.Store == nil || e.Orders == nil || e.Prices == nil {
 		return Result{}, ErrExecutorConfig
 	}
-	unlock := e.Store.LockTargetBinding(spaceID, executionBindingID)
+	unlock := e.Store.LockLogicalAccount(spaceID, logicalAccountID)
 	defer unlock()
-	record, err := e.Store.GetTargetExecutionByBinding(ctx, spaceID, executionBindingID)
+
+	logicalAccount, err := e.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return Result{}, err
 	}
-	now := e.now()
-	progress := Progress{Symbols: make(map[string]SymbolProgress, len(record.Targets))}
-	allComplete := true
-	totalResidual := shared.Zero()
-	for _, target := range record.Targets {
-		result, convergeErr := e.convergeLane(ctx, record, target, now)
-		if convergeErr != nil {
-			if errors.Is(convergeErr, ErrExecutionPaused) {
-				previousStatus := record.Status
-				record.Status = StatusPaused
-				record.LastError = convergeErr.Error()
-				record.Progress = encodeProgress(progress)
-				updated, updateErr := e.Store.UpdateTargetExecutionState(ctx, record)
-				if updateErr != nil {
-					return Result{}, updateErr
-				}
-				recordTargetTransition(previousStatus, StatusPaused, updated)
-				return Result{Status: StatusPaused, Progress: progress}, nil
-			}
-			if errors.Is(convergeErr, ErrInvalidTarget) {
-				previousStatus := record.Status
-				record.Status = StatusFailed
-				record.LastError = convergeErr.Error()
-				record.Progress = encodeProgress(progress)
-				updated, updateErr := e.Store.UpdateTargetExecutionState(ctx, record)
-				if updateErr != nil {
-					return Result{}, errors.Join(convergeErr, updateErr)
-				}
-				recordTargetTransition(previousStatus, StatusFailed, updated)
-				return Result{Status: StatusFailed, Progress: progress}, convergeErr
-			}
-			return Result{Status: record.Status, Progress: progress}, convergeErr
-		}
-		progress.Symbols[target.Symbol] = result.progress
-		allComplete = allComplete && result.complete
-		totalResidual = totalResidual.Add(result.residual.Abs())
-	}
-	status := StatusRunning
-	if allComplete {
-		status = StatusCompleted
-	}
-	if now.UnixMilli() >= record.NotAfter && allComplete {
-		status = StatusExpired
-	}
-	previousStatus := record.Status
-	record.Status = status
-	record.Progress = encodeProgress(progress)
-	record.ResidualQuantity = totalResidual.String()
-	record.LastError = ""
-	updated, err := e.Store.UpdateTargetExecutionState(ctx, record)
+	target, err := e.Store.GetLogicalAccountTarget(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return Result{}, err
 	}
-	if !updated {
-		return Result{}, nil
+	if logicalAccount.OwnerRunnerID != target.RunnerID {
+		return Result{}, fmt.Errorf("%w: target runner no longer owns logical account", ErrInvalidTarget)
 	}
-	recordTargetTransition(previousStatus, status, true)
-	return Result{Status: status, Progress: progress}, nil
-}
-
-func (e *Executor) convergeLane(
-	ctx context.Context,
-	execution store.TargetExecutionRecord,
-	target store.TargetPosition,
-	now time.Time,
-) (laneResult, error) {
-	desired, err := shared.ParseDecimal(target.TargetQuantity)
-	if err != nil {
-		return laneResult{}, fmt.Errorf("%w: target quantity for %s", ErrInvalidTarget, target.Symbol)
-	}
-	account, err := e.Store.GetExchangeAccountByID(ctx, execution.ExchangeAccountID)
-	if err != nil {
-		return laneResult{}, err
-	}
-	if account.SpaceID != execution.SpaceID {
-		return laneResult{}, fmt.Errorf("%w: Exchange account ownership", ErrInvalidTarget)
-	}
-	instrument, err := e.Store.GetInstrument(
-		ctx,
-		account.Exchange,
-		account.MarketType,
-		target.Symbol,
-	)
-	if err != nil {
-		return laneResult{}, err
-	}
-	if instrument.InstrumentID != target.InstrumentID {
-		return laneResult{}, fmt.Errorf("%w: instrument identity for %s", ErrInvalidTarget, target.Symbol)
-	}
-	confirmed, err := e.confirmedQuantity(ctx, account, instrument)
-	if err != nil {
-		return laneResult{}, err
-	}
-	if account.MarketType == string(exchange.MarketTypeSpot) && desired.IsNegative() {
-		return laneResult{}, fmt.Errorf("%w: SPOT target cannot be negative", ErrInvalidTarget)
-	}
-	orders, err := e.Store.ListOrdersForLane(
-		ctx,
-		execution.SpaceID,
-		execution.ExchangeAccountID,
-		target.Symbol,
-	)
-	if err != nil {
-		return laneResult{}, err
+	if logicalAccount.AutomationState != "ACTIVE" {
+		return Result{Status: StatusPaused}, nil
 	}
 
-	if now.UnixMilli() >= execution.NotAfter {
-		progress := SymbolProgress{
-			Target: desired.String(), Confirmed: confirmed.String(),
-			Effective: confirmed.String(), Residual: desired.Sub(confirmed).String(),
-		}
-		for _, current := range orders {
-			if !activeOrder(current.State) ||
-				current.StrategyExecutionID != execution.ExecutionID {
-				continue
-			}
-			progress.ActiveOrderID = current.OrderID
-			switch orderdomain.State(current.State) {
-			case orderdomain.Pending:
-				if _, err := e.Orders.DiscardPending(
-					ctx,
-					execution.SpaceID,
-					current.OrderID,
-				); err != nil {
-					return laneResult{}, err
-				}
-			case orderdomain.Submitting, orderdomain.SubmitUnknown:
-				if _, err := e.Orders.ResolveUnknown(
-					ctx,
-					execution.SpaceID,
-					current.OrderID,
-				); err != nil {
-					return laneResult{}, err
-				}
-			}
-			return laneResult{progress: progress}, nil
-		}
-		return laneResult{
-			progress: progress, complete: true, residual: desired.Sub(confirmed),
-		}, nil
-	}
-
-	effective := confirmed
-	rawRemaining := desired.Sub(confirmed)
-	expectedAction, expectedReduceOnly := childAction(
-		exchange.MarketType(account.MarketType),
-		confirmed,
-		desired,
-	)
-	var compatible *store.OrderRecord
-	conflicting := make([]store.OrderRecord, 0)
-	for i := range orders {
-		current := orders[i]
-		if !activeOrder(current.State) {
-			continue
-		}
-		remaining, parseErr := orderRemaining(current)
-		if parseErr != nil {
-			return laneResult{}, parseErr
-		}
-		if remaining.IsZero() {
-			continue
-		}
-		delta := signedOrderQuantity(current.Side, remaining)
-		if !rawRemaining.IsZero() &&
-			sameSign(delta, expectedAction) &&
-			delta.Abs().Cmp(expectedAction.Abs()) <= 0 &&
-			current.ReduceOnly == expectedReduceOnly &&
-			compatible == nil {
-			effective = effective.Add(delta)
-			compatible = &current
-			continue
-		}
-		conflicting = append(conflicting, current)
-	}
-	progress := SymbolProgress{
-		Target: desired.String(), Confirmed: confirmed.String(),
-		Effective: effective.String(), Residual: desired.Sub(effective).String(),
-	}
-	if len(conflicting) > 0 {
-		for _, current := range conflicting {
-			if err := e.stopConflictingOrder(ctx, execution.SpaceID, current); err != nil {
-				return laneResult{}, err
-			}
-			progress.ActiveOrderID = current.OrderID
-		}
-		return laneResult{progress: progress}, nil
-	}
-	if compatible != nil {
-		progress.ActiveOrderID = compatible.OrderID
-		switch orderdomain.State(compatible.State) {
-		case orderdomain.Pending:
-			if _, err := e.Orders.Submit(
-				ctx,
-				execution.SpaceID,
-				compatible.OrderID,
-			); err != nil {
-				return laneResult{}, err
-			}
-		case orderdomain.Submitting, orderdomain.SubmitUnknown:
-			if _, err := e.Orders.ResolveUnknown(
-				ctx,
-				execution.SpaceID,
-				compatible.OrderID,
-			); err != nil {
-				return laneResult{}, err
-			}
-		}
-		return laneResult{progress: progress}, nil
-	}
-
-	remaining := desired.Sub(confirmed)
-	progress.Effective = confirmed.String()
-	progress.Residual = remaining.String()
-	if remaining.IsZero() {
-		return laneResult{progress: progress, complete: true, residual: shared.Zero()}, nil
-	}
-	if account.Status != "ENABLED" || !account.Ready {
-		return laneResult{}, ErrExecutionPaused
-	}
-
-	action, reduceOnly := expectedAction, expectedReduceOnly
-	step, minimum, err := baseQuantityRules(instrument)
+	members, err := e.loadMembers(ctx, spaceID, logicalAccountID)
 	if err != nil {
-		return laneResult{}, err
+		return Result{}, err
 	}
-	quote, err := e.Prices.LatestPrice(
-		ctx,
-		execution.ExchangeAccountID,
-		target.Symbol,
-	)
+	for _, member := range members {
+		if member.account.Status != "ENABLED" || !member.account.Ready {
+			target.LastError = "member " + member.account.ExchangeAccountID + " is not ready"
+			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
+				return Result{}, err
+			}
+			return Result{Status: StatusPaused}, nil
+		}
+	}
+
+	orders, err := e.activeOrders(ctx, spaceID, members)
 	if err != nil {
-		return laneResult{}, err
+		return Result{}, err
 	}
-	if quote.Price.Cmp(shared.Zero()) <= 0 || quote.UpdatedAt.IsZero() {
-		return laneResult{}, fmt.Errorf("%w: reference price for %s", ErrInvalidTarget, target.Symbol)
-	}
-	childQuantity := floorToStep(action.Abs(), step)
-	if childQuantity.IsZero() || childQuantity.Cmp(minimum) < 0 ||
-		nonzeroBelowMinNotional(childQuantity, quote.Price, instrument.MinNotional) {
-		return laneResult{progress: progress, complete: true, residual: remaining}, nil
-	}
-	if e.MaxChildNotional.Cmp(shared.Zero()) > 0 {
-		capQuantity := floorToStep(e.MaxChildNotional.Div(quote.Price), step)
-		if capQuantity.IsZero() || capQuantity.Cmp(minimum) < 0 ||
-			nonzeroBelowMinNotional(capQuantity, quote.Price, instrument.MinNotional) {
-			return laneResult{}, fmt.Errorf(
-				"%w: max child notional is below Exchange minimum for %s",
-				ErrInvalidTarget,
-				target.Symbol,
+	for _, current := range orders {
+		switch {
+		case current.OwnerType == string(orderdomain.OwnerExternal),
+			current.OwnerType == string(orderdomain.OwnerOperator),
+			current.OwnerType == string(orderdomain.OwnerTarget) &&
+				current.RunnerID != target.RunnerID:
+			reason := fmt.Sprintf(
+				"%s order %s conflicts with automatic target execution",
+				current.OwnerType, current.OrderID,
 			)
-		}
-		if capQuantity.Cmp(childQuantity) < 0 {
-			childQuantity = capQuantity
-		}
-	}
-
-	latest, err := e.Store.GetTargetExecutionByBinding(
-		ctx,
-		execution.SpaceID,
-		execution.ExecutionBindingID,
-	)
-	if err != nil {
-		return laneResult{}, err
-	}
-	if latest.ExecutionID != execution.ExecutionID ||
-		latest.CommandSequence != execution.CommandSequence {
-		return laneResult{progress: progress}, nil
-	}
-	spec := orderdomain.OrderSpec{
-		ClientOrderSpec: orderdomain.ClientOrderSpec{
-			ExchangeAccountID: execution.ExchangeAccountID,
-			ClientOrderID:     childClientOrderID(),
-			InstrumentID:      target.Symbol, Type: exchange.OrderTypeMarket,
-			Side: sideForDelta(action), PositionSide: exchange.PositionSideUnspecified,
-			Quantity: childQuantity,
-		},
-		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
-		ReducePositionOnly: reduceOnly,
-		Owner: orderdomain.OrderOwner{
-			Type: "TARGET", StrategyExecutionID: execution.ExecutionID,
-		},
-	}
-	if account.MarketType == string(exchange.MarketTypeSwap) {
-		spec.PositionSide = exchange.PositionSideNet
-	}
-	placed, err := e.Orders.Place(ctx, execution.SpaceID, spec)
-	if err != nil {
-		return laneResult{}, err
-	}
-	progress.ActiveOrderID = string(placed.ID)
-	if _, err := e.Orders.Submit(ctx, execution.SpaceID, string(placed.ID)); err != nil {
-		return laneResult{}, err
-	}
-	return laneResult{progress: progress}, nil
-}
-
-func (e *Executor) confirmedQuantity(
-	ctx context.Context,
-	account store.ExchangeAccountRecord,
-	instrument store.InstrumentRecord,
-) (shared.Decimal, error) {
-	if account.MarketType == string(exchange.MarketTypeSpot) {
-		for _, balance := range account.Snapshot.Balances {
-			if balance.Asset == instrument.BaseAsset {
-				return shared.ParseDecimal(balance.Total)
+			if err := e.pauseLogicalAccount(ctx, logicalAccount, target, reason); err != nil {
+				return Result{}, err
 			}
+			return Result{Status: StatusPaused, Action: "pause"}, nil
+		case current.OwnerType == string(orderdomain.OwnerTarget) &&
+			current.OwnerID != target.TargetID:
+			if err := e.stopOrder(ctx, current); err != nil {
+				return Result{}, err
+			}
+			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+				return Result{}, err
+			}
+			return Result{Status: StatusConverging, Action: "cancel"}, nil
 		}
-		return shared.Zero(), nil
 	}
-	position, found, err := e.Store.GetPosition(
-		ctx,
-		account.SpaceID,
-		account.ExchangeAccountID,
-		instrument.Symbol,
-		string(exchange.PositionSideNet),
-	)
-	if err != nil || !found {
-		return shared.Zero(), err
+
+	for _, current := range orders {
+		if current.OwnerType != string(orderdomain.OwnerTarget) ||
+			current.OwnerID != target.TargetID {
+			continue
+		}
+		switch orderdomain.State(current.State) {
+		case orderdomain.Pending:
+			if _, err := e.Orders.Submit(ctx, spaceID, current.OrderID); err != nil {
+				return Result{}, err
+			}
+			_ = e.updateTarget(ctx, &target, StatusConverging)
+			return Result{Status: StatusConverging, Action: "submit"}, nil
+		case orderdomain.Submitting, orderdomain.SubmitUnknown:
+			if _, err := e.Orders.ResolveUnknown(ctx, spaceID, current.OrderID); err != nil {
+				return Result{}, err
+			}
+			_ = e.updateTarget(ctx, &target, StatusConverging)
+			return Result{Status: StatusConverging, Action: "resolve"}, nil
+		default:
+			_ = e.updateTarget(ctx, &target, StatusConverging)
+			return Result{Status: StatusConverging}, nil
+		}
 	}
-	return shared.ParseDecimal(position.SignedQuantity)
+
+	desired, err := desiredTargets(target)
+	if err != nil {
+		return Result{}, err
+	}
+	lanes := laneIDs(desired, members)
+	blocked := make([]store.BlockedTarget, 0)
+	for _, instrumentID := range lanes {
+		action, complete, reason, actionErr := nextLaneAction(
+			instrumentID, desired[instrumentID], members,
+		)
+		if actionErr != nil {
+			return Result{}, actionErr
+		}
+		if reason != "" {
+			blocked = append(blocked, store.BlockedTarget{
+				InstrumentID: instrumentID,
+				Quantity:     desired[instrumentID].String(),
+				Reason:       reason,
+			})
+			continue
+		}
+		if complete {
+			continue
+		}
+		placed, placeReason, placeErr := e.placeAction(
+			ctx, spaceID, target, action, members,
+		)
+		if placeErr != nil {
+			return Result{}, placeErr
+		}
+		if placeReason != "" {
+			blocked = append(blocked, store.BlockedTarget{
+				InstrumentID: instrumentID,
+				Quantity:     desired[instrumentID].String(),
+				Reason:       placeReason,
+			})
+			continue
+		}
+		if placed {
+			target.BlockedTargets = blocked
+			target.LastError = ""
+			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+				return Result{}, err
+			}
+			return Result{Status: StatusConverging, Action: "place"}, nil
+		}
+	}
+	target.BlockedTargets = blocked
+	target.LastError = ""
+	if len(blocked) > 0 {
+		if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusBlocked}, nil
+	}
+	if err := e.updateTarget(ctx, &target, StatusConverged); err != nil {
+		return Result{}, err
+	}
+	return Result{Status: StatusConverged}, nil
 }
 
-func (e *Executor) stopConflictingOrder(
+func (e *Executor) loadMembers(
 	ctx context.Context,
 	spaceID string,
+	logicalAccountID string,
+) ([]memberState, error) {
+	records, err := e.Store.ListLogicalAccountMembers(
+		ctx, spaceID, logicalAccountID, false,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return nil, fmt.Errorf("%w: logical account has no enabled members", ErrInvalidTarget)
+	}
+	members := make([]memberState, 0, len(records))
+	for _, record := range records {
+		account, err := e.Store.GetExchangeAccountByID(ctx, record.ExchangeAccountID)
+		if err != nil {
+			return nil, err
+		}
+		instrumentRecords, err := e.Store.ListInstruments(
+			ctx, account.Exchange, account.MarketType,
+		)
+		if err != nil {
+			return nil, err
+		}
+		instruments := make(map[string]store.InstrumentRecord)
+		symbols := make(map[string]string)
+		for _, instrument := range instrumentRecords {
+			if instrument.Status != "TRADING" && instrument.Status != "live" {
+				continue
+			}
+			if instrument.SettlementAsset != "" &&
+				instrument.SettlementAsset != account.SettlementAsset {
+				continue
+			}
+			instruments[instrument.InstrumentID] = instrument
+			symbols[instrument.Symbol] = instrument.InstrumentID
+		}
+		positions := make(map[string]shared.Decimal)
+		if account.MarketType == string(exchange.MarketTypeSpot) {
+			for instrumentID, instrument := range instruments {
+				for _, balance := range account.Snapshot.Balances {
+					if balance.Asset == instrument.BaseAsset {
+						quantity, parseErr := shared.ParseDecimal(balance.Total)
+						if parseErr != nil {
+							return nil, parseErr
+						}
+						positions[instrumentID] = quantity
+					}
+				}
+			}
+		} else {
+			positionRecords, listErr := e.Store.ListPositions(
+				ctx, spaceID, account.ExchangeAccountID, "",
+			)
+			if listErr != nil {
+				return nil, listErr
+			}
+			for _, position := range positionRecords {
+				instrumentID := symbols[position.Symbol]
+				if instrumentID == "" {
+					continue
+				}
+				quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				positions[instrumentID] = positions[instrumentID].Add(quantity)
+			}
+		}
+		members = append(members, memberState{
+			member: record, account: account,
+			instruments: instruments, positions: positions,
+		})
+	}
+	return members, nil
+}
+
+func (e *Executor) activeOrders(
+	ctx context.Context,
+	spaceID string,
+	members []memberState,
+) ([]store.OrderRecord, error) {
+	var active []store.OrderRecord
+	for _, member := range members {
+		records, err := e.Store.ListOrdersForAccount(
+			ctx, spaceID, member.account.ExchangeAccountID, 1,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			if !orderdomain.State(record.State).Terminal() {
+				active = append(active, record)
+			}
+		}
+	}
+	sort.Slice(active, func(i, j int) bool {
+		return active[i].OrderID < active[j].OrderID
+	})
+	return active, nil
+}
+
+func desiredTargets(
+	target store.LogicalAccountTargetRecord,
+) (map[string]shared.Decimal, error) {
+	desired := make(map[string]shared.Decimal, len(target.Targets))
+	for _, current := range target.Targets {
+		quantity, err := shared.ParseDecimal(current.Quantity)
+		if err != nil {
+			return nil, err
+		}
+		desired[current.InstrumentID] = quantity
+	}
+	return desired, nil
+}
+
+func laneIDs(
+	desired map[string]shared.Decimal,
+	members []memberState,
+) []string {
+	set := make(map[string]struct{}, len(desired))
+	for instrumentID := range desired {
+		set[instrumentID] = struct{}{}
+	}
+	for _, member := range members {
+		for instrumentID, quantity := range member.positions {
+			if !quantity.IsZero() {
+				set[instrumentID] = struct{}{}
+			}
+		}
+	}
+	values := make([]string, 0, len(set))
+	for instrumentID := range set {
+		values = append(values, instrumentID)
+	}
+	sort.Strings(values)
+	return values
+}
+
+func nextLaneAction(
+	instrumentID string,
+	desired shared.Decimal,
+	members []memberState,
+) (laneAction, bool, string, error) {
+	confirmed := shared.Zero()
+	for _, member := range members {
+		confirmed = confirmed.Add(member.positions[instrumentID])
+	}
+	for _, member := range positionsByAbsoluteSize(members, instrumentID) {
+		position := member.positions[instrumentID]
+		if position.IsZero() {
+			continue
+		}
+		if desired.IsZero() || !sameSign(position, desired) {
+			instrument, ok := member.instruments[instrumentID]
+			if !ok {
+				return laneAction{}, false,
+					"position has no tradable instrument mapping", nil
+			}
+			return laneAction{
+				member: member, instrument: instrument,
+				delta: position.Neg(), reducing: true,
+			}, false, "", nil
+		}
+	}
+	if confirmed.Cmp(desired) == 0 {
+		return laneAction{}, true, "", nil
+	}
+	delta := desired.Sub(confirmed)
+	if sameSign(confirmed, desired) && confirmed.Abs().Cmp(desired.Abs()) > 0 {
+		excess := confirmed.Abs().Sub(desired.Abs())
+		for _, member := range positionsByAbsoluteSize(members, instrumentID) {
+			position := member.positions[instrumentID]
+			if !sameSign(position, desired) {
+				continue
+			}
+			quantity := excess
+			if position.Abs().Cmp(quantity) < 0 {
+				quantity = position.Abs()
+			}
+			if position.Cmp(shared.Zero()) > 0 {
+				quantity = quantity.Neg()
+			}
+			instrument, ok := member.instruments[instrumentID]
+			if !ok {
+				return laneAction{}, false,
+					"position has no tradable instrument mapping", nil
+			}
+			return laneAction{
+				member: member, instrument: instrument,
+				delta: quantity, reducing: true,
+			}, false, "", nil
+		}
+	}
+	for _, member := range members {
+		if instrument, ok := member.instruments[instrumentID]; ok {
+			return laneAction{
+				member: member, instrument: instrument,
+				delta: delta,
+			}, false, "", nil
+		}
+	}
+	return laneAction{}, false, "no enabled member supports instrument", nil
+}
+
+func positionsByAbsoluteSize(
+	members []memberState,
+	instrumentID string,
+) []memberState {
+	values := append([]memberState(nil), members...)
+	sort.SliceStable(values, func(i, j int) bool {
+		left := values[i].positions[instrumentID].Abs()
+		right := values[j].positions[instrumentID].Abs()
+		cmp := left.Cmp(right)
+		if cmp != 0 {
+			return cmp > 0
+		}
+		if values[i].member.Priority != values[j].member.Priority {
+			return values[i].member.Priority < values[j].member.Priority
+		}
+		return values[i].account.ExchangeAccountID <
+			values[j].account.ExchangeAccountID
+	})
+	return values
+}
+
+func (e *Executor) placeAction(
+	ctx context.Context,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
+	action laneAction,
+	members []memberState,
+) (bool, string, error) {
+	candidates := []laneAction{action}
+	if !action.reducing {
+		candidates = candidates[:0]
+		for _, member := range members {
+			instrument, ok := member.instruments[action.instrument.InstrumentID]
+			if !ok {
+				continue
+			}
+			candidates = append(candidates, laneAction{
+				member: member, instrument: instrument, delta: action.delta,
+			})
+		}
+	}
+	var capacityErrors []string
+	for _, candidate := range candidates {
+		quantity, reason, err := e.childQuantity(ctx, candidate)
+		if err != nil {
+			return false, "", err
+		}
+		if reason != "" {
+			capacityErrors = append(capacityErrors, reason)
+			continue
+		}
+		quote, err := e.Prices.LatestPrice(
+			ctx,
+			candidate.member.account.ExchangeAccountID,
+			candidate.instrument.Symbol,
+		)
+		if err != nil {
+			return false, "", err
+		}
+		if e.MaxChildNotional.Cmp(shared.Zero()) > 0 {
+			maxQuantity := floorToStep(
+				e.MaxChildNotional.Div(quote.Price),
+				mustBaseStep(candidate.instrument),
+			)
+			if maxQuantity.Cmp(shared.Zero()) > 0 && quantity.Cmp(maxQuantity) > 0 {
+				quantity = maxQuantity
+			}
+		}
+		runnerID := target.RunnerID
+		spec := orderdomain.OrderSpec{
+			ClientOrderSpec: orderdomain.ClientOrderSpec{
+				ExchangeAccountID: candidate.member.account.ExchangeAccountID,
+				ClientOrderID:     childClientOrderID(),
+				InstrumentID:      candidate.instrument.Symbol,
+				Type:              exchange.OrderTypeMarket,
+				Side:              sideForDelta(candidate.delta),
+				Quantity:          quantity,
+			},
+			ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
+			ReducePositionOnly: candidate.reducing,
+			Owner: orderdomain.OrderOwner{
+				Type: orderdomain.OwnerTarget, OwnerID: target.TargetID,
+				LogicalAccountID: target.LogicalAccountID, RunnerID: &runnerID,
+			},
+		}
+		if candidate.member.account.MarketType == string(exchange.MarketTypeSwap) {
+			spec.PositionSide = exchange.PositionSideNet
+		}
+		placed, err := e.Orders.Place(ctx, spaceID, spec)
+		if err != nil {
+			if capacityError(err) && !candidate.reducing {
+				capacityErrors = append(
+					capacityErrors,
+					candidate.member.account.ExchangeAccountID+": "+err.Error(),
+				)
+				continue
+			}
+			return false, "", err
+		}
+		if _, err := e.Orders.Submit(ctx, spaceID, string(placed.ID)); err != nil {
+			return false, "", err
+		}
+		return true, "", nil
+	}
+	if len(capacityErrors) == 0 {
+		return false, "quantity is below Exchange minimum", nil
+	}
+	return false, "insufficient member capacity: " +
+		strings.Join(capacityErrors, "; "), nil
+}
+
+func (e *Executor) childQuantity(
+	_ context.Context,
+	action laneAction,
+) (shared.Decimal, string, error) {
+	step, minimum, err := baseQuantityRules(action.instrument)
+	if err != nil {
+		return shared.Decimal{}, "", err
+	}
+	quantity := floorToStep(action.delta.Abs(), step)
+	if quantity.IsZero() || quantity.Cmp(minimum) < 0 {
+		return shared.Zero(), "quantity is below Exchange minimum", nil
+	}
+	return quantity, "", nil
+}
+
+func (e *Executor) stopOrder(
+	ctx context.Context,
 	current store.OrderRecord,
 ) error {
 	switch orderdomain.State(current.State) {
+	case orderdomain.Pending:
+		_, err := e.Orders.DiscardPending(ctx, current.SpaceID, current.OrderID)
+		return err
 	case orderdomain.Submitting, orderdomain.SubmitUnknown:
-		_, err := e.Orders.ResolveUnknown(ctx, spaceID, current.OrderID)
+		_, err := e.Orders.ResolveUnknown(ctx, current.SpaceID, current.OrderID)
 		return err
 	case orderdomain.Canceling, orderdomain.CancelUnknown:
 		return nil
-	case orderdomain.Pending:
-		_, err := e.Orders.DiscardPending(ctx, spaceID, current.OrderID)
-		return err
 	default:
-		_, err := e.Orders.Cancel(ctx, spaceID, current.OrderID)
+		_, err := e.Orders.Cancel(ctx, current.SpaceID, current.OrderID)
 		return err
 	}
 }
 
-func childAction(
-	market exchange.MarketType,
-	confirmed shared.Decimal,
-	desired shared.Decimal,
-) (shared.Decimal, bool) {
-	remaining := desired.Sub(confirmed)
-	if market != exchange.MarketTypeSwap || confirmed.IsZero() {
-		return remaining, false
+func (e *Executor) pauseLogicalAccount(
+	ctx context.Context,
+	logicalAccount store.LogicalAccountRecord,
+	target store.LogicalAccountTargetRecord,
+	reason string,
+) error {
+	if err := e.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation(
+			logicalAccount.SpaceID,
+			logicalAccount.LogicalAccountID,
+			"PAUSED",
+			reason,
+		)
+	}); err != nil {
+		return err
 	}
-	if sameSign(confirmed, remaining) {
-		return remaining, false
+	target.LastError = reason
+	return e.updateTarget(ctx, &target, StatusPending)
+}
+
+func (e *Executor) updateTarget(
+	ctx context.Context,
+	target *store.LogicalAccountTargetRecord,
+	status string,
+) error {
+	target.Status = status
+	updated, err := e.Store.UpdateLogicalAccountTargetState(ctx, *target)
+	if err != nil {
+		return err
 	}
-	closeQuantity := remaining.Abs()
-	if confirmed.Abs().Cmp(closeQuantity) < 0 {
-		closeQuantity = confirmed.Abs()
+	if !updated {
+		return store.ErrConflict
 	}
-	if confirmed.Cmp(shared.Zero()) > 0 {
-		return closeQuantity.Neg(), true
-	}
-	return closeQuantity, true
+	return nil
+}
+
+func capacityError(err error) bool {
+	return errors.Is(err, orderapp.ErrInsufficientFunds) ||
+		errors.Is(err, orderapp.ErrNotionalLimit) ||
+		errors.Is(err, orderapp.ErrLeverageLimit)
 }
 
 func baseQuantityRules(
@@ -474,16 +628,19 @@ func baseQuantityRules(
 ) (shared.Decimal, shared.Decimal, error) {
 	step, err := shared.ParseDecimal(instrument.ExchangeQuantityStep)
 	if err != nil || step.Cmp(shared.Zero()) <= 0 {
-		return shared.Decimal{}, shared.Decimal{}, fmt.Errorf("%w: quantity step", ErrInvalidTarget)
+		return shared.Decimal{}, shared.Decimal{},
+			fmt.Errorf("%w: quantity step", ErrInvalidTarget)
 	}
 	minimum, err := shared.ParseDecimal(instrument.MinExchangeQuantity)
 	if err != nil || minimum.IsNegative() {
-		return shared.Decimal{}, shared.Decimal{}, fmt.Errorf("%w: minimum quantity", ErrInvalidTarget)
+		return shared.Decimal{}, shared.Decimal{},
+			fmt.Errorf("%w: minimum quantity", ErrInvalidTarget)
 	}
 	if instrument.MarketType == string(exchange.MarketTypeSwap) {
 		contractValue, parseErr := shared.ParseDecimal(instrument.ContractValue)
 		if parseErr != nil || contractValue.Cmp(shared.Zero()) <= 0 {
-			return shared.Decimal{}, shared.Decimal{}, fmt.Errorf("%w: contract value", ErrInvalidTarget)
+			return shared.Decimal{}, shared.Decimal{},
+				fmt.Errorf("%w: contract value", ErrInvalidTarget)
 		}
 		step = step.Mul(contractValue)
 		minimum = minimum.Mul(contractValue)
@@ -491,12 +648,24 @@ func baseQuantityRules(
 	return step, minimum, nil
 }
 
+func mustBaseStep(instrument store.InstrumentRecord) shared.Decimal {
+	step, _, err := baseQuantityRules(instrument)
+	if err != nil {
+		return shared.Zero()
+	}
+	return step
+}
+
 func floorToStep(value, step shared.Decimal) shared.Decimal {
 	if value.Cmp(shared.Zero()) <= 0 || step.Cmp(shared.Zero()) <= 0 {
 		return shared.Zero()
 	}
 	units := value.Div(step)
-	integer := new(big.Int).Quo(unitsRat(units).Num(), unitsRat(units).Denom())
+	ratio := new(big.Rat)
+	if _, ok := ratio.SetString(units.String()); !ok {
+		return shared.Zero()
+	}
+	integer := new(big.Int).Quo(ratio.Num(), ratio.Denom())
 	raw, err := shared.ParseDecimal(integer.String())
 	if err != nil {
 		return shared.Zero()
@@ -504,47 +673,9 @@ func floorToStep(value, step shared.Decimal) shared.Decimal {
 	return raw.Mul(step)
 }
 
-func unitsRat(value shared.Decimal) *big.Rat {
-	rat := new(big.Rat)
-	rat.SetString(value.String())
-	return rat
-}
-
-func nonzeroBelowMinNotional(
-	quantity shared.Decimal,
-	price shared.Decimal,
-	rawMinimum string,
-) bool {
-	minimum, err := shared.ParseDecimal(rawMinimum)
-	return err == nil && minimum.Cmp(shared.Zero()) > 0 &&
-		quantity.Mul(price).Cmp(minimum) < 0
-}
-
-func orderRemaining(record store.OrderRecord) (shared.Decimal, error) {
-	quantity, err := shared.ParseDecimal(record.Quantity)
-	if err != nil {
-		return shared.Decimal{}, fmt.Errorf("trade target: corrupted order quantity")
-	}
-	filled, err := shared.ParseDecimal(record.FilledQuantity)
-	if err != nil {
-		return shared.Decimal{}, fmt.Errorf("trade target: corrupted filled quantity")
-	}
-	return quantity.Sub(filled), nil
-}
-
-func activeOrder(raw string) bool {
-	return !orderdomain.State(raw).Terminal()
-}
-
-func signedOrderQuantity(side string, quantity shared.Decimal) shared.Decimal {
-	if exchange.Side(side) == exchange.SideSell {
-		return quantity.Neg()
-	}
-	return quantity
-}
-
 func sameSign(left, right shared.Decimal) bool {
-	return !left.IsZero() && !right.IsZero() && left.IsNegative() == right.IsNegative()
+	return !left.IsZero() && !right.IsZero() &&
+		left.IsNegative() == right.IsNegative()
 }
 
 func sideForDelta(delta shared.Decimal) exchange.Side {
@@ -557,26 +688,3 @@ func sideForDelta(delta shared.Decimal) exchange.Side {
 func childClientOrderID() string {
 	return "mt" + xid.New().String()
 }
-
-func encodeProgress(progress Progress) string {
-	data, err := json.Marshal(progress)
-	if err != nil {
-		return `{"symbols":{}}`
-	}
-	return string(data)
-}
-
-func recordTargetTransition(previous string, next string, updated bool) {
-	if updated && previous != next {
-		telemetry.TargetExecutions.WithLabelValues(strings.ToLower(next)).Inc()
-	}
-}
-
-func (e *Executor) now() time.Time {
-	if e.Now != nil {
-		return e.Now()
-	}
-	return time.Now().UTC()
-}
-
-var _ OrderService = (*orderapp.Service)(nil)

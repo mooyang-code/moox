@@ -53,7 +53,8 @@ func TestAccountSyncFailureRecoveryImportsExternalOrderAndFill(t *testing.T) {
 
 	order, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, "external-client")
 	require.NoError(t, err)
-	require.Equal(t, "EXTERNAL", order.Source)
+	require.Equal(t, "EXTERNAL", order.OwnerType)
+	require.NotEmpty(t, order.OwnerID)
 	require.Equal(t, "PARTIALLY_FILLED", order.State)
 	require.Equal(t, "0.01", order.FilledQuantity)
 	fills, total, err := f.store.ListFills(

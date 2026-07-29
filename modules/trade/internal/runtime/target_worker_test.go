@@ -11,36 +11,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type targetExecutionStoreStub struct {
+type logicalTargetStoreStub struct {
 	mu      sync.Mutex
-	records []store.TargetExecutionRecord
-	updates []store.TargetExecutionRecord
+	records []store.LogicalAccountTargetRecord
 }
 
-func (s *targetExecutionStoreStub) ListTargetExecutions(
+func (s *logicalTargetStoreStub) ListLogicalAccountTargets(
 	context.Context,
 	...string,
-) ([]store.TargetExecutionRecord, error) {
+) ([]store.LogicalAccountTargetRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]store.TargetExecutionRecord(nil), s.records...), nil
+	return append([]store.LogicalAccountTargetRecord(nil), s.records...), nil
 }
 
-func (s *targetExecutionStoreStub) UpdateTargetExecutionState(
-	_ context.Context,
-	record store.TargetExecutionRecord,
-) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.updates = append(s.updates, record)
-	return true, nil
-}
-
-type targetConvergerStub struct {
+type logicalTargetConvergerStub struct {
 	mu     sync.Mutex
 	calls  []string
 	wake   chan struct{}
 	result targetapp.Result
+}
+
+func (s *logicalTargetConvergerStub) Converge(
+	_ context.Context,
+	spaceID string,
+	logicalAccountID string,
+) (targetapp.Result, error) {
+	s.mu.Lock()
+	s.calls = append(s.calls, spaceID+"/"+logicalAccountID)
+	s.mu.Unlock()
+	if s.wake != nil {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
+	}
+	return s.result, nil
 }
 
 type targetMetricsStub struct {
@@ -57,55 +63,37 @@ func (s *targetMetricsStub) ObserveRun(
 	return nil
 }
 
-func (s *targetConvergerStub) Converge(
-	_ context.Context,
-	spaceID string,
-	bindingID string,
-) (targetapp.Result, error) {
-	s.mu.Lock()
-	s.calls = append(s.calls, spaceID+"/"+bindingID)
-	s.mu.Unlock()
-	if s.wake != nil {
-		select {
-		case s.wake <- struct{}{}:
-		default:
-		}
-	}
-	result := s.result
-	if result.Status == "" {
-		result.Status = targetapp.StatusRunning
-	}
-	return result, nil
-}
-
-func TestTargetWorkerRunsActiveExecutionsInStableOrder(t *testing.T) {
-	executions := &targetExecutionStoreStub{records: []store.TargetExecutionRecord{
-		targetExecutionRecord("space-1", "binding-1", "account-1", "BTC-USDT"),
-		targetExecutionRecord("space-1", "binding-2", "account-1", "ETH-USDT"),
+func TestTargetWorkerRunsLogicalAccountsInStableOrder(t *testing.T) {
+	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+		{SpaceID: "space-1", LogicalAccountID: "logical-1", Status: targetapp.StatusPending},
+		{SpaceID: "space-1", LogicalAccountID: "logical-2", Status: targetapp.StatusBlocked},
 	}}
-	converger := &targetConvergerStub{
-		result: targetapp.Result{Status: targetapp.StatusCompleted},
+	converger := &logicalTargetConvergerStub{
+		result: targetapp.Result{Status: targetapp.StatusConverged},
 	}
 	metrics := &targetMetricsStub{}
-	worker := &TargetWorker{Store: executions, Executor: converger, Metrics: metrics}
+	worker := &TargetWorker{Store: targets, Executor: converger, Metrics: metrics}
 
 	require.NoError(t, worker.runOnce(context.Background()))
-	require.Equal(t, []string{"space-1/binding-1", "space-1/binding-2"}, converger.calls)
-	require.Empty(t, executions.updates)
 	require.Equal(t, []string{
-		"rebalance/success/trade-rebalance",
-		"rebalance/success/trade-rebalance",
+		"space-1/logical-1",
+		"space-1/logical-2",
+	}, converger.calls)
+	require.Equal(t, []string{
+		"target/success/trade-target",
+		"target/success/trade-target",
 	}, metrics.runs)
 }
 
 func TestTargetWorkerGateSerializesTargetAcceptance(t *testing.T) {
-	executions := &targetExecutionStoreStub{records: []store.TargetExecutionRecord{
-		targetExecutionRecord("space-1", "binding-1", "account-1", "BTC-USDT"),
-	}}
-	converger := &targetConvergerStub{wake: make(chan struct{}, 1)}
+	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{{
+		SpaceID: "space-1", LogicalAccountID: "logical-1",
+		Status: targetapp.StatusPending,
+	}}}
+	converger := &logicalTargetConvergerStub{wake: make(chan struct{}, 1)}
 	gate := &sync.Mutex{}
 	gate.Lock()
-	worker := &TargetWorker{Store: executions, Executor: converger, Gate: gate}
+	worker := &TargetWorker{Store: targets, Executor: converger, Gate: gate}
 	done := make(chan error, 1)
 	go func() { done <- worker.runOnce(context.Background()) }()
 
@@ -116,57 +104,17 @@ func TestTargetWorkerGateSerializesTargetAcceptance(t *testing.T) {
 	}
 	gate.Unlock()
 	require.NoError(t, <-done)
-	require.Equal(t, []string{"space-1/binding-1"}, converger.calls)
-}
-
-func TestTargetWorkerPausesCompetingBindingsOnSameLane(t *testing.T) {
-	executions := &targetExecutionStoreStub{records: []store.TargetExecutionRecord{
-		targetExecutionRecord("space-1", "binding-1", "account-1", "BTC-USDT"),
-		targetExecutionRecord("space-1", "binding-2", "account-1", "BTC-USDT"),
-	}}
-	converger := &targetConvergerStub{}
-	worker := &TargetWorker{Store: executions, Executor: converger}
-
-	require.NoError(t, worker.runOnce(context.Background()))
-	require.Empty(t, converger.calls)
-	require.Len(t, executions.updates, 2)
-	for _, updated := range executions.updates {
-		require.Equal(t, targetapp.StatusPaused, updated.Status)
-		require.Contains(t, updated.LastError, "multiple active execution bindings")
-	}
-}
-
-func TestTargetWorkerLetsExpiredConflictsTerminate(t *testing.T) {
-	now := time.UnixMilli(10_000)
-	first := targetExecutionRecord("space-1", "binding-1", "account-1", "BTC-USDT")
-	second := targetExecutionRecord("space-1", "binding-2", "account-1", "BTC-USDT")
-	first.NotAfter = now.Add(-time.Second).UnixMilli()
-	second.NotAfter = now.Add(-time.Second).UnixMilli()
-	executions := &targetExecutionStoreStub{
-		records: []store.TargetExecutionRecord{first, second},
-	}
-	converger := &targetConvergerStub{}
-	worker := &TargetWorker{
-		Store: executions, Executor: converger,
-		Now: func() time.Time { return now },
-	}
-
-	require.NoError(t, worker.runOnce(context.Background()))
-	require.Equal(
-		t,
-		[]string{"space-1/binding-1", "space-1/binding-2"},
-		converger.calls,
-	)
-	require.Empty(t, executions.updates)
+	require.Equal(t, []string{"space-1/logical-1"}, converger.calls)
 }
 
 func TestTargetWorkerWakeIsCoalescedAndCancellationStopsRun(t *testing.T) {
-	executions := &targetExecutionStoreStub{records: []store.TargetExecutionRecord{
-		targetExecutionRecord("space-1", "binding-1", "account-1", "BTC-USDT"),
-	}}
-	converger := &targetConvergerStub{wake: make(chan struct{}, 4)}
+	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{{
+		SpaceID: "space-1", LogicalAccountID: "logical-1",
+		Status: targetapp.StatusPending,
+	}}}
+	converger := &logicalTargetConvergerStub{wake: make(chan struct{}, 4)}
 	worker := &TargetWorker{
-		Store: executions, Executor: converger, Interval: time.Hour,
+		Store: targets, Executor: converger, Interval: time.Hour,
 	}
 	worker.Wake()
 	worker.Wake()
@@ -181,21 +129,4 @@ func TestTargetWorkerWakeIsCoalescedAndCancellationStopsRun(t *testing.T) {
 	}
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
-}
-
-func targetExecutionRecord(
-	spaceID string,
-	bindingID string,
-	accountID string,
-	symbol string,
-) store.TargetExecutionRecord {
-	return store.TargetExecutionRecord{
-		SpaceID: spaceID, ExecutionID: "execution-" + bindingID,
-		ExecutionBindingID: bindingID, ExchangeAccountID: accountID,
-		CommandSequence: 1, Status: targetapp.StatusRunning,
-		NotAfter: time.Now().Add(time.Hour).UnixMilli(),
-		Targets: []store.TargetPosition{{
-			InstrumentID: symbol, Symbol: symbol, TargetQuantity: "1",
-		}},
-	}
 }

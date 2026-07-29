@@ -2,95 +2,25 @@ package target
 
 import (
 	"context"
-	"errors"
-	"regexp"
-	"sync"
+	"path/filepath"
 	"testing"
 	"time"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
-type targetStoreStub struct {
-	targetMu    sync.Mutex
-	execution   store.TargetExecutionRecord
-	account     store.ExchangeAccountRecord
-	instrument  store.InstrumentRecord
-	position    store.PositionRecord
-	hasPosition bool
-	orders      []store.OrderRecord
-	updates     []store.TargetExecutionRecord
-}
-
-func (s *targetStoreStub) LockTargetBinding(string, string) func() {
-	s.targetMu.Lock()
-	return s.targetMu.Unlock
-}
-
-func (s *targetStoreStub) GetTargetExecutionByBinding(
-	context.Context,
-	string,
-	string,
-) (store.TargetExecutionRecord, error) {
-	return s.execution, nil
-}
-
-func (s *targetStoreStub) GetExchangeAccountByID(
-	context.Context,
-	string,
-) (store.ExchangeAccountRecord, error) {
-	return s.account, nil
-}
-
-func (s *targetStoreStub) GetInstrument(
-	context.Context,
-	string,
-	string,
-	string,
-) (store.InstrumentRecord, error) {
-	return s.instrument, nil
-}
-
-func (s *targetStoreStub) GetPosition(
-	context.Context,
-	string,
-	string,
-	string,
-	string,
-) (store.PositionRecord, bool, error) {
-	return s.position, s.hasPosition, nil
-}
-
-func (s *targetStoreStub) ListOrdersForLane(
-	context.Context,
-	string,
-	string,
-	string,
-) ([]store.OrderRecord, error) {
-	return append([]store.OrderRecord(nil), s.orders...), nil
-}
-
-func (s *targetStoreStub) UpdateTargetExecutionState(
-	_ context.Context,
-	record store.TargetExecutionRecord,
-) (bool, error) {
-	s.updates = append(s.updates, record)
-	s.execution = record
-	return true, nil
-}
-
 type targetOrderServiceStub struct {
-	placed    []orderdomain.OrderSpec
-	submitted []string
-	canceled  []string
-	discarded []string
-	resolved  []string
-	placeHook func()
+	placeErrors map[string]error
+	specs       []orderdomain.OrderSpec
+	submitted   []string
+	canceled    []string
+	discarded   []string
+	resolved    []string
 }
 
 func (s *targetOrderServiceStub) Place(
@@ -98,11 +28,14 @@ func (s *targetOrderServiceStub) Place(
 	_ string,
 	spec orderdomain.OrderSpec,
 ) (orderdomain.Order, error) {
-	if s.placeHook != nil {
-		s.placeHook()
+	s.specs = append(s.specs, spec)
+	if err := s.placeErrors[spec.ExchangeAccountID]; err != nil {
+		return orderdomain.Order{}, err
 	}
-	s.placed = append(s.placed, spec)
-	return orderdomain.Order{ID: shared.OrderID("child-order")}, nil
+	return orderdomain.Order{
+		ID:   shared.OrderID("child-" + spec.ExchangeAccountID),
+		Spec: spec, State: orderdomain.Pending,
+	}, nil
 }
 
 func (s *targetOrderServiceStub) Submit(
@@ -141,438 +74,357 @@ func (s *targetOrderServiceStub) ResolveUnknown(
 	return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
 }
 
-type priceSourceStub struct {
-	quote Quote
-	err   error
+type targetPriceStub struct {
+	price shared.Decimal
 }
 
-func (s priceSourceStub) LatestPrice(context.Context, string, string) (Quote, error) {
-	return s.quote, s.err
+func (s targetPriceStub) LatestPrice(
+	context.Context,
+	string,
+	string,
+) (Quote, error) {
+	return Quote{Price: s.price, UpdatedAt: time.UnixMilli(2_000)}, nil
 }
 
-func TestConvergeIncludesSameDirectionOpenRemaining(t *testing.T) {
-	executor, state, orders := newSpotExecutor("3", "1")
-	state.orders = []store.OrderRecord{activeOrderRecord(
-		"open-buy",
-		exchange.SideBuy,
-		"1",
-		"0.25",
-	)}
+func TestTargetExecutorAggregatesAcrossExchanges(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "1")
+	fixture.position(t, "account-b", "BTC-USDT-SWAP", "2")
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "3",
+	}})
 
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
-
-	require.NoError(t, err)
-	require.Equal(t, StatusRunning, result.Status)
-	require.Empty(t, orders.placed)
-	require.Equal(t, "1.75", result.Progress.Symbols["BTC-USDT"].Effective)
-	require.Equal(t, "1.25", result.Progress.Symbols["BTC-USDT"].Residual)
-}
-
-func TestConvergeRecoversCompatiblePendingAndUnknownOrders(t *testing.T) {
-	tests := []struct {
-		name        string
-		state       orderdomain.State
-		wantSubmit  bool
-		wantResolve bool
-	}{
-		{"pending", orderdomain.Pending, true, false},
-		{"submitting", orderdomain.Submitting, false, true},
-		{"submit unknown", orderdomain.SubmitUnknown, false, true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			executor, state, orders := newSpotExecutor("2", "1")
-			active := activeOrderRecord("recover-me", exchange.SideBuy, "1", "0")
-			active.State = string(test.state)
-			state.orders = []store.OrderRecord{active}
-
-			result, err := executor.Converge(
-				context.Background(),
-				"space-1",
-				"binding-1",
-			)
-
-			require.NoError(t, err)
-			require.Equal(t, StatusRunning, result.Status)
-			if test.wantSubmit {
-				require.Equal(t, []string{"recover-me"}, orders.submitted)
-			} else {
-				require.Empty(t, orders.submitted)
-			}
-			if test.wantResolve {
-				require.Equal(t, []string{"recover-me"}, orders.resolved)
-			} else {
-				require.Empty(t, orders.resolved)
-			}
-			require.Empty(t, orders.placed)
-		})
-	}
-}
-
-func TestConvergeDiscardsConflictingPendingOrder(t *testing.T) {
-	executor, state, orders := newSpotExecutor("2", "1")
-	active := activeOrderRecord("discard-me", exchange.SideSell, "1", "0")
-	active.State = string(orderdomain.Pending)
-	state.orders = []store.OrderRecord{active}
-
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
-
-	require.NoError(t, err)
-	require.Equal(t, StatusRunning, result.Status)
-	require.Equal(t, []string{"discard-me"}, orders.discarded)
-	require.Empty(t, orders.placed)
-}
-
-func TestConvergeCancelsOppositeOrderBeforePlacing(t *testing.T) {
-	executor, state, orders := newSpotExecutor("3", "1")
-	state.orders = []store.OrderRecord{activeOrderRecord(
-		"open-sell",
-		exchange.SideSell,
-		"0.5",
-		"0",
-	)}
-
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
-
-	require.NoError(t, err)
-	require.Equal(t, StatusRunning, result.Status)
-	require.Equal(t, []string{"open-sell"}, orders.canceled)
-	require.Empty(t, orders.placed)
-}
-
-func TestConvergeCancelsNonReduceOrderBeforeSwapReversal(t *testing.T) {
-	executor, state, orders := newSwapExecutor("-2", "1")
-	active := activeOrderRecord("unsafe-reversal", exchange.SideSell, "1", "0")
-	active.ReduceOnly = false
-	state.orders = []store.OrderRecord{active}
-
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
-
-	require.NoError(t, err)
-	require.Equal(t, StatusRunning, result.Status)
-	require.Equal(t, []string{"unsafe-reversal"}, orders.canceled)
-	require.Empty(t, orders.placed)
-}
-
-func TestConvergeExpiredTargetCreatesNoChild(t *testing.T) {
-	executor, state, orders := newSpotExecutor("2", "1")
-	state.execution.NotAfter = executor.now().Add(-time.Second).UnixMilli()
-
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
-
-	require.NoError(t, err)
-	require.Equal(t, StatusExpired, result.Status)
-	require.Empty(t, orders.placed)
-	require.Equal(t, "1", state.execution.ResidualQuantity)
-}
-
-func TestConvergeExpiredTargetWinsOverPausedAccountAndDiscardsPending(t *testing.T) {
-	executor, state, orders := newSpotExecutor("2", "1")
-	state.account.Ready = false
-	state.execution.NotAfter = executor.now().Add(-time.Second).UnixMilli()
-	active := activeOrderRecord("never-submitted", exchange.SideBuy, "1", "0")
-	active.State = string(orderdomain.Pending)
-	active.StrategyExecutionID = state.execution.ExecutionID
-	state.orders = []store.OrderRecord{active}
-
-	first, err := executor.Converge(context.Background(), "space-1", "binding-1")
-	require.NoError(t, err)
-	require.Equal(t, StatusRunning, first.Status)
-	require.Equal(t, []string{"never-submitted"}, orders.discarded)
-	require.Empty(t, orders.submitted)
-
-	state.orders = nil
-	second, err := executor.Converge(context.Background(), "space-1", "binding-1")
-	require.NoError(t, err)
-	require.Equal(t, StatusExpired, second.Status)
-	require.Equal(t, StatusExpired, state.execution.Status)
-}
-
-func TestExpiredExecutionDoesNotCancelAnotherBindingsChild(t *testing.T) {
-	executor, state, orders := newSpotExecutor("0", "0")
-	state.execution.NotAfter = executor.now().Add(-time.Second).UnixMilli()
-	active := activeOrderRecord("other-child", exchange.SideBuy, "1", "0")
-	active.StrategyExecutionID = "other-execution"
-	state.orders = []store.OrderRecord{active}
-
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
-
-	require.NoError(t, err)
-	require.Equal(t, StatusExpired, result.Status)
-	require.Empty(t, orders.canceled)
-	require.Empty(t, orders.discarded)
-	require.Empty(t, orders.placed)
-}
-
-func TestExpiredExecutionWaitsForItsSubmittedChild(t *testing.T) {
-	executor, state, orders := newSpotExecutor("0", "0")
-	state.execution.NotAfter = executor.now().Add(-time.Second).UnixMilli()
-	active := activeOrderRecord("own-child", exchange.SideBuy, "1", "0")
-	active.StrategyExecutionID = state.execution.ExecutionID
-	state.orders = []store.OrderRecord{active}
-
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
-
-	require.NoError(t, err)
-	require.Equal(t, StatusRunning, result.Status)
-	require.Equal(
-		t,
-		"own-child",
-		result.Progress.Symbols["BTC-USDT"].ActiveOrderID,
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
 	)
-	require.Empty(t, orders.canceled)
-	require.Empty(t, orders.placed)
-}
-
-func TestConvergeCompletesWithBelowMinimumResidual(t *testing.T) {
-	executor, state, orders := newSpotExecutor("1.05", "1")
-	state.instrument.ExchangeQuantityStep = "0.1"
-	state.instrument.MinExchangeQuantity = "0.1"
-
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
 
 	require.NoError(t, err)
-	require.Equal(t, StatusCompleted, result.Status)
-	require.Empty(t, orders.placed)
-	require.Equal(t, "0.05", state.execution.ResidualQuantity)
+	require.Equal(t, StatusConverged, result.Status)
+	require.Empty(t, fixture.orders.specs)
+	target, err := fixture.store.GetLogicalAccountTarget(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, target.Status)
 }
 
-func TestConvergePlacesMarketChildAndCapsNotional(t *testing.T) {
-	executor, _, orders := newSpotExecutor("5", "0")
-	executor.MaxChildNotional = shared.MustDecimal("200")
+func TestTargetExecutorClosesOpposingBeforeOpening(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "-1")
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "2",
+	}})
 
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
 
 	require.NoError(t, err)
-	require.Equal(t, StatusRunning, result.Status)
-	require.Len(t, orders.placed, 1)
-	require.Equal(t, exchange.OrderTypeMarket, orders.placed[0].Type)
-	require.Equal(t, exchange.FillPolicyUnspecified, orders.placed[0].FillPolicy)
-	require.Equal(t, exchange.SideBuy, orders.placed[0].Side)
-	require.Equal(t, "2", orders.placed[0].Quantity.String())
-	require.False(t, orders.placed[0].ReducePositionOnly)
-	require.Equal(t, []string{"child-order"}, orders.submitted)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	spec := fixture.orders.specs[0]
+	require.Equal(t, "account-a", spec.ExchangeAccountID)
+	require.Equal(t, exchange.SideBuy, spec.Side)
+	require.Equal(t, "1", spec.Quantity.String())
+	require.True(t, spec.ReducePositionOnly)
+	require.Len(t, fixture.orders.submitted, 1)
 }
 
-func TestConvergeGeneratesOKXCompatibleClientOrderID(t *testing.T) {
-	executor, state, orders := newSpotExecutor("1", "0")
-	state.account.Exchange = string(exchange.ExchangeOKX)
-	state.instrument.Exchange = string(exchange.ExchangeOKX)
+func TestTargetExecutorReductionSelectsLargestPosition(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "3")
+	fixture.position(t, "account-b", "BTC-USDT-SWAP", "1")
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "2",
+	}})
 
-	_, err := executor.Converge(context.Background(), "space-1", "binding-1")
+	_, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
 
 	require.NoError(t, err)
-	require.Len(t, orders.placed, 1)
-	clientOrderID := orders.placed[0].ClientOrderID
-	require.LessOrEqual(t, len(clientOrderID), 32)
-	require.True(t, regexp.MustCompile(`^[A-Za-z0-9]+$`).MatchString(clientOrderID))
-	require.True(t, okx.ValidClientOrderID(clientOrderID))
+	require.Len(t, fixture.orders.specs, 1)
+	spec := fixture.orders.specs[0]
+	require.Equal(t, "account-a", spec.ExchangeAccountID)
+	require.Equal(t, exchange.SideSell, spec.Side)
+	require.Equal(t, "2", spec.Quantity.String())
+	require.True(t, spec.ReducePositionOnly)
 }
 
-func TestConvergeHoldsBindingLockAcrossChildCreation(t *testing.T) {
-	executor, state, orders := newSpotExecutor("1", "0")
-	placeStarted := make(chan struct{})
-	releasePlace := make(chan struct{})
-	orders.placeHook = func() {
-		close(placeStarted)
-		<-releasePlace
+func TestTargetExecutorIncreaseFallsThroughPriorityOnCapacity(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.placeErrors = map[string]error{
+		"account-a": orderapp.ErrInsufficientFunds,
 	}
-	converged := make(chan error, 1)
-	go func() {
-		_, err := executor.Converge(context.Background(), "space-1", "binding-1")
-		converged <- err
-	}()
-	<-placeStarted
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+	}})
 
-	lockAcquired := make(chan struct{})
-	go func() {
-		unlock := state.LockTargetBinding("space-1", "binding-1")
-		close(lockAcquired)
-		unlock()
-	}()
-	select {
-	case <-lockAcquired:
-		t.Fatal("new target could enter while the old target was creating a child")
-	case <-time.After(25 * time.Millisecond):
-	}
+	_, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
 
-	close(releasePlace)
-	require.NoError(t, <-converged)
-	select {
-	case <-lockAcquired:
-	case <-time.After(time.Second):
-		t.Fatal("binding lock was not released after convergence")
-	}
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 2)
+	require.Equal(t, "account-a", fixture.orders.specs[0].ExchangeAccountID)
+	require.Equal(t, "account-b", fixture.orders.specs[1].ExchangeAccountID)
+	require.Equal(t, []string{"child-account-b"}, fixture.orders.submitted)
 }
 
-func TestConvergeRejectsChildCapBelowExchangeMinimum(t *testing.T) {
-	executor, state, orders := newSpotExecutor("100", "0")
-	state.instrument.ExchangeQuantityStep = "0.1"
-	state.instrument.MinExchangeQuantity = "0.1"
-	state.instrument.MinNotional = "10"
-	executor.MaxChildNotional = shared.MustDecimal("5")
+func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "1")
+	fixture.target(t, nil)
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "old-child",
+		ExchangeAccountID: "account-a", ClientOrderID: "old-child",
+		Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+		PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
+		OwnerType: "TARGET", OwnerID: "target-old",
+		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		State: "OPEN", Version: 1,
+	})
 
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
 
-	require.ErrorIs(t, err, ErrInvalidTarget)
-	require.Equal(t, StatusFailed, result.Status)
-	require.Equal(t, StatusFailed, state.execution.Status)
-	require.Empty(t, orders.placed)
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Equal(t, []string{"old-child"}, fixture.orders.canceled)
+	require.Empty(t, fixture.orders.specs)
 }
 
-func TestConvergeSwapActions(t *testing.T) {
-	tests := []struct {
-		name       string
-		current    string
-		target     string
-		side       exchange.Side
-		quantity   string
-		reduceOnly bool
-	}{
-		{"long grows", "1", "2", exchange.SideBuy, "1", false},
-		{"long shrinks", "2", "1", exchange.SideSell, "1", true},
-		{"long closes before short", "1", "-2", exchange.SideSell, "1", true},
-		{"zero opens short", "0", "-2", exchange.SideSell, "2", false},
-		{"short closes before long", "-1", "2", exchange.SideBuy, "1", true},
-		{"zero opens long", "0", "2", exchange.SideBuy, "2", false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			executor, _, orders := newSwapExecutor(test.target, test.current)
+func TestTargetExecutorPausesOnExternalOrderWithoutCancel(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, nil)
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "external-order",
+		ExchangeAccountID: "account-a", ClientOrderID: "external-order",
+		ExchangeOrderID: "exchange-order", Symbol: "BTCUSDT",
+		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
+		Quantity: "1", ReferencePrice: "100",
+		OwnerType: "EXTERNAL", OwnerID: "exchange-order",
+		LogicalAccountID: "logical-1", State: "OPEN", Version: 1,
+	})
 
-			result, err := executor.Converge(
-				context.Background(),
-				"space-1",
-				"binding-1",
-			)
-
-			require.NoError(t, err)
-			require.Equal(t, StatusRunning, result.Status)
-			require.Len(t, orders.placed, 1)
-			spec := orders.placed[0]
-			require.Equal(t, test.side, spec.Side)
-			require.Equal(t, test.quantity, spec.Quantity.String())
-			require.Equal(t, test.reduceOnly, spec.ReducePositionOnly)
-			require.Equal(t, exchange.PositionSideNet, spec.PositionSide)
-		})
-	}
-}
-
-func TestConvergeRejectsNegativeSpotTarget(t *testing.T) {
-	executor, state, orders := newSpotExecutor("-1", "0")
-
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
-
-	require.ErrorIs(t, err, ErrInvalidTarget)
-	require.Equal(t, StatusFailed, result.Status)
-	require.Empty(t, orders.placed)
-	require.Equal(t, StatusFailed, state.execution.Status)
-}
-
-func TestConvergePausesWhileExchangeAccountIsNotReady(t *testing.T) {
-	executor, state, orders := newSpotExecutor("1", "0")
-	state.account.Ready = false
-
-	result, err := executor.Converge(context.Background(), "space-1", "binding-1")
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
 
 	require.NoError(t, err)
 	require.Equal(t, StatusPaused, result.Status)
-	require.Equal(t, StatusPaused, state.execution.Status)
-	require.Contains(t, state.execution.LastError, ErrExecutionPaused.Error())
-	require.Empty(t, orders.placed)
+	logicalAccount, err := fixture.store.GetLogicalAccount(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
+	require.Contains(t, logicalAccount.PauseReason, "EXTERNAL")
+	require.Empty(t, fixture.orders.canceled)
 }
 
-func TestConvergeReturnsPriceErrorWithoutPlacing(t *testing.T) {
-	executor, _, orders := newSpotExecutor("1", "0")
-	executor.Prices = priceSourceStub{err: errors.New("price unavailable")}
+func TestTargetExecutorPausesWhenAnyMemberNotReady(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.setReady(t, "account-b", false)
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+	}})
 
-	_, err := executor.Converge(context.Background(), "space-1", "binding-1")
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
 
-	require.EqualError(t, err, "price unavailable")
-	require.Empty(t, orders.placed)
+	require.NoError(t, err)
+	require.Equal(t, StatusPaused, result.Status)
+	require.Empty(t, fixture.orders.specs)
 }
 
-func newSpotExecutor(
-	targetQuantity string,
-	currentQuantity string,
-) (*Executor, *targetStoreStub, *targetOrderServiceStub) {
-	now := time.UnixMilli(10_000)
-	state := baseTargetState(targetQuantity, now)
-	state.account.MarketType = string(exchange.MarketTypeSpot)
-	state.account.Snapshot.Balances = []store.AssetBalance{{
-		Asset: "BTC", Total: currentQuantity, Available: currentQuantity,
-	}}
-	state.instrument.MarketType = string(exchange.MarketTypeSpot)
-	state.instrument.ContractValue = "0"
-	state.instrument.MinExchangeQuantity = "0.001"
-	orders := &targetOrderServiceStub{}
-	return &Executor{
-		Store: state, Orders: orders,
-		Prices: priceSourceStub{quote: Quote{
-			Price: shared.MustDecimal("100"), UpdatedAt: now,
-		}},
-		Now: func() time.Time { return now },
-	}, state, orders
+func TestTargetExecutorRecordsBelowMinimumBlockedTarget(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "0.0001",
+	}})
+
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	target, err := fixture.store.GetLogicalAccountTarget(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Len(t, target.BlockedTargets, 1)
+	require.Contains(t, target.BlockedTargets[0].Reason, "minimum")
+	require.Empty(t, fixture.orders.specs)
 }
 
-func newSwapExecutor(
-	targetQuantity string,
-	currentQuantity string,
-) (*Executor, *targetStoreStub, *targetOrderServiceStub) {
-	executor, state, orders := newSpotExecutor(targetQuantity, "0")
-	state.account.MarketType = string(exchange.MarketTypeSwap)
-	state.account.SettlementAsset = "USDT"
-	state.account.MarginMode = string(exchange.MarginModeCross)
-	state.instrument.MarketType = string(exchange.MarketTypeSwap)
-	state.instrument.ContractValue = "0.001"
-	state.instrument.ContractValueAsset = "BTC"
-	state.instrument.ExchangeQuantityStep = "1"
-	state.instrument.MinExchangeQuantity = "1"
-	state.position = store.PositionRecord{
-		SpaceID: "space-1", ExchangeAccountID: "account-1",
-		Symbol: "BTC-USDT", PositionSide: string(exchange.PositionSideNet),
-		SignedQuantity: currentQuantity,
+type targetFixture struct {
+	t      *testing.T
+	store  *store.Store
+	orders *targetOrderServiceStub
+	market exchange.MarketType
+	now    time.Time
+}
+
+func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
+	t.Helper()
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
+	fixture := &targetFixture{
+		t: t, store: tradeStore, orders: &targetOrderServiceStub{},
+		market: market, now: time.UnixMilli(2_000).UTC(),
 	}
-	state.hasPosition = true
-	return executor, state, orders
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		for _, account := range []store.ExchangeAccountRecord{
+			fixture.account("account-a", "BINANCE"),
+			fixture.account("account-b", "OKX"),
+		} {
+			if err := tx.CreateExchangeAccount(account); err != nil {
+				return err
+			}
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
+			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			MarketType: string(market), SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		for index, accountID := range []string{"account-a", "account-b"} {
+			if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+				SpaceID: "space-1", LogicalAccountID: "logical-1",
+				ExchangeAccountID: accountID, Enabled: true, Priority: index + 1,
+			}); err != nil {
+				return err
+			}
+		}
+		for _, instrument := range fixture.instruments() {
+			if err := tx.UpsertInstrument(instrument); err != nil {
+				return err
+			}
+		}
+		return tx.SetLogicalAccountAutomation(
+			"space-1", "logical-1", "ACTIVE", "",
+		)
+	}))
+	return fixture
 }
 
-func baseTargetState(targetQuantity string, now time.Time) *targetStoreStub {
-	return &targetStoreStub{
-		execution: store.TargetExecutionRecord{
-			SpaceID: "space-1", ExecutionID: "execution-1", EventID: "execution-1",
-			StrategyRunID: "run-1", ExecutionBindingID: "binding-1",
-			ExchangeAccountID: "account-1", CommandSequence: 1,
-			NotAfter: now.Add(time.Minute).UnixMilli(), DataRevision: "revision-1",
-			Targets: []store.TargetPosition{{
-				InstrumentID: "BTC-USDT", Symbol: "BTC-USDT",
-				TargetQuantity: targetQuantity,
+func (f *targetFixture) account(
+	id string,
+	exchangeName string,
+) store.ExchangeAccountRecord {
+	return store.ExchangeAccountRecord{
+		SpaceID: "space-1", ExchangeAccountID: id, Name: id,
+		Exchange: exchangeName, MarketType: string(f.market),
+		ExecutionMode: "PAPER", Environment: "PAPER",
+		SettlementAsset: "USDT", MarginMode: map[bool]string{
+			true: "CROSS", false: "",
+		}[f.market == exchange.MarketTypeSwap],
+		Status: "ENABLED", Ready: true,
+		LeverageSettings: store.LeverageSettings{
+			"BTCUSDT": "5", "BTC-USDT-SWAP": "5",
+		},
+		Snapshot: store.ExchangeAccountSnapshot{
+			AvailableFunds: "100000",
+			Balances: []store.AssetBalance{{
+				Asset: "USDT", Available: "100000", Total: "100000",
 			}},
-			Status: StatusRunning,
 		},
-		account: store.ExchangeAccountRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-1",
-			Exchange: string(exchange.ExchangeBinance),
-			Status:   "ENABLED", Ready: true,
-		},
-		instrument: store.InstrumentRecord{
-			Exchange: string(exchange.ExchangeBinance),
-			Symbol:   "BTC-USDT", InstrumentID: "BTC-USDT",
-			BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
-			ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
-			PriceTick: "0.1", MinNotional: "0", Status: "TRADING",
-		},
+		LastSyncAt: 1_900, SnapshotSourceTime: 1_900,
 	}
 }
 
-func activeOrderRecord(
-	orderID string,
-	side exchange.Side,
+func (f *targetFixture) instruments() []store.InstrumentRecord {
+	values := []store.InstrumentRecord{
+		{
+			Exchange: "BINANCE", MarketType: string(f.market), Symbol: "BTCUSDT",
+			InstrumentID: "BTC-USDT-" + string(f.market),
+			BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
+			ExchangeQuantityStep: "1", MinExchangeQuantity: "1",
+			PriceTick: "0.1", Status: "TRADING",
+		},
+		{
+			Exchange: "OKX", MarketType: string(f.market), Symbol: "BTC-USDT-SWAP",
+			InstrumentID: "BTC-USDT-" + string(f.market),
+			BaseAsset:    "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
+			ExchangeQuantityStep: "1", MinExchangeQuantity: "1",
+			PriceTick: "0.1", Status: "TRADING",
+		},
+	}
+	if f.market == exchange.MarketTypeSwap {
+		for index := range values {
+			values[index].Linear = true
+			values[index].ContractValue = "0.001"
+			values[index].ContractValueAsset = "BTC"
+		}
+	}
+	return values
+}
+
+func (f *targetFixture) target(t *testing.T, targets []store.InstrumentTarget) {
+	t.Helper()
+	_, accepted, err := f.store.AcceptLogicalAccountTarget(
+		context.Background(),
+		store.LogicalAccountTargetRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			TargetID: "target-current", RunnerID: "runner-1",
+			CommandSequence: 1, Targets: targets, Status: StatusPending,
+			AcceptedAt: f.now.UnixMilli(),
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, accepted)
+}
+
+func (f *targetFixture) position(
+	t *testing.T,
+	accountID string,
+	symbol string,
 	quantity string,
-	filled string,
-) store.OrderRecord {
-	return store.OrderRecord{
-		OrderID: orderID, State: string(orderdomain.Open), Side: string(side),
-		Quantity: quantity, FilledQuantity: filled, Source: "TARGET",
+) {
+	t.Helper()
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: "space-1", ExchangeAccountID: accountID,
+			Symbol: symbol, PositionSide: "NET", SignedQuantity: quantity,
+			EntryPrice: "100", MarkPrice: "100", Leverage: "5",
+			MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
+		})
+	}))
+}
+
+func (f *targetFixture) order(t *testing.T, record store.OrderRecord) {
+	t.Helper()
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(record)
+	}))
+}
+
+func (f *targetFixture) setReady(t *testing.T, accountID string, ready bool) {
+	t.Helper()
+	account, err := f.store.GetExchangeAccountByID(context.Background(), accountID)
+	require.NoError(t, err)
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateExchangeAccountSync(
+			account.SpaceID, account.ExchangeAccountID,
+			store.ExchangeAccountSyncState{
+				Ready: ready, Snapshot: account.Snapshot,
+				SnapshotSourceTime: account.SnapshotSourceTime,
+				LastSyncAt:         f.now.UnixMilli(),
+			},
+		)
+	}))
+}
+
+func (f *targetFixture) executor() *Executor {
+	return &Executor{
+		Store: f.store, Orders: f.orders,
+		Prices: targetPriceStub{price: shared.MustDecimal("100")},
+		Now:    func() time.Time { return f.now },
 	}
 }

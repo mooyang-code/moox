@@ -446,8 +446,10 @@ func seedFixture(t *testing.T, tradeStore *store.Store, market exchange.MarketTy
 		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
 			SpaceID: testSpace, ExchangeAccountID: testAccount, Name: "E2E",
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
-			ExecutionMode: string(exchange.ExecutionModePaper), SettlementAsset: "USDT",
-			MarginMode: margin, Status: string(exchange.AccountStatusEnabled), Ready: true,
+			ExecutionMode:   string(exchange.ExecutionModePaper),
+			Environment:     string(exchange.AccountEnvironmentPaper),
+			SettlementAsset: "USDT",
+			MarginMode:      margin, Status: string(exchange.AccountStatusEnabled), Ready: true,
 			SyncSymbols: []string{testSymbol}, LeverageSettings: leverage,
 			Snapshot: store.ExchangeAccountSnapshot{
 				Balances: []store.AssetBalance{
@@ -489,7 +491,9 @@ func marketSpec(clientID string, side exchange.Side, quantity string) orderdomai
 			Quantity: shared.MustDecimal(quantity),
 		},
 		ReferencePrice: shared.MustDecimal("50000"), ReferencePriceAt: testNow,
-		Owner: orderdomain.OrderOwner{Type: "E2E"},
+		Owner: orderdomain.OrderOwner{
+			Type: orderdomain.OwnerExternal, OwnerID: "e2e-" + clientID,
+		},
 	}
 }
 
