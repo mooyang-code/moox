@@ -104,7 +104,7 @@ moox-cli setup metadata-import \
 
 ### Storage Schema v6 验证
 
-`series_tag` 切换到目标 Schema v6 时，只有在用户明确确认预发布环境后才允许
+当前 scalar `series_tag` 使用 Schema v6。只有在用户明确确认可破坏性重建的环境后才允许
 使用 `--reset-storage-data`：
 
 ```bash
@@ -197,7 +197,8 @@ seed 只声明 Dataset 的直接绑定，不再单独维护节点或路由 seed�
 
 ### 历史 CSV 导入
 
-> 以下 `series_tag` 参数是统一改造后的目标命令，实施前当前 CLI 尚不支持。
+> `--series-tag` 使用当前 scalar tag 契约；空值精确写入默认序列，Storage 不解析
+> `venue:binance` 等字符串。
 
 ```bash
 moox-cli storage import \

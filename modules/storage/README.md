@@ -1,7 +1,8 @@
 # MooX Storage
 
-> `series_tag` 是已确认但尚待实施的目标契约；实施进度见
-> [实施计划](../../docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.md)。
+> scalar `series_tag` 和 Schema v6 已完成代码切换；生产发布与真实跨模块 E2E
+> 验收仍按[实施计划](../../docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.md)
+> 执行。
 
 MooX Storage 是字段级事实存储和可重建 View 服务。当前实现只有三种进程角色：
 
@@ -124,7 +125,7 @@ MOOX_STORAGE_ROLE=node
 MOOX_STORAGE_ROLE=view
 ```
 
-目标 Schema v6 中，Primary 只从同一份 Metadata Snapshot 解析
+当前 Schema v6 中，Primary 只从同一份 Metadata Snapshot 解析
 `Dataset.data_node_id -> DataNode.service_target`，不读取路由表、节点 attributes
 或环境变量兜底。Dataset 创建后默认为 disabled/unlocked；Doctor 只读检查就绪，
 部署或管理员随后显式激活，激活成功后绑定永久锁定。

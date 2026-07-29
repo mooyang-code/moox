@@ -1,8 +1,9 @@
 # MooX Factor
 
-> `series_tag` 与 `lookback_periods` 是已确认但尚待实施的目标契约；实施前当前 CLI
-> 仍使用旧参数，进度见
-> [实施计划](../../docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.md)。
+> scalar `series_tag`、单任务单 Factor 与 `lookback_periods` 已完成代码切换；
+> 生产发布与真实跨模块 E2E 验收仍按
+> [实施计划](../../docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.md)
+> 执行。
 
 Factor 是面向个人量化的单实例时序因子服务。它只持久化因子定义与数据集绑定；
 实时触发和计算任务都保存在进程内，不提供持久化调度、运行历史或异步进度。

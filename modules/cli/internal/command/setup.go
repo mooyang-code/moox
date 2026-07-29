@@ -291,7 +291,7 @@ func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&host, "host", "", "Storage 目标主机名称")
-	cmd.Flags().BoolVar(&resetStorageData, "reset-storage-data", false, "仅用于已确认的预发布 Schema v5 替换，清空旧 Storage data")
+	cmd.Flags().BoolVar(&resetStorageData, "reset-storage-data", false, "仅用于已确认的破坏性 Schema 切换，清空旧 Storage data")
 	_ = cmd.MarkFlagRequired("host")
 	return cmd
 }

@@ -85,7 +85,7 @@ func TestStorageRedeliveryE2EKeepsOneRowAfterLostAck(t *testing.T) {
 	store := newSQLiteRowUpserter(t)
 	rowKey := &storagepb.RowKey{
 		SpaceId:   spaceID,
-		DatasetId: "binance_spot_kline_1m",
+		DatasetId: "spot_kline_1m",
 		Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 			SubjectId: "BTC-USDT",
 			Freq:      "1m",

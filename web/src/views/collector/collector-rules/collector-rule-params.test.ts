@@ -8,14 +8,14 @@ describe("buildCollectorRuleParams", () => {
         dataType: "kline",
         exchange: "binance",
         market: "spot",
-        datasetId: "binance_spot_kline_1h",
+        datasetId: "spot_kline_1h",
         intervals: ["1h", "4h"],
         scheduleInterval: "1h"
       })
     ).toEqual({
       source: {
         kind: "dataset_subjects",
-        dataset_id: "binance_spot_kline_1h"
+        dataset_id: "spot_kline_1h"
       },
       collector: {
         exchange: "binance",
@@ -25,7 +25,7 @@ describe("buildCollectorRuleParams", () => {
         live: false
       },
       target: {
-        dataset_id: "binance_spot_kline_1h"
+        dataset_id: "spot_kline_1h"
       },
       schedule: {
         interval: "1h"

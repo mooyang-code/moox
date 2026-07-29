@@ -14,7 +14,9 @@ API 或采集流程生成，不在这里维护交易所、标的或历史行情�
   (`deployment_mode: process`) 与同进程 RPC 端点 (`deployment_mode: endpoint`)。
 
 默认量化 seed 使用市场作为 Space。`crypto` 是加密货币市场，`binance` 和 `okx`
-是该 Space 下的 DataSource；单频 Dataset ID 包含来源、产品和频率。
+是该 Space 下的 DataSource。相同 Schema、频率和生命周期的行情使用共享
+`spot_kline_1h`、`perpetual_kline_1h` Dataset，以行上的 `venue:binance` 和
+`venue:okx` scalar `series_tag` 区分；Dataset 不登记 tag 名称。
 
 ## 导入
 
@@ -78,5 +80,5 @@ seed，并通过 Metadata API 动态登记测试 Subject 和 DatasetSubject。
 ## K 线测试数据
 
 A 股与加密货币的真实行情抽样见 [data/kline/README.md](./data/kline/README.md)。
-该文档同时记录改造后的 `series_tag` 目标契约；实际 CSV 转换由实施计划跟踪，不能
-在改造完成前当作新协议验收样本。
+这些 CSV 已使用当前 `series_tag` 和共享 crypto Dataset 契约。旧样本和旧运行数据
+不迁移，切换时清理后重新导入。

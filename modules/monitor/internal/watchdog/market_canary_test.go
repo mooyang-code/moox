@@ -117,7 +117,7 @@ func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
 	result := (MarketCanary{
 		Reader: reader,
 		Config: MarketCanaryConfig{
-			SpaceID: "crypto", DatasetID: "binance_spot_kline",
+			SpaceID: "crypto", DatasetID: "spot_kline_1h",
 			SubjectID: "BTC-USDT", Frequency: "1m",
 			SeriesTag: stringPtr("venue:binance"),
 			Freshness: time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
@@ -132,7 +132,7 @@ func TestMarketCanaryRejectsInvalidFrequency(t *testing.T) {
 	result := (MarketCanary{
 		Reader: reader,
 		Config: MarketCanaryConfig{
-			SpaceID: "crypto", DatasetID: "binance_spot_kline",
+			SpaceID: "crypto", DatasetID: "spot_kline_1h",
 			SubjectID: "BTC-USDT", Frequency: "garbage",
 			SeriesTag: stringPtr("venue:binance"),
 			Freshness: time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,

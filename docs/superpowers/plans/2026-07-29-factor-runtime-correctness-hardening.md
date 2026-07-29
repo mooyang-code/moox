@@ -55,7 +55,7 @@ date:       2026-07-29
 **Files:**
 - No code changes
 
-- [ ] **Step 1: 记录当前分支、HEAD 和工作区**
+- [x] **Step 1: 记录当前分支、HEAD 和工作区**
 
 Run:
 
@@ -69,7 +69,7 @@ git ls-files --others --exclude-standard
 Expected: 本计划与 canonical spec 已经提交并可由 `git ls-files` 找到；没有未知业务
 代码改动。若文档仍未提交，先完成文档提交，再创建 worktree。
 
-- [ ] **Step 2: 创建实施 worktree**
+- [x] **Step 2: 创建实施 worktree**
 
 Run:
 
@@ -80,7 +80,7 @@ git worktree add .worktrees/time-series-tag \
 cd .worktrees/time-series-tag
 ```
 
-- [ ] **Step 3: 跑修改前基线**
+- [x] **Step 3: 跑修改前基线**
 
 Run:
 
@@ -115,7 +115,7 @@ Expected: 全部 PASS。若有既有失败，先记录命令、错误与基线 S
 - Test: `modules/storage/internal/eventmapper/rows_test.go`
 - Test: `packages/events/validation_test.go`
 
-- [ ] **Step 1: 先写协议往返与 presence 失败测试**
+- [x] **Step 1: 先写协议往返与 presence 失败测试**
 
 覆盖：
 
@@ -124,7 +124,7 @@ Expected: 全部 PASS。若有既有失败，先记录命令、错误与基线 S
 3. `TimeSeriesSelector` 未设置 tag、设置 `""`、设置 `venue:okx` 三种状态可区分。
 4. v1 事件名不再被 v2 Consumer 接受。
 
-- [ ] **Step 2: 修改 Proto**
+- [x] **Step 2: 修改 Proto**
 
 目标模型：
 
@@ -161,13 +161,13 @@ message TimeSeriesSelector {
 
 不要添加 `reserved` 或兼容字段；仓库 greenfield contract 会检查这些残留。
 
-- [ ] **Step 3: 升级公共事件**
+- [x] **Step 3: 升级公共事件**
 
 把 `storage.dataset.rows.upserted@1` 升为 `@2`，同步 Registry、Subject 和验证测试。
 本地与公共 Proto 的字段名、类型、语义完全一致，让 protojson mapper 继续只做结构
 复制。
 
-- [ ] **Step 4: 重新生成并验证**
+- [x] **Step 4: 重新生成并验证**
 
 Run:
 
@@ -182,7 +182,7 @@ go test ./packages/storagepb ./packages/events -count=1
 
 Expected: 测试 PASS；最后一个命令无输出。
 
-- [ ] **Step 5: 保存原子切换工作状态，不提交**
+- [x] **Step 5: 保存原子切换工作状态，不提交**
 
 ```bash
 git diff --check
@@ -206,7 +206,7 @@ Expected: Proto 与生成物已更新；消费者迁移将在 Tasks 2-13 完成�
 - Create: `modules/storage/internal/service/datanode/pebble/layout.go`
 - Create: `modules/storage/internal/service/datanode/pebble/layout_test.go`
 
-- [ ] **Step 1: 写 tag 校验测试**
+- [x] **Step 1: 写 tag 校验测试**
 
 `ValidateSeriesTag` 应接受空值和 `venue:binance`，拒绝：
 
@@ -217,7 +217,7 @@ Expected: Proto 与生成物已更新；消费者迁移将在 Tasks 2-13 完成�
 
 校验函数不得 trim、lowercase、解析冒号或返回改写后的 tag。
 
-- [ ] **Step 2: 写物理身份失败测试**
+- [x] **Step 2: 写物理身份失败测试**
 
 覆盖：
 
@@ -227,7 +227,7 @@ Expected: Proto 与生成物已更新；消费者迁移将在 Tasks 2-13 完成�
 - tag 内合法 Unicode 和普通符号原样往返；
 - bucket 清理前缀仍只按 Space/Dataset/bucket，不因 tag 改变。
 
-- [ ] **Step 3: 实现 v2 键布局**
+- [x] **Step 3: 实现 v2 键布局**
 
 删除 JSON canonicalization。TimeSeries tuple 固定为：
 
@@ -238,7 +238,7 @@ kind | space | dataset | bucket | subject | freq | data_time | series_tag
 空 tag 也编码最后一个空 tuple component。`NormalizeRowKey` 只规范 UTC 时间，不改
 tag。
 
-- [ ] **Step 4: 增加 layout marker**
+- [x] **Step 4: 增加 layout marker**
 
 DataNode 根目录写入固定 `storage_layout_version=2`。打开无 marker、v1 marker 或含旧
 键布局的数据目录时不能一概处理：
@@ -250,7 +250,7 @@ DataNode 根目录写入固定 `storage_layout_version=2`。打开无 marker、v
 
 四种情况都写单测；不能让首次启动因“无 marker”被误拒绝。
 
-- [ ] **Step 5: 验证当前子系统**
+- [x] **Step 5: 验证当前子系统**
 
 ```bash
 (cd modules/storage && \
@@ -262,13 +262,15 @@ Expected: 目标 package PASS；继续保留未提交改动。
 ### Task 3: 拆分精确 Key 与范围 Selector
 
 **Files:**
+- Modify: `modules/storage/proto/rows.proto`
+- Regenerate: `modules/storage/proto/storagegen/rows.pb.go`
 - Modify: `modules/storage/internal/service/viewindex/model.go`
 - Modify: `modules/storage/internal/service/view/query.go`
 - Create: `modules/storage/internal/service/view/query_test.go`
 - Modify: `modules/storage/internal/service/primarystore/rows_read.go`
 - Modify: `modules/storage/internal/service/primarystore/service_test.go`
 
-- [ ] **Step 1: 写 selector 语义测试**
+- [x] **Step 1: 写 selector 语义测试**
 
 同一 Subject/Frequency/Time 写三种 tag 后：
 
@@ -280,7 +282,7 @@ Expected: 目标 package PASS；继续保留未提交改动。
 
 同时断言返回 `TimeSeriesKey` 始终包含精确 tag。
 
-- [ ] **Step 2: 修改内部 QuerySpec**
+- [x] **Step 2: 修改内部 QuerySpec**
 
 禁止把 selector 降级成 `RowKey`。内部结构显式保存：
 
@@ -294,7 +296,7 @@ type TimeSeriesSelector struct {
 `nil` 表示全部 tag，非 nil 指向空串表示默认序列。所有 Primary/View/Access 转换都
 保留 presence。
 
-- [ ] **Step 3: 透传 View 完整性**
+- [x] **Step 3: 透传 View 完整性**
 
 在 `ReadTimeSeriesRowsRsp` 增加并由 PrimaryStore 从 DataView 原样复制：
 
@@ -304,9 +306,11 @@ served_indexed_to
 complete
 ```
 
-空 rows 不能自动改成 `complete=true`。
+这三个字段加入 Proto 后运行 `make proto` 更新生成物。空 rows 不能自动改成
+`complete=true`；没有可用 View、Stat 失败或索引没有有效覆盖范围时都不能把未知
+状态伪装为完整。
 
-- [ ] **Step 4: 验证当前子系统**
+- [x] **Step 4: 验证当前子系统**
 
 ```bash
 (cd modules/storage && \
@@ -324,7 +328,7 @@ complete
 - Test: `modules/storage/internal/service/view/reconcile_test.go`
 - Modify: `modules/storage/internal/service/viewindex/model.go`
 
-- [ ] **Step 1: 写 DuckDB 失败测试**
+- [x] **Step 1: 写 DuckDB 失败测试**
 
 覆盖：
 
@@ -340,7 +344,7 @@ complete
   互为反向；
 - Backfill cursor 在同一 timestamp 的多个 tag 间不跳行。
 
-- [ ] **Step 2: 修改 DDL、读写和保留列**
+- [x] **Step 2: 修改 DDL、读写和保留列**
 
 删除 `parseDimensions`、JSON marshal 和所有 `dimensions_json` 分支。系统保留列为：
 
@@ -358,18 +362,18 @@ subject_id ASC, freq ASC, data_time ASC, series_tag ASC
 ASC tie-breaker，保证每页确定性；不要把公开 DESC 路径与任意自定义 sort 混为一套
 方向推导。
 
-- [ ] **Step 3: 更新 Backfill keyset**
+- [x] **Step 3: 更新 Backfill keyset**
 
 `build.go` 的 Grain、`QueryAfter` 和 cursor 全部加入 `series_tag`。实时双写与
 Backfill 只按完整 PK 判断同一行。
 
-- [ ] **Step 4: 处理旧 View**
+- [x] **Step 4: 处理旧 View**
 
 `Open/Stat/Reconcile` 直接检查固定系统列和主键。发现旧 `dimensions_json`、缺少
 `series_tag` 或主键不匹配时拒绝复用 Active/New index，并要求清理重建；不引入
 通用 schema migration/epoch 框架，也不执行 `ALTER TABLE`。
 
-- [ ] **Step 5: 验证当前子系统**
+- [x] **Step 5: 验证当前子系统**
 
 ```bash
 (cd modules/storage && CGO_ENABLED=1 \
@@ -391,7 +395,7 @@ Backfill 只按完整 PK 判断同一行。
 - Modify: `examples/metadata-monitor-metrics.seed.yaml`
 - Modify: `modules/cli/internal/command/metadata_quant_seed_test.go`
 
-- [ ] **Step 1: 写 metadata 校验失败测试**
+- [x] **Step 1: 写 metadata 校验失败测试**
 
 TimeSeries View 的完整 grain 必须是：
 
@@ -402,7 +406,7 @@ subject_id, freq, data_time, series_tag
 用户 Field/ViewColumn 不得与四个系统列重名。Dataset metadata 不新增
 `series_tag_name`、allowed values 或 tag registry。
 
-- [ ] **Step 2: 执行破坏性 Metadata v6**
+- [x] **Step 2: 执行破坏性 Metadata v6**
 
 把 metadata schema version 升到 v6；启动旧 v5 数据库时明确提示清理并重新
 `init/import-seed`。不写迁移 SQL。
@@ -420,12 +424,17 @@ DataSource 继续用于 Provider 配置，不把一个 Dataset 改成多 DataSou
 共享 View ID 固定为 `spot_kline_1h_view` 和 `perpetual_kline_1h_view`，seed contract
 测试同步删除四个 venue 专属 Dataset/View 断言。
 
-- [ ] **Step 3: 验证当前子系统**
+- [x] **Step 3: 验证当前子系统**
 
 ```bash
 (cd modules/storage && \
   go test ./internal/service/catalog ./internal/service/metadata/sqlite ./schema -count=1)
 tmp="$(mktemp -d /tmp/moox-storage-series-tag.XXXXXX)"
+MOOX_STORAGE_HOME="$tmp" go run ./modules/storage/cmd/cli init \
+  --storage-conf modules/storage/config/storage.yaml
+sqlite3 "$tmp/metadata/storage_metadata.db" \
+  "INSERT INTO t_data_nodes(c_node_id,c_name,c_service_target,c_status)
+   VALUES('storage-node-0','Storage Node 0','ip://127.0.0.1:11001','active');"
 MOOX_STORAGE_HOME="$tmp" go run ./modules/storage/cmd/cli import-seed \
   --storage-conf modules/storage/config/storage.yaml \
   --seed examples/metadata-quant-initial.seed.yaml
@@ -433,6 +442,10 @@ status=$?
 rm -rf "$tmp"
 exit "$status"
 ```
+
+这里的显式 DataNode 注册只用于离线 seed 验证。生产环境仍通过部署流程的
+`register-node` RPC 注册 deployment-owned DataNode；`import-seed` 不得隐式创建
+DataNode。
 
 ### Task 6: 完成 Storage 事件、实时 View、回填和查询 E2E
 
@@ -444,10 +457,15 @@ exit "$status"
 - Modify: `modules/storage/cmd/server/main.go`
 - Modify: `modules/storage/internal/service/datanode/service.go`
 - Modify: `modules/storage/test/storage_contract_test.go`
+- Modify: `modules/eventbus/config/app.yaml`
+- Modify: `modules/eventbus/internal/registry/registry_test.go`
+- Modify: `modules/eventbus/test/storage_consumers_e2e_test.go`
+- Modify: `modules/admin/cmd/cli/eventbus_credentials.go`
+- Modify: `modules/admin/cmd/cli/eventbus_credentials_test.go`
 - Modify: `scripts/test-storage-boundary-contract.sh`
 - Modify: `scripts/test-storage-consistency-contract.sh`
 
-- [ ] **Step 1: 添加真实双 tag E2E**
+- [x] **Step 1: 添加真实双 tag E2E**
 
 同一 Dataset/Subject/Frequency/Time 写：
 
@@ -460,26 +478,42 @@ venue:okx       close=102
 验证 Pebble 精确读取、`DatasetRowsUpserted@2`、Active View、Backfill 后 New View、
 selector 三态、稳定排序和字段 patch 均一致。
 
-- [ ] **Step 2: 添加旧术语 contract**
+至少一条 E2E 必须走完真实链路：
+Pebble transaction/outbox -> outbox relay -> embedded authenticated JetStream
+`storage_view` v2 durable -> View event consumer -> 真实 Primary reader -> Active View。
+测试可以额外解码 outbox 做协议断言，但不能用手工调用 `HandleDatasetRows` 代替 relay
+或 consumer。
 
-active source tree 必须不存在：
+EventBus 默认 stream subject 和 Admin 生成的 Storage/View/Factor/Archive ACL 必须
+同步切换到 `moox.storage.dataset.rows.upserted.v2.>`；registry 测试中的旧 subject
+场景改用与 Storage 无关的 synthetic obsolete subject，避免活跃源码保留 v1 合同。
+
+- [x] **Step 2: 添加旧接口 contract**
+
+Task 6 处于原子 wire cutover 的过渡阶段，验收时必须显式使用
+`MOOX_SERIES_IDENTITY_SCOPE=storage`，只扫描 Storage 与 `storagepb` 已删除的 wire、
+schema 和 API 标识：
 
 ```text
-dimensions
-Dimensions
 dimensions_json
 CanonicalDimensions
+GetDimensions
+Dimensions 字段/字面量
+DimensionTags
+SeriesTagName
 ```
 
-排除历史计划和第三方生成依赖，但不能排除当前 Proto、服务、模块 README 和 Web
-代码。
+contract 使用精确的代码标识模式，不把普通英文语义中的 `dimensions` 当成旧接口。
+Archive 为拒绝 v1 Parquet 而保留的 `dimensions_json` 只允许出现在明确列出的
+legacy-rejection 源码和对应负向测试中，不得排除整个模块或任意测试文件。Task 13
+完成所有直接消费者迁移后，把默认 scope 切为 `all`；不得永久默认漏扫。
 
-- [ ] **Step 3: 运行 Storage 验收**
+- [x] **Step 3: 运行 Storage 验收**
 
 ```bash
 (cd modules/storage && go test ./... -count=1)
 (cd modules/storage && CGO_ENABLED=1 go test ./... -count=1)
-bash scripts/test-storage-boundary-contract.sh
+MOOX_SERIES_IDENTITY_SCOPE=storage bash scripts/test-storage-boundary-contract.sh
 bash scripts/test-storage-consistency-contract.sh
 ```
 
@@ -518,7 +552,7 @@ bash scripts/test-storage-consistency-contract.sh
 - Modify: `modules/archive/cmd/cli/main_test.go`
 - Modify: `modules/archive/test/archive_e2e_test.go`
 
-- [ ] **Step 1: 写 Archive 双 tag 失败测试**
+- [x] **Step 1: 写 Archive 双 tag 失败测试**
 
 同一时间两种 tag 经事件与 Backfill 产生两个独立 Partition，每个 Partition 各有
 一条 ArchiveRow；同 tag 修订只覆盖自己的月文件。测试必须抓住当前
@@ -534,7 +568,7 @@ bash scripts/test-storage-consistency-contract.sh
 `series_tag={encoded_tag}` 字段；percent 编码可逆，字面 `%`、`/`、`..` 和空 tag
 不会碰撞或越过归档根目录。
 
-- [ ] **Step 2: 改领域模型和分区身份**
+- [x] **Step 2: 改领域模型和分区身份**
 
 删除 `DimensionsJSON`，不要在 RowPatch 上再保存一份可能与路径不一致的 tag。
 `PartitionKey` 增加 `SeriesTag string`，固定身份为：
@@ -548,7 +582,7 @@ space_id + dataset_id + freq + subject_id + series_tag + YYYYMM
 `LogicalRowID` 只使用 UTC `data_time`；全局行身份由 PartitionKey 与 LogicalRowID
 共同组成。事件和 Backfill 从 Storage key 原样复制 tag 到 PartitionKey。
 
-- [ ] **Step 3: 改 Parquet v2**
+- [x] **Step 3: 改 Parquet v2**
 
 删除 `dimensions_json`，增加必填 UTF-8 `series_tag`。每个文件内该列必须为常量，
 并与目录及文件名解码出的 tag 一致。分区内排序和唯一键为：
@@ -570,7 +604,7 @@ candle_begin_time ASC
 `moox.archive.schema_version=2`。发现 v1 文件、旧 journal、旧列或不含 tag 的旧
 路径时明确拒绝并提示使用新目录；不兼容读写。
 
-- [ ] **Step 4: 更新 Archive 启动与登记配置**
+- [x] **Step 4: 更新 Archive 启动与登记配置**
 
 默认 allowlist 使用 `crypto` 共享 Dataset，Consumer durable 使用
 `moox_archive_kline_v2`，ArchiveFile metadata 写 `schema_version=2`。
@@ -581,7 +615,7 @@ tag 身份：稳定 ID 的摘要输入使用原始 tag，COS key 使用可逆编
 非空值表示精确 tag。同步更新配置、CLI、COS 和 registry 单测，确保默认配置可以
 启动且不会拒绝目标 Dataset。
 
-- [ ] **Step 5: 验证当前子系统**
+- [x] **Step 5: 验证当前子系统**
 
 ```bash
 (cd modules/archive && go test ./... -count=1)
@@ -607,7 +641,7 @@ tag 身份：稳定 ID 的摘要输入使用原始 tag，COS key 使用可逆编
 - Modify: `modules/monitor/internal/watchdog/market_canary.go`
 - Modify: `modules/monitor/internal/watchdog/market_canary_test.go`
 
-- [ ] **Step 1: 写无碰撞测试**
+- [x] **Step 1: 写无碰撞测试**
 
 同一分钟：
 
@@ -617,12 +651,14 @@ tag 身份：稳定 ID 的摘要输入使用原始 tag，COS key 使用可逆编
 - device、mountpoint 等展示值仍是普通 Field；
 - reader 未设置 selector tag，能重建全部实体。
 
-- [ ] **Step 2: 实现 producer-owned tag helper**
+- [x] **Step 2: 实现 producer-owned tag helper**
 
 helper 只负责稳定编码 Monitor 自己的业务身份。不要把解析器下沉到 Storage，也不要
-增加 Map。编码必须覆盖分隔符转义，并有 round-trip 单测。
+增加 Map。短身份使用覆盖分隔符转义的可逆编码并有 round-trip 单测；编码结果超过
+Storage 128-byte 上限时使用带类型前缀的稳定 SHA-256 tag，原始展示身份仍保存在
+Field 中。所有生成 tag 都必须在写入前满足 Storage 形态合同。
 
-- [ ] **Step 3: 让 Market Canary 精确选择一条序列**
+- [x] **Step 3: 让 Market Canary 精确选择一条序列**
 
 `MarketCanarySubject` 使用必填 presence 字段（例如 `*string SeriesTag`），从而区分
 “配置了默认空 tag”和“漏配 tag”。Canary selector 必须精确设置该 tag；CheckID、
@@ -632,7 +668,7 @@ Target 和名称也包含完整 tag。双 tag 测试应证明 page size 2 返回
 `modules/monitor/config/app.yaml` 改为共享 `crypto/spot_kline_1h` 并显式设置
 `series_tag: venue:binance`。
 
-- [ ] **Step 4: 验证当前子系统**
+- [x] **Step 4: 验证当前子系统**
 
 ```bash
 (cd modules/monitor && \
@@ -662,6 +698,7 @@ Target 和名称也包含完整 tag。双 tag 测试应证明 page size 2 返回
 - Modify: `modules/cli/internal/command/setup_storage.go`
 - Modify: `modules/cli/internal/command/setup_storage_test.go`
 - Modify: `modules/cli/internal/command/setup.go`
+- Modify: `modules/cli/internal/command/metadata_quant_seed_test.go`
 - Modify: `web/src/api/storage/types.ts`
 - Modify: `web/src/api/storage/access.ts`
 - Modify: `web/src/api/storage/view.ts`
@@ -681,7 +718,7 @@ Target 和名称也包含完整 tag。双 tag 测试应证明 page size 2 返回
 - Modify: `examples/data/kline/crypto/binance_perpetual_kline_1h.csv`
 - Modify: `examples/data/kline/crypto/okx_spot_kline_1h.csv`
 
-- [ ] **Step 1: 写入口失败测试**
+- [x] **Step 1: 写入口失败测试**
 
 覆盖：
 
@@ -694,7 +731,7 @@ Target 和名称也包含完整 tag。双 tag 测试应证明 page size 2 返回
 - Collector Market Canary 必须配置 `venue:binance` 并发出精确 selector；双 tag 测试
   证明它只比较同一 venue 的相邻时间点，Check Target 包含 tag。
 
-- [ ] **Step 2: 修改实现和样本**
+- [x] **Step 2: 修改实现和样本**
 
 删除 Web/JS 中 `dimensions: {}` 归一化逻辑。Crypto CSV 使用共享 Dataset ID，
 增加 `series_tag` 列；股票样本使用空 tag。
@@ -702,7 +739,7 @@ SCF canary 默认 Dataset 改为 `crypto/spot_kline_1h`，新增必填
 `MOOX_SCF_CANARY_SERIES_TAG`，用 `os.LookupEnv` 区分“未配置”和“显式空 tag”，并
 将 tag 纳入配置校验和 Target identity。
 
-- [ ] **Step 3: 验证当前子系统**
+- [x] **Step 3: 验证当前子系统**
 
 ```bash
 (cd modules/collector && go test ./... -count=1)
@@ -742,13 +779,13 @@ node --check examples/e2e/verify.mjs
 - Modify: `modules/factor/internal/rpc/convert_test.go`
 - Modify: `modules/factor/cmd/cli/main_test.go`
 
-- [ ] **Step 1: 写旧 schema 拒绝测试**
+- [x] **Step 1: 写旧 schema 拒绝测试**
 
 新数据库只有 `c_lookback_periods`；发现 `c_lookback_rows` 或旧 Factor schema 时
 启动失败并提示删除重建。`lookback_periods < 1` 继续拒绝；`input_columns` 和
 `outputs` 使用 `data_time` 或 `series_tag` 也必须拒绝。
 
-- [ ] **Step 2: 完成无兼容重命名**
+- [x] **Step 2: 完成无兼容重命名**
 
 Proto、Go、SQL、CLI flag 和 metadata attributes 统一为：
 
@@ -760,7 +797,7 @@ LookbackPeriods
 
 不保留 alias、双列或自动迁移。
 
-- [ ] **Step 3: 验证当前子系统**
+- [x] **Step 3: 验证当前子系统**
 
 ```bash
 make proto
@@ -786,7 +823,7 @@ make proto
 - Create: `modules/factor/internal/storageio/writeback_test.go`
 - Modify: `examples/factors/timeseries/*.py`
 
-- [ ] **Step 1: 写输入顺序与结果身份失败测试**
+- [x] **Step 1: 写输入顺序与结果身份失败测试**
 
 输入必须按 `(data_time, series_tag)` 稳定排序。Python 输出测试覆盖：
 
@@ -798,13 +835,13 @@ make proto
 - `NaN`/无穷归一化为 null；
 - 输出落在目标范围外时被裁掉。
 
-- [ ] **Step 2: 简化任务为一个 Factor**
+- [x] **Step 2: 简化任务为一个 Factor**
 
 `FactorTask` 只携带一个 `FactorSpec`。删除为多个 Factor 合并 input/output row grain 的
 路径；Scheduler 对每个 enabled Binding/Factor 建独立任务，同 scope 仍可在队列层
 合并时间范围。
 
-- [ ] **Step 3: 修改 JSON/Python 协议**
+- [x] **Step 3: 修改 JSON/Python 协议**
 
 输入列固定为：
 
@@ -825,7 +862,7 @@ type FactorResultRow struct {
 写回用结果行身份，不再用 `targetTimes[i]` 或假定结果与物理输入等长。属性至少记录
 `factor.id`、`factor.source_hash`、`factor.parent_task_id` 和 `factor.computed_at`。
 
-- [ ] **Step 4: 验证当前子系统**
+- [x] **Step 4: 验证当前子系统**
 
 ```bash
 (cd modules/factor && \
@@ -846,7 +883,7 @@ type FactorResultRow struct {
 - Modify: `modules/factor/internal/scheduler/service.go`
 - Modify: `modules/factor/internal/scheduler/service_test.go`
 
-- [ ] **Step 1: 写 cohort 分块失败测试**
+- [x] **Step 1: 写 cohort 分块失败测试**
 
 构造 2001 个 `data_time`，每个时间点有 Binance/OKX 两行。验证：
 
@@ -857,7 +894,7 @@ type FactorResultRow struct {
 - `lookback_periods=3` 恰好补前两个完整时间点，而不是两条物理行；
 - tag 数量变化不改变回看时间点数。
 
-- [ ] **Step 2: 实现范围读取 helper**
+- [x] **Step 2: 实现范围读取 helper**
 
 `ReadRangeChunk` 使用无 tag selector，按稳定全序逐页读取，聚合不同
 `data_time`，直到得到目标 period 数并读完最后一个 cohort。历史倒序读取同理：
@@ -866,7 +903,7 @@ type FactorResultRow struct {
 这仍是单实例 best-effort 读取；不新增 Snapshot/Cursor 服务。完整性依赖 View
 `complete/indexed_to` 和稳定排序。
 
-- [ ] **Step 3: 更新 Scheduler**
+- [x] **Step 3: 更新 Scheduler**
 
 task key 继续是：
 
@@ -876,7 +913,7 @@ space + source_dataset + target_dataset + subject + freq + factor_id
 
 不能加入 tag。每个 Factor 单独执行，pending 同 key 任务只合并时间范围。
 
-- [ ] **Step 4: 验证当前子系统**
+- [x] **Step 4: 验证当前子系统**
 
 ```bash
 (cd modules/factor && \
@@ -895,8 +932,9 @@ space + source_dataset + target_dataset + subject + freq + factor_id
 - Modify: `modules/factor/internal/scheduler/service_test.go`
 - Modify: `modules/factor/internal/observability/realtime_inventory.go`
 - Modify: `modules/factor/internal/observability/realtime_inventory_test.go`
+- Modify: `scripts/test-storage-boundary-contract.sh`
 
-- [ ] **Step 1: 写 event-only retry 失败测试**
+- [x] **Step 1: 写 event-only retry 失败测试**
 
 覆盖：
 
@@ -906,7 +944,7 @@ space + source_dataset + target_dataset + subject + freq + factor_id
 - 重试耗尽记录低基数 outcome，不永久阻塞 scheduler；
 - `complete=true` 仍不被解释为“特定历史事件一定已应用”。
 
-- [ ] **Step 2: 增加简单配置**
+- [x] **Step 2: 增加简单配置**
 
 只增加：
 
@@ -918,13 +956,18 @@ event_read_retry_interval: 500ms
 
 不增加持久化队列、事件 barrier 或跨服务 sequence。
 
-- [ ] **Step 3: 扩展历史修正**
+- [x] **Step 3: 扩展历史修正**
 
 EventBatcher 保留事件的最小/最大 `data_time`，不带 tag。构建任务时，从最后一个受影响
 时间点向后读取 `lookback_periods - 1` 个实际时间点，并把任务 end 扩到最后一个影响
 period 的下一纳秒。多 Factor 因已拆任务，各自按自己的窗口扩展。
 
-- [ ] **Step 4: 验证整个 wire cutover**
+- [x] **Step 4: 验证整个 wire cutover**
+
+先将 `scripts/test-storage-boundary-contract.sh` 的默认 scope 从 Task 6 过渡期的
+`storage` 切为 `all`。全树扫描继续使用精确的旧 wire/schema/API 标识，并只允许
+Archive 明确列出的 v1 Parquet 拒绝 sentinel；不能通过排除目录、模块 README、
+Proto、Web 或所有测试来消除失败。
 
 ```bash
 (cd modules/factor && \
@@ -953,7 +996,7 @@ git diff --check
 
 Expected: 两个 `rg` 命令均无输出，证明范围查询调用方已经全部切到 selector。
 
-- [ ] **Step 5: 创建唯一原子 cutover commit**
+- [x] **Step 5: 创建唯一原子 cutover commit**
 
 ```bash
 git add modules/storage modules/archive modules/monitor modules/collector \
@@ -986,7 +1029,7 @@ Expected: staged diff 同时包含 Proto、生成物和所有消费者；commit 
 - Modify: `modules/factor/internal/store/database.go`
 - Modify: `modules/factor/internal/store/database_test.go`
 
-- [ ] **Step 1: 写启用合同测试**
+- [x] **Step 1: 写启用合同测试**
 
 enabled Binding 必须一次性验证：
 
@@ -998,24 +1041,24 @@ enabled Binding 必须一次性验证：
 
 disabled 草稿不依赖远端 Storage。
 
-- [ ] **Step 2: 写定义更新状态测试**
+- [x] **Step 2: 写定义更新状态测试**
 
 enabled Factor 的源码、input columns、params、`lookback_periods` 更新全部拒绝。唯一
 流程是 `disable -> update/import -> enable -> RecalcFactor`。CLI import 只创建或
 更新 disabled 定义，不同步运行期 metadata。
 
-- [ ] **Step 3: 复用具体 registry service**
+- [x] **Step 3: 复用具体 registry service**
 
 RPC 和 CLI 调用同一个已有 `registry.Service` 的具体方法，不新增通用 application
 framework。`SetFactorStatus` 继续是唯一启用入口，远端 metadata 同步成功后才落
 enabled。
 
-- [ ] **Step 4: 全连接启用 SQLite 外键**
+- [x] **Step 4: 全连接启用 SQLite 外键**
 
 在 SQLite DSN 使用连接级参数，例如 `_foreign_keys=on`，并通过 `SetMaxOpenConns`
 后的多连接测试证明每条连接都拒绝孤儿 Binding；不要只执行一次 `PRAGMA`。
 
-- [ ] **Step 5: 验证并提交**
+- [x] **Step 5: 验证并提交**
 
 ```bash
 (cd modules/factor && \
@@ -1035,7 +1078,7 @@ git commit -m "fix(factor): validate bindings and freeze enabled definitions"
 - Modify: `packages/pyruntime/process/supervisor.go`
 - Test: `packages/pyruntime/process/supervisor_test.go`
 
-- [ ] **Step 1: 写草稿隔离失败测试**
+- [x] **Step 1: 写草稿隔离失败测试**
 
 在 factors 目录放置 disabled 草稿：
 
@@ -1047,19 +1090,19 @@ git commit -m "fix(factor): validate bindings and freeze enabled definitions"
 启动 worker 的 HELLO 必须全部成功，因为启动不扫描该目录。只有显式 LOAD 对应文件
 时才返回该文件的错误。
 
-- [ ] **Step 2: 删除 glob/import preload**
+- [x] **Step 2: 删除 glob/import preload**
 
 worker 启动只完成协议初始化。任务按 immutable `SourcePath + SourceHash` LOAD。
 导入阶段用 redirect 捕获 stdout/stderr，并把诊断放入结构化错误帧，不能污染 stdout
 帧流。
 
-- [ ] **Step 3: 验证 Supervisor 边界**
+- [x] **Step 3: 验证 Supervisor 边界**
 
 HELLO/LOAD/RUN/写阻塞/超时失败后仍由 Supervisor `Kill + Wait`、清空引用，并在后续
 请求重建。不要在 Supervisor 增加业务任务重放；Scheduler 的有限 retry 是唯一任务
 重试层。
 
-- [ ] **Step 4: 验证并提交**
+- [x] **Step 4: 验证并提交**
 
 ```bash
 (cd modules/factor && \
@@ -1102,7 +1145,7 @@ git commit -m "fix(pyruntime): load only requested factor sources"
 - Modify: `examples/README.md`
 - Modify: `examples/e2e/README.md`
 
-- [ ] **Step 1: 把“待实施”标记改为“已实现”**
+- [x] **Step 1: 把“待实施”标记改为“已实现”**
 
 只有对应 E2E 全部 PASS 后才能修改状态。文档必须一致说明：
 
@@ -1113,7 +1156,7 @@ git commit -m "fix(pyruntime): load only requested factor sources"
 - Factor 单任务单 Factor、跨 tag、`lookback_periods`；
 - 旧数据全部清理重建。
 
-- [ ] **Step 2: 扫描活跃树**
+- [x] **Step 2: 扫描活跃树**
 
 Run:
 
@@ -1135,7 +1178,7 @@ Expected: 只允许文档中“明确删除/不兼容”的否定说明；代码
 活跃示例零残留。不要误删 `EventMessage.tags`，它是事件 envelope metadata，与
 TimeSeries tag 无关。
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add docs modules/storage/README.md modules/factor/README.md modules/cli/README.md \
@@ -1249,7 +1292,8 @@ git log --oneline --decorate -20
 git diff feature/mooyang...HEAD --stat
 ```
 
-Expected: worktree clean；每个任务有独立、可回滚提交；diff 不含未知文件。
+Expected: worktree clean；提交历史符合本计划的原子 cutover 与后续独立提交边界；diff
+不含未知文件。
 
 - [ ] **Step 5: 合并并推送**
 
@@ -1264,6 +1308,70 @@ git ls-remote --heads origin feature/mooyang
 
 Expected: 本地 HEAD 与远端 `refs/heads/feature/mooyang` 完全相同。只有完成远端 SHA
 核对，才可报告实施完成。
+
+### Task 19: 发布 106、真实 SCF 和远端 E2E
+
+**Files:**
+- No planned source changes; only deployment evidence and fixes required by real execution
+
+- [ ] **Step 1: 从远端一致 SHA 构建发布物**
+
+在 `feature/mooyang` 本地与远端 SHA 一致后，从该 SHA 构建 CLI、控制面、Storage、
+Factor、Archive、Monitor、Collector 与 SCF 发布包。记录所有发布包对应的 Git SHA，
+禁止使用 worktree 中未提交的二进制。
+
+- [ ] **Step 2: 清理旧 v1 数据并发布到 106**
+
+使用 `custom.toml` 的 `control` host（`106.53.107.122`）执行配置校验和发布：
+
+```bash
+./bin/moox-cli setup validate --file ./custom.toml
+./bin/moox-cli setup deploy-control --file ./custom.toml
+./bin/moox-cli setup deploy-storage --file ./custom.toml --host control --reset-storage-data
+./bin/moox-cli setup verify-storage --file ./custom.toml --host control
+```
+
+在切换前停止旧写入者，并清理会继续消费或发布
+`moox.storage.dataset.rows.upserted.v1` 的旧 Stream/Consumer 状态。Factor 与 Archive
+通过 `setup deploy-service` 发布完整服务包到 106，不使用手工复制裸二进制。发布后
+核对 Storage Primary/View/DataNode、EventBus、Collector、Monitor、Factor、Archive
+的进程、健康检查、事件 subject 和启动日志。
+
+- [ ] **Step 3: 执行远端 series_tag Storage E2E**
+
+```bash
+./bin/moox-cli setup e2e-storage \
+  --file ./custom.toml --host control --namespace series-tag-v2
+```
+
+再通过远端 Gateway 写入同 Dataset、同 Subject、同 timestamp 的空 tag、Binance 和
+OKX 三行，验证 wildcard、exact-empty、exact-value、ASC/DESC 分页、View complete
+字段、Archive tag 目录以及 Factor 价差结果。
+
+- [ ] **Step 4: 发布并运行真实腾讯云 SCF**
+
+使用真实腾讯云凭据执行：
+
+```bash
+MOOX_SERVICE_GATEWAY_CA_FILE=... \
+  bash examples/e2e/run-real-symbol-kline-scf.sh
+```
+
+必须完成真实函数发布与状态检查、50 个节点、package/version、heartbeat、workload、
+Storage/View 写入和 CLS 生命周期证据。Collector 写入与 Market Canary 均使用
+`venue:binance`，读取共享 `crypto/spot_kline_1h` Dataset 的精确 tag。
+
+- [ ] **Step 5: 核对远端运行版本与最终 SHA**
+
+记录并比对：
+
+1. 本地 `feature/mooyang` SHA；
+2. `origin/feature/mooyang` SHA；
+3. 106 上所有发布包/进程报告的 SHA；
+4. SCF package/version 对应 SHA；
+5. E2E 和 CLS 证据中的本次 namespace/job/version。
+
+只有上述 SHA 一致、所有远端健康检查与真实 E2E 通过，才可报告完成。
 
 ---
 
@@ -1282,4 +1390,6 @@ Expected: 本地 HEAD 与远端 `refs/heads/feature/mooyang` 完全相同。只�
 - [ ] Binding 启用合同、环限制、enabled 热更新限制与 SQLite FK 均生效。
 - [ ] 未引入 DAG、持久化调度、Exactly-once 或通用 tag registry。
 - [ ] 模块测试、race、CGO DuckDB、真实 E2E、workspace verify 和 codeCR 全部通过。
+- [ ] 106 上控制面、Storage、Factor、Archive、Monitor、Collector 均运行远端一致 SHA。
+- [ ] 腾讯云 SCF 真实发布、50 节点工作负载、Storage/View 与 CLS 生命周期 E2E 通过。
 - [ ] `feature/mooyang` 本地与远端 SHA 一致。
