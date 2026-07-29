@@ -37,6 +37,14 @@ func TestOpenRejectsMalformedCurrentStrategySchema(t *testing.T) {
 		"missing result logical unique": func(sql string) string {
 			return strings.Replace(sql, ",\n    UNIQUE (runner_id, strategy_id, namespace, trigger_bar_time)", "", 1)
 		},
+		"runner owner index missing space": func(sql string) string {
+			return strings.Replace(
+				sql,
+				"(space_id, logical_account_id)",
+				"(logical_account_id)",
+				1,
+			)
+		},
 		"wrong runner partial unique predicate": func(sql string) string {
 			return strings.Replace(sql, "status = 'ENABLED'", "status = 'DISABLED'", 1)
 		},

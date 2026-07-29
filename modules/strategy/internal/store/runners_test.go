@@ -161,6 +161,39 @@ func TestEnableRunnerRejectsLogicalAccountOwnedByAnotherRunner(t *testing.T) {
 	}
 }
 
+func TestEnableRunnerScopesLogicalAccountOwnershipBySpace(t *testing.T) {
+	repo := openCurrentStore(t)
+	seedStrategy(t, repo, "strategy-1")
+	logicalID := "logical-1"
+	first := newRunner("runner-1", "strategy-1", domain.RunnerStatusDisabled)
+	first.LogicalAccountID = &logicalID
+	second := newRunner("runner-2", "strategy-1", domain.RunnerStatusDisabled)
+	second.SpaceID = "space-2"
+	second.LogicalAccountID = &logicalID
+	if err := repo.CreateRunner(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateRunner(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetRunnerStatus(
+		context.Background(),
+		first.ID,
+		domain.RunnerStatusEnabled,
+		time.Now(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetRunnerStatus(
+		context.Background(),
+		second.ID,
+		domain.RunnerStatusEnabled,
+		time.Now(),
+	); err != nil {
+		t.Fatalf("second space ownership was rejected: %v", err)
+	}
+}
+
 func TestObserveOnlyRunnerHasNoLogicalAccount(t *testing.T) {
 	repo := openCurrentStore(t)
 	seedStrategy(t, repo, "strategy-1")

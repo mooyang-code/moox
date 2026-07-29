@@ -212,7 +212,7 @@ func (m *Store) validateRunnerOwnerIndex() error {
 	).Scan(&columns).Error; err != nil {
 		return fmt.Errorf("inspect Strategy runner owner index columns: %w", err)
 	}
-	if strings.Join(columns, "\x00") != "logical_account_id" {
+	if strings.Join(columns, "\x00") != "space_id\x00logical_account_id" {
 		return obsoleteSchemaError("t_strategy_runners")
 	}
 	var sql string
@@ -223,7 +223,7 @@ func (m *Store) validateRunnerOwnerIndex() error {
 		return fmt.Errorf("inspect Strategy runner owner index SQL: %w", err)
 	}
 	const expected = "CREATE UNIQUE INDEX ux_strategy_runners_enabled_logical_account " +
-		"ON t_strategy_runners (logical_account_id) " +
+		"ON t_strategy_runners (space_id, logical_account_id) " +
 		"WHERE logical_account_id IS NOT NULL AND status = 'ENABLED'"
 	if strings.Join(strings.Fields(sql), " ") != expected {
 		return obsoleteSchemaError("t_strategy_runners")

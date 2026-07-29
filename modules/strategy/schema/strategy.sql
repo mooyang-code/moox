@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_runners (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_runners_enabled_logical_account
-ON t_strategy_runners (logical_account_id)
+ON t_strategy_runners (space_id, logical_account_id)
 WHERE logical_account_id IS NOT NULL AND status = 'ENABLED';
 
 CREATE TABLE IF NOT EXISTS t_strategy_results (

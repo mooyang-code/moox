@@ -58,6 +58,7 @@ func TestStrategySchemaUsesRunnerAndResultColumns(t *testing.T) {
 	}
 	for _, indexPart := range []string{
 		"CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_runners_enabled_logical_account",
+		"ON t_strategy_runners (space_id, logical_account_id)",
 		"WHERE logical_account_id IS NOT NULL AND status = 'ENABLED'",
 		"UNIQUE (runner_id, strategy_id, namespace, trigger_bar_time)",
 	} {
