@@ -327,21 +327,24 @@ A logical account in `PAUSED` never resumes automatically.
 
 ## Target Contract
 
-`TargetIntent` becomes:
+Strategy publishes one `LogicalAccountTargetRequested` command:
 
 ```text
 target_id
 runner_id
 logical_account_id
 command_sequence
-targets[]
+targets[] InstrumentTarget
   instrument_id
-  target_quantity
+  quantity
 ```
 
 The command omits physical account IDs, Exchange-native symbols, market type,
 capital, and allocation weights. Trade resolves account-specific instruments,
 symbols, quantity steps, contract conversions, and minimums.
+Each `InstrumentTarget.quantity` is the signed absolute desired position for
+that instrument, not an Order quantity or adjustment delta. SPOT quantities
+cannot be negative; SWAP uses the sign for direction.
 
 Every command is a FULL replacement for the logical account:
 
@@ -490,6 +493,11 @@ The latest Strategy target remains stored. Only an explicit
    action deadline expires, or an account reports an error.
 7. Finishes in `PAUSED`, never `ACTIVE`.
 
+The RPC keeps the trading-domain name `FlattenLogicalAccount`; operator-facing
+UI uses "close positions per account" (逐账户清仓). Flatten does not delete the
+latest `LogicalAccountTarget`, so a later explicit Resume may reopen exposure
+toward that target.
+
 Flatten is an operator override. It attempts every member independently even
 when the aggregate logical account is Not Ready. Failures and remaining
 positions are returned per account, and repeated use of the same `action_id`
@@ -575,9 +583,11 @@ Live activation requires:
 - Homogeneous member environment.
 - Valid single-secret retrieval for every member credential.
 
-`RevealSecret` is called once by secret ID. Trade validates returned category,
+The service-auth-only `GetSecretValue` RPC is called once by secret ID. The
+ordinary admin `GetSecret` remains masked. Trade validates returned category,
 provider, status, key ID, secret value, and extra configuration. It does not
-list and reveal unrelated credentials.
+list or load unrelated credentials. The plaintext response type remains
+distinct from the masked admin type and is named `SecretMaterial`.
 
 ## Health and Runtime
 
@@ -655,6 +665,8 @@ algorithm registry, or second event workflow.
 - Observe-only `rebalance` updates its theoretical target without an outbox
   message.
 - Empty `rebalance` publishes an empty FULL target.
+- Strategy output and the public command use `InstrumentTarget.quantity`; old
+  `target_quantity`, `TargetPosition`, and `TradeTarget` names are rejected.
 - Command sequence is monotonic per runner.
 - Transaction failure cannot partially write Result, current target, sequence,
   or outbox.
@@ -715,12 +727,14 @@ algorithm registry, or second event workflow.
 - Non-OPEN success responses trigger synchronization.
 - OKX client IDs satisfy native validation.
 - Paper LIMIT is rejected before persistence.
-- Secret retrieval reveals only the requested credential.
+- `GetSecretValue` is service-auth-only and returns only the requested
+  credential with validation metadata.
 - Manager initial failure and worker termination affect readiness.
 
 ### Cross-Module and Real Exchange
 
-- StrategyRunner FULL target reaches one multi-account LogicalAccount.
+- StrategyRunner FULL `LogicalAccountTargetRequested` reaches one multi-account
+  LogicalAccount.
 - Removed instrument becomes zero and closes physical positions.
 - Empty FULL target closes every member.
 - Manual flatten prevents automatic reopening until Resume.
@@ -735,10 +749,12 @@ Strategy documents that describe:
 
 - Binding/group routing.
 - Inbox/Saga/Rebalance legs.
-- Single-account TargetIntent.
+- Single-account target commands.
 - Stateful Strategy input/output and state-format migration.
 - LogicalAccount control revisions or duplicate `FLATTENING`/`DISABLED`
   automation states.
+- `TargetIntent`, `TargetPosition`, `TradeTarget`, `target_quantity`,
+  `RevealSecret`, or other superseded command and secret-access names.
 - Paper LIMIT support.
 - The local double-entry balance projection.
 - Bulk secret reveal.
@@ -757,7 +773,7 @@ The change is complete when:
 5. Manual orders and flatten operations pause automation before they act.
 6. Automatic execution cannot resume without explicit operator Resume.
 7. Order submission, `FillPolicy`, server-derived reduce-only behavior, unknown
-   recovery, OKX IDs, readiness, and secret access satisfy the corrected
-   boundaries.
+   recovery, OKX IDs, readiness, and `GetSecretValue` access satisfy the
+   corrected boundaries.
 8. Module tests, targeted race tests, cross-module E2E, deployment contracts,
    and real Exchange testnet smoke pass.

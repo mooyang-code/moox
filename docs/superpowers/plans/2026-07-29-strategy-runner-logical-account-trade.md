@@ -2,7 +2,7 @@
 
 > **供 Agent 执行：** REQUIRED SUB-SKILL: 使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`，严格按任务中的 `- [ ]` 顺序实施、验证和提交。
 
-**目标：** 将 Strategy 与 Trade 收敛为适合个人量化的通用执行链：不可变 Strategy、可运行的 StrategyRunner、同质 LogicalAccount、FULL 组合目标、动态择优执行，以及可暂停、人工下单和一键清仓的操作入口。
+**目标：** 将 Strategy 与 Trade 收敛为适合个人量化的通用执行链：不可变 Strategy、可运行的 StrategyRunner、同质 LogicalAccount、FULL 组合目标、动态择优执行，以及可暂停、人工下单和逐账户清仓的操作入口。
 
 **架构：** Strategy 是只基于完整历史窗口和参数的无状态函数，只产生按 `instrument_id` 表达的完整理论组合；Trade 以 LogicalAccount 独占执行 ownership，串行 TargetExecutor 每轮最多做一个外部动作。自动执行和人工干预共享订单服务，但 ownership 由服务端赋值。账户私有流和定期同步仍以物理 ExchangeAccount 为边界，LogicalAccount 只聚合自动执行状态、就绪度和执行选择。
 
@@ -20,8 +20,8 @@
 - StrategyRunner 可以没有 LogicalAccount，此时为观察模式；一个 StrategyRunner 只控制一个 LogicalAccount，一个 Strategy 可创建多个 Runner。
 - LogicalAccount 成员必须同为 paper 或 live、同为 SPOT 或 SWAP、同一 settlement asset；允许来自不同 Exchange，自动执行时动态择优。
 - LogicalAccount 处于 `PAUSED` 时继续维护物理账户 session、私有流和同步，只禁止新的自动 TARGET 子订单。
-- 人工 RPC 必须先暂停整个 LogicalAccount。人工下单和一键清仓分别以持久化 `OperatorAction` 执行，调用者不能传入订单 source、owner 或 Runner 标识。
-- `TargetIntent` 是 LogicalAccount 的 FULL 快照：遗漏 instrument 表示目标为零，空列表表示全部归零。
+- 人工 RPC 必须先暂停整个 LogicalAccount。人工下单和逐账户清仓分别以持久化 `OperatorAction` 执行，调用者不能传入订单 source、owner 或 Runner 标识。
+- `LogicalAccountTargetRequested` 携带 LogicalAccount 的 FULL 目标：遗漏 instrument 表示目标为零，空列表表示全部归零。
 - Strategy artifact 由唯一 `strategy_id` 标识并不可变；源码、manifest、输入契约或参数 schema 发生变化必须使用新的 `strategy_id`。
 - V1 Strategy 只支持完整历史窗口计算，不支持 `state_json`、`state_revision`、`next_state`、`state_format_version` 或增量状态迁移。
 
@@ -57,7 +57,7 @@ t_operator_actions
 ```text
 Strategy Engine
   -> StrategyResult + Runner current target + Outbox（同一事务）
-  -> TradeTargetRequested（subject = logical_account_id）
+  -> LogicalAccountTargetRequested（subject = logical_account_id）
   -> Trade LogicalAccountTarget（每个 LogicalAccount 一行）
   -> TargetWorker（串行、每轮最多一个动作）
   -> OrderService
@@ -507,13 +507,16 @@ Go:     TestValidateOutputAcceptsEmptyRebalance
 Go:     TestRunDoesNotExposePreviousTargetsOrState
 Go:     TestRunHashesCompleteHistoryParamsAndTriggerContext
 Go:     TestValidateOutputRejectsNextState
+Go:     TestValidateOutputRejectsTargetQuantityAlias
 Python: test_accepts_empty_rebalance
 Python: test_context_has_no_previous_targets_or_state
 Python: test_rejects_symbol_and_native_account_fields
 Python: test_rejects_next_state
+Python: test_rejects_target_quantity_alias
 Worker: test_accepts_empty_rebalance
 Worker: test_passes_complete_history_without_previous_targets
 Worker: test_rejects_four_argument_stateful_entrypoint
+Worker: test_rejects_target_quantity_alias
 ```
 
 Strategy 输出目标只允许：
@@ -524,7 +527,7 @@ Strategy 输出目标只允许：
   "targets": [
     {
       "instrument_id": "BTC-USDT-SPOT",
-      "target_quantity": "0.25"
+      "quantity": "0.25"
     }
   ],
   "debug_info": {
@@ -534,13 +537,13 @@ Strategy 输出目标只允许：
 }
 ```
 
-禁止输出 `symbol`、Exchange 原生 symbol、账户 ID、source、owner、`state` 或 `next_state`。`hold` 保留 Runner 当前 target；`rebalance` 用本次完整列表替换，空列表表示全平。
+Go、Python SDK 和 Worker 的明细类型统一命名为 `InstrumentTarget`，字段统一为 `instrument_id + quantity`，不保留 `TargetPosition` 或字段别名。禁止输出 `target_quantity`、`symbol`、Exchange 原生 symbol、账户 ID、source、owner、`state` 或 `next_state`。`hold` 保留 Runner 当前 target；`rebalance` 用本次完整列表替换，空列表表示全平。
 
 - [ ] **4.2 运行 RED 测试**
 
 ```bash
 cd modules/strategy
-go test -count=1 ./internal/engine -run 'Test(ValidateOutputAcceptsEmptyRebalance|RunDoesNotExposePreviousTargetsOrState|RunHashesCompleteHistoryParamsAndTriggerContext|ValidateOutputRejectsNextState)$'
+go test -count=1 ./internal/engine -run 'Test(ValidateOutputAcceptsEmptyRebalance|RunDoesNotExposePreviousTargetsOrState|RunHashesCompleteHistoryParamsAndTriggerContext|ValidateOutputRejectsNextState|ValidateOutputRejectsTargetQuantityAlias)$'
 python3 -m unittest discover -s pysdk/tests -p 'test_*.py'
 python3 -m unittest pyworker/test_worker.py
 ```
@@ -748,7 +751,7 @@ git commit -m "feat(trade): add logical account persistence"
 
 ---
 
-## 任务 6：一次性切换 StrategyResult 到 Trade TargetIntent 的公共契约
+## 任务 6：一次性切换 StrategyResult 到 LogicalAccount FULL 目标公共契约
 
 该任务必须在一个提交中同时修改事件生产者、公共校验和消费者，避免某一层仍拒绝空 FULL。
 
@@ -756,6 +759,7 @@ git commit -m "feat(trade): add logical account persistence"
 
 - 修改：`packages/tradeeventpb/trade_events.proto`
 - 生成：`packages/tradeeventpb/trade_events.pb.go`
+- 修改：`packages/events/registry.go`
 - 修改：`packages/events/validation.go`
 - 修改：`packages/events/validation_test.go`
 - 修改：`packages/events/events_test.go`
@@ -781,33 +785,33 @@ git commit -m "feat(trade): add logical account persistence"
 - [ ] **6.1 写公共事件契约测试**
 
 ```text
-TestTradeTargetRequestedRequiresTargetRunnerAndLogicalAccount
-TestTradeTargetRequestedAcceptsEmptyFullTarget
-TestTradeTargetRequestedRejectsDuplicateInstrumentID
-TestTradeTargetRequestedSubjectUsesLogicalAccountID
-TestTargetIntentValidationAcceptsEmptyFullTarget
-TestHandleTargetMapsTargetIdentity
+TestLogicalAccountTargetRequestedRequiresTargetRunnerAndLogicalAccount
+TestLogicalAccountTargetRequestedAcceptsEmptyFullTarget
+TestLogicalAccountTargetRequestedRejectsDuplicateInstrumentID
+TestLogicalAccountTargetRequestedSubjectUsesLogicalAccountID
+TestLogicalAccountTargetRequestedValidationAcceptsEmptyFullTarget
+TestHandleLogicalAccountTargetMapsTargetIdentity
 TestAcceptLogicalAccountTargetPersistsTargetID
 ```
 
 - [ ] **6.2 将 Proto 改为唯一公共形状**
 
 ```proto
-message TradeTarget {
+message InstrumentTarget {
   string instrument_id = 1;
-  string target_quantity = 2;
+  string quantity = 2;
 }
 
-message TradeTargetRequested {
+message LogicalAccountTargetRequested {
   string target_id = 1;
   string runner_id = 2;
   string logical_account_id = 3;
   int64 command_sequence = 4;
-  repeated TradeTarget targets = 5;
+  repeated InstrumentTarget targets = 5;
 }
 ```
 
-Strategy 发布时令 `target_id = result_id`。删除 `strategy_run_id`、`strategy_result_id`、`execution_id`、`execution_binding_id`、`exchange_account_id`、`data_revision`、`not_after` 和 `symbol`。事件 `SubjectID` 使用 `logical_account_id`；目标按 `instrument_id` 唯一，空 targets 合法。
+Strategy 发布时令 `target_id = result_id`。事件注册符号和 Proto 消息使用 `LogicalAccountTargetRequested`；简洁的 wire event name 继续使用 `trade.target.requested`，不额外扩展 subject 词层级。`InstrumentTarget.quantity` 是该 instrument 的有符号绝对期望持仓数量，不是订单数量或本次调整 delta；SPOT 不允许负数，SWAP 可用正负号表达方向。删除 `TargetIntent`、`TargetPosition`、`TradeTarget`、`TradeTargetRequested`、`target_quantity`、`strategy_run_id`、`strategy_result_id`、`execution_id`、`execution_binding_id`、`exchange_account_id`、`data_revision`、`not_after` 和 `symbol`。事件 `SubjectID` 使用 `logical_account_id`；目标按 `instrument_id` 唯一，空 targets 合法。
 
 - [ ] **6.3 运行事件 RED 测试并生成 Proto**
 
@@ -866,6 +870,11 @@ exchange_account_id
 data_revision
 not_after
 symbol
+TargetIntent
+TargetPosition
+TradeTarget
+TradeTargetRequested
+target_quantity
 ```
 
 护栏只扫描 Strategy Target publisher、公共 event 和 Trade Target consumer/domain，避免误伤 Order/Exchange 正常字段。
@@ -1176,7 +1185,7 @@ git commit -m "feat(trade): enforce trusted order ownership"
 
 ---
 
-## 任务 10：实现人工下单和一键清仓
+## 任务 10：实现人工下单和逐账户清仓
 
 **文件：**
 
@@ -1221,7 +1230,7 @@ TestResumeRequiresReadyNoConflictAndWarnsAboutReopen
 
 - [ ] **10.3 实现 FlattenLogicalAccount**
 
-Flatten 的含义是：将 LogicalAccount 每个物理成员的可交易风险仓位精确归零，不做跨账户净额。
+保留 RPC 名 `FlattenLogicalAccount`；管理界面和操作文案统一使用“逐账户清仓”。Flatten 的含义是：将 LogicalAccount 每个物理成员的可交易风险仓位精确归零，不做跨账户净额。它不删除最新 LogicalAccountTarget，后续显式 Resume 可能按该目标重新开仓。
 
 固定步骤：
 
@@ -1352,7 +1361,7 @@ TradeExecutionService:
   ListPositions
 ```
 
-LogicalAccount 公共模型包含 `settlement_asset`、`automation_state` 和 `pause_reason`；不暴露 `control_state`、`control_revision`、`FLATTENING` 或 `DISABLED`。Flatten 的运行状态通过 `GetOperatorAction` 返回。
+LogicalAccount 公共模型包含 `settlement_asset`、`automation_state` 和 `pause_reason`；不暴露 `control_state`、`control_revision`、`FLATTENING` 或 `DISABLED`。`GetLogicalAccountTarget` 使用 `InstrumentTarget.quantity` 返回当前 FULL 目标。Flatten 的运行状态通过 `GetOperatorAction` 返回。
 
 删除公开的 `PauseAccount`、`PlaceOrder`、`SubmitTarget`。`PlaceManualOrder` 请求只含 `action_id`、目标 `exchange_account_id`、订单客户端字段、`fill_policy` 和 reason；服务端由物理账户反查所属 LogicalAccount，再暂停整个 LogicalAccount。请求不含 source、owner、strategy result、runner 或 `reduce_position_only`。
 
@@ -1401,6 +1410,16 @@ git commit -m "feat(api): expose runners and logical account operations"
 
 **文件：**
 
+- 修改：`modules/admin/proto/secret_service.proto`
+- 生成：`modules/admin/proto/admingen/secret_service.pb.go`
+- 生成：`modules/admin/proto/admingen/secret_service.trpc.go`
+- 修改：`modules/admin/proto/admingen/security_test.go`
+- 修改：`modules/admin/internal/service/secret/rpc/service.go`
+- 修改：`modules/admin/internal/service/secret/rpc/service_test.go`
+- 修改：`modules/admin/internal/gateway/gateway_test.go`
+- 修改：`modules/admin/internal/service/sysdeploy/defaults.go`
+- 修改：`modules/admin/internal/service/sysdeploy/defaults_test.go`
+- 修改：`modules/admin/internal/service/sysdeploy/acceptance_test.go`
 - 修改：`modules/trade/internal/secretclient/client.go`
 - 修改：`modules/trade/internal/secretclient/client_test.go`
 - 修改：`modules/trade/internal/config/app.go`
@@ -1418,7 +1437,11 @@ git commit -m "feat(api): expose runners and logical account operations"
 - [ ] **12.1 写 Secret 和环境 profile 测试**
 
 ```text
-TestResolveSecretRevealsOnlyConfiguredID
+TestGetSecretValueReturnsPlaintextOnlyForServiceCall
+TestGetSecretValueRejectsInactiveSecret
+TestAdminRouterDeniesMachineOnlyGetSecretValueAliases
+TestAdminRouterDeniesGetSecretValueThroughDeploymentAlias
+TestResolveSecretGetsOnlyConfiguredSecretValue
 TestResolveSecretValidatesExchangeCategoryAndActive
 TestConfigRejectsProductionAccountWhenLiveTradingDisabled
 TestAdapterUsesFixedTestnetEndpoint
@@ -1435,9 +1458,17 @@ trade:
 
 默认 false。存在 PRODUCTION ExchangeAccount 且开关 false 时拒绝自动和人工下单；同步仍允许。TESTNET 不受 live 开关影响。
 
-- [ ] **12.3 单条 Reveal Secret**
+- [ ] **12.3 按 ID 获取单条 Secret 明文**
 
-直接按 `secret_id` 调用 `RevealSecret`，使用返回 metadata 校验：
+将后台服务专用 RPC `RevealSecret` 改名为 `GetSecretValue`。普通管理端 `GetSecret` 继续返回 metadata 和脱敏值；`GetSecretValue` 仅允许 service-auth 调用，按 `secret_id` 返回可用明文及 metadata。不要命名为 `DecryptSecret`，因为解密属于 DAO 存储实现；不要命名为 `GetExchangeCredential`，因为 Admin Secret 服务仍是通用能力。
+
+请求/响应同步改为 `GetSecretValueReq`、`GetSecretValueRsp`，明文返回结构由 `RevealedSecret` 改为 `SecretMaterial`，字段集合保持不变，从而继续与管理端脱敏 `Secret` 类型严格分离。执行：
+
+```bash
+make -C modules/admin/proto all
+```
+
+Trade 直接按 `secret_id` 调用 `GetSecretValue`，使用返回 metadata 校验：
 
 ```text
 active = true
@@ -1446,7 +1477,9 @@ exchange = ExchangeAccount.exchange
 space scope 匹配
 ```
 
-删除最多列 200 条并逐条 Reveal 的路径。
+删除最多列 200 条再逐条获取明文的路径。
+
+同步更新 Admin Gateway method allowlist、部署默认值和安全测试；全链删除 `RevealSecret`、`RevealedSecret` 旧 RPC/消息名，不保留别名。
 
 - [ ] **12.4 固定 Testnet/Production endpoint**
 
@@ -1467,20 +1500,28 @@ readiness 必须包含 Manager 首次成功、LogicalAccount worker、TargetWork
 - [ ] **12.6 运行测试**
 
 ```bash
-cd modules/trade
+cd modules/admin
+go test -count=1 ./internal/service/secret/rpc ./internal/gateway \
+  ./internal/service/sysdeploy ./proto/admingen
+cd ../trade
 go test -count=1 ./internal/secretclient ./internal/config \
   ./internal/exchange/binance ./internal/exchange/okx \
   ./internal/bootstrap ./internal/health
 ```
 
+预期：Admin 明文接口只允许 service-auth，Trade 只读取配置指定的单个 secret ID；其他测试全部通过。
+
 - [ ] **12.7 提交**
 
 ```bash
-git add modules/trade/internal/secretclient modules/trade/internal/config \
+git add modules/admin/proto modules/admin/internal/service/secret/rpc \
+  modules/admin/internal/gateway/gateway_test.go \
+  modules/admin/internal/service/sysdeploy \
+  modules/trade/internal/secretclient modules/trade/internal/config \
   modules/trade/config/app.yaml modules/trade/internal/bootstrap \
   modules/trade/internal/health modules/trade/internal/exchange/binance \
   modules/trade/internal/exchange/okx
-git commit -m "fix(trade): gate live trading and runtime readiness"
+git commit -m "fix(trade): restrict credential loading and live trading"
 ```
 
 ---
@@ -1528,7 +1569,8 @@ Web 只展示 Strategy、Runner、StrategyResult、当前完整 targets、Logica
 strategy API 返回 runner/result 字段
 operation panel 只操作 Runner 启停
 manual order 必须提供 action_id/reason
-flatten 显示逐账户 remaining position/error
+逐账户清仓按钮调用 FlattenLogicalAccount，并显示逐账户 remaining position/error
+target 表格读取 InstrumentTarget.quantity
 LogicalAccount PAUSED 时明确显示未执行的新 LogicalAccountTarget
 ```
 
@@ -1545,7 +1587,7 @@ default port: 11202
 
 - [ ] **13.3 更新权威文档**
 
-`modules/trade/README.md + DESIGN.md` 作为 Trade 唯一事实源；Strategy 接入手册使用 `Strategy`、`StrategyRunner`、`StrategyResult`、LogicalAccount 和空 FULL 全平语义，并只描述三参数、完整历史窗口 Python entrypoint。删除 Saga、RebalanceSvc、Inbox、ExecutionBinding、StrategyDefinition/Run、state/next_state、state-format migration，以及 LogicalAccount `control_state`、`control_revision`、`FLATTENING`、`DISABLED` 的现役描述。
+`modules/trade/README.md + DESIGN.md` 作为 Trade 唯一事实源；Strategy 接入手册使用 `Strategy`、`StrategyRunner`、`StrategyResult`、`LogicalAccountTargetRequested`、`InstrumentTarget.quantity`、LogicalAccount 和空 FULL 全平语义，并只描述三参数、完整历史窗口 Python entrypoint。删除 Saga、RebalanceSvc、Inbox、ExecutionBinding、StrategyDefinition/Run、TargetIntent、TargetPosition、TradeTarget、target_quantity、RevealSecret、state/next_state、state-format migration，以及 LogicalAccount `control_state`、`control_revision`、`FLATTENING`、`DISABLED` 的现役描述。
 
 历史 `docs/superpowers/plans/*` 不回写。
 
@@ -1699,15 +1741,15 @@ git status --short
 ```bash
 bash scripts/verify-event-contracts.sh
 bash scripts/test-greenfield-contract.sh
-rg -n 'StrategyDefinition|StrategyBinding|ExecutionBinding|StrategyRun|strategy_version|state_schema_version|state_format_version|state_json|state_revision|next_state|data_revision|not_after|TargetState|PortfolioExecutor|PortfolioWorker|control_state|control_revision|ControlFlattening|ControlDisabled' \
-  modules/strategy modules/trade packages web/src docs \
+rg -n 'StrategyDefinition|StrategyBinding|ExecutionBinding|StrategyRun|strategy_version|state_schema_version|state_format_version|state_json|state_revision|next_state|data_revision|not_after|TargetState|PortfolioExecutor|PortfolioWorker|control_state|control_revision|ControlFlattening|ControlDisabled|TargetIntent|TargetPosition|TradeTargetRequested|TradeTarget|target_quantity|RevealSecret|RevealedSecret' \
+  modules/admin modules/strategy modules/trade packages web/src docs \
   --glob '!docs/superpowers/plans/**' \
   --glob '!docs/superpowers/specs/**'
 rg -n 'TimeInForce|ReduceOnly|time_in_force|reduce_only' \
   modules/trade/internal/domain modules/trade/proto
 ```
 
-预期：前两条 PASS；第一条 `rg` 只允许出现在明确的旧 schema 拒绝测试/错误文本中；第二条不得命中生产领域或公开 Proto。Exchange Adapter 内仍允许使用原生 `timeInForce`、`reduceOnly` 字段。
+预期：前两条 PASS；第一条 `rg` 只允许出现在明确的旧 schema、旧输入别名拒绝测试或对应错误文本中，生产代码和现役文档不得命中；第二条不得命中生产领域或公开 Proto。Exchange Adapter 内仍允许使用原生 `timeInForce`、`reduceOnly` 字段。
 
 - [ ] **15.3 运行全仓验证**
 
@@ -1730,6 +1772,7 @@ pnpm docs:build
 Strategy 四表和不可变 artifact
 无状态完整历史窗口、input hash、Result/outbox 原子性
 空 FULL 跨 Go/Python/Event/Trade 的一致性
+LogicalAccountTargetRequested 与 InstrumentTarget.quantity 全链一致性
 LogicalAccount 同质性、automation_state、ownership、锁门禁和 readiness
 TargetExecutor 一轮一个动作及 SPOT/SWAP FULL union
 OperatorAction 幂等、Flatten 重启和逐账户 remaining position
@@ -1739,6 +1782,7 @@ ReducePositionOnly 仅由服务端生成，人工 RPC 不可设置且禁止穿�
 AccountSync 锁顺序
 RPC ownership 防伪造
 Testnet profile 和 live gate
+GetSecretValue service-auth、单 ID 读取和 metadata 校验
 旧 schema/旧术语删除
 ```
 
@@ -1779,6 +1823,7 @@ git status --short
 | 无状态完整历史窗口 | 3、4、6 | 三参数 entrypoint、拒绝 state 字段、完整 input hash |
 | StrategyRunner / StrategyResult 命名 | 2、6、11、13 | Proto、RPC、Web、文档 |
 | Strategy 到 LogicalAccount | 5、6、7 | owner 唯一、subject、LogicalAccountTarget |
+| FULL 目标公共命名 | 4、6、11、13 | LogicalAccountTargetRequested、InstrumentTarget.quantity |
 | FULL / 空全平 / instrument_id | 4、6、8、14 | 五层契约和 E2E |
 | 同质账户组和动态择优 | 5、7、8 | 同质校验、优先级/容量回退 |
 | 一轮一个外部动作 | 8 | cancel/resolve/place 后立即返回 |
@@ -1797,10 +1842,12 @@ git status --short
 - Strategy 生产 schema 恰好四表，旧 schema 明确拒绝。
 - Strategy schema、Proto、Go、Python、manifest 和现役文档不存在 `state_json`、`state_revision`、`next_state`、`state_format_version` 或 `data_revision`。
 - Strategy/Trade/Web 只使用 Strategy、StrategyRunner、StrategyResult、LogicalAccount、LogicalAccountTarget、OperatorAction 术语。
+- 公共目标链只使用 `LogicalAccountTargetRequested`、`InstrumentTarget.quantity` 和 `LogicalAccountTarget`，不存在 `TargetIntent`、`TargetPosition`、`TradeTarget` 或 `target_quantity`。
 - LogicalAccount 保留 `settlement_asset`，只持久化 `automation_state=ACTIVE|PAUSED`，不存在 `control_revision`、`FLATTENING` 或 `DISABLED`。
 - 空 `rebalance` 从 Python 到 Trade LogicalAccountTarget 全链合法，并在 E2E 中让全部物理仓位归零。
 - 一个 LogicalAccount 的自动 TARGET 执行严格串行，每轮最多一个外部动作。
-- 人工 RPC 无法伪造 ownership，人工下单和一键清仓都会先暂停整个 LogicalAccount。
+- 人工 RPC 无法伪造 ownership，人工下单和逐账户清仓都会先暂停整个 LogicalAccount。
+- Admin 后台明文接口名为 `GetSecretValue`，只允许 service-auth；Trade 只按配置的 `secret_id` 获取一条并校验 metadata。
 - PAUSED 不停止物理账户同步和私有流；所有 enabled 成员 Ready 才允许恢复自动执行。
 - OrderService 在 unknown submit 恢复时不会盲目重发，OKX ID 合法，Paper 只下 MARKET。
 - 本地模块测试、race、跨模块 E2E、workspace、`make verify-pr`、文档构建和 clean-tree `make proto-check` 全部通过。
