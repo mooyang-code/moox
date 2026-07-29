@@ -358,6 +358,173 @@ func TestOrderServiceFlattenOversizeRemainsReducePositionOnly(t *testing.T) {
 	require.True(t, placed.Spec.ReducePositionOnly)
 }
 
+func TestSubmitRejectsPositionChangeThatWouldCrossZero(t *testing.T) {
+	for _, owner := range []string{"TARGET", "OPERATOR"} {
+		t.Run(owner, func(t *testing.T) {
+			service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+			positions := &positionSourceStub{}
+			service.Validator.Positions = positions
+			spec := testSpec(service.now())
+			spec.PositionSide = exchange.PositionSideNet
+			spec.Side = exchange.SideBuy
+			spec.Owner.Type = owner
+			pending, err := service.Place(context.Background(), "space-1", spec)
+			require.NoError(t, err)
+			require.False(t, pending.Spec.ReducePositionOnly)
+
+			positions.position.SignedQuantity = shared.MustDecimal("-0.5")
+			rejected, err := service.Submit(
+				context.Background(),
+				"space-1",
+				string(pending.ID),
+			)
+
+			require.ErrorIs(t, err, ErrCrossZero)
+			require.Equal(t, orderdomain.Rejected, rejected.State)
+			require.Zero(t, adapter.placeCalls)
+			stored, getErr := tradeStore.GetOrder(
+				context.Background(),
+				"space-1",
+				string(pending.ID),
+			)
+			require.NoError(t, getErr)
+			require.Equal(t, "REJECTED", stored.State)
+			require.False(t, stored.ReduceOnly)
+		})
+	}
+}
+
+func TestSubmitPersistsFreshReducePositionOnlyBeforeSending(t *testing.T) {
+	service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	positions := &positionSourceStub{}
+	service.Validator.Positions = positions
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideBuy
+	spec.Owner.Type = "OPERATOR"
+	pending, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.False(t, pending.Spec.ReducePositionOnly)
+
+	positions.position.SignedQuantity = shared.MustDecimal("-2")
+	submitted, err := service.Submit(
+		context.Background(),
+		"space-1",
+		string(pending.ID),
+	)
+
+	require.NoError(t, err)
+	require.True(t, adapter.placed.ReduceOnly)
+	require.True(t, submitted.Spec.ReducePositionOnly)
+	stored, err := tradeStore.GetOrder(
+		context.Background(),
+		"space-1",
+		string(pending.ID),
+	)
+	require.NoError(t, err)
+	require.True(t, stored.ReduceOnly)
+}
+
+func TestSubmitRejectsPreviouslyReducingOrderAfterPositionReverses(t *testing.T) {
+	for _, owner := range []string{"TARGET", "OPERATOR", "FLATTEN"} {
+		t.Run(owner, func(t *testing.T) {
+			service, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+			positions := &positionSourceStub{
+				position: exchange.Position{SignedQuantity: shared.MustDecimal("1")},
+			}
+			service.Validator.Positions = positions
+			spec := testSpec(service.now())
+			spec.PositionSide = exchange.PositionSideNet
+			spec.Side = exchange.SideSell
+			spec.Owner.Type = owner
+			pending, err := service.Place(context.Background(), "space-1", spec)
+			require.NoError(t, err)
+			require.True(t, pending.Spec.ReducePositionOnly)
+
+			positions.position.SignedQuantity = shared.MustDecimal("-1")
+			rejected, err := service.Submit(
+				context.Background(),
+				"space-1",
+				string(pending.ID),
+			)
+
+			require.ErrorIs(t, err, ErrReduceOnly)
+			require.Equal(t, orderdomain.Rejected, rejected.State)
+			require.Zero(t, adapter.placeCalls)
+		})
+	}
+}
+
+func TestSubmitKeepsFlattenReduceOnlyAfterPositionShrinks(t *testing.T) {
+	service, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	positions := &positionSourceStub{
+		position: exchange.Position{SignedQuantity: shared.MustDecimal("1")},
+	}
+	service.Validator.Positions = positions
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideSell
+	spec.Quantity = shared.MustDecimal("2")
+	spec.Owner.Type = "FLATTEN"
+	pending, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+
+	positions.position.SignedQuantity = shared.MustDecimal("0.5")
+	submitted, err := service.Submit(
+		context.Background(),
+		"space-1",
+		string(pending.ID),
+	)
+
+	require.NoError(t, err)
+	require.True(t, adapter.placed.ReduceOnly)
+	require.True(t, submitted.Spec.ReducePositionOnly)
+}
+
+func TestConfirmedAbsentRetryRefreshesReducePositionOnly(t *testing.T) {
+	service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	positions := &positionSourceStub{}
+	service.Validator.Positions = positions
+	now := time.Unix(1_700_000_000, 0)
+	service.Now = func() time.Time { return now }
+	service.Validator.Now = func() time.Time { return now }
+	spec := testSpec(now)
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideBuy
+	spec.Owner.Type = "OPERATOR"
+	pending, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+
+	adapter.placeErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
+	unknown, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.Error(t, err)
+	require.Equal(t, orderdomain.SubmitUnknown, unknown.State)
+	require.False(t, adapter.placed.ReduceOnly)
+
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.placeErr = nil
+	now = now.Add(31 * time.Second)
+	pending, err = service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Pending, pending.State)
+	require.Equal(t, 1, adapter.placeCalls)
+
+	positions.position.SignedQuantity = shared.MustDecimal("-2")
+	submitted, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, 2, adapter.placeCalls)
+	require.True(t, adapter.placed.ReduceOnly)
+	require.True(t, submitted.Spec.ReducePositionOnly)
+	require.Equal(t, pending.Spec.ClientOrderID, adapter.placed.ClientOrderID)
+	stored, getErr := tradeStore.GetOrder(
+		context.Background(),
+		"space-1",
+		string(pending.ID),
+	)
+	require.NoError(t, getErr)
+	require.True(t, stored.ReduceOnly)
+}
+
 func TestOrderServiceNeverSetsReducePositionOnlyForSpot(t *testing.T) {
 	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSpot)
 	spec := testSpec(service.now())

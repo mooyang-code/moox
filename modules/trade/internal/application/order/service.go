@@ -188,11 +188,17 @@ func (s *Service) deriveReducePositionOnly(
 	}
 	current := position.SignedQuantity
 	if current.IsZero() {
+		if strings.EqualFold(spec.Owner.Type, "FLATTEN") {
+			return spec, ErrReduceOnly
+		}
 		return spec, nil
 	}
 	reducing := (current.Cmp(shared.Zero()) > 0 && spec.Side == exchange.SideSell) ||
 		(current.Cmp(shared.Zero()) < 0 && spec.Side == exchange.SideBuy)
 	if !reducing {
+		if strings.EqualFold(spec.Owner.Type, "FLATTEN") {
+			return spec, ErrReduceOnly
+		}
 		return spec, nil
 	}
 	if spec.Quantity.Cmp(current.Abs()) > 0 {
@@ -210,6 +216,21 @@ func (s *Service) deriveReducePositionOnly(
 	}
 	spec.ReducePositionOnly = true
 	return spec, nil
+}
+
+func (s *Service) refreshReducePositionOnly(
+	ctx context.Context,
+	spec orderdomain.OrderSpec,
+) (orderdomain.OrderSpec, error) {
+	previous := spec.ReducePositionOnly
+	refreshed, err := s.deriveReducePositionOnly(ctx, spec)
+	if err != nil {
+		return spec, err
+	}
+	if previous && !refreshed.ReducePositionOnly {
+		return spec, ErrReduceOnly
+	}
+	return refreshed, nil
 }
 
 func (s *Service) Submit(
@@ -568,6 +589,14 @@ func (s *Service) submit(
 	if err != nil {
 		return orderdomain.Order{}, false, err
 	}
+	aggregate.Spec, err = s.refreshReducePositionOnly(ctx, aggregate.Spec)
+	if err != nil {
+		if permanentValidationError(err) {
+			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
+			return rejected, false, rejectErr
+		}
+		return orderdomain.Order{}, false, err
+	}
 	validator := s.Validator
 	if record.SubmittedAt > 0 {
 		// A confirmed-absent retry reuses the already validated server quote.
@@ -577,7 +606,8 @@ func (s *Service) submit(
 		validator.Now = func() time.Time { return now }
 		validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
 	}
-	if _, err := validator.Validate(ctx, record.SpaceID, aggregate.Spec); err != nil {
+	validation, err := validator.Validate(ctx, record.SpaceID, aggregate.Spec)
+	if err != nil {
 		if permanentValidationError(err) {
 			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
 			return rejected, false, rejectErr
@@ -592,10 +622,25 @@ func (s *Service) submit(
 	if _, err = aggregate.BeginSubmit(); err != nil {
 		return orderdomain.Order{}, false, err
 	}
+	previousReservation := record
+	releaseReservationForReduction := !record.ReduceOnly &&
+		aggregate.Spec.ReducePositionOnly
+	record.ReduceOnly = aggregate.Spec.ReducePositionOnly
+	if releaseReservationForReduction {
+		record.ReservedAsset = validation.ReservedAsset
+		record.ReservedQuantity = validation.ReservedQuantity.String()
+		record.RemainingReservedQuantity = validation.ReservedQuantity.String()
+	}
 	applyAggregate(&record, aggregate)
 	record.SubmittedAt = s.now().UnixMilli()
 	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateOrder(record, expected)
+		if err := tx.UpdateOrder(record, expected); err != nil {
+			return err
+		}
+		if releaseReservationForReduction {
+			return releaseReservation(tx, previousReservation)
+		}
+		return nil
 	}); err != nil {
 		return orderdomain.Order{}, false, err
 	}
@@ -700,6 +745,7 @@ func permanentValidationError(err error) bool {
 		ErrInsufficientFunds,
 		ErrLeverageLimit,
 		ErrReduceOnly,
+		ErrCrossZero,
 		ErrPaperLimit,
 	} {
 		if errors.Is(err, target) {
