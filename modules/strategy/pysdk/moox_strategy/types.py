@@ -1,14 +1,12 @@
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
+
 
 @dataclass(frozen=True)
-class TargetPosition:
+class InstrumentTarget:
     instrument_id: str
-    symbol: str
-    target_quantity: str
-    reason: Optional[str] = None
-    source_time: Optional[str] = None
-    data_revision: Optional[str] = None
+    quantity: str
+
 
 def empty_targets() -> list[dict[str, Any]]:
     return []
