@@ -1,16 +1,35 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/packages/pyruntime/process"
 )
 
 func TestValidateOutputAcceptsEmptyRebalance(t *testing.T) {
 	if err := Validate(domain.Output{Action: domain.ActionRebalance, Targets: []domain.InstrumentTarget{}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunRejectsLoadedSourceThatDoesNotMatchPersistedStrategy(t *testing.T) {
+	runtime := &Engine{strategies: map[string]process.LoadRequest{
+		"strategy-1": {
+			LogicalID:  "strategy-1",
+			SourceHash: "rejected-source",
+		},
+	}}
+	_, _, err := runtime.Run(
+		context.Background(),
+		domain.ExecutionRequest{StrategyID: "strategy-1"},
+		domain.Strategy{ID: "strategy-1", SourceHash: "persisted-source"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "source hash") {
+		t.Fatalf("Run() error = %v", err)
 	}
 }
 

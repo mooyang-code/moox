@@ -123,6 +123,9 @@ func (e *Engine) Run(
 	if !ok || loaded.SourceHash == "" {
 		return domain.Output{}, "", errors.New("strategy source is not loaded")
 	}
+	if strategy.SourceHash == "" || loaded.SourceHash != strategy.SourceHash {
+		return domain.Output{}, "", errors.New("loaded strategy source hash does not match persisted strategy")
+	}
 	if request.StrategyID != strategy.ID {
 		return domain.Output{}, "", errors.New("execution strategy id does not match loaded artifact")
 	}
