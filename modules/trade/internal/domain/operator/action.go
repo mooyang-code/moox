@@ -12,6 +12,7 @@ type ActionType string
 
 const (
 	ActionManualOrder ActionType = "MANUAL_ORDER"
+	ActionCancelOrder ActionType = "CANCEL_ORDER"
 	ActionFlatten     ActionType = "FLATTEN"
 )
 
@@ -46,7 +47,9 @@ func (a Action) Validate() error {
 }
 
 func validType(value ActionType) bool {
-	return value == ActionManualOrder || value == ActionFlatten
+	return value == ActionManualOrder ||
+		value == ActionCancelOrder ||
+		value == ActionFlatten
 }
 
 func validStatus(value Status) bool {

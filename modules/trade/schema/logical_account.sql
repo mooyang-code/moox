@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS t_operator_actions (
     PRIMARY KEY (c_space_id, c_action_id),
     FOREIGN KEY (c_space_id, c_logical_account_id)
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id),
-    CHECK (c_action_type IN ('MANUAL_ORDER', 'FLATTEN')),
+    CHECK (c_action_type IN ('MANUAL_ORDER', 'CANCEL_ORDER', 'FLATTEN')),
     CHECK (c_status IN ('RUNNING', 'COMPLETED', 'PARTIAL', 'FAILED')),
     CHECK (json_valid(c_request_json)),
     CHECK (c_result_json IS NULL OR json_valid(c_result_json))

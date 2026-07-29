@@ -154,6 +154,11 @@ func TestLogicalAccountSchemaKeepsSettlementAssetAndUsesAutomationState(t *testi
 	require.NotContains(t, sql, "c_control_state")
 	require.NotContains(t, sql, "c_control_revision")
 	require.NotContains(t, sql, "c_paused INTEGER")
+	require.Contains(
+		t,
+		sql,
+		"'MANUAL_ORDER', 'CANCEL_ORDER', 'FLATTEN'",
+	)
 }
 
 func hasUniqueIndex(t *testing.T, db *gorm.DB, table string, want []string) bool {

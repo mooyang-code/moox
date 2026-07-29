@@ -14,6 +14,10 @@ func TestOperatorActionValidation(t *testing.T) {
 		RequestJSON: `{}`, Status: StatusRunning,
 	}
 	require.NoError(t, action.Validate())
+	action.Type = ActionCancelOrder
+	require.NoError(t, action.Validate())
+	action.Type = ActionManualOrder
+	require.NoError(t, action.Validate())
 
 	action.Reason = ""
 	require.ErrorIs(t, action.Validate(), ErrInvalidAction)
