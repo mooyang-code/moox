@@ -56,6 +56,7 @@ reject 'strategy_run_id|strategy_result_id|execution_id|execution_binding_id|exc
 reject 'strategy_run_id|strategy_result_id|execution_id|execution_binding_id|data_revision|not_after|TargetIntent|TargetPosition|TradeTarget|TradeTargetRequested|target_quantity' \
   "Trade target consumer or persisted LogicalAccount target still uses the obsolete target contract" \
   "${production[@]}" \
+  modules/trade/internal/domain \
   modules/trade/internal/eventconsumer/target.go \
   modules/trade/internal/infra/store/target.go \
   modules/trade/internal/runtime/target_worker.go

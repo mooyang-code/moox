@@ -9,6 +9,11 @@ LOGICAL_PORT=${MOOX_E2E_TRADE_LOGICAL_PORT:-45202}
 HEALTH_PORT=${MOOX_E2E_TRADE_HEALTH_PORT:-45210}
 TRADE_PID=""
 
+dump_trade_logs() {
+  cat "$WORK_DIR/trade.log" >&2 2>/dev/null || true
+  cat "$WORK_DIR/log/trpc_trade.log" >&2 2>/dev/null || true
+}
+
 cleanup() {
   if [[ -n "$TRADE_PID" ]]; then
     kill "$TRADE_PID" 2>/dev/null || true
@@ -42,6 +47,8 @@ perl -0pi -e \
 )
 (
   cd "$WORK_DIR"
+  export MOOX_HEALTH_AUTH_ACCESS_KEY=monitor
+  export MOOX_HEALTH_AUTH_SECRET_KEY=e2e-health-secret
   exec "$WORK_DIR/trade-server" -conf "$WORK_DIR/trpc_go.yaml"
 ) >"$WORK_DIR/trade.log" 2>&1 &
 TRADE_PID=$!
@@ -51,13 +58,13 @@ for _ in $(seq 1 120); do
     break
   fi
   if ! kill -0 "$TRADE_PID" 2>/dev/null; then
-    cat "$WORK_DIR/trade.log" >&2
+    dump_trade_logs
     exit 1
   fi
   sleep 0.1
 done
 if ! nc -z 127.0.0.1 "$LOGICAL_PORT" 2>/dev/null; then
-  cat "$WORK_DIR/trade.log" >&2
+  dump_trade_logs
   echo "Trade LogicalAccountService did not become ready" >&2
   exit 1
 fi
