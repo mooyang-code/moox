@@ -237,11 +237,37 @@ t_logical_account_members
   priority
   enabled
   ctime + mtime
+
+t_target_states
+  space_id + logical_account_id
+  execution_id
+  strategy_result_id
+  runner_id
+  command_sequence
+  not_after
+  data_revision
+  targets_json
+  status + progress + residual + last_error
+  ctime + mtime
+
+t_operator_actions
+  space_id + action_id
+  logical_account_id
+  action_type             MANUAL_ORDER | FLATTEN
+  status                  RUNNING | COMPLETED | PARTIAL | FAILED
+  reason
+  request_json + result_json
+  last_error
+  ctime + mtime
 ```
 
 The member table enforces one enabled logical-account membership per physical
 account. Application validation also rejects duplicate membership before the
 database write.
+
+`t_target_states` contains one replaceable current target per logical account;
+it is not target history. `t_operator_actions` is the small durable identity and
+progress record required for `action_id` idempotency and restart continuation.
 
 All enabled members must have the same:
 
