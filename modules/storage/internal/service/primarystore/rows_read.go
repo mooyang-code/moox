@@ -35,8 +35,12 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	if err != nil {
 		return nil, err
 	}
+	existing := existingRowIdentities(rsp.GetExistingKeys())
 	rows := make([]*pb.TimeSeriesRow, 0, len(rsp.GetRows()))
 	for _, row := range rsp.GetRows() {
+		if !existing[rowKeyIdentity(row.GetKey())] {
+			continue
+		}
 		rows = append(rows, &pb.TimeSeriesRow{Key: timeSeriesKeyFromRowKey(row.GetKey()), Fields: row.GetFields()})
 	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
@@ -67,11 +71,23 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 	if err != nil {
 		return nil, err
 	}
+	existing := existingRowIdentities(rsp.GetExistingKeys())
 	rows := make([]*pb.RecordRow, 0, len(rsp.GetRows()))
 	for _, row := range rsp.GetRows() {
+		if !existing[rowKeyIdentity(row.GetKey())] {
+			continue
+		}
 		rows = append(rows, &pb.RecordRow{Key: recordKeyFromRowKey(row.GetKey()), Fields: row.GetFields()})
 	}
 	return &pb.ReadRecordRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
+}
+
+func existingRowIdentities(keys []*pb.RowKey) map[string]bool {
+	existing := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		existing[rowKeyIdentity(key)] = true
+	}
+	return existing
 }
 
 func (s *Service) readTimeSeriesView(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
