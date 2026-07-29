@@ -113,10 +113,8 @@ The Strategy schema becomes four tables:
 t_strategies
   strategy_id                  immutable primary key
   name
-  api_version
   manifest_yaml
   source_code + source_hash
-  state_schema_version
   ctime
 
 t_strategy_runners
@@ -161,11 +159,26 @@ mutable code. `name` is a display label and need not be unique. A
 `StrategyResult` stores its `strategy_id` directly so it remains attributable
 after its runner changes Strategy.
 
+`manifest_yaml` is the immutable Strategy package declaration. It contains the
+supported Strategy API version, Python entrypoint, input requirements,
+parameter schema, and `state_format_version`. The registry parses and strictly
+validates it when publishing a Strategy. V1 accepts only
+`api_version: moox.strategy/v1`; neither `api_version` nor
+`state_format_version` is duplicated as a table column.
+
 Changing a runner's `strategy_id` requires the runner to be disabled. When the
-old and new Strategies declare the same `state_schema_version`, the runner
+old and new Strategies declare the same `state_format_version`, the runner
 retains its state, current target, and command sequence. A different state
-schema requires creating a new runner rather than adding a state-migration
+format requires creating a new runner rather than adding a state-migration
 framework.
+
+Runner `state_json` is a Strategy-private JSON object. The initial and
+stateless value is `{}`. Every `next_state` is a complete replacement, not a
+merge patch, and must be a standard JSON object no larger than 64 KiB. It must
+not contain account positions, balances, orders, or fills. The registry does not
+define a shared business schema for its keys; `state_format_version` is a
+Strategy-declared compatibility number, not a reference to a stored JSON
+Schema.
 
 `t_strategy_results` contains only validated, accepted results. Failed attempts
 update the runner's `last_error` and operational logs but do not create a
@@ -556,9 +569,12 @@ algorithm registry, or second event workflow.
 
 - Strategy and runner CRUD, validation, and strict schema.
 - Strategy IDs identify immutable artifacts; source changes create new IDs.
-- A disabled runner can switch to a Strategy with the same state schema without
-  resetting state, target, or sequence; a different state schema requires a new
+- Manifest parsing rejects unsupported API versions and unknown fields.
+- A disabled runner can switch to a Strategy with the same state format without
+  resetting state, target, or sequence; a different state format requires a new
   runner.
+- State is a complete JSON object, enforces the 64 KiB limit, and rejects
+  incompatible or non-object values.
 - One active runner per logical account.
 - Accepted Result, runner state, FULL target, sequence, and outbox changes are
   atomic.
