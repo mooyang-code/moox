@@ -26,6 +26,45 @@ func TestOpenApplySchemaAndClose(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsMalformedCurrentStrategySchema(t *testing.T) {
+	tests := map[string]func(string) string{
+		"missing primary key": func(sql string) string {
+			return strings.Replace(sql, "strategy_id TEXT PRIMARY KEY", "strategy_id TEXT NOT NULL", 1)
+		},
+		"missing not null": func(sql string) string {
+			return strings.Replace(sql, "source_hash TEXT NOT NULL", "source_hash TEXT", 1)
+		},
+		"missing result logical unique": func(sql string) string {
+			return strings.Replace(sql, ",\n    UNIQUE (runner_id, strategy_id, namespace, trigger_bar_time)", "", 1)
+		},
+		"wrong runner partial unique predicate": func(sql string) string {
+			return strings.Replace(sql, "status = 'ENABLED'", "status = 'DISABLED'", 1)
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "strategy.db")
+			db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Exec(mutate(schema.AllSQL())).Error; err != nil {
+				t.Fatal(err)
+			}
+			sqlDB, err := db.DB()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sqlDB.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "删除旧数据库后重建") {
+				t.Fatalf("Open() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestOpenRejectsObsoleteStrategySchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "strategy.db")
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})

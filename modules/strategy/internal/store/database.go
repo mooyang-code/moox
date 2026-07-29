@@ -77,6 +77,34 @@ var strategySchemaColumns = map[string][]string{
 	},
 }
 
+var strategySchemaRequiredColumns = map[string]map[string]bool{
+	"t_strategies": {
+		"strategy_id": true, "name": true, "manifest_yaml": true,
+		"source_code": true, "source_hash": true, "created_at": true,
+	},
+	"t_strategy_runners": {
+		"runner_id": true, "strategy_id": true, "space_id": true, "view_id": true,
+		"frequency": true, "params_json": true, "status": true,
+		"current_targets_json": true, "command_sequence": true,
+		"created_at": true, "updated_at": true,
+	},
+	"t_strategy_results": {
+		"result_id": true, "runner_id": true, "strategy_id": true,
+		"trigger_bar_time": true, "namespace": true, "input_hash": true,
+		"action": true, "output_json": true, "created_at": true,
+	},
+	"t_strategy_outbox": {
+		"message_id": true, "event_data": true, "created_at": true,
+	},
+}
+
+var strategySchemaPrimaryKeys = map[string]string{
+	"t_strategies":       "strategy_id",
+	"t_strategy_runners": "runner_id",
+	"t_strategy_results": "result_id",
+	"t_strategy_outbox":  "message_id",
+}
+
 func (m *Store) validateExistingSchema() error {
 	tables, err := m.strategyTables()
 	if err != nil {
@@ -124,15 +152,91 @@ func (m *Store) validateSchemaTables(tables []string) error {
 		return obsoleteSchemaError(table)
 	}
 	for _, table := range tables {
-		var columns []string
-		if err := m.db.Raw("SELECT name FROM pragma_table_info(?) ORDER BY cid", table).Scan(&columns).Error; err != nil {
+		var columns []struct {
+			Name    string `gorm:"column:name"`
+			NotNull int    `gorm:"column:not_null"`
+			PK      int    `gorm:"column:pk"`
+		}
+		if err := m.db.Raw(
+			`SELECT name, "notnull" AS not_null, pk FROM pragma_table_info(?) ORDER BY cid`,
+			table,
+		).Scan(&columns).Error; err != nil {
 			return fmt.Errorf("inspect strategy schema table %s: %w", table, err)
 		}
-		if strings.Join(columns, "\x00") != strings.Join(strategySchemaColumns[table], "\x00") {
+		names := make([]string, 0, len(columns))
+		validConstraints := true
+		for _, column := range columns {
+			names = append(names, column.Name)
+			if strategySchemaRequiredColumns[table][column.Name] && column.NotNull != 1 && column.PK == 0 {
+				validConstraints = false
+			}
+			if column.Name == strategySchemaPrimaryKeys[table] && column.PK != 1 {
+				validConstraints = false
+			}
+		}
+		if strings.Join(names, "\x00") != strings.Join(strategySchemaColumns[table], "\x00") ||
+			!validConstraints {
 			return obsoleteSchemaError(table)
 		}
 	}
+	if err := m.validateRunnerOwnerIndex(); err != nil {
+		return err
+	}
+	if err := m.validateResultLogicalUnique(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (m *Store) validateRunnerOwnerIndex() error {
+	var sql string
+	if err := m.db.Raw(`
+		SELECT sql
+		FROM sqlite_master
+		WHERE type = 'index'
+		  AND name = 'ux_strategy_runners_enabled_logical_account'
+	`).Scan(&sql).Error; err != nil {
+		return fmt.Errorf("inspect Strategy runner owner index: %w", err)
+	}
+	normalized := strings.ToUpper(strings.Join(strings.Fields(sql), " "))
+	for _, required := range []string{
+		"CREATE UNIQUE INDEX",
+		"ON T_STRATEGY_RUNNERS (LOGICAL_ACCOUNT_ID)",
+		"WHERE LOGICAL_ACCOUNT_ID IS NOT NULL AND STATUS = 'ENABLED'",
+	} {
+		if !strings.Contains(normalized, required) {
+			return obsoleteSchemaError("t_strategy_runners")
+		}
+	}
+	return nil
+}
+
+func (m *Store) validateResultLogicalUnique() error {
+	var indexes []struct {
+		Name   string `gorm:"column:name"`
+		Unique int    `gorm:"column:unique"`
+	}
+	if err := m.db.Raw("SELECT name, [unique] FROM pragma_index_list('t_strategy_results')").
+		Scan(&indexes).Error; err != nil {
+		return fmt.Errorf("inspect Strategy result indexes: %w", err)
+	}
+	want := "runner_id\x00strategy_id\x00namespace\x00trigger_bar_time"
+	for _, index := range indexes {
+		if index.Unique != 1 {
+			continue
+		}
+		var columns []string
+		if err := m.db.Raw(
+			"SELECT name FROM pragma_index_info(?) ORDER BY seqno",
+			index.Name,
+		).Scan(&columns).Error; err != nil {
+			return fmt.Errorf("inspect Strategy result index %s: %w", index.Name, err)
+		}
+		if strings.Join(columns, "\x00") == want {
+			return nil
+		}
+	}
+	return obsoleteSchemaError("t_strategy_results")
 }
 
 func obsoleteSchemaError(table string) error {

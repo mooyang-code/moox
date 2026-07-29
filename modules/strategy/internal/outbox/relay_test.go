@@ -32,10 +32,9 @@ func openOutboxTestStore(t *testing.T) (*gorm.DB, *store.Store) {
 		t.Fatal(err)
 	}
 	if err := db.Exec(`CREATE TABLE t_strategy_outbox (
-		c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-		c_message_id TEXT NOT NULL UNIQUE,
-		c_event_data BLOB NOT NULL,
-		c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		message_id TEXT PRIMARY KEY,
+		event_data BLOB NOT NULL,
+		created_at INTEGER NOT NULL
 	)`).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +43,7 @@ func openOutboxTestStore(t *testing.T) (*gorm.DB, *store.Store) {
 
 func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 	db, repo := openOutboxTestStore(t)
-	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_event_data) VALUES(?,?)", "run-1", []byte("event-data")).Error; err != nil {
+	if err := db.Exec("INSERT INTO t_strategy_outbox(message_id,event_data,created_at) VALUES(?,?,?)", "run-1", []byte("event-data"), 1).Error; err != nil {
 		t.Fatal(err)
 	}
 	publisher := &recordingPublisher{}
@@ -56,7 +55,7 @@ func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 		t.Fatalf("published rows=%+v", publisher.rows)
 	}
 	var count int64
-	if err := db.Table("t_strategy_outbox").Where("c_message_id=?", "run-1").Count(&count).Error; err != nil {
+	if err := db.Table("t_strategy_outbox").Where("message_id=?", "run-1").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -66,7 +65,7 @@ func TestRelayPublishesClaimedOutboxWithStableMessageID(t *testing.T) {
 
 func TestRelayReleasesFailedPublishAndRetries(t *testing.T) {
 	db, repo := openOutboxTestStore(t)
-	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_event_data) VALUES(?,?)", "run-1", []byte("event-data")).Error; err != nil {
+	if err := db.Exec("INSERT INTO t_strategy_outbox(message_id,event_data,created_at) VALUES(?,?,?)", "run-1", []byte("event-data"), 1).Error; err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("broker unavailable")
@@ -76,7 +75,7 @@ func TestRelayReleasesFailedPublishAndRetries(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 	var count int64
-	if err := db.Table("t_strategy_outbox").Where("c_message_id=?", "run-1").Count(&count).Error; err != nil {
+	if err := db.Table("t_strategy_outbox").Where("message_id=?", "run-1").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -107,9 +106,10 @@ func TestRelayDeletesExpiredTargetAndContinues(t *testing.T) {
 	db, repo := openOutboxTestStore(t)
 	for _, id := range []string{"expired", "current"} {
 		if err := db.Exec(
-			"INSERT INTO t_strategy_outbox(c_message_id,c_event_data) VALUES(?,?)",
+			"INSERT INTO t_strategy_outbox(message_id,event_data,created_at) VALUES(?,?,?)",
 			id,
 			[]byte("event-data"),
+			map[string]int64{"expired": 1, "current": 2}[id],
 		).Error; err != nil {
 			t.Fatal(err)
 		}
