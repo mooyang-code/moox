@@ -47,7 +47,7 @@ func runCLI(args []string, out, errOut *os.File) error {
 		fs.SetOutput(errOut)
 		python := fs.String("python", "python3", "Python executable")
 		worker := fs.String("worker", "pyworker/worker.py", "strategy worker path")
-		trigger := fs.String("trigger", "cli", "trigger bar time")
+		trigger := fs.String("trigger", "", "trigger bar time; defaults to the final history bar")
 		dataJSON := fs.String("data", "[]", "complete history JSON array")
 		paramsJSON := fs.String("params", "{}", "strategy parameters JSON object")
 		if len(args) < 3 {
@@ -71,6 +71,10 @@ func runCLI(args []string, out, errOut *os.File) error {
 		if err := json.Unmarshal([]byte(*dataJSON), &data); err != nil {
 			return fmt.Errorf("data: %w", err)
 		}
+		triggerBarTime, err := resolveTrigger(*trigger, data)
+		if err != nil {
+			return err
+		}
 		var params map[string]any
 		if err := json.Unmarshal([]byte(*paramsJSON), &params); err != nil {
 			return fmt.Errorf("params: %w", err)
@@ -91,7 +95,7 @@ func runCLI(args []string, out, errOut *os.File) error {
 		}
 		outValue, _, err := e.Run(trpc.BackgroundContext(), domain.ExecutionRequest{
 			RequestID: "cli-run", StrategyID: strategy.ID, RunnerID: "cli",
-			TriggerBarTime: *trigger, Namespace: "cli", Data: data, Params: params,
+			TriggerBarTime: triggerBarTime, Namespace: "cli", Data: data, Params: params,
 		}, strategy)
 		if err != nil {
 			return err
@@ -102,6 +106,24 @@ func runCLI(args []string, out, errOut *os.File) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func resolveTrigger(explicit string, data []map[string]any) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	if len(data) == 0 {
+		return "", errors.New("trigger: history must not be empty")
+	}
+	value, ok := data[len(data)-1]["time"]
+	if !ok {
+		return "", errors.New("trigger: final history bar is missing time")
+	}
+	trigger, ok := value.(string)
+	if !ok || trigger == "" {
+		return "", errors.New("trigger: final history bar time must be a non-empty string")
+	}
+	return trigger, nil
 }
 
 func readPackage(manifestPath, sourcePath string) (string, string, error) {
