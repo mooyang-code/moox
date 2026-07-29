@@ -13,7 +13,8 @@ Storage、View、Archive、Factor 和所有时序读写方在同一行身份、�
 默认序列；范围 selector 用 proto presence 区分“全部 tag”和“精确空 tag”。
 Storage 不解析 `namespace:value`。Factor 的任务 scope 不包含 tag，每次在单 Dataset
 内读取完整 tag cohort，每个任务只执行一个 Factor，Python 用带
-`data_time + series_tag` 的 DataFrame 返回任意目标行。
+`data_time + series_tag` 的 DataFrame 返回任意目标行。Archive 将 tag 纳入物理
+PartitionKey，每个 Subject/tag/月独立物化一个 Parquet 文件。
 
 **Tech Stack:** Go 1.25、Protocol Buffers、tRPC-Go、Pebble、DuckDB、NATS
 JetStream、Parquet、GORM + SQLite、Python 3 + pandas、Vue 3 + TypeScript。
@@ -491,6 +492,7 @@ bash scripts/test-storage-consistency-contract.sh
 **Files:**
 - Modify: `modules/archive/internal/domain/row.go`
 - Modify: `modules/archive/internal/domain/identity.go`
+- Modify: `modules/archive/internal/domain/identity_test.go`
 - Modify: `modules/archive/internal/eventconsumer/decode.go`
 - Modify: `modules/archive/internal/backfill/backfill.go`
 - Modify: `modules/archive/internal/journal/store.go`
@@ -508,34 +510,76 @@ bash scripts/test-storage-consistency-contract.sh
 - Modify: `modules/archive/config/app.yaml`
 - Modify: `modules/archive/internal/registry/client.go`
 - Modify: `modules/archive/internal/registry/client_test.go`
+- Modify: `modules/archive/internal/cosstore/client.go`
+- Modify: `modules/archive/internal/cosstore/client_test.go`
+- Modify: `modules/archive/internal/cosstore/sync.go`
+- Create: `modules/archive/internal/cosstore/sync_test.go`
+- Modify: `modules/archive/cmd/cli/main.go`
+- Modify: `modules/archive/cmd/cli/main_test.go`
 - Modify: `modules/archive/test/archive_e2e_test.go`
 
 - [ ] **Step 1: 写 Archive 双 tag 失败测试**
 
-同一时间两种 tag 经事件与 Backfill 都产生两条 ArchiveRow；同 tag 修订覆盖自身，
-不会覆盖另一 tag。测试必须抓住当前 `CanonicalStringMap(nil)` 静默丢身份的问题。
+同一时间两种 tag 经事件与 Backfill 产生两个独立 Partition，每个 Partition 各有
+一条 ArchiveRow；同 tag 修订只覆盖自己的月文件。测试必须抓住当前
+`CanonicalStringMap(nil)` 静默丢身份的问题，并断言：
 
-- [ ] **Step 2: 改领域模型和逻辑 ID**
+```text
+.../BTC-USDT/series_tag=venue%3Abinance/
+.../BTC-USDT/series_tag=venue%3Aokx/
+.../BTC-USDT/series_tag=/
+```
 
-`DimensionsJSON` 全部改为 `SeriesTag string`。LogicalRowID 输入为
-`UTC data_time + "\n" + series_tag`。journal、writer merge 和排序统一使用它。
+分别对应 Binance、OKX 和默认序列。文件名也必须携带相同
+`series_tag={encoded_tag}` 字段；percent 编码可逆，字面 `%`、`/`、`..` 和空 tag
+不会碰撞或越过归档根目录。
+
+- [ ] **Step 2: 改领域模型和分区身份**
+
+删除 `DimensionsJSON`，不要在 RowPatch 上再保存一份可能与路径不一致的 tag。
+`PartitionKey` 增加 `SeriesTag string`，固定身份为：
+
+```text
+space_id + dataset_id + freq + subject_id + series_tag + YYYYMM
+```
+
+`PartitionID`、journal key、dirty 状态、generation、writer mutex 和
+`ArchiveFileID` 全部加入 tag。一个 Partition 内只存在一个 tag，因此
+`LogicalRowID` 只使用 UTC `data_time`；全局行身份由 PartitionKey 与 LogicalRowID
+共同组成。事件和 Backfill 从 Storage key 原样复制 tag 到 PartitionKey。
 
 - [ ] **Step 3: 改 Parquet v2**
 
-删除 `dimensions_json`，增加必填 UTF-8 `series_tag`。排序和唯一键为：
+删除 `dimensions_json`，增加必填 UTF-8 `series_tag`。每个文件内该列必须为常量，
+并与目录及文件名解码出的 tag 一致。分区内排序和唯一键为：
 
 ```text
-candle_begin_time ASC, series_tag ASC
+candle_begin_time ASC
 ```
 
-metadata 使用 `moox.archive.schema_version=2`。发现 v1 文件、旧 journal 或旧列时
-明确拒绝并提示使用新目录；不兼容读写。
+本地相对路径与 COS object key 统一为：
+
+```text
+{space}/{dataset}/{freq}/{encoded_subject}/series_tag={encoded_tag}/
+  {space}__{dataset}__{encoded_subject}__{freq}__series_tag={encoded_tag}__{YYYYMM}.parquet
+```
+
+`encoded_subject` 与 `encoded_tag` 复用 `domain.EncodeIdentity` 的可逆编码；空 tag
+的目录固定为 `series_tag=`。`FileName/ParseFileName` 使用六个固定字段并校验
+目录 tag、文件名 tag 和 Parquet 常量列完全一致。metadata 使用
+`moox.archive.schema_version=2`。发现 v1 文件、旧 journal、旧列或不含 tag 的旧
+路径时明确拒绝并提示使用新目录；不兼容读写。
 
 - [ ] **Step 4: 更新 Archive 启动与登记配置**
 
 默认 allowlist 使用 `crypto` 共享 Dataset，Consumer durable 使用
-`moox_archive_kline_v2`，ArchiveFile metadata 写 `schema_version=2`。同步更新配置
-校验与 registry 单测，确保默认配置可以启动且不会拒绝目标 Dataset。
+`moox_archive_kline_v2`，ArchiveFile metadata 写 `schema_version=2`。
+`partition_key` 固定为
+`freq/encoded_subject/series_tag=encoded_tag/YYYYMM`，稳定 ID 和 COS key 都包含
+tag 身份：稳定 ID 的摘要输入使用原始 tag，COS key 使用可逆编码。Archive CLI
+增加 presence-aware `--series-tag`：未出现表示全部 tag，显式空串表示默认序列，
+非空值表示精确 tag。同步更新配置、CLI、COS 和 registry 单测，确保默认配置可以
+启动且不会拒绝目标 Dataset。
 
 - [ ] **Step 5: 验证当前子系统**
 
@@ -1125,8 +1169,10 @@ git commit -m "docs: document scalar time series tags"
 
 - [ ] **Step 2: Storage + Archive**
 
-消费真实 `DatasetRowsUpserted@2`，断言同一时间点两个 tag 在 Parquet v2 中是两行；
-用独立 reader 检查 schema、排序、唯一键和值。
+消费真实 `DatasetRowsUpserted@2`，断言同一时间点两个 tag 生成两个独立 tag 目录和
+两个 Parquet v2 月文件。用独立 reader 检查每个文件的 `series_tag` 为对应常量，
+按 `candle_begin_time` 排序且时间唯一；ArchiveFile partition key、本地路径和 COS
+object key 均包含同一可逆 tag 编码。
 
 - [ ] **Step 3: Storage + Monitor**
 
@@ -1227,7 +1273,8 @@ Expected: 本地 HEAD 与远端 `refs/heads/feature/mooyang` 完全相同。只�
 - [ ] 空 exact tag 与 absent selector 的语义有单测和 E2E。
 - [ ] Pebble、DuckDB、事件、Parquet 和 Factor 写回使用同一完整行身份。
 - [ ] View/Backfill/分页按包含 tag 的唯一全序，不漏同 timestamp 行。
-- [ ] Archive v2 原样保存 tag，旧 schema 明确拒绝。
+- [ ] Archive v2 按 tag 拆分月目录和文件，路径、ArchiveFile、COS 与 Parquet 常量
+      列中的 tag 一致，旧 schema 明确拒绝。
 - [ ] Binance/OKX 同 Dataset 价差因子真实跑通。
 - [ ] `lookback_periods` 按不同 `data_time` 计数。
 - [ ] 历史修正扩展后续 period，View incomplete 有限重读。

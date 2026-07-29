@@ -202,23 +202,43 @@ PrimaryStore 代理 DataView 时必须透传这些完整性信息，供 Factor �
 space_id + dataset_id + subject_id + freq + data_time + series_tag
 ```
 
-分区路径仍按 Space、Dataset、频率、Subject 和月份组织，不按 tag 拆目录，避免大量
-小文件。Parquet 系统列使用：
+Archive 将 `series_tag` 提升为物理分区键，每个 tag 每月一个 Parquet 文件。分区
+身份为：
+
+```text
+space_id + dataset_id + freq + subject_id + series_tag + YYYYMM
+```
+
+目录和文件名都携带可逆编码后的完整 tag：
+
+```text
+{root}/{space}/{dataset}/{freq}/{subject}/series_tag={encoded_tag}/
+  {space}__{dataset}__{subject}__{freq}__series_tag={encoded_tag}__{YYYYMM}.parquet
+```
+
+`encoded_tag` 只做路径安全的 percent-encoding，不解析业务含义。空 tag 的目录固定
+为 `series_tag=`；例如 `venue:binance` 对应
+`series_tag=venue%3Abinance`。文件名重复携带 tag，使文件离开原目录后仍能恢复完整
+分区身份。本项目接受 tag 拆分产生的小文件，不为减少文件数量把不同 tag 合并到同一
+Parquet。
+
+Parquet 系统列使用：
 
 | 列 | 类型 | 要求 |
 | --- | --- | --- |
 | `candle_begin_time` | `TIMESTAMP(NANOS, UTC)` | 非空 |
-| `series_tag` | UTF-8 string | 非空，默认序列为 `""` |
+| `series_tag` | UTF-8 string | 非空、文件内为常量，并与路径解码值一致 |
 
-文件内按：
+单个文件只包含一个 tag，因此文件内按：
 
 ```text
-candle_begin_time ASC, series_tag ASC
+candle_begin_time ASC
 ```
 
-排序，逻辑 ID 使用 `data_time + series_tag`。事件消费、journal、月文件合并、全量
-Backfill、去重和 Parquet reader 必须原样保留 tag。Archive 不再生成、解析或校验
-`dimensions_json`。
+排序并以 `candle_begin_time` 唯一；全局逻辑身份由分区中的 `series_tag` 和行内
+`data_time` 共同组成。事件消费、journal 分区、月文件物化、ArchiveFile、COS
+object key、全量 Backfill 和 Parquet reader 必须原样保留 tag。Archive 不再生成、
+解析或校验 `dimensions_json`。
 
 ## 7. Factor 设计
 
@@ -340,7 +360,8 @@ Web 导入页提供一个普通 `Series Tag` 文本框，不再接受 Dimensions
 1. 同一时间点写入空 tag、`venue:binance`、`venue:okx` 后三行均可精确读取。
 2. 未设置 selector 返回全部三行，设置空 tag 只返回默认行。
 3. DataNode、事件、View、Archive 和 Factor 写回中的 tag 字节完全一致。
-4. View 与 Archive 都按 `data_time, series_tag` 稳定排序且不重复。
+4. View 按 `data_time, series_tag` 稳定排序；Archive 按 tag 分区，每个文件按
+   `data_time` 稳定排序且不重复。
 5. Factor 可在单 Dataset 内读取两个 venue tag，输出
    `venue_pair:binance-okx` 的价差行。
 6. 同一时间点 tag 数量变化不改变 `lookback_periods` 的时间窗口含义。
