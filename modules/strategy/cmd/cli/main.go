@@ -35,12 +35,12 @@ func runCLI(args []string, out, errOut *os.File) error {
 		if err != nil {
 			return err
 		}
-		m, err := registry.Parse(manifest)
+		parsed, err := registry.Parse(manifest)
 		if err != nil {
 			return err
 		}
 		sum := sha256.Sum256([]byte(source))
-		fmt.Fprintf(out, "valid strategy %s@%s source_hash=%s\n", m.ID, m.Version, hex.EncodeToString(sum[:]))
+		fmt.Fprintf(out, "valid strategy api=%s source_hash=%s\n", parsed.APIVersion, hex.EncodeToString(sum[:]))
 		return nil
 	case "run-once":
 		fs := flag.NewFlagSet("run-once", flag.ContinueOnError)
@@ -48,7 +48,8 @@ func runCLI(args []string, out, errOut *os.File) error {
 		python := fs.String("python", "python3", "Python executable")
 		worker := fs.String("worker", "pyworker/worker.py", "strategy worker path")
 		trigger := fs.String("trigger", "cli", "trigger bar time")
-		stateJSON := fs.String("state", "{}", "previous state JSON")
+		dataJSON := fs.String("data", "[]", "complete history JSON array")
+		paramsJSON := fs.String("params", "{}", "strategy parameters JSON object")
 		if len(args) < 3 {
 			return errors.New("usage: strategy run-once [flags] <manifest.yaml> <source.py>")
 		}
@@ -63,25 +64,35 @@ func runCLI(args []string, out, errOut *os.File) error {
 		if err != nil {
 			return err
 		}
-		m, err := registry.Parse(manifest)
+		if _, err := registry.Parse(manifest); err != nil {
+			return err
+		}
+		var data []map[string]any
+		if err := json.Unmarshal([]byte(*dataJSON), &data); err != nil {
+			return fmt.Errorf("data: %w", err)
+		}
+		var params map[string]any
+		if err := json.Unmarshal([]byte(*paramsJSON), &params); err != nil {
+			return fmt.Errorf("params: %w", err)
+		}
+		strategy, err := (&registry.Service{}).Prepare(
+			"cli-strategy", "cli", manifest, source,
+		)
 		if err != nil {
 			return err
 		}
-		var state map[string]any
-		if err := json.Unmarshal([]byte(*stateJSON), &state); err != nil {
-			return fmt.Errorf("state: %w", err)
-		}
-		sum := sha256.Sum256([]byte(source))
-		definition := domain.StrategyDefinition{StrategyID: m.ID, Version: m.Version, API: m.API, ManifestYAML: manifest, SourceCode: source, SourceHash: hex.EncodeToString(sum[:])}
 		e, err := engine.New(trpc.BackgroundContext(), *python, *worker)
 		if err != nil {
 			return err
 		}
 		defer e.Close()
-		if err := e.Load(trpc.BackgroundContext(), definition); err != nil {
+		if err := e.Load(trpc.BackgroundContext(), strategy); err != nil {
 			return err
 		}
-		outValue, _, err := e.Run(trpc.BackgroundContext(), domain.Task{RunID: "cli-run", BindingID: "cli", StrategyID: m.ID, Version: m.Version, TriggerBarTime: *trigger, PreviousState: domain.State{StateJSON: mustJSON(state)}}, definition)
+		outValue, _, err := e.Run(trpc.BackgroundContext(), domain.ExecutionRequest{
+			RequestID: "cli-run", StrategyID: strategy.ID, RunnerID: "cli",
+			TriggerBarTime: *trigger, Namespace: "cli", Data: data, Params: params,
+		}, strategy)
 		if err != nil {
 			return err
 		}
@@ -103,9 +114,4 @@ func readPackage(manifestPath, sourcePath string) (string, string, error) {
 		return "", "", err
 	}
 	return string(manifest), string(source), nil
-}
-
-func mustJSON(value any) string {
-	b, _ := json.Marshal(value)
-	return string(b)
 }

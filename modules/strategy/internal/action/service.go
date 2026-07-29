@@ -2,6 +2,7 @@ package action
 
 import (
 	"context"
+
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -12,26 +13,16 @@ type Service struct {
 	Engine *engine.Engine
 }
 
-// Evaluate executes a strategy without changing state. Backtests, dry runs,
-// and the RPC commit=false path all use this method so they share the exact
-// Python contract with live execution.
-func (s *Service) Evaluate(ctx context.Context, t domain.Task, d domain.StrategyDefinition) (domain.Output, string, error) {
-	if err := s.Engine.Load(ctx, d); err != nil {
+// Evaluate executes one stateless Strategy against its complete input window.
+// Persisting an accepted result is a separate transaction owned by the Runner
+// orchestration path.
+func (s *Service) Evaluate(
+	ctx context.Context,
+	request domain.ExecutionRequest,
+	strategy domain.Strategy,
+) (domain.Output, string, error) {
+	if err := s.Engine.Load(ctx, strategy); err != nil {
 		return domain.Output{}, "", err
 	}
-	out, hash, err := s.Engine.Run(ctx, t, d)
-	if err != nil {
-		return domain.Output{}, "", err
-	}
-	return out, hash, nil
-}
-
-func (s *Service) Commit(ctx context.Context, t domain.Task, out domain.Output, hash string) error {
-	if t.PreviousState.StateJSON == "" {
-		t.PreviousState.StateJSON = "{}"
-	}
-	if err := s.Repo.Commit(ctx, t, out, hash); err != nil {
-		return err
-	}
-	return nil
+	return s.Engine.Run(ctx, request, strategy)
 }

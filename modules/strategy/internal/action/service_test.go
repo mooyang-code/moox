@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidateDelegatedToEngine(t *testing.T) {
-	if err := engine.Validate(domain.Output{Action: domain.ActionHold, NextState: map[string]any{}}); err != nil {
+	if err := engine.Validate(domain.Output{Action: domain.ActionHold}); err != nil {
 		t.Fatal(err)
 	}
 }

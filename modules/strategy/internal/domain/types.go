@@ -1,7 +1,10 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"time"
 )
 
@@ -64,3 +67,60 @@ type StrategyResult struct {
 }
 
 func (StrategyResult) TableName() string { return "t_strategy_results" }
+
+type InstrumentTarget struct {
+	InstrumentID string `json:"instrument_id"`
+	Quantity     string `json:"quantity"`
+}
+
+func (target *InstrumentTarget) UnmarshalJSON(data []byte) error {
+	type instrumentTarget InstrumentTarget
+	var decoded instrumentTarget
+	if err := decodeStrictJSON(data, &decoded); err != nil {
+		return err
+	}
+	*target = InstrumentTarget(decoded)
+	return nil
+}
+
+type Output struct {
+	Action    Action             `json:"action"`
+	Targets   []InstrumentTarget `json:"targets,omitempty"`
+	DebugInfo map[string]any     `json:"debug_info,omitempty"`
+}
+
+func (output *Output) UnmarshalJSON(data []byte) error {
+	type strategyOutput Output
+	var decoded strategyOutput
+	if err := decodeStrictJSON(data, &decoded); err != nil {
+		return err
+	}
+	*output = Output(decoded)
+	return nil
+}
+
+type ExecutionRequest struct {
+	RequestID      string
+	StrategyID     string
+	RunnerID       string
+	TriggerBarTime string
+	Namespace      string
+	Params         any
+	Data           any
+}
+
+func decodeStrictJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return err
+		}
+		return errors.New("multiple JSON values")
+	}
+	return nil
+}

@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -24,14 +25,17 @@ import (
 )
 
 type Engine struct {
-	pool      *pool.Pool
-	factory   pool.Factory
-	publisher *moduleregistry.SourcePublisher
-	mu        sync.RWMutex
-	versions  map[string]process.LoadRequest
+	pool       *pool.Pool
+	factory    pool.Factory
+	publisher  *moduleregistry.SourcePublisher
+	mu         sync.RWMutex
+	strategies map[string]process.LoadRequest
 }
 
-const maxTargetQuantityLength = 256
+const (
+	maxTargetQuantityLength = 256
+	maxDebugInfoBytes       = 16 * 1024
+)
 
 var decimalQuantity = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
@@ -43,13 +47,19 @@ func NewWithWorkers(ctx context.Context, python, workerPath string, workers int)
 	_ = ctx
 	root := filepath.Join(os.TempDir(), "moox-strategy")
 	factory := func(start context.Context) (process.Worker, error) {
-		return process.NewStdioWorker(start, process.Config{PythonBin: python, WorkerPath: workerPath, Hello: protocol.HelloExpectation{ProtocolVersion: protocol.VersionV1}, TaskTimeout: 30 * 1e9})
+		return process.NewStdioWorker(start, process.Config{
+			PythonBin: python, WorkerPath: workerPath,
+			Hello:       protocol.HelloExpectation{ProtocolVersion: protocol.VersionV1},
+			TaskTimeout: 30 * time.Second,
+		})
 	}
-	p := pool.New(workers, factory)
-	return &Engine{pool: p, factory: factory, publisher: moduleregistry.NewSourcePublisher(root), versions: make(map[string]process.LoadRequest)}, nil
+	return &Engine{
+		pool: pool.New(workers, factory), factory: factory,
+		publisher:  moduleregistry.NewSourcePublisher(root),
+		strategies: make(map[string]process.LoadRequest),
+	}, nil
 }
 
-// Probe starts a real worker and completes its protocol handshake.
 func (e *Engine) Probe(ctx context.Context) error {
 	if e == nil || e.factory == nil {
 		return errors.New("strategy engine unavailable")
@@ -58,126 +68,178 @@ func (e *Engine) Probe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("strategy worker handshake: %w", err)
 	}
-	_ = worker.Close()
-	return nil
+	return worker.Close()
 }
 
-func versionKey(strategyID, version string) string { return strategyID + "/" + version }
+func strategyKey(strategyID string) string {
+	return strategyID
+}
 
-func (e *Engine) Load(ctx context.Context, d domain.StrategyDefinition) error {
+func (e *Engine) Load(ctx context.Context, strategy domain.Strategy) error {
 	if e == nil || e.pool == nil {
 		return errors.New("strategy engine unavailable")
 	}
-	if d.StrategyID == "" || d.Version == "" || d.SourceCode == "" {
-		return errors.New("strategy id, version and source are required")
+	if strings.TrimSpace(strategy.ID) == "" || strategy.SourceCode == "" {
+		return errors.New("strategy id and source are required")
 	}
-	v, err := e.publisher.Publish(ctx, moduleregistry.ModuleSource{Type: "strategy", LogicalID: d.StrategyID + "-" + d.Version, Source: []byte(d.SourceCode)})
+	manifest, err := registry.Parse(strategy.ManifestYAML)
 	if err != nil {
 		return err
 	}
-	if d.SourceHash != "" && d.SourceHash != v.SourceHash {
-		return fmt.Errorf("strategy source hash mismatch: expected=%s actual=%s", d.SourceHash, v.SourceHash)
+	published, err := e.publisher.Publish(ctx, moduleregistry.ModuleSource{
+		Type: "strategy", LogicalID: strategy.ID, Source: []byte(strategy.SourceCode),
+	})
+	if err != nil {
+		return err
 	}
-	entrypoint := "run"
-	if d.ManifestYAML != "" {
-		manifest, err := registry.Parse(d.ManifestYAML)
-		if err != nil {
-			return err
-		}
-		entrypoint = manifest.Entrypoint
+	if strategy.SourceHash != "" && strategy.SourceHash != published.SourceHash {
+		return fmt.Errorf(
+			"strategy source hash mismatch: expected=%s actual=%s",
+			strategy.SourceHash,
+			published.SourceHash,
+		)
 	}
-	req := process.LoadRequest{LogicalID: d.StrategyID + "/" + d.Version, SourceHash: v.SourceHash, Path: v.Path, ModuleType: "strategy", EntryPoint: entrypoint}
-	if err := e.pool.BroadcastLoad(ctx, req); err != nil {
+	request := process.LoadRequest{
+		LogicalID: strategy.ID, SourceHash: published.SourceHash, Path: published.Path,
+		ModuleType: "strategy", EntryPoint: manifest.Entrypoint,
+	}
+	if err := e.pool.BroadcastLoad(ctx, request); err != nil {
 		return err
 	}
 	e.mu.Lock()
-	e.versions[versionKey(d.StrategyID, d.Version)] = req
+	e.strategies[strategyKey(strategy.ID)] = request
 	e.mu.Unlock()
 	return nil
 }
 
-func (e *Engine) Run(ctx context.Context, t domain.Task, d domain.StrategyDefinition) (domain.Output, string, error) {
+func (e *Engine) Run(
+	ctx context.Context,
+	request domain.ExecutionRequest,
+	strategy domain.Strategy,
+) (domain.Output, string, error) {
 	e.mu.RLock()
-	req, loaded := e.versions[versionKey(d.StrategyID, d.Version)]
+	loaded, ok := e.strategies[strategyKey(strategy.ID)]
 	e.mu.RUnlock()
-	if !loaded || req.SourceHash == "" {
+	if !ok || loaded.SourceHash == "" {
 		return domain.Output{}, "", errors.New("strategy source is not loaded")
 	}
-	state := map[string]any{}
-	if t.PreviousState.StateJSON != "" {
-		if err := json.Unmarshal([]byte(t.PreviousState.StateJSON), &state); err != nil {
-			return domain.Output{}, "", fmt.Errorf("decode state: %w", err)
-		}
+	if request.StrategyID != strategy.ID {
+		return domain.Output{}, "", errors.New("execution strategy id does not match loaded artifact")
 	}
-	stateRevision := t.PreviousState.Revision
-	runTime := time.Now().UTC().Format(time.RFC3339Nano)
-	contextMeta := map[string]any{
-		"api_version":      d.API,
-		"strategy_id":      t.StrategyID,
-		"strategy_version": d.Version,
-		"run_id":           t.RunID,
-		"state_revision":   stateRevision,
-		"trigger_bar_time": t.TriggerBarTime,
-		"trigger_bar_end":  t.TriggerBarTime,
-		"run_time":         runTime,
-		"data_cutoff":      runTime,
-		"data_revision":    t.DataRevision,
-		"freq":             t.Freq,
-		"data_start":       "",
-		"data_end":         "",
-		"random_seed":      int64(0),
-		"previous_targets": t.PreviousTargets,
-	}
-	raw, err := json.Marshal(map[string]any{"context": contextMeta, "data": t.Data, "params": t.Params, "state": state})
+	manifest, err := registry.Parse(strategy.ManifestYAML)
 	if err != nil {
-		return domain.Output{}, "", fmt.Errorf("encode strategy input: %w", err)
+		return domain.Output{}, "", err
 	}
-	resp, err := e.pool.RunLoaded(ctx, t.BindingID, req, process.RunRequest{RequestID: t.RunID, ModuleType: "strategy", LogicalID: req.LogicalID, SourceHash: req.SourceHash, Encoding: protocol.EncodingJSON, Meta: raw})
+	if historyLength(request.Data) != manifest.Input.HistoryBars {
+		return domain.Output{}, "", fmt.Errorf(
+			"strategy input requires exactly %d history bars",
+			manifest.Input.HistoryBars,
+		)
+	}
+	meta, inputHash, err := buildInput(request)
+	if err != nil {
+		return domain.Output{}, "", err
+	}
+	response, err := e.pool.RunLoaded(ctx, request.RunnerID, loaded, process.RunRequest{
+		RequestID: request.RequestID, ModuleType: "strategy", LogicalID: loaded.LogicalID,
+		SourceHash: loaded.SourceHash, Encoding: protocol.EncodingJSON, Meta: meta,
+	})
 	if err != nil {
 		return domain.Output{}, "", err
 	}
 	var envelope struct {
 		Result domain.Output `json:"result"`
 	}
-	if err := json.Unmarshal(resp.Meta, &envelope); err != nil {
+	if err := json.Unmarshal(response.Meta, &envelope); err != nil {
 		return domain.Output{}, "", err
 	}
 	if err := Validate(envelope.Result); err != nil {
 		return domain.Output{}, "", err
 	}
-	sum := sha256.Sum256(raw)
-	return envelope.Result, hex.EncodeToString(sum[:]), nil
+	return envelope.Result, inputHash, nil
 }
 
-func Validate(o domain.Output) error {
-	if o.Action != domain.ActionHold && o.Action != domain.ActionRebalance {
-		return fmt.Errorf("invalid action %q", o.Action)
+func buildInput(request domain.ExecutionRequest) ([]byte, string, error) {
+	if strings.TrimSpace(request.StrategyID) == "" ||
+		strings.TrimSpace(request.RunnerID) == "" ||
+		strings.TrimSpace(request.TriggerBarTime) == "" ||
+		strings.TrimSpace(request.Namespace) == "" {
+		return nil, "", errors.New("strategy, runner, trigger time and namespace are required")
 	}
-	if o.Action == domain.ActionRebalance && len(o.Targets) == 0 {
-		return errors.New("rebalance targets are required")
+	contextValue := struct {
+		StrategyID     string `json:"strategy_id"`
+		RunnerID       string `json:"runner_id"`
+		TriggerBarTime string `json:"trigger_bar_time"`
+	}{
+		StrategyID: request.StrategyID, RunnerID: request.RunnerID,
+		TriggerBarTime: request.TriggerBarTime,
 	}
-	seen := map[string]bool{}
-	for _, target := range o.Targets {
-		if strings.TrimSpace(target.InstrumentID) == "" ||
-			strings.TrimSpace(target.Symbol) == "" ||
-			seen[target.Symbol] {
-			return errors.New("duplicate symbol or empty target identity")
-		}
-		if target.TargetQuantity == "" {
-			return errors.New("target quantity is required")
-		}
-		if len(target.TargetQuantity) > maxTargetQuantityLength ||
-			strings.TrimSpace(target.TargetQuantity) != target.TargetQuantity ||
-			!decimalQuantity.MatchString(target.TargetQuantity) {
-			return fmt.Errorf("invalid target quantity %q", target.TargetQuantity)
-		}
-		if _, ok := new(big.Rat).SetString(target.TargetQuantity); !ok {
-			return fmt.Errorf("invalid target quantity %q", target.TargetQuantity)
-		}
-		seen[target.Symbol] = true
+	workerInput := struct {
+		Context any `json:"context"`
+		Data    any `json:"data"`
+		Params  any `json:"params"`
+	}{
+		Context: contextValue, Data: request.Data, Params: request.Params,
 	}
-	if o.NextState == nil {
-		return errors.New("next_state is required")
+	meta, err := json.Marshal(workerInput)
+	if err != nil {
+		return nil, "", fmt.Errorf("encode strategy input: %w", err)
+	}
+	hashInput := struct {
+		StrategyID string `json:"strategy_id"`
+		Namespace  string `json:"namespace"`
+		Input      any    `json:"input"`
+	}{
+		StrategyID: request.StrategyID, Namespace: request.Namespace, Input: workerInput,
+	}
+	rawHashInput, err := json.Marshal(hashInput)
+	if err != nil {
+		return nil, "", fmt.Errorf("encode strategy hash input: %w", err)
+	}
+	sum := sha256.Sum256(rawHashInput)
+	return meta, hex.EncodeToString(sum[:]), nil
+}
+
+func historyLength(data any) int {
+	value := reflect.ValueOf(data)
+	if !value.IsValid() {
+		return 0
+	}
+	if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
+		return value.Len()
+	}
+	return -1
+}
+
+func Validate(output domain.Output) error {
+	if output.Action != domain.ActionHold && output.Action != domain.ActionRebalance {
+		return fmt.Errorf("invalid action %q", output.Action)
+	}
+	seen := make(map[string]struct{}, len(output.Targets))
+	for _, target := range output.Targets {
+		instrumentID := strings.TrimSpace(target.InstrumentID)
+		if instrumentID == "" || instrumentID != target.InstrumentID {
+			return errors.New("target instrument_id is required without surrounding whitespace")
+		}
+		if _, exists := seen[instrumentID]; exists {
+			return fmt.Errorf("duplicate target instrument_id %q", instrumentID)
+		}
+		if len(target.Quantity) > maxTargetQuantityLength ||
+			strings.TrimSpace(target.Quantity) != target.Quantity ||
+			!decimalQuantity.MatchString(target.Quantity) {
+			return fmt.Errorf("invalid target quantity %q", target.Quantity)
+		}
+		if _, ok := new(big.Rat).SetString(target.Quantity); !ok {
+			return fmt.Errorf("invalid target quantity %q", target.Quantity)
+		}
+		seen[instrumentID] = struct{}{}
+	}
+	debugInfo, err := json.Marshal(output.DebugInfo)
+	if err != nil {
+		return fmt.Errorf("encode debug_info: %w", err)
+	}
+	if len(debugInfo) > maxDebugInfoBytes {
+		return fmt.Errorf("debug_info exceeds %d bytes", maxDebugInfoBytes)
 	}
 	return nil
 }
