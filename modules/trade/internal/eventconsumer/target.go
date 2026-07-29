@@ -7,9 +7,6 @@ import (
 	"sync"
 	"time"
 
-	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/execution"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -55,85 +52,123 @@ func HandleTarget(
 	if err != nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
-	request, ok := payload.(*tradeeventpb.TargetIntent)
-	if !ok || message.GetEventName() != events.TradeTargetRequested.Name() ||
-		message.GetEventVersion() != events.TradeTargetRequested.Version() {
+	request, ok := payload.(*tradeeventpb.LogicalAccountTargetRequested)
+	if !ok ||
+		message.GetEventName() != events.LogicalAccountTargetRequested.Name() ||
+		message.GetEventVersion() != events.LogicalAccountTargetRequested.Version() {
 		return jetstream.HandlerResult{
 			Decision: jetstream.TERM,
 			Err:      fmt.Errorf("trade target: unexpected event payload %T", payload),
 		}
 	}
+
+	if opts.Gate != nil {
+		opts.Gate.Lock()
+		defer opts.Gate.Unlock()
+	}
+	unsupportedInstrument, membersReady, err := unsupportedLogicalTargetInstrument(
+		ctx, opts.Store, message.GetSpaceId(), request,
+	)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		}
+		return retryTarget(err)
+	}
+	if unsupportedInstrument != "" {
+		err = fmt.Errorf(
+			"%w: no enabled member supports instrument %s",
+			store.ErrInvalidRecord, unsupportedInstrument,
+		)
+		if membersReady {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		}
+		return retryTarget(err)
+	}
+
 	now := time.Now().UTC()
 	if opts.Now != nil {
-		now = opts.Now()
+		now = opts.Now().UTC()
 	}
-	intent, err := targetIntent(request)
-	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	record := store.LogicalAccountTargetRecord{
+		SpaceID:          message.GetSpaceId(),
+		LogicalAccountID: request.GetLogicalAccountId(),
+		TargetID:         request.GetTargetId(),
+		RunnerID:         request.GetRunnerId(),
+		CommandSequence:  uint64(request.GetCommandSequence()),
+		Targets:          make([]store.InstrumentTarget, 0, len(request.GetTargets())),
+		Status:           "PENDING",
+		AcceptedAt:       now.UnixMilli(),
 	}
-	if err := intent.Validate(now); err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	for _, target := range request.GetTargets() {
+		record.Targets = append(record.Targets, store.InstrumentTarget{
+			InstrumentID: target.GetInstrumentId(),
+			Quantity:     target.GetQuantity(),
+		})
 	}
-	if message.GetEventId() != intent.ExecutionID ||
-		message.GetSubjectId() != intent.ExecutionBindingID {
-		return jetstream.HandlerResult{
-			Decision: jetstream.TERM,
-			Err:      fmt.Errorf("%w: envelope identity mismatch", execution.ErrInvalidTarget),
-		}
-	}
-	_, _, err = (targetapp.Submission{
-		Store: opts.Store,
-		Wake:  opts.Wake,
-		Now:   opts.Now,
-		Gate:  opts.Gate,
-	}).Accept(ctx, message.GetSpaceId(), intent)
+	_, accepted, err := opts.Store.AcceptLogicalAccountTarget(ctx, record)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidRecord) ||
 			errors.Is(err, store.ErrConflict) ||
-			errors.Is(err, execution.ErrInvalidTarget) {
+			errors.Is(err, gorm.ErrRecordNotFound) {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 		}
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			account, accountErr := opts.Store.GetExchangeAccountByID(
-				ctx,
-				intent.ExchangeAccountID,
-			)
-			if accountErr != nil || account.Ready {
-				return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
-			}
-		}
 		return retryTarget(err)
+	}
+	if accepted && opts.Wake != nil {
+		opts.Wake()
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 
-func targetIntent(request *tradeeventpb.TargetIntent) (execution.TargetIntent, error) {
-	if request == nil {
-		return execution.TargetIntent{}, execution.ErrInvalidTarget
+func unsupportedLogicalTargetInstrument(
+	ctx context.Context,
+	tradeStore *store.Store,
+	spaceID string,
+	request *tradeeventpb.LogicalAccountTargetRequested,
+) (instrumentID string, membersReady bool, err error) {
+	if len(request.GetTargets()) == 0 {
+		return "", true, nil
 	}
-	intent := execution.TargetIntent{
-		ExecutionID: request.GetExecutionId(), StrategyRunID: request.GetStrategyRunId(),
-		ExecutionBindingID: request.GetExecutionBindingId(),
-		ExchangeAccountID:  request.GetExchangeAccountId(),
-		CommandSequence:    request.GetCommandSequence(),
-		NotAfter:           time.UnixMilli(request.GetNotAfterUnixMs()),
-		DataRevision:       request.GetDataRevision(),
-		Targets:            make([]execution.Target, 0, len(request.GetTargets())),
+	members, err := tradeStore.ListLogicalAccountMembers(
+		ctx, spaceID, request.GetLogicalAccountId(), false,
+	)
+	if err != nil {
+		return "", false, err
+	}
+	if len(members) == 0 {
+		return request.GetTargets()[0].GetInstrumentId(), true, nil
+	}
+	supportedIDs := make(map[string]struct{})
+	membersReady = true
+	for _, member := range members {
+		account, accountErr := tradeStore.GetExchangeAccountByID(
+			ctx, member.ExchangeAccountID,
+		)
+		if accountErr != nil {
+			return "", false, accountErr
+		}
+		if !account.Ready {
+			membersReady = false
+		}
+		instruments, instrumentErr := tradeStore.ListInstruments(
+			ctx, account.Exchange, account.MarketType,
+		)
+		if instrumentErr != nil {
+			return "", false, instrumentErr
+		}
+		for _, instrument := range instruments {
+			if instrument.Status == "TRADING" {
+				supportedIDs[instrument.InstrumentID] = struct{}{}
+			}
+		}
 	}
 	for _, target := range request.GetTargets() {
-		if target == nil {
-			return execution.TargetIntent{}, execution.ErrInvalidTarget
+		if _, ok := supportedIDs[target.GetInstrumentId()]; !ok {
+			return target.GetInstrumentId(), membersReady, nil
 		}
-		quantity, err := shared.ParseDecimal(target.GetTargetQuantity())
-		if err != nil {
-			return execution.TargetIntent{}, err
-		}
-		intent.Targets = append(intent.Targets, execution.Target{
-			InstrumentID: target.GetInstrumentId(),
-			Symbol:       target.GetSymbol(), TargetQuantity: quantity,
-		})
 	}
-	return intent, nil
+	return "", membersReady, nil
 }
 
 func retryTarget(err error) jetstream.HandlerResult {
