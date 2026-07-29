@@ -125,12 +125,23 @@ type ClientOrderSpec struct {
     Side              Side
     PositionSide      PositionSide
     Type              Type
-    TimeInForce       TimeInForce
+    FillPolicy        FillPolicy
     Quantity          decimal.Decimal
     LimitPrice        *decimal.Decimal
-    ReduceOnly        bool
 }
 ```
+
+`FillPolicy` 只用于 LIMIT，取值为 `GTC|IOC|FOK`；MARKET 必须为 unspecified。公开 RPC 和 `ClientOrderSpec` 不暴露 `ReducePositionOnly`。OrderService 根据 SPOT/SWAP、当前已确认仓位和 Target/Operator 执行阶段生成有效订单：
+
+```go
+type OrderSpec struct {
+    ClientOrderSpec
+    ReducePositionOnly bool
+    Owner              OrderOwner
+}
+```
+
+规则固定为：SPOT、SWAP 开仓或加仓为 false；SWAP 减仓、关闭反向仓位和 Flatten 为 true。人工订单可能穿过零点时直接拒绝，要求先减仓或 Flatten，确认归零后再开反向仓位。
 
 服务入口状态分流必须是：
 
@@ -172,7 +183,7 @@ TestOKXRejectsClientOrderIDLongerThan32
 TestOKXAcceptsGeneratedClientOrderID
 ```
 
-- [ ] **1.5 写并实现 Paper 只支持 MARKET**
+- [ ] **1.5 写并实现成交策略、只减仓保护和 Paper 约束**
 
 Validator 必须在创建订单和 reservation 前拿到 Account 类型并拒绝 Paper LIMIT：
 
@@ -180,6 +191,13 @@ Validator 必须在创建订单和 reservation 前拿到 Account 类型并拒绝
 TestValidatorRejectsPaperLimitBeforeReservation
 TestValidatorAcceptsPaperMarket
 TestPaperAdapterRejectsLimitAsDefenseInDepth
+TestValidatorRequiresFillPolicyForLimit
+TestValidatorRejectsFillPolicyForMarket
+TestExchangeAdaptersMapFillPolicy
+TestOrderServiceDerivesReducePositionOnlyForSwapReduction
+TestOrderServiceLeavesReducePositionOnlyFalseForSwapIncrease
+TestOrderServiceRejectsManualOrderThatWouldCrossZero
+TestOrderServiceNeverSetsReducePositionOnlyForSpot
 ```
 
 - [ ] **1.6 运行 GREEN 和竞态测试**
@@ -1324,12 +1342,13 @@ TradeExecutionService:
   ListPositions
 ```
 
-删除公开的 `PauseAccount`、`PlaceOrder`、`SubmitTarget`。`PlaceManualOrder` 请求只含 `action_id`、目标 `exchange_account_id`、订单客户端字段和 reason；服务端由物理账户反查所属 LogicalAccount，再暂停整个 LogicalAccount。请求不含 source、owner、strategy result 或 runner。
+删除公开的 `PauseAccount`、`PlaceOrder`、`SubmitTarget`。`PlaceManualOrder` 请求只含 `action_id`、目标 `exchange_account_id`、订单客户端字段、`fill_policy` 和 reason；服务端由物理账户反查所属 LogicalAccount，再暂停整个 LogicalAccount。请求不含 source、owner、strategy result、runner 或 `reduce_position_only`。
 
 覆盖：
 
 ```text
 TestManualOrderRPCCannotForgeOwnership
+TestManualOrderRPCCannotSetReducePositionOnly
 TestLogicalRPCRequiresActionIDAndReason
 TestServiceNamesIncludesLogicalAccountService
 TestPhysicalAccountRPCDoesNotExposePause
@@ -1672,9 +1691,11 @@ rg -n 'StrategyDefinition|StrategyBinding|ExecutionBinding|StrategyRun|strategy_
   modules/strategy modules/trade packages web/src docs \
   --glob '!docs/superpowers/plans/**' \
   --glob '!docs/superpowers/specs/**'
+rg -n 'TimeInForce|ReduceOnly|time_in_force|reduce_only' \
+  modules/trade/internal/domain modules/trade/proto
 ```
 
-预期：前两条 PASS；`rg` 只允许出现在明确的旧 schema 拒绝测试/错误文本中，生产代码和现役文档无旧术语。
+预期：前两条 PASS；第一条 `rg` 只允许出现在明确的旧 schema 拒绝测试/错误文本中；第二条不得命中生产领域或公开 Proto。Exchange Adapter 内仍允许使用原生 `timeInForce`、`reduceOnly` 字段。
 
 - [ ] **15.3 运行全仓验证**
 
@@ -1701,6 +1722,8 @@ LogicalAccount 同质性、ownership 和 readiness
 TargetExecutor 一轮一个动作及 SPOT/SWAP FULL union
 OperatorAction 幂等、Flatten 重启和逐账户 remaining position
 OrderService unknown submit 恢复与 reducer 单调性
+FillPolicy 校验和 Exchange 原生字段映射
+ReducePositionOnly 仅由服务端生成，人工 RPC 不可设置且禁止穿零
 AccountSync 锁顺序
 RPC ownership 防伪造
 Testnet profile 和 live gate

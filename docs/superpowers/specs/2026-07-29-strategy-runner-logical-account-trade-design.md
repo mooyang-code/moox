@@ -526,6 +526,24 @@ The shared `OrderService` provides a state-aware idempotent entry point:
 Idempotency compares only caller-owned order fields. Server-derived reference
 price and timestamp do not participate.
 
+The domain names limit-order lifetime behavior `FillPolicy`, with supported
+values `GTC`, `IOC`, and `FOK`; `MARKET` orders have no FillPolicy. Exchange
+adapters map it to native `timeInForce` or order-type fields.
+
+Public RPC and `ClientOrderSpec` do not expose a reduce-only flag.
+`OrderService` derives and persists `ReducePositionOnly` from the confirmed
+position and trusted execution phase:
+
+- SPOT and SWAP opening or increase orders use `false`.
+- SWAP reductions, opposite-position closing, and Flatten orders use `true`.
+- A manual order that would cross zero is rejected; the operator must reduce or
+  Flatten first, wait for confirmed zero, and then submit the opposite opening
+  order.
+
+The internal Order and Exchange request retain `ReducePositionOnly` and map it
+to the Exchange-native `reduceOnly` guard. This prevents a stale closing
+quantity from accidentally opening the opposite position.
+
 The account lock covers precheck, unknown resolution, conditional submission,
 and local response persistence. A successful non-OPEN Exchange response
 triggers immediate `SyncAccount`; Trade never fabricates fills from an
@@ -674,6 +692,12 @@ algorithm registry, or second event workflow.
 ### Order and Exchange
 
 - RPC retry ignores server-derived reference quote changes.
+- Public RPC cannot set reduce-only semantics.
+- `FillPolicy` validates and maps `GTC`, `IOC`, and `FOK` for LIMIT orders;
+  MARKET orders carry no policy.
+- SWAP reductions and Flatten derive `ReducePositionOnly=true`; SWAP increases
+  and all SPOT orders derive `false`.
+- A manual order that would cross zero is rejected.
 - State-aware submit covers every Order state.
 - Unknown lookup window permits only controlled same-ID retry.
 - Non-OPEN success responses trigger synchronization.
@@ -718,7 +742,8 @@ The change is complete when:
    accounts without cross-account netting errors.
 5. Manual orders and flatten operations pause automation before they act.
 6. Automatic execution cannot resume without explicit operator Resume.
-7. Order submission, unknown recovery, OKX IDs, readiness, and secret access
-   satisfy the corrected boundaries.
+7. Order submission, `FillPolicy`, server-derived reduce-only behavior, unknown
+   recovery, OKX IDs, readiness, and secret access satisfy the corrected
+   boundaries.
 8. Module tests, targeted race tests, cross-module E2E, deployment contracts,
    and real Exchange testnet smoke pass.
