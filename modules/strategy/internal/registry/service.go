@@ -5,88 +5,115 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
+	"strings"
+	"time"
+
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"gopkg.in/yaml.v3"
-	"io"
-	"strings"
 )
 
-var ErrImmutableVersion = errors.New("strategy: immutable version")
+const APIVersionV1 = "moox.strategy/v1"
+
+var ErrImmutableStrategy = errors.New("strategy: immutable artifact")
 
 type Manifest struct {
-	ID                 string `yaml:"id"`
-	Version            string `yaml:"version"`
-	API                string `yaml:"api_version"`
-	Entrypoint         string `yaml:"entrypoint"`
-	StateSchemaVersion int    `yaml:"state_schema_version"`
+	APIVersion string        `yaml:"api_version"`
+	Entrypoint string        `yaml:"entrypoint"`
+	Input      ManifestInput `yaml:"input"`
 }
-type Service struct{ Repo *store.Store }
+
+type ManifestInput struct {
+	HistoryBars int `yaml:"history_bars"`
+}
+
+type Service struct {
+	Repo *store.Store
+	Now  func() time.Time
+}
 
 func Parse(raw string) (Manifest, error) {
-	var m Manifest
-	dec := yaml.NewDecoder(strings.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&m); err != nil {
-		return m, err
+	var manifest Manifest
+	decoder := yaml.NewDecoder(strings.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&manifest); err != nil {
+		return manifest, err
 	}
 	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
+	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return m, errors.New("strategy manifest must contain one YAML document")
+			return manifest, errors.New("strategy manifest must contain one YAML document")
 		}
-		return m, err
+		return manifest, err
 	}
-	if m.ID == "" || m.Version == "" || m.API == "" || m.Entrypoint == "" {
-		return m, errors.New("strategy manifest requires id, version, api_version and entrypoint")
+	if manifest.APIVersion != APIVersionV1 {
+		return manifest, errors.New("strategy manifest api_version must be moox.strategy/v1")
 	}
-	return m, nil
-}
-func (s *Service) Publish(ctx context.Context, manifest, source string) (domain.StrategyDefinition, error) {
-	d, err := s.Prepare(manifest, source)
-	if err != nil {
-		return domain.StrategyDefinition{}, err
+	if strings.TrimSpace(manifest.Entrypoint) == "" {
+		return manifest, errors.New("strategy manifest entrypoint is required")
 	}
-	if err := s.Save(ctx, d); err != nil {
-		return domain.StrategyDefinition{}, err
+	if manifest.Input.HistoryBars <= 0 {
+		return manifest, errors.New("strategy manifest input.history_bars must be positive")
 	}
-	return d, nil
+	return manifest, nil
 }
 
-// Prepare validates and hashes a package without persisting it. Callers that
-// have a runtime can LOAD the materialized source before Save, preventing the
-// registry from acknowledging code the worker cannot import.
-func (s *Service) Prepare(manifest, source string) (domain.StrategyDefinition, error) {
-	m, err := Parse(manifest)
+func (s *Service) Publish(
+	ctx context.Context,
+	strategyID, name, manifest, source string,
+) (domain.Strategy, error) {
+	strategy, err := s.Prepare(strategyID, name, manifest, source)
 	if err != nil {
-		return domain.StrategyDefinition{}, err
+		return domain.Strategy{}, err
+	}
+	if err := s.Save(ctx, strategy); err != nil {
+		return domain.Strategy{}, err
+	}
+	return strategy, nil
+}
+
+func (s *Service) Prepare(strategyID, name, manifest, source string) (domain.Strategy, error) {
+	if strings.TrimSpace(strategyID) == "" || strings.TrimSpace(name) == "" {
+		return domain.Strategy{}, errors.New("strategy id and name are required")
+	}
+	if _, err := Parse(manifest); err != nil {
+		return domain.Strategy{}, err
+	}
+	if source == "" {
+		return domain.Strategy{}, errors.New("strategy source is required")
 	}
 	sum := sha256.Sum256([]byte(source))
-	d := domain.StrategyDefinition{StrategyID: m.ID, Version: m.Version, API: m.API, ManifestYAML: manifest, SourceCode: source, SourceHash: hex.EncodeToString(sum[:]), StateSchemaVersion: m.StateSchemaVersion, Status: "draft"}
-	return d, nil
+	now := time.Now().UTC()
+	if s.Now != nil {
+		now = s.Now().UTC()
+	}
+	return domain.Strategy{
+		ID: strategyID, Name: name, ManifestYAML: manifest, SourceCode: source,
+		SourceHash: hex.EncodeToString(sum[:]), CreatedAt: now,
+	}, nil
 }
 
-func (s *Service) Save(ctx context.Context, d domain.StrategyDefinition) error {
+func (s *Service) Save(ctx context.Context, strategy domain.Strategy) error {
 	if s.Repo == nil {
 		return nil
 	}
-	if err := s.Repo.SaveDefinition(ctx, d); err != nil {
-		old, getErr := s.Repo.GetDefinition(ctx, d.StrategyID, d.Version)
+	if err := s.Repo.SaveStrategy(ctx, strategy); err != nil {
+		existing, getErr := s.Repo.GetStrategy(ctx, strategy.ID)
 		if getErr != nil {
 			return err
 		}
-		if old.SourceHash != d.SourceHash || old.ManifestYAML != d.ManifestYAML || old.API != d.API || old.StateSchemaVersion != d.StateSchemaVersion {
-			return ErrImmutableVersion
-		}
-		if old.Status != d.Status {
-			// Validation is the only forward lifecycle transition performed by
-			// this service: a successfully loaded draft may become enabled, but
-			// an enabled version can never be downgraded by a retry.
-			if old.Status == "draft" && d.Status == "enabled" {
-				return s.Repo.EnableDefinition(ctx, d.StrategyID, d.Version)
-			}
-			return ErrImmutableVersion
+		if !sameArtifact(existing, strategy) {
+			return ErrImmutableStrategy
 		}
 	}
 	return nil
+}
+
+func sameArtifact(left, right domain.Strategy) bool {
+	return left.ID == right.ID &&
+		left.Name == right.Name &&
+		left.ManifestYAML == right.ManifestYAML &&
+		left.SourceCode == right.SourceCode &&
+		left.SourceHash == right.SourceHash
 }
