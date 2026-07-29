@@ -130,9 +130,10 @@ func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.Ser
 }
 
 type extraConfig struct {
-	HealthURL      string `json:"health_url"`
-	HealthKind     string `json:"health_kind"`
-	MonitorEnabled *bool  `json:"monitor_enabled"`
+	HealthURL          string `json:"health_url"`
+	HealthKind         string `json:"health_kind"`
+	HealthBodyContains string `json:"health_body_contains"`
+	MonitorEnabled     *bool  `json:"monitor_enabled"`
 }
 
 func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, error) {
@@ -180,7 +181,10 @@ func checkFromDeployment(deployment *adminpb.ServiceDeployment) (*domain.Check, 
 			}
 		}
 		if kind == "readiness" || kind == "ready" {
-			check.BodyContains = `"ready":true`
+			check.BodyContains = strings.TrimSpace(extra.HealthBodyContains)
+			if check.BodyContains == "" {
+				check.BodyContains = `"ready":true`
+			}
 		}
 		return check, nil
 	}

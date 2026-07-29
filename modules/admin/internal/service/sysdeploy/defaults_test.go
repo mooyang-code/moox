@@ -85,6 +85,9 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if gateway.Port != 11002 || healthURL(gateway.ExtraConfig) != "http://127.0.0.1:11012/readyz" {
 		t.Fatalf("moox_gateway deployment = %#v", gateway)
 	}
+	if !strings.Contains(gateway.ExtraConfig, `"health_body_contains":"ready"`) {
+		t.Fatalf("moox_gateway extra_config = %s", gateway.ExtraConfig)
+	}
 	if healthURL(byName["moox_cloudnode"].ExtraConfig) != "http://127.0.0.1:11411/readyz" {
 		t.Fatalf("cloudnode extra_config = %s", byName["moox_cloudnode"].ExtraConfig)
 	}

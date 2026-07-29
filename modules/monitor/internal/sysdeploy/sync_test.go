@@ -110,6 +110,22 @@ func TestCheckFromDeploymentDoesNotAssertReadinessForLiveness(t *testing.T) {
 	}
 }
 
+func TestCheckFromDeploymentUsesConfiguredReadinessBody(t *testing.T) {
+	check, err := checkFromDeployment(&adminpb.ServiceDeployment{
+		NodeId:      "control",
+		ServiceName: "moox_gateway",
+		Protocol:    "http",
+		Status:      "active",
+		ExtraConfig: `{"health_url":"http://127.0.0.1:11012/readyz","health_kind":"readiness","health_body_contains":"ready"}`,
+	})
+	if err != nil || check == nil {
+		t.Fatalf("checkFromDeployment = %+v, %v", check, err)
+	}
+	if check.BodyContains != "ready" {
+		t.Fatalf("readiness body matcher = %q, want ready", check.BodyContains)
+	}
+}
+
 func TestCheckFromDeploymentRejectsRemoteLoopbackHealthURL(t *testing.T) {
 	check, err := checkFromDeployment(&adminpb.ServiceDeployment{
 		NodeId:      "node-b",

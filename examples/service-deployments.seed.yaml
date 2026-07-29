@@ -139,6 +139,7 @@ services:
     extra_config:
       health_url: http://127.0.0.1:11012/readyz
       health_kind: readiness
+      health_body_contains: ready
       monitor_enabled: true
   - name: moox_monitor
     kind: monitor
