@@ -213,6 +213,17 @@ func TestLogicalAccountOwnerClientMapsBusinessErrors(t *testing.T) {
 	}
 }
 
+func TestLogicalAccountOwnerClientRejectsEmptyResponse(t *testing.T) {
+	owner := &logicalAccountOwnerClient{
+		client:  &logicalAccountClientProxyStub{},
+		timeout: time.Second,
+	}
+	err := owner.Validate(context.Background(), "space-1", "logical-1")
+	if err == nil || !strings.Contains(err.Error(), "returned no status") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestLogicalAccountOwnerClientRejectsMismatchedResponses(t *testing.T) {
 	account := &tradepb.LogicalAccount{
 		LogicalAccountId: "logical-other",
