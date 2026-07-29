@@ -153,6 +153,22 @@ func (tx *Tx) SetLogicalAccountOwner(
 	return requireUpdated(result.Error, result.RowsAffected, "logical account owner")
 }
 
+func (tx *Tx) SetLogicalAccountName(
+	spaceID string,
+	logicalAccountID string,
+	name string,
+) error {
+	if blank(name) {
+		return fmt.Errorf("%w: logical account name is required", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_logical_accounts
+		SET c_name = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+	`, name, spaceID, logicalAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "logical account name")
+}
+
 func (tx *Tx) SetLogicalAccountAutomation(
 	spaceID string,
 	logicalAccountID string,
@@ -257,6 +273,26 @@ func (s *Store) ListLogicalAccountMembers(
 		records = append(records, logicalAccountMemberRecord(row))
 	}
 	return records, nil
+}
+
+func (tx *Tx) DeleteLogicalAccountMember(
+	spaceID string,
+	logicalAccountID string,
+	exchangeAccountID string,
+) error {
+	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
+	if err != nil {
+		return err
+	}
+	if account.AutomationState != string(logicalaccount.AutomationPaused) {
+		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrMembershipChange)
+	}
+	result := tx.db.Exec(`
+		DELETE FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+			AND c_exchange_account_id = ?
+	`, spaceID, logicalAccountID, exchangeAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "logical account member")
 }
 
 func (s *Store) FindLogicalAccountByExchangeAccount(
