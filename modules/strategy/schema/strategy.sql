@@ -1,153 +1,50 @@
-CREATE TABLE IF NOT EXISTS t_strategy_defs (
-    c_strategy_id TEXT NOT NULL,
-    c_version TEXT NOT NULL,
-    c_api_version TEXT NOT NULL,
-    c_manifest_yaml TEXT NOT NULL,
-    c_source_code TEXT NOT NULL,
-    c_source_hash TEXT NOT NULL,
-    c_state_schema_version INTEGER NOT NULL DEFAULT 1,
-    c_status TEXT NOT NULL DEFAULT 'draft',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_strategy_id, c_version)
+CREATE TABLE IF NOT EXISTS t_strategies (
+    strategy_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    manifest_yaml TEXT NOT NULL,
+    source_code TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS t_strategy_bindings (
-    c_binding_id TEXT PRIMARY KEY,
-    c_strategy_id TEXT NOT NULL,
-    c_strategy_version TEXT NOT NULL,
-    c_space_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
-    c_freq TEXT NOT NULL,
-    c_params_json TEXT NOT NULL DEFAULT '{}',
-    c_group_id TEXT NOT NULL DEFAULT '',
-    c_capital_weight TEXT NOT NULL DEFAULT '1',
-    c_status TEXT NOT NULL DEFAULT 'disabled'
+CREATE TABLE IF NOT EXISTS t_strategy_runners (
+    runner_id TEXT PRIMARY KEY,
+    strategy_id TEXT NOT NULL,
+    space_id TEXT NOT NULL,
+    view_id TEXT NOT NULL,
+    frequency TEXT NOT NULL,
+    params_json TEXT NOT NULL,
+    logical_account_id TEXT,
+    status TEXT NOT NULL,
+    current_targets_json TEXT NOT NULL,
+    command_sequence INTEGER NOT NULL,
+    last_result_id TEXT,
+    last_success_at INTEGER,
+    last_error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS t_strategy_states (
-    c_binding_id TEXT PRIMARY KEY,
-    c_strategy_version TEXT NOT NULL,
-    c_state_revision INTEGER NOT NULL DEFAULT 0,
-    c_state_json TEXT NOT NULL DEFAULT '{}',
-    c_last_run_id TEXT NOT NULL DEFAULT ''
-);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_strategy_runners_enabled_logical_account
+ON t_strategy_runners (logical_account_id)
+WHERE logical_account_id IS NOT NULL AND status = 'ENABLED';
 
-CREATE TABLE IF NOT EXISTS t_strategy_runs (
-    c_run_id TEXT PRIMARY KEY,
-    c_binding_id TEXT NOT NULL,
-    c_strategy_version TEXT NOT NULL,
-    c_namespace TEXT NOT NULL DEFAULT 'default',
-    c_trigger_bar_time TEXT NOT NULL,
-    c_data_revision TEXT NOT NULL,
-    c_input_hash TEXT NOT NULL,
-    c_previous_state_revision INTEGER NOT NULL,
-    c_status TEXT NOT NULL,
-    c_action TEXT NOT NULL,
-    c_output_json TEXT NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (c_binding_id, c_strategy_version, c_trigger_bar_time, c_namespace)
+CREATE TABLE IF NOT EXISTS t_strategy_results (
+    result_id TEXT PRIMARY KEY,
+    runner_id TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    trigger_bar_time INTEGER NOT NULL,
+    namespace TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    action TEXT NOT NULL,
+    output_json TEXT NOT NULL,
+    command_sequence INTEGER,
+    created_at INTEGER NOT NULL,
+    UNIQUE (runner_id, strategy_id, namespace, trigger_bar_time)
 );
 
 CREATE TABLE IF NOT EXISTS t_strategy_outbox (
-    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_message_id TEXT NOT NULL UNIQUE,
-    c_event_data BLOB NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    message_id TEXT PRIMARY KEY,
+    event_data BLOB NOT NULL,
+    created_at INTEGER NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS t_strategy_command_sequences (
-    c_execution_binding_id TEXT PRIMARY KEY,
-    c_last_sequence INTEGER NOT NULL,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS t_strategy_execution_bindings (
-    c_execution_binding_id TEXT PRIMARY KEY,
-    c_group_id TEXT NOT NULL,
-    c_exchange_account_id TEXT NOT NULL DEFAULT '',
-    c_mode TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'enabled',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS t_strategy_run_metrics (
-    c_run_id TEXT PRIMARY KEY,
-    c_queue_delay_ms INTEGER NOT NULL DEFAULT 0,
-    c_snapshot_duration_ms INTEGER NOT NULL DEFAULT 0,
-    c_compute_duration_ms INTEGER NOT NULL DEFAULT 0,
-    c_validate_duration_ms INTEGER NOT NULL DEFAULT 0,
-    c_total_duration_ms INTEGER NOT NULL DEFAULT 0,
-    c_input_rows INTEGER NOT NULL DEFAULT 0,
-    c_output_targets INTEGER NOT NULL DEFAULT 0,
-    c_worker_id TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS t_strategy_binding_health (
-    c_binding_id TEXT PRIMARY KEY,
-    c_status TEXT NOT NULL,
-    c_mode TEXT NOT NULL,
-    c_last_run_id TEXT NOT NULL DEFAULT '',
-    c_last_success_at DATETIME,
-    c_last_error_type TEXT NOT NULL DEFAULT '',
-    c_last_error_message TEXT NOT NULL DEFAULT '',
-    c_last_data_revision TEXT NOT NULL DEFAULT '',
-    c_data_cutoff DATETIME,
-    c_worker_status TEXT NOT NULL DEFAULT '',
-    c_outbox_lag_seconds INTEGER NOT NULL DEFAULT 0,
-    c_observed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS t_strategy_performance_points (
-    c_binding_id TEXT NOT NULL,
-    c_performance_source TEXT NOT NULL,
-    c_point_time DATETIME NOT NULL,
-    c_nav TEXT NOT NULL,
-    c_cumulative_return TEXT NOT NULL,
-    c_drawdown TEXT NOT NULL,
-    c_gross_exposure TEXT NOT NULL,
-    c_net_exposure TEXT NOT NULL,
-    c_turnover TEXT NOT NULL,
-    c_fees TEXT NOT NULL,
-    c_data_revision TEXT NOT NULL,
-    c_calculated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_binding_id, c_performance_source, c_point_time)
-);
-
-CREATE INDEX IF NOT EXISTS idx_strategy_performance_points_time ON t_strategy_performance_points (c_binding_id, c_performance_source, c_point_time);
-
-CREATE TABLE IF NOT EXISTS t_strategy_performance_daily (
-    c_binding_id TEXT NOT NULL,
-    c_performance_source TEXT NOT NULL,
-    c_trade_date TEXT NOT NULL,
-    c_start_nav TEXT NOT NULL,
-    c_end_nav TEXT NOT NULL,
-    c_return TEXT NOT NULL,
-    c_max_drawdown TEXT NOT NULL,
-    c_turnover TEXT NOT NULL,
-    c_fees TEXT NOT NULL,
-    c_win_count INTEGER NOT NULL DEFAULT 0,
-    c_loss_count INTEGER NOT NULL DEFAULT 0,
-    c_sample_count INTEGER NOT NULL DEFAULT 0,
-    c_data_revision TEXT NOT NULL,
-    c_calculated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_binding_id, c_performance_source, c_trade_date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_strategy_performance_daily_date ON t_strategy_performance_daily (c_binding_id, c_performance_source, c_trade_date);
-
-CREATE TABLE IF NOT EXISTS t_strategy_operation_audits (
-    c_operation_id TEXT PRIMARY KEY,
-    c_operator TEXT NOT NULL,
-    c_action TEXT NOT NULL,
-    c_binding_id TEXT NOT NULL,
-    c_old_value TEXT NOT NULL DEFAULT '',
-    c_new_value TEXT NOT NULL DEFAULT '',
-    c_reason TEXT NOT NULL,
-    c_request_id TEXT NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_strategy_operation_audits_binding ON t_strategy_operation_audits (c_binding_id, c_ctime);

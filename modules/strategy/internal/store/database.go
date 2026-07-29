@@ -29,7 +29,12 @@ func Open(path string) (*Store, error) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
-	return New(db), nil
+	store := New(db)
+	if err := store.validateExistingSchema(); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	return store, nil
 }
 
 // Ping verifies that the database is available.
@@ -48,7 +53,90 @@ func (m *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("strategy schema sql is empty")
 	}
-	return m.db.Exec(sql).Error
+	if err := m.db.Exec(sql).Error; err != nil {
+		return err
+	}
+	return m.validateCurrentSchema()
+}
+
+var strategySchemaColumns = map[string][]string{
+	"t_strategies": {
+		"strategy_id", "name", "manifest_yaml", "source_code", "source_hash", "created_at",
+	},
+	"t_strategy_runners": {
+		"runner_id", "strategy_id", "space_id", "view_id", "frequency", "params_json",
+		"logical_account_id", "status", "current_targets_json", "command_sequence",
+		"last_result_id", "last_success_at", "last_error", "created_at", "updated_at",
+	},
+	"t_strategy_results": {
+		"result_id", "runner_id", "strategy_id", "trigger_bar_time", "namespace",
+		"input_hash", "action", "output_json", "command_sequence", "created_at",
+	},
+	"t_strategy_outbox": {
+		"message_id", "event_data", "created_at",
+	},
+}
+
+func (m *Store) validateExistingSchema() error {
+	tables, err := m.strategyTables()
+	if err != nil {
+		return err
+	}
+	if len(tables) == 0 {
+		return nil
+	}
+	return m.validateSchemaTables(tables)
+}
+
+func (m *Store) validateCurrentSchema() error {
+	tables, err := m.strategyTables()
+	if err != nil {
+		return err
+	}
+	return m.validateSchemaTables(tables)
+}
+
+func (m *Store) strategyTables() ([]string, error) {
+	var tables []string
+	if err := m.db.Raw(`
+		SELECT name
+		FROM sqlite_master
+		WHERE type = 'table'
+		  AND (name = 't_strategies' OR name LIKE 't_strategy_%')
+		ORDER BY name
+	`).Scan(&tables).Error; err != nil {
+		return nil, fmt.Errorf("inspect strategy schema tables: %w", err)
+	}
+	return tables, nil
+}
+
+func (m *Store) validateSchemaTables(tables []string) error {
+	for _, table := range tables {
+		if _, ok := strategySchemaColumns[table]; !ok {
+			return obsoleteSchemaError(table)
+		}
+	}
+	if len(tables) != len(strategySchemaColumns) {
+		table := "Strategy"
+		if len(tables) > 0 {
+			table = tables[0]
+		}
+		return obsoleteSchemaError(table)
+	}
+	for _, table := range tables {
+		var columns []string
+		if err := m.db.Raw("SELECT name FROM pragma_table_info(?) ORDER BY cid", table).Scan(&columns).Error; err != nil {
+			return fmt.Errorf("inspect strategy schema table %s: %w", table, err)
+		}
+		if strings.Join(columns, "\x00") != strings.Join(strategySchemaColumns[table], "\x00") {
+			return obsoleteSchemaError(table)
+		}
+	}
+	return nil
+}
+
+func obsoleteSchemaError(table string) error {
+	return fmt.Errorf("Strategy 数据库表 %s 使用旧 schema；请删除旧数据库后重建", table)
 }
 
 // Close releases the underlying SQL connection.

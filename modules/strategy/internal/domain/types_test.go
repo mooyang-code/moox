@@ -1,23 +1,46 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
+	"time"
 )
 
-func TestStrategyDefinition_TableName_ShouldReturnStrategyDefsTable(t *testing.T) {
-	assert.Equal(t, "t_strategy_defs", StrategyDefinition{}.TableName())
-}
+func TestStrategyPersistenceTypesUseFinalTables(t *testing.T) {
+	logicalAccountID := "logical-account-1"
+	lastResultID := "result-1"
+	lastSuccessAt := time.UnixMilli(1000).UTC()
+	lastError := "worker unavailable"
+	sequence := int64(7)
 
-func TestBinding_TableName_ShouldReturnStrategyBindingsTable(t *testing.T) {
-	assert.Equal(t, "t_strategy_bindings", Binding{}.TableName())
-}
+	strategy := Strategy{ID: "strategy-1", Name: "trend"}
+	runner := StrategyRunner{
+		ID:                 "runner-1",
+		StrategyID:         strategy.ID,
+		LogicalAccountID:   &logicalAccountID,
+		Status:             RunnerStatusEnabled,
+		CurrentTargetsJSON: json.RawMessage(`[]`),
+		CommandSequence:    sequence,
+		LastResultID:       &lastResultID,
+		LastSuccessAt:      &lastSuccessAt,
+		LastError:          &lastError,
+	}
+	result := StrategyResult{
+		ID:              lastResultID,
+		RunnerID:        runner.ID,
+		StrategyID:      strategy.ID,
+		Action:          ActionRebalance,
+		OutputJSON:      json.RawMessage(`{"targets":[]}`),
+		CommandSequence: &sequence,
+	}
 
-func TestState_TableName_ShouldReturnStrategyStatesTable(t *testing.T) {
-	assert.Equal(t, "t_strategy_states", State{}.TableName())
-}
-
-func TestStrategyRun_TableName_ShouldReturnStrategyRunsTable(t *testing.T) {
-	assert.Equal(t, "t_strategy_runs", StrategyRun{}.TableName())
+	if got := strategy.TableName(); got != "t_strategies" {
+		t.Fatalf("Strategy.TableName() = %q", got)
+	}
+	if got := runner.TableName(); got != "t_strategy_runners" {
+		t.Fatalf("StrategyRunner.TableName() = %q", got)
+	}
+	if got := result.TableName(); got != "t_strategy_results" {
+		t.Fatalf("StrategyResult.TableName() = %q", got)
+	}
 }
