@@ -41,6 +41,9 @@ func (s *Service) Commit(
 	result domain.StrategyResult,
 	output domain.Output,
 ) (store.CommitResultOutcome, error) {
+	if err := engine.Validate(output); err != nil {
+		return store.CommitResultOutcome{}, err
+	}
 	return s.Repo.CommitResult(ctx, store.CommitResultRequest{
 		Result: result,
 		Output: output,

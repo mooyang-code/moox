@@ -53,6 +53,30 @@ func TestCommitDelegatesAcceptedResultToAtomicStore(t *testing.T) {
 	}
 }
 
+func TestCommitRejectsInvalidOutputBeforeStore(t *testing.T) {
+	repo := &resultStoreStub{}
+	service := Service{Repo: repo}
+	_, err := service.Commit(
+		context.Background(),
+		domain.StrategyResult{
+			ID: "result-1", RunnerID: "runner-1", Action: domain.ActionRebalance,
+		},
+		domain.Output{
+			Action: domain.ActionRebalance,
+			Targets: []domain.InstrumentTarget{{
+				InstrumentID: "BTC-USDT-SPOT",
+				Quantity:     "not-a-decimal",
+			}},
+		},
+	)
+	if err == nil {
+		t.Fatal("invalid output was committed")
+	}
+	if repo.commitRequest.Result.ID != "" {
+		t.Fatalf("store received invalid result: %+v", repo.commitRequest)
+	}
+}
+
 func TestRecordFailureUpdatesRunnerHealthWithoutResult(t *testing.T) {
 	repo := &resultStoreStub{}
 	service := Service{Repo: repo}
