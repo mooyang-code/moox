@@ -165,8 +165,8 @@ func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error
 	if err != nil {
 		return RunResult{}, err
 	}
-	if err := protocol.WriteFrame(w.in, w.cfg.Limits, protocol.Frame{Type: protocol.TypeRun, Meta: meta, Payload: req.Payload}); err != nil {
-		return RunResult{}, errors.Join(err, w.terminateLocked())
+	if err := w.writeFrameLocked(ctx, protocol.Frame{Type: protocol.TypeRun, Meta: meta, Payload: req.Payload}); err != nil {
+		return RunResult{}, err
 	}
 	ch := make(chan struct {
 		f   protocol.Frame
@@ -231,8 +231,8 @@ func (w *StdioWorker) control(ctx context.Context, typ protocol.MessageType, met
 	ctx, cancel := context.WithTimeout(ctx, w.cfg.TaskTimeout)
 	defer cancel()
 	b, _ := json.Marshal(meta)
-	if err := protocol.WriteFrame(w.in, w.cfg.Limits, protocol.Frame{Type: typ, Meta: b}); err != nil {
-		return errors.Join(err, w.terminateLocked())
+	if err := w.writeFrameLocked(ctx, protocol.Frame{Type: typ, Meta: b}); err != nil {
+		return err
 	}
 	done := make(chan error, 1)
 	out := w.out
@@ -257,6 +257,29 @@ func (w *StdioWorker) control(ctx context.Context, typ protocol.MessageType, met
 		return nil
 	}
 }
+
+// writeFrameLocked requires w.mu. The write runs separately so TaskTimeout can
+// still terminate a child that stopped reading stdin while the caller retains
+// exclusive use of this worker.
+func (w *StdioWorker) writeFrameLocked(ctx context.Context, frame protocol.Frame) error {
+	done := make(chan error, 1)
+	in := w.in
+	go func() {
+		done <- protocol.WriteFrame(in, w.cfg.Limits, frame)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			return errors.Join(err, w.terminateLocked())
+		}
+		return nil
+	case <-ctx.Done():
+		terminateErr := w.terminateLocked()
+		<-done
+		return errors.Join(ctx.Err(), terminateErr)
+	}
+}
+
 func (w *StdioWorker) State() State { w.mu.Lock(); defer w.mu.Unlock(); return w.state }
 func (w *StdioWorker) Hello() protocol.Hello {
 	w.mu.Lock()
@@ -272,10 +295,18 @@ func (w *StdioWorker) Close() error {
 // terminateLocked requires w.mu and consumes the command so Wait is called once.
 func (w *StdioWorker) terminateLocked() error {
 	cmd := w.cmd
+	in := w.in
+	out := w.out
 	w.cmd = nil
 	w.in = nil
 	w.out = nil
 	w.state = StateDead
+	if in != nil {
+		_ = in.Close()
+	}
+	if out != nil {
+		_ = out.Close()
+	}
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}

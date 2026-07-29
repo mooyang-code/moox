@@ -80,7 +80,14 @@ func TestNewStdioWorkerTaskTimeoutReapsHungHelloProcess(t *testing.T) {
 		})
 		done <- err
 	}()
-	observed := <-started
+	var observed startedWorker
+	select {
+	case observed = <-started:
+	case err := <-done:
+		t.Fatalf("worker failed before HELLO timeout observation: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker process did not start")
+	}
 
 	select {
 	case err := <-done:
@@ -94,27 +101,8 @@ func TestNewStdioWorkerTaskTimeoutReapsHungHelloProcess(t *testing.T) {
 }
 
 func TestStdioWorkerLoadTaskTimeoutReapsHungProcess(t *testing.T) {
-	script := writeWorkerScript(t, `
-import json
-import struct
-import sys
-import time
-
-meta = json.dumps({
-    "protocol_version": "moox.py/v1",
-    "worker_version": "test",
-    "python_version": sys.version.split()[0],
-    "runtime_env_hash": "",
-    "encodings": ["json"],
-}).encode()
-sys.stdout.buffer.write(b"MX" + bytes([1]) + struct.pack(">I", len(meta)) + meta + struct.pack(">Q", 0))
-sys.stdout.buffer.flush()
-time.sleep(60)
-`)
-	worker, err := NewStdioWorker(context.Background(), Config{
-		PythonBin: "python3", WorkerPath: script, TaskTimeout: 40 * time.Millisecond,
-	})
-	require.NoError(t, err)
+	worker := newNonReadingStdioWorker(t)
+	worker.cfg.TaskTimeout = 40 * time.Millisecond
 	cmd := worker.cmd
 	done := make(chan error, 1)
 	go func() {
@@ -130,6 +118,54 @@ time.sleep(60)
 		t.Fatal("LOAD did not honor TaskTimeout with a background caller")
 	}
 	assertReapedWorker(t, worker, cmd)
+}
+
+func TestStdioWorkerTaskTimeoutInterruptsBlockedFrameWrite(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*StdioWorker) error
+	}{
+		{
+			name: "run",
+			call: func(worker *StdioWorker) error {
+				_, err := worker.Run(context.Background(), RunRequest{
+					RequestID: "blocked-write",
+					Payload:   make([]byte, 8<<20),
+				})
+				return err
+			},
+		},
+		{
+			name: "load",
+			call: func(worker *StdioWorker) error {
+				return worker.Load(context.Background(), LoadRequest{
+					LogicalID: "blocked-write",
+					Path:      strings.Repeat("x", 1<<20),
+				})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worker := newNonReadingStdioWorker(t)
+			worker.cfg.TaskTimeout = 40 * time.Millisecond
+			cmd := worker.cmd
+			done := make(chan error, 1)
+			go func() {
+				done <- test.call(worker)
+			}()
+
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			case <-time.After(750 * time.Millisecond):
+				_ = cmd.Process.Kill()
+				err := <-done
+				t.Fatalf("blocked frame write ignored TaskTimeout: %v", err)
+			}
+			assertReapedWorker(t, worker, cmd)
+		})
+	}
 }
 
 func TestStdioWorkerFrameWriteFailureReapsProcess(t *testing.T) {
@@ -227,6 +263,32 @@ func newSilentStdioWorker(t *testing.T) (*StdioWorker, *exec.Cmd) {
 		out:   out,
 		state: StateReady,
 	}, cmd
+}
+
+func newNonReadingStdioWorker(t *testing.T) *StdioWorker {
+	t.Helper()
+	script := writeWorkerScript(t, `
+import json
+import struct
+import sys
+import time
+
+meta = json.dumps({
+    "protocol_version": "moox.py/v1",
+    "worker_version": "test",
+    "python_version": sys.version.split()[0],
+    "runtime_env_hash": "",
+    "encodings": ["json"],
+}).encode()
+sys.stdout.buffer.write(b"MX" + bytes([1]) + struct.pack(">I", len(meta)) + meta + struct.pack(">Q", 0))
+sys.stdout.buffer.flush()
+time.sleep(60)
+`)
+	worker, err := NewStdioWorker(context.Background(), Config{
+		PythonBin: "python3", WorkerPath: script, TaskTimeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+	return worker
 }
 
 func writeWorkerScript(t *testing.T, source string) string {
