@@ -119,6 +119,11 @@ func (s *Service) UpdateRunner(
 	if err := ensureRunnerScope(ctx, current); err != nil {
 		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
 	}
+	if current.Status != domain.RunnerStatusDisabled {
+		return &strategypb.UpdateRunnerRsp{
+			RetInfo: invalid(store.ErrRunnerEnabled),
+		}, nil
+	}
 	if value.GetSpaceId() != current.SpaceID {
 		return &strategypb.UpdateRunnerRsp{
 			RetInfo: invalid(errors.New("runner space_id is immutable")),
@@ -135,6 +140,12 @@ func (s *Service) UpdateRunner(
 			current.SpaceID,
 			value.GetLogicalAccountId(),
 		); err != nil {
+			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
+		}
+	}
+	if current.LogicalAccountID != nil &&
+		dereference(current.LogicalAccountID) != value.GetLogicalAccountId() {
+		if err := s.releaseRunner(ctx, current); err != nil {
 			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
 		}
 	}

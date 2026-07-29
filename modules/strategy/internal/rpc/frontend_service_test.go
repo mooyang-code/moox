@@ -121,3 +121,75 @@ func TestSetRunnerStatusReclaimsOwnerWhenRunnerAlreadyEnabled(t *testing.T) {
 		t.Fatalf("response=%+v err=%v claimed=%v", response, err, owner.claimed)
 	}
 }
+
+func TestUpdateRunnerRequiresDisabledBeforeOwnershipCalls(t *testing.T) {
+	service, repo, _ := newRPCServiceForTest(t)
+	createRPCStrategy(t, service, "strategy-1")
+	owner := &fakeLogicalAccountOwner{}
+	service.LogicalAccounts = owner
+	createRPCRunner(t, service, "runner-1", "strategy-1", "crypto", "logical-old")
+	if err := repo.SetRunnerStatus(
+		context.Background(),
+		"runner-1",
+		domain.RunnerStatusEnabled,
+		service.Now(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := service.UpdateRunner(
+		context.Background(),
+		runnerUpdateRequest("logical-new"),
+	)
+	if err != nil || response.GetRetInfo().GetCode() == 0 {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	if len(owner.validated) != 1 || len(owner.released) != 0 {
+		t.Fatalf("validated=%v released=%v", owner.validated, owner.released)
+	}
+}
+
+func TestUpdateRunnerReleasesPreviousLogicalAccountBeforeChangingIt(t *testing.T) {
+	service, repo, _ := newRPCServiceForTest(t)
+	createRPCStrategy(t, service, "strategy-1")
+	owner := &fakeLogicalAccountOwner{releaseErr: context.DeadlineExceeded}
+	service.LogicalAccounts = owner
+	createRPCRunner(t, service, "runner-1", "strategy-1", "crypto", "logical-old")
+
+	rejected, err := service.UpdateRunner(
+		context.Background(),
+		runnerUpdateRequest("logical-new"),
+	)
+	if err != nil || rejected.GetRetInfo().GetCode() == 0 {
+		t.Fatalf("rejected=%+v err=%v", rejected, err)
+	}
+	current, err := repo.GetRunner(context.Background(), "runner-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.LogicalAccountID == nil || *current.LogicalAccountID != "logical-old" {
+		t.Fatalf("runner changed despite release failure: %+v", current)
+	}
+
+	owner.releaseErr = nil
+	updated, err := service.UpdateRunner(
+		context.Background(),
+		runnerUpdateRequest("logical-new"),
+	)
+	if err != nil || updated.GetRetInfo().GetCode() != 0 ||
+		updated.GetRunner().GetLogicalAccountId() != "logical-new" {
+		t.Fatalf("updated=%+v err=%v", updated, err)
+	}
+	if len(owner.released) != 2 ||
+		owner.released[1] != "crypto/logical-old/runner-1" {
+		t.Fatalf("released=%v", owner.released)
+	}
+}
+
+func runnerUpdateRequest(logicalAccountID string) *strategypb.UpdateRunnerReq {
+	return &strategypb.UpdateRunnerReq{Runner: &strategypb.StrategyRunner{
+		RunnerId: "runner-1", StrategyId: "strategy-1", SpaceId: "crypto",
+		ViewId: "view-2", Frequency: "5m", ParamsJson: "{}",
+		LogicalAccountId: logicalAccountID,
+	}}
+}
