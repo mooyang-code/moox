@@ -25,6 +25,8 @@ Build a small execution model for personal quantitative trading in which:
 - Trade chooses physical accounts dynamically.
 - Operators can pause automation, place manual orders, and flatten a logical
   account through explicit RPC commands.
+- Strategies are stateless functions over a complete historical input window
+  and parameters.
 
 The design favors deterministic behavior and clear ownership over portfolio
 optimizers, distributed coordination, or institutional reliability.
@@ -38,18 +40,20 @@ optimizers, distributed coordination, or institutional reliability.
 - Cross-currency NAV aggregation.
 - A generic workflow engine, Saga framework, or global exactly-once delivery.
 - TWAP, VWAP, grid, arbitrage, or pluggable execution algorithms.
+- Stateful or incremental Strategy execution, including `state_json`,
+  `state_revision`, `next_state`, and state-format migration.
 - Backward-compatible protobuf or SQLite migration.
 
 ## Vocabulary
 
 | Name | Meaning |
 | --- | --- |
-| `Strategy` | Immutable strategy code, manifest, parameter schema, and state schema |
-| `StrategyRunner` | One independently configured and stateful deployment of a Strategy |
+| `Strategy` | Immutable strategy code, manifest, and parameter schema |
+| `StrategyRunner` | One independently configured stateless deployment of a Strategy |
 | `StrategyResult` | One validated and atomically accepted Strategy output |
 | `LogicalAccount` | One total execution account composed of physical Exchange accounts |
 | `ExchangeAccount` | One credential-bound paper or live account on one Exchange |
-| `PortfolioExecutor` | Trade component that converges a LogicalAccount to a FULL target |
+| `TargetExecutor` | Trade component that converges a LogicalAccount to a FULL target |
 | `StrategyEngine` | Component that executes Strategy code for a StrategyRunner |
 | `OrderService` | Shared order validation, persistence, submission, cancellation, and recovery kernel |
 | `OperatorAction` | Explicit manual intervention such as an order or logical-account flatten |
@@ -86,8 +90,9 @@ Strategy owns:
 
 - `Strategy`.
 - `StrategyRunner`.
-- Runner parameters, input view, frequency, state, and command sequence.
-- The latest theoretical FULL target saved with runner state.
+- Runner parameters, complete historical input window, frequency, and command
+  sequence.
+- The latest theoretical FULL target saved with the runner.
 
 Trade owns:
 
@@ -125,8 +130,6 @@ t_strategy_runners
   freq
   params_json
   logical_account_id       nullable for observe-only
-  state_revision
-  state_json
   current_targets_json
   command_sequence
   last_result_id
@@ -140,7 +143,6 @@ t_strategy_results
   strategy_id
   namespace
   trigger_bar_time
-  data_revision
   input_hash
   action + output_json
   command_sequence            nullable when no Trade command is emitted
@@ -154,37 +156,51 @@ t_strategy_outbox
 ```
 
 `strategy_id` identifies one immutable Strategy artifact. Editing source code,
-the manifest, or either schema creates a new `strategy_id`; IDs never point to
-mutable code. `name` is a display label and need not be unique. A
-`StrategyResult` stores its `strategy_id` directly so it remains attributable
-after its runner changes Strategy.
+the manifest, input contract, or parameter schema creates a new `strategy_id`;
+IDs never point to mutable code. `name` is a display label and need not be
+unique. A `StrategyResult` stores its `strategy_id` directly so it remains
+attributable after its runner changes Strategy.
 
 `manifest_yaml` is the immutable Strategy package declaration. It contains the
-supported Strategy API version, Python entrypoint, input requirements,
-parameter schema, and `state_format_version`. The registry parses and strictly
-validates it when publishing a Strategy. V1 accepts only
-`api_version: moox.strategy/v1`; neither `api_version` nor
-`state_format_version` is duplicated as a table column.
+supported Strategy API version, Python entrypoint, input requirements, and
+parameter schema. The registry parses and strictly validates it when publishing
+a Strategy. V1 accepts only `api_version: moox.strategy/v1`; `api_version` is
+not duplicated as a table column.
 
-Changing a runner's `strategy_id` requires the runner to be disabled. When the
-old and new Strategies declare the same `state_format_version`, the runner
-retains its state, current target, and command sequence. A different state
-format requires creating a new runner rather than adding a state-migration
-framework.
+Changing a runner's `strategy_id` requires the runner to be disabled. The
+runner retains its current target and command sequence so the Strategy and
+Trade sides remain aligned. The switch clears artifact-specific last-result
+and health fields. There is no Strategy state or state-migration contract.
 
-Runner `state_json` is a Strategy-private JSON object. The initial and
-stateless value is `{}`. Every `next_state` is a complete replacement, not a
-merge patch, and must be a standard JSON object no larger than 64 KiB. It must
-not contain account positions, balances, orders, or fills. The registry does not
-define a shared business schema for its keys; `state_format_version` is a
-Strategy-declared compatibility number, not a reference to a stored JSON
-Schema.
+The Strategy Engine invokes Python with the complete historical input window
+and parameters. Python output contains `action`, `targets`, and optional
+`debug_info`; it never contains `state` or `next_state`. Rolling indicators,
+cooldown rules, and consecutive-signal rules must be derived from the supplied
+historical window rather than hidden mutable state.
+
+"Complete historical window" means the full, time-ordered window declared by
+the Strategy manifest and ending at `trigger_bar_time`; it does not mean all
+market history. The Strategy must be reproducible from that window, parameters,
+immutable artifact, and trigger context alone.
+
+```python
+def run(context, data, params):
+    return {
+        "action": "hold",
+        "targets": [],
+        "debug_info": {},
+    }
+```
 
 `t_strategy_results` contains only validated, accepted results. Failed attempts
 update the runner's `last_error` and operational logs but do not create a
-result. `output_json` preserves the accepted `targets`,
-`next_state`, and `debug_info`. The uniqueness constraint is the logical-trigger
-idempotency key. Reusing the key with a different `input_hash` is a conflict.
+result. `output_json` preserves the accepted `targets` and `debug_info`. The
+uniqueness constraint is the logical-trigger idempotency key. `input_hash` is
+computed from the actual complete input window, parameters, trigger context,
+and immutable Strategy identity. Reusing the key with a different `input_hash`
+is a conflict. The hash excludes generated result IDs, run time, and other
+retry-varying metadata. The design does not carry a caller-supplied
+`data_revision`.
 
 The implementation removes or folds into the four tables:
 
@@ -203,12 +219,13 @@ The implementation removes or folds into the four tables:
 - The current shared execution-binding routing behavior.
 
 `current_targets_json` is the materialized latest accepted FULL theoretical
-target. Strategy passes it to Python as `context.previous_targets`; it is not an
-account-position or Trade-progress snapshot.
+target. It implements `hold`, operator visibility, and outbox creation; it is
+not passed back into Python and is not an account-position or Trade-progress
+snapshot.
 
 Every accepted result atomically inserts `t_strategy_results` and updates the
-runner state. `hold` retains `current_targets_json`, does not increment
-`command_sequence`, and emits no command. `rebalance` replaces
+runner's latest result metadata. `hold` retains `current_targets_json`, does
+not increment `command_sequence`, and emits no command. `rebalance` replaces
 `current_targets_json`; an executing runner also increments
 `command_sequence` and writes one Trade outbox message in the same transaction.
 An observe-only runner stores its theoretical result and target but writes no
@@ -238,17 +255,16 @@ t_logical_account_members
   enabled
   ctime + mtime
 
-t_target_states
+t_logical_account_targets
   space_id + logical_account_id
-  execution_id
-  strategy_result_id
+  target_id
   runner_id
   command_sequence
-  not_after
-  data_revision
   targets_json
-  status + progress + residual + last_error
-  ctime + mtime
+  status                    PENDING | CONVERGING | CONVERGED | BLOCKED
+  blocked_targets_json
+  last_error
+  accepted_at + updated_at
 
 t_operator_actions
   space_id + action_id
@@ -265,8 +281,14 @@ The member table enforces one enabled logical-account membership per physical
 account. Application validation also rejects duplicate membership before the
 database write.
 
-`t_target_states` contains one replaceable current target per logical account;
-it is not target history. `t_operator_actions` is the small durable identity and
+`t_logical_account_targets` contains one replaceable current target per logical
+account; it is not target history. `target_id` is the global idempotency and
+order-ownership identity. A Strategy publisher sets `target_id = result_id`;
+Trade does not copy StrategyResult contents into its database.
+`blocked_targets_json` records target quantities that cannot currently execute
+and their explicit reasons. Execution progress is recomputed from the current
+target, positions, orders, and account snapshots rather than persisted as a
+second snapshot. `t_operator_actions` is the small durable identity and
 progress record required for `action_id` idempotency and restart continuation.
 
 All enabled members must have the same:
@@ -296,7 +318,7 @@ logical_account_ready =
     AND every target instrument has at least one eligible member
 ```
 
-If any member becomes Not Ready, the `PortfolioExecutor` stops creating new
+If any member becomes Not Ready, the `TargetExecutor` stops creating new
 orders. Private events and account synchronization continue. Execution resumes
 automatically when all members are Ready and the control state remains
 `ACTIVE`.
@@ -309,13 +331,10 @@ automatically.
 `TargetIntent` becomes:
 
 ```text
-execution_id
-strategy_result_id
+target_id
 runner_id
 logical_account_id
 command_sequence
-not_after
-data_revision
 targets[]
   instrument_id
   target_quantity
@@ -333,10 +352,10 @@ Every command is a FULL replacement for the logical account:
 - A higher sequence replaces the previous target.
 - Low, duplicate, and out-of-order sequences do not change current state.
 
-Trade persists the latest target as `TargetState`, not as execution history.
-Targets received during an operator pause still replace the stored state, but
-they never change `control_state` or create orders. Only an operator Resume
-reactivates convergence.
+Trade persists the latest target as `LogicalAccountTarget`, not as execution
+history. Targets received during an operator pause still replace the stored
+target, but they never change `control_state` or create orders. Only an operator
+Resume reactivates convergence.
 The convergence input is the union of:
 
 - Current FULL target instruments.
@@ -364,9 +383,10 @@ A target fails validation when no member supports an instrument. A temporary
 member outage makes the logical account Not Ready instead of permanently
 failing the target.
 
-## Portfolio Convergence
+## Target Convergence
 
-Each logical account has one serial `PortfolioExecutor`. It submits at most one
+Each logical account has one serial `TargetExecutor`, scheduled by one
+`TargetWorker`. The executor submits at most one
 child order, waits for a fact or synchronization update, and recomputes. This
 keeps account selection deterministic and avoids cross-account over-ordering.
 
@@ -376,7 +396,7 @@ For each instrument:
 2. Cancel or resolve stale owned orders that conflict with the current target.
 3. Close positions whose sign opposes the target.
 4. Compare the remaining same-direction total with the target.
-5. Reduce excess positions or open the residual quantity.
+5. Reduce excess positions or open the remaining quantity.
 6. Recompute after every Order, Fill, Position, timer, or manual sync update.
 
 Account selection is dynamic:
@@ -386,7 +406,8 @@ Account selection is dynamic:
   position.
 - Increases use member priority first, then available funds and Exchange
   limits.
-- If one account cannot accept the residual, the next eligible member is used.
+- If one account cannot accept the remaining quantity, the next eligible member
+  is used.
 
 Completion requires physical consistency:
 
@@ -396,8 +417,8 @@ Completion requires physical consistency:
 - Opposing positions in different accounts never count as a completed net-zero
   target.
 
-The executor records untradeable residuals below Exchange minimums instead of
-looping.
+The executor records untradeable quantities below Exchange minimums in
+`blocked_targets_json` instead of looping.
 
 ## Order Ownership
 
@@ -407,7 +428,7 @@ Orders store server-assigned ownership:
 logical_account_id
 runner_id
 owner_type             TARGET | OPERATOR | EXTERNAL
-owner_id               execution_id or operator_action_id
+owner_id               target_id or operator_action_id
 ```
 
 Public RPC callers cannot set `owner_type`, `runner_id`, or `owner_id`.
@@ -416,7 +437,7 @@ Public RPC callers cannot set `owner_type`, `runner_id`, or `owner_id`.
 - `OPERATOR` orders belong to one explicit operator action.
 - Exchange-discovered orders are `EXTERNAL`.
 
-`PortfolioExecutor` only cancels or reuses its own `TARGET` orders. An
+The `TargetExecutor` only cancels or reuses its own `TARGET` orders. An
 unexpected `OPERATOR` or `EXTERNAL` order pauses automatic execution and
 surfaces the conflict. It never silently adopts or cancels that order.
 
@@ -471,7 +492,7 @@ The latest Strategy target remains stored. Only an explicit
 7. Finishes in `PAUSED`, never `ACTIVE`.
 
 Flatten is an operator override. It attempts every member independently even
-when the aggregate logical account is Not Ready. Failures and residual
+when the aggregate logical account is Not Ready. Failures and remaining
 positions are returned per account, and repeated use of the same `action_id`
 continues the same action without duplicating child orders.
 
@@ -480,7 +501,7 @@ fails for one account, Flatten reports that account and does not guess a closing
 quantity from an old snapshot; it continues with other accounts. SWAP closing
 orders are reduce-only. SPOT closes supported non-settlement positive balances;
 settlement cash is retained, and dust or unmapped assets are reported as
-residuals.
+remaining positions.
 
 `ResumeLogicalAccount` requires:
 
@@ -511,7 +532,10 @@ triggers immediate `SyncAccount`; Trade never fabricates fills from an
 aggregate order response that lacks a fill ID.
 
 Exchange adapters validate native client-order-ID constraints. In particular,
-OKX IDs contain only supported alphanumeric characters.
+Trade generates OKX client order IDs once with `xid.New().String()`, persists
+them before submission, and reuses the same value for lookup or controlled
+retry. The OKX adapter still validates the native length and alphanumeric
+constraints at its boundary.
 
 ## Paper and Live
 
@@ -571,7 +595,7 @@ LogicalAccountService
   logical account CRUD, membership, ownership, pause, resume, and flatten
 
 TradeExecutionService
-  manual order, cancel, target state, orders, fills, and positions
+  manual order, cancel, logical-account target, orders, fills, and positions
 ```
 
 Strategy publishes one target event. Trade does not add a generic task broker,
@@ -581,11 +605,10 @@ algorithm registry, or second event workflow.
 
 - A member Not Ready stops automatic orders for the whole logical account.
 - Unsupported instruments fail target validation.
-- Insufficient capacity leaves a visible residual and paused/error progress; it
-  does not over-allocate another account.
+- Insufficient capacity leaves a visible `BLOCKED` target with reasons; it does
+  not change operator control state or over-allocate another account.
 - An external order or fill pauses automation.
 - Operator actions remain paused after completion or failure.
-- A target deadline stops new child orders but does not discard late facts.
 - Restart restores current target, operator action, logical-account state,
   unknown orders, and Exchange sessions from SQLite.
 
@@ -596,22 +619,20 @@ algorithm registry, or second event workflow.
 - Strategy and runner CRUD, validation, and strict schema.
 - Strategy IDs identify immutable artifacts; source changes create new IDs.
 - Manifest parsing rejects unsupported API versions and unknown fields.
-- A disabled runner can switch to a Strategy with the same state format without
-  resetting state, target, or sequence; a different state format requires a new
-  runner.
-- State is a complete JSON object, enforces the 64 KiB limit, and rejects
-  incompatible or non-object values.
+- A disabled runner can switch Strategy while retaining its current target and
+  sequence and clearing artifact-specific result and health fields.
+- Python receives a complete historical input window and cannot return or
+  persist `state` or `next_state`.
 - One active runner per logical account.
-- Accepted Result, runner state, FULL target, sequence, and outbox changes are
-  atomic.
+- Accepted Result, Runner target metadata, sequence, and outbox changes are atomic.
 - Failed attempts do not create Strategy Results.
 - `hold` preserves `current_targets_json` and emits no command.
 - Observe-only `rebalance` updates its theoretical target without an outbox
   message.
 - Empty `rebalance` publishes an empty FULL target.
 - Command sequence is monotonic per runner.
-- Stale state CAS or transaction failure cannot overwrite runner state or
-  current target.
+- Transaction failure cannot partially write Result, current target, sequence,
+  or outbox.
 - Removed `group_id`, capital weight, Binding, and ExecutionBinding fields are
   rejected.
 
@@ -624,7 +645,7 @@ algorithm registry, or second event workflow.
 - One owner runner per logical account.
 - Any member Not Ready gates automatic execution.
 
-### Portfolio Executor
+### Target Executor
 
 - Targets aggregate positions across multiple Exchanges.
 - Opposing member positions close before opening target exposure.
@@ -632,7 +653,7 @@ algorithm registry, or second event workflow.
 - Reduction selects the largest reducible position.
 - Increase falls through priority members when capacity is insufficient.
 - One child at a time survives restart and Fill updates.
-- Unsupported instruments and below-minimum residuals terminate predictably.
+- Unsupported instruments and below-minimum blocked targets terminate predictably.
 - FULL omission closes current positions and stale owned orders.
 
 ### Operator
@@ -643,7 +664,7 @@ algorithm registry, or second event workflow.
 - Flatten synchronizes before cancellation and never closes an account while
   cancellation is unconfirmed.
 - Flatten does not trade from stale snapshots after synchronization failure.
-- Partial flatten failure reports per-account residuals and remains paused.
+- Partial flatten failure reports per-account remaining positions and remains paused.
 - Repeated `action_id` does not create duplicate child orders.
 - Flatten handles disabled attached members, SPOT settlement cash, dust, and
   bounded retries.
@@ -679,6 +700,7 @@ Strategy documents that describe:
 - Binding/group routing.
 - Inbox/Saga/Rebalance legs.
 - Single-account TargetIntent.
+- Stateful Strategy input/output and state-format migration.
 - Paper LIMIT support.
 - The local double-entry balance projection.
 - Bulk secret reveal.
@@ -689,12 +711,14 @@ The change is complete when:
 
 1. No production schema, protobuf, Go type, config, or documentation uses the
    removed Binding/group model.
-2. One StrategyRunner controls exactly one homogeneous LogicalAccount.
-3. A LogicalAccount converges one FULL target across multiple physical
+2. Strategy execution is stateless and accepts only complete historical input
+   windows; production contracts contain no Strategy state or `data_revision`.
+3. One StrategyRunner controls exactly one homogeneous LogicalAccount.
+4. A LogicalAccount converges one FULL target across multiple physical
    accounts without cross-account netting errors.
-4. Manual orders and flatten operations pause automation before they act.
-5. Automatic execution cannot resume without explicit operator Resume.
-6. Order submission, unknown recovery, OKX IDs, readiness, and secret access
+5. Manual orders and flatten operations pause automation before they act.
+6. Automatic execution cannot resume without explicit operator Resume.
+7. Order submission, unknown recovery, OKX IDs, readiness, and secret access
    satisfy the corrected boundaries.
-7. Module tests, targeted race tests, cross-module E2E, deployment contracts,
+8. Module tests, targeted race tests, cross-module E2E, deployment contracts,
    and real Exchange testnet smoke pass.

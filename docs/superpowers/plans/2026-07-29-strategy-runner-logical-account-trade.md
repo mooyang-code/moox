@@ -4,7 +4,7 @@
 
 **目标：** 将 Strategy 与 Trade 收敛为适合个人量化的通用执行链：不可变 Strategy、可运行的 StrategyRunner、同质 LogicalAccount、FULL 组合目标、动态择优执行，以及可暂停、人工下单和一键清仓的操作入口。
 
-**架构：** Strategy 只产生按 `instrument_id` 表达的完整理论组合；Trade 以 LogicalAccount 独占执行 ownership，串行 PortfolioExecutor 每轮最多做一个外部动作。自动执行和人工干预共享订单服务，但 ownership 由服务端赋值。账户私有流和定期同步仍以物理 ExchangeAccount 为边界，LogicalAccount 只聚合控制状态、就绪度和执行选择。
+**架构：** Strategy 是只基于完整历史窗口和参数的无状态函数，只产生按 `instrument_id` 表达的完整理论组合；Trade 以 LogicalAccount 独占执行 ownership，串行 TargetExecutor 每轮最多做一个外部动作。自动执行和人工干预共享订单服务，但 ownership 由服务端赋值。账户私有流和定期同步仍以物理 ExchangeAccount 为边界，LogicalAccount 只聚合控制状态、就绪度和执行选择。
 
 **技术栈：** Go、tRPC/Protobuf、SQLite、JetStream、Python Strategy SDK/Worker、Vue/TypeScript、Binance/OKX API。
 
@@ -22,8 +22,8 @@
 - LogicalAccount 处于 `PAUSED` 时继续维护物理账户 session、私有流和同步，只禁止新的自动 TARGET 子订单。
 - 人工 RPC 必须先暂停整个 LogicalAccount。人工下单和一键清仓分别以持久化 `OperatorAction` 执行，调用者不能传入订单 source、owner 或 Runner 标识。
 - `TargetIntent` 是 LogicalAccount 的 FULL 快照：遗漏 instrument 表示目标为零，空列表表示全部归零。
-- `state_json` 是 Strategy 私有完整 JSON Object，初始值 `{}`，最大 64 KiB；`state_revision` 用于 CAS，`state_format_version` 只存在于 manifest。
-- Strategy artifact 由唯一 `strategy_id` 标识并不可变；源码、manifest 或 state format 发生变化必须使用新的 `strategy_id`。
+- Strategy artifact 由唯一 `strategy_id` 标识并不可变；源码、manifest、输入契约或参数 schema 发生变化必须使用新的 `strategy_id`。
+- V1 Strategy 只支持完整历史窗口计算，不支持 `state_json`、`state_revision`、`next_state`、`state_format_version` 或增量状态迁移。
 
 ## 最终目录和数据结构
 
@@ -46,7 +46,7 @@ t_trade_orders
 t_trade_fills
 t_exchange_positions
 t_exchange_account_snapshots
-t_target_states
+t_logical_account_targets
 t_operator_actions
 ```
 
@@ -56,10 +56,10 @@ t_operator_actions
 
 ```text
 Strategy Engine
-  -> StrategyResult + Runner state/current target + Outbox（同一事务）
+  -> StrategyResult + Runner current target + Outbox（同一事务）
   -> TradeTargetRequested（subject = logical_account_id）
-  -> Trade TargetState（每个 LogicalAccount 一行）
-  -> PortfolioWorker（串行、每轮最多一个动作）
+  -> Trade LogicalAccountTarget（每个 LogicalAccount 一行）
+  -> TargetWorker（串行、每轮最多一个动作）
   -> OrderService
   -> Exchange Adapter
 
@@ -97,6 +97,8 @@ Operator RPC
 - 修改：`modules/trade/internal/exchange/okx/okx_test.go`
 - 修改：`modules/trade/internal/exchange/paper/paper.go`
 - 修改：`modules/trade/internal/exchange/paper/paper_test.go`
+- 修改：`modules/trade/go.mod`
+- 修改：`modules/trade/go.sum`
 
 - [ ] **1.1 写 OrderService 状态感知幂等测试**
 
@@ -156,16 +158,13 @@ REST 成功回包为 `OPEN` 以外状态时，持久化响应后立即调用 `Sy
 
 - [ ] **1.4 写并实现 OKX client order ID 约束**
 
-生成规则固定为最多 32 位 ASCII 字母数字：
+使用 `github.com/rs/xid`，在订单首次创建时生成并持久化：
 
 ```go
-func ValidOKXClientOrderID(v string) bool {
-    return len(v) >= 1 && len(v) <= 32 &&
-        regexp.MustCompile(`^[A-Za-z0-9]+$`).MatchString(v)
-}
+clientOrderID := xid.New().String()
 ```
 
-Target/Operator 的 ID 生成器使用无连字符编码；OKX Adapter 在发送前再次 fail-closed 校验。覆盖：
+`xid.New().String()` 固定为 20 位小写字母数字。unknown 查询和受控重试复用数据库中的原值，禁止重新生成。OKX Adapter 在发送前仍做长度和字母数字 fail-closed 校验。覆盖：
 
 ```text
 TestOKXRejectsClientOrderIDWithDash
@@ -200,7 +199,8 @@ git add modules/trade/internal/domain/order \
   modules/trade/internal/application/order \
   modules/trade/internal/application/accountsync \
   modules/trade/internal/exchange/okx \
-  modules/trade/internal/exchange/paper
+  modules/trade/internal/exchange/paper \
+  modules/trade/go.mod modules/trade/go.sum
 git commit -m "fix(trade): make order submission state aware"
 ```
 
@@ -235,6 +235,7 @@ git commit -m "fix(trade): make order submission state aware"
 ```text
 TestAllSQLCreatesExactlyStrategyTables
 TestStrategySchemaUsesRunnerAndResultColumns
+TestStrategySchemaHasNoStateOrDataRevisionColumns
 TestOpenRejectsObsoleteStrategySchema
 TestOpenAcceptsCurrentSchemaOnReopen
 ```
@@ -254,7 +255,7 @@ TestOpenAcceptsCurrentSchemaOnReopen
 
 ```bash
 cd modules/strategy
-go test -count=1 ./schema ./internal/store -run 'Test(AllSQLCreatesExactlyStrategyTables|StrategySchemaUsesRunnerAndResultColumns|OpenRejectsObsoleteStrategySchema|OpenAcceptsCurrentSchemaOnReopen)$'
+go test -count=1 ./schema ./internal/store -run 'Test(AllSQLCreatesExactlyStrategyTables|StrategySchemaUsesRunnerAndResultColumns|StrategySchemaHasNoStateOrDataRevisionColumns|OpenRejectsObsoleteStrategySchema|OpenAcceptsCurrentSchemaOnReopen)$'
 ```
 
 预期：当前 12 表 schema 和旧列断言失败。
@@ -282,8 +283,6 @@ CREATE TABLE t_strategy_runners (
     params_json           TEXT NOT NULL,
     logical_account_id    TEXT,
     status                TEXT NOT NULL,
-    state_json            TEXT NOT NULL,
-    state_revision        INTEGER NOT NULL,
     current_targets_json  TEXT NOT NULL,
     command_sequence      INTEGER NOT NULL,
     last_result_id        TEXT,
@@ -303,7 +302,6 @@ CREATE TABLE t_strategy_results (
     strategy_id        TEXT NOT NULL,
     trigger_bar_time   INTEGER NOT NULL,
     namespace          TEXT NOT NULL,
-    data_revision      TEXT NOT NULL,
     input_hash         TEXT NOT NULL,
     action             TEXT NOT NULL,
     output_json        TEXT NOT NULL,
@@ -338,8 +336,6 @@ type StrategyRunner struct {
     StrategyID         string
     LogicalAccountID   *string
     Status             RunnerStatus
-    StateJSON          json.RawMessage
-    StateRevision      int64
     CurrentTargetsJSON json.RawMessage
     CommandSequence    int64
     LastResultID       *string
@@ -353,7 +349,6 @@ type StrategyResult struct {
     StrategyID      string
     TriggerBarTime  time.Time
     Namespace       string
-    DataRevision    string
     InputHash       string
     Action          Action
     OutputJSON      json.RawMessage
@@ -403,8 +398,8 @@ git commit -m "refactor(strategy): reduce persistence to four tables"
 - [ ] **3.1 写 manifest 和不可变 artifact 测试**
 
 ```text
-TestParseManifestRequiresAPIVersionAndStateFormatVersion
-TestParseManifestRejectsVersionAndStateSchemaVersion
+TestParseManifestRequiresAPIVersionEntrypointAndInputWindow
+TestParseManifestRejectsStateFields
 TestParseManifestRejectsUnsupportedAPIVersion
 TestSaveStrategyRejectsChangedArtifactWithSameID
 TestSaveStrategyAcceptsChangedSourceWithNewID
@@ -415,30 +410,27 @@ manifest 最小结构：
 
 ```yaml
 api_version: moox.strategy/v1
-state_format_version: example-state/v1
 entrypoint: strategy.py:run
+input:
+  history_bars: 200
 ```
 
-数据库不复制 `api_version` 和 `state_format_version`。V1 Registry 只接受 `moox.strategy/v1`。
+数据库不复制 `api_version`。V1 Registry 只接受 `moox.strategy/v1`，manifest 拒绝 `state_format_version`、state schema 和增量状态配置。
 
 - [ ] **3.2 写 Runner 生命周期测试**
 
 ```text
-TestCreateRunnerInitializesStateTargetSequenceAndHealth
+TestCreateRunnerInitializesTargetSequenceAndHealth
 TestUpdateRunnerRequiresDisabledStatus
-TestSwitchRunnerStrategyPreservesRuntimeStateForSameStateFormat
+TestSwitchRunnerStrategyPreservesTargetAndSequence
 TestSwitchRunnerStrategyClearsArtifactSpecificHealth
-TestSwitchRunnerStrategyRejectsDifferentStateFormat
 TestEnableRunnerRejectsLogicalAccountOwnedByAnotherRunner
 TestObserveOnlyRunnerHasNoLogicalAccount
-TestRunnerStateRejectsNonObjectOrLargerThan64KiB
 ```
 
 新 Runner 初值必须是：
 
 ```text
-state_json            = {}
-state_revision        = 0
 current_targets_json  = []
 command_sequence      = 0
 last_result_id        = NULL
@@ -446,18 +438,18 @@ last_success_at       = NULL
 last_error            = NULL
 ```
 
-同 `state_format_version` 切换 Strategy 时只保留 state、current targets、revision 和 command sequence；清空旧 artifact 的 last result/health。不同 format 必须新建 Runner。
+Runner disabled 时可以切换 Strategy；保留 current targets 和 command sequence，避免 Strategy 与 Trade 当前目标错位，同时清空旧 artifact 的 last result/health。
 
 - [ ] **3.3 运行 RED 测试**
 
 ```bash
 cd modules/strategy
-go test -count=1 ./internal/registry ./internal/engine ./internal/store ./cmd/cli -run 'Test(ParseManifest|SaveStrategy|EngineLoadsStrategy|CreateRunner|UpdateRunner|SwitchRunner|EnableRunner|ObserveOnlyRunner|RunnerState)'
+go test -count=1 ./internal/registry ./internal/engine ./internal/store ./cmd/cli -run 'Test(ParseManifest|SaveStrategy|EngineLoadsStrategy|CreateRunner|UpdateRunner|SwitchRunner|EnableRunner|ObserveOnlyRunner)'
 ```
 
 - [ ] **3.4 实现 Registry 和 Runner**
 
-使用解析后的 manifest 做执行校验，不在表里存投影列。Engine cache key 只使用不可变 `strategy_id`。更新 Runner 配置时在事务中读取当前 Strategy 和新 Strategy 的 manifest，再比较 `state_format_version`。
+使用解析后的 manifest 做执行校验，不在表里存投影列。Engine cache key 只使用不可变 `strategy_id`。Python entrypoint 固定接收 `context, data, params`，不存在第四个 state 参数。
 
 - [ ] **3.5 运行 GREEN 测试**
 
@@ -477,7 +469,7 @@ git commit -m "feat(strategy): add immutable strategies and runners"
 
 ---
 
-## 任务 4：统一 Strategy JSON、Python 和 FULL 输出契约
+## 任务 4：统一无状态 Strategy、完整历史窗口和 FULL 输出契约
 
 **文件：**
 
@@ -494,12 +486,16 @@ git commit -m "feat(strategy): add immutable strategies and runners"
 
 ```text
 Go:     TestValidateOutputAcceptsEmptyRebalance
-Go:     TestRunPassesRunnerPreviousTargets
+Go:     TestRunDoesNotExposePreviousTargetsOrState
+Go:     TestRunHashesCompleteHistoryParamsAndTriggerContext
+Go:     TestValidateOutputRejectsNextState
 Python: test_accepts_empty_rebalance
-Python: test_run_preserves_previous_targets
+Python: test_context_has_no_previous_targets_or_state
 Python: test_rejects_symbol_and_native_account_fields
+Python: test_rejects_next_state
 Worker: test_accepts_empty_rebalance
-Worker: test_passes_full_state_and_previous_targets
+Worker: test_passes_complete_history_without_previous_targets
+Worker: test_rejects_four_argument_stateful_entrypoint
 ```
 
 Strategy 输出目标只允许：
@@ -513,39 +509,46 @@ Strategy 输出目标只允许：
       "target_quantity": "0.25"
     }
   ],
-  "next_state": {
+  "debug_info": {
     "fast": 12,
     "slow": 48
   }
 }
 ```
 
-禁止输出 `symbol`、Exchange 原生 symbol、账户 ID、source 或 owner。`hold` 保留 Runner 当前 target；`rebalance` 用本次完整列表替换，空列表表示全平。
+禁止输出 `symbol`、Exchange 原生 symbol、账户 ID、source、owner、`state` 或 `next_state`。`hold` 保留 Runner 当前 target；`rebalance` 用本次完整列表替换，空列表表示全平。
 
 - [ ] **4.2 运行 RED 测试**
 
 ```bash
 cd modules/strategy
-go test -count=1 ./internal/engine -run 'Test(ValidateOutputAcceptsEmptyRebalance|RunPassesRunnerPreviousTargets)$'
+go test -count=1 ./internal/engine -run 'Test(ValidateOutputAcceptsEmptyRebalance|RunDoesNotExposePreviousTargetsOrState|RunHashesCompleteHistoryParamsAndTriggerContext|ValidateOutputRejectsNextState)$'
 python3 -m unittest discover -s pysdk/tests -p 'test_*.py'
 python3 -m unittest pyworker/test_worker.py
 ```
 
 - [ ] **4.3 实现全快照输入输出**
 
-每次调用 Python 传入：
+每次调用 Python 传入完整历史窗口：
 
 ```json
 {
-  "state": {},
-  "state_revision": 0,
-  "previous_targets": [],
-  "params": {},
-  "data": {}
+  "context": {
+    "strategy_id": "strategy-1",
+    "runner_id": "runner-1",
+    "trigger_bar_time": "2026-07-29T10:00:00Z"
+  },
+  "params": {
+    "fast": 12,
+    "slow": 48
+  },
+  "data": [
+    {"time": "2026-07-29T09:59:00Z", "close": "68352.42"}
+  ]
 }
 ```
 
-输入 `state` 和输出 `next_state` 都必须为完整 Object，`next_state` 序列化后不得超过 64 KiB；不做 JSON Merge Patch，不解释内部字段。accepted Result 的 `output_json` 原样保留 `targets`、`next_state` 和 `debug_info`。
+“完整历史窗口”指 manifest 声明、以 `trigger_bar_time` 结束、时间顺序稳定的完整计算窗口，不要求加载全部市场历史。Engine 不维护增量 Strategy 状态，也不把 `current_targets_json` 作为 Python 输入。均线、冷却期、连续信号和滚动指标必须从该窗口计算。`input_hash` 覆盖 immutable strategy identity、完整 data、params、namespace 和 trigger bar time，排除 result ID、run time 等重试会变化的字段；不接收调用者提供的 `data_revision`。accepted Result 的 `output_json` 只保存 `targets` 和可选、受大小限制的 `debug_info`。
 
 - [ ] **4.4 运行 GREEN 测试**
 
@@ -561,12 +564,12 @@ python3 -m unittest pyworker/test_worker.py
 ```bash
 git add modules/strategy/internal/engine modules/strategy/pysdk \
   modules/strategy/pyworker modules/strategy/strategies/example/strategy.py
-git commit -m "feat(strategy): define full target and state contracts"
+git commit -m "feat(strategy): define stateless full target contract"
 ```
 
 ---
 
-## 任务 5：新增 Trade LogicalAccount、TargetState 和 OperatorAction 持久化
+## 任务 5：新增 Trade LogicalAccount、LogicalAccountTarget 和 OperatorAction 持久化
 
 **文件：**
 
@@ -601,10 +604,10 @@ git commit -m "feat(strategy): define full target and state contracts"
 TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger
 TestOpenRejectsSingleAccountTargetAndLedgerSchema
 TestLogicalAccountMembershipEnforcesOneEnabledMembershipPerPhysicalAccount
-TestAcceptTargetUsesLogicalOwnerAndKeepsMaximumSequence
-TestAcceptTargetAllowsEmptyFullWhilePaused
-TestAcceptTargetRejectsMismatchedRunner
-TestTargetProgressCASCannotOverwriteNewSequence
+TestAcceptLogicalAccountTargetUsesOwnerAndKeepsMaximumSequence
+TestAcceptLogicalAccountTargetAllowsEmptyFullWhilePaused
+TestAcceptLogicalAccountTargetRejectsMismatchedRunner
+TestLogicalAccountTargetCASCannotOverwriteNewSequence
 ```
 
 - [ ] **5.2 运行 RED 测试**
@@ -655,30 +658,29 @@ WHERE enabled = 1;
 
 `execution_mode` 只允许 `PAPER|LIVE`；`control_state` 只允许 `ACTIVE|PAUSED|FLATTENING|DISABLED`。ExchangeAccount 另存静态 `PAPER|TESTNET|PRODUCTION` 环境 profile。成员的 execution mode、环境 profile、market type 和 settlement asset 必须同质；`priority` 只是稳定选择顺序，实时容量从账户快照和 Exchange 约束计算，不存分配权重。
 
-- [ ] **5.4 将 TargetExecution 改为单行 TargetState**
+- [ ] **5.4 将 TargetExecution 改为单行 LogicalAccountTarget**
 
 ```sql
-CREATE TABLE t_target_states (
+CREATE TABLE t_logical_account_targets (
     space_id            TEXT NOT NULL,
     logical_account_id  TEXT NOT NULL,
-    execution_id        TEXT NOT NULL,
+    target_id           TEXT NOT NULL,
     runner_id           TEXT NOT NULL,
-    strategy_result_id  TEXT NOT NULL,
     command_sequence    INTEGER NOT NULL,
-    not_after           INTEGER,
-    data_revision       TEXT NOT NULL,
     targets_json        TEXT NOT NULL,
     status              TEXT NOT NULL,
-    progress_json       TEXT NOT NULL,
-    residual_json       TEXT NOT NULL,
+    blocked_targets_json TEXT NOT NULL,
     last_error          TEXT,
-    created_at          INTEGER NOT NULL,
+    accepted_at         INTEGER NOT NULL,
     updated_at          INTEGER NOT NULL,
-    PRIMARY KEY(space_id, logical_account_id)
+    PRIMARY KEY(space_id, logical_account_id),
+    UNIQUE(space_id, target_id)
 );
 ```
 
-新 sequence 原子替换旧 FULL target；相同 sequence 和相同 payload 返回已有状态；旧 sequence 拒绝；PAUSED 时仍接收和保存最新 target，但不执行。
+`status` 只允许 `PENDING|CONVERGING|CONVERGED|BLOCKED`。`blocked_targets_json` 初始为 `[]`，只记录因最小下单量、最小名义金额或全部成员容量不足而无法继续执行的目标差额和原因。执行进度从 targets、positions、orders 和 snapshots 重新计算，不持久化 `progress_json`。
+
+新 sequence 原子替换旧 FULL target；Strategy 发布时令 `target_id = result_id`，Trade 不复制 StrategyResult 内容。相同 target ID/sequence 和相同 payload 返回已有目标；旧 sequence 拒绝；PAUSED 时仍接收和保存最新目标，但不执行。
 
 - [ ] **5.5 建立 OperatorAction**
 
@@ -758,13 +760,13 @@ git commit -m "feat(trade): add logical account persistence"
 - [ ] **6.1 写公共事件契约测试**
 
 ```text
-TestTradeTargetRequestedRequiresStrategyResultRunnerAndLogicalAccount
+TestTradeTargetRequestedRequiresTargetRunnerAndLogicalAccount
 TestTradeTargetRequestedAcceptsEmptyFullTarget
 TestTradeTargetRequestedRejectsDuplicateInstrumentID
 TestTradeTargetRequestedSubjectUsesLogicalAccountID
 TestTargetIntentValidationAcceptsEmptyFullTarget
-TestHandleTargetMapsStrategyResultIdentity
-TestAcceptTargetPersistsStrategyResultID
+TestHandleTargetMapsTargetIdentity
+TestAcceptLogicalAccountTargetPersistsTargetID
 ```
 
 - [ ] **6.2 将 Proto 改为唯一公共形状**
@@ -776,18 +778,15 @@ message TradeTarget {
 }
 
 message TradeTargetRequested {
-  string execution_id = 1;
-  string strategy_result_id = 2;
-  string runner_id = 3;
-  string logical_account_id = 4;
-  int64 command_sequence = 5;
-  int64 not_after_unix_ms = 6;
-  string data_revision = 7;
-  repeated TradeTarget targets = 8;
+  string target_id = 1;
+  string runner_id = 2;
+  string logical_account_id = 3;
+  int64 command_sequence = 4;
+  repeated TradeTarget targets = 5;
 }
 ```
 
-删除 `strategy_run_id`、`execution_binding_id`、`exchange_account_id` 和 `symbol`。事件 `SubjectID` 使用 `logical_account_id`；目标按 `instrument_id` 唯一，空 targets 合法。
+Strategy 发布时令 `target_id = result_id`。删除 `strategy_run_id`、`strategy_result_id`、`execution_id`、`execution_binding_id`、`exchange_account_id`、`data_revision`、`not_after` 和 `symbol`。事件 `SubjectID` 使用 `logical_account_id`；目标按 `instrument_id` 唯一，空 targets 合法。
 
 - [ ] **6.3 运行事件 RED 测试并生成 Proto**
 
@@ -805,13 +804,13 @@ make -C packages/tradeeventpb all
 同一 SQLite 事务完成：
 
 ```text
-1. 校验 runner state_revision
-2. 以 runner_id + strategy_id + namespace + trigger_bar_time 做逻辑重试判定
-3. 写入 accepted StrategyResult
-4. 更新 Runner 完整 state
-5. hold 保留 current target 和 sequence
-6. rebalance 替换 current target 并递增 command sequence
-7. 有 LogicalAccount 的 rebalance 写 outbox；观察模式不写
+1. 以 runner_id + strategy_id + namespace + trigger_bar_time 做逻辑重试判定
+2. 使用完整历史窗口、params、trigger context 和 Strategy identity 的 input_hash 判断相同或冲突重试
+3. 写入 accepted StrategyResult；output_json 只有 targets/debug_info
+4. hold 保留 current target 和 sequence
+5. rebalance 替换 current target 并原子递增 command sequence
+6. 有 LogicalAccount 的 rebalance 以 target_id=result_id 写 outbox；观察模式不写
+7. 更新 Runner 的 last_result_id、last_success_at 和 last_error
 ```
 
 测试：
@@ -824,14 +823,14 @@ TestCommitResultEmptyRebalanceWritesEmptyFullTarget
 TestCommitResultCommandSequenceIsMonotonicPerRunner
 TestCommitResultLogicalRetrySameHashReturnsExistingResult
 TestCommitResultLogicalRetryDifferentHashConflicts
-TestCommitResultStaleRevisionCannotOverwriteRunnerStateOrTarget
-TestCommitResultTransactionFailureRollsBackResultRunnerAndOutbox
+TestCommitResultConcurrentSequenceIsMonotonic
+TestCommitResultTransactionFailureRollsBackResultTargetSequenceAndOutbox
 TestFailedAttemptUpdatesRunnerErrorWithoutCreatingResult
 ```
 
 - [ ] **6.5 实现 Trade 消费者**
 
-消费者用 `logical_account_id` 串行加锁并调用 `AcceptTarget`。验证事件 runner 等于 LogicalAccount 当前 `owner_runner_id`，并验证每个 `instrument_id` 至少有一个成员可解析；不匹配或永久不支持时拒绝并记录可见错误。PAUSED 时仍以更高 sequence 更新 TargetState，但不创建订单。
+消费者用 `logical_account_id` 串行加锁并调用 `AcceptLogicalAccountTarget`。验证事件 runner 等于 LogicalAccount 当前 `owner_runner_id`，并验证每个 `instrument_id` 至少有一个成员可解析；不匹配或永久不支持时拒绝并记录可见错误。PAUSED 时仍以更高 sequence 更新 LogicalAccountTarget，但不创建订单。
 
 - [ ] **6.6 加入旧字段静态护栏**
 
@@ -839,8 +838,12 @@ TestFailedAttemptUpdatesRunnerErrorWithoutCreatingResult
 
 ```text
 strategy_run_id
+strategy_result_id
+execution_id
 execution_binding_id
 exchange_account_id
+data_revision
+not_after
 symbol
 ```
 
@@ -937,9 +940,9 @@ instrument metadata available
 no unresolved submit
 ```
 
-此外，当前 TargetState 的每个 `instrument_id` 都必须至少有一个 Ready member 可执行。任一成员 Not Ready 或目标无临时候选时，LogicalAccount readiness 为 false，自动执行门禁关闭并写明 member/instrument/reason；不要自动修改 operator control state，不要删除 session，不要引入 supervisor。
+此外，当前 LogicalAccountTarget 的每个 `instrument_id` 都必须至少有一个 Ready member 可执行。任一成员 Not Ready 或目标无临时候选时，LogicalAccount readiness 为 false，自动执行门禁关闭并写明 member/instrument/reason；不要自动修改 operator control state，不要删除 session，不要引入 supervisor。
 
-`ResumeLogicalAccount` 只有在没有 RUNNING OperatorAction、没有未解决 EXTERNAL 冲突、全部 enabled member Ready 且当前 targets 可解析时成功。恢复后从最新 TargetState 重新收敛，响应必须明确提示人工清仓后的旧 target 可能重新开仓。
+`ResumeLogicalAccount` 只有在没有 RUNNING OperatorAction、没有未解决 EXTERNAL 冲突、全部 enabled member Ready 且当前 targets 可解析时成功。恢复后从最新 LogicalAccountTarget 重新收敛，响应必须明确提示人工清仓后的旧 target 可能重新开仓。
 
 - [ ] **7.5 修复 Manager 首次失败**
 
@@ -967,48 +970,43 @@ git commit -m "feat(trade): manage logical account ownership and readiness"
 
 ---
 
-## 任务 8：实现串行 PortfolioExecutor 和动态择优
+## 任务 8：实现串行 TargetExecutor、TargetWorker 和动态择优
 
 **文件：**
 
-- 新增：`modules/trade/internal/application/portfolio/executor.go`
-- 新增：`modules/trade/internal/application/portfolio/executor_test.go`
-- 新增：`modules/trade/internal/application/portfolio/lanes.go`
-- 新增：`modules/trade/internal/application/portfolio/lanes_test.go`
-- 新增：`modules/trade/internal/runtime/portfolio_worker.go`
-- 新增：`modules/trade/internal/runtime/portfolio_worker_test.go`
+- 重写：`modules/trade/internal/application/target/executor.go`
+- 重写：`modules/trade/internal/application/target/executor_test.go`
+- 新增：`modules/trade/internal/application/target/lanes.go`
+- 新增：`modules/trade/internal/application/target/lanes_test.go`
+- 重写：`modules/trade/internal/runtime/target_worker.go`
+- 重写：`modules/trade/internal/runtime/target_worker_test.go`
 - 修改：`modules/trade/internal/application/target/price.go`
-- 删除：`modules/trade/internal/application/target/executor.go`
-- 删除：`modules/trade/internal/application/target/executor_test.go`
 - 删除：`modules/trade/internal/application/target/submission.go`
-- 删除：`modules/trade/internal/runtime/target_worker.go`
-- 删除：`modules/trade/internal/runtime/target_worker_test.go`
 - 修改：`modules/trade/internal/infra/store/fact.go`
 - 修改：`modules/trade/internal/infra/store/fact_test.go`
 
 - [ ] **8.1 写 FULL union 和排序测试**
 
 ```text
-TestPortfolioExecutorAggregatesAcrossExchanges
-TestPortfolioExecutorClosesOpposingBeforeOpening
-TestPortfolioExecutorZeroTargetClosesEveryMemberWithoutCrossAccountNetting
-TestPortfolioExecutorReductionSelectsLargestPosition
-TestPortfolioExecutorIncreaseFallsThroughPriorityOnCapacity
-TestPortfolioExecutorSubmitsOnlyOneChildPerPassAndRestoresAfterRestart
-TestPortfolioExecutorFullOmissionClosesPositionAndOwnedOrder
-TestPortfolioExecutorPausesWhenAnyMemberNotReady
-TestPortfolioExecutorPausesOnExternalOrderWithoutCancel
-TestPortfolioExecutorRecordsBelowMinimumResidual
-TestPortfolioExecutorDeadlineStopsNewChildrenButKeepsLateFacts
-TestPortfolioExecutorInsufficientCapacityRecordsResidualAndErrorProgress
-TestListPortfolioLanesIncludesSpotBalancesAndUnmappedResiduals
+TestTargetExecutorAggregatesAcrossExchanges
+TestTargetExecutorClosesOpposingBeforeOpening
+TestTargetExecutorZeroTargetClosesEveryMemberWithoutCrossAccountNetting
+TestTargetExecutorReductionSelectsLargestPosition
+TestTargetExecutorIncreaseFallsThroughPriorityOnCapacity
+TestTargetExecutorSubmitsOnlyOneChildPerPassAndRestoresAfterRestart
+TestTargetExecutorFullOmissionClosesPositionAndOwnedOrder
+TestTargetExecutorPausesWhenAnyMemberNotReady
+TestTargetExecutorPausesOnExternalOrderWithoutCancel
+TestTargetExecutorRecordsBelowMinimumBlockedTarget
+TestTargetExecutorInsufficientCapacityRecordsBlockedTarget
+TestListTargetLanesIncludesSpotBalancesAndUnmappedPositions
 ```
 
 - [ ] **8.2 运行 RED 测试**
 
 ```bash
 cd modules/trade
-go test -count=1 ./internal/application/portfolio ./internal/runtime ./internal/infra/store -run 'Test(PortfolioExecutor|ListPortfolioLanes)'
+go test -count=1 ./internal/application/target ./internal/runtime ./internal/infra/store -run 'Test(TargetExecutor|ListTargetLanes)'
 ```
 
 - [ ] **8.3 实现 canonical instrument lane union**
@@ -1016,13 +1014,13 @@ go test -count=1 ./internal/application/portfolio ./internal/runtime ./internal/
 每轮从以下集合取并集：
 
 ```text
-TargetState.targets
+LogicalAccountTarget.targets
 SWAP t_exchange_positions
 所有活动 TARGET orders
 SPOT snapshot 中非 settlement 的正余额
 ```
 
-SPOT 余额用 base asset、LogicalAccount settlement asset 和 Instrument Registry 映射 canonical `instrument_id`。映射失败的资产作为可见 residual/conflict，不能因 FULL omission 消失。
+SPOT 余额用 base asset、LogicalAccount settlement asset 和 Instrument Registry 映射 canonical `instrument_id`。映射失败的资产作为可见 remaining-position conflict，不能因 FULL omission 消失。
 
 - [ ] **8.4 实现每轮最多一个动作**
 
@@ -1030,15 +1028,14 @@ SPOT 余额用 base asset、LogicalAccount settlement asset 和 Instrument Regis
 
 ```text
 1. LogicalAccount 非 ACTIVE 或成员 Not Ready -> 不下单
-2. TargetState 已过 not_after -> 停止新 child，但继续吸收晚到 Order/Fill/Position facts
-3. 非当前 runner 的 TARGET、OPERATOR、EXTERNAL 活动订单 -> PAUSED
-4. 待 cancel 的旧 TARGET -> cancel 一个并立即 return
-5. SUBMIT_UNKNOWN -> resolve 一个并立即 return
-6. 关闭反向物理仓位 -> place 一个 reduce child 并立即 return
-7. 减仓 -> 选择绝对仓位最大成员，place 一个 child 并立即 return
-8. 加仓 -> 按 priority、可用容量、费用/价格稳定排序，place 一个 child 并立即 return
-9. 剩余量低于交易所 minimum -> 记录 residual
-10. 所有成员容量仍不足 -> 记录 residual 和 error progress，不超配
+2. 非当前 runner 的 TARGET、OPERATOR、EXTERNAL 活动订单 -> PAUSED
+3. 待 cancel 的旧 TARGET -> cancel 一个并立即 return
+4. SUBMIT_UNKNOWN -> resolve 一个并立即 return
+5. 关闭反向物理仓位 -> place 一个 reduce child 并立即 return
+6. 减仓 -> 选择绝对仓位最大成员，place 一个 child 并立即 return
+7. 加仓 -> 按 priority、可用容量、费用/价格稳定排序，place 一个 child 并立即 return
+8. 剩余量低于交易所 minimum -> 写入 blocked_targets_json
+9. 所有成员容量仍不足 -> 写入 blocked_targets_json 并置为 BLOCKED，不超配
 ```
 
 动态择优只在同质成员间做；若第一候选容量不足，按稳定顺序落到下一候选。不能跨账户净掉相反仓位。
@@ -1049,22 +1046,22 @@ SPOT 余额用 base asset、LogicalAccount settlement asset 和 Instrument Regis
 
 ```text
 owner_type = TARGET
-owner_id = execution_id
+owner_id = target_id
 logical_account_id
 runner_id
 ```
 
-重启后按 TargetState、owner 和活动订单重算，不依赖内存任务队列。旧 executor 的 client ID 使用新的纯字母数字生成器。
+重启后按 LogicalAccountTarget、owner 和活动订单重算，不依赖内存任务队列。client order ID 读取订单首次创建时持久化的 `xid.New().String()`，不得重生成。
 
 - [ ] **8.6 运行 GREEN 和竞态测试**
 
 ```bash
 cd modules/trade
-go test -count=1 ./internal/application/portfolio ./internal/runtime ./internal/infra/store
-go test -race -count=1 ./internal/application/portfolio ./internal/runtime ./internal/infra/store
+go test -count=1 ./internal/application/target ./internal/runtime ./internal/infra/store
+go test -race -count=1 ./internal/application/target ./internal/runtime ./internal/infra/store
 ```
 
-- [ ] **8.7 删除旧 TargetExecutor 后复跑 Trade**
+- [ ] **8.7 替换旧单账户 TargetExecutor 后复跑 Trade**
 
 ```bash
 cd modules/trade
@@ -1074,12 +1071,11 @@ go test -count=1 ./...
 - [ ] **8.8 提交**
 
 ```bash
-git add modules/trade/internal/application/portfolio \
-  modules/trade/internal/application/target \
+git add modules/trade/internal/application/target \
   modules/trade/internal/runtime \
   modules/trade/internal/infra/store/fact.go \
   modules/trade/internal/infra/store/fact_test.go
-git commit -m "feat(trade): converge logical portfolios dynamically"
+git commit -m "feat(trade): converge logical targets dynamically"
 ```
 
 ---
@@ -1104,16 +1100,16 @@ git commit -m "feat(trade): converge logical portfolios dynamically"
 TestOrderOwnershipRequiresServerAssignedOwner
 TestExternalOrderPausesOwningLogicalAccount
 TestExternalFillImportsExternalOwnerAndPauses
-TestAccountFactsWakePortfolioAfterReleasingAccountLock
+TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock
 TestTargetOrderFromOtherRunnerPausesLogicalAccount
 ```
 
 - [ ] **9.2 固定订单 ownership**
 
 ```go
-type Ownership struct {
+type OrderOwner struct {
     Type             OwnerType // TARGET | OPERATOR | EXTERNAL
-    OwnerID          string    // execution_id | action_id | exchange import identity
+    OwnerID          string    // target_id | action_id | exchange import identity
     LogicalAccountID string
     RunnerID         *string
 }
@@ -1129,7 +1125,7 @@ RPC 不可传 ownership。Target 调用 OrderService 时由可信内部参数赋
 LogicalAccount lock -> ExchangeAccount lock
 ```
 
-AccountSync 当前在 account lock 内导入事实；新的“暂停 LogicalAccount”和“唤醒 PortfolioWorker”回调必须在释放 account lock 后执行。不要从 account lock 内反向获取 logical lock。
+AccountSync 当前在 account lock 内导入事实；新的“暂停 LogicalAccount”和“唤醒 TargetWorker”回调必须在释放 account lock 后执行。不要从 account lock 内反向获取 logical lock。
 
 - [ ] **9.4 运行测试**
 
@@ -1138,7 +1134,7 @@ cd modules/trade
 go test -count=1 ./internal/domain/order ./internal/application/order \
   ./internal/application/accountsync ./internal/infra/store
 go test -race -count=1 ./internal/application/order \
-  ./internal/application/accountsync ./internal/application/portfolio
+  ./internal/application/accountsync ./internal/application/target
 ```
 
 - [ ] **9.5 提交**
@@ -1174,7 +1170,7 @@ TestManualOrderActionIDIsIdempotent
 TestFlattenFreshSyncsBeforeCancelAndClose
 TestFlattenWaitsForCancellationConfirmation
 TestFlattenSkipsStaleFailedAccountAndContinuesOthers
-TestFlattenReportsPartialResidualsAndEndsPaused
+TestFlattenReportsPartialRemainingPositionsAndEndsPaused
 TestFlattenRetriesSameActionWithoutDuplicateChildren
 TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash
 TestResumeRequiresReadyNoConflictAndWarnsAboutReopen
@@ -1208,9 +1204,9 @@ Flatten 的含义是：将 LogicalAccount 每个物理成员的可交易风险�
 4. 再次同步，确认 cancel 已终态
 5. SWAP 按物理 position 精确 reduce-only 平仓
 6. SPOT 保留 settlement cash，对其他正余额逐个卖出
-7. unmapped asset、dust、minimum violation 写入 residual
+7. unmapped asset、dust、minimum violation 写入逐账户 remaining positions
 8. final sync
-9. COMPLETED：全部归零；PARTIAL：有 residual/账户失败；FAILED：没有任何成员可执行
+9. COMPLETED：全部归零；PARTIAL：有 remaining position/账户失败；FAILED：没有任何成员可执行
 10. 无论 COMPLETED、PARTIAL 或 FAILED，最终都写回 PAUSED；执行期间保持 FLATTENING
 ```
 
@@ -1250,8 +1246,10 @@ git commit -m "feat(trade): add paused manual execution and flatten"
 - 修改：`modules/strategy/internal/rpc/service_test.go`
 - 修改：`modules/strategy/internal/rpc/frontend_service.go`
 - 修改：`modules/strategy/internal/rpc/frontend_service_test.go`
-- 修改：`modules/strategy/internal/bootstrap/exchange_account.go`
-- 修改：`modules/strategy/internal/bootstrap/exchange_account_test.go`
+- 删除：`modules/strategy/internal/bootstrap/exchange_account.go`
+- 删除：`modules/strategy/internal/bootstrap/exchange_account_test.go`
+- 新增：`modules/strategy/internal/bootstrap/logical_account.go`
+- 新增：`modules/strategy/internal/bootstrap/logical_account_test.go`
 - 修改：`modules/strategy/internal/bootstrap/bootstrap.go`
 - 修改：`modules/strategy/internal/bootstrap/config.go`
 - 修改：`modules/strategy/config/app.yaml`
@@ -1291,10 +1289,11 @@ TestCreateStrategyStoresImmutableArtifact
 TestCreateRunnerValidatesLogicalAccountOwnership
 TestRunOncePreviewDoesNotCreateResult
 TestRunOnceFailedAttemptReturnsNoResult
+TestRunOnceAcceptsCompleteHistoryWithoutStateOrDataRevision
 TestRunnerQueriesEnforceSpaceScope
 ```
 
-删除 Binding、Run、Performance、SetExecutionMode API。Strategy 不再直连 ExchangeAccountService；是否可执行只由 Runner 是否挂 LogicalAccount 表达。
+`RunOnce` 请求只携带 runner ID、trigger time、namespace 和完整历史 `data_json`；不携带 `data_revision` 或 Strategy state。删除 Binding、Run、Performance、SetExecutionMode API。Strategy 不再直连 ExchangeAccountService；是否可执行只由 Runner 是否挂 LogicalAccount 表达。
 
 - [ ] **11.2 写 Trade Proto/RPC 契约测试**
 
@@ -1318,7 +1317,7 @@ TradeExecutionService:
   PlaceManualOrder
   CancelOrder
   GetOperatorAction
-  GetTargetState
+  GetLogicalAccountTarget
   ListOrders
   GetOrder
   ListFills
@@ -1432,7 +1431,7 @@ store -> exchange manager -> initial successful reconcile
 -> portfolio worker -> operator worker -> event consumer -> RPC
 ```
 
-readiness 必须包含 Manager 首次成功、LogicalAccount worker、Portfolio worker、Operator worker 和 Event consumer。worker 退出立即不就绪。
+readiness 必须包含 Manager 首次成功、LogicalAccount worker、TargetWorker、Operator worker 和 Event consumer。worker 退出立即不就绪。
 
 - [ ] **12.6 运行测试**
 
@@ -1471,7 +1470,7 @@ git commit -m "fix(trade): gate live trading and runtime readiness"
 - 修改：`web/src/views/strategy/detail/index.vue`
 - 修改：`web/src/views/strategy/components/strategy-operation-panel.vue`
 - 修改：`web/src/views/strategy/components/strategy-operation-panel.test.ts`
-- 修改：`web/src/views/strategy/components/strategy-state-summary.vue`
+- 删除：`web/src/views/strategy/components/strategy-state-summary.vue`
 - 修改：`web/src/views/strategy/components/strategy-run-timeline.vue`
 - 修改：`web/src/views/strategy/components/strategy-target-table.vue`
 - 删除：`web/src/views/strategy/performance/index.vue`
@@ -1492,14 +1491,14 @@ git commit -m "fix(trade): gate live trading and runtime readiness"
 
 - [ ] **13.1 先改 Web 测试**
 
-Web 只展示 Strategy、Runner、StrategyResult、当前完整 targets、state revision、LogicalAccount control/readiness 和 OperatorAction。删除无生产写入来源的 performance UI。
+Web 只展示 Strategy、Runner、StrategyResult、当前完整 targets、LogicalAccount control/readiness 和 OperatorAction。删除 state summary 和无生产写入来源的 performance UI。
 
 ```text
 strategy API 返回 runner/result 字段
 operation panel 只操作 Runner 启停
 manual order 必须提供 action_id/reason
-flatten 显示逐账户 residual/error
-LogicalAccount PAUSED 时明确显示未执行的新 TargetState
+flatten 显示逐账户 remaining position/error
+LogicalAccount PAUSED 时明确显示未执行的新 LogicalAccountTarget
 ```
 
 - [ ] **13.2 更新 Admin 服务发现**
@@ -1515,7 +1514,7 @@ default port: 11202
 
 - [ ] **13.3 更新权威文档**
 
-`modules/trade/README.md + DESIGN.md` 作为 Trade 唯一事实源；Strategy 接入手册使用 `Strategy`、`StrategyRunner`、`StrategyResult`、LogicalAccount 和空 FULL 全平语义。删除 Saga、RebalanceSvc、Inbox、ExecutionBinding、StrategyDefinition/Run 的现役描述。
+`modules/trade/README.md + DESIGN.md` 作为 Trade 唯一事实源；Strategy 接入手册使用 `Strategy`、`StrategyRunner`、`StrategyResult`、LogicalAccount 和空 FULL 全平语义，并只描述三参数、完整历史窗口 Python entrypoint。删除 Saga、RebalanceSvc、Inbox、ExecutionBinding、StrategyDefinition/Run、state/next_state 和 state-format migration 的现役描述。
 
 历史 `docs/superpowers/plans/*` 不回写。
 
@@ -1594,7 +1593,7 @@ TestStrategyOutboxJetStreamReconnectAndCatchUp
 7. 若仍活动则 cancel，并同步确认终态
 8. 重启 Trade
 9. 再按 client ID 查询，确认没有重复 submit，状态和 fill 可恢复
-10. 清理所有活动订单和测试仓位，输出逐账户 residual
+10. 清理所有活动订单和测试仓位，输出逐账户 remaining position
 ```
 
 真实执行门禁固定为：
@@ -1616,7 +1615,7 @@ bash modules/trade/scripts/testnet-smoke.sh
 (cd modules/strategy && CGO_ENABLED=1 go test -count=1 ./test)
 (cd modules/trade && CGO_ENABLED=1 go test -count=1 ./test)
 (cd modules/trade && go test -race -count=1 \
-  ./internal/application/portfolio \
+  ./internal/application/target \
   ./internal/application/operator \
   ./internal/application/order \
   ./internal/application/accountsync \
@@ -1669,7 +1668,7 @@ git status --short
 ```bash
 bash scripts/verify-event-contracts.sh
 bash scripts/test-greenfield-contract.sh
-rg -n 'StrategyDefinition|StrategyBinding|ExecutionBinding|StrategyRun|strategy_version|state_schema_version' \
+rg -n 'StrategyDefinition|StrategyBinding|ExecutionBinding|StrategyRun|strategy_version|state_schema_version|state_format_version|state_json|state_revision|next_state|data_revision|not_after|TargetState|PortfolioExecutor|PortfolioWorker' \
   modules/strategy modules/trade packages web/src docs \
   --glob '!docs/superpowers/plans/**' \
   --glob '!docs/superpowers/specs/**'
@@ -1696,11 +1695,11 @@ pnpm docs:build
 
 ```text
 Strategy 四表和不可变 artifact
-Runner state/CAS/Result/outbox 原子性
+无状态完整历史窗口、input hash、Result/outbox 原子性
 空 FULL 跨 Go/Python/Event/Trade 的一致性
 LogicalAccount 同质性、ownership 和 readiness
-PortfolioExecutor 一轮一个动作及 SPOT/SWAP FULL union
-OperatorAction 幂等、Flatten 重启和逐账户 residual
+TargetExecutor 一轮一个动作及 SPOT/SWAP FULL union
+OperatorAction 幂等、Flatten 重启和逐账户 remaining position
 OrderService unknown submit 恢复与 reducer 单调性
 AccountSync 锁顺序
 RPC ownership 防伪造
@@ -1742,15 +1741,15 @@ git status --short
 | 规格主题 | 实施任务 | 关键证明 |
 |---|---:|---|
 | Strategy 四表与不可变 artifact | 2、3 | schema 严格测试、manifest/ID 测试 |
-| state JSON、format、CAS | 3、4、6 | 64 KiB/Object、切换策略、原子提交 |
+| 无状态完整历史窗口 | 3、4、6 | 三参数 entrypoint、拒绝 state 字段、完整 input hash |
 | StrategyRunner / StrategyResult 命名 | 2、6、11、13 | Proto、RPC、Web、文档 |
-| Strategy 到 LogicalAccount | 5、6、7 | owner 唯一、subject、TargetState |
+| Strategy 到 LogicalAccount | 5、6、7 | owner 唯一、subject、LogicalAccountTarget |
 | FULL / 空全平 / instrument_id | 4、6、8、14 | 五层契约和 E2E |
 | 同质账户组和动态择优 | 5、7、8 | 同质校验、优先级/容量回退 |
 | 一轮一个外部动作 | 8 | cancel/resolve/place 后立即返回 |
 | TARGET/OPERATOR/EXTERNAL ownership | 9、10、11 | 服务端赋值、RPC 防伪造 |
 | 暂停整个 LogicalAccount | 7、9、10 | session 继续、自动执行停止 |
-| ManualOrder / FlattenLogicalAccount | 10、11、14 | action 幂等、逐账户归零/残差 |
+| ManualOrder / FlattenLogicalAccount | 10、11、14 | action 幂等、逐账户归零/剩余仓位 |
 | 订单状态、OKX ID、Paper LIMIT | 1 | focused/race tests |
 | Manager、Secret、live gate | 7、12 | readiness、单 Reveal、profile |
 | 删除账本、旧 schema、旧文档 | 5、13、15 | schema 检查、静态护栏 |
@@ -1761,8 +1760,9 @@ git status --short
 以下条件必须同时满足，才能宣告实施完成：
 
 - Strategy 生产 schema 恰好四表，旧 schema 明确拒绝。
-- Strategy/Trade/Web 只使用 Strategy、StrategyRunner、StrategyResult、LogicalAccount、TargetState、OperatorAction 术语。
-- 空 `rebalance` 从 Python 到 Trade TargetState 全链合法，并在 E2E 中让全部物理仓位归零。
+- Strategy schema、Proto、Go、Python、manifest 和现役文档不存在 `state_json`、`state_revision`、`next_state`、`state_format_version` 或 `data_revision`。
+- Strategy/Trade/Web 只使用 Strategy、StrategyRunner、StrategyResult、LogicalAccount、LogicalAccountTarget、OperatorAction 术语。
+- 空 `rebalance` 从 Python 到 Trade LogicalAccountTarget 全链合法，并在 E2E 中让全部物理仓位归零。
 - 一个 LogicalAccount 的自动 TARGET 执行严格串行，每轮最多一个外部动作。
 - 人工 RPC 无法伪造 ownership，人工下单和一键清仓都会先暂停整个 LogicalAccount。
 - PAUSED 不停止物理账户同步和私有流；所有 enabled 成员 Ready 才允许恢复自动执行。
