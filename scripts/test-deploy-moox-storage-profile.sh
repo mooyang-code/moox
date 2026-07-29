@@ -101,6 +101,8 @@ grep -q 'import-seed' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'cd "${ROOT}/storage"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'doctor bootstrap --format json' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'activate-datasets' "${TMP_ROOT}/unpacked/start.sh"
+[[ "$(grep -Fc 'MOOX_STORAGE_EVENTBUS_URL=${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}' "${TMP_ROOT}/unpacked/start.sh")" == "3" ]]
+[[ "$(grep -Fc 'wait_nats storage "${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}"' "${TMP_ROOT}/unpacked/start.sh")" == "2" ]]
 if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${FIXTURE_ROOT}/scripts/deploy-moox.sh"; then
   echo 'legacy storage route seed environment remains in deployment script' >&2
   exit 1
@@ -184,7 +186,8 @@ fi
 grep -q 'stop_service "storage-node"' "${TMP_ROOT}/unpacked-shard/stop.sh"
 
 TLS_ARCHIVE="${TMP_ROOT}/storage-tls.tar.gz"
-MOOX_EVENTBUS_ENABLE_TLS=1 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
+MOOX_EVENTBUS_ENABLE_TLS=1 MOOX_EVENTBUS_PUBLIC_IP=203.0.113.10 \
+  PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --profile storage --with-storage-node --package-only --archive "${TLS_ARCHIVE}" \
   --target localhost --dir "${TMP_ROOT}/deploy-tls" --stage "${TMP_ROOT}/stage-tls" \
   --goos linux --goarch amd64 --skip-build --node-id storage \
@@ -194,5 +197,7 @@ tar -C "${TMP_ROOT}/unpacked-tls" -xzf "${TLS_ARCHIVE}"
 grep -q 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${TMP_ROOT}/unpacked-tls/storage/config/storage.yaml"
 grep -q 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${TMP_ROOT}/unpacked-tls/storage-view/config/trpc_go.yaml"
 grep -q 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${TMP_ROOT}/unpacked-tls/storage-node/config/storage.yaml"
+grep -Fq 'EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-tls://203.0.113.10:4222}"' "${TMP_ROOT}/unpacked-tls/start.sh"
+[[ "$(grep -Fc 'wait_nats storage "${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}"' "${TMP_ROOT}/unpacked-tls/start.sh")" == "2" ]]
 
 echo 'storage deployment profile contract passed'
