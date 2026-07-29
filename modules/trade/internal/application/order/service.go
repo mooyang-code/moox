@@ -18,7 +18,7 @@ import (
 var (
 	ErrIdempotencyConflict = errors.New("trade order: idempotency conflict")
 	ErrServiceConfig       = errors.New("trade order: service is not configured")
-	ErrCrossZero           = errors.New("trade order: manual order cannot cross zero")
+	ErrCrossZero           = errors.New("trade order: order cannot cross zero")
 )
 
 type AdapterSource interface {
@@ -202,7 +202,8 @@ func (s *Service) deriveReducePositionOnly(
 		}
 		if strings.EqualFold(spec.Owner.Type, "RPC") ||
 			strings.EqualFold(spec.Owner.Type, "MANUAL") ||
-			strings.EqualFold(spec.Owner.Type, "OPERATOR") {
+			strings.EqualFold(spec.Owner.Type, "OPERATOR") ||
+			strings.EqualFold(spec.Owner.Type, "TARGET") {
 			return spec, ErrCrossZero
 		}
 		return spec, nil
@@ -241,6 +242,7 @@ func (s *Service) Submit(
 		result, synchronize, err = s.submit(ctx, record)
 	case orderdomain.Submitting, orderdomain.SubmitUnknown:
 		result, err = s.resolveUnknown(ctx, record, current)
+		synchronize = err == nil && result.State == orderdomain.Open
 	case orderdomain.Rejected:
 		result = current
 		err = errors.New(record.RejectReason)
@@ -445,16 +447,28 @@ func (s *Service) ResolveUnknown(
 		return orderdomain.Order{}, err
 	}
 	unlock := s.Store.LockExchangeAccount(record.ExchangeAccountID)
-	defer unlock()
 	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
 	if err != nil {
+		unlock()
 		return orderdomain.Order{}, err
 	}
 	current, err := domainOrder(record)
 	if err != nil {
+		unlock()
 		return current, err
 	}
-	return s.resolveUnknown(ctx, record, current)
+	wasUnknown := current.State == orderdomain.Submitting ||
+		current.State == orderdomain.SubmitUnknown
+	resolved, err := s.resolveUnknown(ctx, record, current)
+	unlock()
+	if err != nil || !wasUnknown || resolved.State != orderdomain.Open ||
+		s.Syncer == nil {
+		return resolved, err
+	}
+	if err := s.Syncer.SyncAccount(ctx, record.ExchangeAccountID); err != nil {
+		return resolved, err
+	}
+	return s.Get(ctx, record.SpaceID, record.OrderID)
 }
 
 func (s *Service) resolveUnknown(

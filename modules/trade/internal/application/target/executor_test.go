@@ -3,6 +3,7 @@ package target
 import (
 	"context"
 	"errors"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -350,6 +352,21 @@ func TestConvergePlacesMarketChildAndCapsNotional(t *testing.T) {
 	require.Equal(t, "2", orders.placed[0].Quantity.String())
 	require.False(t, orders.placed[0].ReducePositionOnly)
 	require.Equal(t, []string{"child-order"}, orders.submitted)
+}
+
+func TestConvergeGeneratesOKXCompatibleClientOrderID(t *testing.T) {
+	executor, state, orders := newSpotExecutor("1", "0")
+	state.account.Exchange = string(exchange.ExchangeOKX)
+	state.instrument.Exchange = string(exchange.ExchangeOKX)
+
+	_, err := executor.Converge(context.Background(), "space-1", "binding-1")
+
+	require.NoError(t, err)
+	require.Len(t, orders.placed, 1)
+	clientOrderID := orders.placed[0].ClientOrderID
+	require.LessOrEqual(t, len(clientOrderID), 32)
+	require.True(t, regexp.MustCompile(`^[A-Za-z0-9]+$`).MatchString(clientOrderID))
+	require.True(t, okx.ValidClientOrderID(clientOrderID))
 }
 
 func TestConvergeHoldsBindingLockAcrossChildCreation(t *testing.T) {

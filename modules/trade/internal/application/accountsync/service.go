@@ -77,19 +77,31 @@ func (s *Service) SyncAccount(
 		}
 	}()
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	defer unlock()
+	result, maxDifference, err = s.syncAccountLocked(ctx, exchangeAccountID)
+	unlock()
+	if err != nil {
+		return result, err
+	}
+	return s.resolveUnknownOrders(ctx, exchangeAccountID, result)
+}
+
+func (s *Service) syncAccountLocked(
+	ctx context.Context,
+	exchangeAccountID string,
+) (Result, float64, error) {
 	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
 	if err != nil {
-		return Result{}, err
+		return Result{}, 0, err
 	}
 	adapter, err := s.Adapters.Adapter(exchangeAccountID)
 	if err != nil {
-		return Result{}, err
+		return Result{}, 0, err
 	}
 
 	openOrders, err := adapter.ListOpenOrders(ctx)
 	if err != nil {
-		return s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, err)
+		return result, 0, failErr
 	}
 	localOrders, err := s.Store.ListOrdersForAccount(
 		ctx,
@@ -98,17 +110,20 @@ func (s *Service) SyncAccount(
 		s.now().Add(-s.lateFillWindow()).UnixMilli(),
 	)
 	if err != nil {
-		return s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, err)
+		return result, 0, failErr
 	}
 	positions, err := adapter.ListPositionSnapshots(ctx)
 	if err != nil {
-		return s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, err)
+		return result, 0, failErr
 	}
 	accountSnapshot, err := adapter.GetAccountSnapshot(ctx)
 	if err != nil {
-		return s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, err)
+		return result, 0, failErr
 	}
-	maxDifference = maxBalanceDifference(
+	maxDifference := maxBalanceDifference(
 		account.Snapshot.Balances,
 		snapshotRecord(accountSnapshot).Balances,
 	)
@@ -118,7 +133,8 @@ func (s *Service) SyncAccount(
 		account.MarketType,
 	)
 	if err != nil {
-		return s.fail(ctx, account, err)
+		result, failErr := s.fail(ctx, account, err)
+		return result, maxDifference, failErr
 	}
 	symbols := syncSymbols(
 		account,
@@ -133,7 +149,8 @@ func (s *Service) SyncAccount(
 	for _, symbol := range symbols {
 		rows, cursor, listErr := adapter.ListRecentFills(ctx, symbol, cursors[symbol])
 		if listErr != nil {
-			return s.fail(ctx, account, listErr)
+			result, failErr := s.fail(ctx, account, listErr)
+			return result, maxDifference, failErr
 		}
 		fills = append(fills, rows...)
 		if strings.TrimSpace(cursor) != "" {
@@ -160,17 +177,19 @@ func (s *Service) SyncAccount(
 		case exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound):
 			continue
 		default:
-			return s.fail(ctx, account, lookupErr)
+			result, failErr := s.fail(ctx, account, lookupErr)
+			return result, maxDifference, failErr
 		}
 	}
 	ready := account.Ready
 	if s.SessionState != nil {
 		ready = s.SessionState.Ready(account.ExchangeAccountID)
 	}
-	return s.applySnapshot(ctx, account.ExchangeAccountID, Snapshot{
+	result, err := s.applySnapshot(ctx, account.ExchangeAccountID, Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, FillCursors: cursors, Ready: ready,
 	})
+	return result, maxDifference, err
 }
 
 func maxBalanceDifference(before, after []store.AssetBalance) float64 {
@@ -211,8 +230,12 @@ func (s *Service) ApplySnapshot(
 		return Result{}, err
 	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	defer unlock()
-	return s.applySnapshot(ctx, exchangeAccountID, snapshot)
+	result, err := s.applySnapshot(ctx, exchangeAccountID, snapshot)
+	unlock()
+	if err != nil {
+		return result, err
+	}
+	return s.resolveUnknownOrders(ctx, exchangeAccountID, result)
 }
 
 func (s *Service) applySnapshot(
@@ -299,37 +322,6 @@ func (s *Service) applySnapshot(
 		)
 	}
 
-	if s.Orders != nil {
-		unknown, listErr := s.Store.ListOrdersForAccount(
-			ctx,
-			account.SpaceID,
-			account.ExchangeAccountID,
-			s.now().Add(-s.lateFillWindow()).UnixMilli(),
-		)
-		if listErr != nil {
-			return s.fail(ctx, account, listErr)
-		}
-		for _, current := range unknown {
-			state := orderdomain.State(current.State)
-			if state != orderdomain.Submitting && state != orderdomain.SubmitUnknown {
-				continue
-			}
-			before := state
-			resolved, resolveErr := s.Orders.ResolveUnknown(
-				ctx,
-				account.SpaceID,
-				current.OrderID,
-			)
-			if resolveErr != nil {
-				result.Warnings = append(result.Warnings, resolveErr.Error())
-				continue
-			}
-			if resolved.State != before {
-				result.UnknownOrdersResolved++
-			}
-		}
-	}
-
 	now := s.now().UnixMilli()
 	if snapshot.FillCursors == nil {
 		snapshot.FillCursors = account.FillCursors
@@ -355,6 +347,48 @@ func (s *Service) applySnapshot(
 	})
 	if err != nil {
 		return Result{}, err
+	}
+	return result, nil
+}
+
+func (s *Service) resolveUnknownOrders(
+	ctx context.Context,
+	exchangeAccountID string,
+	result Result,
+) (Result, error) {
+	if s.Orders == nil {
+		return result, nil
+	}
+	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	if err != nil {
+		return result, err
+	}
+	unknown, err := s.Store.ListOrdersForAccount(
+		ctx,
+		account.SpaceID,
+		account.ExchangeAccountID,
+		s.now().Add(-s.lateFillWindow()).UnixMilli(),
+	)
+	if err != nil {
+		return result, err
+	}
+	for _, current := range unknown {
+		state := orderdomain.State(current.State)
+		if state != orderdomain.Submitting && state != orderdomain.SubmitUnknown {
+			continue
+		}
+		resolved, resolveErr := s.Orders.ResolveUnknown(
+			ctx,
+			account.SpaceID,
+			current.OrderID,
+		)
+		if resolveErr != nil {
+			result.Warnings = append(result.Warnings, resolveErr.Error())
+			continue
+		}
+		if resolved.State != state {
+			result.UnknownOrdersResolved++
+		}
 	}
 	return result, nil
 }
@@ -643,7 +677,14 @@ func (s *Service) applyOrder(
 	if err != nil {
 		return false, "", err
 	}
-	if current.FilledQuantity.Cmp(shared.MustDecimal(record.FilledQuantity)) > 0 {
+	storedFilled := shared.MustDecimal(record.FilledQuantity)
+	if current.FilledQuantity.Cmp(storedFilled) < 0 {
+		return false, fmt.Sprintf(
+			"order %s ignored regressing cumulative filled quantity",
+			record.OrderID,
+		), nil
+	}
+	if current.FilledQuantity.Cmp(storedFilled) > 0 {
 		return false, fmt.Sprintf(
 			"order %s snapshot is ahead of ingested Fills",
 			record.OrderID,

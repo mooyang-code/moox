@@ -875,7 +875,7 @@ func validateRequest(request exchange.OrderRequest, market exchange.MarketType) 
 		request.Quantity.Cmp(shared.Zero()) <= 0 {
 		return rejected("invalid order request", nil)
 	}
-	if !validClientOrderID(request.ClientOrderID) {
+	if !ValidClientOrderID(request.ClientOrderID) {
 		return rejected("client order ID must be 1-32 ASCII alphanumeric characters", nil)
 	}
 	switch request.OrderType {
@@ -902,7 +902,8 @@ func validateRequest(request exchange.OrderRequest, market exchange.MarketType) 
 	return nil
 }
 
-func validClientOrderID(value string) bool {
+// ValidClientOrderID exposes the clOrdId boundary contract to order producers.
+func ValidClientOrderID(value string) bool {
 	if len(value) == 0 || len(value) > 32 {
 		return false
 	}
