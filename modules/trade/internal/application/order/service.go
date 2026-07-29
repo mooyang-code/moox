@@ -600,7 +600,6 @@ func (s *Service) submit(
 	if _, err = aggregate.BeginSubmit(); err != nil {
 		return orderdomain.Order{}, false, err
 	}
-	previousReservation := record
 	releaseReservationForReduction := !record.ReduceOnly &&
 		aggregate.Spec.ReducePositionOnly
 	record.ReduceOnly = aggregate.Spec.ReducePositionOnly
@@ -612,13 +611,7 @@ func (s *Service) submit(
 	applyAggregate(&record, aggregate)
 	record.SubmittedAt = s.now().UnixMilli()
 	if err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.UpdateOrder(record, expected); err != nil {
-			return err
-		}
-		if releaseReservationForReduction {
-			return releaseReservation(tx, previousReservation)
-		}
-		return nil
+		return tx.UpdateOrder(record, expected)
 	}); err != nil {
 		return orderdomain.Order{}, false, err
 	}
