@@ -15,16 +15,17 @@ func TestPendingOutboxStatsReportsCountAndOldest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.Exec(`CREATE TABLE t_strategy_outbox (
-		c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_message_id TEXT NOT NULL UNIQUE,
-		c_event_data BLOB NOT NULL, c_ctime DATETIME NOT NULL
+		message_id TEXT PRIMARY KEY,
+		event_data BLOB NOT NULL,
+		created_at INTEGER NOT NULL
 	)`).Error; err != nil {
 		t.Fatal(err)
 	}
 	oldest := time.Unix(100, 0).UTC()
-	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_event_data,c_ctime) VALUES(?,?,?)", "one", []byte("event-data"), oldest).Error; err != nil {
+	if err := db.Exec("INSERT INTO t_strategy_outbox(message_id,event_data,created_at) VALUES(?,?,?)", "one", []byte("event-data"), oldest.UnixMilli()).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec("INSERT INTO t_strategy_outbox(c_message_id,c_event_data,c_ctime) VALUES(?,?,?)", "two", []byte("event-data"), oldest.Add(time.Minute)).Error; err != nil {
+	if err := db.Exec("INSERT INTO t_strategy_outbox(message_id,event_data,created_at) VALUES(?,?,?)", "two", []byte("event-data"), oldest.Add(time.Minute).UnixMilli()).Error; err != nil {
 		t.Fatal(err)
 	}
 	stats, err := New(db).PendingOutboxStats(context.Background())
