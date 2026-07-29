@@ -26,6 +26,10 @@ type CommitResultOutcome struct {
 	Created bool
 }
 
+type ResultFilter struct {
+	RunnerID string
+}
+
 func (s *Store) SaveResult(ctx context.Context, result domain.StrategyResult) error {
 	return s.db.WithContext(ctx).Exec(`
 		INSERT INTO t_strategy_results (
@@ -148,6 +152,25 @@ func (s *Store) GetResult(ctx context.Context, resultID string) (domain.Strategy
 		Where("result_id = ?", resultID).
 		Take(&row).Error
 	return row.domain(), err
+}
+
+func (s *Store) ListResults(
+	ctx context.Context,
+	filter ResultFilter,
+) ([]domain.StrategyResult, error) {
+	query := s.db.WithContext(ctx).Table("t_strategy_results")
+	if filter.RunnerID != "" {
+		query = query.Where("runner_id = ?", filter.RunnerID)
+	}
+	var rows []resultRow
+	if err := query.Order("created_at DESC, result_id").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	results := make([]domain.StrategyResult, 0, len(rows))
+	for _, row := range rows {
+		results = append(results, row.domain())
+	}
+	return results, nil
 }
 
 func validateCommitResultRequest(request CommitResultRequest) error {

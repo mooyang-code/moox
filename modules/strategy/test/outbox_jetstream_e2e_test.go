@@ -43,22 +43,23 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateInitialState(context.Background(), domain.State{BindingID: "binding-1", StrategyVersion: "1", Revision: 0, StateJSON: "{}"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CreateBinding(context.Background(), domain.Binding{
-		BindingID: "binding-1", StrategyID: "demo", StrategyVersion: "1", SpaceID: "space",
-		ViewID: "view-1", Freq: "1m", GroupID: "group-1", Status: "enabled",
+	if err := repo.SaveStrategy(context.Background(), domain.Strategy{
+		ID: "demo", Name: "demo", ManifestYAML: "api_version: moox.strategy/v1",
+		SourceCode: "def run(context, data, params): return {'action':'hold'}",
+		SourceHash: "hash-demo", CreatedAt: time.UnixMilli(1000),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateExecutionBinding(context.Background(), domain.ExecutionBinding{
-		ExecutionBindingID: "execution-1", GroupID: "group-1", ExchangeAccountID: "account-1",
-		Mode: "paper", Status: "enabled",
+	logicalAccountID := "logical-1"
+	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{
+		ID: "runner-1", StrategyID: "demo", SpaceID: "space", ViewID: "view-1",
+		Frequency: "1m", ParamsJSON: []byte(`{}`), LogicalAccountID: &logicalAccountID,
+		Status: domain.RunnerStatusDisabled, CreatedAt: time.UnixMilli(1000),
+		UpdatedAt: time.UnixMilli(1000),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	commitDecision(t, repo, "run-1", 0, time.Now().UTC().Format(time.RFC3339Nano))
+	commitDecision(t, repo, "result-1", time.Now().UTC())
 	runtime, err := strategyoutbox.NewRuntime(strategyoutbox.RuntimeConfig{
 		Store: repo, InstanceID: "strategy-e2e", RelayInterval: 20 * time.Millisecond,
 		ReconnectInterval: 20 * time.Millisecond, BatchSize: 10,
@@ -91,7 +92,7 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	natsServer.Shutdown()
 	natsServer.WaitForShutdown()
 	nc.Close()
-	commitDecision(t, repo, "run-2", 1, time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano))
+	commitDecision(t, repo, "result-2", time.Now().UTC().Add(time.Minute))
 	eventuallyStrategy(t, 3*time.Second, func() bool {
 		stats, _ := repo.PendingOutboxStats(context.Background())
 		return !runtime.Connected() && stats.PendingCount == 1
@@ -116,7 +117,7 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	}
 	defer subscription.Unsubscribe()
 	seen := map[string]int{}
-	firstID, secondID := "run-1:rebalance:execution-1", "run-2:rebalance:execution-1"
+	firstID, secondID := "result-1", "result-2"
 	for seen[firstID] == 0 || seen[secondID] == 0 {
 		message, err := subscription.NextMsg(3 * time.Second)
 		if err != nil {
@@ -130,10 +131,13 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() || envelope.GetEventName() != events.TradeTargetRequested.Name() {
+		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() ||
+			envelope.GetEventName() != events.LogicalAccountTargetRequested.Name() {
 			t.Fatalf("invalid envelope/header: id=%q envelope=%+v", message.Header.Get(nats.MsgIdHdr), &envelope)
 		}
-		if _, ok := payload.(*tradeeventpb.TargetIntent); !ok {
+		target, ok := payload.(*tradeeventpb.LogicalAccountTargetRequested)
+		if !ok || target.GetLogicalAccountId() != "logical-1" ||
+			target.GetRunnerId() != "runner-1" {
 			t.Fatalf("payload=%T", payload)
 		}
 		seen[envelope.GetEventId()]++
@@ -163,17 +167,28 @@ func startStrategyNATS(t *testing.T, options *server.Options) *server.Server {
 	return natsServer
 }
 
-func commitDecision(t *testing.T, repo *store.Store, runID string, revision int64, trigger string) {
+func commitDecision(
+	t *testing.T,
+	repo *store.Store,
+	resultID string,
+	trigger time.Time,
+) {
 	t.Helper()
-	task := domain.Task{
-		RunID: runID, BindingID: "binding-1", StrategyID: "demo", Version: "1", Namespace: "default",
-		TriggerBarTime: trigger, DataRevision: "revision-" + runID,
-		PreviousState: domain.State{BindingID: "binding-1", StrategyVersion: "1", Revision: revision, StateJSON: "{}"},
+	output := domain.Output{
+		Action: domain.ActionRebalance,
+		Targets: []domain.InstrumentTarget{{
+			InstrumentID: "BTC-USDT-SPOT", Quantity: "0.5",
+		}},
 	}
-	output := domain.Output{Action: domain.ActionRebalance, Targets: []domain.TargetPosition{{
-		InstrumentID: "BTC-USDT", Symbol: "BTC-USDT", TargetQuantity: "0.5",
-	}}, NextState: map[string]any{"revision": revision + 1}}
-	if err := repo.Commit(context.Background(), task, output, "hash-"+runID); err != nil {
+	_, err := repo.CommitResult(context.Background(), store.CommitResultRequest{
+		Result: domain.StrategyResult{
+			ID: resultID, RunnerID: "runner-1", StrategyID: "demo",
+			TriggerBarTime: trigger, Namespace: "default", InputHash: "hash-" + resultID,
+			Action: output.Action, CreatedAt: trigger.Add(time.Second),
+		},
+		Output: output,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 }

@@ -2,84 +2,83 @@ package e2e_test
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/rpc"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
-	"gorm.io/gorm"
 )
 
-type frontendAccountModes map[string]string
-
-func (m frontendAccountModes) ExecutionMode(_ context.Context, _, id string) (string, error) {
-	mode, ok := m[id]
-	if !ok {
-		return "", errors.New("account not found")
-	}
-	return mode, nil
-}
-
-func TestStrategyFrontendQueriesAndPerformanceE2E(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+func TestStrategyRunnerResultAndTargetQueriesE2E(t *testing.T) {
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(schema.AllSQL()).Error; err != nil {
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&domain.StrategyDefinition{StrategyID: "momentum", Version: "1.0.0", API: "moox.strategy/v1", ManifestYAML: "id: momentum", SourceCode: "def run(): pass", SourceHash: "hash-momentum", Status: "enabled"}).Error; err != nil {
+	strategy := domain.Strategy{
+		ID: "momentum", Name: "momentum", ManifestYAML: "api_version: moox.strategy/v1",
+		SourceCode: "def run(context, data, params): return {'action':'hold'}",
+		SourceHash: "hash-momentum", CreatedAt: time.UnixMilli(1000),
+	}
+	if err := repo.SaveStrategy(context.Background(), strategy); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&domain.Binding{BindingID: "binding-paper", StrategyID: "momentum", StrategyVersion: "1.0.0", SpaceID: "space-1", ViewID: "view-1", Freq: "1h", GroupID: "group-1", Status: "enabled"}).Error; err != nil {
+	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{
+		ID: "runner-1", StrategyID: strategy.ID, SpaceID: "space-1", ViewID: "view-1",
+		Frequency: "1h", ParamsJSON: json.RawMessage(`{}`),
+		Status: domain.RunnerStatusDisabled, CreatedAt: time.UnixMilli(2000),
+		UpdatedAt: time.UnixMilli(2000),
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&domain.State{BindingID: "binding-paper", StrategyVersion: "1.0.0", Revision: 2, StateJSON: "{}", LastRunID: "run-1"}).Error; err != nil {
+	if _, err := repo.CommitResult(context.Background(), store.CommitResultRequest{
+		Result: domain.StrategyResult{
+			ID: "result-1", RunnerID: "runner-1", StrategyID: strategy.ID,
+			TriggerBarTime: time.UnixMilli(3000), Namespace: "default",
+			InputHash: "hash-input", Action: domain.ActionRebalance,
+			CreatedAt: time.UnixMilli(4000),
+		},
+		Output: domain.Output{
+			Action: domain.ActionRebalance,
+			Targets: []domain.InstrumentTarget{{
+				InstrumentID: "BTC-USDT-SPOT", Quantity: "1",
+			}},
+		},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&domain.BindingHealth{BindingID: "binding-paper", Status: "running", Mode: "paper", LastRunID: "run-1", LastDataRevision: "view:2", WorkerStatus: "ready", ObservedAt: time.Now().UTC()}).Error; err != nil {
-		t.Fatal(err)
+
+	service := &rpc.Service{Repo: repo}
+	runners, err := service.ListRunners(context.Background(), &strategypb.ListRunnersReq{
+		SpaceId: "space-1",
+	})
+	if err != nil || runners.GetRetInfo().GetCode() != 0 ||
+		len(runners.GetRunners()) != 1 {
+		t.Fatalf("runners=%+v err=%v", runners, err)
 	}
-	if err := db.Exec("INSERT INTO t_strategy_execution_bindings(c_execution_binding_id,c_group_id,c_exchange_account_id,c_mode,c_status) VALUES(?,?,?,?,?)", "exec-1", "group-1", "paper-account", "paper", "enabled").Error; err != nil {
-		t.Fatal(err)
+	results, err := service.ListStrategyResults(
+		context.Background(),
+		&strategypb.ListStrategyResultsReq{RunnerId: "runner-1"},
+	)
+	if err != nil || results.GetRetInfo().GetCode() != 0 ||
+		len(results.GetResults()) != 1 {
+		t.Fatalf("results=%+v err=%v", results, err)
 	}
-	point := domain.PerformancePoint{BindingID: "binding-paper", Source: "paper", PointTime: time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC), NAV: "1.02", CumulativeReturn: "0.02", Drawdown: "0", GrossExposure: "1", NetExposure: "1", Turnover: "0.1", Fees: "0.01", DataRevision: "paper:2"}
-	if err := db.Create(&point).Error; err != nil {
-		t.Fatal(err)
-	}
-	service := &rpc.Service{
-		Repo:             store.New(db),
-		ExchangeAccounts: frontendAccountModes{"paper-account": "paper"},
-	}
-	ctx := context.Background()
-	list, err := service.ListRunningStrategies(ctx, &strategypb.ListRunningStrategiesReq{Page: &strategypb.PageReq{Page: 1, PageSize: 20}, SpaceId: "space-1"})
-	if err != nil || list.GetRetInfo().GetCode() != 0 || len(list.GetItems()) != 1 {
-		t.Fatalf("list=%+v err=%v", list, err)
-	}
-	overview, err := service.GetStrategyOverview(ctx, &strategypb.GetStrategyOverviewReq{BindingId: "binding-paper"})
-	if err != nil || overview.GetHealth().GetMode() != "paper" || overview.GetDefinition().GetSourceHash() != "hash-momentum" {
-		t.Fatalf("overview=%+v err=%v", overview, err)
-	}
-	performance, err := service.GetStrategyPerformance(ctx, &strategypb.GetStrategyPerformanceReq{BindingId: "binding-paper", PerformanceSource: "paper"})
-	if err != nil || len(performance.GetPoints()) != 1 || performance.GetPerformanceSource() != "paper" {
-		t.Fatalf("performance=%+v err=%v", performance, err)
-	}
-	paused, err := service.PauseBinding(ctx, &strategypb.BindingOperationReq{BindingId: "binding-paper", Reason: "maintenance", OperationId: "op-pause-1"})
-	if err != nil || paused.GetRetInfo().GetCode() != 0 || paused.GetStatus() != "disabled" {
-		t.Fatalf("pause=%+v err=%v", paused, err)
-	}
-	var audits int64
-	db.Table("t_strategy_operation_audits").Where("c_operation_id=?", "op-pause-1").Count(&audits)
-	if audits != 1 {
-		t.Fatalf("audits=%d", audits)
-	}
-	mode, err := service.SetExecutionMode(ctx, &strategypb.SetExecutionModeReq{BindingId: "binding-paper", ExecutionBindingId: "exec-1", Mode: "observe", ExchangeAccountId: "paper-account", Reason: "monitor", OperationId: "op-mode-1"})
-	if err != nil || mode.GetRetInfo().GetCode() != 0 || mode.GetStatus() != "observe" {
-		t.Fatalf("mode=%+v err=%v", mode, err)
+	targets, err := service.ListStrategyTargets(
+		context.Background(),
+		&strategypb.ListStrategyTargetsReq{RunnerId: "runner-1"},
+	)
+	if err != nil || targets.GetRetInfo().GetCode() != 0 ||
+		targets.GetCommandSequence() != 1 || len(targets.GetTargets()) != 1 ||
+		targets.GetTargets()[0].GetQuantity() != "1" {
+		t.Fatalf("targets=%+v err=%v", targets, err)
 	}
 }

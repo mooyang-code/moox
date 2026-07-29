@@ -1,8 +1,7 @@
 python_bin: python3
 worker_path: ./pyworker/worker.py
 database: ./data/strategy.sqlite
-exchange_account_target: ip://127.0.0.1:11200
-live_enabled: false
+logical_account_target: ip://127.0.0.1:11200
 workers: 4
 instance_id: strategy-1
 eventbus:

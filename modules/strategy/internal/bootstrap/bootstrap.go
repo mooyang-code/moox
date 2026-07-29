@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	strategyaction "github.com/mooyang-code/moox/modules/strategy/internal/action"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
@@ -58,8 +59,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		if err != nil {
 			return nil, nil, err
 		}
-	} else if cfg.LiveEnabled {
-		return nil, nil, fmt.Errorf("worker_path is required when live is enabled")
 	}
 	probeCtx, probeCancel := context.WithTimeout(ctx, workerProbeTimeout())
 	err = eng.Probe(probeCtx)
@@ -74,11 +73,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
-	moduleMetrics, err := registerMetricsReporter(s)
-	if err != nil {
+	if _, err := registerMetricsReporter(s); err != nil {
 		return nil, nil, err
 	}
-	repo.SetModuleMetrics(moduleMetrics)
 	service := newRPCService(repo, eng, cfg)
 	strategypb.RegisterStrategyMgrService(s, service)
 	healthState := health.New("strategy", "strategy", "", "")
@@ -140,9 +137,10 @@ func newEventBusRuntime(repo *store.Store, cfg Config) (*strategyoutbox.Runtime,
 
 func newRPCService(repo *store.Store, eng *engine.Engine, cfg Config) *rpc.Service {
 	return &rpc.Service{
-		Repo: repo, Registry: &registry.Service{Repo: repo}, Engine: eng,
-		Workers: cfg.Workers, ReadyWorkers: 0, LiveExecutionEnabled: cfg.LiveEnabled,
-		ExchangeAccounts: newExchangeAccountModeClient(cfg.ExchangeAccountTarget),
+		Repo: repo, Registry: &registry.Service{Repo: repo}, Runtime: eng,
+		Results: &strategyaction.Service{Repo: repo},
+		Workers: cfg.Workers, ReadyWorkers: 0,
+		LogicalAccounts: newLogicalAccountOwnerClient(cfg.LogicalAccountTarget),
 	}
 }
 

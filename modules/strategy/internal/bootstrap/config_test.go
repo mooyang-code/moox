@@ -16,14 +16,14 @@ func TestLoadAppliesSafeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.PythonBin != "python3" || cfg.Workers != 1 || cfg.LiveEnabled {
+	if cfg.PythonBin != "python3" || cfg.Workers != 1 {
 		t.Fatalf("cfg=%+v", cfg)
 	}
 	if cfg.InstanceID != "strategy-1" || cfg.EventBus.RelayInterval != time.Second || cfg.EventBus.RelayBatchSize != 100 || cfg.EventBus.ConnectTimeout != 3*time.Second {
 		t.Fatalf("eventbus defaults=%+v", cfg)
 	}
-	if cfg.ExchangeAccountTarget != "ip://127.0.0.1:11200" {
-		t.Fatalf("exchange account target=%q", cfg.ExchangeAccountTarget)
+	if cfg.LogicalAccountTarget != "ip://127.0.0.1:11200" {
+		t.Fatalf("logical account target=%q", cfg.LogicalAccountTarget)
 	}
 }
 
@@ -37,21 +37,22 @@ func TestLoadRejectsInvalidEventBusRuntimeSettings(t *testing.T) {
 	}
 }
 
-func TestLiveRequiresWorkerPath(t *testing.T) {
+func TestWorkerPathIsAlwaysRequired(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("live_enabled: true\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("database: ./strategy.sqlite\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {
-		t.Fatal("expected live worker path validation")
+		t.Fatal("expected worker path validation")
 	}
 }
 
-func TestNewRPCServicePropagatesLiveCapability(t *testing.T) {
-	if !newRPCService(nil, nil, Config{Workers: 2, LiveEnabled: true}).LiveExecutionEnabled {
-		t.Fatal("live execution capability was not propagated")
-	}
-	if newRPCService(nil, nil, Config{Workers: 2, LiveEnabled: false}).LiveExecutionEnabled {
-		t.Fatal("live execution capability must fail closed")
+func TestNewRPCServiceUsesLogicalAccountOwnerClient(t *testing.T) {
+	service := newRPCService(nil, nil, Config{
+		Workers:              2,
+		LogicalAccountTarget: "ip://trade:11200",
+	})
+	if service.Workers != 2 || service.LogicalAccounts == nil || service.Results == nil {
+		t.Fatalf("service=%+v", service)
 	}
 }

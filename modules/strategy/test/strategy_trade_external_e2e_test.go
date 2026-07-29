@@ -18,7 +18,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-func TestExternalStrategyCommitPublishesTargetIntent(t *testing.T) {
+func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	natsURL := os.Getenv("MOOX_STRATEGY_TRADE_E2E_NATS_URL")
 	if natsURL == "" {
 		t.Fatal("MOOX_STRATEGY_TRADE_E2E_NATS_URL is required by the cross-module harness")
@@ -50,37 +50,39 @@ func TestExternalStrategyCommitPublishesTargetIntent(t *testing.T) {
 	if err = repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	if err = repo.CreateBinding(ctx, domain.Binding{
-		BindingID: "binding-e2e", StrategyID: "strategy-e2e", StrategyVersion: "1",
-		SpaceID: "space", ViewID: "view", Freq: "1m", GroupID: "group-e2e", Status: "enabled",
+	if err = repo.SaveStrategy(ctx, domain.Strategy{
+		ID: "strategy-e2e", Name: "strategy-e2e",
+		ManifestYAML: "api_version: moox.strategy/v1",
+		SourceCode:   "def run(context, data, params): return {'action':'hold'}",
+		SourceHash:   "hash-strategy-e2e", CreatedAt: time.UnixMilli(1000),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = repo.CreateExecutionBinding(ctx, domain.ExecutionBinding{
-		ExecutionBindingID: "execution-e2e", GroupID: "group-e2e", ExchangeAccountID: "acct",
-		Mode: "paper", Status: "enabled",
+	logicalAccountID := "logical-e2e"
+	if err = repo.CreateRunner(ctx, domain.StrategyRunner{
+		ID: "runner-e2e", StrategyID: "strategy-e2e", SpaceID: "space",
+		ViewID: "view", Frequency: "1m", ParamsJSON: []byte(`{}`),
+		LogicalAccountID: &logicalAccountID, Status: domain.RunnerStatusDisabled,
+		CreatedAt: time.UnixMilli(1000), UpdatedAt: time.UnixMilli(1000),
 	}); err != nil {
 		t.Fatal(err)
-	}
-	if err = repo.CreateInitialState(ctx, domain.State{
-		BindingID: "binding-e2e", StrategyVersion: "1", Revision: 0, StateJSON: "{}",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	task := domain.Task{
-		RunID: "strategy-e2e-run", BindingID: "binding-e2e", StrategyID: "strategy-e2e",
-		Version: "1", Namespace: "default", SpaceID: "space",
-		TriggerBarTime: time.Now().UTC().Format(time.RFC3339Nano), DataRevision: "revision-e2e",
-		PreviousState: domain.State{BindingID: "binding-e2e", StrategyVersion: "1", Revision: 0},
 	}
 	output := domain.Output{
 		Action: domain.ActionRebalance,
-		Targets: []domain.TargetPosition{{
-			InstrumentID: "BTC-USDT", Symbol: "BTC-USDT", TargetQuantity: "0.5",
+		Targets: []domain.InstrumentTarget{{
+			InstrumentID: "BTC-USDT-SPOT", Quantity: "0.5",
 		}},
-		NextState: map[string]any{"runs": 1},
 	}
-	if err = repo.Commit(ctx, task, output, "strategy-e2e-input"); err != nil {
+	trigger := time.Now().UTC()
+	if _, err = repo.CommitResult(ctx, store.CommitResultRequest{
+		Result: domain.StrategyResult{
+			ID: "strategy-e2e-result", RunnerID: "runner-e2e",
+			StrategyID: "strategy-e2e", TriggerBarTime: trigger,
+			Namespace: "default", InputHash: "strategy-e2e-input",
+			Action: output.Action, CreatedAt: trigger.Add(time.Second),
+		},
+		Output: output,
+	}); err != nil {
 		t.Fatal(err)
 	}
 

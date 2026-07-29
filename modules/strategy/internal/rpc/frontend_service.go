@@ -5,383 +5,340 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
-	"trpc.group/trpc-go/trpc-go"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-func pageFromProto(page *strategypb.PageReq) store.Page {
-	if page == nil {
-		return store.Page{Number: 1, Size: 20}
+func (s *Service) GetStrategy(
+	ctx context.Context,
+	req *strategypb.GetStrategyReq,
+) (*strategypb.GetStrategyRsp, error) {
+	if req == nil || req.GetStrategyId() == "" || s.Repo == nil {
+		return &strategypb.GetStrategyRsp{RetInfo: invalid(errors.New("strategy_id is required"))}, nil
 	}
-	number := int(page.GetPage())
-	size := int(page.GetPageSize())
-	if number < 1 {
-		number = 1
+	value, err := s.Repo.GetStrategy(ctx, req.GetStrategyId())
+	if err != nil {
+		return &strategypb.GetStrategyRsp{RetInfo: invalid(err)}, nil
 	}
-	if size < 1 {
-		size = 20
-	}
-	if size > 200 {
-		size = 200
-	}
-	return store.Page{Number: number, Size: size}
+	return &strategypb.GetStrategyRsp{RetInfo: success(), Strategy: strategyProto(value)}, nil
 }
 
-func (s *Service) ListRunningStrategies(ctx context.Context, req *strategypb.ListRunningStrategiesReq) (*strategypb.ListRunningStrategiesRsp, error) {
-	if s == nil || s.Repo == nil {
-		return &strategypb.ListRunningStrategiesRsp{RetInfo: invalid(errors.New("strategy repository is unavailable"))}, nil
+func (s *Service) ListStrategies(
+	ctx context.Context,
+	req *strategypb.ListStrategiesReq,
+) (*strategypb.ListStrategiesRsp, error) {
+	if s.Repo == nil {
+		return &strategypb.ListStrategiesRsp{
+			RetInfo: invalid(errors.New("strategy repository is unavailable")),
+		}, nil
 	}
-	var filter store.RunningFilter
+	values, err := s.Repo.ListStrategies(ctx)
+	if err != nil {
+		return &strategypb.ListStrategiesRsp{RetInfo: invalid(err)}, nil
+	}
+	page, size, start, end := pageBounds(req.GetPage(), len(values))
+	items := make([]*strategypb.Strategy, 0, end-start)
+	for _, value := range values[start:end] {
+		items = append(items, strategyProto(value))
+	}
+	return &strategypb.ListStrategiesRsp{
+		RetInfo: success(), Strategies: items, Total: int64(len(values)),
+		Page: int32(page), PageSize: int32(size),
+	}, nil
+}
+
+func (s *Service) GetRunner(
+	ctx context.Context,
+	req *strategypb.GetRunnerReq,
+) (*strategypb.GetRunnerRsp, error) {
+	if req == nil || req.GetRunnerId() == "" || s.Repo == nil {
+		return &strategypb.GetRunnerRsp{RetInfo: invalid(errors.New("runner_id is required"))}, nil
+	}
+	value, err := s.Repo.GetRunner(ctx, req.GetRunnerId())
+	if err != nil {
+		return &strategypb.GetRunnerRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := ensureRunnerScope(ctx, value); err != nil {
+		return &strategypb.GetRunnerRsp{RetInfo: invalid(err)}, nil
+	}
+	return &strategypb.GetRunnerRsp{RetInfo: success(), Runner: runnerProto(value)}, nil
+}
+
+func (s *Service) ListRunners(
+	ctx context.Context,
+	req *strategypb.ListRunnersReq,
+) (*strategypb.ListRunnersRsp, error) {
+	if s.Repo == nil {
+		return &strategypb.ListRunnersRsp{
+			RetInfo: invalid(errors.New("strategy repository is unavailable")),
+		}, nil
+	}
+	filter := store.RunnerFilter{}
 	if req != nil {
-		filter = store.RunningFilter{SpaceID: req.GetSpaceId(), Status: req.GetStatus(), Mode: req.GetMode(), StrategyID: req.GetStrategyId()}
+		filter.StrategyID = req.GetStrategyId()
+		filter.SpaceID = req.GetSpaceId()
+		filter.Status = domain.RunnerStatus(req.GetStatus())
 	}
-	if scopedSpace := requestSpaceID(ctx); scopedSpace != "" {
-		filter.SpaceID = scopedSpace
+	if scoped := requestSpaceID(ctx); scoped != "" {
+		filter.SpaceID = scoped
 	}
-	items, total, err := s.Repo.ListRunningStrategies(ctx, filter, pageFromProto(req.GetPage()))
+	values, err := s.Repo.ListRunners(ctx, filter)
 	if err != nil {
-		return &strategypb.ListRunningStrategiesRsp{RetInfo: invalid(err)}, nil
+		return &strategypb.ListRunnersRsp{RetInfo: invalid(err)}, nil
 	}
-	page := pageFromProto(req.GetPage())
-	out := make([]*strategypb.RunningStrategySummary, 0, len(items))
-	for _, item := range items {
-		out = append(out, summaryProto(item))
+	page, size, start, end := pageBounds(req.GetPage(), len(values))
+	items := make([]*strategypb.StrategyRunner, 0, end-start)
+	for _, value := range values[start:end] {
+		items = append(items, runnerProto(value))
 	}
-	return &strategypb.ListRunningStrategiesRsp{RetInfo: success(), Items: out, Total: total, Page: int32(page.Number), PageSize: int32(page.Size)}, nil
+	return &strategypb.ListRunnersRsp{
+		RetInfo: success(), Runners: items, Total: int64(len(values)),
+		Page: int32(page), PageSize: int32(size),
+	}, nil
 }
 
-func (s *Service) GetStrategyOverview(ctx context.Context, req *strategypb.GetStrategyOverviewReq) (*strategypb.GetStrategyOverviewRsp, error) {
-	if req == nil || req.GetBindingId() == "" {
-		return &strategypb.GetStrategyOverviewRsp{RetInfo: invalid(errors.New("binding_id is required"))}, nil
+func (s *Service) UpdateRunner(
+	ctx context.Context,
+	req *strategypb.UpdateRunnerReq,
+) (*strategypb.UpdateRunnerRsp, error) {
+	if req == nil || req.GetRunner() == nil || s.Repo == nil {
+		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(errors.New("runner is required"))}, nil
 	}
-	binding, err := s.Repo.GetBinding(ctx, req.GetBindingId())
+	value := req.GetRunner()
+	if err := validateRunnerInput(value); err != nil {
+		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
+	}
+	current, err := s.Repo.GetRunner(ctx, value.GetRunnerId())
 	if err != nil {
-		return &strategypb.GetStrategyOverviewRsp{RetInfo: invalid(err)}, nil
+		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := ensureBindingScope(ctx, binding); err != nil {
-		return &strategypb.GetStrategyOverviewRsp{RetInfo: invalid(err)}, nil
+	if err := ensureRunnerScope(ctx, current); err != nil {
+		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
 	}
-	d, err := s.Repo.GetDefinition(ctx, binding.StrategyID, binding.StrategyVersion)
-	if err != nil {
-		return &strategypb.GetStrategyOverviewRsp{RetInfo: invalid(err)}, nil
+	if value.GetSpaceId() != current.SpaceID {
+		return &strategypb.UpdateRunnerRsp{
+			RetInfo: invalid(errors.New("runner space_id is immutable")),
+		}, nil
 	}
-	state, err := s.Repo.GetState(ctx, binding.BindingID)
-	if err != nil {
-		return &strategypb.GetStrategyOverviewRsp{RetInfo: invalid(err)}, nil
-	}
-	health, err := s.Repo.GetHealth(ctx, binding.BindingID)
-	if err != nil {
-		return &strategypb.GetStrategyOverviewRsp{RetInfo: invalid(err)}, nil
-	}
-	summary := domain.RunningStrategySummary{StrategyID: d.StrategyID, Version: d.Version, BindingID: binding.BindingID, SpaceID: binding.SpaceID, ViewID: binding.ViewID, Freq: binding.Freq, Mode: health.Mode, Status: binding.Status, SourceHash: d.SourceHash, LastRunID: state.LastRunID, Health: health}
-	return &strategypb.GetStrategyOverviewRsp{RetInfo: success(), Summary: summaryProto(summary), Binding: bindingProto(binding), Definition: definitionProto(d), State: stateProto(state), Health: healthProto(health)}, nil
-}
-
-func (s *Service) ListStrategyRuns(ctx context.Context, req *strategypb.ListStrategyRunsReq) (*strategypb.ListStrategyRunsRsp, error) {
-	if req == nil || req.GetBindingId() == "" {
-		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(errors.New("binding_id is required"))}, nil
-	}
-	from, to, err := parseStrictTimeRange(req.GetRange())
-	if err != nil {
-		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(err)}, nil
-	}
-	if s == nil || s.Repo == nil {
-		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(errors.New("strategy repository is unavailable"))}, nil
-	}
-	if binding, err := s.Repo.GetBinding(ctx, req.GetBindingId()); err != nil {
-		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(err)}, nil
-	} else if err := ensureBindingScope(ctx, binding); err != nil {
-		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(err)}, nil
-	}
-	filter := store.RunFilter{BindingID: req.GetBindingId(), From: from, To: to}
-	runs, total, err := s.Repo.ListRuns(ctx, filter, pageFromProto(req.GetPage()))
-	if err != nil {
-		return &strategypb.ListStrategyRunsRsp{RetInfo: invalid(err)}, nil
-	}
-	page := pageFromProto(req.GetPage())
-	items := make([]*strategypb.StrategyRun, 0, len(runs))
-	for _, run := range runs {
-		items = append(items, runProto(run))
-	}
-	return &strategypb.ListStrategyRunsRsp{RetInfo: success(), Items: items, Total: total, Page: int32(page.Number), PageSize: int32(page.Size)}, nil
-}
-
-func (s *Service) GetStrategyRun(ctx context.Context, req *strategypb.GetStrategyRunReq) (*strategypb.GetStrategyRunRsp, error) {
-	if req == nil || req.GetRunId() == "" {
-		return &strategypb.GetStrategyRunRsp{RetInfo: invalid(errors.New("run_id is required"))}, nil
-	}
-	run, err := s.Repo.GetRun(ctx, req.GetRunId())
-	if err != nil {
-		return &strategypb.GetStrategyRunRsp{RetInfo: invalid(err)}, nil
-	}
-	if binding, err := s.Repo.GetBinding(ctx, run.BindingID); err != nil {
-		return &strategypb.GetStrategyRunRsp{RetInfo: invalid(err)}, nil
-	} else if err := ensureBindingScope(ctx, binding); err != nil {
-		return &strategypb.GetStrategyRunRsp{RetInfo: invalid(err)}, nil
-	}
-	var metrics domain.RunMetrics
-	metricsJSON := "{}"
-	if metrics, err = s.Repo.GetRunMetrics(ctx, run.RunID); err == nil {
-		b, _ := json.Marshal(metrics)
-		metricsJSON = string(b)
-	}
-	return &strategypb.GetStrategyRunRsp{RetInfo: success(), Run: runProto(run), MetricsJson: metricsJSON}, nil
-}
-
-func (s *Service) ListStrategyTargets(ctx context.Context, req *strategypb.ListStrategyTargetsReq) (*strategypb.ListStrategyTargetsRsp, error) {
-	if req == nil || req.GetRunId() == "" {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(errors.New("run_id is required"))}, nil
-	}
-	targetRun, err := s.Repo.GetRun(ctx, req.GetRunId())
-	if err != nil {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
-	}
-	if binding, err := s.Repo.GetBinding(ctx, targetRun.BindingID); err != nil {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
-	} else if err := ensureBindingScope(ctx, binding); err != nil {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
-	}
-	targets, total, err := s.Repo.ListTargets(ctx, req.GetRunId(), pageFromProto(req.GetPage()))
-	if err != nil {
-		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
-	}
-	items := make([]*strategypb.TargetPosition, 0, len(targets))
-	for _, target := range targets {
-		items = append(items, &strategypb.TargetPosition{
-			InstrumentId:   target.InstrumentID,
-			Symbol:         target.Symbol,
-			TargetQuantity: target.TargetQuantity,
-			Reason:         target.Reason,
-			SourceTime:     target.SourceTime,
-			DataRevision:   target.DataRevision,
-		})
-	}
-	page := pageFromProto(req.GetPage())
-	return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: items, Total: total, Page: int32(page.Number), PageSize: int32(page.Size)}, nil
-}
-
-func (s *Service) GetStrategyStateSummary(ctx context.Context, req *strategypb.GetStrategyStateSummaryReq) (*strategypb.GetStrategyStateSummaryRsp, error) {
-	if req == nil || req.GetBindingId() == "" {
-		return &strategypb.GetStrategyStateSummaryRsp{RetInfo: invalid(errors.New("binding_id is required"))}, nil
-	}
-	if binding, err := s.Repo.GetBinding(ctx, req.GetBindingId()); err != nil {
-		return &strategypb.GetStrategyStateSummaryRsp{RetInfo: invalid(err)}, nil
-	} else if err := ensureBindingScope(ctx, binding); err != nil {
-		return &strategypb.GetStrategyStateSummaryRsp{RetInfo: invalid(err)}, nil
-	}
-	state, err := s.Repo.GetState(ctx, req.GetBindingId())
-	if err != nil {
-		return &strategypb.GetStrategyStateSummaryRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.GetStrategyStateSummaryRsp{RetInfo: success(), State: stateProto(state), SizeBytes: int64(len(state.StateJSON))}, nil
-}
-
-func (s *Service) GetStrategyHealth(ctx context.Context, req *strategypb.GetStrategyHealthReq) (*strategypb.GetStrategyHealthRsp, error) {
-	if req == nil || req.GetBindingId() == "" {
-		return &strategypb.GetStrategyHealthRsp{RetInfo: invalid(errors.New("binding_id is required"))}, nil
-	}
-	if binding, err := s.Repo.GetBinding(ctx, req.GetBindingId()); err != nil {
-		return &strategypb.GetStrategyHealthRsp{RetInfo: invalid(err)}, nil
-	} else if err := ensureBindingScope(ctx, binding); err != nil {
-		return &strategypb.GetStrategyHealthRsp{RetInfo: invalid(err)}, nil
-	}
-	health, err := s.Repo.GetHealth(ctx, req.GetBindingId())
-	if err != nil {
-		return &strategypb.GetStrategyHealthRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.GetStrategyHealthRsp{RetInfo: success(), Health: healthProto(health)}, nil
-}
-
-func (s *Service) GetStrategyPerformance(ctx context.Context, req *strategypb.GetStrategyPerformanceReq) (*strategypb.GetStrategyPerformanceRsp, error) {
-	if req == nil || req.GetBindingId() == "" {
-		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("binding_id is required"))}, nil
-	}
-	if !domain.ValidPerformanceSource(req.GetPerformanceSource()) {
-		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("performance_source must be one of backtest, observe, paper, or live"))}, nil
-	}
-	if interval := req.GetInterval(); interval != "" && interval != "auto" && interval != "daily" {
-		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("interval must be auto or daily"))}, nil
-	}
-	from, to, err := parseStrictTimeRange(req.GetRange())
-	if err != nil {
-		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(err)}, nil
-	}
-	if s == nil || s.Repo == nil {
-		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(errors.New("strategy repository is unavailable"))}, nil
-	}
-	if binding, err := s.Repo.GetBinding(ctx, req.GetBindingId()); err != nil {
-		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(err)}, nil
-	} else if err := ensureBindingScope(ctx, binding); err != nil {
-		return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(err)}, nil
-	}
-	filter := store.PerformanceFilter{BindingID: req.GetBindingId(), Source: req.GetPerformanceSource(), From: from, To: to}
-	out := make([]*strategypb.PerformancePoint, 0)
-	if req.GetInterval() == "daily" {
-		daily, dailyErr := s.Repo.ListPerformanceDaily(ctx, filter)
-		if dailyErr != nil {
-			return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(dailyErr)}, nil
+	if value.GetLogicalAccountId() != "" {
+		if s.LogicalAccounts == nil {
+			return &strategypb.UpdateRunnerRsp{
+				RetInfo: invalid(errors.New("logical account owner client is unavailable")),
+			}, nil
 		}
-		for _, row := range daily {
-			out = append(out, &strategypb.PerformancePoint{PointTime: row.TradeDate, Nav: row.EndNAV, CumulativeReturn: row.Return, Drawdown: row.MaxDrawdown, Turnover: row.Turnover, Fees: row.Fees, DataRevision: row.DataRevision})
+		if err := s.LogicalAccounts.Validate(
+			ctx,
+			current.SpaceID,
+			value.GetLogicalAccountId(),
+		); err != nil {
+			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
+		}
+	}
+	now := s.now()
+	updated := domain.StrategyRunner{
+		ID: current.ID, StrategyID: value.GetStrategyId(), SpaceID: current.SpaceID,
+		ViewID: value.GetViewId(), Frequency: value.GetFrequency(),
+		ParamsJSON:       json.RawMessage(value.GetParamsJson()),
+		LogicalAccountID: optionalString(value.GetLogicalAccountId()),
+		UpdatedAt:        now,
+	}
+	if updated.StrategyID != current.StrategyID {
+		if _, err := s.Repo.GetStrategy(ctx, updated.StrategyID); err != nil {
+			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
+		}
+		if err := s.Repo.SwitchRunnerStrategy(
+			ctx,
+			current.ID,
+			updated.StrategyID,
+			now,
+		); err != nil {
+			return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
+		}
+	}
+	if err := s.Repo.UpdateRunner(ctx, updated); err != nil {
+		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
+	}
+	result, err := s.Repo.GetRunner(ctx, current.ID)
+	if err != nil {
+		return &strategypb.UpdateRunnerRsp{RetInfo: invalid(err)}, nil
+	}
+	return &strategypb.UpdateRunnerRsp{RetInfo: success(), Runner: runnerProto(result)}, nil
+}
+
+func (s *Service) SetRunnerStatus(
+	ctx context.Context,
+	req *strategypb.SetRunnerStatusReq,
+) (*strategypb.SetRunnerStatusRsp, error) {
+	if req == nil || req.GetRunnerId() == "" || s.Repo == nil {
+		return &strategypb.SetRunnerStatusRsp{
+			RetInfo: invalid(errors.New("runner_id and status are required")),
+		}, nil
+	}
+	status := domain.RunnerStatus(req.GetStatus())
+	if status != domain.RunnerStatusEnabled && status != domain.RunnerStatusDisabled {
+		return &strategypb.SetRunnerStatusRsp{
+			RetInfo: invalid(errors.New("runner status must be ENABLED or DISABLED")),
+		}, nil
+	}
+	runner, err := s.Repo.GetRunner(ctx, req.GetRunnerId())
+	if err != nil {
+		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := ensureRunnerScope(ctx, runner); err != nil {
+		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
+	}
+	if runner.Status == status {
+		var reconcileErr error
+		if status == domain.RunnerStatusEnabled {
+			reconcileErr = s.claimRunner(ctx, runner)
+		} else {
+			reconcileErr = s.releaseRunner(ctx, runner)
+		}
+		if reconcileErr != nil {
+			return &strategypb.SetRunnerStatusRsp{
+				RetInfo: invalid(reconcileErr),
+			}, nil
+		}
+		return &strategypb.SetRunnerStatusRsp{
+			RetInfo: success(), Runner: runnerProto(runner),
+		}, nil
+	}
+	if status == domain.RunnerStatusEnabled {
+		if err := s.claimRunner(ctx, runner); err != nil {
+			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
+		}
+		if err := s.Repo.SetRunnerStatus(ctx, runner.ID, status, s.now()); err != nil {
+			s.releaseRunner(ctx, runner)
+			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
 		}
 	} else {
-		points, err := s.Repo.ListPerformancePoints(ctx, filter)
+		if err := s.Repo.SetRunnerStatus(ctx, runner.ID, status, s.now()); err != nil {
+			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
+		}
+		if err := s.releaseRunner(ctx, runner); err != nil {
+			return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
+		}
+	}
+	updated, err := s.Repo.GetRunner(ctx, runner.ID)
+	if err != nil {
+		return &strategypb.SetRunnerStatusRsp{RetInfo: invalid(err)}, nil
+	}
+	return &strategypb.SetRunnerStatusRsp{RetInfo: success(), Runner: runnerProto(updated)}, nil
+}
+
+func (s *Service) ListStrategyResults(
+	ctx context.Context,
+	req *strategypb.ListStrategyResultsReq,
+) (*strategypb.ListStrategyResultsRsp, error) {
+	if s.Repo == nil {
+		return &strategypb.ListStrategyResultsRsp{
+			RetInfo: invalid(errors.New("strategy repository is unavailable")),
+		}, nil
+	}
+	filter := store.ResultFilter{}
+	if req != nil {
+		filter.RunnerID = req.GetRunnerId()
+	}
+	if filter.RunnerID != "" {
+		runner, err := s.Repo.GetRunner(ctx, filter.RunnerID)
 		if err != nil {
-			return &strategypb.GetStrategyPerformanceRsp{RetInfo: invalid(err)}, nil
+			return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
 		}
-		for _, point := range points {
-			out = append(out, &strategypb.PerformancePoint{PointTime: point.PointTime.Format(time.RFC3339Nano), Nav: point.NAV, CumulativeReturn: point.CumulativeReturn, Drawdown: point.Drawdown, GrossExposure: point.GrossExposure, NetExposure: point.NetExposure, Turnover: point.Turnover, Fees: point.Fees, DataRevision: point.DataRevision})
+		if err := ensureRunnerScope(ctx, runner); err != nil {
+			return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
 		}
+	} else if requestSpaceID(ctx) != "" {
+		return &strategypb.ListStrategyResultsRsp{
+			RetInfo: invalid(errors.New("runner_id is required for a scoped result query")),
+		}, nil
 	}
-	if len(out) > 1000 {
-		stride := (len(out) + 999) / 1000
-		sampled := make([]*strategypb.PerformancePoint, 0, 1001)
-		for i := 0; i < len(out); i += stride {
-			sampled = append(sampled, out[i])
-		}
-		if sampled[len(sampled)-1] != out[len(out)-1] {
-			sampled = append(sampled, out[len(out)-1])
-		}
-		out = sampled
+	values, err := s.Repo.ListResults(ctx, filter)
+	if err != nil {
+		return &strategypb.ListStrategyResultsRsp{RetInfo: invalid(err)}, nil
 	}
-	status := "ok"
-	if len(out) == 0 {
-		status = "insufficient_data"
+	page, size, start, end := pageBounds(req.GetPage(), len(values))
+	items := make([]*strategypb.StrategyResult, 0, end-start)
+	for _, value := range values[start:end] {
+		items = append(items, resultProto(value))
 	}
-	summary := &strategypb.PerformanceSummary{Status: status}
-	if len(out) > 0 {
-		last := out[len(out)-1]
-		summary.Nav = last.Nav
-		summary.ReturnValue = last.CumulativeReturn
-		summary.MaxDrawdown = last.Drawdown
-		summary.Turnover = last.Turnover
-		summary.Fees = last.Fees
-		summary.AsOf = last.PointTime
-	}
-	return &strategypb.GetStrategyPerformanceRsp{RetInfo: success(), PerformanceSource: filter.Source, Summary: summary, Points: out, AsOf: summary.AsOf}, nil
+	return &strategypb.ListStrategyResultsRsp{
+		RetInfo: success(), Results: items, Total: int64(len(values)),
+		Page: int32(page), PageSize: int32(size),
+	}, nil
 }
 
-func (s *Service) PauseBinding(ctx context.Context, req *strategypb.BindingOperationReq) (*strategypb.BindingOperationRsp, error) {
-	return s.changeBindingStatus(ctx, req, "disabled", "pause")
+func (s *Service) GetStrategyResult(
+	ctx context.Context,
+	req *strategypb.GetStrategyResultReq,
+) (*strategypb.GetStrategyResultRsp, error) {
+	if req == nil || req.GetResultId() == "" || s.Repo == nil {
+		return &strategypb.GetStrategyResultRsp{
+			RetInfo: invalid(errors.New("result_id is required")),
+		}, nil
+	}
+	value, err := s.Repo.GetResult(ctx, req.GetResultId())
+	if err != nil {
+		return &strategypb.GetStrategyResultRsp{RetInfo: invalid(err)}, nil
+	}
+	runner, err := s.Repo.GetRunner(ctx, value.RunnerID)
+	if err != nil {
+		return &strategypb.GetStrategyResultRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := ensureRunnerScope(ctx, runner); err != nil {
+		return &strategypb.GetStrategyResultRsp{RetInfo: invalid(err)}, nil
+	}
+	return &strategypb.GetStrategyResultRsp{
+		RetInfo: success(), Result: resultProto(value),
+	}, nil
 }
 
-func (s *Service) ResumeBinding(ctx context.Context, req *strategypb.BindingOperationReq) (*strategypb.BindingOperationRsp, error) {
-	return s.changeBindingStatus(ctx, req, "enabled", "resume")
+func (s *Service) ListStrategyTargets(
+	ctx context.Context,
+	req *strategypb.ListStrategyTargetsReq,
+) (*strategypb.ListStrategyTargetsRsp, error) {
+	if req == nil || req.GetRunnerId() == "" || s.Repo == nil {
+		return &strategypb.ListStrategyTargetsRsp{
+			RetInfo: invalid(errors.New("runner_id is required")),
+		}, nil
+	}
+	runner, err := s.Repo.GetRunner(ctx, req.GetRunnerId())
+	if err != nil {
+		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := ensureRunnerScope(ctx, runner); err != nil {
+		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
+	}
+	targets, err := decodeTargets(runner.CurrentTargetsJSON)
+	if err != nil {
+		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
+	}
+	return &strategypb.ListStrategyTargetsRsp{
+		RetInfo: success(), Targets: targets, CommandSequence: runner.CommandSequence,
+	}, nil
 }
 
-func (s *Service) SetExecutionMode(ctx context.Context, req *strategypb.SetExecutionModeReq) (*strategypb.BindingOperationRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetBindingId()) == "" ||
-		strings.TrimSpace(req.GetExecutionBindingId()) == "" ||
-		strings.TrimSpace(req.GetMode()) == "" ||
-		strings.TrimSpace(req.GetExchangeAccountId()) == "" ||
-		strings.TrimSpace(req.GetOperationId()) == "" ||
-		strings.TrimSpace(req.GetReason()) == "" {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("binding_id, execution_binding_id, mode, exchange_account_id, operation_id and reason are required"))}, nil
+func (s *Service) claimRunner(ctx context.Context, runner domain.StrategyRunner) error {
+	if runner.LogicalAccountID == nil {
+		return nil
 	}
-	if req.GetMode() != "observe" && req.GetMode() != "paper" && req.GetMode() != "live" {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("unsupported execution mode"))}, nil
+	if s.LogicalAccounts == nil {
+		return errors.New("logical account owner client is unavailable")
 	}
-	if !operatorAllowed(ctx) {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("strategy operation requires operator permission"))}, nil
-	}
-	if audit, ok := s.findAudit(ctx, req.GetOperationId()); ok {
-		var value domain.ExecutionModeAuditValue
-		if audit.Action != "set_mode" || audit.BindingID != req.GetBindingId() ||
-			json.Unmarshal([]byte(audit.NewValue), &value) != nil ||
-			value.ExecutionBindingID != req.GetExecutionBindingId() ||
-			value.Mode != req.GetMode() || value.ExchangeAccountID != req.GetExchangeAccountId() {
-			return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("operation_id conflicts with an earlier request"))}, nil
-		}
-		return &strategypb.BindingOperationRsp{RetInfo: success(), OperationId: audit.OperationID, Status: value.Mode}, nil
-	}
-	binding, err := s.Repo.GetBinding(ctx, req.GetBindingId())
-	if err != nil {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
-	}
-	if err := ensureBindingScope(ctx, binding); err != nil {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
-	}
-	executionBinding, err := s.Repo.GetExecutionBinding(ctx, req.GetExecutionBindingId())
-	if err != nil {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
-	}
-	if executionBinding.GroupID != binding.GroupID {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("execution binding does not belong to strategy binding group"))}, nil
-	}
-	if s == nil || s.ExchangeAccounts == nil {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("Exchange account lookup is unavailable"))}, nil
-	}
-	accountMode, err := s.ExchangeAccounts.ExecutionMode(
-		ctx,
-		binding.SpaceID,
-		req.GetExchangeAccountId(),
-	)
-	if err != nil {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(fmt.Errorf("get Exchange account mode: %w", err))}, nil
-	}
-	accountMode = strings.ToLower(strings.TrimSpace(accountMode))
-	if accountMode != "paper" && accountMode != "live" {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("Exchange account mode is invalid"))}, nil
-	}
-	if req.GetMode() != "observe" && req.GetMode() != accountMode {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("execution mode does not match Exchange account"))}, nil
-	}
-	if req.GetMode() == "live" && (s == nil || !s.LiveExecutionEnabled) {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("live execution is disabled by server capability"))}, nil
-	}
-	err = s.Repo.SetExecutionMode(ctx, binding, req.GetExecutionBindingId(), req.GetMode(), req.GetExchangeAccountId(), domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: "set_mode", BindingID: binding.BindingID, Reason: req.GetReason(), RequestID: req.GetOperationId()})
-	if err != nil {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.BindingOperationRsp{RetInfo: success(), OperationId: req.GetOperationId(), Status: req.GetMode()}, nil
+	return s.LogicalAccounts.Claim(ctx, runner.SpaceID, *runner.LogicalAccountID, runner.ID)
 }
 
-func (s *Service) changeBindingStatus(ctx context.Context, req *strategypb.BindingOperationReq, status, action string) (*strategypb.BindingOperationRsp, error) {
-	if req == nil || req.GetBindingId() == "" || req.GetOperationId() == "" || req.GetReason() == "" {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("binding_id, reason and operation_id are required"))}, nil
+func (s *Service) releaseRunner(ctx context.Context, runner domain.StrategyRunner) error {
+	if runner.LogicalAccountID == nil {
+		return nil
 	}
-	if !operatorAllowed(ctx) {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("strategy operation requires operator permission"))}, nil
+	if s.LogicalAccounts == nil {
+		return errors.New("logical account owner client is unavailable")
 	}
-	if audit, ok := s.findAudit(ctx, req.GetOperationId()); ok {
-		return &strategypb.BindingOperationRsp{RetInfo: success(), OperationId: audit.OperationID, Status: audit.NewValue}, nil
-	}
-	binding, err := s.Repo.GetBinding(ctx, req.GetBindingId())
-	if err != nil {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
-	}
-	err = s.Repo.SetBindingStatus(ctx, binding, status, domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: action, BindingID: binding.BindingID, Reason: req.GetReason(), RequestID: req.GetOperationId()})
-	if err != nil {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.BindingOperationRsp{RetInfo: success(), OperationId: req.GetOperationId(), Status: status}, nil
-}
-
-func (s *Service) findAudit(ctx context.Context, operationID string) (domain.OperationAudit, bool) {
-	var audit domain.OperationAudit
-	if operationID == "" || s == nil || s.Repo == nil {
-		return audit, false
-	}
-	audit, err := s.Repo.FindAudit(ctx, operationID)
-	if err != nil {
-		return domain.OperationAudit{}, false
-	}
-	return audit, true
-}
-
-func operatorAllowed(ctx context.Context) bool {
-	role := string(trpc.GetMetaData(ctx, "X-User-Role"))
-	if role == "" {
-		return requestSpaceID(ctx) == "" // internal calls and tests have no gateway metadata.
-	}
-	value, err := strconv.Atoi(role)
-	return err == nil && value >= 2
+	return s.LogicalAccounts.Release(ctx, runner.SpaceID, *runner.LogicalAccountID, runner.ID)
 }
 
 func requestSpaceID(ctx context.Context) string {
@@ -393,64 +350,94 @@ func requestSpaceID(ctx context.Context) string {
 	return ""
 }
 
-func ensureBindingScope(ctx context.Context, binding domain.Binding) error {
-	if scopedSpace := requestSpaceID(ctx); scopedSpace != "" && scopedSpace != binding.SpaceID {
-		return fmt.Errorf("binding %q is outside the current space", binding.BindingID)
+func ensureRunnerScope(ctx context.Context, runner domain.StrategyRunner) error {
+	if scoped := requestSpaceID(ctx); scoped != "" && scoped != runner.SpaceID {
+		return fmt.Errorf("runner %q is outside the current space", runner.ID)
 	}
 	return nil
 }
 
-func parseTime(value string) (time.Time, error) {
-	if value == "" {
-		return time.Time{}, nil
+func strategyProto(value domain.Strategy) *strategypb.Strategy {
+	return &strategypb.Strategy{
+		StrategyId: value.ID, Name: value.Name, ManifestYaml: value.ManifestYAML,
+		SourceCode: value.SourceCode, SourceHash: value.SourceHash,
+		CreatedAt: formatTime(value.CreatedAt),
 	}
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return parsed.UTC(), nil
 }
 
-func parseStrictTimeRange(value *strategypb.TimeRange) (time.Time, time.Time, error) {
+func runnerProto(value domain.StrategyRunner) *strategypb.StrategyRunner {
+	targets, _ := decodeTargets(value.CurrentTargetsJSON)
+	return &strategypb.StrategyRunner{
+		RunnerId: value.ID, StrategyId: value.StrategyID, SpaceId: value.SpaceID,
+		ViewId: value.ViewID, Frequency: value.Frequency, ParamsJson: string(value.ParamsJSON),
+		LogicalAccountId: dereference(value.LogicalAccountID), Status: string(value.Status),
+		CurrentTargets: targets, CommandSequence: value.CommandSequence,
+		LastResultId:  dereference(value.LastResultID),
+		LastSuccessAt: formatOptionalTime(value.LastSuccessAt),
+		LastError:     dereference(value.LastError), CreatedAt: formatTime(value.CreatedAt),
+		UpdatedAt: formatTime(value.UpdatedAt),
+	}
+}
+
+func resultProto(value domain.StrategyResult) *strategypb.StrategyResult {
+	return &strategypb.StrategyResult{
+		ResultId: value.ID, RunnerId: value.RunnerID, StrategyId: value.StrategyID,
+		TriggerBarTime: formatTime(value.TriggerBarTime), Namespace: value.Namespace,
+		InputHash: value.InputHash, Action: string(value.Action),
+		OutputJson: string(value.OutputJSON), CommandSequence: value.CommandSequence,
+		CreatedAt: formatTime(value.CreatedAt),
+	}
+}
+
+func decodeTargets(raw json.RawMessage) ([]*strategypb.InstrumentTarget, error) {
+	var targets []domain.InstrumentTarget
+	if len(raw) == 0 {
+		targets = []domain.InstrumentTarget{}
+	} else if err := json.Unmarshal(raw, &targets); err != nil {
+		return nil, err
+	}
+	result := make([]*strategypb.InstrumentTarget, 0, len(targets))
+	for _, target := range targets {
+		result = append(result, &strategypb.InstrumentTarget{
+			InstrumentId: target.InstrumentID, Quantity: target.Quantity,
+		})
+	}
+	return result, nil
+}
+
+func pageBounds(value *strategypb.PageRequest, total int) (int, int, int, int) {
+	page, size := 1, 20
+	if value != nil {
+		if value.GetPage() > 0 {
+			page = int(value.GetPage())
+		}
+		if value.GetPageSize() > 0 {
+			size = int(value.GetPageSize())
+		}
+	}
+	if size > 200 {
+		size = 200
+	}
+	start := (page - 1) * size
+	if start > total {
+		start = total
+	}
+	end := min(start+size, total)
+	return page, size, start, end
+}
+
+func dereference(value *string) string {
 	if value == nil {
-		return time.Time{}, time.Time{}, nil
+		return ""
 	}
-	from, err := parseTime(value.GetFrom())
-	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("range.from must be RFC3339Nano: %w", err)
+	return *value
+}
+
+func formatOptionalTime(value *time.Time) string {
+	if value == nil {
+		return ""
 	}
-	to, err := parseTime(value.GetTo())
-	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("range.to must be RFC3339Nano: %w", err)
-	}
-	if !from.IsZero() && !to.IsZero() && !from.Before(to) {
-		return time.Time{}, time.Time{}, errors.New("range.from must be before range.to")
-	}
-	return from, to, nil
-}
-
-func summaryProto(v domain.RunningStrategySummary) *strategypb.RunningStrategySummary {
-	return &strategypb.RunningStrategySummary{StrategyId: v.StrategyID, Version: v.Version, BindingId: v.BindingID, SpaceId: v.SpaceID, ViewId: v.ViewID, Freq: v.Freq, Mode: v.Mode, Status: v.Status, SourceHash: v.SourceHash, LastRunId: v.LastRunID, LastDataRevision: v.LastDataRevision, Health: healthProto(v.Health)}
-}
-
-func healthProto(v domain.BindingHealth) *strategypb.StrategyHealth {
-	return &strategypb.StrategyHealth{Status: v.Status, Mode: v.Mode, LastRunId: v.LastRunID, LastSuccessAt: formatTime(v.LastSuccessAt), LastErrorType: v.LastErrorType, LastErrorMessage: v.LastErrorMessage, LastDataRevision: v.LastDataRevision, DataCutoff: formatTime(v.DataCutoff), WorkerStatus: v.WorkerStatus, OutboxLagSeconds: v.OutboxLagSeconds, ObservedAt: formatTime(v.ObservedAt)}
-}
-
-func bindingProto(v domain.Binding) *strategypb.StrategyBinding {
-	return &strategypb.StrategyBinding{BindingId: v.BindingID, StrategyId: v.StrategyID, StrategyVersion: v.StrategyVersion, SpaceId: v.SpaceID, ViewId: v.ViewID, Freq: v.Freq, ParamsJson: v.ParamsJSON, GroupId: v.GroupID, CapitalWeight: v.CapitalWeight, Status: v.Status}
-}
-
-func definitionProto(v domain.StrategyDefinition) *strategypb.StrategyDef {
-	return &strategypb.StrategyDef{StrategyId: v.StrategyID, Version: v.Version, ApiVersion: v.API, ManifestYaml: v.ManifestYAML, SourceHash: v.SourceHash, StateSchemaVersion: int32(v.StateSchemaVersion), Status: v.Status}
-}
-
-func stateProto(v domain.State) *strategypb.StrategyState {
-	return &strategypb.StrategyState{BindingId: v.BindingID, Revision: v.Revision, StateJson: v.StateJSON, LastRunId: v.LastRunID}
-}
-
-func runProto(v domain.StrategyRun) *strategypb.StrategyRun {
-	return &strategypb.StrategyRun{RunId: v.RunID, BindingId: v.BindingID, TriggerBarTime: v.TriggerBarTime, DataRevision: v.DataRevision, Action: v.Action, Status: v.Status, OutputJson: v.OutputJSON}
+	return formatTime(*value)
 }
 
 func formatTime(value time.Time) string {

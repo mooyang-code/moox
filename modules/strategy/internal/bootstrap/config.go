@@ -19,14 +19,13 @@ type EventBusConfig struct {
 }
 
 type Config struct {
-	PythonBin             string         `yaml:"python_bin"`
-	WorkerPath            string         `yaml:"worker_path"`
-	Database              string         `yaml:"database"`
-	ExchangeAccountTarget string         `yaml:"exchange_account_target"`
-	LiveEnabled           bool           `yaml:"live_enabled"`
-	Workers               int            `yaml:"workers"`
-	InstanceID            string         `yaml:"instance_id"`
-	EventBus              EventBusConfig `yaml:"eventbus"`
+	PythonBin            string         `yaml:"python_bin"`
+	WorkerPath           string         `yaml:"worker_path"`
+	Database             string         `yaml:"database"`
+	LogicalAccountTarget string         `yaml:"logical_account_target"`
+	Workers              int            `yaml:"workers"`
+	InstanceID           string         `yaml:"instance_id"`
+	EventBus             EventBusConfig `yaml:"eventbus"`
 }
 
 func Load(path string) (Config, error) {
@@ -47,8 +46,8 @@ func Load(path string) (Config, error) {
 	if strings.TrimSpace(c.InstanceID) == "" {
 		c.InstanceID = "strategy-1"
 	}
-	if strings.TrimSpace(c.ExchangeAccountTarget) == "" {
-		c.ExchangeAccountTarget = "ip://127.0.0.1:11200"
+	if strings.TrimSpace(c.LogicalAccountTarget) == "" {
+		c.LogicalAccountTarget = "ip://127.0.0.1:11200"
 	}
 	if len(c.EventBus.URLs) == 0 {
 		c.EventBus.URLs = []string{"nats://127.0.0.1:4222"}

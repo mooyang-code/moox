@@ -2,61 +2,273 @@ package rpc
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"strings"
+	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/glebarez/sqlite"
+	strategyaction "github.com/mooyang-code/moox/modules/strategy/internal/action"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
-	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/registry"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
+	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
-	"gorm.io/gorm"
+	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-func TestRunOnceEvaluatesAndOptionallyCommits(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+const rpcManifest = "api_version: moox.strategy/v1\nentrypoint: strategy.py:run\ninput:\n  history_bars: 1\n"
+
+type fakeRuntime struct {
+	output domain.Output
+	hash   string
+	err    error
+	loads  int
+	last   domain.ExecutionRequest
+}
+
+func (f *fakeRuntime) Load(context.Context, domain.Strategy) error {
+	f.loads++
+	return f.err
+}
+
+func (f *fakeRuntime) Run(
+	_ context.Context,
+	request domain.ExecutionRequest,
+	_ domain.Strategy,
+) (domain.Output, string, error) {
+	f.last = request
+	return f.output, f.hash, f.err
+}
+
+type fakeLogicalAccountOwner struct {
+	validateErr, claimErr, releaseErr error
+	validated, claimed, released      []string
+}
+
+func (f *fakeLogicalAccountOwner) Validate(
+	_ context.Context,
+	spaceID, logicalAccountID string,
+) error {
+	f.validated = append(f.validated, spaceID+"/"+logicalAccountID)
+	return f.validateErr
+}
+
+func (f *fakeLogicalAccountOwner) Claim(
+	_ context.Context,
+	spaceID, logicalAccountID, runnerID string,
+) error {
+	f.claimed = append(f.claimed, spaceID+"/"+logicalAccountID+"/"+runnerID)
+	return f.claimErr
+}
+
+func (f *fakeLogicalAccountOwner) Release(
+	_ context.Context,
+	spaceID, logicalAccountID, runnerID string,
+) error {
+	f.released = append(f.released, spaceID+"/"+logicalAccountID+"/"+runnerID)
+	return f.releaseErr
+}
+
+func TestCreateStrategyStoresImmutableArtifact(t *testing.T) {
+	service, repo, runtime := newRPCServiceForTest(t)
+	request := &strategypb.CreateStrategyReq{Strategy: &strategypb.Strategy{
+		StrategyId: "strategy-1", Name: "trend", ManifestYaml: rpcManifest,
+		SourceCode: "def run(context, data, params): return {'action':'hold','targets':[]}",
+	}}
+	first, err := service.CreateStrategy(context.Background(), request)
+	if err != nil || first.GetRetInfo().GetCode() != 0 {
+		t.Fatalf("CreateStrategy() = %+v, %v", first, err)
+	}
+	request.Strategy.SourceCode += "\n# changed"
+	second, err := service.CreateStrategy(context.Background(), request)
+	if err != nil || second.GetRetInfo().GetCode() == 0 {
+		t.Fatalf("immutable replacement accepted: %+v, %v", second, err)
+	}
+	stored, err := repo.GetStrategy(context.Background(), "strategy-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(schema.AllSQL()).Error; err != nil {
+	if stored.SourceHash != first.GetStrategy().GetSourceHash() || runtime.loads != 2 {
+		t.Fatalf("stored=%+v loads=%d", stored, runtime.loads)
+	}
+}
+
+func TestCreateRunnerValidatesLogicalAccountOwnership(t *testing.T) {
+	service, _, _ := newRPCServiceForTest(t)
+	createRPCStrategy(t, service, "strategy-1")
+	owner := &fakeLogicalAccountOwner{validateErr: errors.New("logical account missing")}
+	service.LogicalAccounts = owner
+	request := &strategypb.CreateRunnerReq{Runner: &strategypb.StrategyRunner{
+		RunnerId: "runner-1", StrategyId: "strategy-1", SpaceId: "crypto",
+		ViewId: "view-1", Frequency: "1m", ParamsJson: "{}",
+		LogicalAccountId: "logical-1", Status: "ENABLED",
+	}}
+	rejected, err := service.CreateRunner(context.Background(), request)
+	if err != nil || rejected.GetRetInfo().GetCode() == 0 {
+		t.Fatalf("invalid logical account accepted: %+v, %v", rejected, err)
+	}
+	owner.validateErr = nil
+	created, err := service.CreateRunner(context.Background(), request)
+	if err != nil || created.GetRetInfo().GetCode() != 0 {
+		t.Fatalf("CreateRunner() = %+v, %v", created, err)
+	}
+	if created.GetRunner().GetStatus() != "DISABLED" ||
+		created.GetRunner().GetCommandSequence() != 0 ||
+		len(created.GetRunner().GetCurrentTargets()) != 0 {
+		t.Fatalf("new runner = %+v", created.GetRunner())
+	}
+	if len(owner.validated) != 2 {
+		t.Fatalf("validation calls = %v", owner.validated)
+	}
+}
+
+func TestRunOncePreviewDoesNotCreateResult(t *testing.T) {
+	service, repo, runtime := newRPCServiceForTest(t)
+	createRPCStrategy(t, service, "strategy-1")
+	createRPCRunner(t, service, "runner-1", "strategy-1", "space-a", "")
+	runtime.output = domain.Output{Action: domain.ActionRebalance, Targets: []domain.InstrumentTarget{}}
+	runtime.hash = "input-hash"
+	response, err := service.RunOnce(context.Background(), &strategypb.RunOnceReq{
+		RunnerId: "runner-1", TriggerBarTime: "2026-07-29T10:00:00Z",
+		Namespace: "preview", DataJson: `[{"time":"2026-07-29T10:00:00Z"}]`,
+	})
+	if err != nil || response.GetRetInfo().GetCode() != 0 || response.GetAccepted() {
+		t.Fatalf("RunOnce() = %+v, %v", response, err)
+	}
+	if countRPCResults(t, repo) != 0 || runtime.last.RunnerID != "runner-1" {
+		t.Fatalf("results=%d request=%+v", countRPCResults(t, repo), runtime.last)
+	}
+}
+
+func TestRunOnceFailedAttemptReturnsNoResult(t *testing.T) {
+	service, repo, runtime := newRPCServiceForTest(t)
+	createRPCStrategy(t, service, "strategy-1")
+	createRPCRunner(t, service, "runner-1", "strategy-1", "space-a", "")
+	if err := repo.SetRunnerStatus(
+		context.Background(), "runner-1", domain.RunnerStatusEnabled, time.Now(),
+	); err != nil {
 		t.Fatal(err)
 	}
-	source := `def run(context, data, params, state): return {"action":"rebalance","targets":[{"instrument_id":"BTC","symbol":"BTCUSDT","target_quantity":"0.25"}],"next_state":{"revision":context["data_revision"],"close":data.iloc[0]["close"]}}`
-	h := sha256.Sum256([]byte(source))
-	d := domain.StrategyDefinition{StrategyID: "demo", Version: "1.0.0", API: "moox.strategy/v1", SourceCode: source, SourceHash: hex.EncodeToString(h[:]), Status: "enabled"}
-	r := store.New(db)
-	if err := r.SaveDefinition(context.Background(), d); err != nil {
-		t.Fatal(err)
+	runtime.err = errors.New("python failed")
+	response, err := service.RunOnce(context.Background(), &strategypb.RunOnceReq{
+		RunnerId: "runner-1", TriggerBarTime: "2026-07-29T10:00:00Z",
+		DataJson: `[{"time":"2026-07-29T10:00:00Z"}]`,
+	})
+	if err != nil || response.GetRetInfo().GetCode() == 0 || response.GetResult() != nil {
+		t.Fatalf("RunOnce() = %+v, %v", response, err)
 	}
-	if err := db.Create(&domain.Binding{BindingID: "b1", StrategyID: d.StrategyID, StrategyVersion: d.Version, ParamsJSON: "{}", Status: "enabled"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&domain.State{BindingID: "b1", StrategyVersion: d.Version, StateJSON: "{}"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	eng, err := engine.New(context.Background(), "python3", "../../pyworker/worker.py")
+	runner, err := repo.GetRunner(context.Background(), "runner-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.Close()
-	svc := &Service{Repo: r, Registry: &registry.Service{Repo: r}, Engine: eng}
-	observed, err := svc.RunOnce(context.Background(), &strategypb.RunOnceReq{BindingId: "b1", TriggerBarTime: "2026-07-11T10:00:00Z", DataJson: `[{"close":42}]`, DataRevision: "rev-1"})
-	if err != nil || observed.GetRetInfo().GetCode() != 0 || observed.GetRun().GetStatus() != "observed" {
-		t.Fatalf("observed=%+v err=%v", observed, err)
+	if countRPCResults(t, repo) != 0 || runner.LastError == nil ||
+		*runner.LastError != "python failed" {
+		t.Fatalf("runner=%+v result_count=%d", runner, countRPCResults(t, repo))
 	}
-	if !strings.Contains(observed.GetRun().GetOutputJson(), `"rev-1"`) {
-		t.Fatalf("snapshot revision missing from output: %s", observed.GetRun().GetOutputJson())
+}
+
+func TestRunOnceAcceptsCompleteHistoryWithoutStateOrDataRevision(t *testing.T) {
+	service, repo, runtime := newRPCServiceForTest(t)
+	createRPCStrategy(t, service, "strategy-1")
+	createRPCRunner(t, service, "runner-1", "strategy-1", "space-a", "")
+	if err := repo.SetRunnerStatus(
+		context.Background(), "runner-1", domain.RunnerStatusEnabled, time.Now(),
+	); err != nil {
+		t.Fatal(err)
 	}
-	committed, err := svc.RunOnce(context.Background(), &strategypb.RunOnceReq{BindingId: "b1", TriggerBarTime: "2026-07-11T10:01:00Z", Commit: true, DataJson: `[{"close":43}]`, DataRevision: "rev-2"})
-	if err != nil || committed.GetRetInfo().GetCode() != 0 || committed.GetRun().GetStatus() != "accepted" {
-		t.Fatalf("committed=%+v err=%v", committed, err)
+	runtime.output = domain.Output{Action: domain.ActionHold}
+	runtime.hash = "input-hash"
+	response, err := service.RunOnce(context.Background(), &strategypb.RunOnceReq{
+		RunnerId: "runner-1", TriggerBarTime: "2026-07-29T10:00:00Z",
+		Namespace: "default", DataJson: `[{"time":"2026-07-29T10:00:00Z","close":"1"}]`,
+	})
+	if err != nil || response.GetRetInfo().GetCode() != 0 || !response.GetAccepted() ||
+		response.GetResult() == nil {
+		t.Fatalf("RunOnce() = %+v, %v", response, err)
 	}
-	var state domain.State
-	if err := db.First(&state, "c_binding_id=?", "b1").Error; err != nil || state.Revision != 1 {
-		t.Fatalf("state=%+v err=%v", state, err)
+	if runtime.last.Params == nil || runtime.last.Data == nil ||
+		countRPCResults(t, repo) != 1 {
+		t.Fatalf("runtime request=%+v result_count=%d", runtime.last, countRPCResults(t, repo))
 	}
+}
+
+func TestRunnerQueriesEnforceSpaceScope(t *testing.T) {
+	service, _, _ := newRPCServiceForTest(t)
+	createRPCStrategy(t, service, "strategy-1")
+	createRPCRunner(t, service, "runner-a", "strategy-1", "space-a", "")
+	createRPCRunner(t, service, "runner-b", "strategy-1", "space-b", "")
+	ctx := trpc.BackgroundContext()
+	trpc.SetMetaData(ctx, "X-Space-Id", []byte("space-a"))
+	response, err := service.ListRunners(ctx, &strategypb.ListRunnersReq{SpaceId: "space-b"})
+	if err != nil || response.GetRetInfo().GetCode() != 0 {
+		t.Fatalf("ListRunners() = %+v, %v", response, err)
+	}
+	if len(response.GetRunners()) != 1 ||
+		response.GetRunners()[0].GetRunnerId() != "runner-a" {
+		t.Fatalf("scoped runners = %+v", response.GetRunners())
+	}
+	get, err := service.GetRunner(ctx, &strategypb.GetRunnerReq{RunnerId: "runner-b"})
+	if err != nil || get.GetRetInfo().GetCode() == 0 {
+		t.Fatalf("out-of-scope runner returned: %+v, %v", get, err)
+	}
+}
+
+func newRPCServiceForTest(t *testing.T) (*Service, *store.Store, *fakeRuntime) {
+	t.Helper()
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeRuntime{}
+	service := &Service{
+		Repo: repo, Registry: &registry.Service{Repo: repo}, Runtime: runtime,
+		Results: &strategyaction.Service{Repo: repo},
+		Now:     func() time.Time { return time.UnixMilli(20_000).UTC() },
+		NewID:   func() string { return "result-generated" },
+	}
+	return service, repo, runtime
+}
+
+func createRPCStrategy(t *testing.T, service *Service, strategyID string) {
+	t.Helper()
+	response, err := service.CreateStrategy(context.Background(), &strategypb.CreateStrategyReq{
+		Strategy: &strategypb.Strategy{
+			StrategyId: strategyID, Name: strategyID, ManifestYaml: rpcManifest,
+			SourceCode: "def run(context, data, params): return {'action':'hold','targets':[]}",
+		},
+	})
+	if err != nil || response.GetRetInfo().GetCode() != 0 {
+		t.Fatalf("CreateStrategy() = %+v, %v", response, err)
+	}
+}
+
+func createRPCRunner(
+	t *testing.T,
+	service *Service,
+	runnerID, strategyID, spaceID, logicalAccountID string,
+) {
+	t.Helper()
+	response, err := service.CreateRunner(context.Background(), &strategypb.CreateRunnerReq{
+		Runner: &strategypb.StrategyRunner{
+			RunnerId: runnerID, StrategyId: strategyID, SpaceId: spaceID,
+			ViewId: "view-1", Frequency: "1m", ParamsJson: "{}",
+			LogicalAccountId: logicalAccountID,
+		},
+	})
+	if err != nil || response.GetRetInfo().GetCode() != 0 {
+		t.Fatalf("CreateRunner() = %+v, %v", response, err)
+	}
+}
+
+func countRPCResults(t *testing.T, repo *store.Store) int64 {
+	t.Helper()
+	results, err := repo.ListResults(context.Background(), store.ResultFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return int64(len(results))
 }
