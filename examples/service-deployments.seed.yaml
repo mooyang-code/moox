@@ -358,135 +358,27 @@ services:
         - ListActiveServiceDeployments
         - ListServiceDeployments
       gateway_callers: [admin-gateway, collector, monitor, moox-cli]
-  - name: trade_account
+  - name: trade_exchange_account
     kind: trade
     deployment_mode: endpoint
     protocol: http
     host: 127.0.0.1
     port: 11200
-    gateway_path: trpc.moox.trade.AccountSvc
+    gateway_path: trpc.moox.trade.ExchangeAccountService
     gateway_enabled: false
     scope: internal
     status: active
-    description: 交易账户服务
+    description: Exchange 账户管理与同步服务
     extra_config: {}
-  - name: trade_balance
+  - name: trade_execution
     kind: trade
     deployment_mode: endpoint
     protocol: http
     host: 127.0.0.1
     port: 11201
-    gateway_path: trpc.moox.trade.BalanceSvc
+    gateway_path: trpc.moox.trade.TradeExecutionService
     gateway_enabled: false
     scope: internal
     status: active
-    description: 交易余额服务
-    extra_config: {}
-  - name: trade_fund
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11202
-    gateway_path: trpc.moox.trade.FundSvc
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 交易资金服务
-    extra_config: {}
-  - name: trade_apikey
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11203
-    gateway_path: trpc.moox.trade.ApiKeySvc
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 交易 API Key 服务
-    extra_config: {}
-  - name: trade_channel
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11204
-    gateway_path: trpc.moox.trade.ChannelSvc
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 交易通道服务
-    extra_config: {}
-  - name: trade_tradeop
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11205
-    gateway_path: trpc.moox.trade.TradeOpSvc
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 交易操作服务
-    extra_config: {}
-  - name: trade_order
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11206
-    gateway_path: trpc.moox.trade.OrderSvc
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 订单服务
-    extra_config: {}
-  - name: trade_tradeq
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11207
-    gateway_path: trpc.moox.trade.TradeQuerySvc
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 交易查询服务
-    extra_config: {}
-  - name: trade_position
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11208
-    gateway_path: trpc.moox.trade.PositionSvc
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 持仓服务
-    extra_config: {}
-  - name: trade_rebalance
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11211
-    gateway_path: trpc.moox.trade.RebalanceSvc
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 目标仓位调仓服务
-    extra_config: {}
-  - name: trade_ops
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11212
-    gateway_path: trpc.moox.trade.TradeOpsSvc
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 交易暂停、对账与 Saga 运维服务
+    description: 订单、成交、持仓与目标执行服务
     extra_config: {}

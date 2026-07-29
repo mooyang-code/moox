@@ -31,7 +31,9 @@ type Engine struct {
 	versions  map[string]process.LoadRequest
 }
 
-var decimalWeight = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
+const maxTargetQuantityLength = 256
+
+var decimalQuantity = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
 func New(ctx context.Context, python, workerPath string) (*Engine, error) {
 	return NewWithWorkers(ctx, python, workerPath, 4)
@@ -151,21 +153,28 @@ func Validate(o domain.Output) error {
 	if o.Action != domain.ActionHold && o.Action != domain.ActionRebalance {
 		return fmt.Errorf("invalid action %q", o.Action)
 	}
+	if o.Action == domain.ActionRebalance && len(o.Targets) == 0 {
+		return errors.New("rebalance targets are required")
+	}
 	seen := map[string]bool{}
 	for _, target := range o.Targets {
-		if target.InstrumentID == "" || seen[target.InstrumentID] {
-			return errors.New("duplicate or empty instrument")
+		if strings.TrimSpace(target.InstrumentID) == "" ||
+			strings.TrimSpace(target.Symbol) == "" ||
+			seen[target.Symbol] {
+			return errors.New("duplicate symbol or empty target identity")
 		}
-		if target.TargetWeight == "" {
-			return errors.New("target weight is required")
+		if target.TargetQuantity == "" {
+			return errors.New("target quantity is required")
 		}
-		if strings.TrimSpace(target.TargetWeight) != target.TargetWeight || !decimalWeight.MatchString(target.TargetWeight) {
-			return fmt.Errorf("invalid target weight %q", target.TargetWeight)
+		if len(target.TargetQuantity) > maxTargetQuantityLength ||
+			strings.TrimSpace(target.TargetQuantity) != target.TargetQuantity ||
+			!decimalQuantity.MatchString(target.TargetQuantity) {
+			return fmt.Errorf("invalid target quantity %q", target.TargetQuantity)
 		}
-		if _, ok := new(big.Rat).SetString(target.TargetWeight); !ok {
-			return fmt.Errorf("invalid target weight %q", target.TargetWeight)
+		if _, ok := new(big.Rat).SetString(target.TargetQuantity); !ok {
+			return fmt.Errorf("invalid target quantity %q", target.TargetQuantity)
 		}
-		seen[target.InstrumentID] = true
+		seen[target.Symbol] = true
 	}
 	if o.NextState == nil {
 		return errors.New("next_state is required")

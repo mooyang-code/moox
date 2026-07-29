@@ -1,51 +1,50 @@
 # moox-trade
 
-Trade 是账户、订单、成交、账本、仓位和调仓的唯一事实源。它只消费 Strategy 发布的
-`trade.rebalance.requested` 命令，不消费自己产生的订单、成交或进度事件。
+Trade 是 Exchange 账户、订单、成交和持仓的事实源。V1 面向个人量化，支持 Binance
+和 OKX 的 SPOT、USDT 线性 SWAP，以及 MARKET、LIMIT 两种订单。
 
-## 主流程
+## 公开服务
 
-Strategy 调仓命令经过 Consumer 解码和校验后，Trade 在同一数据库事务中写入 Inbox、
-调仓 run 和 legs。事务提交后，本地 wake channel 立即推进调仓和订单状态机。下单、
-成交和调仓进度只写 Trade 数据库；私有 WebSocket 提供低延迟成交回报，REST 对账补齐
-断线缺口。
+`ExchangeAccountService` 管理账户配置、杠杆、暂停状态和 `SyncAccount`。
+`TradeExecutionService` 提供下单、撤单、目标数量提交，以及 Order、Fill、Position
+查询。Trade 只使用 `Exchange` 表示交易所，不提供其他平行抽象。
 
-`internal/eventconsumer` 拥有调仓事件的绑定、重连、解码、Inbox 判断、请求规划和
-ACK 分类；`internal/bootstrap` 只创建 EventBus 连接并启动该生命周期。
+## 执行语义
 
-Trade 从交易所公开 instrument 接口读取最新价格、精度和报价资产，新标的第一次调仓
-不依赖 Trade 历史订单。FullTarget 会把命令中省略的已有持仓收敛到 0；空 targets
-表示全部平仓；账户本来没有持仓时，空操作直接记为完成。非零权重经数量精度取整后
-变为 0 会被拒绝，不会留下永远无法推进的空调仓。现货不允许负权重，使用基础资产数量
-下单的永续合约允许做空。OKX SWAP 的 `sz` 是合约张数，V1 在实现 contract value
-换算前明确拒绝该市场，避免按基础资产数量误下单。
+- 数量统一表示基础资产数量；Exchange 适配器负责合约张数换算。
+- SPOT 使用 `position_side=UNSPECIFIED`，SWAP V1 仅支持 NET 和 CROSS。
+- MARKET 不接受限价且 `time_in_force=UNSPECIFIED`。
+- LIMIT 必须提供限价，支持 GTC、IOC 和 FOK。
+- SWAP 支持 `reduce_only`；SPOT 拒绝该字段。
+- POST 超时、EOF、429 或 5xx 进入 `SUBMIT_UNKNOWN`，先按客户端订单号查询再决定后续动作。
+- 撤单确认后仍接受晚到 Fill，订单可收敛为 `PARTIALLY_CANCELED`。
 
-`paper` 只能使用模拟通道，订单通过本地即时成交处理器复用账本和仓位状态机，绝不调用
-真实交易所下单；`live` 只能使用真实通道。
+每个 `ExchangeAccount` 对应一个串行 `ExchangeSession`。启动、重连和手工
+`SyncAccount` 都会读取 Account、Position、OpenOrder 和 RecentFill 快照；全部成功前
+账户保持 Not Ready。SWAP 的权益、保证金、标记价、强平价和 PnL 以 Exchange 快照为准。
 
-本地 wake 采用容量为 1 的合并通知，状态始终以数据库为准。Timer 不是业务主触发器：
+## 策略目标
 
-- 成交缺口对账每 30 秒运行。
-- 订单、Saga 和调仓恢复每 15 秒运行，并在启动时立即执行。
+Strategy 通过 `moox.trade.target.requested.v1` 发布最终基础资产目标数量。Trade 持久化
+`TargetExecution`，按最新 command sequence 收敛，并复用普通订单内核。Trade 不接收
+权重、资金规模或报价资产预算。过期命令被拒绝，新命令覆盖尚未完成的旧目标。
 
 ## 配置
 
-- `database.path`：Trade SQLite 路径。
-- `eventbus.urls`：JetStream 地址。
-- `eventbus.credential_file`：Trade 专属 EventBus 凭据。
-- Strategy 调仓命令 Consumer 名称固定为代码常量 `trade_rebalance_v1`。
-- `security.encryption_key`：交易所凭证 AES-GCM 密钥。
+- `database.path`：独立 SQLite 数据库。
+- `admin`：读取 Admin Secret 的网关和服务认证。
+- `eventbus`：JetStream 地址及 Trade 专属凭据。
+- `runtime.encryption_key`：live 凭据访问门禁值；生产通过
+  `MOOX_TRADE_ENCRYPTION_KEY` 注入，缺失或强度不足时禁止读取 Secret。
+- `runtime.paper_initial_balance`：paper 账户的初始结算资产余额。
 
-`ReconcileNow` 直接执行一次有界对账，不发布事件。健康检查覆盖数据库、EventBus、
-未知订单和私有流状态，不再包含 Trade outbox。
+live Exchange API 密钥只保存为 Admin Secret 引用，不写入 YAML 或 Trade 表；paper
+账户不需要 Secret。
 
 ## 验证
 
 ```bash
-make -C proto all
 go test -count=1 ./...
-go test -count=1 ./test -v
+go test -race -count=1 ./...
+go vet ./...
 ```
-
-`internal/bootstrap/kernel_workers_test.go` 覆盖调仓命令解析、Inbox 幂等、重试分类和本地
-状态推进；跨 Strategy、JetStream、Trade 的端到端验证由事件系统 E2E 执行。

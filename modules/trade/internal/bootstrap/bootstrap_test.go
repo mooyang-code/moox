@@ -2,31 +2,137 @@ package bootstrap
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/trade/internal/health"
-	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/stretchr/testify/assert"
-	"path/filepath"
+	"errors"
+	"os"
+	"sort"
+	"strings"
 	"testing"
+
+	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"gopkg.in/yaml.v3"
 )
 
-func TestKernelEventBusReady_NoClient_ShouldReturnFalse(t *testing.T) {
-	setKernelEventBusClient(nil)
-	assert.False(t, kernelEventBusReady())
-}
-
-func TestTradeHealthSnapshot(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
+	raw, err := os.ReadFile("../../config/trpc_go.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	state := health.New("trade", "trade", "", "")
-	rsp := tradeHealthSnapshot(db, state)(context.Background())
-
-	if rsp.Module != "trade" || rsp.Ready || rsp.Status != "degraded" {
-		t.Fatalf("health response = %+v", rsp)
+	var config struct {
+		Server struct {
+			Service []struct {
+				Name string `yaml:"name"`
+			} `yaml:"service"`
+		} `yaml:"server"`
 	}
-	if rsp.Details["database_ready"] != true || rsp.Details["eventbus_ready"] != false {
-		t.Fatalf("health details = %v", rsp.Details)
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(config.Server.Service))
+	for _, service := range config.Server.Service {
+		names = append(names, service.Name)
+	}
+	sort.Strings(names)
+	want := []string{
+		"trpc.moox.trade.ExchangeAccountService",
+		"trpc.moox.trade.Health",
+		"trpc.moox.trade.TradeExecutionService",
+		"trpc.moox.trade.metrics.timer",
+	}
+	if len(names) != len(want) {
+		t.Fatalf("service names = %v, want %v", names, want)
+	}
+	for index := range want {
+		if names[index] != want[index] {
+			t.Fatalf("service names = %v, want %v", names, want)
+		}
+	}
+}
+
+func TestExchangeCredentialFailsClosedBeforeSecretReveal(t *testing.T) {
+	gateErr := errors.New("encryption key is not configured")
+	secrets := &bootstrapSecretSource{gateErr: gateErr}
+
+	_, err := exchangeCredential(
+		context.Background(), secrets, exchange.ExchangeBinance, "secret-1",
+	)
+	if !errors.Is(err, gateErr) {
+		t.Fatalf("exchangeCredential() error = %v", err)
+	}
+	if secrets.listCalls != 0 {
+		t.Fatalf("ListExchangeSecrets() calls = %d, want 0", secrets.listCalls)
+	}
+}
+
+func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
+	registry := exchange.NewRegistry()
+	registerBuiltins(registry)
+	for _, name := range []exchange.Exchange{
+		exchange.ExchangeBinance,
+		exchange.ExchangeOKX,
+	} {
+		adapter, err := registry.Bind(exchange.AccountConfig{
+			ExchangeAccountID: "account-1",
+			Exchange:          name,
+			MarketType:        exchange.MarketTypeSpot,
+			ExecutionMode:     exchange.ExecutionModePaper,
+			SettlementAsset:   "USDT",
+		}, exchange.Credential{})
+		if err != nil {
+			t.Fatalf("Bind(%s) error = %v", name, err)
+		}
+		if adapter.Exchange() != name {
+			t.Fatalf("Bind(%s) adapter Exchange = %s", name, adapter.Exchange())
+		}
+	}
+
+	_, err := registry.Bind(exchange.AccountConfig{
+		ExchangeAccountID: "account-1",
+		Exchange:          exchange.ExchangeOKX,
+		MarketType:        exchange.MarketTypeSpot,
+		ExecutionMode:     exchange.ExecutionModeLive,
+		SettlementAsset:   "USDT",
+	}, exchange.Credential{APIKey: "key", APISecret: "secret"})
+	if err == nil || !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("OKX LIVE Bind() error = %v, want passphrase rejection", err)
+	}
+}
+
+type bootstrapSecretSource struct {
+	gateErr   error
+	listCalls int
+}
+
+func (s *bootstrapSecretSource) ValidateLiveCredentialAccess() error {
+	return s.gateErr
+}
+
+func (s *bootstrapSecretSource) ListExchangeSecrets(
+	context.Context,
+	exchange.Exchange,
+) ([]accountapp.ExchangeSecret, error) {
+	s.listCalls++
+	return nil, nil
+}
+
+func TestBootstrapOwnsOneStoreAndOneShutdownHook(t *testing.T) {
+	raw, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	if got := strings.Count(source, "store.Open("); got != 1 {
+		t.Fatalf("store.Open calls = %d, want 1", got)
+	}
+	if got := strings.Count(source, "RegisterOnShutdown("); got != 1 {
+		t.Fatalf("shutdown hooks = %d, want 1", got)
+	}
+	for _, forbidden := range []string{
+		"database.NewManager", "dao.New(", "RegisterAccountSvc",
+		"RunRebalance", "fill_reconcile.timer", "order_recovery.timer",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("bootstrap still contains obsolete symbol %q", forbidden)
+		}
 	}
 }

@@ -5,18 +5,10 @@ import { isRetInfoSuccess } from "../ret-info";
 import type { RetInfo } from "./types";
 import { installSpaceAwareSignedClient } from "../admin/signed-client";
 
-// trade 服务 ID → 网关路径映射（与 admin/config/gateway.yaml 对齐）
-const tradeServiceMap: Record<string, string> = {
-  account: "trade_account",
-  balance: "trade_balance",
-  fund: "trade_fund",
-  apikey: "trade_apikey",
-  channel: "trade_channel",
-  tradeop: "trade_tradeop",
-  order: "trade_order",
-  tradeq: "trade_tradeq",
-  position: "trade_position"
-};
+export const tradeServiceMap = {
+  exchangeAccount: "trade_exchange_account",
+  execution: "trade_execution"
+} as const;
 
 const tradeClient = axios.create({
   baseURL: gatewayOrigin(),
@@ -25,27 +17,18 @@ const tradeClient = axios.create({
 });
 
 function assertSuccess(retInfo?: RetInfo) {
-  if (!retInfo) {
-    throw new Error("trade response missing ret_info");
-  }
+  if (!retInfo) throw new Error("trade response missing ret_info");
   if (!isRetInfoSuccess(retInfo.code)) {
     throw new Error(retInfo.msg || `trade request failed: ${retInfo.code}`);
   }
 }
 
-/**
- * 调用 trade 微服务。
- * @param group  服务域: account/balance/fund/apikey/channel/tradeop/order/tradeq/position
- * @param method RPC 方法名，如 ListAccounts
- * @param req    请求体
- */
 export async function callTrade<TReq extends object, TRsp extends { ret_info: RetInfo }>(
   group: keyof typeof tradeServiceMap,
   method: string,
   req: TReq
 ): Promise<TRsp> {
-  const serviceId = tradeServiceMap[group];
-  const rsp = await tradeClient.post<TRsp>(`/api/admin/${serviceId}/${method}`, req);
+  const rsp = await tradeClient.post<TRsp>(`/api/admin/${tradeServiceMap[group]}/${method}`, req);
   assertSuccess(rsp.data.ret_info);
   return rsp.data;
 }

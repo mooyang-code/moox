@@ -58,11 +58,11 @@ func TestUnifiedObservabilityConsumerRoutesAllEvents(t *testing.T) {
 	if metricCalls.Load() != 1 || hostCalls.Load() != 1 || healthCalls.Load() != 1 {
 		t.Fatalf("route calls metrics=%d host=%d health=%d", metricCalls.Load(), hostCalls.Load(), healthCalls.Load())
 	}
-	info, err := js.ConsumerInfo(DefaultStream, DefaultConsumer)
+	info, err := js.ConsumerInfo(events.ObservabilityStreamName(), DefaultConsumer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Config.Durable != DefaultConsumer || info.Config.FilterSubject != DefaultFilterSubject {
+	if info.Config.Durable != DefaultConsumer || info.Config.FilterSubject != events.ObservabilityFilterSubject {
 		t.Fatalf("consumer config = %+v", info.Config)
 	}
 }
@@ -118,7 +118,7 @@ func TestUnifiedObservabilityConsumerNaksTransientRouteFailure(t *testing.T) {
 
 func TestUnifiedObservabilityConsumerReusesDurableAfterRestart(t *testing.T) {
 	server := testkit.Start(t)
-	server.AddStream(t, &nats.StreamConfig{Name: DefaultStream, Subjects: []string{DefaultFilterSubject}, Storage: nats.MemoryStorage})
+	server.AddStream(t, &nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Storage: nats.MemoryStorage})
 	ctx := context.Background()
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.URL()}, Name: "monitor-observability-restart"})
 	if err != nil {
@@ -141,7 +141,7 @@ func TestUnifiedObservabilityConsumerReusesDurableAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = second.Close() })
-	names := server.JetStream().ConsumerNames(DefaultStream)
+	names := server.JetStream().ConsumerNames(events.ObservabilityStreamName())
 	var got []string
 	for name := range names {
 		got = append(got, name)
@@ -202,7 +202,7 @@ func newObservabilityFixture(t *testing.T, routes Routes) (context.Context, *Con
 func newObservabilityFixtureWithContext(t *testing.T, ctx context.Context, routes Routes) (*Consumer, *events.Publisher, nats.JetStreamContext) {
 	t.Helper()
 	server := testkit.Start(t)
-	server.AddStream(t, &nats.StreamConfig{Name: DefaultStream, Subjects: []string{DefaultFilterSubject}, Storage: nats.MemoryStorage})
+	server.AddStream(t, &nats.StreamConfig{Name: events.ObservabilityStreamName(), Subjects: []string{events.ObservabilityFilterSubject}, Storage: nats.MemoryStorage})
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{server.URL()}, Name: "monitor-observability-test"})
 	if err != nil {
 		t.Fatal(err)

@@ -154,7 +154,7 @@ func TestParseTokenRejectsNonHS256(t *testing.T) {
 	}
 }
 
-func TestNewSaltAndMaskSecret(t *testing.T) {
+func TestNewSalt(t *testing.T) {
 	first, err := NewSalt()
 	if err != nil {
 		t.Fatal(err)
@@ -165,12 +165,6 @@ func TestNewSaltAndMaskSecret(t *testing.T) {
 	}
 	if len(first) != 32 || len(second) != 32 || first == second {
 		t.Fatalf("salts=%q,%q", first, second)
-	}
-	if got := MaskSecret("abcdefghijklwxyz", 4, 4); got != "abcd****wxyz" {
-		t.Fatalf("MaskSecret=%q", got)
-	}
-	if got := MaskSecret("short", 4, 4); got != "****" {
-		t.Fatalf("short MaskSecret=%q", got)
 	}
 }
 

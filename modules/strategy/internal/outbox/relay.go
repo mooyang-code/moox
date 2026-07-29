@@ -38,6 +38,12 @@ func (r *Relay) PublishPending(ctx context.Context, limit int) error {
 	}
 	for _, row := range rows {
 		if publishErr := r.Publisher.Publish(ctx, row); publishErr != nil {
+			if errors.Is(publishErr, ErrExpiredOutboxMessage) {
+				if deleteErr := r.Store.DeleteOutbox(ctx, row.MessageID); deleteErr != nil {
+					return deleteErr
+				}
+				continue
+			}
 			return publishErr
 		}
 		if deleteErr := r.Store.DeleteOutbox(ctx, row.MessageID); deleteErr != nil {

@@ -50,7 +50,7 @@ import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { listStrategyTargets } from "@/api/strategy";
 import { useStrategyStore } from "@/store/modules/strategy";
-import type { TargetWeight } from "@/api/strategy-types";
+import type { TargetPosition } from "@/api/strategy-types";
 import HealthPanel from "@/views/strategy/components/strategy-health-panel.vue";
 import RunTimeline from "@/views/strategy/components/strategy-run-timeline.vue";
 import TargetTable from "@/views/strategy/components/strategy-target-table.vue";
@@ -64,7 +64,7 @@ const router = useRouter();
 const store = useStrategyStore();
 const bindingId = String(route.params.bindingId || "");
 const { overview } = storeToRefs(store);
-const targets = ref<TargetWeight[]>([]);
+const targets = ref<TargetPosition[]>([]);
 
 async function refresh() {
   await store.loadOverview(bindingId);

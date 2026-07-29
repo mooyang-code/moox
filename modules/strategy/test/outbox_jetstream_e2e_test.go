@@ -53,12 +53,12 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := repo.CreateExecutionBinding(context.Background(), domain.ExecutionBinding{
-		ExecutionBindingID: "execution-1", GroupID: "group-1", AccountID: "account-1",
-		ChannelID: "channel-1", Mode: "paper", CapitalAmount: "100", QuoteAsset: "USDT", Status: "enabled",
+		ExecutionBindingID: "execution-1", GroupID: "group-1", ExchangeAccountID: "account-1",
+		Mode: "paper", Status: "enabled",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	commitDecision(t, repo, "run-1", 0, "2026-07-17T00:00:00Z")
+	commitDecision(t, repo, "run-1", 0, time.Now().UTC().Format(time.RFC3339Nano))
 	runtime, err := strategyoutbox.NewRuntime(strategyoutbox.RuntimeConfig{
 		Store: repo, InstanceID: "strategy-e2e", RelayInterval: 20 * time.Millisecond,
 		ReconnectInterval: 20 * time.Millisecond, BatchSize: 10,
@@ -91,7 +91,7 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	natsServer.Shutdown()
 	natsServer.WaitForShutdown()
 	nc.Close()
-	commitDecision(t, repo, "run-2", 1, "2026-07-17T00:01:00Z")
+	commitDecision(t, repo, "run-2", 1, time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano))
 	eventuallyStrategy(t, 3*time.Second, func() bool {
 		stats, _ := repo.PendingOutboxStats(context.Background())
 		return !runtime.Connected() && stats.PendingCount == 1
@@ -110,7 +110,7 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 	}
 	defer verifyNC.Close()
 	verifyJS, _ := verifyNC.JetStream()
-	subscription, err := verifyJS.SubscribeSync("moox.trade.rebalance.requested.v1.>", nats.DeliverAll())
+	subscription, err := verifyJS.SubscribeSync("moox.trade.target.requested.v1.>", nats.DeliverAll())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,10 +130,10 @@ func TestStrategyOutboxJetStreamReconnectAndCatchUp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() || envelope.GetEventName() != events.TradeRebalanceRequested.Name() {
+		if message.Header.Get(nats.MsgIdHdr) != envelope.GetEventId() || envelope.GetEventName() != events.TradeTargetRequested.Name() {
 			t.Fatalf("invalid envelope/header: id=%q envelope=%+v", message.Header.Get(nats.MsgIdHdr), &envelope)
 		}
-		if _, ok := payload.(*tradeeventpb.RebalanceRequested); !ok {
+		if _, ok := payload.(*tradeeventpb.TargetIntent); !ok {
 			t.Fatalf("payload=%T", payload)
 		}
 		seen[envelope.GetEventId()]++
@@ -170,8 +170,8 @@ func commitDecision(t *testing.T, repo *store.Store, runID string, revision int6
 		TriggerBarTime: trigger, DataRevision: "revision-" + runID,
 		PreviousState: domain.State{BindingID: "binding-1", StrategyVersion: "1", Revision: revision, StateJSON: "{}"},
 	}
-	output := domain.Output{Action: domain.ActionRebalance, Targets: []domain.TargetWeight{{
-		InstrumentID: "BTC-USDT", Symbol: "BTC-USDT", MarketType: "spot", TargetWeight: "0.5",
+	output := domain.Output{Action: domain.ActionRebalance, Targets: []domain.TargetPosition{{
+		InstrumentID: "BTC-USDT", Symbol: "BTC-USDT", TargetQuantity: "0.5",
 	}}, NextState: map[string]any{"revision": revision + 1}}
 	if err := repo.Commit(context.Background(), task, output, "hash-"+runID); err != nil {
 		t.Fatal(err)

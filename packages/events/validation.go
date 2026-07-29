@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
+	"regexp"
 	"strings"
 	"time"
 
@@ -137,23 +139,59 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	return nil
 }
 
-func validateTradeRebalanceRequested(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*tradeeventpb.RebalanceRequested)
+const maxTargetQuantityLength = 256
+
+var decimalQuantityPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
+
+func validateTradeTargetRequested(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*tradeeventpb.TargetIntent)
 	if !ok {
-		return fmt.Errorf("trade rebalance payload has type %T", value)
+		return fmt.Errorf("trade target payload has type %T", value)
 	}
-	if strings.TrimSpace(payload.GetRequestId()) == "" ||
+	if strings.TrimSpace(payload.GetExecutionId()) == "" ||
 		strings.TrimSpace(payload.GetStrategyRunId()) == "" ||
 		strings.TrimSpace(payload.GetExecutionBindingId()) == "" ||
+		strings.TrimSpace(payload.GetExchangeAccountId()) == "" ||
+		strings.TrimSpace(payload.GetDataRevision()) == "" ||
 		payload.GetCommandSequence() == 0 ||
 		payload.GetCommandSequence() > math.MaxInt64 {
-		return fmt.Errorf("trade rebalance identity or command_sequence is incomplete")
+		return fmt.Errorf("trade target identity or command_sequence is incomplete")
 	}
-	if payload.GetRequestId() != message.GetEventId() {
-		return fmt.Errorf("trade rebalance request_id does not match event_id")
+	if payload.GetNotAfterUnixMs() <= 0 || payload.GetNotAfterUnixMs() <= time.Now().UnixMilli() {
+		return fmt.Errorf("trade target not_after_unix_ms is expired")
+	}
+	if len(payload.GetTargets()) == 0 {
+		return fmt.Errorf("trade target positions are empty")
+	}
+	seenSymbols := make(map[string]struct{}, len(payload.GetTargets()))
+	for i, target := range payload.GetTargets() {
+		if target == nil {
+			return fmt.Errorf("trade target %d is nil", i)
+		}
+		if strings.TrimSpace(target.GetInstrumentId()) == "" {
+			return fmt.Errorf("trade target %d instrument_id is empty", i)
+		}
+		symbol := target.GetSymbol()
+		if strings.TrimSpace(symbol) == "" {
+			return fmt.Errorf("trade target %d symbol is empty", i)
+		}
+		if _, exists := seenSymbols[symbol]; exists {
+			return fmt.Errorf("trade target symbol %q is duplicated", symbol)
+		}
+		seenSymbols[symbol] = struct{}{}
+		quantity := target.GetTargetQuantity()
+		if len(quantity) > maxTargetQuantityLength || !decimalQuantityPattern.MatchString(quantity) {
+			return fmt.Errorf("trade target %d quantity is not decimal", i)
+		}
+		if _, ok := new(big.Rat).SetString(quantity); !ok {
+			return fmt.Errorf("trade target %d quantity is not decimal", i)
+		}
+	}
+	if payload.GetExecutionId() != message.GetEventId() {
+		return fmt.Errorf("trade target execution_id does not match event_id")
 	}
 	if payload.GetExecutionBindingId() != message.GetSubjectId() {
-		return fmt.Errorf("trade rebalance execution_binding_id does not match subject_id")
+		return fmt.Errorf("trade target execution_binding_id does not match subject_id")
 	}
 	return nil
 }

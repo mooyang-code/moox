@@ -12,7 +12,7 @@ from decimal import Decimal, InvalidOperation
 from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
 
-DECIMAL_RE=re.compile(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
+DECIMAL_RE=re.compile(r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?$")
 
 runtime_python = os.environ.get("MOOX_PYTHON_RUNTIME_PATH")
 if runtime_python:
@@ -44,24 +44,41 @@ def validate_result(value):
     targets=value.get("targets",[])
     if not isinstance(targets,list):
         raise ValueError("strategy output targets must be a list")
+    if value["action"] == "rebalance" and not targets:
+        raise ValueError("strategy rebalance targets are required")
     seen=set()
+    allowed_target_fields={
+        "instrument_id","symbol","target_quantity",
+        "reason","source_time","data_revision",
+    }
     for target in targets:
         if not isinstance(target,dict):
             raise ValueError("strategy target must be an object")
+        unknown_fields=set(target)-allowed_target_fields
+        if unknown_fields:
+            raise ValueError(f"unknown strategy target fields: {sorted(unknown_fields)}")
         instrument=target.get("instrument_id")
-        if not instrument or instrument in seen:
-            raise ValueError("strategy target instruments must be unique")
-        weight=target.get("target_weight")
-        if isinstance(weight,bool) or not isinstance(weight,(str,int,float)) or not str(weight).strip():
-            raise ValueError("strategy target_weight must be decimal")
-        if not DECIMAL_RE.fullmatch(str(weight)):
-            raise ValueError("strategy target_weight must be decimal")
+        symbol=target.get("symbol")
+        if (
+            not isinstance(instrument,str)
+            or not instrument.strip()
+            or not isinstance(symbol,str)
+            or not symbol.strip()
+        ):
+            raise ValueError("strategy target instrument_id and symbol are required")
+        if symbol in seen:
+            raise ValueError("strategy target symbols must be unique")
+        quantity=target.get("target_quantity")
+        if not isinstance(quantity,str):
+            raise ValueError("strategy target_quantity must be decimal")
+        if len(quantity) > 256 or not DECIMAL_RE.fullmatch(quantity):
+            raise ValueError("strategy target_quantity must be decimal")
         try:
-            if not Decimal(str(weight)).is_finite():
-                raise ValueError("strategy target_weight must be finite")
+            if not Decimal(quantity).is_finite():
+                raise ValueError("strategy target_quantity must be finite")
         except (InvalidOperation, ValueError):
-            raise ValueError("strategy target_weight must be decimal")
-        seen.add(instrument)
+            raise ValueError("strategy target_quantity must be decimal")
+        seen.add(symbol)
     return value
 
 def json_safe(value):

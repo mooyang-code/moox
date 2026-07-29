@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -14,6 +13,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+const executionTTL = 5 * time.Minute
 
 func (s *Store) Commit(ctx context.Context, task domain.Task, output domain.Output, inputHash string) error {
 	var err error
@@ -113,10 +114,7 @@ func (s *Store) commitOnce(ctx context.Context, task domain.Task, output domain.
 		if spaceID == "" {
 			spaceID = "moox_system"
 		}
-		occurredAt, parseErr := time.Parse(time.RFC3339Nano, task.TriggerBarTime)
-		if parseErr != nil {
-			occurredAt = time.Now().UTC()
-		}
+		occurredAt := time.Now().UTC()
 		if output.Action != domain.ActionRebalance {
 			return nil
 		}
@@ -136,10 +134,8 @@ func (s *Store) commitOnce(ctx context.Context, task domain.Task, output domain.
 			if execution.Mode == "observe" {
 				continue
 			}
-			capital, ok := new(big.Rat).SetString(execution.CapitalAmount)
 			if (execution.Mode != "paper" && execution.Mode != "live") ||
-				strings.TrimSpace(execution.AccountID) == "" || strings.TrimSpace(execution.ChannelID) == "" ||
-				!ok || capital.Sign() <= 0 || strings.TrimSpace(execution.QuoteAsset) == "" {
+				strings.TrimSpace(execution.ExchangeAccountID) == "" {
 				return fmt.Errorf("invalid execution binding %q", execution.ExecutionBindingID)
 			}
 			commandSequence, err := nextExecutionCommandSequence(tx, execution.ExecutionBindingID)
@@ -147,27 +143,19 @@ func (s *Store) commitOnce(ctx context.Context, task domain.Task, output domain.
 				return err
 			}
 			eventID := task.RunID + ":rebalance:" + execution.ExecutionBindingID
-			payload := &tradeeventpb.RebalanceRequested{
-				RequestId: eventID, StrategyRunId: task.RunID, ExecutionBindingId: execution.ExecutionBindingID,
-				AccountId: execution.AccountID, ChannelId: execution.ChannelID, Mode: execution.Mode,
-				DataRevision: task.DataRevision, CapitalAmount: execution.CapitalAmount, QuoteAsset: execution.QuoteAsset,
-				CommandSequence: commandSequence,
+			payload := &tradeeventpb.TargetIntent{
+				ExecutionId: eventID, StrategyRunId: task.RunID, ExecutionBindingId: execution.ExecutionBindingID,
+				ExchangeAccountId: execution.ExchangeAccountID, DataRevision: task.DataRevision,
+				CommandSequence: commandSequence, NotAfterUnixMs: occurredAt.Add(executionTTL).UnixMilli(),
 			}
 			for _, target := range output.Targets {
-				symbol := target.Symbol
-				if symbol == "" {
-					symbol = target.InstrumentID
-				}
-				marketType := target.MarketType
-				if marketType == "" {
-					marketType = "spot"
-				}
-				payload.Targets = append(payload.Targets, &tradeeventpb.RebalanceTarget{
-					InstrumentId: target.InstrumentID, Symbol: symbol,
-					MarketType: marketType, TargetWeight: target.TargetWeight,
+				payload.Targets = append(payload.Targets, &tradeeventpb.TargetPosition{
+					InstrumentId:   target.InstrumentID,
+					Symbol:         target.Symbol,
+					TargetQuantity: target.TargetQuantity,
 				})
 			}
-			eventData, err := registry.MarshalMessage(events.TradeRebalanceRequested, payload, events.PublishOptions{
+			eventData, err := registry.MarshalMessage(events.TradeTargetRequested, payload, events.PublishOptions{
 				EventID: eventID, OccurredAt: occurredAt.UTC(), SpaceID: spaceID, SubjectID: execution.ExecutionBindingID,
 			})
 			if err != nil {

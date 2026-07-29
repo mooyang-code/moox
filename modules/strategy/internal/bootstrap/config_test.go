@@ -22,6 +22,9 @@ func TestLoadAppliesSafeDefaults(t *testing.T) {
 	if cfg.InstanceID != "strategy-1" || cfg.EventBus.RelayInterval != time.Second || cfg.EventBus.RelayBatchSize != 100 || cfg.EventBus.ConnectTimeout != 3*time.Second {
 		t.Fatalf("eventbus defaults=%+v", cfg)
 	}
+	if cfg.ExchangeAccountTarget != "ip://127.0.0.1:11200" {
+		t.Fatalf("exchange account target=%q", cfg.ExchangeAccountTarget)
+	}
 }
 
 func TestLoadRejectsInvalidEventBusRuntimeSettings(t *testing.T) {

@@ -568,11 +568,18 @@ error on the account row.
 Also store:
 
 ```text
+c_sync_symbols_json
 c_leverage_settings_json
+c_fill_cursors_json
 c_snapshot_json
 c_snapshot_source_time
 ```
 
+`c_sync_symbols_json` is the explicit SPOT synchronization universe. It lets
+first-start catch-up inspect a manually traded symbol even when its asset has
+already been sold to zero. Catch-up remains bounded by the history window the
+Exchange API exposes. `c_fill_cursors_json` stores one cursor per symbol on
+the same account row; it is not a separate table.
 `c_leverage_settings_json` is a canonical symbol-to-leverage object.
 `c_snapshot_json` contains only the latest typed ExchangeAccountSnapshot,
 including balances, equity, available funds, and margin values. Validate and
@@ -1232,6 +1239,14 @@ git commit -m "feat(trade): implement durable order execution"
 - Create: `modules/trade/internal/runtime/session_test.go`
 - Create: `modules/trade/internal/runtime/manager.go`
 - Create: `modules/trade/internal/runtime/manager_test.go`
+- Modify: `modules/trade/proto/trade_service.proto`
+- Regenerate: `modules/trade/proto/tradegen/trade_service.pb.go`
+- Modify: `modules/trade/internal/domain/exchangeaccount/account.go`
+- Modify: `modules/trade/internal/exchange/adapter.go`
+- Modify: Binance and OKX adapters and private-stream tests
+- Modify: `modules/trade/internal/infra/store/account.go`
+- Modify: `modules/trade/internal/infra/store/execution.go`
+- Modify: `modules/trade/internal/infra/store/fact.go`
 - Modify: `modules/trade/internal/health/state.go`
 - Modify: `modules/trade/internal/health/server.go`
 - Modify: corresponding health tests
@@ -1255,6 +1270,12 @@ ListRecentFills
 Apply snapshots and buffered events
 READY
 ```
+
+For an adapter such as OKX that needs instrument metadata to normalize SWAP
+contract quantities, subscribe and receive the acknowledgement first, then
+hold normalization behind a small adapter metadata gate until
+`LoadInstruments` completes. Do not move the subscription after the metadata
+request and do not issue the metadata request twice.
 
 Also prove that a private-stream disconnect immediately clears readiness and
 blocks Order submission.
@@ -1301,6 +1322,19 @@ sync cursor and readiness metadata
 ```
 
 Import unmanaged Exchange orders with source `EXTERNAL`. Do not cancel them.
+For SPOT, query every explicitly configured sync symbol, not only symbols
+inferred from current non-zero balances. Advance a fill cursor only after all
+pages in the adapter's documented recovery window have been ingested. V1 uses
+the Exchange's default bounded history where the API cannot page arbitrarily:
+Binance USD-M first-start recovery is the most recent seven days. Older
+one-off backfill is explicitly outside V1 rather than silently claimed as
+complete.
+
+Only a complete REST account snapshot advances the local full-snapshot
+watermark used to rebase reservations. Partial private account events merge
+their present fields but must not advance that watermark. Serialize full
+account synchronization with order submission through the Store's per-account
+lock.
 
 - [ ] **Step 3: Implement one session per enabled account**
 
@@ -1344,9 +1378,20 @@ reconnect, manual SyncAccount, external order import, and readiness gating.
 
 ```bash
 git add modules/trade/internal/application/accountsync \
+  modules/trade/internal/application/account \
+  modules/trade/internal/application/order \
+  modules/trade/internal/domain/exchangeaccount \
+  modules/trade/internal/domain/order \
+  modules/trade/internal/exchange \
+  modules/trade/internal/infra/store \
   modules/trade/internal/runtime \
   modules/trade/internal/health \
+  modules/trade/proto/trade_service.proto \
+  modules/trade/proto/tradegen/trade_service.pb.go \
+  modules/trade/schema/account.sql \
+  modules/trade/go.mod \
   modules/trade/internal/application/reconciliation \
+  modules/trade/internal/bootstrap/bootstrap.go \
   modules/trade/internal/bootstrap/kernel_timers.go \
   modules/trade/internal/bootstrap/kernel_timers_test.go
 git commit -m "feat(trade): add Exchange account synchronization"
@@ -1359,9 +1404,17 @@ git commit -m "feat(trade): add Exchange account synchronization"
 - Create: `modules/trade/internal/application/target/executor_test.go`
 - Create: `modules/trade/internal/runtime/target_worker.go`
 - Create: `modules/trade/internal/runtime/target_worker_test.go`
-- Rewrite: `modules/trade/internal/eventconsumer/target.go`
-- Rewrite: `modules/trade/internal/eventconsumer/target_test.go`
+- Create: `modules/trade/internal/eventconsumer/target.go`
+- Create: `modules/trade/internal/eventconsumer/target_test.go`
 - Modify: `modules/trade/internal/eventconsumer/jetstream.go`
+- Modify: `modules/trade/internal/domain/execution/target.go`
+- Modify: `modules/trade/internal/domain/order/order.go`
+- Modify: `modules/trade/internal/application/order/service.go`
+- Modify: `modules/trade/internal/infra/store/target.go`
+- Modify: `modules/trade/internal/infra/store/fact.go`
+- Modify: `modules/trade/internal/exchange/adapter.go`
+- Modify: `modules/trade/internal/exchange/binance/binance.go`
+- Modify: `modules/trade/internal/exchange/okx/okx.go`
 - Delete: `modules/trade/internal/eventconsumer/rebalance.go`
 - Delete: `modules/trade/internal/eventconsumer/rebalance_test.go`
 - Delete: `modules/trade/internal/eventconsumer/resolver.go`
@@ -1435,6 +1488,12 @@ one child Order per lane at a time.
 Apply optional `max_child_notional` as a deterministic quantity cap. This is
 not a pluggable algorithm.
 
+MARKET validation and reservation use a fresh reference price. Add one narrow
+optional `ReferencePriceSource` capability to the Exchange adapters:
+Binance uses the SPOT or USD-M ticker-price endpoint and OKX uses the market
+ticker endpoint. TargetExecutor must not substitute the instrument price tick
+for a market price.
+
 - [ ] **Step 4: Handle timeout and terminal status**
 
 When `not_after` passes:
@@ -1470,9 +1529,15 @@ Expected: PASS with no Rebalance Run, Leg, planner, or stale-target conflict.
 ```bash
 git add modules/trade/internal/application/target \
   modules/trade/internal/application/rebalance \
+  modules/trade/internal/application/order \
+  modules/trade/internal/domain/execution \
+  modules/trade/internal/domain/order \
   modules/trade/internal/runtime \
   modules/trade/internal/eventconsumer \
-  modules/trade/internal/telemetry
+  modules/trade/internal/exchange \
+  modules/trade/internal/infra/store \
+  modules/trade/internal/telemetry \
+  docs/superpowers/plans/2026-07-28-trade-execution-module-rewrite.md
 git commit -m "feat(trade): converge target positions"
 ```
 
@@ -1494,7 +1559,7 @@ git commit -m "feat(trade): converge target positions"
 - Modify: `modules/trade/config/trpc_go.yaml`
 - Modify: `modules/trade/cmd/server/main.go`
 
-- [ ] **Step 1: Write service-registration tests**
+- [x] **Step 1: Write service-registration tests**
 
 Assert that bootstrap registers only:
 
@@ -1518,7 +1583,7 @@ go test ./internal/rpc ./internal/bootstrap
 
 Expected: FAIL on the old registrations.
 
-- [ ] **Step 2: Implement concise account RPC methods**
+- [x] **Step 2: Implement concise account RPC methods**
 
 Map:
 
@@ -1535,7 +1600,7 @@ SyncAccount   -> accountsync.Service.SyncAccount
 Return full `ExchangeAccount` entities. Preserve Space identity from
 `spacecontext`; never trust a request SpaceID.
 
-- [ ] **Step 3: Implement execution RPC methods**
+- [x] **Step 3: Implement execution RPC methods**
 
 `PlaceOrder` constructs one `OrderSpec`. It does not parse or default
 Exchange/MarketType from caller values. `SubmitTarget` uses the same
@@ -1544,7 +1609,7 @@ TargetExecutor path as EventBus. Query methods read the single Store.
 Cancel by local OrderID. Resolve the account, symbol, and client order ID from
 the stored Order rather than accepting a caller-supplied Exchange route.
 
-- [ ] **Step 4: Wire one Store and the runtime Manager**
+- [x] **Step 4: Wire one Store and the runtime Manager**
 
 Bootstrap order:
 
@@ -1562,13 +1627,13 @@ register one shutdown function
 
 Do not open the SQLite path twice.
 
-- [ ] **Step 5: Reduce tRPC configuration**
+- [x] **Step 5: Reduce tRPC configuration**
 
 Keep two RPC service entries on ports 11200 and 11201, Health on 11210, and
 metrics. Remove the old service and recovery timer ports. Update comments to
 the exact new service names.
 
-- [ ] **Step 6: Run RPC and bootstrap tests**
+- [x] **Step 6: Run RPC and bootstrap tests**
 
 ```bash
 cd modules/trade
@@ -1580,7 +1645,7 @@ go test -race -count=1 ./internal/rpc ./internal/bootstrap
 Expected: PASS with two services, one Store handle, runtime shutdown, and
 correct MARKET/SWAP field round trips.
 
-- [ ] **Step 7: Commit service consolidation**
+- [x] **Step 7: Commit service consolidation**
 
 ```bash
 git add modules/trade/internal/rpc \
@@ -1611,8 +1676,13 @@ git commit -m "refactor(trade): consolidate RPC and bootstrap"
 - Modify: `modules/strategy/pyworker/worker.py`
 - Modify: `modules/strategy/pyworker/test_worker.py`
 - Modify: Strategy outbox tests and E2E tests
+- Modify: `web/src/api/strategy-types.ts`
+- Modify: `web/src/api/strategy.ts`
+- Modify: `web/src/store/modules/strategy.ts`
+- Modify: Strategy operation and target views
+- Modify: `web/src/api/strategy.test.ts`
 
-- [ ] **Step 1: Write the new Strategy output tests**
+- [x] **Step 1: Write the new Strategy output tests**
 
 Require:
 
@@ -1644,7 +1714,7 @@ python3 -m unittest pyworker/test_worker.py
 
 Expected: FAIL because the current contract requires `target_weight`.
 
-- [ ] **Step 2: Replace TargetWeight with TargetPosition**
+- [x] **Step 2: Replace TargetWeight with TargetPosition**
 
 Use:
 
@@ -1660,10 +1730,10 @@ type TargetPosition struct {
 ```
 
 Update Output, previous-target state, frontend queries, Python SDK, worker
-validation, and generated Strategy protobuf. Do not keep a compatibility
-`target_weight` field.
+validation, generated Strategy protobuf, and the Web Strategy target view. Do
+not keep a compatibility `target_weight` field.
 
-- [ ] **Step 3: Simplify execution bindings**
+- [x] **Step 3: Simplify execution bindings**
 
 Replace:
 
@@ -1684,10 +1754,12 @@ Keep mode `observe`, `paper`, or `live` for UI capability and audit. Trade
 still derives authoritative execution mode from ExchangeAccount and rejects a
 mismatch.
 
-Update `SetExecutionModeReq` to accept binding ID, mode,
-ExchangeAccountID, operation ID, and reason.
+Update `SetExecutionModeReq` to accept Strategy binding ID, execution binding
+ID, mode, ExchangeAccountID, operation ID, and reason. Update exactly one
+execution binding; other destinations in the same group remain unchanged.
+Update the Web Strategy operation panel to send only these new fields.
 
-- [ ] **Step 4: Publish TargetIntent atomically**
+- [x] **Step 4: Publish TargetIntent atomically**
 
 For every enabled non-observe execution binding:
 
@@ -1707,7 +1779,7 @@ payload := &tradeeventpb.TargetIntent{
 Keep sequence advancement, Strategy Run commit, state update, and Outbox
 insert in one SQLite transaction.
 
-- [ ] **Step 5: Run Strategy contract and Outbox tests**
+- [x] **Step 5: Run Strategy contract and Outbox tests**
 
 ```bash
 cd modules/strategy
@@ -1718,12 +1790,15 @@ CGO_ENABLED=1 go test -race -count=1 ./internal/store \
   ./internal/outbox
 python3 -m unittest discover -s pysdk/tests
 python3 -m unittest pyworker/test_worker.py
+cd ../../web
+pnpm exec vitest run --config vitest.config.ts src/api/strategy.test.ts
+pnpm exec vue-tsc --noEmit
 ```
 
 Expected: PASS with only final target quantities in Strategy output and the
 public Trade event.
 
-- [ ] **Step 6: Commit the Strategy boundary**
+- [x] **Step 6: Commit the Strategy boundary**
 
 ```bash
 git add modules/strategy packages/tradeeventpb
@@ -1736,6 +1811,9 @@ git commit -m "refactor(strategy): publish target quantities"
 - Modify: `modules/admin/internal/service/sysdeploy/defaults.go`
 - Modify: `modules/admin/internal/service/sysdeploy/defaults_test.go`
 - Modify: `modules/admin/internal/service/sysdeploy/acceptance_test.go`
+- Modify: `modules/admin/cmd/cli/eventbus_credentials.go`
+- Modify: `examples/service-deployments.seed.yaml`
+- Modify: `modules/eventbus/config/app.yaml`
 - Modify: `modules/admin/README.md`
 - Modify: `web/src/api/trade/http.ts`
 - Modify: `web/src/api/trade/index.ts`
@@ -1745,7 +1823,7 @@ git commit -m "refactor(strategy): publish target quantities"
 - Modify: `web/src/views/trading/position-detail/position-detail.vue`
 - Modify: `web/src/views/trading/trade-record/trade-record.vue`
 
-- [ ] **Step 1: Make the deployment catalog tests require two services**
+- [x] **Step 1: Make the deployment catalog tests require two services**
 
 Replace the old eleven-service assertions with exactly:
 
@@ -1760,6 +1838,8 @@ trade_execution -> 127.0.0.1:11201
 Both services are internal and sensitive. Assert that old IDs such as
 `trade_account`, `trade_channel`, `trade_apikey`, `trade_order`,
 `trade_rebalance`, and `trade_ops` are absent.
+When seeding an existing node, delete exactly the obsolete Trade service rows
+for that node in the same transaction; do not leave stale resolvable endpoints.
 
 Run:
 
@@ -1770,11 +1850,14 @@ go test ./internal/service/sysdeploy
 
 Expected: FAIL because the catalog still publishes the legacy service split.
 
-- [ ] **Step 2: Replace the deployment catalog entries**
+- [x] **Step 2: Replace the deployment catalog entries**
 
 Update `defaults.go` and the Admin service documentation. Keep the process
 name `trade`; only the tRPC service IDs and ports collapse. Do not expose a
 local health URL for either entry.
+
+Update the production EventBus stream and generated NATS ACLs to
+`moox.trade.target.requested.v1.>` and durable `trade_target_v1`.
 
 Run:
 
@@ -1785,7 +1868,7 @@ go test ./internal/service/sysdeploy
 
 Expected: PASS with exactly two Trade deployment records.
 
-- [ ] **Step 3: Write failing Web API contract tests**
+- [x] **Step 3: Write failing Web API contract tests**
 
 Test that:
 
@@ -1813,7 +1896,7 @@ pnpm test -- src/api/trade/trade.test.ts
 
 Expected: FAIL because the Web client still maps the legacy services.
 
-- [ ] **Step 4: Replace the Web Trade API surface**
+- [x] **Step 4: Replace the Web Trade API surface**
 
 Use only two transport groups:
 
@@ -1828,7 +1911,7 @@ Mirror the new protobuf names and enums exactly. Use strings for quantities,
 prices, fees, PnL, leverage values, and timestamps crossing the JSON boundary.
 Do not retain aliases for the old field or method names.
 
-- [ ] **Step 5: Update the three Trade views**
+- [x] **Step 5: Update the three Trade views**
 
 The account view must show Exchange, account type, mode, readiness,
 `last_synced_at`, and a `SyncAccount` command. The position view must show
@@ -1845,7 +1928,7 @@ The trade-record view must:
 
 Do not add transfer, dust-conversion, grid, TWAP, or hedge-mode controls.
 
-- [ ] **Step 6: Run the Admin and Web checks**
+- [x] **Step 6: Run the Admin and Web checks**
 
 ```bash
 cd modules/admin
@@ -1860,7 +1943,7 @@ pnpm run build:prod
 Expected: PASS. The browser has one account surface and one execution surface,
 matching the public RPC contract.
 
-- [ ] **Step 7: Commit the integration surface**
+- [x] **Step 7: Commit the integration surface**
 
 ```bash
 git add modules/admin/internal/service/sysdeploy modules/admin/README.md \
@@ -1888,7 +1971,7 @@ git commit -m "refactor(trade): collapse public service surface"
 - Modify: `scripts/check-package-boundaries.sh`
 - Modify: `scripts/verify-event-contracts.sh`
 
-- [ ] **Step 1: Write failing static-boundary assertions**
+- [x] **Step 1: Write failing static-boundary assertions**
 
 Extend the repository checks to reject:
 
@@ -1917,7 +2000,7 @@ bash scripts/verify-event-contracts.sh
 
 Expected: FAIL while legacy packages and declarations still exist.
 
-- [ ] **Step 2: Delete replaced code instead of wrapping it**
+- [x] **Step 2: Delete replaced code instead of wrapping it**
 
 Delete the old service/DAO/database layer, the second Exchange abstraction,
 fixed Rebalance planner, reconciliation package, cancel-replace Saga,
@@ -1935,7 +2018,7 @@ ExchangeSession
 After every package deletion, use `rg` to update direct callers rather than
 adding forwarding types.
 
-- [ ] **Step 3: Simplify runtime configuration**
+- [x] **Step 3: Simplify runtime configuration**
 
 Keep only configuration actually consumed by the final process:
 
@@ -1943,19 +2026,15 @@ Keep only configuration actually consumed by the final process:
 database:
 eventbus:
 admin:
-exchanges:
-  binance:
-  okx:
 runtime:
-telemetry:
 ```
 
-Exchange credentials remain references to Admin secrets, never values in
-YAML. Remove stale per-service configuration, unused HTTP health listeners,
-old reconciliation timers, and Saga settings. Register the two tRPC services
-in `trpc_go.yaml`.
+Live Exchange credentials remain references to Admin secrets, never values in
+YAML; PAPER accounts need no Secret. Remove stale per-service configuration,
+unused HTTP health listeners, old reconciliation timers, and Saga settings.
+Register the two tRPC services in `trpc_go.yaml`.
 
-- [ ] **Step 4: Rewrite documentation against the approved design**
+- [x] **Step 4: Rewrite documentation against the approved design**
 
 Document:
 
@@ -1970,7 +2049,7 @@ Document:
 
 Do not describe old APIs as deprecated. They no longer exist.
 
-- [ ] **Step 5: Prove the old surface is gone**
+- [x] **Step 5: Prove the old surface is gone**
 
 ```bash
 rg -n \
@@ -1994,7 +2073,7 @@ Expected: both `rg` commands return no matches and exit 1; all three scripts
 PASS. A legitimate unrelated use must be excluded by a narrow, documented
 checker rule rather than a broad directory exemption.
 
-- [ ] **Step 6: Run module tests after deletion**
+- [x] **Step 6: Run module tests after deletion**
 
 ```bash
 cd modules/trade
@@ -2007,7 +2086,7 @@ go test -count=1 ./...
 
 Expected: PASS without compatibility packages.
 
-- [ ] **Step 7: Commit the greenfield cleanup**
+- [x] **Step 7: Commit the greenfield cleanup**
 
 ```bash
 git add modules/trade modules/strategy packages/tradeeventpb \
@@ -2034,7 +2113,7 @@ unrelated pre-existing document.
 - Modify: `scripts/test-strategy-trade-event-e2e.sh`
 - Create: `modules/trade/scripts/testnet-smoke.sh`
 
-- [ ] **Step 1: Build a deterministic fake Exchange**
+- [x] **Step 1: Build a deterministic fake Exchange**
 
 The fake must record normalized requests and independently emit:
 
@@ -2048,17 +2127,25 @@ The fake must record normalized requests and independently emit:
 It must not share the Order reducer with production code; otherwise the tests
 would repeat the implementation instead of testing it.
 
-- [ ] **Step 2: Cover SPOT MARKET end to end**
+- [x] **Step 2: Cover SPOT MARKET end to end**
 
 Test MARKET buy and sell with base quantity and no price:
 
 ```text
-RPC -> validation -> persist intent -> Exchange submit
+OrderService -> validation -> persist intent -> Exchange submit
     -> Fill -> Order reducer -> Position -> ListOrders/ListFills
 ```
 
-Verify symbol normalization, quantity/step rounding, fee persistence,
+Verify Exchange-native symbol propagation/validation, quantity-step
+validation/rejection, fee persistence,
 `FILLED` terminal state, and restart recovery from SQLite.
+
+Covered: normalized MARKET buy/sell requests, no limit price, base quantity,
+off-step fail-fast rejection, non-zero normalized Exchange fee persistence,
+Paper Fill/order/balance persistence, terminal state, public Store queries, and
+SQLite restart. Task 7 Binance/OKX tests cited in Step 3 additionally prove
+adapter request mapping and quantity/protocol conversion; they are not treated
+as evidence of implicit InstrumentID-to-symbol conversion.
 
 - [ ] **Step 3: Cover Binance and OKX SWAP semantics**
 
@@ -2075,10 +2162,24 @@ Test:
 
 No test may depend on locally recomputing an Exchange liquidation price.
 
-- [ ] **Step 4: Cover uncertainty and cancel races**
+Task 7 adapter evidence retained by this acceptance suite:
+
+- Binance normalized MARKET/SWAP request and quantity mapping:
+  `internal/exchange/binance.TestAdapterOrderMappings` and
+  `TestLoadSwapInstruments`.
+- OKX base-to-contract and contract-to-base conversion:
+  `internal/exchange/okx.TestSwapMarketOrderConvertsBaseQuantity` and
+  `TestRecentFillsAndPositionsConvertContracts`.
+
+The generic E2E covers NET long/short, partial/full reduce-only, CROSS, leverage,
+and Exchange-provided realized PnL. Long-to-short Target convergence and
+Exchange snapshot liquidation fields are not asserted here, so this step
+remains unchecked.
+
+- [x] **Step 4: Cover uncertainty and cancel races**
 
 Test that EOF, timeout, 429, and 5xx leave the order in
-`SUBMIT_UNCERTAIN`, then query by client order ID before any retry. Verify that
+`SUBMIT_UNKNOWN`, then query by client order ID before any retry. Verify that
 no path produces two Exchange orders for one client order ID.
 
 Test delayed Fill after cancel:
@@ -2091,12 +2192,22 @@ NEW -> CANCELED acknowledgement -> delayed partial Fill
 Also test duplicate Fill idempotency and cumulative-quantity regression
 rejection.
 
-- [ ] **Step 5: Cover readiness and SyncAccount**
+- [x] **Step 5: Cover readiness and SyncAccount**
 
 Test startup, reconnect, manual `SyncAccount`, and failed synchronization.
 Submission must remain disabled until Account, Position, OpenOrder, and
 RecentFill snapshots all succeed. An imported external order or Fill must be
 persisted and returned by the public queries.
+
+Covered by the Task 15 AccountSync matrix: isolated failure and recovery for
+all four snapshots, persisted readiness, manual sync, and external Order/Fill
+import. Runtime startup, buffering, disconnect readiness clearing, and retry are
+proved by production tests
+`runtime.TestExchangeSessionNeverBecomesReadyAfterDisconnectDuringStartup`,
+`TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect`, and
+`TestManagerReconnectsTheExistingSessionAfterRunFailure`. Order submission
+readiness uses that Session/Manager state through the real account eligibility
+service.
 
 - [ ] **Step 6: Cover TargetIntent convergence through JetStream**
 
@@ -2109,6 +2220,13 @@ Use embedded NATS JetStream and real Strategy Outbox publication. Verify:
 - reference price freshness and pre-trade deviation checks;
 - post-Fill slippage recording;
 - reconnect resumes toward the latest target rather than an old plan.
+
+Covered: real Strategy Outbox publication, real Trade consumer, monotonic
+sequence/latest supersede, `not_after`, stale reference rejection, real
+Executor child submission, active-order duplicate suppression, and durable
+JetStream delivery after producer disconnect. The current implementation has
+no pre-trade deviation policy or post-Fill slippage field to assert; those
+items remain implementation gaps, so this step remains unchecked.
 
 - [ ] **Step 7: Add an opt-in Exchange testnet smoke script**
 
@@ -2135,7 +2253,13 @@ sync account -> SPOT MARKET -> query Fill
 -> sync account -> assert ready
 ```
 
-- [ ] **Step 8: Run E2E and race suites**
+**Deferred:** the current adapters do not expose a testnet-endpoint injection
+boundary or a cleanup-safe CLI/RPC workflow. The script therefore performs
+strict preflight validation and then fails closed without placing an order.
+Task 16 must not run it without explicit testnet credentials, and this step
+must not be marked executed until safe order cleanup exists.
+
+- [x] **Step 8: Run E2E and race suites**
 
 ```bash
 cd modules/trade
@@ -2150,7 +2274,7 @@ Expected: PASS without real Exchange credentials. Run
 `modules/trade/scripts/testnet-smoke.sh` only with explicit testnet
 credentials; never point it at production keys.
 
-- [ ] **Step 9: Commit the acceptance suite**
+- [x] **Step 9: Commit the acceptance suite**
 
 ```bash
 git add modules/trade/test modules/trade/scripts \
@@ -2166,7 +2290,7 @@ git commit -m "test(trade): cover generic execution workflows"
 - Modify: generated protobuf files under `packages/tradeeventpb/`
 - Modify: any file required by a confirmed review finding
 
-- [ ] **Step 1: Regenerate protobuf deterministically**
+- [x] **Step 1: Regenerate protobuf deterministically**
 
 ```bash
 make proto
@@ -2183,7 +2307,7 @@ Expected: the first run updates generated outputs when necessary; the second
 run produces no additional diff. Review generated service names and JSON field
 names instead of assuming generation succeeded correctly.
 
-- [ ] **Step 2: Run focused verification**
+- [x] **Step 2: Run focused verification**
 
 ```bash
 cd modules/trade
@@ -2208,7 +2332,7 @@ pnpm run build:prod
 
 Expected: PASS.
 
-- [ ] **Step 3: Run repository contract and workspace verification**
+- [x] **Step 3: Run repository contract and workspace verification**
 
 ```bash
 cd ..
@@ -2224,7 +2348,7 @@ git diff --check
 
 Expected: PASS. `make verify-pr` may repeat earlier tests; do not skip it.
 
-- [ ] **Step 4: Request an independent `codeCR` review**
+- [x] **Step 4: Request an independent `codeCR` review**
 
 Ask the configured `codeCR` subagent to review the final diff for:
 
@@ -2243,7 +2367,7 @@ failing regression test first, and rerun Steps 2 and 3. If no issues remain,
 record the residual risk: real-Exchange behavior is only as strong as the
 testnet coverage performed.
 
-- [ ] **Step 5: Build the Trade artifacts and release contract**
+- [x] **Step 5: Build the Trade artifacts and release contract**
 
 ```bash
 bash scripts/build.sh trade
@@ -2256,7 +2380,7 @@ tar -tzf release/moox-trade-execution-verify-$(go env GOOS)-$(go env GOARCH).tar
 Expected: `bin/moox-trade`, `bin/moox-trade-cli`, and the final Trade config
 are present in the archive.
 
-- [ ] **Step 6: Perform the opt-in live boundary checks**
+- [x] **Step 6: Perform the opt-in live boundary checks**
 
 When testnet credentials are available:
 
@@ -2285,7 +2409,12 @@ Do not treat a process-only health response as execution acceptance. If
 credentials are unavailable, record this as an unexecuted opt-in gate, not as
 a passing test.
 
-- [ ] **Step 7: Commit generated or review fixes**
+**Recorded 2026-07-29:** no testnet credentials or configured local integration
+deployment were available. Neither live boundary command was executed; both
+remain explicit opt-in gates. The fail-closed testnet script was not reported
+as a passing smoke test.
+
+- [x] **Step 7: Commit generated or review fixes**
 
 ```bash
 git status --short
@@ -2302,12 +2431,12 @@ git commit -m "refactor(trade): complete generic execution kernel"
 Skip the commit when there are no remaining changes. Never stage unrelated
 pre-existing files.
 
-- [ ] **Step 8: Push and prove the exact remote revision**
+- [x] **Step 8: Push and prove the exact remote revision**
 
 ```bash
-git push origin feature/mooyang
+git push origin feature/trade-execution-rewrite
 local_sha="$(git rev-parse HEAD)"
-remote_sha="$(git ls-remote --heads origin feature/mooyang | awk '{print $1}')"
+remote_sha="$(git ls-remote --heads origin feature/trade-execution-rewrite | awk '{print $1}')"
 test "${local_sha}" = "${remote_sha}"
 git status --short
 ```
@@ -2317,30 +2446,30 @@ pre-existing changes, but none may be part of the Trade commits.
 
 ## Completion Checklist
 
-- [ ] `ExchangeAccountService` has only `CreateAccount`, `UpdateAccount`,
+- [x] `ExchangeAccountService` has only `CreateAccount`, `UpdateAccount`,
   `GetAccount`, `ListAccounts`, `SetLeverage`, `PauseAccount`, and
   `SyncAccount`.
-- [ ] `TradeExecutionService` has only `PlaceOrder`, `CancelOrder`,
+- [x] `TradeExecutionService` has only `PlaceOrder`, `CancelOrder`,
   `CancelAllOrders`, `SubmitTarget`, `GetExecution`, `ListExecutions`,
   `GetOrder`, `ListOrders`, `ListFills`, and `ListPositions`.
-- [ ] Binance and OKX both support SPOT/SWAP MARKET and LIMIT within the
+- [x] Binance and OKX both support SPOT/SWAP MARKET and LIMIT within the
   approved V1 scope.
-- [ ] Strategy publishes final base quantities; Trade does not consume
+- [x] Strategy publishes final base quantities; Trade does not consume
   weights, capital, or quote assets.
-- [ ] One ExchangeSession serializes command, Fill, snapshot, reconnect, and
+- [x] One ExchangeSession serializes command, Fill, snapshot, reconnect, and
   `SyncAccount` transitions per ExchangeAccount.
-- [ ] Uncertain submission is queried by client order ID before retry.
-- [ ] A delayed Fill can refine a canceled Order into
+- [x] Uncertain submission is queried by client order ID before retry.
+- [x] A delayed Fill can refine a canceled Order into
   `PARTIALLY_CANCELED`.
-- [ ] Startup and reconnect keep the account not ready until the full
+- [x] Startup and reconnect keep the account not ready until the full
   authoritative snapshot succeeds.
-- [ ] Schema inventory contains exactly nine tables, uses `t_order_fills`,
+- [x] Schema inventory contains exactly nine tables, uses `t_order_fills`,
   keeps the three-table double-entry ledger, and contains none of the six
   merged account, target, reservation, or event-state tables.
-- [ ] Obsolete services, Rebalance Legs, Saga, transfer, dust, and duplicate
+- [x] Obsolete services, Rebalance Legs, Saga, transfer, dust, and duplicate
   Exchange abstractions are deleted rather than deprecated.
-- [ ] Focused tests, race tests, E2E, workspace checks, Web build, protobuf
+- [x] Focused tests, race tests, E2E, workspace checks, Web build, protobuf
   regeneration, release packaging, and independent `codeCR` review pass.
-- [ ] Testnet smoke and local deployment checks are either passed or explicitly
+- [x] Testnet smoke and local deployment checks are either passed or explicitly
   recorded as opt-in gates not run because credentials/environment are absent.
-- [ ] Remote `feature/mooyang` points to the verified local HEAD.
+- [x] Remote `feature/trade-execution-rewrite` points to the verified local HEAD.

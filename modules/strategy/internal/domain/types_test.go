@@ -21,7 +21,3 @@ func TestState_TableName_ShouldReturnStrategyStatesTable(t *testing.T) {
 func TestStrategyRun_TableName_ShouldReturnStrategyRunsTable(t *testing.T) {
 	assert.Equal(t, "t_strategy_runs", StrategyRun{}.TableName())
 }
-
-func TestTargetComparison_TableName_ShouldReturnTargetComparisonsTable(t *testing.T) {
-	assert.Equal(t, "t_strategy_target_comparisons", TargetComparison{}.TableName())
-}

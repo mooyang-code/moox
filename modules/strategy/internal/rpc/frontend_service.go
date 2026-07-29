@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -152,9 +151,16 @@ func (s *Service) ListStrategyTargets(ctx context.Context, req *strategypb.ListS
 	if err != nil {
 		return &strategypb.ListStrategyTargetsRsp{RetInfo: invalid(err)}, nil
 	}
-	items := make([]*strategypb.TargetWeight, 0, len(targets))
+	items := make([]*strategypb.TargetPosition, 0, len(targets))
 	for _, target := range targets {
-		items = append(items, &strategypb.TargetWeight{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, PortfolioTarget: target.PortfolioTarget, ActualPosition: target.ActualPosition, Deviation: target.Deviation, SourceTime: target.SourceTime, DataRevision: target.DataRevision})
+		items = append(items, &strategypb.TargetPosition{
+			InstrumentId:   target.InstrumentID,
+			Symbol:         target.Symbol,
+			TargetQuantity: target.TargetQuantity,
+			Reason:         target.Reason,
+			SourceTime:     target.SourceTime,
+			DataRevision:   target.DataRevision,
+		})
 	}
 	page := pageFromProto(req.GetPage())
 	return &strategypb.ListStrategyTargetsRsp{RetInfo: success(), Targets: items, Total: total, Page: int32(page.Number), PageSize: int32(page.Size)}, nil
@@ -270,36 +276,66 @@ func (s *Service) ResumeBinding(ctx context.Context, req *strategypb.BindingOper
 }
 
 func (s *Service) SetExecutionMode(ctx context.Context, req *strategypb.SetExecutionModeReq) (*strategypb.BindingOperationRsp, error) {
-	if req == nil || req.GetBindingId() == "" || req.GetMode() == "" || req.GetOperationId() == "" {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("binding_id, mode and operation_id are required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetBindingId()) == "" ||
+		strings.TrimSpace(req.GetExecutionBindingId()) == "" ||
+		strings.TrimSpace(req.GetMode()) == "" ||
+		strings.TrimSpace(req.GetExchangeAccountId()) == "" ||
+		strings.TrimSpace(req.GetOperationId()) == "" ||
+		strings.TrimSpace(req.GetReason()) == "" {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("binding_id, execution_binding_id, mode, exchange_account_id, operation_id and reason are required"))}, nil
 	}
 	if req.GetMode() != "observe" && req.GetMode() != "paper" && req.GetMode() != "live" {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("unsupported execution mode"))}, nil
-	}
-	if req.GetMode() == "live" && (s == nil || !s.LiveExecutionEnabled) {
-		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("live execution is disabled by server capability"))}, nil
-	}
-	quoteAsset := strings.TrimSpace(req.GetQuoteAsset())
-	if quoteAsset == "" {
-		quoteAsset = "USDT"
-	}
-	if req.GetMode() == "paper" || req.GetMode() == "live" {
-		capital, ok := new(big.Rat).SetString(strings.TrimSpace(req.GetCapitalAmount()))
-		if strings.TrimSpace(req.GetChannelId()) == "" || !ok || capital.Sign() <= 0 {
-			return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("paper/live mode requires channel_id and positive capital_amount"))}, nil
-		}
 	}
 	if !operatorAllowed(ctx) {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("strategy operation requires operator permission"))}, nil
 	}
 	if audit, ok := s.findAudit(ctx, req.GetOperationId()); ok {
-		return &strategypb.BindingOperationRsp{RetInfo: success(), OperationId: audit.OperationID, Status: audit.NewValue}, nil
+		var value domain.ExecutionModeAuditValue
+		if audit.Action != "set_mode" || audit.BindingID != req.GetBindingId() ||
+			json.Unmarshal([]byte(audit.NewValue), &value) != nil ||
+			value.ExecutionBindingID != req.GetExecutionBindingId() ||
+			value.Mode != req.GetMode() || value.ExchangeAccountID != req.GetExchangeAccountId() {
+			return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("operation_id conflicts with an earlier request"))}, nil
+		}
+		return &strategypb.BindingOperationRsp{RetInfo: success(), OperationId: audit.OperationID, Status: value.Mode}, nil
 	}
 	binding, err := s.Repo.GetBinding(ctx, req.GetBindingId())
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}
-	err = s.Repo.SetExecutionMode(ctx, binding, req.GetMode(), req.GetChannelId(), req.GetCapitalAmount(), quoteAsset, domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: "set_mode", BindingID: binding.BindingID, Reason: req.GetReason(), RequestID: req.GetOperationId()})
+	if err := ensureBindingScope(ctx, binding); err != nil {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
+	}
+	executionBinding, err := s.Repo.GetExecutionBinding(ctx, req.GetExecutionBindingId())
+	if err != nil {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
+	}
+	if executionBinding.GroupID != binding.GroupID {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("execution binding does not belong to strategy binding group"))}, nil
+	}
+	if s == nil || s.ExchangeAccounts == nil {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("Exchange account lookup is unavailable"))}, nil
+	}
+	accountMode, err := s.ExchangeAccounts.ExecutionMode(
+		ctx,
+		binding.SpaceID,
+		req.GetExchangeAccountId(),
+	)
+	if err != nil {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(fmt.Errorf("get Exchange account mode: %w", err))}, nil
+	}
+	accountMode = strings.ToLower(strings.TrimSpace(accountMode))
+	if accountMode != "paper" && accountMode != "live" {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("Exchange account mode is invalid"))}, nil
+	}
+	if req.GetMode() != "observe" && req.GetMode() != accountMode {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("execution mode does not match Exchange account"))}, nil
+	}
+	if req.GetMode() == "live" && (s == nil || !s.LiveExecutionEnabled) {
+		return &strategypb.BindingOperationRsp{RetInfo: invalid(errors.New("live execution is disabled by server capability"))}, nil
+	}
+	err = s.Repo.SetExecutionMode(ctx, binding, req.GetExecutionBindingId(), req.GetMode(), req.GetExchangeAccountId(), domain.OperationAudit{OperationID: req.GetOperationId(), Operator: "admin", Action: "set_mode", BindingID: binding.BindingID, Reason: req.GetReason(), RequestID: req.GetOperationId()})
 	if err != nil {
 		return &strategypb.BindingOperationRsp{RetInfo: invalid(err)}, nil
 	}

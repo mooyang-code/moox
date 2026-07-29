@@ -19,11 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-const (
-	DefaultStream        = "MOOX_OBSERVABILITY"
-	DefaultConsumer      = "monitor_observability_ingest_v1"
-	DefaultFilterSubject = "moox.observability.>"
-)
+const DefaultConsumer = "monitor_observability_ingest_v1"
 
 var rejectedEvents = prometheus.NewCounter(prometheus.CounterOpts{
 	Name: "moox_monitor_observability_rejected_total",
@@ -48,7 +44,8 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Stream: DefaultStream, Consumer: DefaultConsumer, FilterSubject: DefaultFilterSubject,
+		Stream: events.ObservabilityStreamName(), Consumer: DefaultConsumer,
+		FilterSubject:  events.ObservabilityFilterSubject,
 		FetchBatchSize: 64, FetchMaxWait: time.Second, AckWait: time.Minute,
 		MaxDeliver: 3, MaxAckPending: 256, DeliverPolicy: nats.DeliverAllPolicy,
 	}
@@ -93,8 +90,15 @@ func NewConsumer(ctx context.Context, client *jetstream.Client, registry *events
 		return nil, err
 	}
 	cfg = withDefaults(cfg)
-	if cfg.Stream != DefaultStream || cfg.Consumer != DefaultConsumer || cfg.FilterSubject != DefaultFilterSubject {
-		return nil, fmt.Errorf("observability consumer topology must be stream=%s consumer=%s filter=%s", DefaultStream, DefaultConsumer, DefaultFilterSubject)
+	if cfg.Stream != events.ObservabilityStreamName() ||
+		cfg.Consumer != DefaultConsumer ||
+		cfg.FilterSubject != events.ObservabilityFilterSubject {
+		return nil, fmt.Errorf(
+			"observability consumer topology must be stream=%s consumer=%s filter=%s",
+			events.ObservabilityStreamName(),
+			DefaultConsumer,
+			events.ObservabilityFilterSubject,
+		)
 	}
 	pull, err := client.NewConsumer(ctx, jetstream.ConsumerConfig{
 		Stream: cfg.Stream, Durable: cfg.Consumer, FilterSubject: cfg.FilterSubject,

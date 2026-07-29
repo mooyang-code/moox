@@ -2,18 +2,9 @@
 # Trade 模块统一承载账户域与交易域，使用独立 SQLite 库。
 
 database:
-  type: sqlite
   path: ./data/moox_trade.db
-  max_idle_conns: 10
-  max_open_conns: 100
-  conn_max_lifetime: 1h
-  conn_max_idle_time: 10m
 
-# 安全配置（API 凭证加解密）。生产环境请改为强随机 32 字节值。
-security:
-  encryption_key: "moox-cloud-secret-key-32bytes"
-
-control_gateway:
+admin:
   base_url: "https://106.53.107.122:11001"
   service_auth:
     target_node: ""
@@ -22,28 +13,13 @@ control_gateway:
     secret_key: ""
     expire_seconds: 60
 
-sync:
-  enabled: true
-  sync_balances: true
-  space_ids: [crypto]
-  sync_positions: true
-  sync_orders: true
-  sync_trades: true
-  window_hours: 24
-  page_size: 500
-  max_symbols_per_run: 10
-
-log:
-  level: info
-  output_path: ./log/moox_trade.log
-  max_size: 100
-  max_backups: 10
-  max_age: 30
-
-health:
-  addr: ":11210"
-
 eventbus:
   enabled: true
   urls: ["nats://127.0.0.1:4222"]
   credential_file: ~/.config/moox/eventbus/trade-eventbus.yaml
+
+# Paper-only startup may leave this empty. Live accounts require
+# MOOX_TRADE_ENCRYPTION_KEY with at least 32 bytes.
+runtime:
+  encryption_key: ""
+  paper_initial_balance: "100000"

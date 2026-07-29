@@ -1,74 +1,68 @@
-# Trade 事件驱动交易内核设计
+# Trade 通用交易执行内核
 
-## 设计目标
+## 边界
 
-Trade 是 MooX 内部的交易事实源。模块以独立数据库保存订单、成交、执行计划、Saga、
-双式账本、余额、持仓、调仓计划与 Inbox。Storage 只提供行情，不保存或投影交易事实。
-
-本项目尚未上线，因此新内核不包含旧表兼容、双写或迁移逻辑。底层数据库实现只在 `internal/infra/store` 内可见，上层依赖 Store 接口与领域模型。
-
-## 分层
+Trade 是 MooX 的交易事实源，负责 ExchangeAccount、ExchangeSession、Order、Fill、
+Position、TargetExecution 和三表双式账本。Strategy 负责生成最终目标数量，Admin
+负责 Secret，EventBus 只负责传输。V1 不做资金划转、零钱兑换、网格、TWAP、组合
+多步骤改单编排、全局 exactly-once 或多进程协调。
 
 ```text
-RPC / Strategy rebalance Consumer
-        |
-application command / consumer / rebalance
-        |
-domain order / execution / ledger / position / rebalance
-        |
-infra store / exchangebridge
-        |
-SQLite       JetStream       Binance / OKX
+RPC / TargetIntent consumer
+            |
+account / order / target / accountsync
+            |
+ExchangeSession -> Binance / OKX
+            |
+SQLite: account, instrument, order, fill, position,
+        target execution, ledger transaction/entry/projection
 ```
 
-- `domain`：精确 Decimal、订单状态机、执行计划、账本、仓位和目标仓位规划，不依赖基础设施。
-- `algorithm`：按 `(name, version)` 注册拆单、定价和执行策略；计划生成后完整持久化，不受后续注册表变化影响。
-- `application`：原子创建交易意图，推进提交、成交结算、撤单换单 Saga 和调仓。
-- `infra/store`：唯一事务边界，订单、账本投影、Inbox 和调仓计划同事务提交。
-- `infra/exchangebridge`：把账户通道解析与旧交易所 REST 适配器隔离在基础设施层。
+## ExchangeAccount 与 ExchangeSession
 
-## 主链路
+账户记录保存 Exchange、SPOT/SWAP、paper/live、可选 Secret 引用、暂停和 readiness
+状态；只有 live 账户必须提供 Secret。
+更新影响会话的配置后立即置为 Not Ready。一个账户只有一个 ExchangeSession；命令、
+私有 Fill、快照、重连和 `SyncAccount` 在该会话内串行处理。
 
-1. Strategy 的调仓命令由 Trade Consumer 接收，Inbox、调仓 run 和 legs 在同一事务提交。
-2. 提交后本地 wake 立即推进调仓 leg；普通下单命令也在数据库提交后唤醒同一状态 Worker。
-3. Worker 在调用交易所前把订单推进到 `SUBMITTING`；明确拒绝、成功和结果未知分别落不同状态。
-4. Binance/OKX 鉴权私有 WebSocket 将成交标准化；成交回报或 REST 缺口修复结果按交易所成交号幂等入库，并在同一事务内更新订单、账本余额和仓位。
-5. 服务在 `SUBMITTING`、`SUBMIT_UNKNOWN`、`CANCELING` 或 `CANCEL_UNKNOWN` 重启时先查询交易所，再决定后续动作，禁止盲目重复下单。
+readiness 需要 Account、Position、OpenOrder 和 RecentFill 四类快照全部成功。同步会
+导入 Trade 进程外创建的订单和成交。WebSocket 用于低延迟通知，REST 快照负责恢复，
+两者都不能绕过同一个持久化 reducer。
 
-定时循环只用于修复中断、补齐私有回报缺口和对账，不是订单或调仓的主触发方式。
+## 订单
 
-私有流由生产 supervisor 按 Space+Channel 去重维护，连接退出后重试。Binance 维护 listen key；OKX 完成 login、orders channel 订阅和 ping/pong 保活。WebSocket 不是事实源，断线后的交易所 REST 对账仍是强制兜底。
+公共数量始终是基础资产数量。适配器读取 instrument 规则并完成精度取整以及 Binance、
+OKX 合约数量换算。支持矩阵：
 
-## 资金与合约
+| 市场 | 类型 | 价格 | TIF | position_side | reduce_only |
+| --- | --- | --- | --- | --- | --- |
+| SPOT | MARKET | 禁止 | UNSPECIFIED | UNSPECIFIED | 禁止 |
+| SPOT | LIMIT | 必填 | GTC / IOC / FOK | UNSPECIFIED | 禁止 |
+| SWAP | MARKET | 禁止 | UNSPECIFIED | NET | 可选 |
+| SWAP | LIMIT | 必填 | GTC / IOC / FOK | NET | 可选 |
 
-- 现货买入冻结报价资产，卖出冻结基础资产。
-- 合约开仓冻结报价资产名义金额，成交后转入 `margin` bucket。
-- 合约 `reduce_only` 不冻结基础资产，避免把合约仓位错误建模为现货余额。
-- 余额同步以交易所总额为锚，同时保留本地未完成订单的 `frozen` 和 `margin`，防止同步覆盖在途预留。
-- 每一笔账本事务必须借贷平衡；业务引用和成交引用均有幂等键。
+调用 Exchange 前先持久化订单。明确成功或拒绝直接推进状态；EOF、timeout、429 和 5xx
+进入 `SUBMIT_UNKNOWN`。恢复时按 client order ID 查询，禁止盲目重发。Fill 按 Exchange
+trade ID 幂等；累计成交不能倒退。撤单确认不封死成交事实，晚到 Fill 可把状态细化为
+`PARTIALLY_CANCELED`。
 
-## 撤单换单
+## SWAP
 
-改单统一建模为持久化 Saga：
+V1 只支持 USDT 线性 SWAP、NET 持仓和 CROSS margin。live 账户以 Exchange 快照中的
+权益、保证金、entry/mark/liquidation price、leverage 和 realized/unrealized PnL
+为权威；paper 账户由本地成交回放并使用公开参考价估值。目标从多翻空时先平后开，
+避免在 NET 模式中产生非预期敞口。
 
-```text
-CANCEL_REQUESTED -> CANCEL_CONFIRMED -> REPLACEMENT_CREATED -> REPLACEMENT_SUBMITTED
-```
+## TargetIntent
 
-若交易所结果未知则进入 `CANCEL_UNKNOWN` 或 `REPLACEMENT_SUBMIT_UNKNOWN`。恢复器先查询交易所事实。原单确认撤销后才创建替代单，避免双重敞口。
+Strategy 发布 `TargetIntent`，包含 execution、binding、account、command sequence、
+有效期、数据 revision 和每个 instrument 的基础资产目标数量。Trade 校验 sequence 和
+有效期，持久化最新 `TargetExecution`，结合当前仓位与活动订单继续收敛。新目标覆盖旧
+目标，重连后只恢复最新目标。
 
-## 目标仓位调仓
+## 持久化
 
-调仓规划支持 `FULL` 与 `PATCH`，确定性地产生带依赖关系的 legs。反向仓位拆为先平仓、后开仓；leg 的 `market_type`、`reduce_only`、价格快照和规则版本被持久化。
-
-Strategy 为每个 paper/live execution binding 发布一条
-`moox.trade.rebalance.requested.v1` 命令。Trade Consumer 原子记录 Inbox 和调仓计划，
-本地 wake 推进可执行 legs，恢复循环仅兜底。每个 leg 复用普通下单内核，因此共享幂等、
-风控、账本、成交和恢复语义。
-
-## 一致性边界
-
-- Space 是共享边界，不区分管理员与普通成员。
-- Trade 数据库是命令与交易事实的唯一权威源。
-- 数据库事务保证本地强一致；Strategy outbox 与 Trade Inbox 保证至少一次传递下的业务幂等。
-- 模拟交易没有专用适配器前必须拒绝，不能回退到实盘或伪造成功。
+SQLite 固定九张业务表。Order 与 Fill 分表，因为 Order 是意图和状态机，Fill 是可能
+多次到达、独立幂等的 Exchange 成交事实。账本保留 transaction、entry、projection
+三表，以最小结构保证借贷平衡并支持快速余额查询。新项目不迁移旧表；数据库出现当前
+九表以外的业务表时启动失败。

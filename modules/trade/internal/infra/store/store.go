@@ -1,29 +1,34 @@
+// Package store owns the single SQLite persistence boundary for Trade.
 package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
-	"sync/atomic"
-	"time"
+	"sync"
 
 	"github.com/glebarez/sqlite"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/ledger"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/position"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/schema"
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
 
-var ErrConflict = errors.New("trade: store conflict")
+const sqliteBusyTimeoutMS = 5000
+
+var (
+	ErrConflict           = errors.New("trade store: conflict")
+	ErrInvalidRecord      = errors.New("trade store: invalid record")
+	ErrIncompatibleSchema = errors.New("trade store: incompatible schema")
+)
 
 type Store struct {
-	db      *gorm.DB
-	wakeup  atomic.Pointer[func()]
-	metrics *report.ModuleMetrics
+	db           *gorm.DB
+	accountLocks sync.Map
+	targetLocks  sync.Map
+	metrics      *report.ModuleMetrics
 }
 
 func (s *Store) SetModuleMetrics(metrics *report.ModuleMetrics) {
@@ -40,859 +45,224 @@ func (s *Store) ModuleMetrics() *report.ModuleMetrics {
 }
 
 type Tx struct {
-	db  *gorm.DB
-	ctx context.Context
-}
-type SagaRecord struct {
-	SpaceID, SagaID, Type, State, OrderID, ReplacementOrderID, Payload, LastError string
-	Version                                                                       uint64
-}
-type RebalanceRunRecord struct {
-	SpaceID, RunID, AccountID, ChannelID, ExecutionMode, IdempotencyKey, MarketSnapshotID, PositionSnapshotID, RulesVersion, AlgorithmName, AlgorithmVersion, Status, Residual string
-	Version                                                                                                                                                                    uint64
-}
-type RebalanceLegRecord struct {
-	SpaceID, RunID, LegID, Symbol, MarketType, BaseAsset, QuoteAsset, Side, Action, Quantity, Price, PlanID, Status string
-	ReduceOnly                                                                                                      bool
-	Sequence                                                                                                        int
-	DependsOn                                                                                                       []int
-}
-type ControlRecord struct {
-	TargetType, TargetID string
-	Paused               bool
-	Reason               string
-}
-type HealthStats struct {
-	OpenOrders, UnknownOrders int64
-}
-type BalanceRecord struct {
-	AccountID, Asset, Bucket, Amount string
-	Version                          uint64
-}
-type PositionRecord struct {
-	AccountID, Symbol, Quantity, AveragePrice, RealizedPnL string
-	Version                                                uint64
-}
-type FillRecord struct {
-	FillID, ExchangeTradeID, AccountID, ChannelID, Symbol, OrderID, Quantity, Price, Fee, FeeAsset string
-	TradedAtMS                                                                                     int64
-	CreatedAt                                                                                      time.Time
-}
-
-type OrderQuery struct {
-	AccountID, ChannelID, Symbol string
-	States                       []string
-	OpenOnly                     bool
-	StartTimeMS, EndTimeMS       int64
-	Offset, Limit                int
-}
-
-type FillQuery struct {
-	AccountID, OrderID, Symbol string
-	StartTimeMS, EndTimeMS     int64
-	Offset, Limit              int
+	db *gorm.DB
 }
 
 func Open(path string) (*Store, error) {
-	db, err := gorm.Open(sqlite.Open(path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)"), &gorm.Config{})
+	dsn := fmt.Sprintf(
+		"%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(%d)",
+		path,
+		sqliteBusyTimeoutMS,
+	)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open trade store: %w", err)
 	}
 	sqlDB, err := db.DB()
 	if err != nil {
+		return nil, fmt.Errorf("access trade database: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	if err := validateExistingTradeSchema(db); err != nil {
+		_ = sqlDB.Close()
 		return nil, err
 	}
-	for _, stmt := range splitSQL(schema.AllSQL()) {
-		if _, err = sqlDB.Exec(stmt); err != nil {
-			return nil, fmt.Errorf("apply trade schema: %w", err)
-		}
+	if err := db.Exec(schema.AllSQL()).Error; err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("apply trade schema: %w", err)
 	}
 	return &Store{db: db}, nil
 }
-func (s *Store) Close() error {
-	db, e := s.db.DB()
-	if e != nil {
-		return e
-	}
-	return db.Close()
-}
-func (s *Store) Transaction(ctx context.Context, fn func(*Tx) error) error {
-	return s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error { return fn(&Tx{db: db, ctx: ctx}) })
-}
-func (s *Store) DBForTest() *gorm.DB { return s.db }
-func (s *Store) SetWakeup(wakeup func()) {
-	s.wakeup.Store(&wakeup)
-}
-func (s *Store) Wake() {
-	if wakeup := s.wakeup.Load(); wakeup != nil && *wakeup != nil {
-		(*wakeup)()
-	}
+
+func (s *Store) LockExchangeAccount(exchangeAccountID string) func() {
+	value, _ := s.accountLocks.LoadOrStore(exchangeAccountID, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
 }
 
-func splitSQL(raw string) []string {
-	var out []string
-	start := 0
-	inTrigger := false
-	lines := splitLines(raw)
-	var buf string
-	for _, line := range lines {
-		trim := trimSpace(line)
-		if hasPrefix(trim, "CREATE TRIGGER") {
-			inTrigger = true
+func (s *Store) LockTargetBinding(spaceID string, executionBindingID string) func() {
+	key := spaceID + "\x00" + executionBindingID
+	value, _ := s.targetLocks.LoadOrStore(key, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
+}
+
+func validateExistingTradeSchema(db *gorm.DB) error {
+	var tables []string
+	if err := db.Raw(`
+		SELECT name FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+	`).Scan(&tables).Error; err != nil {
+		return fmt.Errorf("inspect trade schema: %w", err)
+	}
+	approved := map[string]struct{}{
+		"t_exchange_accounts": {}, "t_exchange_instruments": {},
+		"t_trade_orders": {}, "t_order_fills": {}, "t_exchange_positions": {},
+		"t_target_executions": {}, "t_ledger_transactions": {},
+		"t_ledger_entries": {}, "t_trade_balance_projections": {},
+	}
+	for _, table := range tables {
+		if _, found := approved[table]; !found {
+			return fmt.Errorf("%w: unexpected table %s", ErrIncompatibleSchema, table)
 		}
-		buf += line + "\n"
-		if inTrigger {
-			if trim == "END;" || hasSuffix(trim, "END;") {
-				out = append(out, buf)
-				buf = ""
-				inTrigger = false
-			}
+	}
+
+	reference, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		return fmt.Errorf("open schema reference: %w", err)
+	}
+	if err := reference.Exec(schema.AllSQL()).Error; err != nil {
+		return fmt.Errorf("apply schema reference: %w", err)
+	}
+	for _, table := range tables {
+		got, err := inspectTableShape(db, table)
+		if err != nil {
+			return err
+		}
+		want, err := inspectTableShape(reference, table)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(got, want) {
+			return fmt.Errorf(
+				"%w: %s does not match current columns and constraints",
+				ErrIncompatibleSchema,
+				table,
+			)
+		}
+	}
+	return nil
+}
+
+type tableShape struct {
+	Columns     []tableColumn
+	UniqueKeys  []string
+	ForeignKeys []tableForeignKey
+	SchemaSQL   []string
+}
+
+type tableColumn struct {
+	Name       string  `gorm:"column:name"`
+	Type       string  `gorm:"column:type"`
+	NotNull    int     `gorm:"column:notnull"`
+	DefaultSQL *string `gorm:"column:dflt_value"`
+	PrimaryKey int     `gorm:"column:pk"`
+}
+
+type tableForeignKey struct {
+	Table    string `gorm:"column:table"`
+	From     string `gorm:"column:from"`
+	To       string `gorm:"column:to"`
+	OnUpdate string `gorm:"column:on_update"`
+	OnDelete string `gorm:"column:on_delete"`
+	Match    string `gorm:"column:match"`
+}
+
+func inspectTableShape(db *gorm.DB, table string) (tableShape, error) {
+	var shape tableShape
+	quoted := strings.ReplaceAll(table, `"`, `""`)
+	if err := db.Raw(`PRAGMA table_info("` + quoted + `")`).Scan(&shape.Columns).Error; err != nil {
+		return tableShape{}, fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	var indexes []struct {
+		Name   string `gorm:"column:name"`
+		Unique int    `gorm:"column:unique"`
+	}
+	if err := db.Raw(`PRAGMA index_list("` + quoted + `")`).Scan(&indexes).Error; err != nil {
+		return tableShape{}, fmt.Errorf("inspect %s indexes: %w", table, err)
+	}
+	for _, index := range indexes {
+		if index.Unique == 0 {
 			continue
 		}
-		for i, c := range buf {
-			if c == ';' {
-				out = append(out, buf[:i+1])
-				buf = buf[i+1:]
-				start++
-				break
-			}
+		indexName := strings.ReplaceAll(index.Name, `"`, `""`)
+		var columns []struct {
+			Sequence int    `gorm:"column:seqno"`
+			Name     string `gorm:"column:name"`
 		}
-	}
-	if trimSpace(buf) != "" {
-		out = append(out, buf)
-	}
-	_ = start
-	return out
-}
-func splitLines(s string) []string {
-	var out []string
-	for len(s) > 0 {
-		i := indexByte(s, '\n')
-		if i < 0 {
-			return append(out, s)
+		if err := db.Raw(`PRAGMA index_info("` + indexName + `")`).Scan(&columns).Error; err != nil {
+			return tableShape{}, fmt.Errorf("inspect %s index %s: %w", table, index.Name, err)
 		}
-		out = append(out, s[:i])
-		s = s[i+1:]
-	}
-	return out
-}
-func trimSpace(s string) string {
-	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r' || s[0] == '\n') {
-		s = s[1:]
-	}
-	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t' || s[len(s)-1] == '\r' || s[len(s)-1] == '\n') {
-		s = s[:len(s)-1]
-	}
-	return s
-}
-func hasPrefix(s, p string) bool { return len(s) >= len(p) && s[:len(p)] == p }
-func hasSuffix(s, p string) bool { return len(s) >= len(p) && s[len(s)-len(p):] == p }
-func indexByte(s string, b byte) int {
-	for i := range s {
-		if s[i] == b {
-			return i
+		sort.Slice(columns, func(i, j int) bool { return columns[i].Sequence < columns[j].Sequence })
+		names := make([]string, 0, len(columns))
+		for _, column := range columns {
+			names = append(names, column.Name)
 		}
+		shape.UniqueKeys = append(shape.UniqueKeys, strings.Join(names, "\x00"))
 	}
-	return -1
+	sort.Strings(shape.UniqueKeys)
+	if err := db.Raw(`PRAGMA foreign_key_list("` + quoted + `")`).Scan(&shape.ForeignKeys).Error; err != nil {
+		return tableShape{}, fmt.Errorf("inspect %s foreign keys: %w", table, err)
+	}
+	sort.Slice(shape.ForeignKeys, func(i, j int) bool {
+		left := shape.ForeignKeys[i]
+		right := shape.ForeignKeys[j]
+		return left.Table+"\x00"+left.From+"\x00"+left.To <
+			right.Table+"\x00"+right.From+"\x00"+right.To
+	})
+	var objects []struct {
+		Type string `gorm:"column:type"`
+		Name string `gorm:"column:name"`
+		SQL  string `gorm:"column:sql"`
+	}
+	if err := db.Raw(`
+		SELECT type, name, sql FROM sqlite_master
+		WHERE (type = 'table' AND name = ?)
+			OR (type = 'index' AND tbl_name = ? AND sql IS NOT NULL)
+		ORDER BY type, name
+	`, table, table).Scan(&objects).Error; err != nil {
+		return tableShape{}, fmt.Errorf("inspect %s schema SQL: %w", table, err)
+	}
+	for _, object := range objects {
+		shape.SchemaSQL = append(
+			shape.SchemaSQL,
+			object.Type+"\x00"+object.Name+"\x00"+normalizeSchemaSQL(object.SQL),
+		)
+	}
+	return shape, nil
 }
 
-type OrderRecord struct {
-	SpaceID, OrderID, ClientOrderID, AccountID, ChannelID, Symbol, MarketType, BaseAsset, QuoteAsset, ExecutionMode, Side, Quantity, Price, FilledQuantity, State, ExchangeOrderID, ReservedAsset, ReservedAmount, ConsumedReserved string
-	ReduceOnly                                                                                                                                                                                                                      bool
-	Version                                                                                                                                                                                                                         uint64
+func normalizeSchemaSQL(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
-func (*OrderRecord) TableName() string { return "t_trade_order_aggregates" }
-func (t *Tx) CreateOrder(v *OrderRecord) error {
-	r := map[string]any{"c_space_id": v.SpaceID, "c_order_id": v.OrderID, "c_client_order_id": v.ClientOrderID, "c_account_id": v.AccountID, "c_channel_id": v.ChannelID, "c_symbol": v.Symbol, "c_market_type": v.MarketType, "c_base_asset": v.BaseAsset, "c_quote_asset": v.QuoteAsset, "c_execution_mode": v.ExecutionMode, "c_side": v.Side, "c_quantity": v.Quantity, "c_price": v.Price, "c_reduce_only": v.ReduceOnly, "c_reserved_asset": v.ReservedAsset, "c_reserved_amount": v.ReservedAmount, "c_consumed_reserved": v.ConsumedReserved, "c_filled_quantity": v.FilledQuantity, "c_state": v.State, "c_exchange_order_id": v.ExchangeOrderID, "c_version": v.Version}
-	if e := t.db.Table("t_trade_order_aggregates").Create(r).Error; e != nil {
-		return ErrConflict
-	}
-	return nil
-}
-func (s *Store) GetOrder(ctx context.Context, space, id string) (OrderRecord, error) {
-	return getOrder(s.db.WithContext(ctx), "c_order_id", space, id)
-}
-func (s *Store) GetOrderByClientID(ctx context.Context, space, id string) (OrderRecord, error) {
-	return getOrder(s.db.WithContext(ctx), "c_client_order_id", space, id)
-}
-func (s *Store) GetOrderByExchangeID(ctx context.Context, space, id string) (OrderRecord, error) {
-	return getOrder(s.db.WithContext(ctx), "c_exchange_order_id", space, id)
-}
-func (s *Store) GetOrderForPrivateFill(ctx context.Context, space, channel, symbol, exchangeID string) (OrderRecord, error) {
-	var id string
-	err := s.db.WithContext(ctx).Raw("SELECT c_order_id FROM t_trade_order_aggregates WHERE c_space_id=? AND c_channel_id=? AND c_symbol=? AND c_exchange_order_id=? LIMIT 1", space, channel, symbol, exchangeID).Scan(&id).Error
-	if err != nil {
-		return OrderRecord{}, err
-	}
-	if id == "" {
-		return OrderRecord{}, gorm.ErrRecordNotFound
-	}
-	return s.GetOrder(ctx, space, id)
-}
-func (s *Store) SetControl(ctx context.Context, space string, control ControlRecord) error {
-	return s.db.WithContext(ctx).Exec("INSERT INTO t_trade_controls(c_space_id,c_target_type,c_target_id,c_paused,c_reason,c_mtime) VALUES(?,?,?,?,?,?) ON CONFLICT(c_space_id,c_target_type,c_target_id) DO UPDATE SET c_paused=excluded.c_paused,c_reason=excluded.c_reason,c_mtime=excluded.c_mtime", space, control.TargetType, control.TargetID, control.Paused, control.Reason, time.Now().UTC()).Error
-}
-func (s *Store) IsPaused(ctx context.Context, space, accountID, channelID string) (bool, error) {
-	var count int64
-	err := s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_trade_controls WHERE c_space_id=? AND c_paused=1 AND ((c_target_type='account' AND c_target_id=?) OR (c_target_type='channel' AND c_target_id=?))", space, accountID, channelID).Scan(&count).Error
-	return count > 0, err
-}
-func (s *Store) Health(ctx context.Context) (HealthStats, error) {
-	var stats HealthStats
-	if err := s.db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
-		return stats, err
-	}
-	if err := s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_trade_order_aggregates WHERE c_state IN ('OPEN','PARTIALLY_FILLED','SUBMITTING','SUBMIT_UNKNOWN','CANCELING','CANCEL_UNKNOWN')").Scan(&stats.OpenOrders).Error; err != nil {
-		return stats, err
-	}
-	if err := s.db.WithContext(ctx).Raw("SELECT COUNT(1) FROM t_trade_order_aggregates WHERE c_state IN ('SUBMIT_UNKNOWN','CANCEL_UNKNOWN')").Scan(&stats.UnknownOrders).Error; err != nil {
-		return stats, err
-	}
-	return stats, nil
-}
-func (s *Store) ListRecoverableOrders(ctx context.Context, limit int) ([]OrderRecord, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	var refs []struct {
-		SpaceID string `gorm:"column:c_space_id"`
-		OrderID string `gorm:"column:c_order_id"`
-	}
-	if err := s.db.WithContext(ctx).Raw("SELECT c_space_id,c_order_id FROM t_trade_order_aggregates WHERE c_state IN ('READY','SUBMITTING','SUBMIT_UNKNOWN','CANCELING','CANCEL_UNKNOWN') ORDER BY c_mtime LIMIT ?", limit).Scan(&refs).Error; err != nil {
-		return nil, err
-	}
-	out := make([]OrderRecord, 0, len(refs))
-	for _, r := range refs {
-		v, e := s.GetOrder(ctx, r.SpaceID, r.OrderID)
-		if e != nil {
-			return nil, e
-		}
-		out = append(out, v)
-	}
-	return out, nil
-}
-func (s *Store) ListOpenOrders(ctx context.Context, limit int) ([]OrderRecord, error) {
-	return s.ListOpenOrdersScoped(ctx, "", "", "", limit)
-}
-func (s *Store) ListOpenOrdersScoped(ctx context.Context, space, account, channel string, limit int) ([]OrderRecord, error) {
-	if limit <= 0 {
-		limit = 200
-	}
-	var refs []struct {
-		SpaceID string `gorm:"column:c_space_id"`
-		OrderID string `gorm:"column:c_order_id"`
-	}
-	query := "SELECT c_space_id,c_order_id FROM t_trade_order_aggregates WHERE c_state IN ('OPEN','PARTIALLY_FILLED','SUBMIT_UNKNOWN','CANCELING','CANCEL_UNKNOWN')"
-	args := []any{}
-	if space != "" {
-		query += " AND c_space_id=?"
-		args = append(args, space)
-	}
-	if account != "" {
-		query += " AND c_account_id=?"
-		args = append(args, account)
-	}
-	if channel != "" {
-		query += " AND c_channel_id=?"
-		args = append(args, channel)
-	}
-	query += " ORDER BY c_mtime LIMIT ?"
-	args = append(args, limit)
-	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&refs).Error; err != nil {
-		return nil, err
-	}
-	out := make([]OrderRecord, 0, len(refs))
-	for _, r := range refs {
-		v, e := s.GetOrder(ctx, r.SpaceID, r.OrderID)
-		if e != nil {
-			return nil, e
-		}
-		out = append(out, v)
-	}
-	return out, nil
-}
-func (t *Tx) GetOrder(ctx context.Context, space, id string) (OrderRecord, error) {
-	return getOrder(t.db.WithContext(ctx), "c_order_id", space, id)
-}
-func getOrder(db *gorm.DB, column, space, id string) (OrderRecord, error) {
-	var r struct {
-		SpaceID          string `gorm:"column:c_space_id"`
-		OrderID          string `gorm:"column:c_order_id"`
-		ClientOrderID    string `gorm:"column:c_client_order_id"`
-		AccountID        string `gorm:"column:c_account_id"`
-		ChannelID        string `gorm:"column:c_channel_id"`
-		Symbol           string `gorm:"column:c_symbol"`
-		MarketType       string `gorm:"column:c_market_type"`
-		BaseAsset        string `gorm:"column:c_base_asset"`
-		QuoteAsset       string `gorm:"column:c_quote_asset"`
-		ExecutionMode    string `gorm:"column:c_execution_mode"`
-		Side             string `gorm:"column:c_side"`
-		Quantity         string `gorm:"column:c_quantity"`
-		Price            string `gorm:"column:c_price"`
-		FilledQuantity   string `gorm:"column:c_filled_quantity"`
-		ReduceOnly       bool   `gorm:"column:c_reduce_only"`
-		ReservedAsset    string `gorm:"column:c_reserved_asset"`
-		ReservedAmount   string `gorm:"column:c_reserved_amount"`
-		ConsumedReserved string `gorm:"column:c_consumed_reserved"`
-		State            string `gorm:"column:c_state"`
-		ExchangeOrderID  string `gorm:"column:c_exchange_order_id"`
-		Version          uint64 `gorm:"column:c_version"`
-	}
-	e := db.Table("t_trade_order_aggregates").Where("c_space_id=? AND "+column+"=?", space, id).Take(&r).Error
-	return OrderRecord{SpaceID: r.SpaceID, OrderID: r.OrderID, ClientOrderID: r.ClientOrderID, AccountID: r.AccountID, ChannelID: r.ChannelID, Symbol: r.Symbol, MarketType: r.MarketType, BaseAsset: r.BaseAsset, QuoteAsset: r.QuoteAsset, ExecutionMode: r.ExecutionMode, Side: r.Side, Quantity: r.Quantity, Price: r.Price, ReduceOnly: r.ReduceOnly, ReservedAsset: r.ReservedAsset, ReservedAmount: r.ReservedAmount, ConsumedReserved: r.ConsumedReserved, FilledQuantity: r.FilledQuantity, State: r.State, ExchangeOrderID: r.ExchangeOrderID, Version: r.Version}, e
-}
-func (s *Store) ListOrders(ctx context.Context, space, account, channel, symbol string, openOnly bool) ([]OrderRecord, error) {
-	query := "SELECT c_order_id FROM t_trade_order_aggregates WHERE c_space_id=?"
-	args := []any{space}
-	if account != "" {
-		query += " AND c_account_id=?"
-		args = append(args, account)
-	}
-	if channel != "" {
-		query += " AND c_channel_id=?"
-		args = append(args, channel)
-	}
-	if symbol != "" {
-		query += " AND c_symbol=?"
-		args = append(args, symbol)
-	}
-	if openOnly {
-		query += " AND c_state NOT IN ('FILLED','CANCELED','PARTIALLY_CANCELED','REJECTED','EXPIRED')"
-	}
-	query += " ORDER BY c_id DESC"
-	var refs []struct {
-		OrderID string `gorm:"column:c_order_id"`
-	}
-	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&refs).Error; err != nil {
-		return nil, err
-	}
-	out := make([]OrderRecord, 0, len(refs))
-	for _, r := range refs {
-		v, e := s.GetOrder(ctx, space, r.OrderID)
-		if e != nil {
-			return nil, e
-		}
-		out = append(out, v)
-	}
-	return out, nil
-}
-
-func (s *Store) ListOrdersPage(ctx context.Context, space string, filter OrderQuery) ([]OrderRecord, int, error) {
-	query := s.db.WithContext(ctx).Table("t_trade_order_aggregates")
-	if space != "" {
-		query = query.Where("c_space_id=?", space)
-	}
-	if filter.AccountID != "" {
-		query = query.Where("c_account_id=?", filter.AccountID)
-	}
-	if filter.ChannelID != "" {
-		query = query.Where("c_channel_id=?", filter.ChannelID)
-	}
-	if filter.Symbol != "" {
-		query = query.Where("c_symbol=?", filter.Symbol)
-	}
-	if len(filter.States) > 0 {
-		query = query.Where("c_state IN ?", filter.States)
-	}
-	if filter.OpenOnly {
-		query = query.Where("c_state NOT IN ?", []string{"FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED"})
-	}
-	if filter.StartTimeMS > 0 {
-		query = query.Where("c_ctime>=?", epochTime(filter.StartTimeMS))
-	}
-	if filter.EndTimeMS > 0 {
-		query = query.Where("c_ctime<=?", epochTime(filter.EndTimeMS))
-	}
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	limit := filter.Limit
-	if limit <= 0 || limit > 1000 {
-		limit = 20
-	}
-	var refs []struct {
-		OrderID string `gorm:"column:c_order_id"`
-	}
-	if err := query.Select("c_order_id").Order("c_id DESC").Offset(filter.Offset).Limit(limit).Scan(&refs).Error; err != nil {
-		return nil, 0, err
-	}
-	out := make([]OrderRecord, 0, len(refs))
-	for _, ref := range refs {
-		row, err := s.GetOrder(ctx, space, ref.OrderID)
-		if err != nil {
-			return nil, 0, err
-		}
-		out = append(out, row)
-	}
-	return out, int(total), nil
-}
-
-func (s *Store) ListOrdersForReconciliation(ctx context.Context, space, account, channel, symbol, orderID string, startTimeMS, endTimeMS int64, limit int) ([]OrderRecord, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 200
-	}
-	query := s.db.WithContext(ctx).Table("t_trade_order_aggregates")
-	if space != "" {
-		query = query.Where("c_space_id=?", space)
-	}
-	query = query.Where("c_state NOT IN ?", []string{"FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED"})
-	if account != "" {
-		query = query.Where("c_account_id=?", account)
-	}
-	if channel != "" {
-		query = query.Where("c_channel_id=?", channel)
-	}
-	if symbol != "" {
-		query = query.Where("c_symbol=?", symbol)
-	}
-	if orderID != "" {
-		query = query.Where("c_order_id=?", orderID)
-	}
-	if startTimeMS > 0 {
-		query = query.Where("c_ctime>=?", epochTime(startTimeMS))
-	}
-	if endTimeMS > 0 {
-		query = query.Where("c_ctime<=?", epochTime(endTimeMS))
-	}
-	var refs []struct {
-		SpaceID string `gorm:"column:c_space_id"`
-		OrderID string `gorm:"column:c_order_id"`
-	}
-	if err := query.Select("c_space_id,c_order_id").Order("c_id DESC").Limit(limit).Scan(&refs).Error; err != nil {
-		return nil, err
-	}
-	out := make([]OrderRecord, 0, len(refs))
-	for _, ref := range refs {
-		row, err := s.GetOrder(ctx, ref.SpaceID, ref.OrderID)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, row)
-	}
-	return out, nil
-}
-func (s *Store) ListBalances(ctx context.Context, space, account string) ([]BalanceRecord, error) {
-	var rows []struct {
-		AccountID string `gorm:"column:c_account_id"`
-		Asset     string `gorm:"column:c_asset"`
-		Bucket    string `gorm:"column:c_bucket"`
-		Amount    string `gorm:"column:c_amount"`
-		Version   uint64 `gorm:"column:c_version"`
-	}
-	e := s.db.WithContext(ctx).Raw("SELECT c_account_id,c_asset,c_bucket,c_amount,c_version FROM t_trade_balance_projections WHERE c_space_id=? AND c_account_id=? ORDER BY c_asset,c_bucket", space, account).Scan(&rows).Error
-	out := make([]BalanceRecord, len(rows))
-	for i, r := range rows {
-		out[i] = BalanceRecord{r.AccountID, r.Asset, r.Bucket, r.Amount, r.Version}
-	}
-	return out, e
-}
-func (s *Store) ReconcileBalances(ctx context.Context, space, account string, desired map[string]map[string]shared.Decimal) error {
-	currentRows, err := s.ListBalances(ctx, space, account)
+func (s *Store) Close() error {
+	sqlDB, err := s.db.DB()
 	if err != nil {
 		return err
 	}
-	current := map[string]map[string]shared.Decimal{}
-	for _, r := range currentRows {
-		if current[r.Asset] == nil {
-			current[r.Asset] = map[string]shared.Decimal{}
-		}
-		v, e := shared.ParseDecimal(r.Amount)
-		if e != nil {
-			return e
-		}
-		current[r.Asset][r.Bucket] = v
+	return sqlDB.Close()
+}
+
+func (s *Store) Ping(ctx context.Context) error {
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return err
 	}
-	assets := make(map[string]struct{}, len(desired)+len(current))
-	for asset := range desired {
-		assets[asset] = struct{}{}
+	return sqlDB.PingContext(ctx)
+}
+
+func (s *Store) Transaction(ctx context.Context, fn func(*Tx) error) error {
+	if fn == nil {
+		return fmt.Errorf("%w: nil transaction callback", ErrInvalidRecord)
 	}
-	for asset := range current {
-		assets[asset] = struct{}{}
-	}
-	for asset := range assets {
-		buckets := desired[asset]
-		total := buckets["available"].Add(buckets["frozen"])
-		localFrozen := current[asset]["frozen"]
-		localMargin := current[asset]["margin"]
-		available := total.Sub(localFrozen).Sub(localMargin)
-		if available.IsNegative() {
-			return fmt.Errorf("trade: exchange total %s is below local locked funds %s for %s", total.String(), localFrozen.Add(localMargin).String(), asset)
-		}
-		desired[asset] = map[string]shared.Decimal{"available": available, "frozen": localFrozen, "margin": localMargin}
-	}
-	return s.Transaction(ctx, func(tx *Tx) error {
-		seq := 0
-		for asset, buckets := range desired {
-			for _, bucket := range []string{"available", "frozen", "margin"} {
-				want := buckets[bucket]
-				have := current[asset][bucket]
-				delta := want.Sub(have)
-				if delta.IsZero() {
-					continue
-				}
-				seq++
-				ref := fmt.Sprintf("%s:%s:%s:%d", account, asset, bucket, time.Now().UnixNano()+int64(seq))
-				p := ledger.Transaction{ID: shared.LedgerTransactionID("reconcile:" + ref), BizType: "reconcile", RefType: "balance_snapshot", RefID: ref, Entries: []ledger.Entry{{AccountID: "exchange-reconciliation", Asset: asset, Bucket: "reconciliation", Amount: delta.Neg()}, {AccountID: account, Asset: asset, Bucket: bucket, Amount: delta}}}
-				if err := tx.PostLedger(space, p); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+	return s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
+		return fn(&Tx{db: db})
 	})
 }
-func (s *Store) ListPositions(ctx context.Context, space, account, symbol string) ([]PositionRecord, error) {
-	q := "SELECT c_account_id,c_symbol,c_quantity,c_average_price,c_realized_pnl,c_version FROM t_trade_position_projections WHERE c_space_id=? AND c_account_id=?"
-	args := []any{space, account}
-	if symbol != "" {
-		q += " AND c_symbol=?"
-		args = append(args, symbol)
-	}
-	var rows []struct {
-		AccountID    string `gorm:"column:c_account_id"`
-		Symbol       string `gorm:"column:c_symbol"`
-		Quantity     string `gorm:"column:c_quantity"`
-		AveragePrice string `gorm:"column:c_average_price"`
-		RealizedPnL  string `gorm:"column:c_realized_pnl"`
-		Version      uint64 `gorm:"column:c_version"`
-	}
-	e := s.db.WithContext(ctx).Raw(q, args...).Scan(&rows).Error
-	out := make([]PositionRecord, len(rows))
-	for i, r := range rows {
-		out[i] = PositionRecord{r.AccountID, r.Symbol, r.Quantity, r.AveragePrice, r.RealizedPnL, r.Version}
-	}
-	return out, e
+
+func (s *Store) DBForTest() *gorm.DB {
+	return s.db
 }
 
-func (s *Store) ListFills(ctx context.Context, space, orderID string) ([]FillRecord, error) {
-	rows, _, err := s.ListFillsPage(ctx, space, FillQuery{OrderID: orderID, Limit: 1000})
-	return rows, err
-}
-
-func (s *Store) ListFillsPage(ctx context.Context, space string, filter FillQuery) ([]FillRecord, int, error) {
-	query := s.db.WithContext(ctx).Table("t_trade_fill_events").Where("c_space_id=?", space)
-	tradeTimeExpr := "CASE WHEN c_traded_at_ms > 0 THEN c_traded_at_ms ELSE CAST(strftime('%s', c_ctime) AS INTEGER) * 1000 END"
-	if filter.AccountID != "" {
-		query = query.Where("c_account_id=?", filter.AccountID)
-	}
-	if filter.OrderID != "" {
-		query = query.Where("c_order_id=?", filter.OrderID)
-	}
-	if filter.Symbol != "" {
-		query = query.Where("c_symbol=?", filter.Symbol)
-	}
-	if filter.StartTimeMS > 0 {
-		query = query.Where(tradeTimeExpr+">=?", epochMillis(filter.StartTimeMS))
-	}
-	if filter.EndTimeMS > 0 {
-		query = query.Where(tradeTimeExpr+"<=?", epochMillis(filter.EndTimeMS))
-	}
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	limit := filter.Limit
-	if limit <= 0 || limit > 1000 {
-		limit = 20
-	}
-	var rows []struct {
-		FillID          string    `gorm:"column:c_fill_id"`
-		ExchangeTradeID string    `gorm:"column:c_exchange_trade_id"`
-		AccountID       string    `gorm:"column:c_account_id"`
-		ChannelID       string    `gorm:"column:c_channel_id"`
-		Symbol          string    `gorm:"column:c_symbol"`
-		OrderID         string    `gorm:"column:c_order_id"`
-		Quantity        string    `gorm:"column:c_quantity"`
-		Price           string    `gorm:"column:c_price"`
-		Fee             string    `gorm:"column:c_fee"`
-		FeeAsset        string    `gorm:"column:c_fee_asset"`
-		TradedAtMS      int64     `gorm:"column:c_traded_at_ms"`
-		CreatedAt       time.Time `gorm:"column:c_ctime"`
-	}
-	e := query.Select("c_fill_id,c_exchange_trade_id,c_account_id,c_channel_id,c_symbol,c_order_id,c_quantity,c_price,c_fee,c_fee_asset,c_traded_at_ms,c_ctime").Order(tradeTimeExpr + " DESC, c_id DESC").Offset(filter.Offset).Limit(limit).Scan(&rows).Error
-	out := make([]FillRecord, len(rows))
-	for i, r := range rows {
-		out[i] = FillRecord{FillID: r.FillID, ExchangeTradeID: r.ExchangeTradeID, AccountID: r.AccountID, ChannelID: r.ChannelID, Symbol: r.Symbol, OrderID: r.OrderID, Quantity: r.Quantity, Price: r.Price, Fee: r.Fee, FeeAsset: r.FeeAsset, TradedAtMS: r.TradedAtMS, CreatedAt: r.CreatedAt}
-	}
-	return out, int(total), e
-}
-func (t *Tx) UpdateOrder(v OrderRecord, expected uint64) error {
-	res := t.db.Table("t_trade_order_aggregates").Where("c_space_id=? AND c_order_id=? AND c_version=?", v.SpaceID, v.OrderID, expected).Updates(map[string]any{"c_filled_quantity": v.FilledQuantity, "c_consumed_reserved": v.ConsumedReserved, "c_state": v.State, "c_exchange_order_id": v.ExchangeOrderID, "c_version": v.Version, "c_mtime": time.Now().UTC()})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected != 1 {
-		return ErrConflict
-	}
-	return nil
-}
-
-func (t *Tx) InsertInbox(consumer, id, topic string) (bool, error) {
-	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_inbox(c_consumer,c_message_id,c_event_name) VALUES(?,?,?)", consumer, id, topic)
-	return res.RowsAffected == 1, res.Error
-}
-
-func (t *Tx) RecordInbox(consumer, eventID, eventName string) (bool, error) {
-	return t.InsertInbox(consumer, eventID, eventName)
-}
-
-func (t *Tx) RecordSequencedInbox(consumer, eventID, eventName, spaceID, subjectID string, sequence uint64) (bool, error) {
-	fresh, err := t.InsertInbox(consumer, eventID, eventName)
-	if err != nil || !fresh {
-		return false, err
-	}
-	result := t.db.Exec(`
-		INSERT INTO t_trade_command_offsets(
-			c_consumer,c_space_id,c_subject_id,c_last_sequence,c_event_id
-		) VALUES(?,?,?,?,?)
-		ON CONFLICT(c_consumer,c_space_id,c_subject_id) DO UPDATE SET
-			c_last_sequence=excluded.c_last_sequence,
-			c_event_id=excluded.c_event_id,
-			c_mtime=CURRENT_TIMESTAMP
-		WHERE t_trade_command_offsets.c_last_sequence < excluded.c_last_sequence
-	`, consumer, spaceID, subjectID, sequence, eventID)
-	if result.Error != nil {
-		return false, result.Error
-	}
-	return result.RowsAffected == 1, nil
-}
-
-func (s *Store) RecordInbox(ctx context.Context, consumer, id, topic string) (bool, error) {
-	var fresh bool
-	err := s.Transaction(ctx, func(tx *Tx) error { var e error; fresh, e = tx.InsertInbox(consumer, id, topic); return e })
-	return fresh, err
-}
-
-func (s *Store) HasInbox(ctx context.Context, consumer, id string) (bool, error) {
-	var count int64
-	err := s.db.WithContext(ctx).Raw(
-		"SELECT COUNT(1) FROM t_trade_inbox WHERE c_consumer=? AND c_message_id=?",
-		consumer, id,
-	).Scan(&count).Error
-	return count > 0, err
-}
-
-func (t *Tx) CreateSaga(s SagaRecord) error {
-	return t.db.Exec("INSERT INTO t_trade_sagas(c_space_id,c_saga_id,c_type,c_state,c_order_id,c_replacement_order_id,c_payload,c_version,c_last_error) VALUES(?,?,?,?,?,?,?,?,?)", s.SpaceID, s.SagaID, s.Type, s.State, s.OrderID, s.ReplacementOrderID, s.Payload, s.Version, s.LastError).Error
-}
-func (s *Store) GetSaga(ctx context.Context, space, id string) (SagaRecord, error) {
-	var r struct {
-		SpaceID            string `gorm:"column:c_space_id"`
-		SagaID             string `gorm:"column:c_saga_id"`
-		Type               string `gorm:"column:c_type"`
-		State              string `gorm:"column:c_state"`
-		OrderID            string `gorm:"column:c_order_id"`
-		ReplacementOrderID string `gorm:"column:c_replacement_order_id"`
-		Payload            string `gorm:"column:c_payload"`
-		Version            uint64 `gorm:"column:c_version"`
-		LastError          string `gorm:"column:c_last_error"`
-	}
-	e := s.db.WithContext(ctx).Raw("SELECT c_space_id,c_saga_id,c_type,c_state,c_order_id,c_replacement_order_id,c_payload,c_version,c_last_error FROM t_trade_sagas WHERE c_space_id=? AND c_saga_id=?", space, id).Scan(&r).Error
-	if e == nil && r.SagaID == "" {
-		e = gorm.ErrRecordNotFound
-	}
-	return SagaRecord{r.SpaceID, r.SagaID, r.Type, r.State, r.OrderID, r.ReplacementOrderID, r.Payload, r.LastError, r.Version}, e
-}
-func (s *Store) GetSagaByReplacementOrder(ctx context.Context, space, orderID string) (SagaRecord, error) {
-	var id string
-	if err := s.db.WithContext(ctx).Raw("SELECT c_saga_id FROM t_trade_sagas WHERE c_space_id=? AND c_replacement_order_id=? LIMIT 1", space, orderID).Scan(&id).Error; err != nil {
-		return SagaRecord{}, err
-	}
-	if id == "" {
-		return SagaRecord{}, gorm.ErrRecordNotFound
-	}
-	return s.GetSaga(ctx, space, id)
-}
-func (s *Store) ListRecoverableSagas(ctx context.Context, limit int) ([]SagaRecord, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	var refs []struct {
-		SpaceID string `gorm:"column:c_space_id"`
-		SagaID  string `gorm:"column:c_saga_id"`
-	}
-	if err := s.db.WithContext(ctx).Raw("SELECT c_space_id,c_saga_id FROM t_trade_sagas WHERE c_state IN ('CANCEL_REQUESTED','CANCEL_UNKNOWN','REPLACEMENT_CREATED','REPLACEMENT_SUBMIT_UNKNOWN') ORDER BY c_mtime LIMIT ?", limit).Scan(&refs).Error; err != nil {
-		return nil, err
-	}
-	out := make([]SagaRecord, 0, len(refs))
-	for _, r := range refs {
-		v, e := s.GetSaga(ctx, r.SpaceID, r.SagaID)
-		if e != nil {
-			return nil, e
-		}
-		out = append(out, v)
-	}
-	return out, nil
-}
-func (t *Tx) UpdateSaga(s SagaRecord, expected uint64) error {
-	r := t.db.Exec("UPDATE t_trade_sagas SET c_state=?,c_replacement_order_id=?,c_version=?,c_last_error=?,c_mtime=? WHERE c_space_id=? AND c_saga_id=? AND c_version=?", s.State, s.ReplacementOrderID, s.Version, s.LastError, time.Now().UTC(), s.SpaceID, s.SagaID, expected)
-	if r.Error != nil {
-		return r.Error
-	}
-	if r.RowsAffected != 1 {
-		return ErrConflict
-	}
-	return nil
-}
-func (t *Tx) CreateRebalance(run RebalanceRunRecord, legs []RebalanceLegRecord) error {
-	if err := t.db.Exec("INSERT INTO t_rebalance_runs(c_space_id,c_run_id,c_account_id,c_channel_id,c_execution_mode,c_idempotency_key,c_market_snapshot_id,c_position_snapshot_id,c_rules_version,c_algorithm_name,c_algorithm_version,c_status,c_version,c_residual) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", run.SpaceID, run.RunID, run.AccountID, run.ChannelID, run.ExecutionMode, run.IdempotencyKey, run.MarketSnapshotID, run.PositionSnapshotID, run.RulesVersion, run.AlgorithmName, run.AlgorithmVersion, run.Status, run.Version, run.Residual).Error; err != nil {
-		return err
-	}
-	for _, l := range legs {
-		deps, _ := json.Marshal(l.DependsOn)
-		if err := t.db.Exec("INSERT INTO t_rebalance_legs(c_space_id,c_run_id,c_leg_id,c_symbol,c_market_type,c_base_asset,c_quote_asset,c_side,c_action,c_quantity,c_price,c_reduce_only,c_sequence,c_depends_on,c_plan_id,c_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", l.SpaceID, l.RunID, l.LegID, l.Symbol, l.MarketType, l.BaseAsset, l.QuoteAsset, l.Side, l.Action, l.Quantity, l.Price, l.ReduceOnly, l.Sequence, string(deps), l.PlanID, l.Status).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Store) GetRebalanceRun(ctx context.Context, space, runID string) (RebalanceRunRecord, error) {
-	var row struct {
-		SpaceID       string `gorm:"column:c_space_id"`
-		RunID         string `gorm:"column:c_run_id"`
-		AccountID     string `gorm:"column:c_account_id"`
-		ChannelID     string `gorm:"column:c_channel_id"`
-		ExecutionMode string `gorm:"column:c_execution_mode"`
-	}
-	err := s.db.WithContext(ctx).Raw(
-		"SELECT c_space_id,c_run_id,c_account_id,c_channel_id,c_execution_mode FROM t_rebalance_runs WHERE c_space_id=? AND c_run_id=?",
-		space, runID,
-	).Take(&row).Error
-	return RebalanceRunRecord{
-		SpaceID: row.SpaceID, RunID: row.RunID, AccountID: row.AccountID,
-		ChannelID: row.ChannelID, ExecutionMode: row.ExecutionMode,
-	}, err
-}
-
-func (s *Store) ListActiveRebalanceRuns(ctx context.Context, limit int) ([]RebalanceRunRecord, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	var rows []struct {
-		SpaceID       string `gorm:"column:c_space_id"`
-		RunID         string `gorm:"column:c_run_id"`
-		AccountID     string `gorm:"column:c_account_id"`
-		ChannelID     string `gorm:"column:c_channel_id"`
-		ExecutionMode string `gorm:"column:c_execution_mode"`
-	}
-	e := s.db.WithContext(ctx).Raw("SELECT c_space_id,c_run_id,c_account_id,c_channel_id,c_execution_mode FROM t_rebalance_runs WHERE c_status IN ('PLANNED','EXECUTING') ORDER BY c_mtime LIMIT ?", limit).Scan(&rows).Error
-	out := make([]RebalanceRunRecord, len(rows))
-	for i, r := range rows {
-		out[i] = RebalanceRunRecord{SpaceID: r.SpaceID, RunID: r.RunID, AccountID: r.AccountID, ChannelID: r.ChannelID, ExecutionMode: r.ExecutionMode}
-	}
-	return out, e
-}
-func (s *Store) ListRebalanceLegs(ctx context.Context, space, runID string) ([]RebalanceLegRecord, error) {
-	var rows []struct {
-		SpaceID    string `gorm:"column:c_space_id"`
-		RunID      string `gorm:"column:c_run_id"`
-		LegID      string `gorm:"column:c_leg_id"`
-		Symbol     string `gorm:"column:c_symbol"`
-		MarketType string `gorm:"column:c_market_type"`
-		BaseAsset  string `gorm:"column:c_base_asset"`
-		QuoteAsset string `gorm:"column:c_quote_asset"`
-		Side       string `gorm:"column:c_side"`
-		Action     string `gorm:"column:c_action"`
-		Quantity   string `gorm:"column:c_quantity"`
-		Price      string `gorm:"column:c_price"`
-		ReduceOnly bool   `gorm:"column:c_reduce_only"`
-		Sequence   int    `gorm:"column:c_sequence"`
-		DependsOn  string `gorm:"column:c_depends_on"`
-		PlanID     string `gorm:"column:c_plan_id"`
-		Status     string `gorm:"column:c_status"`
-	}
-	err := s.db.WithContext(ctx).Raw("SELECT * FROM t_rebalance_legs WHERE c_space_id=? AND c_run_id=? ORDER BY c_sequence", space, runID).Scan(&rows).Error
-	out := make([]RebalanceLegRecord, len(rows))
-	for i, r := range rows {
-		var deps []int
-		_ = json.Unmarshal([]byte(r.DependsOn), &deps)
-		out[i] = RebalanceLegRecord{SpaceID: r.SpaceID, RunID: r.RunID, LegID: r.LegID, Symbol: r.Symbol, MarketType: r.MarketType, BaseAsset: r.BaseAsset, QuoteAsset: r.QuoteAsset, Side: r.Side, Action: r.Action, Quantity: r.Quantity, Price: r.Price, ReduceOnly: r.ReduceOnly, Sequence: r.Sequence, DependsOn: deps, PlanID: r.PlanID, Status: r.Status}
-	}
-	return out, err
-}
-func (t *Tx) UpdateRebalanceLeg(space, legID, status, planID string) error {
-	return t.db.Exec("UPDATE t_rebalance_legs SET c_status=?,c_plan_id=? WHERE c_space_id=? AND c_leg_id=?", status, planID, space, legID).Error
-}
-func (t *Tx) UpdateRebalanceRun(space, runID, status, residual string) error {
-	return t.db.Exec("UPDATE t_rebalance_runs SET c_status=?,c_residual=?,c_version=c_version+1,c_mtime=? WHERE c_space_id=? AND c_run_id=?", status, residual, time.Now().UTC(), space, runID).Error
-}
-func (t *Tx) InsertFill(space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset string, tradedAtMS int64) (bool, error) {
-	res := t.db.Exec("INSERT OR IGNORE INTO t_trade_fill_events(c_space_id,c_fill_id,c_exchange_trade_id,c_account_id,c_channel_id,c_symbol,c_order_id,c_quantity,c_price,c_fee,c_fee_asset,c_traded_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", space, fillID, exchangeID, account, channel, symbol, orderID, qty, price, fee, feeAsset, tradedAtMS)
-	return res.RowsAffected == 1, res.Error
-}
-
-func epochMillis(value int64) int64 {
-	if value > 0 && value < 1_000_000_000_000 {
-		return value * 1000
-	}
-	return value
-}
-
-func epochTime(value int64) time.Time { return time.UnixMilli(epochMillis(value)).UTC() }
-func (t *Tx) PostLedger(space string, posting ledger.Transaction) error {
-	if err := posting.Validate(); err != nil {
-		return err
-	}
-	res := t.db.Exec("INSERT OR IGNORE INTO t_ledger_transactions(c_space_id,c_transaction_id,c_biz_type,c_ref_type,c_ref_id) VALUES(?,?,?,?,?)", space, posting.ID, posting.BizType, posting.RefType, posting.RefID)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
+func writeError(err error) error {
+	if err == nil {
 		return nil
 	}
-	for _, e := range posting.Entries {
-		if err := t.db.Exec("INSERT INTO t_ledger_entries(c_space_id,c_transaction_id,c_account_id,c_asset,c_bucket,c_amount) VALUES(?,?,?,?,?,?)", space, posting.ID, e.AccountID, e.Asset, e.Bucket, e.Amount.String()).Error; err != nil {
-			return err
-		}
-		var current string
-		q := t.db.Raw("SELECT c_amount FROM t_trade_balance_projections WHERE c_space_id=? AND c_account_id=? AND c_asset=? AND c_bucket=?", space, e.AccountID, e.Asset, e.Bucket).Scan(&current)
-		if q.Error != nil {
-			return q.Error
-		}
-		amount := shared.Zero()
-		if current != "" {
-			var parseErr error
-			amount, parseErr = shared.ParseDecimal(current)
-			if parseErr != nil {
-				return parseErr
-			}
-		}
-		amount = amount.Add(e.Amount)
-		if !strings.HasPrefix(e.AccountID, "exchange-") && (e.Bucket == "available" || e.Bucket == "frozen") && amount.IsNegative() {
-			return fmt.Errorf("trade: insufficient %s balance for %s", e.Asset, e.AccountID)
-		}
-		if err := t.db.Exec("INSERT INTO t_trade_balance_projections(c_space_id,c_account_id,c_asset,c_bucket,c_amount) VALUES(?,?,?,?,?) ON CONFLICT(c_space_id,c_account_id,c_asset,c_bucket) DO UPDATE SET c_amount=excluded.c_amount,c_version=c_version+1", space, e.AccountID, e.Asset, e.Bucket, amount.String()).Error; err != nil {
-			return err
-		}
+	if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		return fmt.Errorf("%w: %v", ErrConflict, err)
 	}
-	return nil
-}
-func (t *Tx) ApplyPosition(space, account, symbol string, f position.Fill) error {
-	var row struct {
-		Quantity     string `gorm:"column:c_quantity"`
-		AveragePrice string `gorm:"column:c_average_price"`
-		RealizedPnL  string `gorm:"column:c_realized_pnl"`
-		Version      uint64 `gorm:"column:c_version"`
-	}
-	err := t.db.Raw("SELECT c_quantity,c_average_price,c_realized_pnl,c_version FROM t_trade_position_projections WHERE c_space_id=? AND c_account_id=? AND c_symbol=?", space, account, symbol).Scan(&row).Error
-	if err != nil {
-		return err
-	}
-	p := position.Position{Symbol: symbol, Quantity: shared.Zero(), AveragePrice: shared.Zero(), RealizedPnL: shared.Zero(), Version: row.Version}
-	if row.Quantity != "" {
-		if p.Quantity, err = shared.ParseDecimal(row.Quantity); err != nil {
-			return err
-		}
-		if p.AveragePrice, err = shared.ParseDecimal(row.AveragePrice); err != nil {
-			return err
-		}
-		if p.RealizedPnL, err = shared.ParseDecimal(row.RealizedPnL); err != nil {
-			return err
-		}
-	}
-	p = p.Apply(f)
-	return t.db.Exec("INSERT INTO t_trade_position_projections(c_space_id,c_account_id,c_symbol,c_quantity,c_average_price,c_realized_pnl,c_version) VALUES(?,?,?,?,?,?,?) ON CONFLICT(c_space_id,c_account_id,c_symbol) DO UPDATE SET c_quantity=excluded.c_quantity,c_average_price=excluded.c_average_price,c_realized_pnl=excluded.c_realized_pnl,c_version=excluded.c_version", space, account, symbol, p.Quantity.String(), p.AveragePrice.String(), p.RealizedPnL.String(), p.Version).Error
+	return err
 }

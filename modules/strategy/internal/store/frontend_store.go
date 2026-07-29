@@ -160,13 +160,13 @@ func (r *Store) ListRuns(ctx context.Context, filter RunFilter, page Page) ([]do
 	return runs, total, nil
 }
 
-func (r *Store) ListTargets(ctx context.Context, runID string, page Page) ([]domain.TargetWeight, int64, error) {
+func (r *Store) ListTargets(ctx context.Context, runID string, page Page) ([]domain.TargetPosition, int64, error) {
 	p := page.normalized()
 	var run domain.StrategyRun
 	if err := r.db.WithContext(ctx).Where("c_run_id=?", runID).First(&run).Error; err != nil {
 		return nil, 0, err
 	}
-	var targets []domain.TargetWeight
+	var targets []domain.TargetPosition
 	var raw string
 	if err := r.db.WithContext(ctx).Table("t_strategy_runs").Select("c_output_json").Where("c_run_id=?", runID).Scan(&raw).Error; err != nil {
 		return nil, 0, err
@@ -176,26 +176,9 @@ func (r *Store) ListTargets(ctx context.Context, runID string, page Page) ([]dom
 		return nil, 0, err
 	}
 	total := int64(len(output.Targets))
-	var comparisons []domain.TargetComparison
-	if err := r.db.WithContext(ctx).Where("c_run_id=?", runID).Find(&comparisons).Error; err != nil {
-		return nil, 0, err
-	}
-	comparisonByInstrument := make(map[string]domain.TargetComparison, len(comparisons))
-	for _, comparison := range comparisons {
-		comparisonByInstrument[comparison.InstrumentID] = comparison
-	}
-	for i := range output.Targets {
-		if comparison, ok := comparisonByInstrument[output.Targets[i].InstrumentID]; ok {
-			output.Targets[i].PortfolioTarget = comparison.PortfolioTarget
-			output.Targets[i].ActualPosition = comparison.ActualPosition
-			output.Targets[i].Deviation = comparison.Deviation
-			output.Targets[i].SourceTime = formatComparisonTime(comparison.SourceTime)
-			output.Targets[i].DataRevision = comparison.DataRevision
-		}
-	}
 	start := (p.Number - 1) * p.Size
 	if start >= len(output.Targets) {
-		return []domain.TargetWeight{}, total, nil
+		return []domain.TargetPosition{}, total, nil
 	}
 	end := start + p.Size
 	if end > len(output.Targets) {
@@ -203,13 +186,6 @@ func (r *Store) ListTargets(ctx context.Context, runID string, page Page) ([]dom
 	}
 	targets = append(targets, output.Targets[start:end]...)
 	return targets, total, nil
-}
-
-func formatComparisonTime(value time.Time) string {
-	if value.IsZero() {
-		return ""
-	}
-	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func (r *Store) ListPerformancePoints(ctx context.Context, filter PerformanceFilter) ([]domain.PerformancePoint, error) {

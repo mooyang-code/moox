@@ -52,6 +52,12 @@ func (e Event) Validate(message *eventpb.EventMessage, payload proto.Message) er
 
 var builtInEvents []Event
 
+const ObservabilityFilterSubject = "moox.observability.>"
+
+func ObservabilityStreamName() string {
+	return ObservabilityMetricsSnapshotReported.Stream()
+}
+
 func declareEvent(name string, version uint32, stream, owner string, newPayload func() proto.Message, validate EventValidator) Event {
 	event := Event{name: name, version: version, stream: stream, owner: owner, newPayload: newPayload, validate: validate}
 	builtInEvents = append(builtInEvents, event)
@@ -74,9 +80,9 @@ var (
 	DatasetRowsUpserted = declareEvent("storage.dataset.rows.upserted", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)
-	TradeRebalanceRequested = declareEvent("trade.rebalance.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
-		return &tradeeventpb.RebalanceRequested{}
-	}, validateTradeRebalanceRequested)
+	TradeTargetRequested = declareEvent("trade.target.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
+		return &tradeeventpb.TargetIntent{}
+	}, validateTradeTargetRequested)
 )
 
 type Registry struct {

@@ -19,6 +19,15 @@ type BalanceMetrics struct {
 	lastSuccess         prometheus.Gauge
 	maxDifference       prometheus.Gauge
 	consecutiveFailures prometheus.Gauge
+	mu                  sync.Mutex
+	accounts            map[string]balanceState
+}
+
+type balanceState struct {
+	lastRun             float64
+	lastSuccess         float64
+	maxDifference       float64
+	consecutiveFailures float64
 }
 
 func DefaultBalanceMetrics() (*BalanceMetrics, error) {
@@ -44,12 +53,13 @@ func NewBalanceMetrics(registerer prometheus.Registerer) (*BalanceMetrics, error
 		}),
 		maxDifference: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "moox_trade_balance_sync_max_difference_ratio",
-			Help: "Maximum relative difference between the prior local and venue balances.",
+			Help: "Maximum relative difference between the prior local and Exchange balances.",
 		}),
 		consecutiveFailures: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "moox_trade_balance_sync_consecutive_failures",
 			Help: "Number of consecutive failed balance synchronization runs.",
 		}),
+		accounts: make(map[string]balanceState),
 	}
 	for _, collector := range []prometheus.Collector{metrics.runs, metrics.lastRun, metrics.lastSuccess, metrics.maxDifference, metrics.consecutiveFailures} {
 		if err := registerer.Register(collector); err != nil {
@@ -59,8 +69,13 @@ func NewBalanceMetrics(registerer prometheus.Registerer) (*BalanceMetrics, error
 	return metrics, nil
 }
 
-func (m *BalanceMetrics) Observe(now time.Time, maxDifference float64, err error) {
-	if m == nil {
+func (m *BalanceMetrics) Observe(
+	exchangeAccountID string,
+	now time.Time,
+	maxDifference float64,
+	err error,
+) {
+	if m == nil || exchangeAccountID == "" {
 		return
 	}
 	result := "success"
@@ -69,12 +84,44 @@ func (m *BalanceMetrics) Observe(now time.Time, maxDifference float64, err error
 	}
 	timestamp := float64(now.UTC().Unix())
 	m.runs.WithLabelValues(result).Inc()
-	m.lastRun.Set(timestamp)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.accounts[exchangeAccountID]
+	state.lastRun = timestamp
 	if err == nil {
-		m.lastSuccess.Set(timestamp)
-		m.maxDifference.Set(max(maxDifference, 0))
-		m.consecutiveFailures.Set(0)
+		state.lastSuccess = timestamp
+		state.maxDifference = max(maxDifference, 0)
+		state.consecutiveFailures = 0
 	} else {
-		m.consecutiveFailures.Inc()
+		state.consecutiveFailures++
 	}
+	m.accounts[exchangeAccountID] = state
+	m.updateAggregate()
+}
+
+func (m *BalanceMetrics) Remove(exchangeAccountID string) {
+	if m == nil || exchangeAccountID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.accounts, exchangeAccountID)
+	m.updateAggregate()
+}
+
+func (m *BalanceMetrics) updateAggregate() {
+	var latestRun, earliestSuccess, maximumDifference, maximumFailures float64
+	for _, state := range m.accounts {
+		latestRun = max(latestRun, state.lastRun)
+		if earliestSuccess == 0 ||
+			(state.lastSuccess > 0 && state.lastSuccess < earliestSuccess) {
+			earliestSuccess = state.lastSuccess
+		}
+		maximumDifference = max(maximumDifference, state.maxDifference)
+		maximumFailures = max(maximumFailures, state.consecutiveFailures)
+	}
+	m.lastRun.Set(latestRun)
+	m.lastSuccess.Set(earliestSuccess)
+	m.maxDifference.Set(maximumDifference)
+	m.consecutiveFailures.Set(maximumFailures)
 }

@@ -60,7 +60,7 @@ streams:
     duplicates: 2m
     max_bytes: 268435456
   - name: MOOX_TRADE
-    subjects: ["moox.trade.rebalance.requested.v1.>"]
+    subjects: ["moox.trade.target.requested.v1.>"]
     retention: work_queue
     discard: old
     storage: file

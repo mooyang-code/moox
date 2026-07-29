@@ -1,5 +1,6 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
+import { createClientId } from "@/utils/client-id";
 import {
   getStrategyOverview,
   getStrategyPerformance,
@@ -96,15 +97,15 @@ export const useStrategyStore = defineStore("strategy", () => {
   }
 
   async function pause(bindingId: string, reason: string) {
-    return pauseBinding(bindingId, reason, crypto.randomUUID());
+    return pauseBinding(bindingId, reason, createClientId());
   }
 
   async function resume(bindingId: string, reason: string) {
-    return resumeBinding(bindingId, reason, crypto.randomUUID());
+    return resumeBinding(bindingId, reason, createClientId());
   }
 
-  async function changeMode(bindingId: string, mode: string, reason: string, settings: ExecutionSettings = {}) {
-    return setExecutionMode(bindingId, mode, reason, crypto.randomUUID(), settings);
+  async function changeMode(bindingId: string, mode: string, reason: string, settings: ExecutionSettings) {
+    return setExecutionMode(bindingId, mode, reason, createClientId(), settings);
   }
 
   return {

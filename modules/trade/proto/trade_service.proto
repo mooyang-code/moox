@@ -6,538 +6,345 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/trade/proto/tradegen;tradepb";
 
-// Trade 模块统一承载「账户域」与「交易域」两条链路，部署为单一微服务 moox-trade。
-// 纯 RPC 服务，由统一 HTTP 转发层调度：
-//   账户域 /api/trade/{account|balance|fund|apikey}/{method}
-//   交易域 /api/trade/{channel|order|trade|position}/{method}
-//
-// 响应设计参考 admin/storage：每个响应首字段 common.RetInfo（code/msg），
-// code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
-// 鉴权由网关 authorize filter 校验 JWT 并注入 user_id/space_id 到 ctx metadata。
-// 金额/数量统一使用 string 承载 decimal，避免浮点精度丢失。
+// Decimal values are encoded as strings. Timestamps are Unix milliseconds.
 
-// ==================================================================
-// 账户域（Account）
-// ==================================================================
-
-// ========== 枚举 ==========
-
-// AccountType 账户类型。
-enum AccountType {
-  ACCOUNT_TYPE_SPOT = 0;    // 现货
-  ACCOUNT_TYPE_MARGIN = 1;  // 杠杆
-  ACCOUNT_TYPE_SWAP = 2;    // 合约/永续
-  ACCOUNT_TYPE_SIM = 3;     // 模拟
+enum Exchange {
+  EXCHANGE_UNSPECIFIED = 0;
+  EXCHANGE_BINANCE = 1;
+  EXCHANGE_OKX = 2;
 }
 
-// AccountStatus 账户状态。
-enum AccountStatus {
-  ACCOUNT_STATUS_DISABLED = 0; // 禁用
-  ACCOUNT_STATUS_NORMAL = 1;   // 正常
-  ACCOUNT_STATUS_FROZEN = 2;   // 冻结
-  ACCOUNT_STATUS_READONLY = 3; // 只读
-}
-
-// ========== 消息 ==========
-
-// Account 账户信息（对应 t_accounts）。
-message Account {
-  string account_id = 1;
-  string user_id = 2;
-  string account_name = 3;
-  AccountType account_type = 4;
-  string channel_id = 5;      // 绑定交易通道（可空）
-  string base_currency = 6;
-  AccountStatus status = 7;
-  bool is_default = 8;
-  string remark = 9;
-  int64 created_at = 10;
-  int64 updated_at = 11;
-}
-
-// Balance 账户余额（对应 t_account_balances）。
-message Balance {
-  string account_id = 1;
-  string currency = 2;
-  string available = 3; // 可用（decimal string）
-  string frozen = 4;    // 冻结
-  string total = 5;     // 总额
-}
-
-// FundFlow 资金流水（对应 t_account_fund_flows）。
-message FundFlow {
-  string flow_id = 1;
-  string account_id = 2;
-  string currency = 3;
-  string biz_type = 4;       // deposit/withdraw/transfer_in/transfer_out/trade/fee/funding/adjust
-  int32 direction = 5;       // 1=增加, -1=减少
-  string amount = 6;
-  string balance_after = 7;
-  string ref_type = 8;
-  string ref_id = 9;
-  string remark = 10;
-  int64 created_at = 11;
-}
-
-// ApiKey API 凭证（对应 t_account_api_keys，敏感字段由网关脱敏返回）。
-message ApiKey {
-  string api_key_id = 1;
-  string account_id = 2;
-  string exchange = 3;
-  string api_key = 4;        // 列表返回时脱敏
-  string passphrase = 5;     // 仅写入，列表不返回
-  repeated string permissions = 6;
-  int32 status = 7;
-  int64 created_at = 8;
-}
-
-// ========== 账户管理（AccountSvc）==========
-
-message CreateAccountReq {
-  string account_name = 1;
-  AccountType account_type = 2;
-  string channel_id = 3;
-  string base_currency = 4;
-  string remark = 5;
-}
-message CreateAccountRsp {
-  common.RetInfo ret_info = 1;
-  string account_id = 2;
-  Account account = 3;
-}
-
-message UpdateAccountReq {
-  string account_id = 1;
-  string account_name = 2;
-  AccountStatus status = 3;
-  bool is_default = 4;
-  string remark = 5;
-}
-message UpdateAccountRsp {
-  common.RetInfo ret_info = 1;
-  Account account = 2;
-}
-
-message DeleteAccountReq { string account_id = 1; }
-message DeleteAccountRsp { common.RetInfo ret_info = 1; }
-
-message GetAccountReq { string account_id = 1; }
-message GetAccountRsp {
-  common.RetInfo ret_info = 1;
-  Account account = 2;
-}
-
-message ListAccountsReq {
-  string user_id = 1;          // 可空，默认当前登录用户
-  optional AccountType account_type = 2; // 可空过滤
-  string keyword = 3;
-  common.Page page = 4;
-}
-message ListAccountsRsp {
-  common.RetInfo ret_info = 1;
-  repeated Account accounts = 2;
-  common.PageResult page_result = 3;
-}
-
-// SyncExchangeAccounts 从后台秘钥管理导入交易所账户/API Key/默认通道。
-message SyncExchangeAccountsReq {
-  string provider = 1;      // 默认 binance
-  string market_type = 2;   // 可填 spot/margin/swap/futures；为空时自动探测可用市场
-}
-message SyncExchangeAccountsRsp {
-  common.RetInfo ret_info = 1;
-  repeated Account accounts = 2;
-}
-
-// ========== 余额（BalanceSvc）==========
-
-message GetBalancesReq {
-  string account_id = 1;
-  repeated string currencies = 2; // 可空表示全部
-}
-message GetBalancesRsp {
-  common.RetInfo ret_info = 1;
-  repeated Balance balances = 2;
-}
-
-// SyncBalances 从交易所拉取并刷新本地余额快照。
-message SyncBalancesReq { string account_id = 1; }
-message SyncBalancesRsp {
-  common.RetInfo ret_info = 1;
-  repeated Balance balances = 2;
-}
-
-// ========== 资金流水（FundSvc）==========
-
-message ListFundFlowsReq {
-  string account_id = 1;
-  string currency = 2;    // 可空
-  string biz_type = 3;    // 可空
-  int64 start_time = 4;   // 可空
-  int64 end_time = 5;     // 可空
-  common.Page page = 6;
-}
-message ListFundFlowsRsp {
-  common.RetInfo ret_info = 1;
-  repeated FundFlow flows = 2;
-  common.PageResult page_result = 3;
-}
-
-// Transfer 账户间划转（内部记账，生成成对流水）。
-message TransferReq {
-  string from_account_id = 1;
-  string to_account_id = 2;
-  string currency = 3;
-  string amount = 4;
-  string remark = 5;
-}
-message TransferRsp {
-  common.RetInfo ret_info = 1;
-  string out_flow_id = 2;
-  string in_flow_id = 3;
-}
-
-// ========== API 凭证（ApiKeySvc）==========
-
-message CreateApiKeyReq {
-  string account_id = 1;
-  string exchange = 2;
-  string api_key = 3;
-  string api_secret = 4;
-  string passphrase = 5;
-  repeated string permissions = 6;
-}
-message CreateApiKeyRsp {
-  common.RetInfo ret_info = 1;
-  string api_key_id = 2;
-}
-
-message DeleteApiKeyReq { string api_key_id = 1; }
-message DeleteApiKeyRsp { common.RetInfo ret_info = 1; }
-
-message ListApiKeysReq { string account_id = 1; }
-message ListApiKeysRsp {
-  common.RetInfo ret_info = 1;
-  repeated ApiKey api_keys = 2; // 敏感字段脱敏
-}
-
-// ==================================================================
-// 交易域（Order）
-// ==================================================================
-
-// ========== 枚举 ==========
-
-// MarketType 市场类型。
 enum MarketType {
-  MARKET_TYPE_SPOT = 0;     // 现货
-  MARKET_TYPE_MARGIN = 1;   // 杠杆
-  MARKET_TYPE_SWAP = 2;     // 永续
-  MARKET_TYPE_FUTURES = 3;  // 交割
+  MARKET_TYPE_UNSPECIFIED = 0;
+  MARKET_TYPE_SPOT = 1;
+  MARKET_TYPE_SWAP = 2;
 }
 
-// OrderSide 买卖方向。
-enum OrderSide {
-  ORDER_SIDE_BUY = 0;
-  ORDER_SIDE_SELL = 1;
+enum ExecutionMode {
+  EXECUTION_MODE_UNSPECIFIED = 0;
+  EXECUTION_MODE_PAPER = 1;
+  EXECUTION_MODE_LIVE = 2;
 }
 
-// OrderType 订单类型。
 enum OrderType {
-  ORDER_TYPE_LIMIT = 0;       // 限价
-  ORDER_TYPE_MARKET = 1;      // 市价
-  ORDER_TYPE_STOP = 2;        // 止损市价
-  ORDER_TYPE_STOP_LIMIT = 3;  // 止损限价
-  ORDER_TYPE_POST_ONLY = 4;   // 只挂单
-  ORDER_TYPE_IOC = 5;         // 立即成交并取消剩余
-  ORDER_TYPE_FOK = 6;         // 全部成交或取消
+  ORDER_TYPE_UNSPECIFIED = 0;
+  ORDER_TYPE_MARKET = 1;
+  ORDER_TYPE_LIMIT = 2;
 }
 
-// OrderStatus 订单状态（由 Trade Kernel 聚合状态映射）。
-enum OrderStatus {
-  ORDER_STATUS_PENDING = 0;          // 待提交
-  ORDER_STATUS_SUBMITTED = 1;        // 已提交
-  ORDER_STATUS_PARTIALLY_FILLED = 2; // 部分成交
-  ORDER_STATUS_FILLED = 3;           // 完全成交
-  ORDER_STATUS_CANCELED = 4;         // 已撤销
-  ORDER_STATUS_PARTIAL_CANCELED = 5; // 部分成交后撤销
-  ORDER_STATUS_REJECTED = 6;         // 拒绝
-  ORDER_STATUS_EXPIRED = 7;          // 过期
+enum TimeInForce {
+  TIME_IN_FORCE_UNSPECIFIED = 0;
+  TIME_IN_FORCE_GTC = 1;
+  TIME_IN_FORCE_IOC = 2;
+  TIME_IN_FORCE_FOK = 3;
 }
 
-// ChannelStatus 交易通道状态。
-enum ChannelStatus {
-  CHANNEL_STATUS_DISABLED = 0; // 禁用
-  CHANNEL_STATUS_ONLINE = 1;   // 在线
-  CHANNEL_STATUS_OFFLINE = 2;  // 离线
-  CHANNEL_STATUS_ERROR = 3;    // 异常
+enum PositionSide {
+  POSITION_SIDE_UNSPECIFIED = 0;
+  POSITION_SIDE_NET = 1;
 }
 
-// ========== 消息 ==========
-
-// TradeChannel 交易通道（对应 t_trade_channels）。
-message TradeChannel {
-  string channel_id = 1;
-  string channel_name = 2;
-  string exchange = 3;
-  MarketType market_type = 4;
-  string account_id = 5;
-  string api_key_id = 6;
-  string endpoint = 7;
-  bool is_simulated = 8;
-  ChannelStatus status = 9;
-  int32 rate_limit = 10;
-  int64 last_heartbeat = 11;
-  int64 created_at = 12;
-  int64 updated_at = 13;
+enum OrderSide {
+  ORDER_SIDE_UNSPECIFIED = 0;
+  ORDER_SIDE_BUY = 1;
+  ORDER_SIDE_SELL = 2;
 }
 
-// Instrument 交易规则（交易对精度/最小下单量）。
-message Instrument {
-  string symbol = 1;
-  MarketType market_type = 2;
-  string base_ccy = 3;
-  string quote_ccy = 4;
-  string tick_size = 5;
-  string lot_size = 6;
-  string min_notional = 7;
-  string min_qty = 8;
-  string status = 9;
-  string last_price = 10;
+message AssetBalance {
+  string asset = 1;
+  string available = 2;
+  string locked = 3;
+  string total = 4;
 }
 
-// Order 订单（由 Trade Kernel 订单聚合返回）。
+message ExchangeAccountSnapshot {
+  repeated AssetBalance balances = 1;
+  string equity = 2;
+  string available_funds = 3;
+  string used_margin = 4;
+  string maintenance_margin = 5;
+  string unrealized_pnl = 6;
+  int64 exchange_updated_at = 7;
+}
+
+message ExchangeAccount {
+  string exchange_account_id = 1;
+  string space_id = 2;
+  string name = 3;
+  Exchange exchange = 4;
+  MarketType market_type = 5;
+  ExecutionMode execution_mode = 6;
+  string credential_secret_id = 7;
+  string settlement_asset = 8;
+  string margin_mode = 9;
+  string status = 10;
+  bool paused = 11;
+  string pause_reason = 12;
+  bool ready = 13;
+  map<string, string> leverage_settings = 14;
+  ExchangeAccountSnapshot snapshot = 15;
+  int64 last_sync_at = 16;
+  int64 last_ready_at = 17;
+  string last_error = 18;
+  int64 created_at = 19;
+  int64 updated_at = 20;
+  repeated string sync_symbols = 21;
+}
+
 message Order {
   string order_id = 1;
-  string client_order_id = 2;
-  string exchange_order_id = 3;
-  string account_id = 4;
-  string channel_id = 5;
-  string exchange = 6;
+  string exchange_account_id = 2;
+  string client_order_id = 3;
+  string exchange_order_id = 4;
+  Exchange exchange = 5;
+  MarketType market_type = 6;
   string symbol = 7;
-  MarketType market_type = 8;
-  OrderSide side = 9;
-  string pos_side = 10;          // long/short/net（合约）
-  OrderType order_type = 11;
-  string time_in_force = 12;     // GTC/IOC/FOK
-  string price = 13;
-  string quantity = 14;
-  string amount = 15;
-  string filled_qty = 16;
-  string filled_amount = 17;
-  string avg_price = 18;
-  string fee = 19;
-  string fee_currency = 20;
-  OrderStatus status = 21;
-  bool reduce_only = 22;
-  string trigger_price = 23;
-  string source = 24;            // manual/strategy/api/factor
-  string strategy_id = 25;
-  string reject_reason = 26;
+  OrderType order_type = 8;
+  TimeInForce time_in_force = 9;
+  OrderSide side = 10;
+  PositionSide position_side = 11;
+  string quantity = 12;
+  optional string limit_price = 13;
+  string reference_price = 14;
+  int64 reference_price_at = 15;
+  bool reduce_only = 16;
+  string source = 17;
+  string strategy_execution_id = 18;
+  string state = 19;
+  string filled_quantity = 20;
+  string average_price = 21;
+  string reserved_asset = 22;
+  string reserved_quantity = 23;
+  string remaining_reserved_quantity = 24;
+  string reject_reason = 25;
+  uint64 version = 26;
   int64 submitted_at = 27;
   int64 finished_at = 28;
   int64 created_at = 29;
   int64 updated_at = 30;
 }
 
-// Trade 成交明细（由 Trade Kernel Fill 事实返回）。
-message Trade {
-  string trade_id = 1;
+message Fill {
+  string fill_id = 1;
   string exchange_trade_id = 2;
   string order_id = 3;
   string exchange_order_id = 4;
-  string account_id = 5;
-  string channel_id = 6;
-  string exchange = 7;
+  string exchange_account_id = 5;
+  Exchange exchange = 6;
+  MarketType market_type = 7;
   string symbol = 8;
   OrderSide side = 9;
-  string price = 10;
-  string quantity = 11;
-  string amount = 12;
+  PositionSide position_side = 10;
+  string price = 11;
+  string quantity = 12;
   string fee = 13;
-  string fee_currency = 14;
-  string role = 15;       // maker/taker
-  int64 traded_at = 16;
+  string fee_asset = 14;
+  string settlement_asset = 15;
+  string realized_pnl = 16;
+  string role = 17;
+  int64 traded_at = 18;
+  int64 created_at = 19;
 }
 
-// Position 持仓（由 Trade Kernel 成交事实投影）。
 message Position {
-  string position_id = 1;
-  string account_id = 2;
-  string channel_id = 3;
-  string exchange = 4;
-  string symbol = 5;
-  string pos_side = 6;
-  string quantity = 7;
-  string avg_price = 8;
-  string leverage = 9;
-  string margin = 10;
-  string liq_price = 11;
-  string unrealized_pnl = 12;
-  string realized_pnl = 13;
+  string exchange_account_id = 1;
+  string symbol = 2;
+  PositionSide position_side = 3;
+  string signed_quantity = 4;
+  string entry_price = 5;
+  string mark_price = 6;
+  string leverage = 7;
+  string margin_mode = 8;
+  string used_margin = 9;
+  string liquidation_price = 10;
+  string unrealized_pnl = 11;
+  string realized_pnl = 12;
+  int64 exchange_updated_at = 13;
   int64 updated_at = 14;
 }
 
-// ========== 交易通道（ChannelSvc）==========
+message TargetPosition {
+  string instrument_id = 1;
+  string symbol = 2;
+  string target_quantity = 3;
+}
 
-message CreateChannelReq {
-  string channel_name = 1;
-  string exchange = 2;
+message TargetExecution {
+  string execution_id = 1;
+  string event_id = 2;
+  string strategy_run_id = 3;
+  string execution_binding_id = 4;
+  string exchange_account_id = 5;
+  uint64 command_sequence = 6;
+  int64 not_after = 7;
+  string data_revision = 8;
+  repeated TargetPosition targets = 9;
+  string status = 10;
+  string progress = 11;
+  string residual_quantity = 12;
+  string last_error = 13;
+  int64 created_at = 14;
+  int64 updated_at = 15;
+}
+
+message CreateAccountReq {
+  string name = 1;
+  Exchange exchange = 2;
   MarketType market_type = 3;
-  string account_id = 4;
-  string api_key_id = 5;
-  string endpoint = 6;
-  bool is_simulated = 7;
-  int32 rate_limit = 8;
+  ExecutionMode execution_mode = 4;
+  string credential_secret_id = 5;
+  string settlement_asset = 6;
+  string margin_mode = 7;
+  repeated string sync_symbols = 8;
 }
-message CreateChannelRsp {
+message CreateAccountRsp {
   common.RetInfo ret_info = 1;
-  string channel_id = 2;
+  ExchangeAccount account = 2;
 }
 
-message UpdateChannelReq {
-  string channel_id = 1;
-  string channel_name = 2;
-  ChannelStatus status = 3;
-  string endpoint = 4;
-  int32 rate_limit = 5;
+message UpdateAccountReq {
+  string exchange_account_id = 1;
+  string name = 2;
+  string credential_secret_id = 3;
+  string settlement_asset = 4;
+  string margin_mode = 5;
+  string status = 6;
+  repeated string sync_symbols = 7;
 }
-message UpdateChannelRsp { common.RetInfo ret_info = 1; }
-
-message DeleteChannelReq { string channel_id = 1; }
-message DeleteChannelRsp { common.RetInfo ret_info = 1; }
-
-message ListChannelsReq {
-  string account_id = 1;  // 可空
-  string exchange = 2;    // 可空
-  common.Page page = 3;
-}
-message ListChannelsRsp {
+message UpdateAccountRsp {
   common.RetInfo ret_info = 1;
-  repeated TradeChannel channels = 2;
+  ExchangeAccount account = 2;
+}
+
+message GetAccountReq {
+  string exchange_account_id = 1;
+}
+message GetAccountRsp {
+  common.RetInfo ret_info = 1;
+  ExchangeAccount account = 2;
+}
+
+message ListAccountsReq {
+  optional Exchange exchange = 1;
+  optional MarketType market_type = 2;
+  optional ExecutionMode execution_mode = 3;
+  string status = 4;
+  common.Page page = 5;
+}
+message ListAccountsRsp {
+  common.RetInfo ret_info = 1;
+  repeated ExchangeAccount accounts = 2;
   common.PageResult page_result = 3;
 }
 
-// TestChannel 连通性测试（校验 API 凭证与下单权限）。
-message TestChannelReq { string channel_id = 1; }
-message TestChannelRsp {
+message SetLeverageReq {
+  string exchange_account_id = 1;
+  string symbol = 2;
+  string leverage = 3;
+}
+message SetLeverageRsp {
   common.RetInfo ret_info = 1;
-  bool reachable = 2;
-  int32 latency_ms = 3;
+  ExchangeAccount account = 2;
 }
 
-message ListInstrumentsReq {
-  string channel_id = 1;
-  optional MarketType market_type = 2;
+message PauseAccountReq {
+  string exchange_account_id = 1;
+  bool paused = 2;
+  string reason = 3;
 }
-message ListInstrumentsRsp {
+message PauseAccountRsp {
   common.RetInfo ret_info = 1;
-  repeated Instrument instruments = 2;
+  ExchangeAccount account = 2;
 }
 
-// ========== 账户交易操作（TradeOpSvc）==========
+message SyncAccountReq {
+  string exchange_account_id = 1;
+}
+message SyncAccountRsp {
+  common.RetInfo ret_info = 1;
+  int32 fills_ingested = 2;
+  int32 orders_updated = 3;
+  int32 positions_updated = 4;
+  bool account_snapshot_updated = 5;
+  int32 unknown_orders_resolved = 6;
+  bool ready = 7;
+  repeated string warnings = 8;
+}
 
-// PlaceOrder 下单。client_order_id 作为业务幂等键。
 message PlaceOrderReq {
-  string account_id = 1;
-  string channel_id = 2;
-  string client_order_id = 3;
-  string symbol = 4;
-  MarketType market_type = 5;
+  string exchange_account_id = 1;
+  string client_order_id = 2;
+  string symbol = 3;
+  OrderType order_type = 4;
+  TimeInForce time_in_force = 5;
   OrderSide side = 6;
-  string pos_side = 7;
-  OrderType order_type = 8;
-  string time_in_force = 9;
-  string price = 10;
-  string quantity = 11;
-  string amount = 12;        // 市价买单按金额下单时使用
-  bool reduce_only = 13;
-  string trigger_price = 14;
-  string source = 15;
-  string strategy_id = 16;
+  PositionSide position_side = 7;
+  string quantity = 8;
+  optional string limit_price = 9;
+  bool reduce_only = 10;
+  string source = 11;
+  string strategy_execution_id = 12;
 }
 message PlaceOrderRsp {
   common.RetInfo ret_info = 1;
-  string order_id = 2;
-  string exchange_order_id = 3;
-  OrderStatus status = 4;
+  Order order = 2;
 }
 
-// CancelOrder 撤单（order_id 与 client_order_id 二选一）。
 message CancelOrderReq {
-  string account_id = 1;
-  string channel_id = 2;
-  string order_id = 3;
-  string client_order_id = 4;
+  string order_id = 1;
 }
 message CancelOrderRsp {
   common.RetInfo ret_info = 1;
-  OrderStatus status = 2;
+  Order order = 2;
 }
 
-// CancelAllOrders 全撤（可按 symbol 过滤）。
 message CancelAllOrdersReq {
-  string account_id = 1;
-  string channel_id = 2;
-  string symbol = 3; // 可空表示全部
+  string exchange_account_id = 1;
+  string symbol = 2;
 }
 message CancelAllOrdersRsp {
   common.RetInfo ret_info = 1;
   int32 canceled_count = 2;
 }
 
-// AmendOrder 改单（改价/改量）。
-message AmendOrderReq {
-  string account_id = 1;
-  string channel_id = 2;
-  string order_id = 3;
-  string new_price = 4;     // 可空
-  string new_quantity = 5;  // 可空
+message SubmitTargetReq {
+  string event_id = 1;
+  string execution_id = 2;
+  string strategy_run_id = 3;
+  string execution_binding_id = 4;
+  string exchange_account_id = 5;
+  uint64 command_sequence = 6;
+  int64 not_after = 7;
+  string data_revision = 8;
+  repeated TargetPosition targets = 9;
 }
-message AmendOrderRsp {
+message SubmitTargetRsp {
   common.RetInfo ret_info = 1;
-  OrderStatus status = 2;
+  TargetExecution execution = 2;
 }
 
-// SetLeverage 调整杠杆（合约）。
-message SetLeverageReq {
-  string account_id = 1;
-  string channel_id = 2;
-  string symbol = 3;
-  string leverage = 4;
+message GetExecutionReq {
+  string execution_id = 1;
 }
-message SetLeverageRsp { common.RetInfo ret_info = 1; }
-
-// ConvertDust 将现货小额资产转换为交易所支持的目标资产。Binance 现货目标为 BNB。
-message DustTransferItem {
-  string asset = 1;
-  string amount = 2;
-  int64 operate_time = 3;
-  string service_charge_amount = 4;
-  int64 tran_id = 5;
-  string transfered_amount = 6;
-}
-message DustTransferSkippedItem {
-  string asset = 1;
-  string reason = 2;
-}
-message ConvertDustReq {
-  string account_id = 1;
-  string channel_id = 2;
-  repeated string assets = 3;
-}
-message ConvertDustRsp {
+message GetExecutionRsp {
   common.RetInfo ret_info = 1;
-  string total_service_charge = 2;
-  string total_transfered = 3;
-  repeated DustTransferItem results = 4;
-  repeated DustTransferSkippedItem skipped_results = 5;
+  TargetExecution execution = 2;
 }
 
-// ========== 订单查询（OrderSvc）==========
+message ListExecutionsReq {
+  string exchange_account_id = 1;
+  string execution_binding_id = 2;
+  string status = 3;
+  common.Page page = 4;
+}
+message ListExecutionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated TargetExecution executions = 2;
+  common.PageResult page_result = 3;
+}
 
 message GetOrderReq {
   string order_id = 1;
-  string client_order_id = 2; // 二选一
 }
 message GetOrderRsp {
   common.RetInfo ret_info = 1;
@@ -545,190 +352,62 @@ message GetOrderRsp {
 }
 
 message ListOrdersReq {
-  string account_id = 1;
-  string channel_id = 2;     // 可空
-  string symbol = 3;         // 可空
-  OrderStatus status = 4;    // 可空过滤
-  bool only_open = 5;        // 仅未结订单
-  int64 start_time = 6;
-  int64 end_time = 7;
-  common.Page page = 8;
+  string exchange_account_id = 1;
+  string symbol = 2;
+  string state = 3;
+  bool only_open = 4;
+  int64 start_time = 5;
+  int64 end_time = 6;
+  common.Page page = 7;
 }
 message ListOrdersRsp {
   common.RetInfo ret_info = 1;
   repeated Order orders = 2;
   common.PageResult page_result = 3;
 }
-message SyncOrdersReq {
-  string account_id = 1;
-  string symbol = 2;      // 历史订单必填；only_open=true 时可空查询当前挂单
-  bool only_open = 3;
+
+message ListFillsReq {
+  string exchange_account_id = 1;
+  string order_id = 2;
+  string symbol = 3;
   int64 start_time = 4;
   int64 end_time = 5;
   common.Page page = 6;
 }
-message SyncOrdersRsp {
+message ListFillsRsp {
   common.RetInfo ret_info = 1;
-  repeated Order orders = 2;
+  repeated Fill fills = 2;
   common.PageResult page_result = 3;
 }
-
-// ========== 成交查询（TradeQuerySvc）==========
-
-message ListTradesReq {
-  string account_id = 1;
-  string order_id = 2;   // 可空，按订单过滤
-  string symbol = 3;     // 可空
-  int64 start_time = 4;
-  int64 end_time = 5;
-  common.Page page = 6;
-}
-message ListTradesRsp {
-  common.RetInfo ret_info = 1;
-  repeated Trade trades = 2;
-  common.PageResult page_result = 3;
-}
-message SyncTradesReq {
-  string account_id = 1;
-  string order_id = 2;   // 可空，按订单过滤
-  string symbol = 3;     // 必填
-  int64 start_time = 4;
-  int64 end_time = 5;
-  common.Page page = 6;
-}
-message SyncTradesRsp {
-  common.RetInfo ret_info = 1;
-  repeated Trade trades = 2;
-  common.PageResult page_result = 3;
-}
-
-// ========== 持仓查询（PositionSvc）==========
 
 message ListPositionsReq {
-  string account_id = 1;
-  string symbol = 2;     // 可空
+  string exchange_account_id = 1;
+  string symbol = 2;
 }
 message ListPositionsRsp {
   common.RetInfo ret_info = 1;
   repeated Position positions = 2;
 }
 
-// SyncPositions 从交易所拉取并刷新本地持仓快照。
-message SyncPositionsReq {
-  string account_id = 1;
-  string symbol = 2;     // 可空
-}
-message SyncPositionsRsp {
-  common.RetInfo ret_info = 1;
-  repeated Position positions = 2;
-}
-
-// ========== 目标仓位调仓（RebalanceSvc）==========
-message TargetPosition { string symbol = 1; string quantity = 2; string instrument_id = 3; string market_type = 4; }
-message CurrentPosition { string symbol = 1; string quantity = 2; }
-message RebalanceMarket { string symbol = 1; string base_asset = 2; string quote_asset = 3; string price = 4; string market_type = 5; }
-message CreateRebalanceReq {
-  string run_id = 1;
-  string idempotency_key = 2;
-  string account_id = 3;
-  string channel_id = 4;
-  string market_snapshot_id = 5;
-  string position_snapshot_id = 6;
-  string rules_version = 7;
-  string target_mode = 8; // FULL/PATCH
-  repeated TargetPosition targets = 9;
-  repeated CurrentPosition currents = 10;
-  repeated RebalanceMarket markets = 11;
-  string source = 12;
-  string strategy_group_id = 13;
-  string strategy_execution_id = 14;
-  int64 group_target_revision = 15;
-}
-message CreateRebalanceRsp { common.RetInfo ret_info = 1; string run_id = 2; string status = 3; }
-message AdvanceRebalanceReq { string run_id = 1; string account_id = 2; string channel_id = 3; }
-message AdvanceRebalanceRsp { common.RetInfo ret_info = 1; string run_id = 2; string status = 3; }
-
-message SetTradePauseReq { string target_type = 1; string target_id = 2; bool paused = 3; string reason = 4; }
-message SetTradePauseRsp { common.RetInfo ret_info = 1; }
-message ReconcileNowReq { string account_id = 1; string channel_id = 2; }
-message ReconcileNowRsp { common.RetInfo ret_info = 1; string message_id = 2; }
-message InspectSagaReq { string saga_id = 1; }
-message InspectSagaRsp { common.RetInfo ret_info = 1; string saga_id = 2; string state = 3; string order_id = 4; string replacement_order_id = 5; string last_error = 6; uint64 version = 7; }
-
-// ==================================================================
-// Services（同一微服务进程内，按域拆分多个 service）
-// ==================================================================
-
-// --- 账户域 ---
-
-service AccountSvc {
+service ExchangeAccountService {
   rpc CreateAccount(CreateAccountReq) returns (CreateAccountRsp);
   rpc UpdateAccount(UpdateAccountReq) returns (UpdateAccountRsp);
-  rpc DeleteAccount(DeleteAccountReq) returns (DeleteAccountRsp);
   rpc GetAccount(GetAccountReq) returns (GetAccountRsp);
   rpc ListAccounts(ListAccountsReq) returns (ListAccountsRsp);
-  rpc SyncExchangeAccounts(SyncExchangeAccountsReq) returns (SyncExchangeAccountsRsp);
+  rpc SetLeverage(SetLeverageReq) returns (SetLeverageRsp);
+  rpc PauseAccount(PauseAccountReq) returns (PauseAccountRsp);
+  rpc SyncAccount(SyncAccountReq) returns (SyncAccountRsp);
 }
 
-service BalanceSvc {
-  rpc GetBalances(GetBalancesReq) returns (GetBalancesRsp);
-  rpc SyncBalances(SyncBalancesReq) returns (SyncBalancesRsp);
-}
-
-service FundSvc {
-  rpc ListFundFlows(ListFundFlowsReq) returns (ListFundFlowsRsp);
-  rpc Transfer(TransferReq) returns (TransferRsp);
-}
-
-service ApiKeySvc {
-  rpc CreateApiKey(CreateApiKeyReq) returns (CreateApiKeyRsp);
-  rpc DeleteApiKey(DeleteApiKeyReq) returns (DeleteApiKeyRsp);
-  rpc ListApiKeys(ListApiKeysReq) returns (ListApiKeysRsp);
-}
-
-// --- 交易域 ---
-
-service ChannelSvc {
-  rpc CreateChannel(CreateChannelReq) returns (CreateChannelRsp);
-  rpc UpdateChannel(UpdateChannelReq) returns (UpdateChannelRsp);
-  rpc DeleteChannel(DeleteChannelReq) returns (DeleteChannelRsp);
-  rpc ListChannels(ListChannelsReq) returns (ListChannelsRsp);
-  rpc TestChannel(TestChannelReq) returns (TestChannelRsp);
-  rpc ListInstruments(ListInstrumentsReq) returns (ListInstrumentsRsp);
-}
-
-service TradeOpSvc {
+service TradeExecutionService {
   rpc PlaceOrder(PlaceOrderReq) returns (PlaceOrderRsp);
   rpc CancelOrder(CancelOrderReq) returns (CancelOrderRsp);
   rpc CancelAllOrders(CancelAllOrdersReq) returns (CancelAllOrdersRsp);
-  rpc AmendOrder(AmendOrderReq) returns (AmendOrderRsp);
-  rpc SetLeverage(SetLeverageReq) returns (SetLeverageRsp);
-  rpc ConvertDust(ConvertDustReq) returns (ConvertDustRsp);
-}
-
-service OrderSvc {
+  rpc SubmitTarget(SubmitTargetReq) returns (SubmitTargetRsp);
+  rpc GetExecution(GetExecutionReq) returns (GetExecutionRsp);
+  rpc ListExecutions(ListExecutionsReq) returns (ListExecutionsRsp);
   rpc GetOrder(GetOrderReq) returns (GetOrderRsp);
   rpc ListOrders(ListOrdersReq) returns (ListOrdersRsp);
-  rpc SyncOrders(SyncOrdersReq) returns (SyncOrdersRsp);
-}
-
-service TradeQuerySvc {
-  rpc ListTrades(ListTradesReq) returns (ListTradesRsp);
-  rpc SyncTrades(SyncTradesReq) returns (SyncTradesRsp);
-}
-
-service PositionSvc {
+  rpc ListFills(ListFillsReq) returns (ListFillsRsp);
   rpc ListPositions(ListPositionsReq) returns (ListPositionsRsp);
-  rpc SyncPositions(SyncPositionsReq) returns (SyncPositionsRsp);
-}
-
-service RebalanceSvc {
-  rpc CreateRebalance(CreateRebalanceReq) returns (CreateRebalanceRsp);
-  rpc AdvanceRebalance(AdvanceRebalanceReq) returns (AdvanceRebalanceRsp);
-}
-
-service TradeOpsSvc {
-  rpc SetPause(SetTradePauseReq) returns (SetTradePauseRsp);
-  rpc ReconcileNow(ReconcileNowReq) returns (ReconcileNowRsp);
-  rpc InspectSaga(InspectSagaReq) returns (InspectSagaRsp);
 }

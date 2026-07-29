@@ -2,71 +2,115 @@ package order
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 
-var ErrInvalidTransition = errors.New("trade: invalid order transition")
+var (
+	ErrInvalidOrder      = errors.New("trade: invalid order")
+	ErrInvalidTransition = errors.New("trade: invalid order transition")
+)
 
 type Event struct {
 	Type    string
 	Version uint64
 }
 
+type Fill struct {
+	ID       shared.FillID
+	Quantity shared.Decimal
+}
+
 type Order struct {
-	ID             shared.OrderID
-	ClientOrderID  string
-	Quantity       shared.Decimal
-	FilledQuantity shared.Decimal
-	State          State
-	Version        uint64
+	ID               shared.OrderID
+	Spec             OrderSpec
+	ExchangeOrderID  string
+	FilledQuantity   shared.Decimal
+	AverageFillPrice shared.Decimal
+	AppliedFills     map[shared.FillID]shared.Decimal
+	State            State
+	Version          uint64
 }
 
-func New(id shared.OrderID, clientID string, qty shared.Decimal) (*Order, []Event, error) {
-	if id == "" || clientID == "" || qty.Cmp(shared.Zero()) <= 0 {
-		return nil, nil, ErrInvalidTransition
+func New(id shared.OrderID, spec OrderSpec) (*Order, []Event, error) {
+	if id == "" ||
+		strings.TrimSpace(spec.ExchangeAccountID) == "" ||
+		strings.TrimSpace(spec.ClientOrderID) == "" ||
+		strings.TrimSpace(spec.Symbol) == "" ||
+		spec.Quantity.Cmp(shared.Zero()) <= 0 {
+		return nil, nil, ErrInvalidOrder
 	}
-	o := &Order{ID: id, ClientOrderID: clientID, Quantity: qty, State: Draft}
-	return o, o.emit("OrderIntentCreated"), nil
+	order := &Order{
+		ID:           id,
+		Spec:         spec,
+		AppliedFills: make(map[shared.FillID]shared.Decimal),
+		State:        Pending,
+	}
+	return order, order.emit("OrderIntentCreated"), nil
 }
 
-func (o *Order) transition(to State, allowed ...State) ([]Event, error) {
-	if o.State.Terminal() {
+func (o *Order) BeginSubmit() ([]Event, error) {
+	return o.transition(Submitting, Pending)
+}
+
+func (o *Order) MarkSubmitUnknown() ([]Event, error) {
+	return o.transition(SubmitUnknown, Submitting)
+}
+
+func (o *Order) ReturnToPending() ([]Event, error) {
+	return o.transition(Pending, SubmitUnknown)
+}
+
+func (o *Order) Acknowledge(exchangeOrderID string) ([]Event, error) {
+	if strings.TrimSpace(exchangeOrderID) == "" {
 		return nil, ErrInvalidTransition
 	}
-	ok := false
-	for _, s := range allowed {
-		if o.State == s {
-			ok = true
-			break
-		}
+	if o.ExchangeOrderID != "" && o.ExchangeOrderID != exchangeOrderID {
+		return nil, fmt.Errorf("%w: conflicting Exchange order ID", ErrInvalidTransition)
 	}
-	if !ok {
+	switch o.State {
+	case Submitting, SubmitUnknown:
+		o.State = Open
+	case Open, PartiallyFilled, Filled, Canceling, CancelUnknown:
+	default:
 		return nil, ErrInvalidTransition
 	}
-	o.State = to
-	return o.emit("OrderStateChanged"), nil
+	o.ExchangeOrderID = exchangeOrderID
+	return o.emit("OrderAcknowledged"), nil
 }
 
-func (o *Order) MarkReady() ([]Event, error)          { return o.transition(Ready, Draft) }
-func (o *Order) BeginSubmit() ([]Event, error)        { return o.transition(Submitting, Ready, SubmitUnknown) }
-func (o *Order) MarkUnknown() ([]Event, error)        { return o.transition(SubmitUnknown, Submitting) }
-func (o *Order) RecoverSubmitting() ([]Event, error)  { return o.transition(SubmitUnknown, Submitting) }
-func (o *Order) RetryAfterNotFound() ([]Event, error) { return o.transition(Ready, SubmitUnknown) }
-func (o *Order) Acknowledge() ([]Event, error)        { return o.transition(Open, Submitting, SubmitUnknown) }
 func (o *Order) Reject() ([]Event, error) {
-	return o.transition(Rejected, Submitting, SubmitUnknown, Ready, Open, PartiallyFilled)
+	return o.transition(Rejected, Pending, Submitting, SubmitUnknown)
 }
+
 func (o *Order) Expire() ([]Event, error) {
-	return o.transition(Expired, Submitting, SubmitUnknown, Open, PartiallyFilled, Canceling, CancelUnknown)
+	return o.transition(
+		Expired,
+		Pending,
+		Submitting,
+		SubmitUnknown,
+		Open,
+		PartiallyFilled,
+		Canceling,
+		CancelUnknown,
+	)
 }
+
 func (o *Order) BeginCancel() ([]Event, error) {
 	return o.transition(Canceling, Open, PartiallyFilled, SubmitUnknown)
 }
-func (o *Order) MarkCancelUnknown() ([]Event, error) { return o.transition(CancelUnknown, Canceling) }
-func (o *Order) RecoverCanceling() ([]Event, error)  { return o.transition(CancelUnknown, Canceling) }
-func (o *Order) CancelStillOpen() ([]Event, error)   { return o.transition(Open, CancelUnknown) }
-func (o *Order) CancelFailed() ([]Event, error) {
+
+func (o *Order) DiscardPending() ([]Event, error) {
+	return o.transition(Canceled, Pending)
+}
+
+func (o *Order) MarkCancelUnknown() ([]Event, error) {
+	return o.transition(CancelUnknown, Canceling)
+}
+
+func (o *Order) CancelRejected() ([]Event, error) {
 	to := Open
 	if !o.FilledQuantity.IsZero() {
 		to = PartiallyFilled
@@ -74,18 +118,51 @@ func (o *Order) CancelFailed() ([]Event, error) {
 	return o.transition(to, Canceling)
 }
 
-func (o *Order) ApplyFill(qty shared.Decimal) ([]Event, error) {
-	if (o.State != Submitting && o.State != SubmitUnknown && o.State != Open && o.State != PartiallyFilled && o.State != Canceling) || qty.Cmp(shared.Zero()) <= 0 {
+func (o *Order) CancelStillOpen() ([]Event, error) {
+	to := Open
+	if !o.FilledQuantity.IsZero() {
+		to = PartiallyFilled
+	}
+	return o.transition(to, CancelUnknown)
+}
+
+func (o *Order) ApplyFill(fill Fill) ([]Event, error) {
+	if fill.ID == "" || fill.Quantity.Cmp(shared.Zero()) <= 0 {
 		return nil, ErrInvalidTransition
 	}
-	next := o.FilledQuantity.Add(qty)
-	if next.Cmp(o.Quantity) > 0 {
+	if applied, exists := o.AppliedFills[fill.ID]; exists {
+		if applied.Cmp(fill.Quantity) != 0 {
+			return nil, fmt.Errorf("%w: conflicting duplicate Fill", ErrInvalidTransition)
+		}
+		return nil, nil
+	}
+	switch o.State {
+	case Submitting,
+		SubmitUnknown,
+		Open,
+		PartiallyFilled,
+		Canceling,
+		CancelUnknown,
+		Canceled,
+		PartiallyCanceled,
+		Rejected:
+	default:
 		return nil, ErrInvalidTransition
 	}
+	next := o.FilledQuantity.Add(fill.Quantity)
+	if next.Cmp(o.Spec.Quantity) > 0 {
+		return nil, fmt.Errorf("%w: Fill exceeds order quantity", ErrInvalidTransition)
+	}
+	if o.AppliedFills == nil {
+		o.AppliedFills = make(map[shared.FillID]shared.Decimal)
+	}
+	o.AppliedFills[fill.ID] = fill.Quantity
 	o.FilledQuantity = next
-	if next.Cmp(o.Quantity) == 0 {
+	if next.Cmp(o.Spec.Quantity) == 0 {
 		o.State = Filled
-	} else {
+	} else if o.State == Canceled || o.State == PartiallyCanceled || o.State == Rejected {
+		o.State = PartiallyCanceled
+	} else if o.State != Canceling && o.State != CancelUnknown {
 		o.State = PartiallyFilled
 	}
 	return o.emit("FillApplied"), nil
@@ -96,10 +173,31 @@ func (o *Order) ConfirmCancel() ([]Event, error) {
 	if !o.FilledQuantity.IsZero() {
 		to = PartiallyCanceled
 	}
-	return o.transition(to, Canceling, CancelUnknown)
+	return o.transition(
+		to,
+		Submitting,
+		SubmitUnknown,
+		Open,
+		PartiallyFilled,
+		Canceling,
+		CancelUnknown,
+	)
 }
 
-func (o *Order) emit(kind string) []Event {
+func (o *Order) transition(to State, allowed ...State) ([]Event, error) {
+	if o.State.Terminal() {
+		return nil, ErrInvalidTransition
+	}
+	for _, state := range allowed {
+		if o.State == state {
+			o.State = to
+			return o.emit("OrderStateChanged"), nil
+		}
+	}
+	return nil, ErrInvalidTransition
+}
+
+func (o *Order) emit(eventType string) []Event {
 	o.Version++
-	return []Event{{Type: kind, Version: o.Version}}
+	return []Event{{Type: eventType, Version: o.Version}}
 }

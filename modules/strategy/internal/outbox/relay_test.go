@@ -90,3 +90,43 @@ func TestRelayReleasesFailedPublishAndRetries(t *testing.T) {
 		t.Fatalf("publish attempts=%d", len(publisher.rows))
 	}
 }
+
+type expiredFirstPublisher struct {
+	published []string
+}
+
+func (p *expiredFirstPublisher) Publish(_ context.Context, row domain.OutboxMessage) error {
+	if row.MessageID == "expired" {
+		return ErrExpiredOutboxMessage
+	}
+	p.published = append(p.published, row.MessageID)
+	return nil
+}
+
+func TestRelayDeletesExpiredTargetAndContinues(t *testing.T) {
+	db, repo := openOutboxTestStore(t)
+	for _, id := range []string{"expired", "current"} {
+		if err := db.Exec(
+			"INSERT INTO t_strategy_outbox(c_message_id,c_event_data) VALUES(?,?)",
+			id,
+			[]byte("event-data"),
+		).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	publisher := &expiredFirstPublisher{}
+	relay := &Relay{Store: repo, Publisher: publisher}
+	if err := relay.PublishPending(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if len(publisher.published) != 1 || publisher.published[0] != "current" {
+		t.Fatalf("published=%v", publisher.published)
+	}
+	var remaining int64
+	if err := db.Table("t_strategy_outbox").Count(&remaining).Error; err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("remaining=%d", remaining)
+	}
+}

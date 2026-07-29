@@ -3,119 +3,420 @@ package okx
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"golang.org/x/net/websocket"
 )
 
-func (a *Adapter) SubscribePrivate(ctx context.Context, cred exchange.Credential, market exchange.MarketType, handler exchange.StreamHandler) error {
+func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHandler) error {
 	if handler == nil {
-		return errors.New("okx: private stream handler is required")
+		return rejected("private event handler is required", nil)
 	}
-	cfg, err := websocket.NewConfig("wss://ws.okx.com:8443/ws/v5/private", "https://moox.local")
+	gate := make(chan struct{})
+	a.privateGateMu.Lock()
+	a.privateGate = gate
+	a.privateGateMu.Unlock()
+	defer func() {
+		a.privateGateMu.Lock()
+		if a.privateGate == gate {
+			a.privateGate = nil
+		}
+		a.privateGateMu.Unlock()
+	}()
+	config, err := websocket.NewConfig("wss://ws.okx.com:8443/ws/v5/private", "https://moox.local")
 	if err != nil {
-		return err
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
-	conn, err := websocket.DialConfig(cfg)
+	connection, err := websocket.DialConfig(config)
 	if err != nil {
-		return fmt.Errorf("okx: connect private stream: %w", err)
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
-	defer conn.Close()
-	go func() { <-ctx.Done(); _ = conn.Close() }()
+	defer connection.Close()
+	go func() {
+		<-ctx.Done()
+		_ = connection.Close()
+	}()
+
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	login := map[string]any{"op": "login", "args": []map[string]string{{"apiKey": cred.APIKey, "passphrase": cred.Passphrase, "timestamp": timestamp, "sign": sign(cred.APISecret, timestamp, "GET", "/users/self/verify", "")}}}
-	if err := websocket.JSON.Send(conn, login); err != nil {
+	login := map[string]any{"op": "login", "args": []map[string]string{{
+		"apiKey": a.credential.APIKey, "passphrase": a.credential.Passphrase,
+		"timestamp": timestamp,
+		"sign":      signature(a.credential.APISecret, timestamp, "GET", "/users/self/verify", ""),
+	}}}
+	if err := websocket.JSON.Send(connection, login); err != nil {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	if err := expectOKXAck(connection, "login"); err != nil {
 		return err
 	}
-	var ack map[string]any
-	if err := websocket.JSON.Receive(conn, &ack); err != nil {
+	channels := a.privateChannels()
+	subscribe := map[string]any{"op": "subscribe", "args": channels}
+	if err := websocket.JSON.Send(connection, subscribe); err != nil {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	pending, err := expectOKXSubscribeAcks(connection, channels)
+	if err != nil {
 		return err
 	}
-	if ack["event"] != "login" || ack["code"] != "0" {
-		return fmt.Errorf("okx: private stream login failed: %v", ack["msg"])
+	exchange.NotifyPrivateReady(handler)
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-gate:
+		}
 	}
-	subscribe := map[string]any{"op": "subscribe", "args": []map[string]string{{"channel": "orders", "instType": instType(market)}}}
-	if err := websocket.JSON.Send(conn, subscribe); err != nil {
-		return err
+	for _, payload := range pending {
+		if err := a.dispatchPrivate(ctx, payload, handler); err != nil {
+			return err
+		}
 	}
-	var subscribeAck map[string]any
-	if err := websocket.JSON.Receive(conn, &subscribeAck); err != nil {
-		return err
-	}
-	if subscribeAck["event"] != "subscribe" {
-		return fmt.Errorf("okx: private stream subscribe failed: %v", subscribeAck["msg"])
-	}
-	exchange.NotifyPrivateStreamState(ctx, true)
-	defer exchange.NotifyPrivateStreamState(ctx, false)
+
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(25 * time.Second))
-		var payload []byte
-		if err := websocket.Message.Receive(conn, &payload); err != nil {
-			if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
-				_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				if sendErr := websocket.Message.Send(conn, "ping"); sendErr == nil {
-					continue
-				}
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("okx: receive private stream: %w", err)
-		}
-		if string(payload) == "pong" {
-			continue
-		}
-		if err := dispatchOKXPrivate(payload, handler); err != nil {
-			handler.OnError(err)
+		if err := a.receivePrivateMessage(ctx, connection, handler); err != nil {
+			return err
 		}
 	}
 }
 
-func dispatchOKXPrivate(payload []byte, handler exchange.StreamHandler) error {
-	var message struct {
-		Arg struct {
-			Channel string `json:"channel"`
-		} `json:"arg"`
+func (a *Adapter) receivePrivateMessage(
+	ctx context.Context,
+	connection *websocket.Conn,
+	handler exchange.EventHandler,
+) error {
+	return a.receivePrivateMessageWithTimeouts(
+		ctx,
+		connection,
+		handler,
+		25*time.Second,
+		5*time.Second,
+	)
+}
+
+func (a *Adapter) receivePrivateMessageWithTimeouts(
+	ctx context.Context,
+	connection *websocket.Conn,
+	handler exchange.EventHandler,
+	idleTimeout time.Duration,
+	pongTimeout time.Duration,
+) error {
+	_ = connection.SetReadDeadline(time.Now().Add(idleTimeout))
+	var payload []byte
+	err := websocket.Message.Receive(connection, &payload)
+	if err == nil {
+		if string(payload) == "pong" {
+			return nil
+		}
+		return a.dispatchPrivate(ctx, payload, handler)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	timeout, ok := err.(net.Error)
+	if !ok || !timeout.Timeout() {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	_ = connection.SetWriteDeadline(time.Now().Add(pongTimeout))
+	if err := websocket.Message.Send(connection, "ping"); err != nil {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(pongTimeout))
+	for {
+		if err := websocket.Message.Receive(connection, &payload); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+		}
+		if string(payload) == "pong" {
+			return nil
+		}
+		if err := a.dispatchPrivate(ctx, payload, handler); err != nil {
+			return err
+		}
+	}
+}
+
+func expectOKXSubscribeAcks(
+	connection *websocket.Conn,
+	channels []map[string]string,
+) ([][]byte, error) {
+	pending := make(map[string]struct{}, len(channels))
+	buffered := make([][]byte, 0)
+	for _, channel := range channels {
+		pending[channel["channel"]] = struct{}{}
+	}
+	for len(pending) > 0 {
+		var raw []byte
+		if err := websocket.Message.Receive(connection, &raw); err != nil {
+			return nil, &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+		}
+		var payload struct {
+			Event string `json:"event"`
+			Code  string `json:"code"`
+			Msg   string `json:"msg"`
+			Arg   struct {
+				Channel string `json:"channel"`
+			} `json:"arg"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, rejected("decode private subscription frame", err)
+		}
+		if payload.Event == "" && payload.Arg.Channel != "" {
+			buffered = append(buffered, append([]byte(nil), raw...))
+			continue
+		}
+		if payload.Event != "subscribe" ||
+			(payload.Code != "" && payload.Code != "0") {
+			return nil, classifyOKXCode(payload.Code, payload.Msg)
+		}
+		if _, found := pending[payload.Arg.Channel]; !found {
+			return nil, rejected(
+				"unexpected or duplicate private channel acknowledgement",
+				nil,
+			)
+		}
+		delete(pending, payload.Arg.Channel)
+	}
+	return buffered, nil
+}
+
+func (a *Adapter) privateChannels() []map[string]string {
+	channels := []map[string]string{
+		{"channel": "orders", "instType": a.instrumentType()},
+		{"channel": "account"},
+	}
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		channels = append(channels, map[string]string{
+			"channel": "positions", "instType": "SWAP",
+		})
+	}
+	return channels
+}
+
+func expectOKXAck(connection *websocket.Conn, expected string) error {
+	var payload struct {
 		Event string `json:"event"`
 		Code  string `json:"code"`
 		Msg   string `json:"msg"`
-		Data  []struct {
-			Symbol    string `json:"instId"`
-			Side      string `json:"side"`
-			ClientID  string `json:"clOrdId"`
-			OrderID   string `json:"ordId"`
-			TradeID   string `json:"tradeId"`
-			FillQty   string `json:"fillSz"`
-			FillPrice string `json:"fillPx"`
-			Fee       string `json:"fee"`
-			FeeAsset  string `json:"feeCcy"`
-			FillTime  string `json:"fillTime"`
-		} `json:"data"`
 	}
+	if err := websocket.JSON.Receive(connection, &payload); err != nil {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	if payload.Event != expected || (payload.Code != "" && payload.Code != "0") {
+		return classifyOKXCode(payload.Code, payload.Msg)
+	}
+	return nil
+}
+
+type privateMessage struct {
+	Arg struct {
+		Channel string `json:"channel"`
+	} `json:"arg"`
+	Event string          `json:"event"`
+	Code  string          `json:"code"`
+	Msg   string          `json:"msg"`
+	Data  json.RawMessage `json:"data"`
+}
+
+func (a *Adapter) dispatchPrivate(
+	ctx context.Context,
+	payload []byte,
+	handler exchange.EventHandler,
+) error {
+	var message privateMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return err
+		return rejected("decode private event", err)
 	}
 	if message.Event == "error" {
-		return fmt.Errorf("okx private stream %s: %s", message.Code, message.Msg)
+		return classifyOKXCode(message.Code, message.Msg)
 	}
-	if message.Arg.Channel != "orders" {
+	// Login and subscribe acknowledgements do not carry channel data. OKX
+	// emits one subscribe acknowledgement per requested channel.
+	if message.Event != "" {
 		return nil
 	}
-	for _, row := range message.Data {
-		if row.TradeID == "" || row.FillQty == "" || row.FillQty == "0" {
-			continue
+	switch message.Arg.Channel {
+	case "orders":
+		var rows []struct {
+			orderPayload
+			TradeID  string `json:"tradeId"`
+			FillSz   string `json:"fillSz"`
+			FillPx   string `json:"fillPx"`
+			Fee      string `json:"fee"`
+			FeeCcy   string `json:"feeCcy"`
+			FillPnl  string `json:"fillPnl"`
+			ExecType string `json:"execType"`
+			FillTime string `json:"fillTime"`
 		}
-		fee := row.Fee
-		if len(fee) > 0 && fee[0] == '-' {
-			fee = fee[1:]
+		if err := json.Unmarshal(message.Data, &rows); err != nil {
+			return rejected("decode private orders", err)
 		}
-		at, _ := strconv.ParseInt(row.FillTime, 10, 64)
-		handler.OnTrade(&exchange.TradeEvent{Trade: exchange.Trade{ExchangeTradeID: row.TradeID, OrderID: row.OrderID, ClientOrderID: row.ClientID, Symbol: row.Symbol, Side: exchange.OrderSide(row.Side), Price: row.FillPrice, Quantity: row.FillQty, Fee: fee, FeeCurrency: row.FeeAsset, TradedAt: at}})
+		for _, row := range rows {
+			order, err := a.order(row.orderPayload)
+			if err != nil {
+				return err
+			}
+			if err := handler.OnOrder(ctx, order); err != nil {
+				return err
+			}
+			if row.TradeID == "" || row.FillSz == "" || row.FillSz == "0" {
+				continue
+			}
+			fill, err := a.fill(fillPayload{
+				InstID: row.InstID, TradeID: row.TradeID,
+				OrdID: row.OrdID, ClOrdID: row.ClOrdID,
+				Side: row.Side, PosSide: row.PosSide,
+				FillSz: row.FillSz, FillPx: row.FillPx,
+				Fee: row.Fee, FeeCcy: row.FeeCcy,
+				FillPnl: row.FillPnl, ExecType: row.ExecType, Ts: row.FillTime,
+			})
+			if err != nil {
+				return err
+			}
+			if err := handler.OnFill(ctx, fill); err != nil {
+				return err
+			}
+		}
+	case "positions":
+		var rows []positionPayload
+		if err := json.Unmarshal(message.Data, &rows); err != nil {
+			return rejected("decode private positions", err)
+		}
+		for _, row := range rows {
+			if row.PosSide != "" && row.PosSide != "net" {
+				return rejected("hedge position mode is unsupported", nil)
+			}
+			if row.MgnMode != "cross" {
+				return rejected("isolated margin is unsupported", nil)
+			}
+			contracts, err := decimalOrZero(row.Pos)
+			if err != nil {
+				return err
+			}
+			quantity, err := a.toBaseQuantity(row.InstID, contracts)
+			if err != nil {
+				return err
+			}
+			position := exchange.Position{
+				ExchangeAccountID: a.config.ExchangeAccountID,
+				Symbol:            row.InstID, PositionSide: exchange.PositionSideNet,
+				SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
+				ExchangeUpdatedAt: millisString(row.UTime),
+				Present: exchange.PositionPresence{
+					SignedQuantity:   true,
+					EntryPrice:       row.AvgPx != "",
+					MarkPrice:        row.MarkPx != "",
+					Leverage:         row.Lever != "",
+					MarginMode:       true,
+					UsedMargin:       row.IMR != "" || row.Margin != "",
+					LiquidationPrice: row.LiqPx != "",
+					UnrealizedPnL:    row.Upl != "",
+					RealizedPnL:      row.Realized != "",
+				},
+			}
+			position.RequiresSync = !position.Present.EntryPrice ||
+				!position.Present.MarkPrice ||
+				!position.Present.Leverage ||
+				!position.Present.UsedMargin ||
+				!position.Present.UnrealizedPnL
+			position.EntryPrice, err = decimalOrZero(row.AvgPx)
+			if err == nil {
+				position.MarkPrice, err = decimalOrZero(row.MarkPx)
+			}
+			if err == nil {
+				position.Leverage, err = decimalOrZero(row.Lever)
+			}
+			if err == nil {
+				usedMargin := row.IMR
+				if usedMargin == "" {
+					usedMargin = row.Margin
+				}
+				position.UsedMargin, err = decimalOrZero(usedMargin)
+			}
+			if err == nil {
+				position.LiquidationPrice, err = decimalOrZero(row.LiqPx)
+			}
+			if err == nil {
+				position.UnrealizedPnL, err = decimalOrZero(row.Upl)
+			}
+			if err == nil {
+				position.RealizedPnL, err = decimalOrZero(row.Realized)
+			}
+			if err != nil {
+				return err
+			}
+			if err := handler.OnPosition(ctx, position); err != nil {
+				return err
+			}
+		}
+	case "account":
+		var rows []balanceEnvelope
+		if err := json.Unmarshal(message.Data, &rows); err != nil || len(rows) == 0 {
+			return rejected("decode private account", err)
+		}
+		snapshot := exchange.AccountSnapshot{
+			ExchangeUpdatedAt: millisString(rows[0].UTime),
+			Present: exchange.AccountSnapshotPresence{
+				Balances: true,
+				Equity:   true,
+			},
+		}
+		equity, err := decimalOrZero(rows[0].TotalEq)
+		if err != nil {
+			return err
+		}
+		snapshot.Equity = equity
+		for _, detail := range rows[0].Details {
+			totalRaw := detail.Eq
+			if totalRaw == "" {
+				totalRaw = detail.CashBal
+			}
+			total, err := decimalOrZero(totalRaw)
+			if err != nil {
+				return err
+			}
+			availableRaw := detail.AvailEq
+			if availableRaw == "" {
+				availableRaw = detail.AvailBal
+			}
+			available, err := decimalOrZero(availableRaw)
+			if err != nil {
+				return err
+			}
+			locked, err := decimalOrZero(detail.FrozenBal)
+			if err != nil {
+				return err
+			}
+			snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
+				Asset: detail.Ccy, Available: available, Locked: locked, Total: total,
+			})
+			if strings.EqualFold(detail.Ccy, a.config.SettlementAsset) {
+				snapshot.AvailableFunds = available
+				snapshot.UsedMargin, err = decimalOrZero(detail.Imr)
+				if err == nil {
+					snapshot.MaintenanceMargin, err = decimalOrZero(detail.Mmr)
+				}
+				if err == nil {
+					snapshot.UnrealizedPnL, err = decimalOrZero(detail.Upl)
+				}
+				if err != nil {
+					return err
+				}
+				snapshot.Present.AvailableFunds = true
+				snapshot.Present.UsedMargin = true
+				snapshot.Present.MaintenanceMargin = true
+				snapshot.Present.UnrealizedPnL = true
+			}
+		}
+		snapshot.RequiresSync = !snapshot.Present.AvailableFunds
+		if err := handler.OnAccountSnapshot(ctx, snapshot); err != nil {
+			return err
+		}
 	}
 	return nil
 }

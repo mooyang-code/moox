@@ -1,324 +1,273 @@
-// Package exchange 定义 trade 模块对接各交易所的统一适配抽象与领域模型。
-//
-// 设计目标：对上层 RPC（TradeOpSvc/OrderSvc/...）暴露交易所中立的接口，
-// 对下按「交易所 + 市场类型」路由到具体交易所的 REST/WS 实现。
-// 金额/数量统一用 string 承载 decimal，避免浮点精度丢失（与 proto/schema 一致）。
 package exchange
 
-// MarketType 市场类型，用于在同一交易所内路由不同 base path
-// （Binance 现货 /api、U本位 /fapi、币本位 /dapi；OKX 用 instType 区分）。
+import (
+	"context"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+)
+
+type Exchange string
+
+const (
+	ExchangeUnspecified Exchange = ""
+	ExchangeBinance     Exchange = "BINANCE"
+	ExchangeOKX         Exchange = "OKX"
+)
+
+func (e Exchange) Valid() bool {
+	return e == ExchangeBinance || e == ExchangeOKX
+}
+
 type MarketType string
 
 const (
-	MarketSpot    MarketType = "spot"    // 现货
-	MarketMargin  MarketType = "margin"  // 杠杆
-	MarketSwap    MarketType = "swap"    // U本位永续
-	MarketFutures MarketType = "futures" // 交割/币本位
+	MarketTypeUnspecified MarketType = ""
+	MarketTypeSpot        MarketType = "SPOT"
+	MarketTypeSwap        MarketType = "SWAP"
 )
 
-// OrderSide 买卖方向。
-type OrderSide string
+func (m MarketType) Valid() bool {
+	return m == MarketTypeSpot || m == MarketTypeSwap
+}
+
+type ExecutionMode string
 
 const (
-	SideBuy  OrderSide = "buy"
-	SideSell OrderSide = "sell"
+	ExecutionModeUnspecified ExecutionMode = ""
+	ExecutionModePaper       ExecutionMode = "PAPER"
+	ExecutionModeLive        ExecutionMode = "LIVE"
 )
 
-// OrderType 订单类型。
+func (m ExecutionMode) Valid() bool {
+	return m == ExecutionModePaper || m == ExecutionModeLive
+}
+
+type MarginMode string
+
+const (
+	MarginModeUnspecified MarginMode = ""
+	MarginModeCross       MarginMode = "CROSS"
+)
+
 type OrderType string
 
 const (
-	TypeLimit     OrderType = "limit"
-	TypeMarket    OrderType = "market"
-	TypeStop      OrderType = "stop"
-	TypeStopLimit OrderType = "stop_limit"
-	TypePostOnly  OrderType = "post_only"
-	TypeIOC       OrderType = "ioc"
-	TypeFOK       OrderType = "fok"
+	OrderTypeUnspecified OrderType = ""
+	OrderTypeMarket      OrderType = "MARKET"
+	OrderTypeLimit       OrderType = "LIMIT"
 )
 
-// OrderStatus 交易所订单状态（由 RPC 映射为 proto OrderStatus）。
-type OrderStatus int
+type TimeInForce string
 
 const (
-	StatusPending         OrderStatus = 0 // 待提交
-	StatusSubmitted       OrderStatus = 1 // 已提交
-	StatusPartiallyFilled OrderStatus = 2 // 部分成交
-	StatusFilled          OrderStatus = 3 // 完全成交
-	StatusCanceled        OrderStatus = 4 // 已撤销
-	StatusPartialCanceled OrderStatus = 5 // 部分成交后撤销
-	StatusRejected        OrderStatus = 6 // 拒绝
-	StatusExpired         OrderStatus = 7 // 过期
+	TimeInForceUnspecified TimeInForce = ""
+	TimeInForceGTC         TimeInForce = "GTC"
+	TimeInForceIOC         TimeInForce = "IOC"
+	TimeInForceFOK         TimeInForce = "FOK"
 )
 
-// Credential 交易所 API 凭证（由 t_account_api_keys 解密后传入）。
+func (t TimeInForce) ValidForLimit() bool {
+	return t == TimeInForceGTC || t == TimeInForceIOC || t == TimeInForceFOK
+}
+
+type Side string
+
+const (
+	SideUnspecified Side = ""
+	SideBuy         Side = "BUY"
+	SideSell        Side = "SELL"
+)
+
+func (s Side) Valid() bool {
+	return s == SideBuy || s == SideSell
+}
+
+type PositionSide string
+
+const (
+	PositionSideUnspecified PositionSide = ""
+	PositionSideNet         PositionSide = "NET"
+)
+
+type AccountStatus string
+
+const (
+	AccountStatusEnabled  AccountStatus = "ENABLED"
+	AccountStatusDisabled AccountStatus = "DISABLED"
+	AccountStatusError    AccountStatus = "ERROR"
+)
+
+type OrderStatus string
+
+const (
+	OrderStatusPending           OrderStatus = "PENDING"
+	OrderStatusSubmitting        OrderStatus = "SUBMITTING"
+	OrderStatusSubmitUnknown     OrderStatus = "SUBMIT_UNKNOWN"
+	OrderStatusOpen              OrderStatus = "OPEN"
+	OrderStatusPartiallyFilled   OrderStatus = "PARTIALLY_FILLED"
+	OrderStatusCanceling         OrderStatus = "CANCELING"
+	OrderStatusCancelUnknown     OrderStatus = "CANCEL_UNKNOWN"
+	OrderStatusFilled            OrderStatus = "FILLED"
+	OrderStatusCanceled          OrderStatus = "CANCELED"
+	OrderStatusPartiallyCanceled OrderStatus = "PARTIALLY_CANCELED"
+	OrderStatusRejected          OrderStatus = "REJECTED"
+	OrderStatusExpired           OrderStatus = "EXPIRED"
+)
+
 type Credential struct {
 	APIKey     string
 	APISecret  string
-	Passphrase string // OKX 需要
+	Passphrase string
 }
 
-// Instrument 交易规则（精度/最小下单量等），下单前本地校验用。
+type AccountConfig struct {
+	ExchangeAccountID string
+	Exchange          Exchange
+	MarketType        MarketType
+	ExecutionMode     ExecutionMode
+	SettlementAsset   string
+	MarginMode        MarginMode
+}
+
 type Instrument struct {
-	Symbol      string // 统一交易对，如 BTC-USDT
-	Market      MarketType
-	BaseCcy     string
-	QuoteCcy    string
-	TickSize    string // 价格精度
-	LotSize     string // 数量精度
-	MinNotional string // 最小名义价值
-	MinQty      string // 最小下单量
-	LastPrice   string // 最新成交价/标记价，用于本地校验最小名义价值
-	Status      string // 交易对状态
+	Exchange             Exchange
+	MarketType           MarketType
+	Symbol               string
+	InstrumentID         string
+	BaseAsset            string
+	QuoteAsset           string
+	SettlementAsset      string
+	Linear               bool
+	ContractValue        shared.Decimal
+	ContractValueAsset   string
+	ExchangeQuantityStep shared.Decimal
+	MinExchangeQuantity  shared.Decimal
+	PriceTick            shared.Decimal
+	MinNotional          shared.Decimal
+	Status               string
+	ExchangeUpdatedAt    time.Time
 }
 
-// AccountInfo 账户概览。
-type AccountInfo struct {
-	Market    MarketType
-	TotalEq   string // 总权益（计价币）
-	Available string // 可用
-	Frozen    string // 冻结
-	Raw       map[string]string
+type AssetBalance struct {
+	Asset     string
+	Available shared.Decimal
+	Locked    shared.Decimal
+	Total     shared.Decimal
 }
 
-// Balance 单币种余额。
-type Balance struct {
-	Currency  string
-	Available string
-	Frozen    string
-	Total     string
+type AccountSnapshot struct {
+	Balances          []AssetBalance
+	Equity            shared.Decimal
+	AvailableFunds    shared.Decimal
+	UsedMargin        shared.Decimal
+	MaintenanceMargin shared.Decimal
+	UnrealizedPnL     shared.Decimal
+	ExchangeUpdatedAt time.Time
+	Present           AccountSnapshotPresence
+	RequiresSync      bool
 }
 
-// FeeRate 手续费率。
-type FeeRate struct {
-	Symbol string
-	Maker  string
-	Taker  string
+type AccountSnapshotPresence struct {
+	Balances          bool
+	Equity            bool
+	AvailableFunds    bool
+	UsedMargin        bool
+	MaintenanceMargin bool
+	UnrealizedPnL     bool
 }
 
-// FundFlow 资金流水。
-type FundFlow struct {
-	FlowID    string
-	Currency  string
-	BizType   string // deposit/withdraw/transfer/trade/fee/funding/...
-	Direction int    // 1=增加, -1=减少
-	Amount    string
-	Balance   string // 变动后余额
-	Timestamp int64
-}
-
-// Order 订单（适配层中立模型）。
-type Order struct {
-	OrderID         string // 系统/客户端订单号
-	ClientOrderID   string
-	ExchangeOrderID string
-	Symbol          string
-	Market          MarketType
-	Side            OrderSide
-	PosSide         string // long/short/net
-	Type            OrderType
-	Price           string
-	Quantity        string
-	FilledQty       string
-	FilledAmount    string
-	AvgPrice        string
-	Fee             string
-	FeeCurrency     string
-	Status          OrderStatus
-	RejectReason    string
-	CreatedAt       int64
-	UpdatedAt       int64
-}
-
-// OrderResult 下单/撤单/改单的轻量返回。
-type OrderResult struct {
-	OrderID         string
-	ClientOrderID   string
-	ExchangeOrderID string
-	Status          OrderStatus
-}
-
-// Trade 成交明细。
-type Trade struct {
-	TradeID         string
-	ExchangeTradeID string
-	OrderID         string
-	ClientOrderID   string
-	Symbol          string
-	Side            OrderSide
-	Price           string
-	Quantity        string
-	Amount          string
-	Fee             string
-	FeeCurrency     string
-	Role            string // maker/taker
-	TradedAt        int64
-}
-
-// Position 持仓。
 type Position struct {
-	Symbol        string
-	PosSide       string
-	Quantity      string
-	AvgPrice      string
-	Leverage      string
-	Margin        string
-	LiqPrice      string
-	UnrealizedPnl string
-	RealizedPnl   string
-	UpdatedAt     int64
+	ExchangeAccountID string
+	Symbol            string
+	PositionSide      PositionSide
+	SignedQuantity    shared.Decimal
+	EntryPrice        shared.Decimal
+	MarkPrice         shared.Decimal
+	Leverage          shared.Decimal
+	MarginMode        MarginMode
+	UsedMargin        shared.Decimal
+	LiquidationPrice  shared.Decimal
+	UnrealizedPnL     shared.Decimal
+	RealizedPnL       shared.Decimal
+	ExchangeUpdatedAt time.Time
+	Present           PositionPresence
+	RequiresSync      bool
 }
 
-// ===== 请求参数 =====
-
-// TransferReq 划转请求。
-type TransferReq struct {
-	Currency string
-	Amount   string
-	From     MarketType
-	To       MarketType
-	Remark   string
+type PositionPresence struct {
+	SignedQuantity   bool
+	EntryPrice       bool
+	MarkPrice        bool
+	Leverage         bool
+	MarginMode       bool
+	UsedMargin       bool
+	LiquidationPrice bool
+	UnrealizedPnL    bool
+	RealizedPnL      bool
 }
 
-// TransferResult 划转结果。
-type TransferResult struct {
-	TransferID string
+type OrderRequest struct {
+	ClientOrderID  string
+	Symbol         string
+	OrderType      OrderType
+	TimeInForce    TimeInForce
+	Side           Side
+	PositionSide   PositionSide
+	Quantity       shared.Decimal
+	LimitPrice     *shared.Decimal
+	ReferencePrice shared.Decimal
+	ReduceOnly     bool
 }
 
-// DustTransferReq 小额资产转换请求。Binance 现货会转换为 BNB。
-type DustTransferReq struct {
-	Assets      []string
-	AccountType string
+type Order struct {
+	ExchangeOrderID string
+	ClientOrderID   string
+	Symbol          string
+	OrderType       OrderType
+	TimeInForce     TimeInForce
+	Side            Side
+	PositionSide    PositionSide
+	Quantity        shared.Decimal
+	LimitPrice      *shared.Decimal
+	FilledQuantity  shared.Decimal
+	AveragePrice    shared.Decimal
+	ReduceOnly      bool
+	Status          OrderStatus
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
-// DustConvertibleReq 查询可转换为 BNB 的小额资产。
-type DustConvertibleReq struct {
-	AccountType string
+type Fill struct {
+	ExchangeTradeID string
+	ExchangeOrderID string
+	ClientOrderID   string
+	Symbol          string
+	Side            Side
+	PositionSide    PositionSide
+	Quantity        shared.Decimal
+	Price           shared.Decimal
+	Fee             shared.Decimal
+	FeeAsset        string
+	RealizedPnL     shared.Decimal
+	SettlementAsset string
+	LiquidityRole   string
+	TradedAt        time.Time
 }
 
-// DustConvertibleAsset 描述交易所当前允许转换的小额资产。
-type DustConvertibleAsset struct {
-	Asset            string
-	AssetFullName    string
-	AmountFree       string
-	ToBTC            string
-	ToBNB            string
-	ToBNBOffExchange string
-	Exchange         string
+type EventHandler interface {
+	OnOrder(context.Context, Order) error
+	OnFill(context.Context, Fill) error
+	OnPosition(context.Context, Position) error
+	OnAccountSnapshot(context.Context, AccountSnapshot) error
 }
 
-// DustTransferResult 小额资产转换结果。
-type DustTransferResult struct {
-	TotalServiceCharge string
-	TotalTransfered    string
-	Results            []DustTransferItem
-	Skipped            []DustTransferSkippedItem
+type PrivateReadyHandler interface {
+	OnPrivateReady()
 }
 
-type DustTransferItem struct {
-	Asset               string
-	Amount              string
-	OperateTime         int64
-	ServiceChargeAmount string
-	TranID              int64
-	TransferedAmount    string
-}
-
-type DustTransferSkippedItem struct {
-	Asset  string
-	Reason string
-}
-
-// FundFlowQuery 资金流水查询。
-type FundFlowQuery struct {
-	Market    MarketType
-	Currency  string
-	BizType   string
-	StartTime int64
-	EndTime   int64
-	Limit     int
-}
-
-// PlaceOrderReq 下单请求。
-type PlaceOrderReq struct {
-	Market        MarketType
-	Symbol        string
-	Side          OrderSide
-	PosSide       string
-	Type          OrderType
-	TimeInForce   string
-	Price         string
-	Quantity      string
-	Amount        string // 市价买单按金额下单
-	ClientOrderID string
-	ReduceOnly    bool
-	TriggerPrice  string
-}
-
-// CancelOrderReq 撤单请求（OrderID 与 ClientOrderID 二选一）。
-type CancelOrderReq struct {
-	Market        MarketType
-	Symbol        string
-	OrderID       string
-	ClientOrderID string
-}
-
-// AmendOrderReq 改单请求。
-type AmendOrderReq struct {
-	Market        MarketType
-	Symbol        string
-	OrderID       string
-	ClientOrderID string
-	NewPrice      string // 可空
-	NewQuantity   string // 可空
-}
-
-// GetOrderReq 单订单查询。
-type GetOrderReq struct {
-	Market        MarketType
-	Symbol        string
-	OrderID       string
-	ClientOrderID string
-}
-
-// ListOrdersReq 订单列表查询。
-type ListOrdersReq struct {
-	Market    MarketType
-	Symbol    string
-	OnlyOpen  bool
-	StartTime int64
-	EndTime   int64
-	Limit     int
-}
-
-// ListTradesReq 成交列表查询。
-type ListTradesReq struct {
-	Market    MarketType
-	Symbol    string
-	OrderID   string
-	StartTime int64
-	EndTime   int64
-	Limit     int
-}
-
-// ===== 私有 WebSocket 回报事件 =====
-
-// OrderEvent 订单更新事件。
-type OrderEvent struct {
-	Order Order
-}
-
-// TradeEvent 成交事件。
-type TradeEvent struct {
-	Trade Trade
-}
-
-// PositionEvent 持仓更新事件。
-type PositionEvent struct {
-	Position Position
-}
-
-// BalanceEvent 余额变更事件。
-type BalanceEvent struct {
-	Balances []Balance
+func NotifyPrivateReady(handler EventHandler) {
+	if ready, ok := handler.(PrivateReadyHandler); ok {
+		ready.OnPrivateReady()
+	}
 }

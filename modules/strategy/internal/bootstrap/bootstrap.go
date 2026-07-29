@@ -142,6 +142,7 @@ func newRPCService(repo *store.Store, eng *engine.Engine, cfg Config) *rpc.Servi
 	return &rpc.Service{
 		Repo: repo, Registry: &registry.Service{Repo: repo}, Engine: eng,
 		Workers: cfg.Workers, ReadyWorkers: 0, LiveExecutionEnabled: cfg.LiveEnabled,
+		ExchangeAccounts: newExchangeAccountModeClient(cfg.ExchangeAccountTarget),
 	}
 }
 

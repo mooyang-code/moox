@@ -51,6 +51,7 @@ func (d Decimal) Abs() Decimal          { return Decimal{v: new(big.Rat).Abs(d.r
 func (d Decimal) Cmp(o Decimal) int     { return d.rat().Cmp(o.rat()) }
 func (d Decimal) IsZero() bool          { return d.Cmp(Zero()) == 0 }
 func (d Decimal) IsNegative() bool      { return d.Cmp(Zero()) < 0 }
+func (d Decimal) IsInteger() bool       { return d.rat().IsInt() }
 
 func (d Decimal) String() string {
 	r := d.rat()

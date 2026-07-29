@@ -1,628 +1,404 @@
 <template>
   <div class="moox-page">
     <div class="moox-inner">
-      <PageTitleTabs
-        class="record-view-tabs"
-        :model-value="activeTab"
-        :items="tabs"
-        aria-label="订单与成交"
-        @change="switchTab"
-      />
-      <template v-if="activeTab === 'orders'">
-        <!-- 订单列表 -->
-        <section>
-          <div v-if="accounts.length" class="account-tabs-block">
-            <div
-              class="record-account-tabs order-account-tabs"
-              :class="{ expanded: orderAccountTabsExpanded }"
-              role="tablist"
-              aria-label="订单账户"
-            >
-              <button
-                v-for="acc in accounts"
-                :key="acc.account_id"
-                type="button"
-                class="record-account-tab"
-                :class="{ active: orderFilter.account_id === acc.account_id }"
-                role="tab"
-                :aria-selected="orderFilter.account_id === acc.account_id"
-                @click="onOrderAccountTabClick(acc.account_id)"
-              >
-                <span class="account-tab-name">{{ acc.account_name }}</span>
-                <span class="account-tab-type">{{ accountTypeLabels[acc.account_type] || acc.account_type }}</span>
-              </button>
-            </div>
-            <a-button
-              class="account-tabs-toggle"
-              size="mini"
-              type="text"
-              :aria-label="orderAccountTabsExpanded ? '收起账户' : '展开账户'"
-              :title="orderAccountTabsExpanded ? '收起账户' : '展开账户'"
-              @click="toggleOrderAccountTabs"
-            >
-              <template #icon>
-                <icon-up v-if="orderAccountTabsExpanded" />
-                <icon-down v-else />
-              </template>
-            </a-button>
-          </div>
-          <a-empty v-else description="暂无账户" />
+      <div class="page-head">
+        <h2>交易执行</h2>
+        <a-space>
+          <a-select v-model="exchangeAccountId" placeholder="Exchange 账户" style="width: 260px" @change="accountChanged">
+            <a-option v-for="account in accounts" :key="account.exchange_account_id" :value="account.exchange_account_id">
+              {{ account.name }} · {{ marketTypeLabels[account.market_type] }}
+            </a-option>
+          </a-select>
+          <a-tag v-if="selectedAccount" :color="accountExecutable ? 'green' : 'orange'">
+            {{ accountExecutable ? "Ready" : selectedAccount.paused ? "Paused" : "Not Ready" }}
+          </a-tag>
+          <a-button title="刷新账户状态" aria-label="刷新账户状态" @click="refreshAccounts">
+            <template #icon><icon-refresh /></template>
+          </a-button>
+        </a-space>
+      </div>
 
+      <section class="order-entry">
+        <h3>提交订单</h3>
+        <a-form :model="form" layout="inline" auto-label-width>
+          <a-form-item label="Symbol" required>
+            <a-input v-model="form.symbol" style="width: 140px" placeholder="BTCUSDT" />
+          </a-form-item>
+          <a-form-item label="类型" required>
+            <a-radio-group v-model="form.order_type" type="button">
+              <a-radio :value="1">MARKET</a-radio>
+              <a-radio :value="2">LIMIT</a-radio>
+            </a-radio-group>
+          </a-form-item>
+          <a-form-item label="方向" required>
+            <a-radio-group v-model="form.side" type="button">
+              <a-radio :value="1">买入</a-radio>
+              <a-radio :value="2">卖出</a-radio>
+            </a-radio-group>
+          </a-form-item>
+          <a-form-item label="数量" required>
+            <a-input v-model="form.quantity" style="width: 130px" />
+          </a-form-item>
+          <a-form-item v-if="form.order_type === 2" label="限价" required>
+            <a-input v-model="form.limit_price" style="width: 130px" />
+          </a-form-item>
+          <template v-if="selectedAccount?.market_type === 2">
+            <a-form-item label="杠杆" required>
+              <a-input v-model="form.leverage" style="width: 90px" />
+              <a-button :loading="settingLeverage" @click="saveLeverage">设置</a-button>
+            </a-form-item>
+            <a-form-item label="只减仓">
+              <a-switch v-model="form.reduce_only" />
+            </a-form-item>
+          </template>
+          <a-form-item>
+            <a-button type="primary" :loading="submitting" :disabled="!accountExecutable" @click="submit">
+              <template #icon><icon-send /></template>
+              提交
+            </a-button>
+          </a-form-item>
+        </a-form>
+        <a-alert v-if="selectedAccount && !accountExecutable" type="warning" class="entry-warning">
+          账户已暂停或尚未 Ready，不能提交新订单。
+        </a-alert>
+      </section>
+
+      <a-tabs v-model:active-key="activeTab" class="record-view-tabs" @change="loadActiveTab">
+        <a-tab-pane key="orders" title="Orders">
           <div class="filter-bar">
-            <a-input
-              v-model="orderFilter.symbol"
-              placeholder="交易对"
-              style="width: 140px"
-              allow-clear
-              @press-enter="loadOrders"
-            />
-            <a-select v-model="orderFilter.status" placeholder="状态" style="width: 120px" allow-clear @change="loadOrders">
-              <a-option v-for="(label, val) in orderStatusLabels" :key="val" :value="Number(val)">{{ label }}</a-option>
-            </a-select>
-            <a-checkbox v-model="orderFilter.only_open" @change="loadOrders">仅显示未完成</a-checkbox>
-            <a-button type="primary" size="small" :disabled="!orderFilter.account_id" @click="loadOrders">
+            <a-input v-model="filterSymbol" placeholder="Symbol" allow-clear style="width: 150px" @press-enter="loadOrders" />
+            <a-checkbox v-model="onlyOpen" @change="loadOrders">仅未完成</a-checkbox>
+            <a-button :disabled="!exchangeAccountId" @click="loadOrders">
               <template #icon><icon-search /></template>
               查询
             </a-button>
-            <a-button size="small" :loading="syncingOrders" :disabled="!orderFilter.account_id" @click="onSyncOrders">
-              <template #icon><icon-sync /></template>
-              同步订单
-            </a-button>
           </div>
-
           <a-table
             row-key="order_id"
-            size="small"
-            :bordered="{ cell: true }"
-            :loading="orderLoading"
             :data="orders"
+            :loading="loading"
             :pagination="orderPagination"
             :scroll="{ x: 'max-content' }"
-            @page-change="onOrderPageChange"
-            @page-size-change="onOrderPageSizeChange"
+            @page-change="changeOrderPage"
           >
             <template #columns>
-              <a-table-column title="账户" :width="100">
-                <template #cell="{ record }">{{ accountName(record.account_id) }}</template>
+              <a-table-column title="Symbol" data-index="symbol" />
+              <a-table-column title="市场">
+                <template #cell="{ record }">{{ marketTypeLabels[record.market_type] }}</template>
               </a-table-column>
-              <a-table-column title="交易所" data-index="exchange" :width="80" />
-              <a-table-column title="交易对" data-index="symbol" :width="110" />
-              <a-table-column title="方向" :width="60">
+              <a-table-column title="方向">
                 <template #cell="{ record }">
-                  <a-tag size="small" :color="orderSideColors[record.side]">{{ orderSideLabels[record.side] }}</a-tag>
+                  <a-tag :color="orderSideColors[record.side]">{{ orderSideLabels[record.side] }}</a-tag>
                 </template>
               </a-table-column>
-              <a-table-column title="类型" :width="70">
-                <template #cell="{ record }">{{ orderTypeLabels[record.order_type] || record.order_type }}</template>
+              <a-table-column title="类型">
+                <template #cell="{ record }">{{ orderTypeLabels[record.order_type] }}</template>
               </a-table-column>
-              <a-table-column title="价格" data-index="price" :width="100" />
-              <a-table-column title="数量" data-index="quantity" :width="100" />
-              <a-table-column title="已成交" data-index="filled_qty" :width="100" />
-              <a-table-column title="均价" data-index="avg_price" :width="100" />
-              <a-table-column title="状态" :width="80">
-                <template #cell="{ record }">
-                  <a-tag size="small" :color="orderStatusColors[record.status]">{{ orderStatusLabels[record.status] }}</a-tag>
-                </template>
+              <a-table-column title="限价">
+                <template #cell="{ record }">{{ record.limit_price || "-" }}</template>
               </a-table-column>
-              <a-table-column title="委托时间" :width="170">
+              <a-table-column title="数量" data-index="quantity" />
+              <a-table-column title="已成交" data-index="filled_quantity" />
+              <a-table-column title="均价" data-index="average_price" />
+              <a-table-column title="状态" data-index="state" />
+              <a-table-column title="时间">
                 <template #cell="{ record }">{{ formatTimestamp(record.submitted_at || record.created_at) }}</template>
               </a-table-column>
-              <a-table-column title="操作" :width="140" align="center" fixed="right">
+              <a-table-column title="操作" fixed="right">
                 <template #cell="{ record }">
-                  <a-space>
-                    <a-button
-                      v-if="canCancel(record.status)"
-                      size="mini"
-                      type="text"
-                      status="danger"
-                      @click="onCancelOrder(record)"
-                      >撤单</a-button
-                    >
-                    <a-button size="mini" type="text" @click="openOrderTrades(record)">成交</a-button>
-                  </a-space>
+                  <a-button v-if="canCancel(record.state)" size="mini" status="danger" @click="cancel(record)"> 撤单 </a-button>
                 </template>
               </a-table-column>
             </template>
           </a-table>
-        </section>
-      </template>
+        </a-tab-pane>
 
-      <template v-else>
-        <!-- 成交明细 -->
-        <section>
-          <div v-if="accounts.length" class="account-tabs-block">
-            <div
-              class="record-account-tabs trade-account-tabs"
-              :class="{ expanded: tradeAccountTabsExpanded }"
-              role="tablist"
-              aria-label="成交账户"
-            >
-              <button
-                v-for="acc in accounts"
-                :key="acc.account_id"
-                type="button"
-                class="record-account-tab"
-                :class="{ active: tradeFilter.account_id === acc.account_id }"
-                role="tab"
-                :aria-selected="tradeFilter.account_id === acc.account_id"
-                @click="onTradeAccountTabClick(acc.account_id)"
-              >
-                <span class="account-tab-name">{{ acc.account_name }}</span>
-                <span class="account-tab-type">{{ accountTypeLabels[acc.account_type] || acc.account_type }}</span>
-              </button>
-            </div>
-            <a-button
-              class="account-tabs-toggle"
-              size="mini"
-              type="text"
-              :aria-label="tradeAccountTabsExpanded ? '收起账户' : '展开账户'"
-              :title="tradeAccountTabsExpanded ? '收起账户' : '展开账户'"
-              @click="toggleTradeAccountTabs"
-            >
-              <template #icon>
-                <icon-up v-if="tradeAccountTabsExpanded" />
-                <icon-down v-else />
-              </template>
-            </a-button>
-          </div>
-          <a-empty v-else description="暂无账户" />
-
+        <a-tab-pane key="fills" title="Fills">
           <div class="filter-bar">
-            <a-input
-              v-model="tradeFilter.symbol"
-              placeholder="交易对"
-              style="width: 140px"
-              allow-clear
-              @press-enter="loadTrades"
-            />
-            <a-button type="primary" size="small" :disabled="!tradeFilter.account_id" @click="loadTrades">
+            <a-input v-model="filterSymbol" placeholder="Symbol" allow-clear style="width: 150px" @press-enter="loadFills" />
+            <a-button :disabled="!exchangeAccountId" @click="loadFills">
               <template #icon><icon-search /></template>
               查询
             </a-button>
-            <a-button size="small" :loading="syncingTrades" :disabled="!tradeFilter.account_id" @click="onSyncTrades">
-              <template #icon><icon-sync /></template>
-              同步成交
-            </a-button>
           </div>
-
           <a-table
-            row-key="trade_id"
-            size="small"
-            :bordered="{ cell: true }"
-            :loading="tradeLoading"
-            :data="trades"
-            :pagination="tradePagination"
+            row-key="fill_id"
+            :data="fills"
+            :loading="loading"
+            :pagination="fillPagination"
             :scroll="{ x: 'max-content' }"
-            @page-change="onTradePageChange"
-            @page-size-change="onTradePageSizeChange"
+            @page-change="changeFillPage"
           >
             <template #columns>
-              <a-table-column title="账户" :width="100">
-                <template #cell="{ record }">{{ accountName(record.account_id) }}</template>
+              <a-table-column title="Fill ID" data-index="fill_id" ellipsis />
+              <a-table-column title="Symbol" data-index="symbol" />
+              <a-table-column title="市场">
+                <template #cell="{ record }">{{ marketTypeLabels[record.market_type] }}</template>
               </a-table-column>
-              <a-table-column title="交易所" data-index="exchange" :width="80" />
-              <a-table-column title="交易对" data-index="symbol" :width="110" />
-              <a-table-column title="方向" :width="60">
-                <template #cell="{ record }">
-                  <a-tag size="small" :color="orderSideColors[record.side]">{{ orderSideLabels[record.side] }}</a-tag>
-                </template>
+              <a-table-column title="方向">
+                <template #cell="{ record }">{{ orderSideLabels[record.side] }}</template>
               </a-table-column>
-              <a-table-column title="成交价" data-index="price" :width="100" />
-              <a-table-column title="成交量" data-index="quantity" :width="100" />
-              <a-table-column title="成交额" data-index="amount" :width="110" />
-              <a-table-column title="手续费" :width="110">
-                <template #cell="{ record }">{{ record.fee }} {{ record.fee_currency }}</template>
+              <a-table-column title="价格" data-index="price" />
+              <a-table-column title="数量" data-index="quantity" />
+              <a-table-column title="手续费">
+                <template #cell="{ record }">{{ record.fee }} {{ record.fee_asset }}</template>
               </a-table-column>
-              <a-table-column title="角色" data-index="role" :width="70" />
-              <a-table-column title="订单ID" data-index="order_id" :width="160" ellipsis />
-              <a-table-column title="成交时间" :width="170">
+              <a-table-column title="Realized PnL" data-index="realized_pnl" />
+              <a-table-column title="角色" data-index="role" />
+              <a-table-column title="成交时间">
                 <template #cell="{ record }">{{ formatTimestamp(record.traded_at) }}</template>
               </a-table-column>
             </template>
           </a-table>
-        </section>
-      </template>
-
-      <!-- 订单成交明细弹窗 -->
-      <a-modal
-        v-model:visible="orderTradesVisible"
-        width="900px"
-        :title="`订单成交明细 - ${selectedOrder?.symbol || ''}`"
-        :footer="false"
-      >
-        <a-table
-          row-key="trade_id"
-          size="small"
-          :bordered="{ cell: true }"
-          :loading="orderTradesLoading"
-          :data="orderTrades"
-          :pagination="false"
-        >
-          <template #columns>
-            <a-table-column title="成交ID" data-index="trade_id" :width="160" ellipsis />
-            <a-table-column title="方向" :width="60">
-              <template #cell="{ record }">
-                <a-tag size="small" :color="orderSideColors[record.side]">{{ orderSideLabels[record.side] }}</a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="成交价" data-index="price" :width="100" />
-            <a-table-column title="成交量" data-index="quantity" :width="100" />
-            <a-table-column title="成交额" data-index="amount" :width="110" />
-            <a-table-column title="手续费" :width="110">
-              <template #cell="{ record }">{{ record.fee }} {{ record.fee_currency }}</template>
-            </a-table-column>
-            <a-table-column title="角色" data-index="role" :width="70" />
-            <a-table-column title="成交时间" :width="170">
-              <template #cell="{ record }">{{ formatTimestamp(record.traded_at) }}</template>
-            </a-table-column>
-          </template>
-        </a-table>
-      </a-modal>
+        </a-tab-pane>
+      </a-tabs>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import { createClientId } from "@/utils/client-id";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
-  listAccounts,
-  listOrders,
-  syncOrders,
-  listTrades,
-  syncTrades,
+  canCancelOrderState,
   cancelOrder,
-  accountTypeLabels,
-  orderSideLabels,
+  formatTimestamp,
+  listAccounts,
+  listFills,
+  listOrders,
+  marketTypeLabels,
   orderSideColors,
+  orderSideLabels,
   orderTypeLabels,
-  orderStatusLabels,
-  orderStatusColors,
-  formatTimestamp
+  placeOrder,
+  setLeverage
 } from "@/api/trade";
-import type { Account, Order, OrderStatus, Trade } from "@/api/trade/types";
-import { defaultPagination, applyPageResult } from "@/views/data/shared/metadata-utils";
+import type { ExchangeAccount, Fill, Order } from "@/api/trade/types";
 
 defineOptions({ name: "trade-record" });
 
-type TradeRecordTab = "orders" | "trades";
-
-const activeTab = ref<TradeRecordTab>("orders");
-const tabs = [
-  { key: "orders", label: "订单记录" },
-  { key: "trades", label: "成交明细" }
-] as const;
-const accounts = ref<Account[]>([]);
-const orderAccountTabsExpanded = ref(false);
-const tradeAccountTabsExpanded = ref(false);
-
-function switchTab(key: string) {
-  activeTab.value = key === "trades" ? "trades" : "orders";
-}
-
-async function loadAccounts() {
-  const rsp = await listAccounts({ page: { page: 1, size: 200 } });
-  accounts.value = rsp.accounts || [];
-}
-
-function defaultAccountID(): string {
-  return accounts.value.find(acc => acc.is_default)?.account_id || accounts.value[0]?.account_id || "";
-}
-
-function accountName(accountId: string): string {
-  const acc = accounts.value.find(a => a.account_id === accountId);
-  return acc ? acc.account_name : accountId || "-";
-}
-
-function canCancel(status: number): boolean {
-  return [0, 1, 2].includes(status);
-}
-
-function toggleOrderAccountTabs() {
-  orderAccountTabsExpanded.value = !orderAccountTabsExpanded.value;
-}
-
-function toggleTradeAccountTabs() {
-  tradeAccountTabsExpanded.value = !tradeAccountTabsExpanded.value;
-}
-
-// ========== 订单列表 ==========
+const accounts = ref<ExchangeAccount[]>([]);
+const exchangeAccountId = ref("");
+const selectedAccount = computed(
+  () => accounts.value.find(account => account.exchange_account_id === exchangeAccountId.value) || null
+);
+const accountExecutable = computed(() =>
+  Boolean(
+    selectedAccount.value?.ready && !selectedAccount.value?.paused && selectedAccount.value?.status.toUpperCase() === "ENABLED"
+  )
+);
+const activeTab = ref("orders");
+const filterSymbol = ref("");
+const onlyOpen = ref(false);
 const orders = ref<Order[]>([]);
-const orderLoading = ref(false);
-const syncingOrders = ref(false);
-const orderPagination = reactive(defaultPagination());
-const orderFilter = reactive({
-  account_id: "",
+const fills = ref<Fill[]>([]);
+const loading = ref(false);
+const submitting = ref(false);
+const settingLeverage = ref(false);
+const orderPagination = reactive({ current: 1, pageSize: 20, total: 0 });
+const fillPagination = reactive({ current: 1, pageSize: 20, total: 0 });
+const accountRequests = createLatestRequestGuard();
+const orderRequests = createLatestRequestGuard();
+const fillRequests = createLatestRequestGuard();
+const form = reactive({
   symbol: "",
-  status: undefined as OrderStatus | undefined,
-  only_open: false
+  order_type: 1 as 1 | 2,
+  side: 1 as 1 | 2,
+  quantity: "",
+  limit_price: "",
+  leverage: "1",
+  reduce_only: false
 });
 
-async function loadOrders() {
-  if (!orderFilter.account_id) {
-    orders.value = [];
-    return;
+watch(
+  () => form.order_type,
+  value => {
+    if (value === 1) form.limit_price = "";
   }
-  orderLoading.value = true;
-  try {
-    const rsp = await listOrders({
-      account_id: orderFilter.account_id,
-      symbol: orderFilter.symbol || undefined,
-      status: orderFilter.status,
-      only_open: orderFilter.only_open || undefined,
-      page: { page: orderPagination.current, size: orderPagination.pageSize }
-    });
-    orders.value = rsp.orders || [];
-    applyPageResult(orderPagination, rsp.page_result);
-  } finally {
-    orderLoading.value = false;
+);
+watch(selectedAccount, account => {
+  if (account?.market_type !== 2) {
+    form.leverage = "1";
+    form.reduce_only = false;
   }
+});
+
+async function loadAccounts() {
+  const request = accountRequests.begin();
+  const response = await listAccounts({ page: { page: 1, size: 200 } });
+  if (!request.isLatest()) return;
+  accounts.value = response.accounts || [];
+  exchangeAccountId.value ||= accounts.value[0]?.exchange_account_id || "";
 }
 
-async function onOrderAccountTabClick(accountID: string) {
-  if (!accountID || orderFilter.account_id === accountID) {
-    return;
-  }
-  orderFilter.account_id = accountID;
+async function accountChanged() {
   orderPagination.current = 1;
-  await loadOrders();
+  fillPagination.current = 1;
+  await loadActiveTab();
 }
 
-async function onSyncOrders() {
-  if (!orderFilter.account_id) {
-    Message.warning("请先选择账户");
-    return;
-  }
-  const symbol = orderFilter.symbol.trim().toUpperCase();
-  const syncOnlyOpen = orderFilter.only_open || !symbol;
-  syncingOrders.value = true;
+async function refreshAccounts() {
+  await loadAccounts();
+  await loadActiveTab();
+}
+
+async function loadOrders() {
+  if (!exchangeAccountId.value) return;
+  const request = orderRequests.begin();
+  const accountId = exchangeAccountId.value;
+  const query = {
+    exchange_account_id: accountId,
+    symbol: filterSymbol.value.trim().toUpperCase(),
+    only_open: onlyOpen.value,
+    page: { page: orderPagination.current, size: orderPagination.pageSize }
+  };
+  loading.value = true;
   try {
-    const rsp = await syncOrders({
-      account_id: orderFilter.account_id,
-      symbol: symbol || undefined,
-      only_open: syncOnlyOpen,
-      page: { page: orderPagination.current, size: orderPagination.pageSize }
-    });
-    orders.value = rsp.orders || [];
-    applyPageResult(orderPagination, rsp.page_result);
-    orderFilter.symbol = symbol;
-    if (syncOnlyOpen && !symbol) {
-      orderFilter.only_open = true;
-    }
-    Message.success(`已同步 ${orders.value.length} 条订单`);
+    const response = await listOrders(query);
+    if (!request.isLatest() || exchangeAccountId.value !== accountId) return;
+    orders.value = response.orders || [];
+    orderPagination.total = response.page_result?.total || 0;
   } finally {
-    syncingOrders.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 
-function onOrderPageChange(page: number) {
+async function loadFills() {
+  if (!exchangeAccountId.value) return;
+  const request = fillRequests.begin();
+  const accountId = exchangeAccountId.value;
+  const query = {
+    exchange_account_id: accountId,
+    symbol: filterSymbol.value.trim().toUpperCase(),
+    page: { page: fillPagination.current, size: fillPagination.pageSize }
+  };
+  loading.value = true;
+  try {
+    const response = await listFills(query);
+    if (!request.isLatest() || exchangeAccountId.value !== accountId) return;
+    fills.value = response.fills || [];
+    fillPagination.total = response.page_result?.total || 0;
+  } finally {
+    if (request.isLatest()) loading.value = false;
+  }
+}
+
+function loadActiveTab() {
+  return activeTab.value === "fills" ? loadFills() : loadOrders();
+}
+
+function changeOrderPage(page: number) {
   orderPagination.current = page;
   loadOrders();
 }
 
-function onOrderPageSizeChange(size: number) {
-  orderPagination.current = 1;
-  orderPagination.pageSize = size;
-  loadOrders();
+function changeFillPage(page: number) {
+  fillPagination.current = page;
+  loadFills();
 }
 
-async function onCancelOrder(record: Order) {
-  await cancelOrder({
-    account_id: record.account_id,
-    channel_id: record.channel_id,
-    order_id: record.order_id
-  });
+async function submit() {
+  const symbol = form.symbol.trim().toUpperCase();
+  if (!accountExecutable.value || !symbol || !form.quantity.trim()) {
+    Message.warning("请选择 Ready 账户并填写 Symbol 和数量");
+    return;
+  }
+  if (form.order_type === 2 && !form.limit_price.trim()) {
+    Message.warning("LIMIT 订单必须填写限价");
+    return;
+  }
+  submitting.value = true;
+  try {
+    await placeOrder({
+      exchange_account_id: exchangeAccountId.value,
+      client_order_id: createClientId(),
+      symbol,
+      order_type: form.order_type,
+      time_in_force: form.order_type === 1 ? 0 : 1,
+      side: form.side,
+      position_side: selectedAccount.value?.market_type === 2 ? 1 : 0,
+      quantity: form.quantity.trim(),
+      ...(form.order_type === 2 ? { limit_price: form.limit_price.trim() } : {}),
+      reduce_only: selectedAccount.value?.market_type === 2 && form.reduce_only,
+      source: "manual"
+    });
+    Message.success("订单已提交");
+    await loadOrders();
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function saveLeverage() {
+  const symbol = form.symbol.trim().toUpperCase();
+  if (!selectedAccount.value || selectedAccount.value.market_type !== 2 || !symbol || !form.leverage.trim()) {
+    Message.warning("请先选择 SWAP 账户并填写 Symbol 和杠杆");
+    return;
+  }
+  settingLeverage.value = true;
+  try {
+    await setLeverage({
+      exchange_account_id: exchangeAccountId.value,
+      symbol,
+      leverage: form.leverage.trim()
+    });
+    selectedAccount.value.ready = false;
+    Message.success("杠杆已保存；Exchange session 重建并恢复 Ready 后再提交订单");
+  } finally {
+    settingLeverage.value = false;
+  }
+}
+
+const canCancel = canCancelOrderState;
+
+async function cancel(order: Order) {
+  if (order.exchange_account_id !== exchangeAccountId.value) {
+    Message.warning("账户已切换，请刷新后重试");
+    return;
+  }
+  await cancelOrder(order.order_id);
   Message.success("撤单请求已提交");
   await loadOrders();
 }
 
-// ========== 成交明细 ==========
-const trades = ref<Trade[]>([]);
-const tradeLoading = ref(false);
-const syncingTrades = ref(false);
-const tradePagination = reactive(defaultPagination());
-const tradeFilter = reactive({ account_id: "", symbol: "" });
-
-async function loadTrades() {
-  if (!tradeFilter.account_id) {
-    trades.value = [];
-    return;
-  }
-  tradeLoading.value = true;
-  try {
-    const rsp = await listTrades({
-      account_id: tradeFilter.account_id,
-      symbol: tradeFilter.symbol || undefined,
-      page: { page: tradePagination.current, size: tradePagination.pageSize }
-    });
-    trades.value = rsp.trades || [];
-    applyPageResult(tradePagination, rsp.page_result);
-  } finally {
-    tradeLoading.value = false;
-  }
-}
-
-async function onTradeAccountTabClick(accountID: string) {
-  if (!accountID || tradeFilter.account_id === accountID) {
-    return;
-  }
-  tradeFilter.account_id = accountID;
-  tradePagination.current = 1;
-  await loadTrades();
-}
-
-async function onSyncTrades() {
-  if (!tradeFilter.account_id) {
-    Message.warning("请先选择账户");
-    return;
-  }
-  const symbol = tradeFilter.symbol.trim().toUpperCase();
-  if (!symbol) {
-    Message.warning("请先输入交易对");
-    return;
-  }
-  syncingTrades.value = true;
-  try {
-    const rsp = await syncTrades({
-      account_id: tradeFilter.account_id,
-      symbol,
-      page: { page: tradePagination.current, size: tradePagination.pageSize }
-    });
-    trades.value = rsp.trades || [];
-    applyPageResult(tradePagination, rsp.page_result);
-    tradeFilter.symbol = symbol;
-    Message.success(`已同步 ${trades.value.length} 条成交`);
-  } finally {
-    syncingTrades.value = false;
-  }
-}
-
-function onTradePageChange(page: number) {
-  tradePagination.current = page;
-  loadTrades();
-}
-
-function onTradePageSizeChange(size: number) {
-  tradePagination.current = 1;
-  tradePagination.pageSize = size;
-  loadTrades();
-}
-
-// ========== 订单成交明细弹窗 ==========
-const orderTradesVisible = ref(false);
-const orderTrades = ref<Trade[]>([]);
-const orderTradesLoading = ref(false);
-const selectedOrder = ref<Order | null>(null);
-
-async function openOrderTrades(record: Order) {
-  selectedOrder.value = record;
-  orderTradesVisible.value = true;
-  orderTradesLoading.value = true;
-  try {
-    const rsp = await listTrades({
-      account_id: record.account_id,
-      order_id: record.order_id
-    });
-    orderTrades.value = rsp.trades || [];
-  } finally {
-    orderTradesLoading.value = false;
-  }
-}
-
 onMounted(async () => {
   await loadAccounts();
-  const accountID = defaultAccountID();
-  if (accountID) {
-    orderFilter.account_id = accountID;
-    tradeFilter.account_id = accountID;
-    await Promise.all([loadOrders(), loadTrades()]);
-  }
+  await loadOrders();
 });
 </script>
 
 <style scoped>
-.record-view-tabs {
-  margin-bottom: var(--moox-space-3);
-}
-
-.account-tabs-block {
-  position: relative;
-  padding-bottom: var(--moox-space-3);
-  margin-bottom: var(--moox-space-3);
-}
-
-.record-account-tabs {
+.page-head {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  max-height: 42px;
-  padding: var(--moox-space-1);
-  overflow: hidden;
-  border: 1px solid var(--color-border-2);
-  border-radius: 6px;
-  background: var(--color-fill-1);
-}
-
-.record-account-tabs.expanded {
-  max-height: none;
-}
-
-.record-account-tab {
-  display: inline-flex;
-  flex: 0 0 auto;
   align-items: center;
-  gap: var(--moox-space-2);
-  min-height: 32px;
-  padding: 5px var(--moox-space-3);
-  color: var(--color-text-2);
-  white-space: nowrap;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  outline: none;
-  transition:
-    background-color 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease;
+  justify-content: space-between;
+  margin-bottom: var(--moox-space-4);
 }
 
-.record-account-tab:hover {
-  color: rgb(var(--primary-6));
-  background: var(--color-fill-2);
+.order-entry {
+  padding: var(--moox-space-4) 0;
+  border-top: 1px solid var(--color-border-2);
+  border-bottom: 1px solid var(--color-border-2);
 }
 
-.record-account-tab.active {
-  color: rgb(var(--primary-6));
-  background: var(--color-bg-1);
-  border-color: rgb(var(--primary-6));
+.order-entry h3 {
+  margin: 0 0 var(--moox-space-3);
 }
 
-.account-tab-name {
-  max-width: 180px;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-}
-
-.account-tab-type {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.account-tabs-toggle {
-  position: absolute;
-  bottom: -9px;
-  left: 50%;
-  z-index: 2;
-  width: 34px;
-  min-width: 34px;
-  height: 18px;
-  min-height: 18px;
-  padding: 0;
-  color: rgb(var(--primary-6));
-  background: var(--color-bg-1);
-  border: 1px solid var(--color-border-2);
-  border-radius: 999px;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.1);
-  transform: translateX(-50%);
-}
-
-.account-tabs-toggle:hover {
-  background: var(--color-fill-2);
-}
-
-.account-tabs-toggle :deep(.arco-btn-icon) {
-  margin: 0;
-  font-size: 12px;
+.entry-warning {
+  margin-top: var(--moox-space-3);
 }
 
 .filter-bar {
   display: flex;
-  gap: var(--moox-space-2);
+  gap: var(--moox-space-3);
   align-items: center;
   margin-bottom: var(--moox-space-2);
-  flex-wrap: wrap;
+}
+
+.record-view-tabs {
+  margin-bottom: var(--moox-space-3);
 }
 </style>

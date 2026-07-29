@@ -1,21 +1,12 @@
 <template>
-  <a-card title="目标与持仓" :bordered="false">
-    <a-alert v-if="targets.length && !hasComparison" type="info" show-icon class="source-note"
-      >理论目标来自最近一次 Python 决策；当前暂无 Trade 组合快照。</a-alert
-    >
+  <a-card title="目标持仓" :bordered="false">
     <a-table size="small" :data="targets" :pagination="false" row-key="instrument_id">
       <template #columns>
         <a-table-column title="Instrument" data-index="instrument_id" />
-        <a-table-column title="策略理论目标" data-index="target_weight" />
-        <a-table-column title="组合目标"
-          ><template #cell="{ record }">{{ record.portfolio_target || "暂无快照" }}</template></a-table-column
-        >
-        <a-table-column title="实际持仓"
-          ><template #cell="{ record }">{{ record.actual_position || "暂无快照" }}</template></a-table-column
-        >
-        <a-table-column title="偏差"
-          ><template #cell="{ record }">{{ record.deviation || "暂无快照" }}</template></a-table-column
-        >
+        <a-table-column title="Symbol" data-index="symbol" />
+        <a-table-column title="目标数量" data-index="target_quantity" />
+        <a-table-column title="原因" data-index="reason" />
+        <a-table-column title="数据版本" data-index="data_revision" />
       </template>
     </a-table>
     <a-empty v-if="!targets.length" description="暂无目标数据" />
@@ -23,16 +14,6 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
-import type { TargetWeight } from "@/api/strategy-types";
-const props = defineProps<{ targets: TargetWeight[] }>();
-const hasComparison = computed(() =>
-  props.targets.some(target => target.portfolio_target || target.actual_position || target.deviation)
-);
+import type { TargetPosition } from "@/api/strategy-types";
+defineProps<{ targets: TargetPosition[] }>();
 </script>
-
-<style scoped>
-.source-note {
-  margin-bottom: var(--moox-space-3);
-}
-</style>

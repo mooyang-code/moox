@@ -8,7 +8,7 @@ import type {
   StrategyOverview,
   StrategyPerformance,
   StrategyRun,
-  TargetWeight
+  TargetPosition
 } from "./strategy-types";
 
 export interface RunningStrategyFilter extends PageRequest {
@@ -71,10 +71,10 @@ export async function listStrategyRuns(
   return { items: rsp.items ?? [], page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size } };
 }
 
-export async function listStrategyTargets(run_id: string, params: PageRequest = {}): Promise<PageResult<TargetWeight>> {
+export async function listStrategyTargets(run_id: string, params: PageRequest = {}): Promise<PageResult<TargetPosition>> {
   const rsp = await callControl<
     { run_id: string; page: PageRequest },
-    { targets?: TargetWeight[]; total?: number; page?: number; page_size?: number }
+    { targets?: TargetPosition[]; total?: number; page?: number; page_size?: number }
   >("strategy", "ListStrategyTargets", { run_id, page: { page: params.page ?? 1, page_size: params.page_size ?? 100 } });
   return { items: rsp.targets ?? [], page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size } };
 }
@@ -112,9 +112,8 @@ export async function resumeBinding(binding_id: string, reason: string, operatio
 }
 
 export interface ExecutionSettings {
-  channel_id?: string;
-  capital_amount?: string;
-  quote_asset?: string;
+  execution_binding_id: string;
+  exchange_account_id: string;
 }
 
 export async function setExecutionMode(
@@ -122,7 +121,7 @@ export async function setExecutionMode(
   mode: string,
   reason: string,
   operation_id: string,
-  settings: ExecutionSettings = {}
+  settings: ExecutionSettings
 ) {
   return callControl("strategy", "SetExecutionMode", { binding_id, mode, reason, operation_id, ...settings });
 }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
@@ -66,8 +67,8 @@ func TestCommitRebalancePublishesPerExecutionBinding(t *testing.T) {
 			repo := New(db)
 			seedCommitBinding(t, db, tt.executions)
 			task := commitTask("run-1")
-			output := domain.Output{Action: tt.action, Targets: []domain.TargetWeight{{
-				InstrumentID: "BTC-USDT", TargetWeight: "0.5",
+			output := domain.Output{Action: tt.action, Targets: []domain.TargetPosition{{
+				InstrumentID: "BTC-USDT", Symbol: "BTCUSDT", TargetQuantity: "0.5",
 			}}, NextState: map[string]any{"runs": 1}}
 			if err := repo.Commit(context.Background(), task, output, "hash-1"); err != nil {
 				t.Fatal(err)
@@ -96,19 +97,24 @@ func TestCommitRebalancePublishesPerExecutionBinding(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					var payload tradeeventpb.RebalanceRequested
+					var payload tradeeventpb.TargetIntent
 					if err := proto.Unmarshal(envelope.GetPayload(), &payload); err != nil {
 						t.Fatal(err)
 					}
-					if payload.GetRequestId() != row.MessageID || payload.GetStrategyRunId() != task.RunID ||
+					if payload.GetExecutionId() != row.MessageID || payload.GetStrategyRunId() != task.RunID ||
 						payload.GetExecutionBindingId() != envelope.GetSubjectId() {
 						t.Fatalf("invalid rebalance event: envelope=%+v payload=%+v", envelope, &payload)
 					}
 					if payload.GetCommandSequence() != uint64(task.PreviousState.Revision+1) {
 						t.Fatalf("command sequence=%d, want %d", payload.GetCommandSequence(), task.PreviousState.Revision+1)
 					}
-					if len(payload.GetTargets()) != 1 || payload.GetTargets()[0].GetSymbol() != "BTC-USDT" ||
-						payload.GetTargets()[0].GetMarketType() != "spot" {
+					ttl := time.UnixMilli(payload.GetNotAfterUnixMs()).Sub(envelope.GetOccurredAt().AsTime())
+					if ttl < executionTTL-time.Millisecond || ttl > executionTTL {
+						t.Fatalf("target TTL=%s, want %s", ttl, executionTTL)
+					}
+					if payload.GetExchangeAccountId() != "account-1" || payload.GetDataRevision() != task.DataRevision ||
+						len(payload.GetTargets()) != 1 || payload.GetTargets()[0].GetSymbol() != "BTCUSDT" ||
+						payload.GetTargets()[0].GetTargetQuantity() != "0.5" {
 						t.Fatalf("invalid targets: %+v", payload.GetTargets())
 					}
 				}
@@ -122,8 +128,8 @@ func TestCommitRebalanceDuplicateDoesNotAddOutboxRows(t *testing.T) {
 	repo := New(db)
 	seedCommitBinding(t, db, []domain.ExecutionBinding{validExecution("paper-1", "paper")})
 	task := commitTask("run-1")
-	output := domain.Output{Action: domain.ActionRebalance, Targets: []domain.TargetWeight{{
-		InstrumentID: "BTC-USDT", TargetWeight: "0.5",
+	output := domain.Output{Action: domain.ActionRebalance, Targets: []domain.TargetPosition{{
+		InstrumentID: "BTC-USDT", Symbol: "BTCUSDT", TargetQuantity: "0.5",
 	}}, NextState: map[string]any{"runs": 1}}
 	if err := repo.Commit(context.Background(), task, output, "same"); err != nil {
 		t.Fatal(err)
@@ -158,8 +164,8 @@ func TestCommitRebalanceSequenceIsMonotonicPerExecutionBindingAcrossStrategyBind
 	}
 	output := domain.Output{
 		Action: domain.ActionRebalance,
-		Targets: []domain.TargetWeight{{
-			InstrumentID: "BTC-USDT", TargetWeight: "0.5",
+		Targets: []domain.TargetPosition{{
+			InstrumentID: "BTC-USDT", Symbol: "BTCUSDT", TargetQuantity: "0.5",
 		}},
 		NextState: map[string]any{"runs": 1},
 	}
@@ -170,7 +176,7 @@ func TestCommitRebalanceSequenceIsMonotonicPerExecutionBindingAcrossStrategyBind
 	second := commitTask("run-2")
 	second.BindingID = "binding-2"
 	second.StrategyID = "strategy-2"
-	second.TriggerBarTime = "2026-07-25T00:01:00Z"
+	second.TriggerBarTime = time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)
 	second.PreviousState.BindingID = "binding-2"
 	if err := repo.Commit(context.Background(), second, output, "hash-2"); err != nil {
 		t.Fatal(err)
@@ -194,7 +200,7 @@ func TestCommitRebalanceSequenceIsMonotonicPerExecutionBindingAcrossStrategyBind
 		if err != nil {
 			t.Fatal(err)
 		}
-		var payload tradeeventpb.RebalanceRequested
+		var payload tradeeventpb.TargetIntent
 		if err := proto.Unmarshal(envelope.GetPayload(), &payload); err != nil {
 			t.Fatal(err)
 		}
@@ -209,11 +215,11 @@ func TestCommitInvalidExecutionBindingRollsBack(t *testing.T) {
 	db := openCommitDB(t)
 	repo := New(db)
 	invalid := validExecution("paper-1", "paper")
-	invalid.CapitalAmount = "0"
+	invalid.ExchangeAccountID = ""
 	seedCommitBinding(t, db, []domain.ExecutionBinding{invalid})
 	err := repo.Commit(context.Background(), commitTask("run-1"), domain.Output{
 		Action:    domain.ActionRebalance,
-		Targets:   []domain.TargetWeight{{InstrumentID: "BTC-USDT", TargetWeight: "0.5"}},
+		Targets:   []domain.TargetPosition{{InstrumentID: "BTC-USDT", Symbol: "BTCUSDT", TargetQuantity: "0.5"}},
 		NextState: map[string]any{"runs": 1},
 	}, "hash-1")
 	if err == nil {
@@ -251,8 +257,8 @@ func openCommitDB(t *testing.T) *gorm.DB {
 
 func validExecution(id, mode string) domain.ExecutionBinding {
 	return domain.ExecutionBinding{
-		ExecutionBindingID: id, GroupID: "group-1", AccountID: "account-1",
-		ChannelID: "channel-1", Mode: mode, CapitalAmount: "100", QuoteAsset: "USDT", Status: "enabled",
+		ExecutionBindingID: id, GroupID: "group-1", ExchangeAccountID: "account-1",
+		Mode: mode, Status: "enabled",
 	}
 }
 
@@ -278,7 +284,7 @@ func seedCommitBinding(t *testing.T, db *gorm.DB, executions []domain.ExecutionB
 func commitTask(runID string) domain.Task {
 	return domain.Task{
 		RunID: runID, BindingID: "binding-1", StrategyID: "strategy-1", Version: "1",
-		Namespace: "default", TriggerBarTime: "2026-07-25T00:00:00Z", DataRevision: "revision-1",
+		Namespace: "default", TriggerBarTime: time.Now().UTC().Format(time.RFC3339Nano), DataRevision: "revision-1",
 		SpaceID: "space", PreviousState: domain.State{BindingID: "binding-1", StrategyVersion: "1", Revision: 0},
 	}
 }
