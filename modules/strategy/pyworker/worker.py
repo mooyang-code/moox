@@ -27,6 +27,7 @@ else:
 sys.path.insert(0, str(Path(__file__).parents[1] / "pysdk"))
 
 from moox_strategy import validate_output
+from moox_pyruntime.capture import capture_output
 from moox_pyruntime.protocol import (
     TYPE_ERROR as ERROR,
     TYPE_HELLO as HELLO,
@@ -39,6 +40,8 @@ from moox_pyruntime.protocol import (
 )
 
 modules = {}
+MAX_USER_LOG_BYTES = 64 * 1024
+MAX_TRACEBACK_BYTES = 16 * 1024
 
 
 def validate_result(value):
@@ -103,6 +106,28 @@ def run(meta):
     return json_safe(validate_result(result))
 
 
+def invoke(callback):
+    value = None
+    failure = None
+    failure_traceback = ""
+    with capture_output(limit_bytes=MAX_USER_LOG_BYTES) as captured:
+        try:
+            value = callback()
+        except Exception as exc:
+            failure = exc
+            failure_traceback = traceback.format_exc()
+    logs = {
+        "stdout": captured.stdout,
+        "stderr": captured.stderr,
+        "truncated": captured.truncated,
+    }
+    if len(failure_traceback.encode("utf-8")) > MAX_TRACEBACK_BYTES:
+        failure_traceback = failure_traceback.encode("utf-8")[
+            :MAX_TRACEBACK_BYTES
+        ].decode("utf-8", errors="ignore")
+    return value, logs, failure, failure_traceback
+
+
 def serve():
     write_frame(
         sys.stdout.buffer,
@@ -118,24 +143,40 @@ def serve():
     try:
         while True:
             typ, meta, payload = read_frame(sys.stdin.buffer)
-            try:
-                if typ == LOAD:
-                    load(meta)
-                    write_frame(sys.stdout.buffer, RESULT, {"ok": True})
-                elif typ == RUN:
-                    write_frame(
-                        sys.stdout.buffer,
-                        RESULT,
-                        {"ok": True, "result": run(meta)},
-                    )
-                elif typ == TYPE_DRAIN:
-                    break
-            except Exception as exc:
-                traceback.print_exc(file=sys.stderr)
+            if typ == TYPE_DRAIN:
+                break
+            if typ == LOAD:
+                value, logs, failure, failure_traceback = invoke(
+                    lambda: load(meta)
+                )
+            elif typ == RUN:
+                value, logs, failure, failure_traceback = invoke(
+                    lambda: run(meta)
+                )
+            else:
+                continue
+            if failure is not None:
                 write_frame(
                     sys.stdout.buffer,
                     ERROR,
-                    {"error_type": type(exc).__name__, "message": str(exc)},
+                    {
+                        "error_type": type(failure).__name__,
+                        "message": str(failure),
+                        "logs": logs,
+                        "traceback": failure_traceback,
+                    },
+                )
+            elif typ == LOAD:
+                write_frame(
+                    sys.stdout.buffer,
+                    RESULT,
+                    {"ok": True, "logs": logs},
+                )
+            else:
+                write_frame(
+                    sys.stdout.buffer,
+                    RESULT,
+                    {"ok": True, "result": value, "logs": logs},
                 )
     except EOFError:
         pass

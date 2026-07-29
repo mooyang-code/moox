@@ -74,7 +74,7 @@ func TestValidateOutputRejectsTargetQuantityAlias(t *testing.T) {
 func TestRunDoesNotExposePreviousTargetsOrState(t *testing.T) {
 	input, _, err := buildInput(domain.ExecutionRequest{
 		StrategyID: "strategy-1", RunnerID: "runner-1", TriggerBarTime: "2026-07-29T10:00:00Z",
-		Namespace: "live", Data: []map[string]any{{"time": "2026-07-29T09:59:00Z", "close": "1"}},
+		Namespace: "live", Data: []map[string]any{{"time": "2026-07-29T10:00:00Z", "close": "1"}},
 		Params: map[string]any{"fast": 12},
 	})
 	if err != nil {
@@ -98,7 +98,7 @@ func TestRunDoesNotExposePreviousTargetsOrState(t *testing.T) {
 func TestRunHashesCompleteHistoryParamsAndTriggerContext(t *testing.T) {
 	base := domain.ExecutionRequest{
 		StrategyID: "strategy-1", RunnerID: "runner-1", TriggerBarTime: "2026-07-29T10:00:00Z",
-		Namespace: "live", Data: []map[string]any{{"time": "2026-07-29T09:59:00Z", "close": "1"}},
+		Namespace: "live", Data: []map[string]any{{"time": "2026-07-29T10:00:00Z", "close": "1"}},
 		Params: map[string]any{"fast": 12},
 	}
 	_, first, err := buildInput(base)
@@ -113,8 +113,9 @@ func TestRunHashesCompleteHistoryParamsAndTriggerContext(t *testing.T) {
 	variants[0].StrategyID = "strategy-2"
 	variants[1].RunnerID = "runner-2"
 	variants[2].TriggerBarTime = "2026-07-29T10:01:00Z"
+	variants[2].Data = []map[string]any{{"time": "2026-07-29T10:01:00Z", "close": "1"}}
 	variants[3].Namespace = "preview"
-	variants[4].Data = []map[string]any{{"time": "2026-07-29T09:59:00Z", "close": "2"}}
+	variants[4].Data = []map[string]any{{"time": "2026-07-29T10:00:00Z", "close": "2"}}
 	variants[5].Params = map[string]any{"fast": 13}
 	for _, variant := range variants {
 		_, hash, err := buildInput(variant)
@@ -124,6 +125,63 @@ func TestRunHashesCompleteHistoryParamsAndTriggerContext(t *testing.T) {
 		if hash == first {
 			t.Fatalf("input change did not affect hash: %+v", variant)
 		}
+	}
+}
+
+func TestBuildInputRejectsInvalidHistoryWindowTimes(t *testing.T) {
+	base := domain.ExecutionRequest{
+		StrategyID: "strategy-1", RunnerID: "runner-1",
+		TriggerBarTime: "2026-07-29T10:00:00Z", Namespace: "live",
+		Params: map[string]any{},
+	}
+	tests := map[string][]map[string]any{
+		"out of order": {
+			{"time": "2026-07-29T09:59:00Z"},
+			{"time": "2026-07-29T09:58:00Z"},
+			{"time": "2026-07-29T10:00:00Z"},
+		},
+		"duplicate time": {
+			{"time": "2026-07-29T09:59:00Z"},
+			{"time": "2026-07-29T09:59:00Z"},
+			{"time": "2026-07-29T10:00:00Z"},
+		},
+		"future final bar": {
+			{"time": "2026-07-29T10:00:00Z"},
+			{"time": "2026-07-29T10:01:00Z"},
+		},
+		"stale final bar": {
+			{"time": "2026-07-29T09:58:00Z"},
+			{"time": "2026-07-29T09:59:00Z"},
+		},
+		"missing time": {
+			{"time": "2026-07-29T09:59:00Z"},
+			{"close": "1"},
+		},
+	}
+	for name, data := range tests {
+		t.Run(name, func(t *testing.T) {
+			request := base
+			request.Data = data
+			if _, _, err := buildInput(request); err == nil {
+				t.Fatal("buildInput() accepted an invalid history window")
+			}
+		})
+	}
+}
+
+func TestBuildInputAcceptsStrictAscendingHistoryEndingAtTrigger(t *testing.T) {
+	_, _, err := buildInput(domain.ExecutionRequest{
+		StrategyID: "strategy-1", RunnerID: "runner-1",
+		TriggerBarTime: "2026-07-29T10:00:00Z", Namespace: "live",
+		Data: []map[string]any{
+			{"time": "2026-07-29T09:58:00Z"},
+			{"time": "2026-07-29T09:59:00Z"},
+			{"time": "2026-07-29T10:00:00Z"},
+		},
+		Params: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("buildInput() error = %v", err)
 	}
 }
 

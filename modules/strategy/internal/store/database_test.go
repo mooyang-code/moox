@@ -40,6 +40,30 @@ func TestOpenRejectsMalformedCurrentStrategySchema(t *testing.T) {
 		"wrong runner partial unique predicate": func(sql string) string {
 			return strings.Replace(sql, "status = 'ENABLED'", "status = 'DISABLED'", 1)
 		},
+		"case changed runner partial unique predicate": func(sql string) string {
+			return strings.Replace(sql, "status = 'ENABLED'", "status = 'enabled'", 1)
+		},
+		"broadened runner partial unique predicate": func(sql string) string {
+			return strings.Replace(
+				sql,
+				"status = 'ENABLED'",
+				"(status = 'ENABLED' OR status = 'DISABLED')",
+				1,
+			)
+		},
+		"partial result logical unique": func(sql string) string {
+			sql = strings.Replace(
+				sql,
+				",\n    UNIQUE (runner_id, strategy_id, namespace, trigger_bar_time)",
+				"",
+				1,
+			)
+			return sql + `
+CREATE UNIQUE INDEX ux_strategy_results_logical_partial
+ON t_strategy_results (runner_id, strategy_id, namespace, trigger_bar_time)
+WHERE 0;
+`
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -12,9 +12,7 @@ import (
 var ErrRunnerEnabled = errors.New("strategy runner must be disabled")
 
 func (s *Store) CreateRunner(ctx context.Context, runner domain.StrategyRunner) error {
-	if len(runner.CurrentTargetsJSON) == 0 {
-		runner.CurrentTargetsJSON = []byte("[]")
-	}
+	runner.CurrentTargetsJSON = []byte("[]")
 	runner.CommandSequence = 0
 	runner.LastResultID = nil
 	runner.LastSuccessAt = nil
