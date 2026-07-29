@@ -49,18 +49,18 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 	}
 }
 
-func TestExchangeCredentialFailsClosedBeforeSecretReveal(t *testing.T) {
-	gateErr := errors.New("encryption key is not configured")
-	secrets := &bootstrapSecretSource{gateErr: gateErr}
+func TestExchangeCredentialPropagatesSingleSecretReadError(t *testing.T) {
+	readErr := errors.New("secret service unavailable")
+	secrets := &bootstrapSecretSource{err: readErr}
 
 	_, err := exchangeCredential(
 		context.Background(), secrets, exchange.ExchangeBinance, "secret-1",
 	)
-	if !errors.Is(err, gateErr) {
+	if !errors.Is(err, readErr) {
 		t.Fatalf("exchangeCredential() error = %v", err)
 	}
-	if secrets.listCalls != 0 {
-		t.Fatalf("ListExchangeSecrets() calls = %d, want 0", secrets.listCalls)
+	if secrets.getCalls != 1 {
+		t.Fatalf("GetExchangeSecret() calls = %d, want 1", secrets.getCalls)
 	}
 }
 
@@ -99,20 +99,17 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 }
 
 type bootstrapSecretSource struct {
-	gateErr   error
-	listCalls int
+	secret   accountapp.ExchangeSecret
+	err      error
+	getCalls int
 }
 
-func (s *bootstrapSecretSource) ValidateLiveCredentialAccess() error {
-	return s.gateErr
-}
-
-func (s *bootstrapSecretSource) ListExchangeSecrets(
+func (s *bootstrapSecretSource) GetExchangeSecret(
 	context.Context,
-	exchange.Exchange,
-) ([]accountapp.ExchangeSecret, error) {
-	s.listCalls++
-	return nil, nil
+	string,
+) (accountapp.ExchangeSecret, error) {
+	s.getCalls++
+	return s.secret, s.err
 }
 
 func TestBootstrapOwnsOneStoreAndOneShutdownHook(t *testing.T) {

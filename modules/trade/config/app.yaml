@@ -18,8 +18,8 @@ eventbus:
   urls: ["nats://127.0.0.1:4222"]
   credential_file: ~/.config/moox/eventbus/trade-eventbus.yaml
 
-# Paper-only startup may leave this empty. Live accounts require
-# MOOX_TRADE_ENCRYPTION_KEY with at least 32 bytes.
 runtime:
-  encryption_key: ""
+  # Production order submission is disabled unless explicitly enabled.
+  # TESTNET and account synchronization are unaffected.
+  live_trading_enabled: false
   paper_initial_balance: "100000"

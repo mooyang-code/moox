@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/account"
-	tradeconfig "github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 )
@@ -20,7 +19,6 @@ import (
 type Config struct {
 	GatewayBaseURL string
 	ServiceAuth    ServiceAuthConfig
-	EncryptionKey  string
 	Timeout        time.Duration
 }
 
@@ -35,11 +33,10 @@ type ServiceAuthConfig struct {
 
 // Client 调用 admin SecretMgr。
 type Client struct {
-	baseURL       string
-	auth          ServiceAuthConfig
-	client        *http.Client
-	clientErr     error
-	encryptionKey string
+	baseURL   string
+	auth      ServiceAuthConfig
+	client    *http.Client
+	clientErr error
 }
 
 // New 创建 SecretMgr client。
@@ -53,75 +50,48 @@ func New(cfg Config) *Client {
 		baseURL: strings.TrimRight(cfg.GatewayBaseURL, "/"),
 		auth:    cfg.ServiceAuth,
 		// 目标网关来自本服务可信配置，不接受用户输入；这里使用固定超时 HTTP client。
-		client:        client,
-		clientErr:     clientErr,
-		encryptionKey: cfg.EncryptionKey,
+		client:    client,
+		clientErr: clientErr,
 	}
 }
 
-func (c *Client) ValidateLiveCredentialAccess() error {
-	if err := tradeconfig.ValidateLiveEncryptionKey(c.encryptionKey); err != nil {
-		return fmt.Errorf("%w: %v", account.ErrLiveCredentialAccess, err)
-	}
-	return nil
-}
-
-// ListExchangeSecrets returns active credentials for one supported Exchange.
-func (c *Client) ListExchangeSecrets(
+// GetExchangeSecret returns the configured credential and its trusted metadata.
+func (c *Client) GetExchangeSecret(
 	ctx context.Context,
-	exchangeName exchange.Exchange,
-) ([]account.ExchangeSecret, error) {
-	if !exchangeName.Valid() {
-		return nil, account.ErrInvalidCredential
+	secretID string,
+) (account.ExchangeSecret, error) {
+	if strings.TrimSpace(secretID) == "" {
+		return account.ExchangeSecret{}, account.ErrInvalidCredential
 	}
-	var list listSecretsRsp
-	if err := c.post(ctx, "ListSecrets", listSecretsRequest{
-		"exchange",
-		strings.ToLower(string(exchangeName)),
-		"active",
-		0,
-		200,
-	}, &list); err != nil {
-		return nil, err
+	var response getSecretValueRsp
+	if err := c.post(
+		ctx,
+		"GetSecretValue",
+		getSecretValueReq{SecretID: secretID},
+		&response,
+	); err != nil {
+		return account.ExchangeSecret{}, err
 	}
-	out := make([]account.ExchangeSecret, 0, len(list.Secrets))
-	for _, sec := range list.Secrets {
-		if sec.SecretID == "" {
-			continue
-		}
-		if sec.Category != "exchange" ||
-			sec.Exchange != exchangeName ||
-			sec.Status != "active" {
-			return nil, fmt.Errorf(
-				"%w: secret %q metadata does not match %s",
-				account.ErrInvalidCredential,
-				sec.SecretID,
-				exchangeName,
-			)
-		}
-		var reveal revealSecretRsp
-		if err := c.post(ctx, "RevealSecret", revealSecretReq{SecretID: sec.SecretID}, &reveal); err != nil {
-			return nil, err
-		}
-		plain := reveal.Secret
-		if plain.SecretID == "" {
-			plain = sec
-		} else {
-			plain = mergeSecretDTO(sec, plain)
-		}
-		out = append(out, account.ExchangeSecret{
-			SecretID:    plain.SecretID,
-			Name:        plain.Name,
-			Description: plain.Description,
-			Category:    plain.Category,
-			Exchange:    plain.Exchange,
-			Status:      plain.Status,
-			KeyID:       plain.KeyID,
-			SecretValue: plain.SecretValue,
-			ExtraConfig: plain.ExtraConfig,
-		})
+	secret := response.Secret
+	if secret.SecretID != secretID ||
+		secret.Category != "exchange" ||
+		!secret.Exchange.Valid() ||
+		secret.Status != "active" ||
+		strings.TrimSpace(secret.KeyID) == "" ||
+		strings.TrimSpace(secret.SecretValue) == "" {
+		return account.ExchangeSecret{}, fmt.Errorf(
+			"%w: secret %q metadata or value is invalid",
+			account.ErrInvalidCredential,
+			secretID,
+		)
 	}
-	return out, nil
+	return account.ExchangeSecret{
+		SecretID: secret.SecretID, Name: secret.Name,
+		Description: secret.Description, Category: secret.Category,
+		Exchange: secret.Exchange, Status: secret.Status,
+		KeyID: secret.KeyID, SecretValue: secret.SecretValue,
+		ExtraConfig: secret.ExtraConfig,
+	}, nil
 }
 
 func (c *Client) post(ctx context.Context, method string, req any, rsp responseWithRetInfo) error {
@@ -215,42 +185,6 @@ type secretDTO struct {
 	Status      string            `json:"status"`
 }
 
-type listSecretsRequest struct {
-	Category string `json:"category"`
-	Provider string `json:"provider"`
-	Status   string `json:"status"`
-	Offset   int32  `json:"offset"`
-	Limit    int32  `json:"limit"`
-}
-
-func mergeSecretDTO(metadata, revealed secretDTO) secretDTO {
-	if revealed.Name == "" {
-		revealed.Name = metadata.Name
-	}
-	if revealed.Description == "" {
-		revealed.Description = metadata.Description
-	}
-	if revealed.Category == "" {
-		revealed.Category = metadata.Category
-	}
-	if !revealed.Exchange.Valid() {
-		revealed.Exchange = metadata.Exchange
-	}
-	if revealed.SecretType == "" {
-		revealed.SecretType = metadata.SecretType
-	}
-	if revealed.KeyID == "" {
-		revealed.KeyID = metadata.KeyID
-	}
-	if revealed.ExtraConfig == "" {
-		revealed.ExtraConfig = metadata.ExtraConfig
-	}
-	if revealed.Status == "" {
-		revealed.Status = metadata.Status
-	}
-	return revealed
-}
-
 func (s *secretDTO) UnmarshalJSON(data []byte) error {
 	type secretFields secretDTO
 	var decoded secretFields
@@ -272,22 +206,14 @@ func (s *secretDTO) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type listSecretsRsp struct {
-	RetInfo retInfo     `json:"ret_info"`
-	Secrets []secretDTO `json:"secrets"`
-}
-
-func (r *listSecretsRsp) retOK() bool        { return r.RetInfo.ok() }
-func (r *listSecretsRsp) retMessage() string { return r.RetInfo.Msg }
-
-type revealSecretReq struct {
+type getSecretValueReq struct {
 	SecretID string `json:"secret_id"`
 }
 
-type revealSecretRsp struct {
+type getSecretValueRsp struct {
 	RetInfo retInfo   `json:"ret_info"`
 	Secret  secretDTO `json:"secret"`
 }
 
-func (r *revealSecretRsp) retOK() bool        { return r.RetInfo.ok() }
-func (r *revealSecretRsp) retMessage() string { return r.RetInfo.Msg }
+func (r *getSecretValueRsp) retOK() bool        { return r.RetInfo.ok() }
+func (r *getSecretValueRsp) retMessage() string { return r.RetInfo.Msg }

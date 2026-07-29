@@ -3,7 +3,6 @@ package account
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
@@ -15,7 +14,7 @@ var (
 	ErrAccountNotFound      = errors.New("trade account: not found")
 	ErrAccountConflict      = errors.New("trade account: conflict")
 	ErrInvalidCredential    = errors.New("trade account: invalid Exchange credential")
-	ErrLiveCredentialAccess = errors.New("trade account: live credential access is not configured")
+	ErrLiveTradingDisabled  = errors.New("trade account: production trading is disabled")
 	ErrServiceNotConfigured = errors.New("trade account: service is not configured")
 )
 
@@ -45,8 +44,7 @@ type Store interface {
 }
 
 type SecretSource interface {
-	ListExchangeSecrets(context.Context, exchange.Exchange) ([]ExchangeSecret, error)
-	ValidateLiveCredentialAccess() error
+	GetExchangeSecret(context.Context, string) (ExchangeSecret, error)
 }
 
 type SessionState interface {
@@ -55,9 +53,10 @@ type SessionState interface {
 }
 
 type Service struct {
-	Store        Store
-	Secrets      SecretSource
-	SessionState SessionState
+	Store              Store
+	Secrets            SecretSource
+	SessionState       SessionState
+	LiveTradingEnabled bool
 }
 
 type UpdateCommand struct {
@@ -171,6 +170,10 @@ func (s *Service) ExecutionEligibility(
 	if err := current.ExecutionEligibility(); err != nil {
 		return exchangeaccount.Account{}, err
 	}
+	if current.Environment == exchange.AccountEnvironmentProduction &&
+		!s.LiveTradingEnabled {
+		return exchangeaccount.Account{}, ErrLiveTradingDisabled
+	}
 	return current, nil
 }
 
@@ -181,28 +184,24 @@ func (s *Service) validateCredential(
 	if value.ExecutionMode == exchange.ExecutionModePaper {
 		return nil
 	}
+	if value.Environment == exchange.AccountEnvironmentProduction &&
+		!s.LiveTradingEnabled {
+		return ErrLiveTradingDisabled
+	}
 	if s.Secrets == nil {
 		return ErrServiceNotConfigured
 	}
-	if err := s.Secrets.ValidateLiveCredentialAccess(); err != nil {
-		return fmt.Errorf("%w: %v", ErrLiveCredentialAccess, err)
-	}
-	secrets, err := s.Secrets.ListExchangeSecrets(ctx, value.Exchange)
+	secret, err := s.Secrets.GetExchangeSecret(ctx, value.CredentialSecretID)
 	if err != nil {
 		return err
 	}
-	for _, secret := range secrets {
-		if secret.SecretID != value.CredentialSecretID {
-			continue
-		}
-		if secret.Category != "exchange" ||
-			secret.Exchange != value.Exchange ||
-			secret.Status != "active" {
-			return ErrInvalidCredential
-		}
-		return nil
+	if secret.SecretID != value.CredentialSecretID ||
+		secret.Category != "exchange" ||
+		secret.Exchange != value.Exchange ||
+		secret.Status != "active" {
+		return ErrInvalidCredential
 	}
-	return fmt.Errorf("%w: secret %q not found", ErrInvalidCredential, value.CredentialSecretID)
+	return nil
 }
 
 func applyUpdate(value *exchangeaccount.Account, command UpdateCommand) {

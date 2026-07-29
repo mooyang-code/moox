@@ -75,7 +75,6 @@ func initialize(
 			CAFile:     cfg.Admin.ServiceAuth.CAFile,
 			ExpireSecs: cfg.Admin.ServiceAuth.ExpireSeconds,
 		},
-		EncryptionKey: cfg.Runtime.EncryptionKey,
 	})
 	registry := exchange.NewRegistry()
 	registerBuiltins(registry)
@@ -86,8 +85,8 @@ func initialize(
 		RetryMin: time.Second, RetryMax: 30 * time.Second,
 	}
 	accounts := &accountapp.Service{
-		Store:   accountapp.Repository{Store: tradeStore},
-		Secrets: secrets, SessionState: manager,
+		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
+		SessionState: manager, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 	}
 	orderService := &orderapp.Service{
 		Store: tradeStore, Adapters: manager,
@@ -272,40 +271,34 @@ func exchangeCredential(
 	exchangeName exchange.Exchange,
 	secretID string,
 ) (exchange.Credential, error) {
-	if err := secrets.ValidateLiveCredentialAccess(); err != nil {
-		return exchange.Credential{}, fmt.Errorf(
-			"trade bootstrap: live credential access: %w",
-			err,
-		)
-	}
-	values, err := secrets.ListExchangeSecrets(ctx, exchangeName)
+	value, err := secrets.GetExchangeSecret(ctx, secretID)
 	if err != nil {
 		return exchange.Credential{}, err
 	}
-	for _, value := range values {
-		if value.SecretID != secretID {
-			continue
-		}
-		var extra struct {
-			Passphrase string `json:"passphrase"`
-		}
-		if strings.TrimSpace(value.ExtraConfig) != "" {
-			if err := json.Unmarshal([]byte(value.ExtraConfig), &extra); err != nil {
-				return exchange.Credential{}, fmt.Errorf(
-					"trade bootstrap: decode credential extra config: %w",
-					err,
-				)
-			}
-		}
-		return exchange.Credential{
-			APIKey: value.KeyID, APISecret: value.SecretValue,
-			Passphrase: extra.Passphrase,
-		}, nil
+	if value.SecretID != secretID ||
+		value.Exchange != exchangeName ||
+		value.Category != "exchange" ||
+		value.Status != "active" {
+		return exchange.Credential{}, fmt.Errorf(
+			"trade bootstrap: Exchange credential %q metadata mismatch",
+			secretID,
+		)
 	}
-	return exchange.Credential{}, fmt.Errorf(
-		"trade bootstrap: Exchange credential %q not found",
-		secretID,
-	)
+	var extra struct {
+		Passphrase string `json:"passphrase"`
+	}
+	if strings.TrimSpace(value.ExtraConfig) != "" {
+		if err := json.Unmarshal([]byte(value.ExtraConfig), &extra); err != nil {
+			return exchange.Credential{}, fmt.Errorf(
+				"trade bootstrap: decode credential extra config: %w",
+				err,
+			)
+		}
+	}
+	return exchange.Credential{
+		APIKey: value.KeyID, APISecret: value.SecretValue,
+		Passphrase: extra.Passphrase,
+	}, nil
 }
 
 type accountSyncer struct {

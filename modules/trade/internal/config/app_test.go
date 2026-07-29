@@ -10,9 +10,7 @@ import (
 
 func TestDefaultConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Runtime.EncryptionKey != "" {
-		t.Fatalf("default encryption key = %q, want empty", cfg.Runtime.EncryptionKey)
-	}
+	assert.False(t, cfg.Runtime.LiveTradingEnabled)
 	assert.Equal(t, "./data/moox_trade.db", cfg.Database.Path)
 	assert.Equal(t, "https://106.53.107.122:11001", cfg.Admin.BaseURL)
 	assert.True(t, cfg.EventBus.Enabled)
@@ -56,17 +54,17 @@ func TestValidate_EventBusDisabled_ShouldPass(t *testing.T) {
 func TestApplyEnv_OverridesBusinessFields(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "env.db")
 	t.Setenv("MOOX_TRADE_DB_PATH", dbPath)
-	t.Setenv("MOOX_TRADE_ENCRYPTION_KEY", "env-secret")
+	t.Setenv("MOOX_TRADE_LIVE_TRADING_ENABLED", "true")
 	t.Setenv("MOOX_TRADE_ADMIN_URL", "http://127.0.0.1:18080")
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "env-ak")
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "env-sk")
 	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
 
 	cfg := DefaultConfig()
-	cfg.applyEnv()
+	require.NoError(t, cfg.applyEnv())
 
 	assert.Equal(t, dbPath, cfg.Database.Path)
-	assert.Equal(t, "env-secret", cfg.Runtime.EncryptionKey)
+	assert.True(t, cfg.Runtime.LiveTradingEnabled)
 	assert.Equal(t, "http://127.0.0.1:18080", cfg.Admin.BaseURL)
 	assert.Equal(t, "env-ak", cfg.Admin.ServiceAuth.AccessKey)
 	assert.Equal(t, "env-sk", cfg.Admin.ServiceAuth.SecretKey)
@@ -93,24 +91,11 @@ func TestLoad_UnknownLegacyField_ShouldFail(t *testing.T) {
 	assert.Contains(t, err.Error(), "field sync not found")
 }
 
-func TestValidateLiveEncryptionKeyFailsClosed(t *testing.T) {
-	tests := []struct {
-		name string
-		key  string
-	}{
-		{name: "empty"},
-		{name: "short", key: "too-short"},
-		{name: "old checked in literal", key: "moox-cloud-secret-key-32bytes"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateLiveEncryptionKey(tt.key)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "MOOX_TRADE_ENCRYPTION_KEY")
-		})
-	}
-
-	require.NoError(t, ValidateLiveEncryptionKey("0123456789abcdef0123456789abcdef"))
+func TestLoadRejectsInvalidLiveTradingEnvironment(t *testing.T) {
+	t.Setenv("MOOX_TRADE_LIVE_TRADING_ENABLED", "sometimes")
+	_, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MOOX_TRADE_LIVE_TRADING_ENABLED")
 }
 
 func TestValidate_WithoutDatabasePath_ShouldFail(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 
@@ -31,11 +31,9 @@ type DatabaseConfig struct {
 
 // RuntimeConfig contains process-local execution settings.
 type RuntimeConfig struct {
-	EncryptionKey       string `yaml:"encryption_key"`
+	LiveTradingEnabled  bool   `yaml:"live_trading_enabled"`
 	PaperInitialBalance string `yaml:"paper_initial_balance"`
 }
-
-const rejectedEncryptionKey = "moox-cloud-secret-key-32bytes"
 
 // AdminConfig configures Trade access to Admin secrets.
 type AdminConfig struct {
@@ -80,18 +78,6 @@ func DefaultConfig() *AppConfig {
 	}
 }
 
-// ValidateLiveEncryptionKey rejects material that cannot protect live credentials.
-// Paper-only startup does not call this gate and may leave the key unset.
-func ValidateLiveEncryptionKey(key string) error {
-	key = strings.TrimSpace(key)
-	if key == "" || len([]byte(key)) < 32 || key == rejectedEncryptionKey {
-		return fmt.Errorf(
-			"MOOX_TRADE_ENCRYPTION_KEY must be at least 32 bytes and must not use the old checked-in value",
-		)
-	}
-	return nil
-}
-
 // Load 从文件加载配置，叠加默认值与环境变量覆盖。
 func Load(configPath string) (*AppConfig, error) {
 	cfg := DefaultConfig()
@@ -109,19 +95,28 @@ func Load(configPath string) (*AppConfig, error) {
 			}
 		}
 	}
-	cfg.applyEnv()
+	if err := cfg.applyEnv(); err != nil {
+		return nil, fmt.Errorf("invalid environment: %w", err)
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 	return cfg, nil
 }
 
-func (c *AppConfig) applyEnv() {
+func (c *AppConfig) applyEnv() error {
 	if v := os.Getenv("MOOX_TRADE_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
-	if v := os.Getenv("MOOX_TRADE_ENCRYPTION_KEY"); v != "" {
-		c.Runtime.EncryptionKey = v
+	if v := os.Getenv("MOOX_TRADE_LIVE_TRADING_ENABLED"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf(
+				"MOOX_TRADE_LIVE_TRADING_ENABLED must be true or false: %w",
+				err,
+			)
+		}
+		c.Runtime.LiveTradingEnabled = enabled
 	}
 	if v := os.Getenv("MOOX_TRADE_ADMIN_URL"); v != "" {
 		c.Admin.BaseURL = v
@@ -138,6 +133,7 @@ func (c *AppConfig) applyEnv() {
 	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
 		c.Admin.ServiceAuth.CAFile = v
 	}
+	return nil
 }
 
 // Validate 校验配置并创建所需目录。

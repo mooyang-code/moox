@@ -14,15 +14,14 @@ import (
 
 type secretSourceStub struct{}
 
-func (secretSourceStub) ValidateLiveCredentialAccess() error { return nil }
-func (secretSourceStub) ListExchangeSecrets(
+func (secretSourceStub) GetExchangeSecret(
 	context.Context,
-	exchange.Exchange,
-) ([]accountapp.ExchangeSecret, error) {
-	return []accountapp.ExchangeSecret{{
+	string,
+) (accountapp.ExchangeSecret, error) {
+	return accountapp.ExchangeSecret{
 		SecretID: "secret-1", Category: "exchange",
 		Exchange: exchange.ExchangeBinance, Status: "active",
-	}}, nil
+	}, nil
 }
 
 func TestAccountRPCRejectsMissingSpace(t *testing.T) {

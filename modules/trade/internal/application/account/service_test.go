@@ -148,7 +148,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 				tt.mutate(&value)
 			}
 			store := newMemoryStore()
-			secrets := &fakeSecrets{secrets: []ExchangeSecret{tt.secret}}
+			secrets := &fakeSecrets{secret: tt.secret}
 			service := Service{Store: store, Secrets: secrets}
 
 			_, err := service.Create(context.Background(), value)
@@ -173,7 +173,7 @@ func TestCreateDoesNotAliasSameNameAcrossExecutionModes(t *testing.T) {
 	live.ExecutionMode = exchange.ExecutionModeLive
 	live.Environment = exchange.AccountEnvironmentTestnet
 	secrets := &fakeSecrets{
-		secrets: []ExchangeSecret{validSecret()},
+		secret: validSecret(),
 	}
 	service := Service{Store: store, Secrets: secrets}
 
@@ -189,23 +189,23 @@ func TestCreateDoesNotAliasSameNameAcrossExecutionModes(t *testing.T) {
 	}
 }
 
-func TestCreateLiveAccountFailsClosedBeforeReadingCredential(t *testing.T) {
+func TestCreateProductionAccountRequiresExplicitLiveTrading(t *testing.T) {
 	store := newMemoryStore()
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
-	value.Environment = exchange.AccountEnvironmentTestnet
+	value.Environment = exchange.AccountEnvironmentProduction
+	value.SyncSymbols = []string{"BTCUSDT"}
 	secrets := &fakeSecrets{
-		secrets:    []ExchangeSecret{validSecret()},
-		liveKeyErr: ErrLiveCredentialAccess,
+		secret: validSecret(),
 	}
 	service := Service{Store: store, Secrets: secrets}
 
 	_, err := service.Create(context.Background(), value)
-	if !errors.Is(err, ErrLiveCredentialAccess) {
-		t.Fatalf("Create() error = %v, want ErrLiveCredentialAccess", err)
+	if !errors.Is(err, ErrLiveTradingDisabled) {
+		t.Fatalf("Create() error = %v, want ErrLiveTradingDisabled", err)
 	}
-	if secrets.listCalls != 0 {
-		t.Fatalf("ListExchangeSecrets() calls = %d, want 0", secrets.listCalls)
+	if secrets.getCalls != 0 {
+		t.Fatalf("GetExchangeSecret() calls = %d, want 0", secrets.getCalls)
 	}
 	if store.createCalls != 0 {
 		t.Fatalf("Create() writes = %d, want 0", store.createCalls)
@@ -231,7 +231,7 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 	store := newMemoryStore()
 	before := validSwapAccount()
 	store.accounts[before.ID] = before
-	service := Service{Store: store, Secrets: &fakeSecrets{secrets: []ExchangeSecret{validSecret()}}}
+	service := Service{Store: store, Secrets: &fakeSecrets{secret: validSecret()}}
 	name := "renamed"
 
 	got, err := service.Update(context.Background(), UpdateCommand{
@@ -254,43 +254,30 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 	}
 }
 
-func TestUpdateEnablingLiveAccountFailsClosed(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{name: "empty encryption key", err: ErrLiveCredentialAccess},
-		{name: "short encryption key", err: ErrLiveCredentialAccess},
-		{name: "old checked in key", err: ErrLiveCredentialAccess},
+func TestUpdateEnablingProductionAccountRequiresLiveTrading(t *testing.T) {
+	store := newMemoryStore()
+	value := validAccount()
+	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = exchange.AccountEnvironmentProduction
+	value.Status = exchange.AccountStatusDisabled
+	store.accounts[value.ID] = value
+	status := exchange.AccountStatusEnabled
+	service := Service{
+		Store: store,
+		Secrets: &fakeSecrets{
+			secret: validSecret(),
+		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := newMemoryStore()
-			value := validAccount()
-			value.ExecutionMode = exchange.ExecutionModeLive
-			value.Environment = exchange.AccountEnvironmentTestnet
-			value.Status = exchange.AccountStatusDisabled
-			store.accounts[value.ID] = value
-			status := exchange.AccountStatusEnabled
-			service := Service{
-				Store: store,
-				Secrets: &fakeSecrets{
-					secrets:    []ExchangeSecret{validSecret()},
-					liveKeyErr: tt.err,
-				},
-			}
 
-			_, err := service.Update(context.Background(), UpdateCommand{
-				ExchangeAccountID: value.ID,
-				Status:            &status,
-			})
-			if !errors.Is(err, ErrLiveCredentialAccess) {
-				t.Fatalf("Update() error = %v, want ErrLiveCredentialAccess", err)
-			}
-			if store.updateCalls != 0 {
-				t.Fatalf("Update() writes = %d, want 0", store.updateCalls)
-			}
-		})
+	_, err := service.Update(context.Background(), UpdateCommand{
+		ExchangeAccountID: value.ID,
+		Status:            &status,
+	})
+	if !errors.Is(err, ErrLiveTradingDisabled) {
+		t.Fatalf("Update() error = %v, want ErrLiveTradingDisabled", err)
+	}
+	if store.updateCalls != 0 {
+		t.Fatalf("Update() writes = %d, want 0", store.updateCalls)
 	}
 }
 
@@ -337,6 +324,26 @@ func TestExecutionEligibilityRejectsMissingSessionState(t *testing.T) {
 	_, err := service.ExecutionEligibility(context.Background(), value.ID)
 	if !errors.Is(err, ErrServiceNotConfigured) {
 		t.Fatalf("ExecutionEligibility() error = %v, want ErrServiceNotConfigured", err)
+	}
+}
+
+func TestExecutionEligibilityRejectsProductionWhenLiveTradingDisabled(t *testing.T) {
+	store := newMemoryStore()
+	value := validAccount()
+	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = exchange.AccountEnvironmentProduction
+	value.SyncSymbols = []string{"BTCUSDT"}
+	store.accounts[value.ID] = value
+	service := Service{Store: store, SessionState: fakeSessionState{ready: true}}
+
+	_, err := service.ExecutionEligibility(context.Background(), value.ID)
+	if !errors.Is(err, ErrLiveTradingDisabled) {
+		t.Fatalf("ExecutionEligibility() error = %v, want ErrLiveTradingDisabled", err)
+	}
+
+	service.LiveTradingEnabled = true
+	if _, err := service.ExecutionEligibility(context.Background(), value.ID); err != nil {
+		t.Fatalf("ExecutionEligibility() with live enabled error = %v", err)
 	}
 }
 
@@ -456,24 +463,17 @@ func (s *memoryStore) SetLeverage(
 }
 
 type fakeSecrets struct {
-	secrets    []ExchangeSecret
-	liveKeyErr error
-	listCalls  int
+	secret   ExchangeSecret
+	err      error
+	getCalls int
 }
 
-func (f *fakeSecrets) ListExchangeSecrets(
+func (f *fakeSecrets) GetExchangeSecret(
 	_ context.Context,
-	_ exchange.Exchange,
-) ([]ExchangeSecret, error) {
-	f.listCalls++
-	return f.secrets, nil
-}
-
-func (f *fakeSecrets) ValidateLiveCredentialAccess() error {
-	if f.liveKeyErr != nil {
-		return f.liveKeyErr
-	}
-	return nil
+	_ string,
+) (ExchangeSecret, error) {
+	f.getCalls++
+	return f.secret, f.err
 }
 
 type fakeSessionState struct{ ready bool }
