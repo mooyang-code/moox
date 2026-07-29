@@ -80,9 +80,9 @@ var (
 	DatasetRowsUpserted = declareEvent("storage.dataset.rows.upserted", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)
-	TradeTargetRequested = declareEvent("trade.target.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
-		return &tradeeventpb.TargetIntent{}
-	}, validateTradeTargetRequested)
+	LogicalAccountTargetRequested = declareEvent("trade.target.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
+		return &tradeeventpb.LogicalAccountTargetRequested{}
+	}, validateLogicalAccountTargetRequested)
 )
 
 type Registry struct {

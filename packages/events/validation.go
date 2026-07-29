@@ -143,43 +143,31 @@ const maxTargetQuantityLength = 256
 
 var decimalQuantityPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
-func validateTradeTargetRequested(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*tradeeventpb.TargetIntent)
+func validateLogicalAccountTargetRequested(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*tradeeventpb.LogicalAccountTargetRequested)
 	if !ok {
 		return fmt.Errorf("trade target payload has type %T", value)
 	}
-	if strings.TrimSpace(payload.GetExecutionId()) == "" ||
-		strings.TrimSpace(payload.GetStrategyRunId()) == "" ||
-		strings.TrimSpace(payload.GetExecutionBindingId()) == "" ||
-		strings.TrimSpace(payload.GetExchangeAccountId()) == "" ||
-		strings.TrimSpace(payload.GetDataRevision()) == "" ||
-		payload.GetCommandSequence() == 0 ||
-		payload.GetCommandSequence() > math.MaxInt64 {
+	if strings.TrimSpace(payload.GetTargetId()) == "" ||
+		strings.TrimSpace(payload.GetRunnerId()) == "" ||
+		strings.TrimSpace(payload.GetLogicalAccountId()) == "" ||
+		payload.GetCommandSequence() <= 0 {
 		return fmt.Errorf("trade target identity or command_sequence is incomplete")
 	}
-	if payload.GetNotAfterUnixMs() <= 0 || payload.GetNotAfterUnixMs() <= time.Now().UnixMilli() {
-		return fmt.Errorf("trade target not_after_unix_ms is expired")
-	}
-	if len(payload.GetTargets()) == 0 {
-		return fmt.Errorf("trade target positions are empty")
-	}
-	seenSymbols := make(map[string]struct{}, len(payload.GetTargets()))
+	seenInstruments := make(map[string]struct{}, len(payload.GetTargets()))
 	for i, target := range payload.GetTargets() {
 		if target == nil {
 			return fmt.Errorf("trade target %d is nil", i)
 		}
-		if strings.TrimSpace(target.GetInstrumentId()) == "" {
+		instrumentID := target.GetInstrumentId()
+		if strings.TrimSpace(instrumentID) == "" || strings.TrimSpace(instrumentID) != instrumentID {
 			return fmt.Errorf("trade target %d instrument_id is empty", i)
 		}
-		symbol := target.GetSymbol()
-		if strings.TrimSpace(symbol) == "" {
-			return fmt.Errorf("trade target %d symbol is empty", i)
+		if _, exists := seenInstruments[instrumentID]; exists {
+			return fmt.Errorf("trade target instrument_id %q is duplicated", instrumentID)
 		}
-		if _, exists := seenSymbols[symbol]; exists {
-			return fmt.Errorf("trade target symbol %q is duplicated", symbol)
-		}
-		seenSymbols[symbol] = struct{}{}
-		quantity := target.GetTargetQuantity()
+		seenInstruments[instrumentID] = struct{}{}
+		quantity := target.GetQuantity()
 		if len(quantity) > maxTargetQuantityLength || !decimalQuantityPattern.MatchString(quantity) {
 			return fmt.Errorf("trade target %d quantity is not decimal", i)
 		}
@@ -187,11 +175,11 @@ func validateTradeTargetRequested(message *eventpb.EventMessage, value proto.Mes
 			return fmt.Errorf("trade target %d quantity is not decimal", i)
 		}
 	}
-	if payload.GetExecutionId() != message.GetEventId() {
-		return fmt.Errorf("trade target execution_id does not match event_id")
+	if payload.GetTargetId() != message.GetEventId() {
+		return fmt.Errorf("trade target target_id does not match event_id")
 	}
-	if payload.GetExecutionBindingId() != message.GetSubjectId() {
-		return fmt.Errorf("trade target execution_binding_id does not match subject_id")
+	if payload.GetLogicalAccountId() != message.GetSubjectId() {
+		return fmt.Errorf("trade target logical_account_id does not match subject_id")
 	}
 	return nil
 }

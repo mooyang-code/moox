@@ -80,25 +80,31 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 			},
 		},
 		{
-			name:    "trade binding",
-			event:   TradeTargetRequested,
-			payload: validTargetIntent(),
-			opts:    validationOptions("execution-1", "space", "binding-1"),
-			mutate:  func(value proto.Message) { value.(*tradeeventpb.TargetIntent).ExecutionBindingId = "other" },
+			name:    "trade logical account",
+			event:   LogicalAccountTargetRequested,
+			payload: validLogicalAccountTarget(),
+			opts:    validationOptions("target-1", "space", "logical-1"),
+			mutate: func(value proto.Message) {
+				value.(*tradeeventpb.LogicalAccountTargetRequested).LogicalAccountId = "other"
+			},
 		},
 		{
 			name:    "trade event id",
-			event:   TradeTargetRequested,
-			payload: validTargetIntent(),
-			opts:    validationOptions("execution-1", "space", "binding-1"),
-			mutate:  func(value proto.Message) { value.(*tradeeventpb.TargetIntent).ExecutionId = "other" },
+			event:   LogicalAccountTargetRequested,
+			payload: validLogicalAccountTarget(),
+			opts:    validationOptions("target-1", "space", "logical-1"),
+			mutate: func(value proto.Message) {
+				value.(*tradeeventpb.LogicalAccountTargetRequested).TargetId = "other"
+			},
 		},
 		{
 			name:    "trade command sequence",
-			event:   TradeTargetRequested,
-			payload: validTargetIntent(),
-			opts:    validationOptions("execution-1", "space", "binding-1"),
-			mutate:  func(value proto.Message) { value.(*tradeeventpb.TargetIntent).CommandSequence = 0 },
+			event:   LogicalAccountTargetRequested,
+			payload: validLogicalAccountTarget(),
+			opts:    validationOptions("target-1", "space", "logical-1"),
+			mutate: func(value proto.Message) {
+				value.(*tradeeventpb.LogicalAccountTargetRequested).CommandSequence = 0
+			},
 		},
 	}
 	registry, err := DefaultRegistry()
@@ -171,36 +177,26 @@ func TestHealthCheckReportValidation(t *testing.T) {
 	}
 }
 
-func TestTradeTargetRequestedRejectsInvalidPayload(t *testing.T) {
+func TestLogicalAccountTargetRequestedRejectsInvalidPayload(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*tradeeventpb.TargetIntent)
+		mutate func(*tradeeventpb.LogicalAccountTargetRequested)
 	}{
-		{name: "empty execution", mutate: func(value *tradeeventpb.TargetIntent) { value.ExecutionId = "" }},
-		{name: "empty strategy run", mutate: func(value *tradeeventpb.TargetIntent) { value.StrategyRunId = "" }},
-		{name: "empty binding", mutate: func(value *tradeeventpb.TargetIntent) { value.ExecutionBindingId = "" }},
-		{name: "empty exchange account", mutate: func(value *tradeeventpb.TargetIntent) { value.ExchangeAccountId = "" }},
-		{name: "empty data revision", mutate: func(value *tradeeventpb.TargetIntent) { value.DataRevision = "" }},
-		{name: "zero command sequence", mutate: func(value *tradeeventpb.TargetIntent) { value.CommandSequence = 0 }},
-		{name: "command sequence exceeds sqlite integer", mutate: func(value *tradeeventpb.TargetIntent) {
-			value.CommandSequence = uint64(math.MaxInt64) + 1
-		}},
-		{name: "non-positive expiry", mutate: func(value *tradeeventpb.TargetIntent) { value.NotAfterUnixMs = 0 }},
-		{name: "expired", mutate: func(value *tradeeventpb.TargetIntent) {
-			value.NotAfterUnixMs = time.Now().Add(-time.Minute).UnixMilli()
-		}},
-		{name: "empty targets", mutate: func(value *tradeeventpb.TargetIntent) { value.Targets = nil }},
-		{name: "duplicate symbol", mutate: func(value *tradeeventpb.TargetIntent) {
-			value.Targets = append(value.Targets, &tradeeventpb.TargetPosition{
-				InstrumentId: "BTC-USDT-SWAP", Symbol: value.Targets[0].GetSymbol(), TargetQuantity: "2",
+		{name: "empty target", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.TargetId = "" }},
+		{name: "empty runner", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.RunnerId = "" }},
+		{name: "empty logical account", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.LogicalAccountId = "" }},
+		{name: "zero command sequence", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.CommandSequence = 0 }},
+		{name: "negative command sequence", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) { value.CommandSequence = -1 }},
+		{name: "duplicate instrument", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) {
+			value.Targets = append(value.Targets, &tradeeventpb.InstrumentTarget{
+				InstrumentId: value.Targets[0].GetInstrumentId(), Quantity: "2",
 			})
 		}},
-		{name: "blank instrument id", mutate: func(value *tradeeventpb.TargetIntent) {
+		{name: "blank instrument id", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) {
 			value.Targets[0].InstrumentId = " \t "
 		}},
-		{name: "empty symbol", mutate: func(value *tradeeventpb.TargetIntent) { value.Targets[0].Symbol = "" }},
-		{name: "non-decimal target quantity", mutate: func(value *tradeeventpb.TargetIntent) {
-			value.Targets[0].TargetQuantity = "one"
+		{name: "non-decimal quantity", mutate: func(value *tradeeventpb.LogicalAccountTargetRequested) {
+			value.Targets[0].Quantity = "one"
 		}},
 	}
 
@@ -210,33 +206,33 @@ func TestTradeTargetRequestedRejectsInvalidPayload(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			payload := validTargetIntent()
+			payload := validLogicalAccountTarget()
 			test.mutate(payload)
 			if _, err := registry.Encode(
-				TradeTargetRequested,
+				LogicalAccountTargetRequested,
 				payload,
-				validationOptions("execution-1", "space", "binding-1"),
+				validationOptions("target-1", "space", "logical-1"),
 			); err == nil {
-				t.Fatal("invalid target intent was accepted")
+				t.Fatal("invalid logical account target was accepted")
 			}
 		})
 	}
 }
 
-func TestTradeTargetRequestedAcceptsCanonicalQuantitiesAndMaximumSequence(t *testing.T) {
+func TestLogicalAccountTargetRequestedAcceptsCanonicalQuantitiesAndMaximumSequence(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, quantity := range []string{"0", "-0", "1", "-1", "1.25", "-0.0001"} {
 		t.Run(quantity, func(t *testing.T) {
-			payload := validTargetIntent()
-			payload.CommandSequence = uint64(math.MaxInt64)
-			payload.Targets[0].TargetQuantity = quantity
+			payload := validLogicalAccountTarget()
+			payload.CommandSequence = math.MaxInt64
+			payload.Targets[0].Quantity = quantity
 			if _, err := registry.Encode(
-				TradeTargetRequested,
+				LogicalAccountTargetRequested,
 				payload,
-				validationOptions("execution-1", "space", "binding-1"),
+				validationOptions("target-1", "space", "logical-1"),
 			); err != nil {
 				t.Fatalf("canonical quantity %q rejected: %v", quantity, err)
 			}
@@ -244,7 +240,7 @@ func TestTradeTargetRequestedAcceptsCanonicalQuantitiesAndMaximumSequence(t *tes
 	}
 }
 
-func TestTradeTargetRequestedRejectsNonCanonicalQuantities(t *testing.T) {
+func TestLogicalAccountTargetRequestedRejectsNonCanonicalQuantities(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -263,12 +259,12 @@ func TestTradeTargetRequestedRejectsNonCanonicalQuantities(t *testing.T) {
 		strings.Repeat("9", 257),
 	} {
 		t.Run(quantity, func(t *testing.T) {
-			payload := validTargetIntent()
-			payload.Targets[0].TargetQuantity = quantity
+			payload := validLogicalAccountTarget()
+			payload.Targets[0].Quantity = quantity
 			if _, err := registry.Encode(
-				TradeTargetRequested,
+				LogicalAccountTargetRequested,
 				payload,
-				validationOptions("execution-1", "space", "binding-1"),
+				validationOptions("target-1", "space", "logical-1"),
 			); err == nil {
 				t.Fatalf("non-canonical quantity %q was accepted", quantity)
 			}
@@ -335,23 +331,6 @@ func validRowsEvent() *storagepb.DatasetRowsUpserted {
 				SpaceId: "space", DatasetId: "dataset",
 				Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}},
 			},
-		}},
-	}
-}
-
-func validTargetIntent() *tradeeventpb.TargetIntent {
-	return &tradeeventpb.TargetIntent{
-		ExecutionId:        "execution-1",
-		StrategyRunId:      "run-1",
-		ExecutionBindingId: "binding-1",
-		ExchangeAccountId:  "account-1",
-		DataRevision:       "revision-1",
-		CommandSequence:    1,
-		NotAfterUnixMs:     time.Now().Add(time.Hour).UnixMilli(),
-		Targets: []*tradeeventpb.TargetPosition{{
-			InstrumentId:   "BTC-USDT",
-			Symbol:         "BTCUSDT",
-			TargetQuantity: "1.25",
 		}},
 	}
 }

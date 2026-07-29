@@ -4,19 +4,15 @@ package trpc.moox.trade.event;
 
 option go_package = "github.com/mooyang-code/moox/packages/tradeeventpb;tradeeventpb";
 
-message TargetPosition {
+message InstrumentTarget {
   string instrument_id = 1;
-  string symbol = 2;
-  string target_quantity = 3;
+  string quantity = 2;
 }
 
-message TargetIntent {
-  string execution_id = 1;
-  string strategy_run_id = 2;
-  string execution_binding_id = 3;
-  string exchange_account_id = 4;
-  string data_revision = 5;
-  uint64 command_sequence = 6;
-  int64 not_after_unix_ms = 7;
-  repeated TargetPosition targets = 8;
+message LogicalAccountTargetRequested {
+  string target_id = 1;
+  string runner_id = 2;
+  string logical_account_id = 3;
+  int64 command_sequence = 4;
+  repeated InstrumentTarget targets = 5;
 }

@@ -110,7 +110,7 @@ func TestDatasetRowsRoundTrip(t *testing.T) {
 
 func TestEncodeRejectsWrongPayload(t *testing.T) {
 	registry, _ := DefaultRegistry()
-	_, err := registry.Encode(DatasetRowsUpserted, TradeTargetRequested.NewPayload(), PublishOptions{
+	_, err := registry.Encode(DatasetRowsUpserted, LogicalAccountTargetRequested.NewPayload(), PublishOptions{
 		EventID: "event-1", OccurredAt: time.Now().UTC(), SpaceID: "space", SubjectID: "dataset",
 	})
 	if err == nil {
@@ -118,7 +118,7 @@ func TestEncodeRejectsWrongPayload(t *testing.T) {
 	}
 }
 
-func TestTradeTargetRequestedContract(t *testing.T) {
+func TestLogicalAccountTargetRequestedContract(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -127,19 +127,19 @@ func TestTradeTargetRequestedContract(t *testing.T) {
 	if !ok {
 		t.Fatal("trade target event is not registered")
 	}
-	if event.Name() != TradeTargetRequested.Name() ||
+	if event.Name() != LogicalAccountTargetRequested.Name() ||
 		event.Stream() != "MOOX_TRADE" ||
 		event.Owner() != "strategy" {
 		t.Fatalf("unexpected trade target event: name=%q stream=%q owner=%q", event.Name(), event.Stream(), event.Owner())
 	}
-	if _, ok := event.NewPayload().(*tradeeventpb.TargetIntent); !ok {
-		t.Fatalf("payload type = %T, want *tradeeventpb.TargetIntent", event.NewPayload())
+	if _, ok := event.NewPayload().(*tradeeventpb.LogicalAccountTargetRequested); !ok {
+		t.Fatalf("payload type = %T, want *tradeeventpb.LogicalAccountTargetRequested", event.NewPayload())
 	}
-	subject, err := registry.RenderSubject(event, "space", "binding-1")
+	subject, err := registry.RenderSubject(event, "space", "logical-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if subject != "moox.trade.target.requested.v1.onygcy3f.mjuw4zdjnzts2mi" {
+	if subject != "moox.trade.target.requested.v1.onygcy3f.nrxwo2ldmfwc2mi" {
 		t.Fatalf("subject = %q", subject)
 	}
 	if _, exists := registry.Lookup("trade.rebalance.requested", 1); exists {
