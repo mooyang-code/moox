@@ -12,7 +12,7 @@ import (
 func TestResultStoreRoundTrip(t *testing.T) {
 	repo := openCurrentStore(t)
 	seedStrategy(t, repo, "strategy-1")
-	seedRunner(t, repo, "runner-1", "strategy-1", domain.RunnerStatusDisabled)
+	seedRunner(t, repo, "runner-1", "strategy-1", domain.RunnerStatusEnabled)
 	want := domain.StrategyResult{
 		ID: "result-1", RunnerID: "runner-1", StrategyID: "strategy-1",
 		TriggerBarTime: time.UnixMilli(4000).UTC(), Namespace: "default",

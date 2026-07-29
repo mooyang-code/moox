@@ -62,7 +62,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	if err = repo.CreateRunner(ctx, domain.StrategyRunner{
 		ID: "runner-e2e", StrategyID: "strategy-e2e", SpaceID: "space",
 		ViewID: "view", Frequency: "1m", ParamsJSON: []byte(`{}`),
-		LogicalAccountID: &logicalAccountID, Status: domain.RunnerStatusDisabled,
+		LogicalAccountID: &logicalAccountID, Status: domain.RunnerStatusEnabled,
 		CreatedAt: time.UnixMilli(1000), UpdatedAt: time.UnixMilli(1000),
 	}); err != nil {
 		t.Fatal(err)

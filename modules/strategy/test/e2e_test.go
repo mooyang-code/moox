@@ -42,7 +42,7 @@ func TestStrategyRunOnceCommitsResultAndFullTarget(t *testing.T) {
 	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{
 		ID: "runner-1", StrategyID: strategy.ID, SpaceID: "space", ViewID: "view-1",
 		Frequency: "1m", ParamsJSON: json.RawMessage(`{}`),
-		LogicalAccountID: &logicalAccountID, Status: domain.RunnerStatusDisabled,
+		LogicalAccountID: &logicalAccountID, Status: domain.RunnerStatusEnabled,
 		CreatedAt: time.UnixMilli(1000), UpdatedAt: time.UnixMilli(1000),
 	}); err != nil {
 		t.Fatal(err)

@@ -34,7 +34,7 @@ func TestStrategyRunnerResultAndTargetQueriesE2E(t *testing.T) {
 	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{
 		ID: "runner-1", StrategyID: strategy.ID, SpaceID: "space-1", ViewID: "view-1",
 		Frequency: "1h", ParamsJSON: json.RawMessage(`{}`),
-		Status: domain.RunnerStatusDisabled, CreatedAt: time.UnixMilli(2000),
+		Status: domain.RunnerStatusEnabled, CreatedAt: time.UnixMilli(2000),
 		UpdatedAt: time.UnixMilli(2000),
 	}); err != nil {
 		t.Fatal(err)

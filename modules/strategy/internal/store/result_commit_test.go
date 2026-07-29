@@ -38,6 +38,33 @@ func TestCommitResultHoldPreservesCurrentTargetsAndSequence(t *testing.T) {
 	}
 }
 
+func TestCommitResultRejectsNewResultAfterRunnerIsDisabled(t *testing.T) {
+	repo := commitTestStore(t, nil)
+	if err := repo.SetRunnerStatus(
+		context.Background(),
+		"runner-1",
+		domain.RunnerStatusDisabled,
+		time.UnixMilli(9000),
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, err := repo.CommitResult(context.Background(), CommitResultRequest{
+		Result: commitTestResult(
+			"result-disabled",
+			time.UnixMilli(10_000),
+			"hash-disabled",
+			domain.ActionHold,
+		),
+		Output: domain.Output{Action: domain.ActionHold},
+	})
+	if !errors.Is(err, ErrRunnerNotEnabled) {
+		t.Fatalf("CommitResult() error = %v", err)
+	}
+	if countRows(t, repo, "t_strategy_results") != 0 {
+		t.Fatal("disabled runner created a result")
+	}
+}
+
 func TestCommitResultObserveOnlyRebalanceUpdatesTargetWithoutOutbox(t *testing.T) {
 	repo := commitTestStore(t, nil)
 	outcome, err := repo.CommitResult(context.Background(), CommitResultRequest{
@@ -265,7 +292,7 @@ func commitTestStore(t *testing.T, logicalAccountID *string) *Store {
 	if err := repo.CreateRunner(context.Background(), domain.StrategyRunner{
 		ID: "runner-1", StrategyID: "strategy-1", SpaceID: "crypto", ViewID: "view-1",
 		Frequency: "1m", ParamsJSON: json.RawMessage(`{}`), LogicalAccountID: logicalAccountID,
-		Status: domain.RunnerStatusDisabled, CreatedAt: time.UnixMilli(1000),
+		Status: domain.RunnerStatusEnabled, CreatedAt: time.UnixMilli(1000),
 		UpdatedAt: time.UnixMilli(1000),
 	}); err != nil {
 		t.Fatal(err)

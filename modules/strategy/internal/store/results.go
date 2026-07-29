@@ -15,6 +15,7 @@ import (
 )
 
 var ErrLogicalResultConflict = errors.New("strategy result logical retry conflicts with existing input")
+var ErrRunnerNotEnabled = errors.New("strategy runner must be enabled to accept a result")
 
 type CommitResultRequest struct {
 	Result domain.StrategyResult
@@ -59,6 +60,9 @@ func (s *Store) CommitResult(
 		}
 		if runner.StrategyID != request.Result.StrategyID {
 			return errors.New("strategy result does not match runner strategy")
+		}
+		if domain.RunnerStatus(runner.Status) != domain.RunnerStatusEnabled {
+			return ErrRunnerNotEnabled
 		}
 
 		result := request.Result
