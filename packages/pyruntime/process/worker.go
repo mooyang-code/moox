@@ -140,6 +140,9 @@ func newStdioWorker(ctx context.Context, cfg Config, observeStarted func(*StdioW
 }
 
 func (w *StdioWorker) Load(ctx context.Context, req LoadRequest) error {
+	if strings.TrimSpace(req.SourceHash) == "" {
+		return errors.New("pyruntime: load source hash is required")
+	}
 	return w.control(ctx, protocol.TypeLoad, map[string]any{"logical_id": req.LogicalID, "source_hash": req.SourceHash, "path": req.Path, "module_type": req.ModuleType, "entrypoint": req.EntryPoint})
 }
 func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error) {
