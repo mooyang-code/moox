@@ -117,6 +117,39 @@ func TestDatasetMetricsObserveRunUsesMaxWatermarks(t *testing.T) {
 	}
 }
 
+func TestDatasetMetricsAcceptsCanonicalStorageFrequency(t *testing.T) {
+	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "collector")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := DatasetKey{SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Freq: "1H"}
+	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: time.Hour}}); err != nil {
+		t.Fatalf("canonical Storage frequency rejected: %v", err)
+	}
+	if err := metrics.ObserveRun(DatasetObservation{
+		Key: key, Result: "success", Rows: 1, FinishedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("canonical Storage frequency observation rejected: %v", err)
+	}
+}
+
+func TestDatasetMetricsUsesCanonicalFrequencyIdentity(t *testing.T) {
+	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "collector")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowercase := DatasetKey{SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Freq: "1h"}
+	canonical := DatasetKey{SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Freq: "1H"}
+	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: lowercase, Interval: time.Hour}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := metrics.ObserveRun(DatasetObservation{
+		Key: canonical, Result: "success", Rows: 1, FinishedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("canonical observation did not match lowercase inventory: %v", err)
+	}
+}
+
 func TestDatasetMetricsRejectsUnknownDatasetAndLabels(t *testing.T) {
 	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "collector")
 	if err != nil {

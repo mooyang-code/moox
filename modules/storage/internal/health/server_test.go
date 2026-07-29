@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,6 +56,24 @@ func TestSnapshotForRole_ViewRequiresBoundConsumer(t *testing.T) {
 	metrics.SetConsumerBound(false)
 	assert.False(t, state.Snapshot(context.Background()).Ready)
 	metrics.SetConsumerBound(true)
+	assert.True(t, state.Snapshot(context.Background()).Ready)
+}
+
+func TestSnapshotForRole_ViewRejectsStalePendingDelivery(t *testing.T) {
+	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	state := New("storage", InstanceStorageView, "", "")
+	state.SetReady(true)
+	state.SnapshotFunc = SnapshotForRoleWithOptions(InstanceStorageView, metrics, RoleOptions{OldestPendingThreshold: time.Minute})
+	metrics.SetConsumerBound(true)
+
+	delivery := &jetstream.Delivery{}
+	metrics.ObservePendingDelivery(delivery, time.Now().Add(-2*time.Minute))
+	rsp := state.Snapshot(context.Background())
+
+	assert.False(t, rsp.Ready)
+	assert.Equal(t, false, rsp.Details["consumer_draining"])
+	metrics.CompletePendingDelivery(delivery, time.Now())
 	assert.True(t, state.Snapshot(context.Background()).Ready)
 }
 

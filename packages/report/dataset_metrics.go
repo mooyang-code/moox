@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -98,7 +99,8 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 	}
 	next := make(map[DatasetKey]time.Duration, len(items))
 	for i, item := range items {
-		if err := validateDatasetKey(item.Key); err != nil {
+		key, err := canonicalDatasetKey(item.Key)
+		if err != nil {
 			m.inventoryRefreshErrors.Inc()
 			return fmt.Errorf("expected dataset %d: %w", i, err)
 		}
@@ -106,11 +108,11 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 			m.inventoryRefreshErrors.Inc()
 			return fmt.Errorf("expected dataset %d interval must be positive", i)
 		}
-		if _, exists := next[item.Key]; exists {
+		if _, exists := next[key]; exists {
 			m.inventoryRefreshErrors.Inc()
-			return fmt.Errorf("duplicate expected dataset %s/%s/%s", item.Key.SpaceID, item.Key.DatasetID, item.Key.Freq)
+			return fmt.Errorf("duplicate expected dataset %s/%s/%s", key.SpaceID, key.DatasetID, key.Freq)
 		}
-		next[item.Key] = item.Interval
+		next[key] = item.Interval
 	}
 
 	m.mu.Lock()
@@ -168,9 +170,11 @@ func (m *DatasetMetrics) observeRun(observation DatasetObservation, requireExpec
 	if m == nil {
 		return fmt.Errorf("dataset metrics are nil")
 	}
-	if err := validateDatasetKey(observation.Key); err != nil {
+	key, err := canonicalDatasetKey(observation.Key)
+	if err != nil {
 		return err
 	}
+	observation.Key = key
 	if !allowedDatasetResults[observation.Result] {
 		return fmt.Errorf("unknown dataset result %q", observation.Result)
 	}
@@ -216,10 +220,84 @@ func validateDatasetKey(key DatasetKey) error {
 	if err := validateMetricLabel("dataset_id", key.DatasetID); err != nil {
 		return err
 	}
-	if err := validateMetricLabel("freq", key.Freq); err != nil {
+	if err := validateDatasetFrequency(key.Freq); err != nil {
 		return err
 	}
 	return nil
+}
+
+func canonicalDatasetKey(key DatasetKey) (DatasetKey, error) {
+	if err := validateDatasetKey(key); err != nil {
+		return DatasetKey{}, err
+	}
+	freq, err := NormalizeDatasetFrequency(key.Freq)
+	if err != nil {
+		return DatasetKey{}, err
+	}
+	key.Freq = freq
+	return key, nil
+}
+
+func validateDatasetFrequency(value string) error {
+	if len(value) > 64 {
+		return fmt.Errorf("invalid freq %q", value)
+	}
+	if _, err := ParseDatasetFrequency(value); err != nil {
+		return fmt.Errorf("invalid freq %q", value)
+	}
+	return nil
+}
+
+// NormalizeDatasetFrequency returns the canonical Storage identity while
+// accepting lowercase hour/day/week/year spellings used by configuration.
+func NormalizeDatasetFrequency(value string) (string, error) {
+	canonical, _, err := parseDatasetFrequency(value)
+	return canonical, err
+}
+
+// ParseDatasetFrequency returns the duration represented by a Storage
+// frequency or its lowercase configuration spelling.
+func ParseDatasetFrequency(value string) (time.Duration, error) {
+	_, interval, err := parseDatasetFrequency(value)
+	return interval, err
+}
+
+func parseDatasetFrequency(value string) (string, time.Duration, error) {
+	if len(value) < 2 {
+		return "", 0, fmt.Errorf("frequency must be a positive duration")
+	}
+	count, err := strconv.ParseUint(value[:len(value)-1], 10, 64)
+	if err != nil || count == 0 {
+		return "", 0, fmt.Errorf("frequency must be a positive duration")
+	}
+	var unit time.Duration
+	var suffix byte
+	switch value[len(value)-1] {
+	case 'm':
+		unit = time.Minute
+		suffix = 'm'
+	case 'h', 'H':
+		unit = time.Hour
+		suffix = 'H'
+	case 'd', 'D':
+		unit = 24 * time.Hour
+		suffix = 'D'
+	case 'w', 'W':
+		unit = 7 * 24 * time.Hour
+		suffix = 'W'
+	case 'M':
+		unit = 30 * 24 * time.Hour
+		suffix = 'M'
+	case 'y', 'Y':
+		unit = 365 * 24 * time.Hour
+		suffix = 'Y'
+	default:
+		return "", 0, fmt.Errorf("frequency must be a positive duration")
+	}
+	if count > uint64((1<<63-1)/unit) {
+		return "", 0, fmt.Errorf("frequency must be a positive duration")
+	}
+	return fmt.Sprintf("%d%c", count, suffix), time.Duration(count) * unit, nil
 }
 
 func datasetLabelValues(key DatasetKey) []string {

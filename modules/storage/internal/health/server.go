@@ -47,12 +47,14 @@ func SnapshotForRoleWithOptions(instance string, metrics *observability.ViewMetr
 	return func(context.Context) healthz.Response {
 		snapshot := metrics.Snapshot()
 		consumerBound := instance != InstanceStorageView || snapshot.ConsumerBound
+		consumerDraining := instance != InstanceStorageView || snapshot.OldestPendingAge <= threshold
 		outboxDraining := instance != InstanceStorageNode || (snapshot.OutboxObserved && (snapshot.OutboxPendingEntries == 0 || snapshot.OutboxOldestAge <= threshold))
-		ready := consumerBound && outboxDraining
+		ready := consumerBound && consumerDraining && outboxDraining
 		rsp := healthz.Base("storage", instance, "", "", time.Time{}, ready)
 		rsp.Details = map[string]any{
 			"process_alive":                    true,
 			"consumer_bound":                   consumerBound,
+			"consumer_draining":                consumerDraining,
 			"outbox_draining":                  outboxDraining,
 			"outbox_pending_entries":           snapshot.OutboxPendingEntries,
 			"outbox_oldest_age_seconds":        snapshot.OutboxOldestAge.Seconds(),

@@ -28,39 +28,64 @@ type Delivery struct {
 	nakFn      func(context.Context, time.Duration) error
 	termFn     func(context.Context) error
 	progressFn func(context.Context) error
+
+	actionTimeout time.Duration
 }
 
+const defaultDeliveryActionTimeout = 5 * time.Second
+
 func (d *Delivery) Ack(ctx context.Context) error {
-	if d != nil && d.ackFn != nil {
-		return d.ackFn(ctx)
-	}
-	return d.withMessage(ctx, func(msg *nats.Msg, ctx context.Context) error { return msg.AckSync(nats.Context(ctx)) })
+	return d.withActionTimeout(ctx, func(actionCtx context.Context) error {
+		if d != nil && d.ackFn != nil {
+			return d.ackFn(actionCtx)
+		}
+		return d.withMessage(actionCtx, func(msg *nats.Msg, ctx context.Context) error { return msg.AckSync(nats.Context(ctx)) })
+	})
 }
 
 func (d *Delivery) Nak(ctx context.Context, delay time.Duration) error {
-	if d != nil && d.nakFn != nil {
-		return d.nakFn(ctx, delay)
-	}
-	return d.withMessage(ctx, func(msg *nats.Msg, ctx context.Context) error {
-		if delay > 0 {
-			return msg.NakWithDelay(delay, nats.Context(ctx))
+	return d.withActionTimeout(ctx, func(actionCtx context.Context) error {
+		if d != nil && d.nakFn != nil {
+			return d.nakFn(actionCtx, delay)
 		}
-		return msg.Nak(nats.Context(ctx))
+		return d.withMessage(actionCtx, func(msg *nats.Msg, ctx context.Context) error {
+			if delay > 0 {
+				return msg.NakWithDelay(delay, nats.Context(ctx))
+			}
+			return msg.Nak(nats.Context(ctx))
+		})
 	})
 }
 
 func (d *Delivery) InProgress(ctx context.Context) error {
-	if d != nil && d.progressFn != nil {
-		return d.progressFn(ctx)
-	}
-	return d.withMessage(ctx, func(msg *nats.Msg, ctx context.Context) error { return msg.InProgress(nats.Context(ctx)) })
+	return d.withActionTimeout(ctx, func(actionCtx context.Context) error {
+		if d != nil && d.progressFn != nil {
+			return d.progressFn(actionCtx)
+		}
+		return d.withMessage(actionCtx, func(msg *nats.Msg, ctx context.Context) error { return msg.InProgress(nats.Context(ctx)) })
+	})
 }
 
 func (d *Delivery) Term(ctx context.Context) error {
-	if d != nil && d.termFn != nil {
-		return d.termFn(ctx)
+	return d.withActionTimeout(ctx, func(actionCtx context.Context) error {
+		if d != nil && d.termFn != nil {
+			return d.termFn(actionCtx)
+		}
+		return d.withMessage(actionCtx, func(msg *nats.Msg, ctx context.Context) error { return msg.Term(nats.Context(ctx)) })
+	})
+}
+
+func (d *Delivery) withActionTimeout(ctx context.Context, action func(context.Context) error) error {
+	if ctx == nil {
+		ctx = trpc.BackgroundContext()
 	}
-	return d.withMessage(ctx, func(msg *nats.Msg, ctx context.Context) error { return msg.Term(nats.Context(ctx)) })
+	timeout := defaultDeliveryActionTimeout
+	if d != nil && d.actionTimeout > 0 {
+		timeout = d.actionTimeout
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return action(actionCtx)
 }
 
 func (d *Delivery) withMessage(ctx context.Context, fn func(*nats.Msg, context.Context) error) error {

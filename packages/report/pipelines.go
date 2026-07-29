@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -128,11 +127,11 @@ func (c PipelineConfig) Validate() error {
 		if strings.TrimSpace(override.SpaceID) == "" || strings.TrimSpace(override.DatasetID) == "" || strings.TrimSpace(override.Freq) == "" {
 			return fmt.Errorf("realtime_timeseries override %d requires space_id, dataset_id, and freq", index)
 		}
-		interval, err := parsePolicyFrequency(strings.TrimSpace(override.Freq))
+		freq, interval, err := parseDatasetFrequency(strings.TrimSpace(override.Freq))
 		if err != nil || interval <= 0 {
 			return fmt.Errorf("realtime_timeseries override %d has invalid positive freq %q", index, override.Freq)
 		}
-		key := strings.Join([]string{override.SpaceID, override.DatasetID, override.Freq}, "\x00")
+		key := strings.Join([]string{override.SpaceID, override.DatasetID, freq}, "\x00")
 		if seen[key] {
 			return fmt.Errorf("duplicate realtime_timeseries override for %s/%s/%s", override.SpaceID, override.DatasetID, override.Freq)
 		}
@@ -142,22 +141,6 @@ func (c PipelineConfig) Validate() error {
 		}
 	}
 	return nil
-}
-
-func parsePolicyFrequency(raw string) (time.Duration, error) {
-	if strings.HasSuffix(raw, "d") {
-		days, err := strconv.ParseUint(strings.TrimSuffix(raw, "d"), 10, 64)
-		maxDays := uint64((time.Duration(1<<63 - 1)) / (24 * time.Hour))
-		if err != nil || days == 0 || days > maxDays {
-			return 0, fmt.Errorf("frequency must be a positive duration")
-		}
-		return time.Duration(days) * 24 * time.Hour, nil
-	}
-	interval, err := time.ParseDuration(raw)
-	if err != nil || interval <= 0 {
-		return 0, fmt.Errorf("frequency must be a positive duration")
-	}
-	return interval, nil
 }
 
 func (c PipelineConfig) IDsForModule(module string) []string {

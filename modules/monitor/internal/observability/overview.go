@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -718,7 +717,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Status, item.Reason = "degraded", "尚无成功运行"
 	case successLag > 0 && now.Sub(item.LastSuccessAt) > successLag:
 		item.Status, item.Reason = "degraded", "success stale"
-	case watermarkLag > 0 && item.LagSeconds > int64(watermarkLag):
+	case watermarkLag > 0 && item.LagSeconds > int64(watermarkLag/time.Second):
 		item.Status, item.Reason = "stale", "watermark stale"
 	case item.OutputWatermarkAt.IsZero():
 		item.Status, item.Reason = "healthy", "正常但空结果"
@@ -745,7 +744,7 @@ func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeT
 	}
 	watermarkLag := max(time.Duration(defaults.WatermarkPeriods)*frequency, defaults.MinimumWatermarkLag)
 	for _, override := range policy.Overrides {
-		if override.SpaceID == key.spaceID && override.DatasetID == key.datasetID && override.Freq == key.freq && override.WatermarkLag > 0 {
+		if override.SpaceID == key.spaceID && override.DatasetID == key.datasetID && sameDatasetFrequency(override.Freq, key.freq) && override.WatermarkLag > 0 {
 			watermarkLag = override.WatermarkLag
 			break
 		}
@@ -753,16 +752,15 @@ func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeT
 	return runLag, successLag, watermarkLag
 }
 
+func sameDatasetFrequency(left, right string) bool {
+	left, leftErr := report.NormalizeDatasetFrequency(strings.TrimSpace(left))
+	right, rightErr := report.NormalizeDatasetFrequency(strings.TrimSpace(right))
+	return leftErr == nil && rightErr == nil && left == right
+}
+
 func parseOverviewFrequency(raw string) time.Duration {
-	raw = strings.TrimSpace(raw)
-	if strings.HasSuffix(raw, "d") {
-		days, err := strconv.ParseUint(strings.TrimSuffix(raw, "d"), 10, 32)
-		if err == nil && days > 0 {
-			return time.Duration(days) * 24 * time.Hour
-		}
-	}
-	parsed, err := time.ParseDuration(raw)
-	if err != nil || parsed <= 0 {
+	parsed, err := report.ParseDatasetFrequency(strings.TrimSpace(raw))
+	if err != nil {
 		return 0
 	}
 	return parsed

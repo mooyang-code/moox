@@ -47,16 +47,49 @@ func TestDatasetStatusDistinguishesMissingStaleAndEmpty(t *testing.T) {
 }
 
 func TestDatasetTolerancesUseScheduleForRunsAndFrequencyForWatermark(t *testing.T) {
-	key := datasetKey{spaceID: "crypto", datasetID: "market_kline", freq: "1h"}
-	runLag, successLag, watermarkLag := datasetTolerances(key, 60, testRealtimePolicy())
-	if runLag != 2*time.Minute+30*time.Second {
-		t.Fatalf("run lag = %s", runLag)
+	for _, freq := range []string{"1h", "1H"} {
+		key := datasetKey{spaceID: "crypto", datasetID: "market_kline", freq: freq}
+		runLag, successLag, watermarkLag := datasetTolerances(key, 60, testRealtimePolicy())
+		if runLag != 2*time.Minute+30*time.Second {
+			t.Fatalf("%s run lag = %s", freq, runLag)
+		}
+		if successLag != 3*time.Minute+30*time.Second {
+			t.Fatalf("%s success lag = %s", freq, successLag)
+		}
+		if watermarkLag != 3*time.Hour {
+			t.Fatalf("%s watermark lag = %s", freq, watermarkLag)
+		}
 	}
-	if successLag != 3*time.Minute+30*time.Second {
-		t.Fatalf("success lag = %s", successLag)
-	}
-	if watermarkLag != 3*time.Hour {
+}
+
+func TestDatasetTolerancesMatchFrequencyAliasesInOverrides(t *testing.T) {
+	policy := testRealtimePolicy()
+	policy.Overrides = []report.RealtimeTimeSeriesOverride{{
+		SpaceID: "crypto", DatasetID: "market_kline", Freq: "1h", WatermarkLag: 90 * time.Minute,
+	}}
+
+	_, _, watermarkLag := datasetTolerances(
+		datasetKey{spaceID: "crypto", datasetID: "market_kline", freq: "1H"},
+		60,
+		policy,
+	)
+
+	if watermarkLag != 90*time.Minute {
 		t.Fatalf("watermark lag = %s", watermarkLag)
+	}
+}
+
+func TestDatasetStatusMarksCanonicalFrequencyWatermarkStale(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	got := datasetStatus(now, datasetKey{
+		producer: "collector", spaceID: "crypto", datasetID: "market_kline", freq: "1H",
+	}, datasetValues{
+		interval: 3600, inventory: float64(now.Unix()), lastRun: float64(now.Unix()),
+		lastSuccess: float64(now.Unix()), output: float64(now.Add(-4 * time.Hour).Unix()),
+	}, testRealtimePolicy())
+
+	if got.Status != "stale" || got.Reason != "watermark stale" {
+		t.Fatalf("status = %+v", got)
 	}
 }
 
