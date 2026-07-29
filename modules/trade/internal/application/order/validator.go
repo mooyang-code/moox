@@ -183,8 +183,7 @@ func (v Validator) validateReduceOnly(ctx context.Context, spec orderdomain.Orde
 		(position.SignedQuantity.Cmp(shared.Zero()) < 0 && spec.Side != exchange.SideBuy) {
 		return ErrReduceOnly
 	}
-	if spec.Quantity.Cmp(position.SignedQuantity.Abs()) > 0 &&
-		!strings.EqualFold(spec.Owner.Type, "FLATTEN") {
+	if spec.Quantity.Cmp(position.SignedQuantity.Abs()) > 0 {
 		return ErrReduceOnly
 	}
 	return nil

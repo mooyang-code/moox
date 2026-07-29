@@ -16,8 +16,10 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_reference_price TEXT NOT NULL,
     c_reference_price_at INTEGER NOT NULL,
     c_reduce_only INTEGER NOT NULL DEFAULT 0,
-    c_source TEXT NOT NULL,
-    c_strategy_execution_id TEXT NOT NULL DEFAULT '',
+    c_owner_type TEXT NOT NULL,
+    c_owner_id TEXT NOT NULL,
+    c_logical_account_id TEXT,
+    c_runner_id TEXT,
     c_state TEXT NOT NULL,
     c_filled_quantity TEXT NOT NULL DEFAULT '0',
     c_average_price TEXT NOT NULL DEFAULT '0',
@@ -35,8 +37,30 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     UNIQUE (c_space_id, c_exchange_account_id, c_client_order_id),
     FOREIGN KEY (c_space_id, c_exchange_account_id)
         REFERENCES t_exchange_accounts (c_space_id, c_exchange_account_id),
+    FOREIGN KEY (c_space_id, c_logical_account_id)
+        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id),
     FOREIGN KEY (c_exchange, c_market_type, c_symbol)
-        REFERENCES t_exchange_instruments (c_exchange, c_market_type, c_symbol)
+        REFERENCES t_exchange_instruments (c_exchange, c_market_type, c_symbol),
+    CHECK (c_owner_type IN ('TARGET', 'OPERATOR', 'EXTERNAL')),
+    CHECK (c_owner_id <> ''),
+    CHECK (
+        (
+            c_owner_type = 'TARGET'
+            AND c_logical_account_id IS NOT NULL
+            AND c_runner_id IS NOT NULL
+        )
+        OR
+        (
+            c_owner_type = 'OPERATOR'
+            AND c_logical_account_id IS NOT NULL
+            AND c_runner_id IS NULL
+        )
+        OR
+        (
+            c_owner_type = 'EXTERNAL'
+            AND c_runner_id IS NULL
+        )
+    )
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_trade_orders_exchange_order
@@ -50,6 +74,16 @@ WHERE c_exchange_order_id <> '';
 
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_state
 ON t_trade_orders (c_space_id, c_exchange_account_id, c_state, c_mtime);
+
+CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_owner_state
+ON t_trade_orders (
+    c_space_id,
+    c_logical_account_id,
+    c_owner_type,
+    c_owner_id,
+    c_state,
+    c_mtime
+);
 
 CREATE TABLE IF NOT EXISTS t_order_fills (
     c_space_id TEXT NOT NULL,

@@ -24,9 +24,44 @@ type ClientOrderSpec struct {
 	LimitPrice        *shared.Decimal
 }
 
+type OwnerType string
+
+const (
+	OwnerTarget   OwnerType = "TARGET"
+	OwnerOperator OwnerType = "OPERATOR"
+	OwnerExternal OwnerType = "EXTERNAL"
+)
+
 type OrderOwner struct {
-	Type                string
-	StrategyExecutionID string
+	Type             OwnerType
+	OwnerID          string
+	LogicalAccountID string
+	RunnerID         *string
+}
+
+func (o OrderOwner) Validate() error {
+	if strings.TrimSpace(string(o.Type)) == "" ||
+		strings.TrimSpace(o.OwnerID) == "" {
+		return invalidSpec("missing order ownership")
+	}
+	switch o.Type {
+	case OwnerTarget:
+		if strings.TrimSpace(o.LogicalAccountID) == "" ||
+			o.RunnerID == nil || strings.TrimSpace(*o.RunnerID) == "" {
+			return invalidSpec("TARGET requires logical account and runner ownership")
+		}
+	case OwnerOperator:
+		if strings.TrimSpace(o.LogicalAccountID) == "" || o.RunnerID != nil {
+			return invalidSpec("OPERATOR requires logical account without runner")
+		}
+	case OwnerExternal:
+		if o.RunnerID != nil {
+			return invalidSpec("EXTERNAL cannot have runner ownership")
+		}
+	default:
+		return invalidSpec("unsupported order owner type")
+	}
+	return nil
 }
 
 type OrderSpec struct {
@@ -44,9 +79,11 @@ func (s OrderSpec) Validate(
 ) error {
 	if strings.TrimSpace(s.ExchangeAccountID) == "" ||
 		strings.TrimSpace(s.ClientOrderID) == "" ||
-		strings.TrimSpace(s.InstrumentID) == "" ||
-		strings.TrimSpace(s.Owner.Type) == "" {
+		strings.TrimSpace(s.InstrumentID) == "" {
 		return invalidSpec("missing identity")
+	}
+	if err := s.Owner.Validate(); err != nil {
+		return err
 	}
 	if !market.Valid() {
 		return invalidSpec("unsupported market type")

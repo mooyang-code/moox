@@ -166,7 +166,7 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 		"manual-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "EXTERNAL", orderRecord.Source)
+	require.Equal(t, "EXTERNAL", orderRecord.OwnerType)
 	require.Equal(t, "PARTIALLY_FILLED", orderRecord.State)
 	require.Equal(t, "0.5", orderRecord.FilledQuantity)
 
@@ -302,7 +302,9 @@ func TestApplySnapshotResolvesUnknownWithoutReenteringAccountLock(t *testing.T) 
 			ExchangeAccountID: "account-1", ClientOrderID: "unknown-client",
 			Symbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY",
 			PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
-			ReferencePriceAt: 1_000, Source: "TARGET", State: "SUBMIT_UNKNOWN",
+			ReferencePriceAt: 1_000, OwnerType: "TARGET", OwnerID: "target-1",
+			LogicalAccountID: "logical-1", RunnerID: "runner-1",
+			State:          "SUBMIT_UNKNOWN",
 			FilledQuantity: "0", ReservedAsset: "USDT", ReservedQuantity: "100",
 			RemainingReservedQuantity: "100", Version: 1, SubmittedAt: 1_000,
 		})
@@ -365,7 +367,8 @@ func TestPaperSyncRecoversSubmittedOrderAndPersistsSpotFill(t *testing.T) {
 			ExchangeAccountID: "paper-1", ClientOrderID: "client-1",
 			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "0.01", ReferencePrice: "50000",
-			ReferencePriceAt: submittedAt, Source: "MANUAL",
+			ReferencePriceAt: submittedAt,
+			OwnerType:        "EXTERNAL", OwnerID: "paper-existing",
 			State: "SUBMITTING", FilledQuantity: "0",
 			ReservedAsset: "USDT", ReservedQuantity: "500",
 			RemainingReservedQuantity: "500", Version: 1,
@@ -810,6 +813,20 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			MarginMode: "CROSS", Status: "ENABLED",
 			LeverageSettings: store.LeverageSettings{"BTC-USDT": "5"},
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
+			OwnerRunnerID: "runner-1", ExecutionMode: "LIVE",
+			MarketType: "SWAP", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "test",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			ExchangeAccountID: "account-1", Enabled: true,
 		}); err != nil {
 			return err
 		}

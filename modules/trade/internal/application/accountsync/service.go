@@ -847,6 +847,18 @@ func (s *Service) importExternalOrder(
 	if referenceAt.IsZero() {
 		referenceAt = s.now()
 	}
+	ownerID := current.ExchangeOrderID
+	if ownerID == "" {
+		ownerID = clientOrderID
+	}
+	logicalAccountID := ""
+	if logicalAccount, _, findErr := s.Store.FindLogicalAccountByExchangeAccount(
+		ctx, account.SpaceID, account.ExchangeAccountID,
+	); findErr == nil {
+		logicalAccountID = logicalAccount.LogicalAccountID
+	} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+		return store.OrderRecord{}, findErr
+	}
 	record := store.OrderRecord{
 		SpaceID: account.SpaceID,
 		OrderID: "external:" + account.ExchangeAccountID + ":" +
@@ -859,7 +871,8 @@ func (s *Service) importExternalOrder(
 		PositionSide: string(positionSide), Quantity: current.Quantity.String(),
 		LimitPrice: limitPrice, ReferencePrice: reference.String(),
 		ReferencePriceAt: referenceAt.UnixMilli(), ReduceOnly: current.ReduceOnly,
-		Source: "EXTERNAL", State: string(orderdomain.Open),
+		OwnerType: "EXTERNAL", OwnerID: ownerID,
+		LogicalAccountID: logicalAccountID, State: string(orderdomain.Open),
 		FilledQuantity: "0", AveragePrice: "0", ReservedQuantity: "0",
 		RemainingReservedQuantity: "0",
 		ExchangeUpdatedAt:         current.UpdatedAt.UnixMilli(),

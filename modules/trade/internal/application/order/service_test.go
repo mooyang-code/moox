@@ -321,7 +321,7 @@ func TestOrderServiceRejectsManualOrderThatWouldCrossZero(t *testing.T) {
 	spec.PositionSide = exchange.PositionSideNet
 	spec.Side = exchange.SideSell
 	spec.Quantity = shared.MustDecimal("3")
-	spec.Owner.Type = "RPC"
+	setTestOwner(&spec, orderdomain.OwnerOperator)
 
 	_, err := service.Place(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrCrossZero)
@@ -336,13 +336,13 @@ func TestOrderServiceRejectsTargetOrderThatWouldCrossZero(t *testing.T) {
 	spec.PositionSide = exchange.PositionSideNet
 	spec.Side = exchange.SideSell
 	spec.Quantity = shared.MustDecimal("3")
-	spec.Owner.Type = "TARGET"
+	setTestOwner(&spec, orderdomain.OwnerTarget)
 
 	_, err := service.Place(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrCrossZero)
 }
 
-func TestOrderServiceFlattenOversizeRemainsReducePositionOnly(t *testing.T) {
+func TestOrderServiceOperatorFlattenCannotCrossZero(t *testing.T) {
 	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	service.Validator.Positions = positionSourceStub{
 		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
@@ -351,23 +351,25 @@ func TestOrderServiceFlattenOversizeRemainsReducePositionOnly(t *testing.T) {
 	spec.PositionSide = exchange.PositionSideNet
 	spec.Side = exchange.SideSell
 	spec.Quantity = shared.MustDecimal("3")
-	spec.Owner.Type = "FLATTEN"
+	setTestOwner(&spec, orderdomain.OwnerOperator)
 
-	placed, err := service.Place(context.Background(), "space-1", spec)
-	require.NoError(t, err)
-	require.True(t, placed.Spec.ReducePositionOnly)
+	_, err := service.Place(context.Background(), "space-1", spec)
+	require.ErrorIs(t, err, ErrCrossZero)
 }
 
 func TestSubmitRejectsPositionChangeThatWouldCrossZero(t *testing.T) {
-	for _, owner := range []string{"TARGET", "OPERATOR"} {
-		t.Run(owner, func(t *testing.T) {
+	for _, owner := range []orderdomain.OwnerType{
+		orderdomain.OwnerTarget,
+		orderdomain.OwnerOperator,
+	} {
+		t.Run(string(owner), func(t *testing.T) {
 			service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 			positions := &positionSourceStub{}
 			service.Validator.Positions = positions
 			spec := testSpec(service.now())
 			spec.PositionSide = exchange.PositionSideNet
 			spec.Side = exchange.SideBuy
-			spec.Owner.Type = owner
+			setTestOwner(&spec, owner)
 			pending, err := service.Place(context.Background(), "space-1", spec)
 			require.NoError(t, err)
 			require.False(t, pending.Spec.ReducePositionOnly)
@@ -401,7 +403,7 @@ func TestSubmitPersistsFreshReducePositionOnlyBeforeSending(t *testing.T) {
 	spec := testSpec(service.now())
 	spec.PositionSide = exchange.PositionSideNet
 	spec.Side = exchange.SideBuy
-	spec.Owner.Type = "OPERATOR"
+	setTestOwner(&spec, orderdomain.OwnerOperator)
 	pending, err := service.Place(context.Background(), "space-1", spec)
 	require.NoError(t, err)
 	require.False(t, pending.Spec.ReducePositionOnly)
@@ -426,8 +428,11 @@ func TestSubmitPersistsFreshReducePositionOnlyBeforeSending(t *testing.T) {
 }
 
 func TestSubmitRejectsPreviouslyReducingOrderAfterPositionReverses(t *testing.T) {
-	for _, owner := range []string{"TARGET", "OPERATOR", "FLATTEN"} {
-		t.Run(owner, func(t *testing.T) {
+	for _, owner := range []orderdomain.OwnerType{
+		orderdomain.OwnerTarget,
+		orderdomain.OwnerOperator,
+	} {
+		t.Run(string(owner), func(t *testing.T) {
 			service, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 			positions := &positionSourceStub{
 				position: exchange.Position{SignedQuantity: shared.MustDecimal("1")},
@@ -436,7 +441,7 @@ func TestSubmitRejectsPreviouslyReducingOrderAfterPositionReverses(t *testing.T)
 			spec := testSpec(service.now())
 			spec.PositionSide = exchange.PositionSideNet
 			spec.Side = exchange.SideSell
-			spec.Owner.Type = owner
+			setTestOwner(&spec, owner)
 			pending, err := service.Place(context.Background(), "space-1", spec)
 			require.NoError(t, err)
 			require.True(t, pending.Spec.ReducePositionOnly)
@@ -455,30 +460,27 @@ func TestSubmitRejectsPreviouslyReducingOrderAfterPositionReverses(t *testing.T)
 	}
 }
 
-func TestSubmitKeepsFlattenReduceOnlyAfterPositionShrinks(t *testing.T) {
+func TestSubmitRejectsOperatorCloseAfterPositionShrinksBelowOrder(t *testing.T) {
 	service, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	positions := &positionSourceStub{
-		position: exchange.Position{SignedQuantity: shared.MustDecimal("1")},
+		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
 	}
 	service.Validator.Positions = positions
 	spec := testSpec(service.now())
 	spec.PositionSide = exchange.PositionSideNet
 	spec.Side = exchange.SideSell
 	spec.Quantity = shared.MustDecimal("2")
-	spec.Owner.Type = "FLATTEN"
+	setTestOwner(&spec, orderdomain.OwnerOperator)
 	pending, err := service.Place(context.Background(), "space-1", spec)
 	require.NoError(t, err)
 
 	positions.position.SignedQuantity = shared.MustDecimal("0.5")
-	submitted, err := service.Submit(
-		context.Background(),
-		"space-1",
-		string(pending.ID),
+	rejected, err := service.Submit(
+		context.Background(), "space-1", string(pending.ID),
 	)
-
-	require.NoError(t, err)
-	require.True(t, adapter.placed.ReduceOnly)
-	require.True(t, submitted.Spec.ReducePositionOnly)
+	require.ErrorIs(t, err, ErrCrossZero)
+	require.Equal(t, orderdomain.Rejected, rejected.State)
+	require.Zero(t, adapter.placeCalls)
 }
 
 func TestConfirmedAbsentRetryRefreshesReducePositionOnly(t *testing.T) {
@@ -491,7 +493,7 @@ func TestConfirmedAbsentRetryRefreshesReducePositionOnly(t *testing.T) {
 	spec := testSpec(now)
 	spec.PositionSide = exchange.PositionSideNet
 	spec.Side = exchange.SideBuy
-	spec.Owner.Type = "OPERATOR"
+	setTestOwner(&spec, orderdomain.OwnerOperator)
 	pending, err := service.Place(context.Background(), "space-1", spec)
 	require.NoError(t, err)
 
@@ -1001,6 +1003,20 @@ func newTestServiceForMarket(
 			CredentialSecretID: account.CredentialSecretID,
 			SettlementAsset:    account.SettlementAsset, Status: string(account.Status),
 			Ready: true,
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: account.SpaceID, LogicalAccountID: "logical-1", Name: "logical",
+			OwnerRunnerID: "runner-1", ExecutionMode: string(account.ExecutionMode),
+			MarketType: string(account.MarketType), SettlementAsset: account.SettlementAsset,
+			AutomationState: "PAUSED", PauseReason: "test",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: account.SpaceID, LogicalAccountID: "logical-1",
+			ExchangeAccountID: account.ID, Enabled: true,
 		}); err != nil {
 			return err
 		}

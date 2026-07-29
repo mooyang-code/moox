@@ -42,6 +42,9 @@ func New(id shared.OrderID, spec OrderSpec) (*Order, []Event, error) {
 		spec.Quantity.Cmp(shared.Zero()) <= 0 {
 		return nil, nil, ErrInvalidOrder
 	}
+	if err := spec.Owner.Validate(); err != nil {
+		return nil, nil, ErrInvalidOrder
+	}
 	order := &Order{
 		ID:           id,
 		Spec:         spec,

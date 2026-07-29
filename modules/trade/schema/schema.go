@@ -17,5 +17,5 @@ var logicalAccountSQL string
 
 // AllSQL returns the complete greenfield schema in foreign-key dependency order.
 func AllSQL() string {
-	return accountSQL + "\n" + instrumentSQL + "\n" + executionSQL + "\n" + logicalAccountSQL
+	return accountSQL + "\n" + instrumentSQL + "\n" + logicalAccountSQL + "\n" + executionSQL
 }

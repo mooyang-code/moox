@@ -335,6 +335,9 @@ func validSpec() OrderSpec {
 		},
 		ReferencePrice:   shared.MustDecimal("60000"),
 		ReferencePriceAt: time.Now(),
-		Owner:            OrderOwner{Type: "RPC"},
+		Owner: OrderOwner{
+			Type: OwnerOperator, OwnerID: "action-1",
+			LogicalAccountID: "logical-1",
+		},
 	}
 }

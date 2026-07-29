@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"gorm.io/gorm"
 )
@@ -249,8 +250,10 @@ type OrderRecord struct {
 	ReferencePrice            string
 	ReferencePriceAt          int64
 	ReduceOnly                bool
-	Source                    string
-	StrategyExecutionID       string
+	OwnerType                 string
+	OwnerID                   string
+	LogicalAccountID          string
+	RunnerID                  string
 	State                     string
 	FilledQuantity            string
 	AveragePrice              string
@@ -284,8 +287,10 @@ type orderRow struct {
 	ReferencePrice            string    `gorm:"column:c_reference_price"`
 	ReferencePriceAt          int64     `gorm:"column:c_reference_price_at"`
 	ReduceOnly                bool      `gorm:"column:c_reduce_only"`
-	Source                    string    `gorm:"column:c_source"`
-	StrategyExecutionID       string    `gorm:"column:c_strategy_execution_id"`
+	OwnerType                 string    `gorm:"column:c_owner_type"`
+	OwnerID                   string    `gorm:"column:c_owner_id"`
+	LogicalAccountID          *string   `gorm:"column:c_logical_account_id"`
+	RunnerID                  *string   `gorm:"column:c_runner_id"`
 	State                     string    `gorm:"column:c_state"`
 	FilledQuantity            string    `gorm:"column:c_filled_quantity"`
 	AveragePrice              string    `gorm:"column:c_average_price"`
@@ -305,9 +310,12 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 	if record.SpaceID == "" || record.OrderID == "" || record.ExchangeAccountID == "" ||
 		record.ClientOrderID == "" || record.Symbol == "" ||
 		record.OrderType == "" || record.Side == "" ||
-		record.Quantity == "" || record.ReferencePrice == "" || record.Source == "" ||
+		record.Quantity == "" || record.ReferencePrice == "" || record.OwnerType == "" ||
 		record.State == "" {
 		return fmt.Errorf("%w: incomplete order", ErrInvalidRecord)
+	}
+	if err := validateOrderOwnership(tx, record); err != nil {
+		return err
 	}
 	identity, err := tx.accountIdentity(record.SpaceID, record.ExchangeAccountID)
 	if err != nil {
@@ -340,22 +348,67 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 			c_space_id, c_order_id, c_exchange_account_id, c_client_order_id,
 			c_exchange_order_id, c_exchange, c_market_type, c_symbol, c_order_type,
 			c_time_in_force, c_side, c_position_side, c_quantity, c_limit_price,
-			c_reference_price, c_reference_price_at, c_reduce_only, c_source,
-			c_strategy_execution_id, c_state, c_filled_quantity, c_average_price,
+			c_reference_price, c_reference_price_at, c_reduce_only, c_owner_type,
+			c_owner_id, c_logical_account_id, c_runner_id,
+			c_state, c_filled_quantity, c_average_price,
 			c_reserved_asset, c_reserved_quantity, c_remaining_reserved_quantity,
 			c_reject_reason, c_exchange_updated_at, c_version, c_submitted_at, c_finished_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.SpaceID, record.OrderID, record.ExchangeAccountID, record.ClientOrderID,
 		record.ExchangeOrderID, record.Exchange, record.MarketType, record.Symbol,
 		record.OrderType, record.TimeInForce, record.Side, record.PositionSide,
 		record.Quantity, record.LimitPrice, record.ReferencePrice, record.ReferencePriceAt,
-		record.ReduceOnly, record.Source, record.StrategyExecutionID, record.State,
+		record.ReduceOnly, record.OwnerType, record.OwnerID,
+		nullableString(record.LogicalAccountID), nullableString(record.RunnerID), record.State,
 		record.FilledQuantity, record.AveragePrice,
 		record.ReservedAsset, record.ReservedQuantity,
 		record.RemainingReservedQuantity, record.RejectReason, record.ExchangeUpdatedAt,
 		record.Version, record.SubmittedAt, record.FinishedAt,
 	).Error)
+}
+
+func validateOrderOwnership(tx *Tx, record OrderRecord) error {
+	var runnerID *string
+	if record.RunnerID != "" {
+		value := record.RunnerID
+		runnerID = &value
+	}
+	owner := orderdomain.OrderOwner{
+		Type:             orderdomain.OwnerType(record.OwnerType),
+		OwnerID:          record.OwnerID,
+		LogicalAccountID: record.LogicalAccountID,
+		RunnerID:         runnerID,
+	}
+	if err := owner.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
+	}
+	if record.LogicalAccountID == "" {
+		return nil
+	}
+	account, err := tx.GetLogicalAccount(record.SpaceID, record.LogicalAccountID)
+	if err != nil {
+		return err
+	}
+	if owner.Type == orderdomain.OwnerTarget &&
+		account.OwnerRunnerID != record.RunnerID {
+		return fmt.Errorf("%w: TARGET runner does not own logical account", ErrConflict)
+	}
+	var membership int64
+	if err := tx.db.Raw(`
+		SELECT COUNT(*)
+		FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+			AND c_exchange_account_id = ?
+	`,
+		record.SpaceID, record.LogicalAccountID, record.ExchangeAccountID,
+	).Scan(&membership).Error; err != nil {
+		return err
+	}
+	if membership != 1 {
+		return fmt.Errorf("%w: order account is not a logical account member", ErrInvalidRecord)
+	}
+	return nil
 }
 
 func (s *Store) GetOrder(
@@ -638,8 +691,9 @@ func orderRecordFromRow(row orderRow) OrderRecord {
 		TimeInForce: row.TimeInForce, Side: row.Side, PositionSide: row.PositionSide,
 		Quantity: row.Quantity, LimitPrice: row.LimitPrice,
 		ReferencePrice: row.ReferencePrice, ReferencePriceAt: row.ReferencePriceAt,
-		ReduceOnly: row.ReduceOnly, Source: row.Source,
-		StrategyExecutionID: row.StrategyExecutionID, State: row.State,
+		ReduceOnly: row.ReduceOnly, OwnerType: row.OwnerType, OwnerID: row.OwnerID,
+		LogicalAccountID: valueOrEmpty(row.LogicalAccountID),
+		RunnerID:         valueOrEmpty(row.RunnerID), State: row.State,
 		FilledQuantity: row.FilledQuantity, AveragePrice: row.AveragePrice,
 		ReservedAsset: row.ReservedAsset, ReservedQuantity: row.ReservedQuantity,
 		RemainingReservedQuantity: row.RemainingReservedQuantity,
@@ -648,6 +702,20 @@ func orderRecordFromRow(row orderRow) OrderRecord {
 		SubmittedAt: row.SubmittedAt, FinishedAt: row.FinishedAt,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 type FillRecord struct {

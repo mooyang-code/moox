@@ -22,7 +22,10 @@ func TestOrderSpecValidationMatrix(t *testing.T) {
 		},
 		ReferencePrice:   price,
 		ReferencePriceAt: now.Add(-time.Second),
-		Owner:            OrderOwner{Type: "RPC"},
+		Owner: OrderOwner{
+			Type: OwnerOperator, OwnerID: "action-1",
+			LogicalAccountID: "logical-1",
+		},
 	}
 
 	tests := []struct {
@@ -116,7 +119,10 @@ func TestOrderSpecRejectsInvalidMatrixCombinations(t *testing.T) {
 		},
 		ReferencePrice:   price,
 		ReferencePriceAt: now.Add(-time.Second),
-		Owner:            OrderOwner{Type: "RPC"},
+		Owner: OrderOwner{
+			Type: OwnerOperator, OwnerID: "action-1",
+			LogicalAccountID: "logical-1",
+		},
 	}
 
 	tests := []struct {
@@ -182,7 +188,10 @@ func TestClientOrderSpecUsesFillPolicyWithoutReduceOnly(t *testing.T) {
 			LimitPrice:        &price,
 		},
 		ReferencePrice: price, ReferencePriceAt: now,
-		Owner: OrderOwner{Type: "OPERATOR"},
+		Owner: OrderOwner{
+			Type: OwnerOperator, OwnerID: "action-1",
+			LogicalAccountID: "logical-1",
+		},
 	}
 
 	if err := spec.Validate(exchange.MarketTypeSpot, now, time.Second); err != nil {

@@ -69,7 +69,8 @@ func seedFillOrder(
 		Symbol: testSymbol, OrderType: string(exchange.OrderTypeMarket),
 		Side: string(exchange.SideBuy), PositionSide: positionSide,
 		Quantity: quantity, ReferencePrice: "100", ReferencePriceAt: time.Now().UnixMilli(),
-		Source: "TEST", State: string(state), ReservedAsset: "USDT",
+		OwnerType: "EXTERNAL", OwnerID: "exchange-order-1",
+		State: string(state), ReservedAsset: "USDT",
 		ReservedQuantity: reserved, RemainingReservedQuantity: reserved, Version: 1,
 	}
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {

@@ -8,6 +8,56 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, seedAccountAndInstrument(ctx, s))
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
+			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			MarketType: "SPOT", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			ExchangeAccountID: "account-1", Enabled: true,
+		}); err != nil {
+			return err
+		}
+		return tx.CreateOrder(OrderRecord{
+			SpaceID: "space-1", OrderID: "order-target",
+			ExchangeAccountID: "account-1", ClientOrderID: "client-target",
+			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			Quantity: "1", ReferencePrice: "100",
+			OwnerType: "TARGET", OwnerID: "target-1",
+			LogicalAccountID: "logical-1", RunnerID: "runner-1",
+			State: "PENDING",
+		})
+	}))
+
+	got, err := s.GetOrder(ctx, "space-1", "order-target")
+	require.NoError(t, err)
+	require.Equal(t, "TARGET", got.OwnerType)
+	require.Equal(t, "target-1", got.OwnerID)
+	require.Equal(t, "logical-1", got.LogicalAccountID)
+	require.Equal(t, "runner-1", got.RunnerID)
+
+	err = s.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateOrder(OrderRecord{
+			SpaceID: "space-1", OrderID: "invalid-target",
+			ExchangeAccountID: "account-1", ClientOrderID: "invalid-target",
+			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			Quantity: "1", ReferencePrice: "100",
+			OwnerType: "TARGET", OwnerID: "target-1",
+			LogicalAccountID: "logical-1", State: "PENDING",
+		})
+	})
+	require.ErrorIs(t, err, ErrInvalidRecord)
+}
+
 func TestInsertFillDeduplicatesExchangeTradeIdentity(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -58,7 +108,8 @@ func TestInsertFillDeduplicatesExchangeTradeIdentity(t *testing.T) {
 			ClientOrderID: "client-order-2", ExchangeOrderID: "exchange-order-2",
 			Symbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC",
 			Side: "BUY", Quantity: "1", LimitPrice: stringPointer("100"),
-			ReferencePrice: "100", Source: "test", State: "OPEN",
+			ReferencePrice: "100", OwnerType: "EXTERNAL",
+			OwnerID: "exchange-order-2", State: "OPEN",
 		})
 	}))
 	fill.FillID = "fill-2"
@@ -88,7 +139,7 @@ func TestCreateOrderEnforcesAccountClientIdentity(t *testing.T) {
 			ClientOrderID: "client-order-1", Exchange: "BINANCE",
 			MarketType: "SPOT", Symbol: "BTCUSDT", OrderType: "MARKET",
 			Side: "BUY", Quantity: "1", ReferencePrice: "100",
-			Source: "test", State: "READY",
+			OwnerType: "EXTERNAL", OwnerID: "external-2", State: "READY",
 		})
 	})
 	require.ErrorIs(t, err, ErrConflict)
@@ -104,7 +155,8 @@ func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
 			ClientOrderID: "client-order-2", ExchangeOrderID: "exchange-order-2",
 			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
 			OrderType: "MARKET", Side: "SELL", Quantity: "1",
-			ReferencePrice: "101", Source: "test", State: "FILLED",
+			ReferencePrice: "101", OwnerType: "EXTERNAL",
+			OwnerID: "exchange-order-2", State: "FILLED",
 			FilledQuantity: "1", AveragePrice: "101", FinishedAt: 2_000,
 		}); err != nil {
 			return err
@@ -215,7 +267,8 @@ func TestCreateOrderRejectsContradictoryExchangeIdentity(t *testing.T) {
 			SpaceID: "space-1", OrderID: "order-wrong", ExchangeAccountID: "account-1",
 			ClientOrderID: "client-wrong", Exchange: "OKX", MarketType: "SWAP",
 			Symbol: "BTC-USDT-SWAP", OrderType: "MARKET", Side: "BUY",
-			Quantity: "1", ReferencePrice: "100", Source: "test", State: "READY",
+			Quantity: "1", ReferencePrice: "100",
+			OwnerType: "EXTERNAL", OwnerID: "external-wrong", State: "READY",
 		})
 	})
 	require.ErrorIs(t, err, ErrInvalidRecord)
@@ -239,7 +292,8 @@ func TestCreateOrderDerivesExchangeIdentityFromAccount(t *testing.T) {
 			SpaceID: "space-1", OrderID: "derived-order",
 			ExchangeAccountID: "account-1", ClientOrderID: "derived-client",
 			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
-			Quantity: "1", ReferencePrice: "100", Source: "test", State: "READY",
+			Quantity: "1", ReferencePrice: "100",
+			OwnerType: "EXTERNAL", OwnerID: "external-derived", State: "READY",
 		})
 	}))
 
@@ -354,7 +408,8 @@ func TestCreateOrderValidatesEveryDecimal(t *testing.T) {
 				ExchangeAccountID: "account-1", ClientOrderID: "decimal-client",
 				Symbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC",
 				Side: "BUY", Quantity: "1", LimitPrice: &limit,
-				ReferencePrice: "100", Source: "test", State: "READY",
+				ReferencePrice: "100", OwnerType: "EXTERNAL",
+				OwnerID: "external-decimal", State: "READY",
 			}
 			tt.mutate(&record)
 			err := s.Transaction(ctx, func(tx *Tx) error {
@@ -549,7 +604,8 @@ func seedOrder(ctx context.Context, s *Store) error {
 			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY",
 			Quantity: "1", LimitPrice: stringPointer("100"), ReferencePrice: "100",
-			Source: "test", State: "OPEN", Version: 1,
+			OwnerType: "EXTERNAL", OwnerID: "exchange-order-1",
+			State: "OPEN", Version: 1,
 		})
 	})
 }

@@ -3,7 +3,6 @@ package order
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -170,28 +169,16 @@ func (s *Service) deriveReducePositionOnly(
 	}
 	current := position.SignedQuantity
 	if current.IsZero() {
-		if strings.EqualFold(spec.Owner.Type, "FLATTEN") {
-			return spec, ErrReduceOnly
-		}
 		return spec, nil
 	}
 	reducing := (current.Cmp(shared.Zero()) > 0 && spec.Side == exchange.SideSell) ||
 		(current.Cmp(shared.Zero()) < 0 && spec.Side == exchange.SideBuy)
 	if !reducing {
-		if strings.EqualFold(spec.Owner.Type, "FLATTEN") {
-			return spec, ErrReduceOnly
-		}
 		return spec, nil
 	}
 	if spec.Quantity.Cmp(current.Abs()) > 0 {
-		if strings.EqualFold(spec.Owner.Type, "FLATTEN") {
-			spec.ReducePositionOnly = true
-			return spec, nil
-		}
-		if strings.EqualFold(spec.Owner.Type, "RPC") ||
-			strings.EqualFold(spec.Owner.Type, "MANUAL") ||
-			strings.EqualFold(spec.Owner.Type, "OPERATOR") ||
-			strings.EqualFold(spec.Owner.Type, "TARGET") {
+		if spec.Owner.Type == orderdomain.OwnerOperator ||
+			spec.Owner.Type == orderdomain.OwnerTarget {
 			return spec, ErrCrossZero
 		}
 		return spec, nil
@@ -735,9 +722,11 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 		Quantity: value.Spec.Quantity.String(), LimitPrice: limitPrice,
 		ReferencePrice:   value.Spec.ReferencePrice.String(),
 		ReferencePriceAt: value.Spec.ReferencePriceAt.UnixMilli(),
-		ReduceOnly:       value.Spec.ReducePositionOnly, Source: value.Spec.Owner.Type,
-		StrategyExecutionID: value.Spec.Owner.StrategyExecutionID,
-		State:               string(value.State), FilledQuantity: "0", AveragePrice: "0",
+		ReduceOnly:       value.Spec.ReducePositionOnly,
+		OwnerType:        string(value.Spec.Owner.Type), OwnerID: value.Spec.Owner.OwnerID,
+		LogicalAccountID: value.Spec.Owner.LogicalAccountID,
+		RunnerID:         ownerRunnerID(value.Spec.Owner),
+		State:            string(value.State), FilledQuantity: "0", AveragePrice: "0",
 		ReservedAsset:             validation.ReservedAsset,
 		ReservedQuantity:          validation.ReservedQuantity.String(),
 		RemainingReservedQuantity: validation.ReservedQuantity.String(),
@@ -788,7 +777,9 @@ func domainOrder(record store.OrderRecord) (orderdomain.Order, error) {
 			ReferencePriceAt:   time.UnixMilli(record.ReferencePriceAt),
 			ReducePositionOnly: record.ReduceOnly,
 			Owner: orderdomain.OrderOwner{
-				Type: record.Source, StrategyExecutionID: record.StrategyExecutionID,
+				Type: orderdomain.OwnerType(record.OwnerType), OwnerID: record.OwnerID,
+				LogicalAccountID: record.LogicalAccountID,
+				RunnerID:         optionalString(record.RunnerID),
 			},
 		},
 		ExchangeOrderID: record.ExchangeOrderID,
@@ -819,7 +810,11 @@ func sameSpec(record store.OrderRecord, spec orderdomain.OrderSpec) bool {
 		stored.Spec.Side == spec.Side &&
 		stored.Spec.PositionSide == spec.PositionSide &&
 		stored.Spec.Quantity.Cmp(spec.Quantity) == 0 &&
-		equalOptionalDecimal(stored.Spec.LimitPrice, spec.LimitPrice)
+		equalOptionalDecimal(stored.Spec.LimitPrice, spec.LimitPrice) &&
+		stored.Spec.Owner.Type == spec.Owner.Type &&
+		stored.Spec.Owner.OwnerID == spec.Owner.OwnerID &&
+		stored.Spec.Owner.LogicalAccountID == spec.Owner.LogicalAccountID &&
+		equalOptionalString(stored.Spec.Owner.RunnerID, spec.Owner.RunnerID)
 }
 
 func equalOptionalDecimal(left, right *shared.Decimal) bool {
@@ -827,6 +822,27 @@ func equalOptionalDecimal(left, right *shared.Decimal) bool {
 		return left == nil && right == nil
 	}
 	return left.Cmp(*right) == 0
+}
+
+func ownerRunnerID(owner orderdomain.OrderOwner) string {
+	if owner.RunnerID == nil {
+		return ""
+	}
+	return *owner.RunnerID
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func equalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (s *Service) orderID() string {

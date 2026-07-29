@@ -435,7 +435,21 @@ func testSpec(referenceAt time.Time) orderdomain.OrderSpec {
 			Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
 		},
 		ReferencePrice: shared.MustDecimal("100"), ReferencePriceAt: referenceAt,
-		Owner: orderdomain.OrderOwner{Type: "test"},
+		Owner: orderdomain.OrderOwner{
+			Type: orderdomain.OwnerOperator, OwnerID: "action-1",
+			LogicalAccountID: "logical-1",
+		},
+	}
+}
+
+func setTestOwner(spec *orderdomain.OrderSpec, ownerType orderdomain.OwnerType) {
+	spec.Owner = orderdomain.OrderOwner{
+		Type: ownerType, OwnerID: "owner-1",
+		LogicalAccountID: "logical-1",
+	}
+	if ownerType == orderdomain.OwnerTarget {
+		runnerID := "runner-1"
+		spec.Owner.RunnerID = &runnerID
 	}
 }
 
