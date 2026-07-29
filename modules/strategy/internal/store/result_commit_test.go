@@ -95,7 +95,7 @@ func TestCommitResultExecutingRebalanceAtomicallyAdvancesRunnerAndWritesOutbox(t
 	if payload.GetTargetId() != "result-live" || payload.GetRunnerId() != "runner-1" ||
 		payload.GetLogicalAccountId() != logicalAccountID || payload.GetCommandSequence() != 1 ||
 		len(payload.GetTargets()) != 1 || payload.GetTargets()[0].GetQuantity() != "2" {
-		t.Fatalf("payload = %+v", payload)
+		t.Fatalf("payload = %+v", &payload)
 	}
 }
 
