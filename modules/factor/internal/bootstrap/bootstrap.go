@@ -2,8 +2,10 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,7 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/prometheus/client_golang/prometheus"
+	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -105,6 +108,14 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	factorRepo := dbm.Factors()
 	bindingRepo := dbm.Bindings()
 	meta := registry.NewMetadataSync(newMetadataClient(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials), authInfo)
+	startupRegistry := registry.NewService(
+		factorRepo,
+		meta,
+		registry.Options{FactorsDir: cfg.Engine.FactorsDir},
+	).WithBindings(bindingRepo)
+	if err := validateStartupFactorContracts(ctx, startupRegistry); err != nil {
+		return nil, err
+	}
 	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials, authInfo)
 	pythonExec, err = engine.NewPythonExecutor(ctx, cfg.Engine.Workers, process.Config{
 		PythonBin: cfg.Engine.PythonBin, WorkerPath: cfg.Engine.WorkerPath,
@@ -145,13 +156,18 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := realtimeInventory.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initialize factor realtime dataset inventory: %w", err)
 	}
+	factorGate := scheduler.NewFactorGate()
 	sched = scheduler.NewService(scheduler.Config{
 		Workers: cfg.Engine.Workers, QueueCapacity: cfg.Scheduler.QueueCapacity,
 		MaxRetry:               cfg.Scheduler.MaxRetry,
 		ViewSettleDelay:        cfg.Scheduler.ViewSettleDelay,
 		EventReadRetry:         cfg.Scheduler.EventReadRetry,
 		EventReadRetryInterval: cfg.Scheduler.EventReadRetryInterval,
-	}, storage, pythonExec, scheduler.WithDatasetMetrics(runMetrics))
+	}, storage, pythonExec,
+		scheduler.WithDatasetMetrics(runMetrics),
+		scheduler.WithFactorGate(factorGate),
+		scheduler.WithTaskValidator(newTaskValidator(factorRepo, bindingRepo)),
+	)
 	if err := sched.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start factor scheduler: %w", err)
 	}
@@ -194,6 +210,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
 		factorsvc.WithMetadataSync(meta),
 		factorsvc.WithRealtimeInventory(realtimeInventory),
+		factorsvc.WithFactorGate(factorGate),
 	)
 	registered := false
 	for _, name := range []string{"trpc.moox.factor.FactorMgr", "trpc.moox.factor.FactorMgr.trpc"} {
@@ -227,6 +244,20 @@ type realtimeInventoryReconciler interface {
 
 type metricsReporter interface {
 	Handle(context.Context) error
+}
+
+type startupContractValidator interface {
+	ValidateAllEnabledBindings(context.Context) error
+}
+
+func validateStartupFactorContracts(ctx context.Context, validator startupContractValidator) error {
+	if validator == nil {
+		return fmt.Errorf("factor startup contract validator is required")
+	}
+	if err := validator.ValidateAllEnabledBindings(ctx); err != nil {
+		return fmt.Errorf("validate persisted factor contracts: %w", err)
+	}
+	return nil
 }
 
 func registerMetricsReporter(s *server.Server, inventory realtimeInventoryReconciler) {
@@ -398,6 +429,65 @@ func factorAuthInfo() *commonpb.AuthInfo {
 
 func listExecutableBindings(ctx context.Context, repo *store.BindingRepository) ([]domain.FactorBinding, error) {
 	return repo.ListExecutable(ctx)
+}
+
+type factorTaskRepository interface {
+	Get(context.Context, string) (*domain.FactorDef, error)
+}
+
+type bindingTaskRepository interface {
+	ListExecutable(context.Context) ([]domain.FactorBinding, error)
+}
+
+func newTaskValidator(
+	factors factorTaskRepository,
+	bindings bindingTaskRepository,
+) scheduler.TaskValidator {
+	return func(ctx context.Context, task scheduler.Task) error {
+		if factors == nil || bindings == nil {
+			return fmt.Errorf("factor task repositories are unavailable")
+		}
+		factor, err := factors.Get(ctx, task.Factor.FactorID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf(
+					"%w: factor %q no longer exists: %w",
+					scheduler.ErrStaleTask, task.Factor.FactorID, err,
+				)
+			}
+			return fmt.Errorf("load factor %q: %w", task.Factor.FactorID, err)
+		}
+		if factor.Status != domain.FactorStatusEnabled {
+			return fmt.Errorf("%w: factor %q is not enabled", scheduler.ErrStaleTask, factor.FactorID)
+		}
+		if factor.SourceHash != task.Factor.SourceHash {
+			return fmt.Errorf("%w: factor %q source hash changed", scheduler.ErrStaleTask, factor.FactorID)
+		}
+		if !slices.Equal(factor.InputColumns, task.Factor.InputColumns) ||
+			factor.ParamsJSON != task.Factor.ParamsJSON ||
+			factor.LookbackPeriods != task.LookbackPeriods {
+			return fmt.Errorf("%w: factor %q definition changed", scheduler.ErrStaleTask, factor.FactorID)
+		}
+		executable, err := bindings.ListExecutable(ctx)
+		if err != nil {
+			return fmt.Errorf("list executable bindings: %w", err)
+		}
+		for _, binding := range executable {
+			targetDataset := binding.TargetDataset
+			if targetDataset == domain.DefaultBindingTargetID {
+				targetDataset = registry.ResultDataset(binding.SourceDataset)
+			}
+			if binding.FactorID == task.Factor.FactorID &&
+				binding.SpaceID == task.SpaceID &&
+				binding.SourceDataset == task.SourceDataset &&
+				targetDataset == task.TargetDataset &&
+				binding.Freq == task.Freq &&
+				domain.BindingAllowsSubject(binding, task.SubjectID) {
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: no executable binding matches task scope", scheduler.ErrStaleTask)
+	}
 }
 
 func startRealtimeLoop(ctx context.Context, deps realtimeLoopDeps) func() {

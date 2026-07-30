@@ -2,12 +2,17 @@ package registry
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestValidateEnabledBindingAcceptsActiveTimeSeriesViewProjection(t *testing.T) {
@@ -18,6 +23,79 @@ func TestValidateEnabledBindingAcceptsActiveTimeSeriesViewProjection(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, 1, client.getDatasetCalls)
 	require.Equal(t, 1, client.listViewsCalls)
+}
+
+func TestValidateCandidateBindingSetRejectsSameBatchCycle(t *testing.T) {
+	bindings := []domain.FactorBinding{
+		{
+			BindingID: "a-to-b", FactorID: "factor", SpaceID: "crypto",
+			SourceDataset: "a", TargetDataset: "b", Freq: "1h",
+			Status: domain.BindingStatusEnabled,
+		},
+		{
+			BindingID: "b-to-a", FactorID: "factor", SpaceID: "crypto",
+			SourceDataset: "b", TargetDataset: "a", Freq: "1h",
+			Status: domain.BindingStatusEnabled,
+		},
+	}
+
+	err := validateCandidateBindingSet(bindings)
+	require.ErrorContains(t, err, "source dataset")
+	require.ErrorContains(t, err, "also targeted")
+}
+
+func TestValidateEnabledBindingRejectsSecondaryOnlyView(t *testing.T) {
+	client := validBindingContractClient()
+	client.views = []*storagepb.View{{
+		SpaceId: "crypto", ViewId: "joined", Status: "active",
+		PrimaryDatasetId: "orders", DatasetIds: []string{"spot_kline"},
+		ActiveIndexId: "index-a",
+		ActiveColumns: []*storagepb.ViewColumn{
+			{ColumnName: "spot_kline.close", OriginId: "spot_kline.close"},
+			{ColumnName: "spot_kline.volume", OriginId: "spot_kline.volume"},
+		},
+	}}
+
+	err := NewMetadataSync(client, nil).ValidateEnabledBinding(
+		context.Background(), contractBinding(), contractFactor(),
+	)
+	require.ErrorContains(t, err, "has no active primary view")
+}
+
+func TestValidateAllEnabledBindingsRejectsPersistedConflict(t *testing.T) {
+	ctx := context.Background()
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "factor.db")), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
+	factors := store.NewFactorRepository(db)
+	bindings := store.NewBindingRepository(db)
+	require.NoError(t, factors.Create(ctx, domain.FactorDef{
+		FactorID: "factor", Name: "Factor", SourceCode: "x", SourceHash: "hash",
+		InputColumns: []string{"close", "volume"}, Outputs: []string{"value"},
+		ParamsJSON: `{}`, LookbackPeriods: 2, Status: domain.FactorStatusEnabled,
+	}))
+	for _, binding := range []domain.FactorBinding{
+		{
+			BindingID: "a-to-b", FactorID: "factor", SpaceID: "crypto",
+			SourceDataset: "a", TargetDataset: "b", Freq: "1m",
+			Status: domain.BindingStatusEnabled,
+		},
+		{
+			BindingID: "b-to-a", FactorID: "factor", SpaceID: "crypto",
+			SourceDataset: "b", TargetDataset: "a", Freq: "1m",
+			Status: domain.BindingStatusEnabled,
+		},
+	} {
+		require.NoError(t, bindings.Upsert(ctx, binding))
+	}
+	svc := NewService(
+		factors,
+		NewMetadataSync(validBindingContractClient(), nil),
+		Options{FactorsDir: t.TempDir()},
+	).WithBindings(bindings)
+
+	err = svc.ValidateAllEnabledBindings(ctx)
+	require.ErrorContains(t, err, "also targeted")
 }
 
 func TestValidateEnabledBindingRejectsInvalidLocalContractWithoutRemoteCall(t *testing.T) {
@@ -76,7 +154,7 @@ func TestValidateEnabledBindingRejectsInvalidStorageContract(t *testing.T) {
 		},
 		"no active view": {
 			mutate: func(client *bindingContractFake) { client.views = nil },
-			want:   "active view",
+			want:   "active primary view",
 		},
 		"missing projected input": {
 			mutate: func(client *bindingContractFake) {

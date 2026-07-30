@@ -103,6 +103,12 @@ func (s *Service) ValidateEnabledBinding(ctx context.Context, binding domain.Fac
 	return s.meta.ValidateEnabledBinding(ctx, binding, factor)
 }
 
+// ValidateCandidateBindingSet rejects an enabled binding set where a source is
+// also produced as a target in the same space.
+func (s *Service) ValidateCandidateBindingSet(bindings []domain.FactorBinding) error {
+	return validateCandidateBindingSet(bindings)
+}
+
 // ValidateEnabledBindingsForFactor validates every binding that would become
 // executable before any runtime metadata or local status is changed.
 func (s *Service) ValidateEnabledBindingsForFactor(ctx context.Context, factor domain.FactorDef) error {
@@ -111,6 +117,9 @@ func (s *Service) ValidateEnabledBindingsForFactor(ctx context.Context, factor d
 	}
 	bindings, err := s.bindings.ListByFactor(ctx, factor.FactorID)
 	if err != nil {
+		return err
+	}
+	if err := s.ValidateCandidateBindingSet(bindings); err != nil {
 		return err
 	}
 	for _, binding := range bindings {
@@ -122,6 +131,32 @@ func (s *Service) ValidateEnabledBindingsForFactor(ctx context.Context, factor d
 		}
 	}
 	return nil
+}
+
+// ValidateAllEnabledBindings fails closed when persisted executable state no
+// longer satisfies the current binding and Storage View contracts.
+func (s *Service) ValidateAllEnabledBindings(ctx context.Context) error {
+	if s == nil || s.factors == nil {
+		return fmt.Errorf("factor repository is required")
+	}
+	const pageSize = 1000
+	for page := 1; ; page++ {
+		factors, total, err := s.factors.List(ctx, store.FactorFilter{
+			Status: domain.FactorStatusEnabled,
+			Page:   store.Page{Page: page, PageSize: pageSize},
+		})
+		if err != nil {
+			return fmt.Errorf("list enabled factors: %w", err)
+		}
+		for _, factor := range factors {
+			if err := s.ValidateEnabledBindingsForFactor(ctx, factor); err != nil {
+				return fmt.Errorf("factor %q: %w", factor.FactorID, err)
+			}
+		}
+		if int64(page*pageSize) >= total {
+			return nil
+		}
+	}
 }
 
 // NewService creates a registry service.

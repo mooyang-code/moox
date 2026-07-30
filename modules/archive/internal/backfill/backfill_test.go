@@ -134,13 +134,65 @@ func TestBackfillerAbsentSeriesTagUsesWildcardSelector(t *testing.T) {
 	require.Nil(t, access.request.GetSelectors()[0].SeriesTag)
 }
 
-type staticAccess struct{ row *storagepb.TimeSeriesRow }
+func TestBackfillerRejectsIncompleteViewBeforeJournalAppend(t *testing.T) {
+	store, err := journal.Open(t.TempDir())
+	require.NoError(t, err)
+	defer store.Close()
+	root := t.TempDir()
+	w := writer.New(store, root, 1024)
+	row := &storagepb.TimeSeriesRow{
+		Key: &storagepb.TimeSeriesKey{
+			SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC", Freq: "1h",
+			DataTime: "2026-01-02T00:00:00Z", SeriesTag: "venue:binance",
+		},
+		Fields: []*storagepb.FieldValue{{
+			FieldId: "close",
+			Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 1.25}},
+		}},
+	}
+	access := staticAccess{response: &storagepb.ReadTimeSeriesRowsRsp{
+		RetInfo:           &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
+		Rows:              []*storagepb.TimeSeriesRow{row},
+		PageResult:        &commonpb.PageResult{},
+		Complete:          false,
+		ServedIndexedFrom: "2026-01-01T00:00:00Z",
+		ServedIndexedTo:   "2026-01-01T01:00:00Z",
+	}}
+	plan := Plan{
+		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1h",
+		Start: "2026-01-01T00:00:00Z", End: "2026-02-01T00:00:00Z", Confirm: true,
+	}
+
+	total, err := New(access, nil, nil, store, w).Run(t.Context(), plan)
+
+	require.ErrorContains(t, err, "source view is incomplete")
+	require.Zero(t, total)
+	dirty, err := store.DirtyPartitions(t.Context(), 10)
+	require.NoError(t, err)
+	require.Empty(t, dirty)
+	key := domain.PartitionKey{
+		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1h",
+		SeriesTag: "venue:binance", Month: "202601",
+	}
+	path, err := key.AbsolutePath(root)
+	require.NoError(t, err)
+	require.NoFileExists(t, path)
+}
+
+type staticAccess struct {
+	row      *storagepb.TimeSeriesRow
+	response *storagepb.ReadTimeSeriesRowsRsp
+}
 
 func (s staticAccess) ReadTimeSeriesRows(_ context.Context, _ *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+	if s.response != nil {
+		return s.response, nil
+	}
 	return &storagepb.ReadTimeSeriesRowsRsp{
 		RetInfo:    &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
 		Rows:       []*storagepb.TimeSeriesRow{s.row},
 		PageResult: &commonpb.PageResult{},
+		Complete:   true,
 	}, nil
 }
 

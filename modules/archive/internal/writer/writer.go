@@ -197,16 +197,17 @@ func (w *Writer) WriteDirtyMatching(ctx context.Context, limit int, seriesTag *s
 					case errCh <- err:
 					default:
 					}
-					return
+					continue
 				}
 			}
 		}()
 	}
+sendJobs:
 	for _, state := range states {
 		select {
 		case jobs <- state.Key:
 		case <-ctx.Done():
-			break
+			break sendJobs
 		}
 	}
 	close(jobs)

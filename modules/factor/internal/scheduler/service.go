@@ -19,6 +19,7 @@ const maxTargetRowsPerChunk = 2000
 
 var ErrQueueFull = errors.New("factor scheduler queue is full")
 var ErrViewIncomplete = errors.New("factor source view is incomplete")
+var ErrStaleTask = errors.New("factor task is stale")
 
 type Config struct {
 	Workers                int
@@ -41,6 +42,20 @@ type DatasetRunObserver interface {
 
 type Option func(*Service)
 
+type TaskValidator func(context.Context, Task) error
+
+func WithFactorGate(gate *FactorGate) Option {
+	return func(service *Service) {
+		service.factorGate = gate
+	}
+}
+
+func WithTaskValidator(validator TaskValidator) Option {
+	return func(service *Service) {
+		service.taskValidator = validator
+	}
+}
+
 func WithDatasetMetrics(metrics DatasetRunObserver) Option {
 	return func(service *Service) {
 		service.metrics = metrics
@@ -53,20 +68,47 @@ type Status struct {
 }
 
 type Service struct {
-	cfg          Config
-	storage      StorageIO
-	exec         engine.Executor
-	metrics      DatasetRunObserver
-	mu           sync.Mutex
-	queues       [][]taskKey
-	pending      map[taskKey]Task
-	overflow     atomic.Int64
-	running      atomic.Int64
-	started      atomic.Bool
-	workerCtx    context.Context
-	workerCancel context.CancelFunc
-	workerWG     sync.WaitGroup
-	wake         []chan struct{}
+	cfg           Config
+	storage       StorageIO
+	exec          engine.Executor
+	metrics       DatasetRunObserver
+	factorGate    *FactorGate
+	taskValidator TaskValidator
+	mu            sync.Mutex
+	queues        [][]taskKey
+	pending       map[taskKey]Task
+	overflow      atomic.Int64
+	running       atomic.Int64
+	started       atomic.Bool
+	workerCtx     context.Context
+	workerCancel  context.CancelFunc
+	workerWG      sync.WaitGroup
+	wake          []chan struct{}
+}
+
+// DropQueuedFactor removes pending work for one factor without interrupting
+// tasks that workers have already started.
+func (s *Service) DropQueuedFactor(factorID string) int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := 0
+	for shard, queue := range s.queues {
+		kept := queue[:0]
+		for _, key := range queue {
+			task, exists := s.pending[key]
+			if exists && task.Factor.FactorID == factorID {
+				delete(s.pending, key)
+				removed++
+				continue
+			}
+			kept = append(kept, key)
+		}
+		s.queues[shard] = kept
+	}
+	return removed
 }
 
 func NewService(cfg Config, storage StorageIO, exec engine.Executor, opts ...Option) *Service {
@@ -256,6 +298,20 @@ func (s *Service) Stop() error {
 
 // Run synchronously calculates a time range in bounded target-row chunks.
 func (s *Service) Run(ctx context.Context, task Task) error {
+	release := func() {}
+	if s != nil && s.factorGate != nil {
+		release = s.factorGate.AcquireRun(task.Factor.FactorID)
+	}
+	defer release()
+	if s != nil && s.taskValidator != nil {
+		if err := s.taskValidator(ctx, task); err != nil {
+			return err
+		}
+	}
+	return s.runValidated(ctx, task)
+}
+
+func (s *Service) runValidated(ctx context.Context, task Task) error {
 	if s == nil || s.storage == nil || s.exec == nil {
 		return errors.New("scheduler dependencies are required")
 	}

@@ -14,6 +14,30 @@ type bindingContractClient interface {
 	ListViews(context.Context, *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error)
 }
 
+func validateCandidateBindingSet(bindings []domain.FactorBinding) error {
+	targets := make(map[string]string, len(bindings))
+	for _, binding := range bindings {
+		if binding.Status != domain.BindingStatusEnabled {
+			continue
+		}
+		key := binding.SpaceID + "\x00" + binding.TargetDataset
+		targets[key] = binding.BindingID
+	}
+	for _, binding := range bindings {
+		if binding.Status != domain.BindingStatusEnabled {
+			continue
+		}
+		key := binding.SpaceID + "\x00" + binding.SourceDataset
+		if targetBinding, ok := targets[key]; ok {
+			return fmt.Errorf(
+				"source dataset %s/%s is also targeted by enabled binding %q",
+				binding.SpaceID, binding.SourceDataset, targetBinding,
+			)
+		}
+	}
+	return nil
+}
+
 // ValidateEnabledBinding validates the complete remote read contract before an
 // enabled binding can become executable.
 func (s *MetadataSync) ValidateEnabledBinding(
@@ -74,6 +98,9 @@ func validateActiveViewProjection(
 			if view.GetStatus() != "active" || strings.TrimSpace(view.GetActiveIndexId()) == "" {
 				continue
 			}
+			if view.GetPrimaryDatasetId() != binding.SourceDataset {
+				continue
+			}
 			available := make(map[string]struct{}, len(view.GetActiveColumns()))
 			for _, column := range view.GetActiveColumns() {
 				available[column.GetColumnName()] = struct{}{}
@@ -97,7 +124,10 @@ func validateActiveViewProjection(
 		}
 	}
 	if len(missingByView) == 0 {
-		return fmt.Errorf("source dataset %s/%s has no active view", binding.SpaceID, binding.SourceDataset)
+		return fmt.Errorf(
+			"source dataset %s/%s has no active primary view",
+			binding.SpaceID, binding.SourceDataset,
+		)
 	}
 	return fmt.Errorf("no active view projects all input_columns: %s", strings.Join(missingByView, "; "))
 }
