@@ -38,7 +38,7 @@ A 股样本按市场分层抽取：沪市主板 25 只、深市主板 25 只、�
 - `series_tag`
 
 股票样本的 `series_tag` 为空；Binance/OKX 样本分别为 `venue:binance` 和
-`venue:okx`。其余列与 `metadata-quant-initial.seed.yaml` 中对应 Dataset 的列定义
+`venue:okx`。其余列与 `setup/default/metadata.yaml` 中对应 Dataset 的列定义
 一致。A 股时间保留 `+08:00` 时区；加密货币时间使用 UTC `Z`。永续合约样本中的空
 `funding_rate` 表示该小时源数据未提供资金费率，不应按零值处理。
 

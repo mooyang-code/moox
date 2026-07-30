@@ -1412,7 +1412,7 @@ wait_http_reachable() {
   return 1
 }
 
-apply_metrics_metadata() {
+apply_monitor_metadata() {
   if [[ "${WITH_MONITOR}" != "1" ]]; then
     return 0
   fi
@@ -1421,22 +1421,11 @@ apply_metrics_metadata() {
     return 0
   fi
   wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
-  if [[ "${WITH_STORAGE}" == "1" ]]; then
-    "${ROOT}/bin/moox-cli" metadata import --file "${ROOT}/examples/platform-local.seed.yaml" --metadata-url "${METRICS_METADATA_URL}" --if-not-exists
-  fi
-  "${ROOT}/bin/moox-cli" metadata import --file "${ROOT}/examples/metadata-monitor-metrics.seed.yaml" --metadata-url "${METRICS_METADATA_URL}" --if-not-exists
-}
-
-apply_host_metadata() {
-  if [[ "${WITH_MONITOR}" != "1" ]]; then
-    return 0
-  fi
-  if [[ "${WITH_STORAGE}" != "1" && "${WITH_EVENTBUS}" != "1" ]]; then
-    echo "skip host metadata for Monitor deployment without local metrics dependencies"
-    return 0
-  fi
-  wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
-  "${ROOT}/bin/moox-cli" metadata import --file "${ROOT}/examples/metadata-monitor-host.seed.yaml" --metadata-url "${METRICS_METADATA_URL}" --if-not-exists
+  "${ROOT}/bin/moox-cli" metadata import \
+    --file "${ROOT}/examples/setup/default/metadata.yaml" \
+    --spaces moox_system \
+    --metadata-url "${METRICS_METADATA_URL}" \
+    --if-not-exists
 }
 
 init_storage_schema() {
@@ -1835,8 +1824,7 @@ start_monitor() {
     echo "monitor is disabled in this deployment package" >&2
     exit 2
   fi
-  apply_metrics_metadata
-  apply_host_metadata
+  apply_monitor_metadata
   init_monitor_schema
   gateway_service_env_for monitor
   runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"

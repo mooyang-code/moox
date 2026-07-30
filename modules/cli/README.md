@@ -87,13 +87,13 @@ moox-cli setup hosts --file ./custom.toml
 moox-cli setup deploy-storage --file ./custom.toml --host compute
 
 # 展示默认 seed 中可选的业务空间
-moox-cli metadata spaces --file ./examples/metadata-quant-initial.seed.yaml
+moox-cli metadata spaces --file ./examples/setup/default/metadata.yaml
 
 # 用户确认空间后，通过 Storage 主机的 SSH 隧道导入完整依赖闭包
 moox-cli setup metadata-import \
   --file ./custom.toml \
   --storage-host compute \
-  --seed ./examples/metadata-quant-initial.seed.yaml \
+  --seed ./examples/setup/default/metadata.yaml \
   --spaces stock_cn,crypto
 ```
 
@@ -180,15 +180,15 @@ storage:
 
 ```bash
 moox-cli metadata import \
-  --file ../../examples/metadata-quant-initial.seed.yaml \
+  --file ../../examples/setup/default/metadata.yaml \
   --metadata-url http://127.0.0.1:20200 \
   --if-not-exists \
   --spaces crypto
 
-moox-cli metadata import --file ../../examples/metadata-quant-initial.seed.yaml --dry-run
+moox-cli metadata import --file ../../examples/setup/default/metadata.yaml --dry-run
 
 moox-cli metadata apply \
-  --file ../../examples/metadata-monitor-metrics.seed.yaml \
+  --file ../../examples/setup/default/metadata.yaml \
   --metadata-url http://127.0.0.1:20200
 ```
 

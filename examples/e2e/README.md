@@ -73,12 +73,7 @@ TimeSeries 重建使用当前 scalar `series_tag`：精确空 tag 是默认序�
 cd modules/cli
 
 GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/platform-local.seed.yaml \
-  --metadata-url http://127.0.0.1:20200 \
-  --if-not-exists
-
-GOWORK=off go run ./cmd/moox-cli metadata import \
-  --file ../../examples/metadata-quant-initial.seed.yaml \
+  --file ../../examples/setup/default/metadata.yaml \
   --metadata-url http://127.0.0.1:20200 \
   --spaces crypto \
   --if-not-exists
@@ -133,7 +128,7 @@ CloudNode JobItem。`execute_at` 缺失或已到期时立即执行。
 删除所有运行时数据后，一个最小的端到端演示环境应按下面的边界重建：
 
 1. `moox-admin` 启动后，可以登录管理台并看到 `moox_cloudnode`、`moox_collector`、storage-primary/metadata/view 等服务部署记录。
-2. `moox-storage` 的 `storage-primary`、`storage-node` 和 `storage-view` 进程启动后，先注册 DataNode，再导入 `platform-local.seed.yaml` 和 `metadata-quant-initial.seed.yaml` 的 `crypto` Space，并完成 Doctor 检查与显式激活。
+2. `moox-storage` 的 `storage-primary`、`storage-node` 和 `storage-view` 进程启动后，先注册 DataNode，再导入 `setup/default/metadata.yaml` 的 `crypto` Space，并完成 Doctor 检查与显式激活。
 3. `moox-cloudnode` 启动后，通过云账户页面重新创建 Tencent Cloud 账号；密钥不进入 examples。
 4. 使用 collector 打包/发布流程上传 `moox-collector` SCF 包，并通过 cloudnode 批量创建/部署云节点。
 5. `moox-collector` 启动后，E2E 注册 `BTC-USDT`，再创建 Binance 现货 1H K 线规则；
@@ -250,8 +245,7 @@ runner 每 2 秒调用
 脚本默认会调用 `scripts/deploy-moox.sh --reset-data`，然后导入：
 
 ```text
-examples/platform-local.seed.yaml
-examples/metadata-quant-initial.seed.yaml --spaces crypto
+examples/setup/default/metadata.yaml --spaces crypto
 ```
 
 随后通过管理台同一套 HTTP 网关完成注册/登录、修正 public service deployments、创建

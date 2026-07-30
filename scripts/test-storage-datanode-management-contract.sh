@@ -72,13 +72,12 @@ require_text modules/storage/proto/metadata.proto 'rpc CheckDatasetActivation' '
 require_text modules/storage/proto/metadata.proto 'rpc ActivateDataset' 'explicit activation RPC'
 require_text modules/storage/proto/data_node.proto 'service DataNodeRuntime {' 'DataNode runtime service'
 require_text modules/storage/schema/metadata.sql "VALUES ('schema_version', '6')" 'Schema v6'
-require_text examples/metadata-quant-initial.seed.yaml 'data_source_id: crypto_market' 'shared crypto logical DataSource binding'
-require_text examples/metadata-quant-initial.seed.yaml 'dataset_id: spot_kline_1h' 'shared crypto spot Dataset'
-require_text examples/metadata-quant-initial.seed.yaml 'dataset_id: perpetual_kline_1h' 'shared crypto perpetual Dataset'
-require_text examples/metadata-quant-initial.seed.yaml 'view_id: spot_kline_1h_view' 'shared crypto spot View'
-require_text examples/metadata-quant-initial.seed.yaml 'view_id: perpetual_kline_1h_view' 'shared crypto perpetual View'
-require_text examples/metadata-monitor-host.seed.yaml 'grain_keys: [subject_id, freq, data_time, series_tag]' 'monitor host tagged time-series grain'
-require_text examples/metadata-monitor-metrics.seed.yaml 'grain_keys: [subject_id, freq, data_time, series_tag]' 'monitor metrics tagged time-series grain'
+require_text examples/setup/default/metadata.yaml 'data_source_id: crypto_market' 'shared crypto logical DataSource binding'
+require_text examples/setup/default/metadata.yaml 'dataset_id: spot_kline_1h' 'shared crypto spot Dataset'
+require_text examples/setup/default/metadata.yaml 'dataset_id: perpetual_kline_1h' 'shared crypto perpetual Dataset'
+require_text examples/setup/default/metadata.yaml 'view_id: spot_kline_1h_view' 'shared crypto spot View'
+require_text examples/setup/default/metadata.yaml 'view_id: perpetual_kline_1h_view' 'shared crypto perpetual View'
+require_text examples/setup/default/metadata.yaml 'series_tag' 'tagged time-series grain'
 require_text modules/storage/config/metadata.seed.yaml 'grain_keys: [subject_id, freq, data_time, series_tag]' 'storage sample tagged time-series grain'
 
 for forbidden_seed_id in \
@@ -90,7 +89,7 @@ for forbidden_seed_id in \
   binance_perpetual_1h_view \
   okx_spot_1h_view \
   okx_perpetual_1h_view; do
-  if rg -q --fixed-strings -- "${forbidden_seed_id}" examples/metadata-quant-initial.seed.yaml; then
+  if rg -q --fixed-strings -- "${forbidden_seed_id}" examples/setup/default/metadata.yaml; then
     printf 'storage DataNode management contract: obsolete crypto seed ID found: %s\n' "${forbidden_seed_id}" >&2
     exit 1
   fi

@@ -9,14 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestQuantInitialSeedUsesUnifiedCryptoMarket(t *testing.T) {
-	seed, err := loadMetadataSeed(filepath.Join("..", "..", "..", "..", "examples", "metadata-quant-initial.seed.yaml"))
+func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
+	seed, err := loadMetadataSeed(defaultSetupBundlePath("metadata.yaml"))
 	require.NoError(t, err)
 	spaceIDs := make([]string, 0, len(seed.Spaces))
 	for _, space := range seed.Spaces {
 		spaceIDs = append(spaceIDs, space.SpaceID)
 	}
-	require.Equal(t, []string{"stock_cn", "stock_hk", "stock_us", "crypto"}, spaceIDs)
+	require.Equal(t, []string{"stock_cn", "crypto", "moox_system"}, spaceIDs)
 
 	var dataSourceIDs []string
 	var datasetIDs []string
@@ -67,12 +67,13 @@ func TestQuantSampleCSVUsesSharedDatasetAndSeriesTag(t *testing.T) {
 		path      string
 		datasetID string
 		seriesTag string
+		frequency string
 	}{
-		{"crypto/binance_spot_kline_1h.csv", "spot_kline_1h", "venue:binance"},
-		{"crypto/binance_perpetual_kline_1h.csv", "perpetual_kline_1h", "venue:binance"},
-		{"crypto/okx_spot_kline_1h.csv", "spot_kline_1h", "venue:okx"},
-		{"stock_cn/stock_kline_1d.csv", "stock_kline", ""},
-		{"stock_cn/stock_kline_1h.csv", "stock_kline", ""},
+		{"crypto/binance_spot_kline_1h.csv", "spot_kline_1h", "venue:binance", "1H"},
+		{"crypto/binance_perpetual_kline_1h.csv", "perpetual_kline_1h", "venue:binance", "1H"},
+		{"crypto/okx_spot_kline_1h.csv", "spot_kline_1h", "venue:okx", "1H"},
+		{"stock_cn/stock_kline_1d.csv", "stock_kline", "", "1d"},
+		{"stock_cn/stock_kline_1h.csv", "stock_kline", "", "1H"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -89,6 +90,7 @@ func TestQuantSampleCSVUsesSharedDatasetAndSeriesTag(t *testing.T) {
 			for _, row := range rows[1:] {
 				require.Equal(t, tc.datasetID, row[1])
 				require.Equal(t, tc.seriesTag, row[5])
+				require.Equal(t, tc.frequency, row[3])
 			}
 		})
 	}

@@ -32,9 +32,7 @@ func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
 	root := filepath.Join("..", "..", "..")
 	seedPaths := []string{
 		filepath.Join(root, "modules", "storage", "config", "metadata.seed.yaml"),
-		filepath.Join(root, "examples", "metadata-quant-initial.seed.yaml"),
-		filepath.Join(root, "examples", "metadata-monitor-host.seed.yaml"),
-		filepath.Join(root, "examples", "metadata-monitor-metrics.seed.yaml"),
+		filepath.Join(root, "examples", "setup", "default", "metadata.yaml"),
 	}
 
 	for _, seedPath := range seedPaths {

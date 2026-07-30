@@ -136,7 +136,7 @@ Storage deployment and metadata selection are separate from `custom.toml`
 initialization. First list the selectable spaces from the checked-in seed:
 
 ```bash
-./bin/moox-cli metadata spaces --file examples/metadata-quant-initial.seed.yaml
+./bin/moox-cli metadata spaces --file examples/setup/default/metadata.yaml
 ```
 
 Ask which spaces the user wants. Support natural-language answers including
@@ -146,7 +146,7 @@ selection, map the names to the IDs returned by `metadata spaces`, then run:
 ```bash
 ./bin/moox-cli setup metadata-import \
   --file ./custom.toml \
-  --seed examples/metadata-quant-initial.seed.yaml \
+  --seed examples/setup/default/metadata.yaml \
   --storage-host <host-name> \
   --spaces stock_cn,crypto_binance
 ```

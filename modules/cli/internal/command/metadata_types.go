@@ -36,9 +36,8 @@ var metadataImportCmd = &cobra.Command{
 	Long: `通过 moox-storage MetadataService 导入存储元数据 seed。
 
 示例:
-  moox-cli metadata import --file ../../examples/platform-local.seed.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
-  moox-cli metadata import --file ../../examples/metadata-quant-initial.seed.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
-  moox-cli metadata import --file ../../examples/metadata-quant-initial.seed.yaml --spaces crypto --dry-run`,
+  moox-cli metadata import --file ../../examples/setup/default/metadata.yaml --metadata-url http://127.0.0.1:20200 --if-not-exists
+  moox-cli metadata import --file ../../examples/setup/default/metadata.yaml --spaces crypto --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(metadataImportFile) == "" {
 			return fmt.Errorf("必须指定 --file")
@@ -146,6 +145,8 @@ type seedSpace struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
 	Owner       string `yaml:"owner"`
+	Market      string `yaml:"market"`
+	Timezone    string `yaml:"timezone"`
 	seedCommon  `yaml:",inline"`
 }
 

@@ -315,7 +315,7 @@ func newSetupMetadataImportCommand(deps setupDeps) *cobra.Command {
 		return writeSetupJSON(cmd, result)
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&seed, "seed", "examples/metadata-quant-initial.seed.yaml", "metadata seed YAML")
+	cmd.Flags().StringVar(&seed, "seed", "examples/setup/default/metadata.yaml", "metadata seed YAML")
 	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
 	cmd.Flags().StringSliceVar(&spaces, "spaces", nil, "要导入的 Space ID 或中文名")
 	_ = cmd.MarkFlagRequired("storage-host")

@@ -19,16 +19,13 @@ grep -q 'stop_service "eventbus"' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_WITH_EVENTBUS="\${WITH_EVENTBUS}".*stop.sh' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'data/eventbus/jetstream' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'logs/eventbus' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'apply_metrics_metadata' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'metadata-monitor-metrics.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
-sed -n '/^apply_metrics_metadata()/,/^}/p' "${ROOT}/scripts/deploy-moox.sh" |
-  grep -q 'metadata import.*--if-not-exists'
+grep -q 'apply_monitor_metadata' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'examples/setup/default/metadata.yaml' "${ROOT}/scripts/deploy-moox.sh"
+monitor_metadata_block="$(sed -n '/^apply_monitor_metadata()/,/^}/p' "${ROOT}/scripts/deploy-moox.sh")"
+grep -q 'metadata import' <<<"${monitor_metadata_block}"
+grep -q -- '--if-not-exists' <<<"${monitor_metadata_block}"
 ! grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED|local-route' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_METRICS_STORAGE_METADATA_URL' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'apply_host_metadata' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'metadata-monitor-host.seed.yaml' "${ROOT}/scripts/deploy-moox.sh"
-sed -n '/^apply_host_metadata()/,/^}/p' "${ROOT}/scripts/deploy-moox.sh" |
-  grep -q 'metadata import.*--if-not-exists'
 grep -q 'secrets/health-auth.env' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'moox-admin-cli.*random-secret.*--bytes 32' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_HEALTH_AUTH_SECRET_KEY' "${ROOT}/scripts/deploy-moox.sh"
@@ -53,14 +50,12 @@ grep -Fq 'MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID=collector' "${ROOT}/scripts/depl
 grep -Fq 'gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq '"${STAGE_DIR}"/secrets/gateway-cloudnode.key' "${ROOT}/scripts/deploy-moox.sh"
 for dataset in host_resource_v1 host_fs_v1 host_disk_v1 host_net_v1; do
-  grep -q "dataset_id: ${dataset}" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
-  grep -q "dataset_id: ${dataset}.*status: disabled" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
+  grep -q "dataset_id: ${dataset}" "${ROOT}/examples/setup/default/metadata.yaml"
 done
 for column in receive_errors_per_second transmit_errors_per_second error_rate_available; do
-  grep -q "dataset_id: host_net_v1, column_name: ${column}" "${ROOT}/examples/metadata-monitor-host.seed.yaml"
+  grep -q "column_name: ${column}" "${ROOT}/examples/setup/default/metadata.yaml"
 done
-grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-host.seed.yaml"
-grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/metadata-monitor-metrics.seed.yaml"
+grep -q 'data_node_id: storage-node-0' "${ROOT}/examples/setup/default/metadata.yaml"
 
 control_profile=$(sed -n '/^    control)/,/^    storage)/p' "${ROOT}/scripts/deploy-moox.sh")
 grep -Fq 'WITH_EVENTBUS=1' <<<"${control_profile}"
@@ -88,7 +83,7 @@ if ! awk '/stop_service "storage"/ { storage=NR } /stop_service "eventbus"/ { ev
   echo "eventbus must stop after storage" >&2
   exit 1
 fi
-if ! awk '/^apply_metrics_metadata\(\)/ { metadata=NR } /^start_monitor\(\)/ { monitor=NR } END { exit !(metadata < monitor) }' "${ROOT}/scripts/deploy-moox.sh"; then
+if ! awk '/^apply_monitor_metadata\(\)/ { metadata=NR } /^start_monitor\(\)/ { monitor=NR } END { exit !(metadata < monitor) }' "${ROOT}/scripts/deploy-moox.sh"; then
   echo "metadata preflight must run before monitor" >&2
   exit 1
 fi

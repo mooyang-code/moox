@@ -413,8 +413,7 @@ if [[ "${SYSDEPLOY_ONLY}" -eq 1 ]]; then
   log "end-to-end test passed"
   exit 0
 fi
-import_seed "platform-local.seed.yaml"
-import_seed "metadata-quant-initial.seed.yaml" "${SPACE_ID}"
+import_seed "setup/default/metadata.yaml" "${SPACE_ID}"
 
 log "activate imported storage Datasets"
 activate_storage_datasets

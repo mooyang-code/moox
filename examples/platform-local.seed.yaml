@@ -1,2 +1,0 @@
-# DataNode registration is deployment-owned and happens before metadata import.
-# Keep this file as an intentional no-op for existing local bootstrap commands.

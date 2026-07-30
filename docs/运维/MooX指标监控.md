@@ -27,10 +27,11 @@
 历史数据使用 Storage 的内部 Space `moox_system` 和 Dataset `moox_service_metrics`，Space 以 `moox_` 前缀标记 MooX 管理范围。Monitor 不会在运行时创建或修改 Storage 元数据。部署脚本在启动 Monitor 前执行：
 
 ```bash
-moox-cli metadata apply --file examples/platform-local.seed.yaml \
-  --metadata-url http://127.0.0.1:20200
-moox-cli metadata apply --file examples/metadata-monitor-metrics.seed.yaml \
-  --metadata-url http://127.0.0.1:20200
+moox-cli metadata import \
+  --file examples/setup/default/metadata.yaml \
+  --spaces moox_system \
+  --metadata-url http://127.0.0.1:20200 \
+  --if-not-exists
 ```
 
 `metadata apply` 是 create-or-verify：缺失资源按依赖顺序创建，已有资源只有在类型、频率、字段和直接
@@ -42,7 +43,7 @@ DataNode 绑定契约兼容时才报告 unchanged；不兼容会终止 Monitor �
 export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200
 ```
 
-外部 Storage 不得应用 `platform-local.seed.yaml`。每个指标 Dataset 在 seed 中声明
+外部 Storage 只需从默认 metadata 中导入 `moox_system`。每个指标 Dataset 在 seed 中声明
 `data_node_id` 和 `keep_duration`，`series_id` 直接作为 `subject_id`，不为每条动态时序创建
 独立元数据对象。
 
@@ -66,9 +67,9 @@ export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200
 发布使用一个共享 `metrics-publisher` 发布角色和一个独立 `monitor-metrics-consumer` 消费角色。Publisher 只能发布 metrics snapshot；Monitor consumer 只订阅固定 metrics/host topic 和 durable。Monitor 为单实例，不能复用 Publisher 凭据消费，也不通过多实例抢占 durable。
 
 Collector、CloudNode、Factor、Strategy、Trade、Archive 使用固定低基数
-`moox_<module>_*` 指标和代码内置的 pipeline 注册表。只有具备同一业务时间域的权威输入、输出时间时
-才生成 pipeline lag 检查；Collector、Factor 的实时连续性按启用中的 Dataset + Frequency 独立判断，
-不把多个时序汇总成一个模块水位。穿过 Storage 的功能 pipeline 当前显式延期，不从相邻模块水位
+`moox_<module>_*` 指标和代码内置的模块健康检查注册表。只有具备同一业务时间域的权威输入、输出时间时
+才生成水位健康检查；Collector、Factor 的实时连续性按启用中的 Dataset + Frequency 独立判断，
+不把多个时序汇总成一个模块水位。穿过 Storage 的功能检查当前显式延期，不从相邻模块水位
 推断 Storage 已正确处理。
 
 ## 看板和规则

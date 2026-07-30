@@ -83,7 +83,7 @@ help="$("${ROOT}/examples/e2e/run.sh" --help)"
 grep -Fq -- 'Runtime/assert timeout. Default: 120.' <<<"${help}"
 grep -Fq -- 'start resident collector SCF runtime' "${ROOT}/examples/e2e/run.sh"
 grep -Fq -- 'activate_storage_datasets' "${ROOT}/examples/e2e/run.sh"
-import_line="$(grep -n -m1 'import_seed "metadata-quant-initial.seed.yaml"' "${ROOT}/examples/e2e/run.sh" | cut -d: -f1)"
+import_line="$(grep -n -m1 'import_seed "setup/default/metadata.yaml"' "${ROOT}/examples/e2e/run.sh" | cut -d: -f1)"
 activate_line="$(grep -n -m1 '^activate_storage_datasets$' "${ROOT}/examples/e2e/run.sh" | cut -d: -f1)"
 setup_line="$(grep -n -m1 'log "prepare management/backend state' "${ROOT}/examples/e2e/run.sh" | cut -d: -f1)"
 [[ "${import_line}" -lt "${activate_line}" && "${activate_line}" -lt "${setup_line}" ]]

@@ -32,7 +32,7 @@ status_line=$(grep -nF './bin/moox-cli setup status --file ./custom.toml' "${REF
 
 hosts_line=$(grep -nF './bin/moox-cli setup hosts --file ./custom.toml' "${REFERENCE}" | cut -d: -f1)
 storage_line=$(grep -nF './bin/moox-cli setup deploy-storage --file ./custom.toml --host <host-name>' "${REFERENCE}" | cut -d: -f1)
-spaces_line=$(grep -nF './bin/moox-cli metadata spaces --file examples/metadata-quant-initial.seed.yaml' "${REFERENCE}" | cut -d: -f1)
+spaces_line=$(grep -nF './bin/moox-cli metadata spaces --file examples/setup/default/metadata.yaml' "${REFERENCE}" | cut -d: -f1)
 metadata_line=$(grep -nF './bin/moox-cli setup metadata-import' "${REFERENCE}" | cut -d: -f1)
 [[ "${status_line}" -lt "${hosts_line}" && "${hosts_line}" -lt "${storage_line}" && "${storage_line}" -lt "${spaces_line}" && "${spaces_line}" -lt "${metadata_line}" ]]
 grep -Fq '自然语言' "${REFERENCE}"
