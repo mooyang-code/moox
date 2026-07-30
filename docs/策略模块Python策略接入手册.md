@@ -1,598 +1,247 @@
 # Strategy Python 策略接入手册
 
-> 本文定义 `modules/strategy` 面向 Python 策略开发者的实际接入接口。Go 框架负责数据快照、调度、状态和执行端口；策略包只负责纯 Python 计算。
->
-> 模块边界、运行链路、数据模型和一致性设计见 [Strategy 交易策略模块架构设计](策略模块架构设计.md)。
+本文定义 `modules/strategy` 当前 Python 策略契约。Strategy 是不可变代码制品；
+StrategyRunner 保存参数、输入来源和运行状态；StrategyResult 是一次已校验并原子接受
+的策略结果。
 
-## 先看结论
+## 最小策略包
 
-当前可用命令：`strategy validate <strategy.yaml> <strategy.py>` 和 `strategy run-once [--trigger ...] [--state ...] <strategy.yaml> <strategy.py>`。运行时默认使用 `packages/pyruntime` 的常驻 Python worker。
-
-策略开发者只负责策略规则，不负责数据查询、调度、状态落库、账户换算或交易执行。
-
-前端管理台不提供 Python 策略源码输入或在线编辑入口。策略源码通过后端导入/发布接口提交；管理台只展示当前运行策略、版本与源码 hash，并提供运行状态、目标组合、实际偏差和回测/观察/Paper/实盘表现查询。当前不支持版本回滚。
-
-一个可导入策略包必须包含 `strategy.yaml` 和 `strategy.py`。仓库内置策略还必须包含测试：
+一个策略包包含清单和 Python 源码：
 
 ```text
-modules/strategy/strategies/momentum_top_n/
-├── strategy.yaml              # 必须：策略清单、输入依赖和参数约束
-├── strategy.py                # 必须：策略计算函数
-└── tests/
-    └── test_strategy.py       # 内置策略必须；个人上传策略推荐
+strategy.yaml
+strategy.py
 ```
 
-Python 只实现一个入口：
-
-```python
-def run(context, data, params, state):
-    ...
-```
-
-这个函数接收已经准备好的行情与因子宽表，返回完整目标组合和下一份策略状态：
-
-```text
-StrategyInput
-  -> strategy.py:run(...)
-  -> action + TargetWeights + next_state
-```
-
-Go 框架完成其余工作：
-
-```text
-Storage/View 查询
-  -> Bar 完整性与未来数据检查
-  -> Python worker
-  -> 输出校验与运行事实落库
-  -> 多策略资金聚合与硬风控
-  -> 权重换算为目标数量
-  -> BacktestExecution / PaperExecution / LiveTradeExecution
-```
-
-## 开发者负责什么
-
-| 开发者负责 | Go 框架负责 |
-| --- | --- |
-| 声明策略需要的列和回看长度 | 从 Storage View 读取行情与因子数据 |
-| 定义策略参数及参数约束 | 校验参数、列、数据范围和 Bar 完整性 |
-| 选股、过滤、排名、择时和目标权重 | 调度、超时、重试、幂等和 Python worker 管理 |
-| 计算策略内部状态的下一版本 | 原子保存运行结果和策略状态 |
-| 编写确定性测试 | 多策略聚合、账户资金分配和硬风控 |
-| 解释目标产生原因 | 权重转目标数量、模拟撮合和实盘提交 |
-
-策略代码不得自行访问 Storage、Factor、Trade、交易所 API、网络或本地文件。策略也不得提交订单。
-
-## 策略包
-
-### `strategy.yaml`
-
-`strategy.yaml` 描述策略代码本身，不描述某次回测或某个实盘账户。
+`strategy.yaml`：
 
 ```yaml
 api_version: moox.strategy/v1
-id: momentum_top_n
-name: 动量多因子 Top N
-version: 1.0.0
 entrypoint: strategy.py:run
-description: 按两个因子综合排名，等权持有排名最优的 N 个标的。
-
 input:
-  lookback_bars: 1
-  required_columns:
-    - Bias_20
-    - Cci_96
-
-params_schema:
-  type: object
-  additionalProperties: false
-  properties:
-    top_n:
-      type: integer
-      minimum: 1
-      maximum: 100
-      default: 5
-  required:
-    - top_n
-
-state_schema_version: 1
+  history_bars: 200
 ```
 
-字段规则：
+V1 只接受这三个清单字段：
 
-| 字段 | 规则 |
+| 字段 | 含义 |
 | --- | --- |
-| `api_version` | V1 固定为 `moox.strategy/v1`。 |
-| `id` | 稳定唯一标识，只能使用小写字母、数字和下划线。 |
-| `version` | 使用 SemVer。同一版本的源码和清单不可修改。 |
-| `entrypoint` | 固定格式为 `<文件>:<函数>`。V1 只支持 Python 文件。 |
-| `lookback_bars` | Go 为每个标的准备的最大历史 Bar 数。 |
-| `required_columns` | 除基础键列外，策略运行前必须存在的数据列。 |
-| `params_schema` | Go 在启动 Python 前按 JSON Schema 子集校验参数。 |
-| `state_schema_version` | `next_state` 的结构版本；无状态策略仍填写 `1`。 |
+| `api_version` | 固定为 `moox.strategy/v1` |
+| `entrypoint` | `<文件>:<函数>`，例如 `strategy.py:run` |
+| `input.history_bars` | 每次必须提供的完整、严格有序历史窗口行数，必须大于 0 |
 
-Go 先应用 `params_schema` 中的 `default`，再校验 `required` 和其他约束。因此示例未传 `top_n` 时会得到 `5`；传入非法值仍会被拒绝。
+清单是不可变 Strategy 制品的一部分。源码、清单或输入契约变化时使用新的
+`strategy_id`，不要在原 ID 下修改内容。
 
-以下内容属于 Go 管理的策略部署，不写入策略包：
-
-- `space_id`、`view_id` 和 `freq`
-- 标的范围、交易日历、调度周期和 offset
-- 参数实际值
-- 回测区间或实时触发配置
-- 策略资金预算和多策略分配比例
-- 执行账户、通道、资金倍率、交易模式和执行策略
-- 最大总敞口、净敞口、单标的权重和杠杆限制
-
-同一个策略包可以绑定到多个数据范围和参数组合；同一个策略组合也可以绑定多个执行账户。Python 无需为每个部署或账户复制代码。
-
-### `strategy.py`
-
-`strategy.py` 必须提供以下函数：
+`strategy.py` 只导出三参数入口：
 
 ```python
-def run(
-    context: dict,
-    data: "pandas.DataFrame",
-    params: dict,
-    state: dict,
-) -> dict:
-    ...
+def run(context, data, params):
+    return {
+        "action": "hold",
+        "targets": [],
+        "debug_info": {},
+    }
 ```
 
-V1 运行环境只保证提供 Python 标准库、`pandas` 和 `numpy`。策略不得依赖未声明的本机包。
+入口必须恰好接收 `context`、`data`、`params` 三个位置参数。Strategy 是无状态纯计算：
+不接收上一轮内部状态，也不返回下一轮内部状态。
 
-### Python 如何运行
-
-Strategy 不会把 `strategy.py` 当命令执行，也不会为每个 Bar 启动一次 Python。Go 启动固定数量的常驻 worker，由 worker：
-
-1. 与 Go 完成协议、Python、SDK 和依赖环境版本握手。
-2. 按 `source_hash` 使用唯一模块名加载不可变策略版本。
-3. 收到任务后调用 `run(context, data, params, state)`。
-4. 捕获策略日志，校验并返回结构化结果。
-
-这些进程由 Go 侧共享 Python 运行时管理。其 supervisor、重启、日志、Arrow/mmap 和环境版本约束见 [Python 计算运行时架构设计](Python计算运行时架构设计.md)。策略开发者无需创建进程、处理帧或管理 DataFrame 共享。
-
-`if __name__ == "__main__"` 不会成为线上入口。模块加载后会被重复调用，因此不得在 import 阶段启动线程、访问网络或创建可变业务状态。
-
-框架计划提供可选的 `moox_strategy` SDK，用于构造标准空目标、结构化日志和本地协议校验。SDK 不提供 Storage、Trade、账户或网络客户端；不使用 SDK 也可以直接返回本文规定的字典。
-
-## 输入协议
+## 输入
 
 ### `context`
 
-`context` 是只读运行上下文：
+当前上下文只包含：
 
 ```python
 {
-    "api_version": "moox.strategy/v1",
-    "strategy_id": "momentum_top_n",
-    "strategy_version": "1.0.0",
-    "run_id": "strun_01...",
-    "state_revision": 17,
-    "trigger_bar_time": "2026-07-11T08:00:00Z",
-    "trigger_bar_end": "2026-07-11T09:00:00Z",
-    "run_time": "2026-07-11T09:00:02Z",
-    "data_cutoff": "2026-07-11T09:00:02Z",
-    "data_revision": "view_42:00001873",
-    "freq": "1h",
-    "data_start": "2026-07-11T08:00:00Z",
-    "data_end": "2026-07-11T08:00:00Z",
-    "random_seed": 1734958331,
-    "previous_targets": [
-        {
-            "instrument_id": "binance:spot:BTC-USDT",
-            "symbol": "BTC-USDT",
-            "market_type": "spot",
-            "target_weight": 0.2,
-        }
-    ],
+    "strategy_id": "trend-v1",
+    "runner_id": "runner-paper",
+    "trigger_bar_time": "2026-07-30T08:00:00Z",
 }
 ```
 
-关键语义：
+- `strategy_id`：本次执行的不可变 Strategy ID。
+- `runner_id`：独立配置与调度实例。
+- `trigger_bar_time`：本窗口最后一行的决策时点，使用 RFC3339。
 
-- `trigger_bar_time` 是触发本次决策的 Bar 开始时间，`trigger_bar_end` 是其右开区间结束时间。
-- `run_time` 是本次策略运行允许发生的时间，不早于 `trigger_bar_end`。
-- `data_cutoff` 是输入数据的可见性截止时间，必须满足 `data_cutoff <= run_time`。Go 只传入 `available_at <= data_cutoff` 的数据。
-- `data_revision` 固定本次输入使用的 View、行情和因子版本。
-- `state_revision` 标识本次输入基于哪一版策略状态。过期响应不能覆盖新状态。
-- 同一策略、版本和逻辑调度点重试时，`run_id`、`state_revision` 与 `random_seed` 保持稳定。
-- `context` 不提供 `observe`、`backtest`、`paper` 或 `live` 标识。
-- `context` 不提供账户、交易通道和交易所密钥。
-- `previous_targets` 是该 Binding 上一次已接受的完整理论目标，首次运行或上一目标为空时是空列表；它不是账户实际持仓。
-
-策略不得使用 `datetime.now()`、`time.time()` 或系统时区判断交易时点。需要当前运行时间时，只使用 `context["run_time"]`。
+上下文不包含账户、Secret、交易模式或上一轮目标。需要的计算记忆必须从完整历史窗口
+重建，不能依赖进程内全局变量、系统时钟或文件。
 
 ### `data`
 
-`data` 是按长表组织的 `pandas.DataFrame`。每行唯一对应：
+`data` 是由 Go 传入的 `pandas.DataFrame`。输入 JSON 必须：
 
-```text
-(candle_begin_time, instrument_id)
-```
+- 是非空对象数组。
+- 数组长度恰好等于 `input.history_bars`。
+- 每行包含 RFC3339 字符串字段 `time`。
+- `time` 严格递增。
+- 最后一行 `time` 恰好等于 `trigger_bar_time`，既不能陈旧也不能包含未来行。
 
-Go 保证包含七个基础列：
+worker 会把 `time`、`candle_begin_time`、`candle_end_time`、`available_at` 等已存在的
+时间列转换为 UTC pandas 时间。其他行情、因子和标的字段由 Runner 所配置的 View
+输入决定；策略只读取提供的数据，不自行访问 Storage、Factor、Trade、交易所、网络或
+本地文件。
 
-| 列 | 类型 | 说明 |
-| --- | --- | --- |
-| `candle_begin_time` | `datetime64[ns, UTC]` | Bar 开始时间。 |
-| `candle_end_time` | `datetime64[ns, UTC]` | Bar 右开区间结束时间。 |
-| `available_at` | `datetime64[ns, UTC]` | 该行所有实际提供字段可见时间的最大值。 |
-| `is_final` | `bool` | 是否为已闭合、可用于决策的最终 Bar。V1 只传 `true`。 |
-| `instrument_id` | `string` | MooX 唯一合约身份，包含 venue、市场和必要的到期信息。策略只透传，不自行拼接。 |
-| `symbol` | `string` | MooX 规范化标的，如 `BTC-USDT`。 |
-| `market_type` | `string` | `spot`、`margin`、`swap` 或 `futures`。 |
-
-`required_columns` 声明的行情和因子列会附加在同一张宽表中。Go 按 `candle_begin_time`、`instrument_id` 升序排列数据，但不会填充策略未声明的缺失值。回测使用当时的标的范围、因子版本和数据可见时间，不能用今天的完整数据反推历史决策。
-
-策略可以这样取得当前截面：
+“完整历史窗口”是清单声明并以触发时点结束的完整窗口，不是从市场起点开始的所有历史。
+例如冷却期、连续信号计数和滚动指标，都应由这 200 行重新计算：
 
 ```python
-import pandas as pd
+def run(context, data, params):
+    close = data["close"].astype(float)
+    fast = close.rolling(20).mean()
+    slow = close.rolling(60).mean()
+    signal = fast.iloc[-1] > slow.iloc[-1]
+    recent_crosses = (fast > slow).tail(params["confirm_bars"]).all()
 
-trigger_bar_time = pd.Timestamp(context["trigger_bar_time"])
-latest = data.loc[data["candle_begin_time"] == trigger_bar_time].copy()
+    if not signal or not recent_crosses:
+        return {"action": "hold", "targets": []}
+
+    return {
+        "action": "rebalance",
+        "targets": [{
+            "instrument_id": params["instrument_id"],
+            "quantity": params["quantity"],
+        }],
+    }
 ```
-
-Python 输出的 `instrument_id`、`symbol` 和 `market_type` 必须沿用输入值。交易所代码映射由 Go 和 Trade 完成。
-
-如果策略观察了 `[08:00, 09:00)` 的完整 Bar，最早成交时间必须满足 `execution_time >= run_time + execution_latency`，并且市场当时可交易。任何执行器都不能使用策略已经观察过的 Bar 收盘价，也不能使用策略结果尚未产生时的价格。`execution_latency` 由 Go 部署配置统一管理，不传给 Python。
 
 ### `params`
 
-`params` 是已经通过 `params_schema` 校验的只读字典：
-
-```python
-{"top_n": 5}
-```
-
-策略不得从全局配置、环境变量或文件中补充参数。这样才能保证相同输入产生相同结果。
-
-### `state`
-
-`state` 是上一次已接受策略运行保存的状态。首次运行和无状态策略收到空字典：
-
-```python
-{}
-```
-
-状态适合保存：
-
-- 入场时间等无法从上一目标直接恢复的策略记忆
-- 连续持有 Bar 数
-- 卖出后的冷却计数
-- 移动止损参考价
-- 策略计划的分批权重阶段，只按决策推进，不按成交推进
-- 上一次市场状态或信号状态
-
-状态不适合保存：
-
-- 历史行情或完整 DataFrame
-- 账户真实仓位、余额、订单和成交
-- 可从 `data` 重新计算的大型中间结果
-- 文件路径、连接对象或 Python 自定义对象
-- `previous_targets` 已经提供的完整理论目标副本
-
-`next_state` 必须能被标准 JSON 编码，默认最大为 64 KiB。禁止返回 pickle、DataFrame、NumPy 数值对象或字节串。
-
-`next_state` 是完整状态快照，不是对旧状态的 merge patch。`strategy.yaml` 中的 `state_schema_version` 是唯一状态版本来源；状态对象内不重复保存版本。策略版本或状态版本变化时，Go 必须显式迁移或重置状态，不能静默沿用不兼容状态。
-
-## 输出协议
-
-`run` 必须返回一个字典：
+`params` 是 StrategyRunner 保存的 JSON 参数。策略应把它视为只读值：
 
 ```python
 {
-    "action": "rebalance",
-    "targets": targets_df,
-    "next_state": next_state,
-    "debug_info": {
-        "message": "selected top 5",
-        "metrics": {"candidate_count": 182},
-    },
+    "instrument_id": "BTC-USDT-SPOT",
+    "quantity": "0.1",
+    "confirm_bars": 3,
 }
 ```
 
-必填字段是 `action`、`targets` 和 `next_state`。`debug_info` 可省略。
+不要从环境变量、全局配置或文件补齐业务参数，否则相同输入无法复现。
+
+## 输出
+
+输出只能包含：
+
+```python
+{
+    "action": "hold | rebalance",
+    "targets": [
+        {
+            "instrument_id": "BTC-USDT-SPOT",
+            "quantity": "0.1",
+        }
+    ],
+    "debug_info": {},
+}
+```
+
+未知字段会被拒绝。
 
 ### `action`
 
-V1 支持两种决策：
+- `hold`：保留 Runner 的 `current_targets`，不增加 `command_sequence`，不向 Trade 发
+  事件。此时 `targets` 不参与更新，建议返回空列表。
+- `rebalance`：用本次 `targets` 完整替换 Runner 的理论目标。执行型 Runner 增加
+  sequence，并在同一事务写入 `LogicalAccountTargetRequested` outbox；观察型 Runner
+  只保存理论结果。
 
-| 值 | 含义 |
-| --- | --- |
-| `rebalance` | `targets` 是新的完整目标组合。 |
-| `hold` | 不生成新目标，继续保持上一次已接受的目标组合。 |
+### `targets`
 
-这两个值解决“空结果”歧义：
+`targets` 是 FULL 快照，不是 patch：
 
-- `action="hold"` 且空 `targets`：保持原目标，不产生新的调仓操作。
-- `action="rebalance"` 且空 `targets`：完整目标为空，全部平仓。
-- `action="rebalance"` 且有 `targets`：未出现的旧标的目标权重变为 `0`。
+- 每个 `instrument_id` 只能出现一次。
+- `quantity` 必须是最多 256 字符的规范十进制字符串，例如 `"0"`、`"0.25"`、`"-2"`。
+- `quantity` 是带符号绝对目标持仓量，不是订单量、变化量或权重。
+- 遗漏旧标的表示其目标归零。
+- `rebalance` 配合空 `targets` 表示全部目标归零。
+- SPOT 不允许负目标；SWAP 的正负号表示方向。
 
-`hold` 时 `targets` 必须是空数组。策略不得返回 `None` 表示无操作。
-
-`hold` 不是停止执行。如果账户尚未到达上一次目标，Go 仍会让执行层继续向该目标收敛。首次运行尚无旧目标时，`hold` 等价于继续空仓。
-
-### `TargetWeights`
-
-`targets` 是完整的策略级目标组合 JSON 数组（策略内部可以先用 DataFrame 计算，再用 `to_dict("records")` 转成该数组）：
-
-| 列 | 必填 | 说明 |
-| --- | --- | --- |
-| `instrument_id` | 是 | 输入中的 MooX 唯一合约身份。 |
-| `symbol` | 否 | 可选审计字段；执行端以 `instrument_id` 为唯一身份。 |
-| `market_type` | 否 | 可选审计字段；真实交易市场由 Go 绑定和 Trade 校验。 |
-| `target_weight` | 是 | 相对于该策略资金预算的有符号目标权重。 |
-| `score` | 否 | 策略排名或评分，仅用于审计。 |
-| `reason` | 否 | 简短的人类可读原因，仅用于审计。 |
-
-权重规则：
-
-- `1.0` 表示使用该策略全部资金预算做多，不表示使用账户全部资金。
-- `-0.2` 表示使用该策略资金预算的 20% 做空。
-- `0 < sum(abs(target_weight)) < 1` 表示保留部分现金。
-- Go 不会自动把权重归一化，因为自动归一化会改变策略意图。
-- `spot` 的 `target_weight` 不能为负。
-- V1 使用净仓模式，同一 `instrument_id` 只能出现一次。
-- 所有权重必须是有限数；不允许 `NaN`、正负无穷或重复标的。
-- 零权重行应省略。需要全平时返回空目标组合。
-- 行顺序不影响组合语义；Go 会按 `instrument_id` 规范化排序后计算结果 hash。
-
-Go 会在接受结果前检查 `instrument_id`、权重格式、单标的权重、总敞口和净敞口。`symbol`/`market_type` 作为后续 Trade 归因扩展字段，不参与当前 V1 的身份解析；任何一项已实现的约束不合法都会使本次运行按失败处理，不会截断或偷偷修正权重。
-
-### `next_state`
-
-`next_state` 是当前 Bar 计算完成后的策略状态。Go 在下一次调用时将它作为 `state` 传回 Python。
-
-```python
-next_state = {
-    "holding_meta": {
-        "binance:spot:BTC-USDT": {
-            "entry_time": context["run_time"],
-            "hold_bars": 1,
-        }
-    },
-    "cooldowns": {},
-}
-```
-
-无状态策略也必须显式返回：
-
-```python
-"next_state": {}
-```
-
-`hold` 也可以返回更新后的完整状态，例如推进冷却计数；它只是保持目标组合，不是禁止策略状态变化。
-
-状态提交规则：
-
-1. Python 成功返回后，Go 先校验 `action`、`targets` 和 `next_state`。
-2. `rebalance` 在一个本地事务中保存运行结果、新的完整目标、`next_state` 和执行 Outbox。
-3. `hold` 只保存运行结果和 `next_state`，继续引用上一个目标，不创建新的执行 Outbox。
-4. 执行失败不会回滚策略状态；Go 使用已保存目标继续恢复执行，不会再次调用 Python 推进同一 Bar。
-5. Python 不得在 `next_state` 中假设订单已经成交。
-
-这套顺序把“策略已经做出什么决定”和“账户是否已经到达目标”分开。Trade 负责后者的收敛与对账。
+Strategy 不选择物理账户或交易所原生 symbol。Trade 将一个逻辑总目标动态分配到
+LogicalAccount 的同质成员账户。
 
 ### `debug_info`
 
-`debug_info` 是可选调试信息，只用于日志、排查和回测报告。它必须能被 JSON 编码，不能参与 Go 的执行决策。
+`debug_info` 可选，必须是可 JSON 序列化的对象，编码后最多 16 KiB。它用于解释策略
+结果，不参与下一次输入和交易决策。
 
-```python
-"debug_info": {
-    "message": "not enough candidates",
-    "metrics": {
-        "input_rows": 12000,
-        "candidate_count": 3,
-    },
-}
+## 运行与持久化
+
+Go 使用常驻 Python worker：
+
+1. 按 Strategy `source_hash` 加载不可变源码。
+2. 校验历史窗口和三参数入口。
+3. 把输入转换为 DataFrame 并调用 `run(context, data, params)`。
+4. 严格校验输出。
+5. 计算 `input_hash` 并提交 StrategyResult。
+
+`input_hash` 来自 Strategy 身份、namespace、完整输入、参数和触发上下文；不依赖随机
+结果 ID 或运行时间。`(runner_id, strategy_id, namespace, trigger_bar_time)` 是逻辑
+触发幂等键：相同键、相同输入重复提交稳定返回已有结果；相同键但不同输入是冲突。
+
+只有校验并接受成功的运行写入 `t_strategy_results`。失败只更新 Runner 的
+`last_error` 和运行日志。一次成功提交会原子更新：
+
+- StrategyResult。
+- Runner 的 `last_result_id`、`last_success_at` 和当前理论目标。
+- 执行型 rebalance 对应的一条 outbox 消息。
+
+## FULL 与逻辑账户
+
+执行型 StrategyRunner 关联一个 `logical_account_id`。启用前，Strategy 与 Trade 会校验
+Runner ID 和 LogicalAccount owner 双向一致。一个 LogicalAccount 最多由一个 Runner
+控制，但它可以包含多个不同交易所的同质物理账户。
+
+Trade 接收：
+
+```text
+LogicalAccountTargetRequested
+  target_id = result_id
+  runner_id
+  logical_account_id
+  command_sequence
+  targets[] InstrumentTarget(instrument_id, quantity)
 ```
 
-不要把大表、逐 Bar 序列或敏感信息放进 `debug_info`。
+LogicalAccount PAUSED 时，新结果仍保存为当前目标，但不会自动下单。人工 Resume 后会
+向最新目标收敛；人工逐账户清仓不删除目标，因此 Resume 可能重新开仓。
 
-## 完整最小示例
+## 本地校验
 
-下面的策略按两个因子排名，等权持有综合排名最优的 N 个现货标的。
-
-```python
-import pandas as pd
-
-
-TARGET_COLUMNS = [
-    "instrument_id",
-    "symbol",
-    "market_type",
-    "target_weight",
-    "score",
-    "reason",
-]
-
-
-def empty_targets():
-    return []
-
-
-def run(context, data, params, state):
-    trigger_bar_time = pd.Timestamp(context["trigger_bar_time"])
-    top_n = int(params["top_n"])
-
-    latest = data.loc[data["candle_begin_time"] == trigger_bar_time].copy()
-    latest = latest.loc[latest["market_type"] == "spot"]
-    latest = latest.dropna(subset=["Bias_20", "Cci_96"])
-
-    if len(latest) < top_n:
-        return {
-            "action": "hold",
-            "targets": empty_targets(),
-            "next_state": state,
-            "debug_info": {
-                "message": "not enough candidates",
-                "metrics": {"candidate_count": len(latest)},
-            },
-        }
-
-    latest["score"] = (
-        latest["Bias_20"].rank(ascending=False, method="min")
-        + latest["Cci_96"].rank(ascending=False, method="min")
-    )
-    selected = latest.sort_values(
-        ["score", "instrument_id"],
-        kind="mergesort",
-    ).head(top_n).copy()
-    selected["target_weight"] = 1.0 / len(selected)
-    selected["reason"] = "multi_factor_top_n"
-
-    targets = selected[TARGET_COLUMNS].reset_index(drop=True)
-    return {
-        "action": "rebalance",
-        "targets": targets.to_dict("records"),
-        "next_state": {},
-        "debug_info": {
-            "message": f"selected top {top_n}",
-            "metrics": {"candidate_count": len(latest)},
-        },
-    }
-```
-
-这个策略不读取账户资产，不计算下单数量，也不知道自己运行在回测还是实盘环境中。
-
-## 有状态策略示例
-
-entry/exit、最长持仓期和冷却期属于策略规则，可以使用 `state`。下面只展示状态更新方式：
-
-```python
-def run(context, data, params, state):
-    previous_targets = {
-        row["instrument_id"]: row
-        for row in context["previous_targets"]
-    }
-    holding_meta = dict(state.get("holding_meta", {}))
-    cooldowns = dict(state.get("cooldowns", {}))
-
-    # 根据当前闭合 Bar、上一理论目标和旧状态更新目标与 holding_meta/cooldowns。
-    # 省略具体选股规则。
-
-    targets = build_target_weights(previous_targets, holding_meta, cooldowns, data)
-    return {
-        "action": "rebalance",
-        "targets": targets,
-        "next_state": {
-            "holding_meta": holding_meta,
-            "cooldowns": cooldowns,
-            "last_processed_bar": context["trigger_bar_time"],
-        },
-    }
-```
-
-策略状态描述策略自己的选择过程。账户实际持仓仍由 Trade 管理。
-
-## 回测与实时运行
-
-策略开发者面对一套协议：
-
-| 环节 | 历史回测 | 实时运行 |
-| --- | --- | --- |
-| 时间推进 | Go 按历史闭合 Bar 顺序回放 | Go 消费闭合 Bar/因子完成事件 |
-| 输入准备 | Go 查询截至 `data_cutoff` 当时可见的历史窗口 | Go 查询截至 `data_cutoff` 的同口径窗口 |
-| Python 调用 | 同一个 `strategy.py:run` | 同一个 `strategy.py:run` |
-| 状态推进 | 每个 Bar 保存隔离的回测状态 | 每个 Bar 保存绑定实例状态 |
-| 策略输出 | 同一个完整 `TargetWeights` | 同一个完整 `TargetWeights` |
-| 最后执行 | `BacktestExecution` 模拟成交 | `PaperExecution` 或 `LiveTradeExecution` |
-
-给定相同的 `context`、`data`、`params` 和 `state`，Python 必须返回相同结果。运行模式只能改变 Go 的最后执行端口，不能改变策略计算。
-
-## 确定性要求
-
-Python worker 是常驻进程，同一模块可能被多次调用。策略必须满足：
-
-- 不使用可变模块级全局变量保存状态。
-- 不读取系统时间、环境变量、网络或本地文件。
-- 不依赖偶然索引或输入顺序；排名并列时必须使用唯一的 `instrument_id` 打破平局。
-- 不修改传入的 `data`；需要增加列时先调用 `copy()`。
-- 不使用无种子的随机数。需要随机行为时使用 `context["random_seed"]`。
-- 不根据 `run_id` 或其他偶然标识偷偷分支。
-- 相同输入可以安全重试。
-- 不依赖 import 次数、调用次数或其他 Binding 留在 worker 中的对象。
-
-Go 会让每个 worker 同时只执行一个任务，通过多个 worker 提供并行度。worker 会按任务数、内存阈值和异常状态定期轮换；策略不能把 worker 生命周期当成业务生命周期。
-
-Go 会设置执行超时和响应大小限制。超时、进程退出或协议错误都会使本次运行失败，不产生执行意图。
-
-## 失败与重试
-
-| 情况 | 框架行为 |
-| --- | --- |
-| Python 抛出异常 | 记录失败运行；不保存新目标和状态；不提交交易。 |
-| 返回字段缺失或类型错误 | 视为协议错误，本次运行按失败处理。 |
-| 权重、标的或敞口校验失败 | 记录校验原因；不自动修正；不提交交易。 |
-| worker 超时或崩溃 | 重启 worker，使用同一输入和幂等键重试。 |
-| 同一 Bar 事件重复 | 返回已经保存的运行结果，不再次推进状态。 |
-| 旧 `state_revision` 的响应晚到 | 丢弃响应，不能覆盖新状态。 |
-| 同一 Bar 的数据晚到或修订 | 记录新 revision，但不自动改写已接受决策；显式回放使用新的运行命名空间。 |
-| Trade 提交失败 | 保留已接受目标，执行层按同一意图恢复，不重新运行策略。 |
-
-策略希望暂时不动时返回 `hold`。无法安全计算时应抛出异常或返回 `hold`，不要猜测数据，也不要返回部分目标。
-
-V1 每个策略绑定在一个逻辑调度点只接受一次决策。晚到数据和历史修订不会自动触发实盘重算；显式回测或补算必须固定新的 `data_revision`，并按当时可见的 revision 序列重放，不能覆盖原实盘决策。
-
-## 测试要求
-
-至少覆盖以下情况：
-
-1. 正常数据产生预期的完整目标组合。
-2. 数据不足时返回明确的 `hold` 或失败，不会意外清仓。
-3. 空 `rebalance` 明确表示全平。
-4. 相同输入重复运行得到相同输出。
-5. `next_state` 能被 JSON 编码，并在下一次运行中正确恢复。
-6. 缺失因子、`NaN`、重复标的和极端参数得到明确结果。
-7. 输出不包含未来 Bar 或账户执行状态。
-8. `previous_targets` 为空、有旧目标和全平后为空时均得到正确结果。
-9. 在同一 warm worker 中穿插其他输入后重复运行，输出仍保持一致。
-
-内置策略合入仓库时必须包含测试。通过管理面上传的个人策略至少要通过框架的清单校验和确定性冒烟测试。
-
-## 计划提供的本地工具
-
-Strategy 首版当前提供 `validate` 和 `run-once`；`backtest`、`inspect-run`、`inspect-execution` 等管理命令属于后续管理面扩展。
+校验策略包：
 
 ```bash
-# 校验清单、入口函数、参数 schema 和依赖列
-go run ./cmd/cli validate \
-  --strategy-dir ./strategies/momentum_top_n
-
-# 使用 Storage View 在指定决策时间执行一次，但不提交交易
-go run ./cmd/cli run-once \
-  --strategy-dir ./strategies/momentum_top_n \
-  --space crypto \
-  --view binance_spot_factor_view \
-  --freq 1h \
-  --trigger-bar-time 2026-07-11T08:00:00Z \
-  --run-time 2026-07-11T09:00:02Z \
-  --params '{"top_n":5}'
-
-# 将通过校验的策略包登记到本地 Strategy 仓库
-go run ./cmd/cli import \
-  --strategy-dir ./strategies/momentum_top_n
+go run ./modules/strategy/cmd/cli strategy validate \
+  modules/strategy/strategies/example/strategy.yaml \
+  modules/strategy/strategies/example/strategy.py
 ```
 
-`run-once` 只打印标准化输入摘要、目标组合、状态和诊断信息，不调用 Trade。
+使用完整历史 JSON 执行一次：
 
-## 上线前检查清单
+```bash
+go run ./modules/strategy/cmd/cli strategy run-once \
+  --data '[{"time":"2026-07-30T08:00:00Z","close":"118000"}]' \
+  modules/strategy/strategies/example/strategy.yaml \
+  modules/strategy/strategies/example/strategy.py
+```
 
-- [ ] `strategy.yaml` 使用稳定 `id` 和新的 SemVer 版本。
-- [ ] `required_columns` 包含 Python 实际读取的所有行情与因子列。
-- [ ] `lookback_bars` 足以覆盖最长滚动窗口。
-- [ ] Python 只实现 `run(context, data, params, state)`。
-- [ ] `rebalance` 返回完整目标，不是相对增量。
-- [ ] `hold` 与空组合全平的语义经过测试。
-- [ ] 权重按策略资金预算表达，未依赖账户权益。
-- [ ] `next_state` 小于限制且可被标准 JSON 编码。
-- [ ] 可从 `context["previous_targets"]` 读取上一版理论目标，没有在 state 中复制目标组合。
-- [ ] 策略不访问时间、网络、文件、交易所或账户。
-- [ ] 策略没有可变模块级全局变量、后台线程或 import 副作用。
-- [ ] 相同输入重复执行得到相同目标和状态。
-- [ ] 回测、模拟和实盘使用同一策略版本与参数。
+`--trigger` 默认取历史窗口最后一行的 `time`。
 
-## 一句话边界
+测试：
 
-策略 Python 负责回答“这一刻想持有什么”；Go 和 Trade 负责回答“数据是否可用、决定如何保存、账户如何到达目标，以及失败后如何恢复”。
+```bash
+(cd modules/strategy && go test -count=1 ./...)
+(cd modules/strategy && python3 -m unittest discover -s pyworker)
+```
+
+## 上线检查
+
+- 清单只有 V1 支持字段，`history_bars` 与实际窗口完全一致。
+- 入口恰好三个参数，不使用隐藏可变状态。
+- 输入时间严格递增，最后一行等于触发时点。
+- 输出只有 `action`、`targets`、`debug_info`。
+- 数量使用规范十进制字符串，目标标的唯一。
+- 明确验证 `hold`、普通 FULL、遗漏标的归零和空 FULL 清仓。
+- StrategyRunner 与 LogicalAccount owner 已双向关联。
+- 在 TESTNET 验证暂停、Resume 和逐账户清仓后再启用 live。
