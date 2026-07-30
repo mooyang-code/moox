@@ -38,12 +38,3 @@ func canonicalDefaultZero(raw string, label string, sign decimalSign) (string, e
 	}
 	return canonicalDecimal(raw, label, sign)
 }
-
-func canonicalFiniteDecimal(value shared.Decimal, label string) (string, error) {
-	raw := value.String()
-	roundTrip, err := shared.ParseDecimal(raw)
-	if err != nil || roundTrip.Cmp(value) != 0 {
-		return "", fmt.Errorf("%w: non-finite %s", ErrInvalidRecord, label)
-	}
-	return raw, nil
-}

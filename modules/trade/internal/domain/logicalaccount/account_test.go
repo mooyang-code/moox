@@ -42,10 +42,3 @@ func TestLogicalAccountAutomationStateAndReasonMustAgree(t *testing.T) {
 	active.PauseReason = ""
 	require.NoError(t, active.Validate())
 }
-
-func TestLogicalAccountMembershipRequiresPause(t *testing.T) {
-	account := Account{AutomationState: AutomationActive}
-	require.ErrorIs(t, account.RequirePaused(), ErrMembershipChange)
-	account.AutomationState = AutomationPaused
-	require.NoError(t, account.RequirePaused())
-}

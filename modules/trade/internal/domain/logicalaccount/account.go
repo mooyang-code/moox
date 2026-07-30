@@ -85,17 +85,6 @@ func (a Account) Validate() error {
 	return nil
 }
 
-func (a Account) OwnsRunner(runnerID string) bool {
-	return !blank(runnerID) && a.OwnerRunnerID == runnerID
-}
-
-func (a Account) RequirePaused() error {
-	if a.AutomationState != AutomationPaused {
-		return ErrMembershipChange
-	}
-	return nil
-}
-
 func (m Member) Validate() error {
 	if blank(m.SpaceID) || blank(m.LogicalAccountID) ||
 		blank(m.ExchangeAccountID) {

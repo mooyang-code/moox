@@ -711,11 +711,6 @@ func flattenStatus(accounts []FlattenAccountResult, executable int) string {
 	return string(operatordomain.StatusCompleted)
 }
 
-func flattenClientOrderID(actionID, accountID, symbol string) string {
-	sum := sha256.Sum256([]byte(actionID + "\x00" + accountID + "\x00" + symbol))
-	return "mf" + hex.EncodeToString(sum[:15])
-}
-
 func flattenClientOrderIDForSpec(
 	actionID string,
 	accountID string,

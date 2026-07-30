@@ -200,8 +200,14 @@ func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "existing-child",
 		ExchangeAccountID: "account-a",
-		ClientOrderID:     flattenClientOrderID("flatten-1", "account-a", "BTCUSDT"),
-		Symbol:            "BTCUSDT", OrderType: "MARKET", Side: "SELL",
+		ClientOrderID: flattenClientOrderIDForSpec(
+			"flatten-1",
+			"account-a",
+			"BTCUSDT",
+			exchange.SideSell,
+			shared.MustDecimal("2"),
+		),
+		Symbol: "BTCUSDT", OrderType: "MARKET", Side: "SELL",
 		PositionSide: "NET", Quantity: "2", ReferencePrice: "100",
 		ReferencePriceAt: fixture.now.UnixMilli(), ReduceOnly: true,
 		OwnerType: "OPERATOR", OwnerID: "flatten-1",
