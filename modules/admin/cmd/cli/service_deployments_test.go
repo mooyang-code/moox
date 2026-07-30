@@ -14,7 +14,7 @@ import (
 )
 
 func TestLoadServiceDeploymentSeed_Example(t *testing.T) {
-	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, 1, seed.Version)
 	require.Equal(t, "control", seed.Node.ID)
@@ -29,7 +29,7 @@ func TestLoadServiceDeploymentSeed_Example(t *testing.T) {
 }
 
 func TestLoadServiceDeploymentSeed_MatchesDefaultDeploymentContract(t *testing.T) {
-	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
 	require.NoError(t, err)
 	configured := make(map[string]serviceDeploymentEntry, len(seed.Services))
 	for _, item := range seed.Services {
@@ -62,7 +62,7 @@ func TestLoadServiceDeploymentSeed_MatchesDefaultDeploymentContract(t *testing.T
 func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "admin.db")
-	seedPath := filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml")
+	seedPath := filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml")
 	var first, second bytes.Buffer
 	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--public-host", "127.0.0.1", "--eventbus-nats-url", "tls://127.0.0.1:4222"}, &first, &bytes.Buffer{}))
 	require.NoError(t, runServiceDeploymentsCommand([]string{"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--public-host", "127.0.0.1", "--eventbus-nats-url", "tls://127.0.0.1:4222"}, &second, &bytes.Buffer{}))
@@ -146,7 +146,7 @@ func TestValidateServiceDeploymentSeed_RejectsDuplicateAndInvalidGateway(t *test
 }
 
 func TestEnableOptionalStorageShardReplacesEmbeddedRoute(t *testing.T) {
-	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, enableOptionalStorageShard(&seed))
 	require.Len(t, seed.Services, 26)
@@ -175,7 +175,7 @@ func TestEnableOptionalStorageShardReplacesEmbeddedRoute(t *testing.T) {
 }
 
 func TestServiceDeploymentSeedExposesStorageSpaceCleanup(t *testing.T) {
-	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
 	require.NoError(t, err)
 	for _, item := range seed.Services {
 		if item.Name != "storage-primary" {
@@ -200,7 +200,7 @@ func TestServiceDeploymentSeedExposesStorageSpaceCleanup(t *testing.T) {
 }
 
 func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
-	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
 	require.NoError(t, err)
 	for _, item := range seed.Services {
 		if item.Name != "moox_factor" {
@@ -217,7 +217,7 @@ func TestServiceDeploymentSeedRestrictsFactorGatewayCallers(t *testing.T) {
 }
 
 func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
-	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, disableOptionalStorageShard(&seed))
 	require.Len(t, seed.Services, 26)
@@ -228,7 +228,7 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 }
 
 func TestDisableSeedServicesUsesDeploymentProfile(t *testing.T) {
-	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml"))
+	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, disableSeedServices(&seed, "moox_archive, moox_factor,moox_strategy"))
 	statuses := map[string]string{}
@@ -245,7 +245,7 @@ func TestDisableSeedServicesUsesDeploymentProfile(t *testing.T) {
 func TestImportWithOptionalStorageShardCompilesOnlyIndependentDataShardRoute(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "admin.db")
-	seedPath := filepath.Join("..", "..", "..", "..", "examples", "service-deployments.seed.yaml")
+	seedPath := filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml")
 	var output bytes.Buffer
 	require.NoError(t, runServiceDeploymentsCommand([]string{
 		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath, "--node-id", "gateway-node-1", "--public-host", "127.0.0.1", "--eventbus-nats-url", "tls://127.0.0.1:4222", "--with-storage-shard",

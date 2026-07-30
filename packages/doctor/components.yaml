@@ -118,7 +118,7 @@ components:
     health_path: /readyz
     config_paths: [collector/config/app.yaml, collector/config/trpc_go.yaml]
     writable_paths: [data/collector]
-    recovery_action_ids: [inspect_pipeline_input, restart_service_manually]
+    recovery_action_ids: [inspect_health_check_input, restart_service_manually]
     required_in_default_profile: true
   - component_id: moox_cloudnode
     service_name: moox_cloudnode
@@ -163,7 +163,7 @@ components:
     health_path: /readyz
     config_paths: [strategy/config/app.yaml, strategy/config/trpc_go.yaml]
     writable_paths: [data/strategy]
-    recovery_action_ids: [inspect_pipeline_input, restart_service_manually]
+    recovery_action_ids: [inspect_health_check_input, restart_service_manually]
     required_in_default_profile: true
   - component_id: moox_trade
     service_name: moox_trade

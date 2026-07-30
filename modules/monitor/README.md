@@ -71,7 +71,7 @@ Admin 只作为控制面和 SysDeploy 注册中心。Monitor 会有界分页读�
 /api/admin/moox_monitor/GetDoctorContext
 ```
 
-`GetDoctorContext` 只聚合 Manifest、SysDeploy、最新检查、Reporter/功能指标、主机资源和告警事实，组件最多 64 个、pipeline 最多 32 个、响应最多 2 MiB。它不抓取 `/metrics`、不运行 Doctor Engine，也不执行恢复动作。Monitor V1 只能部署一个实例，不包含 Peer、Owner 或 Lease。
+`GetDoctorContext` 只聚合 Manifest、SysDeploy、最新检查、Reporter/功能指标、主机资源和告警事实，组件最多 64 个、模块健康检查最多 32 个、响应最多 2 MiB。它不抓取 `/metrics`、不运行 Doctor Engine，也不执行恢复动作。Monitor V1 只能部署一个实例，不包含 Peer、Owner 或 Lease。
 
 SysDeploy 同步可手动触发 `SyncSystemChecks`；同步后的内置检查使用 `source=sysdeploy` 和 `group_name=moox-system`。
 

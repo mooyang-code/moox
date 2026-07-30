@@ -19,24 +19,24 @@ func TestRecordIngestUpdatesBoundedTelemetry(t *testing.T) {
 	}
 }
 
-func TestEvaluatePipelineSignalsTruthTable(t *testing.T) {
+func TestEvaluateModuleHealthTruthTable(t *testing.T) {
 	now := time.Unix(1000, 0)
-	base := report.PipelineSignals{EnabledWorkloads: 1, PreviousInputWatermark: now.Add(-3 * time.Minute), InputWatermark: now.Add(-time.Minute), OutputWatermark: now.Add(-90 * time.Second), LagTolerance: 2 * time.Minute}
+	base := report.ModuleHealthSignals{EnabledWorkloads: 1, PreviousInputWatermark: now.Add(-3 * time.Minute), InputWatermark: now.Add(-time.Minute), OutputWatermark: now.Add(-90 * time.Second), MaxLag: 2 * time.Minute}
 	cases := []struct {
 		name, want string
-		mutate     func(*report.PipelineSignals)
+		mutate     func(*report.ModuleHealthSignals)
 	}{
-		{name: "no workload", want: "SKIPPED", mutate: func(s *report.PipelineSignals) { s.EnabledWorkloads = 0 }},
-		{name: "input idle", want: "PASS", mutate: func(s *report.PipelineSignals) { s.InputWatermark = s.PreviousInputWatermark }},
-		{name: "output stalled", want: "FAIL", mutate: func(s *report.PipelineSignals) { s.OutputWatermark = now.Add(-10 * time.Minute) }},
-		{name: "legal empty", want: "PASS", mutate: func(s *report.PipelineSignals) { s.LegalEmptyOutput = true }},
-		{name: "storage deferred", want: "SKIPPED", mutate: func(s *report.PipelineSignals) { s.CrossesStorageDeferred = true }},
+		{name: "no workload", want: "SKIPPED", mutate: func(s *report.ModuleHealthSignals) { s.EnabledWorkloads = 0 }},
+		{name: "input idle", want: "PASS", mutate: func(s *report.ModuleHealthSignals) { s.InputWatermark = s.PreviousInputWatermark }},
+		{name: "output stalled", want: "FAIL", mutate: func(s *report.ModuleHealthSignals) { s.OutputWatermark = now.Add(-10 * time.Minute) }},
+		{name: "legal empty", want: "PASS", mutate: func(s *report.ModuleHealthSignals) { s.LegalEmptyOutput = true }},
+		{name: "storage deferred", want: "SKIPPED", mutate: func(s *report.ModuleHealthSignals) { s.ObservabilityDeferred = true }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			signals := base
 			tc.mutate(&signals)
-			got := report.EvaluatePipelineSignals(signals, now)
+			got := report.EvaluateModuleHealth(signals, now)
 			if got.Status != tc.want {
 				t.Fatalf("verdict = %+v, want %s", got, tc.want)
 			}

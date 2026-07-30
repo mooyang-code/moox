@@ -488,7 +488,7 @@ message DoctorObservation {
 message DoctorWatermark {
   string module = 1;
   string stage = 2;
-  string pipeline = 3;
+  string health_check_id = 3;
   string observed_at = 4;
   double value = 5;
   string status = 6;
@@ -506,7 +506,7 @@ message DoctorDiskForecast {
 message GetDoctorContextReq {
   string node_id = 1;
   repeated string component_ids = 2;
-  repeated string pipeline_ids = 3;
+  repeated string health_check_ids = 3;
 }
 message GetDoctorContextRsp {
   common.RetInfo ret_info = 1;

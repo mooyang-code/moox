@@ -1,4 +1,4 @@
-# MooX service deployment seed. Hosts are loopback defaults for a single-node install.
+# MooX default service deployment seed. Hosts are loopback defaults for a single-node install.
 # Replace public_address and the public service hosts before importing a multi-host setup.
 version: 1
 node:

@@ -7,9 +7,6 @@ realtime_timeseries:
     minimum_watermark_lag: 10m
   overrides:
     - space_id: crypto
-      dataset_id: market_kline
-      freq: 1m
-      canary_subject_id: BTC-USDT
+      dataset_id: spot_kline_1h
+      freq: 1H
       watermark_lag: 5m
-      market_price_change_ratio: 0.05
-      market_volume_ratio: 5

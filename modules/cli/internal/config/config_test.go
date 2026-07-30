@@ -55,5 +55,6 @@ func TestEffectiveDoctorUsesEnvironmentOverrides(t *testing.T) {
 	got := (&Config{}).EffectiveDoctor()
 	assert.Equal(t, "node-a", got.NodeID)
 	assert.Equal(t, "ip://monitor:11410", got.MonitorTarget)
-	assert.Equal(t, "examples/service-deployments.seed.yaml", got.SeedPath)
+	assert.Equal(t, "examples/setup/default/service-deployments.yaml", got.SeedPath)
+	assert.Equal(t, "config/dataset-health-policy.yaml", got.DatasetHealthPolicyPath)
 }

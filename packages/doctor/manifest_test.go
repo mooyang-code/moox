@@ -32,7 +32,7 @@ func TestEmbeddedManifestMatchesDefaultSeed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile("../../examples/service-deployments.seed.yaml")
+	data, err := os.ReadFile("../../examples/setup/default/service-deployments.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

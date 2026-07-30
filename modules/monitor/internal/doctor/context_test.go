@@ -36,7 +36,7 @@ func TestBuilderHealthUsesPerComponentFreshnessAndConsecutiveFailures(t *testing
 	for i := 0; i < 3; i++ {
 		require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: time.Now().Add(time.Duration(i) * time.Nanosecond).String(), CheckID: "sysdeploy:node-a:moox_monitor", Status: domain.CheckStatusDegraded, Success: false, BodyExcerpt: `{"service":"moox_monitor","instance_id":"moox_monitor@node-a","node_id":"node-a","boot_id":"boot-a"}`, CheckedAt: now.Add(-time.Duration(i+3) * time.Minute)}))
 	}
-	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ServiceDeployment{{ServiceName: "moox_monitor", NodeId: "node-a", Status: "active"}}}, Checks: repos.Checks, Results: repos.Results, Pipelines: report.PipelineConfig{Version: 1}, Now: func() time.Time { return now }}
+	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ServiceDeployment{{ServiceName: "moox_monitor", NodeId: "node-a", Status: "active"}}}, Checks: repos.Checks, Results: repos.Results, HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return now }}
 	got, err := builder.Build(context.Background(), "node-a", []string{"moox_monitor"}, nil)
 	require.NoError(t, err)
 	require.Len(t, got.HealthObservations, 1)
@@ -55,8 +55,8 @@ func TestBuilderMarksDisabledAsNotExpectedAndStorageDeferred(t *testing.T) {
 			{ServiceName: "moox_factor", NodeId: "node-a", Status: "disabled"},
 			{ServiceName: "storage-primary", NodeId: "node-a", Status: "active"},
 		}},
-		Pipelines: report.PipelineConfig{Version: 1, Pipelines: []report.Pipeline{{ID: "factor-calculation", Module: "factor", SpaceID: "default", InputDataset: "bars", OutputDataset: "factors", LagTolerance: time.Minute, Enabled: true}}},
-		Now:       func() time.Time { return time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC) },
+		HealthChecks: []report.ModuleHealthCheck{{ID: "factor-calculation", Module: "factor", MaxLag: time.Minute, Enabled: true}},
+		Now:          func() time.Time { return time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC) },
 	}
 	got, err := builder.Build(context.Background(), "node-a", []string{"moox_factor", "storage_primary"}, []string{"factor-calculation"})
 	require.NoError(t, err)
@@ -92,11 +92,11 @@ func TestBuilderDoesNotRequireReporterIdentityForNotApplicableComponent(t *testi
 }
 
 func TestBuilderRejectsUnknownSelections(t *testing.T) {
-	builder := Builder{Deployments: deploymentSourceStub{}, Pipelines: report.PipelineConfig{Version: 1}}
+	builder := Builder{Deployments: deploymentSourceStub{}, HealthChecks: report.BuiltInModuleHealthChecks()}
 	_, err := builder.Build(context.Background(), "", []string{"not-a-component"}, nil)
 	require.ErrorContains(t, err, "unknown component_id")
-	_, err = builder.Build(context.Background(), "", nil, []string{"not-a-pipeline"})
-	require.ErrorContains(t, err, "unknown pipeline_id")
+	_, err = builder.Build(context.Background(), "", nil, []string{"not-a-health-check"})
+	require.ErrorContains(t, err, "unknown health_check_id")
 }
 
 func TestBuilderReadsCanonicalModuleMetricNames(t *testing.T) {
@@ -109,7 +109,7 @@ func TestBuilderReadsCanonicalModuleMetricNames(t *testing.T) {
 		return monmetrics.NewMetricMessageStore(db)
 	})
 	require.NoError(t, err)
-	labels := `{"pipeline":"monitor-metrics","stage":"ingest"}`
+	labels := `{"health_check":"monitor-metrics","stage":"ingest"}`
 	samples := []monmetrics.Sample{
 		{SeriesID: "success", ServiceName: "moox_monitor", InstanceID: "moox_monitor@node-a", MetricName: report.ModuleMetricName("monitor", report.ModuleMetricLastSuccess), MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Unix()), ObservedAt: now, Interval: 30 * time.Second, MessageID: "message"},
 		{SeriesID: "input", ServiceName: "moox_monitor", InstanceID: "moox_monitor@node-a", MetricName: report.ModuleMetricName("monitor", report.ModuleMetricInputWatermark), MetricType: "gauge", LabelsJSON: labels, Value: float64(now.Add(-time.Second).Unix()), ObservedAt: now, Interval: 30 * time.Second, MessageID: "message"},
@@ -130,7 +130,7 @@ func TestBuilderReadsCanonicalModuleMetricNames(t *testing.T) {
 		samples,
 	)
 	require.NoError(t, err)
-	otherLabels := `{"pipeline":"monitor-metrics","stage":"ingest"}`
+	otherLabels := `{"health_check":"monitor-metrics","stage":"ingest"}`
 	otherSamples := []monmetrics.Sample{
 		{SeriesID: "other-success", ServiceName: "moox_monitor", InstanceID: "moox_monitor@node-b", MetricName: report.ModuleMetricName("monitor", report.ModuleMetricLastSuccess), MetricType: "gauge", LabelsJSON: otherLabels, Value: float64(now.Add(-time.Hour).Unix()), ObservedAt: now.Add(-time.Hour), Interval: 30 * time.Second, MessageID: "other-message"},
 		{SeriesID: "other-input", ServiceName: "moox_monitor", InstanceID: "moox_monitor@node-b", MetricName: report.ModuleMetricName("monitor", report.ModuleMetricInputWatermark), MetricType: "gauge", LabelsJSON: otherLabels, Value: float64(now.Add(-time.Hour).Unix()), ObservedAt: now.Add(-time.Hour), Interval: 30 * time.Second, MessageID: "other-message"},
@@ -143,16 +143,16 @@ func TestBuilderReadsCanonicalModuleMetricNames(t *testing.T) {
 		otherSamples,
 	)
 	require.NoError(t, err)
-	pipelines := report.PipelineConfig{Pipelines: []report.Pipeline{{
-		ID: "monitor-metrics", Module: "monitor", Enabled: true, WatermarkMonitoring: true,
-	}}}
+	healthChecks := []report.ModuleHealthCheck{{
+		ID: "monitor-metrics", Module: "monitor", Enabled: true, CheckWatermark: true,
+	}}
 	got, err := (Builder{
 		Deployments: deploymentSourceStub{rows: []*adminpb.ServiceDeployment{{
 			ServiceName: "moox_monitor", NodeId: "node-a", Status: "active",
 		}}},
-		Metrics:   messageQuery(messageStore),
-		Pipelines: pipelines,
-		Now:       func() time.Time { return now },
+		Metrics:      messageQuery(messageStore),
+		HealthChecks: healthChecks,
+		Now:          func() time.Time { return now },
 	}).Build(context.Background(), "node-a", []string{"moox_monitor"}, []string{"monitor-metrics"})
 	require.NoError(t, err)
 	require.Len(t, got.ModuleObservations, 3)
@@ -162,7 +162,7 @@ func TestBuilderReadsCanonicalModuleMetricNames(t *testing.T) {
 	require.Len(t, got.Watermarks, 1)
 	require.Equal(t, "monitor", got.Watermarks[0].Module)
 	require.Equal(t, "ingest", got.Watermarks[0].Stage)
-	require.Equal(t, "monitor-metrics", got.Watermarks[0].Pipeline)
+	require.Equal(t, "monitor-metrics", got.Watermarks[0].HealthCheckID)
 }
 
 func messageQuery(messageStore *monmetrics.MetricMessageStore) *monmetrics.QueryService {

@@ -60,10 +60,10 @@ type targetMetricsStub struct {
 func (s *targetMetricsStub) ObserveRun(
 	stage string,
 	result string,
-	pipeline string,
+	healthCheck string,
 	_ time.Time,
 ) error {
-	s.runs = append(s.runs, stage+"/"+result+"/"+pipeline)
+	s.runs = append(s.runs, stage+"/"+result+"/"+healthCheck)
 	return nil
 }
 

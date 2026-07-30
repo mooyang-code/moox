@@ -24,7 +24,7 @@ type TargetConverger interface {
 }
 
 type TargetRunMetrics interface {
-	ObserveRun(stage, result, pipeline string, at time.Time) error
+	ObserveRun(stage, result, healthCheck string, at time.Time) error
 }
 
 type TargetWorker struct {

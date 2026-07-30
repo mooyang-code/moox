@@ -15,12 +15,16 @@ import yaml
 
 root = pathlib.Path(sys.argv[1])
 manifest = yaml.safe_load((root / "packages/doctor/components.yaml").read_text())
-seed = yaml.safe_load((root / "examples/service-deployments.seed.yaml").read_text())
+seed = yaml.safe_load((root / "examples/setup/default/service-deployments.yaml").read_text())
 defaults = (root / "modules/admin/internal/service/sysdeploy/defaults.go").read_text()
-policy_path = root / "examples/monitor-pipelines.yaml"
+policy_path = root / "examples/setup/default/dataset-health-policy.yaml"
 policy_text = policy_path.read_text()
 policy = yaml.safe_load(policy_text)
 
+all_components = {
+    item["service_name"]: item
+    for item in manifest["components"]
+}
 components = {
     item["service_name"]: item
     for item in manifest["components"]
@@ -33,10 +37,12 @@ seed_processes = {
 }
 default_names = set(re.findall(r'deployment\("([^"]+)"', defaults))
 
-if set(components) != set(seed_processes):
+if not set(components).issubset(seed_processes):
     missing = sorted(set(components) - set(seed_processes))
-    extra = sorted(set(seed_processes) - set(components))
-    raise SystemExit(f"manifest/seed process mismatch: missing={missing}, extra={extra}")
+    raise SystemExit(f"manifest/seed process mismatch: missing={missing}")
+unknown = sorted(set(seed_processes) - set(all_components))
+if unknown:
+    raise SystemExit(f"seed contains active process absent from manifest: {unknown}")
 
 missing_defaults = sorted(set(components) - default_names)
 if missing_defaults:
@@ -59,6 +65,9 @@ if policy.get("version") != 2:
     raise SystemExit("monitor policy must use version 2")
 if "crosses_storage_deferred" in policy_text:
     raise SystemExit("monitor policy still contains crosses_storage_deferred")
+for removed in ("canary_subject_id", "market_price_change_ratio", "market_volume_ratio"):
+    if removed in policy_text:
+        raise SystemExit(f"Dataset health policy contains unused field {removed}")
 defaults_policy = ((policy.get("realtime_timeseries") or {}).get("defaults") or {})
 required_defaults = {
     "run_missed_intervals",

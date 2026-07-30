@@ -1222,10 +1222,10 @@ runtime_identity_env() {
   if [[ -n "${config_file}" && -f "${config_file}" ]]; then
     RUNTIME_IDENTITY_ENV+=("MOOX_CONFIG_HASH=sha256:$(shasum -a 256 "${config_file}" | awk '{print $1}')")
   fi
-  if [[ -f "${ROOT}/config/monitor-pipelines.yaml" ]]; then
+  if [[ "${service_name}" == "moox_monitor" && -f "${ROOT}/config/dataset-health-policy.yaml" ]]; then
     RUNTIME_IDENTITY_ENV+=(
-      "MOOX_PIPELINE_CONFIG=${ROOT}/config/monitor-pipelines.yaml"
-      "MOOX_PIPELINE_CONFIG_HASH=sha256:$(shasum -a 256 "${ROOT}/config/monitor-pipelines.yaml" | awk '{print $1}')"
+      "MOOX_DATASET_HEALTH_POLICY=${ROOT}/config/dataset-health-policy.yaml"
+      "MOOX_DATASET_HEALTH_POLICY_HASH=sha256:$(shasum -a 256 "${ROOT}/config/dataset-health-policy.yaml" | awk '{print $1}')"
     )
   fi
   if [[ -f "${HOME}/.config/moox/eventbus/metrics-publisher.yaml" ]]; then
@@ -1686,10 +1686,10 @@ start_admin() {
   local encryption_key_file="${HOME}/.config/moox/credentials/admin-encryption-key"
   [[ -f "${encryption_key_file}" ]] || { echo "missing Admin encryption key: ${encryption_key_file}" >&2; exit 1; }
   init_admin_schema
-  if [[ -x "${ROOT}/bin/moox-admin-cli" && -f "${ROOT}/examples/service-deployments.seed.yaml" ]]; then
+  if [[ -x "${ROOT}/bin/moox-admin-cli" && -f "${ROOT}/examples/setup/default/service-deployments.yaml" ]]; then
     local service_seed_args=(service-deployments import
       --db-path "${ROOT}/data/admin.db" \
-      --file "${ROOT}/examples/service-deployments.seed.yaml" \
+      --file "${ROOT}/examples/setup/default/service-deployments.yaml" \
       --node-id "${MOOX_ADMIN_NODE_ID}" \
       --public-host "${PUBLIC_HOST:-127.0.0.1}" \
       --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}")
@@ -2772,7 +2772,7 @@ EOF
     cp "${ROOT}/modules/storage/schema/metadata.sql" "${STAGE_DIR}/storage/schema/metadata.sql"
   fi
   cp -R "${ROOT}/examples/." "${STAGE_DIR}/examples/"
-  cp "${ROOT}/examples/monitor-pipelines.yaml" "${STAGE_DIR}/config/monitor-pipelines.yaml"
+  cp "${ROOT}/examples/setup/default/dataset-health-policy.yaml" "${STAGE_DIR}/config/dataset-health-policy.yaml"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     cp "${ROOT}/scripts/reset-storage-view-indexes.sh" "${STAGE_DIR}/reset-storage-view-indexes.sh"
   fi

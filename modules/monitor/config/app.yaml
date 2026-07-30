@@ -54,7 +54,7 @@ market_canary:
 
 metrics:
   enabled: true
-  pipeline_config_path: ../../examples/monitor-pipelines.yaml
+  dataset_health_policy_path: ../../examples/setup/default/dataset-health-policy.yaml
   no_data_intervals: 2
   storage:
     gateway_target: ip://127.0.0.1:11003

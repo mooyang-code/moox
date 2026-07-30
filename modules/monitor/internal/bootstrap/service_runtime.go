@@ -33,7 +33,7 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		ObservabilityOverview: &monitorobservability.Builder{
 			Metrics: metricsQuery, Hosts: hostStore,
 			Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-			Policy:                     doctorContext.Pipelines.RealtimeTimeSeries,
+			Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
 			BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 		},
 	}))

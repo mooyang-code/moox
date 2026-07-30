@@ -161,19 +161,20 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if hostGate != nil {
 		hostReady = hostGate.Ready
 	}
-	pipelines, pipelineErr := loadMonitorPipelines(cfg)
-	if pipelineErr != nil {
+	datasetHealthPolicy, policyErr := loadMonitorDatasetHealthPolicy(cfg)
+	if policyErr != nil {
 		_ = runtime.Close()
-		return nil, pipelineErr
+		return nil, policyErr
 	}
 	doctorContext := &monitordoctor.Builder{
 		Deployments: monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target), Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore, Pipelines: pipelines,
+		Alerts: runtime.Repositories.Alerts, Metrics: metricsQuery, Hosts: hostStore,
+		HealthChecks: report.BuiltInModuleHealthChecks(), DatasetHealthPolicy: datasetHealthPolicy,
 	}
 	businessFreshness := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,
 		Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results,
-		Policy:                     doctorContext.Pipelines.RealtimeTimeSeries,
+		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 	}, runtime.Repositories, resultHook)
 	watchdogRun := func(watchdogCtx context.Context) error {
@@ -216,12 +217,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func loadMonitorPipelines(cfg *config.Config) (report.PipelineConfig, error) {
-	if strings.TrimSpace(os.Getenv("MOOX_PIPELINE_CONFIG")) != "" {
-		return report.ValidatePipelineEnvironment()
+func loadMonitorDatasetHealthPolicy(cfg *config.Config) (report.DatasetHealthPolicy, error) {
+	if strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")) != "" {
+		return report.ValidateDatasetHealthEnvironment()
 	}
-	if cfg == nil || strings.TrimSpace(cfg.Metrics.PipelineConfigPath) == "" {
-		return report.PipelineConfig{}, fmt.Errorf("monitor pipeline config path is required")
+	if cfg == nil || strings.TrimSpace(cfg.Metrics.DatasetHealthPolicyPath) == "" {
+		return report.DatasetHealthPolicy{}, fmt.Errorf("monitor Dataset health policy path is required")
 	}
-	return report.LoadPipelineAllowlist(cfg.Metrics.PipelineConfigPath)
+	return report.LoadDatasetHealthPolicy(cfg.Metrics.DatasetHealthPolicyPath)
 }

@@ -29,29 +29,30 @@ type DoctorContextClient interface {
 }
 
 type BootstrapOptions struct {
-	NodeID, LocalNodeID, ReleaseRoot, SeedPath, PipelinePath string
-	CheckIDs                                                 []string
-	Client                                                   DeploymentClient
-	MonitorClient                                            DoctorContextClient
-	StorageActivation                                        StorageActivationClient
-	Prober                                                   HTTPProber
-	Now                                                      func() time.Time
-	ProbeWritable                                            func(context.Context, string, string) error
-	ProcessAlive                                             func(string) bool
+	NodeID, LocalNodeID, ReleaseRoot, SeedPath, DatasetHealthPolicyPath string
+	CheckIDs                                                            []string
+	Client                                                              DeploymentClient
+	MonitorClient                                                       DoctorContextClient
+	StorageActivation                                                   StorageActivationClient
+	Prober                                                              HTTPProber
+	Now                                                                 func() time.Time
+	ProbeWritable                                                       func(context.Context, string, string) error
+	ProcessAlive                                                        func(string) bool
 }
 
 type bootstrapRunner struct {
-	options      BootstrapOptions
-	manifest     core.Manifest
-	deployments  map[string]*adminpb.ServiceDeployment
-	loadErr      error
-	seedServices map[string]seedService
-	seedErr      error
-	pipelineErr  error
-	pipelines    report.PipelineConfig
-	manifestErr  error
-	delivery     *monitorpb.GetDoctorContextRsp
-	deliveryErr  error
+	options                BootstrapOptions
+	manifest               core.Manifest
+	deployments            map[string]*adminpb.ServiceDeployment
+	loadErr                error
+	seedServices           map[string]seedService
+	seedErr                error
+	datasetHealthPolicy    report.DatasetHealthPolicy
+	datasetHealthPolicyErr error
+	healthChecks           []report.ModuleHealthCheck
+	manifestErr            error
+	delivery               *monitorpb.GetDoctorContextRsp
+	deliveryErr            error
 }
 
 func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, error) {
@@ -90,14 +91,15 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 		}
 	}
 	runner.seedServices, runner.seedErr = loadSeedServices(options.SeedPath)
-	runner.pipelines, runner.pipelineErr = report.LoadPipelineAllowlist(options.PipelinePath)
+	runner.healthChecks = report.BuiltInModuleHealthChecks()
+	runner.datasetHealthPolicy, runner.datasetHealthPolicyErr = report.LoadDatasetHealthPolicy(options.DatasetHealthPolicyPath)
 	specs := bootstrapSpecs(manifest, options.NodeID)
 	specs, err = selectSpecs(specs, options.CheckIDs)
 	if err != nil {
 		return core.Report{}, err
 	}
 	if options.MonitorClient != nil && hasCheck(specs, "monitor.metrics_delivery") {
-		runner.delivery, runner.deliveryErr = options.MonitorClient.GetDoctorContext(ctx, &monitorpb.GetDoctorContextReq{NodeId: options.NodeID, PipelineIds: pipelineIDs(runner.pipelines)})
+		runner.delivery, runner.deliveryErr = options.MonitorClient.GetDoctorContext(ctx, &monitorpb.GetDoctorContextReq{NodeId: options.NodeID, HealthCheckIds: healthCheckIDs(runner.healthChecks)})
 	}
 	report, err := (core.Engine{Mode: core.ModeBootstrap, Now: options.Now}).Run(ctx, specs, core.RunnerFunc(runner.run))
 	if err != nil {
@@ -158,7 +160,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			contractErr = r.seedErr
 		}
 		if contractErr == nil {
-			contractErr = r.pipelineErr
+			contractErr = r.datasetHealthPolicyErr
 		}
 		if contractErr != nil {
 			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "apply_service_deployments_seed")
@@ -166,7 +168,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if err := validateSeedAgainstManifest(r.manifest, r.seedServices); err != nil {
 			return checkResult(spec.ID, core.StatusFail, "deployment seed does not match the Manifest", err, "apply_service_deployments_seed")
 		}
-		return checkResult(spec.ID, core.StatusPass, "release Manifest, checksum, deployment seed, and pipeline allowlist are available", nil)
+		return checkResult(spec.ID, core.StatusPass, "release Manifest, checksum, deployment seed, and Dataset health policy are available", nil)
 	case "bootstrap.inventory":
 		if r.loadErr != nil {
 			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "apply_service_deployments_seed")
@@ -224,17 +226,24 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			return checkResult(spec.ID, core.StatusFail, "service identity probe failed", err, "verify_service_identity")
 		}
 		var identity struct {
-			Service            string `json:"service"`
-			InstanceID         string `json:"instance_id"`
-			NodeID             string `json:"node_id"`
-			BootID             string `json:"boot_id"`
-			PipelineConfigHash string `json:"pipeline_config_hash"`
+			Service                 string `json:"service"`
+			InstanceID              string `json:"instance_id"`
+			NodeID                  string `json:"node_id"`
+			BootID                  string `json:"boot_id"`
+			DatasetHealthPolicyHash string `json:"dataset_health_policy_hash"`
 		}
 		if err := json.Unmarshal(probe.Body, &identity); err != nil {
 			return checkResult(spec.ID, core.StatusFail, "service identity response is invalid", err, "verify_service_identity")
 		}
 		want := component.ServiceName + "@" + r.options.NodeID
-		if identity.Service != component.ServiceName || identity.InstanceID != want || identity.NodeID != r.options.NodeID || identity.BootID == "" || (r.pipelines.Checksum != "" && identity.PipelineConfigHash != r.pipelines.Checksum) {
+		identityMismatch := identity.Service != component.ServiceName ||
+			identity.InstanceID != want ||
+			identity.NodeID != r.options.NodeID ||
+			identity.BootID == ""
+		policyMismatch := component.ServiceName == "moox_monitor" &&
+			r.datasetHealthPolicy.Checksum != "" &&
+			identity.DatasetHealthPolicyHash != r.datasetHealthPolicy.Checksum
+		if identityMismatch || policyMismatch {
 			return checkResult(spec.ID, core.StatusFail, "service identity conflicts with canonical service@node identity", nil, "verify_service_identity")
 		}
 		result = checkResult(spec.ID, core.StatusPass, "service identity matches the canonical contract", nil)

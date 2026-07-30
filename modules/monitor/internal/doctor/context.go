@@ -32,14 +32,15 @@ type DeploymentSource interface {
 }
 
 type Builder struct {
-	Deployments DeploymentSource
-	Checks      *store.CheckRepository
-	Results     *store.ResultRepository
-	Alerts      *store.AlertRepository
-	Metrics     *monmetrics.QueryService
-	Hosts       *hostmetrics.Store
-	Pipelines   report.PipelineConfig
-	Now         func() time.Time
+	Deployments         DeploymentSource
+	Checks              *store.CheckRepository
+	Results             *store.ResultRepository
+	Alerts              *store.AlertRepository
+	Metrics             *monmetrics.QueryService
+	Hosts               *hostmetrics.Store
+	HealthChecks        []report.ModuleHealthCheck
+	DatasetHealthPolicy report.DatasetHealthPolicy
+	Now                 func() time.Time
 }
 
 type ExpectedComponent struct {
@@ -58,9 +59,9 @@ type Observation struct {
 }
 
 type Watermark struct {
-	Module, Stage, Pipeline, Status string
-	ObservedAt                      time.Time
-	Value                           float64
+	Module, Stage, HealthCheckID, Status string
+	ObservedAt                           time.Time
+	Value                                float64
 }
 
 type Context struct {
@@ -76,7 +77,7 @@ type Context struct {
 	MissingObservations           []Observation
 }
 
-func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, pipelineIDs []string) (Context, error) {
+func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthCheckIDs []string) (Context, error) {
 	manifest, err := doctor.LoadEmbeddedManifest()
 	if err != nil {
 		return Context{}, err
@@ -85,7 +86,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, pipelin
 	if err != nil {
 		return Context{}, err
 	}
-	if err := validatePipelines(b.Pipelines, pipelineIDs); err != nil {
+	if err := validateHealthChecks(b.HealthChecks, healthCheckIDs); err != nil {
 		return Context{}, err
 	}
 	now := time.Now().UTC()
@@ -122,7 +123,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, pipelin
 	if err := b.addHealth(ctx, components, now, &out); err != nil {
 		return Context{}, err
 	}
-	if err := b.addMetrics(ctx, components, nodeID, pipelineIDs, now, &out); err != nil {
+	if err := b.addMetrics(ctx, components, nodeID, healthCheckIDs, now, &out); err != nil {
 		return Context{}, err
 	}
 	if err := b.addHosts(ctx, nodeID, now, &out); err != nil {
@@ -191,18 +192,27 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 		}
 		observation := Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: status, ObservedAt: latest.CheckedAt, Stale: age > int64(2*interval), AgeSeconds: age, IntervalSeconds: interval, Summary: healthSummary(latest)}
 		var identity struct {
-			Service            string `json:"service"`
-			InstanceID         string `json:"instance_id"`
-			NodeID             string `json:"node_id"`
-			BootID             string `json:"boot_id"`
-			PipelineConfigHash string `json:"pipeline_config_hash"`
+			Service                 string `json:"service"`
+			InstanceID              string `json:"instance_id"`
+			NodeID                  string `json:"node_id"`
+			BootID                  string `json:"boot_id"`
+			DatasetHealthPolicyHash string `json:"dataset_health_policy_hash"`
 		}
 		component := componentByService[expected.ServiceName]
 		if json.Unmarshal([]byte(latest.BodyExcerpt), &identity) == nil {
 			observation.InstanceID, observation.NodeID, observation.BootID = identity.InstanceID, identity.NodeID, identity.BootID
 			wantInstance := expected.ServiceName + "@" + expected.NodeID
-			if component.Transport == doctor.TransportReporter && component.FunctionalObservability != doctor.FunctionalObservabilityDeferred && component.FunctionalObservability != doctor.FunctionalObservabilityNotApplicable &&
-				(identity.Service != expected.ServiceName || identity.InstanceID != wantInstance || identity.NodeID != expected.NodeID || identity.BootID == "" || (b.Pipelines.Checksum != "" && identity.PipelineConfigHash != b.Pipelines.Checksum)) {
+			identityMismatch := identity.Service != expected.ServiceName ||
+				identity.InstanceID != wantInstance ||
+				identity.NodeID != expected.NodeID ||
+				identity.BootID == ""
+			policyMismatch := expected.ServiceName == "moox_monitor" &&
+				b.DatasetHealthPolicy.Checksum != "" &&
+				identity.DatasetHealthPolicyHash != b.DatasetHealthPolicy.Checksum
+			if component.Transport == doctor.TransportReporter &&
+				component.FunctionalObservability != doctor.FunctionalObservabilityDeferred &&
+				component.FunctionalObservability != doctor.FunctionalObservabilityNotApplicable &&
+				(identityMismatch || policyMismatch) {
 				observation.Status, observation.Conflict, observation.Summary = "CONFLICT", true, "health identity does not match the deployment contract"
 			}
 		} else if component.Transport == doctor.TransportReporter && component.FunctionalObservability != doctor.FunctionalObservabilityDeferred && component.FunctionalObservability != doctor.FunctionalObservabilityNotApplicable {
@@ -217,7 +227,7 @@ func sysDeployCheckID(nodeID, serviceName string) string {
 	return "sysdeploy:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
 }
 
-func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, pipelineIDs []string, now time.Time, out *Context) error {
+func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, nodeID string, healthCheckIDs []string, now time.Time, out *Context) error {
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil
 	}
@@ -285,7 +295,7 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 			}
 		}
 	}
-	selectedPipelines := stringSelection(pipelineIDs)
+	selectedHealthChecks := stringSelection(healthCheckIDs)
 	for _, component := range components {
 		if component.FunctionalObservability != doctor.FunctionalObservabilityActive {
 			continue
@@ -325,8 +335,8 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 			if json.Unmarshal([]byte(item.LabelsJSON), &labels) != nil {
 				continue
 			}
-			pipeline := labels["pipeline"]
-			if item.MetricName != metricErrorsMetric && item.MetricName != lastMetricErrorMetric && len(selectedPipelines) > 0 && !selectedPipelines[pipeline] {
+			healthCheck := labels["health_check"]
+			if item.MetricName != metricErrorsMetric && item.MetricName != lastMetricErrorMetric && len(selectedHealthChecks) > 0 && !selectedHealthChecks[healthCheck] {
 				continue
 			}
 			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
@@ -337,7 +347,7 @@ func (b Builder) addMetrics(ctx context.Context, components []doctor.Component, 
 			observation := Observation{Kind: "module", ComponentID: component.ComponentID, ServiceName: component.ServiceName, InstanceID: latest.InstanceID, Status: map[bool]string{true: "STALE", false: "FRESH"}[item.IsStale], ObservedAt: latest.ObservedAt, Stale: item.IsStale, Value: latest.Value, AgeSeconds: age, IntervalSeconds: latest.IntervalSeconds, Summary: item.MetricName, DetailsJSON: item.LabelsJSON}
 			out.ModuleObservations = append(out.ModuleObservations, observation)
 			if item.MetricName == businessWatermarkMetric {
-				out.Watermarks = append(out.Watermarks, Watermark{Module: module, Stage: labels["stage"], Pipeline: pipeline, Value: latest.Value, ObservedAt: latest.ObservedAt, Status: observation.Status})
+				out.Watermarks = append(out.Watermarks, Watermark{Module: module, Stage: labels["stage"], HealthCheckID: healthCheck, Value: latest.Value, ObservedAt: latest.ObservedAt, Status: observation.Status})
 			}
 		}
 	}
@@ -390,14 +400,14 @@ func selectComponents(all []doctor.Component, selected []string) ([]doctor.Compo
 	return out, nil
 }
 
-func validatePipelines(config report.PipelineConfig, selected []string) error {
+func validateHealthChecks(config []report.ModuleHealthCheck, selected []string) error {
 	known := map[string]bool{}
-	for _, pipeline := range config.Pipelines {
-		known[pipeline.ID] = true
+	for _, healthCheck := range config {
+		known[healthCheck.ID] = true
 	}
 	for _, id := range selected {
 		if !known[id] {
-			return fmt.Errorf("unknown pipeline_id %q", id)
+			return fmt.Errorf("unknown health_check_id %q", id)
 		}
 	}
 	return nil
@@ -481,7 +491,8 @@ func enforceBounds(context Context) error {
 		return fmt.Errorf("active_alerts exceeds limit %d", MaxAlerts)
 	}
 	sort.Slice(context.Watermarks, func(i, j int) bool {
-		return context.Watermarks[i].Module+context.Watermarks[i].Pipeline < context.Watermarks[j].Module+context.Watermarks[j].Pipeline
+		return context.Watermarks[i].Module+context.Watermarks[i].HealthCheckID <
+			context.Watermarks[j].Module+context.Watermarks[j].HealthCheckID
 	})
 	return nil
 }

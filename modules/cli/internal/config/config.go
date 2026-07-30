@@ -25,16 +25,20 @@ type Config struct {
 }
 
 type DoctorConfig struct {
-	MonitorTarget   string `yaml:"monitor_target"`
-	SysDeployTarget string `yaml:"sysdeploy_target"`
-	NodeID          string `yaml:"node_id"`
-	ReleaseRoot     string `yaml:"release_root"`
-	SeedPath        string `yaml:"seed_path"`
-	PipelinePath    string `yaml:"pipeline_path"`
+	MonitorTarget           string `yaml:"monitor_target"`
+	SysDeployTarget         string `yaml:"sysdeploy_target"`
+	NodeID                  string `yaml:"node_id"`
+	ReleaseRoot             string `yaml:"release_root"`
+	SeedPath                string `yaml:"seed_path"`
+	DatasetHealthPolicyPath string `yaml:"dataset_health_policy_path"`
 }
 
 func (c *Config) EffectiveDoctor() DoctorConfig {
-	value := DoctorConfig{MonitorTarget: "ip://127.0.0.1:11410", SysDeployTarget: "ip://127.0.0.1:11109", ReleaseRoot: ".", SeedPath: "examples/service-deployments.seed.yaml", PipelinePath: "config/monitor-pipelines.yaml"}
+	value := DoctorConfig{
+		MonitorTarget: "ip://127.0.0.1:11410", SysDeployTarget: "ip://127.0.0.1:11109",
+		ReleaseRoot: ".", SeedPath: "examples/setup/default/service-deployments.yaml",
+		DatasetHealthPolicyPath: "config/dataset-health-policy.yaml",
+	}
 	if c != nil {
 		mergeDoctor(&value, c.Doctor)
 	}
@@ -61,8 +65,8 @@ func mergeDoctor(target *DoctorConfig, source DoctorConfig) {
 	if source.SeedPath != "" {
 		target.SeedPath = source.SeedPath
 	}
-	if source.PipelinePath != "" {
-		target.PipelinePath = source.PipelinePath
+	if source.DatasetHealthPolicyPath != "" {
+		target.DatasetHealthPolicyPath = source.DatasetHealthPolicyPath
 	}
 }
 
@@ -70,7 +74,8 @@ func overrideDoctorFromEnv(value *DoctorConfig) {
 	for name, target := range map[string]*string{
 		"MOOX_DOCTOR_MONITOR_TARGET": &value.MonitorTarget, "MOOX_DOCTOR_SYSDEPLOY_TARGET": &value.SysDeployTarget,
 		"MOOX_NODE_ID": &value.NodeID, "MOOX_RELEASE_ROOT": &value.ReleaseRoot,
-		"MOOX_SERVICE_DEPLOYMENTS_SEED": &value.SeedPath, "MOOX_PIPELINE_CONFIG": &value.PipelinePath,
+		"MOOX_SERVICE_DEPLOYMENTS_SEED": &value.SeedPath,
+		"MOOX_DATASET_HEALTH_POLICY":    &value.DatasetHealthPolicyPath,
 	} {
 		if raw := os.Getenv(name); raw != "" {
 			*target = raw

@@ -10,7 +10,7 @@ API 或采集流程生成，不在这里维护交易所、标的或历史行情�
 - `platform-local.seed.yaml`：兼容既有本地 bootstrap 命令的空 seed；DataNode 注册由部署流程负责。
 - `metadata-monitor-metrics.seed.yaml`：MooX 服务指标逻辑元数据。
 - `metadata-monitor-host.seed.yaml`：主机资源逻辑元数据。
-- `service-deployments.seed.yaml`：Admin `t_service_deployments` 的初始化清单，区分独立进程
+- `setup/default/service-deployments.yaml`：Admin `t_service_deployments` 的初始化清单，区分独立进程
   (`deployment_mode: process`) 与同进程 RPC 端点 (`deployment_mode: endpoint`)。
 
 默认量化 seed 使用市场作为 Space。`crypto` 是加密货币市场，`binance` 和 `okx`
@@ -54,7 +54,7 @@ Admin 启动时会自动补齐同一套默认服务部署。需要在启动前�
 ```bash
 moox-admin-cli service-deployments import \
   --db-path ./data/admin.db \
-  --file examples/service-deployments.seed.yaml \
+  --file examples/setup/default/service-deployments.yaml \
   --node-id gateway-node-1 \
   --public-host 203.0.113.10 \
   --eventbus-nats-url tls://127.0.0.1:4222

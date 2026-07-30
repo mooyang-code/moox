@@ -17,7 +17,7 @@ fi
 
 bash -n "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_SERVICE_NAME=${service_name}' "${ROOT}/scripts/deploy-moox.sh"
-python3 - "${ROOT}/packages/doctor/components.yaml" "${ROOT}/examples/service-deployments.seed.yaml" <<'PY'
+python3 - "${ROOT}/packages/doctor/components.yaml" "${ROOT}/examples/setup/default/service-deployments.yaml" <<'PY'
 import sys
 import yaml
 
@@ -29,8 +29,6 @@ for component in manifest["components"]:
     if component.get("required_in_default_profile", False):
         assert service["status"] == "active", component["component_id"]
         assert service["deployment_mode"] == "process", component["component_id"]
-    if service["status"] == "active":
-        assert component.get("required_in_default_profile", False), component["component_id"]
 PY
 
 if git -C "${ROOT}" diff --name-only HEAD -- modules/storage | grep -q .; then

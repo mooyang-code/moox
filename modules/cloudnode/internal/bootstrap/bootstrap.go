@@ -255,11 +255,7 @@ func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
 	if s == nil {
 		return nil, fmt.Errorf("cloudnode metrics reporter requires a tRPC server")
 	}
-	pipelines, err := report.ValidatePipelineEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "cloudnode", pipelines.IDsForModule("cloudnode"))
+	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "cloudnode", report.HealthCheckIDsForModule("cloudnode"))
 	if err != nil {
 		return nil, err
 	}

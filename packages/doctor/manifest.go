@@ -62,7 +62,7 @@ var allowedRecoveryActions = map[string]bool{
 	"repair_path_permissions":        true,
 	"verify_eventbus_credentials":    true,
 	"restart_service_manually":       true,
-	"inspect_pipeline_input":         true,
+	"inspect_health_check_input":     true,
 	"replay_factor_window_manually":  true,
 	"free_disk_space":                true,
 	"run_bootstrap":                  true,

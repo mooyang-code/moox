@@ -84,15 +84,15 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			case "bootstrap":
 				reportValue, err = doctorcli.RunBootstrap(cmd.Context(), doctorcli.BootstrapOptions{
 					NodeID: nodeID, LocalNodeID: doctorCfg.NodeID, ReleaseRoot: doctorCfg.ReleaseRoot,
-					SeedPath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.SeedPath), PipelinePath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.PipelinePath),
-					CheckIDs: checks, Client: client, MonitorClient: client, StorageActivation: storageActivation, Prober: prober,
+					SeedPath:                resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.SeedPath),
+					DatasetHealthPolicyPath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.DatasetHealthPolicyPath),
+					CheckIDs:                checks, Client: client, MonitorClient: client, StorageActivation: storageActivation, Prober: prober,
 				})
 			case "diagnose":
-				pipelines, loadErr := report.LoadPipelineAllowlist(resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.PipelinePath))
-				if loadErr != nil {
-					return loadErr
-				}
-				reportValue, err = doctorcli.RunDiagnose(cmd.Context(), doctorcli.DiagnoseOptions{NodeID: nodeID, CheckIDs: checks, Client: client, Prober: prober, Pipelines: pipelines})
+				reportValue, err = doctorcli.RunDiagnose(cmd.Context(), doctorcli.DiagnoseOptions{
+					NodeID: nodeID, CheckIDs: checks, Client: client, Prober: prober,
+					HealthChecks: report.BuiltInModuleHealthChecks(),
+				})
 			}
 			if err != nil {
 				return err

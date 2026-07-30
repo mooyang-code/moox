@@ -9,5 +9,5 @@ doctor:
   sysdeploy_target: "ip://127.0.0.1:11109"
   node_id: ""
   release_root: "."
-  seed_path: "examples/service-deployments.seed.yaml"
-  pipeline_path: "config/monitor-pipelines.yaml"
+  seed_path: "examples/setup/default/service-deployments.yaml"
+  dataset_health_policy_path: "config/dataset-health-policy.yaml"

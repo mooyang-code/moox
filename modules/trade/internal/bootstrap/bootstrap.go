@@ -471,15 +471,10 @@ func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetric
 	if serverInstance == nil {
 		return nil
 	}
-	pipelines, err := report.ValidatePipelineEnvironment()
-	if err != nil {
-		log.Warnf("trade module metrics disabled: %v", err)
-		return nil
-	}
 	moduleMetrics, err := report.NewModuleMetrics(
 		prometheus.DefaultRegisterer,
 		"trade",
-		pipelines.IDsForModule("trade"),
+		report.HealthCheckIDsForModule("trade"),
 	)
 	if err != nil {
 		log.Warnf("trade module metrics disabled: %v", err)

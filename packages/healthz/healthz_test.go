@@ -217,10 +217,10 @@ func TestBaseIncludesOptionalRuntimeIdentityFields(t *testing.T) {
 	t.Setenv("MOOX_BOOT_ID", "boot-a")
 	t.Setenv("MOOX_BUILD_TIME", "2026-07-19T00:00:00Z")
 	t.Setenv("MOOX_CONFIG_HASH", "sha256:config")
-	t.Setenv("MOOX_PIPELINE_CONFIG_HASH", "sha256:pipelines")
+	t.Setenv("MOOX_DATASET_HEALTH_POLICY_HASH", "sha256:dataset-health")
 
 	rsp := Base("test", "test@node-a", "v1", "commit", time.Now(), true)
-	if rsp.Service != "moox_test" || rsp.InstanceID != "moox_test@node-a" || rsp.NodeID != "node-a" || rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || rsp.PipelineConfigHash != "sha256:pipelines" {
+	if rsp.Service != "moox_test" || rsp.InstanceID != "moox_test@node-a" || rsp.NodeID != "node-a" || rsp.BootID != "boot-a" || rsp.BuildTime == "" || rsp.ConfigHash != "sha256:config" || rsp.DatasetHealthPolicyHash != "sha256:dataset-health" {
 		t.Fatalf("runtime identity fields = %+v", rsp)
 	}
 }

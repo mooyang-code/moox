@@ -66,14 +66,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector dataset metrics: %w", err)
 	}
-	pipelines, err := report.ValidatePipelineEnvironment()
-	if err != nil {
-		return nil, fmt.Errorf("validate collector pipeline metrics: %w", err)
-	}
 	moduleMetrics, err := report.NewModuleMetrics(
 		prometheus.DefaultRegisterer,
 		"collector",
-		pipelines.IDsForModule("collector"),
+		report.HealthCheckIDsForModule("collector"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector module metrics: %w", err)

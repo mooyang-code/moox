@@ -16,21 +16,21 @@ import (
 
 // Response is the shared process-level health payload exposed by MooX services.
 type Response struct {
-	Module             string         `json:"module"`
-	Service            string         `json:"service,omitempty"`
-	InstanceID         string         `json:"instance_id,omitempty"`
-	NodeID             string         `json:"node_id,omitempty"`
-	Ready              bool           `json:"ready"`
-	Status             string         `json:"status"`
-	Version            string         `json:"version,omitempty"`
-	GitCommit          string         `json:"git_commit,omitempty"`
-	BootID             string         `json:"boot_id,omitempty"`
-	BuildTime          string         `json:"build_time,omitempty"`
-	ConfigHash         string         `json:"config_hash,omitempty"`
-	PipelineConfigHash string         `json:"pipeline_config_hash,omitempty"`
-	StartTime          time.Time      `json:"start_time,omitempty"`
-	Time               time.Time      `json:"time"`
-	Details            map[string]any `json:"details,omitempty"`
+	Module                  string         `json:"module"`
+	Service                 string         `json:"service,omitempty"`
+	InstanceID              string         `json:"instance_id,omitempty"`
+	NodeID                  string         `json:"node_id,omitempty"`
+	Ready                   bool           `json:"ready"`
+	Status                  string         `json:"status"`
+	Version                 string         `json:"version,omitempty"`
+	GitCommit               string         `json:"git_commit,omitempty"`
+	BootID                  string         `json:"boot_id,omitempty"`
+	BuildTime               string         `json:"build_time,omitempty"`
+	ConfigHash              string         `json:"config_hash,omitempty"`
+	DatasetHealthPolicyHash string         `json:"dataset_health_policy_hash,omitempty"`
+	StartTime               time.Time      `json:"start_time,omitempty"`
+	Time                    time.Time      `json:"time"`
+	Details                 map[string]any `json:"details,omitempty"`
 }
 
 // SnapshotFunc returns a health snapshot for the current request.
@@ -38,17 +38,17 @@ type SnapshotFunc func(context.Context) Response
 
 // State contains the shared process health state used by module wrappers.
 type State struct {
-	Module             string
-	InstanceID         string
-	Version            string
-	GitCommit          string
-	BootID             string
-	BuildTime          string
-	ConfigHash         string
-	PipelineConfigHash string
-	StartedAt          time.Time
-	ReadyFlag          atomic.Bool
-	SnapshotFunc       SnapshotFunc
+	Module                  string
+	InstanceID              string
+	Version                 string
+	GitCommit               string
+	BootID                  string
+	BuildTime               string
+	ConfigHash              string
+	DatasetHealthPolicyHash string
+	StartedAt               time.Time
+	ReadyFlag               atomic.Bool
+	SnapshotFunc            SnapshotFunc
 }
 
 // NewState creates a shared health state.
@@ -56,7 +56,7 @@ func NewState(module, instance, version, commit string) *State {
 	return &State{
 		Module: module, InstanceID: instance, Version: version, GitCommit: commit,
 		BootID: os.Getenv("MOOX_BOOT_ID"), BuildTime: os.Getenv("MOOX_BUILD_TIME"),
-		ConfigHash: os.Getenv("MOOX_CONFIG_HASH"), PipelineConfigHash: os.Getenv("MOOX_PIPELINE_CONFIG_HASH"),
+		ConfigHash: os.Getenv("MOOX_CONFIG_HASH"), DatasetHealthPolicyHash: os.Getenv("MOOX_DATASET_HEALTH_POLICY_HASH"),
 		StartedAt: time.Now().UTC(),
 	}
 }
@@ -113,8 +113,8 @@ func (s *State) enrich(rsp *Response) {
 	if rsp.ConfigHash == "" {
 		rsp.ConfigHash = s.ConfigHash
 	}
-	if rsp.PipelineConfigHash == "" {
-		rsp.PipelineConfigHash = s.PipelineConfigHash
+	if rsp.DatasetHealthPolicyHash == "" {
+		rsp.DatasetHealthPolicyHash = s.DatasetHealthPolicyHash
 	}
 }
 
@@ -202,20 +202,20 @@ func Base(module, instanceID, version, gitCommit string, start time.Time, ready 
 		status = "ok"
 	}
 	return Response{
-		Module:             module,
-		Service:            service,
-		InstanceID:         instanceID,
-		NodeID:             strings.TrimSpace(os.Getenv("MOOX_NODE_ID")),
-		Ready:              ready,
-		Status:             status,
-		Version:            version,
-		GitCommit:          gitCommit,
-		BootID:             os.Getenv("MOOX_BOOT_ID"),
-		BuildTime:          os.Getenv("MOOX_BUILD_TIME"),
-		ConfigHash:         os.Getenv("MOOX_CONFIG_HASH"),
-		PipelineConfigHash: os.Getenv("MOOX_PIPELINE_CONFIG_HASH"),
-		StartTime:          start,
-		Time:               time.Now(),
+		Module:                  module,
+		Service:                 service,
+		InstanceID:              instanceID,
+		NodeID:                  strings.TrimSpace(os.Getenv("MOOX_NODE_ID")),
+		Ready:                   ready,
+		Status:                  status,
+		Version:                 version,
+		GitCommit:               gitCommit,
+		BootID:                  os.Getenv("MOOX_BOOT_ID"),
+		BuildTime:               os.Getenv("MOOX_BUILD_TIME"),
+		ConfigHash:              os.Getenv("MOOX_CONFIG_HASH"),
+		DatasetHealthPolicyHash: os.Getenv("MOOX_DATASET_HEALTH_POLICY_HASH"),
+		StartTime:               start,
+		Time:                    time.Now(),
 	}
 }
 
@@ -266,7 +266,7 @@ func readinessHandler(snapshot SnapshotFunc) http.Handler {
 
 // RegisterNoProtocolServiceMux exposes health endpoints through a tRPC
 // http_no_protocol service. This keeps health traffic on the tRPC server's
-// lifecycle, filters, timeout and monitoring pipeline instead of opening a
+// lifecycle, filters, timeout, and monitoring middleware instead of opening a
 // second net/http listener.
 func RegisterNoProtocolServiceMux(service server.Service, mux http.Handler) error {
 	if service == nil {

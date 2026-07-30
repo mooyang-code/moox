@@ -221,7 +221,7 @@ sendJobs:
 }
 
 // LatestInputTime returns the newest business timestamp still waiting in the
-// journal. Scheduler telemetry uses it for both pipeline input and the
+// journal. Scheduler telemetry uses it for both health-check input and the
 // materialized output watermark instead of using the wall clock.
 func (w *Writer) LatestInputTime(ctx context.Context, limit int) (time.Time, error) {
 	if w == nil || w.journal == nil {

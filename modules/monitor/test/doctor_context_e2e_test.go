@@ -40,7 +40,7 @@ func TestDoctorContextEndToEndDisabledAndDeferredFacts(t *testing.T) {
 
 func TestDoctorContextEndToEndRejectsRequestLimits(t *testing.T) {
 	service := rpc.New(nil, rpc.Options{DoctorContext: &monitordoctor.Builder{}})
-	rsp, err := service.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{PipelineIds: make([]string, monitorpb.MaxDoctorContextPipelines+1)})
+	rsp, err := service.GetDoctorContext(context.Background(), &monitorpb.GetDoctorContextReq{HealthCheckIds: make([]string, monitorpb.MaxDoctorContextHealthChecks+1)})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }

@@ -13,11 +13,7 @@ func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
 	if s == nil {
 		return nil, fmt.Errorf("strategy metrics reporter requires a tRPC server")
 	}
-	pipelines, err := report.ValidatePipelineEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "strategy", pipelines.IDsForModule("strategy"))
+	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "strategy", report.HealthCheckIDsForModule("strategy"))
 	if err != nil {
 		return nil, err
 	}

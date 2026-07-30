@@ -131,14 +131,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize factor dataset metrics: %w", err)
 	}
-	pipelines, err := report.ValidatePipelineEnvironment()
-	if err != nil {
-		return nil, fmt.Errorf("validate factor pipeline metrics: %w", err)
-	}
 	moduleMetrics, err := report.NewModuleMetrics(
 		prometheus.DefaultRegisterer,
 		"factor",
-		pipelines.IDsForModule("factor"),
+		report.HealthCheckIDsForModule("factor"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initialize factor module metrics: %w", err)

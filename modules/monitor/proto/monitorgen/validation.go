@@ -3,9 +3,9 @@ package monitorpb
 import "fmt"
 
 const (
-	MaxDoctorContextComponents = 64
-	MaxDoctorContextPipelines  = 32
-	MaxDoctorContextBytes      = 2 << 20
+	MaxDoctorContextComponents   = 64
+	MaxDoctorContextHealthChecks = 32
+	MaxDoctorContextBytes        = 2 << 20
 )
 
 func (r *CreateCheckReq) Validate() error {
@@ -22,13 +22,13 @@ func (r *GetDoctorContextReq) Validate() error {
 	if len(r.ComponentIds) > MaxDoctorContextComponents {
 		return fmt.Errorf("component_ids exceeds limit %d", MaxDoctorContextComponents)
 	}
-	if len(r.PipelineIds) > MaxDoctorContextPipelines {
-		return fmt.Errorf("pipeline_ids exceeds limit %d", MaxDoctorContextPipelines)
+	if len(r.HealthCheckIds) > MaxDoctorContextHealthChecks {
+		return fmt.Errorf("health_check_ids exceeds limit %d", MaxDoctorContextHealthChecks)
 	}
 	if err := validateUniqueNonEmpty("component_ids", r.ComponentIds); err != nil {
 		return err
 	}
-	if err := validateUniqueNonEmpty("pipeline_ids", r.PipelineIds); err != nil {
+	if err := validateUniqueNonEmpty("health_check_ids", r.HealthCheckIds); err != nil {
 		return err
 	}
 	return nil

@@ -178,11 +178,11 @@ func TestMonitorAppConfigHasNoProcessOwnedScheduleIntervals(t *testing.T) {
 	}
 }
 
-func TestMonitorDefaultPipelinePathExistsFromModuleWorkingDirectory(t *testing.T) {
+func TestMonitorDefaultDatasetHealthPolicyPathExistsFromModuleWorkingDirectory(t *testing.T) {
 	moduleRoot := filepath.Join("..", "..")
 	cfg := Default()
-	if _, err := os.Stat(filepath.Join(moduleRoot, cfg.Metrics.PipelineConfigPath)); err != nil {
-		t.Fatalf("pipeline_config_path %q is not usable from modules/monitor: %v", cfg.Metrics.PipelineConfigPath, err)
+	if _, err := os.Stat(filepath.Join(moduleRoot, cfg.Metrics.DatasetHealthPolicyPath)); err != nil {
+		t.Fatalf("dataset_health_policy_path %q is not usable from modules/monitor: %v", cfg.Metrics.DatasetHealthPolicyPath, err)
 	}
 }
 

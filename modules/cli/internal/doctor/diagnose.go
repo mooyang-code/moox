@@ -17,12 +17,12 @@ type ContextClient interface {
 }
 
 type DiagnoseOptions struct {
-	NodeID    string
-	CheckIDs  []string
-	Client    ContextClient
-	Prober    HTTPProber
-	Pipelines report.PipelineConfig
-	Now       func() time.Time
+	NodeID       string
+	CheckIDs     []string
+	Client       ContextClient
+	Prober       HTTPProber
+	HealthChecks []report.ModuleHealthCheck
+	Now          func() time.Time
 }
 
 type diagnoseRunner struct {
@@ -40,7 +40,7 @@ func RunDiagnose(ctx context.Context, options DiagnoseOptions) (core.Report, err
 	if options.Client == nil {
 		contextErr = fmt.Errorf("Monitor client is unavailable")
 	} else {
-		snapshot, contextErr = options.Client.GetDoctorContext(ctx, &monitorpb.GetDoctorContextReq{NodeId: options.NodeID, PipelineIds: pipelineIDs(options.Pipelines)})
+		snapshot, contextErr = options.Client.GetDoctorContext(ctx, &monitorpb.GetDoctorContextReq{NodeId: options.NodeID, HealthCheckIds: healthCheckIDs(options.HealthChecks)})
 		if contextErr == nil && snapshot == nil {
 			contextErr = fmt.Errorf("Monitor returned an empty Doctor Context")
 		}
@@ -68,7 +68,7 @@ func RunDiagnose(ctx context.Context, options DiagnoseOptions) (core.Report, err
 		report.RunID, report.ManifestChecksum = newRunID(), manifest.Checksum
 		return report, nil
 	}
-	specs := diagnoseSpecs(snapshot, options.Pipelines)
+	specs := diagnoseSpecs(snapshot, options.HealthChecks)
 	specs, err = selectSpecs(specs, options.CheckIDs)
 	if err != nil {
 		return core.Report{}, err
@@ -86,7 +86,7 @@ func RunDiagnose(ctx context.Context, options DiagnoseOptions) (core.Report, err
 	return result, nil
 }
 
-func diagnoseSpecs(snapshot *monitorpb.GetDoctorContextRsp, pipelines report.PipelineConfig) []core.CheckSpec {
+func diagnoseSpecs(snapshot *monitorpb.GetDoctorContextRsp, healthChecks []report.ModuleHealthCheck) []core.CheckSpec {
 	specs := []core.CheckSpec{{ID: "diagnose.context"}}
 	health := map[string]string{}
 	freshnessByModule := map[string]string{}
@@ -113,7 +113,7 @@ func diagnoseSpecs(snapshot *monitorpb.GetDoctorContextRsp, pipelines report.Pip
 		}
 		specs = append(specs, core.CheckSpec{ID: reporterID, RequiredDependencies: reporterDependencies, OptionalDependencies: []string{health[component.GetComponentId()]}})
 		module := strings.TrimPrefix(component.GetComponentId(), "moox_")
-		freshnessEnabled := component.GetFunctionalObservability() == "deferred" || moduleFreshnessEnabled(pipelines, module)
+		freshnessEnabled := component.GetFunctionalObservability() == "deferred" || moduleFreshnessEnabled(healthChecks, module)
 		if component.GetFunctionalObservability() != "not_applicable" && freshnessEnabled {
 			freshnessDependencies := []string{reporterID}
 			if component.GetFunctionalObservability() == "deferred" {
@@ -124,13 +124,13 @@ func diagnoseSpecs(snapshot *monitorpb.GetDoctorContextRsp, pipelines report.Pip
 			specs = append(specs, core.CheckSpec{ID: freshnessID, RequiredDependencies: freshnessDependencies, OptionalDependencies: []string{health[component.GetComponentId()]}})
 		}
 	}
-	for _, pipeline := range pipelines.Pipelines {
-		if pipeline.Enabled && pipeline.WatermarkMonitoring {
+	for _, healthCheck := range healthChecks {
+		if healthCheck.Enabled && healthCheck.CheckWatermark {
 			dependencies := []string{"diagnose.context"}
-			if freshnessByModule[pipeline.Module] != "" {
-				dependencies = append(dependencies, freshnessByModule[pipeline.Module])
+			if freshnessByModule[healthCheck.Module] != "" {
+				dependencies = append(dependencies, freshnessByModule[healthCheck.Module])
 			}
-			specs = append(specs, core.CheckSpec{ID: "module.pipeline_lag:" + pipeline.Module + ":" + pipeline.ID, RequiredDependencies: dependencies})
+			specs = append(specs, core.CheckSpec{ID: "module.health_check:" + healthCheck.Module + ":" + healthCheck.ID, RequiredDependencies: dependencies})
 		}
 	}
 	specs = append(specs, core.CheckSpec{ID: "host.disk_forecast:" + firstNode(snapshot)})
@@ -208,7 +208,7 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		metricErrorsName := report.ModuleMetricName(module, report.ModuleMetricErrors)
 		for _, metric := range r.context.GetModuleObservations() {
 			if metric.GetComponentId() == component.GetComponentId() && metric.GetSummary() == metricErrorsName && metric.GetValue() > 0 && recentMetricError(r.context.GetModuleObservations(), component.GetComponentId(), r.now()) {
-				return checkResult(spec.ID, core.StatusFail, "module metric observations have been rejected", nil, "inspect_pipeline_input")
+				return checkResult(spec.ID, core.StatusFail, "module metric observations have been rejected", nil, "inspect_health_check_input")
 			}
 		}
 		observation := findObservation(r.context.GetReporterObservations(), component.GetComponentId())
@@ -244,10 +244,10 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		}
 		observations := r.moduleSuccessObservations(component.GetComponentId())
 		if len(observations) == 0 {
-			return checkResult(spec.ID, core.StatusUnknown, "no functional observation exists for an enabled workload", nil, "inspect_pipeline_input")
+			return checkResult(spec.ID, core.StatusUnknown, "no functional observation exists for an enabled workload", nil, "inspect_health_check_input")
 		}
 		module := strings.TrimPrefix(component.GetComponentId(), "moox_")
-		byPipeline := map[string]time.Time{}
+		byHealthCheck := map[string]time.Time{}
 		for _, observation := range observations {
 			labels := map[string]string{}
 			if json.Unmarshal([]byte(observation.GetDetailsJson()), &labels) != nil {
@@ -257,89 +257,89 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 			if at.IsZero() {
 				continue
 			}
-			byPipeline[labels["pipeline"]] = at
+			byHealthCheck[labels["health_check"]] = at
 		}
-		if len(byPipeline) == 0 {
-			return checkResult(spec.ID, core.StatusUnknown, "functional last-success timestamp is invalid", nil, "inspect_pipeline_input")
+		if len(byHealthCheck) == 0 {
+			return checkResult(spec.ID, core.StatusUnknown, "functional last-success timestamp is invalid", nil, "inspect_health_check_input")
 		}
-		if len(r.options.Pipelines.Pipelines) > 0 {
-			for _, pipeline := range r.options.Pipelines.Pipelines {
-				if !pipeline.Enabled || pipeline.Module != module {
+		if len(r.options.HealthChecks) > 0 {
+			for _, healthCheck := range r.options.HealthChecks {
+				if !healthCheck.Enabled || healthCheck.Module != module {
 					continue
 				}
-				at, ok := byPipeline[pipeline.ID]
+				at, ok := byHealthCheck[healthCheck.ID]
 				if !ok {
-					return checkResult(spec.ID, core.StatusUnknown, "functional last-success timestamp is missing for an enabled pipeline", nil, "inspect_pipeline_input")
+					return checkResult(spec.ID, core.StatusUnknown, "functional last-success timestamp is missing for an enabled health check", nil, "inspect_health_check_input")
 				}
 				threshold := r.moduleFreshnessThreshold(module)
-				if pipeline.LagTolerance > threshold {
-					threshold = pipeline.LagTolerance
+				if healthCheck.MaxLag > threshold {
+					threshold = healthCheck.MaxLag
 				}
 				if at.After(r.now().Add(time.Minute)) || r.now().Sub(at) > threshold {
-					return checkResult(spec.ID, core.StatusFail, "functional last-success timestamp is stale", nil, "inspect_pipeline_input")
+					return checkResult(spec.ID, core.StatusFail, "functional last-success timestamp is stale", nil, "inspect_health_check_input")
 				}
 			}
 			return checkResult(spec.ID, core.StatusPass, "functional last-success timestamps are current", nil)
 		}
 		freshest := time.Time{}
-		for _, at := range byPipeline {
+		for _, at := range byHealthCheck {
 			if at.After(freshest) {
 				freshest = at
 			}
 		}
 		if freshest.After(r.now().Add(time.Minute)) || r.now().Sub(freshest) > r.moduleFreshnessThreshold(module) {
-			return checkResult(spec.ID, core.StatusFail, "functional last-success timestamp is stale", nil, "inspect_pipeline_input")
+			return checkResult(spec.ID, core.StatusFail, "functional last-success timestamp is stale", nil, "inspect_health_check_input")
 		}
 		return checkResult(spec.ID, core.StatusPass, "functional last-success timestamp is current", nil)
 	}
-	if strings.HasPrefix(spec.ID, "module.pipeline_lag:") {
-		pipeline := r.pipelineFromID(spec.ID)
-		if pipeline == nil {
-			return checkResult(spec.ID, core.StatusFail, "unknown pipeline", nil)
+	if strings.HasPrefix(spec.ID, "module.health_check:") {
+		healthCheck := r.healthCheckFromID(spec.ID)
+		if healthCheck == nil {
+			return checkResult(spec.ID, core.StatusFail, "unknown health check", nil)
 		}
-		if !r.moduleExpected(pipeline.Module) {
+		if !r.moduleExpected(healthCheck.Module) {
 			return checkResult(spec.ID, core.StatusSkipped, "no_enabled_workload", nil)
 		}
-		if pipeline.CrossesStorageDeferred {
+		if healthCheck.ObservabilityDeferred {
 			return checkResult(spec.ID, core.StatusSkipped, "storage_observability_deferred", nil)
 		}
 		var input time.Time
 		var inputObservation *monitorpb.DoctorObservation
-		inputMetric := report.ModuleMetricName(pipeline.Module, report.ModuleMetricInputWatermark)
+		inputMetric := report.ModuleMetricName(healthCheck.Module, report.ModuleMetricInputWatermark)
 		for _, observation := range r.context.GetModuleObservations() {
 			if observation.GetSummary() != inputMetric {
 				continue
 			}
 			labels := map[string]string{}
-			if json.Unmarshal([]byte(observation.GetDetailsJson()), &labels) == nil && labels["pipeline"] == pipeline.ID {
+			if json.Unmarshal([]byte(observation.GetDetailsJson()), &labels) == nil && labels["health_check"] == healthCheck.ID {
 				input = time.Unix(int64(observation.GetValue()), 0).UTC()
 				inputObservation = observation
 				break
 			}
 		}
 		if inputObservation != nil && inputObservation.GetStale() {
-			return checkResult(spec.ID, core.StatusUnknown, "pipeline input observation is stale", nil, "inspect_pipeline_input")
+			return checkResult(spec.ID, core.StatusUnknown, "health check input observation is stale", nil, "inspect_health_check_input")
 		}
 		var output time.Time
 		outputStatus := ""
 		for _, watermark := range r.context.GetWatermarks() {
-			if watermark.GetPipeline() == pipeline.ID && watermark.GetModule() == pipeline.Module {
+			if watermark.GetHealthCheckId() == healthCheck.ID && watermark.GetModule() == healthCheck.Module {
 				output = time.Unix(int64(watermark.GetValue()), 0).UTC()
 				outputStatus = watermark.GetStatus()
 				break
 			}
 		}
 		if inputObservation != nil && outputStatus == "STALE" {
-			return checkResult(spec.ID, core.StatusFail, "pipeline output watermark is stale while input exists", nil, "inspect_pipeline_input")
+			return checkResult(spec.ID, core.StatusFail, "health check output watermark is stale while input exists", nil, "inspect_health_check_input")
 		}
 		if input.After(r.now().Add(time.Minute)) || (!output.IsZero() && output.After(r.now().Add(time.Minute))) {
-			return checkResult(spec.ID, core.StatusUnknown, "pipeline watermark is in the future", nil, "inspect_pipeline_input")
+			return checkResult(spec.ID, core.StatusUnknown, "health check watermark is in the future", nil, "inspect_health_check_input")
 		}
 		// The Monitor snapshot has no prior input watermark. Never derive one
 		// from the output watermark: doing so turns an old stalled output into
 		// the evaluator's input-idle PASS path.
-		verdict := report.EvaluatePipelineSignals(report.PipelineSignals{EnabledWorkloads: 1, InputWatermark: input, OutputWatermark: output, LagTolerance: pipeline.LagTolerance, CrossesStorageDeferred: pipeline.CrossesStorageDeferred}, r.now())
-		return checkResult(spec.ID, coreStatus(verdict.Status), verdict.Reason, nil, "inspect_pipeline_input")
+		verdict := report.EvaluateModuleHealth(report.ModuleHealthSignals{EnabledWorkloads: 1, InputWatermark: input, OutputWatermark: output, MaxLag: healthCheck.MaxLag, ObservabilityDeferred: healthCheck.ObservabilityDeferred}, r.now())
+		return checkResult(spec.ID, coreStatus(verdict.Status), verdict.Reason, nil, "inspect_health_check_input")
 	}
 	if strings.HasPrefix(spec.ID, "host.disk_forecast:") {
 		if len(r.context.GetDiskForecasts()) == 0 {
@@ -432,11 +432,11 @@ func (r *diagnoseRunner) expectedFromID(id string) *monitorpb.DoctorExpectedComp
 	return nil
 }
 
-func (r *diagnoseRunner) pipelineFromID(id string) *report.Pipeline {
-	for i := range r.options.Pipelines.Pipelines {
-		pipeline := &r.options.Pipelines.Pipelines[i]
-		if strings.HasSuffix(id, ":"+pipeline.ID) {
-			return pipeline
+func (r *diagnoseRunner) healthCheckFromID(id string) *report.ModuleHealthCheck {
+	for i := range r.options.HealthChecks {
+		healthCheck := &r.options.HealthChecks[i]
+		if strings.HasSuffix(id, ":"+healthCheck.ID) {
+			return healthCheck
 		}
 	}
 	return nil
@@ -463,20 +463,20 @@ func (r *diagnoseRunner) moduleSuccessObservations(componentID string) []*monito
 		if json.Unmarshal([]byte(item.GetDetailsJson()), &labels) != nil {
 			continue
 		}
-		pipeline := labels["pipeline"]
-		if pipeline == "" || r.pipelineEnabled(module, pipeline) {
+		healthCheck := labels["health_check"]
+		if healthCheck == "" || r.healthCheckEnabled(module, healthCheck) {
 			result = append(result, item)
 		}
 	}
 	return result
 }
 
-func (r *diagnoseRunner) pipelineEnabled(module, pipeline string) bool {
-	if len(r.options.Pipelines.Pipelines) == 0 {
+func (r *diagnoseRunner) healthCheckEnabled(module, healthCheck string) bool {
+	if len(r.options.HealthChecks) == 0 {
 		return true
 	}
-	for _, candidate := range r.options.Pipelines.Pipelines {
-		if candidate.Enabled && candidate.Module == module && candidate.ID == pipeline {
+	for _, candidate := range r.options.HealthChecks {
+		if candidate.Enabled && candidate.Module == module && candidate.ID == healthCheck {
 			return true
 		}
 	}
@@ -500,9 +500,9 @@ func (r *diagnoseRunner) moduleExpected(module string) bool {
 
 func (r *diagnoseRunner) moduleFreshnessThreshold(module string) time.Duration {
 	threshold := 5 * time.Minute
-	for _, pipeline := range r.options.Pipelines.Pipelines {
-		if pipeline.Enabled && pipeline.Module == module && pipeline.LagTolerance > threshold {
-			threshold = pipeline.LagTolerance
+	for _, healthCheck := range r.options.HealthChecks {
+		if healthCheck.Enabled && healthCheck.Module == module && healthCheck.MaxLag > threshold {
+			threshold = healthCheck.MaxLag
 		}
 	}
 	return threshold
@@ -517,19 +517,19 @@ func findObservationKind(items []*monitorpb.DoctorObservation, componentID, kind
 	return nil
 }
 
-func pipelineIDs(config report.PipelineConfig) []string {
-	ids := make([]string, 0, len(config.Pipelines))
-	for _, pipeline := range config.Pipelines {
-		if pipeline.Enabled && pipeline.WatermarkMonitoring {
-			ids = append(ids, pipeline.ID)
+func healthCheckIDs(config []report.ModuleHealthCheck) []string {
+	ids := make([]string, 0, len(config))
+	for _, healthCheck := range config {
+		if healthCheck.Enabled && healthCheck.CheckWatermark {
+			ids = append(ids, healthCheck.ID)
 		}
 	}
 	return ids
 }
 
-func moduleFreshnessEnabled(config report.PipelineConfig, module string) bool {
-	for _, pipeline := range config.Pipelines {
-		if pipeline.Enabled && pipeline.FreshnessMonitoring && pipeline.Module == module {
+func moduleFreshnessEnabled(config []report.ModuleHealthCheck, module string) bool {
+	for _, healthCheck := range config {
+		if healthCheck.Enabled && healthCheck.CheckFreshness && healthCheck.Module == module {
 			return true
 		}
 	}

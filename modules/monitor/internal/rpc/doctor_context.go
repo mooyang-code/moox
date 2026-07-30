@@ -18,7 +18,7 @@ func (s *Service) GetDoctorContext(ctx context.Context, req *monitorpb.GetDoctor
 	if s.doctorContext == nil {
 		return &monitorpb.GetDoctorContextRsp{RetInfo: inner(errors.New("doctor context is unavailable"))}, nil
 	}
-	value, err := s.doctorContext.Build(ctx, req.GetNodeId(), req.GetComponentIds(), req.GetPipelineIds())
+	value, err := s.doctorContext.Build(ctx, req.GetNodeId(), req.GetComponentIds(), req.GetHealthCheckIds())
 	if err != nil {
 		return &monitorpb.GetDoctorContextRsp{RetInfo: invalid(err)}, nil
 	}
@@ -61,7 +61,7 @@ func contextToPB(value monitordoctor.Context) *monitorpb.GetDoctorContextRsp {
 		rsp.MissingObservations = append(rsp.MissingObservations, observationToPB(item))
 	}
 	for _, item := range value.Watermarks {
-		rsp.Watermarks = append(rsp.Watermarks, &monitorpb.DoctorWatermark{Module: item.Module, Stage: item.Stage, Pipeline: item.Pipeline, ObservedAt: formatDoctorTime(item.ObservedAt), Value: item.Value, Status: item.Status})
+		rsp.Watermarks = append(rsp.Watermarks, &monitorpb.DoctorWatermark{Module: item.Module, Stage: item.Stage, HealthCheckId: item.HealthCheckID, ObservedAt: formatDoctorTime(item.ObservedAt), Value: item.Value, Status: item.Status})
 	}
 	for _, host := range value.Hosts {
 		rsp.HostResources = append(rsp.HostResources, &monitorpb.HostAgentInfo{

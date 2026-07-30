@@ -32,14 +32,7 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) *report.ModuleM
 		}
 		return nil
 	}
-	pipelines, err := report.ValidatePipelineEnvironment()
-	if err != nil {
-		if runtime != nil {
-			runtime.setMetricsReporterState(false, err)
-		}
-		return nil
-	}
-	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "monitor", pipelines.IDsForModule("monitor"))
+	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "monitor", report.HealthCheckIDsForModule("monitor"))
 	if err != nil {
 		if runtime != nil {
 			runtime.setMetricsReporterState(false, err)

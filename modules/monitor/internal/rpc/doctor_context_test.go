@@ -29,6 +29,19 @@ func TestGetDoctorContextReturnsBoundedFacts(t *testing.T) {
 	require.True(t, rsp.GetExpectedComponents()[0].GetExpected())
 }
 
+func TestDoctorContextUsesHealthCheckWireNames(t *testing.T) {
+	request := &monitorpb.GetDoctorContextReq{
+		NodeId:         "node-a",
+		HealthCheckIds: []string{"monitor-metrics"},
+	}
+	require.Equal(t, []string{"monitor-metrics"}, request.GetHealthCheckIds())
+
+	wire := contextToPB(monitordoctor.Context{Watermarks: []monitordoctor.Watermark{{
+		Module: "monitor", Stage: "ingest", HealthCheckID: "monitor-metrics",
+	}}})
+	require.Equal(t, "monitor-metrics", wire.GetWatermarks()[0].GetHealthCheckId())
+}
+
 func TestGetDoctorContextRejectsTooManyComponents(t *testing.T) {
 	service := &Service{doctorContext: &monitordoctor.Builder{}}
 	ids := make([]string, monitorpb.MaxDoctorContextComponents+1)

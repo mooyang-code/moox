@@ -70,11 +70,11 @@ type AlertConfig struct {
 }
 
 type MetricsConfig struct {
-	Enabled            bool                 `yaml:"enabled"`
-	PipelineConfigPath string               `yaml:"pipeline_config_path"`
-	NoDataIntervals    int                  `yaml:"no_data_intervals"`
-	Storage            MetricsStorageConfig `yaml:"storage"`
-	HostStorage        HostStorageConfig    `yaml:"host_storage"`
+	Enabled                 bool                 `yaml:"enabled"`
+	DatasetHealthPolicyPath string               `yaml:"dataset_health_policy_path"`
+	NoDataIntervals         int                  `yaml:"no_data_intervals"`
+	Storage                 MetricsStorageConfig `yaml:"storage"`
+	HostStorage             HostStorageConfig    `yaml:"host_storage"`
 }
 
 type ObservabilityConfig struct {
@@ -181,7 +181,7 @@ func Default() *Config {
 		},
 		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
 		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 150 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "spot_kline_1h", Symbol: "BTC-USDT", Frequency: "1h", SeriesTag: stringPointer("venue:binance")}}},
-		Metrics:       MetricsConfig{Enabled: true, PipelineConfigPath: "../../examples/monitor-pipelines.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
+		Metrics:       MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../examples/setup/default/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
 
@@ -247,8 +247,8 @@ func (c *Config) applyDefaults() {
 	if len(c.MarketCanary.Subjects) == 0 {
 		c.MarketCanary.Subjects = canaryDefaults.Subjects
 	}
-	if c.Metrics.PipelineConfigPath == "" {
-		c.Metrics.PipelineConfigPath = metricsDefaults.PipelineConfigPath
+	if c.Metrics.DatasetHealthPolicyPath == "" {
+		c.Metrics.DatasetHealthPolicyPath = metricsDefaults.DatasetHealthPolicyPath
 	}
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
@@ -340,8 +340,8 @@ func (c *Config) applyEnv() {
 	if v := strings.TrimSpace(os.Getenv("MOOX_OBSERVABILITY_CREDENTIAL_FILE")); v != "" {
 		c.Observability.CredentialFile = v
 	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_PIPELINE_CONFIG")); v != "" {
-		c.Metrics.PipelineConfigPath = v
+	if v := strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")); v != "" {
+		c.Metrics.DatasetHealthPolicyPath = v
 	}
 	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
 		c.SysDeploy.ServiceAuth.TargetNode = v

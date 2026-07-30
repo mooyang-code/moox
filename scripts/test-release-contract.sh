@@ -4,12 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 (cd "${ROOT}/packages/doctor" && go test -count=1 ./...)
-grep -q 'moox_gateway' "${ROOT}/examples/service-deployments.seed.yaml"
+grep -q 'moox_gateway' "${ROOT}/examples/setup/default/service-deployments.yaml"
 for contract in \
   'packages/doctor/components.yaml' \
   'packages/doctor/report.schema.json' \
   'modules/cli/config/cli.yaml' \
-  'examples/monitor-pipelines.yaml'; do
+  'examples/setup/default/dataset-health-policy.yaml'; do
   grep -q "${contract}" "${ROOT}/scripts/release.sh" || {
     echo "missing Doctor release contract: ${contract}" >&2
     exit 1
