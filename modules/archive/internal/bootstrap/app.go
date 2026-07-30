@@ -66,7 +66,7 @@ func (a *App) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	metadataRegistry := registry.NewClientWithCredentials(a.Config.Archive.StorageRPC.GatewayTarget, a.Config.Archive.StorageRPC.GatewayNodeID, storageCredentials)
+	metadataRegistry := registry.NewClientWithCredentials(a.Config.Archive.StorageRPC.GatewayTarget, a.Config.Archive.StorageRPC.TargetNodeID(), storageCredentials)
 	w.SetRegistry(registry.PartitionRegistry{Client: metadataRegistry, DeviceID: a.Config.Archive.DeviceID})
 	if err := w.Recover(ctx); err != nil {
 		return err

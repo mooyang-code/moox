@@ -116,6 +116,13 @@ views:
     keep_duration: "0"
     status: active
 
+devices:
+  - device_id: parquet-local
+    name: market-parquet-archive
+    engine: parquet
+    endpoint: ../data/archive
+    status: active
+
 dataset_subjects:
   - space_id: crypto
     dataset_id: spot_kline_1h

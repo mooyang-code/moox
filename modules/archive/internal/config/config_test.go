@@ -39,6 +39,12 @@ func TestLoadDefaultsAndMarketSources(t *testing.T) {
 	}
 }
 
+func TestStorageRPCTargetNodeIDPrefersConfigAndFallsBackToEnvironment(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "storage-from-env")
+	assert.Equal(t, "storage-from-env", (StorageRPCConfig{}).TargetNodeID())
+	assert.Equal(t, "storage-from-config", (StorageRPCConfig{GatewayNodeID: " storage-from-config "}).TargetNodeID())
+}
+
 func TestValidateRejectsOverlappingRootAndState(t *testing.T) {
 	cfg := Default()
 	cfg.Archive.RootDir = "/data/archive"

@@ -201,7 +201,9 @@ func (c *Client) readRowsPage(
 	columns []string,
 ) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	req := &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: c.auth,
+		AuthInfo:  c.auth,
+		SpaceId:   key.SpaceID,
+		DatasetId: key.SourceDataset,
 		Selectors: []*storagepb.TimeSeriesSelector{
 			{
 				SpaceId:   key.SpaceID,
@@ -212,7 +214,7 @@ func (c *Client) readRowsPage(
 		},
 		TimeRange:   timeRange,
 		Order:       order,
-		ColumnNames: columns,
+		ColumnNames: qualifyDatasetColumns(key.SourceDataset, columns),
 		Page:        &commonpb.Page{Page: page, Size: size},
 	}
 	// Retry is deliberately attached to this idempotent read call only. The
@@ -225,6 +227,17 @@ func (c *Client) readRowsPage(
 		return nil, err
 	}
 	return rsp, nil
+}
+
+func qualifyDatasetColumns(datasetID string, columns []string) []string {
+	if columns == nil {
+		return nil
+	}
+	qualified := make([]string, len(columns))
+	for index, column := range columns {
+		qualified[index] = datasetID + "." + column
+	}
+	return qualified
 }
 
 // NormalizeStorageTarget normalizes bare host:port targets to tRPC ip:// targets.

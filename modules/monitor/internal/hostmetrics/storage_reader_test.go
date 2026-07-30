@@ -25,6 +25,9 @@ func (f *readerAccessFake) ReadTimeSeriesRows(_ context.Context, req *storagepb.
 		panic("host history must use one wildcard series-tag selector")
 	}
 	dataset := req.GetSelectors()[0].GetDatasetId()
+	if req.GetSpaceId() != req.GetSelectors()[0].GetSpaceId() || req.GetDatasetId() != dataset {
+		panic("host history must repeat the selector scope at request level")
+	}
 	var rows []*storagepb.TimeSeriesRow
 	for _, row := range f.rows {
 		if row.GetKey().GetDatasetId() == dataset {

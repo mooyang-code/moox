@@ -505,7 +505,7 @@ CREATE TABLE IF NOT EXISTS t_storage_devices (
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_engine IN ('pebble', 'duckdb', 'bleve')),
+    CHECK (c_engine IN ('pebble', 'duckdb', 'bleve', 'parquet')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     UNIQUE (c_device_id)
 );

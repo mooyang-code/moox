@@ -64,3 +64,44 @@ func TestRowsToDataFrameRejectsDuplicateIdentity(t *testing.T) {
 		t.Fatal("expected duplicate identity rejection")
 	}
 }
+
+func TestRowsToDataFrameMapsQualifiedViewFieldsToLogicalInputs(t *testing.T) {
+	at := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	frame, err := RowsToDataFrame([]*storagepb.TimeSeriesRow{{
+		Key: &storagepb.TimeSeriesKey{
+			DatasetId: "bars", DataTime: at.Format(time.RFC3339Nano),
+		},
+		Fields: []*storagepb.FieldValue{{
+			FieldId: "bars.close",
+			Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{
+				DoubleValue: 101,
+			}},
+		}},
+	}}, []string{"close"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frame.Rows) != 1 || len(frame.Rows[0]) != 1 || frame.Rows[0][0] != float64(101) {
+		t.Fatalf("qualified field was not mapped to logical input: %v", frame.Rows)
+	}
+}
+
+func TestRowsToDataFrameRejectsPlainAndQualifiedProjectionCollision(t *testing.T) {
+	at := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	_, err := RowsToDataFrame([]*storagepb.TimeSeriesRow{{
+		Key: &storagepb.TimeSeriesKey{
+			DatasetId: "bars", DataTime: at.Format(time.RFC3339Nano),
+		},
+		Fields: []*storagepb.FieldValue{
+			{FieldId: "close", Value: &storagepb.TypedValue{
+				Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 100},
+			}},
+			{FieldId: "bars.close", Value: &storagepb.TypedValue{
+				Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 101},
+			}},
+		},
+	}}, []string{"close"})
+	if err == nil {
+		t.Fatal("expected plain/qualified projection collision rejection")
+	}
+}

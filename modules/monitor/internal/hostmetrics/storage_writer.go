@@ -74,16 +74,20 @@ func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricp
 		if w.cfg.WriteTimeout > 0 {
 			writeCtx, cancel = context.WithTimeout(ctx, w.cfg.WriteTimeout)
 		}
-		rsp, err := w.access.UpsertFields(writeCtx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: w.auth, Rows: group, SourceEventId: messageID})
+		datasetID := group[0].GetKey().GetDatasetId()
+		rsp, err := w.access.UpsertFields(writeCtx, &storagepb.PrimaryUpsertFieldsReq{
+			AuthInfo: w.auth, Rows: group,
+			SourceEventId: messageID + ":" + datasetID,
+		})
 		cancel()
 		if err != nil {
-			return fmt.Errorf("write host dataset %q: %w", group[0].GetKey().GetDatasetId(), err)
+			return fmt.Errorf("write host dataset %q: %w", datasetID, err)
 		}
 		if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			if rsp == nil || rsp.GetRetInfo() == nil {
-				return fmt.Errorf("write host dataset %q returned empty response", group[0].GetKey().GetDatasetId())
+				return fmt.Errorf("write host dataset %q returned empty response", datasetID)
 			}
-			return fmt.Errorf("write host dataset %q: %s", group[0].GetKey().GetDatasetId(), rsp.GetRetInfo().GetMsg())
+			return fmt.Errorf("write host dataset %q: %s", datasetID, rsp.GetRetInfo().GetMsg())
 		}
 	}
 	return nil

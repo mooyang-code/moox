@@ -62,6 +62,13 @@ type StorageRPCConfig struct {
 	HMACKeyFile   string `yaml:"hmac_key_file"`
 }
 
+func (c StorageRPCConfig) TargetNodeID() string {
+	if nodeID := strings.TrimSpace(c.GatewayNodeID); nodeID != "" {
+		return nodeID
+	}
+	return gatewayauth.ServiceGatewayNodeID()
+}
+
 type COSConfig struct {
 	Enabled            bool   `yaml:"enabled"`
 	Region             string `yaml:"region"`

@@ -27,6 +27,10 @@ func TestReadRangeChunkPrependsLookbackAndReturnsTargetPeriods(t *testing.T) {
 	require.Len(t, chunk.Frame.DataTimes, 5)
 	require.Equal(t, []time.Time{base.Add(3 * time.Minute), base.Add(4 * time.Minute)}, chunk.TargetPeriods)
 	require.Equal(t, base, chunk.Frame.DataTimes[0])
+	require.Equal(t, "crypto", access.readReqs[0].GetSpaceId())
+	require.Equal(t, "bars", access.readReqs[0].GetDatasetId())
+	require.Equal(t, []string{"bars.close"}, access.readReqs[0].GetColumnNames())
+	require.Equal(t, []string{"bars.close"}, access.readReqs[1].GetColumnNames())
 	require.Equal(t, storagepb.SortOrder_SORT_ORDER_ASC, access.readReqs[0].GetOrder())
 	require.Equal(t, storagepb.SortOrder_SORT_ORDER_DESC, access.readReqs[1].GetOrder())
 }

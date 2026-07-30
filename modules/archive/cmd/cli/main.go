@@ -117,7 +117,7 @@ func runSyncCOS(ctx context.Context, cli cliConfig, cfg *config.Config, out io.W
 	if err != nil {
 		return err
 	}
-	metadataRegistry := registry.NewClientWithCredentials(cfg.Archive.StorageRPC.GatewayTarget, cfg.Archive.StorageRPC.GatewayNodeID, credentials)
+	metadataRegistry := registry.NewClientWithCredentials(cfg.Archive.StorageRPC.GatewayTarget, cfg.Archive.StorageRPC.TargetNodeID(), credentials)
 	if err := (cosstore.Syncer{
 		Client: client, Journal: store,
 		Registry: registry.PartitionRegistry{Client: metadataRegistry, DeviceID: cfg.Archive.DeviceID},
@@ -154,7 +154,7 @@ func runBackfill(ctx context.Context, cli cliConfig, cfg *config.Config, out io.
 	if err != nil {
 		return err
 	}
-	options := gatewayauth.NewTRPCClientOptions(backfill.NormalizeTarget(target, "11003"), cfg.Archive.StorageRPC.GatewayNodeID, credentials)
+	options := gatewayauth.NewTRPCClientOptions(backfill.NormalizeTarget(target, "11003"), cfg.Archive.StorageRPC.TargetNodeID(), credentials)
 	access := storagepb.NewPrimaryStoreClientProxy(options...)
 	metadata := storagepb.NewMetadataClientProxy(options...)
 	const appID = "archive-backfill"

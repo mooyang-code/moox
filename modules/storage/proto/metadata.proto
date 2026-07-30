@@ -424,7 +424,7 @@ message Device {
   string device_id = 1;
   // name 是设备名称，通常用于管理台展示。
   string name = 2;
-  // engine 是存储引擎，例如 pebble、duckdb 或 bleve。
+  // engine 是存储引擎，例如 pebble、duckdb、bleve 或 parquet。
   string engine = 3;
   // endpoint 是连接地址、文件路径或 URI。
   string endpoint = 4;

@@ -2,7 +2,9 @@ package storageio
 
 import (
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
@@ -46,8 +48,21 @@ func RowsToDataFrame(rows []*storagepb.TimeSeriesRow, columns []string) (*engine
 				item.dataTime.Format(time.RFC3339Nano), item.seriesTag)
 		}
 		valuesByName := make(map[string]any, len(item.row.GetFields()))
+		datasetID := item.row.GetKey().GetDatasetId()
 		for _, field := range item.row.GetFields() {
-			valuesByName[field.GetFieldId()] = typedValueToAny(field.GetValue())
+			name := field.GetFieldId()
+			if prefix := datasetID + "."; datasetID != "" && strings.HasPrefix(name, prefix) {
+				name = strings.TrimPrefix(name, prefix)
+			}
+			if !slices.Contains(columns, name) {
+				continue
+			}
+			if _, duplicate := valuesByName[name]; duplicate {
+				return nil, fmt.Errorf(
+					"duplicate projected field %q for dataset %q", name, datasetID,
+				)
+			}
+			valuesByName[name] = typedValueToAny(field.GetValue())
 		}
 		out := make([]any, 0, len(columns))
 		for _, name := range columns {

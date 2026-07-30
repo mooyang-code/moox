@@ -21,6 +21,10 @@ type metadataSeedGrainContract struct {
 		PrimaryDatasetID string   `yaml:"primary_dataset_id"`
 		GrainKeys        []string `yaml:"grain_keys"`
 	} `yaml:"views"`
+	Devices []struct {
+		DeviceID string `yaml:"device_id"`
+		Engine   string `yaml:"engine"`
+	} `yaml:"devices"`
 }
 
 func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
@@ -55,4 +59,19 @@ func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStorageSeedDeclaresParquetArchiveDevice(t *testing.T) {
+	path := filepath.Join("..", "config", "metadata.seed.yaml")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var seed metadataSeedGrainContract
+	require.NoError(t, yaml.Unmarshal(raw, &seed))
+	for _, device := range seed.Devices {
+		if device.DeviceID == "parquet-local" {
+			require.Equal(t, "parquet", device.Engine)
+			return
+		}
+	}
+	t.Fatal("storage metadata seed does not declare parquet-local")
 }

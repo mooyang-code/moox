@@ -7,7 +7,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-func TestDeviceCRUDUsesSchemaV5WithoutNodeBinding(t *testing.T) {
+func TestDeviceCRUDUsesSchemaV6WithoutNodeBinding(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	created, err := store.UpsertDevice(ctx, &pb.Device{
@@ -57,5 +57,21 @@ func TestDeviceCRUDUsesSchemaV5WithoutNodeBinding(t *testing.T) {
 	archives, page, err := store.ListArchiveFiles(ctx, "space", "dataset", &pb.Page{Page: 1, Size: 10})
 	if err != nil || len(archives) != 1 || page.GetTotal() != 1 {
 		t.Fatalf("listed archives=%v page=%v err=%v", archives, page, err)
+	}
+}
+
+func TestDeviceCRUDAcceptsParquetArchiveDevice(t *testing.T) {
+	store := openTestStore(t, t.Context())
+	created, err := store.UpsertDevice(t.Context(), &pb.Device{
+		DeviceId: "parquet-local",
+		Name:     "Market Parquet Archive",
+		Engine:   "parquet",
+		Endpoint: "../data/archive",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.GetEngine() != "parquet" || created.GetEndpoint() != "../data/archive" {
+		t.Fatalf("created parquet device = %v", created)
 	}
 }
