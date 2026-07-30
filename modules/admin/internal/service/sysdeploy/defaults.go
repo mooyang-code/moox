@@ -56,6 +56,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		deployment("sysdeploy", "admin_rpc", "http", "127.0.0.1", 11109, "trpc.moox.ops.SysDeploy", "internal", "系统服务部署信息 RPC 服务"),
 		deployment("trade_exchange_account", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.ExchangeAccountService", "internal", "Exchange 账户管理与同步服务"),
 		deployment("trade_execution", "trade", "http", "127.0.0.1", 11201, "trpc.moox.trade.TradeExecutionService", "internal", "订单、成交、持仓与目标执行服务"),
+		deployment("trade_logical_account", "trade", "http", "127.0.0.1", 11202, "trpc.moox.trade.LogicalAccountService", "internal", "逻辑账户、执行归属与人工干预服务"),
 	}
 	canonical := map[string]string{
 		"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret",
