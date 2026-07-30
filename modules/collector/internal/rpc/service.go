@@ -679,6 +679,7 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 			params.Collector.Exchange,
 			storagepb.DataKind_DATA_KIND_RECORD,
 			"target",
+			false,
 		)
 	case "kline":
 		if err := s.validateDataset(
@@ -688,6 +689,7 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 			params.Collector.Exchange,
 			storagepb.DataKind_DATA_KIND_RECORD,
 			"source",
+			false,
 		); err != nil {
 			return err
 		}
@@ -698,6 +700,7 @@ func (s *Service) validateTaskRuleDatasets(ctx context.Context, rule domain.Task
 			params.Collector.Exchange,
 			storagepb.DataKind_DATA_KIND_TIME_SERIES,
 			"target",
+			true,
 		)
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", params.Collector.DataType)
@@ -711,6 +714,7 @@ func (s *Service) validateDataset(
 	exchange string,
 	expectedKind storagepb.DataKind,
 	role string,
+	allowSharedMarket bool,
 ) error {
 	info, err := s.datasetSrc.GetDataset(ctx, spaceID, datasetID)
 	if err != nil {
@@ -719,7 +723,9 @@ func (s *Service) validateDataset(
 	if info.Status != "active" {
 		return fmt.Errorf("%s Dataset %s must be active", role, datasetID)
 	}
-	if !strings.EqualFold(info.DataSourceID, exchange) {
+	sourceMatches := strings.EqualFold(info.DataSourceID, exchange) ||
+		(allowSharedMarket && strings.EqualFold(info.DataSourceID, "crypto_market"))
+	if !sourceMatches {
 		return fmt.Errorf(
 			"%s Dataset %s data_source_id=%s does not match collector exchange=%s",
 			role,

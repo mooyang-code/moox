@@ -176,6 +176,29 @@ func TestCreateKlineRuleAcceptsRecordSymbolSourceAndTimeSeriesTarget(t *testing.
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 }
 
+func TestCreateKlineRuleAcceptsSharedCryptoMarketTarget(t *testing.T) {
+	svc := newCollectorRPCService(t)
+	svc.datasetSrc = &fakeRuleDatasetSource{datasets: map[string]storagesource.DatasetInfo{
+		"symbols": {
+			DataSourceID: "binance",
+			DataKind:     storagepb.DataKind_DATA_KIND_RECORD,
+			Status:       "active",
+		},
+		"kline_1m": {
+			DataSourceID: "crypto_market",
+			DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			Status:       "active",
+		},
+	}}
+
+	rsp, err := svc.CreateTaskRule(context.Background(), &pb.CreateTaskRuleReq{Rule: &pb.TaskRule{
+		SpaceId: "crypto", RuleId: "kline-shared-target", DataType: "kline", Exchange: "binance",
+		CollectParams: validKlineCollectParams(t), Enabled: boolPtr(true),
+	}})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+}
+
 func TestCreateKlineRuleRejectsTimeSeriesSource(t *testing.T) {
 	svc := newCollectorRPCService(t)
 	svc.datasetSrc = &fakeRuleDatasetSource{datasets: map[string]storagesource.DatasetInfo{
