@@ -83,6 +83,41 @@ func TestMetricCatalogNoDataAfter(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, c.NoDataAfter())
 }
 
+func TestListFreshSeriesForInstanceFiltersHistoricalLabelsBeforeLimit(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messageStore := metricMessageStoreForTest(t, mgr)
+	now := time.Now().UTC().Truncate(time.Second)
+	rows := make([]MetricSeries, 0, 503)
+	for i := 0; i < 501; i++ {
+		rows = append(rows, MetricSeries{
+			ServiceName: "moox_cloudnode", InstanceID: "cloudnode@control",
+			SeriesID: fmt.Sprintf("stale-%03d", i), MetricName: "heartbeat",
+			LabelsJSON: `{}`, LastSeenAt: now.Add(-3 * time.Minute),
+		})
+	}
+	rows = append(rows,
+		MetricSeries{
+			ServiceName: "moox_cloudnode", InstanceID: "cloudnode@control",
+			SeriesID: "fresh-a", MetricName: "heartbeat", LabelsJSON: `{}`, LastSeenAt: now,
+		},
+		MetricSeries{
+			ServiceName: "moox_cloudnode", InstanceID: "cloudnode@control",
+			SeriesID: "fresh-b", MetricName: "heartbeat", LabelsJSON: `{}`, LastSeenAt: now,
+		},
+	)
+	require.NoError(t, messageStore.db.CreateInBatches(rows, 100).Error)
+
+	got, err := NewCatalog(messageStore).ListFreshSeriesForInstanceAt(
+		context.Background(), "cloudnode@control", "heartbeat", now, 500,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, []string{"fresh-a", "fresh-b"}, []string{got[0].SeriesID, got[1].SeriesID})
+}
+
 func TestMetricCatalogTimeScansRFC3339(t *testing.T) {
 	var got metricCatalogTime
 	require.NoError(t, got.Scan("2026-07-15T04:17:48.123456789Z"))

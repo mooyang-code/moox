@@ -14,11 +14,12 @@ type nodeSource interface {
 }
 
 type SCFMetrics struct {
-	source        nodeSource
-	now           func() time.Time
-	nodes         *prometheus.GaugeVec
-	oldestAge     prometheus.Gauge
-	keepaliveRuns *prometheus.CounterVec
+	source             nodeSource
+	now                func() time.Time
+	nodes              *prometheus.GaugeVec
+	oldestAge          prometheus.Gauge
+	heartbeatTimestamp *prometheus.GaugeVec
+	keepaliveRuns      *prometheus.CounterVec
 }
 
 func NewSCFMetrics(registerer prometheus.Registerer, source nodeSource) (*SCFMetrics, error) {
@@ -36,6 +37,10 @@ func NewSCFMetrics(registerer prometheus.Registerer, source nodeSource) (*SCFMet
 			Name: "moox_cloudnode_scf_oldest_heartbeat_age_seconds",
 			Help: "Age in seconds of the oldest SCF node heartbeat.",
 		}),
+		heartbeatTimestamp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "moox_cloudnode_scf_heartbeat_timestamp_seconds",
+			Help: "Last successful SCF heartbeat timestamp by node.",
+		}, []string{"node_id", "function_name"}),
 		keepaliveRuns: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "moox_cloudnode_scf_keepalive_runs_total",
 			Help: "SCF keepalive maintenance runs grouped by result.",
@@ -45,6 +50,9 @@ func NewSCFMetrics(registerer prometheus.Registerer, source nodeSource) (*SCFMet
 		return nil, err
 	}
 	if err := registerer.Register(metrics.oldestAge); err != nil {
+		return nil, err
+	}
+	if err := registerer.Register(metrics.heartbeatTimestamp); err != nil {
 		return nil, err
 	}
 	if err := registerer.Register(metrics.keepaliveRuns); err != nil {
@@ -61,15 +69,19 @@ func (m *SCFMetrics) Refresh(ctx context.Context) error {
 	counts := map[string]float64{"online": 0, "timeout": 0, "unknown": 0}
 	now := m.now().UTC()
 	var oldest float64
+	m.heartbeatTimestamp.Reset()
 	for _, node := range nodes {
 		status := store.SCFHeartbeatStatus(node.LastHeartbeatAt, now)
 		counts[status]++
+		heartbeatAt := float64(0)
 		if node.LastHeartbeatAt != nil {
 			age := max(now.Sub(node.LastHeartbeatAt.UTC()).Seconds(), 0)
 			if age > oldest {
 				oldest = age
 			}
+			heartbeatAt = float64(node.LastHeartbeatAt.UTC().Unix())
 		}
+		m.heartbeatTimestamp.WithLabelValues(node.NodeID, node.FunctionName).Set(heartbeatAt)
 	}
 	for status, count := range counts {
 		m.nodes.WithLabelValues(status).Set(count)

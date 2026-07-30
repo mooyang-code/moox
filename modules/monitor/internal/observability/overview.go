@@ -38,6 +38,13 @@ type HostStatus struct {
 type SCFSummary struct {
 	OnlineCount, TimeoutCount, UnknownCount int
 	OldestHeartbeatAt                       time.Time
+	UnhealthyNodes                          []SCFHeartbeatStatus
+}
+
+type SCFHeartbeatStatus struct {
+	NodeID, FunctionName, Status string
+	LastHeartbeatAt              time.Time
+	AgeSeconds                   int64
 }
 
 type DatasetFrequencyStatus struct {
@@ -105,9 +112,11 @@ func (b Builder) buildSCFSummary(ctx context.Context, now time.Time) (SCFSummary
 		return SCFSummary{}, nil
 	}
 	const (
-		nodesMetric     = "moox_cloudnode_scf_nodes"
-		oldestAgeMetric = "moox_cloudnode_scf_oldest_heartbeat_age_seconds"
-		maxSeries       = 500
+		nodesMetric              = "moox_cloudnode_scf_nodes"
+		oldestAgeMetric          = "moox_cloudnode_scf_oldest_heartbeat_age_seconds"
+		heartbeatTimestampMetric = "moox_cloudnode_scf_heartbeat_timestamp_seconds"
+		scfHeartbeatTimeout      = 90 * time.Second
+		maxSeries                = 500
 	)
 	series, total, err := b.Metrics.Catalog().ListSeries(ctx, "", nodesMetric, "", 0, maxSeries+1)
 	if err != nil {
@@ -190,6 +199,52 @@ func (b Builder) buildSCFSummary(ctx context.Context, now time.Time) (SCFSummary
 		}
 		break
 	}
+
+	heartbeats, err := b.Metrics.Catalog().ListFreshSeriesForInstanceAt(
+		ctx, latestInstance, heartbeatTimestampMetric, now, maxSeries,
+	)
+	if err != nil {
+		return SCFSummary{}, err
+	}
+	for _, item := range heartbeats {
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return SCFSummary{}, fmt.Errorf("SCF heartbeat labels: %w", err)
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return SCFSummary{}, err
+		}
+		node := SCFHeartbeatStatus{
+			NodeID: labels["node_id"], FunctionName: labels["function_name"],
+		}
+		switch {
+		case latest.Value == 0:
+			node.Status = "unknown"
+		case latest.Value < 0 || math.IsNaN(latest.Value) || math.IsInf(latest.Value, 0):
+			return SCFSummary{}, fmt.Errorf("SCF heartbeat timestamp is invalid")
+		default:
+			node.LastHeartbeatAt = time.Unix(int64(latest.Value), 0).UTC()
+			age := max(now.Sub(node.LastHeartbeatAt), 0)
+			node.AgeSeconds = int64(age / time.Second)
+			if age > scfHeartbeatTimeout {
+				node.Status = "timeout"
+			}
+		}
+		if node.Status != "" {
+			out.UnhealthyNodes = append(out.UnhealthyNodes, node)
+		}
+	}
+	sort.Slice(out.UnhealthyNodes, func(i, j int) bool {
+		left, right := out.UnhealthyNodes[i], out.UnhealthyNodes[j]
+		if left.Status != right.Status {
+			return left.Status == "timeout"
+		}
+		if left.AgeSeconds != right.AgeSeconds {
+			return left.AgeSeconds > right.AgeSeconds
+		}
+		return left.NodeID < right.NodeID
+	})
 	return out, nil
 }
 

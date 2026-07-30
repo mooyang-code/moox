@@ -15,8 +15,8 @@ import (
 )
 
 type businessFreshnessItem struct {
-	spaceID, checkID, name, reason string
-	success                        bool
+	spaceID, checkID, name, reason, diagnostic string
+	success                                    bool
 }
 
 func buildBusinessFreshnessReporter(
@@ -85,8 +85,9 @@ func buildBusinessFreshnessReporter(
 		if scfTotal > 0 {
 			item := businessFreshnessItem{
 				spaceID: "crypto", checkID: "scf:heartbeat", name: "SCF heartbeat freshness",
-				success: overview.SCF.TimeoutCount == 0 && overview.SCF.UnknownCount == 0,
-				reason:  fmt.Sprintf("online=%d timeout=%d unknown=%d", overview.SCF.OnlineCount, overview.SCF.TimeoutCount, overview.SCF.UnknownCount),
+				success:    overview.SCF.TimeoutCount == 0 && overview.SCF.UnknownCount == 0,
+				reason:     fmt.Sprintf("online=%d timeout=%d unknown=%d", overview.SCF.OnlineCount, overview.SCF.TimeoutCount, overview.SCF.UnknownCount),
+				diagnostic: scfHeartbeatDiagnostic(overview.SCF.UnhealthyNodes, overview.SCF.TimeoutCount, overview.SCF.UnknownCount),
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
@@ -177,7 +178,7 @@ func buildBusinessFreshnessReporter(
 				ResultID: fmt.Sprintf("%s-%d", item.checkID, now.UnixNano()),
 				SpaceID:  item.spaceID, CheckID: item.checkID, InstanceID: "monitor",
 				Success: item.success, Connected: item.success, Status: status,
-				ErrorMessage: item.reason, CheckedAt: now, CreatedAt: now,
+				ErrorMessage: item.reason, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
 			}
 			inserted, err := repositories.Results.InsertIfAbsent(ctx, &result)
 			if err != nil {
@@ -198,6 +199,44 @@ func buildBusinessFreshnessReporter(
 		}
 		return errors.Join(errs...)
 	}
+}
+
+func scfHeartbeatDiagnostic(nodes []monitorobservability.SCFHeartbeatStatus, timeoutCount, unknownCount int) string {
+	if len(nodes) == 0 || timeoutCount+unknownCount == 0 {
+		return ""
+	}
+	const maxNodes = 10
+	items := make([]string, 0, min(timeoutCount+unknownCount, maxNodes)+1)
+	cst := time.FixedZone("CST", 8*60*60)
+	remainingTimeout, remainingUnknown := timeoutCount, unknownCount
+	for _, node := range nodes {
+		if len(items) >= maxNodes {
+			break
+		}
+		name := node.NodeID
+		if name == "" {
+			name = node.FunctionName
+		}
+		switch node.Status {
+		case "timeout":
+			if remainingTimeout == 0 {
+				continue
+			}
+			items = append(items, fmt.Sprintf("%s（最后心跳：%s，距检查 %d 秒）",
+				name, node.LastHeartbeatAt.In(cst).Format("2006-01-02 15:04:05 MST"), node.AgeSeconds))
+			remainingTimeout--
+		case "unknown":
+			if remainingUnknown == 0 {
+				continue
+			}
+			items = append(items, name+"（尚未上报心跳）")
+			remainingUnknown--
+		}
+	}
+	if remaining := timeoutCount + unknownCount - len(items); remaining > 0 {
+		items = append(items, fmt.Sprintf("另有 %d 个异常节点", remaining))
+	}
+	return strings.Join(items, "；")
 }
 
 func serviceReporterReason(status string) string {

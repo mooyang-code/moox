@@ -310,6 +310,29 @@ func TestLocalizedReasonExplainsMarketCanaryStorageRejection(t *testing.T) {
 	assert.Contains(t, action, "Dataset、Symbol、Frequency")
 }
 
+func TestLocalizedReasonExplainsMissingReporter(t *testing.T) {
+	check := domain.Check{
+		CheckID: "reporter:control:storage-view:",
+		Name:    "Reporter storage-view control",
+	}
+	reason, action := localizedReason(check, domain.CheckResult{ErrorMessage: "reporter missing"})
+	assert.Equal(t, "未收到 storage-view@control 的指标上报", reason)
+	assert.Equal(t,
+		"检查 storage-view 的 Reporter 定时器、EventBus 连接，并确认上报节点 ID 与 SysDeploy 注册一致",
+		action,
+	)
+}
+
+func TestLocalizedReasonIdentifiesReporterInstance(t *testing.T) {
+	check := domain.Check{
+		CheckID: "reporter:control:storage-view:storage-view-2@control",
+		Name:    "Reporter storage-view control storage-view-2@control",
+	}
+	reason, action := localizedReason(check, domain.CheckResult{ErrorMessage: "producer stale"})
+	assert.Equal(t, "storage-view-2@control 的指标上报已超过允许时间", reason)
+	assert.Equal(t, "检查 storage-view 进程、Reporter 定时器和 EventBus 连接", action)
+}
+
 func TestWebhookNotifierIncludesChineseSCFSentinelDiagnostic(t *testing.T) {
 	sender := &recordingSender{}
 	notifier := WebhookNotifier{NewSender: func(string) (msgbox.Sender, error) { return sender, nil }}
@@ -336,4 +359,33 @@ func TestWebhookNotifierIncludesChineseSCFSentinelDiagnostic(t *testing.T) {
 	assert.Contains(t, message.Body, "诊断编号：external:scf_sentinel:market_canary-123")
 	assert.Contains(t, message.Body, "SCF 节点：moox-sentinel-ap-guangzhou-0")
 	assert.NotContains(t, message.Body, "fewer than two closed bars")
+}
+
+func TestWebhookNotifierExplainsSCFHeartbeatAndListsNodes(t *testing.T) {
+	sender := &recordingSender{}
+	notifier := WebhookNotifier{
+		ReportIP: "106.53.107.122",
+		NewSender: func(string) (msgbox.Sender, error) {
+			return sender, nil
+		},
+	}
+	event := Event{
+		EventType: domain.AlertEventTriggered,
+		Status:    domain.AlertStatusFiring,
+		Check: domain.Check{
+			SpaceID: "crypto", CheckID: "scf:heartbeat", Name: "SCF heartbeat freshness",
+		},
+		Result: domain.CheckResult{
+			InstanceID: "monitor", ErrorMessage: "online=49 timeout=1 unknown=0",
+			BodyExcerpt: "node-stale（最后心跳：2026-07-30 20:12:00 CST，距检查 120 秒）",
+			CheckedAt:   time.Date(2026, 7, 30, 12, 14, 0, 0, time.UTC),
+		},
+	}
+	require.NoError(t, notifier.Send(t.Context(), domain.WebhookChannel{URL: "https://example.com"}, event))
+	require.Len(t, sender.messages, 1)
+	message := sender.messages[0]
+	assert.Contains(t, message.Body, "异常原因：SCF 心跳异常：在线 49，超时 1，未知 0")
+	assert.Contains(t, message.Body, "SCF 节点：node-stale")
+	assert.Contains(t, message.Body, "建议处理：检查 CloudNode 的 SCF 唤醒调用和所列节点最近心跳")
+	assert.Contains(t, message.Body, "上报 IP：106.53.107.122")
 }

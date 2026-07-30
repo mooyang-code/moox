@@ -74,8 +74,15 @@ func notificationBody(event Event, reportIP string) string {
 		if resultID := strings.TrimSpace(event.Result.ResultID); resultID != "" {
 			lines = append(lines, "诊断编号："+resultID)
 		}
-	} else if reportIP = safeNotificationValue(reportIP, 128); reportIP != "" {
-		lines = append(lines, "上报 IP："+reportIP)
+	} else {
+		if event.Check.CheckID == "scf:heartbeat" {
+			if nodes := safeNotificationValue(event.Result.BodyExcerpt, 2048); nodes != "" {
+				lines = append(lines, "SCF 节点："+nodes)
+			}
+		}
+		if reportIP = safeNotificationValue(reportIP, 128); reportIP != "" {
+			lines = append(lines, "上报 IP："+reportIP)
+		}
 	}
 	lines = append(lines,
 		"检查对象："+firstText(event.Check.Name, event.Check.CheckID),
@@ -103,6 +110,22 @@ func safeNotificationValue(value string, limit int) string {
 func localizedReason(check domain.Check, result domain.CheckResult) (string, string) {
 	raw := strings.TrimSpace(result.ErrorMessage)
 	switch {
+	case check.CheckID == "scf:heartbeat":
+		var online, timeout, unknown int
+		if _, err := fmt.Sscanf(raw, "online=%d timeout=%d unknown=%d", &online, &timeout, &unknown); err == nil {
+			return fmt.Sprintf("SCF 心跳异常：在线 %d，超时 %d，未知 %d", online, timeout, unknown),
+				"检查 CloudNode 的 SCF 唤醒调用和所列节点最近心跳"
+		}
+		return firstText(raw, "SCF 心跳状态异常"),
+			"检查 CloudNode 的 SCF 唤醒调用和所列节点最近心跳"
+	case raw == "reporter missing" || raw == "reporter has not reported":
+		service, target := reporterCheckTarget(check)
+		return "未收到 " + target + " 的指标上报",
+			fmt.Sprintf("检查 %s 的 Reporter 定时器、EventBus 连接，并确认上报节点 ID 与 SysDeploy 注册一致", service)
+	case raw == "producer stale":
+		service, target := reporterCheckTarget(check)
+		return target + " 的指标上报已超过允许时间",
+			fmt.Sprintf("检查 %s 进程、Reporter 定时器和 EventBus 连接", service)
 	case strings.HasPrefix(raw, "storage_rejected_query"):
 		parts := strings.SplitN(raw, ":", 3)
 		reason := "Storage 拒绝了行情查询请求"
@@ -164,6 +187,26 @@ func localizedReason(check domain.Check, result domain.CheckResult) (string, str
 		return firstText(result.Status, "未知异常"), "查看 Monitor 与目标服务日志获取详细原因"
 	}
 	return raw, "查看 Monitor 与目标服务日志获取详细原因"
+}
+
+func reporterCheckTarget(check domain.Check) (string, string) {
+	parts := strings.Split(check.CheckID, ":")
+	if len(parts) >= 3 && parts[0] == "reporter" {
+		nodeID, serviceName := strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
+		if serviceName != "" {
+			if len(parts) >= 4 {
+				if instanceID := strings.TrimSpace(parts[3]); instanceID != "" {
+					return serviceName, instanceID
+				}
+			}
+			if nodeID != "" {
+				return serviceName, serviceName + "@" + nodeID
+			}
+			return serviceName, serviceName
+		}
+	}
+	name := firstText(check.Name, check.CheckID, "目标服务")
+	return targetName(name), name
 }
 
 func targetName(value string) string {

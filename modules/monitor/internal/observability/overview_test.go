@@ -259,6 +259,9 @@ func TestBuilderSummarizesAllSCFHeartbeatsFromCloudNodeMetrics(t *testing.T) {
 		seedOverviewMetric(t, db, "timeout", "moox_cloudnode_scf_nodes", `{"status":"timeout"}`, 1, now)
 		seedOverviewMetric(t, db, "unknown", "moox_cloudnode_scf_nodes", `{"status":"unknown"}`, 1, now)
 		seedOverviewMetric(t, db, "oldest", "moox_cloudnode_scf_oldest_heartbeat_age_seconds", `{}`, 120, now)
+		seedOverviewMetric(t, db, "fresh-node", "moox_cloudnode_scf_heartbeat_timestamp_seconds", `{"function_name":"function-fresh","node_id":"node-fresh"}`, float64(now.Add(-30*time.Second).Unix()), now)
+		seedOverviewMetric(t, db, "stale-node", "moox_cloudnode_scf_heartbeat_timestamp_seconds", `{"function_name":"function-stale","node_id":"node-stale"}`, float64(now.Add(-2*time.Minute).Unix()), now)
+		seedOverviewMetric(t, db, "unknown-node", "moox_cloudnode_scf_heartbeat_timestamp_seconds", `{"function_name":"function-unknown","node_id":"node-unknown"}`, 0, now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	if err != nil {
@@ -269,6 +272,34 @@ func TestBuilderSummarizesAllSCFHeartbeatsFromCloudNodeMetrics(t *testing.T) {
 	}
 	if !got.SCF.OldestHeartbeatAt.Equal(now.Add(-2 * time.Minute)) {
 		t.Fatalf("oldest heartbeat = %s", got.SCF.OldestHeartbeatAt)
+	}
+	if len(got.SCF.UnhealthyNodes) != 2 {
+		t.Fatalf("unhealthy nodes = %+v", got.SCF.UnhealthyNodes)
+	}
+	if got.SCF.UnhealthyNodes[0].NodeID != "node-stale" || got.SCF.UnhealthyNodes[0].Status != "timeout" ||
+		got.SCF.UnhealthyNodes[0].AgeSeconds != 120 {
+		t.Fatalf("stale node = %+v", got.SCF.UnhealthyNodes[0])
+	}
+	if got.SCF.UnhealthyNodes[1].NodeID != "node-unknown" || got.SCF.UnhealthyNodes[1].Status != "unknown" {
+		t.Fatalf("unknown node = %+v", got.SCF.UnhealthyNodes[1])
+	}
+}
+
+func TestBuilderIgnoresSCFHeartbeatSeriesNoLongerReported(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetric(t, db, "online", "moox_cloudnode_scf_nodes", `{"status":"online"}`, 49, now)
+		seedOverviewMetric(t, db, "timeout", "moox_cloudnode_scf_nodes", `{"status":"timeout"}`, 1, now)
+		seedOverviewMetric(t, db, "unknown", "moox_cloudnode_scf_nodes", `{"status":"unknown"}`, 0, now)
+		seedOverviewMetric(t, db, "current-stale", "moox_cloudnode_scf_heartbeat_timestamp_seconds", `{"function_name":"current","node_id":"current"}`, float64(now.Add(-2*time.Minute).Unix()), now)
+		seedOverviewMetric(t, db, "deleted-stale", "moox_cloudnode_scf_heartbeat_timestamp_seconds", `{"function_name":"deleted","node_id":"deleted"}`, float64(now.Add(-10*time.Minute).Unix()), now.Add(-3*time.Minute))
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SCF.UnhealthyNodes) != 1 || got.SCF.UnhealthyNodes[0].NodeID != "current" {
+		t.Fatalf("unhealthy nodes = %+v", got.SCF.UnhealthyNodes)
 	}
 }
 

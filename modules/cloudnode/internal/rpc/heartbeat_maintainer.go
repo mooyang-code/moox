@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	keepaliveProbeSource = "keepalive_probe"
-	keepaliveBatchSize   = 10
+	keepaliveProbeSource    = "keepalive_probe"
+	keepaliveBatchSize      = 10
+	keepaliveMaxConcurrency = keepaliveBatchSize
 	// Fifty nodes are rotated in five 9-second timer ticks. One minute keeps
 	// adjacent invocations overlapped while leaving room for a job to finish.
 	keepaliveResidentSec = 60
@@ -71,16 +72,28 @@ func (m *HeartbeatMaintainer) Handle(ctx context.Context) error {
 	defer m.mu.Unlock()
 	start := m.next % len(nodes)
 	limit := min(keepaliveBatchSize, len(nodes))
+	sem := make(chan struct{}, keepaliveMaxConcurrency)
+	var wg sync.WaitGroup
 	attempted := 0
-	for attempted < limit && ctx.Err() == nil {
-		index := (start + attempted) % len(nodes)
-		m.invoke(ctx, &nodes[index])
+	for attempted < limit {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			m.next = (start + max(attempted, 1)) % len(nodes)
+			return nil
+		}
+		node := nodes[(start+attempted)%len(nodes)]
 		attempted++
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			m.invoke(ctx, &node)
+		}()
 	}
-	if attempted == 0 {
-		attempted = 1
-	}
-	m.next = (start + attempted) % len(nodes)
+	wg.Wait()
+	m.next = (start + max(attempted, 1)) % len(nodes)
 	return nil
 }
 

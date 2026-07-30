@@ -87,21 +87,25 @@ func TestHeartbeatMaintainerNoEligibleNodesIsNoop(t *testing.T) {
 	assert.Empty(t, invoker.requestsSnapshot())
 }
 
-func TestHeartbeatMaintainerInvokesNodesSequentially(t *testing.T) {
+func TestHeartbeatMaintainerInvokesNodesWithBoundedConcurrency(t *testing.T) {
 	catalog := newCatalogForAccountTests(t)
 	for i := 0; i < 25; i++ {
 		seedHeartbeatAccountAndNode(t, catalog, fmt.Sprintf("node-%d", i), fmt.Sprintf("function-%d", i))
 	}
-	invoker := &heartbeatSCFClient{invokeDelay: time.Millisecond}
+	invoker := &heartbeatSCFClient{invokeDelay: 50 * time.Millisecond}
 	maintainer := NewHeartbeatMaintainer(heartbeatService(catalog, invoker), HeartbeatTargets{})
 
 	require.NoError(t, maintainer.Handle(context.Background()))
-	assert.Equal(t, 1, invoker.maxConcurrency())
+	assert.Greater(t, invoker.maxConcurrency(), 1)
+	assert.LessOrEqual(t, invoker.maxConcurrency(), keepaliveMaxConcurrency)
 	assert.Len(t, invoker.requestsSnapshot(), 10)
 	require.NoError(t, maintainer.Handle(context.Background()))
 	requests := invoker.requestsSnapshot()
 	require.Len(t, requests, 20)
-	assert.Equal(t, "function-10", requests[10].FunctionName)
+	assert.ElementsMatch(t,
+		[]string{"function-10", "function-11", "function-12", "function-13", "function-14", "function-15", "function-16", "function-17", "function-18", "function-19"},
+		functionNames(requests[10:]),
+	)
 }
 
 func TestHeartbeatMaintainerContinuesWithNextNodeAfterDeadline(t *testing.T) {
@@ -116,14 +120,26 @@ func TestHeartbeatMaintainerContinuesWithNextNodeAfterDeadline(t *testing.T) {
 	defer firstCancel()
 	require.NoError(t, maintainer.Handle(firstCtx))
 
-	secondCtx, secondCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer secondCancel()
-	require.NoError(t, maintainer.Handle(secondCtx))
+	require.NoError(t, maintainer.Handle(context.Background()))
 
 	requests := invoker.requestsSnapshot()
-	require.Len(t, requests, 2)
-	assert.Equal(t, "function-00", requests[0].FunctionName)
-	assert.Equal(t, "function-01", requests[1].FunctionName)
+	require.Len(t, requests, keepaliveBatchSize*2)
+	assert.ElementsMatch(t,
+		[]string{"function-00", "function-01", "function-02", "function-03", "function-04", "function-05", "function-06", "function-07", "function-08", "function-09"},
+		functionNames(requests[:keepaliveBatchSize]),
+	)
+	assert.ElementsMatch(t,
+		[]string{"function-10", "function-00", "function-01", "function-02", "function-03", "function-04", "function-05", "function-06", "function-07", "function-08"},
+		functionNames(requests[keepaliveBatchSize:]),
+	)
+}
+
+func functionNames(requests []tencentscf.InvokeFunctionRequest) []string {
+	names := make([]string, 0, len(requests))
+	for _, request := range requests {
+		names = append(names, request.FunctionName)
+	}
+	return names
 }
 
 func seedHeartbeatAccountAndNode(t *testing.T, catalog *store.CatalogRepository, nodeID string, functionName string) {

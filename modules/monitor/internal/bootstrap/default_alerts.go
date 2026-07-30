@@ -60,6 +60,9 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 		if check.Kind == domain.CheckKindExternal {
 			failureThreshold, successThreshold = 1, 1
 		}
+		if check.CheckID == "scf:heartbeat" {
+			failureThreshold, successThreshold = 2, 1
+		}
 		rule := &domain.AlertRule{
 			SpaceID: check.SpaceID, RuleID: "default:" + check.CheckID, CheckID: check.CheckID,
 			WebhookID: defaultWebhookID, FailureThreshold: failureThreshold, SuccessThreshold: successThreshold,

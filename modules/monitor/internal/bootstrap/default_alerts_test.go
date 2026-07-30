@@ -27,6 +27,7 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	for _, check := range []domain.Check{
 		{CheckID: "sysdeploy:node-a:moox_collector", Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, Enabled: true},
 		{SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceManual, Enabled: true},
+		{SpaceID: "crypto", CheckID: "scf:heartbeat", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
 	} {
 		check := check
 		if err := repositories.Checks.Create(ctx, &check); err != nil {
@@ -54,6 +55,13 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	}
 	if canaryRule.FailureThreshold != 1 || canaryRule.SuccessThreshold != 1 {
 		t.Fatalf("canary rule = %+v", canaryRule)
+	}
+	scfRule, err := repositories.Alerts.GetRule(ctx, "crypto", "default:scf:heartbeat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scfRule.FailureThreshold != 2 || scfRule.SuccessThreshold != 1 {
+		t.Fatalf("SCF heartbeat rule = %+v", scfRule)
 	}
 }
 

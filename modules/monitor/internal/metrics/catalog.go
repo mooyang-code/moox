@@ -258,6 +258,38 @@ func (c *MetricCatalog) ListSeries(ctx context.Context, serviceName, metricName,
 	return rows, total, nil
 }
 
+// ListFreshSeriesForInstanceAt returns only series still emitted by one
+// logical instance, so historical label identities cannot consume the limit.
+func (c *MetricCatalog) ListFreshSeriesForInstanceAt(
+	ctx context.Context,
+	instanceID string,
+	metricName string,
+	at time.Time,
+	limit int,
+) ([]MetricSeries, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	cutoff := at.UTC().Add(-c.noDataAfter)
+	var rows []MetricSeries
+	err := c.messageStore.db.WithContext(ctx).
+		Where("c_instance_id = ? AND c_metric_name = ? AND c_last_seen_at >= ?",
+			instanceID, metricName, cutoff).
+		Order("c_series_id ASC").
+		Limit(limit + 1).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > limit {
+		return nil, fmt.Errorf("fresh metric series exceed limit %d", limit)
+	}
+	return rows, nil
+}
+
 func (c *MetricCatalog) markSeriesStale(rows []MetricSeries) {
 	c.markSeriesStaleAt(rows, time.Now().UTC())
 }

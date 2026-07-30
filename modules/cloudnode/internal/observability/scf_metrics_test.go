@@ -26,9 +26,9 @@ func TestSCFMetricsExposeOnlyBoundedStatusLabels(t *testing.T) {
 	fresh, stale := now.Add(-30*time.Second), now.Add(-2*time.Minute)
 	registry := prometheus.NewRegistry()
 	metrics, err := NewSCFMetrics(registry, nodeSourceStub{nodes: []store.CloudNode{
-		{NodeID: "fresh", LastHeartbeatAt: &fresh},
-		{NodeID: "stale", LastHeartbeatAt: &stale},
-		{NodeID: "unknown"},
+		{NodeID: "fresh", FunctionName: "function-fresh", LastHeartbeatAt: &fresh},
+		{NodeID: "stale", FunctionName: "function-stale", LastHeartbeatAt: &stale},
+		{NodeID: "unknown", FunctionName: "function-unknown"},
 	}})
 	require.NoError(t, err)
 	metrics.now = func() time.Time { return now }
@@ -40,6 +40,9 @@ func TestSCFMetricsExposeOnlyBoundedStatusLabels(t *testing.T) {
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.nodes.WithLabelValues("timeout")))
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.nodes.WithLabelValues("unknown")))
 	require.Equal(t, float64(120), testutil.ToFloat64(metrics.oldestAge))
+	require.Equal(t, float64(fresh.Unix()), testutil.ToFloat64(metrics.heartbeatTimestamp.WithLabelValues("fresh", "function-fresh")))
+	require.Equal(t, float64(stale.Unix()), testutil.ToFloat64(metrics.heartbeatTimestamp.WithLabelValues("stale", "function-stale")))
+	require.Equal(t, float64(0), testutil.ToFloat64(metrics.heartbeatTimestamp.WithLabelValues("unknown", "function-unknown")))
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.keepaliveRuns.WithLabelValues("success")))
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.keepaliveRuns.WithLabelValues("error")))
 }
