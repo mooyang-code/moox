@@ -67,9 +67,6 @@ func newHandler(cfg Config, registerer prometheus.Registerer, gatherer prometheu
 	if err := cfg.validateIdentity(); err != nil {
 		return nil, err
 	}
-	if _, err := ValidatePipelineEnvironment(); err != nil {
-		return nil, err
-	}
 	if _, err := regexp.Compile(cfg.IncludeRegex); err != nil {
 		return nil, fmt.Errorf("include regex: %w", err)
 	}

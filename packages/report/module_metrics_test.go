@@ -26,11 +26,29 @@ func TestModuleMetricsNamesAndLabels(t *testing.T) {
 	}
 	requireMetricFamily(t, families, "moox_collector_runs_total")
 	requireNoLabels(t, families, "module", "subject_id", "job_id", "error")
+	requireLabel(t, families, "moox_collector_runs_total", "health_check", "market-data")
 	for _, family := range families {
 		if !strings.HasPrefix(family.GetName(), "moox_collector_") {
 			t.Fatalf("metric family %q does not use module prefix", family.GetName())
 		}
 	}
+}
+
+func requireLabel(t *testing.T, families []*dto.MetricFamily, familyName, labelName, labelValue string) {
+	t.Helper()
+	for _, family := range families {
+		if family.GetName() != familyName {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == labelName && label.GetValue() == labelValue {
+					return
+				}
+			}
+		}
+	}
+	t.Fatalf("metric family %q does not contain %s=%q", familyName, labelName, labelValue)
 }
 
 func TestModuleMetricsRejectsInvalidModule(t *testing.T) {
@@ -42,19 +60,19 @@ func TestModuleMetricsRejectsInvalidModule(t *testing.T) {
 }
 
 func TestModuleMetricsRejectsTwoHundredFiftySeventhSeries(t *testing.T) {
-	pipelines := make([]string, 32)
-	for i := range pipelines {
-		pipelines[i] = fmt.Sprintf("pipeline-%d", i)
+	healthChecks := make([]string, 32)
+	for i := range healthChecks {
+		healthChecks[i] = fmt.Sprintf("health-check-%d", i)
 	}
-	m, err := NewModuleMetrics(prometheus.NewRegistry(), "monitor", pipelines)
+	m, err := NewModuleMetrics(prometheus.NewRegistry(), "monitor", healthChecks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	created := 0
 	for _, stage := range []string{"ingest", "publish", "dispatch", "calculate", "evaluate", "materialize", "reconcile", "rebalance", "collect"} {
 		for _, result := range []string{"success", "error", "rejected"} {
-			for _, pipeline := range pipelines {
-				err := m.ObserveRun(stage, result, pipeline, time.Time{})
+			for _, healthCheck := range healthChecks {
+				err := m.ObserveRun(stage, result, healthCheck, time.Time{})
 				if created < MaxModuleMetricSeries && err != nil {
 					t.Fatalf("series %d rejected early: %v", created+1, err)
 				}

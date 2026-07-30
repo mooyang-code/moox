@@ -10,21 +10,21 @@ type DatasetRunObserver interface {
 }
 
 // DatasetModuleObserver records one authoritative terminal result in both the
-// per-Dataset series and the low-cardinality module pipeline series. Dataset
+// per-Dataset series and the low-cardinality module health-check series. Dataset
 // watermarks deliberately stay tuple-scoped: folding multiple Dataset/freq
 // values into one module watermark would create false regressions.
 type DatasetModuleObserver struct {
-	datasets DatasetRunObserver
-	module   *ModuleMetrics
-	stage    string
-	pipeline string
+	datasets    DatasetRunObserver
+	module      *ModuleMetrics
+	stage       string
+	healthCheck string
 }
 
 func NewDatasetModuleObserver(
 	datasets DatasetRunObserver,
 	module *ModuleMetrics,
 	stage string,
-	pipeline string,
+	healthCheck string,
 ) (*DatasetModuleObserver, error) {
 	if datasets == nil || module == nil {
 		return nil, fmt.Errorf("dataset and module metrics are required")
@@ -32,10 +32,10 @@ func NewDatasetModuleObserver(
 	if !allowedStages[stage] {
 		return nil, fmt.Errorf("unknown metrics stage %q", stage)
 	}
-	if !module.allowedPipelines[pipeline] {
-		return nil, fmt.Errorf("unknown metrics pipeline %q", pipeline)
+	if !module.allowedHealthChecks[healthCheck] {
+		return nil, fmt.Errorf("unknown metrics health check %q", healthCheck)
 	}
-	return &DatasetModuleObserver{datasets: datasets, module: module, stage: stage, pipeline: pipeline}, nil
+	return &DatasetModuleObserver{datasets: datasets, module: module, stage: stage, healthCheck: healthCheck}, nil
 }
 
 func (o *DatasetModuleObserver) ObserveRun(observation DatasetObservation) error {
@@ -51,5 +51,5 @@ func (o *DatasetModuleObserver) ObserveRun(observation DatasetObservation) error
 	} else if observation.Result == "incomplete" {
 		result = "error"
 	}
-	return o.module.ObserveRun(o.stage, result, o.pipeline, observation.FinishedAt)
+	return o.module.ObserveRun(o.stage, result, o.healthCheck, observation.FinishedAt)
 }

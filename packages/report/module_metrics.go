@@ -37,47 +37,47 @@ func ModuleMetricName(module, metric string) string {
 }
 
 type ModuleMetrics struct {
-	module           string
-	allowedPipelines map[string]bool
-	runs             *prometheus.CounterVec
-	lastSuccess      *prometheus.GaugeVec
-	lastError        *prometheus.GaugeVec
-	watermark        *prometheus.GaugeVec
-	inputWatermark   *prometheus.GaugeVec
-	errors           *prometheus.CounterVec
-	lastMetricError  prometheus.Gauge
-	mu               sync.Mutex
-	series           map[string]bool
-	watermarks       map[string]float64
-	inputWatermarks  map[string]float64
-	maxSeries        int
+	module              string
+	allowedHealthChecks map[string]bool
+	runs                *prometheus.CounterVec
+	lastSuccess         *prometheus.GaugeVec
+	lastError           *prometheus.GaugeVec
+	watermark           *prometheus.GaugeVec
+	inputWatermark      *prometheus.GaugeVec
+	errors              *prometheus.CounterVec
+	lastMetricError     prometheus.Gauge
+	mu                  sync.Mutex
+	series              map[string]bool
+	watermarks          map[string]float64
+	inputWatermarks     map[string]float64
+	maxSeries           int
 }
 
-func NewModuleMetrics(registerer prometheus.Registerer, module string, pipelines []string) (*ModuleMetrics, error) {
+func NewModuleMetrics(registerer prometheus.Registerer, module string, healthChecks []string) (*ModuleMetrics, error) {
 	if err := validateModuleName(module); err != nil {
 		return nil, err
 	}
 	if registerer == nil {
 		registerer = prometheus.DefaultRegisterer
 	}
-	allowed := make(map[string]bool, len(pipelines))
-	for _, pipeline := range pipelines {
-		pipeline = strings.TrimSpace(pipeline)
-		if err := validateMetricLabel("pipeline", pipeline); err != nil {
+	allowed := make(map[string]bool, len(healthChecks))
+	for _, healthCheck := range healthChecks {
+		healthCheck = strings.TrimSpace(healthCheck)
+		if err := validateMetricLabel("health_check", healthCheck); err != nil {
 			return nil, err
 		}
-		if allowed[pipeline] {
-			return nil, fmt.Errorf("duplicate metrics pipeline %q", pipeline)
+		if allowed[healthCheck] {
+			return nil, fmt.Errorf("duplicate metrics health check %q", healthCheck)
 		}
-		allowed[pipeline] = true
+		allowed[healthCheck] = true
 	}
 	m := &ModuleMetrics{
-		module: module, allowedPipelines: allowed, series: map[string]bool{}, watermarks: map[string]float64{}, inputWatermarks: map[string]float64{}, maxSeries: MaxModuleMetricSeries,
-		runs:           prometheus.NewCounterVec(prometheus.CounterOpts{Name: ModuleMetricName(module, ModuleMetricRuns), Help: "Completed module stage runs."}, []string{"stage", "result", "pipeline"}),
-		lastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastSuccess), Help: "Last successful module stage completion."}, []string{"stage", "pipeline"}),
-		lastError:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastError), Help: "Last failed module stage completion."}, []string{"stage", "pipeline"}),
-		watermark:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricBusinessWatermark), Help: "Monotonic authoritative business output watermark."}, []string{"stage", "pipeline"}),
-		inputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricInputWatermark), Help: "Monotonic business timestamp accepted as pipeline input."}, []string{"stage", "pipeline"}),
+		module: module, allowedHealthChecks: allowed, series: map[string]bool{}, watermarks: map[string]float64{}, inputWatermarks: map[string]float64{}, maxSeries: MaxModuleMetricSeries,
+		runs:           prometheus.NewCounterVec(prometheus.CounterOpts{Name: ModuleMetricName(module, ModuleMetricRuns), Help: "Completed module stage runs."}, []string{"stage", "result", "health_check"}),
+		lastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastSuccess), Help: "Last successful module stage completion."}, []string{"stage", "health_check"}),
+		lastError:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricLastError), Help: "Last failed module stage completion."}, []string{"stage", "health_check"}),
+		watermark:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricBusinessWatermark), Help: "Monotonic authoritative business output watermark."}, []string{"stage", "health_check"}),
+		inputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: ModuleMetricName(module, ModuleMetricInputWatermark), Help: "Monotonic business timestamp accepted as module input."}, []string{"stage", "health_check"}),
 		errors:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: ModuleMetricName(module, ModuleMetricErrors), Help: "Rejected module metric observations."}, []string{"operation"}),
 		lastMetricError: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: ModuleMetricName(module, ModuleMetricLastMetricsError),
@@ -97,14 +97,14 @@ func NewModuleMetrics(registerer prometheus.Registerer, module string, pipelines
 	return m, nil
 }
 
-func (m *ModuleMetrics) ObserveRun(stage, result, pipeline string, at time.Time) error {
-	if err := m.validate(stage, result, pipeline); err != nil {
+func (m *ModuleMetrics) ObserveRun(stage, result, healthCheck string, at time.Time) error {
+	if err := m.validate(stage, result, healthCheck); err != nil {
 		return m.recordError("run", err)
 	}
-	if err := m.claim("runs", stage, result, pipeline); err != nil {
+	if err := m.claim("runs", stage, result, healthCheck); err != nil {
 		return m.recordError("run", err)
 	}
-	m.runs.WithLabelValues(stage, result, pipeline).Inc()
+	m.runs.WithLabelValues(stage, result, healthCheck).Inc()
 	if at.IsZero() {
 		return nil
 	}
@@ -114,54 +114,54 @@ func (m *ModuleMetrics) ObserveRun(stage, result, pipeline string, at time.Time)
 		metric = m.lastError
 		kind = "last_error"
 	}
-	if err := m.claim(kind, stage, "", pipeline); err != nil {
+	if err := m.claim(kind, stage, "", healthCheck); err != nil {
 		return m.recordError("run", err)
 	}
-	metric.WithLabelValues(stage, pipeline).Set(float64(at.UTC().Unix()))
+	metric.WithLabelValues(stage, healthCheck).Set(float64(at.UTC().Unix()))
 	return nil
 }
 
-func (m *ModuleMetrics) AdvanceWatermark(stage, pipeline string, value time.Time) error {
-	if err := m.validate(stage, "success", pipeline); err != nil {
+func (m *ModuleMetrics) AdvanceWatermark(stage, healthCheck string, value time.Time) error {
+	if err := m.validate(stage, "success", healthCheck); err != nil {
 		return m.recordError("watermark", err)
 	}
 	if value.IsZero() {
 		return m.recordError("watermark", fmt.Errorf("watermark is required"))
 	}
 	seconds := float64(value.UTC().Unix())
-	key := stage + "\x00" + pipeline
+	key := stage + "\x00" + healthCheck
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if previous, ok := m.watermarks[key]; ok && seconds < previous {
-		return m.recordError("watermark", fmt.Errorf("watermark regression for %s/%s: %v < %v", stage, pipeline, seconds, previous))
+		return m.recordError("watermark", fmt.Errorf("watermark regression for %s/%s: %v < %v", stage, healthCheck, seconds, previous))
 	}
-	if err := m.claimLocked("watermark", stage, "", pipeline); err != nil {
+	if err := m.claimLocked("watermark", stage, "", healthCheck); err != nil {
 		return m.recordErrorLocked("watermark", err)
 	}
 	m.watermarks[key] = seconds
-	m.watermark.WithLabelValues(stage, pipeline).Set(seconds)
+	m.watermark.WithLabelValues(stage, healthCheck).Set(seconds)
 	return nil
 }
 
-func (m *ModuleMetrics) AdvanceInputWatermark(stage, pipeline string, value time.Time) error {
-	if err := m.validate(stage, "success", pipeline); err != nil {
+func (m *ModuleMetrics) AdvanceInputWatermark(stage, healthCheck string, value time.Time) error {
+	if err := m.validate(stage, "success", healthCheck); err != nil {
 		return m.recordError("input_watermark", err)
 	}
 	if value.IsZero() {
 		return m.recordError("input_watermark", fmt.Errorf("input watermark is required"))
 	}
 	seconds := float64(value.UTC().Unix())
-	key := stage + "\x00" + pipeline
+	key := stage + "\x00" + healthCheck
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if previous, ok := m.inputWatermarks[key]; ok && seconds < previous {
-		return m.recordError("input_watermark", fmt.Errorf("input watermark regression for %s/%s: %v < %v", stage, pipeline, seconds, previous))
+		return m.recordError("input_watermark", fmt.Errorf("input watermark regression for %s/%s: %v < %v", stage, healthCheck, seconds, previous))
 	}
-	if err := m.claimLocked("input_watermark", stage, "", pipeline); err != nil {
+	if err := m.claimLocked("input_watermark", stage, "", healthCheck); err != nil {
 		return m.recordErrorLocked("input_watermark", err)
 	}
 	m.inputWatermarks[key] = seconds
-	m.inputWatermark.WithLabelValues(stage, pipeline).Set(seconds)
+	m.inputWatermark.WithLabelValues(stage, healthCheck).Set(seconds)
 	return nil
 }
 
@@ -180,7 +180,7 @@ func (m *ModuleMetrics) recordErrorLocked(operation string, err error) error {
 	return err
 }
 
-func (m *ModuleMetrics) validate(stage, result, pipeline string) error {
+func (m *ModuleMetrics) validate(stage, result, healthCheck string) error {
 	if m == nil {
 		return fmt.Errorf("module metrics are nil")
 	}
@@ -190,20 +190,20 @@ func (m *ModuleMetrics) validate(stage, result, pipeline string) error {
 	if !allowedResults[result] {
 		return fmt.Errorf("unknown metrics result %q", result)
 	}
-	if !m.allowedPipelines[pipeline] {
-		return fmt.Errorf("unknown metrics pipeline %q", pipeline)
+	if !m.allowedHealthChecks[healthCheck] {
+		return fmt.Errorf("unknown metrics health check %q", healthCheck)
 	}
 	return nil
 }
 
-func (m *ModuleMetrics) claim(kind, stage, result, pipeline string) error {
+func (m *ModuleMetrics) claim(kind, stage, result, healthCheck string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.claimLocked(kind, stage, result, pipeline)
+	return m.claimLocked(kind, stage, result, healthCheck)
 }
 
-func (m *ModuleMetrics) claimLocked(kind, stage, result, pipeline string) error {
-	key := strings.Join([]string{kind, m.module, stage, result, pipeline}, "\x00")
+func (m *ModuleMetrics) claimLocked(kind, stage, result, healthCheck string) error {
+	key := strings.Join([]string{kind, m.module, stage, result, healthCheck}, "\x00")
 	if m.series[key] {
 		return nil
 	}
