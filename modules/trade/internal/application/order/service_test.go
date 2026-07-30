@@ -178,6 +178,28 @@ func TestSubmitTargetRejectsExternalFactBeforeExchangeCall(t *testing.T) {
 	require.Zero(t, adapter.placeCalls)
 }
 
+func TestSubmitTargetRechecksAccountReadinessBeforeExchangeCall(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	spec := testSpec(service.now())
+	setTestOwner(&spec, orderdomain.OwnerTarget)
+	pending, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateExchangeAccountReadiness(
+			"space-1", "account-1", false,
+			service.now().UnixMilli(), "private facts awaiting sync",
+		)
+	}))
+
+	got, err := service.Submit(
+		context.Background(), "space-1", string(pending.ID),
+	)
+
+	require.ErrorIs(t, err, ErrAccountNotReady)
+	require.Equal(t, orderdomain.Pending, got.State)
+	require.Zero(t, adapter.placeCalls)
+}
+
 func TestSubmitSubmittingQueriesExchangeBeforeRetry(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))

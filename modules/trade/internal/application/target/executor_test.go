@@ -136,6 +136,34 @@ func TestTargetExecutorDiscardsPendingChildWhenAutomationChangesBeforeSubmit(t *
 	require.Equal(t, "PAUSED", account.AutomationState)
 }
 
+func TestTargetExecutorWaitsWithoutPausingWhenAccountTurnsNotReady(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.submitErrors = map[string]error{
+		"child-account-a": orderapp.ErrAccountNotReady,
+	}
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+	}})
+
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusPaused, result.Status)
+	require.Equal(t, []string{"child-account-a"}, fixture.orders.discarded)
+	account, err := fixture.store.GetLogicalAccount(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "ACTIVE", account.AutomationState)
+	target, err := fixture.store.GetLogicalAccountTarget(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Equal(t, StatusPending, target.Status)
+}
+
 func TestTargetExecutorPausedOwnerReleaseCancelsOwnedOrderWithoutError(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.target(t, []store.InstrumentTarget{{

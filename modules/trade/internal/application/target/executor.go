@@ -183,10 +183,19 @@ func (e *Executor) Converge(
 					); discardErr != nil {
 						return Result{}, errors.Join(err, discardErr)
 					}
-					if pauseErr := e.pauseLogicalAccount(
-						ctx, logicalAccount, target, err.Error(),
-					); pauseErr != nil {
-						return Result{}, pauseErr
+					if errors.Is(err, orderapp.ErrAccountNotReady) {
+						target.LastError = err.Error()
+						if updateErr := e.updateTarget(
+							ctx, &target, StatusPending,
+						); updateErr != nil {
+							return Result{}, updateErr
+						}
+					} else {
+						if pauseErr := e.pauseLogicalAccount(
+							ctx, logicalAccount, target, err.Error(),
+						); pauseErr != nil {
+							return Result{}, pauseErr
+						}
 					}
 					return Result{Status: StatusPaused, Action: "pause"}, nil
 				}
@@ -235,10 +244,19 @@ func (e *Executor) Converge(
 		)
 		if placeErr != nil {
 			if targetSubmitConflict(placeErr) {
-				if pauseErr := e.pauseLogicalAccount(
-					ctx, logicalAccount, target, placeErr.Error(),
-				); pauseErr != nil {
-					return Result{}, pauseErr
+				if errors.Is(placeErr, orderapp.ErrAccountNotReady) {
+					target.LastError = placeErr.Error()
+					if updateErr := e.updateTarget(
+						ctx, &target, StatusPending,
+					); updateErr != nil {
+						return Result{}, updateErr
+					}
+				} else {
+					if pauseErr := e.pauseLogicalAccount(
+						ctx, logicalAccount, target, placeErr.Error(),
+					); pauseErr != nil {
+						return Result{}, pauseErr
+					}
 				}
 				return Result{Status: StatusPaused, Action: "pause"}, nil
 			}
@@ -678,7 +696,8 @@ func capacityError(err error) bool {
 func targetSubmitConflict(err error) bool {
 	return errors.Is(err, orderapp.ErrExternalConflict) ||
 		errors.Is(err, orderapp.ErrAutomationPaused) ||
-		errors.Is(err, orderapp.ErrTargetOwnerConflict)
+		errors.Is(err, orderapp.ErrTargetOwnerConflict) ||
+		errors.Is(err, orderapp.ErrAccountNotReady)
 }
 
 func baseQuantityRules(

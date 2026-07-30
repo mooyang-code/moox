@@ -21,6 +21,7 @@ var (
 	ErrExternalConflict    = errors.New("trade order: active external order conflicts with target")
 	ErrAutomationPaused    = errors.New("trade order: logical account automation is paused")
 	ErrTargetOwnerConflict = errors.New("trade order: target runner no longer owns logical account")
+	ErrAccountNotReady     = errors.New("trade order: exchange account is not ready")
 )
 
 type AdapterSource interface {
@@ -274,6 +275,16 @@ func (s *Service) rejectTargetExternalConflict(
 	if record.OwnerType != string(orderdomain.OwnerTarget) ||
 		record.LogicalAccountID == "" {
 		return nil
+	}
+	account, err := s.Store.GetExchangeAccountByID(
+		ctx,
+		record.ExchangeAccountID,
+	)
+	if err != nil {
+		return err
+	}
+	if account.Status != string(exchange.AccountStatusEnabled) || !account.Ready {
+		return ErrAccountNotReady
 	}
 	logicalAccount, err := s.Store.GetLogicalAccount(
 		ctx,
