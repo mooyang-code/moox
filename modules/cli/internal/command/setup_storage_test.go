@@ -105,6 +105,23 @@ func TestStorageTargetAddressAndNamespaceValidation(t *testing.T) {
 	}
 }
 
+func TestStorageBrowserBaseURLKeepsPublicHostOnTheLocalForwardPort(t *testing.T) {
+	t.Parallel()
+
+	baseURL, err := storageBrowserBaseURL("106.53.107.122", "127.0.0.1:43127")
+
+	require.NoError(t, err)
+	require.Equal(t, "https://106.53.107.122:43127", baseURL)
+	for _, input := range [][2]string{
+		{"", "127.0.0.1:43127"},
+		{"host.test,EXCLUDE example.com", "127.0.0.1:43127"},
+		{"106.53.107.122", "invalid"},
+	} {
+		_, err := storageBrowserBaseURL(input[0], input[1])
+		require.EqualError(t, err, "browser_e2e_control_unavailable")
+	}
+}
+
 func TestStorageLifecycleCreatesActivatesAndDisablesIsolatedRows(t *testing.T) {
 	t.Parallel()
 	api := &fakeStorageMetadataAPI{}
@@ -163,6 +180,40 @@ func TestStorageBrowserFixtureCreatesAndCleansIsolatedAdminAndMetadataRows(t *te
 	require.Equal(t, []string{fixture.SourceID}, metadata.deletedSources)
 	require.Equal(t, []string{fixture.SpaceID}, metadata.deletedSpaces)
 	require.Equal(t, []string{fixture.SpaceID}, admin.disabledSpaces)
+	require.Equal(t, []string{"internal"}, metadata.dataSourceKinds)
+	require.Equal(t, []string{"数值"}, metadata.datasetColumnDisplayNames)
+}
+
+func TestStorageBrowserFixtureKeepsCreateFailureWhenStorageSpaceWasNotCreated(t *testing.T) {
+	t.Parallel()
+	metadata := &fakeStorageMetadataAPI{failCreateSpace: true, failDeleteSpace: true}
+	admin := &fakeStorageAdminSpaceAPI{}
+	session := &remoteStorageSession{
+		metadata: metadata,
+		auth:     &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: "signed"},
+	}
+
+	_, _, err := createStorageBrowserFixture(context.Background(), session, admin)
+
+	require.EqualError(t, err, "browser_e2e_storage_space_create_failed")
+	require.Empty(t, metadata.deletedSpaces)
+	require.Len(t, admin.disabledSpaces, 1)
+}
+
+func TestStorageBrowserFixtureDoesNotMaskDataSourceFailureWithCleanupFailure(t *testing.T) {
+	t.Parallel()
+	metadata := &fakeStorageMetadataAPI{failCreateDataSource: true, failDeleteSpace: true}
+	admin := &fakeStorageAdminSpaceAPI{}
+	session := &remoteStorageSession{
+		metadata: metadata,
+		auth:     &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: "signed"},
+	}
+
+	_, _, err := createStorageBrowserFixture(context.Background(), session, admin)
+
+	require.EqualError(t, err, "browser_e2e_data_source_create_failed (browser_e2e_fixture_cleanup_failed)")
+	require.Len(t, metadata.deletedSpaces, 1)
+	require.Len(t, admin.disabledSpaces, 1)
 }
 
 func TestValidateStorageBuildProvenanceRequiresExactRemoteArtifacts(t *testing.T) {
@@ -226,13 +277,18 @@ func mustJSON(t *testing.T, value any) []byte {
 }
 
 type fakeStorageMetadataAPI struct {
-	auths               []*storagepb.AuthInfo
-	deletedSpaces       []string
-	deletedSources      []string
-	deletedDatasets     []string
-	deletedNodes        []string
-	temporaryNode       *storagepb.DataNode
-	temporaryReferenced bool
+	auths                     []*storagepb.AuthInfo
+	deletedSpaces             []string
+	deletedSources            []string
+	deletedDatasets           []string
+	deletedNodes              []string
+	dataSourceKinds           []string
+	datasetColumnDisplayNames []string
+	temporaryNode             *storagepb.DataNode
+	temporaryReferenced       bool
+	failCreateSpace           bool
+	failCreateDataSource      bool
+	failDeleteSpace           bool
 }
 
 type fakeStorageAdminSpaceAPI struct {
@@ -255,6 +311,9 @@ func storageOK() *storagepb.RetInfo                                 { return &st
 
 func (f *fakeStorageMetadataAPI) CreateSpace(_ context.Context, req *storagepb.CreateSpaceReq) (*storagepb.CreateSpaceRsp, error) {
 	f.remember(req.GetAuthInfo())
+	if f.failCreateSpace {
+		return &storagepb.CreateSpaceRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
+	}
 	return &storagepb.CreateSpaceRsp{RetInfo: storageOK(), Space: req.GetSpace()}, nil
 }
 func (f *fakeStorageMetadataAPI) UpdateSpace(_ context.Context, req *storagepb.UpdateSpaceReq) (*storagepb.UpdateSpaceRsp, error) {
@@ -264,10 +323,17 @@ func (f *fakeStorageMetadataAPI) UpdateSpace(_ context.Context, req *storagepb.U
 func (f *fakeStorageMetadataAPI) DeleteSpace(_ context.Context, req *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error) {
 	f.remember(req.GetAuthInfo())
 	f.deletedSpaces = append(f.deletedSpaces, req.GetSpaceId())
+	if f.failDeleteSpace {
+		return &storagepb.DeleteSpaceRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
+	}
 	return &storagepb.DeleteSpaceRsp{RetInfo: storageOK()}, nil
 }
 func (f *fakeStorageMetadataAPI) CreateDataSource(_ context.Context, req *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error) {
 	f.remember(req.GetAuthInfo())
+	f.dataSourceKinds = append(f.dataSourceKinds, req.GetDataSource().GetKind())
+	if f.failCreateDataSource {
+		return &storagepb.CreateDataSourceRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
+	}
 	return &storagepb.CreateDataSourceRsp{RetInfo: storageOK(), DataSource: req.GetDataSource()}, nil
 }
 func (f *fakeStorageMetadataAPI) UpdateDataSource(_ context.Context, req *storagepb.UpdateDataSourceReq) (*storagepb.UpdateDataSourceRsp, error) {
@@ -308,6 +374,7 @@ func (f *fakeStorageMetadataAPI) DeleteDataset(_ context.Context, req *storagepb
 }
 func (f *fakeStorageMetadataAPI) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
 	f.remember(req.GetAuthInfo())
+	f.datasetColumnDisplayNames = append(f.datasetColumnDisplayNames, req.GetColumn().GetAttributes()["display_name"])
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: storageOK(), Column: req.GetColumn()}, nil
 }
 func (f *fakeStorageMetadataAPI) RebindDatasetDataNode(_ context.Context, req *storagepb.RebindDatasetDataNodeReq) (*storagepb.RebindDatasetDataNodeRsp, error) {

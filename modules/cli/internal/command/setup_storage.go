@@ -1062,6 +1062,28 @@ func mustMarshalStorageBrowserFixture(fixture storageBrowserFixture) string {
 	return string(raw)
 }
 
+func storageBrowserBaseURL(publicHost, localAddress string) (string, error) {
+	publicHost = strings.TrimSpace(publicHost)
+	if publicHost == "" {
+		return "", errors.New("browser_e2e_control_unavailable")
+	}
+	for _, r := range publicHost {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' {
+			continue
+		}
+		return "", errors.New("browser_e2e_control_unavailable")
+	}
+	_, port, err := net.SplitHostPort(localAddress)
+	if err != nil {
+		return "", errors.New("browser_e2e_control_unavailable")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", errors.New("browser_e2e_control_unavailable")
+	}
+	return "https://" + net.JoinHostPort(publicHost, port), nil
+}
+
 func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSession, adminSpaces storageAdminSpaceAPI) (fixture storageBrowserFixture, cleanup func() error, returnErr error) {
 	if session == nil || session.metadata == nil || adminSpaces == nil {
 		return storageBrowserFixture{}, nil, errors.New("browser_e2e_fixture_unavailable")
@@ -1095,7 +1117,7 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 	defer func() {
 		if returnErr != nil && cleanup != nil {
 			if cleanupErr := cleanup(); cleanupErr != nil {
-				returnErr = errors.New("browser_e2e_fixture_cleanup_failed")
+				returnErr = fmt.Errorf("%w (browser_e2e_fixture_cleanup_failed)", returnErr)
 			}
 		}
 	}()
@@ -1107,13 +1129,14 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 		return fixture, cleanup, errors.New("browser_e2e_admin_space_create_failed")
 	}
 	adminSpace = adminResponse.GetSpace()
-	storageSpace = &storagepb.Space{SpaceId: spaceID, Name: "浏览器隔离空间", Owner: "storage-e2e", Status: "active"}
-	spaceResponse, err := session.metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{AuthInfo: session.auth, Space: storageSpace})
+	spaceResponse, err := session.metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{AuthInfo: session.auth, Space: &storagepb.Space{
+		SpaceId: spaceID, Name: "浏览器隔离空间", Owner: "storage-e2e", Status: "active",
+	}})
 	if err != nil || spaceResponse == nil || spaceResponse.GetRetInfo() == nil || spaceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || spaceResponse.GetSpace() == nil {
 		return fixture, cleanup, errors.New("browser_e2e_storage_space_create_failed")
 	}
 	storageSpace = spaceResponse.GetSpace()
-	source = &storagepb.DataSource{SpaceId: spaceID, DataSourceId: sourceID, Name: "浏览器隔离来源", Kind: "e2e", Status: "active"}
+	source = &storagepb.DataSource{SpaceId: spaceID, DataSourceId: sourceID, Name: "浏览器隔离来源", Kind: "internal", Status: "active"}
 	sourceResponse, err := session.metadata.CreateDataSource(ctx, &storagepb.CreateDataSourceReq{AuthInfo: session.auth, DataSource: source})
 	if err != nil || sourceResponse == nil || sourceResponse.GetRetInfo() == nil || sourceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || sourceResponse.GetDataSource() == nil {
 		return fixture, cleanup, errors.New("browser_e2e_data_source_create_failed")
@@ -1136,6 +1159,7 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 	dataset = datasetResponse.GetDataset()
 	columnResponse, err := session.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: session.auth, Column: &storagepb.DatasetColumn{
 		SpaceId: spaceID, DatasetId: datasetID, ColumnName: "value", OriginId: "value", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, Status: "active",
+		Attributes: map[string]string{"display_name": "数值"},
 	}})
 	if err != nil || columnResponse == nil || columnResponse.GetRetInfo() == nil || columnResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 		return fixture, cleanup, errors.New("browser_e2e_dataset_column_create_failed")
@@ -1203,10 +1227,14 @@ curl -kfsS https://127.0.0.1:9527/ >/dev/null`}, nil); err != nil {
 	}
 	command := exec.CommandContext(ctx, "pnpm", "--dir", "web", "exec", "playwright", "test", storageE2ESpec, "--project=chromium")
 	command.Dir = root
-	baseURL := "https://" + listener.Addr().String()
+	baseURL, err := storageBrowserBaseURL(host.Address, listener.Addr().String())
+	if err != nil {
+		return storageBrowserResult{}, err
+	}
 	command.Env = append(os.Environ(),
 		"MOOX_REMOTE_PLAYWRIGHT=1",
 		"MOOX_REMOTE_BASE_URL="+baseURL,
+		"MOOX_REMOTE_FORWARD_HOST="+strings.TrimSpace(host.Address),
 		"MOOX_REMOTE_STORAGE_FIXTURE="+mustMarshalStorageBrowserFixture(fixture),
 		"MOOX_REMOTE_TRACE=off",
 		"MOOX_REMOTE_VIDEO=off",

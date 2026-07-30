@@ -15,9 +15,10 @@ type BrowserFixture = {
 type RpcBody = {
   ret_info?: { code?: number | string; msg?: string };
   items?: Array<{ node?: { node_id?: string }; datasets?: Array<{ dataset_id?: string; name?: string }> }>;
-  spaces?: Array<{ space_id?: string }>;
+  spaces?: Array<{ space_id?: string; name?: string }>;
   datasets?: Array<{ dataset_id?: string; status?: string; binding_locked?: boolean; name?: string }>;
   dataset?: { dataset_id?: string; status?: string; binding_locked?: boolean };
+  fields?: Array<{ field_id?: string; name?: string }>;
 };
 
 function browserFixture(): BrowserFixture {
@@ -80,9 +81,9 @@ async function openDataNodePage(page: Page, query: string) {
   await page.goto(`/#/ops/storage/nodes?tab=${query}`);
   const body = await nodesResponse;
   await expect(page.getByRole("heading", { name: "数据节点" })).toBeVisible();
-  await expect(page.getByText("节点ID", { exact: true })).toBeVisible();
-  await expect(page.getByText("服务目标", { exact: true })).toBeVisible();
-  await expect(page.getByText("Dataset", { exact: true })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "节点ID", exact: true })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "服务目标", exact: true })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Dataset", exact: true })).toBeVisible();
   await expectNoRouteSurface(page);
   expect(body.items?.length || 0, "deployed Storage must expose at least one DataNode").toBeGreaterThan(0);
   return body;
@@ -95,10 +96,16 @@ async function openDatasetPage(page: Page, fixture: BrowserFixture) {
   await page.goto(`/#/collector/data-management?tab=datasets&space_id=${encodeURIComponent(fixture.space_id)}`);
   const [spaces, nodes, datasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
   await expect(page.getByRole("heading", { name: "数据集" })).toBeVisible();
-  await expect(page.getByText("数据集ID", { exact: true })).toBeVisible();
-  expect(spaces.spaces?.some(item => item.space_id === fixture.space_id), "browser fixture Space must be listed by Admin").toBeTruthy();
+  await expect(page.getByRole("columnheader", { name: "数据集ID", exact: true })).toBeVisible();
+  expect(
+    spaces.spaces?.some(item => item.space_id === fixture.space_id),
+    "browser fixture Space must be listed by Admin"
+  ).toBeTruthy();
   expect(nodes.items?.length || 0, "Dataset page must resolve DataNodes").toBeGreaterThan(0);
-  expect(datasets.datasets?.some(item => item.dataset_id === fixture.dataset_id), "browser fixture Dataset must be listed").toBeTruthy();
+  expect(
+    datasets.datasets?.some(item => item.dataset_id === fixture.dataset_id),
+    "browser fixture Dataset must be listed"
+  ).toBeTruthy();
   await expectInfoTooltip(page, "数据集绑定规则说明", "数据集必须绑定一个 DataNode");
   return datasets;
 }
@@ -182,4 +189,44 @@ test("remote mobile keeps DataNode and Dataset workflows inside the viewport", a
 
   await expect(datasetRow).toContainText("active");
   await expect(datasetRow).toContainText("已锁定");
+});
+
+test("remote default setup exposes each business Space with Datasets and Fields", async ({ page }) => {
+  test.skip(process.env.MOOX_REMOTE_DEFAULT_SETUP !== "1", "default-setup acceptance is opt-in");
+  await login(page);
+
+  for (const expected of [
+    { spaceID: "stock_cn", spaceName: "A股市场", datasetID: "stock_kline", fieldID: "amount" },
+    { spaceID: "crypto", spaceName: "加密货币市场", datasetID: "spot_kline_1h", fieldID: "quote_volume" }
+  ]) {
+    const spacesResponse = waitForMethod(page, "ListSpaces", "space");
+    const nodesResponse = waitForMethod(page, "ListDataNodes");
+    const datasetsResponse = waitForMethod(page, "ListDatasets");
+    await page.goto(`/#/collector/data-management?tab=datasets&space_id=${expected.spaceID}`);
+    const [spaces, nodes, datasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
+    expect(
+      spaces.spaces?.some(item => item.space_id === expected.spaceID && item.name === expected.spaceName),
+      `${expected.spaceID} must be available in the Space selector`
+    ).toBeTruthy();
+    expect(nodes.items?.length || 0, `${expected.spaceID} must resolve a DataNode`).toBeGreaterThan(0);
+    expect(
+      datasets.datasets?.some(item => item.dataset_id === expected.datasetID),
+      `${expected.spaceID} must expose ${expected.datasetID}`
+    ).toBeTruthy();
+    await expect(page.getByRole("textbox", { name: expected.spaceName })).toBeVisible();
+    await expect(page.getByRole("row").filter({ hasText: expected.datasetID })).toBeVisible();
+
+    const groupsResponse = waitForMethod(page, "ListFieldGroups");
+    const fieldsResponse = waitForMethod(page, "ListFields");
+    await page.goto("/#/data/fields");
+    await Promise.all([groupsResponse, fieldsResponse]);
+    const fields = await fieldsResponse;
+    expect(
+      fields.fields?.some(item => item.field_id === expected.fieldID),
+      `${expected.spaceID} must expose ${expected.fieldID}`
+    ).toBeTruthy();
+    await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: expected.spaceName })).toBeVisible();
+    await expect(page.getByRole("row").filter({ hasText: expected.fieldID })).toBeVisible();
+  }
 });

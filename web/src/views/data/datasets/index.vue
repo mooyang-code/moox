@@ -188,7 +188,7 @@
       <a-alert v-if="rebindError" type="error" show-icon>{{ rebindError }}</a-alert>
     </a-modal>
 
-    <a-drawer v-model:visible="manageVisible" width="920px" :footer="false">
+    <a-drawer v-model:visible="manageVisible" width="min(920px, 100vw)" :footer="false">
       <template #title>
         <div class="manage-title">
           <span>数据集配置：{{ activeDataset?.dataset_id }}</span>

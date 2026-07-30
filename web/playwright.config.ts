@@ -2,6 +2,14 @@ import { defineConfig, devices } from "@playwright/test";
 
 const remote = process.env.MOOX_REMOTE_PLAYWRIGHT === "1";
 
+export function remoteBrowserLaunchArgs(host: string | undefined): string[] {
+  const normalized = host?.trim() || "";
+  if (!/^[A-Za-z0-9.-]+$/.test(normalized)) {
+    throw new Error("remote_playwright_forward_host_invalid");
+  }
+  return [`--host-resolver-rules=MAP ${normalized} 127.0.0.1`];
+}
+
 export default defineConfig({
   testDir: "./tests",
   timeout: 30_000,
@@ -20,7 +28,10 @@ export default defineConfig({
     {
       name: "chromium",
       testMatch: remote ? /storage-datanode-management\.remote\.e2e\.spec\.ts/ : undefined,
-      use: { ...devices["Desktop Chrome"] }
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: remote ? { args: remoteBrowserLaunchArgs(process.env.MOOX_REMOTE_FORWARD_HOST) } : undefined
+      }
     }
   ]
 });

@@ -450,6 +450,12 @@ test.describe("DataNode management browser workflows", () => {
     await expectInViewport(page, infoTooltip);
 
     const datasetRow = page.getByRole("row", { name: /dataset-a/ });
+    await datasetRow.getByRole("button", { name: "列/对象" }).click();
+    const manageDrawer = page.locator(".arco-drawer").filter({ hasText: "数据集配置：dataset-a" });
+    await expect(manageDrawer).toBeVisible();
+    expect((await manageDrawer.boundingBox())?.width || 0).toBeLessThanOrEqual(391);
+    await page.keyboard.press("Escape");
+
     await datasetRow.getByRole("button", { name: "激活" }).click();
     const activationDialog = page.getByTestId("dataset-activation-modal");
     await expect(activationDialog).toBeVisible();
