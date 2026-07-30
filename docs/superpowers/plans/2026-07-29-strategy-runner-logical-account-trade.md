@@ -25,6 +25,12 @@
 - Strategy artifact 由唯一 `strategy_id` 标识并不可变；源码、manifest、输入契约或参数 schema 发生变化必须使用新的 `strategy_id`。
 - V1 Strategy 只支持完整历史窗口计算，不支持 `state_json`、`state_revision`、`next_state`、`state_format_version` 或增量状态迁移。
 
+### 公共命名决策
+
+- 单个标的的目标结构统一命名为 `InstrumentTarget`，字段为 `instrument_id + quantity`。`quantity` 表示目标绝对持仓数量，不是本次交易增量；不再使用 `TradeTarget` 或 `target_quantity`。
+- 清仓 RPC 保留 `FlattenLogicalAccount`，因为它表达的是将 LogicalAccount 下每个物理账户的风险仓位分别归零。界面统一显示“逐账户清仓”；该操作不删除最新 FULL 目标，也不做跨账户净额抵消。
+- Admin 后台明文读取 RPC 统一命名为 `GetSecretValue`，返回结构命名为 `SecretMaterial`。`RevealSecret` 容易暴露存储实现语义，不再保留。
+
 ## 最终目录和数据结构
 
 ### Strategy 四表
