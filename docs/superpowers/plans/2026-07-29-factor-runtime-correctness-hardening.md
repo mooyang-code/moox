@@ -1195,7 +1195,7 @@ git commit -m "docs: document scalar time series tags"
 - Modify: `modules/archive/test/archive_e2e_test.go`
 - Modify: `modules/monitor/test/host_monitor_direct_storage_e2e_test.go`
 
-- [ ] **Step 1: Storage + Factor + Python**
+- [x] **Step 1: Storage + Factor + Python**
 
 在真实 Storage Primary/View 写入同 Dataset 两个 venue tag。因子以：
 
@@ -1210,19 +1210,19 @@ git commit -m "docs: document scalar time series tags"
 计算价差，断言 target Dataset 的 tag、数值、null 清除、历史修正向后窗口和
 `complete=false` 重读均正确。
 
-- [ ] **Step 2: Storage + Archive**
+- [x] **Step 2: Storage + Archive**
 
 消费真实 `DatasetRowsUpserted@2`，断言同一时间点两个 tag 生成两个独立 tag 目录和
 两个 Parquet v2 月文件。用独立 reader 检查每个文件的 `series_tag` 为对应常量，
 按 `candle_begin_time` 排序且时间唯一；ArchiveFile partition key、本地路径和 COS
 object key 均包含同一可逆 tag 编码。
 
-- [ ] **Step 3: Storage + Monitor**
+- [x] **Step 3: Storage + Monitor**
 
 写一个主机同分钟多个 filesystem/disk/network，查询后实体数和值完整，无 RowKey
 覆盖。
 
-- [ ] **Step 4: 运行脚本**
+- [x] **Step 4: 运行脚本**
 
 ```bash
 bash scripts/test-series-tag-e2e.sh

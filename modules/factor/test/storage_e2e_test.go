@@ -4,19 +4,26 @@ package e2e_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/engine"
+	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,14 +110,15 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	targetID := "portfolio_factor_" + suffix
 	sourceViewID := "source_view_" + suffix
 	viewID := "factor_view_" + suffix
-	factorID := "excess_return_" + suffix
-	factorName := "ExcessReturn_" + suffix
+	factorID := "venue_spread_" + suffix
+	factorName := "VenueSpread_" + suffix
 	bindingID := "bind-" + suffix
 	subjectID := "fund-" + suffix
 	const freq = "1m"
 	first := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
-	second := first.Add(time.Nanosecond)
-	end := second.Add(time.Nanosecond)
+	second := first.Add(time.Minute)
+	third := second.Add(time.Minute)
+	end := third.Add(time.Nanosecond)
 	var spaceCreated, factorCreated, bindingCreated bool
 
 	t.Cleanup(func() {
@@ -178,8 +186,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	for _, field := range []struct {
 		id, name string
 	}{
-		{id: "nav", name: "净值"},
-		{id: "benchmark_return", name: "基准收益"},
+		{id: "close", name: "收盘价"},
 	} {
 		fieldRsp, fieldErr := metadata.CreateField(ctx, &storagepb.CreateFieldReq{
 			AuthInfo: auth,
@@ -203,8 +210,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	for _, column := range []struct {
 		id, display string
 	}{
-		{id: "nav", display: "净值"},
-		{id: "benchmark_return", display: "基准收益"},
+		{id: "close", display: "收盘价"},
 	} {
 		columnRsp, columnErr := metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{
 			AuthInfo: auth,
@@ -241,11 +247,10 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		View: &storagepb.View{
 			SpaceId: spaceID, ViewId: sourceViewID, Name: "源视" + displaySuffix,
 			PrimaryDatasetId: sourceID, DatasetIds: []string{sourceID},
-			GrainKeys: []string{"subject_id", "freq", "data_time"}, Engine: "duckdb",
+			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb",
 			FilterJson: `{"freq":"1m"}`, KeepDuration: "24h", Status: "active",
 			Columns: []*storagepb.ViewColumn{
-				viewColumn(spaceID, sourceViewID, sourceID, "nav", "净值", 10),
-				viewColumn(spaceID, sourceViewID, sourceID, "benchmark_return", "基准收益", 20),
+				viewColumn(spaceID, sourceViewID, sourceID, "close", "收盘价", 10),
 			},
 		},
 	})
@@ -256,8 +261,12 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	writeRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: auth, SourceEventId: "factor-storage-e2e-input-" + suffix,
 		Rows: []*storagepb.RowFieldUpsert{
-			inputRow(spaceID, sourceID, subjectID, freq, first, 1.05, 0.01),
-			inputRow(spaceID, sourceID, subjectID, freq, second, 1.18, 0.02),
+			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:binance", 101),
+			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:okx", 100),
+			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:binance", 104),
+			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:okx", 102),
+			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:binance", 108),
+			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:okx", 105),
 		},
 	})
 	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
@@ -265,28 +274,41 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
 			SpaceID: spaceID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
-		}, first, end, 1, 10, []string{"benchmark_return", "nav"})
+		}, first, end, 1, 10, []string{"close"})
 		assert.NoError(collect, readErr)
 		if readErr == nil {
 			sourceChunk = chunk
-			assert.Equal(collect, []time.Time{first, second}, chunk.TargetPeriods)
+			assert.Equal(collect, []time.Time{first, second, third}, chunk.TargetPeriods)
 		}
 	}, 20*time.Second, 250*time.Millisecond, "source rows were not materialized")
-	require.Equal(t, []time.Time{first, second}, sourceChunk.TargetPeriods)
-	require.Equal(t, []string{"benchmark_return", "nav"}, sourceChunk.Frame.Columns)
+	require.Equal(t, []time.Time{first, second, third}, sourceChunk.TargetPeriods)
+	require.Equal(t, []string{"close"}, sourceChunk.Frame.Columns)
+	require.Equal(t,
+		[]string{"venue:binance", "venue:okx", "venue:binance", "venue:okx", "venue:binance", "venue:okx"},
+		sourceChunk.Frame.SeriesTags,
+	)
 
-	sourceCode := `def compute(df, params):
-    excess = df["nav"] - df["benchmark_return"]
-    return {
-        "excess_return": excess,
-        "rolling_rank": excess.rolling(int(params["window"]), min_periods=1).rank(),
-    }
+	sourceCode := `import pandas as pd
+
+def compute(df, params):
+    left = df[df["series_tag"] == params["left_tag"]][["data_time", "close"]]
+    right = df[df["series_tag"] == params["right_tag"]][["data_time", "close"]]
+    joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
+    spread = joined["close_left"] - joined["close_right"]
+    return pd.DataFrame({
+        "data_time": joined["data_time"],
+        "series_tag": params["output_tag"],
+        "spread": spread,
+        "rolling_spread": spread.rolling(int(params["window"]), min_periods=1).mean(),
+    })
 `
 	createFactorRsp, err := factor.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
 		FactorId: factorID, Name: factorName, SourceCode: sourceCode,
-		InputColumns: []string{"nav", "benchmark_return"},
-		Outputs:      []string{"excess_return", "rolling_rank"},
-		ParamsJson:   `{"window":2}`, LookbackPeriods: 2, Status: "disabled",
+		InputColumns: []string{"close"},
+		Outputs:      []string{"spread", "rolling_spread"},
+		ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
+			`"output_tag":"venue_pair:binance-okx","window":2}`,
+		LookbackPeriods: 2, Status: "disabled",
 	}})
 	require.NoError(t, err)
 	requireStorageRet(t, "FactorMgr.CreateFactor", createFactorRsp.GetRetInfo())
@@ -311,18 +333,18 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	})
 	require.NoError(t, err)
 	requireStorageRet(t, "ListDatasetColumns(target)", targetColumnsRsp.GetRetInfo())
-	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, datasetColumnNames(targetColumnsRsp.GetColumns()))
+	require.ElementsMatch(t, []string{"spread", "rolling_spread"}, datasetColumnNames(targetColumnsRsp.GetColumns()))
 
 	viewColumns := []*storagepb.ViewColumn{
-		viewColumn(spaceID, viewID, targetID, "excess_return", "超额收益", 10),
-		viewColumn(spaceID, viewID, targetID, "rolling_rank", "滚动排名", 20),
+		viewColumn(spaceID, viewID, targetID, "spread", "价差", 10),
+		viewColumn(spaceID, viewID, targetID, "rolling_spread", "滚动价差", 20),
 	}
 	createViewRsp, err := metadata.CreateView(ctx, &storagepb.CreateViewReq{
 		AuthInfo: auth,
 		View: &storagepb.View{
 			SpaceId: spaceID, ViewId: viewID, Name: "因视" + displaySuffix,
 			PrimaryDatasetId: targetID, DatasetIds: []string{targetID},
-			GrainKeys: []string{"subject_id", "freq", "data_time"}, Engine: "duckdb",
+			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb",
 			FilterJson: `{"freq":"1m"}`, KeepDuration: "24h", Status: "active", Columns: viewColumns,
 		},
 	})
@@ -331,30 +353,120 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq, first, end)
 
 	runDeployedFactor(t, ctx, deployRoot, factorID, spaceID, sourceID, subjectID, freq, first, end)
-	rows := waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq, first, second, end, false)
-	assertFactorRows(t, rows, first, second, false)
+	assertPrimaryFactorRows(t, ctx, primary, auth, spaceID, targetID, subjectID, freq,
+		[]time.Time{first, second, third}, []float64{1, 2, 3}, []float64{1, 1.5, 2.5}, -1)
+	rows := waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq,
+		[]time.Time{first, second, third}, end, []float64{1, 2, 3}, []float64{1, 1.5, 2.5}, -1)
+	assertFactorRows(t, rows, []time.Time{first, second, third},
+		[]float64{1, 2, 3}, []float64{1, 1.5, 2.5}, -1)
 
-	nullSource := `def compute(df, params):
-    excess = df["nav"] - df["benchmark_return"]
-    rolling = excess.rolling(int(params["window"]), min_periods=1).rank()
-    excess.iloc[-1] = None
+	// Correcting the first source bar emits DatasetRowsUpserted@2. The realtime
+	// scheduler must expand the affected range by lookback-1 actual periods, so
+	// the second rolling value changes even though its source bar was untouched.
+	correctionRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
+		AuthInfo: auth, SourceEventId: "factor-storage-e2e-correction-" + suffix,
+		Rows: []*storagepb.RowFieldUpsert{
+			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:binance", 103),
+		},
+	})
+	requireStorageOK(t, "PrimaryStore.UpsertFields(correction)", correctionRsp, err)
+	rows = waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq,
+		[]time.Time{first, second, third}, end, []float64{3, 2, 3}, []float64{3, 2.5, 2.5}, -1)
+	assertFactorRows(t, rows, []time.Time{first, second, third},
+		[]float64{3, 2, 3}, []float64{3, 2.5, 2.5}, -1)
+
+	nullSource := `import pandas as pd
+
+def compute(df, params):
+    left = df[df["series_tag"] == params["left_tag"]][["data_time", "close"]]
+    right = df[df["series_tag"] == params["right_tag"]][["data_time", "close"]]
+    joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
+    spread = joined["close_left"] - joined["close_right"]
+    rolling = spread.rolling(int(params["window"]), min_periods=1).mean()
+    spread.iloc[-1] = None
     rolling.iloc[-1] = None
-    return {"excess_return": excess, "rolling_rank": rolling}
+    return pd.DataFrame({
+        "data_time": joined["data_time"], "series_tag": params["output_tag"],
+        "spread": spread, "rolling_spread": rolling,
+    })
 `
+	disableRsp, err := factor.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+		FactorId: factorID, Status: "disabled",
+	})
+	require.NoError(t, err)
+	requireStorageRet(t, "FactorMgr.SetFactorStatus(disable)", disableRsp.GetRetInfo())
 	updateRsp, err := factor.UpdateFactor(ctx, &factorpb.UpdateFactorReq{
 		FactorId: factorID,
 		Factor: &factorpb.FactorDef{
 			FactorId: factorID, Name: factorName, SourceCode: nullSource,
-			InputColumns: []string{"nav", "benchmark_return"},
-			Outputs:      []string{"excess_return", "rolling_rank"},
-			ParamsJson:   `{"window":2}`, LookbackPeriods: 2, Status: "enabled",
+			InputColumns: []string{"close"},
+			Outputs:      []string{"spread", "rolling_spread"},
+			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
+				`"output_tag":"venue_pair:binance-okx","window":2}`,
+			LookbackPeriods: 2, Status: "disabled",
 		},
 	})
 	require.NoError(t, err)
 	requireStorageRet(t, "FactorMgr.UpdateFactor", updateRsp.GetRetInfo())
+	enableNullRsp, err := factor.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+		FactorId: factorID, Status: "enabled",
+	})
+	require.NoError(t, err)
+	requireStorageRet(t, "FactorMgr.SetFactorStatus(re-enable)", enableNullRsp.GetRetInfo())
 	runDeployedFactor(t, ctx, deployRoot, factorID, spaceID, sourceID, subjectID, freq, first, end)
-	rows = waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq, first, second, end, true)
-	assertFactorRows(t, rows, first, second, true)
+	rows = waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq,
+		[]time.Time{first, second, third}, end, []float64{3, 2, 0}, []float64{3, 2.5, 0}, 2)
+	assertFactorRows(t, rows, []time.Time{first, second, third},
+		[]float64{3, 2, 0}, []float64{3, 2.5, 0}, 2)
+}
+
+func assertPrimaryFactorRows(
+	t *testing.T,
+	ctx context.Context,
+	primary storagepb.PrimaryStoreClientProxy,
+	auth *commonpb.AuthInfo,
+	spaceID, datasetID, subjectID, freq string,
+	times []time.Time,
+	spreads, rolling []float64,
+	nullIndex int,
+) {
+	t.Helper()
+	keys := make([]*storagepb.RowKey, 0, len(times))
+	for _, at := range times {
+		keys = append(keys, &storagepb.RowKey{
+			SpaceId: spaceID, DatasetId: datasetID,
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: subjectID, Freq: freq, DataTime: at.Format(time.RFC3339Nano),
+				SeriesTag: "venue_pair:binance-okx",
+			}},
+		})
+	}
+	var lastRows []*storagepb.RowFieldValues
+	ok := assert.EventuallyWithT(t, func(collect *assert.CollectT) {
+		rsp, err := primary.ReadFields(ctx, &storagepb.PrimaryReadFieldsReq{
+			AuthInfo: auth, Keys: keys, FieldIds: []string{"spread", "rolling_spread"},
+		})
+		require.NoError(collect, err)
+		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+		require.Len(collect, rsp.GetRows(), len(times))
+		lastRows = rsp.GetRows()
+		rows := make([]*storagepb.TimeSeriesRow, 0, len(rsp.GetRows()))
+		for _, row := range rsp.GetRows() {
+			rows = append(rows, &storagepb.TimeSeriesRow{
+				Key: &storagepb.TimeSeriesKey{
+					SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(),
+					SubjectId: row.GetKey().GetTimeSeries().GetSubjectId(),
+					Freq:      row.GetKey().GetTimeSeries().GetFreq(),
+					DataTime:  row.GetKey().GetTimeSeries().GetDataTime(),
+					SeriesTag: row.GetKey().GetTimeSeries().GetSeriesTag(),
+				},
+				Fields: row.GetFields(),
+			})
+		}
+		require.True(collect, factorRowsHaveExpectedValues(rows, times, spreads, rolling, nullIndex))
+	}, 10*time.Second, 100*time.Millisecond)
+	require.True(t, ok, "last Primary rows: %v", lastRows)
+	t.Log("real Storage PrimaryStore.ReadFields returned exact output identities and values")
 }
 
 type retResponse interface {
@@ -365,6 +477,106 @@ func TestRequiredEnvPreservesNonEmptyValue(t *testing.T) {
 	const name = "MOOX_FACTOR_STORAGE_E2E_REQUIRED_ENV_TEST"
 	t.Setenv(name, " secret with spaces ")
 	require.Equal(t, " secret with spaces ", requiredEnv(t, name))
+}
+
+func TestFactorEventIncompleteRetriesBeforePython(t *testing.T) {
+	factorsDir := t.TempDir()
+	factorPath := filepath.Join(factorsDir, "VenueSpread.py")
+	source := []byte(`import pandas as pd
+
+def compute(df, params):
+    left = df[df["series_tag"] == params["left_tag"]][["data_time", "close"]]
+    right = df[df["series_tag"] == params["right_tag"]][["data_time", "close"]]
+    joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
+    return pd.DataFrame({
+        "data_time": joined["data_time"],
+        "series_tag": params["output_tag"],
+        "spread": joined["close_left"] - joined["close_right"],
+    })
+`)
+	require.NoError(t, os.WriteFile(factorPath, source, 0o600))
+	hash := sha256.Sum256(source)
+	at := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
+	task, err := scheduler.BuildTask(scheduler.TaskScope{
+		TaskID: "incomplete-retry-e2e", TriggerType: "event", SpaceID: "quant",
+		SourceDataset: "prices", TargetDataset: "spread", SubjectID: "BTC-USDT",
+		Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond),
+	}, domain.FactorDef{
+		FactorID: "venue-spread", Name: "VenueSpread",
+		SourceHash: hex.EncodeToString(hash[:]), SourcePath: factorPath,
+		InputColumns: []string{"close"}, Outputs: []string{"spread"},
+		ParamsJSON: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
+			`"output_tag":"venue_pair:binance-okx"}`,
+		LookbackPeriods: 1, Status: domain.FactorStatusEnabled,
+	}, factorsDir)
+	require.NoError(t, err)
+	python, err := engine.NewPythonExecutor(context.Background(), 1, process.Config{
+		PythonBin: "python3", WorkerPath: filepath.Join("..", "pyworker", "worker.py"),
+		Args: []string{"--factors-dir", factorsDir}, Limits: process.DefaultLimits(),
+	})
+	require.NoError(t, err)
+	defer python.Close()
+	storage := &incompleteThenCompleteStorage{at: at}
+	service := scheduler.NewService(scheduler.Config{
+		Workers: 1, QueueCapacity: 1, EventReadRetry: 2,
+		EventReadRetryInterval: time.Millisecond,
+	}, storage, python)
+	require.NoError(t, service.Run(context.Background(), task))
+	require.Equal(t, 2, storage.reads, "event task must reread after complete=false")
+	require.Equal(t, 1, storage.writes, "incomplete cohort must never reach Python/writeback")
+	require.Len(t, storage.result.Rows, 1)
+	require.Equal(t, "venue_pair:binance-okx", storage.result.Rows[0].SeriesTag)
+	require.InDelta(t, 1.0, storage.result.Rows[0].Values["spread"], 1e-12)
+}
+
+type incompleteThenCompleteStorage struct {
+	mu     sync.Mutex
+	at     time.Time
+	reads  int
+	writes int
+	result *engine.FactorResult
+}
+
+func (s *incompleteThenCompleteStorage) ReadRangeChunk(
+	_ context.Context,
+	_ storageio.WindowKey,
+	_, _ time.Time,
+	_, _ int,
+	columns []string,
+) (*storageio.RangeChunk, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads++
+	return &storageio.RangeChunk{
+		Frame: &engine.DataFrame{
+			Columns: columns, Rows: [][]any{{101.0}, {100.0}},
+			DataTimes:  []time.Time{s.at, s.at},
+			SeriesTags: []string{"venue:binance", "venue:okx"},
+		},
+		TargetPeriods: []time.Time{s.at},
+		Complete:      s.reads > 1,
+	}, nil
+}
+
+func (s *incompleteThenCompleteStorage) ExpandEndByPeriods(
+	_ context.Context,
+	_ storageio.WindowKey,
+	end time.Time,
+	_ int,
+) (time.Time, error) {
+	return end, nil
+}
+
+func (s *incompleteThenCompleteStorage) WriteFactorPatch(
+	_ context.Context,
+	_ *engine.FactorTask,
+	result *engine.FactorResult,
+) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writes++
+	s.result = result
+	return uint64(len(result.Rows)), nil
 }
 
 func requireStorageOK[T retResponse](t *testing.T, action string, rsp T, err error) {
@@ -455,18 +667,16 @@ func reportCleanupFailure(t *testing.T, resource string, rsp any, err error) {
 	t.Errorf("cleanup %s failed: rsp=%v err=%v", resource, rsp, err)
 }
 
-func inputRow(spaceID, datasetID, subjectID, freq string, at time.Time, nav, benchmark float64) *storagepb.RowFieldUpsert {
+func inputRow(spaceID, datasetID, subjectID, freq string, at time.Time, seriesTag string, close float64) *storagepb.RowFieldUpsert {
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{
 			SpaceId: spaceID, DatasetId: datasetID,
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 				SubjectId: subjectID, Freq: freq, DataTime: at.Format(time.RFC3339Nano),
+				SeriesTag: seriesTag,
 			}},
 		},
-		Fields: []*storagepb.FieldValue{
-			doubleValue("nav", nav),
-			doubleValue("benchmark_return", benchmark),
-		},
+		Fields: []*storagepb.FieldValue{doubleValue("close", close)},
 	}
 }
 
@@ -482,7 +692,7 @@ func doubleValue(id string, value float64) *storagepb.FieldValue {
 func viewColumn(spaceID, viewID, datasetID, output, display string, order uint32) *storagepb.ViewColumn {
 	qualified := datasetID + "." + output
 	return &storagepb.ViewColumn{
-		SpaceId: spaceID, ViewId: viewID, ColumnName: output,
+		SpaceId: spaceID, ViewId: viewID, ColumnName: qualified,
 		OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		OriginId:   qualified, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		SortOrder: order, Attributes: map[string]string{"display_name": display},
@@ -552,35 +762,38 @@ func waitForViewRows(
 	view storagepb.DataViewClientProxy,
 	auth *commonpb.AuthInfo,
 	spaceID, viewID, targetID, subjectID, freq string,
-	first, second, end time.Time,
-	secondNull bool,
+	times []time.Time,
+	end time.Time,
+	spreads, rolling []float64,
+	nullIndex int,
 ) []*storagepb.TimeSeriesRow {
 	t.Helper()
 	var rows []*storagepb.TimeSeriesRow
-	outputs := []string{"excess_return", "rolling_rank"}
-	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+	var lastRows []*storagepb.TimeSeriesRow
+	ok := assert.EventuallyWithT(t, func(collect *assert.CollectT) {
 		rsp, err := view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
 			AuthInfo: auth, SpaceId: spaceID, ViewId: viewID,
 			Selectors: []*storagepb.TimeSeriesSelector{{
 				SpaceId: spaceID, DatasetId: targetID, SubjectId: subjectID, Freq: freq,
 			}},
 			TimeRange: &storagepb.TimeRange{
-				StartTime: first.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano),
+				StartTime: times[0].Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano),
 			},
-			ColumnNames: outputs,
-			Sorts:       []*storagepb.SortSpec{{FieldName: "data_time"}},
-			Page:        &commonpb.Page{Page: 1, Size: 10},
+			Sorts: []*storagepb.SortSpec{{FieldName: "data_time"}},
+			Page:  &commonpb.Page{Page: 1, Size: 10},
 		})
 		require.NoError(collect, err)
 		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-		require.Len(collect, rsp.GetRows(), 2)
-		require.True(collect, factorRowsHaveExpectedValues(rsp.GetRows(), first, second, secondNull),
+		lastRows = rsp.GetRows()
+		require.Len(collect, rsp.GetRows(), len(times))
+		require.True(collect, factorRowsHaveExpectedValues(rsp.GetRows(), times, spreads, rolling, nullIndex),
 			"View has not applied the expected factor patch yet")
-		if factorRowsHaveExpectedValues(rsp.GetRows(), first, second, secondNull) {
+		if factorRowsHaveExpectedValues(rsp.GetRows(), times, spreads, rolling, nullIndex) {
 			rows = rsp.GetRows()
 		}
 	}, 30*time.Second, 200*time.Millisecond)
-	t.Log("real Storage DataView.QueryTimeSeriesRows returned both nanosecond rows")
+	require.True(t, ok, "last factor View rows: %v", lastRows)
+	t.Log("real Storage DataView.QueryTimeSeriesRows returned all expected factor rows")
 	return rows
 }
 
@@ -592,54 +805,71 @@ func datasetColumnNames(columns []*storagepb.DatasetColumn) []string {
 	return out
 }
 
-func assertFactorRows(t *testing.T, rows []*storagepb.TimeSeriesRow, first, second time.Time, secondNull bool) {
+func assertFactorRows(
+	t *testing.T,
+	rows []*storagepb.TimeSeriesRow,
+	times []time.Time,
+	spreads, rolling []float64,
+	nullIndex int,
+) {
 	t.Helper()
-	require.Len(t, rows, 2)
-	require.Equal(t, first.Format(time.RFC3339Nano), rows[0].GetKey().GetDataTime())
-	require.Equal(t, second.Format(time.RFC3339Nano), rows[1].GetKey().GetDataTime())
-	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, rowFieldIDs(rows[0]))
-	firstValues := rowValues(rows[0])
-	require.InDelta(t, 1.04, firstValues["excess_return"].GetDoubleValue(), 1e-12)
-	require.InDelta(t, 1.0, firstValues["rolling_rank"].GetDoubleValue(), 1e-12)
-	secondValues := rowValues(rows[1])
-	if secondNull {
-		require.Empty(t, rowFieldIDs(rows[1]), "cleared null outputs must not expose extra fields")
-		require.Nil(t, secondValues["excess_return"], "explicit null must clear old double")
-		require.Nil(t, secondValues["rolling_rank"], "explicit null must clear old double")
-		return
+	require.Len(t, rows, len(times))
+	for i, row := range rows {
+		require.Equal(t, times[i].Format(time.RFC3339Nano), row.GetKey().GetDataTime())
+		require.Equal(t, "venue_pair:binance-okx", row.GetKey().GetSeriesTag())
+		values := rowValues(row)
+		if i == nullIndex {
+			require.Empty(t, rowFieldIDs(row), "cleared null outputs must not expose extra fields")
+			require.Nil(t, values["spread"], "explicit null must clear old spread")
+			require.Nil(t, values["rolling_spread"], "explicit null must clear old rolling spread")
+			continue
+		}
+		require.ElementsMatch(t, []string{"spread", "rolling_spread"}, rowFieldIDs(row))
+		require.InDelta(t, spreads[i], values["spread"].GetDoubleValue(), 1e-12)
+		require.InDelta(t, rolling[i], values["rolling_spread"].GetDoubleValue(), 1e-12)
 	}
-	require.ElementsMatch(t, []string{"excess_return", "rolling_rank"}, rowFieldIDs(rows[1]))
-	require.InDelta(t, 1.16, secondValues["excess_return"].GetDoubleValue(), 1e-12)
-	require.InDelta(t, 2.0, secondValues["rolling_rank"].GetDoubleValue(), 1e-12)
 }
 
 func rowFieldIDs(row *storagepb.TimeSeriesRow) []string {
 	ids := make([]string, 0, len(row.GetFields()))
 	for _, field := range row.GetFields() {
-		ids = append(ids, field.GetFieldId())
+		id := field.GetFieldId()
+		if dot := strings.LastIndexByte(id, '.'); dot >= 0 {
+			id = id[dot+1:]
+		}
+		ids = append(ids, id)
 	}
 	return ids
 }
 
-func factorRowsHaveExpectedValues(rows []*storagepb.TimeSeriesRow, first, second time.Time, secondNull bool) bool {
-	if len(rows) != 2 ||
-		rows[0].GetKey().GetDataTime() != first.Format(time.RFC3339Nano) ||
-		rows[1].GetKey().GetDataTime() != second.Format(time.RFC3339Nano) {
+func factorRowsHaveExpectedValues(
+	rows []*storagepb.TimeSeriesRow,
+	times []time.Time,
+	spreads, rolling []float64,
+	nullIndex int,
+) bool {
+	if len(rows) != len(times) || len(spreads) != len(times) || len(rolling) != len(times) {
 		return false
 	}
-	firstValues := rowValues(rows[0])
-	if firstValues["excess_return"] == nil || firstValues["rolling_rank"] == nil ||
-		!closeEnough(firstValues["excess_return"].GetDoubleValue(), 1.04) ||
-		!closeEnough(firstValues["rolling_rank"].GetDoubleValue(), 1.0) {
-		return false
+	for i, row := range rows {
+		if row.GetKey().GetDataTime() != times[i].Format(time.RFC3339Nano) ||
+			row.GetKey().GetSeriesTag() != "venue_pair:binance-okx" {
+			return false
+		}
+		values := rowValues(row)
+		if i == nullIndex {
+			if values["spread"] != nil || values["rolling_spread"] != nil {
+				return false
+			}
+			continue
+		}
+		if values["spread"] == nil || values["rolling_spread"] == nil ||
+			!closeEnough(values["spread"].GetDoubleValue(), spreads[i]) ||
+			!closeEnough(values["rolling_spread"].GetDoubleValue(), rolling[i]) {
+			return false
+		}
 	}
-	secondValues := rowValues(rows[1])
-	if secondNull {
-		return secondValues["excess_return"] == nil && secondValues["rolling_rank"] == nil
-	}
-	return secondValues["excess_return"] != nil && secondValues["rolling_rank"] != nil &&
-		closeEnough(secondValues["excess_return"].GetDoubleValue(), 1.16) &&
-		closeEnough(secondValues["rolling_rank"].GetDoubleValue(), 2.0)
+	return true
 }
 
 func closeEnough(got, want float64) bool {
