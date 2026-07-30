@@ -21,13 +21,13 @@ describe("strategy API", () => {
     callControl
       .mockResolvedValueOnce({ runners: [{ runner_id: "runner-1" }], total: 1 })
       .mockResolvedValueOnce({ results: [{ result_id: "result-1" }], total: 1 });
-    await listRunners({ strategy_id: "momentum", status: "enabled" });
+    await listRunners({ strategy_id: "momentum", status: "ENABLED" });
     await listStrategyResults("runner-1", { page: 2, page_size: 10 });
     expect(callControl).toHaveBeenNthCalledWith(1, "strategy", "ListRunners", {
       page: { page: 1, page_size: 20 },
       strategy_id: "momentum",
       space_id: undefined,
-      status: "enabled"
+      status: "ENABLED"
     });
     expect(callControl).toHaveBeenNthCalledWith(2, "strategy", "ListStrategyResults", {
       runner_id: "runner-1",
@@ -38,15 +38,15 @@ describe("strategy API", () => {
   it("uses quantity for the current FULL target and controls only Runner status", async () => {
     callControl
       .mockResolvedValueOnce({ targets: [{ instrument_id: "BTC-USDT-SPOT", quantity: "0.1" }], command_sequence: "7" })
-      .mockResolvedValueOnce({ runner: { runner_id: "runner-1", status: "enabled" } });
+      .mockResolvedValueOnce({ runner: { runner_id: "runner-1", status: "ENABLED" } });
     await expect(listStrategyTargets("runner-1")).resolves.toEqual({
       targets: [{ instrument_id: "BTC-USDT-SPOT", quantity: "0.1" }],
       command_sequence: "7"
     });
-    await setRunnerStatus("runner-1", "enabled");
+    await setRunnerStatus("runner-1", "ENABLED");
     expect(callControl).toHaveBeenLastCalledWith("strategy", "SetRunnerStatus", {
       runner_id: "runner-1",
-      status: "enabled"
+      status: "ENABLED"
     });
   });
 });

@@ -51,7 +51,7 @@ skills/moox/scripts/cls-bootstrap.sh \
 - OpenTelemetry 第一阶段只覆盖 Admin 和 Storage 的 server/client filter。目标机可通过 `secrets/otel.env`（`0600`）设置 `MOOX_OTEL_ENDPOINT`、`MOOX_OTEL_INSECURE` 和可选采样率；未设置 endpoint 时使用 no-op provider。默认采样率 1%，不记录请求/响应 body，不重复导出 metrics 或 logs，部署脚本会为 Admin 和各 Storage 进程设置独立 `service.name`。由于官方 `oteltrpc v1.0.2` 与 Storage 使用的 OpenTelemetry 1.35 不兼容，MooX 使用同名本地兼容适配器；扩展其他模块前先完成 Admin 到 Storage 的端到端 trace 验证。
 - `slime/retry` 使用共享的 `packages/trpcretry` 策略，仅挂在经审查的幂等只读 RPC 单次调用选项上，最多尝试两次，只重试客户端网络错误和超时。当前覆盖 Factor、Archive、Monitor 到 Storage 的 `ReadTimeSeriesRows`；Strategy 当前尚未实现 Storage RPC，后续接入 `ReadTimeSeriesRows` 等只读查询时应复用该策略。共享代理的写接口不会继承该 filter。
 - `transinfo-blocker` 只在 Factor 到 Storage 的客户端边界启用白名单，允许 W3C trace 与 MooX trace/space 标识；JWT、HMAC、Authorization 等未列入白名单，禁止透传。
-- `masking` 已用于 Admin Secret 列表/查询响应和 Trade API Key 响应；内部 `RevealSecret` 使用独立 protobuf 类型，避免脱敏破坏受控的明文读取流程。
+- `masking` 已用于 Admin Secret 列表和元数据查询响应；受信服务只能通过 service-auth 调用 `GetSecretValue`，按配置的单个 Secret ID 获取 `SecretMaterial`，并在使用前校验 category、Exchange 和 active 状态。
 - `filterextensions` 继续保持未引入。只有出现明确的方法级策略差异，并有顺序和回滚测试后才启用。
 
 MooX JWT、request HMAC 和 service HMAC 网关过滤器保持权威。通用 JWT 插件不能替换其 claim 检查、元数据注入、签名和 no-auth 规则。

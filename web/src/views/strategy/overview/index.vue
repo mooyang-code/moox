@@ -91,11 +91,13 @@ const createVisible = ref(false);
 const artifactVisible = ref(false);
 const selected = ref<Strategy | null>(null);
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
+const defaultManifest = "api_version: moox.strategy/v1\nentrypoint: strategy.py:run\ninput:\n  history_bars: 200\n";
+const defaultSource = 'def run(context, data, params):\n    return {"action": "hold"}\n';
 const form = reactive({
   strategy_id: "",
   name: "",
-  manifest_yaml: "entrypoint: strategy\\n",
-  source_code: 'def strategy(data, params, context):\\n    return {"action": "hold"}\\n'
+  manifest_yaml: defaultManifest,
+  source_code: defaultSource
 });
 
 async function refresh() {
@@ -126,7 +128,12 @@ async function create() {
     created_at: ""
   });
   createVisible.value = false;
-  Object.assign(form, { strategy_id: "", name: "", manifest_yaml: "entrypoint: strategy\\n" });
+  Object.assign(form, {
+    strategy_id: "",
+    name: "",
+    manifest_yaml: defaultManifest,
+    source_code: defaultSource
+  });
   await refresh();
   return true;
 }

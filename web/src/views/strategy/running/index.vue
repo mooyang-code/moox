@@ -19,8 +19,8 @@
       <div class="filters">
         <a-input v-model="filters.strategy_id" allow-clear placeholder="策略 ID" @press-enter="reloadFirst" />
         <a-select v-model="filters.status" allow-clear placeholder="状态" @change="reloadFirst">
-          <a-option value="enabled">enabled</a-option>
-          <a-option value="disabled">disabled</a-option>
+          <a-option value="ENABLED">ENABLED</a-option>
+          <a-option value="DISABLED">DISABLED</a-option>
         </a-select>
         <a-button type="primary" @click="reloadFirst">查询</a-button>
       </div>
@@ -89,6 +89,7 @@ import { onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { createRunner } from "@/api/strategy";
+import type { StrategyRunnerStatus } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
@@ -98,7 +99,7 @@ const router = useRouter();
 const store = useStrategyStore();
 const spaceStore = useSpaceStore();
 const createVisible = ref(false);
-const filters = reactive({ strategy_id: "", status: "" });
+const filters = reactive<{ strategy_id: string; status: StrategyRunnerStatus | "" }>({ strategy_id: "", status: "" });
 const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
 const form = reactive({
   runner_id: "",
@@ -143,7 +144,7 @@ async function create() {
     params_json: form.params_json || "{}",
     logical_account_id: form.logical_account_id.trim(),
     space_id: spaceStore.requireSpaceId(),
-    status: "disabled",
+    status: "DISABLED",
     current_targets: [],
     command_sequence: "0",
     last_result_id: "",

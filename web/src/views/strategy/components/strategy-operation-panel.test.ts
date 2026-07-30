@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,7 +13,7 @@ describe("Strategy Runner controls", () => {
 
   it("only offers Runner enable when disabled", async () => {
     const wrapper = mount(StrategyOperationPanel, {
-      props: { runnerId: "runner-1", status: "disabled" },
+      props: { runnerId: "runner-1", status: "DISABLED" },
       global: {
         stubs: {
           "a-space": { template: "<div><slot /></div>" },
@@ -23,5 +25,21 @@ describe("Strategy Runner controls", () => {
     expect(wrapper.text()).toContain("启用");
     expect(wrapper.text()).not.toContain("执行模式");
     expect(wrapper.text()).not.toContain("Exchange Account");
+  });
+
+  it("uses the uppercase backend status contract", () => {
+    const source = fs.readFileSync(
+      path.resolve(process.cwd(), "src/views/strategy/components/strategy-operation-panel.vue"),
+      "utf8"
+    );
+    expect(source).toMatch(/status === ["']ENABLED["']/);
+    expect(source).toMatch(/change\(["']DISABLED["']\)/);
+    expect(source).toMatch(/change\(["']ENABLED["']\)/);
+    expect(source).toContain(`"ENABLED" | "DISABLED"`);
+
+    const running = fs.readFileSync(path.resolve(process.cwd(), "src/views/strategy/running/index.vue"), "utf8");
+    expect(running).toContain(`<a-option value="ENABLED">ENABLED</a-option>`);
+    expect(running).toContain(`<a-option value="DISABLED">DISABLED</a-option>`);
+    expect(running).toContain(`status: "DISABLED"`);
   });
 });

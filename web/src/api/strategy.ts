@@ -6,7 +6,8 @@ import type {
   PageResponse,
   Strategy,
   StrategyResult,
-  StrategyRunner
+  StrategyRunner,
+  StrategyRunnerStatus
 } from "./strategy-types";
 
 export interface PageResult<T> {
@@ -46,7 +47,7 @@ export function getRunner(runner_id: string) {
 }
 
 export async function listRunners(
-  params: PageRequest & { strategy_id?: string; space_id?: string; status?: string } = {}
+  params: PageRequest & { strategy_id?: string; space_id?: string; status?: StrategyRunnerStatus } = {}
 ): Promise<PageResult<StrategyRunner>> {
   const rsp = await callControl<
     {
@@ -72,11 +73,12 @@ export function updateRunner(runner: StrategyRunner) {
   return callControl<{ runner: StrategyRunner }, { runner: StrategyRunner }>("strategy", "UpdateRunner", { runner });
 }
 
-export function setRunnerStatus(runner_id: string, status: string) {
-  return callControl<{ runner_id: string; status: string }, { runner: StrategyRunner }>("strategy", "SetRunnerStatus", {
-    runner_id,
-    status
-  });
+export function setRunnerStatus(runner_id: string, status: StrategyRunnerStatus) {
+  return callControl<{ runner_id: string; status: StrategyRunnerStatus }, { runner: StrategyRunner }>(
+    "strategy",
+    "SetRunnerStatus",
+    { runner_id, status }
+  );
 }
 
 export function runOnce(req: { runner_id: string; trigger_bar_time: string; namespace: string; data_json: string }) {

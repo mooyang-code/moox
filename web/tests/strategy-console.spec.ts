@@ -68,7 +68,7 @@ test("Runner detail renders StrategyResult and quantity FULL targets", async ({ 
           frequency: "1m",
           params_json: "{}",
           logical_account_id: "logical-paper",
-          status: "enabled",
+          status: "ENABLED",
           last_success_at: "2026-07-30T00:00:00Z"
         }
       }

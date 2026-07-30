@@ -23,6 +23,8 @@ export interface Strategy {
   created_at: string;
 }
 
+export type StrategyRunnerStatus = "ENABLED" | "DISABLED";
+
 export interface StrategyRunner {
   runner_id: string;
   strategy_id: string;
@@ -31,7 +33,7 @@ export interface StrategyRunner {
   frequency: string;
   params_json: string;
   logical_account_id: string;
-  status: string;
+  status: StrategyRunnerStatus;
   current_targets: InstrumentTarget[];
   command_sequence: string;
   last_result_id: string;
