@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -44,6 +45,69 @@ func TestValidateStorageImportOptions(t *testing.T) {
 		SubjectID: "sub", TimeColumn: "t", DryRun: true, Freq: "1m",
 	})
 	require.NoError(t, err)
+}
+
+func TestStorageImportRejectsInvalidSeriesTagBeforeMetadataSideEffects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.csv")
+	content := "data_time,close\n2026-01-02T03:04:05Z,1.25\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	tests := []struct {
+		name        string
+		tag         string
+		wantMessage string
+	}{
+		{name: "leading whitespace", tag: " venue:binance", wantMessage: "series_tag must not have leading or trailing whitespace"},
+		{name: "trailing whitespace", tag: "venue:binance ", wantMessage: "series_tag must not have leading or trailing whitespace"},
+		{name: "NUL", tag: "venue:\x00binance", wantMessage: "series_tag must not contain ASCII control characters"},
+		{name: "TAB", tag: "venue:\tbinance", wantMessage: "series_tag must not contain ASCII control characters"},
+		{name: "DEL", tag: "venue:\x7fbinance", wantMessage: "series_tag must not contain ASCII control characters"},
+		{name: "too long", tag: strings.Repeat("x", 129), wantMessage: "series_tag must not exceed 128 bytes"},
+		{name: "invalid utf8", tag: string([]byte{0xff}), wantMessage: "series_tag must be valid UTF-8"},
+	}
+	for _, tt := range tests {
+		for _, dryRun := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/dry_run=%t", tt.name, dryRun), func(t *testing.T) {
+				meta := newStorageImportMetaFull()
+				writer := &trackingStorageWriter{}
+				_, err := runStorageImport(context.Background(), validStorageImportOptions(path, tt.tag, dryRun), meta, writer)
+				require.EqualError(t, err, tt.wantMessage)
+				assert.Zero(t, meta.metadataCalls)
+				assert.Zero(t, meta.listDatasetSubjectsCalls)
+				assert.Zero(t, meta.bindDatasetSubjectCalls)
+				assert.Zero(t, writer.writes)
+			})
+		}
+	}
+}
+
+func TestStorageImportAcceptsValidSeriesTagBoundaries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.csv")
+	content := "data_time,close\n2026-01-02T03:04:05Z,1.25\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	tests := []struct {
+		name string
+		tag  string
+	}{
+		{name: "empty", tag: ""},
+		{name: "ordinary", tag: "venue:binance"},
+		{name: "exactly 128 UTF-8 bytes", tag: strings.Repeat("界", 42) + "xx"},
+	}
+	for _, tt := range tests {
+		for _, dryRun := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/dry_run=%t", tt.name, dryRun), func(t *testing.T) {
+				if tt.name == "exactly 128 UTF-8 bytes" {
+					require.Len(t, []byte(tt.tag), 128)
+				}
+				meta := newStorageImportMetaFull()
+				writer := &trackingStorageWriter{}
+				summary, err := runStorageImport(context.Background(), validStorageImportOptions(path, tt.tag, dryRun), meta, writer)
+				require.NoError(t, err)
+				assert.Equal(t, tt.tag, summary.SeriesTag)
+			})
+		}
+	}
 }
 
 func TestValidateStorageImportFile(t *testing.T) {
@@ -189,15 +253,63 @@ func TestRunStorageImportWritePath(t *testing.T) {
 
 type fakeStorageImportMetaFull struct {
 	fakeStorageImportMeta
-	subjects []*pb.DatasetSubject
-	bound    bool
+	subjects                 []*pb.DatasetSubject
+	bound                    bool
+	metadataCalls            int
+	listDatasetSubjectsCalls int
+	bindDatasetSubjectCalls  int
+}
+
+func newStorageImportMetaFull() *fakeStorageImportMetaFull {
+	return &fakeStorageImportMetaFull{
+		fakeStorageImportMeta: fakeStorageImportMeta{
+			dataset: &pb.Dataset{DatasetId: "kline", Freqs: []string{"1m"}, Status: "active"},
+			subject: &pb.Subject{SubjectId: "BTC", Status: "active"},
+			columns: []*pb.DatasetColumn{
+				{ColumnName: "data_time", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_TIME, Required: true, Status: "active"},
+				{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Required: true, Status: "active"},
+			},
+		},
+	}
+}
+
+func validStorageImportOptions(path string, seriesTag string, dryRun bool) storageImportOptions {
+	return storageImportOptions{
+		Format: "csv", File: path, MetadataURL: "http://meta", AccessURL: "http://access",
+		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m",
+		TimeColumn: "data_time", SeriesTag: seriesTag, BatchSize: 100, DryRun: dryRun,
+	}
+}
+
+func (f *fakeStorageImportMetaFull) GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error) {
+	f.metadataCalls++
+	return f.fakeStorageImportMeta.GetDataset(ctx, spaceID, datasetID)
+}
+
+func (f *fakeStorageImportMetaFull) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
+	f.metadataCalls++
+	return f.fakeStorageImportMeta.GetView(ctx, spaceID, viewID)
+}
+
+func (f *fakeStorageImportMetaFull) GetSubject(ctx context.Context, spaceID string, subjectID string) (*pb.Subject, error) {
+	f.metadataCalls++
+	return f.fakeStorageImportMeta.GetSubject(ctx, spaceID, subjectID)
+}
+
+func (f *fakeStorageImportMetaFull) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string) ([]*pb.DatasetColumn, error) {
+	f.metadataCalls++
+	return f.fakeStorageImportMeta.ListDatasetColumns(ctx, spaceID, datasetID)
 }
 
 func (f *fakeStorageImportMetaFull) ListDatasetSubjects(context.Context, string, string, string) ([]*pb.DatasetSubject, error) {
+	f.metadataCalls++
+	f.listDatasetSubjectsCalls++
 	return f.subjects, nil
 }
 
 func (f *fakeStorageImportMetaFull) BindDatasetSubject(context.Context, *pb.DatasetSubject) error {
+	f.metadataCalls++
+	f.bindDatasetSubjectCalls++
 	f.bound = true
 	return nil
 }

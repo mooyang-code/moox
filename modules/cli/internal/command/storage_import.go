@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,15 +12,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
 )
 
 const (
-	defaultStorageImportFormat    = "auto"
-	defaultStorageImportBatchSize = 1000
-	maxStorageImportFileSize      = 512 << 20
+	defaultStorageImportFormat     = "auto"
+	defaultStorageImportBatchSize  = 1000
+	maxStorageImportFileSize       = 512 << 20
+	maxStorageImportSeriesTagBytes = 128
 )
 
 var storageImportFlags storageImportOptions
@@ -354,6 +357,24 @@ func validateStorageImportOptions(opts storageImportOptions) error {
 	for name, value := range required {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("必须指定 --%s", name)
+		}
+	}
+	return validateStorageImportSeriesTag(opts.SeriesTag)
+}
+
+func validateStorageImportSeriesTag(tag string) error {
+	if !utf8.ValidString(tag) {
+		return errors.New("series_tag must be valid UTF-8")
+	}
+	if len(tag) > maxStorageImportSeriesTagBytes {
+		return errors.New("series_tag must not exceed 128 bytes")
+	}
+	if strings.TrimSpace(tag) != tag {
+		return errors.New("series_tag must not have leading or trailing whitespace")
+	}
+	for i := 0; i < len(tag); i++ {
+		if tag[i] < 0x20 || tag[i] == 0x7f {
+			return errors.New("series_tag must not contain ASCII control characters")
 		}
 	}
 	return nil
