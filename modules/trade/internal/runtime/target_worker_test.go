@@ -84,10 +84,26 @@ func TestTargetWorkerRunsLogicalAccountsInStableOrder(t *testing.T) {
 		"space-1/logical-2",
 	}, converger.calls)
 	require.Equal(t, []string{
-		"target/success/trade-target",
-		"target/success/trade-target",
+		"target_commit/success/trade-rebalance",
+		"target_commit/success/trade-rebalance",
 	}, metrics.runs)
 	require.Contains(t, targets.statuses, targetapp.StatusConverged)
+}
+
+func TestTargetWorkerReportsAcceptedAndRejectedOutcomes(t *testing.T) {
+	metrics := &targetMetricsStub{}
+	worker := &TargetWorker{Metrics: metrics}
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+
+	worker.observe(targetapp.Result{Status: targetapp.StatusConverging}, nil, now)
+	worker.observe(targetapp.Result{Status: targetapp.StatusBlocked}, nil, now)
+	worker.observe(targetapp.Result{}, errors.New("failed"), now)
+
+	require.Equal(t, []string{
+		"target_commit/success/trade-rebalance",
+		"target_commit/rejected/trade-rebalance",
+		"target_commit/error/trade-rebalance",
+	}, metrics.runs)
 }
 
 func TestTargetWorkerGateSerializesTargetAcceptance(t *testing.T) {

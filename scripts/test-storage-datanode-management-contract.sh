@@ -25,7 +25,7 @@ required_files=(
   modules/storage/proto/metadata.proto
   modules/storage/proto/data_node.proto
   modules/storage/schema/metadata.sql
-  modules/storage/config/metadata.seed.yaml
+  examples/setup/default/metadata.yaml
   modules/storage/internal/service/catalog/metadata_catalog.go
   modules/storage/internal/service/primarystore/service.go
   modules/storage/cmd/cli/main.go
@@ -78,7 +78,10 @@ require_text examples/setup/default/metadata.yaml 'dataset_id: perpetual_kline_1
 require_text examples/setup/default/metadata.yaml 'view_id: spot_kline_1h_view' 'shared crypto spot View'
 require_text examples/setup/default/metadata.yaml 'view_id: perpetual_kline_1h_view' 'shared crypto perpetual View'
 require_text examples/setup/default/metadata.yaml 'series_tag' 'tagged time-series grain'
-require_text modules/storage/config/metadata.seed.yaml 'grain_keys: [subject_id, freq, data_time, series_tag]' 'storage sample tagged time-series grain'
+if [[ -e modules/storage/config/metadata.seed.yaml ]]; then
+  echo 'storage DataNode management contract: duplicate storage metadata seed remains outside examples/setup/default' >&2
+  exit 1
+fi
 
 for forbidden_seed_id in \
   binance_spot_kline_1h \
@@ -105,7 +108,7 @@ if [[ -n "${legacy_time_series_grains}" ]]; then
 fi
 require_text modules/storage/schema/metadata.sql 'CREATE TABLE IF NOT EXISTS t_data_nodes' 'DataNode table'
 require_text modules/storage/schema/metadata.sql 'FOREIGN KEY (c_data_node_id) REFERENCES t_data_nodes (c_node_id) ON DELETE RESTRICT' 'Dataset DataNode foreign key'
-require_text modules/storage/config/metadata.seed.yaml 'data_node_id:' 'seed direct DataNode binding'
+require_text examples/setup/default/metadata.yaml 'data_node_id:' 'seed direct DataNode binding'
 require_regex modules/storage/internal/service/catalog/metadata_catalog.go 'CheckDatasetActivation|ActivateDataset' 'activation lifecycle implementation'
 require_regex modules/storage/internal/service/primarystore/service.go 'DataNode|data_node' 'snapshot DataNode resolution'
 require_regex modules/storage/cmd/cli/main.go 'RegisterDataNode' 'deployment registration implementation'

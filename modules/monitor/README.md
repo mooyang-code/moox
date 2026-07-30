@@ -6,8 +6,8 @@
 Monitor 还消费 `moox.metrics.snapshot.reported.v1`，将每个已注册 tRPC
 实例的有界 Prometheus snapshot 写入 Storage 时序历史，并提供 metric
 catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取服务的
-`/metrics`，也不依赖 Prometheus Server 或 Pushgateway；Storage 元数据由
-部署前的 `moox-cli metadata apply` 注册和校验。
+`/metrics`，也不依赖 Prometheus Server 或 Pushgateway；控制面与 Storage 部署完成后，
+由 `moox-cli setup init` 注册并校验 Storage 元数据。
 
 模块健康检查清单由 `packages/report` 代码注册表维护；实时 Dataset 阈值由
 `examples/setup/default/dataset-health-policy.yaml` 维护，只有 Monitor 读取。

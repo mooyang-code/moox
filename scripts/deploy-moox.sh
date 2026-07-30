@@ -1395,39 +1395,6 @@ probe_service() {
   curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /readyz)" "${url}" >/dev/null
 }
 
-wait_http_reachable() {
-  local url="$1"
-  local attempts="${2:-30}"
-  echo "waiting for metadata HTTP ${url}"
-  for _ in $(seq 1 "${attempts}"); do
-    # MetadataService does not expose a generic health route. Any HTTP
-    # response proves that the listener is ready; the apply command below is
-    # the read/write contract check.
-    if [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 "${url}" 2>/dev/null || true)" != "000" ]]; then
-      return 0
-    fi
-    sleep 1
-  done
-  echo "metadata HTTP ${url} not reachable after ${attempts}s" >&2
-  return 1
-}
-
-apply_monitor_metadata() {
-  if [[ "${WITH_MONITOR}" != "1" ]]; then
-    return 0
-  fi
-  if [[ "${WITH_STORAGE}" != "1" && "${WITH_EVENTBUS}" != "1" ]]; then
-    echo "skip metrics metadata for Monitor deployment without local metrics dependencies"
-    return 0
-  fi
-  wait_http_reachable "${METRICS_METADATA_URL}" "${MOOX_WAIT_STORAGE_METADATA_SECONDS:-60}"
-  "${ROOT}/bin/moox-cli" metadata import \
-    --file "${ROOT}/examples/setup/default/metadata.yaml" \
-    --spaces moox_system \
-    --metadata-url "${METRICS_METADATA_URL}" \
-    --if-not-exists
-}
-
 init_storage_schema() {
   echo "initializing storage metadata schema"
   mkdir -p "${ROOT}/logs/storage"
@@ -1448,19 +1415,6 @@ register_storage_node() {
     --service-target "ip://127.0.0.1:20107" \
     --name "${MOOX_STORAGE_NODE_NAME:-数据节点}" \
     >>"${ROOT}/logs/storage/stdout.log" 2>&1
-}
-
-import_storage_metadata() {
-  local seed="${ROOT}/storage/config/metadata.seed.yaml"
-  [[ -f "${seed}" ]] || { echo "storage metadata seed not found: ${seed}" >&2; exit 1; }
-  echo "importing storage metadata seed after DataNode registration"
-  (
-    cd "${ROOT}/storage"
-    "${ROOT}/bin/moox-storage-cli" import-seed \
-      --storage-conf=config/storage.yaml \
-      --schema-path=schema/metadata.sql \
-      --seed="${seed}"
-  ) >>"${ROOT}/logs/storage/stdout.log" 2>&1
 }
 
 run_storage_doctor() {
@@ -1655,7 +1609,6 @@ start_storage() {
   wait_nats storage "${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}" "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
   wait_http http://127.0.0.1:20210/healthz "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
   register_storage_node
-  import_storage_metadata
 }
 
 complete_storage_bootstrap() {
@@ -1824,7 +1777,6 @@ start_monitor() {
     echo "monitor is disabled in this deployment package" >&2
     exit 2
   fi
-  apply_monitor_metadata
   init_monitor_schema
   gateway_service_env_for monitor
   runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"

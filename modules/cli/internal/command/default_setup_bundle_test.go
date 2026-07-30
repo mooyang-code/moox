@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +56,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	viewColumnCount := map[string]int{}
 	for _, dataset := range seed.Datasets {
 		datasetsBySpace[dataset.SpaceID] = append(datasetsBySpace[dataset.SpaceID], dataset.DatasetID)
+		require.LessOrEqual(t, utf8.RuneCountInString(dataset.Name), 10, dataset.SpaceID+"/"+dataset.DatasetID)
 		if dataset.SpaceID == "crypto" {
 			require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
 		}
@@ -63,6 +65,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		columnCount[column.SpaceID+"/"+column.DatasetID]++
 	}
 	for _, view := range seed.Views {
+		require.LessOrEqual(t, utf8.RuneCountInString(view.Name), 10, view.SpaceID+"/"+view.ViewID)
 		for _, datasetID := range view.DatasetIDs {
 			viewCount[view.SpaceID+"/"+datasetID]++
 		}

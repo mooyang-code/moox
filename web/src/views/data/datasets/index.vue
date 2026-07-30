@@ -224,7 +224,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -259,6 +259,7 @@ import {
   type DatasetRole,
   type OwnerModule
 } from "@/views/data/shared/module-attribution";
+import { RequestGate } from "@/utils/request-gate";
 
 defineOptions({ name: "DataDatasets" });
 
@@ -312,6 +313,9 @@ const editing = ref(false);
 const manageVisible = ref(false);
 const activeDataset = ref<Dataset>();
 const pagination = reactive(defaultPagination());
+const datasetLoadGate = new RequestGate();
+const activationGate = new RequestGate();
+const rebindGate = new RequestGate();
 
 const form = reactive<DatasetForm>({
   space_id: "",
@@ -381,16 +385,12 @@ function canRebind(dataset: Dataset) {
   return dataset.status === "disabled" && !dataset.binding_locked;
 }
 
-async function loadDataSources() {
-  if (!selectedSpaceId.value) {
-    dataSources.value = [];
-    return;
-  }
-  const rsp = await listDataSources({ space_id: selectedSpaceId.value, page: { page: 1, size: 200 } });
-  dataSources.value = rsp.data_sources || [];
+async function fetchDataSources(spaceId: string) {
+  const rsp = await listDataSources({ space_id: spaceId, page: { page: 1, size: 200 } });
+  return rsp.data_sources || [];
 }
 
-async function loadDataNodes() {
+async function fetchDataNodes() {
   const nodes: DataNode[] = [];
   for (let pageNo = 1; ; pageNo += 1) {
     const rsp = await listDataNodes({ page: { page: pageNo, size: 500 } });
@@ -399,7 +399,7 @@ async function loadDataNodes() {
     }
     if (!rsp.page_result?.has_more || (rsp.items || []).length === 0) break;
   }
-  dataNodes.value = nodes;
+  return nodes;
 }
 
 async function listAllDatasets(spaceId: string) {
@@ -413,32 +413,47 @@ async function listAllDatasets(spaceId: string) {
 }
 
 async function load() {
-  if (!selectedSpaceId.value) {
+  const token = datasetLoadGate.next();
+  const spaceId = selectedSpaceId.value;
+  if (!spaceId) {
     rows.value = [];
+    dataSources.value = [];
+    loading.value = false;
     return;
   }
+  const isCurrent = () => datasetLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
+  const page = pagination.current;
+  const pageSize = pagination.pageSize;
   loading.value = true;
   try {
-    await Promise.all([loadDataSources(), loadDataNodes()]);
+    const [nextDataSources, nextDataNodes] = await Promise.all([fetchDataSources(spaceId), fetchDataNodes()]);
+    if (!isCurrent()) return;
+    dataSources.value = nextDataSources;
+    dataNodes.value = nextDataNodes;
     const deepLinkDatasetId = queryValue(route.query.dataset_id);
     if (deepLinkDatasetId) {
-      rows.value = await listAllDatasets(selectedSpaceId.value);
+      const nextRows = await listAllDatasets(spaceId);
+      if (!isCurrent()) return;
+      rows.value = nextRows;
       pagination.current = 1;
       pagination.total = rows.value.length;
     } else if (hasAttributionFilter.value) {
-      rows.value = await listAllDatasets(selectedSpaceId.value);
+      const nextRows = await listAllDatasets(spaceId);
+      if (!isCurrent()) return;
+      rows.value = nextRows;
       pagination.total = visibleRows.value.length;
     } else {
       const rsp = await listDatasets({
-        space_id: selectedSpaceId.value,
-        page: { page: pagination.current, size: pagination.pageSize }
+        space_id: spaceId,
+        page: { page, size: pageSize }
       });
+      if (!isCurrent()) return;
       rows.value = rsp.datasets || [];
       applyPageResult(pagination, rsp.page_result);
     }
-    await consumeDeepLink();
+    if (isCurrent()) await consumeDeepLink();
   } finally {
-    loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
 }
 
@@ -555,9 +570,11 @@ async function submit() {
 }
 
 function replaceRow(dataset: Dataset) {
-  const index = rows.value.findIndex(item => item.dataset_id === dataset.dataset_id);
+  const index = rows.value.findIndex(item => item.space_id === dataset.space_id && item.dataset_id === dataset.dataset_id);
   if (index >= 0) rows.value.splice(index, 1, dataset);
-  if (activeDataset.value?.dataset_id === dataset.dataset_id) activeDataset.value = dataset;
+  if (activeDataset.value?.space_id === dataset.space_id && activeDataset.value?.dataset_id === dataset.dataset_id) {
+    activeDataset.value = dataset;
+  }
 }
 
 async function openActivation(record: Dataset) {
@@ -569,48 +586,66 @@ async function openActivation(record: Dataset) {
 }
 
 async function runActivationCheck() {
-  if (!activationDataset.value) return;
+  const dataset = activationDataset.value;
+  if (!dataset) return;
+  const token = activationGate.next();
+  const isCurrent = () =>
+    activationGate.isCurrent(token) &&
+    selectedSpaceId.value === dataset.space_id &&
+    activationDataset.value?.space_id === dataset.space_id &&
+    activationDataset.value?.dataset_id === dataset.dataset_id;
   activationLoading.value = true;
   activationError.value = "";
   try {
     const rsp = await checkDatasetActivation({
-      space_id: activationDataset.value.space_id,
-      dataset_id: activationDataset.value.dataset_id
+      space_id: dataset.space_id,
+      dataset_id: dataset.dataset_id
     });
+    if (!isCurrent()) return;
     activationCheck.value = {
       dataset_revision: rsp.dataset_revision,
       checks: rsp.checks || [],
       ready: Boolean(rsp.ready)
     };
   } catch (error) {
-    activationError.value = errorMessage(error, "Dataset 激活自检失败");
+    if (isCurrent()) activationError.value = errorMessage(error, "Dataset 激活自检失败");
   } finally {
-    activationLoading.value = false;
+    if (isCurrent()) activationLoading.value = false;
   }
 }
 
 async function confirmActivation() {
-  if (!activationDataset.value || !activationCheck.value?.ready) return;
+  const dataset = activationDataset.value;
+  const check = activationCheck.value;
+  if (!dataset || !check?.ready) return;
+  const token = activationGate.next();
+  const isCurrent = () =>
+    activationGate.isCurrent(token) &&
+    selectedSpaceId.value === dataset.space_id &&
+    activationDataset.value?.space_id === dataset.space_id &&
+    activationDataset.value?.dataset_id === dataset.dataset_id;
   activationLoading.value = true;
   activationError.value = "";
   try {
     const rsp = await activateDataset({
-      space_id: activationDataset.value.space_id,
-      dataset_id: activationDataset.value.dataset_id,
-      expected_revision: activationCheck.value.dataset_revision
+      space_id: dataset.space_id,
+      dataset_id: dataset.dataset_id,
+      expected_revision: check.dataset_revision
     });
+    if (!isCurrent()) return;
     if (rsp.dataset) replaceRow(rsp.dataset);
     activationVisible.value = false;
     Message.success("数据集已激活，DataNode 绑定已锁定");
   } catch (error) {
-    activationError.value = errorMessage(error, "Dataset 激活失败");
+    if (isCurrent()) activationError.value = errorMessage(error, "Dataset 激活失败");
   } finally {
-    activationLoading.value = false;
+    if (isCurrent()) activationLoading.value = false;
   }
 }
 
 function openRebind(record: Dataset) {
   if (!canRebind(record)) return;
+  rebindGate.next();
   rebindDataset.value = record;
   rebindNodeId.value = rebindNodes.value[0]?.node_id || "";
   rebindError.value = "";
@@ -618,23 +653,32 @@ function openRebind(record: Dataset) {
 }
 
 async function confirmRebind() {
-  if (!rebindDataset.value || !rebindNodeId.value || !canRebind(rebindDataset.value)) return;
+  const dataset = rebindDataset.value;
+  const nodeId = rebindNodeId.value;
+  if (!dataset || !nodeId || !canRebind(dataset)) return;
+  const token = rebindGate.next();
+  const isCurrent = () =>
+    rebindGate.isCurrent(token) &&
+    selectedSpaceId.value === dataset.space_id &&
+    rebindDataset.value?.space_id === dataset.space_id &&
+    rebindDataset.value?.dataset_id === dataset.dataset_id;
   rebindLoading.value = true;
   rebindError.value = "";
   try {
     const rsp = await rebindDatasetDataNode({
-      space_id: rebindDataset.value.space_id,
-      dataset_id: rebindDataset.value.dataset_id,
-      data_node_id: rebindNodeId.value,
-      expected_revision: rebindDataset.value.revision ?? 0
+      space_id: dataset.space_id,
+      dataset_id: dataset.dataset_id,
+      data_node_id: nodeId,
+      expected_revision: dataset.revision ?? 0
     });
+    if (!isCurrent()) return;
     if (rsp.dataset) replaceRow(rsp.dataset);
     rebindVisible.value = false;
     Message.success("Dataset DataNode 已更换");
   } catch (error) {
-    rebindError.value = errorMessage(error, "Dataset DataNode 更换失败");
+    if (isCurrent()) rebindError.value = errorMessage(error, "Dataset DataNode 更换失败");
   } finally {
-    rebindLoading.value = false;
+    if (isCurrent()) rebindLoading.value = false;
   }
 }
 
@@ -649,9 +693,31 @@ function onPageSizeChange(pageSize: number) {
   void load();
 }
 
+function resetDatasetSpaceState() {
+  activationGate.next();
+  rebindGate.next();
+  rows.value = [];
+  dataSources.value = [];
+  visible.value = false;
+  editing.value = false;
+  manageVisible.value = false;
+  activeDataset.value = undefined;
+  activationVisible.value = false;
+  activationDataset.value = undefined;
+  activationCheck.value = undefined;
+  activationError.value = "";
+  activationLoading.value = false;
+  rebindVisible.value = false;
+  rebindDataset.value = undefined;
+  rebindNodeId.value = "";
+  rebindError.value = "";
+  rebindLoading.value = false;
+}
+
 watch(selectedSpaceId, () => {
   if (!initialized.value) return;
   pagination.current = 1;
+  resetDatasetSpaceState();
   void load();
 });
 
@@ -663,6 +729,12 @@ onMounted(async () => {
   }
   await load();
   initialized.value = true;
+});
+
+onBeforeUnmount(() => {
+  datasetLoadGate.next();
+  activationGate.next();
+  rebindGate.next();
 });
 </script>
 

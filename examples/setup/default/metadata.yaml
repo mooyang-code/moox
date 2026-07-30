@@ -1383,6 +1383,12 @@ dataset_columns:
   value_type: string
   required: true
   status: active
+devices:
+- device_id: parquet-local
+  name: market-parquet-archive
+  engine: parquet
+  endpoint: ../data/archive
+  status: active
 views:
 - space_id: stock_cn
   view_id: stock_kline_1d_view
@@ -1438,7 +1444,7 @@ views:
   status: active
 - space_id: crypto
   view_id: spot_kline_1h_view
-  name: 加密货币现货小时行情查询
+  name: 加密现货小时行情
   primary_dataset_id: spot_kline_1h
   dataset_ids:
   - spot_kline_1h
@@ -1453,7 +1459,7 @@ views:
   status: active
 - space_id: crypto
   view_id: perpetual_kline_1h_view
-  name: 加密货币永续小时行情查询
+  name: 加密永续小时行情
   primary_dataset_id: perpetual_kline_1h
   dataset_ids:
   - perpetual_kline_1h

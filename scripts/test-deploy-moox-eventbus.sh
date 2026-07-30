@@ -19,11 +19,12 @@ grep -q 'stop_service "eventbus"' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_WITH_EVENTBUS="\${WITH_EVENTBUS}".*stop.sh' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'data/eventbus/jetstream' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'logs/eventbus' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'apply_monitor_metadata' "${ROOT}/scripts/deploy-moox.sh"
-grep -q 'examples/setup/default/metadata.yaml' "${ROOT}/scripts/deploy-moox.sh"
-monitor_metadata_block="$(sed -n '/^apply_monitor_metadata()/,/^}/p' "${ROOT}/scripts/deploy-moox.sh")"
-grep -q 'metadata import' <<<"${monitor_metadata_block}"
-grep -q -- '--if-not-exists' <<<"${monitor_metadata_block}"
+for forbidden in apply_monitor_metadata examples/setup/default/metadata.yaml 'metadata import'; do
+  if grep -q "${forbidden}" "${ROOT}/scripts/deploy-moox.sh"; then
+    echo "deploy-moox.sh must not import setup metadata outside setup init: ${forbidden}" >&2
+    exit 1
+  fi
+done
 ! grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED|local-route' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'MOOX_METRICS_STORAGE_METADATA_URL' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'secrets/health-auth.env' "${ROOT}/scripts/deploy-moox.sh"
@@ -83,9 +84,4 @@ if ! awk '/stop_service "storage"/ { storage=NR } /stop_service "eventbus"/ { ev
   echo "eventbus must stop after storage" >&2
   exit 1
 fi
-if ! awk '/^apply_monitor_metadata\(\)/ { metadata=NR } /^start_monitor\(\)/ { monitor=NR } END { exit !(metadata < monitor) }' "${ROOT}/scripts/deploy-moox.sh"; then
-  echo "metadata preflight must run before monitor" >&2
-  exit 1
-fi
-
 echo "moox-eventbus deployment contract passed"

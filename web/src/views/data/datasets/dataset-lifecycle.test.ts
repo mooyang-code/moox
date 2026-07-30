@@ -39,14 +39,16 @@ describe("Dataset lifecycle page contract", () => {
     expect(source).toContain("await runActivationCheck()");
     expect(source).toContain('v-for="item in activationCheck?.checks || []"');
     expect(source).toContain(':ok-button-props="{ disabled: !activationReady || activationLoading }"');
-    expect(source).toContain("if (!activationDataset.value || !activationCheck.value?.ready) return");
-    expect(source).toContain("expected_revision: activationCheck.value.dataset_revision");
+    expect(source).toContain("if (!dataset || !check?.ready) return");
+    expect(source).toContain("expected_revision: check.dataset_revision");
+    expect(source).toContain("activationGate.isCurrent(token)");
   });
 
   it("only exposes rebind before activation, excludes the current node, and sends row revision", () => {
     expect(source).toContain('return dataset.status === "disabled" && !dataset.binding_locked');
     expect(source).toContain("item.node_id !== rebindDataset.value?.data_node_id");
-    expect(source).toContain("expected_revision: rebindDataset.value.revision ?? 0");
+    expect(source).toContain("expected_revision: dataset.revision ?? 0");
+    expect(source).toContain("rebindGate.isCurrent(token)");
     expect(source).toContain("绑定永久锁定");
   });
 

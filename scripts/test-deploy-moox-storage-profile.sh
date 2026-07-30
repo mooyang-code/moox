@@ -97,8 +97,10 @@ grep -q '^    - view$' "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml"
 grep -q 'source "\${ROOT}/secrets/storage-node-auth.env"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'source "\${ROOT}/secrets/storage-internal-auth.env"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'register-node' "${TMP_ROOT}/unpacked/start.sh"
-grep -q 'import-seed' "${TMP_ROOT}/unpacked/start.sh"
-grep -q 'cd "${ROOT}/storage"' "${TMP_ROOT}/unpacked/start.sh"
+if grep -q 'import-seed' "${TMP_ROOT}/unpacked/start.sh"; then
+  echo 'storage deployment must not import a second metadata seed before setup init' >&2
+  exit 1
+fi
 grep -q 'doctor bootstrap --format json' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'activate-datasets' "${TMP_ROOT}/unpacked/start.sh"
 [[ "$(grep -Fc 'MOOX_STORAGE_EVENTBUS_URL=${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}' "${TMP_ROOT}/unpacked/start.sh")" == "3" ]]
@@ -125,7 +127,6 @@ assert_order "${TMP_ROOT}/unpacked/start.sh" \
   '^  start_storage_node$' \
   'wait_tcp 127\.0\.0\.1 20107' \
   '^  register_storage_node$' \
-  '^  import_storage_metadata$' \
   '^  start_storage_view$' \
   'wait_http http://127\.0\.0\.1:20211/healthz' \
   '^  if run_storage_doctor; then$' \
@@ -175,7 +176,10 @@ grep -q 'service_name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-
 grep -q 'name: trpc.moox.storage.DataNodeRuntime' "${TMP_ROOT}/unpacked-shard/storage-node/config/trpc_go.yaml"
 grep -q 'start_storage_node' "${TMP_ROOT}/unpacked-shard/start.sh"
 grep -q 'register-node' "${TMP_ROOT}/unpacked-shard/start.sh"
-grep -q 'import-seed' "${TMP_ROOT}/unpacked-shard/start.sh"
+if grep -q 'import-seed' "${TMP_ROOT}/unpacked-shard/start.sh"; then
+  echo 'storage shard deployment must not import a second metadata seed before setup init' >&2
+  exit 1
+fi
 grep -q 'doctor bootstrap --format json' "${TMP_ROOT}/unpacked-shard/start.sh"
 grep -q 'activate-datasets' "${TMP_ROOT}/unpacked-shard/start.sh"
 grep -q 'source "\${ROOT}/secrets/storage-node-auth.env"' "${TMP_ROOT}/unpacked-shard/start.sh"

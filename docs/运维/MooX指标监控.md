@@ -22,22 +22,22 @@
 
 全系统的当前值、永久数据和磁盘巡检命令见[数据保留与磁盘空间](数据保留与磁盘空间.md)。
 
-## 元数据预检和启动顺序
+## 元数据初始化
 
-历史数据使用 Storage 的内部 Space `moox_system` 和 Dataset `moox_service_metrics`，Space 以 `moox_` 前缀标记 MooX 管理范围。Monitor 不会在运行时创建或修改 Storage 元数据。部署脚本在启动 Monitor 前执行：
+历史数据使用 Storage 的内部 Space `moox_system` 和 Dataset `moox_service_metrics`，Space 以 `moox_`
+前缀标记 MooX 管理范围。Monitor 和部署脚本都不会创建或修改 Storage 元数据。完成 Control 与
+Storage 部署后，统一执行：
 
 ```bash
-moox-cli metadata import \
-  --file examples/setup/default/metadata.yaml \
-  --spaces moox_system \
-  --metadata-url http://127.0.0.1:20200 \
-  --if-not-exists
+moox-cli setup init \
+  --file ./custom.toml \
+  --config-dir ./examples/setup/default \
+  --storage-host control
 ```
 
-`metadata apply` 是 create-or-verify：缺失资源按依赖顺序创建，已有资源只有在类型、频率、字段和直接
-DataNode 绑定契约兼容时才报告 unchanged；不兼容会终止 Monitor 启动而不是覆盖数据。部署流程
-负责注册 DataNode。Dataset 初始为 disabled，Doctor 只读检查激活条件，部署或管理员随后显式
-激活，激活成功后绑定不可变。外部或多机 Storage 只需提供 Metadata 地址：
+`setup init` 内部执行严格 create-or-verify：缺失资源按依赖顺序创建，已有资源只有在类型、频率、
+字段和直接 DataNode 绑定契约一致时才报告 unchanged；不兼容会终止初始化而不是覆盖数据。部署流程
+负责注册 DataNode，初始化命令检查激活条件后激活 Dataset，成功后绑定不可变。
 
 ```bash
 export MOOX_METRICS_STORAGE_METADATA_URL=http://storage-metadata:20200

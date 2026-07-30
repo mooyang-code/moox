@@ -110,12 +110,11 @@ HMAC。生产部署必须通过敏感配置注入这些值。
 go run ./cmd/cli init \
   --storage-conf config/storage.primary.yaml \
   --schema-path schema/metadata.sql
-
-go run ./cmd/cli import-seed \
-  --storage-conf config/storage.primary.yaml \
-  --schema-path schema/metadata.sql \
-  --seed config/metadata.seed.yaml
 ```
+
+默认业务元数据不由 Storage 部署过程隐式导入。部署并注册 DataNode 后，在仓库根目录使用
+`moox-cli setup init --config-dir ./examples/setup/default --storage-host <custom.toml 中主机名>`
+同步 Admin 空间、Storage 元数据并显式激活 Dataset。
 
 启动角色时设置：
 

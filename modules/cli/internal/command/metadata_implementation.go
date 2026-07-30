@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
@@ -18,7 +19,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const maxMetadataSeedBytes = 8 << 20
+const (
+	maxMetadataSeedBytes  = 8 << 20
+	metadataApplyPageSize = 500
+	metadataApplyMaxPages = 1000
+)
 
 func validateReservedInternalSpaces(seed metadataSeed) error {
 	for _, item := range seed.Spaces {
@@ -133,6 +138,10 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 		return nil, err
 	}
 	var err error
+	seed, err = normalizeMetadataSeedViews(seed)
+	if err != nil {
+		return nil, err
+	}
 	seed, err = normalizeFieldGroups(seed)
 	if err != nil {
 		return nil, err
@@ -236,14 +245,15 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	}
 	displayNames := make(map[string]string, len(seed.Fields)+len(seed.Factors))
 	for _, item := range seed.Fields {
-		displayNames[item.FieldID] = item.Name
+		displayNames[metadataDisplayNameKey(item.SpaceID, "FIELD", item.FieldID)] = item.Name
 	}
 	for _, item := range seed.Factors {
-		displayNames[item.FactorID] = item.Name
+		displayNames[metadataDisplayNameKey(item.SpaceID, "FACTOR", item.FactorID)] = item.Name
 	}
 	for _, item := range seed.DatasetColumns {
 		if strings.TrimSpace(item.Attributes["display_name"]) == "" {
-			if displayName := strings.TrimSpace(displayNames[item.OriginID]); displayName != "" {
+			key := metadataDisplayNameKey(item.SpaceID, item.OriginType, item.OriginID)
+			if displayName := strings.TrimSpace(displayNames[key]); displayName != "" {
 				item.Attributes = cloneStringMap(item.Attributes)
 				item.Attributes["display_name"] = displayName
 			}
@@ -270,6 +280,10 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 	}
 	for _, item := range seed.Views {
 		view := item.toPB()
+		view.KeepDuration, err = canonicalMetadataKeepDuration(view.GetKeepDuration())
+		if err != nil {
+			return nil, fmt.Errorf("view %q: %w", item.ViewID, err)
+		}
 		calls = append(calls, metadataImportCall{
 			Resource: "views",
 			Method:   "CreateView",
@@ -290,6 +304,33 @@ func buildMetadataImportCalls(seed metadataSeed) ([]metadataImportCall, error) {
 		calls = append(calls, metadataImportCall{Resource: "view_columns", Method: "UpsertViewColumn", Request: &pb.UpsertViewColumnReq{Column: column}, Response: &pb.UpsertViewColumnRsp{}})
 	}
 	return calls, nil
+}
+
+func normalizeMetadataSeedViews(seed metadataSeed) (metadataSeed, error) {
+	if len(seed.Views) == 0 {
+		return seed, nil
+	}
+	datasets := make(map[string]seedDataset, len(seed.Datasets))
+	for _, dataset := range seed.Datasets {
+		datasets[setupMetadataKey(dataset.SpaceID, dataset.DatasetID)] = dataset
+	}
+	seed.Views = append([]seedView(nil), seed.Views...)
+	for index := range seed.Views {
+		normalized, err := canonicalMetadataView(seed.Views[index], datasets)
+		if err != nil {
+			return metadataSeed{}, err
+		}
+		seed.Views[index] = normalized
+	}
+	return seed, nil
+}
+
+func metadataDisplayNameKey(spaceID, originType, originID string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(spaceID),
+		normalizeEnum(originType),
+		strings.TrimSpace(originID),
+	}, "\x00")
 }
 
 func validateSeedDatasets(datasets []seedDataset) error {
@@ -382,26 +423,21 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 			if !ok || column.GetColumn() == nil {
 				return summary, fmt.Errorf("invalid dataset column apply call")
 			}
-			probe = &metadataExistsProbe{Method: "ListDatasetColumns", Request: &pb.ListDatasetColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), DatasetId: column.GetColumn().GetDatasetId(), Page: &commonpb.Page{Page: 1, Size: 500}}, Response: &pb.ListDatasetColumnsRsp{}}
+			probe = &metadataExistsProbe{Method: "ListDatasetColumns", Request: &pb.ListDatasetColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), DatasetId: column.GetColumn().GetDatasetId(), Page: &commonpb.Page{Page: 1, Size: metadataApplyPageSize}}, Response: &pb.ListDatasetColumnsRsp{}}
 		case "view_columns":
 			column, ok := call.Request.(*pb.UpsertViewColumnReq)
 			if !ok || column.GetColumn() == nil {
 				return summary, fmt.Errorf("invalid view column apply call")
 			}
-			probe = &metadataExistsProbe{Method: "ListViewColumns", Request: &pb.ListViewColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), ViewId: column.GetColumn().GetViewId(), Page: &commonpb.Page{Page: 1, Size: 500}}, Response: &pb.ListViewColumnsRsp{}}
+			probe = &metadataExistsProbe{Method: "ListViewColumns", Request: &pb.ListViewColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), ViewId: column.GetColumn().GetViewId(), Page: &commonpb.Page{Page: 1, Size: metadataApplyPageSize}}, Response: &pb.ListViewColumnsRsp{}}
 		}
 		if probe == nil {
 			return summary, fmt.Errorf("apply does not support resource %s without read probe", call.Resource)
 		}
-		if err := postStorageRaw(ctx, metadataURL, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
+		found, actual, err := findMetadataApplyResource(ctx, metadataURL, call.Resource, probe, call.Request)
+		if err != nil {
 			return summary, err
 		}
-		if ret, ok := responseRetInfo(probe.Response); !ok || ret == nil {
-			return summary, fmt.Errorf("%s/%s failed: missing ret_info", metadataServiceName, probe.Method)
-		} else if ret.GetCode() != pb.ErrorCode_SUCCESS && !metadataNotFound(ret) {
-			return summary, fmt.Errorf("%s/%s failed: %s", metadataServiceName, probe.Method, ret.GetMsg())
-		}
-		found, actual := applyProbeResult(call.Resource, probe, call.Request)
 		if !found {
 			if err := postStorage(ctx, metadataURL, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
 				return summary, err
@@ -416,6 +452,84 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 		summary.Unchanged++
 	}
 	return summary, nil
+}
+
+func findMetadataApplyResource(
+	ctx context.Context,
+	metadataURL string,
+	resource string,
+	probe *metadataExistsProbe,
+	expectedRequest proto.Message,
+) (bool, proto.Message, error) {
+	switch resource {
+	case "dataset_columns":
+		base := probe.Request.(*pb.ListDatasetColumnsReq)
+		for page := uint32(1); page <= metadataApplyMaxPages; page++ {
+			current := &metadataExistsProbe{
+				Method: probe.Method,
+				Request: &pb.ListDatasetColumnsReq{
+					SpaceId: base.GetSpaceId(), DatasetId: base.GetDatasetId(),
+					Page: &commonpb.Page{Page: page, Size: metadataApplyPageSize},
+				},
+				Response: &pb.ListDatasetColumnsRsp{},
+			}
+			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, metadataURL, resource, current, expectedRequest)
+			if err != nil || found || !hasMore {
+				return found, actual, err
+			}
+		}
+	case "view_columns":
+		base := probe.Request.(*pb.ListViewColumnsReq)
+		for page := uint32(1); page <= metadataApplyMaxPages; page++ {
+			current := &metadataExistsProbe{
+				Method: probe.Method,
+				Request: &pb.ListViewColumnsReq{
+					SpaceId: base.GetSpaceId(), ViewId: base.GetViewId(),
+					Page: &commonpb.Page{Page: page, Size: metadataApplyPageSize},
+				},
+				Response: &pb.ListViewColumnsRsp{},
+			}
+			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, metadataURL, resource, current, expectedRequest)
+			if err != nil || found || !hasMore {
+				return found, actual, err
+			}
+		}
+	default:
+		found, actual, _, err := inspectMetadataApplyPage(ctx, metadataURL, resource, probe, expectedRequest)
+		return found, actual, err
+	}
+	return false, nil, fmt.Errorf("metadata %s probe exceeds %d pages", resource, metadataApplyMaxPages)
+}
+
+func inspectMetadataApplyPage(
+	ctx context.Context,
+	metadataURL string,
+	resource string,
+	probe *metadataExistsProbe,
+	expectedRequest proto.Message,
+) (bool, proto.Message, bool, error) {
+	if err := postStorageRaw(ctx, metadataURL, metadataServiceName, probe.Method, probe.Request, probe.Response); err != nil {
+		return false, nil, false, err
+	}
+	ret, ok := responseRetInfo(probe.Response)
+	if !ok || ret == nil {
+		return false, nil, false, fmt.Errorf("%s/%s failed: missing ret_info", metadataServiceName, probe.Method)
+	}
+	if ret.GetCode() != pb.ErrorCode_SUCCESS {
+		if metadataNotFound(ret) {
+			return false, nil, false, nil
+		}
+		return false, nil, false, fmt.Errorf("%s/%s failed: %s", metadataServiceName, probe.Method, ret.GetMsg())
+	}
+	found, actual := applyProbeResult(resource, probe, expectedRequest)
+	switch response := probe.Response.(type) {
+	case *pb.ListDatasetColumnsRsp:
+		return found, actual, response.GetPageResult().GetHasMore(), nil
+	case *pb.ListViewColumnsRsp:
+		return found, actual, response.GetPageResult().GetHasMore(), nil
+	default:
+		return found, actual, false, nil
+	}
 }
 
 func applyProbeResult(resource string, probe *metadataExistsProbe, expectedRequest proto.Message) (bool, proto.Message) {
@@ -723,7 +837,26 @@ func (s seedDataset) toPB() (*pb.Dataset, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), KeepDuration: strings.TrimSpace(s.KeepDuration), Freqs: s.Freqs, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+	keepDuration, err := canonicalMetadataKeepDuration(s.KeepDuration)
+	if err != nil {
+		return nil, fmt.Errorf("dataset %q: %w", s.DatasetID, err)
+	}
+	if dataKind == pb.DataKind_DATA_KIND_RECORD && keepDuration != "0" {
+		return nil, fmt.Errorf("dataset %q: record keep_duration must be 0", s.DatasetID)
+	}
+	return &pb.Dataset{SpaceId: s.SpaceID, DatasetId: s.DatasetID, DataSourceId: s.DataSourceID, Name: s.Name, Description: s.Description, DataKind: dataKind, DataNodeId: strings.TrimSpace(s.DataNodeID), KeepDuration: keepDuration, Freqs: s.Freqs, Status: "disabled", CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}, nil
+}
+
+func canonicalMetadataKeepDuration(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "0" {
+		return "0", nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", value)
+	}
+	return duration.String(), nil
 }
 
 func (s seedDatasetSubject) toPB() *pb.DatasetSubject {

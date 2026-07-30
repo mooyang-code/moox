@@ -145,7 +145,7 @@ func (w *TargetWorker) observe(
 	if w.Metrics == nil {
 		return
 	}
-	outcome := "running"
+	outcome := "success"
 	switch {
 	case err != nil:
 		outcome = "error"
@@ -155,7 +155,7 @@ func (w *TargetWorker) observe(
 		result.Status == targetapp.StatusPaused:
 		outcome = "rejected"
 	}
-	_ = w.Metrics.ObserveRun("target", outcome, "trade-target", at)
+	_ = w.Metrics.ObserveRun("target_commit", outcome, "trade-rebalance", at)
 }
 
 func (w *TargetWorker) initWake() {

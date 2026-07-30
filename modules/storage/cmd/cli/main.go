@@ -595,17 +595,14 @@ func resolveSchemaPath(path string) string {
 	return candidates[0]
 }
 
-func resolveSeedPath(path string, storageConfigPath string) string {
+func resolveSeedPath(path string, _ string) string {
 	if path != "" {
 		return path
 	}
 	if path := os.Getenv("STORAGE_SEED_FILE"); path != "" {
 		return path
 	}
-	if storageConfigPath != "" {
-		return filepath.Join(filepath.Dir(storageConfigPath), "metadata.seed.yaml")
-	}
-	return filepath.Join("config", "metadata.seed.yaml")
+	return ""
 }
 
 func printError(stderr io.Writer, err error) {

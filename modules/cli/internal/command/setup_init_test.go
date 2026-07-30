@@ -15,20 +15,28 @@ import (
 
 type fakeSetupInitStorage struct {
 	stages []string
+	record func(string)
+}
+
+func (f *fakeSetupInitStorage) recordStage(stage string) {
+	f.stages = append(f.stages, stage)
+	if f.record != nil {
+		f.record(stage)
+	}
 }
 
 func (f *fakeSetupInitStorage) Apply(_ context.Context, calls []metadataImportCall) (metadataImportSummary, error) {
-	f.stages = append(f.stages, "storage-apply")
+	f.recordStage("storage-apply")
 	return metadataImportSummary{Status: "ok", Planned: len(calls), Applied: len(calls)}, nil
 }
 
 func (f *fakeSetupInitStorage) Activate(_ context.Context, datasets []seedDataset) (setupDatasetActivationSummary, error) {
-	f.stages = append(f.stages, "dataset-activate")
+	f.recordStage("dataset-activate")
 	return setupDatasetActivationSummary{Total: len(datasets), Activated: len(datasets)}, nil
 }
 
 func (f *fakeSetupInitStorage) Verify(_ context.Context, calls []metadataImportCall) (metadataImportSummary, error) {
-	f.stages = append(f.stages, "verify")
+	f.recordStage("verify")
 	return metadataImportSummary{Status: "ok", Planned: len(calls), Unchanged: len(calls)}, nil
 }
 
@@ -53,7 +61,9 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 func TestSetupInitRunsStagesInOrder(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	stages := []string{}
-	storage := &fakeSetupInitStorage{}
+	storage := &fakeSetupInitStorage{record: func(stage string) {
+		stages = append(stages, stage)
+	}}
 	spaces := []setupclient.Space{{
 		SpaceID: "crypto", Name: "加密货币市场", Market: "crypto",
 		Timezone: "UTC", Status: "active", AttributesJSON: "{}",
@@ -97,7 +107,6 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"init", "--file", "custom.toml", "--config-dir", "bundle", "--storage-host", "compute"})
 	require.NoError(t, cmd.Execute())
-	stages = append(stages, storage.stages...)
 	assert.Equal(t, []string{
 		"load-bundle",
 		"load-config",
@@ -107,10 +116,12 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"storage-apply",
 		"dataset-activate",
 		"verify",
+		"admin-status",
 	}, stages)
 	require.JSONEq(t, `{
 		"status":"ready",
 		"business_spaces":1,
+		"business_space_ids":["crypto"],
 		"admin":{"action":"created","users":0,"secrets":0,"hosts":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},
 		"admin_state":"completed",
 		"login_api":"valid",
@@ -231,6 +242,203 @@ func TestSetupInitRejectsMissingMetadataDependencies(t *testing.T) {
 		}},
 	})
 	require.ErrorContains(t, err, `undefined data_source "missing"`)
+}
+
+func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
+	base := metadataSeed{
+		Spaces:      []seedSpace{{SpaceID: "crypto"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Datasets: []seedDataset{{
+			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
+			DataKind: "time_series", Freqs: []string{"1H"},
+		}},
+	}
+	tests := []struct {
+		name   string
+		column seedDatasetColumn
+		want   string
+	}{
+		{
+			name: "field",
+			column: seedDatasetColumn{
+				SpaceID: "crypto", DatasetID: "kline", ColumnName: "close",
+				OriginType: "field", OriginID: "missing",
+			},
+			want: `references undefined field "missing"`,
+		},
+		{
+			name: "factor",
+			column: seedDatasetColumn{
+				SpaceID: "crypto", DatasetID: "kline", ColumnName: "ma",
+				OriginType: "factor", OriginID: "missing",
+			},
+			want: `references undefined factor "missing"`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			seed := base
+			seed.DatasetColumns = []seedDatasetColumn{tc.column}
+			err := validateSetupMetadataDependencies(seed)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
+	base := metadataSeed{
+		Spaces:      []seedSpace{{SpaceID: "crypto"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Datasets: []seedDataset{{
+			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
+			DataKind: "time_series", Freqs: []string{"1H"},
+		}},
+		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
+		DatasetColumns: []seedDatasetColumn{
+			{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close"},
+			{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close"},
+		},
+	}
+	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata dataset_column")
+
+	base.DatasetColumns = base.DatasetColumns[:1]
+	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")}
+	base.ViewColumns = []seedViewColumn{
+		{SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
+		{SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
+	}
+	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata view_column")
+}
+
+func TestSetupInitRejectsMissingViewColumnOrigin(t *testing.T) {
+	err := validateSetupMetadataDependencies(metadataSeed{
+		Spaces:      []seedSpace{{SpaceID: "crypto"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Datasets: []seedDataset{{
+			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
+			DataKind: "time_series", Freqs: []string{"1H"},
+		}},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")},
+		ViewColumns: []seedViewColumn{{
+			SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close",
+			OriginType: "dataset_column", OriginID: "kline.close",
+		}},
+	})
+	require.ErrorContains(t, err, `references undefined dataset_column "kline.close"`)
+}
+
+func TestSetupInitRejectsViewColumnFromUndeclaredDataset(t *testing.T) {
+	err := validateSetupMetadataDependencies(metadataSeed{
+		Spaces:      []seedSpace{{SpaceID: "crypto"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Datasets: []seedDataset{
+			{SpaceID: "crypto", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
+			{SpaceID: "crypto", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
+		},
+		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
+		DatasetColumns: []seedDatasetColumn{
+			{SpaceID: "crypto", DatasetID: "spot", ColumnName: "close", OriginType: "field", OriginID: "close"},
+			{SpaceID: "crypto", DatasetID: "perpetual", ColumnName: "close", OriginType: "field", OriginID: "close"},
+		},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto", "spot_view", "spot", "1H")},
+		ViewColumns: []seedViewColumn{{
+			SpaceID: "crypto", ViewID: "spot_view", ColumnName: "perpetual.close",
+			OriginType: "dataset_column", OriginID: "perpetual.close",
+		}},
+	})
+	require.ErrorContains(t, err, `references dataset "perpetual" not declared by view`)
+}
+
+func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
+	base := metadataSeed{
+		Spaces:      []seedSpace{{SpaceID: "crypto"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Datasets: []seedDataset{{
+			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
+			DataKind: "time_series", Freqs: []string{"1H"},
+		}},
+	}
+	canonical := seedView{
+		SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
+		DatasetIDs: []string{"kline"},
+		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
+		FilterJSON: `{"freq":"1H"}`,
+		Engine:     "duckdb",
+	}
+	tests := []struct {
+		name string
+		view seedView
+		want string
+	}{
+		{
+			name: "missing primary",
+			view: func() seedView {
+				item := canonical
+				item.PrimaryDatasetID = ""
+				return item
+			}(),
+			want: "primary_dataset_id must be explicit",
+		},
+		{
+			name: "dataset order",
+			view: func() seedView {
+				item := canonical
+				item.DatasetIDs = []string{"kline", "kline"}
+				return item
+			}(),
+			want: "dataset_ids must be canonical",
+		},
+		{
+			name: "grain keys",
+			view: func() seedView {
+				item := canonical
+				item.GrainKeys = []string{"subject_id", "data_time"}
+				return item
+			}(),
+			want: "grain_keys must be canonical",
+		},
+		{
+			name: "engine",
+			view: func() seedView {
+				item := canonical
+				item.Engine = "pebble"
+				return item
+			}(),
+			want: `engine must be "duckdb"`,
+		},
+		{
+			name: "filter json",
+			view: func() seedView {
+				item := canonical
+				item.FilterJSON = `{ "freq": "1H" }`
+				return item
+			}(),
+			want: "filter_json must be canonical",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			seed := base
+			seed.Views = []seedView{tc.view}
+			require.ErrorContains(t, validateSetupMetadataDependencies(seed), tc.want)
+		})
+	}
+	seed := base
+	seed.Views = []seedView{canonical}
+	require.NoError(t, validateSetupMetadataDependencies(seed))
+
+	seed.Datasets[0].Freqs = []string{" 1H "}
+	require.NoError(t, validateSetupMetadataDependencies(seed))
+}
+
+func testCanonicalTimeSeriesView(spaceID, viewID, datasetID, freq string) seedView {
+	return seedView{
+		SpaceID: spaceID, ViewID: viewID, PrimaryDatasetID: datasetID,
+		DatasetIDs: []string{datasetID},
+		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
+		FilterJSON: `{"freq":"` + freq + `"}`,
+		Engine:     "duckdb",
+	}
 }
 
 func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {

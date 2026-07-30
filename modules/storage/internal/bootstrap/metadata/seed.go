@@ -39,7 +39,7 @@ type ImportResult struct {
 	Devices         int
 }
 
-// ImportSeed 读取领域型 metadata seed 文件，并按依赖顺序通过元数据控制面写入。
+// ImportSeed 读取显式指定的 metadata seed 文件，并按依赖顺序通过元数据控制面写入。
 // 它会先确保 schema 存在（幂等），再逐类 Upsert，全部使用 Upsert 语义，可重复执行。
 func ImportSeed(ctx context.Context, opts SeedOptions) (ImportResult, error) {
 	var result ImportResult
@@ -376,9 +376,9 @@ func parseColumnOriginType(value string) pb.ColumnOriginType {
 	}
 }
 
-// ---- seed 文件结构（领域型，与 config/metadata.seed.yaml 对应）----
+// ---- seed 文件结构（领域型，与显式传入的 metadata YAML 对应）----
 
-// seedFile 对应 metadata.seed.yaml 的顶层配置。
+// seedFile 对应 metadata YAML 的顶层配置。
 type seedFile struct {
 	Spaces          []seedSpace          `yaml:"spaces"`
 	DataSources     []seedDataSource     `yaml:"data_sources"`

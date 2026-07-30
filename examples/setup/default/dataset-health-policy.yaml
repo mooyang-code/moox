@@ -5,8 +5,4 @@ realtime_timeseries:
     success_missed_intervals: 3
     watermark_periods: 3
     minimum_watermark_lag: 10m
-  overrides:
-    - space_id: crypto
-      dataset_id: spot_kline_1h
-      freq: 1H
-      watermark_lag: 5m
+  overrides: []

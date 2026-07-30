@@ -275,6 +275,7 @@ import type { ServiceDeployment } from "@/api/admin/types";
 import { listAccounts } from "@/api/trade";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
 import { getNodeList } from "@/api/cloud-node";
+import { RequestGate } from "@/utils/request-gate";
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -337,6 +338,7 @@ const counts = reactive<Record<string, number | null>>({
   subjects: null,
   tasks: null
 });
+const spaceLoadGate = new RequestGate();
 
 const pipeline = [
   { key: "sources", stage: "01", label: "数据源", color: "#3b6fd9", path: "/data/sources" },
@@ -606,38 +608,45 @@ const go = (path: string) => {
 };
 
 async function loadSpaceScoped() {
-  const space_id = selectedSpaceId.value;
-  if (!space_id) return;
+  const token = spaceLoadGate.next();
+  const spaceId = selectedSpaceId.value;
+  if (!spaceId) return;
   const page = { page: 1, size: 1 };
+  const isCurrent = () => spaceLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
 
   const jobs: Array<Promise<void>> = [
-    listDataSources({ space_id, page }).then(rsp => {
-      counts.sources = countFrom(rsp.page_result, rsp.data_sources?.length);
+    listDataSources({ space_id: spaceId, page }).then(rsp => {
+      if (isCurrent()) counts.sources = countFrom(rsp.page_result, rsp.data_sources?.length);
     }),
-    loadCollectorAssetCounts(space_id),
-    listFactors({ space_id, page }).then(rsp => {
-      counts.factors = countFrom(rsp.page_result, rsp.factors?.length);
+    loadCollectorAssetCounts(spaceId).then(result => {
+      if (!isCurrent()) return;
+      counts.datasets = result.datasets;
+      counts.views = result.views;
     }),
-    listSubjects({ space_id, page }).then(rsp => {
-      counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
+    listFactors({ space_id: spaceId, page }).then(rsp => {
+      if (isCurrent()) counts.factors = countFrom(rsp.page_result, rsp.factors?.length);
     }),
-    callControl<{ page: { page: number; size: number } }, { rules?: unknown[]; page?: { total?: number } }>(
+    listSubjects({ space_id: spaceId, page }).then(rsp => {
+      if (isCurrent()) counts.subjects = countFrom(rsp.page_result, rsp.subjects?.length);
+    }),
+    callControl<{ space_id: string; page: { page: number; size: number } }, { rules?: unknown[]; page?: { total?: number } }>(
       "collectmgr",
       "GetTaskRuleList",
-      { page: { page: 1, size: 1 } }
+      { space_id: spaceId, page: { page: 1, size: 1 } }
     ).then(rsp => {
-      counts.rules = Number(rsp.page?.total) || rsp.rules?.length || 0;
+      if (isCurrent()) counts.rules = Number(rsp.page?.total) || rsp.rules?.length || 0;
     }),
     callControl<
       { filter: { space_id: string; page: { page: number; size: number } } },
       { instances?: unknown[]; page?: { total?: number } }
-    >("collectmgr", "GetTaskInstanceList", { filter: { space_id, page: { page: 1, size: 1 } } }).then(rsp => {
-      counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
+    >("collectmgr", "GetTaskInstanceList", { filter: { space_id: spaceId, page: { page: 1, size: 1 } } }).then(rsp => {
+      if (isCurrent()) counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
     }),
     listAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
-      counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
+      if (isCurrent()) counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
     }),
     getNodeList({ page: 1, page_size: 200 }).then(({ items, total }) => {
+      if (!isCurrent()) return;
       nodesTotal.value = total || items.length;
       nodesOnline.value = items.filter(n => String(n.status ?? "").includes("ONLINE")).length;
     })
@@ -646,10 +655,10 @@ async function loadSpaceScoped() {
   await Promise.allSettled(jobs);
 }
 
-async function loadCollectorAssetCounts(spaceId: string) {
+async function loadCollectorAssetCounts(spaceId: string): Promise<{ datasets: number; views: number }> {
   const [datasetItems, viewItems] = await Promise.all([listAllDatasets(spaceId), listAllViews(spaceId)]);
   const datasetById = new Map(datasetItems.map(item => [item.dataset_id, item]));
-  counts.datasets = datasetItems.filter(
+  const datasets = datasetItems.filter(
     item =>
       !isLikelyFactorResultDataset(item) &&
       datasetMatchesAttribution(item, {
@@ -658,7 +667,7 @@ async function loadCollectorAssetCounts(spaceId: string) {
         includeUnowned: true
       })
   ).length;
-  counts.views = viewItems.filter(
+  const views = viewItems.filter(
     item =>
       !viewUsesLikelyFactorDataset(item, datasetById) &&
       viewMatchesAttribution(item, {
@@ -667,6 +676,7 @@ async function loadCollectorAssetCounts(spaceId: string) {
         includeUnowned: true
       })
   ).length;
+  return { datasets, views };
 }
 
 async function listAllDatasets(spaceId: string) {
@@ -745,6 +755,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  spaceLoadGate.next();
   if (bannerTimer) {
     clearInterval(bannerTimer);
     bannerTimer = null;

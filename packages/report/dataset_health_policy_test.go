@@ -3,6 +3,7 @@ package report
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -54,6 +55,28 @@ func TestLoadDatasetHealthPolicyRejectsUnknownFieldsAndDocuments(t *testing.T) {
 				t.Fatal("invalid Dataset health policy was accepted")
 			}
 		})
+	}
+}
+
+func TestDefaultDatasetHealthPolicyDoesNotOverrideHourlyWatermarkBelowOnePeriod(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test path")
+	}
+	path := filepath.Join(
+		filepath.Dir(currentFile),
+		"..", "..", "examples", "setup", "default", "dataset-health-policy.yaml",
+	)
+	cfg, err := LoadDatasetHealthPolicy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, override := range cfg.RealtimeTimeSeries.Overrides {
+		if override.SpaceID == "crypto" &&
+			override.DatasetID == "spot_kline_1h" &&
+			strings.EqualFold(override.Freq, "1h") {
+			t.Fatalf("hourly Dataset must use the default multi-period watermark tolerance: %+v", override)
+		}
 	}
 }
 

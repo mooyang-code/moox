@@ -172,7 +172,10 @@ assert_grep 'start_storage_process "storage-primary" "moox-storage-primary"' "${
 assert_grep 'source "\$\{ROOT\}/secrets/storage-node-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'source "\$\{ROOT\}/secrets/storage-internal-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'register-node' "${DEPLOY_DIR}/start.sh"
-assert_grep 'import-seed' "${DEPLOY_DIR}/start.sh"
+if grep -q 'import-seed' "${DEPLOY_DIR}/start.sh"; then
+  echo 'storage deployment must not import a second metadata seed before setup init' >&2
+  exit 1
+fi
 assert_grep 'doctor bootstrap --format json' "${DEPLOY_DIR}/start.sh"
 assert_grep 'activate-datasets' "${DEPLOY_DIR}/start.sh"
 assert_file "${DEPLOY_DIR}/secrets/storage-node-auth.env"
@@ -200,7 +203,6 @@ assert_order "${DEPLOY_DIR}/start.sh" \
   '^  start_storage_node$' \
   'wait_tcp 127\.0\.0\.1 20107' \
   '^  register_storage_node$' \
-  '^  import_storage_metadata$' \
   '^  start_storage_view$' \
   'wait_http http://127\.0\.0\.1:20211/healthz' \
   '^  if run_storage_doctor; then$' \

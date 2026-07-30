@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { FieldGroup } from "@/api/storage/types";
-import { buildGroupTree, fieldQueryFromRoute, fieldQueryToRoute, groupPath, RequestGate } from "./field-workbench";
+import {
+  buildFieldGroupDeleteRequest,
+  buildGroupTree,
+  fieldQueryFromRoute,
+  fieldQueryToRoute,
+  groupPath,
+  isSpaceRequestCurrent,
+  RequestGate
+} from "./field-workbench";
 
 const groups: FieldGroup[] = [
   { space_id: "stock_cn", group_id: "market", name: "市场数据", status: "active", sort_order: 20 },
@@ -32,5 +40,12 @@ describe("field workbench helpers", () => {
     const second = gate.next();
     expect(gate.isCurrent(first)).toBe(false);
     expect(gate.isCurrent(second)).toBe(true);
+  });
+
+  it("keeps a delayed group deletion bound to its original space", () => {
+    const request = buildFieldGroupDeleteRequest(groups[0]);
+    expect(request).toEqual({ space_id: "stock_cn", group_id: "market" });
+    expect(isSpaceRequestCurrent(request, "crypto")).toBe(false);
+    expect(isSpaceRequestCurrent(request, "stock_cn")).toBe(true);
   });
 });

@@ -69,6 +69,20 @@ func storageFailure(code storagepb.ErrorCode) *storagepb.RetInfo {
 	return &storagepb.RetInfo{Code: code}
 }
 
+func TestResolveSeedPathRequiresExplicitFlagOrEnvironment(t *testing.T) {
+	t.Setenv("STORAGE_SEED_FILE", "")
+	if got := resolveSeedPath("", "config/storage.yaml"); got != "" {
+		t.Fatalf("implicit seed path = %q, want empty", got)
+	}
+	if got := resolveSeedPath("bundle/metadata.yaml", "config/storage.yaml"); got != "bundle/metadata.yaml" {
+		t.Fatalf("explicit seed path = %q", got)
+	}
+	t.Setenv("STORAGE_SEED_FILE", "bundle/from-env.yaml")
+	if got := resolveSeedPath("", "config/storage.yaml"); got != "bundle/from-env.yaml" {
+		t.Fatalf("environment seed path = %q", got)
+	}
+}
+
 func withDeploymentSecret(t *testing.T) {
 	t.Helper()
 	previous, ok := os.LookupEnv("MOOX_STORAGE_NODE_AUTH_SECRET")

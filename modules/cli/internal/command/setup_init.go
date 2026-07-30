@@ -2,8 +2,10 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -42,14 +44,15 @@ type setupInitMetadataCounts struct {
 }
 
 type setupInitSummary struct {
-	Status         string                        `json:"status"`
-	BusinessSpaces int                           `json:"business_spaces"`
-	Admin          setupclient.ApplyResult       `json:"admin"`
-	AdminState     string                        `json:"admin_state"`
-	LoginAPI       string                        `json:"login_api"`
-	Metadata       setupInitMetadataCounts       `json:"metadata"`
-	Datasets       setupDatasetActivationSummary `json:"datasets"`
-	Verification   setupInitMetadataCounts       `json:"verification"`
+	Status           string                        `json:"status"`
+	BusinessSpaces   int                           `json:"business_spaces"`
+	BusinessSpaceIDs []string                      `json:"business_space_ids"`
+	Admin            setupclient.ApplyResult       `json:"admin"`
+	AdminState       string                        `json:"admin_state"`
+	LoginAPI         string                        `json:"login_api"`
+	Metadata         setupInitMetadataCounts       `json:"metadata"`
+	Datasets         setupDatasetActivationSummary `json:"datasets"`
+	Verification     setupInitMetadataCounts       `json:"verification"`
 }
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
@@ -107,11 +110,18 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 			if verification.Applied != 0 || verification.Unchanged != len(bundle.Calls) {
 				return fmt.Errorf("metadata_verification_failed")
 			}
+			adminStatus, err = deps.statusSpaces(cmd.Context(), snapshot, bundle.Spaces)
+			if err != nil {
+				return err
+			}
+			if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
+				return fmt.Errorf("setup_incomplete")
+			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
 			}
 			return writeSetupJSON(cmd, setupInitSummary{
-				Status: "ready", BusinessSpaces: len(bundle.Spaces),
+				Status: "ready", BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
 				Admin: admin, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
 				Metadata: setupInitMetadataCounts{
 					Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
@@ -128,6 +138,14 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
 	_ = cmd.MarkFlagRequired("storage-host")
 	return cmd
+}
+
+func setupSpaceIDs(spaces []setupclient.Space) []string {
+	ids := make([]string, 0, len(spaces))
+	for _, space := range spaces {
+		ids = append(ids, strings.TrimSpace(space.SpaceID))
+	}
+	return ids
 }
 
 func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
@@ -190,6 +208,7 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		}
 	}
 	datasets := make(map[string]struct{}, len(seed.Datasets))
+	datasetDefinitions := make(map[string]seedDataset, len(seed.Datasets))
 	for _, item := range seed.Datasets {
 		if err := requireSpace("dataset", item.SpaceID); err != nil {
 			return err
@@ -200,6 +219,7 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		if err := addSetupMetadataKey(datasets, setupMetadataKey(item.SpaceID, item.DatasetID), "dataset"); err != nil {
 			return err
 		}
+		datasetDefinitions[setupMetadataKey(item.SpaceID, item.DatasetID)] = item
 	}
 	groups := make(map[string]struct{}, len(seed.FieldGroups))
 	for _, item := range seed.FieldGroups {
@@ -224,36 +244,140 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 			return err
 		}
 	}
+	factors := make(map[string]struct{}, len(seed.Factors))
 	for _, item := range seed.Factors {
 		if err := requireSpace("factor", item.SpaceID); err != nil {
 			return err
 		}
+		if err := addSetupMetadataKey(factors, setupMetadataKey(item.SpaceID, item.FactorID), "factor"); err != nil {
+			return err
+		}
 	}
+	datasetColumns := make(map[string]struct{}, len(seed.DatasetColumns))
 	for _, item := range seed.DatasetColumns {
 		if _, ok := datasets[setupMetadataKey(item.SpaceID, item.DatasetID)]; !ok {
 			return fmt.Errorf("dataset_column references undefined dataset %s/%s", item.SpaceID, item.DatasetID)
 		}
+		columnKey := setupMetadataColumnKey(item.SpaceID, item.DatasetID, item.ColumnName)
+		if _, ok := datasetColumns[columnKey]; ok {
+			return fmt.Errorf(
+				"duplicate metadata dataset_column %s/%s/%s",
+				item.SpaceID,
+				item.DatasetID,
+				item.ColumnName,
+			)
+		}
+		datasetColumns[columnKey] = struct{}{}
+		originType, err := parseDatasetColumnOriginType(item.OriginType)
+		if err != nil {
+			return err
+		}
+		switch originType {
+		case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
+			if _, ok := fields[setupMetadataKey(item.SpaceID, item.OriginID)]; !ok {
+				return fmt.Errorf(
+					"dataset_column %s/%s/%s references undefined field %q",
+					item.SpaceID,
+					item.DatasetID,
+					item.ColumnName,
+					item.OriginID,
+				)
+			}
+		case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR:
+			if _, ok := factors[setupMetadataKey(item.SpaceID, item.OriginID)]; !ok {
+				return fmt.Errorf(
+					"dataset_column %s/%s/%s references undefined factor %q",
+					item.SpaceID,
+					item.DatasetID,
+					item.ColumnName,
+					item.OriginID,
+				)
+			}
+		}
 	}
 	views := make(map[string]struct{}, len(seed.Views))
+	viewDatasets := make(map[string]map[string]struct{}, len(seed.Views))
 	for _, item := range seed.Views {
 		if err := requireSpace("view", item.SpaceID); err != nil {
 			return err
 		}
+		primaryDatasetID := strings.TrimSpace(item.PrimaryDatasetID)
+		if primaryDatasetID == "" || item.PrimaryDatasetID != primaryDatasetID {
+			return fmt.Errorf(
+				"view %s/%s primary_dataset_id must be explicit and trimmed",
+				item.SpaceID,
+				item.ViewID,
+			)
+		}
+		viewKey := setupMetadataKey(item.SpaceID, item.ViewID)
+		allowedDatasets := make(map[string]struct{}, len(item.DatasetIDs)+1)
 		for _, datasetID := range append([]string{item.PrimaryDatasetID}, item.DatasetIDs...) {
-			if strings.TrimSpace(datasetID) == "" {
+			datasetID = strings.TrimSpace(datasetID)
+			if datasetID == "" {
 				continue
 			}
 			if _, ok := datasets[setupMetadataKey(item.SpaceID, datasetID)]; !ok {
 				return fmt.Errorf("view %s/%s references undefined dataset %q", item.SpaceID, item.ViewID, datasetID)
 			}
+			allowedDatasets[datasetID] = struct{}{}
 		}
-		if err := addSetupMetadataKey(views, setupMetadataKey(item.SpaceID, item.ViewID), "view"); err != nil {
+		if err := validateCanonicalSetupView(item, datasetDefinitions); err != nil {
 			return err
 		}
+		if err := addSetupMetadataKey(views, viewKey, "view"); err != nil {
+			return err
+		}
+		viewDatasets[viewKey] = allowedDatasets
 	}
+	viewColumns := make(map[string]struct{}, len(seed.ViewColumns))
 	for _, item := range seed.ViewColumns {
 		if _, ok := views[setupMetadataKey(item.SpaceID, item.ViewID)]; !ok {
 			return fmt.Errorf("view_column references undefined view %s/%s", item.SpaceID, item.ViewID)
+		}
+		columnKey := setupMetadataColumnKey(item.SpaceID, item.ViewID, item.ColumnName)
+		if _, ok := viewColumns[columnKey]; ok {
+			return fmt.Errorf(
+				"duplicate metadata view_column %s/%s/%s",
+				item.SpaceID,
+				item.ViewID,
+				item.ColumnName,
+			)
+		}
+		viewColumns[columnKey] = struct{}{}
+		originType, err := parseColumnOriginType(item.OriginType)
+		if err != nil {
+			return err
+		}
+		if originType != storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
+			continue
+		}
+		originParts := strings.Split(strings.TrimSpace(item.OriginID), ".")
+		if len(originParts) != 2 {
+			return fmt.Errorf(
+				"view_column %s/%s/%s has invalid dataset_column origin %q",
+				item.SpaceID,
+				item.ViewID,
+				item.ColumnName,
+				item.OriginID,
+			)
+		}
+		if _, ok := viewDatasets[setupMetadataKey(item.SpaceID, item.ViewID)][originParts[0]]; !ok {
+			return fmt.Errorf(
+				"view_column %s/%s/%s references dataset %q not declared by view",
+				item.SpaceID,
+				item.ViewID,
+				item.ColumnName,
+				originParts[0],
+			)
+		}
+		if _, ok := datasetColumns[setupMetadataColumnKey(item.SpaceID, originParts[0], originParts[1])]; !ok {
+			return fmt.Errorf(
+				"view_column %s/%s/%s references undefined dataset_column %q",
+				item.SpaceID,
+				item.ViewID,
+				item.ColumnName,
+				item.OriginID,
+			)
 		}
 	}
 	return nil
@@ -273,6 +397,166 @@ func addSetupMetadataKey(seen map[string]struct{}, raw, resource string) error {
 
 func setupMetadataKey(spaceID, id string) string {
 	return strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(id)
+}
+
+func setupMetadataColumnKey(spaceID, parentID, columnName string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(spaceID),
+		strings.TrimSpace(parentID),
+		strings.TrimSpace(columnName),
+	}, "\x00")
+}
+
+func validateCanonicalSetupView(view seedView, datasets map[string]seedDataset) error {
+	normalized, err := canonicalMetadataView(view, datasets)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(view.DatasetIDs, normalized.DatasetIDs) {
+		return fmt.Errorf(
+			"view %s/%s dataset_ids must be canonical with primary_dataset_id first",
+			view.SpaceID,
+			view.ViewID,
+		)
+	}
+	if !slices.Equal(view.GrainKeys, normalized.GrainKeys) {
+		return fmt.Errorf("view %s/%s grain_keys must be canonical", view.SpaceID, view.ViewID)
+	}
+	if view.Engine != normalized.Engine {
+		return fmt.Errorf(
+			"view %s/%s engine must be %q",
+			view.SpaceID,
+			view.ViewID,
+			normalized.Engine,
+		)
+	}
+	if view.FilterJSON != normalized.FilterJSON {
+		return fmt.Errorf("view %s/%s filter_json must be canonical", view.SpaceID, view.ViewID)
+	}
+	return nil
+}
+
+func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seedView, error) {
+	primaryDatasetID := strings.TrimSpace(view.PrimaryDatasetID)
+	if primaryDatasetID == "" && len(view.DatasetIDs) > 0 {
+		primaryDatasetID = strings.TrimSpace(view.DatasetIDs[0])
+	}
+	if primaryDatasetID == "" {
+		return seedView{}, fmt.Errorf("view %s/%s primary_dataset_id is required", view.SpaceID, view.ViewID)
+	}
+	normalizedDatasetIDs := canonicalSetupViewDatasetIDs(primaryDatasetID, view.DatasetIDs)
+	primary, ok := datasets[setupMetadataKey(view.SpaceID, primaryDatasetID)]
+	if !ok {
+		return seedView{}, fmt.Errorf(
+			"view %s/%s primary dataset %q must be included in the metadata seed",
+			view.SpaceID,
+			view.ViewID,
+			primaryDatasetID,
+		)
+	}
+	dataKind, err := parseDataKind(primary.DataKind)
+	if err != nil {
+		return seedView{}, fmt.Errorf("view %s/%s primary dataset: %w", view.SpaceID, view.ViewID, err)
+	}
+	grainKeys := []string{"record_id", "version"}
+	engine := "bleve"
+	if dataKind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		grainKeys = []string{"subject_id", "freq", "data_time", "series_tag"}
+		engine = "duckdb"
+	}
+	filterJSON := view.FilterJSON
+	if dataKind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		freq, normalizedFilter, err := canonicalSetupTimeSeriesFilter(view.FilterJSON)
+		if err != nil {
+			return seedView{}, fmt.Errorf("view %s/%s: %w", view.SpaceID, view.ViewID, err)
+		}
+		for _, datasetID := range normalizedDatasetIDs {
+			dataset, exists := datasets[setupMetadataKey(view.SpaceID, datasetID)]
+			if !exists {
+				return seedView{}, fmt.Errorf(
+					"view %s/%s dataset %q must be included in the metadata seed",
+					view.SpaceID,
+					view.ViewID,
+					datasetID,
+				)
+			}
+			if kind, parseErr := parseDataKind(dataset.DataKind); parseErr == nil &&
+				kind == storagepb.DataKind_DATA_KIND_TIME_SERIES &&
+				!setupDatasetSupportsFreq(dataset.Freqs, freq) {
+				return seedView{}, fmt.Errorf(
+					"view %s/%s dataset %s does not support freq %q",
+					view.SpaceID,
+					view.ViewID,
+					datasetID,
+					freq,
+				)
+			}
+		}
+		filterJSON = normalizedFilter
+	}
+	view.PrimaryDatasetID = primaryDatasetID
+	view.DatasetIDs = normalizedDatasetIDs
+	view.GrainKeys = grainKeys
+	view.Engine = engine
+	view.FilterJSON = filterJSON
+	return view, nil
+}
+
+func setupDatasetSupportsFreq(freqs []string, freq string) bool {
+	for _, item := range freqs {
+		if strings.TrimSpace(item) == freq {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalSetupViewDatasetIDs(primaryDatasetID string, datasetIDs []string) []string {
+	seen := make(map[string]struct{}, len(datasetIDs)+1)
+	result := make([]string, 0, len(datasetIDs)+1)
+	add := func(datasetID string) {
+		datasetID = strings.TrimSpace(datasetID)
+		if datasetID == "" {
+			return
+		}
+		if _, ok := seen[datasetID]; ok {
+			return
+		}
+		seen[datasetID] = struct{}{}
+		result = append(result, datasetID)
+	}
+	add(primaryDatasetID)
+	for _, datasetID := range datasetIDs {
+		add(datasetID)
+	}
+	return result
+}
+
+func canonicalSetupTimeSeriesFilter(raw string) (string, string, error) {
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &fields); err != nil {
+		return "", "", fmt.Errorf("invalid time series filter_json: %w", err)
+	}
+	var freq string
+	if encoded, ok := fields["freq"]; ok {
+		if err := json.Unmarshal(encoded, &freq); err != nil {
+			return "", "", fmt.Errorf("filter_json.freq must be a string")
+		}
+	}
+	freq = strings.TrimSpace(freq)
+	if freq == "" {
+		return "", "", fmt.Errorf("filter_json.freq is required")
+	}
+	encodedFreq, err := json.Marshal(freq)
+	if err != nil {
+		return "", "", err
+	}
+	fields["freq"] = encodedFreq
+	normalized, err := json.Marshal(fields)
+	if err != nil {
+		return "", "", err
+	}
+	return freq, string(normalized), nil
 }
 
 type remoteSetupInitStorage struct {
