@@ -111,7 +111,15 @@ func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing
 	<-workerDone
 }
 
-func TestEmptyFullTargetClosesExistingPosition(t *testing.T) {
+func TestLogicalAccountOmittedInstrumentConvergesToZero(t *testing.T) {
+	testEmptyFullTargetClosesExistingPosition(t)
+}
+
+func TestLogicalAccountEmptyFullFlattensAllPhysicalPositions(t *testing.T) {
+	testEmptyFullTargetClosesExistingPosition(t)
+}
+
+func testEmptyFullTargetClosesExistingPosition(t *testing.T) {
 	now := time.Now().UTC()
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
 	seedLogicalAccount(t, f.store)

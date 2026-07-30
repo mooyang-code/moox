@@ -331,7 +331,7 @@ func activeOrder(
 	return record
 }
 
-func TestFlattenDoesNotNetOpposingPhysicalAccounts(t *testing.T) {
+func TestLogicalAccountDoesNotNetOpposingPhysicalPositions(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""
 	fixture.position(t, "account-a", "BTCUSDT", "2")

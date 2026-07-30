@@ -86,8 +86,10 @@ func (s *Service) SyncAccount(
 			s.Metrics.Observe(exchangeAccountID, s.now(), maxDifference, err)
 		}
 	}()
+	unlockMembership := s.Store.LockLogicalAccountMembership()
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
 	if err != nil {
+		unlockMembership()
 		return Result{}, err
 	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
@@ -97,6 +99,7 @@ func (s *Service) SyncAccount(
 		err = s.pauseForExternalFact(ctx, exchangeAccountID)
 	}
 	unlockExecution()
+	unlockMembership()
 	if err != nil {
 		return result, err
 	}
@@ -253,8 +256,10 @@ func (s *Service) ApplySnapshot(
 	if err := s.validate(); err != nil {
 		return Result{}, err
 	}
+	unlockMembership := s.Store.LockLogicalAccountMembership()
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
 	if err != nil {
+		unlockMembership()
 		return Result{}, err
 	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
@@ -264,6 +269,7 @@ func (s *Service) ApplySnapshot(
 		err = s.pauseForExternalFact(ctx, exchangeAccountID)
 	}
 	unlockExecution()
+	unlockMembership()
 	if err != nil {
 		return result, err
 	}
@@ -441,6 +447,8 @@ func (s *Service) ApplyFill(
 	if err := s.validate(); err != nil {
 		return false, err
 	}
+	unlockMembership := s.Store.LockLogicalAccountMembership()
+	defer unlockMembership()
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
 	if err != nil {
 		return false, err
@@ -477,6 +485,8 @@ func (s *Service) ApplyOrder(
 	if err := s.validate(); err != nil {
 		return err
 	}
+	unlockMembership := s.Store.LockLogicalAccountMembership()
+	defer unlockMembership()
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
 	if err != nil {
 		return err

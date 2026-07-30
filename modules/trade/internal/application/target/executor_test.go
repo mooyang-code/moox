@@ -90,7 +90,7 @@ func (s targetPriceStub) LatestPrice(
 	return Quote{Price: s.price, UpdatedAt: time.UnixMilli(2_000)}, nil
 }
 
-func TestTargetExecutorAggregatesAcrossExchanges(t *testing.T) {
+func TestLogicalAccountFullTargetConvergesAcrossBinanceAndOKX(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "1")
 	fixture.position(t, "account-b", "BTC-USDT-SWAP", "2")

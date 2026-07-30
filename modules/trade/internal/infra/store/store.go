@@ -25,11 +25,12 @@ var (
 )
 
 type Store struct {
-	db             *gorm.DB
-	accountLocks   sync.Map
-	logicalLocks   sync.Map
-	executionLocks sync.Map
-	metrics        *report.ModuleMetrics
+	db                    *gorm.DB
+	accountLocks          sync.Map
+	logicalLocks          sync.Map
+	executionLocks        sync.Map
+	logicalMembershipLock sync.Mutex
+	metrics               *report.ModuleMetrics
 }
 
 func (s *Store) SetModuleMetrics(metrics *report.ModuleMetrics) {
@@ -99,6 +100,11 @@ func (s *Store) LockLogicalAccountExecution(
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock
+}
+
+func (s *Store) LockLogicalAccountMembership() func() {
+	s.logicalMembershipLock.Lock()
+	return s.logicalMembershipLock.Unlock
 }
 
 func validateExistingTradeSchema(db *gorm.DB) error {

@@ -16,7 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 )
 
-func TestStrategyRunOnceCommitsResultAndFullTarget(t *testing.T) {
+func TestStrategyRunnerRunOnceCommitsResultAndOutbox(t *testing.T) {
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
 	if err != nil {
 		t.Fatal(err)

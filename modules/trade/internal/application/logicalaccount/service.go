@@ -124,6 +124,13 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	}
 	unlock := s.Store.LockLogicalAccount(command.SpaceID, command.LogicalAccountID)
 	defer unlock()
+	unlockMembership := s.Store.LockLogicalAccountMembership()
+	defer unlockMembership()
+	unlockExecution := s.Store.LockLogicalAccountExecution(
+		command.SpaceID,
+		command.LogicalAccountID,
+	)
+	defer unlockExecution()
 	unlockAccount := s.Store.LockExchangeAccount(command.ExchangeAccountID)
 	defer unlockAccount()
 	exposed, err := s.memberHasExposure(
@@ -166,6 +173,10 @@ func (s *Service) RemoveMember(
 	}
 	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
 	defer unlock()
+	unlockMembership := s.Store.LockLogicalAccountMembership()
+	defer unlockMembership()
+	unlockExecution := s.Store.LockLogicalAccountExecution(spaceID, logicalAccountID)
+	defer unlockExecution()
 	unlockAccount := s.Store.LockExchangeAccount(exchangeAccountID)
 	defer unlockAccount()
 	exposed, err := s.memberHasExposure(ctx, spaceID, exchangeAccountID)
