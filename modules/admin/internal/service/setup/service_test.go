@@ -10,6 +10,7 @@ import (
 	"github.com/glebarez/sqlite"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
+	adminspace "github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	sshmodel "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
@@ -35,6 +36,92 @@ func testManifest() Manifest {
 		TencentCloud: TencentCloud{SecretID: "secret-id", SecretKey: "secret-key"},
 		ControlHost:  Host{Name: "control", Address: "192.0.2.10", Port: 22, Username: "ubuntu", Password: "control-password"},
 		OtherHosts:   []Host{{Name: "compute-1", Address: "192.0.2.11", Port: 22, Username: "ubuntu", Password: "compute-password"}},
+	}
+}
+
+func setupSpaceManifest() Manifest {
+	manifest := testManifest()
+	manifest.Spaces = []Space{{
+		SpaceID: "stock_cn", Name: "A股市场", Description: "A股行情与基本面数据",
+		Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai", Status: "active",
+		AttributesJSON: `{"managed_by":"moox-cli","priority":1}`,
+	}}
+	return manifest
+}
+
+func TestApplyCreatesAndInspectsSpaces(t *testing.T) {
+	db := setupDB(t)
+	service := NewService(db, testEncryptionKey)
+
+	result, err := service.Apply(context.Background(), setupSpaceManifest())
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Spaces)
+	assert.Equal(t, 1, result.SpacesCreated)
+	assert.Zero(t, result.SpacesUnchanged)
+
+	var stored adminspace.Space
+	require.NoError(t, db.Where("c_space_id = ?", "stock_cn").First(&stored).Error)
+	assert.Equal(t, `{"managed_by":"moox-cli","priority":1}`, stored.Attributes)
+
+	status, err := service.Inspect(context.Background(), setupSpaceManifest())
+	require.NoError(t, err)
+	assert.Equal(t, 1, status.Spaces)
+	assert.Equal(t, "completed", status.State)
+}
+
+func TestApplyIdenticalSpaceCanonicalJSONIsUnchanged(t *testing.T) {
+	service := NewService(setupDB(t), testEncryptionKey)
+	manifest := setupSpaceManifest()
+	_, err := service.Apply(context.Background(), manifest)
+	require.NoError(t, err)
+
+	manifest.Spaces[0].AttributesJSON = `{ "priority": 1, "managed_by": "moox-cli" }`
+	result, err := service.Apply(context.Background(), manifest)
+	require.NoError(t, err)
+	assert.Equal(t, "unchanged", result.Action)
+	assert.Zero(t, result.SpacesCreated)
+	assert.Equal(t, 1, result.SpacesUnchanged)
+}
+
+func TestApplyRejectsConflictingSpace(t *testing.T) {
+	service := NewService(setupDB(t), testEncryptionKey)
+	manifest := setupSpaceManifest()
+	_, err := service.Apply(context.Background(), manifest)
+	require.NoError(t, err)
+
+	manifest.Spaces[0].Name = "不同名称"
+	_, err = service.Apply(context.Background(), manifest)
+	require.ErrorIs(t, err, ErrConflict)
+}
+
+func TestApplyRollsBackSpaceOnLaterFailure(t *testing.T) {
+	db := setupDB(t)
+	service := NewService(db, testEncryptionKey)
+	service.writeHook = func(stage string) error {
+		if stage == "host:control" {
+			return errors.New("injected host failure")
+		}
+		return nil
+	}
+
+	_, err := service.Apply(context.Background(), setupSpaceManifest())
+	require.ErrorIs(t, err, ErrStorage)
+	var spaces int64
+	require.NoError(t, db.Model(&adminspace.Space{}).Count(&spaces).Error)
+	assert.Zero(t, spaces)
+}
+
+func TestApplyRejectsInvalidAndDuplicateSpaces(t *testing.T) {
+	for _, mutate := range []func(*Manifest){
+		func(manifest *Manifest) { manifest.Spaces[0].AttributesJSON = "[]" },
+		func(manifest *Manifest) { manifest.Spaces[0].AttributesJSON = `{"bad":` },
+		func(manifest *Manifest) { manifest.Spaces[0].SpaceID = "" },
+		func(manifest *Manifest) { manifest.Spaces = append(manifest.Spaces, manifest.Spaces[0]) },
+	} {
+		manifest := setupSpaceManifest()
+		mutate(&manifest)
+		_, err := NewService(setupDB(t), testEncryptionKey).Apply(context.Background(), manifest)
+		require.ErrorIs(t, err, ErrInvalid)
 	}
 }
 

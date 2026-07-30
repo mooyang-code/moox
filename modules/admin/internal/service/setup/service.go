@@ -3,7 +3,9 @@ package setup
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
+	adminspace "github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	sshmodel "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
@@ -42,11 +45,23 @@ type Host struct {
 	Password string
 }
 
+type Space struct {
+	SpaceID        string
+	Name           string
+	Description    string
+	Owner          string
+	Market         string
+	Timezone       string
+	Status         string
+	AttributesJSON string
+}
+
 type Manifest struct {
 	Admin        Admin
 	TencentCloud TencentCloud
 	ControlHost  Host
 	OtherHosts   []Host
+	Spaces       []Space
 }
 
 func (m Manifest) Hosts() []Host {
@@ -57,10 +72,13 @@ func (m Manifest) Hosts() []Host {
 }
 
 type Result struct {
-	Action  string
-	Users   int
-	Secrets int
-	Hosts   int
+	Action          string
+	Users           int
+	Secrets         int
+	Hosts           int
+	Spaces          int
+	SpacesCreated   int
+	SpacesUnchanged int
 }
 
 type Status struct {
@@ -68,6 +86,7 @@ type Status struct {
 	Users     int
 	Secrets   int
 	Hosts     int
+	Spaces    int
 	Missing   int
 	Conflicts int
 }
@@ -90,8 +109,12 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 	if err := validateManifest(manifest, s.db, s.encryptionKey); err != nil {
 		return Result{}, err
 	}
+	spaces, err := normalizeSpaces(manifest.Spaces)
+	if err != nil {
+		return Result{}, err
+	}
 	created := 0
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		n, err := s.ensureAdmin(ctx, tx, manifest.Admin)
 		if err != nil {
 			return err
@@ -102,6 +125,14 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 			return err
 		}
 		created += n
+		for _, space := range spaces {
+			n, err = s.ensureSpace(ctx, tx, space)
+			if err != nil {
+				return err
+			}
+			created += n
+			result.SpacesCreated += n
+		}
 		for _, host := range manifest.Hosts() {
 			n, err = s.ensureHost(ctx, tx, host)
 			if err != nil {
@@ -129,6 +160,7 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 	if created > 0 {
 		result.Action = "created"
 	}
+	result.SpacesUnchanged = result.Spaces - result.SpacesCreated
 	return result, nil
 }
 
@@ -136,8 +168,12 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 	if err := validateManifest(manifest, s.db, s.encryptionKey); err != nil {
 		return Status{}, err
 	}
-	status := Status{State: "completed", Users: 1, Secrets: 1, Hosts: len(manifest.Hosts())}
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	spaces, err := normalizeSpaces(manifest.Spaces)
+	if err != nil {
+		return Status{}, err
+	}
+	status := Status{State: "completed", Users: 1, Secrets: 1, Hosts: len(manifest.Hosts()), Spaces: len(spaces)}
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		state, err := s.inspectAdmin(ctx, tx, manifest.Admin)
 		if err != nil {
 			return err
@@ -148,6 +184,13 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 			return err
 		}
 		status.add(state)
+		for _, space := range spaces {
+			state, err = s.inspectSpace(ctx, tx, space)
+			if err != nil {
+				return err
+			}
+			status.add(state)
+		}
 		for _, host := range manifest.Hosts() {
 			state, err = s.inspectHost(ctx, tx, host)
 			if err != nil {
@@ -169,7 +212,10 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 }
 
 func expectedResult(manifest Manifest) Result {
-	return Result{Users: 1, Secrets: 1, Hosts: len(manifest.Hosts())}
+	return Result{
+		Users: 1, Secrets: 1, Hosts: len(manifest.Hosts()),
+		Spaces: len(manifest.Spaces), SpacesUnchanged: len(manifest.Spaces),
+	}
 }
 
 func validateManifest(manifest Manifest, db *gorm.DB, encryptionKey string) error {
@@ -182,6 +228,9 @@ func validateManifest(manifest Manifest, db *gorm.DB, encryptionKey string) erro
 			strings.TrimSpace(host.Username) == "" || host.Password == "" {
 			return ErrInvalid
 		}
+	}
+	if _, err := normalizeSpaces(manifest.Spaces); err != nil {
+		return err
 	}
 	return nil
 }
@@ -300,6 +349,58 @@ func (s *Service) inspectTencentSecret(ctx context.Context, tx *gorm.DB, input T
 	return recordConflict, nil
 }
 
+func (s *Service) ensureSpace(ctx context.Context, tx *gorm.DB, input Space) (int, error) {
+	state, err := s.inspectSpace(ctx, tx, input)
+	if err != nil || state == recordMatch {
+		return 0, err
+	}
+	if state == recordConflict {
+		return 0, ErrConflict
+	}
+	now := time.Now()
+	item := &adminspace.Space{
+		SpaceID: input.SpaceID, Name: input.Name, Description: input.Description,
+		Owner: input.Owner, Market: input.Market, Timezone: input.Timezone,
+		Status: input.Status, Attributes: input.AttributesJSON,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := tx.WithContext(ctx).Create(item).Error; err != nil {
+		return 0, ErrStorage
+	}
+	if err := s.afterWrite("space:" + input.SpaceID); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+func (s *Service) inspectSpace(ctx context.Context, tx *gorm.DB, input Space) (recordState, error) {
+	var stored adminspace.Space
+	err := tx.WithContext(ctx).
+		Where("c_space_id = ? AND c_is_deleted = 0", input.SpaceID).
+		First(&stored).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return recordMissing, nil
+	}
+	if err != nil {
+		return recordConflict, ErrStorage
+	}
+	storedAttributes, err := canonicalJSONObject(stored.Attributes)
+	if err != nil {
+		return recordConflict, nil
+	}
+	if stored.SpaceID == input.SpaceID &&
+		stored.Name == input.Name &&
+		stored.Description == input.Description &&
+		stored.Owner == input.Owner &&
+		stored.Market == input.Market &&
+		stored.Timezone == input.Timezone &&
+		stored.Status == input.Status &&
+		storedAttributes == input.AttributesJSON {
+		return recordMatch, nil
+	}
+	return recordConflict, nil
+}
+
 func (s *Service) ensureHost(ctx context.Context, tx *gorm.DB, input Host) (int, error) {
 	state, err := s.inspectHost(ctx, tx, input)
 	if err != nil || state == recordMatch {
@@ -354,6 +455,55 @@ func (s *Service) inspectHost(ctx context.Context, tx *gorm.DB, input Host) (rec
 
 func secretEqual(left, right string) bool {
 	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
+}
+
+func normalizeSpaces(inputs []Space) ([]Space, error) {
+	spaces := make([]Space, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		input.SpaceID = strings.TrimSpace(input.SpaceID)
+		input.Name = strings.TrimSpace(input.Name)
+		input.Description = strings.TrimSpace(input.Description)
+		input.Owner = strings.TrimSpace(input.Owner)
+		input.Market = strings.TrimSpace(input.Market)
+		input.Timezone = strings.TrimSpace(input.Timezone)
+		input.Status = strings.TrimSpace(input.Status)
+		if input.Status == "" {
+			input.Status = "active"
+		}
+		attributes, err := canonicalJSONObject(input.AttributesJSON)
+		if err != nil || input.SpaceID == "" || input.Name == "" || input.Market == "" || input.Timezone == "" {
+			return nil, ErrInvalid
+		}
+		if _, ok := seen[input.SpaceID]; ok {
+			return nil, ErrInvalid
+		}
+		seen[input.SpaceID] = struct{}{}
+		input.AttributesJSON = attributes
+		spaces = append(spaces, input)
+	}
+	return spaces, nil
+}
+
+func canonicalJSONObject(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "{}", nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil || value == nil {
+		return "", ErrInvalid
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return "", ErrInvalid
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", ErrInvalid
+	}
+	return string(encoded), nil
 }
 
 func (s *Service) afterWrite(stage string) error {

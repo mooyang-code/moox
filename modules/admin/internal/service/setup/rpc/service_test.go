@@ -36,6 +36,11 @@ func setupRequest() *pb.ApplySetupReq {
 		TencentCloud: &pb.SetupTencentCloud{SecretId: "recognizable-secret-id", SecretKey: "recognizable-secret-key"},
 		ControlHost:  &pb.SetupHost{Name: "control", Address: "192.0.2.10", Port: 22, Username: "ubuntu", Password: "recognizable-control-password"},
 		OtherHosts:   []*pb.SetupHost{{Name: "compute", Address: "192.0.2.11", Port: 22, Username: "ubuntu", Password: "recognizable-compute-password"}},
+		Spaces: []*pb.SetupSpace{{
+			SpaceId: "stock_cn", Name: "A股市场", Description: "A股行情",
+			Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai",
+			Status: "active", AttributesJson: `{"managed_by":"moox-cli"}`,
+		}},
 	}
 }
 
@@ -43,18 +48,28 @@ func statusRequest() *pb.GetSetupStatusReq {
 	request := setupRequest()
 	return &pb.GetSetupStatusReq{
 		Admin: request.Admin, TencentCloud: request.TencentCloud,
-		ControlHost: request.ControlHost, OtherHosts: request.OtherHosts,
+		ControlHost: request.ControlHost, OtherHosts: request.OtherHosts, Spaces: request.Spaces,
 	}
 }
 
 func TestApplySetupMapsRequestAndSanitizesResponse(t *testing.T) {
-	fake := &fakeSetupService{applyResult: setup.Result{Action: "created", Users: 1, Secrets: 1, Hosts: 2}}
+	fake := &fakeSetupService{applyResult: setup.Result{
+		Action: "created", Users: 1, Secrets: 1, Hosts: 2,
+		Spaces: 1, SpacesCreated: 1,
+	}}
 	response, err := NewService(fake).ApplySetup(context.Background(), setupRequest())
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 	assert.Equal(t, "created", response.GetAction())
 	assert.Equal(t, "admin", fake.manifest.Admin.Username)
 	assert.Equal(t, "recognizable-secret-key", fake.manifest.TencentCloud.SecretKey)
+	require.Len(t, fake.manifest.Spaces, 1)
+	assert.Equal(t, "CN", fake.manifest.Spaces[0].Market)
+	assert.Equal(t, "Asia/Shanghai", fake.manifest.Spaces[0].Timezone)
+	assert.Equal(t, `{"managed_by":"moox-cli"}`, fake.manifest.Spaces[0].AttributesJSON)
+	assert.Equal(t, int32(1), response.GetSpaces())
+	assert.Equal(t, int32(1), response.GetSpacesCreated())
+	assert.Zero(t, response.GetSpacesUnchanged())
 
 	raw, err := protojson.Marshal(response)
 	require.NoError(t, err)
@@ -86,12 +101,13 @@ func TestApplySetupMapsDomainErrors(t *testing.T) {
 }
 
 func TestGetSetupStatusReturnsRecordDerivedState(t *testing.T) {
-	fake := &fakeSetupService{status: setup.Status{State: "incomplete", Users: 1, Secrets: 1, Hosts: 2, Missing: 1}}
+	fake := &fakeSetupService{status: setup.Status{State: "incomplete", Users: 1, Secrets: 1, Hosts: 2, Spaces: 1, Missing: 1}}
 	response, err := NewService(fake).GetSetupStatus(context.Background(), statusRequest())
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 	assert.Equal(t, "incomplete", response.GetState())
 	assert.Equal(t, int32(1), response.GetMissing())
+	assert.Equal(t, int32(1), response.GetSpaces())
 	assert.Equal(t, "recognizable-admin-password", fake.manifest.Admin.Password)
 
 	raw, err := protojson.Marshal(response)

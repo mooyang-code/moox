@@ -35,6 +35,8 @@ func (s *Service) ApplySetup(ctx context.Context, request *pb.ApplySetupReq) (*p
 	return &pb.ApplySetupRsp{
 		RetInfo: setupRetOK(), Action: result.Action,
 		Users: int32(result.Users), Secrets: int32(result.Secrets), Hosts: int32(result.Hosts),
+		Spaces: int32(result.Spaces), SpacesCreated: int32(result.SpacesCreated),
+		SpacesUnchanged: int32(result.SpacesUnchanged),
 	}, nil
 }
 
@@ -51,7 +53,7 @@ func (s *Service) GetSetupStatus(ctx context.Context, request *pb.GetSetupStatus
 	return &pb.GetSetupStatusRsp{
 		RetInfo: setupRetOK(), State: status.State,
 		Users: int32(status.Users), Secrets: int32(status.Secrets), Hosts: int32(status.Hosts),
-		Missing: int32(status.Missing), Conflicts: int32(status.Conflicts),
+		Missing: int32(status.Missing), Conflicts: int32(status.Conflicts), Spaces: int32(status.Spaces),
 	}, nil
 }
 
@@ -59,17 +61,29 @@ func applyManifest(request *pb.ApplySetupReq) (setup.Manifest, error) {
 	if request == nil {
 		return setup.Manifest{}, setup.ErrInvalid
 	}
-	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetControlHost(), request.GetOtherHosts())
+	return manifestFromPB(
+		request.GetAdmin(), request.GetTencentCloud(), request.GetControlHost(),
+		request.GetOtherHosts(), request.GetSpaces(),
+	)
 }
 
 func statusManifest(request *pb.GetSetupStatusReq) (setup.Manifest, error) {
 	if request == nil {
 		return setup.Manifest{}, setup.ErrInvalid
 	}
-	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetControlHost(), request.GetOtherHosts())
+	return manifestFromPB(
+		request.GetAdmin(), request.GetTencentCloud(), request.GetControlHost(),
+		request.GetOtherHosts(), request.GetSpaces(),
+	)
 }
 
-func manifestFromPB(admin *pb.SetupAdmin, cloud *pb.SetupTencentCloud, control *pb.SetupHost, others []*pb.SetupHost) (setup.Manifest, error) {
+func manifestFromPB(
+	admin *pb.SetupAdmin,
+	cloud *pb.SetupTencentCloud,
+	control *pb.SetupHost,
+	others []*pb.SetupHost,
+	spaces []*pb.SetupSpace,
+) (setup.Manifest, error) {
 	if admin == nil || cloud == nil || control == nil {
 		return setup.Manifest{}, setup.ErrInvalid
 	}
@@ -78,12 +92,19 @@ func manifestFromPB(admin *pb.SetupAdmin, cloud *pb.SetupTencentCloud, control *
 		TencentCloud: setup.TencentCloud{SecretID: cloud.GetSecretId(), SecretKey: cloud.GetSecretKey()},
 		ControlHost:  hostFromPB(control),
 		OtherHosts:   make([]setup.Host, 0, len(others)),
+		Spaces:       make([]setup.Space, 0, len(spaces)),
 	}
 	for _, host := range others {
 		if host == nil {
 			return setup.Manifest{}, setup.ErrInvalid
 		}
 		manifest.OtherHosts = append(manifest.OtherHosts, hostFromPB(host))
+	}
+	for _, space := range spaces {
+		if space == nil {
+			return setup.Manifest{}, setup.ErrInvalid
+		}
+		manifest.Spaces = append(manifest.Spaces, spaceFromPB(space))
 	}
 	return manifest, nil
 }
@@ -92,6 +113,14 @@ func hostFromPB(host *pb.SetupHost) setup.Host {
 	return setup.Host{
 		Name: host.GetName(), Address: host.GetAddress(), Port: int(host.GetPort()),
 		Username: host.GetUsername(), Password: host.GetPassword(),
+	}
+}
+
+func spaceFromPB(space *pb.SetupSpace) setup.Space {
+	return setup.Space{
+		SpaceID: space.GetSpaceId(), Name: space.GetName(), Description: space.GetDescription(),
+		Owner: space.GetOwner(), Market: space.GetMarket(), Timezone: space.GetTimezone(),
+		Status: space.GetStatus(), AttributesJSON: space.GetAttributesJson(),
 	}
 }
 

@@ -93,6 +93,36 @@ func TestApplyUsesForwardedPrivateSetupEndpoint(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:11110", forwarder.remote)
 	assert.Equal(t, "/trpc.moox.admin.Setup/ApplySetup", capturedPath)
 	assert.Equal(t, "recognizable-secret-key", capturedRequest.GetTencentCloud().GetSecretKey())
+	assert.Empty(t, capturedRequest.GetSpaces())
+}
+
+func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
+	var capturedRequest pb.ApplySetupReq
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		_ = protojson.Unmarshal(body, &capturedRequest)
+		response, _ := protojson.Marshal(&pb.ApplySetupRsp{
+			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created",
+			Users: 1, Secrets: 1, Hosts: 2, Spaces: 1, SpacesCreated: 1,
+		})
+		_, _ = w.Write(response)
+	})}
+	spaces := []Space{{
+		SpaceID: "stock_cn", Name: "A股市场", Description: "A股行情",
+		Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai",
+		Status: "active", AttributesJSON: `{"managed_by":"moox-cli"}`,
+	}}
+
+	result, err := New(forwarder).ApplyWithSpaces(context.Background(), clientSnapshot(t), spaces)
+	require.NoError(t, err)
+	require.Len(t, capturedRequest.GetSpaces(), 1)
+	assert.Equal(t, "stock_cn", capturedRequest.GetSpaces()[0].GetSpaceId())
+	assert.Equal(t, "CN", capturedRequest.GetSpaces()[0].GetMarket())
+	assert.Equal(t, "Asia/Shanghai", capturedRequest.GetSpaces()[0].GetTimezone())
+	assert.Equal(t, `{"managed_by":"moox-cli"}`, capturedRequest.GetSpaces()[0].GetAttributesJson())
+	assert.Equal(t, 1, result.Spaces)
+	assert.Equal(t, 1, result.SpacesCreated)
+	assert.Zero(t, result.SpacesUnchanged)
 }
 
 func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
@@ -110,6 +140,29 @@ func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "completed", result.State)
 	assert.Equal(t, "recognizable-admin-password", capturedRequest.GetAdmin().GetPassword())
+	assert.Empty(t, capturedRequest.GetSpaces())
+}
+
+func TestStatusWithSpacesReturnsSpaceCount(t *testing.T) {
+	var capturedRequest pb.GetSetupStatusReq
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		_ = protojson.Unmarshal(body, &capturedRequest)
+		response, _ := protojson.Marshal(&pb.GetSetupStatusRsp{
+			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed",
+			Users: 1, Secrets: 1, Hosts: 2, Spaces: 1,
+		})
+		_, _ = w.Write(response)
+	})}
+
+	result, err := New(forwarder).StatusWithSpaces(context.Background(), clientSnapshot(t), []Space{{
+		SpaceID: "crypto", Name: "加密货币市场", Market: "crypto",
+		Timezone: "UTC", Status: "active", AttributesJSON: "{}",
+	}})
+	require.NoError(t, err)
+	require.Len(t, capturedRequest.GetSpaces(), 1)
+	assert.Equal(t, "crypto", capturedRequest.GetSpaces()[0].GetSpaceId())
+	assert.Equal(t, 1, result.Spaces)
 }
 
 func TestApplyStoragePlacementUpdatesEveryStorageEndpointThroughPrivateSysDeploy(t *testing.T) {
