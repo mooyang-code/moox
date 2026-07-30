@@ -2,13 +2,17 @@ package writer
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
 	"github.com/mooyang-code/moox/modules/archive/internal/parquetio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/assert"
-	"testing"
-	"time"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWriterMergesPartialUpdateWithoutAddingDuplicateRow(t *testing.T) {
@@ -114,4 +118,58 @@ func TestTempFileHelpers(t *testing.T) {
 	assert.False(t, isTempFile("202601.parquet"))
 	assert.True(t, containsTempMarker("dir/.tmp-123"))
 	assert.False(t, containsTempMarker("clean.parquet"))
+}
+
+type failingRegistry struct {
+	calls atomic.Int32
+	err   error
+}
+
+func (r *failingRegistry) Register(context.Context, domain.PartitionKey, domain.Manifest) error {
+	r.calls.Add(1)
+	return r.err
+}
+
+func TestWriteDirtyReturnsWhenAllWorkersFailBeforeJobsExhausted(t *testing.T) {
+	store, err := journal.Open(t.TempDir())
+	require.NoError(t, err)
+	defer store.Close()
+
+	keys := []domain.PartitionKey{
+		{SpaceID: "crypto", DatasetID: "factor", SubjectID: "BTC-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202601"},
+		{SpaceID: "crypto", DatasetID: "factor", SubjectID: "ETH-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202601"},
+		{SpaceID: "crypto", DatasetID: "factor", SubjectID: "SOL-USDT", Freq: "1h", SeriesTag: "venue:binance", Month: "202601"},
+	}
+	value := 1.25
+	for i, key := range keys {
+		_, err := store.Append(t.Context(), domain.EventBatch{
+			MessageID: key.SubjectID,
+			Rows: []domain.RowPatch{{
+				Partition: key,
+				DataTime:  time.Date(2026, 1, i+1, 0, 0, 0, 0, time.UTC),
+				WrittenAt: time.Now().UTC(),
+				Columns: map[string]domain.Scalar{
+					"factor": {Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: &value},
+				},
+			}},
+		})
+		require.NoError(t, err)
+	}
+
+	registry := &failingRegistry{err: errors.New("register failed")}
+	w := New(store, t.TempDir(), 1024)
+	w.SetWorkers(2)
+	w.SetRegistry(registry)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	err = w.WriteDirty(ctx, 10)
+
+	require.ErrorIs(t, err, registry.err)
+	require.Less(t, time.Since(started), 400*time.Millisecond)
+	require.Equal(t, int32(len(keys)), registry.calls.Load())
+	dirty, err := store.DirtyPartitions(t.Context(), 10)
+	require.NoError(t, err)
+	require.Len(t, dirty, len(keys))
 }

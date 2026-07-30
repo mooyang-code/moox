@@ -97,6 +97,13 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 		if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 			return total, fmt.Errorf("storage read failed")
 		}
+		if !rsp.GetComplete() {
+			return total, fmt.Errorf(
+				"source view is incomplete for %s/%s subject=%s freq=%s tag=%q coverage=[%s,%s)",
+				plan.SpaceID, plan.DatasetID, plan.SubjectID, plan.Freq, valueOrWildcard(plan.SeriesTag),
+				rsp.GetServedIndexedFrom(), rsp.GetServedIndexedTo(),
+			)
+		}
 		patches, err := rowsToPatches(rsp.GetRows(), time.Now().UTC())
 		if err != nil {
 			return total, err
@@ -120,6 +127,13 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 		return total, err
 	}
 	return total, nil
+}
+
+func valueOrWildcard(value *string) string {
+	if value == nil {
+		return "*"
+	}
+	return *value
 }
 
 func newRunID() (string, error) {
