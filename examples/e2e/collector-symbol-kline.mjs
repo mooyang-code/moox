@@ -63,6 +63,7 @@ const ENUM_CODES = {
   DATA_KIND_RECORD: 1,
   DATA_KIND_TIME_SERIES: 2,
   DATASET_COLUMN_ORIGIN_TYPE_FIELD: 1,
+  COLUMN_ORIGIN_TYPE_DATASET_COLUMN: 1,
   FIELD_VALUE_TYPE_STRING: 1,
   FIELD_VALUE_TYPE_INT: 2,
   FIELD_VALUE_TYPE_DOUBLE: 3,
@@ -218,6 +219,38 @@ export function buildKlineDatasetContract(spaceID, datasetID, dataNodeID) {
     freqs: ["1m"],
     columns: KLINE_COLUMNS,
   });
+}
+
+export function buildKlineViewContract(spaceID, datasetID) {
+  validateDatasetID(datasetID);
+  const defaultViewID = `${datasetID}_view`;
+  const viewID = defaultViewID.length <= 30
+    ? defaultViewID
+    : `${datasetID.slice(0, 21)}_${createHash("sha256").update(datasetID).digest("hex").slice(0, 8)}`;
+  return {
+    space_id: spaceID,
+    view_id: viewID,
+    name: "币安分钟线",
+    description: "Collector E2E Binance 1m Kline query view",
+    primary_dataset_id: datasetID,
+    dataset_ids: [datasetID],
+    filter_json: JSON.stringify({ freq: "1m" }),
+    keep_duration: "0",
+    status: "active",
+    columns: KLINE_COLUMNS.map(([columnName, type, displayName], index) => {
+      const originID = `${datasetID}.${columnName}`;
+      return {
+        space_id: spaceID,
+        view_id: viewID,
+        column_name: originID,
+        origin_type: "COLUMN_ORIGIN_TYPE_DATASET_COLUMN",
+        origin_id: originID,
+        value_type: VALUE_TYPES[type],
+        sort_order: index + 1,
+        attributes: { display_name: displayName },
+      };
+    }),
+  };
 }
 
 function buildDatasetContract({ spaceID, datasetID, dataNodeID, name, description, dataKind, freqs, columns }) {
@@ -675,6 +708,7 @@ async function setup(args) {
   const klineContract = buildKlineDatasetContract(args.space, args.klineDataset, dataNode.node_id);
   await ensureDataset(args, token, symbolContract);
   await ensureDataset(args, token, klineContract);
+  await ensureKlineView(args, token, buildKlineViewContract(args.space, args.klineDataset));
   const initialState = {
     ...emptyState(),
     run_id: `${Date.now()}-${randomBytes(4).toString("hex")}`,
@@ -1440,6 +1474,57 @@ async function ensureDataset(args, token, contract) {
   });
   assertDatasetContract(verified.dataset, columns, contract);
   return verified.dataset;
+}
+
+async function ensureKlineView(args, token, contract) {
+  let current = await storagePostRaw(args, token, "metadata", "GetView", {
+    space_id: contract.space_id,
+    view_id: contract.view_id,
+  });
+  if (!retOK(current.ret_info)) {
+    current = await storagePost(args, token, "metadata", "CreateView", { view: contract });
+  }
+  assertKlineViewContract(current.view, contract);
+  return waitFor(`active Kline View ${contract.view_id}`, args.timeoutSeconds * 1000, async () => {
+    const rsp = await storagePost(args, token, "metadata", "GetView", {
+      space_id: contract.space_id,
+      view_id: contract.view_id,
+    });
+    assertKlineViewContract(rsp.view, contract);
+    if (!isKlineViewReady(rsp.view)) {
+      throw new Error(`Kline View ${contract.view_id} has no active index`);
+    }
+    return rsp.view;
+  });
+}
+
+export function isKlineViewReady(view) {
+  const desiredRevision = Number(view?.desired_view_revision || 0);
+  const activeRevision = Number(view?.active_view_revision || 0);
+  return Boolean(view?.active_index_id) && desiredRevision > 0 && activeRevision === desiredRevision;
+}
+
+function assertKlineViewContract(actual, expected) {
+  if (!actual) throw new Error(`Kline View ${expected.view_id} is missing`);
+  for (const key of ["space_id", "view_id", "primary_dataset_id", "filter_json", "status"]) {
+    if (actual[key] !== expected[key]) {
+      throw new Error(`Kline View ${expected.view_id} ${key}=${actual[key]} want=${expected[key]}`);
+    }
+  }
+  if (!sameStringSet(actual.dataset_ids || [], expected.dataset_ids)) {
+    throw new Error(`Kline View ${expected.view_id} dataset_ids do not match`);
+  }
+  const simplify = (column) => [
+    column.column_name,
+    enumCode(column.origin_type),
+    column.origin_id,
+    enumCode(column.value_type),
+  ];
+  const got = (actual.columns || []).map(simplify).sort(compareJSON);
+  const want = expected.columns.map(simplify).sort(compareJSON);
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    throw new Error(`Kline View ${expected.view_id} columns do not match`);
+  }
 }
 
 async function currentDatasetContract(args, token, datasetID, builder) {

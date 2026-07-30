@@ -58,8 +58,11 @@ export MOOX_E2E_STATE_FILE="${TMP}/state.json"
 export MOOX_E2E_LOG_FILE="${TMP}/run.log"
 export MOOX_E2E_PUBLISH_SUMMARY_FILE="${TMP}/publish.json"
 export MOOX_E2E_PUBLISH_STATUS_FILE="${TMP}/publish-status.json"
+export MOOX_E2E_EVENTBUS_CREDENTIAL_FILE="${TMP}/cloudnode-worker.yaml"
 export MOOX_E2E_ADMIN_PASSWORD="test-password"
 export MOOX_ACCESS_TOKEN="test-access-token"
+export MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID="collector"
+export MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY="collector-secret"
 export MOOX_E2E_MOOX_CLI="${TMP}/bin/moox-cli"
 export STATUS_COUNT_FILE="${TMP}/status-count"
 
@@ -76,6 +79,12 @@ grep -q -- 'collector function publish status' "${CALL_LOG}" || fail "publish st
 grep -q -- '--node-count 50' "${CALL_LOG}" || fail "default SCF count was not 50"
 grep -q -- '--function-name-prefix e2e-collector' "${CALL_LOG}" || fail "fleet prefix missing"
 grep -q -- '--control-url https://service.example.test' "${CALL_LOG}" || fail "service control URL missing"
+grep -q -- '--env MOOX_COLLECTOR_ADMIN_GATEWAY_URL=https://service.example.test' "${CALL_LOG}" ||
+  fail "SCF Admin discovery URL missing"
+grep -q -- '--env MOOX_SERVICE_GATEWAY_TARGET=https://service.example.test' "${CALL_LOG}" ||
+  fail "SCF service Gateway target missing"
+grep -q -- "--eventbus-credential-file ${MOOX_E2E_EVENTBUS_CREDENTIAL_FILE}" "${CALL_LOG}" ||
+  fail "explicit EventBus credential missing"
 if grep -Eq -- '--create-batch-size|--deploy-batch-size' "${CALL_LOG}"; then
   fail "runner must not use removed client batch flags"
 fi
@@ -114,6 +123,10 @@ if "${RUNNER}" --cloud-account account-a --package-name moox-collector >/dev/nul
 fi
 if "${RUNNER}" --cloud-account account-a --package-name moox-collector --region ap-guangzhou --scf-count 0 >/dev/null 2>&1; then
   fail "non-positive SCF count must fail"
+fi
+if MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY= "${RUNNER}" \
+  --cloud-account account-a --package-name moox-collector --region ap-guangzhou >/dev/null 2>&1; then
+  fail "missing SCF runtime Gateway credentials must fail even with an access token"
 fi
 
 reset_artifacts() {

@@ -28,6 +28,7 @@ PUBLISH_SUMMARY_FILE="${MOOX_E2E_PUBLISH_SUMMARY_FILE:-${TMPDIR:-/tmp}/moox-symb
 PUBLISH_STATUS_FILE="${MOOX_E2E_PUBLISH_STATUS_FILE:-${TMPDIR:-/tmp}/moox-symbol-kline-publish-status-${RUN_ID}.json}"
 PUBLISH_TIMEOUT_SECONDS="${MOOX_E2E_PUBLISH_TIMEOUT_SECONDS:-1800}"
 MOOX_CLI="${MOOX_E2E_MOOX_CLI:-}"
+EVENTBUS_CREDENTIAL_FILE="${MOOX_E2E_EVENTBUS_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/cloudnode-worker.yaml}"
 COMPLETED=0
 
 usage() {
@@ -88,6 +89,10 @@ done
 if [[ -z "${MOOX_ACCESS_TOKEN:-}" &&
       ( -z "${MOOX_GATEWAY_SERVICE_KEY_ID:-}" || -z "${MOOX_GATEWAY_SERVICE_SECRET_KEY:-}" ) ]]; then
   fail "fleet publish requires MOOX_ACCESS_TOKEN or MOOX_GATEWAY_SERVICE_KEY_ID/MOOX_GATEWAY_SERVICE_SECRET_KEY"
+fi
+if [[ -z "${MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID:-}" ||
+      -z "${MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY:-}" ]]; then
+  fail "SCF runtime requires MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID/MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"
 fi
 [[ "${SCF_COUNT}" =~ ^[0-9]+$ && "${SCF_COUNT}" -gt 0 ]] ||
   fail "--scf-count must be a positive integer"
@@ -155,6 +160,9 @@ publish_fleet() {
     --function-name-prefix "${FLEET_PREFIX}"
     --node-count "${SCF_COUNT}"
     --collector-root "${ROOT}/modules/collector"
+    --eventbus-credential-file "${EVENTBUS_CREDENTIAL_FILE}"
+    --env "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${CONTROL_URL}"
+    --env "MOOX_SERVICE_GATEWAY_TARGET=${CONTROL_URL}"
   )
   if [[ -n "${ZIP_PATH}" ]]; then
     args+=(--zip "${ZIP_PATH}")

@@ -11,6 +11,7 @@ import {
   assertDatasetContract,
   assertNoRuntimeParams,
   buildKlineDatasetContract,
+  buildKlineViewContract,
   buildSCFNodeDefinitions,
   buildSymbolDatasetContract,
   collectKlineWriteEvidence,
@@ -18,6 +19,7 @@ import {
   fieldContractMatches,
   fleetCLSTopicID,
   hasMorePages,
+  isKlineViewReady,
   parseArgs,
   restoreCleanupScope,
   searchCLSLogLines,
@@ -63,6 +65,46 @@ test("builds 1m time-series dataset contract", () => {
     ["quote_volume", "FIELD_VALUE_TYPE_DOUBLE"],
     ["trade_num", "FIELD_VALUE_TYPE_INT"],
   ]);
+});
+
+test("builds an active 1m query view for the Kline dataset", () => {
+  const view = buildKlineViewContract("crypto", "e2e_binance_kline_1m");
+  assert.equal(view.view_id, "e2e_binance_kline_1m_view");
+  assert.equal(view.primary_dataset_id, "e2e_binance_kline_1m");
+  assert.deepEqual(view.dataset_ids, ["e2e_binance_kline_1m"]);
+  assert.equal(view.filter_json, JSON.stringify({ freq: "1m" }));
+  assert.equal(view.status, "active");
+  assert.deepEqual(view.columns.map(({ column_name, origin_id }) => [column_name, origin_id]), [
+    ["e2e_binance_kline_1m.open", "e2e_binance_kline_1m.open"],
+    ["e2e_binance_kline_1m.high", "e2e_binance_kline_1m.high"],
+    ["e2e_binance_kline_1m.low", "e2e_binance_kline_1m.low"],
+    ["e2e_binance_kline_1m.close", "e2e_binance_kline_1m.close"],
+    ["e2e_binance_kline_1m.volume", "e2e_binance_kline_1m.volume"],
+    ["e2e_binance_kline_1m.quote_volume", "e2e_binance_kline_1m.quote_volume"],
+    ["e2e_binance_kline_1m.trade_num", "e2e_binance_kline_1m.trade_num"],
+  ]);
+});
+
+test("uses a stable valid View ID for maximum-length Dataset IDs", () => {
+  const first = buildKlineViewContract("crypto", "a".repeat(30));
+  const second = buildKlineViewContract("crypto", `${"a".repeat(29)}b`);
+  assert.equal(first.view_id.length, 30);
+  assert.match(first.view_id, /^[a-z][a-z0-9_]*$/);
+  assert.equal(first.view_id, buildKlineViewContract("crypto", "a".repeat(30)).view_id);
+  assert.notEqual(first.view_id, second.view_id);
+});
+
+test("Kline View readiness requires the desired revision to be active", () => {
+  assert.equal(isKlineViewReady({
+    active_index_id: "index-old",
+    desired_view_revision: 2,
+    active_view_revision: 1,
+  }), false);
+  assert.equal(isKlineViewReady({
+    active_index_id: "index-current",
+    desired_view_revision: 2,
+    active_view_revision: 2,
+  }), true);
 });
 
 test("requires one shared CLS topic across the SCF fleet", () => {
