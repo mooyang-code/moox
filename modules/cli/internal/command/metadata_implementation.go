@@ -1,10 +1,12 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
@@ -15,6 +17,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
 )
+
+const maxMetadataSeedBytes = 8 << 20
 
 func validateReservedInternalSpaces(seed metadataSeed) error {
 	for _, item := range seed.Spaces {
@@ -100,13 +104,26 @@ func hasInternalSpace(seed metadataSeed, id string) bool {
 }
 
 func loadMetadataSeed(path string) (metadataSeed, error) {
-	raw, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return metadataSeed{}, fmt.Errorf("读取 metadata seed 失败 %s: %w", path, err)
 	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, maxMetadataSeedBytes+1))
+	if err != nil {
+		return metadataSeed{}, fmt.Errorf("读取 metadata seed 失败 %s: %w", path, err)
+	}
+	if len(raw) > maxMetadataSeedBytes {
+		return metadataSeed{}, fmt.Errorf("metadata seed exceeds %d bytes", maxMetadataSeedBytes)
+	}
 	var seed metadataSeed
-	if err := yaml.Unmarshal(raw, &seed); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&seed); err != nil {
 		return metadataSeed{}, fmt.Errorf("解析 metadata seed 失败 %s: %w", path, err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return metadataSeed{}, fmt.Errorf("metadata seed must contain exactly one YAML document")
 	}
 	return seed, nil
 }
@@ -359,12 +376,19 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 	summary := metadataImportSummary{Status: "ok", MetadataURL: metadataURL, Planned: len(calls), Resources: countMetadataCalls(calls)}
 	for _, call := range calls {
 		probe := call.Exists
-		if call.Resource == "dataset_columns" {
+		switch call.Resource {
+		case "dataset_columns":
 			column, ok := call.Request.(*pb.UpsertDatasetColumnReq)
 			if !ok || column.GetColumn() == nil {
 				return summary, fmt.Errorf("invalid dataset column apply call")
 			}
 			probe = &metadataExistsProbe{Method: "ListDatasetColumns", Request: &pb.ListDatasetColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), DatasetId: column.GetColumn().GetDatasetId(), Page: &commonpb.Page{Page: 1, Size: 500}}, Response: &pb.ListDatasetColumnsRsp{}}
+		case "view_columns":
+			column, ok := call.Request.(*pb.UpsertViewColumnReq)
+			if !ok || column.GetColumn() == nil {
+				return summary, fmt.Errorf("invalid view column apply call")
+			}
+			probe = &metadataExistsProbe{Method: "ListViewColumns", Request: &pb.ListViewColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), ViewId: column.GetColumn().GetViewId(), Page: &commonpb.Page{Page: 1, Size: 500}}, Response: &pb.ListViewColumnsRsp{}}
 		}
 		if probe == nil {
 			return summary, fmt.Errorf("apply does not support resource %s without read probe", call.Resource)
@@ -395,7 +419,8 @@ func runMetadataApply(ctx context.Context, metadataURL string, calls []metadataI
 }
 
 func applyProbeResult(resource string, probe *metadataExistsProbe, expectedRequest proto.Message) (bool, proto.Message) {
-	if resource == "dataset_columns" {
+	switch resource {
+	case "dataset_columns":
 		rsp, _ := probe.Response.(*pb.ListDatasetColumnsRsp)
 		if rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			return false, nil
@@ -405,6 +430,21 @@ func applyProbeResult(resource string, probe *metadataExistsProbe, expectedReque
 		for _, c := range rsp.GetColumns() {
 			if c.GetColumnName() == expected.GetColumnName() && c.GetSpaceId() == req.GetSpaceId() && c.GetDatasetId() == req.GetDatasetId() {
 				return true, c
+			}
+		}
+		return false, nil
+	case "view_columns":
+		rsp, _ := probe.Response.(*pb.ListViewColumnsRsp)
+		if rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return false, nil
+		}
+		req := probe.Request.(*pb.ListViewColumnsReq)
+		expected := expectedRequest.(*pb.UpsertViewColumnReq).GetColumn()
+		for _, column := range rsp.GetColumns() {
+			if column.GetColumnName() == expected.GetColumnName() &&
+				column.GetSpaceId() == req.GetSpaceId() &&
+				column.GetViewId() == req.GetViewId() {
+				return true, column
 			}
 		}
 		return false, nil
@@ -458,6 +498,8 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 		expected = req.GetDevice()
 	case *pb.CreateViewReq:
 		expected = req.GetView()
+	case *pb.UpsertViewColumnReq:
+		expected = req.GetColumn()
 	default:
 		return fmt.Errorf("unsupported apply resource request %T", request)
 	}
@@ -474,23 +516,117 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 	}
 	if resource == "data_sources" {
 		x, y := a.(*pb.DataSource), b.(*pb.DataSource)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetName() == y.GetName() && x.GetKind() == y.GetKind() && x.GetTimezone() == y.GetTimezone() && x.GetStatus() == y.GetStatus() && maps.Equal(x.GetAttributes(), y.GetAttributes())
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetDataSourceId() == y.GetDataSourceId() &&
+			x.GetName() == y.GetName() &&
+			x.GetKind() == y.GetKind() &&
+			x.GetMarket() == y.GetMarket() &&
+			x.GetTimezone() == y.GetTimezone() &&
+			x.GetConfigJson() == y.GetConfigJson() &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "datasets" {
 		x, y := a.(*pb.Dataset), b.(*pb.Dataset)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDatasetId() == y.GetDatasetId() && x.GetDataSourceId() == y.GetDataSourceId() && x.GetDataKind() == y.GetDataKind() && slices.Equal(x.GetFreqs(), y.GetFreqs()) && x.GetStatus() == y.GetStatus()
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetDatasetId() == y.GetDatasetId() &&
+			x.GetDataSourceId() == y.GetDataSourceId() &&
+			x.GetName() == y.GetName() &&
+			x.GetDescription() == y.GetDescription() &&
+			x.GetDataKind() == y.GetDataKind() &&
+			slices.Equal(x.GetFreqs(), y.GetFreqs()) &&
+			x.GetStatus() == y.GetStatus() &&
+			x.GetDataNodeId() == y.GetDataNodeId() &&
+			x.GetKeepDuration() == y.GetKeepDuration() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "fields" {
 		x, y := a.(*pb.Field), b.(*pb.Field)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetFieldId() == y.GetFieldId() && x.GetGroupId() == y.GetGroupId() && x.GetValueType() == y.GetValueType() && x.GetSortOrder() == y.GetSortOrder() && x.GetStatus() == y.GetStatus()
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetFieldId() == y.GetFieldId() &&
+			x.GetName() == y.GetName() &&
+			x.GetDescription() == y.GetDescription() &&
+			x.GetValueType() == y.GetValueType() &&
+			x.GetUnit() == y.GetUnit() &&
+			x.GetValidationRuleJson() == y.GetValidationRuleJson() &&
+			x.GetWriteExample() == y.GetWriteExample() &&
+			x.GetStatus() == y.GetStatus() &&
+			x.GetGroupId() == y.GetGroupId() &&
+			x.GetSortOrder() == y.GetSortOrder() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "field_groups" {
 		x, y := a.(*pb.FieldGroup), b.(*pb.FieldGroup)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetGroupId() == y.GetGroupId() && x.GetParentGroupId() == y.GetParentGroupId() && x.GetSortOrder() == y.GetSortOrder() && x.GetStatus() == y.GetStatus()
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetGroupId() == y.GetGroupId() &&
+			x.GetName() == y.GetName() &&
+			x.GetDescription() == y.GetDescription() &&
+			x.GetParentGroupId() == y.GetParentGroupId() &&
+			x.GetSortOrder() == y.GetSortOrder() &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "dataset_columns" {
 		x, y := a.(*pb.DatasetColumn), b.(*pb.DatasetColumn)
-		return x.GetSpaceId() == y.GetSpaceId() && x.GetDatasetId() == y.GetDatasetId() && x.GetColumnName() == y.GetColumnName() && x.GetOriginType() == y.GetOriginType() && x.GetOriginId() == y.GetOriginId() && x.GetValueType() == y.GetValueType() && x.GetRequired() == y.GetRequired() && x.GetStatus() == y.GetStatus()
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetDatasetId() == y.GetDatasetId() &&
+			x.GetColumnName() == y.GetColumnName() &&
+			x.GetOriginType() == y.GetOriginType() &&
+			x.GetOriginId() == y.GetOriginId() &&
+			x.GetValueType() == y.GetValueType() &&
+			x.GetRequired() == y.GetRequired() &&
+			slices.Equal(x.GetAliases(), y.GetAliases()) &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
+	}
+	if resource == "factors" {
+		x, y := a.(*pb.Factor), b.(*pb.Factor)
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetFactorId() == y.GetFactorId() &&
+			x.GetName() == y.GetName() &&
+			x.GetDescription() == y.GetDescription() &&
+			x.GetAlgorithm() == y.GetAlgorithm() &&
+			x.GetParamsJson() == y.GetParamsJson() &&
+			x.GetValueType() == y.GetValueType() &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
+	}
+	if resource == "devices" {
+		x, y := a.(*pb.Device), b.(*pb.Device)
+		return x.GetDeviceId() == y.GetDeviceId() &&
+			x.GetName() == y.GetName() &&
+			x.GetEngine() == y.GetEngine() &&
+			x.GetEndpoint() == y.GetEndpoint() &&
+			x.GetConfigJson() == y.GetConfigJson() &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
+	}
+	if resource == "views" {
+		x, y := a.(*pb.View), b.(*pb.View)
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetViewId() == y.GetViewId() &&
+			x.GetName() == y.GetName() &&
+			x.GetDescription() == y.GetDescription() &&
+			x.GetPrimaryDatasetId() == y.GetPrimaryDatasetId() &&
+			slices.Equal(x.GetDatasetIds(), y.GetDatasetIds()) &&
+			slices.Equal(x.GetGrainKeys(), y.GetGrainKeys()) &&
+			x.GetFilterJson() == y.GetFilterJson() &&
+			x.GetEngine() == y.GetEngine() &&
+			x.GetKeepDuration() == y.GetKeepDuration() &&
+			x.GetStatus() == y.GetStatus() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
+	}
+	if resource == "view_columns" {
+		x, y := a.(*pb.ViewColumn), b.(*pb.ViewColumn)
+		return x.GetSpaceId() == y.GetSpaceId() &&
+			x.GetViewId() == y.GetViewId() &&
+			x.GetColumnName() == y.GetColumnName() &&
+			x.GetOriginType() == y.GetOriginType() &&
+			x.GetOriginId() == y.GetOriginId() &&
+			x.GetValueType() == y.GetValueType() &&
+			x.GetOnlineTime() == y.GetOnlineTime() &&
+			x.GetSortOrder() == y.GetSortOrder() &&
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	return proto.Equal(a, b)
 }

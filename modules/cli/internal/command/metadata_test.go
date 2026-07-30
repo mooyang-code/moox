@@ -36,6 +36,55 @@ func TestLoadMetadataSeed_ParsesMinimalYAML(t *testing.T) {
 	}
 }
 
+func TestLoadMetadataSeedRejectsUnknownField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "seed.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("spaces:\n- space_id: crypto\n  unknown_field: true\n"), 0o600))
+
+	_, err := loadMetadataSeed(path)
+	require.ErrorContains(t, err, "unknown_field")
+}
+
+func TestLoadMetadataSeedRejectsSecondDocument(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "seed.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("spaces: []\n---\nspaces: []\n"), 0o600))
+
+	_, err := loadMetadataSeed(path)
+	require.ErrorContains(t, err, "exactly one YAML document")
+}
+
+func TestBusinessSpacesExcludeInternalScopeAndSort(t *testing.T) {
+	seed := metadataSeed{Spaces: []seedSpace{
+		{
+			SpaceID: "stock_cn", Name: "A股市场", Market: "CN", Timezone: "Asia/Shanghai",
+			seedCommon: seedCommon{Status: "active", Attributes: map[string]string{"managed_by": "moox-cli"}},
+		},
+		{
+			SpaceID: "moox_system", Name: "MooX System",
+			seedCommon: seedCommon{Attributes: map[string]string{"scope": "internal"}},
+		},
+		{
+			SpaceID: "crypto", Name: "加密货币市场", Market: "crypto", Timezone: "UTC",
+		},
+	}}
+
+	spaces, err := businessSetupSpaces(seed)
+	require.NoError(t, err)
+	require.Len(t, spaces, 2)
+	assert.Equal(t, "crypto", spaces[0].SpaceID)
+	assert.Equal(t, "stock_cn", spaces[1].SpaceID)
+	assert.Equal(t, "CN", spaces[1].Market)
+	assert.Equal(t, "Asia/Shanghai", spaces[1].Timezone)
+	assert.Equal(t, `{"managed_by":"moox-cli"}`, spaces[1].AttributesJSON)
+}
+
+func TestBusinessSpacesRejectDuplicateID(t *testing.T) {
+	_, err := businessSetupSpaces(metadataSeed{Spaces: []seedSpace{
+		{SpaceID: "crypto", Name: "Crypto", Market: "crypto", Timezone: "UTC"},
+		{SpaceID: "crypto", Name: "Crypto 2", Market: "crypto", Timezone: "UTC"},
+	}})
+	require.ErrorContains(t, err, "duplicate metadata space")
+}
+
 func TestSelectMetadataSpacesKeepsSelectedDependencyClosure(t *testing.T) {
 	t.Parallel()
 	seed := metadataSeed{
@@ -550,6 +599,130 @@ func TestRunMetadataApplyDatasetColumnProbe(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, createCalled)
 	assert.Equal(t, 1, summary.Applied)
+}
+
+func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
+	seed := metadataSeed{
+		Spaces: []seedSpace{{
+			SpaceID: "crypto", Name: "加密货币", Description: "数字资产", Owner: "quant",
+			seedCommon: seedCommon{Status: "active", Attributes: map[string]string{"managed_by": "moox-cli"}},
+		}},
+		DataSources: []seedDataSource{{
+			SpaceID: "crypto", DataSourceID: "binance", Name: "币安", Kind: "exchange",
+			Market: "crypto", Timezone: "UTC", ConfigJSON: "{}",
+		}},
+		Datasets: []seedDataset{{
+			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "行情",
+			Description: "小时行情", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0",
+			KeepDuration: "8760h", Freqs: []string{"1H"},
+		}},
+		FieldGroups: []seedFieldGroup{{
+			SpaceID: "crypto", GroupID: "quote", Name: "行情", Description: "行情字段", SortOrder: 1,
+		}},
+		Fields: []seedField{{
+			SpaceID: "crypto", GroupID: "quote", FieldID: "close", Name: "收盘价",
+			Description: "收盘价格", ValueType: "DOUBLE", Unit: "USDT",
+			ValidationRuleJSON: "{}", WriteExample: "1.5", SortOrder: 1,
+		}},
+		Factors: []seedFactor{{
+			SpaceID: "crypto", FactorID: "ma20", Name: "均线", Description: "20周期均线",
+			Algorithm: "ma", ParamsJSON: "{}", ValueType: "DOUBLE",
+		}},
+		DatasetColumns: []seedDatasetColumn{{
+			SpaceID: "crypto", DatasetID: "kline", ColumnName: "close",
+			OriginType: "FIELD", OriginID: "close", ValueType: "DOUBLE", Required: true,
+			Aliases: []string{"收盘"}, seedCommon: seedCommon{Attributes: map[string]string{"display_name": "收盘价"}},
+		}},
+		Devices: []seedDevice{{
+			DeviceID: "primary", Name: "主存储", Engine: "pebble", Endpoint: "/data",
+			ConfigJSON: "{}",
+		}},
+		Views: []seedView{{
+			SpaceID: "crypto", ViewID: "kline", Name: "行情视图", Description: "默认行情",
+			PrimaryDatasetID: "kline", DatasetIDs: []string{"kline"}, GrainKeys: []string{"subject_id", "data_time"},
+			FilterJSON: `{"freq":"1H"}`, Engine: "pebble", KeepDuration: "8760h",
+		}},
+		ViewColumns: []seedViewColumn{{
+			SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close",
+			OriginType: "DATASET_COLUMN", OriginID: "kline.close", ValueType: "DOUBLE",
+			OnlineTime: "2026-01-01T00:00:00Z", SortOrder: 1,
+			seedCommon: seedCommon{Attributes: map[string]string{"display_name": "收盘价"}},
+		}},
+	}
+	calls, err := buildMetadataImportCalls(seed)
+	require.NoError(t, err)
+	dataset, err := seed.Datasets[0].toPB()
+	require.NoError(t, err)
+	field, err := seed.Fields[0].toPB()
+	require.NoError(t, err)
+	factor, err := seed.Factors[0].toPB()
+	require.NoError(t, err)
+	datasetColumn, err := seed.DatasetColumns[0].toPB()
+	require.NoError(t, err)
+	viewColumn, err := seed.ViewColumns[0].toPB()
+	require.NoError(t, err)
+
+	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
+		"GetSpace": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.GetSpaceRsp{RetInfo: storageOK(), Space: seed.Spaces[0].toPB()})
+		},
+		"GetDataSource": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.GetDataSourceRsp{RetInfo: storageOK(), DataSource: seed.DataSources[0].toPB()})
+		},
+		"GetDataset": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.GetDatasetRsp{RetInfo: storageOK(), Dataset: dataset})
+		},
+		"GetFieldGroup": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.GetFieldGroupRsp{RetInfo: storageOK(), FieldGroup: seed.FieldGroups[0].toPB()})
+		},
+		"GetField": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.GetFieldRsp{RetInfo: storageOK(), Field: field})
+		},
+		"GetFactor": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.GetFactorRsp{RetInfo: storageOK(), Factor: factor})
+		},
+		"ListDatasetColumns": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.ListDatasetColumnsRsp{RetInfo: storageOK(), Columns: []*pb.DatasetColumn{datasetColumn}})
+		},
+		"GetDevice": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.GetDeviceRsp{RetInfo: storageOK(), Device: seed.Devices[0].toPB()})
+		},
+		"GetView": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.GetViewRsp{RetInfo: storageOK(), View: seed.Views[0].toPB()})
+		},
+		"ListViewColumns": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.ListViewColumnsRsp{RetInfo: storageOK(), Columns: []*pb.ViewColumn{viewColumn}})
+		},
+	})
+	defer server.Close()
+
+	summary, err := runMetadataApply(context.Background(), server.URL, calls)
+	require.NoError(t, err)
+	assert.Zero(t, summary.Applied)
+	assert.Equal(t, len(calls), summary.Unchanged)
+}
+
+func TestRunMetadataApplyRejectsViewColumnConflict(t *testing.T) {
+	expected := &pb.ViewColumn{
+		SpaceId: "crypto", ViewId: "kline", ColumnName: "kline.close",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		OriginId:   "kline.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Attributes: map[string]string{"display_name": "收盘价"},
+	}
+	actual := proto.Clone(expected).(*pb.ViewColumn)
+	actual.ValueType = pb.FieldValueType_FIELD_VALUE_TYPE_STRING
+	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
+		"ListViewColumns": func(w http.ResponseWriter, _ *http.Request) {
+			writeProtoJSON(w, &pb.ListViewColumnsRsp{RetInfo: storageOK(), Columns: []*pb.ViewColumn{actual}})
+		},
+	})
+	defer server.Close()
+
+	_, err := runMetadataApply(context.Background(), server.URL, []metadataImportCall{{
+		Resource: "view_columns", Method: "UpsertViewColumn",
+		Request: &pb.UpsertViewColumnReq{Column: expected}, Response: &pb.UpsertViewColumnRsp{},
+	}})
+	require.ErrorContains(t, err, "contract differs")
 }
 
 func TestRunMetadataApplyRejectsUnsupportedResource(t *testing.T) {
