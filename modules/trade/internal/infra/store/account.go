@@ -163,19 +163,41 @@ func (tx *Tx) UpdateExchangeAccountConfiguration(
 		blank(config.SettlementAsset) || blank(config.Status) {
 		return fmt.Errorf("%w: incomplete Exchange account configuration", ErrInvalidRecord)
 	}
-	var executionMode string
+	var current struct {
+		ExecutionMode   string `gorm:"column:c_execution_mode"`
+		SettlementAsset string `gorm:"column:c_settlement_asset"`
+	}
 	result := tx.db.Raw(`
-		SELECT c_execution_mode FROM t_exchange_accounts
+		SELECT c_execution_mode, c_settlement_asset
+		FROM t_exchange_accounts
 		WHERE c_space_id = ? AND c_exchange_account_id = ?
-	`, spaceID, exchangeAccountID).Scan(&executionMode)
+	`, spaceID, exchangeAccountID).Scan(&current)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected != 1 {
 		return fmt.Errorf("%w: missing Exchange account configuration", ErrInvalidRecord)
 	}
-	if executionMode == "LIVE" && blank(config.CredentialSecretID) {
+	if current.ExecutionMode == "LIVE" && blank(config.CredentialSecretID) {
 		return fmt.Errorf("%w: LIVE requires an Exchange credential", ErrInvalidRecord)
+	}
+	if current.SettlementAsset != config.SettlementAsset {
+		var membershipCount int64
+		if err := tx.db.Table("t_logical_account_members").
+			Where(
+				"c_space_id = ? AND c_exchange_account_id = ?",
+				spaceID,
+				exchangeAccountID,
+			).
+			Count(&membershipCount).Error; err != nil {
+			return err
+		}
+		if membershipCount != 0 {
+			return fmt.Errorf(
+				"%w: remove Exchange account from its logical account before changing settlement asset",
+				ErrConflict,
+			)
+		}
 	}
 	syncSymbolsJSON, err := encodeSyncSymbols(config.SyncSymbols)
 	if err != nil {

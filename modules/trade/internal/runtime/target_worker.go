@@ -37,6 +37,15 @@ type TargetWorker struct {
 
 	wakeOnce sync.Once
 	wake     chan struct{}
+
+	mu        sync.RWMutex
+	ready     bool
+	lastError string
+}
+
+type TargetWorkerSnapshot struct {
+	Ready     bool
+	LastError string
 }
 
 func (w *TargetWorker) Wake() {
@@ -61,7 +70,7 @@ func (w *TargetWorker) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	_ = w.runOnce(ctx)
+	w.setResult(w.runOnce(ctx))
 	for {
 		select {
 		case <-ctx.Done():
@@ -69,7 +78,28 @@ func (w *TargetWorker) Run(ctx context.Context) error {
 		case <-w.wake:
 		case <-ticker.C:
 		}
-		_ = w.runOnce(ctx)
+		w.setResult(w.runOnce(ctx))
+	}
+}
+
+func (w *TargetWorker) Snapshot() TargetWorkerSnapshot {
+	if w == nil {
+		return TargetWorkerSnapshot{}
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return TargetWorkerSnapshot{
+		Ready: w.ready, LastError: w.lastError,
+	}
+}
+
+func (w *TargetWorker) setResult(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ready = err == nil
+	w.lastError = ""
+	if err != nil {
+		w.lastError = err.Error()
 	}
 }
 
@@ -83,6 +113,7 @@ func (w *TargetWorker) runOnce(ctx context.Context) error {
 		targetapp.StatusPending,
 		targetapp.StatusConverging,
 		targetapp.StatusBlocked,
+		targetapp.StatusConverged,
 	)
 	if err != nil {
 		return err

@@ -47,6 +47,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_enabled_physical_account_membership
 ON t_logical_account_members (c_space_id, c_exchange_account_id)
 WHERE c_enabled = 1;
 
+CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_runner
+ON t_logical_accounts (c_space_id, c_owner_runner_id)
+WHERE c_owner_runner_id IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_logical_account_members_account
 ON t_logical_account_members (c_space_id, c_exchange_account_id);
 

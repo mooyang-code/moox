@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -137,7 +138,7 @@ func unsupportedLogicalTargetInstrument(
 		return "", false, err
 	}
 	if len(members) == 0 {
-		return request.GetTargets()[0].GetInstrumentId(), true, nil
+		return request.GetTargets()[0].GetInstrumentId(), false, nil
 	}
 	supportedIDs := make(map[string]struct{})
 	membersReady = true
@@ -158,7 +159,8 @@ func unsupportedLogicalTargetInstrument(
 			return "", false, instrumentErr
 		}
 		for _, instrument := range instruments {
-			if instrument.Status == "TRADING" {
+			if strings.EqualFold(instrument.Status, "TRADING") ||
+				strings.EqualFold(instrument.Status, "live") {
 				supportedIDs[instrument.InstrumentID] = struct{}{}
 			}
 		}

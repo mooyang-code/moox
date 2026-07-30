@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExternalStrategyTargetIntentIsConsumedIntoTradeStore(t *testing.T) {
+func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	natsURL := os.Getenv("MOOX_STRATEGY_TRADE_E2E_NATS_URL")
 	require.NotEmpty(t, natsURL)
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
@@ -25,13 +25,28 @@ func TestExternalStrategyTargetIntentIsConsumedIntoTradeStore(t *testing.T) {
 		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
 			SpaceID: "space", ExchangeAccountID: "acct", Name: "external-e2e",
 			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
-			SettlementAsset: "USDT", Status: "ENABLED", Ready: true,
+			Environment: "PAPER", SettlementAsset: "USDT",
+			Status: "ENABLED", Ready: true,
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space", LogicalAccountID: "logical-e2e", Name: "external-e2e",
+			OwnerRunnerID: "runner-e2e", ExecutionMode: "PAPER",
+			MarketType: "SPOT", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "e2e",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space", LogicalAccountID: "logical-e2e",
+			ExchangeAccountID: "acct", Enabled: true,
 		}); err != nil {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTC-USDT",
-			InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT",
+			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
 			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
 		})
@@ -64,14 +79,16 @@ func TestExternalStrategyTargetIntentIsConsumedIntoTradeStore(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	require.Eventually(t, func() bool {
-		current, getErr := tradeStore.GetTargetExecutionByBinding(
+		current, getErr := tradeStore.GetLogicalAccountTarget(
 			context.Background(),
 			"space",
-			"execution-e2e",
+			"logical-e2e",
 		)
 		return getErr == nil &&
-			current.ExecutionID == "strategy-e2e-run:rebalance:execution-e2e" &&
-			current.Targets[0].TargetQuantity == "0.5"
+			current.TargetID == "strategy-e2e-result" &&
+			current.RunnerID == "runner-e2e" &&
+			len(current.Targets) == 1 &&
+			current.Targets[0].Quantity == "0.5"
 	}, 8*time.Second, 50*time.Millisecond)
 	cancel()
 	<-done

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -180,6 +181,162 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	result, err = service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.Zero(t, result.FillsIngested, "replayed REST Fill must be idempotent")
+}
+
+func TestExternalOrderPausesOwningLogicalAccount(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+	}))
+	observer := runFactsObserver(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Facts: observer,
+		Now:   func() time.Time { return time.UnixMilli(3_000) },
+	}
+	current := exchange.Order{
+		ExchangeOrderID: "external-order", ClientOrderID: "outside-client",
+		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+
+	require.Eventually(t, func() bool {
+		logicalAccount, err := tradeStore.GetLogicalAccount(
+			context.Background(), "space-1", "logical-1",
+		)
+		return err == nil &&
+			logicalAccount.AutomationState == "PAUSED" &&
+			strings.Contains(logicalAccount.PauseReason, "EXTERNAL")
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+	}))
+	adapter := &syncAdapter{lookupErr: &exchange.Error{
+		Kind: exchange.ErrorOrderNotFound, Err: errors.New("missing"),
+	}}
+	observer := runFactsObserver(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Facts: observer,
+		Now:   func() time.Time { return time.UnixMilli(3_000) },
+	}
+
+	applied, err := service.ApplyFill(context.Background(), "account-1", exchange.Fill{
+		ExchangeTradeID: "external-trade", ExchangeOrderID: "external-order",
+		Symbol: "BTC-USDT", Side: exchange.SideBuy,
+		PositionSide: exchange.PositionSideNet,
+		Quantity:     shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_000),
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	order, err := tradeStore.GetOrderByExchangeID(
+		context.Background(), "space-1", "account-1", "BTC-USDT", "external-order",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "EXTERNAL", order.OwnerType)
+	require.Eventually(t, func() bool {
+		logicalAccount, err := tradeStore.GetLogicalAccount(
+			context.Background(), "space-1", "logical-1",
+		)
+		return err == nil &&
+			logicalAccount.AutomationState == "PAUSED" &&
+			strings.Contains(logicalAccount.PauseReason, "EXTERNAL")
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	woke := make(chan struct{}, 1)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Facts: &LogicalAccountFactsObserver{
+			Store: tradeStore,
+			Wake: func() {
+				unlock := tradeStore.LockExchangeAccount("account-1")
+				unlock()
+				woke <- struct{}{}
+			},
+		},
+		Now: func() time.Time { return time.UnixMilli(3_000) },
+	}
+	current := exchange.Order{
+		ExchangeOrderID: "external-order", ClientOrderID: "outside-client",
+		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- service.ApplyOrder(context.Background(), "account-1", current)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("AccountFacts callback ran while the ExchangeAccount lock was held")
+	}
+	select {
+	case <-woke:
+	case <-time.After(time.Second):
+		t.Fatal("TargetWorker was not woken after account facts changed")
+	}
+}
+
+func TestExternalFactsDoNotReenterLogicalAccountLock(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+	}))
+	observer := runFactsObserver(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Facts: observer,
+		Now:   func() time.Time { return time.UnixMilli(3_000) },
+	}
+	unlock := tradeStore.LockLogicalAccount("space-1", "logical-1")
+	done := make(chan error, 1)
+	go func() {
+		done <- service.ApplyOrder(context.Background(), "account-1", exchange.Order{
+			ExchangeOrderID: "external-order", ClientOrderID: "outside-client",
+			Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
+			CreatedAt: time.UnixMilli(2_000), UpdatedAt: time.UnixMilli(2_000),
+		})
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("AccountSync re-entered a LogicalAccount lock held by its caller")
+	}
+	unlock()
+	require.Eventually(t, func() bool {
+		logicalAccount, err := tradeStore.GetLogicalAccount(
+			context.Background(), "space-1", "logical-1",
+		)
+		return err == nil && logicalAccount.AutomationState == "PAUSED"
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestOrderReducerIgnoresOlderExchangeUpdateAndAggregateFill(t *testing.T) {
@@ -801,6 +958,27 @@ func openSyncStore(t *testing.T) *store.Store {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	return tradeStore
+}
+
+func runFactsObserver(
+	t *testing.T,
+	tradeStore *store.Store,
+) *LogicalAccountFactsObserver {
+	t.Helper()
+	observer := &LogicalAccountFactsObserver{
+		Store: tradeStore, RetryInterval: 10 * time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- observer.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+	})
+	require.Eventually(t, func() bool {
+		return observer.Snapshot().Ready
+	}, time.Second, 10*time.Millisecond)
+	return observer
 }
 
 func seedSyncAccount(t *testing.T, tradeStore *store.Store) {

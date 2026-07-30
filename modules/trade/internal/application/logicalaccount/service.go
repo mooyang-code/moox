@@ -39,8 +39,13 @@ type Readiness struct {
 
 type Service struct {
 	Store          *store.Store
+	Syncer         AccountSyncer
 	Now            func() time.Time
 	MaxSnapshotAge time.Duration
+}
+
+type AccountSyncer interface {
+	SyncAccount(context.Context, string) error
 }
 
 func (s *Service) Create(
@@ -110,8 +115,16 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	if s == nil || s.Store == nil {
 		return ErrServiceConfig
 	}
+	if s.Syncer == nil {
+		return ErrServiceConfig
+	}
+	if err := s.Syncer.SyncAccount(ctx, command.ExchangeAccountID); err != nil {
+		return err
+	}
 	unlock := s.Store.LockLogicalAccount(command.SpaceID, command.LogicalAccountID)
 	defer unlock()
+	unlockAccount := s.Store.LockExchangeAccount(command.ExchangeAccountID)
+	defer unlockAccount()
 	if !command.AdoptExistingExposure {
 		exposed, err := s.memberHasExposure(
 			ctx, command.SpaceID, command.ExchangeAccountID,
@@ -141,8 +154,16 @@ func (s *Service) RemoveMember(
 	if s == nil || s.Store == nil {
 		return ErrServiceConfig
 	}
+	if s.Syncer == nil {
+		return ErrServiceConfig
+	}
+	if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+		return err
+	}
 	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
 	defer unlock()
+	unlockAccount := s.Store.LockExchangeAccount(exchangeAccountID)
+	defer unlockAccount()
 	exposed, err := s.memberHasExposure(ctx, spaceID, exchangeAccountID)
 	if err != nil {
 		return err
@@ -190,8 +211,22 @@ func (s *Service) ClaimOwner(
 		}
 	}
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetLogicalAccountOwner(spaceID, logicalAccountID, runnerID)
+		if err := tx.SetLogicalAccountOwner(
+			spaceID,
+			logicalAccountID,
+			runnerID,
+		); err != nil {
+			return err
+		}
+		return tx.DeleteLogicalAccountTargetForOtherRunner(
+			spaceID,
+			logicalAccountID,
+			runnerID,
+		)
 	}); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return store.LogicalAccountRecord{}, ErrOwnerConflict
+		}
 		return store.LogicalAccountRecord{}, err
 	}
 	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
@@ -219,6 +254,16 @@ func (s *Service) ReleaseOwner(
 		return ErrOwnerConflict
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if current.AutomationState == "ACTIVE" {
+			if err := tx.SetLogicalAccountAutomation(
+				spaceID,
+				logicalAccountID,
+				"PAUSED",
+				"runner ownership released",
+			); err != nil {
+				return err
+			}
+		}
 		return tx.SetLogicalAccountOwner(spaceID, logicalAccountID, "")
 	})
 }
@@ -400,6 +445,10 @@ func (s *Service) memberHasExposure(
 	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
 	if err != nil {
 		return false, err
+	}
+	if !account.Ready || account.LastSyncAt <= 0 ||
+		s.snapshotStale(s.now(), account.LastSyncAt) {
+		return false, ErrNotReady
 	}
 	orders, err := s.Store.ListOrdersForAccount(
 		ctx, spaceID, exchangeAccountID, 1,

@@ -98,6 +98,17 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		return LogicalAccountTargetRecord{}, false,
 			fmt.Errorf("%w: logical account target runner ownership", ErrConflict)
 	}
+	if account.MarketType == "SPOT" {
+		for _, target := range record.Targets {
+			quantity, parseErr := shared.ParseDecimal(target.Quantity)
+			if parseErr != nil || quantity.Cmp(shared.Zero()) < 0 {
+				return LogicalAccountTargetRecord{}, false, fmt.Errorf(
+					"%w: SPOT target quantity cannot be negative",
+					ErrInvalidRecord,
+				)
+			}
+		}
+	}
 
 	var row logicalAccountTargetRow
 	query := tx.db.
@@ -179,6 +190,18 @@ func (s *Store) GetLogicalAccountTarget(
 		return LogicalAccountTargetRecord{}, err
 	}
 	return logicalAccountTargetRecord(row)
+}
+
+func (tx *Tx) DeleteLogicalAccountTargetForOtherRunner(
+	spaceID string,
+	logicalAccountID string,
+	runnerID string,
+) error {
+	return tx.db.Exec(`
+		DELETE FROM t_logical_account_targets
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+			AND c_runner_id <> ?
+	`, spaceID, logicalAccountID, runnerID).Error
 }
 
 func (s *Store) ListLogicalAccountTargets(

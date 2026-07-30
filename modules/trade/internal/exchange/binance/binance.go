@@ -149,11 +149,19 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 				continue
 			}
 		}
+		instrumentID, idErr := exchange.CanonicalInstrumentID(
+			item.BaseAsset,
+			item.QuoteAsset,
+			a.config.MarketType,
+		)
+		if idErr != nil {
+			return nil, typedRejected("canonical instrument ID", idErr)
+		}
 		instrument := exchange.Instrument{
 			Exchange:           exchange.ExchangeBinance,
 			MarketType:         a.config.MarketType,
 			Symbol:             item.Symbol,
-			InstrumentID:       item.Symbol,
+			InstrumentID:       instrumentID,
 			BaseAsset:          item.BaseAsset,
 			QuoteAsset:         item.QuoteAsset,
 			SettlementAsset:    item.QuoteAsset,

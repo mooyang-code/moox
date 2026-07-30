@@ -49,7 +49,7 @@ fi
 export MOOX_STRATEGY_TRADE_E2E_NATS_URL="$NATS_URL"
 
 STRATEGY_TEST='TestExternalStrategyCommitPublishesLogicalAccountTarget'
-TRADE_TEST='TestExternalStrategyTargetIntentIsConsumedIntoTradeStore'
+TRADE_TEST='TestExternalLogicalAccountTargetIsConsumedIntoTradeStore'
 
 (
   cd "$ROOT/modules/strategy"

@@ -2,10 +2,27 @@ package exchange
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
+
+// CanonicalInstrumentID identifies the same economic instrument across
+// Exchange-native symbol formats.
+func CanonicalInstrumentID(
+	baseAsset string,
+	quoteAsset string,
+	market MarketType,
+) (string, error) {
+	base := strings.ToUpper(strings.TrimSpace(baseAsset))
+	quote := strings.ToUpper(strings.TrimSpace(quoteAsset))
+	if base == "" || quote == "" || !market.Valid() {
+		return "", fmt.Errorf("trade Exchange: invalid canonical instrument identity")
+	}
+	return base + "-" + quote + "-" + string(market), nil
+}
 
 type Exchange string
 

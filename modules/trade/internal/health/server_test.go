@@ -61,18 +61,23 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 		eventBusEnabled bool
 		eventBusReady   bool
 		sessions        traderuntime.SessionSnapshot
+		logicalReady    bool
+		targetReady     bool
+		operatorReady   bool
 		configErrors    []string
 		want            bool
 	}{
 		{
-			name:     "EventBus disabled and initial account enumeration succeeded",
-			sessions: traderuntime.SessionSnapshot{Reconciled: true},
-			want:     true,
+			name:         "EventBus disabled and initial account enumeration succeeded",
+			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
+			logicalReady: true, targetReady: true, operatorReady: true,
+			want: true,
 		},
 		{
 			name: "all requirements ready", eventBusEnabled: true, eventBusReady: true,
-			sessions: traderuntime.SessionSnapshot{Enabled: 2, Ready: 2, Reconciled: true},
-			want:     true,
+			sessions:     traderuntime.SessionSnapshot{Enabled: 2, Ready: 2, Reconciled: true},
+			logicalReady: true, targetReady: true, operatorReady: true,
+			want: true,
 		},
 		{
 			name: "account enumeration has never succeeded",
@@ -90,7 +95,26 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 		{
 			name:         "configuration error",
 			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
+			logicalReady: true, targetReady: true, operatorReady: true,
 			configErrors: []string{"invalid account"},
+		},
+		{
+			name:          "logical account worker has not recovered",
+			sessions:      traderuntime.SessionSnapshot{Reconciled: true},
+			targetReady:   true,
+			operatorReady: true,
+		},
+		{
+			name:          "target worker has not recovered",
+			sessions:      traderuntime.SessionSnapshot{Reconciled: true},
+			logicalReady:  true,
+			operatorReady: true,
+		},
+		{
+			name:         "operator worker has not recovered",
+			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
+			logicalReady: true,
+			targetReady:  true,
 		},
 	}
 	for _, tt := range tests {
@@ -100,11 +124,23 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 				EventBusEnabled: tt.eventBusEnabled,
 				EventBusReady:   func() bool { return tt.eventBusReady },
 				Sessions:        healthSessions{snapshot: tt.sessions},
-				ConfigErrors:    func() []string { return tt.configErrors },
+				LogicalAccountWorker: func() (bool, string) {
+					return tt.logicalReady, ""
+				},
+				TargetWorker: func() traderuntime.TargetWorkerSnapshot {
+					return traderuntime.TargetWorkerSnapshot{Ready: tt.targetReady}
+				},
+				OperatorWorker: func() traderuntime.OperatorWorkerSnapshot {
+					return traderuntime.OperatorWorkerSnapshot{Ready: tt.operatorReady}
+				},
+				ConfigErrors: func() []string { return tt.configErrors },
 			}
 			ready, details := readiness.Evaluate(context.Background())
 			require.Equal(t, tt.want, ready)
 			require.Equal(t, tt.sessions.Enabled, details["enabled_exchange_accounts"])
+			require.Equal(t, tt.logicalReady, details["logical_account_worker_ready"])
+			require.Equal(t, tt.targetReady, details["target_worker_ready"])
+			require.Equal(t, tt.operatorReady, details["operator_worker_ready"])
 		})
 	}
 }

@@ -38,6 +38,14 @@ server:
       protocol: http
       timeout: 15000
 
+      ######## LogicalAccount RPC ########
+    - name: trpc.moox.trade.LogicalAccountService
+      ip: 127.0.0.1
+      port: 11202
+      network: tcp
+      protocol: http
+      timeout: 15000
+
     - name: trpc.moox.trade.metrics.timer
       port: 11210
       network: "*/30 * * * * *"

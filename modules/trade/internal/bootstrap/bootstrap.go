@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
@@ -121,7 +122,22 @@ func initialize(
 		Store: tradeStore, Executor: targetExecutor, Interval: time.Second,
 		Gate: targetGate, Metrics: tradeStore.ModuleMetrics(),
 	}
-	logicalAccounts := &logicalapp.Service{Store: tradeStore}
+	factsObserver := &accountsync.LogicalAccountFactsObserver{
+		Store: tradeStore,
+		Wake:  targetWorker.Wake,
+	}
+	syncService.Facts = factsObserver
+	logicalAccounts := &logicalapp.Service{
+		Store: tradeStore, Syncer: accountSyncer{service: syncService},
+	}
+	operatorService := &operatorapp.Service{
+		Store: tradeStore, Orders: orderService,
+		Syncer: accountSyncer{service: syncService},
+		Prices: targetapp.ExchangePriceSource{Adapters: manager},
+	}
+	operatorWorker := &traderuntime.OperatorWorker{
+		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
+	}
 	manager.NewSession = func(record store.ExchangeAccountRecord) (traderuntime.ManagedSession, error) {
 		credential := exchange.Credential{}
 		if exchange.ExecutionMode(record.ExecutionMode) == exchange.ExecutionModeLive {
@@ -141,6 +157,7 @@ func initialize(
 			Exchange:          exchange.Exchange(record.Exchange),
 			MarketType:        exchange.MarketType(record.MarketType),
 			ExecutionMode:     exchange.ExecutionMode(record.ExecutionMode),
+			Environment:       exchange.AccountEnvironment(record.Environment),
 			SettlementAsset:   record.SettlementAsset,
 			MarginMode:        exchange.MarginMode(record.MarginMode),
 		}
@@ -197,7 +214,9 @@ func initialize(
 		}()
 	}
 	runWorker(manager.Run)
+	runWorker(factsObserver.Run)
 	runWorker(targetWorker.Run)
+	runWorker(operatorWorker.Run)
 	if eventBus != nil {
 		client := eventBus
 		runWorker(func(workerCtx context.Context) error {
@@ -215,13 +234,69 @@ func initialize(
 		&rpc.LogicalAccountServer{
 			LogicalAccounts: logicalAccounts,
 			Store:           tradeStore,
+			Flatten: func(
+				callCtx context.Context,
+				spaceID string,
+				actionID string,
+				logicalAccountID string,
+				reason string,
+			) (store.OperatorActionRecord, error) {
+				result, flattenErr := operatorService.FlattenLogicalAccount(
+					callCtx,
+					operatorapp.FlattenCommand{
+						SpaceID: spaceID, ActionID: actionID,
+						LogicalAccountID: logicalAccountID, Reason: reason,
+					},
+				)
+				return result.Action, flattenErr
+			},
 		},
-		&rpc.ExecutionServer{Store: tradeStore},
+		&rpc.ExecutionServer{
+			Store: tradeStore,
+			PlaceManual: func(
+				callCtx context.Context,
+				command rpc.ManualOrderCommand,
+			) (store.OperatorActionRecord, store.OrderRecord, error) {
+				result, placeErr := operatorService.PlaceManualOrder(
+					callCtx,
+					operatorapp.ManualOrderCommand{
+						SpaceID: command.SpaceID, ActionID: command.ActionID,
+						ExchangeAccountID: command.ExchangeAccountID,
+						ClientOrderID:     command.ClientOrderID,
+						InstrumentID:      command.Symbol,
+						Type:              command.OrderType, FillPolicy: command.FillPolicy,
+						Side: command.Side, PositionSide: command.PositionSide,
+						Quantity: command.Quantity, LimitPrice: command.LimitPrice,
+						Reason: command.Reason,
+					},
+				)
+				return result.Action, result.Order, placeErr
+			},
+			Cancel: func(
+				callCtx context.Context,
+				spaceID string,
+				actionID string,
+				orderID string,
+				reason string,
+			) (store.OperatorActionRecord, store.OrderRecord, error) {
+				result, cancelErr := operatorService.CancelOrder(
+					callCtx,
+					operatorapp.CancelOrderCommand{
+						SpaceID: spaceID, ActionID: actionID,
+						OrderID: orderID, Reason: reason,
+					},
+				)
+				return result.Action, result.Order, cancelErr
+			},
+		},
 	)
 	if err := registerHealth(
 		serverInstance,
 		tradeStore,
 		manager,
+		factsObserver,
+		targetWorker,
+		operatorWorker,
 		cfg.EventBus.Enabled,
 		eventBus,
 		&targetConsumerReady,
@@ -431,6 +506,9 @@ func registerHealth(
 	serverInstance *server.Server,
 	tradeStore *store.Store,
 	manager *traderuntime.Manager,
+	factsObserver *accountsync.LogicalAccountFactsObserver,
+	targetWorker *traderuntime.TargetWorker,
+	operatorWorker *traderuntime.OperatorWorker,
 	eventBusEnabled bool,
 	eventBus *jetstream.Client,
 	targetConsumerReady *atomic.Bool,
@@ -446,6 +524,12 @@ func registerHealth(
 				targetConsumerReady != nil && targetConsumerReady.Load()
 		},
 		Sessions: manager,
+		LogicalAccountWorker: func() (bool, string) {
+			snapshot := factsObserver.Snapshot()
+			return snapshot.Ready, snapshot.LastError
+		},
+		TargetWorker:   targetWorker.Snapshot,
+		OperatorWorker: operatorWorker.Snapshot,
 	}
 	state.SnapshotFunc = health.SnapshotFunc(
 		state,

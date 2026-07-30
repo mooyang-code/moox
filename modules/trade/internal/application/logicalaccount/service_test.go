@@ -2,7 +2,9 @@ package logicalaccount
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,6 +75,91 @@ func TestLogicalAccountOwnerRunnerIsExclusive(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "runner-other", account.OwnerRunnerID)
+}
+
+func TestLogicalAccountOwnerRunnerIsExclusiveUnderConcurrency(t *testing.T) {
+	service, tradeStore := logicalAccountServiceFixture(t)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "logical-2",
+			ExecutionMode: "PAPER", MarketType: "SWAP", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		})
+	}))
+	require.NoError(t, service.ReleaseOwner(
+		context.Background(), "space-1", "logical-1", "runner-1",
+	))
+
+	var wait sync.WaitGroup
+	results := make(chan error, 2)
+	for _, logicalAccountID := range []string{"logical-1", "logical-2"} {
+		wait.Add(1)
+		go func(id string) {
+			defer wait.Done()
+			_, err := service.ClaimOwner(
+				context.Background(), "space-1", id, "runner-shared",
+			)
+			results <- err
+		}(logicalAccountID)
+	}
+	wait.Wait()
+	close(results)
+	successes := 0
+	conflicts := 0
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrOwnerConflict):
+			conflicts++
+		default:
+			t.Fatalf("ClaimOwner() error = %v", err)
+		}
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, 1, conflicts)
+}
+
+func TestClaimOwnerClearsPreviousRunnerSequence(t *testing.T) {
+	service, tradeStore := logicalAccountServiceFixture(t)
+	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(
+		context.Background(),
+		store.LogicalAccountTargetRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			TargetID: "old-target", RunnerID: "runner-1",
+			CommandSequence: 100, Status: "PENDING", AcceptedAt: 2_000,
+			Targets: []store.InstrumentTarget{{
+				InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+			}},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	require.NoError(t, service.ReleaseOwner(
+		context.Background(), "space-1", "logical-1", "runner-1",
+	))
+	_, err = service.ClaimOwner(
+		context.Background(), "space-1", "logical-1", "runner-2",
+	)
+	require.NoError(t, err)
+
+	_, err = tradeStore.GetLogicalAccountTarget(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.Error(t, err)
+	_, accepted, err = tradeStore.AcceptLogicalAccountTarget(
+		context.Background(),
+		store.LogicalAccountTargetRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			TargetID: "new-target", RunnerID: "runner-2",
+			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_001,
+			Targets: []store.InstrumentTarget{{
+				InstrumentID: "BTC-USDT-SWAP", Quantity: "2",
+			}},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, accepted)
 }
 
 func TestLogicalReadinessRequiresEveryEnabledMemberAndTargetMetadata(t *testing.T) {
@@ -190,10 +277,15 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 		})
 	}))
 	return &Service{
-		Store: tradeStore, Now: func() time.Time { return now },
+		Store: tradeStore, Syncer: noopAccountSyncer{},
+		Now:            func() time.Time { return now },
 		MaxSnapshotAge: time.Minute,
 	}, tradeStore
 }
+
+type noopAccountSyncer struct{}
+
+func (noopAccountSyncer) SyncAccount(context.Context, string) error { return nil }
 
 func logicalFixtureAccount(id string) store.ExchangeAccountRecord {
 	return store.ExchangeAccountRecord{

@@ -175,9 +175,17 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		if row.InstType != a.instrumentType() {
 			continue
 		}
+		instrumentID, idErr := exchange.CanonicalInstrumentID(
+			row.BaseCcy,
+			row.QuoteCcy,
+			a.config.MarketType,
+		)
+		if idErr != nil {
+			return nil, rejected("canonical instrument ID", idErr)
+		}
 		instrument := exchange.Instrument{
 			Exchange: exchange.ExchangeOKX, MarketType: a.config.MarketType,
-			Symbol: row.InstID, InstrumentID: row.InstID,
+			Symbol: row.InstID, InstrumentID: instrumentID,
 			BaseAsset: row.BaseCcy, QuoteAsset: row.QuoteCcy,
 			Status: row.State, ExchangeUpdatedAt: time.Now().UTC(),
 		}

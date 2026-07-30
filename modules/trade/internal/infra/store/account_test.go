@@ -179,6 +179,40 @@ func TestExchangeAccountCredentialIsRequiredOnlyForLive(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
+func TestExchangeAccountSettlementAssetCannotChangeWhileMember(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
+			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			ExchangeAccountID: "account-1", Enabled: true,
+		})
+	}))
+
+	err := s.Transaction(ctx, func(tx *Tx) error {
+		return tx.UpdateExchangeAccountConfiguration(
+			"space-1",
+			"account-1",
+			ExchangeAccountConfiguration{
+				Name: "main", CredentialSecretID: "secret-1",
+				SettlementAsset: "USDC", Status: "ENABLED",
+			},
+		)
+	})
+
+	require.ErrorIs(t, err, ErrConflict)
+}
+
 func testAccount() ExchangeAccountRecord {
 	return ExchangeAccountRecord{
 		SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",

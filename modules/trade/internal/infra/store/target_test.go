@@ -77,6 +77,24 @@ func TestAcceptLogicalAccountTargetRejectsMismatchedRunner(t *testing.T) {
 	require.False(t, accepted)
 }
 
+func TestAcceptLogicalAccountTargetRejectsNegativeSpotQuantity(t *testing.T) {
+	s := openTestStore(t)
+	seedLogicalAccount(t, s, "runner-1")
+	record := validLogicalAccountTarget()
+	record.Targets[0].Quantity = "-1"
+
+	_, accepted, err := s.AcceptLogicalAccountTarget(context.Background(), record)
+
+	require.ErrorIs(t, err, ErrInvalidRecord)
+	require.False(t, accepted)
+	_, err = s.GetLogicalAccountTarget(
+		context.Background(),
+		record.SpaceID,
+		record.LogicalAccountID,
+	)
+	require.Error(t, err)
+}
+
 func TestAcceptLogicalAccountTargetIsIdempotentForSamePayload(t *testing.T) {
 	s := openTestStore(t)
 	seedLogicalAccount(t, s, "runner-1")

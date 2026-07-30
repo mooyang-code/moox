@@ -169,6 +169,7 @@ func TestLoadSwapInstruments(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(instruments) != 1 || !instruments[0].Linear ||
+		instruments[0].InstrumentID != "BTC-USDT-SWAP" ||
 		instruments[0].ContractValue.String() != "1" ||
 		instruments[0].SettlementAsset != "USDT" {
 		t.Fatalf("instrument = %+v", instruments)

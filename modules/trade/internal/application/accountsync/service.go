@@ -33,12 +33,21 @@ type Metrics interface {
 	Observe(exchangeAccountID string, now time.Time, maxDifference float64, err error)
 }
 
+type FactsObserver interface {
+	AccountFactsChanged(
+		ctx context.Context,
+		exchangeAccountID string,
+		external bool,
+	) error
+}
+
 type Result struct {
 	FillsIngested          int
 	OrdersUpdated          int
 	PositionsUpdated       int
 	AccountSnapshotUpdated bool
 	UnknownOrdersResolved  int
+	ExternalFactsImported  bool
 	Ready                  bool
 	Warnings               []string
 }
@@ -59,6 +68,7 @@ type Service struct {
 	Fills          *consumer.Reducer
 	Orders         *orderapp.Service
 	Metrics        Metrics
+	Facts          FactsObserver
 	Now            func() time.Time
 	LateFillWindow time.Duration
 }
@@ -82,7 +92,13 @@ func (s *Service) SyncAccount(
 	if err != nil {
 		return result, err
 	}
-	return s.resolveUnknownOrders(ctx, exchangeAccountID, result)
+	result, err = s.resolveUnknownOrders(ctx, exchangeAccountID, result)
+	if err != nil {
+		return result, err
+	}
+	return result, s.notifyFacts(
+		ctx, exchangeAccountID, result.ExternalFactsImported,
+	)
 }
 
 func (s *Service) syncAccountLocked(
@@ -235,7 +251,13 @@ func (s *Service) ApplySnapshot(
 	if err != nil {
 		return result, err
 	}
-	return s.resolveUnknownOrders(ctx, exchangeAccountID, result)
+	result, err = s.resolveUnknownOrders(ctx, exchangeAccountID, result)
+	if err != nil {
+		return result, err
+	}
+	return result, s.notifyFacts(
+		ctx, exchangeAccountID, result.ExternalFactsImported,
+	)
 }
 
 func (s *Service) applySnapshot(
@@ -263,7 +285,7 @@ func (s *Service) applySnapshot(
 		batchQuantities[key] = batchQuantities[key].Add(fill.Quantity)
 	}
 	for _, fill := range snapshot.Fills {
-		applied, applyErr := s.applyFill(
+		applied, external, applyErr := s.applyFill(
 			ctx,
 			account,
 			fill,
@@ -276,9 +298,10 @@ func (s *Service) applySnapshot(
 		if applied {
 			result.FillsIngested++
 		}
+		result.ExternalFactsImported = result.ExternalFactsImported || external
 	}
 	for _, current := range snapshot.Orders {
-		updated, warning, applyErr := s.applyOrder(ctx, account, current)
+		updated, external, warning, applyErr := s.applyOrder(ctx, account, current)
 		if applyErr != nil {
 			return s.fail(ctx, account, applyErr)
 		}
@@ -288,6 +311,7 @@ func (s *Service) applySnapshot(
 		if warning != "" {
 			result.Warnings = append(result.Warnings, warning)
 		}
+		result.ExternalFactsImported = result.ExternalFactsImported || external
 	}
 
 	positionRecords := make([]store.PositionRecord, 0, len(snapshot.Positions))
@@ -402,18 +426,23 @@ func (s *Service) ApplyFill(
 		return false, err
 	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	defer unlock()
 	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
 	if err != nil {
+		unlock()
 		return false, err
 	}
-	return s.applyFill(
+	applied, external, err := s.applyFill(
 		ctx,
 		account,
 		fill,
 		consumer.OriginPrivateSocket,
 		shared.Zero(),
 	)
+	unlock()
+	if err != nil {
+		return applied, err
+	}
+	return applied, s.notifyFacts(ctx, exchangeAccountID, external)
 }
 
 func (s *Service) ApplyOrder(
@@ -425,13 +454,17 @@ func (s *Service) ApplyOrder(
 		return err
 	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	defer unlock()
 	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	if err != nil {
+		unlock()
+		return err
+	}
+	_, external, _, err := s.applyOrder(ctx, account, current)
+	unlock()
 	if err != nil {
 		return err
 	}
-	_, _, err = s.applyOrder(ctx, account, current)
-	return err
+	return s.notifyFacts(ctx, exchangeAccountID, external)
 }
 
 func (s *Service) ApplyPosition(
@@ -443,12 +476,12 @@ func (s *Service) ApplyPosition(
 		return err
 	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	defer unlock()
 	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
 	if err != nil {
+		unlock()
 		return err
 	}
-	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		record := positionRecord(account, position)
 		if position.RequiresSync || position.Present != (exchange.PositionPresence{}) {
 			current, found, getErr := tx.GetPosition(
@@ -471,6 +504,11 @@ func (s *Service) ApplyPosition(
 		}
 		return tx.UpsertPosition(record)
 	})
+	unlock()
+	if err != nil {
+		return err
+	}
+	return s.notifyFacts(ctx, exchangeAccountID, false)
 }
 
 func (s *Service) ApplyAccountSnapshot(
@@ -482,25 +520,32 @@ func (s *Service) ApplyAccountSnapshot(
 		return err
 	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	defer unlock()
 	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
 	if err != nil {
+		unlock()
 		return err
 	}
 	if snapshot.ExchangeUpdatedAt.UnixMilli() <= 0 {
+		unlock()
 		return errors.New("trade account sync: account snapshot has no Exchange timestamp")
 	}
 	if snapshot.ExchangeUpdatedAt.UnixMilli() < account.Snapshot.ExchangeUpdatedAt {
+		unlock()
 		return nil
 	}
 	merged := mergePrivateSnapshot(account.Snapshot, snapshot)
-	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateExchangeAccountSnapshot(
 			account.SpaceID,
 			account.ExchangeAccountID,
 			merged,
 		)
 	})
+	unlock()
+	if err != nil {
+		return err
+	}
+	return s.notifyFacts(ctx, exchangeAccountID, false)
 }
 
 func (s *Service) SetReady(
@@ -513,12 +558,17 @@ func (s *Service) SetReady(
 		return ErrServiceConfig
 	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	defer unlock()
 	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	if err != nil {
+		unlock()
+		return err
+	}
+	err = s.setReady(ctx, account, ready, cause)
+	unlock()
 	if err != nil {
 		return err
 	}
-	return s.setReady(ctx, account, ready, cause)
+	return s.notifyFacts(ctx, exchangeAccountID, false)
 }
 
 func (s *Service) setReady(
@@ -549,14 +599,18 @@ func (s *Service) applyFill(
 	fill exchange.Fill,
 	kind consumer.FillOrigin,
 	syntheticQuantity shared.Decimal,
-) (bool, error) {
-	if err := s.ensureOrderForFill(ctx, account, fill, syntheticQuantity); err != nil {
-		return false, err
+) (bool, bool, error) {
+	external, err := s.ensureOrderForFill(
+		ctx, account, fill, syntheticQuantity,
+	)
+	if err != nil {
+		return false, false, err
 	}
-	return s.Fills.ApplyFill(ctx, fill, consumer.Source{
+	applied, err := s.Fills.ApplyFill(ctx, fill, consumer.Source{
 		SpaceID: account.SpaceID, ExchangeAccountID: account.ExchangeAccountID,
 		Kind: kind,
 	})
+	return applied, external, err
 }
 
 func (s *Service) ensureOrderForFill(
@@ -564,7 +618,7 @@ func (s *Service) ensureOrderForFill(
 	account store.ExchangeAccountRecord,
 	fill exchange.Fill,
 	syntheticQuantity shared.Decimal,
-) error {
+) (bool, error) {
 	if fill.ExchangeOrderID != "" {
 		if _, err := s.Store.GetOrderByExchangeID(
 			ctx,
@@ -573,9 +627,9 @@ func (s *Service) ensureOrderForFill(
 			fill.Symbol,
 			fill.ExchangeOrderID,
 		); err == nil {
-			return nil
+			return false, nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
+			return false, err
 		}
 	}
 	if fill.ClientOrderID != "" {
@@ -585,14 +639,14 @@ func (s *Service) ensureOrderForFill(
 			account.ExchangeAccountID,
 			fill.ClientOrderID,
 		); err == nil {
-			return nil
+			return false, nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
+			return false, err
 		}
 	}
 	adapter, err := s.Adapters.Adapter(account.ExchangeAccountID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var current exchange.Order
 	var lookupErr error
@@ -612,7 +666,7 @@ func (s *Service) ensureOrderForFill(
 	}
 	if lookupErr != nil {
 		if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {
-			return lookupErr
+			return false, lookupErr
 		}
 		if syntheticQuantity.Cmp(shared.Zero()) <= 0 {
 			syntheticQuantity = fill.Quantity
@@ -626,7 +680,7 @@ func (s *Service) ensureOrderForFill(
 		}
 	}
 	_, err = s.importExternalOrder(ctx, account, current)
-	return err
+	return err == nil, err
 }
 
 func fillBatchKey(fill exchange.Fill) string {
@@ -643,7 +697,7 @@ func (s *Service) applyOrder(
 	ctx context.Context,
 	account store.ExchangeAccountRecord,
 	current exchange.Order,
-) (bool, string, error) {
+) (bool, bool, string, error) {
 	var record store.OrderRecord
 	var err error
 	switch {
@@ -663,34 +717,34 @@ func (s *Service) applyOrder(
 			current.ExchangeOrderID,
 		)
 	default:
-		return false, "", errors.New(
+		return false, false, "", errors.New(
 			"trade account sync: Exchange order has no stable identifier",
 		)
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		record, err = s.importExternalOrder(ctx, account, current)
 		if err != nil {
-			return false, "", err
+			return false, false, "", err
 		}
-		return true, "", s.applyOrderState(ctx, record, current)
+		return true, true, "", s.applyOrderState(ctx, record, current)
 	}
 	if err != nil {
-		return false, "", err
+		return false, false, "", err
 	}
 	storedFilled := shared.MustDecimal(record.FilledQuantity)
 	if current.FilledQuantity.Cmp(storedFilled) < 0 {
-		return false, fmt.Sprintf(
+		return false, false, fmt.Sprintf(
 			"order %s ignored regressing cumulative filled quantity",
 			record.OrderID,
 		), nil
 	}
 	if current.FilledQuantity.Cmp(storedFilled) > 0 {
-		return false, fmt.Sprintf(
+		return false, false, fmt.Sprintf(
 			"order %s snapshot is ahead of ingested Fills",
 			record.OrderID,
 		), s.applyOrderState(ctx, record, current)
 	}
-	return true, "", s.applyOrderState(ctx, record, current)
+	return true, false, "", s.applyOrderState(ctx, record, current)
 }
 
 func (s *Service) applyOrderState(
@@ -908,6 +962,17 @@ func (s *Service) validate() error {
 		return ErrServiceConfig
 	}
 	return nil
+}
+
+func (s *Service) notifyFacts(
+	ctx context.Context,
+	exchangeAccountID string,
+	external bool,
+) error {
+	if s.Facts == nil {
+		return nil
+	}
+	return s.Facts.AccountFactsChanged(ctx, exchangeAccountID, external)
 }
 
 func (s *Service) now() time.Time {

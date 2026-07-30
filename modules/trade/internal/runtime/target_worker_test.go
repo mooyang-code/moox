@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,17 +13,20 @@ import (
 )
 
 type logicalTargetStoreStub struct {
-	mu      sync.Mutex
-	records []store.LogicalAccountTargetRecord
+	mu       sync.Mutex
+	records  []store.LogicalAccountTargetRecord
+	statuses []string
+	err      error
 }
 
 func (s *logicalTargetStoreStub) ListLogicalAccountTargets(
-	context.Context,
-	...string,
+	_ context.Context,
+	statuses ...string,
 ) ([]store.LogicalAccountTargetRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]store.LogicalAccountTargetRecord(nil), s.records...), nil
+	s.statuses = append([]string(nil), statuses...)
+	return append([]store.LogicalAccountTargetRecord(nil), s.records...), s.err
 }
 
 type logicalTargetConvergerStub struct {
@@ -83,6 +87,7 @@ func TestTargetWorkerRunsLogicalAccountsInStableOrder(t *testing.T) {
 		"target/success/trade-target",
 		"target/success/trade-target",
 	}, metrics.runs)
+	require.Contains(t, targets.statuses, targetapp.StatusConverged)
 }
 
 func TestTargetWorkerGateSerializesTargetAcceptance(t *testing.T) {
@@ -127,6 +132,32 @@ func TestTargetWorkerWakeIsCoalescedAndCancellationStopsRun(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("TargetWorker did not run")
 	}
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestTargetWorkerReadinessRecoversAfterTransientStoreError(t *testing.T) {
+	targets := &logicalTargetStoreStub{err: errors.New("temporary list failure")}
+	worker := &TargetWorker{
+		Store: targets, Executor: &logicalTargetConvergerStub{},
+		Interval: 10 * time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	require.Eventually(t, func() bool {
+		snapshot := worker.Snapshot()
+		return !snapshot.Ready && snapshot.LastError == "temporary list failure"
+	}, time.Second, 10*time.Millisecond)
+	targets.mu.Lock()
+	targets.err = nil
+	targets.mu.Unlock()
+	require.Eventually(t, func() bool {
+		snapshot := worker.Snapshot()
+		return snapshot.Ready && snapshot.LastError == ""
+	}, time.Second, 10*time.Millisecond)
+
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 }

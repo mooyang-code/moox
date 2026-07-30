@@ -214,7 +214,7 @@ func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/api/v5/public/instruments":
-			ok(w, `[{"instId":"BTC-USDT-SWAP","instType":"SWAP","settleCcy":"USDT","tickSz":"0.1","lotSz":"1","minSz":"1","ctVal":"0.01","ctValCcy":"BTC","ctType":"linear","state":"live"}]`)
+			ok(w, `[{"instId":"BTC-USDT-SWAP","instType":"SWAP","baseCcy":"BTC","quoteCcy":"USDT","settleCcy":"USDT","tickSz":"0.1","lotSz":"1","minSz":"1","ctVal":"0.01","ctValCcy":"BTC","ctType":"linear","state":"live"}]`)
 		case "/api/v5/trade/order":
 			if request.Method == http.MethodPost {
 				if err := json.NewDecoder(request.Body).Decode(&orderBody); err != nil {
@@ -235,7 +235,8 @@ func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(instruments) != 1 || instruments[0].BaseAsset != "BTC" ||
-		instruments[0].QuoteAsset != "USDT" {
+		instruments[0].QuoteAsset != "USDT" ||
+		instruments[0].InstrumentID != "BTC-USDT-SWAP" {
 		t.Fatalf("instruments = %+v", instruments)
 	}
 	order, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{

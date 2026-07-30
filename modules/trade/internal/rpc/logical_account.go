@@ -144,19 +144,20 @@ func (h *LogicalAccountServer) AddLogicalAccountMember(
 	if err == nil {
 		err = validatePB(req)
 	}
-	if err == nil {
-		err = h.LogicalAccounts.AddMember(ctx, logicalapp.AddMemberCommand{
-			SpaceID: spaceID, LogicalAccountID: req.GetLogicalAccountId(),
-			ExchangeAccountID:     req.GetExchangeAccountId(),
-			Enabled:               req.GetEnabled(),
-			Priority:              int(req.GetPriority()),
-			AdoptExistingExposure: req.GetAdoptExistingExposure(),
-		})
-	}
 	if err != nil {
 		return &tradepb.AddLogicalAccountMemberRsp{
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
+	}
+	err = h.LogicalAccounts.AddMember(ctx, logicalapp.AddMemberCommand{
+		SpaceID: spaceID, LogicalAccountID: req.GetLogicalAccountId(),
+		ExchangeAccountID:     req.GetExchangeAccountId(),
+		Enabled:               req.GetEnabled(),
+		Priority:              int(req.GetPriority()),
+		AdoptExistingExposure: req.GetAdoptExistingExposure(),
+	})
+	if err != nil {
+		return &tradepb.AddLogicalAccountMemberRsp{RetInfo: errorInfo(err)}, nil
 	}
 	record, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId())
 	return &tradepb.AddLogicalAccountMemberRsp{
@@ -173,18 +174,19 @@ func (h *LogicalAccountServer) RemoveLogicalAccountMember(
 	if err == nil {
 		err = validatePB(req)
 	}
-	if err == nil {
-		err = h.LogicalAccounts.RemoveMember(
-			ctx,
-			spaceID,
-			req.GetLogicalAccountId(),
-			req.GetExchangeAccountId(),
-		)
-	}
 	if err != nil {
 		return &tradepb.RemoveLogicalAccountMemberRsp{
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
+	}
+	err = h.LogicalAccounts.RemoveMember(
+		ctx,
+		spaceID,
+		req.GetLogicalAccountId(),
+		req.GetExchangeAccountId(),
+	)
+	if err != nil {
+		return &tradepb.RemoveLogicalAccountMemberRsp{RetInfo: errorInfo(err)}, nil
 	}
 	record, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId())
 	return &tradepb.RemoveLogicalAccountMemberRsp{
@@ -226,18 +228,19 @@ func (h *LogicalAccountServer) ReleaseLogicalAccountOwner(
 	if err == nil {
 		err = validatePB(req)
 	}
-	if err == nil {
-		err = h.LogicalAccounts.ReleaseOwner(
-			ctx,
-			spaceID,
-			req.GetLogicalAccountId(),
-			req.GetRunnerId(),
-		)
-	}
 	if err != nil {
 		return &tradepb.ReleaseLogicalAccountOwnerRsp{
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
+	}
+	err = h.LogicalAccounts.ReleaseOwner(
+		ctx,
+		spaceID,
+		req.GetLogicalAccountId(),
+		req.GetRunnerId(),
+	)
+	if err != nil {
+		return &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: errorInfo(err)}, nil
 	}
 	record, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId())
 	return &tradepb.ReleaseLogicalAccountOwnerRsp{
@@ -302,6 +305,11 @@ func (h *LogicalAccountServer) FlattenLogicalAccount(
 	spaceID, err := requiredSpace(ctx)
 	if err == nil {
 		err = validatePB(req)
+	}
+	if err != nil {
+		return &tradepb.FlattenLogicalAccountRsp{
+			RetInfo: invalidOrErrorInfo(err),
+		}, nil
 	}
 	if err == nil && h.Flatten == nil {
 		err = fmt.Errorf("trade RPC: flatten service is not configured")

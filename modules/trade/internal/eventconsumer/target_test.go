@@ -123,6 +123,75 @@ func TestHandleLogicalAccountTargetRetriesMissingMetadataUntilMembersReady(t *te
 	}
 }
 
+func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
+	tradeStore := openTargetStore(t)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
+			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			MarketType: "SPOT", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		})
+	}))
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+
+	result := HandleTarget(context.Background(), logicalTargetDelivery(
+		t, now, "target-1", "runner-1", "logical-1", 1,
+		[]*tradeeventpb.InstrumentTarget{{
+			InstrumentId: "BTC-USDT-SPOT", Quantity: "1",
+		}},
+	), TargetOptions{Store: tradeStore, Now: func() time.Time { return now }})
+
+	require.Equal(t, jetstream.RETRY, result.Decision)
+	require.Error(t, result.Err)
+}
+
+func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
+	tradeStore := openTargetStore(t)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
+			SpaceID: "space-1", ExchangeAccountID: "okx-1", Name: "okx",
+			Exchange: "OKX", MarketType: "SWAP", ExecutionMode: "PAPER",
+			Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS",
+			Status: "ENABLED", Ready: true,
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
+			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			MarketType: "SWAP", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			ExchangeAccountID: "okx-1", Enabled: true,
+		}); err != nil {
+			return err
+		}
+		return tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "OKX", MarketType: "SWAP", Symbol: "BTC-USDT-SWAP",
+			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
+			SettlementAsset: "USDT", Linear: true, ContractValue: "0.01",
+			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
+			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "live",
+		})
+	}))
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+
+	result := HandleTarget(context.Background(), logicalTargetDelivery(
+		t, now, "target-1", "runner-1", "logical-1", 1,
+		[]*tradeeventpb.InstrumentTarget{{
+			InstrumentId: "BTC-USDT-SWAP", Quantity: "1",
+		}},
+	), TargetOptions{Store: tradeStore, Now: func() time.Time { return now }})
+
+	require.Equal(t, jetstream.ACK, result.Decision)
+	require.NoError(t, result.Err)
+}
+
 func TestHandleLogicalAccountTargetDoesNotWakeForExactRetry(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	seedLogicalTargetAccount(t, tradeStore, true, true)

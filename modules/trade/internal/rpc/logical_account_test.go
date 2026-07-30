@@ -95,3 +95,53 @@ func TestFlattenLogicalAccountDelegatesTrustedSpace(t *testing.T) {
 		t.Fatalf("response = %+v, got = %v", response, got)
 	}
 }
+
+func TestFlattenLogicalAccountMapsInvalidRequest(t *testing.T) {
+	response, err := (&LogicalAccountServer{}).FlattenLogicalAccount(
+		spacecontext.WithSpaceID(context.Background(), "space-1"),
+		&tradepb.FlattenLogicalAccountReq{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetRetInfo().GetCode() != tradepb.ErrorCode_INVALID_PARAM {
+		t.Fatalf("ret_info = %+v", response.GetRetInfo())
+	}
+}
+
+func TestReleaseLogicalAccountOwnerMapsOwnerConflict(t *testing.T) {
+	tradeStore := openRPCStore(t)
+	service := &logicalapp.Service{Store: tradeStore}
+	handler := &LogicalAccountServer{
+		LogicalAccounts: service,
+		Store:           tradeStore,
+	}
+	requireNoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
+			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			MarketType: "SPOT", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "test",
+		})
+	}))
+
+	response, err := handler.ReleaseLogicalAccountOwner(
+		spacecontext.WithSpaceID(context.Background(), "space-1"),
+		&tradepb.ReleaseLogicalAccountOwnerReq{
+			LogicalAccountId: "logical-1", RunnerId: "runner-other",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetRetInfo().GetCode() != tradepb.ErrorCode_CONFLICT {
+		t.Fatalf("ret_info = %+v", response.GetRetInfo())
+	}
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
