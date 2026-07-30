@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -159,10 +158,14 @@ func unsupportedLogicalTargetInstrument(
 			return "", false, instrumentErr
 		}
 		for _, instrument := range instruments {
-			if strings.EqualFold(instrument.Status, "TRADING") ||
-				strings.EqualFold(instrument.Status, "live") {
-				supportedIDs[instrument.InstrumentID] = struct{}{}
+			if instrument.Status != "TRADING" && instrument.Status != "live" {
+				continue
 			}
+			if instrument.SettlementAsset != "" &&
+				instrument.SettlementAsset != account.SettlementAsset {
+				continue
+			}
+			supportedIDs[instrument.InstrumentID] = struct{}{}
 		}
 	}
 	for _, target := range request.GetTargets() {

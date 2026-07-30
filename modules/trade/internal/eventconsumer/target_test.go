@@ -96,6 +96,56 @@ func TestHandleLogicalAccountTargetRejectsUnsupportedInstrument(t *testing.T) {
 	require.Contains(t, result.Err.Error(), "ETH-USDT-SPOT")
 }
 
+func TestHandleLogicalAccountTargetRejectsInstrumentForDifferentSettlementAsset(t *testing.T) {
+	tradeStore := openTargetStore(t)
+	seedLogicalTargetAccount(t, tradeStore, true, true)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDC",
+			InstrumentID: "BTC-USDC-SPOT", BaseAsset: "BTC", QuoteAsset: "USDC",
+			SettlementAsset: "USDC", ExchangeQuantityStep: "0.001",
+			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
+		})
+	}))
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+
+	result := HandleTarget(context.Background(), logicalTargetDelivery(
+		t, now, "target-usdc", "runner-1", "logical-1", 1,
+		[]*tradeeventpb.InstrumentTarget{{
+			InstrumentId: "BTC-USDC-SPOT", Quantity: "1",
+		}},
+	), TargetOptions{Store: tradeStore, Now: func() time.Time { return now }})
+
+	require.Equal(t, jetstream.TERM, result.Decision)
+	require.Error(t, result.Err)
+	require.Contains(t, result.Err.Error(), "BTC-USDC-SPOT")
+}
+
+func TestHandleLogicalAccountTargetRejectsNonCanonicalInstrumentStatus(t *testing.T) {
+	tradeStore := openTargetStore(t)
+	seedLogicalTargetAccount(t, tradeStore, true, false)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			InstrumentID: "BTC-USDT-SPOT", BaseAsset: "BTC", QuoteAsset: "USDT",
+			SettlementAsset: "USDT", ExchangeQuantityStep: "0.001",
+			MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "trading",
+		})
+	}))
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+
+	result := HandleTarget(context.Background(), logicalTargetDelivery(
+		t, now, "target-lowercase-status", "runner-1", "logical-1", 1,
+		[]*tradeeventpb.InstrumentTarget{{
+			InstrumentId: "BTC-USDT-SPOT", Quantity: "1",
+		}},
+	), TargetOptions{Store: tradeStore, Now: func() time.Time { return now }})
+
+	require.Equal(t, jetstream.TERM, result.Decision)
+	require.Error(t, result.Err)
+	require.Contains(t, result.Err.Error(), "BTC-USDT-SPOT")
+}
+
 func TestHandleLogicalAccountTargetRetriesMissingMetadataUntilMembersReady(t *testing.T) {
 	for _, test := range []struct {
 		name     string

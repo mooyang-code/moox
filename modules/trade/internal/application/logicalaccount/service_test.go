@@ -283,6 +283,38 @@ func TestLogicalReadinessRequiresEveryEnabledMemberAndTargetMetadata(t *testing.
 	require.Contains(t, readiness.Reasons[0], "account-b")
 }
 
+func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) {
+	service, tradeStore := logicalAccountServiceFixture(t)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", MarketType: "SWAP", Symbol: "BTCUSDT",
+			InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
+			SettlementAsset: "USDC", Linear: true, ContractValue: "0.001",
+			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
+			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "TRADING",
+		})
+	}))
+	_, _, err := tradeStore.AcceptLogicalAccountTarget(
+		context.Background(),
+		store.LogicalAccountTargetRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			TargetID: "target-usdc", RunnerID: "runner-1",
+			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_000,
+			Targets: []store.InstrumentTarget{{
+				InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+			}},
+		},
+	)
+	require.NoError(t, err)
+
+	readiness, err := service.Readiness(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.False(t, readiness.Ready)
+	require.Contains(t, readiness.Reasons, "target instrument BTC-USDT-SWAP is unavailable")
+}
+
 func TestResumeRequiresReadyNoConflictAndWarnsAboutReopen(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
 	_, _, err := tradeStore.AcceptLogicalAccountTarget(

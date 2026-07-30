@@ -434,9 +434,14 @@ func (s *Service) readiness(
 			return Readiness{}, listErr
 		}
 		for _, instrument := range instruments {
-			if instrument.Status == "TRADING" || instrument.Status == "live" {
-				supported[instrument.InstrumentID] = struct{}{}
+			if instrument.Status != "TRADING" && instrument.Status != "live" {
+				continue
 			}
+			if instrument.SettlementAsset != "" &&
+				instrument.SettlementAsset != account.SettlementAsset {
+				continue
+			}
+			supported[instrument.InstrumentID] = struct{}{}
 		}
 		orders, listErr := s.Store.ListOrdersForAccount(
 			ctx, spaceID, account.ExchangeAccountID, 1,

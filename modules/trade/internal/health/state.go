@@ -43,7 +43,8 @@ func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
 	if r.ConfigErrors != nil {
 		configErrors = append(configErrors, r.ConfigErrors()...)
 	}
-	sessionsReady := sessionSnapshot.Reconciled &&
+	sessionsReady := sessionSnapshot.Enabled > 0 &&
+		sessionSnapshot.Reconciled &&
 		sessionSnapshot.Ready == sessionSnapshot.Enabled
 	targetWorker := traderuntime.TargetWorkerSnapshot{}
 	if r.TargetWorker != nil {
