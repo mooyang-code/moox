@@ -1297,7 +1297,7 @@ git diff feature/mooyang...HEAD --stat
 Expected: worktree clean；提交历史符合本计划的原子 cutover 与后续独立提交边界；diff
 不含未知文件。
 
-- [ ] **Step 5: 合并并推送**
+- [x] **Step 5: 合并并推送**
 
 ```bash
 cd /Users/mooyang/Documents/go/src/github.com/mooyang-code/moox
