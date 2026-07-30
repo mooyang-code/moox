@@ -99,6 +99,11 @@ func TestManualOrderTerminalReplayDoesNotPauseAfterResume(t *testing.T) {
 	_, err := fixture.service().PlaceManualOrder(context.Background(), command)
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.DeleteLogicalAccountMember(
+			"space-1", "logical-1", "account-a",
+		); err != nil {
+			return err
+		}
 		return tx.SetLogicalAccountAutomation(
 			"space-1", "logical-1", "ACTIVE", "",
 		)
@@ -112,6 +117,103 @@ func TestManualOrderTerminalReplayDoesNotPauseAfterResume(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "ACTIVE", account.AutomationState)
+}
+
+func TestManualOrderRunningReplayFailsStablyAfterMemberRemoval(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
+	command := ManualOrderCommand{
+		SpaceID: "space-1", ActionID: "manual-1",
+		ExchangeAccountID: "account-a", ClientOrderID: "manual-client",
+		InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.1"),
+		Reason: "operator override",
+	}
+	requestJSON, err := manualOrderRequestJSON(command)
+	require.NoError(t, err)
+	_, _, err = fixture.store.CreateOperatorAction(
+		context.Background(),
+		store.OperatorActionRecord{
+			SpaceID: "space-1", ActionID: "manual-1",
+			LogicalAccountID: "logical-1", ActionType: "MANUAL_ORDER",
+			Reason: command.Reason, RequestJSON: requestJSON, Status: "RUNNING",
+		},
+	)
+	require.NoError(t, err)
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.SetLogicalAccountAutomation(
+			"space-1", "logical-1", "PAUSED", "membership change",
+		); err != nil {
+			return err
+		}
+		return tx.DeleteLogicalAccountMember(
+			"space-1", "logical-1", "account-a",
+		)
+	}))
+
+	result, err := fixture.service().PlaceManualOrder(
+		context.Background(), command,
+	)
+
+	require.Error(t, err)
+	require.Equal(t, "FAILED", result.Action.Status)
+	replayed, replayErr := fixture.service().PlaceManualOrder(
+		context.Background(), command,
+	)
+	require.Error(t, replayErr)
+	require.Equal(t, "FAILED", replayed.Action.Status)
+}
+
+func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSpot)
+	command := ManualOrderCommand{
+		SpaceID: "space-1", ActionID: "manual-1",
+		ExchangeAccountID: "account-a", ClientOrderID: "manual-client",
+		InstrumentID: "BTCUSDT", Type: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.1"),
+		Reason: "operator override",
+	}
+	requestJSON, err := manualOrderRequestJSON(command)
+	require.NoError(t, err)
+	_, _, err = fixture.store.CreateOperatorAction(
+		context.Background(),
+		store.OperatorActionRecord{
+			SpaceID: "space-1", ActionID: "manual-1",
+			LogicalAccountID: "logical-1", ActionType: "MANUAL_ORDER",
+			Reason: command.Reason, RequestJSON: requestJSON, Status: "RUNNING",
+		},
+	)
+	require.NoError(t, err)
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.SetLogicalAccountAutomation(
+			"space-1", "logical-1", "PAUSED", "membership change",
+		); err != nil {
+			return err
+		}
+		if err := tx.DeleteLogicalAccountMember(
+			"space-1", "logical-1", "account-a",
+		); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "logical-2",
+			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-2",
+			ExchangeAccountID: "account-a", Enabled: true,
+		})
+	}))
+
+	result, err := fixture.service().PlaceManualOrder(
+		context.Background(), command,
+	)
+
+	require.Error(t, err)
+	require.Equal(t, "FAILED", result.Action.Status)
+	require.Contains(t, result.Accounts[0].Error, "moved")
 }
 
 func TestManualOrderFreshSyncsTargetWithoutKnownTargetOrders(t *testing.T) {

@@ -374,6 +374,57 @@ func TestKnownExternalAggregateFillAheadPausesLogicalAccount(t *testing.T) {
 	requireLogicalAccountAutomation(t, tradeStore, "PAUSED")
 }
 
+func TestTerminalExternalFillPausesSynchronouslyWithoutObserver(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Now:   func() time.Time { return time.UnixMilli(4_000) },
+	}
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+	current := exchange.Order{
+		ExchangeOrderID: "terminal-external-order",
+		ClientOrderID:   "terminal-external-client",
+		Symbol:          "BTC-USDT",
+		OrderType:       exchange.OrderTypeMarket,
+		Side:            exchange.SideBuy,
+		PositionSide:    exchange.PositionSideNet,
+		Quantity:        shared.MustDecimal("1"),
+		Status:          exchange.OrderStatusOpen,
+		CreatedAt:       time.UnixMilli(1_000),
+		UpdatedAt:       time.UnixMilli(1_000),
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	requireLogicalAccountAutomation(t, tradeStore, "PAUSED")
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+
+	applied, err := service.ApplyFill(context.Background(), "account-1", exchange.Fill{
+		ExchangeTradeID: "terminal-external-trade",
+		ExchangeOrderID: current.ExchangeOrderID,
+		ClientOrderID:   current.ClientOrderID,
+		Symbol:          current.Symbol,
+		Side:            current.Side,
+		PositionSide:    current.PositionSide,
+		Quantity:        shared.MustDecimal("1"),
+		Price:           shared.MustDecimal("100"),
+		SettlementAsset: "USDT",
+		TradedAt:        time.UnixMilli(2_000),
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
+	logicalAccount, err := tradeStore.GetLogicalAccount(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
+	order, err := tradeStore.GetOrderByClientID(
+		context.Background(), "space-1", "account-1", current.ClientOrderID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "FILLED", order.State)
+}
+
 func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)

@@ -53,6 +53,31 @@ func TestRemoveMemberRejectsActiveOrdersOrPositions(t *testing.T) {
 	require.ErrorIs(t, err, ErrMemberHasExposure)
 }
 
+func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {
+	service, tradeStore := logicalAccountServiceFixture(t)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: "space-1", ExchangeAccountID: "account-a",
+			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			Leverage: "5", MarginMode: "CROSS",
+			ExchangeUpdatedAt: 1_900,
+		})
+	}))
+
+	err := service.AddMember(context.Background(), AddMemberCommand{
+		SpaceID: "space-1", LogicalAccountID: "logical-1",
+		ExchangeAccountID: "account-a", Enabled: false, Priority: 1,
+		AdoptExistingExposure: true,
+	})
+
+	require.ErrorIs(t, err, ErrMemberHasExposure)
+	_, member, findErr := tradeStore.FindLogicalAccountByExchangeAccount(
+		context.Background(), "space-1", "account-a",
+	)
+	require.NoError(t, findErr)
+	require.True(t, member.Enabled)
+}
+
 func TestLogicalAccountOwnerRunnerIsExclusive(t *testing.T) {
 	service, _ := logicalAccountServiceFixture(t)
 
@@ -160,6 +185,68 @@ func TestClaimOwnerClearsPreviousRunnerSequence(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, accepted)
+}
+
+func TestClaimOwnerWaitsForPreviousRunnerTargetOrdersToStop(t *testing.T) {
+	service, tradeStore := logicalAccountServiceFixture(t)
+	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(
+		context.Background(),
+		store.LogicalAccountTargetRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1",
+			TargetID: "old-target", RunnerID: "runner-1",
+			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_000,
+			Targets: []store.InstrumentTarget{{
+				InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+			}},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "old-target-order",
+			ExchangeAccountID: "account-a", ClientOrderID: "old-target-order",
+			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
+			ReferencePriceAt: 2_000,
+			OwnerType:        "TARGET", OwnerID: "old-target",
+			LogicalAccountID: "logical-1", RunnerID: "runner-1",
+			State: "OPEN", Version: 1,
+		})
+	}))
+	require.NoError(t, service.ReleaseOwner(
+		context.Background(), "space-1", "logical-1", "runner-1",
+	))
+
+	_, err = service.ClaimOwner(
+		context.Background(), "space-1", "logical-1", "runner-2",
+	)
+	require.ErrorIs(t, err, ErrNotReady)
+	current, getErr := tradeStore.GetLogicalAccountTarget(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, getErr)
+	require.Equal(t, "old-target", current.TargetID)
+
+	order, err := tradeStore.GetOrder(
+		context.Background(), "space-1", "old-target-order",
+	)
+	require.NoError(t, err)
+	expectedVersion := order.Version
+	order.State = "CANCELED"
+	order.Version++
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateOrder(order, expectedVersion)
+	}))
+	claimed, err := service.ClaimOwner(
+		context.Background(), "space-1", "logical-1", "runner-2",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "runner-2", claimed.OwnerRunnerID)
+	_, err = tradeStore.GetLogicalAccountTarget(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.Error(t, err)
 }
 
 func TestLogicalReadinessRequiresEveryEnabledMemberAndTargetMetadata(t *testing.T) {

@@ -109,11 +109,56 @@ func (s *Service) PlaceManualOrder(
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
+	var runningAction *store.OperatorActionRecord
+	if existing, getErr := s.Store.GetOperatorAction(
+		ctx, command.SpaceID, command.ActionID,
+	); getErr == nil {
+		expected := store.OperatorActionRecord{
+			SpaceID: command.SpaceID, ActionID: command.ActionID,
+			LogicalAccountID: existing.LogicalAccountID,
+			ActionType:       "MANUAL_ORDER", Reason: strings.TrimSpace(command.Reason),
+			RequestJSON: requestJSON,
+		}
+		current, _, matchErr := s.existingAction(ctx, expected)
+		if matchErr != nil {
+			return ManualOrderResult{}, matchErr
+		}
+		if current.Status != "RUNNING" {
+			return s.loadManualOrderResult(ctx, current)
+		}
+		runningAction = &current
+	} else if !errors.Is(getErr, gorm.ErrRecordNotFound) {
+		return ManualOrderResult{}, getErr
+	}
 	logicalAccount, unlock, err := s.lockCurrentLogicalAccount(
 		ctx, command.SpaceID, command.ExchangeAccountID,
 	)
 	if err != nil {
+		if runningAction != nil {
+			return s.failManualAction(
+				ctx,
+				*runningAction,
+				fmt.Errorf("%w: execution account is no longer an enabled member", err),
+				[]OperatorAccountError{{
+					ExchangeAccountID: command.ExchangeAccountID,
+					Error:             err.Error(),
+				}},
+			)
+		}
 		return ManualOrderResult{}, err
+	}
+	if runningAction != nil &&
+		runningAction.LogicalAccountID != logicalAccount.LogicalAccountID {
+		unlock()
+		return s.failManualAction(
+			ctx,
+			*runningAction,
+			ErrInvalidCommand,
+			[]OperatorAccountError{{
+				ExchangeAccountID: command.ExchangeAccountID,
+				Error:             "execution account moved to another logical account",
+			}},
+		)
 	}
 	defer unlock()
 

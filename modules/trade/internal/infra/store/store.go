@@ -25,10 +25,11 @@ var (
 )
 
 type Store struct {
-	db           *gorm.DB
-	accountLocks sync.Map
-	logicalLocks sync.Map
-	metrics      *report.ModuleMetrics
+	db             *gorm.DB
+	accountLocks   sync.Map
+	logicalLocks   sync.Map
+	executionLocks sync.Map
+	metrics        *report.ModuleMetrics
 }
 
 func (s *Store) SetModuleMetrics(metrics *report.ModuleMetrics) {
@@ -84,6 +85,17 @@ func (s *Store) LockExchangeAccount(exchangeAccountID string) func() {
 func (s *Store) LockLogicalAccount(spaceID string, logicalAccountID string) func() {
 	key := spaceID + "\x00" + logicalAccountID
 	value, _ := s.logicalLocks.LoadOrStore(key, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
+}
+
+func (s *Store) LockLogicalAccountExecution(
+	spaceID string,
+	logicalAccountID string,
+) func() {
+	key := spaceID + "\x00" + logicalAccountID
+	value, _ := s.executionLocks.LoadOrStore(key, &sync.Mutex{})
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock

@@ -177,6 +177,19 @@ func (e *Executor) Converge(
 		switch orderdomain.State(current.State) {
 		case orderdomain.Pending:
 			if _, err := e.Orders.Submit(ctx, spaceID, current.OrderID); err != nil {
+				if targetSubmitConflict(err) {
+					if _, discardErr := e.Orders.DiscardPending(
+						ctx, spaceID, current.OrderID,
+					); discardErr != nil {
+						return Result{}, errors.Join(err, discardErr)
+					}
+					if pauseErr := e.pauseLogicalAccount(
+						ctx, logicalAccount, target, err.Error(),
+					); pauseErr != nil {
+						return Result{}, pauseErr
+					}
+					return Result{Status: StatusPaused, Action: "pause"}, nil
+				}
 				return Result{}, err
 			}
 			_ = e.updateTarget(ctx, &target, StatusConverging)
@@ -221,6 +234,14 @@ func (e *Executor) Converge(
 			ctx, spaceID, target, action, members,
 		)
 		if placeErr != nil {
+			if targetSubmitConflict(placeErr) {
+				if pauseErr := e.pauseLogicalAccount(
+					ctx, logicalAccount, target, placeErr.Error(),
+				); pauseErr != nil {
+					return Result{}, pauseErr
+				}
+				return Result{Status: StatusPaused, Action: "pause"}, nil
+			}
 			return Result{}, placeErr
 		}
 		if placeReason != "" {
@@ -561,6 +582,12 @@ func (e *Executor) placeAction(
 			return false, "", err
 		}
 		if _, err := e.Orders.Submit(ctx, spaceID, string(placed.ID)); err != nil {
+			if targetSubmitConflict(err) {
+				_, discardErr := e.Orders.DiscardPending(
+					ctx, spaceID, string(placed.ID),
+				)
+				return false, "", errors.Join(err, discardErr)
+			}
 			return false, "", err
 		}
 		return true, "", nil
@@ -646,6 +673,12 @@ func capacityError(err error) bool {
 	return errors.Is(err, orderapp.ErrInsufficientFunds) ||
 		errors.Is(err, orderapp.ErrNotionalLimit) ||
 		errors.Is(err, orderapp.ErrLeverageLimit)
+}
+
+func targetSubmitConflict(err error) bool {
+	return errors.Is(err, orderapp.ErrExternalConflict) ||
+		errors.Is(err, orderapp.ErrAutomationPaused) ||
+		errors.Is(err, orderapp.ErrTargetOwnerConflict)
 }
 
 func baseQuantityRules(

@@ -15,12 +15,13 @@ import (
 )
 
 type targetOrderServiceStub struct {
-	placeErrors map[string]error
-	specs       []orderdomain.OrderSpec
-	submitted   []string
-	canceled    []string
-	discarded   []string
-	resolved    []string
+	placeErrors  map[string]error
+	submitErrors map[string]error
+	specs        []orderdomain.OrderSpec
+	submitted    []string
+	canceled     []string
+	discarded    []string
+	resolved     []string
 }
 
 func (s *targetOrderServiceStub) Place(
@@ -44,6 +45,9 @@ func (s *targetOrderServiceStub) Submit(
 	orderID string,
 ) (orderdomain.Order, error) {
 	s.submitted = append(s.submitted, orderID)
+	if err := s.submitErrors[orderID]; err != nil {
+		return orderdomain.Order{}, err
+	}
 	return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
 }
 
@@ -106,6 +110,30 @@ func TestTargetExecutorAggregatesAcrossExchanges(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, StatusConverged, target.Status)
+}
+
+func TestTargetExecutorDiscardsPendingChildWhenAutomationChangesBeforeSubmit(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.submitErrors = map[string]error{
+		"child-account-a": orderapp.ErrAutomationPaused,
+	}
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+	}})
+
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusPaused, result.Status)
+	require.Equal(t, "pause", result.Action)
+	require.Equal(t, []string{"child-account-a"}, fixture.orders.discarded)
+	account, err := fixture.store.GetLogicalAccount(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "PAUSED", account.AutomationState)
 }
 
 func TestTargetExecutorPausedOwnerReleaseCancelsOwnedOrderWithoutError(t *testing.T) {

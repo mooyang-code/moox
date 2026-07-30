@@ -9,6 +9,7 @@ import (
 	"time"
 
 	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -125,14 +126,17 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	defer unlock()
 	unlockAccount := s.Store.LockExchangeAccount(command.ExchangeAccountID)
 	defer unlockAccount()
-	if !command.AdoptExistingExposure {
-		exposed, err := s.memberHasExposure(
-			ctx, command.SpaceID, command.ExchangeAccountID,
-		)
-		if err != nil {
-			return err
+	exposed, err := s.memberHasExposure(
+		ctx, command.SpaceID, command.ExchangeAccountID,
+	)
+	if err != nil {
+		return err
+	}
+	if exposed {
+		if !command.Enabled {
+			return ErrMemberHasExposure
 		}
-		if exposed {
+		if !command.AdoptExistingExposure {
 			return ErrAdoptionRequired
 		}
 	}
@@ -208,6 +212,23 @@ func (s *Service) ClaimOwner(
 		if account.OwnerRunnerID == runnerID &&
 			account.LogicalAccountID != logicalAccountID {
 			return store.LogicalAccountRecord{}, ErrOwnerConflict
+		}
+	}
+	orders, _, err := s.Store.ListOrders(ctx, spaceID, store.OrderQuery{
+		LogicalAccountID: logicalAccountID,
+		OnlyOpen:         true,
+		Limit:            1000,
+	})
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	for _, current := range orders {
+		if current.OwnerType == string(orderdomain.OwnerTarget) {
+			return store.LogicalAccountRecord{}, fmt.Errorf(
+				"%w: previous runner order %s is still active",
+				ErrNotReady,
+				current.OrderID,
+			)
 		}
 	}
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -299,6 +320,23 @@ func (s *Service) Resume(
 	}
 	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
 	defer unlock()
+	before, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	unlockExecution := s.Store.LockLogicalAccountExecution(spaceID, logicalAccountID)
+	defer unlockExecution()
+	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, "", err
+	}
+	if current.AutomationState != before.AutomationState ||
+		current.PauseReason != before.PauseReason {
+		return store.LogicalAccountRecord{}, "", fmt.Errorf(
+			"%w: account facts changed while resuming",
+			ErrNotReady,
+		)
+	}
 	readiness, err := s.readiness(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return store.LogicalAccountRecord{}, "", err
@@ -325,7 +363,7 @@ func (s *Service) Resume(
 	}); err != nil {
 		return store.LogicalAccountRecord{}, "", err
 	}
-	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	current, err = s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	return current, "恢复后会按最新目标重新收敛，人工清仓后的仓位可能重新开仓", err
 }
 

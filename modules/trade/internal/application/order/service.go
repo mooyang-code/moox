@@ -18,6 +18,9 @@ var (
 	ErrIdempotencyConflict = errors.New("trade order: idempotency conflict")
 	ErrServiceConfig       = errors.New("trade order: service is not configured")
 	ErrCrossZero           = errors.New("trade order: order cannot cross zero")
+	ErrExternalConflict    = errors.New("trade order: active external order conflicts with target")
+	ErrAutomationPaused    = errors.New("trade order: logical account automation is paused")
+	ErrTargetOwnerConflict = errors.New("trade order: target runner no longer owns logical account")
 )
 
 type AdapterSource interface {
@@ -214,32 +217,47 @@ func (s *Service) Submit(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	unlock := s.Store.LockExchangeAccount(record.ExchangeAccountID)
-	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
-	if err != nil {
-		unlock()
-		return orderdomain.Order{}, err
-	}
-	current, err := domainOrder(record)
-	if err != nil {
-		unlock()
-		return orderdomain.Order{}, err
-	}
 	var result orderdomain.Order
 	var synchronize bool
-	switch current.State {
-	case orderdomain.Pending:
-		result, synchronize, err = s.submit(ctx, record)
-	case orderdomain.Submitting, orderdomain.SubmitUnknown:
-		result, err = s.resolveUnknown(ctx, record, current)
-		synchronize = err == nil && result.State == orderdomain.Open
-	case orderdomain.Rejected:
-		result = current
-		err = errors.New(record.RejectReason)
-	default:
-		result = current
-	}
-	unlock()
+	err = func() error {
+		unlockExecution := func() {}
+		if record.OwnerType == string(orderdomain.OwnerTarget) &&
+			record.LogicalAccountID != "" {
+			unlockExecution = s.Store.LockLogicalAccountExecution(
+				record.SpaceID,
+				record.LogicalAccountID,
+			)
+		}
+		defer unlockExecution()
+
+		unlockAccount := s.Store.LockExchangeAccount(record.ExchangeAccountID)
+		defer unlockAccount()
+		currentRecord, getErr := s.Store.GetOrder(ctx, spaceID, orderID)
+		if getErr != nil {
+			return getErr
+		}
+		current, domainErr := domainOrder(currentRecord)
+		if domainErr != nil {
+			return domainErr
+		}
+		switch current.State {
+		case orderdomain.Pending:
+			if conflictErr := s.rejectTargetExternalConflict(ctx, currentRecord); conflictErr != nil {
+				result = current
+				return conflictErr
+			}
+			result, synchronize, domainErr = s.submit(ctx, currentRecord)
+		case orderdomain.Submitting, orderdomain.SubmitUnknown:
+			result, domainErr = s.resolveUnknown(ctx, currentRecord, current)
+			synchronize = domainErr == nil && result.State == orderdomain.Open
+		case orderdomain.Rejected:
+			result = current
+			domainErr = errors.New(currentRecord.RejectReason)
+		default:
+			result = current
+		}
+		return domainErr
+	}()
 	if err != nil || !synchronize || s.Syncer == nil {
 		return result, err
 	}
@@ -247,6 +265,46 @@ func (s *Service) Submit(
 		return result, err
 	}
 	return s.Get(ctx, record.SpaceID, record.OrderID)
+}
+
+func (s *Service) rejectTargetExternalConflict(
+	ctx context.Context,
+	record store.OrderRecord,
+) error {
+	if record.OwnerType != string(orderdomain.OwnerTarget) ||
+		record.LogicalAccountID == "" {
+		return nil
+	}
+	logicalAccount, err := s.Store.GetLogicalAccount(
+		ctx,
+		record.SpaceID,
+		record.LogicalAccountID,
+	)
+	if err != nil {
+		return err
+	}
+	if logicalAccount.AutomationState != "ACTIVE" {
+		return ErrAutomationPaused
+	}
+	if logicalAccount.OwnerRunnerID == "" ||
+		logicalAccount.OwnerRunnerID != record.RunnerID {
+		return ErrTargetOwnerConflict
+	}
+	records, _, err := s.Store.ListOrders(ctx, record.SpaceID, store.OrderQuery{
+		LogicalAccountID: record.LogicalAccountID,
+		OnlyOpen:         true,
+		Limit:            1000,
+	})
+	if err != nil {
+		return err
+	}
+	for _, current := range records {
+		if current.OrderID != record.OrderID &&
+			current.OwnerType == string(orderdomain.OwnerExternal) {
+			return ErrExternalConflict
+		}
+	}
+	return nil
 }
 
 func (s *Service) Cancel(

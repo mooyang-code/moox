@@ -86,9 +86,17 @@ func (s *Service) SyncAccount(
 			s.Metrics.Observe(exchangeAccountID, s.now(), maxDifference, err)
 		}
 	}()
+	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
+	if err != nil {
+		return Result{}, err
+	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
 	result, maxDifference, err = s.syncAccountLocked(ctx, exchangeAccountID)
 	unlock()
+	if err == nil && result.ExternalFactsImported {
+		err = s.pauseForExternalFact(ctx, exchangeAccountID)
+	}
+	unlockExecution()
 	if err != nil {
 		return result, err
 	}
@@ -97,7 +105,7 @@ func (s *Service) SyncAccount(
 		return result, err
 	}
 	return result, s.notifyFacts(
-		ctx, exchangeAccountID, result.ExternalFactsImported,
+		ctx, exchangeAccountID, false,
 	)
 }
 
@@ -245,9 +253,17 @@ func (s *Service) ApplySnapshot(
 	if err := s.validate(); err != nil {
 		return Result{}, err
 	}
+	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
+	if err != nil {
+		return Result{}, err
+	}
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
 	result, err := s.applySnapshot(ctx, exchangeAccountID, snapshot)
 	unlock()
+	if err == nil && result.ExternalFactsImported {
+		err = s.pauseForExternalFact(ctx, exchangeAccountID)
+	}
+	unlockExecution()
 	if err != nil {
 		return result, err
 	}
@@ -256,7 +272,7 @@ func (s *Service) ApplySnapshot(
 		return result, err
 	}
 	return result, s.notifyFacts(
-		ctx, exchangeAccountID, result.ExternalFactsImported,
+		ctx, exchangeAccountID, false,
 	)
 }
 
@@ -425,6 +441,11 @@ func (s *Service) ApplyFill(
 	if err := s.validate(); err != nil {
 		return false, err
 	}
+	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
+	if err != nil {
+		return false, err
+	}
+	defer unlockExecution()
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
 	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
 	if err != nil {
@@ -439,10 +460,13 @@ func (s *Service) ApplyFill(
 		shared.Zero(),
 	)
 	unlock()
+	if err == nil && external {
+		err = s.pauseForExternalFact(ctx, exchangeAccountID)
+	}
 	if err != nil {
 		return applied, err
 	}
-	return applied, s.notifyFacts(ctx, exchangeAccountID, external)
+	return applied, s.notifyFacts(ctx, exchangeAccountID, false)
 }
 
 func (s *Service) ApplyOrder(
@@ -453,6 +477,11 @@ func (s *Service) ApplyOrder(
 	if err := s.validate(); err != nil {
 		return err
 	}
+	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
+	if err != nil {
+		return err
+	}
+	defer unlockExecution()
 	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
 	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
 	if err != nil {
@@ -461,10 +490,13 @@ func (s *Service) ApplyOrder(
 	}
 	_, external, _, err := s.applyOrder(ctx, account, current)
 	unlock()
+	if err == nil && external {
+		err = s.pauseForExternalFact(ctx, exchangeAccountID)
+	}
 	if err != nil {
 		return err
 	}
-	return s.notifyFacts(ctx, exchangeAccountID, external)
+	return s.notifyFacts(ctx, exchangeAccountID, false)
 }
 
 func (s *Service) ApplyPosition(
@@ -976,6 +1008,60 @@ func (s *Service) notifyFacts(
 		return nil
 	}
 	return s.Facts.AccountFactsChanged(ctx, exchangeAccountID, external)
+}
+
+func (s *Service) lockLogicalAccountExecution(
+	ctx context.Context,
+	exchangeAccountID string,
+) (func(), error) {
+	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	if err != nil {
+		return nil, err
+	}
+	logicalAccount, _, err := s.Store.FindLogicalAccountByExchangeAccount(
+		ctx,
+		account.SpaceID,
+		exchangeAccountID,
+	)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return func() {}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.Store.LockLogicalAccountExecution(
+		logicalAccount.SpaceID,
+		logicalAccount.LogicalAccountID,
+	), nil
+}
+
+func (s *Service) pauseForExternalFact(
+	ctx context.Context,
+	exchangeAccountID string,
+) error {
+	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	if err != nil {
+		return err
+	}
+	logicalAccount, _, err := s.Store.FindLogicalAccountByExchangeAccount(
+		ctx,
+		account.SpaceID,
+		exchangeAccountID,
+	)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation(
+			logicalAccount.SpaceID,
+			logicalAccount.LogicalAccountID,
+			"PAUSED",
+			"EXTERNAL order or fill detected on "+exchangeAccountID,
+		)
+	})
 }
 
 func (s *Service) now() time.Time {

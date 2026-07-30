@@ -150,6 +150,34 @@ func TestSubmitPendingSubmitsOnce(t *testing.T) {
 	require.Equal(t, 1, adapter.placeCalls)
 }
 
+func TestSubmitTargetRejectsExternalFactBeforeExchangeCall(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	spec := testSpec(service.now())
+	setTestOwner(&spec, orderdomain.OwnerTarget)
+	pending, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "external-order",
+			ExchangeAccountID: "account-1", ClientOrderID: "external-client",
+			ExchangeOrderID: "external-exchange-order",
+			Symbol:          "BTC-USDT", OrderType: "MARKET", Side: "BUY",
+			Quantity: "1", ReferencePrice: "100",
+			ReferencePriceAt: service.now().UnixMilli(),
+			OwnerType:        "EXTERNAL", OwnerID: "external-exchange-order",
+			LogicalAccountID: "logical-1", State: "OPEN", Version: 1,
+		})
+	}))
+
+	got, err := service.Submit(
+		context.Background(), "space-1", string(pending.ID),
+	)
+
+	require.ErrorIs(t, err, ErrExternalConflict)
+	require.Equal(t, orderdomain.Pending, got.State)
+	require.Zero(t, adapter.placeCalls)
+}
+
 func TestSubmitSubmittingQueriesExchangeBeforeRetry(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
@@ -1010,7 +1038,7 @@ func newTestServiceForMarket(
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1", Name: "logical",
 			OwnerRunnerID: "runner-1", ExecutionMode: string(account.ExecutionMode),
 			MarketType: string(account.MarketType), SettlementAsset: account.SettlementAsset,
-			AutomationState: "PAUSED", PauseReason: "test",
+			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -1018,6 +1046,11 @@ func newTestServiceForMarket(
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1",
 			ExchangeAccountID: account.ID, Enabled: true,
 		}); err != nil {
+			return err
+		}
+		if err := tx.SetLogicalAccountAutomation(
+			account.SpaceID, "logical-1", "ACTIVE", "",
+		); err != nil {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
