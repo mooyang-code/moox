@@ -39,7 +39,7 @@ func (d *Delivery) Ack(ctx context.Context) error {
 		if d != nil && d.ackFn != nil {
 			return d.ackFn(actionCtx)
 		}
-		return d.withMessage(actionCtx, func(msg *nats.Msg, ctx context.Context) error { return msg.AckSync(nats.Context(ctx)) })
+		return d.withMessage(actionCtx, func(msg *nats.Msg, _ context.Context) error { return msg.Ack() })
 	})
 }
 

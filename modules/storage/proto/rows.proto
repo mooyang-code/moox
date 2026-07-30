@@ -108,6 +108,8 @@ message ReadTimeSeriesRowsReq {
   common.Page page = 6;
   string space_id = 7;
   string dataset_id = 8;
+  // keys are exact PrimaryStore point reads. Range reads use selectors.
+  repeated TimeSeriesKey keys = 9;
 }
 
 message ReadTimeSeriesRowsRsp {

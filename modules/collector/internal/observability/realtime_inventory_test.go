@@ -47,7 +47,7 @@ func collectorRule(id string, enabled, live bool, dataType, target, schedule str
 	return domain.TaskRule{SpaceID: "crypto", RuleID: id, DataType: dataType, Exchange: "binance", CollectParams: params, Enabled: enabled}
 }
 
-func TestRealtimeInventorySelectsEnabledLiveKlineAndDeduplicates(t *testing.T) {
+func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing.T) {
 	source := &ruleSourceStub{rules: []domain.TaskRule{
 		collectorRule("live", true, true, "kline", "bars", "2m", "1m", "5m"),
 		collectorRule("duplicate", true, true, "kline", "bars", "3m", "1m"),
@@ -62,8 +62,22 @@ func TestRealtimeInventorySelectsEnabledLiveKlineAndDeduplicates(t *testing.T) {
 	require.Equal(t, []report.DatasetExpectation{
 		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "1m"}, Interval: 2 * time.Minute},
 		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "5m"}, Interval: 2 * time.Minute},
+		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "batch-bars", Freq: "1m"}, Interval: time.Minute},
 	}, registry.items)
 	require.False(t, inventory.Due(time.Now()))
+}
+
+func TestRealtimeInventoryCanonicalizesFrequencyAliasesBeforeDeduplication(t *testing.T) {
+	source := &ruleSourceStub{rules: []domain.TaskRule{
+		collectorRule("lowercase", true, false, "kline", "bars", "2h", "1h"),
+		collectorRule("canonical", true, false, "kline", "bars", "3h", "1H"),
+	}}
+	registry := &registryStub{}
+
+	require.NoError(t, NewRealtimeInventory(source, registry).Refresh(context.Background()))
+	require.Equal(t, []report.DatasetExpectation{{
+		Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "1H"}, Interval: 2 * time.Hour,
+	}}, registry.items)
 }
 
 func TestRealtimeInventoryFailureRetainsPreviousSnapshot(t *testing.T) {

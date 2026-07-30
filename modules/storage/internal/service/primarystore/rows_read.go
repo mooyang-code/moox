@@ -9,15 +9,40 @@ import (
 )
 
 // These RPC handlers preserve the public PrimaryStore row contract while
-// range reads use a registered View. Exact point reads use ReadFields.
+// exact reads use the field API and range reads use the registered View.
 func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
-	if req == nil || len(req.GetSelectors()) == 0 {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("selectors are required"))}, nil
+	if req == nil || (len(req.GetSelectors()) == 0 && len(req.GetKeys()) == 0) {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("selectors or keys are required"))}, nil
 	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	return s.readTimeSeriesView(ctx, req)
+	if _, _, err := timeSeriesDataset(req); err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if len(req.GetKeys()) == 0 {
+		return s.readTimeSeriesView(ctx, req)
+	}
+	if len(req.GetColumnNames()) == 0 || req.GetTimeRange() != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("exact key reads require column_names and no time_range"))}, nil
+	}
+	keys := make([]*pb.RowKey, 0, len(req.GetKeys()))
+	for _, key := range req.GetKeys() {
+		keys = append(keys, timeSeriesRowKey(key))
+	}
+	rsp, err := s.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: req.GetAuthInfo(), Keys: keys, FieldIds: req.GetColumnNames()})
+	if err != nil {
+		return nil, err
+	}
+	existing := existingRowIdentities(rsp.GetExistingKeys())
+	rows := make([]*pb.TimeSeriesRow, 0, len(rsp.GetRows()))
+	for _, row := range rsp.GetRows() {
+		if !existing[rowKeyIdentity(row.GetKey())] {
+			continue
+		}
+		rows = append(rows, &pb.TimeSeriesRow{Key: timeSeriesKeyFromRowKey(row.GetKey()), Fields: row.GetFields()})
+	}
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
 }
 
 func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {
@@ -45,11 +70,23 @@ func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq)
 	if err != nil {
 		return nil, err
 	}
+	existing := existingRowIdentities(rsp.GetExistingKeys())
 	rows := make([]*pb.RecordRow, 0, len(rsp.GetRows()))
 	for _, row := range rsp.GetRows() {
+		if !existing[rowKeyIdentity(row.GetKey())] {
+			continue
+		}
 		rows = append(rows, &pb.RecordRow{Key: recordKeyFromRowKey(row.GetKey()), Fields: row.GetFields()})
 	}
 	return &pb.ReadRecordRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
+}
+
+func existingRowIdentities(keys []*pb.RowKey) map[string]bool {
+	existing := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		existing[rowKeyIdentity(key)] = true
+	}
+	return existing
 }
 
 func (s *Service) readTimeSeriesView(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -124,6 +161,9 @@ func timeSeriesDataset(req *pb.ReadTimeSeriesRowsReq) (string, string, error) {
 	if spaceID == "" || datasetID == "" {
 		return "", "", errors.New("space_id and dataset_id are required")
 	}
+	if (len(req.GetSelectors()) == 0) == (len(req.GetKeys()) == 0) {
+		return "", "", errors.New("provide exactly one of selectors or keys")
+	}
 	for _, selector := range req.GetSelectors() {
 		if selector == nil {
 			return "", "", errors.New("time-series selector is required")
@@ -134,6 +174,15 @@ func timeSeriesDataset(req *pb.ReadTimeSeriesRowsReq) (string, string, error) {
 		}
 		if selector.GetSpaceId() != spaceID || selector.GetDatasetId() != datasetID {
 			return "", "", errors.New("one range read may reference only the request space/dataset")
+		}
+	}
+	for _, key := range req.GetKeys() {
+		if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" ||
+			key.GetSubjectId() == "" || key.GetFreq() == "" || key.GetDataTime() == "" {
+			return "", "", errors.New("key space_id, dataset_id, subject_id, freq, and data_time are required")
+		}
+		if key.GetSpaceId() != spaceID || key.GetDatasetId() != datasetID {
+			return "", "", errors.New("one exact read may reference only the request space/dataset")
 		}
 	}
 	return spaceID, datasetID, nil
@@ -153,6 +202,27 @@ func recordDataset(keys []*pb.RecordKey) (string, string, error) {
 		}
 	}
 	return spaceID, datasetID, nil
+}
+
+func timeSeriesKeyFromRowKey(key *pb.RowKey) *pb.TimeSeriesKey {
+	if key == nil || key.GetTimeSeries() == nil {
+		return nil
+	}
+	return &pb.TimeSeriesKey{
+		SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
+		SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(),
+		DataTime: key.GetTimeSeries().GetDataTime(), SeriesTag: key.GetTimeSeries().GetSeriesTag(),
+	}
+}
+
+func timeSeriesRowKey(key *pb.TimeSeriesKey) *pb.RowKey {
+	return &pb.RowKey{
+		SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
+		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+			SubjectId: key.GetSubjectId(), Freq: key.GetFreq(),
+			DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
+		}},
+	}
 }
 
 func recordRowKey(key *pb.RecordKey) *pb.RowKey {

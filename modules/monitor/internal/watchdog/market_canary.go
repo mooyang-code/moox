@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -91,17 +92,27 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
+	interval, err := report.ParseDatasetFrequency(storageFrequency)
+	if err != nil {
+		result.ErrorMessage = "invalid_config"
+		return result
+	}
+	candidateCount, err := marketCanaryCandidateCount(config.Freshness, interval)
+	if err != nil {
+		result.ErrorMessage = "invalid_config"
+		return result
+	}
+	candidateTimes, err := report.RecentDatasetTimes(storageFrequency, now, candidateCount)
+	if err != nil {
+		result.ErrorMessage = "invalid_config"
+		return result
+	}
 	startedAt := time.Now()
 	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 		AuthInfo: c.AuthInfo,
 		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
-		Selectors: []*storagepb.TimeSeriesSelector{{
-			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
-			SubjectId: config.SubjectID, Freq: storageFrequency, SeriesTag: config.SeriesTag,
-		}},
-		Order:       storagepb.SortOrder_SORT_ORDER_DESC,
-		ColumnNames: []string{config.DatasetID + ".close", config.DatasetID + ".volume"},
-		Page:        &storagepb.Page{Page: 1, Size: 2},
+		Keys:        recentMarketCanaryKeys(config, storageFrequency, candidateTimes),
+		ColumnNames: []string{"close", "volume"},
 	}, client.WithFilter(trpcretry.ReadOnly()))
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
@@ -112,7 +123,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
-	bars, err := decodeMarketBars(rsp.GetRows())
+	bars, err := decodeMarketBars(rsp.GetRows(), *config.SeriesTag)
 	if err != nil {
 		result.ErrorMessage = err.Error()
 		return result
@@ -137,6 +148,30 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	result.Connected = true
 	result.Status = domain.CheckStatusOK
 	return result
+}
+
+func recentMarketCanaryKeys(config MarketCanaryConfig, frequency string, times []time.Time) []*storagepb.TimeSeriesKey {
+	keys := make([]*storagepb.TimeSeriesKey, 0, len(times))
+	for _, at := range times {
+		keys = append(keys, &storagepb.TimeSeriesKey{
+			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
+			SubjectId: config.SubjectID, Freq: frequency,
+			DataTime: at.Format(time.RFC3339Nano), SeriesTag: *config.SeriesTag,
+		})
+	}
+	return keys
+}
+
+func marketCanaryCandidateCount(freshness, interval time.Duration) (int, error) {
+	const minCandidates, maxCandidates = 24, 512
+	count := int((freshness-1)/interval) + 3
+	if count < minCandidates {
+		count = minCandidates
+	}
+	if count > maxCandidates {
+		return 0, fmt.Errorf("market canary freshness requires more than %d exact keys", maxCandidates)
+	}
+	return count, nil
 }
 
 func canonicalStorageFrequency(frequency string) (string, error) {
@@ -190,11 +225,14 @@ func storageRejectionError(retInfo *storagepb.RetInfo) string {
 	return fmt.Sprintf("storage_rejected_query:%d:%s", retInfo.GetCode(), message)
 }
 
-func decodeMarketBars(rows []*storagepb.TimeSeriesRow) ([]marketBar, error) {
+func decodeMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([]marketBar, error) {
 	bars := make([]marketBar, 0, len(rows))
 	for _, row := range rows {
 		if row.GetKey() == nil {
 			return nil, fmt.Errorf("missing_row_key")
+		}
+		if row.GetKey().GetSeriesTag() != seriesTag {
+			continue
 		}
 		dataTime, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
 		if err != nil {

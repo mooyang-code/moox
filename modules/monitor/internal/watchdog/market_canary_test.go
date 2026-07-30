@@ -2,7 +2,6 @@ package watchdog
 
 import (
 	"context"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -27,18 +26,15 @@ type tagFilteringCanaryReader struct {
 
 func (r *tagFilteringCanaryReader) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	r.request = request
-	selector := request.GetSelectors()[0]
+	wanted := make(map[string]struct{}, len(request.GetKeys()))
+	for _, key := range request.GetKeys() {
+		wanted[key.GetDataTime()+"\n"+key.GetSeriesTag()] = struct{}{}
+	}
 	rows := make([]*storagepb.TimeSeriesRow, 0, len(r.rows))
 	for _, row := range r.rows {
-		if selector.SeriesTag == nil || row.GetKey().GetSeriesTag() == selector.GetSeriesTag() {
+		if _, ok := wanted[row.GetKey().GetDataTime()+"\n"+row.GetKey().GetSeriesTag()]; ok {
 			rows = append(rows, row)
 		}
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].GetKey().GetDataTime() > rows[j].GetKey().GetDataTime()
-	})
-	if size := int(request.GetPage().GetSize()); len(rows) > size {
-		rows = rows[:size]
 	}
 	return &storagepb.ReadTimeSeriesRowsRsp{
 		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
@@ -52,9 +48,19 @@ func (r *canaryReader) ReadTimeSeriesRows(_ context.Context, request *storagepb.
 	if retInfo == nil {
 		retInfo = &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}
 	}
+	wanted := make(map[string]struct{}, len(request.GetKeys()))
+	for _, key := range request.GetKeys() {
+		wanted[key.GetDataTime()] = struct{}{}
+	}
+	rows := make([]*storagepb.TimeSeriesRow, 0, len(r.rows))
+	for _, row := range r.rows {
+		if _, ok := wanted[row.GetKey().GetDataTime()]; ok {
+			rows = append(rows, row)
+		}
+	}
 	return &storagepb.ReadTimeSeriesRowsRsp{
 		RetInfo: retInfo,
-		Rows:    r.rows,
+		Rows:    rows,
 	}, nil
 }
 
@@ -65,23 +71,25 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 		marketCanaryRow(now.Add(-time.Minute), 101, 12),
 	}}
 	config := MarketCanaryConfig{
-		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1h",
+		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
 		SeriesTag: stringPtr("venue:binance"),
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
 	}
 	auth := &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "derived-key"}
 	result := (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.True(t, result.Success)
-	require.Equal(t, "market_canary:market_kline:BTC-USDT:1h:venue:binance", result.CheckID)
-	require.Equal(t, "crypto/market_kline/BTC-USDT/1h/venue:binance", MarketCanaryTarget(config))
+	require.Equal(t, "market_canary:market_kline:BTC-USDT:1m:venue:binance", result.CheckID)
+	require.Equal(t, "crypto/market_kline/BTC-USDT/1m/venue:binance", MarketCanaryTarget(config))
 	require.Equal(t, "crypto", reader.request.GetSpaceId())
 	require.Equal(t, "market_kline", reader.request.GetDatasetId())
-	require.Equal(t, "BTC-USDT", reader.request.GetSelectors()[0].GetSubjectId())
-	require.Equal(t, "1H", reader.request.GetSelectors()[0].GetFreq())
-	require.Equal(t, "venue:binance", reader.request.GetSelectors()[0].GetSeriesTag())
-	require.NotNil(t, reader.request.GetSelectors()[0].SeriesTag)
-	require.Equal(t, []string{"market_kline.close", "market_kline.volume"}, reader.request.GetColumnNames())
-	require.Equal(t, uint32(2), reader.request.GetPage().GetSize())
+	require.Equal(t, "BTC-USDT", reader.request.GetKeys()[0].GetSubjectId())
+	require.Equal(t, "1m", reader.request.GetKeys()[0].GetFreq())
+	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetSeriesTag())
+	require.Len(t, reader.request.GetKeys(), 24)
+	require.Equal(t, now.Format(time.RFC3339Nano), reader.request.GetKeys()[0].GetDataTime())
+	require.Equal(t, now.Add(-23*time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[23].GetDataTime())
+	require.Equal(t, []string{"close", "volume"}, reader.request.GetColumnNames())
+	require.Nil(t, reader.request.GetTimeRange())
 	require.Equal(t, auth, reader.request.GetAuthInfo())
 
 	reader.rows = []*storagepb.TimeSeriesRow{
@@ -102,14 +110,14 @@ func TestMarketCanaryPageDoesNotMixVenuesAtSameTimestamp(t *testing.T) {
 		marketCanaryTaggedRow(now.Add(-time.Minute), "venue:okx", 600, 60),
 	}}
 	config := MarketCanaryConfig{
-		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1h",
+		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
 		SeriesTag: stringPtr("venue:binance"),
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
 	}
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.True(t, result.Success)
-	require.Equal(t, uint32(2), reader.request.GetPage().GetSize())
-	require.Equal(t, "venue:binance", reader.request.GetSelectors()[0].GetSeriesTag())
+	require.Len(t, reader.request.GetKeys(), 24)
+	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetSeriesTag())
 }
 
 func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
@@ -125,6 +133,26 @@ func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
 	}).Run(t.Context())
 
 	require.Equal(t, "storage_rejected_query:7:dataset disabled", result.ErrorMessage)
+}
+
+func TestMarketCanaryExactWindowCoversConfiguredFreshness(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+		marketCanaryRow(now.Add(-31*time.Minute), 100, 10),
+		marketCanaryRow(now.Add(-30*time.Minute), 101, 12),
+	}}
+	result := (MarketCanary{
+		Reader: reader,
+		Config: MarketCanaryConfig{
+			SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
+			SeriesTag: stringPtr("venue:binance"),
+			Freshness: 150 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+		},
+		Now: func() time.Time { return now },
+	}).Run(t.Context())
+
+	require.True(t, result.Success)
+	require.Len(t, reader.request.GetKeys(), 152)
 }
 
 func TestMarketCanaryRejectsInvalidFrequency(t *testing.T) {
@@ -170,7 +198,7 @@ func TestMarketCanaryStorageRejectionRedactsSensitiveDetail(t *testing.T) {
 }
 
 func marketCanaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.TimeSeriesRow {
-	return marketCanaryTaggedRow(at, "", closeValue, volumeValue)
+	return marketCanaryTaggedRow(at, "venue:binance", closeValue, volumeValue)
 }
 
 func marketCanaryTaggedRow(at time.Time, seriesTag string, closeValue, volumeValue float64) *storagepb.TimeSeriesRow {

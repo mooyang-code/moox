@@ -178,6 +178,95 @@ func TestReadTimeSeriesRowsUsesSelectorsAndCopiesViewCompleteness(t *testing.T) 
 	}
 }
 
+func TestPrimaryExactTimeSeriesReadOmitsMissingRows(t *testing.T) {
+	var existing *pb.RowKey
+	node := &recordingNode{
+		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			return &pb.UpsertFieldsRsp{}, nil
+		},
+		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+			rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+			for _, key := range req.GetKeys() {
+				rows = append(rows, &pb.RowFieldValues{Key: key})
+			}
+			existing = req.GetKeys()[1]
+			rows[1].Fields = []*pb.FieldValue{{
+				FieldId: "close",
+				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
+			}}
+			return &pb.ReadFieldsRsp{
+				RetInfo:      successRetInfo(),
+				Rows:         rows,
+				ExistingKeys: []*pb.RowKey{existing},
+			}, nil
+		},
+	}
+	svc, err := New(Options{Node: node})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := []*pb.TimeSeriesKey{
+		{SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1H", DataTime: "2026-07-29T16:00:00Z", SeriesTag: "venue:okx"},
+		{SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1H", DataTime: "2026-07-29T15:00:00Z", SeriesTag: "venue:binance"},
+	}
+	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		AuthInfo:    &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		SpaceId:     "space",
+		DatasetId:   "dataset",
+		Keys:        keys,
+		ColumnNames: []string{"close"},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("read rsp=%v err=%v", rsp, err)
+	}
+	if len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetDataTime() != keys[1].GetDataTime() ||
+		rsp.GetRows()[0].GetKey().GetSeriesTag() != "venue:binance" {
+		t.Fatalf("rows=%v want only existing key %v", rsp.GetRows(), existing)
+	}
+}
+
+func TestPrimaryExactRecordReadOmitsMissingRows(t *testing.T) {
+	node := &recordingNode{
+		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			return &pb.UpsertFieldsRsp{}, nil
+		},
+		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+			rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+			for _, key := range req.GetKeys() {
+				rows = append(rows, &pb.RowFieldValues{Key: key})
+			}
+			rows[1].Fields = []*pb.FieldValue{{
+				FieldId: "value",
+				Value:   &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "present"}},
+			}}
+			return &pb.ReadFieldsRsp{
+				RetInfo:      successRetInfo(),
+				Rows:         rows,
+				ExistingKeys: []*pb.RowKey{req.GetKeys()[1]},
+			}, nil
+		},
+	}
+	svc, err := New(Options{Node: node})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := []*pb.RecordKey{
+		{SpaceId: "space", DatasetId: "dataset", RecordId: "missing", Version: "1"},
+		{SpaceId: "space", DatasetId: "dataset", RecordId: "present", Version: "1"},
+	}
+	rsp, err := svc.ReadRecordRows(context.Background(), &pb.ReadRecordRowsReq{
+		AuthInfo:    &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		Keys:        keys,
+		ColumnNames: []string{"value"},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("read rsp=%v err=%v", rsp, err)
+	}
+	if len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetRecordId() != keys[1].GetRecordId() {
+		t.Fatalf("rows=%v want only existing key %v", rsp.GetRows(), keys[1])
+	}
+}
+
 func TestPrimaryRejectsWritesFromSCFMarketCanaryCredential(t *testing.T) {
 	svc, err := New(Options{
 		Node: &recordingNode{

@@ -244,8 +244,7 @@ t_logical_accounts
   execution_mode          PAPER | LIVE
   market_type             SPOT | SWAP
   settlement_asset
-  control_state           ACTIVE | PAUSED | FLATTENING | DISABLED
-  control_revision
+  automation_state        ACTIVE | PAUSED
   pause_reason
   ctime + mtime
 
@@ -300,7 +299,8 @@ All enabled members must have the same:
 They may use different Exchanges. `priority` is a deterministic selection
 order, not an allocation weight.
 
-Membership changes require the logical account to be `PAUSED` or `DISABLED`.
+New logical accounts start `PAUSED`. Membership changes require the logical
+account to remain `PAUSED`.
 Removing a member with active orders or nonzero positions is rejected.
 Adding a member with active orders or nonzero positions requires an explicit
 operator adoption request. Without that request, Trade rejects the membership
@@ -313,36 +313,38 @@ Logical-account readiness is computed, not persisted:
 
 ```text
 logical_account_ready =
-    control_state == ACTIVE
+    automation_state == ACTIVE
     AND every enabled member session is Ready
     AND every target instrument has at least one eligible member
 ```
 
 If any member becomes Not Ready, the `TargetExecutor` stops creating new
 orders. Private events and account synchronization continue. Execution resumes
-automatically when all members are Ready and the control state remains
+automatically when all members are Ready and `automation_state` remains
 `ACTIVE`.
 
-Operator `PAUSED`, `FLATTENING`, and `DISABLED` states never resume
-automatically.
+A logical account in `PAUSED` never resumes automatically.
 
 ## Target Contract
 
-`TargetIntent` becomes:
+Strategy publishes one `LogicalAccountTargetRequested` command:
 
 ```text
 target_id
 runner_id
 logical_account_id
 command_sequence
-targets[]
+targets[] InstrumentTarget
   instrument_id
-  target_quantity
+  quantity
 ```
 
 The command omits physical account IDs, Exchange-native symbols, market type,
 capital, and allocation weights. Trade resolves account-specific instruments,
 symbols, quantity steps, contract conversions, and minimums.
+Each `InstrumentTarget.quantity` is the signed absolute desired position for
+that instrument, not an Order quantity or adjustment delta. SPOT quantities
+cannot be negative; SWAP uses the sign for direction.
 
 Every command is a FULL replacement for the logical account:
 
@@ -354,8 +356,8 @@ Every command is a FULL replacement for the logical account:
 
 Trade persists the latest target as `LogicalAccountTarget`, not as execution
 history. Targets received during an operator pause still replace the stored
-target, but they never change `control_state` or create orders. Only an operator
-Resume reactivates convergence.
+target, but they never change `automation_state` or create orders. Only an
+operator Resume reactivates convergence.
 The convergence input is the union of:
 
 - Current FULL target instruments.
@@ -464,7 +466,7 @@ Every modifying request requires an idempotent `action_id` and reason.
 
 1. Resolves the physical account's logical account.
 2. Acquires the logical-account lock.
-3. Persists `PAUSED`, increments `control_revision`, and records the reason.
+3. Persists `automation_state=PAUSED` and records the reason.
 4. Stops new target children and cancels every active owned target order in the
    logical account.
 5. Creates an `OPERATOR` order through the shared `OrderService`.
@@ -477,7 +479,7 @@ The latest Strategy target remains stored. Only an explicit
 
 `FlattenLogicalAccount`:
 
-1. Persists `FLATTENING`, increments `control_revision`, and records the
+1. Atomically persists `automation_state=PAUSED` and a RUNNING
    `OperatorAction`.
 2. Performs a fresh Exchange synchronization for every attached member,
    including disabled members that still belong to the logical account.
@@ -491,10 +493,23 @@ The latest Strategy target remains stored. Only an explicit
    action deadline expires, or an account reports an error.
 7. Finishes in `PAUSED`, never `ACTIVE`.
 
+The RPC keeps the trading-domain name `FlattenLogicalAccount`; operator-facing
+UI uses "close positions per account" (逐账户清仓). Flatten does not delete the
+latest `LogicalAccountTarget`, so a later explicit Resume may reopen exposure
+toward that target.
+
 Flatten is an operator override. It attempts every member independently even
 when the aggregate logical account is Not Ready. Failures and remaining
 positions are returned per account, and repeated use of the same `action_id`
 continues the same action without duplicating child orders.
+
+LogicalAccount does not duplicate the running action as a `FLATTENING` state.
+The RUNNING `OperatorAction` is the durable progress and restart identity.
+There is no `control_revision`: the single-process serial executor, operator
+path, and membership changes share the same logical-account lock. The
+TargetExecutor holds that lock from its final ACTIVE check through Order
+creation, Exchange submission, and response persistence; a later Pause then
+cancels any active TARGET order created immediately before it.
 
 Not Ready does not permit stale-position trading. If fresh synchronization
 fails for one account, Flatten reports that account and does not guess a closing
@@ -526,6 +541,24 @@ The shared `OrderService` provides a state-aware idempotent entry point:
 Idempotency compares only caller-owned order fields. Server-derived reference
 price and timestamp do not participate.
 
+The domain names limit-order lifetime behavior `FillPolicy`, with supported
+values `GTC`, `IOC`, and `FOK`; `MARKET` orders have no FillPolicy. Exchange
+adapters map it to native `timeInForce` or order-type fields.
+
+Public RPC and `ClientOrderSpec` do not expose a reduce-only flag.
+`OrderService` derives and persists `ReducePositionOnly` from the confirmed
+position and trusted execution phase:
+
+- SPOT and SWAP opening or increase orders use `false`.
+- SWAP reductions, opposite-position closing, and Flatten orders use `true`.
+- A manual order that would cross zero is rejected; the operator must reduce or
+  Flatten first, wait for confirmed zero, and then submit the opposite opening
+  order.
+
+The internal Order and Exchange request retain `ReducePositionOnly` and map it
+to the Exchange-native `reduceOnly` guard. This prevents a stale closing
+quantity from accidentally opening the opposite position.
+
 The account lock covers precheck, unknown resolution, conditional submission,
 and local response persistence. A successful non-OPEN Exchange response
 triggers immediate `SyncAccount`; Trade never fabricates fills from an
@@ -550,9 +583,11 @@ Live activation requires:
 - Homogeneous member environment.
 - Valid single-secret retrieval for every member credential.
 
-`RevealSecret` is called once by secret ID. Trade validates returned category,
+The service-auth-only `GetSecretValue` RPC is called once by secret ID. The
+ordinary admin `GetSecret` remains masked. Trade validates returned category,
 provider, status, key ID, secret value, and extra configuration. It does not
-list and reveal unrelated credentials.
+list or load unrelated credentials. The plaintext response type remains
+distinct from the masked admin type and is named `SecretMaterial`.
 
 ## Health and Runtime
 
@@ -606,9 +641,9 @@ algorithm registry, or second event workflow.
 - A member Not Ready stops automatic orders for the whole logical account.
 - Unsupported instruments fail target validation.
 - Insufficient capacity leaves a visible `BLOCKED` target with reasons; it does
-  not change operator control state or over-allocate another account.
+  not change `automation_state` or over-allocate another account.
 - An external order or fill pauses automation.
-- Operator actions remain paused after completion or failure.
+- Logical accounts remain paused after operator actions complete or fail.
 - Restart restores current target, operator action, logical-account state,
   unknown orders, and Exchange sessions from SQLite.
 
@@ -630,6 +665,8 @@ algorithm registry, or second event workflow.
 - Observe-only `rebalance` updates its theoretical target without an outbox
   message.
 - Empty `rebalance` publishes an empty FULL target.
+- Strategy output and the public command use `InstrumentTarget.quantity`; old
+  `target_quantity`, `TargetPosition`, and `TradeTarget` names are rejected.
 - Command sequence is monotonic per runner.
 - Transaction failure cannot partially write Result, current target, sequence,
   or outbox.
@@ -639,8 +676,9 @@ algorithm registry, or second event workflow.
 ### Logical Account
 
 - Homogeneous member validation.
-- Physical account cannot join two enabled logical accounts.
-- Membership changes require paused/disabled state.
+- A physical account cannot have enabled membership in two logical accounts.
+- New logical accounts start paused.
+- Membership changes require paused state.
 - Removing a member with positions or orders is rejected.
 - One owner runner per logical account.
 - Any member Not Ready gates automatic execution.
@@ -653,6 +691,8 @@ algorithm registry, or second event workflow.
 - Reduction selects the largest reducible position.
 - Increase falls through priority members when capacity is insufficient.
 - One child at a time survives restart and Fill updates.
+- Final pre-submit validation under the logical-account lock prevents a child
+  from being created after Pause.
 - Unsupported instruments and below-minimum blocked targets terminate predictably.
 - FULL omission closes current positions and stale owned orders.
 
@@ -666,6 +706,8 @@ algorithm registry, or second event workflow.
 - Flatten does not trade from stale snapshots after synchronization failure.
 - Partial flatten failure reports per-account remaining positions and remains paused.
 - Repeated `action_id` does not create duplicate child orders.
+- A running Flatten is represented by the OperatorAction while the logical
+  account remains paused.
 - Flatten handles disabled attached members, SPOT settlement cash, dust, and
   bounded retries.
 - Resume requires Ready members and makes reopening the latest target explicit.
@@ -674,17 +716,25 @@ algorithm registry, or second event workflow.
 ### Order and Exchange
 
 - RPC retry ignores server-derived reference quote changes.
+- Public RPC cannot set reduce-only semantics.
+- `FillPolicy` validates and maps `GTC`, `IOC`, and `FOK` for LIMIT orders;
+  MARKET orders carry no policy.
+- SWAP reductions and Flatten derive `ReducePositionOnly=true`; SWAP increases
+  and all SPOT orders derive `false`.
+- A manual order that would cross zero is rejected.
 - State-aware submit covers every Order state.
 - Unknown lookup window permits only controlled same-ID retry.
 - Non-OPEN success responses trigger synchronization.
 - OKX client IDs satisfy native validation.
 - Paper LIMIT is rejected before persistence.
-- Secret retrieval reveals only the requested credential.
+- `GetSecretValue` is service-auth-only and returns only the requested
+  credential with validation metadata.
 - Manager initial failure and worker termination affect readiness.
 
 ### Cross-Module and Real Exchange
 
-- StrategyRunner FULL target reaches one multi-account LogicalAccount.
+- StrategyRunner FULL `LogicalAccountTargetRequested` reaches one multi-account
+  LogicalAccount.
 - Removed instrument becomes zero and closes physical positions.
 - Empty FULL target closes every member.
 - Manual flatten prevents automatic reopening until Resume.
@@ -699,8 +749,12 @@ Strategy documents that describe:
 
 - Binding/group routing.
 - Inbox/Saga/Rebalance legs.
-- Single-account TargetIntent.
+- Single-account target commands.
 - Stateful Strategy input/output and state-format migration.
+- LogicalAccount control revisions or duplicate `FLATTENING`/`DISABLED`
+  automation states.
+- `TargetIntent`, `TargetPosition`, `TradeTarget`, `target_quantity`,
+  `RevealSecret`, or other superseded command and secret-access names.
 - Paper LIMIT support.
 - The local double-entry balance projection.
 - Bulk secret reveal.
@@ -718,7 +772,8 @@ The change is complete when:
    accounts without cross-account netting errors.
 5. Manual orders and flatten operations pause automation before they act.
 6. Automatic execution cannot resume without explicit operator Resume.
-7. Order submission, unknown recovery, OKX IDs, readiness, and secret access
-   satisfy the corrected boundaries.
+7. Order submission, `FillPolicy`, server-derived reduce-only behavior, unknown
+   recovery, OKX IDs, readiness, and `GetSecretValue` access satisfy the
+   corrected boundaries.
 8. Module tests, targeted race tests, cross-module E2E, deployment contracts,
    and real Exchange testnet smoke pass.
