@@ -306,6 +306,10 @@ func TestDuckDBRejectsMalformedSystemSchema(t *testing.T) {
 			ddl:  `CREATE TABLE view_rows (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, data_time TIMESTAMP_NS NOT NULL, PRIMARY KEY(subject_id, freq, data_time))`,
 		},
 		{
+			name: "legacy dimensions schema",
+			ddl:  `CREATE TABLE view_rows (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, data_time TIMESTAMP_NS NOT NULL, dimensions_json VARCHAR NOT NULL, PRIMARY KEY(subject_id, freq, data_time, dimensions_json))`,
+		},
+		{
 			name: "wrong primary key",
 			ddl:  `CREATE TABLE view_rows (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, data_time TIMESTAMP_NS NOT NULL, series_tag VARCHAR NOT NULL, PRIMARY KEY(subject_id, freq, data_time))`,
 		},
