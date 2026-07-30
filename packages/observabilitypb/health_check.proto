@@ -17,4 +17,5 @@ message HealthCheckReport {
   string error_code = 8;
   string error_summary = 9;
   google.protobuf.Timestamp checked_at = 10;
+  string node_id = 11;
 }

@@ -833,19 +833,27 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 	}
 	out := make([]BusinessStatus, 0, len(lastSuccess))
 	for key, successValue := range lastSuccess {
+		runValue := lastRun[key]
+		failureValue := failures[key]
+		differenceValue := differences[key]
+		if successValue.value == 0 && runValue.value == 0 && failureValue.value == 0 && differenceValue.value == 0 {
+			// Prometheus exports registered gauges as zero even when Trade has no
+			// configured accounts. No sync has been expected until activity begins.
+			continue
+		}
 		lastSuccessAt := unixTime(successValue.value)
 		lastCheckedAt := lastSuccessAt
-		if runValue, ok := lastRun[key]; ok {
+		if _, ok := lastRun[key]; ok {
 			lastCheckedAt = unixTime(runValue.value)
 		}
 		status, reason := "healthy", "balance sync fresh"
 		switch {
 		case successValue.stale:
 			status, reason = "stale", "producer stale"
-		case failures[key].value >= 3:
+		case failureValue.value >= 3:
 			status, reason = "down", "balance sync failed 3 consecutive runs"
-		case differences[key].value > threshold:
-			status, reason = "down", fmt.Sprintf("balance difference %.4f exceeds %.4f", differences[key].value, threshold)
+		case differenceValue.value > threshold:
+			status, reason = "down", fmt.Sprintf("balance difference %.4f exceeds %.4f", differenceValue.value, threshold)
 		case lastSuccessAt.IsZero():
 			status, reason = "unknown", "尚未上报"
 		case now.Sub(lastSuccessAt) > 15*time.Minute:

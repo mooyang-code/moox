@@ -99,6 +99,7 @@ grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/se
 [[ -d "${TMP_ROOT}/unpacked/trade" ]]
 grep -Fq 'WITH_STRATEGY="${MOOX_WITH_STRATEGY:-1}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'WITH_TRADE="${MOOX_WITH_TRADE:-1}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'RUNTIME_IDENTITY_ENV+=("MOOX_REPORT_IP=${PUBLIC_HOST}")' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'start_strategy' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'start_trade' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'trade) url=http://127.0.0.1:11210/readyz' "${TMP_ROOT}/unpacked/healthcheck.sh"

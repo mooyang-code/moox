@@ -154,7 +154,7 @@ func TestSCFSentinelUsesDirectNotificationOnlyForCentralPathFailure(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			sender := &sentinelSender{}
 			handler, err := serverless.NewWatchdogHandler(serverless.WatchdogOptions{
-				Enabled: true, ObserverID: "scf-sentinel", SpaceID: "crypto",
+				Enabled: true, ObserverID: "scf-sentinel", NodeID: "scf-node-a", SpaceID: "crypto",
 				Ready: func() bool { return true },
 				Checks: []serverless.WatchdogCheck{func(context.Context) serverless.CheckResult {
 					return serverless.CheckResult{

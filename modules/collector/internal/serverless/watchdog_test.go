@@ -59,7 +59,7 @@ func TestWatchdogDirectSendBoundariesAndCooldown(t *testing.T) {
 	clock := func() time.Time { return now }
 	events, sender := &eventReporterStub{}, &senderStub{}
 	handler, err := NewWatchdogHandler(WatchdogOptions{
-		Enabled: true, ObserverID: "scf-sentinel", SpaceID: "crypto", Ready: func() bool { return true },
+		Enabled: true, ObserverID: "scf-sentinel", NodeID: "scf-node-a", SpaceID: "crypto", Ready: func() bool { return true },
 		Checks: []WatchdogCheck{
 			func(context.Context) CheckResult {
 				return CheckResult{CheckID: "monitor_ready", Kind: "http", Success: false, Error: "down"}
@@ -74,6 +74,7 @@ func TestWatchdogDirectSendBoundariesAndCooldown(t *testing.T) {
 	require.NoError(t, handler.Handle(context.Background()))
 	require.Equal(t, int32(1), sender.count.Load())
 	require.Len(t, events.reports, 2)
+	require.Equal(t, "scf-node-a", events.reports[0].GetNodeId())
 	require.NoError(t, handler.Handle(context.Background()))
 	require.Equal(t, int32(1), sender.count.Load())
 
@@ -85,7 +86,7 @@ func TestWatchdogDirectSendBoundariesAndCooldown(t *testing.T) {
 func TestWatchdogHealthyMonitorCanaryFailureUsesOnlyEventBus(t *testing.T) {
 	events, sender := &eventReporterStub{}, &senderStub{}
 	handler, err := NewWatchdogHandler(WatchdogOptions{
-		Enabled: true, ObserverID: "scf-sentinel", SpaceID: "crypto", Ready: func() bool { return true },
+		Enabled: true, ObserverID: "scf-sentinel", NodeID: "scf-node-a", SpaceID: "crypto", Ready: func() bool { return true },
 		Checks: []WatchdogCheck{
 			func(context.Context) CheckResult { return CheckResult{CheckID: "monitor_ready", Success: true} },
 			func(context.Context) CheckResult {
@@ -103,7 +104,7 @@ func TestWatchdogHealthyMonitorCanaryFailureUsesOnlyEventBus(t *testing.T) {
 func TestWatchdogEventBusFailureDirectSendsOnce(t *testing.T) {
 	events, sender := &eventReporterStub{err: errors.New("eventbus down")}, &senderStub{}
 	handler, err := NewWatchdogHandler(WatchdogOptions{
-		Enabled: true, ObserverID: "scf-sentinel", SpaceID: "crypto", Ready: func() bool { return true },
+		Enabled: true, ObserverID: "scf-sentinel", NodeID: "scf-node-a", SpaceID: "crypto", Ready: func() bool { return true },
 		Checks: []WatchdogCheck{func(context.Context) CheckResult { return CheckResult{CheckID: "monitor_ready", Success: true} }},
 		Events: events, DirectSender: sender,
 	})
@@ -115,7 +116,7 @@ func TestWatchdogEventBusFailureDirectSendsOnce(t *testing.T) {
 func TestWatchdogEventBusDeadlineStillUsesFreshDirectContext(t *testing.T) {
 	events, sender := &blockingEventReporter{}, &contextCheckingSender{}
 	handler, err := NewWatchdogHandler(WatchdogOptions{
-		Enabled: true, ObserverID: "scf-sentinel", SpaceID: "crypto",
+		Enabled: true, ObserverID: "scf-sentinel", NodeID: "scf-node-a", SpaceID: "crypto",
 		Ready: func() bool { return true }, Timeout: 20 * time.Millisecond,
 		Checks: []WatchdogCheck{
 			func(context.Context) CheckResult { return CheckResult{CheckID: "monitor_ready", Success: true} },
@@ -134,7 +135,7 @@ func TestWatchdogSkipsNotReadyAndOverlap(t *testing.T) {
 	var skippedMu sync.Mutex
 	var skipped []string
 	handler, err := NewWatchdogHandler(WatchdogOptions{
-		Enabled: true, ObserverID: "scf-sentinel", Ready: func() bool { return false },
+		Enabled: true, ObserverID: "scf-sentinel", NodeID: "scf-node-a", Ready: func() bool { return false },
 		OnSkipped: func(reason string) {
 			skippedMu.Lock()
 			skipped = append(skipped, reason)

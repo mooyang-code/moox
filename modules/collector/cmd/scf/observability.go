@@ -122,8 +122,9 @@ func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 		}
 	}
 	return serverless.NewWatchdogHandler(serverless.WatchdogOptions{
-		Enabled: true, ObserverID: "scf_sentinel", SpaceID: firstNonEmpty(os.Getenv("MOOX_SPACE_ID"), "crypto"),
-		Ready: runtimeapp.IsReady, Checks: checks, Events: events, Metrics: reporter, DirectSender: sender,
+		Enabled: true, ObserverID: "scf_sentinel", NodeID: nodeID,
+		SpaceID: firstNonEmpty(os.Getenv("MOOX_SPACE_ID"), "crypto"),
+		Ready:   runtimeapp.IsReady, Checks: checks, Events: events, Metrics: reporter, DirectSender: sender,
 	})
 }
 

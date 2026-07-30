@@ -28,15 +28,16 @@ func TestExternalHealthRouteUsesFixedAllowlistAndPersistsResult(t *testing.T) {
 	now := time.Now().UTC()
 	route := externalHealthRoute(repos, nil)
 	require.NoError(t, route(context.Background(), &eventpb.EventMessage{SpaceId: "crypto"}, &observabilitypb.HealthCheckReport{
-		ObserverId: externalSentinelObserver, CheckId: "monitor_ready", Success: true,
+		ObserverId: externalSentinelObserver, NodeId: "scf-node-a", CheckId: "monitor_ready", Success: true,
 		StatusCode: 200, LatencyMs: 12, CheckedAt: timestamppb.New(now),
 	}))
 	results, err := repos.Results.Recent(context.Background(), "crypto", externalCheckID(externalSentinelObserver, "monitor_ready"), 1)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.True(t, results[0].Success)
+	require.Equal(t, "scf-node-a", results[0].InstanceID)
 	require.NoError(t, route(context.Background(), &eventpb.EventMessage{SpaceId: "crypto"}, &observabilitypb.HealthCheckReport{
-		ObserverId: externalSentinelObserver, CheckId: "monitor_ready", Success: true,
+		ObserverId: externalSentinelObserver, NodeId: "scf-node-a", CheckId: "monitor_ready", Success: true,
 		StatusCode: 200, LatencyMs: 12, CheckedAt: timestamppb.New(now),
 	}))
 	results, err = repos.Results.Recent(context.Background(), "crypto", externalCheckID(externalSentinelObserver, "monitor_ready"), 10)
@@ -48,6 +49,11 @@ func TestExternalHealthRouteUsesFixedAllowlistAndPersistsResult(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown external observer")
+
+	err = route(context.Background(), &eventpb.EventMessage{SpaceId: "crypto"}, &observabilitypb.HealthCheckReport{
+		ObserverId: externalSentinelObserver, CheckId: "monitor_ready", CheckedAt: timestamppb.New(now),
+	})
+	require.ErrorContains(t, err, "node_id is required")
 }
 
 func TestExternalHealthRouteStoresBacklogWithoutRegressingCurrentState(t *testing.T) {
@@ -65,7 +71,7 @@ func TestExternalHealthRouteStoresBacklogWithoutRegressingCurrentState(t *testin
 	message := &eventpb.EventMessage{SpaceId: "crypto"}
 
 	require.NoError(t, route(context.Background(), message, &observabilitypb.HealthCheckReport{
-		ObserverId: externalSentinelObserver, CheckId: "monitor_ready", Success: false,
+		ObserverId: externalSentinelObserver, NodeId: "scf-node-a", CheckId: "monitor_ready", Success: false,
 		ErrorSummary: "historical outage", CheckedAt: timestamppb.New(now.Add(-2 * time.Minute)),
 	}))
 	check, err := repos.Checks.Get(context.Background(), "crypto", checkID)
@@ -73,7 +79,7 @@ func TestExternalHealthRouteStoresBacklogWithoutRegressingCurrentState(t *testin
 	require.Nil(t, check.LastCheckedAt)
 
 	require.NoError(t, route(context.Background(), message, &observabilitypb.HealthCheckReport{
-		ObserverId: externalSentinelObserver, CheckId: "monitor_ready", Success: true,
+		ObserverId: externalSentinelObserver, NodeId: "scf-node-a", CheckId: "monitor_ready", Success: true,
 		StatusCode: 200, CheckedAt: timestamppb.New(now),
 	}))
 	check, err = repos.Checks.Get(context.Background(), "crypto", checkID)
@@ -82,7 +88,7 @@ func TestExternalHealthRouteStoresBacklogWithoutRegressingCurrentState(t *testin
 	require.WithinDuration(t, now, *check.LastCheckedAt, time.Millisecond)
 
 	require.NoError(t, route(context.Background(), message, &observabilitypb.HealthCheckReport{
-		ObserverId: externalSentinelObserver, CheckId: "monitor_ready", Success: false,
+		ObserverId: externalSentinelObserver, NodeId: "scf-node-a", CheckId: "monitor_ready", Success: false,
 		ErrorSummary: "out-of-order failure", CheckedAt: timestamppb.New(now.Add(-10 * time.Second)),
 	}))
 	check, err = repos.Checks.Get(context.Background(), "crypto", checkID)
@@ -106,7 +112,7 @@ func TestExternalHealthRoutePreservesStableErrorCodeAndSafeDiagnostic(t *testing
 	now := time.Now().UTC()
 	route := externalHealthRoute(repos, nil)
 	require.NoError(t, route(context.Background(), &eventpb.EventMessage{SpaceId: "crypto"}, &observabilitypb.HealthCheckReport{
-		ObserverId: externalSentinelObserver, CheckId: "market_canary", Kind: "storage",
+		ObserverId: externalSentinelObserver, NodeId: "scf-node-a", CheckId: "market_canary", Kind: "storage",
 		Target: "crypto/binance_spot_kline_1h/BTC-USDT/1H", Success: false,
 		ErrorCode:    "insufficient_closed_bars",
 		ErrorSummary: "Storage 查询只返回 0 根已收盘 K 线，至少需要 2 根",

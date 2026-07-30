@@ -24,8 +24,15 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/nats-io/nats.go"
 	trpc "trpc.group/trpc-go/trpc-go"
+	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 )
+
+const archiveConsumerRetryDelay = time.Second
+
+type archiveEventRunner interface {
+	Run(context.Context) error
+}
 
 type App struct {
 	Config    *config.Config
@@ -133,7 +140,11 @@ func (a *App) Run(ctx context.Context) error {
 	handler := eventconsumer.NewHandler(decoder, store, nil)
 	runner := eventconsumer.NewRunner(pull, handler, a.Config.Archive.EventBus.FetchBatch)
 	runnerErr := make(chan error, 1)
-	go func() { runnerErr <- runner.Run(ctx) }()
+	go func() {
+		runnerErr <- runArchiveEventConsumer(ctx, runner, archiveConsumerRetryDelay, func(err error) {
+			log.Errorf("archive event consumer stopped; retrying: %v", err)
+		})
+	}()
 	var serveErr <-chan error
 	if a.Server != nil {
 		ch := make(chan error, 1)
@@ -192,6 +203,52 @@ func (a *App) Run(ctx context.Context) error {
 		state.DirtyPartitions.Store(status.DirtyPartitions)
 	}
 	return errors.Join(firstErr, drainErr, flushErr)
+}
+
+func runArchiveEventConsumer(
+	ctx context.Context,
+	runner archiveEventRunner,
+	retryDelay time.Duration,
+	onFailure func(error),
+) error {
+	if runner == nil {
+		return errors.New("archive event runner is required")
+	}
+	if ctx == nil {
+		ctx = trpc.BackgroundContext()
+	}
+	if retryDelay <= 0 {
+		retryDelay = archiveConsumerRetryDelay
+	}
+	for {
+		err := runner.Run(ctx)
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return nil
+		}
+		if err == nil {
+			return nil
+		}
+		if !retryableArchiveConsumerError(err) {
+			return err
+		}
+		if onFailure != nil {
+			onFailure(err)
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
+func retryableArchiveConsumerError(err error) bool {
+	return errors.Is(err, nats.ErrReconnectBufExceeded) ||
+		errors.Is(err, nats.ErrFetchDisconnected)
 }
 
 func eventBusConfig(cfg *config.Config) (jetstream.Config, error) {

@@ -55,6 +55,7 @@ type MetricsReporter interface {
 type WatchdogOptions struct {
 	Enabled        bool
 	ObserverID     string
+	NodeID         string
 	SpaceID        string
 	Ready          func() bool
 	Checks         []WatchdogCheck
@@ -79,6 +80,9 @@ func NewWatchdogHandler(options WatchdogOptions) (*WatchdogHandler, error) {
 	}
 	if strings.TrimSpace(options.ObserverID) == "" {
 		return nil, errors.New("SCF watchdog observer_id is required")
+	}
+	if strings.TrimSpace(options.NodeID) == "" {
+		return nil, errors.New("SCF watchdog node_id is required")
 	}
 	if options.Ready == nil {
 		options.Ready = func() bool { return false }
@@ -130,6 +134,7 @@ func (h *WatchdogHandler) run(ctx context.Context) error {
 		if h.options.Events != nil && !publishFailed {
 			report := &observabilitypb.HealthCheckReport{
 				ObserverId:   h.options.ObserverID,
+				NodeId:       h.options.NodeID,
 				CheckId:      result.CheckID,
 				Target:       result.Target,
 				Kind:         result.Kind,
@@ -191,7 +196,10 @@ func (h *WatchdogHandler) sendDirect(ctx context.Context, results []CheckResult,
 		Severity: msgbox.SeverityCritical,
 		Title:    "MooX SCF Sentinel",
 		Body:     body,
-		Labels:   map[string]string{"space_id": truncateRunes(h.options.SpaceID, 256)},
+		Labels: map[string]string{
+			"space_id": truncateRunes(h.options.SpaceID, 256),
+			"SCF 节点":   truncateRunes(h.options.NodeID, 256),
+		},
 	}); err == nil {
 		h.lastDirectUnix.Store(now.Unix())
 	}

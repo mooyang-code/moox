@@ -58,6 +58,10 @@ func externalHealthRoute(repos *store.Repositories, evaluator *alerting.Evaluato
 		if _, ok := externalSentinelChecks[rawCheckID]; !ok {
 			return eventconsumer.Permanent(fmt.Errorf("unknown external check"))
 		}
+		nodeID := oneLineDiagnostic(report.GetNodeId(), 256)
+		if nodeID == "" {
+			return eventconsumer.Permanent(fmt.Errorf("external SCF node_id is required"))
+		}
 		if message.GetSpaceId() != "crypto" || report.GetCheckedAt() == nil {
 			return eventconsumer.Permanent(fmt.Errorf("invalid external check scope or checked_at"))
 		}
@@ -76,7 +80,7 @@ func externalHealthRoute(repos *store.Repositories, evaluator *alerting.Evaluato
 		}
 		result := &domain.CheckResult{
 			ResultID: fmt.Sprintf("%s-%d", checkID, checkedAt.UnixNano()),
-			SpaceID:  message.GetSpaceId(), CheckID: checkID, InstanceID: observerID,
+			SpaceID:  message.GetSpaceId(), CheckID: checkID, InstanceID: nodeID,
 			Success: report.GetSuccess(), Status: status, HTTPStatus: int(report.GetStatusCode()),
 			Connected: report.GetSuccess(), LatencyMS: report.GetLatencyMs(),
 			ErrorMessage: externalErrorMessage(report),

@@ -273,7 +273,10 @@ func TestWebhookNotifierRoutesThroughMsgboxSender(t *testing.T) {
 
 func TestWebhookNotifierExplainsKnownFailuresInChinese(t *testing.T) {
 	sender := &recordingSender{}
-	notifier := WebhookNotifier{NewSender: func(string) (msgbox.Sender, error) { return sender, nil }}
+	notifier := WebhookNotifier{
+		ReportIP:  "106.53.107.122",
+		NewSender: func(string) (msgbox.Sender, error) { return sender, nil },
+	}
 	check := domain.Check{
 		CheckID: "sysdeploy:control:storage-primary",
 		Name:    "storage-primary@control",
@@ -292,6 +295,7 @@ func TestWebhookNotifierExplainsKnownFailuresInChinese(t *testing.T) {
 	assert.Equal(t, "持续告警：storage-primary@control", message.Title)
 	assert.Contains(t, message.Body, "异常原因：目标服务拒绝了健康检查鉴权（HTTP 401）")
 	assert.Contains(t, message.Body, "建议处理：检查 Monitor 与 storage-primary 使用的 health-auth 密钥是否一致")
+	assert.Contains(t, message.Body, "上报 IP：106.53.107.122")
 	assert.Contains(t, message.Body, "检查时间：2026-07-29 17:30:00 CST")
 	assert.Equal(t, "持续告警", message.Labels["事件"])
 	assert.Equal(t, "异常中", message.Labels["状态"])
@@ -318,7 +322,7 @@ func TestWebhookNotifierIncludesChineseSCFSentinelDiagnostic(t *testing.T) {
 		Check: check, Status: domain.AlertStatusFiring, EventType: domain.AlertEventReminder,
 		Result: domain.CheckResult{
 			ResultID:   "external:scf_sentinel:market_canary-123",
-			InstanceID: "scf_sentinel", ErrorMessage: "insufficient_closed_bars",
+			InstanceID: "moox-sentinel-ap-guangzhou-0", ErrorMessage: "insufficient_closed_bars",
 			BodyExcerpt: "查询范围：crypto/binance_spot_kline_1h/BTC-USDT/1H；SCF 上报：Storage 查询只返回 0 根已收盘 K 线，至少需要 2 根",
 			LatencyMS:   23, CheckedAt: time.Date(2026, 7, 29, 10, 4, 30, 0, time.UTC),
 		},
@@ -330,5 +334,6 @@ func TestWebhookNotifierIncludesChineseSCFSentinelDiagnostic(t *testing.T) {
 	assert.Contains(t, message.Body, "建议处理：检查采集任务是否持续写入该 Dataset、Symbol 和 Frequency")
 	assert.Contains(t, message.Body, "诊断信息：查询范围：crypto/binance_spot_kline_1h/BTC-USDT/1H；SCF 上报：Storage 查询只返回 0 根已收盘 K 线，至少需要 2 根")
 	assert.Contains(t, message.Body, "诊断编号：external:scf_sentinel:market_canary-123")
+	assert.Contains(t, message.Body, "SCF 节点：moox-sentinel-ap-guangzhou-0")
 	assert.NotContains(t, message.Body, "fewer than two closed bars")
 }

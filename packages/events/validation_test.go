@@ -207,6 +207,7 @@ func TestHealthCheckReportValidation(t *testing.T) {
 	occurredAt := time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC)
 	valid := &observabilitypb.HealthCheckReport{
 		ObserverId: "scf-watchdog",
+		NodeId:     "scf-node-a",
 		CheckId:    "storage-health",
 		Target:     "http://storage:8080/healthz",
 		Kind:       "http",
@@ -225,6 +226,7 @@ func TestHealthCheckReportValidation(t *testing.T) {
 
 	tests := map[string]func(*observabilitypb.HealthCheckReport){
 		"observer required":   func(v *observabilitypb.HealthCheckReport) { v.ObserverId = "" },
+		"node too long":       func(v *observabilitypb.HealthCheckReport) { v.NodeId = string(make([]byte, 257)) },
 		"check required":      func(v *observabilitypb.HealthCheckReport) { v.CheckId = "" },
 		"kind required":       func(v *observabilitypb.HealthCheckReport) { v.Kind = "" },
 		"target too long":     func(v *observabilitypb.HealthCheckReport) { v.Target = string(make([]byte, 513)) },

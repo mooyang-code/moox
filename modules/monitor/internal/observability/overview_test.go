@@ -290,6 +290,23 @@ func TestBuilderMarksBalanceDownAfterThreeFailures(t *testing.T) {
 	}
 }
 
+func TestBuilderOmitsBalanceCheckBeforeAnyAccountSyncRuns(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetric(t, db, "balance-success", "moox_trade_balance_sync_last_success_timestamp_seconds", `{}`, 0, now)
+		seedOverviewMetric(t, db, "balance-run", "moox_trade_balance_sync_last_run_timestamp_seconds", `{}`, 0, now)
+		seedOverviewMetric(t, db, "balance-failures", "moox_trade_balance_sync_consecutive_failures", `{}`, 0, now)
+		seedOverviewMetric(t, db, "balance-difference", "moox_trade_balance_sync_max_difference_ratio", `{}`, 0, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.BusinessChecks) != 0 {
+		t.Fatalf("balance status = %+v, want no check before the first sync run", got.BusinessChecks)
+	}
+}
+
 func TestBuilderMarksBalanceDifferenceAboveThresholdDown(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query := openOverviewMetrics(t, func(db *gorm.DB) {

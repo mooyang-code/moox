@@ -1216,6 +1216,9 @@ runtime_identity_env() {
     "MOOX_NODE_ID=${MOOX_GATEWAY_NODE_ID}"
     "MOOX_BOOT_ID=${boot_id}"
   )
+  if [[ -n "${PUBLIC_HOST:-}" ]]; then
+    RUNTIME_IDENTITY_ENV+=("MOOX_REPORT_IP=${PUBLIC_HOST}")
+  fi
   if [[ -n "${config_file}" && -f "${config_file}" ]]; then
     RUNTIME_IDENTITY_ENV+=("MOOX_CONFIG_HASH=sha256:$(shasum -a 256 "${config_file}" | awk '{print $1}')")
   fi

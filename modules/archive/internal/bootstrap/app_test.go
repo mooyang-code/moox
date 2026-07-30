@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/config"
@@ -21,9 +22,56 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type transientArchiveRunner struct {
+	calls atomic.Int32
+	err   error
+}
+
+func (r *transientArchiveRunner) Run(ctx context.Context) error {
+	if r.calls.Add(1) == 1 {
+		return fmt.Errorf("runner failed: %w", r.err)
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type failingArchiveRunner struct{ err error }
+
+func (r failingArchiveRunner) Run(context.Context) error { return r.err }
+
+func TestArchiveConsumerReturnsPermanentRunnerFailure(t *testing.T) {
+	want := errors.New("consumer deleted")
+	err := runArchiveEventConsumer(t.Context(), failingArchiveRunner{err: want}, time.Millisecond, nil)
+	require.ErrorIs(t, err, want)
+}
+
+func TestArchiveConsumerRetriesTransientRunnerFailure(t *testing.T) {
+	for _, transientErr := range []error{nats.ErrReconnectBufExceeded, nats.ErrFetchDisconnected} {
+		t.Run(transientErr.Error(), func(t *testing.T) {
+			runner := &transientArchiveRunner{err: transientErr}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() {
+				done <- runArchiveEventConsumer(ctx, runner, time.Millisecond, nil)
+			}()
+			require.Eventually(t, func() bool {
+				return runner.calls.Load() >= 2
+			}, time.Second, time.Millisecond)
+			select {
+			case err := <-done:
+				t.Fatalf("consumer exited after transient failure: %v", err)
+			default:
+			}
+			cancel()
+			require.NoError(t, <-done)
+		})
+	}
+}
 
 func TestSourceLists(t *testing.T) {
 	cfg := testConfig()

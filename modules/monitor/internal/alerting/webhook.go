@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 type WebhookNotifier struct {
 	NewSender func(string) (msgbox.Sender, error)
 	Timeout   time.Duration
+	ReportIP  string
 }
 
 func (n WebhookNotifier) Send(ctx context.Context, webhook domain.WebhookChannel, event Event) error {
@@ -39,7 +41,7 @@ func (n WebhookNotifier) Send(ctx context.Context, webhook domain.WebhookChannel
 	return sender.Send(ctx, msgbox.Message{
 		Key: event.DedupeKey, Severity: severity,
 		Title: notificationTitle(event),
-		Body:  notificationBody(event),
+		Body:  notificationBody(event, firstText(n.ReportIP, os.Getenv("MOOX_REPORT_IP"))),
 		Labels: map[string]string{
 			"检查项": event.Check.CheckID, "事件": localizedEventType(event.EventType),
 			"状态": localizedAlertStatus(event.Status), "实例": event.Result.InstanceID,
@@ -52,7 +54,7 @@ func notificationTitle(event Event) string {
 	return localizedEventType(event.EventType) + "：" + name
 }
 
-func notificationBody(event Event) string {
+func notificationBody(event Event, reportIP string) string {
 	reason, action := localizedReason(event.Check, event.Result)
 	if event.EventType == domain.AlertEventResolved {
 		reason = "检查已恢复正常"
@@ -63,18 +65,39 @@ func notificationBody(event Event) string {
 		lines = append(lines, "建议处理："+action)
 	}
 	if strings.HasPrefix(event.Check.CheckID, "external:scf_sentinel:") {
+		if nodeID := safeNotificationValue(event.Result.InstanceID, 256); nodeID != "" {
+			lines = append(lines, "SCF 节点："+nodeID)
+		}
 		if diagnostic := strings.TrimSpace(event.Result.BodyExcerpt); diagnostic != "" {
 			lines = append(lines, "诊断信息："+diagnostic)
 		}
 		if resultID := strings.TrimSpace(event.Result.ResultID); resultID != "" {
 			lines = append(lines, "诊断编号："+resultID)
 		}
+	} else if reportIP = safeNotificationValue(reportIP, 128); reportIP != "" {
+		lines = append(lines, "上报 IP："+reportIP)
 	}
 	lines = append(lines,
 		"检查对象："+firstText(event.Check.Name, event.Check.CheckID),
 		"检查时间："+event.Result.CheckedAt.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02 15:04:05 MST"),
 	)
 	return strings.Join(lines, "\n")
+}
+
+func safeNotificationValue(value string, limit int) string {
+	value = strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\n', '\t':
+			return ' '
+		default:
+			return r
+		}
+	}, strings.TrimSpace(value))
+	runes := []rune(value)
+	if limit > 0 && len(runes) > limit {
+		return string(runes[:limit])
+	}
+	return value
 }
 
 func localizedReason(check domain.Check, result domain.CheckResult) (string, string) {

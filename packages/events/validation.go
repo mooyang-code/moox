@@ -82,6 +82,9 @@ func validateObservabilityHealthCheckReported(message *eventpb.EventMessage, val
 		strings.TrimSpace(payload.GetKind()) == "" {
 		return fmt.Errorf("health check observer_id, check_id, and kind are required")
 	}
+	if len(payload.GetNodeId()) > 256 {
+		return fmt.Errorf("health check node_id exceeds 256 bytes")
+	}
 	if len(payload.GetTarget()) > 512 {
 		return fmt.Errorf("health check target exceeds 512 bytes")
 	}
