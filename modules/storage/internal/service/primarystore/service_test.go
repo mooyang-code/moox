@@ -660,6 +660,54 @@ func TestPrimaryReadFieldsReturnsResolvedLatestRecordVersion(t *testing.T) {
 	}
 }
 
+func TestPrimaryExactTimeSeriesReadCrossesDataNodePebble(t *testing.T) {
+	node, err := datanode.NewService(datanode.Options{
+		NodeID: "node-a", AuthSecret: "node-secret",
+		Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close()
+	svc, err := New(Options{
+		Node: node,
+		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+			return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey("node-secret", "primary")}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := &pb.TimeSeriesKey{
+		SpaceId: "crypto", DatasetId: "spot_kline_1h", SubjectId: "BTC-USDT", Freq: "1h",
+		DataTime: "2026-07-29T15:00:00Z", SeriesTag: "venue:binance",
+	}
+	rowKey := timeSeriesRowKey(key)
+	writeRsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		Rows: []*pb.RowFieldUpsert{{
+			Key: rowKey,
+			Fields: []*pb.FieldValue{{
+				FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 101.25}},
+			}},
+		}},
+	})
+	if err != nil || writeRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("write rsp=%v err=%v", writeRsp, err)
+	}
+	readRsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		SpaceId:  "crypto", DatasetId: "spot_kline_1h",
+		Keys: []*pb.TimeSeriesKey{key}, ColumnNames: []string{"close"},
+	})
+	if err != nil || readRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS ||
+		len(readRsp.GetRows()) != 1 || readRsp.GetRows()[0].GetKey().GetSeriesTag() != "venue:binance" ||
+		len(readRsp.GetRows()[0].GetFields()) != 1 ||
+		readRsp.GetRows()[0].GetFields()[0].GetValue().GetDoubleValue() != 101.25 {
+		t.Fatalf("read rsp=%v err=%v", readRsp, err)
+	}
+}
+
 func successRetInfo() *pb.RetInfo {
 	return &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}
 }
