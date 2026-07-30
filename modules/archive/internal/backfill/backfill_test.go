@@ -119,6 +119,8 @@ func TestBackfillerCarriesPrimaryAuth(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "request capture")
 	require.Equal(t, auth, access.request.GetAuthInfo())
+	require.Equal(t, "crypto", access.request.GetSpaceId())
+	require.Equal(t, "kline", access.request.GetDatasetId())
 	require.Len(t, access.request.GetSelectors(), 1)
 	require.NotNil(t, access.request.GetSelectors()[0].SeriesTag)
 	require.Empty(t, access.request.GetSelectors()[0].GetSeriesTag())

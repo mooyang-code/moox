@@ -60,6 +60,8 @@ func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, selector *stor
 		var callErr error
 		rsp, callErr = w.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 			AuthInfo:  w.authInfo,
+			SpaceId:   selector.GetSpaceId(),
+			DatasetId: selector.GetDatasetId(),
 			Selectors: []*storagepb.TimeSeriesSelector{selector},
 			Order:     storagepb.SortOrder_SORT_ORDER_DESC,
 			Page:      &storagepb.Page{Page: 1, Size: 1},

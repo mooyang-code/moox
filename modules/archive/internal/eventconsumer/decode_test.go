@@ -39,6 +39,20 @@ func TestDecoderKeepsSameTimestampDifferentTagsInDistinctPartitions(t *testing.T
 	assert.NotEqual(t, domain.PartitionID(batch.Rows[0].Partition), domain.PartitionID(batch.Rows[1].Partition))
 }
 
+func TestDecoderPreservesExplicitNullPatch(t *testing.T) {
+	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
+	event := validStorageEvent()
+	event.Rows[0].Fields[0].Value = &storagepb.TypedValue{
+		Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL},
+	}
+	raw, subject, messageID := marshalEvent(t, event)
+	batch, decision, err := decoder.DecodeEvent(raw, subject, messageID)
+	require.NoError(t, err)
+	require.Equal(t, DecisionArchive, decision)
+	require.Len(t, batch.Rows, 1)
+	assert.True(t, batch.Rows[0].Columns["close"].Null)
+}
+
 func TestDecoderRejectsInvalidRow(t *testing.T) {
 	decoder := NewDecoder(map[string][]string{"crypto": {"spot_kline_1h"}})
 	event := validStorageEvent()

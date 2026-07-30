@@ -164,6 +164,9 @@ func (s *Store) Append(ctx context.Context, event domain.EventBatch) (AppendResu
 			state.Schema = map[string]storagepb.FieldValueType{}
 		}
 		for name, value := range patch.Columns {
+			if value.Null {
+				continue
+			}
 			if old, exists := state.Schema[name]; exists && old != value.Type {
 				return AppendResult{}, fmt.Errorf("schema conflict for column %s", name)
 			}
@@ -194,6 +197,9 @@ func (s *Store) Append(ctx context.Context, event domain.EventBatch) (AppendResu
 			return AppendResult{}, err
 		}
 		for name, value := range patch.Columns {
+			if value.Null {
+				continue
+			}
 			if err := batch.Set(schemaKey(patch.Partition.SpaceID, patch.Partition.DatasetID, name), u32(uint32(value.Type)), nil); err != nil {
 				return AppendResult{}, err
 			}

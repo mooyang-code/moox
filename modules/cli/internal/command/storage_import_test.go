@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -285,4 +286,41 @@ func TestCSVStorageFileImporterUsesScalarSeriesTag(t *testing.T) {
 	require.Equal(t, "venue:binance", result.Rows[0].GetKey().GetSeriesTag())
 	upserts := storageImportUpserts(result.Rows)
 	require.Equal(t, "venue:binance", upserts[0].GetKey().GetTimeSeries().GetSeriesTag())
+}
+
+func TestCSVStorageFileImporterRejectsScopeMismatch(t *testing.T) {
+	options := storageImportOptions{
+		SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h",
+		TimeColumn: "data_time", SeriesTag: "venue:binance",
+	}
+	columns := map[string]*pb.DatasetColumn{
+		"close": {ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Required: true},
+	}
+	tests := []struct {
+		name        string
+		column      string
+		value       string
+		wantMessage string
+	}{
+		{name: "space", column: "space_id", value: "stocks", wantMessage: "does not match --space"},
+		{name: "dataset", column: "dataset_id", value: "perpetual_kline_1h", wantMessage: "does not match --dataset"},
+		{name: "subject", column: "subject_id", value: "ETH-USDT", wantMessage: "does not match --subject"},
+		{name: "frequency", column: "freq", value: "5m", wantMessage: "does not match --freq"},
+		{name: "series tag", column: "series_tag", value: "venue:okx", wantMessage: "does not match --series-tag"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sample.csv")
+			content := fmt.Sprintf(
+				"%s,data_time,close\n%s,2026-01-02T03:04:05Z,1.25\n",
+				tt.column, tt.value,
+			)
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+			_, err := csvStorageFileImporter{}.ReadTimeSeriesRows(path, storageImportContext{
+				Options: options,
+				Columns: columns,
+			})
+			require.ErrorContains(t, err, tt.wantMessage)
+		})
+	}
 }

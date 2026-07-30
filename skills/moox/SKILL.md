@@ -128,7 +128,7 @@ staged configuration.
 - Do not reintroduce `object_id` into public APIs. Use Space, DataSource, Subject, DataSet, View, Field, and Factor.
 - Use `subject_id` for normalized subject identity and `SubjectSymbol.external_symbol` for source-specific symbols.
 - Use `start_time`, `end_time`, and `snapshot_time`; avoid suffixes such as `_ms`.
-- Keep `dimensions` as user-defined partition/query dimensions. Do not expose storage-level partition keys to callers.
+- Keep `series_tag` as one optional scalar user label and part of time-series identity, for example `venue:binance`. Do not reintroduce map-style dimensions.
 - Treat Pebble-backed PrimaryStore as the online ordered fact store. Treat DuckDB as analytical query and versioned wide view storage. Treat Parquet as cold archive. Treat Bleve as text search.
 
 See `references/` for more detailed notes.

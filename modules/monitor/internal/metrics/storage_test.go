@@ -102,6 +102,9 @@ func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
 	if len(a.readReq.GetSelectors()) != 1 {
 		t.Fatalf("selectors=%d, want 1", len(a.readReq.GetSelectors()))
 	}
+	if a.readReq.GetSpaceId() != "moox_system" || a.readReq.GetDatasetId() != "moox_service_metrics" {
+		t.Fatalf("request scope=%s/%s", a.readReq.GetSpaceId(), a.readReq.GetDatasetId())
+	}
 	key := a.readReq.GetSelectors()[0]
 	if key.GetSubjectId() != "series-1" {
 		t.Fatalf("query key=%+v, want series subject", key)

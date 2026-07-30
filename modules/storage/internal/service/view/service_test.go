@@ -4,7 +4,10 @@ package view
 
 import (
 	"context"
+	"database/sql"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +118,37 @@ func TestViewServiceRequiresSecretAndAuth(t *testing.T) {
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+}
+
+func TestViewServicePropagatesIncompatibleDuckDBSchema(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "views")
+	duckdbRoot := filepath.Join(root, "duckdb")
+	if err := os.MkdirAll(duckdbRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("duckdb", filepath.Join(duckdbRoot, "legacy.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE view_rows (
+			subject_id VARCHAR NOT NULL,
+			freq VARCHAR NOT NULL,
+			data_time TIMESTAMP_NS NOT NULL,
+			dimensions_json VARCHAR NOT NULL,
+			PRIMARY KEY (subject_id, freq, data_time, dimensions_json)
+		)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = New(root, "view-secret")
+	if err == nil || !strings.Contains(err.Error(), "clean the index and rebuild it") {
+		t.Fatalf("New() error = %v", err)
 	}
 }
 

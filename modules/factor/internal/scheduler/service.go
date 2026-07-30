@@ -31,7 +31,7 @@ type Config struct {
 
 type StorageIO interface {
 	ReadRangeChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, int, []string) (*storageio.RangeChunk, error)
-	ExpandEndByPeriods(context.Context, storageio.WindowKey, time.Time, int) (time.Time, error)
+	ExpandEndByPeriods(context.Context, storageio.WindowKey, time.Time, int) (*storageio.EndExpansion, error)
 	WriteFactorPatch(context.Context, *engine.FactorTask, *engine.FactorResult) (uint64, error)
 }
 
@@ -291,21 +291,13 @@ func (s *Service) Run(ctx context.Context, task Task) error {
 			runErr = err
 			return runErr
 		}
-		runErr = s.withRetry(ctx, func() error {
-			expanded, err := s.storage.ExpandEndByPeriods(ctx, storageio.WindowKey{
-				SpaceID: task.SpaceID, SourceDataset: task.SourceDataset,
-				SubjectID: task.SubjectID, Freq: task.Freq,
-			}, task.EndTime, task.LookbackPeriods-1)
-			if err != nil {
-				return engine.RetryableError{Err: err}
-			}
-			if expanded.After(task.EndTime) {
-				task.EndTime = expanded
-			}
-			return nil
-		})
+		var expanded *storageio.EndExpansion
+		expanded, runErr = s.readReadyExpansion(ctx, task)
 		if runErr != nil {
 			return runErr
+		}
+		if expanded.EndTime.After(task.EndTime) {
+			task.EndTime = expanded.EndTime
 		}
 	}
 	cursor := task.StartTime
@@ -405,6 +397,45 @@ func (s *Service) readReadyChunk(ctx context.Context, task Task, cursor time.Tim
 				return nil, err
 			}
 		}
+	}
+	return nil, ErrViewIncomplete
+}
+
+func (s *Service) readReadyExpansion(ctx context.Context, task Task) (*storageio.EndExpansion, error) {
+	attempts := 1 + s.cfg.EventReadRetry
+	var last *storageio.EndExpansion
+	for attempt := 0; attempt < attempts; attempt++ {
+		var expansion *storageio.EndExpansion
+		err := s.withRetry(ctx, func() error {
+			var readErr error
+			expansion, readErr = s.storage.ExpandEndByPeriods(ctx, storageio.WindowKey{
+				SpaceID: task.SpaceID, SourceDataset: task.SourceDataset,
+				SubjectID: task.SubjectID, Freq: task.Freq,
+			}, task.EndTime, task.LookbackPeriods-1)
+			if readErr != nil {
+				return engine.RetryableError{Err: readErr}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		last = expansion
+		if expansion != nil && expansion.Complete {
+			return expansion, nil
+		}
+		if attempt+1 < attempts {
+			if err := sleepContext(ctx, s.cfg.EventReadRetryInterval); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// Fewer than the requested successor periods is valid near the current
+	// tail. Retry first so a lagging View can catch up, then accept only when
+	// its inclusive watermark has reached the triggering event range.
+	if last != nil && !last.IndexedTo.IsZero() &&
+		!last.IndexedTo.Before(task.EndTime.Add(-time.Nanosecond)) {
+		return last, nil
 	}
 	return nil, ErrViewIncomplete
 }

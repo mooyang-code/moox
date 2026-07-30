@@ -160,6 +160,8 @@ func TestLatestTimeSeriesTimeReadsNewestStorageRow(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC), got)
 	require.NotNil(t, proxy.req)
+	assert.Equal(t, "crypto", proxy.req.GetSpaceId())
+	assert.Equal(t, "kline", proxy.req.GetDatasetId())
 	assert.Equal(t, storagepb.SortOrder_SORT_ORDER_DESC, proxy.req.GetOrder())
 	assert.Equal(t, uint32(1), proxy.req.GetPage().GetSize())
 	require.Len(t, proxy.req.GetSelectors(), 1)

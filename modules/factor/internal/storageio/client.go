@@ -53,6 +53,13 @@ type RangeChunk struct {
 	IndexedTo     time.Time
 }
 
+// EndExpansion is an event range expanded over dependent source periods.
+type EndExpansion struct {
+	EndTime   time.Time
+	Complete  bool
+	IndexedTo time.Time
+}
+
 // ReadRangeChunk reads a bounded target range and prepends the required history.
 func (c *Client) ReadRangeChunk(
 	ctx context.Context,
@@ -112,20 +119,26 @@ func (c *Client) ExpandEndByPeriods(
 	key WindowKey,
 	endTime time.Time,
 	periods int,
-) (time.Time, error) {
+) (*EndExpansion, error) {
 	if periods <= 0 {
-		return endTime, nil
+		return &EndExpansion{EndTime: endTime, Complete: true}, nil
 	}
-	_, nextPeriods, _, _, err := c.readPeriods(ctx, key, &storagepb.TimeRange{
+	_, nextPeriods, complete, indexedTo, err := c.readPeriods(ctx, key, &storagepb.TimeRange{
 		StartTime: endTime.UTC().Format(time.RFC3339Nano),
 	}, storagepb.SortOrder_SORT_ORDER_ASC, periods, nil)
 	if err != nil {
-		return time.Time{}, err
+		return nil, err
+	}
+	// Open-ended View reads cannot report coverage complete. Receiving every
+	// requested successor period is nevertheless sufficient for expansion.
+	expanded := &EndExpansion{
+		EndTime: endTime, Complete: complete || len(nextPeriods) >= periods, IndexedTo: indexedTo,
 	}
 	if len(nextPeriods) == 0 {
-		return endTime, nil
+		return expanded, nil
 	}
-	return nextPeriods[len(nextPeriods)-1].Add(time.Nanosecond), nil
+	expanded.EndTime = nextPeriods[len(nextPeriods)-1].Add(time.Nanosecond)
+	return expanded, nil
 }
 
 func (c *Client) readPeriods(

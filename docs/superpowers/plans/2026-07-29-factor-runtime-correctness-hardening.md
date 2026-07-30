@@ -1236,7 +1236,7 @@ Expected: 所有真实 Storage/View/Python/Parquet 路径 PASS；脚本自行创
 **Files:**
 - No planned source changes; only fixes required by verification/review
 
-- [ ] **Step 1: 全量测试**
+- [x] **Step 1: 全量测试**
 
 ```bash
 (cd modules/storage && go test ./... -count=1)
@@ -1274,7 +1274,7 @@ make verify-pr
 
 处理全部 P0/P1 和与本计划相关的 P2，再重跑受影响测试。
 
-- [ ] **Step 3: 执行破坏性重建演练**
+- [x] **Step 3: 执行破坏性重建演练**
 
 在临时部署目录验证：
 

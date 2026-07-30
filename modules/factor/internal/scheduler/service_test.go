@@ -347,6 +347,46 @@ func TestEventRunExpandsCorrectionThroughDependentPeriods(t *testing.T) {
 	require.Equal(t, []int{3}, storage.writeSizes)
 }
 
+func TestEventRunRetriesIncompleteCorrectionExpansionBeforeFixingEnd(t *testing.T) {
+	base := time.Unix(1, 0).UTC()
+	storage := &fakeStorage{
+		expansions: []*storageio.EndExpansion{
+			{EndTime: base.Add(2 * time.Minute), Complete: false, IndexedTo: base.Add(time.Minute)},
+			{EndTime: base.Add(3 * time.Minute), Complete: true, IndexedTo: base.Add(2 * time.Minute)},
+		},
+		chunks: []*storageio.RangeChunk{
+			frameChunk([]time.Time{base, base.Add(time.Minute), base.Add(2 * time.Minute)}),
+		},
+	}
+	svc := NewService(Config{EventReadRetry: 1}, storage, &fakeExecutor{})
+	task := oneBarTask("BTC", base)
+	task.LookbackPeriods = 3
+
+	require.NoError(t, svc.Run(context.Background(), task))
+	require.Equal(t, 2, storage.expandCalls)
+	require.Equal(t, base.Add(3*time.Minute), storage.readEnds[0])
+	require.Equal(t, []int{3}, storage.writeSizes)
+}
+
+func TestEventRunAcceptsCurrentTailOnlyAfterExpansionRetries(t *testing.T) {
+	base := time.Unix(1, 0).UTC()
+	eventEnd := base.Add(time.Nanosecond)
+	storage := &fakeStorage{
+		expansions: []*storageio.EndExpansion{
+			{EndTime: eventEnd, Complete: false, IndexedTo: base},
+			{EndTime: eventEnd, Complete: false, IndexedTo: base},
+		},
+		chunks: []*storageio.RangeChunk{frameChunk([]time.Time{base})},
+	}
+	svc := NewService(Config{EventReadRetry: 1}, storage, &fakeExecutor{})
+	task := oneBarTask("BTC", base)
+	task.LookbackPeriods = 3
+
+	require.NoError(t, svc.Run(context.Background(), task))
+	require.Equal(t, 2, storage.expandCalls)
+	require.Equal(t, []int{1}, storage.writeSizes)
+}
+
 func TestRunSecondChunkFailureLeavesFirstChunkWritten(t *testing.T) {
 	base := time.Unix(0, 0).UTC()
 	storage := &fakeStorage{chunks: []*storageio.RangeChunk{
@@ -451,6 +491,7 @@ type fakeStorage struct {
 	writeErr    error
 	repeatFirst bool
 	expandedEnd time.Time
+	expansions  []*storageio.EndExpansion
 	expandErr   error
 	expandCalls int
 	readCalls   int
@@ -490,15 +531,20 @@ func (s *fakeStorage) ExpandEndByPeriods(
 	_ storageio.WindowKey,
 	end time.Time,
 	_ int,
-) (time.Time, error) {
+) (*storageio.EndExpansion, error) {
 	s.expandCalls++
 	if s.expandErr != nil {
-		return time.Time{}, s.expandErr
+		return nil, s.expandErr
+	}
+	if len(s.expansions) > 0 {
+		expansion := s.expansions[0]
+		s.expansions = s.expansions[1:]
+		return expansion, nil
 	}
 	if s.expandedEnd.After(end) {
-		return s.expandedEnd, nil
+		end = s.expandedEnd
 	}
-	return end, nil
+	return &storageio.EndExpansion{EndTime: end, Complete: true}, nil
 }
 
 type fakeExecutor struct {

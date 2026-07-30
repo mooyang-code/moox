@@ -563,8 +563,8 @@ func (s *incompleteThenCompleteStorage) ExpandEndByPeriods(
 	_ storageio.WindowKey,
 	end time.Time,
 	_ int,
-) (time.Time, error) {
-	return end, nil
+) (*storageio.EndExpansion, error) {
+	return &storageio.EndExpansion{EndTime: end, Complete: true}, nil
 }
 
 func (s *incompleteThenCompleteStorage) WriteFactorPatch(

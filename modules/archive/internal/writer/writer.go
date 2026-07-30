@@ -95,6 +95,9 @@ func (w *Writer) WritePartition(ctx context.Context, key domain.PartitionKey) (d
 		row = domain.MergePatch(row, item.Patch)
 		rows[item.RowID] = row
 		for name, value := range item.Patch.Columns {
+			if value.Null {
+				continue
+			}
 			if old, ok := schema[name]; ok && old != value.Type {
 				return domain.Manifest{}, fmt.Errorf("schema conflict for %s", name)
 			}

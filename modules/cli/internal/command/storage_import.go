@@ -489,11 +489,17 @@ func (csvStorageFileImporter) ReadTimeSeriesRows(path string, ctx storageImportC
 				continue
 			}
 			if isStorageImportKeyColumn(name) {
-				if name == "series_tag" && index < len(record) && record[index] != ctx.Options.SeriesTag {
-					return storageImportParseResult{}, fmt.Errorf(
-						"row %d series_tag %q does not match --series-tag %q",
-						line, record[index], ctx.Options.SeriesTag,
-					)
+				if expected, flag, validate := storageImportScopeColumn(name, ctx.Options); validate {
+					actual := ""
+					if index < len(record) {
+						actual = strings.TrimSpace(record[index])
+					}
+					if actual != expected {
+						return storageImportParseResult{}, fmt.Errorf(
+							"row %d %s %q does not match %s %q",
+							line, name, actual, flag, expected,
+						)
+					}
 				}
 				continue
 			}
@@ -587,6 +593,23 @@ func isStorageImportKeyColumn(name string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func storageImportScopeColumn(name string, options storageImportOptions) (expected string, flag string, validate bool) {
+	switch name {
+	case "space_id":
+		return options.SpaceID, "--space", true
+	case "dataset_id":
+		return options.DatasetID, "--dataset", true
+	case "subject_id":
+		return options.SubjectID, "--subject", true
+	case "freq":
+		return options.Freq, "--freq", true
+	case "series_tag":
+		return options.SeriesTag, "--series-tag", true
+	default:
+		return "", "", false
 	}
 }
 

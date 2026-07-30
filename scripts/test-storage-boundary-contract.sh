@@ -22,10 +22,10 @@ assert_no_legacy_series_identity() {
   # "task frequency dimensions". Task 13 changes the default scope to "all"
   # after every direct consumer has crossed the atomic wire boundary.
   local pattern='GetDimensions\b|CanonicalDimensions\b|DimensionTags\b|SeriesTagName\b|Dimensions[[:space:]]+(\[\]string|map\[)|Dimensions[[:space:]]*:|dimensions_json\b|dimensions[[:space:]]*=|dimensions[[:space:]]*\??:|\.dimensions\b|"dimensions"[[:space:]]*:|json:"dimensions|parse[A-Za-z]*Dimensions\b|dataDimensions\b|series_tag_name|dimension_tags'
-  local targets=(modules packages web/src examples)
+  local targets=(modules packages web/src examples skills/moox)
   local scope="${MOOX_SERIES_IDENTITY_SCOPE:-all}"
   if [[ "${scope}" == "all" ]]; then
-    targets=(modules packages web/src examples)
+    targets=(modules packages web/src examples skills/moox)
   elif [[ "${scope}" == "storage" ]]; then
     targets=(modules/storage packages/storagepb)
   else
@@ -42,9 +42,11 @@ assert_no_legacy_series_identity() {
     "${targets[@]}" || true)"
   while IFS= read -r match; do
     [[ -z "${match}" ]] && continue
-    # Archive must fail closed on pre-v2 Parquet. These exact files are the
-    # only allowed source-level legacy schema sentinels.
+    # Archive and DuckDB must fail closed on pre-v2 layouts. These exact files
+    # are the only allowed source-level legacy schema sentinels.
     case "${match}" in
+      modules/storage/internal/service/viewindex/duckdb/index_manager_test.go:*dimensions_json*|\
+      modules/storage/internal/service/view/service_test.go:*dimensions_json*|\
       modules/archive/internal/parquetio/codec.go:*dimensions_json*|\
       modules/archive/internal/parquetio/schema.go:*dimensions_json*|\
       modules/archive/internal/parquetio/codec_test.go:*dimensions_json*|\

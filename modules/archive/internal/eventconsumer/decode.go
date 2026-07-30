@@ -136,6 +136,8 @@ func toLocalTypedValue(value *sharedpb.TypedValue) *localpb.TypedValue {
 		return nil
 	}
 	switch v := value.GetValue().(type) {
+	case *sharedpb.TypedValue_NullValue:
+		return &localpb.TypedValue{Value: &localpb.TypedValue_NullValue{NullValue: localpb.NullValue(v.NullValue)}}
 	case *sharedpb.TypedValue_StringValue:
 		return &localpb.TypedValue{Value: &localpb.TypedValue_StringValue{StringValue: v.StringValue}}
 	case *sharedpb.TypedValue_IntValue:

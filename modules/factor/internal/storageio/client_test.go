@@ -91,6 +91,23 @@ func TestReadRangeChunkLookbackCountsPeriodsNotRows(t *testing.T) {
 	require.Len(t, chunk.Frame.Rows, 7)
 }
 
+func TestExpandEndByPeriodsPreservesViewCompleteness(t *testing.T) {
+	base := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
+	indexedTo := base.Add(time.Minute)
+	access := &fakeAccessClient{
+		readRows:        [][]*storagepb.TimeSeriesRow{{klineRow(indexedTo, 2)}},
+		readComplete:    []bool{false},
+		servedIndexedTo: []string{indexedTo.Format(time.RFC3339Nano)},
+	}
+	expansion, err := (&Client{access: access}).ExpandEndByPeriods(context.Background(), WindowKey{
+		SpaceID: "crypto", SourceDataset: "bars", SubjectID: "BTC-USDT", Freq: "1m",
+	}, base.Add(time.Nanosecond), 2)
+	require.NoError(t, err)
+	require.False(t, expansion.Complete)
+	require.Equal(t, indexedTo.Add(time.Nanosecond), expansion.EndTime)
+	require.Equal(t, indexedTo, expansion.IndexedTo)
+}
+
 func TestWriteFactorPatchUsesResultIdentityAndWritesExplicitNullCells(t *testing.T) {
 	access := &fakeAccessClient{}
 	c := &Client{access: access}
@@ -139,9 +156,11 @@ func TestNormalizeStorageTarget(t *testing.T) {
 }
 
 type fakeAccessClient struct {
-	readRows  [][]*storagepb.TimeSeriesRow
-	readReqs  []*storagepb.ReadTimeSeriesRowsReq
-	writeReqs []*storagepb.PrimaryUpsertFieldsReq
+	readRows        [][]*storagepb.TimeSeriesRow
+	readComplete    []bool
+	servedIndexedTo []string
+	readReqs        []*storagepb.ReadTimeSeriesRowsReq
+	writeReqs       []*storagepb.PrimaryUpsertFieldsReq
 }
 
 func (f *fakeAccessClient) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
@@ -150,7 +169,17 @@ func (f *fakeAccessClient) ReadTimeSeriesRows(_ context.Context, req *storagepb.
 	if len(f.readRows) > 0 {
 		rows, f.readRows = f.readRows[0], f.readRows[1:]
 	}
-	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: successRet(), Rows: rows}, nil
+	complete := true
+	if len(f.readComplete) > 0 {
+		complete, f.readComplete = f.readComplete[0], f.readComplete[1:]
+	}
+	indexedTo := ""
+	if len(f.servedIndexedTo) > 0 {
+		indexedTo, f.servedIndexedTo = f.servedIndexedTo[0], f.servedIndexedTo[1:]
+	}
+	return &storagepb.ReadTimeSeriesRowsRsp{
+		RetInfo: successRet(), Rows: rows, Complete: complete, ServedIndexedTo: indexedTo,
+	}, nil
 }
 func (f *fakeAccessClient) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	f.writeReqs = append(f.writeReqs, req)

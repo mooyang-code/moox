@@ -306,7 +306,12 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 		tr.EndTime = end.UTC().Format(time.RFC3339Nano)
 	}
 	columnPrefix := a.cfg.DatasetID + "."
-	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: a.auth, Selectors: keys, TimeRange: tr, Order: order, ColumnNames: []string{columnPrefix + "value", columnPrefix + "labels_json", columnPrefix + "message_id"}, Page: &commonpb.Page{Page: 1, Size: uint32(limit)}}, client.WithFilter(trpcretry.ReadOnly()))
+	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+		AuthInfo: a.auth, SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID,
+		Selectors: keys, TimeRange: tr, Order: order,
+		ColumnNames: []string{columnPrefix + "value", columnPrefix + "labels_json", columnPrefix + "message_id"},
+		Page:        &commonpb.Page{Page: 1, Size: uint32(limit)},
+	}, client.WithFilter(trpcretry.ReadOnly()))
 	if err != nil {
 		return nil, fmt.Errorf("read metrics history: %w", err)
 	}

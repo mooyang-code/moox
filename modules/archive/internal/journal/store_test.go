@@ -9,6 +9,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 func TestOpenRejectsV1Journal(t *testing.T) {
@@ -91,6 +92,29 @@ func TestAppendDuplicateMessageReturnsReceiptWithoutNewPending(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending = %#v, %v", pending, err)
 	}
+}
+
+func TestAppendNullDoesNotDefineOrConflictWithColumnSchema(t *testing.T) {
+	store := openTestStore(t, t.TempDir())
+	key := fixturePartition()
+	dataTime := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	appendValue := func(messageID string, value domain.Scalar) {
+		t.Helper()
+		_, err := store.Append(context.Background(), domain.EventBatch{
+			MessageID: messageID,
+			Rows: []domain.RowPatch{{
+				Partition: key, DataTime: dataTime, WrittenAt: time.Now().UTC(),
+				Columns: map[string]domain.Scalar{"close": value},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendValue("null-first", domain.Scalar{Null: true})
+	value := 1.25
+	appendValue("double", domain.Scalar{Type: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Double: &value})
+	appendValue("null-after-double", domain.Scalar{Null: true})
 }
 
 func openTestStore(t *testing.T, path string) *Store {

@@ -164,7 +164,11 @@ export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | u
       continue;
     }
     if (filter.operator === "not_empty") {
-      out.push({ column: fieldName, op: "FILTER_OP_NE", values: [{ null_value: "NULL_VALUE_NULL" }] });
+      out.push({
+        column: fieldName,
+        op: "FILTER_OP_NE",
+        values: [fieldName === "series_tag" ? { string_value: "" } : { null_value: "NULL_VALUE_NULL" }]
+      });
       continue;
     }
     if (filter.operator === "range") {

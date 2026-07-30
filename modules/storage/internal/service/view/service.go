@@ -61,8 +61,11 @@ func New(root, authSecret string) (*Service, error) {
 		return nil, err
 	}
 	engines := map[string]viewindex.Engine{"bleve": bleveEngine}
-	if duckdbEngine, err := viewduckdb.OpenIndexManager(viewduckdb.IndexManagerOptions{Root: filepath.Join(root, "duckdb")}); err == nil {
+	duckdbEngine, err := viewduckdb.OpenIndexManager(viewduckdb.IndexManagerOptions{Root: filepath.Join(root, "duckdb")})
+	if err == nil {
 		engines["duckdb"] = duckdbEngine
+	} else if !viewduckdb.IsUnavailable(err) {
+		return nil, fmt.Errorf("open duckdb view indexes: %w", err)
 	}
 	service := &Service{
 		engines:      engines,
