@@ -225,6 +225,54 @@ func TestPrimaryExactTimeSeriesReadOmitsMissingRows(t *testing.T) {
 	}
 }
 
+func TestPrimaryTimeSeriesReadRejectsAmbiguousOrMismatchedScope(t *testing.T) {
+	svc, err := New(Options{Node: &recordingNode{
+		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			return nil, errors.New("unexpected write")
+		},
+		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+			return nil, errors.New("invalid request reached DataNode")
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := &pb.TimeSeriesKey{
+		SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1m",
+		DataTime: "2026-07-29T15:00:00Z", SeriesTag: "venue:binance",
+	}
+	selector := &pb.TimeSeriesSelector{
+		SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1m",
+	}
+	for _, tc := range []struct {
+		name string
+		req  *pb.ReadTimeSeriesRowsReq
+	}{
+		{
+			name: "keys and selectors",
+			req: &pb.ReadTimeSeriesRowsReq{
+				SpaceId: "space", DatasetId: "dataset", Keys: []*pb.TimeSeriesKey{key},
+				Selectors: []*pb.TimeSeriesSelector{selector}, ColumnNames: []string{"close"},
+			},
+		},
+		{
+			name: "key outside top-level scope",
+			req: &pb.ReadTimeSeriesRowsReq{
+				SpaceId: "other", DatasetId: "dataset", Keys: []*pb.TimeSeriesKey{key},
+				ColumnNames: []string{"close"},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.req.AuthInfo = &pb.AuthInfo{AppId: "caller", AppKey: "key"}
+			rsp, readErr := svc.ReadTimeSeriesRows(context.Background(), tc.req)
+			if readErr != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
+				t.Fatalf("rsp=%v err=%v", rsp, readErr)
+			}
+		})
+	}
+}
+
 func TestPrimaryExactRecordReadOmitsMissingRows(t *testing.T) {
 	node := &recordingNode{
 		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {

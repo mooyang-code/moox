@@ -155,7 +155,8 @@ message TimeSeriesSelector {
 ```
 
 `ReadTimeSeriesRowsReq` 和 `QueryTimeSeriesRowsReq` 范围查询改用
-`repeated TimeSeriesSelector selectors`；点查只走 `ReadFields(RowKey)`。删除当前
+`repeated TimeSeriesSelector selectors`；精确时序点查可传 `keys`，PrimaryStore
+内部委托 `ReadFields(RowKey)`，通用点查仍可直接调用 `ReadFields`。删除当前
 未实现的 `page_token/next_page_token`，保留稳定排序的 offset page，明确并发写入时
 不提供跨请求快照。
 

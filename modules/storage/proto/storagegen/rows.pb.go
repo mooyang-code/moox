@@ -862,8 +862,8 @@ func (x *RecordRow) GetAttributes() map[string]string {
 	return nil
 }
 
-// Range and version queries use row-shaped read contracts. Point reads use
-// PrimaryStore.ReadFields; all writes use RowFieldUpsert.
+// Time-series range reads use selectors and exact reads use keys; exact reads
+// delegate to PrimaryStore.ReadFields. All writes use RowFieldUpsert.
 type ReadTimeSeriesRowsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
