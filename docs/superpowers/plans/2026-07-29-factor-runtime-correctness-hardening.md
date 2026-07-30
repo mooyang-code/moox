@@ -1414,7 +1414,7 @@ Storage/View 写入和 CLS 生命周期证据。Collector 写入与 Market Canar
 - [x] disabled Python 草稿不会在 worker 启动时 import。
 - [x] Binding 启用合同、环限制、enabled 热更新限制与 SQLite FK 均生效。
 - [x] 未引入 DAG、持久化调度、Exactly-once 或通用 tag registry。
-- [ ] 模块测试、race、CGO DuckDB、真实 E2E、workspace verify 和 codeCR 全部通过。
+- [x] 模块测试、race、CGO DuckDB、真实 E2E、workspace verify 和 codeCR 全部通过。
 - [ ] 106 上控制面、Storage、Factor、Archive、Monitor、Collector 均运行远端一致 SHA。
 - [ ] 腾讯云 SCF 真实发布、50 节点工作负载、Storage/View 与 CLS 生命周期 E2E 通过。
 - [ ] `feature/mooyang` 本地与远端 SHA 一致。

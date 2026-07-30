@@ -792,14 +792,18 @@ git add docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.m
 git commit -m "docs(factor): record review remediation evidence"
 ```
 
-- [ ] **Step 7: 使用 codeCR 做独立审查**
+- [x] **Step 7: 使用 codeCR 做独立审查**
 
 审查范围从本设计提交的父提交到当前 HEAD。要求逐项复核六个原始问题、锁顺序、
 测试缺口和是否引入过度设计，并提供文件/行号证据。
 
 Expected: 无 P0-P2；如有问题，回到对应 Task 按 TDD 修复并重新运行受影响验证。
 
-- [ ] **Step 8: 最终状态核对**
+最终 codeCR 审查范围为 `5b2626bc..7e6347da`，结论为无剩余 P0-P2。非阻断测试
+缺口为：未覆盖超过 1000 个 enabled Factor 的启动分页、未用真实 SQLite 删除贯穿
+完整 Recalc RPC、Backfill incomplete 回归只覆盖第一页。
+
+- [x] **Step 8: 最终状态核对**
 
 Run:
 
