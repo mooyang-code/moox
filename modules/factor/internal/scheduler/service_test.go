@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,84 @@ func TestSchedulerRejectsNewScopeWhenQueueIsFull(t *testing.T) {
 	err := svc.Enqueue(context.Background(), oneBarTask("ETH", time.Unix(1, 0)))
 	require.ErrorIs(t, err, ErrQueueFull)
 	require.EqualValues(t, 1, svc.Status().QueueOverflowCount)
+}
+
+func TestRunSkipsTaskRejectedByCurrentDefinition(t *testing.T) {
+	exec := &fakeExecutor{}
+	svc := NewService(
+		Config{},
+		&fakeStorage{},
+		exec,
+		WithTaskValidator(func(context.Context, Task) error {
+			return ErrStaleTask
+		}),
+	)
+
+	err := svc.Run(context.Background(), oneBarTask("BTC", time.Unix(1, 0)))
+	require.ErrorIs(t, err, ErrStaleTask)
+	require.Zero(t, exec.calls)
+}
+
+func TestDropQueuedFactorRemovesOnlyMatchingTasks(t *testing.T) {
+	svc := NewService(Config{Workers: 1, QueueCapacity: 4}, nil, nil)
+	old := oneBarTask("BTC", time.Unix(1, 0))
+	old.Factor.FactorID = "old"
+	keep := oneBarTask("ETH", time.Unix(1, 0))
+	keep.Factor.FactorID = "keep"
+
+	require.NoError(t, svc.Enqueue(context.Background(), old))
+	require.NoError(t, svc.Enqueue(context.Background(), keep))
+	require.Equal(t, 1, svc.DropQueuedFactor("old"))
+	require.Equal(t, 1, svc.Status().QueueDepth)
+}
+
+func TestWorkerRejectsPoppedTaskThatBecomesStaleBehindFactorGate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gate := NewFactorGate()
+	writeHeld := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	go gate.Mutate("bias", func() {
+		close(writeHeld)
+		<-releaseWrite
+	})
+	<-writeHeld
+
+	var stale atomic.Bool
+	validationResult := make(chan error, 1)
+	storage := &fakeStorage{chunks: []*storageio.RangeChunk{
+		frameChunk([]time.Time{time.Unix(1, 0)}),
+	}}
+	exec := &fakeExecutor{}
+	svc := NewService(
+		Config{Workers: 1, QueueCapacity: 1},
+		storage,
+		exec,
+		WithFactorGate(gate),
+		WithTaskValidator(func(context.Context, Task) error {
+			if stale.Load() {
+				validationResult <- ErrStaleTask
+				return ErrStaleTask
+			}
+			validationResult <- nil
+			return nil
+		}),
+	)
+	task := oneBarTask("BTC", time.Unix(1, 0))
+	require.NoError(t, svc.Enqueue(ctx, task))
+	require.NoError(t, svc.Start(ctx))
+	t.Cleanup(func() { require.NoError(t, svc.Stop()) })
+
+	require.Eventually(t, func() bool {
+		return svc.Status().QueueDepth == 0
+	}, time.Second, time.Millisecond, "worker did not pop task before gate release")
+	stale.Store(true)
+	close(releaseWrite)
+	require.ErrorIs(t, <-validationResult, ErrStaleTask)
+	require.NoError(t, svc.WaitIdle(ctx))
+	require.Zero(t, exec.calls)
+	require.Zero(t, storage.readCalls)
+	require.Empty(t, storage.writeSizes)
 }
 
 func TestSchedulerSupersedeDoesNotGrowQueue(t *testing.T) {

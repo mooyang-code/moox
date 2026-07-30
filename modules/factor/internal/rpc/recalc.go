@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -58,6 +59,9 @@ func (s *Service) RecalcFactor(ctx context.Context, req *factorpb.RecalcFactorRe
 				return &factorpb.RecalcFactorRsp{RetInfo: invalid(buildErr)}, nil
 			}
 			if runErr := s.scheduler.Run(ctx, task); runErr != nil {
+				if errors.Is(runErr, scheduler.ErrStaleTask) {
+					return &factorpb.RecalcFactorRsp{RetInfo: conflict(runErr)}, nil
+				}
 				return &factorpb.RecalcFactorRsp{RetInfo: inner(runErr)}, nil
 			}
 		}

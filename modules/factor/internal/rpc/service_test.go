@@ -6,18 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type inventoryStub struct {
@@ -424,6 +428,51 @@ func TestUpsertEnabledBindingValidatesContractBeforePersisting(t *testing.T) {
 	require.Equal(t, domain.BindingStatusEnabled, rows[0].Status)
 }
 
+func TestUpsertBindingRejectsCandidateSetSourceTargetConflictForEnabledFactor(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinitionWithStatus(t, db, "factor", domain.FactorStatusEnabled)
+	require.NoError(t, db.Bindings().Upsert(ctx, domain.FactorBinding{
+		BindingID: "a-to-b", FactorID: "factor", SpaceID: "space",
+		SourceDataset: "a", TargetDataset: "b", Freq: "1m",
+		SubjectMode: domain.SubjectModeAll, SubjectsJSON: domain.DefaultSubjectsJSON,
+		Status: domain.BindingStatusEnabled,
+	}))
+	metadata := newRecordingFactorMetadataClient("space", "factor")
+	svc := NewWithRuntime(
+		db,
+		nil,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+	)
+
+	rsp, err := svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: &factorpb.FactorBinding{
+		BindingId: "c-to-a", FactorId: "factor", SpaceId: "space",
+		SourceDataset: "c", TargetDataset: "a", Freq: "1m",
+		SubjectMode: domain.SubjectModeAll, Status: domain.BindingStatusEnabled,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "also targeted")
+	rows, total, listErr := db.Bindings().List(ctx, store.BindingFilter{})
+	require.NoError(t, listErr)
+	require.EqualValues(t, 1, total)
+	require.Equal(t, "a-to-b", rows[0].BindingID)
+}
+
+func TestUpsertBindingReturnsExistingBindingLookupError(t *testing.T) {
+	db := openRPCTestDB(t)
+	require.NoError(t, db.Close())
+	svc := NewWithRuntime(db, nil, WithFactorsDir(t.TempDir()))
+
+	rsp, err := svc.UpsertBinding(context.Background(), &factorpb.UpsertBindingReq{
+		Binding: testBindingPB(domain.SubjectModeAll, domain.DefaultSubjectsJSON),
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), `find existing binding "bind"`)
+}
+
 func TestUpsertEnabledBindingRejectsFactorResultSourceWithoutPersisting(t *testing.T) {
 	ctx := context.Background()
 	db := openRPCTestDB(t)
@@ -464,6 +513,172 @@ func TestSetFactorStatusDisabledReconcilesStorageMetadata(t *testing.T) {
 	require.Len(t, metadata.updatedFactors, 1)
 	require.Equal(t, "disabled", metadata.updatedFactors[0].GetStatus())
 	require.Zero(t, metadata.targetCalls)
+}
+
+func TestSetFactorStatusEnabledRevalidatesExistingEnabledFactor(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
+	metadata := newRecordingFactorMetadataClient("crypto", "bias")
+	metadata.secondaryOnlyView = true
+	svc := NewWithRuntime(
+		db,
+		nil,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+	)
+
+	rsp, err := svc.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+		FactorId: "bias", Status: domain.FactorStatusEnabled,
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "active primary view")
+}
+
+func TestSetFactorStatusDisableWaitsForRunningTask(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
+	metadata := newRecordingFactorMetadataClient("crypto", "bias")
+	gate := scheduler.NewFactorGate()
+	runner := &fakeRPCScheduler{}
+	svc := NewWithRuntime(
+		db,
+		runner,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+		WithFactorGate(gate),
+	)
+	release := gate.AcquireRun("bias")
+	done := make(chan *factorpb.SetFactorStatusRsp, 1)
+	go func() {
+		rsp, _ := svc.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+			FactorId: "bias", Status: domain.FactorStatusDisabled,
+		})
+		done <- rsp
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("disable returned while factor task still held the run gate")
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	select {
+	case rsp := <-done:
+		require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	case <-time.After(time.Second):
+		t.Fatal("disable did not complete after the running task released the gate")
+	}
+	require.Equal(t, 1, runner.dropCalls)
+}
+
+func TestUpdatedFactorDropsQueuedOldTask(t *testing.T) {
+	db := openRPCTestDB(t)
+	seedRPCFactorDefinitionWithStatus(t, db, "factor", domain.FactorStatusDisabled)
+	runner := &fakeRPCScheduler{}
+	svc := NewWithRuntime(
+		db,
+		runner,
+		WithFactorsDir(t.TempDir()),
+		WithFactorGate(scheduler.NewFactorGate()),
+	)
+	updated := genericFactorPB("factor", "TestFactor", []string{"value"})
+	updated.Status = domain.FactorStatusDisabled
+	updated.ParamsJson = `{"window":10}`
+
+	rsp, err := svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{
+		FactorId: "factor", Factor: updated,
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, 1, runner.dropCalls)
+}
+
+func TestFactorMutationLifecyclePreventsOldWriteAfterRecalc(t *testing.T) {
+	ctx := context.Background()
+	db := openRPCTestDB(t)
+	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
+	gate := scheduler.NewFactorGate()
+	exec := newLifecycleExecutor()
+	storage := &lifecycleStorage{}
+	sched := scheduler.NewService(
+		scheduler.Config{},
+		storage,
+		exec,
+		scheduler.WithFactorGate(gate),
+	)
+	metadata := newRecordingFactorMetadataClient("crypto", "bias")
+	metadata.existingTarget = true
+	svc := NewWithRuntime(
+		db,
+		sched,
+		WithFactorsDir(t.TempDir()),
+		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
+		WithFactorGate(gate),
+	)
+	factor, err := db.Factors().Get(ctx, "bias")
+	require.NoError(t, err)
+	start := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	oldTask, err := scheduler.BuildTask(scheduler.TaskScope{
+		TaskID: "old", TriggerType: "recalc",
+		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
+		SubjectID: "BTC", Freq: "1m", StartTime: start, EndTime: start.Add(time.Nanosecond),
+	}, *factor, t.TempDir())
+	require.NoError(t, err)
+	oldDone := make(chan error, 1)
+	go func() {
+		oldDone <- sched.Run(ctx, oldTask)
+	}()
+	select {
+	case <-exec.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old executor did not start")
+	}
+
+	disableDone := make(chan *factorpb.SetFactorStatusRsp, 1)
+	disableStarted := make(chan struct{})
+	go func() {
+		close(disableStarted)
+		rsp, _ := svc.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+			FactorId: "bias", Status: domain.FactorStatusDisabled,
+		})
+		disableDone <- rsp
+	}()
+	<-disableStarted
+	select {
+	case <-disableDone:
+		t.Fatal("disable returned before old executor completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(exec.releaseFirst)
+	require.NoError(t, <-oldDone)
+	disableRsp := <-disableDone
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, disableRsp.GetRetInfo().GetCode())
+
+	updated := genericFactorPB("bias", "Bias", []string{"bias"})
+	updated.Status = domain.FactorStatusDisabled
+	updateRsp, err := svc.UpdateFactor(ctx, &factorpb.UpdateFactorReq{
+		FactorId: "bias", Factor: updated,
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
+	enableRsp, err := svc.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+		FactorId: "bias", Status: domain.FactorStatusEnabled,
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, enableRsp.GetRetInfo().GetCode(), enableRsp.GetRetInfo().GetMsg())
+	recalcRsp, err := svc.RecalcFactor(ctx, &factorpb.RecalcFactorReq{
+		FactorId: "bias", SpaceId: "crypto", SourceDataset: "bars",
+		SubjectId: "BTC", Freq: "1m",
+		StartTime: start.Format(time.RFC3339Nano),
+		EndTime:   start.Add(time.Nanosecond).Format(time.RFC3339Nano),
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, recalcRsp.GetRetInfo().GetCode())
+	require.Equal(t, []float64{1, 2}, storage.values())
 }
 
 func TestSetFactorStatusEnableReconciliationFailureRemainsNonExecutable(t *testing.T) {
@@ -540,6 +755,24 @@ func TestRecalcRejectsMissingOrInvalidRange(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 	}
+}
+
+func TestRecalcFactorReportsStaleTaskAsConflict(t *testing.T) {
+	db := openRPCTestDB(t)
+	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
+	svc := NewWithRuntime(
+		db,
+		&fakeRPCScheduler{err: errors.Join(scheduler.ErrStaleTask, gorm.ErrRecordNotFound)},
+		WithFactorsDir(t.TempDir()),
+	)
+	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{
+		FactorId: "bias", SpaceId: "crypto", SourceDataset: "bars",
+		SubjectId: "BTC", Freq: "1m",
+		StartTime: "2026-07-26T00:00:00Z", EndTime: "2026-07-26T01:00:00Z",
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "stale")
 }
 
 func TestRecalcHonorsBindingSubjectScope(t *testing.T) {
@@ -627,15 +860,121 @@ func TestGetEngineStatusIsMinimal(t *testing.T) {
 }
 
 type fakeRPCScheduler struct {
-	status scheduler.Status
-	tasks  []scheduler.Task
-	err    error
+	mu        sync.Mutex
+	status    scheduler.Status
+	tasks     []scheduler.Task
+	err       error
+	dropCalls int
 }
 
 func (f *fakeRPCScheduler) Status() scheduler.Status { return f.status }
 func (f *fakeRPCScheduler) Run(_ context.Context, task scheduler.Task) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.tasks = append(f.tasks, task)
 	return f.err
+}
+func (f *fakeRPCScheduler) DropQueuedFactor(string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dropCalls++
+	return 0
+}
+
+type lifecycleExecutor struct {
+	mu           sync.Mutex
+	calls        int
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+}
+
+func newLifecycleExecutor() *lifecycleExecutor {
+	return &lifecycleExecutor{
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+}
+
+func (e *lifecycleExecutor) Execute(
+	ctx context.Context,
+	task *engine.FactorTask,
+	frame *engine.DataFrame,
+) (*engine.FactorResult, error) {
+	e.mu.Lock()
+	e.calls++
+	call := e.calls
+	e.mu.Unlock()
+	if call == 1 {
+		close(e.firstStarted)
+		select {
+		case <-e.releaseFirst:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	rows := make([]engine.FactorResultRow, 0, len(frame.DataTimes))
+	for _, dataTime := range frame.DataTimes {
+		rows = append(rows, engine.FactorResultRow{
+			DataTime: dataTime,
+			Values: map[string]any{
+				task.Factor.Outputs[0]: float64(call),
+			},
+		})
+	}
+	return &engine.FactorResult{Rows: rows}, nil
+}
+
+func (*lifecycleExecutor) Close() error { return nil }
+
+type lifecycleStorage struct {
+	mu     sync.Mutex
+	writes []float64
+}
+
+func (s *lifecycleStorage) ReadRangeChunk(
+	_ context.Context,
+	_ storageio.WindowKey,
+	start time.Time,
+	_ time.Time,
+	_ int,
+	_ int,
+	_ []string,
+) (*storageio.RangeChunk, error) {
+	return &storageio.RangeChunk{
+		Frame: &engine.DataFrame{
+			DataTimes:  []time.Time{start},
+			SeriesTags: []string{""},
+		},
+		TargetPeriods: []time.Time{start},
+		Complete:      true,
+	}, nil
+}
+
+func (*lifecycleStorage) ExpandEndByPeriods(
+	_ context.Context,
+	_ storageio.WindowKey,
+	end time.Time,
+	_ int,
+) (*storageio.EndExpansion, error) {
+	return &storageio.EndExpansion{EndTime: end, Complete: true}, nil
+}
+
+func (s *lifecycleStorage) WriteFactorPatch(
+	_ context.Context,
+	task *engine.FactorTask,
+	result *engine.FactorResult,
+) (uint64, error) {
+	value := result.Rows[0].Values[task.Factor.Outputs[0]].(float64)
+	s.mu.Lock()
+	s.writes = append(s.writes, value)
+	s.mu.Unlock()
+	return uint64(len(result.Rows)), nil
+}
+
+func (s *lifecycleStorage) values() []float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]float64(nil), s.writes...)
 }
 
 func openRPCTestDB(t *testing.T) *store.Store {
@@ -689,13 +1028,15 @@ func seedRPCDisabledBindingWithScope(t *testing.T, db *store.Store, factorID, sp
 }
 
 type recordingFactorMetadataClient struct {
-	factors          map[string]*storagepb.Factor
-	updatedFactors   []*storagepb.Factor
-	targetCalls      int
-	getFactorRet     *commonpb.RetInfo
-	createDatasetRet *commonpb.RetInfo
-	listViewsCalls   int
-	sourceRole       string
+	factors           map[string]*storagepb.Factor
+	updatedFactors    []*storagepb.Factor
+	targetCalls       int
+	getFactorRet      *commonpb.RetInfo
+	createDatasetRet  *commonpb.RetInfo
+	listViewsCalls    int
+	sourceRole        string
+	existingTarget    bool
+	secondaryOnlyView bool
 }
 
 func newRecordingFactorMetadataClient(spaceID, factorID string) *recordingFactorMetadataClient {
@@ -742,21 +1083,35 @@ func (f *recordingFactorMetadataClient) UpdateDataset(context.Context, *storagep
 func (f *recordingFactorMetadataClient) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	f.targetCalls++
 	if req.GetDatasetId() == "target" || strings.HasSuffix(req.GetDatasetId(), "_factor") {
+		if f.existingTarget {
+			return &storagepb.GetDatasetRsp{RetInfo: success(), Dataset: &storagepb.Dataset{
+				SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Status: "active",
+				DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
+			}}, nil
+		}
 		return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}}, nil
 	}
 	return &storagepb.GetDatasetRsp{RetInfo: success(), Dataset: &storagepb.Dataset{
 		SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Status: "active",
-		DataKind:   storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		DataNodeId: "data-node", KeepDuration: "30d",
-		Attributes: map[string]string{"dataset_role": f.sourceRole},
+		DataKind:     storagepb.DataKind_DATA_KIND_TIME_SERIES,
+		DataSourceId: "source-a", DataNodeId: "data-node", KeepDuration: "30d",
+		Attributes: map[string]string{
+			"dataset_role":   f.sourceRole,
+			"data_source_id": "source-a",
+		},
 	}}, nil
 }
 
 func (f *recordingFactorMetadataClient) ListViews(_ context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
 	f.listViewsCalls++
+	primaryDatasetID := req.GetDatasetId()
+	if f.secondaryOnlyView {
+		primaryDatasetID = "other"
+	}
 	return &storagepb.ListViewsRsp{RetInfo: success(), Views: []*storagepb.View{{
 		SpaceId: req.GetSpaceId(), ViewId: "source_view", Status: "active",
-		ActiveIndexId: "index-a", ActiveColumns: []*storagepb.ViewColumn{
+		PrimaryDatasetId: primaryDatasetID,
+		ActiveIndexId:    "index-a", ActiveColumns: []*storagepb.ViewColumn{
 			{ColumnName: req.GetDatasetId() + ".close", OriginId: req.GetDatasetId() + ".close"},
 		},
 	}}}, nil
@@ -764,7 +1119,7 @@ func (f *recordingFactorMetadataClient) ListViews(_ context.Context, req *storag
 
 func (f *recordingFactorMetadataClient) CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error) {
 	f.targetCalls++
-	return &storagepb.CheckDatasetActivationRsp{RetInfo: success()}, nil
+	return &storagepb.CheckDatasetActivationRsp{RetInfo: success(), Ready: true}, nil
 }
 
 func (f *recordingFactorMetadataClient) ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {

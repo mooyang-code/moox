@@ -65,6 +65,12 @@ func WithRealtimeInventory(inventory realtimeInventory) Option {
 	}
 }
 
+func WithFactorGate(gate *scheduler.FactorGate) Option {
+	return func(s *Service) {
+		s.factorGate = gate
+	}
+}
+
 // Service implements FactorMgr.
 type Service struct {
 	factors     *store.FactorRepository
@@ -75,6 +81,7 @@ type Service struct {
 	meta        *registry.MetadataSync
 	registry    *registry.Service
 	inventory   realtimeInventory
+	factorGate  *scheduler.FactorGate
 	mutationMu  sync.Mutex
 	removeStage func(*factorArtifactStage) error
 }
@@ -138,33 +145,42 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 	if err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(err)}, nil
 	}
+	var rsp *factorpb.UpdateFactorRsp
+	s.mutateFactors([]string{factor.FactorID}, func() {
+		rsp = s.updateFactor(ctx, factor)
+	})
+	return rsp, nil
+}
+
+func (s *Service) updateFactor(ctx context.Context, factor domain.FactorDef) *factorpb.UpdateFactorRsp {
 	existing, err := s.factors.Get(ctx, factor.FactorID)
 	if err != nil {
-		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
+		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}
 	}
 	if existing.Name != factor.Name {
-		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name is immutable; create a new factor_id"))}, nil
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor name is immutable; create a new factor_id"))}
 	}
 	if !slices.Equal(existing.Outputs, factor.Outputs) {
-		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor outputs are immutable; create a new factor_id"))}, nil
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor outputs are immutable; create a new factor_id"))}
 	}
 	if existing.Status != factor.Status {
-		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor status must be changed through SetFactorStatus"))}, nil
+		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor status must be changed through SetFactorStatus"))}
 	}
 	if existing.Status == domain.FactorStatusEnabled {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf(
 			"disable factor %q before updating its definition", factor.FactorID,
-		))}, nil
+		))}
 	}
 	if err := s.publishFactorSource(ctx, &factor); err != nil {
-		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
+		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}
 	}
 	if err := s.registry.SaveFactorDefinition(ctx, factor); err != nil {
-		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}, nil
+		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}
 	}
+	s.dropQueuedFactors(factor.FactorID)
 	s.refreshRealtimeInventory(ctx)
 	got, _ := s.factors.Get(ctx, factor.FactorID)
-	return &factorpb.UpdateFactorRsp{RetInfo: success(), Factor: factorToPB(*got)}, nil
+	return &factorpb.UpdateFactorRsp{RetInfo: success(), Factor: factorToPB(*got)}
 }
 
 func (s *Service) publishFactorSource(ctx context.Context, factor *domain.FactorDef) error {
@@ -217,68 +233,86 @@ func (s *Service) SetFactorStatus(ctx context.Context, req *factorpb.SetFactorSt
 	if status != domain.FactorStatusEnabled && status != domain.FactorStatusDisabled {
 		return &factorpb.SetFactorStatusRsp{RetInfo: invalid(fmt.Errorf("invalid factor status %q", status))}, nil
 	}
+	var rsp *factorpb.SetFactorStatusRsp
+	s.mutateFactors([]string{factorID}, func() {
+		rsp = s.setFactorStatus(ctx, factorID, status)
+	})
+	return rsp, nil
+}
+
+func (s *Service) setFactorStatus(ctx context.Context, factorID, status string) *factorpb.SetFactorStatusRsp {
 	existing, err := s.factors.Get(ctx, factorID)
 	if err != nil {
-		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
-	}
-	if existing.Status == domain.FactorStatusEnabled && status == domain.FactorStatusEnabled {
-		return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorToPB(*existing)}, nil
+		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}
 	}
 	if status == domain.FactorStatusEnabled {
 		candidate := *existing
 		candidate.Status = domain.FactorStatusEnabled
 		if err := s.registry.ValidateEnabledBindingsForFactor(ctx, candidate); err != nil {
-			return &factorpb.SetFactorStatusRsp{RetInfo: invalid(err)}, nil
+			return &factorpb.SetFactorStatusRsp{RetInfo: invalid(err)}
 		}
 		if err := s.syncFactorDefinitionBindings(ctx, candidate); err != nil {
-			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}
 		}
 	}
 	if err := s.factors.SetStatus(ctx, factorID, status); err != nil {
-		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}
+	}
+	if status != domain.FactorStatusEnabled {
+		s.dropQueuedFactors(factorID)
 	}
 	s.refreshRealtimeInventory(ctx)
 	got, err := s.factors.Get(ctx, factorID)
 	if err != nil {
-		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}
 	}
 	if status != domain.FactorStatusEnabled {
 		if err := s.syncFactorBindings(ctx, factorID); err != nil {
-			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}, nil
+			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}
 		}
 	}
-	return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorToPB(*got)}, nil
+	return &factorpb.SetFactorStatusRsp{RetInfo: success(), Factor: factorToPB(*got)}
 }
 
 func (s *Service) DeleteFactor(ctx context.Context, req *factorpb.DeleteFactorReq) (*factorpb.DeleteFactorRsp, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
-	if strings.TrimSpace(req.GetFactorId()) == "" {
+	factorID := strings.TrimSpace(req.GetFactorId())
+	if factorID == "" {
 		return &factorpb.DeleteFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id is required"))}, nil
 	}
-	factor, err := s.factors.Get(ctx, req.GetFactorId())
+	var rsp *factorpb.DeleteFactorRsp
+	s.mutateFactors([]string{factorID}, func() {
+		rsp = s.deleteFactor(ctx, factorID)
+	})
+	return rsp, nil
+}
+
+func (s *Service) deleteFactor(ctx context.Context, factorID string) *factorpb.DeleteFactorRsp {
+	factor, err := s.factors.Get(ctx, factorID)
 	if err != nil {
-		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}, nil
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}
 	}
 	bindings, err := s.bindings.ListByFactor(ctx, factor.FactorID)
 	if err != nil {
-		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}, nil
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}
 	}
 	if len(bindings) != 0 {
-		return &factorpb.DeleteFactorRsp{RetInfo: invalid(fmt.Errorf("factor %q still has bindings; delete them first", factor.FactorID))}, nil
+		return &factorpb.DeleteFactorRsp{RetInfo: invalid(fmt.Errorf("factor %q still has bindings; delete them first", factor.FactorID))}
 	}
 	stage, err := stageFactorArtifacts(s.factorsDir, factor.Name)
 	if err != nil {
-		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}, nil
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(err)}
 	}
 	if err := s.factors.Delete(ctx, factor.FactorID); err != nil {
-		return &factorpb.DeleteFactorRsp{RetInfo: inner(errors.Join(err, stage.Restore()))}, nil
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(errors.Join(err, stage.Restore()))}
 	}
+	s.dropQueuedFactors(factor.FactorID)
 	s.refreshRealtimeInventory(ctx)
 	if err := s.removeStage(stage); err != nil {
-		return &factorpb.DeleteFactorRsp{RetInfo: inner(fmt.Errorf("remove factor %s staged artifacts: %w", factor.FactorID, err))}, nil
+		return &factorpb.DeleteFactorRsp{RetInfo: inner(fmt.Errorf("remove factor %s staged artifacts: %w", factor.FactorID, err))}
 	}
-	return &factorpb.DeleteFactorRsp{RetInfo: success()}, nil
+	return &factorpb.DeleteFactorRsp{RetInfo: success()}
 }
 
 func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBindingReq) (*factorpb.UpsertBindingRsp, error) {
@@ -288,28 +322,95 @@ func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBinding
 	if err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}, nil
 	}
-	if binding.Status == domain.BindingStatusDisabled {
-		if err := s.bindings.Upsert(ctx, binding); err != nil {
-			return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
-		}
-		s.refreshRealtimeInventory(ctx)
-		return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}, nil
+	existing, found, err := s.findBinding(ctx, binding.BindingID)
+	if err != nil {
+		return &factorpb.UpsertBindingRsp{RetInfo: inner(fmt.Errorf(
+			"find existing binding %q: %w", binding.BindingID, err,
+		))}, nil
+	}
+	factorIDs := []string{binding.FactorID}
+	if found {
+		factorIDs = append(factorIDs, existing.FactorID)
+	}
+	var rsp *factorpb.UpsertBindingRsp
+	s.mutateFactors(factorIDs, func() {
+		rsp = s.upsertBinding(ctx, binding, factorIDs, existing)
+	})
+	return rsp, nil
+}
+
+func (s *Service) upsertBinding(
+	ctx context.Context,
+	binding domain.FactorBinding,
+	factorIDs []string,
+	expected *domain.FactorBinding,
+) *factorpb.UpsertBindingRsp {
+	if err := s.confirmBindingUnchanged(ctx, binding.BindingID, expected); err != nil {
+		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
 	}
 	factor, err := s.factors.Get(ctx, binding.FactorID)
 	if err != nil {
-		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
+		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
+	}
+	if factor.Status == domain.FactorStatusEnabled {
+		candidate, err := s.candidateBindingsForUpsert(ctx, binding)
+		if err != nil {
+			return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
+		}
+		if err := s.registry.ValidateCandidateBindingSet(candidate); err != nil {
+			return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}
+		}
+	}
+	if binding.Status == domain.BindingStatusDisabled {
+		if err := s.bindings.Upsert(ctx, binding); err != nil {
+			return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
+		}
+		s.dropQueuedFactors(factorIDs...)
+		s.refreshRealtimeInventory(ctx)
+		return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}
 	}
 	if err := s.registry.ValidateEnabledBinding(ctx, binding, *factor); err != nil {
-		return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}, nil
+		return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}
 	}
 	if err := s.syncBindingMetadata(ctx, binding); err != nil {
-		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
+		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
 	}
 	if err := s.bindings.Upsert(ctx, binding); err != nil {
-		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}, nil
+		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
 	}
+	s.dropQueuedFactors(factorIDs...)
 	s.refreshRealtimeInventory(ctx)
-	return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}, nil
+	return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}
+}
+
+func (s *Service) candidateBindingsForUpsert(
+	ctx context.Context,
+	binding domain.FactorBinding,
+) ([]domain.FactorBinding, error) {
+	current, err := s.bindings.ListByFactor(ctx, binding.FactorID)
+	if err != nil {
+		return nil, err
+	}
+	candidate := make([]domain.FactorBinding, 0, len(current)+1)
+	replaced := false
+	for _, existing := range current {
+		sameID := existing.BindingID == binding.BindingID
+		sameNaturalScope := existing.SpaceID == binding.SpaceID &&
+			existing.SourceDataset == binding.SourceDataset &&
+			existing.Freq == binding.Freq
+		if sameID || sameNaturalScope {
+			if !replaced {
+				candidate = append(candidate, binding)
+				replaced = true
+			}
+			continue
+		}
+		candidate = append(candidate, existing)
+	}
+	if !replaced {
+		candidate = append(candidate, binding)
+	}
+	return candidate, nil
 }
 
 func (s *Service) ListBindings(ctx context.Context, req *factorpb.ListBindingsReq) (*factorpb.ListBindingsRsp, error) {
@@ -328,14 +429,112 @@ func (s *Service) ListBindings(ctx context.Context, req *factorpb.ListBindingsRe
 func (s *Service) DeleteBinding(ctx context.Context, req *factorpb.DeleteBindingReq) (*factorpb.DeleteBindingRsp, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()
-	if req.GetBindingId() == "" {
+	bindingID := strings.TrimSpace(req.GetBindingId())
+	if bindingID == "" {
 		return &factorpb.DeleteBindingRsp{RetInfo: invalid(fmt.Errorf("binding_id is required"))}, nil
 	}
-	if err := s.bindings.Delete(ctx, req.GetBindingId()); err != nil {
-		return &factorpb.DeleteBindingRsp{RetInfo: inner(err)}, nil
+	binding, found, err := s.findBinding(ctx, bindingID)
+	if err != nil {
+		return &factorpb.DeleteBindingRsp{RetInfo: inner(fmt.Errorf(
+			"find binding %q: %w", bindingID, err,
+		))}, nil
 	}
-	s.refreshRealtimeInventory(ctx)
-	return &factorpb.DeleteBindingRsp{RetInfo: success()}, nil
+	if !found {
+		return &factorpb.DeleteBindingRsp{RetInfo: inner(fmt.Errorf("binding %q not found", bindingID))}, nil
+	}
+	var rsp *factorpb.DeleteBindingRsp
+	s.mutateFactors([]string{binding.FactorID}, func() {
+		if err := s.confirmBindingUnchanged(ctx, bindingID, binding); err != nil {
+			rsp = &factorpb.DeleteBindingRsp{RetInfo: inner(err)}
+			return
+		}
+		if err := s.bindings.Delete(ctx, bindingID); err != nil {
+			rsp = &factorpb.DeleteBindingRsp{RetInfo: inner(err)}
+			return
+		}
+		s.dropQueuedFactors(binding.FactorID)
+		s.refreshRealtimeInventory(ctx)
+		rsp = &factorpb.DeleteBindingRsp{RetInfo: success()}
+	})
+	return rsp, nil
+}
+
+func (s *Service) mutateFactors(factorIDs []string, fn func()) {
+	unique := make([]string, 0, len(factorIDs))
+	seen := make(map[string]struct{}, len(factorIDs))
+	for _, factorID := range factorIDs {
+		factorID = strings.TrimSpace(factorID)
+		if factorID == "" {
+			continue
+		}
+		if _, exists := seen[factorID]; exists {
+			continue
+		}
+		seen[factorID] = struct{}{}
+		unique = append(unique, factorID)
+	}
+	slices.Sort(unique)
+	var lock func(int)
+	lock = func(index int) {
+		if s.factorGate == nil || index == len(unique) {
+			fn()
+			return
+		}
+		s.factorGate.Mutate(unique[index], func() {
+			lock(index + 1)
+		})
+	}
+	lock(0)
+}
+
+func (s *Service) dropQueuedFactors(factorIDs ...string) {
+	dropper, ok := s.scheduler.(interface{ DropQueuedFactor(string) int })
+	if !ok {
+		return
+	}
+	for _, factorID := range factorIDs {
+		dropper.DropQueuedFactor(factorID)
+	}
+}
+
+func (s *Service) confirmBindingUnchanged(
+	ctx context.Context,
+	bindingID string,
+	expected *domain.FactorBinding,
+) error {
+	current, found, err := s.findBinding(ctx, bindingID)
+	if err != nil {
+		return fmt.Errorf("recheck binding %q: %w", bindingID, err)
+	}
+	if expected == nil {
+		if found {
+			return fmt.Errorf("binding %q changed while waiting for factor gate", bindingID)
+		}
+		return nil
+	}
+	if !found || *current != *expected {
+		return fmt.Errorf("binding %q changed while waiting for factor gate", bindingID)
+	}
+	return nil
+}
+
+func (s *Service) findBinding(ctx context.Context, bindingID string) (*domain.FactorBinding, bool, error) {
+	for page := 1; ; page++ {
+		rows, total, err := s.bindings.List(ctx, store.BindingFilter{
+			Page: store.Page{Page: page, PageSize: 1000},
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		for i := range rows {
+			if rows[i].BindingID == bindingID {
+				return &rows[i], true, nil
+			}
+		}
+		if int64(page*1000) >= total {
+			return nil, false, nil
+		}
+	}
 }
 
 func (s *Service) refreshRealtimeInventory(ctx context.Context) {
@@ -529,6 +728,10 @@ func success() *commonpb.RetInfo {
 
 func invalid(err error) *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: err.Error()}
+}
+
+func conflict(err error) *commonpb.RetInfo {
+	return &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: err.Error()}
 }
 
 func inner(err error) *commonpb.RetInfo {
