@@ -32,12 +32,10 @@ status_line=$(grep -nF './bin/moox-cli setup status --file ./custom.toml' "${REF
 
 hosts_line=$(grep -nF './bin/moox-cli setup hosts --file ./custom.toml' "${REFERENCE}" | cut -d: -f1)
 storage_line=$(grep -nF './bin/moox-cli setup deploy-storage --file ./custom.toml --host <host-name>' "${REFERENCE}" | cut -d: -f1)
-spaces_line=$(grep -nF './bin/moox-cli metadata spaces --file examples/setup/default/metadata.yaml' "${REFERENCE}" | cut -d: -f1)
-metadata_line=$(grep -nF './bin/moox-cli setup metadata-import' "${REFERENCE}" | cut -d: -f1)
-[[ "${status_line}" -lt "${hosts_line}" && "${hosts_line}" -lt "${storage_line}" && "${storage_line}" -lt "${spaces_line}" && "${spaces_line}" -lt "${metadata_line}" ]]
-grep -Fq '自然语言' "${REFERENCE}"
-grep -Fq '暂不导入' "${REFERENCE}"
-grep -Fq -- '--spaces stock_cn,crypto_binance' "${REFERENCE}"
+init_line=$(grep -nF './bin/moox-cli setup init' "${REFERENCE}" | cut -d: -f1)
+[[ "${status_line}" -lt "${hosts_line}" && "${hosts_line}" -lt "${storage_line}" && "${storage_line}" -lt "${init_line}" ]]
+grep -Fq -- '--config-dir ./examples/setup/default' "${REFERENCE}"
+grep -Fq 'partial import' "${REFERENCE}"
 
 grep -Fq '禁止 Agent' "${REFERENCE}"
 for forbidden in 'cat custom.toml' 'sed custom.toml' 'rg custom.toml' 'Python 读取' 'source custom.toml'; do

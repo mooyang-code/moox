@@ -14,3 +14,13 @@
 初始化可重复执行。已有资源与声明一致时报告 unchanged；契约不一致时失败，不覆盖已有
 配置和数据。Dataset 先以 disabled 创建，通过 Storage 激活检查后由 `setup init`
 显式激活。
+
+```bash
+moox-cli setup init \
+  --file ./custom.toml \
+  --config-dir ./examples/setup/default \
+  --storage-host control
+```
+
+`--storage-host` 必须是 `custom.toml` 中已经部署 Storage 的主机名。命令只读取
+`metadata.yaml` 完成初始化；另外两份文件分别由 Monitor 和 Admin 部署导入读取。

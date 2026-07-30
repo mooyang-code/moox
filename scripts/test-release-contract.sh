@@ -79,6 +79,22 @@ assert module.HELLO
 PY
 grep -q "name __pycache__ -o -name .pytest_cache" "${ROOT}/scripts/release.sh"
 grep -q "name '\*.pyc' -o -name '\*.sqlite' -o -name '\*.db'" "${ROOT}/scripts/release.sh"
+
+release="${tmp_strategy}/release"
+mkdir -p "${release}/examples"
+cp -R "${ROOT}/examples/." "${release}/examples/"
+for path in \
+  'examples/setup/default/metadata.yaml' \
+  'examples/setup/default/dataset-health-policy.yaml' \
+  'examples/setup/default/service-deployments.yaml'; do
+  test -f "${release}/${path}" || {
+    echo "release is missing default setup file: ${path}" >&2
+    exit 1
+  }
+done
+test ! -e "${release}/examples/monitor-pipelines.yaml"
+test ! -e "${release}/examples/metadata-quant-initial.seed.yaml"
+
 bash -n \
   "${ROOT}/scripts/build.sh" \
   "${ROOT}/scripts/test-deploy-moox-factor.sh" \

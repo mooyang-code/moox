@@ -7,6 +7,7 @@ MooX 命令行工具，用于本地运维与数据初始化：用户注册、Sto
 ```bash
 moox-cli metadata import ...        # 导入 Storage 元数据 seed
 moox-cli metadata apply ...         # 创建并校验 Storage 元数据契约（不覆盖已有不兼容资源）
+moox-cli setup init ...             # 一次初始化 Admin 空间、Storage 元数据与 Dataset
 moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
@@ -75,7 +76,7 @@ moox-cli setup deploy-service \
 进程内读取凭据；部署包、JSON 输出和命令参数均不携带这些凭据。`custom.toml`
 是用户维护的只读输入，CLI 不修改或删除该文件。
 
-控制面初始化完成后，再单独选择 Storage 主机和业务元数据。Admin、Gateway、Web、
+控制面初始化完成后，再选择 Storage 主机并导入默认业务元数据。Admin、Gateway、Web、
 EventBus、CloudNode 和 Collector 固定部署在 `control_host`；Storage 的四个初始组件作为一个单元部署到明确
 选择的 `control_host` 或 `other_hosts` 主机：
 
@@ -86,21 +87,21 @@ moox-cli setup hosts --file ./custom.toml
 # --host 必须显式指定 custom.toml 中的主机名
 moox-cli setup deploy-storage --file ./custom.toml --host compute
 
-# 展示默认 seed 中可选的业务空间
-moox-cli metadata spaces --file ./examples/setup/default/metadata.yaml
-
-# 用户确认空间后，通过 Storage 主机的 SSH 隧道导入完整依赖闭包
-moox-cli setup metadata-import \
+# 同步 Admin 业务空间和 Storage 元数据，并激活通过检查的 Dataset
+moox-cli setup init \
   --file ./custom.toml \
-  --storage-host compute \
-  --seed ./examples/setup/default/metadata.yaml \
-  --spaces stock_cn,crypto
+  --config-dir ./examples/setup/default \
+  --storage-host compute
 ```
 
 `deploy-storage` 同机部署 `storage-primary` 和统一的 `storage-view`，并更新控制面的 Storage 服务
 位置。在 macOS 上发布 Linux Storage 时，CLI 自动通过 `compile_host` 构建 CGO
-二进制后再打包。业务空间选择不写入 `custom.toml`；用户可以导入全部、部分或暂不导入。
-自然语言理解由 MooX Skill 负责，CLI 始终接收明确的主机名和稳定 Space ID。
+二进制后再打包。`setup init` 固定从配置目录读取 `metadata.yaml`，把
+`stock_cn`、`crypto` 写入 Admin，把它们和内部 `moox_system` 元数据写入
+Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且不覆盖。
+
+`metadata spaces` 和 `setup metadata-import` 保留给只导入部分业务空间的高级操作；
+标准新系统初始化不需要逐个选择 YAML 或 Space。
 
 ### Storage Schema v6 验证
 

@@ -27,4 +27,12 @@ grep -Fq 'uses: docker://ghcr.io/gitleaks/gitleaks:v8.30.1' "$GITHUB_CI"
 grep -Fq 'github.event.pull_request.base.sha' "$GITHUB_CI"
 grep -Fq 'github.event.pull_request.head.sha' "$GITHUB_CI"
 
+if rg -n -i '\bpipelines?\b' \
+  "${ROOT}/packages/report" \
+  "${ROOT}/modules/monitor" \
+  "${ROOT}/modules/cli/internal/doctor"; then
+  echo 'legacy Pipeline health vocabulary remains' >&2
+  exit 1
+fi
+
 echo 'secret scan contract passed'

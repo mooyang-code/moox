@@ -30,6 +30,20 @@ IPv4/DNS、端口和 TLS 开关。`setup deploy-control` 在控制节点部署 A
 Web、EventBus、CloudNode、Collector 和 Monitor；EventBus token、私有 CA 与
 `cloudnode-worker.yaml` 均由系统生成，不属于用户配置。
 
+控制面和 Storage 部署完成后，用一个命令导入默认 A 股、加密货币与内部监控元数据：
+
+```bash
+moox-cli setup init \
+  --file ./custom.toml \
+  --config-dir ./examples/setup/default \
+  --storage-host control
+```
+
+命令会从固定的 `metadata.yaml` 同步 Admin 业务空间和 Storage
+Space、DataSource、Dataset、Field、Column、View，完成 Dataset 激活后再次校验。
+它可以重复执行；声明不一致时失败，不覆盖已有配置。完整流程见
+[系统初始化](docs/setup.md)。
+
 部署必须显式提供节点 ID、中央控制面 URL、只含公钥证书的 peer CA bundle，以及权限为 `0600` 的集群 control/service key 文件。control key 在 Admin 和所有 Gateway 间相同，service key 在所有 Gateway 和调用方间相同。
 
 提交前统一运行 `make verify`。它会检查模块和 package 依赖边界、tRPC Context、gofmt、Prettier 与零 warning ESLint，遍历 `go.work` 执行所有 Go 测试和 vet，并完成管理台测试、生产构建、文档构建、发布契约、Gateway/Strategy 部署和 Caddy 契约检查；所有格式与 lint 门禁都是只读检查，不在 CI 中执行 `--fix` 或 `--write`。

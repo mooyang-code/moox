@@ -250,10 +250,11 @@ Run `validate`, `deploy-control`, `apply`, and `status` in that order. Do not
 ask about Storage until setup is complete and the public login API is verified.
 Then use `setup hosts`, ask the user in natural language for exactly one Storage
 host, and run `setup deploy-storage`; the four initial Storage processes stay on
-that machine. Only after Storage is ready, list `metadata spaces`, ask which
-business spaces to import (including all or none), and invoke
-`setup metadata-import` with stable Space IDs. Keep `custom.toml` unchanged and
-never parse either its secrets or a generated filtered seed in Agent context.
+that machine. After Storage is ready, run `setup init --config-dir
+./examples/setup/default --storage-host <host-name>` to create or verify the
+default Admin spaces and Storage metadata, activate Datasets, and verify the
+result. Keep `custom.toml` unchanged and never parse either its secrets or a
+generated filtered seed in Agent context.
 
 `t_service_deployments` remains the source of truth for service addresses.
 `/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never

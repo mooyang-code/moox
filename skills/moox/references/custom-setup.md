@@ -130,31 +130,23 @@ index, materialization, and query responsibilities behind one `trpc_go.yaml`.
 Admin, Gateway, and Web remain on `control_host`. The command also updates the
 Storage endpoints in SysDeploy. Never silently choose a Storage host.
 
-## Phase 3: Optional Business Metadata
+## Phase 3: Default Metadata Initialization
 
-Storage deployment and metadata selection are separate from `custom.toml`
-initialization. First list the selectable spaces from the checked-in seed:
-
-```bash
-./bin/moox-cli metadata spaces --file examples/setup/default/metadata.yaml
-```
-
-Ask which spaces the user wants. Support natural-language answers including
-"全部", "只导入 A 股和币安", and "暂不导入". For a concrete
-selection, map the names to the IDs returned by `metadata spaces`, then run:
+After Storage is ready, initialize the checked-in A-share and crypto spaces,
+their Dataset and Field contracts, and the internal monitoring metadata:
 
 ```bash
-./bin/moox-cli setup metadata-import \
+./bin/moox-cli setup init \
   --file ./custom.toml \
-  --seed examples/setup/default/metadata.yaml \
-  --storage-host <host-name> \
-  --spaces stock_cn,crypto_binance
+  --config-dir ./examples/setup/default \
+  --storage-host <host-name>
 ```
 
-Only `setup metadata-import` may use the manifest to open the SSH tunnel to the
-selected Storage host. It imports the selected Space dependency closure and
-uses create-if-missing semantics. Never construct a filtered YAML file in the
-Agent context. If the user chooses "暂不导入", stop after Storage is ready.
+Only `setup init` may use the manifest to open the SSH tunnels to Admin and the
+selected Storage host. It creates or verifies the Admin business spaces and all
+Storage metadata, activates ready Datasets, and verifies the result. Never
+construct a filtered YAML file in the Agent context. Use `metadata spaces` and
+`setup metadata-import` only when the user explicitly requests a partial import.
 
 ## Secret Boundary
 
