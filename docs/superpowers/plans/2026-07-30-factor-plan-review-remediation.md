@@ -69,7 +69,7 @@
 - Modify: `modules/factor/internal/registry/binding_contract_test.go`
 - Modify: `modules/factor/internal/registry/service.go`
 
-- [ ] **Step 1: 写同批 Binding 环的失败测试**
+- [x] **Step 1: 写同批 Binding 环的失败测试**
 
 在 `binding_contract_test.go` 构造同一 disabled Factor 的两条 enabled Binding：
 
@@ -85,7 +85,7 @@ require.ErrorContains(t, err, "source dataset")
 require.ErrorContains(t, err, "also targeted")
 ```
 
-- [ ] **Step 2: 运行环测试并确认 RED**
+- [x] **Step 2: 运行环测试并确认 RED**
 
 Run:
 
@@ -96,7 +96,7 @@ go test ./internal/registry -run TestValidateCandidateBindingSetRejectsSameBatch
 
 Expected: FAIL，因为 `validateCandidateBindingSet` 尚不存在。
 
-- [ ] **Step 3: 实现无 DAG 的候选集合校验**
+- [x] **Step 3: 实现无 DAG 的候选集合校验**
 
 在 `binding_contract.go` 增加：
 
@@ -128,7 +128,7 @@ func validateCandidateBindingSet(bindings []domain.FactorBinding) error {
 
 在 `ValidateEnabledBindingsForFactor` 的逐条远端校验前调用该函数。
 
-- [ ] **Step 4: 写 secondary-only View 的失败测试**
+- [x] **Step 4: 写 secondary-only View 的失败测试**
 
 让 fake `ListViews` 只返回：
 
@@ -149,7 +149,7 @@ func validateCandidateBindingSet(bindings []domain.FactorBinding) error {
 require.ErrorContains(t, err, "has no active primary view")
 ```
 
-- [ ] **Step 5: 运行 View 测试并确认 RED**
+- [x] **Step 5: 运行 View 测试并确认 RED**
 
 Run:
 
@@ -160,7 +160,7 @@ go test ./internal/registry -run 'TestValidateEnabledBindingRejectsSecondaryOnly
 
 Expected: secondary-only View 测试错误地通过。
 
-- [ ] **Step 6: 强制 Primary View 合同**
+- [x] **Step 6: 强制 Primary View 合同**
 
 在 `validateActiveViewProjection` 遍历 View 时先过滤：
 
@@ -181,7 +181,7 @@ return fmt.Errorf(
 
 同时修正现有正例 fake，明确设置 `PrimaryDatasetId`。
 
-- [ ] **Step 7: 运行 Registry 测试**
+- [x] **Step 7: 运行 Registry 测试**
 
 Run:
 
@@ -192,7 +192,7 @@ go test ./internal/registry -count=1
 
 Expected: PASS。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add modules/factor/internal/registry/binding_contract.go \
@@ -214,7 +214,7 @@ git commit -m "fix(factor): reject binding cycles and secondary views"
 - Modify: `modules/factor/internal/rpc/service.go`
 - Modify: `modules/factor/internal/rpc/service_test.go`
 
-- [ ] **Step 1: 写 FactorGate 等待在途任务的失败测试**
+- [x] **Step 1: 写 FactorGate 等待在途任务的失败测试**
 
 新建 `factor_gate_test.go`：
 
@@ -247,7 +247,7 @@ func TestFactorGateMutationWaitsForRunningTask(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 运行 FactorGate 测试并确认 RED**
+- [x] **Step 2: 运行 FactorGate 测试并确认 RED**
 
 Run:
 
@@ -258,7 +258,7 @@ go test ./internal/scheduler -run TestFactorGateMutationWaitsForRunningTask -cou
 
 Expected: FAIL，因为 `FactorGate` 尚不存在。
 
-- [ ] **Step 3: 实现 FactorGate**
+- [x] **Step 3: 实现 FactorGate**
 
 新建 `factor_gate.go`：
 
@@ -299,7 +299,7 @@ func (g *FactorGate) Mutate(factorID string, fn func()) {
 
 实现使用闭包的内部 primitive；RPC 层再包装需要返回值的操作。
 
-- [ ] **Step 4: 写 stale Task 和 DropQueued 测试**
+- [x] **Step 4: 写 stale Task 和 DropQueued 测试**
 
 在 `service_test.go` 增加：
 
@@ -324,7 +324,7 @@ func TestDropQueuedFactorRemovesOnlyMatchingTasks(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: 运行 Scheduler 测试并确认 RED**
+- [x] **Step 5: 运行 Scheduler 测试并确认 RED**
 
 Run:
 
@@ -335,7 +335,7 @@ go test ./internal/scheduler -run 'TestRunSkipsTaskRejectedByCurrentDefinition|T
 
 Expected: FAIL，因为 validator option 和 DropQueuedFactor 尚不存在。
 
-- [ ] **Step 6: 给 Scheduler 注入 Gate 和 TaskValidator**
+- [x] **Step 6: 给 Scheduler 注入 Gate 和 TaskValidator**
 
 在 `service.go` 增加：
 
@@ -371,7 +371,7 @@ return s.runValidated(ctx, task)
 
 把现有 `Run` 主体移动到未导出的 `runValidated`，不改变计算逻辑。
 
-- [ ] **Step 7: 实现 DropQueuedFactor**
+- [x] **Step 7: 实现 DropQueuedFactor**
 
 在 scheduler 队列 mutex 内删除匹配 factor 的 pending entry，并重建各 shard key：
 
@@ -397,7 +397,7 @@ func (s *Service) DropQueuedFactor(factorID string) int {
 }
 ```
 
-- [ ] **Step 8: 写 RPC disable/update 生命周期测试**
+- [x] **Step 8: 写 RPC disable/update 生命周期测试**
 
 在 `rpc/service_test.go` 使用可控 executor：
 
@@ -410,7 +410,7 @@ func (s *Service) DropQueuedFactor(factorID string) int {
 
 另写排队任务测试，disable 后断言 `DropQueuedFactor` 被调用且旧任务未执行。
 
-- [ ] **Step 9: 运行 RPC 生命周期测试并确认 RED**
+- [x] **Step 9: 运行 RPC 生命周期测试并确认 RED**
 
 Run:
 
@@ -421,7 +421,7 @@ go test ./internal/rpc -run 'TestSetFactorStatusDisableWaitsForRunningTask|TestU
 
 Expected: disable 在旧任务仍运行时提前返回，或排队旧任务仍执行。
 
-- [ ] **Step 10: 在 bootstrap 注入当前合同 validator**
+- [x] **Step 10: 在 bootstrap 注入当前合同 validator**
 
 在 `bootstrap.go` 创建一个共享 `FactorGate`，传入 Scheduler 和 RPC。TaskValidator 每次
 执行时：
@@ -435,7 +435,7 @@ Expected: disable 在旧任务仍运行时提前返回，或排队旧任务仍�
 
 Validator 不访问 Python 或 Storage。
 
-- [ ] **Step 11: 在 RPC mutation 中使用写锁**
+- [x] **Step 11: 在 RPC mutation 中使用写锁**
 
 给 RPC `Service` 增加共享 `factorGate` option。以下操作在相同 factor 的
 `FactorGate.Mutate` 内执行：
@@ -450,7 +450,7 @@ Validator 不访问 Python 或 Storage。
 `scheduler.DropQueuedFactor(factorID)`。保持现有 `mutationMu -> FactorGate -> SQLite`
 锁顺序。
 
-- [ ] **Step 12: 运行 Factor 测试和 race**
+- [x] **Step 12: 运行 Factor 测试和 race**
 
 Run:
 
@@ -462,7 +462,7 @@ go test -race ./internal/scheduler ./internal/rpc ./internal/trigger/... -count=
 
 Expected: PASS，无 race。
 
-- [ ] **Step 13: 提交**
+- [x] **Step 13: 提交**
 
 ```bash
 git add modules/factor/internal/scheduler \
@@ -482,7 +482,7 @@ git commit -m "fix(factor): fence stale runtime tasks"
 - Modify: `modules/archive/internal/writer/writer.go`
 - Modify: `modules/archive/internal/writer/writer_test.go`
 
-- [ ] **Step 1: 写 incomplete Backfill 失败测试**
+- [x] **Step 1: 写 incomplete Backfill 失败测试**
 
 让 fake access 返回一行但：
 
@@ -501,7 +501,7 @@ require.Empty(t, journalDirtyPartitions(t, store))
 require.NoFileExists(t, expectedParquetPath)
 ```
 
-- [ ] **Step 2: 运行 Backfill 测试并确认 RED**
+- [x] **Step 2: 运行 Backfill 测试并确认 RED**
 
 Run:
 
@@ -512,7 +512,7 @@ go test ./internal/backfill -run TestBackfillerRejectsIncompleteViewBeforeJourna
 
 Expected: 当前实现错误地成功并产生归档。
 
-- [ ] **Step 3: 实现 incomplete fail-closed**
+- [x] **Step 3: 实现 incomplete fail-closed**
 
 在 RetInfo 校验后、`rowsToPatches` 前加入：
 
@@ -528,7 +528,7 @@ if !rsp.GetComplete() {
 
 更新正常测试 stub，显式设置 `Complete: true`。
 
-- [ ] **Step 4: 写 writer 全 worker 失败测试**
+- [x] **Step 4: 写 writer 全 worker 失败测试**
 
 准备 `workers+1` 个 dirty Partition，通过 fake Registry 或不可写输出让前两个
 `WritePartition` 返回错误。在带 500ms timeout 的 context 中调用：
@@ -542,7 +542,7 @@ require.Less(t, time.Since(started), 400*time.Millisecond)
 
 测试还要断言所有失败分区仍为 dirty。
 
-- [ ] **Step 5: 运行 writer 测试并确认 RED**
+- [x] **Step 5: 运行 writer 测试并确认 RED**
 
 Run:
 
@@ -553,7 +553,7 @@ go test ./internal/writer -run TestWriteDirtyReturnsWhenAllWorkersFailBeforeJobs
 
 Expected: 当前实现等待 context deadline 或测试超时。
 
-- [ ] **Step 6: 让 worker 记录首错后继续消费**
+- [x] **Step 6: 让 worker 记录首错后继续消费**
 
 将 worker 的错误分支改为：
 
@@ -582,7 +582,7 @@ for _, state := range states {
 
 等待 worker 后优先返回 `errCh` 中的首个错误；没有 worker 错误时返回 `ctx.Err()`。
 
-- [ ] **Step 7: 运行 Archive 测试和 race**
+- [x] **Step 7: 运行 Archive 测试和 race**
 
 Run:
 
@@ -594,7 +594,7 @@ go test -race ./internal/backfill ./internal/writer ./internal/bootstrap -count=
 
 Expected: PASS，无阻塞、无 race。
 
-- [ ] **Step 8: 提交**
+- [x] **Step 8: 提交**
 
 ```bash
 git add modules/archive/internal/backfill modules/archive/internal/writer
@@ -609,7 +609,7 @@ git commit -m "fix(archive): fail closed on incomplete materialization"
 - Modify: `modules/cli/internal/command/storage_import.go`
 - Modify: `modules/cli/internal/command/storage_import_test.go`
 
-- [ ] **Step 1: 写非法 tag 输入矩阵**
+- [x] **Step 1: 写非法 tag 输入矩阵**
 
 在 `storage_import_test.go` 增加 table test：
 
@@ -629,7 +629,7 @@ tests := []struct {
 每个 case 同时验证 `DryRun=true` 和真实执行，断言 Metadata fake 的
 `ListDatasetSubjects`、`BindDatasetSubject` 调用次数均为零。
 
-- [ ] **Step 2: 运行 CLI 测试并确认 RED**
+- [x] **Step 2: 运行 CLI 测试并确认 RED**
 
 Run:
 
@@ -640,7 +640,7 @@ go test ./internal/command -run TestStorageImportRejectsInvalidSeriesTagBeforeMe
 
 Expected: dry-run 错误地成功，真实导入已调用 Metadata。
 
-- [ ] **Step 3: 实现局部 validator**
+- [x] **Step 3: 实现局部 validator**
 
 在 `storage_import.go` 增加：
 
@@ -669,7 +669,7 @@ func validateStorageImportSeriesTag(tag string) error {
 在 `validateStorageImportOptions` 最后调用该函数。该函数必须在
 `runStorageImport` 打开文件或调用 Metadata client 前执行。
 
-- [ ] **Step 4: 增加 Storage/CLI 合同矩阵**
+- [x] **Step 4: 增加 Storage/CLI 合同矩阵**
 
 在 CLI 测试中加入合法边界：
 
@@ -680,7 +680,7 @@ func validateStorageImportSeriesTag(tag string) error {
 并保持错误字符串与
 `modules/storage/internal/rowidentity/series_tag_test.go` 的输入矩阵一致。
 
-- [ ] **Step 5: 运行 CLI 测试**
+- [x] **Step 5: 运行 CLI 测试**
 
 Run:
 
@@ -692,7 +692,7 @@ go test ./... -count=1
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add modules/cli/internal/command/storage_import.go \
@@ -707,7 +707,7 @@ git commit -m "fix(cli): validate import series tags before side effects"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.md`
 
-- [ ] **Step 1: 运行格式和定向模块测试**
+- [x] **Step 1: 运行格式和定向模块测试**
 
 Run:
 
@@ -728,7 +728,7 @@ gofmt -w \
 
 Expected: PASS。
 
-- [ ] **Step 2: 运行 race 和 Python 测试**
+- [x] **Step 2: 运行 race 和 Python 测试**
 
 Run:
 
@@ -742,7 +742,7 @@ Run:
 
 Expected: Go 无 race；Python `23 passed` 或更多。
 
-- [ ] **Step 3: 运行 Storage 合同和真实隔离 E2E**
+- [x] **Step 3: 运行 Storage 合同和真实隔离 E2E**
 
 Run:
 
@@ -754,7 +754,7 @@ Run:
 
 Expected: 全部 PASS；E2E 覆盖 Storage/View、Factor Python、Archive Parquet 和 Monitor。
 
-- [ ] **Step 4: 运行 workspace 验证**
+- [x] **Step 4: 运行 workspace 验证**
 
 Proto 生成与 workspace 测试必须串行：
 
@@ -766,7 +766,7 @@ git status --short
 
 Expected: `make verify-pr` PASS；仅存在本计划内预期修改。
 
-- [ ] **Step 5: 更新原执行计划**
+- [x] **Step 5: 更新原执行计划**
 
 只将本轮有证据的 Task 7、9、14、18 条目更新为已修复，并记录：
 
@@ -776,7 +776,16 @@ Expected: `make verify-pr` PASS；仅存在本计划内预期修改。
 
 Task 19 的 106、SCF、50 节点和远端 SHA 条目没有重新执行时保持未勾选。
 
-- [ ] **Step 6: 提交验证文档**
+本轮验证基于代码提交 `84d2bcc0`、`c187d0c5`、`555828a0`：
+
+- Factor、Archive、CLI 全模块测试通过；
+- Factor 与 Archive 定向 race 通过；
+- Python worker `23 passed`；
+- Storage boundary/consistency contract 通过；
+- `test-series-tag-e2e.sh` 覆盖 Factor、Archive、Monitor 并通过；
+- `make verify-pr` 与 `git diff --check` 通过。
+
+- [x] **Step 6: 提交验证文档**
 
 ```bash
 git add docs/superpowers/plans/2026-07-29-factor-runtime-correctness-hardening.md

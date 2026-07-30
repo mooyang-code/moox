@@ -622,6 +622,12 @@ tag 身份：稳定 ID 的摘要输入使用原始 tag，COS key 使用可逆编
 (cd modules/archive && go test ./... -count=1)
 ```
 
+2026-07-30 复审补强证据：
+
+- Backfill 在 `complete=false` 时于 Journal/Parquet 副作用前失败；
+- writer 记录首个错误后继续消费剩余分区，不再因 worker 提前退出阻塞 producer；
+- Archive 全模块、相关 race 与真实 Storage outbox/Parquet E2E 均通过。
+
 ### Task 8: 修改 Monitor 多实体时序身份
 
 **Files:**
@@ -752,6 +758,10 @@ node --test examples/e2e/collector-symbol-kline.test.mjs
 bash -n examples/e2e/run.sh examples/e2e/run-real-scf.sh
 node --check examples/e2e/verify.mjs
 ```
+
+2026-07-30 复审补强证据：CLI import 在读取文件、同步 Metadata、Bind 和写入前统一校验
+`series_tag`；覆盖 invalid UTF-8、超过 128 bytes、首尾空白、控制字符、空 tag 和
+精确 128-byte 边界，dry-run 与真实导入均验证无提前副作用。
 
 ---
 
@@ -1069,6 +1079,14 @@ git add modules/factor
 git commit -m "fix(factor): validate bindings and freeze enabled definitions"
 ```
 
+2026-07-30 复审补强证据：
+
+- enabled Binding 按 mutation 后的完整候选集合拒绝 target/source 冲突；
+- source Dataset 必须存在以它为 `PrimaryDatasetId` 的 active View；
+- Factor 启动前重新验证所有 enabled Factor/Binding 合同；
+- Scheduler 与管理 RPC 共享按 Factor 的进程内读写门闩，执行前复核定义和 Binding，
+  mutation 后清理排队任务，已弹出的旧任务也不能写回。
+
 ### Task 15: 删除 Python worker 启动预加载
 
 **Files:**
@@ -1276,6 +1294,11 @@ make verify-pr
 
 处理全部 P0/P1 和与本计划相关的 P2，再重跑受影响测试。
 
+2026-07-30 复审修复已完成模块测试、Factor/Archive race、Python worker 测试、
+Storage boundary/consistency contract、真实 `test-series-tag-e2e.sh` 和
+`make verify-pr`。本轮独立 codeCR 结论记录在补强计划中；Task 19 的远端发布与
+真实 SCF 证据不在本轮范围，仍保持未完成。
+
 - [x] **Step 3: 执行破坏性重建演练**
 
 在临时部署目录验证：
@@ -1379,18 +1402,18 @@ Storage/View 写入和 CLS 生命周期证据。Collector 写入与 Market Canar
 
 ## 6. 最终验收清单
 
-- [ ] TimeSeries 全链路只有一个 `series_tag`，无 Dimensions Map 或 tag 数组。
-- [ ] 空 exact tag 与 absent selector 的语义有单测和 E2E。
-- [ ] Pebble、DuckDB、事件、Parquet 和 Factor 写回使用同一完整行身份。
-- [ ] View/Backfill/分页按包含 tag 的唯一全序，不漏同 timestamp 行。
-- [ ] Archive v2 按 tag 拆分月目录和文件，路径、ArchiveFile、COS 与 Parquet 常量
+- [x] TimeSeries 全链路只有一个 `series_tag`，无 Dimensions Map 或 tag 数组。
+- [x] 空 exact tag 与 absent selector 的语义有单测和 E2E。
+- [x] Pebble、DuckDB、事件、Parquet 和 Factor 写回使用同一完整行身份。
+- [x] View/Backfill/分页按包含 tag 的唯一全序，不漏同 timestamp 行。
+- [x] Archive v2 按 tag 拆分月目录和文件，路径、ArchiveFile、COS 与 Parquet 常量
       列中的 tag 一致，旧 schema 明确拒绝。
-- [ ] Binance/OKX 同 Dataset 价差因子真实跑通。
-- [ ] `lookback_periods` 按不同 `data_time` 计数。
-- [ ] 历史修正扩展后续 period，View incomplete 有限重读。
-- [ ] disabled Python 草稿不会在 worker 启动时 import。
-- [ ] Binding 启用合同、环限制、enabled 热更新限制与 SQLite FK 均生效。
-- [ ] 未引入 DAG、持久化调度、Exactly-once 或通用 tag registry。
+- [x] Binance/OKX 同 Dataset 价差因子真实跑通。
+- [x] `lookback_periods` 按不同 `data_time` 计数。
+- [x] 历史修正扩展后续 period，View incomplete 有限重读。
+- [x] disabled Python 草稿不会在 worker 启动时 import。
+- [x] Binding 启用合同、环限制、enabled 热更新限制与 SQLite FK 均生效。
+- [x] 未引入 DAG、持久化调度、Exactly-once 或通用 tag registry。
 - [ ] 模块测试、race、CGO DuckDB、真实 E2E、workspace verify 和 codeCR 全部通过。
 - [ ] 106 上控制面、Storage、Factor、Archive、Monitor、Collector 均运行远端一致 SHA。
 - [ ] 腾讯云 SCF 真实发布、50 节点工作负载、Storage/View 与 CLS 生命周期 E2E 通过。
