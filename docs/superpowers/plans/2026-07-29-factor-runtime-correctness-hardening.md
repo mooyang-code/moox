@@ -1261,7 +1261,7 @@ bash scripts/test-go-workspace.sh
 make verify-pr
 ```
 
-- [ ] **Step 2: 用 codeCR 做独立审查**
+- [x] **Step 2: 用 codeCR 做独立审查**
 
 审查重点：
 
@@ -1285,7 +1285,7 @@ make verify-pr
 3. v2 事件、View、Archive 和 Factor 全链路恢复；
 4. 文档列出的生产停机顺序可实际执行。
 
-- [ ] **Step 4: 检查提交与工作区**
+- [x] **Step 4: 检查提交与工作区**
 
 ```bash
 git status --short --branch
