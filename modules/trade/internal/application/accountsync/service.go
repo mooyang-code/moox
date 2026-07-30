@@ -550,7 +550,7 @@ func (s *Service) ApplyPosition(
 	if err != nil {
 		return err
 	}
-	return s.notifyFacts(ctx, exchangeAccountID, false)
+	return nil
 }
 
 func (s *Service) ApplyAccountSnapshot(
@@ -587,7 +587,7 @@ func (s *Service) ApplyAccountSnapshot(
 	if err != nil {
 		return err
 	}
-	return s.notifyFacts(ctx, exchangeAccountID, false)
+	return nil
 }
 
 func (s *Service) SetReady(

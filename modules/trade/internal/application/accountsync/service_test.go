@@ -779,6 +779,44 @@ func TestApplyPartialPositionUsesConfiguredLeverage(t *testing.T) {
 	require.Equal(t, "1", position.SignedQuantity)
 }
 
+func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	wakes := 0
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Facts: &LogicalAccountFactsObserver{
+			Store: tradeStore,
+			Wake:  func() { wakes++ },
+		},
+	}
+	require.NoError(t, service.ApplyPosition(
+		context.Background(), "account-1", exchange.Position{
+			Symbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
+			SignedQuantity:    shared.MustDecimal("1"),
+			EntryPrice:        shared.MustDecimal("100"),
+			MarginMode:        exchange.MarginModeCross,
+			ExchangeUpdatedAt: time.UnixMilli(2_500),
+			Present: exchange.PositionPresence{
+				SignedQuantity: true, EntryPrice: true, MarginMode: true,
+			},
+			RequiresSync: true,
+		},
+	))
+	require.NoError(t, service.ApplyAccountSnapshot(
+		context.Background(), "account-1", exchange.AccountSnapshot{
+			AvailableFunds:    shared.MustDecimal("800"),
+			ExchangeUpdatedAt: time.UnixMilli(2_500),
+			Present: exchange.AccountSnapshotPresence{
+				AvailableFunds: true,
+			},
+			RequiresSync: true,
+		},
+	))
+	require.Zero(t, wakes)
+}
+
 func TestApplyUnknownPartialPositionDefersToFullSync(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
