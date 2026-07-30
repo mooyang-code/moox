@@ -23,6 +23,7 @@ const defaultSetupFile = "./custom.toml"
 
 type setupDeps struct {
 	load               func(string) (*setupconfig.Snapshot, error)
+	loadInitBundle     func(string) (setupInitBundle, error)
 	validate           func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
 	validateDeployment func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error)
 	trustHost          func(context.Context, *setupconfig.Snapshot, string, string) error
@@ -30,7 +31,10 @@ type setupDeps struct {
 	deployService      func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
 	apply              func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
 	status             func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
+	applySpaces        func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
+	statusSpaces       func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
 	login              func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
+	openInitStorage    func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
 	deployStorage      func(context.Context, *setupconfig.Snapshot, string, bool) error
 	importMetadata     func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
 	verifyStorage      func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
@@ -51,6 +55,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		SilenceUsage: true,
 	}
 	cmd.AddCommand(
+		newSetupInitCommand(deps),
 		newSetupHostsCommand(deps),
 		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
@@ -328,6 +333,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.load == nil {
 		deps.load = defaults.load
 	}
+	if deps.loadInitBundle == nil {
+		deps.loadInitBundle = defaults.loadInitBundle
+	}
 	if deps.validate == nil {
 		deps.validate = defaults.validate
 	}
@@ -349,8 +357,17 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.status == nil {
 		deps.status = defaults.status
 	}
+	if deps.applySpaces == nil {
+		deps.applySpaces = defaults.applySpaces
+	}
+	if deps.statusSpaces == nil {
+		deps.statusSpaces = defaults.statusSpaces
+	}
 	if deps.login == nil {
 		deps.login = defaults.login
+	}
+	if deps.openInitStorage == nil {
+		deps.openInitStorage = defaults.openInitStorage
 	}
 	if deps.deployStorage == nil {
 		deps.deployStorage = defaults.deployStorage
@@ -382,6 +399,7 @@ func defaultSetupDeps() setupDeps {
 			}
 			return setupconfig.Load(path, root)
 		},
+		loadInitBundle:     loadSetupInitBundle,
 		validate:           defaultSetupValidate,
 		validateDeployment: defaultSetupValidateDeployment,
 		trustHost:          defaultSetupTrustHost,
@@ -389,6 +407,9 @@ func defaultSetupDeps() setupDeps {
 		deployService:      defaultSetupDeployService,
 		apply:              defaultSetupApply,
 		status:             defaultSetupStatus,
+		applySpaces:        defaultSetupApplyWithSpaces,
+		statusSpaces:       defaultSetupStatusWithSpaces,
+		openInitStorage:    defaultOpenSetupInitStorage,
 		deployStorage:      defaultSetupDeployStorage,
 		importMetadata:     defaultSetupImportMetadata,
 		verifyStorage:      defaultSetupVerifyStorage,
@@ -782,6 +803,32 @@ func defaultSetupStatus(ctx context.Context, snapshot *setupconfig.Snapshot) (se
 	}
 	defer transport.Close()
 	return setupclient.New(transport).Status(ctx, snapshot)
+}
+
+func defaultSetupApplyWithSpaces(
+	ctx context.Context,
+	snapshot *setupconfig.Snapshot,
+	spaces []setupclient.Space,
+) (setupclient.ApplyResult, error) {
+	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	if err != nil {
+		return setupclient.ApplyResult{}, err
+	}
+	defer transport.Close()
+	return setupclient.New(transport).ApplyWithSpaces(ctx, snapshot, spaces)
+}
+
+func defaultSetupStatusWithSpaces(
+	ctx context.Context,
+	snapshot *setupconfig.Snapshot,
+	spaces []setupclient.Space,
+) (setupclient.StatusResult, error) {
+	transport, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	if err != nil {
+		return setupclient.StatusResult{}, err
+	}
+	defer transport.Close()
+	return setupclient.New(transport).StatusWithSpaces(ctx, snapshot, spaces)
 }
 
 func dialSetupHost(ctx context.Context, host setupconfig.Host) (setupssh.Client, error) {

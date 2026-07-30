@@ -303,6 +303,23 @@ func TestMetadataContractsEqualTreatsNilAndEmptyAttributesAsEqual(t *testing.T) 
 	))
 }
 
+func TestMetadataContractsEqualAcceptsActivatedLockedDataset(t *testing.T) {
+	expected := &pb.Dataset{
+		SpaceId: "crypto", DatasetId: "kline", DataSourceId: "binance",
+		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES,
+		DataNodeId: "storage-node-0", KeepDuration: "8760h",
+		Freqs: []string{"1H"}, Status: "disabled",
+	}
+	actual := proto.Clone(expected).(*pb.Dataset)
+	actual.Status = "active"
+	actual.BindingLocked = true
+	actual.Revision = 8
+	assert.True(t, metadataContractsEqual("datasets", expected, actual))
+
+	actual.BindingLocked = false
+	assert.False(t, metadataContractsEqual("datasets", expected, actual))
+}
+
 func TestApplyProbeResultOtherResources(t *testing.T) {
 	ds := &pb.DataSource{SpaceId: "crypto", DataSourceId: "binance"}
 	probe := &metadataExistsProbe{

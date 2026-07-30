@@ -528,6 +528,8 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 	}
 	if resource == "datasets" {
 		x, y := a.(*pb.Dataset), b.(*pb.Dataset)
+		statusMatches := x.GetStatus() == y.GetStatus() ||
+			(x.GetStatus() == "disabled" && y.GetStatus() == "active" && y.GetBindingLocked())
 		return x.GetSpaceId() == y.GetSpaceId() &&
 			x.GetDatasetId() == y.GetDatasetId() &&
 			x.GetDataSourceId() == y.GetDataSourceId() &&
@@ -535,7 +537,7 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetDescription() == y.GetDescription() &&
 			x.GetDataKind() == y.GetDataKind() &&
 			slices.Equal(x.GetFreqs(), y.GetFreqs()) &&
-			x.GetStatus() == y.GetStatus() &&
+			statusMatches &&
 			x.GetDataNodeId() == y.GetDataNodeId() &&
 			x.GetKeepDuration() == y.GetKeepDuration() &&
 			maps.Equal(x.GetAttributes(), y.GetAttributes())

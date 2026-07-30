@@ -288,6 +288,12 @@ func (f *fakeStorageMetadataAPI) CreateDataset(_ context.Context, req *storagepb
 	}
 	return &storagepb.CreateDatasetRsp{RetInfo: storageOK(), Dataset: &dataset}, nil
 }
+func (f *fakeStorageMetadataAPI) GetDataset(_ context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
+	f.remember(req.GetAuthInfo())
+	return &storagepb.GetDatasetRsp{RetInfo: storageOK(), Dataset: &storagepb.Dataset{
+		SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Status: "disabled", Revision: 7,
+	}}, nil
+}
 func (f *fakeStorageMetadataAPI) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq) (*storagepb.UpdateDatasetRsp, error) {
 	f.remember(req.GetAuthInfo())
 	return &storagepb.UpdateDatasetRsp{RetInfo: storageOK(), Dataset: req.GetDataset()}, nil

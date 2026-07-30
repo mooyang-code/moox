@@ -16,6 +16,7 @@ import (
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	setupdomain "github.com/mooyang-code/moox/modules/admin/internal/service/setup"
 	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
+	adminspace "github.com/mooyang-code/moox/modules/admin/internal/service/space"
 	sshmodel "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
@@ -64,6 +65,8 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/ApplySetup", request, apply)
 	require.Equal(t, pb.ErrorCode_SUCCESS, apply.GetRetInfo().GetCode())
 	require.Equal(t, "created", apply.GetAction())
+	require.Equal(t, int32(2), apply.GetSpaces())
+	require.Equal(t, int32(2), apply.GetSpacesCreated())
 
 	var user authmodel.User
 	require.NoError(t, manager.GetDB().Where("c_username = ?", "admin").First(&user).Error)
@@ -78,16 +81,25 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	require.NoError(t, manager.GetDB().Order("c_address").Find(&hosts).Error)
 	require.Len(t, hosts, 2)
 	assert.NotEqual(t, "control-e2e-password", hosts[0].Password)
+	var spaces []adminspace.Space
+	require.NoError(t, manager.GetDB().Order("c_space_id").Find(&spaces).Error)
+	require.Len(t, spaces, 2)
+	assert.Equal(t, "crypto", spaces[0].SpaceID)
+	assert.Equal(t, "crypto", spaces[0].Market)
+	assert.Equal(t, "stock_cn", spaces[1].SpaceID)
+	assert.Equal(t, "Asia/Shanghai", spaces[1].Timezone)
 
 	retry := &pb.ApplySetupRsp{}
 	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/ApplySetup", request, retry)
 	assert.Equal(t, "unchanged", retry.GetAction())
+	assert.Equal(t, int32(2), retry.GetSpacesUnchanged())
 
 	status := &pb.GetSetupStatusRsp{}
 	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/GetSetupStatus", setupStatusRequest(request), status)
 	assert.Equal(t, "completed", status.GetState())
 	assert.Zero(t, status.GetMissing())
 	assert.Zero(t, status.GetConflicts())
+	assert.Equal(t, int32(2), status.GetSpaces())
 
 	require.NoError(t, manager.GetDB().Where("c_name = ?", "compute-1").Delete(&sshmodel.SSHHost{}).Error)
 	partial := &pb.ApplySetupRsp{}
@@ -122,11 +134,18 @@ func setupApplyRequest() *pb.ApplySetupReq {
 		TencentCloud: &pb.SetupTencentCloud{SecretId: "AKID-e2e", SecretKey: "cloud-e2e-secret"},
 		ControlHost:  &pb.SetupHost{Name: "control", Address: "192.0.2.10", Port: 22, Username: "ubuntu", Password: "control-e2e-password"},
 		OtherHosts:   []*pb.SetupHost{{Name: "compute-1", Address: "192.0.2.11", Port: 22, Username: "ubuntu", Password: "compute-e2e-password"}},
+		Spaces: []*pb.SetupSpace{
+			{SpaceId: "stock_cn", Name: "A股市场", Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai", Status: "active", AttributesJson: "{}"},
+			{SpaceId: "crypto", Name: "加密货币市场", Owner: "quant", Market: "crypto", Timezone: "UTC", Status: "active", AttributesJson: "{}"},
+		},
 	}
 }
 
 func setupStatusRequest(request *pb.ApplySetupReq) *pb.GetSetupStatusReq {
-	return &pb.GetSetupStatusReq{Admin: request.Admin, TencentCloud: request.TencentCloud, ControlHost: request.ControlHost, OtherHosts: request.OtherHosts}
+	return &pb.GetSetupStatusReq{
+		Admin: request.Admin, TencentCloud: request.TencentCloud,
+		ControlHost: request.ControlHost, OtherHosts: request.OtherHosts, Spaces: request.Spaces,
+	}
 }
 
 func protoHandler(newRequest func() proto.Message, call func(context.Context, proto.Message) (proto.Message, error)) http.HandlerFunc {
