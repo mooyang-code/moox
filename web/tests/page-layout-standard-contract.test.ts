@@ -187,7 +187,6 @@ describe("page layout standards", () => {
     const resourceMonitor = read("container/resource-monitor/resource-monitor.vue");
     const dataImport = read("data/import/index.vue");
     const strategyOverview = read("strategy/overview/index.vue");
-    const strategyPerformance = read("strategy/performance/index.vue");
     const hostMonitor = read("ops/host-workbench/host-monitor.vue");
     const packageManage = read("collector/cloud-node/function-package-manage.vue");
 
@@ -211,13 +210,8 @@ describe("page layout standards", () => {
 
     expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
-    expectMargin(strategyOverview, ".summary-grid", "margin-bottom", 8);
-    expect(strategyOverview).toMatch(
-      /\.filters\s*\{[\s\S]*?gap:\s*var\(--moox-space-2\);[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/
-    );
+    expectMargin(strategyOverview, ".page-head", "margin-bottom", 8);
     expectMargin(strategyOverview, ".top-alert", "margin-bottom", 8);
-    expectMargin(strategyPerformance, ".performance-toolbar", "margin-bottom", 8);
-    expect(strategyPerformance).toMatch(/\.metrics\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
     expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:\s*0 0 var\(--moox-space-5\);/);
     expectMargin(hostMonitor, ".monitor-toolbar", "margin-bottom", 8);
     expectMargin(hostMonitor, ".monitor-summary", "margin-bottom", 8);

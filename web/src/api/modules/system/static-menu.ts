@@ -92,15 +92,24 @@ export const systemMenu = [
   directory("05", "0", "/trading/accounts", "trading", "trading", 6, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-overview/account-overview", 1),
   menu(
+    "0504",
+    "05",
+    "/trading/logical-accounts",
+    "trading-logical-accounts",
+    "trading-logical-accounts",
+    "trading/logical-accounts/index",
+    2
+  ),
+  menu(
     "0502",
     "05",
     "/trading/positions",
     "trading-positions",
     "trading-positions",
     "trading/position-detail/position-detail",
-    2
+    3
   ),
-  menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 3),
+  menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 4),
 
   directory("06", "0", "/ops/hosts", "ops", "ops", 7, { svgIcon: "defend", icon: "" }),
   menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 1),

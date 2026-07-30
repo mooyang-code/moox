@@ -85,7 +85,7 @@ export const staticRoutes = [
         meta: { title: "strategy-running" }
       },
       {
-        path: "/strategy/detail/:bindingId",
+        path: "/strategy/detail/:runnerId",
         name: "strategy-detail",
         component: () => import("@/views/strategy/detail/index.vue"),
         meta: { title: "strategy-detail", hide: true }
@@ -119,6 +119,12 @@ export const staticRoutes = [
         name: "trading-accounts",
         component: () => import("@/views/trading/account-overview/account-overview.vue"),
         meta: { title: "trading-accounts" }
+      },
+      {
+        path: "/trading/logical-accounts",
+        name: "trading-logical-accounts",
+        component: () => import("@/views/trading/logical-accounts/index.vue"),
+        meta: { title: "trading-logical-accounts" }
       },
       {
         path: "/trading/positions",

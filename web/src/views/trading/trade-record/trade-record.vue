@@ -9,59 +9,14 @@
               {{ account.name }} · {{ marketTypeLabels[account.market_type] }}
             </a-option>
           </a-select>
-          <a-tag v-if="selectedAccount" :color="accountExecutable ? 'green' : 'orange'">
-            {{ accountExecutable ? "Ready" : selectedAccount.paused ? "Paused" : "Not Ready" }}
+          <a-tag v-if="selectedAccount" :color="selectedAccount.ready ? 'green' : 'orange'">
+            {{ selectedAccount.ready ? "Ready" : "Not Ready" }}
           </a-tag>
           <a-button title="刷新账户状态" aria-label="刷新账户状态" @click="refreshAccounts">
             <template #icon><icon-refresh /></template>
           </a-button>
         </a-space>
       </div>
-
-      <section class="order-entry">
-        <h3>提交订单</h3>
-        <a-form :model="form" layout="inline" auto-label-width>
-          <a-form-item label="Symbol" required>
-            <a-input v-model="form.symbol" style="width: 140px" placeholder="BTCUSDT" />
-          </a-form-item>
-          <a-form-item label="类型" required>
-            <a-radio-group v-model="form.order_type" type="button">
-              <a-radio :value="1">MARKET</a-radio>
-              <a-radio :value="2">LIMIT</a-radio>
-            </a-radio-group>
-          </a-form-item>
-          <a-form-item label="方向" required>
-            <a-radio-group v-model="form.side" type="button">
-              <a-radio :value="1">买入</a-radio>
-              <a-radio :value="2">卖出</a-radio>
-            </a-radio-group>
-          </a-form-item>
-          <a-form-item label="数量" required>
-            <a-input v-model="form.quantity" style="width: 130px" />
-          </a-form-item>
-          <a-form-item v-if="form.order_type === 2" label="限价" required>
-            <a-input v-model="form.limit_price" style="width: 130px" />
-          </a-form-item>
-          <template v-if="selectedAccount?.market_type === 2">
-            <a-form-item label="杠杆" required>
-              <a-input v-model="form.leverage" style="width: 90px" />
-              <a-button :loading="settingLeverage" @click="saveLeverage">设置</a-button>
-            </a-form-item>
-            <a-form-item label="只减仓">
-              <a-switch v-model="form.reduce_only" />
-            </a-form-item>
-          </template>
-          <a-form-item>
-            <a-button type="primary" :loading="submitting" :disabled="!accountExecutable" @click="submit">
-              <template #icon><icon-send /></template>
-              提交
-            </a-button>
-          </a-form-item>
-        </a-form>
-        <a-alert v-if="selectedAccount && !accountExecutable" type="warning" class="entry-warning">
-          账户已暂停或尚未 Ready，不能提交新订单。
-        </a-alert>
-      </section>
 
       <a-tabs v-model:active-key="activeTab" class="record-view-tabs" @change="loadActiveTab">
         <a-tab-pane key="orders" title="Orders">
@@ -157,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -171,9 +126,7 @@ import {
   marketTypeLabels,
   orderSideColors,
   orderSideLabels,
-  orderTypeLabels,
-  placeOrder,
-  setLeverage
+  orderTypeLabels
 } from "@/api/trade";
 import type { ExchangeAccount, Fill, Order } from "@/api/trade/types";
 
@@ -184,47 +137,17 @@ const exchangeAccountId = ref("");
 const selectedAccount = computed(
   () => accounts.value.find(account => account.exchange_account_id === exchangeAccountId.value) || null
 );
-const accountExecutable = computed(() =>
-  Boolean(
-    selectedAccount.value?.ready && !selectedAccount.value?.paused && selectedAccount.value?.status.toUpperCase() === "ENABLED"
-  )
-);
 const activeTab = ref("orders");
 const filterSymbol = ref("");
 const onlyOpen = ref(false);
 const orders = ref<Order[]>([]);
 const fills = ref<Fill[]>([]);
 const loading = ref(false);
-const submitting = ref(false);
-const settingLeverage = ref(false);
 const orderPagination = reactive({ current: 1, pageSize: 20, total: 0 });
 const fillPagination = reactive({ current: 1, pageSize: 20, total: 0 });
 const accountRequests = createLatestRequestGuard();
 const orderRequests = createLatestRequestGuard();
 const fillRequests = createLatestRequestGuard();
-const form = reactive({
-  symbol: "",
-  order_type: 1 as 1 | 2,
-  side: 1 as 1 | 2,
-  quantity: "",
-  limit_price: "",
-  leverage: "1",
-  reduce_only: false
-});
-
-watch(
-  () => form.order_type,
-  value => {
-    if (value === 1) form.limit_price = "";
-  }
-);
-watch(selectedAccount, account => {
-  if (account?.market_type !== 2) {
-    form.leverage = "1";
-    form.reduce_only = false;
-  }
-});
-
 async function loadAccounts() {
   const request = accountRequests.begin();
   const response = await listAccounts({ page: { page: 1, size: 200 } });
@@ -299,58 +222,6 @@ function changeFillPage(page: number) {
   loadFills();
 }
 
-async function submit() {
-  const symbol = form.symbol.trim().toUpperCase();
-  if (!accountExecutable.value || !symbol || !form.quantity.trim()) {
-    Message.warning("请选择 Ready 账户并填写 Symbol 和数量");
-    return;
-  }
-  if (form.order_type === 2 && !form.limit_price.trim()) {
-    Message.warning("LIMIT 订单必须填写限价");
-    return;
-  }
-  submitting.value = true;
-  try {
-    await placeOrder({
-      exchange_account_id: exchangeAccountId.value,
-      client_order_id: createClientId(),
-      symbol,
-      order_type: form.order_type,
-      time_in_force: form.order_type === 1 ? 0 : 1,
-      side: form.side,
-      position_side: selectedAccount.value?.market_type === 2 ? 1 : 0,
-      quantity: form.quantity.trim(),
-      ...(form.order_type === 2 ? { limit_price: form.limit_price.trim() } : {}),
-      reduce_only: selectedAccount.value?.market_type === 2 && form.reduce_only,
-      source: "manual"
-    });
-    Message.success("订单已提交");
-    await loadOrders();
-  } finally {
-    submitting.value = false;
-  }
-}
-
-async function saveLeverage() {
-  const symbol = form.symbol.trim().toUpperCase();
-  if (!selectedAccount.value || selectedAccount.value.market_type !== 2 || !symbol || !form.leverage.trim()) {
-    Message.warning("请先选择 SWAP 账户并填写 Symbol 和杠杆");
-    return;
-  }
-  settingLeverage.value = true;
-  try {
-    await setLeverage({
-      exchange_account_id: exchangeAccountId.value,
-      symbol,
-      leverage: form.leverage.trim()
-    });
-    selectedAccount.value.ready = false;
-    Message.success("杠杆已保存；Exchange session 重建并恢复 Ready 后再提交订单");
-  } finally {
-    settingLeverage.value = false;
-  }
-}
-
 const canCancel = canCancelOrderState;
 
 async function cancel(order: Order) {
@@ -358,7 +229,7 @@ async function cancel(order: Order) {
     Message.warning("账户已切换，请刷新后重试");
     return;
   }
-  await cancelOrder(order.order_id);
+  await cancelOrder(createClientId(), order.order_id, "manual cancel from console");
   Message.success("撤单请求已提交");
   await loadOrders();
 }

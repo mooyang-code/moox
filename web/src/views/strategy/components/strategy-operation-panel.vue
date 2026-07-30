@@ -1,93 +1,50 @@
 <template>
-  <a-card title="运行控制" :bordered="false">
-    <a-alert v-if="!canOperate" type="info" show-icon>当前账号只有查看权限。</a-alert>
-    <a-space v-else>
-      <a-button v-if="status !== 'disabled'" status="warning" :loading="loading" @click="pause">暂停 Binding</a-button>
-      <a-button v-else type="primary" :loading="loading" @click="resume">恢复 Binding</a-button>
-      <a-select v-model="mode" style="width: 130px" :disabled="loading"
-        ><a-option value="observe">Observe</a-option><a-option value="paper">Paper</a-option
-        ><a-option v-if="store.liveExecutionEnabled" value="live">Live</a-option></a-select
-      >
-      <a-input v-model="executionBindingId" style="width: 190px" placeholder="执行绑定 ID" :disabled="loading" />
-      <a-input v-model="exchangeAccountId" style="width: 190px" placeholder="Exchange 账户 ID" :disabled="loading" />
-      <a-button :loading="loading" @click="changeMode">应用模式</a-button>
+  <div class="operation-bar">
+    <span>Runner 控制</span>
+    <a-space>
+      <a-popconfirm v-if="status === 'enabled'" content="停用后不再计算新目标，确认继续？" @ok="change('disabled')">
+        <a-button status="warning" :loading="loading">停用</a-button>
+      </a-popconfirm>
+      <a-popconfirm v-else content="启用时会校验 Logical Account ownership，确认继续？" @ok="change('enabled')">
+        <a-button type="primary" status="success" :loading="loading">启用</a-button>
+      </a-popconfirm>
     </a-space>
-    <a-modal v-model:visible="reasonVisible" title="填写操作原因" @ok="submitReason">
-      <a-textarea v-model="reason" placeholder="请输入操作原因" :auto-size="{ minRows: 3, maxRows: 6 }" />
-    </a-modal>
-  </a-card>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { useStrategyStore } from "@/store/modules/strategy";
-import { useUserInfoStore } from "@/store/modules/user-info";
-const props = defineProps<{ bindingId: string; status?: string; currentMode?: string }>();
+import { setRunnerStatus } from "@/api/strategy";
+
+const props = defineProps<{ runnerId: string; status: string }>();
 const emit = defineEmits<{ changed: [] }>();
-const store = useStrategyStore();
-const userStore = useUserInfoStore();
-const canOperate = computed(() => userStore.account.roles.includes("admin"));
-const mode = ref(props.currentMode || "observe");
-const executionBindingId = ref("");
-const exchangeAccountId = ref("");
-const reason = ref("");
-const pending = ref<"pause" | "resume" | "mode">("pause");
-const reasonVisible = ref(false);
 const loading = ref(false);
-watch(
-  () => props.currentMode,
-  currentMode => {
-    mode.value = currentMode || "observe";
-    if (!store.liveExecutionEnabled && mode.value === "live") mode.value = "observe";
-  },
-  { immediate: true }
-);
-watch(
-  () => store.liveExecutionEnabled,
-  () => {
-    if (!store.liveExecutionEnabled && mode.value === "live") mode.value = "observe";
-  }
-);
-function ask(action: "pause" | "resume" | "mode") {
-  pending.value = action;
-  reason.value = "";
-  reasonVisible.value = true;
-}
-function pause() {
-  ask("pause");
-}
-function resume() {
-  ask("resume");
-}
-function changeMode() {
-  ask("mode");
-}
-async function submitReason() {
-  if (!reason.value.trim()) {
-    Message.warning("请填写操作原因");
-    return;
-  }
-  if (pending.value === "mode" && (!executionBindingId.value.trim() || !exchangeAccountId.value.trim())) {
-    Message.warning("请填写执行绑定和 Exchange 账户");
-    return;
-  }
+
+async function change(status: "enabled" | "disabled") {
   loading.value = true;
   try {
-    if (pending.value === "pause") await store.pause(props.bindingId, reason.value);
-    else if (pending.value === "resume") await store.resume(props.bindingId, reason.value);
-    else
-      await store.changeMode(props.bindingId, mode.value, reason.value, {
-        execution_binding_id: executionBindingId.value.trim(),
-        exchange_account_id: exchangeAccountId.value.trim()
-      });
-    reasonVisible.value = false;
-    Message.success("操作已提交");
+    await setRunnerStatus(props.runnerId, status);
+    Message.success(status === "enabled" ? "Runner 已启用" : "Runner 已停用");
     emit("changed");
-  } catch (err) {
-    Message.error(err instanceof Error ? err.message : "操作失败");
   } finally {
     loading.value = false;
   }
 }
 </script>
+
+<style scoped>
+.operation-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--moox-space-2);
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+}
+.operation-bar > span {
+  color: var(--color-text-2);
+  font-weight: 600;
+}
+</style>

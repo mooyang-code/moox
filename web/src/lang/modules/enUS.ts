@@ -51,6 +51,7 @@ export default {
     ["collector-rules"]: "collection tasks",
     ["collector-tasks"]: "task instances",
     ["trading-accounts"]: "accounts",
+    ["trading-logical-accounts"]: "logical accounts",
     ["trading-positions"]: "positions",
     ["trading-orders"]: "orders",
     ["ops"]: "operations",

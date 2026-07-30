@@ -39,12 +39,13 @@
           <a-table-column title="执行模式">
             <template #cell="{ record }">{{ executionModeLabels[record.execution_mode] }}</template>
           </a-table-column>
+          <a-table-column title="环境">
+            <template #cell="{ record }">{{ environmentLabels[record.environment] }}</template>
+          </a-table-column>
           <a-table-column title="状态">
             <template #cell="{ record }">
               <a-space>
-                <a-tag :color="record.paused ? 'orange' : record.ready ? 'green' : 'gray'">
-                  {{ record.paused ? "已暂停" : record.ready ? "Ready" : "Not Ready" }}
-                </a-tag>
+                <a-tag :color="record.ready ? 'green' : 'gray'">{{ record.ready ? "Ready" : "Not Ready" }}</a-tag>
                 <span>{{ record.status }}</span>
               </a-space>
             </template>
@@ -54,15 +55,12 @@
             <template #cell="{ record }">{{ formatTimestamp(record.last_sync_at) }}</template>
           </a-table-column>
           <a-table-column title="最近错误" data-index="last_error" ellipsis />
-          <a-table-column title="操作" fixed="right" :width="190">
+          <a-table-column title="操作" fixed="right" :width="100">
             <template #cell="{ record }">
               <a-space>
                 <a-button size="mini" :loading="syncingId === record.exchange_account_id" @click="sync(record)">
                   <template #icon><icon-sync /></template>
                   同步
-                </a-button>
-                <a-button size="mini" :status="record.paused ? 'success' : 'warning'" @click="togglePause(record)">
-                  {{ record.paused ? "恢复" : "暂停" }}
                 </a-button>
               </a-space>
             </template>
@@ -91,6 +89,15 @@
               <a-radio :value="2">Live</a-radio>
             </a-radio-group>
           </a-form-item>
+          <a-form-item label="环境" required>
+            <a-radio-group v-model="form.environment" type="button">
+              <a-radio v-if="form.execution_mode === 1" :value="1">Paper</a-radio>
+              <template v-else>
+                <a-radio :value="2">Testnet</a-radio>
+                <a-radio :value="3">Production</a-radio>
+              </template>
+            </a-radio-group>
+          </a-form-item>
           <a-form-item v-if="form.execution_mode === 2" label="Credential Secret ID" required>
             <a-input v-model="form.credential_secret_id" />
           </a-form-item>
@@ -108,16 +115,16 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
-import { Message, Modal } from "@arco-design/web-vue";
+import { onMounted, reactive, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
 import {
   createAccount,
+  environmentLabels,
   exchangeLabels,
   executionModeLabels,
   formatTimestamp,
   listAccounts,
   marketTypeLabels,
-  pauseAccount,
   syncAccount
 } from "@/api/trade";
 import type { ExchangeAccount } from "@/api/trade/types";
@@ -135,10 +142,18 @@ const form = reactive({
   exchange: 1 as 1 | 2,
   market_type: 1 as 1 | 2,
   execution_mode: 1 as 1 | 2,
+  environment: 1 as 1 | 2 | 3,
   credential_secret_id: "",
   settlement_asset: "USDT",
   margin_mode: "CROSS"
 });
+
+watch(
+  () => form.execution_mode,
+  mode => {
+    form.environment = mode === 1 ? 1 : 2;
+  }
+);
 
 async function loadAccounts() {
   loading.value = true;
@@ -167,22 +182,6 @@ async function sync(account: ExchangeAccount) {
   } finally {
     syncingId.value = "";
   }
-}
-
-function togglePause(account: ExchangeAccount) {
-  const paused = !account.paused;
-  Modal.confirm({
-    title: paused ? "暂停账户" : "恢复账户",
-    content: paused ? "暂停后不会接受新订单。" : "确认恢复该账户的新订单执行？",
-    onOk: async () => {
-      await pauseAccount({
-        exchange_account_id: account.exchange_account_id,
-        paused,
-        reason: paused ? "manual pause from console" : "manual resume from console"
-      });
-      await loadAccounts();
-    }
-  });
 }
 
 async function create() {

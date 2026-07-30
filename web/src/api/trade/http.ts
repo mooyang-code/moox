@@ -7,7 +7,8 @@ import { installSpaceAwareSignedClient } from "../admin/signed-client";
 
 export const tradeServiceMap = {
   exchangeAccount: "trade_exchange_account",
-  execution: "trade_execution"
+  execution: "trade_execution",
+  logicalAccount: "trade_logical_account"
 } as const;
 
 const tradeClient = axios.create({

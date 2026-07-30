@@ -18,8 +18,9 @@ export interface PageResult {
 export type Exchange = 0 | 1 | 2;
 export type MarketType = 0 | 1 | 2;
 export type ExecutionMode = 0 | 1 | 2;
+export type AccountEnvironment = 0 | 1 | 2 | 3;
 export type OrderType = 0 | 1 | 2;
-export type TimeInForce = 0 | 1 | 2 | 3;
+export type FillPolicy = 0 | 1 | 2 | 3;
 export type PositionSide = 0 | 1;
 export type OrderSide = 0 | 1 | 2;
 
@@ -47,12 +48,11 @@ export interface ExchangeAccount {
   exchange: Exchange;
   market_type: MarketType;
   execution_mode: ExecutionMode;
+  environment: AccountEnvironment;
   credential_secret_id: string;
   settlement_asset: string;
   margin_mode: string;
   status: string;
-  paused: boolean;
-  pause_reason: string;
   ready: boolean;
   leverage_settings: Record<string, string>;
   snapshot?: ExchangeAccountSnapshot;
@@ -64,6 +64,29 @@ export interface ExchangeAccount {
   sync_symbols: string[];
 }
 
+export interface LogicalAccountMember {
+  exchange_account_id: string;
+  enabled: boolean;
+  priority: number;
+}
+
+export interface LogicalAccount {
+  logical_account_id: string;
+  space_id: string;
+  name: string;
+  owner_runner_id: string;
+  execution_mode: ExecutionMode;
+  market_type: MarketType;
+  settlement_asset: string;
+  automation_state: "ACTIVE" | "PAUSED" | string;
+  pause_reason: string;
+  members: LogicalAccountMember[];
+  ready: boolean;
+  readiness_reasons: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Order {
   order_id: string;
   exchange_account_id: string;
@@ -73,16 +96,18 @@ export interface Order {
   market_type: MarketType;
   symbol: string;
   order_type: OrderType;
-  time_in_force: TimeInForce;
+  fill_policy: FillPolicy;
   side: OrderSide;
   position_side: PositionSide;
   quantity: string;
   limit_price?: string;
   reference_price: string;
   reference_price_at: string;
-  reduce_only: boolean;
-  source: string;
-  strategy_execution_id: string;
+  reduce_position_only: boolean;
+  owner_type: string;
+  owner_id: string;
+  logical_account_id: string;
+  runner_id: string;
   state: string;
   filled_quantity: string;
   average_price: string;
@@ -136,28 +161,57 @@ export interface Position {
   updated_at: string;
 }
 
-export interface TargetPosition {
+export interface InstrumentTarget {
   instrument_id: string;
-  symbol: string;
-  target_quantity: string;
+  quantity: string;
 }
 
-export interface TargetExecution {
-  execution_id: string;
-  event_id: string;
-  strategy_run_id: string;
-  execution_binding_id: string;
-  exchange_account_id: string;
+export interface BlockedTarget extends InstrumentTarget {
+  reason: string;
+}
+
+export interface LogicalAccountTarget {
+  target_id: string;
+  logical_account_id: string;
+  runner_id: string;
   command_sequence: string;
-  not_after: string;
-  data_revision: string;
-  targets: TargetPosition[];
+  targets: InstrumentTarget[];
   status: string;
-  progress: string;
-  residual_quantity: string;
+  blocked_targets: BlockedTarget[];
+  last_error: string;
+  accepted_at: string;
+  updated_at: string;
+}
+
+export interface OperatorAction {
+  action_id: string;
+  logical_account_id: string;
+  action_type: string;
+  reason: string;
+  status: string;
+  result_json: string;
   last_error: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface RemainingPosition {
+  symbol?: string;
+  asset?: string;
+  quantity: string;
+  reason: string;
+}
+
+export interface FlattenAccountResult {
+  exchange_account_id: string;
+  status: string;
+  child_order_ids?: string[];
+  remaining_positions?: RemainingPosition[];
+  error?: string;
+}
+
+export interface FlattenResult {
+  accounts: FlattenAccountResult[];
 }
 
 export interface CreateAccountReq {
@@ -165,14 +219,11 @@ export interface CreateAccountReq {
   exchange: Exchange;
   market_type: MarketType;
   execution_mode: ExecutionMode;
+  environment: AccountEnvironment;
   credential_secret_id: string;
   settlement_asset: string;
   margin_mode?: string;
   sync_symbols?: string[];
-}
-export interface CreateAccountRsp {
-  ret_info: RetInfo;
-  account: ExchangeAccount;
 }
 
 export interface UpdateAccountReq {
@@ -184,133 +235,48 @@ export interface UpdateAccountReq {
   status?: string;
   sync_symbols?: string[];
 }
-export interface UpdateAccountRsp {
-  ret_info: RetInfo;
-  account: ExchangeAccount;
-}
-
-export interface GetAccountRsp {
-  ret_info: RetInfo;
-  account: ExchangeAccount;
-}
-
-export interface GetExecutionRsp {
-  ret_info: RetInfo;
-  execution: TargetExecution;
-}
-
-export interface GetOrderRsp {
-  ret_info: RetInfo;
-  order: Order;
-}
 
 export interface ListAccountsReq {
   exchange?: Exchange;
   market_type?: MarketType;
   execution_mode?: ExecutionMode;
+  environment?: AccountEnvironment;
   status?: string;
   page?: Page;
 }
-export interface ListAccountsRsp {
-  ret_info: RetInfo;
-  accounts: ExchangeAccount[];
-  page_result: PageResult;
+
+export interface CreateLogicalAccountReq {
+  name: string;
+  execution_mode: ExecutionMode;
+  market_type: MarketType;
+  settlement_asset: string;
 }
 
-export interface SetLeverageReq {
+export interface AddLogicalAccountMemberReq {
+  logical_account_id: string;
   exchange_account_id: string;
-  symbol: string;
-  leverage: string;
-}
-export interface SetLeverageRsp {
-  ret_info: RetInfo;
-  account: ExchangeAccount;
+  enabled: boolean;
+  priority: number;
+  adopt_existing_exposure: boolean;
 }
 
-export interface PauseAccountReq {
-  exchange_account_id: string;
-  paused: boolean;
-  reason: string;
-}
-export interface PauseAccountRsp {
-  ret_info: RetInfo;
-  account: ExchangeAccount;
-}
-
-export interface SyncAccountRsp {
-  ret_info: RetInfo;
-  fills_ingested: number;
-  orders_updated: number;
-  positions_updated: number;
-  account_snapshot_updated: boolean;
-  unknown_orders_resolved: number;
-  ready: boolean;
-  warnings: string[];
-}
-
-export interface PlaceOrderReq {
+export interface PlaceManualOrderReq {
+  action_id: string;
   exchange_account_id: string;
   client_order_id: string;
   symbol: string;
   order_type: OrderType;
-  time_in_force: TimeInForce;
+  fill_policy: FillPolicy;
   side: OrderSide;
   position_side: PositionSide;
   quantity: string;
   limit_price?: string;
-  reduce_only: boolean;
-  source: string;
-  strategy_execution_id?: string;
-}
-export interface PlaceOrderRsp {
-  ret_info: RetInfo;
-  order: Order;
-}
-
-export interface CancelOrderRsp {
-  ret_info: RetInfo;
-  order: Order;
-}
-
-export interface CancelAllOrdersReq {
-  exchange_account_id: string;
-  symbol?: string;
-}
-export interface CancelAllOrdersRsp {
-  ret_info: RetInfo;
-  canceled_count: number;
-}
-
-export interface SubmitTargetReq {
-  event_id: string;
-  execution_id: string;
-  strategy_run_id: string;
-  execution_binding_id: string;
-  exchange_account_id: string;
-  command_sequence: string;
-  not_after: string;
-  data_revision: string;
-  targets: TargetPosition[];
-}
-export interface SubmitTargetRsp {
-  ret_info: RetInfo;
-  execution: TargetExecution;
-}
-
-export interface ListExecutionsReq {
-  exchange_account_id?: string;
-  execution_binding_id?: string;
-  status?: string;
-  page?: Page;
-}
-export interface ListExecutionsRsp {
-  ret_info: RetInfo;
-  executions: TargetExecution[];
-  page_result: PageResult;
+  reason: string;
 }
 
 export interface ListOrdersReq {
-  exchange_account_id: string;
+  logical_account_id?: string;
+  exchange_account_id?: string;
   symbol?: string;
   state?: string;
   only_open?: boolean;
@@ -318,27 +284,28 @@ export interface ListOrdersReq {
   end_time?: string;
   page?: Page;
 }
-export interface ListOrdersRsp {
-  ret_info: RetInfo;
-  orders: Order[];
-  page_result: PageResult;
-}
 
 export interface ListFillsReq {
-  exchange_account_id: string;
+  exchange_account_id?: string;
   order_id?: string;
   symbol?: string;
   start_time?: string;
   end_time?: string;
   page?: Page;
 }
-export interface ListFillsRsp {
-  ret_info: RetInfo;
-  fills: Fill[];
-  page_result: PageResult;
+
+export interface ListPositionsReq {
+  logical_account_id?: string;
+  exchange_account_id?: string;
+  symbol?: string;
 }
 
-export interface ListPositionsRsp {
+export interface AccountResponse {
   ret_info: RetInfo;
-  positions: Position[];
+  account: ExchangeAccount;
+}
+
+export interface LogicalAccountResponse {
+  ret_info: RetInfo;
+  logical_account: LogicalAccount;
 }

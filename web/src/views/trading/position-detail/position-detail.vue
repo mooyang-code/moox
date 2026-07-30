@@ -96,7 +96,7 @@ async function loadPositions() {
   const requestedSymbol = symbol.value.trim().toUpperCase();
   loading.value = true;
   try {
-    const response = await listPositions(accountId, requestedSymbol);
+    const response = await listPositions({ exchange_account_id: accountId, symbol: requestedSymbol });
     if (!request.isLatest() || exchangeAccountId.value !== accountId) return;
     positions.value = response.positions || [];
   } finally {

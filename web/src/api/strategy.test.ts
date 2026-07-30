@@ -3,41 +3,50 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { callControl } = vi.hoisted(() => ({ callControl: vi.fn() }));
 vi.mock("@/api/admin/http", () => ({ callControl }));
 
-import { getStrategyCapabilities, normalizePerformance, setExecutionMode } from "./strategy";
+import { listRunners, listStrategies, listStrategyResults, listStrategyTargets, setRunnerStatus } from "./strategy";
 
-describe("strategy api normalization", () => {
+describe("strategy API", () => {
   beforeEach(() => callControl.mockReset());
 
-  it("keeps performance sources separate", () => {
-    const result = normalizePerformance({
-      groups: [
-        { performance_source: "paper", points: [] },
-        { performance_source: "live", points: [] }
-      ]
+  it("maps Strategy list responses", async () => {
+    callControl.mockResolvedValueOnce({ strategies: [{ strategy_id: "momentum" }], total: 1, page: 1, page_size: 20 });
+    await expect(listStrategies({ page: 1, page_size: 20 })).resolves.toMatchObject({
+      items: [{ strategy_id: "momentum" }],
+      page: { total: 1 }
     });
-    expect(result.groups.map(item => item.performance_source)).toEqual(["paper", "live"]);
+    expect(callControl).toHaveBeenCalledWith("strategy", "ListStrategies", { page: { page: 1, page_size: 20 } });
   });
 
-  it("treats only an explicit true capability as enabled", async () => {
-    callControl.mockResolvedValueOnce({ live_execution_enabled: true });
-    await expect(getStrategyCapabilities()).resolves.toEqual({ live_execution_enabled: true });
-    callControl.mockResolvedValueOnce({ live_execution_enabled: "true" });
-    await expect(getStrategyCapabilities()).resolves.toEqual({ live_execution_enabled: false });
+  it("sends runner filters and reads results", async () => {
+    callControl
+      .mockResolvedValueOnce({ runners: [{ runner_id: "runner-1" }], total: 1 })
+      .mockResolvedValueOnce({ results: [{ result_id: "result-1" }], total: 1 });
+    await listRunners({ strategy_id: "momentum", status: "enabled" });
+    await listStrategyResults("runner-1", { page: 2, page_size: 10 });
+    expect(callControl).toHaveBeenNthCalledWith(1, "strategy", "ListRunners", {
+      page: { page: 1, page_size: 20 },
+      strategy_id: "momentum",
+      space_id: undefined,
+      status: "enabled"
+    });
+    expect(callControl).toHaveBeenNthCalledWith(2, "strategy", "ListStrategyResults", {
+      runner_id: "runner-1",
+      page: { page: 2, page_size: 10 }
+    });
   });
 
-  it("sends the exact execution binding and Exchange account when changing mode", async () => {
-    callControl.mockResolvedValueOnce({ ret_info: { code: 0 } });
-    await setExecutionMode("binding-1", "paper", "test", "operation-1", {
-      execution_binding_id: "execution-1",
-      exchange_account_id: "account-1"
+  it("uses quantity for the current FULL target and controls only Runner status", async () => {
+    callControl
+      .mockResolvedValueOnce({ targets: [{ instrument_id: "BTC-USDT-SPOT", quantity: "0.1" }], command_sequence: "7" })
+      .mockResolvedValueOnce({ runner: { runner_id: "runner-1", status: "enabled" } });
+    await expect(listStrategyTargets("runner-1")).resolves.toEqual({
+      targets: [{ instrument_id: "BTC-USDT-SPOT", quantity: "0.1" }],
+      command_sequence: "7"
     });
-    expect(callControl).toHaveBeenCalledWith("strategy", "SetExecutionMode", {
-      binding_id: "binding-1",
-      mode: "paper",
-      reason: "test",
-      operation_id: "operation-1",
-      execution_binding_id: "execution-1",
-      exchange_account_id: "account-1"
+    await setRunnerStatus("runner-1", "enabled");
+    expect(callControl).toHaveBeenLastCalledWith("strategy", "SetRunnerStatus", {
+      runner_id: "runner-1",
+      status: "enabled"
     });
   });
 });

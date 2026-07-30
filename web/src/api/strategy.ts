@@ -1,127 +1,113 @@
 import { callControl } from "@/api/admin/http";
 import type {
+  EngineStatus,
+  InstrumentTarget,
   PageRequest,
   PageResponse,
-  PerformanceSource,
-  RunningStrategySummary,
-  StrategyHealth,
-  StrategyOverview,
-  StrategyPerformance,
-  StrategyRun,
-  TargetPosition
+  Strategy,
+  StrategyResult,
+  StrategyRunner
 } from "./strategy-types";
-
-export interface RunningStrategyFilter extends PageRequest {
-  space_id?: string;
-  status?: string;
-  mode?: string;
-  strategy_id?: string;
-}
 
 export interface PageResult<T> {
   items: T[];
   page: PageResponse;
 }
 
-export interface StrategyCapabilities {
-  live_execution_enabled: boolean;
+function pageRequest(params: PageRequest): Required<PageRequest> {
+  return { page: params.page ?? 1, page_size: params.page_size ?? 20 };
 }
 
-export async function getStrategyCapabilities(): Promise<StrategyCapabilities> {
-  const rsp = await callControl<Record<string, never>, { live_execution_enabled?: boolean }>("strategy", "GetEngineStatus", {});
-  return { live_execution_enabled: rsp.live_execution_enabled === true };
+export function createStrategy(strategy: Strategy) {
+  return callControl<{ strategy: Strategy }, { strategy: Strategy }>("strategy", "CreateStrategy", { strategy });
 }
 
-export function normalizePerformance(input: { groups?: StrategyPerformance[] } | StrategyPerformance): {
-  groups: StrategyPerformance[];
-} {
-  return "groups" in input && Array.isArray(input.groups) ? { groups: input.groups } : { groups: [input as StrategyPerformance] };
+export function getStrategy(strategy_id: string) {
+  return callControl<{ strategy_id: string }, { strategy: Strategy }>("strategy", "GetStrategy", { strategy_id });
 }
 
-export async function listRunningStrategies(params: RunningStrategyFilter = {}): Promise<PageResult<RunningStrategySummary>> {
+export async function listStrategies(params: PageRequest = {}): Promise<PageResult<Strategy>> {
   const rsp = await callControl<
-    { page: PageRequest; space_id?: string; status?: string; mode?: string; strategy_id?: string },
-    { items?: RunningStrategySummary[]; total?: number; page?: number; page_size?: number }
-  >("strategy", "ListRunningStrategies", {
-    page: { page: params.page ?? 1, page_size: params.page_size ?? 20 },
-    space_id: params.space_id,
-    status: params.status,
-    mode: params.mode,
-    strategy_id: params.strategy_id
-  });
-  return { items: rsp.items ?? [], page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size } };
+    { page: Required<PageRequest> },
+    { strategies?: Strategy[]; total?: number; page?: number; page_size?: number }
+  >("strategy", "ListStrategies", { page: pageRequest(params) });
+  return {
+    items: rsp.strategies ?? [],
+    page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size }
+  };
 }
 
-export async function getStrategyOverview(binding_id: string): Promise<StrategyOverview> {
-  return callControl("strategy", "GetStrategyOverview", { binding_id });
+export function createRunner(runner: StrategyRunner) {
+  return callControl<{ runner: StrategyRunner }, { runner: StrategyRunner }>("strategy", "CreateRunner", { runner });
 }
 
-export async function listStrategyRuns(
-  binding_id: string,
-  params: PageRequest & { from?: string; to?: string } = {}
-): Promise<PageResult<StrategyRun>> {
+export function getRunner(runner_id: string) {
+  return callControl<{ runner_id: string }, { runner: StrategyRunner }>("strategy", "GetRunner", { runner_id });
+}
+
+export async function listRunners(
+  params: PageRequest & { strategy_id?: string; space_id?: string; status?: string } = {}
+): Promise<PageResult<StrategyRunner>> {
   const rsp = await callControl<
-    { binding_id: string; page: PageRequest; range: { from: string; to: string } },
-    { items?: StrategyRun[]; total?: number; page?: number; page_size?: number }
-  >("strategy", "ListStrategyRuns", {
-    binding_id,
-    page: { page: params.page ?? 1, page_size: params.page_size ?? 20 },
-    range: { from: params.from ?? "", to: params.to ?? "" }
+    {
+      page: Required<PageRequest>;
+      strategy_id?: string;
+      space_id?: string;
+      status?: string;
+    },
+    { runners?: StrategyRunner[]; total?: number; page?: number; page_size?: number }
+  >("strategy", "ListRunners", {
+    page: pageRequest(params),
+    strategy_id: params.strategy_id || undefined,
+    space_id: params.space_id || undefined,
+    status: params.status || undefined
   });
-  return { items: rsp.items ?? [], page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size } };
+  return {
+    items: rsp.runners ?? [],
+    page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size }
+  };
 }
 
-export async function listStrategyTargets(run_id: string, params: PageRequest = {}): Promise<PageResult<TargetPosition>> {
+export function updateRunner(runner: StrategyRunner) {
+  return callControl<{ runner: StrategyRunner }, { runner: StrategyRunner }>("strategy", "UpdateRunner", { runner });
+}
+
+export function setRunnerStatus(runner_id: string, status: string) {
+  return callControl<{ runner_id: string; status: string }, { runner: StrategyRunner }>("strategy", "SetRunnerStatus", {
+    runner_id,
+    status
+  });
+}
+
+export function runOnce(req: { runner_id: string; trigger_bar_time: string; namespace: string; data_json: string }) {
+  return callControl<typeof req, { result?: StrategyResult; accepted: boolean }>("strategy", "RunOnce", req);
+}
+
+export async function listStrategyResults(runner_id: string, params: PageRequest = {}): Promise<PageResult<StrategyResult>> {
   const rsp = await callControl<
-    { run_id: string; page: PageRequest },
-    { targets?: TargetPosition[]; total?: number; page?: number; page_size?: number }
-  >("strategy", "ListStrategyTargets", { run_id, page: { page: params.page ?? 1, page_size: params.page_size ?? 100 } });
-  return { items: rsp.targets ?? [], page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size } };
+    { runner_id: string; page: Required<PageRequest> },
+    { results?: StrategyResult[]; total?: number; page?: number; page_size?: number }
+  >("strategy", "ListStrategyResults", { runner_id, page: pageRequest(params) });
+  return {
+    items: rsp.results ?? [],
+    page: { total: rsp.total ?? 0, page: rsp.page, page_size: rsp.page_size }
+  };
 }
 
-export async function getStrategyHealth(binding_id: string): Promise<StrategyHealth> {
-  const rsp = await callControl<{ binding_id: string }, { health?: StrategyHealth }>("strategy", "GetStrategyHealth", {
-    binding_id
-  });
-  return rsp.health ?? { status: "unknown", mode: "observe" };
+export function getStrategyResult(result_id: string) {
+  return callControl<{ result_id: string }, { result: StrategyResult }>("strategy", "GetStrategyResult", { result_id });
 }
 
-export async function getStrategyPerformance(
-  binding_id: string,
-  source: PerformanceSource,
-  params: { from?: string; to?: string; interval?: string } = {}
-): Promise<StrategyPerformance> {
-  const rsp = await callControl<
-    { binding_id: string; performance_source: PerformanceSource; interval: string; range: { from: string; to: string } },
-    StrategyPerformance
-  >("strategy", "GetStrategyPerformance", {
-    binding_id,
-    performance_source: source,
-    interval: params.interval ?? "auto",
-    range: { from: params.from ?? "", to: params.to ?? "" }
-  });
-  return { ...rsp, performance_source: rsp.performance_source || source, points: rsp.points || [] };
+export async function listStrategyTargets(runner_id: string): Promise<{ targets: InstrumentTarget[]; command_sequence: string }> {
+  const rsp = await callControl<{ runner_id: string }, { targets?: InstrumentTarget[]; command_sequence?: string }>(
+    "strategy",
+    "ListStrategyTargets",
+    { runner_id }
+  );
+  return { targets: rsp.targets ?? [], command_sequence: rsp.command_sequence ?? "0" };
 }
 
-export async function pauseBinding(binding_id: string, reason: string, operation_id: string) {
-  return callControl("strategy", "PauseBinding", { binding_id, reason, operation_id });
-}
-
-export async function resumeBinding(binding_id: string, reason: string, operation_id: string) {
-  return callControl("strategy", "ResumeBinding", { binding_id, reason, operation_id });
-}
-
-export interface ExecutionSettings {
-  execution_binding_id: string;
-  exchange_account_id: string;
-}
-
-export async function setExecutionMode(
-  binding_id: string,
-  mode: string,
-  reason: string,
-  operation_id: string,
-  settings: ExecutionSettings
-) {
-  return callControl("strategy", "SetExecutionMode", { binding_id, mode, reason, operation_id, ...settings });
+export async function getEngineStatus(): Promise<EngineStatus> {
+  const rsp = await callControl<Record<string, never>, Partial<EngineStatus>>("strategy", "GetEngineStatus", {});
+  return { workers: rsp.workers ?? 0, ready_workers: rsp.ready_workers ?? 0 };
 }

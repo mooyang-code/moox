@@ -1,46 +1,40 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { createClientId } from "@/utils/client-id";
 import {
-  getStrategyOverview,
-  getStrategyPerformance,
-  getStrategyCapabilities,
-  listRunningStrategies,
-  listStrategyRuns,
-  pauseBinding,
-  resumeBinding,
-  setExecutionMode,
-  type ExecutionSettings
+  getEngineStatus,
+  getRunner,
+  getStrategy,
+  listRunners,
+  listStrategies,
+  listStrategyResults,
+  listStrategyTargets
 } from "@/api/strategy";
-import type {
-  PerformanceSource,
-  RunningStrategySummary,
-  StrategyOverview,
-  StrategyPerformance,
-  StrategyRun
-} from "@/api/strategy-types";
+import type { EngineStatus, InstrumentTarget, Strategy, StrategyResult, StrategyRunner } from "@/api/strategy-types";
 
 export const useStrategyStore = defineStore("strategy", () => {
-  const rows = ref<RunningStrategySummary[]>([]);
-  const total = ref(0);
+  const strategies = ref<Strategy[]>([]);
+  const runners = ref<StrategyRunner[]>([]);
+  const runner = ref<StrategyRunner | null>(null);
+  const strategy = ref<Strategy | null>(null);
+  const results = ref<StrategyResult[]>([]);
+  const targets = ref<InstrumentTarget[]>([]);
+  const commandSequence = ref("0");
+  const engine = ref<EngineStatus>({ workers: 0, ready_workers: 0 });
+  const totalStrategies = ref(0);
+  const totalRunners = ref(0);
   const loading = ref(false);
   const error = ref("");
-  const overview = ref<StrategyOverview | null>(null);
-  const runs = ref<StrategyRun[]>([]);
-  const performance = ref<StrategyPerformance | null>(null);
-  const performanceSource = ref<PerformanceSource>("paper");
   const poller = ref<ReturnType<typeof setInterval> | null>(null);
-  const liveExecutionEnabled = ref(false);
+  const engineReady = computed(() => engine.value.workers > 0 && engine.value.ready_workers === engine.value.workers);
 
-  const hasRows = computed(() => rows.value.length > 0);
-
-  async function loadRunning(params: Parameters<typeof listRunningStrategies>[0] = {}) {
+  async function loadStrategies(params: Parameters<typeof listStrategies>[0] = {}) {
     loading.value = true;
     error.value = "";
     try {
-      const [result] = await Promise.all([listRunningStrategies(params), loadCapabilities()]);
-      rows.value = result.items;
-      total.value = result.page.total ?? 0;
+      const [result, status] = await Promise.all([listStrategies(params), getEngineStatus()]);
+      strategies.value = result.items;
+      totalStrategies.value = result.page.total;
+      engine.value = status;
     } catch (err) {
       error.value = err instanceof Error ? err.message : "策略列表加载失败";
     } finally {
@@ -48,39 +42,38 @@ export const useStrategyStore = defineStore("strategy", () => {
     }
   }
 
-  async function loadOverview(bindingId: string) {
+  async function loadRunners(params: Parameters<typeof listRunners>[0] = {}) {
     loading.value = true;
     error.value = "";
     try {
-      const [loadedOverview, runsResult] = await Promise.all([
-        getStrategyOverview(bindingId),
-        listStrategyRuns(bindingId, { page: 1, page_size: 20 }),
-        loadCapabilities()
-      ]);
-      overview.value = loadedOverview;
-      runs.value = runsResult.items;
+      const result = await listRunners(params);
+      runners.value = result.items;
+      totalRunners.value = result.page.total;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "策略详情加载失败";
+      error.value = err instanceof Error ? err.message : "Runner 列表加载失败";
     } finally {
       loading.value = false;
     }
   }
 
-  async function loadCapabilities() {
+  async function loadRunnerDetail(runnerId: string) {
+    loading.value = true;
+    error.value = "";
     try {
-      const capabilities = await getStrategyCapabilities();
-      liveExecutionEnabled.value = capabilities.live_execution_enabled;
-    } catch {
-      liveExecutionEnabled.value = false;
-    }
-  }
-
-  async function loadPerformance(bindingId: string, source = performanceSource.value) {
-    performanceSource.value = source;
-    try {
-      performance.value = await getStrategyPerformance(bindingId, source);
+      const [runnerRsp, resultRsp, targetRsp] = await Promise.all([
+        getRunner(runnerId),
+        listStrategyResults(runnerId, { page: 1, page_size: 50 }),
+        listStrategyTargets(runnerId)
+      ]);
+      runner.value = runnerRsp.runner;
+      results.value = resultRsp.items;
+      targets.value = targetRsp.targets;
+      commandSequence.value = targetRsp.command_sequence;
+      strategy.value = (await getStrategy(runnerRsp.runner.strategy_id)).strategy;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : "策略表现加载失败";
+      error.value = err instanceof Error ? err.message : "Runner 详情加载失败";
+    } finally {
+      loading.value = false;
     }
   }
 
@@ -90,43 +83,28 @@ export const useStrategyStore = defineStore("strategy", () => {
   }
 
   function stopPolling() {
-    if (poller.value) {
-      clearInterval(poller.value);
-      poller.value = null;
-    }
-  }
-
-  async function pause(bindingId: string, reason: string) {
-    return pauseBinding(bindingId, reason, createClientId());
-  }
-
-  async function resume(bindingId: string, reason: string) {
-    return resumeBinding(bindingId, reason, createClientId());
-  }
-
-  async function changeMode(bindingId: string, mode: string, reason: string, settings: ExecutionSettings) {
-    return setExecutionMode(bindingId, mode, reason, createClientId(), settings);
+    if (poller.value) clearInterval(poller.value);
+    poller.value = null;
   }
 
   return {
-    rows,
-    total,
+    strategies,
+    runners,
+    runner,
+    strategy,
+    results,
+    targets,
+    commandSequence,
+    engine,
+    totalStrategies,
+    totalRunners,
     loading,
     error,
-    overview,
-    runs,
-    performance,
-    performanceSource,
-    liveExecutionEnabled,
-    hasRows,
-    loadRunning,
-    loadOverview,
-    loadCapabilities,
-    loadPerformance,
+    engineReady,
+    loadStrategies,
+    loadRunners,
+    loadRunnerDetail,
     startPolling,
-    stopPolling,
-    pause,
-    resume,
-    changeMode
+    stopPolling
   };
 });

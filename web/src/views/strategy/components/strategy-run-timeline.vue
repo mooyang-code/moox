@@ -1,19 +1,32 @@
 <template>
-  <a-card title="最近决策" :bordered="false">
-    <a-table size="small" :data="runs" :pagination="false" row-key="run_id">
-      <template #columns>
-        <a-table-column title="触发时间" data-index="trigger_bar_time" :width="190" />
-        <a-table-column title="运行 ID" data-index="run_id" :width="180" :ellipsis="true" :tooltip="true" />
-        <a-table-column title="决策" data-index="action" :width="100" />
-        <a-table-column title="状态" data-index="status" :width="120" />
-        <a-table-column title="数据版本" data-index="data_revision" :width="180" :ellipsis="true" :tooltip="true" />
-      </template>
-    </a-table>
-    <a-empty v-if="!runs.length" description="暂无运行记录" />
-  </a-card>
+  <a-table row-key="result_id" size="small" :data="results" :pagination="false" :scroll="{ x: 'max-content' }">
+    <template #columns>
+      <a-table-column title="结果 ID" data-index="result_id" :width="180" />
+      <a-table-column title="触发时间" :width="180">
+        <template #cell="{ record }">{{ formatTime(record.trigger_bar_time) }}</template>
+      </a-table-column>
+      <a-table-column title="动作" :width="100">
+        <template #cell="{ record }"
+          ><a-tag size="small">{{ record.action }}</a-tag></template
+        >
+      </a-table-column>
+      <a-table-column title="命名空间" data-index="namespace" :width="140" />
+      <a-table-column title="输入 Hash" data-index="input_hash" :width="180" :ellipsis="true" :tooltip="true" />
+      <a-table-column title="命令序号" :width="110">
+        <template #cell="{ record }">{{ record.command_sequence ?? "-" }}</template>
+      </a-table-column>
+      <a-table-column title="输出" :width="300" :ellipsis="true" :tooltip="true">
+        <template #cell="{ record }">{{ record.output_json }}</template>
+      </a-table-column>
+    </template>
+  </a-table>
+  <a-empty v-if="!results.length" description="暂无策略结果" />
 </template>
 
 <script setup lang="ts">
-import type { StrategyRun } from "@/api/strategy-types";
-defineProps<{ runs: StrategyRun[] }>();
+import type { StrategyResult } from "@/api/strategy-types";
+defineProps<{ results: StrategyResult[] }>();
+function formatTime(value: string) {
+  return value ? new Date(value).toLocaleString() : "-";
+}
 </script>
