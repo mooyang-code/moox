@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
-	"strings"
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
@@ -125,46 +124,12 @@ func deviceSeriesTag(device string) string {
 	return hashedSeriesTag("device", device)
 }
 
-func decodeDeviceSeriesTag(tag string) (string, error) {
-	const prefix = "device:"
-	if strings.HasPrefix(tag, "device-sha256:") {
-		return "", fmt.Errorf("device series tag %q uses an irreversible hash fallback", tag)
-	}
-	if !strings.HasPrefix(tag, prefix) {
-		return "", fmt.Errorf("invalid device series tag %q", tag)
-	}
-	return url.QueryUnescape(strings.TrimPrefix(tag, prefix))
-}
-
 func filesystemSeriesTag(device, mountpoint string) string {
 	tag := "filesystem:" + url.QueryEscape(device) + "|" + url.QueryEscape(mountpoint)
 	if len(tag) <= maxSeriesTagBytes {
 		return tag
 	}
 	return hashedSeriesTag("filesystem", device, mountpoint)
-}
-
-func decodeFilesystemSeriesTag(tag string) (string, string, error) {
-	const prefix = "filesystem:"
-	if strings.HasPrefix(tag, "filesystem-sha256:") {
-		return "", "", fmt.Errorf("filesystem series tag %q uses an irreversible hash fallback", tag)
-	}
-	if !strings.HasPrefix(tag, prefix) {
-		return "", "", fmt.Errorf("invalid filesystem series tag %q", tag)
-	}
-	parts := strings.Split(strings.TrimPrefix(tag, prefix), "|")
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("invalid filesystem series tag %q", tag)
-	}
-	device, err := url.QueryUnescape(parts[0])
-	if err != nil {
-		return "", "", fmt.Errorf("decode filesystem device: %w", err)
-	}
-	mountpoint, err := url.QueryUnescape(parts[1])
-	if err != nil {
-		return "", "", fmt.Errorf("decode filesystem mountpoint: %w", err)
-	}
-	return device, mountpoint, nil
 }
 
 func hashedSeriesTag(kind string, identityParts ...string) string {

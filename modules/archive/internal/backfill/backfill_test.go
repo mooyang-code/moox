@@ -83,7 +83,7 @@ func TestBackfillMessageIDIncludesSelectorPresenceAndValue(t *testing.T) {
 	require.NotEqual(t, exact, backfillMessageID(otherRange, "run-1", 1))
 }
 
-func TestNewRunIDIsUnique(t *testing.T) {
+func TestNewRunIDDoesNotCollide(t *testing.T) {
 	first, err := newRunID()
 	require.NoError(t, err)
 	second, err := newRunID()
