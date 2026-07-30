@@ -317,6 +317,11 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "secrets"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(deploy, "data", "old.db"), []byte("old"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(deploy, "secrets", "keep.env"), []byte("secret"), 0o600))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(deploy, "secrets", "storage-internal-auth.env"),
+		[]byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-old"),
+		0o600,
+	))
 
 	archiveDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "bin"), 0o700))
@@ -325,6 +330,11 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "lib"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "secrets"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "data", "new.db"), []byte("new"), 0o600))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(archiveDir, "secrets", "storage-internal-auth.env"),
+		[]byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-new\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-new\n"),
+		0o600,
+	))
 	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "config", "caddy", "Caddyfile.next"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "bin", "moox-admin-cli"), []byte("#!/bin/sh\nprintf '{\"secret\":\"generated\"}\\n'\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "lib", "caddy-managed.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
@@ -342,6 +352,11 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(deploy, "data", "old.db"))
 	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
 	require.Equal(t, "secret", string(requireFile(t, filepath.Join(deploy, "secrets", "keep.env"))))
+	require.Equal(
+		t,
+		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-old\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-new\n",
+		string(requireFile(t, filepath.Join(deploy, "secrets", "storage-internal-auth.env"))),
+	)
 }
 
 func TestStorageRollsBackAfterReadinessFailure(t *testing.T) {

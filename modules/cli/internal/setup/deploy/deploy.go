@@ -684,8 +684,32 @@ install_control() {
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
   if [ "$reset_data" = 0 ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
+  packaged_storage_auth="$next/secrets/storage-internal-auth.env.packaged"
+  if [ -s "$next/secrets/storage-internal-auth.env" ]; then
+    mv "$next/secrets/storage-internal-auth.env" "$packaged_storage_auth"
+  fi
   if [ -d "$deploy/secrets" ]; then cp -R "$deploy/secrets/." "$next/secrets/"; fi
   mkdir -p "$HOME/.config/moox/credentials" "$next/secrets"
+  if [ -s "$packaged_storage_auth" ]; then
+    if [ ! -s "$next/secrets/storage-internal-auth.env" ]; then
+      mv "$packaged_storage_auth" "$next/secrets/storage-internal-auth.env"
+    else
+      for key in MOOX_STORAGE_PRIMARY_AUTH_SECRET MOOX_STORAGE_VIEW_AUTH_SECRET; do
+        if ! grep -q "^${key}=" "$next/secrets/storage-internal-auth.env"; then
+          line=$(grep -m1 "^${key}=" "$packaged_storage_auth" || true)
+          if [ -z "$line" ]; then
+            echo 'storage_internal_auth_invalid' >&2
+            return 1
+          fi
+          if [ -n "$(tail -c 1 "$next/secrets/storage-internal-auth.env")" ]; then
+            printf '\n' >>"$next/secrets/storage-internal-auth.env"
+          fi
+          printf '%s\n' "$line" >>"$next/secrets/storage-internal-auth.env"
+        fi
+      done
+      rm -f "$packaged_storage_auth"
+    fi
+  fi
   if [ -f "$next/secrets/msgbox.env.next" ]; then
     mv -f "$next/secrets/msgbox.env.next" "$next/secrets/msgbox.env"
   fi
