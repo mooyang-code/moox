@@ -258,6 +258,122 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestKnownExternalFillPausesOnceForNewFact(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	observer := runFactsObserver(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Facts: observer,
+		Now:   func() time.Time { return time.UnixMilli(4_000) },
+	}
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+	current := exchange.Order{
+		ExchangeOrderID: "known-external-order", ClientOrderID: "known-external-client",
+		Symbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), Status: exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_000),
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	requireLogicalAccountAutomation(t, tradeStore, "PAUSED")
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+
+	fill := exchange.Fill{
+		ExchangeTradeID: "known-external-trade",
+		ExchangeOrderID: current.ExchangeOrderID,
+		ClientOrderID:   current.ClientOrderID,
+		Symbol:          current.Symbol,
+		Side:            current.Side,
+		PositionSide:    current.PositionSide,
+		Quantity:        shared.MustDecimal("0.25"),
+		Price:           shared.MustDecimal("100"),
+		SettlementAsset: "USDT",
+		TradedAt:        time.UnixMilli(2_000),
+	}
+	applied, err := service.ApplyFill(context.Background(), "account-1", fill)
+	require.NoError(t, err)
+	require.True(t, applied)
+	requireLogicalAccountAutomation(t, tradeStore, "PAUSED")
+
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+	applied, err = service.ApplyFill(context.Background(), "account-1", fill)
+	require.NoError(t, err)
+	require.False(t, applied)
+	requireLogicalAccountRemainsActive(t, tradeStore)
+}
+
+func TestKnownExternalOrderUpdatePausesOnceForNewFact(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	observer := runFactsObserver(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Facts: observer,
+		Now:   func() time.Time { return time.UnixMilli(4_000) },
+	}
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+	current := exchange.Order{
+		ExchangeOrderID: "updated-external-order",
+		ClientOrderID:   "updated-external-client",
+		Symbol:          "BTC-USDT",
+		OrderType:       exchange.OrderTypeMarket,
+		Side:            exchange.SideBuy,
+		PositionSide:    exchange.PositionSideNet,
+		Quantity:        shared.MustDecimal("1"),
+		Status:          exchange.OrderStatusOpen,
+		CreatedAt:       time.UnixMilli(1_000),
+		UpdatedAt:       time.UnixMilli(1_000),
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	requireLogicalAccountAutomation(t, tradeStore, "PAUSED")
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+
+	current.UpdatedAt = time.UnixMilli(2_000)
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	requireLogicalAccountAutomation(t, tradeStore, "PAUSED")
+
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	requireLogicalAccountRemainsActive(t, tradeStore)
+}
+
+func TestKnownExternalAggregateFillAheadPausesLogicalAccount(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	observer := runFactsObserver(t, tradeStore)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
+		Fills: &consumer.Reducer{Store: tradeStore},
+		Facts: observer,
+		Now:   func() time.Time { return time.UnixMilli(4_000) },
+	}
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+	current := exchange.Order{
+		ExchangeOrderID: "aggregate-external-order",
+		ClientOrderID:   "aggregate-external-client",
+		Symbol:          "BTC-USDT",
+		OrderType:       exchange.OrderTypeMarket,
+		Side:            exchange.SideBuy,
+		PositionSide:    exchange.PositionSideNet,
+		Quantity:        shared.MustDecimal("1"),
+		Status:          exchange.OrderStatusOpen,
+		CreatedAt:       time.UnixMilli(1_000),
+		UpdatedAt:       time.UnixMilli(1_000),
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	requireLogicalAccountAutomation(t, tradeStore, "PAUSED")
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+
+	current.FilledQuantity = shared.MustDecimal("0.5")
+	current.Status = exchange.OrderStatusPartiallyFilled
+	current.UpdatedAt = time.UnixMilli(2_000)
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
+	requireLogicalAccountAutomation(t, tradeStore, "PAUSED")
+}
+
 func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
@@ -979,6 +1095,44 @@ func runFactsObserver(
 		return observer.Snapshot().Ready
 	}, time.Second, 10*time.Millisecond)
 	return observer
+}
+
+func setLogicalAccountAutomation(
+	t *testing.T,
+	tradeStore *store.Store,
+	state string,
+) {
+	t.Helper()
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", state, "")
+	}))
+}
+
+func requireLogicalAccountAutomation(
+	t *testing.T,
+	tradeStore *store.Store,
+	state string,
+) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		logicalAccount, err := tradeStore.GetLogicalAccount(
+			context.Background(), "space-1", "logical-1",
+		)
+		return err == nil && logicalAccount.AutomationState == state
+	}, time.Second, 10*time.Millisecond)
+}
+
+func requireLogicalAccountRemainsActive(
+	t *testing.T,
+	tradeStore *store.Store,
+) {
+	t.Helper()
+	require.Never(t, func() bool {
+		logicalAccount, err := tradeStore.GetLogicalAccount(
+			context.Background(), "space-1", "logical-1",
+		)
+		return err != nil || logicalAccount.AutomationState != "ACTIVE"
+	}, 100*time.Millisecond, 10*time.Millisecond)
 }
 
 func seedSyncAccount(t *testing.T, tradeStore *store.Store) {

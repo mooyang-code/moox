@@ -610,7 +610,7 @@ func (s *Service) applyFill(
 		SpaceID: account.SpaceID, ExchangeAccountID: account.ExchangeAccountID,
 		Kind: kind,
 	})
-	return applied, external, err
+	return applied, external && applied, err
 }
 
 func (s *Service) ensureOrderForFill(
@@ -620,26 +620,26 @@ func (s *Service) ensureOrderForFill(
 	syntheticQuantity shared.Decimal,
 ) (bool, error) {
 	if fill.ExchangeOrderID != "" {
-		if _, err := s.Store.GetOrderByExchangeID(
+		if record, err := s.Store.GetOrderByExchangeID(
 			ctx,
 			account.SpaceID,
 			account.ExchangeAccountID,
 			fill.Symbol,
 			fill.ExchangeOrderID,
 		); err == nil {
-			return false, nil
+			return record.OwnerType == string(orderdomain.OwnerExternal), nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, err
 		}
 	}
 	if fill.ClientOrderID != "" {
-		if _, err := s.Store.GetOrderByClientID(
+		if record, err := s.Store.GetOrderByClientID(
 			ctx,
 			account.SpaceID,
 			account.ExchangeAccountID,
 			fill.ClientOrderID,
 		); err == nil {
-			return false, nil
+			return record.OwnerType == string(orderdomain.OwnerExternal), nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, err
 		}
@@ -732,6 +732,9 @@ func (s *Service) applyOrder(
 		return false, false, "", err
 	}
 	storedFilled := shared.MustDecimal(record.FilledQuantity)
+	externalChanged := record.OwnerType == string(orderdomain.OwnerExternal) &&
+		(current.UpdatedAt.UnixMilli() > record.ExchangeUpdatedAt ||
+			current.FilledQuantity.Cmp(storedFilled) > 0)
 	if current.FilledQuantity.Cmp(storedFilled) < 0 {
 		return false, false, fmt.Sprintf(
 			"order %s ignored regressing cumulative filled quantity",
@@ -739,12 +742,12 @@ func (s *Service) applyOrder(
 		), nil
 	}
 	if current.FilledQuantity.Cmp(storedFilled) > 0 {
-		return false, false, fmt.Sprintf(
+		return false, externalChanged, fmt.Sprintf(
 			"order %s snapshot is ahead of ingested Fills",
 			record.OrderID,
 		), s.applyOrderState(ctx, record, current)
 	}
-	return true, false, "", s.applyOrderState(ctx, record, current)
+	return true, externalChanged, "", s.applyOrderState(ctx, record, current)
 }
 
 func (s *Service) applyOrderState(

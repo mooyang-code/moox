@@ -489,6 +489,7 @@ type operatorOrderStub struct {
 	specs       []orderdomain.OrderSpec
 	submitCalls int
 	leaveOpen   map[string]bool
+	cancelError map[string]error
 }
 
 func (s *operatorOrderStub) Place(
@@ -554,6 +555,9 @@ func (s *operatorOrderStub) Cancel(
 	orderID string,
 ) (orderdomain.Order, error) {
 	s.fixture.trace = append(s.fixture.trace, "cancel:"+orderID)
+	if err := s.cancelError[orderID]; err != nil {
+		return orderdomain.Order{}, err
+	}
 	if s.leaveOpen[orderID] {
 		return orderdomain.Order{ID: shared.OrderID(orderID), State: orderdomain.Open}, nil
 	}

@@ -123,6 +123,30 @@ func TestFlattenWaitsForCancellationConfirmation(t *testing.T) {
 	require.Contains(t, result.Accounts[0].Error, "cancellation is not confirmed")
 }
 
+func TestFlattenAttemptsEveryCancellationForOneAccount(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	first := activeOrder(fixture, "active-order-a", "TARGET")
+	second := activeOrder(fixture, "active-order-b", "EXTERNAL")
+	fixture.order(t, first)
+	fixture.order(t, second)
+	fixture.orders.cancelError = map[string]error{
+		first.OrderID: errors.New("first cancel failed"),
+	}
+
+	err := fixture.service().cancelAccountOrders(
+		context.Background(), "space-1", "account-a", "flatten-1",
+	)
+
+	require.ErrorContains(t, err, "first cancel failed")
+	require.Contains(t, fixture.trace, "cancel:"+first.OrderID)
+	require.Contains(t, fixture.trace, "cancel:"+second.OrderID)
+	secondRecord, getErr := fixture.store.GetOrder(
+		context.Background(), "space-1", second.OrderID,
+	)
+	require.NoError(t, getErr)
+	require.Equal(t, "CANCELED", secondRecord.State)
+}
+
 func TestFlattenSkipsStaleFailedAccountAndContinuesOthers(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""

@@ -108,6 +108,40 @@ func TestTargetExecutorAggregatesAcrossExchanges(t *testing.T) {
 	require.Equal(t, StatusConverged, target.Status)
 }
 
+func TestTargetExecutorPausedOwnerReleaseCancelsOwnedOrderWithoutError(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
+	}})
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "target-open",
+		ExchangeAccountID: "account-a", ClientOrderID: "target-open",
+		Exchange: "BINANCE", MarketType: "SWAP", Symbol: "BTCUSDT",
+		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
+		Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 2_000,
+		OwnerType: "TARGET", OwnerID: "target-current",
+		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		State: "OPEN", Version: 1,
+	})
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.SetLogicalAccountAutomation(
+			"space-1", "logical-1", "PAUSED", "runner ownership released",
+		); err != nil {
+			return err
+		}
+		return tx.SetLogicalAccountOwner("space-1", "logical-1", "")
+	}))
+
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusPaused, result.Status)
+	require.Equal(t, "cancel", result.Action)
+	require.Equal(t, []string{"target-open"}, fixture.orders.canceled)
+}
+
 func TestTargetExecutorClosesOpposingBeforeOpening(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "-1")

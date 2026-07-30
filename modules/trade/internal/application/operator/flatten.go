@@ -279,6 +279,7 @@ func (s *Service) cancelAccountOrders(
 	if err != nil {
 		return err
 	}
+	var cancelErrors []error
 	for _, current := range records {
 		if orderdomain.State(current.State).Terminal() ||
 			current.OwnerType == string(orderdomain.OwnerOperator) &&
@@ -286,10 +287,14 @@ func (s *Service) cancelAccountOrders(
 			continue
 		}
 		if err := s.stopOrder(ctx, current); err != nil {
-			return err
+			cancelErrors = append(cancelErrors, fmt.Errorf(
+				"cancel order %s: %w",
+				current.OrderID,
+				err,
+			))
 		}
 	}
-	return nil
+	return errors.Join(cancelErrors...)
 }
 
 func (s *Service) confirmAccountCancellations(

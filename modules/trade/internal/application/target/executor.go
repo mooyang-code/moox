@@ -93,11 +93,36 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
+	if logicalAccount.AutomationState != "ACTIVE" {
+		orders, _, listErr := e.Store.ListOrders(
+			ctx,
+			spaceID,
+			store.OrderQuery{
+				LogicalAccountID: logicalAccountID,
+				OnlyOpen:         true,
+				Limit:            1000,
+			},
+		)
+		if listErr != nil {
+			return Result{}, listErr
+		}
+		for _, current := range orders {
+			if current.OwnerType != string(orderdomain.OwnerTarget) {
+				continue
+			}
+			if err := e.stopOrder(ctx, current); err != nil {
+				return Result{}, err
+			}
+			target.LastError = logicalAccount.PauseReason
+			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
+				return Result{}, err
+			}
+			return Result{Status: StatusPaused, Action: "cancel"}, nil
+		}
+		return Result{Status: StatusPaused}, nil
+	}
 	if logicalAccount.OwnerRunnerID != target.RunnerID {
 		return Result{}, fmt.Errorf("%w: target runner no longer owns logical account", ErrInvalidTarget)
-	}
-	if logicalAccount.AutomationState != "ACTIVE" {
-		return Result{Status: StatusPaused}, nil
 	}
 
 	members, err := e.loadMembers(ctx, spaceID, logicalAccountID)

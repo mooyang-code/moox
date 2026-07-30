@@ -175,9 +175,17 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		if row.InstType != a.instrumentType() {
 			continue
 		}
+		baseAsset, quoteAsset := row.BaseCcy, row.QuoteCcy
+		if a.config.MarketType == exchange.MarketTypeSwap {
+			if row.CtType != "linear" || row.SettleCcy != "USDT" ||
+				row.CtVal == "" || row.CtValCcy == "" {
+				continue
+			}
+			baseAsset, quoteAsset = row.CtValCcy, row.SettleCcy
+		}
 		instrumentID, idErr := exchange.CanonicalInstrumentID(
-			row.BaseCcy,
-			row.QuoteCcy,
+			baseAsset,
+			quoteAsset,
 			a.config.MarketType,
 		)
 		if idErr != nil {
@@ -186,7 +194,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		instrument := exchange.Instrument{
 			Exchange: exchange.ExchangeOKX, MarketType: a.config.MarketType,
 			Symbol: row.InstID, InstrumentID: instrumentID,
-			BaseAsset: row.BaseCcy, QuoteAsset: row.QuoteCcy,
+			BaseAsset: baseAsset, QuoteAsset: quoteAsset,
 			Status: row.State, ExchangeUpdatedAt: time.Now().UTC(),
 		}
 		instrument.PriceTick, err = decimal(row.TickSz)
@@ -200,12 +208,6 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 			return nil, err
 		}
 		if a.config.MarketType == exchange.MarketTypeSwap {
-			if row.CtType != "linear" || row.SettleCcy != "USDT" ||
-				row.CtVal == "" || row.CtValCcy == "" {
-				continue
-			}
-			instrument.BaseAsset = row.CtValCcy
-			instrument.QuoteAsset = row.SettleCcy
 			instrument.Linear = true
 			instrument.SettlementAsset = row.SettleCcy
 			instrument.ContractValue, err = decimal(row.CtVal)
