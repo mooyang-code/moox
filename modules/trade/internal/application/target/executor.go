@@ -65,6 +65,7 @@ type memberState struct {
 	account     store.ExchangeAccountRecord
 	instruments map[string]store.InstrumentRecord
 	positions   map[string]shared.Decimal
+	blocked     []store.BlockedTarget
 }
 
 type laneAction struct {
@@ -169,6 +170,31 @@ func (e *Executor) Converge(
 		}
 	}
 
+	blocked := blockedExposures(members)
+	if len(blocked) > 0 {
+		for _, current := range orders {
+			if current.OwnerType != string(orderdomain.OwnerTarget) ||
+				current.OwnerID != target.TargetID {
+				continue
+			}
+			if err := e.stopOrder(ctx, current); err != nil {
+				return Result{}, err
+			}
+			target.BlockedTargets = blocked
+			target.LastError = ""
+			if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
+				return Result{}, err
+			}
+			return Result{Status: StatusBlocked, Action: "cancel"}, nil
+		}
+		target.BlockedTargets = blocked
+		target.LastError = ""
+		if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusBlocked}, nil
+	}
+
 	for _, current := range orders {
 		if current.OwnerType != string(orderdomain.OwnerTarget) ||
 			current.OwnerID != target.TargetID {
@@ -220,7 +246,7 @@ func (e *Executor) Converge(
 		return Result{}, err
 	}
 	lanes := laneIDs(desired, members)
-	blocked := make([]store.BlockedTarget, 0)
+	blocked = nil
 	for _, instrumentID := range lanes {
 		action, complete, reason, actionErr := nextLaneAction(
 			instrumentID, desired[instrumentID], members,
@@ -265,7 +291,7 @@ func (e *Executor) Converge(
 		if placeReason != "" {
 			blocked = append(blocked, store.BlockedTarget{
 				InstrumentID: instrumentID,
-				Quantity:     desired[instrumentID].String(),
+				Quantity:     action.delta.String(),
 				Reason:       placeReason,
 			})
 			continue
@@ -333,17 +359,33 @@ func (e *Executor) loadMembers(
 			symbols[instrument.Symbol] = instrument.InstrumentID
 		}
 		positions := make(map[string]shared.Decimal)
+		blocked := make([]store.BlockedTarget, 0)
 		if account.MarketType == string(exchange.MarketTypeSpot) {
-			for instrumentID, instrument := range instruments {
-				for _, balance := range account.Snapshot.Balances {
-					if balance.Asset == instrument.BaseAsset {
-						quantity, parseErr := shared.ParseDecimal(balance.Total)
-						if parseErr != nil {
-							return nil, parseErr
-						}
-						positions[instrumentID] = quantity
-					}
+			for _, balance := range account.Snapshot.Balances {
+				if balance.Asset == account.SettlementAsset {
+					continue
 				}
+				quantity, parseErr := shared.ParseDecimal(balance.Total)
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				if quantity.Cmp(shared.Zero()) <= 0 {
+					continue
+				}
+				instrumentID, mapped := spotInstrumentID(
+					balance.Asset,
+					instruments,
+				)
+				if !mapped {
+					blocked = append(blocked, store.BlockedTarget{
+						InstrumentID: balance.Asset,
+						Quantity:     quantity.String(),
+						Reason: account.ExchangeAccountID +
+							": asset has no unique tradable instrument mapping",
+					})
+					continue
+				}
+				positions[instrumentID] = positions[instrumentID].Add(quantity)
 			}
 		} else {
 			positionRecords, listErr := e.Store.ListPositions(
@@ -353,23 +395,57 @@ func (e *Executor) loadMembers(
 				return nil, listErr
 			}
 			for _, position := range positionRecords {
-				instrumentID := symbols[position.Symbol]
-				if instrumentID == "" {
-					continue
-				}
 				quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
 				if parseErr != nil {
 					return nil, parseErr
+				}
+				if quantity.IsZero() {
+					continue
+				}
+				instrumentID := symbols[position.Symbol]
+				if instrumentID == "" {
+					blocked = append(blocked, store.BlockedTarget{
+						InstrumentID: position.Symbol,
+						Quantity:     quantity.String(),
+						Reason: account.ExchangeAccountID +
+							": position has no tradable instrument mapping",
+					})
+					continue
 				}
 				positions[instrumentID] = positions[instrumentID].Add(quantity)
 			}
 		}
 		members = append(members, memberState{
 			member: record, account: account,
-			instruments: instruments, positions: positions,
+			instruments: instruments, positions: positions, blocked: blocked,
 		})
 	}
 	return members, nil
+}
+
+func spotInstrumentID(
+	asset string,
+	instruments map[string]store.InstrumentRecord,
+) (string, bool) {
+	instrumentID := ""
+	for candidateID, instrument := range instruments {
+		if instrument.BaseAsset != asset {
+			continue
+		}
+		if instrumentID != "" && instrumentID != candidateID {
+			return "", false
+		}
+		instrumentID = candidateID
+	}
+	return instrumentID, instrumentID != ""
+}
+
+func blockedExposures(members []memberState) []store.BlockedTarget {
+	var blocked []store.BlockedTarget
+	for _, member := range members {
+		blocked = append(blocked, member.blocked...)
+	}
+	return blocked
 }
 
 func (e *Executor) activeOrders(
@@ -568,6 +644,22 @@ func (e *Executor) placeAction(
 				quantity = maxQuantity
 			}
 		}
+		belowMinimum, err := belowMinimumNotional(
+			quantity,
+			quote.Price,
+			candidate.instrument.MinNotional,
+		)
+		if err != nil {
+			return false, "", err
+		}
+		if belowMinimum {
+			capacityErrors = append(
+				capacityErrors,
+				candidate.member.account.ExchangeAccountID+
+					": notional is below Exchange minimum",
+			)
+			continue
+		}
 		runnerID := target.RunnerID
 		spec := orderdomain.OrderSpec{
 			ClientOrderSpec: orderdomain.ClientOrderSpec{
@@ -615,6 +707,22 @@ func (e *Executor) placeAction(
 	}
 	return false, "insufficient member capacity: " +
 		strings.Join(capacityErrors, "; "), nil
+}
+
+func belowMinimumNotional(
+	quantity shared.Decimal,
+	price shared.Decimal,
+	rawMinimum string,
+) (bool, error) {
+	if strings.TrimSpace(rawMinimum) == "" {
+		return false, nil
+	}
+	minimum, err := shared.ParseDecimal(rawMinimum)
+	if err != nil || minimum.IsNegative() {
+		return false, fmt.Errorf("%w: minimum notional", ErrInvalidTarget)
+	}
+	return minimum.Cmp(shared.Zero()) > 0 &&
+		quantity.Mul(price).Cmp(minimum) < 0, nil
 }
 
 func (e *Executor) childQuantity(

@@ -350,6 +350,146 @@ func TestTargetExecutorRecordsBelowMinimumBlockedTarget(t *testing.T) {
 	require.Empty(t, fixture.orders.specs)
 }
 
+func TestTargetExecutorRecordsBelowMinimumNotionalAsBlocked(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.setMinNotional(t, "BINANCE", "BTCUSDT", "10")
+	fixture.setMinNotional(t, "OKX", "BTC-USDT-SWAP", "10")
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "0.001",
+	}})
+
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	target, err := fixture.store.GetLogicalAccountTarget(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Len(t, target.BlockedTargets, 1)
+	require.Contains(t, target.BlockedTargets[0].Reason, "notional")
+	require.Empty(t, fixture.orders.specs)
+}
+
+func TestTargetExecutorFullTargetReportsUnmappedExposure(t *testing.T) {
+	t.Run("SPOT balance", func(t *testing.T) {
+		fixture := newTargetFixture(t, exchange.MarketTypeSpot)
+		fixture.setBalance(t, "account-a", "DOGE", "12")
+		fixture.target(t, nil)
+
+		result, err := fixture.executor().Converge(
+			context.Background(), "space-1", "logical-1",
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, StatusBlocked, result.Status)
+		target, err := fixture.store.GetLogicalAccountTarget(
+			context.Background(), "space-1", "logical-1",
+		)
+		require.NoError(t, err)
+		require.Len(t, target.BlockedTargets, 1)
+		require.Equal(t, "DOGE", target.BlockedTargets[0].InstrumentID)
+		require.Equal(t, "12", target.BlockedTargets[0].Quantity)
+		require.Contains(t, target.BlockedTargets[0].Reason, "mapping")
+		require.Empty(t, fixture.orders.specs)
+	})
+
+	t.Run("SWAP position", func(t *testing.T) {
+		fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+		fixture.position(t, "account-a", "ETHUSDT", "2")
+		fixture.target(t, nil)
+
+		result, err := fixture.executor().Converge(
+			context.Background(), "space-1", "logical-1",
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, StatusBlocked, result.Status)
+		target, err := fixture.store.GetLogicalAccountTarget(
+			context.Background(), "space-1", "logical-1",
+		)
+		require.NoError(t, err)
+		require.Len(t, target.BlockedTargets, 1)
+		require.Equal(t, "ETHUSDT", target.BlockedTargets[0].InstrumentID)
+		require.Equal(t, "2", target.BlockedTargets[0].Quantity)
+		require.Contains(t, target.BlockedTargets[0].Reason, "mapping")
+		require.Empty(t, fixture.orders.specs)
+	})
+}
+
+func TestTargetExecutorDoesNotTradeWhileExposureIsUnmapped(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
+	fixture.setBalance(t, "account-a", "DOGE", "12")
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SPOT", Quantity: "1",
+	}})
+
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Empty(t, fixture.orders.specs)
+	target, err := fixture.store.GetLogicalAccountTarget(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Len(t, target.BlockedTargets, 1)
+	require.Equal(t, "DOGE", target.BlockedTargets[0].InstrumentID)
+}
+
+func TestTargetExecutorCancelsCurrentOrderWhenExposureBecomesUnmapped(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
+	fixture.setBalance(t, "account-a", "DOGE", "12")
+	fixture.target(t, []store.InstrumentTarget{{
+		InstrumentID: "BTC-USDT-SPOT", Quantity: "1",
+	}})
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "current-child",
+		ExchangeAccountID: "account-a", ClientOrderID: "current-child",
+		Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+		OrderType: "MARKET", Side: "BUY", Quantity: "1",
+		ReferencePrice: "100", ReferencePriceAt: 2_000,
+		OwnerType: "TARGET", OwnerID: "target-current",
+		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		State: "OPEN", Version: 1,
+	})
+
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Equal(t, "cancel", result.Action)
+	require.Equal(t, []string{"current-child"}, fixture.orders.canceled)
+	require.Empty(t, fixture.orders.specs)
+}
+
+func TestTargetExecutorRecordsBlockedRemainingDelta(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "0.001")
+	fixture.setMinNotional(t, "BINANCE", "BTCUSDT", "10")
+	fixture.target(t, nil)
+
+	result, err := fixture.executor().Converge(
+		context.Background(), "space-1", "logical-1",
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	target, err := fixture.store.GetLogicalAccountTarget(
+		context.Background(), "space-1", "logical-1",
+	)
+	require.NoError(t, err)
+	require.Len(t, target.BlockedTargets, 1)
+	require.Equal(t, "-0.001", target.BlockedTargets[0].Quantity)
+	require.Contains(t, target.BlockedTargets[0].Reason, "notional")
+}
+
 type targetFixture struct {
 	t      *testing.T
 	store  *store.Store
@@ -508,6 +648,51 @@ func (f *targetFixture) setReady(t *testing.T, accountID string, ready bool) {
 				LastSyncAt:         f.now.UnixMilli(),
 			},
 		)
+	}))
+}
+
+func (f *targetFixture) setBalance(
+	t *testing.T,
+	accountID string,
+	asset string,
+	total string,
+) {
+	t.Helper()
+	account, err := f.store.GetExchangeAccountByID(context.Background(), accountID)
+	require.NoError(t, err)
+	account.Snapshot.Balances = append(account.Snapshot.Balances, store.AssetBalance{
+		Asset: asset, Available: total, Total: total,
+	})
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateExchangeAccountSync(
+			account.SpaceID,
+			account.ExchangeAccountID,
+			store.ExchangeAccountSyncState{
+				Ready: account.Ready, Snapshot: account.Snapshot,
+				SnapshotSourceTime: account.SnapshotSourceTime,
+				LastSyncAt:         account.LastSyncAt,
+			},
+		)
+	}))
+}
+
+func (f *targetFixture) setMinNotional(
+	t *testing.T,
+	exchangeName string,
+	symbol string,
+	minNotional string,
+) {
+	t.Helper()
+	instrument, err := f.store.GetInstrument(
+		context.Background(),
+		exchangeName,
+		string(f.market),
+		symbol,
+	)
+	require.NoError(t, err)
+	instrument.MinNotional = minNotional
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertInstrument(instrument)
 	}))
 }
 
