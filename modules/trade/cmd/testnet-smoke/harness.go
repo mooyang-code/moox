@@ -34,6 +34,7 @@ type liveHarness struct {
 	orders   *orderapp.Service
 	operator *operatorapp.Service
 	logical  *logicalapp.Service
+	probe    *privateOrderProbe
 
 	cancel context.CancelFunc
 	done   chan error
@@ -81,6 +82,7 @@ func openLiveHarness(
 		Store: database, Adapters: manager, SessionState: manager,
 		Fills: &consumer.Reducer{Store: database}, Orders: orders,
 	}
+	probe := newPrivateOrderProbe()
 	orders.Syncer = smokeSyncer{service: syncService}
 	manager.NewSession = func(record store.ExchangeAccountRecord) (traderuntime.ManagedSession, error) {
 		if record.Environment != string(exchange.AccountEnvironmentTestnet) ||
@@ -106,6 +108,7 @@ func openLiveHarness(
 		default:
 			return nil, errors.New("unsupported testnet Exchange")
 		}
+		adapter = probingAdapter{Adapter: adapter, probe: probe}
 		return &traderuntime.ExchangeSession{
 			Account: record, Adapter: adapter, Sync: syncService,
 			SyncInterval: 2 * time.Second,
@@ -127,6 +130,7 @@ func openLiveHarness(
 			Store: database, Syncer: smokeSyncer{service: syncService},
 			MaxSnapshotAge: 2 * time.Minute,
 		},
+		probe:  probe,
 		cancel: cancel, done: done,
 	}
 	return harness, nil
@@ -322,8 +326,16 @@ func runSubmitPhase(
 		return err
 	}
 	fmt.Printf("%s PASS query state=%s\n", options.Exchange, queried.Status)
+	if err := harness.probe.wait(ctx, clientOrderID); err != nil {
+		return fmt.Errorf(
+			"wait private order event for %s: %w",
+			clientOrderID,
+			err,
+		)
+	}
+	fmt.Printf("%s PASS stream client_order_id=%s\n", options.Exchange, clientOrderID)
 	if _, err := harness.sync.SyncAccount(ctx, harness.identity.AccountID); err != nil {
-		return fmt.Errorf("post-submit private stream/sync convergence: %w", err)
+		return fmt.Errorf("post-submit account sync convergence: %w", err)
 	}
 	local, err := harness.store.GetOrder(ctx, smokeSpaceID, result.Order.OrderID)
 	if err != nil {
@@ -333,7 +345,7 @@ func runSubmitPhase(
 		local.ExchangeOrderID != result.Order.ExchangeOrderID {
 		return errors.New("post-submit local order identity did not converge")
 	}
-	fmt.Printf("%s PASS stream/sync local_state=%s\n", options.Exchange, local.State)
+	fmt.Printf("%s PASS sync local_state=%s\n", options.Exchange, local.State)
 	return nil
 }
 
