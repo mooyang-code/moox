@@ -75,6 +75,18 @@
                     <span v-if="activeFreq" class="inline-freq">/ {{ activeFreq }}</span>
                   </div>
                 </div>
+                <a-space>
+                  <a-checkbox v-model="seriesTagExact" @change="onSeriesTagFilter">精确标签</a-checkbox>
+                  <a-input
+                    v-model="seriesTagFilter"
+                    allow-clear
+                    placeholder="留空表示默认序列"
+                    :disabled="!seriesTagExact"
+                    :style="{ width: '220px' }"
+                    @press-enter="onSeriesTagFilter"
+                    @clear="onSeriesTagFilter"
+                  />
+                </a-space>
                 <a-button :disabled="!activeDataId" :loading="loading" @click="reloadRows">
                   <template #icon><icon-refresh /></template>
                   重新加载
@@ -111,6 +123,7 @@
                       </span>
                     </template>
                   </a-table-column>
+                  <a-table-column data-index="seriesTag" title="序列标签" :width="180" />
                   <a-table-column data-index="version" :width="230">
                     <template #title>
                       <span class="sortable-title">
@@ -324,6 +337,7 @@ import { datasetMatchesAttribution, type DatasetRole, type OwnerModule } from "@
 import { useSpaceStore } from "@/store/modules/space";
 import {
   adaptiveColumnWidth,
+  buildTimeSeriesBrowseSelector,
   buildColumnLabels,
   buildSubjectDataIds,
   datasetDisplayName,
@@ -378,6 +392,8 @@ const dataIds = ref<BrowseDataId[]>([]);
 const activeDataId = ref("");
 const activeFreq = ref("");
 const dataIdKeyword = ref("");
+const seriesTagFilter = ref("");
+const seriesTagExact = ref(false);
 const tableRows = ref<BrowseTableRow[]>([]);
 const tableColumnNames = ref<string[]>([]);
 const detailRow = ref<BrowseTableRow>();
@@ -506,6 +522,8 @@ function clearBrowseState() {
   activeDataId.value = "";
   activeFreq.value = "";
   dataIdKeyword.value = "";
+  seriesTagFilter.value = "";
+  seriesTagExact.value = false;
   tableRows.value = [];
   tableColumnNames.value = [];
   pagination.current = 1;
@@ -562,6 +580,11 @@ async function selectDataId(dataId: string) {
   await reloadRows();
 }
 
+async function onSeriesTagFilter() {
+  pagination.current = 1;
+  await reloadRows();
+}
+
 async function reloadRows() {
   tableColumnNames.value = preferredColumnNames.value;
   if (mode.value === "time_series") {
@@ -585,16 +608,18 @@ async function loadTimeSeriesRows() {
 
   loading.value = true;
   try {
+    const selector = buildTimeSeriesBrowseSelector(
+      space_id,
+      dataset_id,
+      activeDataId.value,
+      activeFreq.value,
+      seriesTagFilter.value,
+      seriesTagExact.value
+    );
     const rsp = await readTimeSeriesRows({
-      keys: [
-        {
-          space_id,
-          dataset_id,
-          subject_id: activeDataId.value,
-          freq: activeFreq.value,
-          dimensions: {}
-        }
-      ],
+      space_id,
+      dataset_id,
+      selectors: [selector],
       order: accessSortOrder("data_time"),
       page: { page: pagination.current, size: pagination.pageSize }
     });

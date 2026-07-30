@@ -93,6 +93,9 @@ func (s *Service) CreateView(ctx context.Context, req *pb.CreateViewReq) (*pb.Cr
 	if err := validateViewID(view.GetViewId()); err != nil {
 		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
+	if err := validateViewColumns(view.GetColumns()); err != nil {
+		return &pb.CreateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
 	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {
 		view.PrimaryDatasetId = view.GetDatasetIds()[0]
 	}
@@ -122,6 +125,9 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewID(view.GetViewId()); err != nil {
+		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := validateViewColumns(view.GetColumns()); err != nil {
 		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if view.PrimaryDatasetId == "" && len(view.GetDatasetIds()) > 0 {

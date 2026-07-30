@@ -284,10 +284,10 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 	if limit > 500 {
 		limit = 500
 	}
-	keys := make([]*storagepb.TimeSeriesKey, 0, len(selectors))
+	keys := make([]*storagepb.TimeSeriesSelector, 0, len(selectors))
 	for _, selector := range selectors {
 		if selector.SeriesID != "" {
-			key := &storagepb.TimeSeriesKey{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, SubjectId: selector.SeriesID, Freq: a.cfg.Frequency}
+			key := &storagepb.TimeSeriesSelector{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, SubjectId: selector.SeriesID, Freq: a.cfg.Frequency}
 			keys = append(keys, key)
 		}
 	}
@@ -306,7 +306,12 @@ func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []
 		tr.EndTime = end.UTC().Format(time.RFC3339Nano)
 	}
 	columnPrefix := a.cfg.DatasetID + "."
-	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: a.auth, Keys: keys, TimeRange: tr, Order: order, ColumnNames: []string{columnPrefix + "value", columnPrefix + "labels_json", columnPrefix + "message_id"}, Page: &commonpb.Page{Page: 1, Size: uint32(limit)}}, client.WithFilter(trpcretry.ReadOnly()))
+	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+		AuthInfo: a.auth, SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID,
+		Selectors: keys, TimeRange: tr, Order: order,
+		ColumnNames: []string{columnPrefix + "value", columnPrefix + "labels_json", columnPrefix + "message_id"},
+		Page:        &commonpb.Page{Page: 1, Size: uint32(limit)},
+	}, client.WithFilter(trpcretry.ReadOnly()))
 	if err != nil {
 		return nil, fmt.Errorf("read metrics history: %w", err)
 	}

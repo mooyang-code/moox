@@ -122,7 +122,7 @@ func TestDatasetMetricsAcceptsCanonicalStorageFrequency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := DatasetKey{SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Freq: "1H"}
+	key := DatasetKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", Freq: "1H"}
 	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: time.Hour}}); err != nil {
 		t.Fatalf("canonical Storage frequency rejected: %v", err)
 	}
@@ -138,8 +138,8 @@ func TestDatasetMetricsUsesCanonicalFrequencyIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lowercase := DatasetKey{SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Freq: "1h"}
-	canonical := DatasetKey{SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Freq: "1H"}
+	lowercase := DatasetKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", Freq: "1h"}
+	canonical := DatasetKey{SpaceID: "crypto", DatasetID: "spot_kline_1h", Freq: "1H"}
 	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: lowercase, Interval: time.Hour}}); err != nil {
 		t.Fatal(err)
 	}

@@ -2,7 +2,10 @@ package hostmetrics
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"net/url"
 	"sort"
 	"time"
 
@@ -13,6 +16,8 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"trpc.group/trpc-go/trpc-go/client"
 )
+
+const maxSeriesTagBytes = 128
 
 type hostStorageAccess interface {
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
@@ -68,16 +73,20 @@ func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricp
 		if w.cfg.WriteTimeout > 0 {
 			writeCtx, cancel = context.WithTimeout(ctx, w.cfg.WriteTimeout)
 		}
-		rsp, err := w.access.UpsertFields(writeCtx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: w.auth, Rows: group, SourceEventId: messageID})
+		datasetID := group[0].GetKey().GetDatasetId()
+		rsp, err := w.access.UpsertFields(writeCtx, &storagepb.PrimaryUpsertFieldsReq{
+			AuthInfo: w.auth, Rows: group,
+			SourceEventId: messageID + ":" + datasetID,
+		})
 		cancel()
 		if err != nil {
-			return fmt.Errorf("write host dataset %q: %w", group[0].GetKey().GetDatasetId(), err)
+			return fmt.Errorf("write host dataset %q: %w", datasetID, err)
 		}
 		if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			if rsp == nil || rsp.GetRetInfo() == nil {
-				return fmt.Errorf("write host dataset %q returned empty response", group[0].GetKey().GetDatasetId())
+				return fmt.Errorf("write host dataset %q returned empty response", datasetID)
 			}
-			return fmt.Errorf("write host dataset %q: %s", group[0].GetKey().GetDatasetId(), rsp.GetRetInfo().GetMsg())
+			return fmt.Errorf("write host dataset %q: %s", datasetID, rsp.GetRetInfo().GetMsg())
 		}
 	}
 	return nil
@@ -103,9 +112,37 @@ func groupRows(rows []struct {
 	return out
 }
 
-func baseKey(space, dataset, subject, freq, dataTime string, dimensions map[string]string) *storagepb.RowKey {
-	return &storagepb.RowKey{SpaceId: space, DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Freq: freq, DataTime: dataTime, Dimensions: dimensions}}}
+func baseKey(space, dataset, subject, freq, dataTime, seriesTag string) *storagepb.RowKey {
+	return &storagepb.RowKey{SpaceId: space, DatasetId: dataset, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: subject, Freq: freq, DataTime: dataTime, SeriesTag: seriesTag}}}
 }
+
+func deviceSeriesTag(device string) string {
+	tag := "device:" + url.QueryEscape(device)
+	if len(tag) <= maxSeriesTagBytes {
+		return tag
+	}
+	return hashedSeriesTag("device", device)
+}
+
+func filesystemSeriesTag(device, mountpoint string) string {
+	tag := "filesystem:" + url.QueryEscape(device) + "|" + url.QueryEscape(mountpoint)
+	if len(tag) <= maxSeriesTagBytes {
+		return tag
+	}
+	return hashedSeriesTag("filesystem", device, mountpoint)
+}
+
+func hashedSeriesTag(kind string, identityParts ...string) string {
+	hash := sha256.New()
+	var size [8]byte
+	for _, part := range identityParts {
+		binary.BigEndian.PutUint64(size[:], uint64(len(part)))
+		_, _ = hash.Write(size[:])
+		_, _ = hash.Write([]byte(part))
+	}
+	return fmt.Sprintf("%s-sha256:%x", kind, hash.Sum(nil))
+}
+
 func intColumn(name string, value uint64) *storagepb.FieldValue {
 	return &storagepb.FieldValue{FieldId: name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: int64(value)}}}
 }
@@ -121,14 +158,13 @@ func boolColumn(name string, value bool) *storagepb.FieldValue {
 
 func resourceRow(space, dataset, freq, at string, snapshot *hostmetricpb.HostSnapshot, agentID string) *storagepb.RowFieldUpsert {
 	cpu, memory := snapshot.GetCpu(), snapshot.GetMemory()
-	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, nil), Fields: []*storagepb.FieldValue{
+	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, ""), Fields: []*storagepb.FieldValue{
 		stringColumn("agent_id", agentID), intColumn("logical_cores", uint64(cpu.GetLogicalCores())), doubleColumn("cpu_usage_percent", cpu.GetUsagePercent()), boolColumn("cpu_usage_available", cpu.GetUsageAvailable()), intColumn("memory_total_bytes", memory.GetTotalBytes()), intColumn("memory_used_bytes", memory.GetUsedBytes()), intColumn("memory_available_bytes", memory.GetAvailableBytes()), doubleColumn("memory_usage_percent", memory.GetUsagePercent()),
 	}}
 }
 
 func filesystemRow(space, dataset, freq, at string, fs *hostmetricpb.FilesystemMetric, agentID string) *storagepb.RowFieldUpsert {
-	dimensions := map[string]string{"device": fs.GetDevice(), "mountpoint": fs.GetMountpoint()}
-	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Fields: []*storagepb.FieldValue{stringColumn("device", fs.GetDevice()), stringColumn("mountpoint", fs.GetMountpoint()), stringColumn("fs_type", fs.GetFsType()), intColumn("total_bytes", fs.GetTotalBytes()), intColumn("used_bytes", fs.GetUsedBytes()), intColumn("available_bytes", fs.GetAvailableBytes()), doubleColumn("usage_percent", fs.GetUsagePercent()), boolColumn("read_only", fs.GetReadOnly())}}
+	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, filesystemSeriesTag(fs.GetDevice(), fs.GetMountpoint())), Fields: []*storagepb.FieldValue{stringColumn("device", fs.GetDevice()), stringColumn("mountpoint", fs.GetMountpoint()), stringColumn("fs_type", fs.GetFsType()), intColumn("total_bytes", fs.GetTotalBytes()), intColumn("used_bytes", fs.GetUsedBytes()), intColumn("available_bytes", fs.GetAvailableBytes()), doubleColumn("usage_percent", fs.GetUsagePercent()), boolColumn("read_only", fs.GetReadOnly())}}
 }
 
 func diskRow(space, dataset, freq, at string, disk *hostmetricpb.DiskMetric, agentID string) *storagepb.RowFieldUpsert {
@@ -136,8 +172,7 @@ func diskRow(space, dataset, freq, at string, disk *hostmetricpb.DiskMetric, age
 	if disk.GetRateAvailable() {
 		fields = append(fields, doubleColumn("read_bytes_per_second", disk.GetReadBytesPerSecond()), doubleColumn("write_bytes_per_second", disk.GetWriteBytesPerSecond()), doubleColumn("read_iops", disk.GetReadIops()), doubleColumn("write_iops", disk.GetWriteIops()), doubleColumn("utilization_percent", disk.GetUtilizationPercent()))
 	}
-	dimensions := map[string]string{"device": disk.GetDevice()}
-	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Fields: fields}
+	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, deviceSeriesTag(disk.GetDevice())), Fields: fields}
 }
 
 func networkRow(space, dataset, freq, at string, network *hostmetricpb.NetworkMetric, agentID string) *storagepb.RowFieldUpsert {
@@ -148,8 +183,7 @@ func networkRow(space, dataset, freq, at string, network *hostmetricpb.NetworkMe
 	if network.GetErrorRateAvailable() {
 		fields = append(fields, doubleColumn("receive_errors_per_second", network.GetReceiveErrorsPerSecond()), doubleColumn("transmit_errors_per_second", network.GetTransmitErrorsPerSecond()))
 	}
-	dimensions := map[string]string{"device": network.GetDevice()}
-	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, dimensions), Fields: fields}
+	return &storagepb.RowFieldUpsert{Key: baseKey(space, dataset, agentID, freq, at, deviceSeriesTag(network.GetDevice())), Fields: fields}
 }
 
 func stringValue(value string) *storagepb.TypedValue {

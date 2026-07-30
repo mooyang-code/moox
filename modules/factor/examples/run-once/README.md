@@ -1,6 +1,7 @@
 # Factor Run-Once Verification
 
-> 以下命令是 `series_tag` 改造完成后的目标验收方式，实施前 CLI 仍使用旧参数。
+> 以下命令使用当前 scalar `series_tag` 与 `lookback_periods` 契约；真实远端 E2E
+> 验收由发布流程单独执行。
 
 Storage Gateway、source Dataset 与 Factor target Dataset 需要已经可用。Python 环境需安装
 `pyworker/requirements.txt`。下面使用非 K 线 `nav/benchmark_return` 因子；Bias/CCI

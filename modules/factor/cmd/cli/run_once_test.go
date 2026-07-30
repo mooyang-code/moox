@@ -105,7 +105,7 @@ func TestRunInitAndImport(t *testing.T) {
 		"import", "--db", dbPath, "--factors-dir", factorsDir,
 		"--file", filepath.Join(factorsDir, "Bias.py"), "--factor-id", "bias",
 		"--input-columns", "close", "--outputs", "bias", "--params-json", "{}",
-		"--lookback-rows", "20",
+		"--lookback-periods", "20",
 	}, &out))
 	require.Contains(t, out.String(), `"ok":true`)
 }

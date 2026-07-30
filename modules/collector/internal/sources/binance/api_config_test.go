@@ -77,7 +77,7 @@ func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
 type fakeKlineStorage struct {
 	latest         time.Time
 	found          bool
-	latestKey      *storagepb.TimeSeriesKey
+	latestKey      *storagepb.TimeSeriesSelector
 	writes         [][]*storagepb.RowFieldUpsert
 	latestCalls    int
 	latestFailures int
@@ -85,7 +85,7 @@ type fakeKlineStorage struct {
 	writeFailures  int
 }
 
-func (s *fakeKlineStorage) LatestTimeSeriesTime(_ context.Context, key *storagepb.TimeSeriesKey) (time.Time, bool, error) {
+func (s *fakeKlineStorage) LatestTimeSeriesTime(_ context.Context, key *storagepb.TimeSeriesSelector) (time.Time, bool, error) {
 	s.latestCalls++
 	if s.latestCalls <= s.latestFailures {
 		return time.Time{}, false, errors.New("temporary read failure")

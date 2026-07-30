@@ -2,6 +2,8 @@ package backfill
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -27,6 +29,7 @@ type Plan struct {
 	DatasetID string
 	SubjectID string
 	Freq      string
+	SeriesTag *string
 	Start     string
 	End       string
 	Confirm   bool
@@ -70,11 +73,24 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	key := &storagepb.TimeSeriesKey{SpaceId: plan.SpaceID, DatasetId: plan.DatasetID, SubjectId: plan.SubjectID, Freq: plan.Freq}
+	runID, err := newRunID()
+	if err != nil {
+		return 0, fmt.Errorf("create backfill run id: %w", err)
+	}
+	selector := &storagepb.TimeSeriesSelector{SpaceId: plan.SpaceID, DatasetId: plan.DatasetID, SubjectId: plan.SubjectID, Freq: plan.Freq, SeriesTag: plan.SeriesTag}
 	page := uint32(1)
 	total := 0
 	for {
-		rsp, err := b.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{AuthInfo: b.auth, Keys: []*storagepb.TimeSeriesKey{key}, TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)}, Order: storagepb.SortOrder_SORT_ORDER_ASC, Page: &commonpb.Page{Page: page, Size: 500}}, client.WithFilter(trpcretry.ReadOnly()))
+		rsp, err := b.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+			AuthInfo: b.auth, SpaceId: plan.SpaceID, DatasetId: plan.DatasetID,
+			Selectors: []*storagepb.TimeSeriesSelector{selector},
+			TimeRange: &storagepb.TimeRange{
+				StartTime: start.UTC().Format(time.RFC3339Nano),
+				EndTime:   end.UTC().Format(time.RFC3339Nano),
+			},
+			Order: storagepb.SortOrder_SORT_ORDER_ASC,
+			Page:  &commonpb.Page{Page: page, Size: 500},
+		}, client.WithFilter(trpcretry.ReadOnly()))
 		if err != nil {
 			return total, err
 		}
@@ -86,11 +102,14 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 			return total, err
 		}
 		if len(patches) > 0 {
-			_, err = b.journal.Append(ctx, domain.EventBatch{MessageID: fmt.Sprintf("backfill/%s/%s/%s/%s/%d", plan.SpaceID, plan.DatasetID, plan.SubjectID, plan.Freq, page), Rows: patches})
+			result, appendErr := b.journal.Append(ctx, domain.EventBatch{MessageID: backfillMessageID(plan, runID, page), Rows: patches})
+			err = appendErr
 			if err != nil {
 				return total, err
 			}
-			total += len(patches)
+			if !result.Duplicate {
+				total += len(patches)
+			}
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
 			break
@@ -102,6 +121,27 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 	}
 	return total, nil
 }
+
+func newRunID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+func backfillMessageID(plan Plan, runID string, page uint32) string {
+	selector := "series_tag=*"
+	if plan.SeriesTag != nil {
+		selector = "series_tag=" + domain.EncodeIdentity(*plan.SeriesTag)
+	}
+	return fmt.Sprintf(
+		"backfill/%s/%s/%s/%s/%s/start=%s/end=%s/run=%s/page=%d",
+		domain.EncodeIdentity(plan.SpaceID), domain.EncodeIdentity(plan.DatasetID),
+		domain.EncodeIdentity(plan.SubjectID), domain.EncodeIdentity(plan.Freq), selector,
+		domain.EncodeIdentity(plan.Start), domain.EncodeIdentity(plan.End), runID, page,
+	)
+}
 func rowsToPatches(rows []*storagepb.TimeSeriesRow, writtenAt time.Time) ([]domain.RowPatch, error) {
 	out := make([]domain.RowPatch, 0, len(rows))
 	for _, row := range rows {
@@ -110,10 +150,6 @@ func rowsToPatches(rows []*storagepb.TimeSeriesRow, writtenAt time.Time) ([]doma
 		}
 		key := row.GetKey()
 		t, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
-		if err != nil {
-			return nil, err
-		}
-		dims, err := domain.CanonicalStringMap(nil)
 		if err != nil {
 			return nil, err
 		}
@@ -132,7 +168,7 @@ func rowsToPatches(rows []*storagepb.TimeSeriesRow, writtenAt time.Time) ([]doma
 		for k, v := range row.GetAttributes() {
 			attrs[k] = v
 		}
-		out = append(out, domain.RowPatch{Partition: domain.PartitionKey{SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), Month: domain.MonthOf(t)}, DataTime: t.UTC(), DimensionsJSON: dims, Attributes: attrs, WrittenAt: writtenAt, Columns: columns})
+		out = append(out, domain.RowPatch{Partition: domain.PartitionKey{SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), SeriesTag: key.GetSeriesTag(), Month: domain.MonthOf(t)}, DataTime: t.UTC(), Attributes: attrs, WrittenAt: writtenAt, Columns: columns})
 	}
 	return out, nil
 }

@@ -5,12 +5,16 @@ import (
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/config"
+	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	"github.com/mooyang-code/moox/modules/archive/internal/health"
+	"github.com/mooyang-code/moox/modules/archive/internal/journal"
+	archivewriter "github.com/mooyang-code/moox/modules/archive/internal/writer"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
 	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -24,7 +28,7 @@ import (
 func TestSourceLists(t *testing.T) {
 	cfg := testConfig()
 	got := sourceLists(cfg)
-	if len(got["crypto_binance"]) != 2 || got["crypto_binance"][0] != "spot_kline" {
+	if len(got["crypto"]) != 2 || got["crypto"][0] != "spot_kline_1h" {
 		t.Fatalf("source lists=%v", got)
 	}
 }
@@ -51,6 +55,84 @@ func TestAppRunRequiresConfig(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAppRunRejectsLegacyArchivePathBeforeStarting(t *testing.T) {
+	cfg := config.Default()
+	cfg.Archive.RootDir = t.TempDir()
+	cfg.Archive.StateDir = t.TempDir()
+	legacy := filepath.Join(cfg.Archive.RootDir, "crypto", "kline", "1h", "BTC", "crypto__kline__BTC__1h__202601.parquet")
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacy), 0o755))
+	require.NoError(t, os.WriteFile(legacy, []byte("legacy"), 0o600))
+	err := (&App{Config: cfg}).Run(t.Context())
+	require.ErrorContains(t, err, "validate archive root")
+}
+
+func TestValidateArchiveRootRejectsV1SchemaAndCorruptV2Path(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		write func(*testing.T, string)
+	}{
+		{name: "v1 schema", write: writeV1Parquet},
+		{name: "corrupt parquet", write: func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, []byte("not parquet"), 0o600))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			store, err := journal.Open(t.TempDir())
+			require.NoError(t, err)
+			defer store.Close()
+			key := domain.PartitionKey{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1h", SeriesTag: "", Month: "202601"}
+			path, err := key.AbsolutePath(root)
+			require.NoError(t, err)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			test.write(t, path)
+			require.Error(t, validateArchiveRoot(t.Context(), root, store))
+		})
+	}
+}
+
+func writeV1Parquet(t *testing.T, path string) {
+	t.Helper()
+	file, err := os.Create(path)
+	require.NoError(t, err)
+	schema := parquet.NewSchema("moox_archive_v1", parquet.Group{
+		"candle_begin_time": parquet.Timestamp(parquet.Nanosecond),
+		"space_id":          parquet.String(), "dataset_id": parquet.String(),
+		"subject_id": parquet.String(), "freq": parquet.String(),
+		"dimensions_json": parquet.String(), "attributes_json": parquet.String(),
+		"written_at": parquet.Timestamp(parquet.Nanosecond),
+	})
+	writer := parquet.NewGenericWriter[map[string]any](file, schema)
+	writer.SetKeyValueMetadata("moox.archive.schema_version", "1")
+	_, err = writer.Write([]map[string]any{{
+		"candle_begin_time": time.Now().UTC(), "space_id": "crypto", "dataset_id": "kline",
+		"subject_id": "BTC", "freq": "1h", "dimensions_json": "{}", "attributes_json": "{}",
+		"written_at": time.Now().UTC(),
+	}})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, file.Close())
+}
+
+func TestValidateArchiveRootAcceptsJournaledV2Generation(t *testing.T) {
+	root := t.TempDir()
+	store, err := journal.Open(t.TempDir())
+	require.NoError(t, err)
+	defer store.Close()
+	key := domain.PartitionKey{SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1h", SeriesTag: "", Month: "202601"}
+	_, err = store.Append(t.Context(), domain.EventBatch{
+		MessageID: "v2-root",
+		Rows: []domain.RowPatch{{
+			Partition: key, DataTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			WrittenAt: time.Now().UTC(), Columns: map[string]domain.Scalar{},
+		}},
+	})
+	require.NoError(t, err)
+	_, err = archivewriter.New(store, root, 1024).WritePartition(t.Context(), key)
+	require.NoError(t, err)
+	require.NoError(t, validateArchiveRoot(t.Context(), root, store))
+}
+
 func TestRegisterHealthRequiresConfig(t *testing.T) {
 	err := (&App{}).RegisterHealth(nil)
 	require.Error(t, err)
@@ -72,7 +154,7 @@ func TestAppRunConsumesStorageEventAndBecomesReadyE2E(t *testing.T) {
 	t.Cleanup(func() { nc.Close() })
 	js, err := nc.JetStream()
 	require.NoError(t, err)
-	const storageSubject = "moox.storage.dataset.rows.upserted.v1.>"
+	const storageSubject = "moox.storage.dataset.rows.upserted.v2.>"
 	_, err = js.AddStream(&nats.StreamConfig{Name: events.DatasetRowsUpserted.Stream(), Subjects: []string{storageSubject}, Storage: nats.FileStorage})
 	require.NoError(t, err)
 	_, err = js.AddConsumer(events.DatasetRowsUpserted.Stream(), &nats.ConsumerConfig{
@@ -137,12 +219,12 @@ func publishArchiveStorageEvent(t *testing.T, ctx context.Context, natsURL strin
 	publisher, err := events.NewPublisher(client, registry)
 	require.NoError(t, err)
 	payload := &storagepb.DatasetRowsUpserted{
-		SpaceId: "crypto_binance", DatasetId: "spot_kline",
+		SpaceId: "crypto", DatasetId: "spot_kline_1h",
 		Rows: []*storagepb.RowUpsert{{
 			Key: &storagepb.RowKey{
-				SpaceId: "crypto_binance", DatasetId: "spot_kline",
+				SpaceId: "crypto", DatasetId: "spot_kline_1h",
 				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-					SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-25T00:00:00Z",
+					SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-07-25T00:00:00Z", SeriesTag: "venue:binance",
 				}},
 			},
 			Fields: []*storagepb.FieldValue{{
@@ -153,7 +235,7 @@ func publishArchiveStorageEvent(t *testing.T, ctx context.Context, natsURL strin
 	}
 	_, err = publisher.Publish(ctx, events.DatasetRowsUpserted, payload, events.PublishOptions{
 		EventID: "archive-app-e2e-1", OccurredAt: time.Now().UTC(),
-		SpaceID: "crypto_binance", SubjectID: "spot_kline",
+		SpaceID: "crypto", SubjectID: "spot_kline_1h",
 	})
 	require.NoError(t, err)
 }

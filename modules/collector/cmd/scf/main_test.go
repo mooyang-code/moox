@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -27,6 +28,26 @@ func TestOnceOptionsFromEnv(t *testing.T) {
 	if opts.StorageRPCGatewayTarget != "127.0.0.1:11003" {
 		t.Fatalf("StorageRPCGatewayTarget = %q, want 127.0.0.1:11003", opts.StorageRPCGatewayTarget)
 	}
+}
+
+func TestSCFCanarySeriesTagDistinguishesMissingAndExplicitEmpty(t *testing.T) {
+	t.Setenv("MOOX_SCF_CANARY_SERIES_TAG", "venue:binance")
+	tag, err := scfCanarySeriesTag()
+	require.NoError(t, err)
+	assert.Equal(t, "venue:binance", tag)
+
+	t.Setenv("MOOX_SCF_CANARY_SERIES_TAG", "")
+	tag, err = scfCanarySeriesTag()
+	require.NoError(t, err)
+	assert.Equal(t, "", tag)
+
+	require.NoError(t, unsetEnvForTest("MOOX_SCF_CANARY_SERIES_TAG"))
+	_, err = scfCanarySeriesTag()
+	require.Error(t, err)
+}
+
+func unsetEnvForTest(name string) error {
+	return os.Unsetenv(name)
 }
 
 func TestInitializeRuntimeOnceDoesNotRequireTRPCConfig(t *testing.T) {

@@ -56,11 +56,10 @@ func rowParts(key *pb.RowKey, bucketDuration time.Duration) (kind byte, parts []
 		at = at.UTC()
 		bucket := at.Truncate(bucketDuration).Format(canonicalTimeLayout)
 		dataTime := at.Format(canonicalTimeLayout)
-		dimensions, dimensionsErr := rowidentity.CanonicalDimensions(row.GetDimensions())
-		if dimensionsErr != nil {
-			return 0, nil, invalidf("invalid dimensions: %w", dimensionsErr)
+		if tagErr := rowidentity.ValidateSeriesTag(row.GetSeriesTag()); tagErr != nil {
+			return 0, nil, invalidf("invalid series_tag: %w", tagErr)
 		}
-		return timeSeriesKind, append(base, []byte(bucket), []byte(row.GetSubjectId()), []byte(row.GetFreq()), []byte(dataTime), []byte(dimensions)), nil
+		return timeSeriesKind, append(base, []byte(bucket), []byte(row.GetSubjectId()), []byte(row.GetFreq()), []byte(dataTime), []byte(row.GetSeriesTag())), nil
 	case *pb.RowKey_Record:
 		row := value.Record
 		if row == nil || row.GetRecordId() == "" || row.GetVersion() == "" {

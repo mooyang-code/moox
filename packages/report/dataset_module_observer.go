@@ -48,6 +48,8 @@ func (o *DatasetModuleObserver) ObserveRun(observation DatasetObservation) error
 	result := "success"
 	if observation.Result == "error" || observation.Result == "rejected" {
 		result = observation.Result
+	} else if observation.Result == "incomplete" {
+		result = "error"
 	}
 	return o.module.ObserveRun(o.stage, result, o.pipeline, observation.FinishedAt)
 }

@@ -12,11 +12,12 @@ describe("factor management contract", () => {
       input_columns: ["nav", "benchmark_return"],
       outputs: ["excess_return", "rolling_rank"],
       params_json: `{"window":20}`,
-      lookback_rows: 100,
+      lookback_periods: 100,
       status: "enabled"
     };
     expect(factor.input_columns).toEqual(["nav", "benchmark_return"]);
     expect(factor.outputs).toEqual(["excess_return", "rolling_rank"]);
+    expect(factor.lookback_periods).toBe(100);
   });
 
   it("uses synchronous half-open range recalc", () => {
@@ -50,5 +51,10 @@ describe("factor management contract", () => {
   it("changes status only through SetFactorStatus", () => {
     expect(factorDefinitionsView).toContain('<a-select v-model="form.status" disabled>');
     expect(factorDefinitionsView).toContain("await setFactorStatus(record.factor_id, next)");
+  });
+
+  it("uses the period-based runtime contract in the editor", () => {
+    expect(factorDefinitionsView).toContain('data-index="lookback_periods"');
+    expect(factorDefinitionsView).toContain("return result");
   });
 });

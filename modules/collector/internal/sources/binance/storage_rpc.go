@@ -54,15 +54,17 @@ func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowF
 	})
 }
 
-func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, key *storagepb.TimeSeriesKey) (time.Time, bool, error) {
+func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, selector *storagepb.TimeSeriesSelector) (time.Time, bool, error) {
 	var rsp *storagepb.ReadTimeSeriesRowsRsp
 	err := retryStorage(ctx, func() error {
 		var callErr error
 		rsp, callErr = w.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-			AuthInfo: w.authInfo,
-			Keys:     []*storagepb.TimeSeriesKey{key},
-			Order:    storagepb.SortOrder_SORT_ORDER_DESC,
-			Page:     &storagepb.Page{Page: 1, Size: 1},
+			AuthInfo:  w.authInfo,
+			SpaceId:   selector.GetSpaceId(),
+			DatasetId: selector.GetDatasetId(),
+			Selectors: []*storagepb.TimeSeriesSelector{selector},
+			Order:     storagepb.SortOrder_SORT_ORDER_DESC,
+			Page:      &storagepb.Page{Page: 1, Size: 1},
 		})
 		if callErr != nil {
 			return fmt.Errorf("read latest time-series row: %w", callErr)

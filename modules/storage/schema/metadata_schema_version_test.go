@@ -11,14 +11,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestMetadataSchemaV5Contract(t *testing.T) {
+func TestMetadataSchemaV6Contract(t *testing.T) {
 	sql, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '5')",
+		"VALUES ('schema_version', '6')",
 		"CREATE TABLE IF NOT EXISTS t_data_nodes",
 		"c_node_id TEXT NOT NULL",
 		"c_name TEXT NOT NULL",
@@ -47,6 +47,7 @@ func TestMetadataSchemaV5Contract(t *testing.T) {
 		"c_" + "retention_window",
 		"c_content_hash",
 		"c_required",
+		"ALTER TABLE",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("metadata schema contains removed schema element %q", forbidden)
@@ -71,7 +72,7 @@ func TestMetadataSchemaV5Contract(t *testing.T) {
 	}
 }
 
-func TestMetadataSchemaV5DDLExecutes(t *testing.T) {
+func TestMetadataSchemaV6DDLExecutes(t *testing.T) {
 	schema, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -90,8 +91,8 @@ func TestMetadataSchemaV5DDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "5" {
-		t.Fatalf("persisted schema version = %q, want 5", version)
+	if version != "6" {
+		t.Fatalf("persisted schema version = %q, want 6", version)
 	}
 	var foreignKeysEnabled int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeysEnabled); err != nil {

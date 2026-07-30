@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '5')
+VALUES ('schema_version', '6')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -505,7 +505,7 @@ CREATE TABLE IF NOT EXISTS t_storage_devices (
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_engine IN ('pebble', 'duckdb', 'bleve')),
+    CHECK (c_engine IN ('pebble', 'duckdb', 'bleve', 'parquet')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     UNIQUE (c_device_id)
 );

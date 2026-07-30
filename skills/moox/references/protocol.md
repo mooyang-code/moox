@@ -43,6 +43,6 @@ Time fields should be named by meaning:
 - `observed_time`
 - `updated_time`
 
-`DataRef` describes a logical data location. It should include space, dataset, data source, subject, frequency, and dimensions. Physical path or table details belong to StorageRoute and storage engine config.
+`DataRef` describes a logical data location. For time-series data it should include space, dataset, subject, frequency, and the optional scalar `series_tag`. Physical path or table details belong to StorageRoute and storage engine config.
 
 `DataView` is the query composition layer. It can include base fields, factor instances, expressions, and system columns. Query callers should not choose view policy details; the control plane should resolve the active view version and Storage metadata.

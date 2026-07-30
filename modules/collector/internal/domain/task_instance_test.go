@@ -21,7 +21,7 @@ func TestTaskInstance_StableTaskID_SameInput_ShouldReturnDeterministicID(t *test
 		Exchange:  "binance",
 		Market:    "spot",
 		DataType:  "kline",
-		DatasetID: "binance_spot_kline",
+		DatasetID: "spot_kline_1h",
 		SubjectID: "btc-usdt",
 		Interval:  "1m",
 	}
@@ -36,7 +36,7 @@ func TestTaskInstance_StableTaskID_DifferentSpace_ShouldReturnDifferentID(t *tes
 		Exchange:  "binance",
 		Market:    "spot",
 		DataType:  "kline",
-		DatasetID: "binance_spot_kline",
+		DatasetID: "spot_kline_1h",
 		SubjectID: "btc-usdt",
 		Interval:  "1m",
 	}

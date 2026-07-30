@@ -45,6 +45,7 @@ func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 		Reader: fixture, AuthInfo: &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "derived-key"},
 		Config: monitorwatchdog.MarketCanaryConfig{
 			SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
+			SeriesTag: testStringPtr("venue:binance"),
 			Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
 		},
 		Now: func() time.Time { return now },
@@ -59,14 +60,19 @@ func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 	require.Equal(t, "market_kline", fixture.request.GetKeys()[0].GetDatasetId())
 	require.Equal(t, "BTC-USDT", fixture.request.GetKeys()[0].GetSubjectId())
 	require.Equal(t, "1m", fixture.request.GetKeys()[0].GetFreq())
+	require.Equal(t, "venue:binance", fixture.request.GetKeys()[0].GetSeriesTag())
 	require.Equal(t, now.Format(time.RFC3339Nano), fixture.request.GetKeys()[0].GetDataTime())
 	require.Equal(t, "monitor-market-canary", fixture.request.GetAuthInfo().GetAppId())
 	require.NotEmpty(t, fixture.request.GetAuthInfo().GetAppKey())
 }
 
+func testStringPtr(value string) *string {
+	return &value
+}
+
 func canaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.TimeSeriesRow {
 	return &storagepb.TimeSeriesRow{
-		Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano)},
+		Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"},
 		Fields: []*storagepb.FieldValue{
 			{FieldId: "market_kline.close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: closeValue}}},
 			{FieldId: "market_kline.volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: volumeValue}}},

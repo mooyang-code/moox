@@ -33,8 +33,8 @@ message QueryTimeSeriesRowsReq {
   string space_id = 2;
   // view_id 是已登记的查询入口。
   string view_id = 3;
-  // keys 是时序查询 key；范围读时 key.data_time 可为空，实际版本集合由 time_range 表达。
-  repeated TimeSeriesKey keys = 4;
+  // selectors 是时序范围查询条件；series_tag 未设置时匹配该 scope 下的全部序列。
+  repeated TimeSeriesSelector selectors = 4;
   // time_range 是左闭右开时间范围。
   TimeRange time_range = 5;
   // column_names 是要返回的列名；为空时返回 View 默认列。

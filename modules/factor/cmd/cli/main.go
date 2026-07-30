@@ -23,7 +23,7 @@ type cliConfig struct {
 	InputColumns      []string
 	Outputs           []string
 	ParamsJSON        string
-	LookbackRows      int
+	LookbackPeriods   int
 	SpaceID           string
 	DatasetID         string
 	SubjectID         string
@@ -84,7 +84,7 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&inputColumns, "input-columns", "", "comma-separated input columns")
 		fs.StringVar(&outputs, "outputs", "", "comma-separated output columns")
 		fs.StringVar(&cfg.ParamsJSON, "params-json", "{}", "factor parameter JSON object")
-		fs.IntVar(&cfg.LookbackRows, "lookback-rows", 0, "input lookback rows")
+		fs.IntVar(&cfg.LookbackPeriods, "lookback-periods", 0, "input lookback periods")
 		if err := fs.Parse(args[1:]); err != nil {
 			return cliConfig{}, err
 		}

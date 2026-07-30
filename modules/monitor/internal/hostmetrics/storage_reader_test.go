@@ -21,7 +21,13 @@ type readerAccessFake struct {
 func (f *readerAccessFake) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	f.calls++
 	f.lastStart, f.lastEnd = req.GetTimeRange().GetStartTime(), req.GetTimeRange().GetEndTime()
-	dataset := req.GetKeys()[0].GetDatasetId()
+	if len(req.GetSelectors()) != 1 || req.GetSelectors()[0].SeriesTag != nil {
+		panic("host history must use one wildcard series-tag selector")
+	}
+	dataset := req.GetSelectors()[0].GetDatasetId()
+	if req.GetSpaceId() != req.GetSelectors()[0].GetSpaceId() || req.GetDatasetId() != dataset {
+		panic("host history must repeat the selector scope at request level")
+	}
 	var rows []*storagepb.TimeSeriesRow
 	for _, row := range f.rows {
 		if row.GetKey().GetDatasetId() == dataset {
@@ -100,7 +106,7 @@ func readRow(row *storagepb.RowFieldUpsert) *storagepb.TimeSeriesRow {
 	return &storagepb.TimeSeriesRow{
 		Key: &storagepb.TimeSeriesKey{
 			SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
-			SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime(),
+			SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime(), SeriesTag: key.GetTimeSeries().GetSeriesTag(),
 		},
 		Fields: row.GetFields(), Attributes: attributes,
 	}

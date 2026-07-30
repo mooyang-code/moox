@@ -63,8 +63,8 @@
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :md="12" :lg="8">
-                <a-form-item label="Dimensions JSON">
-                  <a-input v-model="form.dimensions" placeholder="{}" />
+                <a-form-item label="序列标签">
+                  <a-input v-model="form.series_tag" placeholder="venue:binance" />
                 </a-form-item>
               </a-col>
             </a-row>
@@ -158,7 +158,7 @@ const form = reactive({
   subject_id: "",
   freq: "",
   time_column: "data_time",
-  dimensions: "{}",
+  series_tag: "",
   record_id_column: "record_id",
   version_column: "version",
   batch_size: 500
@@ -247,15 +247,6 @@ function parseCsv(text: string) {
   return { headers: parsedHeaders, rows };
 }
 
-function parseDimensions() {
-  if (!form.dimensions.trim()) return {};
-  const parsed = JSON.parse(form.dimensions);
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-    throw new Error("Dimensions 必须是 JSON 对象");
-  }
-  return parsed as Record<string, string>;
-}
-
 function columnNameMap() {
   const map = new Map<string, DatasetColumn>();
   columns.value.forEach(column => {
@@ -267,7 +258,7 @@ function columnNameMap() {
 
 function keyColumns() {
   if (isTimeSeriesDataset.value) {
-    return new Set([form.time_column]);
+    return new Set(["space_id", "dataset_id", "subject_id", "freq", "data_time", "series_tag", form.time_column]);
   }
   return new Set([form.record_id_column, form.version_column].filter(Boolean));
 }
@@ -351,16 +342,15 @@ async function importRows() {
   try {
     const space_id = spaceStore.requireSpaceId();
     if (isTimeSeriesDataset.value) {
-      const dimensions = parseDimensions();
       const rows: RowFieldUpsert[] = parsedRows.value.map(row => ({
         key: {
           space_id,
           dataset_id: form.dataset_id,
           time_series: {
-            subject_id: form.subject_id,
-            freq: form.freq,
+            subject_id: row.subject_id || form.subject_id,
+            freq: row.freq || form.freq,
             data_time: row[form.time_column],
-            dimensions
+            series_tag: row.series_tag ?? form.series_tag
           }
         },
         fields: rowFields(row)

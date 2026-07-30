@@ -13,6 +13,8 @@ data/admin.db
 data/cloudnode/moox_cloudnode.db
 data/collector/moox_collector.db
 data/storage
+data/archive
+data/factor
 data/trade
 ```
 
@@ -23,8 +25,15 @@ moox-admin      -> modules/admin/schema
 moox-cloudnode  -> modules/cloudnode/schema
 moox-collector  -> modules/collector/schema
 moox-storage    -> modules/storage schema/config
+moox-archive    -> modules/archive journal + Parquet v2
+moox-factor     -> modules/factor/schema
 moox-trade      -> modules/trade/schema
 ```
+
+TimeSeries 重建使用当前 scalar `series_tag`：精确空 tag 是默认序列，范围 selector
+缺省 tag 才表示 wildcard。Binance/OKX 写入共享 crypto Dataset，Archive 按 tag
+拆目录生成 Parquet v2，Factor 每个任务只执行一个 Factor 并以
+`lookback_periods` 计算跨 tag 时间窗口。旧 schema 和旧数据不迁移。
 
 ## 重建契约
 

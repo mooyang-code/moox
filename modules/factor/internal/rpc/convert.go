@@ -9,17 +9,17 @@ import (
 
 func factorToPB(f domain.FactorDef) *factorpb.FactorDef {
 	return &factorpb.FactorDef{
-		FactorId:     f.FactorID,
-		Name:         f.Name,
-		SourceCode:   f.SourceCode,
-		SourceHash:   f.SourceHash,
-		InputColumns: append([]string(nil), f.InputColumns...),
-		Outputs:      append([]string(nil), f.Outputs...),
-		ParamsJson:   f.ParamsJSON,
-		LookbackRows: int32(f.LookbackRows),
-		Status:       f.Status,
-		CreatedAt:    formatTime(f.CreateTime),
-		UpdatedAt:    formatTime(f.ModifyTime),
+		FactorId:        f.FactorID,
+		Name:            f.Name,
+		SourceCode:      f.SourceCode,
+		SourceHash:      f.SourceHash,
+		InputColumns:    append([]string(nil), f.InputColumns...),
+		Outputs:         append([]string(nil), f.Outputs...),
+		ParamsJson:      f.ParamsJSON,
+		LookbackPeriods: int32(f.LookbackPeriods),
+		Status:          f.Status,
+		CreatedAt:       formatTime(f.CreateTime),
+		UpdatedAt:       formatTime(f.ModifyTime),
 	}
 }
 
@@ -28,15 +28,15 @@ func factorFromPB(pb *factorpb.FactorDef) domain.FactorDef {
 		return domain.FactorDef{}
 	}
 	return domain.FactorDef{
-		FactorID:     pb.GetFactorId(),
-		Name:         pb.GetName(),
-		SourceCode:   pb.GetSourceCode(),
-		SourceHash:   pb.GetSourceHash(),
-		InputColumns: append([]string(nil), pb.GetInputColumns()...),
-		Outputs:      append([]string(nil), pb.GetOutputs()...),
-		ParamsJSON:   pb.GetParamsJson(),
-		LookbackRows: int(pb.GetLookbackRows()),
-		Status:       pb.GetStatus(),
+		FactorID:        pb.GetFactorId(),
+		Name:            pb.GetName(),
+		SourceCode:      pb.GetSourceCode(),
+		SourceHash:      pb.GetSourceHash(),
+		InputColumns:    append([]string(nil), pb.GetInputColumns()...),
+		Outputs:         append([]string(nil), pb.GetOutputs()...),
+		ParamsJSON:      pb.GetParamsJson(),
+		LookbackPeriods: int(pb.GetLookbackPeriods()),
+		Status:          pb.GetStatus(),
 	}
 }
 

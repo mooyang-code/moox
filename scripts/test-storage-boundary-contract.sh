@@ -17,6 +17,52 @@ assert_no_match() {
   fi
 }
 
+assert_no_legacy_series_identity() {
+  # Match the removed wire/schema/API surface, not ordinary prose such as
+  # "task frequency dimensions". Task 13 changes the default scope to "all"
+  # after every direct consumer has crossed the atomic wire boundary.
+  local pattern='GetDimensions\b|CanonicalDimensions\b|DimensionTags\b|SeriesTagName\b|Dimensions[[:space:]]+(\[\]string|map\[)|Dimensions[[:space:]]*:|dimensions_json\b|dimensions[[:space:]]*=|dimensions[[:space:]]*\??:|\.dimensions\b|"dimensions"[[:space:]]*:|json:"dimensions|parse[A-Za-z]*Dimensions\b|dataDimensions\b|series_tag_name|dimension_tags'
+  local targets=(modules packages web/src examples skills/moox)
+  local scope="${MOOX_SERIES_IDENTITY_SCOPE:-all}"
+  if [[ "${scope}" == "all" ]]; then
+    targets=(modules packages web/src examples skills/moox)
+  elif [[ "${scope}" == "storage" ]]; then
+    targets=(modules/storage packages/storagepb)
+  else
+    fail "MOOX_SERIES_IDENTITY_SCOPE must be storage or all"
+  fi
+
+  local matches
+  matches="$(rg -n --hidden \
+    --glob '!docs/superpowers/**' \
+    --glob '!**/go.sum' \
+    --glob '!web/node_modules/**' \
+    --glob '!node_modules/**' \
+    "${pattern}" \
+    "${targets[@]}" || true)"
+  while IFS= read -r match; do
+    [[ -z "${match}" ]] && continue
+    # Archive and DuckDB must fail closed on pre-v2 layouts. These exact files
+    # are the only allowed source-level legacy schema sentinels.
+    case "${match}" in
+      modules/storage/internal/service/viewindex/duckdb/index_manager_test.go:*dimensions_json*|\
+      modules/storage/internal/service/view/service_test.go:*dimensions_json*|\
+      modules/archive/internal/parquetio/codec.go:*dimensions_json*|\
+      modules/archive/internal/parquetio/schema.go:*dimensions_json*|\
+      modules/archive/internal/parquetio/codec_test.go:*dimensions_json*|\
+      modules/archive/internal/parquetio/schema_test.go:*dimensions_json*|\
+      modules/archive/internal/bootstrap/app_test.go:*dimensions_json*)
+        continue
+        ;;
+    esac
+    printf '%s\n' "${match}" >&2
+    fail "forbidden ${scope} legacy series identity interface remains"
+  done <<<"${matches}"
+  if [[ "${scope}" == "storage" ]]; then
+    printf 'storage boundary contract: transitional series identity scope=storage\n'
+  fi
+}
+
 [[ -f docs/存储层架构.md ]] || fail 'docs/存储层架构.md is missing'
 grep -Fq '[存储层架构](存储层架构.md)' docs/架构总览.md || fail 'architecture overview does not link storage layer architecture'
 
@@ -32,6 +78,7 @@ assert_no_match 'FactKey|RowMarker|content_hash|FACT_VERSION_IMMUTABLE|node_sequ
 assert_no_match 'storage[_-]access|moox-storage-access|ProjectionReader|internal/(core|infra)/' modules/storage packages/gatewayproxy modules/admin modules/gateway web/src/api/storage examples
 assert_no_match 'context\.Background\(\)' modules/storage packages/gatewayproxy modules/admin modules/gateway --glob '*.go' --glob '!**/*_test.go' --glob '!**/*pb.go' --glob '!**/*trpc.go'
 assert_no_match 'packages/crypto|package crypto' modules/storage packages/gatewayproxy modules/admin modules/gateway
+assert_no_legacy_series_identity
 
 while IFS= read -r match; do
   file="${match%%:*}"

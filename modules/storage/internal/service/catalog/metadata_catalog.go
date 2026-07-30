@@ -445,6 +445,9 @@ func (s *Service) CreateField(ctx context.Context, req *pb.CreateFieldReq) (*pb.
 	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
 		return &pb.CreateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
+	if err := validateUserColumnName("field_id", item.GetFieldId()); err != nil {
+		return &pb.CreateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	created, err := s.metadata.CreateField(ctx, item)
 	if err != nil {
 		return &pb.CreateFieldRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -459,6 +462,9 @@ func (s *Service) UpdateField(ctx context.Context, req *pb.UpdateFieldReq) (*pb.
 		return &pb.UpdateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and field_id are required"))}, nil
 	}
 	if err := validateFieldSpaceContext(ctx, item.GetSpaceId()); err != nil {
+		return &pb.UpdateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if err := validateUserColumnName("field_id", item.GetFieldId()); err != nil {
 		return &pb.UpdateFieldRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	updated, err := s.metadata.UpdateField(ctx, item)

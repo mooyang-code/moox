@@ -7,13 +7,13 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 import "moox_common.proto";
 import "common.proto";
 
-// TimeSeriesRowKey identifies one time-series row. Dimensions distinguish
-// multiple entities observed for the same subject, frequency, and timestamp.
+// TimeSeriesRowKey identifies one time-series row. An empty series_tag is the
+// default series for the subject, frequency, and timestamp.
 message TimeSeriesRowKey {
   string subject_id = 1;
   string freq = 2;
   string data_time = 3;
-  map<string, string> dimensions = 4;
+  string series_tag = 4;
 }
 
 // RecordRowKey identifies one immutable record version.
@@ -67,7 +67,15 @@ message TimeSeriesKey {
   string subject_id = 3;
   string freq = 4;
   string data_time = 5;
-  map<string, string> dimensions = 6;
+  string series_tag = 6;
+}
+
+message TimeSeriesSelector {
+  string space_id = 1;
+  string dataset_id = 2;
+  string subject_id = 3;
+  string freq = 4;
+  optional string series_tag = 5;
 }
 
 message RecordKey {
@@ -89,25 +97,28 @@ message RecordRow {
   map<string, string> attributes = 3;
 }
 
-// Range and version queries use row-shaped read contracts. Point reads use
-// PrimaryStore.ReadFields; all writes use RowFieldUpsert.
+// Time-series range reads use selectors and exact reads use keys; exact reads
+// delegate to PrimaryStore.ReadFields. All writes use RowFieldUpsert.
 message ReadTimeSeriesRowsReq {
   common.AuthInfo auth_info = 1;
-  repeated TimeSeriesKey keys = 2;
+  repeated TimeSeriesSelector selectors = 2;
   TimeRange time_range = 3;
   SortOrder order = 4;
   repeated string column_names = 5;
   common.Page page = 6;
   string space_id = 7;
   string dataset_id = 8;
-  string page_token = 9;
+  // keys are exact PrimaryStore point reads. Range reads use selectors.
+  repeated TimeSeriesKey keys = 9;
 }
 
 message ReadTimeSeriesRowsRsp {
   common.RetInfo ret_info = 1;
   repeated TimeSeriesRow rows = 2;
   common.PageResult page_result = 3;
-  string next_page_token = 4;
+  string served_indexed_from = 4;
+  string served_indexed_to = 5;
+  bool complete = 6;
 }
 
 message ReadRecordRowsReq {
@@ -119,12 +130,10 @@ message ReadRecordRowsReq {
   common.Page page = 6;
   string space_id = 7;
   string dataset_id = 8;
-  string page_token = 9;
 }
 
 message ReadRecordRowsRsp {
   common.RetInfo ret_info = 1;
   repeated RecordRow rows = 2;
   common.PageResult page_result = 3;
-  string next_page_token = 4;
 }

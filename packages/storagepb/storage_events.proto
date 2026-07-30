@@ -31,7 +31,7 @@ message TimeSeriesRowKey {
   string subject_id = 1;
   string freq = 2;
   string data_time = 3;
-  map<string, string> dimensions = 4;
+  string series_tag = 4;
 }
 
 message RecordRowKey {

@@ -30,7 +30,14 @@ func Write(path string, rows []domain.ArchiveRow, opts WriteOptions) (domain.Man
 	for name, kind := range opts.Columns {
 		columns[name] = kind
 	}
+	partition := rows[0].Partition
+	if err := partition.Validate(); err != nil {
+		return domain.Manifest{}, err
+	}
 	for _, row := range rows {
+		if row.Partition != partition || domain.MonthOf(row.DataTime) != partition.Month {
+			return domain.Manifest{}, fmt.Errorf("row partition identity mismatch")
+		}
 		for name, value := range row.Columns {
 			if old, ok := columns[name]; ok && old != value.Type {
 				return domain.Manifest{}, fmt.Errorf("schema conflict for %s", name)
@@ -50,9 +57,15 @@ func Write(path string, rows []domain.ArchiveRow, opts WriteOptions) (domain.Man
 		return domain.Manifest{}, err
 	}
 	writer := parquet.NewGenericWriter[map[string]any](file, schema, parquet.Compression(&zstd.Codec{}), parquet.MaxRowsPerRowGroup(opts.RowGroupRows))
-	writer.SetKeyValueMetadata("moox.archive.schema_version", "1")
+	writer.SetKeyValueMetadata("moox.archive.schema_version", "2")
 	writer.SetKeyValueMetadata("moox.archive.generation", fmt.Sprint(opts.Generation))
 	writer.SetKeyValueMetadata("moox.archive.materialized_at", opts.MaterializedAt.UTC().Format(time.RFC3339Nano))
+	writer.SetKeyValueMetadata("moox.archive.space_id", partition.SpaceID)
+	writer.SetKeyValueMetadata("moox.archive.dataset_id", partition.DatasetID)
+	writer.SetKeyValueMetadata("moox.archive.subject_id", partition.SubjectID)
+	writer.SetKeyValueMetadata("moox.archive.freq", partition.Freq)
+	writer.SetKeyValueMetadata("moox.archive.series_tag", partition.SeriesTag)
+	writer.SetKeyValueMetadata("moox.archive.month", partition.Month)
 	typesRaw, _ := json.Marshal(columns)
 	writer.SetKeyValueMetadata("moox.archive.column_types", string(typesRaw))
 	maps := make([]map[string]any, 0, len(rows))
@@ -92,17 +105,23 @@ func Read(path string) ([]domain.ArchiveRow, map[string]storagepb.FieldValueType
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	metadata := map[string]string{}
+	for _, key := range []string{"moox.archive.schema_version", "moox.archive.generation", "moox.archive.materialized_at", "moox.archive.column_types", "moox.archive.space_id", "moox.archive.dataset_id", "moox.archive.subject_id", "moox.archive.freq", "moox.archive.series_tag", "moox.archive.month"} {
+		if value, ok := parquetFile.Lookup(key); ok {
+			metadata[key] = value
+		}
+	}
+	if metadata["moox.archive.schema_version"] != "2" {
+		return nil, nil, nil, fmt.Errorf("unsupported archive parquet schema version %q; use a new v2 archive directory", metadata["moox.archive.schema_version"])
+	}
+	if !hasRequiredSchemaField(parquetFile.Schema(), colSeriesTag) || hasSchemaField(parquetFile.Schema(), "dimensions_json") {
+		return nil, nil, nil, fmt.Errorf("invalid archive parquet v2 system columns")
+	}
 	values, err := parquet.ReadFile[any](path)
 	if err != nil && err != io.EOF {
 		return nil, nil, nil, err
 	}
 	columns := schemaColumns(parquetFile.Schema())
-	metadata := map[string]string{}
-	for _, key := range []string{"moox.archive.schema_version", "moox.archive.generation", "moox.archive.materialized_at", "moox.archive.column_types"} {
-		if value, ok := parquetFile.Lookup(key); ok {
-			metadata[key] = value
-		}
-	}
 	if rawTypes := metadata["moox.archive.column_types"]; rawTypes != "" {
 		var encoded map[string]storagepb.FieldValueType
 		if json.Unmarshal([]byte(rawTypes), &encoded) == nil {
@@ -127,37 +146,63 @@ func Read(path string) ([]domain.ArchiveRow, map[string]storagepb.FieldValueType
 }
 
 func Validate(path string, expected domain.PartitionKey, generation uint64) (domain.Manifest, error) {
-	rows, _, metadata, err := Read(path)
+	rows, columns, metadata, err := Read(path)
 	if err != nil {
 		return domain.Manifest{}, err
 	}
 	if metadata["moox.archive.generation"] != fmt.Sprint(generation) {
 		return domain.Manifest{}, fmt.Errorf("generation metadata mismatch")
 	}
+	if metadata["moox.archive.schema_version"] != "2" {
+		return domain.Manifest{}, fmt.Errorf("archive parquet schema is not v2")
+	}
+	if len(rows) == 0 {
+		return domain.Manifest{}, fmt.Errorf("archive parquet partition is empty")
+	}
+	identity := map[string]string{
+		"moox.archive.space_id":   expected.SpaceID,
+		"moox.archive.dataset_id": expected.DatasetID,
+		"moox.archive.subject_id": expected.SubjectID,
+		"moox.archive.freq":       expected.Freq,
+		"moox.archive.series_tag": expected.SeriesTag,
+		"moox.archive.month":      expected.Month,
+	}
+	for name, want := range identity {
+		if metadata[name] != want {
+			return domain.Manifest{}, fmt.Errorf("%s metadata mismatch", name)
+		}
+	}
 	seen := make(map[string]struct{}, len(rows))
 	for i, row := range rows {
 		if row.Partition != expected {
 			return domain.Manifest{}, fmt.Errorf("partition identity mismatch")
 		}
-		id := domain.LogicalRowID(row.DataTime, row.DimensionsJSON)
+		if row.Partition.SeriesTag != expected.SeriesTag {
+			return domain.Manifest{}, fmt.Errorf("series_tag is not constant")
+		}
+		id := domain.LogicalRowID(row.DataTime)
 		if _, exists := seen[id]; exists {
 			return domain.Manifest{}, fmt.Errorf("duplicate logical row %s", id)
 		}
 		seen[id] = struct{}{}
 		if i > 0 {
 			prev := rows[i-1]
-			if row.DataTime.Before(prev.DataTime) || (row.DataTime.Equal(prev.DataTime) && row.DimensionsJSON < prev.DimensionsJSON) {
+			if !row.DataTime.After(prev.DataTime) {
 				return domain.Manifest{}, fmt.Errorf("rows are not sorted")
 			}
 		}
 	}
-	manifest := manifestFor(path, rows, nil, WriteOptions{Generation: generation})
+	materializedAt, err := time.Parse(time.RFC3339Nano, metadata["moox.archive.materialized_at"])
+	if err != nil {
+		return domain.Manifest{}, fmt.Errorf("invalid materialized_at metadata: %w", err)
+	}
+	manifest := manifestFor(path, rows, columns, WriteOptions{Generation: generation, MaterializedAt: materializedAt})
 	return manifest, nil
 }
 
 func rowToMap(row domain.ArchiveRow) map[string]any {
 	attributes, _ := domain.CanonicalStringMap(row.Attributes)
-	out := map[string]any{colCandleTime: row.DataTime.UTC(), colSpace: row.Partition.SpaceID, colDataset: row.Partition.DatasetID, colSubject: row.Partition.SubjectID, colFreq: row.Partition.Freq, colDimensions: row.DimensionsJSON, colAttributes: attributes, colWrittenAt: row.WrittenAt.UTC()}
+	out := map[string]any{colCandleTime: row.DataTime.UTC(), colSpace: row.Partition.SpaceID, colDataset: row.Partition.DatasetID, colSubject: row.Partition.SubjectID, colFreq: row.Partition.Freq, colSeriesTag: row.Partition.SeriesTag, colAttributes: attributes, colWrittenAt: row.WrittenAt.UTC()}
 	for name, value := range row.Columns {
 		switch value.Type {
 		case storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING:
@@ -209,7 +254,15 @@ func mapToRow(value map[string]any, columns map[string]storagepb.FieldValueType)
 			return domain.ArchiveRow{}, err
 		}
 	}
-	row := domain.ArchiveRow{Partition: domain.PartitionKey{SpaceID: asString(value[colSpace]), DatasetID: asString(value[colDataset]), SubjectID: asString(value[colSubject]), Freq: asString(value[colFreq]), Month: domain.MonthOf(dataTime)}, DataTime: dataTime.UTC(), DimensionsJSON: asString(value[colDimensions]), Attributes: attributes, WrittenAt: writtenAt.UTC(), Columns: map[string]domain.Scalar{}}
+	seriesTag, exists := value[colSeriesTag]
+	if !exists || seriesTag == nil {
+		return domain.ArchiveRow{}, fmt.Errorf("series_tag is required")
+	}
+	seriesTagString, ok := seriesTag.(string)
+	if !ok {
+		return domain.ArchiveRow{}, fmt.Errorf("series_tag must be a string")
+	}
+	row := domain.ArchiveRow{Partition: domain.PartitionKey{SpaceID: asString(value[colSpace]), DatasetID: asString(value[colDataset]), SubjectID: asString(value[colSubject]), Freq: asString(value[colFreq]), SeriesTag: seriesTagString, Month: domain.MonthOf(dataTime)}, DataTime: dataTime.UTC(), Attributes: attributes, WrittenAt: writtenAt.UTC(), Columns: map[string]domain.Scalar{}}
 	for name, kind := range columns {
 		raw, exists := value[name]
 		if !exists || raw == nil {
@@ -292,7 +345,7 @@ func schemaColumns(schema *parquet.Schema) map[string]storagepb.FieldValueType {
 	out := map[string]storagepb.FieldValueType{}
 	for _, field := range schema.Fields() {
 		switch field.Name() {
-		case colCandleTime, colSpace, colDataset, colSubject, colFreq, colDimensions, colAttributes, colWrittenAt:
+		case colCandleTime, colSpace, colDataset, colSubject, colFreq, colSeriesTag, colAttributes, colWrittenAt:
 			continue
 		}
 		kind := field.Type().Kind()
@@ -314,6 +367,25 @@ func schemaColumns(schema *parquet.Schema) map[string]storagepb.FieldValueType {
 	}
 	return out
 }
+
+func hasSchemaField(schema *parquet.Schema, name string) bool {
+	for _, field := range schema.Fields() {
+		if field.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRequiredSchemaField(schema *parquet.Schema, name string) bool {
+	for _, field := range schema.Fields() {
+		if field.Name() == name {
+			return !field.Optional() && !field.Repeated()
+		}
+	}
+	return false
+}
+
 func manifestFor(path string, rows []domain.ArchiveRow, columns map[string]storagepb.FieldValueType, opts WriteOptions) domain.Manifest {
 	data, _ := os.ReadFile(path)
 	sum := sha256.Sum256(data)

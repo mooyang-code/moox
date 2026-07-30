@@ -41,6 +41,7 @@ func TestStorageMarketCanaryCheckEvaluatesRealRows(t *testing.T) {
 	}}
 	cfg := MarketCanaryConfig{
 		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
+		SeriesTag: stringPtr("venue:binance"),
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
 		AuthInfo: &storagepb.AuthInfo{AppId: "canary", AppKey: "key"},
 	}
@@ -48,9 +49,10 @@ func TestStorageMarketCanaryCheckEvaluatesRealRows(t *testing.T) {
 	require.Equal(t, "1m", reader.request.GetKeys()[0].GetFreq())
 	require.Len(t, reader.request.GetKeys(), 24)
 	require.NotEmpty(t, reader.request.GetKeys()[0].GetDataTime())
+	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetSeriesTag())
 	require.Nil(t, reader.request.GetTimeRange())
 	require.Equal(t, []string{"close", "volume"}, reader.request.GetColumnNames())
-	require.Equal(t, "crypto/market_kline/BTC-USDT/1m", StorageMarketCanaryCheck(reader, cfg)(t.Context()).Target)
+	require.Equal(t, "crypto/market_kline/BTC-USDT/1m/venue:binance", StorageMarketCanaryCheck(reader, cfg)(t.Context()).Target)
 	cfg.Freshness = time.Second
 	stale := StorageMarketCanaryCheck(reader, cfg)(t.Context())
 	require.False(t, stale.Success)
@@ -62,6 +64,7 @@ func TestStorageMarketCanaryReportsObservedClosedBarCount(t *testing.T) {
 	reader := &canaryReader{}
 	result := StorageMarketCanaryCheck(reader, MarketCanaryConfig{
 		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
+		SeriesTag: stringPtr("venue:binance"),
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
 		AuthInfo: &storagepb.AuthInfo{AppId: "canary", AppKey: "key"},
 	})(t.Context())
@@ -70,10 +73,31 @@ func TestStorageMarketCanaryReportsObservedClosedBarCount(t *testing.T) {
 	require.Equal(t, "Storage 查询只返回 0 根已收盘 K 线，至少需要 2 根", result.Error)
 }
 
+func TestStorageMarketCanaryOnlyComparesConfiguredSeriesTag(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	okx := canaryRow(now.Add(-30*time.Second), 500, 500)
+	okx.Key.SeriesTag = "venue:okx"
+	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+		canaryRow(now.Add(-2*time.Minute), 100, 10),
+		okx,
+		canaryRow(now.Add(-time.Minute), 101, 12),
+	}}
+	result := StorageMarketCanaryCheck(reader, MarketCanaryConfig{
+		SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Frequency: "1m",
+		SeriesTag: stringPtr("venue:binance"),
+		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+		AuthInfo: &storagepb.AuthInfo{AppId: "canary", AppKey: "key"},
+	})(t.Context())
+
+	require.True(t, result.Success)
+	require.Contains(t, result.Target, "venue:binance")
+}
+
 func TestStorageMarketCanaryRejectsInvalidFrequency(t *testing.T) {
 	reader := &canaryReader{}
 	result := StorageMarketCanaryCheck(reader, MarketCanaryConfig{
 		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "garbage",
+		SeriesTag: stringPtr("venue:binance"),
 		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
 		AuthInfo: &storagepb.AuthInfo{AppId: "canary", AppKey: "key"},
 	})(t.Context())
@@ -84,10 +108,12 @@ func TestStorageMarketCanaryRejectsInvalidFrequency(t *testing.T) {
 
 func canaryRow(at time.Time, closeValue, volumeValue float64) *storagepb.TimeSeriesRow {
 	return &storagepb.TimeSeriesRow{
-		Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano)},
+		Key: &storagepb.TimeSeriesKey{DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: "venue:binance"},
 		Fields: []*storagepb.FieldValue{
 			{FieldId: "market_kline.close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: closeValue}}},
 			{FieldId: "market_kline.volume", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: volumeValue}}},
 		},
 	}
 }
+
+func stringPtr(value string) *string { return &value }

@@ -98,7 +98,7 @@ func (s *MetadataSync) syncTargetDatasetAfterFactorMetadata(ctx context.Context,
 	}
 	dataSourceID := source.GetDataSourceId()
 	if strings.TrimSpace(dataSourceID) == "" {
-		dataSourceID = DataSourceIDFromDataset(sourceDataset)
+		return fmt.Errorf("source dataset %s/%s must define data_source_id", spaceID, sourceDataset)
 	}
 	if strings.TrimSpace(source.GetDataNodeId()) == "" || strings.TrimSpace(source.GetKeepDuration()) == "" {
 		return fmt.Errorf("source dataset %s/%s must define data_node_id and keep_duration", spaceID, sourceDataset)
@@ -248,7 +248,7 @@ func (s *MetadataSync) createFactor(ctx context.Context, spaceID string, factor 
 		Attributes: map[string]string{
 			"input_columns_json": string(inputColumnsJSON),
 			"outputs_json":       string(outputsJSON),
-			"lookback_rows":      strconv.Itoa(factor.LookbackRows),
+			"lookback_periods":   strconv.Itoa(factor.LookbackPeriods),
 		},
 	}
 
@@ -483,16 +483,6 @@ func activationNotReadyError(spaceID, datasetID string, checks []*storagepb.Data
 		failed = append(failed, "metadata activation checks are not ready")
 	}
 	return fmt.Errorf("dataset %s/%s activation readiness failed: %s", spaceID, datasetID, strings.Join(failed, "; "))
-}
-
-// DataSourceIDFromDataset infers the Storage data_source_id from a dataset id.
-// Seeded market datasets follow "<source>_..." (for example binance_spot_kline).
-func DataSourceIDFromDataset(datasetID string) string {
-	parts := strings.Split(strings.TrimSpace(datasetID), "_")
-	if len(parts) == 0 || parts[0] == "" {
-		return strings.TrimSpace(datasetID)
-	}
-	return parts[0]
 }
 
 func columnDisplayName(columnName string) string {

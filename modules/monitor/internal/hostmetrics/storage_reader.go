@@ -128,7 +128,9 @@ func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := r.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 			AuthInfo:  r.auth,
-			Keys:      []*storagepb.TimeSeriesKey{{SpaceId: r.cfg.SpaceID, DatasetId: dataset, SubjectId: agentID, Freq: r.cfg.Frequency}},
+			SpaceId:   r.cfg.SpaceID,
+			DatasetId: dataset,
+			Selectors: []*storagepb.TimeSeriesSelector{{SpaceId: r.cfg.SpaceID, DatasetId: dataset, SubjectId: agentID, Freq: r.cfg.Frequency}},
 			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
 			Order:     storagepb.SortOrder_SORT_ORDER_DESC,
 			Page:      &commonpb.Page{Page: pageNo, Size: uint32(pageSize)},

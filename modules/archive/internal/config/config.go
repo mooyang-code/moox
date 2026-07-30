@@ -46,7 +46,7 @@ type EventBusConfig struct {
 	DedupeRetention time.Duration `yaml:"dedupe_retention"`
 }
 
-const ArchiveConsumer = "moox_archive_kline_v1"
+const ArchiveConsumer = "moox_archive_kline_v2"
 
 type MaterializeConfig struct {
 	PendingRows     int           `yaml:"pending_rows"`
@@ -60,6 +60,13 @@ type StorageRPCConfig struct {
 	GatewayNodeID string `yaml:"gateway_node_id"`
 	KeyID         string `yaml:"key_id"`
 	HMACKeyFile   string `yaml:"hmac_key_file"`
+}
+
+func (c StorageRPCConfig) TargetNodeID() string {
+	if nodeID := strings.TrimSpace(c.GatewayNodeID); nodeID != "" {
+		return nodeID
+	}
+	return gatewayauth.ServiceGatewayNodeID()
 }
 
 type COSConfig struct {
@@ -82,10 +89,9 @@ func Default() *Config {
 			StateDir: "../data/archive-state",
 			DeviceID: "parquet-local",
 			Sources: map[string]SourceConfig{
-				"stock_cn":       {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
-				"stock_us":       {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
-				"crypto_binance": {Datasets: []string{"spot_kline", "swap_kline"}},
-				"crypto_okx":     {Datasets: []string{"spot_kline", "swap_kline"}},
+				"stock_cn": {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
+				"stock_us": {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
+				"crypto":   {Datasets: []string{"spot_kline_1h", "perpetual_kline_1h"}},
 			},
 			EventBus: EventBusConfig{
 				URLs:     []string{"nats://127.0.0.1:4222"},
@@ -205,7 +211,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("archive directory %s must not be a symlink", p)
 		}
 	}
-	allowed := map[string]bool{"stock_cn": true, "stock_us": true, "crypto_binance": true, "crypto_okx": true}
+	allowed := map[string]bool{"stock_cn": true, "stock_us": true, "crypto": true}
 	if len(c.Archive.Sources) == 0 {
 		return fmt.Errorf("archive sources are required")
 	}

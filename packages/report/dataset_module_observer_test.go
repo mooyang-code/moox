@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 )
 
@@ -69,6 +70,43 @@ func TestDatasetModuleObserverDoesNotRecordRejectedDatasetFactAsModuleSuccess(t 
 		t.Fatal(gatherErr)
 	}
 	requireNoMetricFamily(t, families, ModuleMetricName("collector", ModuleMetricLastSuccess))
+}
+
+func TestDatasetModuleObserverRecordsIncompleteDatasetAsModuleError(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	datasets, err := NewDatasetMetrics(registry, "factor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := DatasetKey{SpaceID: "crypto", DatasetID: "factor_result", Freq: "1m"}
+	if err := datasets.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: time.Minute}}); err != nil {
+		t.Fatal(err)
+	}
+	module, err := NewModuleMetrics(registry, "factor", []string{"factor-realtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer, err := NewDatasetModuleObserver(datasets, module, "calculate", "factor-realtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := observer.ObserveRun(DatasetObservation{
+		Key: key, Result: "incomplete", FinishedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(datasets.runs.WithLabelValues("crypto", "factor_result", "1m", "incomplete")); got != 1 {
+		t.Fatalf("incomplete dataset runs=%v, want 1", got)
+	}
+	if got := testutil.ToFloat64(module.runs.WithLabelValues("calculate", "error", "factor-realtime")); got != 1 {
+		t.Fatalf("module error runs=%v, want 1", got)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNoMetricFamily(t, families, ModuleMetricName("factor", ModuleMetricLastSuccess))
 }
 
 func requireNoMetricFamily(t *testing.T, families []*dto.MetricFamily, name string) {

@@ -36,7 +36,7 @@
           <a-table-column title="输出列" :width="180" :ellipsis="true" :tooltip="true">
             <template #cell="{ record }">{{ record.outputs.join(", ") }}</template>
           </a-table-column>
-          <a-table-column title="回看行数" data-index="lookback_rows" :width="100" />
+          <a-table-column title="回看周期数" data-index="lookback_periods" :width="110" />
           <a-table-column title="源码Hash" data-index="source_hash" :width="220" :ellipsis="true" :tooltip="true" />
           <a-table-column title="状态" :width="100">
             <template #cell="{ record }">
@@ -86,8 +86,8 @@
             <a-option value="disabled">disabled</a-option>
           </a-select>
         </a-form-item>
-        <a-form-item field="lookback_rows" label="回看行数" required>
-          <a-input-number v-model="form.lookback_rows" :min="1" />
+        <a-form-item field="lookback_periods" label="回看周期数" required>
+          <a-input-number v-model="form.lookback_periods" :min="1" />
         </a-form-item>
         <a-form-item class="form-span-2" field="input_columns" label="输入列" required>
           <a-input-tag v-model="inputTags" allow-clear placeholder="输入列名后回车" />
@@ -132,7 +132,7 @@ const form = reactive<FactorDef>({
   input_columns: ["close"],
   outputs: ["bias_20"],
   params_json: `{"windows":[20]}`,
-  lookback_rows: 200,
+  lookback_periods: 200,
   status: "disabled"
 });
 
@@ -164,17 +164,17 @@ function resetForm() {
     source_code: [
       "def compute(df, params):",
       "    close = df['close']",
-      "    outputs = {}",
+      "    result = df[['data_time', 'series_tag']].copy()",
       "    for window in params['windows']:",
       "        average = close.rolling(window, min_periods=1).mean()",
-      "        outputs[f'bias_{window}'] = close / average - 1",
-      "    return outputs",
+      "        result[f'bias_{window}'] = close / average - 1",
+      "    return result",
       ""
     ].join("\n"),
     input_columns: ["close"],
     outputs: ["bias_20"],
     params_json: `{"windows":[20]}`,
-    lookback_rows: 200,
+    lookback_periods: 200,
     status: "disabled"
   });
   inputTags.value = ["close"];

@@ -211,6 +211,21 @@ func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
 	}
 }
 
+func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
+	cfg := Default()
+	cfg.SysDeploy.Enabled = false
+	cfg.MarketCanary.Subjects[0].SeriesTag = nil
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires series_tag") {
+		t.Fatalf("Validate() error = %v, want missing series_tag error", err)
+	}
+
+	empty := ""
+	cfg.MarketCanary.Subjects[0].SeriesTag = &empty
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("explicit default series tag must be valid: %v", err)
+	}
+}
+
 func TestMonitorConfigRejectsLegacyHostRetention(t *testing.T) {
 	_, err := Load(writeConfig(t, "metrics:\n  host_storage:\n    retention: 72h\n"))
 	if err == nil {

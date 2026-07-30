@@ -1,7 +1,6 @@
 # K 线测试样本
 
-> 本文中的 `series_tag` 列和共享 crypto Dataset 是改造后的目标样本契约；计划执行前
-> 现有 CSV 尚未转换。
+> 本文中的 `series_tag` 列和共享 crypto Dataset 是当前样本契约。
 
 本目录保存从本机 `Documents/量化数据` 抽取并标准化的小规模真实行情样本，供
 Storage、Factor、View 和数据导入测试使用。

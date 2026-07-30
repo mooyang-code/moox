@@ -11,6 +11,13 @@ spaces:
 
 data_sources:
   - space_id: crypto
+    data_source_id: crypto_market
+    name: 加密货币聚合行情
+    kind: internal
+    market: crypto
+    timezone: UTC
+    status: active
+  - space_id: crypto
     data_source_id: binance
     name: 币安
     kind: exchange
@@ -50,14 +57,14 @@ subject_symbols:
 
 datasets:
   - space_id: crypto
-    dataset_id: binance_spot_kline
-    data_source_id: binance
-    name: 币安现货K线
-    description: Binance spot OHLCV kline facts
+    dataset_id: spot_kline_1h
+    data_source_id: crypto_market
+    name: 加密货币现货K线
+    description: Shared spot OHLCV facts; venue is carried by series_tag
     data_kind: time_series
     data_node_id: storage-node-0
     keep_duration: 4320h
-    freqs: ["1m", "1h", "1d"]
+    freqs: ["1h"]
     status: disabled
   - space_id: crypto
     dataset_id: binance_spot_symbols
@@ -82,11 +89,11 @@ datasets:
 
 views:
   - space_id: crypto
-    view_id: binance_spot_kline_view
+    view_id: spot_kline_1h_view
     name: 现货行情视图
-    primary_dataset_id: binance_spot_kline
-    dataset_ids: [binance_spot_kline]
-    grain_keys: [subject_id, freq, data_time]
+    primary_dataset_id: spot_kline_1h
+    dataset_ids: [spot_kline_1h]
+    grain_keys: [subject_id, freq, data_time, series_tag]
     engine: duckdb
     keep_duration: 4320h
     status: active
@@ -109,14 +116,21 @@ views:
     keep_duration: "0"
     status: active
 
+devices:
+  - device_id: parquet-local
+    name: market-parquet-archive
+    engine: parquet
+    endpoint: ../data/archive
+    status: active
+
 dataset_subjects:
   - space_id: crypto
-    dataset_id: binance_spot_kline
+    dataset_id: spot_kline_1h
     subject_id: APT-USDT
     subject_role: normal
     status: active
   - space_id: crypto
-    dataset_id: binance_spot_kline
+    dataset_id: spot_kline_1h
     subject_id: AR-USDT
     subject_role: normal
     status: active
@@ -259,7 +273,7 @@ fields:
 
 dataset_columns:
   - space_id: crypto
-    dataset_id: binance_spot_kline
+    dataset_id: spot_kline_1h
     column_name: open
     attributes:
       display_name: 开盘价
@@ -269,7 +283,7 @@ dataset_columns:
     required: true
     status: active
   - space_id: crypto
-    dataset_id: binance_spot_kline
+    dataset_id: spot_kline_1h
     column_name: high
     attributes:
       display_name: 最高价
@@ -279,7 +293,7 @@ dataset_columns:
     required: true
     status: active
   - space_id: crypto
-    dataset_id: binance_spot_kline
+    dataset_id: spot_kline_1h
     column_name: low
     attributes:
       display_name: 最低价
@@ -289,7 +303,7 @@ dataset_columns:
     required: true
     status: active
   - space_id: crypto
-    dataset_id: binance_spot_kline
+    dataset_id: spot_kline_1h
     column_name: close
     attributes:
       display_name: 收盘价
@@ -299,7 +313,7 @@ dataset_columns:
     required: true
     status: active
   - space_id: crypto
-    dataset_id: binance_spot_kline
+    dataset_id: spot_kline_1h
     column_name: volume
     attributes:
       display_name: 成交量
@@ -308,7 +322,7 @@ dataset_columns:
     value_type: double
     status: active
   - space_id: crypto
-    dataset_id: binance_spot_kline
+    dataset_id: spot_kline_1h
     column_name: quote_volume
     attributes:
       display_name: 成交额
@@ -317,7 +331,7 @@ dataset_columns:
     value_type: double
     status: active
   - space_id: crypto
-    dataset_id: binance_spot_kline
+    dataset_id: spot_kline_1h
     column_name: trade_num
     attributes:
       display_name: 成交笔数

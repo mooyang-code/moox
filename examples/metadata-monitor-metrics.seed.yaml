@@ -30,7 +30,7 @@ datasets:
     status: disabled
 
 views:
-  - {space_id: moox_system, view_id: moox_service_metrics_view, name: 服务指标视图, primary_dataset_id: moox_service_metrics, dataset_ids: [moox_service_metrics], grain_keys: [subject_id, freq, data_time], filter_json: '{"freq":"30s"}', engine: duckdb, keep_duration: 4320h, status: active}
+  - {space_id: moox_system, view_id: moox_service_metrics_view, name: 服务指标视图, primary_dataset_id: moox_service_metrics, dataset_ids: [moox_service_metrics], grain_keys: [subject_id, freq, data_time, series_tag], filter_json: '{"freq":"30s"}', engine: duckdb, keep_duration: 4320h, status: active}
 
 fields:
   - {space_id: moox_system, field_id: monitor_metric_value, name: Metric value, value_type: double, status: active}

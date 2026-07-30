@@ -14,6 +14,7 @@ import {
   buildSCFNodeDefinitions,
   buildSymbolDatasetContract,
   collectKlineWriteEvidence,
+  exactKlinePointReadRequest,
   fieldContractMatches,
   fleetCLSTopicID,
   hasMorePages,
@@ -315,12 +316,10 @@ test("validates sampled 1m OHLCV rows", () => {
     subject_id: "BTC-USDT",
     freq: "1m",
     data_time: "2026-07-27T12:34:00Z",
+    series_tag: "venue:binance",
   };
   const row = {
-    key: {
-      ...expectedKey,
-      dimensions: {},
-    },
+    key: { ...expectedKey },
     fields: [
       field("open", 100),
       field("high", 110),
@@ -335,6 +334,30 @@ test("validates sampled 1m OHLCV rows", () => {
   const invalid = structuredClone(row);
   invalid.fields.find((item) => item.field_id === "high").value = typed(99);
   assert.throws(() => validateKlineStorageRow(invalid, invalid.key), /high/);
+});
+
+test("builds independent exact Primary point reads for multiple periods", () => {
+  const base = {
+    space_id: "crypto",
+    dataset_id: "spot_kline_1h",
+    subject_id: "BTC-USDT",
+    freq: "1H",
+    series_tag: "venue:binance",
+  };
+  const first = exactKlinePointReadRequest(
+    { ...base, data_time: "2026-07-29T00:00:00Z" },
+    ["close"],
+  );
+  const second = exactKlinePointReadRequest(
+    { ...base, data_time: "2026-07-29T01:00:00Z" },
+    ["close"],
+  );
+
+  assert.notDeepEqual(first.keys, second.keys);
+  assert.equal(first.keys[0].time_series.data_time, "2026-07-29T00:00:00Z");
+  assert.equal(second.keys[0].time_series.data_time, "2026-07-29T01:00:00Z");
+  assert.equal(first.keys[0].time_series.series_tag, "venue:binance");
+  assert.equal("time_range" in first, false);
 });
 
 test("never places storage endpoints or secrets in job params", () => {

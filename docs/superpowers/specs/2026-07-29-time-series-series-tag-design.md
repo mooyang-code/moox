@@ -1,7 +1,7 @@
 # Time-Series `series_tag` 统一设计
 
 **日期：** 2026-07-29
-**状态：** 已确认，待实施
+**状态：** 已实现；生产发布与真实跨模块 E2E 验收待后续完成
 **适用范围：** Storage、View、Archive、Factor，以及所有时序读写方
 
 ## 1. 背景与目标
@@ -16,7 +16,7 @@
 Map 规范化、查询语义、索引和 Python 分组复杂度带入整个链路。个人量化场景中，
 实际需求大多只是给一条序列附加一个稳定身份，不需要通用多维分析引擎。
 
-本设计将整个项目统一为一个可选的不透明字符串 `series_tag`：
+当前实现已将整个项目统一为一个可选的不透明字符串 `series_tag`：
 
 ```text
 venue:binance
@@ -227,7 +227,7 @@ Parquet 系统列使用：
 | 列 | 类型 | 要求 |
 | --- | --- | --- |
 | `candle_begin_time` | `TIMESTAMP(NANOS, UTC)` | 非空 |
-| `series_tag` | UTF-8 string | 非空、文件内为常量，并与路径解码值一致 |
+| `series_tag` | UTF-8 string | NOT NULL、文件内为常量，并与路径解码值一致；默认序列为 `""` |
 
 单个文件只包含一个 tag，因此文件内按：
 
@@ -306,7 +306,7 @@ def compute(df, params):
 
 ### 7.4 `lookback_periods`
 
-原 `lookback_rows` 改名为 `lookback_periods`。一个 period 是一个不同的
+旧 `lookback_rows` 已删除，当前字段为 `lookback_periods`。一个 period 是一个不同的
 `data_time`，而不是一条物理行。同一时间点存在 10 个 tag 仍只算一个 period。
 
 读取目标 chunk、历史上下文和历史修正的向后影响范围，都必须在完整 tag 集合上按

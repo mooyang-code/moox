@@ -141,25 +141,33 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		targets = append(targets, target)
 	}
 	sort.Strings(targets)
+	totalFactors := 0
+	for _, factors := range groups {
+		totalFactors += len(factors)
+	}
 	factorCount := 0
-	for i, target := range targets {
-		currentTaskID := taskID
-		if len(targets) > 1 {
-			currentTaskID = fmt.Sprintf("%s-%d", taskID, i+1)
+	taskIndex := 0
+	for _, target := range targets {
+		for _, factor := range groups[target] {
+			taskIndex++
+			currentTaskID := taskID
+			if totalFactors > 1 {
+				currentTaskID = fmt.Sprintf("%s-%d", taskID, taskIndex)
+			}
+			task, buildErr := scheduler.BuildTask(scheduler.TaskScope{
+				TaskID: currentTaskID, TriggerType: "manual", SpaceID: cfg.SpaceID,
+				SourceDataset: cfg.DatasetID, TargetDataset: target,
+				SubjectID: cfg.SubjectID, Freq: cfg.Freq,
+				StartTime: cfg.StartTime, EndTime: cfg.EndTime,
+			}, factor, runtimeCfg.FactorsDir)
+			if buildErr != nil {
+				return buildErr
+			}
+			if runErr := runner.Run(ctx, task); runErr != nil {
+				return runErr
+			}
+			factorCount++
 		}
-		task, buildErr := scheduler.BuildTask(scheduler.TaskScope{
-			TaskID: currentTaskID, TriggerType: "manual", SpaceID: cfg.SpaceID,
-			SourceDataset: cfg.DatasetID, TargetDataset: target,
-			SubjectID: cfg.SubjectID, Freq: cfg.Freq,
-			StartTime: cfg.StartTime, EndTime: cfg.EndTime,
-		}, groups[target], runtimeCfg.FactorsDir)
-		if buildErr != nil {
-			return buildErr
-		}
-		if runErr := runner.Run(ctx, task); runErr != nil {
-			return runErr
-		}
-		factorCount += len(groups[target])
 	}
 	elapsed := time.Since(started).Milliseconds()
 	return json.NewEncoder(out).Encode(map[string]any{

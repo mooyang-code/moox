@@ -2,7 +2,12 @@
 
 独立采集控制面与 SCF 运行时模块。
 
-当前实现以 Binance 标的和 K 线采集为主。目标架构将引入 `stock_cn`、`stock_us`、`crypto_binance`、`crypto_okx` Market Module，并在模块内部完成多 Provider 路由、质量裁决和完整性补洞。目标设计见 [内置市场行情采集架构](../../docs/内置市场行情采集架构.md)，在对应代码落地前，本文其余部分仍以当前实现为准。
+当前实现以 Binance 标的和 K 线采集为主。目标架构将引入 `stock_cn`、`stock_us`、
+`crypto` Market Module，并在模块内部完成多 Provider 路由、质量裁决和完整性补洞。
+Binance/OKX 写入共享 crypto Dataset，以 scalar `series_tag` 区分交易场所，不按 venue
+复制 Dataset 或 Market Module。目标设计见
+[内置市场行情采集架构](../../docs/内置市场行情采集架构.md)，在对应代码落地前，
+本文其余部分仍以当前实现为准。
 
 ## 职责边界
 
@@ -101,7 +106,11 @@ admin 网关
 keepalive 会下发真实的 `service_gateway_target`，完成首次通信初始化；keepalive 不
 拉取或执行任务。本地默认值指向 Node Service Gateway，仅用于开发调试。
 
-目标市场架构把 SCF 定位为无状态、有界、可重试的执行器。所有 Market Module 复用同一代码包，但按 Space 分别部署 `stock_cn`、`stock_us`、`crypto_binance`、`crypto_okx` 函数，并以 `MOOX_SPACE_ID` 固定执行范围。Provider 路由、全局限频和缺口规划留在 `moox-collector` 控制面；SCF 达到时间、页数或行数预算时返回 `continuation_cursor`，由控制面创建后续 JobItem。
+目标市场架构把 SCF 定位为无状态、有界、可重试的执行器。所有 Market Module 复用
+同一代码包，但按 Space 分别部署 `stock_cn`、`stock_us`、`crypto` 函数，并以
+`MOOX_SPACE_ID` 固定执行范围。Provider 路由、全局限频和缺口规划留在
+`moox-collector` 控制面；SCF 达到时间、页数或行数预算时返回
+`continuation_cursor`，由控制面创建后续 JobItem。
 
 每个 SCF 进程只有一个 NATS 连接和一个常驻 taskrunner，内部绑定 registry 声明的多个
 JobType。`execute_at` 缺失或已到期时立即执行；未来时间通过 JetStream 延迟重投。

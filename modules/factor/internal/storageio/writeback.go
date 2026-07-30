@@ -12,38 +12,42 @@ import (
 func (c *Client) WriteFactorPatch(
 	ctx context.Context,
 	task *engine.FactorTask,
-	targetTimes []time.Time,
 	result *engine.FactorResult,
 ) (uint64, error) {
 	if task == nil || result == nil {
 		return 0, fmt.Errorf("task and result are required")
 	}
-	if len(result.Columns) == 0 {
+	if len(result.Rows) == 0 {
 		return 0, nil
 	}
-	for name, values := range result.Columns {
-		if len(values) < len(targetTimes) {
-			return 0, fmt.Errorf("factor column %s has %d values for %d target rows", name, len(values), len(targetTimes))
-		}
-	}
-	rows := make([]*storagepb.RowFieldUpsert, 0, len(targetTimes))
+	rows := make([]*storagepb.RowFieldUpsert, 0, len(result.Rows))
 	computedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	for i, targetTime := range targetTimes {
+	for i, resultRow := range result.Rows {
+		if resultRow.DataTime.IsZero() {
+			return 0, fmt.Errorf("factor result row %d data_time is required", i)
+		}
 		row := &storagepb.RowFieldUpsert{
 			Key: &storagepb.RowKey{
 				SpaceId: task.SpaceID, DatasetId: task.TargetDataset,
 				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 					SubjectId: task.SubjectID, Freq: task.Freq,
-					DataTime: targetTime.UTC().Format(time.RFC3339Nano),
+					DataTime:  resultRow.DataTime.UTC().Format(time.RFC3339Nano),
+					SeriesTag: resultRow.SeriesTag,
 				}},
 			},
 			Attributes: map[string]*storagepb.TypedValue{
+				"factor.id":             stringValue(task.Factor.FactorID),
+				"factor.source_hash":    stringValue(task.Factor.SourceHash),
 				"factor.parent_task_id": stringValue(task.TaskID),
 				"factor.computed_at":    stringValue(computedAt),
 			},
 		}
-		for name, values := range result.Columns {
-			if values[i] == nil {
+		for _, name := range task.Factor.Outputs {
+			value, exists := resultRow.Values[name]
+			if !exists {
+				return 0, fmt.Errorf("factor result row %d is missing output %s", i, name)
+			}
+			if value == nil {
 				row.Fields = append(row.Fields, &storagepb.FieldValue{
 					FieldId: name,
 					Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{
@@ -52,16 +56,13 @@ func (c *Client) WriteFactorPatch(
 				})
 				continue
 			}
-			value, ok := asFloat64(values[i])
+			number, ok := asFloat64(value)
 			if !ok {
-				return 0, fmt.Errorf("factor column %s returned non-numeric value %T", name, values[i])
+				return 0, fmt.Errorf("factor output %s returned non-numeric value %T", name, value)
 			}
-			row.Fields = append(row.Fields, doubleField(name, value))
+			row.Fields = append(row.Fields, doubleField(name, number))
 		}
 		rows = append(rows, row)
-	}
-	if len(rows) == 0 {
-		return 0, nil
 	}
 	rsp, err := c.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: c.auth, Rows: rows})
 	if err != nil {

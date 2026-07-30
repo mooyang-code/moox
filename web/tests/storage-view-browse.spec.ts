@@ -52,4 +52,24 @@ describe("storage view browse workflows", () => {
       ]
     });
   });
+
+  it("serializes series tag emptiness against the canonical empty tag", () => {
+    expect(
+      buildViewFilterExprs([
+        { fieldName: "series_tag", operator: "empty", valueType: "FIELD_VALUE_TYPE_STRING" },
+        { fieldName: "series_tag", operator: "not_empty", valueType: "FIELD_VALUE_TYPE_STRING" }
+      ])
+    ).toEqual({
+      group_logical: "FILTER_LOGICAL_AND",
+      groups: [
+        {
+          logical: "FILTER_LOGICAL_AND",
+          conds: [
+            { column: "series_tag", op: "FILTER_OP_EQ", values: [{ string_value: "" }] },
+            { column: "series_tag", op: "FILTER_OP_NE", values: [{ string_value: "" }] }
+          ]
+        }
+      ]
+    });
+  });
 });

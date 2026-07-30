@@ -57,18 +57,18 @@ func (s *fakeNATSSession) Close() error {
 func TestBestEffortHandlerACKsAfterMemoryAdd(t *testing.T) {
 	now := time.Date(2026, 7, 26, 9, 30, 0, 0, time.UTC)
 	batcher := trigger.NewEventBatcher(time.Second, []domain.FactorBinding{
-		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+		binding("bias", "spot_kline_1h", domain.SubjectModeAll, "[]"),
 	})
 	handler := storageEventHandler{eventBatcher: batcher}
 	got := handler.Handle(context.Background(), encodedDelivery(t,
-		event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now)))
+		event("crypto", "spot_kline_1h", "BTC-USDT", "1m", now)))
 	require.Equal(t, jetstream.ACK, got.Decision)
 	require.Len(t, batcher.Flush(time.Now().Add(2*time.Second)), 1)
 }
 
 func TestBestEffortHandlerRetriesWhenBatcherUnavailable(t *testing.T) {
 	got := (storageEventHandler{}).Handle(context.Background(), encodedDelivery(t,
-		event("crypto", "binance_spot_kline", "BTC-USDT", "1m", time.Now())))
+		event("crypto", "spot_kline_1h", "BTC-USDT", "1m", time.Now())))
 	require.Equal(t, jetstream.RETRY, got.Decision)
 }
 
@@ -207,7 +207,7 @@ func TestConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	batcher := trigger.NewEventBatcher(20*time.Millisecond, []domain.FactorBinding{
-		binding("bias", "binance_spot_kline", domain.SubjectModeAll, "[]"),
+		binding("bias", "spot_kline_1h", domain.SubjectModeAll, "[]"),
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -231,9 +231,9 @@ func TestConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := event("crypto", "binance_spot_kline", "BTC-USDT", "1m", now)
+	payload := event("crypto", "spot_kline_1h", "BTC-USDT", "1m", now)
 	if _, err = publisher.Publish(ctx, events.DatasetRowsUpserted, payload, events.PublishOptions{
-		EventID: "factor-real-e2e-1", OccurredAt: now, SpaceID: "crypto", SubjectID: "binance_spot_kline",
+		EventID: "factor-real-e2e-1", OccurredAt: now, SpaceID: "crypto", SubjectID: "spot_kline_1h",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 		BindingID:     "b1",
 		FactorID:      "bias",
 		SpaceID:       "crypto",
-		SourceDataset: "binance_spot_kline",
+		SourceDataset: "spot_kline_1h",
 		Freq:          "1m",
 		SubjectMode:   domain.SubjectModeAll,
 		SubjectsJSON:  "[]",
@@ -264,7 +264,7 @@ func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
 		Status:        domain.BindingStatusEnabled,
 	}})
 
-	d.Add(rowsChangedEvent("crypto", "binance_spot_kline", "1m", now, symbols), now)
+	d.Add(rowsChangedEvent("crypto", "spot_kline_1h", "1m", now, symbols), now)
 	tasks := d.Flush(now.Add(time.Second))
 	if len(tasks) != len(symbols) {
 		t.Fatalf("tasks = %d, want %d", len(tasks), len(symbols))
@@ -288,7 +288,7 @@ func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
 			BindingID:     "b1",
 			FactorID:      "bias",
 			SpaceID:       "crypto",
-			SourceDataset: "binance_spot_kline",
+			SourceDataset: "spot_kline_1h",
 			Freq:          "1m",
 			SubjectMode:   domain.SubjectModeAll,
 			SubjectsJSON:  "[]",
@@ -299,7 +299,7 @@ func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
 			BindingID:     "b2",
 			FactorID:      "volume",
 			SpaceID:       "crypto",
-			SourceDataset: "binance_spot_kline",
+			SourceDataset: "spot_kline_1h",
 			Freq:          "1m",
 			SubjectMode:   domain.SubjectModeAll,
 			SubjectsJSON:  "[]",
@@ -308,7 +308,7 @@ func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
 		},
 	})
 
-	d.Add(rowsChangedEvent("crypto", "binance_spot_kline", "1m", now, []string{"BTC-USDT"}), now)
+	d.Add(rowsChangedEvent("crypto", "spot_kline_1h", "1m", now, []string{"BTC-USDT"}), now)
 	tasks := d.Flush(now.Add(time.Second))
 	if len(tasks) != 2 {
 		t.Fatalf("tasks = %d, want 2: %+v", len(tasks), tasks)

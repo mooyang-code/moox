@@ -99,12 +99,18 @@ func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(a.readReq.GetKeys()) != 1 {
-		t.Fatalf("keys=%d, want 1", len(a.readReq.GetKeys()))
+	if len(a.readReq.GetSelectors()) != 1 {
+		t.Fatalf("selectors=%d, want 1", len(a.readReq.GetSelectors()))
 	}
-	key := a.readReq.GetKeys()[0]
+	if a.readReq.GetSpaceId() != "moox_system" || a.readReq.GetDatasetId() != "moox_service_metrics" {
+		t.Fatalf("request scope=%s/%s", a.readReq.GetSpaceId(), a.readReq.GetDatasetId())
+	}
+	key := a.readReq.GetSelectors()[0]
 	if key.GetSubjectId() != "series-1" {
 		t.Fatalf("query key=%+v, want series subject", key)
+	}
+	if key.SeriesTag != nil {
+		t.Fatal("metrics history selector must omit series_tag")
 	}
 }
 func TestStorageAdapterRejectsUnreadyDataNode(t *testing.T) {

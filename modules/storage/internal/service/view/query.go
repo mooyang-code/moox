@@ -50,17 +50,14 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if err := s.authorize(req.GetAuthInfo()); err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if len(req.GetKeys()) == 0 && req.GetTimeRange() == nil && req.GetFilter() == nil {
+	if len(req.GetSelectors()) == 0 && req.GetTimeRange() == nil && req.GetFilter() == nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
 	}
-	keys := make([]*pb.RowKey, 0, len(req.GetKeys()))
-	for _, k := range req.GetKeys() {
-		if k == nil {
-			return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("time-series key is required"))}, nil
-		}
-		keys = append(keys, timeSeriesRowKey(k))
-	}
 	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetViewId())
+	selectors, err := s.timeSeriesSelectors(indexID, req)
+	if err != nil {
+		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	engine, err := s.engineFor(indexID)
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
@@ -74,7 +71,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if req.GetLimit() > 0 {
 		offset = 0
 	}
-	spec := viewindex.QuerySpec{Keys: keys, TimeRange: req.GetTimeRange(), Groups: filterGroups(req.GetFilter()), GroupLogical: filterLogical(req.GetFilter()), Sorts: req.GetSorts(), Includes: req.GetColumnNames(), Offset: offset, Limit: limit, TotalMode: req.GetTotalMode()}
+	spec := viewindex.QuerySpec{Selectors: selectors, TimeRange: req.GetTimeRange(), Groups: filterGroups(req.GetFilter()), GroupLogical: filterLogical(req.GetFilter()), Sorts: req.GetSorts(), Includes: req.GetColumnNames(), Offset: offset, Limit: limit, TotalMode: req.GetTotalMode()}
 	rows, total, err := engine.Query(ctx, indexID, spec)
 	if err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
@@ -87,8 +84,12 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if statsErr != nil {
 		log.Printf("storage view query stat failed space=%s view=%s index=%s: %v", req.GetSpaceId(), req.GetViewId(), indexID, statsErr)
 	}
-	complete := runtimeCoverageComplete(runtime, req.GetTimeRange(), stats)
-	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), ServedIndexedFrom: stats.IndexedFrom, ServedIndexedTo: stats.IndexedTo, Complete: complete}, nil
+	complete := statsErr == nil && len(out) > 0 && runtimeCoverageComplete(runtime, req.GetTimeRange(), stats)
+	indexedFrom, indexedTo := "", ""
+	if statsErr == nil {
+		indexedFrom, indexedTo = stats.IndexedFrom, stats.IndexedTo
+	}
+	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), ServedIndexedFrom: indexedFrom, ServedIndexedTo: indexedTo, Complete: complete}, nil
 }
 
 // SearchRecordRows pushes full-text, structured filters, sorting, and paging
@@ -192,11 +193,7 @@ func rowToTimeSeriesKey(k *pb.RowKey) *pb.TimeSeriesKey {
 	if k == nil || k.GetTimeSeries() == nil {
 		return nil
 	}
-	return &pb.TimeSeriesKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), SubjectId: k.GetTimeSeries().GetSubjectId(), Freq: k.GetTimeSeries().GetFreq(), DataTime: k.GetTimeSeries().GetDataTime(), Dimensions: k.GetTimeSeries().GetDimensions()}
-}
-
-func timeSeriesRowKey(k *pb.TimeSeriesKey) *pb.RowKey {
-	return &pb.RowKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: k.GetSubjectId(), Freq: k.GetFreq(), DataTime: k.GetDataTime(), Dimensions: k.GetDimensions()}}}
+	return &pb.TimeSeriesKey{SpaceId: k.GetSpaceId(), DatasetId: k.GetDatasetId(), SubjectId: k.GetTimeSeries().GetSubjectId(), Freq: k.GetTimeSeries().GetFreq(), DataTime: k.GetTimeSeries().GetDataTime(), SeriesTag: k.GetTimeSeries().GetSeriesTag()}
 }
 
 func recordRowKey(k *pb.RecordKey) *pb.RowKey {
@@ -242,10 +239,10 @@ func queryErrorCode(err error) pb.ErrorCode {
 }
 
 func queryCoverageComplete(rng *pb.TimeRange, stats viewindex.ViewIndexStats) bool {
-	if rng == nil || (rng.GetStartTime() == "" && rng.GetEndTime() == "") {
-		return true
+	if !stats.Exists || stats.EntryCount == 0 || stats.IndexedFrom == "" || stats.IndexedTo == "" {
+		return false
 	}
-	if stats.EntryCount == 0 || stats.IndexedFrom == "" || stats.IndexedTo == "" {
+	if rng == nil {
 		return false
 	}
 	indexedFrom, err := time.Parse(time.RFC3339Nano, stats.IndexedFrom)
@@ -256,17 +253,23 @@ func queryCoverageComplete(rng *pb.TimeRange, stats viewindex.ViewIndexStats) bo
 	if err != nil {
 		return false
 	}
-	if start := strings.TrimSpace(rng.GetStartTime()); start != "" {
-		requestedStart, err := time.Parse(time.RFC3339Nano, start)
-		if err != nil || requestedStart.Before(indexedFrom) {
-			return false
-		}
+	start := strings.TrimSpace(rng.GetStartTime())
+	end := strings.TrimSpace(rng.GetEndTime())
+	if start == "" || end == "" {
+		return false
 	}
-	if end := strings.TrimSpace(rng.GetEndTime()); end != "" {
-		requestedEnd, err := time.Parse(time.RFC3339Nano, end)
-		if err != nil || requestedEnd.After(indexedTo) {
-			return false
-		}
+	requestedStart, err := time.Parse(time.RFC3339Nano, start)
+	if err != nil || requestedStart.Before(indexedFrom) {
+		return false
+	}
+	requestedEnd, err := time.Parse(time.RFC3339Nano, end)
+	if err != nil || !requestedEnd.After(requestedStart) {
+		return false
+	}
+	// IndexedTo is the inclusive maximum data_time while the query end is
+	// exclusive. One nanosecond beyond the maximum is therefore still covered.
+	if requestedEnd.After(indexedTo) && requestedEnd.Sub(indexedTo) > time.Nanosecond {
+		return false
 	}
 	return true
 }
@@ -276,7 +279,47 @@ func runtimeCoverageComplete(runtime *viewRuntime, rng *pb.TimeRange, stats view
 		return false
 	}
 	runtime.mu.Lock()
-	active := runtime.status == "active" && runtime.active != ""
+	active := runtime.active != ""
 	runtime.mu.Unlock()
 	return active && queryCoverageComplete(rng, stats)
+}
+
+func (s *Service) timeSeriesSelectors(indexID string, req *pb.QueryTimeSeriesRowsReq) ([]viewindex.TimeSeriesSelector, error) {
+	if len(req.GetSelectors()) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(req.GetSpaceId()) == "" {
+		return nil, errors.New("space_id is required")
+	}
+	s.mu.RLock()
+	schema, ok := s.schemas[indexID]
+	s.mu.RUnlock()
+	if !ok || schema.SpaceID == "" || schema.PrimaryDatasetID == "" {
+		return nil, errors.New("view selector scope is unavailable")
+	}
+	if schema.SpaceID != req.GetSpaceId() {
+		return nil, errors.New("request space_id does not match the view")
+	}
+	selectors := make([]viewindex.TimeSeriesSelector, 0, len(req.GetSelectors()))
+	for _, selector := range req.GetSelectors() {
+		if selector == nil {
+			return nil, errors.New("time-series selector is required")
+		}
+		if selector.GetSpaceId() == "" || selector.GetDatasetId() == "" ||
+			selector.GetSubjectId() == "" || selector.GetFreq() == "" {
+			return nil, errors.New("selector space_id, dataset_id, subject_id, and freq are required")
+		}
+		if selector.GetSpaceId() != req.GetSpaceId() || selector.GetSpaceId() != schema.SpaceID {
+			return nil, errors.New("selector space_id does not match the view")
+		}
+		if selector.GetDatasetId() != schema.PrimaryDatasetID {
+			return nil, errors.New("selector dataset_id does not match the view")
+		}
+		selectors = append(selectors, viewindex.TimeSeriesSelector{
+			SpaceID: selector.GetSpaceId(), DatasetID: selector.GetDatasetId(),
+			SubjectID: selector.GetSubjectId(), Freq: selector.GetFreq(),
+			SeriesTag: selector.SeriesTag,
+		})
+	}
+	return selectors, nil
 }

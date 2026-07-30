@@ -77,7 +77,7 @@ var (
 	ObservabilityHealthCheckReported = declareEvent("observability.health.check.reported", 1, "MOOX_OBSERVABILITY", "watchdog", func() proto.Message {
 		return &observabilitypb.HealthCheckReport{}
 	}, validateObservabilityHealthCheckReported)
-	DatasetRowsUpserted = declareEvent("storage.dataset.rows.upserted", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+	DatasetRowsUpserted = declareEvent("storage.dataset.rows.upserted", 2, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)
 	LogicalAccountTargetRequested = declareEvent("trade.target.requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {

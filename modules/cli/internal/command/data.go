@@ -19,7 +19,7 @@ var (
 	dataDatasetID       string
 	dataSubjectID       string
 	dataFreq            string
-	dataDimensions      []string
+	dataSeriesTag       string
 	dataOutputFile      string
 	dataStartTime       string
 	dataEndTime         string
@@ -50,14 +50,11 @@ var dataRowsExportCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
+			selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
 			rsp, err := exportRowsRemote(trpc.BackgroundContext(), dataStorageURL, &pb.ReadTimeSeriesRowsReq{
 				AuthInfo: auth,
-				Keys: []*pb.TimeSeriesKey{{
-					SpaceId:   defaultFlag(dataSpaceID, "default"),
-					DatasetId: datasetID,
-					SubjectId: dataSubjectID,
-					Freq:      dataFreq,
-				}},
+				SpaceId:  defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
+				Selectors: []*pb.TimeSeriesSelector{selector},
 				TimeRange: &pb.TimeRange{
 					StartTime: dataStartTime,
 					EndTime:   dataEndTime,
@@ -73,6 +70,17 @@ var dataRowsExportCmd = &cobra.Command{
 	},
 }
 
+func timeSeriesSelectorForExport(datasetID string, exactSeriesTag bool) *pb.TimeSeriesSelector {
+	selector := &pb.TimeSeriesSelector{
+		SpaceId: defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
+		SubjectId: dataSubjectID, Freq: dataFreq,
+	}
+	if exactSeriesTag {
+		selector.SeriesTag = &dataSeriesTag
+	}
+	return selector
+}
+
 func init() {
 	rootCmd.AddCommand(dataCmd)
 	dataCmd.AddCommand(dataRowsCmd)
@@ -84,7 +92,7 @@ func init() {
 	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "", "Dataset ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSubjectID, "subject", "", "Subject ID")
 	dataRowsExportCmd.Flags().StringVar(&dataFreq, "freq", "1m", "K 线频率")
-	dataRowsExportCmd.Flags().StringArrayVar(&dataDimensions, "dimension", nil, "自定义维度，格式 name=value，可重复")
+	dataRowsExportCmd.Flags().StringVar(&dataSeriesTag, "series-tag", "", "精确序列标签；省略表示全部序列，显式空值表示默认序列")
 	dataRowsExportCmd.Flags().StringVar(&dataStartTime, "start-time", "", "起始时间")
 	dataRowsExportCmd.Flags().StringVar(&dataEndTime, "end-time", "", "结束时间")
 	dataRowsExportCmd.Flags().Uint32Var(&dataPageSize, "page-size", 1000, "最多导出行数")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -141,7 +142,7 @@ func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	return nil
 }
 
-const metadataSchemaVersion = "5"
+const metadataSchemaVersion = "6"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
@@ -166,8 +167,14 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	}
 	var version string
 	err := s.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && version != metadataSchemaVersion) {
+	if err == nil && version == "5" {
+		return errors.New("incompatible storage metadata schema v5; remove the metadata database and run init/import-seed")
+	}
+	if errors.Is(err, sql.ErrNoRows) {
 		return errors.New("incompatible storage metadata schema; reset metadata database")
+	}
+	if err == nil && version != metadataSchemaVersion {
+		return fmt.Errorf("incompatible storage metadata schema v%s; remove the metadata database and run init/import-seed", version)
 	}
 	return err
 }

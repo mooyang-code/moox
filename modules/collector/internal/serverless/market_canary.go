@@ -19,6 +19,7 @@ type MarketCanaryConfig struct {
 	DatasetID            string
 	SubjectID            string
 	Frequency            string
+	SeriesTag            *string
 	Freshness            time.Duration
 	ReturnThreshold      float64
 	VolumeRatioThreshold float64
@@ -43,10 +44,11 @@ func StorageMarketCanaryCheck(reader TimeSeriesReader, cfg MarketCanaryConfig) W
 		startedAt := time.Now().UTC()
 		result := CheckResult{
 			CheckID: "market_canary", Kind: "storage", CheckedAt: startedAt,
-			Target: strings.Join([]string{cfg.SpaceID, cfg.DatasetID, cfg.SubjectID, cfg.Frequency}, "/"),
+			Target: marketCanaryTarget(cfg.SpaceID, cfg.DatasetID, cfg.SubjectID, cfg.Frequency, cfg.SeriesTag),
 		}
 		if reader == nil || strings.TrimSpace(cfg.SpaceID) == "" || strings.TrimSpace(cfg.DatasetID) == "" ||
 			strings.TrimSpace(cfg.SubjectID) == "" || strings.TrimSpace(cfg.Frequency) == "" ||
+			cfg.SeriesTag == nil ||
 			cfg.AuthInfo == nil || strings.TrimSpace(cfg.AuthInfo.GetAppId()) == "" || strings.TrimSpace(cfg.AuthInfo.GetAppKey()) == "" ||
 			cfg.Freshness <= 0 || cfg.ReturnThreshold <= 0 || cfg.VolumeRatioThreshold <= 0 {
 			result.ErrorCode, result.Error = "invalid_config", "market canary Storage scope and thresholds are required"
@@ -72,7 +74,7 @@ func StorageMarketCanaryCheck(reader TimeSeriesReader, cfg MarketCanaryConfig) W
 			result.ErrorCode, result.Error = "invalid_config", "market canary frequency is invalid"
 			return result
 		}
-		result.Target = strings.Join([]string{cfg.SpaceID, cfg.DatasetID, cfg.SubjectID, frequency}, "/")
+		result.Target = marketCanaryTarget(cfg.SpaceID, cfg.DatasetID, cfg.SubjectID, frequency, cfg.SeriesTag)
 		rsp, err := reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 			AuthInfo: cfg.AuthInfo,
 			SpaceId:  cfg.SpaceID, DatasetId: cfg.DatasetID,
@@ -88,7 +90,7 @@ func StorageMarketCanaryCheck(reader TimeSeriesReader, cfg MarketCanaryConfig) W
 			result.ErrorCode, result.Error = "storage_error", "Storage rejected market canary query"
 			return result
 		}
-		bars, err := decodeMarketBars(rsp.GetRows())
+		bars, err := decodeMarketBars(rsp.GetRows(), *cfg.SeriesTag)
 		if err != nil {
 			result.ErrorCode, result.Error = "decode", err.Error()
 			return result
@@ -125,7 +127,7 @@ func recentMarketCanaryKeys(cfg MarketCanaryConfig, frequency string, times []ti
 		keys = append(keys, &storagepb.TimeSeriesKey{
 			SpaceId: cfg.SpaceID, DatasetId: cfg.DatasetID,
 			SubjectId: cfg.SubjectID, Freq: frequency,
-			DataTime: at.Format(time.RFC3339Nano),
+			DataTime: at.Format(time.RFC3339Nano), SeriesTag: *cfg.SeriesTag,
 		})
 	}
 	return keys
@@ -143,11 +145,14 @@ func marketCanaryCandidateCount(freshness, interval time.Duration) (int, error) 
 	return count, nil
 }
 
-func decodeMarketBars(rows []*storagepb.TimeSeriesRow) ([]marketBar, error) {
+func decodeMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([]marketBar, error) {
 	bars := make([]marketBar, 0, len(rows))
 	for _, row := range rows {
 		if row.GetKey() == nil {
 			return nil, fmt.Errorf("market canary row key is missing")
+		}
+		if row.GetKey().GetSeriesTag() != seriesTag {
+			continue
 		}
 		dataTime, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
 		if err != nil {
@@ -174,4 +179,12 @@ func decodeMarketBars(rows []*storagepb.TimeSeriesRow) ([]marketBar, error) {
 		bars = append(bars, marketBar{DataTime: dataTime.UTC(), Close: closeValue, Volume: volumeValue})
 	}
 	return bars, nil
+}
+
+func marketCanaryTarget(spaceID, datasetID, subjectID, frequency string, seriesTag *string) string {
+	tag := "<missing>"
+	if seriesTag != nil {
+		tag = *seriesTag
+	}
+	return strings.Join([]string{spaceID, datasetID, subjectID, frequency, tag}, "/")
 }

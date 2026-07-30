@@ -56,7 +56,7 @@ export function parseArgs(argv) {
     rule: "binance_spot_kline_1h",
     node: "e2e-scf-node",
     package: "moox-collector_dev",
-    dataset: "binance_spot_kline_1h",
+    dataset: "spot_kline_1h",
     e2eNodeId: "e2e-gateway",
     username: "mooxe2eadmin",
     password: "MooxE2E#20260704!",
@@ -134,7 +134,7 @@ Options:
   --rule <rule_id>         Collector rule ID. Default: binance_spot_kline_1h
   --node <node_id>         Cloud runtime node ID. Default: e2e-scf-node
   --package <package_id>   Code package ID. Default: moox-collector_dev
-  --dataset <dataset_id>   Dataset ID. Default: binance_spot_kline_1h
+  --dataset <dataset_id>   Dataset ID. Default: spot_kline_1h
   --e2e-node <node_id>     Admin Gateway node used by SysDeploy checks.
   --state-file <path>      Local state shared by setup/schedule/assert phases.
   --skip-cloud-node-setup  Reuse real deployed CloudNodes; do not create e2e-local.
@@ -476,8 +476,11 @@ async function assertAfterSCF(args) {
     const start = new Date(end.getTime() - 60 * 60 * 1000);
     const rsp = await storagePost(args, token, "view", "QueryTimeSeriesRows", {
       space_id: args.space,
-      view_id: "binance_spot_1h_view",
-      keys: [{ space_id: args.space, subject_id: sample.subject_id, freq: sample.freq }],
+      view_id: "spot_kline_1h_view",
+      selectors: [{
+        space_id: args.space, dataset_id: args.dataset,
+        subject_id: sample.subject_id, freq: sample.freq, series_tag: "venue:binance",
+      }],
       time_range: { start_time: start.toISOString(), end_time: end.toISOString() },
       page: { page: 1, size: 20 },
     });
@@ -867,7 +870,18 @@ async function datasetRowSnapshot(args, token) {
 export function datasetSnapshotRequest(args) {
   return {
     space_id: args.space,
-    view_id: "binance_spot_1h_view",
+    view_id: "spot_kline_1h_view",
+    filter: {
+      groups: [{
+        conds: [{
+          column: "series_tag",
+          op: "FILTER_OP_EQ",
+          values: [{ string_value: "venue:binance" }],
+        }],
+        logical: "FILTER_LOGICAL_AND",
+      }],
+      group_logical: "FILTER_LOGICAL_AND",
+    },
     time_range: { start_time: "1970-01-01T00:00:00Z" },
     sorts: [{ field_name: "data_time", desc: true }],
     page: { page: 1, size: 200 },
@@ -911,6 +925,7 @@ export function collectStorageWriteEvidence(jobItems) {
         dataset_id: expectedDatasetID,
         subject_id: String(item.params?.subject_id || item.params?.symbol || ""),
         freq: String(task.freq || ""),
+        series_tag: "venue:binance",
       };
       const count = Number(task.rows_written);
       if (!Number.isInteger(count) || count < 0) {
@@ -957,14 +972,12 @@ export function assertTaskInstanceWriteEvidence(instances, jobItems) {
 
 async function assertWrittenRowKeysReadable(args, token, keys) {
   const unique = [...new Map(keys.map((key) => [JSON.stringify(stableJSON(key)), key])).values()];
-  for (let offset = 0; offset < unique.length; offset += 50) {
-    const batch = unique.slice(offset, offset + 50);
-    const rsp = await storagePost(args, token, "access", "ReadTimeSeriesRows",
-      primaryWrittenRowsRequest(args, batch));
+  for (const key of unique) {
+    const rsp = await storagePost(args, token, "access", "ReadFields",
+      primaryWrittenRowsRequest(args, key));
     const visible = primaryRowsWithField(rsp.rows || [], "close");
-    const missing = batch.filter((key) => !visible.has(JSON.stringify(stableJSON(key))));
-    if (missing.length > 0) {
-      throw new Error(`${missing.length}/${batch.length} written RowKeys are not readable from Storage Primary`);
+    if (!visible.has(JSON.stringify(stableJSON(key)))) {
+      throw new Error(`written RowKey is not readable from Storage Primary: ${JSON.stringify(key)}`);
     }
   }
 }
@@ -976,16 +989,29 @@ export function primaryRowsWithField(rows, fieldID) {
       return Object.entries(field.value).some(([name, value]) =>
         name.endsWith("_value") && value !== null && value !== undefined);
     }))
-    .map((row) => JSON.stringify(stableJSON(row.key || {}))));
+    .map((row) => {
+      const key = row.key || {};
+      return JSON.stringify(stableJSON(key.time_series ? {
+        space_id: key.space_id,
+        dataset_id: key.dataset_id,
+        ...key.time_series,
+      } : key));
+    }));
 }
 
-export function primaryWrittenRowsRequest(args, keys) {
+export function primaryWrittenRowsRequest(args, key) {
   return {
-    space_id: args.space,
-    dataset_id: args.dataset,
-    keys,
-    column_names: ["close"],
-    page: { page: 1, size: keys.length },
+    keys: [{
+      space_id: key.space_id || args.space,
+      dataset_id: key.dataset_id || args.dataset,
+      time_series: {
+        subject_id: key.subject_id,
+        freq: key.freq,
+        data_time: key.data_time,
+        series_tag: key.series_tag,
+      },
+    }],
+    field_ids: ["close"],
   };
 }
 

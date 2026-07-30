@@ -19,8 +19,9 @@ import (
 
 // 产品类型常量
 const (
-	InstTypeSPOT = "SPOT" // 现货
-	InstTypeSWAP = "SWAP" // 永续合约
+	InstTypeSPOT     = "SPOT" // 现货
+	InstTypeSWAP     = "SWAP" // 永续合约
+	binanceSeriesTag = "venue:binance"
 )
 
 var errKlineNotClosed = errors.New("K线尚未闭合")
@@ -36,7 +37,7 @@ type KlineCollector struct {
 }
 
 type klineStorage interface {
-	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesKey) (time.Time, bool, error)
+	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesSelector) (time.Time, bool, error)
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
@@ -126,8 +127,9 @@ func (c *KlineCollector) CollectWithResult(
 		}
 		writer = newStorageWriter(accessTarget, "", storageAuthInfo(binding))
 	}
-	watermark, found, err := writer.LatestTimeSeriesTime(ctx, &storagepb.TimeSeriesKey{
+	watermark, found, err := writer.LatestTimeSeriesTime(ctx, &storagepb.TimeSeriesSelector{
 		SpaceId: spaceID, DatasetId: datasetID, SubjectId: storageSubjectID, Freq: freq,
+		SeriesTag: stringPointer(binanceSeriesTag),
 	})
 	if err != nil {
 		return result, fmt.Errorf("读取K线水位线失败: %w", err)
@@ -284,7 +286,9 @@ func buildKlineRows(klines []*market.Kline, spaceID string, datasetID string, sy
 		rows = append(rows, &storagepb.RowFieldUpsert{
 			Key: &storagepb.RowKey{
 				SpaceId: spaceID, DatasetId: datasetID,
-				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: symbol, Freq: freq, DataTime: openTime}},
+				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+					SubjectId: symbol, Freq: freq, DataTime: openTime, SeriesTag: binanceSeriesTag,
+				}},
 			},
 			Fields: []*storagepb.FieldValue{
 				doubleField("open", openValue),
@@ -298,6 +302,10 @@ func buildKlineRows(klines []*market.Kline, spaceID string, datasetID string, sy
 		})
 	}
 	return rows, nil
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func filterClosedKlines(klines []*market.Kline, now time.Time) ([]*market.Kline, int) {

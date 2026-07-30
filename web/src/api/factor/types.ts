@@ -12,7 +12,7 @@ export interface FactorDef {
   input_columns: string[];
   outputs: string[];
   params_json: string;
-  lookback_rows: number;
+  lookback_periods: number;
   status: FactorStatus;
   created_at?: string;
   updated_at?: string;

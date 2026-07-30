@@ -17,7 +17,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-const formatVersion uint32 = 1
+const formatVersion uint32 = 2
 
 type PartitionPhase string
 
@@ -164,6 +164,9 @@ func (s *Store) Append(ctx context.Context, event domain.EventBatch) (AppendResu
 			state.Schema = map[string]storagepb.FieldValueType{}
 		}
 		for name, value := range patch.Columns {
+			if value.Null {
+				continue
+			}
 			if old, exists := state.Schema[name]; exists && old != value.Type {
 				return AppendResult{}, fmt.Errorf("schema conflict for column %s", name)
 			}
@@ -189,11 +192,14 @@ func (s *Store) Append(ctx context.Context, event domain.EventBatch) (AppendResu
 		if err != nil {
 			return AppendResult{}, err
 		}
-		id := domain.LogicalRowID(patch.DataTime, patch.DimensionsJSON)
+		id := domain.LogicalRowID(patch.DataTime)
 		if err := batch.Set(pendingKey(patch.Partition, seq, id), raw, nil); err != nil {
 			return AppendResult{}, err
 		}
 		for name, value := range patch.Columns {
+			if value.Null {
+				continue
+			}
 			if err := batch.Set(schemaKey(patch.Partition.SpaceID, patch.Partition.DatasetID, name), u32(uint32(value.Type)), nil); err != nil {
 				return AppendResult{}, err
 			}
@@ -239,6 +245,14 @@ func (s *Store) Quarantine(ctx context.Context, record QuarantineRecord) error {
 }
 
 func (s *Store) DirtyPartitions(ctx context.Context, limit int) ([]PartitionState, error) {
+	return s.dirtyPartitions(ctx, limit, nil)
+}
+
+func (s *Store) DirtyPartitionsBySeriesTag(ctx context.Context, limit int, seriesTag string) ([]PartitionState, error) {
+	return s.dirtyPartitions(ctx, limit, &seriesTag)
+}
+
+func (s *Store) dirtyPartitions(ctx context.Context, limit int, seriesTag *string) ([]PartitionState, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -254,6 +268,9 @@ func (s *Store) DirtyPartitions(ctx context.Context, limit int) ([]PartitionStat
 		var state PartitionState
 		if err := json.Unmarshal(iter.Value(), &state); err != nil {
 			return nil, err
+		}
+		if seriesTag != nil && state.Key.SeriesTag != *seriesTag {
+			continue
 		}
 		if state.Phase != PhaseClean || state.HighWaterSeq > state.MaterializingSeq {
 			out = append(out, state)
@@ -322,6 +339,50 @@ func (s *Store) MarkLocalCommitted(ctx context.Context, key domain.PartitionKey,
 }
 func (s *Store) MarkRegistered(ctx context.Context, key domain.PartitionKey) error {
 	return s.updatePhase(ctx, key, PhaseRegistered, nil)
+}
+
+func (s *Store) PartitionState(ctx context.Context, key domain.PartitionKey) (PartitionState, error) {
+	if err := ctx.Err(); err != nil {
+		return PartitionState{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	raw, closer, err := s.db.Get(partitionKey(key))
+	if closer != nil {
+		defer closer.Close()
+	}
+	if errors.Is(err, pebble.ErrNotFound) {
+		return PartitionState{}, fmt.Errorf("archive partition is not present in journal")
+	}
+	if err != nil {
+		return PartitionState{}, err
+	}
+	var state PartitionState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return PartitionState{}, err
+	}
+	return state, nil
+}
+
+func (s *Store) MarkCOSSynced(ctx context.Context, key domain.PartitionKey, cosState domain.COSState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, err := s.getPartition(key)
+	if err != nil {
+		return err
+	}
+	if state.Manifest == nil || state.Manifest.Generation != cosState.Generation {
+		return fmt.Errorf("COS generation does not match local manifest")
+	}
+	state.COS = cosState
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return s.db.Set(partitionKey(key), raw, pebble.Sync)
 }
 
 func (s *Store) Complete(ctx context.Context, key domain.PartitionKey, through uint64) error {

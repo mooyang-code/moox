@@ -38,20 +38,29 @@ func TestParseImportGenericDefinition(t *testing.T) {
 	cfg, err := parseArgs([]string{
 		"import", "--file", "./Bias.py", "--factor-id", "bias",
 		"--input-columns", "close, benchmark_return", "--outputs", "bias_20,bias_96",
-		"--params-json", `{"windows":[20,96]}`, "--lookback-rows", "200",
+		"--params-json", `{"windows":[20,96]}`, "--lookback-periods", "200",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "./Bias.py", cfg.File)
 	require.Equal(t, []string{"close", "benchmark_return"}, cfg.InputColumns)
 	require.Equal(t, []string{"bias_20", "bias_96"}, cfg.Outputs)
-	require.Equal(t, 200, cfg.LookbackRows)
+	require.Equal(t, 200, cfg.LookbackPeriods)
 }
 
 func TestParseImportRejectsStatusFlag(t *testing.T) {
 	_, err := parseArgs([]string{
 		"import", "--file", "./Bias.py", "--factor-id", "bias",
 		"--input-columns", "close", "--outputs", "bias",
-		"--lookback-rows", "20", "--status", "enabled",
+		"--lookback-periods", "20", "--status", "enabled",
+	})
+	require.Error(t, err)
+}
+
+func TestParseImportRejectsRetiredLookbackRowsFlag(t *testing.T) {
+	_, err := parseArgs([]string{
+		"import", "--file", "./Bias.py", "--factor-id", "bias",
+		"--input-columns", "close", "--outputs", "bias",
+		"--lookback-rows", "20",
 	})
 	require.Error(t, err)
 }

@@ -112,7 +112,7 @@ func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
 		"t_factor_defs": {
 			"c_factor_id", "c_name", "c_source_code", "c_source_hash", "c_source_path",
-			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_rows",
+			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
 			"c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_bindings": {
@@ -161,6 +161,7 @@ func (s *Store) Close() error {
 
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
+		"_pragma=foreign_keys(ON)",
 		"_pragma=journal_mode(WAL)",
 		"_pragma=synchronous(NORMAL)",
 		"_pragma=busy_timeout(5000)",

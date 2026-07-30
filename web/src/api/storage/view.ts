@@ -9,7 +9,7 @@ import type {
   RetInfo,
   SortSpec,
   TimeRange,
-  TimeSeriesKey,
+  TimeSeriesSelector,
   TimeSeriesRow,
   TotalMode,
   VersionRange
@@ -18,7 +18,7 @@ import type {
 export interface QueryTimeSeriesRowsReq {
   space_id: string;
   view_id: string;
-  keys?: TimeSeriesKey[];
+  selectors?: TimeSeriesSelector[];
   time_range?: TimeRange;
   column_names?: string[];
   filter?: FilterSpec;

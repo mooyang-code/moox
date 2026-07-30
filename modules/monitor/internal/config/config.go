@@ -93,10 +93,11 @@ type MarketCanaryConfig struct {
 }
 
 type MarketCanarySubject struct {
-	SpaceID   string `yaml:"space_id"`
-	DatasetID string `yaml:"dataset_id"`
-	Symbol    string `yaml:"symbol"`
-	Frequency string `yaml:"frequency"`
+	SpaceID   string  `yaml:"space_id"`
+	DatasetID string  `yaml:"dataset_id"`
+	Symbol    string  `yaml:"symbol"`
+	Frequency string  `yaml:"frequency"`
+	SeriesTag *string `yaml:"series_tag"`
 }
 
 type MetricsStorageConfig struct {
@@ -179,7 +180,7 @@ func Default() *Config {
 			SendTimeoutSeconds: 10,
 		},
 		Observability: ObservabilityConfig{Enabled: true, EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
-		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 150 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "binance_spot_kline_1h", Symbol: "BTC-USDT", Frequency: "1h"}}},
+		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 150 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "spot_kline_1h", Symbol: "BTC-USDT", Frequency: "1h", SeriesTag: stringPointer("venue:binance")}}},
 		Metrics:       MetricsConfig{Enabled: true, PipelineConfigPath: "../../examples/monitor-pipelines.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", DatasetID: "moox_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "moox_system", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "host_resource_v1", FilesystemDatasetID: "host_fs_v1", DiskDatasetID: "host_disk_v1", NetworkDatasetID: "host_net_v1"}},
 	}
 }
@@ -390,6 +391,9 @@ func (c *Config) Validate() error {
 				strings.TrimSpace(subject.Symbol) == "" || strings.TrimSpace(subject.Frequency) == "" {
 				return fmt.Errorf("market_canary subject requires space_id, dataset_id, symbol, and frequency")
 			}
+			if subject.SeriesTag == nil {
+				return fmt.Errorf("market_canary subject requires series_tag (use an explicit empty value for the default series)")
+			}
 		}
 	}
 	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
@@ -423,6 +427,10 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func defaultInstanceID() string {

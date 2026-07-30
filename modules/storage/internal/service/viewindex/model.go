@@ -139,14 +139,27 @@ type FilterGroup struct {
 	Logical pb.FilterLogical
 }
 
+// TimeSeriesSelector is a range predicate, not an exact row identity.
+// A nil SeriesTag matches all tags; a non-nil empty value matches only the
+// default series.
+type TimeSeriesSelector struct {
+	SpaceID   string
+	DatasetID string
+	SubjectID string
+	Freq      string
+	SeriesTag *string
+}
+
 type QuerySpec struct {
 	Keys         []*pb.RowKey
+	Selectors    []TimeSeriesSelector
 	TimeRange    *pb.TimeRange
 	VersionRange *pb.VersionRange
 	TextQuery    string
 	Groups       []FilterGroup
 	GroupLogical pb.FilterLogical
 	Sorts        []*pb.SortSpec
+	Order        pb.SortOrder
 	Includes     []string
 	AfterKey     *pb.RowKey
 	Offset       int

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -195,6 +196,9 @@ func validateStorageRow(row *storagepb.RowUpsert) error {
 		if err := validateStorageTime(series.GetDataTime()); err != nil {
 			return fmt.Errorf("time-series data_time: %w", err)
 		}
+		if err := validateSeriesTag(series.GetSeriesTag()); err != nil {
+			return fmt.Errorf("time-series series_tag: %w", err)
+		}
 	case *storagepb.RowKey_Record:
 		record := kind.Record
 		if record == nil || strings.TrimSpace(record.GetRecordId()) == "" || strings.TrimSpace(record.GetVersion()) == "" {
@@ -217,6 +221,24 @@ func validateStorageRow(row *storagepb.RowUpsert) error {
 		}
 		if err := validateStorageValue(value); err != nil {
 			return fmt.Errorf("attribute %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func validateSeriesTag(value string) error {
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("must be valid UTF-8")
+	}
+	if len(value) > 128 {
+		return fmt.Errorf("exceeds 128 bytes")
+	}
+	if strings.TrimSpace(value) != value {
+		return fmt.Errorf("must not contain leading or trailing whitespace")
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("must not contain ASCII control characters")
 		}
 	}
 	return nil

@@ -56,12 +56,21 @@ func TestStdioWorkerLoadCancellationReapsProcess(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := w.Load(ctx, LoadRequest{LogicalID: "cancel"})
+	err := w.Load(ctx, LoadRequest{LogicalID: "cancel", SourceHash: "hash"})
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, StateDead, w.State())
 	assert.Nil(t, w.cmd)
 	assert.NotNil(t, cmd.ProcessState)
 	require.NoError(t, w.Close())
+}
+
+func TestStdioWorkerLoadRejectsMissingSourceHashWithoutWriting(t *testing.T) {
+	w, _ := newSilentStdioWorker(t)
+	t.Cleanup(func() { _ = w.Close() })
+
+	err := w.Load(context.Background(), LoadRequest{LogicalID: "mutable", Path: "/tmp/mutable.py"})
+	require.ErrorContains(t, err, "source hash is required")
+	assert.Equal(t, StateReady, w.State())
 }
 
 func TestNewStdioWorkerTaskTimeoutReapsHungHelloProcess(t *testing.T) {
@@ -106,7 +115,7 @@ func TestStdioWorkerLoadTaskTimeoutReapsHungProcess(t *testing.T) {
 	cmd := worker.cmd
 	done := make(chan error, 1)
 	go func() {
-		done <- worker.Load(context.Background(), LoadRequest{LogicalID: "hung-load"})
+		done <- worker.Load(context.Background(), LoadRequest{LogicalID: "hung-load", SourceHash: "hash"})
 	}()
 
 	select {
@@ -139,8 +148,9 @@ func TestStdioWorkerTaskTimeoutInterruptsBlockedFrameWrite(t *testing.T) {
 			name: "load",
 			call: func(worker *StdioWorker) error {
 				return worker.Load(context.Background(), LoadRequest{
-					LogicalID: "blocked-write",
-					Path:      strings.Repeat("x", 1<<20),
+					LogicalID:  "blocked-write",
+					SourceHash: "hash",
+					Path:       strings.Repeat("x", 1<<20),
 				})
 			},
 		},

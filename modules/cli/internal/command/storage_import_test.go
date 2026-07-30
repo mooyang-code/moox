@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -74,16 +75,6 @@ func TestRetryableStorageImportWriteError(t *testing.T) {
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
-
-func TestParseStorageImportDimensions(t *testing.T) {
-	dims, err := parseStorageImportDimensions([]string{"env=prod", "zone=a"})
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"env": "prod", "zone": "a"}, dims)
-	_, err = parseStorageImportDimensions([]string{"bad"})
-	require.Error(t, err)
-	_, err = parseStorageImportDimensions([]string{"a=1", "a=2"})
-	require.Error(t, err)
-}
 
 func TestEmptyCSVRecord(t *testing.T) {
 	assert.True(t, emptyCSVRecord([]string{"", "  "}))
@@ -275,4 +266,61 @@ func TestCSVStorageFileImporterReadsRows(t *testing.T) {
 	assert.Equal(t, 1, result.Stats.ValidatedRows)
 	require.Len(t, result.Rows, 1)
 	assert.Equal(t, "BTC", result.Rows[0].GetKey().GetSubjectId())
+}
+
+func TestCSVStorageFileImporterUsesScalarSeriesTag(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.csv")
+	content := "data_time,series_tag,close\n2026-01-02T03:04:05Z,venue:binance,1.25\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	ctx := storageImportContext{
+		Options: storageImportOptions{
+			SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h",
+			TimeColumn: "data_time", SeriesTag: "venue:binance",
+		},
+		Columns: map[string]*pb.DatasetColumn{
+			"close": {ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Required: true},
+		},
+	}
+	result, err := csvStorageFileImporter{}.ReadTimeSeriesRows(path, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "venue:binance", result.Rows[0].GetKey().GetSeriesTag())
+	upserts := storageImportUpserts(result.Rows)
+	require.Equal(t, "venue:binance", upserts[0].GetKey().GetTimeSeries().GetSeriesTag())
+}
+
+func TestCSVStorageFileImporterRejectsScopeMismatch(t *testing.T) {
+	options := storageImportOptions{
+		SpaceID: "crypto", DatasetID: "spot_kline_1h", SubjectID: "BTC-USDT", Freq: "1h",
+		TimeColumn: "data_time", SeriesTag: "venue:binance",
+	}
+	columns := map[string]*pb.DatasetColumn{
+		"close": {ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Required: true},
+	}
+	tests := []struct {
+		name        string
+		column      string
+		value       string
+		wantMessage string
+	}{
+		{name: "space", column: "space_id", value: "stocks", wantMessage: "does not match --space"},
+		{name: "dataset", column: "dataset_id", value: "perpetual_kline_1h", wantMessage: "does not match --dataset"},
+		{name: "subject", column: "subject_id", value: "ETH-USDT", wantMessage: "does not match --subject"},
+		{name: "frequency", column: "freq", value: "5m", wantMessage: "does not match --freq"},
+		{name: "series tag", column: "series_tag", value: "venue:okx", wantMessage: "does not match --series-tag"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sample.csv")
+			content := fmt.Sprintf(
+				"%s,data_time,close\n%s,2026-01-02T03:04:05Z,1.25\n",
+				tt.column, tt.value,
+			)
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+			_, err := csvStorageFileImporter{}.ReadTimeSeriesRows(path, storageImportContext{
+				Options: options,
+				Columns: columns,
+			})
+			require.ErrorContains(t, err, tt.wantMessage)
+		})
+	}
 }

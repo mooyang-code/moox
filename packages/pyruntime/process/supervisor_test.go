@@ -144,6 +144,27 @@ func TestSupervisorRunLoadedManyRestartsAfterLoadError(t *testing.T) {
 	assert.Equal(t, StateStarting, s.State())
 }
 
+func TestSupervisorRebuildsOnRequestAfterLoadErrorWithoutReplayingFailedTask(t *testing.T) {
+	loadErr := errors.New("load failed")
+	factoryCalls := 0
+	s := NewSupervisor(func(context.Context) (Worker, error) {
+		factoryCalls++
+		if factoryCalls == 1 {
+			return &failingWorker{loadErr: loadErr}, nil
+		}
+		return &memoryWorker{}, nil
+	}, SupervisorConfig{})
+
+	_, err := s.RunLoaded(context.Background(), LoadRequest{LogicalID: "bad"}, RunRequest{RequestID: "first"})
+	require.ErrorIs(t, err, loadErr)
+	assert.Equal(t, 1, factoryCalls)
+
+	result, err := s.RunLoaded(context.Background(), LoadRequest{LogicalID: "good"}, RunRequest{RequestID: "second"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"done":true}`, string(result.Meta))
+	assert.Equal(t, 2, factoryCalls)
+}
+
 func TestSupervisorRunLoadedManyRestartsAfterRunError(t *testing.T) {
 	runErr := errors.New("run failed")
 	w := &failingWorker{runErr: runErr}

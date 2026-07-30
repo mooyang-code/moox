@@ -147,7 +147,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	sched = scheduler.NewService(scheduler.Config{
 		Workers: cfg.Engine.Workers, QueueCapacity: cfg.Scheduler.QueueCapacity,
-		MaxRetry: cfg.Scheduler.MaxRetry,
+		MaxRetry:               cfg.Scheduler.MaxRetry,
+		ViewSettleDelay:        cfg.Scheduler.ViewSettleDelay,
+		EventReadRetry:         cfg.Scheduler.EventReadRetry,
+		EventReadRetryInterval: cfg.Scheduler.EventReadRetryInterval,
 	}, storage, pythonExec, scheduler.WithDatasetMetrics(runMetrics))
 	if err := sched.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start factor scheduler: %w", err)
@@ -359,6 +362,10 @@ func (c *metadataClientAdapter) ListDatasetColumns(ctx context.Context, req *sto
 	return c.client.ListDatasetColumns(ctx, req)
 }
 
+func (c *metadataClientAdapter) ListViews(ctx context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
+	return c.client.ListViews(ctx, req)
+}
+
 func (c *metadataClientAdapter) ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {
 	return c.client.ListDatasetSubjects(ctx, req)
 }
@@ -428,43 +435,45 @@ func startRealtimeLoop(ctx context.Context, deps realtimeLoopDeps) func() {
 func drainEventBatch(ctx context.Context, deps realtimeLoopDeps) {
 	tasks := deps.eventBatcher.Flush(time.Now())
 	for _, task := range tasks {
-		schedTask, ok, err := buildSchedulerTask(ctx, deps.factors, deps.factorsDir, task)
+		schedTasks, err := buildSchedulerTasks(ctx, deps.factors, deps.factorsDir, task)
 		if err != nil {
 			log.WarnContextf(ctx, "factor realtime task lost while building: %v", err)
 			continue
 		}
-		if !ok {
-			continue
-		}
-		if err := deps.scheduler.Enqueue(ctx, schedTask); err != nil {
-			log.WarnContextf(ctx, "factor realtime task lost while enqueueing: %v", err)
+		for _, schedTask := range schedTasks {
+			if err := deps.scheduler.Enqueue(ctx, schedTask); err != nil {
+				log.WarnContextf(ctx, "factor realtime task lost while enqueueing: %v", err)
+			}
 		}
 	}
 }
 
-func buildSchedulerTask(ctx context.Context, repo *store.FactorRepository, factorsDir string, task trigger.Task) (scheduler.Task, bool, error) {
-	factors := make([]domain.FactorDef, 0, len(task.FactorIDs))
+func buildSchedulerTasks(
+	ctx context.Context,
+	repo *store.FactorRepository,
+	factorsDir string,
+	task trigger.Task,
+) ([]scheduler.Task, error) {
+	tasks := make([]scheduler.Task, 0, len(task.FactorIDs))
 	for _, factorID := range task.FactorIDs {
 		factor, err := repo.Get(ctx, factorID)
 		if err != nil {
-			return scheduler.Task{}, false, fmt.Errorf("load factor %s: %w", factorID, err)
+			return nil, fmt.Errorf("load factor %s: %w", factorID, err)
 		}
-		if factor.Status == domain.FactorStatusEnabled {
-			factors = append(factors, *factor)
+		if factor.Status != domain.FactorStatusEnabled {
+			continue
 		}
+		built, err := scheduler.BuildTask(scheduler.TaskScope{
+			TriggerType: "event",
+			SpaceID:     task.SpaceID, SourceDataset: task.SourceDataset,
+			TargetDataset: task.TargetDataset, SubjectID: task.SubjectID, Freq: task.Freq,
+			StartTime: task.StartTime, EndTime: task.EndTime,
+		}, *factor, factorsDir)
+		if err != nil {
+			return nil, err
+		}
+		built.TaskID = scheduler.DeterministicTaskID(built)
+		tasks = append(tasks, built)
 	}
-	if len(factors) == 0 {
-		return scheduler.Task{}, false, nil
-	}
-	built, err := scheduler.BuildTask(scheduler.TaskScope{
-		TriggerType: "event",
-		SpaceID:     task.SpaceID, SourceDataset: task.SourceDataset,
-		TargetDataset: task.TargetDataset, SubjectID: task.SubjectID, Freq: task.Freq,
-		StartTime: task.StartTime, EndTime: task.EndTime,
-	}, factors, factorsDir)
-	if err != nil {
-		return scheduler.Task{}, false, err
-	}
-	built.TaskID = scheduler.DeterministicTaskID(built)
-	return built, true, nil
+	return tasks, nil
 }

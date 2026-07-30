@@ -18,6 +18,84 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func TestDatasetRowsUpsertedV1IsRejectedByV2Consumer(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := DatasetRowsUpserted.Version(); got != 2 {
+		t.Fatalf("storage event version = %d, want 2", got)
+	}
+	if _, ok := registry.Lookup(DatasetRowsUpserted.Name(), 1); ok {
+		t.Fatal("v1 storage event remains registered")
+	}
+	encoded, err := registry.Encode(
+		DatasetRowsUpserted,
+		validRowsEvent(),
+		validationOptions("storage-event-1", "space", "dataset"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded.Message.EventVersion = 1
+	raw, err := proto.Marshal(encoded.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := DecodeDatasetRowsUpserted(
+		registry,
+		raw,
+		"moox.storage.dataset.rows.upserted.v2.space.dataset",
+		"storage-event-1",
+	); err == nil {
+		t.Fatal("v1 storage event was accepted by v2 consumer")
+	}
+}
+
+func TestDatasetRowsUpsertedValidatesSeriesTagShape(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		tag     string
+		wantErr bool
+	}{
+		{name: "default series"},
+		{name: "opaque value", tag: "venue:okx"},
+		{name: "too long", tag: strings.Repeat("x", 129), wantErr: true},
+		{name: "leading whitespace", tag: " venue:okx", wantErr: true},
+		{name: "trailing whitespace", tag: "venue:okx ", wantErr: true},
+		{name: "control character", tag: "venue:\x00okx", wantErr: true},
+		{name: "invalid utf8", tag: string([]byte{0xff}), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := &storagepb.DatasetRowsUpserted{
+				SpaceId: "space", DatasetId: "dataset",
+				Rows: []*storagepb.RowUpsert{{
+					Key: &storagepb.RowKey{
+						SpaceId: "space", DatasetId: "dataset",
+						Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+							SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-29T00:00:00Z",
+							SeriesTag: tt.tag,
+						}},
+					},
+				}},
+			}
+			_, err := registry.Encode(
+				DatasetRowsUpserted,
+				payload,
+				validationOptions("storage-event-1", "space", "dataset"),
+			)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Encode() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 type semanticValidationPublisher struct {
 	calls int
 }

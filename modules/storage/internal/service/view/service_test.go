@@ -4,7 +4,10 @@ package view
 
 import (
 	"context"
+	"database/sql"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,17 +74,33 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	}
 	ctx := context.Background()
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
-	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", PrimaryDatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare: rsp=%v err=%v", rsp, err)
 	}
-	key := &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}}
+	if err := svc.AttachActiveView(&pb.View{
+		SpaceId: "quant", ViewId: "prices-view", PrimaryDatasetId: "prices",
+		ActiveIndexId: "prices-view", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1",
+		Engine: "duckdb", ActiveColumns: columns, Status: "active",
+	}); err != nil {
+		t.Fatalf("attach active view: %v", err)
+	}
+	key := &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "venue:okx"}}}
 	value := &pb.FieldValue{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}
 	if rsp, err := svc.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: "prices-view", Batch: &pb.ViewIndexWriteBatch{ViewRevision: 1, ViewSchemaHash: "schema-1", WriteMode: "LIVE_WRITE", RowWrites: []*pb.ViewIndexRowWrite{{Key: &pb.ViewIndexRowKey{RowKey: key}, Fields: []*pb.FieldValue{value}}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("apply: rsp=%v err=%v", rsp, err)
 	}
-	rsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{AuthInfo: auth, ViewId: "prices-view", Keys: []*pb.TimeSeriesKey{{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-20T00:00:00Z"}}, ColumnNames: []string{"close"}})
+	tag := "venue:okx"
+	rsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{
+		AuthInfo: auth, SpaceId: "quant", ViewId: "prices-view",
+		Selectors:   []*pb.TimeSeriesSelector{{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &tag}},
+		ColumnNames: []string{"close"},
+	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 || len(rsp.GetRows()[0].GetFields()) != 1 {
 		t.Fatalf("query: rsp=%v err=%v", rsp, err)
+	}
+	if rsp.GetRows()[0].GetKey().GetSeriesTag() != tag {
+		t.Fatalf("query lost exact series tag: rsp=%v", rsp)
 	}
 }
 
@@ -99,6 +118,37 @@ func TestViewServiceRequiresSecretAndAuth(t *testing.T) {
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+}
+
+func TestViewServicePropagatesIncompatibleDuckDBSchema(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "views")
+	duckdbRoot := filepath.Join(root, "duckdb")
+	if err := os.MkdirAll(duckdbRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("duckdb", filepath.Join(duckdbRoot, "legacy.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE view_rows (
+			subject_id VARCHAR NOT NULL,
+			freq VARCHAR NOT NULL,
+			data_time TIMESTAMP_NS NOT NULL,
+			dimensions_json VARCHAR NOT NULL,
+			PRIMARY KEY (subject_id, freq, data_time, dimensions_json)
+		)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = New(root, "view-secret")
+	if err == nil || !strings.Contains(err.Error(), "clean the index and rebuild it") {
+		t.Fatalf("New() error = %v", err)
 	}
 }
 
