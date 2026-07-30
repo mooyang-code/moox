@@ -14,7 +14,7 @@ while IFS= read -r module_path; do
   }
 done < <(awk '/^use \(/ {on=1; next} on && /^\)/ {exit} on {gsub(/^[[:space:]]*\.\//, ""); if (length) print}' go.work)
 
-[[ "${workspace_count}" -eq 45 ]] || {
+[[ "${workspace_count}" -eq 47 ]] || {
   echo "unexpected go.work module count: ${workspace_count}" >&2
   exit 1
 }
@@ -33,9 +33,9 @@ grep -Fq '每台服务器的 `moox-gateway`' modules/README.md
 grep -Fq 'strategy/strategy-cli' README.md
 grep -Fq 'Strategy、Monitor、Storage 和 Archive' README.md
 
-grep -Fq 'RPC `11430`，健康检查 `11431`' docs/策略模块架构设计.md
-grep -Fq '工程接入状态' docs/策略模块架构设计.md
-grep -Fq '构建、发布和标准部署链路已接入' docs/策略模块架构设计.md
+grep -Fq 'Strategy 只有四张业务表' docs/策略模块架构设计.md
+grep -Fq 'Python 是完整历史窗口上的无状态函数' docs/策略模块架构设计.md
+grep -Fq 'LogicalAccountTargetRequested' docs/策略模块架构设计.md
 ! grep -Fq '建议 HTTP 端口 `11408`' docs/策略模块架构设计.md
 
 grep -Fq '全部 Active 写入成功后才 ACK' docs/存储引擎架构.md
