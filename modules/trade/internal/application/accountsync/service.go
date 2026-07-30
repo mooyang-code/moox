@@ -540,11 +540,26 @@ func (s *Service) ApplyPosition(
 				// A private partial update cannot create a valid SWAP
 				// projection without leverage. Keep the stream alive and let
 				// the queued full synchronization create the authoritative row.
-				return nil
+				return tx.UpdateExchangeAccountReadiness(
+					account.SpaceID,
+					account.ExchangeAccountID,
+					false,
+					s.now().UnixMilli(),
+					"private position update awaiting full sync",
+				)
 			}
 			record = mergePositionRecord(account, current, found, record, position.Present)
 		}
-		return tx.UpsertPosition(record)
+		if err := tx.UpsertPosition(record); err != nil {
+			return err
+		}
+		return tx.UpdateExchangeAccountReadiness(
+			account.SpaceID,
+			account.ExchangeAccountID,
+			false,
+			s.now().UnixMilli(),
+			"private position update awaiting full sync",
+		)
 	})
 	unlock()
 	if err != nil {
@@ -577,10 +592,19 @@ func (s *Service) ApplyAccountSnapshot(
 	}
 	merged := mergePrivateSnapshot(account.Snapshot, snapshot)
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountSnapshot(
+		if err := tx.UpdateExchangeAccountSnapshot(
 			account.SpaceID,
 			account.ExchangeAccountID,
 			merged,
+		); err != nil {
+			return err
+		}
+		return tx.UpdateExchangeAccountReadiness(
+			account.SpaceID,
+			account.ExchangeAccountID,
+			false,
+			s.now().UnixMilli(),
+			"private account update awaiting full sync",
 		)
 	})
 	unlock()

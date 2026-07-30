@@ -321,7 +321,7 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 		return err
 	case privatePosition:
 		err := s.Sync.ApplyPosition(ctx, s.Account.ExchangeAccountID, event.position)
-		if err == nil && event.position.RequiresSync && s.syncRequested != nil {
+		if err == nil && s.syncRequested != nil {
 			select {
 			case s.syncRequested <- struct{}{}:
 			default:
@@ -334,7 +334,7 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 			s.Account.ExchangeAccountID,
 			event.account,
 		)
-		if err == nil && event.account.RequiresSync && s.syncRequested != nil {
+		if err == nil && s.syncRequested != nil {
 			select {
 			case s.syncRequested <- struct{}{}:
 			default:

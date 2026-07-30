@@ -183,6 +183,9 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 	go func() { done <- session.Run(context.Background()) }()
 
 	require.Eventually(t, session.Ready, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return len(adapter.callSnapshot()) >= 12
+	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, []string{
 		"SubscribePrivate",
 		"LoadInstruments",
@@ -191,6 +194,10 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		"GetAccountSnapshot",
 		"ListPositionSnapshots",
 		"ListOpenOrders",
+		"ListRecentFills",
+		"ListOpenOrders",
+		"ListPositionSnapshots",
+		"GetAccountSnapshot",
 		"ListRecentFills",
 	}, adapter.callSnapshot())
 	stored, err := tradeStore.GetExchangeAccountByID(context.Background(), "account-1")

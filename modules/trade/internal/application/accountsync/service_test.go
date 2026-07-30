@@ -815,6 +815,12 @@ func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T
 		},
 	))
 	require.Zero(t, wakes)
+	account, err := tradeStore.GetExchangeAccountByID(
+		context.Background(), "account-1",
+	)
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+	require.Contains(t, account.LastError, "awaiting full sync")
 }
 
 func TestApplyUnknownPartialPositionDefersToFullSync(t *testing.T) {
