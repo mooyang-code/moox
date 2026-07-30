@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/cosstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/domain"
 	eventconsumer "github.com/mooyang-code/moox/modules/archive/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/archive/internal/journal"
@@ -291,6 +292,12 @@ func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 		}
 		if file.GetAttributes()["cos_status"] != "" || file.GetAttributes()["cos_object_key"] != "" {
 			t.Fatalf("local-only Archive must not fabricate COS state: %+v", file.GetAttributes())
+		}
+		objectKey, objectKeyErr := cosstore.ObjectKey(archiveRoot, "moox/archive", path)
+		relativePath, relativePathErr := key.RelativePath()
+		wantObjectKey := "moox/archive/" + filepath.ToSlash(relativePath)
+		if objectKeyErr != nil || relativePathErr != nil || objectKey != wantObjectKey {
+			t.Fatalf("COS object key=%q, want %q: objectErr=%v relativeErr=%v", objectKey, wantObjectKey, objectKeyErr, relativePathErr)
 		}
 	}
 }

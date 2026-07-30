@@ -1215,7 +1215,8 @@ git commit -m "docs: document scalar time series tags"
 消费真实 `DatasetRowsUpserted@2`，断言同一时间点两个 tag 生成两个独立 tag 目录和
 两个 Parquet v2 月文件。用独立 reader 检查每个文件的 `series_tag` 为对应常量，
 按 `candle_begin_time` 排序且时间唯一；ArchiveFile partition key、本地路径和 COS
-object key 均包含同一可逆 tag 编码。
+object key 均包含同一可逆 tag 编码。此本地 E2E 校验真实 Parquet 路径派生出的
+object key；不伪造 COS 已同步状态，也不要求开发机具备 COS 凭据。
 
 - [x] **Step 3: Storage + Monitor**
 
