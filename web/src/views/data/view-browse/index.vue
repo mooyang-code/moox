@@ -146,7 +146,8 @@
                     <template #title
                       ><span class="sortable-title"
                         >序列标签<span class="sort-arrows"
-                          ><button :class="sortArrowClass('series_tag', 'asc')" @click.stop="setSort('series_tag', 'asc')">▲</button
+                          ><button :class="sortArrowClass('series_tag', 'asc')" @click.stop="setSort('series_tag', 'asc')">
+                            ▲</button
                           ><button :class="sortArrowClass('series_tag', 'desc')" @click.stop="setSort('series_tag', 'desc')">
                             ▼
                           </button></span

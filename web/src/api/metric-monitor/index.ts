@@ -36,11 +36,7 @@ function boundedLimit(limit: number | undefined, max: number, fallback: number):
 
 export const metricMonitorApi = {
   getObservabilityOverview(req: { space_id?: string } = {}) {
-    return callControl<typeof req, { overview?: ObservabilityOverview }>(
-      METRIC_MONITOR_SERVICE,
-      "GetObservabilityOverview",
-      req
-    );
+    return callControl<typeof req, { overview?: ObservabilityOverview }>(METRIC_MONITOR_SERVICE, "GetObservabilityOverview", req);
   },
 
   listMetricServices(req: { space_id?: string; page?: PageRequest } = {}) {
