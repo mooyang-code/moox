@@ -223,7 +223,7 @@ Resume 在不存在运行中人工操作或外部冲突且启用成员 Ready 后
 
 普通 Admin `GetSecret` 始终返回脱敏值。Trade 通过服务认证的
 `GetSecretValue(secret_id)` 单条取得独立类型 `SecretMaterial`，并校验 category、
-provider、status、key ID、明文值和 extra config；不得先列出全部 Secret。
+Exchange、status、key ID、明文值和 extra config；不得先列出全部 Secret。
 
 Live 交易总开关默认关闭。PRODUCTION 账户的创建、启用和下单在
 `live_trading_enabled=false` 时失败。TESTNET 与 PRODUCTION 使用固定 REST/WS 端点；
