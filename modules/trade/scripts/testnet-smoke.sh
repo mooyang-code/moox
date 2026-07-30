@@ -1,57 +1,80 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-die() {
-  echo "trade testnet smoke: $*" >&2
-  exit 1
+skip() {
+  echo "trade testnet smoke: SKIP $*" >&2
+  exit 2
 }
 
-[[ "${MOOX_TRADE_TESTNET:-}" == "1" ]] ||
-  die "refusing to run without MOOX_TRADE_TESTNET=1"
+[[ "${MOOX_TRADE_TESTNET_CONFIRM:-}" == "YES" ]] ||
+  skip "set MOOX_TRADE_TESTNET_CONFIRM=YES to permit real Testnet orders"
+[[ -n "${MOOX_BINANCE_TESTNET_SECRET_ID:-}" ]] ||
+  skip "MOOX_BINANCE_TESTNET_SECRET_ID is required"
+[[ -n "${MOOX_OKX_TESTNET_SECRET_ID:-}" ]] ||
+  skip "MOOX_OKX_TESTNET_SECRET_ID is required"
 
-exchange_name=${MOOX_TRADE_TESTNET_EXCHANGE:-}
-case "$exchange_name" in
-  binance|okx) ;;
-  *) die "MOOX_TRADE_TESTNET_EXCHANGE must be binance or okx" ;;
-esac
-
-[[ -n "${MOOX_TRADE_TESTNET_API_KEY:-}" ]] ||
-  die "MOOX_TRADE_TESTNET_API_KEY is required"
-[[ -n "${MOOX_TRADE_TESTNET_API_SECRET:-}" ]] ||
-  die "MOOX_TRADE_TESTNET_API_SECRET is required"
-[[ -n "${MOOX_TRADE_TESTNET_SYMBOL:-}" ]] ||
-  die "MOOX_TRADE_TESTNET_SYMBOL is required"
-[[ -n "${MOOX_TRADE_TESTNET_SWAP_SYMBOL:-}" ]] ||
-  die "MOOX_TRADE_TESTNET_SWAP_SYMBOL is required"
-if [[ "$exchange_name" == "okx" ]]; then
-  [[ -n "${MOOX_TRADE_TESTNET_PASSPHRASE:-}" ]] ||
-    die "MOOX_TRADE_TESTNET_PASSPHRASE is required for OKX"
-  [[ "${MOOX_TRADE_TESTNET_OKX_SIMULATED:-}" == "1" ]] ||
-    die "MOOX_TRADE_TESTNET_OKX_SIMULATED=1 is required for OKX demo trading"
-fi
-
-endpoint=${MOOX_TRADE_TESTNET_ENDPOINT:-}
-if [[ -n "$endpoint" ]]; then
-  case "$exchange_name:$endpoint" in
-    binance:https://testnet.binance.vision*|\
-    binance:https://demo-fapi.binance.com*|\
-    okx:https://www.okx.com*) ;;
-    *) die "endpoint is not an allowlisted ${exchange_name} testnet endpoint" ;;
-  esac
-fi
-
-client_prefix="moox-testnet-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
-created_orders=()
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$script_dir/../../.." && pwd)
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/moox-trade-testnet.XXXXXX")
+binary="$work_dir/testnet-smoke"
+completed=0
 
 cleanup() {
-  if ((${#created_orders[@]} != 0)); then
-    echo "trade testnet smoke: cleanup is unavailable; manual cancellation required for ${created_orders[*]}" >&2
+  if [[ "$completed" == "1" ]]; then
+    rm -rf "$work_dir"
+  else
+    echo "trade testnet smoke: retained recovery files at $work_dir" >&2
   fi
 }
 trap cleanup EXIT INT TERM
 
-# The current Trade CLI/RPC has no credential-safe, testnet-endpoint-pinned
-# command that can perform and clean up this sequence. Keep the harness closed
-# until that interface exists; never improvise direct production-capable HTTP.
-echo "trade testnet smoke: preflight passed for ${exchange_name} (${client_prefix})" >&2
-die "order execution is disabled until a testnet-only CLI/RPC cleanup path is implemented"
+(
+  cd "$repo_root"
+  go build -o "$binary" ./modules/trade/cmd/testnet-smoke
+)
+
+max_notional=${MOOX_TRADE_TESTNET_MAX_NOTIONAL:-20}
+config="$repo_root/modules/trade/config/app.yaml"
+
+run_exchange() {
+  local exchange_name=$1
+  local secret_id=$2
+  local symbol=$3
+  local lower
+  lower=$(printf '%s' "$exchange_name" | tr '[:upper:]' '[:lower:]')
+  local database="$work_dir/${lower}.db"
+  local state="$work_dir/${lower}.json"
+  local common=(
+    --exchange "$exchange_name"
+    --secret-id "$secret_id"
+    --database "$database"
+    --state "$state"
+    --config "$config"
+    --symbol "$symbol"
+    --max-notional "$max_notional"
+  )
+
+  if ! "$binary" --phase submit "${common[@]}"; then
+    if [[ -s "$state" ]]; then
+      "$binary" --phase recover "${common[@]}" || true
+    fi
+    return 1
+  fi
+  if ! "$binary" --phase recover "${common[@]}"; then
+    echo "trade testnet smoke: ${exchange_name} cleanup failed; state retained at ${state}" >&2
+    return 1
+  fi
+}
+
+binance_symbol=${MOOX_BINANCE_TESTNET_SYMBOL:-BTCUSDT}
+okx_symbol=${MOOX_OKX_TESTNET_SYMBOL:-BTC-USDT}
+[[ "$binance_symbol" =~ ^[A-Z0-9]+$ ]] ||
+  skip "MOOX_BINANCE_TESTNET_SYMBOL must be an uppercase native symbol"
+[[ "$okx_symbol" =~ ^[A-Z0-9-]+$ ]] ||
+  skip "MOOX_OKX_TESTNET_SYMBOL must be an uppercase native symbol"
+
+run_exchange BINANCE "$MOOX_BINANCE_TESTNET_SECRET_ID" "$binance_symbol"
+echo "BINANCE PASS submit/query/stream/sync/restart/cleanup"
+run_exchange OKX "$MOOX_OKX_TESTNET_SECRET_ID" "$okx_symbol"
+echo "OKX PASS submit/query/stream/sync/restart/cleanup"
+completed=1
