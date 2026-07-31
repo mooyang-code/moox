@@ -43,6 +43,12 @@ for forbidden in 'cat custom.toml' 'sed custom.toml' 'rg custom.toml' 'Python �
 done
 grep -Fq 'status 返回 `completed`' "${REFERENCE}"
 grep -Fq 'references/custom-setup.md' "${SKILL}"
+grep -Fq 'owns the Caddy prerequisite' "${SKILL}"
+grep -Fq 'certificate` summary' "${SKILL}"
+if grep -Fq 'caddy-prerequisite.sh ensure' "${SKILL}"; then
+  echo 'initialization Skill must use moox-cli for the Caddy prerequisite' >&2
+  exit 1
+fi
 
 template_block=$(awk '/^```toml$/{inside=1; next} inside && /^```$/{exit} inside{print}' "${REFERENCE}")
 cmp -s <(printf '%s\n' "${template_block}") "${TEMPLATE}" || { echo 'reference template differs from custom.toml.example' >&2; exit 1; }
