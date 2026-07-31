@@ -27,7 +27,7 @@ describe("storage page actions contract", () => {
     expect(pages.nodes).toContain("部署流程拥有");
     expect(pages.nodes).toContain("不再经过独立路由层");
     expect(pages.nodes).toContain("只有已禁用且没有 Dataset 的节点才能删除");
-    expect(pages.nodes).toContain('title="操作" :width="190"');
+    expect(pages.nodes).toContain('title="操作" :width="170"');
     expect(pages.nodes).toContain("display: flex;\n  flex-wrap: wrap;");
     expect(pages.nodes).toContain('path: "/collector/data-management"');
     expect(pages.nodes).toContain('query: { tab: "datasets", space_id: summary.space_id, dataset_id: summary.dataset_id }');

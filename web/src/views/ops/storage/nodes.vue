@@ -81,7 +81,7 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.node.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="190" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="170" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space class="row-actions" :size="4" wrap>
                 <a-button size="mini" type="text" @click="openDetail(record)">
