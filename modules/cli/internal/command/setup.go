@@ -173,11 +173,36 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
 		}
-		return writeSetupJSON(cmd, map[string]any{"host": snapshot.Manifest.ControlHost.Name, "status": "ready", "reset_data": resetData})
+		return writeSetupJSON(cmd, map[string]any{
+			"host":        snapshot.Manifest.ControlHost.Name,
+			"status":      "ready",
+			"reset_data":  resetData,
+			"certificate": setupCertificateSummary(snapshot.Manifest.ControlHost.Address),
+		})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().BoolVar(&resetData, "reset-data", false, "删除控制面现有数据后重新部署")
 	return cmd
+}
+
+// setupCertificateSummary makes the certificate work performed by
+// deploy-control explicit without exposing any key material. The deployment
+// itself remains the source of truth for Caddy configuration and renewal.
+func setupCertificateSummary(publicHost string) map[string]any {
+	if setupdeploy.UsesPublicTLS(publicHost) {
+		return map[string]any{
+			"mode":              "public",
+			"issuer":            "letsencrypt",
+			"automatic_renewal": true,
+			"renewal":           "caddy_acme_ari",
+		}
+	}
+	return map[string]any{
+		"mode":              "internal",
+		"issuer":            "caddy_internal_ca",
+		"automatic_renewal": true,
+		"renewal":           "caddy_internal",
+	}
 }
 
 func newSetupDeployServiceCommand(deps setupDeps) *cobra.Command {

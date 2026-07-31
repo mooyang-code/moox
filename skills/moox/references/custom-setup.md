@@ -95,6 +95,12 @@ test -e ./custom.toml || exit 2
 ./bin/moox-cli setup status --file ./custom.toml
 ```
 
+`setup deploy-control` 同时负责受管 Caddy 的安装、证书模式选择、HTTPS 验收和
+健康检查续期调度。公网 IP/DNS 自动使用操作系统信任的 Let's Encrypt 证书，不需要
+用户安装根证书；私网、回环地址和 `.localhost` 自动使用 Caddy internal CA。该命令的
+脱敏 JSON `certificate` 字段会报告 `mode`、`issuer` 和 `automatic_renewal`，Skill
+只根据这些字段确认结果，不读取证书私钥。
+
 If validation reports `host_key_unknown`, obtain each SHA256 host fingerprint
 through an independent trusted channel, run `setup trust-host`, and repeat
 validation. Never accept a fingerprint merely because the same SSH connection

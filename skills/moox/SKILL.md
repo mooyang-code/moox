@@ -146,16 +146,29 @@ See `references/` for more detailed notes.
 
 ## System Initialization Deployment Flow
 
-Before uploading or starting web-host, run the automatic managed edge prerequisite:
+Use `moox-cli setup deploy-control` for the first control-plane deployment. It
+owns the Caddy prerequisite, certificate selection, HTTPS acceptance, and the
+healthcheck/renewal scheduler; do not ask the user to run a separate Caddy
+script during initialization:
 
 ```bash
-skills/moox/scripts/caddy-prerequisite.sh ensure --target user@host --deploy-dir /home/user/moox
-scripts/deploy-moox.sh --target user@host --dir /home/user/moox --public-host host.example
+./bin/moox-cli setup validate --file ./custom.toml
+./bin/moox-cli setup deploy-control --file ./custom.toml
 ```
 
-The prerequisite command installs and verifies Caddy `v2.11.4`; on a clean target it intentionally waits because the Caddyfile and loopback upstreams do not exist yet. The following deployment command uploads the candidate Caddyfile, rejects non-loopback upstream addresses, starts loopback upstreams, atomically starts or reloads only the MooX-owned Caddy process, and performs HTTPS acceptance.
+The command installs and verifies pinned Caddy `v2.11.4`, uploads the
+candidate Caddyfile, rejects non-loopback upstreams, starts or reloads only the
+MooX-owned edge, and performs HTTPS acceptance. Its sanitized JSON includes a
+`certificate` summary (`mode`, `issuer`, and `automatic_renewal`) so the Skill
+can prove which trust model was selected without reading keys.
 
-`--tls-mode auto` selects Let's Encrypt public certificates for public IP/DNS hosts. Keep TCP 80 publicly reachable for HTTP-01 issuance and renewal. Caddy remains running, renews from ACME ARI automatically, and is covered by the generated healthcheck. Browsers and backend clients use their operating-system trust store without installing a MooX root certificate.
+Automatic mode selects Let's Encrypt public certificates for public IP/DNS
+hosts and Caddy internal CA for private, loopback, and `.localhost` hosts.
+Public mode requires TCP 80 to remain reachable for HTTP-01 issuance and
+renewal. Caddy remains running, renews from ACME ARI automatically, and is
+restarted by the generated healthcheck after failure or reboot. Browsers and
+backend clients use their operating-system trust store in public mode; no MooX
+root certificate is installed.
 
 ### Internal 模式根证书
 

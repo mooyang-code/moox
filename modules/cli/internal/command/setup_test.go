@@ -296,7 +296,17 @@ func TestSetupDeployControlAcceptsExplicitResetFlag(t *testing.T) {
 	cmd.SetArgs([]string{"deploy-control", "--file", "custom.toml", "--reset-data"})
 	require.NoError(t, cmd.Execute())
 	require.True(t, reset)
-	require.JSONEq(t, `{"host":"control","status":"ready","reset_data":true}`, output.String())
+	require.JSONEq(t, `{"host":"control","status":"ready","reset_data":true,"certificate":{"mode":"public","issuer":"letsencrypt","automatic_renewal":true,"renewal":"caddy_acme_ari"}}`, output.String())
+}
+
+func TestSetupCertificateSummarySelectsTrustModel(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, map[string]any{
+		"mode": "public", "issuer": "letsencrypt", "automatic_renewal": true, "renewal": "caddy_acme_ari",
+	}, setupCertificateSummary("203.0.113.8"))
+	assert.Equal(t, map[string]any{
+		"mode": "internal", "issuer": "caddy_internal_ca", "automatic_renewal": true, "renewal": "caddy_internal",
+	}, setupCertificateSummary("127.0.0.1"))
 }
 
 func TestControlDeployOptionsUseManifestEventBusEndpoint(t *testing.T) {

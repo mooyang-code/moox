@@ -30,6 +30,14 @@ moox-cli setup status --file ./custom.toml
 moox-cli setup e2e-eventbus --file ./custom.toml
 ```
 
+`setup deploy-control` also installs the managed Caddy edge, selects the
+certificate trust model, performs HTTPS acceptance, and installs the
+healthcheck that keeps Caddy available for automatic renewal. Public IP/DNS
+targets use Let's Encrypt certificates trusted by normal browsers; private or
+loopback targets use Caddy internal CA. The command's sanitized JSON includes
+`certificate.mode`, `certificate.issuer`, and `certificate.automatic_renewal`.
+No certificate private key is printed or copied into the release package.
+
 `[eventbus]` 只填写 Collector SCF 能访问的公网 IPv4/DNS、端口和
 `tls_enabled = true`。EventBus 用户名、token、私有 CA 和
 `cloudnode-worker.yaml` 由部署流程生成，不写入 `custom.toml`。控制面部署单元包含

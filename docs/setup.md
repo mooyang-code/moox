@@ -7,6 +7,10 @@
 2. 完成控制面部署和 `setup apply`。
 3. 使用 `setup deploy-storage` 把 Storage 部署到 `custom.toml` 中的一台主机。
 
+`setup deploy-control` 会一起安装受管 Caddy、选择公网 ACME 或 internal CA、验收
+HTTPS，并配置健康检查以维持 Caddy 运行和自动续期。公网 IP/DNS 不需要用户安装根
+证书；私网或回环地址才需要通过 `caddy-ca.sh` 分发 internal CA。
+
 ## 默认配置
 
 默认配置集中在 [`examples/setup/default/`](../examples/setup/default/)：
