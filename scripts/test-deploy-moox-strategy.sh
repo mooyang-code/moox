@@ -65,7 +65,7 @@ grep -q '^  credential_file: ""$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml
 grep -q 'WITH_STRATEGY="${MOOX_WITH_STRATEGY:-1}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'start_strategy' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime' "${TMP_ROOT}/unpacked/start.sh"
-grep -q 'strategy) url=http://127.0.0.1:11431/readyz' "${TMP_ROOT}/unpacked/healthcheck.sh"
+grep -q 'strategy) url=http://127.0.0.1:11431/healthz' "${TMP_ROOT}/unpacked/healthcheck.sh"
 grep -q 'stop_service "strategy"' "${TMP_ROOT}/unpacked/stop.sh"
 ! find "${TMP_ROOT}/unpacked/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o -name '*.db' \) -print -quit | grep -q .
 

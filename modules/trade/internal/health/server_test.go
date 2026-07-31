@@ -68,10 +68,10 @@ func TestReadinessRequiresDatabaseEventBusAllLiveSessionsAndValidConfig(t *testi
 		want            bool
 	}{
 		{
-			name:         "EventBus disabled and initial account enumeration succeeded",
+			name:         "idle service is ready after account enumeration succeeds",
 			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
 			logicalReady: true, targetReady: true, operatorReady: true,
-			want: false,
+			want: true,
 		},
 		{
 			name: "all requirements ready", eventBusEnabled: true, eventBusReady: true,

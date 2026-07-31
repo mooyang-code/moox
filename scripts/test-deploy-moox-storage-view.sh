@@ -154,14 +154,14 @@ assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/start.s
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/healthcheck.sh"
 assert_grep 'sign_health_request' "${DEPLOY_DIR}/healthcheck.sh"
 for mapping in \
-  'admin.*127\.0\.0\.1:11010/readyz' \
-  'collector.*127\.0\.0\.1:11412/readyz' \
-  'factor.*127\.0\.0\.1:11414/readyz' \
-  'monitor.*127\.0\.0\.1:11409/readyz' \
-  'cloudnode.*127\.0\.0\.1:11411/readyz' \
-  'archive.*127\.0\.0\.1:11416/readyz' \
-  'eventbus.*127\.0\.0\.1:11419/readyz' \
-  'web-host.*127\.0\.0\.1:19527/readyz'; do
+  'admin.*127\.0\.0\.1:11010/healthz' \
+  'collector.*127\.0\.0\.1:11412/healthz' \
+  'factor.*127\.0\.0\.1:11414/healthz' \
+  'monitor.*127\.0\.0\.1:11409/healthz' \
+  'cloudnode.*127\.0\.0\.1:11411/healthz' \
+  'archive.*127\.0\.0\.1:11416/healthz' \
+  'eventbus.*127\.0\.0\.1:11419/healthz' \
+  'web-host.*127\.0\.0\.1:19527/healthz'; do
   assert_grep "${mapping}" "${DEPLOY_DIR}/healthcheck.sh"
 done
 assert_grep 'health probe failed' "${DEPLOY_DIR}/healthcheck.sh"

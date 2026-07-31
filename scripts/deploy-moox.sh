@@ -2355,23 +2355,23 @@ sign_health_request() {
 probe_service() {
   local name="$1" url=""
   case "${name}" in
-    admin) url=http://127.0.0.1:11010/readyz ;;
-    gateway) url=http://127.0.0.1:11012/readyz ;;
-    archive) url=http://127.0.0.1:11416/readyz ;;
-    cloudnode) url=http://127.0.0.1:11411/readyz ;;
-    collector) url=http://127.0.0.1:11412/readyz ;;
-    eventbus) url=http://127.0.0.1:11419/readyz ;;
-    factor) url=http://127.0.0.1:11414/readyz ;;
-    strategy) url=http://127.0.0.1:11431/readyz ;;
-    trade) url=http://127.0.0.1:11210/readyz ;;
-    monitor) url=http://127.0.0.1:11409/readyz ;;
-    web-host) url=http://127.0.0.1:19527/readyz ;;
-    storage-primary) url=http://127.0.0.1:20210/readyz ;;
-    storage-view) url=http://127.0.0.1:20211/readyz ;;
-    storage-node) url=http://127.0.0.1:20212/readyz ;;
+    admin) url=http://127.0.0.1:11010/healthz ;;
+    gateway) url=http://127.0.0.1:11012/healthz ;;
+    archive) url=http://127.0.0.1:11416/healthz ;;
+    cloudnode) url=http://127.0.0.1:11411/healthz ;;
+    collector) url=http://127.0.0.1:11412/healthz ;;
+    eventbus) url=http://127.0.0.1:11419/healthz ;;
+    factor) url=http://127.0.0.1:11414/healthz ;;
+    strategy) url=http://127.0.0.1:11431/healthz ;;
+    trade) url=http://127.0.0.1:11210/healthz ;;
+    monitor) url=http://127.0.0.1:11409/healthz ;;
+    web-host) url=http://127.0.0.1:19527/healthz ;;
+    storage-primary) url=http://127.0.0.1:20210/healthz ;;
+    storage-view) url=http://127.0.0.1:20211/healthz ;;
+    storage-node) url=http://127.0.0.1:20212/healthz ;;
     *) echo "unknown service health mapping: ${name}" >&2; return 1 ;;
   esac
-  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /readyz)" "${url}" >/dev/null
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}" >/dev/null
 }
 
 default_services=()

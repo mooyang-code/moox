@@ -38,6 +38,13 @@ func buildBusinessFreshnessReporter(
 			if service.ReporterStatus == "" {
 				continue
 			}
+			expected, err := reporterDeploymentExpected(ctx, repositories.Checks, service)
+			if err != nil {
+				return err
+			}
+			if !expected {
+				continue
+			}
 			checkID := strings.Join([]string{
 				"reporter", service.NodeID, service.ServiceName, service.InstanceID,
 			}, ":")
@@ -50,12 +57,25 @@ func buildBusinessFreshnessReporter(
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
+		factorExpected, factorExpectedKnown := false, false
 		for _, dataset := range overview.Datasets {
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
 			if dataset.Producer == "storage" {
 				// Storage rows are commit facts, not an enabled inventory owned
 				// by Storage, so they never create independent freshness checks.
 				continue
+			}
+			if dataset.Producer == "factor" {
+				if !factorExpectedKnown {
+					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "moox_factor")
+					if err != nil {
+						return err
+					}
+					factorExpectedKnown = true
+				}
+				if !factorExpected {
+					continue
+				}
 			}
 			if dataset.Reason == "producer stale" {
 				suppressed[dataset.SpaceID+"\x00"+checkID] = struct{}{}
@@ -198,6 +218,69 @@ func buildBusinessFreshnessReporter(
 			}
 		}
 		return errors.Join(errs...)
+	}
+}
+
+func serviceDeploymentExpected(
+	ctx context.Context,
+	checks *store.CheckRepository,
+	serviceName string,
+) (bool, error) {
+	if checks == nil || strings.TrimSpace(serviceName) == "" {
+		return true, nil
+	}
+	const (
+		pageSize  = 500
+		maxChecks = 1500
+	)
+	opts := store.ListChecksOptions{Source: domain.CheckSourceSysDeploy}
+	total, err := checks.Count(ctx, opts)
+	if err != nil {
+		return false, err
+	}
+	if total > maxChecks {
+		return false, fmt.Errorf("sysdeploy checks exceed limit %d", maxChecks)
+	}
+	found := false
+	for page := 1; int64((page-1)*pageSize) < total; page++ {
+		opts.Page = store.Page{Page: page, PageSize: pageSize}
+		rows, err := checks.List(ctx, opts)
+		if err != nil {
+			return false, err
+		}
+		for _, check := range rows {
+			if strings.HasSuffix(check.CheckID, ":"+serviceName) {
+				found = true
+				if check.Enabled {
+					return true, nil
+				}
+			}
+		}
+		if len(rows) < pageSize {
+			return !found, nil
+		}
+	}
+	return !found, nil
+}
+
+func reporterDeploymentExpected(
+	ctx context.Context,
+	checks *store.CheckRepository,
+	service monitorobservability.ServiceStatus,
+) (bool, error) {
+	if checks == nil || strings.TrimSpace(service.NodeID) == "" || strings.TrimSpace(service.ServiceName) == "" {
+		return true, nil
+	}
+	checkID := strings.Join([]string{"sysdeploy", service.NodeID, service.ServiceName}, ":")
+	check, err := checks.Get(ctx, "", checkID)
+	switch {
+	case err == nil:
+		return check.Enabled, nil
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		// External reporters, such as SCF nodes, do not have SysDeploy checks.
+		return true, nil
+	default:
+		return false, err
 	}
 }
 
