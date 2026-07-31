@@ -112,11 +112,13 @@ async function openDataNodePage(page: Page, query: string) {
 }
 
 async function openDatasetPage(page: Page, fixture: BrowserFixture) {
-  const spacesResponse = waitForMethod(page, "ListSpaces", "space");
+  const spacesResponse = waitForMethodExchange(page, "ListSpaces", "space");
   const nodesResponse = waitForMethod(page, "ListDataNodes");
   const datasetsResponse = waitForMethodExchange(page, "ListDatasets");
   await page.goto("/#/collector/data-management?tab=datasets");
-  const [spaces, initialNodes, initialDatasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
+  const [spacesExchange, initialNodes, initialDatasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
+  expect(spacesExchange.requestBody.status, "global Space selector must request active Spaces").toBe("active");
+  const spaces = spacesExchange.body;
   await expect(page.getByRole("heading", { name: "数据集" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "数据集ID", exact: true })).toBeVisible();
   expect(
@@ -261,11 +263,13 @@ test("remote default setup exposes each business Space with Datasets and Fields"
     { spaceID: "stock_cn", spaceName: "A股市场", datasetID: "stock_kline", fieldID: "amount" },
     { spaceID: "crypto", spaceName: "加密货币市场", datasetID: "spot_kline_1h", fieldID: "quote_volume" }
   ]) {
-    const spacesResponse = waitForMethod(page, "ListSpaces", "space");
+    const spacesResponse = waitForMethodExchange(page, "ListSpaces", "space");
     const nodesResponse = waitForMethod(page, "ListDataNodes");
     const datasetsResponse = waitForMethodExchange(page, "ListDatasets");
     await page.goto("/#/collector/data-management?tab=datasets");
-    const [spaces, initialNodes, initialDatasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
+    const [spacesExchange, initialNodes, initialDatasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
+    expect(spacesExchange.requestBody.status, "global Space selector must request active Spaces").toBe("active");
+    const spaces = spacesExchange.body;
     expect(
       spaces.spaces?.some(item => item.space_id === expected.spaceID && item.name === expected.spaceName),
       `${expected.spaceID} must be available in the Space selector`
