@@ -307,10 +307,10 @@ test.describe("DataNode management browser workflows", () => {
     await page.screenshot({ path: testInfo.outputPath("storage-datanode-desktop.png"), fullPage: true });
 
     await nodeRow.getByRole("button", { name: "查看" }).click();
-    const detailDrawer = page.getByTestId("data-node-detail-drawer");
-    await expect(detailDrawer).toBeVisible();
-    await expect(detailDrawer).toContainText("Space");
-    await expect(detailDrawer).toContainText(datasetNames[2]);
+    const detailModal = page.getByTestId("data-node-detail-modal");
+    await expect(detailModal).toBeVisible();
+    await expect(detailModal).toContainText("Space");
+    await expect(detailModal).toContainText(datasetNames[2]);
     expect(callsFor(fixture, "ListDataNodes")).toHaveLength(1);
     expect(callsFor(fixture, "ListDatasets")).toHaveLength(0);
     expect(callsFor(fixture, "GetDataNode")).toHaveLength(0);
@@ -355,9 +355,9 @@ test.describe("DataNode management browser workflows", () => {
     await expectButtonsDoNotOverlap(actionCell);
 
     await nodeRow.getByRole("button", { name: "查看" }).click();
-    const detailDrawer = page.getByTestId("data-node-detail-drawer");
-    await expect(detailDrawer).toBeVisible();
-    await expectInViewport(page, detailDrawer);
+    const detailModal = page.getByTestId("data-node-detail-modal");
+    await expect(detailModal).toBeVisible();
+    await expectInViewport(page, detailModal);
     await page.keyboard.press("Escape");
 
     await nodeRow.getByRole("button", { name: "编辑" }).click();

@@ -33,6 +33,12 @@ describe("storage page actions contract", () => {
     expect(pages.nodes).toContain('query: { tab: "datasets", space_id: summary.space_id, dataset_id: summary.dataset_id }');
   });
 
+  it("uses a modal for DataNode details instead of a side drawer", () => {
+    expect(pages.nodes).toContain('data-testid="data-node-detail-modal"');
+    expect(pages.nodes).not.toContain('data-testid="data-node-detail-drawer"');
+    expect(pages.nodes).toMatch(/<a-modal[\s\S]*data-testid="data-node-detail-modal"/);
+  });
+
   it("aligns the archive action row to the left", () => {
     expect(pages.archive).toMatch(/\.page-actions\s*\{[\s\S]*?justify-content:\s*flex-start;/);
   });

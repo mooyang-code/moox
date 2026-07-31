@@ -192,9 +192,9 @@ test("remote desktop covers DataNode details and Dataset lifecycle UI", async ({
     if (label) await expect(firstNode).toContainText(label);
   }
   await firstNode.getByRole("button", { name: "查看" }).click();
-  const detailDrawer = page.getByTestId("data-node-detail-drawer");
-  await expect(detailDrawer).toBeVisible();
-  await expect(detailDrawer.getByRole("heading", { name: "Dataset" })).toBeVisible();
+  const detailModal = page.getByTestId("data-node-detail-modal");
+  await expect(detailModal).toBeVisible();
+  await expect(detailModal.getByRole("heading", { name: "Dataset" })).toBeVisible();
   await page.keyboard.press("Escape");
 
   await openDatasetPage(page, fixture);
@@ -237,10 +237,10 @@ test("remote mobile keeps DataNode and Dataset workflows inside the viewport", a
   if (nodeHeadingBox) expect(nodeHeadingBox.x + nodeHeadingBox.width).toBeLessThanOrEqual(390);
   const nodeRow = page.getByRole("row").nth(1);
   await nodeRow.getByRole("button", { name: "查看" }).click();
-  const detailDrawer = page.getByTestId("data-node-detail-drawer");
-  await expect(detailDrawer).toBeVisible();
-  const drawerBox = await detailDrawer.boundingBox();
-  expect(drawerBox?.width || 0).toBeLessThanOrEqual(391);
+  const detailModal = page.getByTestId("data-node-detail-modal");
+  await expect(detailModal).toBeVisible();
+  const modalBox = await detailModal.boundingBox();
+  expect(modalBox?.width || 0).toBeLessThanOrEqual(391);
   await page.keyboard.press("Escape");
 
   await openDatasetPage(page, fixture);

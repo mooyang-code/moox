@@ -140,10 +140,10 @@
       </a-form>
     </a-modal>
 
-    <a-drawer
+    <a-modal
       v-model:visible="detailVisible"
-      data-testid="data-node-detail-drawer"
-      width="640px"
+      data-testid="data-node-detail-modal"
+      width="760px"
       title="数据节点详情"
       :footer="false"
     >
@@ -190,7 +190,7 @@
         </a-table>
         <a-empty v-else description="暂无 Dataset" />
       </div>
-    </a-drawer>
+    </a-modal>
   </div>
 </template>
 
