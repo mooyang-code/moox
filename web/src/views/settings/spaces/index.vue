@@ -41,7 +41,14 @@
           <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space>
-                <a-button size="mini" type="text" @click="spaceStore.setSelectedSpace(record.space_id)">设为当前</a-button>
+                <a-button
+                  size="mini"
+                  type="text"
+                  :disabled="record.status !== 'active'"
+                  @click="spaceStore.setSelectedSpace(record.space_id)"
+                >
+                  设为当前
+                </a-button>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
               </a-space>
             </template>
@@ -166,7 +173,9 @@ async function submit() {
   Message.success("空间已保存");
   visible.value = false;
   await load();
-  spaceStore.setSelectedSpace(form.space_id);
+  if (form.status === "active") {
+    spaceStore.setSelectedSpace(form.space_id);
+  }
 }
 
 function onPageChange(page: number) {

@@ -21,6 +21,7 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -38,6 +39,8 @@ const (
 	storageReleaseManifestFile   = "artifacts/storage-datanode-release-sha256.txt"
 	storageE2ESpec               = "tests/storage-datanode-management.remote.e2e.spec.ts"
 	storageDeploymentNodeID      = "storage-node-0"
+	storageBrowserFixtureOwner   = "storage-browser-e2e"
+	storageBrowserFixtureMaxAge  = time.Hour
 )
 
 type storageVerifyResult struct {
@@ -78,6 +81,7 @@ type storageBrowserResult struct {
 type storageBrowserFixture struct {
 	Namespace   string `json:"namespace"`
 	SpaceID     string `json:"space_id"`
+	SpaceName   string `json:"space_name"`
 	SourceID    string `json:"data_source_id"`
 	DatasetID   string `json:"dataset_id"`
 	DatasetName string `json:"dataset_name"`
@@ -102,6 +106,7 @@ type storageMetadataAPI interface {
 	CreateSpace(context.Context, *storagepb.CreateSpaceReq) (*storagepb.CreateSpaceRsp, error)
 	UpdateSpace(context.Context, *storagepb.UpdateSpaceReq) (*storagepb.UpdateSpaceRsp, error)
 	DeleteSpace(context.Context, *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error)
+	ListSpaces(context.Context, *storagepb.ListSpacesReq) (*storagepb.ListSpacesRsp, error)
 	CreateDataSource(context.Context, *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error)
 	UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq) (*storagepb.UpdateDataSourceRsp, error)
 	DeleteDataSource(context.Context, *storagepb.DeleteDataSourceReq) (*storagepb.DeleteDataSourceRsp, error)
@@ -121,7 +126,8 @@ type storageMetadataAPI interface {
 
 type storageAdminSpaceAPI interface {
 	CreateSpace(context.Context, *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error)
-	UpdateSpace(context.Context, *adminpb.UpdateSpaceReq) (*adminpb.UpdateSpaceRsp, error)
+	DeleteSpace(context.Context, *adminpb.DeleteSpaceReq) (*adminpb.DeleteSpaceRsp, error)
+	ListSpaces(context.Context, *adminpb.ListSpacesReq) (*adminpb.ListSpacesRsp, error)
 }
 
 type storageAdminSpaceProxy struct {
@@ -133,8 +139,12 @@ func (c *storageAdminSpaceProxy) CreateSpace(ctx context.Context, req *adminpb.C
 	return c.proxy.CreateSpace(ctx, req, c.options...)
 }
 
-func (c *storageAdminSpaceProxy) UpdateSpace(ctx context.Context, req *adminpb.UpdateSpaceReq) (*adminpb.UpdateSpaceRsp, error) {
-	return c.proxy.UpdateSpace(ctx, req, c.options...)
+func (c *storageAdminSpaceProxy) DeleteSpace(ctx context.Context, req *adminpb.DeleteSpaceReq) (*adminpb.DeleteSpaceRsp, error) {
+	return c.proxy.DeleteSpace(ctx, req, c.options...)
+}
+
+func (c *storageAdminSpaceProxy) ListSpaces(ctx context.Context, req *adminpb.ListSpacesReq) (*adminpb.ListSpacesRsp, error) {
+	return c.proxy.ListSpaces(ctx, req, c.options...)
 }
 
 type storagePrimaryAPI interface {
@@ -161,6 +171,10 @@ func (c *storageMetadataProxy) UpdateSpace(ctx context.Context, req *storagepb.U
 
 func (c *storageMetadataProxy) DeleteSpace(ctx context.Context, req *storagepb.DeleteSpaceReq) (*storagepb.DeleteSpaceRsp, error) {
 	return c.proxy.DeleteSpace(ctx, req, c.options...)
+}
+
+func (c *storageMetadataProxy) ListSpaces(ctx context.Context, req *storagepb.ListSpacesReq) (*storagepb.ListSpacesRsp, error) {
+	return c.proxy.ListSpaces(ctx, req, c.options...)
 }
 
 func (c *storageMetadataProxy) CreateDataSource(ctx context.Context, req *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error) {
@@ -1088,11 +1102,18 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 	if session == nil || session.metadata == nil || adminSpaces == nil {
 		return storageBrowserFixture{}, nil, errors.New("browser_e2e_fixture_unavailable")
 	}
+	if err := cleanupAbandonedStorageBrowserFixtures(ctx, session, adminSpaces); err != nil {
+		return storageBrowserFixture{}, nil, err
+	}
 	namespace := newStorageBrowserNamespace()
 	spaceID := namespace + "_space"
+	spaceName := "浏览器隔离空间 " + namespace
 	sourceID := namespace + "_source"
 	datasetID := namespace + "_dataset"
-	fixture = storageBrowserFixture{Namespace: namespace, SpaceID: spaceID, SourceID: sourceID, DatasetID: datasetID, DatasetName: "浏览器验证集"}
+	fixture = storageBrowserFixture{
+		Namespace: namespace, SpaceID: spaceID, SpaceName: spaceName,
+		SourceID: sourceID, DatasetID: datasetID, DatasetName: "浏览器验证集",
+	}
 	var adminSpace *adminpb.Space
 	var storageSpace *storagepb.Space
 	var source *storagepb.DataSource
@@ -1103,9 +1124,7 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 			first = err
 		}
 		if adminSpace != nil {
-			response, err := adminSpaces.UpdateSpace(ctx, &adminpb.UpdateSpaceReq{Space: &adminpb.Space{
-				SpaceId: adminSpace.GetSpaceId(), Name: adminSpace.GetName(), Owner: adminSpace.GetOwner(), Status: "disabled",
-			}})
+			response, err := adminSpaces.DeleteSpace(ctx, &adminpb.DeleteSpaceReq{SpaceId: adminSpace.GetSpaceId()})
 			if err != nil || response == nil || response.GetRetInfo() == nil || response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
 				if first == nil {
 					first = errors.New("browser_e2e_admin_space_cleanup_failed")
@@ -1123,14 +1142,14 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 	}()
 
 	adminResponse, err := adminSpaces.CreateSpace(ctx, &adminpb.CreateSpaceReq{Space: &adminpb.Space{
-		SpaceId: spaceID, Name: "浏览器隔离空间", Owner: "storage-e2e", Status: "active",
+		SpaceId: spaceID, Name: spaceName, Owner: storageBrowserFixtureOwner, Status: "active",
 	}})
 	if err != nil || adminResponse == nil || adminResponse.GetRetInfo() == nil || adminResponse.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS || adminResponse.GetSpace() == nil {
 		return fixture, cleanup, errors.New("browser_e2e_admin_space_create_failed")
 	}
 	adminSpace = adminResponse.GetSpace()
 	spaceResponse, err := session.metadata.CreateSpace(ctx, &storagepb.CreateSpaceReq{AuthInfo: session.auth, Space: &storagepb.Space{
-		SpaceId: spaceID, Name: "浏览器隔离空间", Owner: "storage-e2e", Status: "active",
+		SpaceId: spaceID, Name: spaceName, Owner: storageBrowserFixtureOwner, Status: "active",
 	}})
 	if err != nil || spaceResponse == nil || spaceResponse.GetRetInfo() == nil || spaceResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || spaceResponse.GetSpace() == nil {
 		return fixture, cleanup, errors.New("browser_e2e_storage_space_create_failed")
@@ -1165,6 +1184,139 @@ func createStorageBrowserFixture(ctx context.Context, session *remoteStorageSess
 		return fixture, cleanup, errors.New("browser_e2e_dataset_column_create_failed")
 	}
 	return fixture, cleanup, nil
+}
+
+func cleanupAbandonedStorageBrowserFixtures(
+	ctx context.Context,
+	session *remoteStorageSession,
+	adminSpaces storageAdminSpaceAPI,
+) error {
+	now := time.Now().UTC()
+	storageSpaces, err := listStorageBrowserSpaces(ctx, session)
+	if err != nil {
+		return err
+	}
+	for _, space := range storageSpaces {
+		if !abandonedStorageBrowserSpace(
+			space.GetSpaceId(),
+			space.GetName(),
+			space.GetCreatedAt(),
+			now,
+		) {
+			continue
+		}
+		response, deleteErr := session.metadata.DeleteSpace(ctx, &storagepb.DeleteSpaceReq{
+			AuthInfo: session.auth,
+			SpaceId:  space.GetSpaceId(),
+		})
+		if deleteErr != nil || response == nil || response.GetRetInfo() == nil ||
+			response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return errors.New("browser_e2e_fixture_cleanup_failed")
+		}
+	}
+
+	adminSpacesList, err := listAdminBrowserSpaces(ctx, adminSpaces)
+	if err != nil {
+		return err
+	}
+	for _, space := range adminSpacesList {
+		if !abandonedStorageBrowserSpace(
+			space.GetSpaceId(),
+			space.GetName(),
+			space.GetCreatedAt(),
+			now,
+		) {
+			continue
+		}
+		response, deleteErr := adminSpaces.DeleteSpace(ctx, &adminpb.DeleteSpaceReq{SpaceId: space.GetSpaceId()})
+		if deleteErr != nil || response == nil || response.GetRetInfo() == nil ||
+			response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
+			return errors.New("browser_e2e_fixture_cleanup_failed")
+		}
+	}
+	return nil
+}
+
+func listStorageBrowserSpaces(
+	ctx context.Context,
+	session *remoteStorageSession,
+) ([]*storagepb.Space, error) {
+	const pageSize = 200
+	var spaces []*storagepb.Space
+	for pageNo := uint32(1); ; pageNo++ {
+		response, err := session.metadata.ListSpaces(ctx, &storagepb.ListSpacesReq{
+			AuthInfo: session.auth,
+			Owner:    storageBrowserFixtureOwner,
+			Page:     &commonpb.Page{Page: pageNo, Size: pageSize},
+		})
+		if err != nil || response == nil || response.GetRetInfo() == nil ||
+			response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+			return nil, errors.New("browser_e2e_fixture_cleanup_failed")
+		}
+		spaces = append(spaces, response.GetSpaces()...)
+		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
+			return spaces, nil
+		}
+	}
+}
+
+func listAdminBrowserSpaces(
+	ctx context.Context,
+	adminSpaces storageAdminSpaceAPI,
+) ([]*adminpb.Space, error) {
+	const pageSize = 200
+	var spaces []*adminpb.Space
+	for pageNo := uint32(1); ; pageNo++ {
+		response, err := adminSpaces.ListSpaces(ctx, &adminpb.ListSpacesReq{
+			Owner: storageBrowserFixtureOwner,
+			Page:  &commonpb.Page{Page: pageNo, Size: pageSize},
+		})
+		if err != nil || response == nil || response.GetRetInfo() == nil ||
+			response.GetRetInfo().GetCode() != adminpb.ErrorCode_SUCCESS {
+			return nil, errors.New("browser_e2e_fixture_cleanup_failed")
+		}
+		spaces = append(spaces, response.GetSpaces()...)
+		if response.GetPageResult() == nil || !response.GetPageResult().GetHasMore() {
+			return spaces, nil
+		}
+	}
+}
+
+func abandonedStorageBrowserSpace(spaceID, name, createdAt string, now time.Time) bool {
+	const namespaceLength = 10
+	if !strings.HasSuffix(spaceID, "_space") {
+		return false
+	}
+	namespace := strings.TrimSuffix(spaceID, "_space")
+	if len(namespace) != namespaceLength || !strings.HasPrefix(namespace, "br") ||
+		name != "浏览器隔离空间 "+namespace {
+		return false
+	}
+	for _, char := range namespace[2:] {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'z') {
+			return false
+		}
+	}
+	created, ok := parseStorageBrowserTime(createdAt)
+	if !ok || created.After(now) {
+		return false
+	}
+	return now.Sub(created) >= storageBrowserFixtureMaxAge
+}
+
+func parseStorageBrowserTime(value string) (time.Time, bool) {
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		parsed, err := time.Parse(layout, strings.TrimSpace(value))
+		if err == nil {
+			return parsed.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name, repoRoot string) (storageBrowserResult, error) {

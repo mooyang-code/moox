@@ -7,6 +7,7 @@ test.describe.configure({ mode: "serial" });
 type BrowserFixture = {
   namespace: string;
   space_id: string;
+  space_name: string;
   data_source_id: string;
   dataset_id: string;
   dataset_name: string;
@@ -21,6 +22,11 @@ type RpcBody = {
   fields?: Array<{ field_id?: string; name?: string }>;
 };
 
+type RpcExchange = {
+  body: RpcBody;
+  requestBody: Record<string, unknown>;
+};
+
 function browserFixture(): BrowserFixture {
   const raw = process.env.MOOX_REMOTE_STORAGE_FIXTURE;
   if (!raw) throw new Error("remote_storage_fixture_missing");
@@ -30,24 +36,40 @@ function browserFixture(): BrowserFixture {
   } catch {
     throw new Error("remote_storage_fixture_invalid");
   }
-  for (const key of ["namespace", "space_id", "data_source_id", "dataset_id", "dataset_name"] as const) {
+  for (const key of ["namespace", "space_id", "space_name", "data_source_id", "dataset_id", "dataset_name"] as const) {
     if (!fixture[key]) throw new Error(`remote_storage_fixture_${key}_missing`);
   }
   return fixture;
 }
 
-function waitForMethod(page: Page, method: string, service = "storage") {
+function waitForMethodExchange(page: Page, method: string, service = "storage", expectedSpaceID = "") {
   return page
     .waitForResponse(response => {
       if (response.request().method() !== "POST") return false;
-      return new URL(response.url()).pathname === `/api/admin/${service}/${method}`;
+      if (new URL(response.url()).pathname !== `/api/admin/${service}/${method}`) return false;
+      if (!expectedSpaceID) return true;
+      try {
+        return (response.request().postDataJSON() as Record<string, unknown>).space_id === expectedSpaceID;
+      } catch {
+        return false;
+      }
     })
     .then(async response => {
       expect(response.ok(), `${method} HTTP response`).toBeTruthy();
       const body = (await response.json()) as RpcBody;
       expect(body.ret_info?.code, `${method} ret_info.code`).toBe(0);
-      return body;
+      let requestBody: Record<string, unknown> = {};
+      try {
+        requestBody = response.request().postDataJSON() as Record<string, unknown>;
+      } catch {
+        requestBody = {};
+      }
+      return { body, requestBody } satisfies RpcExchange;
     });
+}
+
+function waitForMethod(page: Page, method: string, service = "storage") {
+  return waitForMethodExchange(page, method, service).then(exchange => exchange.body);
 }
 
 async function login(page: Page) {
@@ -92,15 +114,22 @@ async function openDataNodePage(page: Page, query: string) {
 async function openDatasetPage(page: Page, fixture: BrowserFixture) {
   const spacesResponse = waitForMethod(page, "ListSpaces", "space");
   const nodesResponse = waitForMethod(page, "ListDataNodes");
-  const datasetsResponse = waitForMethod(page, "ListDatasets");
-  await page.goto(`/#/collector/data-management?tab=datasets&space_id=${encodeURIComponent(fixture.space_id)}`);
-  const [spaces, nodes, datasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
+  const datasetsResponse = waitForMethodExchange(page, "ListDatasets");
+  await page.goto("/#/collector/data-management?tab=datasets");
+  const [spaces, initialNodes, initialDatasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
   await expect(page.getByRole("heading", { name: "数据集" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "数据集ID", exact: true })).toBeVisible();
   expect(
     spaces.spaces?.some(item => item.space_id === fixture.space_id),
     "browser fixture Space must be listed by Admin"
   ).toBeTruthy();
+  const { nodes, datasets } = await selectBusinessSpace(
+    page,
+    { spaceID: fixture.space_id, spaceName: fixture.space_name },
+    spaces.spaces || [],
+    initialNodes,
+    initialDatasets
+  );
   expect(nodes.items?.length || 0, "Dataset page must resolve DataNodes").toBeGreaterThan(0);
   expect(
     datasets.datasets?.some(item => item.dataset_id === fixture.dataset_id),
@@ -114,7 +143,39 @@ function firstDatasetRow(page: Page, datasetId: string) {
   return page.getByRole("row").filter({ hasText: datasetId }).first();
 }
 
+async function selectBusinessSpace(
+  page: Page,
+  expected: { spaceID: string; spaceName: string },
+  spaces: NonNullable<RpcBody["spaces"]>,
+  initialNodes: RpcBody,
+  initialDatasets: RpcExchange
+) {
+  const input = page.locator("input.arco-select-view-input").first();
+  const selector = input.locator("..");
+  await expect(selector).toBeVisible();
+  if (initialDatasets.requestBody.space_id === expected.spaceID) {
+    return { nodes: initialNodes, datasets: initialDatasets.body };
+  }
+
+  const optionIndex = spaces.findIndex(space => space.space_id === expected.spaceID);
+  expect(optionIndex, `${expected.spaceID} must have a selectable option`).toBeGreaterThanOrEqual(0);
+  await selector.click();
+  const options = page.locator(".arco-select-dropdown:visible .arco-select-option");
+  await expect(options).toHaveCount(spaces.length);
+  const option = options.nth(optionIndex);
+  await expect(option).toBeVisible();
+  await expect(option).toHaveText(expected.spaceName);
+  const nodesResponse = waitForMethod(page, "ListDataNodes");
+  const datasetsResponse = waitForMethodExchange(page, "ListDatasets", "storage", expected.spaceID);
+  await option.click();
+  const [nodes, datasetsExchange] = await Promise.all([nodesResponse, datasetsResponse]);
+  expect(datasetsExchange.requestBody.space_id).toBe(expected.spaceID);
+  await expect(input).toHaveAttribute("placeholder", expected.spaceName);
+  return { nodes, datasets: datasetsExchange.body };
+}
+
 test("remote desktop covers DataNode details and Dataset lifecycle UI", async ({ page }) => {
+  test.skip(process.env.MOOX_REMOTE_DEFAULT_SETUP === "1", "covered by the standard remote acceptance run");
   await login(page);
   const fixture = browserFixture();
   const nodeBody = await openDataNodePage(page, "unknown");
@@ -161,6 +222,7 @@ test("remote desktop covers DataNode details and Dataset lifecycle UI", async ({
 });
 
 test("remote mobile keeps DataNode and Dataset workflows inside the viewport", async ({ page }) => {
+  test.skip(process.env.MOOX_REMOTE_DEFAULT_SETUP === "1", "covered by the standard remote acceptance run");
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page);
   const fixture = browserFixture();
@@ -201,19 +263,20 @@ test("remote default setup exposes each business Space with Datasets and Fields"
   ]) {
     const spacesResponse = waitForMethod(page, "ListSpaces", "space");
     const nodesResponse = waitForMethod(page, "ListDataNodes");
-    const datasetsResponse = waitForMethod(page, "ListDatasets");
-    await page.goto(`/#/collector/data-management?tab=datasets&space_id=${expected.spaceID}`);
-    const [spaces, nodes, datasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
+    const datasetsResponse = waitForMethodExchange(page, "ListDatasets");
+    await page.goto("/#/collector/data-management?tab=datasets");
+    const [spaces, initialNodes, initialDatasets] = await Promise.all([spacesResponse, nodesResponse, datasetsResponse]);
     expect(
       spaces.spaces?.some(item => item.space_id === expected.spaceID && item.name === expected.spaceName),
       `${expected.spaceID} must be available in the Space selector`
     ).toBeTruthy();
+    const { nodes, datasets } = await selectBusinessSpace(page, expected, spaces.spaces || [], initialNodes, initialDatasets);
     expect(nodes.items?.length || 0, `${expected.spaceID} must resolve a DataNode`).toBeGreaterThan(0);
     expect(
       datasets.datasets?.some(item => item.dataset_id === expected.datasetID),
       `${expected.spaceID} must expose ${expected.datasetID}`
     ).toBeTruthy();
-    await expect(page.getByRole("textbox", { name: expected.spaceName })).toBeVisible();
+    await expect(page.locator("input.arco-select-view-input").first()).toHaveAttribute("placeholder", expected.spaceName);
     await expect(page.getByRole("row").filter({ hasText: expected.datasetID })).toBeVisible();
 
     const groupsResponse = waitForMethod(page, "ListFieldGroups");
@@ -226,7 +289,7 @@ test("remote default setup exposes each business Space with Datasets and Fields"
       `${expected.spaceID} must expose ${expected.fieldID}`
     ).toBeTruthy();
     await expect(page.getByRole("heading", { name: "字段管理" })).toBeVisible();
-    await expect(page.getByRole("textbox", { name: expected.spaceName })).toBeVisible();
+    await expect(page.locator("input.arco-select-view-input").first()).toHaveAttribute("placeholder", expected.spaceName);
     await expect(page.getByRole("row").filter({ hasText: expected.fieldID })).toBeVisible();
   }
 });

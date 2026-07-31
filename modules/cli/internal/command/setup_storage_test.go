@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -173,15 +176,113 @@ func TestStorageBrowserFixtureCreatesAndCleansIsolatedAdminAndMetadataRows(t *te
 	fixture, cleanup, err := createStorageBrowserFixture(context.Background(), session, admin)
 	require.NoError(t, err)
 	require.Equal(t, fixture.SpaceID, fixture.Namespace+"_space")
+	require.Equal(t, fixture.SpaceName, "浏览器隔离空间 "+fixture.Namespace)
 	require.Equal(t, fixture.DatasetID, fixture.Namespace+"_dataset")
 	require.Equal(t, fixture.DatasetName, "浏览器验证集")
 	require.NoError(t, cleanup())
 	require.Equal(t, []string{fixture.DatasetID}, metadata.deletedDatasets)
 	require.Equal(t, []string{fixture.SourceID}, metadata.deletedSources)
 	require.Equal(t, []string{fixture.SpaceID}, metadata.deletedSpaces)
-	require.Equal(t, []string{fixture.SpaceID}, admin.disabledSpaces)
+	require.Equal(t, []string{fixture.SpaceID}, admin.deletedSpaces)
 	require.Equal(t, []string{"internal"}, metadata.dataSourceKinds)
 	require.Equal(t, []string{"数值"}, metadata.datasetColumnDisplayNames)
+}
+
+func TestStorageBrowserFixtureRemovesAbandonedE2ESpacesBeforeCreating(t *testing.T) {
+	t.Parallel()
+	staleCreatedAt := time.Now().UTC().Add(-2 * storageBrowserFixtureMaxAge).Format(time.RFC3339Nano)
+	recentCreatedAt := time.Now().UTC().Add(-storageBrowserFixtureMaxAge / 2).Format(time.RFC3339Nano)
+	var storageSpaces []*storagepb.Space
+	var adminSpaceRows []*adminpb.Space
+	var staleIDs []string
+	for index := 0; index < 205; index++ {
+		namespace := fmt.Sprintf("brstale%03d", index)
+		spaceID := namespace + "_space"
+		spaceName := "浏览器隔离空间 " + namespace
+		staleIDs = append(staleIDs, spaceID)
+		storageSpaces = append(storageSpaces, &storagepb.Space{
+			SpaceId: spaceID, Name: spaceName, Owner: storageBrowserFixtureOwner,
+			Status: "active", CreatedAt: staleCreatedAt,
+		})
+		adminSpaceRows = append(adminSpaceRows, &adminpb.Space{
+			SpaceId: spaceID, Name: spaceName, Owner: storageBrowserFixtureOwner,
+			Status: "active", CreatedAt: staleCreatedAt,
+		})
+	}
+	storageSpaces = append(storageSpaces,
+		&storagepb.Space{
+			SpaceId: "brrecent01_space", Name: "浏览器隔离空间 brrecent01",
+			Owner: storageBrowserFixtureOwner, Status: "active", CreatedAt: recentCreatedAt,
+		},
+		&storagepb.Space{
+			SpaceId: "business_space", Name: "业务空间",
+			Owner: storageBrowserFixtureOwner, Status: "active", CreatedAt: staleCreatedAt,
+		},
+		&storagepb.Space{
+			SpaceId: "brmismatch_space", Name: "浏览器隔离空间 brdifferent",
+			Owner: storageBrowserFixtureOwner, Status: "active", CreatedAt: staleCreatedAt,
+		},
+		&storagepb.Space{
+			SpaceId: "brshort_space", Name: "浏览器隔离空间 brshort",
+			Owner: storageBrowserFixtureOwner, Status: "active", CreatedAt: staleCreatedAt,
+		},
+		&storagepb.Space{
+			SpaceId: "brother_space", Name: "浏览器隔离空间 brother",
+			Owner: "storage-e2e", Status: "active", CreatedAt: staleCreatedAt,
+		},
+	)
+	adminSpaceRows = append(adminSpaceRows,
+		&adminpb.Space{
+			SpaceId: "brrecent01_space", Name: "浏览器隔离空间 brrecent01",
+			Owner: storageBrowserFixtureOwner, Status: "active", CreatedAt: recentCreatedAt,
+		},
+		&adminpb.Space{
+			SpaceId: "business_space", Name: "业务空间",
+			Owner: storageBrowserFixtureOwner, Status: "active", CreatedAt: staleCreatedAt,
+		},
+		&adminpb.Space{
+			SpaceId: "brmismatch_space", Name: "浏览器隔离空间 brdifferent",
+			Owner: storageBrowserFixtureOwner, Status: "active", CreatedAt: staleCreatedAt,
+		},
+		&adminpb.Space{
+			SpaceId: "brshort_space", Name: "浏览器隔离空间 brshort",
+			Owner: storageBrowserFixtureOwner, Status: "active", CreatedAt: staleCreatedAt,
+		},
+		&adminpb.Space{
+			SpaceId: "brdone_space", Name: "浏览器隔离空间 brdone",
+			Owner: storageBrowserFixtureOwner, Status: "disabled", CreatedAt: staleCreatedAt,
+		},
+		&adminpb.Space{
+			SpaceId: "brdisable0_space", Name: "浏览器隔离空间 brdisable0",
+			Owner: storageBrowserFixtureOwner, Status: "disabled", CreatedAt: staleCreatedAt,
+		},
+	)
+	metadata := &fakeStorageMetadataAPI{spaces: storageSpaces}
+	admin := &fakeStorageAdminSpaceAPI{spaces: adminSpaceRows}
+	session := &remoteStorageSession{
+		metadata: metadata,
+		auth:     &storagepb.AuthInfo{AppId: "storage-metadata", AppKey: "signed"},
+	}
+
+	fixture, cleanup, err := createStorageBrowserFixture(context.Background(), session, admin)
+	require.NoError(t, err)
+	require.Equal(t, staleIDs, metadata.deletedSpaces)
+	require.Equal(t, append(staleIDs, "brdisable0_space"), admin.deletedSpaces)
+	require.Equal(t, 2, metadata.listSpaceCalls)
+	require.Equal(t, 2, admin.listSpaceCalls)
+	for _, protectedID := range []string{
+		"brrecent01_space", "business_space", "brmismatch_space", "brshort_space", "brother_space",
+	} {
+		require.NotContains(t, metadata.deletedSpaces, protectedID)
+	}
+	for _, protectedID := range []string{
+		"brrecent01_space", "business_space", "brmismatch_space", "brshort_space", "brdone_space",
+	} {
+		require.NotContains(t, admin.deletedSpaces, protectedID)
+	}
+	require.NoError(t, cleanup())
+	require.Equal(t, append(staleIDs, fixture.SpaceID), metadata.deletedSpaces)
+	require.Equal(t, append(append(staleIDs, "brdisable0_space"), fixture.SpaceID), admin.deletedSpaces)
 }
 
 func TestStorageBrowserFixtureKeepsCreateFailureWhenStorageSpaceWasNotCreated(t *testing.T) {
@@ -197,7 +298,7 @@ func TestStorageBrowserFixtureKeepsCreateFailureWhenStorageSpaceWasNotCreated(t 
 
 	require.EqualError(t, err, "browser_e2e_storage_space_create_failed")
 	require.Empty(t, metadata.deletedSpaces)
-	require.Len(t, admin.disabledSpaces, 1)
+	require.Len(t, admin.deletedSpaces, 1)
 }
 
 func TestStorageBrowserFixtureDoesNotMaskDataSourceFailureWithCleanupFailure(t *testing.T) {
@@ -213,7 +314,7 @@ func TestStorageBrowserFixtureDoesNotMaskDataSourceFailureWithCleanupFailure(t *
 
 	require.EqualError(t, err, "browser_e2e_data_source_create_failed (browser_e2e_fixture_cleanup_failed)")
 	require.Len(t, metadata.deletedSpaces, 1)
-	require.Len(t, admin.disabledSpaces, 1)
+	require.Len(t, admin.deletedSpaces, 1)
 }
 
 func TestValidateStorageBuildProvenanceRequiresExactRemoteArtifacts(t *testing.T) {
@@ -278,6 +379,7 @@ func mustJSON(t *testing.T, value any) []byte {
 
 type fakeStorageMetadataAPI struct {
 	auths                     []*storagepb.AuthInfo
+	spaces                    []*storagepb.Space
 	deletedSpaces             []string
 	deletedSources            []string
 	deletedDatasets           []string
@@ -289,21 +391,45 @@ type fakeStorageMetadataAPI struct {
 	failCreateSpace           bool
 	failCreateDataSource      bool
 	failDeleteSpace           bool
+	listSpaceCalls            int
 }
 
 type fakeStorageAdminSpaceAPI struct {
-	disabledSpaces []string
+	deletedSpaces  []string
+	spaces         []*adminpb.Space
+	listSpaceCalls int
 }
 
 func (f *fakeStorageAdminSpaceAPI) CreateSpace(_ context.Context, req *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error) {
 	return &adminpb.CreateSpaceRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS}, Space: req.GetSpace()}, nil
 }
 
-func (f *fakeStorageAdminSpaceAPI) UpdateSpace(_ context.Context, req *adminpb.UpdateSpaceReq) (*adminpb.UpdateSpaceRsp, error) {
-	if req.GetSpace().GetStatus() == "disabled" {
-		f.disabledSpaces = append(f.disabledSpaces, req.GetSpace().GetSpaceId())
+func (f *fakeStorageAdminSpaceAPI) DeleteSpace(_ context.Context, req *adminpb.DeleteSpaceReq) (*adminpb.DeleteSpaceRsp, error) {
+	f.deletedSpaces = append(f.deletedSpaces, req.GetSpaceId())
+	return &adminpb.DeleteSpaceRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS}}, nil
+}
+
+func (f *fakeStorageAdminSpaceAPI) ListSpaces(
+	_ context.Context,
+	req *adminpb.ListSpacesReq,
+) (*adminpb.ListSpacesRsp, error) {
+	f.listSpaceCalls++
+	var spaces []*adminpb.Space
+	for _, space := range f.spaces {
+		if req.GetOwner() != "" && space.GetOwner() != req.GetOwner() {
+			continue
+		}
+		if req.GetStatus() != "" && space.GetStatus() != req.GetStatus() {
+			continue
+		}
+		spaces = append(spaces, space)
 	}
-	return &adminpb.UpdateSpaceRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS}, Space: req.GetSpace()}, nil
+	page, size, items, hasMore := paginateStorageBrowserSpaces(spaces, req.GetPage())
+	return &adminpb.ListSpacesRsp{
+		RetInfo:    &adminpb.RetInfo{Code: adminpb.ErrorCode_SUCCESS},
+		Spaces:     items,
+		PageResult: &commonpb.PageResult{Page: page, Size: size, Total: uint32(len(spaces)), HasMore: hasMore},
+	}, nil
 }
 
 func (f *fakeStorageMetadataAPI) remember(auth *storagepb.AuthInfo) { f.auths = append(f.auths, auth) }
@@ -327,6 +453,42 @@ func (f *fakeStorageMetadataAPI) DeleteSpace(_ context.Context, req *storagepb.D
 		return &storagepb.DeleteSpaceRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM}}, nil
 	}
 	return &storagepb.DeleteSpaceRsp{RetInfo: storageOK()}, nil
+}
+func (f *fakeStorageMetadataAPI) ListSpaces(
+	_ context.Context,
+	req *storagepb.ListSpacesReq,
+) (*storagepb.ListSpacesRsp, error) {
+	f.remember(req.GetAuthInfo())
+	f.listSpaceCalls++
+	var spaces []*storagepb.Space
+	for _, space := range f.spaces {
+		if req.GetOwner() == "" || space.GetOwner() == req.GetOwner() {
+			spaces = append(spaces, space)
+		}
+	}
+	page, size, items, hasMore := paginateStorageBrowserSpaces(spaces, req.GetPage())
+	return &storagepb.ListSpacesRsp{
+		RetInfo: storageOK(), Spaces: items,
+		PageResult: &commonpb.PageResult{Page: page, Size: size, Total: uint32(len(spaces)), HasMore: hasMore},
+	}, nil
+}
+
+func paginateStorageBrowserSpaces[T any](items []T, request *commonpb.Page) (uint32, uint32, []T, bool) {
+	page, size := uint32(1), uint32(20)
+	if request != nil {
+		if request.GetPage() > 0 {
+			page = request.GetPage()
+		}
+		if request.GetSize() > 0 {
+			size = request.GetSize()
+		}
+	}
+	start := int((page - 1) * size)
+	if start >= len(items) {
+		return page, size, nil, false
+	}
+	end := min(start+int(size), len(items))
+	return page, size, items[start:end], end < len(items)
 }
 func (f *fakeStorageMetadataAPI) CreateDataSource(_ context.Context, req *storagepb.CreateDataSourceReq) (*storagepb.CreateDataSourceRsp, error) {
 	f.remember(req.GetAuthInfo())
