@@ -159,36 +159,46 @@
 
       <div v-if="detailNode" class="detail-datasets">
         <h3>Dataset</h3>
-        <a-table
-          v-if="detailNode.datasets.length"
-          row-key="dataset_id"
-          size="small"
-          :bordered="{ cell: true }"
-          :data="detailNode.datasets"
-          :pagination="detailPagination"
-          :scroll="{ x: 'max-content' }"
-          @page-change="onDetailPageChange"
-        >
-          <template #columns>
-            <a-table-column title="Space" data-index="space_id" :width="120" />
-            <a-table-column title="Dataset ID" data-index="dataset_id" :width="150" />
-            <a-table-column title="名称" :width="150">
-              <template #cell="{ record }">{{ record.name || record.dataset_id }}</template>
-            </a-table-column>
-            <a-table-column title="数据类型" :width="150" data-index="data_kind" />
-            <a-table-column title="保留时长" :width="120" data-index="keep_duration" />
-            <a-table-column title="状态" :width="90">
-              <template #cell="{ record }">
-                <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="操作" :width="100" align="center">
-              <template #cell="{ record }">
-                <a-button size="mini" type="text" @click="openDataset(record)">打开</a-button>
-              </template>
-            </a-table-column>
-          </template>
-        </a-table>
+        <div v-if="detailNode.datasets.length" class="detail-datasets-list">
+          <a-table
+            row-key="dataset_id"
+            size="small"
+            :bordered="{ cell: true }"
+            :data="detailDatasetRows"
+            :pagination="false"
+            :scroll="{ x: 'max-content', y: '380px' }"
+          >
+            <template #columns>
+              <a-table-column title="Space" data-index="space_id" :width="120" />
+              <a-table-column title="Dataset ID" data-index="dataset_id" :width="150" />
+              <a-table-column title="名称" :width="150">
+                <template #cell="{ record }">{{ record.name || record.dataset_id }}</template>
+              </a-table-column>
+              <a-table-column title="数据类型" :width="150" data-index="data_kind" />
+              <a-table-column title="保留时长" :width="120" data-index="keep_duration" />
+              <a-table-column title="状态" :width="90">
+                <template #cell="{ record }">
+                  <a-tag size="small" :color="statusColor(record.status)">{{ record.status }}</a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="操作" :width="100" align="center">
+                <template #cell="{ record }">
+                  <a-button size="mini" type="text" @click="openDataset(record)">打开</a-button>
+                </template>
+              </a-table-column>
+            </template>
+          </a-table>
+          <a-pagination
+            class="detail-datasets-pagination"
+            :current="detailPagination.current"
+            :total="detailPagination.total"
+            :page-size="detailPagination.pageSize"
+            :show-total="detailPagination.showTotal"
+            :show-page-size="detailPagination.showPageSize"
+            :hide-on-single-page="detailPagination.hideOnSinglePage"
+            @change="onDetailPageChange"
+          />
+        </div>
         <a-empty v-else description="暂无 Dataset" />
       </div>
     </a-modal>
@@ -223,6 +233,11 @@ const detailPagination = reactive({
 });
 const pagination = reactive(defaultPagination());
 const form = reactive({ node_id: "", name: "", service_target: "", status: "disabled" });
+const detailDatasetRows = computed(() => {
+  if (!detailNode.value) return [];
+  const start = (detailPagination.current - 1) * detailPagination.pageSize;
+  return detailNode.value.datasets.slice(start, start + detailPagination.pageSize);
+});
 
 const selectedNodeId = computed(() => form.node_id);
 
@@ -388,5 +403,15 @@ onMounted(load);
 .detail-datasets h3 {
   margin: 0 0 12px;
   font-size: 16px;
+}
+
+.detail-datasets-list {
+  min-height: 452px;
+}
+
+.detail-datasets-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 </style>

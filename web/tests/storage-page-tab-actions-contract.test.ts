@@ -37,7 +37,9 @@ describe("storage page actions contract", () => {
     expect(pages.nodes).toContain('data-testid="data-node-detail-modal"');
     expect(pages.nodes).not.toContain('data-testid="data-node-detail-drawer"');
     expect(pages.nodes).toMatch(/<a-modal[\s\S]*data-testid="data-node-detail-modal"[\s\S]*width="1000px"/);
-    expect(pages.nodes).toContain(":pagination=\"detailPagination\"");
+    expect(pages.nodes).toContain('class="detail-datasets-list"');
+    expect(pages.nodes).toContain("<a-pagination");
+    expect(pages.nodes).toContain(":pagination=\"false\"");
     expect(pages.nodes).toContain("pageSize: 10");
     expect(pages.nodes).toContain("showPageSize: false");
   });
