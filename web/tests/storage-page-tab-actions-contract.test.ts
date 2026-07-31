@@ -36,7 +36,10 @@ describe("storage page actions contract", () => {
   it("uses a modal for DataNode details instead of a side drawer", () => {
     expect(pages.nodes).toContain('data-testid="data-node-detail-modal"');
     expect(pages.nodes).not.toContain('data-testid="data-node-detail-drawer"');
-    expect(pages.nodes).toMatch(/<a-modal[\s\S]*data-testid="data-node-detail-modal"/);
+    expect(pages.nodes).toMatch(/<a-modal[\s\S]*data-testid="data-node-detail-modal"[\s\S]*width="1000px"/);
+    expect(pages.nodes).toContain(":pagination=\"detailPagination\"");
+    expect(pages.nodes).toContain("pageSize: 10");
+    expect(pages.nodes).toContain("showPageSize: false");
   });
 
   it("aligns the archive action row to the left", () => {

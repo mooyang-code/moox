@@ -28,7 +28,12 @@ type Dataset = {
 const ok = (data: JsonRecord = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
 const fail = (code: number, msg: string) => ({ ret_info: { code, msg } });
 
-const datasetNames = ["超长行情数据集A", "跨市场行情数据集B", "日内成交明细数据集C"];
+const datasetNames = [
+  "超长行情数据集A",
+  "跨市场行情数据集B",
+  "日内成交明细数据集C",
+  ...Array.from({ length: 9 }, (_, index) => `分页测试数据集${index + 1}`)
+];
 
 function makeDataset(overrides: Partial<Dataset> = {}): Dataset {
   return {
@@ -311,6 +316,11 @@ test.describe("DataNode management browser workflows", () => {
     await expect(detailModal).toBeVisible();
     await expect(detailModal).toContainText("Space");
     await expect(detailModal).toContainText(datasetNames[2]);
+    const secondDetailPage = detailModal.locator("li.arco-pagination-item").filter({ hasText: "2" });
+    await expect(secondDetailPage).toBeVisible();
+    await expect(detailModal).not.toContainText(datasetNames.at(-1) || "");
+    await secondDetailPage.click();
+    await expect(detailModal).toContainText(datasetNames.at(-1) || "");
     expect(callsFor(fixture, "ListDataNodes")).toHaveLength(1);
     expect(callsFor(fixture, "ListDatasets")).toHaveLength(0);
     expect(callsFor(fixture, "GetDataNode")).toHaveLength(0);

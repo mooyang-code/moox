@@ -143,7 +143,7 @@
     <a-modal
       v-model:visible="detailVisible"
       data-testid="data-node-detail-modal"
-      width="760px"
+      width="1000px"
       title="数据节点详情"
       :footer="false"
     >
@@ -165,8 +165,9 @@
           size="small"
           :bordered="{ cell: true }"
           :data="detailNode.datasets"
-          :pagination="false"
+          :pagination="detailPagination"
           :scroll="{ x: 'max-content' }"
+          @page-change="onDetailPageChange"
         >
           <template #columns>
             <a-table-column title="Space" data-index="space_id" :width="120" />
@@ -212,6 +213,14 @@ const visible = ref(false);
 const nodeInfoVisible = ref(false);
 const detailVisible = ref(false);
 const detailNode = ref<DataNodeListItem>();
+const detailPagination = reactive({
+  current: 1,
+  pageSize: 10,
+  total: 0,
+  showTotal: true,
+  showPageSize: false,
+  hideOnSinglePage: false
+});
 const pagination = reactive(defaultPagination());
 const form = reactive({ node_id: "", name: "", service_target: "", status: "disabled" });
 
@@ -235,7 +244,13 @@ function openEdit(record: DataNodeListItem) {
 
 function openDetail(record: DataNodeListItem) {
   detailNode.value = record;
+  detailPagination.current = 1;
+  detailPagination.total = record.datasets.length;
   detailVisible.value = true;
+}
+
+function onDetailPageChange(page: number) {
+  detailPagination.current = page;
 }
 
 function canDelete(record: DataNodeListItem) {
