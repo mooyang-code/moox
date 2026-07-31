@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CONFIG=${CADDY_CONFIG:-"${ROOT_DIR}/deploy/caddy/Caddyfile"}
 NO_ADMIN_CONFIG="${ROOT_DIR}/deploy/caddy/Caddyfile.no-admin"
+PUBLIC_CONFIG="${ROOT_DIR}/deploy/caddy/Caddyfile.public"
+PUBLIC_NO_ADMIN_CONFIG="${ROOT_DIR}/deploy/caddy/Caddyfile.public.no-admin"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -35,6 +37,14 @@ grep -Fq 'Content-Security-Policy' "${CONFIG}" || fail 'browser CSP is missing'
 if grep -Eq '^[[:space:]]*handle_path([[:space:]]|$)' "${CONFIG}"; then
   fail 'handle_path would strip upstream request paths'
 fi
+for public_config in "${PUBLIC_CONFIG}" "${PUBLIC_NO_ADMIN_CONFIG}"; do
+  [[ -f "${public_config}" ]] || fail "public Caddy configuration is missing: ${public_config}"
+  grep -Fq 'profile shortlived' "${public_config}" || fail "${public_config} does not request short-lived certificates"
+  grep -Fq 'disable_tlsalpn_challenge' "${public_config}" || fail "${public_config} does not force the port-80 HTTP challenge"
+  if grep -Fq 'tls internal' "${public_config}"; then
+    fail "${public_config} still uses the private Caddy CA"
+  fi
+done
 pass 'static route-isolation contract'
 
 if [[ -n "${CADDY_BIN:-}" ]]; then
@@ -67,6 +77,8 @@ export XDG_DATA_HOME="${TMP_DIR}/data"
 export XDG_CONFIG_HOME="${TMP_DIR}/config"
 
 "${CADDY_BIN}" validate --config "${CONFIG}" --adapter caddyfile
+"${CADDY_BIN}" validate --config "${PUBLIC_CONFIG}" --adapter caddyfile
+"${CADDY_BIN}" validate --config "${PUBLIC_NO_ADMIN_CONFIG}" --adapter caddyfile
 pass 'Caddy configuration validation'
 
 cat >"${TMP_DIR}/upstreams.py" <<'PY'

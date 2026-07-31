@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -23,7 +25,6 @@ import (
 )
 
 const (
-	remoteArchiveNext        = "/tmp/moox-control.tar.gz.next"
 	remoteStorageArchiveNext = "/tmp/moox-storage.tar.gz.next"
 )
 
@@ -46,6 +47,34 @@ type Options struct {
 	HealthAuthVersion      string
 	HealthAuthAccessKey    string
 	HealthAuthSecretKey    string
+	TLSMode                TLSMode
+}
+
+type TLSMode string
+
+const (
+	TLSModePublic   TLSMode = "public"
+	TLSModeInternal TLSMode = "internal"
+
+	controlRollbackTimeout = 5 * time.Minute
+)
+
+func resolveTLSMode(mode TLSMode, publicHost string) TLSMode {
+	if mode == TLSModePublic || mode == TLSModeInternal {
+		return mode
+	}
+	host := strings.TrimSpace(publicHost)
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return TLSModeInternal
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+		return TLSModeInternal
+	}
+	return TLSModePublic
+}
+
+func UsesPublicTLS(publicHost string) bool {
+	return resolveTLSMode("", publicHost) == TLSModePublic
 }
 
 type Packager interface {
@@ -158,6 +187,7 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if _, err := eventBusCommandEnv(nil, opts); err != nil {
 		return err
 	}
+	opts.TLSMode = resolveTLSMode(opts.TLSMode, opts.PublicHost)
 	if opts.BrowserPort == 0 {
 		opts.BrowserPort = 9527
 	}
@@ -176,6 +206,11 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if err := detectPlatform(ctx, transport, &opts); err != nil {
 		return fmt.Errorf("control_platform_unsupported")
 	}
+	activationToken, err := newActivationToken()
+	if err != nil {
+		return fmt.Errorf("control_deploy_invalid")
+	}
+	remoteArchive := controlArchivePath(activationToken)
 
 	archive, err := deps.Packager.Package(ctx, opts)
 	if err != nil {
@@ -191,7 +226,7 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		_ = file.Close()
 		return fmt.Errorf("control_package_failed")
 	}
-	if err := transport.Upload(ctx, file, info.Size(), remoteArchiveNext, fs.FileMode(0o600)); err != nil {
+	if err := transport.Upload(ctx, file, info.Size(), remoteArchive, fs.FileMode(0o600)); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("control_upload_failed")
 	}
@@ -199,7 +234,7 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 10*time.Second)
 		defer cancel()
-		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteArchiveNext}, nil)
+		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteArchive}, nil)
 	}()
 
 	reset := "0"
@@ -208,16 +243,18 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	if _, err := transport.Run(ctx, []string{
 		"sh", "-lc", installControlScript, "moox-install-control",
-		opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH, reset,
+		opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH, reset, string(opts.TLSMode), activationToken, remoteArchive,
 	}, nil); err != nil {
 		return fmt.Errorf("control_install_failed")
 	}
 	installed := true
 	defer func() {
 		if returnErr != nil && installed {
-			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 30*time.Second)
+			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), controlRollbackTimeout)
 			defer cancel()
-			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackControlScript}, nil)
+			if _, rollbackErr := transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackControlScript, "moox-rollback-control", activationToken}, nil); rollbackErr != nil {
+				returnErr = fmt.Errorf("%v; control_rollback_failed", returnErr)
+			}
 		}
 	}()
 	for _, stage := range []ReadinessStage{
@@ -228,15 +265,29 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 			return fmt.Errorf("control_deploy_not_ready")
 		}
 	}
-	ca, err := transport.Run(ctx, []string{"sh", "-lc", `cat "$HOME/moox/prod/certs/caddy/root.crt"`}, nil)
-	if err != nil || deps.CAStore.Save(opts.PublicHost, []byte(ca.Stdout)) != nil {
-		return fmt.Errorf("control_ca_unavailable")
+	if opts.TLSMode == TLSModeInternal {
+		ca, err := transport.Run(ctx, []string{"sh", "-lc", `cat "$HOME/moox/prod/certs/caddy/root.crt"`}, nil)
+		if err != nil || deps.CAStore.Save(opts.PublicHost, []byte(ca.Stdout)) != nil {
+			return fmt.Errorf("control_ca_unavailable")
+		}
 	}
 	// Once readiness and CA persistence succeed, the new deployment is authoritative.
 	// A lost finalize response must never roll it back after previous was removed.
 	installed = false
-	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeControlScript}, nil)
+	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeControlScript, "moox-finalize-control", activationToken}, nil)
 	return nil
+}
+
+func newActivationToken() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value[:]), nil
+}
+
+func controlArchivePath(activationToken string) string {
+	return "/tmp/moox-control-" + activationToken + ".tar.gz"
 }
 
 func validReleaseToken(value string) bool {
@@ -348,6 +399,7 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 		"--profile", "control", "--package-only", "--archive", archive,
 		"--target", "localhost", "--dir", "~/moox/prod", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
 		"--public-host", opts.PublicHost, "--browser-https-port", strconv.Itoa(opts.BrowserPort),
+		"--tls-mode", string(resolveTLSMode(opts.TLSMode, opts.PublicHost)),
 		"--node-id", "control", "--gateway-control-url", "http://127.0.0.1:11000",
 		"--monitor-instance-id", "monitor-control",
 	)
@@ -550,7 +602,7 @@ func (p CommandProbe) Wait(ctx context.Context, transport setupssh.Client, stage
 		delay = time.Second
 	}
 	command := probeCommand(stage)
-	args := []string{"sh", "-lc", command, "moox-readiness", opts.PublicHost, strconv.Itoa(opts.BrowserPort)}
+	args := []string{"sh", "-lc", command, "moox-readiness", opts.PublicHost, strconv.Itoa(opts.BrowserPort), string(resolveTLSMode(opts.TLSMode, opts.PublicHost))}
 	for attempt := 0; attempt < attempts; attempt++ {
 		if _, err := transport.Run(ctx, args, nil); err == nil {
 			return nil
@@ -583,7 +635,7 @@ func probeCommand(stage ReadinessStage) string {
 	case WebReady:
 		return `"$HOME/moox/prod/status.sh" web-host >/dev/null`
 	case BrowserHTTPSReady:
-		return `curl -fsS --cacert "$HOME/moox/prod/certs/caddy/root.crt" "https://$1:$2/" >/dev/null`
+		return `if [ "$3" = internal ]; then curl -fsS --resolve "$1:$2:127.0.0.1" --cacert "$HOME/moox/prod/certs/caddy/root.crt" "https://$1:$2/" >/dev/null; else curl -fsS --resolve "$1:$2:127.0.0.1" "https://$1:$2/" >/dev/null; fi`
 	case StoragePrimaryReady:
 		return `"$HOME/moox/storage/status.sh" storage-primary >/dev/null`
 	case StorageViewReady:
@@ -674,16 +726,94 @@ install_control() {
   browser_port="$2"
   target_arch="$3"
   reset_data="$4"
+  tls_mode="$5"
+  activation_token="$6"
+  archive="$7"
   case "$reset_data" in 0|1) ;; *) echo 'control_reset_invalid' >&2; return 1 ;; esac
+  case "$tls_mode" in public|internal) ;; *) echo 'control_tls_mode_invalid' >&2; return 1 ;; esac
+  case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo 'control_activation_token_invalid' >&2; return 1 ;; esac
+  [ "$archive" = "/tmp/moox-control-$activation_token.tar.gz" ] || {
+    echo 'control_archive_invalid' >&2
+    return 1
+  }
   root="$HOME/moox"
   deploy="$root/prod"
   next="$root/prod.next"
-  previous="$root/prod.previous"
-  archive=/tmp/moox-control.tar.gz.next
+  previous="$root/prod.previous.$activation_token"
+  mkdir -p "$root"
+  flock_command="${MOOX_FLOCK_COMMAND:-flock}"
+  command -v "$flock_command" >/dev/null 2>&1 || { echo 'control_maintenance_lock_unavailable' >&2; return 1; }
+  exec 8>"$deploy.maintenance.lock"
+  "$flock_command" 8
+  install_control_healthcheck_cron() {
+    if [ -n "${MOOX_CRON_DAEMON_CHECK_COMMAND:-}" ]; then
+      "$MOOX_CRON_DAEMON_CHECK_COMMAND" || {
+        echo 'control_healthcheck_daemon_unavailable' >&2
+        return 1
+      }
+    else
+      command -v systemctl >/dev/null 2>&1 || {
+        echo 'control_healthcheck_daemon_unavailable' >&2
+        return 1
+      }
+      cron_unit=""
+      for unit in cron.service crond.service; do
+        if systemctl is-active --quiet "$unit" && systemctl is-enabled --quiet "$unit"; then
+          cron_unit="$unit"
+          break
+        fi
+      done
+      [ -n "$cron_unit" ] || {
+        echo 'control_healthcheck_daemon_unavailable' >&2
+        return 1
+      }
+    fi
+    crontab_command="${MOOX_CRONTAB_COMMAND:-crontab}"
+    command -v "$crontab_command" >/dev/null 2>&1 || {
+      echo 'control_healthcheck_scheduler_unavailable' >&2
+      return 1
+    }
+    cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin $HOME/moox/prod/healthcheck.sh >/dev/null 2>&1'
+    current=$("$crontab_command" -l 2>/dev/null || true)
+    {
+      printf '%s\n' "$current" | grep -Fv '/moox/prod/healthcheck.sh' || true
+      printf '%s\n' "$cron_line"
+    } | "$crontab_command" -
+  }
+  # Install the scheduler before any deployment mutation. If cron is
+  # unavailable, the existing deployment remains untouched.
+  install_control_healthcheck_cron
   rm -rf "$next" "$previous"
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
+  printf '%s\n' "$activation_token" >"$next/.control-activation-token"
+  caddy_stopped=0
+  restart_stopped_caddy() {
+    [ "$caddy_stopped" = 1 ] || return 0
+    candidate="$deploy"
+    [ -x "$candidate/lib/caddy-managed.sh" ] || candidate="$previous"
+    if [ -x "$candidate/lib/caddy-managed.sh" ]; then
+      "$candidate/lib/caddy-managed.sh" start --deploy-dir "$candidate" --os linux --arch "$target_arch" 8>&- || true
+    fi
+  }
+  on_install_control_exit() {
+    status=$?
+    trap - EXIT
+    if [ "$status" -ne 0 ]; then restart_stopped_caddy; fi
+    exit "$status"
+  }
+  trap on_install_control_exit EXIT
+  # Caddy owns files in its ACME storage while running. Stop it before copying
+  # that directory into the atomic replacement.
+  if [ -x "$deploy/lib/caddy-managed.sh" ]; then
+    "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"
+    caddy_stopped=1
+  fi
   if [ "$reset_data" = 0 ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
+  if [ "$reset_data" = 1 ] && [ -d "$deploy/data/caddy" ]; then
+    mkdir -p "$next/data/caddy"
+    cp -R "$deploy/data/caddy/." "$next/data/caddy/"
+  fi
   packaged_storage_auth="$next/secrets/storage-internal-auth.env.packaged"
   if [ -s "$next/secrets/storage-internal-auth.env" ]; then
     mv "$next/secrets/storage-internal-auth.env" "$packaged_storage_auth"
@@ -735,23 +865,21 @@ install_control() {
     printf 'MOOX_ADMIN_JWT_SECRET_KEY=%s\n' "$secret" >"$next/secrets/admin-jwt.env"
   fi
   chmod 600 "$next/secrets/"*
-  # The managed Caddy process is outside stop.sh. Stop it before moving the
-  # old deployment aside, otherwise the new path cannot adopt its listener.
-  if [ -x "$deploy/lib/caddy-managed.sh" ]; then
-    "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"
-  fi
   if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then
-    "$deploy/start.sh" || true
-    [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" || true
+    "$deploy/start.sh" 8>&- || true
+    restart_stopped_caddy
+    caddy_stopped=0
     return 1
   fi
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
   mv "$next" "$deploy"
+  caddy_ports="$browser_port,11001"
   if ! MOOX_PUBLIC_HOST="$public_host" MOOX_BROWSER_HTTPS_PORT="$browser_port" MOOX_SERVICE_HTTPS_PORT=11001 \
+    MOOX_TLS_MODE="$tls_mode" \
     MOOX_CADDY_CHECKSUMS="$deploy/lib/caddy-v2.11.4-checksums.txt" \
     MOOX_CADDY_ARCHIVE="$deploy/lib/caddy_2.11.4_linux_${target_arch}.tar.gz" \
     "$deploy/lib/caddy-managed.sh" ensure --deploy-dir "$deploy" --os linux --arch "$target_arch" \
-      --ports "$browser_port,11001" --config "$deploy/config/caddy/Caddyfile.next"; then
+      --ports "$caddy_ports" --config "$deploy/config/caddy/Caddyfile.next" 8>&-; then
     if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"; then
       echo 'managed Caddy could not be stopped; leaving the failed deployment in place for safe retry' >&2
       return 1
@@ -759,12 +887,13 @@ install_control() {
     rm -rf "$deploy"
     if [ -d "$previous" ]; then
       mv "$previous" "$deploy"
-      "$deploy/start.sh" || true
-      [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" || true
+      "$deploy/start.sh" 8>&- || true
+      [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" 8>&- || true
     fi
+    caddy_stopped=0
     return 1
   fi
-  if ! "$deploy/start.sh"; then
+  if ! "$deploy/start.sh" 8>&-; then
     if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$target_arch"; then
       echo 'managed Caddy could not be stopped; leaving the failed deployment in place for safe retry' >&2
       return 1
@@ -773,17 +902,27 @@ install_control() {
     rm -rf "$deploy"
     if [ -d "$previous" ]; then
       mv "$previous" "$deploy"
-      "$deploy/start.sh" || true
-      [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" || true
+      "$deploy/start.sh" 8>&- || true
+      [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$target_arch" 8>&- || true
     fi
+    caddy_stopped=0
     return 1
   fi
+  caddy_stopped=0
 }
-install_control "$1" "$2" "$3" "$4"`
+install_control "$1" "$2" "$3" "$4" "$5" "$6" "$7"`
 
 const rollbackControlScript = `set -eu
 deploy="$HOME/moox/prod"
-previous="$HOME/moox/prod.previous"
+activation_token="$1"
+case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo 'control_activation_token_invalid' >&2; exit 1 ;; esac
+previous="$HOME/moox/prod.previous.$activation_token"
+flock_command="${MOOX_FLOCK_COMMAND:-flock}"
+command -v "$flock_command" >/dev/null 2>&1 || { echo 'control_maintenance_lock_unavailable' >&2; exit 1; }
+exec 8>"$deploy.maintenance.lock"
+"$flock_command" 8
+[ -s "$deploy/.control-activation-token" ] || exit 0
+[ "$(cat "$deploy/.control-activation-token")" = "$activation_token" ] || exit 0
 if [ -x "$deploy/lib/caddy-managed.sh" ] && ! "$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$(uname -m)"; then
   echo 'managed Caddy could not be stopped; refusing destructive rollback' >&2
   exit 1
@@ -792,8 +931,19 @@ if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
 rm -rf "$deploy"
 if [ -d "$previous" ]; then
   mv "$previous" "$deploy"
-  "$deploy/start.sh"
-  [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$(uname -m)"
+  "$deploy/start.sh" 8>&-
+  [ ! -x "$deploy/lib/caddy-managed.sh" ] || "$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy" --os linux --arch "$(uname -m)" 8>&-
 fi`
 
-const finalizeControlScript = `rm -rf "$HOME/moox/prod.previous"`
+const finalizeControlScript = `set -eu
+deploy="$HOME/moox/prod"
+activation_token="$1"
+case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo 'control_activation_token_invalid' >&2; exit 1 ;; esac
+flock_command="${MOOX_FLOCK_COMMAND:-flock}"
+command -v "$flock_command" >/dev/null 2>&1 || { echo 'control_maintenance_lock_unavailable' >&2; exit 1; }
+exec 8>"$deploy.maintenance.lock"
+"$flock_command" 8
+[ -s "$deploy/.control-activation-token" ] || exit 0
+[ "$(cat "$deploy/.control-activation-token")" = "$activation_token" ] || exit 0
+rm -rf "$HOME/moox"/prod.previous.*
+rm -f "$deploy/.control-activation-token"`

@@ -418,6 +418,9 @@ func defaultSetupDeps() setupDeps {
 		e2eEventBus:        defaultSetupE2EEventBus,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
+			if setupdeploy.UsesPublicTLS(snapshot.Manifest.ControlHost.Address) {
+				return setupclient.VerifyPublicLogin(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password)
+			}
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address))
 		},
 	}
@@ -671,6 +674,29 @@ func defaultSetupTrustHost(ctx context.Context, snapshot *setupconfig.Snapshot, 
 }
 
 func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot, resetData bool) error {
+	return runSetupControlDeploySteps(
+		func() error {
+			if !setupdeploy.UsesPublicTLS(snapshot.Manifest.ControlHost.Address) {
+				return nil
+			}
+			return ensureSetupControlFirewall(ctx, snapshot)
+		},
+		func() error { return deploySetupControl(ctx, snapshot, resetData) },
+		func() error { return ensureSetupEventBusFirewall(ctx, snapshot) },
+	)
+}
+
+func runSetupControlDeploySteps(ensureControl, deploy, ensureEventBus func() error) error {
+	if err := ensureControl(); err != nil {
+		return err
+	}
+	if err := deploy(); err != nil {
+		return err
+	}
+	return ensureEventBus()
+}
+
+func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, resetData bool) error {
 	host := snapshot.Manifest.ControlHost
 	transport, err := dialSetupHost(ctx, host)
 	if err != nil {
@@ -686,30 +712,67 @@ func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot, res
 	if err := setupdeploy.Control(ctx, transport, opts, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
-	return ensureSetupEventBusFirewall(ctx, snapshot)
+	return nil
 }
 
-func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) error {
-	publicIP, err := eventBusFirewallIP(ctx, snapshot.Manifest.EventBus.PublicAddress, net.DefaultResolver.LookupIP)
+func ensureSetupFirewallRules(
+	ctx context.Context,
+	snapshot *setupconfig.Snapshot,
+	address string,
+	rules []cloudtencent.CreateFirewallRulesOptions,
+	failure string,
+) error {
+	publicIP, err := eventBusFirewallIP(ctx, address, net.DefaultResolver.LookupIP)
 	if err != nil {
-		return fmt.Errorf("eventbus_firewall_failed")
+		return fmt.Errorf("%s", failure)
 	}
 	client, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
 		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
 		Region: snapshot.Manifest.TencentCloud.Region,
 	})
 	if err != nil {
-		return fmt.Errorf("eventbus_firewall_failed")
+		return fmt.Errorf("%s", failure)
 	}
-	for _, rule := range setupControlFirewallRules(snapshot.Manifest.EventBus.Port) {
+	for _, rule := range rules {
 		if _, err := client.EnsureFirewallRule(ctx, publicIP, rule); err != nil {
-			return fmt.Errorf("eventbus_firewall_failed")
+			return fmt.Errorf("%s", failure)
 		}
 	}
 	return nil
 }
 
-func setupControlFirewallRules(eventBusPort int) []cloudtencent.CreateFirewallRulesOptions {
+func ensureSetupControlFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) error {
+	return ensureSetupFirewallRules(ctx, snapshot, snapshot.Manifest.ControlHost.Address, setupControlFirewallRules(), "control_firewall_failed")
+}
+
+func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) error {
+	return ensureSetupFirewallRules(
+		ctx,
+		snapshot,
+		snapshot.Manifest.EventBus.PublicAddress,
+		setupRuntimeFirewallRules(snapshot.Manifest.EventBus.Port),
+		"eventbus_firewall_failed",
+	)
+}
+
+func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
+	return []cloudtencent.CreateFirewallRulesOptions{
+		{
+			Protocol: "TCP", Ports: "80", CidrBlock: "0.0.0.0/0",
+			Action: "ACCEPT", Description: "MooX ACME HTTP challenge",
+		},
+		{
+			Protocol: "TCP", Ports: "9527", CidrBlock: "0.0.0.0/0",
+			Action: "ACCEPT", Description: "MooX browser HTTPS",
+		},
+		{
+			Protocol: "TCP", Ports: "11001", CidrBlock: "0.0.0.0/0",
+			Action: "ACCEPT", Description: "MooX service HTTPS",
+		},
+	}
+}
+
+func setupRuntimeFirewallRules(eventBusPort int) []cloudtencent.CreateFirewallRulesOptions {
 	return []cloudtencent.CreateFirewallRulesOptions{
 		{
 			Protocol: "TCP", Ports: fmt.Sprint(eventBusPort), CidrBlock: "0.0.0.0/0",

@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/require"
@@ -29,6 +31,7 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 	probe := &fakeProbe{events: &events}
 	opts := Options{
 		RepositoryRoot: dir, PublicHost: "203.0.113.8", BrowserPort: 9527, TargetGOOS: "linux", TargetGOARCH: "amd64",
+		TLSMode:               TLSModeInternal,
 		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
 	}
 
@@ -39,7 +42,7 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 		"gateway_ready", "eventbus_ready", "cloudnode_ready", "collector_ready",
 		"monitor_ready", "web_ready", "browser_https_ready", "ca", "finalize", "cleanup",
 	}, events)
-	require.Equal(t, remoteArchiveNext, transport.uploadPath)
+	require.Regexp(t, `^/tmp/moox-control-[0-9a-f]{32}\.tar\.gz$`, transport.uploadPath)
 	require.Equal(t, fs.FileMode(0o600), transport.uploadMode)
 	require.Equal(t, "control-package", transport.uploaded.String())
 	require.Contains(t, strings.Join(transport.commands[0], " "), "sh -lc")
@@ -51,6 +54,85 @@ func TestControlOrdersSafeDeployment(t *testing.T) {
 	for _, secret := range []string{"admin-secret", "ssh-secret", "AKID-secret", "cloud-secret"} {
 		require.NotContains(t, captured, secret)
 	}
+}
+
+func TestControlRollbackBudgetCoversSerializedHealthcheck(t *testing.T) {
+	require.GreaterOrEqual(t, controlRollbackTimeout, 5*time.Minute)
+}
+
+func TestControlDeploymentsUseIsolatedRemoteArchives(t *testing.T) {
+	run := func() string {
+		archive := filepath.Join(t.TempDir(), "control.tar.gz")
+		require.NoError(t, os.WriteFile(archive, []byte("package"), 0o600))
+		events := []string{}
+		transport := &fakeTransport{events: &events}
+		require.NoError(t, Control(context.Background(), transport, Options{
+			RepositoryRoot: t.TempDir(), PublicHost: "106.53.107.122", BrowserPort: 9527,
+			TargetGOOS: "linux", TargetGOARCH: "amd64", TLSMode: TLSModePublic,
+			EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
+		}, Dependencies{
+			Packager: &fakePackager{path: archive, events: &events},
+			Probe:    &fakeProbe{events: &events},
+			CAStore:  &fakeCAStore{events: &events},
+		}))
+		var install []string
+		for _, command := range transport.commands {
+			if len(command) >= 3 && strings.Contains(command[2], "install_control") {
+				install = command
+				break
+			}
+		}
+		require.NotEmpty(t, install)
+		require.Equal(t, transport.uploadPath, install[len(install)-1])
+		require.Equal(t, controlArchivePath(install[len(install)-2]), transport.uploadPath)
+		return transport.uploadPath
+	}
+
+	require.NotEqual(t, run(), run())
+}
+
+func TestResolveTLSModeUsesPublicCertificatesForPublicHosts(t *testing.T) {
+	t.Parallel()
+	for _, host := range []string{"106.53.107.122", "moox.example.com"} {
+		require.Equal(t, TLSModePublic, resolveTLSMode("", host))
+	}
+	for _, host := range []string{"127.0.0.1", "10.0.0.8", "192.168.1.8", "localhost"} {
+		require.Equal(t, TLSModeInternal, resolveTLSMode("", host))
+	}
+	require.Equal(t, TLSModeInternal, resolveTLSMode(TLSModeInternal, "106.53.107.122"))
+}
+
+func TestBrowserHTTPSProbeKeepsPublicIdentityButConnectsLocally(t *testing.T) {
+	command := probeCommand(BrowserHTTPSReady)
+	require.Contains(t, command, `--resolve "$1:$2:127.0.0.1"`)
+	require.Contains(t, command, `"https://$1:$2/"`)
+	require.NotContains(t, command, "-k")
+}
+
+func TestControlPublicTLSDoesNotFetchPrivateCA(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "control.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events}
+	err := Control(context.Background(), transport, Options{
+		RepositoryRoot: t.TempDir(), PublicHost: "106.53.107.122", BrowserPort: 9527,
+		TargetGOOS: "linux", TargetGOARCH: "amd64", TLSMode: TLSModePublic,
+		EventBusPublicAddress: "eventbus.example.test", EventBusPort: 4222, EventBusTLSEnabled: true,
+	}, Dependencies{
+		Packager: &fakePackager{path: archive, events: &events},
+		Probe:    &fakeProbe{events: &events},
+		CAStore:  &fakeCAStore{events: &events},
+	})
+	require.NoError(t, err)
+	require.NotContains(t, events, "ca")
+	var install []string
+	for _, command := range transport.commands {
+		if len(command) >= 3 && strings.Contains(command[2], "install_control") {
+			install = command
+		}
+	}
+	require.NotEmpty(t, install)
+	require.Contains(t, install, string(TLSModePublic))
 }
 
 func TestControlRollsBackWhenEventServiceIsNotReady(t *testing.T) {
@@ -96,7 +178,10 @@ func TestControlPassesResetDataAsBoundedPositionalFlag(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, install)
-	require.Equal(t, "1", install[len(install)-1], "reset is a bounded positional flag, not shell text")
+	require.Equal(t, "1", install[len(install)-4], "reset is a bounded positional flag, not shell text")
+	require.Equal(t, "public", install[len(install)-3])
+	require.Regexp(t, `^[0-9a-f]{32}$`, install[len(install)-2])
+	require.Equal(t, controlArchivePath(install[len(install)-2]), install[len(install)-1])
 }
 
 func TestEventBusCommandEnvPreservesBaseAndAddsEndpoint(t *testing.T) {
@@ -314,8 +399,12 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	home := t.TempDir()
 	deploy := filepath.Join(home, "moox", "prod")
 	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "data"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "data", "caddy"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "secrets"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "start.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "stop.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(deploy, "data", "old.db"), []byte("old"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "data", "caddy", "acme-account.json"), []byte("account"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(deploy, "secrets", "keep.env"), []byte("secret"), 0o600))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(deploy, "secrets", "storage-internal-auth.env"),
@@ -342,21 +431,150 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "stop.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	archive := filepath.Join(t.TempDir(), "control.tar.gz")
 	require.NoError(t, exec.Command("tar", "-C", archiveDir, "-czf", archive, ".").Run())
-	defer os.Remove(remoteArchiveNext)
-	require.NoError(t, copyFileForTest(archive, remoteArchiveNext))
+	activationToken := "test-reset"
+	remoteArchive := controlArchivePath(activationToken)
+	defer os.Remove(remoteArchive)
+	require.NoError(t, copyFileForTest(archive, remoteArchive))
 
-	cmd := exec.Command("bash", "-c", installControlScript, "moox-install-control", "control.example.test", "9527", "amd64", "1")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	crontabLog := filepath.Join(t.TempDir(), "crontab")
+	crontabCommand := filepath.Join(t.TempDir(), "crontab")
+	require.NoError(t, os.WriteFile(
+		crontabCommand,
+		[]byte("#!/bin/sh\nif [ \"$1\" = -l ]; then exit 0; fi\ncat >\"$MOOX_CRONTAB_LOG\"\n"),
+		0o700,
+	))
+	flockCommand := fakeFlockCommand(t)
+	cmd := exec.Command("bash", "-c", installControlScript, "moox-install-control", "control.example.test", "9527", "amd64", "1", "public", activationToken, remoteArchive)
+	cmd.Env = append(
+		os.Environ(),
+		"HOME="+home,
+		"MOOX_CRONTAB_COMMAND="+crontabCommand,
+		"MOOX_CRONTAB_LOG="+crontabLog,
+		"MOOX_CRON_DAEMON_CHECK_COMMAND=/usr/bin/true",
+		"MOOX_FLOCK_COMMAND="+flockCommand,
+	)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
+	require.Contains(t, string(requireFile(t, crontabLog)), `* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin $HOME/moox/prod/healthcheck.sh >/dev/null 2>&1`)
 	require.NoFileExists(t, filepath.Join(deploy, "data", "old.db"))
 	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
+	require.Equal(t, "account", string(requireFile(t, filepath.Join(deploy, "data", "caddy", "acme-account.json"))))
 	require.Equal(t, "secret", string(requireFile(t, filepath.Join(deploy, "secrets", "keep.env"))))
 	require.Equal(
 		t,
 		"MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-old\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-new\n",
 		string(requireFile(t, filepath.Join(deploy, "secrets", "storage-internal-auth.env"))),
 	)
+
+	// A client can disappear after activation but before finalize. A later setup
+	// must take over without deleting the first transaction's rollback lineage.
+	nextToken := "test-next"
+	nextArchive := controlArchivePath(nextToken)
+	defer os.Remove(nextArchive)
+	require.NoError(t, copyFileForTest(archive, nextArchive))
+	next := exec.Command("bash", "-c", installControlScript, "moox-install-control", "control.example.test", "9527", "amd64", "0", "public", nextToken, nextArchive)
+	next.Env = cmd.Env
+	output, err = next.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, nextToken+"\n", string(requireFile(t, filepath.Join(deploy, ".control-activation-token"))))
+	require.FileExists(t, filepath.Join(home, "moox", "prod.previous."+nextToken, ".control-activation-token"))
+	require.DirExists(t, filepath.Join(home, "moox", "prod.previous."+activationToken))
+
+	rollbackNext := exec.Command("bash", "-c", rollbackControlScript, "moox-rollback-control", nextToken)
+	rollbackNext.Env = cmd.Env
+	output, err = rollbackNext.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, activationToken+"\n", string(requireFile(t, filepath.Join(deploy, ".control-activation-token"))))
+
+	rollbackFirst := exec.Command("bash", "-c", rollbackControlScript, "moox-rollback-control", activationToken)
+	rollbackFirst.Env = cmd.Env
+	output, err = rollbackFirst.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, "old", string(requireFile(t, filepath.Join(deploy, "data", "old.db"))))
+}
+
+func TestControlInstallerWaitsForStableMaintenanceLock(t *testing.T) {
+	home := t.TempDir()
+	lockPath := filepath.Join(home, "moox", "prod.maintenance.lock")
+	require.NoError(t, os.MkdirAll(filepath.Dir(lockPath), 0o700))
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	defer lock.Close()
+	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX))
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", installControlScript, "moox-install-control", "control.example.test", "9527", "amd64", "1", "public", "test-lock", controlArchivePath("test-lock"))
+	cmd.Env = append(os.Environ(), "HOME="+home, "MOOX_CRONTAB_COMMAND=/bin/true", "MOOX_FLOCK_COMMAND="+fakeFlockCommand(t))
+	require.NoError(t, cmd.Start())
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		require.Failf(t, "installer exited instead of waiting for the maintenance lock", "error: %v", err)
+	case <-time.After(200 * time.Millisecond):
+		require.NoDirExists(t, filepath.Join(home, "moox", "prod.next"), "installer mutated deployment state before acquiring the shared lock")
+	}
+	cancel()
+	<-done
+}
+
+func TestControlInstallerCreatesLockParentOnCleanHost(t *testing.T) {
+	home := t.TempDir()
+	token := "cold-start"
+	cmd := exec.Command(
+		"bash", "-c", installControlScript, "moox-install-control",
+		"control.example.test", "9527", "amd64", "0", "public", token, controlArchivePath(token),
+	)
+	cmd.Env = append(
+		os.Environ(),
+		"HOME="+home,
+		"MOOX_CRONTAB_COMMAND=/usr/bin/true",
+		"MOOX_CRON_DAEMON_CHECK_COMMAND=/usr/bin/true",
+		"MOOX_FLOCK_COMMAND="+fakeFlockCommand(t),
+	)
+	output, err := cmd.CombinedOutput()
+	require.Error(t, err, "the deliberately absent archive must stop the installer")
+	require.NotContains(t, string(output), "prod.maintenance.lock")
+	require.DirExists(t, filepath.Join(home, "moox"))
+	require.FileExists(t, filepath.Join(home, "moox", "prod.maintenance.lock"))
+}
+
+func TestControlInstallerSchedulerFailureLeavesExistingDeploymentUntouched(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "prod")
+	require.NoError(t, os.MkdirAll(deploy, 0o700))
+	marker := filepath.Join(deploy, "existing")
+	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0o600))
+
+	cmd := exec.Command(
+		"bash", "-c", installControlScript, "moox-install-control",
+		"control.example.test", "9527", "amd64", "1", "public", "test-cron-failure", controlArchivePath("test-cron-failure"),
+	)
+	cmd.Env = append(
+		os.Environ(),
+		"HOME="+home,
+		"MOOX_CRONTAB_COMMAND=/usr/bin/false",
+		"MOOX_CRON_DAEMON_CHECK_COMMAND=/usr/bin/true",
+		"MOOX_FLOCK_COMMAND="+fakeFlockCommand(t),
+	)
+	output, err := cmd.CombinedOutput()
+	require.Error(t, err, string(output))
+	require.Equal(t, "keep", string(requireFile(t, marker)))
+	require.NoDirExists(t, filepath.Join(home, "moox", "prod.next"))
+	require.NoDirExists(t, filepath.Join(home, "moox", "prod.previous"))
+}
+
+func fakeFlockCommand(t *testing.T) string {
+	t.Helper()
+	command := filepath.Join(t.TempDir(), "flock")
+	require.NoError(t, os.WriteFile(
+		command,
+		[]byte("#!/usr/bin/env python3\nimport fcntl, sys\nfcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX)\n"),
+		0o700,
+	))
+	return command
 }
 
 func TestStorageRollsBackAfterReadinessFailure(t *testing.T) {
@@ -454,8 +672,26 @@ func TestFinalizeResponseLossNeverRollsBackHealthyDeployment(t *testing.T) {
 func TestRemoteInstallerScriptsParse(t *testing.T) {
 	require.NotContains(t, installControlScript, "--label", "moox-admin-cli random-secret does not support labels")
 	require.Contains(t, installControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`, "atomic control replacement must stop managed Caddy before changing deploy paths")
+	require.Less(
+		t,
+		strings.Index(installControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`),
+		strings.Index(installControlScript, `cp -R "$deploy/data/caddy/." "$next/data/caddy/"`),
+		"managed Caddy must stop before its live ACME storage is copied",
+	)
+	require.Contains(t, installControlScript, "trap on_install_control_exit EXIT", "pre-activation failures must restart the stopped Caddy")
+	require.Contains(t, installControlScript, "install_control_healthcheck_cron", "control install must schedule Caddy and service recovery after reboot")
+	require.Contains(t, installControlScript, `* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin $HOME/moox/prod/healthcheck.sh >/dev/null 2>&1`, "control healthcheck must run every minute with system administration tools available")
+	require.Contains(t, installControlScript, "systemctl is-enabled --quiet", "control install must verify that cron survives reboot")
+	require.Contains(t, installControlScript, `"$deploy.maintenance.lock"`, "installer and healthcheck must share a lock outside the renamed deployment directory")
+	require.Contains(t, installControlScript, `"$deploy/start.sh" 8>&-`, "services must not inherit the deployment maintenance lock")
+	require.Contains(t, installControlScript, `--config "$deploy/config/caddy/Caddyfile.next" 8>&-`, "Caddy must not inherit the deployment maintenance lock")
 	require.Contains(t, rollbackControlScript, `"$deploy/lib/caddy-managed.sh" stop --deploy-dir "$deploy"`, "control rollback must stop the active Caddy before restoring the previous path")
 	require.Contains(t, rollbackControlScript, `"$deploy/lib/caddy-managed.sh" start --deploy-dir "$deploy"`, "control rollback must restart Caddy after restoring the previous path")
+	require.Contains(t, rollbackControlScript, `"$deploy/start.sh" 8>&-`, "restored services must not inherit the deployment maintenance lock")
+	require.Contains(t, rollbackControlScript, `"$deploy.maintenance.lock"`, "control rollback must serialize with installer and healthcheck")
+	require.Contains(t, finalizeControlScript, `"$deploy.maintenance.lock"`, "control finalize must serialize with installer and healthcheck")
+	require.Contains(t, rollbackControlScript, ".control-activation-token", "rollback must not affect a superseding deployment")
+	require.Contains(t, finalizeControlScript, ".control-activation-token", "finalize must not affect a superseding deployment")
 	require.NotContains(t, rollbackControlScript, `caddy-managed.sh" stop --deploy-dir "$deploy" --os linux --arch "$(uname -m)" || true`, "control rollback must not ignore a Caddy stop failure")
 	for name, script := range map[string]string{
 		"install": installControlScript, "rollback": rollbackControlScript, "finalize": finalizeControlScript,
@@ -475,19 +711,41 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 func TestRollbackScriptRestoresAndStartsPreviousDeployment(t *testing.T) {
 	home := t.TempDir()
 	deploy := filepath.Join(home, "moox", "prod")
-	previous := filepath.Join(home, "moox", "prod.previous")
+	previous := filepath.Join(home, "moox", "prod.previous.rollback-test")
 	require.NoError(t, os.MkdirAll(deploy, 0o700))
 	require.NoError(t, os.MkdirAll(previous, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, ".control-activation-token"), []byte("rollback-test\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(deploy, "stop.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(previous, "start.sh"), []byte("#!/bin/sh\nprintf started >\"$HOME/rollback-event\"\n"), 0o700))
-	command := exec.Command("bash", "-c", rollbackControlScript)
-	command.Env = append(os.Environ(), "HOME="+home)
+	command := exec.Command("bash", "-c", rollbackControlScript, "moox-rollback-control", "rollback-test")
+	command.Env = append(os.Environ(), "HOME="+home, "MOOX_FLOCK_COMMAND="+fakeFlockCommand(t))
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 	require.Equal(t, "started", string(requireFile(t, filepath.Join(home, "rollback-event"))))
 	_, err = os.Stat(previous)
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.FileExists(t, filepath.Join(deploy, "start.sh"))
+}
+
+func TestStaleControlTransactionCannotRollbackOrFinalizeNewerDeployment(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "prod")
+	previous := filepath.Join(home, "moox", "prod.previous.stale")
+	require.NoError(t, os.MkdirAll(deploy, 0o700))
+	require.NoError(t, os.MkdirAll(previous, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, ".control-activation-token"), []byte("newer\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "current"), []byte("current"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(previous, "rollback"), []byte("rollback"), 0o600))
+	env := append(os.Environ(), "HOME="+home, "MOOX_FLOCK_COMMAND="+fakeFlockCommand(t))
+
+	for _, script := range []string{rollbackControlScript, finalizeControlScript} {
+		command := exec.Command("bash", "-c", script, "moox-control-transaction", "stale")
+		command.Env = env
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, string(output))
+	}
+	require.FileExists(t, filepath.Join(deploy, "current"))
+	require.FileExists(t, filepath.Join(previous, "rollback"))
 }
 
 func requireFile(t *testing.T, path string) []byte {

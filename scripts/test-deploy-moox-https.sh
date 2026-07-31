@@ -10,6 +10,7 @@ trap cleanup EXIT
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 assert_contains() { grep -Fq -- "$2" "$1" || fail "$1 does not contain $2"; }
+assert_not_contains() { ! grep -Fq -- "$2" "$1" || fail "$1 unexpectedly contains $2"; }
 
 [[ -x "${HELPER}" ]] || fail "managed Caddy helper is missing"
 assert_contains "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" 'caddy_2.11.4_linux_amd64.tar.gz'
@@ -24,6 +25,29 @@ assert_contains "${LOOPBACK_HELPER}" 'MOOX_GATEWAY_SERVICE_ADDR-127.0.0.1:11002'
 assert_contains "${LOOPBACK_HELPER}" 'MOOX_GATEWAY_HEALTH_ADDR-127.0.0.1:11012'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'moox-archive" -config=config/app.yaml -conf=config/trpc_go.yaml'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'verify_public_https'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" '--tls-mode <auto|public|internal>'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'resolve_tls_mode'
+resolver=$(awk '/^resolve_tls_mode\(\) \{/{capture=1} capture{print} capture && /^\}/{exit}' "${ROOT}/scripts/deploy-moox.sh")
+assert_equals() {
+  local expected="$1" actual="$2"
+  [[ "${actual}" == "${expected}" ]] || fail "expected ${expected}, got ${actual}"
+}
+resolve_for_test() {
+  env TLS_MODE=auto PUBLIC_HOST="$1" bash -c "${resolver}; resolve_tls_mode"
+}
+assert_equals internal "$(resolve_for_test foo.localhost)"
+assert_equals public "$(resolve_for_test 10.example.com)"
+assert_equals internal "$(resolve_for_test 10.0.0.1)"
+assert_equals public "$(resolve_for_test 106.53.107.122)"
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'Caddyfile.public'
+assert_contains "${HELPER}" 'ACME HTTP challenge port 80'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'MOOX_TLS_MODE'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'ensure_caddy'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'start_caddy'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'openssl x509 -checkend 86400'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" '"${ROOT}.maintenance.lock"'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" '"${DEPLOY_DIR}.maintenance.lock"'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" '"running":true'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'public HTTPS acceptance failed'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'MOOX_GATEWAY_CALLER=admin-gateway'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'canonical=$(printf "moox-gateway-auth-v1\n%s\nPOST\n%s\n\n\n%s\n%s\n%s\n%s" "$MOOX_GATEWAY_CALLER" "$path" "$body_hash" "$timestamp" "$nonce" "$node_id")'
@@ -41,11 +65,16 @@ assert_contains "${ROOT}/scripts/deploy-moox.sh" 'target CA trust installation f
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'cp "${ROOT}/scripts/install-caddy-ca.sh" "${STAGE_DIR}/lib/install-caddy-ca.sh"'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'cp "${ROOT}/scripts/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/loopback-listeners.sh"'
 assert_contains "${HELPER}" '.activation.rollback'
+assert_contains "${HELPER}" 'MOOX_TLS_MODE'
+assert_contains "${HELPER}" '"tls_mode":"%s"'
+assert_contains "${HELPER}" 'certs/caddy/root.crt'
 assert_contains "${HELPER}" 'restore_file "${ENV_FILE}"'
+assert_contains "${HELPER}" 'restore_file "${CA_ROOT}"'
+assert_contains "${HELPER}" 'restore_file "${CA_SHA}"'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" 'Caddyfile.next'
 assert_contains "${ROOT}/scripts/deploy-moox.sh" '--config "${deploy_dir}/config/caddy/Caddyfile.next"'
-assert_contains "${ROOT}/scripts/deploy-moox.sh" 'moox-caddy-data.XXXXXX'
-assert_contains "${ROOT}/scripts/deploy-moox.sh" 'mv "${DEPLOY_DIR}/data/caddy" "${CADDY_DATA_TMP}/caddy"'
+assert_contains "${ROOT}/scripts/deploy-moox.sh" 'find "${DEPLOY_DIR}/data" -mindepth 1 -maxdepth 1 ! -name caddy'
+assert_not_contains "${ROOT}/scripts/deploy-moox.sh" 'mv "${DEPLOY_DIR}/data/caddy"'
 assert_contains "${HELPER}" 'rollback)'
 assert_contains "${HELPER}" 'command -v ss'
 assert_contains "${HELPER}" '/proc/net/tcp'
@@ -117,6 +146,10 @@ if [[ "${FAKE_OCCUPY_9527:-0}" == 1 && "$*" == *TCP:9527* ]]; then
   printf '424242\n'
   exit 0
 fi
+if [[ "${FAKE_OCCUPY_80:-0}" == 1 && "$*" == *TCP:80* ]]; then
+  printf '424243\n'
+  exit 0
+fi
 if [[ "$*" == *"TCP:${FAKE_ADMIN_PORT}"* ]] && fake_pid; then
   exit 0
 fi
@@ -173,17 +206,28 @@ grep -Fxq -- '-n setcap -r '"${CAP_DEPLOY}/bin/caddy" "${SUDO_LOG}" || \
 
 # Explicit deployment edge values must win over an older persisted edge.env.
 printf 'MOOX_CADDY_PORTS=9527\\,443\nMOOX_SERVICE_HTTPS_PORT=443\n' >"${CAP_DEPLOY}/config/caddy/edge.env"
-MOOX_PUBLIC_HOST=127.0.0.1 MOOX_BROWSER_HTTPS_PORT=9527 MOOX_SERVICE_HTTPS_PORT=11001 \
+MOOX_PUBLIC_HOST=127.0.0.1 MOOX_BROWSER_HTTPS_PORT=9527 MOOX_SERVICE_HTTPS_PORT=11001 MOOX_TLS_MODE=public \
 MOOX_CADDY_SKIP_CA_WAIT=1 FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
   "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 --ports 8443
+[[ -s "${CAP_STATE}" ]] || fail 'public TLS did not grant the capability required for transient HTTP-01 challenges'
 grep -Fxq 'MOOX_CADDY_PORTS=8443' "${CAP_DEPLOY}/config/caddy/edge.env" || \
   fail 'explicit Caddy ports were overridden by persisted edge.env'
 grep -Fxq 'MOOX_SERVICE_HTTPS_PORT=11001' "${CAP_DEPLOY}/config/caddy/edge.env" || \
   fail 'explicit Caddy service port was overridden by persisted edge.env'
+grep -Fxq 'MOOX_TLS_MODE=public' "${CAP_DEPLOY}/config/caddy/edge.env" || \
+  fail 'public TLS mode was not persisted for renewal and lifecycle commands'
+: >"${SUDO_LOG}"
 
 FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" PATH="${TMP}/cap-bin:${PATH}" \
   "${HELPER}" ensure --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64
-[[ ! -s "${SUDO_LOG}" ]] || fail 'capability-free nonprivileged Caddy ports unexpectedly invoked sudo'
+! grep -Fq 'setcap' "${SUDO_LOG}" || fail 'persisted public TLS capability was needlessly changed'
+printf ':8443 { respond "ok" }\n' >"${CAP_DEPLOY}/config/caddy/Caddyfile"
+if FAKE_CAP_STATE="${CAP_STATE}" FAKE_SUDO_LOG="${SUDO_LOG}" FAKE_OCCUPY_80=1 PATH="${TMP}/cap-bin:${PATH}" \
+  "${HELPER}" check --deploy-dir "${CAP_DEPLOY}" --os linux --arch amd64 >/dev/null 2>"${TMP}/port-80.out"; then
+  fail 'public TLS accepted an unrelated listener on ACME port 80'
+fi
+grep -Fq 'ACME HTTP challenge port 80' "${TMP}/port-80.out" || fail 'ACME port conflict failure was unclear'
+rm -f "${CAP_DEPLOY}/config/caddy/Caddyfile"
 
 # Port syntax is platform-independent; non-Linux never mutates capabilities.
 printf '%s\n' "${CAP_DEPLOY}/bin/caddy" >"${CAP_STATE}"; : >"${SUDO_LOG}"
@@ -333,13 +377,29 @@ cmp -s "${TMP}/expected-8443.env" "${TMP}/deploy/config/caddy/edge.env" || fail 
 "${HELPER}" start --deploy-dir "${TMP}/deploy" --os linux --arch amd64
 
 # Explicit rollback uses the same complete snapshot and reconciles the restored
-# binary to the restored port set.
-"${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 \
+# binary to the restored port set. Legacy internal edge.env files did not
+# include MOOX_TLS_MODE, so absence must still trigger an internal-to-public
+# cold start.
+grep -v '^MOOX_TLS_MODE=' "${TMP}/deploy/config/caddy/edge.env" >"${TMP}/deploy/config/caddy/edge.env.legacy"
+mv "${TMP}/deploy/config/caddy/edge.env.legacy" "${TMP}/deploy/config/caddy/edge.env"
+cp "${TMP}/deploy/config/caddy/edge.env" "${TMP}/expected-8443.env"
+mkdir -p "${TMP}/deploy/certs/caddy"
+printf 'old-root\n' >"${TMP}/deploy/certs/caddy/root.crt"
+printf 'old-sha\n' >"${TMP}/deploy/certs/caddy/root.sha256"
+MOOX_PUBLIC_HOST=127.0.0.1 MOOX_TLS_MODE=public "${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64 \
   --ports 443 --config "${TMP}/tx-443.Caddyfile"
+public_pid=$(cat "${TMP}/deploy/run/caddy.pid")
+[[ ! -e "${TMP}/deploy/certs/caddy/root.crt" && ! -e "${TMP}/deploy/certs/caddy/root.sha256" ]] || \
+  fail 'public activation retained stale private CA artifacts'
 "${HELPER}" rollback --deploy-dir "${TMP}/deploy" --os linux --arch amd64
+rollback_pid=$(cat "${TMP}/deploy/run/caddy.pid")
+[[ "${rollback_pid}" != "${public_pid}" ]] || fail 'TLS mode rollback reused the public-mode Caddy process'
+kill -0 "${rollback_pid}" || fail 'TLS mode rollback did not cold-start the restored internal activation'
 cmp -s "${TMP}/expected-8443.Caddyfile" "${TMP}/deploy/config/caddy/Caddyfile" || fail 'explicit rollback did not restore the exact 8443 config'
 cmp -s "${TMP}/expected-8443.env" "${TMP}/deploy/config/caddy/edge.env" || fail 'explicit rollback did not restore the exact 8443 environment'
 [[ ! -e "${CAP_STATE}" ]] || fail 'explicit rollback did not remove the rejected 443 capability'
+grep -Fxq 'old-root' "${TMP}/deploy/certs/caddy/root.crt" || fail 'explicit rollback did not restore the private root'
+grep -Fxq 'old-sha' "${TMP}/deploy/certs/caddy/root.sha256" || fail 'explicit rollback did not restore the private root fingerprint'
 
 MOOX_PUBLIC_HOST=127.0.0.1 MOOX_BROWSER_HTTPS_PORT="${EDGE_PORT}" MOOX_SERVICE_HTTPS_PORT=11001 \
   "${HELPER}" ensure --deploy-dir "${TMP}/deploy" --os linux --arch amd64

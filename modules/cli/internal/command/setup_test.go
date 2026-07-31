@@ -329,10 +329,26 @@ func TestEventBusFirewallIPRejectsAmbiguousDNS(t *testing.T) {
 	require.ErrorContains(t, err, "exactly one IPv4")
 }
 
-func TestSetupControlFirewallRulesIncludeEventBusGatewayAndSentinelHealth(t *testing.T) {
-	rules := setupControlFirewallRules(4222)
+func TestSetupControlFirewallRulesIncludePublicTLSAndServicePorts(t *testing.T) {
+	rules := setupControlFirewallRules()
+	require.Len(t, rules, 3)
+	assert.Equal(t, "80", rules[0].Ports)
+	assert.Equal(t, "MooX ACME HTTP challenge", rules[0].Description)
+	assert.Equal(t, "9527", rules[1].Ports)
+	assert.Equal(t, "MooX browser HTTPS", rules[1].Description)
+	assert.Equal(t, "11001", rules[2].Ports)
+	assert.Equal(t, "MooX service HTTPS", rules[2].Description)
+	for _, rule := range rules {
+		assert.Equal(t, "TCP", rule.Protocol)
+		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
+		assert.Equal(t, "ACCEPT", rule.Action)
+	}
+}
+
+func TestSetupRuntimeFirewallRulesIncludeEventBusAndServicePorts(t *testing.T) {
+	rules := setupRuntimeFirewallRules(4333)
 	require.Len(t, rules, 4)
-	assert.Equal(t, "4222", rules[0].Ports)
+	assert.Equal(t, "4333", rules[0].Ports)
 	assert.Equal(t, "MooX EventBus TLS", rules[0].Description)
 	assert.Equal(t, "11003", rules[1].Ports)
 	assert.Equal(t, "MooX service gateway native", rules[1].Description)
@@ -345,6 +361,25 @@ func TestSetupControlFirewallRulesIncludeEventBusGatewayAndSentinelHealth(t *tes
 		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
 		assert.Equal(t, "ACCEPT", rule.Action)
 	}
+}
+
+func TestSetupControlDeploymentOpensACMEBeforeDeploy(t *testing.T) {
+	events := []string{}
+	step := func(name string, fail bool) func() error {
+		return func() error {
+			events = append(events, name)
+			if fail {
+				return errors.New(name)
+			}
+			return nil
+		}
+	}
+	require.NoError(t, runSetupControlDeploySteps(step("control-firewall", false), step("deploy", false), step("eventbus-firewall", false)))
+	require.Equal(t, []string{"control-firewall", "deploy", "eventbus-firewall"}, events)
+
+	events = nil
+	require.EqualError(t, runSetupControlDeploySteps(step("control-firewall", true), step("deploy", false), step("eventbus-firewall", false)), "control-firewall")
+	require.Equal(t, []string{"control-firewall"}, events)
 }
 
 func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {

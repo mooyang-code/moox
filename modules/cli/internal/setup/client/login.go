@@ -23,6 +23,14 @@ type LoginResult struct {
 	LoginAPI string `json:"login_api"`
 }
 
+func VerifyPublicLogin(ctx context.Context, baseURL, username, password string) (LoginResult, error) {
+	httpClient := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
+	}
+	return verifyPublicLogin(ctx, baseURL, username, password, httpClient)
+}
+
 func VerifyPublicLoginWithCAFile(ctx context.Context, baseURL, username, password, caPath string) (LoginResult, error) {
 	info, err := os.Lstat(caPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {

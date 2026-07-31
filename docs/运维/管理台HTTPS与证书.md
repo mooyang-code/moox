@@ -29,35 +29,34 @@ Caddy 是 HTTP/HTTPS 的唯一公开边缘。中央节点允许站点、`/api/ad
 
 ## 首次部署
 
-`make deploy` 必须同时提供稳定 `--node-id`、中央 `--gateway-control-url`、peer CA bundle 以及 control/service key 文件。部署会自动执行 Caddy 前置步骤：下载固定版本、校验官方 checksum、安装到部署目录、启动 loopback 上游、安全启动或 reload MooX 管理的 Caddy，然后做 HTTPS 验收。正常流程不需要也不应预先安装系统 Caddy。部署还会以 `--target-ca auto` 安装目标机信任，并以 `--local-ca auto` 检查操作机信任；本机没有安装时会自动安装。根证书默认保存为 `~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt`，文件名带目标地址，迁移或多服务器并存时可直接区分。若本机缺少管理员权限，部署会明确失败并给出安装命令；只有明确不需要浏览器访问时才使用 `--local-ca skip`。使用 `--target-ca skip` 可显式跳过目标机安装。
+`make deploy` 必须同时提供稳定 `--node-id`、中央 `--gateway-control-url`、peer CA bundle 以及 control/service key 文件。部署会自动执行 Caddy 前置步骤：下载固定版本、校验官方 checksum、安装到部署目录、启动 loopback 上游、安全启动或 reload MooX 管理的 Caddy，然后做 HTTPS 验收。正常流程不需要也不应预先安装系统 Caddy。
+
+`--tls-mode auto` 是默认值：公网 IP/DNS 使用 Let's Encrypt `shortlived` 证书，私网、loopback 和 `*.localhost` 使用 Caddy internal CA。公网模式要求 TCP 80 持续可从互联网到达，以便完成 HTTP-01 初次签发和后续续期；浏览器与后端直接使用操作系统信任库，不安装 MooX 根证书。只有 internal 模式才执行 `--target-ca`、`--local-ca` 和根证书分发流程。
 
 管理边界是部署目录下的 `bin/caddy`、`config/caddy/Caddyfile`、`run/caddy.pid` 和 `data/caddy`。端口被其他进程占用或发现非 MooX Caddy 时部署失败并保留对方进程。
 
-## CA 获取和信任
+## 公网证书和自动续期
 
-Caddy `tls internal` 生成私有 CA。`data/caddy` 在普通重新部署和数据重置时保留，公开根证书复制为 `certs/caddy/root.crt`；`root.key` 绝不得离开目标机。
+公网模式使用 Caddy `v2.11.4` 的 ACME `shortlived` profile。证书由浏览器系统信任，SAN 是 `--public-host` 的公网 IP 或 DNS；不生成 `certs/caddy/root.crt`，也不要求用户安装证书。Caddy 常驻运行并根据 ACME Renewal Information 自动续期，MooX 每分钟的 `healthcheck.sh` 会检查并拉起异常的 Caddy。`data/caddy` 在普通重新部署和 `--reset-data` 时保留，因此 ACME 账号、证书和续期状态不会丢失。
 
 ```bash
-skills/moox/scripts/caddy-ca.sh fetch --target user@host --deploy-dir /home/user/moox/prod --output ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt
-skills/moox/scripts/caddy-ca.sh inspect --ca-file ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt
-skills/moox/scripts/caddy-ca.sh install --ca-file ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt
-curl --cacert ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt https://<host>:<browser-port>/
-openssl s_client -connect <host>:<service-port> -servername <dns-name> -CAfile ~/.moox/certs/moox-caddy-root-<IP-or-DNS>.crt </dev/null
+curl https://<public-host>:<browser-port>/
+openssl s_client -connect <public-host>:<service-port> -servername <public-host> </dev/null
 ```
 
 `/api/service/*` 不能用普通 curl 作为成功验收，它还需要合法 service HMAC 和目标 `node_id`。正式签名示例见 [Node Gateway 运维手册](../ops/node-gateway.md)。完整组件边界见[节点服务网关架构](../节点服务网关架构.md)。
 
-`install` 在 macOS 调用 `security add-trusted-cert`，Windows 调用 `Import-Certificate`，Debian/Ubuntu 使用 `update-ca-certificates`，RHEL/Fedora 使用 `update-ca-trust`。每次公开部署都会按 SHA-256 指纹检查操作机信任；缺失时自动安装，非交互部署会要求免密管理员权限，否则失败并提示手工命令。每台浏览器机器都需本地安装 CA，否则浏览器显示不可信警告；不要通过跳过 TLS 验证规避警告。
+## Internal CA 获取和信任
 
-Skill 也可单独为 web-host 目标机安装信任：`skills/moox/scripts/caddy-ca.sh install-target --target user@host --deploy-dir /home/user/moox/prod`。该命令只读取公开根证书，不复制或导出 `root.key`。
+显式 `--tls-mode internal` 时，Caddy 生成私有 CA，公开根证书复制为 `certs/caddy/root.crt`；`root.key` 绝不得离开目标机。此时才使用 `skills/moox/scripts/caddy-ca.sh fetch|inspect|install|install-target`，部署默认通过 `--target-ca auto` 和 `--local-ca auto` 安装信任。每台浏览器机器都需安装该 CA，不要通过跳过 TLS 验证规避警告。
 
-后端进程使用 `MOOX_SERVICE_GATEWAY_CA_FILE=<deploy>/certs/caddy/root.crt`，无法挂载文件的 SCF 使用等价的 `MOOX_SERVICE_GATEWAY_CA_PEM_B64`。这些只包含公开 CA，service HMAC secret 另行注入。
+Internal 模式的后端进程使用 `MOOX_SERVICE_GATEWAY_CA_FILE=<deploy>/certs/caddy/root.crt`，无法挂载文件的 SCF 使用等价的 `MOOX_SERVICE_GATEWAY_CA_PEM_B64`。公网模式不得注入这些变量。
 
 ## 更新、轮换与故障恢复
 
-- Caddy 在保留 `data/caddy` 时自动续期叶子证书。修改 `--public-host` 以改变 IP/DNS SAN 后重新部署，并用 `openssl s_client` 检查 SAN 和信任链。
+- Caddy 在保留 `data/caddy` 且进程持续运行时自动续期。公网模式必须保持 TCP 80 可达。修改 `--public-host` 后重新部署，并用 `openssl s_client` 检查 SAN、发行者和有效期。
 - 新配置或 Caddy 启动/reload 验收失败时，部署应回滚到上一个已验证的二进制和 Caddyfile；先检查端口所有者、PID 和 Caddy admin 状态，不要手工终止无关进程。
-- CA 轮换会使所有已安装的浏览器信任和后端/SCF CA 配置失效，必须作为显式变更：备份、生成新 CA、核对指纹、向全部调用方重新分发并完成 HTTPS 验收。
-- 如果 CA 私钥丢失，无法从 `root.crt` 恢复；必须轮换 CA 并重新建立全部信任。私钥和密钥文件仅允许部署用户读取，根证书可读但不应与私钥一起打包。
+- Internal CA 轮换会使所有已安装的浏览器信任和后端/SCF CA 配置失效，必须作为显式变更。
+- Internal CA 私钥丢失时无法从 `root.crt` 恢复；必须轮换 CA 并重新建立全部信任。
 
 当共享工作树中的部署脚本仍在调整参数名或默认值时，以 `scripts/deploy-moox.sh --help`、`deploy/caddy/Caddyfile` 和同版本部署包为实际配置契约，不应由本文推断尚未落地的自动化。

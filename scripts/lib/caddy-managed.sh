@@ -36,6 +36,8 @@ done
 OS=$(normalize_os "${OS}"); ARCH=$(normalize_arch "${ARCH}")
 BIN="${DEPLOY_DIR}/bin/caddy"; CONFIG="${DEPLOY_DIR}/config/caddy/Caddyfile"; PIDFILE="${DEPLOY_DIR}/run/caddy.pid"
 ENV_FILE="${DEPLOY_DIR}/config/caddy/edge.env"
+CA_ROOT="${DEPLOY_DIR}/certs/caddy/root.crt"
+CA_SHA="${DEPLOY_DIR}/certs/caddy/root.sha256"
 ACTIVATION_ROLLBACK="${DEPLOY_DIR}/config/caddy/.activation.rollback"
 BIN_ROLLBACK_CHANGED="${BIN}.rollback.changed"
 # Deployment activation passes public edge values explicitly. Preserve those
@@ -47,18 +49,27 @@ EXPLICIT_BROWSER_PORT_SET=${MOOX_BROWSER_HTTPS_PORT+x}
 EXPLICIT_BROWSER_PORT=${MOOX_BROWSER_HTTPS_PORT-}
 EXPLICIT_SERVICE_PORT_SET=${MOOX_SERVICE_HTTPS_PORT+x}
 EXPLICIT_SERVICE_PORT=${MOOX_SERVICE_HTTPS_PORT-}
+EXPLICIT_TLS_MODE_SET=${MOOX_TLS_MODE+x}
+EXPLICIT_TLS_MODE=${MOOX_TLS_MODE-}
+ACTIVE_TLS_MODE=internal
+unset MOOX_TLS_MODE
 if [[ -s "${ENV_FILE}" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
   set +a
+  ACTIVE_TLS_MODE=${MOOX_TLS_MODE:-internal}
 fi
 if [[ -n "${EXPLICIT_PUBLIC_HOST_SET}" ]]; then MOOX_PUBLIC_HOST=${EXPLICIT_PUBLIC_HOST}; export MOOX_PUBLIC_HOST; fi
 if [[ -n "${EXPLICIT_BROWSER_PORT_SET}" ]]; then MOOX_BROWSER_HTTPS_PORT=${EXPLICIT_BROWSER_PORT}; export MOOX_BROWSER_HTTPS_PORT; fi
 if [[ -n "${EXPLICIT_SERVICE_PORT_SET}" ]]; then MOOX_SERVICE_HTTPS_PORT=${EXPLICIT_SERVICE_PORT}; export MOOX_SERVICE_HTTPS_PORT; fi
+if [[ -n "${EXPLICIT_TLS_MODE_SET}" ]]; then MOOX_TLS_MODE=${EXPLICIT_TLS_MODE}; export MOOX_TLS_MODE; fi
 if [[ "${PORTS_SET}" -eq 0 && -n "${MOOX_CADDY_PORTS:-}" ]]; then
   PORTS="${MOOX_CADDY_PORTS}"
 fi
+MOOX_TLS_MODE=${MOOX_TLS_MODE:-internal}
+[[ "${MOOX_TLS_MODE}" =~ ^(public|internal)$ ]] || fail "invalid TLS mode: ${MOOX_TLS_MODE}"
+export MOOX_TLS_MODE
 export XDG_DATA_HOME="${DEPLOY_DIR}/data/caddy" XDG_CONFIG_HOME="${DEPLOY_DIR}/config/caddy/runtime"
 
 version_ok() { [[ -x "${BIN}" ]] && [[ $("${BIN}" version 2>/dev/null | awk '{print $1}') == "${CADDY_VERSION}" ]]; }
@@ -73,6 +84,7 @@ validate_ports() {
   done
 }
 requires_privileged_port() {
+  [[ "${MOOX_TLS_MODE}" != public ]] || return 0
   local port
   local -a ports
   IFS=, read -ra ports <<<"${PORTS}"
@@ -127,22 +139,28 @@ begin_activation() {
   snapshot_file "${CONFIG}"
   snapshot_file "${ENV_FILE}"
   snapshot_file "${BIN}"
+  snapshot_file "${CA_ROOT}"
+  snapshot_file "${CA_SHA}"
   rm -f "${BIN_ROLLBACK_CHANGED}"
   : >"${ACTIVATION_ROLLBACK}"
 }
 load_active_ports() {
-  unset MOOX_CADDY_PORTS
+  unset MOOX_CADDY_PORTS MOOX_TLS_MODE
   if [[ -s "${ENV_FILE}" ]]; then
     # shellcheck disable=SC1090
     source "${ENV_FILE}"
   fi
   PORTS="${MOOX_CADDY_PORTS:-9527,11001}"
+  MOOX_TLS_MODE=${MOOX_TLS_MODE:-internal}
+  export MOOX_TLS_MODE
   validate_ports
 }
 restore_activation() {
   [[ -e "${ACTIVATION_ROLLBACK}" ]] || return 1
   restore_file "${CONFIG}"
   restore_file "${ENV_FILE}"
+  restore_file "${CA_ROOT}"
+  restore_file "${CA_SHA}"
   if [[ -e "${BIN_ROLLBACK_CHANGED}" ]]; then
     restore_file "${BIN}"
   else
@@ -161,6 +179,7 @@ write_candidate_env() {
       printf 'MOOX_PUBLIC_HOST=%q\nMOOX_BROWSER_HTTPS_PORT=%q\nMOOX_SERVICE_HTTPS_PORT=%q\n' \
         "${MOOX_PUBLIC_HOST}" "${MOOX_BROWSER_HTTPS_PORT:-9527}" "${MOOX_SERVICE_HTTPS_PORT:-11001}"
     fi
+    printf 'MOOX_TLS_MODE=%q\n' "${MOOX_TLS_MODE}"
   } >"${ENV_FILE}.candidate"
 }
 managed_process() {
@@ -274,6 +293,13 @@ check_ports() {
     if pid_owned; then pid=$(cat "${PIDFILE}"); [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]] && continue; fi
     fail "edge port ${port} is occupied by unrelated PID(s): ${owners//$'\n'/,}; refusing takeover"
   done
+  if [[ "${MOOX_TLS_MODE}" == public ]]; then
+    owners=$(port_pids 80)
+    if [[ -n "${owners}" ]]; then
+      if pid_owned; then pid=$(cat "${PIDFILE}"); [[ " ${owners//$'\n'/ } " == *" ${pid} "* ]] && return 0; fi
+      fail "ACME HTTP challenge port 80 is occupied by unrelated PID(s): ${owners//$'\n'/,}; refusing public TLS activation"
+    fi
+  fi
 }
 
 port_pids() {
@@ -370,6 +396,12 @@ start_caddy() {
 }
 
 publish_ca() {
+  if [[ "${MOOX_TLS_MODE}" != internal ]]; then
+    # A stale private root would make service clients trust only the old
+    # internal certificate after switching this edge to a public issuer.
+    rm -f "${CA_ROOT}" "${CA_SHA}"
+    return 0
+  fi
   [[ ${MOOX_CADDY_SKIP_CA_WAIT:-0} == 1 ]] && return 0
   local root="${XDG_DATA_HOME}/caddy/pki/authorities/local/root.crt" fingerprint old
   for _ in $(seq 1 100); do [[ -s "${root}" ]] && break; sleep .1; done
@@ -377,13 +409,21 @@ publish_ca() {
   openssl x509 -in "${root}" -noout -text | grep -Eq 'CA:TRUE' || fail 'Caddy root certificate is not a CA'
   fingerprint=$(openssl x509 -in "${root}" -noout -fingerprint -sha256 | cut -d= -f2)
   mkdir -p "${DEPLOY_DIR}/certs/caddy"
-  if [[ -s "${DEPLOY_DIR}/certs/caddy/root.sha256" ]]; then
-    old=$(cat "${DEPLOY_DIR}/certs/caddy/root.sha256")
+  if [[ -s "${CA_SHA}" ]]; then
+    old=$(cat "${CA_SHA}")
     [[ "${old}" == "${fingerprint}" ]] || fail "Caddy CA changed (${old} -> ${fingerprint}); explicit rotation is required"
   fi
-  install -m 0644 "${root}" "${DEPLOY_DIR}/certs/caddy/root.crt"
-  printf '%s\n' "${fingerprint}" >"${DEPLOY_DIR}/certs/caddy/root.sha256"
+  install -m 0644 "${root}" "${CA_ROOT}"
+  printf '%s\n' "${fingerprint}" >"${CA_SHA}"
   log "Caddy CA SHA-256 fingerprint: ${fingerprint}"
+}
+
+remove_internal_leaf() {
+  [[ "${MOOX_TLS_MODE}" == public && "${ACTIVE_TLS_MODE}" == internal ]] || return 0
+  [[ "${MOOX_PUBLIC_HOST:-}" =~ ^[A-Za-z0-9:._-]+$ ]] || fail 'public host is unsafe for certificate storage cleanup'
+  local leaf_dir="${XDG_DATA_HOME}/caddy/certificates/local/${MOOX_PUBLIC_HOST}"
+  rm -f "${leaf_dir}/${MOOX_PUBLIC_HOST}.crt" "${leaf_dir}/${MOOX_PUBLIC_HOST}.key" "${leaf_dir}/${MOOX_PUBLIC_HOST}.json"
+  log "removed cached internal leaf before public ACME issuance"
 }
 
 validate_ports
@@ -397,6 +437,7 @@ case "${COMMAND}" in
     clean_stale_pid
     pid_owned || adopt_managed_process || true
     previous_pid=""
+    tls_mode_changed=0
     if pid_owned; then previous_pid=$(cat "${PIDFILE}"); fi
     begin_activation
     version_ok || install_binary
@@ -418,9 +459,19 @@ case "${COMMAND}" in
     fi
     if [[ -s "${CONFIG}" ]]; then
       if [[ -n "${previous_pid}" ]] && ! pid_owned; then stop_recorded_pid; fi
+      if [[ -n "${previous_pid}" && "${ACTIVE_TLS_MODE}" != "${MOOX_TLS_MODE}" ]]; then
+        stop_recorded_pid
+        previous_pid=""
+        tls_mode_changed=1
+      fi
+      remove_internal_leaf
       if ! (start_caddy); then
         restore_activation || fail 'Caddy activation failed and rollback could not restore the previous state'
-        restore_runtime_after_failure "${previous_pid}"
+        if [[ "${tls_mode_changed}" == 1 ]]; then
+          start_caddy
+        else
+          restore_runtime_after_failure "${previous_pid}"
+        fi
         fail 'Caddy activation failed; restored previous config, binary, ports, environment, and capability'
       fi
     else
@@ -434,12 +485,19 @@ case "${COMMAND}" in
     clean_stale_pid
     if [[ -e "${ACTIVATION_ROLLBACK}" ]]; then
       rollback_pid=""
+      rollback_tls_mode="${MOOX_TLS_MODE}"
       if pid_owned; then rollback_pid=$(cat "${PIDFILE}"); fi
       restore_activation || fail 'managed Caddy rollback state is incomplete'
       if [[ -s "${CONFIG}" ]]; then
         if [[ "${rollback_pid}" =~ ^[0-9]+$ ]] && kill -0 "${rollback_pid}" 2>/dev/null; then
-          printf '%s\n' "${rollback_pid}" >"${PIDFILE}"
-          "${BIN}" reload --config "${CONFIG}" --adapter caddyfile
+          if [[ "${rollback_tls_mode}" != "${MOOX_TLS_MODE}" ]]; then
+            terminate_managed_pid "${rollback_pid}"
+            rm -f "${PIDFILE}"
+            start_caddy
+          else
+            printf '%s\n' "${rollback_pid}" >"${PIDFILE}"
+            "${BIN}" reload --config "${CONFIG}" --adapter caddyfile
+          fi
         else
           rm -f "${PIDFILE}"
           start_caddy
@@ -461,6 +519,6 @@ case "${COMMAND}" in
   status)
     installed=false; running=false; valid=false; admin=false; version=''; version_ok && { installed=true; version=${CADDY_VERSION}; }; pid_owned && running=true; admin_healthy && admin=true
     [[ "${installed}" == true && -s "${CONFIG}" ]] && "${BIN}" validate --config "${CONFIG}" --adapter caddyfile >/dev/null 2>&1 && valid=true
-    printf '{"version":"%s","installed":%s,"running":%s,"admin_healthy":%s,"config_valid":%s,"deploy_dir":"%s"}\n' "${CADDY_VERSION}" "${installed}" "${running}" "${admin}" "${valid}" "${DEPLOY_DIR//\"/\\\"}";;
+    printf '{"version":"%s","installed":%s,"running":%s,"admin_healthy":%s,"config_valid":%s,"tls_mode":"%s","deploy_dir":"%s"}\n' "${CADDY_VERSION}" "${installed}" "${running}" "${admin}" "${valid}" "${MOOX_TLS_MODE}" "${DEPLOY_DIR//\"/\\\"}";;
   *) fail "unknown command: ${COMMAND}";;
 esac

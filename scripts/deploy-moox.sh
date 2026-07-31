@@ -61,6 +61,8 @@ fi
 export MOOX_EVENTBUS_NATS_URL="${EVENTBUS_URL_ENV}" MOOX_EVENTBUS_HOST MOOX_EVENTBUS_PORT
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 PUBLIC_HOST=""
+TLS_MODE=auto
+TLS_MODE_RESOLVED=internal
 BROWSER_HTTPS_PORT=9527
 SERVICE_HTTPS_PORT=11001
 LOCAL_CA=auto
@@ -119,6 +121,8 @@ Options:
   --reuse-web-assets              Reuse current embedded statik assets when building web-host.
   --reset-data                    Remove target data directory before deploying. Use when rebuilding from examples.
   --public-host <ip-or-dns>       Certificate SAN and public HTTPS host; enables managed Caddy.
+  --tls-mode <auto|public|internal>
+                                  TLS issuer. Auto uses public ACME except for private/loopback hosts.
   --browser-https-port <port>     Browser HTTPS edge. Default: 9527.
   --service-https-port <port>     Service HTTPS edge. Default: 11001.
   --local-ca <auto|install|skip>  Operator CA workflow. Default: auto (check and install).
@@ -499,6 +503,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --public-host) PUBLIC_HOST="${2:-}"; shift 2 ;;
+    --tls-mode) TLS_MODE="${2:-}"; shift 2 ;;
     --browser-https-port) BROWSER_HTTPS_PORT="${2:-}"; shift 2 ;;
     --service-https-port) SERVICE_HTTPS_PORT="${2:-}"; shift 2 ;;
     --local-ca) LOCAL_CA="${2:-}"; shift 2 ;;
@@ -545,10 +550,50 @@ if [[ "${WITH_MONITOR}" -eq 1 ]]; then
 fi
 [[ "${LOCAL_CA}" =~ ^(auto|install|skip)$ ]] || fail '--local-ca must be auto, install, or skip'
 [[ "${TARGET_CA}" =~ ^(auto|skip)$ ]] || fail '--target-ca must be auto or skip'
+[[ "${TLS_MODE}" =~ ^(auto|public|internal)$ ]] || fail '--tls-mode must be auto, public, or internal'
 
 is_local_target() {
   [[ "${TARGET}" == "localhost" || "${TARGET}" == "127.0.0.1" || "${TARGET}" == "::1" ]]
 }
+
+resolve_tls_mode() {
+  if [[ "${TLS_MODE}" != auto ]]; then
+    printf '%s\n' "${TLS_MODE}"
+    return
+  fi
+  local host octet1 octet2 octet3 octet4
+  host=$(printf '%s' "${PUBLIC_HOST}" | tr '[:upper:]' '[:lower:]')
+  case "${host}" in
+    ""|localhost|*.localhost|::1|fc*:*|fd*:*|fe8*:*|fe9*:*|fea*:*|feb*:*)
+      printf 'internal\n'
+      return
+      ;;
+  esac
+  if [[ "${host}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+    octet1=${BASH_REMATCH[1]}
+    octet2=${BASH_REMATCH[2]}
+    octet3=${BASH_REMATCH[3]}
+    octet4=${BASH_REMATCH[4]}
+    if ((10#${octet1} <= 255 && 10#${octet2} <= 255 && 10#${octet3} <= 255 && 10#${octet4} <= 255)); then
+      if ((10#${octet1} == 10 || 10#${octet1} == 127 || \
+          (10#${octet1} == 169 && 10#${octet2} == 254) || \
+          (10#${octet1} == 172 && 10#${octet2} >= 16 && 10#${octet2} <= 31) || \
+          (10#${octet1} == 192 && 10#${octet2} == 168))); then
+        printf 'internal\n'
+        return
+      fi
+    fi
+  fi
+  printf 'public\n'
+}
+
+remove_resettable_data() {
+  local data_dir="$1"
+  [[ -d "${data_dir}" ]] || return 0
+  find "${data_dir}" -mindepth 1 -maxdepth 1 ! -name caddy -exec rm -rf -- {} +
+}
+
+TLS_MODE_RESOLVED="$(resolve_tls_mode)"
 
 if [[ "${WITH_WEB_HOST}" -eq 1 && -z "${PUBLIC_HOST}" ]] && ! is_local_target; then
   fail "--public-host is required when deploying web-host to a remote target"
@@ -1803,6 +1848,11 @@ start_web_host() {
       "${ROOT}/bin/moox-web-host"
 }
 
+start_caddy() {
+  [[ -x "${ROOT}/lib/caddy-managed.sh" && -s "${ROOT}/config/caddy/edge.env" ]] || return 0
+  "${ROOT}/lib/caddy-managed.sh" start --deploy-dir "${ROOT}"
+}
+
 SERVICE="${1:-}"
 case "${SERVICE}" in
   "")
@@ -1846,6 +1896,7 @@ case "${SERVICE}" in
     if [[ "${WITH_WEB_HOST}" == "1" ]]; then
       start_web_host
     fi
+    start_caddy
     ;;
   storage)
     if [[ "${WITH_STORAGE}" != "1" ]]; then
@@ -2236,6 +2287,10 @@ if [[ "${WITH_TRADE}" == "1" ]]; then
   services=(trade "${services[@]}")
 fi
 
+if [[ -x "${ROOT}/lib/caddy-managed.sh" && -s "${ROOT}/config/caddy/edge.env" ]]; then
+  echo "caddy: $("${ROOT}/lib/caddy-managed.sh" status --deploy-dir "${ROOT}")"
+fi
+
 for name in "${services[@]}"; do
   pid_file="${ROOT}/run/${name}.pid"
   if [[ ! -f "${pid_file}" ]]; then
@@ -2397,14 +2452,48 @@ ensure_service() {
   return 1
 }
 
+ensure_caddy() {
+  [[ -x "${ROOT}/lib/caddy-managed.sh" && -s "${ROOT}/config/caddy/edge.env" ]] || return 0
+  local status
+  status=$("${ROOT}/lib/caddy-managed.sh" status --deploy-dir "${ROOT}" 2>/dev/null || true)
+  if [[ "${status}" != *'"running":true'* || "${status}" != *'"admin_healthy":true'* || "${status}" != *'"config_valid":true'* ]]; then
+    log_line "caddy: edge process unhealthy; restarting"
+    "${ROOT}/lib/caddy-managed.sh" start --deploy-dir "${ROOT}" 9>&- >>"${LOG_FILE}" 2>&1
+  fi
+  # Public mode uses the operating-system trust store. Internal mode keeps the
+  # existing deployment CA workflow for private and loopback installations.
+  set -a
+  source "${ROOT}/config/caddy/edge.env"
+  set +a
+  local -a ca_args=()
+  [[ "${MOOX_TLS_MODE:-internal}" != internal ]] || ca_args=(--cacert "${ROOT}/certs/caddy/root.crt")
+  local edge_port="${MOOX_BROWSER_HTTPS_PORT:-9527}"
+  [[ "${WITH_ADMIN}" == "1" ]] || edge_port="${MOOX_SERVICE_HTTPS_PORT:-11001}"
+  curl --silent --show-error --max-time 5 "${ca_args[@]}" \
+    --resolve "${MOOX_PUBLIC_HOST}:${edge_port}:127.0.0.1" \
+    --output /dev/null "https://${MOOX_PUBLIC_HOST}:${edge_port}/"
+  if [[ "${MOOX_TLS_MODE:-internal}" == public ]]; then
+    local certificate
+    certificate=$(openssl s_client -connect "127.0.0.1:${edge_port}" \
+      -servername "${MOOX_PUBLIC_HOST}" -showcerts </dev/null 2>/dev/null |
+      sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' | sed -n '1,/-----END CERTIFICATE-----/p')
+    [[ -n "${certificate}" ]] || return 1
+    if ! printf '%s\n' "${certificate}" | openssl x509 -checkend 86400 -noout >/dev/null; then
+      log_line "caddy: public certificate has less than 24 hours remaining"
+      return 1
+    fi
+  fi
+}
+
 (
   flock -n 9 || exit 0
   failed=0
+  ensure_caddy || failed=1
   for name in "${services[@]}"; do
     ensure_service "${name}" || failed=1
   done
   exit "${failed}"
-) 9>"${ROOT}/run/healthcheck.lock"
+) 9>"${ROOT}.maintenance.lock"
 EOF
 
   perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_TRADE__#${WITH_TRADE}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g; s#__PUBLIC_HOST__#${PUBLIC_HOST}#g; s#__SCF_SERVICE_GATEWAY_TARGET__#${scf_service_gateway_target}#g; s#__SCF_STORAGE_RPC_GATEWAY_TARGET__#${scf_storage_rpc_gateway_target}#g" \
@@ -2576,9 +2665,17 @@ EOF
   fi
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then
     mkdir -p "${STAGE_DIR}/admin/config"
-    cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile.next"
+    if [[ "${TLS_MODE_RESOLVED}" == public ]]; then
+      cp "${ROOT}/deploy/caddy/Caddyfile.public" "${STAGE_DIR}/config/caddy/Caddyfile.next"
+    else
+      cp "${ROOT}/deploy/caddy/Caddyfile" "${STAGE_DIR}/config/caddy/Caddyfile.next"
+    fi
   else
-    cp "${ROOT}/deploy/caddy/Caddyfile.no-admin" "${STAGE_DIR}/config/caddy/Caddyfile.next"
+    if [[ "${TLS_MODE_RESOLVED}" == public ]]; then
+      cp "${ROOT}/deploy/caddy/Caddyfile.public.no-admin" "${STAGE_DIR}/config/caddy/Caddyfile.next"
+    else
+      cp "${ROOT}/deploy/caddy/Caddyfile.no-admin" "${STAGE_DIR}/config/caddy/Caddyfile.next"
+    fi
   fi
   chmod +x "${STAGE_DIR}/lib/caddy-managed.sh" "${STAGE_DIR}/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/install-caddy-ca.sh"
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
@@ -2738,7 +2835,7 @@ prepare_cls_preflight() {
 }
 
 sync_local_stage() {
-  local deploy_dir caddy_data_tmp=""
+  local deploy_dir
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
   mkdir -p "${deploy_dir}"
 
@@ -2783,16 +2880,7 @@ sync_local_stage() {
   fi
 
   if [[ "${RESET_DATA}" -eq 1 ]]; then
-    if [[ -d "${deploy_dir}/data/caddy" ]]; then
-      caddy_data_tmp=$(mktemp -d "${TMPDIR:-/tmp}/moox-caddy-data.XXXXXX")
-      mv "${deploy_dir}/data/caddy" "${caddy_data_tmp}/caddy"
-    fi
-    rm -rf "${deploy_dir}/data"
-    if [[ -n "${caddy_data_tmp}" ]]; then
-      mkdir -p "${deploy_dir}/data"
-      mv "${caddy_data_tmp}/caddy" "${deploy_dir}/data/caddy"
-      rmdir "${caddy_data_tmp}"
-    fi
+    remove_resettable_data "${deploy_dir}/data"
   fi
 
   if command -v rsync >/dev/null 2>&1; then
@@ -2942,6 +3030,7 @@ sync_local_stage() {
       local caddy_ports="${SERVICE_HTTPS_PORT}"
       [[ "${WITH_ADMIN}" -eq 0 ]] || caddy_ports="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
       MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
+        MOOX_TLS_MODE="${TLS_MODE_RESOLVED}" \
         MOOX_CADDY_CHECKSUMS="${deploy_dir}/lib/caddy-v2.11.4-checksums.txt" \
         MOOX_CADDY_ARCHIVE="${deploy_dir}/lib/caddy_2.11.4_$([[ "${TARGET_GOOS}" == darwin ]] && printf mac || printf '%s' "${TARGET_GOOS}")_${TARGET_GOARCH}.tar.gz" \
         "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${caddy_ports}" --config "${deploy_dir}/config/caddy/Caddyfile.next"
@@ -2967,7 +3056,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -2992,12 +3081,13 @@ sync_remote_stage() {
   quoted_eventbus_enable_tls="$(shell_quote "${MOOX_EVENTBUS_ENABLE_TLS:-0}")"
   quoted_eventbus_public_ip="$(shell_quote "${MOOX_EVENTBUS_PUBLIC_IP:-}")"
   quoted_public_host="$(shell_quote "${PUBLIC_HOST}")"
+  quoted_tls_mode="$(shell_quote "${TLS_MODE_RESOLVED}")"
   quoted_browser_https_port="$(shell_quote "${BROWSER_HTTPS_PORT}")"
   quoted_service_https_port="$(shell_quote "${SERVICE_HTTPS_PORT}")"
   quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
   quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} PUBLIC_HOST=${quoted_public_host} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
@@ -3020,7 +3110,10 @@ elif [[ "${DEPLOY_DIR}" == "~/"* ]]; then
 fi
 
 mkdir -p "${DEPLOY_DIR}"
-CADDY_DATA_TMP=""
+if command -v flock >/dev/null 2>&1; then
+  exec 8>"${DEPLOY_DIR}.maintenance.lock"
+  flock 8
+fi
 KEY_FILE="${HOME}/.config/moox/credentials/admin-encryption-key"
 if [[ "${WITH_ADMIN}" == "1" && ! -f "${KEY_FILE}" ]]; then
   mkdir -p "${HOME}/.config/moox/credentials"
@@ -3056,15 +3149,8 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
 fi
 
 if [[ "${RESET_DATA}" == "1" ]]; then
-  if [[ -d "${DEPLOY_DIR}/data/caddy" ]]; then
-    CADDY_DATA_TMP=$(mktemp -d /tmp/moox-caddy-data.XXXXXX)
-    mv "${DEPLOY_DIR}/data/caddy" "${CADDY_DATA_TMP}/caddy"
-  fi
-  rm -rf "${DEPLOY_DIR}/data"
-  if [[ -n "${CADDY_DATA_TMP}" ]]; then
-    mkdir -p "${DEPLOY_DIR}/data"
-    mv "${CADDY_DATA_TMP}/caddy" "${DEPLOY_DIR}/data/caddy"
-    rmdir "${CADDY_DATA_TMP}"
+  if [[ -d "${DEPLOY_DIR}/data" ]]; then
+    find "${DEPLOY_DIR}/data" -mindepth 1 -maxdepth 1 ! -name caddy -exec rm -rf -- {} +
   fi
 fi
 
@@ -3145,11 +3231,12 @@ chmod 0600 "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/ga
     CADDY_PORTS="${SERVICE_HTTPS_PORT}"
     [[ "${WITH_ADMIN}" == "0" ]] || CADDY_PORTS="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
     MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
+      MOOX_TLS_MODE="${TLS_MODE_RESOLVED}" \
       MOOX_CADDY_CHECKSUMS="${DEPLOY_DIR}/lib/caddy-v2.11.4-checksums.txt" \
       MOOX_CADDY_ARCHIVE="${DEPLOY_DIR}/lib/caddy_2.11.4_${CADDY_OS_NAME}_${TARGET_GOARCH}.tar.gz" \
-      "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${CADDY_PORTS}" --config "${DEPLOY_DIR}/config/caddy/Caddyfile.next"
+      "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${CADDY_PORTS}" --config "${DEPLOY_DIR}/config/caddy/Caddyfile.next" 8>&-
   fi
-  "${DEPLOY_DIR}/start.sh"
+  "${DEPLOY_DIR}/start.sh" 8>&-
 fi
 EOF
   log "deployed to ${TARGET}:${DEPLOY_DIR}"
@@ -3180,7 +3267,7 @@ else
 fi
 
 configure_target_ca() {
-  [[ -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 && "${TARGET_CA}" != skip ]] || return 0
+  [[ "${TLS_MODE_RESOLVED}" == internal && -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 && "${TARGET_CA}" != skip ]] || return 0
   local args=(install-target --target "${TARGET}" --deploy-dir "${DEPLOY_DIR}")
   local status
   args+=(--non-interactive)
@@ -3201,7 +3288,7 @@ configure_target_ca() {
 configure_target_ca
 
 configure_local_ca() {
-  [[ -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 && "${LOCAL_CA}" != skip ]] || return 0
+  [[ "${TLS_MODE_RESOLVED}" == internal && -n "${PUBLIC_HOST}" && "${NO_START}" -eq 0 && "${LOCAL_CA}" != skip ]] || return 0
   local output source status
   output="${LOCAL_CA_OUTPUT:-$(default_local_ca_output)}"
   output="$(expand_local_path "${output}")"
@@ -3243,12 +3330,14 @@ verify_public_https() {
   local browser="https://${PUBLIC_HOST}:${BROWSER_HTTPS_PORT}"
   local service="https://${PUBLIC_HOST}:${SERVICE_HTTPS_PORT}"
   local verify_script='set -euo pipefail
-ca=$1; browser=$2; service=$3; service_auth_file=$4; with_admin=$5; node_id=$6
+ca=$1; browser=$2; service=$3; service_auth_file=$4; with_admin=$5; node_id=$6; tls_mode=$7
 case "$ca" in "~/"*) ca="$HOME/${ca#\~/}";; esac
 case "$service_auth_file" in "~/"*) service_auth_file="$HOME/${service_auth_file#\~/}";; esac
 browser_authority=${browser#https://}; service_authority=${service#https://}
 status() {
-  curl --silent --show-error --max-time 5 --cacert "$ca" \
+  ca_args=()
+  [[ "$tls_mode" != internal ]] || ca_args=(--cacert "$ca")
+  curl --silent --show-error --max-time 5 "${ca_args[@]}" \
     --resolve "$browser_authority:127.0.0.1" --resolve "$service_authority:127.0.0.1" \
     --output /dev/null --write-out "%{http_code}" "$@"
 }
@@ -3280,17 +3369,17 @@ expect_status "$expected" -X POST -H "Content-Type: application/json" \
   -H "X-Moox-Nonce: $nonce" -H "X-Moox-Target-Node: $node_id" -H "X-Moox-Signature: $signature" \
   --data "{}" "$service$path"'
   if is_local_target; then
-    bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" || {
+    bash -c "${verify_script}" _ "$(expand_local_path "${DEPLOY_DIR}")/certs/caddy/root.crt" "${browser}" "${service}" "$(expand_local_path "${DEPLOY_DIR}")/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" || {
       "$(expand_local_path "${DEPLOY_DIR}")/lib/caddy-managed.sh" rollback --deploy-dir "$(expand_local_path "${DEPLOY_DIR}")" || true
       fail "public HTTPS acceptance failed"
     }
   elif [[ -n "${FETCHED_CA_FILE}" ]]; then
-    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" <<<"${verify_script}" || {
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" <<<"${verify_script}" || {
       ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
       fail "public HTTPS acceptance failed"
     }
   else
-    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" <<<"${verify_script}" || {
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}/certs/caddy/root.crt" "${browser}" "${service}" "${DEPLOY_DIR%/}/secrets/gateway-service.env" "${WITH_ADMIN}" "${NODE_ID}" "${TLS_MODE_RESOLVED}" <<<"${verify_script}" || {
       ssh -o BatchMode=yes "${TARGET}" "$(shell_quote "${DEPLOY_DIR%/}/lib/caddy-managed.sh") rollback --deploy-dir $(shell_quote "${DEPLOY_DIR}")" || true
       fail "remote public HTTPS acceptance failed"
     }

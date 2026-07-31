@@ -188,6 +188,8 @@ cp "${ROOT}/scripts/lib/caddy-managed.sh" "${RELEASE_ROOT}/lib/caddy-managed.sh"
 cp "${ROOT}/scripts/deps/caddy-v2.11.4-checksums.txt" "${RELEASE_ROOT}/lib/caddy-v2.11.4-checksums.txt"
 cp "${ROOT}/deploy/caddy/Caddyfile" "${RELEASE_ROOT}/config/caddy/Caddyfile"
 cp "${ROOT}/deploy/caddy/Caddyfile.no-admin" "${RELEASE_ROOT}/config/caddy/Caddyfile.no-admin"
+cp "${ROOT}/deploy/caddy/Caddyfile.public" "${RELEASE_ROOT}/config/caddy/Caddyfile.public"
+cp "${ROOT}/deploy/caddy/Caddyfile.public.no-admin" "${RELEASE_ROOT}/config/caddy/Caddyfile.public.no-admin"
 chmod +x "${RELEASE_ROOT}/lib/caddy-managed.sh"
 
 tar -C "${ROOT}/release" -czf "${ARCHIVE}" "$(basename "${RELEASE_ROOT}")"
