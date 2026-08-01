@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS t_collector_task_rules (
     c_space_id TEXT NOT NULL DEFAULT '',
     c_rule_id TEXT NOT NULL,
     c_data_type TEXT NOT NULL DEFAULT '',
-    c_exchange TEXT NOT NULL DEFAULT '',
+    c_provider TEXT NOT NULL DEFAULT '',
+    c_market_type TEXT NOT NULL DEFAULT '',
     c_collect_params TEXT NOT NULL DEFAULT '{}',
     c_enabled INTEGER NOT NULL DEFAULT 1,
     c_creator TEXT NOT NULL DEFAULT '',
@@ -15,7 +16,8 @@ CREATE TABLE IF NOT EXISTS t_collector_task_rules (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_rules_space_rule ON t_collector_task_rules (c_space_id, c_rule_id);
 CREATE INDEX IF NOT EXISTS idx_collector_rules_space ON t_collector_task_rules (c_space_id);
-CREATE INDEX IF NOT EXISTS idx_collector_rules_exchange ON t_collector_task_rules (c_exchange);
+CREATE INDEX IF NOT EXISTS idx_collector_rules_provider ON t_collector_task_rules (c_provider);
+CREATE INDEX IF NOT EXISTS idx_collector_rules_market_type ON t_collector_task_rules (c_market_type);
 CREATE INDEX IF NOT EXISTS idx_collector_rules_type ON t_collector_task_rules (c_data_type);
 CREATE INDEX IF NOT EXISTS idx_collector_rules_enabled ON t_collector_task_rules (c_enabled);
 
@@ -23,15 +25,13 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
     c_task_id TEXT NOT NULL,
-    c_cloud_job_item_id TEXT NOT NULL DEFAULT '',
     c_rule_id TEXT NOT NULL,
-    c_exchange TEXT NOT NULL DEFAULT '',
-    c_market TEXT NOT NULL DEFAULT '',
+    c_provider TEXT NOT NULL DEFAULT '',
+    c_market_type TEXT NOT NULL DEFAULT '',
     c_data_type TEXT NOT NULL DEFAULT '',
     c_dataset_id TEXT NOT NULL DEFAULT '',
     c_subject_id TEXT NOT NULL DEFAULT '',
-    c_symbol TEXT NOT NULL DEFAULT '',
-    c_interval TEXT NOT NULL DEFAULT 'default',
+    c_frequency TEXT NOT NULL DEFAULT '',
     c_last_exec_node TEXT NOT NULL DEFAULT '',
     c_last_exec_status INTEGER NOT NULL DEFAULT 1,
     c_task_params TEXT NOT NULL DEFAULT '{}',
@@ -43,7 +43,6 @@ CREATE TABLE IF NOT EXISTS t_collector_task_instances (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_space_task ON t_collector_task_instances (c_space_id, c_task_id);
-CREATE INDEX IF NOT EXISTS idx_collector_instances_job_item ON t_collector_task_instances (c_space_id, c_cloud_job_item_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_rule ON t_collector_task_instances (c_space_id, c_rule_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_subject ON t_collector_task_instances (c_space_id, c_dataset_id, c_subject_id);
 CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_instances (c_last_exec_status);
@@ -61,3 +60,75 @@ AFTER UPDATE ON t_collector_task_instances
 BEGIN
     UPDATE t_collector_task_instances SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
 END;
+
+CREATE TABLE IF NOT EXISTS t_collector_fetch_batches (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_batch_id TEXT NOT NULL,
+    c_parent_batch_id TEXT NOT NULL DEFAULT '',
+    c_schedule_id TEXT NOT NULL,
+    c_batch_kind TEXT NOT NULL,
+    c_shard_index INTEGER NOT NULL,
+    c_rule_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_region TEXT NOT NULL,
+    c_node_id TEXT NOT NULL,
+    c_function_name TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_attempt INTEGER NOT NULL DEFAULT 1,
+    c_request_id TEXT NOT NULL DEFAULT '',
+    c_request_json TEXT NOT NULL DEFAULT '{}',
+    c_planned_count INTEGER NOT NULL DEFAULT 0,
+    c_success_count INTEGER NOT NULL DEFAULT 0,
+    c_retry_count INTEGER NOT NULL DEFAULT 0,
+    c_permanent_failed_count INTEGER NOT NULL DEFAULT 0,
+    c_error_summary TEXT NOT NULL DEFAULT '',
+    c_late_completion INTEGER NOT NULL DEFAULT 0,
+    c_planned_at DATETIME,
+    c_dispatched_at DATETIME,
+    c_deadline_at DATETIME,
+    c_completed_at DATETIME,
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_fetch_batch
+ON t_collector_fetch_batches (c_space_id, c_batch_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_fetch_schedule_shard
+ON t_collector_fetch_batches
+(c_space_id, c_schedule_id, c_batch_kind, c_shard_index, c_attempt);
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_deadline
+ON t_collector_fetch_batches (c_status, c_deadline_at);
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_batch_schedule
+ON t_collector_fetch_batches (c_space_id, c_schedule_id);
+
+CREATE TABLE IF NOT EXISTS t_collector_fetch_retry_items (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_retry_key TEXT NOT NULL,
+  c_source_batch_id TEXT NOT NULL,
+  c_batch_kind TEXT NOT NULL DEFAULT 'realtime',
+    c_rule_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_target_data_time DATETIME NOT NULL,
+    c_task_json TEXT NOT NULL DEFAULT '{}',
+    c_attempt INTEGER NOT NULL DEFAULT 1,
+    c_status TEXT NOT NULL,
+    c_next_retry_at DATETIME,
+    c_last_error_type TEXT NOT NULL DEFAULT '',
+    c_last_error_summary TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_fetch_retry
+ON t_collector_fetch_retry_items (c_space_id, c_retry_key);
+
+CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due
+ON t_collector_fetch_retry_items (c_status, c_next_retry_at);

@@ -11,13 +11,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -25,14 +29,9 @@ import (
 )
 
 const (
-	defaultCollectorSCFTimeout   = "120"
+	defaultCollectorSCFTimeout   = "10"
 	maxCollectorPublishNodeCount = 100
 )
-
-var defaultCollectorJobTypes = []string{
-	"collect.binance.kline",
-	"collect.binance.symbol",
-}
 
 type collectorPackageOptions struct {
 	CollectorRoot            string
@@ -53,6 +52,7 @@ type collectorPublishOptions struct {
 	ServiceAccessKey       string
 	ServiceSecretKey       string
 	CloudAccountID         string
+	Namespace              string
 	Runtime                string
 	Handler                string
 	Region                 string
@@ -67,6 +67,8 @@ type collectorPublishOptions struct {
 	EventBusCredentialFile string
 	NodeCount              int
 	FunctionNamePrefix     string
+	File                   string
+	FetcherConfig          *setupconfig.SCFFetcher
 	CLSSecretID            string
 	CLSSecretKey           string
 }
@@ -106,8 +108,18 @@ type collectorDeleteOptions struct {
 	Wait             bool
 }
 
+type collectorProbeOptions struct {
+	ControlURL       string
+	AccessToken      string
+	ServiceAccessKey string
+	ServiceSecretKey string
+	SpaceID          string
+	Region           string
+}
+
 var collectorDeployFlags collectorDeployOptions
 var collectorDeleteFlags collectorDeleteOptions
+var collectorProbeFlags collectorProbeOptions
 
 var collectorFunctionDeployCmd = &cobra.Command{
 	Use:   "deploy",
@@ -142,6 +154,20 @@ var collectorFunctionDeleteCmd = &cobra.Command{
 			}
 		}
 		return err
+	},
+}
+
+var collectorFunctionProbeCmd = &cobra.Command{
+	Use:   "probe-egress",
+	Short: "逐个调用短时 SCF 验证公网出口和 Binance 连通性",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		report, err := probeCollectorEgress(cmd.Context(), collectorProbeFlags)
+		encErr := json.NewEncoder(cmd.OutOrStdout()).Encode(report)
+		if err != nil {
+			return err
+		}
+		return encErr
 	},
 }
 
@@ -193,12 +219,12 @@ var collectorFunctionPublishSubmitCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		summary, err := publishCollectorFunction(cmd.Context(), collectorPublishFlags)
-		if err != nil {
-			return err
-		}
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
-		return enc.Encode(summary)
+		if encodeErr := enc.Encode(summary); encodeErr != nil {
+			return encodeErr
+		}
+		return err
 	},
 }
 
@@ -218,13 +244,25 @@ var collectorFunctionPublishStatusCmd = &cobra.Command{
 }
 
 type collectorPublishSummary struct {
-	ZipPath    string `json:"zip_path"`
-	PackageID  string `json:"package_id"`
-	CLSTopicID string `json:"cls_topic_id"`
-	FleetMode  string `json:"fleet_mode"`
-	JobID      string `json:"job_id"`
-	Operation  string `json:"operation"`
-	TotalCount int    `json:"total_count"`
+	ZipPath    string                          `json:"zip_path"`
+	PackageID  string                          `json:"package_id"`
+	CLSTopicID string                          `json:"cls_topic_id"`
+	FleetMode  string                          `json:"fleet_mode"`
+	JobID      string                          `json:"job_id"`
+	JobIDs     []string                        `json:"job_ids,omitempty"`
+	Operation  string                          `json:"operation"`
+	TotalCount int                             `json:"total_count"`
+	Regions    []collectorPublishRegionSummary `json:"regions,omitempty"`
+}
+
+type collectorPublishRegionSummary struct {
+	Region         string `json:"region"`
+	CloudAccountID string `json:"cloud_account_id"`
+	PackageID      string `json:"package_id"`
+	CLSLogsetID    string `json:"cls_logset_id"`
+	CLSTopicID     string `json:"cls_topic_id"`
+	JobID          string `json:"job_id"`
+	TotalCount     int    `json:"total_count"`
 }
 
 type collectorDeploySummary struct {
@@ -258,7 +296,7 @@ type collectorFleetAPI interface {
 func init() {
 	rootCmd.AddCommand(collectorCmd)
 	collectorCmd.AddCommand(collectorFunctionCmd)
-	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd, collectorFunctionPublishCmd, collectorFunctionDeployCmd, collectorFunctionDeleteCmd)
+	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd, collectorFunctionPublishCmd, collectorFunctionDeployCmd, collectorFunctionDeleteCmd, collectorFunctionProbeCmd)
 	collectorFunctionPublishCmd.AddCommand(collectorFunctionPublishSubmitCmd, collectorFunctionPublishStatusCmd)
 
 	addCollectorPackageFlags(collectorFunctionPackageCmd, &collectorPackageFlags)
@@ -274,7 +312,7 @@ func init() {
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ZipPath, "zip", "", "existing SCF zip path")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageName, "package-name", "moox-collector", "function package name")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageType, "package-type", "data_collector", "function package type")
-	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.BizType, "biz-type", "data_collector", "business type")
+	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.BizType, "biz-type", "market_fetcher", "business type")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.Runtime, "runtime", "Go1", "SCF runtime")
 
 	deleteFlags := collectorFunctionDeleteCmd.Flags()
@@ -286,6 +324,13 @@ func init() {
 	deleteFlags.BoolVar(&collectorDeleteFlags.Confirm, "confirm", false, "确认删除当前 space 的全部 SCF 节点")
 	deleteFlags.BoolVar(&collectorDeleteFlags.DryRun, "dry-run", false, "只列出目标，不提交删除任务")
 	deleteFlags.BoolVar(&collectorDeleteFlags.Wait, "wait", true, "提交后等待异步任务完成")
+	probeFlags := collectorFunctionProbeCmd.Flags()
+	probeFlags.StringVar(&collectorProbeFlags.ControlURL, "control-url", "", "Control service base URL")
+	probeFlags.StringVar(&collectorProbeFlags.AccessToken, "access-token", "", "Control access token")
+	probeFlags.StringVar(&collectorProbeFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名 access key")
+	probeFlags.StringVar(&collectorProbeFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名 secret key")
+	probeFlags.StringVar(&collectorProbeFlags.SpaceID, "space-id", "", "space id")
+	probeFlags.StringVar(&collectorProbeFlags.Region, "region", "", "只探测指定地域")
 
 	submitFlags := collectorFunctionPublishSubmitCmd.Flags()
 	submitFlags.StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
@@ -294,20 +339,21 @@ func init() {
 	submitFlags.StringVar(&collectorPublishFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	submitFlags.StringVar(&collectorPublishFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	submitFlags.StringVar(&collectorPublishFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
-	submitFlags.StringVar(&collectorPublishFlags.Runtime, "runtime", "Go1", "SCF runtime")
+	submitFlags.StringVar(&collectorPublishFlags.Runtime, "runtime", "", "SCF runtime (defaults to Go1)")
+	submitFlags.StringVar(&collectorPublishFlags.Namespace, "namespace", "", "SCF namespace (defaults to default)")
 	submitFlags.StringVar(&collectorPublishFlags.Handler, "handler", "main", "SCF handler")
 	submitFlags.StringVar(&collectorPublishFlags.Region, "region", "", "cloud region")
 	submitFlags.StringVar(&collectorPublishFlags.ZipPath, "zip", "", "existing SCF zip path")
 	submitFlags.StringVar(&collectorPublishFlags.PackageName, "package-name", "moox-collector", "function package name")
 	submitFlags.StringVar(&collectorPublishFlags.PackageType, "package-type", "data_collector", "function package type")
-	submitFlags.StringVar(&collectorPublishFlags.BizType, "biz-type", "data_collector", "business type")
+	submitFlags.StringVar(&collectorPublishFlags.BizType, "biz-type", "market_fetcher", "business type")
 	submitFlags.StringVar(&collectorPublishFlags.NodeType, "node-type", "scf-event", "cloud node type")
-	submitFlags.StringSliceVar(&collectorPublishFlags.JobTypes, "job-types", defaultCollectorJobTypes, "JobTypes consumed by this SCF deployment")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Env, "env", nil, "SCF environment variable as KEY=VALUE")
 	submitFlags.StringArrayVar(&collectorPublishFlags.Config, "function-config", nil, "cloudnode node runtime config as KEY=VALUE; not written into SCF package config.yaml")
-	submitFlags.StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/cloudnode-worker.yaml", "0600 cloudnode-worker EventBus credential YAML")
+	submitFlags.StringVar(&collectorPublishFlags.EventBusCredentialFile, "eventbus-credential-file", "~/.config/moox/eventbus/market-fetch-publisher.yaml", "0600 market-fetch-publisher EventBus credential YAML")
 	submitFlags.IntVar(&collectorPublishFlags.NodeCount, "node-count", 50, "number of SCF nodes in the collector fleet")
-	submitFlags.StringVar(&collectorPublishFlags.FunctionNamePrefix, "function-name-prefix", "moox-collector", "stable function name prefix used to identify the fleet")
+	submitFlags.StringVar(&collectorPublishFlags.FunctionNamePrefix, "function-name-prefix", "", "stable function name prefix used to identify the fleet")
+	submitFlags.StringVar(&collectorPublishFlags.File, "file", "", "custom.toml; when scf_fetcher is enabled, regions and function counts are read from it")
 
 	statusFlags := collectorFunctionPublishStatusCmd.Flags()
 	statusFlags.StringVar(&collectorPublishStatusFlags.ControlURL, "control-url", "", "Control service base URL")
@@ -342,14 +388,6 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 	if configDir == "" {
 		configDir = filepath.Join(collectorRoot, "configs")
 	}
-	clsTopicID := strings.TrimSpace(opts.CLSTopicID)
-	if clsTopicID == "" {
-		resources, err := resolveCollectorCLSResources(ctx)
-		if err != nil {
-			return nil, err
-		}
-		clsTopicID = resources.TopicID
-	}
 	binaryPath := filepath.Join(os.TempDir(), fmt.Sprintf("moox-collector-scf-%d", time.Now().UnixNano()), "main")
 	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {
 		return nil, err
@@ -363,28 +401,42 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 		BinaryPath:               binaryPath,
 		ConfigDir:                configDir,
 		OutPath:                  outPath,
-		CLSTopicID:               clsTopicID,
 		StoragePrimaryAuthSecret: firstNonEmpty(opts.StoragePrimaryAuthSecret, os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")),
 	})
 }
 
-var newCollectorCLSAPI = func(secretID, secretKey string) (tencent.CLSAPI, error) {
+var newCollectorCLSAPI = func(secretID, secretKey, region string) (tencent.CLSAPI, error) {
 	return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
 		SecretID:  secretID,
 		SecretKey: secretKey,
-		Region:    clsprepare.Region,
+		Region:    region,
 	})
 }
 
-func resolveCollectorCLSResources(ctx context.Context) (tencent.CLSBootstrapResult, error) {
-	secretID, secretKey := collectorCLSCredentials()
-	api, err := newCollectorCLSAPI(secretID, secretKey)
+func resolveCollectorCLSResources(ctx context.Context, control *adminclient.Client, account adminclient.CloudAccount, region string) (tencent.CLSBootstrapResult, error) {
+	region = strings.TrimSpace(region)
+	if region == "" {
+		return tencent.CLSBootstrapResult{}, fmt.Errorf("CLS region is required")
+	}
+	if control == nil || strings.TrimSpace(account.CredentialSecretID) == "" {
+		return tencent.CLSBootstrapResult{}, fmt.Errorf("Tencent cloud account %q has no CLS credential secret", account.AccountID)
+	}
+	secret, err := control.GetSecretValue(ctx, account.CredentialSecretID)
+	if err != nil {
+		return tencent.CLSBootstrapResult{}, fmt.Errorf("reveal Tencent cloud account %q credentials for CLS: %w", account.AccountID, err)
+	}
+	if secret == nil || secret.Provider != "tencent" || secret.Category != "cloud" || secret.Status != "active" || strings.TrimSpace(secret.KeyID) == "" || strings.TrimSpace(secret.SecretValue) == "" {
+		return tencent.CLSBootstrapResult{}, fmt.Errorf("Tencent cloud account %q returned incomplete active cloud credentials for CLS", account.AccountID)
+	}
+	api, err := newCollectorCLSAPI(secret.KeyID, secret.SecretValue, region)
 	if err != nil {
 		return tencent.CLSBootstrapResult{}, fmt.Errorf("create CLS client for collector package: %w", err)
 	}
-	resources, err := tencent.ResolveExistingCLS(ctx, api, clsprepare.LogsetName, clsprepare.TopicName)
+	bootstrapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	resources, err := tencent.BootstrapCLS(bootstrapCtx, api, tencent.CLSBootstrapOptions{LogsetName: clsprepare.LogsetName, TopicName: clsprepare.TopicName, RetentionDays: 30, Partitions: 1})
 	if err != nil {
-		return tencent.CLSBootstrapResult{}, fmt.Errorf("resolve CLS topic for collector package: %w", err)
+		return tencent.CLSBootstrapResult{}, fmt.Errorf("prepare %s CLS topic for collector function: %w", region, err)
 	}
 	return resources, nil
 }
@@ -393,13 +445,17 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.ControlURL == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--control-url is required")
 	}
-	if opts.CloudAccountID == "" {
+	if opts.CloudAccountID == "" && strings.TrimSpace(opts.File) == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--cloud-account-id is required")
 	}
-	if opts.Region == "" {
+	fetcherConfig, err := loadCollectorSCFFetcherConfig(opts.File)
+	if err != nil {
+		return collectorPublishSummary{}, err
+	}
+	if opts.Region == "" && (fetcherConfig == nil || !fetcherConfig.Enabled) {
 		return collectorPublishSummary{}, fmt.Errorf("--region is required")
 	}
-	if opts.NodeCount <= 0 || opts.NodeCount > maxCollectorPublishNodeCount {
+	if (fetcherConfig == nil || !fetcherConfig.Enabled) && (opts.NodeCount <= 0 || opts.NodeCount > maxCollectorPublishNodeCount) {
 		return collectorPublishSummary{}, fmt.Errorf(
 			"--node-count must be between 1 and %d",
 			maxCollectorPublishNodeCount,
@@ -408,40 +464,41 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if err := validateCollectorPublishAuth(opts); err != nil {
 		return collectorPublishSummary{}, err
 	}
-	opts.FunctionNamePrefix = defaultFlag(opts.FunctionNamePrefix, defaultFlag(opts.PackageName, "moox-collector"))
-	if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
-		return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before control-plane access: %w", err)
+	if fetcherConfig != nil && fetcherConfig.Enabled {
+		opts.FetcherConfig = fetcherConfig
+		opts.Namespace = defaultFlag(fetcherConfig.Namespace, opts.Namespace)
+		opts.Runtime = defaultFlag(fetcherConfig.Runtime, opts.Runtime)
+		opts.FunctionNamePrefix = defaultFlag(fetcherConfig.FunctionPrefix, opts.FunctionNamePrefix)
+	}
+	prefixDefault := defaultFlag(opts.PackageName, "moox-collector")
+	if fetcherConfig != nil && fetcherConfig.Enabled {
+		prefixDefault = defaultFlag(fetcherConfig.FunctionPrefix, prefixDefault)
+	}
+	opts.FunctionNamePrefix = defaultFlag(opts.FunctionNamePrefix, prefixDefault)
+	if fetcherConfig == nil || !fetcherConfig.Enabled {
+		if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
+			return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before control-plane access: %w", err)
+		}
 	}
 	client := newControlClient(opts.ControlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, opts.SpaceID)
 	accounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
-	accountFound := false
+	accountsByID := make(map[string]adminclient.CloudAccount, len(accounts))
 	for _, account := range accounts {
-		if account.AccountID == opts.CloudAccountID {
-			accountFound = true
-			break
-		}
+		accountsByID[account.AccountID] = account
 	}
-	if !accountFound {
+	if (fetcherConfig == nil || !fetcherConfig.Enabled) && accountsByID[opts.CloudAccountID].AccountID == "" {
 		return collectorPublishSummary{}, fmt.Errorf("Tencent cloud account %q not found", opts.CloudAccountID)
 	}
-	fleetNodes, err := inspectCollectorFleet(ctx, client, opts)
-	if err != nil {
-		return collectorPublishSummary{}, err
+	var preflightFleetNodes []adminclient.CloudNode
+	if fetcherConfig == nil || !fetcherConfig.Enabled {
+		preflightFleetNodes, err = inspectCollectorFleet(ctx, client, opts)
+		if err != nil {
+			return collectorPublishSummary{}, err
+		}
 	}
-	opts.CLSSecretID, opts.CLSSecretKey = collectorCLSCredentials()
-	clsAPI, err := newCollectorCLSAPI(opts.CLSSecretID, opts.CLSSecretKey)
-	if err != nil {
-		return collectorPublishSummary{}, err
-	}
-	clsResources, err := tencent.ResolveExistingCLS(ctx, clsAPI, clsprepare.LogsetName, clsprepare.TopicName)
-	if err != nil {
-		return collectorPublishSummary{}, err
-	}
-	opts.CLSLogsetID = clsResources.LogsetID
-	opts.CLSTopicID = clsResources.TopicID
 	zipPath := opts.ZipPath
 	if zipPath == "" {
 		result, err := packageCollectorFunction(ctx, opts.collectorPackageOptions)
@@ -450,40 +507,100 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		}
 		zipPath = result.Path
 	}
-	if err := collectorpackager.ValidateSCFPackageCLSTopic(zipPath, opts.CLSTopicID); err != nil {
-		return collectorPublishSummary{}, err
-	}
-	if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
-		return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before package upload: %w", err)
+	if fetcherConfig == nil || !fetcherConfig.Enabled {
+		if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
+			return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before package upload: %w", err)
+		}
 	}
 	data, err := os.ReadFile(zipPath)
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
 
-	uploadResp, err := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
-		PackageName:      defaultFlag(opts.PackageName, "moox-collector"),
-		Version:          defaultFlag(opts.Version, "dev"),
-		Runtime:          defaultFlag(opts.Runtime, "Go1"),
-		PackageType:      adminclient.ResolvePackageType(defaultFlag(opts.PackageType, "data_collector")),
-		BizType:          defaultFlag(opts.BizType, "data_collector"),
-		CloudAccountID:   opts.CloudAccountID,
-		OriginalFilename: filepath.Base(zipPath),
-	}, data)
-	if err != nil {
-		return collectorPublishSummary{}, err
-	}
-	summary := collectorPublishSummary{
-		ZipPath:    zipPath,
-		PackageID:  uploadResp.PackageID,
-		CLSTopicID: opts.CLSTopicID,
+	summary := collectorPublishSummary{ZipPath: zipPath}
+	upload := func(regionOpts collectorPublishOptions) (string, error) {
+		response, uploadErr := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
+			PackageName: defaultFlag(regionOpts.PackageName, "moox-collector"), Version: defaultFlag(regionOpts.Version, "dev"),
+			Runtime: defaultFlag(regionOpts.Runtime, "Go1"), PackageType: adminclient.ResolvePackageType(defaultFlag(regionOpts.PackageType, "data_collector")),
+			BizType: defaultFlag(regionOpts.BizType, "market_fetcher"), CloudAccountID: regionOpts.CloudAccountID, OriginalFilename: filepath.Base(zipPath),
+		}, data)
+		if uploadErr != nil {
+			return "", uploadErr
+		}
+		return response.PackageID, nil
 	}
 
-	createItems, err := buildCollectorFleetCreateItems(opts, uploadResp.PackageID)
+	if fetcherConfig != nil && fetcherConfig.Enabled {
+		opts.FetcherConfig = fetcherConfig
+		var jobs []string
+		for _, region := range fetcherConfig.Regions {
+			if !region.Enabled {
+				continue
+			}
+			regionOpts := opts
+			regionOpts.Region = region.Region
+			regionOpts.NodeCount = region.FunctionCount
+			regionOpts.CloudAccountID = region.CloudAccountID
+			account, ok := accountsByID[regionOpts.CloudAccountID]
+			if !ok || account.IsDeleted {
+				return summary, fmt.Errorf("Tencent cloud account %q for region %s not found", regionOpts.CloudAccountID, regionOpts.Region)
+			}
+			if account.COSRegion != regionOpts.Region {
+				return summary, fmt.Errorf("Tencent cloud account %q COS region %q must match SCF region %q", account.AccountID, account.COSRegion, regionOpts.Region)
+			}
+			resources, resolveErr := resolveCollectorCLSResources(ctx, client, account, regionOpts.Region)
+			if resolveErr != nil {
+				return summary, resolveErr
+			}
+			regionOpts.CLSLogsetID, regionOpts.CLSTopicID = resources.LogsetID, resources.TopicID
+			packageID, uploadErr := upload(regionOpts)
+			if uploadErr != nil {
+				return summary, uploadErr
+			}
+			fleetNodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
+			if inspectErr != nil {
+				return summary, inspectErr
+			}
+			createItems, buildErr := buildCollectorFleetCreateItems(regionOpts, packageID)
+			if buildErr != nil {
+				return summary, buildErr
+			}
+			fleetSummary, submitErr := submitCollectorFleet(ctx, client, regionOpts, packageID, createItems, fleetNodes)
+			if submitErr != nil {
+				summary.JobIDs = append([]string(nil), jobs...)
+				summary.JobID = strings.Join(summary.JobIDs, ",")
+				return summary, submitErr
+			}
+			summary.FleetMode = fleetSummary.FleetMode
+			summary.Operation = fleetSummary.Operation
+			summary.TotalCount += fleetSummary.TotalCount
+			summary.PackageID = packageID
+			summary.CLSTopicID = regionOpts.CLSTopicID
+			summary.Regions = append(summary.Regions, collectorPublishRegionSummary{Region: regionOpts.Region, CloudAccountID: regionOpts.CloudAccountID, PackageID: packageID, CLSLogsetID: regionOpts.CLSLogsetID, CLSTopicID: regionOpts.CLSTopicID, JobID: fleetSummary.JobID, TotalCount: fleetSummary.TotalCount})
+			if fleetSummary.JobID != "" {
+				jobs = append(jobs, fleetSummary.JobID)
+				summary.JobIDs = append([]string(nil), jobs...)
+				summary.JobID = strings.Join(summary.JobIDs, ",")
+			}
+		}
+		return summary, nil
+	}
+	account := accountsByID[opts.CloudAccountID]
+	resources, err := resolveCollectorCLSResources(ctx, client, account, opts.Region)
 	if err != nil {
 		return summary, err
 	}
-	fleetSummary, err := submitCollectorFleet(ctx, client, opts, uploadResp.PackageID, createItems, fleetNodes)
+	opts.CLSLogsetID, opts.CLSTopicID = resources.LogsetID, resources.TopicID
+	packageID, err := upload(opts)
+	if err != nil {
+		return summary, err
+	}
+	summary.PackageID, summary.CLSTopicID = packageID, opts.CLSTopicID
+	createItems, err := buildCollectorFleetCreateItems(opts, packageID)
+	if err != nil {
+		return summary, err
+	}
+	fleetSummary, err := submitCollectorFleet(ctx, client, opts, packageID, createItems, preflightFleetNodes)
 	if err != nil {
 		return summary, err
 	}
@@ -491,7 +608,21 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	summary.JobID = fleetSummary.JobID
 	summary.Operation = fleetSummary.Operation
 	summary.TotalCount = fleetSummary.TotalCount
+	summary.Regions = append(summary.Regions, collectorPublishRegionSummary{Region: opts.Region, CloudAccountID: opts.CloudAccountID, PackageID: packageID, CLSLogsetID: opts.CLSLogsetID, CLSTopicID: opts.CLSTopicID, JobID: fleetSummary.JobID, TotalCount: fleetSummary.TotalCount})
 	return summary, nil
+}
+
+func loadCollectorSCFFetcherConfig(path string) (*setupconfig.SCFFetcher, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	root := filepath.Dir(path)
+	snapshot, err := setupconfig.Load(path, root)
+	if err != nil {
+		return nil, fmt.Errorf("load collector SCF config: %w", err)
+	}
+	return &snapshot.Manifest.SCFFetcher, nil
 }
 
 func validateCollectorPublishAuth(opts collectorPublishOptions) error {
@@ -519,7 +650,7 @@ func inspectCollectorFleet(
 		CloudAccountID: opts.CloudAccountID,
 		Region:         opts.Region,
 		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
-		BizType:        defaultFlag(opts.BizType, "data_collector"),
+		BizType:        defaultFlag(opts.BizType, "market_fetcher"),
 	})
 	if err != nil {
 		return nil, err
@@ -527,7 +658,7 @@ func inspectCollectorFleet(
 	fleetNodes, err := selectCollectorFleetNodes(
 		catalogNodes,
 		opts.FunctionNamePrefix,
-		defaultFlag(opts.BizType, "data_collector"),
+		defaultFlag(opts.BizType, "market_fetcher"),
 		opts.NodeCount,
 	)
 	if err != nil {
@@ -607,7 +738,67 @@ func publishCollectorFunctionStatus(ctx context.Context, opts collectorPublishSt
 		opts.ServiceSecretKey,
 		opts.SpaceID,
 	)
-	return client.GetNodeBatchChange(ctx, opts.JobID)
+	jobIDs := splitJobIDs(opts.JobID)
+	if len(jobIDs) == 1 {
+		return client.GetNodeBatchChange(ctx, jobIDs[0])
+	}
+	aggregated := &adminclient.NodeBatchChangeResponse{Job: &adminclient.NodeBatchSummary{JobID: strings.Join(jobIDs, ",")}}
+	for _, jobID := range jobIDs {
+		status, err := client.GetNodeBatchChange(ctx, jobID)
+		if err != nil {
+			return nil, fmt.Errorf("get node batch %s: %w", jobID, err)
+		}
+		if status == nil || status.Job == nil {
+			continue
+		}
+		aggregated.Job.TotalCount += status.Job.TotalCount
+		aggregated.Job.PendingCount += status.Job.PendingCount
+		aggregated.Job.RunningCount += status.Job.RunningCount
+		aggregated.Job.SuccessCount += status.Job.SuccessCount
+		aggregated.Job.FailedCount += status.Job.FailedCount
+		aggregated.Items = append(aggregated.Items, status.Items...)
+		if aggregated.Job.CreatedAt == "" || status.Job.CreatedAt < aggregated.Job.CreatedAt {
+			aggregated.Job.CreatedAt = status.Job.CreatedAt
+		}
+		if status.Job.CompletedAt > aggregated.Job.CompletedAt {
+			aggregated.Job.CompletedAt = status.Job.CompletedAt
+		}
+		aggregated.Job.Status = mergeBatchStatus(aggregated.Job.Status, status.Job.Status)
+	}
+	if aggregated.Job.TotalCount > 0 {
+		aggregated.Job.ProgressPercent = (aggregated.Job.SuccessCount + aggregated.Job.FailedCount) * 100 / aggregated.Job.TotalCount
+	}
+	return aggregated, nil
+}
+
+func splitJobIDs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	ids := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			ids = append(ids, value)
+		}
+	}
+	return ids
+}
+
+func mergeBatchStatus(current, next string) string {
+	if current == "" {
+		return next
+	}
+	if current == next {
+		return current
+	}
+	if strings.Contains(current, "FAILED") || strings.Contains(next, "FAILED") || strings.Contains(current, "PARTIAL") || strings.Contains(next, "PARTIAL") {
+		return "NODE_BATCH_STATUS_PARTIAL"
+	}
+	if strings.Contains(current, "RUNNING") || strings.Contains(next, "RUNNING") {
+		return "NODE_BATCH_STATUS_RUNNING"
+	}
+	if strings.Contains(current, "PENDING") || strings.Contains(next, "PENDING") {
+		return "NODE_BATCH_STATUS_PENDING"
+	}
+	return "NODE_BATCH_STATUS_PARTIAL"
 }
 
 func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) (*collectorDeleteSummary, error) {
@@ -624,7 +815,7 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	}
 
 	client := newControlClient(controlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
-	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{NodeType: "scf-event"})
+	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{NodeType: "scf-event", BizType: "market_fetcher"})
 	if err != nil {
 		return nil, fmt.Errorf("list active SCF nodes: %w", err)
 	}
@@ -693,6 +884,139 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	}
 }
 
+type collectorProbeResult struct {
+	NodeID          string `json:"node_id"`
+	Region          string `json:"region"`
+	FunctionName    string `json:"function_name"`
+	OutboundIP      string `json:"outbound_ip,omitempty"`
+	OutboundIPError string `json:"outbound_ip_error,omitempty"`
+	ProviderStatus  int    `json:"provider_status,omitempty"`
+	LatencyMS       int64  `json:"latency_ms,omitempty"`
+	CheckedAt       string `json:"checked_at"`
+	Error           string `json:"error,omitempty"`
+}
+
+type collectorProbeReport struct {
+	Results             []collectorProbeResult `json:"results"`
+	DistinctOutboundIPs []string               `json:"distinct_outbound_ips"`
+}
+
+func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*collectorProbeReport, error) {
+	controlURL := strings.TrimSpace(opts.ControlURL)
+	if controlURL == "" {
+		return nil, fmt.Errorf("--control-url is required")
+	}
+	spaceID := defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID"))
+	if spaceID == "" {
+		return nil, fmt.Errorf("--space-id is required")
+	}
+	client := newControlClient(controlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
+	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{Region: opts.Region, NodeType: "scf-event", BizType: "market_fetcher"})
+	if err != nil {
+		return nil, err
+	}
+	eligible := make([]adminclient.CloudNode, 0, len(nodes))
+	for _, node := range nodes {
+		if !collectorProbeNodeEligible(node) {
+			continue
+		}
+		eligible = append(eligible, node)
+	}
+	if len(eligible) == 0 {
+		return nil, fmt.Errorf("no active market_fetcher SCF nodes are available for egress probe")
+	}
+	report := &collectorProbeReport{Results: make([]collectorProbeResult, len(eligible))}
+	sem := make(chan struct{}, 5)
+	var wg sync.WaitGroup
+	var failed atomic.Int32
+	for index, node := range eligible {
+		index, node := index, node
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				report.Results[index] = collectorProbeResult{NodeID: node.NodeID, Region: node.Region, FunctionName: node.FunctionName, CheckedAt: time.Now().UTC().Format(time.RFC3339Nano), Error: ctx.Err().Error()}
+				failed.Add(1)
+				return
+			}
+			defer func() { <-sem }()
+			started := time.Now()
+			result := collectorProbeResult{NodeID: node.NodeID, Region: node.Region, FunctionName: node.FunctionName, CheckedAt: started.UTC().Format(time.RFC3339Nano)}
+			response, invokeErr := client.InvokeFunction(ctx, node.NodeID, map[string]any{"action": "egress_probe", "data": map[string]any{"provider": "binance", "market_type": "spot", "node_id": node.NodeID}})
+			result.LatencyMS = time.Since(started).Milliseconds()
+			if invokeErr != nil {
+				result.Error = invokeErr.Error()
+				failed.Add(1)
+			} else if data, ok := egressProbeResponseData(response); ok {
+				if details, ok := data["details"].(map[string]any); ok {
+					result.OutboundIP, _ = details["public_ip"].(string)
+					result.OutboundIPError, _ = details["public_ip_error"].(string)
+				}
+				result.ProviderStatus = http.StatusOK
+			} else {
+				rawResponse, _ := json.Marshal(response)
+				result.Error = fmt.Sprintf("SCF returned no egress probe payload: %s", rawResponse)
+				failed.Add(1)
+			}
+			report.Results[index] = result
+		}()
+	}
+	wg.Wait()
+	ipSet := make(map[string]struct{})
+	for _, result := range report.Results {
+		if ip := strings.TrimSpace(result.OutboundIP); ip != "" {
+			ipSet[ip] = struct{}{}
+		}
+	}
+	for ip := range ipSet {
+		report.DistinctOutboundIPs = append(report.DistinctOutboundIPs, ip)
+	}
+	sort.Strings(report.DistinctOutboundIPs)
+	if failed.Load() > 0 {
+		return report, fmt.Errorf("%d SCF egress probe(s) failed", failed.Load())
+	}
+	return report, nil
+}
+
+func collectorProbeNodeEligible(node adminclient.CloudNode) bool {
+	if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" || strings.TrimSpace(node.PackageID) == "" {
+		return false
+	}
+	if ready, ok := node.Metadata["deployment_ready"].(bool); ok {
+		return ready
+	}
+	switch status := strings.ToLower(strings.TrimSpace(fmt.Sprint(node.Status))); status {
+	case "2", "online", "active", "running", "ready", "node_status_online", "cloud_node_status_online":
+		return true
+	default:
+		return false
+	}
+}
+
+// egressProbeResponseData accepts both the normal JSON Struct response and
+// the fallback raw string emitted by CloudNode when Tencent returns a JSON
+// string rather than an object. Keeping this normalization here makes the
+// deployment probe useful without exposing provider-specific response shapes.
+func egressProbeResponseData(response map[string]any) (map[string]any, bool) {
+	if response == nil {
+		return nil, false
+	}
+	if data, ok := response["data"].(map[string]any); ok {
+		return data, true
+	}
+	if raw, ok := response["raw"].(string); ok {
+		var decoded map[string]any
+		if json.Unmarshal([]byte(raw), &decoded) == nil {
+			if data, ok := decoded["data"].(map[string]any); ok {
+				return data, true
+			}
+		}
+	}
+	return nil, false
+}
+
 func collectorCLSCredentials() (string, string) {
 	return firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_ID"), os.Getenv("TENCENTCLOUD_SECRET_ID")),
 		firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_KEY"), os.Getenv("TENCENTCLOUD_SECRET_KEY"))
@@ -700,12 +1024,10 @@ func collectorCLSCredentials() (string, string) {
 
 func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) (adminclient.NodeCreateItem, error) {
 	packageName := defaultFlag(opts.PackageName, "moox-collector")
-	bizType := defaultFlag(opts.BizType, "data_collector")
-	jobTypes, err := resolveCollectorPublishJobTypes(opts.JobTypes)
-	if err != nil {
-		return adminclient.NodeCreateItem{}, err
+	bizType := defaultFlag(opts.BizType, "market_fetcher")
+	if len(opts.JobTypes) > 0 {
+		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher does not consume CloudNode JobItem workloads")
 	}
-	opts.JobTypes = jobTypes
 	environment, err := collectorFunctionEnvironment(opts, packageID)
 	if err != nil {
 		return adminclient.NodeCreateItem{}, err
@@ -714,24 +1036,65 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if config == nil {
 		config = make(map[string]string)
 	}
+	fetcher := opts.FetcherConfig
+	if fetcher == nil {
+		fetcher = &setupconfig.SCFFetcher{MemorySize: 64, TimeoutSeconds: 10, RealtimeBatchSize: 10, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 5, RequestTimeoutMS: 2000, HTTPMaxAttempts: 1, StorageMaxAttempts: 1, CommitReserveMS: 2000, MaxRetryAttempts: 3}
+	}
 	if strings.TrimSpace(config["timeout"]) == "" {
-		config["timeout"] = defaultCollectorSCFTimeout
+		config["timeout"] = strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 10))
+	}
+	if strings.TrimSpace(config["memory_size"]) == "" {
+		config["memory_size"] = strconv.Itoa(defaultInt(fetcher.MemorySize, 64))
+	}
+	if collectorConfigInt(config, "memory_size", 64) != 64 {
+		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher memory_size is fixed at 64MB")
+	}
+	if collectorConfigInt(config, "timeout", 10) != 10 {
+		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher timeout is fixed at 10 seconds")
 	}
 	setDefaultEnv(config, "cls_logset_id", opts.CLSLogsetID)
 	setDefaultEnv(config, "cls_topic_id", opts.CLSTopicID)
+	for configKey, environmentKey := range map[string]string{
+		"max_inflight_requests": "MOOX_FETCH_MAX_INFLIGHT_REQUESTS",
+		"request_timeout_ms":    "MOOX_FETCH_REQUEST_TIMEOUT_MS",
+		"http_max_attempts":     "MOOX_FETCH_HTTP_MAX_ATTEMPTS",
+		"storage_max_attempts":  "MOOX_FETCH_STORAGE_MAX_ATTEMPTS",
+		"realtime_batch_size":   "MOOX_FETCH_REALTIME_BATCH_SIZE",
+		"realtime_bar_limit":    "MOOX_FETCH_REALTIME_BAR_LIMIT",
+		"catchup_batch_size":    "MOOX_FETCH_CATCHUP_BATCH_SIZE",
+		"catchup_bar_limit":     "MOOX_FETCH_CATCHUP_BAR_LIMIT",
+		"commit_reserve_ms":     "MOOX_FETCH_COMMIT_RESERVE_MS",
+		"max_retry_attempts":    "MOOX_FETCH_MAX_RETRY_ATTEMPTS",
+	} {
+		if value := strings.TrimSpace(config[configKey]); value != "" {
+			environment[environmentKey] = value
+		}
+	}
+	effectiveInt := func(key string, fallback int) int {
+		return collectorConfigInt(config, key, fallback)
+	}
 	return adminclient.NodeCreateItem{
 		CloudAccountID: opts.CloudAccountID,
 		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
 		Runtime:        defaultFlag(opts.Runtime, "Go1"),
+		Namespace:      defaultFlag(opts.Namespace, "default"),
 		Handler:        defaultFlag(opts.Handler, "main"),
 		Config:         config,
 		Environment:    environment,
 		Region:         opts.Region,
 		PackageID:      packageID,
 		Metadata: map[string]any{
-			"function_name_prefix": packageName,
-			"biz_type":             bizType,
-			"supported_workloads":  append([]string(nil), jobTypes...),
+			"function_name_prefix":  packageName,
+			"biz_type":              bizType,
+			"supported_workloads":   []string{},
+			"memory_size":           effectiveInt("memory_size", defaultInt(fetcher.MemorySize, 64)),
+			"timeout_seconds":       effectiveInt("timeout", defaultInt(fetcher.TimeoutSeconds, 10)),
+			"max_inflight_requests": effectiveInt("max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 5)),
+			"realtime_batch_size":   effectiveInt("realtime_batch_size", defaultInt(fetcher.RealtimeBatchSize, 10)),
+			"realtime_bar_limit":    effectiveInt("realtime_bar_limit", defaultInt(fetcher.RealtimeBarLimit, 3)),
+			"request_timeout_ms":    effectiveInt("request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 2000)),
+			"http_max_attempts":     effectiveInt("http_max_attempts", defaultInt(fetcher.HTTPMaxAttempts, 1)),
+			"storage_max_attempts":  effectiveInt("storage_max_attempts", defaultInt(fetcher.StorageMaxAttempts, 1)),
 		},
 	}, nil
 }
@@ -760,7 +1123,6 @@ func buildCollectorFleetCreateItems(opts collectorPublishOptions, packageID stri
 func validateCollectorFleetRuntimeEnvironment(environment map[string]string) error {
 	required := []string{
 		"MOOX_SPACE_ID",
-		"MOOX_COLLECTOR_JOB_TYPES",
 		"MOOX_EVENTBUS_NATS_URL",
 		"MOOX_EVENTBUS_NATS_USERNAME",
 		"MOOX_EVENTBUS_NATS_PASSWORD",
@@ -772,9 +1134,6 @@ func validateCollectorFleetRuntimeEnvironment(environment map[string]string) err
 		"MOOX_GATEWAY_SERVICE_SECRET_KEY",
 		"MOOX_GATEWAY_CA_PEM_B64",
 		"MOOX_SERVICE_GATEWAY_CA_PEM_B64",
-		"MOOX_CLS_HOST",
-		"MOOX_CLS_SECRET_ID",
-		"MOOX_CLS_SECRET_KEY",
 	}
 	for _, key := range required {
 		if strings.TrimSpace(environment[key]) == "" {
@@ -898,28 +1257,39 @@ func metadataIntValue(metadata map[string]any, key string) (int, bool) {
 }
 
 func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...string) (map[string]string, error) {
-	jobTypes, err := resolveCollectorPublishJobTypes(opts.JobTypes)
-	if err != nil {
-		return nil, err
+	if len(opts.JobTypes) > 0 {
+		return nil, fmt.Errorf("market_fetcher does not consume CloudNode JobItem workloads")
 	}
 	packageID := ""
 	if len(packageIDs) > 0 {
 		packageID = packageIDs[0]
 	}
 	env := map[string]string{}
-	setDefaultEnv(env, "MOOX_COLLECTOR_JOB_TYPES", strings.Join(jobTypes, ","))
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
+	fetcher := opts.FetcherConfig
+	if fetcher == nil {
+		fetcher = &setupconfig.SCFFetcher{TimeoutSeconds: 10, MaxInflightRequests: 5, RequestTimeoutMS: 2000, HTTPMaxAttempts: 1, StorageMaxAttempts: 1, CommitReserveMS: 2000, RealtimeBatchSize: 10, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxRetryAttempts: 3}
+	}
+	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 10)))
+	setDefaultEnv(env, "MOOX_FETCH_MAX_INFLIGHT_REQUESTS", strconv.Itoa(defaultInt(fetcher.MaxInflightRequests, 5)))
+	setDefaultEnv(env, "MOOX_FETCH_REQUEST_TIMEOUT_MS", strconv.Itoa(defaultInt(fetcher.RequestTimeoutMS, 2000)))
+	setDefaultEnv(env, "MOOX_FETCH_HTTP_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.HTTPMaxAttempts, 1)))
+	setDefaultEnv(env, "MOOX_FETCH_STORAGE_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.StorageMaxAttempts, 1)))
+	setDefaultEnv(env, "MOOX_FETCH_REALTIME_BATCH_SIZE", strconv.Itoa(defaultInt(fetcher.RealtimeBatchSize, 10)))
+	setDefaultEnv(env, "MOOX_FETCH_REALTIME_BAR_LIMIT", strconv.Itoa(defaultInt(fetcher.RealtimeBarLimit, 3)))
+	setDefaultEnv(env, "MOOX_FETCH_CATCHUP_BATCH_SIZE", strconv.Itoa(defaultInt(fetcher.CatchupBatchSize, 1)))
+	setDefaultEnv(env, "MOOX_FETCH_CATCHUP_BAR_LIMIT", strconv.Itoa(defaultInt(fetcher.CatchupBarLimit, 1000)))
+	setDefaultEnv(env, "MOOX_FETCH_COMMIT_RESERVE_MS", strconv.Itoa(defaultInt(fetcher.CommitReserveMS, 2000)))
+	setDefaultEnv(env, "MOOX_FETCH_MAX_RETRY_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.MaxRetryAttempts, 3)))
 	gatewayNodeID := firstNonEmpty(os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_TARGET_NODE", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"))
-	clsHost := firstNonEmpty(os.Getenv("MOOX_CLS_HOST"), clsprepare.Host)
-	clsSecretID := firstNonEmpty(opts.CLSSecretID, os.Getenv("MOOX_CLS_SECRET_ID"), os.Getenv("TENCENTCLOUD_SECRET_ID"))
-	clsSecretKey := firstNonEmpty(opts.CLSSecretKey, os.Getenv("MOOX_CLS_SECRET_KEY"), os.Getenv("TENCENTCLOUD_SECRET_KEY"))
-	setDefaultEnv(env, "MOOX_CLS_HOST", clsHost)
-	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", clsSecretID)
-	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", clsSecretKey)
+	// The native Storage gateway verifies the caller together with the key ID.
+	// The SCF uses the Collector service credential, so its caller must match
+	// that credential's ACL rather than the CLI process's caller identity.
+	setDefaultEnv(env, "MOOX_GATEWAY_CALLER", "collector")
 	overrides := parseCollectorOverrides(opts.Env)
 	managed := map[string]struct{}{
 		"MOOX_EVENTBUS_NATS_URL":            {},
@@ -927,15 +1297,31 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_EVENTBUS_NATS_PASSWORD":       {},
 		"MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64": {},
 		"MOOX_CODE_PACKAGE_ID":              {},
-		"MOOX_CLS_SECRET_ID":                {},
-		"MOOX_CLS_SECRET_KEY":               {},
 		"MOOX_GATEWAY_SERVICE_KEY_ID":       {},
 		"MOOX_GATEWAY_SERVICE_SECRET_KEY":   {},
+		"MOOX_GATEWAY_CALLER":               {},
 		"MOOX_GATEWAY_NODE_ID":              {},
 		"MOOX_GATEWAY_TARGET_NODE":          {},
 		"MOOX_SERVICE_GATEWAY_CA_PEM_B64":   {},
-		"MOOX_COLLECTOR_JOB_TYPES":          {},
 		"MOOX_SPACE_ID":                     {},
+		"MOOX_FETCH_TIMEOUT_SECONDS":        {},
+		"MOOX_FETCH_MAX_INFLIGHT_REQUESTS":  {},
+		"MOOX_FETCH_REQUEST_TIMEOUT_MS":     {},
+		"MOOX_FETCH_HTTP_MAX_ATTEMPTS":      {},
+		"MOOX_FETCH_STORAGE_MAX_ATTEMPTS":   {},
+		"MOOX_FETCH_REALTIME_BATCH_SIZE":    {},
+		"MOOX_FETCH_REALTIME_BAR_LIMIT":     {},
+		"MOOX_FETCH_CATCHUP_BATCH_SIZE":     {},
+		"MOOX_FETCH_CATCHUP_BAR_LIMIT":      {},
+		"MOOX_FETCH_COMMIT_RESERVE_MS":      {},
+		"MOOX_FETCH_MAX_RETRY_ATTEMPTS":     {},
+		"MOOX_CLS_SECRET_ID":                {},
+		"MOOX_CLS_SECRET_KEY":               {},
+		"MOOX_CLS_HOST":                     {},
+		"TENCENTCLOUD_SECRET_ID":            {},
+		"TENCENTCLOUD_SECRET_KEY":           {},
+		"TENCENT_SECRET_ID":                 {},
+		"TENCENT_SECRET_KEY":                {},
 	}
 	for key := range overrides {
 		if _, ok := managed[key]; ok {
@@ -949,18 +1335,18 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 			return nil, err
 		}
 		if len(credential.URLs) != 1 {
-			return nil, fmt.Errorf("cloudnode-worker credential must contain exactly one EventBus URL")
+			return nil, fmt.Errorf("market-fetch-publisher credential must contain exactly one EventBus URL")
 		}
 		eventBusURL, err := url.Parse(credential.URLs[0])
 		if err != nil || eventBusURL.Scheme != "tls" || eventBusURL.Hostname() == "" || eventBusURL.Port() == "" {
-			return nil, fmt.Errorf("cloudnode-worker credential URL must be tls with host and port")
+			return nil, fmt.Errorf("market-fetch-publisher credential URL must be tls with host and port")
 		}
 		if host := eventBusURL.Hostname(); host == "localhost" || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback() {
 			return nil, fmt.Errorf("SCF EventBus URL must not use a loopback host")
 		}
 		caPath := credential.CAFile
 		if caPath == "" {
-			return nil, fmt.Errorf("cloudnode-worker credential requires ca_file")
+			return nil, fmt.Errorf("market-fetch-publisher credential requires ca_file")
 		}
 		if !filepath.IsAbs(caPath) {
 			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
@@ -1034,38 +1420,10 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		}
 		env[key] = value
 	}
-	if strings.TrimSpace(env["MOOX_CLS_HOST"]) == "" || strings.TrimSpace(env["MOOX_CLS_SECRET_ID"]) == "" || strings.TrimSpace(env["MOOX_CLS_SECRET_KEY"]) == "" {
-		return nil, fmt.Errorf("CLS runtime host and credentials are required; set MOOX_CLS_* or TENCENTCLOUD_SECRET_ID/TENCENTCLOUD_SECRET_KEY")
-	}
 	if len(env) == 0 {
 		return nil, nil
 	}
 	return env, nil
-}
-
-func resolveCollectorPublishJobTypes(values []string) ([]string, error) {
-	if len(values) == 0 {
-		return append([]string(nil), defaultCollectorJobTypes...), nil
-	}
-	result := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		jobType := strings.TrimSpace(value)
-		if jobType == "" {
-			return nil, fmt.Errorf("collector job type must not be empty")
-		}
-		switch jobType {
-		case "collect.binance.kline", "collect.binance.symbol":
-		default:
-			return nil, fmt.Errorf("unsupported collector job type %q", jobType)
-		}
-		if _, ok := seen[jobType]; ok {
-			continue
-		}
-		seen[jobType] = struct{}{}
-		result = append(result, jobType)
-	}
-	return result, nil
 }
 
 func setDefaultEnv(env map[string]string, key string, value string) {
@@ -1073,6 +1431,21 @@ func setDefaultEnv(env map[string]string, key string, value string) {
 		return
 	}
 	env[key] = value
+}
+
+func defaultInt(value, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
+func collectorConfigInt(values map[string]string, key string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(values[key]))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (collectorDeploySummary, error) {
@@ -1104,7 +1477,7 @@ func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (
 		Version:          defaultFlag(opts.Version, "dev"),
 		Runtime:          defaultFlag(opts.Runtime, "Go1"),
 		PackageType:      adminclient.ResolvePackageType(defaultFlag(opts.PackageType, "data_collector")),
-		BizType:          defaultFlag(opts.BizType, "data_collector"),
+		BizType:          defaultFlag(opts.BizType, "market_fetcher"),
 		CloudAccountID:   opts.CloudAccountID,
 		OriginalFilename: filepath.Base(zipPath),
 	}, data)

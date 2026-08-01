@@ -52,8 +52,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 13 {
-		t.Fatalf("eventbus records=%d, want 13", count)
+	if count != 15 {
+		t.Fatalf("eventbus records=%d, want 15", count)
 	}
 }
 
@@ -82,6 +82,8 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.FileExists(t, filepath.Join(exportDir, "archive-eventbus.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "trade-eventbus.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "cloudnode-worker.yaml"))
+	assert.FileExists(t, filepath.Join(exportDir, "market-fetch-publisher.yaml"))
+	assert.FileExists(t, filepath.Join(exportDir, "collector-market-fetch-consumer.yaml"))
 	strategyCredential := filepath.Join(exportDir, "strategy-eventbus.yaml")
 	assert.FileExists(t, strategyCredential)
 	info, err := os.Stat(strategyCredential)
@@ -102,17 +104,19 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	}
 
 	yaml := usersYAML(map[string]string{
-		"eventbus-internal-admin":        "a",
-		"hostagent-publisher":            "b",
-		"metrics-publisher":              "c",
-		"monitor-observability-consumer": "d",
-		"storage-eventbus":               "f",
-		"cloudnode-eventbus":             "g",
-		"cloudnode-worker":               "worker",
-		"factor-eventbus":                "h",
-		"strategy-eventbus":              "i",
-		"archive-eventbus":               "j",
-		"trade-eventbus":                 "k",
+		"eventbus-internal-admin":         "a",
+		"hostagent-publisher":             "b",
+		"metrics-publisher":               "c",
+		"monitor-observability-consumer":  "d",
+		"storage-eventbus":                "f",
+		"cloudnode-eventbus":              "g",
+		"cloudnode-worker":                "worker",
+		"market-fetch-publisher":          "publisher",
+		"collector-market-fetch-consumer": "consumer",
+		"factor-eventbus":                 "h",
+		"strategy-eventbus":               "i",
+		"archive-eventbus":                "j",
+		"trade-eventbus":                  "k",
 	})
 	assert.Contains(t, yaml, "eventbus-internal-admin")
 	assert.Contains(t, yaml, "factor-eventbus")
@@ -123,17 +127,19 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "$JS.EVENT.ADVISORY.API"]}`, aclLine(internalAdminACL, "subscribe:"))
 	assert.NotContains(t, aclLine(internalAdminACL, "subscribe:"), "$JS.EVENT.ADVISORY.API.>")
 	for role, password := range map[string]string{
-		"eventbus-internal-admin":        "a",
-		"hostagent-publisher":            "b",
-		"metrics-publisher":              "c",
-		"monitor-observability-consumer": "d",
-		"storage-eventbus":               "f",
-		"cloudnode-eventbus":             "g",
-		"cloudnode-worker":               "worker",
-		"factor-eventbus":                "h",
-		"archive-eventbus":               "j",
-		"strategy-eventbus":              "i",
-		"trade-eventbus":                 "k",
+		"eventbus-internal-admin":         "a",
+		"hostagent-publisher":             "b",
+		"metrics-publisher":               "c",
+		"monitor-observability-consumer":  "d",
+		"storage-eventbus":                "f",
+		"cloudnode-eventbus":              "g",
+		"cloudnode-worker":                "worker",
+		"market-fetch-publisher":          "publisher",
+		"collector-market-fetch-consumer": "consumer",
+		"factor-eventbus":                 "h",
+		"archive-eventbus":                "j",
+		"strategy-eventbus":               "i",
+		"trade-eventbus":                  "k",
 	} {
 		assert.Contains(t, eventBusACLBlock(yaml, role), "password: "+password)
 	}
@@ -204,6 +210,14 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, cloudnodeACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	assert.Equal(t, `publish: {allow: ["moox.observability.metrics.snapshot.reported.v1.>", "moox.observability.health.check.reported.v1.>", "$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>", "$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>", "$JS.ACK.MOOX_CLOUDNODE_EXEC.>"]}`, aclLine(workerACL, "publish:"))
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(workerACL, "subscribe:"))
+	publisherACL := eventBusACLBlock(yaml, "market-fetch-publisher")
+	assert.Contains(t, publisherACL, "moox.market.fetch.batch.completed.v1.>")
+	assert.NotContains(t, publisherACL, "$JS.API.CONSUMER")
+	consumerACL := eventBusACLBlock(yaml, "collector-market-fetch-consumer")
+	assert.Contains(t, consumerACL, "$JS.API.CONSUMER.INFO.*.*")
+	assert.Contains(t, consumerACL, "$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*")
+	assert.Contains(t, consumerACL, "$JS.ACK.MOOX_MARKET_FETCH.*.>")
+	assert.NotContains(t, consumerACL, "$JS.API.>")
 	for _, forbidden := range []string{"CONSUMER.CREATE", "CONSUMER.DELETE", "STREAM.NAMES", "$KV.", "moox.cloudnode.job.execution"} {
 		assert.NotContains(t, workerACL, forbidden)
 	}

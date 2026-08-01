@@ -37,6 +37,7 @@ use (
 	./packages/hostmetricpb
 	./packages/jetstream
 	./packages/metricspb
+	./packages/marketfetchpb
 	./packages/msgbox
 	./packages/observabilitypb
 	./packages/pyruntime

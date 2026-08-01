@@ -10,6 +10,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T) {
+	base := func() SCFFetcher {
+		return SCFFetcher{
+			Enabled: true, MemorySize: 64, TimeoutSeconds: 10,
+			MaxInflightRequests: 5, RequestTimeoutMS: 2000,
+			HTTPMaxAttempts: 1, StorageMaxAttempts: 1,
+			Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
+		}
+	}
+
+	t.Run("requires an enabled region", func(t *testing.T) {
+		cfg := base()
+		cfg.Regions[0].Enabled = false
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at least one enabled region")
+	})
+
+	t.Run("caps invocation concurrency at the executor bound", func(t *testing.T) {
+		cfg := base()
+		cfg.MaxInflightRequests = 65
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "between 1 and 64")
+	})
+}
+
 const validManifest = `[admin]
 username = "admin"
 password = "admin-password"

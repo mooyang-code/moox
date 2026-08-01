@@ -1276,6 +1276,9 @@ runtime_identity_env() {
   if [[ -f "${HOME}/.config/moox/eventbus/metrics-publisher.yaml" ]]; then
     RUNTIME_IDENTITY_ENV+=("MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/metrics-publisher.yaml")
   fi
+  if [[ -n "${MOOX_EVENTBUS_NATS_URL:-}" ]]; then
+    RUNTIME_IDENTITY_ENV+=("MOOX_METRICS_EVENTBUS_URL=${MOOX_EVENTBUS_NATS_URL}")
+  fi
 }
 
 STORAGE_SCHEMA_ENV=(
@@ -1287,6 +1290,7 @@ STORAGE_SCHEMA_ENV=(
 
 COLLECTOR_ENV=(
   "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${MOOX_COLLECTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
+  "MOOX_EVENTBUS_CREDENTIAL_FILE=${MOOX_EVENTBUS_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/collector-market-fetch-consumer.yaml}"
 )
 
 FACTOR_ENV=(

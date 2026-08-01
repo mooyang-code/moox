@@ -49,11 +49,42 @@ type Host struct {
 	Password string `toml:"password"`
 }
 
+type SCFFetcherRegion struct {
+	Region         string `toml:"region"`
+	DisplayName    string `toml:"display_name"`
+	Enabled        bool   `toml:"enabled"`
+	FunctionCount  int    `toml:"function_count"`
+	CloudAccountID string `toml:"cloud_account_id"`
+}
+
+type SCFFetcher struct {
+	Enabled             bool               `toml:"enabled"`
+	Namespace           string             `toml:"namespace"`
+	Runtime             string             `toml:"runtime"`
+	FunctionPrefix      string             `toml:"function_prefix"`
+	MemorySize          int                `toml:"memory_size"`
+	TimeoutSeconds      int                `toml:"timeout_seconds"`
+	RealtimeBatchSize   int                `toml:"realtime_batch_size"`
+	RealtimeBarLimit    int                `toml:"realtime_bar_limit"`
+	CatchupBatchSize    int                `toml:"catchup_batch_size"`
+	CatchupBarLimit     int                `toml:"catchup_bar_limit"`
+	MaxInflightRequests int                `toml:"max_inflight_requests"`
+	RequestTimeoutMS    int                `toml:"request_timeout_ms"`
+	HTTPMaxAttempts     int                `toml:"http_max_attempts"`
+	StorageMaxAttempts  int                `toml:"storage_max_attempts"`
+	CommitReserveMS     int                `toml:"commit_reserve_ms"`
+	MaxRetryAttempts    int                `toml:"max_retry_attempts"`
+	RetryDelays         []string           `toml:"retry_delays"`
+	StaggerEnabled      bool               `toml:"stagger_enabled"`
+	Regions             []SCFFetcherRegion `toml:"regions"`
+}
+
 type Manifest struct {
 	Admin        Admin        `toml:"admin"`
 	TencentCloud TencentCloud `toml:"tencent_cloud"`
 	EventBus     EventBus     `toml:"eventbus"`
 	Monitoring   Monitoring   `toml:"monitoring"`
+	SCFFetcher   SCFFetcher   `toml:"scf_fetcher"`
 	ControlHost  Host         `toml:"control_host"`
 	CompileHost  Host         `toml:"compile_host"`
 	OtherHosts   []Host       `toml:"other_hosts"`
@@ -220,6 +251,9 @@ func validate(manifest *Manifest) error {
 	if manifest.Monitoring.WeComWebhook != "" && !validHTTPSWebhook(manifest.Monitoring.WeComWebhook) {
 		return fmt.Errorf("config_invalid: monitoring.wecom_webhook must be a valid HTTPS URL")
 	}
+	if err := validateSCFFetcher(&manifest.SCFFetcher); err != nil {
+		return err
+	}
 
 	names := make(map[string]struct{}, 1+len(manifest.OtherHosts))
 	addresses := make(map[string]struct{}, 1+len(manifest.OtherHosts))
@@ -239,6 +273,113 @@ func validate(manifest *Manifest) error {
 		}
 	}
 	return nil
+}
+
+func validateSCFFetcher(cfg *SCFFetcher) error {
+	if cfg == nil || !cfg.Enabled {
+		return nil
+	}
+	if cfg.Namespace == "" {
+		cfg.Namespace = "default"
+	}
+	if cfg.Runtime == "" {
+		cfg.Runtime = "Go1"
+	}
+	if cfg.FunctionPrefix == "" {
+		cfg.FunctionPrefix = "moox-fetcher"
+	}
+	if cfg.MemorySize != 64 {
+		return fmt.Errorf("config_invalid: scf_fetcher.memory_size must be 64")
+	}
+	if cfg.TimeoutSeconds != 10 {
+		return fmt.Errorf("config_invalid: scf_fetcher.timeout_seconds must be 10")
+	}
+	if cfg.RealtimeBatchSize == 0 {
+		cfg.RealtimeBatchSize = 10
+	}
+	if cfg.RealtimeBatchSize != 10 {
+		return fmt.Errorf("config_invalid: scf_fetcher.realtime_batch_size must be 10")
+	}
+	if cfg.RealtimeBarLimit == 0 {
+		cfg.RealtimeBarLimit = 3
+	}
+	if cfg.RealtimeBarLimit != 3 {
+		return fmt.Errorf("config_invalid: scf_fetcher.realtime_bar_limit must be 3")
+	}
+	if cfg.CatchupBatchSize <= 0 {
+		cfg.CatchupBatchSize = 1
+	}
+	if cfg.CatchupBatchSize != 1 {
+		return fmt.Errorf("config_invalid: scf_fetcher.catchup_batch_size must be 1")
+	}
+	if cfg.CatchupBarLimit == 0 {
+		cfg.CatchupBarLimit = 1000
+	}
+	if cfg.CatchupBarLimit != 1000 {
+		return fmt.Errorf("config_invalid: scf_fetcher.catchup_bar_limit must be 1000")
+	}
+	if cfg.MaxInflightRequests <= 0 || cfg.MaxInflightRequests > 64 {
+		return fmt.Errorf("config_invalid: scf_fetcher.max_inflight_requests must be between 1 and 64")
+	}
+	if cfg.RequestTimeoutMS <= 0 || cfg.StorageMaxAttempts != 1 || cfg.HTTPMaxAttempts != 1 {
+		return fmt.Errorf("config_invalid: scf_fetcher request/storage attempts are invalid")
+	}
+	if cfg.CommitReserveMS == 0 {
+		cfg.CommitReserveMS = 2000
+	}
+	if cfg.MaxRetryAttempts == 0 {
+		cfg.MaxRetryAttempts = 3
+	}
+	if cfg.CommitReserveMS < 0 || cfg.MaxRetryAttempts != 3 {
+		return fmt.Errorf("config_invalid: scf_fetcher commit_reserve_ms must be non-negative and max_retry_attempts must be 3")
+	}
+	if len(cfg.RetryDelays) == 0 {
+		cfg.RetryDelays = []string{"5s", "30s", "2m"}
+	}
+	if len(cfg.RetryDelays) != 3 || cfg.RetryDelays[0] != "5s" || cfg.RetryDelays[1] != "30s" || cfg.RetryDelays[2] != "2m" || cfg.StaggerEnabled {
+		return fmt.Errorf("config_invalid: scf_fetcher retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false")
+	}
+	if cfg.RequestTimeoutMS+cfg.CommitReserveMS >= cfg.TimeoutSeconds*1000 {
+		return fmt.Errorf("config_invalid: scf_fetcher request_timeout_ms + commit_reserve_ms must be less than timeout")
+	}
+	seen := make(map[string]struct{}, len(cfg.Regions))
+	enabledRegions := 0
+	for i := range cfg.Regions {
+		region := strings.TrimSpace(cfg.Regions[i].Region)
+		if region == "" || cfg.Regions[i].FunctionCount <= 0 || cfg.Regions[i].FunctionCount > 50 || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
+			return fmt.Errorf("config_invalid: scf_fetcher.regions[%d] region, cloud_account_id, and function_count 1..50 are required for enabled regions", i)
+		}
+		if !supportedSCFRegion(region) {
+			return fmt.Errorf("config_invalid: scf_fetcher.regions[%d] region %q is not supported", i, region)
+		}
+		if _, ok := seen[region]; ok {
+			return fmt.Errorf("config_invalid: scf_fetcher region %q is duplicated", region)
+		}
+		seen[region] = struct{}{}
+		cfg.Regions[i].Region = region
+		cfg.Regions[i].CloudAccountID = strings.TrimSpace(cfg.Regions[i].CloudAccountID)
+		if cfg.Regions[i].Enabled {
+			enabledRegions++
+		}
+	}
+	if len(cfg.Regions) == 0 {
+		return fmt.Errorf("config_invalid: scf_fetcher.regions must not be empty when enabled")
+	}
+	if enabledRegions == 0 {
+		return fmt.Errorf("config_invalid: scf_fetcher.regions must contain at least one enabled region")
+	}
+	return nil
+}
+
+// supportedSCFRegion keeps an operator typo from creating a partial fleet.
+// It intentionally covers the standard Tencent Cloud SCF regions used by MooX.
+func supportedSCFRegion(region string) bool {
+	switch region {
+	case "ap-beijing", "ap-chengdu", "ap-chongqing", "ap-guangzhou", "ap-nanjing", "ap-shanghai", "ap-shanghai-fsi", "ap-shenzhen-fsi", "ap-hongkong", "na-toronto", "na-siliconvalley", "eu-frankfurt", "ap-singapore", "ap-bangkok", "ap-jakarta", "ap-tokyo", "ap-seoul":
+		return true
+	default:
+		return false
+	}
 }
 
 func validHTTPSWebhook(rawURL string) bool {

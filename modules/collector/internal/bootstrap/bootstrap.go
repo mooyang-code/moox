@@ -4,13 +4,18 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
+	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
+	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	"github.com/mooyang-code/moox/modules/collector/internal/taskpublisher"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -59,7 +64,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	deps, err := Resolve(ctx, cfg)
 	if err != nil {
-		log.WarnContextf(ctx, "[Collector] resolve dependencies from sysdeploy failed, use local defaults: %v", err)
+		return nil, fmt.Errorf("resolve collector dependencies from sysdeploy: %w", err)
 	}
 
 	datasetMetrics, err := report.NewDatasetMetrics(prometheus.DefaultRegisterer, "collector")
@@ -74,7 +79,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector module metrics: %w", err)
 	}
-	runMetrics, err := report.NewDatasetModuleObserver(
+	_, err = report.NewDatasetModuleObserver(
 		datasetMetrics,
 		moduleMetrics,
 		"collect",
@@ -88,19 +93,23 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, fmt.Errorf("initialize collector realtime dataset inventory: %w", err)
 	}
 	svc := collectsvc.New(dbm, collectsvc.Dependencies{
-		AdminGatewayURL:                deps.AdminGatewayURL,
-		ServiceAuth:                    taskpublisherAuth(deps.ServiceAuth),
 		StorageRPCGatewayTarget:        deps.StorageRPCGatewayTarget,
 		PlannerStorageRPCGatewayTarget: cfg.Storage.GatewayTarget,
-		DatasetMetrics:                 runMetrics,
 		RealtimeInventory:              realtimeInventory,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
-	collectsvc.SetDefaultService(svc)
+	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
+	registerMarketFetchSchedule(s, cfg, deps, dbm, marketFetchMetrics)
+	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
+	if spaceID == "" {
+		spaceID = "crypto"
+	}
+	if err := marketfetch.StartCompletionConsumer(ctx, spaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), marketFetchMetrics); err != nil {
+		log.WarnContextf(ctx, "collector market fetch completion consumer disabled: %v", err)
+	}
 	if err := registerHealth(s, cfg, dbm); err != nil {
 		return nil, err
 	}
-	registerCollectorSchedule(s)
 	registerMetricsReporter(s, realtimeInventory)
 
 	keepDB = true
@@ -180,25 +189,48 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State)
 	}
 }
 
-func registerCollectorSchedule(s *server.Server) {
-	timer.RegisterScheduler("collectorSchedule", &timer.DefaultScheduler{})
-	service := s.Service("trpc.moox.collector.schedule.timer")
-	if service == nil {
-		log.Warn("collector schedule timer service is not configured, skip register")
+func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, metrics *marketfetch.Metrics) {
+	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
+	service := s.Service("trpc.moox.collector.schedule.timer")
+	if service == nil {
+		log.Warn("collector market fetch timer service is not configured, skip register")
+		return
+	}
+	if isLoopbackTarget(deps.StorageRPCGatewayTarget) {
+		log.ErrorContextf(context.Background(), "collector market fetch timer disabled: Storage target %q is loopback; refusing to send it to remote SCF", deps.StorageRPCGatewayTarget)
+		return
+	}
+	auth := runtimeAuth(deps.ServiceAuth)
+	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.AdminGatewayURL, Auth: auth, Timeout: 5 * time.Second})
+	scheduler := &marketfetch.Scheduler{
+		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(), Invoker: invoker,
+		Storage: func(target, market string) (binance.BatchStorage, error) {
+			return binance.NewBatchStorage(target, market)
+		},
+		StorageTarget: deps.StorageRPCGatewayTarget, BatchSize: 10, InvokeConcurrency: 20,
+		Metrics: metrics,
+	}
+	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
-		return collectsvc.HandleSchedule(ctx, "")
+		spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
+		if spaceID == "" {
+			spaceID = "crypto"
+		}
+		if err := scheduler.Tick(ctx, spaceID); err != nil {
+			log.WarnContextf(ctx, "collector market fetch tick failed space=%s: %v", spaceID, err)
+			return err
+		}
+		return nil
 	})
 }
 
-func taskpublisherAuth(cfg ServiceAuthConfig) taskpublisher.AuthConfig {
-	return taskpublisher.AuthConfig{
-		AccessKey:   cfg.AccessKey,
-		SecretKey:   cfg.SecretKey,
-		TargetNode:  cfg.TargetNode,
-		CAFile:      cfg.CAFile,
-		CAPEMBase64: cfg.CAPEMBase64,
-		ExpireSec:   cfg.ExpireSeconds,
-	}
+func isLoopbackTarget(target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	return strings.Contains(target, "127.0.0.1") || strings.Contains(target, "localhost") || strings.Contains(target, "[::1]")
+}
+
+func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {
+	return runtimeapp.AuthConfig{AccessKey: cfg.AccessKey, SecretKey: cfg.SecretKey, TargetNode: cfg.TargetNode, CAFile: cfg.CAFile, CAPEMBase64: cfg.CAPEMBase64, ExpireSec: cfg.ExpireSeconds}
 }

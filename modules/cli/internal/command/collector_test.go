@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
@@ -80,6 +79,23 @@ func TestCollectorFunctionEnvironmentEmbedsCAFileMaterial(t *testing.T) {
 	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_FILE")
 }
 
+func TestEgressProbeResponseDataAcceptsStructuredAndRawResponses(t *testing.T) {
+	structured, ok := egressProbeResponseData(map[string]any{
+		"data": map[string]any{"details": map[string]any{"public_ip": "198.51.100.1"}},
+	})
+	require.True(t, ok)
+	assert.Equal(t, "198.51.100.1", structured["details"].(map[string]any)["public_ip"])
+
+	raw, ok := egressProbeResponseData(map[string]any{
+		"raw": `{"success":true,"data":{"details":{"public_ip":"198.51.100.2"}}}`,
+	})
+	require.True(t, ok)
+	assert.Equal(t, "198.51.100.2", raw["details"].(map[string]any)["public_ip"])
+
+	_, ok = egressProbeResponseData(map[string]any{"raw": "not-json"})
+	assert.False(t, ok)
+}
+
 func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
 		setCollectorCLSTestCredentials(t)
@@ -113,15 +129,24 @@ func TestCollectorFunctionEnvironmentRejectsInvalidOrConflictingCA(t *testing.T)
 	})
 }
 
-func TestCollectorFunctionEnvironmentRequiresRuntimeCLSCredentials(t *testing.T) {
+func TestCollectorFunctionEnvironmentDoesNotRequireOrInjectCLSCredentials(t *testing.T) {
 	t.Setenv("MOOX_CLS_SECRET_ID", "")
 	t.Setenv("MOOX_CLS_SECRET_KEY", "")
 	t.Setenv("TENCENTCLOUD_SECRET_ID", "")
 	t.Setenv("TENCENTCLOUD_SECRET_KEY", "")
 	t.Setenv("TENCENT_SECRET_ID", "")
 	t.Setenv("TENCENT_SECRET_KEY", "")
-	_, err := collectorFunctionEnvironment(collectorPublishOptions{})
-	require.ErrorContains(t, err, "CLS runtime host and credentials are required")
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, env, "MOOX_CLS_SECRET_ID")
+	assert.NotContains(t, env, "MOOX_CLS_SECRET_KEY")
+}
+
+func TestCollectorFunctionEnvironmentRejectsCloudCredentialOverrides(t *testing.T) {
+	_, err := collectorFunctionEnvironment(collectorPublishOptions{Env: []string{"TENCENTCLOUD_SECRET_ID=should-not-reach-scf"}})
+	require.ErrorContains(t, err, "managed key TENCENTCLOUD_SECRET_ID")
+	_, err = collectorFunctionEnvironment(collectorPublishOptions{Env: []string{"MOOX_CLS_SECRET_KEY=should-not-reach-scf"}})
+	require.ErrorContains(t, err, "managed key MOOX_CLS_SECRET_KEY")
 }
 
 func TestCollectorFunctionEnvironmentInjectsManagedEventBusCredential(t *testing.T) {
@@ -169,6 +194,7 @@ func TestCollectorFunctionEnvironmentUsesRuntimeCollectorIdentity(t *testing.T) 
 	assert.Equal(t, "node-a", env["MOOX_GATEWAY_TARGET_NODE"])
 	assert.Equal(t, "collector", env["MOOX_GATEWAY_SERVICE_KEY_ID"])
 	assert.Equal(t, "collector-secret", env["MOOX_GATEWAY_SERVICE_SECRET_KEY"])
+	assert.Equal(t, "collector", env["MOOX_GATEWAY_CALLER"])
 }
 
 type collectorCLSAPI struct{}
@@ -191,17 +217,6 @@ func (collectorCLSAPI) CreateIndex(context.Context, string) (string, error) {
 	panic("unexpected CreateIndex")
 }
 
-func TestResolveCollectorCLSResourcesUsesTencentCloudAPI(t *testing.T) {
-	original := newCollectorCLSAPI
-	newCollectorCLSAPI = func(string, string) (tencent.CLSAPI, error) { return collectorCLSAPI{}, nil }
-	t.Cleanup(func() { newCollectorCLSAPI = original })
-
-	resources, err := resolveCollectorCLSResources(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, "logset-from-api", resources.LogsetID)
-	assert.Equal(t, "topic-from-api", resources.TopicID)
-}
-
 func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	t.Setenv("MOOX_CLS_HOST", "ap-guangzhou.cls.tencentyun.com")
 	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
@@ -221,7 +236,7 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 		Handler:          "main",
 		Region:           "ap-guangzhou",
 		PackageName:      "moox-collector",
-		BizType:          "data_collector",
+		BizType:          "market_fetcher",
 		NodeType:         "scf-event",
 		Env:              []string{"MOOX_ENV=prod"},
 	}, "moox-collector_dev")
@@ -229,7 +244,7 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.CloudAccountID != "account-a" || item.Region != "ap-guangzhou" || item.PackageID != "moox-collector_dev" {
 		t.Fatalf("routing fields = %#v", item)
 	}
-	if item.Config["timeout"] != "120" {
+	if item.Config["timeout"] != "10" || item.Config["memory_size"] != "64" {
 		t.Fatalf("config = %#v", item.Config)
 	}
 	if item.Config["cls_logset_id"] != "logset-unified" || item.Config["cls_topic_id"] != "topic-unified" {
@@ -244,23 +259,22 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "collector" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "collector-secret" {
 		t.Fatalf("service auth env = %#v", item.Environment)
 	}
-	if item.Environment["MOOX_CLS_HOST"] != "ap-guangzhou.cls.tencentyun.com" || item.Environment["MOOX_CLS_SECRET_ID"] != "cls-id" || item.Environment["MOOX_CLS_SECRET_KEY"] != "cls-key" {
-		t.Fatalf("CLS env = %#v", item.Environment)
-	}
+	assert.NotContains(t, item.Environment, "MOOX_CLS_SECRET_ID")
+	assert.NotContains(t, item.Environment, "MOOX_CLS_SECRET_KEY")
 	if item.Metadata["function_name_prefix"] != "moox-collector" {
 		t.Fatalf("function_name_prefix = %#v", item.Metadata["function_name_prefix"])
 	}
-	if item.Metadata["biz_type"] != "data_collector" {
+	if item.Metadata["biz_type"] != "market_fetcher" {
 		t.Fatalf("biz_type = %#v", item.Metadata["biz_type"])
 	}
 	workloads, ok := item.Metadata["supported_workloads"].([]string)
 	if !ok {
 		t.Fatalf("supported_workloads type = %T", item.Metadata["supported_workloads"])
 	}
-	if len(workloads) != 2 || workloads[0] != "collect.binance.kline" || workloads[1] != "collect.binance.symbol" {
+	if len(workloads) != 0 {
 		t.Fatalf("supported_workloads = %#v", workloads)
 	}
-	assert.Equal(t, "collect.binance.kline,collect.binance.symbol", item.Environment["MOOX_COLLECTOR_JOB_TYPES"])
+	assert.NotContains(t, item.Environment, "MOOX_COLLECTOR_JOB_TYPES")
 }
 
 func TestBuildCollectorFleetCreateItemsAreUniqueAndDeepCloned(t *testing.T) {
@@ -478,7 +492,7 @@ func TestPublishSubmitRejectsPartialFleetBeforeUpload(t *testing.T) {
 		case "/api/admin/cloudnode/ListCloudAccounts":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"accounts":[{"account_id":"account-a"}]}`))
 		case "/api/admin/cloudnode/GetNodeList":
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fleet-0","biz_type":"data_collector","metadata":{"function_name_prefix":"fleet","index":0}}],"page":{"has_more":false}}`))
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fleet-0","biz_type":"market_fetcher","metadata":{"function_name_prefix":"fleet","index":0}}],"page":{"has_more":false}}`))
 		case "/api/admin/cloudnode/InitPackageUpload":
 			uploadCalled = true
 			t.Fatal("partial fleet must fail before upload")
@@ -549,50 +563,37 @@ func TestCollectorCLSCredentialsPreferDedicatedRuntimeIdentity(t *testing.T) {
 	assert.Equal(t, "dedicated-key", secretKey)
 }
 
-func TestBuildCollectorCreateNodeItemNormalizesJobTypesAndKeepsMetadataEnvironmentInSync(t *testing.T) {
-	item := mustBuildCollectorCreateNodeItem(t, collectorPublishOptions{
+func TestResolveCollectorCLSResourcesUsesSelectedCloudAccountSecret(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/service/secret/GetSecretValue", r.URL.Path)
+		require.NotEmpty(t, r.Header.Get("X-Moox-Signature"))
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"secret":{"secret_id":"secret-shanghai","category":"cloud","provider":"tencent","status":"active","key_id":"shanghai-id","secret_value":"shanghai-key"}}`))
+	}))
+	defer server.Close()
+	client := adminclient.New(server.URL)
+	client.ServiceAuth = &adminclient.ServiceAuthConfig{AccessKey: "ak", SecretKey: "sk", Caller: "moox-cli", TargetNode: "gateway", ExpireSecs: 60}
+	previous := newCollectorCLSAPI
+	defer func() { newCollectorCLSAPI = previous }()
+	var gotID, gotKey, gotRegion string
+	newCollectorCLSAPI = func(secretID, secretKey, region string) (tencent.CLSAPI, error) {
+		gotID, gotKey, gotRegion = secretID, secretKey, region
+		return collectorCLSAPI{}, nil
+	}
+	_, err := resolveCollectorCLSResources(context.Background(), client, adminclient.CloudAccount{AccountID: "tencent-scf-shanghai", CredentialSecretID: "secret-shanghai"}, "ap-shanghai")
+	require.NoError(t, err)
+	assert.Equal(t, "shanghai-id", gotID)
+	assert.Equal(t, "shanghai-key", gotKey)
+	assert.Equal(t, "ap-shanghai", gotRegion)
+}
+
+func TestBuildCollectorCreateNodeItemRejectsLegacyJobItemWorkloads(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
 		CloudAccountID: "account-a",
 		Region:         "ap-guangzhou",
-		JobTypes: []string{
-			" collect.binance.symbol ",
-			"collect.binance.kline",
-			"collect.binance.symbol",
-		},
+		JobTypes:       []string{"kline_realtime"},
 	}, "moox-collector_dev")
-
-	workloads, ok := item.Metadata["supported_workloads"].([]string)
-	require.True(t, ok)
-	assert.Equal(t, []string{"collect.binance.symbol", "collect.binance.kline"}, workloads)
-	assert.Equal(t, strings.Join(workloads, ","), item.Environment["MOOX_COLLECTOR_JOB_TYPES"])
-}
-
-func TestBuildCollectorCreateNodeItemRejectsInvalidJobTypes(t *testing.T) {
-	tests := []struct {
-		name     string
-		jobTypes []string
-		want     string
-	}{
-		{name: "empty", jobTypes: []string{""}, want: "must not be empty"},
-		{name: "whitespace", jobTypes: []string{"  "}, want: "must not be empty"},
-		{name: "unknown", jobTypes: []string{"collect.tushare.kline"}, want: "unsupported collector job type"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			setCollectorCLSTestCredentials(t)
-			_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
-				CloudAccountID: "account-a",
-				Region:         "ap-guangzhou",
-				JobTypes:       tt.jobTypes,
-			}, "moox-collector_dev")
-			require.ErrorContains(t, err, tt.want)
-		})
-	}
-}
-
-func TestCollectorFunctionPublishJobTypesFlagDefaultsToBinance(t *testing.T) {
-	got, err := collectorFunctionPublishSubmitCmd.Flags().GetStringSlice("job-types")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"collect.binance.kline", "collect.binance.symbol"}, got)
+	require.ErrorContains(t, err, "does not consume CloudNode JobItem workloads")
 }
 
 func TestBuildCollectorCreateNodeItemDefaultsToGoRuntime(t *testing.T) {
@@ -619,18 +620,9 @@ func TestCollectorFunctionEnvironmentRejectsManagedGatewayOverride(t *testing.T)
 			"MOOX_GATEWAY_SERVICE_KEY_ID=override-ak",
 			"MOOX_GATEWAY_SERVICE_SECRET_KEY=override-sk",
 			"MOOX_GATEWAY_SERVICE_EXPIRE_SECONDS=60",
-			"MOOX_COLLECTOR_JOB_TYPES=collect.binance.symbol",
 		},
 	}, "moox-collector_dev")
 	require.ErrorContains(t, err, "managed key")
-}
-
-func TestCollectorFunctionEnvironmentRejectsManagedJobTypesOverride(t *testing.T) {
-	setCollectorCLSTestCredentials(t)
-	_, err := collectorFunctionEnvironment(collectorPublishOptions{
-		Env: []string{"MOOX_COLLECTOR_JOB_TYPES=collect.binance.symbol"},
-	})
-	require.ErrorContains(t, err, "managed key MOOX_COLLECTOR_JOB_TYPES")
 }
 
 func TestCollectorFunctionEnvironmentRejectsManagedSpaceOverride(t *testing.T) {
@@ -640,6 +632,14 @@ func TestCollectorFunctionEnvironmentRejectsManagedSpaceOverride(t *testing.T) {
 		Env:     []string{"MOOX_SPACE_ID=stocks"},
 	})
 	require.ErrorContains(t, err, "managed key MOOX_SPACE_ID")
+}
+
+func TestCollectorFunctionEnvironmentRejectsGatewayCallerOverride(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := collectorFunctionEnvironment(collectorPublishOptions{
+		Env: []string{"MOOX_GATEWAY_CALLER=moox-cli"},
+	})
+	require.ErrorContains(t, err, "managed key MOOX_GATEWAY_CALLER")
 }
 
 func TestDeployCollectorFunctionWithExistingZip(t *testing.T) {

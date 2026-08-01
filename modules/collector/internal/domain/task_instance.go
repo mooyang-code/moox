@@ -23,14 +23,19 @@ type DatasetSubject struct {
 
 // TaskSpec is an adapter output before persistence fields are added.
 type TaskSpec struct {
-	Exchange  string
-	Market    string
-	DataType  string
-	DatasetID string
-	SubjectID string
-	Symbol    string
-	Interval  string
-	Params    map[string]any
+	Provider   string
+	MarketType string
+	DataType   string
+	DatasetID  string
+	SubjectID  string
+	Frequency  string
+	Params     map[string]any
+	// Legacy planner-only aliases remain outside persistence while the static
+	// rule metadata package is reduced independently.
+	Exchange string
+	Market   string
+	Symbol   string
+	Interval string
 }
 
 // TaskInstance is the Collector-owned executable business task.
@@ -38,15 +43,13 @@ type TaskInstance struct {
 	ID             int        `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID        string     `gorm:"column:c_space_id"`
 	TaskID         string     `gorm:"column:c_task_id"`
-	CloudJobItemID string     `gorm:"column:c_cloud_job_item_id"`
 	RuleID         string     `gorm:"column:c_rule_id"`
-	Exchange       string     `gorm:"column:c_exchange"`
-	Market         string     `gorm:"column:c_market"`
+	Provider       string     `gorm:"column:c_provider"`
+	MarketType     string     `gorm:"column:c_market_type"`
 	DataType       string     `gorm:"column:c_data_type"`
 	DatasetID      string     `gorm:"column:c_dataset_id"`
 	SubjectID      string     `gorm:"column:c_subject_id"`
-	Symbol         string     `gorm:"column:c_symbol"`
-	Interval       string     `gorm:"column:c_interval"`
+	Frequency      string     `gorm:"column:c_frequency"`
 	LastExecNode   string     `gorm:"column:c_last_exec_node"`
 	LastExecStatus int        `gorm:"column:c_last_exec_status"`
 	TaskParams     string     `gorm:"column:c_task_params"`
@@ -68,12 +71,12 @@ func StableTaskID(spaceID string, ruleID string, spec TaskSpec) string {
 	parts := []string{
 		spaceID,
 		ruleID,
-		spec.Exchange,
-		spec.Market,
+		spec.Provider,
+		spec.MarketType,
 		spec.DataType,
 		spec.DatasetID,
 		spec.SubjectID,
-		spec.Interval,
+		spec.Frequency,
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])[:32]

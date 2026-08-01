@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
@@ -19,6 +20,38 @@ type storageWriter struct {
 	access   storagepb.PrimaryStoreClientProxy
 	metadata storagepb.MetadataClientProxy
 	authInfo *storagepb.AuthInfo
+}
+
+// BatchStorage is the small Storage surface used by short-lived market fetches.
+type BatchStorage interface {
+	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
+	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesSelector) (time.Time, bool, error)
+	RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error
+	ListDatasetSubjects(context.Context, string, string) ([]*storagepb.DatasetSubject, error)
+	BindDatasetSubject(context.Context, *storagepb.DatasetSubject) error
+}
+
+// ReconcileSymbolSnapshot disables memberships that disappeared from the
+// latest exchange snapshot (including an explicit manual allowlist shrink).
+func (w *storageWriter) ReconcileSymbolSnapshot(ctx context.Context, spaceID, datasetID string, active []*exchange.SymbolInfo) error {
+	memberships, err := w.ListDatasetSubjects(ctx, spaceID, datasetID)
+	if err != nil {
+		return err
+	}
+	return reconcileInactiveSymbolMemberships(ctx, w, spaceID, datasetID, active, memberships)
+}
+
+// NewBatchStorage creates the shared Storage Primary/Metadata adapter used by
+// a short-lived SCF invocation.
+func NewBatchStorage(accessTarget, instType string) (BatchStorage, error) {
+	if normalized, normalizeErr := InstTypeForMarket(instType); normalizeErr == nil {
+		instType = normalized
+	}
+	binding, err := ResolveStorageBinding(instType)
+	if err != nil {
+		return nil, err
+	}
+	return newStorageWriter(accessTarget, accessTarget, storageAuthInfo(binding)), nil
 }
 
 func newStorageWriter(accessTarget string, metadataTarget string, authInfo *storagepb.AuthInfo) *storageWriter {
@@ -42,10 +75,19 @@ func storageGatewayTarget(accessTarget, metadataTarget string) string {
 }
 
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
+	return w.upsertFields(ctx, rows, "")
+}
+
+func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {
+	return w.upsertFields(ctx, rows, sourceEventID)
+}
+
+func (w *storageWriter) upsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {
 	return retryStorage(ctx, func() error {
 		rsp, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
-			AuthInfo: w.authInfo,
-			Rows:     rows,
+			AuthInfo:      w.authInfo,
+			Rows:          rows,
+			SourceEventId: sourceEventID,
 		})
 		if err != nil {
 			return fmt.Errorf("write time-series rows: %w", err)

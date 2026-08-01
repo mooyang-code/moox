@@ -75,6 +75,8 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	// physical Storage listener.
 	if v := endpointTRPCTarget(active, "service_gateway_native"); v != "" {
 		deps.StorageRPCGatewayTarget = v
+	} else {
+		return deps, fmt.Errorf("active service_gateway_native deployment has no native tRPC target")
 	}
 	return deps, nil
 }

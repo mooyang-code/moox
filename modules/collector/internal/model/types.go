@@ -14,7 +14,11 @@ const (
 type EventAction string
 
 const (
-	EventActionKeepalive EventAction = "keepalive"
+	// EventActionMarketFetch runs one bounded market-fetch batch and exits.
+	EventActionMarketFetch EventAction = "market_fetch"
+	// EventActionEgressProbe validates that this SCF instance can reach the
+	// configured public network and Binance endpoint before it is scheduled.
+	EventActionEgressProbe EventAction = "egress_probe"
 )
 
 // TaskSummary 任务摘要（用于心跳上报）

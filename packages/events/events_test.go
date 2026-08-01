@@ -17,6 +17,7 @@ func TestBuiltInEvents(t *testing.T) {
 	}
 	want := []string{
 		"cloudnode.job.execution.requested@1",
+		"market.fetch.batch.completed@1",
 		"observability.health.check.reported@1",
 		"observability.host.snapshot.reported@1",
 		"observability.metrics.snapshot.reported@1",
@@ -28,6 +29,7 @@ func TestBuiltInEvents(t *testing.T) {
 		"observability.health.check.reported@1":     "watchdog",
 		"observability.host.snapshot.reported@1":    "hostagent",
 		"observability.metrics.snapshot.reported@1": "service",
+		"market.fetch.batch.completed@1":            "collector",
 		"storage.dataset.rows.upserted@2":           "storage",
 		"trade.target.requested@1":                  "strategy",
 	}

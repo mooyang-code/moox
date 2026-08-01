@@ -80,7 +80,7 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 		if !rule.Enabled {
 			continue
 		}
-		params, err := domain.ParseCollectParams(rule.CollectParams, rule.Exchange, rule.DataType)
+		params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
 		if err != nil {
 			i.registry.ObserveInventoryRefreshError()
 			return fmt.Errorf("parse collector rule %q: %w", rule.RuleID, err)

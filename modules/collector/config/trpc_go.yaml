@@ -26,14 +26,14 @@ server:
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-    - name: trpc.moox.collector.schedule.timer
-      port: 11403
-      network: "20 */1 * * * *?scheduler=collectorSchedule"
-      protocol: timer
-      timeout: 60000
     - name: trpc.moox.collector.metrics.timer
       port: 11412
       network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 25000
+    - name: trpc.moox.collector.schedule.timer
+      port: 11413
+      network: "*/10 * * * * *"
       protocol: timer
       timeout: 10000
 

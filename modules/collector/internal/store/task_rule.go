@@ -15,13 +15,14 @@ const MaxEnabledTaskRules = 1000
 
 // TaskRuleFilter describes rule list filters.
 type TaskRuleFilter struct {
-	SpaceID  string
-	DataType string
-	Exchange string
-	Enabled  *bool
-	RuleID   string
-	Page     int
-	PageSize int
+	SpaceID    string
+	DataType   string
+	Provider   string
+	MarketType string
+	Enabled    *bool
+	RuleID     string
+	Page       int
+	PageSize   int
 }
 
 // TaskRuleRepository persists collection rules.
@@ -55,7 +56,11 @@ func (r *TaskRuleRepository) ListEnabled(ctx context.Context, spaceID string) ([
 	err := r.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_enabled = ?", strings.TrimSpace(spaceID), true).
 		Order("c_id ASC").
+		Limit(MaxEnabledTaskRules + 1).
 		Find(&rules).Error
+	if err == nil && len(rules) > MaxEnabledTaskRules {
+		return nil, fmt.Errorf("enabled task rule count exceeds limit %d", MaxEnabledTaskRules)
+	}
 	return rules, err
 }
 
@@ -106,7 +111,8 @@ func (r *TaskRuleRepository) UpdateByRuleID(ctx context.Context, spaceID string,
 	updates := map[string]any{
 		"c_space_id":       rule.SpaceID,
 		"c_data_type":      rule.DataType,
-		"c_exchange":       rule.Exchange,
+		"c_provider":       rule.Provider,
+		"c_market_type":    rule.MarketType,
 		"c_collect_params": rule.CollectParams,
 		"c_enabled":        rule.Enabled,
 		"c_creator":        rule.Creator,
@@ -138,8 +144,11 @@ func (r *TaskRuleRepository) applyFilter(q *gorm.DB, filter TaskRuleFilter) *gor
 	if v := strings.TrimSpace(filter.DataType); v != "" {
 		q = q.Where("c_data_type = ?", v)
 	}
-	if v := strings.TrimSpace(filter.Exchange); v != "" {
-		q = q.Where("c_exchange = ?", v)
+	if v := strings.TrimSpace(filter.Provider); v != "" {
+		q = q.Where("c_provider = ?", v)
+	}
+	if v := strings.TrimSpace(filter.MarketType); v != "" {
+		q = q.Where("c_market_type = ?", v)
 	}
 	if filter.Enabled != nil {
 		q = q.Where("c_enabled = ?", *filter.Enabled)

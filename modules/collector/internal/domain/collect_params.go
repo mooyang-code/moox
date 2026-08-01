@@ -11,10 +11,21 @@ import (
 
 // CollectParams describes how a rule generates concrete task instances.
 type CollectParams struct {
-	Source    CollectSource   `json:"source"`
-	Collector CollectorSpec   `json:"collector"`
-	Target    CollectTarget   `json:"target"`
-	Schedule  CollectSchedule `json:"schedule"`
+	// The persisted rule contract is flat and greenfield-only. The nested
+	// fields below are derived for the collector's internal planners and are
+	// deliberately excluded from JSON so old exchange/market aliases fail
+	// validation rather than becoming a second public contract.
+	Source          CollectSource   `json:"-"`
+	Collector       CollectorSpec   `json:"-"`
+	Target          CollectTarget   `json:"-"`
+	Schedule        CollectSchedule `json:"-"`
+	Provider        string          `json:"provider,omitempty"`
+	MarketType      string          `json:"market_type,omitempty"`
+	SymbolSource    string          `json:"symbol_source,omitempty"`
+	Symbols         []string        `json:"symbols,omitempty"`
+	SymbolDatasetID string          `json:"symbol_dataset_id,omitempty"`
+	TargetDatasetID string          `json:"target_dataset_id,omitempty"`
+	Frequency       string          `json:"frequency,omitempty"`
 }
 
 // CollectSource describes where target objects come from.
@@ -43,7 +54,7 @@ type CollectSchedule struct {
 }
 
 // ParseCollectParams parses rule JSON and normalizes the standard shape.
-func ParseCollectParams(raw string, fallbackExchange string, fallbackDataType string) (*CollectParams, error) {
+func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType string, fallbackDataType string) (*CollectParams, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		raw = "{}"
@@ -57,28 +68,53 @@ func ParseCollectParams(raw string, fallbackExchange string, fallbackDataType st
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return nil, fmt.Errorf("parse collect params: trailing JSON value")
 	}
-	params.Normalize(fallbackExchange, fallbackDataType)
+	params.Normalize(fallbackProvider, fallbackMarketType, fallbackDataType)
 	return &params, nil
 }
 
 // Normalize canonicalizes the standard collect params shape.
-func (p *CollectParams) Normalize(fallbackExchange string, fallbackDataType string) {
-	if p.Collector.Exchange == "" {
-		p.Collector.Exchange = fallbackExchange
+func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType string, fallbackDataType string) {
+	p.Provider = strings.ToLower(firstNonEmpty(p.Provider, fallbackProvider))
+	p.MarketType = strings.ToLower(firstNonEmpty(p.MarketType, fallbackMarketType))
+	p.SymbolSource = strings.ToLower(strings.TrimSpace(p.SymbolSource))
+	p.SymbolDatasetID = strings.TrimSpace(p.SymbolDatasetID)
+	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)
+	p.Frequency = strings.TrimSpace(p.Frequency)
+	if p.Frequency == "" && strings.EqualFold(strings.TrimSpace(fallbackDataType), "symbol") {
+		// Symbol snapshots are deliberately small manual inventories. They use a
+		// fixed hourly cadence unless a valid explicit frequency is supplied.
+		p.Frequency = "1h"
 	}
-	if p.Collector.DataType == "" {
-		p.Collector.DataType = fallbackDataType
+
+	sourceKind := ""
+	switch p.SymbolSource {
+	case "dataset":
+		sourceKind = "dataset_subjects"
+	case "manual":
+		sourceKind = "none"
 	}
-	p.Source.Kind = strings.ToLower(strings.TrimSpace(p.Source.Kind))
-	p.Source.DatasetID = strings.TrimSpace(p.Source.DatasetID)
-	p.Collector.Exchange = strings.ToLower(strings.TrimSpace(p.Collector.Exchange))
-	p.Collector.Market = strings.ToLower(strings.TrimSpace(p.Collector.Market))
-	p.Collector.DataType = strings.ToLower(strings.TrimSpace(p.Collector.DataType))
-	for i := range p.Collector.Intervals {
-		p.Collector.Intervals[i] = strings.TrimSpace(p.Collector.Intervals[i])
+	p.Source = CollectSource{Kind: sourceKind, DatasetID: p.SymbolDatasetID}
+	intervals := []string(nil)
+	if p.Frequency != "" {
+		intervals = []string{p.Frequency}
 	}
-	p.Target.DatasetID = strings.TrimSpace(p.Target.DatasetID)
-	p.Schedule.Interval = strings.TrimSpace(p.Schedule.Interval)
+	p.Collector = CollectorSpec{
+		Exchange:  p.Provider,
+		Market:    p.MarketType,
+		DataType:  strings.ToLower(strings.TrimSpace(fallbackDataType)),
+		Intervals: intervals,
+	}
+	p.Target = CollectTarget{DatasetID: p.TargetDatasetID}
+	p.Schedule = CollectSchedule{Interval: p.Frequency}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // Validate checks the single supported rule JSON contract.
@@ -111,6 +147,9 @@ func (p *CollectParams) Validate() error {
 	case "symbol":
 		if p.Source.Kind != "none" {
 			return fmt.Errorf("symbol source.kind must be none")
+		}
+		if strings.EqualFold(p.SymbolSource, "manual") && len(p.Symbols) == 0 {
+			return fmt.Errorf("symbols is required for manual symbol source")
 		}
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)

@@ -34,6 +34,8 @@ type FunctionInfo struct {
 	Runtime     string
 	ModTime     string
 	CodeSize    int64
+	MemorySize  int64
+	Timeout     int64
 	ClsLogsetID string
 	ClsTopicID  string
 	Environment map[string]string
@@ -103,6 +105,44 @@ type UpdateFunctionConfigurationResponse struct {
 	RequestID string
 }
 
+type UpdateFunctionEventInvokeConfigRequest struct {
+	FunctionRef
+	RetryNum int64
+	// MsgTTL is required by Tencent when updating async invoke config. Keep a
+	// short bounded retention window because the durable retry state lives in
+	// MooX EventBus, not in SCF's provider queue.
+	MsgTTL int64
+}
+
+type UpdateFunctionEventInvokeConfigResponse struct {
+	RequestID string
+}
+
+func (c *Client) UpdateFunctionEventInvokeConfig(ctx context.Context, req UpdateFunctionEventInvokeConfigRequest) (*UpdateFunctionEventInvokeConfigResponse, error) {
+	client, err := c.newClient(req.Region)
+	if err != nil {
+		return nil, err
+	}
+	request := scf.NewUpdateFunctionEventInvokeConfigRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	msgTTL := req.MsgTTL
+	if msgTTL <= 0 {
+		// Tencent currently caps this field at six hours (21600 seconds).
+		msgTTL = 21600
+	}
+	request.AsyncTriggerConfig = &scf.AsyncTriggerConfig{RetryConfig: []*scf.RetryConfig{{RetryNum: common.Int64Ptr(req.RetryNum)}}, MsgTTL: common.Int64Ptr(msgTTL)}
+	response, err := client.UpdateFunctionEventInvokeConfigWithContext(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	out := &UpdateFunctionEventInvokeConfigResponse{}
+	if response.Response != nil {
+		out.RequestID = deref(response.Response.RequestId)
+	}
+	return out, nil
+}
+
 // InvokeFunctionRequest describes a SCF invocation.
 type InvokeFunctionRequest struct {
 	Region       string
@@ -163,6 +203,12 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	}
 	if response.Response.CodeSize != nil {
 		out.CodeSize = int64(*response.Response.CodeSize)
+	}
+	if response.Response.MemorySize != nil {
+		out.MemorySize = int64(*response.Response.MemorySize)
+	}
+	if response.Response.Timeout != nil {
+		out.Timeout = int64(*response.Response.Timeout)
 	}
 	return out, nil
 }

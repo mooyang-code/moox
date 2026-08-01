@@ -79,8 +79,8 @@ func TestStorageRedeliveryE2EKeepsOneRowAfterLostAck(t *testing.T) {
 		spaceID = batchTestSpaceID + "-storage"
 		itemID  = "storage-redelivery"
 	)
-	_, registry, publisher, consumer := newBatchE2EQueue(t, setupCtx, spaceID, batchTestJobType, 1)
-	publishBatchE2EJob(t, setupCtx, publisher, spaceID, batchTestJobType, itemID, nil)
+	registry, publisher, consumer := newBatchE2EQueue(t, setupCtx, spaceID, batchTestSubject, 1)
+	publishBatchE2ECompletion(t, setupCtx, publisher, spaceID, batchTestSubject, itemID)
 
 	store := newSQLiteRowUpserter(t)
 	rowKey := &storagepb.RowKey{

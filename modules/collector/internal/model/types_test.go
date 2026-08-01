@@ -14,7 +14,8 @@ func TestCollectorType_Constants_ShouldMatchExpectedValues(t *testing.T) {
 }
 
 func TestEventAction_Constants_ShouldMatchExpectedValues(t *testing.T) {
-	assert.Equal(t, EventAction("keepalive"), EventActionKeepalive)
+	assert.Equal(t, EventAction("market_fetch"), EventActionMarketFetch)
+	assert.Equal(t, EventAction("egress_probe"), EventActionEgressProbe)
 }
 
 func TestTaskExecuteEventJSONHasNoImmediateFlag(t *testing.T) {
@@ -57,7 +58,7 @@ func TestCollectParams_ShouldMarshal(t *testing.T) {
 
 func TestCloudFunctionEvent_ServiceDeployment_ShouldMarshal(t *testing.T) {
 	event := CloudFunctionEvent{
-		Action: EventActionKeepalive,
+		Action: EventActionMarketFetch,
 		ServiceDeployments: map[string]ServiceDeployment{
 			"collector": {ServiceName: "collector", Host: "127.0.0.1", Port: 8080, Status: "active"},
 		},

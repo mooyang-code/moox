@@ -1,146 +1,86 @@
 # moox-collector
 
-独立采集控制面与 SCF 运行时模块。
+MooX 的行情采集控制面和短时 SCF 运行时。Collector 负责规则、稳定任务实例、批次、
+重试和数据新鲜度；SCF 只执行一批行情请求，不常驻等待任务。
 
-当前实现以 Binance 标的和 K 线采集为主。目标架构将引入 `stock_cn`、`stock_us`、
-`crypto` Market Module，并在模块内部完成多 Provider 路由、质量裁决和完整性补洞。
-Binance/OKX 写入共享 crypto Dataset，以 scalar `series_tag` 区分交易场所，不按 venue
-复制 Dataset 或 Market Module。目标设计见
-[内置市场行情采集架构](../../docs/内置市场行情采集架构.md)，在对应代码落地前，
-本文其余部分仍以当前实现为准。
-
-## 职责边界
+## 职责
 
 | 组件 | 职责 |
-|------|------|
-| `moox-collector` | 采集规则、任务实例、任务规划、状态上报（CollectMgr RPC） |
-| `moox-collector-scf` | 腾讯云 SCF 入口，执行 CloudNode 下发的采集 JobItem |
-| `modules/cloudnode` | 云账户、代码包、异步 JobItem 队列和 SCF 执行状态 |
-| `modules/admin` | 网关转发 `/api/admin/collectmgr/*`，不承载采集业务表 |
+| --- | --- |
+| `moox-collector` | Rule、TaskInstance、BatchInvocation、RetryItem、Timer 与 Completion Consumer |
+| `moox-collector-scf` | 接收单个 `market_fetch` 事件，抓取、批量写入 Storage、发布完成事件 |
+| `modules/cloudnode` | 云账户、代码包、函数节点与腾讯云 `InvokeFunction(Event)` |
+| `modules/storage` | 行情数据和最新时间水位真值 |
+| `modules/monitor` | Dataset freshness、部署状态和中文异常诊断 |
 
-## 目录结构
+短时主链：
 
 ```text
-cmd/
-  server/                 独立采集管理服务
-  cli/                    模块 CLI（init）
-  scf/                    SCF 运行时
-config/                   moox-collector 服务配置
-configs/                  SCF 运行时本地默认配置
-schema/                   collector SQLite schema
-internal/
-  bootstrap/              独立服务启动、配置、数据库和依赖发现
-  app/runtime/            SCF runtime 配置、后台服务鉴权和 URL helper
-  serverless/bootstrap/   SCF runtime 启动装配与定时器注册
-  domain/                 采集业务领域模型
-  store/                  Collector SQLite 持久化
-  rpc/                    CollectMgr RPC 实现
-  jobs/                   JobItem job_type 与任务 payload 定义
-  executor/               采集任务即时执行编排
-  planner/                规则 + dataset subjects → 任务实例
-  taskrunner/             JetStream JobItem delivery 到采集任务的执行适配
-  serverless/             SCF runtime 事件入口
-  sources/                采集器注册、交易所客户端与执行
-  planner/storagesource/  从 moox-storage metadata tRPC 加载规划输入
-  taskpublisher/          调用 moox-cloudnode 提交 JobItem
-  reporter/               任务状态与心跳上报
-  model/                  SCF 运行时事件、心跳和采集结果模型
-  httpclient/             Collector 内部 HTTP 客户端与 DNS 优选
+TaskRule -> Collector Scheduler -> BatchInvocation(planned)
+         -> CloudNode InvokeFunction(Event) -> SCF <= 10s
+         -> Storage Primary batch upsert -> EventBus Completion
+         -> Collector Completion Consumer -> TaskInstance / RetryItem
 ```
+
+SCF 不启动 JetStream 任务消费者、Keepalive 或后台 reporter。未被调用的备用函数没有心跳是
+正常状态；Monitor 通过 Storage freshness 和 Completion 快照判断采集是否正常。
+
+## 规则
+
+Symbol Rule 将手动配置的 Binance 标的写入 RECORD Dataset。K 线 Rule 从关联 Symbol Dataset
+读取 active subjects，写入 TimeSeries Dataset。实时 K 线批次每项只请求最近 3 根并过滤未收盘
+数据；长缺口由独立 CatchupBatch 分页恢复。
+
+每个实时 BatchInvocation 最多 10 项。函数配置固定为 64MB、10 秒，默认并发为 5；临时错误
+由 Collector 以 5 秒、30 秒、2 分钟重试，而不是在函数内部退避。
+
+规则、运行态字段与接口说明见 [采集任务管理](../../docs/采集任务管理.md)。
 
 ## 构建
 
 ```bash
-make build              # moox-collector
+make build
 make build-linux
-make build-scf          # SCF 运行时
-make package-scf        # 打包 SCF 部署 zip
+make build-scf
+make package-scf
 
-# 或仓库根目录
+# 仓库根目录
 ./scripts/build.sh collector
 ./scripts/build.sh collector-scf
 ./scripts/build-collector-scf-package.sh
 ```
 
-SCF 打包会通过腾讯云 API 查询固定的 `moox/moox-application` 资源，并将实时返回的 Topic ID 写入包内 `trpc_go.yaml`，不接受写死的 Topic ID。资源不存在或未启用索引时构建会报错，并提示先使用 MooX Skill 自动建立或修复资源。
+SCF 包通过腾讯云 API 查询 `moox/moox-application` 资源并写入真实 Topic ID；没有资源或索引时
+构建失败，不能使用写死 ID。
 
-## 端口与网关
+## 运行与配置
 
-- CollectMgr HTTP：`:11402`（`config/trpc_go.yaml`）
-- 管理台路径：`/api/admin/collectmgr/{Method}`（admin 网关 JWT）
-- CloudNode JobItem 提交：`/api/service/cloudnode/SubmitJobItems`（Collector 控制面，经 admin 网关 HMAC 鉴权）
-- CloudNode JobItem 运行时：直连 JetStream Job Execution Queue，并通过
-  `/api/service/cloudnode/ReportJobItemStatus` 上报终态
-- 采集任务实例状态：`/api/service/collectmgr/ReportTaskStatus`（HMAC，经网关）
+- CollectMgr HTTP：`:11402`。
+- 管理台 Rule API：`/api/admin/collectmgr/{Method}`。
+- Collector 调 CloudNode：`/api/service/cloudnode/GetNodeList`、`InvokeFunction`。
+- EventBus：`moox.market.fetch.batch.completed.v1.*`，Collector 和 Monitor 使用独立 durable。
+- Collector 数据库默认：`./data/moox_collector.db`。
 
-## 部署关系
+关键环境变量：
 
-典型链路：
+- `MOOX_COLLECTOR_DB_PATH`：Collector SQLite 路径。
+- `MOOX_COLLECTOR_ADMIN_GATEWAY_URL`：通过 SysDeploy 发现依赖。
+- `MOOX_COLLECTOR_STORAGE_METADATA_TARGET` / `MOOX_COLLECTOR_STORAGE_ACCESS_TARGET`：Storage Gateway 覆盖。
+- `MOOX_GATEWAY_NODE_ID` / `MOOX_GATEWAY_SERVICE_KEY_ID` / `MOOX_GATEWAY_SERVICE_SECRET_KEY`：服务网关签名。
+- `MOOX_FETCH_MAX_INFLIGHT_REQUESTS`：SCF 内 HTTP 并发，范围 1 到 64。
+- `MOOX_FETCH_REQUEST_TIMEOUT_MS`：单次行情 HTTP 超时，默认 2000ms。
 
-```text
-admin 网关
-  → moox-collector（规划任务）
-  → moox-admin `/api/service/cloudnode/SubmitJobItems`（HMAC 鉴权）
-  → moox-cloudnode（提前提交带 execute_at 的 JobItem）
-  → moox-collector-scf（常驻 bind space_id + job_type durable，竞争消费）
-  → moox-storage Access（写入 K 线等）
-  → 回报 cloudnode ReportJobItemStatus + collectmgr ReportTaskStatus
+短时函数由 CloudNode metadata 和环境变量共同回读；`custom.toml` 只提供初始化发布种子，不是
+第二份运行时真值。
+
+## 验证
+
+```bash
+cd modules/collector
+go test -race -count=1 ./internal/marketfetch ./internal/store ./internal/bootstrap ./internal/rpc ./test
 ```
 
-`moox-collector` 通常与 `moox-cloudnode` 同机或同发布包部署。协议定义见 `modules/collector/proto/`。
-
-本地直接运行时数据文件默认：`./data/moox_collector.db`（以 `config/app.yaml` 为准）。
-通过 `scripts/deploy-moox.sh` 发布时，配置会被改写到部署目录的 `../data/collector/moox_collector.db`。
-
-环境变量：
-
-- `MOOX_COLLECTOR_DB_PATH` — 覆盖 Collector SQLite 路径
-- `MOOX_COLLECTOR_ADMIN_GATEWAY_URL` — 配置后从 Admin SysDeploy active 部署记录解析 CloudNode/Storage 依赖
-- `MOOX_COLLECTOR_STORAGE_METADATA_TARGET` / `MOOX_COLLECTOR_STORAGE_ACCESS_TARGET` — 覆盖 Node Service Gateway tRPC target
-- `MOOX_GATEWAY_NODE_ID` / `MOOX_GATEWAY_SERVICE_KEY_ID` / `MOOX_GATEWAY_SERVICE_SECRET_KEY` — Collector 调用 `/api/service/*` 时使用的 Gateway 节点签名身份
-- `MOOX_GATEWAY_CA_FILE` — 宿主机进程使用的 Gateway CA 文件；SCF 使用 `MOOX_GATEWAY_CA_PEM_B64`
-
-## SCF runtime 配置
-
-`configs/config.yaml` 是 `moox-collector-scf` 打包进代码包的默认配置。CloudNode
-keepalive 会下发真实的 `service_gateway_target`，完成首次通信初始化；keepalive 不
-拉取或执行任务。本地默认值指向 Node Service Gateway，仅用于开发调试。
-
-目标市场架构把 SCF 定位为无状态、有界、可重试的执行器。所有 Market Module 复用
-同一代码包，但按 Space 分别部署 `stock_cn`、`stock_us`、`crypto` 函数，并以
-`MOOX_SPACE_ID` 固定执行范围。Provider 路由、全局限频和缺口规划留在
-`moox-collector` 控制面；SCF 达到时间、页数或行数预算时返回
-`continuation_cursor`，由控制面创建后续 JobItem。
-
-每个 SCF 进程只有一个 NATS 连接和一个常驻 taskrunner，内部绑定 registry 声明的多个
-JobType。`execute_at` 缺失或已到期时立即执行；未来时间通过 JetStream 延迟重投。
-控制面 timer 在每分钟第 20 秒调用 `ScheduleTasks`。`schedule.interval` 表示 Rule 生成
-任务的周期，`collector.intervals` 表示 Kline 数据频率；控制面只在 Rule 到期时读取
-Dataset，并把 `execute_at` 设置为下一个 UTC 对齐周期边界。增加 SCF 实例时，新实例使用相同 durable 自动
-参与竞争消费；SCF 执行完全由 JetStream delivery 驱动。系统允许少量重复执行，
-不承诺任务级去重。查询接口和 `moox-cli init` 不在 SCF 中执行。
-
-Dataset 契约固定为：Symbol Rule 写入 RECORD Dataset；Kline Rule 从该 Symbol RECORD
-Dataset 的 active subjects 展开任务，并写入 TIME_SERIES Dataset。Binance 配置不再静态
-绑定任何 Dataset，真实 source/target 只来自 Rule。
-
-SCF 包中的 CLS writer 使用 `info` 级别。每次 JobItem delivery 都记录
-`collector_job_received`、校验/延期/开始、TaskInstance 与 CloudNode 上报、
-`collector_job_done` 和实际 ACK/NAK/TERM 结果。日志使用稳定的 `key=value` 字段，
-依靠 `job_item_id + delivery_count` 关联重投，不输出完整任务参数或认证信息。
-Binance HTTP 客户端使用系统信任根和域名 SNI 正常验证 TLS 证书，不配置私有客户端证书，
-也不允许 `InsecureSkipVerify`。成功日志只记录 domain、HTTP status 和耗时，不记录完整
-URL、query 或凭据。
-
-关键字段：
-
-- `system.storage_rpc.gateway_target` — Node Service Gateway 原生 tRPC 地址。
-- `system.service_auth` — SCF 调 `/api/service/*` 所需 HMAC 签名配置。
-- `sources.market` — 运行时加载的数据源采集器配置，例如 Binance。
-- `MOOX_SPACE_ID` — 目标架构中固定该 SCF 函数负责的内置 Space。
-
-## 相关文档
-
-- [docs/采集任务管理.md](../../docs/采集任务管理.md)
-- [docs/内置市场行情采集架构.md](../../docs/内置市场行情采集架构.md)
-- [docs/云节点管理.md](../../docs/云节点管理.md)
+真实验收先运行 `moox-cli collector function probe-egress`，随后用 10 个 Symbol 验证真实
+Storage 数据。需要保留的定位字段是 `batch_id`、CloudNode `request_id`、Completion 状态、
+RetryItem 状态和 Storage watermark；旧 `cloud_job_item_id`、JobItem 终态和常驻 SCF runner
+不是短时路径的验收条件。

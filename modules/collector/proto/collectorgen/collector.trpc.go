@@ -31,14 +31,10 @@ type CollectMgrService interface {
 	DisableTaskRule(ctx context.Context, req *DisableTaskRuleReq) (*DisableTaskRuleRsp, error)
 	// GetTaskInstanceList ----- 任务实例 -----
 	GetTaskInstanceList(ctx context.Context, req *GetTaskInstanceListReq) (*GetTaskInstanceListRsp, error)
-
-	ReportTaskStatus(ctx context.Context, req *ReportInstanceStatusReq) (*ReportInstanceStatusRsp, error)
 	// GetDataTypeConfigs ----- 数据类型配置 -----
 	GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq) (*GetDataTypeConfigsRsp, error)
 
 	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq) (*GetDataTypeConfigWithFieldsRsp, error)
-	// ScheduleTasks ----- 任务规划器 -----
-	ScheduleTasks(ctx context.Context, req *ScheduleTasksReq) (*ScheduleTasksRsp, error)
 }
 
 func CollectMgrService_GetTaskRuleList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -149,24 +145,6 @@ func CollectMgrService_GetTaskInstanceList_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func CollectMgrService_ReportTaskStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReportInstanceStatusReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).ReportTaskStatus(ctx, reqbody.(*ReportInstanceStatusReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func CollectMgrService_GetDataTypeConfigs_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetDataTypeConfigsReq{}
 	filters, err := f(req)
@@ -193,24 +171,6 @@ func CollectMgrService_GetDataTypeConfigWithFields_Handler(svr interface{}, ctx 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CollectMgrService).GetDataTypeConfigWithFields(ctx, reqbody.(*GetDataTypeConfigWithFieldsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CollectMgrService_ScheduleTasks_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ScheduleTasksReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).ScheduleTasks(ctx, reqbody.(*ScheduleTasksReq))
 	}
 
 	var rsp interface{}
@@ -251,20 +211,12 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_GetTaskInstanceList_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/ReportTaskStatus",
-			Func: CollectMgrService_ReportTaskStatus_Handler,
-		},
-		{
 			Name: "/trpc.moox.collector.CollectMgr/GetDataTypeConfigs",
 			Func: CollectMgrService_GetDataTypeConfigs_Handler,
 		},
 		{
 			Name: "/trpc.moox.collector.CollectMgr/GetDataTypeConfigWithFields",
 			Func: CollectMgrService_GetDataTypeConfigWithFields_Handler,
-		},
-		{
-			Name: "/trpc.moox.collector.CollectMgr/ScheduleTasks",
-			Func: CollectMgrService_ScheduleTasks_Handler,
 		},
 	},
 }
@@ -301,9 +253,6 @@ func (s *UnimplementedCollectMgr) DisableTaskRule(ctx context.Context, req *Disa
 func (s *UnimplementedCollectMgr) GetTaskInstanceList(ctx context.Context, req *GetTaskInstanceListReq) (*GetTaskInstanceListRsp, error) {
 	return nil, errors.New("rpc GetTaskInstanceList of service CollectMgr is not implemented")
 }
-func (s *UnimplementedCollectMgr) ReportTaskStatus(ctx context.Context, req *ReportInstanceStatusReq) (*ReportInstanceStatusRsp, error) {
-	return nil, errors.New("rpc ReportTaskStatus of service CollectMgr is not implemented")
-}
 
 // GetDataTypeConfigs ----- 数据类型配置 -----
 func (s *UnimplementedCollectMgr) GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq) (*GetDataTypeConfigsRsp, error) {
@@ -311,11 +260,6 @@ func (s *UnimplementedCollectMgr) GetDataTypeConfigs(ctx context.Context, req *G
 }
 func (s *UnimplementedCollectMgr) GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq) (*GetDataTypeConfigWithFieldsRsp, error) {
 	return nil, errors.New("rpc GetDataTypeConfigWithFields of service CollectMgr is not implemented")
-}
-
-// ScheduleTasks ----- 任务规划器 -----
-func (s *UnimplementedCollectMgr) ScheduleTasks(ctx context.Context, req *ScheduleTasksReq) (*ScheduleTasksRsp, error) {
-	return nil, errors.New("rpc ScheduleTasks of service CollectMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -338,14 +282,10 @@ type CollectMgrClientProxy interface {
 	DisableTaskRule(ctx context.Context, req *DisableTaskRuleReq, opts ...client.Option) (rsp *DisableTaskRuleRsp, err error)
 	// GetTaskInstanceList ----- 任务实例 -----
 	GetTaskInstanceList(ctx context.Context, req *GetTaskInstanceListReq, opts ...client.Option) (rsp *GetTaskInstanceListRsp, err error)
-
-	ReportTaskStatus(ctx context.Context, req *ReportInstanceStatusReq, opts ...client.Option) (rsp *ReportInstanceStatusRsp, err error)
 	// GetDataTypeConfigs ----- 数据类型配置 -----
 	GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq, opts ...client.Option) (rsp *GetDataTypeConfigsRsp, err error)
 
 	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq, opts ...client.Option) (rsp *GetDataTypeConfigWithFieldsRsp, err error)
-	// ScheduleTasks ----- 任务规划器 -----
-	ScheduleTasks(ctx context.Context, req *ScheduleTasksReq, opts ...client.Option) (rsp *ScheduleTasksRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -477,26 +417,6 @@ func (c *CollectMgrClientProxyImpl) GetTaskInstanceList(ctx context.Context, req
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) ReportTaskStatus(ctx context.Context, req *ReportInstanceStatusReq, opts ...client.Option) (*ReportInstanceStatusRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ReportTaskStatus")
-	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("collector")
-	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("ReportTaskStatus")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReportInstanceStatusRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *CollectMgrClientProxyImpl) GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq, opts ...client.Option) (*GetDataTypeConfigsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -531,26 +451,6 @@ func (c *CollectMgrClientProxyImpl) GetDataTypeConfigWithFields(ctx context.Cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetDataTypeConfigWithFieldsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CollectMgrClientProxyImpl) ScheduleTasks(ctx context.Context, req *ScheduleTasksReq, opts ...client.Option) (*ScheduleTasksRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ScheduleTasks")
-	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("collector")
-	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("ScheduleTasks")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ScheduleTasksRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

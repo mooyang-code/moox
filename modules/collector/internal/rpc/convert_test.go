@@ -17,7 +17,7 @@ func TestToPBRuleAndFromPBRule_ShouldRoundTripCoreFields(t *testing.T) {
 	params, err := structpb.NewStruct(map[string]any{"source": map[string]any{"kind": "none"}})
 	require.NoError(t, err)
 	in := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Exchange: "binance",
+		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 		Creator: "tester", CreateTime: time.Unix(1, 0).UTC(), ModifyTime: time.Unix(2, 0).UTC(),
 	}
@@ -27,12 +27,24 @@ func TestToPBRuleAndFromPBRule_ShouldRoundTripCoreFields(t *testing.T) {
 	assert.Equal(t, enabled, pbRule.GetEnabled())
 
 	out := fromPBRule(&pb.TaskRule{
-		SpaceId: "crypto", RuleId: "rule-2", DataType: "kline", Exchange: "binance",
+		SpaceId: "crypto", RuleId: "rule-2", DataType: "kline", Provider: "binance", MarketType: "spot",
 		CollectParams: params, Enabled: &enabled,
 	})
 	assert.Equal(t, "crypto", out.SpaceID)
 	assert.Equal(t, "rule-2", out.RuleID)
-	assert.Equal(t, "binance", out.Exchange)
+	assert.Equal(t, "binance", out.Provider)
+}
+
+func TestTaskRuleProtoJSONRejectsLegacyRuleFields(t *testing.T) {
+	for _, raw := range []string{
+		`{"spaceId":"crypto","exchange":"binance"}`,
+		`{"spaceId":"crypto","market":"spot"}`,
+	} {
+		var rule pb.TaskRule
+		err := protojson.Unmarshal([]byte(raw), &rule)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown field")
+	}
 }
 
 func TestPageHelpers_ShouldNormalizeBounds(t *testing.T) {
@@ -53,8 +65,8 @@ func TestPageHelpers_ShouldNormalizeBounds(t *testing.T) {
 func TestToPBInstance_ShouldMapStatus(t *testing.T) {
 	now := time.Now().UTC()
 	instance := toPBInstance(domain.TaskInstance{
-		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1", Exchange: "binance",
-		Market: "spot", DataType: "symbol", LastExecStatus: domain.InstanceStatusSuccess,
+		SpaceID: "crypto", TaskID: "task-1", RuleID: "rule-1", Provider: "binance",
+		MarketType: "spot", DataType: "symbol", LastExecStatus: domain.InstanceStatusSuccess,
 		CreateTime: now, ModifyTime: now,
 	})
 	assert.Equal(t, "task-1", instance.GetTaskId())

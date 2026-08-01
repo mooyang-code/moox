@@ -8,7 +8,8 @@ type TaskRule struct {
 	SpaceID       string    `gorm:"column:c_space_id"`
 	RuleID        string    `gorm:"column:c_rule_id"`
 	DataType      string    `gorm:"column:c_data_type"`
-	Exchange      string    `gorm:"column:c_exchange"`
+	Provider      string    `gorm:"column:c_provider"`
+	MarketType    string    `gorm:"column:c_market_type"`
 	CollectParams string    `gorm:"column:c_collect_params"`
 	Enabled       bool      `gorm:"column:c_enabled"`
 	Creator       string    `gorm:"column:c_creator"`

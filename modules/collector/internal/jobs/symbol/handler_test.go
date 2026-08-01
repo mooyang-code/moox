@@ -19,7 +19,7 @@ func TestNewJobDefinition_ShouldExposeSymbolMetadata(t *testing.T) {
 
 func TestBuildTaskSpecs_ValidParams_ShouldReturnSingleTask(t *testing.T) {
 	params := &domain.CollectParams{}
-	params.Normalize("binance", "symbol")
+	params.Normalize("binance", "spot", "symbol")
 	params.Source.Kind = "none"
 	params.Collector.Market = "spot"
 	params.Target.DatasetID = "ds-symbol"
@@ -34,7 +34,7 @@ func TestBuildTaskSpecs_ValidParams_ShouldReturnSingleTask(t *testing.T) {
 func TestNewJobDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing.T) {
 	def := NewJobDefinition()
 	params := &domain.CollectParams{}
-	params.Normalize("binance", "symbol")
+	params.Normalize("binance", "spot", "symbol")
 	params.Source.Kind = "dataset_subjects"
 
 	_, err := def.Planner(context.Background(), &domain.TaskRule{}, params, nil)

@@ -61,6 +61,38 @@ func TestSubjectConsumerFilterSeparatesRoutes(t *testing.T) {
 	}
 }
 
+func TestSpaceConsumerFilterOnlyIncludesOneSpace(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := spaceConsumerFilter(registry, SpaceConsumerConfig{
+		ConsumerConfig: ConsumerConfig{Event: MarketFetchBatchCompleted},
+		SpaceID:        "crypto",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := registry.SpacePattern(MarketFetchBatchCompleted, "crypto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want || !strings.HasSuffix(got, ".>") {
+		t.Fatalf("filter = %q, want %q", got, want)
+	}
+}
+
+func TestSpaceConsumerFilterRejectsEmptySpaceID(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = spaceConsumerFilter(registry, SpaceConsumerConfig{ConsumerConfig: ConsumerConfig{Event: MarketFetchBatchCompleted}})
+	if err == nil || !strings.Contains(err.Error(), "space_id") {
+		t.Fatalf("error = %v, want space_id validation", err)
+	}
+}
+
 func TestSubjectConsumerFilterRejectsEmptySpaceID(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {

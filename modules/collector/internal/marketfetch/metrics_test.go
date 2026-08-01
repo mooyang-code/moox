@@ -1,0 +1,73 @@
+package marketfetch
+
+import (
+	"testing"
+
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+func TestMetricsExposeCompactLowCardinalitySet(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := NewMetrics(registry)
+	metrics.Observe("crypto", &marketfetchpb.MarketFetchBatchCompleted{
+		DatasetId:   "binance_spot_kline_1m",
+		Frequency:   "1m",
+		Status:      "succeeded",
+		DurationMs:  250,
+		CompletedAt: timestamppb.Now(),
+	})
+	metrics.SetRetryPending("crypto", "binance_spot_kline_1m", "1m", 0)
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	got := make(map[string]struct{}, len(families))
+	for _, family := range families {
+		got[family.GetName()] = struct{}{}
+	}
+	want := map[string]struct{}{
+		"moox_collector_market_fetch_batches_total":                  {},
+		"moox_collector_market_fetch_batch_duration_seconds":         {},
+		"moox_collector_market_fetch_retry_pending":                  {},
+		"moox_collector_market_fetch_last_success_timestamp_seconds": {},
+	}
+	for name := range want {
+		if _, ok := got[name]; !ok {
+			t.Fatalf("metric %q is missing; got %v", name, got)
+		}
+	}
+	if _, ok := got["moox_collector_market_fetch_items_total"]; ok {
+		t.Fatal("per-item counter should not be registered")
+	}
+}
+
+func TestMetricsUseFixedOutcomeAndLabelContracts(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := NewMetrics(registry)
+	for _, status := range []string{"succeeded", "partial_failed", "failed", "timed_out"} {
+		metrics.Observe("crypto", &marketfetchpb.MarketFetchBatchCompleted{DatasetId: "bars", Frequency: "1m", Status: status})
+	}
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		switch family.GetName() {
+		case "moox_collector_market_fetch_batches_total":
+			if got := len(family.GetMetric()); got != 4 {
+				t.Fatalf("batch outcome series=%d, want 4", got)
+			}
+			for _, metric := range family.GetMetric() {
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == "outcome" {
+						switch label.GetValue() {
+						case "success", "partial_failed", "failed", "timeout":
+						default:
+							t.Fatalf("unexpected outcome label %q", label.GetValue())
+						}
+					}
+				}
+			}
+		}
+	}
+}

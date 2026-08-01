@@ -10,7 +10,7 @@ import (
 
 func TestKlinePlannerUsesSourceDatasetSubjectsAndTargetDatasetID(t *testing.T) {
 	params := &domain.CollectParams{}
-	params.Normalize("binance", "kline")
+	params.Normalize("binance", "spot", "kline")
 	params.Source.Kind = "dataset_subjects"
 	params.Source.DatasetID = "symbols"
 	params.Target.DatasetID = "kline_1m"
@@ -34,7 +34,7 @@ func TestKlinePlannerUsesSourceDatasetSubjectsAndTargetDatasetID(t *testing.T) {
 
 func TestKlinePlannerSkipsSubjectWithoutExternalSymbol(t *testing.T) {
 	params := &domain.CollectParams{}
-	params.Normalize("binance", "kline")
+	params.Normalize("binance", "spot", "kline")
 	params.Target.DatasetID = "kline_1m"
 	params.Collector.Intervals = []string{"1m"}
 
