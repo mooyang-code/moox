@@ -135,6 +135,7 @@ var (
 		0: "NODE_BATCH_OPERATION_UNSPECIFIED",
 		1: "NODE_BATCH_OPERATION_CREATE_NODES",
 		2: "NODE_BATCH_OPERATION_DEPLOY_NODES",
+		3: "NODE_BATCH_OPERATION_DELETE_NODES",
 	}
 	nodeBatchStatusNames = map[int]string{
 		0: "NODE_BATCH_STATUS_UNSPECIFIED",
@@ -366,6 +367,15 @@ func (c *Client) SubmitDeployNodes(ctx context.Context, deployments []NodeDeploy
 		return nil, err
 	}
 	return parseSubmitNodeBatchResponse(raw, "SubmitDeployNodes")
+}
+
+// SubmitDeleteNodes submits durable remote SCF deletion tasks for catalog nodes.
+func (c *Client) SubmitDeleteNodes(ctx context.Context, nodeIDs []string) (*SubmitNodeBatchResponse, error) {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/SubmitDeleteNodes", map[string]any{"node_ids": nodeIDs})
+	if err != nil {
+		return nil, err
+	}
+	return parseSubmitNodeBatchResponse(raw, "SubmitDeleteNodes")
 }
 
 func (c *Client) GetNodeBatchChange(ctx context.Context, jobID string) (*NodeBatchChangeResponse, error) {

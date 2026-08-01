@@ -59,7 +59,7 @@ assert console[0]["level"] == "info", console
 services = document["server"]["service"]
 sentinel = [service for service in services if service["name"] == "trpc.moox.collector.scf_observability.timer"]
 assert len(sentinel) == 1, sentinel
-assert sentinel[0]["timeout"] == 20000, sentinel
+assert sentinel[0]["timeout"] == 30000, sentinel
 assert "*/30" in sentinel[0]["network"], sentinel
 PY
 

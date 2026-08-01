@@ -29,6 +29,8 @@ type CloudNodeMgrService interface {
 
 	SubmitDeployNodes(ctx context.Context, req *BatchDeployNodesReq) (*SubmitNodeBatchRsp, error)
 
+	SubmitDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*SubmitNodeBatchRsp, error)
+
 	GetNodeBatchChange(ctx context.Context, req *GetNodeBatchChangeReq) (*GetNodeBatchChangeRsp, error)
 
 	BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*BatchDeleteNodesRsp, error)
@@ -148,6 +150,24 @@ func CloudNodeMgrService_SubmitDeployNodes_Handler(svr interface{}, ctx context.
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CloudNodeMgrService).SubmitDeployNodes(ctx, reqbody.(*BatchDeployNodesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CloudNodeMgrService_SubmitDeleteNodes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BatchDeleteNodesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeMgrService).SubmitDeleteNodes(ctx, reqbody.(*BatchDeleteNodesReq))
 	}
 
 	var rsp interface{}
@@ -526,6 +546,10 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CloudNodeMgrService_SubmitDeployNodes_Handler,
 		},
 		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes",
+			Func: CloudNodeMgrService_SubmitDeleteNodes_Handler,
+		},
+		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeBatchChange",
 			Func: CloudNodeMgrService_GetNodeBatchChange_Handler,
 		},
@@ -630,6 +654,9 @@ func (s *UnimplementedCloudNodeMgr) SubmitCreateNodes(ctx context.Context, req *
 func (s *UnimplementedCloudNodeMgr) SubmitDeployNodes(ctx context.Context, req *BatchDeployNodesReq) (*SubmitNodeBatchRsp, error) {
 	return nil, errors.New("rpc SubmitDeployNodes of service CloudNodeMgr is not implemented")
 }
+func (s *UnimplementedCloudNodeMgr) SubmitDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*SubmitNodeBatchRsp, error) {
+	return nil, errors.New("rpc SubmitDeleteNodes of service CloudNodeMgr is not implemented")
+}
 func (s *UnimplementedCloudNodeMgr) GetNodeBatchChange(ctx context.Context, req *GetNodeBatchChangeReq) (*GetNodeBatchChangeRsp, error) {
 	return nil, errors.New("rpc GetNodeBatchChange of service CloudNodeMgr is not implemented")
 }
@@ -705,6 +732,8 @@ type CloudNodeMgrClientProxy interface {
 	SubmitCreateNodes(ctx context.Context, req *BatchCreateNodesReq, opts ...client.Option) (rsp *SubmitNodeBatchRsp, err error)
 
 	SubmitDeployNodes(ctx context.Context, req *BatchDeployNodesReq, opts ...client.Option) (rsp *SubmitNodeBatchRsp, err error)
+
+	SubmitDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq, opts ...client.Option) (rsp *SubmitNodeBatchRsp, err error)
 
 	GetNodeBatchChange(ctx context.Context, req *GetNodeBatchChangeReq, opts ...client.Option) (rsp *GetNodeBatchChangeRsp, err error)
 
@@ -843,6 +872,26 @@ func (c *CloudNodeMgrClientProxyImpl) SubmitDeployNodes(ctx context.Context, req
 	msg.WithCalleeServer("cloudnode")
 	msg.WithCalleeService("CloudNodeMgr")
 	msg.WithCalleeMethod("SubmitDeployNodes")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SubmitNodeBatchRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) SubmitDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq, opts ...client.Option) (*SubmitNodeBatchRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/SubmitDeleteNodes")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("SubmitDeleteNodes")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)

@@ -210,6 +210,10 @@ func (c *heartbeatSCFClient) CreateFunction(context.Context, tencentscf.CreateFu
 	return &tencentscf.CreateFunctionResponse{}, nil
 }
 
+func (c *heartbeatSCFClient) DeleteFunction(context.Context, tencentscf.FunctionRef) error {
+	return nil
+}
+
 func (c *heartbeatSCFClient) UpdateFunctionCode(context.Context, tencentscf.UpdateFunctionCodeRequest) (*tencentscf.UpdateFunctionCodeResponse, error) {
 	return &tencentscf.UpdateFunctionCodeResponse{}, nil
 }

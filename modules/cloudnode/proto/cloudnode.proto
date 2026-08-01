@@ -82,6 +82,7 @@ enum NodeBatchOperation {
   NODE_BATCH_OPERATION_UNSPECIFIED = 0;
   NODE_BATCH_OPERATION_CREATE_NODES = 1;
   NODE_BATCH_OPERATION_DEPLOY_NODES = 2;
+  NODE_BATCH_OPERATION_DELETE_NODES = 3;
 }
 
 enum NodeBatchStatus {
@@ -248,6 +249,10 @@ message BatchDeleteNodesReq {
 message BatchDeleteNodesRsp {
   common.RetInfo ret_info = 1;
   int32 processed_count = 2;
+}
+
+message NodeDeleteItem {
+  string node_id = 1;
 }
 
 message NodeDeployItem {
@@ -618,6 +623,7 @@ service CloudNodeMgr {
 
   rpc SubmitCreateNodes(BatchCreateNodesReq) returns (SubmitNodeBatchRsp);
   rpc SubmitDeployNodes(BatchDeployNodesReq) returns (SubmitNodeBatchRsp);
+  rpc SubmitDeleteNodes(BatchDeleteNodesReq) returns (SubmitNodeBatchRsp);
   rpc GetNodeBatchChange(GetNodeBatchChangeReq) returns (GetNodeBatchChangeRsp);
   rpc BatchDeleteNodes(BatchDeleteNodesReq) returns (BatchDeleteNodesRsp);
 

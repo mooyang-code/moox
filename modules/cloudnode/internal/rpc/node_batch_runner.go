@@ -194,6 +194,12 @@ func (s *Service) dispatchNodeBatchItem(
 			return "", fmt.Errorf("decode deploy node item: %w", err)
 		}
 		return s.executeDeployNodeItem(ctx, item.SpaceID, request)
+	case nodeBatchOperationDelete:
+		request := &pb.NodeDeleteItem{}
+		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
+			return "", fmt.Errorf("decode delete node item: %w", err)
+		}
+		return s.executeDeleteNodeItem(ctx, item.SpaceID, request)
 	default:
 		return "", fmt.Errorf("unsupported node batch operation %q", operation)
 	}

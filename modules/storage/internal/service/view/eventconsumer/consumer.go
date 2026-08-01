@@ -131,7 +131,7 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 	}
 	opts.Metrics.SetConsumerBound(true)
 	loopCtx, cancel := context.WithCancel(ctx)
-	dispatcher := newSubjectDispatcher(loopCtx, opts.MaxWorkers, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+	dispatcher := newSubjectDispatcher(loopCtx, opts.MaxWorkers, opts.MaxAckPending, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
 		if opts.BeforeProcess != nil {
 			if err := opts.BeforeProcess(ctx, delivery); err != nil {
 				return err

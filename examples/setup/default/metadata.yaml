@@ -25,6 +25,7 @@ spaces:
     scope: internal
     owner_module: monitor
     managed_by: moox-cli
+
 data_sources:
 - space_id: stock_cn
   data_source_id: quantclass_stock
@@ -70,6 +71,7 @@ data_sources:
   kind: internal
   timezone: UTC
   status: active
+
 datasets:
 - space_id: stock_cn
   dataset_id: stock_kline
@@ -125,6 +127,7 @@ datasets:
   attributes:
     source_directories: 财务预处理数据
     storage_model: wide_common_metrics
+
 - space_id: crypto
   dataset_id: spot_kline_1h
   data_source_id: crypto_market
@@ -149,6 +152,7 @@ datasets:
   status: disabled
   attributes:
     source_directories: 永续合约1小时数据-币对分类|OKX永续合约1小时数据-币对分类
+
 - space_id: moox_system
   dataset_id: host_resource_v1
   data_source_id: moox_host_agent
@@ -204,6 +208,7 @@ datasets:
   freqs:
   - 30s
   status: disabled
+
 field_groups:
 - space_id: stock_cn
   group_id: identity
@@ -406,6 +411,7 @@ fields:
   unit: percent
   sort_order: 120
   status: active
+
 - space_id: crypto
   group_id: identity
   field_id: symbol
@@ -477,6 +483,7 @@ fields:
   unit: percent
   sort_order: 10
   status: active
+
 - space_id: moox_system
   field_id: host_agent_id
   name: Host agent ID
@@ -702,6 +709,7 @@ fields:
   name: Message ID
   value_type: string
   status: active
+
 dataset_columns:
 - space_id: stock_cn
   dataset_id: stock_kline
@@ -919,6 +927,7 @@ dataset_columns:
   origin_id: raw_payload
   value_type: json
   status: active
+
 - space_id: crypto
   dataset_id: spot_kline_1h
   column_name: open
@@ -1040,6 +1049,7 @@ dataset_columns:
   origin_id: raw_payload
   value_type: json
   status: active
+
 - space_id: moox_system
   dataset_id: host_resource_v1
   column_name: agent_id
@@ -1383,12 +1393,14 @@ dataset_columns:
   value_type: string
   required: true
   status: active
+
 devices:
 - device_id: parquet-local
   name: market-parquet-archive
   engine: parquet
   endpoint: ../data/archive
   status: active
+  
 views:
 - space_id: stock_cn
   view_id: stock_kline_1d_view

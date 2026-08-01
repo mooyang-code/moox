@@ -40,15 +40,19 @@ type subjectDispatcher struct {
 	reporter   jetstream.ErrorReporter
 	hooks      subjectDispatcherMetricsHooks
 	ready      chan *subjectQueue
+	pending    chan struct{}
 	queues     map[string]*subjectQueue
 	mu         sync.Mutex
 	closed     bool
 	wg         sync.WaitGroup
 }
 
-func newSubjectDispatcher(parent context.Context, maxWorkers int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
+func newSubjectDispatcher(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
 	if maxWorkers < 1 {
 		maxWorkers = 1
+	}
+	if maxPending < 1 {
+		maxPending = maxWorkers
 	}
 	ctx, cancel := context.WithCancel(parent)
 	var metricsHooks subjectDispatcherMetricsHooks
@@ -58,7 +62,7 @@ func newSubjectDispatcher(parent context.Context, maxWorkers int, handler subjec
 	d := &subjectDispatcher{
 		ctx: ctx, cancel: cancel, maxWorkers: maxWorkers, handler: handler, reporter: reporter,
 		hooks: metricsHooks,
-		ready: make(chan *subjectQueue, maxWorkers), queues: make(map[string]*subjectQueue),
+		ready: make(chan *subjectQueue, maxWorkers), pending: make(chan struct{}, maxPending), queues: make(map[string]*subjectQueue),
 	}
 	d.wg.Add(maxWorkers)
 	for i := 0; i < maxWorkers; i++ {
@@ -71,9 +75,15 @@ func (d *subjectDispatcher) Dispatch(delivery *jetstream.Delivery) error {
 	if d == nil || delivery == nil {
 		return errors.New("storage view subject delivery is nil")
 	}
+	select {
+	case d.pending <- struct{}{}:
+	case <-d.ctx.Done():
+		return d.ctx.Err()
+	}
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
+		<-d.pending
 		return errors.New("storage view subject dispatcher is closed")
 	}
 	queue := d.queues[delivery.Subject]
@@ -131,6 +141,7 @@ func (d *subjectDispatcher) worker() {
 			if d.hooks.onFinish != nil {
 				d.hooks.onFinish(delivery)
 			}
+			<-d.pending
 			d.finish(queue)
 		case <-d.ctx.Done():
 			return

@@ -9,7 +9,7 @@ server:
       port: 8005
       network: "*/30 * * * * *?scheduler=scfObservability&startAtOnce=1"
       protocol: timer
-      timeout: 20000
+      timeout: 30000
 
 plugins:
   log:

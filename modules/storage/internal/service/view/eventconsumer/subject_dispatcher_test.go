@@ -25,7 +25,7 @@ func TestSubjectDispatcherDifferentSubjectsRunInParallel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	aStarted, bStarted, releaseA := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	d := newSubjectDispatcher(ctx, 2, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
+	d := newSubjectDispatcher(ctx, 2, 8, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
 		if delivery.Subject == "A" {
 			close(aStarted)
 			<-releaseA
@@ -60,7 +60,7 @@ func TestSubjectDispatcherPreservesSubjectOrder(t *testing.T) {
 	firstStarted, releaseFirst, secondDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var mu sync.Mutex
 	var order []string
-	d := newSubjectDispatcher(ctx, 4, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
+	d := newSubjectDispatcher(ctx, 4, 8, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
 		if delivery.RawMessageID == "first" {
 			close(firstStarted)
 			<-releaseFirst
@@ -103,11 +103,52 @@ func TestSubjectDispatcherPreservesSubjectOrder(t *testing.T) {
 	}
 }
 
+func TestSubjectDispatcherBackpressuresAtMaxPending(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	d := newSubjectDispatcher(ctx, 1, 1, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
+		if delivery.RawMessageID == "first" {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		return nil
+	}, nil)
+	defer d.Close()
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "same", RawMessageID: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first delivery did not start")
+	}
+	secondReturned := make(chan error, 1)
+	go func() {
+		secondReturned <- d.Dispatch(&jetstream.Delivery{Subject: "same", RawMessageID: "second"})
+	}()
+	select {
+	case err := <-secondReturned:
+		t.Fatalf("second dispatch bypassed max_pending: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseFirst)
+	select {
+	case err := <-secondReturned:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second dispatch did not resume after capacity was released")
+	}
+}
+
 func TestSubjectDispatcherRetryKeepsSubjectBlockedButOtherSubjectRuns(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	aFailed, retryA, aSecond, bStarted := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
-	d := newSubjectDispatcher(ctx, 2, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
+	d := newSubjectDispatcher(ctx, 2, 8, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
 		switch delivery.RawMessageID {
 		case "a1":
 			close(aFailed)
@@ -153,7 +194,7 @@ func TestSubjectDispatcherStartsHeartbeatWhenDeliveryIsQueuedAndStopsItOnClose(t
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	queuedHeartbeat := make(chan *deliveryHeartbeat, 2)
-	d := newSubjectDispatcher(ctx, 1, func(handlerCtx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+	d := newSubjectDispatcher(ctx, 1, 8, func(handlerCtx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
 		if delivery.RawMessageID == "first" {
 			close(firstStarted)
 			select {

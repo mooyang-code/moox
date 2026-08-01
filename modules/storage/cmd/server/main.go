@@ -526,8 +526,20 @@ func runDataNodeRole() error {
 	return s.Serve()
 }
 
+const storageEventBusReconnectBufferBytes = 32 * 1024 * 1024
+
 func storageEventBusConfig(urls []string, name string) (jetstream.Config, error) {
 	cfg := jetstream.ConfigFromEnv(urls, name)
+	reconnectBuffer := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES"))
+	if reconnectBuffer == "" {
+		cfg.ReconnectBufferBytes = storageEventBusReconnectBufferBytes
+	} else {
+		value, err := strconv.Atoi(reconnectBuffer)
+		if err != nil || value < 0 {
+			return jetstream.Config{}, fmt.Errorf("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES must be a non-negative integer")
+		}
+		cfg.ReconnectBufferBytes = value
+	}
 	path, err := storageEventBusCredentialFile()
 	if err != nil {
 		return jetstream.Config{}, err

@@ -59,6 +59,73 @@ func TestTLSURLsRequireHandshakeFirst(t *testing.T) {
 	}
 }
 
+func TestReconnectBufferFlushesPublishAfterServerRestart(t *testing.T) {
+	port := reserveTestPort(t)
+	storeDir := t.TempDir()
+	start := func() *natsserver.Server {
+		t.Helper()
+		srv, err := natsserver.NewServer(&natsserver.Options{
+			Host: "127.0.0.1", Port: port, JetStream: true, StoreDir: storeDir, NoLog: true, NoSigs: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		go srv.Start()
+		if !srv.ReadyForConnections(5 * time.Second) {
+			srv.Shutdown()
+			t.Fatal("nats server not ready")
+		}
+		return srv
+	}
+
+	srv := start()
+	client, err := Connect(context.Background(), Config{
+		URLs: []string{fmt.Sprintf("nats://127.0.0.1:%d", port)}, Name: "reconnect-buffer-test",
+		ReconnectBufferBytes: 1024, ReconnectWait: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	sub, err := client.nc.SubscribeSync("moox.test.reconnect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.nc.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.Shutdown()
+	srv.WaitForShutdown()
+	waitForNATSStatus(t, client.nc, nats.RECONNECTING)
+	if err := client.nc.Publish("moox.test.reconnect", []byte("buffered")); err != nil {
+		t.Fatalf("publish while reconnecting: %v", err)
+	}
+
+	srv = start()
+	defer srv.Shutdown()
+	waitForNATSStatus(t, client.nc, nats.CONNECTED)
+	msg, err := sub.NextMsg(3 * time.Second)
+	if err != nil {
+		t.Fatalf("receive buffered publish after reconnect: %v", err)
+	}
+	if string(msg.Data) != "buffered" {
+		t.Fatalf("message data = %q", msg.Data)
+	}
+}
+
+func waitForNATSStatus(t *testing.T, connection *nats.Conn, want nats.Status) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if connection.Status() == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("nats status = %s, want %s", connection.Status(), want)
+}
+
 func connectTestClient(t *testing.T, url string) *Client {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

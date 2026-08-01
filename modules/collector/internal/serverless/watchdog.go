@@ -19,12 +19,32 @@ import (
 const (
 	maxWatchdogChecks      = 8
 	maxWatchdogErrorRunes  = 256
-	defaultWatchdogTimeout = 20 * time.Second
+	defaultWatchdogTimeout = 24 * time.Second
 	defaultDirectCooldown  = 5 * time.Minute
 	directSendTimeout      = 5 * time.Second
 )
 
 type WatchdogCheck func(context.Context) CheckResult
+
+// ConfirmUnreachableCheck retries one transient connectivity failure before reporting it.
+func ConfirmUnreachableCheck(check WatchdogCheck, delay time.Duration) WatchdogCheck {
+	return func(ctx context.Context) CheckResult {
+		result := check(ctx)
+		if result.Success || result.ErrorCode != "unreachable" {
+			return result
+		}
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return result
+			case <-timer.C:
+			}
+		}
+		return check(ctx)
+	}
+}
 
 type CheckResult struct {
 	CheckID    string

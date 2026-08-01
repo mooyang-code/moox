@@ -95,7 +95,19 @@ type collectorDeployOptions struct {
 	Runtime          string
 }
 
+type collectorDeleteOptions struct {
+	ControlURL       string
+	AccessToken      string
+	ServiceAccessKey string
+	ServiceSecretKey string
+	SpaceID          string
+	Confirm          bool
+	DryRun           bool
+	Wait             bool
+}
+
 var collectorDeployFlags collectorDeployOptions
+var collectorDeleteFlags collectorDeleteOptions
 
 var collectorFunctionDeployCmd = &cobra.Command{
 	Use:   "deploy",
@@ -111,6 +123,25 @@ var collectorFunctionDeployCmd = &cobra.Command{
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(summary)
+	},
+}
+
+var collectorFunctionDeleteCmd = &cobra.Command{
+	Use:   "delete",
+	Short: "异步删除当前 space 中全部 SCF 云函数",
+	Long: "列出当前 space 的全部 scf-event 节点，并通过 CloudNode 提交可恢复查询的异步删除任务。\n" +
+		"必须显式指定 --confirm；使用 --dry-run 只列出目标而不提交删除。",
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		summary, err := deleteCollectorFunctions(cmd.Context(), collectorDeleteFlags)
+		if summary != nil {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			if encodeErr := enc.Encode(summary); encodeErr != nil && err == nil {
+				return encodeErr
+			}
+		}
+		return err
 	},
 }
 
@@ -204,6 +235,20 @@ type collectorDeploySummary struct {
 	TotalCount int    `json:"total_count"`
 }
 
+type collectorDeleteSummary struct {
+	SpaceID       string                            `json:"space_id"`
+	NodeType      string                            `json:"node_type"`
+	DryRun        bool                              `json:"dry_run"`
+	TotalCount    int                               `json:"total_count"`
+	NodeIDs       []string                          `json:"node_ids,omitempty"`
+	JobID         string                            `json:"job_id,omitempty"`
+	Operation     string                            `json:"operation,omitempty"`
+	Status        string                            `json:"status,omitempty"`
+	SuccessCount  int                               `json:"success_count,omitempty"`
+	FailedCount   int                               `json:"failed_count,omitempty"`
+	FailedResults []adminclient.NodeBatchItemResult `json:"failed_results,omitempty"`
+}
+
 type collectorFleetAPI interface {
 	ListCloudNodes(context.Context, adminclient.CloudNodeListFilter) ([]adminclient.CloudNode, error)
 	SubmitCreateNodes(context.Context, []adminclient.NodeCreateItem) (*adminclient.SubmitNodeBatchResponse, error)
@@ -213,7 +258,7 @@ type collectorFleetAPI interface {
 func init() {
 	rootCmd.AddCommand(collectorCmd)
 	collectorCmd.AddCommand(collectorFunctionCmd)
-	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd, collectorFunctionPublishCmd, collectorFunctionDeployCmd)
+	collectorFunctionCmd.AddCommand(collectorFunctionPackageCmd, collectorFunctionPublishCmd, collectorFunctionDeployCmd, collectorFunctionDeleteCmd)
 	collectorFunctionPublishCmd.AddCommand(collectorFunctionPublishSubmitCmd, collectorFunctionPublishStatusCmd)
 
 	addCollectorPackageFlags(collectorFunctionPackageCmd, &collectorPackageFlags)
@@ -231,6 +276,16 @@ func init() {
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.PackageType, "package-type", "data_collector", "function package type")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.BizType, "biz-type", "data_collector", "business type")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.Runtime, "runtime", "Go1", "SCF runtime")
+
+	deleteFlags := collectorFunctionDeleteCmd.Flags()
+	deleteFlags.StringVar(&collectorDeleteFlags.ControlURL, "control-url", "", "Control service base URL")
+	deleteFlags.StringVar(&collectorDeleteFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
+	deleteFlags.StringVar(&collectorDeleteFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
+	deleteFlags.StringVar(&collectorDeleteFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
+	deleteFlags.StringVar(&collectorDeleteFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
+	deleteFlags.BoolVar(&collectorDeleteFlags.Confirm, "confirm", false, "确认删除当前 space 的全部 SCF 节点")
+	deleteFlags.BoolVar(&collectorDeleteFlags.DryRun, "dry-run", false, "只列出目标，不提交删除任务")
+	deleteFlags.BoolVar(&collectorDeleteFlags.Wait, "wait", true, "提交后等待异步任务完成")
 
 	submitFlags := collectorFunctionPublishSubmitCmd.Flags()
 	submitFlags.StringVar(&collectorPublishFlags.ControlURL, "control-url", "", "Control service base URL")
@@ -553,6 +608,89 @@ func publishCollectorFunctionStatus(ctx context.Context, opts collectorPublishSt
 		opts.SpaceID,
 	)
 	return client.GetNodeBatchChange(ctx, opts.JobID)
+}
+
+func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) (*collectorDeleteSummary, error) {
+	controlURL := strings.TrimSpace(opts.ControlURL)
+	if controlURL == "" {
+		return nil, fmt.Errorf("--control-url is required")
+	}
+	spaceID := strings.TrimSpace(defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
+	if spaceID == "" {
+		return nil, fmt.Errorf("--space-id is required")
+	}
+	if !opts.DryRun && !opts.Confirm {
+		return nil, fmt.Errorf("refusing to delete SCF nodes without --confirm (use --dry-run to inspect targets)")
+	}
+
+	client := newControlClient(controlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
+	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{NodeType: "scf-event"})
+	if err != nil {
+		return nil, fmt.Errorf("list active SCF nodes: %w", err)
+	}
+	nodeIDs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" {
+			continue
+		}
+		nodeIDs = append(nodeIDs, node.NodeID)
+	}
+	summary := &collectorDeleteSummary{
+		SpaceID:    spaceID,
+		NodeType:   "scf-event",
+		DryRun:     opts.DryRun,
+		TotalCount: len(nodeIDs),
+		NodeIDs:    nodeIDs,
+	}
+	if opts.DryRun || len(nodeIDs) == 0 {
+		if len(nodeIDs) == 0 {
+			summary.Status = "nothing_to_delete"
+		} else {
+			summary.Status = "dry_run"
+		}
+		return summary, nil
+	}
+
+	resp, err := client.SubmitDeleteNodes(ctx, nodeIDs)
+	if err != nil {
+		return summary, fmt.Errorf("submit SCF deletion batch: %w", err)
+	}
+	summary.JobID = resp.JobID
+	summary.Operation = resp.Operation
+	summary.TotalCount = resp.TotalCount
+	summary.Status = "submitted"
+	if !opts.Wait {
+		return summary, nil
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+	for {
+		change, err := client.GetNodeBatchChange(waitCtx, resp.JobID)
+		if err != nil {
+			return summary, fmt.Errorf("poll SCF deletion batch %s: %w", resp.JobID, err)
+		}
+		summary.Status = change.Job.Status
+		summary.SuccessCount = change.Job.SuccessCount
+		summary.FailedCount = change.Job.FailedCount
+		summary.FailedResults = nil
+		for _, item := range change.Items {
+			if item.Status != "NODE_BATCH_ITEM_STATUS_SUCCESS" {
+				summary.FailedResults = append(summary.FailedResults, item)
+			}
+		}
+		switch change.Job.Status {
+		case "NODE_BATCH_STATUS_SUCCESS":
+			return summary, nil
+		case "NODE_BATCH_STATUS_FAILED", "NODE_BATCH_STATUS_PARTIAL":
+			return summary, fmt.Errorf("SCF deletion batch %s finished with status %s", resp.JobID, change.Job.Status)
+		}
+		select {
+		case <-waitCtx.Done():
+			return summary, fmt.Errorf("wait SCF deletion batch %s: %w", resp.JobID, waitCtx.Err())
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func collectorCLSCredentials() (string, string) {

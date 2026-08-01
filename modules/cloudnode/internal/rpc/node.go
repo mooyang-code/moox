@@ -183,6 +183,38 @@ func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodes
 	}, nil
 }
 
+func (s *Service) executeDeleteNodeItem(ctx context.Context, spaceID string, item *pb.NodeDeleteItem) (string, error) {
+	if item == nil || strings.TrimSpace(item.GetNodeId()) == "" {
+		return "", fmt.Errorf("node_id is required")
+	}
+	node, err := s.catalog.GetNode(ctx, spaceID, item.GetNodeId())
+	if err != nil {
+		return "", err
+	}
+	if node == nil {
+		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
+	}
+	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
+	if err != nil || account == nil {
+		if err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("cloud account unavailable for node %s", node.NodeID)
+	}
+	client, err := s.scfClient(ctx, *account)
+	if err != nil {
+		return "", err
+	}
+	ref := tencentscf.FunctionRef{Region: node.Region, FunctionName: firstString(node.FunctionName, node.NodeID), Namespace: firstString(node.Namespace, "default")}
+	if err := client.DeleteFunction(ctx, ref); err != nil && !isSCFNotFound(err) {
+		return "", fmt.Errorf("delete scf function %s: %w", node.NodeID, err)
+	}
+	if err := s.catalog.DeleteNodes(ctx, spaceID, []string{node.NodeID}); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("deleted function %s", ref.FunctionName), nil
+}
+
 func (s *Service) executeDeployNodeItem(
 	ctx context.Context,
 	spaceID string,

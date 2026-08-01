@@ -61,6 +61,20 @@ type CreateFunctionResponse struct {
 	RequestID string
 }
 
+// DeleteFunction deletes an SCF function by its exact identity.
+func (c *Client) DeleteFunction(ctx context.Context, ref FunctionRef) error {
+	log.InfoContextf(ctx, "[CloudNode-TencentSCF] delete function=%s namespace=%s region=%s", ref.FunctionName, ref.Namespace, ref.Region)
+	client, err := c.newClient(ref.Region)
+	if err != nil {
+		return err
+	}
+	request := scf.NewDeleteFunctionRequest()
+	request.FunctionName = common.StringPtr(ref.FunctionName)
+	request.Namespace = common.StringPtr(ref.Namespace)
+	_, err = client.DeleteFunctionWithContext(ctx, request)
+	return err
+}
+
 // UpdateFunctionCodeRequest updates a Tencent SCF function with a local zip.
 type UpdateFunctionCodeRequest struct {
 	FunctionRef

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -22,7 +23,10 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-const scfObservabilityService = "trpc.moox.collector.scf_observability.timer"
+const (
+	scfObservabilityService = "trpc.moox.collector.scf_observability.timer"
+	scfReadyCheckTimeout    = 3 * time.Second
+)
 
 var scfBootID = fmt.Sprintf("scf-%d", time.Now().UTC().UnixNano())
 
@@ -84,9 +88,16 @@ func buildSentinel(ctx context.Context) (*serverless.WatchdogHandler, error) {
 	if strings.TrimSpace(healthAuth.AccessKey) == "" || strings.TrimSpace(healthAuth.SecretKey) == "" {
 		return nil, fmt.Errorf("SCF watchdog requires health HMAC credentials")
 	}
+	readyClient := &http.Client{Timeout: scfReadyCheckTimeout}
 	checks := []serverless.WatchdogCheck{
-		serverless.SignedHTTPReadyCheck("monitor_ready", monitorURL, nil, healthAuth),
-		serverless.SignedHTTPReadyCheck("gateway_ready", gatewayURL, nil, healthAuth),
+		serverless.ConfirmUnreachableCheck(
+			serverless.SignedHTTPReadyCheck("monitor_ready", monitorURL, readyClient, healthAuth),
+			200*time.Millisecond,
+		),
+		serverless.ConfirmUnreachableCheck(
+			serverless.SignedHTTPReadyCheck("gateway_ready", gatewayURL, readyClient, healthAuth),
+			200*time.Millisecond,
+		),
 	}
 	if envDefaultTrue("MOOX_SCF_CANARY_ENABLED") {
 		seriesTag, err := scfCanarySeriesTag()

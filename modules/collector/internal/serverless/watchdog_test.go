@@ -147,6 +147,14 @@ func TestWatchdogSkipsNotReadyAndOverlap(t *testing.T) {
 	require.Equal(t, []string{"not_ready"}, skipped)
 }
 
+func TestWatchdogDefaultTimeoutLeavesDirectFallbackWithinTimerBudget(t *testing.T) {
+	handler, err := NewWatchdogHandler(WatchdogOptions{
+		Enabled: true, ObserverID: "scf-sentinel", NodeID: "scf-node-a",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 24*time.Second, handler.options.Timeout)
+}
+
 func TestSignedHTTPReadyCheckAddsHealthAuthentication(t *testing.T) {
 	var header string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -159,4 +167,58 @@ func TestSignedHTTPReadyCheckAddsHealthAuthentication(t *testing.T) {
 	})(context.Background())
 	require.True(t, result.Success, "%+v", result)
 	require.Contains(t, header, "moox-health-v1/scf/")
+}
+
+func TestConfirmUnreachableCheckRetriesTransientFailure(t *testing.T) {
+	var calls int
+	check := ConfirmUnreachableCheck(func(context.Context) CheckResult {
+		calls++
+		if calls == 1 {
+			return CheckResult{CheckID: "monitor_ready", Success: false, ErrorCode: "unreachable", Error: "timeout"}
+		}
+		return CheckResult{CheckID: "monitor_ready", Success: true}
+	}, 0)
+
+	result := check(context.Background())
+	require.True(t, result.Success)
+	require.Equal(t, 2, calls)
+}
+
+func TestConfirmUnreachableCheckReturnsConfirmedFailure(t *testing.T) {
+	var calls int
+	check := ConfirmUnreachableCheck(func(context.Context) CheckResult {
+		calls++
+		return CheckResult{CheckID: "monitor_ready", Success: false, ErrorCode: "unreachable", Error: "timeout"}
+	}, 0)
+
+	result := check(context.Background())
+	require.False(t, result.Success)
+	require.Equal(t, "unreachable", result.ErrorCode)
+	require.Equal(t, 2, calls)
+}
+
+func TestConfirmUnreachableCheckDoesNotRetryHTTPFailure(t *testing.T) {
+	var calls int
+	check := ConfirmUnreachableCheck(func(context.Context) CheckResult {
+		calls++
+		return CheckResult{CheckID: "monitor_ready", Success: false, ErrorCode: "http_status", Error: "HTTP 503"}
+	}, 0)
+
+	result := check(context.Background())
+	require.False(t, result.Success)
+	require.Equal(t, 1, calls)
+}
+
+func TestConfirmUnreachableCheckStopsWhenContextIsCanceled(t *testing.T) {
+	var calls int
+	check := ConfirmUnreachableCheck(func(context.Context) CheckResult {
+		calls++
+		return CheckResult{CheckID: "monitor_ready", Success: false, ErrorCode: "unreachable", Error: "timeout"}
+	}, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := check(ctx)
+	require.False(t, result.Success)
+	require.Equal(t, 1, calls)
 }

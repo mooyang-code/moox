@@ -59,6 +59,7 @@ func TestStorageEventBusConfigLoadsCredentialFromExplicitEnv(t *testing.T) {
 	}
 	t.Setenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE", credentialFile)
 	t.Setenv("MOOX_STORAGE_CONFIG", "")
+	t.Setenv("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES", "")
 
 	got, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-view")
 	if err != nil {
@@ -66,6 +67,36 @@ func TestStorageEventBusConfigLoadsCredentialFromExplicitEnv(t *testing.T) {
 	}
 	if got.Username != "storage-eventbus" || got.Password != "storage-secret" {
 		t.Fatalf("credential config = username %q/password %q", got.Username, got.Password)
+	}
+	if got.ReconnectBufferBytes != storageEventBusReconnectBufferBytes {
+		t.Fatalf("reconnect buffer = %d, want %d", got.ReconnectBufferBytes, storageEventBusReconnectBufferBytes)
+	}
+}
+
+func TestStorageEventBusConfigHonorsExplicitReconnectBuffer(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE", "")
+	t.Setenv("MOOX_STORAGE_CONFIG", "")
+	t.Setenv("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES", "0")
+
+	got, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReconnectBufferBytes != 0 {
+		t.Fatalf("reconnect buffer = %d, want explicit 0", got.ReconnectBufferBytes)
+	}
+}
+
+func TestStorageEventBusConfigRejectsInvalidReconnectBuffer(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE", "")
+	t.Setenv("MOOX_STORAGE_CONFIG", "")
+	for _, value := range []string{"garbage", "-1"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("MOOX_EVENTBUS_RECONNECT_BUFFER_BYTES", value)
+			if _, err := storageEventBusConfig([]string{"nats://127.0.0.1:4222"}, "storage-view"); err == nil {
+				t.Fatalf("reconnect buffer %q was accepted", value)
+			}
+		})
 	}
 }
 

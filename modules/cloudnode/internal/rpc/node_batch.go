@@ -15,6 +15,7 @@ import (
 const (
 	nodeBatchOperationCreate = "create_nodes"
 	nodeBatchOperationDeploy = "deploy_nodes"
+	nodeBatchOperationDelete = "delete_nodes"
 	maxNodeBatchItems        = 100
 )
 
@@ -106,6 +107,43 @@ func (s *Service) SubmitDeployNodes(ctx context.Context, req *pb.BatchDeployNode
 		Operation:  pb.NodeBatchOperation_NODE_BATCH_OPERATION_DEPLOY_NODES,
 		TotalCount: int32(len(creates)),
 	}, nil
+}
+
+// SubmitDeleteNodes enqueues remote SCF deletion and catalog cleanup as a durable node batch.
+func (s *Service) SubmitDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.SubmitNodeBatchRsp, error) {
+	spaceID, err := spacecontext.MustFromContext(ctx)
+	if err != nil {
+		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	nodeIDs := compactStrings(req.GetNodeIds())
+	if ret := validateNodeBatchSize(len(nodeIDs), "node_ids"); ret != nil {
+		return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
+	}
+	jobID := "node-batch-" + uuid.NewString()
+	items := make([]store.NodeBatchItemCreate, 0, len(nodeIDs))
+	seen := make(map[string]struct{}, len(nodeIDs))
+	for index, nodeID := range nodeIDs {
+		if _, ok := seen[nodeID]; ok {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_ids contains duplicate node_id")}, nil
+		}
+		seen[nodeID] = struct{}{}
+		node, err := s.catalog.GetNode(ctx, spaceID, nodeID)
+		if err != nil {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+		}
+		if node == nil || node.IsDeleted {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found: "+nodeID)}, nil
+		}
+		raw, err := protojson.Marshal(&pb.NodeDeleteItem{NodeId: nodeID})
+		if err != nil {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid delete request")}, nil
+		}
+		items = append(items, store.NodeBatchItemCreate{ItemID: fmt.Sprintf("%s-%03d", jobID, index), ItemIndex: index, NodeID: nodeID, RequestJSON: string(raw)})
+	}
+	if err := s.catalog.CreateNodeBatch(ctx, store.NodeBatchCreate{SpaceID: spaceID, JobID: jobID, Operation: nodeBatchOperationDelete, Items: items}); err != nil {
+		return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+	}
+	return &pb.SubmitNodeBatchRsp{RetInfo: retOK(), JobId: jobID, Operation: pb.NodeBatchOperation_NODE_BATCH_OPERATION_DELETE_NODES, TotalCount: int32(len(items))}, nil
 }
 
 func (s *Service) GetNodeBatchChange(ctx context.Context, req *pb.GetNodeBatchChangeReq) (*pb.GetNodeBatchChangeRsp, error) {
@@ -231,6 +269,8 @@ func nodeBatchOperationToPB(operation string) pb.NodeBatchOperation {
 		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_CREATE_NODES
 	case nodeBatchOperationDeploy:
 		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_DEPLOY_NODES
+	case nodeBatchOperationDelete:
+		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_DELETE_NODES
 	default:
 		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_UNSPECIFIED
 	}
