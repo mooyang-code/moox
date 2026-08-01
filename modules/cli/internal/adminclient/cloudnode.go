@@ -273,6 +273,51 @@ func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter)
 	}
 }
 
+// InvokeFunction executes a request-response CloudNode SCF invocation. It is
+// intentionally small because the short-lived fetcher only needs the probe
+// action during deployment validation.
+func (c *Client) InvokeFunction(ctx context.Context, nodeID string, event map[string]any) (map[string]any, error) {
+	if strings.TrimSpace(nodeID) == "" {
+		return nil, fmt.Errorf("node_id is required")
+	}
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/InvokeFunction", map[string]any{
+		"node_id": nodeID, "event_data": event, "scf_invoke_type": "SCF_INVOKE_TYPE_REQUEST_RESPONSE",
+	})
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		RetInfo *retInfo `json:"ret_info"`
+		SCF     struct {
+			Code      int            `json:"code"`
+			Message   string         `json:"message"`
+			RequestID string         `json:"request_id"`
+			Result    map[string]any `json:"result"`
+		} `json:"scf"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, err
+	}
+	if response.RetInfo != nil && response.RetInfo.Code != 0 {
+		return nil, fmt.Errorf("invoke SCF: %s", response.RetInfo.Msg)
+	}
+	if response.SCF.Code != 0 {
+		return nil, fmt.Errorf("invoke SCF: %s", response.SCF.Message)
+	}
+	if len(response.SCF.Result) == 0 {
+		// Preserve provider execution metadata when a synchronous invocation
+		// returns an empty RetMsg. This is particularly useful for deployment
+		// probes: an empty payload is not success, and the request id/message
+		// are the only actionable clues available from CloudNode.
+		return map[string]any{
+			"_cloudnode_code":       response.SCF.Code,
+			"_cloudnode_message":    response.SCF.Message,
+			"_cloudnode_request_id": response.SCF.RequestID,
+		}, nil
+	}
+	return response.SCF.Result, nil
+}
+
 // ListCloudAccounts 调 cloudnode/ListCloudAccounts，返回脱敏账户列表。
 func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]CloudAccount, error) {
 	body := map[string]string{}

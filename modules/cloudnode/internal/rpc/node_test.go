@@ -183,6 +183,35 @@ func TestGetNodeListAndUpdateNode(t *testing.T) {
 	}}, queue.identities)
 }
 
+func TestUpdateMarketFetcherDoesNotProvisionJobItemQueues(t *testing.T) {
+	catalog := newCatalogForAccountTests(t)
+	queue := &orderedQueue{}
+	svc := &Service{catalog: catalog, executionQueue: queue}
+	ctx := spacecontext.WithSpaceID(context.Background(), "crypto")
+	meta, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher"})
+	require.NoError(t, err)
+	require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{
+		SpaceID: "crypto", NodeID: "fetch-1", CloudAccountID: "acct-1", Region: "ap-guangzhou", Status: "unknown", SupportedWorkloads: `["collect.binance.kline"]`,
+	}))
+
+	rsp, err := svc.UpdateNode(ctx, &pb.UpdateNodeReq{Node: &pb.CloudNode{
+		NodeId: "fetch-1", Metadata: meta, SupportedWorkloads: []string{"collect.binance.kline"},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	assert.Empty(t, queue.identities)
+	node, err := catalog.GetNode(ctx, "crypto", "fetch-1")
+	require.NoError(t, err)
+	assert.Equal(t, "[]", node.SupportedWorkloads)
+}
+
+func TestMergeMarketFetcherCannotRestoreJobItemWorkloadsWithoutBizType(t *testing.T) {
+	next := mergeNodeUpdate(store.CloudNode{
+		Metadata: `{"biz_type":"market_fetcher"}`, SupportedWorkloads: "[]",
+	}, &pb.CloudNode{SupportedWorkloads: []string{"collect.binance.kline"}})
+	assert.Equal(t, "[]", next.SupportedWorkloads)
+}
+
 func TestBatchDeleteNodes_ShouldSoftDelete(t *testing.T) {
 	catalog := newCatalogForAccountTests(t)
 	svc := &Service{catalog: catalog}
@@ -274,6 +303,9 @@ func TestExecuteCreateNodeItemPreservesTencentSCFConfiguration(t *testing.T) {
 			Status:      "Active",
 			ClsLogsetID: "logset-created",
 			ClsTopicID:  "topic-created",
+			MemorySize:  256,
+			Timeout:     120,
+			Environment: map[string]string{"MOOX_ENV": "prod", "MOOX_SCF_WATCHDOG_ENABLED": "true"},
 		}},
 	}}
 	svc := &Service{
@@ -613,8 +645,8 @@ func TestExecuteDeployNodeItemUpdatesTencentSCFFunctionCodeFromPackage(t *testin
 	if len(fake.configured) != 1 {
 		t.Fatalf("configuration calls = %d, want 1", len(fake.configured))
 	}
-	if fake.getCalls != 3 {
-		t.Fatalf("GetFunction calls = %d, want initial, post-code, and post-configuration checks", fake.getCalls)
+	if fake.getCalls != 4 {
+		t.Fatalf("GetFunction calls = %d, want initial, post-code, post-configuration, and verification checks", fake.getCalls)
 	}
 	if got := fake.configured[0].Environment["MOOX_EVENTBUS_NATS_PASSWORD"]; got != "rotated-worker-token" {
 		t.Fatalf("worker credential = %q", got)
@@ -727,6 +759,9 @@ type fakeSCFClient struct {
 	created              []tencentscf.CreateFunctionRequest
 	updated              []tencentscf.UpdateFunctionCodeRequest
 	configured           []tencentscf.UpdateFunctionConfigurationRequest
+	currentEnvironment   map[string]string
+	currentMemorySize    int64
+	currentTimeout       int64
 }
 
 type fakeSCFGetResult struct {
@@ -750,7 +785,7 @@ func (f *fakeSCFClient) GetFunction(ctx context.Context, _ tencentscf.FunctionRe
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	return &tencentscf.FunctionInfo{Status: "Active"}, nil
+	return &tencentscf.FunctionInfo{Status: "Active", Environment: f.currentEnvironment, MemorySize: f.currentMemorySize, Timeout: f.currentTimeout}, nil
 }
 
 func (f *fakeSCFClient) CreateFunction(ctx context.Context, req tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error) {
@@ -774,6 +809,9 @@ func (f *fakeSCFClient) UpdateFunctionCode(_ context.Context, req tencentscf.Upd
 
 func (f *fakeSCFClient) UpdateFunctionConfiguration(_ context.Context, req tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error) {
 	f.configured = append(f.configured, req)
+	f.currentEnvironment = req.Environment
+	f.currentMemorySize = req.MemorySize
+	f.currentTimeout = req.Timeout
 	return &tencentscf.UpdateFunctionConfigurationResponse{RequestID: "config-req"}, nil
 }
 

@@ -48,13 +48,15 @@ func TestDatasetSource_ListSubjects_EmptyDatasetID_ShouldReturnError(t *testing.
 
 func TestDatasetSourceGetDatasetReturnsValidationContract(t *testing.T) {
 	src := &DatasetSource{metadata: &fakeMetadataClient{dataset: &storagepb.Dataset{
-		DataSourceId: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active",
+		DataSourceId: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, Attributes: map[string]string{"market_type": "spot"},
 	}}}
 	info, err := src.GetDataset(context.Background(), "crypto", "kline")
 	require.NoError(t, err)
 	assert.Equal(t, "binance", info.DataSourceID)
 	assert.Equal(t, storagepb.DataKind_DATA_KIND_TIME_SERIES, info.DataKind)
 	assert.Equal(t, "active", info.Status)
+	assert.Equal(t, []string{"1m"}, info.Freqs)
+	assert.Equal(t, "spot", info.Attributes["market_type"])
 }
 
 func TestDatasetSource_ListSubjects_ValidBindings_ShouldMergeSymbols(t *testing.T) {

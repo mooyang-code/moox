@@ -25,12 +25,13 @@ func TestDefaultProvidesOnlyProcessDefaults(t *testing.T) {
 
 func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 	cfg := loadRepositoryConfig(t)
-	require.Len(t, cfg.Streams, 4)
+	require.Len(t, cfg.Streams, 5)
 	require.Len(t, cfg.KV, 1)
 	want := map[string]string{
 		"MOOX_CLOUDNODE_EXEC": "work_queue",
 		"MOOX_OBSERVABILITY":  "limits",
 		"MOOX_STORAGE":        "limits",
+		"MOOX_MARKET_FETCH":   "limits",
 		"MOOX_TRADE":          "work_queue",
 	}
 	for _, stream := range cfg.Streams {

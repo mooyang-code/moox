@@ -59,6 +59,17 @@ streams:
     max_age: 72h
     duplicates: 2m
     max_bytes: 268435456
+  - name: MOOX_MARKET_FETCH
+    subjects: ["moox.market.fetch.batch.completed.v1.>"]
+    # Collector and Monitor both observe the completion; work_queue would let
+    # the first durable consumer steal the message from the other one.
+    retention: limits
+    discard: old
+    storage: file
+    replicas: 1
+    max_age: 24h
+    duplicates: 10m
+    max_bytes: 268435456
   - name: MOOX_TRADE
     subjects: ["moox.trade.target.requested.v1.>"]
     retention: work_queue

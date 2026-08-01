@@ -8,11 +8,6 @@ trap 'rm -rf "${TMP_ROOT}"' EXIT
 FAKE_BIN="${TMP_ROOT}/bin"
 mkdir -p "${FAKE_BIN}"
 
-cat >"${FAKE_BIN}/moox-cli" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' '{"resources":{"topic_id":"topic-contract-test"}}'
-EOF
-
 cat >"${FAKE_BIN}/go" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -28,13 +23,12 @@ done
 printf '#!/usr/bin/env bash\n' >"${output}"
 chmod +x "${output}"
 EOF
-chmod +x "${FAKE_BIN}/moox-cli" "${FAKE_BIN}/go"
+chmod +x "${FAKE_BIN}/go"
 
 package_path="${TMP_ROOT}/collector-scf.zip"
 (
   cd "${TMP_ROOT}"
   PATH="${FAKE_BIN}:${PATH}" \
-    MOOX_CLI="${FAKE_BIN}/moox-cli" \
     MOOX_STORAGE_PRIMARY_AUTH_SECRET="storage-secret" \
     VERSION=contract-test \
     OUT_PATH="collector-scf.zip" \
@@ -49,18 +43,12 @@ import yaml
 with open(sys.argv[1], encoding="utf-8") as stream:
     document = yaml.safe_load(stream)
 writers = document["plugins"]["log"]["default"]
-cls = [writer for writer in writers if writer.get("writer") == "cls"]
 console = [writer for writer in writers if writer.get("writer") == "console"]
-assert len(cls) == 1, cls
-assert cls[0]["level"] == "info", cls
-assert cls[0]["remote_config"]["topic_id"] == "topic-contract-test", cls
+assert not [writer for writer in writers if writer.get("writer") == "cls"], writers
 assert len(console) == 1, console
 assert console[0]["level"] == "info", console
 services = document["server"]["service"]
-sentinel = [service for service in services if service["name"] == "trpc.moox.collector.scf_observability.timer"]
-assert len(sentinel) == 1, sentinel
-assert sentinel[0]["timeout"] == 30000, sentinel
-assert "*/30" in sentinel[0]["network"], sentinel
+assert not [service for service in services if ".scf_observability." in service.get("name", "")], services
 PY
 
 unzip -p "${package_path}" sources/market/binance.yaml >"${TMP_ROOT}/binance.yaml"

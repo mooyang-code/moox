@@ -11,7 +11,7 @@ const day = 24 * time.Hour
 
 // ParseScheduleInterval parses a fixed UTC scheduling period.
 func ParseScheduleInterval(raw string) (time.Duration, error) {
-	raw = strings.TrimSpace(raw)
+	raw = strings.ToLower(strings.TrimSpace(raw))
 	var (
 		interval time.Duration
 		err      error

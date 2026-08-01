@@ -16,9 +16,11 @@ import (
 
 // Store owns the Collector SQLite connection and repositories.
 type Store struct {
-	db        *gorm.DB
-	taskRules *TaskRuleRepository
-	taskItems *TaskInstanceRepository
+	db           *gorm.DB
+	taskRules    *TaskRuleRepository
+	taskItems    *TaskInstanceRepository
+	fetchBatches *FetchBatchRepository
+	fetchRetries *FetchRetryRepository
 }
 
 // Options configures the Collector SQLite store.
@@ -46,6 +48,8 @@ func Open(opts *Options) (*Store, error) {
 	s := &Store{db: db}
 	s.taskRules = NewTaskRuleRepository(db)
 	s.taskItems = NewTaskInstanceRepository(db)
+	s.fetchBatches = NewFetchBatchRepository(db)
+	s.fetchRetries = NewFetchRetryRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -65,6 +69,20 @@ func (s *Store) TaskInstances() *TaskInstanceRepository {
 		return nil
 	}
 	return s.taskItems
+}
+
+func (s *Store) FetchBatches() *FetchBatchRepository {
+	if s == nil {
+		return nil
+	}
+	return s.fetchBatches
+}
+
+func (s *Store) FetchRetries() *FetchRetryRepository {
+	if s == nil {
+		return nil
+	}
+	return s.fetchRetries
 }
 
 // ApplySchema applies schema SQL during service startup.

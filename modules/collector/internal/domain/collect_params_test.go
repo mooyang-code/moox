@@ -9,12 +9,14 @@ import (
 
 func TestParseCollectParamsUsesSingleDatasetDrivenContract(t *testing.T) {
 	raw := `{
-		"source":{"kind":"dataset_subjects","dataset_id":"source-kline"},
-		"collector":{"exchange":" Binance ","market":" SPOT ","data_type":" KLINE ","intervals":["1m"],"live":false},
-		"target":{"dataset_id":"target-kline"},
-		"schedule":{"interval":"1h"}
+		"provider":" Binance ",
+		"market_type":" SPOT ",
+		"symbol_source":"dataset",
+		"symbol_dataset_id":"source-kline",
+		"target_dataset_id":"target-kline",
+		"frequency":"1h"
 	}`
-	params, err := ParseCollectParams(raw, "", "")
+	params, err := ParseCollectParams(raw, "", "", "kline")
 	require.NoError(t, err)
 	require.NoError(t, params.Validate())
 	assert.Equal(t, "binance", params.Collector.Exchange)
@@ -26,26 +28,47 @@ func TestParseCollectParamsUsesSingleDatasetDrivenContract(t *testing.T) {
 
 func TestParseCollectParamsAcceptsSymbolWithoutSourceDataset(t *testing.T) {
 	raw := `{
-		"source":{"kind":"none","dataset_id":""},
-		"collector":{"exchange":"binance","market":"swap","data_type":"symbol","intervals":[]},
-		"target":{"dataset_id":"symbols"},
-		"schedule":{"interval":"30m"}
+		"provider":"binance",
+		"market_type":"swap",
+		"symbol_source":"manual",
+		"symbols":["BTC-USDT"],
+		"target_dataset_id":"symbols",
+		"frequency":"30m"
 	}`
-	params, err := ParseCollectParams(raw, "", "")
+	params, err := ParseCollectParams(raw, "", "", "symbol")
 	require.NoError(t, err)
 	require.NoError(t, params.Validate())
 	assert.Equal(t, "none", params.Source.Kind)
-	assert.Empty(t, params.Collector.Intervals)
+	assert.Equal(t, []string{"30m"}, params.Collector.Intervals)
+}
+
+func TestParseCollectParamsDefaultsSymbolFrequencyToHourly(t *testing.T) {
+	params, err := ParseCollectParams(`{
+		"provider":"binance",
+		"market_type":"spot",
+		"symbol_source":"manual",
+		"symbols":["BTC-USDT"],
+		"target_dataset_id":"symbols"
+	}`, "", "", "symbol")
+	require.NoError(t, err)
+	require.NoError(t, params.Validate())
+	assert.Equal(t, "1h", params.Frequency)
+	assert.Equal(t, "1h", params.Schedule.Interval)
 }
 
 func TestParseCollectParamsRejectsRemovedFields(t *testing.T) {
 	for _, raw := range []string{
+		`{"exchange":"binance"}`,
+		`{"market":"spot"}`,
+		`{"symbol":"BTC-USDT"}`,
+		`{"interval":"1m"}`,
+		`{"collector":{"exchange":"binance"}}`,
 		`{"target":{"job_type":"collect.binance.kline"}}`,
 		`{"schedule":{"timezone":"Asia/Shanghai"}}`,
 		`{"schedule":{"intervals":["1m"]}}`,
 		`{"objects":["BTCUSDT"]}`,
 	} {
-		_, err := ParseCollectParams(raw, "binance", "kline")
+		_, err := ParseCollectParams(raw, "binance", "spot", "kline")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unknown field")
 	}
@@ -53,17 +76,17 @@ func TestParseCollectParamsRejectsRemovedFields(t *testing.T) {
 
 func TestCollectParamsValidateRequiresExplicitDatasetsAndIntervals(t *testing.T) {
 	params, err := ParseCollectParams(`{
-		"source":{"kind":"dataset_subjects"},
-		"collector":{"exchange":"binance","market":"spot","data_type":"kline"},
-		"target":{},
-		"schedule":{"interval":"bad"}
-	}`, "", "")
+		"provider":"binance",
+		"market_type":"spot",
+		"symbol_source":"dataset",
+		"frequency":"bad"
+	}`, "", "", "kline")
 	require.NoError(t, err)
 	require.Error(t, params.Validate())
 }
 
 func TestParseCollectParamsInvalidJSONReturnsError(t *testing.T) {
-	_, err := ParseCollectParams("{", "binance", "kline")
+	_, err := ParseCollectParams("{", "binance", "spot", "kline")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "parse collect params")
 }
@@ -85,11 +108,13 @@ func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			params, err := ParseCollectParams(`{
-				"source":{"kind":"none","dataset_id":""},
-				"collector":{"exchange":"binance","market":"spot","data_type":"symbol"},
-				"target":{"dataset_id":"symbols"},
-				"schedule":{"interval":"`+tt.interval+`"}
-			}`, "", "")
+				"provider":"binance",
+				"market_type":"spot",
+				"symbol_source":"manual",
+				"symbols":["BTC-USDT"],
+				"target_dataset_id":"symbols",
+				"frequency":"`+tt.interval+`"
+			}`, "", "", "symbol")
 			require.NoError(t, err)
 
 			err = params.Validate()

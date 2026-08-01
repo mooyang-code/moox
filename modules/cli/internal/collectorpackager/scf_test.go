@@ -37,7 +37,6 @@ func TestBuildSCFPackage_ValidInputs_ShouldCreateZipWithExpectedEntries(t *testi
 		BinaryPath: binaryPath,
 		ConfigDir:  configDir,
 		OutPath:    outPath,
-		CLSTopicID: "topic-unified",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -57,18 +56,14 @@ func TestBuildSCFPackage_ValidInputs_ShouldCreateZipWithExpectedEntries(t *testi
 			content, readErr := io.ReadAll(stream)
 			require.NoError(t, readErr)
 			require.NoError(t, stream.Close())
-			assert.Contains(t, string(content), "writer: cls")
-			assert.Contains(t, string(content), "level: info")
-			assert.Contains(t, string(content), "topic_id: topic-unified")
-			assert.Contains(t, string(content), "secret_id: ${MOOX_CLS_SECRET_ID}")
+			assert.NotContains(t, string(content), "writer: cls")
+			assert.NotContains(t, string(content), "MOOX_CLS_SECRET")
 		}
 	}
 	assert.ElementsMatch(t, []string{"main", "config.yaml", "trpc_go.yaml", "sources/binance/kline.yaml"}, names)
-	require.NoError(t, ValidateSCFPackageCLSTopic(outPath, "topic-unified"))
-	require.ErrorContains(t, ValidateSCFPackageCLSTopic(outPath, "topic-other"), "does not match")
 }
 
-func TestBuildSCFPackage_MissingCLSTopicID_ShouldReturnError(t *testing.T) {
+func TestBuildSCFPackage_AllowsPlatformConfiguredCLS(t *testing.T) {
 	tmp := t.TempDir()
 	binaryPath := filepath.Join(tmp, "collector")
 	require.NoError(t, os.WriteFile(binaryPath, []byte("binary"), 0o755))
@@ -78,7 +73,7 @@ func TestBuildSCFPackage_MissingCLSTopicID_ShouldReturnError(t *testing.T) {
 		ConfigDir:  tmp,
 		OutPath:    filepath.Join(tmp, "package.zip"),
 	})
-	require.ErrorContains(t, err, "CLS topic ID is required")
+	require.ErrorContains(t, err, "config.yaml")
 }
 
 func TestBuildSCFPackage_RendersStorageAuthKeyWithoutPackagingSecret(t *testing.T) {
@@ -100,7 +95,7 @@ storage:
 	outPath := filepath.Join(tmp, "package.zip")
 	_, err := BuildSCFPackage(BuildSCFPackageOptions{
 		BinaryPath: binaryPath, ConfigDir: configDir, OutPath: outPath,
-		CLSTopicID: "topic-unified", StoragePrimaryAuthSecret: "storage-secret",
+		StoragePrimaryAuthSecret: "storage-secret",
 	})
 	require.NoError(t, err)
 	reader, err := zip.OpenReader(outPath)
@@ -139,13 +134,13 @@ storage:
 
 	_, err := BuildSCFPackage(BuildSCFPackageOptions{
 		BinaryPath: binaryPath, ConfigDir: configDir,
-		OutPath: filepath.Join(tmp, "package.zip"), CLSTopicID: "topic-unified",
+		OutPath: filepath.Join(tmp, "package.zip"),
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 }
 
-func TestCLSTopicIDFromTRPCConfigRejectsMultipleWriters(t *testing.T) {
+func TestRenderTRPCConfigForServerlessRemovesCLSWriters(t *testing.T) {
 	config := []byte(`plugins:
   log:
     default:
@@ -154,11 +149,12 @@ func TestCLSTopicIDFromTRPCConfigRejectsMultipleWriters(t *testing.T) {
       - writer: cls
         remote_config: {topic_id: topic-b}
 `)
-	_, err := clsTopicIDFromTRPCConfig(config)
-	require.ErrorContains(t, err, "exactly one CLS writer")
+	rendered, err := renderTRPCConfigForServerless(config)
+	require.NoError(t, err)
+	assert.NotContains(t, string(rendered), "writer: cls")
 }
 
-func TestSCFPackageCLSWriterUsesInfoLevel(t *testing.T) {
+func TestSCFPackageRemovesSDKCLSWriter(t *testing.T) {
 	source := []byte(`plugins:
   log:
     default:
@@ -169,7 +165,7 @@ func TestSCFPackageCLSWriterUsesInfoLevel(t *testing.T) {
         remote_config:
           topic_id: stale-topic
 `)
-	rendered, err := renderTRPCConfigWithCLS(source, "topic-unified")
+	rendered, err := renderTRPCConfigForServerless(source)
 	require.NoError(t, err)
 
 	var document map[string]any
@@ -177,20 +173,14 @@ func TestSCFPackageCLSWriterUsesInfoLevel(t *testing.T) {
 	plugins := document["plugins"].(map[string]any)
 	logs := plugins["log"].(map[string]any)
 	writers := logs["default"].([]any)
-	var clsWriters, consoleWriters int
+	var consoleWriters int
 	for _, writer := range writers {
 		config := writer.(map[string]any)
 		switch config["writer"] {
-		case "cls":
-			clsWriters++
-			assert.Equal(t, "info", config["level"])
-			remote := config["remote_config"].(map[string]any)
-			assert.Equal(t, "topic-unified", remote["topic_id"])
 		case "console":
 			consoleWriters++
 			assert.Equal(t, "warn", config["level"], "console level must remain unchanged")
 		}
 	}
-	assert.Equal(t, 1, clsWriters)
 	assert.Equal(t, 1, consoleWriters)
 }

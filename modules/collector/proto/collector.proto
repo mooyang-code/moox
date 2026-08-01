@@ -28,21 +28,23 @@ message TaskRule {
   string space_id = 1;
   string rule_id = 2;
   string data_type = 3;
-  string exchange = 4;
+  string provider = 4;
   google.protobuf.Struct collect_params = 5;
   optional bool enabled = 6;
   string creator = 7;
   string create_time = 8;     // RFC3339
   string modify_time = 9;     // RFC3339
+  string market_type = 10;
 }
 
 message GetTaskRuleListReq {
   string space_id = 1;
   string data_type = 2;
-  string exchange = 3;
+  string provider = 3;
   optional bool enabled = 4;
   string rule_id = 5;
   common.Page page = 6;
+  string market_type = 7;
 }
 
 message GetTaskRuleListRsp {
@@ -95,13 +97,12 @@ message TaskInstance {
   string space_id = 1;
   string task_id = 2;
   string rule_id = 3;
-  string exchange = 4;
-  string market = 5;
+  string provider = 4;
+  string market_type = 5;
   string data_type = 6;
   string dataset_id = 7;
   string subject_id = 8;
-  string symbol = 9;
-  string interval = 10;
+  string frequency = 9;
   google.protobuf.Struct task_params = 11;
   string last_exec_node = 12;
   TaskInstanceStatus last_exec_status = 13;
@@ -110,7 +111,6 @@ message TaskInstance {
   bool is_deleted = 16;
   string create_time = 17;     // RFC3339
   string modify_time = 18;     // RFC3339
-  string cloud_job_item_id = 19;
 }
 
 // TaskInstanceFilter 任务实例筛选条件。
@@ -118,13 +118,12 @@ message TaskInstanceFilter {
   string space_id = 1;
   string rule_id = 2;
   string task_id = 3;
-  string exchange = 4;
-  string market = 5;
+  string provider = 4;
+  string market_type = 5;
   string data_type = 6;
   string dataset_id = 7;
   string subject_id = 8;
-  string symbol = 9;
-  string interval = 10;
+  string frequency = 9;
   TaskInstanceStatus last_exec_status = 11;
   string last_exec_node = 12;
   bool include_deleted = 13;
@@ -142,21 +141,6 @@ message GetTaskInstanceListRsp {
 }
 
 // ReportInstanceStatusReq 上报任务状态请求。
-message ReportInstanceStatusReq {
-  string space_id = 1;
-  string task_id = 2;
-  string node_id = 3;
-  TaskInstanceStatus status = 4;
-  google.protobuf.Struct result = 5;
-  string error_message = 6;
-  int64 duration_ms = 7;
-  string job_item_id = 8;
-}
-
-message ReportInstanceStatusRsp {
-  common.RetInfo ret_info = 1;
-}
-
 // DataTypeConfig 数据类型配置。
 message DataTypeConfig {
   int32 id = 1;
@@ -208,14 +192,6 @@ message GetDataTypeConfigWithFieldsRsp {
   DataTypeConfigDetail detail = 2;
 }
 
-message ScheduleTasksReq {
-  string space_id = 1;
-}
-
-message ScheduleTasksRsp {
-  common.RetInfo ret_info = 1;
-}
-
 service CollectMgr {
   // ----- 任务规则 -----
   rpc GetTaskRuleList(GetTaskRuleListReq) returns (GetTaskRuleListRsp);
@@ -226,12 +202,8 @@ service CollectMgr {
 
   // ----- 任务实例 -----
   rpc GetTaskInstanceList(GetTaskInstanceListReq) returns (GetTaskInstanceListRsp);
-  rpc ReportTaskStatus(ReportInstanceStatusReq) returns (ReportInstanceStatusRsp);
 
   // ----- 数据类型配置 -----
   rpc GetDataTypeConfigs(GetDataTypeConfigsReq) returns (GetDataTypeConfigsRsp);
   rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
-
-  // ----- 任务规划器 -----
-  rpc ScheduleTasks(ScheduleTasksReq) returns (ScheduleTasksRsp);
 }

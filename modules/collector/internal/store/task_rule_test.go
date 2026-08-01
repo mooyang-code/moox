@@ -27,7 +27,7 @@ func TestTaskRuleRepository_CRUD(t *testing.T) {
 	repo := s.TaskRules()
 	ctx := context.Background()
 	rule := domain.TaskRule{
-		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Exchange: "binance",
+		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Enabled: true,
 	}
 	require.NoError(t, repo.Create(ctx, rule))
@@ -42,7 +42,7 @@ func TestTaskRuleRepository_CRUD(t *testing.T) {
 	assert.Len(t, rules, 1)
 
 	updated, err := repo.UpdateByRuleID(ctx, "crypto", "rule-1", domain.TaskRule{
-		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Exchange: "binance",
+		SpaceID: "crypto", RuleID: "rule-1", DataType: "symbol", Provider: "binance", MarketType: "spot",
 		CollectParams: `{"source":{"kind":"none"}}`, Creator: "updated", Enabled: true,
 	})
 	require.NoError(t, err)

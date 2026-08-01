@@ -132,6 +132,7 @@ proto:
 	$(MAKE) -C packages/tradeeventpb all
 	$(MAKE) -C packages/storagepb generate
 	$(MAKE) -C packages/events all
+	$(MAKE) -C packages/marketfetchpb all
 	$(MAKE) -C modules/storage proto
 	$(MAKE) -C modules/admin/proto all
 	$(MAKE) -C modules/trade/proto all

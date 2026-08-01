@@ -178,14 +178,15 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 	}, runtime.Repositories, resultHook)
 	watchdogRun := func(watchdogCtx context.Context) error {
-		var marketErr, freshnessErr error
+		var marketErr, freshnessErr, fetchFreshnessErr error
 		if marketCanary != nil {
 			marketErr = marketCanary(watchdogCtx)
 		}
 		if businessFreshness != nil {
 			freshnessErr = businessFreshness(watchdogCtx)
 		}
-		return errors.Join(marketErr, freshnessErr)
+		fetchFreshnessErr = evaluateMarketFetchFreshness(watchdogCtx, runtime, resultHook)
+		return errors.Join(marketErr, freshnessErr, fetchFreshnessErr)
 	}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, metricRules, metricEvaluator, doctorContext)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
@@ -206,6 +207,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	startMetricsStorageGate(runtimeCtx, cfg, runtime, metricsStorage)
 	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
 	startObservabilityConsumer(runtimeCtx, cfg, runtime, metricsStorage, hostStore)
+	startMarketFetchConsumer(runtimeCtx, cfg, runtime)
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done

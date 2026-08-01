@@ -19,7 +19,7 @@ func TestNewJobDefinition_ShouldExposeKlineMetadata(t *testing.T) {
 
 func TestBuildTaskSpecs_MultipleIntervals_ShouldExpandSubjects(t *testing.T) {
 	params := &domain.CollectParams{}
-	params.Normalize("binance", "kline")
+	params.Normalize("binance", "spot", "kline")
 	params.Collector.Intervals = []string{"1m", "5m"}
 	params.Target.DatasetID = "ds-1"
 	subjects := []domain.DatasetSubject{
@@ -35,7 +35,7 @@ func TestBuildTaskSpecs_MultipleIntervals_ShouldExpandSubjects(t *testing.T) {
 
 func TestBuildTaskSpecs_EmptyInterval_ShouldDefaultToOneMinute(t *testing.T) {
 	params := &domain.CollectParams{}
-	params.Normalize("binance", "kline")
+	params.Normalize("binance", "spot", "kline")
 	params.Target.DatasetID = "ds-1"
 	subjects := []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT"}}
 
@@ -47,7 +47,7 @@ func TestBuildTaskSpecs_EmptyInterval_ShouldDefaultToOneMinute(t *testing.T) {
 func TestNewJobDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing.T) {
 	def := NewJobDefinition()
 	params := &domain.CollectParams{}
-	params.Normalize("binance", "kline")
+	params.Normalize("binance", "spot", "kline")
 	params.Source.Kind = "none"
 
 	_, err := def.Planner(context.Background(), &domain.TaskRule{}, params, nil)

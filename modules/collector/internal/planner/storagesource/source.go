@@ -27,6 +27,8 @@ type DatasetInfo struct {
 	DataSourceID string
 	DataKind     storagepb.DataKind
 	Status       string
+	Freqs        []string
+	Attributes   map[string]string
 }
 
 // GetDataset returns the Dataset identity and write shape used for rule validation.
@@ -48,7 +50,20 @@ func (s *DatasetSource) GetDataset(ctx context.Context, spaceID, datasetID strin
 		DataSourceID: strings.TrimSpace(dataset.GetDataSourceId()),
 		DataKind:     dataset.GetDataKind(),
 		Status:       strings.ToLower(strings.TrimSpace(dataset.GetStatus())),
+		Freqs:        append([]string(nil), dataset.GetFreqs()...),
+		Attributes:   cloneAttributes(dataset.GetAttributes()),
 	}, nil
+}
+
+func cloneAttributes(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
 }
 
 // DatasetSource loads active dataset subjects and source-side symbols.

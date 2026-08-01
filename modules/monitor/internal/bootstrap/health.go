@@ -109,6 +109,9 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 			rsp.Details["database_checks_error"] = checksErr.Error()
 		}
 		rsp.Details["scheduler_ready"] = schedulerReady
+		if runtime != nil && runtime.MarketFetchStore != nil {
+			rsp.Details["market_fetch_latest_series"] = runtime.MarketFetchStore.Count()
+		}
 		return rsp
 	}
 }

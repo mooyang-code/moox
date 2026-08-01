@@ -15,6 +15,7 @@ require (
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/msgbox v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
@@ -135,6 +136,8 @@ replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gate
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+
+replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
 
 replace github.com/mooyang-code/moox/packages/msgbox => ../../packages/msgbox
 

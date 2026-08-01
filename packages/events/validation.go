@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/storagepb"
@@ -139,6 +140,78 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 		if err := validateStorageRow(row); err != nil {
 			return fmt.Errorf("storage event row %d: %w", i, err)
 		}
+	}
+	return nil
+}
+
+func validateMarketFetchBatchCompleted(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*marketfetchpb.MarketFetchBatchCompleted)
+	if !ok {
+		return fmt.Errorf("market fetch payload has type %T", value)
+	}
+	if strings.TrimSpace(payload.GetBatchId()) == "" ||
+		strings.TrimSpace(payload.GetScheduleId()) == "" ||
+		strings.TrimSpace(payload.GetDatasetId()) == "" ||
+		strings.TrimSpace(payload.GetFrequency()) == "" ||
+		strings.TrimSpace(payload.GetBatchKind()) == "" {
+		return fmt.Errorf("market fetch batch identity is incomplete")
+	}
+	if payload.GetBatchId() != message.GetEventId() {
+		return fmt.Errorf("market fetch batch_id does not match event_id")
+	}
+	switch payload.GetBatchKind() {
+	case "realtime", "symbol_snapshot", "catchup":
+	default:
+		return fmt.Errorf("market fetch batch_kind %q is invalid", payload.GetBatchKind())
+	}
+	switch payload.GetStatus() {
+	case "succeeded", "partial_failed", "failed", "timed_out":
+	default:
+		return fmt.Errorf("market fetch status %q is invalid", payload.GetStatus())
+	}
+	if message.GetSpaceId() != "" && payload.GetNodeId() == "" {
+		return fmt.Errorf("market fetch node_id is required")
+	}
+	if message.GetSubjectId() != payload.GetDatasetId() {
+		return fmt.Errorf("market fetch dataset does not match subject_id")
+	}
+	if payload.GetPlannedCount() < 0 || payload.GetSuccessCount() < 0 ||
+		payload.GetRetryCount() < 0 || payload.GetPermanentFailedCount() < 0 {
+		return fmt.Errorf("market fetch counts must be non-negative")
+	}
+	if payload.GetPlannedCount() != int32(len(payload.GetItems())) {
+		return fmt.Errorf("market fetch planned_count does not match items")
+	}
+	var success, retryable, permanent int32
+	if payload.GetCompletedAt() == nil || payload.GetCompletedAt().CheckValid() != nil {
+		return fmt.Errorf("market fetch completed_at is invalid")
+	}
+	if len(payload.GetErrorSummary()) > 256 {
+		return fmt.Errorf("market fetch error_summary exceeds 256 bytes")
+	}
+	for i, item := range payload.GetItems() {
+		if item == nil || strings.TrimSpace(item.GetSubjectId()) == "" || strings.TrimSpace(item.GetOutcome()) == "" {
+			return fmt.Errorf("market fetch item %d identity is incomplete", i)
+		}
+		if len(item.GetErrorSummary()) > 256 {
+			return fmt.Errorf("market fetch item %d error_summary exceeds 256 bytes", i)
+		}
+		switch item.GetOutcome() {
+		case "success":
+			success++
+		case "http_429", "http_5xx", "network_error", "storage_error":
+			retryable++
+		case "invalid_request":
+			permanent++
+		default:
+			return fmt.Errorf("market fetch item %d outcome %q is invalid", i, item.GetOutcome())
+		}
+	}
+	if payload.GetSuccessCount() != success || payload.GetRetryCount() != retryable || payload.GetPermanentFailedCount() != permanent {
+		return fmt.Errorf("market fetch outcome counts do not match items")
+	}
+	if payload.GetSuccessCount()+payload.GetRetryCount()+payload.GetPermanentFailedCount() != payload.GetPlannedCount() {
+		return fmt.Errorf("market fetch outcome counts do not sum to planned_count")
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ func (r *CatalogRepository) ListSCFEventNodes(ctx context.Context) ([]CloudNode,
 	var nodes []CloudNode
 	err := r.db.WithContext(ctx).
 		Where("c_is_deleted = ? AND c_provider = ? AND c_node_type = ?", false, "tencent-scf", "scf-event").
+		Where("CASE WHEN json_valid(c_metadata) THEN COALESCE(json_extract(c_metadata, '$.biz_type'), '') ELSE '' END <> ?", "market_fetcher").
 		Order("c_id ASC").
 		Find(&nodes).Error
 	return nodes, err
@@ -126,7 +128,7 @@ func (r *CatalogRepository) DeleteNodes(ctx context.Context, spaceID string, nod
 	return q.Updates(map[string]any{"c_is_deleted": true, "c_status": "deleted", "c_mtime": time.Now().UTC()}).Error
 }
 
-func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID string, nodeID string, packageID string, packageVersion string) error {
+func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID string, nodeID string, packageID string, packageVersion string, desiredConfig map[string]string, desiredEnvironment map[string]string) error {
 	if nodeID == "" {
 		return nil
 	}
@@ -141,7 +143,63 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 	if spaceID != "" {
 		q = q.Where("c_space_id = ?", spaceID)
 	}
-	return q.Updates(updates).Error
+	var node CloudNode
+	if err := q.First(&node).Error; err != nil {
+		return err
+	}
+	existingMetadata := map[string]any{}
+	if strings.TrimSpace(node.Metadata) != "" {
+		_ = json.Unmarshal([]byte(node.Metadata), &existingMetadata)
+	}
+	metadataPatch := map[string]any{"deployment_ready": true}
+	if bizType, _ := existingMetadata["biz_type"].(string); strings.EqualFold(strings.TrimSpace(bizType), "market_fetcher") {
+		// Deployment updates bypass UpdateNode, so clear stale resident worker
+		// queue identities here as well when a Fetcher is republished.
+		updates["c_supported_workloads"] = "[]"
+		metadataPatch["supported_workloads"] = []string{}
+	}
+	if len(desiredConfig) > 0 {
+		metadataPatch["config"] = desiredConfig
+		if value := strings.TrimSpace(desiredConfig["memory_size"]); value != "" {
+			metadataPatch["memory_size"] = value
+		}
+		if value := strings.TrimSpace(desiredConfig["timeout"]); value != "" {
+			metadataPatch["timeout_seconds"] = value
+		}
+	}
+	// Deployment updates carry the fetcher settings in the function
+	// environment. Mirror the managed values into catalog metadata so fleet
+	// inspection and the scheduler see the same effective configuration after
+	// republishing an existing node.
+	managedEnvironment := map[string]string{
+		"max_inflight_requests": "MOOX_FETCH_MAX_INFLIGHT_REQUESTS",
+		"request_timeout_ms":    "MOOX_FETCH_REQUEST_TIMEOUT_MS",
+		"http_max_attempts":     "MOOX_FETCH_HTTP_MAX_ATTEMPTS",
+		"storage_max_attempts":  "MOOX_FETCH_STORAGE_MAX_ATTEMPTS",
+		"realtime_batch_size":   "MOOX_FETCH_REALTIME_BATCH_SIZE",
+		"realtime_bar_limit":    "MOOX_FETCH_REALTIME_BAR_LIMIT",
+		"catchup_batch_size":    "MOOX_FETCH_CATCHUP_BATCH_SIZE",
+		"catchup_bar_limit":     "MOOX_FETCH_CATCHUP_BAR_LIMIT",
+		"commit_reserve_ms":     "MOOX_FETCH_COMMIT_RESERVE_MS",
+		"max_retry_attempts":    "MOOX_FETCH_MAX_RETRY_ATTEMPTS",
+	}
+	for metadataKey, environmentKey := range managedEnvironment {
+		if value := strings.TrimSpace(desiredEnvironment[environmentKey]); value != "" {
+			metadataPatch[metadataKey] = value
+		}
+	}
+	metadataJSON, err := json.Marshal(metadataPatch)
+	if err != nil {
+		return err
+	}
+	updates["c_metadata"] = gorm.Expr(
+		"json_patch(CASE WHEN json_valid(c_metadata) THEN c_metadata ELSE '{}' END, ?)",
+		string(metadataJSON),
+	)
+	// Rebuild the update query from the primary key. Reusing the SELECT scope
+	// causes GORM's SQLite dialector to emit an UPDATE ... FROM self join,
+	// making c_node_id ambiguous.
+	return r.db.WithContext(ctx).Model(&CloudNode{}).Where("c_id = ?", node.ID).Updates(updates).Error
 }
 
 func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, version string, supported string, metadata string) error {

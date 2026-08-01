@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -73,7 +74,7 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	require.NotNil(t, matched)
 	assert.Equal(t, "node-a", matched.NodeID)
 
-	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2"))
+	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2", nil, map[string]string{"MOOX_FETCH_MAX_INFLIGHT_REQUESTS": "7"}))
 	require.NoError(t, repo.UpdateHeartbeat(ctx, "crypto", "node-a", "v2", `["collect.kline"]`, `{}`))
 	updated, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
@@ -83,6 +84,25 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	deleted, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
 	assert.Nil(t, deleted)
+}
+
+func TestUpdateNodeDeploymentClearsMarketFetcherWorkloads(t *testing.T) {
+	repo := newTestCatalog(t)
+	ctx := context.Background()
+	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
+		SpaceID: "crypto", NodeID: "fetch-1", NodeType: "scf-event", Region: "ap-guangzhou",
+		SupportedWorkloads: `["collect.binance.kline"]`, Metadata: `{"biz_type":"market_fetcher","probe":"retained"}`,
+	}))
+
+	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "fetch-1", "pkg-1", "v1", nil, nil))
+	updated, err := repo.GetNode(ctx, "crypto", "fetch-1")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "[]", updated.SupportedWorkloads)
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(updated.Metadata), &metadata))
+	assert.Empty(t, metadata["supported_workloads"])
+	assert.Equal(t, "retained", metadata["probe"])
 }
 
 func TestCatalogRepository_ListNodesFiltersBizTypeAndHeartbeatPreservesFleetMetadata(t *testing.T) {

@@ -30,16 +30,17 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "archive-eventbus", "cloudnode-eventbus", "cloudnode-worker", "factor-eventbus", "strategy-eventbus", "trade-eventbus"}
-var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "cloudnode-eventbus": "eventbus_cloudnode", "cloudnode-worker": "eventbus_cloudnode_worker", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade"}
+var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "archive-eventbus", "cloudnode-eventbus", "cloudnode-worker", "market-fetch-publisher", "collector-market-fetch-consumer", "factor-eventbus", "strategy-eventbus", "trade-eventbus"}
+var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "cloudnode-eventbus": "eventbus_cloudnode", "cloudnode-worker": "eventbus_cloudnode_worker", "market-fetch-publisher": "eventbus_market_fetch_publisher", "collector-market-fetch-consumer": "eventbus_collector_market_fetch_consumer", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade"}
 var localEventBusRoles = map[string]bool{
-	"eventbus-internal-admin":        true,
-	"metrics-publisher":              true,
-	"monitor-observability-consumer": true,
-	"cloudnode-eventbus":             true,
-	"factor-eventbus":                true,
-	"strategy-eventbus":              true,
-	"trade-eventbus":                 true,
+	"eventbus-internal-admin":         true,
+	"metrics-publisher":               true,
+	"monitor-observability-consumer":  true,
+	"cloudnode-eventbus":              true,
+	"collector-market-fetch-consumer": true,
+	"factor-eventbus":                 true,
+	"strategy-eventbus":               true,
+	"trade-eventbus":                  true,
 }
 
 type eventbusBundle struct {
@@ -259,17 +260,19 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 		return err
 	}
 	roleFiles := map[string]string{
-		"eventbus-internal-admin":        "internal-admin.yaml",
-		"hostagent-publisher":            "hostagent-publisher.yaml",
-		"metrics-publisher":              "metrics-publisher.yaml",
-		"monitor-observability-consumer": "monitor-observability.yaml",
-		"storage-eventbus":               "storage-eventbus.yaml",
-		"archive-eventbus":               "archive-eventbus.yaml",
-		"cloudnode-eventbus":             "cloudnode-eventbus.yaml",
-		"cloudnode-worker":               "cloudnode-worker.yaml",
-		"factor-eventbus":                "factor-eventbus.yaml",
-		"strategy-eventbus":              "strategy-eventbus.yaml",
-		"trade-eventbus":                 "trade-eventbus.yaml",
+		"eventbus-internal-admin":         "internal-admin.yaml",
+		"hostagent-publisher":             "hostagent-publisher.yaml",
+		"metrics-publisher":               "metrics-publisher.yaml",
+		"monitor-observability-consumer":  "monitor-observability.yaml",
+		"storage-eventbus":                "storage-eventbus.yaml",
+		"archive-eventbus":                "archive-eventbus.yaml",
+		"cloudnode-eventbus":              "cloudnode-eventbus.yaml",
+		"cloudnode-worker":                "cloudnode-worker.yaml",
+		"market-fetch-publisher":          "market-fetch-publisher.yaml",
+		"collector-market-fetch-consumer": "collector-market-fetch-consumer.yaml",
+		"factor-eventbus":                 "factor-eventbus.yaml",
+		"strategy-eventbus":               "strategy-eventbus.yaml",
+		"trade-eventbus":                  "trade-eventbus.yaml",
 	}
 	for role, name := range roleFiles {
 		field := "token"
@@ -330,15 +333,17 @@ func usersYAML(tokens map[string]string) string { // ACLs are deliberately subje
 		"  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"$JS.EVENT.ADVISORY.API\"]}\n"+
 		"  - username: hostagent-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.observability.host.snapshot.reported.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: metrics-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.observability.metrics.snapshot.reported.v1.>\", \"moox.observability.health.check.reported.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: monitor-observability-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.ACK.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: monitor-observability-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.ACK.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\", \"$JS.API.CONSUMER.INFO.*.monitor-market-fetch-v1\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.monitor-market-fetch-v1\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.monitor-market-fetch-v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_MARKET_FETCH.monitor-market-fetch-v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_MARKET_FETCH.monitor-market-fetch-v1\", \"$JS.ACK.MOOX_MARKET_FETCH.monitor-market-fetch-v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: storage-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.storage.dataset.rows.upserted.v2.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.storage_view\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view\", \"$JS.ACK.MOOX_STORAGE.storage_view.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: archive-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.moox_archive_kline_v2\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.moox_archive_kline_v2.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.ACK.MOOX_STORAGE.moox_archive_kline_v2.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: cloudnode-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.cloudnode.job.execution.requested.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.>\", \"$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>\", \"$JS.API.CONSUMER.CREATE.MOOX_CLOUDNODE_EXEC.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>\", \"$JS.ACK.MOOX_CLOUDNODE_EXEC.>\", \"$JS.API.STREAM.INFO.KV_MOOX_CLOUDNODE_JOB_ACTIVE\", \"$JS.API.STREAM.MSG.GET.KV_MOOX_CLOUDNODE_JOB_ACTIVE\", \"$JS.API.DIRECT.GET.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>\", \"$JS.API.CONSUMER.CREATE.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>\", \"$JS.API.CONSUMER.DELETE.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>\", \"$KV.MOOX_CLOUDNODE_JOB_ACTIVE.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: cloudnode-worker\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.observability.metrics.snapshot.reported.v1.>\", \"moox.observability.health.check.reported.v1.>\", \"$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>\", \"$JS.ACK.MOOX_CLOUDNODE_EXEC.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: market-fetch-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.market.fetch.batch.completed.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: collector-market-fetch-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.*\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_MARKET_FETCH.*\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_MARKET_FETCH.*\", \"$JS.ACK.MOOX_MARKET_FETCH.*.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: factor-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.factor_calc\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_calc\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_calc.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_calc\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_calc\", \"$JS.ACK.MOOX_STORAGE.factor_calc.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.trade.target.requested.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: trade-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.trade_target_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_v1\", \"$JS.ACK.MOOX_TRADE.trade_target_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
-		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["cloudnode-eventbus"], tokens["cloudnode-worker"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"])
+		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["cloudnode-eventbus"], tokens["cloudnode-worker"], tokens["market-fetch-publisher"], tokens["collector-market-fetch-consumer"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"])
 }
 func atomicSecretFile(path string, data []byte) error {
 	dir := filepath.Dir(path)

@@ -10,10 +10,23 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 )
 
+type singleAttemptContextKey struct{}
+
+// SingleAttempt marks an outbound provider request as one-shot. Short-lived
+// SCF batches retry at the Collector boundary instead of spending the 10s
+// function budget on in-function backoff.
+func SingleAttempt(ctx context.Context) context.Context {
+	return context.WithValue(ctx, singleAttemptContextKey{}, true)
+}
+
 func retryBinance(ctx context.Context, operation func() error) error {
+	attempts := 3
+	if single, _ := ctx.Value(singleAttemptContextKey{}).(bool); single {
+		attempts = 1
+	}
 	return retry.Do(
 		operation,
-		retry.Attempts(3),
+		retry.Attempts(uint(attempts)),
 		retry.Delay(200*time.Millisecond),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxDelay(time.Second),

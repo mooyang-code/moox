@@ -15,6 +15,7 @@ require (
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/msgbox v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/tencentyun/scf-go-lib v0.0.0-20230904103145-13c9a7eeca80
@@ -71,6 +72,8 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstr
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
 replace github.com/mooyang-code/moox/packages/msgbox => ../../packages/msgbox
+
+replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
 
 replace github.com/mooyang-code/moox/packages/observabilitypb => ../../packages/observabilitypb
 

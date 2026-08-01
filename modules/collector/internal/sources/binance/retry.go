@@ -11,10 +11,21 @@ import (
 
 const outboundAttempts = 3
 
+type singleAttemptContextKey struct{}
+
+// SingleAttempt marks Storage calls as one-shot for short-lived SCF batches.
+func SingleAttempt(ctx context.Context) context.Context {
+	return context.WithValue(ctx, singleAttemptContextKey{}, true)
+}
+
 func retryStorage(ctx context.Context, operation func() error) error {
+	attempts := outboundAttempts
+	if single, _ := ctx.Value(singleAttemptContextKey{}).(bool); single {
+		attempts = 1
+	}
 	return retry.Do(
 		operation,
-		retry.Attempts(outboundAttempts),
+		retry.Attempts(uint(attempts)),
 		retry.Delay(200*time.Millisecond),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxDelay(time.Second),

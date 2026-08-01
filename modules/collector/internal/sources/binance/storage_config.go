@@ -31,6 +31,19 @@ type APIConfig struct {
 	SwapBaseURL string `yaml:"swap_base_url"`
 }
 
+// InstTypeForMarket converts the scheduler's lower-case market label to the
+// Binance API product type used by the existing collectors.
+func InstTypeForMarket(market string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(market)) {
+	case "spot", "现货":
+		return InstTypeSPOT, nil
+	case "swap", "futures", "future", "perpetual", "合约", "永续合约":
+		return InstTypeSWAP, nil
+	default:
+		return "", fmt.Errorf("unsupported market type %q", market)
+	}
+}
+
 type binanceSourceConfig struct {
 	App struct {
 		ID          string `yaml:"id"`

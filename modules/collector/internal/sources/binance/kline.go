@@ -36,6 +36,99 @@ type KlineCollector struct {
 	now            func() time.Time
 }
 
+// NewKlineCollector returns a configured Binance K-line collector for bounded
+// short-lived invocations. It intentionally does not attach a Storage writer.
+func NewKlineCollector() *KlineCollector {
+	client := newConfiguredClient()
+	return &KlineCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client), swapAPI: binanceapi.NewSwapAPI(client)}
+}
+
+// FetchRealtimeRows fetches only the latest closed K-lines and returns rows for
+// one aggregate Storage commit. It never reads a Storage watermark.
+func (c *KlineCollector) FetchRealtimeRows(ctx context.Context, params *sources.CollectParams, limit int) ([]*storagepb.RowFieldUpsert, time.Time, error) {
+	if params == nil {
+		return nil, time.Time{}, fmt.Errorf("K线采集参数不能为空")
+	}
+	if limit <= 0 || limit > 3 {
+		return nil, time.Time{}, fmt.Errorf("realtime kline limit must be between 1 and 3")
+	}
+	spaceID := strings.TrimSpace(params.SpaceID)
+	datasetID := strings.TrimSpace(params.DatasetID)
+	if spaceID == "" || datasetID == "" || strings.TrimSpace(params.Symbol) == "" || strings.TrimSpace(params.SubjectID) == "" {
+		return nil, time.Time{}, fmt.Errorf("space_id, dataset_id, symbol and subject_id are required")
+	}
+	freq, err := normalizeFreq(params.Interval)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	requestCtx := binanceapi.SingleAttempt(ctx)
+	klines, err := c.fetchKlines(requestCtx, params, &exchange.KlineRequest{Symbol: params.Symbol, Interval: params.Interval, Limit: limit})
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	converted := convertExchangeKlines(klines, params.SubjectID, params.Interval)
+	closed, _ := filterClosedKlines(converted, c.currentTime())
+	rows, err := buildKlineRows(closed, spaceID, datasetID, params.SubjectID, freq)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	var watermark time.Time
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
+			continue
+		}
+		value, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetTimeSeries().GetDataTime())
+		if parseErr == nil && (watermark.IsZero() || value.After(watermark)) {
+			watermark = value.UTC()
+		}
+	}
+	return rows, watermark, nil
+}
+
+// FetchCatchupRows fetches one bounded historical page. It deliberately does
+// not follow pagination; the scheduler creates another catchup batch when a
+// gap remains.
+func (c *KlineCollector) FetchCatchupRows(ctx context.Context, params *sources.CollectParams, start time.Time, limit int) ([]*storagepb.RowFieldUpsert, time.Time, error) {
+	if params == nil {
+		return nil, time.Time{}, fmt.Errorf("K线采集参数不能为空")
+	}
+	if limit <= 0 || limit > 1000 {
+		return nil, time.Time{}, fmt.Errorf("catchup kline limit must be between 1 and 1000")
+	}
+	spaceID := strings.TrimSpace(params.SpaceID)
+	datasetID := strings.TrimSpace(params.DatasetID)
+	if spaceID == "" || datasetID == "" || strings.TrimSpace(params.Symbol) == "" || strings.TrimSpace(params.SubjectID) == "" {
+		return nil, time.Time{}, fmt.Errorf("space_id, dataset_id, symbol and subject_id are required")
+	}
+	if start.IsZero() {
+		return nil, time.Time{}, fmt.Errorf("catchup start_time is required")
+	}
+	freq, err := normalizeFreq(params.Interval)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	klines, err := c.fetchKlines(binanceapi.SingleAttempt(ctx), params, &exchange.KlineRequest{Symbol: params.Symbol, Interval: params.Interval, Limit: limit, StartTime: start.UTC()})
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	closed, _ := filterClosedKlines(convertExchangeKlines(klines, params.SubjectID, params.Interval), c.currentTime())
+	rows, err := buildKlineRows(closed, spaceID, datasetID, params.SubjectID, freq)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	var watermark time.Time
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
+			continue
+		}
+		value, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetTimeSeries().GetDataTime())
+		if parseErr == nil && (watermark.IsZero() || value.After(watermark)) {
+			watermark = value.UTC()
+		}
+	}
+	return rows, watermark, nil
+}
+
 type klineStorage interface {
 	LatestTimeSeriesTime(context.Context, *storagepb.TimeSeriesSelector) (time.Time, bool, error)
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
@@ -44,12 +137,7 @@ type klineStorage interface {
 // init 自注册到采集器注册中心
 func init() {
 	// 创建采集器实例
-	client := newConfiguredClient()
-	c := &KlineCollector{
-		client:  client,
-		spotAPI: binanceapi.NewSpotAPI(client),
-		swapAPI: binanceapi.NewSwapAPI(client),
-	}
+	c := NewKlineCollector()
 
 	for _, market := range []struct {
 		id string

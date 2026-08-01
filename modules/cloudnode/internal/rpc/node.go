@@ -88,8 +88,10 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	if existing != nil {
 		node = mergeNodeUpdate(*existing, pbNode)
 	}
-	if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
-		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	if !isMarketFetchNode(&node) {
+		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+			return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
 	}
 	if err := s.catalog.UpsertNode(ctx, node); err != nil {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -136,12 +138,17 @@ func (s *Service) executeCreateNodeItem(
 	if strings.TrimSpace(node.PackageID) == "" {
 		return "", fmt.Errorf("package_id is required")
 	}
-	if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
-		return "", err
+	if !isMarketFetchNode(&node) {
+		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+			return "", err
+		}
 	}
 	if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
 		return "", err
 	}
+	metadata := parseJSONMap(node.Metadata)
+	metadata["deployment_ready"] = true
+	node.Metadata = jsonString(metadata)
 	persistCtx, persistCancel := acceptedSCFPersistenceContext(ctx)
 	defer persistCancel()
 	if err := s.catalog.UpsertNode(persistCtx, node); err != nil {
@@ -251,15 +258,17 @@ func (s *Service) executeDeployNodeItem(
 			node.NodeID,
 		)
 	}
-	if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
-		return "", err
+	if !isMarketFetchNode(node) {
+		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
+			return "", err
+		}
 	}
 	if err := s.updateSCFFunctionCode(ctx, *node, *pkg, item.GetEnvironment(), item.GetConfig(), watchdogEnabled); err != nil {
 		return "", err
 	}
 	persistCtx, persistCancel := acceptedSCFPersistenceContext(ctx)
 	defer persistCancel()
-	if err := s.catalog.UpdateNodeDeployment(persistCtx, spaceID, item.GetNodeId(), item.GetPackageId(), pkg.Version); err != nil {
+	if err := s.catalog.UpdateNodeDeployment(persistCtx, spaceID, item.GetNodeId(), item.GetPackageId(), pkg.Version, item.GetConfig(), item.GetEnvironment()); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("deployed package %s to %s", pkg.PackageID, node.NodeID), nil
@@ -343,7 +352,13 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err != nil {
 			return err
 		}
+		if err := verifySCFFunctionConfiguration(info, item.GetConfig(), item.GetEnvironment(), ref.FunctionName); err != nil {
+			return err
+		}
 		mergeSCFFunctionMetadata(node, info)
+		if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
+			return err
+		}
 		// A previous attempt may have created the function before CloudNode was
 		// interrupted. The package marker proves this is the accepted create,
 		// rather than an unrelated function with the same stable name.
@@ -407,14 +422,44 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err != nil {
 			return err
 		}
+		if err := verifySCFFunctionConfiguration(info, item.GetConfig(), item.GetEnvironment(), ref.FunctionName); err != nil {
+			return err
+		}
 		mergeSCFFunctionMetadata(node, info)
+		if err := ensureSCFAsyncRetryConfig(reconcileCtx, client, ref, isMarketFetchNode(node)); err != nil {
+			return err
+		}
 		return nil
 	}
 	info, err = waitForSCFActive(ctx, client, ref, nil)
 	if err != nil {
 		return err
 	}
+	if err := verifySCFFunctionConfiguration(info, item.GetConfig(), item.GetEnvironment(), ref.FunctionName); err != nil {
+		return err
+	}
 	mergeSCFFunctionMetadata(node, info)
+	if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureSCFAsyncRetryConfig(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, enabled bool) error {
+	if !enabled {
+		return nil
+	}
+	configurer, ok := client.(interface {
+		UpdateFunctionEventInvokeConfig(context.Context, tencentscf.UpdateFunctionEventInvokeConfigRequest) (*tencentscf.UpdateFunctionEventInvokeConfigResponse, error)
+	})
+	if !ok {
+		return nil
+	}
+	// Tencent requires a minimum 60-second async retention period. Keep it
+	// close to the Collector deadline; retries are owned by MooX, not SCF.
+	if _, err := configurer.UpdateFunctionEventInvokeConfig(ctx, tencentscf.UpdateFunctionEventInvokeConfigRequest{FunctionRef: ref, RetryNum: 0, MsgTTL: 60}); err != nil {
+		return fmt.Errorf("configure scf async retry for %s: %w", ref.FunctionName, err)
+	}
 	return nil
 }
 
@@ -552,8 +597,43 @@ func (s *Service) updateSCFFunctionCode(
 	}); err != nil {
 		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
 	}
-	_, err = waitForSCFActive(ctx, client, ref, nil)
-	return err
+	if _, err = waitForSCFActive(ctx, client, ref, nil); err != nil {
+		return err
+	}
+	verified, err := client.GetFunction(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("verify scf function %s configuration: %w", ref.FunctionName, err)
+	}
+	if err := verifySCFFunctionConfiguration(verified, desiredConfig, desiredEnvironment, ref.FunctionName); err != nil {
+		return err
+	}
+	return ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(&node))
+}
+
+func verifySCFFunctionConfiguration(info *tencentscf.FunctionInfo, desiredConfig, desiredEnvironment map[string]string, functionName string) error {
+	if info == nil {
+		return fmt.Errorf("scf function %s configuration readback is empty", functionName)
+	}
+	if expected := configInt64(desiredConfig, "memory_size", 0); expected > 0 {
+		if info.MemorySize <= 0 || info.MemorySize != expected {
+			return fmt.Errorf("scf function %s memory_size=%d; expected %d", functionName, info.MemorySize, expected)
+		}
+	}
+	if expected := configInt64(desiredConfig, "timeout", 0); expected > 0 {
+		if info.Timeout <= 0 || info.Timeout != expected {
+			return fmt.Errorf("scf function %s timeout=%d; expected %d", functionName, info.Timeout, expected)
+		}
+	}
+	for key, expected := range desiredEnvironment {
+		if actual, ok := info.Environment[key]; !ok || actual != expected {
+			return fmt.Errorf("scf function %s environment %q does not match desired configuration", functionName, key)
+		}
+	}
+	return nil
+}
+
+func isMarketFetchNode(node *store.CloudNode) bool {
+	return node != nil && strings.EqualFold(strings.TrimSpace(metadataString(parseJSONMap(node.Metadata), "biz_type")), "market_fetcher")
 }
 
 func (s *Service) ensureSingleSCFWatchdog(ctx context.Context, spaceID, nodeID string) error {
@@ -872,11 +952,21 @@ func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNo
 	if node.GetRunningVersion() != "" {
 		next.RunningVersion = node.GetRunningVersion()
 	}
-	if len(node.GetSupportedWorkloads()) > 0 {
+	metadata := nodeMetadataFromPB(node)
+	bizType := metadataString(metadata, "biz_type")
+	if bizType == "" {
+		bizType = metadataString(parseJSONMap(existing.Metadata), "biz_type")
+	}
+	if strings.EqualFold(strings.TrimSpace(bizType), "market_fetcher") {
+		// A short-lived market fetcher does not consume JobItem queues. Clear a
+		// stale value when an existing node is republished from the greenfield
+		// configuration, where an empty repeated protobuf field is otherwise
+		// indistinguishable from an omitted field.
+		next.SupportedWorkloads = "[]"
+	} else if len(node.GetSupportedWorkloads()) > 0 {
 		raw, _ := json.Marshal(node.GetSupportedWorkloads())
 		next.SupportedWorkloads = string(raw)
 	}
-	metadata := nodeMetadataFromPB(node)
 	if len(metadata) > 0 {
 		next.Metadata = mergeMetadataJSON(existing.Metadata, jsonString(metadata))
 	}

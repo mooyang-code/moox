@@ -36,7 +36,7 @@ func TestJobDefinitionByDataTypeReturnsKlineFields(t *testing.T) {
 
 func TestBuildTaskSpecsDispatchesByCollectorParams(t *testing.T) {
 	params := &domain.CollectParams{}
-	params.Normalize("binance", "kline")
+	params.Normalize("binance", "spot", "kline")
 	params.Source.Kind = "dataset_subjects"
 	params.Collector.Market = "spot"
 	params.Collector.Intervals = []string{"1m"}

@@ -102,9 +102,11 @@ Symbol 规则负责生成或刷新 RECORD 类型的 Symbol Dataset。用户可�
   "data_type": "symbol",
   "provider": "binance",
   "market_type": "spot",
-  "symbol_source": "manual",
-  "symbols": ["BTC-USDT", "ETH-USDT"],
-  "target_dataset_id": "binance_spot_symbols"
+  "collect_params": {
+    "symbol_source": "manual",
+    "symbols": ["BTC-USDT", "ETH-USDT"],
+    "target_dataset_id": "binance_spot_symbols"
+  }
 }
 ```
 
@@ -113,7 +115,7 @@ Symbol 规则负责生成或刷新 RECORD 类型的 Symbol Dataset。用户可�
 1. Collector 生成只包含一个规则项的 `symbol_snapshot` BatchInvocation。
 2. SCF 调用 Binance exchangeInfo 获取一次市场标的快照；行情数据源 API 不从 Collector 本机调用。
 3. SCF 仅保留用户 `symbols` 中存在且处于 active 状态的标的。
-4. 将规范化 Symbol 批量写入 `target_dataset_id`。
+4. 将规范化 Symbol 写入 `target_dataset_id`；为避免 SQLite 元数据快照串行刷新挤占固定 10 秒预算，首版每条手动 Symbol 规则最多 20 个标的，并串行提交元数据。
 5. 用户配置但 Binance 不存在的 Symbol 标记为规则错误，不进入 K 线任务。
 6. 现货与合约必须使用不同 Symbol Dataset，例如 `binance_spot_symbols` 和 `binance_futures_symbols`。
 
@@ -126,12 +128,16 @@ K 线等普通行情规则必须关联 Symbol Dataset，不直接保存另一份
   "data_type": "kline",
   "provider": "binance",
   "market_type": "spot",
-  "symbol_source": "dataset",
-  "symbol_dataset_id": "binance_spot_symbols",
-  "target_dataset_id": "binance_spot_kline_1m",
-  "frequency": "1m"
+  "collect_params": {
+    "symbol_source": "dataset",
+    "symbol_dataset_id": "binance_spot_symbols",
+    "target_dataset_id": "binance_spot_kline_1m",
+    "frequency": "1m"
+  }
 }
 ```
+
+示例展示的是 `TaskRule` 的字段包络；`data_type`、`provider` 和 `market_type` 属于外层 Rule，只有 `collect_params` 内的对象会被 Collector 的严格 JSON 解析器读取。
 
 规则校验必须保证：
 
@@ -139,9 +145,10 @@ K 线等普通行情规则必须关联 Symbol Dataset，不直接保存另一份
 - `symbol_dataset_id` 是 RECORD Dataset；
 - `target_dataset_id` 是启用中的 TimeSeries Dataset；
 - `frequency` 已在目标 Dataset 中启用；
+- Binance 的 Symbol Dataset 和 K 线 Dataset 必须在 `attributes.market_type` 写明 `spot` 或 `swap`，并与规则 `market_type` 完全一致；仅检查共同的 `data_source_id=binance` 无法阻止现货、合约串写。
 - `symbol_source` 对普通行情只能是 `dataset`；
 - `symbol_source=manual` 只用于 Symbol Dataset 规则。
-- `symbols` 必须去重、规范化且数量不超过 1000；最终 SCF 事件仍必须通过 128KB 大小校验。
+- `symbols` 仅用于手动 Symbol 规则，必须去重、规范化且数量不超过 20；普通 K 线的标的数量来自 Dataset，不受该配置项限制。最终 Scheduler 生成的异步事件预留 Envelope 空间后不得超过 120KB，Handler 仍拒绝超过 128KB 的入参。
 
 ### 4.4 稳定标识
 
@@ -222,9 +229,9 @@ Collector Timer
 
 强制顺序：
 
-1. 在 SQLite 事务中插入 `planned` 批次及完整 `request_json`，同时设置 `deadline_at=planned_at+30s`。
+1. 在 SQLite 事务中插入 `planned` 批次及完整 `request_json`，同时设置 `deadline_at=planned_at+70s`。
 2. 调用 CloudNode `InvokeFunction(Event)`。
-3. 调用成功后使用条件更新将 `planned` 转为 `dispatched`，写入 `request_id`、`dispatched_at`，并将 `deadline_at` 更新为 `dispatched_at+20s`。
+3. 调用成功后使用条件更新将 `planned` 转为 `dispatched`，写入 `request_id`、`dispatched_at`，并将 `deadline_at` 更新为 `dispatched_at+70s`。腾讯异步消息最短可保留 60 秒，Collector 额外预留 10 秒给事件投递和 Completion 消费；SCF 的业务执行仍固定为 10 秒。
 4. 如果完成事件先于 CloudNode 响应到达，调用返回后的更新只能补充 `request_id`，不得把 terminal 状态回退为 `dispatched`。
 5. 调用同步失败时，不删除批次；仅当批次仍为 `planned` 时将全部 CollectionItem 写入 RetryItem。
 6. Completion Consumer 收到完成事件后，事务更新批次和 RetryItem，再 ACK。
@@ -278,7 +285,7 @@ CloudNode 异步调用的 JSON 使用固定 `action=market_fetch`：
 - `catchup`：恰好 1 个 item，必须携带 `start_time`，`bar_limit<=1000`；
 - `symbol_snapshot`：恰好 1 个规则项，携带去重后的 `manual_symbols`，调用一次 exchangeInfo。
 
-Handler 必须拒绝未知字段组合、空 Dataset、重复 task_id、跨 Dataset items 和超过配置上限的载荷。序列化后的异步事件必须小于 128KB；部署前测试以最大长度 Symbol 和 10 个 realtime items 验证该边界。
+Handler 必须拒绝未知字段组合、空 Dataset、重复 task_id、跨 Dataset items 和超过配置上限的载荷。`data.space_id` 必须与函数部署时受管环境变量 `MOOX_SPACE_ID` 完全一致；不一致时在任何 Storage 写入或 EventBus 发布之前失败。序列化后的异步事件必须小于 128KB；部署前测试以最大长度 Symbol 和 10 个 realtime items 验证该边界。
 
 ## 6. 实时采集与历史补采分离
 
@@ -302,7 +309,7 @@ Handler 必须拒绝未知字段组合、空 Dataset、重复 task_id、跨 Data
 
 ### 6.2 Gap Audit 与 CatchupBatch
 
-历史缺口不进入每分钟实时批次。Collector 在现有 Timer 中每 10 分钟执行一次轻量 Gap Audit：
+历史缺口不进入每分钟实时批次。Collector 在现有 Timer 中每分钟执行一次轻量 Gap Audit：
 
 1. 先筛选最近成功时间已经落后 3 个 Frequency 的 TaskInstance，只对这些候选项读取 Storage 最新水位。
 2. 若水位落后目标时间超过实时窗口覆盖范围，生成 CatchupBatch。
@@ -393,30 +400,35 @@ region = "ap-guangzhou"
 display_name = "华南地区（广州）"
 enabled = true
 function_count = 1
+cloud_account_id = "tencent-scf-guangzhou"
 
 [[scf_fetcher.regions]]
 region = "ap-shanghai"
 display_name = "华东地区（上海）"
 enabled = true
 function_count = 1
+cloud_account_id = "tencent-scf-shanghai"
 
 [[scf_fetcher.regions]]
 region = "ap-beijing"
 display_name = "华北地区（北京）"
 enabled = true
 function_count = 1
+cloud_account_id = "tencent-scf-beijing"
 
 [[scf_fetcher.regions]]
 region = "ap-chengdu"
 display_name = "西南地区（成都）"
 enabled = true
 function_count = 1
+cloud_account_id = "tencent-scf-chengdu"
 
 [[scf_fetcher.regions]]
 region = "ap-hongkong"
 display_name = "港澳台地区（中国香港）"
 enabled = true
 function_count = 1
+cloud_account_id = "tencent-scf-hongkong"
 ```
 
 配置校验：
@@ -424,12 +436,16 @@ function_count = 1
 - `memory_size` 必须等于 64；若真实压测出现 OOM，停止扩量并重新评审内存与成本，不静默改成更大值；
 - timeout 必须为 10；
 - `request_timeout_ms + commit_reserve_ms < 10000`；
-- `max_inflight_requests > 0`；
+- `1 <= max_inflight_requests <= 64`；超过 Executor 上限直接拒绝，避免函数启动后每批都因非法并发配置失败；
 - `realtime_batch_size` 初始不得超过 10；
 - `http_max_attempts` 必须为 1；
 - `storage_max_attempts` 必须为 1；
 - 地域不能重复；
+- 至少一个地域必须 `enabled = true`；
 - 每个启用地域 `function_count >= 1`；
+- 每个启用地域必须声明 `cloud_account_id`，且该云账户的 COS Region 与 SCF Region 相同；发布前 CLI 直接拒绝跨地域 COS 包和拼写错误的地域；
+- 每个地域由 CLI 创建或复用同地域的 SCF 平台 CLS Logset/Topic。函数包不内置 CLS SDK writer，不注入 `MOOX_CLS_SECRET_*`，日志投递只由 SCF 函数级 CLS 配置完成；
+- `retry_delays` 只接受固定值 `["5s", "30s", "2m"]`，`stagger_enabled` 必须为 `false`；首版不实现可配置错峰；
 - 所有函数的环境变量总大小不得超过腾讯云限制；
 - 未配置 `[scf_fetcher]` 时不创建 Fetcher，不影响不使用 SCF 的用户。
 
@@ -452,18 +468,25 @@ CloudNode `c_metadata` 至少保存：
 ```json
 {
   "biz_type": "market_fetcher",
-  "supported_workloads": ["symbol_snapshot", "kline_realtime", "kline_catchup"],
+  "supported_workloads": [],
   "memory_size": 64,
   "timeout_seconds": 10,
   "max_inflight_requests": 5,
   "realtime_batch_size": 10,
   "request_timeout_ms": 2000,
   "http_max_attempts": 1,
-  "storage_max_attempts": 1
+  "storage_max_attempts": 1,
+  "realtime_bar_limit": 3,
+  "catchup_batch_size": 1,
+  "catchup_bar_limit": 1000,
+  "commit_reserve_ms": 2000,
+  "max_retry_attempts": 3
 }
 ```
 
-`biz_type=market_fetcher` 是节点的业务身份，不是兼容旧执行模式的开关。Collector 只读取该业务类型且部署状态为 Active 的节点，不维护第二份函数配置表，也不保留 `execution_mode`、旧 Worker 模式或双模式分支。
+重新发布已有 Fetcher 时，Collector 将这些受管环境变量同步回 `c_metadata`，避免“腾讯云函数已更新、CloudNode 目录仍显示旧配置”的漂移。
+
+`biz_type=market_fetcher` 是节点的业务身份，不是兼容旧执行模式的开关。它不消费 CloudNode JobItem queue，因此 `supported_workloads` 固定为空；CloudNode 仅对该业务类型跳过通用 queue provisioning，其他业务节点维持原行为。Collector 只读取该业务类型且部署状态为 Active 的节点，不维护第二份函数配置表，也不保留 `execution_mode`、旧 Worker 模式或双模式分支。
 
 ## 9. EventBus 完成事件与重试
 
@@ -546,7 +569,7 @@ message MarketFetchBatchCompleted {
 ```yaml
 - name: MOOX_MARKET_FETCH
   subjects: ["moox.market.fetch.batch.completed.v1.>"]
-  retention: work_queue
+  retention: limits
   discard: old
   storage: file
   replicas: 1
@@ -580,7 +603,7 @@ deliver_policy: all
 | 角色 | 运行位置 | 权限 |
 | --- | --- | --- |
 | `market-fetch-publisher` | SCF | 只允许发布 `moox.market.fetch.batch.completed.v1.>` 和订阅自身 `_INBOX.>` |
-| `collector-market-fetch-consumer` | Collector 控制节点 | 只允许创建、绑定、拉取和 ACK `MOOX_MARKET_FETCH/collector-market-fetch-completion-v1` |
+| `collector-market-fetch-consumer` | Collector 控制节点 | 只允许创建、绑定、拉取和 ACK 本 space 的 `MOOX_MARKET_FETCH/collector-market-fetch-completion-v1-<space_id>` |
 
 `market-fetch-publisher` 不允许创建 Consumer、读取其他 Stream 或发布 Observability 指标。`collector-market-fetch-consumer` 不允许发布业务事件。发布包只注入 publisher 凭据内容和 CA，不复制仓库 `custom.toml`。
 
@@ -614,7 +637,7 @@ permission_denied
 invalid_rule_config
 ```
 
-HTTP 429 优先采用 `Retry-After`；没有该字段时使用 5 秒、30 秒、2 分钟。最多重试 3 次。
+HTTP 429、5xx、网络错误和 Storage 临时错误统一使用固定 5 秒、30 秒、2 分钟退避，最多重试 3 次；首版不解析 `Retry-After`，避免为个人量化场景引入额外状态。
 
 当后续实时批次已经成功写入同一 Dataset、Subject、Frequency 且 `target_data_time` 不早于 RetryItem 目标时间时，旧 RetryItem 标记为 `superseded`，不再浪费 SCF 调用。
 
@@ -780,7 +803,7 @@ Dispatcher 对 CloudNode 调用使用最多 20 个并发；这是控制面请求
 9. 以初始 batch size 10 分组。
 10. 按启用地域和函数 round-robin 分配批次。
 11. 先保存 `planned`，再异步调用 CloudNode。
-12. 每 10 分钟执行 Gap Audit；每小时执行历史状态清理。
+12. 每分钟执行 Gap Audit；每小时执行历史状态清理。
 
 确定性的 `batch_id` 和 `space_id + schedule_id + batch_kind + shard_index + attempt` 唯一索引，保证 Timer 每 10 秒扫描时不会重复创建同一周期的同一分片；`schedule_id` 用于聚合一个周期内的多个批次，不要求单列唯一。
 
@@ -798,11 +821,11 @@ Dispatcher 对 CloudNode 调用使用最多 20 个并发；这是控制面请求
 中国香港 1 个函数
 ```
 
-1000 个 Symbol、batch size 10 时每分钟约 100 次调用，按 5 个地域 round-robin 后每地域约 20 次。一个函数名可以由 SCF 平台按并发自动扩出多个实例，不需要预先创建 10 个同地域函数。
+1000 个 K 线 Symbol、batch size 10 时每分钟约 100 次调用，按 5 个地域 round-robin 后每地域约 20 次。一个函数名可以由 SCF 平台按并发自动扩出多个实例，不需要预先创建 10 个同地域函数。Symbol Dataset 刷新是独立的手动小批次，不承担全交易所 1000 标的元数据同步。
 
 ### 13.2 一次性出口探针
 
-出口探针不是腾讯云系统函数，也不是常驻 Watchdog。它是同一个行情 Fetcher Handler 的一次性诊断动作，只在函数部署完成后、Collector Scheduler 启用前或人工排障时同步调用：
+出口探针不是腾讯云系统函数，也不是常驻 Watchdog。它是同一个短时行情 Fetcher Handler 的一次性诊断动作，只在函数部署完成后、Collector Scheduler 启用前或人工排障时同步调用。这样不新增函数、不引入定时探针，也能验证“SCF 能否访问 Binance”；公网 IP 反射服务仅作为辅助信息：
 
 ```json
 {
@@ -814,10 +837,10 @@ Dispatcher 对 CloudNode 调用使用最多 20 个并发；这是控制面请求
 
 执行流程保持简单：
 
-1. `moox-cli collector function probe-egress --file ./custom.toml` 从 CloudNode 枚举所有 `biz_type=market_fetcher` 且部署状态为 Active 的节点。
+1. `moox-cli collector function probe-egress ... | tee artifacts/egress-probe-$(date +%Y%m%d%H%M%S).json` 从 CloudNode 枚举所有 `biz_type=market_fetcher` 且部署状态为 Active 的节点，并把原始 JSON 输出保存为本次发布记录。
 2. CLI 以最多 5 个并发，通过 CloudNode `InvokeFunction(RequestResponse)` 同步调用每个节点一次。
-3. SCF 使用 2 秒超时请求 `https://api.ipify.org?format=json`，解析本次调用的公网出口 IP。
-4. SCF 再使用 2 秒超时请求当前 `provider + market_type` 对应的轻量 `time` 或 `ping` 接口；必须使用真实采集配置中的 Base URL，不能另写一个只供探针使用的 Binance 地址。
+3. SCF 使用 2 秒超时请求当前 `provider + market_type` 对应的轻量 `ping` 接口；必须使用真实采集配置中的 Base URL，不能另写一个只供探针使用的 Binance 地址。该请求是必选检查。
+4. SCF 再以同样的 2 秒上限请求 `https://api.ipify.org?format=text`，解析本次调用的公网出口 IP；该请求是辅助检查，失败只记录 `public_ip_error`，不掩盖 Binance 已经可访问的事实。
 5. Handler 将结果直接返回给 CLI；不写 Storage、不发布 EventBus、不更新业务指标。
 6. CLI 将 CloudNode 已知字段和 Handler 返回字段合并，输出逐节点表格和 `distinct_outbound_ips` 汇总。
 
@@ -838,7 +861,7 @@ Dispatcher 对 CloudNode 调用使用最多 20 个并发；这是控制面请求
 
 失败语义：
 
-- 公网 IP 服务失败时，当前节点结果失败并记录错误，不把空 IP 当作有效出口；
+- 公网 IP 服务失败时，当前节点仍可通过“Binance 连通性”验收，但不把空 IP 当作有效出口，并在记录中保留 `public_ip_error`；
 - Binance 探测失败时，当前节点不通过部署验收；
 - 一个节点失败不阻止 CLI 完成其他节点探测，CLI 最终以非零退出码结束并打印全部失败节点；
 - `coldstart`、`http_429` 和资源使用量不由出口探针判断，分别从腾讯云日志、真实采集完成事件和账单中观察。
@@ -861,7 +884,7 @@ Dispatcher 对 CloudNode 调用使用最多 20 个并发；这是控制面请求
 
 短时 SCF 不启动后台 metrics reporter。SCF 通过批次完成事件传递结果，Collector Completion Consumer 更新内存指标，再由 Collector 现有 `packages/report` 定时统一上报 Observability EventBus。
 
-冷启动精确数据第一版保留在腾讯云 CLS 和 SCF 控制台，不新增 CLS 抓取服务。Collector 只报告批次、采集项、批次总耗时、重试积压和最后成功时间；HTTP 请求耗时与 Storage 提交耗时进入结构化日志，不单独生成指标。
+冷启动精确数据第一版保留在腾讯云 CLS 和 SCF 控制台，不新增 CLS 抓取服务。Collector 只报告批次、批次总耗时、重试积压和最后成功时间；HTTP 请求耗时、Storage 提交耗时及每个采集项的错误进入结构化日志，不单独生成指标。
 
 ### 14.2 指标命名
 
@@ -870,7 +893,6 @@ Dispatcher 对 CloudNode 调用使用最多 20 个并发；这是控制面请求
 ```text
 moox_collector_market_fetch_batches_total
 moox_collector_market_fetch_batch_duration_seconds
-moox_collector_market_fetch_items_total
 moox_collector_market_fetch_retry_pending
 moox_collector_market_fetch_last_success_timestamp_seconds
 ```
@@ -879,13 +901,10 @@ moox_collector_market_fetch_last_success_timestamp_seconds
 
 ```text
 batches_total:
-  space_id, dataset_id, frequency, region, batch_kind, outcome
+  space_id, dataset_id, frequency, outcome
 
 batch_duration_seconds:
-  space_id, dataset_id, frequency, region, batch_kind
-
-items_total:
-  space_id, dataset_id, frequency, outcome
+  space_id, dataset_id, frequency
 
 retry_pending:
   space_id, dataset_id, frequency
@@ -900,31 +919,22 @@ last_success_timestamp_seconds:
 batches_total:
   success, partial_failed, failed, timeout
 
-items_total:
-  success, http_429, http_5xx, network_error, storage_error, invalid_request
 ```
 
-不再单独定义 retry、completion timeout、HTTP 429 和 HTTP 5xx counter：
-
-- 重试原因从 `items_total{outcome=~"http_429|http_5xx|network_error"}` 得到；
-- Completion 超时从 `batches_total{outcome="timeout"}` 得到；
-- 429 和 5xx 分别从 `items_total` 对应 outcome 得到；
-- 详细请求耗时、Storage 提交耗时、原始错误和 `Retry-After` 写结构化日志。
+不再单独定义 item、retry、completion timeout、HTTP 429 和 HTTP 5xx counter。批次状态、RetryItem 积压和最后成功时间分别由上述 4 个指标提供；429、5xx、网络错误、Storage 错误、请求耗时和提交耗时写入结构化日志与完成事件明细。
 
 `provider` 和 `market_type` 可由 `dataset_id` 关联配置获得，不重复放进指标标签。`symbol`、`batch_id`、`function_name`、`node_id` 和 SCF 实例 ID 只进入日志或 SQLite，禁止作为指标标签。
 
 ### 14.3 Monitor 检查
 
-Monitor 为每个启用 Dataset + Frequency 检查：
+Monitor 的职责分成两层，避免把 Collector 的 SQLite 明细复制进 Monitor：
 
-- 最近一次成功周期时间；
-- Dataset 最新数据时间；
-- 周期 planned/success/retry/permanent_failed 数量；
-- 批次完成率；
-- Completion 超时数量；
-- RetryItem 积压和最老等待时间；
-- 连续失败周期数；
-- CloudNode Fetcher 部署是否 Active。
+- `businessFreshness` 读取 Storage 真值，按每个启用的实时 TimeSeries Dataset + Frequency 检查最近一次数据时间；因此 Monitor 重启、EventBus 暂时不可用或从未收到 Completion 时，仍能通过 Dataset freshness 发现“没有新数据”。
+- `market_fetch` Completion Consumer 只保存每个 Dataset + Frequency 的最后一条小快照，并生成批次状态、新鲜度、失败摘要和待重试数量的 CheckResult；这部分用于中文告警诊断，不声称它等价于 Collector 的完整 planned/success/retry/permanent 明细。
+- Collector 的 gap audit 不用 `last_exec_time` 截断候选，而是以 `c_id` 游标轮转扫描，每分钟读取最多 80 个启用实例；Storage watermark 查询并发上限为 16、单项超时 1.5 秒，每分钟最多创建 5 个 catch-up 批次。最坏为 5 轮查询，给固定 10 秒 tRPC timer 预留收尾时间；只有本轮审计完整返回才推进审计时间，超时或错误会在下一次 timer 重试。这样既不会让 1h 等慢频率任务被固定旧行饿死，也不会在 10 秒 tRPC timer 内顺序阻塞一千次 RPC。
+- CloudNode Fetcher 是否 Active 继续由现有 sysdeploy/CloudNode 检查负责；短时函数不使用心跳判活。
+
+Collector 自己负责 BatchInvocation、Completion timeout、RetryItem 最老等待时间和批次完成率；Monitor 不直接查询 Collector SQLite。若后续需要在 Monitor 展示这些精确字段，再增加一个只读 Collector overview RPC，不通过 EventBus 复制明细表。
 
 短时 SCF 不再使用 `scf:heartbeat` 判断函数在线。未被调用的备用函数没有心跳是正常状态。
 
@@ -933,13 +943,13 @@ Monitor 为每个启用 Dataset + Frequency 检查：
 示例：
 
 ```text
-[严重] 行情采集批次未完成：binance_spot_kline_1m/1m
-异常原因：计划调用 100 个批次，20 秒内仅收到 97 个完成回执
-建议处理：检查缺失批次对应地域的 SCF 日志、CloudNode request_id 和 EventBus 连通性
-诊断信息：schedule_id=... missing_batch_count=3 oldest_deadline=...
+[严重] 行情数据新鲜度异常：binance_spot_kline_1m/BTC-USDT/1m
+异常原因：Storage 最新已收盘 K 线距当前已超过允许的新鲜度；最近批次状态为 failed
+建议处理：检查 Collector 批次、SCF 日志、CloudNode request_id 和 EventBus 连通性
+诊断信息：dataset_id=binance_spot_kline_1m frequency=1m batch_id=... retry_count=2 latest_data_time=...
 ```
 
-告警诊断至少包含 `schedule_id`、`batch_id`、`region`、`node_id`、`request_id` 和最后错误摘要。
+告警诊断至少包含 `dataset_id`、`frequency`、`batch_id`、`region`、`node_id`、`request_id`、最新数据时间和最后错误摘要；Collector 自己的批次列表仍保留 planned/success/retry/permanent 细分。
 
 ## 15. 全新初始化与删除范围
 
@@ -997,9 +1007,9 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - `modules/collector/internal/marketfetch/storage.go`：单 Dataset Storage Primary 批量写入。
 - `modules/collector/internal/marketfetch/completion.go`：完成事件构造和发布。
 - `modules/collector/internal/marketfetch/egress_probe.go`：一次性公网出口和数据源连通性探测。
-- `modules/collector/internal/marketfetch/metrics.go`：五个低基数行情采集指标。
+- `modules/collector/internal/marketfetch/metrics.go`：四个低基数行情采集指标。
 - `modules/collector/internal/marketfetch/consumer.go`：Collector Completion Consumer。
-- `modules/collector/internal/marketfetch/recovery.go`：超时回收、RetryItem 和 Gap Audit。
+- `modules/collector/internal/marketfetch/scheduler.go`：超时回收、RetryItem 调度和 Gap Audit。
 - `modules/collector/test/short_lived_market_fetch_e2e_test.go`：本地完整链路 E2E。
 
 ### 修改
@@ -1013,7 +1023,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - `modules/eventbus/config/app.yaml`、配置测试：增加 `MOOX_MARKET_FETCH`。
 - `modules/collector/schema/collector.sql`：直接重建规则、实例、batch 和 retry 表，不保留旧列。
 - `modules/collector/internal/store/database.go`：暴露新 Repository。
-- `modules/collector/proto/collector.proto`：`exchange` 收敛为 `provider`。
+- `modules/collector/proto/collector.proto`：规则字段收敛为 `provider`、`market_type`；不保留 `exchange`。
 - `modules/collector/internal/domain/task_rule.go`、`task_instance.go`：同步命名和稳定任务语义。
 - `modules/collector/internal/jobs/symbol/*`：手动 Symbol allowlist 和目标 Dataset 校验。
 - `modules/collector/internal/jobs/kline/*`：只允许 Dataset Symbol 来源。
@@ -1068,7 +1078,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - [ ] 运行 `cd modules/cli && go test -count=1 ./internal/setup/config ./internal/command`，确认新字段当前被 strict loader 拒绝。
 - [ ] 增加 `SCFFetcher`、`SCFFetcherRegion` typed config 和本计划中的默认值。
 - [ ] 将 `collector function publish submit` 改为接受 `--file ./custom.toml`，从 `scf_fetcher.regions` 展开函数池；Fetcher 模式不再使用单一 `--region` 和 `--node-count` 作为真值。
-- [ ] 将配置转换为 NodeCreateItem metadata、config 和 environment；metadata 固定使用 `biz_type=market_fetcher`，不得生成 `execution_mode`。
+- [ ] 将配置转换为 NodeCreateItem metadata、config 和 environment；metadata 固定使用 `biz_type=market_fetcher` 和空 `supported_workloads`，不得生成 `execution_mode` 或 `MOOX_COLLECTOR_JOB_TYPES`。
 - [ ] 发布后通过 DescribeFunction 回读 memory、timeout 和环境变量；任一不一致则发布任务失败。
 - [ ] 运行 `make verify-custom-setup`。
 - [ ] 提交：`feat(setup): add short-lived scf fetcher config`。
@@ -1107,7 +1117,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - [ ] 写 Symbol manual allowlist、`symbol_snapshot` 只生成一个规则项、Kline 必须引用 Dataset、现货/合约 Dataset 不匹配的测试。
 - [ ] 写 1000 个 active subjects 生成 100 个 size=10 批次的测试。
 - [ ] 写连续两次相同 schedule 生成相同 batch_id、节点列表变化也不重复建 shard、不同 schedule 仍复用稳定 TaskInstance 的测试。
-- [ ] 写 Proto、JSON 和数据库只接受 `provider`、`market_type`、`frequency`，拒绝旧字段别名的测试。
+- [ ] 写 Proto、JSON 和数据库只接受 `provider`、`market_type`、`frequency`，拒绝 `exchange`、`market`、嵌套 `collector/source/target/schedule` 等旧字段的测试。
 - [ ] 串行运行 `make proto`，不要与 Go 测试并发。
 - [ ] 实现 `provider` 命名、规则校验、稳定 TaskInstance 和 round-robin 地域分配。
 - [ ] 运行 `cd modules/collector && go test -race -count=1 ./internal/jobs/... ./internal/planner/... ./internal/domain/...`。
@@ -1137,15 +1147,16 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - Modify: `modules/collector/internal/model/types.go`
 - Modify: `modules/collector/internal/serverless/handler.go`
 - Modify: `modules/collector/cmd/scf/main.go`
-- Test: `internal/marketfetch/*_test.go`、`internal/serverless/handler_test.go`、`cmd/scf/main_test.go`
+- Test: `internal/marketfetch/executor_test.go`、`egress_probe_test.go`、`metrics_test.go`、
+  `internal/serverless/handler_test.go`、`cmd/scf/main_test.go`
 
-- [ ] 写并发永不超过 5、realtime batch 超过 10 被拒绝、8 秒停止新请求的测试。
+- [ ] 写并发永不超过 5、realtime batch 超过 10 被拒绝、8 秒停止新请求，以及 `data.space_id != MOOX_SPACE_ID` 在 Storage/EventBus 前被拒绝的测试。
 - [ ] 写 `symbol_snapshot` 由 SCF 调用 exchangeInfo、按 allowlist 过滤并批量写 RECORD Dataset 的测试。
 - [ ] 写 9 个慢请求加 1 个成功请求的 deadline 测试。
 - [ ] 写 Storage 失败使已抓取项转为 retryable、Storage 成功后才发布成功事件的测试。
 - [ ] 写短时路径 Storage 只调用一次，并为 Primary 请求传入 `source_event_id=batch_id` 的测试。
 - [ ] 写事件发布失败时 Handler 返回错误且依赖 Collector 超时回收的测试。
-- [ ] 写 `action=egress_probe` 依次探测公网 IP 和当前数据源轻量接口、任一失败返回明确错误且不调用 Storage/EventBus 的测试。
+- [ ] 写 `action=egress_probe` 探测公网 IP（辅助）和当前数据源轻量接口（必需），Binance 探测失败返回明确错误且不调用 Storage/EventBus；公网 IP 反射服务失败只记录诊断。
 - [ ] 实现 `egress_probe.go`：两个外部请求各自最多 2 秒，返回 `outbound_ip`、`provider_status`、`latency_ms`、`checked_at` 和 `error`。
 - [ ] 删除生产启动中的常驻 Runner、`select {}`、Keepalive 和后台 observability timer。
 - [ ] 让 `cloudfunction.Start` 直接阻塞运行短时 Handler。
@@ -1157,17 +1168,20 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 
 **文件：**
 
-- Create: `modules/collector/internal/marketfetch/consumer.go`、`recovery.go`
+- Modify: `modules/collector/internal/marketfetch/completion.go`、`scheduler.go`
 - Modify: `modules/collector/internal/bootstrap/bootstrap.go`
 - Modify: `modules/collector/internal/rpc/service.go`
-- Test: `internal/marketfetch/consumer_test.go`、`recovery_test.go`
+- Test: `internal/marketfetch/completion_test.go`、`scheduler_test.go`、
+  `internal/store/fetch_batch_test.go`、`internal/store/fetch_retry_test.go`
 
 - [ ] 写 Consumer “事务成功后 ACK、SQLite 失败 NAK、非法事件 TERM”的测试。
-- [ ] 写 429 Retry-After、5s/30s/2m、最多 3 次和永久错误不重试测试。
-- [ ] 写 planned 超过 30 秒、dispatched 超过 20 秒无完成事件后创建 RetryItem 的测试。
+- [ ] 写 429 固定 5s/30s/2m、最多 3 次和永久错误不重试测试。
+- [ ] 写 planned/dispatched 超过 70 秒无完成事件后创建 RetryItem 的测试；写 timeout 与 Completion 并发时，迟到成功仍能取消 pending Retry 并更新 freshness。
 - [ ] 写晚到成功事件取消未投递 RetryItem、已经投递允许幂等重复的测试。
 - [ ] 写后续实时成功覆盖旧 target_data_time 后 RetryItem 变为 superseded 的测试。
 - [ ] 实现 governed Consumer 和恢复扫描。
+- [ ] 明确晚到 Completion 的状态规则：只允许 `pending -> succeeded` 取消未投递 RetryItem，
+  不得覆盖已经 `dispatched` 的 RetryItem；同一 `retry_key` 不得重复创建待重试项。
 - [ ] 运行 `cd modules/collector && go test -race -count=1 ./internal/marketfetch ./internal/bootstrap ./internal/rpc`。
 - [ ] 提交：`feat(collector): close async scf completion and retry loop`。
 
@@ -1184,10 +1198,11 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 
 - [ ] 写两次并发触发只执行一次扫描的测试。
 - [ ] 写每 10 秒扫描但同一 schedule 只创建一次批次的测试。
+- [ ] 写 2/10 个函数节点时 round-robin 不跳过节点的测试。
 - [ ] 写 100 个批次提交时 CloudNode 并发不超过 20，Timer 不等待 SCF 完成的测试。
 - [ ] 写 Dispatcher 固定使用 Event 调用、保存腾讯云 request_id，并用 CAS 防止 terminal 状态回退的测试。
 - [ ] 写 Fetcher 节点只选择 `biz_type=market_fetcher` 且部署状态 Active 的测试。
-- [ ] 写 Gap Audit 只在 10 分钟边界运行、Catchup 每分钟最多 5 个的测试。
+- [ ] 写 Gap Audit 每分钟运行一次、Catchup 每分钟最多 5 个的测试。
 - [ ] 使用 `timerjob.New("collector_schedule", 25*time.Second, ...)` 包装 Handler。
 - [ ] 运行 `cd modules/collector && go test -race -count=1 ./internal/bootstrap ./internal/rpc`。
 - [ ] 提交：`feat(collector): guard short-lived market scheduler`。
@@ -1205,11 +1220,11 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 
 - [ ] 写 `biz_type=market_fetcher` 节点不会收到 Keepalive 的测试。
 - [ ] 写该节点不因 90 秒无心跳被标为 timeout 的测试。
-- [ ] 写 Monitor 不再生成 `scf:heartbeat`，而生成 deployment 和 batch freshness 检查的测试。
+- [ ] 写 Monitor 不再生成 `scf:heartbeat`；Storage Dataset freshness 和 Completion 快照检查分别覆盖冷启动、EventBus 中断、批次失败和恢复通知。
 - [ ] 写中文批次超时、重试积压和恢复通知测试。
-- [ ] 写仅注册五个 `moox_collector_market_fetch_` 指标、标签集合和每类 outcome 枚举严格匹配 14.2、非法 outcome 被拒绝的测试。
+- [ ] 写仅注册四个 `moox_collector_market_fetch_` 指标、标签集合和批次 outcome 枚举严格匹配 14.2 的测试。
 - [ ] 删除旧 keepalive 指标和默认告警；删除独立 retries、completion timeout、429、5xx、request duration 和 storage commit duration 指标。
-- [ ] 将请求耗时、Storage 提交耗时、原始错误和 `Retry-After` 写入结构化日志，保留 deployment、batch、retry pending 和 last success 指标。
+- [ ] 将请求耗时、Storage 提交耗时和原始错误写入结构化日志，保留 deployment、batch、retry pending 和 last success 指标。
 - [ ] 运行 `cd modules/cloudnode && go test -race -count=1 ./internal/...`。
 - [ ] 运行 `cd modules/collector && go test -race -count=1 ./internal/marketfetch`。
 - [ ] 运行 `cd modules/monitor && go test -race -count=1 ./internal/...`。
@@ -1221,15 +1236,24 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 
 - Create: `modules/collector/test/short_lived_market_fetch_e2e_test.go`
 - Modify: `modules/cli/internal/command/collector.go` 及测试
-- Modify: `docs/云节点管理.md`、`docs/采集任务管理.md`
+- Modify: `docs/云节点管理.md`、`docs/采集任务管理.md`、`modules/collector/README.md`、
+  `examples/e2e/README.md`
 
-- [ ] 使用嵌入式 JetStream、假 Binance、真实 Collector SQLite 和假 Storage Primary 验证 planned→dispatched→completed→ACK。
+- [ ] 使用嵌入式 JetStream、假 Binance、真实 Collector SQLite 和假 Storage Primary 验证
+  `planned -> dispatched -> completed -> ACK`；测试必须经过 Scheduler、Dispatcher、Completion
+  Consumer，而不是只直接调用 Executor。
 - [ ] 验证 429 进入 RetryItem，重试成功后写入 Storage。
 - [ ] 验证 SCF 无完成事件时 20 秒后自动回收。
 - [ ] 验证 Storage 重复 Upsert 不产生重复 RowKey。
-- [ ] 给 moox-cli 增加 `collector function probe-egress --file ./custom.toml`：最多并发 5、逐节点同步 RequestResponse、打印完整结果、任一节点失败时最终返回非零退出码。
+- [ ] 给 moox-cli 增加 `collector function probe-egress --control-url ... --space-id ...`：最多并发 5、只探测 `market_fetcher` 且已部署节点、逐节点同步 RequestResponse、打印完整结果和 `distinct_outbound_ips` 汇总、任一节点失败或没有可探测节点时最终返回非零退出码；`custom.toml` 仅用于发布配置，不假设其中存在 Control RPC 地址。
 - [ ] 写出口 IP 服务失败、Binance 探测失败、部分节点失败仍继续和 `distinct_outbound_ips` 汇总测试。
 - [ ] 增加全新初始化检查：旧 Collector 函数已删除、Fetcher metadata 无 `execution_mode`、新 Completion durable 可用；不实现旧 JobItem drain 或旧链路恢复命令。
+- [ ] 删除旧 `examples/e2e/collector-symbol-kline.mjs`、`verify.mjs` 及其 JobItem runner，更新
+  Collector README 和采集任务 runbook：验收只观察 BatchInvocation、Completion、RetryItem 和
+  Storage watermark；旧脚本不得保留在发布门禁或 `make verify-pr` 路径。
+- [ ] 新增一条可复制的短时 E2E 命令，至少输出 `batch_id`、`request_id`、Completion 状态、
+  RetryItem 状态和 Dataset 最新水位；真实 SCF 验收不得再等待 `cloud_job_item_id` 或 JobItem
+  终态作为成功条件。
 - [ ] 运行 `make proto` 后执行 `./scripts/test-go-workspace.sh`，两者不得并行。
 - [ ] 运行 `make verify-pr` 和 `make verify-custom-setup`。
 - [ ] 请求独立 `codeCR` 审查，修复所有 P0-P2 后重新运行验证。
@@ -1246,7 +1270,8 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 make build
 make test-collector-scf-package-contract
 # 执行 Task 2 定义的 publish submit/status，等待全部函数 Active
-./bin/moox-cli collector function probe-egress --file ./custom.toml
+./bin/moox-cli collector function probe-egress --control-url "$MOOX_CONTROL_URL" --space-id "$MOOX_SPACE_ID" \\
+  --service-access-key "$MOOX_GATEWAY_SERVICE_KEY_ID" --service-secret-key "$MOOX_GATEWAY_SERVICE_SECRET_KEY"
 ```
 
 检查：
@@ -1254,10 +1279,10 @@ make test-collector-scf-package-contract
 - `custom.toml` 权限仍为 0600；
 - EventBus TLS 地址可从 SCF 访问；
 - Storage Primary tRPC 地址可从 SCF 访问；
-- CloudNode 中 5 个初始函数均为 Active；
+- CloudNode 中 `custom.toml` 声明的全部初始函数节点均为 Active；
 - 函数配置为 64MB、10 秒、异步自动重试 0；
 - 环境变量与 CloudNode metadata 一致；
-- 出口探针逐节点成功，Binance 轻量接口状态为 200，汇总中至少有一个有效公网 IP。
+- 出口探针逐节点成功，Binance 轻量接口状态为 200；若公网 IP 反射服务可用，则记录并汇总有效出口 IP，反射服务不可用不阻断发布。
 
 ### 18.2 分阶段真实数据验证
 
@@ -1331,7 +1356,7 @@ resource_usage_gbs =
 11. Stable TaskInstance 不按分钟膨胀；成功批次 48 小时后自动清理。
 12. `manual` Symbol 规则和 `dataset` 行情规则均能正确工作。
 13. 短时 Fetcher 不运行 Keepalive，也不会触发 `scf:heartbeat` 告警。
-14. 初始 5 个地域函数通过真实出口 IP 和 API 连通性探针。
+14. `custom.toml` 中启用的全部函数节点通过 Binance API 连通性探针；公网 IP 仅在反射服务可用时记录，不作为硬性通过条件。
 15. 1000 个标的连续运行 24 小时，完成率、Dataset freshness 和 RetryItem 积压符合预期。
 16. SCF 总运行时长和 GBs 资源使用量显著低于旧常驻模型。
 17. 本地 race/E2E、`make verify-pr`、独立 codeCR、真实 SCF 和真实 Storage 数据验证全部通过。

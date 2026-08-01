@@ -31,37 +31,30 @@ func (s *registryStub) ReplaceExpected(items []report.DatasetExpectation) error 
 }
 func (s *registryStub) ObserveInventoryRefreshError() { s.errors++ }
 
-func collectorRule(id string, enabled, live bool, dataType, target, schedule string, frequencies ...string) domain.TaskRule {
-	params := `{"source":{"kind":"none"},"collector":{"exchange":"binance","market":"spot","data_type":"symbol"},"target":{"dataset_id":"` + target + `"},"schedule":{"interval":"` + schedule + `"}}`
+func collectorRule(id string, enabled bool, dataType, target, frequency string) domain.TaskRule {
+	params := `{"provider":"binance","market_type":"spot","symbol_source":"manual","symbols":["BTC-USDT"],"target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
 	if dataType == "kline" {
-		params = `{"source":{"kind":"dataset_subjects","dataset_id":"symbols"},"collector":{"exchange":"binance","market":"spot","data_type":"kline","live":` +
-			map[bool]string{true: "true", false: "false"}[live] + `,"intervals":[`
-		for index, freq := range frequencies {
-			if index > 0 {
-				params += ","
-			}
-			params += `"` + freq + `"`
-		}
-		params += `]},"target":{"dataset_id":"` + target + `"},"schedule":{"interval":"` + schedule + `"}}`
+		params = `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
 	}
-	return domain.TaskRule{SpaceID: "crypto", RuleID: id, DataType: dataType, Exchange: "binance", CollectParams: params, Enabled: enabled}
+	return domain.TaskRule{SpaceID: "crypto", RuleID: id, DataType: dataType, Provider: "binance", MarketType: "spot", CollectParams: params, Enabled: enabled}
 }
 
 func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing.T) {
 	source := &ruleSourceStub{rules: []domain.TaskRule{
-		collectorRule("live", true, true, "kline", "bars", "2m", "1m", "5m"),
-		collectorRule("duplicate", true, true, "kline", "bars", "3m", "1m"),
-		collectorRule("batch", true, false, "kline", "batch-bars", "1m", "1m"),
-		collectorRule("symbol", true, false, "symbol", "symbols", "1m"),
-		collectorRule("disabled", false, true, "kline", "disabled-bars", "1m", "1m"),
+		collectorRule("live", true, "kline", "bars", "1m"),
+		collectorRule("live-5m", true, "kline", "bars", "5m"),
+		collectorRule("duplicate", true, "kline", "bars", "1m"),
+		collectorRule("batch", true, "kline", "batch-bars", "1m"),
+		collectorRule("symbol", true, "symbol", "symbols", "1m"),
+		collectorRule("disabled", false, "kline", "disabled-bars", "1m"),
 	}}
 	registry := &registryStub{}
 	inventory := NewRealtimeInventory(source, registry)
 
 	require.NoError(t, inventory.Refresh(context.Background()))
 	require.Equal(t, []report.DatasetExpectation{
-		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "1m"}, Interval: 2 * time.Minute},
-		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "5m"}, Interval: 2 * time.Minute},
+		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "1m"}, Interval: time.Minute},
+		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "5m"}, Interval: 5 * time.Minute},
 		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "batch-bars", Freq: "1m"}, Interval: time.Minute},
 	}, registry.items)
 	require.False(t, inventory.Due(time.Now()))
@@ -69,19 +62,19 @@ func TestRealtimeInventorySelectsEnabledScheduledKlineAndDeduplicates(t *testing
 
 func TestRealtimeInventoryCanonicalizesFrequencyAliasesBeforeDeduplication(t *testing.T) {
 	source := &ruleSourceStub{rules: []domain.TaskRule{
-		collectorRule("lowercase", true, false, "kline", "bars", "2h", "1h"),
-		collectorRule("canonical", true, false, "kline", "bars", "3h", "1H"),
+		collectorRule("lowercase", true, "kline", "bars", "1h"),
+		collectorRule("canonical", true, "kline", "bars", "1H"),
 	}}
 	registry := &registryStub{}
 
 	require.NoError(t, NewRealtimeInventory(source, registry).Refresh(context.Background()))
 	require.Equal(t, []report.DatasetExpectation{{
-		Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "1H"}, Interval: 2 * time.Hour,
+		Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "bars", Freq: "1H"}, Interval: time.Hour,
 	}}, registry.items)
 }
 
 func TestRealtimeInventoryFailureRetainsPreviousSnapshot(t *testing.T) {
-	source := &ruleSourceStub{rules: []domain.TaskRule{collectorRule("live", true, true, "kline", "bars", "1m", "1m")}}
+	source := &ruleSourceStub{rules: []domain.TaskRule{collectorRule("live", true, "kline", "bars", "1m")}}
 	registry := &registryStub{}
 	inventory := NewRealtimeInventory(source, registry)
 	require.NoError(t, inventory.Refresh(context.Background()))
