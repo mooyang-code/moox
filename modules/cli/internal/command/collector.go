@@ -701,7 +701,31 @@ func submitCollectorFleet(
 		return summary, nil
 	}
 	if len(fleetNodes) != opts.NodeCount {
-		return summary, fmt.Errorf("collector fleet node count=%d; expected %d", len(fleetNodes), opts.NodeCount)
+		return summary, fmt.Errorf("collector fleet node slots=%d; expected %d", len(fleetNodes), opts.NodeCount)
+	}
+
+	existing := 0
+	missing := make([]adminclient.NodeCreateItem, 0)
+	for index, node := range fleetNodes {
+		if strings.TrimSpace(node.NodeID) == "" {
+			missing = append(missing, createItems[index])
+			continue
+		}
+		existing++
+	}
+	if existing == 0 {
+		return summary, fmt.Errorf("collector fleet has empty node slots")
+	}
+	if len(missing) > 0 {
+		summary.FleetMode = "expanded"
+		resp, err := api.SubmitCreateNodes(ctx, missing)
+		if err != nil {
+			return summary, err
+		}
+		summary.JobID = resp.JobID
+		summary.Operation = "create_nodes"
+		summary.TotalCount = resp.TotalCount
+		return summary, nil
 	}
 
 	summary.FleetMode = "updated"
@@ -1202,14 +1226,6 @@ func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, biz
 	}
 	if count == 0 {
 		return nil, nil
-	}
-	if count != expected {
-		return nil, fmt.Errorf("fleet prefix %q has %d nodes; expected either 0 or %d", prefix, count, expected)
-	}
-	for index, present := range found {
-		if !present {
-			return nil, fmt.Errorf("fleet prefix %q is missing fleet index %d", prefix, index)
-		}
 	}
 	return indexed, nil
 }

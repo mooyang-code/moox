@@ -318,13 +318,16 @@ func TestBuildCollectorFleetCreateItemsRequiresCompleteRuntimeEnvironment(t *tes
 	require.ErrorContains(t, err, "collector fleet runtime environment requires")
 }
 
-func TestSelectCollectorFleetNodesRejectsPartialFleet(t *testing.T) {
+func TestSelectCollectorFleetNodesKeepsEmptySlotsForFleetExpansion(t *testing.T) {
 	nodes := []adminclient.CloudNode{
 		{NodeID: "fleet-0", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}},
 		{NodeID: "other-0", BizType: "factor_calculator", Metadata: map[string]any{"function_name_prefix": "other", "index": float64(0)}},
 	}
-	_, err := selectCollectorFleetNodes(nodes, "fleet", "data_collector", 50)
-	require.ErrorContains(t, err, `fleet prefix "fleet" has 1 nodes; expected either 0 or 50`)
+	selected, err := selectCollectorFleetNodes(nodes, "fleet", "data_collector", 50)
+	require.NoError(t, err)
+	require.Len(t, selected, 50)
+	assert.Equal(t, "fleet-0", selected[0].NodeID)
+	assert.Empty(t, selected[1].NodeID)
 }
 
 func TestSelectCollectorFleetNodesRequiresUniqueCompleteIndexes(t *testing.T) {
@@ -484,7 +487,28 @@ func TestPublishSubmitDeployFleetUsesOneJob(t *testing.T) {
 	}
 }
 
-func TestPublishSubmitRejectsPartialFleetBeforeUpload(t *testing.T) {
+func TestPublishSubmitExpandsPartialFleet(t *testing.T) {
+	nodes := make([]adminclient.CloudNode, 4)
+	nodes[0] = adminclient.CloudNode{NodeID: "fleet-0", PackageID: "pkg-old", BizType: "data_collector", Metadata: map[string]any{"function_name_prefix": "fleet", "index": float64(0)}}
+	items := make([]adminclient.NodeCreateItem, 4)
+	for index := range items {
+		items[index] = adminclient.NodeCreateItem{PackageID: "pkg-new", Metadata: map[string]any{"function_name_prefix": "fleet", "index": index}}
+	}
+	api := &fakeCollectorFleetAPI{}
+	summary, err := submitCollectorFleet(context.Background(), api, collectorPublishOptions{NodeCount: 4}, "pkg-new", items, nodes)
+	require.NoError(t, err)
+	assert.Equal(t, "expanded", summary.FleetMode)
+	assert.Equal(t, "create_nodes", summary.Operation)
+	assert.Equal(t, 3, summary.TotalCount)
+	require.Len(t, api.createCalls, 1)
+	assert.Empty(t, api.deployCalls)
+	require.Len(t, api.createCalls[0], 3)
+	assert.Equal(t, 1, api.createCalls[0][0].Metadata["index"])
+	assert.Equal(t, 2, api.createCalls[0][1].Metadata["index"])
+	assert.Equal(t, 3, api.createCalls[0][2].Metadata["index"])
+}
+
+func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
 	credentialFile := setCollectorFleetRuntimeTestEnvironment(t)
 	uploadCalled := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -492,7 +516,7 @@ func TestPublishSubmitRejectsPartialFleetBeforeUpload(t *testing.T) {
 		case "/api/admin/cloudnode/ListCloudAccounts":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"accounts":[{"account_id":"account-a"}]}`))
 		case "/api/admin/cloudnode/GetNodeList":
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fleet-0","biz_type":"market_fetcher","metadata":{"function_name_prefix":"fleet","index":0}}],"page":{"has_more":false}}`))
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fleet-50","biz_type":"market_fetcher","metadata":{"function_name_prefix":"fleet","index":50}}],"page":{"has_more":false}}`))
 		case "/api/admin/cloudnode/InitPackageUpload":
 			uploadCalled = true
 			t.Fatal("partial fleet must fail before upload")
@@ -511,7 +535,7 @@ func TestPublishSubmitRejectsPartialFleetBeforeUpload(t *testing.T) {
 		FunctionNamePrefix:     "fleet",
 		EventBusCredentialFile: credentialFile,
 	})
-	require.ErrorContains(t, err, `fleet prefix "fleet" has 1 nodes`)
+	require.ErrorContains(t, err, `fleet prefix "fleet" has invalid index metadata`)
 	assert.False(t, uploadCalled)
 }
 
