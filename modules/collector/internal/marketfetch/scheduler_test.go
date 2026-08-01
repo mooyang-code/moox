@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -23,6 +24,38 @@ func TestNormalizedBatchIdentityUsesNormalizedItemMarketType(t *testing.T) {
 
 	assert.Equal(t, "binance", provider)
 	assert.Equal(t, "spot", marketType)
+}
+
+func TestTargetDataTimeUsesCalendarBoundariesForWeekAndMonth(t *testing.T) {
+	now := time.Date(2026, time.July, 29, 15, 47, 12, 0, time.UTC)
+	tests := []struct {
+		frequency string
+		want      time.Time
+	}{
+		{frequency: "1m", want: time.Date(2026, time.July, 29, 15, 46, 0, 0, time.UTC)},
+		{frequency: "1w", want: time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC)},
+		{frequency: "1M", want: time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.frequency, func(t *testing.T) {
+			got, err := targetDataTime(now, tt.frequency)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestNormalizeStorageFrequencyKeepsWeekAndMonthSemantics(t *testing.T) {
+	for input, want := range map[string]string{"1w": "1W", "1M": "1M"} {
+		got, err := normalizeStorageFrequency(input)
+		assert.NoError(t, err)
+		assert.Equal(t, want, got)
+	}
+}
+
+func TestGapAuditThresholdUsesWeekAndMonthIntervals(t *testing.T) {
+	assert.Equal(t, 21*24*time.Hour, gapAuditThreshold("1w"))
+	assert.Equal(t, 90*24*time.Hour, gapAuditThreshold("1M"))
 }
 
 func ruleIDs(rules []domain.TaskRule) []string {

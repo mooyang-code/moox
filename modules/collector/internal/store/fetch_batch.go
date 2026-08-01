@@ -15,14 +15,15 @@ type FetchBatchRepository struct{ db *gorm.DB }
 // the short-lived collector. Keeping it here lets batch completion commit the
 // batch, retry state, and task freshness in one SQLite transaction.
 type MarketFetchInstanceUpdate struct {
-	SpaceID   string
-	TaskID    string
-	DatasetID string
-	SubjectID string
-	Frequency string
-	At        time.Time
-	Status    int
-	Result    string
+	SpaceID        string
+	TaskID         string
+	DatasetID      string
+	SubjectID      string
+	Frequency      string
+	TargetDataTime time.Time
+	At             time.Time
+	Status         int
+	Result         string
 }
 
 // MarketFetchRetrySupersede marks older pending retry work unnecessary after a
@@ -41,8 +42,11 @@ type FetchCompletionEffects struct {
 	// CancelPendingRetryKeys resolves a late success only when the retry is
 	// still pending. A retry already dispatched to a newer batch must remain
 	// dispatched so that its own completion can win the race.
-	CancelPendingRetryKeys  []string
-	PermanentRetryKeys      []string
+	CancelPendingRetryKeys []string
+	PermanentRetryKeys     []string
+	// SupersedePendingRetries retires older retry work after a newer realtime
+	// success. It also covers already-dispatched retries: their completion is
+	// still recorded, but must not regress the current task state.
 	SupersedePendingRetries []MarketFetchRetrySupersede
 	InstanceUpdates         []MarketFetchInstanceUpdate
 }
@@ -174,7 +178,7 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 				continue
 			}
 			if err := tx.Model(&domain.RetryItem{}).
-				Where("c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_status = ? AND c_target_data_time <= ?", item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, "pending", item.TargetDataTime.UTC()).
+				Where("c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_status IN ? AND c_target_data_time <= ?", item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, []string{"pending", "dispatched"}, item.TargetDataTime.UTC()).
 				Updates(map[string]any{"c_status": "superseded", "c_mtime": time.Now().UTC()}).Error; err != nil {
 				return err
 			}
@@ -183,6 +187,12 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			query := tx.Model(&domain.TaskInstance{}).Where("c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_is_deleted = ?", item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, false)
 			if item.TaskID != "" {
 				query = query.Where("c_task_id = ?", item.TaskID)
+			}
+			if !item.TargetDataTime.IsZero() {
+				// Completion order is not data order: an older SCF invocation can
+				// finish after the next period has already succeeded. Keep the
+				// instance state for the newest covered market-data timestamp.
+				query = query.Where("CASE WHEN json_valid(c_result) THEN COALESCE(CAST(json_extract(c_result, '$.target_data_unix') AS INTEGER), -1) ELSE -1 END <= ?", item.TargetDataTime.UTC().Unix())
 			}
 			if err := query.Updates(map[string]any{
 				"c_last_exec_status": item.Status, "c_last_exec_time": item.At.UTC(), "c_result": normalizeJSON(item.Result), "c_mtime": time.Now().UTC(),

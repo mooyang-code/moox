@@ -99,6 +99,8 @@ func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
 	}{
 		{name: "go duration", interval: "90m"},
 		{name: "day duration", interval: "2d"},
+		{name: "week duration", interval: "1w"},
+		{name: "month duration", interval: "1M"},
 		{name: "shorter than one minute", interval: "30s", wantErr: "whole minutes"},
 		{name: "fractional minute", interval: "90s", wantErr: "whole minutes"},
 		{name: "zero days", interval: "0d", wantErr: "positive"},

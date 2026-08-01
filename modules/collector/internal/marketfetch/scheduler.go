@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
+	"github.com/mooyang-code/moox/packages/report"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -333,26 +333,8 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 }
 
 func gapAuditThreshold(frequency string) time.Duration {
-	frequency = strings.TrimSpace(strings.ToLower(frequency))
-	if frequency == "" {
-		return 10 * time.Minute
-	}
-	unit := frequency[len(frequency)-1]
-	value, err := strconv.Atoi(strings.TrimSpace(frequency[:len(frequency)-1]))
-	if err != nil || value <= 0 {
-		return 10 * time.Minute
-	}
-	var interval time.Duration
-	switch unit {
-	case 's':
-		interval = time.Duration(value) * time.Second
-	case 'm':
-		interval = time.Duration(value) * time.Minute
-	case 'h':
-		interval = time.Duration(value) * time.Hour
-	case 'd':
-		interval = time.Duration(value) * 24 * time.Hour
-	default:
+	interval, err := report.ParseDatasetFrequency(strings.TrimSpace(frequency))
+	if err != nil {
 		return 10 * time.Minute
 	}
 	threshold := 3 * interval
@@ -673,48 +655,15 @@ func manualSymbols(raw string) []string {
 }
 
 func targetDataTime(now time.Time, frequency string) (time.Time, error) {
-	duration, err := frequencyDuration(frequency)
+	times, err := report.RecentDatasetTimes(frequency, now.UTC(), 2)
 	if err != nil {
 		return time.Time{}, err
 	}
-	return now.UTC().Truncate(duration).Add(-duration), nil
-}
-
-func frequencyDuration(frequency string) (time.Duration, error) {
-	frequency = strings.TrimSpace(strings.ToLower(frequency))
-	if len(frequency) < 2 {
-		return 0, fmt.Errorf("invalid frequency %q", frequency)
-	}
-	var count int
-	if _, err := fmt.Sscanf(frequency[:len(frequency)-1], "%d", &count); err != nil || count <= 0 {
-		return 0, fmt.Errorf("invalid frequency %q", frequency)
-	}
-	switch frequency[len(frequency)-1] {
-	case 'm':
-		return time.Duration(count) * time.Minute, nil
-	case 'h':
-		return time.Duration(count) * time.Hour, nil
-	case 'd':
-		return time.Duration(count) * 24 * time.Hour, nil
-	default:
-		return 0, fmt.Errorf("unsupported frequency %q", frequency)
-	}
+	return times[1], nil
 }
 
 func normalizeStorageFrequency(frequency string) (string, error) {
-	frequency = strings.TrimSpace(frequency)
-	duration, err := frequencyDuration(frequency)
-	if err != nil {
-		return "", err
-	}
-	switch {
-	case duration%(24*time.Hour) == 0:
-		return fmt.Sprintf("%dD", int(duration/(24*time.Hour))), nil
-	case duration%time.Hour == 0:
-		return fmt.Sprintf("%dH", int(duration/time.Hour)), nil
-	default:
-		return fmt.Sprintf("%dM", int(duration/time.Minute)), nil
-	}
+	return report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
 }
 
 func stringPtr(value string) *string { return &value }

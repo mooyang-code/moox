@@ -189,6 +189,18 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		if item == nil {
 			continue
 		}
+		if key := item.GetSourceEventId(); key != "" {
+			previous, getErr := retries.Get(ctx, spaceID, key)
+			if getErr != nil && !errors.Is(getErr, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("load retry item %s: %w", key, getErr)
+			}
+			if previous != nil && previous.Status == "superseded" {
+				// A newer realtime success already covered this target. An in-flight
+				// older retry may still report completion, but cannot overwrite the
+				// current task instance or schedule another retry.
+				continue
+			}
+		}
 		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) && batch.BatchKind == domain.BatchKindRealtime {
 			target, targetErr := time.Parse(time.RFC3339Nano, item.GetTargetDataTime())
 			if targetErr == nil {
@@ -205,11 +217,12 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 			} else {
 				effects.SucceededRetryKeys = append(effects.SucceededRetryKeys, key)
 			}
-			effects.InstanceUpdates = append(effects.InstanceUpdates, store.MarketFetchInstanceUpdate{SpaceID: spaceID, TaskID: item.GetTaskId(), DatasetID: payload.GetDatasetId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), At: completedAt, Status: domain.InstanceStatusSuccess})
+			effects.InstanceUpdates = append(effects.InstanceUpdates, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusSuccess))
 			continue
 		}
 		if item.GetOutcome() == string(domain.ItemOutcomeSuccess) {
-			effects.InstanceUpdates = append(effects.InstanceUpdates, store.MarketFetchInstanceUpdate{SpaceID: spaceID, TaskID: item.GetTaskId(), DatasetID: payload.GetDatasetId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), At: completedAt, Status: domain.InstanceStatusSuccess})
+			effects.InstanceUpdates = append(effects.InstanceUpdates, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusSuccess))
+			continue
 		}
 		if !isRetryOutcome(item.GetOutcome()) {
 			// A retry child which receives a permanent result must be terminally
@@ -217,6 +230,9 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 			// from both the retry scheduler and the failure metrics.
 			if key := item.GetSourceEventId(); key != "" {
 				effects.PermanentRetryKeys = append(effects.PermanentRetryKeys, key)
+			}
+			if !lateCompletion {
+				effects.InstanceUpdates = append(effects.InstanceUpdates, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusFailed))
 			}
 			continue
 		}
@@ -243,6 +259,9 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		}
 		if attempt > maxRetryAttempts() {
 			effects.PermanentRetryKeys = append(effects.PermanentRetryKeys, key)
+			if !lateCompletion {
+				effects.InstanceUpdates = append(effects.InstanceUpdates, taskInstanceUpdate(spaceID, payload, item, completedAt, domain.InstanceStatusFailed))
+			}
 			continue
 		}
 		when := completedAt.Add(retryDelay(attempt))
@@ -290,6 +309,27 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		}
 	}
 	return nil
+}
+
+func taskInstanceUpdate(spaceID string, payload *marketfetchpb.MarketFetchBatchCompleted, item *marketfetchpb.MarketFetchItemResult, at time.Time, status int) store.MarketFetchInstanceUpdate {
+	resultData := map[string]any{"outcome": item.GetOutcome()}
+	targetDataTime, err := time.Parse(time.RFC3339Nano, item.GetTargetDataTime())
+	if err == nil {
+		targetDataTime = targetDataTime.UTC()
+		resultData["target_data_time"] = targetDataTime.Format(time.RFC3339Nano)
+		resultData["target_data_unix"] = targetDataTime.Unix()
+	}
+	if item.GetErrorType() != "" {
+		resultData["error_type"] = item.GetErrorType()
+	}
+	if item.GetErrorSummary() != "" {
+		resultData["error_summary"] = item.GetErrorSummary()
+	}
+	result, _ := json.Marshal(resultData)
+	return store.MarketFetchInstanceUpdate{
+		SpaceID: spaceID, TaskID: item.GetTaskId(), DatasetID: payload.GetDatasetId(), SubjectID: item.GetSubjectId(), Frequency: payload.GetFrequency(), TargetDataTime: targetDataTime,
+		At: at, Status: status, Result: string(result),
+	}
 }
 
 func completionIdentityMismatch(batch *domain.BatchInvocation, payload *marketfetchpb.MarketFetchBatchCompleted) string {

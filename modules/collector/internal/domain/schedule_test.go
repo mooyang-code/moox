@@ -18,6 +18,8 @@ func TestParseScheduleIntervalAcceptsWholeMinuteDurations(t *testing.T) {
 		{raw: "24h", want: 24 * time.Hour},
 		{raw: "1d", want: 24 * time.Hour},
 		{raw: "2d", want: 48 * time.Hour},
+		{raw: "1w", want: 7 * 24 * time.Hour},
+		{raw: "1M", want: 31 * 24 * time.Hour},
 	}
 
 	for _, tt := range tests {
@@ -105,6 +107,18 @@ func TestScheduleDecisionAlignsMinuteHourFourHourAndDayPeriods(t *testing.T) {
 			now:  time.Date(2026, time.July, 27, 23, 59, 42, 0, time.UTC),
 			raw:  "1d",
 			want: time.Date(2026, time.July, 28, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "week",
+			now:  time.Date(2026, time.July, 26, 23, 59, 42, 0, time.UTC),
+			raw:  "1w",
+			want: time.Date(2026, time.July, 27, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "month",
+			now:  time.Date(2026, time.July, 31, 23, 59, 42, 0, time.UTC),
+			raw:  "1M",
+			want: time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC),
 		},
 	}
 
