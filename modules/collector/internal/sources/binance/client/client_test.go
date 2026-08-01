@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
@@ -114,6 +115,37 @@ func TestSymbolInfoRaw_ToSymbolInfo_ShouldMapTradingPair(t *testing.T) {
 	assert.Equal(t, "active", info.Status)
 	assert.Equal(t, "0.001", info.MinQty)
 	assert.Equal(t, "0.01", info.TickSize)
+}
+
+func TestDecodeExchangeInfoStreamsOnlySelectedSymbolFields(t *testing.T) {
+	payload := `{"timezone":"UTC","serverTime":1,"symbols":[` +
+		`{"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","orderTypes":["LIMIT","MARKET"],"permissions":["SPOT"],"filters":[{"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"}]},` +
+		`{"symbol":"OLDUSDT","status":"BREAK","baseAsset":"OLD","quoteAsset":"USDT","orderTypes":["LIMIT"],"permissions":["SPOT"],"filters":[]}]}`
+
+	total, symbols, err := decodeExchangeInfo(strings.NewReader(payload), func(raw *exchangeInfoSymbolRaw) bool {
+		return raw.Status == "TRADING"
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	require.Len(t, symbols, 1)
+	assert.Equal(t, "BTC-USDT", symbols[0].Symbol)
+	assert.Equal(t, "0.001", symbols[0].MinQty)
+}
+
+func TestExchangeInfoForSymbolsUsesFilteredEndpointQuery(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, `["BTCUSDT","ETHUSDT"]`, r.URL.Query().Get("symbols"))
+		_, _ = w.Write([]byte(`{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	client.HTTPClient = httpclient.NewHTTPClient(server.Client())
+	require.NoError(t, client.SetSpotBaseURL(server.URL))
+	symbols, err := NewSpotAPI(client).GetExchangeInfoForSymbols(context.Background(), []string{"btc-usdt", "eth-usdt", "BTCUSDT"})
+	require.NoError(t, err)
+	require.Len(t, symbols, 1)
+	assert.Equal(t, "BTC-USDT", symbols[0].Symbol)
 }
 
 func TestClient_DefaultDomains_ShouldUseBinanceHosts(t *testing.T) {

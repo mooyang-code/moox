@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -166,6 +167,23 @@ func TestHTTPClient_Get_ShouldDecodeJSONResponse(t *testing.T) {
 	err = client.GetWithIP(context.Background(), parsed.Host, parsed.Path, nil, &result, "")
 	require.NoError(t, err)
 	assert.Equal(t, "ok", result["status"])
+}
+
+func TestHTTPClient_GetWithIPStreamConsumesResponseBody(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"symbols":[{"symbol":"BTCUSDT"}]}`))
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	var got map[string]any
+	err = NewHTTPClient(server.Client()).GetWithIPStream(
+		context.Background(), parsed.Host, "/api/v3/exchangeInfo", nil, "",
+		func(reader io.Reader) error { return json.NewDecoder(reader).Decode(&got) },
+	)
+	require.NoError(t, err)
+	assert.Len(t, got["symbols"], 1)
 }
 
 func TestHTTPClient_Get_ShouldRejectNonOKStatus(t *testing.T) {

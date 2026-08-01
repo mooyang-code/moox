@@ -15,6 +15,16 @@ func TestRotateRulesAfterAdvancesPastLastCappedRule(t *testing.T) {
 	assert.Equal(t, []string{"rule-a", "rule-b", "rule-c"}, ruleIDs(rotateRulesAfter(rules, "missing")))
 }
 
+func TestNormalizedBatchIdentityUsesNormalizedItemMarketType(t *testing.T) {
+	provider, marketType := normalizedBatchIdentity(
+		domain.CollectionItem{Provider: "binance", MarketType: "spot"},
+		domain.TaskRule{Provider: "binance", MarketType: ""},
+	)
+
+	assert.Equal(t, "binance", provider)
+	assert.Equal(t, "spot", marketType)
+}
+
 func ruleIDs(rules []domain.TaskRule) []string {
 	ids := make([]string, 0, len(rules))
 	for _, rule := range rules {

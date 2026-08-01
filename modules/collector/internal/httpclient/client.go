@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -61,6 +62,25 @@ func (c *HTTPClient) Get(ctx context.Context, domain, path string, query url.Val
 // GetWithIP 发送 GET 请求（使用指定的 IP）
 // specifiedIP: 指定使用的 IP 地址，如果为空则使用域名直接访问
 func (c *HTTPClient) GetWithIP(ctx context.Context, domain, path string, query url.Values, result interface{}, specifiedIP string) error {
+	return c.getWithIP(ctx, domain, path, query, specifiedIP, func(reader io.Reader) error {
+		if result == nil {
+			return nil
+		}
+		return json.NewDecoder(reader).Decode(result)
+	})
+}
+
+// GetWithIPStream sends a GET request and lets the caller consume the response
+// body incrementally. It is intended for large JSON snapshots that must stay
+// within a small SCF memory limit.
+func (c *HTTPClient) GetWithIPStream(ctx context.Context, domain, path string, query url.Values, specifiedIP string, consume func(io.Reader) error) error {
+	if consume == nil {
+		return fmt.Errorf("response consumer is required")
+	}
+	return c.getWithIP(ctx, domain, path, query, specifiedIP, consume)
+}
+
+func (c *HTTPClient) getWithIP(ctx context.Context, domain, path string, query url.Values, specifiedIP string, consume func(io.Reader) error) error {
 	// 构建完整 URL（使用域名，保证 TLS SNI 正确）
 	fullURL := fmt.Sprintf("https://%s%s", domain, path)
 	if len(query) > 0 {
@@ -95,16 +115,25 @@ func (c *HTTPClient) GetWithIP(ctx context.Context, domain, path string, query u
 			Timeout:   c.httpClient.Timeout,
 			Transport: transport,
 		}
-		return c.doRequest(ctx, tempClient, fullURL, domain, result)
+		return c.doRequestStream(ctx, tempClient, fullURL, domain, consume)
 	}
 
 	// 降级：直接使用域名（标准 DNS 解析）
 	log.DebugContextf(ctx, "未找到指定 IP，直接使用域名: %s", domain)
-	return c.doRequest(ctx, c.httpClient, fullURL, domain, result)
+	return c.doRequestStream(ctx, c.httpClient, fullURL, domain, consume)
 }
 
 // doRequest 执行 HTTP 请求并解析 JSON 响应
 func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, fullURL, domain string, result interface{}) error {
+	return c.doRequestStream(ctx, httpClient, fullURL, domain, func(reader io.Reader) error {
+		if result == nil {
+			return nil
+		}
+		return json.NewDecoder(reader).Decode(result)
+	})
+}
+
+func (c *HTTPClient) doRequestStream(ctx context.Context, httpClient *http.Client, fullURL, domain string, consume func(io.Reader) error) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
@@ -137,10 +166,8 @@ func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, ful
 		domain, resp.StatusCode, time.Since(start).Milliseconds(), jobcontext.JobItemID(ctx),
 	)
 
-	// 解析 JSON
-	if result != nil {
-		decoder := json.NewDecoder(resp.Body)
-		if err := decoder.Decode(result); err != nil {
+	if consume != nil {
+		if err := consume(resp.Body); err != nil {
 			return fmt.Errorf("JSON 解析失败: %w", err)
 		}
 	}

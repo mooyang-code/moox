@@ -3,7 +3,9 @@ package binance
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
@@ -132,6 +134,110 @@ type ExchangeInfoResponse struct {
 	Timezone   string          `json:"timezone"`
 	ServerTime int64           `json:"serverTime"`
 	Symbols    []SymbolInfoRaw `json:"symbols"`
+}
+
+func normalizeExchangeInfoSymbols(symbols []string) []string {
+	result := make([]string, 0, len(symbols))
+	seen := make(map[string]struct{}, len(symbols))
+	for _, symbol := range symbols {
+		value := strings.ToUpper(FormatSymbol(symbol))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+// exchangeInfoSymbolRaw intentionally keeps only fields used by the symbol
+// dataset. Binance's exchangeInfo response also contains large order-type,
+// permission and filter arrays for every market. Decoding the symbols array
+// one object at a time avoids retaining the complete response in a 64MB SCF.
+type exchangeInfoSymbolRaw struct {
+	Symbol       string       `json:"symbol"`
+	Status       string       `json:"status"`
+	BaseAsset    string       `json:"baseAsset"`
+	QuoteAsset   string       `json:"quoteAsset"`
+	ContractType string       `json:"contractType"`
+	Pair         string       `json:"pair"`
+	Filters      []FilterInfo `json:"filters"`
+}
+
+func (s *exchangeInfoSymbolRaw) toSymbolInfo() *exchange.SymbolInfo {
+	if s == nil {
+		return nil
+	}
+	raw := SymbolInfoRaw{
+		Symbol: s.Symbol, Status: s.Status, BaseAsset: s.BaseAsset,
+		QuoteAsset: s.QuoteAsset, ContractType: s.ContractType,
+		Pair: s.Pair, Filters: s.Filters,
+	}
+	return raw.ToSymbolInfo()
+}
+
+// decodeExchangeInfo streams the large top-level symbols array. The callback
+// decides which entries to retain; the raw entry and its filters become
+// collectible before the next entry is decoded.
+func decodeExchangeInfo(reader io.Reader, keep func(*exchangeInfoSymbolRaw) bool) (int, []*exchange.SymbolInfo, error) {
+	decoder := json.NewDecoder(reader)
+	start, err := decoder.Token()
+	if err != nil {
+		return 0, nil, fmt.Errorf("解析ExchangeInfo对象失败: %w", err)
+	}
+	if delimiter, ok := start.(json.Delim); !ok || delimiter != '{' {
+		return 0, nil, fmt.Errorf("解析ExchangeInfo对象失败: 期望对象")
+	}
+
+	var total int
+	var symbols []*exchange.SymbolInfo
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return total, nil, fmt.Errorf("解析ExchangeInfo字段失败: %w", err)
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return total, nil, fmt.Errorf("解析ExchangeInfo字段失败: 字段名不是字符串")
+		}
+		if key != "symbols" {
+			var ignored json.RawMessage
+			if err := decoder.Decode(&ignored); err != nil {
+				return total, nil, fmt.Errorf("跳过ExchangeInfo字段 %s 失败: %w", key, err)
+			}
+			continue
+		}
+		arrayStart, err := decoder.Token()
+		if err != nil {
+			return total, nil, fmt.Errorf("解析ExchangeInfo symbols 失败: %w", err)
+		}
+		if delimiter, ok := arrayStart.(json.Delim); !ok || delimiter != '[' {
+			return total, nil, fmt.Errorf("解析ExchangeInfo symbols 失败: 期望数组")
+		}
+		for decoder.More() {
+			var raw exchangeInfoSymbolRaw
+			if err := decoder.Decode(&raw); err != nil {
+				return total, nil, fmt.Errorf("解析ExchangeInfo symbol 失败: %w", err)
+			}
+			total++
+			if keep != nil && !keep(&raw) {
+				continue
+			}
+			if symbol := raw.toSymbolInfo(); symbol != nil {
+				symbols = append(symbols, symbol)
+			}
+		}
+		if _, err := decoder.Token(); err != nil {
+			return total, nil, fmt.Errorf("结束ExchangeInfo symbols 失败: %w", err)
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return total, nil, fmt.Errorf("结束ExchangeInfo对象失败: %w", err)
+	}
+	return total, symbols, nil
 }
 
 // SymbolInfoRaw 交易对原始信息（币安格式）

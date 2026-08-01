@@ -2,9 +2,12 @@ package binance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
@@ -96,7 +99,28 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 // GetExchangeInfo 获取现货交易所信息（交易规则和交易对）
 // API: GET https://api.binance.com/api/v3/exchangeInfo
 func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo, error) {
-	var result ExchangeInfoResponse
+	return api.getExchangeInfo(ctx, nil, nil)
+}
+
+// GetExchangeInfoForSymbols asks Binance for only the configured symbols. The
+// exchangeInfo endpoint accepts a JSON-encoded symbols array; using it keeps
+// manual SymbolTask invocations small enough for the 64MB SCF limit.
+func (api *SpotAPI) GetExchangeInfoForSymbols(ctx context.Context, symbols []string) ([]*exchange.SymbolInfo, error) {
+	normalized := normalizeExchangeInfoSymbols(symbols)
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, fmt.Errorf("编码ExchangeInfo symbols失败: %w", err)
+	}
+	return api.getExchangeInfo(ctx, url.Values{"symbols": {string(encoded)}}, normalized)
+}
+
+func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values, allowlist []string) ([]*exchange.SymbolInfo, error) {
+	allowed := make(map[string]struct{}, len(allowlist))
+	for _, symbol := range allowlist {
+		allowed[symbol] = struct{}{}
+	}
+	var symbols []*exchange.SymbolInfo
+	var total int
 	var triedIPs []string
 	domain := api.client.SpotDomain()
 
@@ -107,7 +131,20 @@ func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo
 				log.WarnContextf(ctx, "[SpotAPI] 无可用DNS优选IP获取ExchangeInfo，降级为域名直连, 已尝试IP: %v", triedIPs)
 			}
 
-			err := api.client.GetWithIP(ctx, domain, SpotExchangeInfoEndpoint, nil, &result, currentIP)
+			err := api.client.GetWithIPStream(ctx, domain, SpotExchangeInfoEndpoint, query, currentIP, func(reader io.Reader) error {
+				var decodeErr error
+				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
+					if raw.Status != "TRADING" {
+						return false
+					}
+					if len(allowed) == 0 {
+						return true
+					}
+					_, ok := allowed[strings.ToUpper(raw.Symbol)]
+					return ok
+				})
+				return decodeErr
+			})
 			if err != nil {
 				if currentIP != "" {
 					triedIPs = append(triedIPs, currentIP)
@@ -122,16 +159,7 @@ func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo
 		return nil, fmt.Errorf("获取现货交易所信息失败: %w", err)
 	}
 
-	// 转换为通用格式
-	symbols := make([]*exchange.SymbolInfo, 0, len(result.Symbols))
-	for _, raw := range result.Symbols {
-		// 只包含状态为 TRADING 的交易对
-		if raw.Status == "TRADING" {
-			symbols = append(symbols, raw.ToSymbolInfo())
-		}
-	}
-
 	log.InfoContextf(ctx, "[SpotAPI] 获取ExchangeInfo成功，总计%d个交易对，活跃%d个",
-		len(result.Symbols), len(symbols))
+		total, len(symbols))
 	return symbols, nil
 }

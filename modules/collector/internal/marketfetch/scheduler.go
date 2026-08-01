@@ -157,7 +157,12 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				scheduleID := fmt.Sprintf("%s:%s:%s", rule.RuleID, frequency, target.Format(time.RFC3339Nano))
 				batchKind := batchKindForRule(rule)
 				batchID := stableID(spaceID, scheduleID, string(batchKind), fmt.Sprintf("%d", shard), "1")
-				req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: strings.ToLower(rule.Provider), MarketType: rule.MarketType, Region: node.Region, NodeID: node.NodeID, Items: batchItems[start:end]}
+				// The item is the normalized source of truth. Older rules may have an
+				// empty top-level market_type while collect_params already contains
+				// the canonical value; forwarding rule.MarketType would make SCF
+				// reject the whole batch before it can inspect the item.
+				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start], rule)
+				req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, Items: batchItems[start:end]}
 				created, err := s.planOne(ctx, rule, req, node)
 				if err != nil {
 					return err
@@ -196,6 +201,12 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 	}
 	return nil
+}
+
+func normalizedBatchIdentity(item domain.CollectionItem, rule domain.TaskRule) (string, string) {
+	provider := strings.ToLower(firstNonEmpty(item.Provider, rule.Provider))
+	marketType := firstNonEmpty(item.MarketType, rule.MarketType)
+	return provider, marketType
 }
 
 func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domain.TaskRule, nodes []scfinvoker.Node, now time.Time) error {

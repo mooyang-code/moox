@@ -3,8 +3,10 @@ package binance
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
@@ -97,7 +99,25 @@ func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 // GetExchangeInfo 获取永续合约交易所信息（交易规则和交易对）
 // API: GET https://fapi.binance.com/fapi/v1/exchangeInfo
 func (api *SwapAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo, error) {
-	var result ExchangeInfoResponse
+	return api.getExchangeInfo(ctx, nil, nil)
+}
+
+// GetExchangeInfoForSymbols limits the exchangeInfo response to the configured
+// symbols so manual SymbolTask invocations stay within the 64MB SCF limit.
+func (api *SwapAPI) GetExchangeInfoForSymbols(ctx context.Context, symbols []string) ([]*exchange.SymbolInfo, error) {
+	normalized := normalizeExchangeInfoSymbols(symbols)
+	// Futures exchangeInfo does not support the spot `symbols` query. Stream
+	// the full response and retain only the requested entries instead.
+	return api.getExchangeInfo(ctx, nil, normalized)
+}
+
+func (api *SwapAPI) getExchangeInfo(ctx context.Context, query url.Values, allowlist []string) ([]*exchange.SymbolInfo, error) {
+	allowed := make(map[string]struct{}, len(allowlist))
+	for _, symbol := range allowlist {
+		allowed[symbol] = struct{}{}
+	}
+	var symbols []*exchange.SymbolInfo
+	var total int
 	var triedIPs []string
 	domain := api.client.SwapDomain()
 
@@ -108,7 +128,20 @@ func (api *SwapAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo
 				log.WarnContextf(ctx, "[SwapAPI] 无可用DNS优选IP获取ExchangeInfo，降级为域名直连, 已尝试IP: %v", triedIPs)
 			}
 
-			err := api.client.GetWithIP(ctx, domain, SwapExchangeInfoEndpoint, nil, &result, currentIP)
+			err := api.client.GetWithIPStream(ctx, domain, SwapExchangeInfoEndpoint, query, currentIP, func(reader io.Reader) error {
+				var decodeErr error
+				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
+					if raw.Status != "TRADING" || raw.ContractType != "PERPETUAL" {
+						return false
+					}
+					if len(allowed) == 0 {
+						return true
+					}
+					_, ok := allowed[strings.ToUpper(raw.Symbol)]
+					return ok
+				})
+				return decodeErr
+			})
 			if err != nil {
 				if currentIP != "" {
 					triedIPs = append(triedIPs, currentIP)
@@ -123,16 +156,7 @@ func (api *SwapAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo
 		return nil, fmt.Errorf("获取永续合约交易所信息失败: %w", err)
 	}
 
-	// 转换为通用格式
-	symbols := make([]*exchange.SymbolInfo, 0, len(result.Symbols))
-	for _, raw := range result.Symbols {
-		// 只包含状态为 TRADING 且合约类型为 PERPETUAL 的交易对
-		if raw.Status == "TRADING" && raw.ContractType == "PERPETUAL" {
-			symbols = append(symbols, raw.ToSymbolInfo())
-		}
-	}
-
 	log.InfoContextf(ctx, "[SwapAPI] 获取ExchangeInfo成功，总计%d个交易对，活跃永续合约%d个",
-		len(result.Symbols), len(symbols))
+		total, len(symbols))
 	return symbols, nil
 }

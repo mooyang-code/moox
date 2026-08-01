@@ -49,7 +49,7 @@ func (c *SymbolCollector) FetchSymbolSnapshot(ctx context.Context, params *sourc
 	if params == nil {
 		return nil, nil, "", fmt.Errorf("标的采集参数不能为空")
 	}
-	symbols, err := c.fetchSymbols(binanceapi.SingleAttempt(ctx), params)
+	symbols, err := c.fetchSymbols(binanceapi.SingleAttempt(ctx), params, allowlist)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -195,7 +195,7 @@ func (c *SymbolCollector) CollectWithResult(
 		spaceID, datasetID, params.InstType)
 
 	// 根据产品类型获取标的列表
-	symbols, err := c.fetchSymbols(ctx, params)
+	symbols, err := c.fetchSymbols(ctx, params, nil)
 	if err != nil {
 		log.ErrorContextf(ctx, "[SymbolCollector] 获取标的失败: %v", err)
 		return sources.CollectResult{}, err
@@ -232,14 +232,20 @@ func (c *SymbolCollector) CollectWithResult(
 }
 
 // fetchSymbols 获取标的列表
-func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
+func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.CollectParams, allowlist []string) ([]*exchange.SymbolInfo, error) {
 	if c.fetchSymbolPage != nil {
 		return c.fetchSymbolPage(ctx, params)
 	}
 	switch params.InstType {
 	case InstTypeSPOT:
+		if len(allowlist) > 0 {
+			return c.spotAPI.GetExchangeInfoForSymbols(ctx, allowlist)
+		}
 		return c.spotAPI.GetExchangeInfo(ctx)
 	case InstTypeSWAP:
+		if len(allowlist) > 0 {
+			return c.swapAPI.GetExchangeInfoForSymbols(ctx, allowlist)
+		}
 		return c.swapAPI.GetExchangeInfo(ctx)
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
