@@ -47,6 +47,10 @@ type Options struct {
 	HealthAuthVersion      string
 	HealthAuthAccessKey    string
 	HealthAuthSecretKey    string
+	GatewayControlURL      string
+	GatewayControlKey      string
+	GatewayServiceKey      string
+	GatewayCABundle        []byte
 	TLSMode                TLSMode
 }
 
@@ -503,10 +507,51 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	_ = os.Remove(archive)
+	controlURL := "http://127.0.0.1:11000"
+	if !opts.UseControlGateway {
+		controlURL = strings.TrimSpace(opts.GatewayControlURL)
+		if controlURL == "" || strings.TrimSpace(opts.GatewayControlKey) == "" || strings.TrimSpace(opts.GatewayServiceKey) == "" || len(opts.GatewayCABundle) == 0 {
+			return "", fmt.Errorf("remote storage package requires control gateway material")
+		}
+	}
 	args := []string{
 		"--profile", "storage", "--package-only", "--archive", archive,
 		"--target", "localhost", "--dir", "~/moox/storage", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
-		"--public-host", opts.PublicHost, "--node-id", storageNodeID(opts.NodeID), "--gateway-control-url", "http://127.0.0.1:11000",
+		"--public-host", opts.PublicHost, "--node-id", storageNodeID(opts.NodeID), "--gateway-control-url", controlURL,
+	}
+	var gatewayFiles []string
+	if !opts.UseControlGateway {
+		for _, item := range []struct {
+			prefix string
+			value  []byte
+		}{
+			{"moox-gateway-control-", []byte(strings.TrimSpace(opts.GatewayControlKey))},
+			{"moox-gateway-service-", []byte(strings.TrimSpace(opts.GatewayServiceKey))},
+			{"moox-gateway-ca-", opts.GatewayCABundle},
+		} {
+			file, writeErr := os.CreateTemp("", item.prefix)
+			if writeErr != nil {
+				return "", writeErr
+			}
+			name := file.Name()
+			if _, writeErr = file.Write(item.value); writeErr == nil {
+				writeErr = file.Chmod(0o600)
+			}
+			if closeErr := file.Close(); writeErr == nil {
+				writeErr = closeErr
+			}
+			if writeErr != nil {
+				_ = os.Remove(name)
+				return "", writeErr
+			}
+			gatewayFiles = append(gatewayFiles, name)
+		}
+		defer func() {
+			for _, file := range gatewayFiles {
+				_ = os.Remove(file)
+			}
+		}()
+		args = append(args, "--gateway-control-key-file", gatewayFiles[0], "--gateway-service-key-file", gatewayFiles[1], "--gateway-ca-bundle", gatewayFiles[2])
 	}
 	if skipBuild {
 		args = append(args, "--skip-build")

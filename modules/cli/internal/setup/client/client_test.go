@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -165,29 +164,49 @@ func TestStatusWithSpacesReturnsSpaceCount(t *testing.T) {
 	assert.Equal(t, 1, result.Spaces)
 }
 
-func TestApplyStoragePlacementUpdatesEveryStorageEndpointThroughPrivateSysDeploy(t *testing.T) {
+func TestApplyStoragePlacementCreatesRemoteLoopbackRoutesAndPublishesGatewayEndpoints(t *testing.T) {
 	t.Parallel()
-	updated := map[string]string{}
-	healthURLs := map[string]string{}
+	updated := map[string]*pb.ServiceDeployment{}
+	created := map[string]*pb.ServiceDeployment{}
+	var gatewayNode *pb.GatewayNode
 	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
+		case "/trpc.moox.ops.SysDeploy/ListGatewayNodes":
+			response, _ := protojson.Marshal(&pb.ListGatewayNodesRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
+			_, _ = w.Write(response)
+		case "/trpc.moox.ops.SysDeploy/CreateGatewayNode":
+			var input pb.CreateGatewayNodeReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			gatewayNode = input.GetNode()
+			response, _ := protojson.Marshal(&pb.CreateGatewayNodeRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Node: gatewayNode})
+			_, _ = w.Write(response)
 		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
 			var input pb.GetServiceDeploymentReq
 			body, _ := io.ReadAll(request.Body)
 			_ = protojson.Unmarshal(body, &input)
+			if input.GetNodeId() == "compute-1" {
+				response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND}})
+				_, _ = w.Write(response)
+				return
+			}
 			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
 				RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
 				Deployment: &pb.ServiceDeployment{NodeId: "control", ServiceName: input.GetServiceName(), Host: "127.0.0.1", Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:20210/readyz","monitor_enabled":true}`},
 			})
 			_, _ = w.Write(response)
+		case "/trpc.moox.ops.SysDeploy/CreateServiceDeployment":
+			var input pb.CreateServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			created[input.GetDeployment().GetServiceName()] = input.GetDeployment()
+			response, _ := protojson.Marshal(&pb.CreateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
+			_, _ = w.Write(response)
 		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
 			var input pb.UpdateServiceDeploymentReq
 			body, _ := io.ReadAll(request.Body)
 			_ = protojson.Unmarshal(body, &input)
-			updated[input.GetServiceName()] = input.GetDeployment().GetHost()
-			var extra map[string]any
-			_ = json.Unmarshal([]byte(input.GetDeployment().GetExtraConfig()), &extra)
-			healthURLs[input.GetServiceName()], _ = extra["health_url"].(string)
+			updated[input.GetServiceName()] = input.GetDeployment()
 			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
 			_, _ = w.Write(response)
 		default:
@@ -195,14 +214,17 @@ func TestApplyStoragePlacementUpdatesEveryStorageEndpointThroughPrivateSysDeploy
 		}
 	})}
 
-	result, err := New(forwarder).ApplyStoragePlacement(context.Background(), "203.0.113.9")
+	result, err := New(forwarder).ApplyStoragePlacement(context.Background(), "compute-1", "203.0.113.9")
 	require.NoError(t, err)
 	require.Equal(t, len(storageDeploymentNames), result.Deployments)
 	require.Equal(t, "127.0.0.1:11109", forwarder.remote)
+	require.Equal(t, "compute-1", gatewayNode.GetNodeId())
+	require.Equal(t, "https://203.0.113.9:11001", gatewayNode.GetPublicAddress())
 	for _, name := range storageDeploymentNames {
-		require.Equal(t, "203.0.113.9", updated[name], name)
-		require.Equal(t, "http://203.0.113.9:20210/readyz", healthURLs[name], name)
+		require.Equal(t, "compute-1", created[name].GetNodeId(), name)
+		require.Equal(t, "127.0.0.1", created[name].GetHost(), name)
 	}
+	require.Equal(t, "203.0.113.9", updated["service_gateway_native"].GetHost())
 }
 
 func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {

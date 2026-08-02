@@ -3,12 +3,10 @@ package client
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -143,10 +141,13 @@ func (c *Client) StatusWithSpaces(
 	}, nil
 }
 
-func (c *Client) ApplyStoragePlacement(ctx context.Context, host string) (StoragePlacementResult, error) {
-	host = strings.TrimSpace(host)
-	if c == nil || c.forwarder == nil || host == "" {
+func (c *Client) ApplyStoragePlacement(ctx context.Context, nodeID, host string) (StoragePlacementResult, error) {
+	nodeID, host = strings.TrimSpace(nodeID), strings.TrimSpace(host)
+	if c == nil || c.forwarder == nil || nodeID == "" || host == "" {
 		return StoragePlacementResult{}, fmt.Errorf("storage_placement_invalid")
+	}
+	if err := c.ensureGatewayNode(ctx, nodeID, host); err != nil {
+		return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 	}
 	for _, serviceName := range storageDeploymentNames {
 		getResponse := &pb.GetServiceDeploymentRsp{}
@@ -158,48 +159,67 @@ func (c *Client) ApplyStoragePlacement(ctx context.Context, host string) (Storag
 			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 		}
 		deployment := proto.Clone(getResponse.GetDeployment()).(*pb.ServiceDeployment)
+		deployment.Id = 0
+		deployment.NodeId = nodeID
+		// Each remote Gateway reaches its local Storage processes through loopback.
+		// The public address belongs only to the Gateway node, not to its routes.
+		deployment.Host = "127.0.0.1"
+		if err := c.upsertDeployment(ctx, deployment); err != nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+	}
+	// The HTTP gateway remains on control for CloudNode and other control-plane
+	// RPCs. Only the native Storage ingress moves to the Storage host.
+	for _, serviceName := range []string{"service_gateway_native"} {
+		getResponse := &pb.GetServiceDeploymentRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+			&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: serviceName}, getResponse); err != nil || checkRetInfo(getResponse.GetRetInfo()) != nil || getResponse.GetDeployment() == nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		deployment := proto.Clone(getResponse.GetDeployment()).(*pb.ServiceDeployment)
 		deployment.Host = host
-		extraConfig, err := storageExtraConfigForHost(deployment.GetExtraConfig(), host)
-		if err != nil {
-			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
-		}
-		deployment.ExtraConfig = extraConfig
-		updateResponse := &pb.UpdateServiceDeploymentRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateServiceDeployment",
-			&pb.UpdateServiceDeploymentReq{NodeId: "control", ServiceName: serviceName, Deployment: deployment}, updateResponse); err != nil {
-			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
-		}
-		if err := checkRetInfo(updateResponse.GetRetInfo()); err != nil {
+		if err := c.upsertDeployment(ctx, deployment); err != nil {
 			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 		}
 	}
 	return StoragePlacementResult{Deployments: len(storageDeploymentNames)}, nil
 }
 
-func storageExtraConfigForHost(raw, host string) (string, error) {
-	if strings.TrimSpace(raw) == "" {
-		return raw, nil
+func (c *Client) ensureGatewayNode(ctx context.Context, nodeID, host string) error {
+	response := &pb.ListGatewayNodesRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "ListGatewayNodes", &pb.ListGatewayNodesReq{NodeId: nodeID}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+		return fmt.Errorf("gateway_node_lookup_failed")
 	}
-	var extra map[string]any
-	if err := json.Unmarshal([]byte(raw), &extra); err != nil {
-		return "", err
+	node := &pb.GatewayNode{NodeId: nodeID, Name: nodeID, PublicAddress: "https://" + net.JoinHostPort(host, "11001"), Status: "enabled"}
+	if len(response.GetNodes()) == 0 {
+		created := &pb.CreateGatewayNodeRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateGatewayNode", &pb.CreateGatewayNodeReq{Node: node}, created); err != nil || checkRetInfo(created.GetRetInfo()) != nil {
+			return fmt.Errorf("gateway_node_create_failed")
+		}
+		return nil
 	}
-	healthURL, ok := extra["health_url"].(string)
-	if !ok || strings.TrimSpace(healthURL) == "" {
-		return raw, nil
+	updated := &pb.UpdateGatewayNodeRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateGatewayNode", &pb.UpdateGatewayNodeReq{NodeId: nodeID, Node: node}, updated); err != nil || checkRetInfo(updated.GetRetInfo()) != nil {
+		return fmt.Errorf("gateway_node_update_failed")
 	}
-	parsed, err := url.Parse(healthURL)
-	if err != nil {
-		return "", err
+	return nil
+}
+
+func (c *Client) upsertDeployment(ctx context.Context, deployment *pb.ServiceDeployment) error {
+	getResponse := &pb.GetServiceDeploymentRsp{}
+	err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment", &pb.GetServiceDeploymentReq{NodeId: deployment.GetNodeId(), ServiceName: deployment.GetServiceName()}, getResponse)
+	if err == nil && checkRetInfo(getResponse.GetRetInfo()) == nil {
+		response := &pb.UpdateServiceDeploymentRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "UpdateServiceDeployment", &pb.UpdateServiceDeploymentReq{NodeId: deployment.GetNodeId(), ServiceName: deployment.GetServiceName(), Deployment: deployment}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+			return fmt.Errorf("deployment_update_failed")
+		}
+		return nil
 	}
-	_, port, err := net.SplitHostPort(parsed.Host)
-	if err != nil {
-		return "", err
+	response := &pb.CreateServiceDeploymentRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "CreateServiceDeployment", &pb.CreateServiceDeploymentReq{Deployment: deployment}, response); err != nil || checkRetInfo(response.GetRetInfo()) != nil {
+		return fmt.Errorf("deployment_create_failed")
 	}
-	parsed.Host = net.JoinHostPort(host, port)
-	extra["health_url"] = parsed.String()
-	encoded, err := json.Marshal(extra)
-	return string(encoded), err
+	return nil
 }
 
 func (c *Client) forwardedPost(ctx context.Context, method string, request, response proto.Message) error {

@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -466,6 +467,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		return err
 	}
 	defer control.Close()
+	useControlGateway := host.Name == snapshot.Manifest.ControlHost.Name
 	primarySecret, viewSecret, err := controlStorageInternalAuth(ctx, control)
 	if err != nil {
 		return err
@@ -474,11 +476,14 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return err
 	}
+	controlURL, controlKey, serviceKey, gatewayCA, err := controlGatewayMaterial(ctx, control, snapshot.Manifest.ControlHost.Address, useControlGateway)
+	if err != nil {
+		return err
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
 	}
-	useControlGateway := host.Name == snapshot.Manifest.ControlHost.Name
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData,
 		UseControlGateway:     useControlGateway,
@@ -490,17 +495,46 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		HealthAuthVersion:     healthVersion,
 		HealthAuthAccessKey:   healthAccessKey,
 		HealthAuthSecretKey:   healthSecret,
+		GatewayControlURL:     controlURL,
+		GatewayControlKey:     controlKey,
+		GatewayServiceKey:     serviceKey,
+		GatewayCABundle:       gatewayCA,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
-	placementHost := host.Address
-	if useControlGateway {
-		placementHost = "127.0.0.1"
-	}
-	if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, placementHost); err != nil {
-		return err
+	if !useControlGateway {
+		if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Name, host.Address); err != nil {
+			return err
+		}
 	}
 	return restartStorageClients(ctx, control)
+}
+
+func controlGatewayMaterial(ctx context.Context, control setupssh.Client, controlHost string, local bool) (string, string, string, []byte, error) {
+	if local {
+		return "http://127.0.0.1:11000", "", "", nil, nil
+	}
+	result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
+for file in "$HOME/moox/prod/secrets/gateway-control.key" "$HOME/moox/prod/secrets/gateway-service.key" "$HOME/moox/prod/certs/gateway/peers.pem"; do
+  test -s "$file"
+  base64 -w 0 "$file"
+  printf '\n'
+done`}, nil)
+	if err != nil {
+		return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
+	}
+	parts := strings.Fields(result.Stdout)
+	if len(parts) != 3 {
+		return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
+	}
+	decoded := make([][]byte, 3)
+	for index, value := range parts {
+		decoded[index], err = base64.StdEncoding.DecodeString(value)
+		if err != nil || len(decoded[index]) == 0 {
+			return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
+		}
+	}
+	return "https://" + net.JoinHostPort(controlHost, "9527"), strings.TrimSpace(string(decoded[0])), strings.TrimSpace(string(decoded[1])), decoded[2], nil
 }
 
 func controlHealthAuth(ctx context.Context, control setupssh.Client) (string, string, string, error) {
@@ -564,7 +598,7 @@ func restartStorageClients(ctx context.Context, control setupssh.Client) error {
 	if _, err := control.Run(ctx, []string{
 		"sh", "-lc",
 		`set -eu
-for service in monitor cloudnode; do
+for service in monitor cloudnode collector; do
   if "$HOME/moox/prod/status.sh" "$service" >/dev/null 2>&1; then
     "$HOME/moox/prod/restart.sh" "$service"
   fi

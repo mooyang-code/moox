@@ -80,25 +80,26 @@ type SCFFetcherSpace struct {
 	PackageName      string `toml:"package_name"`
 	// CLSCloudAccountID owns the single regional CLS topic used by every
 	// short-lived collector function in this space, regardless of its SCF region.
-	CLSCloudAccountID   string             `toml:"cls_cloud_account_id"`
-	Namespace           string             `toml:"namespace"`
-	Runtime             string             `toml:"runtime"`
-	FunctionPrefix      string             `toml:"function_prefix"`
-	MemorySize          int                `toml:"memory_size"`
-	TimeoutSeconds      int                `toml:"timeout_seconds"`
-	RealtimeBatchSize   int                `toml:"realtime_batch_size"`
-	RealtimeBarLimit    int                `toml:"realtime_bar_limit"`
-	CatchupBatchSize    int                `toml:"catchup_batch_size"`
-	CatchupBarLimit     int                `toml:"catchup_bar_limit"`
-	MaxInflightRequests int                `toml:"max_inflight_requests"`
-	RequestTimeoutMS    int                `toml:"request_timeout_ms"`
-	HTTPMaxAttempts     int                `toml:"http_max_attempts"`
-	StorageMaxAttempts  int                `toml:"storage_max_attempts"`
-	StorageTimeoutMS    int                `toml:"storage_timeout_ms"`
-	MaxRetryAttempts    int                `toml:"max_retry_attempts"`
-	RetryDelays         []string           `toml:"retry_delays"`
-	StaggerEnabled      bool               `toml:"stagger_enabled"`
-	Regions             []SCFFetcherRegion `toml:"regions"`
+	CLSCloudAccountID    string             `toml:"cls_cloud_account_id"`
+	Namespace            string             `toml:"namespace"`
+	Runtime              string             `toml:"runtime"`
+	FunctionPrefix       string             `toml:"function_prefix"`
+	StorageGatewayNodeID string             `toml:"storage_gateway_node_id"`
+	MemorySize           int                `toml:"memory_size"`
+	TimeoutSeconds       int                `toml:"timeout_seconds"`
+	RealtimeBatchSize    int                `toml:"realtime_batch_size"`
+	RealtimeBarLimit     int                `toml:"realtime_bar_limit"`
+	CatchupBatchSize     int                `toml:"catchup_batch_size"`
+	CatchupBarLimit      int                `toml:"catchup_bar_limit"`
+	MaxInflightRequests  int                `toml:"max_inflight_requests"`
+	RequestTimeoutMS     int                `toml:"request_timeout_ms"`
+	HTTPMaxAttempts      int                `toml:"http_max_attempts"`
+	StorageMaxAttempts   int                `toml:"storage_max_attempts"`
+	StorageTimeoutMS     int                `toml:"storage_timeout_ms"`
+	MaxRetryAttempts     int                `toml:"max_retry_attempts"`
+	RetryDelays          []string           `toml:"retry_delays"`
+	StaggerEnabled       bool               `toml:"stagger_enabled"`
+	Regions              []SCFFetcherRegion `toml:"regions"`
 }
 
 type Manifest struct {
