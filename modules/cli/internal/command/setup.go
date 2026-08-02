@@ -480,6 +480,11 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	if err != nil {
 		return err
 	}
+	if !useControlGateway {
+		if _, err = setupclient.New(control).PrepareStoragePlacement(ctx, host.Name, host.Address); err != nil {
+			return err
+		}
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("storage_deploy_invalid")
@@ -506,6 +511,9 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Name, host.Address); err != nil {
 			return err
 		}
+		if err = ensureSetupStorageGatewayFirewall(ctx, snapshot, host.Address); err != nil {
+			return err
+		}
 	}
 	return restartStorageClients(ctx, control)
 }
@@ -515,7 +523,7 @@ func controlGatewayMaterial(ctx context.Context, control setupssh.Client, contro
 		return "http://127.0.0.1:11000", "", "", nil, nil
 	}
 	result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
-for file in "$HOME/moox/prod/secrets/gateway-control.key" "$HOME/moox/prod/secrets/gateway-service.key" "$HOME/moox/prod/certs/gateway/peers.pem"; do
+for file in "$HOME/moox/prod/secrets/gateway-control.key" "$HOME/moox/prod/secrets/gateway-service.key" "$HOME/moox/prod/certs/caddy/root.crt"; do
   test -s "$file"
   base64 -w 0 "$file"
   printf '\n'
@@ -812,6 +820,12 @@ func ensureSetupEventBusFirewall(ctx context.Context, snapshot *setupconfig.Snap
 		setupRuntimeFirewallRules(snapshot.Manifest.EventBus.Port),
 		"eventbus_firewall_failed",
 	)
+}
+
+func ensureSetupStorageGatewayFirewall(ctx context.Context, snapshot *setupconfig.Snapshot, address string) error {
+	return ensureSetupFirewallRules(ctx, snapshot, address, []cloudtencent.CreateFirewallRulesOptions{{
+		Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway",
+	}}, "storage_gateway_firewall_failed")
 }
 
 func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {

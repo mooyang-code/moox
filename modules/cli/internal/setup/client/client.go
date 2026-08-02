@@ -142,6 +142,28 @@ func (c *Client) StatusWithSpaces(
 }
 
 func (c *Client) ApplyStoragePlacement(ctx context.Context, nodeID, host string) (StoragePlacementResult, error) {
+	if _, err := c.PrepareStoragePlacement(ctx, nodeID, host); err != nil {
+		return StoragePlacementResult{}, err
+	}
+	// The HTTP gateway remains on control for CloudNode and other control-plane
+	// RPCs. Only the native Storage ingress moves to the Storage host.
+	getResponse := &pb.GetServiceDeploymentRsp{}
+	if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+		&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: "service_gateway_native"}, getResponse); err != nil || checkRetInfo(getResponse.GetRetInfo()) != nil || getResponse.GetDeployment() == nil {
+		return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+	}
+	deployment := proto.Clone(getResponse.GetDeployment()).(*pb.ServiceDeployment)
+	deployment.Host = strings.TrimSpace(host)
+	if err := c.upsertDeployment(ctx, deployment); err != nil {
+		return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+	}
+	return StoragePlacementResult{Deployments: len(storageDeploymentNames)}, nil
+}
+
+// PrepareStoragePlacement creates the remote Gateway node and its local
+// routes before the Gateway starts. It deliberately leaves SCF discovery on
+// the current native endpoint until Storage readiness has succeeded.
+func (c *Client) PrepareStoragePlacement(ctx context.Context, nodeID, host string) (StoragePlacementResult, error) {
 	nodeID, host = strings.TrimSpace(nodeID), strings.TrimSpace(host)
 	if c == nil || c.forwarder == nil || nodeID == "" || host == "" {
 		return StoragePlacementResult{}, fmt.Errorf("storage_placement_invalid")
@@ -164,20 +186,6 @@ func (c *Client) ApplyStoragePlacement(ctx context.Context, nodeID, host string)
 		// Each remote Gateway reaches its local Storage processes through loopback.
 		// The public address belongs only to the Gateway node, not to its routes.
 		deployment.Host = "127.0.0.1"
-		if err := c.upsertDeployment(ctx, deployment); err != nil {
-			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
-		}
-	}
-	// The HTTP gateway remains on control for CloudNode and other control-plane
-	// RPCs. Only the native Storage ingress moves to the Storage host.
-	for _, serviceName := range []string{"service_gateway_native"} {
-		getResponse := &pb.GetServiceDeploymentRsp{}
-		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
-			&pb.GetServiceDeploymentReq{NodeId: "control", ServiceName: serviceName}, getResponse); err != nil || checkRetInfo(getResponse.GetRetInfo()) != nil || getResponse.GetDeployment() == nil {
-			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
-		}
-		deployment := proto.Clone(getResponse.GetDeployment()).(*pb.ServiceDeployment)
-		deployment.Host = host
 		if err := c.upsertDeployment(ctx, deployment); err != nil {
 			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
 		}
