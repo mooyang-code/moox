@@ -25,6 +25,21 @@ type activationMetadataStore struct {
 	beforeCommit func()
 }
 
+type registerDataSubjectMetadataStore struct {
+	metadata.Store
+	registered bool
+}
+
+func (s *registerDataSubjectMetadataStore) RegisterDataSubject(
+	_ context.Context,
+	subject *pb.Subject,
+	_ *pb.SubjectSymbol,
+	bindings []*pb.DatasetSubject,
+) (*pb.Subject, []*pb.DatasetSubject, error) {
+	s.registered = true
+	return subject, bindings, nil
+}
+
 func (s *activationMetadataStore) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
 	if s.datasetErr != nil {
 		return nil, s.datasetErr
@@ -116,6 +131,25 @@ func TestActivateDatasetReportsCommittedPublicationFailureAndRetryIsIdempotent(t
 	require.Equal(t, pb.ErrorCode_SUCCESS, retry.GetRetInfo().GetCode())
 	require.Equal(t, uint64(8), retry.GetDataset().GetRevision())
 	require.Equal(t, 1, store.commitCalls)
+}
+
+func TestRegisterDataSubjectSucceedsWhenCacheRefreshIsAlreadyRunning(t *testing.T) {
+	store := &registerDataSubjectMetadataStore{}
+	service, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret"})
+	require.NoError(t, err)
+
+	rsp, err := service.RegisterDataSubject(context.Background(), &pb.RegisterDataSubjectReq{
+		SpaceId:        "crypto",
+		DataSourceId:   "binance",
+		ExternalSymbol: "BTCUSDT",
+		Subject:        &pb.Subject{SubjectId: "BTC-USDT", SubjectType: "crypto_pair"},
+		DatasetBindings: []*pb.DatasetSubject{{
+			DatasetId: "symbols",
+		}},
+	})
+	require.NoError(t, err)
+	require.True(t, store.registered)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestActivateDatasetCASConflictDoesNotChangeState(t *testing.T) {

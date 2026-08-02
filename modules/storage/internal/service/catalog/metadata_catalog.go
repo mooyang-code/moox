@@ -144,9 +144,11 @@ func (s *Service) RegisterDataSubject(ctx context.Context, req *pb.RegisterDataS
 		}
 		return &pb.RegisterDataSubjectRsp{RetInfo: retinfo.Error(code, err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.RegisterDataSubjectRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
+	// Registration is idempotent and the SQLite transaction has already
+	// committed. A concurrent snapshot refresh must not turn that committed
+	// registration into a collector failure; the next cache publication will
+	// expose it to readers.
+	s.refreshMetadataCacheAfterCommit(ctx, "RegisterDataSubject")
 	return &pb.RegisterDataSubjectRsp{RetInfo: retinfo.Success("success"), Subject: created, DatasetBindings: bindings}, nil
 }
 
