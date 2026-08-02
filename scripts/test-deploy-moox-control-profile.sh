@@ -41,7 +41,7 @@ ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 for binary in \
   moox-admin moox-cli moox-gateway moox-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli moox-collector-scf \
+  moox-collector moox-collector-cli \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
@@ -80,7 +80,7 @@ tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
 for binary in \
   moox-admin moox-admin-cli moox-cli moox-gateway moox-gateway-cli moox-web-host \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
-  moox-collector moox-collector-cli moox-collector-scf \
+  moox-collector moox-collector-cli \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
   moox-monitor moox-monitor-cli; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing control binary: ${binary}" >&2; exit 1; }

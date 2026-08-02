@@ -778,8 +778,6 @@ build_core_binaries() {
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" collector
-    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-      "${ROOT}/scripts/build.sh" collector-scf
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
@@ -2705,7 +2703,6 @@ EOF
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     copy_required_binary "moox-collector"
     copy_required_binary "moox-collector-cli"
-    copy_required_binary "moox-collector-scf"
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
     copy_required_binary "moox-factor"

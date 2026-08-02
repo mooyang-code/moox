@@ -65,7 +65,7 @@ mkdir -p "${DEPLOY_DIR}/data" "${DEPLOY_DIR}/logs" "${DEPLOY_DIR}/run"
 mkdir -p "${DEPLOY_DIR}/secrets" "${DEPLOY_DIR}/certs/caddy"
 printf 'keep-this-ca\n' >"${DEPLOY_DIR}/certs/caddy/root.crt"
 seed_disabled_component cloudnode moox-cloudnode moox-cloudnode-cli
-seed_disabled_component collector moox-collector moox-collector-cli moox-collector-scf
+seed_disabled_component collector moox-collector moox-collector-cli
 seed_disabled_component factor moox-factor moox-factor-cli
 seed_disabled_component strategy moox-strategy moox-strategy-cli
 seed_disabled_component trade moox-trade moox-trade-cli
@@ -112,7 +112,6 @@ for path in \
   bin/moox-cloudnode-cli \
   bin/moox-collector \
   bin/moox-collector-cli \
-  bin/moox-collector-scf \
   bin/moox-factor \
   bin/moox-factor-cli \
   bin/moox-strategy \
