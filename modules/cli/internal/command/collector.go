@@ -1187,7 +1187,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	}
 	fetcher := opts.FetcherConfig
 	if fetcher == nil {
-		fetcher = &setupconfig.SCFFetcherSpace{MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 32, RequestTimeoutMS: 1500, HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3}
+		fetcher = defaultCollectorSCFFetcherSpace()
 	}
 	if strings.TrimSpace(config["timeout"]) == "" {
 		config["timeout"] = strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15))
@@ -1419,7 +1419,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
 	fetcher := opts.FetcherConfig
 	if fetcher == nil {
-		fetcher = &setupconfig.SCFFetcherSpace{TimeoutSeconds: 15, MaxInflightRequests: 16, RequestTimeoutMS: 1500, HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxRetryAttempts: 3}
+		fetcher = defaultCollectorSCFFetcherSpace()
 	}
 	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15)))
 	setDefaultEnv(env, "MOOX_FETCH_MAX_INFLIGHT_REQUESTS", strconv.Itoa(defaultInt(fetcher.MaxInflightRequests, 5)))
@@ -1599,6 +1599,23 @@ func defaultInt(value, fallback int) int {
 		return value
 	}
 	return fallback
+}
+
+func defaultCollectorSCFFetcherSpace() *setupconfig.SCFFetcherSpace {
+	return &setupconfig.SCFFetcherSpace{
+		MemorySize:          64,
+		TimeoutSeconds:      15,
+		RealtimeBatchSize:   64,
+		RealtimeBarLimit:    3,
+		CatchupBatchSize:    1,
+		CatchupBarLimit:     1000,
+		MaxInflightRequests: 32,
+		RequestTimeoutMS:    1500,
+		HTTPMaxAttempts:     4,
+		StorageMaxAttempts:  1,
+		StorageTimeoutMS:    5000,
+		MaxRetryAttempts:    3,
+	}
 }
 
 func collectorConfigInt(values map[string]string, key string, fallback int) int {

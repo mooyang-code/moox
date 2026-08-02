@@ -118,12 +118,12 @@ func TestResultErrorSummaryUsesFirstActionableItemError(t *testing.T) {
 
 func TestStorageAndPublishReservesKeepsFullStorageTimeout(t *testing.T) {
 	commit, publish := storageAndPublishReserves(5*time.Second, 800*time.Millisecond)
-	assert.Equal(t, 7800*time.Millisecond, commit)
-	assert.Equal(t, 2*time.Second, publish)
+	assert.Equal(t, 8800*time.Millisecond, commit)
+	assert.Equal(t, 3*time.Second, publish)
 
 	commit, publish = storageAndPublishReserves(0, 0)
-	assert.Equal(t, 7*time.Second, commit)
-	assert.Equal(t, 2*time.Second, publish)
+	assert.Equal(t, 8*time.Second, commit)
+	assert.Equal(t, 3*time.Second, publish)
 }
 
 func TestExecutorSupportsSymbolSnapshotAndCatchupBatches(t *testing.T) {

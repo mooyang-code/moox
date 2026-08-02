@@ -78,10 +78,12 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		"region":        region,
 	}}
 	defer func() {
-		if timeout <= 0 {
+		if timeout <= 0 || ctx.Err() != nil {
 			return
 		}
-		flushCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		// The SCF context carries the platform deadline. Do not turn a best-effort
+		// log flush into work that runs beyond the invocation's remaining budget.
+		flushCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		if flushErr := reporter.Flush(flushCtx); flushErr != nil {
 			log.ErrorContextf(ctx, "cls_report_flush_failed request_id=%s error=%q", event.RequestID, flushErr)

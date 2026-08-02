@@ -71,9 +71,9 @@ data.space_id 必须与 MOOX_SPACE_ID=crypto_market 相等。Storage target 只�
 
 ### 时间预算
 
-    Binance 工作窗口 = 15s - Storage 5s - completion 2s - CLS 3s
+    Binance 工作窗口 = 15s - Storage 5s - completion 3s - CLS 3s
     Storage 聚合写入 = 最多 5s
-    EventBus 完成事件 = 最多 2s（首次 TLS 连接也必须能完成）
+    EventBus 完成事件 = 最多 3s（首次 TLS 连接也必须能完成）
     CLS 同步提交 = 最多 3s；跨地域 CLS 首次连接超时只记录，不改变 response
 
 CLS 使用同步 SendLogList，一次调用只发送一次。单函数最多 64 个实时 item，远低于 SDK 的 10,000 条/5MB 限制。
@@ -224,7 +224,7 @@ CloudFunctionEvent 收敛为本计划事件契约。删除仅由旧路径使用�
 
 - [ ] **Step 4: 留足 CLS 尾部预算**
 
-    const completionPublishReserve = 2 * time.Second
+    const completionPublishReserve = 3 * time.Second
     const clsFlushReserve = 3 * time.Second
 
     func executionReserves(storage time.Duration) (commit, publish, cls time.Duration) {

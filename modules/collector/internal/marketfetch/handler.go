@@ -30,9 +30,9 @@ type Handler struct {
 const (
 	// A fresh SCF invocation establishes a TLS connection to EventBus before
 	// publishing the only completion fact. Half a second is not enough for
-	// that cold path, while two seconds still leaves more than seven seconds
-	// for market requests after Storage and CLS reserves in a 15 second call.
-	completionPublishReserve = 2 * time.Second
+	// that cold path. Three seconds leaves a 5-second market window after the
+	// Storage and CLS reserves in a 15-second call.
+	completionPublishReserve = 3 * time.Second
 	defaultStorageTimeout    = 5 * time.Second
 )
 

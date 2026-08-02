@@ -305,6 +305,7 @@ func TestCollectorFunctionEnvironmentUsesRuntimeCollectorIdentity(t *testing.T) 
 	assert.Equal(t, "collector", env["MOOX_GATEWAY_SERVICE_KEY_ID"])
 	assert.Equal(t, "collector-secret", env["MOOX_GATEWAY_SERVICE_SECRET_KEY"])
 	assert.Equal(t, "collector", env["MOOX_GATEWAY_CALLER"])
+	assert.Equal(t, "32", env["MOOX_FETCH_MAX_INFLIGHT_REQUESTS"])
 }
 
 type collectorCLSAPI struct{}

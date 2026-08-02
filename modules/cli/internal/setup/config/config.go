@@ -23,7 +23,7 @@ const (
 	SCFCLSReserveMilliseconds = 3000
 	// SCFCompletionReserveMilliseconds leaves enough time for the durable
 	// completion event after Storage has accepted the aggregate write.
-	SCFCompletionReserveMilliseconds = 2000
+	SCFCompletionReserveMilliseconds = 3000
 )
 
 type Admin struct {
