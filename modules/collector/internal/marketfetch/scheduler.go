@@ -637,30 +637,14 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 		if len(frequencies) == 0 {
 			frequencies = []string{"1h"}
 		}
-		var allowlist []string
-		switch params.SymbolSource {
-		case "manual":
-			allowlist = manualSymbols(rule.CollectParams)
-			if len(allowlist) == 0 {
-				return nil, nil, fmt.Errorf("manual symbol task requires an explicit symbols allowlist")
-			}
-			if len(allowlist) > MaxSymbolTaskSymbols {
-				return nil, nil, fmt.Errorf("manual symbol task contains %d symbols; maximum is %d", len(allowlist), MaxSymbolTaskSymbols)
-			}
-		case "exchange":
-			// An empty allowlist instructs the Binance adapter to fetch the full
-			// active USDT spot snapshot in one SymbolTask.
-		default:
-			return nil, nil, fmt.Errorf("unsupported symbol_source %q", params.SymbolSource)
+		if params.SymbolSource != "exchange" {
+			return nil, nil, fmt.Errorf("symbol task requires exchange snapshot source")
 		}
-		if params.SymbolSource == "exchange" {
-			items := make([]domain.CollectionItem, fullSymbolSnapshotShards)
-			for shard := range items {
-				items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: "symbol", DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullSymbolSnapshotShards}
-			}
-			return items, frequencies[:1], nil
+		items := make([]domain.CollectionItem, fullSymbolSnapshotShards)
+		for shard := range items {
+			items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: "symbol", DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullSymbolSnapshotShards}
 		}
-		return []domain.CollectionItem{{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: "symbol", DatasetID: targetDataset, Allowlist: allowlist}}, frequencies[:1], nil
+		return items, frequencies[:1], nil
 	}
 	if dataType != "kline" {
 		return nil, nil, fmt.Errorf("unsupported data_type %q", dataType)
@@ -699,30 +683,6 @@ func batchKindForRule(rule domain.TaskRule) domain.BatchKind {
 		return domain.BatchKindSymbolSnapshot
 	}
 	return domain.BatchKindRealtime
-}
-
-func manualSymbols(raw string) []string {
-	var payload struct {
-		Symbols []string `json:"symbols"`
-	}
-	if json.Unmarshal([]byte(raw), &payload) != nil {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(payload.Symbols))
-	result := make([]string, 0, len(payload.Symbols))
-	for _, symbol := range payload.Symbols {
-		symbol = strings.TrimSpace(symbol)
-		if symbol == "" {
-			continue
-		}
-		key := strings.ToUpper(strings.ReplaceAll(symbol, "-", ""))
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		result = append(result, symbol)
-	}
-	return result
 }
 
 func targetDataTime(now time.Time, frequency string) (time.Time, error) {

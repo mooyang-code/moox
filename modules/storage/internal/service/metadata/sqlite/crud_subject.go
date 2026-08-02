@@ -50,6 +50,9 @@ func (s *Store) GetSubject(ctx context.Context, spaceID string, subjectID string
 
 func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectType string, market string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
+	if subjectIDs == nil {
+		subjectIDs = []string{}
+	}
 	subjectIDsJSON, err := marshalJSON(subjectIDs)
 	if err != nil {
 		return nil, nil, err

@@ -2,64 +2,41 @@ import { describe, expect, it } from "vitest";
 import { buildCollectorRuleParams, datasetMatchesCollector } from "./collector-rule-params";
 
 describe("buildCollectorRuleParams", () => {
-  it("builds the single dataset-driven Kline contract", () => {
+  it("builds the dataset-driven Kline contract", () => {
     expect(
       buildCollectorRuleParams({
         dataType: "kline",
         exchange: "binance",
         market: "spot",
         datasetId: "spot_kline_1h",
-        intervals: ["1h", "4h"],
+        symbolDatasetId: "binance_spot_symbols",
         scheduleInterval: "1h"
       })
     ).toEqual({
-      source: {
-        kind: "dataset_subjects",
-        dataset_id: "spot_kline_1h"
-      },
-      collector: {
-        exchange: "binance",
-        market: "spot",
-        data_type: "kline",
-        intervals: ["1h", "4h"],
-        live: false
-      },
-      target: {
-        dataset_id: "spot_kline_1h"
-      },
-      schedule: {
-        interval: "1h"
-      }
+      provider: "binance",
+      market_type: "spot",
+      symbol_source: "dataset",
+      symbol_dataset_id: "binance_spot_symbols",
+      target_dataset_id: "spot_kline_1h",
+      frequency: "1h"
     });
   });
 
-  it("builds a Symbol contract without collection intervals", () => {
+  it("builds a full exchange Symbol snapshot contract", () => {
     expect(
       buildCollectorRuleParams({
         dataType: "symbol",
         exchange: "binance",
         market: "spot",
         datasetId: "binance_spot_symbols",
-        intervals: ["1m"],
         scheduleInterval: "6h"
       })
     ).toEqual({
-      source: {
-        kind: "none"
-      },
-      collector: {
-        exchange: "binance",
-        market: "spot",
-        data_type: "symbol",
-        intervals: [],
-        live: false
-      },
-      target: {
-        dataset_id: "binance_spot_symbols"
-      },
-      schedule: {
-        interval: "6h"
-      }
+      provider: "binance",
+      market_type: "spot",
+      symbol_source: "exchange",
+      target_dataset_id: "binance_spot_symbols",
+      frequency: "6h"
     });
   });
 
@@ -70,7 +47,7 @@ describe("buildCollectorRuleParams", () => {
         exchange: "binance",
         market: "spot",
         datasetId: " ",
-        intervals: ["1m"],
+        symbolDatasetId: "symbols",
         scheduleInterval: "5m"
       })
     ).toThrow("请选择 Dataset");
@@ -81,7 +58,7 @@ describe("buildCollectorRuleParams", () => {
       dataType: "kline" as const,
       exchange: "binance",
       datasetId: "shared_kline",
-      intervals: ["1m"],
+      symbolDatasetId: "symbols",
       scheduleInterval: "5m"
     };
 
@@ -89,12 +66,12 @@ describe("buildCollectorRuleParams", () => {
     const swap = buildCollectorRuleParams({ ...baseInput, market: "swap" });
 
     expect(spot).toMatchObject({
-      collector: { market: "spot" },
-      target: { dataset_id: "shared_kline" }
+      market_type: "spot",
+      target_dataset_id: "shared_kline"
     });
     expect(swap).toMatchObject({
-      collector: { market: "swap" },
-      target: { dataset_id: "shared_kline" }
+      market_type: "swap",
+      target_dataset_id: "shared_kline"
     });
   });
 });

@@ -37,11 +37,6 @@ const (
 	// and performs one aggregate Storage write.
 	MaxRealtimeItems = 64
 	MaxRealtimeRows  = 3
-	// A manual Symbol task is deliberately kept small. Full exchange snapshots
-	// are represented by one empty-allowlist item and use their own bounded SCF
-	// invocation. Metadata registration remains serial because Storage uses
-	// SQLite-backed snapshot publication.
-	MaxSymbolTaskSymbols = 20
 )
 
 // Request is the JSON payload accepted by a market_fetch SCF invocation.
@@ -110,8 +105,6 @@ func (r *Request) validate() error {
 			}
 		} else if r.BatchKind == domain.BatchKindRealtime && item.BarLimit > MaxRealtimeRows {
 			return fmt.Errorf("realtime bar_limit must be between 1 and %d", MaxRealtimeRows)
-		} else if r.BatchKind == domain.BatchKindSymbolSnapshot && len(item.Allowlist) > MaxSymbolTaskSymbols {
-			return fmt.Errorf("symbol allowlist exceeds maximum %d", MaxSymbolTaskSymbols)
 		}
 	}
 	if r.Concurrency < 0 || r.Concurrency > MaxConcurrency {
@@ -142,7 +135,7 @@ type Executor struct {
 		FetchCatchupRows(context.Context, *sources.CollectParams, time.Time, int) ([]*storagepb.RowFieldUpsert, time.Time, error)
 	}
 	Symbols interface {
-		FetchSymbolSnapshot(context.Context, *sources.CollectParams, []string) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error)
+		FetchSymbolSnapshot(context.Context, *sources.CollectParams) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error)
 	}
 	Storage Storage
 	Now     func() time.Time
@@ -382,8 +375,7 @@ func compactResultOutcomes(results []domain.ItemResult) string {
 
 // registerSymbols deliberately stays serial because each metadata write
 // refreshes the Storage metadata snapshot and the backing store is SQLite.
-// Manual symbol tasks are limited to a small explicit allowlist; exchange
-// snapshots invoke this same path once per hourly refresh.
+// Each full exchange snapshot invokes this path once per refresh.
 func registerSymbols(ctx context.Context, storage Storage, registrations []*storagepb.RegisterDataSubjectReq) error {
 	if len(registrations) == 0 {
 		return nil
@@ -468,9 +460,9 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 		log.InfoContextf(ctx, "market_fetch_kline_success batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=realtime elapsed_ms=%d success=true rows=%d latest=%s", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, len(rows), latest.UTC().Format(time.RFC3339Nano))
 		return successResult(item), rows, nil, nil
 	case "symbol", "symbols":
-		requestCtx, cancel := symbolRequestContext(ctx, len(item.Allowlist) == 0)
+		requestCtx, cancel := symbolRequestContext(ctx, true)
 		defer cancel()
-		rows, symbols, _, err := e.Symbols.FetchSymbolSnapshot(requestCtx, params, item.Allowlist)
+		rows, symbols, _, err := e.Symbols.FetchSymbolSnapshot(requestCtx, params)
 		if err != nil {
 			return failureResult(item, classifyError(err), errorType(err), err), nil, nil, nil
 		}

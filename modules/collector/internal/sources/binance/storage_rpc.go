@@ -32,7 +32,7 @@ type BatchStorage interface {
 }
 
 // ReconcileSymbolSnapshot disables memberships that disappeared from the
-// latest exchange snapshot (including an explicit manual allowlist shrink).
+// latest exchange snapshot.
 func (w *storageWriter) ReconcileSymbolSnapshot(ctx context.Context, spaceID, datasetID string, active []*exchange.SymbolInfo) error {
 	memberships, err := w.ListDatasetSubjects(ctx, spaceID, datasetID)
 	if err != nil {

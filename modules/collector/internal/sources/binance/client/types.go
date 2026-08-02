@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
@@ -134,23 +133,6 @@ type ExchangeInfoResponse struct {
 	Timezone   string          `json:"timezone"`
 	ServerTime int64           `json:"serverTime"`
 	Symbols    []SymbolInfoRaw `json:"symbols"`
-}
-
-func normalizeExchangeInfoSymbols(symbols []string) []string {
-	result := make([]string, 0, len(symbols))
-	seen := make(map[string]struct{}, len(symbols))
-	for _, symbol := range symbols {
-		value := strings.ToUpper(FormatSymbol(symbol))
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
 }
 
 // exchangeInfoSymbolRaw intentionally keeps only fields used by the symbol

@@ -43,60 +43,18 @@ func NewSymbolCollector() *SymbolCollector {
 	return &SymbolCollector{client: client, spotAPI: binanceapi.NewSpotAPI(client), swapAPI: binanceapi.NewSwapAPI(client)}
 }
 
-// FetchSymbolSnapshot fetches and filters a symbol snapshot without writing it.
-// allowlist is empty for the complete active USDT snapshot.
-func (c *SymbolCollector) FetchSymbolSnapshot(ctx context.Context, params *sources.CollectParams, allowlist []string) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error) {
+// FetchSymbolSnapshot fetches the complete active USDT snapshot without writing it.
+func (c *SymbolCollector) FetchSymbolSnapshot(ctx context.Context, params *sources.CollectParams) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error) {
 	if params == nil {
 		return nil, nil, "", fmt.Errorf("标的采集参数不能为空")
 	}
-	symbols, err := c.fetchSymbols(binanceapi.SingleAttempt(ctx), params, allowlist)
+	symbols, err := c.fetchSymbols(binanceapi.SingleAttempt(ctx), params)
 	if err != nil {
 		return nil, nil, "", err
 	}
 	filtered := c.filterSymbols(symbols)
-	if len(allowlist) > 0 {
-		allowed := make(map[string]struct{}, len(allowlist)*2)
-		for _, value := range allowlist {
-			value = strings.TrimSpace(value)
-			if value == "" {
-				continue
-			}
-			allowed[normalizeAllowlistSymbol(value)] = struct{}{}
-		}
-		filtered = filterAllowlistedSymbols(filtered, allowed)
-	}
-	if len(filtered) == 0 && len(allowlist) == 0 {
+	if len(filtered) == 0 {
 		return nil, nil, "", fmt.Errorf("Binance active symbol snapshot is empty")
-	}
-	if len(filtered) == 0 && len(allowlist) > 0 {
-		return nil, nil, "", fmt.Errorf("Binance allowlist contains no active symbols")
-	}
-	if len(allowlist) > 0 {
-		matched := make(map[string]struct{}, len(filtered)*2)
-		for _, symbol := range filtered {
-			subjectID := normalizedSubjectID(symbol)
-			matched[normalizeAllowlistSymbol(subjectID)] = struct{}{}
-			matched[normalizeAllowlistSymbol(binanceapi.FormatSymbol(subjectID))] = struct{}{}
-		}
-		missing := make([]string, 0)
-		seen := make(map[string]struct{}, len(allowlist))
-		for _, value := range allowlist {
-			value = strings.TrimSpace(value)
-			key := normalizeAllowlistSymbol(value)
-			if key == "" {
-				continue
-			}
-			if _, duplicate := seen[key]; duplicate {
-				continue
-			}
-			seen[key] = struct{}{}
-			if _, ok := matched[key]; !ok {
-				missing = append(missing, value)
-			}
-		}
-		if len(missing) > 0 {
-			return nil, nil, "", fmt.Errorf("Binance allowlist symbols are not active: %s", strings.Join(missing, ","))
-		}
 	}
 	rows, err := buildSymbolRecordRows(filtered, params.SpaceID, params.DatasetID)
 	if err != nil {
@@ -107,26 +65,6 @@ func (c *SymbolCollector) FetchSymbolSnapshot(ctx context.Context, params *sourc
 		version = rows[0].GetKey().GetRecord().GetVersion()
 	}
 	return rows, filtered, version, nil
-}
-
-func filterAllowlistedSymbols(symbols []*exchange.SymbolInfo, allowed map[string]struct{}) []*exchange.SymbolInfo {
-	filtered := make([]*exchange.SymbolInfo, 0, len(symbols))
-	for _, symbol := range symbols {
-		subjectID := normalizeAllowlistSymbol(normalizedSubjectID(symbol))
-		external := normalizeAllowlistSymbol(binanceapi.FormatSymbol(subjectID))
-		if _, ok := allowed[subjectID]; ok {
-			filtered = append(filtered, symbol)
-			continue
-		}
-		if _, ok := allowed[external]; ok {
-			filtered = append(filtered, symbol)
-		}
-	}
-	return filtered
-}
-
-func normalizeAllowlistSymbol(value string) string {
-	return strings.ToUpper(binanceapi.FormatSymbol(strings.TrimSpace(value)))
 }
 
 type symbolStorage interface {
@@ -195,7 +133,7 @@ func (c *SymbolCollector) CollectWithResult(
 		spaceID, datasetID, params.InstType)
 
 	// 根据产品类型获取标的列表
-	symbols, err := c.fetchSymbols(ctx, params, nil)
+	symbols, err := c.fetchSymbols(ctx, params)
 	if err != nil {
 		log.ErrorContextf(ctx, "[SymbolCollector] 获取标的失败: %v", err)
 		return sources.CollectResult{}, err
@@ -232,20 +170,14 @@ func (c *SymbolCollector) CollectWithResult(
 }
 
 // fetchSymbols 获取标的列表
-func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.CollectParams, allowlist []string) ([]*exchange.SymbolInfo, error) {
+func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
 	if c.fetchSymbolPage != nil {
 		return c.fetchSymbolPage(ctx, params)
 	}
 	switch params.InstType {
 	case InstTypeSPOT:
-		if len(allowlist) > 0 {
-			return c.spotAPI.GetExchangeInfoForSymbols(ctx, allowlist)
-		}
 		return c.spotAPI.GetExchangeInfo(ctx)
 	case InstTypeSWAP:
-		if len(allowlist) > 0 {
-			return c.swapAPI.GetExchangeInfoForSymbols(ctx, allowlist)
-		}
 		return c.swapAPI.GetExchangeInfo(ctx)
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)

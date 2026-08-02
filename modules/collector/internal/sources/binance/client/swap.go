@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -78,23 +77,10 @@ func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 // GetExchangeInfo 获取永续合约交易所信息（交易规则和交易对）
 // API: GET https://fapi.binance.com/fapi/v1/exchangeInfo
 func (api *SwapAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo, error) {
-	return api.getExchangeInfo(ctx, nil, nil)
+	return api.getExchangeInfo(ctx, nil)
 }
 
-// GetExchangeInfoForSymbols limits the exchangeInfo response to the configured
-// symbols so manual SymbolTask invocations stay within the 64MB SCF limit.
-func (api *SwapAPI) GetExchangeInfoForSymbols(ctx context.Context, symbols []string) ([]*exchange.SymbolInfo, error) {
-	normalized := normalizeExchangeInfoSymbols(symbols)
-	// Futures exchangeInfo does not support the spot `symbols` query. Stream
-	// the full response and retain only the requested entries instead.
-	return api.getExchangeInfo(ctx, nil, normalized)
-}
-
-func (api *SwapAPI) getExchangeInfo(ctx context.Context, query url.Values, allowlist []string) ([]*exchange.SymbolInfo, error) {
-	allowed := make(map[string]struct{}, len(allowlist))
-	for _, symbol := range allowlist {
-		allowed[symbol] = struct{}{}
-	}
+func (api *SwapAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*exchange.SymbolInfo, error) {
 	var symbols []*exchange.SymbolInfo
 	var total int
 	domain := api.client.SwapDomain()
@@ -107,11 +93,7 @@ func (api *SwapAPI) getExchangeInfo(ctx context.Context, query url.Values, allow
 					if raw.Status != "TRADING" || raw.ContractType != "PERPETUAL" {
 						return false
 					}
-					if len(allowed) == 0 {
-						return true
-					}
-					_, ok := allowed[strings.ToUpper(raw.Symbol)]
-					return ok
+					return true
 				})
 				return decodeErr
 			})

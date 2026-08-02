@@ -37,21 +37,20 @@ const (
 )
 
 type CollectionItem struct {
-	TaskID             string   `json:"task_id,omitempty"`
-	SubjectID          string   `json:"subject_id"`
-	Symbol             string   `json:"symbol"`
-	TargetDataTime     string   `json:"target_data_time,omitempty"`
-	StartTime          string   `json:"start_time,omitempty"`
-	BarLimit           int      `json:"bar_limit,omitempty"`
-	SourceEventID      string   `json:"source_event_id,omitempty"`
-	Provider           string   `json:"provider"`
-	MarketType         string   `json:"market_type"`
-	DataType           string   `json:"data_type"`
-	DatasetID          string   `json:"dataset_id"`
-	Frequency          string   `json:"frequency,omitempty"`
-	Allowlist          []string `json:"allowlist,omitempty"`
-	SnapshotShardIndex int      `json:"snapshot_shard_index,omitempty"`
-	SnapshotShardCount int      `json:"snapshot_shard_count,omitempty"`
+	TaskID             string `json:"task_id,omitempty"`
+	SubjectID          string `json:"subject_id"`
+	Symbol             string `json:"symbol"`
+	TargetDataTime     string `json:"target_data_time,omitempty"`
+	StartTime          string `json:"start_time,omitempty"`
+	BarLimit           int    `json:"bar_limit,omitempty"`
+	SourceEventID      string `json:"source_event_id,omitempty"`
+	Provider           string `json:"provider"`
+	MarketType         string `json:"market_type"`
+	DataType           string `json:"data_type"`
+	DatasetID          string `json:"dataset_id"`
+	Frequency          string `json:"frequency,omitempty"`
+	SnapshotShardIndex int    `json:"snapshot_shard_index,omitempty"`
+	SnapshotShardCount int    `json:"snapshot_shard_count,omitempty"`
 }
 
 type ItemResult struct {

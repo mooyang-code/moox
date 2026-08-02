@@ -103,8 +103,7 @@ Symbol 规则负责生成或刷新 RECORD 类型的 Symbol Dataset。用户可�
   "provider": "binance",
   "market_type": "spot",
   "collect_params": {
-    "symbol_source": "manual",
-    "symbols": ["BTC-USDT", "ETH-USDT"],
+    "symbol_source": "exchange",
     "target_dataset_id": "binance_spot_symbols"
   }
 }
@@ -114,10 +113,9 @@ Symbol 规则负责生成或刷新 RECORD 类型的 Symbol Dataset。用户可�
 
 1. Collector 生成只包含一个规则项的 `symbol_snapshot` BatchInvocation。
 2. SCF 调用 Binance exchangeInfo 获取一次市场标的快照；行情数据源 API 不从 Collector 本机调用。
-3. SCF 仅保留用户 `symbols` 中存在且处于 active 状态的标的。
-4. 将规范化 Symbol 写入 `target_dataset_id`；为避免 SQLite 元数据快照串行刷新挤占固定 15 秒预算，首版每条手动 Symbol 规则最多 20 个标的，并串行提交元数据。
-5. 用户配置但 Binance 不存在的 Symbol 标记为规则错误，不进入 K 线任务。
-6. 现货与合约必须使用不同 Symbol Dataset，例如 `binance_spot_symbols` 和 `binance_futures_symbols`。
+3. SCF 过滤为目标市场中处于 active 状态的全量标的。
+4. 将规范化 Symbol 写入 `target_dataset_id`；分片内元数据注册保持串行，避免 SQLite 元数据快照刷新挤占固定 15 秒预算。
+5. 现货与合约必须使用不同 Symbol Dataset，例如 `binance_spot_symbols` 和 `binance_futures_symbols`。
 
 ### 4.3 普通行情采集规则
 
@@ -147,8 +145,7 @@ K 线等普通行情规则必须关联 Symbol Dataset，不直接保存另一份
 - `frequency` 已在目标 Dataset 中启用；
 - Binance 的 Symbol Dataset 和 K 线 Dataset 必须在 `attributes.market_type` 写明 `spot` 或 `swap`，并与规则 `market_type` 完全一致；仅检查共同的 `data_source_id=binance` 无法阻止现货、合约串写。
 - `symbol_source` 对普通行情只能是 `dataset`；
-- `symbol_source=manual` 只用于 Symbol Dataset 规则。
-- `symbols` 仅用于手动 Symbol 规则，必须去重、规范化且数量不超过 20；普通 K 线的标的数量来自 Dataset，不受该配置项限制。最终 Scheduler 生成的异步事件预留 Envelope 空间后不得超过 120KB，Handler 仍拒绝超过 128KB 的入参。
+- `symbol_source` 对 Symbol Dataset 规则只能是 `exchange`，用于生成全量活跃标的快照；普通 K 线的标的数量来自 Dataset，不受配置项限制。最终 Scheduler 生成的异步事件预留 Envelope 空间后不得超过 120KB，Handler 仍拒绝超过 128KB 的入参。
 
 ### 4.4 稳定标识
 
@@ -283,7 +280,7 @@ CloudNode 异步调用的 JSON 使用固定 `action=market_fetch`：
 
 - `realtime`：最多 64 个 items，每项 `bar_limit=3`；每分钟按当前函数池数量均分；
 - `catchup`：恰好 1 个 item，必须携带 `start_time`，`bar_limit<=1000`；
-- `symbol_snapshot`：恰好 1 个规则项，携带去重后的 `manual_symbols`，调用一次 exchangeInfo。
+- `symbol_snapshot`：每个分片恰好 1 个规则项，调用一次 exchangeInfo 并处理全量活跃标的快照。
 
 Handler 必须拒绝未知字段组合、空 Dataset、重复 task_id、跨 Dataset items 和超过配置上限的载荷。`data.space_id` 必须与函数部署时受管环境变量 `MOOX_SPACE_ID` 完全一致；不一致时在任何 Storage 写入或 EventBus 发布之前失败。序列化后的异步事件必须小于 128KB；部署前测试以最大长度 Symbol 和 10 个 realtime items 验证该边界。
 
@@ -1021,7 +1018,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - `modules/collector/internal/store/database.go`：暴露新 Repository。
 - `modules/collector/proto/collector.proto`：规则字段收敛为 `provider`、`market_type`；不保留 `exchange`。
 - `modules/collector/internal/domain/task_rule.go`、`task_instance.go`：同步命名和稳定任务语义。
-- `modules/collector/internal/jobs/symbol/*`：手动 Symbol allowlist 和目标 Dataset 校验。
+- `modules/collector/internal/jobs/symbol/*`：全量 Symbol 快照和目标 Dataset 校验。
 - `modules/collector/internal/jobs/kline/*`：只允许 Dataset Symbol 来源。
 - `modules/collector/internal/sources/binance/kline.go`：拆分实时小窗口和 Catchup 单页路径。
 - `modules/collector/internal/sources/binance/kline_cursor.go`：移除实时路径的 5000 根循环。
@@ -1110,7 +1107,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - Create: `modules/collector/internal/planner/fetch_batch_builder.go`
 - Test: `internal/jobs/*/*_test.go`、`internal/planner/fetch_batch_builder_test.go`
 
-- [ ] 写 Symbol manual allowlist、`symbol_snapshot` 只生成一个规则项、Kline 必须引用 Dataset、现货/合约 Dataset 不匹配的测试。
+- [ ] 写全量 Symbol 快照分片、Kline 必须引用 Dataset、现货/合约 Dataset 不匹配的测试。
 - [ ] 写 1000 个 active subjects 生成 100 个 size=10 批次的测试。
 - [ ] 写连续两次相同 schedule 生成相同 batch_id、节点列表变化也不重复建 shard、不同 schedule 仍复用稳定 TaskInstance 的测试。
 - [ ] 写 Proto、JSON 和数据库只接受 `provider`、`market_type`、`frequency`，拒绝 `exchange`、`market`、嵌套 `collector/source/target/schedule` 等旧字段的测试。
@@ -1147,7 +1144,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
   `internal/serverless/handler_test.go`、`cmd/scf/main_test.go`
 
 - [ ] 写并发永不超过 5、realtime batch 超过 10 被拒绝、8 秒停止新请求，以及 `data.space_id != MOOX_SPACE_ID` 在 Storage/EventBus 前被拒绝的测试。
-- [ ] 写 `symbol_snapshot` 由 SCF 调用 exchangeInfo、按 allowlist 过滤并批量写 RECORD Dataset 的测试。
+- [ ] 写 `symbol_snapshot` 由 SCF 调用 exchangeInfo、全量活跃标的分片并批量写 RECORD Dataset 的测试。
 - [ ] 写 9 个慢请求加 1 个成功请求的 deadline 测试。
 - [ ] 写 Storage 失败使已抓取项转为 retryable、Storage 成功后才发布成功事件的测试。
 - [ ] 写短时路径 Storage 只调用一次，并为 Primary 请求传入 `source_event_id=batch_id` 的测试。
@@ -1350,7 +1347,7 @@ resource_usage_gbs =
 9. 函数内并发、batch size 和 timeout 环境变量与 CloudNode DB 一致。
 10. 429、网络超时和 5xx 能通过完成事件落为 RetryItem，并在最多 3 次内终结。
 11. Stable TaskInstance 不按分钟膨胀；成功批次 48 小时后自动清理。
-12. `manual` Symbol 规则和 `dataset` 行情规则均能正确工作。
+12. 全量 Symbol 快照规则和 `dataset` 行情规则均能正确工作。
 13. 短时 Fetcher 不运行 Keepalive，也不会触发 `scf:heartbeat` 告警。
 14. `custom.toml` 中启用的全部函数节点通过 Binance API 连通性探针；公网 IP 仅在反射服务可用时记录，不作为硬性通过条件。
 15. 1000 个标的连续运行 24 小时，完成率、Dataset freshness 和 RetryItem 积压符合预期。

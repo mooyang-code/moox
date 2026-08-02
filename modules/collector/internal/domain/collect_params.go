@@ -22,7 +22,6 @@ type CollectParams struct {
 	Provider        string          `json:"provider,omitempty"`
 	MarketType      string          `json:"market_type,omitempty"`
 	SymbolSource    string          `json:"symbol_source,omitempty"`
-	Symbols         []string        `json:"symbols,omitempty"`
 	SymbolDatasetID string          `json:"symbol_dataset_id,omitempty"`
 	TargetDatasetID string          `json:"target_dataset_id,omitempty"`
 	Frequency       string          `json:"frequency,omitempty"`
@@ -81,8 +80,8 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	p.TargetDatasetID = strings.TrimSpace(p.TargetDatasetID)
 	p.Frequency = strings.TrimSpace(p.Frequency)
 	if p.Frequency == "" && strings.EqualFold(strings.TrimSpace(fallbackDataType), "symbol") {
-		// Symbol snapshots are deliberately small manual inventories. They use a
-		// fixed hourly cadence unless a valid explicit frequency is supplied.
+		// Full Symbol snapshots use an hourly cadence unless a valid explicit
+		// frequency is supplied.
 		p.Frequency = "1h"
 	}
 
@@ -90,7 +89,7 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	switch p.SymbolSource {
 	case "dataset":
 		sourceKind = "dataset_subjects"
-	case "manual", "exchange":
+	case "exchange", "manual":
 		sourceKind = "none"
 	}
 	p.Source = CollectSource{Kind: sourceKind, DatasetID: p.SymbolDatasetID}
@@ -148,17 +147,8 @@ func (p *CollectParams) Validate() error {
 		if p.Source.Kind != "none" {
 			return fmt.Errorf("symbol source.kind must be none")
 		}
-		switch p.SymbolSource {
-		case "manual":
-			if len(p.Symbols) == 0 {
-				return fmt.Errorf("symbols is required for manual symbol source")
-			}
-		case "exchange":
-			if len(p.Symbols) != 0 {
-				return fmt.Errorf("symbols must be empty for exchange symbol source")
-			}
-		default:
-			return fmt.Errorf("symbol_source must be manual or exchange for symbol task")
+		if p.SymbolSource != "exchange" {
+			return fmt.Errorf("symbol_source must be exchange for symbol task")
 		}
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)

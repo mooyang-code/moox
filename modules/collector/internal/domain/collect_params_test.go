@@ -26,12 +26,11 @@ func TestParseCollectParamsUsesSingleDatasetDrivenContract(t *testing.T) {
 	assert.Equal(t, "target-kline", params.Target.DatasetID)
 }
 
-func TestParseCollectParamsAcceptsSymbolWithoutSourceDataset(t *testing.T) {
+func TestParseCollectParamsRequiresExchangeSymbolSnapshot(t *testing.T) {
 	raw := `{
 		"provider":"binance",
 		"market_type":"swap",
-		"symbol_source":"manual",
-		"symbols":["BTC-USDT"],
+		"symbol_source":"exchange",
 		"target_dataset_id":"symbols",
 		"frequency":"30m"
 	}`
@@ -55,24 +54,22 @@ func TestParseCollectParamsAcceptsExchangeSymbolSnapshot(t *testing.T) {
 	assert.Equal(t, "1h", params.Frequency)
 }
 
-func TestCollectParamsRejectsSymbolsForExchangeSnapshot(t *testing.T) {
+func TestCollectParamsRejectsManualSymbolSnapshot(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",
 		"market_type":"spot",
-		"symbol_source":"exchange",
-		"symbols":["BTC-USDT"],
+		"symbol_source":"manual",
 		"target_dataset_id":"symbols"
 	}`, "", "", "symbol")
 	require.NoError(t, err)
-	require.ErrorContains(t, params.Validate(), "symbols must be empty")
+	require.ErrorContains(t, params.Validate(), "symbol_source must be exchange")
 }
 
 func TestParseCollectParamsDefaultsSymbolFrequencyToHourly(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",
 		"market_type":"spot",
-		"symbol_source":"manual",
-		"symbols":["BTC-USDT"],
+		"symbol_source":"exchange",
 		"target_dataset_id":"symbols"
 	}`, "", "", "symbol")
 	require.NoError(t, err)
@@ -137,8 +134,7 @@ func TestCollectParamsValidateUsesWholeMinuteScheduleIntervals(t *testing.T) {
 			params, err := ParseCollectParams(`{
 				"provider":"binance",
 				"market_type":"spot",
-				"symbol_source":"manual",
-				"symbols":["BTC-USDT"],
+				"symbol_source":"exchange",
 				"target_dataset_id":"symbols",
 				"frequency":"`+tt.interval+`"
 			}`, "", "", "symbol")

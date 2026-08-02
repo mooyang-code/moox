@@ -71,7 +71,7 @@ func TestRealtimeBatchSizeFansOutAcrossCurrentFleet(t *testing.T) {
 	assert.Equal(t, 10, scheduler.realtimeBatchSize(479, nodes))
 }
 
-func TestExpandRuleUsesEmptyAllowlistForExchangeSymbolSnapshot(t *testing.T) {
+func TestExpandRuleUsesAllShardsForExchangeSymbolSnapshot(t *testing.T) {
 	scheduler := &Scheduler{}
 	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
 		SpaceID: "crypto_market", RuleID: "binance_spot_symbols", DataType: "symbol", Provider: "binance", MarketType: "spot",
@@ -80,7 +80,6 @@ func TestExpandRuleUsesEmptyAllowlistForExchangeSymbolSnapshot(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"1h"}, frequencies)
 	if assert.Len(t, items, fullSymbolSnapshotShards) {
-		assert.Empty(t, items[0].Allowlist)
 		assert.Equal(t, "binance_spot_symbols", items[0].DatasetID)
 		assert.Equal(t, 0, items[0].SnapshotShardIndex)
 		assert.Equal(t, fullSymbolSnapshotShards, items[0].SnapshotShardCount)

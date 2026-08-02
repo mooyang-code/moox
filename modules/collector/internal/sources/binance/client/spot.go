@@ -2,12 +2,10 @@ package binance
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -78,26 +76,10 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 // GetExchangeInfo 获取现货交易所信息（交易规则和交易对）
 // API: GET https://api.binance.com/api/v3/exchangeInfo
 func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo, error) {
-	return api.getExchangeInfo(ctx, nil, nil)
+	return api.getExchangeInfo(ctx, nil)
 }
 
-// GetExchangeInfoForSymbols asks Binance for only the configured symbols. The
-// exchangeInfo endpoint accepts a JSON-encoded symbols array; using it keeps
-// manual SymbolTask invocations small enough for the 64MB SCF limit.
-func (api *SpotAPI) GetExchangeInfoForSymbols(ctx context.Context, symbols []string) ([]*exchange.SymbolInfo, error) {
-	normalized := normalizeExchangeInfoSymbols(symbols)
-	encoded, err := json.Marshal(normalized)
-	if err != nil {
-		return nil, fmt.Errorf("编码ExchangeInfo symbols失败: %w", err)
-	}
-	return api.getExchangeInfo(ctx, url.Values{"symbols": {string(encoded)}}, normalized)
-}
-
-func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values, allowlist []string) ([]*exchange.SymbolInfo, error) {
-	allowed := make(map[string]struct{}, len(allowlist))
-	for _, symbol := range allowlist {
-		allowed[symbol] = struct{}{}
-	}
+func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*exchange.SymbolInfo, error) {
 	var symbols []*exchange.SymbolInfo
 	var total int
 	domain := api.client.SpotDomain()
@@ -110,11 +92,7 @@ func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values, allow
 					if raw.Status != "TRADING" {
 						return false
 					}
-					if len(allowed) == 0 {
-						return true
-					}
-					_, ok := allowed[strings.ToUpper(raw.Symbol)]
-					return ok
+					return true
 				})
 				return decodeErr
 			})

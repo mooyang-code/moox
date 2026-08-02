@@ -3,7 +3,7 @@ export type CollectorRuleInput = {
   exchange: string;
   market: "spot" | "swap";
   datasetId: string;
-  intervals: string[];
+  symbolDatasetId?: string;
   scheduleInterval: string;
 };
 
@@ -36,33 +36,26 @@ export function buildCollectorRuleParams(input: CollectorRuleInput): Record<stri
     throw new Error("请输入采集频率");
   }
 
-  const intervals = input.dataType === "kline" ? input.intervals.map(interval => interval.trim()).filter(Boolean) : [];
-  if (input.dataType === "kline" && intervals.length === 0) {
-    throw new Error("请选择 K线周期");
+  if (input.dataType === "symbol") {
+    return {
+      provider: exchange,
+      market_type: input.market,
+      symbol_source: "exchange",
+      target_dataset_id: datasetId,
+      frequency: scheduleInterval
+    };
   }
 
+  const symbolDatasetId = input.symbolDatasetId?.trim();
+  if (!symbolDatasetId) {
+    throw new Error("请选择标的 Dataset");
+  }
   return {
-    source:
-      input.dataType === "kline"
-        ? {
-            kind: "dataset_subjects",
-            dataset_id: datasetId
-          }
-        : {
-            kind: "none"
-          },
-    collector: {
-      exchange,
-      market: input.market,
-      data_type: input.dataType,
-      intervals,
-      live: false
-    },
-    target: {
-      dataset_id: datasetId
-    },
-    schedule: {
-      interval: scheduleInterval
-    }
+    provider: exchange,
+    market_type: input.market,
+    symbol_source: "dataset",
+    symbol_dataset_id: symbolDatasetId,
+    target_dataset_id: datasetId,
+    frequency: scheduleInterval
   };
 }

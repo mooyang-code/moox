@@ -30,13 +30,16 @@ func TestNormalizedSubjectID(t *testing.T) {
 	}))
 }
 
-func TestFetchSymbolSnapshotRejectsPartiallyMissingAllowlist(t *testing.T) {
+func TestFetchSymbolSnapshotUsesFullActiveCatalog(t *testing.T) {
 	collector := &SymbolCollector{fetchSymbolPage: func(context.Context, *sources.CollectParams) ([]*exchange.SymbolInfo, error) {
-		return []*exchange.SymbolInfo{{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"}}, nil
+		return []*exchange.SymbolInfo{
+			{Symbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"},
+			{Symbol: "ETHUSDT", BaseAsset: "ETH", QuoteAsset: "USDT", Status: "active"},
+		}, nil
 	}}
-	_, _, _, err := collector.FetchSymbolSnapshot(context.Background(), &sources.CollectParams{SpaceID: "crypto", DatasetID: "symbols", InstType: InstTypeSPOT}, []string{"BTC-USDT", "TYPO-USDT"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "TYPO-USDT")
+	_, symbols, _, err := collector.FetchSymbolSnapshot(context.Background(), &sources.CollectParams{SpaceID: "crypto", DatasetID: "symbols", InstType: InstTypeSPOT})
+	require.NoError(t, err)
+	assert.Len(t, symbols, 2)
 }
 
 func TestContainsHyphen(t *testing.T) {

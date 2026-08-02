@@ -136,9 +136,21 @@
           </a-select>
         </a-form-item>
 
-        <a-form-item v-if="addForm.data_type === 'kline'" label="K线周期" required>
-          <a-checkbox-group v-model="intervalsValue" :options="INTERVAL_OPTIONS"> </a-checkbox-group>
+        <a-form-item v-if="addForm.data_type === 'kline'" label="标的 Dataset" required>
+          <a-select v-model="symbolDatasetIdValue" placeholder="请选择已激活的标的 Dataset" :loading="loadingDatasets" allow-search>
+            <a-option v-for="dataset in availableSymbolDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
+              {{ dataset.name || dataset.dataset_id }} ({{ dataset.dataset_id }})
+            </a-option>
+          </a-select>
         </a-form-item>
+
+        <a-alert
+          v-if="addForm.data_type === 'symbol'"
+          type="info"
+          :show-icon="true"
+          :closable="false"
+          title="从交易所读取全量活跃标的快照"
+        />
 
         <a-form-item label="采集频率" required>
           <a-input v-model="scheduleIntervalValue" placeholder="例如 5m、1h、24h" allow-clear />
@@ -234,7 +246,7 @@ const detailData = ref<Partial<TaskConfig>>({});
 const dataTypeConfigs = ref<DataTypeConfig[]>([]);
 const marketValue = ref<CollectorRuleInput["market"]>("spot");
 const datasetIdValue = ref("");
-const intervalsValue = ref<string[]>([]);
+const symbolDatasetIdValue = ref("");
 const scheduleIntervalValue = ref("");
 
 const dataSourceOptions = ref<{ label: string; value: string }[]>([]);
@@ -295,27 +307,15 @@ const availableDatasets = computed(() => {
   );
 });
 
+const availableSymbolDatasets = computed(() => {
+  if (!addForm.value.data_source) return [];
+  return activeDatasets.value.filter(dataset => datasetMatchesCollector(dataset, addForm.value.data_source, "symbol"));
+});
+
 const rules = {
   data_type: [{ required: true, message: "请选择数据类型" }],
   data_source: [{ required: true, message: "请选择数据源" }]
 };
-
-// K线周期选项（常量，避免每次渲染重新创建）
-const INTERVAL_OPTIONS = [
-  { label: "1分钟", value: "1m" },
-  { label: "3分钟", value: "3m" },
-  { label: "5分钟", value: "5m" },
-  { label: "15分钟", value: "15m" },
-  { label: "30分钟", value: "30m" },
-  { label: "1小时", value: "1h" },
-  { label: "2小时", value: "2h" },
-  { label: "4小时", value: "4h" },
-  { label: "6小时", value: "6h" },
-  { label: "12小时", value: "12h" },
-  { label: "1天", value: "1d" },
-  { label: "1周", value: "1w" },
-  { label: "1月", value: "1M" }
-];
 
 // 获取数据源标签
 const getDataSourceLabel = (value: string) => {
@@ -554,7 +554,7 @@ const loadActiveDatasets = async () => {
 const resetRuleFields = () => {
   marketValue.value = "spot";
   datasetIdValue.value = "";
-  intervalsValue.value = [];
+  symbolDatasetIdValue.value = "";
   scheduleIntervalValue.value = "";
 };
 
@@ -563,36 +563,15 @@ const isRecord = (value: unknown): value is Record<string, any> =>
 
 const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
   const params: unknown = JSON.parse(raw || "{}");
-  if (!isRecord(params) || !isRecord(params.source) || !isRecord(params.collector)) {
+  if (!isRecord(params)) {
     throw new Error("规则参数不是当前支持的结构");
   }
-  if (!isRecord(params.target) || !isRecord(params.schedule)) {
-    throw new Error("规则参数不是当前支持的结构");
-  }
-
-  const source = params.source;
-  const collector = params.collector;
-  const target = params.target;
-  const schedule = params.schedule;
-  if (
-    "objects" in params ||
-    "inst_type" in params ||
-    "inst_types" in params ||
-    "job_type" in target ||
-    "timezone" in schedule ||
-    "intervals" in schedule
-  ) {
-    throw new Error("规则包含已删除字段，请按新结构重新创建");
-  }
-
-  const dataType = collector.data_type;
-  const exchange = String(collector.exchange || "").trim();
-  const market = collector.market;
-  const datasetId = String(target.dataset_id || "").trim();
-  const scheduleInterval = String(schedule.interval || "").trim();
-  const intervals = Array.isArray(collector.intervals)
-    ? collector.intervals.map((interval: unknown) => String(interval || "").trim()).filter(Boolean)
-    : [];
+  const dataType = String(params.symbol_source) === "exchange" ? "symbol" : "kline";
+  const exchange = String(params.provider || "").trim();
+  const market = params.market_type;
+  const datasetId = String(params.target_dataset_id || "").trim();
+  const symbolDatasetId = String(params.symbol_dataset_id || "").trim();
+  const scheduleInterval = String(params.frequency || "").trim();
   if (dataType !== "kline" && dataType !== "symbol") {
     throw new Error("规则数据类型无效");
   }
@@ -600,14 +579,14 @@ const parseStrictRuleParams = (raw: string): CollectorRuleInput => {
     throw new Error("规则缺少必填参数");
   }
   if (dataType === "kline") {
-    if (source.kind !== "dataset_subjects" || source.dataset_id !== datasetId || intervals.length === 0) {
+    if (params.symbol_source !== "dataset" || !symbolDatasetId) {
       throw new Error("K线规则参数无效");
     }
-  } else if (source.kind !== "none") {
+  } else if (params.symbol_source !== "exchange") {
     throw new Error("标的规则参数无效");
   }
 
-  return { dataType, exchange, market, datasetId, intervals, scheduleInterval };
+  return { dataType, exchange, market, datasetId, symbolDatasetId, scheduleInterval };
 };
 
 const onAdd = () => {
@@ -644,7 +623,7 @@ const onUpdate = (record: TaskConfig) => {
   };
   marketValue.value = input.market;
   datasetIdValue.value = input.datasetId;
-  intervalsValue.value = input.intervals;
+  symbolDatasetIdValue.value = input.symbolDatasetId || "";
   scheduleIntervalValue.value = input.scheduleInterval;
   loadDataSourceOptionsForType(input.dataType);
   open.value = true;
@@ -654,7 +633,7 @@ const onDataTypeChange = (value: string) => {
   addForm.value.data_type = value;
   addForm.value.data_source = "";
   datasetIdValue.value = "";
-  intervalsValue.value = [];
+  symbolDatasetIdValue.value = "";
   loadDataSourceOptionsForType(value);
 };
 
@@ -690,7 +669,7 @@ const handleOk = async (): Promise<boolean> => {
       exchange: addForm.value.data_source,
       market: marketValue.value,
       datasetId: datasetIdValue.value,
-      intervals: intervalsValue.value,
+      symbolDatasetId: symbolDatasetIdValue.value,
       scheduleInterval: scheduleIntervalValue.value
     });
     addForm.value.collect_params = JSON.stringify(collectParams);

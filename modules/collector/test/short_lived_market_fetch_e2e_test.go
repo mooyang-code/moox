@@ -33,7 +33,7 @@ func (e2eKlines) FetchRealtimeRows(context.Context, *sources.CollectParams, int)
 
 type e2eSymbols struct{}
 
-func (e2eSymbols) FetchSymbolSnapshot(context.Context, *sources.CollectParams, []string) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error) {
+func (e2eSymbols) FetchSymbolSnapshot(context.Context, *sources.CollectParams) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error) {
 	return nil, nil, "", nil
 }
 

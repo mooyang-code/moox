@@ -43,7 +43,7 @@ func TestValidateTaskRuleDatasetsRejectsSymbolMarketMismatch(t *testing.T) {
 	}}
 	rule := domain.TaskRule{
 		SpaceID: "crypto", DataType: "symbol", Provider: "binance", MarketType: "swap",
-		CollectParams: `{"provider":"binance","market_type":"swap","symbol_source":"manual","symbols":["BTC-USDT"],"target_dataset_id":"symbols"}`,
+		CollectParams: `{"provider":"binance","market_type":"swap","symbol_source":"exchange","target_dataset_id":"symbols"}`,
 	}
 	require.ErrorContains(t, service.validateTaskRuleDatasets(context.Background(), rule), "market_type=spot does not match rule market_type=swap")
 }

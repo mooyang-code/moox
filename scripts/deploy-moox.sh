@@ -1683,6 +1683,9 @@ start_admin() {
       service_seed_args+=(--disable-storage-shard)
     fi
     local disabled_services=()
+    # A control-only package must not publish loopback Storage routes. Storage
+    # is deployed on its own node and the Admin BFF targets that node gateway.
+    [[ "${WITH_STORAGE}" == "1" ]] || disabled_services+=(storage-primary storage-view)
     [[ "${WITH_ARCHIVE}" == "1" ]] || disabled_services+=(moox_archive)
     [[ "${WITH_CLOUDNODE}" == "1" ]] || disabled_services+=(moox_cloudnode)
     [[ "${WITH_COLLECTOR}" == "1" ]] || disabled_services+=(moox_collector)
@@ -1717,11 +1720,22 @@ start_admin() {
       >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
       { echo "EventBus credential export failed" >&2; exit 1; }
   fi
+  # Storage may live on a dedicated node. Reuse Collector's deployed storage
+  # gateway config so the browser BFF signs requests for the same target.
+  local storage_gateway_target="ip://127.0.0.1:11003"
+  local storage_gateway_node_id="${MOOX_ADMIN_NODE_ID}"
+  if [[ -f "${ROOT}/collector/config/app.yaml" ]]; then
+    storage_gateway_target="$(awk -F: '/^[[:space:]]*gateway_target:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
+    storage_gateway_node_id="$(awk -F: '/^[[:space:]]*gateway_node_id:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
+    storage_gateway_target="${storage_gateway_target:-ip://127.0.0.1:11003}"
+    storage_gateway_node_id="${storage_gateway_node_id:-${MOOX_ADMIN_NODE_ID}}"
+  fi
+  storage_gateway_target="${storage_gateway_target#ip://}"
   gateway_service_env_for admin-gateway
   runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=127.0.0.1:11003" "MOOX_NODE_GATEWAY_NODE_ID=${MOOX_ADMIN_NODE_ID}" \
+      "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${storage_gateway_target}" "MOOX_NODE_GATEWAY_NODE_ID=${storage_gateway_node_id}" \
       "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
 }

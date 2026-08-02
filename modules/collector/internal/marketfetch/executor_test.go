@@ -35,7 +35,7 @@ func (f *fakeKlines) FetchRealtimeRows(context.Context, *sources.CollectParams, 
 
 type fakeSymbols struct{}
 
-func (fakeSymbols) FetchSymbolSnapshot(context.Context, *sources.CollectParams, []string) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error) {
+func (fakeSymbols) FetchSymbolSnapshot(context.Context, *sources.CollectParams) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error) {
 	return nil, nil, "", errors.New("not used")
 }
 
@@ -44,7 +44,7 @@ type fakeSnapshotSymbols struct {
 	info []*exchange.SymbolInfo
 }
 
-func (f fakeSnapshotSymbols) FetchSymbolSnapshot(context.Context, *sources.CollectParams, []string) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error) {
+func (f fakeSnapshotSymbols) FetchSymbolSnapshot(context.Context, *sources.CollectParams) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, string, error) {
 	return f.rows, f.info, "v1", nil
 }
 
@@ -141,7 +141,7 @@ func TestExecutorSupportsSymbolSnapshotAndCatchupBatches(t *testing.T) {
 	storage := &fakeStorage{}
 	klines := &fakeKlines{rows: rows}
 	executor := &Executor{Klines: klines, Catchup: klines, Symbols: fakeSnapshotSymbols{rows: rows, info: []*exchange.SymbolInfo{{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"}}}, Storage: storage}
-	symbolPayload, err := executor.Execute(context.Background(), Request{BatchID: "symbol", SpaceID: "crypto", BatchKind: domain.BatchKindSymbolSnapshot, Provider: "binance", MarketType: "spot", DatasetID: "symbols", Items: []domain.CollectionItem{{DataType: "symbol", DatasetID: "symbols", Allowlist: []string{"BTC-USDT"}}}})
+	symbolPayload, err := executor.Execute(context.Background(), Request{BatchID: "symbol", SpaceID: "crypto", BatchKind: domain.BatchKindSymbolSnapshot, Provider: "binance", MarketType: "spot", DatasetID: "symbols", Items: []domain.CollectionItem{{DataType: "symbol", DatasetID: "symbols"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -132,22 +132,6 @@ func TestDecodeExchangeInfoStreamsOnlySelectedSymbolFields(t *testing.T) {
 	assert.Equal(t, "0.001", symbols[0].MinQty)
 }
 
-func TestExchangeInfoForSymbolsUsesFilteredEndpointQuery(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, `["BTCUSDT","ETHUSDT"]`, r.URL.Query().Get("symbols"))
-		_, _ = w.Write([]byte(`{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT"}]}`))
-	}))
-	defer server.Close()
-
-	client := NewClient()
-	client.HTTPClient = httpclient.NewHTTPClient(server.Client())
-	require.NoError(t, client.SetSpotBaseURL(server.URL))
-	symbols, err := NewSpotAPI(client).GetExchangeInfoForSymbols(context.Background(), []string{"btc-usdt", "eth-usdt", "BTCUSDT"})
-	require.NoError(t, err)
-	require.Len(t, symbols, 1)
-	assert.Equal(t, "BTC-USDT", symbols[0].Symbol)
-}
-
 func TestClient_DefaultDomains_ShouldUseBinanceHosts(t *testing.T) {
 	c := NewClient()
 	assert.Equal(t, SpotDomain, c.SpotDomain())

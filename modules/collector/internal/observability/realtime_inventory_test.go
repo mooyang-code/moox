@@ -32,7 +32,7 @@ func (s *registryStub) ReplaceExpected(items []report.DatasetExpectation) error 
 func (s *registryStub) ObserveInventoryRefreshError() { s.errors++ }
 
 func collectorRule(id string, enabled bool, dataType, target, frequency string) domain.TaskRule {
-	params := `{"provider":"binance","market_type":"spot","symbol_source":"manual","symbols":["BTC-USDT"],"target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
+	params := `{"provider":"binance","market_type":"spot","symbol_source":"exchange","target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
 	if dataType == "kline" {
 		params = `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"` + target + `","frequency":"` + frequency + `"}`
 	}
