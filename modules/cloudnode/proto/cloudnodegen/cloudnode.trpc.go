@@ -57,8 +57,6 @@ type CloudNodeMgrService interface {
 
 	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq) (*CompletePackageUploadRsp, error)
 
-	ReportHeartbeat(ctx context.Context, req *ReportHeartbeatReq) (*ReportHeartbeatRsp, error)
-
 	SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq) (*SubmitJobItemsRsp, error)
 
 	ReportJobItemStatus(ctx context.Context, req *ReportJobItemStatusReq) (*ReportJobItemStatusRsp, error)
@@ -412,24 +410,6 @@ func CloudNodeMgrService_CompletePackageUpload_Handler(svr interface{}, ctx cont
 	return rsp, nil
 }
 
-func CloudNodeMgrService_ReportHeartbeat_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReportHeartbeatReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CloudNodeMgrService).ReportHeartbeat(ctx, reqbody.(*ReportHeartbeatReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func CloudNodeMgrService_SubmitJobItems_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &SubmitJobItemsReq{}
 	filters, err := f(req)
@@ -602,10 +582,6 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CloudNodeMgrService_CompletePackageUpload_Handler,
 		},
 		{
-			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ReportHeartbeat",
-			Func: CloudNodeMgrService_ReportHeartbeat_Handler,
-		},
-		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/SubmitJobItems",
 			Func: CloudNodeMgrService_SubmitJobItems_Handler,
 		},
@@ -696,9 +672,6 @@ func (s *UnimplementedCloudNodeMgr) InitPackageUpload(ctx context.Context, req *
 func (s *UnimplementedCloudNodeMgr) CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq) (*CompletePackageUploadRsp, error) {
 	return nil, errors.New("rpc CompletePackageUpload of service CloudNodeMgr is not implemented")
 }
-func (s *UnimplementedCloudNodeMgr) ReportHeartbeat(ctx context.Context, req *ReportHeartbeatReq) (*ReportHeartbeatRsp, error) {
-	return nil, errors.New("rpc ReportHeartbeat of service CloudNodeMgr is not implemented")
-}
 func (s *UnimplementedCloudNodeMgr) SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq) (*SubmitJobItemsRsp, error) {
 	return nil, errors.New("rpc SubmitJobItems of service CloudNodeMgr is not implemented")
 }
@@ -760,8 +733,6 @@ type CloudNodeMgrClientProxy interface {
 	InitPackageUpload(ctx context.Context, req *InitPackageUploadReq, opts ...client.Option) (rsp *InitPackageUploadRsp, err error)
 
 	CompletePackageUpload(ctx context.Context, req *CompletePackageUploadReq, opts ...client.Option) (rsp *CompletePackageUploadRsp, err error)
-
-	ReportHeartbeat(ctx context.Context, req *ReportHeartbeatReq, opts ...client.Option) (rsp *ReportHeartbeatRsp, err error)
 
 	SubmitJobItems(ctx context.Context, req *SubmitJobItemsReq, opts ...client.Option) (rsp *SubmitJobItemsRsp, err error)
 
@@ -1157,26 +1128,6 @@ func (c *CloudNodeMgrClientProxyImpl) CompletePackageUpload(ctx context.Context,
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CompletePackageUploadRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CloudNodeMgrClientProxyImpl) ReportHeartbeat(ctx context.Context, req *ReportHeartbeatReq, opts ...client.Option) (*ReportHeartbeatRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/ReportHeartbeat")
-	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("cloudnode")
-	msg.WithCalleeService("CloudNodeMgr")
-	msg.WithCalleeMethod("ReportHeartbeat")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReportHeartbeatRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

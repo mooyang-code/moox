@@ -105,7 +105,7 @@ moox-cli setup init \
 `deploy-storage` 同机部署 `storage-primary` 和统一的 `storage-view`，并更新控制面的 Storage 服务
 位置。在 macOS 上发布 Linux Storage 时，CLI 自动通过 `compile_host` 构建 CGO
 二进制后再打包。`setup init` 固定从配置目录读取 `metadata.yaml`，把
-`stock_cn`、`crypto` 写入 Admin，把它们和内部 `moox_system` 元数据写入
+`stock_cn`、`crypto_market` 写入 Admin，把它们和内部 `moox_system` 元数据写入
 Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且不覆盖。
 
 `metadata spaces` 和 `setup metadata-import` 保留给只导入部分业务空间的高级操作；
@@ -192,7 +192,7 @@ moox-cli metadata import \
   --file ../../examples/setup/default/metadata.yaml \
   --metadata-url http://127.0.0.1:20200 \
   --if-not-exists \
-  --spaces crypto
+  --spaces crypto_market
 
 moox-cli metadata import --file ../../examples/setup/default/metadata.yaml --dry-run
 
@@ -215,7 +215,7 @@ moox-cli storage import \
   --file ~/data/ARB-USDT.csv \
   --access-url http://127.0.0.1:20201 \
   --metadata-url http://127.0.0.1:20200 \
-  --space crypto \
+  --space crypto_market \
   --view ar_usdt_close_view \
   --dataset spot_kline_1h \
   --subject ARB-USDT \

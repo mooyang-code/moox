@@ -18,6 +18,9 @@ import (
 const (
 	manifestName = "custom.toml"
 	maxFileSize  = 1 << 20
+	// SCFCLSReserveMilliseconds is injected into every short-lived market SCF.
+	// Keep setup validation aligned with the runtime's CLS flush reservation.
+	SCFCLSReserveMilliseconds = 800
 )
 
 type Admin struct {
@@ -72,6 +75,7 @@ type SCFFetcher struct {
 // collector fleet. PackageConfigDir is relative to modules/collector/configs.
 type SCFFetcherSpace struct {
 	SpaceID          string `toml:"space_id"`
+	Entrypoint       string `toml:"entrypoint"`
 	PackageConfigDir string `toml:"package_config_dir"`
 	PackageName      string `toml:"package_name"`
 	// CLSCloudAccountID owns the single regional CLS topic used by every
@@ -325,6 +329,9 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if cfg.PackageConfigDir == "" {
 		cfg.PackageConfigDir = filepath.ToSlash(filepath.Join("scf", cfg.SpaceID))
 	}
+	if cfg.Entrypoint == "" {
+		cfg.Entrypoint = cfg.SpaceID
+	}
 	cfg.PackageConfigDir = filepath.ToSlash(filepath.Clean(cfg.PackageConfigDir))
 	if cfg.PackageConfigDir == "." || strings.HasPrefix(cfg.PackageConfigDir, "../") || filepath.IsAbs(cfg.PackageConfigDir) {
 		return fmt.Errorf("config_invalid: %s.package_config_dir must stay under collector configs", path)
@@ -338,13 +345,13 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if cfg.FunctionPrefix == "" {
 		cfg.FunctionPrefix = "moox-fetcher-" + cfg.SpaceID
 	}
-	if !strings.Contains(cfg.FunctionPrefix, cfg.SpaceID) {
+	if !includesSpaceIdentity(cfg.FunctionPrefix, cfg.SpaceID) {
 		return fmt.Errorf("config_invalid: %s.function_prefix must include space_id", path)
 	}
 	if cfg.PackageName == "" {
 		cfg.PackageName = "moox-collector-" + cfg.SpaceID
 	}
-	if !strings.Contains(cfg.PackageName, cfg.SpaceID) {
+	if !includesSpaceIdentity(cfg.PackageName, cfg.SpaceID) {
 		return fmt.Errorf("config_invalid: %s.package_name must include space_id", path)
 	}
 	cfg.CLSCloudAccountID = strings.TrimSpace(cfg.CLSCloudAccountID)
@@ -400,9 +407,9 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false", path)
 	}
 	requestWaves := (cfg.RealtimeBatchSize + cfg.MaxInflightRequests - 1) / cfg.MaxInflightRequests
-	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + 500
+	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + 500 + SCFCLSReserveMilliseconds
 	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
-		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + publish reserve must be less than timeout", path)
+		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + publish and CLS reserves must be less than timeout", path)
 	}
 	seen := make(map[string]struct{}, len(cfg.Regions))
 	enabledRegions := 0
@@ -463,6 +470,10 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		}
 	}
 	return nil
+}
+
+func includesSpaceIdentity(value, spaceID string) bool {
+	return strings.Contains(value, spaceID) || strings.Contains(value, strings.ReplaceAll(spaceID, "_", "-"))
 }
 
 // supportedSCFRegion keeps an operator typo from creating a partial fleet.

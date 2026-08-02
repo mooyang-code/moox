@@ -64,25 +64,8 @@ func notificationBody(event Event, reportIP string) string {
 	if action != "" {
 		lines = append(lines, "建议处理："+action)
 	}
-	if strings.HasPrefix(event.Check.CheckID, "external:scf_sentinel:") {
-		if nodeID := safeNotificationValue(event.Result.InstanceID, 256); nodeID != "" {
-			lines = append(lines, "SCF 节点："+nodeID)
-		}
-		if diagnostic := strings.TrimSpace(event.Result.BodyExcerpt); diagnostic != "" {
-			lines = append(lines, "诊断信息："+diagnostic)
-		}
-		if resultID := strings.TrimSpace(event.Result.ResultID); resultID != "" {
-			lines = append(lines, "诊断编号："+resultID)
-		}
-	} else {
-		if event.Check.CheckID == "scf:heartbeat" {
-			if nodes := safeNotificationValue(event.Result.BodyExcerpt, 2048); nodes != "" {
-				lines = append(lines, "SCF 节点："+nodes)
-			}
-		}
-		if reportIP = safeNotificationValue(reportIP, 128); reportIP != "" {
-			lines = append(lines, "上报 IP："+reportIP)
-		}
+	if reportIP = safeNotificationValue(reportIP, 128); reportIP != "" {
+		lines = append(lines, "上报 IP："+reportIP)
 	}
 	lines = append(lines,
 		"检查对象："+firstText(event.Check.Name, event.Check.CheckID),
@@ -110,14 +93,6 @@ func safeNotificationValue(value string, limit int) string {
 func localizedReason(check domain.Check, result domain.CheckResult) (string, string) {
 	raw := strings.TrimSpace(result.ErrorMessage)
 	switch {
-	case check.CheckID == "scf:heartbeat":
-		var online, timeout, unknown int
-		if _, err := fmt.Sscanf(raw, "online=%d timeout=%d unknown=%d", &online, &timeout, &unknown); err == nil {
-			return fmt.Sprintf("SCF 心跳异常：在线 %d，超时 %d，未知 %d", online, timeout, unknown),
-				"检查 CloudNode 的 SCF 唤醒调用和所列节点最近心跳"
-		}
-		return firstText(raw, "SCF 心跳状态异常"),
-			"检查 CloudNode 的 SCF 唤醒调用和所列节点最近心跳"
 	case raw == "reporter missing" || raw == "reporter has not reported":
 		service, target := reporterCheckTarget(check)
 		return "未收到 " + target + " 的指标上报",

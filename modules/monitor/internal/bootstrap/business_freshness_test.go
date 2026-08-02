@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,76 +14,6 @@ import (
 	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
-
-func TestBusinessFreshnessReporterIncludesTimedOutSCFNodes(t *testing.T) {
-	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "")
-	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = manager.Close() })
-	if err := manager.ApplySchema(schema.SQL()); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC().Truncate(time.Second)
-	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
-		for _, metric := range []struct {
-			id, name, labels string
-			value            float64
-		}{
-			{"online", "moox_cloudnode_scf_nodes", `{"status":"online"}`, 49},
-			{"timeout", "moox_cloudnode_scf_nodes", `{"status":"timeout"}`, 1},
-			{"unknown", "moox_cloudnode_scf_nodes", `{"status":"unknown"}`, 0},
-			{"oldest", "moox_cloudnode_scf_oldest_heartbeat_age_seconds", `{}`, 120},
-			{"node-stale", "moox_cloudnode_scf_heartbeat_timestamp_seconds", `{"function_name":"function-stale","node_id":"node-stale"}`, float64(now.Add(-2 * time.Minute).Unix())},
-		} {
-			if err := db.Create(&monmetrics.MetricSeries{
-				ServiceName: "cloudnode", InstanceID: "cloudnode@control", SeriesID: metric.id,
-				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels, LastSeenAt: now,
-			}).Error; err != nil {
-				t.Fatal(err)
-			}
-			if err := db.Create(&monmetrics.MetricLatest{
-				SeriesID: metric.id, ServiceName: "cloudnode", InstanceID: "cloudnode@control",
-				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels,
-				Value: metric.value, ObservedAt: now,
-			}).Error; err != nil {
-				t.Fatal(err)
-			}
-		}
-		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	repositories := manager.Repositories()
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Metrics: query, Now: func() time.Time { return now },
-	}, repositories, nil)
-	if err := run(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	results, err := repositories.Results.Recent(t.Context(), "crypto", "scf:heartbeat", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 1 || results[0].Success {
-		t.Fatalf("results = %+v", results)
-	}
-	if !strings.Contains(results[0].BodyExcerpt, "node-stale") ||
-		!strings.Contains(results[0].BodyExcerpt, "120 秒") {
-		t.Fatalf("diagnostic = %q", results[0].BodyExcerpt)
-	}
-}
-
-func TestSCFHeartbeatDiagnosticRespectsAggregateCounts(t *testing.T) {
-	nodes := []monitorobservability.SCFHeartbeatStatus{
-		{NodeID: "stale-but-aggregate-healthy", Status: "timeout", AgeSeconds: 120},
-	}
-	if got := scfHeartbeatDiagnostic(nodes, 0, 0); got != "" {
-		t.Fatalf("diagnostic = %q, want empty", got)
-	}
-}
 
 func TestBusinessFreshnessReporterResolvesDatasetNoLongerExpected(t *testing.T) {
 	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "")
@@ -116,6 +45,61 @@ func TestBusinessFreshnessReporterResolvesDatasetNoLongerExpected(t *testing.T) 
 		t.Fatal(err)
 	}
 	if len(results) != 1 || !results[0].Success || results[0].ErrorMessage != "no_longer_expected" {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
+func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		for _, metric := range []struct {
+			id, name string
+			value    float64
+		}{
+			{"balance-success", "moox_trade_balance_sync_last_success_timestamp_seconds", float64(now.Unix())},
+			{"balance-run", "moox_trade_balance_sync_last_run_timestamp_seconds", float64(now.Unix())},
+			{"balance-failures", "moox_trade_balance_sync_consecutive_failures", 0},
+			{"balance-difference", "moox_trade_balance_sync_max_difference_ratio", 0},
+		} {
+			if err := db.Create(&monmetrics.MetricSeries{
+				ServiceName: "moox_trade", InstanceID: "moox_trade@control", SeriesID: metric.id,
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: "{}", LastSeenAt: now,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&monmetrics.MetricLatest{
+				SeriesID: metric.id, ServiceName: "moox_trade", InstanceID: "moox_trade@control",
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: "{}", Value: metric.value, ObservedAt: now,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Now: func() time.Time { return now },
+	}, repositories, nil)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := repositories.Results.Recent(t.Context(), "crypto_market", "balance:moox_trade", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || !results[0].Success {
 		t.Fatalf("results = %+v", results)
 	}
 }

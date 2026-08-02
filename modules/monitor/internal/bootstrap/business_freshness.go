@@ -95,23 +95,12 @@ func buildBusinessFreshnessReporter(
 				continue
 			}
 			item := businessFreshnessItem{
-				spaceID: "crypto", checkID: "balance:" + business.Module,
+				spaceID: "crypto_market", checkID: "balance:" + business.Module,
 				name:    "Balance freshness " + business.Module,
 				success: business.Status == "healthy", reason: business.Reason,
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
-		scfTotal := overview.SCF.OnlineCount + overview.SCF.TimeoutCount + overview.SCF.UnknownCount
-		if scfTotal > 0 {
-			item := businessFreshnessItem{
-				spaceID: "crypto", checkID: "scf:heartbeat", name: "SCF heartbeat freshness",
-				success:    overview.SCF.TimeoutCount == 0 && overview.SCF.UnknownCount == 0,
-				reason:     fmt.Sprintf("online=%d timeout=%d unknown=%d", overview.SCF.OnlineCount, overview.SCF.TimeoutCount, overview.SCF.UnknownCount),
-				diagnostic: scfHeartbeatDiagnostic(overview.SCF.UnhealthyNodes, overview.SCF.TimeoutCount, overview.SCF.UnknownCount),
-			}
-			items[item.spaceID+"\x00"+item.checkID] = item
-		}
-
 		enabled := true
 		existing := make([]domain.Check, 0, 500)
 		for page := 1; len(existing) < 1000; page++ {
@@ -287,44 +276,6 @@ func reporterDeploymentExpected(
 	default:
 		return false, err
 	}
-}
-
-func scfHeartbeatDiagnostic(nodes []monitorobservability.SCFHeartbeatStatus, timeoutCount, unknownCount int) string {
-	if len(nodes) == 0 || timeoutCount+unknownCount == 0 {
-		return ""
-	}
-	const maxNodes = 10
-	items := make([]string, 0, min(timeoutCount+unknownCount, maxNodes)+1)
-	cst := time.FixedZone("CST", 8*60*60)
-	remainingTimeout, remainingUnknown := timeoutCount, unknownCount
-	for _, node := range nodes {
-		if len(items) >= maxNodes {
-			break
-		}
-		name := node.NodeID
-		if name == "" {
-			name = node.FunctionName
-		}
-		switch node.Status {
-		case "timeout":
-			if remainingTimeout == 0 {
-				continue
-			}
-			items = append(items, fmt.Sprintf("%s（最后心跳：%s，距检查 %d 秒）",
-				name, node.LastHeartbeatAt.In(cst).Format("2006-01-02 15:04:05 MST"), node.AgeSeconds))
-			remainingTimeout--
-		case "unknown":
-			if remainingUnknown == 0 {
-				continue
-			}
-			items = append(items, name+"（尚未上报心跳）")
-			remainingUnknown--
-		}
-	}
-	if remaining := timeoutCount + unknownCount - len(items); remaining > 0 {
-		items = append(items, fmt.Sprintf("另有 %d 个异常节点", remaining))
-	}
-	return strings.Join(items, "；")
 }
 
 func serviceReporterReason(status string) string {

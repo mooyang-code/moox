@@ -46,7 +46,7 @@ market_canary:
   return_threshold: 0.05
   volume_ratio_threshold: 5
   subjects:
-    - space_id: crypto
+    - space_id: crypto_market
       dataset_id: spot_kline_1h
       symbol: BTC-USDT
       frequency: 1h

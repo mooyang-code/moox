@@ -7,7 +7,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/packages/cloudjobqueue"
@@ -58,21 +57,16 @@ func TestNew_ShouldApplyOptions(t *testing.T) {
 	queue := &fakeExecutionQueue{}
 	state := &fakeJobStateStore{}
 	history := jobhistory.NewStore(jobhistory.StoreOptions{Dir: t.TempDir()})
-	sink := projection.NewHeartbeatBuffer(mgr.Catalog(), projection.HeartbeatBufferOptions{MaxKeys: 4})
-	t.Cleanup(func() { _ = sink.Close(context.Background()) })
-
 	svc := New(mgr,
 		WithExecutionQueue(queue),
 		WithJobStateStore(state),
 		WithJobHistoryStore(history),
-		WithHeartbeatSink(sink),
 	)
 	require.NotNil(t, svc)
 	assert.NotNil(t, svc.catalog)
 	assert.Equal(t, queue, svc.executionQueue)
 	assert.Equal(t, state, svc.jobState)
 	assert.Equal(t, history, svc.history)
-	assert.Equal(t, sink, svc.heartbeatSink)
 	assert.NotNil(t, svc.scfClientFactory)
 
 	assert.NotNil(t, svc.scfClientFactory(cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}))

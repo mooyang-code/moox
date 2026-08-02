@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/packages/events"
@@ -24,6 +23,8 @@ type Handler struct {
 	NewStorage func(string, string) (Storage, error)
 	Publish    func(context.Context, Request, proto.Message) error
 	Now        func() time.Time
+	Reporter   ItemReporter
+	CLSReserve time.Duration
 }
 
 const (
@@ -56,14 +57,17 @@ func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*
 	}
 	budgetCtx, cancel := executionContext(ctx)
 	defer cancel()
-	storageTarget := runtimeapp.GetStorageRPCGatewayTarget()
+	storageTarget := strings.TrimSpace(event.StorageRPCGatewayTarget)
+	if storageTarget == "" {
+		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
+	}
 	storage, err := h.NewStorage(storageTarget, req.MarketType)
 	if err != nil {
 		return nil, err
 	}
 	storageTimeout := time.Duration(envInt("MOOX_FETCH_STORAGE_TIMEOUT_MS", int(defaultStorageTimeout/time.Millisecond))) * time.Millisecond
-	commitReserve, publishReserve := storageAndPublishReserves(storageTimeout)
-	executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout}
+	commitReserve, publishReserve := storageAndPublishReserves(storageTimeout, h.CLSReserve)
+	executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout, Reporter: h.Reporter}
 	payload, err := executor.Execute(budgetCtx, req)
 	if err != nil {
 		return nil, err
@@ -83,11 +87,14 @@ func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*
 // then reserves a small fixed window to publish the completion event. Storage
 // crosses SCF -> Gateway -> Storage Primary, so it must not share a timeout
 // budget with EventBus publication.
-func storageAndPublishReserves(storage time.Duration) (commit, publish time.Duration) {
+func storageAndPublishReserves(storage time.Duration, cls time.Duration) (commit, publish time.Duration) {
 	if storage <= 0 {
 		storage = defaultStorageTimeout
 	}
-	return storage + completionPublishReserve, completionPublishReserve
+	if cls < 0 {
+		cls = 0
+	}
+	return storage + completionPublishReserve + cls, completionPublishReserve
 }
 
 func executionContext(parent context.Context) (context.Context, context.CancelFunc) {

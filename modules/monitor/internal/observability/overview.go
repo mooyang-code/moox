@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -35,18 +34,6 @@ type HostStatus struct {
 	CPUPercent, MemoryPercent, FilesystemMaxPercent float64
 }
 
-type SCFSummary struct {
-	OnlineCount, TimeoutCount, UnknownCount int
-	OldestHeartbeatAt                       time.Time
-	UnhealthyNodes                          []SCFHeartbeatStatus
-}
-
-type SCFHeartbeatStatus struct {
-	NodeID, FunctionName, Status string
-	LastHeartbeatAt              time.Time
-	AgeSeconds                   int64
-}
-
 type DatasetFrequencyStatus struct {
 	Producer, SpaceID, DatasetID, Freq, Status, Reason string
 	LastRunAt, LastSuccessAt                           time.Time
@@ -63,7 +50,6 @@ type Overview struct {
 	GeneratedAt    time.Time
 	Services       []ServiceStatus
 	Hosts          []HostStatus
-	SCF            SCFSummary
 	Datasets       []DatasetFrequencyStatus
 	BusinessChecks []BusinessStatus
 }
@@ -91,9 +77,6 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	if out.Services, err = b.buildServices(ctx, spaceID); err != nil {
 		return Overview{}, err
 	}
-	if out.SCF, err = b.buildSCFSummary(ctx, now); err != nil {
-		return Overview{}, err
-	}
 	if out.Hosts, err = b.buildHosts(ctx); err != nil {
 		return Overview{}, err
 	}
@@ -105,154 +88,6 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	sortOverview(&out)
 	return out, nil
-}
-
-func (b Builder) buildSCFSummary(ctx context.Context, now time.Time) (SCFSummary, error) {
-	if b.Metrics == nil || b.Metrics.Catalog() == nil {
-		return SCFSummary{}, nil
-	}
-	const (
-		nodesMetric              = "moox_cloudnode_scf_nodes"
-		oldestAgeMetric          = "moox_cloudnode_scf_oldest_heartbeat_age_seconds"
-		heartbeatTimestampMetric = "moox_cloudnode_scf_heartbeat_timestamp_seconds"
-		scfHeartbeatTimeout      = 90 * time.Second
-		maxSeries                = 500
-	)
-	series, total, err := b.Metrics.Catalog().ListSeries(ctx, "", nodesMetric, "", 0, maxSeries+1)
-	if err != nil {
-		return SCFSummary{}, err
-	}
-	if total > maxSeries {
-		return SCFSummary{}, fmt.Errorf("SCF metric series exceed limit %d", maxSeries)
-	}
-	if len(series) == 0 {
-		return SCFSummary{}, nil
-	}
-	latestInstance := series[0].InstanceID
-	latestSeen := series[0].LastSeenAt
-	for _, item := range series[1:] {
-		if item.LastSeenAt.After(latestSeen) {
-			latestInstance, latestSeen = item.InstanceID, item.LastSeenAt
-		}
-	}
-
-	var out SCFSummary
-	var stale bool
-	for _, item := range series {
-		if item.InstanceID != latestInstance {
-			continue
-		}
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return SCFSummary{}, fmt.Errorf("SCF status labels: %w", err)
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return SCFSummary{}, err
-		}
-		count, err := nonNegativeMetricCount(latest.Value)
-		if err != nil {
-			return SCFSummary{}, fmt.Errorf("SCF status %q: %w", labels["status"], err)
-		}
-		stale = stale || item.IsStale
-		switch labels["status"] {
-		case "online":
-			out.OnlineCount += count
-		case "timeout":
-			out.TimeoutCount += count
-		case "unknown":
-			out.UnknownCount += count
-		default:
-			return SCFSummary{}, fmt.Errorf("unknown SCF heartbeat status %q", labels["status"])
-		}
-	}
-	if stale {
-		out.UnknownCount += out.OnlineCount + out.TimeoutCount
-		out.OnlineCount, out.TimeoutCount = 0, 0
-		return out, nil
-	}
-
-	ages, ageTotal, err := b.Metrics.Catalog().ListSeries(ctx, "", oldestAgeMetric, "", 0, maxSeries+1)
-	if err != nil {
-		return SCFSummary{}, err
-	}
-	if ageTotal > maxSeries {
-		return SCFSummary{}, fmt.Errorf("SCF oldest heartbeat series exceed limit %d", maxSeries)
-	}
-	for _, item := range ages {
-		if item.InstanceID != latestInstance {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return SCFSummary{}, err
-		}
-		if latest.Value < 0 || math.IsNaN(latest.Value) || math.IsInf(latest.Value, 0) {
-			return SCFSummary{}, fmt.Errorf("SCF oldest heartbeat age is invalid")
-		}
-		if out.OnlineCount+out.TimeoutCount+out.UnknownCount > 0 {
-			age := latest.Value
-			if observedLag := now.Sub(latest.ObservedAt).Seconds(); observedLag > 0 {
-				age += observedLag
-			}
-			out.OldestHeartbeatAt = now.Add(-time.Duration(age * float64(time.Second)))
-		}
-		break
-	}
-
-	heartbeats, err := b.Metrics.Catalog().ListFreshSeriesForInstanceAt(
-		ctx, latestInstance, heartbeatTimestampMetric, now, maxSeries,
-	)
-	if err != nil {
-		return SCFSummary{}, err
-	}
-	for _, item := range heartbeats {
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return SCFSummary{}, fmt.Errorf("SCF heartbeat labels: %w", err)
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return SCFSummary{}, err
-		}
-		node := SCFHeartbeatStatus{
-			NodeID: labels["node_id"], FunctionName: labels["function_name"],
-		}
-		switch {
-		case latest.Value == 0:
-			node.Status = "unknown"
-		case latest.Value < 0 || math.IsNaN(latest.Value) || math.IsInf(latest.Value, 0):
-			return SCFSummary{}, fmt.Errorf("SCF heartbeat timestamp is invalid")
-		default:
-			node.LastHeartbeatAt = time.Unix(int64(latest.Value), 0).UTC()
-			age := max(now.Sub(node.LastHeartbeatAt), 0)
-			node.AgeSeconds = int64(age / time.Second)
-			if age > scfHeartbeatTimeout {
-				node.Status = "timeout"
-			}
-		}
-		if node.Status != "" {
-			out.UnhealthyNodes = append(out.UnhealthyNodes, node)
-		}
-	}
-	sort.Slice(out.UnhealthyNodes, func(i, j int) bool {
-		left, right := out.UnhealthyNodes[i], out.UnhealthyNodes[j]
-		if left.Status != right.Status {
-			return left.Status == "timeout"
-		}
-		if left.AgeSeconds != right.AgeSeconds {
-			return left.AgeSeconds > right.AgeSeconds
-		}
-		return left.NodeID < right.NodeID
-	})
-	return out, nil
-}
-
-func nonNegativeMetricCount(value float64) (int, error) {
-	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value > maxOverviewServices {
-		return 0, fmt.Errorf("count is invalid")
-	}
-	return int(value), nil
 }
 
 func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceStatus, error) {

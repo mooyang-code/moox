@@ -26,10 +26,6 @@ func overviewToPB(value monitorobservability.Overview) *monitorpb.ObservabilityO
 		Hosts:          make([]*monitorpb.HostObservabilityStatus, 0, len(value.Hosts)),
 		Datasets:       make([]*monitorpb.DatasetFrequencyStatus, 0, len(value.Datasets)),
 		BusinessChecks: make([]*monitorpb.BusinessObservabilityStatus, 0, len(value.BusinessChecks)),
-		Scf: &monitorpb.ScfObservabilitySummary{
-			OnlineCount: int32(value.SCF.OnlineCount), TimeoutCount: int32(value.SCF.TimeoutCount),
-			UnknownCount: int32(value.SCF.UnknownCount), OldestHeartbeatAt: timeToString(value.SCF.OldestHeartbeatAt),
-		},
 	}
 	for _, item := range value.Services {
 		out.Services = append(out.Services, &monitorpb.ServiceObservabilityStatus{

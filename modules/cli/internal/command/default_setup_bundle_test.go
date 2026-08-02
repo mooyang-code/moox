@@ -30,7 +30,7 @@ func TestDefaultSetupBundleDefinesBusinessAndInternalSpaces(t *testing.T) {
 	}
 	slices.Sort(business)
 	slices.Sort(internal)
-	require.Equal(t, []string{"crypto", "stock_cn"}, business)
+	require.Equal(t, []string{"crypto_market", "stock_cn"}, business)
 	require.Equal(t, []string{"moox_system"}, internal)
 
 	byID := make(map[string]seedSpace, len(seed.Spaces))
@@ -39,8 +39,8 @@ func TestDefaultSetupBundleDefinesBusinessAndInternalSpaces(t *testing.T) {
 	}
 	require.Equal(t, "CN", byID["stock_cn"].Market)
 	require.Equal(t, "Asia/Shanghai", byID["stock_cn"].Timezone)
-	require.Equal(t, "crypto", byID["crypto"].Market)
-	require.Equal(t, "UTC", byID["crypto"].Timezone)
+	require.Equal(t, "crypto", byID["crypto_market"].Market)
+	require.Equal(t, "UTC", byID["crypto_market"].Timezone)
 }
 
 func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
@@ -57,7 +57,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		datasetsBySpace[dataset.SpaceID] = append(datasetsBySpace[dataset.SpaceID], dataset.DatasetID)
 		require.LessOrEqual(t, utf8.RuneCountInString(dataset.Name), 10, dataset.SpaceID+"/"+dataset.DatasetID)
-		if dataset.SpaceID == "crypto" {
+		if dataset.SpaceID == "crypto_market" {
 			require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
 		}
 	}
@@ -69,7 +69,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		for _, datasetID := range view.DatasetIDs {
 			viewCount[view.SpaceID+"/"+datasetID]++
 		}
-		if view.SpaceID == "crypto" {
+		if view.SpaceID == "crypto_market" {
 			require.Contains(t, view.FilterJSON, `"freq":"1H"`, view.ViewID)
 		}
 	}
@@ -94,7 +94,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		"index_kline",
 		"stock_kline",
 	}, datasetsBySpace["stock_cn"])
-	require.Equal(t, []string{"perpetual_kline_1h", "spot_kline_1h"}, datasetsBySpace["crypto"])
+	require.Equal(t, []string{"perpetual_kline_1h", "spot_kline_1h"}, datasetsBySpace["crypto_market"])
 }
 
 func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {

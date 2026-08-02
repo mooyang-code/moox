@@ -49,7 +49,7 @@ func TestAsyncSCFPublishSubmitRunnerAndStatus(t *testing.T) {
 		metadata, metadataErr := structpb.NewStruct(map[string]any{
 			"function_name_prefix": "collector-e2e",
 			"index":                index,
-			"supported_workloads":  []any{"collect.binance.symbol", "collect.binance.kline"},
+			"biz_type":             "market_fetcher",
 		})
 		require.NoError(t, metadataErr)
 		items = append(items, &pb.NodeCreateItem{

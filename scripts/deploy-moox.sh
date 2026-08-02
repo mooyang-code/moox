@@ -778,8 +778,6 @@ build_core_binaries() {
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" collector
-    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-      "${ROOT}/scripts/build.sh" collector-scf
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
@@ -922,7 +920,7 @@ patch_configs() {
     perl -0pi -e 's#path:\s*\./data/moox_collector\.db#path: ../data/collector/moox_collector.db#g' \
       "${STAGE_DIR}/collector/config/app.yaml"
     # Local collector config disables the timer for dev runs; deployments need it on.
-    perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g; s#scheduler=collectorSchedule&disable=0&params=(?=")#scheduler=collectorSchedule&disable=0&params=space_id=crypto#g' \
+    perl -0pi -e 's#scheduler=collectorSchedule&disable=1&params=[^"]*#scheduler=collectorSchedule&disable=0&params=space_id=crypto_market#g; s#scheduler=collectorSchedule&disable=0&params=(?=")#scheduler=collectorSchedule&disable=0&params=space_id=crypto_market#g' \
       "${STAGE_DIR}/collector/config/trpc_go.yaml"
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
@@ -1128,13 +1126,6 @@ WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
 PUBLIC_HOST="${MOOX_PUBLIC_HOST:-__PUBLIC_HOST__}"
-SCF_SENTINEL_ENV=()
-if [[ -n "${PUBLIC_HOST}" ]]; then
-  SCF_SENTINEL_ENV=(
-    "MOOX_MONITOR_READY_URL=http://${PUBLIC_HOST}:11409/readyz"
-    "MOOX_GATEWAY_READY_URL=http://${PUBLIC_HOST}:11012/readyz"
-  )
-fi
 SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-__SCF_SERVICE_GATEWAY_TARGET__}"
 SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-__SCF_STORAGE_RPC_GATEWAY_TARGET__}"
 if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
@@ -1751,7 +1742,7 @@ start_cloudnode() {
   runtime_identity_env moox_cloudnode "${ROOT}/cloudnode/config/app.yaml"
   start_service "cloudnode" "${ROOT}/cloudnode" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "${SCF_SENTINEL_ENV[@]+"${SCF_SENTINEL_ENV[@]}"}" \
+      "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" \
       "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
       "MOOX_SERVICE_GATEWAY_HTTP_URL=http://127.0.0.1:11002" \
       "MOOX_SCF_SERVICE_GATEWAY_TARGET=${SCF_SERVICE_GATEWAY_TARGET}" \
@@ -2712,7 +2703,6 @@ EOF
   if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
     copy_required_binary "moox-collector"
     copy_required_binary "moox-collector-cli"
-    copy_required_binary "moox-collector-scf"
   fi
   if [[ "${WITH_FACTOR}" -eq 1 ]]; then
     copy_required_binary "moox-factor"

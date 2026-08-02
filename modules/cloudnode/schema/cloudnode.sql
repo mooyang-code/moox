@@ -13,11 +13,8 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_region TEXT NOT NULL DEFAULT '',
     c_namespace TEXT NOT NULL DEFAULT '',
     c_function_name TEXT NOT NULL DEFAULT '',
-    c_running_version TEXT NOT NULL DEFAULT '',
-    c_supported_workloads TEXT NOT NULL DEFAULT '[]',
     c_metadata TEXT NOT NULL DEFAULT '{}',
     c_status TEXT NOT NULL DEFAULT 'unknown',
-    c_last_heartbeat_at DATETIME,
     c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP

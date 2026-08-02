@@ -3,13 +3,10 @@ package rpc
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
@@ -17,10 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
-	"github.com/mooyang-code/moox/packages/cloudjobqueue"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"google.golang.org/protobuf/types/known/structpb"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -28,27 +22,7 @@ const (
 	scfOperationTimeout       = 5 * time.Minute
 	scfCreateAttemptTimeout   = 4 * time.Minute
 	scfCreateReconcileTimeout = 10 * time.Second
-	scfWatchdogEnvironmentKey = "MOOX_SCF_WATCHDOG_ENABLED"
-	scfWatchdogMetadataKey    = "scf_watchdog_enabled"
-	scfStorageAuthAppID       = "scf-market-canary"
 )
-
-var scfWatchdogRuntimeEnvironment = map[string]string{
-	"MOOX_MONITOR_READY_URL":    "MOOX_MONITOR_READY_URL",
-	"MOOX_GATEWAY_READY_URL":    "MOOX_GATEWAY_READY_URL",
-	"MOOX_HEALTH_HMAC_VERSION":  "MOOX_HEALTH_AUTH_VERSION",
-	"MOOX_HEALTH_HMAC_KEY_ID":   "MOOX_HEALTH_AUTH_ACCESS_KEY",
-	"MOOX_HEALTH_HMAC_SECRET":   "MOOX_HEALTH_AUTH_SECRET_KEY",
-	"MOOX_MSGBOX_WECOM_WEBHOOK": "MOOX_MSGBOX_WECOM_WEBHOOK",
-}
-
-var scfCanaryRuntimeDefaults = map[string]string{
-	"MOOX_SCF_CANARY_DATASET_ID": "spot_kline_1h",
-	"MOOX_SCF_CANARY_FREQUENCY":  "1h",
-	"MOOX_SCF_CANARY_SERIES_TAG": "venue:binance",
-}
-
-var scfWatchdogSelectionMu sync.Mutex
 
 func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.GetNodeListRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
@@ -88,11 +62,6 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	if existing != nil {
 		node = mergeNodeUpdate(*existing, pbNode)
 	}
-	if !isMarketFetchNode(&node) {
-		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
-			return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-	}
 	if err := s.catalog.UpsertNode(ctx, node); err != nil {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
@@ -109,26 +78,6 @@ func (s *Service) executeCreateNodeItem(
 		return "", fmt.Errorf("node item is required")
 	}
 	node := cloudNodeFromCreateItem(spaceID, item, index)
-	watchdogEnabled, _, err := requestedSCFWatchdog(item.GetEnvironment())
-	if err != nil {
-		return "", err
-	}
-	if watchdogEnabled && strings.EqualFold(strings.TrimSpace(node.Region), "local") {
-		return "", fmt.Errorf("SCF watchdog sentinel requires a cloud SCF node")
-	}
-	if watchdogEnabled {
-		// Node batch items execute concurrently. Serialize the small number of
-		// sentinel selections through provider acceptance and catalog persistence
-		// so two items in one batch cannot both pass the catalog check.
-		scfWatchdogSelectionMu.Lock()
-		defer scfWatchdogSelectionMu.Unlock()
-		if err := s.ensureSingleSCFWatchdog(ctx, spaceID, node.NodeID); err != nil {
-			return "", err
-		}
-		metadata := parseJSONMap(node.Metadata)
-		metadata[scfWatchdogMetadataKey] = true
-		node.Metadata = jsonString(metadata)
-	}
 	if strings.TrimSpace(node.CloudAccountID) == "" {
 		return "", fmt.Errorf("cloud_account_id is required")
 	}
@@ -137,11 +86,6 @@ func (s *Service) executeCreateNodeItem(
 	}
 	if strings.TrimSpace(node.PackageID) == "" {
 		return "", fmt.Errorf("package_id is required")
-	}
-	if !isMarketFetchNode(&node) {
-		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
-			return "", err
-		}
 	}
 	if err := s.ensureSCFFunction(ctx, &node, item); err != nil {
 		return "", err
@@ -155,21 +99,6 @@ func (s *Service) executeCreateNodeItem(
 		return "", err
 	}
 	return fmt.Sprintf("created function %s", node.FunctionName), nil
-}
-
-func (s *Service) ensureNodeExecutionQueues(ctx context.Context, spaceID string, workloads []string) error {
-	if s == nil || s.executionQueue == nil {
-		return nil
-	}
-	for _, jobType := range compactStrings(workloads) {
-		if err := s.executionQueue.EnsureJobExecutionQueue(ctx, cloudjobqueue.Identity{
-			SpaceID: spaceID,
-			JobType: jobType,
-		}); err != nil {
-			return fmt.Errorf("ensure execution queue for workload %s: %w", jobType, err)
-		}
-	}
-	return nil
 }
 
 func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.BatchDeleteNodesRsp, error) {
@@ -247,23 +176,7 @@ func (s *Service) executeDeployNodeItem(
 	if pkg.Status != "available" {
 		return "", fmt.Errorf("package %s is not available", pkg.PackageID)
 	}
-	watchdogEnabled := metadataBool(parseJSONMap(node.Metadata), scfWatchdogMetadataKey)
-	requestedWatchdog, watchdogSpecified, err := requestedSCFWatchdog(item.GetEnvironment())
-	if err != nil {
-		return "", err
-	}
-	if watchdogSpecified && requestedWatchdog != watchdogEnabled {
-		return "", fmt.Errorf(
-			"SCF watchdog sentinel selection for node %s is immutable; delete and recreate the selected node",
-			node.NodeID,
-		)
-	}
-	if !isMarketFetchNode(node) {
-		if err := s.ensureNodeExecutionQueues(ctx, node.SpaceID, parseStringSliceJSON(node.SupportedWorkloads)); err != nil {
-			return "", err
-		}
-	}
-	if err := s.updateSCFFunctionCode(ctx, *node, *pkg, item.GetEnvironment(), item.GetConfig(), watchdogEnabled); err != nil {
+	if err := s.updateSCFFunctionCode(ctx, *node, *pkg, item.GetEnvironment(), item.GetConfig()); err != nil {
 		return "", err
 	}
 	persistCtx, persistCancel := acceptedSCFPersistenceContext(ctx)
@@ -272,33 +185,6 @@ func (s *Service) executeDeployNodeItem(
 		return "", err
 	}
 	return fmt.Sprintf("deployed package %s to %s", pkg.PackageID, node.NodeID), nil
-}
-
-func (s *Service) ReportHeartbeat(ctx context.Context, req *pb.ReportHeartbeatReq) (*pb.ReportHeartbeatRsp, error) {
-	if strings.TrimSpace(req.GetSpaceId()) == "" {
-		return &pb.ReportHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
-	}
-	if strings.TrimSpace(req.GetNodeId()) == "" {
-		return &pb.ReportHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_id is required")}, nil
-	}
-	spaceID := req.GetSpaceId()
-	log.InfoContextf(ctx, "[CloudNode] heartbeat space=%s node_id=%s node_type=%s source=%s version=%s",
-		spaceID, req.GetNodeId(), req.GetNodeType(), req.GetSourceService(), req.GetRunningVersion())
-	if s.heartbeatSink != nil {
-		if err := s.heartbeatSink.Enqueue(req); err != nil {
-			log.WarnContextf(ctx, "[CloudNode] heartbeat enqueue failed: %v", err)
-			return &pb.ReportHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		return &pb.ReportHeartbeatRsp{RetInfo: retOK()}, nil
-	}
-	if req.GetNodeId() != "" {
-		supported, _ := json.Marshal(req.GetSupportedWorkloads())
-		metadata, _ := json.Marshal(req.GetMetadata().AsMap())
-		if err := s.catalog.UpdateHeartbeat(ctx, spaceID, req.GetNodeId(), req.GetRunningVersion(), string(supported), string(metadata)); err != nil {
-			log.WarnContextf(ctx, "[CloudNode] heartbeat upsert node failed: %v", err)
-		}
-	}
-	return &pb.ReportHeartbeatRsp{RetInfo: retOK()}, nil
 }
 
 func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, item *pb.NodeCreateItem) error {
@@ -345,9 +231,6 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 				pkg.PackageID,
 			)
 		}
-		if remoteSCFWatchdogEnabled(info.Environment) != metadataBool(parseJSONMap(node.Metadata), scfWatchdogMetadataKey) {
-			return fmt.Errorf("scf function %s watchdog selection does not match catalog", ref.FunctionName)
-		}
 		info, err = waitForSCFActive(ctx, client, ref, info)
 		if err != nil {
 			return err
@@ -367,10 +250,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	if !isSCFNotFound(err) {
 		return fmt.Errorf("get scf function %s: %w", ref.FunctionName, err)
 	}
-	watchdogEnabled := metadataBool(parseJSONMap(node.Metadata), scfWatchdogMetadataKey)
-	environment, err := scfWatchdogEnvironment(item.GetEnvironment(), watchdogEnabled)
-	if err != nil {
-		return err
+	environment := copyStringMap(item.GetEnvironment())
+	if environment == nil {
+		environment = make(map[string]string)
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	createCtx, createCancel := context.WithTimeout(ctx, scfCreateAttemptTimeout)
@@ -525,7 +407,6 @@ func (s *Service) updateSCFFunctionCode(
 	pkg store.FunctionPackage,
 	desiredEnvironment map[string]string,
 	desiredConfig map[string]string,
-	watchdogEnabled bool,
 ) error {
 	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 	if err != nil {
@@ -582,10 +463,6 @@ func (s *Service) updateSCFFunctionCode(
 			environment = make(map[string]string)
 		}
 	}
-	environment, err = scfWatchdogEnvironment(environment, watchdogEnabled)
-	if err != nil {
-		return err
-	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
 		FunctionRef:    ref,
@@ -633,99 +510,6 @@ func verifySCFFunctionConfiguration(info *tencentscf.FunctionInfo, desiredConfig
 
 func isMarketFetchNode(node *store.CloudNode) bool {
 	return node != nil && strings.EqualFold(strings.TrimSpace(metadataString(parseJSONMap(node.Metadata), "biz_type")), "market_fetcher")
-}
-
-func (s *Service) ensureSingleSCFWatchdog(ctx context.Context, spaceID, nodeID string) error {
-	nodes, err := s.catalog.ListSCFEventNodes(ctx)
-	if err != nil {
-		return fmt.Errorf("list SCF nodes before watchdog selection: %w", err)
-	}
-	for _, node := range nodes {
-		if node.SpaceID != spaceID || node.NodeID == nodeID {
-			continue
-		}
-		if metadataBool(parseJSONMap(node.Metadata), scfWatchdogMetadataKey) {
-			return fmt.Errorf(
-				"space %s already has SCF watchdog sentinel node %s",
-				spaceID,
-				node.NodeID,
-			)
-		}
-	}
-	return nil
-}
-
-func requestedSCFWatchdog(environment map[string]string) (enabled bool, specified bool, err error) {
-	raw, ok := environment[scfWatchdogEnvironmentKey]
-	if !ok {
-		return false, false, nil
-	}
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "true":
-		return true, true, nil
-	case "false":
-		return false, true, nil
-	default:
-		return false, true, fmt.Errorf("%s must be true or false", scfWatchdogEnvironmentKey)
-	}
-}
-
-func remoteSCFWatchdogEnabled(environment map[string]string) bool {
-	enabled, _, err := requestedSCFWatchdog(environment)
-	return err == nil && enabled
-}
-
-func scfWatchdogEnvironment(environment map[string]string, enabled bool) (map[string]string, error) {
-	result := copyStringMap(environment)
-	if result == nil {
-		result = make(map[string]string)
-	}
-	if !enabled {
-		delete(result, scfWatchdogEnvironmentKey)
-		for key := range scfWatchdogRuntimeEnvironment {
-			delete(result, key)
-		}
-		for key := range scfCanaryRuntimeDefaults {
-			delete(result, key)
-		}
-		delete(result, "MOOX_SCF_STORAGE_AUTH_APP_ID")
-		delete(result, "MOOX_SCF_STORAGE_AUTH_APP_KEY")
-		return result, nil
-	}
-	result[scfWatchdogEnvironmentKey] = "true"
-	for targetKey, sourceKey := range scfWatchdogRuntimeEnvironment {
-		value := strings.TrimSpace(os.Getenv(sourceKey))
-		if value == "" {
-			delete(result, targetKey)
-			if targetKey != "MOOX_MSGBOX_WECOM_WEBHOOK" {
-				return nil, fmt.Errorf("SCF watchdog runtime requires %s", sourceKey)
-			}
-			continue
-		}
-		result[targetKey] = value
-	}
-	for targetKey, fallback := range scfCanaryRuntimeDefaults {
-		if targetKey == "MOOX_SCF_CANARY_SERIES_TAG" {
-			value, configured := os.LookupEnv(targetKey)
-			if configured {
-				result[targetKey] = value
-			} else {
-				result[targetKey] = fallback
-			}
-			continue
-		}
-		result[targetKey] = strings.TrimSpace(os.Getenv(targetKey))
-		if result[targetKey] == "" {
-			result[targetKey] = fallback
-		}
-	}
-	primarySecret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
-	if primarySecret == "" {
-		return nil, fmt.Errorf("SCF watchdog runtime requires MOOX_STORAGE_PRIMARY_AUTH_SECRET")
-	}
-	result["MOOX_SCF_STORAGE_AUTH_APP_ID"] = scfStorageAuthAppID
-	result["MOOX_SCF_STORAGE_AUTH_APP_KEY"] = mooxsecurity.HMACSHA256Hex(primarySecret, []byte(scfStorageAuthAppID))
-	return result, nil
 }
 
 func acceptedSCFPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -881,20 +665,19 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 	)
 	nodeID := firstString(metadataString(metadata, "node_id"), functionName)
 	return store.CloudNode{
-		SpaceID:            spaceID,
-		NodeID:             nodeID,
-		CloudAccountID:     item.GetCloudAccountId(),
-		PackageID:          item.GetPackageId(),
-		DeploymentID:       firstString(item.GetDeploymentId(), metadataString(metadata, "deployment_id")),
-		NodeType:           firstString(item.GetNodeType(), "scf-event"),
-		Provider:           "tencent-scf",
-		Region:             item.GetRegion(),
-		Namespace:          firstString(item.GetNamespace(), "default"),
-		FunctionName:       functionName,
-		SupportedWorkloads: supportedWorkloadsFromMetadata(metadata),
-		Metadata:           jsonString(metadata),
-		Status:             "unknown",
-		IsDeleted:          false,
+		SpaceID:        spaceID,
+		NodeID:         nodeID,
+		CloudAccountID: item.GetCloudAccountId(),
+		PackageID:      item.GetPackageId(),
+		DeploymentID:   firstString(item.GetDeploymentId(), metadataString(metadata, "deployment_id")),
+		NodeType:       firstString(item.GetNodeType(), "scf-event"),
+		Provider:       "tencent-scf",
+		Region:         item.GetRegion(),
+		Namespace:      firstString(item.GetNamespace(), "default"),
+		FunctionName:   functionName,
+		Metadata:       jsonString(metadata),
+		Status:         "unknown",
+		IsDeleted:      false,
 	}
 }
 
@@ -948,24 +731,7 @@ func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNo
 	if node.GetFunctionName() != "" {
 		next.FunctionName = node.GetFunctionName()
 	}
-	if node.GetRunningVersion() != "" {
-		next.RunningVersion = node.GetRunningVersion()
-	}
 	metadata := nodeMetadataFromPB(node)
-	bizType := metadataString(metadata, "biz_type")
-	if bizType == "" {
-		bizType = metadataString(parseJSONMap(existing.Metadata), "biz_type")
-	}
-	if strings.EqualFold(strings.TrimSpace(bizType), "market_fetcher") {
-		// A short-lived market fetcher does not consume JobItem queues. Clear a
-		// stale value when an existing node is republished from the greenfield
-		// configuration, where an empty repeated protobuf field is otherwise
-		// indistinguishable from an omitted field.
-		next.SupportedWorkloads = "[]"
-	} else if len(node.GetSupportedWorkloads()) > 0 {
-		raw, _ := json.Marshal(node.GetSupportedWorkloads())
-		next.SupportedWorkloads = string(raw)
-	}
 	if len(metadata) > 0 {
 		next.Metadata = mergeMetadataJSON(existing.Metadata, jsonString(metadata))
 	}
@@ -977,73 +743,56 @@ func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNo
 }
 
 func toPBNode(node store.CloudNode) *pb.CloudNode {
-	lastHeartbeat := ""
-	if node.LastHeartbeatAt != nil {
-		lastHeartbeat = node.LastHeartbeatAt.UTC().Format(time.RFC3339)
-	}
 	metadata := parseJSONMap(node.Metadata)
 	st, _ := structpb.NewStruct(metadata)
 	if st == nil {
 		st = &structpb.Struct{}
 	}
 	return &pb.CloudNode{
-		Id:                 int32(node.ID),
-		SpaceId:            node.SpaceID,
-		NodeId:             node.NodeID,
-		CloudAccountId:     node.CloudAccountID,
-		PackageId:          node.PackageID,
-		PackageVersion:     node.PackageVersion,
-		DeploymentId:       node.DeploymentID,
-		RunningVersion:     node.RunningVersion,
-		Namespace:          node.Namespace,
-		NodeType:           node.NodeType,
-		Provider:           node.Provider,
-		FunctionName:       node.FunctionName,
-		BizType:            metadataString(metadata, "biz_type"),
-		Region:             node.Region,
-		Tag:                metadataString(metadata, "tag"),
-		IpAddress:          metadataString(metadata, "ip_address"),
-		SupportedWorkloads: parseStringSliceJSON(node.SupportedWorkloads),
-		Metadata:           st,
-		TimeoutThreshold:   metadataInt32(metadata, "timeout_threshold"),
-		HeartbeatInterval:  metadataInt32(metadata, "heartbeat_interval"),
-		ProbeEnabled:       metadataBool(metadata, "probe_enabled"),
-		ProbeUrl:           metadataString(metadata, "probe_url"),
-		Status:             nodeStatusToPB(node.Status),
-		LastHeartbeat:      lastHeartbeat,
-		IsDeleted:          node.IsDeleted,
-		CreateTime:         formatTime(node.CreateTime),
-		ModifyTime:         formatTime(node.ModifyTime),
-		ClsTopicId:         metadataString(metadata, "cls_topic_id"),
+		Id:               int32(node.ID),
+		SpaceId:          node.SpaceID,
+		NodeId:           node.NodeID,
+		CloudAccountId:   node.CloudAccountID,
+		PackageId:        node.PackageID,
+		PackageVersion:   node.PackageVersion,
+		DeploymentId:     node.DeploymentID,
+		Namespace:        node.Namespace,
+		NodeType:         node.NodeType,
+		Provider:         node.Provider,
+		FunctionName:     node.FunctionName,
+		BizType:          metadataString(metadata, "biz_type"),
+		Region:           node.Region,
+		Tag:              metadataString(metadata, "tag"),
+		IpAddress:        metadataString(metadata, "ip_address"),
+		Metadata:         st,
+		TimeoutThreshold: metadataInt32(metadata, "timeout_threshold"),
+		ProbeEnabled:     metadataBool(metadata, "probe_enabled"),
+		ProbeUrl:         metadataString(metadata, "probe_url"),
+		Status:           nodeStatusToPB(node.Status),
+		IsDeleted:        node.IsDeleted,
+		CreateTime:       formatTime(node.CreateTime),
+		ModifyTime:       formatTime(node.ModifyTime),
+		ClsTopicId:       metadataString(metadata, "cls_topic_id"),
 	}
 }
 
 func fromPBNode(spaceID string, node *pb.CloudNode) store.CloudNode {
 	metadata := nodeMetadataFromPB(node)
-	supported := "[]"
-	if len(node.GetSupportedWorkloads()) > 0 {
-		raw, _ := json.Marshal(node.GetSupportedWorkloads())
-		supported = string(raw)
-	} else if workloads := supportedWorkloadsFromMetadata(metadata); workloads != "[]" {
-		supported = workloads
-	}
 	return store.CloudNode{
-		SpaceID:            spaceID,
-		NodeID:             node.GetNodeId(),
-		CloudAccountID:     node.GetCloudAccountId(),
-		PackageID:          node.GetPackageId(),
-		PackageVersion:     node.GetPackageVersion(),
-		DeploymentID:       node.GetDeploymentId(),
-		NodeType:           firstString(node.GetNodeType(), "scf-event"),
-		Provider:           firstString(node.GetProvider(), "tencent-scf"),
-		Region:             node.GetRegion(),
-		Namespace:          node.GetNamespace(),
-		FunctionName:       firstString(node.GetFunctionName(), metadataString(metadata, "function_name"), node.GetNodeId()),
-		RunningVersion:     node.GetRunningVersion(),
-		SupportedWorkloads: supported,
-		Metadata:           jsonString(metadata),
-		Status:             nodeStatusToDB(node.GetStatus()),
-		IsDeleted:          node.GetIsDeleted(),
+		SpaceID:        spaceID,
+		NodeID:         node.GetNodeId(),
+		CloudAccountID: node.GetCloudAccountId(),
+		PackageID:      node.GetPackageId(),
+		PackageVersion: node.GetPackageVersion(),
+		DeploymentID:   node.GetDeploymentId(),
+		NodeType:       firstString(node.GetNodeType(), "scf-event"),
+		Provider:       firstString(node.GetProvider(), "tencent-scf"),
+		Region:         node.GetRegion(),
+		Namespace:      node.GetNamespace(),
+		FunctionName:   firstString(node.GetFunctionName(), metadataString(metadata, "function_name"), node.GetNodeId()),
+		Metadata:       jsonString(metadata),
+		Status:         nodeStatusToDB(node.GetStatus()),
+		IsDeleted:      node.GetIsDeleted(),
 	}
 }
 
@@ -1063,9 +812,6 @@ func nodeMetadataFromPB(node *pb.CloudNode) map[string]any {
 	}
 	if node.GetTimeoutThreshold() != 0 {
 		metadata["timeout_threshold"] = node.GetTimeoutThreshold()
-	}
-	if node.GetHeartbeatInterval() != 0 {
-		metadata["heartbeat_interval"] = node.GetHeartbeatInterval()
 	}
 	if node.GetProbeEnabled() {
 		metadata["probe_enabled"] = true
@@ -1107,16 +853,4 @@ func nodeStatusToDB(status pb.NodeStatusCode) string {
 	default:
 		return "unknown"
 	}
-}
-
-func parseStringSliceJSON(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "[]" {
-		return nil
-	}
-	var out []string
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil
-	}
-	return out
 }

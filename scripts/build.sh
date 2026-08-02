@@ -119,7 +119,6 @@ case "${TARGET_MODULE}" in
     build_go modules/cloudnode ./cmd/cli moox-cloudnode-cli 0
     build_go modules/collector ./cmd/server moox-collector 0
     build_go modules/collector ./cmd/cli moox-collector-cli 0
-    build_go modules/collector ./cmd/scf moox-collector-scf 0
     build_go modules/factor ./cmd/server moox-factor 0
     build_go modules/factor ./cmd/cli moox-factor-cli 0
     build_go modules/strategy ./cmd/server moox-strategy 0
@@ -163,9 +162,6 @@ case "${TARGET_MODULE}" in
     ;;
   collector-cli)
     build_go modules/collector ./cmd/cli moox-collector-cli 0
-    ;;
-  collector-scf)
-    build_go modules/collector ./cmd/scf moox-collector-scf 0
     ;;
   factor)
     build_go modules/factor ./cmd/server moox-factor 0

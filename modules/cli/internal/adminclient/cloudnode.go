@@ -106,7 +106,6 @@ type CloudNode struct {
 	FunctionName   string         `json:"function_name"`
 	Metadata       map[string]any `json:"metadata"`
 	Status         any            `json:"status"`
-	LastHeartbeat  string         `json:"last_heartbeat"`
 	IsDeleted      bool           `json:"is_deleted"`
 }
 

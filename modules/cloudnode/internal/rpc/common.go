@@ -162,25 +162,6 @@ func metadataBool(metadata map[string]any, key string) bool {
 	}
 }
 
-func supportedWorkloadsFromMetadata(metadata map[string]any) string {
-	if value, ok := metadata["supported_workloads"].([]any); ok && len(value) > 0 {
-		raw, err := json.Marshal(value)
-		if err == nil {
-			return string(raw)
-		}
-	}
-	if raw := metadataString(metadata, "supported_workloads"); raw != "" {
-		return raw
-	}
-	if bizType := metadataString(metadata, "biz_type"); bizType != "" {
-		raw, err := json.Marshal([]string{bizType})
-		if err == nil {
-			return string(raw)
-		}
-	}
-	return "[]"
-}
-
 func firstString(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {

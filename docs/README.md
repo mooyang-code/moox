@@ -51,3 +51,6 @@ MooX 是一个供个人使用的单用户量化金融平台，涵盖多源数据
 ## 许可证
 
 私有项目，未经授权不得使用。
+# 架构决策
+
+- [短时 SCF 行情采集](architecture/scf-short-lived-market-fetch.md)

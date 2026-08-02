@@ -12,7 +12,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -21,8 +20,10 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/clsreporter"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -153,12 +154,24 @@ type Executor struct {
 	// after the invocation deadline has already expired.
 	CommitReserve  time.Duration
 	StorageReserve time.Duration
+	Reporter       ItemReporter
 }
+
+// ItemReporter receives final per-item outcomes. It is intentionally tiny so
+// the executor can run outside SCF while the short-lived handler supplies CLS.
+type ItemReporter interface{ Report(clsreporter.Entry) }
 
 type execution struct {
 	item  domain.CollectionItem
 	rows  []*storagepb.RowFieldUpsert
 	items []*exchangeItem
+}
+
+type itemExecution struct {
+	rows          []*storagepb.RowFieldUpsert
+	registrations []*storagepb.RegisterDataSubjectReq
+	symbols       []*exchange.SymbolInfo
+	elapsed       time.Duration
 }
 
 // exchangeItem keeps symbol metadata private to this package while allowing
@@ -204,10 +217,7 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 		}
 	}
 	results := make([]domain.ItemResult, len(req.Items))
-	rows := make([]*storagepb.RowFieldUpsert, 0)
-	registrations := make([]*storagepb.RegisterDataSubjectReq, 0)
-	rowCountByItem := make(map[int]int, len(req.Items))
-	symbolsByItem := make(map[int][]*exchange.SymbolInfo, len(req.Items))
+	executions := make([]itemExecution, len(req.Items))
 	concurrency := req.Concurrency
 	if concurrency == 0 {
 		concurrency = DefaultConcurrency
@@ -215,32 +225,37 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 	if concurrency > len(req.Items) {
 		concurrency = len(req.Items)
 	}
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	for index, item := range req.Items {
-		index, item := index, item
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-workCtx.Done():
-				results[index] = failureResult(item, domain.ItemOutcomeNetworkError, "deadline_exhausted", workCtx.Err())
-				return
-			}
-			defer func() { <-sem }()
-			result, itemRows, itemRegs, itemSymbols := e.executeItem(workCtx, req, item)
-			mu.Lock()
-			results[index] = result
-			rows = append(rows, itemRows...)
-			registrations = append(registrations, itemRegs...)
-			rowCountByItem[index] = len(itemRows)
-			symbolsByItem[index] = itemSymbols
-			mu.Unlock()
-		}()
+	for start := 0; start < len(req.Items); start += concurrency {
+		end := min(start+concurrency, len(req.Items))
+		handlers := make([]func() error, 0, end-start)
+		for index := start; index < end; index++ {
+			index, item := index, req.Items[index]
+			handlers = append(handlers, func() error {
+				if err := workCtx.Err(); err != nil {
+					results[index] = failureResult(item, domain.ItemOutcomeNetworkError, "deadline_exhausted", err)
+					return nil
+				}
+				itemStarted := time.Now()
+				result, itemRows, itemRegs, itemSymbols := e.executeItem(workCtx, req, item)
+				results[index] = result
+				executions[index] = itemExecution{rows: itemRows, registrations: itemRegs, symbols: itemSymbols, elapsed: time.Since(itemStarted)}
+				return nil
+			})
+		}
+		if err := trpc.GoAndWait(handlers...); err != nil {
+			return nil, err
+		}
 	}
-	wg.Wait()
+	rows := make([]*storagepb.RowFieldUpsert, 0)
+	registrations := make([]*storagepb.RegisterDataSubjectReq, 0)
+	rowCountByItem := make([]int, len(req.Items))
+	symbolsByItem := make([][]*exchange.SymbolInfo, len(req.Items))
+	for index := range executions {
+		rows = append(rows, executions[index].rows...)
+		registrations = append(registrations, executions[index].registrations...)
+		rowCountByItem[index] = len(executions[index].rows)
+		symbolsByItem[index] = executions[index].symbols
+	}
 
 	// A single Storage write is used for the complete successful row set. If it
 	// fails, none of those items are reported as successful.
@@ -269,6 +284,9 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 				results[index].Outcome = domain.ItemOutcomeStorageError
 				results[index].ErrorType = "storage"
 				results[index].ErrorSummary = truncateError(writeErr)
+				// CLS rows measures rows committed to Storage, not rows merely
+				// returned by the upstream exchange.
+				rowCountByItem[index] = 0
 			}
 		}
 	}
@@ -307,8 +325,24 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 	if payload.GetStatus() != "succeeded" {
 		log.WarnContextf(ctx, "market_fetch_result batch_id=%s status=%s error=%q results=%s", req.BatchID, payload.GetStatus(), resultErrorSummary(results), compactResultOutcomes(results))
 	}
-	waitForCLSDispatch(ctx)
+	e.reportResults(req, results, executions, rowCountByItem)
 	return payload, nil
+}
+
+func (e *Executor) reportResults(req Request, results []domain.ItemResult, executions []itemExecution, rowCountByItem []int) {
+	if e == nil || e.Reporter == nil {
+		return
+	}
+	for index, result := range results {
+		fields := map[string]string{
+			"event_type": "market_fetch_item", "batch_id": req.BatchID, "space_id": req.SpaceID,
+			"request_id": req.RequestID, "region": req.Region, "function_node_id": req.NodeID, "symbol": result.Symbol,
+			"dataset_id": result.DatasetID, "frequency": result.Frequency, "success": strconv.FormatBool(result.Outcome == domain.ItemOutcomeSuccess),
+			"error_kind": result.ErrorType, "error_message": truncateErrorString(result.ErrorSummary),
+			"elapsed_ms": strconv.FormatInt(executions[index].elapsed.Milliseconds(), 10), "rows": strconv.Itoa(rowCountByItem[index]),
+		}
+		e.Reporter.Report(clsreporter.Entry{Timestamp: time.Now().UTC(), Fields: fields})
+	}
 }
 
 func resultErrorSummary(results []domain.ItemResult) string {
@@ -320,15 +354,11 @@ func resultErrorSummary(results []domain.ItemResult) string {
 	return ""
 }
 
-func waitForCLSDispatch(ctx context.Context) {
-	// trpc-log-cls is asynchronous. Keep a short, bounded handoff window so a
-	// short-lived SCF does not return before the 100ms CLS batch timer runs.
-	timer := time.NewTimer(150 * time.Millisecond)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-	case <-timer.C:
+func truncateErrorString(value string) string {
+	if len(value) <= 512 {
+		return value
 	}
+	return value[:512]
 }
 
 func compactResultOutcomes(results []domain.ItemResult) string {

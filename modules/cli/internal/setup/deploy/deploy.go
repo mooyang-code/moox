@@ -241,11 +241,12 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if opts.ResetControlData {
 		reset = "1"
 	}
-	if _, err := transport.Run(ctx, []string{
+	installResult, err := transport.Run(ctx, []string{
 		"sh", "-lc", installControlScript, "moox-install-control",
 		opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH, reset, string(opts.TLSMode), activationToken, remoteArchive,
-	}, nil); err != nil {
-		return fmt.Errorf("control_install_failed")
+	}, nil)
+	if err != nil {
+		return commandFailure("control_install_failed", installResult)
 	}
 	installed := true
 	defer func() {
@@ -276,6 +277,18 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	installed = false
 	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeControlScript, "moox-finalize-control", activationToken}, nil)
 	return nil
+}
+
+func commandFailure(code string, result setupssh.Result) error {
+	detail := strings.TrimSpace(strings.Join([]string{result.Stderr, result.Stdout}, "\n"))
+	detail = strings.Join(strings.Fields(detail), " ")
+	if len(detail) > 500 {
+		detail = detail[:500]
+	}
+	if detail == "" {
+		return fmt.Errorf("%s", code)
+	}
+	return fmt.Errorf("%s: %s", code, detail)
 }
 
 func newActivationToken() (string, error) {
@@ -503,6 +516,8 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	}
 	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"), args...)
 	command.Dir = root
+	command.Stdout = os.Stderr
+	command.Stderr = os.Stderr
 	command.Env, err = eventBusCommandEnv(os.Environ(), opts)
 	if err != nil {
 		_ = os.Remove(archive)

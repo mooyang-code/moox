@@ -111,7 +111,6 @@ message CloudNode {
   string package_id = 5;
   string package_version = 6;
   string deployment_id = 7;
-  string running_version = 8;
   string namespace = 9;
   string node_type = 10;
   string provider = 11;
@@ -120,14 +119,11 @@ message CloudNode {
   string region = 14;
   string tag = 15;
   string ip_address = 16;
-  repeated string supported_workloads = 17;
   google.protobuf.Struct metadata = 18;
   int32 timeout_threshold = 19;
-  int32 heartbeat_interval = 20;
   bool probe_enabled = 21;
   string probe_url = 22;
   NodeStatusCode status = 23;
-  string last_heartbeat = 24;  // RFC3339，可为空
   bool is_deleted = 25;
   string create_time = 26;     // RFC3339
   string modify_time = 27;     // RFC3339
@@ -476,23 +472,6 @@ message LocalDNSReportItem {
   string resolve_at = 3;
 }
 
-message ReportHeartbeatReq {
-  string space_id = 1;
-  string node_id = 2;
-  string node_type = 3;
-  string running_version = 4;
-  string source_service = 5;
-  string timestamp = 6;
-  google.protobuf.Struct metrics = 7;
-  google.protobuf.Struct metadata = 8;
-  repeated string supported_workloads = 9;
-  repeated LocalDNSReportItem local_dns_records = 10;
-}
-
-message ReportHeartbeatRsp {
-  common.RetInfo ret_info = 1;
-}
-
 message JobItem {
   string space_id = 1;
   string job_id = 2;
@@ -640,8 +619,6 @@ service CloudNodeMgr {
   rpc GetPackageDownloadURL(GetPackageDownloadURLReq) returns (GetPackageDownloadURLRsp);
   rpc InitPackageUpload(InitPackageUploadReq) returns (InitPackageUploadRsp);
   rpc CompletePackageUpload(CompletePackageUploadReq) returns (CompletePackageUploadRsp);
-
-  rpc ReportHeartbeat(ReportHeartbeatReq) returns (ReportHeartbeatRsp);
 
   rpc SubmitJobItems(SubmitJobItemsReq) returns (SubmitJobItemsRsp);
   rpc ReportJobItemStatus(ReportJobItemStatusReq) returns (ReportJobItemStatusRsp);

@@ -8,24 +8,17 @@ import (
 	"gorm.io/gorm"
 )
 
-func (r *CatalogRepository) FindNodeForInvocation(ctx context.Context, spaceID string, deploymentID string, workloadType string) (*CloudNode, error) {
+func (r *CatalogRepository) FindNodeForInvocation(ctx context.Context, spaceID string, deploymentID string, _ string) (*CloudNode, error) {
 	if strings.TrimSpace(spaceID) == "" {
 		return nil, fmt.Errorf("space_id is required")
 	}
-	q := r.db.WithContext(ctx).Where(
-		"c_is_deleted = ? AND c_space_id = ? AND c_last_heartbeat_at IS NOT NULL AND c_last_heartbeat_at >= ?",
-		false,
-		spaceID,
-		r.currentTime().Add(-scfHeartbeatTimeout),
-	)
+	q := r.db.WithContext(ctx).Where("c_is_deleted = ? AND c_space_id = ?", false, spaceID).
+		Where("CASE WHEN json_valid(c_metadata) THEN COALESCE(json_extract(c_metadata, '$.biz_type'), '') ELSE '' END <> ?", "market_fetcher")
 	if deploymentID != "" {
 		q = q.Where("c_deployment_id = ?", deploymentID)
 	}
-	if workloadType != "" {
-		q = q.Where("c_supported_workloads LIKE ? OR c_metadata LIKE ?", "%"+workloadType+"%", "%"+workloadType+"%")
-	}
 	var node CloudNode
-	if err := q.Order("c_last_heartbeat_at DESC, c_id DESC").First(&node).Error; err != nil {
+	if err := q.Order("c_id DESC").First(&node).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}

@@ -8,15 +8,11 @@ require (
 	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/cloudjobqueue v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/cloudruntime v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/msgbox v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/tencentyun/scf-go-lib v0.0.0-20230904103145-13c9a7eeca80
 	google.golang.org/protobuf v1.36.11
@@ -26,7 +22,6 @@ require (
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
-	trpc.group/trpc-go/trpc-log-cls v1.0.0
 )
 
 require (
@@ -35,9 +30,10 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
-	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/observabilitypb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
@@ -107,9 +103,10 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/nats-server/v2 v2.11.17 // indirect; test-only embedded broker
@@ -125,7 +122,7 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
 	github.com/stretchr/testify v1.11.1
-	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
+	github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.48.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -155,3 +152,5 @@ replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gate
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
+
+replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter

@@ -21,18 +21,14 @@ export interface CloudNode {
   package_id?: string;
   package_version?: string;
   deployment_id?: string;
-  running_version?: string;
   biz_type?: string;
   tag?: string;
   ip_address?: string;
-  supported_workloads?: string[];
   metadata?: Record<string, unknown>;
   timeout_threshold?: number;
-  heartbeat_interval?: number;
   probe_enabled?: boolean;
   probe_url?: string;
   status?: NodeStatusCode | number;
-  last_heartbeat?: string;
   is_deleted?: boolean;
   cls_topic_id?: string;
   create_time?: string;
@@ -81,9 +77,7 @@ export interface UpdateNodeRequest {
   package_id?: string;
   package_version?: string;
   deployment_id?: string;
-  supported_workloads?: string[];
   timeout_threshold?: number;
-  heartbeat_interval?: number;
   probe_enabled?: boolean;
   probe_url?: string;
   metadata?: Record<string, unknown> | string;

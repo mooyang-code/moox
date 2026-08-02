@@ -16,23 +16,23 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	for _, space := range seed.Spaces {
 		spaceIDs = append(spaceIDs, space.SpaceID)
 	}
-	require.Equal(t, []string{"stock_cn", "crypto", "moox_system"}, spaceIDs)
+	require.Equal(t, []string{"stock_cn", "crypto_market", "moox_system"}, spaceIDs)
 
 	var dataSourceIDs []string
 	var datasetIDs []string
 	var viewIDs []string
 	for _, item := range seed.DataSources {
-		if item.SpaceID == "crypto" {
+		if item.SpaceID == "crypto_market" {
 			dataSourceIDs = append(dataSourceIDs, item.DataSourceID)
 		}
 	}
 	for _, item := range seed.Datasets {
-		if item.SpaceID == "crypto" {
+		if item.SpaceID == "crypto_market" {
 			datasetIDs = append(datasetIDs, item.DatasetID)
 		}
 	}
 	for _, item := range seed.Views {
-		if item.SpaceID == "crypto" {
+		if item.SpaceID == "crypto_market" {
 			viewIDs = append(viewIDs, item.ViewID)
 		}
 	}
@@ -50,12 +50,12 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 		require.Equal(t, "storage-node-0", item.DataNodeID, item.DatasetID)
 		require.NotEmpty(t, item.KeepDuration, item.DatasetID)
 		require.Equal(t, "disabled", item.Status, item.DatasetID)
-		if item.SpaceID == "crypto" {
+		if item.SpaceID == "crypto_market" {
 			require.Equal(t, "crypto_market", item.DataSourceID, item.DatasetID)
 		}
 	}
 	for _, item := range seed.Views {
-		if item.SpaceID == "crypto" {
+		if item.SpaceID == "crypto_market" {
 			require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, item.GrainKeys, item.ViewID)
 		}
 	}
@@ -69,9 +69,9 @@ func TestQuantSampleCSVUsesSharedDatasetAndSeriesTag(t *testing.T) {
 		seriesTag string
 		frequency string
 	}{
-		{"crypto/binance_spot_kline_1h.csv", "spot_kline_1h", "venue:binance", "1H"},
-		{"crypto/binance_perpetual_kline_1h.csv", "perpetual_kline_1h", "venue:binance", "1H"},
-		{"crypto/okx_spot_kline_1h.csv", "spot_kline_1h", "venue:okx", "1H"},
+		{"crypto_market/binance_spot_kline_1h.csv", "spot_kline_1h", "venue:binance", "1H"},
+		{"crypto_market/binance_perpetual_kline_1h.csv", "perpetual_kline_1h", "venue:binance", "1H"},
+		{"crypto_market/okx_spot_kline_1h.csv", "spot_kline_1h", "venue:okx", "1H"},
 		{"stock_cn/stock_kline_1d.csv", "stock_kline", "", "1d"},
 		{"stock_cn/stock_kline_1h.csv", "stock_kline", "", "1H"},
 	}

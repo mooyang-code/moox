@@ -54,7 +54,7 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	require.Len(t, bundle.Spaces, 2)
 	require.NotEmpty(t, bundle.Calls)
 	require.Len(t, bundle.Datasets, 11)
-	assert.Equal(t, "crypto", bundle.Spaces[0].SpaceID)
+	assert.Equal(t, "crypto_market", bundle.Spaces[0].SpaceID)
 	assert.Equal(t, "stock_cn", bundle.Spaces[1].SpaceID)
 }
 
@@ -65,7 +65,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		stages = append(stages, stage)
 	}}
 	spaces := []setupclient.Space{{
-		SpaceID: "crypto", Name: "加密货币市场", Market: "crypto",
+		SpaceID: "crypto_market", Name: "加密货币市场", Market: "crypto_market",
 		Timezone: "UTC", Status: "active", AttributesJSON: "{}",
 	}}
 	deps := setupDeps{
@@ -74,8 +74,8 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 			return setupInitBundle{
 				Spaces: spaces,
 				Datasets: []seedDataset{
-					{SpaceID: "crypto", DatasetID: "spot_kline_1h"},
-					{SpaceID: "crypto", DatasetID: "perpetual_kline_1h"},
+					{SpaceID: "crypto_market", DatasetID: "spot_kline_1h"},
+					{SpaceID: "crypto_market", DatasetID: "perpetual_kline_1h"},
 				},
 				Calls: make([]metadataImportCall, 3),
 			}, nil
@@ -121,7 +121,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 	require.JSONEq(t, `{
 		"status":"ready",
 		"business_spaces":1,
-		"business_space_ids":["crypto"],
+		"business_space_ids":["crypto_market"],
 		"admin":{"action":"created","users":0,"secrets":0,"hosts":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},
 		"admin_state":"completed",
 		"login_api":"valid",
@@ -181,32 +181,32 @@ func (f *fakeDatasetActivationAPI) ActivateDataset(_ context.Context, req *stora
 func TestSetupInitActivatesReadyDatasets(t *testing.T) {
 	api := &fakeDatasetActivationAPI{
 		datasets: map[string]*storagepb.Dataset{
-			"crypto/spot_kline_1h": {SpaceId: "crypto", DatasetId: "spot_kline_1h", Status: "disabled", Revision: 7},
+			"crypto_market/spot_kline_1h": {SpaceId: "crypto_market", DatasetId: "spot_kline_1h", Status: "disabled", Revision: 7},
 		},
 		checks: map[string]*storagepb.CheckDatasetActivationRsp{
-			"crypto/spot_kline_1h": {RetInfo: storageOK(), DatasetRevision: 7, Ready: true},
+			"crypto_market/spot_kline_1h": {RetInfo: storageOK(), DatasetRevision: 7, Ready: true},
 		},
 	}
 	result, err := activateSetupDatasets(context.Background(), api, &storagepb.AuthInfo{}, []seedDataset{{
-		SpaceID: "crypto", DatasetID: "spot_kline_1h",
+		SpaceID: "crypto_market", DatasetID: "spot_kline_1h",
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, setupDatasetActivationSummary{Total: 1, Activated: 1}, result)
-	assert.Equal(t, []string{"crypto/spot_kline_1h"}, api.activated)
+	assert.Equal(t, []string{"crypto_market/spot_kline_1h"}, api.activated)
 }
 
 func TestSetupInitLeavesActiveDatasetsUnchanged(t *testing.T) {
 	api := &fakeDatasetActivationAPI{
 		datasets: map[string]*storagepb.Dataset{
-			"crypto/spot_kline_1h": {
-				SpaceId: "crypto", DatasetId: "spot_kline_1h",
+			"crypto_market/spot_kline_1h": {
+				SpaceId: "crypto_market", DatasetId: "spot_kline_1h",
 				Status: "active", BindingLocked: true, Revision: 8,
 			},
 		},
 		checks: map[string]*storagepb.CheckDatasetActivationRsp{},
 	}
 	result, err := activateSetupDatasets(context.Background(), api, &storagepb.AuthInfo{}, []seedDataset{{
-		SpaceID: "crypto", DatasetID: "spot_kline_1h",
+		SpaceID: "crypto_market", DatasetID: "spot_kline_1h",
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, setupDatasetActivationSummary{Total: 1, Unchanged: 1}, result)
@@ -216,10 +216,10 @@ func TestSetupInitLeavesActiveDatasetsUnchanged(t *testing.T) {
 func TestSetupInitReportsDatasetReadinessChecks(t *testing.T) {
 	api := &fakeDatasetActivationAPI{
 		datasets: map[string]*storagepb.Dataset{
-			"crypto/spot_kline_1h": {SpaceId: "crypto", DatasetId: "spot_kline_1h", Status: "disabled", Revision: 7},
+			"crypto_market/spot_kline_1h": {SpaceId: "crypto_market", DatasetId: "spot_kline_1h", Status: "disabled", Revision: 7},
 		},
 		checks: map[string]*storagepb.CheckDatasetActivationRsp{
-			"crypto/spot_kline_1h": {
+			"crypto_market/spot_kline_1h": {
 				RetInfo: storageOK(), DatasetRevision: 7, Ready: false,
 				Checks: []*storagepb.DatasetActivationCheck{{
 					CheckId: "data_node_ready", Ready: false, Summary: "storage-node-0 unavailable",
@@ -228,7 +228,7 @@ func TestSetupInitReportsDatasetReadinessChecks(t *testing.T) {
 		},
 	}
 	_, err := activateSetupDatasets(context.Background(), api, &storagepb.AuthInfo{}, []seedDataset{{
-		SpaceID: "crypto", DatasetID: "spot_kline_1h",
+		SpaceID: "crypto_market", DatasetID: "spot_kline_1h",
 	}})
 	require.ErrorContains(t, err, "data_node_ready=not_ready(storage-node-0 unavailable)")
 	assert.Empty(t, api.activated)
@@ -236,9 +236,9 @@ func TestSetupInitReportsDatasetReadinessChecks(t *testing.T) {
 
 func TestSetupInitRejectsMissingMetadataDependencies(t *testing.T) {
 	err := validateSetupMetadataDependencies(metadataSeed{
-		Spaces: []seedSpace{{SpaceID: "crypto"}},
+		Spaces: []seedSpace{{SpaceID: "crypto_market"}},
 		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "missing",
+			SpaceID: "crypto_market", DatasetID: "kline", DataSourceID: "missing",
 		}},
 	})
 	require.ErrorContains(t, err, `undefined data_source "missing"`)
@@ -246,10 +246,10 @@ func TestSetupInitRejectsMissingMetadataDependencies(t *testing.T) {
 
 func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 	base := metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Spaces:      []seedSpace{{SpaceID: "crypto_market"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto_market", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
+			SpaceID: "crypto_market", DatasetID: "kline", DataSourceID: "market",
 			DataKind: "time_series", Freqs: []string{"1H"},
 		}},
 	}
@@ -261,7 +261,7 @@ func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 		{
 			name: "field",
 			column: seedDatasetColumn{
-				SpaceID: "crypto", DatasetID: "kline", ColumnName: "close",
+				SpaceID: "crypto_market", DatasetID: "kline", ColumnName: "close",
 				OriginType: "field", OriginID: "missing",
 			},
 			want: `references undefined field "missing"`,
@@ -269,7 +269,7 @@ func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 		{
 			name: "factor",
 			column: seedDatasetColumn{
-				SpaceID: "crypto", DatasetID: "kline", ColumnName: "ma",
+				SpaceID: "crypto_market", DatasetID: "kline", ColumnName: "ma",
 				OriginType: "factor", OriginID: "missing",
 			},
 			want: `references undefined factor "missing"`,
@@ -287,40 +287,40 @@ func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 
 func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 	base := metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Spaces:      []seedSpace{{SpaceID: "crypto_market"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto_market", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
+			SpaceID: "crypto_market", DatasetID: "kline", DataSourceID: "market",
 			DataKind: "time_series", Freqs: []string{"1H"},
 		}},
-		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
+		Fields: []seedField{{SpaceID: "crypto_market", FieldID: "close"}},
 		DatasetColumns: []seedDatasetColumn{
-			{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close"},
-			{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close"},
+			{SpaceID: "crypto_market", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close"},
+			{SpaceID: "crypto_market", DatasetID: "kline", ColumnName: "close", OriginType: "field", OriginID: "close"},
 		},
 	}
 	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata dataset_column")
 
 	base.DatasetColumns = base.DatasetColumns[:1]
-	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")}
+	base.Views = []seedView{testCanonicalTimeSeriesView("crypto_market", "kline", "kline", "1H")}
 	base.ViewColumns = []seedViewColumn{
-		{SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
-		{SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
+		{SpaceID: "crypto_market", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
+		{SpaceID: "crypto_market", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
 	}
 	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata view_column")
 }
 
 func TestSetupInitRejectsMissingViewColumnOrigin(t *testing.T) {
 	err := validateSetupMetadataDependencies(metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Spaces:      []seedSpace{{SpaceID: "crypto_market"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto_market", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
+			SpaceID: "crypto_market", DatasetID: "kline", DataSourceID: "market",
 			DataKind: "time_series", Freqs: []string{"1H"},
 		}},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto_market", "kline", "kline", "1H")},
 		ViewColumns: []seedViewColumn{{
-			SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close",
+			SpaceID: "crypto_market", ViewID: "kline", ColumnName: "kline.close",
 			OriginType: "dataset_column", OriginID: "kline.close",
 		}},
 	})
@@ -329,20 +329,20 @@ func TestSetupInitRejectsMissingViewColumnOrigin(t *testing.T) {
 
 func TestSetupInitRejectsViewColumnFromUndeclaredDataset(t *testing.T) {
 	err := validateSetupMetadataDependencies(metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Spaces:      []seedSpace{{SpaceID: "crypto_market"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto_market", DataSourceID: "market"}},
 		Datasets: []seedDataset{
-			{SpaceID: "crypto", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
-			{SpaceID: "crypto", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
+			{SpaceID: "crypto_market", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
+			{SpaceID: "crypto_market", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
 		},
-		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
+		Fields: []seedField{{SpaceID: "crypto_market", FieldID: "close"}},
 		DatasetColumns: []seedDatasetColumn{
-			{SpaceID: "crypto", DatasetID: "spot", ColumnName: "close", OriginType: "field", OriginID: "close"},
-			{SpaceID: "crypto", DatasetID: "perpetual", ColumnName: "close", OriginType: "field", OriginID: "close"},
+			{SpaceID: "crypto_market", DatasetID: "spot", ColumnName: "close", OriginType: "field", OriginID: "close"},
+			{SpaceID: "crypto_market", DatasetID: "perpetual", ColumnName: "close", OriginType: "field", OriginID: "close"},
 		},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "spot_view", "spot", "1H")},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto_market", "spot_view", "spot", "1H")},
 		ViewColumns: []seedViewColumn{{
-			SpaceID: "crypto", ViewID: "spot_view", ColumnName: "perpetual.close",
+			SpaceID: "crypto_market", ViewID: "spot_view", ColumnName: "perpetual.close",
 			OriginType: "dataset_column", OriginID: "perpetual.close",
 		}},
 	})
@@ -351,15 +351,15 @@ func TestSetupInitRejectsViewColumnFromUndeclaredDataset(t *testing.T) {
 
 func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 	base := metadataSeed{
-		Spaces:      []seedSpace{{SpaceID: "crypto"}},
-		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
+		Spaces:      []seedSpace{{SpaceID: "crypto_market"}},
+		DataSources: []seedDataSource{{SpaceID: "crypto_market", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
-			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
+			SpaceID: "crypto_market", DatasetID: "kline", DataSourceID: "market",
 			DataKind: "time_series", Freqs: []string{"1H"},
 		}},
 	}
 	canonical := seedView{
-		SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
+		SpaceID: "crypto_market", ViewID: "kline_view", PrimaryDatasetID: "kline",
 		DatasetIDs: []string{"kline"},
 		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
 		FilterJSON: `{"freq":"1H"}`,

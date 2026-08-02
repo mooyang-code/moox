@@ -100,14 +100,12 @@ func domainFromBaseURL(rawURL string) (string, error) {
 	return parsed.Host, nil
 }
 
-// GetDirect sends Binance requests through the platform DNS resolver. SCF
-// invocations are short-lived, so maintaining a separate DNS/IP probe cache
-// adds cost and can make the first request noisier without improving routing.
+// GetDirect sends a normal HTTPS request using system DNS.
 func (c *Client) GetDirect(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
-	return c.HTTPClient.GetWithIP(ctx, domain, path, query, result, "")
+	return c.HTTPClient.Get(ctx, domain, path, query, result)
 }
 
 // GetDirectStream is the streaming counterpart of GetDirect.
 func (c *Client) GetDirectStream(ctx context.Context, domain, path string, query url.Values, consume func(io.Reader) error) error {
-	return c.HTTPClient.GetWithIPStream(ctx, domain, path, query, "", consume)
+	return c.HTTPClient.GetStream(ctx, domain, path, query, consume)
 }
