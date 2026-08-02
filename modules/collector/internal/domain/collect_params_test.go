@@ -42,6 +42,31 @@ func TestParseCollectParamsAcceptsSymbolWithoutSourceDataset(t *testing.T) {
 	assert.Equal(t, []string{"30m"}, params.Collector.Intervals)
 }
 
+func TestParseCollectParamsAcceptsExchangeSymbolSnapshot(t *testing.T) {
+	params, err := ParseCollectParams(`{
+		"provider":"binance",
+		"market_type":"spot",
+		"symbol_source":"exchange",
+		"target_dataset_id":"symbols"
+	}`, "", "", "symbol")
+	require.NoError(t, err)
+	require.NoError(t, params.Validate())
+	assert.Equal(t, "none", params.Source.Kind)
+	assert.Equal(t, "1h", params.Frequency)
+}
+
+func TestCollectParamsRejectsSymbolsForExchangeSnapshot(t *testing.T) {
+	params, err := ParseCollectParams(`{
+		"provider":"binance",
+		"market_type":"spot",
+		"symbol_source":"exchange",
+		"symbols":["BTC-USDT"],
+		"target_dataset_id":"symbols"
+	}`, "", "", "symbol")
+	require.NoError(t, err)
+	require.ErrorContains(t, params.Validate(), "symbols must be empty")
+}
+
 func TestParseCollectParamsDefaultsSymbolFrequencyToHourly(t *testing.T) {
 	params, err := ParseCollectParams(`{
 		"provider":"binance",

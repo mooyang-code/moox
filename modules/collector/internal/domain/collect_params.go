@@ -90,7 +90,7 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	switch p.SymbolSource {
 	case "dataset":
 		sourceKind = "dataset_subjects"
-	case "manual":
+	case "manual", "exchange":
 		sourceKind = "none"
 	}
 	p.Source = CollectSource{Kind: sourceKind, DatasetID: p.SymbolDatasetID}
@@ -148,8 +148,17 @@ func (p *CollectParams) Validate() error {
 		if p.Source.Kind != "none" {
 			return fmt.Errorf("symbol source.kind must be none")
 		}
-		if strings.EqualFold(p.SymbolSource, "manual") && len(p.Symbols) == 0 {
-			return fmt.Errorf("symbols is required for manual symbol source")
+		switch p.SymbolSource {
+		case "manual":
+			if len(p.Symbols) == 0 {
+				return fmt.Errorf("symbols is required for manual symbol source")
+			}
+		case "exchange":
+			if len(p.Symbols) != 0 {
+				return fmt.Errorf("symbols must be empty for exchange symbol source")
+			}
+		default:
+			return fmt.Errorf("symbol_source must be manual or exchange for symbol task")
 		}
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)

@@ -628,12 +628,21 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 		if len(frequencies) == 0 {
 			frequencies = []string{"1h"}
 		}
-		allowlist := manualSymbols(rule.CollectParams)
-		if len(allowlist) == 0 {
-			return nil, nil, fmt.Errorf("symbol task requires an explicit symbols allowlist")
-		}
-		if len(allowlist) > MaxSymbolTaskSymbols {
-			return nil, nil, fmt.Errorf("symbol task contains %d symbols; maximum is %d", len(allowlist), MaxSymbolTaskSymbols)
+		var allowlist []string
+		switch params.SymbolSource {
+		case "manual":
+			allowlist = manualSymbols(rule.CollectParams)
+			if len(allowlist) == 0 {
+				return nil, nil, fmt.Errorf("manual symbol task requires an explicit symbols allowlist")
+			}
+			if len(allowlist) > MaxSymbolTaskSymbols {
+				return nil, nil, fmt.Errorf("manual symbol task contains %d symbols; maximum is %d", len(allowlist), MaxSymbolTaskSymbols)
+			}
+		case "exchange":
+			// An empty allowlist instructs the Binance adapter to fetch the full
+			// active USDT spot snapshot in one SymbolTask.
+		default:
+			return nil, nil, fmt.Errorf("unsupported symbol_source %q", params.SymbolSource)
 		}
 		return []domain.CollectionItem{{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: "symbol", DatasetID: targetDataset, Allowlist: allowlist}}, frequencies[:1], nil
 	}

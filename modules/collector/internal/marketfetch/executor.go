@@ -37,12 +37,10 @@ const (
 	// and performs one aggregate Storage write.
 	MaxRealtimeItems = 64
 	MaxRealtimeRows  = 3
-	// Symbol metadata is intentionally an explicit, small manual task. The
-	// Storage metadata endpoint refreshes its snapshot per subject, so a full
-	// exchange-wide symbol dump does not belong in a 10-second SCF invocation.
-	// Metadata registration is intentionally serial against Storage. Keep the
-	// manual symbol task bounded so it can complete inside the fixed 10-second
-	// SCF budget even when Storage is briefly slow.
+	// A manual Symbol task is deliberately kept small. Full exchange snapshots
+	// are represented by one empty-allowlist item and use their own bounded SCF
+	// invocation. Metadata registration remains serial because Storage uses
+	// SQLite-backed snapshot publication.
 	MaxSymbolTaskSymbols = 20
 )
 
@@ -378,7 +376,8 @@ func compactResultOutcomes(results []domain.ItemResult) string {
 
 // registerSymbols deliberately stays serial because each metadata write
 // refreshes the Storage metadata snapshot and the backing store is SQLite.
-// The scheduler limits this manual task to a small explicit allowlist.
+// Manual symbol tasks are limited to a small explicit allowlist; exchange
+// snapshots invoke this same path once per hourly refresh.
 func registerSymbols(ctx context.Context, storage Storage, registrations []*storagepb.RegisterDataSubjectReq) error {
 	if len(registrations) == 0 {
 		return nil
