@@ -47,10 +47,6 @@ type Options struct {
 	HealthAuthVersion      string
 	HealthAuthAccessKey    string
 	HealthAuthSecretKey    string
-	GatewayControlURL      string
-	GatewayControlKey      []byte
-	GatewayServiceKey      []byte
-	GatewayCABundle        []byte
 	TLSMode                TLSMode
 }
 
@@ -510,25 +506,13 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	args := []string{
 		"--profile", "storage", "--package-only", "--archive", archive,
 		"--target", "localhost", "--dir", "~/moox/storage", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
-		"--public-host", opts.PublicHost, "--node-id", storageNodeID(opts.NodeID), "--gateway-control-url", storageGatewayControlURL(opts),
+		"--public-host", opts.PublicHost, "--node-id", storageNodeID(opts.NodeID), "--gateway-control-url", "http://127.0.0.1:11000",
 	}
 	if skipBuild {
 		args = append(args, "--skip-build")
 	}
 	if opts.UseControlGateway {
 		args = append(args, "--no-gateway")
-	} else {
-		gatewayFiles, err := writeStorageGatewayInputs(opts)
-		if err != nil {
-			_ = os.Remove(archive)
-			return "", err
-		}
-		defer os.RemoveAll(filepath.Dir(gatewayFiles.controlKey))
-		args = append(args,
-			"--gateway-control-key-file", gatewayFiles.controlKey,
-			"--gateway-service-key-file", gatewayFiles.serviceKey,
-			"--gateway-ca-bundle", gatewayFiles.caBundle,
-		)
 	}
 	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"), args...)
 	command.Dir = root
@@ -563,48 +547,6 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	return archive, nil
-}
-
-type storageGatewayInputFiles struct {
-	controlKey string
-	serviceKey string
-	caBundle   string
-}
-
-func storageGatewayControlURL(opts Options) string {
-	if value := strings.TrimSpace(opts.GatewayControlURL); value != "" {
-		return value
-	}
-	return "http://127.0.0.1:11000"
-}
-
-func writeStorageGatewayInputs(opts Options) (storageGatewayInputFiles, error) {
-	if strings.TrimSpace(opts.GatewayControlURL) == "" || len(opts.GatewayControlKey) == 0 || len(opts.GatewayServiceKey) == 0 || len(opts.GatewayCABundle) == 0 {
-		return storageGatewayInputFiles{}, fmt.Errorf("storage package requires control gateway credentials")
-	}
-	dir, err := os.MkdirTemp("", "moox-storage-gateway-*")
-	if err != nil {
-		return storageGatewayInputFiles{}, err
-	}
-	files := storageGatewayInputFiles{
-		controlKey: filepath.Join(dir, "gateway-control.key"),
-		serviceKey: filepath.Join(dir, "gateway-service.key"),
-		caBundle:   filepath.Join(dir, "gateway-ca.pem"),
-	}
-	for name, input := range map[string]struct {
-		content []byte
-		mode    fs.FileMode
-	}{
-		files.controlKey: {content: opts.GatewayControlKey, mode: 0o600},
-		files.serviceKey: {content: opts.GatewayServiceKey, mode: 0o600},
-		files.caBundle:   {content: opts.GatewayCABundle, mode: 0o644},
-	} {
-		if err := os.WriteFile(name, input.content, input.mode); err != nil {
-			_ = os.RemoveAll(dir)
-			return storageGatewayInputFiles{}, err
-		}
-	}
-	return files, nil
 }
 
 func storageNodeID(nodeID string) string {
