@@ -18,7 +18,6 @@ type BuildSCFPackageOptions struct {
 	BinaryPath               string
 	ConfigDir                string
 	OutPath                  string
-	CLSTopicID               string
 	StoragePrimaryAuthSecret string
 }
 
@@ -28,10 +27,9 @@ type BuildSCFPackageResult struct {
 	Entries []string
 }
 
-// BuildSCFPackage creates a zip containing main, config.yaml, trpc_go.yaml,
-// and nested sources/ entries. When example_trpc_go.yaml is present, it is
-// packaged as trpc_go.yaml so developer-local ignored configs do not leak into
-// SCF packages.
+// BuildSCFPackage creates a zip containing only the short-lived runtime binary,
+// configuration, and source definitions. CLS credentials are injected as SCF
+// environment variables and never rendered into the package.
 func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error) {
 	if opts.BinaryPath == "" {
 		return nil, fmt.Errorf("binary path is required")
@@ -55,7 +53,6 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	defer zw.Close()
 
 	var entries []string
-	trpcConfigured := false
 	addFile := func(src, dst string) error {
 		if err := addZipFile(zw, src, dst); err != nil {
 			return err
@@ -71,31 +68,6 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	configPath := filepath.Join(opts.ConfigDir, "config.yaml")
 	if err := addFile(configPath, "config.yaml"); err != nil {
 		return nil, err
-	}
-
-	trpcPath := filepath.Join(opts.ConfigDir, "example_trpc_go.yaml")
-	if _, err := os.Stat(trpcPath); err == nil {
-		if err := addServerlessTRPCConfig(zw, trpcPath, opts.CLSTopicID); err != nil {
-			return nil, err
-		}
-		entries = append(entries, "trpc_go.yaml")
-		trpcConfigured = true
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	} else {
-		trpcPath = filepath.Join(opts.ConfigDir, "trpc_go.yaml")
-		if _, err := os.Stat(trpcPath); err == nil {
-			if err := addServerlessTRPCConfig(zw, trpcPath, opts.CLSTopicID); err != nil {
-				return nil, err
-			}
-			entries = append(entries, "trpc_go.yaml")
-			trpcConfigured = true
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
-	}
-	if !trpcConfigured {
-		return nil, fmt.Errorf("SCF package requires example_trpc_go.yaml or trpc_go.yaml")
 	}
 
 	sourcesDir := filepath.Join(opts.ConfigDir, "sources")
@@ -195,84 +167,6 @@ func mappingValue(node *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
-}
-
-// addServerlessTRPCConfig installs the one centralized CLS writer. Native SCF
-// logging is deliberately not used: it creates a separate topic per region and
-// turns otherwise short-lived invocations into an unnecessary storage bill.
-func addServerlessTRPCConfig(zw *zip.Writer, sourcePath, clsTopicID string) error {
-	source, err := os.ReadFile(sourcePath)
-	if err != nil {
-		return err
-	}
-	rendered, err := renderTRPCConfigForServerless(source, clsTopicID)
-	if err != nil {
-		return fmt.Errorf("render SCF trpc_go.yaml: %w", err)
-	}
-	header := &zip.FileHeader{Name: "trpc_go.yaml", Method: zip.Deflate}
-	header.SetMode(0o644)
-	w, err := zw.CreateHeader(header)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(rendered)
-	return err
-}
-
-func renderTRPCConfigForServerless(source []byte, clsTopicID string) ([]byte, error) {
-	if strings.TrimSpace(clsTopicID) == "" {
-		return nil, fmt.Errorf("CLS topic id is required for serverless logs")
-	}
-	var document map[string]any
-	if err := yaml.Unmarshal(source, &document); err != nil {
-		return nil, err
-	}
-	plugins, _ := document["plugins"].(map[string]any)
-	if plugins == nil {
-		plugins = make(map[string]any)
-		document["plugins"] = plugins
-	}
-	logs, _ := plugins["log"].(map[string]any)
-	if logs == nil {
-		logs = make(map[string]any)
-		plugins["log"] = logs
-	}
-	// Do not keep a console writer here. With native SCF CLS disabled it would
-	// create a second platform log stream. The short-lived fetcher emits one
-	// start and one result line per symbol, so use the centralized CLS writer
-	// at info level and batch those lines before the invocation returns.
-	logs["default"] = []any{map[string]any{
-		"writer": "cls",
-		"level":  "info",
-		"remote_config": map[string]any{
-			"topic_id":        strings.TrimSpace(clsTopicID),
-			"host":            "${MOOX_CLS_HOST}",
-			"secret_id":       "${MOOX_CLS_SECRET_ID}",
-			"secret_key":      "${MOOX_CLS_SECRET_KEY}",
-			"max_block_sec":   0,
-			"max_batch_count": 100,
-			// The CLS SDK rejects values below 100ms and falls back to 2s. A
-			// short-lived function uses the legal minimum and waits after its
-			// result so the async writer can hand the final partial batch to the
-			// producer.
-			"linger_ms": 100,
-		},
-	}}
-	if server, ok := document["server"].(map[string]any); ok {
-		if services, ok := server["service"].([]any); ok {
-			filteredServices := make([]any, 0, len(services))
-			for _, service := range services {
-				config, _ := service.(map[string]any)
-				name, _ := config["name"].(string)
-				if strings.Contains(name, ".scf_observability.") {
-					continue
-				}
-				filteredServices = append(filteredServices, service)
-			}
-			server["service"] = filteredServices
-		}
-	}
-	return yaml.Marshal(document)
 }
 
 func addZipFile(zw *zip.Writer, src, dst string) error {

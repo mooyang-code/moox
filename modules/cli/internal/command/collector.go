@@ -43,6 +43,7 @@ type collectorPackageOptions struct {
 	Version                  string
 	Out                      string
 	ConfigDir                string
+	Entrypoint               string
 	CLSLogsetID              string
 	CLSTopicID               string
 	StoragePrimaryAuthSecret string
@@ -413,14 +414,14 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 	}
 	defer os.RemoveAll(filepath.Dir(binaryPath))
 
-	if err := buildCollectorLinuxBinary(ctx, collectorRoot, binaryPath, version); err != nil {
+	entrypoint := defaultFlag(opts.Entrypoint, "crypto_market")
+	if err := buildCollectorLinuxBinary(ctx, collectorRoot, binaryPath, version, entrypoint); err != nil {
 		return nil, err
 	}
 	return collectorpackager.BuildSCFPackage(collectorpackager.BuildSCFPackageOptions{
 		BinaryPath:               binaryPath,
 		ConfigDir:                configDir,
 		OutPath:                  outPath,
-		CLSTopicID:               opts.CLSTopicID,
 		StoragePrimaryAuthSecret: firstNonEmpty(opts.StoragePrimaryAuthSecret, os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")),
 	})
 }
@@ -1735,8 +1736,11 @@ func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKe
 	return client
 }
 
-func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version string) error {
-	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-s -w -X main.Version=%s", version), "-o", outPath, "./cmd/scf")
+func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {
+	if entrypoint != "crypto_market" {
+		return fmt.Errorf("unsupported collector SCF entrypoint %q", entrypoint)
+	}
+	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-s -w -X main.Version=%s", version), "-o", outPath, "./cmd/scf/"+entrypoint)
 	cmd.Dir = collectorRoot
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
 	output, err := cmd.CombinedOutput()
