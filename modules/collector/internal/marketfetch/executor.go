@@ -468,14 +468,36 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 		if err != nil {
 			return failureResult(item, classifyError(err), errorType(err), err), nil, nil, nil
 		}
-		register, err := binance.BuildSymbolRegisterRequests(req.SpaceID, item.DatasetID, instType, symbols)
+		shardRows, shardSymbols, err := selectSymbolSnapshotShard(rows, symbols, item.SnapshotShardIndex, item.SnapshotShardCount)
+		if err != nil {
+			return failureResult(item, domain.ItemOutcomeInvalid, "symbol_shard", err), nil, nil, nil
+		}
+		register, err := binance.BuildSymbolRegisterRequests(req.SpaceID, item.DatasetID, instType, shardSymbols)
 		if err != nil {
 			return failureResult(item, domain.ItemOutcomeInvalid, "metadata", err), nil, nil, nil
 		}
-		return successResult(item), rows, register, symbols
+		if item.SnapshotShardCount > 0 && item.SnapshotShardIndex != 0 {
+			symbols = nil
+		}
+		return successResult(item), shardRows, register, symbols
 	default:
 		return failureResult(item, domain.ItemOutcomeInvalid, "data_type", fmt.Errorf("unsupported data_type %q", item.DataType)), nil, nil, nil
 	}
+}
+
+func selectSymbolSnapshotShard(rows []*storagepb.RowFieldUpsert, symbols []*exchange.SymbolInfo, index, count int) ([]*storagepb.RowFieldUpsert, []*exchange.SymbolInfo, error) {
+	if count <= 0 {
+		return rows, symbols, nil
+	}
+	if index < 0 || index >= count {
+		return nil, nil, fmt.Errorf("symbol snapshot shard %d is outside [0,%d)", index, count)
+	}
+	if len(rows) != len(symbols) {
+		return nil, nil, fmt.Errorf("symbol snapshot rows (%d) do not match symbols (%d)", len(rows), len(symbols))
+	}
+	start := len(symbols) * index / count
+	end := len(symbols) * (index + 1) / count
+	return rows[start:end], symbols[start:end], nil
 }
 
 func isKlineItem(dataType string) bool {

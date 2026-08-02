@@ -59,6 +59,12 @@ type Scheduler struct {
 	invokeSem         chan struct{}
 }
 
+// fullSymbolSnapshotShards keeps each SCF's SQLite metadata registration
+// small while still sourcing the complete exchange snapshot. Binance's active
+// USDT catalogue is currently well below 640 symbols, so each shard carries
+// at most about 20 subjects.
+const fullSymbolSnapshotShards = 32
+
 func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s == nil || s.Rules == nil || s.Batches == nil || s.Invoker == nil {
 		return fmt.Errorf("market fetch scheduler is not initialized")
@@ -143,6 +149,9 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			}
 			batchItems := append([]domain.CollectionItem(nil), items...)
 			batchSize := s.realtimeBatchSize(len(batchItems), nodes)
+			if strings.EqualFold(rule.DataType, "symbol") {
+				batchSize = 1
+			}
 			for start, shard := 0, 0; start < len(batchItems); start, shard = start+batchSize, shard+1 {
 				end := start + batchSize
 				if end > len(batchItems) {
@@ -643,6 +652,13 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 			// active USDT spot snapshot in one SymbolTask.
 		default:
 			return nil, nil, fmt.Errorf("unsupported symbol_source %q", params.SymbolSource)
+		}
+		if params.SymbolSource == "exchange" {
+			items := make([]domain.CollectionItem, fullSymbolSnapshotShards)
+			for shard := range items {
+				items[shard] = domain.CollectionItem{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: "symbol", DatasetID: targetDataset, SnapshotShardIndex: shard, SnapshotShardCount: fullSymbolSnapshotShards}
+			}
+			return items, frequencies[:1], nil
 		}
 		return []domain.CollectionItem{{SubjectID: targetDataset, Provider: provider, MarketType: marketType, DataType: "symbol", DatasetID: targetDataset, Allowlist: allowlist}}, frequencies[:1], nil
 	}

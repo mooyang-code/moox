@@ -79,9 +79,12 @@ func TestExpandRuleUsesEmptyAllowlistForExchangeSymbolSnapshot(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"1h"}, frequencies)
-	if assert.Len(t, items, 1) {
+	if assert.Len(t, items, fullSymbolSnapshotShards) {
 		assert.Empty(t, items[0].Allowlist)
 		assert.Equal(t, "binance_spot_symbols", items[0].DatasetID)
+		assert.Equal(t, 0, items[0].SnapshotShardIndex)
+		assert.Equal(t, fullSymbolSnapshotShards, items[0].SnapshotShardCount)
+		assert.Equal(t, fullSymbolSnapshotShards-1, items[len(items)-1].SnapshotShardIndex)
 	}
 }
 

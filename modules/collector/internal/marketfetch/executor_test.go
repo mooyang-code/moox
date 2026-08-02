@@ -168,6 +168,15 @@ func TestSymbolSnapshotTimeoutUsesDedicatedFullSnapshotSetting(t *testing.T) {
 	assert.Equal(t, 4500*time.Millisecond, requestTimeout("MOOX_FETCH_SYMBOL_SNAPSHOT_TIMEOUT_MS", 5000))
 }
 
+func TestSelectSymbolSnapshotShardKeepsRowsAndSymbolsAligned(t *testing.T) {
+	rows := []*storagepb.RowFieldUpsert{{}, {}, {}, {}, {}}
+	symbols := []*exchange.SymbolInfo{{Symbol: "A"}, {Symbol: "B"}, {Symbol: "C"}, {Symbol: "D"}, {Symbol: "E"}}
+	shardRows, shardSymbols, err := selectSymbolSnapshotShard(rows, symbols, 1, 3)
+	require.NoError(t, err)
+	assert.Len(t, shardRows, 2)
+	assert.Equal(t, []string{"B", "C"}, []string{shardSymbols[0].Symbol, shardSymbols[1].Symbol})
+}
+
 func TestHandlerRejectsRequestForAnotherSpaceBeforeStorage(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	handler := NewHandler()
