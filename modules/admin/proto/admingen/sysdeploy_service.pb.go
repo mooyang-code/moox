@@ -23,7 +23,7 @@ const (
 )
 
 // SysDeploy 管理系统服务部署信息。
-// 管理台通过 /api/admin/sysdeploy/{method} 访问；后台/SCF 运行时通过 keepalive payload 获取 active 部署信息。
+// 管理台通过 /api/admin/sysdeploy/{method} 访问；后台服务通过网关读取 active 部署信息。
 type ServiceDeployment struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
