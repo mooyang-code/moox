@@ -62,6 +62,7 @@ data.space_id 必须与 MOOX_SPACE_ID=crypto_market 相等。Storage target 只�
 |---|---:|---|
 | MOOX_CLS_ENABLED | 是 | true 启用，其他值为 Noop。 |
 | MOOX_CLS_ENDPOINT | 启用时 | CLS API 上传域名。 |
+| MOOX_CLS_LOGSET_ID | 启用时 | 初始化阶段创建并只读解析出的 Logset ID；用于部署核验和诊断。 |
 | MOOX_CLS_TOPIC_ID | 启用时 | 集中 Topic ID。 |
 | MOOX_CLS_SECRET_ID / MOOX_CLS_SECRET_KEY | 启用时 | 发布 CLI 注入，永不写入 zip。 |
 | MOOX_CLS_TIMEOUT_MS | 否 | 默认 3000，范围 100..3000。 |
@@ -342,12 +343,13 @@ collectorFunctionEnvironment 固定注入：
 
     MOOX_CLS_ENABLED=true
     MOOX_CLS_ENDPOINT=<clsprepare.Host>
+    MOOX_CLS_LOGSET_ID=<resolved logset>
     MOOX_CLS_TOPIC_ID=<resolved topic>
-    MOOX_CLS_TIMEOUT_MS=800
+    MOOX_CLS_TIMEOUT_MS=3000
     MOOX_CLS_SECRET_ID=<resolved id>
     MOOX_CLS_SECRET_KEY=<resolved key>
 
-将其加入 managed map，拒绝 --env 覆盖，删除 MOOX_CLS_HOST。保留从 dedicated CLS account 解析 Topic/密钥的控制面流程，只改注入位置。
+将其加入 managed map，拒绝 --env 覆盖，删除 MOOX_CLS_HOST。发布只读解析初始化阶段已有的 CLS Logset/Topic；COS bucket 仍由 CloudNode 的已注册云账户提供给部署 API，SCF 运行时不使用 COS，因此不注入额外 bucket 或云凭据。
 
 - [ ] **Step 6: 写 package/publish 回归测试**
 

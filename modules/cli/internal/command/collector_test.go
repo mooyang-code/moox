@@ -370,6 +370,7 @@ func TestBuildCollectorCreateNodeItemUsesManagedShortLivedConfiguration(t *testi
 		t.Fatalf("service auth env = %#v", item.Environment)
 	}
 	assert.Equal(t, "ap-guangzhou.cls.tencentyun.com", item.Environment["MOOX_CLS_ENDPOINT"])
+	assert.Equal(t, "logset-unified", item.Environment["MOOX_CLS_LOGSET_ID"])
 	assert.Equal(t, "topic-unified", item.Environment["MOOX_CLS_TOPIC_ID"])
 	assert.Equal(t, "cls-id", item.Environment["MOOX_CLS_SECRET_ID"])
 	assert.Equal(t, "cls-key", item.Environment["MOOX_CLS_SECRET_KEY"])

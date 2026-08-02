@@ -1440,6 +1440,10 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	defaultCLSSecretID, defaultCLSSecretKey := collectorCLSCredentials()
 	setDefaultEnv(env, "MOOX_CLS_ENABLED", "true")
 	setDefaultEnv(env, "MOOX_CLS_ENDPOINT", firstNonEmpty(opts.CLSHost, os.Getenv("MOOX_CLS_ENDPOINT"), clsprepare.Host))
+	// The logset is not needed by the CLS write API, but carrying the resolved
+	// initialization resource makes each deployed function diagnosable without
+	// baking infrastructure IDs into the SCF zip.
+	setDefaultEnv(env, "MOOX_CLS_LOGSET_ID", opts.CLSLogsetID)
 	setDefaultEnv(env, "MOOX_CLS_TOPIC_ID", firstNonEmpty(opts.CLSTopicID, os.Getenv("MOOX_CLS_TOPIC_ID")))
 	setDefaultEnv(env, "MOOX_CLS_TIMEOUT_MS", strconv.Itoa(setupconfig.SCFCLSReserveMilliseconds))
 	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", firstNonEmpty(opts.CLSSecretID, defaultCLSSecretID))
@@ -1477,6 +1481,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_CLS_SECRET_KEY":               {},
 		"MOOX_CLS_ENABLED":                  {},
 		"MOOX_CLS_ENDPOINT":                 {},
+		"MOOX_CLS_LOGSET_ID":                {},
 		"MOOX_CLS_TOPIC_ID":                 {},
 		"MOOX_CLS_TIMEOUT_MS":               {},
 		"TENCENTCLOUD_SECRET_ID":            {},
