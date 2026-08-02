@@ -1761,8 +1761,11 @@ start_collector() {
   init_collector_schema
   gateway_service_env_for collector
   runtime_identity_env moox_collector "${ROOT}/collector/config/app.yaml"
+  local storage_gateway_node_id
+  storage_gateway_node_id="$(awk -F: '/^[[:space:]]*gateway_node_id:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
+  storage_gateway_node_id="${storage_gateway_node_id:-${MOOX_GATEWAY_NODE_ID}}"
   start_service "collector" "${ROOT}/collector" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${storage_gateway_node_id}" "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
 }
 
 start_factor() {

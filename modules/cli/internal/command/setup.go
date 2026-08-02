@@ -511,6 +511,9 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, host.Name, host.Address); err != nil {
 			return err
 		}
+		if err = configureRemoteCollectorStorageTarget(ctx, control, host.Name, host.Address); err != nil {
+			return err
+		}
 		if err = ensureSetupStorageGatewayFirewall(ctx, snapshot, host.Address); err != nil {
 			return err
 		}
@@ -518,12 +521,47 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	return restartStorageClients(ctx, control)
 }
 
+// configureRemoteCollectorStorageTarget keeps the Collector planner on the
+// same native Storage gateway that short-lived SCF invocations use. The
+// control host has no local Storage when Storage is deployed remotely.
+func configureRemoteCollectorStorageTarget(ctx context.Context, control setupssh.Client, nodeID, host string) error {
+	if control == nil || strings.TrimSpace(nodeID) == "" || net.ParseIP(strings.TrimSpace(host)) == nil {
+		return fmt.Errorf("collector_storage_target_prepare_failed")
+	}
+	target := "ip://" + net.JoinHostPort(host, "11003")
+	_, err := control.Run(ctx, []string{
+		"sh", "-lc", `set -eu
+target="$1"
+config="$HOME/moox/prod/collector/config/app.yaml"
+test -f "$config"
+python3 - "$config" "$target" "$2" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+target = sys.argv[2]
+node_id = sys.argv[3]
+raw = path.read_text()
+updated, target_count = re.subn(r'(?m)^  gateway_target:.*$', '  gateway_target: ' + target, raw, count=1)
+updated, node_count = re.subn(r'(?m)^  gateway_node_id:.*$', '  gateway_node_id: "' + node_id + '"', updated, count=1)
+if target_count != 1 or node_count != 1:
+    raise SystemExit(1)
+path.write_text(updated)
+PY
+`, "sh", target, nodeID}, nil)
+	if err != nil {
+		return fmt.Errorf("collector_storage_target_prepare_failed")
+	}
+	return nil
+}
+
 func controlGatewayMaterial(ctx context.Context, control setupssh.Client, controlHost string, local bool) (string, string, string, []byte, error) {
 	if local {
 		return "http://127.0.0.1:11000", "", "", nil, nil
 	}
 	result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
-for file in "$HOME/moox/prod/secrets/gateway-control.key" "$HOME/moox/prod/secrets/gateway-service.key" "$HOME/moox/prod/certs/caddy/root.crt"; do
+for file in "$HOME/moox/prod/secrets/gateway-control.key" "$HOME/moox/prod/secrets/gateway-service.key" "$HOME/moox/prod/data/caddy/caddy/pki/authorities/local/root.crt"; do
   test -s "$file"
   base64 -w 0 "$file"
   printf '\n'

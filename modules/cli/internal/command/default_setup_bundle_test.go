@@ -57,7 +57,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		datasetsBySpace[dataset.SpaceID] = append(datasetsBySpace[dataset.SpaceID], dataset.DatasetID)
 		require.LessOrEqual(t, utf8.RuneCountInString(dataset.Name), 10, dataset.SpaceID+"/"+dataset.DatasetID)
-		if dataset.SpaceID == "crypto_market" {
+		if dataset.SpaceID == "crypto_market" && dataset.DatasetID != "binance_spot_symbols" && dataset.DatasetID != "binance_spot_kline_1m" {
 			require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
 		}
 	}
@@ -69,7 +69,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		for _, datasetID := range view.DatasetIDs {
 			viewCount[view.SpaceID+"/"+datasetID]++
 		}
-		if view.SpaceID == "crypto_market" {
+		if view.SpaceID == "crypto_market" && view.ViewID != "binance_spot_kline_1m_view" {
 			require.Contains(t, view.FilterJSON, `"freq":"1H"`, view.ViewID)
 		}
 	}
@@ -79,7 +79,9 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		key := dataset.SpaceID + "/" + dataset.DatasetID
 		require.Positive(t, columnCount[key], "Dataset %s has no columns", key)
-		require.Positive(t, viewCount[key], "Dataset %s has no View", key)
+		if dataset.DatasetID != "binance_spot_symbols" {
+			require.Positive(t, viewCount[key], "Dataset %s has no View", key)
+		}
 	}
 	for _, view := range seed.Views {
 		require.Positive(t, viewColumnCount[view.SpaceID+"/"+view.ViewID], "View %s/%s has no columns", view.SpaceID, view.ViewID)
@@ -94,7 +96,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		"index_kline",
 		"stock_kline",
 	}, datasetsBySpace["stock_cn"])
-	require.Equal(t, []string{"perpetual_kline_1h", "spot_kline_1h"}, datasetsBySpace["crypto_market"])
+	require.Equal(t, []string{"binance_spot_kline_1m", "binance_spot_symbols", "perpetual_kline_1h", "spot_kline_1h"}, datasetsBySpace["crypto_market"])
 }
 
 func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {

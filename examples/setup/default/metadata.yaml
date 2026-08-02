@@ -129,6 +129,30 @@ datasets:
     storage_model: wide_common_metrics
 
 - space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  data_source_id: binance
+  name: 币安现货交易对
+  data_kind: record
+  data_node_id: storage-node-0
+  keep_duration: '0'
+  status: disabled
+  attributes:
+    market_type: spot
+    storage_model: wide_common_metrics
+- space_id: crypto_market
+  dataset_id: binance_spot_kline_1m
+  data_source_id: binance
+  name: 币安现货一分钟行情
+  data_kind: time_series
+  data_node_id: storage-node-0
+  keep_duration: 720h
+  freqs:
+  - 1m
+  status: disabled
+  attributes:
+    market_type: spot
+    storage_model: wide_common_metrics
+- space_id: crypto_market
   dataset_id: spot_kline_1h
   data_source_id: crypto_market
   name: 加密货币现货小时行情
@@ -427,6 +451,62 @@ fields:
   sort_order: 90
   status: active
 - space_id: crypto_market
+  group_id: identity
+  field_id: external_symbol
+  name: 外部交易对代码
+  value_type: string
+  sort_order: 20
+  status: active
+- space_id: crypto_market
+  group_id: identity
+  field_id: base_asset
+  name: 基础资产
+  value_type: string
+  sort_order: 30
+  status: active
+- space_id: crypto_market
+  group_id: identity
+  field_id: quote_asset
+  name: 计价资产
+  value_type: string
+  sort_order: 40
+  status: active
+- space_id: crypto_market
+  group_id: identity
+  field_id: status
+  name: 交易状态
+  value_type: string
+  sort_order: 50
+  status: active
+- space_id: crypto_market
+  group_id: identity
+  field_id: min_qty
+  name: 最小数量
+  value_type: double
+  sort_order: 60
+  status: active
+- space_id: crypto_market
+  group_id: identity
+  field_id: max_qty
+  name: 最大数量
+  value_type: double
+  sort_order: 70
+  status: active
+- space_id: crypto_market
+  group_id: identity
+  field_id: tick_size
+  name: 最小价格变动
+  value_type: double
+  sort_order: 80
+  status: active
+- space_id: crypto_market
+  group_id: identity
+  field_id: lot_size
+  name: 最小下单数量
+  value_type: double
+  sort_order: 90
+  status: active
+- space_id: crypto_market
   group_id: quote
   field_id: open
   name: 开盘价
@@ -711,6 +791,130 @@ fields:
   status: active
 
 dataset_columns:
+- space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  column_name: symbol
+  origin_type: field
+  origin_id: symbol
+  value_type: string
+  required: true
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  column_name: external_symbol
+  origin_type: field
+  origin_id: external_symbol
+  value_type: string
+  required: true
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  column_name: base_asset
+  origin_type: field
+  origin_id: base_asset
+  value_type: string
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  column_name: quote_asset
+  origin_type: field
+  origin_id: quote_asset
+  value_type: string
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  column_name: status
+  origin_type: field
+  origin_id: status
+  value_type: string
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  column_name: min_qty
+  origin_type: field
+  origin_id: min_qty
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  column_name: max_qty
+  origin_type: field
+  origin_id: max_qty
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  column_name: tick_size
+  origin_type: field
+  origin_id: tick_size
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_symbols
+  column_name: lot_size
+  origin_type: field
+  origin_id: lot_size
+  value_type: double
+  status: active
+
+- space_id: crypto_market
+  dataset_id: binance_spot_kline_1m
+  column_name: open
+  origin_type: field
+  origin_id: open
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_kline_1m
+  column_name: high
+  origin_type: field
+  origin_id: high
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_kline_1m
+  column_name: low
+  origin_type: field
+  origin_id: low
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_kline_1m
+  column_name: close
+  origin_type: field
+  origin_id: close
+  value_type: double
+  required: true
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_kline_1m
+  column_name: volume
+  origin_type: field
+  origin_id: volume
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_kline_1m
+  column_name: quote_volume
+  origin_type: field
+  origin_id: quote_volume
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_kline_1m
+  column_name: trade_num
+  origin_type: field
+  origin_id: trade_num
+  value_type: int
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_spot_kline_1m
+  column_name: raw_payload
+  origin_type: field
+  origin_id: raw_payload
+  value_type: json
+  status: active
+
 - space_id: stock_cn
   dataset_id: stock_kline
   column_name: open
@@ -1455,6 +1659,21 @@ views:
   engine: bleve
   status: active
 - space_id: crypto_market
+  view_id: binance_spot_kline_1m_view
+  name: 币安现货分钟行情
+  primary_dataset_id: binance_spot_kline_1m
+  dataset_ids:
+  - binance_spot_kline_1m
+  grain_keys:
+  - subject_id
+  - freq
+  - data_time
+  - series_tag
+  filter_json: '{"freq":"1m"}'
+  engine: duckdb
+  keep_duration: 720h
+  status: active
+- space_id: crypto_market
   view_id: spot_kline_1h_view
   name: 加密现货小时行情
   primary_dataset_id: spot_kline_1h
@@ -1794,6 +2013,60 @@ view_columns:
   sort_order: 70
   attributes:
     display_name: 滚动净资产收益率
+- space_id: crypto_market
+  view_id: binance_spot_kline_1m_view
+  column_name: binance_spot_kline_1m.open
+  origin_type: dataset_column
+  origin_id: binance_spot_kline_1m.open
+  value_type: double
+  sort_order: 10
+  attributes:
+    display_name: 开盘价
+- space_id: crypto_market
+  view_id: binance_spot_kline_1m_view
+  column_name: binance_spot_kline_1m.high
+  origin_type: dataset_column
+  origin_id: binance_spot_kline_1m.high
+  value_type: double
+  sort_order: 20
+  attributes:
+    display_name: 最高价
+- space_id: crypto_market
+  view_id: binance_spot_kline_1m_view
+  column_name: binance_spot_kline_1m.low
+  origin_type: dataset_column
+  origin_id: binance_spot_kline_1m.low
+  value_type: double
+  sort_order: 30
+  attributes:
+    display_name: 最低价
+- space_id: crypto_market
+  view_id: binance_spot_kline_1m_view
+  column_name: binance_spot_kline_1m.close
+  origin_type: dataset_column
+  origin_id: binance_spot_kline_1m.close
+  value_type: double
+  sort_order: 40
+  attributes:
+    display_name: 收盘价
+- space_id: crypto_market
+  view_id: binance_spot_kline_1m_view
+  column_name: binance_spot_kline_1m.volume
+  origin_type: dataset_column
+  origin_id: binance_spot_kline_1m.volume
+  value_type: double
+  sort_order: 50
+  attributes:
+    display_name: 成交量
+- space_id: crypto_market
+  view_id: binance_spot_kline_1m_view
+  column_name: binance_spot_kline_1m.quote_volume
+  origin_type: dataset_column
+  origin_id: binance_spot_kline_1m.quote_volume
+  value_type: double
+  sort_order: 60
+  attributes:
+    display_name: 报价成交量
 - space_id: crypto_market
   view_id: spot_kline_1h_view
   column_name: spot_kline_1h.open

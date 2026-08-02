@@ -39,10 +39,13 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 
 	require.ElementsMatch(t, []string{"crypto_market", "binance", "okx"}, dataSourceIDs)
 	require.ElementsMatch(t, []string{
+		"binance_spot_symbols",
+		"binance_spot_kline_1m",
 		"spot_kline_1h",
 		"perpetual_kline_1h",
 	}, datasetIDs)
 	require.ElementsMatch(t, []string{
+		"binance_spot_kline_1m_view",
 		"spot_kline_1h_view",
 		"perpetual_kline_1h_view",
 	}, viewIDs)
@@ -50,7 +53,7 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 		require.Equal(t, "storage-node-0", item.DataNodeID, item.DatasetID)
 		require.NotEmpty(t, item.KeepDuration, item.DatasetID)
 		require.Equal(t, "disabled", item.Status, item.DatasetID)
-		if item.SpaceID == "crypto_market" {
+		if item.SpaceID == "crypto_market" && item.DatasetID != "binance_spot_symbols" && item.DatasetID != "binance_spot_kline_1m" {
 			require.Equal(t, "crypto_market", item.DataSourceID, item.DatasetID)
 		}
 	}
