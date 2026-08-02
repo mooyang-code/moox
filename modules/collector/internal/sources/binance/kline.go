@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/avast/retry-go"
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
@@ -61,8 +66,7 @@ func (c *KlineCollector) FetchRealtimeRows(ctx context.Context, params *sources.
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	requestCtx := binanceapi.SingleAttempt(ctx)
-	klines, err := c.fetchKlines(requestCtx, params, &exchange.KlineRequest{Symbol: params.Symbol, Interval: params.Interval, Limit: limit})
+	klines, err := c.fetchKlinesWithRetry(ctx, params, &exchange.KlineRequest{Symbol: params.Symbol, Interval: params.Interval, Limit: limit})
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -107,7 +111,7 @@ func (c *KlineCollector) FetchCatchupRows(ctx context.Context, params *sources.C
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	klines, err := c.fetchKlines(binanceapi.SingleAttempt(ctx), params, &exchange.KlineRequest{Symbol: params.Symbol, Interval: params.Interval, Limit: limit, StartTime: start.UTC()})
+	klines, err := c.fetchKlinesWithRetry(ctx, params, &exchange.KlineRequest{Symbol: params.Symbol, Interval: params.Interval, Limit: limit, StartTime: start.UTC()})
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -234,7 +238,7 @@ func (c *KlineCollector) CollectWithResult(
 		if !ok {
 			break
 		}
-		exchangeKlines, err := c.fetchKlines(ctx, params, req)
+		exchangeKlines, err := c.fetchKlinesWithRetry(ctx, params, req)
 		if err != nil {
 			return result, err
 		}
@@ -302,6 +306,74 @@ func (c *KlineCollector) fetchKlines(ctx context.Context, params *sources.Collec
 		return c.fetchKlinePage(ctx, params, req)
 	}
 	return c.fetchExchangeKlines(ctx, params, req)
+}
+
+// fetchKlinesWithRetry gives each Binance request an independent timeout and
+// retries transient failures three times after the first request. The
+// surrounding SCF work context still bounds the entire batch, so retries
+// cannot outlive it.
+func (c *KlineCollector) fetchKlinesWithRetry(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	var klines []*exchange.Kline
+	maxAttempts := klineFetchAttempts()
+	attempt := 0
+	err := retry.Do(
+		func() error {
+			attempt++
+			attemptCtx, cancel := context.WithTimeout(ctx, klineRequestTimeout())
+			defer cancel()
+			var fetchErr error
+			klines, fetchErr = c.fetchKlines(binanceapi.SingleAttempt(attemptCtx), params, req)
+			if fetchErr != nil && isRetryableKlineError(ctx, fetchErr) {
+				log.WarnContextf(ctx, "market_fetch_kline_retry symbol=%s interval=%s attempt=%d/%d error=%v", params.Symbol, params.Interval, attempt, maxAttempts, fetchErr)
+			}
+			return fetchErr
+		},
+		retry.Attempts(uint(maxAttempts)),
+		retry.Delay(200*time.Millisecond),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxDelay(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+		retry.RetryIf(func(err error) bool { return isRetryableKlineError(ctx, err) }),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return klines, nil
+}
+
+func klineFetchAttempts() int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv("MOOX_FETCH_HTTP_MAX_ATTEMPTS")))
+	if err != nil || value <= 0 {
+		return 4
+	}
+	if value > 4 {
+		return 4
+	}
+	return value
+}
+
+func klineRequestTimeout() time.Duration {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv("MOOX_FETCH_REQUEST_TIMEOUT_MS")))
+	if err != nil || value <= 0 {
+		value = 2000
+	}
+	return time.Duration(value) * time.Millisecond
+}
+
+func isRetryableKlineError(parent context.Context, err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return parent.Err() == nil
+	}
+	var statusErr *httpclient.StatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.StatusCode == 429 || statusErr.StatusCode >= 500
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr)
 }
 
 func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {

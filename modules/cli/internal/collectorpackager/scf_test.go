@@ -58,7 +58,7 @@ func TestBuildSCFPackage_ValidInputs_ShouldCreateZipWithExpectedEntries(t *testi
 			require.NoError(t, readErr)
 			require.NoError(t, stream.Close())
 			assert.Contains(t, string(content), "writer: cls")
-			assert.Contains(t, string(content), "level: warn")
+			assert.Contains(t, string(content), "level: info")
 			assert.Contains(t, string(content), "topic_id: topic-central")
 		}
 	}
@@ -161,7 +161,7 @@ func TestRenderTRPCConfigForServerlessUsesCentralCLSWriters(t *testing.T) {
 	assert.NotContains(t, string(rendered), "topic-b")
 }
 
-func TestSCFPackageUsesOnlyCentralWarnCLSWriter(t *testing.T) {
+func TestSCFPackageUsesOnlyCentralInfoCLSWriter(t *testing.T) {
 	source := []byte(`plugins:
   log:
     default:
@@ -184,7 +184,7 @@ func TestSCFPackageUsesOnlyCentralWarnCLSWriter(t *testing.T) {
 	for _, writer := range writers {
 		config := writer.(map[string]any)
 		assert.Equal(t, "cls", config["writer"])
-		assert.Equal(t, "warn", config["level"])
+		assert.Equal(t, "info", config["level"])
 		remote := config["remote_config"].(map[string]any)
 		assert.Equal(t, "topic-central", remote["topic_id"])
 	}

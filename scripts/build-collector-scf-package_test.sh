@@ -31,6 +31,7 @@ package_path="${TMP_ROOT}/collector-scf.zip"
   PATH="${FAKE_BIN}:${PATH}" \
     MOOX_STORAGE_PRIMARY_AUTH_SECRET="storage-secret" \
     MOOX_CLS_TOPIC_ID="topic-central" \
+    SCF_SPACE_ID="crypto" \
     VERSION=contract-test \
     OUT_PATH="collector-scf.zip" \
     bash "${ROOT}/scripts/build-collector-scf-package.sh"
@@ -46,7 +47,7 @@ with open(sys.argv[1], encoding="utf-8") as stream:
 writers = document["plugins"]["log"]["default"]
 assert len(writers) == 1, writers
 assert writers[0]["writer"] == "cls", writers
-assert writers[0]["level"] == "warn", writers
+assert writers[0]["level"] == "info", writers
 assert writers[0]["remote_config"]["topic_id"] == "topic-central", writers
 services = document["server"]["service"]
 assert not [service for service in services if ".scf_observability." in service.get("name", "")], services

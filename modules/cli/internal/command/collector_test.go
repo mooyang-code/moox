@@ -14,6 +14,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -78,6 +79,106 @@ func TestCollectorFunctionEnvironmentEmbedsCAFileMaterial(t *testing.T) {
 	assert.Equal(t, base64.StdEncoding.EncodeToString(pemBytes), env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
 	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
 	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_FILE")
+}
+
+func TestLoadCollectorSCFFetcherConfigSelectsOnlyRequestedSpace(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "custom.toml")
+	content := `[admin]
+username = "admin"
+password = "password"
+
+[tencent_cloud]
+secret_id = "secret-id"
+secret_key = "secret-key"
+region = "ap-guangzhou"
+
+[eventbus]
+public_address = "eventbus.example.test"
+port = 4222
+tls_enabled = true
+
+[control_host]
+name = "control"
+address = "192.0.2.10"
+port = 22
+username = "ubuntu"
+password = "password"
+
+[scf_fetcher]
+enabled = true
+
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+package_config_dir = "scf/crypto"
+package_name = "moox-collector-crypto"
+function_prefix = "moox-fetcher-crypto"
+memory_size = 64
+timeout_seconds = 15
+realtime_batch_size = 10
+max_inflight_requests = 5
+request_timeout_ms = 1500
+http_max_attempts = 4
+storage_max_attempts = 1
+storage_timeout_ms = 5000
+
+[[scf_fetcher.spaces.regions]]
+region = "ap-singapore"
+enabled = true
+function_count = 1
+cloud_account_id = "tencent-scf-singapore"
+
+[[scf_fetcher.spaces]]
+space_id = "stock_cn"
+package_config_dir = "scf/stock_cn"
+package_name = "moox-collector-stock_cn"
+function_prefix = "moox-fetcher-stock_cn"
+memory_size = 64
+timeout_seconds = 15
+realtime_batch_size = 10
+max_inflight_requests = 5
+request_timeout_ms = 1500
+http_max_attempts = 4
+storage_max_attempts = 1
+storage_timeout_ms = 5000
+
+[[scf_fetcher.spaces.regions]]
+region = "ap-guangzhou"
+enabled = true
+function_count = 1
+cloud_account_id = "tencent-scf-guangzhou"
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	crypto, err := loadCollectorSCFFetcherConfig(path, "crypto")
+	require.NoError(t, err)
+	require.NotNil(t, crypto)
+	assert.Equal(t, "crypto", crypto.SpaceID)
+	assert.Equal(t, "scf/crypto", crypto.PackageConfigDir)
+	assert.Equal(t, "ap-singapore", crypto.Regions[0].Region)
+
+	_, err = loadCollectorSCFFetcherConfig(path, "stock_us")
+	require.ErrorContains(t, err, `no configuration for space "stock_us"`)
+}
+
+func TestEnsureCollectorSpaceCloudAccountsRegistersOnlyMissingAccount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/cloudnode/CreateCloudAccount", r.URL.Path)
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"account":{"account_id":"tencent-scf-singapore","cos_region":"ap-singapore","cos_bucket":"moox-scf-singapore-1255382561"}}`))
+	}))
+	defer server.Close()
+
+	accounts := map[string]adminclient.CloudAccount{}
+	err := ensureCollectorSpaceCloudAccounts(context.Background(), adminclient.New(server.URL), &setupconfig.SCFFetcherSpace{
+		SpaceID: "crypto",
+		Regions: []setupconfig.SCFFetcherRegion{{
+			Region: "ap-singapore", Enabled: true, CloudAccountID: "tencent-scf-singapore",
+			CloudAccountName: "Tencent SCF Singapore", CredentialSecretID: "tencent-default",
+			AppID: "1255382561", COSBucket: "moox-scf-singapore-1255382561",
+		}},
+	}, accounts)
+	require.NoError(t, err)
+	assert.Equal(t, "ap-singapore", accounts["tencent-scf-singapore"].COSRegion)
 }
 
 func TestEgressProbeResponseDataAcceptsStructuredAndRawResponses(t *testing.T) {
@@ -245,7 +346,7 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.CloudAccountID != "account-a" || item.Region != "ap-guangzhou" || item.PackageID != "moox-collector_dev" {
 		t.Fatalf("routing fields = %#v", item)
 	}
-	if item.Config["timeout"] != "10" || item.Config["memory_size"] != "64" {
+	if item.Config["timeout"] != "15" || item.Config["memory_size"] != "64" {
 		t.Fatalf("config = %#v", item.Config)
 	}
 	assert.NotContains(t, item.Config, "cls_logset_id")

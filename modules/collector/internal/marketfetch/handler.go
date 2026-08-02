@@ -26,6 +26,11 @@ type Handler struct {
 	Now        func() time.Time
 }
 
+const (
+	completionPublishReserve = 500 * time.Millisecond
+	defaultStorageTimeout    = 5 * time.Second
+)
+
 func NewHandler() *Handler {
 	return &Handler{NewStorage: func(target, market string) (Storage, error) { return binance.NewBatchStorage(target, market) }, Publish: publishCompletion}
 }
@@ -56,19 +61,12 @@ func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*
 	if err != nil {
 		return nil, err
 	}
-	reserve := time.Duration(envInt("MOOX_FETCH_COMMIT_RESERVE_MS", envInt("MOOX_MARKET_FETCH_COMMIT_RESERVE_MS", 2000))) * time.Millisecond
-	storageReserve := reserve * 3 / 4
-	if storageReserve <= 0 {
-		storageReserve = reserve
-	}
-	executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: reserve, StorageReserve: storageReserve}
+	storageTimeout := time.Duration(envInt("MOOX_FETCH_STORAGE_TIMEOUT_MS", int(defaultStorageTimeout/time.Millisecond))) * time.Millisecond
+	commitReserve, publishReserve := storageAndPublishReserves(storageTimeout)
+	executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout}
 	payload, err := executor.Execute(budgetCtx, req)
 	if err != nil {
 		return nil, err
-	}
-	publishReserve := reserve - storageReserve
-	if publishReserve <= 0 {
-		publishReserve = reserve
 	}
 	publishCtx, publishCancel := context.WithTimeout(budgetCtx, publishReserve)
 	defer publishCancel()
@@ -81,8 +79,19 @@ func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*
 	return &model.Response{Success: payload.GetStatus() == "succeeded" || payload.GetStatus() == "partial_failed", Message: payload.GetStatus(), Data: payload, RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
 }
 
+// storageAndPublishReserves keeps the Storage RPC's full configured timeout,
+// then reserves a small fixed window to publish the completion event. Storage
+// crosses SCF -> Gateway -> Storage Primary, so it must not share a timeout
+// budget with EventBus publication.
+func storageAndPublishReserves(storage time.Duration) (commit, publish time.Duration) {
+	if storage <= 0 {
+		storage = defaultStorageTimeout
+	}
+	return storage + completionPublishReserve, completionPublishReserve
+}
+
 func executionContext(parent context.Context) (context.Context, context.CancelFunc) {
-	seconds := envInt("MOOX_FETCH_TIMEOUT_SECONDS", envInt("MOOX_MARKET_FETCH_TIMEOUT_SECONDS", 10))
+	seconds := envInt("MOOX_FETCH_TIMEOUT_SECONDS", envInt("MOOX_MARKET_FETCH_TIMEOUT_SECONDS", 15))
 	budget := time.Duration(seconds) * time.Second
 	if deadline, ok := parent.Deadline(); ok {
 		remaining := time.Until(deadline)

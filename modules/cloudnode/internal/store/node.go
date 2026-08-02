@@ -180,7 +180,7 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 		"realtime_bar_limit":    "MOOX_FETCH_REALTIME_BAR_LIMIT",
 		"catchup_batch_size":    "MOOX_FETCH_CATCHUP_BATCH_SIZE",
 		"catchup_bar_limit":     "MOOX_FETCH_CATCHUP_BAR_LIMIT",
-		"commit_reserve_ms":     "MOOX_FETCH_COMMIT_RESERVE_MS",
+		"storage_timeout_ms":    "MOOX_FETCH_STORAGE_TIMEOUT_MS",
 		"max_retry_attempts":    "MOOX_FETCH_MAX_RETRY_ATTEMPTS",
 	}
 	for metadataKey, environmentKey := range managedEnvironment {

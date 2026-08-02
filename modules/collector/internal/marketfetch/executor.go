@@ -305,16 +305,22 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 
 	payload := buildCompletion(req, results, now(), now().Sub(started))
 	if payload.GetStatus() != "succeeded" {
-		// Keep the only SCF completion log compact and actionable. Successful
-		// batches are represented by their EventBus completion event; warning
-		// storage is reserved for batches that need attention.
-		log.WarnContextf(ctx, "market_fetch_result batch_id=%s status=%s results=%s", req.BatchID, payload.GetStatus(), compactResultOutcomes(results))
-		waitForCLSWarnDispatch(ctx)
+		log.WarnContextf(ctx, "market_fetch_result batch_id=%s status=%s error=%q results=%s", req.BatchID, payload.GetStatus(), resultErrorSummary(results), compactResultOutcomes(results))
 	}
+	waitForCLSDispatch(ctx)
 	return payload, nil
 }
 
-func waitForCLSWarnDispatch(ctx context.Context) {
+func resultErrorSummary(results []domain.ItemResult) string {
+	for _, result := range results {
+		if summary := strings.TrimSpace(result.ErrorSummary); summary != "" {
+			return summary
+		}
+	}
+	return ""
+}
+
+func waitForCLSDispatch(ctx context.Context) {
 	// trpc-log-cls is asynchronous. Keep a short, bounded handoff window so a
 	// short-lived SCF does not return before the 100ms CLS batch timer runs.
 	timer := time.NewTimer(150 * time.Millisecond)
@@ -376,8 +382,6 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 		return failureResult(item, domain.ItemOutcomeInvalid, "market_type", err), nil, nil, nil
 	}
 	params := &sources.CollectParams{SpaceID: req.SpaceID, DatasetID: item.DatasetID, InstType: instType, Symbol: item.Symbol, SubjectID: item.SubjectID, Interval: item.Frequency, Live: req.BatchKind == domain.BatchKindRealtime}
-	requestCtx, cancel := requestContext(ctx)
-	defer cancel()
 	if req.BatchKind == domain.BatchKindCatchup {
 		if e.Catchup == nil {
 			return failureResult(item, domain.ItemOutcomeInvalid, "catchup", fmt.Errorf("catchup collector is not initialized")), nil, nil, nil
@@ -386,13 +390,20 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 		if parseErr != nil {
 			return failureResult(item, domain.ItemOutcomeInvalid, "start_time", parseErr), nil, nil, nil
 		}
-		rows, latest, fetchErr := e.Catchup.FetchCatchupRows(requestCtx, params, start, item.BarLimit)
+		log.InfoContextf(ctx, "market_fetch_kline_start batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency)
+		fetchStarted := time.Now()
+		rows, latest, fetchErr := e.Catchup.FetchCatchupRows(ctx, params, start, item.BarLimit)
+		elapsedMS := time.Since(fetchStarted).Milliseconds()
 		if fetchErr != nil {
+			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, fetchErr)
 			return failureResult(item, classifyError(fetchErr), errorType(fetchErr), fetchErr), nil, nil, nil
 		}
 		if len(rows) == 0 || latest.IsZero() {
-			return failureResult(item, domain.ItemOutcomeStorageError, "empty_data", fmt.Errorf("Binance returned no closed bars")), nil, nil, nil
+			emptyErr := fmt.Errorf("Binance returned no closed bars")
+			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, emptyErr)
+			return failureResult(item, domain.ItemOutcomeStorageError, "empty_data", emptyErr), nil, nil, nil
 		}
+		log.InfoContextf(ctx, "market_fetch_kline_success batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup elapsed_ms=%d success=true rows=%d latest=%s", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, len(rows), latest.UTC().Format(time.RFC3339Nano))
 		return successResult(item), rows, nil, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(item.DataType)) {
@@ -401,18 +412,29 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 		if limit <= 0 {
 			limit = MaxRealtimeRows
 		}
-		rows, latest, err := e.Klines.FetchRealtimeRows(requestCtx, params, limit)
+		log.InfoContextf(ctx, "market_fetch_kline_start batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=realtime", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency)
+		fetchStarted := time.Now()
+		rows, latest, err := e.Klines.FetchRealtimeRows(ctx, params, limit)
+		elapsedMS := time.Since(fetchStarted).Milliseconds()
 		if err != nil {
+			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=realtime elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, err)
 			return failureResult(item, classifyError(err), errorType(err), err), nil, nil, nil
 		}
 		if len(rows) == 0 || latest.IsZero() {
-			return failureResult(item, domain.ItemOutcomeStorageError, "empty_data", fmt.Errorf("Binance returned no closed bars")), nil, nil, nil
+			emptyErr := fmt.Errorf("Binance returned no closed bars")
+			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=realtime elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, emptyErr)
+			return failureResult(item, domain.ItemOutcomeStorageError, "empty_data", emptyErr), nil, nil, nil
 		}
 		if target, parseErr := time.Parse(time.RFC3339Nano, item.TargetDataTime); item.TargetDataTime != "" && parseErr == nil && latest.Before(target) {
-			return failureResult(item, domain.ItemOutcomeStorageError, "stale_data", fmt.Errorf("latest closed bar %s is older than target %s", latest.UTC().Format(time.RFC3339Nano), target.UTC().Format(time.RFC3339Nano))), nil, nil, nil
+			staleErr := fmt.Errorf("latest closed bar %s is older than target %s", latest.UTC().Format(time.RFC3339Nano), target.UTC().Format(time.RFC3339Nano))
+			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=realtime elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, staleErr)
+			return failureResult(item, domain.ItemOutcomeStorageError, "stale_data", staleErr), nil, nil, nil
 		}
+		log.InfoContextf(ctx, "market_fetch_kline_success batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=realtime elapsed_ms=%d success=true rows=%d latest=%s", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, len(rows), latest.UTC().Format(time.RFC3339Nano))
 		return successResult(item), rows, nil, nil
 	case "symbol", "symbols":
+		requestCtx, cancel := requestContext(ctx)
+		defer cancel()
 		rows, symbols, _, err := e.Symbols.FetchSymbolSnapshot(requestCtx, params, item.Allowlist)
 		if err != nil {
 			return failureResult(item, classifyError(err), errorType(err), err), nil, nil, nil

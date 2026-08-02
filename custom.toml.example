@@ -15,63 +15,54 @@ tls_enabled = true
 [monitoring]
 wecom_webhook = ""
 
-# 短时行情 SCF 出口池。开启后由 Collector 按规则批量异步调用函数；
-# 每个函数固定 64MB / 10 秒，单次最多 10 个标的，函数内并发由环境变量传入。
-# realtime/catchup 的批次和 K 线条数使用固定安全上限；第一版只开放 max_inflight_requests 调整。
+# 短时行情 SCF 按 Space 独立发布、独立消费任务。每个 Space 都必须有独立
+# package_config_dir、package_name 和 function_prefix，避免跨空间混用数据源配置。
 [scf_fetcher]
 enabled = false
+
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+package_config_dir = "scf/crypto"
+package_name = "moox-collector-crypto"
 namespace = "default"
 runtime = "Go1"
-function_prefix = "moox-fetcher"
+function_prefix = "moox-fetcher-crypto"
 memory_size = 64
-timeout_seconds = 10
+timeout_seconds = 15
 realtime_batch_size = 10
 realtime_bar_limit = 3
 catchup_batch_size = 1
 catchup_bar_limit = 1000
 max_inflight_requests = 5
 request_timeout_ms = 2000
-http_max_attempts = 1
+http_max_attempts = 4
 storage_max_attempts = 1
-commit_reserve_ms = 2000
+storage_timeout_ms = 5000
 max_retry_attempts = 3
 retry_delays = ["5s", "30s", "2m"]
 stagger_enabled = false
 
-[[scf_fetcher.regions]]
-region = "ap-guangzhou"
-display_name = "华南地区（广州）"
+[[scf_fetcher.spaces.regions]]
+region = "ap-singapore"
+display_name = "亚太东南（新加坡）"
 enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-guangzhou"
+function_count = 5
+cloud_account_id = "tencent-scf-singapore"
+cloud_account_name = "Tencent SCF Singapore"
+credential_secret_id = "tencent-default"
+app_id = "<tencent-app-id>"
+cos_bucket = "moox-scf-singapore-<tencent-app-id>"
 
-[[scf_fetcher.regions]]
-region = "ap-shanghai"
-display_name = "华东地区（上海）"
+[[scf_fetcher.spaces.regions]]
+region = "ap-tokyo"
+display_name = "亚太东北（东京）"
 enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-shanghai"
-
-[[scf_fetcher.regions]]
-region = "ap-beijing"
-display_name = "华北地区（北京）"
-enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-beijing"
-
-[[scf_fetcher.regions]]
-region = "ap-chengdu"
-display_name = "西南地区（成都）"
-enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-chengdu"
-
-[[scf_fetcher.regions]]
-region = "ap-hongkong"
-display_name = "港澳台地区（中国香港）"
-enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-hongkong"
+function_count = 5
+cloud_account_id = "tencent-scf-tokyo"
+cloud_account_name = "Tencent SCF Tokyo"
+credential_secret_id = "tencent-default"
+app_id = "<tencent-app-id>"
+cos_bucket = "moox-scf-tokyo-<tencent-app-id>"
 
 [control_host]
 name = "control"

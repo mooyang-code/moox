@@ -238,21 +238,23 @@ func renderTRPCConfigForServerless(source []byte, clsTopicID string) ([]byte, er
 		plugins["log"] = logs
 	}
 	// Do not keep a console writer here. With native SCF CLS disabled it would
-	// create a second platform log stream. CLS receives only warn/error events;
-	// normal per-symbol outcomes remain in the EventBus completion event.
+	// create a second platform log stream. The short-lived fetcher emits one
+	// start and one result line per symbol, so use the centralized CLS writer
+	// at info level and batch those lines before the invocation returns.
 	logs["default"] = []any{map[string]any{
 		"writer": "cls",
-		"level":  "warn",
+		"level":  "info",
 		"remote_config": map[string]any{
 			"topic_id":        strings.TrimSpace(clsTopicID),
 			"host":            "${MOOX_CLS_HOST}",
 			"secret_id":       "${MOOX_CLS_SECRET_ID}",
 			"secret_key":      "${MOOX_CLS_SECRET_KEY}",
 			"max_block_sec":   0,
-			"max_batch_count": 1,
+			"max_batch_count": 100,
 			// The CLS SDK rejects values below 100ms and falls back to 2s. A
 			// short-lived function uses the legal minimum and waits after its
-			// warning result so the async writer can hand it to the producer.
+			// result so the async writer can hand the final partial batch to the
+			// producer.
 			"linger_ms": 100,
 		},
 	}}

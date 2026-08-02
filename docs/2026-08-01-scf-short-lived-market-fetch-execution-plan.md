@@ -2,7 +2,7 @@
 
 > **执行要求：** 实现本计划时使用 `superpowers:executing-plans` 或 `superpowers:subagent-driven-development`，逐任务执行并在每个阶段完成测试、独立代码审查和提交。
 
-**目标：** 将当前常驻 Collector SCF 改造为 10 秒内完成的按需行情采集函数，在保留多地域公网出口能力的同时，显著降低函数运行时长和资源使用费用。
+**目标：** 将当前常驻 Collector SCF 改造为 15 秒内完成的按需行情采集函数，在保留多地域公网出口能力的同时，显著降低函数运行时长和资源使用费用。
 
 **架构：** Collector 是唯一调度控制面，按启用规则生成稳定的采集周期和短时批次；CloudNode 负责按地域异步调用 SCF；SCF 只抓取当前批次、批量写入 Storage Primary 并发布一个受治理的批次完成事件。Collector 消费完成事件、持久化失败项并负责超时回收和受控重试，Monitor 只观察批次、Dataset 和部署状态，不参与调度。
 
@@ -20,7 +20,7 @@ SCF 仍需保留，因为行情 API 请求必须从 SCF 发出，以使用不同
 
 1. 每分钟处理所有启用中的实时 TimeSeries Dataset + Frequency。
 2. 支持约 1000 个标的的实时 K 线采集。
-3. SCF 单次执行超时固定为 10 秒；函数不常驻、不使用 Keepalive。
+3. SCF 单次执行超时固定为 15 秒；函数不常驻、不使用 Keepalive。
 4. 函数内部并发由环境变量配置，并在 CloudNode 数据库记录期望值。
 5. 实时采集只抓取最近少量已收盘 K 线，不在实时批次内追赶大量历史数据。
 6. SCF 在内存中聚合结果后，只通过 Storage Primary 批量写入真值数据。
@@ -44,7 +44,7 @@ SCF 仍需保留，因为行情 API 请求必须从 SCF 发出，以使用不同
 | 事项 | 第一版决策 |
 | --- | --- |
 | 调度所有者 | 仅 Collector |
-| SCF 运行模式 | 异步事件调用，单次批次，10 秒超时 |
+| SCF 运行模式 | 异步事件调用，单次批次，15 秒超时 |
 | SCF 内存 | 64MB |
 | 实时批次初始大小 | 10 个 CollectionItem |
 | 函数内 HTTP 并发 | 5 |
@@ -67,7 +67,7 @@ SCF 仍需保留，因为行情 API 请求必须从 SCF 发出，以使用不同
 
 地域间账号级并发额度相互独立；广州、上海、北京、成都和中国香港默认总函数并发配额为 128000MB。每个命名空间默认最多 50 个函数：[并发管理体系](https://cloud.tencent.com/document/product/583/49313)、[配额限制说明](https://cloud.tencent.com/document/product/583/11637)。
 
-SCF 当前函数运行环境最小内存为 64MB，异步请求事件大小上限为 128KB，函数超时支持 1～900 秒。本计划固定使用 64MB 和 10 秒，不尝试 32MB。
+SCF 当前函数运行环境最小内存为 64MB，异步请求事件大小上限为 128KB，函数超时支持 1～900 秒。本计划固定使用 64MB 和 15 秒，不尝试 32MB。
 
 SCF 官方没有承诺固定冷启动耗时。冷启动必须通过 `Init Report` 或 `Provisioned Report` 中的 `Coldstart`、`PullCode`、`InitRuntime` 和 `InitFunction` 实测：[工作原理](https://cloud.tencent.com/document/product/583/9694)。
 
@@ -115,7 +115,7 @@ Symbol 规则负责生成或刷新 RECORD 类型的 Symbol Dataset。用户可�
 1. Collector 生成只包含一个规则项的 `symbol_snapshot` BatchInvocation。
 2. SCF 调用 Binance exchangeInfo 获取一次市场标的快照；行情数据源 API 不从 Collector 本机调用。
 3. SCF 仅保留用户 `symbols` 中存在且处于 active 状态的标的。
-4. 将规范化 Symbol 写入 `target_dataset_id`；为避免 SQLite 元数据快照串行刷新挤占固定 10 秒预算，首版每条手动 Symbol 规则最多 20 个标的，并串行提交元数据。
+4. 将规范化 Symbol 写入 `target_dataset_id`；为避免 SQLite 元数据快照串行刷新挤占固定 15 秒预算，首版每条手动 Symbol 规则最多 20 个标的，并串行提交元数据。
 5. 用户配置但 Binance 不存在的 Symbol 标记为规则错误，不进入 K 线任务。
 6. 现货与合约必须使用不同 Symbol Dataset，例如 `binance_spot_symbols` 和 `binance_futures_symbols`。
 
@@ -193,7 +193,7 @@ Collector Timer
   └─ 通过 CloudNode 异步调用 SCF
          │
          ▼
-SCF Fetcher（最长 10 秒）
+SCF Fetcher（最长 15 秒）
   ├─ 受限并发请求 Binance REST
   ├─ 聚合每个 CollectionItem 的结果
   ├─ 成功数据一次批量写入 Storage Primary
@@ -225,13 +225,13 @@ Collector Timer
 | `succeeded` | 所有 CollectionItem 成功写入 Storage |
 | `partial_failed` | 部分成功，部分进入 RetryItem 或永久失败 |
 | `failed` | 没有成功项且已经终结 |
-| `timed_out` | SCF 10 秒上限后又超过完成回执宽限期，仍未收到完成事件 |
+| `timed_out` | SCF 15 秒上限后又超过完成回执宽限期，仍未收到完成事件 |
 
 强制顺序：
 
 1. 在 SQLite 事务中插入 `planned` 批次及完整 `request_json`，同时设置 `deadline_at=planned_at+70s`。
 2. 调用 CloudNode `InvokeFunction(Event)`。
-3. 调用成功后使用条件更新将 `planned` 转为 `dispatched`，写入 `request_id`、`dispatched_at`，并将 `deadline_at` 更新为 `dispatched_at+70s`。腾讯异步消息最短可保留 60 秒，Collector 额外预留 10 秒给事件投递和 Completion 消费；SCF 的业务执行仍固定为 10 秒。
+3. 调用成功后使用条件更新将 `planned` 转为 `dispatched`，写入 `request_id`、`dispatched_at`，并将 `deadline_at` 更新为 `dispatched_at+75s`。腾讯异步消息最短可保留 60 秒，Collector 额外预留 15 秒给事件投递和 Completion 消费；SCF 的业务执行固定为 15 秒。
 4. 如果完成事件先于 CloudNode 响应到达，调用返回后的更新只能补充 `request_id`，不得把 terminal 状态回退为 `dispatched`。
 5. 调用同步失败时，不删除批次；仅当批次仍为 `planned` 时将全部 CollectionItem 写入 RetryItem。
 6. Completion Consumer 收到完成事件后，事务更新批次和 RetryItem，再 ACK。
@@ -304,7 +304,7 @@ Handler 必须拒绝未知字段组合、空 Dataset、重复 task_id、跨 Data
 
 - 正常周期只新增 1 根；
 - 某一分钟调用失败时，下一周期可以自动补回短缺口；
-- 固定小窗口能控制 HTTP 响应大小和 10 秒预算；
+- 固定小窗口能控制 HTTP 响应大小和 15 秒预算；
 - 不需要在 SCF 内先读取 Storage 水位。
 
 ### 6.2 Gap Audit 与 CatchupBatch
@@ -326,7 +326,7 @@ Handler 必须拒绝未知字段组合、空 Dataset、重复 task_id、跨 Data
 
 ```toml
 memory_size = 64
-timeout_seconds = 10
+timeout_seconds = 15
 ```
 
 不配置预置并发。部署器必须将腾讯云异步自动重试次数设为 0，避免平台自动重试和 Collector 重试叠加。
@@ -336,21 +336,21 @@ timeout_seconds = 10
 ```text
 MOOX_FETCH_MAX_INFLIGHT_REQUESTS=5
 MOOX_FETCH_REQUEST_TIMEOUT_MS=2000
-MOOX_FETCH_HTTP_MAX_ATTEMPTS=1
+MOOX_FETCH_HTTP_MAX_ATTEMPTS=4
 MOOX_FETCH_STORAGE_MAX_ATTEMPTS=1
 MOOX_FETCH_REALTIME_BATCH_SIZE=10
 MOOX_FETCH_REALTIME_BAR_LIMIT=3
 MOOX_FETCH_CATCHUP_BATCH_SIZE=1
 MOOX_FETCH_CATCHUP_BAR_LIMIT=1000
-MOOX_FETCH_COMMIT_RESERVE_MS=2000
+MOOX_FETCH_STORAGE_TIMEOUT_MS=5000
 ```
 
-`MOOX_FETCH_HTTP_MAX_ATTEMPTS=1` 表示 Binance 总共只发起一次 HTTP 请求，不是“失败后再重试一次”。`MOOX_FETCH_STORAGE_MAX_ATTEMPTS=1` 同样禁止沿用当前 Storage Client 的三次内层重试；Storage 临时失败交给 Collector RetryItem。
+`MOOX_FETCH_HTTP_MAX_ATTEMPTS=4` 表示首次请求失败后最多重试三次，即单个 K 线请求最多发起四次；429、5xx、网络错误和单次请求超时使用短退避重试，但不能超过 SCF 的整体工作 deadline。`MOOX_FETCH_STORAGE_MAX_ATTEMPTS=1` 同样禁止沿用当前 Storage Client 的三次内层重试；Storage 临时失败交给 Collector RetryItem。
 
 ### 7.3 Deadline 规则
 
-1. 从 SCF `context.Deadline()` 读取平台 deadline；若运行库没有提供，则以 Handler 开始时间加 10 秒作为保守 fallback。
-2. 计算 `work_deadline = platform_deadline - commit_reserve`。
+1. 从 SCF `context.Deadline()` 读取平台 deadline；若运行库没有提供，则以 Handler 开始时间加 15 秒作为保守 fallback。
+2. 计算 `work_deadline = platform_deadline - storage_timeout_ms - 500ms`。
 3. 到达 `work_deadline` 后不再启动新的 Binance 请求。
 4. 已经运行的请求使用子 Context 取消。
 5. 未启动和被取消的 CollectionItem 标记为 `deadline_exhausted`，由 Collector 重试。
@@ -377,80 +377,73 @@ SCF timeout = 0
 ```toml
 [scf_fetcher]
 enabled = true
+
+[[scf_fetcher.spaces]]
+space_id = "crypto"
+package_config_dir = "scf/crypto"
+package_name = "moox-collector-crypto"
 namespace = "default"
 runtime = "Go1"
-function_prefix = "moox-fetcher"
+function_prefix = "moox-fetcher-crypto"
 memory_size = 64
-timeout_seconds = 10
+timeout_seconds = 15
 realtime_batch_size = 64
 realtime_bar_limit = 3
 catchup_batch_size = 1
 catchup_bar_limit = 1000
 max_inflight_requests = 16
 request_timeout_ms = 1500
-http_max_attempts = 1
+http_max_attempts = 4
 storage_max_attempts = 1
-commit_reserve_ms = 2000
+storage_timeout_ms = 5000
 max_retry_attempts = 3
 retry_delays = ["5s", "30s", "2m"]
 stagger_enabled = false
 
-[[scf_fetcher.regions]]
-region = "ap-guangzhou"
-display_name = "华南地区（广州）"
+[[scf_fetcher.spaces.regions]]
+region = "ap-singapore"
+display_name = "亚太东南（新加坡）"
 enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-guangzhou"
+function_count = 5
+cloud_account_id = "tencent-scf-singapore"
+cloud_account_name = "Tencent SCF Singapore"
+credential_secret_id = "tencent-default"
+app_id = "<tencent-app-id>"
+cos_bucket = "moox-scf-singapore-<tencent-app-id>"
 
-[[scf_fetcher.regions]]
-region = "ap-shanghai"
-display_name = "华东地区（上海）"
+[[scf_fetcher.spaces.regions]]
+region = "ap-tokyo"
+display_name = "亚太东北（东京）"
 enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-shanghai"
-
-[[scf_fetcher.regions]]
-region = "ap-beijing"
-display_name = "华北地区（北京）"
-enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-beijing"
-
-[[scf_fetcher.regions]]
-region = "ap-chengdu"
-display_name = "西南地区（成都）"
-enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-chengdu"
-
-[[scf_fetcher.regions]]
-region = "ap-hongkong"
-display_name = "港澳台地区（中国香港）"
-enabled = true
-function_count = 1
-cloud_account_id = "tencent-scf-hongkong"
+function_count = 5
+cloud_account_id = "tencent-scf-tokyo"
+cloud_account_name = "Tencent SCF Tokyo"
+credential_secret_id = "tencent-default"
+app_id = "<tencent-app-id>"
+cos_bucket = "moox-scf-tokyo-<tencent-app-id>"
 ```
 
 配置校验：
 
 - `memory_size` 必须等于 64；若真实压测出现 OOM，停止扩量并重新评审内存与成本，不静默改成更大值；
-- timeout 必须为 10；
-- `request_timeout_ms + commit_reserve_ms < 10000`；
+- `scf_fetcher.spaces` 是唯一的 SCF 隔离边界：每个 `space_id` 必须唯一，且每个 Space 的 `package_config_dir`、`package_name`、`function_prefix` 都必须包含该 Space；
+- timeout 必须为 15；
+- `ceil(realtime_batch_size / max_inflight_requests) * request_timeout_ms + storage_timeout_ms + 500 < 15000`；
 - `1 <= max_inflight_requests <= 64`；超过 Executor 上限直接拒绝，避免函数启动后每批都因非法并发配置失败；
 - `1 <= realtime_batch_size <= 64`；实时调度先按当前函数池均分，再受该上限约束；
-- `http_max_attempts` 必须为 1；
+- `http_max_attempts` 必须为 4（首次请求加三次重试）；
 - `storage_max_attempts` 必须为 1；
-- 地域不能重复；
-- 至少一个地域必须 `enabled = true`；
+- 同一 Space 内地域不能重复，且至少一个地域必须 `enabled = true`；
 - 每个启用地域 `function_count >= 1`；
 - 每个启用地域必须声明 `cloud_account_id`，且该云账户的 COS Region 与 SCF Region 相同；发布前 CLI 直接拒绝跨地域 COS 包和拼写错误的地域；
-- `cls_cloud_account_id` 可显式指定统一日志账户；未指定时优先选择广州的启用账户。CLI 只解析既有的 `ap-guangzhou/moox/moox-application`，不会在发布函数时按地域创建 CLS 资源；
-- 函数包内置 tRPC CLS writer，仅投递 `warn`/`error` 到统一 Topic，并由受控环境变量注入 `MOOX_CLS_SECRET_*`；CloudNode 创建时设置 `AutoCreateClsTopic=FALSE` 和 `AutoDeployClsTopicIndex=FALSE`，更新时设置 `IgnoreSysLog=true`，避免未指定 Topic 时自动创建 `SCF_logset`/`SCF_logtopic`；
+- 未注册的地域云账户可由本次发布创建，但必须同时声明 `cloud_account_name`、`credential_secret_id`、`app_id`、`cos_bucket`；凭据只引用 SecretMgr ID，不写入 `custom.toml`；
+- `cls_cloud_account_id` 可按 Space 显式指定日志账户；未指定时取该 Space 的第一个启用地域账户；
+- 函数包内置 tRPC CLS writer，投递 `info` 及以上日志到统一 Topic，并由受控环境变量注入 `MOOX_CLS_SECRET_*`；每个正常 K 线标的输出开始与成功日志，CLS 按 100 条批量发送；
 - CLS 初始化默认保存 2 天、固定 1 个分区且禁用自动扩分区；
 - `moox-cli` 上传函数包时经 CloudNode 自动确认配置的 COS 桶存在，不存在则创建私有桶；对象路径包含 UTC 日期，便于按日期清理；
 - `retry_delays` 只接受固定值 `["5s", "30s", "2m"]`，`stagger_enabled` 必须为 `false`；首版不实现可配置错峰；
 - 所有函数的环境变量总大小不得超过腾讯云限制；
-- 未配置 `[scf_fetcher]` 时不创建 Fetcher，不影响不使用 SCF 的用户。
+- 未配置启用的 `[scf_fetcher]` 时不创建 Fetcher，不影响不使用 SCF 的用户。
 
 ### 8.2 真值来源
 
@@ -473,16 +466,16 @@ CloudNode `c_metadata` 至少保存：
   "biz_type": "market_fetcher",
   "supported_workloads": [],
   "memory_size": 64,
-  "timeout_seconds": 10,
+  "timeout_seconds": 15,
   "max_inflight_requests": 16,
   "realtime_batch_size": 64,
   "request_timeout_ms": 1500,
-  "http_max_attempts": 1,
+  "http_max_attempts": 4,
   "storage_max_attempts": 1,
   "realtime_bar_limit": 3,
   "catchup_batch_size": 1,
   "catchup_bar_limit": 1000,
-  "commit_reserve_ms": 2000,
+  "storage_timeout_ms": 5000,
   "max_retry_attempts": 3
 }
 ```
@@ -979,7 +972,7 @@ CloudNode 的通用 JobItem 能力只有在其他模块仍有明确引用时才�
 3. 删除 Collector SQLite `./data/moox_collector.db`、CloudNode SQLite `./data/moox_cloudnode.db`、Monitor SQLite `./data/monitor/monitor.db` 和 `job_item.history_dir` 指向的旧 JobItem 历史目录，再通过 `custom.toml` 重新初始化所需配置。
 4. 删除旧 Collector JetStream stream、consumer 和 KV 数据，按本计划重新创建 `MOOX_MARKET_FETCH` 及 Completion durable。
 5. 使用全新 Schema 启动 Collector、CloudNode 和 Monitor；禁止编写 ALTER、数据回填或旧字段读取代码。
-6. 发布新的短时 Fetcher，回读验证 64MB、10 秒和环境变量。
+6. 发布新的短时 Fetcher，回读验证 64MB、15 秒和环境变量。
 7. 执行 `probe-egress`，全部启用节点通过后再创建 Symbol 与 Kline 规则。
 8. 先启用 10 个 Symbol 验证真实 Storage 数据，再逐步扩大到 100 和 1000 个 Symbol。
 
@@ -1006,7 +999,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - `modules/collector/internal/planner/fetch_batch_builder.go`：CollectionItem、分片和地域分配。
 - `modules/collector/internal/scfinvoker/client.go`：查询短时 Fetcher 节点并调用 CloudNode `InvokeFunction(Event)`。
 - `modules/collector/internal/marketfetch/dispatcher.go`：先持久化批次，再异步调用并条件更新状态。
-- `modules/collector/internal/marketfetch/executor.go`：10 秒批次执行器。
+- `modules/collector/internal/marketfetch/executor.go`：15 秒批次执行器。
 - `modules/collector/internal/marketfetch/storage.go`：单 Dataset Storage Primary 批量写入。
 - `modules/collector/internal/marketfetch/completion.go`：完成事件构造和发布。
 - `modules/collector/internal/marketfetch/egress_probe.go`：一次性公网出口和数据源连通性探测。
@@ -1041,7 +1034,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - `modules/collector/cmd/scf/main.go`、`observability.go`：删除常驻 Runner 和后台 reporter。
 - `modules/cloudnode/internal/rpc/heartbeat_maintainer.go`：按 `biz_type` 排除行情 Fetcher。
 - `modules/cloudnode/internal/store/node.go`、`internal/rpc/node.go`：短时函数部署状态语义。
-- `modules/cli/internal/setup/config/config.go`、测试：支持严格解析 `[scf_fetcher]`。
+- `modules/cli/internal/setup/config/config.go`、测试：支持严格解析按 Space 隔离的 `[scf_fetcher.spaces]`。
 - `custom.toml.example`：加入初始化示例。
 - `modules/cli/internal/command/collector.go`、测试：支持多地域函数池发布、异步删除和同步出口探针。
 - `modules/monitor/internal/observability/overview.go`：展示部署和批次状态。
@@ -1077,10 +1070,10 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - Modify: `modules/cli/internal/command/collector.go` 及测试
 - Modify: `modules/cloudnode/internal/rpc/node.go` 及测试
 
-- [ ] 写合法五地域配置、重复地域、batch size 超限、timeout 非 10、HTTP attempts 非 1 的失败测试。
+- [ ] 写合法多 Space 配置、重复 Space/地域、batch size 超限、timeout 非 15、HTTP attempts 非 4 的失败测试。
 - [ ] 运行 `cd modules/cli && go test -count=1 ./internal/setup/config ./internal/command`，确认新字段当前被 strict loader 拒绝。
-- [ ] 增加 `SCFFetcher`、`SCFFetcherRegion` typed config 和本计划中的默认值。
-- [ ] 将 `collector function publish submit` 改为接受 `--file ./custom.toml`，从 `scf_fetcher.regions` 展开函数池；Fetcher 模式不再使用单一 `--region` 和 `--node-count` 作为真值。
+- [ ] 增加 `SCFFetcherSpace`、`SCFFetcherRegion` typed config 和本计划中的默认值。
+- [ ] 将 `collector function publish submit` 改为接受 `--file ./custom.toml --space-id <space>`，从选中 Space 的 `scf_fetcher.spaces.regions` 展开函数池；Fetcher 模式不再使用单一 `--region` 和 `--node-count` 作为真值。
 - [ ] 将配置转换为 NodeCreateItem metadata、config 和 environment；metadata 固定使用 `biz_type=market_fetcher` 和空 `supported_workloads`，不得生成 `execution_mode` 或 `MOOX_COLLECTOR_JOB_TYPES`。
 - [ ] 发布后通过 DescribeFunction 回读 memory、timeout 和环境变量；任一不一致则发布任务失败。
 - [ ] 运行 `make verify-custom-setup`。
@@ -1142,7 +1135,7 @@ Git 可以回退到上一个可构建提交，但旧常驻 Worker、Keepalive �
 - [ ] 运行 `cd modules/collector && go test -race -count=1 ./internal/sources/binance`。
 - [ ] 提交：`refactor(collector): bound realtime kline fetch window`。
 
-### Task 6：实现 10 秒 Market Fetch Executor 和 SCF Handler
+### Task 6：实现 15 秒 Market Fetch Executor 和 SCF Handler
 
 **文件：**
 
@@ -1283,7 +1276,7 @@ make test-collector-scf-package-contract
 - EventBus TLS 地址可从 SCF 访问；
 - Storage Primary tRPC 地址可从 SCF 访问；
 - CloudNode 中 `custom.toml` 声明的全部初始函数节点均为 Active；
-- 函数配置为 64MB、10 秒、异步自动重试 0；
+- 函数配置为 64MB、15 秒、异步自动重试 0；
 - 环境变量与 CloudNode metadata 一致；
 - 出口探针逐节点成功，Binance 轻量接口状态为 200；若公网 IP 反射服务可用，则记录并汇总有效出口 IP，反射服务不可用不阻断发布。
 
@@ -1353,7 +1346,7 @@ resource_usage_gbs =
 5. Storage RowKey 和 `source_event_id` 保证重复执行不产生重复 K 线。
 6. 实时路径只抓最近 3 根，不读取水位、不循环追赶 5000 根。
 7. 长历史缺口通过受限 CatchupBatch 分段恢复。
-8. 函数配置固定为 64MB、10 秒，正常实时批次 P99 小于 8 秒。
+8. 函数配置固定为 64MB、15 秒，正常实时批次 P99 小于 13 秒。
 9. 函数内并发、batch size 和 timeout 环境变量与 CloudNode DB 一致。
 10. 429、网络超时和 5xx 能通过完成事件落为 RetryItem，并在最多 3 次内终结。
 11. Stable TaskInstance 不按分钟膨胀；成功批次 48 小时后自动清理。
@@ -1370,7 +1363,7 @@ resource_usage_gbs =
 
 - Collector 规划、持久化、回收和重试；
 - CloudNode 管理函数和发起调用；
-- SCF 只做 10 秒内的行情请求、Storage 提交和完成上报；
+- SCF 只做 15 秒内的行情请求、Storage 提交和完成上报；
 - Storage 是数据真值；
 - EventBus 传递受治理的完成事实；
 - Monitor 观察批次和 Dataset，而不是用心跳假设按需函数必须常驻。

@@ -10,7 +10,17 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// Package uploads cross regions. Two minutes leaves room for a slow but
+// healthy transfer while preventing an unbounded publish process when COS
+// stops responding.
+const packageUploadTimeout = 2 * time.Minute
+
+var newPackageUploadHTTPClient = func() *http.Client {
+	return &http.Client{Timeout: packageUploadTimeout}
+}
 
 // CloudAccount 云账户（脱敏，仅用于列举与取 account_id）。
 type CloudAccount struct {
@@ -22,6 +32,18 @@ type CloudAccount struct {
 	COSRegion          string `json:"cos_region"`
 	COSBucket          string `json:"cos_bucket"`
 	IsDeleted          bool   `json:"is_deleted"`
+}
+
+// CloudAccountInput registers an existing Tencent credential and its
+// region-local COS bucket with CloudNode. It never contains SecretID/SecretKey.
+type CloudAccountInput struct {
+	AccountID          string `json:"account_id"`
+	AccountName        string `json:"account_name"`
+	Provider           string `json:"provider"`
+	CredentialSecretID string `json:"credential_secret_id"`
+	AppID              string `json:"app_id"`
+	COSRegion          string `json:"cos_region"`
+	COSBucket          string `json:"cos_bucket"`
 }
 
 type UploadPackageRequest struct {
@@ -341,6 +363,29 @@ func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]Clou
 	return resp.Accounts, nil
 }
 
+// CreateCloudAccount registers a cloud account before a fleet publish. COS
+// bucket creation remains CloudNode's responsibility during package upload.
+func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput) (*CloudAccount, error) {
+	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/CreateCloudAccount", map[string]CloudAccountInput{"account": input})
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		RetInfo *retInfo      `json:"ret_info"`
+		Account *CloudAccount `json:"account"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	if resp.RetInfo != nil && !isRetInfoSuccess(resp.RetInfo.Code) {
+		return nil, fmt.Errorf("CreateCloudAccount: code %d: %s", resp.RetInfo.Code, resp.RetInfo.Msg)
+	}
+	if resp.Account == nil || strings.TrimSpace(resp.Account.AccountID) == "" {
+		return nil, fmt.Errorf("CreateCloudAccount returned no account")
+	}
+	return resp.Account, nil
+}
+
 // UploadPackage 两阶段上传：InitPackageUpload -> COS PUT -> CompletePackageUpload。
 func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, data []byte) (*UploadPackageResponse, error) {
 	raw, err := c.postJSON(ctx, http.MethodPost, "/api/admin/cloudnode/InitPackageUpload", req)
@@ -366,7 +411,7 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 	if err != nil {
 		return nil, err
 	}
-	putResp, err := http.DefaultClient.Do(putReq)
+	putResp, err := newPackageUploadHTTPClient().Do(putReq)
 	if err != nil {
 		return nil, fmt.Errorf("COS upload: %w", err)
 	}

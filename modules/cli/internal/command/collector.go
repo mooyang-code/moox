@@ -32,12 +32,14 @@ import (
 )
 
 const (
-	defaultCollectorSCFTimeout   = "10"
+	defaultCollectorSCFTimeout   = "15"
 	maxCollectorPublishNodeCount = 100
 )
 
 type collectorPackageOptions struct {
 	CollectorRoot            string
+	SpaceID                  string
+	PackageConfigDir         string
 	Version                  string
 	Out                      string
 	ConfigDir                string
@@ -71,7 +73,7 @@ type collectorPublishOptions struct {
 	NodeCount              int
 	FunctionNamePrefix     string
 	File                   string
-	FetcherConfig          *setupconfig.SCFFetcher
+	FetcherConfig          *setupconfig.SCFFetcherSpace
 	CLSSecretID            string
 	CLSSecretKey           string
 	CLSHost                string
@@ -107,6 +109,7 @@ type collectorDeleteOptions struct {
 	ServiceAccessKey string
 	ServiceSecretKey string
 	SpaceID          string
+	Region           string
 	Confirm          bool
 	DryRun           bool
 	Wait             bool
@@ -145,7 +148,7 @@ var collectorFunctionDeployCmd = &cobra.Command{
 var collectorFunctionDeleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "异步删除当前 space 中全部 SCF 云函数",
-	Long: "列出当前 space 的全部 scf-event 节点，并通过 CloudNode 提交可恢复查询的异步删除任务。\n" +
+	Long: "列出当前 space 的 scf-event 节点，并通过 CloudNode 提交可恢复查询的异步删除任务；可按地域筛选。\n" +
 		"必须显式指定 --confirm；使用 --dry-run 只列出目标而不提交删除。",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -279,6 +282,7 @@ type collectorDeploySummary struct {
 
 type collectorDeleteSummary struct {
 	SpaceID       string                            `json:"space_id"`
+	Region        string                            `json:"region,omitempty"`
 	NodeType      string                            `json:"node_type"`
 	DryRun        bool                              `json:"dry_run"`
 	TotalCount    int                               `json:"total_count"`
@@ -311,6 +315,7 @@ func init() {
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 access_key")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
+	collectorFunctionPackageCmd.Flags().StringVar(&collectorPackageFlags.SpaceID, "space-id", "", "space id; selects configs/scf/<space-id>")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.CloudAccountID, "cloud-account-id", "", "cloud account id")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.NodeID, "node-id", "", "existing cloud node id / function name")
 	collectorFunctionDeployCmd.Flags().StringVar(&collectorDeployFlags.ZipPath, "zip", "", "existing SCF zip path")
@@ -325,7 +330,8 @@ func init() {
 	deleteFlags.StringVar(&collectorDeleteFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
 	deleteFlags.StringVar(&collectorDeleteFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	deleteFlags.StringVar(&collectorDeleteFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
-	deleteFlags.BoolVar(&collectorDeleteFlags.Confirm, "confirm", false, "确认删除当前 space 的全部 SCF 节点")
+	deleteFlags.StringVar(&collectorDeleteFlags.Region, "region", "", "只删除指定地域的 SCF 节点")
+	deleteFlags.BoolVar(&collectorDeleteFlags.Confirm, "confirm", false, "确认删除当前筛选范围内的 SCF 节点")
 	deleteFlags.BoolVar(&collectorDeleteFlags.DryRun, "dry-run", false, "只列出目标，不提交删除任务")
 	deleteFlags.BoolVar(&collectorDeleteFlags.Wait, "wait", true, "提交后等待异步任务完成")
 	probeFlags := collectorFunctionProbeCmd.Flags()
@@ -387,11 +393,19 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 	}
 	outPath := opts.Out
 	if outPath == "" {
-		outPath = filepath.Join(collectorRoot, fmt.Sprintf("collector-scf-%s.zip", version))
+		spaceID := strings.TrimSpace(opts.SpaceID)
+		if spaceID == "" {
+			return nil, fmt.Errorf("--space-id is required when --out is omitted")
+		}
+		outPath = filepath.Join(collectorRoot, fmt.Sprintf("collector-scf-%s-%s.zip", spaceID, version))
 	}
 	configDir := opts.ConfigDir
 	if configDir == "" {
-		configDir = filepath.Join(collectorRoot, "configs")
+		spaceID := strings.TrimSpace(opts.SpaceID)
+		if spaceID == "" {
+			return nil, fmt.Errorf("--space-id is required when --config is omitted")
+		}
+		configDir = filepath.Join(collectorRoot, "configs", filepath.FromSlash(defaultFlag(opts.PackageConfigDir, filepath.ToSlash(filepath.Join("scf", spaceID)))))
 	}
 	binaryPath := filepath.Join(os.TempDir(), fmt.Sprintf("moox-collector-scf-%d", time.Now().UnixNano()), "main")
 	if err := os.MkdirAll(filepath.Dir(binaryPath), 0o755); err != nil {
@@ -454,14 +468,14 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.CloudAccountID == "" && strings.TrimSpace(opts.File) == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--cloud-account-id is required")
 	}
-	fetcherConfig, err := loadCollectorSCFFetcherConfig(opts.File)
+	fetcherConfig, err := loadCollectorSCFFetcherConfig(opts.File, opts.SpaceID)
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
-	if opts.Region == "" && (fetcherConfig == nil || !fetcherConfig.Enabled) {
+	if opts.Region == "" && fetcherConfig == nil {
 		return collectorPublishSummary{}, fmt.Errorf("--region is required")
 	}
-	if (fetcherConfig == nil || !fetcherConfig.Enabled) && (opts.NodeCount <= 0 || opts.NodeCount > maxCollectorPublishNodeCount) {
+	if fetcherConfig == nil && (opts.NodeCount <= 0 || opts.NodeCount > maxCollectorPublishNodeCount) {
 		return collectorPublishSummary{}, fmt.Errorf(
 			"--node-count must be between 1 and %d",
 			maxCollectorPublishNodeCount,
@@ -470,18 +484,23 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if err := validateCollectorPublishAuth(opts); err != nil {
 		return collectorPublishSummary{}, err
 	}
-	if fetcherConfig != nil && fetcherConfig.Enabled {
+	if fetcherConfig != nil {
 		opts.FetcherConfig = fetcherConfig
+		opts.collectorPackageOptions.SpaceID = fetcherConfig.SpaceID
+		opts.collectorPackageOptions.PackageConfigDir = fetcherConfig.PackageConfigDir
 		opts.Namespace = defaultFlag(fetcherConfig.Namespace, opts.Namespace)
 		opts.Runtime = defaultFlag(fetcherConfig.Runtime, opts.Runtime)
 		opts.FunctionNamePrefix = defaultFlag(fetcherConfig.FunctionPrefix, opts.FunctionNamePrefix)
+		if opts.PackageName == "moox-collector" {
+			opts.PackageName = fetcherConfig.PackageName
+		}
 	}
 	prefixDefault := defaultFlag(opts.PackageName, "moox-collector")
-	if fetcherConfig != nil && fetcherConfig.Enabled {
+	if fetcherConfig != nil {
 		prefixDefault = defaultFlag(fetcherConfig.FunctionPrefix, prefixDefault)
 	}
 	opts.FunctionNamePrefix = defaultFlag(opts.FunctionNamePrefix, prefixDefault)
-	if fetcherConfig == nil || !fetcherConfig.Enabled {
+	if fetcherConfig == nil {
 		if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
 			return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before control-plane access: %w", err)
 		}
@@ -495,18 +514,23 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	for _, account := range accounts {
 		accountsByID[account.AccountID] = account
 	}
-	if (fetcherConfig == nil || !fetcherConfig.Enabled) && accountsByID[opts.CloudAccountID].AccountID == "" {
+	if fetcherConfig != nil {
+		if err := ensureCollectorSpaceCloudAccounts(ctx, client, fetcherConfig, accountsByID); err != nil {
+			return collectorPublishSummary{}, err
+		}
+	}
+	if fetcherConfig == nil && accountsByID[opts.CloudAccountID].AccountID == "" {
 		return collectorPublishSummary{}, fmt.Errorf("Tencent cloud account %q not found", opts.CloudAccountID)
 	}
 	var preflightFleetNodes []adminclient.CloudNode
-	if fetcherConfig == nil || !fetcherConfig.Enabled {
+	if fetcherConfig == nil {
 		preflightFleetNodes, err = inspectCollectorFleet(ctx, client, opts)
 		if err != nil {
 			return collectorPublishSummary{}, err
 		}
 	}
 	clsAccountID := opts.CloudAccountID
-	if fetcherConfig != nil && fetcherConfig.Enabled {
+	if fetcherConfig != nil {
 		clsAccountID = fetcherConfig.CLSCloudAccountID
 	}
 	clsAccount, ok := accountsByID[clsAccountID]
@@ -534,7 +558,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	} else if err := validateCollectorZipLogging(zipPath, opts.CLSTopicID); err != nil {
 		return collectorPublishSummary{}, err
 	}
-	if fetcherConfig == nil || !fetcherConfig.Enabled {
+	if fetcherConfig == nil {
 		if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
 			return collectorPublishSummary{}, fmt.Errorf("validate collector fleet before package upload: %w", err)
 		}
@@ -557,7 +581,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return response.PackageID, nil
 	}
 
-	if fetcherConfig != nil && fetcherConfig.Enabled {
+	if fetcherConfig != nil {
 		opts.FetcherConfig = fetcherConfig
 		var jobs []string
 		for _, region := range fetcherConfig.Regions {
@@ -628,6 +652,39 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	return summary, nil
 }
 
+func ensureCollectorSpaceCloudAccounts(
+	ctx context.Context,
+	client *adminclient.Client,
+	fetcher *setupconfig.SCFFetcherSpace,
+	accounts map[string]adminclient.CloudAccount,
+) error {
+	if fetcher == nil {
+		return nil
+	}
+	for _, region := range fetcher.Regions {
+		if !region.Enabled || accounts[region.CloudAccountID].AccountID != "" {
+			continue
+		}
+		if region.CloudAccountName == "" || region.CredentialSecretID == "" || region.AppID == "" || region.COSBucket == "" {
+			return fmt.Errorf("Tencent cloud account %q for space %s region %s is not registered; set cloud_account_name, credential_secret_id, app_id, and cos_bucket together", region.CloudAccountID, fetcher.SpaceID, region.Region)
+		}
+		account, err := client.CreateCloudAccount(ctx, adminclient.CloudAccountInput{
+			AccountID:          region.CloudAccountID,
+			AccountName:        region.CloudAccountName,
+			Provider:           "tencent",
+			CredentialSecretID: region.CredentialSecretID,
+			AppID:              region.AppID,
+			COSRegion:          region.Region,
+			COSBucket:          region.COSBucket,
+		})
+		if err != nil {
+			return fmt.Errorf("register Tencent cloud account %q for space %s region %s: %w", region.CloudAccountID, fetcher.SpaceID, region.Region, err)
+		}
+		accounts[account.AccountID] = *account
+	}
+	return nil
+}
+
 func validateCollectorZipLogging(zipPath, topicID string) error {
 	archive, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -665,13 +722,13 @@ func validateCollectorZipLogging(zipPath, topicID string) error {
 	}
 	writer, _ := writers[0].(map[string]any)
 	remote, _ := writer["remote_config"].(map[string]any)
-	if writer["writer"] != "cls" || writer["level"] != "warn" || strings.TrimSpace(fmt.Sprint(remote["topic_id"])) != strings.TrimSpace(topicID) {
-		return fmt.Errorf("SCF trpc_go.yaml must use the resolved centralized CLS warn writer")
+	if writer["writer"] != "cls" || writer["level"] != "info" || strings.TrimSpace(fmt.Sprint(remote["topic_id"])) != strings.TrimSpace(topicID) {
+		return fmt.Errorf("SCF trpc_go.yaml must use the resolved centralized CLS info writer")
 	}
 	return nil
 }
 
-func loadCollectorSCFFetcherConfig(path string) (*setupconfig.SCFFetcher, error) {
+func loadCollectorSCFFetcherConfig(path, spaceID string) (*setupconfig.SCFFetcherSpace, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, nil
@@ -681,7 +738,20 @@ func loadCollectorSCFFetcherConfig(path string) (*setupconfig.SCFFetcher, error)
 	if err != nil {
 		return nil, fmt.Errorf("load collector SCF config: %w", err)
 	}
-	return &snapshot.Manifest.SCFFetcher, nil
+	if !snapshot.Manifest.SCFFetcher.Enabled {
+		return nil, nil
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return nil, fmt.Errorf("--space-id is required to select scf_fetcher.spaces")
+	}
+	for index := range snapshot.Manifest.SCFFetcher.Spaces {
+		space := &snapshot.Manifest.SCFFetcher.Spaces[index]
+		if space.SpaceID == spaceID {
+			return space, nil
+		}
+	}
+	return nil, fmt.Errorf("scf_fetcher has no configuration for space %q", spaceID)
 }
 
 func validateCollectorPublishAuth(opts collectorPublishOptions) error {
@@ -898,7 +968,12 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	}
 
 	client := newControlClient(controlURL, opts.AccessToken, opts.ServiceAccessKey, opts.ServiceSecretKey, spaceID)
-	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{NodeType: "scf-event", BizType: "market_fetcher"})
+	region := strings.TrimSpace(opts.Region)
+	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
+		NodeType: "scf-event",
+		BizType:  "market_fetcher",
+		Region:   region,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list active SCF nodes: %w", err)
 	}
@@ -911,6 +986,7 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	}
 	summary := &collectorDeleteSummary{
 		SpaceID:    spaceID,
+		Region:     region,
 		NodeType:   "scf-event",
 		DryRun:     opts.DryRun,
 		TotalCount: len(nodeIDs),
@@ -1120,19 +1196,22 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	}
 	fetcher := opts.FetcherConfig
 	if fetcher == nil {
-		fetcher = &setupconfig.SCFFetcher{MemorySize: 64, TimeoutSeconds: 10, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 16, RequestTimeoutMS: 1500, HTTPMaxAttempts: 1, StorageMaxAttempts: 1, CommitReserveMS: 2000, MaxRetryAttempts: 3}
+		fetcher = &setupconfig.SCFFetcherSpace{MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 16, RequestTimeoutMS: 1500, HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3}
 	}
 	if strings.TrimSpace(config["timeout"]) == "" {
-		config["timeout"] = strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 10))
+		config["timeout"] = strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15))
 	}
 	if strings.TrimSpace(config["memory_size"]) == "" {
 		config["memory_size"] = strconv.Itoa(defaultInt(fetcher.MemorySize, 64))
 	}
+	if strings.TrimSpace(config["storage_timeout_ms"]) == "" {
+		config["storage_timeout_ms"] = strconv.Itoa(defaultInt(fetcher.StorageTimeoutMS, 5000))
+	}
 	if collectorConfigInt(config, "memory_size", 64) != 64 {
 		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher memory_size is fixed at 64MB")
 	}
-	if collectorConfigInt(config, "timeout", 10) != 10 {
-		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher timeout is fixed at 10 seconds")
+	if collectorConfigInt(config, "timeout", 15) != 15 {
+		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher timeout is fixed at 15 seconds")
 	}
 	if err := validateCollectorRuntimeConfig(config, fetcher); err != nil {
 		return adminclient.NodeCreateItem{}, err
@@ -1146,7 +1225,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 		"realtime_bar_limit":    "MOOX_FETCH_REALTIME_BAR_LIMIT",
 		"catchup_batch_size":    "MOOX_FETCH_CATCHUP_BATCH_SIZE",
 		"catchup_bar_limit":     "MOOX_FETCH_CATCHUP_BAR_LIMIT",
-		"commit_reserve_ms":     "MOOX_FETCH_COMMIT_RESERVE_MS",
+		"storage_timeout_ms":    "MOOX_FETCH_STORAGE_TIMEOUT_MS",
 		"max_retry_attempts":    "MOOX_FETCH_MAX_RETRY_ATTEMPTS",
 	} {
 		if value := strings.TrimSpace(config[configKey]); value != "" {
@@ -1171,13 +1250,14 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 			"biz_type":              bizType,
 			"supported_workloads":   []string{},
 			"memory_size":           effectiveInt("memory_size", defaultInt(fetcher.MemorySize, 64)),
-			"timeout_seconds":       effectiveInt("timeout", defaultInt(fetcher.TimeoutSeconds, 10)),
+			"timeout_seconds":       effectiveInt("timeout", defaultInt(fetcher.TimeoutSeconds, 15)),
 			"max_inflight_requests": effectiveInt("max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 5)),
 			"realtime_batch_size":   effectiveInt("realtime_batch_size", defaultInt(fetcher.RealtimeBatchSize, 10)),
 			"realtime_bar_limit":    effectiveInt("realtime_bar_limit", defaultInt(fetcher.RealtimeBarLimit, 3)),
 			"request_timeout_ms":    effectiveInt("request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 2000)),
-			"http_max_attempts":     effectiveInt("http_max_attempts", defaultInt(fetcher.HTTPMaxAttempts, 1)),
+			"http_max_attempts":     effectiveInt("http_max_attempts", defaultInt(fetcher.HTTPMaxAttempts, 4)),
 			"storage_max_attempts":  effectiveInt("storage_max_attempts", defaultInt(fetcher.StorageMaxAttempts, 1)),
+			"storage_timeout_ms":    effectiveInt("storage_timeout_ms", defaultInt(fetcher.StorageTimeoutMS, 5000)),
 		},
 	}, nil
 }
@@ -1346,18 +1426,18 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
 	fetcher := opts.FetcherConfig
 	if fetcher == nil {
-		fetcher = &setupconfig.SCFFetcher{TimeoutSeconds: 10, MaxInflightRequests: 16, RequestTimeoutMS: 1500, HTTPMaxAttempts: 1, StorageMaxAttempts: 1, CommitReserveMS: 2000, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxRetryAttempts: 3}
+		fetcher = &setupconfig.SCFFetcherSpace{TimeoutSeconds: 15, MaxInflightRequests: 16, RequestTimeoutMS: 1500, HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxRetryAttempts: 3}
 	}
-	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 10)))
+	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15)))
 	setDefaultEnv(env, "MOOX_FETCH_MAX_INFLIGHT_REQUESTS", strconv.Itoa(defaultInt(fetcher.MaxInflightRequests, 5)))
 	setDefaultEnv(env, "MOOX_FETCH_REQUEST_TIMEOUT_MS", strconv.Itoa(defaultInt(fetcher.RequestTimeoutMS, 2000)))
-	setDefaultEnv(env, "MOOX_FETCH_HTTP_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.HTTPMaxAttempts, 1)))
+	setDefaultEnv(env, "MOOX_FETCH_HTTP_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.HTTPMaxAttempts, 4)))
 	setDefaultEnv(env, "MOOX_FETCH_STORAGE_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.StorageMaxAttempts, 1)))
 	setDefaultEnv(env, "MOOX_FETCH_REALTIME_BATCH_SIZE", strconv.Itoa(defaultInt(fetcher.RealtimeBatchSize, 10)))
 	setDefaultEnv(env, "MOOX_FETCH_REALTIME_BAR_LIMIT", strconv.Itoa(defaultInt(fetcher.RealtimeBarLimit, 3)))
 	setDefaultEnv(env, "MOOX_FETCH_CATCHUP_BATCH_SIZE", strconv.Itoa(defaultInt(fetcher.CatchupBatchSize, 1)))
 	setDefaultEnv(env, "MOOX_FETCH_CATCHUP_BAR_LIMIT", strconv.Itoa(defaultInt(fetcher.CatchupBarLimit, 1000)))
-	setDefaultEnv(env, "MOOX_FETCH_COMMIT_RESERVE_MS", strconv.Itoa(defaultInt(fetcher.CommitReserveMS, 2000)))
+	setDefaultEnv(env, "MOOX_FETCH_STORAGE_TIMEOUT_MS", strconv.Itoa(defaultInt(fetcher.StorageTimeoutMS, 5000)))
 	setDefaultEnv(env, "MOOX_FETCH_MAX_RETRY_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.MaxRetryAttempts, 3)))
 	gatewayNodeID := firstNonEmpty(os.Getenv("MOOX_GATEWAY_NODE_ID"), os.Getenv("MOOX_GATEWAY_TARGET_NODE"))
 	setDefaultEnv(env, "MOOX_GATEWAY_NODE_ID", gatewayNodeID)
@@ -1395,7 +1475,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_FETCH_REALTIME_BAR_LIMIT":     {},
 		"MOOX_FETCH_CATCHUP_BATCH_SIZE":     {},
 		"MOOX_FETCH_CATCHUP_BAR_LIMIT":      {},
-		"MOOX_FETCH_COMMIT_RESERVE_MS":      {},
+		"MOOX_FETCH_STORAGE_TIMEOUT_MS":     {},
 		"MOOX_FETCH_MAX_RETRY_ATTEMPTS":     {},
 		"MOOX_CLS_SECRET_ID":                {},
 		"MOOX_CLS_SECRET_KEY":               {},
@@ -1533,7 +1613,7 @@ func collectorConfigInt(values map[string]string, key string, fallback int) int 
 // validateCollectorRuntimeConfig keeps command-line function-config overrides
 // inside the same short-lived execution budget as custom.toml. This is needed
 // because those overrides are copied into SCF environment variables directly.
-func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconfig.SCFFetcher) error {
+func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconfig.SCFFetcherSpace) error {
 	if fetcher == nil {
 		return fmt.Errorf("scf fetcher configuration is required")
 	}
@@ -1555,13 +1635,16 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if err != nil {
 		return err
 	}
-	commitReserveMS, err := collectorRuntimeConfigInt(values, "commit_reserve_ms", defaultInt(fetcher.CommitReserveMS, 2000), 0)
+	storageTimeoutMS, err := collectorRuntimeConfigInt(values, "storage_timeout_ms", defaultInt(fetcher.StorageTimeoutMS, 5000), 1)
 	if err != nil {
 		return err
 	}
 	requestWaves := (batchSize + inflight - 1) / inflight
-	if requestWaves*requestTimeoutMS+commitReserveMS >= 10_000 {
-		return fmt.Errorf("market_fetcher realtime request waves + commit_reserve_ms must be less than the 10-second timeout")
+	if storageTimeoutMS != 5000 {
+		return fmt.Errorf("market_fetcher storage_timeout_ms is fixed at 5000")
+	}
+	if requestWaves*requestTimeoutMS+storageTimeoutMS+500 >= 15_000 {
+		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + publish reserve must be less than the 15-second timeout")
 	}
 	return nil
 }
@@ -1653,7 +1736,7 @@ func newControlClient(controlURL, accessToken, serviceAccessKey, serviceSecretKe
 }
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version string) error {
-	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-X main.Version=%s", version), "-o", outPath, "./cmd/scf")
+	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-s -w -X main.Version=%s", version), "-o", outPath, "./cmd/scf")
 	cmd.Dir = collectorRoot
 	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
 	output, err := cmd.CombinedOutput()

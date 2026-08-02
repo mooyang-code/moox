@@ -98,6 +98,26 @@ func TestExecutorTurnsSuccessfulItemsIntoStorageErrors(t *testing.T) {
 	}
 }
 
+func TestResultErrorSummaryUsesFirstActionableItemError(t *testing.T) {
+	results := []domain.ItemResult{
+		{Outcome: domain.ItemOutcomeStorageError, ErrorSummary: ""},
+		{Outcome: domain.ItemOutcomeStorageError, ErrorSummary: "write time-series rows: timeout"},
+		{Outcome: domain.ItemOutcomeStorageError, ErrorSummary: "later error"},
+	}
+	assert.Equal(t, "write time-series rows: timeout", resultErrorSummary(results))
+	assert.Empty(t, resultErrorSummary([]domain.ItemResult{{Outcome: domain.ItemOutcomeSuccess}}))
+}
+
+func TestStorageAndPublishReservesKeepsFullStorageTimeout(t *testing.T) {
+	commit, publish := storageAndPublishReserves(5 * time.Second)
+	assert.Equal(t, 5500*time.Millisecond, commit)
+	assert.Equal(t, 500*time.Millisecond, publish)
+
+	commit, publish = storageAndPublishReserves(0)
+	assert.Equal(t, 5500*time.Millisecond, commit)
+	assert.Equal(t, 500*time.Millisecond, publish)
+}
+
 func TestExecutorSupportsSymbolSnapshotAndCatchupBatches(t *testing.T) {
 	rows := []*storagepb.RowFieldUpsert{{}}
 	storage := &fakeStorage{}

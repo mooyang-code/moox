@@ -75,6 +75,32 @@ func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 	assert.Equal(t, "a1", accounts[0].AccountID)
 }
 
+func TestCreateCloudAccount_RegistersRegionLocalBucket(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/cloudnode/CreateCloudAccount", r.URL.Path)
+		var body struct {
+			Account CloudAccountInput `json:"account"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "tencent-scf-singapore", body.Account.AccountID)
+		assert.Equal(t, "ap-singapore", body.Account.COSRegion)
+		assert.Equal(t, "moox-scf-singapore-1255382561", body.Account.COSBucket)
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"account":{"account_id":"tencent-scf-singapore","cos_region":"ap-singapore","cos_bucket":"moox-scf-singapore-1255382561"}}`))
+	}))
+	defer server.Close()
+
+	account, err := New(server.URL).CreateCloudAccount(context.Background(), CloudAccountInput{
+		AccountID: "tencent-scf-singapore", AccountName: "Tencent SCF Singapore", Provider: "tencent",
+		CredentialSecretID: "tencent-default", AppID: "1255382561", COSRegion: "ap-singapore", COSBucket: "moox-scf-singapore-1255382561",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "tencent-scf-singapore", account.AccountID)
+}
+
+func TestPackageUploadClientHasBoundedTimeout(t *testing.T) {
+	assert.Equal(t, packageUploadTimeout, newPackageUploadHTTPClient().Timeout)
+}
+
 func TestResolvePackageType_MapsKnownAliases(t *testing.T) {
 	assert.Equal(t, 1, ResolvePackageType("collector"))
 	assert.Equal(t, 2, ResolvePackageType("factor"))

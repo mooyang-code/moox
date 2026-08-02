@@ -1,0 +1,18 @@
+global:
+  namespace: Production
+  env_name: dev
+
+server:
+  timeout: 5000
+  service:
+    - name: trpc.moox.collector.scf_observability.timer
+      port: 8005
+      network: "*/30 * * * * *?scheduler=scfObservability&startAtOnce=1"
+      protocol: timer
+      timeout: 30000
+
+plugins:
+  log:
+    default:
+      - writer: console
+        level: info

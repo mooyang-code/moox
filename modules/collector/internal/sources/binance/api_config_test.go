@@ -3,6 +3,7 @@ package binance
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +73,32 @@ func TestKlineCollectorOnlyUnclosedBarCompletesWithoutWrite(t *testing.T) {
 	assert.Zero(t, result.RowsWritten)
 	assert.Empty(t, result.OutputWatermark)
 	assert.Empty(t, result.SnapshotVersion)
+}
+
+func TestFetchRealtimeRowsRetriesTimeoutThreeTimes(t *testing.T) {
+	now := time.Date(2026, 8, 2, 7, 0, 0, 0, time.UTC)
+	var calls atomic.Int32
+	collector := &KlineCollector{
+		fetchKlinePage: func(context.Context, *sources.CollectParams, *exchange.KlineRequest) ([]*exchange.Kline, error) {
+			if calls.Add(1) <= 3 {
+				return nil, context.DeadlineExceeded
+			}
+			return []*exchange.Kline{{
+				OpenTime: now.Add(-2 * time.Minute), CloseTime: now.Add(-time.Minute),
+				Open: common.NewDecimal("1"), High: common.NewDecimal("2"), Low: common.NewDecimal("0.5"), Close: common.NewDecimal("1.5"),
+				Volume: common.NewDecimal("10"), QuoteVolume: common.NewDecimal("15"), TradeCount: 3,
+			}}, nil
+		},
+		now: func() time.Time { return now },
+	}
+	rows, latest, err := collector.FetchRealtimeRows(context.Background(), &sources.CollectParams{
+		SpaceID: "crypto", DatasetID: "spot_kline_1m", InstType: InstTypeSPOT,
+		Symbol: "SKYUSDT", SubjectID: "SKY-USDT", Interval: "1m",
+	}, 3)
+	require.NoError(t, err)
+	assert.Equal(t, int32(4), calls.Load())
+	assert.Len(t, rows, 1)
+	assert.Equal(t, now.Add(-2*time.Minute), latest)
 }
 
 type fakeKlineStorage struct {

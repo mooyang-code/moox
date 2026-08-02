@@ -50,17 +50,32 @@ type Host struct {
 }
 
 type SCFFetcherRegion struct {
-	Region         string `toml:"region"`
-	DisplayName    string `toml:"display_name"`
-	Enabled        bool   `toml:"enabled"`
-	FunctionCount  int    `toml:"function_count"`
-	CloudAccountID string `toml:"cloud_account_id"`
+	Region             string `toml:"region"`
+	DisplayName        string `toml:"display_name"`
+	Enabled            bool   `toml:"enabled"`
+	FunctionCount      int    `toml:"function_count"`
+	CloudAccountID     string `toml:"cloud_account_id"`
+	CloudAccountName   string `toml:"cloud_account_name"`
+	CredentialSecretID string `toml:"credential_secret_id"`
+	AppID              string `toml:"app_id"`
+	COSBucket          string `toml:"cos_bucket"`
 }
 
+// SCFFetcher is the manifest container for independent, space-scoped SCF
+// fleets. A function may only consume tasks from its configured space.
 type SCFFetcher struct {
-	Enabled bool `toml:"enabled"`
+	Enabled bool              `toml:"enabled"`
+	Spaces  []SCFFetcherSpace `toml:"spaces"`
+}
+
+// SCFFetcherSpace describes one separately packaged and deployed source
+// collector fleet. PackageConfigDir is relative to modules/collector/configs.
+type SCFFetcherSpace struct {
+	SpaceID          string `toml:"space_id"`
+	PackageConfigDir string `toml:"package_config_dir"`
+	PackageName      string `toml:"package_name"`
 	// CLSCloudAccountID owns the single regional CLS topic used by every
-	// short-lived collector function, regardless of its SCF region.
+	// short-lived collector function in this space, regardless of its SCF region.
 	CLSCloudAccountID   string             `toml:"cls_cloud_account_id"`
 	Namespace           string             `toml:"namespace"`
 	Runtime             string             `toml:"runtime"`
@@ -75,7 +90,7 @@ type SCFFetcher struct {
 	RequestTimeoutMS    int                `toml:"request_timeout_ms"`
 	HTTPMaxAttempts     int                `toml:"http_max_attempts"`
 	StorageMaxAttempts  int                `toml:"storage_max_attempts"`
-	CommitReserveMS     int                `toml:"commit_reserve_ms"`
+	StorageTimeoutMS    int                `toml:"storage_timeout_ms"`
 	MaxRetryAttempts    int                `toml:"max_retry_attempts"`
 	RetryDelays         []string           `toml:"retry_delays"`
 	StaggerEnabled      bool               `toml:"stagger_enabled"`
@@ -282,6 +297,38 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 	if cfg == nil || !cfg.Enabled {
 		return nil
 	}
+	if len(cfg.Spaces) == 0 {
+		return fmt.Errorf("config_invalid: scf_fetcher.spaces must not be empty when enabled")
+	}
+	seenSpaces := make(map[string]struct{}, len(cfg.Spaces))
+	for index := range cfg.Spaces {
+		spaceID := strings.TrimSpace(cfg.Spaces[index].SpaceID)
+		if spaceID == "" {
+			return fmt.Errorf("config_invalid: scf_fetcher.spaces[%d].space_id is required", index)
+		}
+		if _, exists := seenSpaces[spaceID]; exists {
+			return fmt.Errorf("config_invalid: scf_fetcher space %q is duplicated", spaceID)
+		}
+		seenSpaces[spaceID] = struct{}{}
+		cfg.Spaces[index].SpaceID = spaceID
+		if err := validateSCFFetcherSpace(&cfg.Spaces[index], fmt.Sprintf("scf_fetcher.spaces[%d]", index)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
+	if cfg == nil {
+		return fmt.Errorf("config_invalid: %s is required", path)
+	}
+	if cfg.PackageConfigDir == "" {
+		cfg.PackageConfigDir = filepath.ToSlash(filepath.Join("scf", cfg.SpaceID))
+	}
+	cfg.PackageConfigDir = filepath.ToSlash(filepath.Clean(cfg.PackageConfigDir))
+	if cfg.PackageConfigDir == "." || strings.HasPrefix(cfg.PackageConfigDir, "../") || filepath.IsAbs(cfg.PackageConfigDir) {
+		return fmt.Errorf("config_invalid: %s.package_config_dir must stay under collector configs", path)
+	}
 	if cfg.Namespace == "" {
 		cfg.Namespace = "default"
 	}
@@ -289,90 +336,113 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 		cfg.Runtime = "Go1"
 	}
 	if cfg.FunctionPrefix == "" {
-		cfg.FunctionPrefix = "moox-fetcher"
+		cfg.FunctionPrefix = "moox-fetcher-" + cfg.SpaceID
+	}
+	if !strings.Contains(cfg.FunctionPrefix, cfg.SpaceID) {
+		return fmt.Errorf("config_invalid: %s.function_prefix must include space_id", path)
+	}
+	if cfg.PackageName == "" {
+		cfg.PackageName = "moox-collector-" + cfg.SpaceID
+	}
+	if !strings.Contains(cfg.PackageName, cfg.SpaceID) {
+		return fmt.Errorf("config_invalid: %s.package_name must include space_id", path)
 	}
 	cfg.CLSCloudAccountID = strings.TrimSpace(cfg.CLSCloudAccountID)
 	if cfg.MemorySize != 64 {
-		return fmt.Errorf("config_invalid: scf_fetcher.memory_size must be 64")
+		return fmt.Errorf("config_invalid: %s.memory_size must be 64", path)
 	}
-	if cfg.TimeoutSeconds != 10 {
-		return fmt.Errorf("config_invalid: scf_fetcher.timeout_seconds must be 10")
+	if cfg.TimeoutSeconds != 15 {
+		return fmt.Errorf("config_invalid: %s.timeout_seconds must be 15", path)
 	}
 	if cfg.RealtimeBatchSize == 0 {
 		cfg.RealtimeBatchSize = 64
 	}
 	if cfg.RealtimeBatchSize < 1 || cfg.RealtimeBatchSize > 64 {
-		return fmt.Errorf("config_invalid: scf_fetcher.realtime_batch_size must be between 1 and 64")
+		return fmt.Errorf("config_invalid: %s.realtime_batch_size must be between 1 and 64", path)
 	}
 	if cfg.RealtimeBarLimit == 0 {
 		cfg.RealtimeBarLimit = 3
 	}
 	if cfg.RealtimeBarLimit != 3 {
-		return fmt.Errorf("config_invalid: scf_fetcher.realtime_bar_limit must be 3")
+		return fmt.Errorf("config_invalid: %s.realtime_bar_limit must be 3", path)
 	}
 	if cfg.CatchupBatchSize <= 0 {
 		cfg.CatchupBatchSize = 1
 	}
 	if cfg.CatchupBatchSize != 1 {
-		return fmt.Errorf("config_invalid: scf_fetcher.catchup_batch_size must be 1")
+		return fmt.Errorf("config_invalid: %s.catchup_batch_size must be 1", path)
 	}
 	if cfg.CatchupBarLimit == 0 {
 		cfg.CatchupBarLimit = 1000
 	}
 	if cfg.CatchupBarLimit != 1000 {
-		return fmt.Errorf("config_invalid: scf_fetcher.catchup_bar_limit must be 1000")
+		return fmt.Errorf("config_invalid: %s.catchup_bar_limit must be 1000", path)
 	}
 	if cfg.MaxInflightRequests <= 0 || cfg.MaxInflightRequests > 64 {
-		return fmt.Errorf("config_invalid: scf_fetcher.max_inflight_requests must be between 1 and 64")
+		return fmt.Errorf("config_invalid: %s.max_inflight_requests must be between 1 and 64", path)
 	}
-	if cfg.RequestTimeoutMS <= 0 || cfg.StorageMaxAttempts != 1 || cfg.HTTPMaxAttempts != 1 {
-		return fmt.Errorf("config_invalid: scf_fetcher request/storage attempts are invalid")
+	if cfg.RequestTimeoutMS <= 0 || cfg.StorageMaxAttempts != 1 || cfg.HTTPMaxAttempts != 4 {
+		return fmt.Errorf("config_invalid: %s request/storage attempts are invalid", path)
 	}
-	if cfg.CommitReserveMS == 0 {
-		cfg.CommitReserveMS = 2000
+	if cfg.StorageTimeoutMS == 0 {
+		cfg.StorageTimeoutMS = 5000
 	}
 	if cfg.MaxRetryAttempts == 0 {
 		cfg.MaxRetryAttempts = 3
 	}
-	if cfg.CommitReserveMS < 0 || cfg.MaxRetryAttempts != 3 {
-		return fmt.Errorf("config_invalid: scf_fetcher commit_reserve_ms must be non-negative and max_retry_attempts must be 3")
+	if cfg.StorageTimeoutMS != 5000 || cfg.MaxRetryAttempts != 3 {
+		return fmt.Errorf("config_invalid: %s storage_timeout_ms must be 5000 and max_retry_attempts must be 3", path)
 	}
 	if len(cfg.RetryDelays) == 0 {
 		cfg.RetryDelays = []string{"5s", "30s", "2m"}
 	}
 	if len(cfg.RetryDelays) != 3 || cfg.RetryDelays[0] != "5s" || cfg.RetryDelays[1] != "30s" || cfg.RetryDelays[2] != "2m" || cfg.StaggerEnabled {
-		return fmt.Errorf("config_invalid: scf_fetcher retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false")
+		return fmt.Errorf("config_invalid: %s retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false", path)
 	}
 	requestWaves := (cfg.RealtimeBatchSize + cfg.MaxInflightRequests - 1) / cfg.MaxInflightRequests
-	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.CommitReserveMS
+	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + 500
 	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
-		return fmt.Errorf("config_invalid: scf_fetcher realtime request waves + commit_reserve_ms must be less than timeout")
+		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + publish reserve must be less than timeout", path)
 	}
 	seen := make(map[string]struct{}, len(cfg.Regions))
 	enabledRegions := 0
 	for i := range cfg.Regions {
 		region := strings.TrimSpace(cfg.Regions[i].Region)
 		if region == "" || cfg.Regions[i].FunctionCount <= 0 || cfg.Regions[i].FunctionCount > 50 || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
-			return fmt.Errorf("config_invalid: scf_fetcher.regions[%d] region, cloud_account_id, and function_count 1..50 are required for enabled regions", i)
+			return fmt.Errorf("config_invalid: %s.regions[%d] region, cloud_account_id, and function_count 1..50 are required for enabled regions", path, i)
 		}
 		if !supportedSCFRegion(region) {
-			return fmt.Errorf("config_invalid: scf_fetcher.regions[%d] region %q is not supported", i, region)
+			return fmt.Errorf("config_invalid: %s.regions[%d] region %q is not supported", path, i, region)
 		}
 		if _, ok := seen[region]; ok {
-			return fmt.Errorf("config_invalid: scf_fetcher region %q is duplicated", region)
+			return fmt.Errorf("config_invalid: %s region %q is duplicated", path, region)
 		}
 		seen[region] = struct{}{}
 		cfg.Regions[i].Region = region
 		cfg.Regions[i].CloudAccountID = strings.TrimSpace(cfg.Regions[i].CloudAccountID)
+		cfg.Regions[i].CloudAccountName = strings.TrimSpace(cfg.Regions[i].CloudAccountName)
+		cfg.Regions[i].CredentialSecretID = strings.TrimSpace(cfg.Regions[i].CredentialSecretID)
+		cfg.Regions[i].AppID = strings.TrimSpace(cfg.Regions[i].AppID)
+		cfg.Regions[i].COSBucket = strings.TrimSpace(cfg.Regions[i].COSBucket)
+		registrationFields := []string{cfg.Regions[i].CloudAccountName, cfg.Regions[i].CredentialSecretID, cfg.Regions[i].AppID, cfg.Regions[i].COSBucket}
+		registrationCount := 0
+		for _, field := range registrationFields {
+			if field != "" {
+				registrationCount++
+			}
+		}
+		if registrationCount != 0 && registrationCount != len(registrationFields) {
+			return fmt.Errorf("config_invalid: %s.regions[%d] cloud account registration requires cloud_account_name, credential_secret_id, app_id, and cos_bucket together", path, i)
+		}
 		if cfg.Regions[i].Enabled {
 			enabledRegions++
 		}
 	}
 	if len(cfg.Regions) == 0 {
-		return fmt.Errorf("config_invalid: scf_fetcher.regions must not be empty when enabled")
+		return fmt.Errorf("config_invalid: %s.regions must not be empty", path)
 	}
 	if enabledRegions == 0 {
-		return fmt.Errorf("config_invalid: scf_fetcher.regions must contain at least one enabled region")
+		return fmt.Errorf("config_invalid: %s.regions must contain at least one enabled region", path)
 	}
 	if cfg.CLSCloudAccountID == "" {
 		// Keep the central log sink deterministic for the standard MooX fleet
