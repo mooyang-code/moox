@@ -870,8 +870,8 @@ const defaultNodeType = computed(() => {
 // 采集 SCF runtime 默认使用 Go1。
 const defaultRuntime = computed(() => "Go1");
 
-// 当前页面的业务类型固定为数据采集。
-const currentBizType = computed(() => "data_collector");
+// Short-lived market-fetch SCF nodes are registered under this shared type.
+const currentBizType = computed(() => "market_fetcher");
 
 // 生命周期钩子
 onMounted(async () => {
