@@ -74,6 +74,7 @@ github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnr
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/jtolds/gls v4.20.0+incompatible h1:xdiiI2gbIgH/gLH7ADydsJ1uDOEzR8yvV7C0MuV77Wo=
 github.com/jtolds/gls v4.20.0+incompatible/go.mod h1:QJZ7F/aHp+rZTRtaJ1ow/lLfFfVYBRgL+9YlvaHOwJU=
+github.com/klauspost/compress v1.15.1/go.mod h1:/3/Vjq9QcHkK5uEr5lBEmyoZ1iFhe47etQ6QUkpK6sk=
 github.com/klauspost/compress v1.18.5 h1:/h1gH5Ce+VWNLSWqPzOVn6XBO+vJbCNGvjoaGBFW2IE=
 github.com/klauspost/compress v1.18.5/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=
@@ -160,8 +161,8 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed h1:fAAkGa0jncXK1VezWQ4vrn8HOfJcxEvUZS4L8yFuebI=
-github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed/go.mod h1:/TcQ9bTgVYkRkMLyGdjdjjAfpUW1LbklvSAvZorIYAM=
+github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11 h1:LJshkcQ14A/7XCgqalheBHv8qLwwOXr/xqttQbjWdHM=
+github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11/go.mod h1:WU+0TXfVbSctEsUUf4KmIKnfr+tknbjcsnx/TrEIPH4=
 github.com/tencentyun/scf-go-lib v0.0.0-20230904103145-13c9a7eeca80 h1:OjUY8rjewsD2dprstvMdFmUVXZaC1tkiRhXdisTFNrg=
 github.com/tencentyun/scf-go-lib v0.0.0-20230904103145-13c9a7eeca80/go.mod h1:K3DbqPpP2WE/9MWokWWzgFZcbgtMb9Wd5CYk9AAbEN8=
 github.com/valyala/bytebufferpool v1.0.0 h1:GqA5TC/0021Y/b9FG4Oi9Mr3q7XYx6KllzawFIhcdPw=

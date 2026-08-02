@@ -28,6 +28,7 @@ use (
 	./packages/cloudjobqueue
 	./packages/cloudprovider
 	./packages/cloudruntime
+	./packages/clsreporter
 	./packages/commonpb
 	./packages/doctor
 	./packages/events
@@ -36,8 +37,8 @@ use (
 	./packages/healthz
 	./packages/hostmetricpb
 	./packages/jetstream
-	./packages/metricspb
 	./packages/marketfetchpb
+	./packages/metricspb
 	./packages/msgbox
 	./packages/observabilitypb
 	./packages/pyruntime
