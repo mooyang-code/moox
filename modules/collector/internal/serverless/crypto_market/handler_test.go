@@ -49,5 +49,5 @@ func TestStaticFieldsReporterPreservesInvocationIdentity(t *testing.T) {
 	reporter.Report(clsreporter.Entry{Fields: map[string]string{"event_type": "market_fetch_item", "region": "request-region"}})
 	require.Len(t, recorder.entries, 1)
 	assert.Equal(t, "crypto-fetcher", recorder.entries[0].Fields["function_name"])
-	assert.Equal(t, "request-region", recorder.entries[0].Fields["region"])
+	assert.Equal(t, "ap-singapore", recorder.entries[0].Fields["region"])
 }

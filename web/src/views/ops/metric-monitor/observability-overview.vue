@@ -22,14 +22,6 @@
       </a-tooltip>
     </header>
 
-    <section class="scf-band" aria-label="SCF 运行状态">
-      <strong>SCF</strong>
-      <span class="status-item status-healthy">在线 {{ overview.scf?.online_count || 0 }}</span>
-      <span class="status-item status-stale">超时 {{ overview.scf?.timeout_count || 0 }}</span>
-      <span class="status-item status-unknown">未知 {{ overview.scf?.unknown_count || 0 }}</span>
-      <span class="muted">最旧心跳 {{ formatTime(overview.scf?.oldest_heartbeat_at) }}</span>
-    </section>
-
     <section class="overview-section">
       <div class="section-head"><strong>服务</strong><span>健康检查与 Reporter freshness</span></div>
       <a-table
@@ -208,9 +200,7 @@ const abnormalCount = computed(
       ...(overview.value.hosts || []),
       ...(overview.value.datasets || []),
       ...(overview.value.business_checks || [])
-    ].filter(item => item.status !== "healthy").length +
-    (overview.value.scf?.timeout_count || 0) +
-    (overview.value.scf?.unknown_count || 0)
+    ].filter(item => item.status !== "healthy").length
 );
 const datasetEmptyDescription = computed(() => {
   if ((overview.value.services || []).some(item => item.status === "stale")) return "producer stale";
@@ -292,7 +282,6 @@ onActivated(loadOverview);
 }
 
 .overview-toolbar,
-.scf-band,
 .section-head,
 .dataset-filters {
   display: flex;
@@ -304,27 +293,19 @@ onActivated(loadOverview);
   padding: 0 0 var(--moox-space-3);
 }
 
-.overview-summary,
-.scf-band {
+.overview-summary {
   display: flex;
   flex-wrap: wrap;
   gap: var(--moox-space-4);
 }
 
-.overview-summary span,
-.scf-band span {
+.overview-summary span {
   color: var(--color-text-2);
 }
 
 .overview-summary b {
   margin-right: 4px;
   color: var(--color-text-1);
-}
-
-.scf-band {
-  padding: 10px 0;
-  border-top: 1px solid var(--color-border-2);
-  border-bottom: 1px solid var(--color-border-2);
 }
 
 .overview-section {
@@ -371,10 +352,6 @@ onActivated(loadOverview);
 
   .overview-summary {
     gap: var(--moox-space-2) var(--moox-space-3);
-  }
-
-  .scf-band {
-    gap: var(--moox-space-2);
   }
 
   .dataset-filters {

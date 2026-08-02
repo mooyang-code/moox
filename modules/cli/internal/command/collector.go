@@ -1430,7 +1430,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_CLS_ENABLED", "true")
 	setDefaultEnv(env, "MOOX_CLS_ENDPOINT", firstNonEmpty(opts.CLSHost, os.Getenv("MOOX_CLS_ENDPOINT"), clsprepare.Host))
 	setDefaultEnv(env, "MOOX_CLS_TOPIC_ID", firstNonEmpty(opts.CLSTopicID, os.Getenv("MOOX_CLS_TOPIC_ID")))
-	setDefaultEnv(env, "MOOX_CLS_TIMEOUT_MS", "800")
+	setDefaultEnv(env, "MOOX_CLS_TIMEOUT_MS", strconv.Itoa(setupconfig.SCFCLSReserveMilliseconds))
 	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", firstNonEmpty(opts.CLSSecretID, defaultCLSSecretID))
 	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", firstNonEmpty(opts.CLSSecretKey, defaultCLSSecretKey))
 	// The native Storage gateway verifies the caller together with the key ID.
@@ -1631,8 +1631,8 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if storageTimeoutMS != 5000 {
 		return fmt.Errorf("market_fetcher storage_timeout_ms is fixed at 5000")
 	}
-	if requestWaves*requestTimeoutMS+storageTimeoutMS+500 >= 15_000 {
-		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + publish reserve must be less than the 15-second timeout")
+	if requestWaves*requestTimeoutMS+storageTimeoutMS+500+setupconfig.SCFCLSReserveMilliseconds >= 15_000 {
+		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + publish and CLS reserves must be less than the 15-second timeout")
 	}
 	return nil
 }

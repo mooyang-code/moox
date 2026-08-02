@@ -284,6 +284,9 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 				results[index].Outcome = domain.ItemOutcomeStorageError
 				results[index].ErrorType = "storage"
 				results[index].ErrorSummary = truncateError(writeErr)
+				// CLS rows measures rows committed to Storage, not rows merely
+				// returned by the upstream exchange.
+				rowCountByItem[index] = 0
 			}
 		}
 	}
@@ -322,11 +325,11 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 	if payload.GetStatus() != "succeeded" {
 		log.WarnContextf(ctx, "market_fetch_result batch_id=%s status=%s error=%q results=%s", req.BatchID, payload.GetStatus(), resultErrorSummary(results), compactResultOutcomes(results))
 	}
-	e.reportResults(req, results, executions)
+	e.reportResults(req, results, executions, rowCountByItem)
 	return payload, nil
 }
 
-func (e *Executor) reportResults(req Request, results []domain.ItemResult, executions []itemExecution) {
+func (e *Executor) reportResults(req Request, results []domain.ItemResult, executions []itemExecution, rowCountByItem []int) {
 	if e == nil || e.Reporter == nil {
 		return
 	}
@@ -336,7 +339,7 @@ func (e *Executor) reportResults(req Request, results []domain.ItemResult, execu
 			"request_id": req.RequestID, "region": req.Region, "function_node_id": req.NodeID, "symbol": result.Symbol,
 			"dataset_id": result.DatasetID, "frequency": result.Frequency, "success": strconv.FormatBool(result.Outcome == domain.ItemOutcomeSuccess),
 			"error_kind": result.ErrorType, "error_message": truncateErrorString(result.ErrorSummary),
-			"elapsed_ms": strconv.FormatInt(executions[index].elapsed.Milliseconds(), 10), "rows": strconv.Itoa(len(executions[index].rows)),
+			"elapsed_ms": strconv.FormatInt(executions[index].elapsed.Milliseconds(), 10), "rows": strconv.Itoa(rowCountByItem[index]),
 		}
 		e.Reporter.Report(clsreporter.Entry{Timestamp: time.Now().UTC(), Fields: fields})
 	}

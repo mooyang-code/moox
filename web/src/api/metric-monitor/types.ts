@@ -232,13 +232,6 @@ export interface HostObservabilityStatus {
   filesystem_max_percent?: number;
 }
 
-export interface ScfObservabilitySummary {
-  online_count?: number;
-  timeout_count?: number;
-  unknown_count?: number;
-  oldest_heartbeat_at?: string;
-}
-
 export interface DatasetFrequencyStatus {
   producer?: string;
   space_id?: string;
@@ -265,7 +258,6 @@ export interface ObservabilityOverview {
   generated_at?: string;
   services?: ServiceObservabilityStatus[];
   hosts?: HostObservabilityStatus[];
-  scf?: ScfObservabilitySummary;
   datasets?: DatasetFrequencyStatus[];
   business_checks?: BusinessObservabilityStatus[];
 }

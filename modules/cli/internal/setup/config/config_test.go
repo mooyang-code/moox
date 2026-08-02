@@ -65,6 +65,17 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "request waves")
 	})
+
+	t.Run("reserves the CLS flush window", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].RealtimeBatchSize = 64
+		cfg.Spaces[0].MaxInflightRequests = 16
+		cfg.Spaces[0].RequestTimeoutMS = 2300
+		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "CLS reserves")
+	})
 }
 
 const validManifest = `[admin]

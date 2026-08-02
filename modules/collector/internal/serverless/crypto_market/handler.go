@@ -117,7 +117,7 @@ func (r staticFieldsReporter) Report(entry clsreporter.Entry) {
 		}
 	}
 	for key, value := range entry.Fields {
-		if value != "" || fields[key] == "" {
+		if _, fixed := r.Fields[key]; !fixed && (value != "" || fields[key] == "") {
 			fields[key] = value
 		}
 	}

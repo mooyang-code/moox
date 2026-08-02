@@ -18,6 +18,9 @@ import (
 const (
 	manifestName = "custom.toml"
 	maxFileSize  = 1 << 20
+	// SCFCLSReserveMilliseconds is injected into every short-lived market SCF.
+	// Keep setup validation aligned with the runtime's CLS flush reservation.
+	SCFCLSReserveMilliseconds = 800
 )
 
 type Admin struct {
@@ -404,9 +407,9 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false", path)
 	}
 	requestWaves := (cfg.RealtimeBatchSize + cfg.MaxInflightRequests - 1) / cfg.MaxInflightRequests
-	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + 500
+	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + 500 + SCFCLSReserveMilliseconds
 	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
-		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + publish reserve must be less than timeout", path)
+		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + publish and CLS reserves must be less than timeout", path)
 	}
 	seen := make(map[string]struct{}, len(cfg.Regions))
 	enabledRegions := 0

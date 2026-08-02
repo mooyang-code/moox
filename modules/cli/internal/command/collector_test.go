@@ -746,6 +746,20 @@ func TestBuildCollectorCreateNodeItemRejectsUnsafeRuntimeOverride(t *testing.T) 
 	require.ErrorContains(t, err, "request waves")
 }
 
+func TestBuildCollectorCreateNodeItemReservesCLSFlushWindow(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
+		CloudAccountID: "account-a",
+		Region:         "ap-guangzhou",
+		Config: []string{
+			"realtime_batch_size=64",
+			"max_inflight_requests=16",
+			"request_timeout_ms=2300",
+		},
+	}, "moox-collector_dev")
+	require.ErrorContains(t, err, "CLS reserves")
+}
+
 func TestBuildCollectorCreateNodeItemRejectsInvalidInflightOverride(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{

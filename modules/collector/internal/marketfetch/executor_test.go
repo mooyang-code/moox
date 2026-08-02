@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/clsreporter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +55,10 @@ type fakeStorage struct {
 	err       error
 }
 
+type recordingItemReporter struct{ entries []clsreporter.Entry }
+
+func (r *recordingItemReporter) Report(entry clsreporter.Entry) { r.entries = append(r.entries, entry) }
+
 func (f *fakeStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
 	f.commits++
 	f.rows += len(rows)
@@ -88,7 +93,8 @@ func TestExecutorAggregatesRowsIntoOneStorageCommit(t *testing.T) {
 func TestExecutorTurnsSuccessfulItemsIntoStorageErrors(t *testing.T) {
 	klines := &fakeKlines{rows: []*storagepb.RowFieldUpsert{{}}}
 	storage := &fakeStorage{err: errors.New("storage unavailable")}
-	executor := &Executor{Klines: klines, Symbols: fakeSymbols{}, Storage: storage}
+	reporter := &recordingItemReporter{}
+	executor := &Executor{Klines: klines, Symbols: fakeSymbols{}, Storage: storage, Reporter: reporter}
 	payload, err := executor.Execute(context.Background(), Request{BatchID: "b2", SpaceID: "crypto", DatasetID: "bars", BatchKind: domain.BatchKindRealtime, Provider: "binance", MarketType: "spot", Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", Frequency: "1m"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +102,8 @@ func TestExecutorTurnsSuccessfulItemsIntoStorageErrors(t *testing.T) {
 	if payload.GetStatus() != "failed" || payload.GetRetryCount() != 1 || payload.GetItems()[0].GetOutcome() != string(domain.ItemOutcomeStorageError) {
 		t.Fatalf("payload=%+v", payload)
 	}
+	require.Len(t, reporter.entries, 1)
+	assert.Equal(t, "0", reporter.entries[0].Fields["rows"])
 }
 
 func TestResultErrorSummaryUsesFirstActionableItemError(t *testing.T) {

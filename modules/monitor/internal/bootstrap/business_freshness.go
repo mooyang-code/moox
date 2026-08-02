@@ -95,7 +95,7 @@ func buildBusinessFreshnessReporter(
 				continue
 			}
 			item := businessFreshnessItem{
-				spaceID: "crypto", checkID: "balance:" + business.Module,
+				spaceID: "crypto_market", checkID: "balance:" + business.Module,
 				name:    "Balance freshness " + business.Module,
 				success: business.Status == "healthy", reason: business.Reason,
 			}
