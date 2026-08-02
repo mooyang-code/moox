@@ -20,8 +20,7 @@ func TestGetObservabilityOverviewSupportsAllSpacesAndMapsAllSections(t *testing.
 	if rsp.GetRetInfo().GetCode() != 0 || rsp.GetOverview().GetGeneratedAt() != now.Format(time.RFC3339Nano) {
 		t.Fatalf("overview response = %+v", rsp)
 	}
-	if rsp.GetOverview().GetScf() == nil || rsp.GetOverview().GetServices() == nil ||
-		rsp.GetOverview().GetHosts() == nil || rsp.GetOverview().GetDatasets() == nil ||
+	if rsp.GetOverview().GetServices() == nil || rsp.GetOverview().GetHosts() == nil || rsp.GetOverview().GetDatasets() == nil ||
 		rsp.GetOverview().GetBusinessChecks() == nil {
 		t.Fatalf("overview sections are not initialized: %+v", rsp.GetOverview())
 	}

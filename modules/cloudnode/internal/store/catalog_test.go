@@ -2,8 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -53,8 +51,7 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
 		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "acct-1",
 		NodeType: "scf-event", Region: "ap-guangzhou", Namespace: "default", Status: "online",
-		SupportedWorkloads: `["collect.kline"]`, DeploymentID: "dep-1",
-		LastHeartbeatAt: timePtr(repo.currentTime()),
+		DeploymentID: "dep-1",
 	}))
 	node, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
@@ -75,7 +72,6 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	assert.Equal(t, "node-a", matched.NodeID)
 
 	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2", nil, map[string]string{"MOOX_FETCH_MAX_INFLIGHT_REQUESTS": "7"}))
-	require.NoError(t, repo.UpdateHeartbeat(ctx, "crypto", "node-a", "v2", `["collect.kline"]`, `{}`))
 	updated, err := repo.GetNode(ctx, "crypto", "node-a")
 	require.NoError(t, err)
 	require.NotNil(t, updated)
@@ -86,26 +82,7 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	assert.Nil(t, deleted)
 }
 
-func TestUpdateNodeDeploymentClearsMarketFetcherWorkloads(t *testing.T) {
-	repo := newTestCatalog(t)
-	ctx := context.Background()
-	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
-		SpaceID: "crypto", NodeID: "fetch-1", NodeType: "scf-event", Region: "ap-guangzhou",
-		SupportedWorkloads: `["collect.binance.kline"]`, Metadata: `{"biz_type":"market_fetcher","probe":"retained"}`,
-	}))
-
-	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "fetch-1", "pkg-1", "v1", nil, nil))
-	updated, err := repo.GetNode(ctx, "crypto", "fetch-1")
-	require.NoError(t, err)
-	require.NotNil(t, updated)
-	assert.Equal(t, "[]", updated.SupportedWorkloads)
-	var metadata map[string]any
-	require.NoError(t, json.Unmarshal([]byte(updated.Metadata), &metadata))
-	assert.Empty(t, metadata["supported_workloads"])
-	assert.Equal(t, "retained", metadata["probe"])
-}
-
-func TestCatalogRepository_ListNodesFiltersBizTypeAndHeartbeatPreservesFleetMetadata(t *testing.T) {
+func TestCatalogRepository_ListNodesFiltersBizType(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
 	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
@@ -119,10 +96,6 @@ func TestCatalogRepository_ListNodesFiltersBizTypeAndHeartbeatPreservesFleetMeta
 		Metadata: `{"biz_type":"factor_calculator","function_name_prefix":"collector","index":0}`,
 	}))
 
-	require.NoError(t, repo.UpdateHeartbeat(
-		ctx, "crypto", "collector-0", "v1", `["collect.binance.kline"]`,
-		`{"runtime_code_package_id":"pkg-1"}`,
-	))
 	nodes, total, err := repo.ListNodes(ctx, "crypto", &pb.GetNodeListReq{
 		NodeType: "scf-event", Region: "ap-guangzhou", BizType: "data_collector",
 		Page: &pb.Page{Page: 1, Size: 10},
@@ -131,60 +104,7 @@ func TestCatalogRepository_ListNodesFiltersBizTypeAndHeartbeatPreservesFleetMeta
 	assert.Equal(t, int64(1), total)
 	require.Len(t, nodes, 1)
 	assert.Equal(t, "collector-0", nodes[0].NodeID)
-	assert.JSONEq(t,
-		`{"biz_type":"data_collector","function_name_prefix":"collector","index":0,"runtime_code_package_id":"pkg-1"}`,
-		nodes[0].Metadata,
-	)
-}
-
-func TestCatalogRepository_ListSCFEventNodesReturnsEveryEligibleNodeWithoutPagination(t *testing.T) {
-	repo := newTestCatalog(t)
-	ctx := context.Background()
-
-	nodes := make([]CloudNode, 0, 1007)
-	for i := 0; i < 1002; i++ {
-		status := "online"
-		switch i {
-		case 0:
-			status = "unknown"
-		case 1:
-			status = "new"
-		}
-		nodes = append(nodes, CloudNode{
-			SpaceID:        "crypto",
-			NodeID:         fmt.Sprintf("eligible-%04d", i),
-			Provider:       "tencent-scf",
-			NodeType:       "scf-event",
-			CloudAccountID: "acct-1",
-			Status:         status,
-		})
-	}
-	nodes = append(nodes,
-		CloudNode{SpaceID: "crypto", NodeID: "wrong-provider", Provider: "local", NodeType: "scf-event", Status: "online"},
-		CloudNode{SpaceID: "crypto", NodeID: "wrong-type", Provider: "tencent-scf", NodeType: "scf-polling", Status: "online"},
-		CloudNode{SpaceID: "crypto", NodeID: "deleted", Provider: "tencent-scf", NodeType: "scf-event", Status: "deleted", IsDeleted: true},
-	)
-	require.NoError(t, repo.db.WithContext(ctx).CreateInBatches(nodes, 200).Error)
-
-	got, err := repo.ListSCFEventNodes(ctx)
-	require.NoError(t, err)
-	require.Len(t, got, 1002)
-	assert.Equal(t, "eligible-0000", got[0].NodeID)
-	assert.Equal(t, "unknown", got[0].Status)
-	assert.Equal(t, "eligible-0001", got[1].NodeID)
-	assert.Equal(t, "new", got[1].Status)
-	assert.Equal(t, "eligible-1001", got[len(got)-1].NodeID)
-}
-
-func TestCatalogRepository_HeartbeatDoesNotRegisterUnknownNode(t *testing.T) {
-	repo := newTestCatalog(t)
-	ctx := context.Background()
-
-	require.NoError(t, repo.UpdateHeartbeat(ctx, "crypto", "unknown-function", "v1", `["collect.kline"]`, `{}`))
-
-	node, err := repo.GetNode(ctx, "crypto", "unknown-function")
-	require.NoError(t, err)
-	assert.Nil(t, node)
+	assert.JSONEq(t, `{"biz_type":"data_collector","function_name_prefix":"collector","index":0}`, nodes[0].Metadata)
 }
 
 func TestPageFromCommon_NormalizesBounds(t *testing.T) {

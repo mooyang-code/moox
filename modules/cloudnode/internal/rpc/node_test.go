@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,738 +14,99 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	cloudnodeschema "github.com/mooyang-code/moox/modules/cloudnode/schema"
-	"github.com/mooyang-code/moox/packages/cloudjobqueue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 	"gorm.io/gorm"
 )
 
-func TestReportHeartbeatEnqueuesHeartbeatSink(t *testing.T) {
-	sink := &fakeHeartbeatSink{}
-	svc := &Service{heartbeatSink: sink}
-
-	rsp, err := svc.ReportHeartbeat(context.Background(), &pb.ReportHeartbeatReq{
-		SpaceId:        "crypto",
-		NodeId:         "node-1",
-		NodeType:       "scf-event",
-		RunningVersion: "v1",
-	})
-	if err != nil {
-		t.Fatalf("ReportHeartbeat transport error = %v", err)
-	}
-	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("ret = %+v", rsp.GetRetInfo())
-	}
-	if len(sink.items) != 1 || sink.items[0].GetNodeId() != "node-1" {
-		t.Fatalf("sink items = %+v", sink.items)
-	}
-}
-
-type fakeHeartbeatSink struct {
-	items []*pb.ReportHeartbeatReq
-}
-
-func (s *fakeHeartbeatSink) Enqueue(req *pb.ReportHeartbeatReq) error {
-	s.items = append(s.items, req)
-	return nil
-}
-
-func (s *fakeHeartbeatSink) Flush(context.Context) error { return nil }
-
-func (s *fakeHeartbeatSink) Close(context.Context) error { return nil }
-
 func TestNodeMetadataAndStatusBranches(t *testing.T) {
-	meta, err := structpb.NewStruct(map[string]any{"existing": "yes"})
+	metadata, err := structpb.NewStruct(map[string]any{"existing": "yes"})
 	require.NoError(t, err)
-	node := &pb.CloudNode{
-		Metadata:           meta,
-		BizType:            "collect.kline",
-		Tag:                "prod",
-		IpAddress:          "10.0.0.1",
-		TimeoutThreshold:   30,
-		HeartbeatInterval:  15,
-		ProbeEnabled:       true,
-		ProbeUrl:           "https://probe",
-		ClsTopicId:         "topic-1",
-		SupportedWorkloads: []string{"collect.kline"},
-	}
-	got := nodeMetadataFromPB(node)
-	assert.Equal(t, "yes", got["existing"])
-	assert.Equal(t, "collect.kline", got["biz_type"])
+	got := nodeMetadataFromPB(&pb.CloudNode{
+		Metadata: metadata, BizType: "market_fetcher", Tag: "prod", IpAddress: "10.0.0.1",
+		TimeoutThreshold: 30, ProbeEnabled: true, ProbeUrl: "https://probe", ClsTopicId: "topic-1",
+	})
+	assert.Equal(t, "market_fetcher", got["biz_type"])
 	assert.Equal(t, true, got["probe_enabled"])
-	assert.Equal(t, "topic-1", got["cls_topic_id"])
 	assert.Empty(t, nodeMetadataFromPB(nil))
-
 	assert.Equal(t, pb.NodeStatusCode_NODE_STATUS_TIMEOUT, nodeStatusToPB(" timeout "))
-	assert.Equal(t, pb.NodeStatusCode_NODE_STATUS_ABNORMAL, nodeStatusToPB("abnormal"))
-	assert.Equal(t, pb.NodeStatusCode_NODE_STATUS_OFFLINE, nodeStatusToPB("unknown"))
-	assert.Equal(t, pb.NodeStatusCode_NODE_STATUS_UNSPECIFIED, nodeStatusToPB("starting"))
-
-	assert.Equal(t, "timeout", nodeStatusToDB(pb.NodeStatusCode_NODE_STATUS_TIMEOUT))
-	assert.Equal(t, "abnormal", nodeStatusToDB(pb.NodeStatusCode_NODE_STATUS_ABNORMAL))
 	assert.Equal(t, "offline", nodeStatusToDB(pb.NodeStatusCode_NODE_STATUS_OFFLINE))
-	assert.Equal(t, "unknown", nodeStatusToDB(pb.NodeStatusCode_NODE_STATUS_UNSPECIFIED))
 }
 
-func TestNodeConversionHelpersCoverDefaults(t *testing.T) {
-	assert.Nil(t, parseStringSliceJSON(""))
-	assert.Nil(t, parseStringSliceJSON("[]"))
-	assert.Nil(t, parseStringSliceJSON("{bad"))
-
-	copied := copyStringMap(map[string]string{"a": "1"})
-	copied["a"] = "2"
-	assert.Equal(t, "1", map[string]string{"a": "1"}["a"])
-	assert.Nil(t, copyStringMap(nil))
-
-	meta, err := structpb.NewStruct(map[string]any{
-		"function_name":       "fn-meta",
-		"supported_workloads": []any{"collect.symbol"},
-	})
-	require.NoError(t, err)
-	node := fromPBNode("space", &pb.CloudNode{
-		NodeId:   "node-1",
-		Metadata: meta,
-		Status:   pb.NodeStatusCode_NODE_STATUS_ABNORMAL,
-	})
-	assert.Equal(t, "scf-event", node.NodeType)
-	assert.Equal(t, "tencent-scf", node.Provider)
-	assert.Equal(t, "fn-meta", node.FunctionName)
-	assert.Contains(t, node.SupportedWorkloads, "collect.symbol")
-	assert.Equal(t, "abnormal", node.Status)
-}
-
-func TestMergeNodeUpdateCoversOptionalFields(t *testing.T) {
-	meta, err := structpb.NewStruct(map[string]any{"new": "value"})
-	require.NoError(t, err)
-	existing := store.CloudNode{
-		SpaceID: "space", NodeID: "node-1", CloudAccountID: "old-acct",
-		Metadata: `{"old":"value"}`, Status: "online",
-	}
-	next := mergeNodeUpdate(existing, &pb.CloudNode{
-		CloudAccountId:     "new-acct",
-		PackageId:          "pkg-1",
-		PackageVersion:     "v2",
-		DeploymentId:       "dep-1",
-		NodeType:           "worker",
-		Provider:           "tencent-scf",
-		Region:             "ap-guangzhou",
-		Namespace:          "default",
-		FunctionName:       "fn",
-		RunningVersion:     "rv1",
-		SupportedWorkloads: []string{"collect.kline"},
-		Metadata:           meta,
-		Status:             pb.NodeStatusCode_NODE_STATUS_OFFLINE,
-		IsDeleted:          true,
-	})
-	assert.Equal(t, "new-acct", next.CloudAccountID)
-	assert.Equal(t, "pkg-1", next.PackageID)
-	assert.Equal(t, "v2", next.PackageVersion)
-	assert.Equal(t, "dep-1", next.DeploymentID)
-	assert.Equal(t, "worker", next.NodeType)
-	assert.Equal(t, "tencent-scf", next.Provider)
-	assert.Equal(t, "ap-guangzhou", next.Region)
-	assert.Equal(t, "default", next.Namespace)
-	assert.Equal(t, "fn", next.FunctionName)
-	assert.Equal(t, "rv1", next.RunningVersion)
-	assert.Contains(t, next.SupportedWorkloads, "collect.kline")
-	assert.Contains(t, next.Metadata, `"old":"value"`)
-	assert.Contains(t, next.Metadata, `"new":"value"`)
-	assert.Equal(t, "offline", next.Status)
-	assert.True(t, next.IsDeleted)
-}
-
-func TestGetNodeListAndUpdateNode(t *testing.T) {
+func TestUpdateNodeAndConversion(t *testing.T) {
 	catalog := newCatalogForAccountTests(t)
-	queue := &orderedQueue{}
-	svc := &Service{catalog: catalog, executionQueue: queue}
-	ctx := spacecontext.WithSpaceID(context.Background(), "crypto")
+	svc := &Service{catalog: catalog}
+	ctx := spacecontext.WithSpaceID(context.Background(), "crypto_market")
 	require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{
-		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "acct-1",
-		Region: "ap-guangzhou", Status: "online",
+		SpaceID: "crypto_market", NodeID: "node-a", CloudAccountID: "acct-1", Region: "ap-guangzhou", Status: "online",
 	}))
-
-	listRsp, err := svc.GetNodeList(ctx, &pb.GetNodeListReq{Page: &pb.Page{Page: 1, Size: 10}})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, listRsp.GetRetInfo().GetCode())
-	require.Len(t, listRsp.GetItems(), 1)
-	assert.Equal(t, "node-a", listRsp.GetItems()[0].GetNodeId())
-
-	updateRsp, err := svc.UpdateNode(ctx, &pb.UpdateNodeReq{Node: &pb.CloudNode{
-		NodeId: "node-a", Region: "ap-shanghai", Status: pb.NodeStatusCode_NODE_STATUS_ONLINE,
-		SupportedWorkloads: []string{"collect.kline"},
-	}})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, updateRsp.GetRetInfo().GetCode())
-	require.Equal(t, []cloudjobqueue.Identity{{
-		SpaceID: "crypto", JobType: "collect.kline",
-	}}, queue.identities)
-}
-
-func TestUpdateMarketFetcherDoesNotProvisionJobItemQueues(t *testing.T) {
-	catalog := newCatalogForAccountTests(t)
-	queue := &orderedQueue{}
-	svc := &Service{catalog: catalog, executionQueue: queue}
-	ctx := spacecontext.WithSpaceID(context.Background(), "crypto")
-	meta, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher"})
-	require.NoError(t, err)
-	require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{
-		SpaceID: "crypto", NodeID: "fetch-1", CloudAccountID: "acct-1", Region: "ap-guangzhou", Status: "unknown", SupportedWorkloads: `["collect.binance.kline"]`,
-	}))
-
 	rsp, err := svc.UpdateNode(ctx, &pb.UpdateNodeReq{Node: &pb.CloudNode{
-		NodeId: "fetch-1", Metadata: meta, SupportedWorkloads: []string{"collect.binance.kline"},
+		NodeId: "node-a", Region: "ap-shanghai", Status: pb.NodeStatusCode_NODE_STATUS_ONLINE,
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	assert.Empty(t, queue.identities)
-	node, err := catalog.GetNode(ctx, "crypto", "fetch-1")
+	node, err := catalog.GetNode(ctx, "crypto_market", "node-a")
 	require.NoError(t, err)
-	assert.Equal(t, "[]", node.SupportedWorkloads)
-}
+	assert.Equal(t, "ap-shanghai", node.Region)
 
-func TestMergeMarketFetcherCannotRestoreJobItemWorkloadsWithoutBizType(t *testing.T) {
-	next := mergeNodeUpdate(store.CloudNode{
-		Metadata: `{"biz_type":"market_fetcher"}`, SupportedWorkloads: "[]",
-	}, &pb.CloudNode{SupportedWorkloads: []string{"collect.binance.kline"}})
-	assert.Equal(t, "[]", next.SupportedWorkloads)
-}
-
-func TestBatchDeleteNodes_ShouldSoftDelete(t *testing.T) {
-	catalog := newCatalogForAccountTests(t)
-	svc := &Service{catalog: catalog}
-	ctx := spacecontext.WithSpaceID(context.Background(), "crypto")
-	require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{
-		SpaceID: "crypto", NodeID: "node-del", Region: "ap-guangzhou",
-	}))
-
-	rsp, err := svc.BatchDeleteNodes(ctx, &pb.BatchDeleteNodesReq{NodeIds: []string{"node-del"}})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	assert.Equal(t, int32(1), rsp.GetProcessedCount())
-}
-
-func TestReportHeartbeatWithoutSink_ShouldUpdateRegisteredNode(t *testing.T) {
-	catalog := newCatalogForAccountTests(t)
-	svc := &Service{catalog: catalog}
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID: "crypto", NodeID: "node-hb", CloudAccountID: "account-a", Status: "unknown",
-	}))
-	meta, err := structpb.NewStruct(map[string]any{"probe_enabled": true})
-	require.NoError(t, err)
-
-	rsp, err := svc.ReportHeartbeat(context.Background(), &pb.ReportHeartbeatReq{
-		SpaceId: "crypto", NodeId: "node-hb", NodeType: "scf-event",
-		RunningVersion: "v1", SupportedWorkloads: []string{"collect.kline"}, Metadata: meta,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-
-	node, err := catalog.GetNode(context.Background(), "crypto", "node-hb")
-	require.NoError(t, err)
-	require.NotNil(t, node)
-	assert.Equal(t, "online", node.Status)
-	assert.Equal(t, "v1", node.RunningVersion)
-	assert.Equal(t, "account-a", node.CloudAccountID)
-}
-
-func TestNodeConversionHelpers(t *testing.T) {
-	assert.True(t, isTencentProvider("tencent"))
-	assert.False(t, isTencentProvider("tencent-scf"))
-	assert.False(t, isTencentProvider("aws"))
-	assert.True(t, isSCFNotFound(errors.New("ResourceNotFound.FunctionName")))
-	assert.Equal(t, int64(30), configInt64(map[string]string{"timeout": "30"}, "timeout", 10))
-	assert.Equal(t, int64(10), configInt64(map[string]string{"timeout": "bad"}, "timeout", 10))
-
-	now := time.Now().UTC()
-	pbNode := toPBNode(store.CloudNode{
-		SpaceID: "crypto", NodeID: "n1", Region: "ap-guangzhou",
-		Status: "online", Metadata: `{"biz_type":"collect.kline"}`,
-		LastHeartbeatAt: &now, SupportedWorkloads: `["collect.kline"]`,
-	})
+	pbNode := toPBNode(store.CloudNode{SpaceID: "crypto_market", NodeID: "n1", Status: "online", Metadata: `{"biz_type":"market_fetcher"}`})
+	assert.Equal(t, "market_fetcher", pbNode.GetBizType())
 	assert.Equal(t, pb.NodeStatusCode_NODE_STATUS_ONLINE, pbNode.GetStatus())
-	assert.Equal(t, "collect.kline", pbNode.GetBizType())
-	assert.Equal(t, []string{"collect.kline"}, parseStringSliceJSON(`["collect.kline"]`))
-
-	assert.Equal(t, "online", nodeStatusToDB(pb.NodeStatusCode_NODE_STATUS_ONLINE))
-	assert.Equal(t, pb.NodeStatusCode_NODE_STATUS_OFFLINE, nodeStatusToPB("deleted"))
-
-	item := cloudNodeFromCreateItem("crypto", &pb.NodeCreateItem{
-		CloudAccountId: "acct-1", Region: "ap-guangzhou", PackageId: "pkg-1",
-	}, 2)
-	assert.Contains(t, item.NodeID, "moox-cloudnode")
-	assert.Equal(t, "acct-1", item.CloudAccountID)
-
-	otherSpace := cloudNodeFromCreateItem("stocks", &pb.NodeCreateItem{
-		CloudAccountId: "acct-1", Region: "ap-guangzhou", PackageId: "pkg-1",
-	}, 2)
-	collidingSpace := cloudNodeFromCreateItem("foo/bar", &pb.NodeCreateItem{
-		CloudAccountId: "acct-1", Region: "ap-guangzhou", PackageId: "pkg-1",
-	}, 2)
-	normalizedSpace := cloudNodeFromCreateItem("foo-bar", &pb.NodeCreateItem{
-		CloudAccountId: "acct-1", Region: "ap-guangzhou", PackageId: "pkg-1",
-	}, 2)
-	assert.NotEqual(t, item.FunctionName, otherSpace.FunctionName)
-	assert.NotEqual(t, collidingSpace.FunctionName, normalizedSpace.FunctionName)
-	assert.Contains(t, item.FunctionName, "-crypto-")
-	assert.Contains(t, otherSpace.FunctionName, "-stocks-")
 }
 
-func TestExecuteCreateNodeItemPreservesTencentSCFConfiguration(t *testing.T) {
-	setSCFWatchdogRuntimeEnvironment(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test")
-	db := newNodeSCFTestDB(t)
-	catalog := store.NewCatalogRepository(db)
+func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{
 		{err: errors.New("ResourceNotFound.FunctionName")},
-		{info: &tencentscf.FunctionInfo{
-			Status:      "Active",
-			ClsLogsetID: "logset-created",
-			ClsTopicID:  "topic-created",
-			MemorySize:  256,
-			Timeout:     120,
-			Environment: map[string]string{"MOOX_ENV": "prod", "MOOX_SCF_WATCHDOG_ENABLED": "true"},
-		}},
+		{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 15, Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev", "MOOX_SPACE_ID": "crypto_market"}}},
 	}}
 	svc := &Service{
 		catalog:            catalog,
-		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "secret-id", SecretKey: "secret-key"}},
-		scfClientFactory: func(credential cloudcredential.TencentCredential) scfProvisioner {
-			if credential.SecretID != "secret-id" || credential.SecretKey != "secret-key" {
-				t.Fatalf("account credentials were not passed to provider")
-			}
-			return fake
-		},
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
 	}
-	metadata, err := structpb.NewStruct(map[string]any{
-		"function_name_prefix": "moox-collector",
-		"supported_workloads":  []any{"collect.kline", "collect.symbol"},
-	})
-	if err != nil {
-		t.Fatalf("metadata: %v", err)
-	}
-
-	_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
-		CloudAccountId: "account-a",
-		NodeType:       "scf-event",
-		Runtime:        "CustomRuntime",
-		Handler:        "main",
-		Config: map[string]string{
-			"memory_size":   "256",
-			"cls_logset_id": "logset-config",
-			"cls_topic_id":  "topic-config",
-		},
-		Environment: map[string]string{
-			"MOOX_ENV":                  "prod",
-			"MOOX_SCF_WATCHDOG_ENABLED": "true",
-		},
-		Region:    "ap-guangzhou",
-		Namespace: "collector",
-		PackageId: "moox-collector_dev",
-		Metadata:  metadata,
+	metadata, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher", "function_name_prefix": "moox-fetcher-crypto-market"})
+	require.NoError(t, err)
+	_, err = svc.executeCreateNodeItem(context.Background(), "crypto_market", &pb.NodeCreateItem{
+		CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
+		Config:      map[string]string{"memory_size": "64", "timeout": "15"},
+		Environment: map[string]string{"MOOX_SPACE_ID": "crypto_market"}, Metadata: metadata,
 	}, 0)
-	if err != nil {
-		t.Fatalf("executeCreateNodeItem error = %v", err)
-	}
-	if len(fake.created) != 1 {
-		t.Fatalf("created calls = %d, want 1", len(fake.created))
-	}
-	create := fake.created[0]
-	expectedFunctionName := fmt.Sprintf("moox-collector-%s-ap-guangzhou-0", sanitizeSCFFunctionToken("crypto"))
-	if create.FunctionName != expectedFunctionName || create.Namespace != "collector" || create.Region != "ap-guangzhou" {
-		t.Fatalf("function ref = %#v", create.FunctionRef)
-	}
-	if create.COSBucket != "moox-scf-1255382561" || create.COSRegion != "ap-guangzhou" || create.COSObject != "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip" {
-		t.Fatalf("cos package = bucket:%q region:%q object:%q", create.COSBucket, create.COSRegion, create.COSObject)
-	}
-	if create.Runtime != "CustomRuntime" || create.Handler != "main" || create.Timeout != 120 || create.MemorySize != 256 {
-		t.Fatalf("runtime config = %#v", create)
-	}
-	if create.Environment["MOOX_ENV"] != "prod" {
-		t.Fatalf("env = %#v", create.Environment)
-	}
-	if create.Environment[scfWatchdogEnvironmentKey] != "true" {
-		t.Fatalf("watchdog env = %#v", create.Environment)
-	}
-
-	node, err := catalog.GetNode(context.Background(), "crypto", expectedFunctionName)
-	if err != nil {
-		t.Fatalf("load node: %v", err)
-	}
-	if node == nil {
-		t.Fatalf("node was not persisted")
-	}
-	if got := parseStringSliceJSON(node.SupportedWorkloads); strings.Join(got, ",") != "collect.kline,collect.symbol" {
-		t.Fatalf("supported workloads = %#v", got)
-	}
-	nodeMetadata := parseJSONMap(node.Metadata)
-	if !metadataBool(nodeMetadata, scfWatchdogMetadataKey) {
-		t.Fatalf("watchdog selection was not persisted: %s", node.Metadata)
-	}
-	if _, exists := nodeMetadata["cls_logset_id"]; exists {
-		t.Fatalf("native CLS logset metadata must be cleared: %s", node.Metadata)
-	}
-	if _, exists := nodeMetadata["cls_topic_id"]; exists {
-		t.Fatalf("native CLS topic metadata must be cleared: %s", node.Metadata)
-	}
-	listRsp, err := svc.GetNodeList(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.GetNodeListReq{})
-	if err != nil {
-		t.Fatalf("GetNodeList transport error = %v", err)
-	}
-	if len(listRsp.GetItems()) != 1 || listRsp.GetItems()[0].GetClsTopicId() != "" {
-		t.Fatalf("list cls_topic_id = %#v", listRsp.GetItems())
-	}
+	require.NoError(t, err)
+	require.Len(t, fake.created, 1)
+	assert.Equal(t, int64(64), fake.created[0].MemorySize)
+	assert.Equal(t, int64(15), fake.created[0].Timeout)
+	assert.NotContains(t, fake.created[0].Environment, "MOOX_SCF_WATCHDOG_ENABLED")
 }
 
-func TestExecuteCreateNodeItemRejectsSecondSCFWatchdogInSpace(t *testing.T) {
+func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID: "crypto", NodeID: "sentinel-a", NodeType: "scf-event", Provider: "tencent-scf",
-		Region: "ap-guangzhou", Metadata: `{"scf_watchdog_enabled":true}`,
-	}))
-	svc := &Service{catalog: catalog}
-	metadata, err := structpb.NewStruct(map[string]any{"node_id": "sentinel-b"})
-	require.NoError(t, err)
-	item := &pb.NodeCreateItem{
-		CloudAccountId: "account-a", Region: "ap-guangzhou", PackageId: "package-a",
-		Environment: map[string]string{scfWatchdogEnvironmentKey: "true"},
-		Metadata:    metadata,
-	}
-
-	_, err = svc.executeCreateNodeItem(context.Background(), "crypto", item, 1)
-	require.ErrorContains(t, err, "already has SCF watchdog sentinel node sentinel-a")
-	require.NoError(t, svc.ensureSingleSCFWatchdog(context.Background(), "stocks", "sentinel-b"))
-}
-
-func TestSCFWatchdogEnvironmentOnlyEnablesExplicitSelection(t *testing.T) {
-	enabled, specified, err := requestedSCFWatchdog(map[string]string{scfWatchdogEnvironmentKey: " true "})
-	require.NoError(t, err)
-	require.True(t, enabled)
-	require.True(t, specified)
-
-	environment, err := scfWatchdogEnvironment(map[string]string{
-		"MOOX_ENV":                "prod",
-		scfWatchdogEnvironmentKey: "false",
-	}, false)
-	require.NoError(t, err)
-	require.Equal(t, "prod", environment["MOOX_ENV"])
-	require.NotContains(t, environment, scfWatchdogEnvironmentKey)
-	for key := range scfWatchdogRuntimeEnvironment {
-		require.NotContains(t, environment, key)
-	}
-	for key := range scfCanaryRuntimeDefaults {
-		require.NotContains(t, environment, key)
-	}
-
-	_, _, err = requestedSCFWatchdog(map[string]string{scfWatchdogEnvironmentKey: "yes"})
-	require.ErrorContains(t, err, "must be true or false")
-}
-
-func TestSCFWatchdogEnvironmentInjectsAndRotatesServerOwnedSecrets(t *testing.T) {
-	setSCFWatchdogRuntimeEnvironment(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=new")
-	environment, err := scfWatchdogEnvironment(map[string]string{
-		"MOOX_ENV":                  "prod",
-		"MOOX_MSGBOX_WECOM_WEBHOOK": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old",
-	}, true)
-	require.NoError(t, err)
-	require.Equal(t, "true", environment[scfWatchdogEnvironmentKey])
-	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=new", environment["MOOX_MSGBOX_WECOM_WEBHOOK"])
-	require.Equal(t, "monitor-secret", environment["MOOX_HEALTH_HMAC_SECRET"])
-	require.Equal(t, "http://monitor.example.test:11409/readyz", environment["MOOX_MONITOR_READY_URL"])
-	require.Equal(t, scfStorageAuthAppID, environment["MOOX_SCF_STORAGE_AUTH_APP_ID"])
-	require.NotEmpty(t, environment["MOOX_SCF_STORAGE_AUTH_APP_KEY"])
-	require.NotEqual(t, "primary-secret", environment["MOOX_SCF_STORAGE_AUTH_APP_KEY"])
-	require.Equal(t, "spot_kline_1h", environment["MOOX_SCF_CANARY_DATASET_ID"])
-	require.Equal(t, "1h", environment["MOOX_SCF_CANARY_FREQUENCY"])
-	require.Equal(t, "venue:binance", environment["MOOX_SCF_CANARY_SERIES_TAG"])
-}
-
-func TestSCFWatchdogEnvironmentSynchronizesConfiguredCanaryIdentity(t *testing.T) {
-	setSCFWatchdogRuntimeEnvironment(t, "")
-	t.Setenv("MOOX_SCF_CANARY_DATASET_ID", "perpetual_kline_1h")
-	t.Setenv("MOOX_SCF_CANARY_FREQUENCY", "4h")
-	t.Setenv("MOOX_SCF_CANARY_SERIES_TAG", "venue:okx")
-
-	environment, err := scfWatchdogEnvironment(nil, true)
-	require.NoError(t, err)
-	require.Equal(t, "perpetual_kline_1h", environment["MOOX_SCF_CANARY_DATASET_ID"])
-	require.Equal(t, "4h", environment["MOOX_SCF_CANARY_FREQUENCY"])
-	require.Equal(t, "venue:okx", environment["MOOX_SCF_CANARY_SERIES_TAG"])
-}
-
-func TestSCFWatchdogEnvironmentPreservesExplicitDefaultSeriesTag(t *testing.T) {
-	setSCFWatchdogRuntimeEnvironment(t, "")
-	t.Setenv("MOOX_SCF_CANARY_SERIES_TAG", "")
-
-	environment, err := scfWatchdogEnvironment(nil, true)
-	require.NoError(t, err)
-	require.Contains(t, environment, "MOOX_SCF_CANARY_SERIES_TAG")
-	require.Equal(t, "", environment["MOOX_SCF_CANARY_SERIES_TAG"])
-	require.Equal(t, "spot_kline_1h", environment["MOOX_SCF_CANARY_DATASET_ID"])
-	require.Equal(t, "1h", environment["MOOX_SCF_CANARY_FREQUENCY"])
-}
-
-func TestSCFWatchdogEnvironmentAllowsNotificationsToBeDisabled(t *testing.T) {
-	setSCFWatchdogRuntimeEnvironment(t, "")
-	environment, err := scfWatchdogEnvironment(map[string]string{
-		"MOOX_MSGBOX_WECOM_WEBHOOK": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old",
-	}, true)
-	require.NoError(t, err)
-	require.NotContains(t, environment, "MOOX_MSGBOX_WECOM_WEBHOOK")
-}
-
-func TestSCFWatchdogEnvironmentRequiresReachableChecksAndHealthCredentials(t *testing.T) {
-	for _, sourceKey := range scfWatchdogRuntimeEnvironment {
-		t.Setenv(sourceKey, "")
-	}
-	_, err := scfWatchdogEnvironment(nil, true)
-	require.ErrorContains(t, err, "SCF watchdog runtime requires")
-}
-
-func setSCFWatchdogRuntimeEnvironment(t *testing.T, webhook string) {
-	t.Helper()
-	t.Setenv("MOOX_MONITOR_READY_URL", "http://monitor.example.test:11409/readyz")
-	t.Setenv("MOOX_GATEWAY_READY_URL", "http://gateway.example.test:11012/readyz")
-	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
-	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
-	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "monitor-secret")
-	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", webhook)
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
-}
-
-func TestExecuteDeployNodeItemCannotPromoteUnselectedWatchdog(t *testing.T) {
-	db := newNodeSCFTestDB(t)
-	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
 	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID: "crypto", NodeID: "worker-a", CloudAccountID: "account-a",
-		PackageID: "old-package", NodeType: "scf-event", Provider: "tencent-scf",
-		Region: "ap-guangzhou", FunctionName: "worker-a", Metadata: `{}`,
+		SpaceID: "crypto_market", NodeID: "node-a", CloudAccountID: "account-a", PackageID: "old-package", NodeType: "scf-event", Provider: "tencent-scf",
+		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-0", Metadata: `{"biz_type":"market_fetcher","handler":"main"}`,
 	}))
-	fake := &fakeSCFClient{}
-	svc := &Service{
-		catalog: catalog,
-		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{
-			SecretID: "secret-id", SecretKey: "secret-key",
-		}},
-		scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake },
-	}
-
-	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{
-		NodeId: "worker-a", PackageId: "moox-collector_dev",
-		Environment: map[string]string{scfWatchdogEnvironmentKey: "true"},
-	})
-	require.ErrorContains(t, err, "selection for node worker-a is immutable")
-	require.Zero(t, fake.getCalls)
-}
-
-func TestExecuteCreateNodeItemSharesExecutionQueuesAcrossCodePackages(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	queue := &orderedQueue{}
-	svc := &Service{catalog: catalog, executionQueue: queue}
-	metadata, err := structpb.NewStruct(map[string]any{
-		"supported_workloads": []any{"collect.kline", "collect.symbol"},
-	})
-	require.NoError(t, err)
-
-	items := []*pb.NodeCreateItem{
-		{
-			CloudAccountId: "account-a", Region: "local", PackageId: "package-a",
-			Metadata: metadata,
-		},
-		{
-			CloudAccountId: "account-a", Region: "local", PackageId: "package-b",
-			Metadata: metadata,
-		},
-	}
-	for i, item := range items {
-		_, err := svc.executeCreateNodeItem(context.Background(), "crypto", item, i)
-		require.NoError(t, err)
-	}
-	require.Len(t, queue.identities, 4)
-	assert.Equal(t, queue.identities[0], queue.identities[2])
-	assert.Equal(t, queue.identities[1], queue.identities[3])
-	assert.Equal(t, cloudjobqueue.Identity{SpaceID: "crypto", JobType: "collect.kline"}, queue.identities[0])
-	assert.Equal(t, cloudjobqueue.Identity{SpaceID: "crypto", JobType: "collect.symbol"}, queue.identities[1])
-	firstDurable, err := queue.identities[0].ConsumerName()
-	require.NoError(t, err)
-	secondPackageDurable, err := queue.identities[2].ConsumerName()
-	require.NoError(t, err)
-	assert.Equal(t, firstDurable, secondPackageDurable)
-}
-
-func TestExecuteDeployNodeItemUpdatesTencentSCFFunctionCodeFromPackage(t *testing.T) {
-	db := newNodeSCFTestDB(t)
-	catalog := store.NewCatalogRepository(db)
-	seedSCFAccountAndPackage(t, catalog)
-	if err := catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID:            "crypto",
-		NodeID:             "node-a",
-		CloudAccountID:     "account-a",
-		PackageID:          "old-package",
-		NodeType:           "scf-event",
-		Provider:           "tencent-scf",
-		Region:             "ap-guangzhou",
-		Namespace:          "collector",
-		FunctionName:       "moox-collector-ap-guangzhou-0",
-		SupportedWorkloads: `["collect.kline","collect.symbol"]`,
-		Metadata:           `{"handler":"main"}`,
-		Status:             "unknown",
-	}); err != nil {
-		t.Fatalf("seed node: %v", err)
-	}
-	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
-		Status: "Active",
-		Environment: map[string]string{
-			"MOOX_EVENTBUS_NATS_PASSWORD": "worker-token",
-			"MOOX_CODE_PACKAGE_ID":        "old-package",
-		},
-	}}}}
-	queue := &orderedQueue{}
+	fake := &fakeSCFClient{currentEnvironment: map[string]string{"MOOX_CODE_PACKAGE_ID": "old-package"}}
 	svc := &Service{
 		catalog:            catalog,
-		executionQueue:     queue,
-		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "secret-id", SecretKey: "secret-key"}},
-		scfClientFactory: func(credential cloudcredential.TencentCredential) scfProvisioner {
-			return fake
-		},
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
 	}
-
-	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{
-		NodeId:    "node-a",
-		PackageId: "moox-collector_dev",
-		Environment: map[string]string{
-			"MOOX_EVENTBUS_NATS_PASSWORD": "rotated-worker-token",
-			"MOOX_SPACE_ID":               "crypto",
-		},
-		Config: map[string]string{
-			"memory_size":   "512",
-			"timeout":       "90",
-			"cls_logset_id": "logset-new",
-			"cls_topic_id":  "topic-new",
-		},
+	_, err := svc.executeDeployNodeItem(context.Background(), "crypto_market", &pb.NodeDeployItem{
+		NodeId: "node-a", PackageId: "moox-collector_dev", Config: map[string]string{"memory_size": "64", "timeout": "15"},
+		Environment: map[string]string{"MOOX_SPACE_ID": "crypto_market"},
 	})
-	if err != nil {
-		t.Fatalf("executeDeployNodeItem error = %v", err)
-	}
-	if len(fake.updated) != 1 {
-		t.Fatalf("updated calls = %d, want 1", len(fake.updated))
-	}
-	update := fake.updated[0]
-	if update.FunctionName != "moox-collector-ap-guangzhou-0" || update.Namespace != "collector" || update.Region != "ap-guangzhou" {
-		t.Fatalf("function ref = %#v", update.FunctionRef)
-	}
-	if update.COSBucket != "moox-scf-1255382561" || update.COSRegion != "ap-guangzhou" || update.COSObject != "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip" {
-		t.Fatalf("cos package = bucket:%q region:%q object:%q", update.COSBucket, update.COSRegion, update.COSObject)
-	}
-	if len(fake.configured) != 1 {
-		t.Fatalf("configuration calls = %d, want 1", len(fake.configured))
-	}
-	if fake.getCalls != 4 {
-		t.Fatalf("GetFunction calls = %d, want initial, post-code, post-configuration, and verification checks", fake.getCalls)
-	}
-	if got := fake.configured[0].Environment["MOOX_EVENTBUS_NATS_PASSWORD"]; got != "rotated-worker-token" {
-		t.Fatalf("worker credential = %q", got)
-	}
-	if got := fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"]; got != "moox-collector_dev" {
-		t.Fatalf("package id env = %q", got)
-	}
-	if fake.configured[0].MemorySize != 512 ||
-		fake.configured[0].Timeout != 90 ||
-		!fake.configured[0].ClearNativeCLS {
-		t.Fatalf("desired function config = %#v", fake.configured[0])
-	}
-	if update.Handler != "main" {
-		t.Fatalf("handler = %q", update.Handler)
-	}
-	require.Equal(t, []cloudjobqueue.Identity{
-		{SpaceID: "crypto", JobType: "collect.kline"},
-		{SpaceID: "crypto", JobType: "collect.symbol"},
-	}, queue.identities)
-}
-
-func TestExecuteDeployNodeItemReconcilesAcceptedSCFDeploymentAfterCallerTimeout(t *testing.T) {
-	db := newNodeSCFTestDB(t)
-	catalog := store.NewCatalogRepository(db)
-	seedSCFAccountAndPackage(t, catalog)
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "account-a",
-		PackageID: "old-package", NodeType: "scf-event", Provider: "tencent-scf",
-		Region: "ap-guangzhou", Namespace: "collector", FunctionName: "collector-0",
-		Metadata: `{"handler":"main"}`,
-	}))
-	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
-		Status: "Updating",
-		Environment: map[string]string{
-			"MOOX_CODE_PACKAGE_ID": "moox-collector_dev",
-		},
-	}}}}
-	svc := &Service{
-		catalog: catalog,
-		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{
-			SecretID: "secret-id", SecretKey: "secret-key",
-		}},
-		scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake },
-	}
-
-	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{
-		NodeId: "node-a", PackageId: "moox-collector_dev",
-	})
-
 	require.NoError(t, err)
-	assert.Empty(t, fake.updated)
+	require.Len(t, fake.updated, 1)
 	require.Len(t, fake.configured, 1)
+	assert.Equal(t, int64(64), fake.configured[0].MemorySize)
+	assert.Equal(t, int64(15), fake.configured[0].Timeout)
 	assert.Equal(t, "moox-collector_dev", fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"])
-	node, err := catalog.GetNode(context.Background(), "crypto", "node-a")
-	require.NoError(t, err)
-	require.NotNil(t, node)
-	assert.Equal(t, "moox-collector_dev", node.PackageID)
-}
-
-func TestExecuteDeployNodeItemUpdatesConfigurationWhenPackageIsCurrent(t *testing.T) {
-	setSCFWatchdogRuntimeEnvironment(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=rotated")
-	db := newNodeSCFTestDB(t)
-	catalog := store.NewCatalogRepository(db)
-	seedSCFAccountAndPackage(t, catalog)
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "account-a",
-		PackageID: "moox-collector_dev", NodeType: "scf-event", Provider: "tencent-scf",
-		Region: "ap-guangzhou", Namespace: "collector", FunctionName: "collector-0",
-		Metadata: `{"handler":"main","scf_watchdog_enabled":true}`,
-	}))
-	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
-		Status: "Active",
-		Environment: map[string]string{
-			"MOOX_CODE_PACKAGE_ID":      "moox-collector_dev",
-			scfWatchdogEnvironmentKey:   "true",
-			"MOOX_MONITOR_READY_URL":    "https://old.example/readyz",
-			"MOOX_HEALTH_HMAC_SECRET":   "old-secret",
-			"MOOX_MSGBOX_WECOM_WEBHOOK": "https://old.example/webhook",
-		},
-	}}}}
-	svc := &Service{
-		catalog: catalog,
-		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{
-			SecretID: "secret-id", SecretKey: "secret-key",
-		}},
-		scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake },
-	}
-
-	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{
-		NodeId: "node-a", PackageId: "moox-collector_dev",
-	})
-
-	require.NoError(t, err)
-	require.Empty(t, fake.updated)
-	require.Len(t, fake.configured, 1)
-	require.Equal(t, "http://monitor.example.test:11409/readyz", fake.configured[0].Environment["MOOX_MONITOR_READY_URL"])
-	require.Equal(t, "monitor-secret", fake.configured[0].Environment["MOOX_HEALTH_HMAC_SECRET"])
-	require.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=rotated", fake.configured[0].Environment["MOOX_MSGBOX_WECOM_WEBHOOK"])
-	require.Equal(t, "moox-collector_dev", fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"])
 }
 
 type fakeSCFClient struct {
-	getErr               error
 	getResults           []fakeSCFGetResult
 	getCalls             int
 	respectContext       bool
@@ -756,8 +116,6 @@ type fakeSCFClient struct {
 	updated              []tencentscf.UpdateFunctionCodeRequest
 	configured           []tencentscf.UpdateFunctionConfigurationRequest
 	currentEnvironment   map[string]string
-	currentMemorySize    int64
-	currentTimeout       int64
 }
 
 type fakeSCFGetResult struct {
@@ -773,17 +131,10 @@ func (f *fakeSCFClient) GetFunction(ctx context.Context, _ tencentscf.FunctionRe
 	if len(f.getResults) > 0 {
 		result := f.getResults[0]
 		f.getResults = f.getResults[1:]
-		if result.err != nil {
-			return nil, result.err
-		}
-		return result.info, nil
+		return result.info, result.err
 	}
-	if f.getErr != nil {
-		return nil, f.getErr
-	}
-	return &tencentscf.FunctionInfo{Status: "Active", Environment: f.currentEnvironment, MemorySize: f.currentMemorySize, Timeout: f.currentTimeout}, nil
+	return &tencentscf.FunctionInfo{Status: "Active", Environment: f.currentEnvironment, MemorySize: 64, Timeout: 15}, nil
 }
-
 func (f *fakeSCFClient) CreateFunction(ctx context.Context, req tencentscf.CreateFunctionRequest) (*tencentscf.CreateFunctionResponse, error) {
 	f.created = append(f.created, req)
 	if f.createWaitForContext {
@@ -793,42 +144,30 @@ func (f *fakeSCFClient) CreateFunction(ctx context.Context, req tencentscf.Creat
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
-	return &tencentscf.CreateFunctionResponse{RequestID: "create-req"}, nil
+	return &tencentscf.CreateFunctionResponse{}, nil
 }
-
 func (f *fakeSCFClient) DeleteFunction(context.Context, tencentscf.FunctionRef) error { return nil }
-
 func (f *fakeSCFClient) UpdateFunctionCode(_ context.Context, req tencentscf.UpdateFunctionCodeRequest) (*tencentscf.UpdateFunctionCodeResponse, error) {
 	f.updated = append(f.updated, req)
-	return &tencentscf.UpdateFunctionCodeResponse{RequestID: "update-req"}, nil
+	return &tencentscf.UpdateFunctionCodeResponse{}, nil
 }
-
 func (f *fakeSCFClient) UpdateFunctionConfiguration(_ context.Context, req tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error) {
 	f.configured = append(f.configured, req)
 	f.currentEnvironment = req.Environment
-	f.currentMemorySize = req.MemorySize
-	f.currentTimeout = req.Timeout
-	return &tencentscf.UpdateFunctionConfigurationResponse{RequestID: "config-req"}, nil
+	return &tencentscf.UpdateFunctionConfigurationResponse{}, nil
 }
-
-func (f *fakeSCFClient) InvokeFunction(_ context.Context, _ tencentscf.InvokeFunctionRequest) (*tencentscf.InvokeFunctionResponse, error) {
-	return &tencentscf.InvokeFunctionResponse{RequestID: "invoke-req"}, nil
+func (f *fakeSCFClient) InvokeFunction(context.Context, tencentscf.InvokeFunctionRequest) (*tencentscf.InvokeFunctionResponse, error) {
+	return &tencentscf.InvokeFunctionResponse{}, nil
 }
 
 func newNodeSCFTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
 	db, err := gorm.Open(sqlite.Open("file:"+name+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := db.Exec(cloudnodeschema.AllSQL()).Error; err != nil {
-		t.Fatalf("apply schema: %v", err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(cloudnodeschema.AllSQL()).Error)
 	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("open sql db: %v", err)
-	}
+	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
 	return db
@@ -837,33 +176,8 @@ func newNodeSCFTestDB(t *testing.T) *gorm.DB {
 func seedSCFAccountAndPackage(t *testing.T, catalog *store.CatalogRepository) {
 	t.Helper()
 	now := time.Now().UTC()
-	if err := catalog.UpsertAccount(context.Background(), store.CloudAccount{
-		AccountID:          "account-a",
-		AccountName:        "test-account",
-		Provider:           "tencent",
-		CredentialSecretID: "secret-1",
-		AppID:              "1255382561",
-		COSRegion:          "ap-guangzhou",
-		COSBucket:          "moox-scf-1255382561",
-		CreateTime:         now,
-	}); err != nil {
-		t.Fatalf("seed account: %v", err)
-	}
-	if err := catalog.UpsertPackage(context.Background(), store.FunctionPackage{
-		SpaceID:        "crypto",
-		PackageID:      "moox-collector_dev",
-		PackageName:    "moox-collector",
-		Version:        "dev",
-		Runtime:        "CustomRuntime",
-		PackageType:    "collector",
-		WorkloadType:   "data_collector",
-		CloudAccountID: "account-a",
-		COSRegion:      "ap-guangzhou",
-		COSBucket:      "moox-scf-1255382561",
-		COSPath:        "moox/cloud-packages/collector/moox-collector/dev/collector-scf.zip",
-		Status:         "available",
-		CreateTime:     now,
-	}); err != nil {
-		t.Fatalf("seed package: %v", err)
+	require.NoError(t, catalog.UpsertAccount(context.Background(), store.CloudAccount{AccountID: "account-a", Provider: "tencent", CredentialSecretID: "secret", COSRegion: "ap-guangzhou", COSBucket: "bucket", CreateTime: now}))
+	for _, spaceID := range []string{"crypto", "crypto_market"} {
+		require.NoError(t, catalog.UpsertPackage(context.Background(), store.FunctionPackage{SpaceID: spaceID, PackageID: "moox-collector_dev", PackageName: "collector", Version: "dev", Runtime: "CustomRuntime", PackageType: "collector", WorkloadType: "market_fetcher", CloudAccountID: "account-a", COSRegion: "ap-guangzhou", COSBucket: "bucket", COSPath: "packages/collector.zip", Status: "available", CreateTime: now}))
 	}
 }

@@ -3,26 +3,23 @@ package store
 import "time"
 
 type CloudNode struct {
-	ID                 int        `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID            string     `gorm:"column:c_space_id"`
-	NodeID             string     `gorm:"column:c_node_id"`
-	Provider           string     `gorm:"column:c_provider"`
-	CloudAccountID     string     `gorm:"column:c_cloud_account_id"`
-	PackageID          string     `gorm:"column:c_package_id"`
-	PackageVersion     string     `gorm:"column:c_package_version"`
-	DeploymentID       string     `gorm:"column:c_deployment_id"`
-	NodeType           string     `gorm:"column:c_node_type"`
-	Region             string     `gorm:"column:c_region"`
-	Namespace          string     `gorm:"column:c_namespace"`
-	FunctionName       string     `gorm:"column:c_function_name"`
-	RunningVersion     string     `gorm:"column:c_running_version"`
-	SupportedWorkloads string     `gorm:"column:c_supported_workloads"`
-	Metadata           string     `gorm:"column:c_metadata"`
-	Status             string     `gorm:"column:c_status"`
-	LastHeartbeatAt    *time.Time `gorm:"column:c_last_heartbeat_at"`
-	IsDeleted          bool       `gorm:"column:c_is_deleted"`
-	CreateTime         time.Time  `gorm:"column:c_ctime"`
-	ModifyTime         time.Time  `gorm:"column:c_mtime"`
+	ID             int       `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID        string    `gorm:"column:c_space_id"`
+	NodeID         string    `gorm:"column:c_node_id"`
+	Provider       string    `gorm:"column:c_provider"`
+	CloudAccountID string    `gorm:"column:c_cloud_account_id"`
+	PackageID      string    `gorm:"column:c_package_id"`
+	PackageVersion string    `gorm:"column:c_package_version"`
+	DeploymentID   string    `gorm:"column:c_deployment_id"`
+	NodeType       string    `gorm:"column:c_node_type"`
+	Region         string    `gorm:"column:c_region"`
+	Namespace      string    `gorm:"column:c_namespace"`
+	FunctionName   string    `gorm:"column:c_function_name"`
+	Metadata       string    `gorm:"column:c_metadata"`
+	Status         string    `gorm:"column:c_status"`
+	IsDeleted      bool      `gorm:"column:c_is_deleted"`
+	CreateTime     time.Time `gorm:"column:c_ctime"`
+	ModifyTime     time.Time `gorm:"column:c_mtime"`
 }
 
 func (*CloudNode) TableName() string { return "t_cloud_nodes" }

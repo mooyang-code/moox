@@ -11,24 +11,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const scfHeartbeatTimeout = 90 * time.Second
-
-// ListSCFEventNodes returns every live catalog entry backed by Tencent SCF's
-// event invocation mode. Node status is intentionally not part of the filter:
-// newly published functions need keepalives before their first heartbeat.
-func (r *CatalogRepository) ListSCFEventNodes(ctx context.Context) ([]CloudNode, error) {
-	var nodes []CloudNode
-	err := r.db.WithContext(ctx).
-		Where("c_is_deleted = ? AND c_provider = ? AND c_node_type = ?", false, "tencent-scf", "scf-event").
-		Where("CASE WHEN json_valid(c_metadata) THEN COALESCE(json_extract(c_metadata, '$.biz_type'), '') ELSE '' END <> ?", "market_fetcher").
-		Order("c_id ASC").
-		Find(&nodes).Error
-	return nodes, err
-}
-
 func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *pb.GetNodeListReq) ([]CloudNode, int64, error) {
 	q := r.db.WithContext(ctx).Model(&CloudNode{}).Where("c_is_deleted = ?", false)
-	now := r.currentTime()
 	if spaceID != "" {
 		q = q.Where("c_space_id = ?", spaceID)
 	}
@@ -51,13 +35,8 @@ func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *
 		q = q.Where("json_extract(c_metadata, '$.biz_type') = ?", req.GetBizType())
 	}
 	if req.GetStatus() != pb.NodeStatusCode_NODE_STATUS_UNSPECIFIED {
-		switch req.GetStatus() {
-		case pb.NodeStatusCode_NODE_STATUS_ONLINE:
-			q = q.Where("c_last_heartbeat_at IS NOT NULL AND c_last_heartbeat_at >= ?", now.Add(-scfHeartbeatTimeout))
-		case pb.NodeStatusCode_NODE_STATUS_TIMEOUT:
-			q = q.Where("c_last_heartbeat_at IS NOT NULL AND c_last_heartbeat_at < ?", now.Add(-scfHeartbeatTimeout))
-		default:
-			status := nodeStatusFromPB(req.GetStatus())
+		status := nodeStatusFromPB(req.GetStatus())
+		if status != "" {
 			q = q.Where("c_status = ?", status)
 		}
 	}
@@ -72,9 +51,6 @@ func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *
 	page, size := pageFromCommon(req.GetPage())
 	var nodes []CloudNode
 	err := q.Order("c_id DESC").Limit(size).Offset((page - 1) * size).Find(&nodes).Error
-	for index := range nodes {
-		deriveSCFHeartbeatStatus(&nodes[index], now)
-	}
 	return nodes, total, err
 }
 
@@ -90,7 +66,6 @@ func (r *CatalogRepository) GetNode(ctx context.Context, spaceID string, nodeID 
 		}
 		return nil, err
 	}
-	deriveSCFHeartbeatStatus(&node, r.currentTime())
 	return &node, nil
 }
 
@@ -111,8 +86,7 @@ func (r *CatalogRepository) UpsertNode(ctx context.Context, node CloudNode) erro
 		DoUpdates: clause.AssignmentColumns([]string{
 			"c_cloud_account_id", "c_package_id", "c_package_version", "c_deployment_id",
 			"c_node_type", "c_region", "c_namespace", "c_function_name", "c_provider",
-			"c_running_version", "c_supported_workloads", "c_metadata", "c_status", "c_is_deleted", "c_mtime",
-			"c_last_heartbeat_at",
+			"c_metadata", "c_status", "c_is_deleted", "c_mtime",
 		}),
 	}).Create(&node).Error
 }
@@ -152,12 +126,6 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 		_ = json.Unmarshal([]byte(node.Metadata), &existingMetadata)
 	}
 	metadataPatch := map[string]any{"deployment_ready": true}
-	if bizType, _ := existingMetadata["biz_type"].(string); strings.EqualFold(strings.TrimSpace(bizType), "market_fetcher") {
-		// Deployment updates bypass UpdateNode, so clear stale resident worker
-		// queue identities here as well when a Fetcher is republished.
-		updates["c_supported_workloads"] = "[]"
-		metadataPatch["supported_workloads"] = []string{}
-	}
 	if len(desiredConfig) > 0 {
 		metadataPatch["config"] = desiredConfig
 		if value := strings.TrimSpace(desiredConfig["memory_size"]); value != "" {
@@ -200,40 +168,6 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 	// causes GORM's SQLite dialector to emit an UPDATE ... FROM self join,
 	// making c_node_id ambiguous.
 	return r.db.WithContext(ctx).Model(&CloudNode{}).Where("c_id = ?", node.ID).Updates(updates).Error
-}
-
-func (r *CatalogRepository) UpdateHeartbeat(ctx context.Context, spaceID string, nodeID string, version string, supported string, metadata string) error {
-	now := r.currentTime()
-	return r.db.WithContext(ctx).Model(&CloudNode{}).
-		Where("c_space_id = ? AND c_node_id = ? AND c_is_deleted = ?", spaceID, nodeID, false).
-		Updates(map[string]any{
-			"c_running_version":     version,
-			"c_supported_workloads": supported,
-			"c_metadata": gorm.Expr(
-				"json_patch(CASE WHEN json_valid(c_metadata) THEN c_metadata ELSE '{}' END, ?)",
-				metadata,
-			),
-			"c_status":            "online",
-			"c_last_heartbeat_at": now,
-			"c_mtime":             now,
-		}).Error
-}
-
-func deriveSCFHeartbeatStatus(node *CloudNode, now time.Time) {
-	if node == nil || strings.EqualFold(node.Status, "deleted") {
-		return
-	}
-	node.Status = SCFHeartbeatStatus(node.LastHeartbeatAt, now)
-}
-
-func SCFHeartbeatStatus(lastHeartbeat *time.Time, now time.Time) string {
-	if lastHeartbeat == nil || lastHeartbeat.IsZero() {
-		return "unknown"
-	}
-	if now.UTC().Sub(lastHeartbeat.UTC()) > scfHeartbeatTimeout {
-		return "timeout"
-	}
-	return "online"
 }
 
 func nodeStatusFromPB(status pb.NodeStatusCode) string {

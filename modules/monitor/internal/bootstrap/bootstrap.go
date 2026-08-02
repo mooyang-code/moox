@@ -52,14 +52,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	alertNotifier := alerting.WebhookNotifier{Timeout: time.Duration(cfg.Alert.SendTimeoutSeconds) * time.Second}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
-	if err := registerExternalSentinelChecks(ctx, runtime.Repositories); err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("register external sentinel checks: %w", err)
-	}
-	runtime.ObservabilityHealthRoute = externalHealthRoute(
-		runtime.Repositories,
-		alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{Notifier: alertNotifier}),
-	)
 	hostRegistry, err := store.WithDatabase(mgr, hostmetrics.NewRegistry)
 	if err != nil {
 		_ = runtime.Close()

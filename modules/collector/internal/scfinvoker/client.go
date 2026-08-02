@@ -111,7 +111,7 @@ func nodeFromProto(item *cloudnodepb.CloudNode) Node {
 	if item.GetMetadata() != nil {
 		metadata = item.GetMetadata().AsMap()
 	}
-	return Node{NodeID: item.GetNodeId(), FunctionName: item.GetFunctionName(), Region: item.GetRegion(), Namespace: item.GetNamespace(), PackageID: item.GetPackageId(), DeploymentID: item.GetDeploymentId(), BizType: item.GetBizType(), Workloads: append([]string(nil), item.GetSupportedWorkloads()...), Metadata: metadata}
+	return Node{NodeID: item.GetNodeId(), FunctionName: item.GetFunctionName(), Region: item.GetRegion(), Namespace: item.GetNamespace(), PackageID: item.GetPackageId(), DeploymentID: item.GetDeploymentId(), BizType: item.GetBizType(), Metadata: metadata}
 }
 
 func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudnodepb.ScfInvokeType) (InvocationResult, error) {

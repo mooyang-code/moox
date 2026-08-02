@@ -8,7 +8,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -22,7 +21,6 @@ type Service struct {
 	jobState           jobstate.Store
 	history            *jobhistory.Store
 	executionQueue     jobqueue.ExecutionQueue
-	heartbeatSink      projection.HeartbeatSink
 	catalog            *store.CatalogRepository
 	credentialResolver interface {
 		Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error)
@@ -54,10 +52,6 @@ func WithJobStateStore(store jobstate.Store) Option {
 
 func WithJobHistoryStore(store *jobhistory.Store) Option {
 	return func(s *Service) { s.history = store }
-}
-
-func WithHeartbeatSink(sink projection.HeartbeatSink) Option {
-	return func(s *Service) { s.heartbeatSink = sink }
 }
 
 func WithModuleMetrics(metrics *report.ModuleMetrics) Option {

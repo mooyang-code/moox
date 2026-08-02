@@ -663,34 +663,30 @@ type CloudNode struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Id                 int32            `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	SpaceId            string           `protobuf:"bytes,2,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
-	NodeId             string           `protobuf:"bytes,3,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	CloudAccountId     string           `protobuf:"bytes,4,opt,name=cloud_account_id,json=cloudAccountId,proto3" json:"cloud_account_id,omitempty"`
-	PackageId          string           `protobuf:"bytes,5,opt,name=package_id,json=packageId,proto3" json:"package_id,omitempty"`
-	PackageVersion     string           `protobuf:"bytes,6,opt,name=package_version,json=packageVersion,proto3" json:"package_version,omitempty"`
-	DeploymentId       string           `protobuf:"bytes,7,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
-	RunningVersion     string           `protobuf:"bytes,8,opt,name=running_version,json=runningVersion,proto3" json:"running_version,omitempty"`
-	Namespace          string           `protobuf:"bytes,9,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	NodeType           string           `protobuf:"bytes,10,opt,name=node_type,json=nodeType,proto3" json:"node_type,omitempty"`
-	Provider           string           `protobuf:"bytes,11,opt,name=provider,proto3" json:"provider,omitempty"`
-	FunctionName       string           `protobuf:"bytes,12,opt,name=function_name,json=functionName,proto3" json:"function_name,omitempty"`
-	BizType            string           `protobuf:"bytes,13,opt,name=biz_type,json=bizType,proto3" json:"biz_type,omitempty"`
-	Region             string           `protobuf:"bytes,14,opt,name=region,proto3" json:"region,omitempty"`
-	Tag                string           `protobuf:"bytes,15,opt,name=tag,proto3" json:"tag,omitempty"`
-	IpAddress          string           `protobuf:"bytes,16,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
-	SupportedWorkloads []string         `protobuf:"bytes,17,rep,name=supported_workloads,json=supportedWorkloads,proto3" json:"supported_workloads,omitempty"`
-	Metadata           *structpb.Struct `protobuf:"bytes,18,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	TimeoutThreshold   int32            `protobuf:"varint,19,opt,name=timeout_threshold,json=timeoutThreshold,proto3" json:"timeout_threshold,omitempty"`
-	HeartbeatInterval  int32            `protobuf:"varint,20,opt,name=heartbeat_interval,json=heartbeatInterval,proto3" json:"heartbeat_interval,omitempty"`
-	ProbeEnabled       bool             `protobuf:"varint,21,opt,name=probe_enabled,json=probeEnabled,proto3" json:"probe_enabled,omitempty"`
-	ProbeUrl           string           `protobuf:"bytes,22,opt,name=probe_url,json=probeUrl,proto3" json:"probe_url,omitempty"`
-	Status             NodeStatusCode   `protobuf:"varint,23,opt,name=status,proto3,enum=trpc.moox.cloudnode.NodeStatusCode" json:"status,omitempty"`
-	LastHeartbeat      string           `protobuf:"bytes,24,opt,name=last_heartbeat,json=lastHeartbeat,proto3" json:"last_heartbeat,omitempty"` // RFC3339，可为空
-	IsDeleted          bool             `protobuf:"varint,25,opt,name=is_deleted,json=isDeleted,proto3" json:"is_deleted,omitempty"`
-	CreateTime         string           `protobuf:"bytes,26,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"` // RFC3339
-	ModifyTime         string           `protobuf:"bytes,27,opt,name=modify_time,json=modifyTime,proto3" json:"modify_time,omitempty"` // RFC3339
-	ClsTopicId         string           `protobuf:"bytes,28,opt,name=cls_topic_id,json=clsTopicId,proto3" json:"cls_topic_id,omitempty"`
+	Id               int32            `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	SpaceId          string           `protobuf:"bytes,2,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	NodeId           string           `protobuf:"bytes,3,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	CloudAccountId   string           `protobuf:"bytes,4,opt,name=cloud_account_id,json=cloudAccountId,proto3" json:"cloud_account_id,omitempty"`
+	PackageId        string           `protobuf:"bytes,5,opt,name=package_id,json=packageId,proto3" json:"package_id,omitempty"`
+	PackageVersion   string           `protobuf:"bytes,6,opt,name=package_version,json=packageVersion,proto3" json:"package_version,omitempty"`
+	DeploymentId     string           `protobuf:"bytes,7,opt,name=deployment_id,json=deploymentId,proto3" json:"deployment_id,omitempty"`
+	Namespace        string           `protobuf:"bytes,9,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	NodeType         string           `protobuf:"bytes,10,opt,name=node_type,json=nodeType,proto3" json:"node_type,omitempty"`
+	Provider         string           `protobuf:"bytes,11,opt,name=provider,proto3" json:"provider,omitempty"`
+	FunctionName     string           `protobuf:"bytes,12,opt,name=function_name,json=functionName,proto3" json:"function_name,omitempty"`
+	BizType          string           `protobuf:"bytes,13,opt,name=biz_type,json=bizType,proto3" json:"biz_type,omitempty"`
+	Region           string           `protobuf:"bytes,14,opt,name=region,proto3" json:"region,omitempty"`
+	Tag              string           `protobuf:"bytes,15,opt,name=tag,proto3" json:"tag,omitempty"`
+	IpAddress        string           `protobuf:"bytes,16,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	Metadata         *structpb.Struct `protobuf:"bytes,18,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	TimeoutThreshold int32            `protobuf:"varint,19,opt,name=timeout_threshold,json=timeoutThreshold,proto3" json:"timeout_threshold,omitempty"`
+	ProbeEnabled     bool             `protobuf:"varint,21,opt,name=probe_enabled,json=probeEnabled,proto3" json:"probe_enabled,omitempty"`
+	ProbeUrl         string           `protobuf:"bytes,22,opt,name=probe_url,json=probeUrl,proto3" json:"probe_url,omitempty"`
+	Status           NodeStatusCode   `protobuf:"varint,23,opt,name=status,proto3,enum=trpc.moox.cloudnode.NodeStatusCode" json:"status,omitempty"`
+	IsDeleted        bool             `protobuf:"varint,25,opt,name=is_deleted,json=isDeleted,proto3" json:"is_deleted,omitempty"`
+	CreateTime       string           `protobuf:"bytes,26,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"` // RFC3339
+	ModifyTime       string           `protobuf:"bytes,27,opt,name=modify_time,json=modifyTime,proto3" json:"modify_time,omitempty"` // RFC3339
+	ClsTopicId       string           `protobuf:"bytes,28,opt,name=cls_topic_id,json=clsTopicId,proto3" json:"cls_topic_id,omitempty"`
 }
 
 func (x *CloudNode) Reset() {
@@ -774,13 +770,6 @@ func (x *CloudNode) GetDeploymentId() string {
 	return ""
 }
 
-func (x *CloudNode) GetRunningVersion() string {
-	if x != nil {
-		return x.RunningVersion
-	}
-	return ""
-}
-
 func (x *CloudNode) GetNamespace() string {
 	if x != nil {
 		return x.Namespace
@@ -837,13 +826,6 @@ func (x *CloudNode) GetIpAddress() string {
 	return ""
 }
 
-func (x *CloudNode) GetSupportedWorkloads() []string {
-	if x != nil {
-		return x.SupportedWorkloads
-	}
-	return nil
-}
-
 func (x *CloudNode) GetMetadata() *structpb.Struct {
 	if x != nil {
 		return x.Metadata
@@ -854,13 +836,6 @@ func (x *CloudNode) GetMetadata() *structpb.Struct {
 func (x *CloudNode) GetTimeoutThreshold() int32 {
 	if x != nil {
 		return x.TimeoutThreshold
-	}
-	return 0
-}
-
-func (x *CloudNode) GetHeartbeatInterval() int32 {
-	if x != nil {
-		return x.HeartbeatInterval
 	}
 	return 0
 }
@@ -884,13 +859,6 @@ func (x *CloudNode) GetStatus() NodeStatusCode {
 		return x.Status
 	}
 	return NodeStatusCode_NODE_STATUS_UNSPECIFIED
-}
-
-func (x *CloudNode) GetLastHeartbeat() string {
-	if x != nil {
-		return x.LastHeartbeat
-	}
-	return ""
 }
 
 func (x *CloudNode) GetIsDeleted() bool {
@@ -4377,172 +4345,6 @@ func (x *LocalDNSReportItem) GetResolveAt() string {
 	return ""
 }
 
-type ReportHeartbeatReq struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	SpaceId            string                `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
-	NodeId             string                `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	NodeType           string                `protobuf:"bytes,3,opt,name=node_type,json=nodeType,proto3" json:"node_type,omitempty"`
-	RunningVersion     string                `protobuf:"bytes,4,opt,name=running_version,json=runningVersion,proto3" json:"running_version,omitempty"`
-	SourceService      string                `protobuf:"bytes,5,opt,name=source_service,json=sourceService,proto3" json:"source_service,omitempty"`
-	Timestamp          string                `protobuf:"bytes,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	Metrics            *structpb.Struct      `protobuf:"bytes,7,opt,name=metrics,proto3" json:"metrics,omitempty"`
-	Metadata           *structpb.Struct      `protobuf:"bytes,8,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	SupportedWorkloads []string              `protobuf:"bytes,9,rep,name=supported_workloads,json=supportedWorkloads,proto3" json:"supported_workloads,omitempty"`
-	LocalDnsRecords    []*LocalDNSReportItem `protobuf:"bytes,10,rep,name=local_dns_records,json=localDnsRecords,proto3" json:"local_dns_records,omitempty"`
-}
-
-func (x *ReportHeartbeatReq) Reset() {
-	*x = ReportHeartbeatReq{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[49]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *ReportHeartbeatReq) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReportHeartbeatReq) ProtoMessage() {}
-
-func (x *ReportHeartbeatReq) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[49]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReportHeartbeatReq.ProtoReflect.Descriptor instead.
-func (*ReportHeartbeatReq) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{49}
-}
-
-func (x *ReportHeartbeatReq) GetSpaceId() string {
-	if x != nil {
-		return x.SpaceId
-	}
-	return ""
-}
-
-func (x *ReportHeartbeatReq) GetNodeId() string {
-	if x != nil {
-		return x.NodeId
-	}
-	return ""
-}
-
-func (x *ReportHeartbeatReq) GetNodeType() string {
-	if x != nil {
-		return x.NodeType
-	}
-	return ""
-}
-
-func (x *ReportHeartbeatReq) GetRunningVersion() string {
-	if x != nil {
-		return x.RunningVersion
-	}
-	return ""
-}
-
-func (x *ReportHeartbeatReq) GetSourceService() string {
-	if x != nil {
-		return x.SourceService
-	}
-	return ""
-}
-
-func (x *ReportHeartbeatReq) GetTimestamp() string {
-	if x != nil {
-		return x.Timestamp
-	}
-	return ""
-}
-
-func (x *ReportHeartbeatReq) GetMetrics() *structpb.Struct {
-	if x != nil {
-		return x.Metrics
-	}
-	return nil
-}
-
-func (x *ReportHeartbeatReq) GetMetadata() *structpb.Struct {
-	if x != nil {
-		return x.Metadata
-	}
-	return nil
-}
-
-func (x *ReportHeartbeatReq) GetSupportedWorkloads() []string {
-	if x != nil {
-		return x.SupportedWorkloads
-	}
-	return nil
-}
-
-func (x *ReportHeartbeatReq) GetLocalDnsRecords() []*LocalDNSReportItem {
-	if x != nil {
-		return x.LocalDnsRecords
-	}
-	return nil
-}
-
-type ReportHeartbeatRsp struct {
-	state         protoimpl.MessageState
-	sizeCache     protoimpl.SizeCache
-	unknownFields protoimpl.UnknownFields
-
-	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
-}
-
-func (x *ReportHeartbeatRsp) Reset() {
-	*x = ReportHeartbeatRsp{}
-	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[50]
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		ms.StoreMessageInfo(mi)
-	}
-}
-
-func (x *ReportHeartbeatRsp) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReportHeartbeatRsp) ProtoMessage() {}
-
-func (x *ReportHeartbeatRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[50]
-	if protoimpl.UnsafeEnabled && x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReportHeartbeatRsp.ProtoReflect.Descriptor instead.
-func (*ReportHeartbeatRsp) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{50}
-}
-
-func (x *ReportHeartbeatRsp) GetRetInfo() *commonpb.RetInfo {
-	if x != nil {
-		return x.RetInfo
-	}
-	return nil
-}
-
 type JobItem struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -4560,7 +4362,7 @@ type JobItem struct {
 func (x *JobItem) Reset() {
 	*x = JobItem{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[51]
+		mi := &file_cloudnode_proto_msgTypes[49]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4573,7 +4375,7 @@ func (x *JobItem) String() string {
 func (*JobItem) ProtoMessage() {}
 
 func (x *JobItem) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[51]
+	mi := &file_cloudnode_proto_msgTypes[49]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4586,7 +4388,7 @@ func (x *JobItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobItem.ProtoReflect.Descriptor instead.
 func (*JobItem) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{51}
+	return file_cloudnode_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *JobItem) GetSpaceId() string {
@@ -4649,7 +4451,7 @@ type SubmitJobItemsReq struct {
 func (x *SubmitJobItemsReq) Reset() {
 	*x = SubmitJobItemsReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[52]
+		mi := &file_cloudnode_proto_msgTypes[50]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4662,7 +4464,7 @@ func (x *SubmitJobItemsReq) String() string {
 func (*SubmitJobItemsReq) ProtoMessage() {}
 
 func (x *SubmitJobItemsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[52]
+	mi := &file_cloudnode_proto_msgTypes[50]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4675,7 +4477,7 @@ func (x *SubmitJobItemsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitJobItemsReq.ProtoReflect.Descriptor instead.
 func (*SubmitJobItemsReq) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{52}
+	return file_cloudnode_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *SubmitJobItemsReq) GetItems() []*JobItem {
@@ -4698,7 +4500,7 @@ type JobItemAck struct {
 func (x *JobItemAck) Reset() {
 	*x = JobItemAck{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[53]
+		mi := &file_cloudnode_proto_msgTypes[51]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4711,7 +4513,7 @@ func (x *JobItemAck) String() string {
 func (*JobItemAck) ProtoMessage() {}
 
 func (x *JobItemAck) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[53]
+	mi := &file_cloudnode_proto_msgTypes[51]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4724,7 +4526,7 @@ func (x *JobItemAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobItemAck.ProtoReflect.Descriptor instead.
 func (*JobItemAck) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{53}
+	return file_cloudnode_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *JobItemAck) GetJobItemId() string {
@@ -4763,7 +4565,7 @@ type SubmitJobItemsRsp struct {
 func (x *SubmitJobItemsRsp) Reset() {
 	*x = SubmitJobItemsRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[54]
+		mi := &file_cloudnode_proto_msgTypes[52]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4776,7 +4578,7 @@ func (x *SubmitJobItemsRsp) String() string {
 func (*SubmitJobItemsRsp) ProtoMessage() {}
 
 func (x *SubmitJobItemsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[54]
+	mi := &file_cloudnode_proto_msgTypes[52]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4789,7 +4591,7 @@ func (x *SubmitJobItemsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitJobItemsRsp.ProtoReflect.Descriptor instead.
 func (*SubmitJobItemsRsp) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{54}
+	return file_cloudnode_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *SubmitJobItemsRsp) GetRetInfo() *commonpb.RetInfo {
@@ -4846,7 +4648,7 @@ type ReportJobItemStatusReq struct {
 func (x *ReportJobItemStatusReq) Reset() {
 	*x = ReportJobItemStatusReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[55]
+		mi := &file_cloudnode_proto_msgTypes[53]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4859,7 +4661,7 @@ func (x *ReportJobItemStatusReq) String() string {
 func (*ReportJobItemStatusReq) ProtoMessage() {}
 
 func (x *ReportJobItemStatusReq) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[55]
+	mi := &file_cloudnode_proto_msgTypes[53]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4872,7 +4674,7 @@ func (x *ReportJobItemStatusReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportJobItemStatusReq.ProtoReflect.Descriptor instead.
 func (*ReportJobItemStatusReq) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{55}
+	return file_cloudnode_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ReportJobItemStatusReq) GetSpaceId() string {
@@ -4949,7 +4751,7 @@ type ReportJobItemStatusRsp struct {
 func (x *ReportJobItemStatusRsp) Reset() {
 	*x = ReportJobItemStatusRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[56]
+		mi := &file_cloudnode_proto_msgTypes[54]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4962,7 +4764,7 @@ func (x *ReportJobItemStatusRsp) String() string {
 func (*ReportJobItemStatusRsp) ProtoMessage() {}
 
 func (x *ReportJobItemStatusRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[56]
+	mi := &file_cloudnode_proto_msgTypes[54]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4975,7 +4777,7 @@ func (x *ReportJobItemStatusRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportJobItemStatusRsp.ProtoReflect.Descriptor instead.
 func (*ReportJobItemStatusRsp) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{56}
+	return file_cloudnode_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ReportJobItemStatusRsp) GetRetInfo() *commonpb.RetInfo {
@@ -4997,7 +4799,7 @@ type GetJobItemReq struct {
 func (x *GetJobItemReq) Reset() {
 	*x = GetJobItemReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[57]
+		mi := &file_cloudnode_proto_msgTypes[55]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5010,7 +4812,7 @@ func (x *GetJobItemReq) String() string {
 func (*GetJobItemReq) ProtoMessage() {}
 
 func (x *GetJobItemReq) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[57]
+	mi := &file_cloudnode_proto_msgTypes[55]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5023,7 +4825,7 @@ func (x *GetJobItemReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobItemReq.ProtoReflect.Descriptor instead.
 func (*GetJobItemReq) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{57}
+	return file_cloudnode_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *GetJobItemReq) GetSpaceId() string {
@@ -5066,7 +4868,7 @@ type JobItemDetail struct {
 func (x *JobItemDetail) Reset() {
 	*x = JobItemDetail{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[58]
+		mi := &file_cloudnode_proto_msgTypes[56]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5079,7 +4881,7 @@ func (x *JobItemDetail) String() string {
 func (*JobItemDetail) ProtoMessage() {}
 
 func (x *JobItemDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[58]
+	mi := &file_cloudnode_proto_msgTypes[56]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5092,7 +4894,7 @@ func (x *JobItemDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobItemDetail.ProtoReflect.Descriptor instead.
 func (*JobItemDetail) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{58}
+	return file_cloudnode_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *JobItemDetail) GetSpaceId() string {
@@ -5219,7 +5021,7 @@ type GetJobItemRsp struct {
 func (x *GetJobItemRsp) Reset() {
 	*x = GetJobItemRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[59]
+		mi := &file_cloudnode_proto_msgTypes[57]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5232,7 +5034,7 @@ func (x *GetJobItemRsp) String() string {
 func (*GetJobItemRsp) ProtoMessage() {}
 
 func (x *GetJobItemRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[59]
+	mi := &file_cloudnode_proto_msgTypes[57]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5245,7 +5047,7 @@ func (x *GetJobItemRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobItemRsp.ProtoReflect.Descriptor instead.
 func (*GetJobItemRsp) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{59}
+	return file_cloudnode_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *GetJobItemRsp) GetRetInfo() *commonpb.RetInfo {
@@ -5277,7 +5079,7 @@ type ListJobItemsReq struct {
 func (x *ListJobItemsReq) Reset() {
 	*x = ListJobItemsReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[60]
+		mi := &file_cloudnode_proto_msgTypes[58]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5290,7 +5092,7 @@ func (x *ListJobItemsReq) String() string {
 func (*ListJobItemsReq) ProtoMessage() {}
 
 func (x *ListJobItemsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[60]
+	mi := &file_cloudnode_proto_msgTypes[58]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5303,7 +5105,7 @@ func (x *ListJobItemsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobItemsReq.ProtoReflect.Descriptor instead.
 func (*ListJobItemsReq) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{60}
+	return file_cloudnode_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ListJobItemsReq) GetSpaceId() string {
@@ -5354,7 +5156,7 @@ type ListJobItemsRsp struct {
 func (x *ListJobItemsRsp) Reset() {
 	*x = ListJobItemsRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[61]
+		mi := &file_cloudnode_proto_msgTypes[59]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5367,7 +5169,7 @@ func (x *ListJobItemsRsp) String() string {
 func (*ListJobItemsRsp) ProtoMessage() {}
 
 func (x *ListJobItemsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[61]
+	mi := &file_cloudnode_proto_msgTypes[59]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5380,7 +5182,7 @@ func (x *ListJobItemsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobItemsRsp.ProtoReflect.Descriptor instead.
 func (*ListJobItemsRsp) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{61}
+	return file_cloudnode_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ListJobItemsRsp) GetRetInfo() *commonpb.RetInfo {
@@ -5416,7 +5218,7 @@ type InvokeSyncPayload struct {
 func (x *InvokeSyncPayload) Reset() {
 	*x = InvokeSyncPayload{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[62]
+		mi := &file_cloudnode_proto_msgTypes[60]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5429,7 +5231,7 @@ func (x *InvokeSyncPayload) String() string {
 func (*InvokeSyncPayload) ProtoMessage() {}
 
 func (x *InvokeSyncPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[62]
+	mi := &file_cloudnode_proto_msgTypes[60]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5442,7 +5244,7 @@ func (x *InvokeSyncPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeSyncPayload.ProtoReflect.Descriptor instead.
 func (*InvokeSyncPayload) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{62}
+	return file_cloudnode_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *InvokeSyncPayload) GetRequestId() string {
@@ -5477,7 +5279,7 @@ type InvokeSyncReq struct {
 func (x *InvokeSyncReq) Reset() {
 	*x = InvokeSyncReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[63]
+		mi := &file_cloudnode_proto_msgTypes[61]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5490,7 +5292,7 @@ func (x *InvokeSyncReq) String() string {
 func (*InvokeSyncReq) ProtoMessage() {}
 
 func (x *InvokeSyncReq) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[63]
+	mi := &file_cloudnode_proto_msgTypes[61]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5503,7 +5305,7 @@ func (x *InvokeSyncReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeSyncReq.ProtoReflect.Descriptor instead.
 func (*InvokeSyncReq) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{63}
+	return file_cloudnode_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *InvokeSyncReq) GetSpaceId() string {
@@ -5577,7 +5379,7 @@ type InvokeSyncResult struct {
 func (x *InvokeSyncResult) Reset() {
 	*x = InvokeSyncResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[64]
+		mi := &file_cloudnode_proto_msgTypes[62]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5590,7 +5392,7 @@ func (x *InvokeSyncResult) String() string {
 func (*InvokeSyncResult) ProtoMessage() {}
 
 func (x *InvokeSyncResult) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[64]
+	mi := &file_cloudnode_proto_msgTypes[62]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5603,7 +5405,7 @@ func (x *InvokeSyncResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeSyncResult.ProtoReflect.Descriptor instead.
 func (*InvokeSyncResult) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{64}
+	return file_cloudnode_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *InvokeSyncResult) GetRequestId() string {
@@ -5659,7 +5461,7 @@ type InvokeSyncRsp struct {
 func (x *InvokeSyncRsp) Reset() {
 	*x = InvokeSyncRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_cloudnode_proto_msgTypes[65]
+		mi := &file_cloudnode_proto_msgTypes[63]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5672,7 +5474,7 @@ func (x *InvokeSyncRsp) String() string {
 func (*InvokeSyncRsp) ProtoMessage() {}
 
 func (x *InvokeSyncRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_cloudnode_proto_msgTypes[65]
+	mi := &file_cloudnode_proto_msgTypes[63]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5685,7 +5487,7 @@ func (x *InvokeSyncRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeSyncRsp.ProtoReflect.Descriptor instead.
 func (*InvokeSyncRsp) Descriptor() ([]byte, []int) {
-	return file_cloudnode_proto_rawDescGZIP(), []int{65}
+	return file_cloudnode_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *InvokeSyncRsp) GetRetInfo() *commonpb.RetInfo {
@@ -5754,7 +5556,7 @@ var file_cloudnode_proto_rawDesc = []byte{
 	0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2f, 0x73, 0x74, 0x72, 0x75, 0x63,
 	0x74, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x1a, 0x1f, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2f,
 	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2f, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61,
-	0x6d, 0x70, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x22, 0xda, 0x07, 0x0a, 0x09, 0x43, 0x6c, 0x6f,
+	0x6d, 0x70, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x22, 0xaa, 0x06, 0x0a, 0x09, 0x43, 0x6c, 0x6f,
 	0x75, 0x64, 0x4e, 0x6f, 0x64, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01,
 	0x28, 0x05, 0x52, 0x02, 0x69, 0x64, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f,
 	0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49,
@@ -5769,46 +5571,35 @@ var file_cloudnode_proto_rawDesc = []byte{
 	0x63, 0x6b, 0x61, 0x67, 0x65, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x23, 0x0a, 0x0d,
 	0x64, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x6d, 0x65, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x07, 0x20,
 	0x01, 0x28, 0x09, 0x52, 0x0c, 0x64, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x6d, 0x65, 0x6e, 0x74, 0x49,
-	0x64, 0x12, 0x27, 0x0a, 0x0f, 0x72, 0x75, 0x6e, 0x6e, 0x69, 0x6e, 0x67, 0x5f, 0x76, 0x65, 0x72,
-	0x73, 0x69, 0x6f, 0x6e, 0x18, 0x08, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0e, 0x72, 0x75, 0x6e, 0x6e,
-	0x69, 0x6e, 0x67, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x1c, 0x0a, 0x09, 0x6e, 0x61,
-	0x6d, 0x65, 0x73, 0x70, 0x61, 0x63, 0x65, 0x18, 0x09, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6e,
-	0x61, 0x6d, 0x65, 0x73, 0x70, 0x61, 0x63, 0x65, 0x12, 0x1b, 0x0a, 0x09, 0x6e, 0x6f, 0x64, 0x65,
-	0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6e, 0x6f, 0x64,
-	0x65, 0x54, 0x79, 0x70, 0x65, 0x12, 0x1a, 0x0a, 0x08, 0x70, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65,
-	0x72, 0x18, 0x0b, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65,
-	0x72, 0x12, 0x23, 0x0a, 0x0d, 0x66, 0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x6e, 0x61,
-	0x6d, 0x65, 0x18, 0x0c, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x66, 0x75, 0x6e, 0x63, 0x74, 0x69,
-	0x6f, 0x6e, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x19, 0x0a, 0x08, 0x62, 0x69, 0x7a, 0x5f, 0x74, 0x79,
-	0x70, 0x65, 0x18, 0x0d, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x62, 0x69, 0x7a, 0x54, 0x79, 0x70,
-	0x65, 0x12, 0x16, 0x0a, 0x06, 0x72, 0x65, 0x67, 0x69, 0x6f, 0x6e, 0x18, 0x0e, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x06, 0x72, 0x65, 0x67, 0x69, 0x6f, 0x6e, 0x12, 0x10, 0x0a, 0x03, 0x74, 0x61, 0x67,
-	0x18, 0x0f, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x74, 0x61, 0x67, 0x12, 0x1d, 0x0a, 0x0a, 0x69,
-	0x70, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x18, 0x10, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x09, 0x69, 0x70, 0x41, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x12, 0x2f, 0x0a, 0x13, 0x73, 0x75,
-	0x70, 0x70, 0x6f, 0x72, 0x74, 0x65, 0x64, 0x5f, 0x77, 0x6f, 0x72, 0x6b, 0x6c, 0x6f, 0x61, 0x64,
-	0x73, 0x18, 0x11, 0x20, 0x03, 0x28, 0x09, 0x52, 0x12, 0x73, 0x75, 0x70, 0x70, 0x6f, 0x72, 0x74,
-	0x65, 0x64, 0x57, 0x6f, 0x72, 0x6b, 0x6c, 0x6f, 0x61, 0x64, 0x73, 0x12, 0x33, 0x0a, 0x08, 0x6d,
-	0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x18, 0x12, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x17, 0x2e,
-	0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e,
-	0x53, 0x74, 0x72, 0x75, 0x63, 0x74, 0x52, 0x08, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61,
-	0x12, 0x2b, 0x0a, 0x11, 0x74, 0x69, 0x6d, 0x65, 0x6f, 0x75, 0x74, 0x5f, 0x74, 0x68, 0x72, 0x65,
-	0x73, 0x68, 0x6f, 0x6c, 0x64, 0x18, 0x13, 0x20, 0x01, 0x28, 0x05, 0x52, 0x10, 0x74, 0x69, 0x6d,
-	0x65, 0x6f, 0x75, 0x74, 0x54, 0x68, 0x72, 0x65, 0x73, 0x68, 0x6f, 0x6c, 0x64, 0x12, 0x2d, 0x0a,
-	0x12, 0x68, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x5f, 0x69, 0x6e, 0x74, 0x65, 0x72,
-	0x76, 0x61, 0x6c, 0x18, 0x14, 0x20, 0x01, 0x28, 0x05, 0x52, 0x11, 0x68, 0x65, 0x61, 0x72, 0x74,
-	0x62, 0x65, 0x61, 0x74, 0x49, 0x6e, 0x74, 0x65, 0x72, 0x76, 0x61, 0x6c, 0x12, 0x23, 0x0a, 0x0d,
-	0x70, 0x72, 0x6f, 0x62, 0x65, 0x5f, 0x65, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x18, 0x15, 0x20,
-	0x01, 0x28, 0x08, 0x52, 0x0c, 0x70, 0x72, 0x6f, 0x62, 0x65, 0x45, 0x6e, 0x61, 0x62, 0x6c, 0x65,
-	0x64, 0x12, 0x1b, 0x0a, 0x09, 0x70, 0x72, 0x6f, 0x62, 0x65, 0x5f, 0x75, 0x72, 0x6c, 0x18, 0x16,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x72, 0x6f, 0x62, 0x65, 0x55, 0x72, 0x6c, 0x12, 0x3b,
-	0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18, 0x17, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x23,
-	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64,
-	0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x4e, 0x6f, 0x64, 0x65, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x43,
-	0x6f, 0x64, 0x65, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x25, 0x0a, 0x0e, 0x6c,
-	0x61, 0x73, 0x74, 0x5f, 0x68, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x18, 0x18, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x0d, 0x6c, 0x61, 0x73, 0x74, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65,
-	0x61, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x69, 0x73, 0x5f, 0x64, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x64,
+	0x64, 0x12, 0x1c, 0x0a, 0x09, 0x6e, 0x61, 0x6d, 0x65, 0x73, 0x70, 0x61, 0x63, 0x65, 0x18, 0x09,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6e, 0x61, 0x6d, 0x65, 0x73, 0x70, 0x61, 0x63, 0x65, 0x12,
+	0x1b, 0x0a, 0x09, 0x6e, 0x6f, 0x64, 0x65, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x0a, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x08, 0x6e, 0x6f, 0x64, 0x65, 0x54, 0x79, 0x70, 0x65, 0x12, 0x1a, 0x0a, 0x08,
+	0x70, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x18, 0x0b, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08,
+	0x70, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x12, 0x23, 0x0a, 0x0d, 0x66, 0x75, 0x6e, 0x63,
+	0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x0c, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x0c, 0x66, 0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x19, 0x0a,
+	0x08, 0x62, 0x69, 0x7a, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x0d, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x07, 0x62, 0x69, 0x7a, 0x54, 0x79, 0x70, 0x65, 0x12, 0x16, 0x0a, 0x06, 0x72, 0x65, 0x67, 0x69,
+	0x6f, 0x6e, 0x18, 0x0e, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x72, 0x65, 0x67, 0x69, 0x6f, 0x6e,
+	0x12, 0x10, 0x0a, 0x03, 0x74, 0x61, 0x67, 0x18, 0x0f, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x74,
+	0x61, 0x67, 0x12, 0x1d, 0x0a, 0x0a, 0x69, 0x70, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73,
+	0x18, 0x10, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x69, 0x70, 0x41, 0x64, 0x64, 0x72, 0x65, 0x73,
+	0x73, 0x12, 0x33, 0x0a, 0x08, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x18, 0x12, 0x20,
+	0x01, 0x28, 0x0b, 0x32, 0x17, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x53, 0x74, 0x72, 0x75, 0x63, 0x74, 0x52, 0x08, 0x6d, 0x65,
+	0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x12, 0x2b, 0x0a, 0x11, 0x74, 0x69, 0x6d, 0x65, 0x6f, 0x75,
+	0x74, 0x5f, 0x74, 0x68, 0x72, 0x65, 0x73, 0x68, 0x6f, 0x6c, 0x64, 0x18, 0x13, 0x20, 0x01, 0x28,
+	0x05, 0x52, 0x10, 0x74, 0x69, 0x6d, 0x65, 0x6f, 0x75, 0x74, 0x54, 0x68, 0x72, 0x65, 0x73, 0x68,
+	0x6f, 0x6c, 0x64, 0x12, 0x23, 0x0a, 0x0d, 0x70, 0x72, 0x6f, 0x62, 0x65, 0x5f, 0x65, 0x6e, 0x61,
+	0x62, 0x6c, 0x65, 0x64, 0x18, 0x15, 0x20, 0x01, 0x28, 0x08, 0x52, 0x0c, 0x70, 0x72, 0x6f, 0x62,
+	0x65, 0x45, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x70, 0x72, 0x6f, 0x62,
+	0x65, 0x5f, 0x75, 0x72, 0x6c, 0x18, 0x16, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x72, 0x6f,
+	0x62, 0x65, 0x55, 0x72, 0x6c, 0x12, 0x3b, 0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18,
+	0x17, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x23, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x4e, 0x6f, 0x64, 0x65,
+	0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x43, 0x6f, 0x64, 0x65, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74,
+	0x75, 0x73, 0x12, 0x1d, 0x0a, 0x0a, 0x69, 0x73, 0x5f, 0x64, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x64,
 	0x18, 0x19, 0x20, 0x01, 0x28, 0x08, 0x52, 0x09, 0x69, 0x73, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65,
 	0x64, 0x12, 0x1f, 0x0a, 0x0b, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x5f, 0x74, 0x69, 0x6d, 0x65,
 	0x18, 0x1a, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x54, 0x69,
@@ -6389,40 +6180,7 @@ var file_cloudnode_proto_rawDesc = []byte{
 	0x5f, 0x6c, 0x69, 0x73, 0x74, 0x18, 0x02, 0x20, 0x03, 0x28, 0x09, 0x52, 0x06, 0x69, 0x70, 0x4c,
 	0x69, 0x73, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x72, 0x65, 0x73, 0x6f, 0x6c, 0x76, 0x65, 0x5f, 0x61,
 	0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x72, 0x65, 0x73, 0x6f, 0x6c, 0x76, 0x65,
-	0x41, 0x74, 0x22, 0xc1, 0x03, 0x0a, 0x12, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x48, 0x65, 0x61,
-	0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61,
-	0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61,
-	0x63, 0x65, 0x49, 0x64, 0x12, 0x17, 0x0a, 0x07, 0x6e, 0x6f, 0x64, 0x65, 0x5f, 0x69, 0x64, 0x18,
-	0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x6e, 0x6f, 0x64, 0x65, 0x49, 0x64, 0x12, 0x1b, 0x0a,
-	0x09, 0x6e, 0x6f, 0x64, 0x65, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x08, 0x6e, 0x6f, 0x64, 0x65, 0x54, 0x79, 0x70, 0x65, 0x12, 0x27, 0x0a, 0x0f, 0x72, 0x75,
-	0x6e, 0x6e, 0x69, 0x6e, 0x67, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x04, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x0e, 0x72, 0x75, 0x6e, 0x6e, 0x69, 0x6e, 0x67, 0x56, 0x65, 0x72, 0x73,
-	0x69, 0x6f, 0x6e, 0x12, 0x25, 0x0a, 0x0e, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x5f, 0x73, 0x65,
-	0x72, 0x76, 0x69, 0x63, 0x65, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x73, 0x6f, 0x75,
-	0x72, 0x63, 0x65, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x1c, 0x0a, 0x09, 0x74, 0x69,
-	0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x74,
-	0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x12, 0x31, 0x0a, 0x07, 0x6d, 0x65, 0x74, 0x72,
-	0x69, 0x63, 0x73, 0x18, 0x07, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x17, 0x2e, 0x67, 0x6f, 0x6f, 0x67,
-	0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x53, 0x74, 0x72, 0x75,
-	0x63, 0x74, 0x52, 0x07, 0x6d, 0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x12, 0x33, 0x0a, 0x08, 0x6d,
-	0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61, 0x18, 0x08, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x17, 0x2e,
-	0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e,
-	0x53, 0x74, 0x72, 0x75, 0x63, 0x74, 0x52, 0x08, 0x6d, 0x65, 0x74, 0x61, 0x64, 0x61, 0x74, 0x61,
-	0x12, 0x2f, 0x0a, 0x13, 0x73, 0x75, 0x70, 0x70, 0x6f, 0x72, 0x74, 0x65, 0x64, 0x5f, 0x77, 0x6f,
-	0x72, 0x6b, 0x6c, 0x6f, 0x61, 0x64, 0x73, 0x18, 0x09, 0x20, 0x03, 0x28, 0x09, 0x52, 0x12, 0x73,
-	0x75, 0x70, 0x70, 0x6f, 0x72, 0x74, 0x65, 0x64, 0x57, 0x6f, 0x72, 0x6b, 0x6c, 0x6f, 0x61, 0x64,
-	0x73, 0x12, 0x53, 0x0a, 0x11, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x5f, 0x64, 0x6e, 0x73, 0x5f, 0x72,
-	0x65, 0x63, 0x6f, 0x72, 0x64, 0x73, 0x18, 0x0a, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x27, 0x2e, 0x74,
-	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f,
-	0x64, 0x65, 0x2e, 0x4c, 0x6f, 0x63, 0x61, 0x6c, 0x44, 0x4e, 0x53, 0x52, 0x65, 0x70, 0x6f, 0x72,
-	0x74, 0x49, 0x74, 0x65, 0x6d, 0x52, 0x0f, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x44, 0x6e, 0x73, 0x52,
-	0x65, 0x63, 0x6f, 0x72, 0x64, 0x73, 0x22, 0x4a, 0x0a, 0x12, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74,
-	0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08,
-	0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19,
-	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f,
-	0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e,
-	0x66, 0x6f, 0x22, 0xfe, 0x01, 0x0a, 0x07, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x12, 0x19,
+	0x41, 0x74, 0x22, 0xfe, 0x01, 0x0a, 0x07, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x12, 0x19,
 	0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
 	0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x15, 0x0a, 0x06, 0x6a, 0x6f, 0x62,
 	0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x6a, 0x6f, 0x62, 0x49, 0x64,
@@ -6760,7 +6518,7 @@ var file_cloudnode_proto_rawDesc = []byte{
 	0x43, 0x48, 0x5f, 0x49, 0x54, 0x45, 0x4d, 0x5f, 0x53, 0x54, 0x41, 0x54, 0x55, 0x53, 0x5f, 0x53,
 	0x55, 0x43, 0x43, 0x45, 0x53, 0x53, 0x10, 0x03, 0x12, 0x21, 0x0a, 0x1d, 0x4e, 0x4f, 0x44, 0x45,
 	0x5f, 0x42, 0x41, 0x54, 0x43, 0x48, 0x5f, 0x49, 0x54, 0x45, 0x4d, 0x5f, 0x53, 0x54, 0x41, 0x54,
-	0x55, 0x53, 0x5f, 0x46, 0x41, 0x49, 0x4c, 0x45, 0x44, 0x10, 0x04, 0x32, 0x8c, 0x14, 0x0a, 0x0c,
+	0x55, 0x53, 0x5f, 0x46, 0x41, 0x49, 0x4c, 0x45, 0x44, 0x10, 0x04, 0x32, 0xa7, 0x13, 0x0a, 0x0c,
 	0x43, 0x6c, 0x6f, 0x75, 0x64, 0x4e, 0x6f, 0x64, 0x65, 0x4d, 0x67, 0x72, 0x12, 0x57, 0x0a, 0x0b,
 	0x47, 0x65, 0x74, 0x4e, 0x6f, 0x64, 0x65, 0x4c, 0x69, 0x73, 0x74, 0x12, 0x23, 0x2e, 0x74, 0x72,
 	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64,
@@ -6885,49 +6643,42 @@ var file_cloudnode_proto_rawDesc = []byte{
 	0x67, 0x65, 0x55, 0x70, 0x6c, 0x6f, 0x61, 0x64, 0x52, 0x65, 0x71, 0x1a, 0x2d, 0x2e, 0x74, 0x72,
 	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64,
 	0x65, 0x2e, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67,
-	0x65, 0x55, 0x70, 0x6c, 0x6f, 0x61, 0x64, 0x52, 0x73, 0x70, 0x12, 0x63, 0x0a, 0x0f, 0x52, 0x65,
-	0x70, 0x6f, 0x72, 0x74, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x12, 0x27, 0x2e,
-	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e,
-	0x6f, 0x64, 0x65, 0x2e, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62,
-	0x65, 0x61, 0x74, 0x52, 0x65, 0x71, 0x1a, 0x27, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
-	0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x52, 0x65, 0x70,
-	0x6f, 0x72, 0x74, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x73, 0x70, 0x12,
-	0x60, 0x0a, 0x0e, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d,
-	0x73, 0x12, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c,
-	0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x4a, 0x6f,
-	0x62, 0x49, 0x74, 0x65, 0x6d, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63,
+	0x65, 0x55, 0x70, 0x6c, 0x6f, 0x61, 0x64, 0x52, 0x73, 0x70, 0x12, 0x60, 0x0a, 0x0e, 0x53, 0x75,
+	0x62, 0x6d, 0x69, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x73, 0x12, 0x26, 0x2e, 0x74,
+	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f,
+	0x64, 0x65, 0x2e, 0x53, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d,
+	0x73, 0x52, 0x65, 0x71, 0x1a, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
+	0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x53, 0x75, 0x62, 0x6d, 0x69,
+	0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x73, 0x52, 0x73, 0x70, 0x12, 0x6f, 0x0a, 0x13,
+	0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x53, 0x74, 0x61,
+	0x74, 0x75, 0x73, 0x12, 0x2b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74,
+	0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x65, 0x71,
+	0x1a, 0x2b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f,
+	0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x4a, 0x6f, 0x62,
+	0x49, 0x74, 0x65, 0x6d, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x73, 0x70, 0x12, 0x54, 0x0a,
+	0x0a, 0x47, 0x65, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x12, 0x22, 0x2e, 0x74, 0x72,
+	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64,
+	0x65, 0x2e, 0x47, 0x65, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x52, 0x65, 0x71, 0x1a,
+	0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75,
+	0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x47, 0x65, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d,
+	0x52, 0x73, 0x70, 0x12, 0x5a, 0x0a, 0x0c, 0x4c, 0x69, 0x73, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74,
+	0x65, 0x6d, 0x73, 0x12, 0x24, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x4a, 0x6f,
+	0x62, 0x49, 0x74, 0x65, 0x6d, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x24, 0x2e, 0x74, 0x72, 0x70, 0x63,
 	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e,
-	0x53, 0x75, 0x62, 0x6d, 0x69, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x73, 0x52, 0x73,
-	0x70, 0x12, 0x6f, 0x0a, 0x13, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74,
-	0x65, 0x6d, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x2b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
-	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x52,
-	0x65, 0x70, 0x6f, 0x72, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x53, 0x74, 0x61, 0x74,
-	0x75, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x2b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
-	0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x52, 0x65, 0x70, 0x6f,
-	0x72, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52,
-	0x73, 0x70, 0x12, 0x54, 0x0a, 0x0a, 0x47, 0x65, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d,
-	0x12, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f,
-	0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x47, 0x65, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65,
-	0x6d, 0x52, 0x65, 0x71, 0x1a, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
-	0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x47, 0x65, 0x74, 0x4a, 0x6f,
-	0x62, 0x49, 0x74, 0x65, 0x6d, 0x52, 0x73, 0x70, 0x12, 0x5a, 0x0a, 0x0c, 0x4c, 0x69, 0x73, 0x74,
-	0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x73, 0x12, 0x24, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
-	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x4c,
-	0x69, 0x73, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x24,
-	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64,
-	0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d,
-	0x73, 0x52, 0x73, 0x70, 0x12, 0x54, 0x0a, 0x0a, 0x49, 0x6e, 0x76, 0x6f, 0x6b, 0x65, 0x53, 0x79,
-	0x6e, 0x63, 0x12, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63,
-	0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x49, 0x6e, 0x76, 0x6f, 0x6b, 0x65, 0x53,
-	0x79, 0x6e, 0x63, 0x52, 0x65, 0x71, 0x1a, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
-	0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x49, 0x6e, 0x76,
-	0x6f, 0x6b, 0x65, 0x53, 0x79, 0x6e, 0x63, 0x52, 0x73, 0x70, 0x42, 0x4f, 0x5a, 0x4d, 0x67, 0x69,
-	0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67,
-	0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c,
-	0x65, 0x73, 0x2f, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2f, 0x70, 0x72, 0x6f,
-	0x74, 0x6f, 0x2f, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x67, 0x65, 0x6e, 0x3b,
-	0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f,
-	0x74, 0x6f, 0x33,
+	0x4c, 0x69, 0x73, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x74, 0x65, 0x6d, 0x73, 0x52, 0x73, 0x70, 0x12,
+	0x54, 0x0a, 0x0a, 0x49, 0x6e, 0x76, 0x6f, 0x6b, 0x65, 0x53, 0x79, 0x6e, 0x63, 0x12, 0x22, 0x2e,
+	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x6e,
+	0x6f, 0x64, 0x65, 0x2e, 0x49, 0x6e, 0x76, 0x6f, 0x6b, 0x65, 0x53, 0x79, 0x6e, 0x63, 0x52, 0x65,
+	0x71, 0x1a, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6c,
+	0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2e, 0x49, 0x6e, 0x76, 0x6f, 0x6b, 0x65, 0x53, 0x79,
+	0x6e, 0x63, 0x52, 0x73, 0x70, 0x42, 0x4f, 0x5a, 0x4d, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e,
+	0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65,
+	0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x63, 0x6c,
+	0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x63, 0x6c,
+	0x6f, 0x75, 0x64, 0x6e, 0x6f, 0x64, 0x65, 0x67, 0x65, 0x6e, 0x3b, 0x63, 0x6c, 0x6f, 0x75, 0x64,
+	0x6e, 0x6f, 0x64, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -6943,7 +6694,7 @@ func file_cloudnode_proto_rawDescGZIP() []byte {
 }
 
 var file_cloudnode_proto_enumTypes = make([]protoimpl.EnumInfo, 12)
-var file_cloudnode_proto_msgTypes = make([]protoimpl.MessageInfo, 70)
+var file_cloudnode_proto_msgTypes = make([]protoimpl.MessageInfo, 68)
 var file_cloudnode_proto_goTypes = []interface{}{
 	(NodeStatusCode)(0),              // 0: trpc.moox.cloudnode.NodeStatusCode
 	(PackageStatus)(0),               // 1: trpc.moox.cloudnode.PackageStatus
@@ -7006,181 +6757,173 @@ var file_cloudnode_proto_goTypes = []interface{}{
 	(*CompletePackageUploadReq)(nil), // 58: trpc.moox.cloudnode.CompletePackageUploadReq
 	(*CompletePackageUploadRsp)(nil), // 59: trpc.moox.cloudnode.CompletePackageUploadRsp
 	(*LocalDNSReportItem)(nil),       // 60: trpc.moox.cloudnode.LocalDNSReportItem
-	(*ReportHeartbeatReq)(nil),       // 61: trpc.moox.cloudnode.ReportHeartbeatReq
-	(*ReportHeartbeatRsp)(nil),       // 62: trpc.moox.cloudnode.ReportHeartbeatRsp
-	(*JobItem)(nil),                  // 63: trpc.moox.cloudnode.JobItem
-	(*SubmitJobItemsReq)(nil),        // 64: trpc.moox.cloudnode.SubmitJobItemsReq
-	(*JobItemAck)(nil),               // 65: trpc.moox.cloudnode.JobItemAck
-	(*SubmitJobItemsRsp)(nil),        // 66: trpc.moox.cloudnode.SubmitJobItemsRsp
-	(*ReportJobItemStatusReq)(nil),   // 67: trpc.moox.cloudnode.ReportJobItemStatusReq
-	(*ReportJobItemStatusRsp)(nil),   // 68: trpc.moox.cloudnode.ReportJobItemStatusRsp
-	(*GetJobItemReq)(nil),            // 69: trpc.moox.cloudnode.GetJobItemReq
-	(*JobItemDetail)(nil),            // 70: trpc.moox.cloudnode.JobItemDetail
-	(*GetJobItemRsp)(nil),            // 71: trpc.moox.cloudnode.GetJobItemRsp
-	(*ListJobItemsReq)(nil),          // 72: trpc.moox.cloudnode.ListJobItemsReq
-	(*ListJobItemsRsp)(nil),          // 73: trpc.moox.cloudnode.ListJobItemsRsp
-	(*InvokeSyncPayload)(nil),        // 74: trpc.moox.cloudnode.InvokeSyncPayload
-	(*InvokeSyncReq)(nil),            // 75: trpc.moox.cloudnode.InvokeSyncReq
-	(*InvokeSyncResult)(nil),         // 76: trpc.moox.cloudnode.InvokeSyncResult
-	(*InvokeSyncRsp)(nil),            // 77: trpc.moox.cloudnode.InvokeSyncRsp
-	nil,                              // 78: trpc.moox.cloudnode.NodeCreateItem.ConfigEntry
-	nil,                              // 79: trpc.moox.cloudnode.NodeCreateItem.EnvironmentEntry
-	nil,                              // 80: trpc.moox.cloudnode.NodeDeployItem.ConfigEntry
-	nil,                              // 81: trpc.moox.cloudnode.NodeDeployItem.EnvironmentEntry
-	(*structpb.Struct)(nil),          // 82: google.protobuf.Struct
-	(*commonpb.Page)(nil),            // 83: trpc.moox.common.Page
-	(*commonpb.RetInfo)(nil),         // 84: trpc.moox.common.RetInfo
-	(*commonpb.PageResult)(nil),      // 85: trpc.moox.common.PageResult
-	(*timestamppb.Timestamp)(nil),    // 86: google.protobuf.Timestamp
+	(*JobItem)(nil),                  // 61: trpc.moox.cloudnode.JobItem
+	(*SubmitJobItemsReq)(nil),        // 62: trpc.moox.cloudnode.SubmitJobItemsReq
+	(*JobItemAck)(nil),               // 63: trpc.moox.cloudnode.JobItemAck
+	(*SubmitJobItemsRsp)(nil),        // 64: trpc.moox.cloudnode.SubmitJobItemsRsp
+	(*ReportJobItemStatusReq)(nil),   // 65: trpc.moox.cloudnode.ReportJobItemStatusReq
+	(*ReportJobItemStatusRsp)(nil),   // 66: trpc.moox.cloudnode.ReportJobItemStatusRsp
+	(*GetJobItemReq)(nil),            // 67: trpc.moox.cloudnode.GetJobItemReq
+	(*JobItemDetail)(nil),            // 68: trpc.moox.cloudnode.JobItemDetail
+	(*GetJobItemRsp)(nil),            // 69: trpc.moox.cloudnode.GetJobItemRsp
+	(*ListJobItemsReq)(nil),          // 70: trpc.moox.cloudnode.ListJobItemsReq
+	(*ListJobItemsRsp)(nil),          // 71: trpc.moox.cloudnode.ListJobItemsRsp
+	(*InvokeSyncPayload)(nil),        // 72: trpc.moox.cloudnode.InvokeSyncPayload
+	(*InvokeSyncReq)(nil),            // 73: trpc.moox.cloudnode.InvokeSyncReq
+	(*InvokeSyncResult)(nil),         // 74: trpc.moox.cloudnode.InvokeSyncResult
+	(*InvokeSyncRsp)(nil),            // 75: trpc.moox.cloudnode.InvokeSyncRsp
+	nil,                              // 76: trpc.moox.cloudnode.NodeCreateItem.ConfigEntry
+	nil,                              // 77: trpc.moox.cloudnode.NodeCreateItem.EnvironmentEntry
+	nil,                              // 78: trpc.moox.cloudnode.NodeDeployItem.ConfigEntry
+	nil,                              // 79: trpc.moox.cloudnode.NodeDeployItem.EnvironmentEntry
+	(*structpb.Struct)(nil),          // 80: google.protobuf.Struct
+	(*commonpb.Page)(nil),            // 81: trpc.moox.common.Page
+	(*commonpb.RetInfo)(nil),         // 82: trpc.moox.common.RetInfo
+	(*commonpb.PageResult)(nil),      // 83: trpc.moox.common.PageResult
+	(*timestamppb.Timestamp)(nil),    // 84: google.protobuf.Timestamp
 }
 var file_cloudnode_proto_depIdxs = []int32{
-	82,  // 0: trpc.moox.cloudnode.CloudNode.metadata:type_name -> google.protobuf.Struct
+	80,  // 0: trpc.moox.cloudnode.CloudNode.metadata:type_name -> google.protobuf.Struct
 	0,   // 1: trpc.moox.cloudnode.CloudNode.status:type_name -> trpc.moox.cloudnode.NodeStatusCode
 	0,   // 2: trpc.moox.cloudnode.GetNodeListReq.status:type_name -> trpc.moox.cloudnode.NodeStatusCode
-	83,  // 3: trpc.moox.cloudnode.GetNodeListReq.page:type_name -> trpc.moox.common.Page
-	84,  // 4: trpc.moox.cloudnode.GetNodeListRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	81,  // 3: trpc.moox.cloudnode.GetNodeListReq.page:type_name -> trpc.moox.common.Page
+	82,  // 4: trpc.moox.cloudnode.GetNodeListRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	12,  // 5: trpc.moox.cloudnode.GetNodeListRsp.items:type_name -> trpc.moox.cloudnode.CloudNode
-	85,  // 6: trpc.moox.cloudnode.GetNodeListRsp.page:type_name -> trpc.moox.common.PageResult
+	83,  // 6: trpc.moox.cloudnode.GetNodeListRsp.page:type_name -> trpc.moox.common.PageResult
 	12,  // 7: trpc.moox.cloudnode.UpdateNodeReq.node:type_name -> trpc.moox.cloudnode.CloudNode
-	84,  // 8: trpc.moox.cloudnode.UpdateNodeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	82,  // 9: trpc.moox.cloudnode.InvokeFunctionReq.event_data:type_name -> google.protobuf.Struct
+	82,  // 8: trpc.moox.cloudnode.UpdateNodeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	80,  // 9: trpc.moox.cloudnode.InvokeFunctionReq.event_data:type_name -> google.protobuf.Struct
 	8,   // 10: trpc.moox.cloudnode.InvokeFunctionReq.scf_invoke_type:type_name -> trpc.moox.cloudnode.ScfInvokeType
-	82,  // 11: trpc.moox.cloudnode.ScfInvokeResult.result:type_name -> google.protobuf.Struct
-	84,  // 12: trpc.moox.cloudnode.InvokeFunctionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	80,  // 11: trpc.moox.cloudnode.ScfInvokeResult.result:type_name -> google.protobuf.Struct
+	82,  // 12: trpc.moox.cloudnode.InvokeFunctionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	18,  // 13: trpc.moox.cloudnode.InvokeFunctionRsp.scf:type_name -> trpc.moox.cloudnode.ScfInvokeResult
-	78,  // 14: trpc.moox.cloudnode.NodeCreateItem.config:type_name -> trpc.moox.cloudnode.NodeCreateItem.ConfigEntry
-	79,  // 15: trpc.moox.cloudnode.NodeCreateItem.environment:type_name -> trpc.moox.cloudnode.NodeCreateItem.EnvironmentEntry
-	82,  // 16: trpc.moox.cloudnode.NodeCreateItem.metadata:type_name -> google.protobuf.Struct
+	76,  // 14: trpc.moox.cloudnode.NodeCreateItem.config:type_name -> trpc.moox.cloudnode.NodeCreateItem.ConfigEntry
+	77,  // 15: trpc.moox.cloudnode.NodeCreateItem.environment:type_name -> trpc.moox.cloudnode.NodeCreateItem.EnvironmentEntry
+	80,  // 16: trpc.moox.cloudnode.NodeCreateItem.metadata:type_name -> google.protobuf.Struct
 	20,  // 17: trpc.moox.cloudnode.BatchCreateNodesReq.nodes:type_name -> trpc.moox.cloudnode.NodeCreateItem
-	84,  // 18: trpc.moox.cloudnode.SubmitNodeBatchRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 18: trpc.moox.cloudnode.SubmitNodeBatchRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	9,   // 19: trpc.moox.cloudnode.SubmitNodeBatchRsp.operation:type_name -> trpc.moox.cloudnode.NodeBatchOperation
 	9,   // 20: trpc.moox.cloudnode.NodeBatchSummary.operation:type_name -> trpc.moox.cloudnode.NodeBatchOperation
 	10,  // 21: trpc.moox.cloudnode.NodeBatchSummary.status:type_name -> trpc.moox.cloudnode.NodeBatchStatus
 	11,  // 22: trpc.moox.cloudnode.NodeBatchItemResult.status:type_name -> trpc.moox.cloudnode.NodeBatchItemStatus
-	84,  // 23: trpc.moox.cloudnode.GetNodeBatchChangeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 23: trpc.moox.cloudnode.GetNodeBatchChangeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	24,  // 24: trpc.moox.cloudnode.GetNodeBatchChangeRsp.job:type_name -> trpc.moox.cloudnode.NodeBatchSummary
 	25,  // 25: trpc.moox.cloudnode.GetNodeBatchChangeRsp.items:type_name -> trpc.moox.cloudnode.NodeBatchItemResult
-	84,  // 26: trpc.moox.cloudnode.BatchDeleteNodesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	80,  // 27: trpc.moox.cloudnode.NodeDeployItem.config:type_name -> trpc.moox.cloudnode.NodeDeployItem.ConfigEntry
-	81,  // 28: trpc.moox.cloudnode.NodeDeployItem.environment:type_name -> trpc.moox.cloudnode.NodeDeployItem.EnvironmentEntry
+	82,  // 26: trpc.moox.cloudnode.BatchDeleteNodesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	78,  // 27: trpc.moox.cloudnode.NodeDeployItem.config:type_name -> trpc.moox.cloudnode.NodeDeployItem.ConfigEntry
+	79,  // 28: trpc.moox.cloudnode.NodeDeployItem.environment:type_name -> trpc.moox.cloudnode.NodeDeployItem.EnvironmentEntry
 	30,  // 29: trpc.moox.cloudnode.BatchDeployNodesReq.deployments:type_name -> trpc.moox.cloudnode.NodeDeployItem
-	84,  // 30: trpc.moox.cloudnode.ListCloudAccountsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 30: trpc.moox.cloudnode.ListCloudAccountsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	32,  // 31: trpc.moox.cloudnode.ListCloudAccountsRsp.accounts:type_name -> trpc.moox.cloudnode.CloudAccountSummary
 	33,  // 32: trpc.moox.cloudnode.CreateCloudAccountReq.account:type_name -> trpc.moox.cloudnode.CloudAccountInput
-	84,  // 33: trpc.moox.cloudnode.CreateCloudAccountRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 33: trpc.moox.cloudnode.CreateCloudAccountRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	32,  // 34: trpc.moox.cloudnode.CreateCloudAccountRsp.account:type_name -> trpc.moox.cloudnode.CloudAccountSummary
 	33,  // 35: trpc.moox.cloudnode.UpdateCloudAccountReq.account:type_name -> trpc.moox.cloudnode.CloudAccountInput
-	84,  // 36: trpc.moox.cloudnode.UpdateCloudAccountRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	84,  // 37: trpc.moox.cloudnode.DeleteCloudAccountRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	84,  // 38: trpc.moox.cloudnode.ListCloudRegionsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 36: trpc.moox.cloudnode.UpdateCloudAccountRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 37: trpc.moox.cloudnode.DeleteCloudAccountRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 38: trpc.moox.cloudnode.ListCloudRegionsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	42,  // 39: trpc.moox.cloudnode.ListCloudRegionsRsp.regions:type_name -> trpc.moox.cloudnode.CloudRegion
 	2,   // 40: trpc.moox.cloudnode.PackageListItem.package_type:type_name -> trpc.moox.cloudnode.PackageType
 	1,   // 41: trpc.moox.cloudnode.PackageListItem.status:type_name -> trpc.moox.cloudnode.PackageStatus
 	2,   // 42: trpc.moox.cloudnode.GetPackageListReq.package_type:type_name -> trpc.moox.cloudnode.PackageType
 	1,   // 43: trpc.moox.cloudnode.GetPackageListReq.status:type_name -> trpc.moox.cloudnode.PackageStatus
-	83,  // 44: trpc.moox.cloudnode.GetPackageListReq.page:type_name -> trpc.moox.common.Page
-	84,  // 45: trpc.moox.cloudnode.GetPackageListRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	81,  // 44: trpc.moox.cloudnode.GetPackageListReq.page:type_name -> trpc.moox.common.Page
+	82,  // 45: trpc.moox.cloudnode.GetPackageListRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	45,  // 46: trpc.moox.cloudnode.GetPackageListRsp.items:type_name -> trpc.moox.cloudnode.PackageListItem
-	85,  // 47: trpc.moox.cloudnode.GetPackageListRsp.page:type_name -> trpc.moox.common.PageResult
+	83,  // 47: trpc.moox.cloudnode.GetPackageListRsp.page:type_name -> trpc.moox.common.PageResult
 	2,   // 48: trpc.moox.cloudnode.PackageDetail.package_type:type_name -> trpc.moox.cloudnode.PackageType
 	1,   // 49: trpc.moox.cloudnode.PackageDetail.status:type_name -> trpc.moox.cloudnode.PackageStatus
-	84,  // 50: trpc.moox.cloudnode.GetPackageDetailRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 50: trpc.moox.cloudnode.GetPackageDetailRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	48,  // 51: trpc.moox.cloudnode.GetPackageDetailRsp.detail:type_name -> trpc.moox.cloudnode.PackageDetail
-	84,  // 52: trpc.moox.cloudnode.DeletePackageRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	84,  // 53: trpc.moox.cloudnode.GetPackageDownloadURLRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 52: trpc.moox.cloudnode.DeletePackageRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 53: trpc.moox.cloudnode.GetPackageDownloadURLRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	53,  // 54: trpc.moox.cloudnode.GetPackageDownloadURLRsp.url:type_name -> trpc.moox.cloudnode.PackageDownloadURL
 	2,   // 55: trpc.moox.cloudnode.InitPackageUploadReq.package_type:type_name -> trpc.moox.cloudnode.PackageType
-	84,  // 56: trpc.moox.cloudnode.InitPackageUploadRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	84,  // 57: trpc.moox.cloudnode.CompletePackageUploadRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 56: trpc.moox.cloudnode.InitPackageUploadRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 57: trpc.moox.cloudnode.CompletePackageUploadRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	48,  // 58: trpc.moox.cloudnode.CompletePackageUploadRsp.detail:type_name -> trpc.moox.cloudnode.PackageDetail
-	82,  // 59: trpc.moox.cloudnode.ReportHeartbeatReq.metrics:type_name -> google.protobuf.Struct
-	82,  // 60: trpc.moox.cloudnode.ReportHeartbeatReq.metadata:type_name -> google.protobuf.Struct
-	60,  // 61: trpc.moox.cloudnode.ReportHeartbeatReq.local_dns_records:type_name -> trpc.moox.cloudnode.LocalDNSReportItem
-	84,  // 62: trpc.moox.cloudnode.ReportHeartbeatRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	82,  // 63: trpc.moox.cloudnode.JobItem.params:type_name -> google.protobuf.Struct
-	86,  // 64: trpc.moox.cloudnode.JobItem.execute_at:type_name -> google.protobuf.Timestamp
-	63,  // 65: trpc.moox.cloudnode.SubmitJobItemsReq.items:type_name -> trpc.moox.cloudnode.JobItem
-	4,   // 66: trpc.moox.cloudnode.JobItemAck.status:type_name -> trpc.moox.cloudnode.JobItemAckStatus
-	84,  // 67: trpc.moox.cloudnode.SubmitJobItemsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	65,  // 68: trpc.moox.cloudnode.SubmitJobItemsRsp.acks:type_name -> trpc.moox.cloudnode.JobItemAck
-	5,   // 69: trpc.moox.cloudnode.ReportJobItemStatusReq.status:type_name -> trpc.moox.cloudnode.JobItemReportStatus
-	6,   // 70: trpc.moox.cloudnode.ReportJobItemStatusReq.error_kind:type_name -> trpc.moox.cloudnode.JobItemErrorKind
-	82,  // 71: trpc.moox.cloudnode.ReportJobItemStatusReq.result_summary:type_name -> google.protobuf.Struct
-	84,  // 72: trpc.moox.cloudnode.ReportJobItemStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	82,  // 73: trpc.moox.cloudnode.JobItemDetail.params:type_name -> google.protobuf.Struct
-	3,   // 74: trpc.moox.cloudnode.JobItemDetail.status:type_name -> trpc.moox.cloudnode.JobItemStatus
-	82,  // 75: trpc.moox.cloudnode.JobItemDetail.result_summary:type_name -> google.protobuf.Struct
-	6,   // 76: trpc.moox.cloudnode.JobItemDetail.last_error_kind:type_name -> trpc.moox.cloudnode.JobItemErrorKind
-	86,  // 77: trpc.moox.cloudnode.JobItemDetail.create_time:type_name -> google.protobuf.Timestamp
-	86,  // 78: trpc.moox.cloudnode.JobItemDetail.finish_time:type_name -> google.protobuf.Timestamp
-	86,  // 79: trpc.moox.cloudnode.JobItemDetail.execute_at:type_name -> google.protobuf.Timestamp
-	84,  // 80: trpc.moox.cloudnode.GetJobItemRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	70,  // 81: trpc.moox.cloudnode.GetJobItemRsp.item:type_name -> trpc.moox.cloudnode.JobItemDetail
-	3,   // 82: trpc.moox.cloudnode.ListJobItemsReq.status:type_name -> trpc.moox.cloudnode.JobItemStatus
-	83,  // 83: trpc.moox.cloudnode.ListJobItemsReq.page:type_name -> trpc.moox.common.Page
-	84,  // 84: trpc.moox.cloudnode.ListJobItemsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	70,  // 85: trpc.moox.cloudnode.ListJobItemsRsp.items:type_name -> trpc.moox.cloudnode.JobItemDetail
-	85,  // 86: trpc.moox.cloudnode.ListJobItemsRsp.page:type_name -> trpc.moox.common.PageResult
-	74,  // 87: trpc.moox.cloudnode.InvokeSyncReq.payloads:type_name -> trpc.moox.cloudnode.InvokeSyncPayload
-	7,   // 88: trpc.moox.cloudnode.InvokeSyncResult.status:type_name -> trpc.moox.cloudnode.InvocationStatus
-	84,  // 89: trpc.moox.cloudnode.InvokeSyncRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	7,   // 90: trpc.moox.cloudnode.InvokeSyncRsp.status:type_name -> trpc.moox.cloudnode.InvocationStatus
-	76,  // 91: trpc.moox.cloudnode.InvokeSyncRsp.results:type_name -> trpc.moox.cloudnode.InvokeSyncResult
-	13,  // 92: trpc.moox.cloudnode.CloudNodeMgr.GetNodeList:input_type -> trpc.moox.cloudnode.GetNodeListReq
-	15,  // 93: trpc.moox.cloudnode.CloudNodeMgr.UpdateNode:input_type -> trpc.moox.cloudnode.UpdateNodeReq
-	17,  // 94: trpc.moox.cloudnode.CloudNodeMgr.InvokeFunction:input_type -> trpc.moox.cloudnode.InvokeFunctionReq
-	21,  // 95: trpc.moox.cloudnode.CloudNodeMgr.SubmitCreateNodes:input_type -> trpc.moox.cloudnode.BatchCreateNodesReq
-	31,  // 96: trpc.moox.cloudnode.CloudNodeMgr.SubmitDeployNodes:input_type -> trpc.moox.cloudnode.BatchDeployNodesReq
-	27,  // 97: trpc.moox.cloudnode.CloudNodeMgr.SubmitDeleteNodes:input_type -> trpc.moox.cloudnode.BatchDeleteNodesReq
-	23,  // 98: trpc.moox.cloudnode.CloudNodeMgr.GetNodeBatchChange:input_type -> trpc.moox.cloudnode.GetNodeBatchChangeReq
-	27,  // 99: trpc.moox.cloudnode.CloudNodeMgr.BatchDeleteNodes:input_type -> trpc.moox.cloudnode.BatchDeleteNodesReq
-	34,  // 100: trpc.moox.cloudnode.CloudNodeMgr.ListCloudAccounts:input_type -> trpc.moox.cloudnode.ListCloudAccountsReq
-	36,  // 101: trpc.moox.cloudnode.CloudNodeMgr.CreateCloudAccount:input_type -> trpc.moox.cloudnode.CreateCloudAccountReq
-	38,  // 102: trpc.moox.cloudnode.CloudNodeMgr.UpdateCloudAccount:input_type -> trpc.moox.cloudnode.UpdateCloudAccountReq
-	40,  // 103: trpc.moox.cloudnode.CloudNodeMgr.DeleteCloudAccount:input_type -> trpc.moox.cloudnode.DeleteCloudAccountReq
-	43,  // 104: trpc.moox.cloudnode.CloudNodeMgr.ListCloudRegions:input_type -> trpc.moox.cloudnode.ListCloudRegionsReq
-	46,  // 105: trpc.moox.cloudnode.CloudNodeMgr.GetPackageList:input_type -> trpc.moox.cloudnode.GetPackageListReq
-	49,  // 106: trpc.moox.cloudnode.CloudNodeMgr.GetPackageDetail:input_type -> trpc.moox.cloudnode.GetPackageDetailReq
-	51,  // 107: trpc.moox.cloudnode.CloudNodeMgr.DeletePackage:input_type -> trpc.moox.cloudnode.DeletePackageReq
-	54,  // 108: trpc.moox.cloudnode.CloudNodeMgr.GetPackageDownloadURL:input_type -> trpc.moox.cloudnode.GetPackageDownloadURLReq
-	56,  // 109: trpc.moox.cloudnode.CloudNodeMgr.InitPackageUpload:input_type -> trpc.moox.cloudnode.InitPackageUploadReq
-	58,  // 110: trpc.moox.cloudnode.CloudNodeMgr.CompletePackageUpload:input_type -> trpc.moox.cloudnode.CompletePackageUploadReq
-	61,  // 111: trpc.moox.cloudnode.CloudNodeMgr.ReportHeartbeat:input_type -> trpc.moox.cloudnode.ReportHeartbeatReq
-	64,  // 112: trpc.moox.cloudnode.CloudNodeMgr.SubmitJobItems:input_type -> trpc.moox.cloudnode.SubmitJobItemsReq
-	67,  // 113: trpc.moox.cloudnode.CloudNodeMgr.ReportJobItemStatus:input_type -> trpc.moox.cloudnode.ReportJobItemStatusReq
-	69,  // 114: trpc.moox.cloudnode.CloudNodeMgr.GetJobItem:input_type -> trpc.moox.cloudnode.GetJobItemReq
-	72,  // 115: trpc.moox.cloudnode.CloudNodeMgr.ListJobItems:input_type -> trpc.moox.cloudnode.ListJobItemsReq
-	75,  // 116: trpc.moox.cloudnode.CloudNodeMgr.InvokeSync:input_type -> trpc.moox.cloudnode.InvokeSyncReq
-	14,  // 117: trpc.moox.cloudnode.CloudNodeMgr.GetNodeList:output_type -> trpc.moox.cloudnode.GetNodeListRsp
-	16,  // 118: trpc.moox.cloudnode.CloudNodeMgr.UpdateNode:output_type -> trpc.moox.cloudnode.UpdateNodeRsp
-	19,  // 119: trpc.moox.cloudnode.CloudNodeMgr.InvokeFunction:output_type -> trpc.moox.cloudnode.InvokeFunctionRsp
-	22,  // 120: trpc.moox.cloudnode.CloudNodeMgr.SubmitCreateNodes:output_type -> trpc.moox.cloudnode.SubmitNodeBatchRsp
-	22,  // 121: trpc.moox.cloudnode.CloudNodeMgr.SubmitDeployNodes:output_type -> trpc.moox.cloudnode.SubmitNodeBatchRsp
-	22,  // 122: trpc.moox.cloudnode.CloudNodeMgr.SubmitDeleteNodes:output_type -> trpc.moox.cloudnode.SubmitNodeBatchRsp
-	26,  // 123: trpc.moox.cloudnode.CloudNodeMgr.GetNodeBatchChange:output_type -> trpc.moox.cloudnode.GetNodeBatchChangeRsp
-	28,  // 124: trpc.moox.cloudnode.CloudNodeMgr.BatchDeleteNodes:output_type -> trpc.moox.cloudnode.BatchDeleteNodesRsp
-	35,  // 125: trpc.moox.cloudnode.CloudNodeMgr.ListCloudAccounts:output_type -> trpc.moox.cloudnode.ListCloudAccountsRsp
-	37,  // 126: trpc.moox.cloudnode.CloudNodeMgr.CreateCloudAccount:output_type -> trpc.moox.cloudnode.CreateCloudAccountRsp
-	39,  // 127: trpc.moox.cloudnode.CloudNodeMgr.UpdateCloudAccount:output_type -> trpc.moox.cloudnode.UpdateCloudAccountRsp
-	41,  // 128: trpc.moox.cloudnode.CloudNodeMgr.DeleteCloudAccount:output_type -> trpc.moox.cloudnode.DeleteCloudAccountRsp
-	44,  // 129: trpc.moox.cloudnode.CloudNodeMgr.ListCloudRegions:output_type -> trpc.moox.cloudnode.ListCloudRegionsRsp
-	47,  // 130: trpc.moox.cloudnode.CloudNodeMgr.GetPackageList:output_type -> trpc.moox.cloudnode.GetPackageListRsp
-	50,  // 131: trpc.moox.cloudnode.CloudNodeMgr.GetPackageDetail:output_type -> trpc.moox.cloudnode.GetPackageDetailRsp
-	52,  // 132: trpc.moox.cloudnode.CloudNodeMgr.DeletePackage:output_type -> trpc.moox.cloudnode.DeletePackageRsp
-	55,  // 133: trpc.moox.cloudnode.CloudNodeMgr.GetPackageDownloadURL:output_type -> trpc.moox.cloudnode.GetPackageDownloadURLRsp
-	57,  // 134: trpc.moox.cloudnode.CloudNodeMgr.InitPackageUpload:output_type -> trpc.moox.cloudnode.InitPackageUploadRsp
-	59,  // 135: trpc.moox.cloudnode.CloudNodeMgr.CompletePackageUpload:output_type -> trpc.moox.cloudnode.CompletePackageUploadRsp
-	62,  // 136: trpc.moox.cloudnode.CloudNodeMgr.ReportHeartbeat:output_type -> trpc.moox.cloudnode.ReportHeartbeatRsp
-	66,  // 137: trpc.moox.cloudnode.CloudNodeMgr.SubmitJobItems:output_type -> trpc.moox.cloudnode.SubmitJobItemsRsp
-	68,  // 138: trpc.moox.cloudnode.CloudNodeMgr.ReportJobItemStatus:output_type -> trpc.moox.cloudnode.ReportJobItemStatusRsp
-	71,  // 139: trpc.moox.cloudnode.CloudNodeMgr.GetJobItem:output_type -> trpc.moox.cloudnode.GetJobItemRsp
-	73,  // 140: trpc.moox.cloudnode.CloudNodeMgr.ListJobItems:output_type -> trpc.moox.cloudnode.ListJobItemsRsp
-	77,  // 141: trpc.moox.cloudnode.CloudNodeMgr.InvokeSync:output_type -> trpc.moox.cloudnode.InvokeSyncRsp
-	117, // [117:142] is the sub-list for method output_type
-	92,  // [92:117] is the sub-list for method input_type
-	92,  // [92:92] is the sub-list for extension type_name
-	92,  // [92:92] is the sub-list for extension extendee
-	0,   // [0:92] is the sub-list for field type_name
+	80,  // 59: trpc.moox.cloudnode.JobItem.params:type_name -> google.protobuf.Struct
+	84,  // 60: trpc.moox.cloudnode.JobItem.execute_at:type_name -> google.protobuf.Timestamp
+	61,  // 61: trpc.moox.cloudnode.SubmitJobItemsReq.items:type_name -> trpc.moox.cloudnode.JobItem
+	4,   // 62: trpc.moox.cloudnode.JobItemAck.status:type_name -> trpc.moox.cloudnode.JobItemAckStatus
+	82,  // 63: trpc.moox.cloudnode.SubmitJobItemsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	63,  // 64: trpc.moox.cloudnode.SubmitJobItemsRsp.acks:type_name -> trpc.moox.cloudnode.JobItemAck
+	5,   // 65: trpc.moox.cloudnode.ReportJobItemStatusReq.status:type_name -> trpc.moox.cloudnode.JobItemReportStatus
+	6,   // 66: trpc.moox.cloudnode.ReportJobItemStatusReq.error_kind:type_name -> trpc.moox.cloudnode.JobItemErrorKind
+	80,  // 67: trpc.moox.cloudnode.ReportJobItemStatusReq.result_summary:type_name -> google.protobuf.Struct
+	82,  // 68: trpc.moox.cloudnode.ReportJobItemStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	80,  // 69: trpc.moox.cloudnode.JobItemDetail.params:type_name -> google.protobuf.Struct
+	3,   // 70: trpc.moox.cloudnode.JobItemDetail.status:type_name -> trpc.moox.cloudnode.JobItemStatus
+	80,  // 71: trpc.moox.cloudnode.JobItemDetail.result_summary:type_name -> google.protobuf.Struct
+	6,   // 72: trpc.moox.cloudnode.JobItemDetail.last_error_kind:type_name -> trpc.moox.cloudnode.JobItemErrorKind
+	84,  // 73: trpc.moox.cloudnode.JobItemDetail.create_time:type_name -> google.protobuf.Timestamp
+	84,  // 74: trpc.moox.cloudnode.JobItemDetail.finish_time:type_name -> google.protobuf.Timestamp
+	84,  // 75: trpc.moox.cloudnode.JobItemDetail.execute_at:type_name -> google.protobuf.Timestamp
+	82,  // 76: trpc.moox.cloudnode.GetJobItemRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	68,  // 77: trpc.moox.cloudnode.GetJobItemRsp.item:type_name -> trpc.moox.cloudnode.JobItemDetail
+	3,   // 78: trpc.moox.cloudnode.ListJobItemsReq.status:type_name -> trpc.moox.cloudnode.JobItemStatus
+	81,  // 79: trpc.moox.cloudnode.ListJobItemsReq.page:type_name -> trpc.moox.common.Page
+	82,  // 80: trpc.moox.cloudnode.ListJobItemsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	68,  // 81: trpc.moox.cloudnode.ListJobItemsRsp.items:type_name -> trpc.moox.cloudnode.JobItemDetail
+	83,  // 82: trpc.moox.cloudnode.ListJobItemsRsp.page:type_name -> trpc.moox.common.PageResult
+	72,  // 83: trpc.moox.cloudnode.InvokeSyncReq.payloads:type_name -> trpc.moox.cloudnode.InvokeSyncPayload
+	7,   // 84: trpc.moox.cloudnode.InvokeSyncResult.status:type_name -> trpc.moox.cloudnode.InvocationStatus
+	82,  // 85: trpc.moox.cloudnode.InvokeSyncRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	7,   // 86: trpc.moox.cloudnode.InvokeSyncRsp.status:type_name -> trpc.moox.cloudnode.InvocationStatus
+	74,  // 87: trpc.moox.cloudnode.InvokeSyncRsp.results:type_name -> trpc.moox.cloudnode.InvokeSyncResult
+	13,  // 88: trpc.moox.cloudnode.CloudNodeMgr.GetNodeList:input_type -> trpc.moox.cloudnode.GetNodeListReq
+	15,  // 89: trpc.moox.cloudnode.CloudNodeMgr.UpdateNode:input_type -> trpc.moox.cloudnode.UpdateNodeReq
+	17,  // 90: trpc.moox.cloudnode.CloudNodeMgr.InvokeFunction:input_type -> trpc.moox.cloudnode.InvokeFunctionReq
+	21,  // 91: trpc.moox.cloudnode.CloudNodeMgr.SubmitCreateNodes:input_type -> trpc.moox.cloudnode.BatchCreateNodesReq
+	31,  // 92: trpc.moox.cloudnode.CloudNodeMgr.SubmitDeployNodes:input_type -> trpc.moox.cloudnode.BatchDeployNodesReq
+	27,  // 93: trpc.moox.cloudnode.CloudNodeMgr.SubmitDeleteNodes:input_type -> trpc.moox.cloudnode.BatchDeleteNodesReq
+	23,  // 94: trpc.moox.cloudnode.CloudNodeMgr.GetNodeBatchChange:input_type -> trpc.moox.cloudnode.GetNodeBatchChangeReq
+	27,  // 95: trpc.moox.cloudnode.CloudNodeMgr.BatchDeleteNodes:input_type -> trpc.moox.cloudnode.BatchDeleteNodesReq
+	34,  // 96: trpc.moox.cloudnode.CloudNodeMgr.ListCloudAccounts:input_type -> trpc.moox.cloudnode.ListCloudAccountsReq
+	36,  // 97: trpc.moox.cloudnode.CloudNodeMgr.CreateCloudAccount:input_type -> trpc.moox.cloudnode.CreateCloudAccountReq
+	38,  // 98: trpc.moox.cloudnode.CloudNodeMgr.UpdateCloudAccount:input_type -> trpc.moox.cloudnode.UpdateCloudAccountReq
+	40,  // 99: trpc.moox.cloudnode.CloudNodeMgr.DeleteCloudAccount:input_type -> trpc.moox.cloudnode.DeleteCloudAccountReq
+	43,  // 100: trpc.moox.cloudnode.CloudNodeMgr.ListCloudRegions:input_type -> trpc.moox.cloudnode.ListCloudRegionsReq
+	46,  // 101: trpc.moox.cloudnode.CloudNodeMgr.GetPackageList:input_type -> trpc.moox.cloudnode.GetPackageListReq
+	49,  // 102: trpc.moox.cloudnode.CloudNodeMgr.GetPackageDetail:input_type -> trpc.moox.cloudnode.GetPackageDetailReq
+	51,  // 103: trpc.moox.cloudnode.CloudNodeMgr.DeletePackage:input_type -> trpc.moox.cloudnode.DeletePackageReq
+	54,  // 104: trpc.moox.cloudnode.CloudNodeMgr.GetPackageDownloadURL:input_type -> trpc.moox.cloudnode.GetPackageDownloadURLReq
+	56,  // 105: trpc.moox.cloudnode.CloudNodeMgr.InitPackageUpload:input_type -> trpc.moox.cloudnode.InitPackageUploadReq
+	58,  // 106: trpc.moox.cloudnode.CloudNodeMgr.CompletePackageUpload:input_type -> trpc.moox.cloudnode.CompletePackageUploadReq
+	62,  // 107: trpc.moox.cloudnode.CloudNodeMgr.SubmitJobItems:input_type -> trpc.moox.cloudnode.SubmitJobItemsReq
+	65,  // 108: trpc.moox.cloudnode.CloudNodeMgr.ReportJobItemStatus:input_type -> trpc.moox.cloudnode.ReportJobItemStatusReq
+	67,  // 109: trpc.moox.cloudnode.CloudNodeMgr.GetJobItem:input_type -> trpc.moox.cloudnode.GetJobItemReq
+	70,  // 110: trpc.moox.cloudnode.CloudNodeMgr.ListJobItems:input_type -> trpc.moox.cloudnode.ListJobItemsReq
+	73,  // 111: trpc.moox.cloudnode.CloudNodeMgr.InvokeSync:input_type -> trpc.moox.cloudnode.InvokeSyncReq
+	14,  // 112: trpc.moox.cloudnode.CloudNodeMgr.GetNodeList:output_type -> trpc.moox.cloudnode.GetNodeListRsp
+	16,  // 113: trpc.moox.cloudnode.CloudNodeMgr.UpdateNode:output_type -> trpc.moox.cloudnode.UpdateNodeRsp
+	19,  // 114: trpc.moox.cloudnode.CloudNodeMgr.InvokeFunction:output_type -> trpc.moox.cloudnode.InvokeFunctionRsp
+	22,  // 115: trpc.moox.cloudnode.CloudNodeMgr.SubmitCreateNodes:output_type -> trpc.moox.cloudnode.SubmitNodeBatchRsp
+	22,  // 116: trpc.moox.cloudnode.CloudNodeMgr.SubmitDeployNodes:output_type -> trpc.moox.cloudnode.SubmitNodeBatchRsp
+	22,  // 117: trpc.moox.cloudnode.CloudNodeMgr.SubmitDeleteNodes:output_type -> trpc.moox.cloudnode.SubmitNodeBatchRsp
+	26,  // 118: trpc.moox.cloudnode.CloudNodeMgr.GetNodeBatchChange:output_type -> trpc.moox.cloudnode.GetNodeBatchChangeRsp
+	28,  // 119: trpc.moox.cloudnode.CloudNodeMgr.BatchDeleteNodes:output_type -> trpc.moox.cloudnode.BatchDeleteNodesRsp
+	35,  // 120: trpc.moox.cloudnode.CloudNodeMgr.ListCloudAccounts:output_type -> trpc.moox.cloudnode.ListCloudAccountsRsp
+	37,  // 121: trpc.moox.cloudnode.CloudNodeMgr.CreateCloudAccount:output_type -> trpc.moox.cloudnode.CreateCloudAccountRsp
+	39,  // 122: trpc.moox.cloudnode.CloudNodeMgr.UpdateCloudAccount:output_type -> trpc.moox.cloudnode.UpdateCloudAccountRsp
+	41,  // 123: trpc.moox.cloudnode.CloudNodeMgr.DeleteCloudAccount:output_type -> trpc.moox.cloudnode.DeleteCloudAccountRsp
+	44,  // 124: trpc.moox.cloudnode.CloudNodeMgr.ListCloudRegions:output_type -> trpc.moox.cloudnode.ListCloudRegionsRsp
+	47,  // 125: trpc.moox.cloudnode.CloudNodeMgr.GetPackageList:output_type -> trpc.moox.cloudnode.GetPackageListRsp
+	50,  // 126: trpc.moox.cloudnode.CloudNodeMgr.GetPackageDetail:output_type -> trpc.moox.cloudnode.GetPackageDetailRsp
+	52,  // 127: trpc.moox.cloudnode.CloudNodeMgr.DeletePackage:output_type -> trpc.moox.cloudnode.DeletePackageRsp
+	55,  // 128: trpc.moox.cloudnode.CloudNodeMgr.GetPackageDownloadURL:output_type -> trpc.moox.cloudnode.GetPackageDownloadURLRsp
+	57,  // 129: trpc.moox.cloudnode.CloudNodeMgr.InitPackageUpload:output_type -> trpc.moox.cloudnode.InitPackageUploadRsp
+	59,  // 130: trpc.moox.cloudnode.CloudNodeMgr.CompletePackageUpload:output_type -> trpc.moox.cloudnode.CompletePackageUploadRsp
+	64,  // 131: trpc.moox.cloudnode.CloudNodeMgr.SubmitJobItems:output_type -> trpc.moox.cloudnode.SubmitJobItemsRsp
+	66,  // 132: trpc.moox.cloudnode.CloudNodeMgr.ReportJobItemStatus:output_type -> trpc.moox.cloudnode.ReportJobItemStatusRsp
+	69,  // 133: trpc.moox.cloudnode.CloudNodeMgr.GetJobItem:output_type -> trpc.moox.cloudnode.GetJobItemRsp
+	71,  // 134: trpc.moox.cloudnode.CloudNodeMgr.ListJobItems:output_type -> trpc.moox.cloudnode.ListJobItemsRsp
+	75,  // 135: trpc.moox.cloudnode.CloudNodeMgr.InvokeSync:output_type -> trpc.moox.cloudnode.InvokeSyncRsp
+	112, // [112:136] is the sub-list for method output_type
+	88,  // [88:112] is the sub-list for method input_type
+	88,  // [88:88] is the sub-list for extension type_name
+	88,  // [88:88] is the sub-list for extension extendee
+	0,   // [0:88] is the sub-list for field type_name
 }
 
 func init() { file_cloudnode_proto_init() }
@@ -7778,30 +7521,6 @@ func file_cloudnode_proto_init() {
 			}
 		}
 		file_cloudnode_proto_msgTypes[49].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ReportHeartbeatReq); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_cloudnode_proto_msgTypes[50].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ReportHeartbeatRsp); i {
-			case 0:
-				return &v.state
-			case 1:
-				return &v.sizeCache
-			case 2:
-				return &v.unknownFields
-			default:
-				return nil
-			}
-		}
-		file_cloudnode_proto_msgTypes[51].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*JobItem); i {
 			case 0:
 				return &v.state
@@ -7813,7 +7532,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[52].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[50].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*SubmitJobItemsReq); i {
 			case 0:
 				return &v.state
@@ -7825,7 +7544,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[53].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[51].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*JobItemAck); i {
 			case 0:
 				return &v.state
@@ -7837,7 +7556,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[54].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[52].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*SubmitJobItemsRsp); i {
 			case 0:
 				return &v.state
@@ -7849,7 +7568,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[55].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[53].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ReportJobItemStatusReq); i {
 			case 0:
 				return &v.state
@@ -7861,7 +7580,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[56].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[54].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ReportJobItemStatusRsp); i {
 			case 0:
 				return &v.state
@@ -7873,7 +7592,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[57].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[55].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetJobItemReq); i {
 			case 0:
 				return &v.state
@@ -7885,7 +7604,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[58].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[56].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*JobItemDetail); i {
 			case 0:
 				return &v.state
@@ -7897,7 +7616,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[59].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[57].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetJobItemRsp); i {
 			case 0:
 				return &v.state
@@ -7909,7 +7628,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[60].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[58].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ListJobItemsReq); i {
 			case 0:
 				return &v.state
@@ -7921,7 +7640,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[61].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[59].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ListJobItemsRsp); i {
 			case 0:
 				return &v.state
@@ -7933,7 +7652,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[62].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[60].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*InvokeSyncPayload); i {
 			case 0:
 				return &v.state
@@ -7945,7 +7664,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[63].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[61].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*InvokeSyncReq); i {
 			case 0:
 				return &v.state
@@ -7957,7 +7676,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[64].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[62].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*InvokeSyncResult); i {
 			case 0:
 				return &v.state
@@ -7969,7 +7688,7 @@ func file_cloudnode_proto_init() {
 				return nil
 			}
 		}
-		file_cloudnode_proto_msgTypes[65].Exporter = func(v interface{}, i int) interface{} {
+		file_cloudnode_proto_msgTypes[63].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*InvokeSyncRsp); i {
 			case 0:
 				return &v.state
@@ -7989,7 +7708,7 @@ func file_cloudnode_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_cloudnode_proto_rawDesc,
 			NumEnums:      12,
-			NumMessages:   70,
+			NumMessages:   68,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

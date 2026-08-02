@@ -353,7 +353,7 @@ message GetOverviewReq { string space_id = 1; }
 message GetOverviewRsp { common.RetInfo ret_info = 1; Overview overview = 2; }
 
 // Observability overview is a bounded operational projection. It keeps service,
-// host, SCF, dataset, and business-check state in one response without exposing
+// host, dataset, and business-check state in one response without exposing
 // the underlying metric catalog.
 message ServiceObservabilityStatus {
   string node_id = 1;
@@ -372,12 +372,6 @@ message HostObservabilityStatus {
   double cpu_percent = 6;
   double memory_percent = 7;
   double filesystem_max_percent = 8;
-}
-message ScfObservabilitySummary {
-  int32 online_count = 1;
-  int32 timeout_count = 2;
-  int32 unknown_count = 3;
-  string oldest_heartbeat_at = 4;
 }
 message DatasetFrequencyStatus {
   string producer = 1;
@@ -403,7 +397,6 @@ message ObservabilityOverview {
   string generated_at = 1;
   repeated ServiceObservabilityStatus services = 2;
   repeated HostObservabilityStatus hosts = 3;
-  ScfObservabilitySummary scf = 4;
   repeated DatasetFrequencyStatus datasets = 5;
   repeated BusinessObservabilityStatus business_checks = 6;
 }

@@ -85,7 +85,7 @@ func TestInvokeFunction_WithEventData(t *testing.T) {
 	}))
 	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
 		SpaceID: "crypto", NodeID: "node-1", CloudAccountID: "acct-1", Region: "ap-guangzhou",
-		Status: "online", SupportedWorkloads: `["collect.kline"]`,
+		Status: "online",
 	}))
 	svc := &Service{
 		catalog:            catalog,

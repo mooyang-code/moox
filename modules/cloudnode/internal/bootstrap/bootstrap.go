@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/pprof"
-	"os"
 	"strings"
 	"time"
 
@@ -16,8 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
-	cloudnodeobservability "github.com/mooyang-code/moox/modules/cloudnode/internal/observability"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/projection"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -32,14 +29,11 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-const scfHeartbeatMaintainerTimerService = "trpc.moox.cloudnode.scf_heartbeat_maintainer.timer"
-
 // Runtime owns CloudNode process resources and their shutdown order.
 type Runtime struct {
 	StartedAt       time.Time
 	Store           *store.Store
 	JetStream       *jobqueue.Runtime
-	HeartbeatBuffer *projection.HeartbeatBuffer
 	DebugServer     *http.Server
 	NodeBatchCancel context.CancelFunc
 }
@@ -55,11 +49,6 @@ func (r *Runtime) Close(ctx context.Context) error {
 		r.NodeBatchCancel()
 	}
 	var firstErr error
-	if r.HeartbeatBuffer != nil {
-		if err := r.HeartbeatBuffer.Close(ctx); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
 	if r.JetStream != nil {
 		if err := r.JetStream.Close(); err != nil && firstErr == nil {
 			firstErr = err
@@ -146,17 +135,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			MaxDeliver:    cfg.JetStream.MaxDeliver,
 			MaxAckPending: cfg.JetStream.MaxAckPending,
 		})
-		catalog := dbm.Catalog()
-		heartbeatSink := projection.NewHeartbeatBuffer(catalog, projection.HeartbeatBufferOptions{
-			MaxKeys:       2048,
-			FlushInterval: time.Second,
-		})
-		runtime.HeartbeatBuffer = heartbeatSink
 		opts = append(opts,
 			cloudnoderpc.WithExecutionQueue(execQueue),
 			cloudnoderpc.WithJobStateStore(stateStore),
 			cloudnoderpc.WithJobHistoryStore(historyStore),
-			cloudnoderpc.WithHeartbeatSink(heartbeatSink),
 		)
 		log.InfoContextf(ctx, "cloudnode JetStream 已启用: event=%s active_kv=%s eventbus_urls=%s",
 			events.CloudJobExecutionRequested.Name(), cfg.JobItem.ActiveKVBucket, strings.Join(cfg.JetStream.URLs, ","))
@@ -174,26 +156,6 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
-	heartbeatMaintainer := cloudnoderpc.NewHeartbeatMaintainer(svc, scfHeartbeatTargetsFromEnv())
-	heartbeatHandler := heartbeatMaintainer.Handle
-	if scfMetrics, metricsErr := cloudnodeobservability.NewSCFMetrics(prometheus.DefaultRegisterer, dbm.Catalog()); metricsErr != nil {
-		log.WarnContextf(ctx, "cloudnode SCF metrics disabled: %v", metricsErr)
-	} else {
-		if refreshErr := scfMetrics.Refresh(ctx); refreshErr != nil {
-			log.WarnContextf(ctx, "initial cloudnode SCF metrics refresh failed: %v", refreshErr)
-		}
-		heartbeatHandler = func(runCtx context.Context) error {
-			runErr := heartbeatMaintainer.Handle(runCtx)
-			scfMetrics.ObserveKeepalive(runErr)
-			if refreshErr := scfMetrics.Refresh(runCtx); refreshErr != nil {
-				log.WarnContextf(runCtx, "cloudnode SCF metrics refresh failed: %v", refreshErr)
-			}
-			return runErr
-		}
-	}
-	if err := registerSCFHeartbeatMaintainerHandler(s, heartbeatHandler); err != nil {
-		return nil, err
-	}
 	if err := registerHealth(s, cfg, dbm); err != nil {
 		return nil, err
 	}
@@ -219,36 +181,6 @@ func startNodeBatchRunner(ctx context.Context, svc *cloudnoderpc.Service, cfg *c
 		return fmt.Errorf("cloudnode config is required")
 	}
 	return svc.StartNodeBatchRunner(ctx, cfg.NodeBatch.BatchSize, cfg.NodeBatch.PollInterval)
-}
-
-func scfHeartbeatTargetsFromEnv() cloudnoderpc.HeartbeatTargets {
-	serviceTarget := strings.TrimSpace(os.Getenv("MOOX_SCF_SERVICE_GATEWAY_TARGET"))
-	if serviceTarget == "" {
-		serviceTarget = "http://127.0.0.1:11002"
-	}
-	storageTarget := strings.TrimSpace(os.Getenv("MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET"))
-	if storageTarget == "" {
-		storageTarget = "ip://127.0.0.1:11003"
-	}
-	return cloudnoderpc.HeartbeatTargets{
-		ServiceGatewayTarget:    serviceTarget,
-		StorageRPCGatewayTarget: storageTarget,
-	}
-}
-
-func registerSCFHeartbeatMaintainerHandler(s *server.Server, handler func(context.Context) error) error {
-	if s == nil {
-		return fmt.Errorf("cloudnode SCF heartbeat maintainer requires a tRPC server")
-	}
-	if handler == nil {
-		return fmt.Errorf("cloudnode SCF heartbeat maintainer handler is required")
-	}
-	service := s.Service(scfHeartbeatMaintainerTimerService)
-	if service == nil {
-		return fmt.Errorf("cloudnode SCF heartbeat maintainer timer service %q is not configured", scfHeartbeatMaintainerTimerService)
-	}
-	timer.RegisterHandlerService(service, handler)
-	return nil
 }
 
 func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
