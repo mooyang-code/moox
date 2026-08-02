@@ -251,7 +251,9 @@ const normalizeTaskInstance = (raw: RawTaskInstance): TaskInstance => {
     DataType: raw.DataType ?? raw.data_type ?? "",
     DatasetID: raw.DatasetID ?? raw.dataset_id ?? "",
     SubjectID: raw.SubjectID ?? raw.subject_id ?? "",
-    Symbol: raw.Symbol ?? raw.symbol ?? "",
+    // Market-fetch instances persist the canonical SubjectID. Treat it as the
+    // display symbol when legacy responses do not expose a separate alias.
+    Symbol: raw.Symbol ?? raw.symbol ?? raw.SubjectID ?? raw.subject_id ?? "",
     Interval: raw.Interval ?? raw.interval ?? "",
     LastExecNode: raw.LastExecNode ?? raw.last_exec_node ?? "",
     LastExecStatus: Number(lastExecStatus),

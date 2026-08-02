@@ -20,6 +20,7 @@ type MarketFetchInstanceUpdate struct {
 	DatasetID      string
 	SubjectID      string
 	Frequency      string
+	LastExecNode   string
 	TargetDataTime time.Time
 	At             time.Time
 	Status         int
@@ -195,7 +196,7 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 				query = query.Where("CASE WHEN json_valid(c_result) THEN COALESCE(CAST(json_extract(c_result, '$.target_data_unix') AS INTEGER), -1) ELSE -1 END <= ?", item.TargetDataTime.UTC().Unix())
 			}
 			if err := query.Updates(map[string]any{
-				"c_last_exec_status": item.Status, "c_last_exec_time": item.At.UTC(), "c_result": normalizeJSON(item.Result), "c_mtime": time.Now().UTC(),
+				"c_last_exec_node": item.LastExecNode, "c_last_exec_status": item.Status, "c_last_exec_time": item.At.UTC(), "c_result": normalizeJSON(item.Result), "c_mtime": time.Now().UTC(),
 			}).Error; err != nil {
 				return err
 			}

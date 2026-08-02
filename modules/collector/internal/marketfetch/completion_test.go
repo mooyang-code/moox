@@ -39,6 +39,7 @@ func TestHandleCompletionMarksPermanentFailureOnTaskInstance(t *testing.T) {
 	instance, err := db.TaskInstances().Get(ctx, "crypto", "task-btc")
 	require.NoError(t, err)
 	assert.Equal(t, domain.InstanceStatusFailed, instance.LastExecStatus)
+	assert.Equal(t, "node-1", instance.LastExecNode)
 	require.NotNil(t, instance.LastExecTime)
 	assert.Equal(t, completedAt, instance.LastExecTime.UTC())
 	var result map[string]any
