@@ -310,6 +310,12 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 				if result.Outcome != domain.ItemOutcomeSuccess || !isSymbolItem(result.DataType) || result.DatasetID == "" {
 					continue
 				}
+				// Each exchange snapshot shard sees only part of the catalogue.
+				// Reconciling it independently would mark every symbol held by the
+				// other shards disabled. Shards only activate their own members.
+				if req.Items[index].SnapshotShardCount > 1 {
+					continue
+				}
 				if err := reconciler.ReconcileSymbolSnapshot(commitCtx, req.SpaceID, result.DatasetID, symbolsByItem[index]); err != nil {
 					results[index].Outcome = domain.ItemOutcomeStorageError
 					results[index].ErrorType = "metadata_reconcile"

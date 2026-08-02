@@ -55,6 +55,11 @@ type fakeStorage struct {
 	err       error
 }
 
+type fakeReconcilingStorage struct {
+	fakeStorage
+	reconciles int
+}
+
 type recordingItemReporter struct{ entries []clsreporter.Entry }
 
 func (r *recordingItemReporter) Report(entry clsreporter.Entry) { r.entries = append(r.entries, entry) }
@@ -67,6 +72,11 @@ func (f *fakeStorage) UpsertFields(_ context.Context, rows []*storagepb.RowField
 
 func (f *fakeStorage) RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error {
 	f.registers++
+	return f.err
+}
+
+func (f *fakeReconcilingStorage) ReconcileSymbolSnapshot(context.Context, string, string, []*exchange.SymbolInfo) error {
+	f.reconciles++
 	return f.err
 }
 
@@ -146,6 +156,24 @@ func TestExecutorSupportsSymbolSnapshotAndCatchupBatches(t *testing.T) {
 	if catchupPayload.GetStatus() != "succeeded" || klines.calls.Load() != 1 {
 		t.Fatalf("catchup payload=%s calls=%d", catchupPayload.GetStatus(), klines.calls.Load())
 	}
+}
+
+func TestExecutorDoesNotReconcilePartialSymbolSnapshotShard(t *testing.T) {
+	rows := []*storagepb.RowFieldUpsert{{}}
+	storage := &fakeReconcilingStorage{}
+	executor := &Executor{
+		Klines:  &fakeKlines{},
+		Symbols: fakeSnapshotSymbols{rows: rows, info: []*exchange.SymbolInfo{{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"}}},
+		Storage: storage,
+	}
+	payload, err := executor.Execute(context.Background(), Request{
+		BatchID: "symbol-shard", SpaceID: "crypto", BatchKind: domain.BatchKindSymbolSnapshot,
+		Provider: "binance", MarketType: "spot", DatasetID: "symbols",
+		Items: []domain.CollectionItem{{DataType: "symbol", DatasetID: "symbols", SnapshotShardIndex: 0, SnapshotShardCount: 32}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", payload.GetStatus())
+	assert.Zero(t, storage.reconciles)
 }
 
 func TestRequestRejectsOversizedRealtimeAndAcceptsSymbolSnapshotWithoutSubject(t *testing.T) {
