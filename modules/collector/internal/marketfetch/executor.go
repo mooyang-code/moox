@@ -311,9 +311,9 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 					continue
 				}
 				// Each exchange snapshot shard sees only part of the catalogue.
-				// Reconciling it independently would mark every symbol held by the
-				// other shards disabled. Shards only activate their own members.
-				if req.Items[index].SnapshotShardCount > 1 {
+				// Item zero retains the complete exchange list specifically for
+				// reconciliation; all other shards must only activate their slice.
+				if req.Items[index].SnapshotShardCount > 1 && req.Items[index].SnapshotShardIndex != 0 {
 					continue
 				}
 				if err := reconciler.ReconcileSymbolSnapshot(commitCtx, req.SpaceID, result.DatasetID, symbolsByItem[index]); err != nil {

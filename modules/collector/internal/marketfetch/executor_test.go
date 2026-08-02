@@ -169,11 +169,29 @@ func TestExecutorDoesNotReconcilePartialSymbolSnapshotShard(t *testing.T) {
 	payload, err := executor.Execute(context.Background(), Request{
 		BatchID: "symbol-shard", SpaceID: "crypto", BatchKind: domain.BatchKindSymbolSnapshot,
 		Provider: "binance", MarketType: "spot", DatasetID: "symbols",
-		Items: []domain.CollectionItem{{DataType: "symbol", DatasetID: "symbols", SnapshotShardIndex: 0, SnapshotShardCount: 32}},
+		Items: []domain.CollectionItem{{DataType: "symbol", DatasetID: "symbols", SnapshotShardIndex: 1, SnapshotShardCount: 32}},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "succeeded", payload.GetStatus())
 	assert.Zero(t, storage.reconciles)
+}
+
+func TestExecutorReconcilesFullCatalogFromFirstSymbolSnapshotShard(t *testing.T) {
+	rows := []*storagepb.RowFieldUpsert{{}}
+	storage := &fakeReconcilingStorage{}
+	executor := &Executor{
+		Klines:  &fakeKlines{},
+		Symbols: fakeSnapshotSymbols{rows: rows, info: []*exchange.SymbolInfo{{Symbol: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "active"}}},
+		Storage: storage,
+	}
+	payload, err := executor.Execute(context.Background(), Request{
+		BatchID: "symbol-first-shard", SpaceID: "crypto", BatchKind: domain.BatchKindSymbolSnapshot,
+		Provider: "binance", MarketType: "spot", DatasetID: "symbols",
+		Items: []domain.CollectionItem{{DataType: "symbol", DatasetID: "symbols", SnapshotShardIndex: 0, SnapshotShardCount: 32}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", payload.GetStatus())
+	assert.Equal(t, 1, storage.reconciles)
 }
 
 func TestRequestRejectsOversizedRealtimeAndAcceptsSymbolSnapshotWithoutSubject(t *testing.T) {
