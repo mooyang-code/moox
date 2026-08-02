@@ -9,6 +9,7 @@ import (
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/serverless"
 	trpc "trpc.group/trpc-go/trpc-go"
+	_ "trpc.group/trpc-go/trpc-log-cls"
 )
 
 var Version string

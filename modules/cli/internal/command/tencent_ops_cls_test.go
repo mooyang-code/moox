@@ -15,7 +15,7 @@ func TestRunCLSBootstrapDryRunDoesNotResolveCredentials(t *testing.T) {
 	opts := clsBootstrapOptions{
 		SecretID: "should-not-be-printed", SecretKey: "also-secret",
 		Region: "ap-guangzhou", LogsetName: "moox", TopicName: "moox-application",
-		RetentionDays: 30, Partitions: 1, DryRun: true,
+		RetentionDays: 2, Partitions: 1, DryRun: true,
 	}
 	if err := runCLSBootstrap(cmd, opts); err != nil {
 		t.Fatalf("runCLSBootstrap() error = %v", err)

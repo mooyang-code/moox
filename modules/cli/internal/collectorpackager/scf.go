@@ -18,6 +18,7 @@ type BuildSCFPackageOptions struct {
 	BinaryPath               string
 	ConfigDir                string
 	OutPath                  string
+	CLSTopicID               string
 	StoragePrimaryAuthSecret string
 }
 
@@ -54,6 +55,7 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	defer zw.Close()
 
 	var entries []string
+	trpcConfigured := false
 	addFile := func(src, dst string) error {
 		if err := addZipFile(zw, src, dst); err != nil {
 			return err
@@ -73,22 +75,27 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 
 	trpcPath := filepath.Join(opts.ConfigDir, "example_trpc_go.yaml")
 	if _, err := os.Stat(trpcPath); err == nil {
-		if err := addServerlessTRPCConfig(zw, trpcPath); err != nil {
+		if err := addServerlessTRPCConfig(zw, trpcPath, opts.CLSTopicID); err != nil {
 			return nil, err
 		}
 		entries = append(entries, "trpc_go.yaml")
+		trpcConfigured = true
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	} else {
 		trpcPath = filepath.Join(opts.ConfigDir, "trpc_go.yaml")
 		if _, err := os.Stat(trpcPath); err == nil {
-			if err := addServerlessTRPCConfig(zw, trpcPath); err != nil {
+			if err := addServerlessTRPCConfig(zw, trpcPath, opts.CLSTopicID); err != nil {
 				return nil, err
 			}
 			entries = append(entries, "trpc_go.yaml")
+			trpcConfigured = true
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
+	}
+	if !trpcConfigured {
+		return nil, fmt.Errorf("SCF package requires example_trpc_go.yaml or trpc_go.yaml")
 	}
 
 	sourcesDir := filepath.Join(opts.ConfigDir, "sources")
@@ -190,15 +197,15 @@ func mappingValue(node *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-// addServerlessTRPCConfig removes SDK-based CLS output. SCF's function-level
-// CLS destination is configured by CloudNode, avoiding cloud credentials in
-// each market-fetch function and allowing each region to use its local topic.
-func addServerlessTRPCConfig(zw *zip.Writer, sourcePath string) error {
+// addServerlessTRPCConfig installs the one centralized CLS writer. Native SCF
+// logging is deliberately not used: it creates a separate topic per region and
+// turns otherwise short-lived invocations into an unnecessary storage bill.
+func addServerlessTRPCConfig(zw *zip.Writer, sourcePath, clsTopicID string) error {
 	source, err := os.ReadFile(sourcePath)
 	if err != nil {
 		return err
 	}
-	rendered, err := renderTRPCConfigForServerless(source)
+	rendered, err := renderTRPCConfigForServerless(source, clsTopicID)
 	if err != nil {
 		return fmt.Errorf("render SCF trpc_go.yaml: %w", err)
 	}
@@ -212,7 +219,10 @@ func addServerlessTRPCConfig(zw *zip.Writer, sourcePath string) error {
 	return err
 }
 
-func renderTRPCConfigForServerless(source []byte) ([]byte, error) {
+func renderTRPCConfigForServerless(source []byte, clsTopicID string) ([]byte, error) {
+	if strings.TrimSpace(clsTopicID) == "" {
+		return nil, fmt.Errorf("CLS topic id is required for serverless logs")
+	}
 	var document map[string]any
 	if err := yaml.Unmarshal(source, &document); err != nil {
 		return nil, err
@@ -227,16 +237,25 @@ func renderTRPCConfigForServerless(source []byte) ([]byte, error) {
 		logs = make(map[string]any)
 		plugins["log"] = logs
 	}
-	writers, _ := logs["default"].([]any)
-	filtered := make([]any, 0, len(writers))
-	for _, writer := range writers {
-		config, ok := writer.(map[string]any)
-		if ok && config["writer"] == "cls" {
-			continue
-		}
-		filtered = append(filtered, writer)
-	}
-	logs["default"] = filtered
+	// Do not keep a console writer here. With native SCF CLS disabled it would
+	// create a second platform log stream. CLS receives only warn/error events;
+	// normal per-symbol outcomes remain in the EventBus completion event.
+	logs["default"] = []any{map[string]any{
+		"writer": "cls",
+		"level":  "warn",
+		"remote_config": map[string]any{
+			"topic_id":        strings.TrimSpace(clsTopicID),
+			"host":            "${MOOX_CLS_HOST}",
+			"secret_id":       "${MOOX_CLS_SECRET_ID}",
+			"secret_key":      "${MOOX_CLS_SECRET_KEY}",
+			"max_block_sec":   0,
+			"max_batch_count": 1,
+			// The CLS SDK rejects values below 100ms and falls back to 2s. A
+			// short-lived function uses the legal minimum and waits after its
+			// warning result so the async writer can hand it to the producer.
+			"linger_ms": 100,
+		},
+	}}
 	if server, ok := document["server"].(map[string]any); ok {
 		if services, ok := server["service"].([]any); ok {
 			filteredServices := make([]any, 0, len(services))

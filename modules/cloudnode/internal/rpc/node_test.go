@@ -362,9 +362,6 @@ func TestExecuteCreateNodeItemPreservesTencentSCFConfiguration(t *testing.T) {
 	if create.Runtime != "CustomRuntime" || create.Handler != "main" || create.Timeout != 120 || create.MemorySize != 256 {
 		t.Fatalf("runtime config = %#v", create)
 	}
-	if create.ClsLogsetID != "logset-config" || create.ClsTopicID != "topic-config" {
-		t.Fatalf("cls config = %q/%q", create.ClsLogsetID, create.ClsTopicID)
-	}
 	if create.Environment["MOOX_ENV"] != "prod" {
 		t.Fatalf("env = %#v", create.Environment)
 	}
@@ -386,17 +383,17 @@ func TestExecuteCreateNodeItemPreservesTencentSCFConfiguration(t *testing.T) {
 	if !metadataBool(nodeMetadata, scfWatchdogMetadataKey) {
 		t.Fatalf("watchdog selection was not persisted: %s", node.Metadata)
 	}
-	if got := metadataString(nodeMetadata, "cls_logset_id"); got != "logset-created" {
-		t.Fatalf("metadata cls_logset_id = %q, want logset-created", got)
+	if _, exists := nodeMetadata["cls_logset_id"]; exists {
+		t.Fatalf("native CLS logset metadata must be cleared: %s", node.Metadata)
 	}
-	if got := metadataString(nodeMetadata, "cls_topic_id"); got != "topic-created" {
-		t.Fatalf("metadata cls_topic_id = %q, want topic-created", got)
+	if _, exists := nodeMetadata["cls_topic_id"]; exists {
+		t.Fatalf("native CLS topic metadata must be cleared: %s", node.Metadata)
 	}
 	listRsp, err := svc.GetNodeList(spacecontext.WithSpaceID(context.Background(), "crypto"), &pb.GetNodeListReq{})
 	if err != nil {
 		t.Fatalf("GetNodeList transport error = %v", err)
 	}
-	if len(listRsp.GetItems()) != 1 || listRsp.GetItems()[0].GetClsTopicId() != "topic-created" {
+	if len(listRsp.GetItems()) != 1 || listRsp.GetItems()[0].GetClsTopicId() != "" {
 		t.Fatalf("list cls_topic_id = %#v", listRsp.GetItems())
 	}
 }
@@ -656,8 +653,7 @@ func TestExecuteDeployNodeItemUpdatesTencentSCFFunctionCodeFromPackage(t *testin
 	}
 	if fake.configured[0].MemorySize != 512 ||
 		fake.configured[0].Timeout != 90 ||
-		fake.configured[0].ClsLogsetID != "logset-new" ||
-		fake.configured[0].ClsTopicID != "topic-new" {
+		!fake.configured[0].ClearNativeCLS {
 		t.Fatalf("desired function config = %#v", fake.configured[0])
 	}
 	if update.Handler != "main" {

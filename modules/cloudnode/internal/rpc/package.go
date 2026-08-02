@@ -120,6 +120,9 @@ func (s *Service) InitPackageUpload(ctx context.Context, req *pb.InitPackageUplo
 	if err != nil {
 		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
+	if err := ensureCOSBucket(ctx, *account, credential); err != nil {
+		return &pb.InitPackageUploadRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "ensure COS bucket failed: "+err.Error())}, nil
+	}
 	packageType := packageTypeToDB(req.GetPackageType())
 	filename := sanitizePackageFileName(firstString(req.GetOriginalFilename(), req.GetPackageName()+"-"+req.GetVersion()+".zip"))
 	packageID := buildPackageID(req.GetPackageName(), req.GetVersion(), uuid.NewString())
@@ -284,6 +287,34 @@ func newCOSClient(account store.CloudAccount, credential cloudcredential.Tencent
 	})
 }
 
+// ensureCOSBucket makes package publishing self-contained. moox-cli starts an
+// upload through InitPackageUpload, so a configured-but-not-yet-created bucket
+// is created on demand instead of requiring a separate console operation.
+func ensureCOSBucket(ctx context.Context, account store.CloudAccount, credential cloudcredential.TencentCredential) error {
+	client := newCOSClient(account, credential)
+	if client == nil {
+		return fmt.Errorf("create COS client")
+	}
+	_, err := client.Bucket.Head(ctx)
+	if err == nil {
+		return nil
+	}
+	if !cos.IsNotFoundError(err) {
+		return fmt.Errorf("check bucket %s: %w", account.COSBucket, err)
+	}
+	if _, err := client.Bucket.Put(ctx, &cos.BucketPutOptions{XCosACL: "private"}); err != nil {
+		// A concurrent CLI invocation may have created it after our HEAD.
+		if _, verifyErr := client.Bucket.Head(ctx); verifyErr != nil {
+			return fmt.Errorf("create bucket %s: %w", account.COSBucket, err)
+		}
+		return nil
+	}
+	if _, err := client.Bucket.Head(ctx); err != nil {
+		return fmt.Errorf("verify bucket %s: %w", account.COSBucket, err)
+	}
+	return nil
+}
+
 func verifyCOSObject(ctx context.Context, account store.CloudAccount, credential cloudcredential.TencentCredential, objectPath string, expectedSize int64, expectedMD5 string) error {
 	client := newCOSClient(account, credential)
 	key := strings.TrimPrefix(objectPath, "/")
@@ -323,9 +354,14 @@ func buildPackageID(packageName string, version string, uploadID string) string 
 }
 
 func buildPackageCOSPath(packageType string, packageName string, version string, packageID string, filename string) string {
+	return buildPackageCOSPathAt(time.Now().UTC(), packageType, packageName, version, packageID, filename)
+}
+
+func buildPackageCOSPathAt(now time.Time, packageType string, packageName string, version string, packageID string, filename string) string {
 	return path.Join(
 		"moox",
 		"cloud-packages",
+		now.UTC().Format("2006-01-02"),
 		sanitizePackagePathSegment(packageType),
 		sanitizePackagePathSegment(packageName),
 		sanitizePackagePathSegment(version),

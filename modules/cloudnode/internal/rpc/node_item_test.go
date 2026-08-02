@@ -96,8 +96,8 @@ func TestExecuteCreateNodeItemReconcilesFunctionCreatedBeforeRestart(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, node)
 	assert.Equal(t, "moox-collector_dev", node.PackageID)
-	assert.Contains(t, node.Metadata, `"cls_logset_id":"logset-a"`)
-	assert.Contains(t, node.Metadata, `"cls_topic_id":"topic-a"`)
+	assert.NotContains(t, node.Metadata, `"cls_logset_id"`)
+	assert.NotContains(t, node.Metadata, `"cls_topic_id"`)
 }
 
 func TestExecuteCreateNodeItemRejectsUnownedExistingFunction(t *testing.T) {

@@ -444,7 +444,10 @@ cloud_account_id = "tencent-scf-hongkong"
 - 至少一个地域必须 `enabled = true`；
 - 每个启用地域 `function_count >= 1`；
 - 每个启用地域必须声明 `cloud_account_id`，且该云账户的 COS Region 与 SCF Region 相同；发布前 CLI 直接拒绝跨地域 COS 包和拼写错误的地域；
-- 每个地域由 CLI 创建或复用同地域的 SCF 平台 CLS Logset/Topic。函数包不内置 CLS SDK writer，不注入 `MOOX_CLS_SECRET_*`，日志投递只由 SCF 函数级 CLS 配置完成；
+- `cls_cloud_account_id` 可显式指定统一日志账户；未指定时优先选择广州的启用账户。CLI 只解析既有的 `ap-guangzhou/moox/moox-application`，不会在发布函数时按地域创建 CLS 资源；
+- 函数包内置 tRPC CLS writer，仅投递 `warn`/`error` 到统一 Topic，并由受控环境变量注入 `MOOX_CLS_SECRET_*`；CloudNode 创建时设置 `AutoCreateClsTopic=FALSE` 和 `AutoDeployClsTopicIndex=FALSE`，更新时设置 `IgnoreSysLog=true`，避免未指定 Topic 时自动创建 `SCF_logset`/`SCF_logtopic`；
+- CLS 初始化默认保存 2 天、固定 1 个分区且禁用自动扩分区；
+- `moox-cli` 上传函数包时经 CloudNode 自动确认配置的 COS 桶存在，不存在则创建私有桶；对象路径包含 UTC 日期，便于按日期清理；
 - `retry_delays` 只接受固定值 `["5s", "30s", "2m"]`，`stagger_enabled` 必须为 `false`；首版不实现可配置错峰；
 - 所有函数的环境变量总大小不得超过腾讯云限制；
 - 未配置 `[scf_fetcher]` 时不创建 Fetcher，不影响不使用 SCF 的用户。

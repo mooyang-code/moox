@@ -53,8 +53,6 @@ type CreateFunctionRequest struct {
 	COSBucket   string
 	COSRegion   string
 	COSObject   string
-	ClsLogsetID string
-	ClsTopicID  string
 	Type        string
 }
 
@@ -97,8 +95,10 @@ type UpdateFunctionConfigurationRequest struct {
 	Environment map[string]string
 	MemorySize  int64
 	Timeout     int64
-	ClsLogsetID string
-	ClsTopicID  string
+	// ClearNativeCLS explicitly sends empty CLS ids during an update, removing
+	// any historical SCF-native log destination. MooX uses the shared tRPC CLS
+	// writer instead.
+	ClearNativeCLS bool
 }
 
 type UpdateFunctionConfigurationResponse struct {
@@ -229,11 +229,13 @@ func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunc
 	if req.Timeout > 0 {
 		request.Timeout = common.Int64Ptr(req.Timeout)
 	}
-	if req.ClsLogsetID != "" {
-		request.ClsLogsetId = common.StringPtr(req.ClsLogsetID)
-	}
-	if req.ClsTopicID != "" {
-		request.ClsTopicId = common.StringPtr(req.ClsTopicID)
+	if req.ClearNativeCLS {
+		request.ClsLogsetId = common.StringPtr("")
+		request.ClsTopicId = common.StringPtr("")
+		// Leaving both CLS IDs unset selects SCF's default delivery, which
+		// auto-creates SCF_logset/SCF_logtopic resources. IgnoreSysLog is the
+		// provider switch that actually disables that native path.
+		request.IgnoreSysLog = common.BoolPtr(true)
 	}
 	response, err := scfClient.UpdateFunctionConfigurationWithContext(ctx, request)
 	if err != nil {
@@ -316,12 +318,10 @@ func buildCreateFunctionRequest(req CreateFunctionRequest) *scf.CreateFunctionRe
 	if len(req.Environment) > 0 {
 		request.Environment = &scf.Environment{Variables: environmentVariables(req.Environment)}
 	}
-	if req.ClsLogsetID != "" {
-		request.ClsLogsetId = common.StringPtr(req.ClsLogsetID)
-	}
-	if req.ClsTopicID != "" {
-		request.ClsTopicId = common.StringPtr(req.ClsTopicID)
-	}
+	// Disable SCF's creation-time default delivery. The application writer is
+	// explicitly configured in trpc_go.yaml instead.
+	request.AutoCreateClsTopic = common.StringPtr("FALSE")
+	request.AutoDeployClsTopicIndex = common.StringPtr("FALSE")
 	if req.Type != "" {
 		request.Type = common.StringPtr(req.Type)
 	}

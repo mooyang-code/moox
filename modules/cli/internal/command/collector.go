@@ -71,6 +71,7 @@ type collectorPublishOptions struct {
 	FetcherConfig          *setupconfig.SCFFetcher
 	CLSSecretID            string
 	CLSSecretKey           string
+	CLSHost                string
 }
 
 type collectorPublishStatusOptions struct {
@@ -369,6 +370,7 @@ func addCollectorPackageFlags(cmd *cobra.Command, opts *collectorPackageOptions)
 	cmd.Flags().StringVar(&opts.Version, "version", "dev", "collector package version")
 	cmd.Flags().StringVar(&opts.Out, "out", "", "output zip path")
 	cmd.Flags().StringVar(&opts.ConfigDir, "config", "", "collector config directory")
+	cmd.Flags().StringVar(&opts.CLSTopicID, "cls-topic-id", "", "central CLS topic id used by SCF warning/error logs")
 }
 
 func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions) (*collectorpackager.BuildSCFPackageResult, error) {
@@ -401,6 +403,7 @@ func packageCollectorFunction(ctx context.Context, opts collectorPackageOptions)
 		BinaryPath:               binaryPath,
 		ConfigDir:                configDir,
 		OutPath:                  outPath,
+		CLSTopicID:               opts.CLSTopicID,
 		StoragePrimaryAuthSecret: firstNonEmpty(opts.StoragePrimaryAuthSecret, os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")),
 	})
 }
@@ -413,37 +416,42 @@ var newCollectorCLSAPI = func(secretID, secretKey, region string) (tencent.CLSAP
 	})
 }
 
-func resolveCollectorCLSResources(ctx context.Context, control *adminclient.Client, account adminclient.CloudAccount, region string) (tencent.CLSBootstrapResult, error) {
-	region = strings.TrimSpace(region)
-	if region == "" {
-		return tencent.CLSBootstrapResult{}, fmt.Errorf("CLS region is required")
-	}
+type collectorCLSSink struct {
+	Resources tencent.CLSBootstrapResult
+}
+
+func resolveCollectorCLSSink(ctx context.Context, control *adminclient.Client, account adminclient.CloudAccount) (collectorCLSSink, error) {
 	if control == nil || strings.TrimSpace(account.CredentialSecretID) == "" {
-		return tencent.CLSBootstrapResult{}, fmt.Errorf("Tencent cloud account %q has no CLS credential secret", account.AccountID)
+		return collectorCLSSink{}, fmt.Errorf("Tencent cloud account %q has no CLS credential secret", account.AccountID)
 	}
 	secret, err := control.GetSecretValue(ctx, account.CredentialSecretID)
 	if err != nil {
-		return tencent.CLSBootstrapResult{}, fmt.Errorf("reveal Tencent cloud account %q credentials for CLS: %w", account.AccountID, err)
+		return collectorCLSSink{}, fmt.Errorf("reveal Tencent cloud account %q credentials for CLS: %w", account.AccountID, err)
 	}
 	if secret == nil || secret.Provider != "tencent" || secret.Category != "cloud" || secret.Status != "active" || strings.TrimSpace(secret.KeyID) == "" || strings.TrimSpace(secret.SecretValue) == "" {
-		return tencent.CLSBootstrapResult{}, fmt.Errorf("Tencent cloud account %q returned incomplete active cloud credentials for CLS", account.AccountID)
+		return collectorCLSSink{}, fmt.Errorf("Tencent cloud account %q returned incomplete active cloud credentials for CLS", account.AccountID)
 	}
-	api, err := newCollectorCLSAPI(secret.KeyID, secret.SecretValue, region)
+	api, err := newCollectorCLSAPI(secret.KeyID, secret.SecretValue, clsprepare.Region)
 	if err != nil {
-		return tencent.CLSBootstrapResult{}, fmt.Errorf("create CLS client for collector package: %w", err)
+		return collectorCLSSink{}, fmt.Errorf("create central CLS client for collector package: %w", err)
 	}
-	bootstrapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	resolveCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	resources, err := tencent.BootstrapCLS(bootstrapCtx, api, tencent.CLSBootstrapOptions{LogsetName: clsprepare.LogsetName, TopicName: clsprepare.TopicName, RetentionDays: 30, Partitions: 1})
+	resources, err := tencent.ResolveExistingCLS(resolveCtx, api, clsprepare.LogsetName, clsprepare.TopicName)
 	if err != nil {
-		return tencent.CLSBootstrapResult{}, fmt.Errorf("prepare %s CLS topic for collector function: %w", region, err)
+		return collectorCLSSink{}, fmt.Errorf("resolve central CLS topic for collector function: %w", err)
 	}
-	return resources, nil
+	return collectorCLSSink{Resources: resources}, nil
 }
 
 func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions) (collectorPublishSummary, error) {
 	if opts.ControlURL == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--control-url is required")
+	}
+	if strings.TrimSpace(opts.ZipPath) != "" {
+		// An external archive could omit or redirect the centralized CLS writer.
+		// Build from the audited package path for every fleet publication.
+		return collectorPublishSummary{}, fmt.Errorf("--zip is not supported by collector function publish; build the audited SCF package from source")
 	}
 	if opts.CloudAccountID == "" && strings.TrimSpace(opts.File) == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--cloud-account-id is required")
@@ -499,6 +507,25 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, err
 		}
 	}
+	clsAccountID := opts.CloudAccountID
+	if fetcherConfig != nil && fetcherConfig.Enabled {
+		clsAccountID = fetcherConfig.CLSCloudAccountID
+	}
+	clsAccount, ok := accountsByID[clsAccountID]
+	if !ok || clsAccount.IsDeleted {
+		return collectorPublishSummary{}, fmt.Errorf("central CLS cloud account %q not found", clsAccountID)
+	}
+	clsSink, err := resolveCollectorCLSSink(ctx, client, clsAccount)
+	if err != nil {
+		return collectorPublishSummary{}, err
+	}
+	opts.CLSLogsetID = clsSink.Resources.LogsetID
+	opts.CLSTopicID = clsSink.Resources.TopicID
+	opts.CLSSecretID, opts.CLSSecretKey = collectorCLSCredentials()
+	if opts.CLSSecretID == "" || opts.CLSSecretKey == "" {
+		return collectorPublishSummary{}, fmt.Errorf("MOOX_CLS_SECRET_ID and MOOX_CLS_SECRET_KEY are required for SCF centralized logging")
+	}
+	opts.CLSHost = clsprepare.Host
 	zipPath := opts.ZipPath
 	if zipPath == "" {
 		result, err := packageCollectorFunction(ctx, opts.collectorPackageOptions)
@@ -548,11 +575,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if account.COSRegion != regionOpts.Region {
 				return summary, fmt.Errorf("Tencent cloud account %q COS region %q must match SCF region %q", account.AccountID, account.COSRegion, regionOpts.Region)
 			}
-			resources, resolveErr := resolveCollectorCLSResources(ctx, client, account, regionOpts.Region)
-			if resolveErr != nil {
-				return summary, resolveErr
-			}
-			regionOpts.CLSLogsetID, regionOpts.CLSTopicID = resources.LogsetID, resources.TopicID
 			packageID, uploadErr := upload(regionOpts)
 			if uploadErr != nil {
 				return summary, uploadErr
@@ -585,12 +607,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		}
 		return summary, nil
 	}
-	account := accountsByID[opts.CloudAccountID]
-	resources, err := resolveCollectorCLSResources(ctx, client, account, opts.Region)
-	if err != nil {
-		return summary, err
-	}
-	opts.CLSLogsetID, opts.CLSTopicID = resources.LogsetID, resources.TopicID
 	packageID, err := upload(opts)
 	if err != nil {
 		return summary, err
@@ -1042,8 +1058,7 @@ func egressProbeResponseData(response map[string]any) (map[string]any, bool) {
 }
 
 func collectorCLSCredentials() (string, string) {
-	return firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_ID"), os.Getenv("TENCENTCLOUD_SECRET_ID")),
-		firstNonEmpty(os.Getenv("MOOX_CLS_SECRET_KEY"), os.Getenv("TENCENTCLOUD_SECRET_KEY"))
+	return strings.TrimSpace(os.Getenv("MOOX_CLS_SECRET_ID")), strings.TrimSpace(os.Getenv("MOOX_CLS_SECRET_KEY"))
 }
 
 func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) (adminclient.NodeCreateItem, error) {
@@ -1079,8 +1094,6 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if err := validateCollectorRuntimeConfig(config, fetcher); err != nil {
 		return adminclient.NodeCreateItem{}, err
 	}
-	setDefaultEnv(config, "cls_logset_id", opts.CLSLogsetID)
-	setDefaultEnv(config, "cls_topic_id", opts.CLSTopicID)
 	for configKey, environmentKey := range map[string]string{
 		"max_inflight_requests": "MOOX_FETCH_MAX_INFLIGHT_REQUESTS",
 		"request_timeout_ms":    "MOOX_FETCH_REQUEST_TIMEOUT_MS",
@@ -1161,6 +1174,9 @@ func validateCollectorFleetRuntimeEnvironment(environment map[string]string) err
 		"MOOX_GATEWAY_SERVICE_SECRET_KEY",
 		"MOOX_GATEWAY_CA_PEM_B64",
 		"MOOX_SERVICE_GATEWAY_CA_PEM_B64",
+		"MOOX_CLS_HOST",
+		"MOOX_CLS_SECRET_ID",
+		"MOOX_CLS_SECRET_KEY",
 	}
 	for _, key := range required {
 		if strings.TrimSpace(environment[key]) == "" {
@@ -1305,6 +1321,10 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_GATEWAY_TARGET_NODE", gatewayNodeID)
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"))
+	defaultCLSSecretID, defaultCLSSecretKey := collectorCLSCredentials()
+	setDefaultEnv(env, "MOOX_CLS_HOST", firstNonEmpty(opts.CLSHost, os.Getenv("MOOX_CLS_HOST"), clsprepare.Host))
+	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", firstNonEmpty(opts.CLSSecretID, defaultCLSSecretID))
+	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", firstNonEmpty(opts.CLSSecretKey, defaultCLSSecretKey))
 	// The native Storage gateway verifies the caller together with the key ID.
 	// The SCF uses the Collector service credential, so its caller must match
 	// that credential's ACL rather than the CLI process's caller identity.

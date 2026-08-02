@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,11 +29,11 @@ func mustBuildCollectorCreateNodeItem(t *testing.T, opts collectorPublishOptions
 
 func setCollectorCLSTestCredentials(t *testing.T) {
 	t.Helper()
-	if os.Getenv("MOOX_CLS_SECRET_ID") == "" && os.Getenv("TENCENTCLOUD_SECRET_ID") == "" {
-		t.Setenv("TENCENTCLOUD_SECRET_ID", "test-cls-id")
+	if os.Getenv("MOOX_CLS_SECRET_ID") == "" {
+		t.Setenv("MOOX_CLS_SECRET_ID", "test-cls-id")
 	}
-	if os.Getenv("MOOX_CLS_SECRET_KEY") == "" && os.Getenv("TENCENTCLOUD_SECRET_KEY") == "" {
-		t.Setenv("TENCENTCLOUD_SECRET_KEY", "test-cls-key")
+	if os.Getenv("MOOX_CLS_SECRET_KEY") == "" {
+		t.Setenv("MOOX_CLS_SECRET_KEY", "test-cls-key")
 	}
 }
 
@@ -247,9 +248,8 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Config["timeout"] != "10" || item.Config["memory_size"] != "64" {
 		t.Fatalf("config = %#v", item.Config)
 	}
-	if item.Config["cls_logset_id"] != "logset-unified" || item.Config["cls_topic_id"] != "topic-unified" {
-		t.Fatalf("CLS function config = %#v", item.Config)
-	}
+	assert.NotContains(t, item.Config, "cls_logset_id")
+	assert.NotContains(t, item.Config, "cls_topic_id")
 	if item.Environment["MOOX_ENV"] != "prod" {
 		t.Fatalf("env = %#v", item.Environment)
 	}
@@ -259,8 +259,9 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "collector" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "collector-secret" {
 		t.Fatalf("service auth env = %#v", item.Environment)
 	}
-	assert.NotContains(t, item.Environment, "MOOX_CLS_SECRET_ID")
-	assert.NotContains(t, item.Environment, "MOOX_CLS_SECRET_KEY")
+	assert.Equal(t, "ap-guangzhou.cls.tencentyun.com", item.Environment["MOOX_CLS_HOST"])
+	assert.Equal(t, "cls-id", item.Environment["MOOX_CLS_SECRET_ID"])
+	assert.Equal(t, "cls-key", item.Environment["MOOX_CLS_SECRET_KEY"])
 	if item.Metadata["function_name_prefix"] != "moox-collector" {
 		t.Fatalf("function_name_prefix = %#v", item.Metadata["function_name_prefix"])
 	}
@@ -587,7 +588,7 @@ func TestCollectorCLSCredentialsPreferDedicatedRuntimeIdentity(t *testing.T) {
 	assert.Equal(t, "dedicated-key", secretKey)
 }
 
-func TestResolveCollectorCLSResourcesUsesSelectedCloudAccountSecret(t *testing.T) {
+func TestResolveCollectorCLSSinkUsesSelectedCloudAccountSecret(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/service/secret/GetSecretValue", r.URL.Path)
 		require.NotEmpty(t, r.Header.Get("X-Moox-Signature"))
@@ -603,11 +604,11 @@ func TestResolveCollectorCLSResourcesUsesSelectedCloudAccountSecret(t *testing.T
 		gotID, gotKey, gotRegion = secretID, secretKey, region
 		return collectorCLSAPI{}, nil
 	}
-	_, err := resolveCollectorCLSResources(context.Background(), client, adminclient.CloudAccount{AccountID: "tencent-scf-shanghai", CredentialSecretID: "secret-shanghai"}, "ap-shanghai")
+	_, err := resolveCollectorCLSSink(context.Background(), client, adminclient.CloudAccount{AccountID: "tencent-scf-shanghai", CredentialSecretID: "secret-shanghai"})
 	require.NoError(t, err)
 	assert.Equal(t, "shanghai-id", gotID)
 	assert.Equal(t, "shanghai-key", gotKey)
-	assert.Equal(t, "ap-shanghai", gotRegion)
+	assert.Equal(t, clsprepare.Region, gotRegion)
 }
 
 func TestBuildCollectorCreateNodeItemRejectsLegacyJobItemWorkloads(t *testing.T) {

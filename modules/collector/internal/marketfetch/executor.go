@@ -305,9 +305,39 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 
 	payload := buildCompletion(req, results, now(), now().Sub(started))
 	if payload.GetStatus() != "succeeded" {
-		log.WarnContextf(ctx, "market fetch batch completed with status=%s batch_id=%s", payload.GetStatus(), req.BatchID)
+		// Keep the only SCF completion log compact and actionable. Successful
+		// batches are represented by their EventBus completion event; warning
+		// storage is reserved for batches that need attention.
+		log.WarnContextf(ctx, "market_fetch_result batch_id=%s status=%s results=%s", req.BatchID, payload.GetStatus(), compactResultOutcomes(results))
+		waitForCLSWarnDispatch(ctx)
 	}
 	return payload, nil
+}
+
+func waitForCLSWarnDispatch(ctx context.Context) {
+	// trpc-log-cls is asynchronous. Keep a short, bounded handoff window so a
+	// short-lived SCF does not return before the 100ms CLS batch timer runs.
+	timer := time.NewTimer(150 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+func compactResultOutcomes(results []domain.ItemResult) string {
+	parts := make([]string, 0, len(results))
+	for _, result := range results {
+		symbol := strings.TrimSpace(result.SubjectID)
+		if symbol == "" {
+			symbol = strings.TrimSpace(result.Symbol)
+		}
+		if symbol == "" {
+			symbol = "unknown"
+		}
+		parts = append(parts, symbol+":"+string(result.Outcome))
+	}
+	return strings.Join(parts, ",")
 }
 
 // registerSymbols deliberately stays serial because each metadata write

@@ -385,8 +385,6 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		COSBucket:   pkg.COSBucket,
 		COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
 		COSObject:   strings.TrimPrefix(pkg.COSPath, "/"),
-		ClsLogsetID: strings.TrimSpace(config["cls_logset_id"]),
-		ClsTopicID:  strings.TrimSpace(config["cls_topic_id"]),
 		Type:        firstString(config["function_type"], "Event"),
 	})
 	createCancel()
@@ -506,12 +504,14 @@ func mergeSCFFunctionMetadata(node *store.CloudNode, info *tencentscf.FunctionIn
 	}
 	metadata := parseJSONMap(node.Metadata)
 	changed := false
-	if clsLogsetID := strings.TrimSpace(info.ClsLogsetID); clsLogsetID != "" {
-		metadata["cls_logset_id"] = clsLogsetID
+	// SCF-native CLS must remain disabled. Clear stale metadata as well so the
+	// catalog cannot suggest that a per-function topic is still in use.
+	if _, ok := metadata["cls_logset_id"]; ok {
+		delete(metadata, "cls_logset_id")
 		changed = true
 	}
-	if clsTopicID := strings.TrimSpace(info.ClsTopicID); clsTopicID != "" {
-		metadata["cls_topic_id"] = clsTopicID
+	if _, ok := metadata["cls_topic_id"]; ok {
+		delete(metadata, "cls_topic_id")
 		changed = true
 	}
 	if changed {
@@ -588,12 +588,11 @@ func (s *Service) updateSCFFunctionCode(
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
-		FunctionRef: ref,
-		Environment: environment,
-		MemorySize:  configInt64(desiredConfig, "memory_size", 0),
-		Timeout:     configInt64(desiredConfig, "timeout", 0),
-		ClsLogsetID: strings.TrimSpace(desiredConfig["cls_logset_id"]),
-		ClsTopicID:  strings.TrimSpace(desiredConfig["cls_topic_id"]),
+		FunctionRef:    ref,
+		Environment:    environment,
+		MemorySize:     configInt64(desiredConfig, "memory_size", 0),
+		Timeout:        configInt64(desiredConfig, "timeout", 0),
+		ClearNativeCLS: true,
 	}); err != nil {
 		return fmt.Errorf("update scf function %s configuration: %w", ref.FunctionName, err)
 	}

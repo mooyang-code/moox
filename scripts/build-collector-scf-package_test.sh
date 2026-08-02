@@ -30,6 +30,7 @@ package_path="${TMP_ROOT}/collector-scf.zip"
   cd "${TMP_ROOT}"
   PATH="${FAKE_BIN}:${PATH}" \
     MOOX_STORAGE_PRIMARY_AUTH_SECRET="storage-secret" \
+    MOOX_CLS_TOPIC_ID="topic-central" \
     VERSION=contract-test \
     OUT_PATH="collector-scf.zip" \
     bash "${ROOT}/scripts/build-collector-scf-package.sh"
@@ -43,10 +44,10 @@ import yaml
 with open(sys.argv[1], encoding="utf-8") as stream:
     document = yaml.safe_load(stream)
 writers = document["plugins"]["log"]["default"]
-console = [writer for writer in writers if writer.get("writer") == "console"]
-assert not [writer for writer in writers if writer.get("writer") == "cls"], writers
-assert len(console) == 1, console
-assert console[0]["level"] == "info", console
+assert len(writers) == 1, writers
+assert writers[0]["writer"] == "cls", writers
+assert writers[0]["level"] == "warn", writers
+assert writers[0]["remote_config"]["topic_id"] == "topic-central", writers
 services = document["server"]["service"]
 assert not [service for service in services if ".scf_observability." in service.get("name", "")], services
 PY

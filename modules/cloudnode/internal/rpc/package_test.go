@@ -15,8 +15,8 @@ func TestPackageHelpers_ShouldSanitizeAndConvert(t *testing.T) {
 	assert.Equal(t, "pkg_v1_upload-1", buildPackageID("pkg", "v1", "upload-1"))
 	assert.Equal(
 		t,
-		"moox/cloud-packages/collector/pkg/v1/pkg_v1_upload-1/a.zip",
-		buildPackageCOSPath("collector", "pkg", "v1", "pkg_v1_upload-1", "a.zip"),
+		"moox/cloud-packages/2026-08-02/collector/pkg/v1/pkg_v1_upload-1/a.zip",
+		buildPackageCOSPathAt(time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC), "collector", "pkg", "v1", "pkg_v1_upload-1", "a.zip"),
 	)
 	assert.Equal(t, "package.zip", sanitizePackageFileName("@@@"))
 	assert.Equal(t, "ok-name", sanitizePackagePathSegment(" ok-name "))

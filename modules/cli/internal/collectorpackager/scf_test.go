@@ -37,6 +37,7 @@ func TestBuildSCFPackage_ValidInputs_ShouldCreateZipWithExpectedEntries(t *testi
 		BinaryPath: binaryPath,
 		ConfigDir:  configDir,
 		OutPath:    outPath,
+		CLSTopicID: "topic-central",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -56,8 +57,9 @@ func TestBuildSCFPackage_ValidInputs_ShouldCreateZipWithExpectedEntries(t *testi
 			content, readErr := io.ReadAll(stream)
 			require.NoError(t, readErr)
 			require.NoError(t, stream.Close())
-			assert.NotContains(t, string(content), "writer: cls")
-			assert.NotContains(t, string(content), "MOOX_CLS_SECRET")
+			assert.Contains(t, string(content), "writer: cls")
+			assert.Contains(t, string(content), "level: warn")
+			assert.Contains(t, string(content), "topic_id: topic-central")
 		}
 	}
 	assert.ElementsMatch(t, []string{"main", "config.yaml", "trpc_go.yaml", "sources/binance/kline.yaml"}, names)
@@ -83,6 +85,7 @@ func TestBuildSCFPackage_RendersStorageAuthKeyWithoutPackagingSecret(t *testing.
 	configDir := filepath.Join(tmp, "config")
 	require.NoError(t, os.MkdirAll(filepath.Join(configDir, "sources", "market"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("storage: {}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "trpc_go.yaml"), []byte("server: {}\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "sources", "market", "binance.yaml"), []byte(`
 storage:
   bindings:
@@ -94,7 +97,7 @@ storage:
 
 	outPath := filepath.Join(tmp, "package.zip")
 	_, err := BuildSCFPackage(BuildSCFPackageOptions{
-		BinaryPath: binaryPath, ConfigDir: configDir, OutPath: outPath,
+		BinaryPath: binaryPath, ConfigDir: configDir, OutPath: outPath, CLSTopicID: "topic-central",
 		StoragePrimaryAuthSecret: "storage-secret",
 	})
 	require.NoError(t, err)
@@ -125,6 +128,7 @@ func TestBuildSCFPackage_RejectsBinanceConfigWithoutStorageSecret(t *testing.T) 
 	configDir := filepath.Join(tmp, "config")
 	require.NoError(t, os.MkdirAll(filepath.Join(configDir, "sources", "market"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("storage: {}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "trpc_go.yaml"), []byte("server: {}\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, "sources", "market", "binance.yaml"), []byte(`
 storage:
   auth_info:
@@ -133,14 +137,14 @@ storage:
 `), 0o644))
 
 	_, err := BuildSCFPackage(BuildSCFPackageOptions{
-		BinaryPath: binaryPath, ConfigDir: configDir,
+		BinaryPath: binaryPath, ConfigDir: configDir, CLSTopicID: "topic-central",
 		OutPath: filepath.Join(tmp, "package.zip"),
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 }
 
-func TestRenderTRPCConfigForServerlessRemovesCLSWriters(t *testing.T) {
+func TestRenderTRPCConfigForServerlessUsesCentralCLSWriters(t *testing.T) {
 	config := []byte(`plugins:
   log:
     default:
@@ -149,12 +153,15 @@ func TestRenderTRPCConfigForServerlessRemovesCLSWriters(t *testing.T) {
       - writer: cls
         remote_config: {topic_id: topic-b}
 `)
-	rendered, err := renderTRPCConfigForServerless(config)
+	rendered, err := renderTRPCConfigForServerless(config, "topic-central")
 	require.NoError(t, err)
-	assert.NotContains(t, string(rendered), "writer: cls")
+	assert.Contains(t, string(rendered), "writer: cls")
+	assert.Contains(t, string(rendered), "topic_id: topic-central")
+	assert.NotContains(t, string(rendered), "topic-a")
+	assert.NotContains(t, string(rendered), "topic-b")
 }
 
-func TestSCFPackageRemovesSDKCLSWriter(t *testing.T) {
+func TestSCFPackageUsesOnlyCentralWarnCLSWriter(t *testing.T) {
 	source := []byte(`plugins:
   log:
     default:
@@ -165,7 +172,7 @@ func TestSCFPackageRemovesSDKCLSWriter(t *testing.T) {
         remote_config:
           topic_id: stale-topic
 `)
-	rendered, err := renderTRPCConfigForServerless(source)
+	rendered, err := renderTRPCConfigForServerless(source, "topic-central")
 	require.NoError(t, err)
 
 	var document map[string]any
@@ -173,14 +180,12 @@ func TestSCFPackageRemovesSDKCLSWriter(t *testing.T) {
 	plugins := document["plugins"].(map[string]any)
 	logs := plugins["log"].(map[string]any)
 	writers := logs["default"].([]any)
-	var consoleWriters int
+	require.Len(t, writers, 1)
 	for _, writer := range writers {
 		config := writer.(map[string]any)
-		switch config["writer"] {
-		case "console":
-			consoleWriters++
-			assert.Equal(t, "warn", config["level"], "console level must remain unchanged")
-		}
+		assert.Equal(t, "cls", config["writer"])
+		assert.Equal(t, "warn", config["level"])
+		remote := config["remote_config"].(map[string]any)
+		assert.Equal(t, "topic-central", remote["topic_id"])
 	}
-	assert.Equal(t, 1, consoleWriters)
 }

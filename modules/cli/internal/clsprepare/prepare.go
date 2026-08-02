@@ -13,10 +13,12 @@ import (
 )
 
 const (
-	Region     = "ap-guangzhou"
-	LogsetName = "moox"
-	TopicName  = "moox-application"
-	Host       = Region + ".cls.tencentyun.com"
+	Region              = "ap-guangzhou"
+	LogsetName          = "moox"
+	TopicName           = "moox-application"
+	Host                = Region + ".cls.tencentyun.com"
+	RetentionDays int64 = 2
+	Partitions    int64 = 1
 )
 
 type AccountSource interface {
@@ -79,7 +81,7 @@ func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Op
 		return Result{}, safeUpstreamError("create CLS client", err)
 	}
 	resources, err := tencent.BootstrapCLS(ctx, api, tencent.CLSBootstrapOptions{
-		LogsetName: LogsetName, TopicName: TopicName, RetentionDays: 30, Partitions: 1,
+		LogsetName: LogsetName, TopicName: TopicName, RetentionDays: RetentionDays, Partitions: Partitions,
 	})
 	if err != nil {
 		return Result{}, safeUpstreamError("prepare fixed CLS resources", err)

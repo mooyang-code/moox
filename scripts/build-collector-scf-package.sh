@@ -37,16 +37,32 @@ if [[ -f "${BUILD_DIR}/package/example_trpc_go.yaml" ]]; then
   cp "${BUILD_DIR}/package/example_trpc_go.yaml" "${BUILD_DIR}/package/trpc_go.yaml"
   rm -f "${BUILD_DIR}/package/example_trpc_go.yaml"
 fi
-python3 - "${BUILD_DIR}/package/trpc_go.yaml" <<'PY'
+[[ -n "${MOOX_CLS_TOPIC_ID:-}" ]] || {
+  echo "MOOX_CLS_TOPIC_ID is required to package centralized SCF warning/error logs" >&2
+  exit 1
+}
+python3 - "${BUILD_DIR}/package/trpc_go.yaml" "${MOOX_CLS_TOPIC_ID}" <<'PY'
 import sys
 import yaml
 
-path = sys.argv[1]
+path, topic_id = sys.argv[1], sys.argv[2]
 with open(path, encoding="utf-8") as stream:
     document = yaml.safe_load(stream) or {}
 plugins = document.setdefault("plugins", {})
 logs = plugins.setdefault("log", {})
-logs["default"] = [item for item in logs.get("default", []) if not isinstance(item, dict) or item.get("writer") != "cls"]
+logs["default"] = [{
+    "writer": "cls",
+    "level": "warn",
+    "remote_config": {
+        "topic_id": topic_id,
+        "host": "${MOOX_CLS_HOST}",
+        "secret_id": "${MOOX_CLS_SECRET_ID}",
+        "secret_key": "${MOOX_CLS_SECRET_KEY}",
+        "max_block_sec": 0,
+        "max_batch_count": 1,
+        "linger_ms": 100,
+    },
+}]
 server = document.setdefault("server", {})
 server["service"] = [item for item in server.get("service", []) if not isinstance(item, dict) or ".scf_observability." not in item.get("name", "")]
 with open(path, "w", encoding="utf-8") as stream:

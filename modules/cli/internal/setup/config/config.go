@@ -58,7 +58,10 @@ type SCFFetcherRegion struct {
 }
 
 type SCFFetcher struct {
-	Enabled             bool               `toml:"enabled"`
+	Enabled bool `toml:"enabled"`
+	// CLSCloudAccountID owns the single regional CLS topic used by every
+	// short-lived collector function, regardless of its SCF region.
+	CLSCloudAccountID   string             `toml:"cls_cloud_account_id"`
 	Namespace           string             `toml:"namespace"`
 	Runtime             string             `toml:"runtime"`
 	FunctionPrefix      string             `toml:"function_prefix"`
@@ -288,6 +291,7 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 	if cfg.FunctionPrefix == "" {
 		cfg.FunctionPrefix = "moox-fetcher"
 	}
+	cfg.CLSCloudAccountID = strings.TrimSpace(cfg.CLSCloudAccountID)
 	if cfg.MemorySize != 64 {
 		return fmt.Errorf("config_invalid: scf_fetcher.memory_size must be 64")
 	}
@@ -369,6 +373,24 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 	}
 	if enabledRegions == 0 {
 		return fmt.Errorf("config_invalid: scf_fetcher.regions must contain at least one enabled region")
+	}
+	if cfg.CLSCloudAccountID == "" {
+		// Keep the central log sink deterministic for the standard MooX fleet
+		// while allowing a manifest to name a different dedicated log account.
+		for _, region := range cfg.Regions {
+			if region.Enabled && region.Region == "ap-guangzhou" {
+				cfg.CLSCloudAccountID = region.CloudAccountID
+				break
+			}
+		}
+		if cfg.CLSCloudAccountID == "" {
+			for _, region := range cfg.Regions {
+				if region.Enabled {
+					cfg.CLSCloudAccountID = region.CloudAccountID
+					break
+				}
+			}
+		}
 	}
 	return nil
 }
