@@ -516,6 +516,8 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	}
 	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"), args...)
 	command.Dir = root
+	command.Stdout = os.Stderr
+	command.Stderr = os.Stderr
 	command.Env, err = eventBusCommandEnv(os.Environ(), opts)
 	if err != nil {
 		_ = os.Remove(archive)
