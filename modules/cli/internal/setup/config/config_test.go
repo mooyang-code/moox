@@ -14,7 +14,7 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 	base := func() SCFFetcher {
 		return SCFFetcher{
 			Enabled: true, MemorySize: 64, TimeoutSeconds: 10,
-			MaxInflightRequests: 5, RequestTimeoutMS: 2000,
+			MaxInflightRequests: 16, RequestTimeoutMS: 1500,
 			HTTPMaxAttempts: 1, StorageMaxAttempts: 1,
 			Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
 		}
@@ -34,6 +34,33 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 		err := validateSCFFetcher(&cfg)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "between 1 and 64")
+	})
+
+	t.Run("allows a 64-item realtime batch for fleet fanout", func(t *testing.T) {
+		cfg := base()
+		cfg.RealtimeBatchSize = 64
+		cfg.Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		require.NoError(t, validateSCFFetcher(&cfg))
+	})
+
+	t.Run("rejects a realtime batch above the SCF request bound", func(t *testing.T) {
+		cfg := base()
+		cfg.RealtimeBatchSize = 65
+		cfg.Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "between 1 and 64")
+	})
+
+	t.Run("rejects a batch that cannot finish before the SCF deadline", func(t *testing.T) {
+		cfg := base()
+		cfg.RealtimeBatchSize = 64
+		cfg.MaxInflightRequests = 1
+		cfg.RequestTimeoutMS = 7000
+		cfg.Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "request waves")
 	})
 }
 

@@ -1062,7 +1062,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	}
 	fetcher := opts.FetcherConfig
 	if fetcher == nil {
-		fetcher = &setupconfig.SCFFetcher{MemorySize: 64, TimeoutSeconds: 10, RealtimeBatchSize: 10, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 5, RequestTimeoutMS: 2000, HTTPMaxAttempts: 1, StorageMaxAttempts: 1, CommitReserveMS: 2000, MaxRetryAttempts: 3}
+		fetcher = &setupconfig.SCFFetcher{MemorySize: 64, TimeoutSeconds: 10, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 16, RequestTimeoutMS: 1500, HTTPMaxAttempts: 1, StorageMaxAttempts: 1, CommitReserveMS: 2000, MaxRetryAttempts: 3}
 	}
 	if strings.TrimSpace(config["timeout"]) == "" {
 		config["timeout"] = strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 10))
@@ -1075,6 +1075,9 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	}
 	if collectorConfigInt(config, "timeout", 10) != 10 {
 		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher timeout is fixed at 10 seconds")
+	}
+	if err := validateCollectorRuntimeConfig(config, fetcher); err != nil {
+		return adminclient.NodeCreateItem{}, err
 	}
 	setDefaultEnv(config, "cls_logset_id", opts.CLSLogsetID)
 	setDefaultEnv(config, "cls_topic_id", opts.CLSTopicID)
@@ -1284,7 +1287,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_SPACE_ID", defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
 	fetcher := opts.FetcherConfig
 	if fetcher == nil {
-		fetcher = &setupconfig.SCFFetcher{TimeoutSeconds: 10, MaxInflightRequests: 5, RequestTimeoutMS: 2000, HTTPMaxAttempts: 1, StorageMaxAttempts: 1, CommitReserveMS: 2000, RealtimeBatchSize: 10, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxRetryAttempts: 3}
+		fetcher = &setupconfig.SCFFetcher{TimeoutSeconds: 10, MaxInflightRequests: 16, RequestTimeoutMS: 1500, HTTPMaxAttempts: 1, StorageMaxAttempts: 1, CommitReserveMS: 2000, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxRetryAttempts: 3}
 	}
 	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 10)))
 	setDefaultEnv(env, "MOOX_FETCH_MAX_INFLIGHT_REQUESTS", strconv.Itoa(defaultInt(fetcher.MaxInflightRequests, 5)))
@@ -1462,6 +1465,54 @@ func collectorConfigInt(values map[string]string, key string, fallback int) int 
 		return fallback
 	}
 	return value
+}
+
+// validateCollectorRuntimeConfig keeps command-line function-config overrides
+// inside the same short-lived execution budget as custom.toml. This is needed
+// because those overrides are copied into SCF environment variables directly.
+func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconfig.SCFFetcher) error {
+	if fetcher == nil {
+		return fmt.Errorf("scf fetcher configuration is required")
+	}
+	batchSize, err := collectorRuntimeConfigInt(values, "realtime_batch_size", defaultInt(fetcher.RealtimeBatchSize, 64), 1)
+	if err != nil {
+		return err
+	}
+	if batchSize < 1 || batchSize > 64 {
+		return fmt.Errorf("market_fetcher realtime_batch_size must be between 1 and 64")
+	}
+	inflight, err := collectorRuntimeConfigInt(values, "max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 16), 1)
+	if err != nil {
+		return err
+	}
+	if inflight < 1 || inflight > 64 {
+		return fmt.Errorf("market_fetcher max_inflight_requests must be between 1 and 64")
+	}
+	requestTimeoutMS, err := collectorRuntimeConfigInt(values, "request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 1500), 1)
+	if err != nil {
+		return err
+	}
+	commitReserveMS, err := collectorRuntimeConfigInt(values, "commit_reserve_ms", defaultInt(fetcher.CommitReserveMS, 2000), 0)
+	if err != nil {
+		return err
+	}
+	requestWaves := (batchSize + inflight - 1) / inflight
+	if requestWaves*requestTimeoutMS+commitReserveMS >= 10_000 {
+		return fmt.Errorf("market_fetcher realtime request waves + commit_reserve_ms must be less than the 10-second timeout")
+	}
+	return nil
+}
+
+func collectorRuntimeConfigInt(values map[string]string, key string, fallback, minimum int) (int, error) {
+	raw, ok := values[key]
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value < minimum {
+		return 0, fmt.Errorf("market_fetcher %s must be an integer >= %d", key, minimum)
+	}
+	return value, nil
 }
 
 func deployCollectorFunction(ctx context.Context, opts collectorDeployOptions) (collectorDeploySummary, error) {

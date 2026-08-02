@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,7 @@ import (
 )
 
 const (
-	DefaultBatchSize = 10
+	DefaultBatchSize = MaxRealtimeItems
 	DefaultMaxPlan   = 1000
 	// 80 items / 16 workers yields at most five 1.5-second storage-read waves,
 	// leaving room inside the fixed 10-second tRPC timer deadline.
@@ -32,8 +33,9 @@ const (
 	gapAuditWorkers  = 16
 )
 
-// Scheduler scans enabled rules and creates stable, at-most-ten-item SCF
-// batches. It is intentionally a single process timer handler; SQLite unique
+// Scheduler scans enabled rules and creates stable SCF batches. Realtime work
+// fans out across the available SCF fleet before the per-function item limit
+// applies. It is intentionally a single process timer handler; SQLite unique
 // indexes provide the only idempotency needed by this single-user system.
 type Scheduler struct {
 	Rules             *store.TaskRuleRepository
@@ -140,8 +142,9 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				continue
 			}
 			batchItems := append([]domain.CollectionItem(nil), items...)
-			for start, shard := 0, 0; start < len(batchItems); start, shard = start+s.batchSize(), shard+1 {
-				end := start + s.batchSize()
+			batchSize := s.realtimeBatchSize(len(batchItems), nodes)
+			for start, shard := 0, 0; start < len(batchItems); start, shard = start+batchSize, shard+1 {
+				end := start + batchSize
 				if end > len(batchItems) {
 					end = len(batchItems)
 				}
@@ -410,11 +413,54 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, event map
 	}
 }
 
-func (s *Scheduler) batchSize() int {
-	if s.BatchSize <= 0 || s.BatchSize > DefaultBatchSize {
-		return DefaultBatchSize
+// realtimeBatchSize makes one minute's work fan out to the current SCF fleet
+// first, then applies the smallest per-function limit declared by that fleet.
+// This keeps each node at one invocation for the common case while preventing
+// a stale or deliberately smaller function configuration from receiving an
+// oversized event.
+func (s *Scheduler) realtimeBatchSize(itemCount int, nodes []scfinvoker.Node) int {
+	if itemCount <= 0 || len(nodes) == 0 {
+		return 1
 	}
-	return s.BatchSize
+	limit := DefaultBatchSize
+	if s.BatchSize > 0 && s.BatchSize < limit {
+		limit = s.BatchSize
+	}
+	for _, node := range nodes {
+		if configured, ok := nodeMetadataInt(node.Metadata, "realtime_batch_size"); ok && configured < limit {
+			limit = configured
+		}
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	perNode := (itemCount + len(nodes) - 1) / len(nodes)
+	if perNode < limit {
+		return perNode
+	}
+	return limit
+}
+
+func nodeMetadataInt(metadata map[string]any, key string) (int, bool) {
+	if metadata == nil {
+		return 0, false
+	}
+	switch value := metadata[key].(type) {
+	case int:
+		return value, value > 0
+	case int32:
+		return int(value), value > 0
+	case int64:
+		return int(value), value > 0
+	case float64:
+		integer := int(value)
+		return integer, value == float64(integer) && integer > 0
+	case string:
+		integer, err := strconv.Atoi(strings.TrimSpace(value))
+		return integer, err == nil && integer > 0
+	default:
+		return 0, false
+	}
 }
 
 func (s *Scheduler) recoverDue(ctx context.Context, spaceID string, nodes []scfinvoker.Node, now time.Time) error {

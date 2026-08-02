@@ -29,8 +29,13 @@ import (
 const (
 	DefaultConcurrency = 5
 	MaxConcurrency     = 64
-	MaxRealtimeItems   = 10
-	MaxRealtimeRows    = 3
+	// MaxRealtimeItems bounds the work accepted by one short-lived SCF. The
+	// scheduler partitions a minute's symbols across the available functions;
+	// with ten functions this permits 479 symbols to fan out as ten requests of
+	// at most 48 symbols each. The function still caps its own HTTP concurrency
+	// and performs one aggregate Storage write.
+	MaxRealtimeItems = 64
+	MaxRealtimeRows  = 3
 	// Symbol metadata is intentionally an explicit, small manual task. The
 	// Storage metadata endpoint refreshes its snapshot per subject, so a full
 	// exchange-wide symbol dump does not belong in a 10-second SCF invocation.

@@ -631,6 +631,40 @@ func TestBuildCollectorCreateNodeItemDefaultsToGoRuntime(t *testing.T) {
 	}
 }
 
+func TestBuildCollectorCreateNodeItemRejectsUnsafeRuntimeOverride(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
+		CloudAccountID: "account-a",
+		Region:         "ap-guangzhou",
+		Config: []string{
+			"realtime_batch_size=64",
+			"max_inflight_requests=1",
+			"request_timeout_ms=7000",
+		},
+	}, "moox-collector_dev")
+	require.ErrorContains(t, err, "request waves")
+}
+
+func TestBuildCollectorCreateNodeItemRejectsInvalidInflightOverride(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
+		CloudAccountID: "account-a",
+		Region:         "ap-guangzhou",
+		Config:         []string{"max_inflight_requests=65"},
+	}, "moox-collector_dev")
+	require.ErrorContains(t, err, "max_inflight_requests must be between 1 and 64")
+}
+
+func TestBuildCollectorCreateNodeItemRejectsMalformedRuntimeOverride(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
+		CloudAccountID: "account-a",
+		Region:         "ap-guangzhou",
+		Config:         []string{"max_inflight_requests=not-a-number"},
+	}, "moox-collector_dev")
+	require.ErrorContains(t, err, "max_inflight_requests must be an integer")
+}
+
 func TestCollectorFunctionEnvironmentRejectsManagedGatewayOverride(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
 	_, err := buildCollectorCreateNodeItem(collectorPublishOptions{

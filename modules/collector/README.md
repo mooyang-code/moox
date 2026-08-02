@@ -31,8 +31,7 @@ Symbol Rule 将手动配置的 Binance 标的写入 RECORD Dataset。K 线 Rule 
 读取 active subjects，写入 TimeSeries Dataset。实时 K 线批次每项只请求最近 3 根并过滤未收盘
 数据；长缺口由独立 CatchupBatch 分页恢复。
 
-每个实时 BatchInvocation 最多 10 项。函数配置固定为 64MB、10 秒，默认并发为 5；临时错误
-由 Collector 以 5 秒、30 秒、2 分钟重试，而不是在函数内部退避。
+每个实时周期先按当前 SCF 函数数均分标的；单个 BatchInvocation 最多 64 项。函数配置固定为 64MB、10 秒，默认 HTTP 并发为 16；临时错误由 Collector 以 5 秒、30 秒、2 分钟重试，而不是在函数内部退避。
 
 规则、运行态字段与接口说明见 [采集任务管理](../../docs/采集任务管理.md)。
 

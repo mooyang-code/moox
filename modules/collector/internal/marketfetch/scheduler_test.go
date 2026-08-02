@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -56,6 +57,18 @@ func TestNormalizeStorageFrequencyKeepsWeekAndMonthSemantics(t *testing.T) {
 func TestGapAuditThresholdUsesWeekAndMonthIntervals(t *testing.T) {
 	assert.Equal(t, 21*24*time.Hour, gapAuditThreshold("1w"))
 	assert.Equal(t, 90*24*time.Hour, gapAuditThreshold("1M"))
+}
+
+func TestRealtimeBatchSizeFansOutAcrossCurrentFleet(t *testing.T) {
+	nodes := make([]scfinvoker.Node, 10)
+	for index := range nodes {
+		nodes[index].Metadata = map[string]any{"realtime_batch_size": float64(64)}
+	}
+	scheduler := &Scheduler{BatchSize: MaxRealtimeItems}
+	assert.Equal(t, 48, scheduler.realtimeBatchSize(479, nodes))
+
+	nodes[0].Metadata["realtime_batch_size"] = float64(10)
+	assert.Equal(t, 10, scheduler.realtimeBatchSize(479, nodes))
 }
 
 func ruleIDs(rules []domain.TaskRule) []string {

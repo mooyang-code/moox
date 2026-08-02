@@ -295,10 +295,10 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 		return fmt.Errorf("config_invalid: scf_fetcher.timeout_seconds must be 10")
 	}
 	if cfg.RealtimeBatchSize == 0 {
-		cfg.RealtimeBatchSize = 10
+		cfg.RealtimeBatchSize = 64
 	}
-	if cfg.RealtimeBatchSize != 10 {
-		return fmt.Errorf("config_invalid: scf_fetcher.realtime_batch_size must be 10")
+	if cfg.RealtimeBatchSize < 1 || cfg.RealtimeBatchSize > 64 {
+		return fmt.Errorf("config_invalid: scf_fetcher.realtime_batch_size must be between 1 and 64")
 	}
 	if cfg.RealtimeBarLimit == 0 {
 		cfg.RealtimeBarLimit = 3
@@ -339,8 +339,10 @@ func validateSCFFetcher(cfg *SCFFetcher) error {
 	if len(cfg.RetryDelays) != 3 || cfg.RetryDelays[0] != "5s" || cfg.RetryDelays[1] != "30s" || cfg.RetryDelays[2] != "2m" || cfg.StaggerEnabled {
 		return fmt.Errorf("config_invalid: scf_fetcher retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false")
 	}
-	if cfg.RequestTimeoutMS+cfg.CommitReserveMS >= cfg.TimeoutSeconds*1000 {
-		return fmt.Errorf("config_invalid: scf_fetcher request_timeout_ms + commit_reserve_ms must be less than timeout")
+	requestWaves := (cfg.RealtimeBatchSize + cfg.MaxInflightRequests - 1) / cfg.MaxInflightRequests
+	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.CommitReserveMS
+	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
+		return fmt.Errorf("config_invalid: scf_fetcher realtime request waves + commit_reserve_ms must be less than timeout")
 	}
 	seen := make(map[string]struct{}, len(cfg.Regions))
 	enabledRegions := 0

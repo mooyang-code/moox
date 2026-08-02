@@ -209,7 +209,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		Storage: func(target, market string) (binance.BatchStorage, error) {
 			return binance.NewBatchStorage(target, market)
 		},
-		StorageTarget: deps.StorageRPCGatewayTarget, BatchSize: 10, InvokeConcurrency: 20,
+		StorageTarget: deps.StorageRPCGatewayTarget, BatchSize: marketfetch.MaxRealtimeItems, InvokeConcurrency: 20,
 		Metrics: metrics,
 	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})

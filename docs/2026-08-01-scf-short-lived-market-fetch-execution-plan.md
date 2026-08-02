@@ -74,7 +74,7 @@ SCF 官方没有承诺固定冷启动耗时。冷启动必须通过 `Init Report
 因此：
 
 - 不在容量计算中假定冷启动固定为 1～2 秒；
-- 事件载荷只携带最多 10 个轻量 CollectionItem，不携带行情结果；
+- 每个实时周期先按当前 SCF 函数数均分标的；每个事件载荷最多携带 64 个轻量 CollectionItem，不携带行情结果；
 - 正常 Handler 在 8 秒前停止新请求，预留约 2 秒提交 Storage 和发布完成事件；
 - 是否扩大批次、并发或函数数量，以真实 P95/P99 和 429 数据决定。
 
@@ -87,7 +87,7 @@ SCF 官方没有承诺固定冷启动耗时。冷启动必须通过 `Init Report
 | TaskRule | 用户配置的采集规则 | 长期保存 |
 | TaskInstance | 规则展开后的稳定业务任务，例如某 Dataset 的某 Symbol + Frequency | 长期保存，每个组合仅一条 |
 | CollectionItem | 某次 SCF 请求中的单个标的采集项 | 不逐周期单独落库 |
-| BatchInvocation | 一次实际 SCF 调用，包含最多 10 个 CollectionItem | 成功保留 48 小时，失败保留 7 天 |
+| BatchInvocation | 一次实际 SCF 调用，包含最多 64 个 CollectionItem；实时任务优先一函数一批 | 成功保留 48 小时，失败保留 7 天 |
 | RetryItem | 需要重试的单个 CollectionItem | 仅失败时保存，成功或过期后清理 |
 | CatchupBatch | 独立的历史缺口补采批次 | 按 BatchInvocation 保存 |
 
@@ -281,7 +281,7 @@ CloudNode 异步调用的 JSON 使用固定 `action=market_fetch`：
 
 `batch_kind` 允许：
 
-- `realtime`：最多 10 个 items，每项 `bar_limit=3`；
+- `realtime`：最多 64 个 items，每项 `bar_limit=3`；每分钟按当前函数池数量均分；
 - `catchup`：恰好 1 个 item，必须携带 `start_time`，`bar_limit<=1000`；
 - `symbol_snapshot`：恰好 1 个规则项，携带去重后的 `manual_symbols`，调用一次 exchangeInfo。
 
@@ -366,7 +366,7 @@ ResourceLimitReached = 0
 SCF timeout = 0
 ```
 
-批次大小只有在以上门槛连续满足后，才允许从 10 调到 20、30 或 50。
+`realtime_batch_size = 64`、`max_inflight_requests = 16`、`request_timeout_ms = 1500` 是当前基线；它最多四轮请求加 2 秒提交预留。单函数批次上限固定为 64，不再继续增大。
 
 ## 8. custom.toml 与配置真值
 
@@ -382,12 +382,12 @@ runtime = "Go1"
 function_prefix = "moox-fetcher"
 memory_size = 64
 timeout_seconds = 10
-realtime_batch_size = 10
+realtime_batch_size = 64
 realtime_bar_limit = 3
 catchup_batch_size = 1
 catchup_bar_limit = 1000
-max_inflight_requests = 5
-request_timeout_ms = 2000
+max_inflight_requests = 16
+request_timeout_ms = 1500
 http_max_attempts = 1
 storage_max_attempts = 1
 commit_reserve_ms = 2000
@@ -437,7 +437,7 @@ cloud_account_id = "tencent-scf-hongkong"
 - timeout 必须为 10；
 - `request_timeout_ms + commit_reserve_ms < 10000`；
 - `1 <= max_inflight_requests <= 64`；超过 Executor 上限直接拒绝，避免函数启动后每批都因非法并发配置失败；
-- `realtime_batch_size` 初始不得超过 10；
+- `1 <= realtime_batch_size <= 64`；实时调度先按当前函数池均分，再受该上限约束；
 - `http_max_attempts` 必须为 1；
 - `storage_max_attempts` 必须为 1；
 - 地域不能重复；
@@ -471,9 +471,9 @@ CloudNode `c_metadata` 至少保存：
   "supported_workloads": [],
   "memory_size": 64,
   "timeout_seconds": 10,
-  "max_inflight_requests": 5,
-  "realtime_batch_size": 10,
-  "request_timeout_ms": 2000,
+  "max_inflight_requests": 16,
+  "realtime_batch_size": 64,
+  "request_timeout_ms": 1500,
   "http_max_attempts": 1,
   "storage_max_attempts": 1,
   "realtime_bar_limit": 3,
@@ -800,7 +800,7 @@ Dispatcher 对 CloudNode 调用使用最多 20 个并发；这是控制面请求
 6. K 线规则读取关联 Symbol Dataset 的 active subjects。
 7. Upsert 稳定 TaskInstance。
 8. 以 Dataset 为边界生成 CollectionItem。
-9. 以初始 batch size 10 分组。
+9. 按当前 SCF 数量优先均分；单函数最多 64 个标的，超过时才追加批次。
 10. 按启用地域和函数 round-robin 分配批次。
 11. 先保存 `planned`，再异步调用 CloudNode。
 12. 每分钟执行 Gap Audit；每小时执行历史状态清理。
@@ -821,7 +821,7 @@ Dispatcher 对 CloudNode 调用使用最多 20 个并发；这是控制面请求
 中国香港 1 个函数
 ```
 
-1000 个 K 线 Symbol、batch size 10 时每分钟约 100 次调用，按 5 个地域 round-robin 后每地域约 20 次。一个函数名可以由 SCF 平台按并发自动扩出多个实例，不需要预先创建 10 个同地域函数。Symbol Dataset 刷新是独立的手动小批次，不承担全交易所 1000 标的元数据同步。
+实时调度先按当前 SCF 函数数均分标的：例如 10 个函数采集 1000 个 K 线 Symbol 时，每个函数处理约 100 个标的；受 64-item 上限约束时会拆成 16 次。一个函数名可以由 SCF 平台按并发自动扩出多个实例，但本系统仍以注册函数节点数作为每轮初始 fan-out 数。Symbol Dataset 刷新是独立的手动小批次，不承担全交易所 1000 标的元数据同步。
 
 ### 13.2 一次性出口探针
 
