@@ -656,9 +656,8 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 	functionName := firstString(
 		metadataString(metadata, "function_name"),
 		fmt.Sprintf(
-			"%s-%s-%s-%s",
+			"%s-%s-%s",
 			prefix,
-			sanitizeSCFFunctionToken(spaceID),
 			firstString(item.GetRegion(), "region"),
 			indexSuffix,
 		),
