@@ -28,7 +28,7 @@ trap 'rm -rf "${TMP_ROOT}"; rm -f "${ROOT}/custom.toml.contract-test"' EXIT
 
 cat >"${FAKE_BIN}/moox-cli" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' '{"hosts":[{"name":"compile","address":"192.0.2.77","port":2222,"username":"builder","role":"compile"}]}'
+printf '%s\n' '{"hosts":[{"name":"storage","address":"192.0.2.88","port":2200,"username":"storage-builder","role":"other"},{"name":"compile","address":"192.0.2.77","port":2222,"username":"builder","role":"compile"}]}'
 EOF
 cat >"${FAKE_BIN}/rsync" <<'EOF'
 #!/usr/bin/env bash
@@ -57,17 +57,18 @@ LOCAL_BIN="${TMP_ROOT}/output" \
 REMOTE_ROOT=/tmp/moox-build-contract \
 GIT_COMMIT=test-sha \
 VERSION=test-version \
+MOOX_STORAGE_BUILD_HOST=storage \
 bash "${SCRIPT}"
 
 grep -Fq -- '--exclude=custom.toml' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '--exclude=bin' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '--exclude=release' "${TMP_ROOT}/rsync.log"
-grep -Fq -- '-p 2222' "${TMP_ROOT}/rsync.log"
-grep -Fq -- '192.0.2.77' "${TMP_ROOT}/rsync.log"
+grep -Fq -- '-p 2200' "${TMP_ROOT}/rsync.log"
+grep -Fq -- '192.0.2.88' "${TMP_ROOT}/rsync.log"
 grep -Fq -- 'StrictHostKeyChecking=yes' "${TMP_ROOT}/rsync.log"
 grep -Fq -- 'UserKnownHostsFile' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '-p' "${TMP_ROOT}/ssh.log"
-grep -Fq -- '2222' "${TMP_ROOT}/ssh.log"
+grep -Fq -- '2200' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'GIT_COMMIT=' "${TMP_ROOT}/ssh.log"
 for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
   test -s "${TMP_ROOT}/output/${binary}"

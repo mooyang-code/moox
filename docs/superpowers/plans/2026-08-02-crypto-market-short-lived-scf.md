@@ -73,7 +73,7 @@ data.space_id 必须与 MOOX_SPACE_ID=crypto_market 相等。Storage target 只�
 
     Binance 工作窗口 = 15s - Storage 5s - completion 500ms - CLS 800ms
     Storage 聚合写入 = 最多 5s
-    EventBus 完成事件 = 最多 500ms
+    EventBus 完成事件 = 最多 2s（首次 TLS 连接也必须能完成）
     CLS 同步提交 = 最多 800ms；错误只记录，不改变 response
 
 CLS 使用同步 SendLogList，一次调用只发送一次。单函数最多 64 个实时 item，远低于 SDK 的 10,000 条/5MB 限制。
@@ -224,7 +224,7 @@ CloudFunctionEvent 收敛为本计划事件契约。删除仅由旧路径使用�
 
 - [ ] **Step 4: 留足 CLS 尾部预算**
 
-    const completionPublishReserve = 500 * time.Millisecond
+    const completionPublishReserve = 2 * time.Second
     const clsFlushReserve = 800 * time.Millisecond
 
     func executionReserves(storage time.Duration) (commit, publish, cls time.Duration) {
@@ -556,4 +556,3 @@ Expected: 不提交或回退无关工作区改动，远端 feature/mooyang 指�
 严格按 Task 1 到 9 推进。CloudNode 和 Monitor Proto 生成必须独占工作区，不可与 Go 测试并发。Task 8 是唯一破坏性阶段，必须在本地单测、zip 内容测试和 CLI validate 均通过后执行。
 
 回退不恢复旧常驻架构：保留上一版短时 zip 的版本号，暂停新规则、修复后重新发布即可。项目尚未上线，不恢复或迁移旧 crypto 数据与 Sentinel 状态。
-

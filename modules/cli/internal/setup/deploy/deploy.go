@@ -492,6 +492,9 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		command.Env = append(os.Environ(),
 			"MOOX_CLI="+executable,
 			"CONFIG="+filepath.Join(root, "custom.toml"),
+			// Storage uses CGO. Build on the selected deployment host so the
+			// resulting binary cannot require a newer libc than that host has.
+			"MOOX_STORAGE_BUILD_HOST="+storageNodeID(opts.NodeID),
 		)
 		if err := command.Run(); err != nil {
 			return "", err

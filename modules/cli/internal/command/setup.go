@@ -560,12 +560,15 @@ func controlGatewayMaterial(ctx context.Context, control setupssh.Client, contro
 	if local {
 		return "http://127.0.0.1:11000", "", "", nil, nil
 	}
-	result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
-for file in "$HOME/moox/prod/secrets/gateway-control.key" "$HOME/moox/prod/secrets/gateway-service.key" "$HOME/moox/prod/data/caddy/caddy/pki/authorities/local/root.crt"; do
-  test -s "$file"
-  base64 -w 0 "$file"
-  printf '\n'
-done`}, nil)
+result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
+control_key="$HOME/moox/prod/secrets/gateway-control.key"
+service_key="$HOME/moox/prod/secrets/gateway-service.key"
+caddy_root="$HOME/moox/prod/data/caddy/caddy/pki/authorities/local/root.crt"
+gateway_peers="$HOME/moox/prod/certs/gateway/peers.pem"
+for file in "$control_key" "$service_key" "$caddy_root" "$gateway_peers"; do test -s "$file"; done
+base64 -w 0 "$control_key"; printf '\n'
+base64 -w 0 "$service_key"; printf '\n'
+cat "$caddy_root" "$gateway_peers" | base64 -w 0; printf '\n'`}, nil)
 	if err != nil {
 		return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
 	}

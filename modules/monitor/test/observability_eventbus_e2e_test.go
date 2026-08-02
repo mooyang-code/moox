@@ -167,11 +167,11 @@ func publishObservabilityMetric(t *testing.T, ctx context.Context, publisher *ev
 func publishObservabilityHealth(t *testing.T, ctx context.Context, publisher *events.Publisher, eventID string) {
 	t.Helper()
 	if _, err := publisher.Publish(ctx, events.ObservabilityHealthCheckReported, &observabilitypb.HealthCheckReport{
-		ObserverId: "scf-sentinel", CheckId: "monitor_ready", Kind: "http",
+		ObserverId: "external-observer", CheckId: "monitor_ready", Kind: "http",
 		Success: true, CheckedAt: timestamppb.Now(),
 	}, events.PublishOptions{
 		EventID: eventID, OccurredAt: time.Now().UTC(),
-		SpaceID: "moox_system", SubjectID: "scf-sentinel/monitor_ready",
+		SpaceID: "moox_system", SubjectID: "external-observer/monitor_ready",
 	}); err != nil {
 		t.Fatal(err)
 	}

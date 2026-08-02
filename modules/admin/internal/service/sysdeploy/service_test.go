@@ -317,20 +317,3 @@ func TestValidateDeployment_AllowsGatewayHTTPPath(t *testing.T) {
 		ExtraConfig: "{}",
 	}))
 }
-
-func TestServiceImpl_GetServiceDeployments_ActiveRows_ShouldReturnMap(t *testing.T) {
-	db := setupSysDeployTestDB(t)
-	svc := NewService(&database.Manager{}, testAdminNodeID)
-	svc.dao = NewDAO(db)
-	require.NoError(t, svc.dao.Create(context.Background(), &Deployment{
-		NodeID:      testAdminNodeID,
-		ServiceName: "svc_map",
-		Host:        "127.0.0.1",
-		Port:        19090,
-		Status:      "active",
-	}))
-
-	payload, err := svc.GetServiceDeployments(context.Background())
-	require.NoError(t, err)
-	assert.Contains(t, payload, "svc_map")
-}

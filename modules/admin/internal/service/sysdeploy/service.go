@@ -19,11 +19,10 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Service 管理系统服务部署信息，并向 cloudnode keepalive 提供 SCF runtime payload。
+// Service 管理系统服务部署信息，并提供网关路由与健康检查所需的部署目录。
 type Service interface {
 	pb.SysDeployService
 	SeedDefaults(ctx context.Context) error
-	GetServiceDeployments(ctx context.Context) (map[string]interface{}, error)
 	ResolveAdminServiceDetail(ctx context.Context, adminNodeID, serviceID string) (gateway.ServiceDetail, bool)
 	CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewayproxy.Snapshot, error)
 	ReportGatewayStatus(ctx context.Context, report GatewayStatusReport) error
@@ -198,34 +197,6 @@ func (s *ServiceImpl) ListActiveServiceDeployments(ctx context.Context, req *pb.
 		return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询 active 服务部署信息失败")}, nil
 	}
 	return &pb.ListActiveServiceDeploymentsRsp{RetInfo: retOK(), Deployments: modelsToPB(rows), DeploymentMap: endpointMap(rows, req.GetNodeId() == "")}, nil
-}
-
-// GetServiceDeployments 返回可直接序列化到 SCF keepalive event 的 active 部署信息。
-func (s *ServiceImpl) GetServiceDeployments(ctx context.Context) (map[string]interface{}, error) {
-	if s.adminNodeID == "" {
-		return nil, fmt.Errorf("admin node id is required")
-	}
-	rows, err := s.dao.ListActive(ctx, s.adminNodeID)
-	if err != nil {
-		return nil, err
-	}
-	payload := make(map[string]interface{}, len(rows))
-	for i := range rows {
-		row := rows[i]
-		payload[row.ServiceName] = map[string]interface{}{
-			"service_name": row.ServiceName,
-			"service_kind": row.ServiceKind,
-			"protocol":     row.Protocol,
-			"host":         row.Host,
-			"port":         row.Port,
-			"base_url":     deploymentBaseURL(&row),
-			"rpc_address":  deploymentRPCAddress(&row),
-			"gateway_path": row.GatewayPath,
-			"scope":        row.Scope,
-			"status":       row.Status,
-		}
-	}
-	return payload, nil
 }
 
 // ResolveAdminServiceDetail resolves browser control-plane forwarding only from

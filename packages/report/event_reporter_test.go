@@ -30,7 +30,7 @@ func TestEventReporterReportsTypedHealthCheck(t *testing.T) {
 	publisher := &fakePublisher{}
 	reporter := &EventReporter{Registry: registry, Publisher: publisher}
 	report := &observabilitypb.HealthCheckReport{
-		ObserverId: "scf-sentinel", CheckId: "collector-ready", Target: "collector",
+		ObserverId: "external-observer", CheckId: "collector-ready", Target: "collector",
 		Kind: "trpc", Success: true, CheckedAt: timestamppb.New(time.Now().UTC()),
 	}
 	if err := reporter.ReportHealth(context.Background(), report, "crypto"); err != nil {
@@ -39,7 +39,7 @@ func TestEventReporterReportsTypedHealthCheck(t *testing.T) {
 	if len(publisher.events) != 1 || publisher.events[0].Name() != events.ObservabilityHealthCheckReported.Name() {
 		t.Fatalf("events = %+v", publisher.events)
 	}
-	if got := publisher.options[0].SubjectID; got != "scf-sentinel/collector-ready" {
+	if got := publisher.options[0].SubjectID; got != "external-observer/collector-ready" {
 		t.Fatalf("subject_id = %q", got)
 	}
 }
@@ -96,7 +96,7 @@ func TestEventReporterConnectsLazily(t *testing.T) {
 		t.Fatal("event reporter connected before the first publish")
 	}
 	err = reporter.ReportHealth(context.Background(), &observabilitypb.HealthCheckReport{
-		ObserverId: "scf-sentinel", CheckId: "monitor-ready", Kind: "http",
+		ObserverId: "external-observer", CheckId: "monitor-ready", Kind: "http",
 		Success: false, CheckedAt: timestamppb.Now(),
 	}, "crypto")
 	if err == nil || connectCalls != 1 {
