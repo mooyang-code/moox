@@ -688,7 +688,8 @@ func sanitizeSCFFunctionToken(value string) string {
 	}
 	var b strings.Builder
 	for _, r := range raw {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+		// Tencent SCF function names permit letters, digits, and hyphens only.
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' {
 			b.WriteRune(r)
 			continue
 		}
