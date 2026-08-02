@@ -501,10 +501,7 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		return err
 	}
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
-		// Storage can run on a separate machine while its public gateway remains
-		// the control plane's single logical gateway node. The route snapshot is
-		// keyed by that logical ID; its upstream host is updated above.
-		RepositoryRoot: root, PublicHost: host.Address, NodeID: snapshot.Manifest.ControlHost.Name, ResetStorageData: resetStorageData,
+		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData,
 		UseControlGateway:     useControlGateway,
 		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
 		EventBusPort:          snapshot.Manifest.EventBus.Port,
