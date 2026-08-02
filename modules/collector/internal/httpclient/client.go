@@ -15,7 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// HTTPClient 通用 HTTP 客户端（支持 DNS 优选 + TLS SNI）
+// HTTPClient 通用 HTTP 客户端（使用标准 DNS + TLS SNI）。
 type HTTPClient struct {
 	httpClient *http.Client
 }
@@ -52,11 +52,9 @@ func NewHTTPClient(base ...*http.Client) *HTTPClient {
 	}
 }
 
-// Get 发送 GET 请求（自动获取最优 IP）
+// Get sends a request through the platform DNS resolver.
 func (c *HTTPClient) Get(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
-	// 尝试获取最优 IP
-	bestIP := GetBestIP(domain)
-	return c.GetWithIP(ctx, domain, path, query, result, bestIP)
+	return c.GetWithIP(ctx, domain, path, query, result, "")
 }
 
 // GetWithIP 发送 GET 请求（使用指定的 IP）

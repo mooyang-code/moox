@@ -3,6 +3,7 @@ package binance
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 
@@ -99,8 +100,14 @@ func domainFromBaseURL(rawURL string) (string, error) {
 	return parsed.Host, nil
 }
 
-// GetWithIP 发送 GET 请求（使用指定的 IP）
-// 这是对 HTTPClient.GetWithIP 的简单封装，方便在重试逻辑中使用
-func (c *Client) GetWithIP(ctx context.Context, domain, path string, query url.Values, result interface{}, specifiedIP string) error {
-	return c.HTTPClient.GetWithIP(ctx, domain, path, query, result, specifiedIP)
+// GetDirect sends Binance requests through the platform DNS resolver. SCF
+// invocations are short-lived, so maintaining a separate DNS/IP probe cache
+// adds cost and can make the first request noisier without improving routing.
+func (c *Client) GetDirect(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
+	return c.HTTPClient.GetWithIP(ctx, domain, path, query, result, "")
+}
+
+// GetDirectStream is the streaming counterpart of GetDirect.
+func (c *Client) GetDirectStream(ctx context.Context, domain, path string, query url.Values, consume func(io.Reader) error) error {
+	return c.HTTPClient.GetWithIPStream(ctx, domain, path, query, "", consume)
 }

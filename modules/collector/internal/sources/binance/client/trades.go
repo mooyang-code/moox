@@ -6,9 +6,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func getRecentTrades(ctx context.Context, client *Client, domain, endpoint, label string, supportsFromID bool, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
@@ -31,19 +29,8 @@ func getRecentTrades(ctx context.Context, client *Client, domain, endpoint, labe
 	}
 
 	var raw []AggregateTrade
-	var triedIPs []string
 	err := retryBinance(ctx, func() error {
-		currentIP := httpclient.GetNextAvailableIP(domain, triedIPs)
-		if currentIP == "" {
-			log.WarnContextf(ctx, "[%s] 无可用DNS优选IP，降级为域名直连, symbol=%s", label, req.Symbol)
-		}
-		if err := client.GetWithIP(ctx, domain, endpoint, params, &raw, currentIP); err != nil {
-			if currentIP != "" {
-				triedIPs = append(triedIPs, currentIP)
-			}
-			return err
-		}
-		return nil
+		return client.GetDirect(ctx, domain, endpoint, params, &raw)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("获取%s最近成交失败: %w", label, err)

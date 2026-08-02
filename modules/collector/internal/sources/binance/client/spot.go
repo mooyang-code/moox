@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -52,32 +51,12 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 		params.Set("endTime", strconv.FormatInt(req.EndTime.UnixMilli(), 10))
 	}
 
-	// 发送请求（带重试，失败时切换IP）
+	// Retry the domain request. Each SCF invocation uses normal DNS directly.
 	var rawKlines []CandleStick
-	var triedIPs []string // 记录已尝试失败的IP列表
 
 	err := retryBinance(ctx,
 		func() error {
-			// 获取下一个可用的IP（排除已失败的IP）
-			currentIP := httpclient.GetNextAvailableIP(domain, triedIPs)
-
-			// DNS proxy 记录可能尚未同步，允许降级为标准域名访问。
-			if currentIP == "" {
-				log.WarnContextf(ctx, "[SpotAPI] 无可用DNS优选IP，降级为域名直连, symbol=%s, interval=%s, 已尝试IP: %v",
-					symbol, req.Interval, triedIPs)
-			}
-
-			// 使用指定IP发送请求
-			err := api.client.GetWithIP(ctx, domain, SpotKlineEndpoint, params, &rawKlines, currentIP)
-			if err != nil {
-				if currentIP != "" {
-					// 请求失败，记录这个IP
-					triedIPs = append(triedIPs, currentIP)
-					log.WarnContextf(ctx, "[SpotAPI] IP %s 请求失败，加入排除列表", currentIP)
-				}
-				return err
-			}
-			return nil
+			return api.client.GetDirect(ctx, domain, SpotKlineEndpoint, params, &rawKlines)
 		},
 	)
 	if err != nil {
@@ -121,17 +100,11 @@ func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values, allow
 	}
 	var symbols []*exchange.SymbolInfo
 	var total int
-	var triedIPs []string
 	domain := api.client.SpotDomain()
 
 	err := retryBinance(ctx,
 		func() error {
-			currentIP := httpclient.GetNextAvailableIP(domain, triedIPs)
-			if currentIP == "" {
-				log.WarnContextf(ctx, "[SpotAPI] 无可用DNS优选IP获取ExchangeInfo，降级为域名直连, 已尝试IP: %v", triedIPs)
-			}
-
-			err := api.client.GetWithIPStream(ctx, domain, SpotExchangeInfoEndpoint, query, currentIP, func(reader io.Reader) error {
+			return api.client.GetDirectStream(ctx, domain, SpotExchangeInfoEndpoint, query, func(reader io.Reader) error {
 				var decodeErr error
 				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
 					if raw.Status != "TRADING" {
@@ -145,14 +118,6 @@ func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values, allow
 				})
 				return decodeErr
 			})
-			if err != nil {
-				if currentIP != "" {
-					triedIPs = append(triedIPs, currentIP)
-					log.WarnContextf(ctx, "[SpotAPI] IP %s 获取ExchangeInfo失败，加入排除列表", currentIP)
-				}
-				return err
-			}
-			return nil
 		},
 	)
 	if err != nil {

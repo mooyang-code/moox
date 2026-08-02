@@ -151,6 +151,27 @@ func TestHTTPClient_Get_ShouldDelegateToGetWithIP(t *testing.T) {
 	assert.Equal(t, "ok", result["status"])
 }
 
+func TestHTTPClient_Get_IgnoresPreferredIPRecords(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	Init()
+	t.Cleanup(Init)
+	updateDNSRecords([]*DNSRecord{{
+		Domain: parsed.Host,
+		IPList: []*IPInfo{{IP: "203.0.113.1", Available: true}},
+	}})
+	client := NewHTTPClient(server.Client())
+	var result map[string]string
+
+	require.NoError(t, client.Get(t.Context(), parsed.Host, parsed.Path, nil, &result))
+	assert.Equal(t, "ok", result["status"])
+}
+
 func TestHTTPClient_Get_ShouldDecodeJSONResponse(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
