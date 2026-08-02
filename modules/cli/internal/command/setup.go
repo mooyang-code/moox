@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -479,6 +480,26 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		return fmt.Errorf("storage_deploy_invalid")
 	}
 	useControlGateway := host.Name == snapshot.Manifest.ControlHost.Name
+	gatewayURL := ""
+	var gatewayControlKey, gatewayServiceKey, gatewayCABundle []byte
+	if !useControlGateway {
+		gatewayURL = fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
+		gatewayControlKey, gatewayServiceKey, gatewayCABundle, err = controlGatewayInputs(ctx, control)
+		if err != nil {
+			return err
+		}
+	}
+	placementHost := host.Address
+	if useControlGateway {
+		placementHost = "127.0.0.1"
+	}
+	// A remote node gateway needs its route snapshot on its first start. Publish
+	// the Storage placement before starting it; the gateway can then fetch a
+	// valid (even if the upstream is not live yet) snapshot instead of failing
+	// closed on a 404.
+	if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, placementHost); err != nil {
+		return err
+	}
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData,
 		UseControlGateway:     useControlGateway,
@@ -490,17 +511,47 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		HealthAuthVersion:     healthVersion,
 		HealthAuthAccessKey:   healthAccessKey,
 		HealthAuthSecretKey:   healthSecret,
+		GatewayControlURL:     gatewayURL,
+		GatewayControlKey:     gatewayControlKey,
+		GatewayServiceKey:     gatewayServiceKey,
+		GatewayCABundle:       gatewayCABundle,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
-	placementHost := host.Address
-	if useControlGateway {
-		placementHost = "127.0.0.1"
-	}
-	if _, err = setupclient.New(control).ApplyStoragePlacement(ctx, placementHost); err != nil {
-		return err
-	}
 	return restartStorageClients(ctx, control)
+}
+
+// controlGatewayInputs transfers only the credentials required to package the
+// selected remote Storage gateway. The values remain in memory and are written
+// to short-lived 0600 files by the packager.
+func controlGatewayInputs(ctx context.Context, control setupssh.Client) ([]byte, []byte, []byte, error) {
+	if control == nil {
+		return nil, nil, nil, fmt.Errorf("storage_gateway_credentials_unavailable")
+	}
+	result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
+for file in \
+  "$HOME/moox/prod/secrets/gateway-control.key" \
+  "$HOME/moox/prod/secrets/gateway-service.key" \
+  "$HOME/moox/prod/certs/gateway/peers.pem"; do
+  test -s "$file"
+  base64 <"$file" | tr -d '\n'
+  printf '\n'
+done`}, nil)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("storage_gateway_credentials_unavailable")
+	}
+	encoded := strings.Fields(result.Stdout)
+	if len(encoded) != 3 {
+		return nil, nil, nil, fmt.Errorf("storage_gateway_credentials_unavailable")
+	}
+	decoded := make([][]byte, len(encoded))
+	for i, value := range encoded {
+		decoded[i], err = base64.StdEncoding.Strict().DecodeString(value)
+		if err != nil || len(decoded[i]) == 0 {
+			return nil, nil, nil, fmt.Errorf("storage_gateway_credentials_unavailable")
+		}
+	}
+	return decoded[0], decoded[1], decoded[2], nil
 }
 
 func controlHealthAuth(ctx context.Context, control setupssh.Client) (string, string, string, error) {

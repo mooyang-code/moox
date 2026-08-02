@@ -266,7 +266,9 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 	if size < 0 || !mode.IsRegular() {
 		return fmt.Errorf("ssh_upload_invalid")
 	}
-	client, err := sftp.NewClient(t.client)
+	// Deployment archives are hundreds of MiB. Default SFTP writes wait for
+	// every 32 KiB acknowledgement, which is painfully slow across regions.
+	client, err := sftp.NewClient(t.client, sftp.UseConcurrentWrites(true), sftp.MaxConcurrentRequestsPerFile(64))
 	if err != nil {
 		return fmt.Errorf("ssh_upload_failed")
 	}

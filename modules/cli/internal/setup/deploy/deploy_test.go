@@ -293,6 +293,30 @@ func TestStorageNodeIDUsesSelectedHostName(t *testing.T) {
 	require.Equal(t, "storage", storageNodeID(""))
 }
 
+func TestStorageGatewayInputsAreEphemeralAndRestricted(t *testing.T) {
+	files, err := writeStorageGatewayInputs(Options{
+		GatewayControlURL: "https://control.example.test:9527",
+		GatewayControlKey: []byte("control-key\n"),
+		GatewayServiceKey: []byte("service-key\n"),
+		GatewayCABundle:   []byte("-----BEGIN CERTIFICATE-----\ncertificate\n-----END CERTIFICATE-----\n"),
+	})
+	require.NoError(t, err)
+	defer os.RemoveAll(filepath.Dir(files.controlKey))
+	require.Equal(t, "control-key\n", string(requireFile(t, files.controlKey)))
+	require.Equal(t, "service-key\n", string(requireFile(t, files.serviceKey)))
+	info, err := os.Stat(files.controlKey)
+	require.NoError(t, err)
+	require.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
+	info, err = os.Stat(files.caBundle)
+	require.NoError(t, err)
+	require.Equal(t, fs.FileMode(0o644), info.Mode().Perm())
+}
+
+func TestStorageGatewayInputsRequireRemoteControlMaterial(t *testing.T) {
+	_, err := writeStorageGatewayInputs(Options{GatewayControlURL: "https://control.example.test:9527"})
+	require.EqualError(t, err, "storage package requires control gateway credentials")
+}
+
 func TestStoragePassesResetStorageDataAsBoundedPositionalFlag(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
 	require.NoError(t, os.WriteFile(archive, []byte("storage-package"), 0o600))
