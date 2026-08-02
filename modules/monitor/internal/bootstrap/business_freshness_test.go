@@ -120,6 +120,40 @@ func TestBusinessFreshnessReporterResolvesDatasetNoLongerExpected(t *testing.T) 
 	}
 }
 
+func TestBusinessFreshnessReporterDoesNotResolveMarketFetchCheck(t *testing.T) {
+	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "")
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	check := &domain.Check{
+		SpaceID: "crypto", CheckID: "market_fetch:binance_symbols:1m",
+		Name: "行情采集 binance_symbols/1m", GroupName: "market_fetch", Kind: domain.CheckKindExternal,
+		Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30,
+	}
+	if err := repositories.Checks.Create(t.Context(), check); err != nil {
+		t.Fatal(err)
+	}
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Checks: repositories.Checks, Results: repositories.Results,
+	}, repositories, nil)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := repositories.Results.Recent(t.Context(), "crypto", check.CheckID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %+v, want no business freshness result", results)
+	}
+}
+
 func TestBusinessFreshnessReporterResolvesReporterForDisabledDeployment(t *testing.T) {
 	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "")
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))

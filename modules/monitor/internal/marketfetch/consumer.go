@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,9 @@ func (s *Store) Observe(spaceID string, payload *marketfetchpb.MarketFetchBatchC
 	if s == nil || payload == nil {
 		return
 	}
+	if isE2EDataset(payload.GetDatasetId()) {
+		return
+	}
 	completed := time.Time{}
 	if payload.GetCompletedAt() != nil && payload.GetCompletedAt().CheckValid() == nil {
 		completed = payload.GetCompletedAt().AsTime().UTC()
@@ -50,6 +54,12 @@ func (s *Store) Observe(spaceID string, payload *marketfetchpb.MarketFetchBatchC
 	s.mu.Lock()
 	s.latest[spaceID+"/"+payload.GetDatasetId()+"/"+payload.GetFrequency()] = Status{SpaceID: spaceID, DatasetID: payload.GetDatasetId(), Frequency: payload.GetFrequency(), BatchID: payload.GetBatchId(), ScheduleID: payload.GetScheduleId(), BatchKind: payload.GetBatchKind(), Region: payload.GetRegion(), NodeID: payload.GetNodeId(), RequestID: payload.GetRequestId(), Status: payload.GetStatus(), SuccessCount: payload.GetSuccessCount(), RetryCount: payload.GetRetryCount(), CompletedAt: completed, ErrorSummary: payload.GetErrorSummary()}
 	s.mu.Unlock()
+}
+
+// isE2EDataset prevents test traffic retained in EventBus from becoming a
+// production freshness check after Monitor restarts.
+func isE2EDataset(datasetID string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(datasetID)), "e2e_")
 }
 
 func (s *Store) Get(spaceID, datasetID, frequency string) (Status, bool) {

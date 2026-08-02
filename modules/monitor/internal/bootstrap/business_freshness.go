@@ -139,6 +139,11 @@ func buildBusinessFreshnessReporter(
 			}
 		}
 		for _, check := range existing {
+			// Market-fetch completion freshness has its own owner and watchdog
+			// below. Do not resolve it as absent from the business inventory.
+			if strings.HasPrefix(check.CheckID, marketFetchCheckPrefix) {
+				continue
+			}
 			key := check.SpaceID + "\x00" + check.CheckID
 			if _, frozen := suppressed[key]; frozen {
 				continue
