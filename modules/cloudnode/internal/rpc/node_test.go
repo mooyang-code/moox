@@ -78,7 +78,7 @@ func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {
 	require.Len(t, fake.created, 1)
 	assert.Equal(t, int64(64), fake.created[0].MemorySize)
 	assert.Equal(t, int64(15), fake.created[0].Timeout)
-	assert.NotContains(t, fake.created[0].Environment, "MOOX_SCF_WATCHDOG_ENABLED")
+	assert.NotContains(t, fake.created[0].Environment, "MOOX_MONITOR_READY_URL")
 }
 
 func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {

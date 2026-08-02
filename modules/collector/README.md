@@ -22,7 +22,7 @@ TaskRule -> Collector Scheduler -> BatchInvocation(planned)
          -> Collector Completion Consumer -> TaskInstance / RetryItem
 ```
 
-SCF 不启动 JetStream 任务消费者、Keepalive 或后台 reporter。未被调用的备用函数没有心跳是
+SCF 不启动 JetStream 任务消费者、驻留循环或后台 reporter。未被调用的备用函数没有在线状态是
 正常状态；Monitor 通过 Storage freshness 和 Completion 快照判断采集是否正常。
 
 ## 规则

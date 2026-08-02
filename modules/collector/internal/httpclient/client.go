@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -15,52 +14,33 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// HTTPClient 通用 HTTP 客户端（使用标准 DNS + TLS SNI）。
-type HTTPClient struct {
-	httpClient *http.Client
-}
+// HTTPClient issues HTTPS requests using the platform DNS resolver and TLS SNI.
+type HTTPClient struct{ httpClient *http.Client }
 
 const defaultRequestTimeout = 5 * time.Second
 
 // StatusError reports a non-success HTTP response.
-type StatusError struct {
-	StatusCode int
-}
+type StatusError struct{ StatusCode int }
 
-func (e *StatusError) Error() string {
-	return fmt.Sprintf("HTTP status %d", e.StatusCode)
-}
+func (e *StatusError) Error() string { return fmt.Sprintf("HTTP status %d", e.StatusCode) }
 
-// NewHTTPClient 创建通用 HTTP 客户端。可选的 base client 供受控集成环境复用
-// 已配置的 Transport，例如本地 TLS 测试服务器。
 func NewHTTPClient(base ...*http.Client) *HTTPClient {
 	if len(base) > 0 && base[0] != nil {
 		return &HTTPClient{httpClient: base[0]}
 	}
-	return &HTTPClient{
-		httpClient: &http.Client{
-			Timeout: defaultRequestTimeout,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					MinVersion: tls.VersionTLS12,
-				},
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
+	return &HTTPClient{httpClient: &http.Client{
+		Timeout: defaultRequestTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
 		},
-	}
+	}}
 }
 
-// Get sends a request through the platform DNS resolver.
 func (c *HTTPClient) Get(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
-	return c.GetWithIP(ctx, domain, path, query, result, "")
-}
-
-// GetWithIP 发送 GET 请求（使用指定的 IP）
-// specifiedIP: 指定使用的 IP 地址，如果为空则使用域名直接访问
-func (c *HTTPClient) GetWithIP(ctx context.Context, domain, path string, query url.Values, result interface{}, specifiedIP string) error {
-	return c.getWithIP(ctx, domain, path, query, specifiedIP, func(reader io.Reader) error {
+	return c.get(ctx, domain, path, query, func(reader io.Reader) error {
 		if result == nil {
 			return nil
 		}
@@ -68,107 +48,38 @@ func (c *HTTPClient) GetWithIP(ctx context.Context, domain, path string, query u
 	})
 }
 
-// GetWithIPStream sends a GET request and lets the caller consume the response
-// body incrementally. It is intended for large JSON snapshots that must stay
-// within a small SCF memory limit.
-func (c *HTTPClient) GetWithIPStream(ctx context.Context, domain, path string, query url.Values, specifiedIP string, consume func(io.Reader) error) error {
+// GetStream lets a caller decode a bounded response without an intermediate copy.
+func (c *HTTPClient) GetStream(ctx context.Context, domain, path string, query url.Values, consume func(io.Reader) error) error {
 	if consume == nil {
 		return fmt.Errorf("response consumer is required")
 	}
-	return c.getWithIP(ctx, domain, path, query, specifiedIP, consume)
+	return c.get(ctx, domain, path, query, consume)
 }
 
-func (c *HTTPClient) getWithIP(ctx context.Context, domain, path string, query url.Values, specifiedIP string, consume func(io.Reader) error) error {
-	// 构建完整 URL（使用域名，保证 TLS SNI 正确）
+func (c *HTTPClient) get(ctx context.Context, domain, path string, query url.Values, consume func(io.Reader) error) error {
 	fullURL := fmt.Sprintf("https://%s%s", domain, path)
 	if len(query) > 0 {
 		fullURL += "?" + query.Encode()
 	}
-
-	// 创建自定义 Dialer（将域名解析到指定 IP）
-	var dialer *net.Dialer
-	if specifiedIP != "" {
-		log.DebugContextf(ctx, "使用指定 IP 访问 %s: %s", domain, specifiedIP)
-		dialer = &net.Dialer{
-			Timeout: 10 * time.Second,
-		}
-
-		// 设置自定义 Transport，将域名解析到指定 IP
-		transport := c.httpClient.Transport.(*http.Transport).Clone()
-		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			// 提取端口号
-			_, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				port = "443" // 默认 HTTPS 端口
-			}
-
-			// 使用指定 IP 进行连接
-			targetAddr := net.JoinHostPort(specifiedIP, port)
-			log.DebugContextf(ctx, "DialContext: 将 %s 解析到 %s", addr, targetAddr)
-			return dialer.DialContext(ctx, network, targetAddr)
-		}
-
-		// 为这次请求创建临时客户端
-		tempClient := &http.Client{
-			Timeout:   c.httpClient.Timeout,
-			Transport: transport,
-		}
-		return c.doRequestStream(ctx, tempClient, fullURL, domain, consume)
-	}
-
-	// 降级：直接使用域名（标准 DNS 解析）
-	log.DebugContextf(ctx, "未找到指定 IP，直接使用域名: %s", domain)
-	return c.doRequestStream(ctx, c.httpClient, fullURL, domain, consume)
-}
-
-// doRequest 执行 HTTP 请求并解析 JSON 响应
-func (c *HTTPClient) doRequest(ctx context.Context, httpClient *http.Client, fullURL, domain string, result interface{}) error {
-	return c.doRequestStream(ctx, httpClient, fullURL, domain, func(reader io.Reader) error {
-		if result == nil {
-			return nil
-		}
-		return json.NewDecoder(reader).Decode(result)
-	})
-}
-
-func (c *HTTPClient) doRequestStream(ctx context.Context, httpClient *http.Client, fullURL, domain string, consume func(io.Reader) error) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
 	}
-
-	// 设置必要的请求头
 	req.Header.Set("User-Agent", "moox-collector/1.0")
-
-	// 发送请求
-	start := time.Now()
-	log.DebugContextf(ctx, "[collector-http] GET start domain=%s timeout=%s", domain, httpClient.Timeout)
-	resp, err := httpClient.Do(req)
+	started := time.Now()
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		log.WarnContextf(ctx, "[collector-http] GET error domain=%s duration=%s error=%v", domain, time.Since(start), err)
+		log.WarnContextf(ctx, "collector_http_failed domain=%s duration_ms=%d error=%q", domain, time.Since(started).Milliseconds(), err)
 		return fmt.Errorf("请求 %s 失败: %w", domain, err)
 	}
 	defer resp.Body.Close()
-	log.DebugContextf(ctx, "[collector-http] GET response domain=%s status=%d duration=%s", domain, resp.StatusCode, time.Since(start))
-
-	// 检查状态码
 	if resp.StatusCode != http.StatusOK {
-		log.WarnContextf(ctx,
-			"collector_http_failed domain=%s status=%d duration_ms=%d job_item_id=%q",
-			domain, resp.StatusCode, time.Since(start).Milliseconds(), jobcontext.JobItemID(ctx),
-		)
+		log.WarnContextf(ctx, "collector_http_failed domain=%s status=%d duration_ms=%d job_item_id=%q", domain, resp.StatusCode, time.Since(started).Milliseconds(), jobcontext.JobItemID(ctx))
 		return &StatusError{StatusCode: resp.StatusCode}
 	}
-	log.InfoContextf(ctx,
-		"collector_http_completed domain=%s status=%d duration_ms=%d job_item_id=%q",
-		domain, resp.StatusCode, time.Since(start).Milliseconds(), jobcontext.JobItemID(ctx),
-	)
-
-	if consume != nil {
-		if err := consume(resp.Body); err != nil {
-			return fmt.Errorf("JSON 解析失败: %w", err)
-		}
+	if err := consume(resp.Body); err != nil {
+		return fmt.Errorf("JSON 解析失败: %w", err)
 	}
-
+	log.InfoContextf(ctx, "collector_http_completed domain=%s status=%d duration_ms=%d job_item_id=%q", domain, resp.StatusCode, time.Since(started).Milliseconds(), jobcontext.JobItemID(ctx))
 	return nil
 }

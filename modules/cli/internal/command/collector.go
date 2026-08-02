@@ -486,6 +486,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if fetcherConfig != nil {
 		opts.FetcherConfig = fetcherConfig
 		opts.collectorPackageOptions.SpaceID = fetcherConfig.SpaceID
+		opts.collectorPackageOptions.Entrypoint = fetcherConfig.Entrypoint
 		opts.collectorPackageOptions.PackageConfigDir = fetcherConfig.PackageConfigDir
 		opts.Namespace = defaultFlag(fetcherConfig.Namespace, opts.Namespace)
 		opts.Runtime = defaultFlag(fetcherConfig.Runtime, opts.Runtime)
@@ -1227,7 +1228,6 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 		Metadata: map[string]any{
 			"function_name_prefix":  packageName,
 			"biz_type":              bizType,
-			"supported_workloads":   []string{},
 			"memory_size":           effectiveInt("memory_size", defaultInt(fetcher.MemorySize, 64)),
 			"timeout_seconds":       effectiveInt("timeout", defaultInt(fetcher.TimeoutSeconds, 15)),
 			"max_inflight_requests": effectiveInt("max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 5)),

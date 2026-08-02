@@ -62,8 +62,10 @@ for module in "${modules[@]}"; do
 	require_text "${main}" 'packages/healthz/trpcrecovery' "missing sanitized recovery registration for ${module}"
 	require_text "${modfile}" 'trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0' "missing prometheus dependency for ${module}"
 	require_text "${main}" 'trpc.group/trpc-go/trpc-metrics-prometheus' "missing prometheus registration for ${module}"
-	require_text "${modfile}" 'trpc.group/trpc-go/trpc-log-cls v1.0.0' "missing CLS dependency for ${module}"
-	require_text "${main}" 'trpc.group/trpc-go/trpc-log-cls' "missing CLS registration for ${module}"
+	if [[ "${module}" != collector ]]; then
+		require_text "${modfile}" 'trpc.group/trpc-go/trpc-log-cls v1.0.0' "missing CLS dependency for ${module}"
+		require_text "${main}" 'trpc.group/trpc-go/trpc-log-cls' "missing CLS registration for ${module}"
+	fi
 	if [[ "${module}" == archive ]]; then
 		require_text "modules/archive/internal/bootstrap/app.go" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
 		require_text "modules/archive/internal/bootstrap/app.go" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"

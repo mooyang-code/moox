@@ -1,4 +1,4 @@
-# Binance source configuration used only by the crypto-space SCF fleet.
+# Binance source configuration used only by the crypto_market SCF fleet.
 app:
   id: "binance"
   name: "币安交易所"

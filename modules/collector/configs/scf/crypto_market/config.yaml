@@ -18,4 +18,4 @@ sources:
   market:
     - name: "binance"
       enabled: true
-      config: "configs/sources/market/binance.yaml"
+      config: "sources/market/binance.yaml"

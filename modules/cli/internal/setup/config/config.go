@@ -342,13 +342,13 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if cfg.FunctionPrefix == "" {
 		cfg.FunctionPrefix = "moox-fetcher-" + cfg.SpaceID
 	}
-	if !strings.Contains(cfg.FunctionPrefix, cfg.SpaceID) {
+	if !includesSpaceIdentity(cfg.FunctionPrefix, cfg.SpaceID) {
 		return fmt.Errorf("config_invalid: %s.function_prefix must include space_id", path)
 	}
 	if cfg.PackageName == "" {
 		cfg.PackageName = "moox-collector-" + cfg.SpaceID
 	}
-	if !strings.Contains(cfg.PackageName, cfg.SpaceID) {
+	if !includesSpaceIdentity(cfg.PackageName, cfg.SpaceID) {
 		return fmt.Errorf("config_invalid: %s.package_name must include space_id", path)
 	}
 	cfg.CLSCloudAccountID = strings.TrimSpace(cfg.CLSCloudAccountID)
@@ -467,6 +467,10 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		}
 	}
 	return nil
+}
+
+func includesSpaceIdentity(value, spaceID string) bool {
+	return strings.Contains(value, spaceID) || strings.Contains(value, strings.ReplaceAll(spaceID, "_", "-"))
 }
 
 // supportedSCFRegion keeps an operator typo from creating a partial fleet.

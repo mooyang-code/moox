@@ -11,9 +11,9 @@ Storage、Factor、View 和数据导入测试使用。
 | --- | --- | --- | --- | --- | ---: |
 | `stock_cn/stock_kline_1d.csv` | `stock_cn/stock_kline` | `1d` | 100 只股票 | 2026-07-02 至 2026-07-16 | 1,100 |
 | `stock_cn/stock_kline_1h.csv` | `stock_cn/stock_kline` | `1h` | 100 只股票 | 2026-07-16 完整交易日 | 400 |
-| `crypto/binance_spot_kline_1h.csv` | `crypto/spot_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
-| `crypto/binance_perpetual_kline_1h.csv` | `crypto/perpetual_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
-| `crypto/okx_spot_kline_1h.csv` | `crypto/spot_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
+| `crypto_market/binance_spot_kline_1h.csv` | `crypto_market/spot_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
+| `crypto_market/binance_perpetual_kline_1h.csv` | `crypto_market/perpetual_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
+| `crypto_market/okx_spot_kline_1h.csv` | `crypto_market/spot_kline_1h` | `1h` | 10 个交易对 | 2026-07-15 完整自然日 | 240 |
 
 A 股样本按市场分层抽取：沪市主板 25 只、深市主板 25 只、创业板 20 只、
 科创板 20 只、北交所 10 只。入选标的均具备连续 11 个日线交易日，小时样本包含

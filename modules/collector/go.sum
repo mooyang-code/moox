@@ -1,7 +1,5 @@
 github.com/BurntSushi/toml v1.3.2 h1:o7IhLm0Msx3BaB+n3Ag7L8EVlByGnpq14C4YWiu/gL8=
 github.com/BurntSushi/toml v1.3.2/go.mod h1:CxXYINrC8qIiEnFrOxCa7Jy5BFHlXnUU2pbicEuybxQ=
-github.com/agiledragon/gomonkey/v2 v2.10.1 h1:FPJJNykD1957cZlGhr9X0zjr291/lbazoZ/dmc4mS4c=
-github.com/agiledragon/gomonkey/v2 v2.10.1/go.mod h1:ap1AmDzcVOAz1YpeJ3TCzIgstoaWLA6jbbgxfB4w2iY=
 github.com/andybalholm/brotli v1.2.0 h1:ukwgCxwYrmACq68yiUqwIWnGY0cTPox/M94sVwToPjQ=
 github.com/andybalholm/brotli v1.2.0/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op h1:Z/MZK75wC/NSrkgqeNIa7jexam9uWzhLmFTSCPI/kn0=
@@ -262,8 +260,6 @@ trpc.group/trpc-go/trpc-filter/validation v1.0.1 h1:vSRewf8yQ2lXiXwZ0F0+w2Yk3NNy
 trpc.group/trpc-go/trpc-filter/validation v1.0.1/go.mod h1:NsZw4I7fvVnJSXVB86shTT0p1XqcbCqAdFicMyG+sxQ=
 trpc.group/trpc-go/trpc-go v1.0.4 h1:DaTTeaSf5Ah/dtQ8nAKKV2zaO7b7EB6qWLNWlMwLSsc=
 trpc.group/trpc-go/trpc-go v1.0.4/go.mod h1:lZOyo/G6nv2eBEPeDmbEfRhQDCOB65WsTqKqsgC2paA=
-trpc.group/trpc-go/trpc-log-cls v1.0.0 h1:zJ7NnE7khFmxN+jxkZkJd5qTUj4ERJ+2DJXAWyP/akc=
-trpc.group/trpc-go/trpc-log-cls v1.0.0/go.mod h1:ws/wxx51jkd1CClG6+n82rZvRWxczmzbve3tapK61D0=
 trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0 h1:KOWoPoowE/pNDgFQKidfgU7t+avhLmCDMD6nwgG1Y+g=
 trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0/go.mod h1:rGmXHWtX8+Spt7fNxlPwG00DCWVlgBDsIX8yv7oFOFo=
 trpc.group/trpc-go/trpc-metrics-runtime v1.0.0 h1:KHrlvzlzaGP4F2hcUQrtaeq3hM9cHyz2q1wXQmUnlII=

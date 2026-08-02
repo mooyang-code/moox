@@ -20,8 +20,7 @@ import (
 
 const spaceID = "crypto_market"
 
-// Handler accepts only bounded crypto market actions. It intentionally has no
-// keepalive, service-discovery, timer, or resident worker responsibility.
+// Handler accepts only bounded crypto market actions and has no resident work.
 type Handler struct {
 	NewMarketFetch func() *marketfetch.Handler
 	NewReporter    func() (clsreporter.Reporter, time.Duration, error)
@@ -68,6 +67,16 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		reporter = clsreporter.Noop()
 		timeout = 0
 	}
+	functionName := strings.TrimSpace(os.Getenv("MOOX_SCF_FUNCTION_NAME"))
+	region := ""
+	if function != nil {
+		functionName = firstNonEmpty(function.FunctionName, functionName)
+		region = function.TencentcloudRegion
+	}
+	reporter = staticFieldsReporter{Reporter: reporter, Fields: map[string]string{
+		"function_name": functionName,
+		"region":        region,
+	}}
 	defer func() {
 		if timeout <= 0 {
 			return
@@ -93,4 +102,34 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 
 func failure(code, message string) *model.Response {
 	return &model.Response{Success: false, Message: code + ": " + message, Timestamp: time.Now().UTC()}
+}
+
+type staticFieldsReporter struct {
+	clsreporter.Reporter
+	Fields map[string]string
+}
+
+func (r staticFieldsReporter) Report(entry clsreporter.Entry) {
+	fields := make(map[string]string, len(r.Fields)+len(entry.Fields))
+	for key, value := range r.Fields {
+		if value != "" {
+			fields[key] = value
+		}
+	}
+	for key, value := range entry.Fields {
+		if value != "" || fields[key] == "" {
+			fields[key] = value
+		}
+	}
+	entry.Fields = fields
+	r.Reporter.Report(entry)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }

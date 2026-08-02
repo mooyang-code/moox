@@ -12,7 +12,6 @@ type AppConfig struct {
 	System   *SystemConfig   `json:"system" yaml:"system"`       // 系统配置
 	EventBus *EventBusConfig `json:"event_bus" yaml:"event_bus"` // 事件总线配置
 	Sources  *SourcesConfig  `json:"sources" yaml:"sources"`     // 数据源配置
-	DNSProxy *DNSProxyConfig `json:"dnsproxy" yaml:"dnsproxy"`   // DNS 代理配置
 }
 
 // SystemConfig 系统配置
@@ -153,30 +152,4 @@ func loadConfigFile(cfg *AppConfig) error {
 		return err
 	}
 	return yaml.Unmarshal(data, cfg)
-}
-
-// DNSProxyConfig DNS 代理配置
-type DNSProxyConfig struct {
-	ProbeConfigs     []ProbeConfig `json:"probe_configs" yaml:"probe_configs"`         // 探测配置列表
-	DNSServers       []string      `json:"dns_servers" yaml:"dns_servers"`             // DNS 服务器列表，如 ["8.8.8.8", "1.1.1.1", "localhost"]
-	DNSTimeout       int           `json:"dns_timeout" yaml:"dns_timeout"`             // DNS 解析超时时间（秒），默认 5
-	ConcurrentLimit  int           `json:"concurrent_limit" yaml:"concurrent_limit"`   // 并发解析域名数，默认 10
-	ScheduledDomains []string      `json:"scheduled_domains" yaml:"scheduled_domains"` // 需要定时解析的域名列表
-}
-
-// ProbeConfig 探测配置
-type ProbeConfig struct {
-	Domain    string          `json:"domain" yaml:"domain"`         // 域名
-	ProbeType string          `json:"probe_type" yaml:"probe_type"` // 探测类型: https | tcp
-	ProbeAPI  *ProbeAPIConfig `json:"probe_api" yaml:"probe_api"`   // HTTPS 探测配置
-	TCPPort   int             `json:"tcp_port" yaml:"tcp_port"`     // TCP 探测端口，默认 443
-	Timeout   int             `json:"timeout" yaml:"timeout"`       // 超时时间（秒），默认 2
-}
-
-// ProbeAPIConfig HTTPS 探测 API 配置
-type ProbeAPIConfig struct {
-	Path           string `json:"path" yaml:"path"`                       // API 路径
-	Method         string `json:"method" yaml:"method"`                   // HTTP 方法
-	Timeout        int    `json:"timeout" yaml:"timeout"`                 // 超时时间（秒）
-	ExpectedStatus int    `json:"expected_status" yaml:"expected_status"` // 期望的 HTTP 状态码
 }

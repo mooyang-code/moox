@@ -8,7 +8,7 @@
 | `dataset-health-policy.yaml` | Monitor | 实时 Dataset 健康阈值 |
 | `service-deployments.yaml` | Admin 部署导入 | 默认服务和 RPC 端点 |
 
-`metadata.yaml` 的业务 Space 只有 `stock_cn` 和 `crypto`。`moox_system` 带
+`metadata.yaml` 的业务 Space 只有 `stock_cn` 和 `crypto_market`。`moox_system` 带
 `attributes.scope: internal`，只进入 Storage，不显示在管理台业务空间选择器中。
 
 初始化可重复执行。已有资源与声明一致时报告 unchanged；契约不一致时失败，不覆盖已有

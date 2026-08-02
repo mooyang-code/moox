@@ -102,7 +102,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	registerMarketFetchSchedule(s, cfg, deps, dbm, marketFetchMetrics)
 	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 	if spaceID == "" {
-		spaceID = "crypto"
+		spaceID = "crypto_market"
 	}
 	if err := marketfetch.StartCompletionConsumer(ctx, spaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), marketFetchMetrics); err != nil {
 		log.WarnContextf(ctx, "collector market fetch completion consumer disabled: %v", err)
@@ -216,7 +216,7 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
 		spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 		if spaceID == "" {
-			spaceID = "crypto"
+			spaceID = "crypto_market"
 		}
 		if err := scheduler.Tick(ctx, spaceID); err != nil {
 			log.WarnContextf(ctx, "collector market fetch tick failed space=%s: %v", spaceID, err)

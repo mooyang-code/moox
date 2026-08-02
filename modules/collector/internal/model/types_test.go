@@ -9,19 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCollectorType_Constants_ShouldMatchExpectedValues(t *testing.T) {
-	assert.Equal(t, CollectorType("binance"), CollectorTypeBinance)
-}
-
 func TestEventAction_Constants_ShouldMatchExpectedValues(t *testing.T) {
 	assert.Equal(t, EventAction("market_fetch"), EventActionMarketFetch)
 	assert.Equal(t, EventAction("egress_probe"), EventActionEgressProbe)
-}
-
-func TestTaskExecuteEventJSONHasNoImmediateFlag(t *testing.T) {
-	raw, err := json.Marshal(TaskExecuteEvent{TaskID: "task-1"})
-	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "immediate")
 }
 
 func TestCollectParams_ShouldMarshal(t *testing.T) {

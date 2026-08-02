@@ -64,20 +64,8 @@ func notificationBody(event Event, reportIP string) string {
 	if action != "" {
 		lines = append(lines, "建议处理："+action)
 	}
-	if strings.HasPrefix(event.Check.CheckID, "external:scf_sentinel:") {
-		if nodeID := safeNotificationValue(event.Result.InstanceID, 256); nodeID != "" {
-			lines = append(lines, "SCF 节点："+nodeID)
-		}
-		if diagnostic := strings.TrimSpace(event.Result.BodyExcerpt); diagnostic != "" {
-			lines = append(lines, "诊断信息："+diagnostic)
-		}
-		if resultID := strings.TrimSpace(event.Result.ResultID); resultID != "" {
-			lines = append(lines, "诊断编号："+resultID)
-		}
-	} else {
-		if reportIP = safeNotificationValue(reportIP, 128); reportIP != "" {
-			lines = append(lines, "上报 IP："+reportIP)
-		}
+	if reportIP = safeNotificationValue(reportIP, 128); reportIP != "" {
+		lines = append(lines, "上报 IP："+reportIP)
 	}
 	lines = append(lines,
 		"检查对象："+firstText(event.Check.Name, event.Check.CheckID),

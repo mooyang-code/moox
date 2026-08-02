@@ -110,10 +110,11 @@ password = "password"
 enabled = true
 
 [[scf_fetcher.spaces]]
-space_id = "crypto"
-package_config_dir = "scf/crypto"
-package_name = "moox-collector-crypto"
-function_prefix = "moox-fetcher-crypto"
+space_id = "crypto_market"
+entrypoint = "crypto_market"
+package_config_dir = "scf/crypto_market"
+package_name = "moox-collector-crypto-market"
+function_prefix = "moox-fetcher-crypto-market"
 memory_size = 64
 timeout_seconds = 15
 realtime_batch_size = 10
@@ -151,12 +152,13 @@ cloud_account_id = "tencent-scf-guangzhou"
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-	crypto, err := loadCollectorSCFFetcherConfig(path, "crypto")
+	cryptoMarket, err := loadCollectorSCFFetcherConfig(path, "crypto_market")
 	require.NoError(t, err)
-	require.NotNil(t, crypto)
-	assert.Equal(t, "crypto", crypto.SpaceID)
-	assert.Equal(t, "scf/crypto", crypto.PackageConfigDir)
-	assert.Equal(t, "ap-singapore", crypto.Regions[0].Region)
+	require.NotNil(t, cryptoMarket)
+	assert.Equal(t, "crypto_market", cryptoMarket.SpaceID)
+	assert.Equal(t, "crypto_market", cryptoMarket.Entrypoint)
+	assert.Equal(t, "scf/crypto_market", cryptoMarket.PackageConfigDir)
+	assert.Equal(t, "ap-singapore", cryptoMarket.Regions[0].Region)
 
 	_, err = loadCollectorSCFFetcherConfig(path, "stock_us")
 	require.ErrorContains(t, err, `no configuration for space "stock_us"`)
@@ -320,8 +322,8 @@ func (collectorCLSAPI) CreateIndex(context.Context, string) (string, error) {
 	panic("unexpected CreateIndex")
 }
 
-func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
-	t.Setenv("MOOX_CLS_HOST", "ap-guangzhou.cls.tencentyun.com")
+func TestBuildCollectorCreateNodeItemUsesManagedShortLivedConfiguration(t *testing.T) {
+	t.Setenv("MOOX_CLS_ENDPOINT", "ap-guangzhou.cls.tencentyun.com")
 	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
 	t.Setenv("MOOX_CLS_SECRET_KEY", "cls-key")
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
@@ -371,13 +373,7 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Metadata["biz_type"] != "market_fetcher" {
 		t.Fatalf("biz_type = %#v", item.Metadata["biz_type"])
 	}
-	workloads, ok := item.Metadata["supported_workloads"].([]string)
-	if !ok {
-		t.Fatalf("supported_workloads type = %T", item.Metadata["supported_workloads"])
-	}
-	if len(workloads) != 0 {
-		t.Fatalf("supported_workloads = %#v", workloads)
-	}
+	assert.NotContains(t, item.Metadata, "supported_workloads")
 	assert.NotContains(t, item.Environment, "MOOX_COLLECTOR_JOB_TYPES")
 }
 
