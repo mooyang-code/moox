@@ -342,7 +342,7 @@ packageCollectorFunction/buildCollectorLinuxBinary 和脚本接收 entrypoint，
 collectorFunctionEnvironment 固定注入：
 
     MOOX_CLS_ENABLED=true
-    MOOX_CLS_ENDPOINT=<clsprepare.Host>
+    MOOX_CLS_ENDPOINT=<resolved public ingest endpoint>
     MOOX_CLS_LOGSET_ID=<resolved logset>
     MOOX_CLS_TOPIC_ID=<resolved topic>
     MOOX_CLS_TIMEOUT_MS=3000
