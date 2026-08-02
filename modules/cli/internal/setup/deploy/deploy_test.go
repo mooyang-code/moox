@@ -19,6 +19,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCommandFailureIncludesBoundedCommandOutput(t *testing.T) {
+	err := commandFailure("control_install_failed", setupssh.Result{Stderr: "remote install failed\nwith details"})
+	require.ErrorContains(t, err, "control_install_failed: remote install failed with details")
+
+	err = commandFailure("control_install_failed", setupssh.Result{})
+	require.EqualError(t, err, "control_install_failed")
+}
+
 func TestControlOrdersSafeDeployment(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
