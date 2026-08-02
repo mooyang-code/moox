@@ -16,10 +16,15 @@ func TestStartProductionRuntimeRequiresSpaceID(t *testing.T) {
 func TestStartProductionRuntimeBlocksInCloudFunctionStart(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	t.Chdir(t.TempDir())
+	oldInitialize := initializeSCFTRPC
+	t.Cleanup(func() { initializeSCFTRPC = oldInitialize })
+	initialized := false
+	initializeSCFTRPC = func() { initialized = true }
 	oldRegister := registerCloudFunction
 	t.Cleanup(func() { registerCloudFunction = oldRegister })
 	called := false
 	registerCloudFunction = func() { called = true }
 	require.NoError(t, startProductionRuntime(context.Background(), runtimeapp.DefaultConfig()))
+	require.True(t, initialized)
 	require.True(t, called)
 }

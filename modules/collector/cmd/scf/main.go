@@ -15,6 +15,7 @@ import (
 var Version string
 
 var registerCloudFunction = serverless.RegisterCloudFunction
+var initializeSCFTRPC = func() { _ = trpc.NewServer() }
 
 func main() {
 	cfg := runtimeapp.DefaultConfig()
@@ -33,6 +34,10 @@ func startProductionRuntime(_ context.Context, cfg *runtimeapp.AppConfig) error 
 	if strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")) == "" {
 		return fmt.Errorf("MOOX_SPACE_ID is required")
 	}
+	// cloudfunction.Start does not initialize tRPC's config/plugins. Do that
+	// explicitly so the packaged CLS-only logger replaces the console writer
+	// before any handler emits a log line.
+	initializeSCFTRPC()
 	if _, err := runtimeapp.LoadConfigs(cfg); err != nil {
 		return err
 	}
