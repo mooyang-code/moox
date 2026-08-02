@@ -11,16 +11,12 @@ export interface CloudNode {
   ip_address: string;
   package_id?: string;
   package_version?: string;
-  running_version?: string;
-  supported_workloads: string[] | string;
   metadata: string | Record<string, unknown>;
   status: string | number;
   timeout_threshold: number;
-  heartbeat_interval: number;
   probe_enabled: boolean;
   probe_url?: string;
   cls_topic_id?: string;
-  last_heartbeat?: string;
   create_time?: string;
   modify_time?: string;
 }
@@ -42,18 +38,6 @@ export interface BatchPlanItem {
   planCount: number;
 }
 
-export function normalizeSupportedWorkloads(value: string[] | string | undefined): string[] {
-  if (!value) return [];
-  if (Array.isArray(value)) return [...value];
-  if (value === "[]") return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? [...parsed] : [];
-  } catch {
-    return [];
-  }
-}
-
 export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode[] {
   return items.map(item => ({
     node_id: String(item.node_id || ""),
@@ -65,16 +49,12 @@ export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode
     ip_address: String(item.ip_address || ""),
     package_id: String(item.package_id || ""),
     package_version: String(item.package_version || ""),
-    running_version: String(item.running_version || ""),
-    supported_workloads: normalizeSupportedWorkloads(item.supported_workloads as string[] | string | undefined),
     metadata: (item.metadata as string | Record<string, unknown>) || "",
     status: (item.status as string | number) || "NODE_STATUS_OFFLINE",
     timeout_threshold: Number(item.timeout_threshold || 0),
-    heartbeat_interval: Number(item.heartbeat_interval || 0),
     probe_enabled: Boolean(item.probe_enabled ?? false),
     probe_url: String(item.probe_url || ""),
     cls_topic_id: String(item.cls_topic_id || ""),
-    last_heartbeat: String(item.last_heartbeat || ""),
     create_time: String(item.create_time || ""),
     modify_time: String(item.modify_time || "")
   }));

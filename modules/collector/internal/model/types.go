@@ -53,51 +53,15 @@ type NodeMetrics struct {
 	Timestamp   time.Time `json:"timestamp"`
 }
 
-// HeartbeatPayload 心跳上报数据
-type HeartbeatPayload struct {
-	SpaceID             string                 `json:"space_id"`
-	NodeID              string                 `json:"node_id"`
-	NodeType            string                 `json:"node_type"`
-	RunningVersion      string                 `json:"running_version"`
-	Timestamp           time.Time              `json:"timestamp"`
-	RunningTasks        []*TaskSummary         `json:"running_tasks"`
-	Metrics             *NodeMetrics           `json:"metrics"`
-	Metadata            map[string]interface{} `json:"metadata,omitempty"`
-	SupportedCollectors []string               `json:"supported_collectors,omitempty"` // 支持的采集器数据类型
-	LocalDNSRecords     []*LocalDNSReportItem  `json:"local_dns_records,omitempty"`    // 本地解析的 DNS 记录
-}
-
-// LocalDNSReportItem 本地 DNS 解析结果（用于上报）
-type LocalDNSReportItem struct {
-	Domain    string    `json:"domain"`     // 域名
-	IPList    []string  `json:"ip_list"`    // 可用的 IP 列表（按延迟排序）
-	ResolveAt time.Time `json:"resolve_at"` // 解析时间
-}
-
 // CloudFunctionEvent 云函数事件
 type CloudFunctionEvent struct {
-	Action                  EventAction                  `json:"action,omitempty"`
-	Data                    map[string]interface{}       `json:"data,omitempty"`
-	Timestamp               string                       `json:"timestamp"` // 使用时间格式字符串（支持时区）
-	RequestID               string                       `json:"request_id,omitempty"`
-	Source                  string                       `json:"source,omitempty"`                 // 探测来源标识
-	ServiceGatewayTarget    string                       `json:"service_gateway_target,omitempty"` // /api/service gateway target
-	StorageRPCGatewayTarget string                       `json:"storage_rpc_gateway_target,omitempty"`
-	ServiceDeployments      map[string]ServiceDeployment `json:"service_deployments,omitempty"` // 控制面下发的 active 服务部署信息
-}
-
-// ServiceDeployment 是控制面 keepalive 下发给 SCF runtime 的服务部署信息。
-type ServiceDeployment struct {
-	ServiceName string `json:"service_name,omitempty"`
-	ServiceKind string `json:"service_kind,omitempty"`
-	Protocol    string `json:"protocol,omitempty"`
-	Host        string `json:"host,omitempty"`
-	Port        int    `json:"port,omitempty"`
-	BaseURL     string `json:"base_url,omitempty"`
-	RPCAddress  string `json:"rpc_address,omitempty"`
-	GatewayPath string `json:"gateway_path,omitempty"`
-	Scope       string `json:"scope,omitempty"`
-	Status      string `json:"status,omitempty"`
+	Action                  EventAction            `json:"action,omitempty"`
+	Data                    map[string]interface{} `json:"data,omitempty"`
+	Timestamp               string                 `json:"timestamp"` // 使用时间格式字符串（支持时区）
+	RequestID               string                 `json:"request_id,omitempty"`
+	Source                  string                 `json:"source,omitempty"`                 // 探测来源标识
+	ServiceGatewayTarget    string                 `json:"service_gateway_target,omitempty"` // /api/service gateway target
+	StorageRPCGatewayTarget string                 `json:"storage_rpc_gateway_target,omitempty"`
 }
 
 // TaskExecuteEvent 任务立即执行事件（服务端触发）

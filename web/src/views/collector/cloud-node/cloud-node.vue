@@ -145,11 +145,6 @@
                   {{ getRegionName(record.region) }}
                 </template>
               </a-table-column>
-              <a-table-column title="最后心跳时间" data-index="last_heartbeat" :width="170">
-                <template #cell="{ record }">
-                  {{ formatDateTime(record.last_heartbeat) }}
-                </template>
-              </a-table-column>
               <a-table-column title="CLS 主题 ID" data-index="cls_topic_id" :width="180" :ellipsis="true" :tooltip="true">
                 <template #cell="{ record }">
                   {{ record.cls_topic_id || "-" }}
@@ -160,21 +155,6 @@
                   <a-tag v-if="record.tag" size="small" :color="record.tag === '国内' ? 'blue' : 'orange'">
                     {{ record.tag }}
                   </a-tag>
-                  <span v-else>-</span>
-                </template>
-              </a-table-column>
-              <a-table-column title="支持的工作负载" data-index="supported_workloads" :width="150">
-                <template #cell="{ record }">
-                  <div v-if="getSupportedWorkloads(record.supported_workloads).length > 0" class="node-workloads">
-                    <a-tag
-                      v-for="(workload, index) in getSupportedWorkloads(record.supported_workloads)"
-                      :key="index"
-                      size="small"
-                      :color="getCollectorColor(workload)"
-                    >
-                      {{ getCollectorName(workload) }}
-                    </a-tag>
-                  </div>
                   <span v-else>-</span>
                 </template>
               </a-table-column>
@@ -326,19 +306,6 @@
           />
           <template #help>
             <div style="font-size: 12px; color: #86909c">设置为0时将使用全局默认值（通常为30秒）</div>
-          </template>
-        </a-form-item>
-
-        <a-form-item field="heartbeatInterval" label="心跳间隔（秒）">
-          <a-input-number
-            v-model="batchAddForm.heartbeatInterval"
-            :min="0"
-            :max="300"
-            placeholder="0表示使用全局默认值"
-            style="width: 100%"
-          />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">设置为0时将使用全局默认值（通常为10秒）</div>
           </template>
         </a-form-item>
 
@@ -563,10 +530,6 @@
             {{ selectedNodeDetail.timeout_threshold || 0 }}秒
             <span v-if="selectedNodeDetail.timeout_threshold === 0" style="color: #86909c">（使用全局默认值）</span>
           </a-descriptions-item>
-          <a-descriptions-item label="心跳间隔">
-            {{ selectedNodeDetail.heartbeat_interval || 0 }}秒
-            <span v-if="selectedNodeDetail.heartbeat_interval === 0" style="color: #86909c">（使用全局默认值）</span>
-          </a-descriptions-item>
           <a-descriptions-item label="启用探测">
             <a-tag bordered size="small" :color="selectedNodeDetail.probe_enabled ? 'green' : 'red'">
               {{ selectedNodeDetail.probe_enabled ? "是" : "否" }}
@@ -715,19 +678,6 @@
           </template>
         </a-form-item>
 
-        <a-form-item field="heartbeatInterval" label="心跳间隔（秒）">
-          <a-input-number
-            v-model="editNodeForm.heartbeatInterval"
-            :min="0"
-            :max="300"
-            placeholder="0表示使用全局默认值"
-            style="width: 100%"
-          />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">设置为0时将使用全局默认值（通常为10秒）</div>
-          </template>
-        </a-form-item>
-
         <a-form-item field="probeEnabled" label="启用探测">
           <a-switch v-model="editNodeForm.probeEnabled" />
           <template #help>
@@ -786,7 +736,6 @@ import {
   getStatusColor,
   getStatusText,
   normalizeCloudNodes,
-  normalizeSupportedWorkloads,
   type BatchPlanItem,
   type CloudNode,
   type RegionInfo
@@ -831,9 +780,7 @@ const batchAddForm = reactive({
   packageId: "", // 代码包版本ID
   nodeCount: 5,
   namespace: "",
-  // 新增心跳配置字段
-  timeoutThreshold: 0, // 超时阈值（秒），0表示使用全局默认值
-  heartbeatInterval: 0, // 心跳间隔（秒），0表示使用全局默认值
+	 timeoutThreshold: 0, // 超时阈值（秒），0表示使用全局默认值
   probeEnabled: true, // 是否启用探测，默认启用
   config: {} as Record<string, string>,
   environment: {} as Record<string, string>
@@ -1083,7 +1030,6 @@ const onBatchAdd = async () => {
   batchAddForm.nodeCount = 5;
   batchAddForm.namespace = "";
   batchAddForm.timeoutThreshold = 0;
-  batchAddForm.heartbeatInterval = 0;
   batchAddForm.probeEnabled = true;
 
   // 加载可用的代码包列表
@@ -1163,9 +1109,7 @@ const buildCreateNodeBatchChange = (region: string, index: number) => ({
     config: optionalRecord(batchAddForm.config),
     environment: optionalRecord(batchAddForm.environment),
     metadata: JSON.stringify({ env: "prod", index }),
-    // 新增心跳配置字段
-    timeout_threshold: batchAddForm.timeoutThreshold,
-    heartbeat_interval: batchAddForm.heartbeatInterval,
+	 timeout_threshold: batchAddForm.timeoutThreshold,
     probe_enabled: batchAddForm.probeEnabled
   }
 });
@@ -1551,8 +1495,6 @@ watch(
   }
 );
 
-const getSupportedWorkloads = (value: string[] | string | undefined): string[] => normalizeSupportedWorkloads(value);
-
 // 分页相关（使用后端分页）
 const onPageChange = (page: number) => {
   pagination.value.current = page;
@@ -1642,7 +1584,6 @@ const editNodeForm = reactive({
   namespace: "",
   region: "",
   timeoutThreshold: 0,
-  heartbeatInterval: 0,
   probeEnabled: true
 });
 
@@ -1843,7 +1784,6 @@ const onEdit = (record: CloudNode) => {
   editNodeForm.namespace = record.namespace;
   editNodeForm.region = getRegionName(record.region);
   editNodeForm.timeoutThreshold = record.timeout_threshold || 0;
-  editNodeForm.heartbeatInterval = record.heartbeat_interval || 0;
   editNodeForm.probeEnabled = record.probe_enabled;
 
   // 打开弹窗
@@ -1858,7 +1798,6 @@ const handleEditNodeCancel = () => {
   editNodeForm.namespace = "";
   editNodeForm.region = "";
   editNodeForm.timeoutThreshold = 0;
-  editNodeForm.heartbeatInterval = 0;
   editNodeForm.probeEnabled = true;
 };
 
@@ -1868,11 +1807,9 @@ const handleEditNodeOk = async () => {
     await updateNode({
       node_id: editNodeForm.nodeId,
       timeout_threshold: editNodeForm.timeoutThreshold,
-      heartbeat_interval: editNodeForm.heartbeatInterval,
       probe_enabled: editNodeForm.probeEnabled,
       metadata: {
         timeout_threshold: editNodeForm.timeoutThreshold,
-        heartbeat_interval: editNodeForm.heartbeatInterval,
         probe_enabled: editNodeForm.probeEnabled
       }
     });

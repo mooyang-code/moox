@@ -42,7 +42,6 @@ export async function submitCloudNodeBatchChange(batchChanges: CloudNodeBatchCha
           tag: params.tag,
           function_name_prefix: functionNamePrefix,
           timeout_threshold: params.timeout_threshold,
-          heartbeat_interval: params.heartbeat_interval,
           probe_enabled: params.probe_enabled,
           index
         }
