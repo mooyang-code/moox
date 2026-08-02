@@ -32,7 +32,7 @@ func buildMonitorMarketCanary(
 		return nil, fmt.Errorf("monitor market canary credentials: %w", err)
 	}
 	reader := storagepb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(
-		gatewayauth.ServiceGatewayTarget(cfg.Metrics.Storage.GatewayTarget),
+		cfg.Metrics.Storage.GatewayTarget,
 		firstNonEmptyString(cfg.Metrics.Storage.GatewayNodeID, gatewayauth.ServiceGatewayNodeID()),
 		credentials,
 	)...)

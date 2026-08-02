@@ -121,6 +121,24 @@ func TestMonitorGatewayAuthEnvironment(t *testing.T) {
 	}
 }
 
+func TestMonitorStorageGatewayEnvironmentOverridesMetricsOnly(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_NODE_ID", "control")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://10.0.0.8:11003")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "compute-1")
+	cfg := Default()
+	cfg.applyEnv()
+
+	if cfg.SysDeploy.ServiceAuth.TargetNode != "control" {
+		t.Fatalf("sysdeploy target = %q, want control", cfg.SysDeploy.ServiceAuth.TargetNode)
+	}
+	if cfg.Metrics.Storage.GatewayTarget != "ip://10.0.0.8:11003" || cfg.Metrics.HostStorage.GatewayTarget != "ip://10.0.0.8:11003" {
+		t.Fatalf("storage targets = %q, %q", cfg.Metrics.Storage.GatewayTarget, cfg.Metrics.HostStorage.GatewayTarget)
+	}
+	if cfg.Metrics.Storage.GatewayNodeID != "compute-1" || cfg.Metrics.HostStorage.GatewayNodeID != "compute-1" {
+		t.Fatalf("storage nodes = %q, %q", cfg.Metrics.Storage.GatewayNodeID, cfg.Metrics.HostStorage.GatewayNodeID)
+	}
+}
+
 func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 	t.Setenv("MOOX_HEALTH_AUTH_VERSION", "moox-health-v1")
 	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")

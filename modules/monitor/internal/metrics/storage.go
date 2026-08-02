@@ -43,7 +43,9 @@ func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconf
 	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}}
 }
 func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	target := gatewayauth.ServiceGatewayTarget(cfg.GatewayTarget)
+	// Monitor's Storage target is a dedicated dependency setting. Do not let the
+	// process-local gateway default redirect it back to the control node.
+	target := cfg.GatewayTarget
 	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
 	if err != nil {
 		return NewStorageAdapter(nil, nil, cfg)

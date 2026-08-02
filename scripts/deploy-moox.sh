@@ -1725,7 +1725,7 @@ start_admin() {
   local storage_gateway_target="ip://127.0.0.1:11003"
   local storage_gateway_node_id="${MOOX_ADMIN_NODE_ID}"
   if [[ -f "${ROOT}/collector/config/app.yaml" ]]; then
-    storage_gateway_target="$(awk -F: '/^[[:space:]]*gateway_target:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
+    storage_gateway_target="$(awk '/^[[:space:]]*gateway_target:/ {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]\"]/, ""); print; exit}' "${ROOT}/collector/config/app.yaml")"
     storage_gateway_node_id="$(awk -F: '/^[[:space:]]*gateway_node_id:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
     storage_gateway_target="${storage_gateway_target:-ip://127.0.0.1:11003}"
     storage_gateway_node_id="${storage_gateway_node_id:-${MOOX_ADMIN_NODE_ID}}"
@@ -1839,9 +1839,15 @@ start_monitor() {
   init_monitor_schema
   gateway_service_env_for monitor
   runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"
+  local storage_gateway_target storage_gateway_node_id
+  storage_gateway_target="$(awk '/^[[:space:]]*gateway_target:/ {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]\"]/, ""); print; exit}' "${ROOT}/collector/config/app.yaml")"
+  storage_gateway_node_id="$(awk -F: '/^[[:space:]]*gateway_node_id:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
+  storage_gateway_target="${storage_gateway_target:-ip://127.0.0.1:11003}"
+  storage_gateway_node_id="${storage_gateway_node_id:-${MOOX_GATEWAY_NODE_ID}}"
   start_service "monitor" "${ROOT}/monitor" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
+      "MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${storage_gateway_target}" "MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${storage_gateway_node_id}" \
       "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
 
