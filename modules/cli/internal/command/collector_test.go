@@ -41,7 +41,8 @@ func setCollectorCLSTestCredentials(t *testing.T) {
 func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
 	t.Helper()
 	setCollectorCLSTestCredentials(t)
-	t.Setenv("MOOX_CLS_HOST", "ap-guangzhou.cls.tencentyun.com")
+	t.Setenv("MOOX_CLS_ENDPOINT", "ap-guangzhou.cls.tencentyun.com")
+	t.Setenv("MOOX_CLS_TOPIC_ID", "topic-test")
 	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-e2e")
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "collector-secret")
@@ -360,7 +361,8 @@ func TestBuildCollectorCreateNodeItemIncludesCollectorWorkloads(t *testing.T) {
 	if item.Environment["MOOX_GATEWAY_SERVICE_KEY_ID"] != "collector" || item.Environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] != "collector-secret" {
 		t.Fatalf("service auth env = %#v", item.Environment)
 	}
-	assert.Equal(t, "ap-guangzhou.cls.tencentyun.com", item.Environment["MOOX_CLS_HOST"])
+	assert.Equal(t, "ap-guangzhou.cls.tencentyun.com", item.Environment["MOOX_CLS_ENDPOINT"])
+	assert.Equal(t, "topic-unified", item.Environment["MOOX_CLS_TOPIC_ID"])
 	assert.Equal(t, "cls-id", item.Environment["MOOX_CLS_SECRET_ID"])
 	assert.Equal(t, "cls-key", item.Environment["MOOX_CLS_SECRET_KEY"])
 	if item.Metadata["function_name_prefix"] != "moox-collector" {
@@ -412,7 +414,8 @@ func TestBuildCollectorFleetCreateItemsAreUniqueAndDeepCloned(t *testing.T) {
 
 func TestBuildCollectorFleetCreateItemsRequiresCompleteRuntimeEnvironment(t *testing.T) {
 	setCollectorCLSTestCredentials(t)
-	t.Setenv("MOOX_CLS_HOST", "ap-guangzhou.cls.tencentyun.com")
+	t.Setenv("MOOX_CLS_ENDPOINT", "ap-guangzhou.cls.tencentyun.com")
+	t.Setenv("MOOX_CLS_TOPIC_ID", "topic-test")
 	_, err := buildCollectorFleetCreateItems(collectorPublishOptions{
 		SpaceID:   "crypto",
 		NodeCount: 50,

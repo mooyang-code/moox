@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,7 +27,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -686,45 +684,25 @@ func ensureCollectorSpaceCloudAccounts(
 	return nil
 }
 
-func validateCollectorZipLogging(zipPath, topicID string) error {
+func validateCollectorZipLogging(zipPath, _ string) error {
 	archive, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("open SCF zip: %w", err)
 	}
 	defer archive.Close()
-	var trpcFile *zip.File
+	mainFound, configFound := false, false
 	for _, file := range archive.File {
-		if file.Name != "trpc_go.yaml" {
-			continue
+		switch file.Name {
+		case "main":
+			mainFound = true
+		case "config.yaml":
+			configFound = true
+		case "trpc_go.yaml", "example_trpc_go.yaml":
+			return fmt.Errorf("SCF zip must not contain %s", file.Name)
 		}
-		if trpcFile != nil {
-			return fmt.Errorf("SCF zip must contain exactly one trpc_go.yaml")
-		}
-		trpcFile = file
 	}
-	if trpcFile == nil {
-		return fmt.Errorf("SCF zip must contain trpc_go.yaml with centralized CLS logging")
-	}
-	reader, err := trpcFile.Open()
-	if err != nil {
-		return fmt.Errorf("open SCF trpc_go.yaml: %w", err)
-	}
-	defer reader.Close()
-	var document map[string]any
-	decoder := yaml.NewDecoder(io.LimitReader(reader, 1<<20))
-	if err := decoder.Decode(&document); err != nil {
-		return fmt.Errorf("parse SCF trpc_go.yaml: %w", err)
-	}
-	plugins, _ := document["plugins"].(map[string]any)
-	logs, _ := plugins["log"].(map[string]any)
-	writers, _ := logs["default"].([]any)
-	if len(writers) != 1 {
-		return fmt.Errorf("SCF trpc_go.yaml must contain exactly one centralized CLS writer")
-	}
-	writer, _ := writers[0].(map[string]any)
-	remote, _ := writer["remote_config"].(map[string]any)
-	if writer["writer"] != "cls" || writer["level"] != "info" || strings.TrimSpace(fmt.Sprint(remote["topic_id"])) != strings.TrimSpace(topicID) {
-		return fmt.Errorf("SCF trpc_go.yaml must use the resolved centralized CLS info writer")
+	if !mainFound || !configFound {
+		return fmt.Errorf("SCF zip must contain main and config.yaml")
 	}
 	return nil
 }
@@ -1298,7 +1276,10 @@ func validateCollectorFleetRuntimeEnvironment(environment map[string]string) err
 		"MOOX_GATEWAY_SERVICE_SECRET_KEY",
 		"MOOX_GATEWAY_CA_PEM_B64",
 		"MOOX_SERVICE_GATEWAY_CA_PEM_B64",
-		"MOOX_CLS_HOST",
+		"MOOX_CLS_ENABLED",
+		"MOOX_CLS_ENDPOINT",
+		"MOOX_CLS_TOPIC_ID",
+		"MOOX_CLS_TIMEOUT_MS",
 		"MOOX_CLS_SECRET_ID",
 		"MOOX_CLS_SECRET_KEY",
 	}
@@ -1446,7 +1427,10 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_KEY_ID", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID"))
 	setDefaultEnv(env, "MOOX_GATEWAY_SERVICE_SECRET_KEY", os.Getenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY"))
 	defaultCLSSecretID, defaultCLSSecretKey := collectorCLSCredentials()
-	setDefaultEnv(env, "MOOX_CLS_HOST", firstNonEmpty(opts.CLSHost, os.Getenv("MOOX_CLS_HOST"), clsprepare.Host))
+	setDefaultEnv(env, "MOOX_CLS_ENABLED", "true")
+	setDefaultEnv(env, "MOOX_CLS_ENDPOINT", firstNonEmpty(opts.CLSHost, os.Getenv("MOOX_CLS_ENDPOINT"), clsprepare.Host))
+	setDefaultEnv(env, "MOOX_CLS_TOPIC_ID", firstNonEmpty(opts.CLSTopicID, os.Getenv("MOOX_CLS_TOPIC_ID")))
+	setDefaultEnv(env, "MOOX_CLS_TIMEOUT_MS", "800")
 	setDefaultEnv(env, "MOOX_CLS_SECRET_ID", firstNonEmpty(opts.CLSSecretID, defaultCLSSecretID))
 	setDefaultEnv(env, "MOOX_CLS_SECRET_KEY", firstNonEmpty(opts.CLSSecretKey, defaultCLSSecretKey))
 	// The native Storage gateway verifies the caller together with the key ID.
@@ -1480,7 +1464,10 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_FETCH_MAX_RETRY_ATTEMPTS":     {},
 		"MOOX_CLS_SECRET_ID":                {},
 		"MOOX_CLS_SECRET_KEY":               {},
-		"MOOX_CLS_HOST":                     {},
+		"MOOX_CLS_ENABLED":                  {},
+		"MOOX_CLS_ENDPOINT":                 {},
+		"MOOX_CLS_TOPIC_ID":                 {},
+		"MOOX_CLS_TIMEOUT_MS":               {},
 		"TENCENTCLOUD_SECRET_ID":            {},
 		"TENCENTCLOUD_SECRET_KEY":           {},
 		"TENCENT_SECRET_ID":                 {},
