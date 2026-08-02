@@ -462,7 +462,7 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 		log.InfoContextf(ctx, "market_fetch_kline_success batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=realtime elapsed_ms=%d success=true rows=%d latest=%s", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, len(rows), latest.UTC().Format(time.RFC3339Nano))
 		return successResult(item), rows, nil, nil
 	case "symbol", "symbols":
-		requestCtx, cancel := requestContext(ctx)
+		requestCtx, cancel := symbolRequestContext(ctx, len(item.Allowlist) == 0)
 		defer cancel()
 		rows, symbols, _, err := e.Symbols.FetchSymbolSnapshot(requestCtx, params, item.Allowlist)
 		if err != nil {
@@ -497,11 +497,25 @@ func isSymbolItem(dataType string) bool {
 }
 
 func requestContext(parent context.Context) (context.Context, context.CancelFunc) {
-	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv("MOOX_FETCH_REQUEST_TIMEOUT_MS")))
-	if err != nil || value <= 0 {
-		value = 2000
+	return context.WithTimeout(parent, requestTimeout("MOOX_FETCH_REQUEST_TIMEOUT_MS", 2000))
+}
+
+// symbolRequestContext gives the complete ExchangeInfo response its own
+// bounded timeout. The normal 2-second K-line timeout is too short to read
+// Binance's full active-symbol catalogue from an overseas SCF.
+func symbolRequestContext(parent context.Context, fullSnapshot bool) (context.Context, context.CancelFunc) {
+	if fullSnapshot {
+		return context.WithTimeout(parent, requestTimeout("MOOX_FETCH_SYMBOL_SNAPSHOT_TIMEOUT_MS", 5000))
 	}
-	return context.WithTimeout(parent, time.Duration(value)*time.Millisecond)
+	return requestContext(parent)
+}
+
+func requestTimeout(name string, fallback int) time.Duration {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil || value <= 0 {
+		value = fallback
+	}
+	return time.Duration(value) * time.Millisecond
 }
 
 func successResult(item domain.CollectionItem) domain.ItemResult {

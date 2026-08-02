@@ -158,6 +158,16 @@ func TestRequestRejectsOversizedRealtimeAndAcceptsSymbolSnapshotWithoutSubject(t
 	}
 }
 
+func TestSymbolSnapshotTimeoutUsesDedicatedFullSnapshotSetting(t *testing.T) {
+	t.Setenv("MOOX_FETCH_REQUEST_TIMEOUT_MS", "2000")
+	t.Setenv("MOOX_FETCH_SYMBOL_SNAPSHOT_TIMEOUT_MS", "")
+	assert.Equal(t, 2*time.Second, requestTimeout("MOOX_FETCH_REQUEST_TIMEOUT_MS", 2000))
+	assert.Equal(t, 5*time.Second, requestTimeout("MOOX_FETCH_SYMBOL_SNAPSHOT_TIMEOUT_MS", 5000))
+
+	t.Setenv("MOOX_FETCH_SYMBOL_SNAPSHOT_TIMEOUT_MS", "4500")
+	assert.Equal(t, 4500*time.Millisecond, requestTimeout("MOOX_FETCH_SYMBOL_SNAPSHOT_TIMEOUT_MS", 5000))
+}
+
 func TestHandlerRejectsRequestForAnotherSpaceBeforeStorage(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	handler := NewHandler()
