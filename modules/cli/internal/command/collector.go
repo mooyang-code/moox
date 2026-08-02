@@ -1,10 +1,12 @@
 package command
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -26,6 +28,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -448,11 +451,6 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.ControlURL == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--control-url is required")
 	}
-	if strings.TrimSpace(opts.ZipPath) != "" {
-		// An external archive could omit or redirect the centralized CLS writer.
-		// Build from the audited package path for every fleet publication.
-		return collectorPublishSummary{}, fmt.Errorf("--zip is not supported by collector function publish; build the audited SCF package from source")
-	}
 	if opts.CloudAccountID == "" && strings.TrimSpace(opts.File) == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--cloud-account-id is required")
 	}
@@ -533,6 +531,8 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			return collectorPublishSummary{}, err
 		}
 		zipPath = result.Path
+	} else if err := validateCollectorZipLogging(zipPath, opts.CLSTopicID); err != nil {
+		return collectorPublishSummary{}, err
 	}
 	if fetcherConfig == nil || !fetcherConfig.Enabled {
 		if _, err := buildCollectorFleetCreateItems(opts, "preflight-package-id"); err != nil {
@@ -626,6 +626,49 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	summary.TotalCount = fleetSummary.TotalCount
 	summary.Regions = append(summary.Regions, collectorPublishRegionSummary{Region: opts.Region, CloudAccountID: opts.CloudAccountID, PackageID: packageID, CLSLogsetID: opts.CLSLogsetID, CLSTopicID: opts.CLSTopicID, JobID: fleetSummary.JobID, TotalCount: fleetSummary.TotalCount})
 	return summary, nil
+}
+
+func validateCollectorZipLogging(zipPath, topicID string) error {
+	archive, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("open SCF zip: %w", err)
+	}
+	defer archive.Close()
+	var trpcFile *zip.File
+	for _, file := range archive.File {
+		if file.Name != "trpc_go.yaml" {
+			continue
+		}
+		if trpcFile != nil {
+			return fmt.Errorf("SCF zip must contain exactly one trpc_go.yaml")
+		}
+		trpcFile = file
+	}
+	if trpcFile == nil {
+		return fmt.Errorf("SCF zip must contain trpc_go.yaml with centralized CLS logging")
+	}
+	reader, err := trpcFile.Open()
+	if err != nil {
+		return fmt.Errorf("open SCF trpc_go.yaml: %w", err)
+	}
+	defer reader.Close()
+	var document map[string]any
+	decoder := yaml.NewDecoder(io.LimitReader(reader, 1<<20))
+	if err := decoder.Decode(&document); err != nil {
+		return fmt.Errorf("parse SCF trpc_go.yaml: %w", err)
+	}
+	plugins, _ := document["plugins"].(map[string]any)
+	logs, _ := plugins["log"].(map[string]any)
+	writers, _ := logs["default"].([]any)
+	if len(writers) != 1 {
+		return fmt.Errorf("SCF trpc_go.yaml must contain exactly one centralized CLS writer")
+	}
+	writer, _ := writers[0].(map[string]any)
+	remote, _ := writer["remote_config"].(map[string]any)
+	if writer["writer"] != "cls" || writer["level"] != "warn" || strings.TrimSpace(fmt.Sprint(remote["topic_id"])) != strings.TrimSpace(topicID) {
+		return fmt.Errorf("SCF trpc_go.yaml must use the resolved centralized CLS warn writer")
+	}
+	return nil
 }
 
 func loadCollectorSCFFetcherConfig(path string) (*setupconfig.SCFFetcher, error) {
