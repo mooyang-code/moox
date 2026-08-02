@@ -1659,7 +1659,7 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if storageTimeoutMS != 5000 {
 		return fmt.Errorf("market_fetcher storage_timeout_ms is fixed at 5000")
 	}
-	if requestWaves*requestTimeoutMS+storageTimeoutMS+setupconfig.SCFCompletionReserveMilliseconds+setupconfig.SCFCLSReserveMilliseconds >= 15_000 {
+	if requestWaves*requestTimeoutMS+storageTimeoutMS+setupconfig.SCFCompletionReserveMilliseconds+setupconfig.SCFCLSReserveMilliseconds+setupconfig.SCFFinalResponseReserveMilliseconds >= 15_000 {
 		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + publish and CLS reserves must be less than the 15-second timeout")
 	}
 	return nil

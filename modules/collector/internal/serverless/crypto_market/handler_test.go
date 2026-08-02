@@ -60,6 +60,23 @@ func TestHandlerSkipsReporterFlushAfterInvocationCancellation(t *testing.T) {
 	assert.False(t, reporter.flushed)
 }
 
+func TestHandlerKeepsFinalResponseReserveBeforeReporterFlush(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", spaceID)
+	reporter := &recordingReporter{}
+	handler := &Handler{NewReporter: func() (clsreporter.Reporter, time.Duration, error) {
+		return reporter, 3 * time.Second, nil
+	}}
+	raw, err := json.Marshal(model.CloudFunctionEvent{Action: "unsupported", RequestID: "request-1"})
+	require.NoError(t, err)
+	parent, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	ctx := functioncontext.NewContext(parent, &functioncontext.FunctionContext{FunctionName: "crypto-fetcher", TencentcloudRegion: "ap-singapore"})
+	response, err := handler.HandleRequest(ctx, raw)
+	require.NoError(t, err)
+	assert.False(t, response.(*model.Response).Success)
+	assert.False(t, reporter.flushed)
+}
+
 func TestStaticFieldsReporterPreservesInvocationIdentity(t *testing.T) {
 	recorder := &recordingReporter{}
 	reporter := staticFieldsReporter{Reporter: recorder, Fields: map[string]string{"function_name": "crypto-fetcher", "region": "ap-singapore"}}

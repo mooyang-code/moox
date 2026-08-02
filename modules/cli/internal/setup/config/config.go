@@ -24,6 +24,9 @@ const (
 	// SCFCompletionReserveMilliseconds leaves enough time for the durable
 	// completion event after Storage has accepted the aggregate write.
 	SCFCompletionReserveMilliseconds = 3000
+	// SCFFinalResponseReserveMilliseconds keeps the SCF runtime enough time to
+	// serialize and return its response after best-effort CLS logging.
+	SCFFinalResponseReserveMilliseconds = 500
 )
 
 type Admin struct {
@@ -411,7 +414,7 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false", path)
 	}
 	requestWaves := (cfg.RealtimeBatchSize + cfg.MaxInflightRequests - 1) / cfg.MaxInflightRequests
-	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + SCFCompletionReserveMilliseconds + SCFCLSReserveMilliseconds
+	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + SCFCompletionReserveMilliseconds + SCFCLSReserveMilliseconds + SCFFinalResponseReserveMilliseconds
 	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
 		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + publish and CLS reserves must be less than timeout", path)
 	}

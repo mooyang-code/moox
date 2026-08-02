@@ -71,10 +71,10 @@ data.space_id 必须与 MOOX_SPACE_ID=crypto_market 相等。Storage target 只�
 
 ### 时间预算
 
-    Binance 工作窗口 = 15s - Storage 5s - completion 3s - CLS 3s
+    Binance 工作窗口 = 15s - Storage 5s - completion 3s - CLS 3s - response 500ms
     Storage 聚合写入 = 最多 5s
     EventBus 完成事件 = 最多 3s（首次 TLS 连接也必须能完成）
-    CLS 同步提交 = 最多 3s；跨地域 CLS 首次连接超时只记录，不改变 response
+    CLS 同步提交 = 最多 3s，且必须留下 500ms response reserve；跨地域 CLS 首次连接超时只记录，不改变 response
 
 CLS 使用同步 SendLogList，一次调用只发送一次。单函数最多 64 个实时 item，远低于 SDK 的 10,000 条/5MB 限制。
 

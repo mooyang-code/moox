@@ -20,6 +20,8 @@ import (
 
 const spaceID = "crypto_market"
 
+const finalResponseReserve = 500 * time.Millisecond
+
 // Handler accepts only bounded crypto market actions and has no resident work.
 type Handler struct {
 	NewMarketFetch func() *marketfetch.Handler
@@ -81,8 +83,17 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		if timeout <= 0 || ctx.Err() != nil {
 			return
 		}
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline) - finalResponseReserve
+			if remaining <= 0 {
+				return
+			}
+			if remaining < timeout {
+				timeout = remaining
+			}
+		}
 		// The SCF context carries the platform deadline. Do not turn a best-effort
-		// log flush into work that runs beyond the invocation's remaining budget.
+		// log flush into work that consumes the final response budget.
 		flushCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		if flushErr := reporter.Flush(flushCtx); flushErr != nil {
