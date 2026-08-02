@@ -23,6 +23,17 @@ func retryStorage(ctx context.Context, operation func() error) error {
 	if single, _ := ctx.Value(singleAttemptContextKey{}).(bool); single {
 		attempts = 1
 	}
+	return retryStorageAttempts(ctx, attempts, operation)
+}
+
+// retryMetadataStorage keeps metadata registrations retryable even when the
+// enclosing SCF uses one-shot writes. Registration is idempotent, and a
+// dropped response must not discard an otherwise complete Symbol snapshot.
+func retryMetadataStorage(ctx context.Context, operation func() error) error {
+	return retryStorageAttempts(ctx, outboundAttempts, operation)
+}
+
+func retryStorageAttempts(ctx context.Context, attempts int, operation func() error) error {
 	return retry.Do(
 		operation,
 		retry.Attempts(uint(attempts)),

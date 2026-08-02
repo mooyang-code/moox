@@ -132,7 +132,7 @@ func (w *storageWriter) LatestTimeSeriesTime(ctx context.Context, selector *stor
 
 func (w *storageWriter) RegisterDataSubject(ctx context.Context, req *storagepb.RegisterDataSubjectReq) error {
 	req.AuthInfo = w.authInfo
-	return retryStorage(ctx, func() error {
+	return retryMetadataStorage(ctx, func() error {
 		rsp, err := w.metadata.RegisterDataSubject(ctx, req)
 		if err != nil {
 			return fmt.Errorf("register data subject: %w", err)
