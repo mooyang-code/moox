@@ -16,7 +16,7 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 			Enabled: true,
 			Spaces: []SCFFetcherSpace{{
 				SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
-				MaxInflightRequests: 16, RequestTimeoutMS: 1500,
+				MaxInflightRequests: 32, RequestTimeoutMS: 1500,
 				HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
 				Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
 			}},
@@ -69,8 +69,8 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 	t.Run("reserves the CLS flush window", func(t *testing.T) {
 		cfg := base()
 		cfg.Spaces[0].RealtimeBatchSize = 64
-		cfg.Spaces[0].MaxInflightRequests = 16
-		cfg.Spaces[0].RequestTimeoutMS = 2300
+		cfg.Spaces[0].MaxInflightRequests = 32
+		cfg.Spaces[0].RequestTimeoutMS = 2600
 		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
 		err := validateSCFFetcher(&cfg)
 		require.Error(t, err)

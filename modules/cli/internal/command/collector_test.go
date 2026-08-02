@@ -38,6 +38,11 @@ func setCollectorCLSTestCredentials(t *testing.T) {
 	}
 }
 
+func TestSCFCLSIngestHostUsesPublicEndpoint(t *testing.T) {
+	assert.Equal(t, "ap-guangzhou.cls.tencentcs.com", scfCLSIngestHost("ap-guangzhou.cls.tencentyun.com"))
+	assert.Equal(t, "custom.example.test", scfCLSIngestHost("custom.example.test"))
+}
+
 func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
 	t.Helper()
 	setCollectorCLSTestCredentials(t)
@@ -753,8 +758,8 @@ func TestBuildCollectorCreateNodeItemReservesCLSFlushWindow(t *testing.T) {
 		Region:         "ap-guangzhou",
 		Config: []string{
 			"realtime_batch_size=64",
-			"max_inflight_requests=16",
-			"request_timeout_ms=2300",
+			"max_inflight_requests=32",
+			"request_timeout_ms=2600",
 		},
 	}, "moox-collector_dev")
 	require.ErrorContains(t, err, "CLS reserves")

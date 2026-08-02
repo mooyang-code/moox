@@ -20,7 +20,10 @@ const (
 	maxFileSize  = 1 << 20
 	// SCFCLSReserveMilliseconds is injected into every short-lived market SCF.
 	// Keep setup validation aligned with the runtime's CLS flush reservation.
-	SCFCLSReserveMilliseconds = 800
+	SCFCLSReserveMilliseconds = 3000
+	// SCFCompletionReserveMilliseconds leaves enough time for the durable
+	// completion event after Storage has accepted the aggregate write.
+	SCFCompletionReserveMilliseconds = 2000
 )
 
 type Admin struct {
@@ -408,7 +411,7 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false", path)
 	}
 	requestWaves := (cfg.RealtimeBatchSize + cfg.MaxInflightRequests - 1) / cfg.MaxInflightRequests
-	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + 500 + SCFCLSReserveMilliseconds
+	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + SCFCompletionReserveMilliseconds + SCFCLSReserveMilliseconds
 	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
 		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + publish and CLS reserves must be less than timeout", path)
 	}

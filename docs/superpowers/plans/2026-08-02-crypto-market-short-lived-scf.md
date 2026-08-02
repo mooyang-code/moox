@@ -64,17 +64,17 @@ data.space_id 必须与 MOOX_SPACE_ID=crypto_market 相等。Storage target 只�
 | MOOX_CLS_ENDPOINT | 启用时 | CLS API 上传域名。 |
 | MOOX_CLS_TOPIC_ID | 启用时 | 集中 Topic ID。 |
 | MOOX_CLS_SECRET_ID / MOOX_CLS_SECRET_KEY | 启用时 | 发布 CLI 注入，永不写入 zip。 |
-| MOOX_CLS_TIMEOUT_MS | 否 | 默认 800，范围 100..1000。 |
+| MOOX_CLS_TIMEOUT_MS | 否 | 默认 3000，范围 100..3000。 |
 | MOOX_CLS_SOURCE | 否 | 空时由 Handler 使用函数名。 |
 
 所有记录附加 space_id、function_name、region、request_id、batch_id、event_type=market_fetch_item；标的记录至少有 symbol、dataset_id、frequency、elapsed_ms、success、rows、error_kind、error_message。
 
 ### 时间预算
 
-    Binance 工作窗口 = 15s - Storage 5s - completion 500ms - CLS 800ms
+    Binance 工作窗口 = 15s - Storage 5s - completion 2s - CLS 3s
     Storage 聚合写入 = 最多 5s
     EventBus 完成事件 = 最多 2s（首次 TLS 连接也必须能完成）
-    CLS 同步提交 = 最多 800ms；错误只记录，不改变 response
+    CLS 同步提交 = 最多 3s；跨地域 CLS 首次连接超时只记录，不改变 response
 
 CLS 使用同步 SendLogList，一次调用只发送一次。单函数最多 64 个实时 item，远低于 SDK 的 10,000 条/5MB 限制。
 
@@ -225,7 +225,7 @@ CloudFunctionEvent 收敛为本计划事件契约。删除仅由旧路径使用�
 - [ ] **Step 4: 留足 CLS 尾部预算**
 
     const completionPublishReserve = 2 * time.Second
-    const clsFlushReserve = 800 * time.Millisecond
+    const clsFlushReserve = 3 * time.Second
 
     func executionReserves(storage time.Duration) (commit, publish, cls time.Duration) {
         return storage + completionPublishReserve + clsFlushReserve,
@@ -484,7 +484,7 @@ Expected: PASS；页面不存在心跳字段。
     memory_size = 64
     timeout_seconds = 15
     storage_timeout_ms = 5000
-    max_inflight_requests = 16
+    max_inflight_requests = 32
 
 保留 ap-singapore 五个、ap-tokyo 五个；每个地域使用独立 Cloud Account/COS 包。
 

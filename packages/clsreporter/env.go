@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	defaultTimeout = 800 * time.Millisecond
+	defaultTimeout = 3 * time.Second
 	minTimeout     = 100 * time.Millisecond
-	maxTimeout     = time.Second
+	maxTimeout     = 3 * time.Second
 )
 
 // Config contains all connection data needed to submit a CLS batch. It is

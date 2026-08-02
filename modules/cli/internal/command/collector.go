@@ -547,7 +547,10 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.CLSSecretID == "" || opts.CLSSecretKey == "" {
 		return collectorPublishSummary{}, fmt.Errorf("MOOX_CLS_SECRET_ID and MOOX_CLS_SECRET_KEY are required for SCF centralized logging")
 	}
-	opts.CLSHost = clsprepare.Host
+	// The shared Topic is in Guangzhou but the short-lived functions run in
+	// overseas regions. They must use CLS's public ingestion endpoint rather
+	// than the Guangzhou VPC-only tencentyun.com address.
+	opts.CLSHost = scfCLSIngestHost(clsprepare.Host)
 	zipPath := opts.ZipPath
 	if zipPath == "" {
 		result, err := packageCollectorFunction(ctx, opts.collectorPackageOptions)
@@ -1160,6 +1163,14 @@ func collectorCLSCredentials() (string, string) {
 	return strings.TrimSpace(os.Getenv("MOOX_CLS_SECRET_ID")), strings.TrimSpace(os.Getenv("MOOX_CLS_SECRET_KEY"))
 }
 
+func scfCLSIngestHost(host string) string {
+	host = strings.TrimSpace(host)
+	if strings.HasSuffix(host, ".cls.tencentyun.com") {
+		return strings.TrimSuffix(host, ".cls.tencentyun.com") + ".cls.tencentcs.com"
+	}
+	return host
+}
+
 func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string) (adminclient.NodeCreateItem, error) {
 	packageName := defaultFlag(opts.PackageName, "moox-collector")
 	bizType := defaultFlag(opts.BizType, "market_fetcher")
@@ -1176,7 +1187,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	}
 	fetcher := opts.FetcherConfig
 	if fetcher == nil {
-		fetcher = &setupconfig.SCFFetcherSpace{MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 16, RequestTimeoutMS: 1500, HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3}
+		fetcher = &setupconfig.SCFFetcherSpace{MemorySize: 64, TimeoutSeconds: 15, RealtimeBatchSize: 64, RealtimeBarLimit: 3, CatchupBatchSize: 1, CatchupBarLimit: 1000, MaxInflightRequests: 32, RequestTimeoutMS: 1500, HTTPMaxAttempts: 4, StorageMaxAttempts: 1, StorageTimeoutMS: 5000, MaxRetryAttempts: 3}
 	}
 	if strings.TrimSpace(config["timeout"]) == "" {
 		config["timeout"] = strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15))
@@ -1612,7 +1623,7 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if batchSize < 1 || batchSize > 64 {
 		return fmt.Errorf("market_fetcher realtime_batch_size must be between 1 and 64")
 	}
-	inflight, err := collectorRuntimeConfigInt(values, "max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 16), 1)
+	inflight, err := collectorRuntimeConfigInt(values, "max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 32), 1)
 	if err != nil {
 		return err
 	}
@@ -1631,7 +1642,7 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if storageTimeoutMS != 5000 {
 		return fmt.Errorf("market_fetcher storage_timeout_ms is fixed at 5000")
 	}
-	if requestWaves*requestTimeoutMS+storageTimeoutMS+500+setupconfig.SCFCLSReserveMilliseconds >= 15_000 {
+	if requestWaves*requestTimeoutMS+storageTimeoutMS+setupconfig.SCFCompletionReserveMilliseconds+setupconfig.SCFCLSReserveMilliseconds >= 15_000 {
 		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + publish and CLS reserves must be less than the 15-second timeout")
 	}
 	return nil
