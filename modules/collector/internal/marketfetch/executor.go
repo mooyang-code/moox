@@ -167,6 +167,13 @@ type execution struct {
 	items []*exchangeItem
 }
 
+type itemExecution struct {
+	rows          []*storagepb.RowFieldUpsert
+	registrations []*storagepb.RegisterDataSubjectReq
+	symbols       []*exchange.SymbolInfo
+	elapsed       time.Duration
+}
+
 // exchangeItem keeps symbol metadata private to this package while allowing
 // the symbol path to perform metadata registration after the aggregate row
 // write.
@@ -210,11 +217,6 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 		}
 	}
 	results := make([]domain.ItemResult, len(req.Items))
-	type itemExecution struct {
-		rows          []*storagepb.RowFieldUpsert
-		registrations []*storagepb.RegisterDataSubjectReq
-		symbols       []*exchange.SymbolInfo
-	}
 	executions := make([]itemExecution, len(req.Items))
 	concurrency := req.Concurrency
 	if concurrency == 0 {
@@ -233,9 +235,10 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 					results[index] = failureResult(item, domain.ItemOutcomeNetworkError, "deadline_exhausted", err)
 					return nil
 				}
+				itemStarted := time.Now()
 				result, itemRows, itemRegs, itemSymbols := e.executeItem(workCtx, req, item)
 				results[index] = result
-				executions[index] = itemExecution{rows: itemRows, registrations: itemRegs, symbols: itemSymbols}
+				executions[index] = itemExecution{rows: itemRows, registrations: itemRegs, symbols: itemSymbols, elapsed: time.Since(itemStarted)}
 				return nil
 			})
 		}
@@ -319,19 +322,21 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 	if payload.GetStatus() != "succeeded" {
 		log.WarnContextf(ctx, "market_fetch_result batch_id=%s status=%s error=%q results=%s", req.BatchID, payload.GetStatus(), resultErrorSummary(results), compactResultOutcomes(results))
 	}
-	e.reportResults(req, results)
+	e.reportResults(req, results, executions)
 	return payload, nil
 }
 
-func (e *Executor) reportResults(req Request, results []domain.ItemResult) {
+func (e *Executor) reportResults(req Request, results []domain.ItemResult, executions []itemExecution) {
 	if e == nil || e.Reporter == nil {
 		return
 	}
-	for _, result := range results {
+	for index, result := range results {
 		fields := map[string]string{
-			"event_type": "market_fetch_item", "batch_id": req.BatchID, "symbol": result.Symbol,
+			"event_type": "market_fetch_item", "batch_id": req.BatchID, "space_id": req.SpaceID,
+			"request_id": req.RequestID, "region": req.Region, "function_node_id": req.NodeID, "symbol": result.Symbol,
 			"dataset_id": result.DatasetID, "frequency": result.Frequency, "success": strconv.FormatBool(result.Outcome == domain.ItemOutcomeSuccess),
 			"error_kind": result.ErrorType, "error_message": truncateErrorString(result.ErrorSummary),
+			"elapsed_ms": strconv.FormatInt(executions[index].elapsed.Milliseconds(), 10), "rows": strconv.Itoa(len(executions[index].rows)),
 		}
 		e.Reporter.Report(clsreporter.Entry{Timestamp: time.Now().UTC(), Fields: fields})
 	}
