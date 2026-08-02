@@ -72,6 +72,7 @@ type SCFFetcher struct {
 // collector fleet. PackageConfigDir is relative to modules/collector/configs.
 type SCFFetcherSpace struct {
 	SpaceID          string `toml:"space_id"`
+	Entrypoint       string `toml:"entrypoint"`
 	PackageConfigDir string `toml:"package_config_dir"`
 	PackageName      string `toml:"package_name"`
 	// CLSCloudAccountID owns the single regional CLS topic used by every
@@ -324,6 +325,9 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	}
 	if cfg.PackageConfigDir == "" {
 		cfg.PackageConfigDir = filepath.ToSlash(filepath.Join("scf", cfg.SpaceID))
+	}
+	if cfg.Entrypoint == "" {
+		cfg.Entrypoint = cfg.SpaceID
 	}
 	cfg.PackageConfigDir = filepath.ToSlash(filepath.Clean(cfg.PackageConfigDir))
 	if cfg.PackageConfigDir == "." || strings.HasPrefix(cfg.PackageConfigDir, "../") || filepath.IsAbs(cfg.PackageConfigDir) {

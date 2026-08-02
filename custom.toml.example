@@ -21,12 +21,13 @@ wecom_webhook = ""
 enabled = false
 
 [[scf_fetcher.spaces]]
-space_id = "crypto"
-package_config_dir = "scf/crypto"
-package_name = "moox-collector-crypto"
+space_id = "crypto_market"
+entrypoint = "crypto_market"
+package_config_dir = "scf/crypto_market"
+package_name = "moox-collector-crypto-market"
 namespace = "default"
 runtime = "Go1"
-function_prefix = "moox-fetcher-crypto"
+function_prefix = "moox-fetcher-crypto-market"
 memory_size = 64
 timeout_seconds = 15
 realtime_batch_size = 10
