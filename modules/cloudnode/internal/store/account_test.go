@@ -19,11 +19,3 @@ func TestPackageTypeAndStatusMappings(t *testing.T) {
 	assert.Equal(t, "deleted", packageStatusToDB(pb.PackageStatus_PACKAGE_STATUS_DELETED))
 	assert.Equal(t, "", packageStatusToDB(pb.PackageStatus_PACKAGE_STATUS_UNSPECIFIED))
 }
-
-func TestNodeStatusFromPBMappings(t *testing.T) {
-	assert.Equal(t, "online", nodeStatusFromPB(pb.NodeStatusCode_NODE_STATUS_ONLINE))
-	assert.Equal(t, "timeout", nodeStatusFromPB(pb.NodeStatusCode_NODE_STATUS_TIMEOUT))
-	assert.Equal(t, "abnormal", nodeStatusFromPB(pb.NodeStatusCode_NODE_STATUS_ABNORMAL))
-	assert.Equal(t, "offline", nodeStatusFromPB(pb.NodeStatusCode_NODE_STATUS_OFFLINE))
-	assert.Equal(t, "", nodeStatusFromPB(pb.NodeStatusCode_NODE_STATUS_UNSPECIFIED))
-}

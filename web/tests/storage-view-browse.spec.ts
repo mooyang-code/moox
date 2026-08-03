@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { useViewCatalog } from "@/views/data/view-browse/composables/use-view-catalog";
 import { useViewKline } from "@/views/data/view-browse/composables/use-view-kline";
@@ -5,6 +7,27 @@ import { useViewQuery } from "@/views/data/view-browse/composables/use-view-quer
 import { buildViewFilterExprs } from "@/views/data/view-browse/view-browse-utils";
 
 describe("storage view browse workflows", () => {
+  it("uses previous and next controls instead of total-count pagination", () => {
+    const source = readFileSync(resolve(__dirname, "../src/views/data/view-browse/index.vue"), "utf8");
+
+    expect(source).toContain(':pagination="false"');
+    expect(source).not.toContain("showTotal");
+    expect(source).not.toContain("showJumper");
+    expect(source).not.toContain("@page-change");
+    expect(source.match(/aria-label="上一页"/g)).toHaveLength(2);
+    expect(source.match(/aria-label="下一页"/g)).toHaveLength(2);
+  });
+
+  it("queries time-series previews one page at a time and limits unscoped views to one day", () => {
+    const source = readFileSync(resolve(__dirname, "../src/views/data/view-browse/index.vue"), "utf8");
+
+    expect(source).not.toContain("VIEW_BROWSE_PREVIEW_LIMIT");
+    expect(source).toContain('page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }');
+    expect(source).toContain('total_mode: "NONE"');
+    expect(source).toContain("VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS = 24");
+    expect(source).toContain("hasExactSubjectIDFilter()");
+  });
+
   it("selects the first remaining view when the active view disappears", () => {
     const catalog = useViewCatalog<{ view_id: string }>();
     catalog.replaceViews([{ view_id: "view-a" }, { view_id: "view-b" }]);

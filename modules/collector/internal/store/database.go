@@ -137,15 +137,12 @@ func applySQLitePoolConfig(db *gorm.DB, cfg *Options) {
 	if err != nil {
 		return
 	}
-	maxOpen := 30
-	maxIdle := 20
+	// Collector has one local SQLite database. Keeping one connection avoids
+	// scheduler writes contending with completion-consumer writes; WAL helps
+	// readers but still permits only one writer.
+	maxOpen := 1
+	maxIdle := 1
 	if cfg != nil {
-		if cfg.MaxOpenConns > 0 {
-			maxOpen = cfg.MaxOpenConns
-		}
-		if cfg.MaxIdleConns > 0 && cfg.MaxIdleConns < maxOpen {
-			maxIdle = cfg.MaxIdleConns
-		}
 		if cfg.ConnMaxLifetime > 0 {
 			sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 		}

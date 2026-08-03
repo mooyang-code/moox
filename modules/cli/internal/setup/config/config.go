@@ -395,7 +395,7 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if cfg.MaxInflightRequests <= 0 || cfg.MaxInflightRequests > 64 {
 		return fmt.Errorf("config_invalid: %s.max_inflight_requests must be between 1 and 64", path)
 	}
-	if cfg.RequestTimeoutMS <= 0 || cfg.StorageMaxAttempts != 1 || cfg.HTTPMaxAttempts != 4 {
+	if cfg.RequestTimeoutMS <= 0 || cfg.StorageMaxAttempts < 1 || cfg.StorageMaxAttempts > 3 || cfg.HTTPMaxAttempts != 4 {
 		return fmt.Errorf("config_invalid: %s request/storage attempts are invalid", path)
 	}
 	if cfg.StorageTimeoutMS == 0 {

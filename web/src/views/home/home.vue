@@ -389,23 +389,21 @@ const setupSteps = [
   { title: "查询与因子", description: "用数据视图浏览 K 线；因子模块自动写回独立结果数据集合。" }
 ];
 
-const nodesOnline = ref<number | null>(null);
 const nodesTotal = ref<number | null>(null);
 const deployments = ref<ServiceDeployment[]>([]);
 const deploymentsLoaded = ref(false);
 const hosts = ref<HostMetrics[]>([]);
 
-const nodesAllOnline = computed(() => nodesTotal.value !== null && nodesOnline.value === nodesTotal.value);
 const nodesNote = computed(() => {
   if (nodesTotal.value === null) return "加载中";
   if (nodesTotal.value === 0) return "尚未注册节点";
-  return nodesAllOnline.value ? "全部在线" : "存在离线节点";
+  return "已登记云函数节点";
 });
 
 const healthBreakdown = computed(() => [
   { key: "freshness", label: "数据新鲜度", score: 26, max: 30, tone: "ok", note: "主力 K 线 6 分钟前入库" },
   { key: "collector", label: "采集任务健康", score: 16, max: 20, tone: "warn", note: "7 个任务需要处理" },
-  { key: "nodes", label: "云节点健康", score: 12, max: 15, tone: "warn", note: "96 / 101 节点在线" },
+  { key: "nodes", label: "云节点登记", score: 15, max: 15, tone: "ok", note: "已登记云函数节点" },
   { key: "services", label: "服务部署健康", score: 14, max: 15, tone: "ok", note: "核心服务 active" },
   { key: "assets", label: "数据资产完整度", score: 8, max: 10, tone: "ok", note: "Dataset / View 已配置" },
   { key: "trade", label: "交易账户状态", score: 8, max: 10, tone: "ok", note: "5 / 6 账户可用" }
@@ -460,12 +458,12 @@ const dashboardKpis = computed(() => [
   },
   {
     key: "nodes",
-    label: "云节点在线",
-    value: "96",
-    unit: "/101",
+    label: "云节点",
+    value: String(countOrFallback(nodesTotal.value, 0)),
+    unit: "",
     note: nodesNote.value,
-    delta: "5 离线",
-    tone: "warn",
+    delta: "已登记",
+    tone: "neutral",
     path: "/collector/cloudnodes"
   },
   {
@@ -495,14 +493,6 @@ const incidentItems = [
     action: "打开结果",
     path: "/factor/results",
     tone: "danger"
-  },
-  {
-    level: "P2",
-    title: "云节点离线 5 台",
-    meta: "SCF runtime 心跳缺失",
-    action: "查看节点",
-    path: "/collector/cloudnodes",
-    tone: "warn"
   },
   {
     level: "P2",
@@ -648,7 +638,6 @@ async function loadSpaceScoped() {
     getNodeList({ page: 1, page_size: 200 }).then(({ items, total }) => {
       if (!isCurrent()) return;
       nodesTotal.value = total || items.length;
-      nodesOnline.value = items.filter(n => String(n.status ?? "").includes("ONLINE")).length;
     })
   ];
 
@@ -738,7 +727,6 @@ function resetCounts() {
   Object.keys(counts).forEach(k => {
     counts[k] = null;
   });
-  nodesOnline.value = null;
   nodesTotal.value = null;
 }
 

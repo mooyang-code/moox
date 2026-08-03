@@ -15,14 +15,6 @@ option go_package = "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudn
 //
 // 响应设计：每个响应首字段 common.RetInfo（code/msg），code=SUCCESS(0) 表示成功。
 
-enum NodeStatusCode {
-  NODE_STATUS_UNSPECIFIED = 0;
-  NODE_STATUS_OFFLINE = 1;
-  NODE_STATUS_ONLINE = 2;
-  NODE_STATUS_TIMEOUT = 3;
-  NODE_STATUS_ABNORMAL = 4;
-}
-
 enum PackageStatus {
   PACKAGE_STATUS_UNSPECIFIED = 0;
   PACKAGE_STATUS_PENDING = 1;
@@ -123,11 +115,9 @@ message CloudNode {
   int32 timeout_threshold = 19;
   bool probe_enabled = 21;
   string probe_url = 22;
-  NodeStatusCode status = 23;
   bool is_deleted = 25;
   string create_time = 26;     // RFC3339
   string modify_time = 27;     // RFC3339
-  string cls_topic_id = 28;
 }
 
 message GetNodeListReq {
@@ -138,7 +128,6 @@ message GetNodeListReq {
   string node_type = 5;
   string biz_type = 6;
   string tag = 7;
-  NodeStatusCode status = 8;
   string keyword = 9;
   common.Page page = 10;
 }

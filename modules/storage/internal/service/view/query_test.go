@@ -12,11 +12,12 @@ import (
 )
 
 type queryEngine struct {
-	spec    viewindex.QuerySpec
-	rows    []*pb.RowFieldValues
-	stats   viewindex.ViewIndexStats
-	statErr error
-	calls   int
+	spec      viewindex.QuerySpec
+	rows      []*pb.RowFieldValues
+	stats     viewindex.ViewIndexStats
+	statErr   error
+	calls     int
+	statCalls int
 }
 
 func (*queryEngine) Engine() string { return "query-test" }
@@ -32,6 +33,7 @@ func (e *queryEngine) Query(_ context.Context, _ string, spec viewindex.QuerySpe
 	return e.rows, int64(len(e.rows)), nil
 }
 func (e *queryEngine) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
+	e.statCalls++
 	return e.stats, e.statErr
 }
 func (*queryEngine) Remove(context.Context, string) error { return nil }
@@ -153,6 +155,63 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 				t.Fatalf("coverage fields not returned: %v", rsp)
 			}
 		})
+	}
+}
+
+func TestQueryTimeSeriesRowsUsesRuntimeStatsForNoTotal(t *testing.T) {
+	stats := viewindex.ViewIndexStats{
+		Exists: true, EntryCount: 1,
+		IndexedFrom: "2026-07-29T00:00:00Z",
+		IndexedTo:   "2026-07-29T00:01:00Z",
+	}
+	engine := &queryEngine{rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}}, stats: stats}
+	svc, auth := queryTestService(engine, true)
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
+	runtime.statsIndexID = "prices-index"
+	runtime.stats = stats
+
+	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
+		AuthInfo: auth, SpaceId: "space", ViewId: "prices", TotalMode: pb.TotalMode_NONE,
+		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+	if engine.statCalls != 0 {
+		t.Fatalf("total_mode=NONE called Stat %d times", engine.statCalls)
+	}
+	if !rsp.GetComplete() || rsp.GetServedIndexedTo() != stats.IndexedTo {
+		t.Fatalf("runtime stats were not returned: %v", rsp)
+	}
+}
+
+func TestQueryTimeSeriesRowsRefreshesStatsWhenCompletenessIsRequested(t *testing.T) {
+	stats := viewindex.ViewIndexStats{
+		Exists: true, EntryCount: 1,
+		IndexedFrom: "2026-07-29T00:00:00Z",
+		IndexedTo:   "2026-07-29T00:01:00Z",
+	}
+	engine := &queryEngine{
+		rows:    []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}},
+		stats:   stats,
+		statErr: errors.New("stat failed"),
+	}
+	svc, auth := queryTestService(engine, true)
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
+	runtime.statsIndexID = "prices-index"
+	runtime.stats = stats
+
+	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
+		AuthInfo: auth, SpaceId: "space", ViewId: "prices",
+		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+	if engine.statCalls != 1 || rsp.GetComplete() || rsp.GetServedIndexedTo() != "" {
+		t.Fatalf("completeness query used stale runtime stats: %v", rsp)
 	}
 }
 

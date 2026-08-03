@@ -96,6 +96,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			_ = runtime.Close(closeCtx)
 		}
 	}()
+	if err := dbm.MigrateLegacySchema(); err != nil {
+		log.ErrorContextf(ctx, "清理 cloudnode 已废弃 schema 失败: %v", err)
+		return nil, err
+	}
 	if err := dbm.ApplySchema(schema.AllSQL()); err != nil {
 		log.ErrorContextf(ctx, "初始化 cloudnode schema 失败: %v", err)
 		return nil, err

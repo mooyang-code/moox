@@ -535,7 +535,6 @@ const loadActiveDatasets = async () => {
     for (let page = 1; ; page += 1) {
       const response = await listDatasets({
         space_id: spaceId,
-        status: "active",
         page: { page, size: 500 }
       });
       datasets.push(...(response.datasets || []).filter(dataset => dataset.status === "active"));

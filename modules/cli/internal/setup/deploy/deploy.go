@@ -287,7 +287,9 @@ func commandFailure(code string, result setupssh.Result) error {
 	detail := strings.TrimSpace(strings.Join([]string{result.Stderr, result.Stdout}, "\n"))
 	detail = strings.Join(strings.Fields(detail), " ")
 	if len(detail) > 500 {
-		detail = detail[:500]
+		// Keep the start for context and the end where shell commands usually
+		// report their actual failure after verbose tool output.
+		detail = detail[:240] + " ... " + detail[len(detail)-256:]
 	}
 	if detail == "" {
 		return fmt.Errorf("%s", code)

@@ -79,7 +79,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector module metrics: %w", err)
 	}
-	_, err = report.NewDatasetModuleObserver(
+	datasetRunObserver, err := report.NewDatasetModuleObserver(
 		datasetMetrics,
 		moduleMetrics,
 		"collect",
@@ -99,6 +99,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
+	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
 	registerMarketFetchSchedule(s, cfg, deps, dbm, marketFetchMetrics)
 	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 	if spaceID == "" {

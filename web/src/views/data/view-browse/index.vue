@@ -110,14 +110,12 @@
                 :bordered="{ cell: true }"
                 :loading="loading || contextLoading"
                 :data="tableRows"
-                :pagination="timeSeriesTablePagination"
+                :pagination="false"
                 :scroll="{ x: 'max-content', y: 500 }"
-                @page-change="onPageChange"
-                @page-size-change="onPageSizeChange"
               >
                 <template #columns>
                   <a-table-column title="序号" :width="72" align="center" fixed="left">
-                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
+                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1 }}</template>
                   </a-table-column>
                   <a-table-column data-index="key" :width="180" fixed="left">
                     <template #title
@@ -192,8 +190,7 @@
                   </a-table-column>
                 </template>
               </a-table>
-              <div v-if="timeSeriesUsesPreviewPager" class="preview-pager">
-                <span class="preview-pager__hint">{{ previewPagerText(VIEW_BROWSE_PREVIEW_LIMIT) }}</span>
+              <div v-if="hasQueried" class="preview-pager">
                 <div class="preview-pager__actions">
                   <a-tooltip content="上一页">
                     <a-button
@@ -206,7 +203,6 @@
                       <template #icon><icon-left /></template>
                     </a-button>
                   </a-tooltip>
-                  <span class="preview-pager__page">第 {{ pagination.current }} 页</span>
                   <a-tooltip content="下一页">
                     <a-button
                       size="small"
@@ -229,14 +225,12 @@
                 :bordered="{ cell: true }"
                 :loading="loading || contextLoading"
                 :data="tableRows"
-                :pagination="tablePagination"
+                :pagination="false"
                 :scroll="{ x: 'max-content', y: 460 }"
-                @page-change="onPageChange"
-                @page-size-change="onPageSizeChange"
               >
                 <template #columns>
                   <a-table-column title="序号" :width="72" align="center" fixed="left">
-                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * pagination.pageSize + rowIndex + 1 }}</template>
+                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1 }}</template>
                   </a-table-column>
                   <a-table-column data-index="key" :width="200" fixed="left">
                     <template #title
@@ -287,6 +281,32 @@
                   </a-table-column>
                 </template>
               </a-table>
+              <div v-if="hasQueried" class="preview-pager">
+                <div class="preview-pager__actions">
+                  <a-tooltip content="上一页">
+                    <a-button
+                      size="small"
+                      shape="circle"
+                      :disabled="pagination.current <= 1 || loading || contextLoading"
+                      aria-label="上一页"
+                      @click="onPreviewPrevPage"
+                    >
+                      <template #icon><icon-left /></template>
+                    </a-button>
+                  </a-tooltip>
+                  <a-tooltip content="下一页">
+                    <a-button
+                      size="small"
+                      shape="circle"
+                      :disabled="!previewHasMore || loading || contextLoading"
+                      aria-label="下一页"
+                      @click="onPreviewNextPage"
+                    >
+                      <template #icon><icon-right /></template>
+                    </a-button>
+                  </a-tooltip>
+                </div>
+              </div>
             </section>
           </ResultTable>
 
@@ -333,7 +353,6 @@ import type {
   Factor,
   Field,
   FieldValueType,
-  PageResult,
   RecordRow,
   TimeSeriesRow,
   View,
@@ -358,9 +377,7 @@ import {
   klineRowsHaveFreq,
   klineSubjectIdFromFilters,
   normalizeKlineLimit,
-  previewPagerText,
   type KlineChartRecord,
-  usesPreviewPager,
   viewDisplayName,
   viewModeFromPrimaryDataset,
   type ViewFilterOperator,
@@ -459,22 +476,19 @@ const loading = ref(false);
 const queryError = ref("");
 const hasQueried = ref(false);
 const previewHasMore = ref(false);
-const timeSeriesPageResult = ref<PageResult>();
 const klineVisible = ref(false);
 const klineSubjectId = ref("");
 const klineFreq = ref("");
 const klineRecords = ref<KlineChartRecord[]>([]);
 const klineLoading = ref(false);
 const klineLimit = ref(DEFAULT_KLINE_LIMIT);
-const VIEW_BROWSE_PREVIEW_LIMIT = 1000;
-const VIEW_BROWSE_PREVIEW_WINDOW_DAYS = 7;
+const VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS = 24;
+const VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS = 7;
 const DEFAULT_VIEW_PAGE_SIZE = 25;
 const KLINE_COLUMN_BASENAMES = ["open_time", "open", "high", "low", "close", "volume"];
 
 const pagination = reactive({
-  current: 1,
-  pageSize: DEFAULT_VIEW_PAGE_SIZE,
-  total: 0
+  current: 1
 });
 
 const filterOperatorOptions: Array<{ label: string; value: ViewFilterOperator }> = [
@@ -517,20 +531,6 @@ const modeText = computed(() => {
   if (mode.value === "record") return "记录视图 / Bleve";
   return "未知类型";
 });
-
-const tablePagination = computed(() => ({
-  current: pagination.current,
-  pageSize: pagination.pageSize,
-  total: pagination.total,
-  showTotal: true,
-  showPageSize: true,
-  showJumper: true,
-  hideOnSinglePage: false,
-  pageSizeOptions: [25, 50, 100, 200]
-}));
-
-const timeSeriesUsesPreviewPager = computed(() => usesPreviewPager(timeSeriesPageResult.value));
-const timeSeriesTablePagination = computed(() => (timeSeriesUsesPreviewPager.value ? false : tablePagination.value));
 
 const preferredColumnNames = computed(() => viewColumns.value.map(item => item.column_name).filter(Boolean));
 const klineColumnNames = computed(() => {
@@ -671,9 +671,7 @@ function clearViewState() {
   queryError.value = "";
   hasQueried.value = false;
   previewHasMore.value = false;
-  timeSeriesPageResult.value = undefined;
   pagination.current = 1;
-  pagination.total = 0;
 }
 
 async function loadViewContext() {
@@ -731,8 +729,7 @@ async function loadTimeSeriesViewRows() {
       ...(preferredColumnNames.value.length > 0 ? { column_names: preferredColumnNames.value } : {}),
       filter: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
-      limit: VIEW_BROWSE_PREVIEW_LIMIT,
-      page: { page: pagination.current, size: pagination.pageSize },
+      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
       total_mode: "NONE"
     });
     const rows = rsp.rows || [];
@@ -742,16 +739,12 @@ async function loadTimeSeriesViewRows() {
       seriesTag: rows[index]?.key?.series_tag || ""
     }));
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
-    timeSeriesPageResult.value = rsp.page_result;
     previewHasMore.value = !!rsp.page_result?.has_more;
-    pagination.total = usesPreviewPager(rsp.page_result) ? 0 : (rsp.page_result?.total ?? rows.length);
     hasQueried.value = true;
   } catch (error) {
     queryError.value = error instanceof Error ? error.message : "查询时序视图失败";
     tableRows.value = [];
-    pagination.total = 0;
     previewHasMore.value = false;
-    timeSeriesPageResult.value = undefined;
     hasQueried.value = true;
     Message.error(queryError.value);
   } finally {
@@ -772,21 +765,17 @@ async function loadRecordViewRows() {
       text_query: recordKeyword.value.trim(),
       filter: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
-      page: { page: pagination.current, size: pagination.pageSize }
+      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
     });
     const rows = rsp.rows || [];
     tableRows.value = recordRowsToTableRows(rows);
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
-    pagination.total = rsp.page_result?.total ?? rows.length;
-    previewHasMore.value = false;
-    timeSeriesPageResult.value = undefined;
+    previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
   } catch (error) {
     queryError.value = error instanceof Error ? error.message : "查询记录视图失败";
     tableRows.value = [];
-    pagination.total = 0;
     previewHasMore.value = false;
-    timeSeriesPageResult.value = undefined;
     hasQueried.value = true;
     Message.error(queryError.value);
   } finally {
@@ -876,11 +865,20 @@ function activeFilterExprs() {
 function defaultTimeSeriesPreviewRange() {
   if (hasActiveDataTimeFilter()) return undefined;
   const end = new Date(Date.now() + 5 * 60 * 1000);
-  const start = new Date(end.getTime() - VIEW_BROWSE_PREVIEW_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const windowHours = hasExactSubjectIDFilter()
+    ? VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS * 24
+    : VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS;
+  const start = new Date(end.getTime() - windowHours * 60 * 60 * 1000);
   return {
     start_time: start.toISOString(),
     end_time: end.toISOString()
   };
+}
+
+function hasExactSubjectIDFilter() {
+  return filters.value.some(
+    filter => filter.fieldName.trim() === "subject_id" && filter.operator === "eq" && !!(filter.value || "").trim()
+  );
 }
 
 function hasActiveDataTimeFilter() {
@@ -899,17 +897,6 @@ function hasFilterInput(filter: ViewFilterState) {
 
 function filterValueType(fieldName: string): FieldValueType {
   return filterFieldOptions.value.find(item => item.value === fieldName)?.valueType || "FIELD_VALUE_TYPE_STRING";
-}
-
-async function onPageChange(page: number) {
-  pagination.current = page;
-  await reloadRows();
-}
-
-async function onPageSizeChange(pageSize: number) {
-  pagination.pageSize = pageSize;
-  pagination.current = 1;
-  await reloadRows();
 }
 
 async function onPreviewPrevPage() {
@@ -1269,13 +1256,6 @@ watch(selectedSpaceId, () => {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-}
-
-.preview-pager__page {
-  min-width: 58px;
-  text-align: center;
-  color: var(--color-text-1);
-  font-weight: 600;
 }
 
 .record-search-bar {

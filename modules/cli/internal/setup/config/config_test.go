@@ -17,7 +17,7 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 			Spaces: []SCFFetcherSpace{{
 				SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
 				MaxInflightRequests: 32, RequestTimeoutMS: 1500,
-				HTTPMaxAttempts: 4, StorageMaxAttempts: 1,
+				HTTPMaxAttempts: 4, StorageMaxAttempts: 3,
 				Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
 			}},
 		}
@@ -37,6 +37,14 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 		err := validateSCFFetcher(&cfg)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "between 1 and 64")
+	})
+
+	t.Run("caps aggregate Storage retries at three attempts", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].StorageMaxAttempts = 4
+		err := validateSCFFetcher(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "request/storage attempts")
 	})
 
 	t.Run("allows a 64-item realtime batch for fleet fanout", func(t *testing.T) {

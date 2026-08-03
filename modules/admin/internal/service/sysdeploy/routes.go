@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type routeExtraConfig struct {
@@ -81,7 +82,10 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 		return gatewayproxy.Snapshot{}, &RouteConfigError{Err: err}
 	}
 	if err := d.db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", nodeID).Updates(map[string]interface{}{"c_route_hash": snapshot.RouteHash, "c_route_count": len(snapshot.Routes)}).Error; err != nil {
-		return gatewayproxy.Snapshot{}, err
+		// Route compilation is read-only from Gateway's perspective. The status
+		// fields are operator-facing bookkeeping, so a transient SQLite writer
+		// conflict must not make an otherwise valid route snapshot unavailable.
+		log.WarnContextf(ctx, "record gateway route snapshot status failed node_id=%s: %v", nodeID, err)
 	}
 	return snapshot, nil
 }

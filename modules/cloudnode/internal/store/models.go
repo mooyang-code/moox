@@ -16,7 +16,6 @@ type CloudNode struct {
 	Namespace      string    `gorm:"column:c_namespace"`
 	FunctionName   string    `gorm:"column:c_function_name"`
 	Metadata       string    `gorm:"column:c_metadata"`
-	Status         string    `gorm:"column:c_status"`
 	IsDeleted      bool      `gorm:"column:c_is_deleted"`
 	CreateTime     time.Time `gorm:"column:c_ctime"`
 	ModifyTime     time.Time `gorm:"column:c_mtime"`

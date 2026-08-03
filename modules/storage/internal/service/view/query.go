@@ -80,13 +80,21 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	for _, row := range rows {
 		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: row.GetFields()})
 	}
-	stats, statsErr := engine.Stat(ctx, indexID)
-	if statsErr != nil {
-		log.Printf("storage view query stat failed space=%s view=%s index=%s: %v", req.GetSpaceId(), req.GetViewId(), indexID, statsErr)
+	stats, hasStats := cachedActiveIndexStats(runtime, indexID)
+	if req.GetTotalMode() != pb.TotalMode_NONE {
+		hasStats = false
+		var statsErr error
+		stats, statsErr = engine.Stat(ctx, indexID)
+		if statsErr != nil {
+			log.Printf("storage view query stat failed space=%s view=%s index=%s: %v", req.GetSpaceId(), req.GetViewId(), indexID, statsErr)
+		} else {
+			hasStats = true
+			s.cacheActiveIndexStats(runtime, indexID, stats)
+		}
 	}
-	complete := statsErr == nil && len(out) > 0 && runtimeCoverageComplete(runtime, req.GetTimeRange(), stats)
+	complete := hasStats && len(out) > 0 && runtimeCoverageComplete(runtime, req.GetTimeRange(), stats)
 	indexedFrom, indexedTo := "", ""
-	if statsErr == nil {
+	if hasStats {
 		indexedFrom, indexedTo = stats.IndexedFrom, stats.IndexedTo
 	}
 	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), ServedIndexedFrom: indexedFrom, ServedIndexedTo: indexedTo, Complete: complete}, nil

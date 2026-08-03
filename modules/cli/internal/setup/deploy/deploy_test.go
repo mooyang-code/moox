@@ -25,6 +25,9 @@ func TestCommandFailureIncludesBoundedCommandOutput(t *testing.T) {
 
 	err = commandFailure("control_install_failed", setupssh.Result{})
 	require.EqualError(t, err, "control_install_failed")
+
+	err = commandFailure("control_install_failed", setupssh.Result{Stderr: strings.Repeat("a", 300) + " failure-tail"})
+	require.ErrorContains(t, err, "failure-tail")
 }
 
 func TestControlOrdersSafeDeployment(t *testing.T) {

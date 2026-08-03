@@ -20,18 +20,16 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestNodeMetadataAndStatusBranches(t *testing.T) {
+func TestNodeMetadataBranches(t *testing.T) {
 	metadata, err := structpb.NewStruct(map[string]any{"existing": "yes"})
 	require.NoError(t, err)
 	got := nodeMetadataFromPB(&pb.CloudNode{
 		Metadata: metadata, BizType: "market_fetcher", Tag: "prod", IpAddress: "10.0.0.1",
-		TimeoutThreshold: 30, ProbeEnabled: true, ProbeUrl: "https://probe", ClsTopicId: "topic-1",
+		TimeoutThreshold: 30, ProbeEnabled: true, ProbeUrl: "https://probe",
 	})
 	assert.Equal(t, "market_fetcher", got["biz_type"])
 	assert.Equal(t, true, got["probe_enabled"])
 	assert.Empty(t, nodeMetadataFromPB(nil))
-	assert.Equal(t, pb.NodeStatusCode_NODE_STATUS_TIMEOUT, nodeStatusToPB(" timeout "))
-	assert.Equal(t, "offline", nodeStatusToDB(pb.NodeStatusCode_NODE_STATUS_OFFLINE))
 }
 
 func TestUpdateNodeAndConversion(t *testing.T) {
@@ -39,10 +37,10 @@ func TestUpdateNodeAndConversion(t *testing.T) {
 	svc := &Service{catalog: catalog}
 	ctx := spacecontext.WithSpaceID(context.Background(), "crypto_market")
 	require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{
-		SpaceID: "crypto_market", NodeID: "node-a", CloudAccountID: "acct-1", Region: "ap-guangzhou", Status: "online",
+		SpaceID: "crypto_market", NodeID: "node-a", CloudAccountID: "acct-1", Region: "ap-guangzhou",
 	}))
 	rsp, err := svc.UpdateNode(ctx, &pb.UpdateNodeReq{Node: &pb.CloudNode{
-		NodeId: "node-a", Region: "ap-shanghai", Status: pb.NodeStatusCode_NODE_STATUS_ONLINE,
+		NodeId: "node-a", Region: "ap-shanghai",
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
@@ -50,9 +48,8 @@ func TestUpdateNodeAndConversion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ap-shanghai", node.Region)
 
-	pbNode := toPBNode(store.CloudNode{SpaceID: "crypto_market", NodeID: "n1", Status: "online", Metadata: `{"biz_type":"market_fetcher"}`})
+	pbNode := toPBNode(store.CloudNode{SpaceID: "crypto_market", NodeID: "n1", Metadata: `{"biz_type":"market_fetcher"}`})
 	assert.Equal(t, "market_fetcher", pbNode.GetBizType())
-	assert.Equal(t, pb.NodeStatusCode_NODE_STATUS_ONLINE, pbNode.GetStatus())
 }
 
 func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {

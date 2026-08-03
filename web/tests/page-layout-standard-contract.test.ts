@@ -131,7 +131,6 @@ describe("page layout standards", () => {
       '<a-input v-model="form.nodeId" placeholder="请输入节点ID" allow-clear />',
       '<a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>',
       '<a-select placeholder="节点类型" v-model="form.nodeType" style="width: 180px" allow-clear>',
-      '<a-select placeholder="节点状态" v-model="form.status" style="width: 120px" allow-clear>',
       '<a-button type="primary" @click="search">',
       "<icon-search />",
       "<span>查询</span>"

@@ -44,6 +44,8 @@ type viewRef struct{ spaceID, viewID string }
 type viewRuntime struct {
 	mu           sync.Mutex
 	active       string
+	statsIndexID string
+	stats        viewindex.ViewIndexStats
 	next         string
 	status       string
 	buildID      string
@@ -380,6 +382,31 @@ func (s *Service) activeIndex(spaceID, viewID string) (string, *viewRuntime) {
 		return indexID, runtime
 	}
 	return viewID, nil
+}
+
+func (s *Service) cacheActiveIndexStats(runtime *viewRuntime, indexID string, stats viewindex.ViewIndexStats) {
+	if runtime == nil || indexID == "" {
+		return
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.active != indexID {
+		return
+	}
+	runtime.statsIndexID = indexID
+	runtime.stats = stats
+}
+
+func cachedActiveIndexStats(runtime *viewRuntime, indexID string) (viewindex.ViewIndexStats, bool) {
+	if runtime == nil || indexID == "" {
+		return viewindex.ViewIndexStats{}, false
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.active != indexID || runtime.statsIndexID != indexID {
+		return viewindex.ViewIndexStats{}, false
+	}
+	return runtime.stats, true
 }
 
 func (s *Service) removeIndexMappingsLocked(id string) {

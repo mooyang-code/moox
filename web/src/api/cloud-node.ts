@@ -1,13 +1,6 @@
 import { callControl } from "@/api/admin/http";
 export { withOptionalSpace } from "@/api/space-context";
 
-export type NodeStatusCode =
-  | "NODE_STATUS_UNSPECIFIED"
-  | "NODE_STATUS_OFFLINE"
-  | "NODE_STATUS_ONLINE"
-  | "NODE_STATUS_TIMEOUT"
-  | "NODE_STATUS_ABNORMAL";
-
 export interface CloudNode {
   id?: number;
   space_id?: string;
@@ -28,9 +21,7 @@ export interface CloudNode {
   timeout_threshold?: number;
   probe_enabled?: boolean;
   probe_url?: string;
-  status?: NodeStatusCode | number;
   is_deleted?: boolean;
-  cls_topic_id?: string;
   create_time?: string;
   modify_time?: string;
 }
@@ -64,7 +55,6 @@ export interface GetNodeListRequest {
   node_type?: string;
   biz_type?: string;
   tag?: string;
-  status?: NodeStatusCode | number | string;
   keyword?: string;
   page?: Page | number;
   page_size?: number;
@@ -172,15 +162,7 @@ export interface BatchDeleteNodesResponse {
   processed_count: number;
 }
 
-export const NODE_STATUS_LABEL: Record<string, string> = {
-  NODE_STATUS_ONLINE: "在线",
-  NODE_STATUS_OFFLINE: "离线",
-  NODE_STATUS_TIMEOUT: "超时",
-  NODE_STATUS_ABNORMAL: "异常",
-  NODE_STATUS_UNSPECIFIED: "未知"
-};
-
-function normalizePageParams<T extends { page?: Page | number; page_size?: number; status?: unknown }>(
+function normalizePageParams<T extends { page?: Page | number; page_size?: number }>(
   params: T
 ): T & { page?: Page } {
   const normalized = { ...params } as T & { page?: Page };
@@ -191,9 +173,6 @@ function normalizePageParams<T extends { page?: Page | number; page_size?: numbe
     };
   }
   delete (normalized as { page_size?: number }).page_size;
-  if (normalized.status === "") {
-    delete (normalized as { status?: unknown }).status;
-  }
   return normalized;
 }
 

@@ -211,6 +211,8 @@ func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace 
 	}
 	oldID := runtime.active
 	runtime.active = runtime.next
+	runtime.statsIndexID = ""
+	runtime.stats = viewindex.ViewIndexStats{}
 	runtime.next = ""
 	runtime.status = "active"
 	runtime.buildID = ""
@@ -293,6 +295,10 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 	s.catalogViews[viewKey] = proto.Clone(view).(*pb.View)
 	s.indexEngine[view.GetActiveIndexId()] = engineName
 	s.schemas[view.GetActiveIndexId()] = schema
+	if runtime.active != view.GetActiveIndexId() {
+		runtime.statsIndexID = ""
+		runtime.stats = viewindex.ViewIndexStats{}
+	}
 	runtime.active = view.GetActiveIndexId()
 	runtime.status = "active"
 	s.indexView[view.GetActiveIndexId()] = viewKey

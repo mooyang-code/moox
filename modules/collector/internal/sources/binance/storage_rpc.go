@@ -83,8 +83,8 @@ func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*stor
 }
 
 func (w *storageWriter) upsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {
-	return retryStorage(ctx, func() error {
-		rsp, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
+	return retryStorageWithAttemptTimeout(ctx, func(attemptCtx context.Context) error {
+		rsp, err := w.access.UpsertFields(attemptCtx, &storagepb.PrimaryUpsertFieldsReq{
 			AuthInfo:      w.authInfo,
 			Rows:          rows,
 			SourceEventId: sourceEventID,

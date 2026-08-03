@@ -147,8 +147,8 @@ func Default() *Config {
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/moox_collector.db",
-			MaxIdleConns:    10,
-			MaxOpenConns:    50,
+			MaxIdleConns:    1,
+			MaxOpenConns:    1,
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},

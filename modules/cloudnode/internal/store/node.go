@@ -34,12 +34,6 @@ func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *
 	if req.GetBizType() != "" {
 		q = q.Where("json_extract(c_metadata, '$.biz_type') = ?", req.GetBizType())
 	}
-	if req.GetStatus() != pb.NodeStatusCode_NODE_STATUS_UNSPECIFIED {
-		status := nodeStatusFromPB(req.GetStatus())
-		if status != "" {
-			q = q.Where("c_status = ?", status)
-		}
-	}
 	if req.GetKeyword() != "" {
 		kw := "%" + req.GetKeyword() + "%"
 		q = q.Where("c_node_id LIKE ? OR c_function_name LIKE ? OR c_metadata LIKE ?", kw, kw, kw)
@@ -78,15 +72,12 @@ func (r *CatalogRepository) UpsertNode(ctx context.Context, node CloudNode) erro
 	if node.Provider == "" {
 		node.Provider = "tencent-scf"
 	}
-	if node.Status == "" {
-		node.Status = "unknown"
-	}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_node_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"c_cloud_account_id", "c_package_id", "c_package_version", "c_deployment_id",
 			"c_node_type", "c_region", "c_namespace", "c_function_name", "c_provider",
-			"c_metadata", "c_status", "c_is_deleted", "c_mtime",
+			"c_metadata", "c_is_deleted", "c_mtime",
 		}),
 	}).Create(&node).Error
 }
@@ -99,7 +90,7 @@ func (r *CatalogRepository) DeleteNodes(ctx context.Context, spaceID string, nod
 	if spaceID != "" {
 		q = q.Where("c_space_id = ?", spaceID)
 	}
-	return q.Updates(map[string]any{"c_is_deleted": true, "c_status": "deleted", "c_mtime": time.Now().UTC()}).Error
+	return q.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
 }
 
 func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID string, nodeID string, packageID string, packageVersion string, desiredConfig map[string]string, desiredEnvironment map[string]string) error {
@@ -168,19 +159,4 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 	// causes GORM's SQLite dialector to emit an UPDATE ... FROM self join,
 	// making c_node_id ambiguous.
 	return r.db.WithContext(ctx).Model(&CloudNode{}).Where("c_id = ?", node.ID).Updates(updates).Error
-}
-
-func nodeStatusFromPB(status pb.NodeStatusCode) string {
-	switch status {
-	case pb.NodeStatusCode_NODE_STATUS_ONLINE:
-		return "online"
-	case pb.NodeStatusCode_NODE_STATUS_TIMEOUT:
-		return "timeout"
-	case pb.NodeStatusCode_NODE_STATUS_ABNORMAL:
-		return "abnormal"
-	case pb.NodeStatusCode_NODE_STATUS_OFFLINE:
-		return "offline"
-	default:
-		return ""
-	}
 }

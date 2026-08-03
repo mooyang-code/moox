@@ -69,14 +69,19 @@ func Resolve(ctx context.Context, cfg *Config) (Dependencies, error) {
 	if v := endpointGatewayTarget(active, "service_gateway"); v != "" {
 		deps.ServiceGatewayTarget = v
 	}
-	// Storage clients use the native tRPC listener, never the public HTTP
-	// gateway endpoint. A deployment without a native target leaves the local
-	// gateway configuration intact rather than silently falling back to a
-	// physical Storage listener.
-	if v := endpointTRPCTarget(active, "service_gateway_native"); v != "" {
+	// Storage clients use the native tRPC listener selected for the Storage
+	// deployment. The active-deployment response contains endpoints from every
+	// node, keyed as "node_id/service_name". Selecting the generic name here
+	// makes the chosen gateway depend on map iteration order and can send the
+	// Collector to a gateway that does not own the Storage routes.
+	nativeGateway := "service_gateway_native"
+	if nodeID := strings.TrimSpace(cfg.Storage.GatewayNodeID); nodeID != "" {
+		nativeGateway = nodeID + "/" + nativeGateway
+	}
+	if v := endpointTRPCTarget(active, nativeGateway); v != "" {
 		deps.StorageRPCGatewayTarget = v
 	} else {
-		return deps, fmt.Errorf("active service_gateway_native deployment has no native tRPC target")
+		return deps, fmt.Errorf("active %s deployment has no native tRPC target", nativeGateway)
 	}
 	return deps, nil
 }

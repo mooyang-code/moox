@@ -201,12 +201,6 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	node.PackageVersion = pkg.Version
 	metadata := parseJSONMap(node.Metadata)
 	config := item.GetConfig()
-	if clsTopicID := strings.TrimSpace(config["cls_topic_id"]); clsTopicID != "" {
-		metadata["cls_topic_id"] = clsTopicID
-	}
-	if clsLogsetID := strings.TrimSpace(config["cls_logset_id"]); clsLogsetID != "" {
-		metadata["cls_logset_id"] = clsLogsetID
-	}
 	metadata["runtime"] = firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime"))
 	metadata["handler"] = firstString(item.GetHandler(), metadataString(metadata, "handler"), "main")
 	node.Metadata = jsonString(metadata)
@@ -238,7 +232,6 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err := verifySCFFunctionConfiguration(info, item.GetConfig(), item.GetEnvironment(), ref.FunctionName); err != nil {
 			return err
 		}
-		mergeSCFFunctionMetadata(node, info)
 		if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
 			return err
 		}
@@ -305,7 +298,6 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err := verifySCFFunctionConfiguration(info, item.GetConfig(), item.GetEnvironment(), ref.FunctionName); err != nil {
 			return err
 		}
-		mergeSCFFunctionMetadata(node, info)
 		if err := ensureSCFAsyncRetryConfig(reconcileCtx, client, ref, isMarketFetchNode(node)); err != nil {
 			return err
 		}
@@ -318,7 +310,6 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	if err := verifySCFFunctionConfiguration(info, item.GetConfig(), item.GetEnvironment(), ref.FunctionName); err != nil {
 		return err
 	}
-	mergeSCFFunctionMetadata(node, info)
 	if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
 		return err
 	}
@@ -378,27 +369,6 @@ func (s *Service) ensureLocalPackage(ctx context.Context, node *store.CloudNode,
 	}
 	node.PackageVersion = pkg.Version
 	return nil
-}
-
-func mergeSCFFunctionMetadata(node *store.CloudNode, info *tencentscf.FunctionInfo) {
-	if node == nil || info == nil {
-		return
-	}
-	metadata := parseJSONMap(node.Metadata)
-	changed := false
-	// SCF-native CLS must remain disabled. Clear stale metadata as well so the
-	// catalog cannot suggest that a per-function topic is still in use.
-	if _, ok := metadata["cls_logset_id"]; ok {
-		delete(metadata, "cls_logset_id")
-		changed = true
-	}
-	if _, ok := metadata["cls_topic_id"]; ok {
-		delete(metadata, "cls_topic_id")
-		changed = true
-	}
-	if changed {
-		node.Metadata = jsonString(metadata)
-	}
 }
 
 func (s *Service) updateSCFFunctionCode(
@@ -675,7 +645,6 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 		Namespace:      firstString(item.GetNamespace(), "default"),
 		FunctionName:   functionName,
 		Metadata:       jsonString(metadata),
-		Status:         "unknown",
 		IsDeleted:      false,
 	}
 }
@@ -735,9 +704,6 @@ func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNo
 	if len(metadata) > 0 {
 		next.Metadata = mergeMetadataJSON(existing.Metadata, jsonString(metadata))
 	}
-	if node.GetStatus() != pb.NodeStatusCode_NODE_STATUS_UNSPECIFIED {
-		next.Status = nodeStatusToDB(node.GetStatus())
-	}
 	next.IsDeleted = node.GetIsDeleted()
 	return next
 }
@@ -768,11 +734,9 @@ func toPBNode(node store.CloudNode) *pb.CloudNode {
 		TimeoutThreshold: metadataInt32(metadata, "timeout_threshold"),
 		ProbeEnabled:     metadataBool(metadata, "probe_enabled"),
 		ProbeUrl:         metadataString(metadata, "probe_url"),
-		Status:           nodeStatusToPB(node.Status),
 		IsDeleted:        node.IsDeleted,
 		CreateTime:       formatTime(node.CreateTime),
 		ModifyTime:       formatTime(node.ModifyTime),
-		ClsTopicId:       metadataString(metadata, "cls_topic_id"),
 	}
 }
 
@@ -791,7 +755,6 @@ func fromPBNode(spaceID string, node *pb.CloudNode) store.CloudNode {
 		Namespace:      node.GetNamespace(),
 		FunctionName:   firstString(node.GetFunctionName(), metadataString(metadata, "function_name"), node.GetNodeId()),
 		Metadata:       jsonString(metadata),
-		Status:         nodeStatusToDB(node.GetStatus()),
 		IsDeleted:      node.GetIsDeleted(),
 	}
 }
@@ -819,38 +782,5 @@ func nodeMetadataFromPB(node *pb.CloudNode) map[string]any {
 	if node.GetProbeUrl() != "" {
 		metadata["probe_url"] = node.GetProbeUrl()
 	}
-	if node.GetClsTopicId() != "" {
-		metadata["cls_topic_id"] = node.GetClsTopicId()
-	}
 	return metadata
-}
-
-func nodeStatusToPB(status string) pb.NodeStatusCode {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "online":
-		return pb.NodeStatusCode_NODE_STATUS_ONLINE
-	case "timeout":
-		return pb.NodeStatusCode_NODE_STATUS_TIMEOUT
-	case "abnormal":
-		return pb.NodeStatusCode_NODE_STATUS_ABNORMAL
-	case "offline", "deleted", "unknown":
-		return pb.NodeStatusCode_NODE_STATUS_OFFLINE
-	default:
-		return pb.NodeStatusCode_NODE_STATUS_UNSPECIFIED
-	}
-}
-
-func nodeStatusToDB(status pb.NodeStatusCode) string {
-	switch status {
-	case pb.NodeStatusCode_NODE_STATUS_ONLINE:
-		return "online"
-	case pb.NodeStatusCode_NODE_STATUS_TIMEOUT:
-		return "timeout"
-	case pb.NodeStatusCode_NODE_STATUS_ABNORMAL:
-		return "abnormal"
-	case pb.NodeStatusCode_NODE_STATUS_OFFLINE:
-		return "offline"
-	default:
-		return "unknown"
-	}
 }

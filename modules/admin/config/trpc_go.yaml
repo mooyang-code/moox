@@ -90,6 +90,11 @@ server:
       network: "0 */5 * * * *"
       protocol: timer
       timeout: 60000
+    - name: trpc.moox.admin.certificates.timer
+      port: 11307
+      network: "0 0 0 * * *"
+      protocol: timer
+      timeout: 10000
 
 client:
   filter:

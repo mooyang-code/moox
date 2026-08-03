@@ -52,10 +52,6 @@
             <a-option value="scf-web">云函数（Web型）</a-option>
             <a-option value="server">服务器</a-option>
           </a-select>
-          <a-select placeholder="节点状态" v-model="form.status" style="width: 120px" allow-clear>
-            <a-option value="online">在线</a-option>
-            <a-option value="offline">离线</a-option>
-          </a-select>
           <a-button type="primary" @click="search">
             <template #icon><icon-search /></template>
             <span>查询</span>
@@ -145,11 +141,6 @@
                   {{ getRegionName(record.region) }}
                 </template>
               </a-table-column>
-              <a-table-column title="CLS 主题 ID" data-index="cls_topic_id" :width="180" :ellipsis="true" :tooltip="true">
-                <template #cell="{ record }">
-                  {{ record.cls_topic_id || "-" }}
-                </template>
-              </a-table-column>
               <a-table-column title="标签" data-index="tag" :width="80">
                 <template #cell="{ record }">
                   <a-tag v-if="record.tag" size="small" :color="record.tag === '国内' ? 'blue' : 'orange'">
@@ -168,13 +159,6 @@
                     {{ record.package_version }}
                   </a-link>
                   <span v-else>-</span>
-                </template>
-              </a-table-column>
-              <a-table-column title="状态" :width="80" align="center">
-                <template #cell="{ record }">
-                  <a-tag bordered size="small" :color="getStatusColor(record.status)">
-                    {{ getStatusText(record.status) }}
-                  </a-tag>
                 </template>
               </a-table-column>
               <a-table-column title="操作" :width="170" align="center" fixed="right">
@@ -521,11 +505,6 @@
           <a-descriptions-item label="代码包版本">
             {{ selectedNodeDetail.package_version || "-" }}
           </a-descriptions-item>
-          <a-descriptions-item label="状态">
-            <a-tag bordered size="small" :color="getStatusColor(selectedNodeDetail.status)">
-              {{ getStatusText(selectedNodeDetail.status) }}
-            </a-tag>
-          </a-descriptions-item>
           <a-descriptions-item label="超时阈值">
             {{ selectedNodeDetail.timeout_threshold || 0 }}秒
             <span v-if="selectedNodeDetail.timeout_threshold === 0" style="color: #86909c">（使用全局默认值）</span>
@@ -534,9 +513,6 @@
             <a-tag bordered size="small" :color="selectedNodeDetail.probe_enabled ? 'green' : 'red'">
               {{ selectedNodeDetail.probe_enabled ? "是" : "否" }}
             </a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="CLS 主题 ID">
-            {{ selectedNodeDetail.cls_topic_id || "-" }}
           </a-descriptions-item>
           <a-descriptions-item label="元数据" :span="2">
             <div
@@ -731,8 +707,6 @@ import {
   getPackageTypeColor,
   getPackageTypeLabel,
   getProviderName,
-  getStatusColor,
-  getStatusText,
   normalizeCloudNodes,
   type BatchPlanItem,
   type CloudNode,
@@ -754,8 +728,7 @@ const form = reactive({
   cloudAccountId: "",
   nodeId: "",
   region: "",
-  nodeType: "",
-  status: ""
+  nodeType: ""
 });
 
 // 数据列表
@@ -1416,7 +1389,6 @@ const loadData = async (showEmptyTip = false) => {
       region: form.region,
       node_type: form.nodeType,
       biz_type: currentBizType.value, // 根据路由添加业务类型过滤
-      status: form.status,
       page: pagination.value.current,
       page_size: pagination.value.pageSize
     });

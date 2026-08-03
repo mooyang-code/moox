@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +86,32 @@ func TestCollectorFunctionEnvironmentEmbedsCAFileMaterial(t *testing.T) {
 	assert.Equal(t, base64.StdEncoding.EncodeToString(pemBytes), env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
 	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
 	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_FILE")
+}
+
+func TestCollectorFunctionEnvironmentUsesResolvedControlTrustMaterial(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	controlCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	staleCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("stale")})
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", base64.StdEncoding.EncodeToString(staleCA))
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", base64.StdEncoding.EncodeToString(staleCA))
+
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{
+		EventBusCredential: &jetstream.CredentialFile{
+			URLs:     []string{"tls://203.0.113.10:4222"},
+			Username: "publisher",
+			Password: "publisher-secret",
+			CAFile:   "ca.pem",
+		},
+		EventBusCAPEM:       []byte("eventbus-control-ca"),
+		GatewayCAPEM:        controlCA,
+		ServiceGatewayCAPEM: controlCA,
+	}, "package-control")
+	require.NoError(t, err)
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("eventbus-control-ca")), env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString(controlCA), env["MOOX_GATEWAY_CA_PEM_B64"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString(controlCA), env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
 }
 
 func TestLoadCollectorSCFFetcherConfigSelectsOnlyRequestedSpace(t *testing.T) {

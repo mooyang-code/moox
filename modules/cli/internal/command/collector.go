@@ -23,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -76,6 +77,21 @@ type collectorPublishOptions struct {
 	CLSSecretID            string
 	CLSSecretKey           string
 	CLSHost                string
+	// In manifest mode these public materials are read from the control host
+	// immediately before a fleet is published. They must not come from the
+	// operator machine, which may still hold an old CA after a control-plane
+	// certificate rotation.
+	EventBusCredential  *jetstream.CredentialFile
+	EventBusCAPEM       []byte
+	GatewayCAPEM        []byte
+	ServiceGatewayCAPEM []byte
+}
+
+type collectorSCFTrustMaterial struct {
+	EventBusCredential  jetstream.CredentialFile
+	EventBusCAPEM       []byte
+	GatewayCAPEM        []byte
+	ServiceGatewayCAPEM []byte
 }
 
 type collectorPublishStatusOptions struct {
@@ -467,7 +483,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if opts.CloudAccountID == "" && strings.TrimSpace(opts.File) == "" {
 		return collectorPublishSummary{}, fmt.Errorf("--cloud-account-id is required")
 	}
-	fetcherConfig, err := loadCollectorSCFFetcherConfig(opts.File, opts.SpaceID)
+	fetcherConfig, manifest, err := loadCollectorSCFFetcherConfigSnapshot(opts.File, opts.SpaceID)
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
@@ -484,6 +500,14 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 		return collectorPublishSummary{}, err
 	}
 	if fetcherConfig != nil {
+		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost)
+		if trustErr != nil {
+			return collectorPublishSummary{}, trustErr
+		}
+		opts.EventBusCredential = &trustMaterial.EventBusCredential
+		opts.EventBusCAPEM = trustMaterial.EventBusCAPEM
+		opts.GatewayCAPEM = trustMaterial.GatewayCAPEM
+		opts.ServiceGatewayCAPEM = trustMaterial.ServiceGatewayCAPEM
 		opts.FetcherConfig = fetcherConfig
 		opts.collectorPackageOptions.SpaceID = fetcherConfig.SpaceID
 		opts.collectorPackageOptions.Entrypoint = fetcherConfig.Entrypoint
@@ -712,29 +736,77 @@ func validateCollectorZipLogging(zipPath, _ string) error {
 }
 
 func loadCollectorSCFFetcherConfig(path, spaceID string) (*setupconfig.SCFFetcherSpace, error) {
+	fetcher, _, err := loadCollectorSCFFetcherConfigSnapshot(path, spaceID)
+	return fetcher, err
+}
+
+func loadCollectorSCFFetcherConfigSnapshot(path, spaceID string) (*setupconfig.SCFFetcherSpace, *setupconfig.Snapshot, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	root := filepath.Dir(path)
 	snapshot, err := setupconfig.Load(path, root)
 	if err != nil {
-		return nil, fmt.Errorf("load collector SCF config: %w", err)
+		return nil, nil, fmt.Errorf("load collector SCF config: %w", err)
 	}
 	if !snapshot.Manifest.SCFFetcher.Enabled {
-		return nil, nil
+		return nil, snapshot, nil
 	}
 	spaceID = strings.TrimSpace(spaceID)
 	if spaceID == "" {
-		return nil, fmt.Errorf("--space-id is required to select scf_fetcher.spaces")
+		return nil, nil, fmt.Errorf("--space-id is required to select scf_fetcher.spaces")
 	}
 	for index := range snapshot.Manifest.SCFFetcher.Spaces {
 		space := &snapshot.Manifest.SCFFetcher.Spaces[index]
 		if space.SpaceID == spaceID {
-			return space, nil
+			return space, snapshot, nil
 		}
 	}
-	return nil, fmt.Errorf("scf_fetcher has no configuration for space %q", spaceID)
+	return nil, nil, fmt.Errorf("scf_fetcher has no configuration for space %q", spaceID)
+}
+
+func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconfig.Host) (collectorSCFTrustMaterial, error) {
+	transport, err := setupssh.Dial(ctx, sshTarget(controlHost), controlHost.Password, setupssh.Options{Timeout: 15 * time.Second})
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("connect control host to read SCF trust material: %w", err)
+	}
+	defer transport.Close()
+
+	credentialRaw, err := readRemoteControlFile(ctx, transport, ".config/moox/eventbus/market-fetch-publisher.yaml")
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("read control EventBus publisher credential: %w", err)
+	}
+	credential, err := decodeEventBusCredential(string(credentialRaw))
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("decode control EventBus publisher credential: %w", err)
+	}
+	eventBusCA, err := readRemoteControlFile(ctx, transport, ".config/moox/eventbus/ca.pem")
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("read control EventBus CA: %w", err)
+	}
+	gatewayCA, err := readRemoteControlFile(ctx, transport, "moox/prod/certs/gateway/peers.pem")
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("read control Gateway peer CA: %w", err)
+	}
+	serviceGatewayCA, err := readRemoteControlFile(ctx, transport, "moox/prod/certs/caddy/root.crt")
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("read control service Gateway CA: %w", err)
+	}
+	return collectorSCFTrustMaterial{
+		EventBusCredential:  credential,
+		EventBusCAPEM:       eventBusCA,
+		GatewayCAPEM:        gatewayCA,
+		ServiceGatewayCAPEM: serviceGatewayCA,
+	}, nil
+}
+
+func readRemoteControlFile(ctx context.Context, transport setupssh.Client, relativePath string) ([]byte, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", `cat "$HOME/$1"`, "moox-scf-trust", relativePath}, nil)
+	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 1<<20 {
+		return nil, fmt.Errorf("control_public_file_unavailable")
+	}
+	return []byte(result.Stdout), nil
 }
 
 func validateCollectorPublishAuth(opts collectorPublishOptions) error {
@@ -1246,7 +1318,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 			"realtime_bar_limit":    effectiveInt("realtime_bar_limit", defaultInt(fetcher.RealtimeBarLimit, 3)),
 			"request_timeout_ms":    effectiveInt("request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 2000)),
 			"http_max_attempts":     effectiveInt("http_max_attempts", defaultInt(fetcher.HTTPMaxAttempts, 4)),
-			"storage_max_attempts":  effectiveInt("storage_max_attempts", defaultInt(fetcher.StorageMaxAttempts, 1)),
+			"storage_max_attempts":  effectiveInt("storage_max_attempts", defaultInt(fetcher.StorageMaxAttempts, 3)),
 			"storage_timeout_ms":    effectiveInt("storage_timeout_ms", defaultInt(fetcher.StorageTimeoutMS, 5000)),
 		},
 	}, nil
@@ -1425,7 +1497,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	setDefaultEnv(env, "MOOX_FETCH_MAX_INFLIGHT_REQUESTS", strconv.Itoa(defaultInt(fetcher.MaxInflightRequests, 5)))
 	setDefaultEnv(env, "MOOX_FETCH_REQUEST_TIMEOUT_MS", strconv.Itoa(defaultInt(fetcher.RequestTimeoutMS, 2000)))
 	setDefaultEnv(env, "MOOX_FETCH_HTTP_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.HTTPMaxAttempts, 4)))
-	setDefaultEnv(env, "MOOX_FETCH_STORAGE_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.StorageMaxAttempts, 1)))
+	setDefaultEnv(env, "MOOX_FETCH_STORAGE_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.StorageMaxAttempts, 3)))
 	setDefaultEnv(env, "MOOX_FETCH_REALTIME_BATCH_SIZE", strconv.Itoa(defaultInt(fetcher.RealtimeBatchSize, 10)))
 	setDefaultEnv(env, "MOOX_FETCH_REALTIME_BAR_LIMIT", strconv.Itoa(defaultInt(fetcher.RealtimeBarLimit, 3)))
 	setDefaultEnv(env, "MOOX_FETCH_CATCHUP_BATCH_SIZE", strconv.Itoa(defaultInt(fetcher.CatchupBatchSize, 1)))
@@ -1494,32 +1566,13 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 			return nil, fmt.Errorf("--env must not override managed key %s", key)
 		}
 	}
-	if packageID != "" && opts.EventBusCredentialFile != "" {
-		credentialPath := jetstream.ExpandCredentialPath(opts.EventBusCredentialFile)
-		credential, err := jetstream.LoadCredentialFile(credentialPath)
+	if packageID != "" && (opts.EventBusCredential != nil || opts.EventBusCredentialFile != "") {
+		credential, caPEM, err := collectorEventBusCredentialMaterial(opts)
 		if err != nil {
 			return nil, err
 		}
-		if len(credential.URLs) != 1 {
-			return nil, fmt.Errorf("market-fetch-publisher credential must contain exactly one EventBus URL")
-		}
-		eventBusURL, err := url.Parse(credential.URLs[0])
-		if err != nil || eventBusURL.Scheme != "tls" || eventBusURL.Hostname() == "" || eventBusURL.Port() == "" {
-			return nil, fmt.Errorf("market-fetch-publisher credential URL must be tls with host and port")
-		}
-		if host := eventBusURL.Hostname(); host == "localhost" || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback() {
-			return nil, fmt.Errorf("SCF EventBus URL must not use a loopback host")
-		}
-		caPath := credential.CAFile
-		if caPath == "" {
-			return nil, fmt.Errorf("market-fetch-publisher credential requires ca_file")
-		}
-		if !filepath.IsAbs(caPath) {
-			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
-		}
-		caPEM, err := os.ReadFile(caPath)
-		if err != nil {
-			return nil, fmt.Errorf("read EventBus CA file: %w", err)
+		if err := validateCollectorEventBusCredential(credential); err != nil {
+			return nil, err
 		}
 		env["MOOX_EVENTBUS_NATS_URL"] = credential.URLs[0]
 		env["MOOX_EVENTBUS_NATS_USERNAME"] = credential.Username
@@ -1538,6 +1591,10 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	}
 	caFile := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_FILE"))
 	caMaterial := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_PEM_B64"))
+	if len(opts.GatewayCAPEM) > 0 {
+		caFile = ""
+		caMaterial = base64.StdEncoding.EncodeToString(opts.GatewayCAPEM)
+	}
 	if overrideMaterial := strings.TrimSpace(overrides["MOOX_GATEWAY_CA_PEM_B64"]); overrideMaterial != "" {
 		if caFile != "" || (caMaterial != "" && caMaterial != overrideMaterial) {
 			return nil, fmt.Errorf("gateway CA material conflicts with host configuration")
@@ -1562,6 +1619,10 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	}
 	serviceCAFile := strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_CA_FILE"))
 	serviceCAMaterial := strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64"))
+	if len(opts.ServiceGatewayCAPEM) > 0 {
+		serviceCAFile = ""
+		serviceCAMaterial = base64.StdEncoding.EncodeToString(opts.ServiceGatewayCAPEM)
+	}
 	if serviceCAFile != "" && serviceCAMaterial != "" {
 		return nil, fmt.Errorf("service gateway CA file and CA PEM material are mutually exclusive")
 	}
@@ -1592,6 +1653,52 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	return env, nil
 }
 
+func collectorEventBusCredentialMaterial(opts collectorPublishOptions) (jetstream.CredentialFile, []byte, error) {
+	if opts.EventBusCredential != nil {
+		if len(opts.EventBusCAPEM) == 0 {
+			return jetstream.CredentialFile{}, nil, fmt.Errorf("control EventBus publisher credential requires CA material")
+		}
+		return *opts.EventBusCredential, append([]byte(nil), opts.EventBusCAPEM...), nil
+	}
+	if opts.EventBusCredentialFile == "" {
+		return jetstream.CredentialFile{}, nil, fmt.Errorf("market-fetch-publisher EventBus credential is required")
+	}
+	credentialPath := jetstream.ExpandCredentialPath(opts.EventBusCredentialFile)
+	credential, err := jetstream.LoadCredentialFile(credentialPath)
+	if err != nil {
+		return jetstream.CredentialFile{}, nil, err
+	}
+	caPath := credential.CAFile
+	if caPath == "" {
+		return jetstream.CredentialFile{}, nil, fmt.Errorf("market-fetch-publisher credential requires ca_file")
+	}
+	if !filepath.IsAbs(caPath) {
+		caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return jetstream.CredentialFile{}, nil, fmt.Errorf("read EventBus CA file: %w", err)
+	}
+	return credential, caPEM, nil
+}
+
+func validateCollectorEventBusCredential(credential jetstream.CredentialFile) error {
+	if len(credential.URLs) != 1 {
+		return fmt.Errorf("market-fetch-publisher credential must contain exactly one EventBus URL")
+	}
+	eventBusURL, err := url.Parse(credential.URLs[0])
+	if err != nil || eventBusURL.Scheme != "tls" || eventBusURL.Hostname() == "" || eventBusURL.Port() == "" {
+		return fmt.Errorf("market-fetch-publisher credential URL must be tls with host and port")
+	}
+	if host := eventBusURL.Hostname(); host == "localhost" || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback() {
+		return fmt.Errorf("SCF EventBus URL must not use a loopback host")
+	}
+	if strings.TrimSpace(credential.Username) == "" || strings.TrimSpace(credential.Password) == "" {
+		return fmt.Errorf("market-fetch-publisher credential requires username and password")
+	}
+	return nil
+}
+
 func setDefaultEnv(env map[string]string, key string, value string) {
 	if strings.TrimSpace(value) == "" {
 		return
@@ -1617,7 +1724,7 @@ func defaultCollectorSCFFetcherSpace() *setupconfig.SCFFetcherSpace {
 		MaxInflightRequests: 32,
 		RequestTimeoutMS:    1500,
 		HTTPMaxAttempts:     4,
-		StorageMaxAttempts:  1,
+		StorageMaxAttempts:  3,
 		StorageTimeoutMS:    5000,
 		MaxRetryAttempts:    3,
 	}

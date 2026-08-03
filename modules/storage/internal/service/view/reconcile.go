@@ -115,6 +115,8 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			if err := s.AttachActiveView(view); err != nil {
 				return err
 			}
+			_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
+			s.cacheActiveIndexStats(runtime, view.GetActiveIndexId(), stats)
 		}
 	}
 	failedBuild := false

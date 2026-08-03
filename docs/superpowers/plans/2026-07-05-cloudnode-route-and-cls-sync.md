@@ -19,7 +19,7 @@
 
 - [ ] **Step 1: Write failing tests**
 
-Add/extend tests so `ensureSCFFunction` persists `cls_logset_id` and `cls_topic_id` into node metadata when Tencent SCF returns them from `GetFunction`.
+Do not persist SCF native CLS identifiers in CloudNode metadata. Centralized CLS configuration is passed only to the short-lived function through its environment.
 
 - [ ] **Step 2: Run test to verify it fails**
 

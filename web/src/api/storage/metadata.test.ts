@@ -54,13 +54,12 @@ describe("Storage metadata DataNode APIs", () => {
     expect(mocks.callStorage).toHaveBeenLastCalledWith("DeleteDataNode", { node_id: "node-a" });
   });
 
-  it("preserves Proto JSON Dataset binding fields and filters", async () => {
+  it("preserves supported Proto JSON Dataset filters", async () => {
     await listDatasets({
       space_id: "space-a",
       data_source_id: "source-a",
       data_node_id: "node-a",
       data_kind: "DATA_KIND_TIME_SERIES",
-      status: "disabled",
       page: { page: 1, size: 20 }
     });
     expect(mocks.callStorage).toHaveBeenLastCalledWith("ListDatasets", {
@@ -68,7 +67,6 @@ describe("Storage metadata DataNode APIs", () => {
       data_source_id: "source-a",
       data_node_id: "node-a",
       data_kind: "DATA_KIND_TIME_SERIES",
-      status: "disabled",
       page: { page: 1, size: 20 }
     });
   });

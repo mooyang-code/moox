@@ -91,6 +91,36 @@ func TestResolveUsesPublicGatewayEndpoints(t *testing.T) {
 	assert.Equal(t, "106.53.107.122:11003", endpointTRPCTarget(items, "service_gateway_native"))
 }
 
+func TestResolveSelectsStorageGatewayNode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"deployment_map": map[string]any{
+				"control/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "control.example.com", "port": 11003,
+				},
+				"compute-1/service_gateway_native": map[string]any{
+					"service_name": "service_gateway_native", "protocol": "trpc", "host": "compute.example.com", "port": 11003,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	cfg := Default()
+	cfg.SysDeploy.AdminGatewayURL = server.URL
+	cfg.SysDeploy.ServiceAuth.AccessKey = "ak"
+	cfg.SysDeploy.ServiceAuth.SecretKey = "sk"
+	cfg.SysDeploy.ServiceAuth.TargetNode = "control"
+	cfg.Storage.GatewayNodeID = "compute-1"
+
+	deps, err := Resolve(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "compute.example.com:11003", deps.StorageRPCGatewayTarget)
+}
+
 func TestIsHTTPURL(t *testing.T) {
 	assert.True(t, isHTTPURL("http://example.com"))
 	assert.True(t, isHTTPURL("HTTPS://example.com"))

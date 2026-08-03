@@ -334,7 +334,7 @@ timeout_seconds = 15
 MOOX_FETCH_MAX_INFLIGHT_REQUESTS=5
 MOOX_FETCH_REQUEST_TIMEOUT_MS=2000
 MOOX_FETCH_HTTP_MAX_ATTEMPTS=4
-MOOX_FETCH_STORAGE_MAX_ATTEMPTS=1
+MOOX_FETCH_STORAGE_MAX_ATTEMPTS=3
 MOOX_FETCH_REALTIME_BATCH_SIZE=10
 MOOX_FETCH_REALTIME_BAR_LIMIT=3
 MOOX_FETCH_CATCHUP_BATCH_SIZE=1
@@ -342,7 +342,7 @@ MOOX_FETCH_CATCHUP_BAR_LIMIT=1000
 MOOX_FETCH_STORAGE_TIMEOUT_MS=5000
 ```
 
-`MOOX_FETCH_HTTP_MAX_ATTEMPTS=4` 表示首次请求失败后最多重试三次，即单个 K 线请求最多发起四次；429、5xx、网络错误和单次请求超时使用短退避重试，但不能超过 SCF 的整体工作 deadline。`MOOX_FETCH_STORAGE_MAX_ATTEMPTS=1` 同样禁止沿用当前 Storage Client 的三次内层重试；Storage 临时失败交给 Collector RetryItem。
+`MOOX_FETCH_HTTP_MAX_ATTEMPTS=4` 表示首次请求失败后最多重试三次，即单个 K 线请求最多发起四次；429、5xx、网络错误和单次请求超时使用短退避重试，但不能超过 SCF 的整体工作 deadline。`MOOX_FETCH_STORAGE_MAX_ATTEMPTS=3` 用于聚合写入的短重试：每次写入会使用独立的子 deadline，避免一次 Gateway 回包超时耗尽整个 5 秒 Storage 预算。三次仍失败时才交给 Collector RetryItem。
 
 ### 7.3 Deadline 规则
 
@@ -391,7 +391,7 @@ catchup_bar_limit = 1000
 max_inflight_requests = 16
 request_timeout_ms = 1500
 http_max_attempts = 4
-storage_max_attempts = 1
+storage_max_attempts = 3
 storage_timeout_ms = 5000
 max_retry_attempts = 3
 retry_delays = ["5s", "30s", "2m"]
@@ -429,7 +429,7 @@ cos_bucket = "moox-scf-tokyo-<tencent-app-id>"
 - `1 <= max_inflight_requests <= 64`；超过 Executor 上限直接拒绝，避免函数启动后每批都因非法并发配置失败；
 - `1 <= realtime_batch_size <= 64`；实时调度先按当前函数池均分，再受该上限约束；
 - `http_max_attempts` 必须为 4（首次请求加三次重试）；
-- `storage_max_attempts` 必须为 1；
+- `storage_max_attempts` 必须为 1 到 3；实时聚合写默认取 3，仍受 `storage_timeout_ms` 的总预算限制；
 - 同一 Space 内地域不能重复，且至少一个地域必须 `enabled = true`；
 - 每个启用地域 `function_count >= 1`；
 - 每个启用地域必须声明 `cloud_account_id`，且该云账户的 COS Region 与 SCF Region 相同；发布前 CLI 直接拒绝跨地域 COS 包和拼写错误的地域；
@@ -468,7 +468,7 @@ CloudNode `c_metadata` 至少保存：
   "realtime_batch_size": 64,
   "request_timeout_ms": 1500,
   "http_max_attempts": 4,
-  "storage_max_attempts": 1,
+  "storage_max_attempts": 3,
   "realtime_bar_limit": 3,
   "catchup_batch_size": 1,
   "catchup_bar_limit": 1000,

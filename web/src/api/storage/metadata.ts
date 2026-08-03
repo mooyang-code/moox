@@ -99,7 +99,6 @@ export function listDatasets(params: {
   data_source_id?: string;
   data_kind?: string;
   data_node_id?: string;
-  status?: string;
   page?: Page;
 }) {
   return callMetadata<typeof params, RetRsp & { datasets: Dataset[]; page_result: PageResult }>("ListDatasets", params);

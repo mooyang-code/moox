@@ -1,8 +1,12 @@
 package marketfetch
 
 import (
+	"time"
+
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type Metrics struct {
@@ -10,6 +14,15 @@ type Metrics struct {
 	batchDuration *prometheus.HistogramVec
 	retryPending  *prometheus.GaugeVec
 	lastSuccess   *prometheus.GaugeVec
+	datasetRuns   report.DatasetRunObserver
+}
+
+// SetDatasetRunObserver connects terminal SCF batch outcomes to the shared
+// Dataset freshness contract consumed by Monitor.
+func (m *Metrics) SetDatasetRunObserver(observer report.DatasetRunObserver) {
+	if m != nil {
+		m.datasetRuns = observer
+	}
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -76,6 +89,31 @@ func (m *Metrics) Observe(spaceID string, payload *marketfetchpb.MarketFetchBatc
 	m.batchDuration.WithLabelValues(spaceID, payload.GetDatasetId(), payload.GetFrequency()).Observe(float64(payload.GetDurationMs()) / 1000)
 	if payload.GetStatus() == "succeeded" && payload.GetCompletedAt() != nil && payload.GetCompletedAt().CheckValid() == nil {
 		m.lastSuccess.WithLabelValues(spaceID, payload.GetDatasetId(), payload.GetFrequency()).Set(float64(payload.GetCompletedAt().AsTime().Unix()))
+	}
+	m.observeDatasetRun(spaceID, payload)
+}
+
+func (m *Metrics) observeDatasetRun(spaceID string, payload *marketfetchpb.MarketFetchBatchCompleted) {
+	if m == nil || m.datasetRuns == nil || payload == nil {
+		return
+	}
+	completedAt := time.Now().UTC()
+	if timestamp := payload.GetCompletedAt(); timestamp != nil && timestamp.CheckValid() == nil {
+		completedAt = timestamp.AsTime().UTC()
+	}
+	result := "error"
+	switch payload.GetStatus() {
+	case "succeeded":
+		result = "success"
+	case "partial_failed":
+		result = "incomplete"
+	}
+	if err := m.datasetRuns.ObserveRun(report.DatasetObservation{
+		Key:        report.DatasetKey{SpaceID: spaceID, DatasetID: payload.GetDatasetId(), Freq: payload.GetFrequency()},
+		Result:     result,
+		FinishedAt: completedAt,
+	}); err != nil {
+		log.Warnf("collector dataset freshness observation failed space_id=%s dataset_id=%s frequency=%s status=%s: %v", spaceID, payload.GetDatasetId(), payload.GetFrequency(), payload.GetStatus(), err)
 	}
 }
 

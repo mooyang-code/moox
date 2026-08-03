@@ -75,6 +75,9 @@ func applySchema(dbPath string, rawSQL string) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := db.MigrateLegacySchema(); err != nil {
+		return fmt.Errorf("migrate legacy schema: %w", err)
+	}
 	if err := db.ApplySchema(rawSQL); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}

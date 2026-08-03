@@ -73,8 +73,6 @@ func TestExecuteCreateNodeItemReconcilesFunctionCreatedBeforeRestart(t *testing.
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{
 		info: &tencentscf.FunctionInfo{
 			Status:      "Active",
-			ClsLogsetID: "logset-a",
-			ClsTopicID:  "topic-a",
 			Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev"},
 		},
 	}}}
@@ -96,8 +94,6 @@ func TestExecuteCreateNodeItemReconcilesFunctionCreatedBeforeRestart(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, node)
 	assert.Equal(t, "moox-collector_dev", node.PackageID)
-	assert.NotContains(t, node.Metadata, `"cls_logset_id"`)
-	assert.NotContains(t, node.Metadata, `"cls_topic_id"`)
 }
 
 func TestExecuteCreateNodeItemRejectsUnownedExistingFunction(t *testing.T) {

@@ -14,14 +14,12 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_namespace TEXT NOT NULL DEFAULT '',
     c_function_name TEXT NOT NULL DEFAULT '',
     c_metadata TEXT NOT NULL DEFAULT '{}',
-    c_status TEXT NOT NULL DEFAULT 'unknown',
     c_is_deleted INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cloud_nodes_space_node ON t_cloud_nodes (c_space_id, c_node_id);
-CREATE INDEX IF NOT EXISTS idx_cloud_nodes_status ON t_cloud_nodes (c_status);
 CREATE INDEX IF NOT EXISTS idx_cloud_nodes_deleted ON t_cloud_nodes (c_is_deleted);
 
 CREATE TABLE IF NOT EXISTS t_cloud_accounts (

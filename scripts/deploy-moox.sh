@@ -1123,6 +1123,9 @@ WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
 WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
 WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
 WITH_TRADE="${MOOX_WITH_TRADE:-__WITH_TRADE__}"
+if [[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
+  ADMIN_SECRET_ENV+=("MOOX_EVENTBUS_CA_FILE=${HOME}/.config/moox/eventbus/ca.pem")
+fi
 WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
@@ -1734,7 +1737,7 @@ start_admin() {
   gateway_service_env_for admin-gateway
   runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${storage_gateway_target}" "MOOX_NODE_GATEWAY_NODE_ID=${storage_gateway_node_id}" \
       "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml

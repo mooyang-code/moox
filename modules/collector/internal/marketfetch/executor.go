@@ -172,8 +172,8 @@ type exchangeItem struct {
 	register []*storagepb.RegisterDataSubjectReq
 }
 
-// Execute fetches all items concurrently, writes all successful rows once,
-// then returns a completion payload. No retry is performed in the function;
+// Execute fetches all items concurrently, writes all successful rows once with
+// a bounded Storage retry, then returns a completion payload. Remaining
 // retryable outcomes are handed back to the scheduler in the event payload.
 func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 	if err := req.validate(); err != nil {
@@ -248,8 +248,9 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 		symbolsByItem[index] = executions[index].symbols
 	}
 
-	// A single Storage write is used for the complete successful row set. If it
-	// fails, none of those items are reported as successful.
+	// A single idempotent Storage write is used for the complete successful row
+	// set. Its bounded internal retries preserve that atomic batch outcome while
+	// tolerating a transient Gateway response timeout.
 	storageReserve := e.StorageReserve
 	if storageReserve <= 0 {
 		storageReserve = commitReserve
@@ -260,7 +261,6 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 		commitCtx, cancel = context.WithTimeout(ctx, storageReserve)
 		defer cancel()
 	}
-	commitCtx = binance.SingleAttempt(commitCtx)
 	var writeErr error
 	if len(rows) > 0 {
 		if sourced, ok := e.Storage.(sourceStorage); ok {

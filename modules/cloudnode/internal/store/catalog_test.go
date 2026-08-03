@@ -50,7 +50,7 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 
 	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
 		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "acct-1",
-		NodeType: "scf-event", Region: "ap-guangzhou", Namespace: "default", Status: "online",
+		NodeType: "scf-event", Region: "ap-guangzhou", Namespace: "default",
 		DeploymentID: "dep-1",
 	}))
 	node, err := repo.GetNode(ctx, "crypto", "node-a")
@@ -59,7 +59,7 @@ func TestCatalogRepository_NodeLifecycle(t *testing.T) {
 	assert.Equal(t, "tencent-scf", node.Provider)
 
 	nodes, total, err := repo.ListNodes(ctx, "crypto", &pb.GetNodeListReq{
-		NodeId: "node", Region: "ap-guangzhou", Status: pb.NodeStatusCode_NODE_STATUS_ONLINE,
+		NodeId: "node", Region: "ap-guangzhou",
 		Keyword: "node", Page: &pb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
@@ -87,12 +87,12 @@ func TestCatalogRepository_ListNodesFiltersBizType(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
 		SpaceID: "crypto", NodeID: "collector-0", NodeType: "scf-event",
-		Region: "ap-guangzhou", Status: "online",
+		Region:   "ap-guangzhou",
 		Metadata: `{"biz_type":"data_collector","function_name_prefix":"collector","index":0}`,
 	}))
 	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
 		SpaceID: "crypto", NodeID: "factor-0", NodeType: "scf-event",
-		Region: "ap-guangzhou", Status: "online",
+		Region:   "ap-guangzhou",
 		Metadata: `{"biz_type":"factor_calculator","function_name_prefix":"collector","index":0}`,
 	}))
 

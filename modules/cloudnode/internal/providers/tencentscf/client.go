@@ -36,8 +36,6 @@ type FunctionInfo struct {
 	CodeSize    int64
 	MemorySize  int64
 	Timeout     int64
-	ClsLogsetID string
-	ClsTopicID  string
 	Environment map[string]string
 }
 
@@ -191,8 +189,6 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	out.Status = deref(response.Response.Status)
 	out.Runtime = deref(response.Response.Runtime)
 	out.ModTime = deref(response.Response.ModTime)
-	out.ClsLogsetID = deref(response.Response.ClsLogsetId)
-	out.ClsTopicID = deref(response.Response.ClsTopicId)
 	if response.Response.Environment != nil {
 		out.Environment = make(map[string]string, len(response.Response.Environment.Variables))
 		for _, variable := range response.Response.Environment.Variables {

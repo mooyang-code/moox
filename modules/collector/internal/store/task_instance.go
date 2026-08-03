@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -71,15 +72,43 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 	if len(instances) == 0 {
 		return nil
 	}
+	spaceID := instances[0].SpaceID
+	taskIDs := make([]string, 0, len(instances))
+	for _, instance := range instances {
+		if instance.SpaceID != spaceID {
+			return fmt.Errorf("task instances must belong to one space")
+		}
+		taskIDs = append(taskIDs, instance.TaskID)
+	}
+	var existingRows []domain.TaskInstance
+	if err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_task_id IN ?", spaceID, taskIDs).
+		Find(&existingRows).Error; err != nil {
+		return err
+	}
+	existing := make(map[string]domain.TaskInstance, len(existingRows))
+	for _, instance := range existingRows {
+		existing[instance.TaskID] = instance
+	}
+	changed := make([]domain.TaskInstance, 0, len(instances))
+	for _, instance := range instances {
+		current, found := existing[instance.TaskID]
+		if !found || taskInstanceDefinitionChanged(current, instance) {
+			changed = append(changed, instance)
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
 	now := time.Now().UTC()
-	for i := range instances {
-		if instances[i].CreateTime.IsZero() {
-			instances[i].CreateTime = now
+	for i := range changed {
+		if changed[i].CreateTime.IsZero() {
+			changed[i].CreateTime = now
 		}
-		if instances[i].LastExecStatus == 0 {
-			instances[i].LastExecStatus = domain.InstanceStatusPending
+		if changed[i].LastExecStatus == 0 {
+			changed[i].LastExecStatus = domain.InstanceStatusPending
 		}
-		instances[i].ModifyTime = now
+		changed[i].ModifyTime = now
 	}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_task_id"}},
@@ -95,7 +124,19 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			"c_is_deleted":  clause.Expr{SQL: "excluded.c_is_deleted"},
 			"c_mtime":       clause.Expr{SQL: "excluded.c_mtime"},
 		}),
-	}).Create(&instances).Error
+	}).Create(&changed).Error
+}
+
+func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
+	return current.RuleID != desired.RuleID ||
+		current.Provider != desired.Provider ||
+		current.MarketType != desired.MarketType ||
+		current.DataType != desired.DataType ||
+		current.DatasetID != desired.DatasetID ||
+		current.SubjectID != desired.SubjectID ||
+		current.Frequency != desired.Frequency ||
+		current.TaskParams != desired.TaskParams ||
+		current.IsDeleted != desired.IsDeleted
 }
 
 // DeactivateMissingMarketFetchRuleInstances prevents the gap auditor from
@@ -105,6 +146,13 @@ func (r *TaskInstanceRepository) DeactivateMissingMarketFetchRuleInstances(ctx c
 		Where("c_space_id = ? AND c_rule_id = ? AND c_is_deleted = ?", spaceID, ruleID, false)
 	if len(activeTaskIDs) > 0 {
 		query = query.Where("c_task_id NOT IN ?", activeTaskIDs)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
 	}
 	return query.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
 }

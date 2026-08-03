@@ -1,4 +1,3 @@
-import { NODE_STATUS_LABEL } from "@/api/cloud-node";
 import { PACKAGE_STATUS_LABEL, PACKAGE_TYPE_LABEL } from "@/api/function-package";
 
 export interface CloudNode {
@@ -12,11 +11,9 @@ export interface CloudNode {
   package_id?: string;
   package_version?: string;
   metadata: string | Record<string, unknown>;
-  status: string | number;
   timeout_threshold: number;
   probe_enabled: boolean;
   probe_url?: string;
-  cls_topic_id?: string;
   create_time?: string;
   modify_time?: string;
 }
@@ -50,11 +47,9 @@ export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode
     package_id: String(item.package_id || ""),
     package_version: String(item.package_version || ""),
     metadata: (item.metadata as string | Record<string, unknown>) || "",
-    status: (item.status as string | number) || "NODE_STATUS_OFFLINE",
     timeout_threshold: Number(item.timeout_threshold || 0),
     probe_enabled: Boolean(item.probe_enabled ?? false),
     probe_url: String(item.probe_url || ""),
-    cls_topic_id: String(item.cls_topic_id || ""),
     create_time: String(item.create_time || ""),
     modify_time: String(item.modify_time || "")
   }));
@@ -88,37 +83,6 @@ export const getNodeTypeLabel = (value: string) =>
   ({ "scf-event": "云函数（事件型）", "scf-web": "云函数（Web型）", server: "服务器" })[value] || value;
 export const getNodeTypeColor = (value: string) =>
   ({ "scf-event": "blue", "scf-web": "cyan", server: "orange" })[value] || "gray";
-
-export function getStatusColor(status: string | number) {
-  return (
-    (
-      {
-        1: "red",
-        2: "green",
-        3: "orange",
-        4: "orangered",
-        NODE_STATUS_OFFLINE: "red",
-        NODE_STATUS_ONLINE: "green",
-        NODE_STATUS_TIMEOUT: "orange",
-        NODE_STATUS_ABNORMAL: "orangered"
-      } as Record<string, string>
-    )[String(status)] || "gray"
-  );
-}
-
-export function getStatusText(status: string | number) {
-  if (typeof status === "string" && status) {
-    return NODE_STATUS_LABEL[status] || status;
-  }
-  const key =
-    (
-      { 1: "NODE_STATUS_OFFLINE", 2: "NODE_STATUS_ONLINE", 3: "NODE_STATUS_TIMEOUT", 4: "NODE_STATUS_ABNORMAL" } as Record<
-        number,
-        string
-      >
-    )[Number(status)] || "NODE_STATUS_UNSPECIFIED";
-  return NODE_STATUS_LABEL[key] || "未知";
-}
 
 export const getCollectorName = (value: string) =>
   ({ kline: "K线", ticker: "行情", orderbook: "订单簿", trade: "逐笔", news: "资讯", symbol: "标的" })[value] || value;
