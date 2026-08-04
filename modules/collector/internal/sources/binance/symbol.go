@@ -218,7 +218,7 @@ func (c *SymbolCollector) reportSymbols(
 		if target == "" {
 			return "", fmt.Errorf("未配置存储服务 tRPC 地址")
 		}
-		writer = newStorageWriter(target, target, storageAuthInfo(binding))
+		writer = newStorageWriter(target, target, storageAuthInfo(binding), "")
 	}
 	memberships, err := writer.ListDatasetSubjects(ctx, spaceID, datasetID)
 	if err != nil {

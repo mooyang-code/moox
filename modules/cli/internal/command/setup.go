@@ -517,6 +517,15 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		if err = ensureSetupStorageGatewayFirewall(ctx, snapshot, host.Address); err != nil {
 			return err
 		}
+	} else {
+		// Control setup disables Storage routes until the package is installed.
+		// Activate them only after Storage readiness succeeds so the native
+		// gateway can resolve PrimaryStore and Metadata calls.
+		// Control-plane service deployments use the stable node id "control";
+		// the manifest host name is only an SSH/config alias.
+		if _, err = setupclient.New(control).ActivateStoragePlacement(ctx, "control"); err != nil {
+			return err
+		}
 	}
 	return restartStorageClients(ctx, control)
 }
@@ -560,7 +569,7 @@ func controlGatewayMaterial(ctx context.Context, control setupssh.Client, contro
 	if local {
 		return "http://127.0.0.1:11000", "", "", nil, nil
 	}
-result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
+	result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
 control_key="$HOME/moox/prod/secrets/gateway-control.key"
 service_key="$HOME/moox/prod/secrets/gateway-service.key"
 caddy_root="$HOME/moox/prod/data/caddy/caddy/pki/authorities/local/root.crt"

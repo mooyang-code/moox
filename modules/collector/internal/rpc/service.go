@@ -251,6 +251,7 @@ func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstan
 		repoFilter.DatasetID = filter.GetDatasetId()
 		repoFilter.SubjectID = filter.GetSubjectId()
 		repoFilter.Frequency = filter.GetFrequency()
+		repoFilter.FunctionName = filter.GetFunctionName()
 		repoFilter.LastExecNode = filter.GetLastExecNode()
 		repoFilter.IncludeDeleted = filter.GetIncludeDeleted()
 		repoFilter.Page = page

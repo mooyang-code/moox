@@ -217,6 +217,8 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, consumerACL, "$JS.API.CONSUMER.INFO.*.*")
 	assert.Contains(t, consumerACL, "$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*")
 	assert.Contains(t, consumerACL, "$JS.ACK.MOOX_MARKET_FETCH.*.>")
+	assert.Contains(t, consumerACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.*")
+	assert.Contains(t, consumerACL, "$JS.ACK.MOOX_STORAGE.*.>")
 	assert.NotContains(t, consumerACL, "$JS.API.>")
 	for _, forbidden := range []string{"CONSUMER.CREATE", "CONSUMER.DELETE", "STREAM.NAMES", "$KV.", "moox.cloudnode.job.execution"} {
 		assert.NotContains(t, workerACL, forbidden)

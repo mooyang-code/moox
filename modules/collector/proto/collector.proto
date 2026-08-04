@@ -111,6 +111,7 @@ message TaskInstance {
   bool is_deleted = 16;
   string create_time = 17;     // RFC3339
   string modify_time = 18;     // RFC3339
+  string function_name = 19;   // 当前绑定的 SCF 函数名
 }
 
 // TaskInstanceFilter 任务实例筛选条件。
@@ -128,6 +129,7 @@ message TaskInstanceFilter {
   string last_exec_node = 12;
   bool include_deleted = 13;
   common.Page page = 14;
+  string function_name = 15; // 当前绑定的 SCF 函数名
 }
 
 message GetTaskInstanceListReq {

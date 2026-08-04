@@ -22,6 +22,7 @@ shell_quote() {
 [[ -f "${KNOWN_HOSTS_PATH}" ]] || die "missing trusted SSH host-key store: ${KNOWN_HOSTS_PATH}"
 command -v jq >/dev/null 2>&1 || die "jq is required to read sanitized setup host output"
 command -v rsync >/dev/null 2>&1 || die "rsync is required"
+command -v scp >/dev/null 2>&1 || die "scp is required"
 command -v ssh >/dev/null 2>&1 || die "ssh is required"
 
 hosts_json="$(${MOOX_CLI} setup hosts --file "${CONFIG}")" || die "unable to load build host through moox-cli"
@@ -49,9 +50,11 @@ known_hosts_q="$(shell_quote "${KNOWN_HOSTS_PATH}")"
 
 rsync_ssh="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${known_hosts_q}"
 ssh_args=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=${KNOWN_HOSTS_PATH}")
+scp_args=(scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=${KNOWN_HOSTS_PATH}")
 if [[ "${port}" != "22" ]]; then
   rsync_ssh+=" -p ${port}"
   ssh_args+=(-p "${port}")
+  scp_args+=(-P "${port}")
 fi
 
 echo "==> sync source to Storage build host ${name} (${username}@${address}:${port})"
@@ -72,13 +75,37 @@ echo "==> build storage on ${name} (${version})"
 
 mkdir -p "${BIN_DIR}"
 echo "==> download Linux Storage binaries from ${name}"
-rsync -az \
-  -e "${rsync_ssh}" \
-  "${remote}:${REMOTE_ROOT}/bin/moox-storage-primary" \
-  "${remote}:${REMOTE_ROOT}/bin/moox-storage-node" \
-  "${remote}:${REMOTE_ROOT}/bin/moox-storage-view" \
-  "${remote}:${REMOTE_ROOT}/bin/moox-storage-cli" \
-  "${BIN_DIR}/"
+for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
+  # Use scp for the large remote artifacts. The rsync daemon on some build
+  # hosts leaves a remote single-file pull open after the payload is complete;
+  # scp closes the SSH channel reliably and is sufficient for these immutable
+  # release binaries.
+  remote_binary="${REMOTE_ROOT}/bin/${binary}"
+  remote_size="$("${ssh_args[@]}" "${remote}" "stat -c %s ${remote_binary}")"
+  [[ "${remote_size}" =~ ^[0-9]+$ && "${remote_size}" -gt 0 ]] || die "remote build returned invalid size for ${binary}"
+  local_tmp="${BIN_DIR}/.${binary}.tmp"
+  "${scp_args[@]}" "${remote}:${remote_binary}" "${local_tmp}" &
+  copy_pid=$!
+  copy_done=0
+  for _ in $(seq 1 900); do
+    if [[ -s "${local_tmp}" ]]; then
+      local_size="$(stat -f %z "${local_tmp}" 2>/dev/null || true)"
+      if [[ "${local_size}" == "${remote_size}" ]]; then
+        copy_done=1
+        kill "${copy_pid}" 2>/dev/null || true
+        wait "${copy_pid}" 2>/dev/null || true
+        break
+      fi
+    fi
+    if ! kill -0 "${copy_pid}" 2>/dev/null; then
+      wait "${copy_pid}" || die "download failed for ${binary}"
+      break
+    fi
+    sleep 1
+  done
+  [[ "${copy_done}" -eq 1 ]] || die "timed out downloading ${binary}"
+  mv "${local_tmp}" "${BIN_DIR}/${binary}"
+done
 
 for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
   [[ -s "${BIN_DIR}/${binary}" ]] || die "remote build did not return ${binary}"

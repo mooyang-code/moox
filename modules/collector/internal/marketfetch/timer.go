@@ -17,7 +17,7 @@ import (
 // TimerRequestFromEnv turns the static per-function assignment into the same
 // bounded request used by the manual/egress paths. No control-plane request is
 // made from SCF.
-func TimerRequestFromEnv(requestID, nodeID string, now time.Time) (Request, string, error) {
+func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request, string, error) {
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_PROVIDER")))
 	marketType := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_MARKET_TYPE")))
 	datasetID := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DATASET_ID"))
@@ -61,7 +61,7 @@ func TimerRequestFromEnv(requestID, nodeID string, now time.Time) (Request, stri
 	for _, subject := range subjects {
 		items = append(items, domain.CollectionItem{SubjectID: subject, Symbol: externalSymbols[subject], Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: datasetID, BarLimit: MaxRealtimeRows})
 	}
-	return Request{BatchID: batchID, BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, Provider: provider, MarketType: marketType, NodeID: nodeID, RequestID: requestID, DNSRoutes: dnsRoutes, Items: items}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
+	return Request{BatchID: batchID, BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, Provider: provider, MarketType: marketType, FunctionName: strings.TrimSpace(functionName), RequestID: requestID, DNSRoutes: dnsRoutes, Items: items}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
 }
 
 func parseExternalSymbols(raw string, subjects []string) (map[string]string, error) {

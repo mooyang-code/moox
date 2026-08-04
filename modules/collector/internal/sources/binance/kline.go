@@ -217,7 +217,7 @@ func (c *KlineCollector) CollectWithResult(
 		if accessTarget == "" {
 			return result, fmt.Errorf("未配置存储 access tRPC 地址")
 		}
-		writer = newStorageWriter(accessTarget, "", storageAuthInfo(binding))
+		writer = newStorageWriter(accessTarget, "", storageAuthInfo(binding), "")
 	}
 	watermark, found, err := writer.LatestTimeSeriesTime(ctx, &storagepb.TimeSeriesSelector{
 		SpaceId: spaceID, DatasetId: datasetID, SubjectId: storageSubjectID, Freq: freq,

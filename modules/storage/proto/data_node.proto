@@ -13,6 +13,7 @@ message UpsertFieldsReq {
   string node_id = 2;
   repeated RowFieldUpsert rows = 3;
   string source_event_id = 4;
+  string write_source = 5;
 }
 
 message UpsertFieldsRsp {

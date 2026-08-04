@@ -13,8 +13,10 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/clsreporter"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakeKlines struct {
@@ -230,7 +232,7 @@ func TestSelectSymbolSnapshotShardKeepsRowsAndSymbolsAligned(t *testing.T) {
 func TestHandlerRejectsRequestForAnotherSpaceBeforeStorage(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto")
 	handler := NewHandler()
-	handler.NewStorage = func(string, string) (Storage, error) {
+	handler.NewStorage = func(string, string, string) (Storage, error) {
 		t.Fatal("storage must not be created for a cross-space request")
 		return nil, nil
 	}
@@ -244,4 +246,27 @@ func TestHandlerRejectsRequestForAnotherSpaceBeforeStorage(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, rsp.Success)
 	assert.Contains(t, rsp.Message, "does not match function space")
+}
+
+func TestHandlerUsesRuntimeFunctionNameForStorageWriteSource(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	var writeSource string
+	handler := NewHandler()
+	handler.NewStorage = func(_, _, source string) (Storage, error) {
+		writeSource = source
+		return &fakeStorage{}, nil
+	}
+	handler.Publish = func(context.Context, Request, proto.Message) error { return nil }
+	handler.Execute = func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+		return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil
+	}
+	_, err := handler.HandleWithFunctionName(context.Background(), model.CloudFunctionEvent{
+		RequestID: "request-1", StorageRPCGatewayTarget: "ip://127.0.0.1:11003",
+		Data: map[string]any{
+			"batch_id": "batch-1", "space_id": "crypto", "dataset_id": "bars", "provider": "binance", "market_type": "spot",
+			"items": []any{map[string]any{"task_id": "task-1", "subject_id": "BTC-USDT", "symbol": "BTCUSDT", "dataset_id": "bars", "provider": "binance", "market_type": "spot", "data_type": "kline", "frequency": "1m", "bar_limit": 1}},
+		},
+	}, "actual-function")
+	require.NoError(t, err)
+	assert.Equal(t, "scf:actual-function", writeSource)
 }

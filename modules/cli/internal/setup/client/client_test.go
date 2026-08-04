@@ -227,6 +227,40 @@ func TestApplyStoragePlacementCreatesRemoteLoopbackRoutesAndPublishesGatewayEndp
 	require.Equal(t, "203.0.113.9", updated["service_gateway_native"].GetHost())
 }
 
+func TestActivateStoragePlacementEnablesLocalStorageRoutes(t *testing.T) {
+	updated := map[string]*pb.ServiceDeployment{}
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
+			var input pb.GetServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
+				RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
+				Deployment: &pb.ServiceDeployment{NodeId: input.GetNodeId(), ServiceName: input.GetServiceName(), Status: "disabled", GatewayEnabled: true},
+			})
+			_, _ = w.Write(response)
+		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
+			var input pb.UpdateServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			updated[input.GetServiceName()] = input.GetDeployment()
+			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
+			_, _ = w.Write(response)
+		default:
+			http.NotFound(w, request)
+		}
+	})}
+
+	result, err := New(forwarder).ActivateStoragePlacement(context.Background(), "control")
+	require.NoError(t, err)
+	require.Equal(t, len(storageDeploymentNames), result.Deployments)
+	for _, name := range storageDeploymentNames {
+		assert.Equal(t, "active", updated[name].GetStatus(), name)
+		assert.True(t, updated[name].GetGatewayEnabled(), name)
+	}
+}
+
 func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
 	for _, tt := range []struct {
 		name string

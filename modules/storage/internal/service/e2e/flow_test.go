@@ -69,7 +69,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 			doubleField("volume", float64(10+i)),
 		}})
 	}
-	if rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: writes}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 3 {
+	if rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: writes, WriteSource: "scf:e2e-fetcher"}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 3 {
 		t.Fatalf("primary write: rsp=%v err=%v", rsp, err)
 	}
 	read, err := primary.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: []string{"close", "volume"}})
@@ -98,7 +98,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.GetEventVersion() != 2 || len(eventRows.GetRows()) != 3 {
+	if message.GetEventVersion() != 2 || eventRows.GetWriteSource() != "scf:e2e-fetcher" || len(eventRows.GetRows()) != 3 {
 		t.Fatalf("DatasetRowsUpserted@2 message=%v rows=%v", message, eventRows.GetRows())
 	}
 	for i, row := range eventRows.GetRows() {

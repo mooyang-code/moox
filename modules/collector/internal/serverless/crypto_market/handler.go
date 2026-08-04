@@ -133,7 +133,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 			}
 			return handler.HandleTimerAt(ctx, event.RequestID, functionName, timerNow)
 		}
-		return handler.Handle(ctx, event)
+		return handler.HandleWithFunctionName(ctx, event, functionName)
 	case model.EventActionEgressProbe:
 		return marketfetch.EgressProbe(ctx, "binance", "spot")
 	default:

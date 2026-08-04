@@ -26,6 +26,7 @@ type TaskGroup struct {
 // NodeAssignment is the deterministic desired state for one SCF node.
 type NodeAssignment struct {
 	NodeID          string
+	FunctionName    string
 	Region          string
 	Provider        string
 	MarketType      string
@@ -108,12 +109,12 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 			}
 			node := timerNodes[nodeIndex]
 			nodeIndex++
-			assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, Region: node.Region, Provider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals, Cron: cron, Enabled: true, AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|"))})
+			assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region, Provider: group.Provider, MarketType: group.MarketType, DatasetID: group.DatasetID, Frequency: group.Frequency, Subjects: subjects, ExternalSymbols: externals, Cron: cron, Enabled: true, AssignmentHash: AssignmentHash(group.Provider, group.MarketType, group.DatasetID, group.Frequency, strings.Join(hashParts, "|"))})
 		}
 	}
 	for ; nodeIndex < len(timerNodes); nodeIndex++ {
 		node := timerNodes[nodeIndex]
-		assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, Region: node.Region, Enabled: false, AssignmentHash: AssignmentHash()})
+		assignments = append(assignments, NodeAssignment{NodeID: node.NodeID, FunctionName: node.FunctionName, Region: node.Region, Enabled: false, AssignmentHash: AssignmentHash()})
 	}
 	sort.Slice(assignments, func(i, j int) bool { return assignments[i].NodeID < assignments[j].NodeID })
 	return assignments, nil

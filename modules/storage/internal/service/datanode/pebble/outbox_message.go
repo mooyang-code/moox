@@ -21,25 +21,37 @@ import (
 // outbox write is the commit boundary. The event_id is replaced with the
 // Pebble outbox id by BindOutboxID after the write batch has reserved that id.
 func BuildDatasetRowsUpsertedMessage(nodeID string, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-	return buildDatasetRowsUpsertedMessage(nodeID, "outbox-pending", spaceID, datasetID, rows)
+	return buildDatasetRowsUpsertedMessage(nodeID, "", "outbox-pending", spaceID, datasetID, rows)
+}
+
+// BuildDatasetRowsUpsertedMessageWithSource persists the upstream write source
+// in the public storage change event.
+func BuildDatasetRowsUpsertedMessageWithSource(nodeID, writeSource, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	return buildDatasetRowsUpsertedMessage(nodeID, writeSource, "outbox-pending", spaceID, datasetID, rows)
 }
 
 // BuildDatasetRowsUpsertedMessageForSource derives a stable output ID from the
 // source event and write identity. It is used by consumers whose input can be
 // redelivered after the local write has already committed.
 func BuildDatasetRowsUpsertedMessageForSource(nodeID, sourceEventID, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	return BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(nodeID, sourceEventID, "", spaceID, datasetID, rows)
+}
+
+// BuildDatasetRowsUpsertedMessageForSourceWithWriteSource preserves the source
+// event identity and carries the upstream writer into the outbox payload.
+func BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(nodeID, sourceEventID, writeSource, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 	if sourceEventID == "" {
 		return nil, fmt.Errorf("source_event_id is required")
 	}
 	hash := sha256.Sum256([]byte(sourceEventID + "\x00" + spaceID + "\x00" + datasetID))
-	return buildDatasetRowsUpsertedMessage(nodeID, "storage-source-"+hex.EncodeToString(hash[:16]), spaceID, datasetID, rows)
+	return buildDatasetRowsUpsertedMessage(nodeID, writeSource, "storage-source-"+hex.EncodeToString(hash[:16]), spaceID, datasetID, rows)
 }
 
-func buildDatasetRowsUpsertedMessage(nodeID, eventID, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+func buildDatasetRowsUpsertedMessage(nodeID, writeSource, eventID, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 	if spaceID == "" || datasetID == "" {
 		return nil, fmt.Errorf("space_id and dataset_id are required")
 	}
-	rowPayload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: rows})
+	rowPayload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: rows, WriteSource: writeSource})
 	if err != nil {
 		return nil, err
 	}

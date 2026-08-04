@@ -22,6 +22,7 @@ func TestTimerRequestFromEnv(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ip://10.0.0.1:11003", target)
 	require.Len(t, req.Items, 2)
+	require.Equal(t, "node", req.FunctionName)
 	require.Equal(t, "BTCUSDT", req.Items[0].Symbol)
 	require.Equal(t, "BTC-USDT", req.Items[0].SubjectID)
 }

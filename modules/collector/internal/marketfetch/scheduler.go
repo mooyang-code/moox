@@ -50,7 +50,7 @@ type Scheduler struct {
 	Batches           *store.FetchBatchRepository
 	Retries           *store.FetchRetryRepository
 	Invoker           *scfinvoker.Client
-	Storage           func(string, string) (binance.BatchStorage, error)
+	Storage           func(string, string, string) (binance.BatchStorage, error)
 	StorageTarget     string
 	BatchSize         int
 	InvokeConcurrency int
@@ -225,7 +225,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				// the canonical value; forwarding rule.MarketType would make SCF
 				// reject the whole batch before it can inspect the item.
 				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start], rule)
-				req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
+				req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
 				created, err := s.planOne(ctx, rule, req, node, nodes)
 				if err != nil {
 					return err
@@ -409,7 +409,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 					continue
 				}
 				checkCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-				storage, storageErr := s.Storage(s.StorageTarget, instance.MarketType)
+				storage, storageErr := s.Storage(s.StorageTarget, instance.MarketType, "")
 				if storageErr == nil {
 					watermark, found, watermarkErr := storage.LatestTimeSeriesTime(checkCtx, &storagepb.TimeSeriesSelector{
 						SpaceId: spaceID, DatasetId: instance.DatasetID, SubjectId: instance.SubjectID,
@@ -457,13 +457,13 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 			break
 		}
 		node := nodes[index%len(nodes)]
-		item := domain.CollectionItem{SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.start.Format(time.RFC3339Nano), BarLimit: 1000}
+		item := domain.CollectionItem{TaskID: candidate.instance.TaskID, SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.start.Format(time.RFC3339Nano), BarLimit: 1000}
 		// A bounded 1,000-bar catchup must be allowed to advance on every audit
 		// minute. A ten-minute identity keeps the first page deduplicated but
 		// stalls large gaps for nine unnecessary minutes.
 		scheduleID := fmt.Sprintf("catchup:%s:%s", candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
 		batchID := stableID(spaceID, scheduleID, string(domain.BatchKindCatchup), "0", "1")
-		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindCatchup, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindCatchup, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
 		if _, err := s.planOne(ctx, candidate.rule, req, node, nodes); err != nil {
 			return err
 		}
@@ -698,7 +698,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		if batchKind == "" {
 			batchKind = domain.BatchKindRealtime
 		}
-		req := Request{BatchID: batchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
 		raw, _ := json.Marshal(req)
 		if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
@@ -796,6 +796,7 @@ func invocationCandidates(primary scfinvoker.Node, nodes []scfinvoker.Node) []sc
 func requestForNode(req Request, node scfinvoker.Node) Request {
 	req.Region = node.Region
 	req.NodeID = node.NodeID
+	req.FunctionName = node.FunctionName
 	return req
 }
 
@@ -861,7 +862,7 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 		if s.Storage == nil {
 			return nil, nil, fmt.Errorf("storage reader is not initialized")
 		}
-		storage, err := s.Storage(s.StorageTarget, marketType)
+		storage, err := s.Storage(s.StorageTarget, marketType, "")
 		if err != nil {
 			return nil, nil, err
 		}

@@ -830,10 +830,13 @@ func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconf
 	if err != nil {
 		return collectorSCFTrustMaterial{}, fmt.Errorf("read control Gateway peer CA: %w", err)
 	}
-	serviceGatewayCA, err := readRemoteControlFile(ctx, transport, "moox/prod/certs/caddy/root.crt")
-	if err != nil {
-		return collectorSCFTrustMaterial{}, fmt.Errorf("read control service Gateway CA: %w", err)
-	}
+	// Timer-triggered market-fetch functions call the Storage tRPC endpoint
+	// directly and do not use the HTTPS service gateway.  Public Caddy mode
+	// intentionally has no local root.crt (the platform CA is sufficient), so
+	// a missing service-gateway CA must not block publishing this short-lived
+	// fleet.  Keep the material when an internal CA is present for other
+	// trigger types, but treat it as optional here.
+	serviceGatewayCA, _ := readRemoteControlFile(ctx, transport, "moox/prod/certs/caddy/root.crt")
 	return collectorSCFTrustMaterial{
 		EventBusCredential:  credential,
 		EventBusCAPEM:       eventBusCA,
@@ -1291,7 +1294,15 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if len(opts.JobTypes) > 0 {
 		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher does not consume CloudNode JobItem workloads")
 	}
-	environment, err := collectorFunctionEnvironment(opts, packageID)
+	// Timer functions do not use the EventBus or the HTTPS service gateway: they
+	// call the native Storage tRPC gateway directly. Set the effective trigger
+	// before building the environment so those large CA/EventBus values are not
+	// accidentally copied into every Timer function and exceed Tencent's 4KB
+	// environment limit.
+	envOpts := opts
+	envOpts.TriggerType = defaultFlag(opts.TriggerType, "timer")
+	envOpts.BizType = bizType
+	environment, err := collectorFunctionEnvironment(envOpts, packageID)
 	if err != nil {
 		return adminclient.NodeCreateItem{}, err
 	}
@@ -1375,7 +1386,7 @@ func buildCollectorFleetCreateItems(opts collectorPublishOptions, packageID stri
 	if err != nil {
 		return nil, err
 	}
-	if err := validateCollectorFleetRuntimeEnvironment(base.Environment, strings.EqualFold(strings.TrimSpace(opts.TriggerType), "timer")); err != nil {
+	if err := validateCollectorFleetRuntimeEnvironment(base.Environment, strings.EqualFold(defaultFlag(opts.TriggerType, "timer"), "timer"), strings.EqualFold(defaultFlag(opts.BizType, "market_fetcher"), "market_fetcher")); err != nil {
 		return nil, err
 	}
 	prefix := defaultFlag(opts.FunctionNamePrefix, defaultFlag(opts.PackageName, "moox-collector"))
@@ -1388,7 +1399,8 @@ func buildCollectorFleetCreateItems(opts collectorPublishOptions, packageID stri
 	return items, nil
 }
 
-func validateCollectorFleetRuntimeEnvironment(environment map[string]string, timer bool) error {
+func validateCollectorFleetRuntimeEnvironment(environment map[string]string, timer bool, marketFetcher ...bool) error {
+	marketFetch := len(marketFetcher) > 0 && marketFetcher[0]
 	required := []string{
 		"MOOX_SPACE_ID",
 		"MOOX_CODE_PACKAGE_ID",
@@ -1396,7 +1408,6 @@ func validateCollectorFleetRuntimeEnvironment(environment map[string]string, tim
 		"MOOX_GATEWAY_TARGET_NODE",
 		"MOOX_GATEWAY_SERVICE_KEY_ID",
 		"MOOX_GATEWAY_SERVICE_SECRET_KEY",
-		"MOOX_GATEWAY_CA_PEM_B64",
 		"MOOX_CLS_ENABLED",
 		"MOOX_CLS_ENDPOINT",
 		"MOOX_CLS_TOPIC_ID",
@@ -1404,7 +1415,8 @@ func validateCollectorFleetRuntimeEnvironment(environment map[string]string, tim
 		"MOOX_CLS_SECRET_ID",
 		"MOOX_CLS_SECRET_KEY",
 	}
-	if !timer {
+	if !timer && !marketFetch {
+		required = append(required, "MOOX_GATEWAY_CA_PEM_B64")
 		required = append(required, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
 	} else {
 		required = append(required, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
@@ -1613,6 +1625,7 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		"MOOX_GATEWAY_CALLER":               {},
 		"MOOX_GATEWAY_NODE_ID":              {},
 		"MOOX_GATEWAY_TARGET_NODE":          {},
+		"MOOX_GATEWAY_CA_PEM_B64":           {},
 		"MOOX_SERVICE_GATEWAY_CA_PEM_B64":   {},
 		"MOOX_SPACE_ID":                     {},
 		"MOOX_FETCH_TIMEOUT_SECONDS":        {},
@@ -1643,7 +1656,15 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 			return nil, fmt.Errorf("--env must not override managed key %s", key)
 		}
 	}
-	useEventBus := !strings.EqualFold(strings.TrimSpace(opts.TriggerType), "timer")
+	// Timer market-fetcher SCFs are self-contained and do not need EventBus.
+	// Invoke market-fetchers publish their completion event so the scheduler
+	// can advance the batch, therefore they retain NATS materials but not the
+	// unrelated HTTPS gateway certificates (the 4KB SCF environment limit is
+	// otherwise exceeded by the two RSA CA bundles).
+	isTimer := strings.EqualFold(strings.TrimSpace(opts.TriggerType), "timer")
+	isMarketFetcher := strings.EqualFold(strings.TrimSpace(opts.BizType), "market_fetcher")
+	useEventBus := !isTimer
+	useServiceGateway := !isTimer && !isMarketFetcher
 	if packageID != "" {
 		env["MOOX_CODE_PACKAGE_ID"] = packageID
 	}
@@ -1670,35 +1691,37 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 	if strings.TrimSpace(overrides["MOOX_SERVICE_GATEWAY_CA_FILE"]) != "" {
 		return nil, fmt.Errorf("serverless environment must not contain MOOX_SERVICE_GATEWAY_CA_FILE")
 	}
-	caFile := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_FILE"))
-	caMaterial := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_PEM_B64"))
-	if len(opts.GatewayCAPEM) > 0 {
-		caFile = ""
-		caMaterial = base64.StdEncoding.EncodeToString(opts.GatewayCAPEM)
-	}
-	if overrideMaterial := strings.TrimSpace(overrides["MOOX_GATEWAY_CA_PEM_B64"]); overrideMaterial != "" {
-		if caFile != "" || (caMaterial != "" && caMaterial != overrideMaterial) {
-			return nil, fmt.Errorf("gateway CA material conflicts with host configuration")
+	if useServiceGateway {
+		caFile := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_FILE"))
+		caMaterial := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CA_PEM_B64"))
+		if len(opts.GatewayCAPEM) > 0 {
+			caFile = ""
+			caMaterial = base64.StdEncoding.EncodeToString(opts.GatewayCAPEM)
 		}
-		caMaterial = overrideMaterial
-	}
-	if caFile != "" && caMaterial != "" {
-		return nil, fmt.Errorf("gateway CA file and CA PEM material are mutually exclusive")
-	}
-	if caFile != "" {
-		pem, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, fmt.Errorf("read gateway CA file: %w", err)
+		if overrideMaterial := strings.TrimSpace(overrides["MOOX_GATEWAY_CA_PEM_B64"]); overrideMaterial != "" {
+			if caFile != "" || (caMaterial != "" && caMaterial != overrideMaterial) {
+				return nil, fmt.Errorf("gateway CA material conflicts with host configuration")
+			}
+			caMaterial = overrideMaterial
 		}
-		caMaterial = base64.StdEncoding.EncodeToString(pem)
-	}
-	if caMaterial != "" {
-		if _, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{CAPEMBase64: caMaterial}); err != nil {
-			return nil, fmt.Errorf("invalid gateway CA material: %w", err)
+		if caFile != "" && caMaterial != "" {
+			return nil, fmt.Errorf("gateway CA file and CA PEM material are mutually exclusive")
 		}
-		setDefaultEnv(env, "MOOX_GATEWAY_CA_PEM_B64", caMaterial)
+		if caFile != "" {
+			pem, err := os.ReadFile(caFile)
+			if err != nil {
+				return nil, fmt.Errorf("read gateway CA file: %w", err)
+			}
+			caMaterial = base64.StdEncoding.EncodeToString(pem)
+		}
+		if caMaterial != "" {
+			if _, err := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{CAPEMBase64: caMaterial}); err != nil {
+				return nil, fmt.Errorf("invalid gateway CA material: %w", err)
+			}
+			setDefaultEnv(env, "MOOX_GATEWAY_CA_PEM_B64", caMaterial)
+		}
 	}
-	if useEventBus {
+	if useServiceGateway {
 		serviceCAFile := strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_CA_FILE"))
 		serviceCAMaterial := strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64"))
 		if len(opts.ServiceGatewayCAPEM) > 0 {

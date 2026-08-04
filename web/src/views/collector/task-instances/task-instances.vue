@@ -7,6 +7,7 @@
             <a-input v-model="form.taskId" placeholder="请输入任务ID" allow-clear style="width: 200px" />
             <a-input v-model="form.ruleId" placeholder="请输入规则ID" allow-clear style="width: 200px" />
             <a-input v-model="form.lastExecNode" placeholder="最后执行节点" allow-clear style="width: 150px" />
+            <a-input v-model="form.functionName" placeholder="写入源函数" allow-clear style="width: 220px" />
             <a-input v-model="form.symbol" placeholder="请输入交易标的" allow-clear style="width: 150px" />
             <a-select placeholder="执行状态" v-model="form.lastExecStatus" style="width: 120px" allow-clear>
               <a-option :value="1">待执行</a-option>
@@ -56,6 +57,13 @@
               <template #cell="{ record }">
                 <a-tooltip :content="getLastExecNode(record)">
                   <span class="ellipsis-text">{{ getLastExecNode(record) }}</span>
+                </a-tooltip>
+              </template>
+            </a-table-column>
+            <a-table-column title="写入源" data-index="FunctionName" :width="320">
+              <template #cell="{ record }">
+                <a-tooltip :content="record.FunctionName || '未分配'">
+                  <span class="ellipsis-text">{{ record.FunctionName || "未分配" }}</span>
                 </a-tooltip>
               </template>
             </a-table-column>
@@ -116,6 +124,7 @@
         <a-descriptions-item label="数据集">{{ detailData.DatasetID || "-" }}</a-descriptions-item>
         <a-descriptions-item label="标的ID">{{ detailData.SubjectID || "-" }}</a-descriptions-item>
         <a-descriptions-item label="最后执行节点">{{ getLastExecNode(detailData) }}</a-descriptions-item>
+        <a-descriptions-item label="写入源">{{ detailData.FunctionName || "未分配" }}</a-descriptions-item>
         <a-descriptions-item label="交易标的">
           <a-tag color="arcoblue">{{ detailData.Symbol }}</a-tag>
         </a-descriptions-item>
@@ -166,6 +175,7 @@ interface TaskInstance {
   Symbol: string;
   Interval: string;
   LastExecNode: string; // v2.0: 最后执行节点
+  FunctionName: string;
   LastExecStatus: number; // v2.0: 最后执行状态
   TaskParams: Record<string, any>;
   LastExecTime: string | null;
@@ -188,6 +198,7 @@ const form = ref({
   taskId: "",
   ruleId: "",
   lastExecNode: "", // v2.0: 执行节点
+  functionName: "",
   symbol: "",
   lastExecStatus: null as number | null, // v2.0: 执行状态
   includeDeleted: false
@@ -256,6 +267,7 @@ const normalizeTaskInstance = (raw: RawTaskInstance): TaskInstance => {
     Symbol: raw.Symbol ?? raw.symbol ?? raw.SubjectID ?? raw.subject_id ?? "",
     Interval: raw.Interval ?? raw.interval ?? "",
     LastExecNode: raw.LastExecNode ?? raw.last_exec_node ?? "",
+    FunctionName: raw.FunctionName ?? raw.function_name ?? "",
     LastExecStatus: Number(lastExecStatus),
     TaskParams: normalizeObject(raw.TaskParams ?? raw.task_params),
     LastExecTime: raw.LastExecTime ?? raw.last_exec_time ?? null,
@@ -340,6 +352,7 @@ const getInstanceList = async () => {
     if (form.value.taskId) filter.task_id = form.value.taskId;
     if (form.value.ruleId) filter.rule_id = form.value.ruleId;
     if (form.value.lastExecNode) filter.last_exec_node = form.value.lastExecNode;
+    if (form.value.functionName) filter.function_name = form.value.functionName;
     if (form.value.symbol) filter.symbol = form.value.symbol;
     if (form.value.lastExecStatus !== null) filter.last_exec_status = form.value.lastExecStatus;
     if (form.value.includeDeleted) filter.include_deleted = true;

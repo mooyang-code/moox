@@ -93,7 +93,46 @@ func (s *Store) ApplySchema(sql string) error {
 	if strings.TrimSpace(sql) == "" {
 		return fmt.Errorf("collector schema sql is empty")
 	}
+	// The schema is also applied to an existing Collector database during a
+	// rolling deploy. SQLite executes the schema as one batch, so add the new
+	// assignment column before the batch reaches its dependent index.
+	if err := s.ensureTaskInstanceFunctionColumn(); err != nil {
+		return err
+	}
 	return s.db.Exec(sql).Error
+}
+
+func (s *Store) ensureTaskInstanceFunctionColumn() error {
+	var tableCount int64
+	if err := s.db.Raw(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, "t_collector_task_instances").Scan(&tableCount).Error; err != nil {
+		return fmt.Errorf("check task instance table: %w", err)
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	rows, err := s.db.Raw("PRAGMA table_info(t_collector_task_instances)").Rows()
+	if err != nil {
+		return fmt.Errorf("inspect task instance columns: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("scan task instance column: %w", err)
+		}
+		if name == "c_function_name" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("inspect task instance columns: %w", err)
+	}
+	if err := s.db.Exec(`ALTER TABLE t_collector_task_instances ADD COLUMN c_function_name TEXT NOT NULL DEFAULT ''`).Error; err != nil {
+		return fmt.Errorf("add task instance function column: %w", err)
+	}
+	return nil
 }
 
 // Ping verifies that the database is available.

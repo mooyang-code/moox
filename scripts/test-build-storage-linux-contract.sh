@@ -40,13 +40,24 @@ if [[ "${!#}" == "${LOCAL_BIN}/" ]]; then
   done
 fi
 EOF
+cat >"${FAKE_BIN}/scp" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >>"${SCP_LOG}"
+destination="${!#}"
+mkdir -p "$(dirname "${destination}")"
+printf '%s\n' binary >"${destination}"
+EOF
 cat >"${FAKE_BIN}/ssh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >>"${SSH_LOG}"
+if [[ "$*" == *"stat -c %s"* ]]; then
+  printf '7\n'
+fi
 EOF
-chmod +x "${FAKE_BIN}/moox-cli" "${FAKE_BIN}/rsync" "${FAKE_BIN}/ssh"
+chmod +x "${FAKE_BIN}/moox-cli" "${FAKE_BIN}/rsync" "${FAKE_BIN}/scp" "${FAKE_BIN}/ssh"
 
 RSYNC_LOG="${TMP_ROOT}/rsync.log" \
+SCP_LOG="${TMP_ROOT}/scp.log" \
 SSH_LOG="${TMP_ROOT}/ssh.log" \
 PATH="${FAKE_BIN}:${PATH}" \
 MOOX_CLI="${FAKE_BIN}/moox-cli" \
@@ -67,6 +78,7 @@ grep -Fq -- '-p 2200' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '192.0.2.88' "${TMP_ROOT}/rsync.log"
 grep -Fq -- 'StrictHostKeyChecking=yes' "${TMP_ROOT}/rsync.log"
 grep -Fq -- 'UserKnownHostsFile' "${TMP_ROOT}/rsync.log"
+grep -Fq -- 'UserKnownHostsFile' "${TMP_ROOT}/scp.log"
 grep -Fq -- '-p' "${TMP_ROOT}/ssh.log"
 grep -Fq -- '2200' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'GIT_COMMIT=' "${TMP_ROOT}/ssh.log"

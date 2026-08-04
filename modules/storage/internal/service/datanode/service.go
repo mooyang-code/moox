@@ -88,9 +88,9 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*p
 	}
 	writeEvent := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		if req.GetSourceEventId() == "" {
-			return pebble.BuildDatasetRowsUpsertedMessage(s.nodeID, spaceID, datasetID, rows)
+			return pebble.BuildDatasetRowsUpsertedMessageWithSource(s.nodeID, req.GetWriteSource(), spaceID, datasetID, rows)
 		}
-		return pebble.BuildDatasetRowsUpsertedMessageForSource(s.nodeID, req.GetSourceEventId(), spaceID, datasetID, rows)
+		return pebble.BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(s.nodeID, req.GetSourceEventId(), req.GetWriteSource(), spaceID, datasetID, rows)
 	}
 	var entries []*pebble.OutboxEntry
 	var err error

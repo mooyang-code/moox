@@ -17,9 +17,10 @@ import (
 const datasetSubjectPageSize = 1000
 
 type storageWriter struct {
-	access   storagepb.PrimaryStoreClientProxy
-	metadata storagepb.MetadataClientProxy
-	authInfo *storagepb.AuthInfo
+	access      storagepb.PrimaryStoreClientProxy
+	metadata    storagepb.MetadataClientProxy
+	authInfo    *storagepb.AuthInfo
+	writeSource string
 }
 
 // BatchStorage is the small Storage surface used by short-lived market fetches.
@@ -44,6 +45,12 @@ func (w *storageWriter) ReconcileSymbolSnapshot(ctx context.Context, spaceID, da
 // NewBatchStorage creates the shared Storage Primary/Metadata adapter used by
 // a short-lived SCF invocation.
 func NewBatchStorage(accessTarget, instType string) (BatchStorage, error) {
+	return NewBatchStorageWithWriteSource(accessTarget, instType, "")
+}
+
+// NewBatchStorageWithWriteSource creates a Storage adapter carrying the
+// canonical write source into the Storage outbox event.
+func NewBatchStorageWithWriteSource(accessTarget, instType, writeSource string) (BatchStorage, error) {
 	if normalized, normalizeErr := InstTypeForMarket(instType); normalizeErr == nil {
 		instType = normalized
 	}
@@ -51,16 +58,17 @@ func NewBatchStorage(accessTarget, instType string) (BatchStorage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newStorageWriter(accessTarget, accessTarget, storageAuthInfo(binding)), nil
+	return newStorageWriter(accessTarget, accessTarget, storageAuthInfo(binding), writeSource), nil
 }
 
-func newStorageWriter(accessTarget string, metadataTarget string, authInfo *storagepb.AuthInfo) *storageWriter {
+func newStorageWriter(accessTarget string, metadataTarget string, authInfo *storagepb.AuthInfo, writeSource string) *storageWriter {
 	target := storageGatewayTarget(accessTarget, metadataTarget)
 	serviceOptions := gatewayauth.NewTRPCClientOptions(normalizeStorageTarget(target, "11003"), strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")), gatewayauth.CredentialsFromEnv())
 	return &storageWriter{
-		access:   storagepb.NewPrimaryStoreClientProxy(serviceOptions...),
-		metadata: storagepb.NewMetadataClientProxy(serviceOptions...),
-		authInfo: authInfo,
+		access:      storagepb.NewPrimaryStoreClientProxy(serviceOptions...),
+		metadata:    storagepb.NewMetadataClientProxy(serviceOptions...),
+		authInfo:    authInfo,
+		writeSource: strings.TrimSpace(writeSource),
 	}
 }
 
@@ -88,6 +96,7 @@ func (w *storageWriter) upsertFields(ctx context.Context, rows []*storagepb.RowF
 			AuthInfo:      w.authInfo,
 			Rows:          rows,
 			SourceEventId: sourceEventID,
+			WriteSource:   w.writeSource,
 		})
 		if err != nil {
 			return fmt.Errorf("write time-series rows: %w", err)

@@ -125,6 +125,20 @@ func TestCollectorTimerEnvironmentOmitsControlPlaneCredentials(t *testing.T) {
 	assert.Equal(t, "ip://storage:11003", env["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
 	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_URL")
 	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_PASSWORD")
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
+	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
+}
+
+func TestCollectorInvokeMarketFetcherKeepsEventBusButOmitsHTTPSCAs(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{
+		TriggerType: "invoke", BizType: "market_fetcher", StorageRPCGatewayTarget: "ip://storage:11003",
+		EventBusCredential: &jetstream.CredentialFile{URLs: []string{"tls://eventbus.example:4222"}, Username: "worker", Password: "secret"},
+		EventBusCAPEM:      []byte("eventbus-ca"), GatewayCAPEM: []byte("gateway-ca"), ServiceGatewayCAPEM: []byte("service-ca"),
+	}, "pkg-invoke")
+	require.NoError(t, err)
+	assert.Equal(t, "tls://eventbus.example:4222", env["MOOX_EVENTBUS_NATS_URL"])
+	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
 	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
 }
 

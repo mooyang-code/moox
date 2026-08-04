@@ -228,10 +228,13 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	auth := runtimeAuth(deps.ServiceAuth)
 	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.AdminGatewayURL, Auth: auth, Timeout: 5 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(cfg.Storage.GatewayTarget)
-	reconciler := &marketfetch.Reconciler{Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, DNS: dnsCache, Metrics: metrics, MaxSubjects: 30}
+	reconciler := &marketfetch.Reconciler{Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache, Metrics: metrics, MaxSubjects: 30}
 	invokeScheduler := &marketfetch.Scheduler{
 		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
-		Invoker: invoker, Storage: binance.NewBatchStorage, StorageTarget: cfg.Storage.GatewayTarget,
+		// Use the target resolved by discovery rather than the static local
+		// config.  Invoke SCFs may run outside the Collector host, so a
+		// 127.0.0.1 gateway target would point back at the function itself.
+		Invoker: invoker, Storage: binance.NewBatchStorageWithWriteSource, StorageTarget: deps.StorageRPCGatewayTarget,
 		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: "crypto_market", DNSCache: dnsCache,
 		Symbols:               metadataSource,
 		InvokeNonRealtimeOnly: true,
@@ -243,16 +246,19 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	if err := marketfetch.StartCompletionConsumer(trpc.BackgroundContext(), completionSpaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), metrics); err != nil {
 		log.WarnContextf(trpc.BackgroundContext(), "collector market fetch completion consumer disabled: %v", err)
 	}
+	if err := marketfetch.StartStorageWriteConsumer(trpc.BackgroundContext(), completionSpaceID, dbm.TaskInstances()); err != nil {
+		log.WarnContextf(trpc.BackgroundContext(), "collector storage write consumer disabled: %v", err)
+	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
 		spaceID := completionSpaceID
 		go func() {
 			tickCtx := trpc.BackgroundContext()
-			if err := reconciler.Reconcile(tickCtx, spaceID); err != nil {
-				log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
-			}
 			if err := invokeScheduler.Tick(tickCtx, spaceID); err != nil {
 				log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
+			}
+			if err := reconciler.Reconcile(tickCtx, spaceID); err != nil {
+				log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
 			}
 		}()
 		return nil

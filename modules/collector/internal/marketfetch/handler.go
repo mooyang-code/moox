@@ -21,7 +21,7 @@ import (
 // Handler is the short-lived SCF action handler. Dependencies are built per
 // invocation so there is no resident worker, timer, or job lease in SCF.
 type Handler struct {
-	NewStorage func(string, string) (Storage, error)
+	NewStorage func(string, string, string) (Storage, error)
 	Publish    func(context.Context, Request, proto.Message) error
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the bounded Executor below; tests can prove the Timer contract
@@ -42,11 +42,19 @@ const (
 )
 
 func NewHandler() *Handler {
-	return &Handler{NewStorage: func(target, market string) (Storage, error) { return binance.NewBatchStorage(target, market) }, Publish: publishCompletion}
+	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
+		return binance.NewBatchStorageWithWriteSource(target, market, writeSource)
+	}, Publish: publishCompletion}
 }
 
 func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
-	return h.handle(ctx, event, true)
+	return h.handleWithFunctionName(ctx, event, true, "")
+}
+
+// HandleWithFunctionName binds an Invoke request to the function identity
+// supplied by the Tencent runtime. Payload function_name is only a hint.
+func (h *Handler) HandleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, functionName string) (*model.Response, error) {
+	return h.handleWithFunctionName(ctx, event, true, functionName)
 }
 
 // HandleTimer executes a Tencent Timer invocation. Timer work intentionally
@@ -69,6 +77,10 @@ func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, n
 }
 
 func (h *Handler) handle(ctx context.Context, event model.CloudFunctionEvent, publish bool) (*model.Response, error) {
+	return h.handleWithFunctionName(ctx, event, publish, "")
+}
+
+func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, publish bool, runtimeFunctionName string) (*model.Response, error) {
 	if h == nil {
 		return nil, fmt.Errorf("market fetch handler is nil")
 	}
@@ -78,6 +90,13 @@ func (h *Handler) handle(ctx context.Context, event model.CloudFunctionEvent, pu
 	}
 	if req.RequestID == "" {
 		req.RequestID = event.RequestID
+	}
+	// The runtime identity is authoritative. Keep the environment/payload
+	// fallback only for direct library callers without a Tencent context.
+	if runtimeFunctionName = strings.TrimSpace(runtimeFunctionName); runtimeFunctionName != "" {
+		req.FunctionName = runtimeFunctionName
+	} else if strings.TrimSpace(req.FunctionName) == "" {
+		req.FunctionName = strings.TrimSpace(os.Getenv("MOOX_SCF_FUNCTION_NAME"))
 	}
 	if expectedSpaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); expectedSpaceID == "" {
 		return &model.Response{Success: false, Message: "MOOX_SPACE_ID is required", RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
@@ -101,7 +120,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	}
 	budgetCtx, cancel := executionContext(ctx)
 	defer cancel()
-	storage, err := h.NewStorage(storageTarget, req.MarketType)
+	storage, err := h.NewStorage(storageTarget, req.MarketType, writeSourceForFunctionName(req.FunctionName))
 	if err != nil {
 		return nil, err
 	}

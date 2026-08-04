@@ -133,7 +133,7 @@ func TestTimerMarketFetchHandlerE2E(t *testing.T) {
 		NewReporter: func() (clsreporter.Reporter, time.Duration, error) { return clsreporter.Noop(), 0, nil },
 		NewMarketFetch: func() *marketfetch.Handler {
 			return &marketfetch.Handler{
-				NewStorage: func(string, string) (marketfetch.Storage, error) { return timerStorageStub{}, nil },
+				NewStorage: func(string, string, string) (marketfetch.Storage, error) { return timerStorageStub{}, nil },
 				Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 					captured = request
 					return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil

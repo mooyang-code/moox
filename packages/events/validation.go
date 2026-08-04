@@ -129,6 +129,9 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	if len(payload.GetRows()) == 0 {
 		return fmt.Errorf("storage event rows payload is empty")
 	}
+	if len(payload.GetWriteSource()) > 256 || strings.TrimSpace(payload.GetWriteSource()) != payload.GetWriteSource() {
+		return fmt.Errorf("storage event write_source is invalid")
+	}
 	for i, row := range payload.GetRows() {
 		if row == nil || row.GetKey() == nil {
 			return fmt.Errorf("storage event row %d key is required", i)

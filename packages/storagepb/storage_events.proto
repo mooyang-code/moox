@@ -10,6 +10,7 @@ message DatasetRowsUpserted {
   string space_id = 1;
   string dataset_id = 2;
   repeated RowUpsert rows = 3;
+  string write_source = 4;
 }
 
 message RowUpsert {

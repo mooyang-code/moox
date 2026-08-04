@@ -57,6 +57,7 @@ message RowsUpserted {
   string space_id = 1;
   string dataset_id = 2;
   repeated RowFieldUpsert rows = 3;
+  string write_source = 4;
 }
 
 // Query key views are retained as read-only query contracts. DataNode writes

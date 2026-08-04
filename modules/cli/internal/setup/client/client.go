@@ -160,6 +160,35 @@ func (c *Client) ApplyStoragePlacement(ctx context.Context, nodeID, host string)
 	return StoragePlacementResult{Deployments: len(storageDeploymentNames)}, nil
 }
 
+// ActivateStoragePlacement enables the local Storage routes after a control
+// host receives the separately managed Storage package. Initial control-plane
+// setup intentionally marks these deployments disabled when Storage has not
+// been installed yet; leaving them disabled means the native gateway cannot
+// resolve PrimaryStore/Metadata requests even though the processes are ready.
+func (c *Client) ActivateStoragePlacement(ctx context.Context, nodeID string) (StoragePlacementResult, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if c == nil || c.forwarder == nil || nodeID == "" {
+		return StoragePlacementResult{}, fmt.Errorf("storage_placement_invalid")
+	}
+	for _, serviceName := range storageDeploymentNames {
+		getResponse := &pb.GetServiceDeploymentRsp{}
+		if err := c.forwardedPostTo(ctx, sysDeployRemoteAddress, "trpc.moox.ops.SysDeploy", "GetServiceDeployment",
+			&pb.GetServiceDeploymentReq{NodeId: nodeID, ServiceName: serviceName}, getResponse); err != nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		if err := checkRetInfo(getResponse.GetRetInfo()); err != nil || getResponse.GetDeployment() == nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+		deployment := proto.Clone(getResponse.GetDeployment()).(*pb.ServiceDeployment)
+		deployment.Status = "active"
+		deployment.GatewayEnabled = true
+		if err := c.upsertDeployment(ctx, deployment); err != nil {
+			return StoragePlacementResult{}, fmt.Errorf("storage_placement_failed")
+		}
+	}
+	return StoragePlacementResult{Deployments: len(storageDeploymentNames)}, nil
+}
+
 // PrepareStoragePlacement creates the remote Gateway node and its local
 // routes before the Gateway starts. It deliberately leaves SCF discovery on
 // the current native endpoint until Storage readiness has succeeded.

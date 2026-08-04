@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -27,6 +28,7 @@ type TaskInstanceFilter struct {
 	DatasetID      string
 	SubjectID      string
 	Frequency      string
+	FunctionName   string
 	LastExecNode   string
 	LastExecStatus *int
 	IncludeDeleted bool
@@ -37,6 +39,28 @@ type TaskInstanceFilter struct {
 // TaskInstanceRepository persists executable task instances.
 type TaskInstanceRepository struct {
 	db *gorm.DB
+}
+
+// StorageWriteObservation is a successful time-series write observed from a
+// Storage change event. FunctionName is the current SCF assignment, while At
+// is the event envelope time rather than the market bar's data time.
+type StorageWriteObservation struct {
+	SpaceID      string
+	DatasetID    string
+	SubjectID    string
+	Frequency    string
+	FunctionName string
+	At           time.Time
+}
+
+// MarketFetchAssignment is one atomic SCF-to-subject binding update.
+type MarketFetchAssignment struct {
+	Provider     string
+	MarketType   string
+	DatasetID    string
+	Frequency    string
+	FunctionName string
+	Subjects     []string
 }
 
 // NewTaskInstanceRepository creates a repository.
@@ -125,6 +149,144 @@ func (r *TaskInstanceRepository) UpsertMany(ctx context.Context, instances []dom
 			"c_mtime":       clause.Expr{SQL: "excluded.c_mtime"},
 		}),
 	}).Create(&changed).Error
+}
+
+// ClearMarketFetchAssignments removes the current SCF assignment before a
+// fresh deterministic assignment is persisted. Execution history is kept.
+func (r *TaskInstanceRepository) ClearMarketFetchAssignments(ctx context.Context, spaceID string, functionNames []string) error {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return fmt.Errorf("space_id is required")
+	}
+	query := r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
+		Where("c_space_id = ? AND c_is_deleted = ? AND c_function_name <> ''", spaceID, false)
+	if len(functionNames) > 0 {
+		query = query.Where("c_function_name IN ?", functionNames)
+	}
+	return query.Updates(map[string]any{"c_function_name": "", "c_mtime": time.Now().UTC()}).Error
+}
+
+// ReplaceMarketFetchAssignments atomically replaces the bindings owned by the
+// listed functions. The completion consumer never observes the transient empty
+// state between clearing old bindings and assigning the new snapshot.
+func (r *TaskInstanceRepository) ReplaceMarketFetchAssignments(ctx context.Context, spaceID string, functionNames []string, assignments []MarketFetchAssignment) error {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return fmt.Errorf("space_id is required")
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.Model(&domain.TaskInstance{}).
+			Where("c_space_id = ? AND c_is_deleted = ? AND c_function_name <> ''", spaceID, false)
+		if len(functionNames) > 0 {
+			query = query.Where("c_function_name IN ?", functionNames)
+		}
+		if err := query.Updates(map[string]any{"c_function_name": "", "c_mtime": time.Now().UTC()}).Error; err != nil {
+			return err
+		}
+		for _, assignment := range assignments {
+			functionName := strings.TrimSpace(assignment.FunctionName)
+			if strings.TrimSpace(assignment.DatasetID) == "" || strings.TrimSpace(assignment.Frequency) == "" || functionName == "" {
+				return fmt.Errorf("dataset_id, frequency and function_name are required")
+			}
+			if len(assignment.Subjects) == 0 {
+				continue
+			}
+			if err := tx.Model(&domain.TaskInstance{}).
+				Where("c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_dataset_id = ? AND c_frequency IN ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(assignment.Provider), strings.TrimSpace(assignment.MarketType), "kline", strings.TrimSpace(assignment.DatasetID), frequencyVariants(assignment.Frequency), assignment.Subjects, false).
+				Where("c_function_name <> ?", functionName).
+				Updates(map[string]any{"c_function_name": functionName, "c_mtime": time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// AssignMarketFetchFunction binds all subjects in one timer assignment to the
+// current SCF function. The stable business task identity is unchanged when a
+// subject moves to another function.
+func (r *TaskInstanceRepository) AssignMarketFetchFunction(ctx context.Context, spaceID, provider, marketType, datasetID, frequency, functionName string, subjects []string) error {
+	spaceID = strings.TrimSpace(spaceID)
+	functionName = strings.TrimSpace(functionName)
+	if spaceID == "" || strings.TrimSpace(datasetID) == "" || strings.TrimSpace(frequency) == "" || functionName == "" {
+		return fmt.Errorf("space_id, dataset_id, frequency and function_name are required")
+	}
+	if len(subjects) == 0 {
+		return nil
+	}
+	frequencyValues := frequencyVariants(frequency)
+	return r.db.WithContext(ctx).Model(&domain.TaskInstance{}).
+		Where("c_space_id = ? AND c_provider = ? AND c_market_type = ? AND c_data_type = ? AND c_dataset_id = ? AND c_frequency IN ? AND c_subject_id IN ? AND c_is_deleted = ?", spaceID, strings.TrimSpace(provider), strings.TrimSpace(marketType), "kline", strings.TrimSpace(datasetID), frequencyValues, subjects, false).
+		Where("c_function_name <> ?", functionName).
+		Updates(map[string]any{"c_function_name": functionName, "c_mtime": time.Now().UTC()}).Error
+}
+
+// MarkStorageWrites updates task freshness after Storage has committed the
+// corresponding rows. The function match prevents a late old SCF write from
+// updating a task already reassigned to another function.
+func (r *TaskInstanceRepository) MarkStorageWrites(ctx context.Context, observations []StorageWriteObservation) (int64, error) {
+	if len(observations) == 0 {
+		return 0, nil
+	}
+	updated := int64(0)
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		seen := make(map[string]struct{}, len(observations))
+		for _, observation := range observations {
+			if strings.TrimSpace(observation.SpaceID) == "" || strings.TrimSpace(observation.DatasetID) == "" || strings.TrimSpace(observation.SubjectID) == "" || strings.TrimSpace(observation.Frequency) == "" || strings.TrimSpace(observation.FunctionName) == "" || observation.At.IsZero() {
+				continue
+			}
+			key := strings.Join([]string{observation.SpaceID, observation.DatasetID, observation.SubjectID, observation.Frequency, observation.FunctionName}, "\x00")
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			frequencyValues := frequencyVariants(observation.Frequency)
+			result := tx.Model(&domain.TaskInstance{}).
+				Where("c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency IN ? AND c_function_name = ? AND c_is_deleted = ?", observation.SpaceID, observation.DatasetID, observation.SubjectID, frequencyValues, observation.FunctionName, false).
+				Where("c_last_exec_time IS NULL OR c_last_exec_time < ?", observation.At.UTC()).
+				Updates(map[string]any{"c_last_exec_status": domain.InstanceStatusSuccess, "c_last_exec_time": observation.At.UTC(), "c_mtime": time.Now().UTC()})
+			if result.Error != nil {
+				return result.Error
+			}
+			updated += result.RowsAffected
+		}
+		return nil
+	})
+	return updated, err
+}
+
+func frequencyVariants(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	values := []string{value}
+	seen := map[string]struct{}{value: {}}
+	add := func(candidate string) {
+		if candidate == "" {
+			return
+		}
+		if _, exists := seen[candidate]; exists {
+			return
+		}
+		seen[candidate] = struct{}{}
+		values = append(values, candidate)
+	}
+	canonical, err := report.NormalizeDatasetFrequency(value)
+	if err != nil {
+		return values
+	}
+	add(canonical)
+	// Older task rows may retain lowercase hour/day spellings while Storage
+	// events use its canonical uppercase identity. Minutes and months are
+	// intentionally not case-folded because M and m have different meanings.
+	if len(canonical) > 1 {
+		switch canonical[len(canonical)-1] {
+		case 'H', 'D', 'W', 'Y':
+			add(strings.ToLower(canonical))
+		}
+	}
+	return values
 }
 
 func taskInstanceDefinitionChanged(current, desired domain.TaskInstance) bool {
@@ -232,6 +394,9 @@ func (r *TaskInstanceRepository) applyFilter(q *gorm.DB, filter TaskInstanceFilt
 	}
 	if filter.Frequency != "" {
 		q = q.Where("c_frequency = ?", filter.Frequency)
+	}
+	if filter.FunctionName != "" {
+		q = q.Where("c_function_name LIKE ?", "%"+filter.FunctionName+"%")
 	}
 	if filter.LastExecNode != "" {
 		q = q.Where("c_last_exec_node = ?", filter.LastExecNode)

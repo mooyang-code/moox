@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -48,6 +49,7 @@ type Reconciler struct {
 	Rules       ruleSource
 	Symbols     datasetSource
 	Nodes       runtimeConfigClient
+	Instances   *store.TaskInstanceRepository
 	DNS         dnsSnapshotter
 	Metrics     *Metrics
 	MaxSubjects int
@@ -159,6 +161,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		pendingFingerprints[assignment.NodeID] = fingerprint
 	}
 	if len(patches) == 0 {
+		if err := r.persistAssignments(ctx, spaceID, nodes, assignments); err != nil {
+			return r.fail(spaceID, "task_instances", err)
+		}
 		r.observeAssignmentMetrics(spaceID, groups, assignments, time.Now().UTC().Unix())
 		return nil
 	}
@@ -181,6 +186,39 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	r.mu.Unlock()
 	log.InfoContextf(ctx, "collector_scf_timer_reconciled space=%s nodes=%d patches=%d job=%s", spaceID, len(nodes), len(patches), jobID)
 	r.observeAssignmentDesiredMetrics(spaceID, groups, assignments)
+	return nil
+}
+
+func (r *Reconciler) persistAssignments(ctx context.Context, spaceID string, nodes []scfinvoker.Node, assignments []NodeAssignment) error {
+	if r == nil || r.Instances == nil {
+		return nil
+	}
+	functionNames := make([]string, 0, len(nodes))
+	seen := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		name := strings.TrimSpace(node.FunctionName)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		functionNames = append(functionNames, name)
+	}
+	replacements := make([]store.MarketFetchAssignment, 0, len(assignments))
+	for _, assignment := range assignments {
+		if !assignment.Enabled {
+			continue
+		}
+		if strings.TrimSpace(assignment.FunctionName) == "" {
+			return fmt.Errorf("enabled assignment %s has no function_name", assignment.NodeID)
+		}
+		replacements = append(replacements, store.MarketFetchAssignment{Provider: assignment.Provider, MarketType: assignment.MarketType, DatasetID: assignment.DatasetID, Frequency: assignment.Frequency, FunctionName: assignment.FunctionName, Subjects: assignment.Subjects})
+	}
+	if err := r.Instances.ReplaceMarketFetchAssignments(ctx, spaceID, functionNames, replacements); err != nil {
+		return fmt.Errorf("replace SCF task assignments: %w", err)
+	}
 	return nil
 }
 
