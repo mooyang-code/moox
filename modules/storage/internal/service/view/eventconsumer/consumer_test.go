@@ -50,7 +50,7 @@ func TestShouldRebindFetchTransportErrors(t *testing.T) {
 func TestRebindRetriesUntilSubscriptionIsAvailable(t *testing.T) {
 	consumer := &Consumer{}
 	var attempts int
-	want := &fakePullConsumer{}
+	want := &fakeDeliveryConsumer{}
 	consumer.bind = func(context.Context) (deliveryConsumer, error) {
 		attempts++
 		if attempts < 2 {
@@ -66,12 +66,12 @@ func TestRebindRetriesUntilSubscriptionIsAvailable(t *testing.T) {
 	}
 }
 
-type fakePullConsumer struct{}
+type fakeDeliveryConsumer struct{}
 
-func (*fakePullConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
+func (*fakeDeliveryConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
 	return nil, nats.ErrTimeout
 }
-func (*fakePullConsumer) Close() error { return nil }
+func (*fakeDeliveryConsumer) Close() error { return nil }
 
 func TestApplyDeliveryRejectsMalformedAndMismatchedEvents(t *testing.T) {
 	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
