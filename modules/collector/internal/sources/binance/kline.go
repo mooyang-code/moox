@@ -379,9 +379,9 @@ func isRetryableKlineError(parent context.Context, err error) bool {
 func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *sources.CollectParams, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
 	switch params.InstType {
 	case InstTypeSPOT:
-		return c.spotAPI.GetKline(ctx, req)
+		return c.spotAPI.GetKlineWithIPs(ctx, req, params.DNSIPs(c.client.SpotDomain()))
 	case InstTypeSWAP:
-		return c.swapAPI.GetKline(ctx, req)
+		return c.swapAPI.GetKlineWithIPs(ctx, req, params.DNSIPs(c.client.SwapDomain()))
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
 	}

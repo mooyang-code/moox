@@ -105,4 +105,27 @@ type CollectParams struct {
 	SubjectID string // MooX 数据对象ID: BTC-USDT，用于写入 storage
 	Interval  string // 周期（K线用）: 1m, 5m, 1h
 	Live      bool   // 是否由实时调度触发；闭合 K 线仍直接写入 Storage
+	// DNSRoutes is the control-plane DNS snapshot carried by a short-lived
+	// SCF task. The source keeps the original hostname for TLS SNI and uses the
+	// resolved IPs only for the TCP dial.
+	DNSRoutes map[string]DNSResolution
+}
+
+// DNSResolution is intentionally small: the scheduler only needs the
+// hostname-to-address mapping captured before dispatching an SCF invocation.
+type DNSResolution struct {
+	IPs        []string  `json:"ips,omitempty"`
+	ResolvedAt time.Time `json:"resolved_at,omitempty"`
+}
+
+// DNSIPs returns a defensive copy of the addresses for host.
+func (p *CollectParams) DNSIPs(host string) []string {
+	if p == nil || p.DNSRoutes == nil {
+		return nil
+	}
+	route, ok := p.DNSRoutes[strings.ToLower(strings.TrimSpace(host))]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), route.IPs...)
 }

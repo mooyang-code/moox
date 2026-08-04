@@ -105,7 +105,18 @@ func (c *Client) GetDirect(ctx context.Context, domain, path string, query url.V
 	return c.HTTPClient.Get(ctx, domain, path, query, result)
 }
 
+// GetDirectWithIPs tries the control-plane DNS snapshot before falling back
+// to the normal hostname resolver. The URL remains the hostname so TLS SNI
+// and the HTTP Host header are never replaced by an address literal.
+func (c *Client) GetDirectWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, result interface{}) error {
+	return c.HTTPClient.GetWithIPs(ctx, domain, ips, path, query, result)
+}
+
 // GetDirectStream is the streaming counterpart of GetDirect.
 func (c *Client) GetDirectStream(ctx context.Context, domain, path string, query url.Values, consume func(io.Reader) error) error {
 	return c.HTTPClient.GetStream(ctx, domain, path, query, consume)
+}
+
+func (c *Client) GetDirectStreamWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, consume func(io.Reader) error) error {
+	return c.HTTPClient.GetStreamWithIPs(ctx, domain, ips, path, query, consume)
 }

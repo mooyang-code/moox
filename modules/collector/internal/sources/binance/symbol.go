@@ -176,9 +176,9 @@ func (c *SymbolCollector) fetchSymbols(ctx context.Context, params *sources.Coll
 	}
 	switch params.InstType {
 	case InstTypeSPOT:
-		return c.spotAPI.GetExchangeInfo(ctx)
+		return c.spotAPI.GetExchangeInfoWithIPs(ctx, params.DNSIPs(c.client.SpotDomain()))
 	case InstTypeSWAP:
-		return c.swapAPI.GetExchangeInfo(ctx)
+		return c.swapAPI.GetExchangeInfoWithIPs(ctx, params.DNSIPs(c.client.SwapDomain()))
 	default:
 		return nil, fmt.Errorf("不支持的产品类型: %s", params.InstType)
 	}

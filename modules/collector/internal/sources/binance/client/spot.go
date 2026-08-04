@@ -29,6 +29,11 @@ func (api *SpotAPI) GetRecentTrades(ctx context.Context, req *exchange.TradeRequ
 // GetKline 获取现货K线数据
 // API: GET https://api.binance.com/api/v3/klines
 func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	return api.GetKlineWithIPs(ctx, req, nil)
+}
+
+// GetKlineWithIPs uses the collector's DNS snapshot when one is available.
+func (api *SpotAPI) GetKlineWithIPs(ctx context.Context, req *exchange.KlineRequest, ips []string) ([]*exchange.Kline, error) {
 	params := url.Values{}
 	domain := api.client.SpotDomain()
 
@@ -49,12 +54,12 @@ func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 		params.Set("endTime", strconv.FormatInt(req.EndTime.UnixMilli(), 10))
 	}
 
-	// Retry the domain request. Each SCF invocation uses normal DNS directly.
+	// GetDirectWithIPs falls back to hostname DNS after the supplied addresses.
 	var rawKlines []CandleStick
 
 	err := retryBinance(ctx,
 		func() error {
-			return api.client.GetDirect(ctx, domain, SpotKlineEndpoint, params, &rawKlines)
+			return api.client.GetDirectWithIPs(ctx, domain, ips, SpotKlineEndpoint, params, &rawKlines)
 		},
 	)
 	if err != nil {
@@ -80,13 +85,21 @@ func (api *SpotAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo
 }
 
 func (api *SpotAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithIPs(ctx, query, nil)
+}
+
+func (api *SpotAPI) GetExchangeInfoWithIPs(ctx context.Context, ips []string) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithIPs(ctx, nil, ips)
+}
+
+func (api *SpotAPI) getExchangeInfoWithIPs(ctx context.Context, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
 	var symbols []*exchange.SymbolInfo
 	var total int
 	domain := api.client.SpotDomain()
 
 	err := retryBinance(ctx,
 		func() error {
-			return api.client.GetDirectStream(ctx, domain, SpotExchangeInfoEndpoint, query, func(reader io.Reader) error {
+			return api.client.GetDirectStreamWithIPs(ctx, domain, ips, SpotExchangeInfoEndpoint, query, func(reader io.Reader) error {
 				var decodeErr error
 				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
 					if raw.Status != "TRADING" {

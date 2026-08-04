@@ -15,6 +15,7 @@ import (
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -29,9 +30,15 @@ const (
 	DefaultMaxPlan   = 1000
 	// 80 items / 16 workers yields at most five 1.5-second storage-read waves,
 	// leaving room inside the fixed 10-second tRPC timer deadline.
-	gapAuditPageSize = 80
-	gapAuditWorkers  = 16
+	gapAuditPageSize = 40
+	gapAuditWorkers  = 4
+	gapAuditInterval = 5 * time.Minute
 )
+
+type scheduleState struct {
+	target      time.Time
+	fingerprint string
+}
 
 // Scheduler scans enabled rules and creates stable SCF batches. Realtime work
 // fans out across the available SCF fleet before the per-function item limit
@@ -50,13 +57,18 @@ type Scheduler struct {
 	MaxRetryAttempts  int
 	Metrics           *Metrics
 	SpaceID           string
-	Now               func() time.Time
-	mu                sync.Mutex
-	lastGapAudit      time.Time
-	gapAuditCursorID  int
-	lastRuleID        string
-	lastCleanup       time.Time
-	invokeSem         chan struct{}
+	DNSCache          interface {
+		Snapshot() map[string]sources.DNSResolution
+	}
+	Now              func() time.Time
+	mu               sync.Mutex
+	lastGapAudit     time.Time
+	gapAuditCursorID int
+	lastRuleID       string
+	lastCleanup      time.Time
+	planStates       map[string]scheduleState
+	ruleFingerprints map[string]string
+	invokeSem        chan struct{}
 }
 
 // fullSymbolSnapshotShards keeps each SCF's SQLite metadata registration
@@ -80,6 +92,12 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 		s.invokeSem = make(chan struct{}, limit)
 	}
+	if s.planStates == nil {
+		s.planStates = make(map[string]scheduleState)
+	}
+	if s.ruleFingerprints == nil {
+		s.ruleFingerprints = make(map[string]string)
+	}
 	if strings.TrimSpace(spaceID) == "" {
 		spaceID = strings.TrimSpace(s.SpaceID)
 	}
@@ -90,6 +108,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
+	dnsRoutes := s.dnsSnapshot()
 	rules, err := s.Rules.ListEnabled(ctx, spaceID)
 	if err != nil {
 		return fmt.Errorf("list enabled collection rules: %w", err)
@@ -125,10 +144,17 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			continue
 		}
 		activeTaskIDs := make([]string, 0, len(items)*len(frequencies))
+		ruleFingerprintParts := make([]string, 0, len(items)*len(frequencies))
+		instancesChanged := false
 		for _, frequency := range frequencies {
+			frequencyTaskIDs := make([]string, 0, len(items))
 			for index := range items {
 				spec := domain.TaskSpec{Provider: items[index].Provider, MarketType: items[index].MarketType, DataType: items[index].DataType, DatasetID: items[index].DatasetID, SubjectID: items[index].SubjectID, Frequency: frequency}
 				items[index].TaskID = domain.StableTaskID(spaceID, rule.RuleID, spec)
+			}
+			for _, item := range items {
+				frequencyTaskIDs = append(frequencyTaskIDs, item.TaskID)
+				ruleFingerprintParts = append(ruleFingerprintParts, item.TaskID+"\x00"+rule.CollectParams)
 			}
 			if s.Instances != nil {
 				instances := make([]domain.TaskInstance, 0, len(items))
@@ -138,13 +164,26 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 					activeTaskIDs = append(activeTaskIDs, taskID)
 					instances = append(instances, domain.TaskInstance{SpaceID: spaceID, TaskID: taskID, RuleID: rule.RuleID, Provider: item.Provider, MarketType: item.MarketType, DataType: item.DataType, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: frequency, TaskParams: rule.CollectParams})
 				}
-				if err := s.Instances.UpsertMany(ctx, instances); err != nil {
-					return fmt.Errorf("persist stable collection instances: %w", err)
+				frequencyFingerprint := taskFingerprint(frequencyTaskIDs, rule.CollectParams)
+				stateKey := rule.RuleID + "\x00" + frequency
+				state := s.planStates[stateKey]
+				frequencyChanged := state.fingerprint != frequencyFingerprint
+				if frequencyChanged {
+					instancesChanged = true
+					if err := s.Instances.UpsertMany(ctx, instances); err != nil {
+						return fmt.Errorf("persist stable collection instances: %w", err)
+					}
 				}
 			}
 			target, err := targetDataTime(now, frequency)
 			if err != nil {
 				log.WarnContextf(ctx, "skip rule=%s frequency=%s: %v", rule.RuleID, frequency, err)
+				continue
+			}
+			stateKey := rule.RuleID + "\x00" + frequency
+			state := s.planStates[stateKey]
+			frequencyFingerprint := taskFingerprint(frequencyTaskIDs, rule.CollectParams)
+			if !state.target.IsZero() && state.target.Equal(target) && state.fingerprint == frequencyFingerprint {
 				continue
 			}
 			batchItems := append([]domain.CollectionItem(nil), items...)
@@ -174,7 +213,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				// the canonical value; forwarding rule.MarketType would make SCF
 				// reject the whole batch before it can inspect the item.
 				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start], rule)
-				req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, Items: batchItems[start:end]}
+				req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
 				created, err := s.planOne(ctx, rule, req, node)
 				if err != nil {
 					return err
@@ -186,18 +225,27 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 					break
 				}
 			}
+			s.planStates[stateKey] = scheduleState{target: target, fingerprint: frequencyFingerprint}
 			if planned >= DefaultMaxPlan {
 				break
 			}
 		}
-		if s.Instances != nil {
+		if s.Instances != nil && instancesChanged {
+			ruleFingerprint := taskFingerprint(ruleFingerprintParts, "")
+			if s.ruleFingerprints[rule.RuleID] == ruleFingerprint {
+				instancesChanged = false
+			} else {
+				s.ruleFingerprints[rule.RuleID] = ruleFingerprint
+			}
+		}
+		if s.Instances != nil && instancesChanged {
 			if err := s.Instances.DeactivateMissingMarketFetchRuleInstances(ctx, spaceID, rule.RuleID, activeTaskIDs); err != nil {
 				return fmt.Errorf("deactivate removed collection instances: %w", err)
 			}
 		}
 		s.lastRuleID = rule.RuleID
 	}
-	if s.Instances != nil && (s.lastGapAudit.IsZero() || now.Sub(s.lastGapAudit) >= time.Minute) {
+	if s.Instances != nil && (s.lastGapAudit.IsZero() || now.Sub(s.lastGapAudit) >= gapAuditInterval) {
 		if err := s.auditGaps(ctx, spaceID, rules, nodes, now); err != nil {
 			log.WarnContextf(ctx, "market fetch gap audit failed: %v", err)
 		} else {
@@ -215,10 +263,29 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	return nil
 }
 
+func (s *Scheduler) dnsSnapshot() map[string]sources.DNSResolution {
+	if s == nil || s.DNSCache == nil {
+		return nil
+	}
+	return s.DNSCache.Snapshot()
+}
+
 func normalizedBatchIdentity(item domain.CollectionItem, rule domain.TaskRule) (string, string) {
 	provider := strings.ToLower(firstNonEmpty(item.Provider, rule.Provider))
 	marketType := firstNonEmpty(item.MarketType, rule.MarketType)
 	return provider, marketType
+}
+
+func taskFingerprint(taskIDs []string, params string) string {
+	ids := append([]string(nil), taskIDs...)
+	sort.Strings(ids)
+	h := sha256.New()
+	for _, taskID := range ids {
+		_, _ = h.Write([]byte(taskID))
+		_, _ = h.Write([]byte{0})
+	}
+	_, _ = h.Write([]byte(params))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domain.TaskRule, nodes []scfinvoker.Node, now time.Time) error {
@@ -336,7 +403,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		// stalls large gaps for nine unnecessary minutes.
 		scheduleID := fmt.Sprintf("catchup:%s:%s", candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
 		batchID := stableID(spaceID, scheduleID, string(domain.BatchKindCatchup), "0", "1")
-		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindCatchup, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindCatchup, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
 		if _, err := s.planOne(ctx, candidate.rule, req, node); err != nil {
 			return err
 		}
@@ -556,7 +623,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		if batchKind == "" {
 			batchKind = domain.BatchKindRealtime
 		}
-		req := Request{BatchID: batchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
 		raw, _ := json.Marshal(req)
 		event, err := marketFetchEvent(req, s.StorageTarget)
 		if err != nil {

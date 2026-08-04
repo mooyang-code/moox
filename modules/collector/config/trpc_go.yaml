@@ -36,6 +36,11 @@ server:
       network: "*/10 * * * * *"
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.collector.dns.timer
+      port: 11414
+      network: "0 */5 * * * *"
+      protocol: timer
+      timeout: 10000
 
 plugins:
   metrics:

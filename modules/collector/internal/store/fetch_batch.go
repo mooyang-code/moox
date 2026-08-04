@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -174,13 +175,30 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 				return err
 			}
 		}
+		// A realtime batch contains dozens of symbols. Updating retry state one
+		// symbol at a time serializes the SQLite writer and can delay completion
+		// event handling long enough to make healthy SCF calls look timed out.
+		// Collapse the batch's supersede operations into one UPDATE instead.
+		conditions := make([]string, 0, len(effects.SupersedePendingRetries))
+		args := make([]any, 0, len(effects.SupersedePendingRetries)*5)
+		seen := make(map[string]struct{}, len(effects.SupersedePendingRetries))
 		for _, item := range effects.SupersedePendingRetries {
 			if item.SpaceID == "" || item.DatasetID == "" || item.SubjectID == "" || item.Frequency == "" || item.TargetDataTime.IsZero() {
 				continue
 			}
-			if err := tx.Model(&domain.RetryItem{}).
-				Where("c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_status IN ? AND c_target_data_time <= ?", item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, []string{"pending", "dispatched"}, item.TargetDataTime.UTC()).
-				Updates(map[string]any{"c_status": "superseded", "c_mtime": time.Now().UTC()}).Error; err != nil {
+			key := strings.Join([]string{item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, item.TargetDataTime.UTC().Format(time.RFC3339Nano)}, "\x00")
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			conditions = append(conditions, "(c_space_id = ? AND c_dataset_id = ? AND c_subject_id = ? AND c_frequency = ? AND c_target_data_time <= ?)")
+			args = append(args, item.SpaceID, item.DatasetID, item.SubjectID, item.Frequency, item.TargetDataTime.UTC())
+		}
+		if len(conditions) > 0 {
+			query := tx.Model(&domain.RetryItem{}).
+				Where("c_status IN ?", []string{"pending", "dispatched"}).
+				Where(strings.Join(conditions, " OR "), args...)
+			if err := query.Updates(map[string]any{"c_status": "superseded", "c_mtime": time.Now().UTC()}).Error; err != nil {
 				return err
 			}
 		}

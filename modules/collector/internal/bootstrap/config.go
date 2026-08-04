@@ -19,6 +19,7 @@ type Config struct {
 	Storage   StorageConfig   `yaml:"storage"`
 	SysDeploy SysDeployConfig `yaml:"sysdeploy"`
 	Health    HealthConfig    `yaml:"health"`
+	DNS       DNSConfig       `yaml:"dns"`
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -64,6 +65,15 @@ type ServiceAuthConfig struct {
 // HealthConfig controls the lightweight HTTP health endpoint.
 type HealthConfig struct {
 	Addr string `yaml:"addr"`
+}
+
+// DNSConfig controls the small control-plane DNS snapshot sent with SCF
+// requests. Empty nameservers use the host resolver.
+type DNSConfig struct {
+	Domains         []string      `yaml:"domains"`
+	RefreshInterval time.Duration `yaml:"refresh_interval"`
+	ResolveTimeout  time.Duration `yaml:"resolve_timeout"`
+	Nameservers     []string      `yaml:"nameservers"`
 }
 
 // Load reads YAML config from path.
@@ -122,6 +132,22 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_COLLECTOR_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
+	if v := os.Getenv("MOOX_COLLECTOR_DNS_DOMAINS"); v != "" {
+		c.DNS.Domains = splitCSV(v)
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_DNS_NAMESERVERS"); v != "" {
+		c.DNS.Nameservers = splitCSV(v)
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_DNS_REFRESH_INTERVAL"); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			c.DNS.RefreshInterval = parsed
+		}
+	}
+	if v := os.Getenv("MOOX_COLLECTOR_DNS_RESOLVE_TIMEOUT"); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil {
+			c.DNS.ResolveTimeout = parsed
+		}
+	}
 }
 
 func (c *Config) validateStorageTargets() error {
@@ -163,5 +189,21 @@ func Default() *Config {
 		Health: HealthConfig{
 			Addr: ":11412",
 		},
+		DNS: DNSConfig{
+			Domains:         []string{"data-api.binance.vision", "api.binance.com", "fapi.binance.com"},
+			RefreshInterval: 5 * time.Minute,
+			ResolveTimeout:  5 * time.Second,
+		},
 	}
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }

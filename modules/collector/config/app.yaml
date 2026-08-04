@@ -33,3 +33,14 @@ sysdeploy:
 
 health:
   addr: ":11412"
+
+# Collector resolves these hosts before dispatching a short-lived SCF task.
+# Binance is enabled by default; add other provider hosts here as needed.
+dns:
+  domains:
+    - data-api.binance.vision
+    - api.binance.com
+    - fapi.binance.com
+  refresh_interval: 5m
+  resolve_timeout: 5s
+  # nameservers: ["119.29.29.29", "1.1.1.1"]

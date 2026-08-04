@@ -9,6 +9,7 @@ import (
 	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
+	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
@@ -100,7 +101,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
 	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
-	registerMarketFetchSchedule(s, cfg, deps, dbm, marketFetchMetrics)
+	dnsCache := dnscache.New(dnscache.Config{Domains: cfg.DNS.Domains, RefreshInterval: cfg.DNS.RefreshInterval, ResolveTimeout: cfg.DNS.ResolveTimeout, Nameservers: cfg.DNS.Nameservers})
+	if err := dnsCache.Refresh(ctx); err != nil {
+		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
+	}
+	registerDNSRefreshSchedule(s, dnsCache)
+	registerMarketFetchSchedule(s, cfg, deps, dbm, marketFetchMetrics, dnsCache)
 	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
 	if spaceID == "" {
 		spaceID = "crypto_market"
@@ -178,7 +184,11 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store) error {
 
 func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
-		databaseReady := dbm != nil && dbm.Ping(ctx) == nil
+		// Do not synchronously ping SQLite from /readyz. The collector's single
+		// SQLite connection is intentionally shared by the scheduler and the
+		// completion consumer; during a large batch, a health probe can otherwise
+		// wait behind a writer and make a healthy process appear dead to cron.
+		databaseReady := dbm != nil
 		state.SetReady(databaseReady)
 		rsp := healthz.Base("collector", "collector", "", "", collectorStartedAt, databaseReady)
 		rsp.Details = map[string]any{
@@ -190,7 +200,29 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State)
 	}
 }
 
-func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, metrics *marketfetch.Metrics) {
+func registerDNSRefreshSchedule(s *server.Server, cache *dnscache.Cache) {
+	if s == nil || cache == nil {
+		return
+	}
+	service := s.Service("trpc.moox.collector.dns.timer")
+	if service == nil {
+		log.Warn("collector DNS timer service is not configured, skip register")
+		return
+	}
+	timer.RegisterHandlerService(service, func(ctx context.Context) error {
+		if !cache.Due(time.Now().UTC()) {
+			return nil
+		}
+		go func() {
+			if err := cache.Refresh(trpc.BackgroundContext()); err != nil {
+				log.WarnContextf(ctx, "collector DNS snapshot refresh failed: %v", err)
+			}
+		}()
+		return nil
+	})
+}
+
+func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, metrics *marketfetch.Metrics, dnsCache *dnscache.Cache) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
@@ -210,8 +242,13 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		Storage: func(target, market string) (binance.BatchStorage, error) {
 			return binance.NewBatchStorage(target, market)
 		},
-		StorageTarget: deps.StorageRPCGatewayTarget, BatchSize: marketfetch.MaxRealtimeItems, InvokeConcurrency: 20,
-		Metrics: metrics,
+		StorageTarget: deps.StorageRPCGatewayTarget, BatchSize: marketfetch.MaxRealtimeItems,
+		// Keep concurrent SCF aggregate Storage writes below the Gateway's
+		// single-host capacity. Five matches the currently reachable
+		// Singapore fleet and avoids a minute-start write storm.
+		InvokeConcurrency: 5,
+		DNSCache:          dnsCache,
+		Metrics:           metrics,
 	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
@@ -219,10 +256,17 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		if spaceID == "" {
 			spaceID = "crypto_market"
 		}
-		if err := scheduler.Tick(ctx, spaceID); err != nil {
-			log.WarnContextf(ctx, "collector market fetch tick failed space=%s: %v", spaceID, err)
-			return err
-		}
+		// Timer handlers run on the tRPC server loop. A full-symbol planning
+		// pass can legitimately take several seconds while SQLite and Storage
+		// are busy; running it inline would block /readyz and make the process
+		// look dead to healthcheck cron. The scheduler has its own mutex, so
+		// overlapping ticks are safely coalesced by Tick.
+		go func() {
+			tickCtx := trpc.BackgroundContext()
+			if err := scheduler.Tick(tickCtx, spaceID); err != nil {
+				log.WarnContextf(tickCtx, "collector market fetch tick failed space=%s: %v", spaceID, err)
+			}
+		}()
 		return nil
 	})
 }

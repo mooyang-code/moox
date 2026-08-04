@@ -29,6 +29,10 @@ func (api *SwapAPI) GetRecentTrades(ctx context.Context, req *exchange.TradeRequ
 // GetKline 获取永续合约K线数据
 // API: GET https://fapi.binance.com/fapi/v1/klines
 func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {
+	return api.GetKlineWithIPs(ctx, req, nil)
+}
+
+func (api *SwapAPI) GetKlineWithIPs(ctx context.Context, req *exchange.KlineRequest, ips []string) ([]*exchange.Kline, error) {
 	params := url.Values{}
 	domain := api.client.SwapDomain()
 
@@ -49,12 +53,12 @@ func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([
 		params.Set("endTime", strconv.FormatInt(req.EndTime.UnixMilli(), 10))
 	}
 
-	// Retry the domain request. Each SCF invocation uses normal DNS directly.
+	// GetDirectWithIPs falls back to hostname DNS after the supplied addresses.
 	var rawKlines []CandleStick
 
 	err := retryBinance(ctx,
 		func() error {
-			return api.client.GetDirect(ctx, domain, SwapKlineEndpoint, params, &rawKlines)
+			return api.client.GetDirectWithIPs(ctx, domain, ips, SwapKlineEndpoint, params, &rawKlines)
 		},
 	)
 	if err != nil {
@@ -81,13 +85,21 @@ func (api *SwapAPI) GetExchangeInfo(ctx context.Context) ([]*exchange.SymbolInfo
 }
 
 func (api *SwapAPI) getExchangeInfo(ctx context.Context, query url.Values) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithIPs(ctx, query, nil)
+}
+
+func (api *SwapAPI) GetExchangeInfoWithIPs(ctx context.Context, ips []string) ([]*exchange.SymbolInfo, error) {
+	return api.getExchangeInfoWithIPs(ctx, nil, ips)
+}
+
+func (api *SwapAPI) getExchangeInfoWithIPs(ctx context.Context, query url.Values, ips []string) ([]*exchange.SymbolInfo, error) {
 	var symbols []*exchange.SymbolInfo
 	var total int
 	domain := api.client.SwapDomain()
 
 	err := retryBinance(ctx,
 		func() error {
-			return api.client.GetDirectStream(ctx, domain, SwapExchangeInfoEndpoint, query, func(reader io.Reader) error {
+			return api.client.GetDirectStreamWithIPs(ctx, domain, ips, SwapExchangeInfoEndpoint, query, func(reader io.Reader) error {
 				var decodeErr error
 				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
 					if raw.Status != "TRADING" || raw.ContractType != "PERPETUAL" {

@@ -41,20 +41,21 @@ const (
 
 // Request is the JSON payload accepted by a market_fetch SCF invocation.
 type Request struct {
-	BatchID     string                  `json:"batch_id"`
-	ScheduleID  string                  `json:"schedule_id,omitempty"`
-	BatchKind   domain.BatchKind        `json:"batch_kind"`
-	SpaceID     string                  `json:"space_id"`
-	DatasetID   string                  `json:"dataset_id,omitempty"`
-	Frequency   string                  `json:"frequency,omitempty"`
-	Provider    string                  `json:"provider"`
-	MarketType  string                  `json:"market_type"`
-	Region      string                  `json:"region"`
-	NodeID      string                  `json:"node_id"`
-	RequestID   string                  `json:"request_id,omitempty"`
-	ShardIndex  int                     `json:"shard_index,omitempty"`
-	Concurrency int                     `json:"concurrency,omitempty"`
-	Items       []domain.CollectionItem `json:"items"`
+	BatchID     string                           `json:"batch_id"`
+	ScheduleID  string                           `json:"schedule_id,omitempty"`
+	BatchKind   domain.BatchKind                 `json:"batch_kind"`
+	SpaceID     string                           `json:"space_id"`
+	DatasetID   string                           `json:"dataset_id,omitempty"`
+	Frequency   string                           `json:"frequency,omitempty"`
+	Provider    string                           `json:"provider"`
+	MarketType  string                           `json:"market_type"`
+	Region      string                           `json:"region"`
+	NodeID      string                           `json:"node_id"`
+	RequestID   string                           `json:"request_id,omitempty"`
+	ShardIndex  int                              `json:"shard_index,omitempty"`
+	Concurrency int                              `json:"concurrency,omitempty"`
+	DNSRoutes   map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
+	Items       []domain.CollectionItem          `json:"items"`
 }
 
 func (r *Request) validate() error {
@@ -408,7 +409,7 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 	if err != nil {
 		return failureResult(item, domain.ItemOutcomeInvalid, "market_type", err), nil, nil, nil
 	}
-	params := &sources.CollectParams{SpaceID: req.SpaceID, DatasetID: item.DatasetID, InstType: instType, Symbol: item.Symbol, SubjectID: item.SubjectID, Interval: item.Frequency, Live: req.BatchKind == domain.BatchKindRealtime}
+	params := &sources.CollectParams{SpaceID: req.SpaceID, DatasetID: item.DatasetID, InstType: instType, Symbol: item.Symbol, SubjectID: item.SubjectID, Interval: item.Frequency, Live: req.BatchKind == domain.BatchKindRealtime, DNSRoutes: req.DNSRoutes}
 	if req.BatchKind == domain.BatchKindCatchup {
 		if e.Catchup == nil {
 			return failureResult(item, domain.ItemOutcomeInvalid, "catchup", fmt.Errorf("catchup collector is not initialized")), nil, nil, nil

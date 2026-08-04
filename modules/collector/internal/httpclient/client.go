@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
@@ -40,7 +42,7 @@ func NewHTTPClient(base ...*http.Client) *HTTPClient {
 }
 
 func (c *HTTPClient) Get(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
-	return c.get(ctx, domain, path, query, func(reader io.Reader) error {
+	return c.getWithClient(ctx, c.httpClient, domain, path, query, func(reader io.Reader) error {
 		if result == nil {
 			return nil
 		}
@@ -53,10 +55,79 @@ func (c *HTTPClient) GetStream(ctx context.Context, domain, path string, query u
 	if consume == nil {
 		return fmt.Errorf("response consumer is required")
 	}
-	return c.get(ctx, domain, path, query, consume)
+	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
 }
 
-func (c *HTTPClient) get(ctx context.Context, domain, path string, query url.Values, consume func(io.Reader) error) error {
+// GetWithIPs first dials the supplied addresses while keeping domain in the
+// URL. This preserves the Host header and TLS SNI. Only after every supplied
+// address fails does it make one normal hostname request.
+func (c *HTTPClient) GetWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, result interface{}) error {
+	return c.getWithIPs(ctx, domain, ips, path, query, func(reader io.Reader) error {
+		if result == nil {
+			return nil
+		}
+		return json.NewDecoder(reader).Decode(result)
+	})
+}
+
+// GetStreamWithIPs is the streaming counterpart of GetWithIPs.
+func (c *HTTPClient) GetStreamWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, consume func(io.Reader) error) error {
+	if consume == nil {
+		return fmt.Errorf("response consumer is required")
+	}
+	return c.getWithIPs(ctx, domain, ips, path, query, consume)
+}
+
+func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, consume func(io.Reader) error) error {
+	for _, ip := range uniqueIPs(ips) {
+		client := c.clientForIP(ip)
+		if client == nil {
+			break
+		}
+		if err := c.getWithClient(ctx, client, domain, path, query, consume); err == nil {
+			return nil
+		} else {
+			log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s error=%v", domain, ip, err)
+		}
+	}
+	log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d", domain, len(uniqueIPs(ips)))
+	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
+}
+
+func (c *HTTPClient) clientForIP(ip string) *http.Client {
+	if c == nil || c.httpClient == nil {
+		return nil
+	}
+	base, ok := c.httpClient.Transport.(*http.Transport)
+	if !ok || base == nil {
+		return nil
+	}
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil {
+		return nil
+	}
+	transport := base.Clone()
+	originalDial := transport.DialContext
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(address)
+		if err != nil || port == "" {
+			port = "443"
+		}
+		target := net.JoinHostPort(parsed.String(), port)
+		if originalDial != nil {
+			return originalDial(ctx, network, target)
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, target)
+	}
+	client := *c.httpClient
+	client.Transport = transport
+	return &client
+}
+
+func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, domain, path string, query url.Values, consume func(io.Reader) error) error {
+	if client == nil {
+		return fmt.Errorf("HTTP client is not initialized")
+	}
 	fullURL := fmt.Sprintf("https://%s%s", domain, path)
 	if len(query) > 0 {
 		fullURL += "?" + query.Encode()
@@ -67,7 +138,7 @@ func (c *HTTPClient) get(ctx context.Context, domain, path string, query url.Val
 	}
 	req.Header.Set("User-Agent", "moox-collector/1.0")
 	started := time.Now()
-	resp, err := c.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		log.WarnContextf(ctx, "collector_http_failed domain=%s duration_ms=%d error=%q", domain, time.Since(started).Milliseconds(), err)
 		return fmt.Errorf("请求 %s 失败: %w", domain, err)
@@ -82,4 +153,22 @@ func (c *HTTPClient) get(ctx context.Context, domain, path string, query url.Val
 	}
 	log.InfoContextf(ctx, "collector_http_completed domain=%s status=%d duration_ms=%d job_item_id=%q", domain, resp.StatusCode, time.Since(started).Milliseconds(), jobcontext.JobItemID(ctx))
 	return nil
+}
+
+func uniqueIPs(ips []string) []string {
+	seen := make(map[string]struct{}, len(ips))
+	result := make([]string, 0, len(ips))
+	for _, value := range ips {
+		ip := net.ParseIP(strings.TrimSpace(value))
+		if ip == nil {
+			continue
+		}
+		value = ip.String()
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

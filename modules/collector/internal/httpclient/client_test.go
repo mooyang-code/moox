@@ -34,3 +34,18 @@ func TestHTTPClientGetRejectsNonOK(t *testing.T) {
 	require.ErrorAs(t, err, &statusErr)
 	assert.Equal(t, http.StatusBadGateway, statusErr.StatusCode)
 }
+
+func TestHTTPClientGetWithIPsPreservesHostnameRequest(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "" {
+			t.Fatalf("request host is empty")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"host": r.Host})
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	var result map[string]string
+	require.NoError(t, NewHTTPClient(server.Client()).GetWithIPs(context.Background(), parsed.Host, []string{"127.0.0.1"}, parsed.Path, nil, &result))
+	assert.Equal(t, parsed.Host, result["host"])
+}
