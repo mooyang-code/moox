@@ -853,10 +853,14 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 			if !strings.EqualFold(strings.TrimSpace(subject.Status), "active") || strings.TrimSpace(subject.SubjectID) == "" {
 				continue
 			}
-			if strings.TrimSpace(subject.ExternalSymbol) == "" {
-				return nil, nil, fmt.Errorf("external symbol is missing for subject %s", subject.SubjectID)
+			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
+			if !validSubject(subjectID) || strings.TrimSpace(subject.ExternalSymbol) == "" {
+				// Keep one malformed snapshot row from poisoning all timer
+				// assignments; reconciliation deactivates the stale instance.
+				log.WarnContextf(ctx, "skip invalid market symbol subject=%q external_symbol=%q", subject.SubjectID, subject.ExternalSymbol)
+				continue
 			}
-			items = append(items, domain.CollectionItem{SubjectID: strings.TrimSpace(subject.SubjectID), Symbol: strings.TrimSpace(subject.ExternalSymbol), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: strings.TrimSpace(subject.ExternalSymbol), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
 		}
 	} else {
 		if s.Storage == nil {

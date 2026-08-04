@@ -122,6 +122,24 @@ func TestExpandRuleUsesExplicitExternalSymbolForKline(t *testing.T) {
 	}
 }
 
+func TestExpandRuleSkipsMalformedSnapshotSubjects(t *testing.T) {
+	scheduler := &Scheduler{
+		SpaceID: "crypto_market",
+		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{
+			{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"},
+			{SubjectID: "币安人生-USDT", ExternalSymbol: "", Status: "active"},
+		}},
+	}
+	items, _, err := scheduler.expandRule(t.Context(), domain.TaskRule{
+		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
+	})
+	assert.NoError(t, err)
+	if assert.Len(t, items, 1) {
+		assert.Equal(t, "BTC-USDT", items[0].SubjectID)
+	}
+}
+
 type datasetSourceStub struct {
 	subjects []domain.DatasetSubject
 }

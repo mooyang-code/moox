@@ -4,7 +4,7 @@
 
 **Goal:** 将实时 K 线从 Collector 逐节点调用改为腾讯云 Timer Trigger 直接触发，并由 Collector 统一协调每节点任务和公共 DNS 环境变量，在保持多地域出口能力的同时消除本地 Invoke 排队、缩短延迟和降低无效 SCF 运行成本。
 
-**Implementation status (2026-08-04):** 当前分支已完成 Task 1-10 的代码实现、全仓本地验证、E2E 和独立 codeCR，提交为 `582f875b`。Task 11 的腾讯云线上发布、绿色重建、灰度/全量数据闭环和回滚演练仍是发布前执行清单，尚未执行；因此本地测试不能被当成线上已发布证明。Task 1-10 中的“先运行失败测试”是实现方法说明，不代表本次交付伪造了未执行的红灯证据。
+**Implementation status (2026-08-05):** Task 1-10 的代码、测试和独立 codeCR 已完成；本轮线上发布与全量 Timer 数据验证已经执行，详见第 6 节。Collector/CloudNode/Storage-node 已部署并运行，49 个 SCF 节点已完成地域与 Timer 元数据核验，CLS 已验证连续 3 个完整 1m 周期覆盖 478 个 active symbol。Storage view 在 EventBus 重启后曾出现 outbox/消费积压，已通过 DataNode relay 超时保护、重启恢复和 view consumer 重启处理；最终 Storage view 水位仍需继续追平后，才能把第 8 项“Storage 查询连续 3 轮”标记为完全闭环。Task 1-10 中的“先运行失败测试”是实现方法说明，不代表本次交付伪造了未执行的红灯证据。
 
 **Architecture:** Collector 只做控制面协调：读取启用规则和完整 Symbol Dataset，按每函数最多 30 个标的确定性分片，将节点私有任务与公共 DNS 一次提交给 CloudNode。CloudNode 持有腾讯凭据，合并完整函数 Environment、协调 Timer Trigger 并回读；SCF 每次被 Timer 触发后从环境变量读取任务，并发请求行情、聚合后一次写 Storage，实时链路不再依赖 Collector、Admin、CloudNode Invoke 或 EventBus Completion。
 
@@ -867,3 +867,41 @@ git commit -m "docs: finalize timer-triggered market fetch operations"
 8. 400 多个 active Symbol 连续三个 1m 已收盘周期均可在 Storage 查询到，CLS 可按函数/标的查看耗时与结果。
 9. Monitor 不再发“尚未收到行情采集完成回执”，但能对协调失败、Trigger 异常和 Dataset/K 线过期发出中文告警。
 10. `./scripts/test-go-workspace.sh`、`make verify-pr`、Web 全测/生产构建、独立 codeCR 和真实腾讯灰度/全量验收全部通过。
+
+## 6. 线上执行记录（2026-08-05）
+
+### 6.1 已发布版本与运行配置
+
+- Collector `/home/ubuntu/moox/prod/bin/moox-collector`：本地/远端 SHA-256 均为 `764aec1ef7f04b09ffa8dc8711f5bbfbd94cf80235448ed1691fe6b39c8b5a44`。
+- CloudNode `/home/ubuntu/moox/prod/bin/moox-cloudnode`：远端已重启并使用本轮 Timer 回读限流实现；每 5 分钟最多回读 4 个节点，避免 Tencent `RequestLimitExceeded` 触发协调风暴。
+- Storage-node：部署 SHA-256 `d023e750611093da446845095cbb95c15a1b8fbd7592f4529866aaed10b3cdba`。Relay 每次 JetStream publish 使用 5 秒独立超时，EventBus 断连时只保留 outbox 并等待下一轮重试，不再永久阻塞单 relay goroutine。
+- Collector storage consumer ACL 已从通配符改为显式 `MOOX_STORAGE` API 权限；远端用户凭据重新生成后，`collector-storage-write-v1-crypto_market` 已正常绑定且 pending 为 0。
+
+### 6.2 Timer 节点与环境变量核验
+
+- CloudNode 目录共有 49 个已部署节点：广州 20 个 Timer + 1 个 Invoke，北京 10 + 1，上海 10 + 1，新加坡 5 + 1；共 45 个 Timer、4 个 Invoke。
+- 本轮有任务的 16 个 Timer 节点均启用，29 个多余 Timer 节点均关闭 Trigger；每个任务最多 30 个 symbol，active Kline task instance 为 478 个。
+- Timer cron 均为 `0 * * * * * *`，Timer memory 为 64MB，timeout 为 15s，Storage timeout 为 5s；每函数环境变量请求体 567 至 1631 字节，受管环境预算均为 3011 字节，未超过 Tencent 4KB 限制。
+- 发现并跳过 Symbol Dataset 中不合法的 `币安人生-USDT`，对应过期任务实例已软删除；不会再让一个非法 symbol 阻塞 478 个合法标的的整批协调。
+
+### 6.3 CLS 与任务实例结果
+
+CLS Topic `c7ff7bb7-622f-43c6-86ac-800552762a2c` 按 `event_type=market_fetch_item`、`dataset_id=binance_spot_kline_1m` 逐分钟核验：
+
+| UTC 分钟 | 记录数 | 成功 | 失败 | 函数数 | symbol 数 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 21:46 | 478 | 478 | 0 | 16 | 478 |
+| 21:47 | 478 | 478 | 0 | 16 | 478 |
+| 21:48 | 478 | 478 | 0 | 16 | 478 |
+
+EventBus 恢复后 Collector 任务实例查询结果为 `active=478, fresh=478, success=478`，最新执行时间与当前分钟一致。CLS 每条明细包含函数名、symbol、耗时、成功状态和错误信息。
+
+### 6.4 Storage 恢复记录与剩余闭环
+
+本轮曾观察到 Storage DataNode outbox relay 因 EventBus 重启及 NATS 写超时积压；重启 DataNode 后 outbox 从 1733 条逐步降至 0，Collector consumer 保持 pending=0。Storage view consumer 曾因断连退订，已重启并恢复 bound=1；为追平历史积压，线上 view 配置的 `max_workers` 临时调整为 8。
+
+在本记录写入时，Storage view durable consumer 仍在追平历史消息，`served_indexed_to` 落后于 CLS 最新分钟。因此发布和 CLS/任务实例闭环已完成，但“通过 Storage View 查询连续 3 轮最新已收盘 K 线”仍是发布后的观察项；在该水位追平前，不应把 Monitor 的 freshness 告警标记为误报。若积压持续增长，应先检查 view consumer 的 bound、pending、ack_pending 和 `moox_storage_view_delivery_duration_seconds`，不要重新启用旧的每分钟 Invoke 链路。
+
+### 6.5 回滚状态
+
+本轮未执行全量 Timer 关闭回滚演练，已保留 Collector、CloudNode、Storage-node 旧二进制和远端配置备份。若需要回滚，必须先关闭全部 Timer Trigger，确认无新 Timer 调用后再恢复上一版发布物；不得让 Timer 与旧 Invoke 实时链路并行超过一个采集周期。

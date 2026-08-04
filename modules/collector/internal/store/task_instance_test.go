@@ -81,3 +81,21 @@ func TestTaskInstanceRepositoryMatchesCanonicalStorageFrequency(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), updated)
 }
+
+func TestTaskInstanceRepositoryDeactivatesMissingRuleInstances(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	instances := []domain.TaskInstance{
+		{SpaceID: "crypto", TaskID: "keep", RuleID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Frequency: "1m", TaskParams: `{}`},
+		{SpaceID: "crypto", TaskID: "remove", RuleID: "rule-1", Provider: "binance", MarketType: "spot", DataType: "kline", DatasetID: "bars", SubjectID: "ETH-USDT", Frequency: "1m", TaskParams: `{}`},
+	}
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, instances))
+	require.NoError(t, s.TaskInstances().DeactivateMissingMarketFetchRuleInstances(ctx, "crypto", "rule-1", []string{"keep"}))
+
+	removed, err := s.TaskInstances().Get(ctx, "crypto", "remove")
+	require.NoError(t, err)
+	assert.True(t, removed.IsDeleted)
+	kept, err := s.TaskInstances().Get(ctx, "crypto", "keep")
+	require.NoError(t, err)
+	assert.False(t, kept.IsDeleted)
+}

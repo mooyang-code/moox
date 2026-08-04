@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,8 @@ const (
 	scfOperationTimeout       = 5 * time.Minute
 	scfCreateAttemptTimeout   = 4 * time.Minute
 	scfCreateReconcileTimeout = 10 * time.Second
+	timerReadbackInterval     = 5 * time.Minute
+	timerReadbackBatchSize    = 4
 )
 
 func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.GetNodeListRsp, error) {
@@ -34,12 +37,42 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 	if err != nil {
 		return &pb.GetNodeListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	var refreshWG sync.WaitGroup
-	refreshSlots := make(chan struct{}, 16)
+	// Tencent API has a per-account request rate limit. GetNodeList is called
+	// by Collector every few seconds, so refreshing all timer nodes here would
+	// turn a read-only listing into a 2*node-count API burst. Refresh a small
+	// oldest-first slice and cache the readback timestamp in node metadata.
+	type timerRefreshCandidate struct {
+		index int
+		at    time.Time
+	}
+	now := time.Now().UTC()
+	candidates := make([]timerRefreshCandidate, 0)
 	for index := range nodes {
 		if nodes[index].TriggerType != "timer" {
 			continue
 		}
+		last, _ := time.Parse(time.RFC3339Nano, metadataString(parseJSONMap(nodes[index].Metadata), "timer_last_readback_at"))
+		if !last.IsZero() && now.Sub(last) < timerReadbackInterval {
+			continue
+		}
+		candidates = append(candidates, timerRefreshCandidate{index: index, at: last})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].at.IsZero() != candidates[j].at.IsZero() {
+			return candidates[i].at.IsZero()
+		}
+		if candidates[i].at.Equal(candidates[j].at) {
+			return candidates[i].index < candidates[j].index
+		}
+		return candidates[i].at.Before(candidates[j].at)
+	})
+	if len(candidates) > timerReadbackBatchSize {
+		candidates = candidates[:timerReadbackBatchSize]
+	}
+	var refreshWG sync.WaitGroup
+	refreshSlots := make(chan struct{}, timerReadbackBatchSize)
+	for _, candidate := range candidates {
+		index := candidate.index
 		refreshWG.Add(1)
 		go func(index int) {
 			defer refreshWG.Done()
@@ -75,7 +108,8 @@ func (s *Service) refreshTimerTriggerMetadata(ctx context.Context, spaceID strin
 		return nil
 	}
 	metadata := parseJSONMap(node.Metadata)
-	patch := map[string]any{"timer_available_status": "Unknown", "timer_actual_type": nil, "timer_actual_enabled": nil, "timer_actual_cron": nil, "timer_actual_qualifier": nil, "timer_actual_message": nil}
+	readbackAt := time.Now().UTC().Format(time.RFC3339Nano)
+	patch := map[string]any{"timer_available_status": "Unknown", "timer_actual_type": nil, "timer_actual_enabled": nil, "timer_actual_cron": nil, "timer_actual_qualifier": nil, "timer_actual_message": nil, "timer_last_readback_at": readbackAt}
 	if strings.TrimSpace(node.PackageID) == "" || (strings.TrimSpace(node.DeploymentID) == "" && !metadataBool(metadata, "deployment_ready")) {
 		patch["timer_available_status"] = "Unknown"
 		err := s.catalog.UpdateNodeRuntimeMetadata(ctx, spaceID, node.NodeID, patch)

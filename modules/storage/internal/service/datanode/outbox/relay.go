@@ -28,6 +28,7 @@ type PublishAckPublisher interface {
 type RelayOptions struct {
 	PollInterval                  time.Duration
 	BatchSize                     int
+	PublishTimeout                time.Duration
 	Metrics                       *observability.ViewMetrics
 	ProcessedEventCleanupInterval time.Duration
 	ProcessedEventRetention       time.Duration
@@ -61,6 +62,9 @@ func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Rel
 	}
 	if opts.BatchSize <= 0 {
 		opts.BatchSize = 100
+	}
+	if opts.PublishTimeout <= 0 {
+		opts.PublishTimeout = 5 * time.Second
 	}
 	if opts.ProcessedEventCleanupInterval <= 0 {
 		opts.ProcessedEventCleanupInterval = time.Hour
@@ -167,7 +171,12 @@ func (r *Relay) flush(ctx context.Context) error {
 			}
 			return err
 		}
-		ack, err := r.publish(ctx, data)
+		// A disconnected EventBus client must not wedge the single relay
+		// goroutine forever. Keep the outbox entry for the next poll when the
+		// bounded publish attempt expires; the EventID makes the retry idempotent.
+		publishCtx, cancel := context.WithTimeout(ctx, r.options.PublishTimeout)
+		ack, err := r.publish(publishCtx, data)
+		cancel()
 		if err != nil {
 			r.metrics.IncOutboxPublishError()
 			if len(confirmed) > 0 {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
@@ -23,6 +24,13 @@ type testPublisher struct {
 	attempts [][]byte
 	calls    int
 	failAt   int
+}
+
+type blockingPublisher struct{}
+
+func (blockingPublisher) PublishMessage(ctx context.Context, _ []byte) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (p *testPublisher) PublishMessage(_ context.Context, data []byte) error {
@@ -114,6 +122,35 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	entries, err = store.ListOutbox(context.Background(), 0, 10)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("remaining after retry=%v err=%v", entries, err)
+	}
+}
+
+func TestRelayBoundsPublishAttempt(t *testing.T) {
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
+	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	relay, err := NewRelay(store, blockingPublisher{}, RelayOptions{PublishTimeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	if err := relay.flush(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("flush error=%v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("publish attempt took %s, want bounded", elapsed)
+	}
+	entries, err := store.ListOutbox(context.Background(), 0, 10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("outbox after timeout=%v err=%v", entries, err)
 	}
 }
 

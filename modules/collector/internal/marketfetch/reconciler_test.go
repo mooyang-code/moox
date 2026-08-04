@@ -226,6 +226,14 @@ func TestReconcilerRepairsTriggerProtocolDrift(t *testing.T) {
 	require.True(t, timerTriggerNeedsRepair(assignment, metadata))
 }
 
+func TestReconcilerDoesNotStormOnTransientTimerReadbackError(t *testing.T) {
+	assignment := NodeAssignment{Enabled: true, Cron: "0 * * * * * *"}
+	metadata := map[string]any{"timer_available_status": "Unknown", "timer_status_error": "RequestLimitExceeded"}
+	require.False(t, timerTriggerNeedsRepair(assignment, metadata))
+	metadata["timer_status_error"] = nil
+	require.True(t, timerTriggerNeedsRepair(assignment, metadata))
+}
+
 func TestReconcilerSplitsLongSubjectsBeforeEnvironmentFailure(t *testing.T) {
 	group := TaskGroup{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", ExternalSymbols: map[string]string{}}
 	for index := 0; index < 30; index++ {

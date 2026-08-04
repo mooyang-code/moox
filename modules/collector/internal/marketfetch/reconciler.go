@@ -508,11 +508,19 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 		symbolIDs := make([]string, 0, len(subjects))
 		externalSymbols := make(map[string]string, len(subjects))
 		for _, subject := range subjects {
-			if strings.EqualFold(strings.TrimSpace(subject.Status), "active") && strings.TrimSpace(subject.SubjectID) != "" {
-				subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-				symbolIDs = append(symbolIDs, subjectID)
-				externalSymbols[subjectID] = strings.TrimSpace(subject.ExternalSymbol)
+			if !strings.EqualFold(strings.TrimSpace(subject.Status), "active") {
+				continue
 			}
+			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
+			if !validSubject(subjectID) || strings.TrimSpace(subject.ExternalSymbol) == "" {
+				// A malformed/stale symbol must not block the entire full-snapshot
+				// assignment. It is deliberately omitted and will be deactivated
+				// from TaskInstance during the same reconciliation pass.
+				log.WarnContextf(ctx, "skip invalid market symbol subject=%q external_symbol=%q", subject.SubjectID, subject.ExternalSymbol)
+				continue
+			}
+			symbolIDs = append(symbolIDs, subjectID)
+			externalSymbols[subjectID] = strings.TrimSpace(subject.ExternalSymbol)
 		}
 		for _, frequency := range params.Collector.Intervals {
 			groups = append(groups, TaskGroup{Provider: params.Provider, MarketType: params.MarketType, DatasetID: params.Target.DatasetID, Frequency: frequency, Subjects: symbolIDs, ExternalSymbols: externalSymbols})
@@ -590,11 +598,19 @@ func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.N
 }
 
 func timerTriggerNeedsRepair(assignment NodeAssignment, metadata map[string]any) bool {
+	// A Tencent readback can be temporarily Unknown when the account-level API
+	// rate limit is hit. Do not immediately enqueue another full environment
+	// update for that node; the next bounded readback will recover the state.
+	status, _ := metadata["timer_available_status"].(string)
+	statusError, _ := metadata["timer_status_error"].(string)
+	if strings.EqualFold(strings.TrimSpace(status), "unknown") && strings.TrimSpace(statusError) != "" {
+		return false
+	}
 	actualEnabled, hasActualEnabled := metadataBoolValue(metadata, "timer_actual_enabled")
 	if !hasActualEnabled || actualEnabled != assignment.Enabled {
 		return true
 	}
-	status := strings.TrimSpace(fmt.Sprint(metadata["timer_available_status"]))
+	status = strings.TrimSpace(status)
 	if assignment.Enabled && !strings.EqualFold(status, "available") {
 		return true
 	}

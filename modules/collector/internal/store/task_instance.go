@@ -309,13 +309,9 @@ func (r *TaskInstanceRepository) DeactivateMissingMarketFetchRuleInstances(ctx c
 	if len(activeTaskIDs) > 0 {
 		query = query.Where("c_task_id NOT IN ?", activeTaskIDs)
 	}
-	var count int64
-	if err := query.Count(&count).Error; err != nil {
-		return err
-	}
-	if count == 0 {
-		return nil
-	}
+	// Do not call Count on this statement before Updates. GORM's SQLite
+	// dialect retains the count source table and emits UPDATE ... FROM the
+	// same table, making unqualified c_* predicates ambiguous.
 	return query.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
 }
 
