@@ -251,6 +251,15 @@ func shouldRebind(err error) bool {
 
 func (c *Consumer) rebind(ctx context.Context, opts Config) pullConsumer {
 	for ctx.Err() == nil {
+		// nats.go can return a subscription object while the underlying
+		// connection is still reconnecting. Do not bind that unusable
+		// subscription; wait until the shared client reports a live connection.
+		if c.client != nil && !c.client.Ready() {
+			if !sleepRebind(ctx) {
+				return nil
+			}
+			continue
+		}
 		attemptCtx, cancel := context.WithTimeout(ctx, rebindAttemptLimit)
 		bound, err := c.bind(attemptCtx)
 		cancel()
@@ -260,15 +269,20 @@ func (c *Consumer) rebind(ctx context.Context, opts Config) pullConsumer {
 		if opts.ErrorReporter != nil {
 			opts.ErrorReporter.Report(fmt.Errorf("rebind storage view consumer: %w", err))
 		}
-		timer := time.NewTimer(rebindRetryDelay)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+		if !sleepRebind(ctx) {
 			return nil
 		}
 	}
 	return nil
+}
+
+func sleepRebind(ctx context.Context) bool {
+	timer := time.NewTimer(rebindRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
