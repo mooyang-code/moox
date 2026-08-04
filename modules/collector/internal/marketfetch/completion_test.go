@@ -182,6 +182,20 @@ func TestHandleCompletionDoesNotRegressNewSuccessWithOlderRealtimeFailure(t *tes
 	assert.Equal(t, newerCompletedAt, instance.LastExecTime.UTC())
 }
 
+func TestCompletionAcceptsFailoverNodeForSameBatch(t *testing.T) {
+	batch := completionTestBatch("failover")
+	payload := completionTestPayload(nil, time.Now().UTC())
+	payload.BatchId = batch.BatchID
+	payload.ScheduleId = batch.ScheduleID
+	payload.BatchKind = string(batch.BatchKind)
+	payload.DatasetId = batch.DatasetID
+	payload.Frequency = batch.Frequency
+	payload.NodeId = "node-failover"
+	payload.PlannedCount = int32(batch.PlannedCount)
+
+	assert.Empty(t, completionIdentityMismatch(&batch, payload))
+}
+
 func newCompletionTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})

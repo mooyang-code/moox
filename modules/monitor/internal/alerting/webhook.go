@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -124,7 +125,7 @@ func localizedReason(check domain.Check, result domain.CheckResult) (string, str
 			"检查行情采集任务最近一次成功时间及 Dataset 最新数据时间"
 	case raw == "threshold_exceeded":
 		return "价格涨跌幅或成交量变化超过预设阈值",
-			"核对交易所实时行情，确认是正常剧烈波动还是异常数据"
+			marketCanaryThresholdAction(result.BodyExcerpt)
 	case raw == "invalid_config":
 		return "监控项配置不完整或阈值无效",
 			"检查 Market Canary 的 Dataset、Symbol、Frequency 和阈值配置"
@@ -162,6 +163,45 @@ func localizedReason(check domain.Check, result domain.CheckResult) (string, str
 		return firstText(result.Status, "未知异常"), "查看 Monitor 与目标服务日志获取详细原因"
 	}
 	return raw, "查看 Monitor 与目标服务日志获取详细原因"
+}
+
+type marketCanaryThresholdDiagnostic struct {
+	Type                 string  `json:"type"`
+	PreviousClose        float64 `json:"previous_close"`
+	CurrentClose         float64 `json:"current_close"`
+	PriceReturn          float64 `json:"price_return"`
+	ReturnThreshold      float64 `json:"return_threshold"`
+	PreviousVolume       float64 `json:"previous_volume"`
+	CurrentVolume        float64 `json:"current_volume"`
+	VolumeRatio          float64 `json:"volume_ratio"`
+	VolumeRatioThreshold float64 `json:"volume_ratio_threshold"`
+}
+
+func marketCanaryThresholdAction(raw string) string {
+	const fallback = "核对交易所实时行情，确认是正常剧烈波动还是异常数据"
+	var diagnostic marketCanaryThresholdDiagnostic
+	if err := json.Unmarshal([]byte(raw), &diagnostic); err != nil || diagnostic.Type != "market_canary_threshold" {
+		return fallback
+	}
+	return fmt.Sprintf(
+		"核对交易所实时行情，确认是正常剧烈波动还是异常数据；变化前：收盘价 %s、成交量 %s；变化后：收盘价 %s、成交量 %s；价格变化 %s（阈值 %s），成交量变化 %s 倍（阈值 %s 倍）",
+		formatCanaryValue(diagnostic.PreviousClose),
+		formatCanaryValue(diagnostic.PreviousVolume),
+		formatCanaryValue(diagnostic.CurrentClose),
+		formatCanaryValue(diagnostic.CurrentVolume),
+		formatCanaryPercent(diagnostic.PriceReturn),
+		formatCanaryPercent(diagnostic.ReturnThreshold),
+		formatCanaryValue(diagnostic.VolumeRatio),
+		formatCanaryValue(diagnostic.VolumeRatioThreshold),
+	)
+}
+
+func formatCanaryValue(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+
+func formatCanaryPercent(value float64) string {
+	return formatCanaryValue(value*100) + "%"
 }
 
 func reporterCheckTarget(check domain.Check) (string, string) {

@@ -80,7 +80,24 @@ func (r *FetchBatchRepository) Get(ctx context.Context, spaceID, batchID string)
 }
 
 func (r *FetchBatchRepository) MarkDispatched(ctx context.Context, spaceID, batchID, requestID string, deadline time.Time) (bool, error) {
-	updates := map[string]any{"c_status": domain.BatchStatusDispatched, "c_request_id": requestID, "c_dispatched_at": time.Now().UTC(), "c_deadline_at": deadline.UTC(), "c_mtime": time.Now().UTC()}
+	return r.MarkDispatchedToNode(ctx, spaceID, batchID, requestID, deadline, "", "", "")
+}
+
+// MarkDispatchedToNode records the node that accepted the invocation. The
+// routing fields are updated in the same planned->dispatched CAS so a
+// failover completion is matched against the node that actually ran it.
+func (r *FetchBatchRepository) MarkDispatchedToNode(ctx context.Context, spaceID, batchID, requestID string, deadline time.Time, region, nodeID, functionName string) (bool, error) {
+	now := time.Now().UTC()
+	updates := map[string]any{"c_status": domain.BatchStatusDispatched, "c_request_id": requestID, "c_dispatched_at": now, "c_deadline_at": deadline.UTC(), "c_mtime": now}
+	if strings.TrimSpace(region) != "" {
+		updates["c_region"] = region
+	}
+	if strings.TrimSpace(nodeID) != "" {
+		updates["c_node_id"] = nodeID
+	}
+	if strings.TrimSpace(functionName) != "" {
+		updates["c_function_name"] = functionName
+	}
 	result := r.db.WithContext(ctx).Model(&domain.BatchInvocation{}).
 		Where("c_space_id = ? AND c_batch_id = ? AND c_status = ?", spaceID, batchID, domain.BatchStatusPlanned).
 		Updates(updates)

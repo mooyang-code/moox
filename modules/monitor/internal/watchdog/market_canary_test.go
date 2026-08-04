@@ -2,6 +2,7 @@ package watchdog
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,13 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	result = (MarketCanary{Reader: reader, AuthInfo: auth, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.False(t, result.Success)
 	require.Equal(t, "threshold_exceeded", result.ErrorMessage)
+	var diagnostic marketCanaryThresholdDiagnostic
+	require.NoError(t, json.Unmarshal([]byte(result.BodyExcerpt), &diagnostic))
+	require.Equal(t, "market_canary_threshold", diagnostic.Type)
+	require.Equal(t, 100.0, diagnostic.PreviousClose)
+	require.Equal(t, 110.0, diagnostic.CurrentClose)
+	require.Equal(t, 10.0, diagnostic.PreviousVolume)
+	require.Equal(t, 12.0, diagnostic.CurrentVolume)
 }
 
 func TestMarketCanaryPageDoesNotMixVenuesAtSameTimestamp(t *testing.T) {

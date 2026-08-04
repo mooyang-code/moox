@@ -214,7 +214,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 				// reject the whole batch before it can inspect the item.
 				batchProvider, batchMarketType := normalizedBatchIdentity(batchItems[start], rule)
 				req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: batchKind, ShardIndex: shard, SpaceID: spaceID, DatasetID: batchItems[start].DatasetID, Frequency: frequency, Provider: batchProvider, MarketType: batchMarketType, Region: node.Region, NodeID: node.NodeID, DNSRoutes: dnsRoutes, Items: batchItems[start:end]}
-				created, err := s.planOne(ctx, rule, req, node)
+				created, err := s.planOne(ctx, rule, req, node, nodes)
 				if err != nil {
 					return err
 				}
@@ -404,7 +404,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		scheduleID := fmt.Sprintf("catchup:%s:%s", candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
 		batchID := stableID(spaceID, scheduleID, string(domain.BatchKindCatchup), "0", "1")
 		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindCatchup, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
-		if _, err := s.planOne(ctx, candidate.rule, req, node); err != nil {
+		if _, err := s.planOne(ctx, candidate.rule, req, node, nodes); err != nil {
 			return err
 		}
 	}
@@ -423,13 +423,12 @@ func gapAuditThreshold(frequency string) time.Duration {
 	return threshold
 }
 
-func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Request, node scfinvoker.Node) (bool, error) {
+func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Request, node scfinvoker.Node, nodes []scfinvoker.Node) (bool, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return false, err
 	}
-	event, err := marketFetchEvent(req, s.StorageTarget)
-	if err != nil {
+	if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
 		return false, err
 	}
 	now := time.Now().UTC()
@@ -446,7 +445,7 @@ func (s *Scheduler) planOne(ctx context.Context, rule domain.TaskRule, req Reque
 	}
 	// Planning is the durable part of the timer tick. Invocation is bounded by
 	// a small semaphore so a slow control plane cannot block the next rule.
-	go s.dispatchPlanned(req, node, event)
+	go s.dispatchPlanned(req, node, nodes)
 	return true, nil
 }
 
@@ -462,7 +461,7 @@ func rotateRulesAfter(rules []domain.TaskRule, lastRuleID string) []domain.TaskR
 	return rules
 }
 
-func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, event map[string]any) {
+func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, nodes []scfinvoker.Node) {
 	if s.invokeSem == nil {
 		s.invokeSem = make(chan struct{}, 20)
 	}
@@ -477,16 +476,32 @@ func (s *Scheduler) dispatchPlanned(req Request, node scfinvoker.Node, event map
 	if batch, err := s.Batches.Get(ctx, req.SpaceID, req.BatchID); err != nil || batch.Status != domain.BatchStatusPlanned {
 		return
 	}
-	invokeCtx, invokeCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer invokeCancel()
-	result, err := s.Invoker.Invoke(invokeCtx, req.SpaceID, node.NodeID, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT)
-	if err != nil {
-		log.WarnContextf(ctx, "SCF market fetch invoke pending batch=%s node=%s err=%v", req.BatchID, node.NodeID, err)
+	for attempt, candidate := range invocationCandidates(node, nodes) {
+		event, err := marketFetchEvent(requestForNode(req, candidate), s.StorageTarget)
+		if err != nil {
+			log.WarnContextf(ctx, "build SCF market fetch failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
+			return
+		}
+		invokeCtx, invokeCancel := context.WithTimeout(ctx, 5*time.Second)
+		result, invokeErr := s.Invoker.Invoke(invokeCtx, req.SpaceID, candidate.NodeID, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT)
+		invokeCancel()
+		if invokeErr != nil {
+			if attempt == 0 {
+				log.WarnContextf(ctx, "SCF market fetch invoke failed; trying failover batch=%s from_node=%s err=%v", req.BatchID, candidate.NodeID, invokeErr)
+			} else {
+				log.WarnContextf(ctx, "SCF market fetch failover invoke failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, invokeErr)
+			}
+			continue
+		}
+		if _, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(70*time.Second), candidate.Region, candidate.NodeID, candidate.FunctionName); err != nil {
+			log.WarnContextf(ctx, "mark market fetch batch dispatched failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
+		}
+		if attempt > 0 {
+			log.InfoContextf(ctx, "SCF market fetch failover succeeded batch=%s node=%s", req.BatchID, candidate.NodeID)
+		}
 		return
 	}
-	if _, err := s.Batches.MarkDispatched(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(70*time.Second)); err != nil {
-		log.WarnContextf(ctx, "mark market fetch batch dispatched failed batch=%s err=%v", req.BatchID, err)
-	}
+	log.WarnContextf(ctx, "SCF market fetch invoke exhausted failover batch=%s original_node=%s", req.BatchID, node.NodeID)
 }
 
 // realtimeBatchSize makes one minute's work fan out to the current SCF fleet
@@ -625,8 +640,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		}
 		req := Request{BatchID: batchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
 		raw, _ := json.Marshal(req)
-		event, err := marketFetchEvent(req, s.StorageTarget)
-		if err != nil {
+		if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")
 			continue
 		}
@@ -638,12 +652,12 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		if !created {
 			continue
 		}
-		go s.dispatchRetry(req, node, event, retry.RetryKey)
+		go s.dispatchRetry(req, node, nodes, retry.RetryKey)
 	}
 	return nil
 }
 
-func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, event map[string]any, retryKey string) {
+func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, nodes []scfinvoker.Node, retryKey string) {
 	if s.invokeSem == nil {
 		s.invokeSem = make(chan struct{}, 20)
 	}
@@ -655,33 +669,74 @@ func (s *Scheduler) dispatchRetry(req Request, node scfinvoker.Node, event map[s
 	case <-ctx.Done():
 		return
 	}
-	invokeCtx, invokeCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer invokeCancel()
-	result, err := s.Invoker.Invoke(invokeCtx, req.SpaceID, node.NodeID, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT)
-	if err != nil {
-		log.WarnContextf(ctx, "SCF market fetch retry invoke failed batch=%s node=%s err=%v", req.BatchID, node.NodeID, err)
-		return
-	}
-	updated, err := s.Batches.MarkDispatched(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(70*time.Second))
-	if err != nil {
-		log.WarnContextf(ctx, "mark market fetch retry dispatched failed batch=%s err=%v", req.BatchID, err)
-		return
-	}
-	// A completion can arrive before the invoke RPC returns. In that case the
-	// batch CAS is intentionally false; do not move an already completed retry
-	// item back to dispatched, or it can remain stuck forever.
-	if !updated {
-		return
-	}
-	if err := s.Retries.MarkStatus(ctx, req.SpaceID, retryKey, "dispatched"); err != nil {
-		log.WarnContextf(ctx, "mark market fetch retry status failed key=%s err=%v", retryKey, err)
-		return
-	}
-	if s.Metrics != nil {
-		if count, countErr := s.Retries.CountPending(ctx, req.SpaceID, req.DatasetID, req.Frequency); countErr == nil {
-			s.Metrics.SetRetryPending(req.SpaceID, req.DatasetID, req.Frequency, int(count))
+	for attempt, candidate := range invocationCandidates(node, nodes) {
+		event, err := marketFetchEvent(requestForNode(req, candidate), s.StorageTarget)
+		if err != nil {
+			log.WarnContextf(ctx, "build SCF market fetch retry failover event failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
+			return
 		}
+		invokeCtx, invokeCancel := context.WithTimeout(ctx, 5*time.Second)
+		result, invokeErr := s.Invoker.Invoke(invokeCtx, req.SpaceID, candidate.NodeID, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_EVENT)
+		invokeCancel()
+		if invokeErr != nil {
+			if attempt == 0 {
+				log.WarnContextf(ctx, "SCF market fetch retry invoke failed; trying failover batch=%s from_node=%s err=%v", req.BatchID, candidate.NodeID, invokeErr)
+			} else {
+				log.WarnContextf(ctx, "SCF market fetch retry failover invoke failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, invokeErr)
+			}
+			continue
+		}
+		updated, err := s.Batches.MarkDispatchedToNode(ctx, req.SpaceID, req.BatchID, result.RequestID, time.Now().UTC().Add(70*time.Second), candidate.Region, candidate.NodeID, candidate.FunctionName)
+		if err != nil {
+			log.WarnContextf(ctx, "mark market fetch retry dispatched failed batch=%s node=%s err=%v", req.BatchID, candidate.NodeID, err)
+			return
+		}
+		// A completion can arrive before the invoke RPC returns. In that case the
+		// batch CAS is intentionally false; do not move an already completed retry
+		// item back to dispatched, or it can remain stuck forever.
+		if !updated {
+			return
+		}
+		if err := s.Retries.MarkStatus(ctx, req.SpaceID, retryKey, "dispatched"); err != nil {
+			log.WarnContextf(ctx, "mark market fetch retry status failed key=%s err=%v", retryKey, err)
+			return
+		}
+		if attempt > 0 {
+			log.InfoContextf(ctx, "SCF market fetch retry failover succeeded batch=%s node=%s", req.BatchID, candidate.NodeID)
+		}
+		if s.Metrics != nil {
+			if count, countErr := s.Retries.CountPending(ctx, req.SpaceID, req.DatasetID, req.Frequency); countErr == nil {
+				s.Metrics.SetRetryPending(req.SpaceID, req.DatasetID, req.Frequency, int(count))
+			}
+		}
+		return
 	}
+	log.WarnContextf(ctx, "SCF market fetch retry invoke exhausted failover batch=%s original_node=%s", req.BatchID, node.NodeID)
+}
+
+// invocationCandidates returns the original node followed by one deterministic
+// alternate. A single alternate is enough to bypass a bad SCF node while
+// keeping a control-plane outage from multiplying calls across the fleet.
+func invocationCandidates(primary scfinvoker.Node, nodes []scfinvoker.Node) []scfinvoker.Node {
+	if strings.TrimSpace(primary.NodeID) == "" || len(nodes) == 0 {
+		return []scfinvoker.Node{primary}
+	}
+	for index, node := range nodes {
+		if node.NodeID != primary.NodeID {
+			continue
+		}
+		if len(nodes) == 1 {
+			return []scfinvoker.Node{primary}
+		}
+		return []scfinvoker.Node{primary, nodes[(index+1)%len(nodes)]}
+	}
+	return []scfinvoker.Node{primary, nodes[0]}
+}
+
+func requestForNode(req Request, node scfinvoker.Node) Request {
+	req.Region = node.Region
+	req.NodeID = node.NodeID
+	return req
 }
 
 func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]domain.CollectionItem, []string, error) {

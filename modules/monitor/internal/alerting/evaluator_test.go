@@ -332,3 +332,17 @@ func TestLocalizedReasonIdentifiesReporterInstance(t *testing.T) {
 	assert.Equal(t, "storage-view-2@control 的指标上报已超过允许时间", reason)
 	assert.Equal(t, "检查 storage-view 进程、Reporter 定时器和 EventBus 连接", action)
 }
+
+func TestLocalizedReasonIncludesMarketCanaryBeforeAndAfterValues(t *testing.T) {
+	reason, action := localizedReason(
+		domain.Check{CheckID: "market_canary:binance_spot_kline:BTC-USDT:1m"},
+		domain.CheckResult{
+			ErrorMessage: "threshold_exceeded",
+			BodyExcerpt:  `{"type":"market_canary_threshold","previous_close":100,"current_close":110,"price_return":0.1,"return_threshold":0.05,"previous_volume":10,"current_volume":12,"volume_ratio":1.2,"volume_ratio_threshold":5}`,
+		},
+	)
+	assert.Equal(t, "价格涨跌幅或成交量变化超过预设阈值", reason)
+	assert.Contains(t, action, "变化前：收盘价 100、成交量 10")
+	assert.Contains(t, action, "变化后：收盘价 110、成交量 12")
+	assert.Contains(t, action, "价格变化 10%（阈值 5%）")
+}

@@ -2,6 +2,7 @@ package watchdog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -40,6 +41,23 @@ type marketBar struct {
 	DataTime time.Time
 	Close    float64
 	Volume   float64
+}
+
+// marketCanaryThresholdDiagnostic is persisted in CheckResult.BodyExcerpt so
+// the alerting layer can include the compared values without adding monitor
+// schema columns or coupling alert formatting to the watchdog package.
+type marketCanaryThresholdDiagnostic struct {
+	Type                 string  `json:"type"`
+	PreviousTime         string  `json:"previous_time"`
+	CurrentTime          string  `json:"current_time"`
+	PreviousClose        float64 `json:"previous_close"`
+	CurrentClose         float64 `json:"current_close"`
+	PriceReturn          float64 `json:"price_return"`
+	ReturnThreshold      float64 `json:"return_threshold"`
+	PreviousVolume       float64 `json:"previous_volume"`
+	CurrentVolume        float64 `json:"current_volume"`
+	VolumeRatio          float64 `json:"volume_ratio"`
+	VolumeRatioThreshold float64 `json:"volume_ratio_threshold"`
 }
 
 var (
@@ -142,12 +160,34 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	volumeRatio := current.Volume / math.Max(previous.Volume, 1e-12)
 	if priceReturn >= config.ReturnThreshold || volumeRatio >= config.VolumeRatioThreshold {
 		result.ErrorMessage = "threshold_exceeded"
+		result.BodyExcerpt = marketCanaryThresholdDetails(previous, current, priceReturn, volumeRatio, config)
 		return result
 	}
 	result.Success = true
 	result.Connected = true
 	result.Status = domain.CheckStatusOK
 	return result
+}
+
+func marketCanaryThresholdDetails(previous, current marketBar, priceReturn, volumeRatio float64, config MarketCanaryConfig) string {
+	diagnostic := marketCanaryThresholdDiagnostic{
+		Type:                 "market_canary_threshold",
+		PreviousTime:         previous.DataTime.UTC().Format(time.RFC3339Nano),
+		CurrentTime:          current.DataTime.UTC().Format(time.RFC3339Nano),
+		PreviousClose:        previous.Close,
+		CurrentClose:         current.Close,
+		PriceReturn:          priceReturn,
+		ReturnThreshold:      config.ReturnThreshold,
+		PreviousVolume:       previous.Volume,
+		CurrentVolume:        current.Volume,
+		VolumeRatio:          volumeRatio,
+		VolumeRatioThreshold: config.VolumeRatioThreshold,
+	}
+	raw, err := json.Marshal(diagnostic)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 func recentMarketCanaryKeys(config MarketCanaryConfig, frequency string, times []time.Time) []*storagepb.TimeSeriesKey {

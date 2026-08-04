@@ -341,8 +341,11 @@ func completionIdentityMismatch(batch *domain.BatchInvocation, payload *marketfe
 		{"batch_kind", string(batch.BatchKind), payload.GetBatchKind()},
 		{"dataset_id", batch.DatasetID, payload.GetDatasetId()},
 		{"frequency", batch.Frequency, payload.GetFrequency()},
-		{"node_id", batch.NodeID, payload.GetNodeId()},
 	}
+	// NodeID is intentionally not part of the completion identity. An invoke
+	// timeout can trigger the same batch on a failover node, and its completion
+	// is still valid for this batch. The batch ID and schedule scope prevent a
+	// completion from being applied to a different planned batch.
 	for _, check := range checks {
 		if strings.TrimSpace(check.expected) != strings.TrimSpace(check.actual) {
 			return fmt.Sprintf("%s expected=%q actual=%q", check.name, check.expected, check.actual)

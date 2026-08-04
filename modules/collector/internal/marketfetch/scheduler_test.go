@@ -71,6 +71,15 @@ func TestRealtimeBatchSizeFansOutAcrossCurrentFleet(t *testing.T) {
 	assert.Equal(t, 10, scheduler.realtimeBatchSize(479, nodes))
 }
 
+func TestInvocationCandidatesUsesOneDeterministicFailover(t *testing.T) {
+	nodes := []scfinvoker.Node{{NodeID: "node-a"}, {NodeID: "node-b"}, {NodeID: "node-c"}}
+	got := invocationCandidates(nodes[1], nodes)
+	if assert.Len(t, got, 2) {
+		assert.Equal(t, []string{"node-b", "node-c"}, []string{got[0].NodeID, got[1].NodeID})
+	}
+	assert.Equal(t, []string{"node-a"}, []string{invocationCandidates(nodes[0], nodes[:1])[0].NodeID})
+}
+
 func TestExpandRuleUsesAllShardsForExchangeSymbolSnapshot(t *testing.T) {
 	scheduler := &Scheduler{}
 	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{

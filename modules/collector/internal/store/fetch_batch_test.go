@@ -62,6 +62,26 @@ func TestDueMarketFetchRecordsAreIsolatedBySpace(t *testing.T) {
 	assert.Equal(t, "crypto", retries[0].SpaceID)
 }
 
+func TestMarkDispatchedToNodeUpdatesFailoverRouting(t *testing.T) {
+	s := newCollectorStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	batch := &domain.BatchInvocation{SpaceID: "crypto", BatchID: "failover", Status: domain.BatchStatusPlanned, NodeID: "node-a", Region: "ap-beijing", FunctionName: "fn-a"}
+	created, err := s.FetchBatches().CreatePlanned(ctx, batch)
+	require.NoError(t, err)
+	require.True(t, created)
+	updated, err := s.FetchBatches().MarkDispatchedToNode(ctx, "crypto", "failover", "request-b", now.Add(time.Minute), "ap-shanghai", "node-b", "fn-b")
+	require.NoError(t, err)
+	require.True(t, updated)
+	stored, err := s.FetchBatches().Get(ctx, "crypto", "failover")
+	require.NoError(t, err)
+	assert.Equal(t, domain.BatchStatusDispatched, stored.Status)
+	assert.Equal(t, "ap-shanghai", stored.Region)
+	assert.Equal(t, "node-b", stored.NodeID)
+	assert.Equal(t, "fn-b", stored.FunctionName)
+	assert.Equal(t, "request-b", stored.RequestID)
+}
+
 func TestFetchBatchCompletionMarksDispatchedRetryPermanent(t *testing.T) {
 	s := newCollectorStore(t)
 	ctx := context.Background()
