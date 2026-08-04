@@ -1,5 +1,7 @@
 # Crypto Market Short-Lived SCF Implementation Plan
 
+> **历史计划，实时调度部分已被替代：** 短时函数、64MB/15s、一次聚合写 Storage 和 CLS 明细仍有效；“Collector 每分钟调用全部 realtime SCF”改由 [SCF 定时触发行情采集执行计划](2026-08-04-scf-timer-market-fetch.md) 接管。不要重新实现本文的 realtime `InvokeFunction` 链路。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
 **Goal:** 将行情采集 SCF 彻底改造成 crypto_market 空间专属、按批次短时运行的函数，并删除常驻 Worker、心跳、Keepalive、SCF Sentinel/Watchdog 及遗留数据、监控链路。

@@ -1,5 +1,7 @@
 # Collector SCF Invoke Failover Design
 
+> **适用范围已收缩：** realtime K 线将改由腾讯 Timer Trigger 直接触发，不再使用本设计的 immediate Invoke failover。本设计仅作为 `egress_probe`、Symbol 全量快照、补采和人工 E2E 等按需调用的历史参考；实时目标见 [SCF 定时触发行情采集执行计划](../plans/2026-08-04-scf-timer-market-fetch.md)。
+
 ## Goal
 
 When the Collector control plane cannot complete `InvokeFunction` for a

@@ -34,7 +34,8 @@
 * [行情数据归档模块设计](行情数据归档模块设计.md)
 * [主机监控架构设计](主机监控架构设计.md)
 * [监控配置](监控配置.md)
-* [SCF 短时行情采集执行计划](2026-08-01-scf-short-lived-market-fetch-execution-plan.md)
+* [SCF 短时行情采集架构](architecture/scf-short-lived-market-fetch.md)
+* [SCF 定时触发行情采集执行计划](superpowers/plans/2026-08-04-scf-timer-market-fetch.md)
 
 ## 运维
 

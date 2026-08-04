@@ -1,5 +1,7 @@
 # SCF 短时行情采集执行计划
 
+> **历史计划，实时链路已被替代：** 2026-08-04 起，实时 K 线不再以“Collector 每分钟逐批 `InvokeFunction`”作为目标架构，改由腾讯 Timer Trigger 直接触发并从每函数 Environment 读取任务。请执行 [SCF 定时触发行情采集执行计划](superpowers/plans/2026-08-04-scf-timer-market-fetch.md)。本文只保留短时函数、补采和历史决策背景。
+
 > **执行要求：** 实现本计划时使用 `superpowers:executing-plans` 或 `superpowers:subagent-driven-development`，逐任务执行并在每个阶段完成测试、独立代码审查和提交。
 
 **目标：** 将当前常驻 Collector SCF 改造为 15 秒内完成的按需行情采集函数，在保留多地域公网出口能力的同时，显著降低函数运行时长和资源使用费用。
