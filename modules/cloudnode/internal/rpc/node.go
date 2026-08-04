@@ -54,6 +54,11 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	if pbNode == nil || pbNode.GetNodeId() == "" {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node.node_id is required")}, nil
 	}
+	if pbNode.GetNodeType() != "" {
+		if err := validateTriggerType(pbNode.GetNodeType(), pbNode.GetTriggerType()); err != nil {
+			return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+	}
 	node := fromPBNode(spaceID, pbNode)
 	existing, err := s.catalog.GetNode(ctx, spaceID, pbNode.GetNodeId())
 	if err != nil {
@@ -61,6 +66,9 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	}
 	if existing != nil {
 		node = mergeNodeUpdate(*existing, pbNode)
+	}
+	if err := validateTriggerType(node.NodeType, node.TriggerType); err != nil {
+		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if err := s.catalog.UpsertNode(ctx, node); err != nil {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -78,6 +86,9 @@ func (s *Service) executeCreateNodeItem(
 		return "", fmt.Errorf("node item is required")
 	}
 	node := cloudNodeFromCreateItem(spaceID, item, index)
+	if err := validateTriggerType(node.NodeType, item.GetTriggerType()); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(node.CloudAccountID) == "" {
 		return "", fmt.Errorf("cloud_account_id is required")
 	}
@@ -142,6 +153,11 @@ func (s *Service) executeDeleteNodeItem(ctx context.Context, spaceID string, ite
 		return "", err
 	}
 	ref := tencentscf.FunctionRef{Region: node.Region, FunctionName: firstString(node.FunctionName, node.NodeID), Namespace: firstString(node.Namespace, "default")}
+	if node.TriggerType == "timer" {
+		if err := client.DeleteTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Qualifier: timerTriggerQualifier}); err != nil && !isSCFNotFound(err) {
+			return "", fmt.Errorf("delete timer trigger for %s: %w", node.NodeID, err)
+		}
+	}
 	if err := client.DeleteFunction(ctx, ref); err != nil && !isSCFNotFound(err) {
 		return "", fmt.Errorf("delete scf function %s: %w", node.NodeID, err)
 	}
@@ -201,6 +217,12 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	node.PackageVersion = pkg.Version
 	metadata := parseJSONMap(node.Metadata)
 	config := item.GetConfig()
+	memorySize := configInt64(config, "memory_size", 256)
+	timeoutSeconds := configInt64(config, "timeout", defaultSCFTimeoutSeconds)
+	if isMarketFetchNode(node) {
+		memorySize = 64
+		timeoutSeconds = 15
+	}
 	metadata["runtime"] = firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime"))
 	metadata["handler"] = firstString(item.GetHandler(), metadataString(metadata, "handler"), "main")
 	node.Metadata = jsonString(metadata)
@@ -254,8 +276,8 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		Runtime:     firstString(item.GetRuntime(), pkg.Runtime, "CustomRuntime"),
 		Handler:     firstString(item.GetHandler(), "main"),
 		Description: fmt.Sprintf("MooX cloud function node %s", node.NodeID),
-		MemorySize:  configInt64(config, "memory_size", 256),
-		Timeout:     configInt64(config, "timeout", defaultSCFTimeoutSeconds),
+		MemorySize:  memorySize,
+		Timeout:     timeoutSeconds,
 		Environment: environment,
 		COSBucket:   pkg.COSBucket,
 		COSRegion:   firstString(pkg.COSRegion, account.COSRegion),
@@ -301,6 +323,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err := ensureSCFAsyncRetryConfig(reconcileCtx, client, ref, isMarketFetchNode(node)); err != nil {
 			return err
 		}
+		if err := ensureInitialTimerTrigger(reconcileCtx, client, node, ref); err != nil {
+			return err
+		}
 		return nil
 	}
 	info, err = waitForSCFActive(ctx, client, ref, nil)
@@ -312,6 +337,20 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	}
 	if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
 		return err
+	}
+	if err := ensureInitialTimerTrigger(ctx, client, node, ref); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureInitialTimerTrigger(ctx context.Context, client scfProvisioner, node *store.CloudNode, ref tencentscf.FunctionRef) error {
+	if node == nil || node.TriggerType != "timer" {
+		return nil
+	}
+	_, err := client.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Cron: "0 * * * * * *", Enabled: false, Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
+	if err != nil {
+		return fmt.Errorf("ensure initial timer trigger for %s: %w", ref.FunctionName, err)
 	}
 	return nil
 }
@@ -398,6 +437,8 @@ func (s *Service) updateSCFFunctionCode(
 		FunctionName: firstString(node.FunctionName, node.NodeID),
 		Namespace:    firstString(node.Namespace, "default"),
 	}
+	unlock := lockSCFFunction(ref)
+	defer unlock()
 	info, err := client.GetFunction(ctx, ref)
 	if err != nil {
 		return fmt.Errorf("get scf function %s before deploy: %w", ref.FunctionName, err)
@@ -410,6 +451,22 @@ func (s *Service) updateSCFFunctionCode(
 	info, err = waitForSCFActive(ctx, client, ref, info)
 	if err != nil {
 		return err
+	}
+	// Deployment callers own only the base runtime variables. Preserve the
+	// Collector-managed timer assignment when a function is republished; the
+	// next reconciliation will replace it if the desired assignment changed.
+	// Validate the complete merged environment before uploading code so an
+	// oversized timer deployment cannot leave a new package with old config.
+	environment := copyStringMap(info.Environment)
+	if environment == nil {
+		environment = make(map[string]string)
+	}
+	for key, value := range desiredEnvironment {
+		environment[key] = value
+	}
+	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
+	if size := scfEnvironmentBytes(environment); size > maxSCFEnvironmentBytes {
+		return fmt.Errorf("scf function %s environment is %d bytes; limit is %d", ref.FunctionName, size, maxSCFEnvironmentBytes)
 	}
 	if !codeCurrent {
 		_, err = client.UpdateFunctionCode(ctx, tencentscf.UpdateFunctionCodeRequest{
@@ -426,14 +483,6 @@ func (s *Service) updateSCFFunctionCode(
 			return err
 		}
 	}
-	environment := copyStringMap(desiredEnvironment)
-	if len(environment) == 0 {
-		environment = copyStringMap(info.Environment)
-		if environment == nil {
-			environment = make(map[string]string)
-		}
-	}
-	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{
 		FunctionRef:    ref,
 		Environment:    environment,
@@ -576,6 +625,33 @@ func isTencentProvider(provider string) bool {
 	return strings.TrimSpace(provider) == "tencent"
 }
 
+func normalizeTriggerType(nodeType, triggerType string) string {
+	nodeType = strings.TrimSpace(nodeType)
+	triggerType = strings.ToLower(strings.TrimSpace(triggerType))
+	if nodeType != "scf-event" {
+		return ""
+	}
+	if triggerType == "timer" {
+		return "timer"
+	}
+	return "invoke"
+}
+
+func validateTriggerType(nodeType, triggerType string) error {
+	nodeType = strings.TrimSpace(nodeType)
+	triggerType = strings.ToLower(strings.TrimSpace(triggerType))
+	if nodeType != "scf-event" {
+		if triggerType != "" {
+			return fmt.Errorf("trigger_type is only valid for scf-event nodes")
+		}
+		return nil
+	}
+	if triggerType != "" && triggerType != "invoke" && triggerType != "timer" {
+		return fmt.Errorf("trigger_type must be invoke or timer")
+	}
+	return nil
+}
+
 func isSCFNotFound(err error) bool {
 	if err == nil {
 		return false
@@ -640,6 +716,7 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 		PackageID:      item.GetPackageId(),
 		DeploymentID:   firstString(item.GetDeploymentId(), metadataString(metadata, "deployment_id")),
 		NodeType:       firstString(item.GetNodeType(), "scf-event"),
+		TriggerType:    normalizeTriggerType(firstString(item.GetNodeType(), "scf-event"), item.GetTriggerType()),
 		Provider:       "tencent-scf",
 		Region:         item.GetRegion(),
 		Namespace:      firstString(item.GetNamespace(), "default"),
@@ -688,6 +765,9 @@ func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNo
 	if node.GetNodeType() != "" {
 		next.NodeType = node.GetNodeType()
 	}
+	if node.GetTriggerType() != "" {
+		next.TriggerType = normalizeTriggerType(next.NodeType, node.GetTriggerType())
+	}
 	if node.GetProvider() != "" {
 		next.Provider = node.GetProvider()
 	}
@@ -724,6 +804,7 @@ func toPBNode(node store.CloudNode) *pb.CloudNode {
 		DeploymentId:     node.DeploymentID,
 		Namespace:        node.Namespace,
 		NodeType:         node.NodeType,
+		TriggerType:      node.TriggerType,
 		Provider:         node.Provider,
 		FunctionName:     node.FunctionName,
 		BizType:          metadataString(metadata, "biz_type"),
@@ -750,6 +831,7 @@ func fromPBNode(spaceID string, node *pb.CloudNode) store.CloudNode {
 		PackageVersion: node.GetPackageVersion(),
 		DeploymentID:   node.GetDeploymentId(),
 		NodeType:       firstString(node.GetNodeType(), "scf-event"),
+		TriggerType:    normalizeTriggerType(firstString(node.GetNodeType(), "scf-event"), node.GetTriggerType()),
 		Provider:       firstString(node.GetProvider(), "tencent-scf"),
 		Region:         node.GetRegion(),
 		Namespace:      node.GetNamespace(),

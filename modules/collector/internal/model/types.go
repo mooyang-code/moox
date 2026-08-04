@@ -12,12 +12,19 @@ const (
 
 // CloudFunctionEvent is the complete invocation contract for a short-lived SCF.
 type CloudFunctionEvent struct {
-	Action                  EventAction            `json:"action,omitempty"`
-	Data                    map[string]interface{} `json:"data,omitempty"`
-	Timestamp               string                 `json:"timestamp"`
-	RequestID               string                 `json:"request_id,omitempty"`
-	Source                  string                 `json:"source,omitempty"`
-	StorageRPCGatewayTarget string                 `json:"storage_rpc_gateway_target,omitempty"`
+	Action    EventAction            `json:"action,omitempty"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	Timestamp string                 `json:"timestamp"`
+	// Tencent Timer events use capitalized fields. They remain separate from
+	// the MooX one-shot envelope so the timer timestamp can make the batch ID
+	// idempotent without a configuration request.
+	Type                    string `json:"Type,omitempty"`
+	TriggerName             string `json:"TriggerName,omitempty"`
+	Time                    string `json:"Time,omitempty"`
+	Message                 string `json:"Message,omitempty"`
+	RequestID               string `json:"request_id,omitempty"`
+	Source                  string `json:"source,omitempty"`
+	StorageRPCGatewayTarget string `json:"storage_rpc_gateway_target,omitempty"`
 }
 
 // Response is the function response returned to CloudNode.

@@ -200,6 +200,12 @@ func (s *Service) dispatchNodeBatchItem(
 			return "", fmt.Errorf("decode delete node item: %w", err)
 		}
 		return s.executeDeleteNodeItem(ctx, item.SpaceID, request)
+	case nodeBatchOperationRuntimeConfig:
+		request := &pb.NodeRuntimeConfigPatch{}
+		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
+			return "", fmt.Errorf("decode runtime config item: %w", err)
+		}
+		return s.executeRuntimeConfigItem(ctx, item.SpaceID, request)
 	default:
 		return "", fmt.Errorf("unsupported node batch operation %q", operation)
 	}

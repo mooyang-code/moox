@@ -41,6 +41,29 @@ func NewHandler() *Handler {
 }
 
 func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
+	return h.handle(ctx, event, true)
+}
+
+// HandleTimer executes a Tencent Timer invocation. Timer work intentionally
+// skips EventBus completion publication; Storage freshness and CLS are the
+// runtime evidence, and the next timer naturally retries the latest bars.
+func (h *Handler) HandleTimer(ctx context.Context, requestID, nodeID string) (*model.Response, error) {
+	now := time.Now().UTC()
+	if h != nil && h.Now != nil {
+		now = h.Now().UTC()
+	}
+	return h.HandleTimerAt(ctx, requestID, nodeID, now)
+}
+
+func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, now time.Time) (*model.Response, error) {
+	req, storageTarget, err := TimerRequestFromEnv(requestID, nodeID, now)
+	if err != nil {
+		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	}
+	return h.handleRequest(ctx, req, storageTarget, false)
+}
+
+func (h *Handler) handle(ctx context.Context, event model.CloudFunctionEvent, publish bool) (*model.Response, error) {
 	if h == nil {
 		return nil, fmt.Errorf("market fetch handler is nil")
 	}
@@ -59,12 +82,20 @@ func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*
 	if req.Concurrency == 0 {
 		req.Concurrency = envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
 	}
-	budgetCtx, cancel := executionContext(ctx)
-	defer cancel()
 	storageTarget := strings.TrimSpace(event.StorageRPCGatewayTarget)
 	if storageTarget == "" {
 		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
 	}
+	return h.handleRequest(ctx, req, storageTarget, publish)
+}
+
+func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget string, publish bool) (*model.Response, error) {
+	storageTarget = strings.TrimSpace(storageTarget)
+	if storageTarget == "" {
+		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
+	}
+	budgetCtx, cancel := executionContext(ctx)
+	defer cancel()
 	storage, err := h.NewStorage(storageTarget, req.MarketType)
 	if err != nil {
 		return nil, err
@@ -76,13 +107,12 @@ func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*
 	if err != nil {
 		return nil, err
 	}
-	publishCtx, publishCancel := context.WithTimeout(budgetCtx, publishReserve)
-	defer publishCancel()
-	if err := h.Publish(publishCtx, req, payload); err != nil {
-		// Do not turn a successful Storage write into a false success: the
-		// caller retries the invocation and the event publisher is idempotent
-		// on batch_id.
-		return nil, fmt.Errorf("publish market fetch completion: %w", err)
+	if publish {
+		publishCtx, publishCancel := context.WithTimeout(budgetCtx, publishReserve)
+		defer publishCancel()
+		if err := h.Publish(publishCtx, req, payload); err != nil {
+			return nil, fmt.Errorf("publish market fetch completion: %w", err)
+		}
 	}
 	return &model.Response{Success: payload.GetStatus() == "succeeded" || payload.GetStatus() == "partial_failed", Message: payload.GetStatus(), Data: payload, RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
 }

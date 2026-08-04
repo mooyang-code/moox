@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	nodeBatchOperationCreate = "create_nodes"
-	nodeBatchOperationDeploy = "deploy_nodes"
-	nodeBatchOperationDelete = "delete_nodes"
-	maxNodeBatchItems        = 100
+	nodeBatchOperationCreate        = "create_nodes"
+	nodeBatchOperationDeploy        = "deploy_nodes"
+	nodeBatchOperationDelete        = "delete_nodes"
+	nodeBatchOperationRuntimeConfig = "update_runtime_configs"
+	maxNodeBatchItems               = 100
 )
 
 func (s *Service) SubmitCreateNodes(ctx context.Context, req *pb.BatchCreateNodesReq) (*pb.SubmitNodeBatchRsp, error) {
@@ -216,6 +217,9 @@ func (s *Service) preflightCreateNode(
 		return store.CloudNode{}, retErr(pb.ErrorCode_INVALID_PARAM, "nodes item is required")
 	}
 	node := cloudNodeFromCreateItem(spaceID, item, index)
+	if err := validateTriggerType(node.NodeType, item.GetTriggerType()); err != nil {
+		return store.CloudNode{}, retErr(pb.ErrorCode_INVALID_PARAM, err.Error())
+	}
 	if strings.TrimSpace(node.CloudAccountID) == "" || strings.TrimSpace(node.Region) == "" || strings.TrimSpace(node.PackageID) == "" {
 		return store.CloudNode{}, retErr(pb.ErrorCode_INVALID_PARAM, "nodes.cloud_account_id, region and package_id are required")
 	}
@@ -271,6 +275,8 @@ func nodeBatchOperationToPB(operation string) pb.NodeBatchOperation {
 		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_DEPLOY_NODES
 	case nodeBatchOperationDelete:
 		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_DELETE_NODES
+	case nodeBatchOperationRuntimeConfig:
+		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS
 	default:
 		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_UNSPECIFIED
 	}

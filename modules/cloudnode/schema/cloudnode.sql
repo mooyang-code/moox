@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS t_cloud_nodes (
     c_package_version TEXT NOT NULL DEFAULT '',
     c_deployment_id TEXT NOT NULL DEFAULT '',
     c_node_type TEXT NOT NULL DEFAULT 'scf-event',
+    c_trigger_type TEXT NOT NULL DEFAULT '',
     c_region TEXT NOT NULL DEFAULT '',
     c_namespace TEXT NOT NULL DEFAULT '',
     c_function_name TEXT NOT NULL DEFAULT '',

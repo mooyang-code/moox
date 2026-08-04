@@ -58,13 +58,24 @@ func buildBusinessFreshnessReporter(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		factorExpected, factorExpectedKnown := false, false
+		storageScopes := make(map[string]struct{})
 		for _, dataset := range overview.Datasets {
-			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
 			if dataset.Producer == "storage" {
-				// Storage rows are commit facts, not an enabled inventory owned
-				// by Storage, so they never create independent freshness checks.
-				continue
+				storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+dataset.Freq] = struct{}{}
 			}
+		}
+		for _, dataset := range overview.Datasets {
+			if dataset.Producer == "collector" {
+				// Collector's Timer path intentionally has no per-run observer.
+				// Once Storage has a fact row, its write watermark is authoritative
+				// and the inventory row must not create a duplicate stale alert. If
+				// Storage has never reported, retain this expectation so a newly
+				// enabled but never-running Dataset is still visible as unhealthy.
+				if _, exists := storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+dataset.Freq]; exists {
+					continue
+				}
+			}
+			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
 			if dataset.Producer == "factor" {
 				if !factorExpectedKnown {
 					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "moox_factor")
@@ -128,11 +139,6 @@ func buildBusinessFreshnessReporter(
 			}
 		}
 		for _, check := range existing {
-			// Market-fetch completion freshness has its own owner and watchdog
-			// below. Do not resolve it as absent from the business inventory.
-			if strings.HasPrefix(check.CheckID, marketFetchCheckPrefix) {
-				continue
-			}
 			key := check.SpaceID + "\x00" + check.CheckID
 			if _, frozen := suppressed[key]; frozen {
 				continue

@@ -75,6 +75,7 @@ enum NodeBatchOperation {
   NODE_BATCH_OPERATION_CREATE_NODES = 1;
   NODE_BATCH_OPERATION_DEPLOY_NODES = 2;
   NODE_BATCH_OPERATION_DELETE_NODES = 3;
+  NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS = 4;
 }
 
 enum NodeBatchStatus {
@@ -118,6 +119,7 @@ message CloudNode {
   bool is_deleted = 25;
   string create_time = 26;     // RFC3339
   string modify_time = 27;     // RFC3339
+  string trigger_type = 28;    // invoke or timer
 }
 
 message GetNodeListReq {
@@ -128,6 +130,7 @@ message GetNodeListReq {
   string node_type = 5;
   string biz_type = 6;
   string tag = 7;
+  string trigger_type = 8;
   string keyword = 9;
   common.Page page = 10;
 }
@@ -180,6 +183,7 @@ message NodeCreateItem {
   string package_id = 9;
   string deployment_id = 10;
   google.protobuf.Struct metadata = 11;
+  string trigger_type = 12;
 }
 
 message BatchCreateNodesReq {
@@ -234,6 +238,17 @@ message BatchDeleteNodesReq {
 message BatchDeleteNodesRsp {
   common.RetInfo ret_info = 1;
   int32 processed_count = 2;
+}
+
+message NodeRuntimeConfigPatch {
+  string node_id = 1;
+  map<string, string> managed_environment = 2;
+  bool timer_enabled = 3;
+  string timer_cron = 4;
+}
+
+message BatchUpdateNodeRuntimeConfigsReq {
+  repeated NodeRuntimeConfigPatch nodes = 1;
 }
 
 message NodeDeleteItem {
@@ -594,6 +609,7 @@ service CloudNodeMgr {
   rpc SubmitDeleteNodes(BatchDeleteNodesReq) returns (SubmitNodeBatchRsp);
   rpc GetNodeBatchChange(GetNodeBatchChangeReq) returns (GetNodeBatchChangeRsp);
   rpc BatchDeleteNodes(BatchDeleteNodesReq) returns (BatchDeleteNodesRsp);
+  rpc SubmitUpdateNodeRuntimeConfigs(BatchUpdateNodeRuntimeConfigsReq) returns (SubmitNodeBatchRsp);
 
   rpc ListCloudAccounts(ListCloudAccountsReq) returns (ListCloudAccountsRsp);
   rpc CreateCloudAccount(CreateCloudAccountReq) returns (CreateCloudAccountRsp);

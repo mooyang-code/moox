@@ -52,6 +52,7 @@ func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
 	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-e2e")
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "collector")
 	t.Setenv("MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY", "collector-secret")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://106.53.107.122:11003")
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(server.Close)
@@ -114,6 +115,19 @@ func TestCollectorFunctionEnvironmentUsesResolvedControlTrustMaterial(t *testing
 	assert.Equal(t, base64.StdEncoding.EncodeToString(controlCA), env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
 }
 
+func TestCollectorTimerEnvironmentOmitsControlPlaneCredentials(t *testing.T) {
+	t.Setenv("MOOX_CLS_SECRET_ID", "cls-id")
+	t.Setenv("MOOX_CLS_SECRET_KEY", "cls-key")
+	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
+	t.Setenv("MOOX_SERVICE_GATEWAY_CA_PEM_B64", "")
+	env, err := collectorFunctionEnvironment(collectorPublishOptions{TriggerType: "timer", StorageRPCGatewayTarget: "ip://storage:11003"}, "pkg-timer")
+	require.NoError(t, err)
+	assert.Equal(t, "ip://storage:11003", env["MOOX_STORAGE_RPC_GATEWAY_TARGET"])
+	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_URL")
+	assert.NotContains(t, env, "MOOX_EVENTBUS_NATS_PASSWORD")
+	assert.NotContains(t, env, "MOOX_SERVICE_GATEWAY_CA_PEM_B64")
+}
+
 func TestLoadCollectorSCFFetcherConfigSelectsOnlyRequestedSpace(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "custom.toml")
@@ -143,6 +157,7 @@ enabled = true
 
 [[scf_fetcher.spaces]]
 space_id = "crypto_market"
+storage_rpc_gateway_target = "ip://106.53.107.122:11003"
 entrypoint = "crypto_market"
 package_config_dir = "scf/crypto_market"
 package_name = "moox-collector-crypto-market"
@@ -164,6 +179,7 @@ cloud_account_id = "tencent-scf-singapore"
 
 [[scf_fetcher.spaces]]
 space_id = "stock_cn"
+storage_rpc_gateway_target = "ip://106.53.107.122:11003"
 package_config_dir = "scf/stock_cn"
 package_name = "moox-collector-stock_cn"
 function_prefix = "moox-fetcher-stock_cn"

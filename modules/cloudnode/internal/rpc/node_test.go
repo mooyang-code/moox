@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,32 @@ func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
 	assert.Equal(t, "moox-collector_dev", fake.configured[0].Environment["MOOX_CODE_PACKAGE_ID"])
 }
 
+func TestExecuteDeployNodeItemRejectsMergedTimerEnvironmentOverLimit(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto_market", NodeID: "timer-node", CloudAccountID: "account-a", PackageID: "old-package", NodeType: "scf-event", TriggerType: "timer", Provider: "tencent-scf",
+		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"biz_type":"market_fetcher","handler":"main"}`,
+	}))
+	large := map[string]string{"MOOX_CODE_PACKAGE_ID": "old-package"}
+	for index := 0; index < 80; index++ {
+		large[fmt.Sprintf("MOOX_EXTRA_%03d", index)] = strings.Repeat("x", 64)
+	}
+	fake := &fakeSCFClient{currentEnvironment: large}
+	svc := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	_, err := svc.executeDeployNodeItem(context.Background(), "crypto_market", &pb.NodeDeployItem{
+		NodeId: "timer-node", PackageId: "moox-collector_dev", Environment: map[string]string{"MOOX_SPACE_ID": "crypto_market"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "environment is")
+	assert.Empty(t, fake.updated)
+	assert.Empty(t, fake.configured)
+}
+
 type fakeSCFClient struct {
 	getResults           []fakeSCFGetResult
 	getCalls             int
@@ -155,6 +182,12 @@ func (f *fakeSCFClient) UpdateFunctionConfiguration(_ context.Context, req tence
 }
 func (f *fakeSCFClient) InvokeFunction(context.Context, tencentscf.InvokeFunctionRequest) (*tencentscf.InvokeFunctionResponse, error) {
 	return &tencentscf.InvokeFunctionResponse{}, nil
+}
+func (f *fakeSCFClient) EnsureTimerTrigger(_ context.Context, req tencentscf.TimerTriggerRequest) (*tencentscf.TimerTriggerInfo, error) {
+	return &tencentscf.TimerTriggerInfo{Name: req.Name, Cron: req.Cron, Enabled: req.Enabled, AvailableStatus: "Available", Qualifier: req.Qualifier, Message: req.Message}, nil
+}
+func (f *fakeSCFClient) DeleteTimerTrigger(context.Context, tencentscf.TimerTriggerRequest) error {
+	return nil
 }
 
 func newNodeSCFTestDB(t *testing.T) *gorm.DB {

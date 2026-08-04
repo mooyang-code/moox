@@ -12,6 +12,7 @@ type CloudNode struct {
 	PackageVersion string    `gorm:"column:c_package_version"`
 	DeploymentID   string    `gorm:"column:c_deployment_id"`
 	NodeType       string    `gorm:"column:c_node_type"`
+	TriggerType    string    `gorm:"column:c_trigger_type"`
 	Region         string    `gorm:"column:c_region"`
 	Namespace      string    `gorm:"column:c_namespace"`
 	FunctionName   string    `gorm:"column:c_function_name"`

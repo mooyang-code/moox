@@ -19,8 +19,8 @@ const web = read(trackedWithoutProtoReservation[0]);
 const proto = read('modules/collector/proto/collector.proto');
 const schema = read('modules/collector/schema/collector.sql');
 const controlPlane = [
-  'modules/collector/internal/taskpublisher/client.go',
-  'modules/collector/internal/rpc/service.go',
+  'modules/collector/internal/marketfetch/reconciler.go',
+  'modules/collector/internal/bootstrap/bootstrap.go',
 ].map(read).join('\n');
 
 const forbidden = ['planned_exec_node', 'PlannedExecNode', 'c_planned_exec_node', '计划节点'];

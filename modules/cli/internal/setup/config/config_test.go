@@ -16,7 +16,8 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 			Enabled: true,
 			Spaces: []SCFFetcherSpace{{
 				SpaceID: "crypto", MemorySize: 64, TimeoutSeconds: 15,
-				MaxInflightRequests: 32, RequestTimeoutMS: 1500,
+				StorageRPCGatewayTarget: "ip://106.53.107.122:11003",
+				MaxInflightRequests:     32, RequestTimeoutMS: 1500,
 				HTTPMaxAttempts: 4, StorageMaxAttempts: 3,
 				Regions: []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 1}},
 			}},

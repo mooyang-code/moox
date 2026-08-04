@@ -78,6 +78,7 @@ type UploadPackageResponse struct {
 type NodeCreateItem struct {
 	CloudAccountID string            `json:"cloud_account_id"`
 	NodeType       string            `json:"node_type"`
+	TriggerType    string            `json:"trigger_type,omitempty"`
 	Runtime        string            `json:"runtime,omitempty"`
 	Handler        string            `json:"handler,omitempty"`
 	Config         map[string]string `json:"config,omitempty"`
@@ -102,6 +103,7 @@ type CloudNode struct {
 	PackageID      string         `json:"package_id"`
 	Region         string         `json:"region"`
 	NodeType       string         `json:"node_type"`
+	TriggerType    string         `json:"trigger_type"`
 	BizType        string         `json:"biz_type"`
 	FunctionName   string         `json:"function_name"`
 	Metadata       map[string]any `json:"metadata"`

@@ -1,6 +1,6 @@
 # SCF 短时行情采集
 
-> 状态：目标架构，待执行 [SCF 定时触发行情采集执行计划](../superpowers/plans/2026-08-04-scf-timer-market-fetch.md)。在切换验收完成前，线上仍可能运行 Collector 直接调用 SCF 的旧链路。
+> 状态：目标架构已在当前实现分支落地；线上切换、绿色重建和腾讯云灰度仍需按 [SCF 定时触发行情采集执行计划](../superpowers/plans/2026-08-04-scf-timer-market-fetch.md) 验收。在切换完成前，线上仍可能运行 Collector 直接调用 SCF 的旧链路。
 
 ## 背景
 
@@ -46,12 +46,16 @@ flowchart LR
 | `MOOX_MARKET_FETCH_DATASET_ID` | 目标 K 线 Dataset |
 | `MOOX_MARKET_FETCH_FREQUENCY` | `1m`、`1h` 等规范频率 |
 | `MOOX_MARKET_FETCH_SUBJECTS` | 按字典序排列并用 `\|` 分隔，最多 30 个 |
+| `MOOX_MARKET_FETCH_SYMBOLS_JSON` | `subject_id -> external_symbol` 紧凑 JSON；SCF 不猜交易所 symbol |
 | `MOOX_MARKET_FETCH_ASSIGNMENT_HASH` | 不含更新时间的任务内容哈希 |
 | `MOOX_MARKET_FETCH_DNS_ROUTES_JSON` | Collector 生成的公共 `host -> IP[]` JSON |
 | `MOOX_MARKET_FETCH_DNS_HASH` | 不含解析时间的 DNS 内容哈希 |
 | `MOOX_MARKET_FETCH_DNS_UPDATED_AT` | 最近一次成功解析时间，RFC3339 |
+| `MOOX_STORAGE_RPC_GATEWAY_TARGET` | 发布时从 `scf_fetcher.spaces[].storage_rpc_gateway_target` 写入的固定 Storage 数据面地址 |
 
 DNS 仍采用“缓存 IP 优先、失败后域名直连”的简单策略，不做测速、排序或健康打分。Collector 每 5 分钟解析配置域名，单域失败保留上次成功值；内容哈希未变化时不更新腾讯函数配置。SCF 遇到环境变量缺失、JSON 非法或 IP 请求失败时，记录警告并回退系统 DNS，不能让整个批次因 DNS 缓存失效。
+
+Collector 是 DNS 信息的唯一更新者：它定时解析配置中的币安域名，把成功结果保存在进程内缓存，并在下一次配置协调时复制到每个相关 SCF 的环境变量。SCF 不回调 Collector 获取任务或 DNS，因此采集链路不依赖 Collector 的在线请求接口。Storage 地址同样在发布时固定写入环境变量；Collector 不在每分钟协调中修改该地址。Timer 发布拒绝空值和 loopback Storage 地址。
 
 腾讯云限制单函数环境变量总大小为 4KB，本方案不把任务 JSON、证书和无关控制面配置无限塞入函数。定时函数不携带 EventBus 与 Collector 调用凭据；发布和每次配置协调都按完整环境计算 UTF-8 字节数并预留空间，超过限制时在调用腾讯 API 前失败。每函数 30 个标的是容量上限，不是保证一定能放下的替代校验。[腾讯云配额限制说明](https://cloud.tencent.com/document/product/583/11637)
 
@@ -74,6 +78,8 @@ Timer 的 Message 只放固定协议标识，任务和 DNS 均从环境变量读
 - 腾讯 `UpdateFunctionConfiguration` 提交整份 Environment。CloudNode 必须先读取远端完整环境、在函数级互斥锁内合并受管键、检查 4KB、更新、等待 Active 并回读，防止部署、DNS 和任务更新互相覆盖。[更新函数配置 API](https://cloud.tencent.com/document/api/583/18580)
 - DNS 与任务由同一个协调器一次提交，不能由两个 Timer 各自覆盖函数 Environment。
 - 配置更新失败时保留上次有效任务；下一次协调继续重试。部分节点成功不会清空失败节点的旧任务。
+- 重新发布已有 Timer 节点时 CloudNode 合并远端完整 Environment 并清除旧运行时 fingerprint，下一次 Collector 协调会重新回读并校验任务；不会因代码发布误删任务后又错误跳过修复。
+- 管理台删除使用 CloudNode 批次先删 Timer Trigger、再删 Function、最后软删目录，避免只隐藏目录而让远端函数继续触发和计费。
 - Timer 是异步调用，仍受地域/命名空间并发限制；并发超限由腾讯异步队列策略处理。Monitor 必须同时观察 Trigger 状态、Collector 最近协调结果和 Storage 数据新鲜度。
 
 ## 成本边界
@@ -88,7 +94,7 @@ Timer 的 Message 只放固定协议标识，任务和 DNS 均从环境变量读
 - `modules/cloudnode`：腾讯凭据、函数环境合并、Timer Trigger 生命周期和回读验证。
 - `modules/collector/internal/serverless/crypto_market`：解析 Timer event 和函数环境，执行一次实时采集。
 - `modules/storage`：K 线真值和幂等写入。
-- `modules/monitor`：Trigger/协调状态及 Dataset、K 线新鲜度，不参与调度。
+- `modules/monitor`：Trigger/协调状态及 Dataset、Storage 实际写入水位和 K 线新鲜度，不参与调度；不能无条件忽略 `producer=storage`。
 - `web`：展示节点类型、触发方式和协调结果，不直接操作腾讯云。
 
 历史的常驻 SCF、心跳、Sentinel，以及 Collector 每分钟逐节点 `InvokeFunction` 的设计只用于理解演进过程，不得作为新实时链路重新启用。

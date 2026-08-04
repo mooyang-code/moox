@@ -5,6 +5,7 @@ export interface CloudNode {
   cloud_account_id: string;
   namespace: string;
   node_type: string;
+  trigger_type: string;
   region: string;
   tag: string;
   ip_address: string;
@@ -41,6 +42,7 @@ export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode
     cloud_account_id: String(item.cloud_account_id || ""),
     namespace: String(item.namespace || ""),
     node_type: String(item.node_type || ""),
+    trigger_type: String(item.trigger_type || ""),
     region: String(item.region || ""),
     tag: String(item.tag || ""),
     ip_address: String(item.ip_address || ""),
@@ -83,6 +85,7 @@ export const getNodeTypeLabel = (value: string) =>
   ({ "scf-event": "云函数（事件型）", "scf-web": "云函数（Web型）", server: "服务器" })[value] || value;
 export const getNodeTypeColor = (value: string) =>
   ({ "scf-event": "blue", "scf-web": "cyan", server: "orange" })[value] || "gray";
+export const getTriggerTypeLabel = (value: string) => ({ timer: "定时器", invoke: "手动调用" })[value] || (value || "-");
 
 export const getCollectorName = (value: string) =>
   ({ kline: "K线", ticker: "行情", orderbook: "订单簿", trade: "逐笔", news: "资讯", symbol: "标的" })[value] || value;

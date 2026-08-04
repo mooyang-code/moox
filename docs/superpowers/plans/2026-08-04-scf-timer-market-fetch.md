@@ -4,6 +4,8 @@
 
 **Goal:** 将实时 K 线从 Collector 逐节点调用改为腾讯云 Timer Trigger 直接触发，并由 Collector 统一协调每节点任务和公共 DNS 环境变量，在保持多地域出口能力的同时消除本地 Invoke 排队、缩短延迟和降低无效 SCF 运行成本。
 
+**Implementation status (2026-08-04):** 当前分支已完成代码实现和本地验证；本计划中的勾选项保留为线上切换、腾讯云资源回读和全量数据闭环的执行清单。未完成线上验收前，不得把本地测试当成已发布证明。
+
 **Architecture:** Collector 只做控制面协调：读取启用规则和完整 Symbol Dataset，按每函数最多 30 个标的确定性分片，将节点私有任务与公共 DNS 一次提交给 CloudNode。CloudNode 持有腾讯凭据，合并完整函数 Environment、协调 Timer Trigger 并回读；SCF 每次被 Timer 触发后从环境变量读取任务，并发请求行情、聚合后一次写 Storage，实时链路不再依赖 Collector、Admin、CloudNode Invoke 或 EventBus Completion。
 
 **Tech Stack:** Go 1.25、tRPC-Go Timer、Tencent Cloud SCF Go SDK v1.1.0、SQLite/GORM、Storage tRPC、Vue 3、TypeScript、Vitest、CLS。
@@ -79,11 +81,12 @@ flowchart LR
 | `MOOX_MARKET_FETCH_DATASET_ID` | Collector | 一个函数只写一个 Dataset |
 | `MOOX_MARKET_FETCH_FREQUENCY` | Collector | 规范化为 `1m`、`1h` 等 |
 | `MOOX_MARKET_FETCH_SUBJECTS` | Collector | 字典序、`\|` 分隔、1 至 30 个 |
+| `MOOX_MARKET_FETCH_SYMBOLS_JSON` | Collector | `subject_id -> 外部行情 symbol` 的紧凑 JSON；禁止 SCF 根据 SubjectID 猜 symbol |
 | `MOOX_MARKET_FETCH_ASSIGNMENT_HASH` | Collector | SHA-256 前 16 个十六进制字符；不包含更新时间 |
 | `MOOX_MARKET_FETCH_DNS_ROUTES_JSON` | Collector | 紧凑 JSON：`host -> []IP` |
 | `MOOX_MARKET_FETCH_DNS_HASH` | Collector | 基于排序后的 host/IP；不含解析时间 |
 | `MOOX_MARKET_FETCH_DNS_UPDATED_AT` | Collector | 最近成功解析时间 RFC3339 |
-| `MOOX_STORAGE_RPC_GATEWAY_TARGET` | 发布 CLI/CloudNode | 定时函数固定 Storage 地址，不由 Timer event 提供 |
+| `MOOX_STORAGE_RPC_GATEWAY_TARGET` | 发布 CLI/CloudNode | 定时函数固定 Storage 数据面地址，不由 Timer event 提供；来源为 `scf_fetcher.spaces[].storage_rpc_gateway_target` |
 | `MOOX_FETCH_MAX_INFLIGHT_REQUESTS` | 发布 CLI/CloudNode | 函数内部 HTTP 并发 |
 | `MOOX_FETCH_REQUEST_TIMEOUT_MS` | 发布 CLI/CloudNode | 单次行情 HTTP 超时 |
 | `MOOX_FETCH_STORAGE_TIMEOUT_MS` | 发布 CLI/CloudNode | 聚合 Storage 写入超时，默认 5000ms |
@@ -96,11 +99,15 @@ MOOX_MARKET_FETCH_MARKET_TYPE=spot
 MOOX_MARKET_FETCH_DATASET_ID=binance_spot_kline_1m
 MOOX_MARKET_FETCH_FREQUENCY=1m
 MOOX_MARKET_FETCH_SUBJECTS=BTC-USDT|ETH-USDT|SOL-USDT
+MOOX_MARKET_FETCH_SYMBOLS_JSON={"BTC-USDT":"BTCUSDT","ETH-USDT":"ETHUSDT","SOL-USDT":"SOLUSDT"}
 MOOX_MARKET_FETCH_ASSIGNMENT_HASH=4c90f2de37e18b6a
 MOOX_MARKET_FETCH_DNS_ROUTES_JSON={"api.binance.com":["1.2.3.4"],"data-api.binance.vision":["5.6.7.8"]}
 MOOX_MARKET_FETCH_DNS_HASH=6db17155f0f0d241
 MOOX_MARKET_FETCH_DNS_UPDATED_AT=2026-08-04T08:00:00Z
+MOOX_STORAGE_RPC_GATEWAY_TARGET=ip://106.53.107.122:11003
 ```
+
+`MOOX_STORAGE_RPC_GATEWAY_TARGET` 是部署时写入的固定数据面地址，避免 SCF 每次触发再请求 Collector 配置接口。它不是由 Collector 每分钟变更的受管任务键；Collector 只负责把当前 DNS 快照和任务分片更新到相应函数环境。公共 DNS 的“公共”表示所有函数复制同一份快照，不表示腾讯云存在跨函数共享环境变量。
 
 ### 2.2 节点字段契约
 
@@ -122,6 +129,9 @@ node_type=scf-event, trigger_type=invoke  # 探针、Symbol、补采、人工 E2
 5. shard 数大于定时节点数时，本轮整体失败并保留旧配置，同时上报“容量不足”；不允许只下发前 N 个 shard。
 6. 多余节点写入空任务并关闭 Trigger，不产生每分钟空调用费用。
 7. Rule、Symbol 或 DNS 内容没有变化时，哈希相同的节点不调用腾讯配置接口。
+
+8. Symbol Dataset 返回的 `external_symbol` 必须随分片一起固化。Collector 写入
+   `MOOX_MARKET_FETCH_SYMBOLS_JSON`，SCF 只使用该映射请求交易所，不能通过删除连字符等启发式规则猜 symbol；缺失或冲突映射直接让本轮协调失败。
 
 ### 2.4 频率与 cron
 
@@ -532,11 +542,11 @@ type RuntimeConfigClient interface {
 
 HTTP 仍走现有签名 Service Gateway，Collector 不接触腾讯 Secret。
 
-- [ ] **Step 4: 将 DNS 和任务接到同一个 tRPC Timer**
+- [ ] **Step 4: 将 DNS 和任务接到同一个 Collector tRPC Timer**
 
-保留现有 5 分钟 DNS 解析 timer，但其成功后只更新内存并 `MarkDirty()`。新增配置协调 timer 每 30 秒检查 dirty/hash；Rule 创建、更新、启停和 Symbol 快照成功后也 `MarkDirty()`。Handler 继续用 goroutine 执行，避免阻塞 `/readyz`，Reconciler 自身用 mutex 合并重叠 tick。
+Collector 启动时先做一次 DNS refresh；随后由独立的 5 分钟 DNS timer 更新内存快照。配置协调使用现有 `collector.schedule.timer`，第一期每分钟执行一次：读取启用规则、完整 Symbol Dataset 和 `trigger_type=timer` 节点，合并当前 DNS 快照后一次提交 CloudNode runtime-config batch。Timer handler 只负责快速启动受控 goroutine，不把腾讯 API 调用同步阻塞在 timer 请求上；Reconciler 使用 mutex 和待提交 fingerprint 避免重叠 tick 重复更新。Rule、Symbol 或 DNS 变化无需再让 SCF 请求 Collector 配置接口。
 
-启动顺序：初始 DNS refresh -> 初始规则/Symbol inventory -> 初始 Reconcile -> 注册周期 timer。初始 Reconcile 失败不阻止 Collector 启动，但 readyz details 和 Reporter 必须明确显示失败。
+启动顺序：初始 DNS refresh -> 初始规则/Symbol inventory -> 注册 DNS timer 和配置协调 timer。初始协调失败不阻止 Collector 启动，但必须通过日志、Reporter 和 Storage freshness 暴露；下一分钟继续重试。DNS 更新只更新缓存，由下一次统一协调把 DNS 与任务放进同一个函数 Environment patch，不能有两个协程分别覆盖完整 Environment。
 
 - [ ] **Step 5: 运行 Collector 测试并提交**
 
@@ -796,11 +806,29 @@ Run: `cd web && pnpm test && pnpm build:prod`
 
 Expected: 全部 PASS。随后使用 `codeCR` Agent 审查 Collector/CloudNode/SCF 的正确性、竞态、Secret 边界和测试缺口；修复所有 P0-P2 后重新运行上述验证。
 
-- [ ] **Step 3: 更新维护文档**
+### Task 11: 发布与删除回归闭环
+
+- [ ] **Step 1: 重新发布已有 Timer 节点**
+
+  代码发布先读取并合并远端 Environment，保留 Collector 管理的任务、外部 symbol 映射和 DNS；发布完成后清空目录中的运行时 fingerprint，使下一次协调重新回读并校验任务，而不是因旧 metadata 错误跳过。
+
+- [ ] **Step 2: 删除节点必须清理远端资源**
+
+  管理台删除走 `SubmitDeleteNodes` 批次，CloudNode 先删除 Timer Trigger，再删除 SCF Function，最后软删除目录记录。UI 等待批次完成或明确显示失败，不能只隐藏数据库记录而让远端函数继续触发和计费。
+
+- [ ] **Step 3: 强制校验 Storage 数据面地址**
+
+  Timer 发布必须提供 `MOOX_STORAGE_RPC_GATEWAY_TARGET=ip://host:port`，拒绝空值和 loopback 地址；Storage 地址是发布配置，不由每次 Timer 请求回调控制面获取。
+
+- [ ] **Step 4: Monitor 使用 Storage freshness**
+
+  Monitor 对启用 Dataset 同时消费 Collector inventory 和 Storage `last_run/last_success/output_watermark`，以 Storage 实际写入水位判断行情链路；不得通过删除 Completion 消费者来回避告警，也不得把所有 `producer=storage` 行无条件忽略。
+
+- [ ] **Step 5: 更新维护文档**
 
 文档必须明确：常驻/心跳为何成本高、Collector Invoke 为何产生约 10 秒排队、Timer 仍计入腾讯并发、每函数独立环境、公共 DNS 的物理复制方式、30 标的与 4KB 双重限制、允许重复且不做双版本、Timer/Invoke 节点边界、回滚步骤。旧计划保留历史页，但首页必须标注被本计划替代。
 
-- [ ] **Step 4: 绿色重建数据库并灰度 2 个节点**
+- [ ] **Step 6: 绿色重建数据库并灰度 2 个节点**
 
 1. 停止 Collector 实时 Invoke timer，记录最后一轮已收盘 K 线。
 2. 备份后删除 Collector 与 CloudNode SQLite 运行文件，使用新 schema 初始化；不执行字段兼容迁移。
@@ -808,17 +836,17 @@ Expected: 全部 PASS。随后使用 `codeCR` Agent 审查 Collector/CloudNode/S
 4. Collector 初次协调后，通过 CloudNode `GetNodeList` 和腾讯 `GetFunction/ListTriggers` 回读：两个函数任务不同、DNS JSON 相同、Environment 小于等于 4KB、Trigger 为 `OPEN/Available`。
 5. 连续观察 3 个 1m 周期：Timer event Time 到 Handler 开始不再出现 8 至 10 秒的 MooX 本地排队；每节点不超过 30 个标的；每调用一次 Storage 聚合写；CLS 有每标的耗时和结果。
 
-- [ ] **Step 5: 扩到全量并做数据闭环**
+- [ ] **Step 7: 扩到全量并做数据闭环**
 
 部署足够节点覆盖全量 active Symbol。验收脚本按 Symbol Dataset 构造 expected set，再查询目标 K 线 Dataset 最近 3 个已收盘周期，输出：总标的、最新周期已覆盖、前一周期已覆盖、缺失标的列表。要求连续 3 轮全量覆盖；允许重复 RowKey，不允许缺失被静默忽略。
 
 同时验证：删除一个 Symbol 后只有受影响节点更新；新增一个 Symbol 后被分配；DNS IP 未变化时 10 分钟内没有 Function configuration update；模拟一个 DNS host 失败时仍保留旧值并可域名回退；富余节点 Trigger 为 CLOSE。
 
-- [ ] **Step 6: 回滚演练**
+- [ ] **Step 8: 回滚演练**
 
 回滚顺序固定为：先关闭所有 Timer Trigger，确认没有新 Timer 调用，再回滚到本次发布前已经验证并留存的 Collector/CloudNode 二进制和数据库备份，最后启动旧 realtime Invoke 链路。禁止 Timer 与旧 realtime Invoke 同时运行超过一个采集周期。新代码不保留运行时兼容开关，回滚依靠上一版发布物，不在同一二进制维护两套实时模型。
 
-- [ ] **Step 7: 最终提交**
+- [ ] **Step 9: 最终提交**
 
 ```bash
 git add modules/collector modules/monitor docs

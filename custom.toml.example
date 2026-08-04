@@ -28,6 +28,8 @@ package_name = "moox-collector-crypto-market"
 namespace = "default"
 runtime = "Go1"
 function_prefix = "moox-fetcher-crypto-market"
+# SCF Timer 每次直接访问该 Storage tRPC 地址，不再请求 Collector 配置接口。
+storage_rpc_gateway_target = "ip://106.53.107.122:11003"
 memory_size = 64
 timeout_seconds = 15
 realtime_batch_size = 10
