@@ -91,6 +91,15 @@ type Consumer struct {
 	handler  DatasetRowsHandler
 	config   Config
 	registry *events.Registry
+	// bind is injectable for tests and lets the delivery loop recreate a pull
+	// subscription after a transient NATS disconnect. A durable JetStream
+	// consumer remains intact; only the local subscription is rebound.
+	bind func(context.Context) (pullConsumer, error)
+}
+
+type pullConsumer interface {
+	Fetch(context.Context, int) ([]*jetstream.Delivery, error)
+	Close() error
 }
 
 func New(client *jetstream.Client, handler DatasetRowsHandler, config Config) (*Consumer, error) {
@@ -108,7 +117,26 @@ func New(client *jetstream.Client, handler DatasetRowsHandler, config Config) (*
 	if err != nil {
 		return nil, err
 	}
-	return &Consumer{client: client, handler: handler, config: config, registry: registry}, nil
+	consumer := &Consumer{client: client, handler: handler, config: config, registry: registry}
+	consumer.bind = consumer.bindPullConsumer
+	return consumer, nil
+}
+
+func (c *Consumer) bindPullConsumer(ctx context.Context) (pullConsumer, error) {
+	if c == nil || c.client == nil || c.registry == nil {
+		return nil, errors.New("storage view event consumer is not initialized")
+	}
+	opts := c.config
+	return events.NewConsumer(ctx, c.client, c.registry, events.ConsumerConfig{
+		Name:                opts.Consumer,
+		Event:               events.DatasetRowsUpserted,
+		AckWait:             time.Duration(opts.AckWaitMS) * time.Millisecond,
+		MaxDeliver:          -1,
+		MaxAckPending:       opts.MaxAckPending,
+		FetchMaxWait:        time.Second,
+		DeliverPolicy:       nats.DeliverAllPolicy,
+		DeliverDecodeErrors: true,
+	})
 }
 
 func (c *Consumer) Start(ctx context.Context) (func(), error) {
@@ -119,13 +147,10 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 		return nil, errors.New("storage view consumer context is required")
 	}
 	opts := c.config
-	bound, err := events.NewConsumer(ctx, c.client, c.registry, events.ConsumerConfig{
-		Name: opts.Consumer, Event: events.DatasetRowsUpserted,
-		AckWait:    time.Duration(opts.AckWaitMS) * time.Millisecond,
-		MaxDeliver: -1, MaxAckPending: opts.MaxAckPending,
-		FetchMaxWait: time.Second, DeliverPolicy: nats.DeliverAllPolicy,
-		DeliverDecodeErrors: true,
-	})
+	if c.bind == nil {
+		c.bind = c.bindPullConsumer
+	}
+	bound, err := c.bind(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +182,11 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 	go func() {
 		defer close(done)
 		defer opts.Metrics.SetConsumerBound(false)
-		defer bound.Close()
+		defer func() {
+			if bound != nil {
+				_ = bound.Close()
+			}
+		}()
 		defer dispatcher.Close()
 		for loopCtx.Err() == nil {
 			deliveries, fetchErr := bound.Fetch(loopCtx, opts.FetchBatch)
@@ -179,6 +208,17 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 				if !errors.Is(fetchErr, nats.ErrTimeout) {
 					opts.Metrics.SetConsumerBound(false)
 					opts.ErrorReporter.Report(fmt.Errorf("fetch storage view deliveries: %w", fetchErr))
+					if shouldRebind(fetchErr) {
+						if bound != nil {
+							_ = bound.Close()
+							bound = nil
+						}
+						bound = c.rebind(loopCtx, opts)
+						if bound == nil {
+							return
+						}
+						opts.Metrics.SetConsumerBound(true)
+					}
 				}
 				timer := time.NewTimer(250 * time.Millisecond)
 				select {
@@ -195,4 +235,40 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 		}
 	}()
 	return func() { cancel(); <-done }, nil
+}
+
+const (
+	rebindRetryDelay   = time.Second
+	rebindAttemptLimit = 5 * time.Second
+)
+
+func shouldRebind(err error) bool {
+	return errors.Is(err, nats.ErrFetchDisconnected) ||
+		errors.Is(err, nats.ErrDisconnected) ||
+		errors.Is(err, nats.ErrConnectionClosed) ||
+		errors.Is(err, nats.ErrBadSubscription)
+}
+
+func (c *Consumer) rebind(ctx context.Context, opts Config) pullConsumer {
+	for ctx.Err() == nil {
+		attemptCtx, cancel := context.WithTimeout(ctx, rebindAttemptLimit)
+		bound, err := c.bind(attemptCtx)
+		cancel()
+		if err == nil {
+			return bound
+		}
+		if opts.ErrorReporter != nil {
+			opts.ErrorReporter.Report(fmt.Errorf("rebind storage view consumer: %w", err))
+		}
+		timer := time.NewTimer(rebindRetryDelay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		}
+	}
+	return nil
 }

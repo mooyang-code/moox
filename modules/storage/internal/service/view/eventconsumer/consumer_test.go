@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -34,6 +35,43 @@ func TestConfigRejectsNegativeRetryAttempts(t *testing.T) {
 		t.Fatal("negative MaxRetryAttempts was accepted")
 	}
 }
+
+func TestShouldRebindFetchTransportErrors(t *testing.T) {
+	for _, err := range []error{nats.ErrFetchDisconnected, nats.ErrDisconnected, nats.ErrConnectionClosed, nats.ErrBadSubscription} {
+		if !shouldRebind(err) {
+			t.Fatalf("shouldRebind(%v) = false, want true", err)
+		}
+	}
+	if shouldRebind(nats.ErrTimeout) {
+		t.Fatal("fetch timeout should not recreate a subscription")
+	}
+}
+
+func TestRebindRetriesUntilSubscriptionIsAvailable(t *testing.T) {
+	consumer := &Consumer{}
+	var attempts int
+	want := &fakePullConsumer{}
+	consumer.bind = func(context.Context) (pullConsumer, error) {
+		attempts++
+		if attempts < 2 {
+			return nil, errors.New("nats reconnecting")
+		}
+		return want, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	got := consumer.rebind(ctx, Config{})
+	if got != want || attempts != 2 {
+		t.Fatalf("rebind() = %v after %d attempts, want fake consumer after 2 attempts", got, attempts)
+	}
+}
+
+type fakePullConsumer struct{}
+
+func (*fakePullConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
+	return nil, nats.ErrTimeout
+}
+func (*fakePullConsumer) Close() error { return nil }
 
 func TestApplyDeliveryRejectsMalformedAndMismatchedEvents(t *testing.T) {
 	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
