@@ -4,7 +4,7 @@
 
 **Goal:** 将实时 K 线从 Collector 逐节点调用改为腾讯云 Timer Trigger 直接触发，并由 Collector 统一协调每节点任务和公共 DNS 环境变量，在保持多地域出口能力的同时消除本地 Invoke 排队、缩短延迟和降低无效 SCF 运行成本。
 
-**Implementation status (2026-08-04):** 当前分支已完成代码实现和本地验证；本计划中的勾选项保留为线上切换、腾讯云资源回读和全量数据闭环的执行清单。实现同时固化了 Timer 30 标的预算、严格 Trigger readback、异步配置任务状态确认、DNS 空快照保留和每地域 1 个 Invoke 辅助节点。未完成线上验收前，不得把本地测试当成已发布证明。
+**Implementation status (2026-08-04):** 当前分支已完成 Task 1-10 的代码实现、全仓本地验证、E2E 和独立 codeCR，提交为 `582f875b`。Task 11 的腾讯云线上发布、绿色重建、灰度/全量数据闭环和回滚演练仍是发布前执行清单，尚未执行；因此本地测试不能被当成线上已发布证明。Task 1-10 中的“先运行失败测试”是实现方法说明，不代表本次交付伪造了未执行的红灯证据。
 
 **Architecture:** Collector 只做控制面协调：读取启用规则和完整 Symbol Dataset，按每函数最多 30 个标的确定性分片，将节点私有任务与公共 DNS 一次提交给 CloudNode。CloudNode 持有腾讯凭据，合并完整函数 Environment、协调 Timer Trigger 并回读；SCF 每次被 Timer 触发后从环境变量读取任务，并发请求行情、聚合后一次写 Storage，实时链路不再依赖 Collector、Admin、CloudNode Invoke 或 EventBus Completion。
 
