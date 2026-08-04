@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	scf "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf/v20180416"
@@ -24,11 +25,27 @@ type TimerTriggerRequest struct {
 
 type TimerTriggerInfo struct {
 	Name            string
+	Type            string
 	Cron            string
 	Enabled         bool
 	AvailableStatus string
 	Qualifier       string
 	Message         string
+}
+
+// GetTimerTrigger is a read-only provider lookup used by CloudNode's health
+// refresh. It intentionally does not repair drift; Collector/Monitor should
+// be able to report a manually disabled or deleted trigger before the next
+// reconciliation decides to apply the desired state.
+func (c *Client) GetTimerTrigger(ctx context.Context, ref FunctionRef, name string) (*TimerTriggerInfo, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("timer trigger name is required")
+	}
+	item, err := c.findTimerTrigger(ctx, ref, name)
+	if err != nil || item == nil {
+		return nil, err
+	}
+	return timerTriggerInfoFromSDK(item), nil
 }
 
 func (c *Client) EnsureTimerTrigger(ctx context.Context, req TimerTriggerRequest) (*TimerTriggerInfo, error) {
@@ -52,7 +69,15 @@ func (c *Client) EnsureTimerTrigger(ctx context.Context, req TimerTriggerRequest
 	currentQualifier := deref(current.Qualifier)
 	currentMessage := deref(current.CustomArgument)
 	if currentCron == req.Cron && currentEnabled == req.Enabled && currentQualifier == qualifier && currentMessage == message {
-		return timerTriggerInfoFromSDK(current), nil
+		readback, readbackErr := c.waitForTimerTrigger(ctx, req.FunctionRef, req, qualifier, message)
+		if readbackErr != nil {
+			return nil, readbackErr
+		}
+		info := timerTriggerInfoFromSDK(readback)
+		if err := validateTimerTriggerInfo(info, req, qualifier, message); err != nil {
+			return nil, err
+		}
+		return info, nil
 	}
 	log.InfoContextf(ctx, "[CloudNode-TencentSCF] update timer trigger function=%s trigger=%s", req.FunctionName, req.Name)
 	client, err := c.newClient(req.Region)
@@ -71,14 +96,18 @@ func (c *Client) EnsureTimerTrigger(ctx context.Context, req TimerTriggerRequest
 	if _, err := client.UpdateTriggerWithContext(ctx, update); err != nil {
 		return nil, err
 	}
-	updated, err := c.findTimerTrigger(ctx, req.FunctionRef, req.Name)
+	updated, err := c.waitForTimerTrigger(ctx, req.FunctionRef, req, qualifier, message)
 	if err != nil {
 		return nil, err
 	}
 	if updated == nil {
 		return nil, fmt.Errorf("timer trigger %q disappeared after update", req.Name)
 	}
-	return timerTriggerInfoFromSDK(updated), nil
+	info := timerTriggerInfoFromSDK(updated)
+	if err := validateTimerTriggerInfo(info, req, qualifier, message); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 func (c *Client) DeleteTimerTrigger(ctx context.Context, req TimerTriggerRequest) error {
@@ -121,14 +150,65 @@ func (c *Client) createTimerTrigger(ctx context.Context, req TimerTriggerRequest
 	if _, err := client.CreateTriggerWithContext(ctx, request); err != nil {
 		return nil, err
 	}
-	created, err := c.findTimerTrigger(ctx, req.FunctionRef, req.Name)
+	created, err := c.waitForTimerTrigger(ctx, req.FunctionRef, req, qualifier, message)
 	if err != nil {
 		return nil, err
 	}
 	if created == nil {
 		return nil, fmt.Errorf("timer trigger %q was not returned after creation", req.Name)
 	}
-	return timerTriggerInfoFromSDK(created), nil
+	info := timerTriggerInfoFromSDK(created)
+	if err := validateTimerTriggerInfo(info, req, qualifier, message); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+// validateTimerTriggerInfo is deliberately strict. A successful Tencent
+// update request is not enough: CloudNode persists the assignment only after
+// the provider readback matches the requested schedule and is Available.
+func validateTimerTriggerInfo(info *TimerTriggerInfo, req TimerTriggerRequest, qualifier, message string) error {
+	if info == nil {
+		return fmt.Errorf("timer trigger %q readback is empty", req.Name)
+	}
+	if info.Name != req.Name || !strings.EqualFold(strings.TrimSpace(info.Type), "timer") || info.Cron != req.Cron || info.Enabled != req.Enabled || info.Qualifier != qualifier || info.Message != message {
+		return fmt.Errorf("timer trigger %q readback does not match requested state", req.Name)
+	}
+	if !strings.EqualFold(strings.TrimSpace(info.AvailableStatus), "available") {
+		return fmt.Errorf("timer trigger %q is not available: status=%q", req.Name, info.AvailableStatus)
+	}
+	return nil
+}
+
+// waitForTimerTrigger is kept small and bounded. Tencent may expose the
+// trigger list one short poll behind Create/Update; callers can use it before
+// strict validation without turning a control-plane retry into a long job.
+func (c *Client) waitForTimerTrigger(ctx context.Context, ref FunctionRef, req TimerTriggerRequest, qualifier, message string) (*scf.TriggerInfo, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	var last *scf.TriggerInfo
+	for {
+		item, err := c.findTimerTrigger(ctx, ref, req.Name)
+		if err != nil || item == nil {
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			last = item
+			if validateTimerTriggerInfo(timerTriggerInfoFromSDK(item), req, qualifier, message) == nil {
+				return item, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return last, nil
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (c *Client) findTimerTrigger(ctx context.Context, ref FunctionRef, name string) (*scf.TriggerInfo, error) {
@@ -167,6 +247,7 @@ func timerTriggerInfoFromSDK(item *scf.TriggerInfo) *TimerTriggerInfo {
 	}
 	return &TimerTriggerInfo{
 		Name:            deref(item.TriggerName),
+		Type:            deref(item.Type),
 		Cron:            normalizeTimerCron(item.TriggerDesc),
 		Enabled:         item.Enable != nil && *item.Enable != 0,
 		AvailableStatus: deref(item.AvailableStatus),

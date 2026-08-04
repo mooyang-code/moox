@@ -102,14 +102,18 @@ func buildBusinessFreshnessReporter(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" || business.Module == domain.CheckSourceObservability {
+			if business.Kind != "balance" && business.Kind != "market_fetch" {
 				continue
 			}
-			item := businessFreshnessItem{
-				spaceID: "crypto_market", checkID: "balance:" + business.Module,
-				name:    "Balance freshness " + business.Module,
-				success: business.Status == "healthy", reason: business.Reason,
+			spaceID := business.SpaceID
+			if spaceID == "" {
+				spaceID = "crypto_market"
 			}
+			checkID, name := "balance:"+business.Module, "Balance freshness "+business.Module
+			if business.Kind == "market_fetch" {
+				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
+			}
+			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		enabled := true

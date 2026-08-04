@@ -30,10 +30,13 @@ flowchart LR
 
 1. 实时 K 线由每个函数自己的 Timer Trigger 触发，不再由 Collector 在每分钟调用每个函数。
 2. Collector 仍是控制面：扫描启用规则、读取关联 Symbol Dataset、生成稳定分片，并在 Symbol、规则或 DNS 变化时协调函数环境变量。
-3. 每个定时函数只承载一个 `provider + market_type + dataset_id + frequency` 组合，最多 30 个标的。函数每次触发后从环境变量读取任务，不调用 Collector 或 Admin 配置接口。
+3. 每个定时函数只承载一个 `provider + market_type + dataset_id + frequency` 组合，最多 30 个标的。30 是业务上限；Collector 先按约 1.8KB 的受管 Environment 预算拆分，为 provider、代码包、CLS、Storage 等未知变量预留空间；如果长标的或 DNS 路由仍使完整 Environment 接近 4KB，Collector 会进一步拆小分片，而不是反复提交必失败的配置。函数每次触发后从环境变量读取任务，不调用 Collector 或 Admin 配置接口。
 4. SCF 并发请求行情，聚合后只调用一次 Storage。定时函数不发布逐批 Completion 事件；下一周期天然重试最近 3 根已收盘 K 线，Storage RowKey Upsert 负责幂等。
 5. 长时间缺口、Symbol 全量快照、出口探针和人工 E2E 仍走有界的按需调用，不和实时 Timer 链路混在一起。
 6. 不实现双版本任务快照。函数配置更新期间允许旧、新分片短暂重叠，重复 K 线写入是安全的；`assignment_hash` 只用于判断是否需要更新和排障。
+7. 配置驱动的标准发布会在每个启用地域额外保留 1 个 `trigger_type=invoke` 辅助函数，专门承载
+   Symbol 全量快照、缺口补采、出口探针和人工 E2E；`function_count` 只表示用户配置的 Timer
+   实时容量。这样不会把按需工作错误投递到静态 Timer 环境，也不需要 SCF 在每次调用时回调控制面。
 
 ## 任务环境变量
 
@@ -57,7 +60,7 @@ DNS 仍采用“缓存 IP 优先、失败后域名直连”的简单策略，不
 
 Collector 是 DNS 信息的唯一更新者：它定时解析配置中的币安域名，把成功结果保存在进程内缓存，并在下一次配置协调时复制到每个相关 SCF 的环境变量。SCF 不回调 Collector 获取任务或 DNS，因此采集链路不依赖 Collector 的在线请求接口。Storage 地址同样在发布时固定写入环境变量；Collector 不在每分钟协调中修改该地址。Timer 发布拒绝空值和 loopback Storage 地址。
 
-腾讯云限制单函数环境变量总大小为 4KB，本方案不把任务 JSON、证书和无关控制面配置无限塞入函数。定时函数不携带 EventBus 与 Collector 调用凭据；发布和每次配置协调都按完整环境计算 UTF-8 字节数并预留空间，超过限制时在调用腾讯 API 前失败。每函数 30 个标的是容量上限，不是保证一定能放下的替代校验。[腾讯云配额限制说明](https://cloud.tencent.com/document/product/583/11637)
+腾讯云限制单函数环境变量总大小为 4KB，本方案不把任务 JSON、证书和无关控制面配置无限塞入函数。定时函数不携带 EventBus 与 Collector 调用凭据；发布和每次配置协调都按完整环境计算 UTF-8 字节数并预留空间，超过限制时在调用腾讯 API 前失败。每函数 30 个标的是容量上限，不是保证一定能放下的替代校验；Collector 会在 30 以内按实际受管 Environment 大小继续拆分。[腾讯云配额限制说明](https://cloud.tencent.com/document/product/583/11637)
 
 ## 节点与触发器模型
 
@@ -66,6 +69,10 @@ Timer Trigger 触发的仍是 SCF 事件函数，所以数据模型分开表达�
 - `node_type = scf-event`：腾讯云函数类型。
 - `trigger_type = timer`：实时行情节点由定时器触发。
 - `trigger_type = invoke`：出口探针、Symbol 快照、补采和人工 E2E 由 MooX 按需调用。
+
+标准 `custom.toml` 发布按地域自动创建一枚 Invoke 辅助函数；如果手工只发布 Timer 函数，Symbol
+快照和缺口补采没有可用执行节点，Collector 会明确记录“无 active market fetcher nodes”，不能
+把这种配置当成全量采集已就绪。
 
 CloudNode 为 `trigger_type=timer` 的节点自动确保一个确定名称的 Timer Trigger 存在，维护 cron、开关和回读状态。没有任务的富余节点关闭 Trigger，避免空函数每分钟产生费用。管理台列表和详情同时展示节点类型、触发方式、cron 与触发器状态，避免把“事件函数”和“定时触发”混成一个字段。
 
@@ -80,7 +87,7 @@ Timer 的 Message 只放固定协议标识，任务和 DNS 均从环境变量读
 - 配置更新失败时保留上次有效任务；下一次协调继续重试。部分节点成功不会清空失败节点的旧任务。
 - 重新发布已有 Timer 节点时 CloudNode 合并远端完整 Environment 并清除旧运行时 fingerprint，下一次 Collector 协调会重新回读并校验任务；不会因代码发布误删任务后又错误跳过修复。
 - 管理台删除使用 CloudNode 批次先删 Timer Trigger、再删 Function、最后软删目录，避免只隐藏目录而让远端函数继续触发和计费。
-- Timer 是异步调用，仍受地域/命名空间并发限制；并发超限由腾讯异步队列策略处理。Monitor 必须同时观察 Trigger 状态、Collector 最近协调结果和 Storage 数据新鲜度。
+- Timer 是异步调用，仍受地域/命名空间并发限制；并发超限由腾讯异步队列策略处理。Collector 每次列出 Timer 节点时由 CloudNode 以有界并发只读回查腾讯 Trigger，同时核验类型、Qualifier、固定 Message、cron、开关和 Available 状态；发现漂移时下一次协调重新提交，由 CloudNode 的 Ensure 修复。真实状态、分片需求/实际数量和最近成功协调时间通过统一 metrics reporter 上报 EventBus。Monitor 消费这些协调指标，并与 Storage 数据新鲜度一起告警。协调器的完整检查到提交过程串行化，避免慢 Tick 交叉提交旧/新快照；规则或节点删除时会清理旧指标标签。
 
 ## 成本边界
 

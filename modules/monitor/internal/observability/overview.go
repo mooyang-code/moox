@@ -42,8 +42,8 @@ type DatasetFrequencyStatus struct {
 }
 
 type BusinessStatus struct {
-	Kind, Module, Status, Reason string
-	LastCheckedAt                time.Time
+	SpaceID, Kind, Module, Status, Reason string
+	LastCheckedAt                         time.Time
 }
 
 type Overview struct {
@@ -86,6 +86,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	if out.BusinessChecks, err = b.buildBusinessChecks(ctx, spaceID); err != nil {
 		return Overview{}, err
 	}
+	coordination, err := b.buildMarketFetchCoordination(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, coordination...)
 	sortOverview(&out)
 	return out, nil
 }
@@ -669,7 +674,7 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 			if kind == "" {
 				continue
 			}
-			item := BusinessStatus{Kind: kind, Module: check.Source, Status: "unknown", Reason: "尚未上报"}
+			item := BusinessStatus{SpaceID: check.SpaceID, Kind: kind, Module: check.Source, Status: "unknown", Reason: "尚未上报"}
 			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
 			if err != nil {
 				return nil, err
@@ -750,11 +755,145 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 			status, reason = "down", "balance sync stale"
 		}
 		out = append(out, BusinessStatus{
-			Kind: "balance", Module: successValue.serviceName, Status: status,
+			SpaceID: "crypto_market", Kind: "balance", Module: successValue.serviceName, Status: status,
 			Reason: reason, LastCheckedAt: lastCheckedAt,
 		})
 	}
 	return out, nil
+}
+
+type timerCoordinationState struct {
+	required, active, lastSuccess float64
+	hasRequired, hasLastSuccess   bool
+	healthy                       float64
+	hasHealth                     bool
+	staleSeries                   bool
+	badNodes                      []string
+}
+
+// buildMarketFetchCoordination consumes the small Collector coordination
+// metric set. It deliberately does not call Tencent or CloudNode: Collector
+// already reads the trigger readback and publishes it through the shared
+// reporter, while Monitor remains a pure consumer.
+func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	states := map[string]*timerCoordinationState{}
+	collectorReporterFresh := false
+	if services, _, err := b.Metrics.Catalog().ListServices(ctx, "", 0, 500); err != nil {
+		return nil, err
+	} else {
+		for _, service := range services {
+			if service.ServiceName == "moox_collector" && !service.IsStale {
+				collectorReporterFresh = true
+				break
+			}
+		}
+	}
+	load := func(metricName string, apply func(*timerCoordinationState, map[string]string, float64)) error {
+		series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", metricName, "", 500, now)
+		if err != nil {
+			return err
+		}
+		for _, item := range series {
+			labels, err := datasetLabels(item.LabelsJSON)
+			if err != nil {
+				return fmt.Errorf("timer coordination labels for %s: %w", item.SeriesID, err)
+			}
+			currentSpace := strings.TrimSpace(labels["space_id"])
+			if currentSpace == "" || (spaceID != "" && currentSpace != spaceID) {
+				continue
+			}
+			state := states[currentSpace]
+			if state == nil {
+				state = &timerCoordinationState{}
+				states[currentSpace] = state
+			}
+			if item.IsStale {
+				// Collector removes Gauge children when a rule/node disappears.
+				// The metrics catalog retains old series for history, so stale
+				// children must not keep an obsolete coordination alert alive.
+				state.staleSeries = true
+				continue
+			}
+			latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+			if err != nil {
+				return err
+			}
+			apply(state, labels, latest.Value)
+		}
+		return nil
+	}
+	if err := load("moox_collector_market_fetch_assignment_required", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		state.required += maxFloat(value, 0)
+		state.hasRequired = true
+	}); err != nil {
+		return nil, err
+	}
+	if err := load("moox_collector_market_fetch_assignment_active", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		state.active += maxFloat(value, 0)
+	}); err != nil {
+		return nil, err
+	}
+	if err := load("moox_collector_market_fetch_assignment_last_success_timestamp_seconds", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		if value > state.lastSuccess {
+			state.lastSuccess = value
+		}
+		state.hasLastSuccess = true
+	}); err != nil {
+		return nil, err
+	}
+	if err := load("moox_collector_market_fetch_coordination_healthy", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		state.healthy = value
+		state.hasHealth = true
+	}); err != nil {
+		return nil, err
+	}
+	if err := load("moox_collector_market_fetch_timer_available", func(state *timerCoordinationState, labels map[string]string, value float64) {
+		if value > 0 {
+			return
+		}
+		if nodeID := strings.TrimSpace(labels["node_id"]); nodeID != "" {
+			state.badNodes = append(state.badNodes, nodeID)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	out := make([]BusinessStatus, 0, len(states))
+	for currentSpace, state := range states {
+		if state.hasHealth && state.healthy <= 0 {
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector Timer 协调失败，请查看 Collector 日志", LastCheckedAt: now})
+			continue
+		}
+		if !state.hasRequired || state.required <= 0 {
+			if state.staleSeries && !collectorReporterFresh {
+				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector Timer 协调指标已停止上报", LastCheckedAt: now})
+			}
+			continue
+		}
+		status, reason := "healthy", "Timer 分配和触发器正常"
+		switch {
+		case state.active < state.required:
+			status, reason = "down", fmt.Sprintf("Timer 节点分配不足：已分配 %.0f 个，需要 %.0f 个", state.active, state.required)
+		case !state.hasLastSuccess || state.lastSuccess <= 0:
+			status, reason = "down", "尚未完成 Timer 配置协调"
+		case now.Sub(unixTime(state.lastSuccess)) > 2*time.Minute:
+			status, reason = "down", fmt.Sprintf("最近一次 Timer 配置协调已超过允许时间，最后成功时间 %s", unixTime(state.lastSuccess).Format(time.RFC3339))
+		case len(state.badNodes) > 0:
+			sort.Strings(state.badNodes)
+			status, reason = "down", "Timer 触发器不可用：节点 "+strings.Join(state.badNodes, ", ")
+		}
+		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
+	}
+	return out, nil
+}
+
+func maxFloat(value, floor float64) float64 {
+	if value < floor {
+		return floor
+	}
+	return value
 }
 
 type balanceMetricValue struct {

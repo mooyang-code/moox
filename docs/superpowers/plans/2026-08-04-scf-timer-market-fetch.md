@@ -4,7 +4,7 @@
 
 **Goal:** 将实时 K 线从 Collector 逐节点调用改为腾讯云 Timer Trigger 直接触发，并由 Collector 统一协调每节点任务和公共 DNS 环境变量，在保持多地域出口能力的同时消除本地 Invoke 排队、缩短延迟和降低无效 SCF 运行成本。
 
-**Implementation status (2026-08-04):** 当前分支已完成代码实现和本地验证；本计划中的勾选项保留为线上切换、腾讯云资源回读和全量数据闭环的执行清单。未完成线上验收前，不得把本地测试当成已发布证明。
+**Implementation status (2026-08-04):** 当前分支已完成代码实现和本地验证；本计划中的勾选项保留为线上切换、腾讯云资源回读和全量数据闭环的执行清单。实现同时固化了 Timer 30 标的预算、严格 Trigger readback、异步配置任务状态确认、DNS 空快照保留和每地域 1 个 Invoke 辅助节点。未完成线上验收前，不得把本地测试当成已发布证明。
 
 **Architecture:** Collector 只做控制面协调：读取启用规则和完整 Symbol Dataset，按每函数最多 30 个标的确定性分片，将节点私有任务与公共 DNS 一次提交给 CloudNode。CloudNode 持有腾讯凭据，合并完整函数 Environment、协调 Timer Trigger 并回读；SCF 每次被 Timer 触发后从环境变量读取任务，并发请求行情、聚合后一次写 Storage，实时链路不再依赖 Collector、Admin、CloudNode Invoke 或 EventBus Completion。
 
@@ -15,7 +15,7 @@
 - 本项目尚未上线，不保留旧实时 Invoke 调度、旧表数据或兼容分支；切换时清空重建 Collector/CloudNode 运行数据。
 - SCF 固定 64MB、15 秒；函数内 HTTP 并发继续由环境变量配置。
 - Timer Trigger 是异步调用，仍计入地域和命名空间 SCF 并发，不能写成“规避腾讯并发限制”。
-- 一个定时函数只承载一个 `provider + market_type + dataset_id + frequency`，标的总数不超过 30。
+- 一个定时函数只承载一个 `provider + market_type + dataset_id + frequency`，标的总数不超过 30；完整 Environment 预算不足时，Collector 会在 30 以内继续拆小分片。
 - 不实现双版本任务快照、分布式锁、全局 exactly-once、预置并发或复杂错峰；所有同频节点在同一秒触发。
 - 允许配置切换期间少量重复采集；Storage RowKey Upsert 是数据幂等边界。
 - Collector 不持有腾讯云密钥；所有腾讯 SCF 查询、环境变量更新和 Trigger 操作都由 CloudNode 完成。
@@ -49,9 +49,9 @@ Collector Timer -> 本地分片/排队 -> Gateway -> CloudNode -> Tencent Invoke
 
 ### 1.3 为什么限制 30 个标的
 
-每个函数环境变量总大小上限为 4KB，单函数同类型 Trigger 上限为 10 个；本方案每函数只用一个 Timer Trigger。30 是业务容量上限，完整 Environment 仍必须逐次校验，不允许以“标的没有超过 30”代替 4KB 校验。[配额限制](https://cloud.tencent.com/document/product/583/11637)
+每个函数环境变量总大小上限为 4KB，单函数同类型 Trigger 上限为 10 个；本方案每函数只用一个 Timer Trigger。30 是业务容量上限，Collector 先按约 1.8KB 的受管 Environment 预算拆分，为无法提前知道的 provider、代码包、CLS、Storage 变量留出空间；完整 Environment 仍必须由 CloudNode 逐次校验，不允许以“标的没有超过 30”代替 4KB 校验。[配额限制](https://cloud.tencent.com/document/product/583/11637)
 
-定时函数不再注入 EventBus、Collector 和 Service Gateway 控制面变量，只保留 Storage、CLS、行情执行参数、任务和 DNS。这样既减少 Secret 暴露，也为 4KB 环境限制留出空间。
+定时函数不再注入 EventBus、Collector 和 Service Gateway 控制面变量，只保留 Storage、CLS、行情执行参数、任务和 DNS。Collector 还会用真实 DNS/任务内容计算受管 Environment 字节数；在调用 CloudNode 前预留 provider 变量空间，超长合法标的会自动拆分而不是永久协调失败。这样既减少 Secret 暴露，也为 4KB 环境限制留出空间。
 
 ## 2. 目标运行链路
 
@@ -544,7 +544,7 @@ HTTP 仍走现有签名 Service Gateway，Collector 不接触腾讯 Secret。
 
 - [ ] **Step 4: 将 DNS 和任务接到同一个 Collector tRPC Timer**
 
-Collector 启动时先做一次 DNS refresh；随后由独立的 5 分钟 DNS timer 更新内存快照。配置协调使用现有 `collector.schedule.timer`，第一期每分钟执行一次：读取启用规则、完整 Symbol Dataset 和 `trigger_type=timer` 节点，合并当前 DNS 快照后一次提交 CloudNode runtime-config batch。Timer handler 只负责快速启动受控 goroutine，不把腾讯 API 调用同步阻塞在 timer 请求上；Reconciler 使用 mutex 和待提交 fingerprint 避免重叠 tick 重复更新。Rule、Symbol 或 DNS 变化无需再让 SCF 请求 Collector 配置接口。
+Collector 启动时先做一次 DNS refresh；随后由独立的 5 分钟 DNS timer 更新内存快照。配置协调使用现有 `collector.schedule.timer`，第一期每分钟执行一次：读取启用规则、完整 Symbol Dataset 和 `trigger_type=timer` 节点，合并当前 DNS 快照后一次提交 CloudNode runtime-config batch。Timer handler 只负责快速启动受控 goroutine，不把腾讯 API 调用同步阻塞在 timer 请求上；Reconciler 串行保护完整的读取、分片、状态检查到提交过程，并使用待提交 fingerprint 避免重复更新。每次节点列表读取还会由 CloudNode 以最多 16 个并发、每节点并行的双只读请求回查腾讯 Function/Trigger，校验固定协议字段并发布真实可用状态及每节点剩余 Environment 预算；发现 Trigger 漂移时下一次协调重新提交，由 CloudNode Ensure 修复；Collector 按最小预算继续拆分标的，规则或节点删除时清理旧协调指标。Rule、Symbol 或 DNS 变化无需再让 SCF 请求 Collector 配置接口。
 
 启动顺序：初始 DNS refresh -> 初始规则/Symbol inventory -> 注册 DNS timer 和配置协调 timer。初始协调失败不阻止 Collector 启动，但必须通过日志、Reporter 和 Storage freshness 暴露；下一分钟继续重试。DNS 更新只更新缓存，由下一次统一协调把 DNS 与任务放进同一个函数 Environment patch，不能有两个协程分别覆盖完整 Environment。
 
@@ -656,9 +656,9 @@ Expected: 新测试 FAIL。
 
 禁止留下 `if timerMode { ... } else { oldRealtime... }` 兼容分支。新项目只保留一个实时执行模型。
 
-- [ ] **Step 4: 简化 Monitor**
+- [x] **Step 4: 简化 Monitor**
 
-删除 `market_fetch:*` Completion 消费和“尚未收到行情采集完成回执”告警。实时健康使用三项：Collector 最近成功配置协调、CloudNode Timer Trigger 状态、现有 Dataset/K 线 freshness。异常原因使用中文，并包含 dataset/frequency、assigned/required nodes、最后协调时间或最新 K 线时间。
+删除 `market_fetch:*` Completion 消费和“尚未收到行情采集完成回执”告警。Collector 通过统一 metrics reporter 上报最近成功协调、required/active 分片和每个 Timer Trigger 回读状态；Monitor 消费这些指标，并与现有 Dataset/K 线 freshness 合并为中文告警，包含 assigned/required nodes、最后协调时间或 Trigger 节点。
 
 - [ ] **Step 5: 运行模块测试并提交**
 
@@ -700,6 +700,7 @@ Expected: FAIL，当前仍默认 `scf-event` Invoke 环境且带 EventBus。
 
 - realtime 包发布：`trigger_type=timer`，Timer 初始关闭，等待 Collector 首次任务协调后开启。
 - probe/catchup 包发布：`trigger_type=invoke`，不创建 Timer。
+- 配置驱动的标准发布会按每个启用地域自动创建 1 个 Invoke 辅助节点；`function_count` 只表示 Timer 实时节点数，避免 Symbol 快照、补采和探针没有执行节点。
 - Timer 函数只保留一个 Storage Gateway CA；不复制同一 CA 到多个别名。
 - `custom.toml` 只保存地域、节点数量、64MB/15s、Trigger 类型和默认 cron，不保存每节点 Subject 或 DNS；它们是运行态协调结果。
 
@@ -785,12 +786,13 @@ git commit -m "feat(web): show SCF trigger type and timer status"
 
 - [ ] **Step 1: 收敛指标，不保留旧批次指标**
 
-删除 realtime Completion 驱动的 batch/retry 指标，新增且只新增以下四项：
+删除 realtime Completion 驱动的 batch/retry 指标，新增且只新增以下五项：
 
 ```text
 moox_collector_market_fetch_assignment_required{space_id,dataset_id,frequency}
 moox_collector_market_fetch_assignment_active{space_id,dataset_id,frequency}
 moox_collector_market_fetch_assignment_last_success_timestamp_seconds{space_id}
+moox_collector_market_fetch_coordination_healthy{space_id}
 moox_collector_market_fetch_assignment_errors_total{space_id,reason}
 ```
 

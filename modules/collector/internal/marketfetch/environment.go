@@ -13,11 +13,24 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 )
 
-const maxDNSIPsPerHost = 4
+const (
+	maxDNSIPsPerHost = 4
+	// Leave roughly 2.2KB for provider/package/CLS/Storage variables in
+	// Tencent's 4KB function-environment limit. Collector owns only this
+	// managed portion and cannot see every provider-owned key before submit.
+	maxManagedEnvironmentSize = 1800
+)
 
 // BuildManagedEnvironment creates only the Collector-owned keys. CloudNode
 // merges them with provider-owned keys such as MOOX_CODE_PACKAGE_ID.
 func BuildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution) (map[string]string, error) {
+	return buildManagedEnvironment(assignment, snapshot, maxManagedEnvironmentSize)
+}
+
+func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution, maxSize int) (map[string]string, error) {
+	if maxSize <= 0 {
+		return nil, fmt.Errorf("timer managed environment budget must be positive")
+	}
 	cron := assignment.Cron
 	if assignment.Enabled && cron == "" {
 		var err error
@@ -56,7 +69,7 @@ func BuildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 	if err != nil {
 		return nil, fmt.Errorf("encode external symbols: %w", err)
 	}
-	return map[string]string{
+	environment := map[string]string{
 		"MOOX_MARKET_FETCH_PROVIDER":        assignment.Provider,
 		"MOOX_MARKET_FETCH_MARKET_TYPE":     assignment.MarketType,
 		"MOOX_MARKET_FETCH_DATASET_ID":      assignment.DatasetID,
@@ -67,7 +80,19 @@ func BuildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 		"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": string(rawRoutes),
 		"MOOX_MARKET_FETCH_DNS_HASH":        dnsHash,
 		"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  updatedAt,
-	}, nil
+	}
+	if environmentBytes(environment) > maxSize {
+		return nil, fmt.Errorf("timer assignment environment is %d bytes before provider variables; reduce symbols or split the assignment (managed budget %d)", environmentBytes(environment), maxSize)
+	}
+	return environment, nil
+}
+
+func environmentBytes(values map[string]string) int {
+	total := 0
+	for key, value := range values {
+		total += len(key) + 1 + len(value) + 1
+	}
+	return total
 }
 
 func normalizeDNSRoutes(snapshot map[string]sources.DNSResolution) (map[string][]string, string, string) {

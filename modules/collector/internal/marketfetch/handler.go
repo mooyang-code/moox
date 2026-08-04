@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -22,6 +23,10 @@ import (
 type Handler struct {
 	NewStorage func(string, string) (Storage, error)
 	Publish    func(context.Context, Request, proto.Message) error
+	// Execute is a test seam for the timer entrypoint. Production leaves it nil
+	// and uses the bounded Executor below; tests can prove the Timer contract
+	// without making an external exchange request.
+	Execute    func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
 	Now        func() time.Time
 	Reporter   ItemReporter
 	CLSReserve time.Duration
@@ -101,9 +106,14 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		return nil, err
 	}
 	storageTimeout := time.Duration(envInt("MOOX_FETCH_STORAGE_TIMEOUT_MS", int(defaultStorageTimeout/time.Millisecond))) * time.Millisecond
-	commitReserve, publishReserve := storageAndPublishReserves(storageTimeout, h.CLSReserve)
-	executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout, Reporter: h.Reporter}
-	payload, err := executor.Execute(budgetCtx, req)
+	commitReserve, publishReserve := storageAndPublishReserves(storageTimeout, h.CLSReserve, publish)
+	var payload *marketfetchpb.MarketFetchBatchCompleted
+	if h.Execute != nil {
+		payload, err = h.Execute(budgetCtx, req, storage)
+	} else {
+		executor := &Executor{Klines: binance.NewKlineCollector(), Catchup: binance.NewKlineCollector(), Symbols: binance.NewSymbolCollector(), Storage: storage, Now: h.Now, CommitReserve: commitReserve, StorageReserve: storageTimeout, Reporter: h.Reporter}
+		payload, err = executor.Execute(budgetCtx, req)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -121,12 +131,19 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 // then reserves a small fixed window to publish the completion event. Storage
 // crosses SCF -> Gateway -> Storage Primary, so it must not share a timeout
 // budget with EventBus publication.
-func storageAndPublishReserves(storage time.Duration, cls time.Duration) (commit, publish time.Duration) {
+func storageAndPublishReserves(storage time.Duration, cls time.Duration, completion bool) (commit, publish time.Duration) {
 	if storage <= 0 {
 		storage = defaultStorageTimeout
 	}
 	if cls < 0 {
 		cls = 0
+	}
+	if !completion {
+		// Timer invocations do not publish a completion event. Do not reserve
+		// three seconds for a path that is deliberately absent; that budget is
+		// needed by the 30-symbol HTTP fan-out before the five-second Storage
+		// write and best-effort CLS flush.
+		return storage + cls, 0
 	}
 	return storage + completionPublishReserve + cls, completionPublishReserve
 }

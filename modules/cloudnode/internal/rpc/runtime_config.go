@@ -28,7 +28,7 @@ var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_DATASET_ID":      {},
 	"MOOX_MARKET_FETCH_FREQUENCY":       {},
 	"MOOX_MARKET_FETCH_SUBJECTS":        {},
-	"MOOX_MARKET_FETCH_SYMBOLS_JSON":     {},
+	"MOOX_MARKET_FETCH_SYMBOLS_JSON":    {},
 	"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": {},
 	"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": {},
 	"MOOX_MARKET_FETCH_DNS_HASH":        {},
@@ -39,6 +39,9 @@ func (s *Service) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *pb.Ba
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
 		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
+	if req == nil {
+		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
 	}
 	items := req.GetNodes()
 	if ret := validateNodeBatchSize(len(items), "nodes"); ret != nil {
@@ -135,21 +138,25 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 	if environment == nil {
 		environment = make(map[string]string)
 	}
+	needsEnvironmentUpdate := !managedEnvironmentMatches(environment, item.GetManagedEnvironment())
 	for key, value := range item.GetManagedEnvironment() {
 		environment[key] = value
 	}
 	if size := scfEnvironmentBytes(environment); size > maxSCFEnvironmentBytes {
 		return "", fmt.Errorf("scf function %s environment is %d bytes; limit is %d", ref.FunctionName, size, maxSCFEnvironmentBytes)
 	}
-	if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{FunctionRef: ref, Environment: environment}); err != nil {
-		return "", fmt.Errorf("update scf function %s environment: %w", ref.FunctionName, err)
-	}
-	if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
-		return "", err
-	}
-	verified, err := client.GetFunction(ctx, ref)
-	if err != nil {
-		return "", fmt.Errorf("verify scf function %s environment: %w", ref.FunctionName, err)
+	verified := info
+	if needsEnvironmentUpdate {
+		if _, err := client.UpdateFunctionConfiguration(ctx, tencentscf.UpdateFunctionConfigurationRequest{FunctionRef: ref, Environment: environment}); err != nil {
+			return "", fmt.Errorf("update scf function %s environment: %w", ref.FunctionName, err)
+		}
+		if _, err := waitForSCFActive(ctx, client, ref, nil); err != nil {
+			return "", err
+		}
+		verified, err = client.GetFunction(ctx, ref)
+		if err != nil {
+			return "", fmt.Errorf("verify scf function %s environment: %w", ref.FunctionName, err)
+		}
 	}
 	for key, expected := range item.GetManagedEnvironment() {
 		if verified.Environment[key] != expected {
@@ -160,7 +167,7 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 	if err != nil {
 		return "", fmt.Errorf("ensure timer trigger for %s: %w", ref.FunctionName, err)
 	}
-	metadata := map[string]any{"assignment_hash": environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "assignment_count": strings.Count(environment["MOOX_MARKET_FETCH_SUBJECTS"], "|") + boolToInt(environment["MOOX_MARKET_FETCH_SUBJECTS"] != ""), "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_available_status": trigger.AvailableStatus, "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	metadata := map[string]any{"assignment_hash": environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "assignment_count": strings.Count(environment["MOOX_MARKET_FETCH_SUBJECTS"], "|") + boolToInt(environment["MOOX_MARKET_FETCH_SUBJECTS"] != ""), "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
 	if err := s.catalog.UpdateNodeRuntimeMetadata(ctx, spaceID, node.NodeID, metadata); err != nil {
 		return "", err
 	}
@@ -178,6 +185,26 @@ func scfEnvironmentBytes(values map[string]string) int {
 		total += len(key) + 1 + len(values[key]) + 1
 	}
 	return total
+}
+
+func scfManagedEnvironmentBudget(values map[string]string) int {
+	base := make(map[string]string, len(values))
+	for key, value := range values {
+		if _, managed := managedEnvironmentKeys[key]; managed {
+			continue
+		}
+		base[key] = value
+	}
+	return maxSCFEnvironmentBytes - scfEnvironmentBytes(base)
+}
+
+func managedEnvironmentMatches(current, desired map[string]string) bool {
+	for key, expected := range desired {
+		if actual, ok := current[key]; !ok || actual != expected {
+			return false
+		}
+	}
+	return true
 }
 
 func boolToInt(value bool) int {

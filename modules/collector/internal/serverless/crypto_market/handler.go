@@ -20,7 +20,11 @@ import (
 
 const spaceID = "crypto_market"
 
-const finalResponseReserve = 500 * time.Millisecond
+const (
+	finalResponseReserve = 500 * time.Millisecond
+	timerTriggerName     = "moox-market-fetch-timer"
+	timerTriggerMessage  = "market_fetch_timer_v1"
+)
 
 // Handler accepts only bounded crypto market actions and has no resident work.
 type Handler struct {
@@ -58,8 +62,16 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	timerConfigured := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS")) != ""
 	var event model.CloudFunctionEvent
 	decodeErr := json.Unmarshal(raw, &event)
-	if decodeErr != nil && !timerConfigured {
+	if decodeErr != nil {
 		return failure("invalid_event", fmt.Sprintf("decode event: %v", decodeErr)), nil
+	}
+	// A function with a static Timer assignment must not accept a hand-built
+	// market_fetch envelope. Requiring the provider's Timer identity keeps the
+	// environment-backed realtime path separate from the bounded Invoke path.
+	if timerConfigured && (event.Action == "" || event.Action == model.EventActionMarketFetch) {
+		if err := validateTimerEvent(event); err != nil {
+			return failure("invalid_timer_event", err.Error()), nil
+		}
 	}
 	function, _ := functioncontext.FromContext(ctx)
 	if event.RequestID == "" && function != nil {
@@ -77,7 +89,7 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		functionName = firstNonEmpty(function.FunctionName, functionName)
 		region = function.TencentcloudRegion
 	}
-	if timerConfigured && (decodeErr != nil || event.Action == "") {
+	if timerConfigured && event.Action == "" {
 		event.Action = model.EventActionMarketFetch
 		event.Source = "tencent_timer"
 		event.StorageRPCGatewayTarget = os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")
@@ -127,6 +139,25 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	default:
 		return failure("unknown_event_type", "unsupported crypto market SCF action"), nil
 	}
+}
+
+func validateTimerEvent(event model.CloudFunctionEvent) error {
+	if !strings.EqualFold(strings.TrimSpace(event.Type), "Timer") {
+		return fmt.Errorf("timer event type must be Timer")
+	}
+	if strings.TrimSpace(event.TriggerName) != timerTriggerName {
+		return fmt.Errorf("timer trigger name is not recognized")
+	}
+	if strings.TrimSpace(event.Message) != timerTriggerMessage {
+		return fmt.Errorf("timer trigger message is not recognized")
+	}
+	if strings.TrimSpace(event.Time) == "" {
+		return fmt.Errorf("timer event time is required")
+	}
+	if _, err := time.Parse(time.RFC3339, strings.TrimSpace(event.Time)); err != nil {
+		return fmt.Errorf("timer event time is invalid: %w", err)
+	}
+	return nil
 }
 
 func failure(code, message string) *model.Response {

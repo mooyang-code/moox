@@ -38,6 +38,7 @@ type scfProvisioner interface {
 	UpdateFunctionCode(context.Context, tencentscf.UpdateFunctionCodeRequest) (*tencentscf.UpdateFunctionCodeResponse, error)
 	UpdateFunctionConfiguration(context.Context, tencentscf.UpdateFunctionConfigurationRequest) (*tencentscf.UpdateFunctionConfigurationResponse, error)
 	EnsureTimerTrigger(context.Context, tencentscf.TimerTriggerRequest) (*tencentscf.TimerTriggerInfo, error)
+	GetTimerTrigger(context.Context, tencentscf.FunctionRef, string) (*tencentscf.TimerTriggerInfo, error)
 	DeleteTimerTrigger(context.Context, tencentscf.TimerTriggerRequest) error
 	InvokeFunction(context.Context, tencentscf.InvokeFunctionRequest) (*tencentscf.InvokeFunctionResponse, error)
 }

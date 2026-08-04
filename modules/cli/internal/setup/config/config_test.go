@@ -48,25 +48,34 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 		assert.Contains(t, err.Error(), "request/storage attempts")
 	})
 
-	t.Run("allows a 64-item realtime batch for fleet fanout", func(t *testing.T) {
+	t.Run("allows a 30-item realtime batch for fleet fanout", func(t *testing.T) {
 		cfg := base()
-		cfg.Spaces[0].RealtimeBatchSize = 64
+		cfg.Spaces[0].RealtimeBatchSize = 30
+		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
+		require.NoError(t, validateSCFFetcher(&cfg))
+	})
+
+	t.Run("accepts the standard 10-item timer and invoke budget", func(t *testing.T) {
+		cfg := base()
+		cfg.Spaces[0].RealtimeBatchSize = 10
+		cfg.Spaces[0].MaxInflightRequests = 10
+		cfg.Spaces[0].RequestTimeoutMS = 2000
 		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
 		require.NoError(t, validateSCFFetcher(&cfg))
 	})
 
 	t.Run("rejects a realtime batch above the SCF request bound", func(t *testing.T) {
 		cfg := base()
-		cfg.Spaces[0].RealtimeBatchSize = 65
+		cfg.Spaces[0].RealtimeBatchSize = 31
 		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
 		err := validateSCFFetcher(&cfg)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "between 1 and 64")
+		assert.Contains(t, err.Error(), "between 1 and 30")
 	})
 
 	t.Run("rejects a batch that cannot finish before the SCF deadline", func(t *testing.T) {
 		cfg := base()
-		cfg.Spaces[0].RealtimeBatchSize = 64
+		cfg.Spaces[0].RealtimeBatchSize = 30
 		cfg.Spaces[0].MaxInflightRequests = 1
 		cfg.Spaces[0].RequestTimeoutMS = 7000
 		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
@@ -77,13 +86,13 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 
 	t.Run("reserves the CLS flush window", func(t *testing.T) {
 		cfg := base()
-		cfg.Spaces[0].RealtimeBatchSize = 64
+		cfg.Spaces[0].RealtimeBatchSize = 30
 		cfg.Spaces[0].MaxInflightRequests = 32
-		cfg.Spaces[0].RequestTimeoutMS = 2600
+		cfg.Spaces[0].RequestTimeoutMS = 5000
 		cfg.Spaces[0].Regions[0].CloudAccountID = "tencent-scf-guangzhou"
 		err := validateSCFFetcher(&cfg)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "CLS reserves")
+		assert.Contains(t, err.Error(), "reserves")
 	})
 }
 

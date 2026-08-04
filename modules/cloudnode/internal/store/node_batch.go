@@ -45,6 +45,21 @@ type NodeBatchAggregate struct {
 func (r *CatalogRepository) CreateNodeBatch(ctx context.Context, input NodeBatchCreate) error {
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// A config-driven publish can be retried while the first async create
+		// job is still pending. Reserve stable node IDs in the batch table so
+		// two jobs cannot race the same SCF function name.
+		for _, item := range input.Items {
+			var conflict int64
+			if err := tx.Table("t_cloud_node_batch_items AS i").
+				Joins("JOIN t_cloud_node_batches AS b ON b.c_space_id = i.c_space_id AND b.c_job_id = i.c_job_id").
+				Where("i.c_space_id = ? AND i.c_node_id = ? AND i.c_status IN ? AND b.c_operation = ?", input.SpaceID, item.NodeID, []string{NodeBatchPending, NodeBatchRunning}, "create_nodes").
+				Count(&conflict).Error; err != nil {
+				return err
+			}
+			if conflict > 0 {
+				return fmt.Errorf("node %s already has a pending create batch", item.NodeID)
+			}
+		}
 		job := NodeBatch{
 			SpaceID:    input.SpaceID,
 			JobID:      input.JobID,

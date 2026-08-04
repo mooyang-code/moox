@@ -38,6 +38,11 @@ func (s *Service) SubmitCreateNodes(ctx context.Context, req *pb.BatchCreateNode
 		if ret != nil {
 			return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
 		}
+		if existing, err := s.catalog.GetNode(ctx, spaceID, node.NodeID); err != nil {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+		} else if existing != nil && !existing.IsDeleted {
+			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node already exists: "+node.NodeID)}, nil
+		}
 		if _, exists := seenNodes[node.NodeID]; exists {
 			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes contains duplicate node_id")}, nil
 		}

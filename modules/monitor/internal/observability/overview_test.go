@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
@@ -156,6 +157,68 @@ func TestBuilderDeduplicatesServiceBootHistory(t *testing.T) {
 		!got.Services[0].LastSeenAt.Equal(now) {
 		t.Fatalf("services = %+v", got.Services)
 	}
+}
+
+func TestBuilderReportsTimerCoordinationHealth(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"crypto_market","dataset_id":"bars","frequency":"1m"}`
+		seedOverviewMetricForInstance(t, db, "timer-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "timer-active", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "timer-success", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"crypto_market"}`, float64(now.Unix()), now)
+		seedOverviewMetricForInstance(t, db, "timer-trigger", "moox_collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto_market","node_id":"timer-1","enabled":"true"}`, 1, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.BusinessChecks) != 1 || got.BusinessChecks[0].Kind != "market_fetch" || got.BusinessChecks[0].Status != "healthy" || got.BusinessChecks[0].SpaceID != "crypto_market" {
+		t.Fatalf("business checks = %+v", got.BusinessChecks)
+	}
+}
+
+func TestBuilderReportsStoppedCollectorForStaleTimerCoordinationSeries(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"crypto_market","dataset_id":"bars","frequency":"1m"}`
+		old := now.Add(-2 * time.Hour)
+		seedOverviewMetricForInstance(t, db, "stale-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, old)
+		seedOverviewMetricForInstance(t, db, "stale-active", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, old)
+		seedOverviewMetricForInstance(t, db, "stale-success", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"crypto_market"}`, float64(old.Unix()), old)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "market_fetch", got.BusinessChecks[0].Kind)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "停止上报")
+}
+
+func TestBuilderIgnoresDeletedTimerLabelsWhenCollectorReporterIsFresh(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		require.NoError(t, db.Create(&monmetrics.MetricService{ServiceName: "moox_collector", InstanceID: "collector@control", BootID: "boot", NodeID: "control", LastSeenAt: now}).Error)
+		labels := `{"space_id":"crypto_market","dataset_id":"deleted-bars","frequency":"1m"}`
+		old := now.Add(-2 * time.Hour)
+		seedOverviewMetricForInstance(t, db, "deleted-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, old)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	for _, item := range got.BusinessChecks {
+		require.NotEqual(t, "market_fetch", item.Kind)
+	}
+}
+
+func TestBuilderReportsInitialTimerCoordinationFailure(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "failed-coordination", "moox_collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto_market"}`, 0, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "协调失败")
 }
 
 func TestBuilderSysDeployFailureOverridesFreshReporter(t *testing.T) {

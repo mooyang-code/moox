@@ -1,6 +1,8 @@
 package marketfetch
 
 import (
+	"strings"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -8,6 +10,8 @@ type Metrics struct {
 	assignmentRequired    *prometheus.GaugeVec
 	assignmentActive      *prometheus.GaugeVec
 	assignmentLastSuccess *prometheus.GaugeVec
+	assignmentHealthy     *prometheus.GaugeVec
+	timerAvailable        *prometheus.GaugeVec
 	assignmentErrors      *prometheus.CounterVec
 }
 
@@ -21,11 +25,15 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		assignmentRequired:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_required", Help: "Required Timer SCF assignments."}, []string{"space_id", "dataset_id", "frequency"}),
 		assignmentActive:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_active", Help: "Active Timer SCF assignments."}, []string{"space_id", "dataset_id", "frequency"}),
 		assignmentLastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", Help: "Last successful Timer assignment reconciliation timestamp."}, []string{"space_id"}),
+		assignmentHealthy:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_healthy", Help: "Whether the latest Timer assignment reconciliation completed (1 healthy, 0 failed)."}, []string{"space_id"}),
+		timerAvailable:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_available", Help: "Tencent Timer trigger availability for Collector nodes (1 available, 0 unavailable, -1 unknown)."}, []string{"space_id", "node_id", "enabled"}),
 		assignmentErrors:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_fetch_assignment_errors_total", Help: "Timer assignment reconciliation errors."}, []string{"space_id", "reason"}),
 	}
 	metrics.assignmentRequired = registerGaugeVec(reg, metrics.assignmentRequired)
 	metrics.assignmentActive = registerGaugeVec(reg, metrics.assignmentActive)
 	metrics.assignmentLastSuccess = registerGaugeVec(reg, metrics.assignmentLastSuccess)
+	metrics.assignmentHealthy = registerGaugeVec(reg, metrics.assignmentHealthy)
+	metrics.timerAvailable = registerGaugeVec(reg, metrics.timerAvailable)
 	metrics.assignmentErrors = registerCounterVec(reg, metrics.assignmentErrors)
 	return metrics
 }
@@ -54,6 +62,14 @@ func registerGaugeVec(reg prometheus.Registerer, collector *prometheus.GaugeVec)
 
 // ObserveAssignment records the desired and currently assigned Timer shards.
 func (m *Metrics) ObserveAssignment(spaceID, datasetID, frequency string, required, active int, reconciledAt int64) {
+	m.ObserveAssignmentDesired(spaceID, datasetID, frequency, required, active)
+	m.ObserveAssignmentSuccess(spaceID, reconciledAt)
+}
+
+// ObserveAssignmentDesired records the state requested from CloudNode. It is
+// deliberately separate from success: SubmitRuntimeConfigs is asynchronous,
+// so accepting a job must not advance the last-success timestamp.
+func (m *Metrics) ObserveAssignmentDesired(spaceID, datasetID, frequency string, required, active int) {
 	if m == nil {
 		return
 	}
@@ -65,9 +81,41 @@ func (m *Metrics) ObserveAssignment(spaceID, datasetID, frequency string, requir
 	}
 	m.assignmentRequired.WithLabelValues(spaceID, datasetID, frequency).Set(float64(required))
 	m.assignmentActive.WithLabelValues(spaceID, datasetID, frequency).Set(float64(active))
-	if reconciledAt > 0 {
-		m.assignmentLastSuccess.WithLabelValues(spaceID).Set(float64(reconciledAt))
+}
+
+// ResetAssignmentScope removes labels for rules which disappeared from the
+// current reconciliation result. GaugeVec keeps a child until it is deleted;
+// leaving those children around would make Monitor alert for disabled rules.
+func (m *Metrics) ResetAssignmentScope(spaceID string) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
 	}
+	labels := prometheus.Labels{"space_id": spaceID}
+	m.assignmentRequired.DeletePartialMatch(labels)
+	m.assignmentActive.DeletePartialMatch(labels)
+}
+
+func (m *Metrics) ResetTimerScope(spaceID string) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	m.timerAvailable.DeletePartialMatch(prometheus.Labels{"space_id": spaceID})
+}
+
+func (m *Metrics) ObserveAssignmentSuccess(spaceID string, reconciledAt int64) {
+	if m == nil || reconciledAt <= 0 {
+		return
+	}
+	m.assignmentLastSuccess.WithLabelValues(spaceID).Set(float64(reconciledAt))
+	m.assignmentHealthy.WithLabelValues(spaceID).Set(1)
+}
+
+func (m *Metrics) ObserveAssignmentFailure(spaceID, reason string) {
+	if m == nil {
+		return
+	}
+	m.assignmentHealthy.WithLabelValues(spaceID).Set(0)
+	m.ObserveAssignmentError(spaceID, reason)
 }
 
 func (m *Metrics) ObserveAssignmentError(spaceID, reason string) {
@@ -75,6 +123,23 @@ func (m *Metrics) ObserveAssignmentError(spaceID, reason string) {
 		return
 	}
 	m.assignmentErrors.WithLabelValues(spaceID, reason).Inc()
+}
+
+// ObserveTimerState mirrors the last CloudNode trigger readback. The
+// Collector is the only component that already lists the timer fleet, so it
+// forwards this small coordination fact through the normal metrics reporter
+// instead of making Monitor call Tencent or CloudNode directly.
+func (m *Metrics) ObserveTimerState(spaceID, nodeID, enabled string, value float64) {
+	if m == nil || strings.TrimSpace(nodeID) == "" {
+		return
+	}
+	if value < -1 {
+		value = -1
+	}
+	if value > 1 {
+		value = 1
+	}
+	m.timerAvailable.WithLabelValues(spaceID, nodeID, enabled).Set(value)
 }
 
 // Observe and SetRetryPending remain no-ops for the retired completion-based

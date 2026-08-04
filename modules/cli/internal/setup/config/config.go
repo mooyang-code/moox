@@ -374,10 +374,10 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s.timeout_seconds must be 15", path)
 	}
 	if cfg.RealtimeBatchSize == 0 {
-		cfg.RealtimeBatchSize = 64
+		cfg.RealtimeBatchSize = 30
 	}
-	if cfg.RealtimeBatchSize < 1 || cfg.RealtimeBatchSize > 64 {
-		return fmt.Errorf("config_invalid: %s.realtime_batch_size must be between 1 and 64", path)
+	if cfg.RealtimeBatchSize < 1 || cfg.RealtimeBatchSize > 30 {
+		return fmt.Errorf("config_invalid: %s.realtime_batch_size must be between 1 and 30", path)
 	}
 	if cfg.RealtimeBarLimit == 0 {
 		cfg.RealtimeBarLimit = 3
@@ -419,9 +419,13 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 		return fmt.Errorf("config_invalid: %s retry_delays must be [5s, 30s, 2m] and stagger_enabled must be false", path)
 	}
 	requestWaves := (cfg.RealtimeBatchSize + cfg.MaxInflightRequests - 1) / cfg.MaxInflightRequests
+	// Standard config-driven publishing creates both the realtime Timer fleet
+	// and one Invoke auxiliary per region. Validate the stricter Invoke budget
+	// here, before uploading or submitting the Timer batch, so a bad manifest
+	// cannot leave a partially published fleet behind.
 	requestBudgetMS := requestWaves*cfg.RequestTimeoutMS + cfg.StorageTimeoutMS + SCFCompletionReserveMilliseconds + SCFCLSReserveMilliseconds + SCFFinalResponseReserveMilliseconds
 	if requestBudgetMS >= cfg.TimeoutSeconds*1000 {
-		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + publish and CLS reserves must be less than timeout", path)
+		return fmt.Errorf("config_invalid: %s realtime request waves + storage_timeout_ms + completion, CLS and final response reserves must be less than timeout", path)
 	}
 	seen := make(map[string]struct{}, len(cfg.Regions))
 	enabledRegions := 0

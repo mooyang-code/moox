@@ -71,11 +71,12 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 				return nil, fmt.Errorf("invalid subject %q", subject)
 			}
 		}
-		if group.ExternalSymbols != nil {
-			for _, subject := range group.Subjects {
-				if strings.TrimSpace(group.ExternalSymbols[subject]) == "" {
-					return nil, fmt.Errorf("subject %s has no external symbol", subject)
-				}
+		if group.ExternalSymbols == nil {
+			return nil, fmt.Errorf("task group external symbol mapping is required")
+		}
+		for _, subject := range group.Subjects {
+			if strings.TrimSpace(group.ExternalSymbols[subject]) == "" {
+				return nil, fmt.Errorf("subject %s has no external symbol", subject)
 			}
 		}
 		normalized = append(normalized, group)
@@ -102,11 +103,6 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 			externals := make(map[string]string, len(subjects))
 			for _, subject := range subjects {
 				external := strings.TrimSpace(group.ExternalSymbols[subject])
-				if external == "" {
-					// Test/manual callers may only provide SubjectID. Reconciled
-					// production groups always carry the explicit Storage mapping.
-					external = strings.ReplaceAll(subject, "-", "")
-				}
 				externals[subject] = external
 				hashParts = append(hashParts, subject+"="+external)
 			}

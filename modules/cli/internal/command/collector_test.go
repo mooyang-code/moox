@@ -348,7 +348,7 @@ func TestCollectorFunctionEnvironmentUsesRuntimeCollectorIdentity(t *testing.T) 
 	assert.Equal(t, "collector", env["MOOX_GATEWAY_SERVICE_KEY_ID"])
 	assert.Equal(t, "collector-secret", env["MOOX_GATEWAY_SERVICE_SECRET_KEY"])
 	assert.Equal(t, "collector", env["MOOX_GATEWAY_CALLER"])
-	assert.Equal(t, "32", env["MOOX_FETCH_MAX_INFLIGHT_REQUESTS"])
+	assert.Equal(t, "10", env["MOOX_FETCH_MAX_INFLIGHT_REQUESTS"])
 }
 
 type collectorCLSAPI struct{}
@@ -667,7 +667,7 @@ func TestPublishSubmitRejectsOversizedFleetBeforeUpload(t *testing.T) {
 		case "/api/admin/cloudnode/ListCloudAccounts":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"accounts":[{"account_id":"account-a"}]}`))
 		case "/api/admin/cloudnode/GetNodeList":
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fleet-50","biz_type":"market_fetcher","metadata":{"function_name_prefix":"fleet","index":50}}],"page":{"has_more":false}}`))
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fleet-50","biz_type":"market_fetcher","trigger_type":"timer","metadata":{"function_name_prefix":"fleet","index":50}}],"page":{"has_more":false}}`))
 		case "/api/admin/cloudnode/InitPackageUpload":
 			uploadCalled = true
 			t.Fatal("partial fleet must fail before upload")
@@ -788,7 +788,7 @@ func TestBuildCollectorCreateNodeItemRejectsUnsafeRuntimeOverride(t *testing.T) 
 		CloudAccountID: "account-a",
 		Region:         "ap-guangzhou",
 		Config: []string{
-			"realtime_batch_size=64",
+			"realtime_batch_size=30",
 			"max_inflight_requests=1",
 			"request_timeout_ms=7000",
 		},
@@ -802,12 +802,23 @@ func TestBuildCollectorCreateNodeItemReservesCLSFlushWindow(t *testing.T) {
 		CloudAccountID: "account-a",
 		Region:         "ap-guangzhou",
 		Config: []string{
-			"realtime_batch_size=64",
+			"realtime_batch_size=30",
 			"max_inflight_requests=32",
-			"request_timeout_ms=2600",
+			"request_timeout_ms=6500",
 		},
 	}, "moox-collector_dev")
-	require.ErrorContains(t, err, "CLS reserves")
+	require.ErrorContains(t, err, "configured reserves")
+}
+
+func TestBuildCollectorCreateNodeItemStandardManifestFitsTimerAndInvokeBudgets(t *testing.T) {
+	setCollectorCLSTestCredentials(t)
+	for _, triggerType := range []string{"timer", "invoke"} {
+		_, err := buildCollectorCreateNodeItem(collectorPublishOptions{
+			CloudAccountID: "account-a", Region: "ap-guangzhou", TriggerType: triggerType,
+			Config: []string{"realtime_batch_size=10", "max_inflight_requests=10", "request_timeout_ms=2000"},
+		}, "moox-collector_dev")
+		require.NoError(t, err, "trigger_type=%s", triggerType)
+	}
 }
 
 func TestBuildCollectorCreateNodeItemRejectsInvalidInflightOverride(t *testing.T) {

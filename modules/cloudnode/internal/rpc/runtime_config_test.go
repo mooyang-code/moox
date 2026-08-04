@@ -16,3 +16,10 @@ func TestManagedEnvironmentRejectsUnknownKey(t *testing.T) {
 		t.Fatal("provider credentials must not be collector-managed")
 	}
 }
+
+func TestManagedEnvironmentMatchesOnlyCollectorOwnedValues(t *testing.T) {
+	current := map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "BTC-USDT", "SECRET": "keep"}
+	require.True(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "BTC-USDT"}))
+	require.False(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_SUBJECTS": "ETH-USDT"}))
+	require.False(t, managedEnvironmentMatches(current, map[string]string{"MOOX_MARKET_FETCH_DNS_HASH": "missing"}))
+}

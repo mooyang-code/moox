@@ -22,6 +22,8 @@ package_path="${TMP_ROOT}/collector-scf.zip"
   PATH="${FAKE_BIN}:${PATH}" SCF_SPACE_ID="crypto_market" SCF_ENTRYPOINT="crypto_market" MOOX_STORAGE_PRIMARY_AUTH_SECRET="test-storage-secret" VERSION="contract-test" OUT_PATH="collector-scf.zip" \
     bash "${ROOT}/scripts/build-collector-scf-package.sh"
 )
-unzip -l "${package_path}" | grep -q ' main$'
-unzip -l "${package_path}" | grep -q ' sources/market/binance.yaml$'
-! unzip -l "${package_path}" | grep -q 'trpc_go.yaml'
+listing_path="${TMP_ROOT}/listing.txt"
+unzip -l "${package_path}" >"${listing_path}"
+grep -q ' main$' "${listing_path}"
+grep -q ' sources/market/binance.yaml$' "${listing_path}"
+! grep -q 'trpc_go.yaml' "${listing_path}"

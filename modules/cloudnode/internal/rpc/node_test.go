@@ -49,8 +49,42 @@ func TestUpdateNodeAndConversion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ap-shanghai", node.Region)
 
+	require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{
+		SpaceID: "crypto_market", NodeID: "timer-node", NodeType: "scf-event", TriggerType: "timer", Region: "ap-shanghai",
+	}))
+	bad, err := svc.UpdateNode(ctx, &pb.UpdateNodeReq{Node: &pb.CloudNode{NodeId: "timer-node", TriggerType: "timre"}})
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
+	assert.Contains(t, bad.GetRetInfo().GetMsg(), "trigger_type must be invoke or timer")
+	unchanged, err := catalog.GetNode(ctx, "crypto_market", "timer-node")
+	require.NoError(t, err)
+	assert.Equal(t, "timer", unchanged.TriggerType)
+
 	pbNode := toPBNode(store.CloudNode{SpaceID: "crypto_market", NodeID: "n1", Metadata: `{"biz_type":"market_fetcher"}`})
 	assert.Equal(t, "market_fetcher", pbNode.GetBizType())
+}
+
+func TestGetNodeListRefreshesTimerTriggerReadback(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto_market", NodeID: "timer-node", CloudAccountID: "account-a", PackageID: "pkg", DeploymentID: "deployment-1",
+		NodeType: "scf-event", TriggerType: "timer", Region: "ap-guangzhou", FunctionName: "timer-node",
+		Metadata: `{"deployment_ready":true,"timer_enabled":true,"timer_cron":"0 * * * * * *","timer_available_status":"Available"}`,
+	}))
+	fake := &fakeSCFClient{timerInfoSet: true, timerInfo: &tencentscf.TimerTriggerInfo{Name: timerTriggerName, Type: "timer", Cron: "0 */5 * * * * *", Enabled: false, AvailableStatus: "Available", Qualifier: timerTriggerQualifier, Message: timerTriggerMessage}}
+	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
+	rsp, err := svc.GetNodeList(spacecontext.WithSpaceID(context.Background(), "crypto_market"), &pb.GetNodeListReq{TriggerType: "timer"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetItems(), 1)
+	metadata := rsp.GetItems()[0].GetMetadata().AsMap()
+	assert.Equal(t, false, metadata["timer_actual_enabled"])
+	assert.Equal(t, "0 */5 * * * * *", metadata["timer_actual_cron"])
+	assert.Equal(t, "Available", metadata["timer_available_status"])
+	stored, err := catalog.GetNode(context.Background(), "crypto_market", "timer-node")
+	require.NoError(t, err)
+	assert.Contains(t, stored.Metadata, "timer_actual_enabled")
 }
 
 func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {
@@ -77,6 +111,25 @@ func TestExecuteCreateNodeItemCreatesShortLivedFunction(t *testing.T) {
 	assert.Equal(t, int64(64), fake.created[0].MemorySize)
 	assert.Equal(t, int64(15), fake.created[0].Timeout)
 	assert.NotContains(t, fake.created[0].Environment, "MOOX_MONITOR_READY_URL")
+}
+
+func TestExecuteCreateExistingTimerNodeEnsuresTrigger(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 15, Environment: map[string]string{"MOOX_CODE_PACKAGE_ID": "moox-collector_dev", "MOOX_SPACE_ID": "crypto_market"}}}}}
+	svc := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	metadata, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher", "function_name_prefix": "moox-fetcher-crypto-market"})
+	require.NoError(t, err)
+	_, err = svc.executeCreateNodeItem(context.Background(), "crypto_market", &pb.NodeCreateItem{
+		CloudAccountId: "account-a", Region: "ap-singapore", Namespace: "collector", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
+		TriggerType: "timer", Config: map[string]string{"memory_size": "64", "timeout": "15"}, Environment: map[string]string{"MOOX_SPACE_ID": "crypto_market"}, Metadata: metadata,
+	}, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, fake.timerEnsures)
 }
 
 func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
@@ -130,6 +183,39 @@ func TestExecuteDeployNodeItemRejectsMergedTimerEnvironmentOverLimit(t *testing.
 	assert.Empty(t, fake.configured)
 }
 
+func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
+		SpaceID: "crypto_market", NodeID: "timer-node", CloudAccountID: "account-a", PackageID: "pkg", NodeType: "scf-event", TriggerType: "timer", Provider: "tencent-scf",
+		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"biz_type":"market_fetcher"}`,
+	}))
+	environment := map[string]string{
+		"MOOX_CODE_PACKAGE_ID":              "pkg",
+		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment",
+		"MOOX_MARKET_FETCH_DNS_HASH":        "dns",
+		"MOOX_MARKET_FETCH_DNS_UPDATED_AT":  "2026-08-04T01:00:00Z",
+		"MOOX_MARKET_FETCH_SUBJECTS":        "BTC-USDT",
+		"MOOX_MARKET_FETCH_SYMBOLS_JSON":    `{"BTC-USDT":"BTCUSDT"}`,
+		"MOOX_MARKET_FETCH_PROVIDER":        "binance",
+		"MOOX_MARKET_FETCH_MARKET_TYPE":     "spot",
+		"MOOX_MARKET_FETCH_DATASET_ID":      "bars",
+		"MOOX_MARKET_FETCH_FREQUENCY":       "1m",
+		"MOOX_MARKET_FETCH_DNS_ROUTES_JSON": `{"api.binance.com":["203.0.113.1"]}`,
+	}
+	fake := &fakeSCFClient{currentEnvironment: environment}
+	svc := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	_, err := svc.executeRuntimeConfigItem(context.Background(), "crypto_market", &pb.NodeRuntimeConfigPatch{
+		NodeId: "timer-node", ManagedEnvironment: environment, TimerCron: "0 * * * * * *", TimerEnabled: true,
+	})
+	require.NoError(t, err)
+	require.Empty(t, fake.configured, "unchanged managed environment must not call UpdateFunctionConfiguration")
+}
+
 type fakeSCFClient struct {
 	getResults           []fakeSCFGetResult
 	getCalls             int
@@ -140,6 +226,10 @@ type fakeSCFClient struct {
 	updated              []tencentscf.UpdateFunctionCodeRequest
 	configured           []tencentscf.UpdateFunctionConfigurationRequest
 	currentEnvironment   map[string]string
+	timerEnsures         int
+	timerInfoSet         bool
+	timerInfo            *tencentscf.TimerTriggerInfo
+	timerErr             error
 }
 
 type fakeSCFGetResult struct {
@@ -184,7 +274,18 @@ func (f *fakeSCFClient) InvokeFunction(context.Context, tencentscf.InvokeFunctio
 	return &tencentscf.InvokeFunctionResponse{}, nil
 }
 func (f *fakeSCFClient) EnsureTimerTrigger(_ context.Context, req tencentscf.TimerTriggerRequest) (*tencentscf.TimerTriggerInfo, error) {
-	return &tencentscf.TimerTriggerInfo{Name: req.Name, Cron: req.Cron, Enabled: req.Enabled, AvailableStatus: "Available", Qualifier: req.Qualifier, Message: req.Message}, nil
+	f.timerEnsures++
+	return &tencentscf.TimerTriggerInfo{Name: req.Name, Type: "timer", Cron: req.Cron, Enabled: req.Enabled, AvailableStatus: "Available", Qualifier: req.Qualifier, Message: req.Message}, nil
+}
+
+func (f *fakeSCFClient) GetTimerTrigger(_ context.Context, _ tencentscf.FunctionRef, _ string) (*tencentscf.TimerTriggerInfo, error) {
+	if f.timerErr != nil {
+		return nil, f.timerErr
+	}
+	if f.timerInfoSet {
+		return f.timerInfo, nil
+	}
+	return &tencentscf.TimerTriggerInfo{Name: timerTriggerName, Type: "timer", Cron: "0 * * * * * *", Enabled: true, AvailableStatus: "Available", Qualifier: timerTriggerQualifier, Message: timerTriggerMessage}, nil
 }
 func (f *fakeSCFClient) DeleteTimerTrigger(context.Context, tencentscf.TimerTriggerRequest) error {
 	return nil

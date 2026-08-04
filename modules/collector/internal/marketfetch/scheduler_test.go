@@ -75,7 +75,7 @@ func TestRealtimeBatchSizeFansOutAcrossCurrentFleet(t *testing.T) {
 		nodes[index].Metadata = map[string]any{"realtime_batch_size": float64(64)}
 	}
 	scheduler := &Scheduler{BatchSize: MaxRealtimeItems}
-	assert.Equal(t, 48, scheduler.realtimeBatchSize(479, nodes))
+	assert.Equal(t, 30, scheduler.realtimeBatchSize(479, nodes))
 
 	nodes[0].Metadata["realtime_batch_size"] = float64(10)
 	assert.Equal(t, 10, scheduler.realtimeBatchSize(479, nodes))

@@ -666,6 +666,36 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				summary.JobIDs = append([]string(nil), jobs...)
 				summary.JobID = strings.Join(summary.JobIDs, ",")
 			}
+			// The normal config-driven deployment always needs one bounded
+			// Invoke node as well: Symbol snapshots, gap catch-up, probes and
+			// manual E2E are intentionally not sent to a static Timer function.
+			// Keep this auxiliary fleet to one function per region so the
+			// realtime count in custom.toml remains the Timer capacity the user
+			// explicitly configured.
+			if strings.EqualFold(strings.TrimSpace(regionOpts.TriggerType), "timer") {
+				invokeOpts := regionOpts
+				invokeOpts.TriggerType = "invoke"
+				invokeOpts.NodeCount = 1
+				invokeOpts.FunctionNamePrefix = strings.TrimSuffix(regionOpts.FunctionNamePrefix, "-") + "-invoke"
+				invokeNodes, inspectInvokeErr := inspectCollectorFleet(ctx, client, invokeOpts)
+				if inspectInvokeErr != nil {
+					return summary, inspectInvokeErr
+				}
+				invokeItems, buildInvokeErr := buildCollectorFleetCreateItems(invokeOpts, packageID)
+				if buildInvokeErr != nil {
+					return summary, buildInvokeErr
+				}
+				invokeSummary, submitInvokeErr := submitCollectorFleet(ctx, client, invokeOpts, packageID, invokeItems, invokeNodes)
+				if submitInvokeErr != nil {
+					return summary, submitInvokeErr
+				}
+				summary.TotalCount += invokeSummary.TotalCount
+				if invokeSummary.JobID != "" {
+					jobs = append(jobs, invokeSummary.JobID)
+					summary.JobIDs = append([]string(nil), jobs...)
+					summary.JobID = strings.Join(summary.JobIDs, ",")
+				}
+			}
 		}
 		return summary, nil
 	}
@@ -850,11 +880,12 @@ func inspectCollectorFleet(
 	if err != nil {
 		return nil, err
 	}
-	fleetNodes, err := selectCollectorFleetNodes(
+	fleetNodes, err := selectCollectorFleetNodesForTrigger(
 		catalogNodes,
 		opts.FunctionNamePrefix,
 		defaultFlag(opts.BizType, "market_fetcher"),
 		opts.NodeCount,
+		defaultFlag(opts.TriggerType, "timer"),
 	)
 	if err != nil {
 		return nil, err
@@ -1287,7 +1318,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	if collectorConfigInt(config, "timeout", 15) != 15 {
 		return adminclient.NodeCreateItem{}, fmt.Errorf("market_fetcher timeout is fixed at 15 seconds")
 	}
-	if err := validateCollectorRuntimeConfig(config, fetcher); err != nil {
+	if err := validateCollectorRuntimeConfig(config, fetcher, strings.EqualFold(defaultFlag(opts.TriggerType, "timer"), "timer")); err != nil {
 		return adminclient.NodeCreateItem{}, err
 	}
 	for configKey, environmentKey := range map[string]string{
@@ -1312,7 +1343,7 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 	return adminclient.NodeCreateItem{
 		CloudAccountID: opts.CloudAccountID,
 		NodeType:       defaultFlag(opts.NodeType, "scf-event"),
-		TriggerType:    defaultFlag(opts.TriggerType, "invoke"),
+		TriggerType:    defaultFlag(opts.TriggerType, "timer"),
 		Runtime:        defaultFlag(opts.Runtime, "Go1"),
 		Namespace:      defaultFlag(opts.Namespace, "default"),
 		Handler:        defaultFlag(opts.Handler, "main"),
@@ -1325,10 +1356,10 @@ func buildCollectorCreateNodeItem(opts collectorPublishOptions, packageID string
 			"biz_type":              bizType,
 			"memory_size":           effectiveInt("memory_size", defaultInt(fetcher.MemorySize, 64)),
 			"timeout_seconds":       effectiveInt("timeout", defaultInt(fetcher.TimeoutSeconds, 15)),
-			"max_inflight_requests": effectiveInt("max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 5)),
-			"realtime_batch_size":   effectiveInt("realtime_batch_size", defaultInt(fetcher.RealtimeBatchSize, 10)),
+			"max_inflight_requests": effectiveInt("max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 10)),
+			"realtime_batch_size":   effectiveInt("realtime_batch_size", defaultInt(fetcher.RealtimeBatchSize, 30)),
 			"realtime_bar_limit":    effectiveInt("realtime_bar_limit", defaultInt(fetcher.RealtimeBarLimit, 3)),
-			"request_timeout_ms":    effectiveInt("request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 2000)),
+			"request_timeout_ms":    effectiveInt("request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 1000)),
 			"http_max_attempts":     effectiveInt("http_max_attempts", defaultInt(fetcher.HTTPMaxAttempts, 4)),
 			"storage_max_attempts":  effectiveInt("storage_max_attempts", defaultInt(fetcher.StorageMaxAttempts, 3)),
 			"storage_timeout_ms":    effectiveInt("storage_timeout_ms", defaultInt(fetcher.StorageTimeoutMS, 5000)),
@@ -1433,6 +1464,10 @@ func cloneCollectorStringMap(source map[string]string) map[string]string {
 }
 
 func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, bizType string, expected int) ([]adminclient.CloudNode, error) {
+	return selectCollectorFleetNodesForTrigger(nodes, prefix, bizType, expected, "")
+}
+
+func selectCollectorFleetNodesForTrigger(nodes []adminclient.CloudNode, prefix string, bizType string, expected int, triggerType string) ([]adminclient.CloudNode, error) {
 	indexed := make([]adminclient.CloudNode, expected)
 	found := make([]bool, expected)
 	count := 0
@@ -1451,6 +1486,15 @@ func selectCollectorFleetNodes(nodes []adminclient.CloudNode, prefix string, biz
 				node.NodeID,
 				node.BizType,
 				bizType,
+			)
+		}
+		if expectedTrigger := strings.TrimSpace(triggerType); expectedTrigger != "" && !strings.EqualFold(strings.TrimSpace(node.TriggerType), expectedTrigger) {
+			return nil, fmt.Errorf(
+				"fleet prefix %q node %q has trigger_type %q; expected %q",
+				prefix,
+				node.NodeID,
+				node.TriggerType,
+				expectedTrigger,
 			)
 		}
 		count++
@@ -1526,11 +1570,11 @@ func collectorFunctionEnvironment(opts collectorPublishOptions, packageIDs ...st
 		fetcher = defaultCollectorSCFFetcherSpace()
 	}
 	setDefaultEnv(env, "MOOX_FETCH_TIMEOUT_SECONDS", strconv.Itoa(defaultInt(fetcher.TimeoutSeconds, 15)))
-	setDefaultEnv(env, "MOOX_FETCH_MAX_INFLIGHT_REQUESTS", strconv.Itoa(defaultInt(fetcher.MaxInflightRequests, 5)))
-	setDefaultEnv(env, "MOOX_FETCH_REQUEST_TIMEOUT_MS", strconv.Itoa(defaultInt(fetcher.RequestTimeoutMS, 2000)))
+	setDefaultEnv(env, "MOOX_FETCH_MAX_INFLIGHT_REQUESTS", strconv.Itoa(defaultInt(fetcher.MaxInflightRequests, 10)))
+	setDefaultEnv(env, "MOOX_FETCH_REQUEST_TIMEOUT_MS", strconv.Itoa(defaultInt(fetcher.RequestTimeoutMS, 1000)))
 	setDefaultEnv(env, "MOOX_FETCH_HTTP_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.HTTPMaxAttempts, 4)))
 	setDefaultEnv(env, "MOOX_FETCH_STORAGE_MAX_ATTEMPTS", strconv.Itoa(defaultInt(fetcher.StorageMaxAttempts, 3)))
-	setDefaultEnv(env, "MOOX_FETCH_REALTIME_BATCH_SIZE", strconv.Itoa(defaultInt(fetcher.RealtimeBatchSize, 10)))
+	setDefaultEnv(env, "MOOX_FETCH_REALTIME_BATCH_SIZE", strconv.Itoa(defaultInt(fetcher.RealtimeBatchSize, 30)))
 	setDefaultEnv(env, "MOOX_FETCH_REALTIME_BAR_LIMIT", strconv.Itoa(defaultInt(fetcher.RealtimeBarLimit, 3)))
 	setDefaultEnv(env, "MOOX_FETCH_CATCHUP_BATCH_SIZE", strconv.Itoa(defaultInt(fetcher.CatchupBatchSize, 1)))
 	setDefaultEnv(env, "MOOX_FETCH_CATCHUP_BAR_LIMIT", strconv.Itoa(defaultInt(fetcher.CatchupBarLimit, 1000)))
@@ -1756,12 +1800,12 @@ func defaultCollectorSCFFetcherSpace() *setupconfig.SCFFetcherSpace {
 	return &setupconfig.SCFFetcherSpace{
 		MemorySize:          64,
 		TimeoutSeconds:      15,
-		RealtimeBatchSize:   64,
+		RealtimeBatchSize:   30,
 		RealtimeBarLimit:    3,
 		CatchupBatchSize:    1,
 		CatchupBarLimit:     1000,
-		MaxInflightRequests: 32,
-		RequestTimeoutMS:    1500,
+		MaxInflightRequests: 10,
+		RequestTimeoutMS:    1000,
 		HTTPMaxAttempts:     4,
 		StorageMaxAttempts:  3,
 		StorageTimeoutMS:    5000,
@@ -1780,25 +1824,25 @@ func collectorConfigInt(values map[string]string, key string, fallback int) int 
 // validateCollectorRuntimeConfig keeps command-line function-config overrides
 // inside the same short-lived execution budget as custom.toml. This is needed
 // because those overrides are copied into SCF environment variables directly.
-func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconfig.SCFFetcherSpace) error {
+func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconfig.SCFFetcherSpace, timer bool) error {
 	if fetcher == nil {
 		return fmt.Errorf("scf fetcher configuration is required")
 	}
-	batchSize, err := collectorRuntimeConfigInt(values, "realtime_batch_size", defaultInt(fetcher.RealtimeBatchSize, 64), 1)
+	batchSize, err := collectorRuntimeConfigInt(values, "realtime_batch_size", defaultInt(fetcher.RealtimeBatchSize, 30), 1)
 	if err != nil {
 		return err
 	}
-	if batchSize < 1 || batchSize > 64 {
-		return fmt.Errorf("market_fetcher realtime_batch_size must be between 1 and 64")
+	if batchSize < 1 || batchSize > 30 {
+		return fmt.Errorf("market_fetcher realtime_batch_size must be between 1 and 30")
 	}
-	inflight, err := collectorRuntimeConfigInt(values, "max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 32), 1)
+	inflight, err := collectorRuntimeConfigInt(values, "max_inflight_requests", defaultInt(fetcher.MaxInflightRequests, 10), 1)
 	if err != nil {
 		return err
 	}
 	if inflight < 1 || inflight > 64 {
 		return fmt.Errorf("market_fetcher max_inflight_requests must be between 1 and 64")
 	}
-	requestTimeoutMS, err := collectorRuntimeConfigInt(values, "request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 1500), 1)
+	requestTimeoutMS, err := collectorRuntimeConfigInt(values, "request_timeout_ms", defaultInt(fetcher.RequestTimeoutMS, 1000), 1)
 	if err != nil {
 		return err
 	}
@@ -1810,8 +1854,12 @@ func validateCollectorRuntimeConfig(values map[string]string, fetcher *setupconf
 	if storageTimeoutMS != 5000 {
 		return fmt.Errorf("market_fetcher storage_timeout_ms is fixed at 5000")
 	}
-	if requestWaves*requestTimeoutMS+storageTimeoutMS+setupconfig.SCFCompletionReserveMilliseconds+setupconfig.SCFCLSReserveMilliseconds+setupconfig.SCFFinalResponseReserveMilliseconds >= 15_000 {
-		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + publish and CLS reserves must be less than the 15-second timeout")
+	reserve := setupconfig.SCFCLSReserveMilliseconds + setupconfig.SCFFinalResponseReserveMilliseconds
+	if !timer {
+		reserve += setupconfig.SCFCompletionReserveMilliseconds
+	}
+	if requestWaves*requestTimeoutMS+storageTimeoutMS+reserve >= 15_000 {
+		return fmt.Errorf("market_fetcher realtime request waves + storage_timeout_ms + configured reserves must be less than the 15-second timeout")
 	}
 	return nil
 }

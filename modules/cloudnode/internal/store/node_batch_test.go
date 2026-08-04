@@ -32,6 +32,20 @@ func TestCreateNodeBatchIsAtomic(t *testing.T) {
 	assert.Zero(t, itemCount)
 }
 
+func TestCreateNodeBatchRejectsStableNodeWhilePreviousCreateIsPending(t *testing.T) {
+	repo := newTestCatalog(t)
+	ctx := context.Background()
+	require.NoError(t, repo.CreateNodeBatch(ctx, NodeBatchCreate{
+		SpaceID: "crypto", JobID: "job-first", Operation: "create_nodes",
+		Items: []NodeBatchItemCreate{{ItemID: "item-first", ItemIndex: 0, NodeID: "stable-node", RequestJSON: `{}`}},
+	}))
+	err := repo.CreateNodeBatch(ctx, NodeBatchCreate{
+		SpaceID: "crypto", JobID: "job-second", Operation: "create_nodes",
+		Items: []NodeBatchItemCreate{{ItemID: "item-second", ItemIndex: 0, NodeID: "stable-node", RequestJSON: `{}`}},
+	})
+	require.ErrorContains(t, err, "already has a pending create batch")
+}
+
 func TestTakePendingNodeBatchItemsMarksWholeBatchRunning(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()

@@ -136,6 +136,13 @@
                 </template>
               </a-table-column>
               <a-table-column title="命名空间" data-index="namespace" :width="120"></a-table-column>
+              <a-table-column title="节点类型" data-index="node_type" :width="135">
+                <template #cell="{ record }">
+                  <a-tag size="small" :color="getNodeTypeColor(record.node_type)">
+                    {{ getNodeTypeLabel(record.node_type) }}
+                  </a-tag>
+                </template>
+              </a-table-column>
               <a-table-column title="触发方式" data-index="trigger_type" :width="100">
                 <template #cell="{ record }">{{ getTriggerTypeLabel(record.trigger_type) }}</template>
               </a-table-column>
@@ -506,6 +513,31 @@
           <a-descriptions-item label="触发方式">
             {{ getTriggerTypeLabel(selectedNodeDetail.trigger_type) }}
           </a-descriptions-item>
+          <template v-if="selectedNodeDetail.trigger_type === 'timer'">
+            <a-descriptions-item label="Timer 状态">
+              <a-tag size="small" :color="timerAvailableColor(selectedTimerMetadata.timer_available_status)">
+                {{ timerAvailableLabel(selectedTimerMetadata.timer_available_status) }}
+              </a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="Timer Cron">
+              {{ timerMetadataText("timer_cron") }}
+            </a-descriptions-item>
+            <a-descriptions-item label="Timer 开关">
+              {{ timerEnabledLabel() }}
+            </a-descriptions-item>
+            <a-descriptions-item label="分配标的数">
+              {{ timerMetadataText("assignment_count") }}
+            </a-descriptions-item>
+            <a-descriptions-item label="任务指纹">
+              {{ timerMetadataText("assignment_hash") }}
+            </a-descriptions-item>
+            <a-descriptions-item label="DNS 指纹">
+              {{ timerMetadataText("dns_hash") }}
+            </a-descriptions-item>
+            <a-descriptions-item label="最近协调时间" :span="2">
+              {{ timerDateTimeText() }}
+            </a-descriptions-item>
+          </template>
           <a-descriptions-item label="地区">
             {{ getRegionName(selectedNodeDetail.region) }}
           </a-descriptions-item>
@@ -722,6 +754,7 @@ import {
   getPackageTypeLabel,
   getProviderName,
   normalizeCloudNodes,
+  parseMetadata,
   type BatchPlanItem,
   type CloudNode,
   type RegionInfo
@@ -852,7 +885,9 @@ const currentPackageType = computed(() => 1);
 
 // 根据路由路径判断默认的节点类型
 const defaultNodeType = computed(() => {
-  return ""; // 搜索框节点类型不设默认值
+  // Collector cloud-node operations create event SCFs by default. The list
+  // filter remains unselected so it can still show every node type.
+  return "scf-event";
 });
 
 // 采集 SCF runtime 默认使用 Go1。
@@ -864,7 +899,7 @@ const currentBizType = computed(() => "market_fetcher");
 // 生命周期钩子
 onMounted(async () => {
   // 根据路由设置默认的节点类型筛选条件
-  form.nodeType = defaultNodeType.value;
+  form.nodeType = "";
 
   await spaceStore.loadSpaces();
   if (selectedSpaceId.value) {
@@ -898,6 +933,13 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   }
   await loadData();
 });
+
+watch(
+  () => batchAddForm.nodeType,
+  nodeType => {
+    batchAddForm.triggerType = nodeType === "scf-event" ? batchAddForm.triggerType || "timer" : "";
+  }
+);
 
 onBeforeUnmount(() => {
   batchPoller.dispose();
@@ -1009,6 +1051,7 @@ const onBatchAdd = async () => {
   // 重置表单
   batchAddForm.cloudAccountId = cloudAccountOptions.value[0]?.account_id || "";
   batchAddForm.nodeType = defaultNodeType.value; // 根据路由设置默认节点类型
+  batchAddForm.triggerType = batchAddForm.nodeType === "scf-event" ? "timer" : "";
   batchAddForm.runtime = defaultRuntime.value; // 根据路由设置默认运行时
   batchAddForm.region = "ap-hongkong";
   batchAddForm.tag = getRegionTag(batchAddForm.region) || "海外";
@@ -1039,6 +1082,10 @@ const handleBatchAddOk = async () => {
   }
   if (!batchAddForm.nodeType) {
     Message.warning("请选择节点类型");
+    return;
+  }
+  if (batchAddForm.nodeType === "scf-event" && !["timer", "invoke"].includes(batchAddForm.triggerType)) {
+    Message.warning("请选择云函数触发方式");
     return;
   }
   if (!batchAddForm.runtime) {
@@ -1557,6 +1604,28 @@ const onFunctionPackageManage = () => {
 // 节点详情
 const nodeDetailVisible = ref(false);
 const selectedNodeDetail = ref<CloudNode | null>(null);
+const selectedTimerMetadata = computed(() => parseMetadata(selectedNodeDetail.value?.metadata));
+const timerMetadataText = (key: string) => {
+  const value = selectedTimerMetadata.value[key];
+  if (value === undefined || value === null || value === "") return "-";
+  return String(value);
+};
+const timerEnabledLabel = () => {
+  const value = timerMetadataText("timer_enabled");
+  if (value === "-") return "未知";
+  return value === "true" ? "已开启" : "已关闭";
+};
+const timerDateTimeText = () => {
+  const value = timerMetadataText("runtime_config_reconciled_at");
+  return value === "-" ? "-" : formatDateTime(value);
+};
+const timerAvailableLabel = (value: unknown) => {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "available") return "可用";
+  if (normalized === "") return "未知";
+  return String(value);
+};
+const timerAvailableColor = (value: unknown) => (String(value || "").toLowerCase() === "available" ? "green" : "orange");
 
 // 代码包详情
 const packageDetailVisible = ref(false);

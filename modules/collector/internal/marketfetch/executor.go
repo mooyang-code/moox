@@ -31,11 +31,9 @@ const (
 	DefaultConcurrency = 5
 	MaxConcurrency     = 64
 	// MaxRealtimeItems bounds the work accepted by one short-lived SCF. The
-	// scheduler partitions a minute's symbols across the available functions;
-	// with ten functions this permits 479 symbols to fan out as ten requests of
-	// at most 48 symbols each. The function still caps its own HTTP concurrency
-	// and performs one aggregate Storage write.
-	MaxRealtimeItems = 64
+	// Collector assigns at most 30 symbols to one Timer function so the
+	// fifteen-second budget remains usable with a bounded HTTP fan-out.
+	MaxRealtimeItems = 30
 	MaxRealtimeRows  = 3
 )
 

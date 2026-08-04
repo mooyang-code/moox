@@ -6,8 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/clsreporter"
+	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tencentyun/scf-go-lib/functioncontext"
@@ -84,4 +88,65 @@ func TestStaticFieldsReporterPreservesInvocationIdentity(t *testing.T) {
 	require.Len(t, recorder.entries, 1)
 	assert.Equal(t, "crypto-fetcher", recorder.entries[0].Fields["function_name"])
 	assert.Equal(t, "ap-singapore", recorder.entries[0].Fields["region"])
+}
+
+func TestHandlerRequiresTimerIdentityForEnvironmentBackedMarketFetch(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", spaceID)
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "BTC-USDT")
+	reporter := &recordingReporter{}
+	handler := &Handler{NewReporter: func() (clsreporter.Reporter, time.Duration, error) {
+		return reporter, 0, nil
+	}}
+	raw, err := json.Marshal(model.CloudFunctionEvent{Type: "Timer", TriggerName: "wrong", Message: "market_fetch_timer_v1"})
+	require.NoError(t, err)
+	response, err := handler.HandleRequest(context.Background(), raw)
+	require.NoError(t, err)
+	assert.False(t, response.(*model.Response).Success)
+	assert.Contains(t, response.(*model.Response).Message, "invalid_timer_event")
+}
+
+func TestValidateTimerEventAcceptsCloudTriggerContract(t *testing.T) {
+	assert.NoError(t, validateTimerEvent(model.CloudFunctionEvent{
+		Type: "Timer", TriggerName: timerTriggerName, Message: timerTriggerMessage, Time: "2026-08-04T01:02:00Z",
+	}))
+}
+
+type timerStorageStub struct{}
+
+func (timerStorageStub) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error { return nil }
+func (timerStorageStub) RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error {
+	return nil
+}
+
+func TestTimerMarketFetchHandlerE2E(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", spaceID)
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "spot")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")
+	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "BTC-USDT")
+	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", `{"BTC-USDT":"BTCUSDT"}`)
+	t.Setenv("MOOX_MARKET_FETCH_ASSIGNMENT_HASH", "assignment")
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://127.0.0.1:11003")
+	var captured marketfetch.Request
+	handler := &Handler{
+		NewReporter: func() (clsreporter.Reporter, time.Duration, error) { return clsreporter.Noop(), 0, nil },
+		NewMarketFetch: func() *marketfetch.Handler {
+			return &marketfetch.Handler{
+				NewStorage: func(string, string) (marketfetch.Storage, error) { return timerStorageStub{}, nil },
+				Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+					captured = request
+					return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil
+				},
+			}
+		},
+	}
+	raw, err := json.Marshal(model.CloudFunctionEvent{Type: "Timer", TriggerName: timerTriggerName, Message: timerTriggerMessage, Time: "2026-08-04T01:02:00Z"})
+	require.NoError(t, err)
+	response, err := handler.HandleRequest(context.Background(), raw)
+	require.NoError(t, err)
+	require.True(t, response.(*model.Response).Success)
+	require.Equal(t, domain.BatchKindRealtime, captured.BatchKind)
+	require.Len(t, captured.Items, 1)
+	require.Equal(t, "BTCUSDT", captured.Items[0].Symbol)
 }

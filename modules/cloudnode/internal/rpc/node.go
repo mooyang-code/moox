@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
@@ -33,6 +34,30 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 	if err != nil {
 		return &pb.GetNodeListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	var refreshWG sync.WaitGroup
+	refreshSlots := make(chan struct{}, 16)
+	for index := range nodes {
+		if nodes[index].TriggerType != "timer" {
+			continue
+		}
+		refreshWG.Add(1)
+		go func(index int) {
+			defer refreshWG.Done()
+			select {
+			case refreshSlots <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-refreshSlots }()
+			// Refresh the provider readback on every timer-fleet listing. This is
+			// a read-only health check, not an Ensure call, so manual Tencent-side
+			// trigger drift is visible even when the assignment hash is unchanged.
+			// The bounded slots avoid making a 50-node fleet serial or creating an
+			// unbounded Tencent API burst.
+			_ = s.refreshTimerTriggerMetadata(ctx, spaceID, &nodes[index])
+		}(index)
+	}
+	refreshWG.Wait()
 	out := make([]*pb.CloudNode, 0, len(nodes))
 	for _, node := range nodes {
 		out = append(out, toPBNode(node))
@@ -45,6 +70,98 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 	}, nil
 }
 
+func (s *Service) refreshTimerTriggerMetadata(ctx context.Context, spaceID string, node *store.CloudNode) error {
+	if s == nil || node == nil || node.TriggerType != "timer" {
+		return nil
+	}
+	metadata := parseJSONMap(node.Metadata)
+	patch := map[string]any{"timer_available_status": "Unknown", "timer_actual_type": nil, "timer_actual_enabled": nil, "timer_actual_cron": nil, "timer_actual_qualifier": nil, "timer_actual_message": nil}
+	if strings.TrimSpace(node.PackageID) == "" || (strings.TrimSpace(node.DeploymentID) == "" && !metadataBool(metadata, "deployment_ready")) {
+		patch["timer_available_status"] = "Unknown"
+		err := s.catalog.UpdateNodeRuntimeMetadata(ctx, spaceID, node.NodeID, patch)
+		for key, value := range patch {
+			if value == nil {
+				delete(metadata, key)
+				continue
+			}
+			metadata[key] = value
+		}
+		node.Metadata = jsonString(metadata)
+		return err
+	}
+	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
+	if err != nil || account == nil {
+		if err == nil {
+			err = fmt.Errorf("cloud account unavailable")
+		}
+		patch["timer_status_error"] = err.Error()
+	} else {
+		client, clientErr := s.scfClient(ctx, *account)
+		if clientErr != nil {
+			err = clientErr
+			patch["timer_status_error"] = clientErr.Error()
+		} else {
+			ref := tencentscf.FunctionRef{Region: node.Region, FunctionName: firstString(node.FunctionName, node.NodeID), Namespace: firstString(node.Namespace, "default")}
+			var function *tencentscf.FunctionInfo
+			var functionErr error
+			var info *tencentscf.TimerTriggerInfo
+			var lookupErr error
+			var readbackWG sync.WaitGroup
+			readbackWG.Add(2)
+			go func() {
+				defer readbackWG.Done()
+				function, functionErr = client.GetFunction(ctx, ref)
+			}()
+			go func() {
+				defer readbackWG.Done()
+				info, lookupErr = client.GetTimerTrigger(ctx, ref, timerTriggerName)
+			}()
+			readbackWG.Wait()
+			if functionErr != nil || function == nil {
+				if functionErr == nil {
+					functionErr = fmt.Errorf("empty SCF function readback")
+				}
+				err = functionErr
+				patch["timer_status_error"] = functionErr.Error()
+			} else {
+				patch["managed_environment_budget_bytes"] = scfManagedEnvironmentBudget(function.Environment)
+				if lookupErr != nil {
+					err = lookupErr
+					patch["timer_status_error"] = lookupErr.Error()
+				} else if info == nil {
+					patch["timer_available_status"] = "Missing"
+					patch["timer_status_error"] = "timer trigger is missing"
+				} else {
+					patch["timer_available_status"] = firstString(info.AvailableStatus, "Unknown")
+					patch["timer_actual_type"] = info.Type
+					patch["timer_actual_enabled"] = info.Enabled
+					patch["timer_actual_cron"] = info.Cron
+					patch["timer_actual_qualifier"] = info.Qualifier
+					patch["timer_actual_message"] = info.Message
+					patch["timer_status_error"] = nil
+				}
+			}
+		}
+	}
+	if err != nil && patch["timer_available_status"] == "Unknown" {
+		// Keep Unknown rather than preserving an old Available value.
+		patch["timer_available_status"] = "Unknown"
+	}
+	updateErr := s.catalog.UpdateNodeRuntimeMetadata(ctx, spaceID, node.NodeID, patch)
+	for key, value := range patch {
+		if value == nil {
+			delete(metadata, key)
+			continue
+		}
+		metadata[key] = value
+	}
+	node.Metadata = jsonString(metadata)
+	if updateErr != nil {
+		return updateErr
+	}
+	return err
+}
+
 func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.UpdateNodeRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
@@ -54,16 +171,23 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	if pbNode == nil || pbNode.GetNodeId() == "" {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node.node_id is required")}, nil
 	}
-	if pbNode.GetNodeType() != "" {
-		if err := validateTriggerType(pbNode.GetNodeType(), pbNode.GetTriggerType()); err != nil {
-			return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-		}
-	}
-	node := fromPBNode(spaceID, pbNode)
 	existing, err := s.catalog.GetNode(ctx, spaceID, pbNode.GetNodeId())
 	if err != nil {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	requestedNodeType := pbNode.GetNodeType()
+	if requestedNodeType == "" && existing != nil {
+		requestedNodeType = existing.NodeType
+	}
+	if strings.TrimSpace(pbNode.GetTriggerType()) != "" {
+		if err := validateTriggerType(requestedNodeType, pbNode.GetTriggerType()); err != nil {
+			return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+		if existing != nil && normalizeTriggerType(requestedNodeType, pbNode.GetTriggerType()) != existing.TriggerType {
+			return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "trigger_type cannot be changed after node creation; recreate the node")}, nil
+		}
+	}
+	node := fromPBNode(spaceID, pbNode)
 	if existing != nil {
 		node = mergeNodeUpdate(*existing, pbNode)
 	}
@@ -255,6 +379,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 			return err
 		}
 		if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
+			return err
+		}
+		if err := ensureInitialTimerTrigger(ctx, client, node, ref); err != nil {
 			return err
 		}
 		// A previous attempt may have created the function before CloudNode was
@@ -502,7 +629,10 @@ func (s *Service) updateSCFFunctionCode(
 	if err := verifySCFFunctionConfiguration(verified, desiredConfig, desiredEnvironment, ref.FunctionName); err != nil {
 		return err
 	}
-	return ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(&node))
+	if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(&node)); err != nil {
+		return err
+	}
+	return ensureInitialTimerTrigger(ctx, client, &node, ref)
 }
 
 func verifySCFFunctionConfiguration(info *tencentscf.FunctionInfo, desiredConfig, desiredEnvironment map[string]string, functionName string) error {

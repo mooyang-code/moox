@@ -146,6 +146,31 @@ func (c *Client) SubmitRuntimeConfigs(ctx context.Context, spaceID string, patch
 	return rsp.GetJobId(), nil
 }
 
+// GetRuntimeConfigBatchStatus is used by Collector to distinguish an
+// accepted asynchronous job from a configuration that actually reached every
+// Tencent function. Runtime reconciliation must not report success before
+// CloudNode's durable worker finishes.
+func (c *Client) GetRuntimeConfigBatchStatus(ctx context.Context, spaceID, jobID string) (*cloudnodepb.NodeBatchSummary, error) {
+	if strings.TrimSpace(jobID) == "" {
+		return nil, fmt.Errorf("job_id is required")
+	}
+	raw, err := protojson.Marshal(&cloudnodepb.GetNodeBatchChangeReq{JobId: jobID})
+	if err != nil {
+		return nil, err
+	}
+	var rsp cloudnodepb.GetNodeBatchChangeRsp
+	if err := c.post(ctx, spaceID, "GetNodeBatchChange", raw, &rsp); err != nil {
+		return nil, err
+	}
+	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
+		return nil, fmt.Errorf("get runtime config batch: %s", rsp.GetRetInfo().GetMsg())
+	}
+	if rsp.GetJob() == nil {
+		return nil, fmt.Errorf("get runtime config batch: empty job")
+	}
+	return rsp.GetJob(), nil
+}
+
 func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudnodepb.ScfInvokeType) (InvocationResult, error) {
 	if strings.TrimSpace(nodeID) == "" {
 		return InvocationResult{}, fmt.Errorf("node_id is required")
