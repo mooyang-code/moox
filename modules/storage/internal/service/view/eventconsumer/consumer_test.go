@@ -51,7 +51,7 @@ func TestRebindRetriesUntilSubscriptionIsAvailable(t *testing.T) {
 	consumer := &Consumer{}
 	var attempts int
 	want := &fakePullConsumer{}
-	consumer.bind = func(context.Context) (pullConsumer, error) {
+	consumer.bind = func(context.Context) (deliveryConsumer, error) {
 		attempts++
 		if attempts < 2 {
 			return nil, errors.New("nats reconnecting")

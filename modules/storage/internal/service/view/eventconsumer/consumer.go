@@ -94,10 +94,10 @@ type Consumer struct {
 	// bind is injectable for tests and lets the delivery loop recreate a pull
 	// subscription after a transient NATS disconnect. A durable JetStream
 	// consumer remains intact; only the local subscription is rebound.
-	bind func(context.Context) (pullConsumer, error)
+	bind func(context.Context) (deliveryConsumer, error)
 }
 
-type pullConsumer interface {
+type deliveryConsumer interface {
 	Fetch(context.Context, int) ([]*jetstream.Delivery, error)
 	Close() error
 }
@@ -118,11 +118,11 @@ func New(client *jetstream.Client, handler DatasetRowsHandler, config Config) (*
 		return nil, err
 	}
 	consumer := &Consumer{client: client, handler: handler, config: config, registry: registry}
-	consumer.bind = consumer.bindPullConsumer
+	consumer.bind = consumer.bindDelivery
 	return consumer, nil
 }
 
-func (c *Consumer) bindPullConsumer(ctx context.Context) (pullConsumer, error) {
+func (c *Consumer) bindDelivery(ctx context.Context) (deliveryConsumer, error) {
 	if c == nil || c.client == nil || c.registry == nil {
 		return nil, errors.New("storage view event consumer is not initialized")
 	}
@@ -148,7 +148,7 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 	}
 	opts := c.config
 	if c.bind == nil {
-		c.bind = c.bindPullConsumer
+		c.bind = c.bindDelivery
 	}
 	bound, err := c.bind(ctx)
 	if err != nil {
@@ -249,7 +249,7 @@ func shouldRebind(err error) bool {
 		errors.Is(err, nats.ErrBadSubscription)
 }
 
-func (c *Consumer) rebind(ctx context.Context, opts Config) pullConsumer {
+func (c *Consumer) rebind(ctx context.Context, opts Config) deliveryConsumer {
 	for ctx.Err() == nil {
 		// nats.go can return a subscription object while the underlying
 		// connection is still reconnecting. Do not bind that unusable
