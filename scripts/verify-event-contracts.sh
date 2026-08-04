@@ -18,8 +18,16 @@ reject() {
   fi
 }
 
-reject 'streamcalc|TickReceived|MarketKlineClosed|MOOX_MARKET' \
+# Timer-triggered market fetch configuration deliberately uses the
+# MOOX_MARKET_FETCH_* environment-variable prefix.  Do not treat that prefix
+# as an EventBus stream name: the timer path writes Storage directly and does
+# itself neither starts nor depends on the completion consumer. Keep the
+# unrelated legacy market event symbols guarded here.
+reject 'streamcalc|TickReceived|MarketKlineClosed' \
   "legacy market event pipeline remains" "${production[@]}" modules packages
+# The bounded Invoke path for Symbol snapshots and catch-up still uses the
+# completion consumer. Timer-triggered realtime K-lines skip publication and
+# derive freshness from Storage, so this is not a realtime EventBus dependency.
 reject 'packages/dlqpb|PublishRejected|MOOX_DLQ|dlq\.message\.rejected' \
   "shared EventBus DLQ remains" "${production[@]}" modules packages
 reject 'TradeOrder|\bTradeExecution\b|TradeFill|TradeReconciliation|TradeRebalanceCompleted|TradeRebalanceRequested|RebalanceRequested|RebalanceTarget|trade\.rebalance\.requested|TradingSignal|t_trade_outbox|withTradeDLQ' \

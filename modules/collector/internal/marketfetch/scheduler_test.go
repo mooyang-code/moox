@@ -1,10 +1,12 @@
 package marketfetch
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/stretchr/testify/assert"
 )
@@ -25,6 +27,14 @@ func TestNormalizedBatchIdentityUsesNormalizedItemMarketType(t *testing.T) {
 
 	assert.Equal(t, "binance", provider)
 	assert.Equal(t, "spot", marketType)
+}
+
+func TestFilterInvokeRulesDropsRealtimeKlineRules(t *testing.T) {
+	rules := filterInvokeRules([]domain.TaskRule{
+		{RuleID: "symbols", DataType: "symbol"},
+		{RuleID: "kline", DataType: "kline"},
+	})
+	assert.Equal(t, []string{"symbols"}, ruleIDs(rules))
 }
 
 func TestTargetDataTimeUsesCalendarBoundariesForWeekAndMonth(t *testing.T) {
@@ -94,6 +104,34 @@ func TestExpandRuleUsesAllShardsForExchangeSymbolSnapshot(t *testing.T) {
 		assert.Equal(t, fullSymbolSnapshotShards, items[0].SnapshotShardCount)
 		assert.Equal(t, fullSymbolSnapshotShards-1, items[len(items)-1].SnapshotShardIndex)
 	}
+}
+
+func TestExpandRuleUsesExplicitExternalSymbolForKline(t *testing.T) {
+	scheduler := &Scheduler{
+		SpaceID: "crypto_market",
+		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "BTC-USDT", ExternalSymbol: "BTCUSDT", Status: "active"}}},
+	}
+	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
+		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"1m"}, frequencies)
+	if assert.Len(t, items, 1) {
+		assert.Equal(t, "BTCUSDT", items[0].Symbol)
+	}
+}
+
+type datasetSourceStub struct {
+	subjects []domain.DatasetSubject
+}
+
+func (s datasetSourceStub) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
+	return storagesource.DatasetInfo{DataSourceID: "symbols"}, nil
+}
+
+func (s datasetSourceStub) ListSubjects(context.Context, string, string, string) ([]domain.DatasetSubject, error) {
+	return append([]domain.DatasetSubject(nil), s.subjects...), nil
 }
 
 func ruleIDs(rules []domain.TaskRule) []string {

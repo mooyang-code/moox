@@ -29,6 +29,7 @@ export async function submitCloudNodeBatchChange(batchChanges: CloudNodeBatchCha
       return {
         cloud_account_id: params.cloud_account_id,
         node_type: params.node_type,
+        trigger_type: params.trigger_type,
         region: params.region,
         namespace: params.namespace || first.namespace || "default",
         runtime: params.runtime || first.runtime || "Go1",
@@ -53,6 +54,7 @@ export async function submitCloudNodeBatchChange(batchChanges: CloudNodeBatchCha
       region: first.region,
       namespace: first.namespace || "default",
       node_type: first.node_type,
+      trigger_type: first.trigger_type,
       function_name_prefix: first.function_name_prefix || first.function_name || "moox-cloudnode",
       runtime: first.runtime || "Go1",
       handler: first.handler || "main",

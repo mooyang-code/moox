@@ -31,6 +31,9 @@ func (r *CatalogRepository) ListNodes(ctx context.Context, spaceID string, req *
 	if req.GetNodeType() != "" {
 		q = q.Where("c_node_type = ?", req.GetNodeType())
 	}
+	if req.GetTriggerType() != "" {
+		q = q.Where("c_trigger_type = ?", req.GetTriggerType())
+	}
 	if req.GetBizType() != "" {
 		q = q.Where("json_extract(c_metadata, '$.biz_type') = ?", req.GetBizType())
 	}
@@ -76,7 +79,7 @@ func (r *CatalogRepository) UpsertNode(ctx context.Context, node CloudNode) erro
 		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_node_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"c_cloud_account_id", "c_package_id", "c_package_version", "c_deployment_id",
-			"c_node_type", "c_region", "c_namespace", "c_function_name", "c_provider",
+			"c_node_type", "c_trigger_type", "c_region", "c_namespace", "c_function_name", "c_provider",
 			"c_metadata", "c_is_deleted", "c_mtime",
 		}),
 	}).Create(&node).Error
@@ -147,6 +150,15 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 			metadataPatch[metadataKey] = value
 		}
 	}
+	// A timer function's assignment is runtime state owned by Collector, not
+	// by the code deployment command. Invalidate the catalog fingerprint after
+	// republishing so the next one-minute reconciliation observes the missing
+	// or stale remote assignment and writes it back.
+	if node.TriggerType == "timer" {
+		for _, key := range []string{"assignment_hash", "assignment_count", "dns_hash", "dns_updated_at", "timer_trigger_name", "timer_cron", "timer_enabled", "timer_available_status", "runtime_config_reconciled_at"} {
+			metadataPatch[key] = nil
+		}
+	}
 	metadataJSON, err := json.Marshal(metadataPatch)
 	if err != nil {
 		return err
@@ -159,4 +171,29 @@ func (r *CatalogRepository) UpdateNodeDeployment(ctx context.Context, spaceID st
 	// causes GORM's SQLite dialector to emit an UPDATE ... FROM self join,
 	// making c_node_id ambiguous.
 	return r.db.WithContext(ctx).Model(&CloudNode{}).Where("c_id = ?", node.ID).Updates(updates).Error
+}
+
+func (r *CatalogRepository) UpdateNodeRuntimeMetadata(ctx context.Context, spaceID, nodeID string, patch map[string]any) error {
+	if strings.TrimSpace(nodeID) == "" {
+		return gorm.ErrInvalidData
+	}
+	metadataJSON, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	q := r.db.WithContext(ctx).Model(&CloudNode{}).Where("c_node_id = ? AND c_is_deleted = ?", nodeID, false)
+	if strings.TrimSpace(spaceID) != "" {
+		q = q.Where("c_space_id = ?", spaceID)
+	}
+	result := q.Updates(map[string]any{
+		"c_metadata": gorm.Expr("json_patch(CASE WHEN json_valid(c_metadata) THEN c_metadata ELSE '{}' END, ?)", string(metadataJSON)),
+		"c_mtime":    time.Now().UTC(),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }

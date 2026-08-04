@@ -39,6 +39,8 @@ type Node struct {
 	PackageID    string
 	DeploymentID string
 	BizType      string
+	NodeType     string
+	TriggerType  string
 	Workloads    []string
 	Metadata     map[string]any
 }
@@ -59,12 +61,23 @@ func New(cfg Config) *Client {
 }
 
 func (c *Client) ListMarketFetchers(ctx context.Context, spaceID string) ([]Node, error) {
+	// Invoke is reserved for symbol snapshots, bounded catch-up and manual
+	// probes. Realtime K-line nodes are Timer-triggered and must not be selected
+	// by the legacy request scheduler.
+	return c.listMarketFetchers(ctx, spaceID, "invoke")
+}
+
+func (c *Client) ListTimerMarketFetchers(ctx context.Context, spaceID string) ([]Node, error) {
+	return c.listMarketFetchers(ctx, spaceID, "timer")
+}
+
+func (c *Client) listMarketFetchers(ctx context.Context, spaceID, triggerType string) ([]Node, error) {
 	if strings.TrimSpace(spaceID) == "" {
 		return nil, fmt.Errorf("space_id is required")
 	}
 	var all []Node
 	for page := uint32(1); ; page++ {
-		raw, err := protojson.Marshal(&cloudnodepb.GetNodeListReq{BizType: "market_fetcher", Page: &commonpb.Page{Page: page, Size: 100}})
+		raw, err := protojson.Marshal(&cloudnodepb.GetNodeListReq{BizType: "market_fetcher", TriggerType: triggerType, Page: &commonpb.Page{Page: page, Size: 100}})
 		if err != nil {
 			return nil, err
 		}
@@ -111,7 +124,26 @@ func nodeFromProto(item *cloudnodepb.CloudNode) Node {
 	if item.GetMetadata() != nil {
 		metadata = item.GetMetadata().AsMap()
 	}
-	return Node{NodeID: item.GetNodeId(), FunctionName: item.GetFunctionName(), Region: item.GetRegion(), Namespace: item.GetNamespace(), PackageID: item.GetPackageId(), DeploymentID: item.GetDeploymentId(), BizType: item.GetBizType(), Metadata: metadata}
+	return Node{NodeID: item.GetNodeId(), FunctionName: item.GetFunctionName(), Region: item.GetRegion(), Namespace: item.GetNamespace(), PackageID: item.GetPackageId(), DeploymentID: item.GetDeploymentId(), BizType: item.GetBizType(), NodeType: item.GetNodeType(), TriggerType: item.GetTriggerType(), Metadata: metadata}
+}
+
+// SubmitRuntimeConfigs persists one asynchronous CloudNode reconciliation job.
+func (c *Client) SubmitRuntimeConfigs(ctx context.Context, spaceID string, patches []*cloudnodepb.NodeRuntimeConfigPatch) (string, error) {
+	if len(patches) == 0 {
+		return "", fmt.Errorf("runtime config patches are required")
+	}
+	raw, err := protojson.Marshal(&cloudnodepb.BatchUpdateNodeRuntimeConfigsReq{Nodes: patches})
+	if err != nil {
+		return "", err
+	}
+	var rsp cloudnodepb.SubmitNodeBatchRsp
+	if err := c.post(ctx, spaceID, "SubmitUpdateNodeRuntimeConfigs", raw, &rsp); err != nil {
+		return "", err
+	}
+	if rsp.GetRetInfo().GetCode() != cloudnodepb.ErrorCode_SUCCESS {
+		return "", fmt.Errorf("submit runtime configs: %s", rsp.GetRetInfo().GetMsg())
+	}
+	return rsp.GetJobId(), nil
 }
 
 func (c *Client) Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudnodepb.ScfInvokeType) (InvocationResult, error) {

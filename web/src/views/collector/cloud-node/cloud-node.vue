@@ -136,6 +136,9 @@
                 </template>
               </a-table-column>
               <a-table-column title="命名空间" data-index="namespace" :width="120"></a-table-column>
+              <a-table-column title="触发方式" data-index="trigger_type" :width="100">
+                <template #cell="{ record }">{{ getTriggerTypeLabel(record.trigger_type) }}</template>
+              </a-table-column>
               <a-table-column title="地区" data-index="region" :width="150">
                 <template #cell="{ record }">
                   {{ getRegionName(record.region) }}
@@ -211,7 +214,14 @@
           <a-select v-model="batchAddForm.nodeType" placeholder="请选择节点类型" style="width: 100%">
             <a-option value="scf-event">云函数（事件型）</a-option>
             <a-option value="scf-web">云函数（Web型）</a-option>
-            <a-option value="server">服务器</a-option>
+          <a-option value="server">服务器</a-option>
+          </a-select>
+        </a-form-item>
+
+        <a-form-item v-if="batchAddForm.nodeType === 'scf-event'" field="triggerType" label="触发方式" required>
+          <a-select v-model="batchAddForm.triggerType" style="width: 100%">
+            <a-option value="timer">定时器</a-option>
+            <a-option value="invoke">手动调用</a-option>
           </a-select>
         </a-form-item>
 
@@ -493,6 +503,9 @@
               {{ getNodeTypeLabel(selectedNodeDetail.node_type) }}
             </a-tag>
           </a-descriptions-item>
+          <a-descriptions-item label="触发方式">
+            {{ getTriggerTypeLabel(selectedNodeDetail.trigger_type) }}
+          </a-descriptions-item>
           <a-descriptions-item label="地区">
             {{ getRegionName(selectedNodeDetail.region) }}
           </a-descriptions-item>
@@ -700,7 +713,8 @@ import {
 	formatMetadata,
 	formatTime,
 	getBatchChangeTypeText,
-	getNodeTypeColor,
+  getNodeTypeColor,
+  getTriggerTypeLabel,
   getNodeTypeLabel,
   getPackageStatusColor,
   getPackageStatusLabel,
@@ -744,6 +758,7 @@ const batchAddVisible = ref(false);
 const batchAddForm = reactive({
   cloudAccountId: "",
   nodeType: "scf-event", // 节点类型，默认为事件型云函数
+  triggerType: "timer",
   runtime: "Go1", // 运行时环境，默认Go1
   handler: "main",
   region: "ap-guangzhou",
@@ -1071,6 +1086,7 @@ const buildCreateNodeBatchChange = (region: string, index: number) => ({
     cloud_account_id: batchAddForm.cloudAccountId,
     namespace: batchAddForm.namespace || undefined,
     node_type: batchAddForm.nodeType, // 使用表单中选择的节点类型
+    trigger_type: batchAddForm.nodeType === "scf-event" ? batchAddForm.triggerType : undefined,
     runtime: batchAddForm.runtime, // 运行时环境
     handler: batchAddForm.handler || "main",
     biz_type: currentBizType.value, // 根据路由设置业务类型

@@ -35,6 +35,8 @@ type CloudNodeMgrService interface {
 
 	BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*BatchDeleteNodesRsp, error)
 
+	SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *BatchUpdateNodeRuntimeConfigsReq) (*SubmitNodeBatchRsp, error)
+
 	ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq) (*ListCloudAccountsRsp, error)
 
 	CreateCloudAccount(ctx context.Context, req *CreateCloudAccountReq) (*CreateCloudAccountRsp, error)
@@ -202,6 +204,24 @@ func CloudNodeMgrService_BatchDeleteNodes_Handler(svr interface{}, ctx context.C
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CloudNodeMgrService).BatchDeleteNodes(ctx, reqbody.(*BatchDeleteNodesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CloudNodeMgrService_SubmitUpdateNodeRuntimeConfigs_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BatchUpdateNodeRuntimeConfigsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeMgrService).SubmitUpdateNodeRuntimeConfigs(ctx, reqbody.(*BatchUpdateNodeRuntimeConfigsReq))
 	}
 
 	var rsp interface{}
@@ -538,6 +558,10 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CloudNodeMgrService_BatchDeleteNodes_Handler,
 		},
 		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs",
+			Func: CloudNodeMgrService_SubmitUpdateNodeRuntimeConfigs_Handler,
+		},
+		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ListCloudAccounts",
 			Func: CloudNodeMgrService_ListCloudAccounts_Handler,
 		},
@@ -639,6 +663,9 @@ func (s *UnimplementedCloudNodeMgr) GetNodeBatchChange(ctx context.Context, req 
 func (s *UnimplementedCloudNodeMgr) BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq) (*BatchDeleteNodesRsp, error) {
 	return nil, errors.New("rpc BatchDeleteNodes of service CloudNodeMgr is not implemented")
 }
+func (s *UnimplementedCloudNodeMgr) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *BatchUpdateNodeRuntimeConfigsReq) (*SubmitNodeBatchRsp, error) {
+	return nil, errors.New("rpc SubmitUpdateNodeRuntimeConfigs of service CloudNodeMgr is not implemented")
+}
 func (s *UnimplementedCloudNodeMgr) ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq) (*ListCloudAccountsRsp, error) {
 	return nil, errors.New("rpc ListCloudAccounts of service CloudNodeMgr is not implemented")
 }
@@ -711,6 +738,8 @@ type CloudNodeMgrClientProxy interface {
 	GetNodeBatchChange(ctx context.Context, req *GetNodeBatchChangeReq, opts ...client.Option) (rsp *GetNodeBatchChangeRsp, err error)
 
 	BatchDeleteNodes(ctx context.Context, req *BatchDeleteNodesReq, opts ...client.Option) (rsp *BatchDeleteNodesRsp, err error)
+
+	SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *BatchUpdateNodeRuntimeConfigsReq, opts ...client.Option) (rsp *SubmitNodeBatchRsp, err error)
 
 	ListCloudAccounts(ctx context.Context, req *ListCloudAccountsReq, opts ...client.Option) (rsp *ListCloudAccountsRsp, err error)
 
@@ -908,6 +937,26 @@ func (c *CloudNodeMgrClientProxyImpl) BatchDeleteNodes(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &BatchDeleteNodesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *BatchUpdateNodeRuntimeConfigsReq, opts ...client.Option) (*SubmitNodeBatchRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/SubmitUpdateNodeRuntimeConfigs")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("SubmitUpdateNodeRuntimeConfigs")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SubmitNodeBatchRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

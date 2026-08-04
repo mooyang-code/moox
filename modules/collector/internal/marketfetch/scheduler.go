@@ -57,7 +57,11 @@ type Scheduler struct {
 	MaxRetryAttempts  int
 	Metrics           *Metrics
 	SpaceID           string
-	DNSCache          interface {
+	Symbols           datasetSource
+	// InvokeNonRealtimeOnly keeps the old Invoke path for symbol snapshots and
+	// bounded catch-up while realtime K-lines run from Timer-triggered nodes.
+	InvokeNonRealtimeOnly bool
+	DNSCache              interface {
 		Snapshot() map[string]sources.DNSResolution
 	}
 	Now              func() time.Time
@@ -109,10 +113,12 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		now = s.Now().UTC()
 	}
 	dnsRoutes := s.dnsSnapshot()
-	rules, err := s.Rules.ListEnabled(ctx, spaceID)
+	allRules, err := s.Rules.ListEnabled(ctx, spaceID)
 	if err != nil {
 		return fmt.Errorf("list enabled collection rules: %w", err)
 	}
+	rules := allRules
+	invokeRules := filterInvokeRules(allRules)
 	rules = rotateRulesAfter(rules, s.lastRuleID)
 	nodes, err := s.Invoker.ListMarketFetchers(ctx, spaceID)
 	if err != nil {
@@ -124,7 +130,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 		return nodes[i].FunctionName < nodes[j].FunctionName
 	})
-	if len(nodes) == 0 && len(rules) > 0 {
+	if len(nodes) == 0 && len(invokeRules) > 0 {
 		return fmt.Errorf("no active market fetcher nodes")
 	}
 	if err := s.recoverDue(ctx, spaceID, nodes, now); err != nil {
@@ -183,6 +189,12 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 			stateKey := rule.RuleID + "\x00" + frequency
 			state := s.planStates[stateKey]
 			frequencyFingerprint := taskFingerprint(frequencyTaskIDs, rule.CollectParams)
+			if s.InvokeNonRealtimeOnly && isKlineRule(rule) {
+				// Keep the TaskInstance inventory for the bounded gap auditor, but
+				// leave realtime K-line execution to Timer-triggered functions.
+				s.planStates[stateKey] = scheduleState{fingerprint: frequencyFingerprint}
+				continue
+			}
 			if !state.target.IsZero() && state.target.Equal(target) && state.fingerprint == frequencyFingerprint {
 				continue
 			}
@@ -246,7 +258,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		s.lastRuleID = rule.RuleID
 	}
 	if s.Instances != nil && (s.lastGapAudit.IsZero() || now.Sub(s.lastGapAudit) >= gapAuditInterval) {
-		if err := s.auditGaps(ctx, spaceID, rules, nodes, now); err != nil {
+		if err := s.auditGaps(ctx, spaceID, allRules, nodes, now); err != nil {
 			log.WarnContextf(ctx, "market fetch gap audit failed: %v", err)
 		} else {
 			s.lastGapAudit = now
@@ -261,6 +273,32 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 		}
 	}
 	return nil
+}
+
+func filterInvokeRules(rules []domain.TaskRule) []domain.TaskRule {
+	filtered := make([]domain.TaskRule, 0, len(rules))
+	for _, rule := range rules {
+		dataType := strings.ToLower(strings.TrimSpace(rule.DataType))
+		if dataType == "" {
+			params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+			if err == nil {
+				dataType = strings.ToLower(strings.TrimSpace(params.Collector.DataType))
+			}
+		}
+		if dataType != "kline" {
+			filtered = append(filtered, rule)
+		}
+	}
+	return filtered
+}
+
+func isKlineRule(rule domain.TaskRule) bool {
+	dataType := strings.ToLower(strings.TrimSpace(rule.DataType))
+	if dataType != "" {
+		return dataType == "kline"
+	}
+	params, err := domain.ParseCollectParams(rule.CollectParams, rule.Provider, rule.MarketType, rule.DataType)
+	return err == nil && strings.EqualFold(strings.TrimSpace(params.Collector.DataType), "kline")
 }
 
 func (s *Scheduler) dnsSnapshot() map[string]sources.DNSResolution {
@@ -293,8 +331,23 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		return nil
 	}
 	byRule := make(map[string]domain.TaskRule, len(rules))
+	externalSymbols := make(map[string]string)
 	for _, rule := range rules {
 		byRule[rule.RuleID] = rule
+		if !isKlineRule(rule) {
+			continue
+		}
+		items, _, err := s.expandRule(ctx, rule)
+		if err != nil {
+			log.WarnContextf(ctx, "skip external symbol map rule=%s: %v", rule.RuleID, err)
+			continue
+		}
+		for _, item := range items {
+			if item.SubjectID == "" || item.Symbol == "" {
+				continue
+			}
+			externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(item.SubjectID))] = item.Symbol
+		}
 	}
 	// Do not filter by last_exec_time here. A recent invocation can still leave
 	// the Storage watermark stale. Scan a bounded cursor page and rotate through
@@ -312,6 +365,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 	type auditResult struct {
 		instance domain.TaskInstance
 		rule     domain.TaskRule
+		symbol   string
 		start    time.Time
 		stale    bool
 		err      error
@@ -333,6 +387,12 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 					continue
 				}
 				result := auditResult{instance: instance, rule: rule, start: now.Add(-time.Hour)}
+				result.symbol = externalSymbols[rule.RuleID+"\x00"+strings.ToUpper(strings.TrimSpace(instance.SubjectID))]
+				if result.symbol == "" {
+					result.err = fmt.Errorf("external symbol is missing for subject %s", instance.SubjectID)
+					results <- result
+					continue
+				}
 				threshold := gapAuditThreshold(instance.Frequency)
 				if s.Storage == nil {
 					if instance.LastExecTime != nil && !instance.LastExecTime.IsZero() {
@@ -397,7 +457,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 			break
 		}
 		node := nodes[index%len(nodes)]
-		item := domain.CollectionItem{SubjectID: candidate.instance.SubjectID, Symbol: candidate.instance.SubjectID, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.start.Format(time.RFC3339Nano), BarLimit: 1000}
+		item := domain.CollectionItem{SubjectID: candidate.instance.SubjectID, Symbol: candidate.symbol, Provider: candidate.instance.Provider, MarketType: candidate.instance.MarketType, DataType: "kline", DatasetID: candidate.instance.DatasetID, Frequency: candidate.instance.Frequency, StartTime: candidate.start.Format(time.RFC3339Nano), BarLimit: 1000}
 		// A bounded 1,000-bar catchup must be allowed to advance on every audit
 		// minute. A ten-minute identity keeps the first page deduplicated but
 		// stalls large gaps for nine unnecessary minutes.
@@ -774,27 +834,51 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 	if params.Source.DatasetID == "" {
 		return nil, nil, fmt.Errorf("kline symbol dataset is required")
 	}
-	if s.Storage == nil {
-		return nil, nil, fmt.Errorf("storage reader is not initialized")
-	}
-	storage, err := s.Storage(s.StorageTarget, marketType)
-	if err != nil {
-		return nil, nil, err
-	}
-	memberships, err := storage.ListDatasetSubjects(ctx, rule.SpaceID, params.Source.DatasetID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("list symbol dataset subjects: %w", err)
-	}
-	items := make([]domain.CollectionItem, 0, len(memberships))
-	for _, membership := range memberships {
-		if membership == nil || !strings.EqualFold(strings.TrimSpace(membership.GetStatus()), "active") {
-			continue
+	items := make([]domain.CollectionItem, 0)
+	if s.Symbols != nil {
+		spaceID := strings.TrimSpace(rule.SpaceID)
+		if spaceID == "" {
+			spaceID = strings.TrimSpace(s.SpaceID)
 		}
-		subjectID := strings.TrimSpace(membership.GetSubjectId())
-		if subjectID == "" {
-			continue
+		dataset, err := s.Symbols.GetDataset(ctx, spaceID, params.Source.DatasetID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("get symbol dataset %s: %w", params.Source.DatasetID, err)
 		}
-		items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: strings.ReplaceAll(subjectID, "-", ""), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+		subjects, err := s.Symbols.ListSubjects(ctx, spaceID, params.Source.DatasetID, dataset.DataSourceID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list symbol dataset subjects: %w", err)
+		}
+		for _, subject := range subjects {
+			if !strings.EqualFold(strings.TrimSpace(subject.Status), "active") || strings.TrimSpace(subject.SubjectID) == "" {
+				continue
+			}
+			if strings.TrimSpace(subject.ExternalSymbol) == "" {
+				return nil, nil, fmt.Errorf("external symbol is missing for subject %s", subject.SubjectID)
+			}
+			items = append(items, domain.CollectionItem{SubjectID: strings.TrimSpace(subject.SubjectID), Symbol: strings.TrimSpace(subject.ExternalSymbol), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+		}
+	} else {
+		if s.Storage == nil {
+			return nil, nil, fmt.Errorf("storage reader is not initialized")
+		}
+		storage, err := s.Storage(s.StorageTarget, marketType)
+		if err != nil {
+			return nil, nil, err
+		}
+		memberships, err := storage.ListDatasetSubjects(ctx, rule.SpaceID, params.Source.DatasetID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list symbol dataset subjects: %w", err)
+		}
+		for _, membership := range memberships {
+			if membership == nil || !strings.EqualFold(strings.TrimSpace(membership.GetStatus()), "active") {
+				continue
+			}
+			subjectID := strings.TrimSpace(membership.GetSubjectId())
+			if subjectID == "" {
+				continue
+			}
+			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: strings.ReplaceAll(subjectID, "-", ""), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})
+		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].SubjectID < items[j].SubjectID })
 	return items, frequencies, nil

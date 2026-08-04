@@ -55,9 +55,11 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	if strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")) != spaceID {
 		return failure("invalid_space", "MOOX_SPACE_ID must be crypto_market"), nil
 	}
+	timerConfigured := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SUBJECTS")) != ""
 	var event model.CloudFunctionEvent
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return failure("invalid_event", fmt.Sprintf("decode event: %v", err)), nil
+	decodeErr := json.Unmarshal(raw, &event)
+	if decodeErr != nil && !timerConfigured {
+		return failure("invalid_event", fmt.Sprintf("decode event: %v", decodeErr)), nil
 	}
 	function, _ := functioncontext.FromContext(ctx)
 	if event.RequestID == "" && function != nil {
@@ -74,6 +76,11 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	if function != nil {
 		functionName = firstNonEmpty(function.FunctionName, functionName)
 		region = function.TencentcloudRegion
+	}
+	if timerConfigured && (decodeErr != nil || event.Action == "") {
+		event.Action = model.EventActionMarketFetch
+		event.Source = "tencent_timer"
+		event.StorageRPCGatewayTarget = os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET")
 	}
 	reporter = staticFieldsReporter{Reporter: reporter, Fields: map[string]string{
 		"function_name": functionName,
@@ -105,6 +112,15 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 		handler := h.NewMarketFetch()
 		handler.Reporter = reporter
 		handler.CLSReserve = timeout
+		if timerConfigured {
+			timerNow := time.Now().UTC()
+			if event.Time != "" {
+				if parsed, parseErr := time.Parse(time.RFC3339, event.Time); parseErr == nil {
+					timerNow = parsed.UTC()
+				}
+			}
+			return handler.HandleTimerAt(ctx, event.RequestID, functionName, timerNow)
+		}
 		return handler.Handle(ctx, event)
 	case model.EventActionEgressProbe:
 		return marketfetch.EgressProbe(ctx, "binance", "spot")

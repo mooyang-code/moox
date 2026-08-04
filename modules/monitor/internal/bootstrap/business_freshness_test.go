@@ -49,6 +49,62 @@ func TestBusinessFreshnessReporterResolvesDatasetNoLongerExpected(t *testing.T) 
 	}
 }
 
+func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	labels := `{"dataset_id":"bars","freq":"1m","space_id":"crypto"}`
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		for _, metric := range []struct {
+			id, name, labels string
+			value            float64
+		}{
+			{"enabled", "moox_collector_dataset_enabled", labels, 1},
+			{"interval", "moox_collector_dataset_expected_interval_seconds", labels, 60},
+			{"inventory", "moox_collector_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix())},
+		} {
+			if err := db.Create(&monmetrics.MetricSeries{
+				ServiceName: "moox_collector", InstanceID: "collector@node-a", SeriesID: metric.id,
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels, LastSeenAt: now,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&monmetrics.MetricLatest{
+				SeriesID: metric.id, ServiceName: "moox_collector", InstanceID: "collector@node-a",
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels,
+				Value: metric.value, ObservedAt: now,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := manager.Repositories()
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Results: repositories.Results,
+		Now: func() time.Time { return now },
+	}, repositories, nil)
+	if err := run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := repositories.Results.Recent(t.Context(), "crypto", "dataset:collector:bars:1m", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Success || results[0].ErrorMessage != "尚未上报" {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
 func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
@@ -101,40 +157,6 @@ func TestBusinessFreshnessReporterStoresBalanceCheckInCryptoMarket(t *testing.T)
 	}
 	if len(results) != 1 || !results[0].Success {
 		t.Fatalf("results = %+v", results)
-	}
-}
-
-func TestBusinessFreshnessReporterDoesNotResolveMarketFetchCheck(t *testing.T) {
-	t.Setenv("MOOX_MSGBOX_WECOM_WEBHOOK", "")
-	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = manager.Close() })
-	if err := manager.ApplySchema(schema.SQL()); err != nil {
-		t.Fatal(err)
-	}
-	repositories := manager.Repositories()
-	check := &domain.Check{
-		SpaceID: "crypto", CheckID: "market_fetch:binance_symbols:1m",
-		Name: "行情采集 binance_symbols/1m", GroupName: "market_fetch", Kind: domain.CheckKindExternal,
-		Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30,
-	}
-	if err := repositories.Checks.Create(t.Context(), check); err != nil {
-		t.Fatal(err)
-	}
-	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
-		Checks: repositories.Checks, Results: repositories.Results,
-	}, repositories, nil)
-	if err := run(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	results, err := repositories.Results.Recent(t.Context(), "crypto", check.CheckID, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 0 {
-		t.Fatalf("results = %+v, want no business freshness result", results)
 	}
 }
 

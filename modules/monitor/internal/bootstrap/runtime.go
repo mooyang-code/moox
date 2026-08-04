@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	monmarketfetch "github.com/mooyang-code/moox/modules/monitor/internal/marketfetch"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
@@ -27,7 +26,6 @@ type Runtime struct {
 	Store                    *store.Store
 	Repositories             *store.Repositories
 	MetricStores             *monmetrics.Stores
-	MarketFetchStore         *monmarketfetch.Store
 	HostRuleCache            *hostmetrics.RuleCache
 	Scheduler                *scheduler.Scheduler
 	MetricScheduler          *monmetrics.RuleScheduler

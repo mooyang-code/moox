@@ -6,6 +6,7 @@ export interface CloudNode {
   space_id?: string;
   node_id: string;
   node_type: string;
+  trigger_type?: string;
   cloud_account_id: string;
   region: string;
   namespace: string;
@@ -53,6 +54,7 @@ export interface GetNodeListRequest {
   namespace?: string;
   region?: string;
   node_type?: string;
+  trigger_type?: string;
   biz_type?: string;
   tag?: string;
   keyword?: string;
@@ -79,6 +81,7 @@ export interface BatchCreateNodesRequest {
   region: string;
   namespace: string;
   node_type?: string;
+  trigger_type?: string;
   function_name_prefix: string;
   runtime: string;
   handler?: string;
@@ -93,6 +96,7 @@ export interface BatchCreateNodesRequest {
 export interface BatchCreateNodeItem {
   cloud_account_id: string;
   node_type?: string;
+  trigger_type?: string;
   runtime: string;
   handler?: string;
   config?: Record<string, string>;
@@ -197,6 +201,7 @@ export const submitCreateNodes = async (data: BatchCreateNodesRequest): Promise<
     Array.from({ length: data.count }).map((_, index) => ({
       cloud_account_id: data.cloud_account_id,
       node_type: data.node_type,
+      trigger_type: data.trigger_type,
       region: data.region,
       namespace: data.namespace,
       runtime: data.runtime,
@@ -227,10 +232,21 @@ export const getNodeBatchChange = async (jobId: string): Promise<GetNodeBatchCha
   callControl<{ job_id: string }, GetNodeBatchChangeResponse>("cloudnode", "GetNodeBatchChange", { job_id: jobId });
 
 export const batchDeleteNodes = async (data: BatchDeleteNodesRequest): Promise<BatchDeleteNodesResponse> => {
-  const rsp = await callControl<{ node_ids: string[] }, Partial<BatchDeleteNodesResponse>>("cloudnode", "BatchDeleteNodes", {
-    node_ids: data.node_ids
-  });
-  return { processed_count: rsp.processed_count ?? 0 };
+	const submitted = await callControl<{ node_ids: string[] }, SubmitNodeBatchResponse>("cloudnode", "SubmitDeleteNodes", {
+		node_ids: data.node_ids
+	});
+	const deadline = Date.now() + 2 * 60 * 1000;
+	while (Date.now() < deadline) {
+		const status = await getNodeBatchChange(submitted.job_id);
+		if (status.job.status === "NODE_BATCH_STATUS_SUCCESS") {
+			return { processed_count: status.job.success_count };
+		}
+		if (status.job.status === "NODE_BATCH_STATUS_FAILED" || status.job.status === "NODE_BATCH_STATUS_PARTIAL") {
+			throw new Error(`删除云函数失败：${status.job.failed_count} 个节点未完成`);
+		}
+		await new Promise(resolve => setTimeout(resolve, 250));
+	}
+	throw new Error("删除云函数超时，请在云节点批次中查看结果");
 };
 
 export const listCloudRegions = async (provider = "tencent"): Promise<CloudRegion[]> => {

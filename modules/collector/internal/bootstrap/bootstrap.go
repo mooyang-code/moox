@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
+	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
@@ -106,14 +107,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
 	}
 	registerDNSRefreshSchedule(s, dnsCache)
-	registerMarketFetchSchedule(s, cfg, deps, dbm, marketFetchMetrics, dnsCache)
-	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
-	if spaceID == "" {
-		spaceID = "crypto_market"
-	}
-	if err := marketfetch.StartCompletionConsumer(ctx, spaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), marketFetchMetrics); err != nil {
-		log.WarnContextf(ctx, "collector market fetch completion consumer disabled: %v", err)
-	}
+	registerMarketFetchSchedule(s, cfg, deps, dbm, dnsCache, marketFetchMetrics)
 	if err := registerHealth(s, cfg, dbm); err != nil {
 		return nil, err
 	}
@@ -222,7 +216,7 @@ func registerDNSRefreshSchedule(s *server.Server, cache *dnscache.Cache) {
 	})
 }
 
-func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, metrics *marketfetch.Metrics, dnsCache *dnscache.Cache) {
+func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, dnsCache *dnscache.Cache, metrics *marketfetch.Metrics) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
@@ -231,49 +225,38 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		log.Warn("collector market fetch timer service is not configured, skip register")
 		return
 	}
-	if isLoopbackTarget(deps.StorageRPCGatewayTarget) {
-		log.ErrorContextf(context.Background(), "collector market fetch timer disabled: Storage target %q is loopback; refusing to send it to remote SCF", deps.StorageRPCGatewayTarget)
-		return
-	}
 	auth := runtimeAuth(deps.ServiceAuth)
 	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.AdminGatewayURL, Auth: auth, Timeout: 5 * time.Second})
-	scheduler := &marketfetch.Scheduler{
-		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(), Invoker: invoker,
-		Storage: func(target, market string) (binance.BatchStorage, error) {
-			return binance.NewBatchStorage(target, market)
-		},
-		StorageTarget: deps.StorageRPCGatewayTarget, BatchSize: marketfetch.MaxRealtimeItems,
-		// Keep concurrent SCF aggregate Storage writes below the Gateway's
-		// single-host capacity. Five matches the currently reachable
-		// Singapore fleet and avoids a minute-start write storm.
-		InvokeConcurrency: 5,
-		DNSCache:          dnsCache,
-		Metrics:           metrics,
+	metadataSource := storagesource.NewDatasetSource(cfg.Storage.GatewayTarget)
+	reconciler := &marketfetch.Reconciler{Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, DNS: dnsCache, Metrics: metrics, MaxSubjects: 30}
+	invokeScheduler := &marketfetch.Scheduler{
+		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
+		Invoker: invoker, Storage: binance.NewBatchStorage, StorageTarget: cfg.Storage.GatewayTarget,
+		InvokeConcurrency: 20, MaxRetryAttempts: 3, Metrics: metrics, SpaceID: "crypto_market", DNSCache: dnsCache,
+		Symbols:               metadataSource,
+		InvokeNonRealtimeOnly: true,
+	}
+	completionSpaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
+	if completionSpaceID == "" {
+		completionSpaceID = "crypto_market"
+	}
+	if err := marketfetch.StartCompletionConsumer(trpc.BackgroundContext(), completionSpaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), metrics); err != nil {
+		log.WarnContextf(trpc.BackgroundContext(), "collector market fetch completion consumer disabled: %v", err)
 	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
-		spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
-		if spaceID == "" {
-			spaceID = "crypto_market"
-		}
-		// Timer handlers run on the tRPC server loop. A full-symbol planning
-		// pass can legitimately take several seconds while SQLite and Storage
-		// are busy; running it inline would block /readyz and make the process
-		// look dead to healthcheck cron. The scheduler has its own mutex, so
-		// overlapping ticks are safely coalesced by Tick.
+		spaceID := completionSpaceID
 		go func() {
 			tickCtx := trpc.BackgroundContext()
-			if err := scheduler.Tick(tickCtx, spaceID); err != nil {
-				log.WarnContextf(tickCtx, "collector market fetch tick failed space=%s: %v", spaceID, err)
+			if err := reconciler.Reconcile(tickCtx, spaceID); err != nil {
+				log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
+			}
+			if err := invokeScheduler.Tick(tickCtx, spaceID); err != nil {
+				log.WarnContextf(tickCtx, "collector invoke scheduler failed space=%s: %v", spaceID, err)
 			}
 		}()
 		return nil
 	})
-}
-
-func isLoopbackTarget(target string) bool {
-	target = strings.ToLower(strings.TrimSpace(target))
-	return strings.Contains(target, "127.0.0.1") || strings.Contains(target, "localhost") || strings.Contains(target, "[::1]")
 }
 
 func runtimeAuth(cfg ServiceAuthConfig) runtimeapp.AuthConfig {
