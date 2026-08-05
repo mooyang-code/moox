@@ -898,10 +898,18 @@ EventBus 恢复后 Collector 任务实例查询结果为 `active=478, fresh=478,
 
 ### 6.4 Storage 恢复记录与剩余闭环
 
-本轮曾观察到 Storage DataNode outbox relay 因 EventBus 重启及 NATS 写超时积压；重启 DataNode 后 outbox 从 1733 条逐步降至 0，Collector consumer 保持 pending=0。Storage view consumer 曾因断连退订，已重启并恢复 bound=1；为追平历史积压，线上 view 配置的 `max_workers` 临时调整为 8。
+本轮曾观察到 Storage DataNode outbox relay 因 EventBus 重启及 NATS 写超时积压；重启 DataNode 后 outbox 从 1733 条逐步降至 0，Collector consumer 保持 pending=0。Storage view consumer 曾因断连退订，导致 `nats: invalid subscription` 循环；本轮修复后，消费者在传输错误时关闭本地订阅、等待共享 NATS 连接恢复，再绑定同一个 durable consumer，不会重建或丢失 ACK 状态。
 
-在本记录写入时，Storage view durable consumer 仍在追平历史消息，`served_indexed_to` 落后于 CLS 最新分钟。因此发布和 CLS/任务实例闭环已完成，但“通过 Storage View 查询连续 3 轮最新已收盘 K 线”仍是发布后的观察项；在该水位追平前，不应把 Monitor 的 freshness 告警标记为误报。若积压持续增长，应先检查 view consumer 的 bound、pending、ack_pending 和 `moox_storage_view_delivery_duration_seconds`，不要重新启用旧的每分钟 Invoke 链路。
+### 6.5 最新 Storage View 发布验收（2026-08-05 02:00 UTC 后）
 
-### 6.5 回滚状态
+- 最新 Storage View 二进制 SHA-256：`e0ef974277e5454e14c2634233824f514e93b0197924e6cef8ac3acb300548ce`，远端 PID `3169241`，由提交 `0e7c03a4` 构建并重启。
+- 重启后的 Prometheus：`consumer_bound=1`、`consumer_lag_messages=0`、`lane_active=0`、`oldest_pending_event_age_seconds=0`；JetStream `storage_view` durable 的 `pending=0`，历史积压已清空。部署后日志未再出现 `nats: invalid subscription`。
+- 通过 SSH 隧道直读 Storage View 的 `crypto_market/binance_spot_kline_1m/BTC-USDT/1m` 连续 3 次（间隔 10 秒）：三次均返回 `total=3072`、`served_indexed_to=2026-08-05T01:58:00Z`，且返回数据稳定。
+- Collector SQLite 实时核验：`active=478`、`success=478`；最近一轮执行时间为 `2026-08-05 02:03:01Z` 至 `02:03:03Z`，16 个 Timer 函数全部有任务实例。
+- CLS Topic `c7ff7bb7-622f-43c6-86ac-800552762a2c` 的 `market_fetch_item` 明细验证了函数名、symbol、耗时和结果字段；最新成功周期的任务实例已全部成功。CLS 中仍可看到个别周期因 `11003` Storage TCP 超时产生的失败明细，随后周期已恢复并由 Collector 任务实例反映最新成功状态；这属于可观测的瞬时 Storage 失败，不应被隐藏。
+
+Storage View 水位追平和三轮读取闭环已完成。后续若再出现积压，应优先检查 `consumer_bound`、JetStream `pending/ack_pending`、`oldest_pending_event_age_seconds` 与 Storage 11003 网络/服务日志，禁止恢复旧的每分钟 Invoke 链路。
+
+### 6.6 回滚状态
 
 本轮未执行全量 Timer 关闭回滚演练，已保留 Collector、CloudNode、Storage-node 旧二进制和远端配置备份。若需要回滚，必须先关闭全部 Timer Trigger，确认无新 Timer 调用后再恢复上一版发布物；不得让 Timer 与旧 Invoke 实时链路并行超过一个采集周期。
