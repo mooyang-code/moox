@@ -51,10 +51,10 @@
               <span>{{ dataNodeLabel(record.data_node_id) }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="数据形态" :width="130">
+          <a-table-column title="数据形态" :width="90">
             <template #cell="{ record }">{{ optionLabel(dataKindOptions, record.data_kind) }}</template>
           </a-table-column>
-          <a-table-column title="频率" :width="180">
+          <a-table-column title="频率" :width="100">
             <template #cell="{ record }">{{ joinList(record.freqs) || "-" }}</template>
           </a-table-column>
           <a-table-column title="状态" :width="90">
@@ -71,7 +71,7 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="360" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="180" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space wrap>
                 <a-button size="mini" type="text" @click="openManage(record)">列/对象</a-button>
