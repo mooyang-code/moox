@@ -38,6 +38,34 @@ flowchart LR
    Symbol 全量快照、缺口补采、出口探针和人工 E2E；`function_count` 只表示用户配置的 Timer
    实时容量。这样不会把按需工作错误投递到静态 Timer 环境，也不需要 SCF 在每次调用时回调控制面。
 
+## Invoke 辅助节点的作用
+
+线上形如 `moox-fetcher-crypto-market-invoke-ap-guangzhou-0` 的函数是按需执行节点，不是
+实时 K 线节点。它们没有 Timer Trigger，不会每分钟自动运行；只有 Collector、`moox-cli`
+或人工操作通过 `InvokeFunction` 调用时才执行，因此不会产生 Timer 空跑的函数运行时长。
+
+每个启用地域保留 1 个辅助节点，主要原因是让以下按需任务使用对应地域的 SCF 公网出口：
+
+- Binance 全量 Symbol 快照刷新；
+- K 线缺口补采和有限失败重试；
+- 部署后的出口连通性探针；
+- 人工 E2E、临时诊断和按需验证。
+
+实时节点和辅助节点的边界如下：
+
+| 节点命名/类型 | 触发方式 | 主要用途 | 是否参与实时 K 线 |
+| --- | --- | --- | --- |
+| `...-timer-<region>-N` / `trigger_type=timer` | 腾讯 Timer Trigger | 从函数 Environment 读取分片，每分钟抓取 K 线 | 是 |
+| `...-invoke-<region>-0` / `trigger_type=invoke` | MooX `InvokeFunction` | Symbol、补采、探针和人工任务 | 否 |
+
+因此，删除这些 Invoke 节点不会停止 Timer 实时采集，但会使 Symbol 快照、缺口补采、出口
+探针和人工 E2E 没有执行节点；只有在明确不需要这些按需能力时才应删除。`custom.toml` 的
+`function_count` 只统计 Timer 节点，Invoke 辅助节点是额外的每地域 1 个固定容量。
+
+当前 `custom.toml` 启用新加坡、广州、上海和北京四个地域，所以对应会看到四个辅助函数：
+`...-invoke-ap-singapore-0`、`...-invoke-ap-guangzhou-0`、`...-invoke-ap-shanghai-0` 和
+`...-invoke-ap-beijing-0`；东京、成都等未启用地域不会创建对应节点。
+
 ## 任务环境变量
 
 腾讯云没有跨函数共享的一份“全局环境变量”。这里的“公共环境变量”是逻辑概念：Collector 生成同一份 DNS 内容，CloudNode 将它复制到每个定时函数；每个函数仍有自己独立的环境变量和不同的标的分片。[腾讯云环境变量说明](https://cloud.tencent.com/document/product/583/30228)
