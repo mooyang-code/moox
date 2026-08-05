@@ -18,11 +18,13 @@ func TestTimerRequestFromEnv(t *testing.T) {
 	t.Setenv("MOOX_MARKET_FETCH_ASSIGNMENT_HASH", "abc")
 	t.Setenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON", `{"api.binance.com":["203.0.113.1"]}`)
 	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://10.0.0.1:11003")
+	t.Setenv("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", "30")
 	req, target, err := TimerRequestFromEnv("req", "node", time.Date(2026, 8, 4, 1, 2, 3, 0, time.UTC))
 	require.NoError(t, err)
 	require.Equal(t, "ip://10.0.0.1:11003", target)
 	require.Len(t, req.Items, 2)
 	require.Equal(t, "node", req.FunctionName)
+	require.Equal(t, 30, req.Concurrency)
 	require.Equal(t, "BTCUSDT", req.Items[0].Symbol)
 	require.Equal(t, "BTC-USDT", req.Items[0].SubjectID)
 }

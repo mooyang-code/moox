@@ -61,7 +61,8 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 	for _, subject := range subjects {
 		items = append(items, domain.CollectionItem{SubjectID: subject, Symbol: externalSymbols[subject], Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: datasetID, BarLimit: MaxRealtimeRows})
 	}
-	return Request{BatchID: batchID, BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, Provider: provider, MarketType: marketType, FunctionName: strings.TrimSpace(functionName), RequestID: requestID, DNSRoutes: dnsRoutes, Items: items}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
+	concurrency := envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
+	return Request{BatchID: batchID, BatchKind: domain.BatchKindRealtime, SpaceID: spaceID, DatasetID: datasetID, Frequency: frequency, Provider: provider, MarketType: marketType, FunctionName: strings.TrimSpace(functionName), RequestID: requestID, DNSRoutes: dnsRoutes, Items: items, Concurrency: concurrency}, os.Getenv("MOOX_STORAGE_RPC_GATEWAY_TARGET"), nil
 }
 
 func parseExternalSymbols(raw string, subjects []string) (map[string]string, error) {
