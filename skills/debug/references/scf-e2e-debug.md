@@ -137,7 +137,7 @@ Check these boundaries:
 
 - Cloud account still exists and is linked to node/package.
 - Package row has COS bucket, COS region, COS path, version, runtime, package type, and status.
-- Node row has node ID/function name, package ID, region, namespace, runtime, handler, node type, biz type, supported collectors, and probe enabled.
+- Node row has node ID/function name, package ID, region, namespace, runtime, handler, node type, biz type, and supported collectors.
 - Keepalive probe invokes the same function name shown in Tencent SCF.
 - Heartbeat store marks the node online after keepalive success.
 - `ScheduleTasks` submitted only the next JobItem after the rule changed.

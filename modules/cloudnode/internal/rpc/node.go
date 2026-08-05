@@ -108,6 +108,7 @@ func (s *Service) refreshTimerTriggerMetadata(ctx context.Context, spaceID strin
 		return nil
 	}
 	metadata := parseJSONMap(node.Metadata)
+	removeDeprecatedNodeMetadata(metadata)
 	readbackAt := time.Now().UTC().Format(time.RFC3339Nano)
 	patch := map[string]any{"timer_available_status": "Unknown", "timer_actual_type": nil, "timer_actual_enabled": nil, "timer_actual_cron": nil, "timer_actual_qualifier": nil, "timer_actual_message": nil, "timer_last_readback_at": readbackAt}
 	if strings.TrimSpace(node.PackageID) == "" || (strings.TrimSpace(node.DeploymentID) == "" && !metadataBool(metadata, "deployment_ready")) {
@@ -946,7 +947,13 @@ func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNo
 	}
 	metadata := nodeMetadataFromPB(node)
 	if len(metadata) > 0 {
-		next.Metadata = mergeMetadataJSON(existing.Metadata, jsonString(metadata))
+		merged := parseJSONMap(mergeMetadataJSON(existing.Metadata, jsonString(metadata)))
+		removeDeprecatedNodeMetadata(merged)
+		next.Metadata = jsonString(merged)
+	} else {
+		merged := parseJSONMap(existing.Metadata)
+		removeDeprecatedNodeMetadata(merged)
+		next.Metadata = jsonString(merged)
 	}
 	next.IsDeleted = node.GetIsDeleted()
 	return next
@@ -959,29 +966,26 @@ func toPBNode(node store.CloudNode) *pb.CloudNode {
 		st = &structpb.Struct{}
 	}
 	return &pb.CloudNode{
-		Id:               int32(node.ID),
-		SpaceId:          node.SpaceID,
-		NodeId:           node.NodeID,
-		CloudAccountId:   node.CloudAccountID,
-		PackageId:        node.PackageID,
-		PackageVersion:   node.PackageVersion,
-		DeploymentId:     node.DeploymentID,
-		Namespace:        node.Namespace,
-		NodeType:         node.NodeType,
-		TriggerType:      node.TriggerType,
-		Provider:         node.Provider,
-		FunctionName:     node.FunctionName,
-		BizType:          metadataString(metadata, "biz_type"),
-		Region:           node.Region,
-		Tag:              metadataString(metadata, "tag"),
-		IpAddress:        metadataString(metadata, "ip_address"),
-		Metadata:         st,
-		TimeoutThreshold: metadataInt32(metadata, "timeout_threshold"),
-		ProbeEnabled:     metadataBool(metadata, "probe_enabled"),
-		ProbeUrl:         metadataString(metadata, "probe_url"),
-		IsDeleted:        node.IsDeleted,
-		CreateTime:       formatTime(node.CreateTime),
-		ModifyTime:       formatTime(node.ModifyTime),
+		Id:             int32(node.ID),
+		SpaceId:        node.SpaceID,
+		NodeId:         node.NodeID,
+		CloudAccountId: node.CloudAccountID,
+		PackageId:      node.PackageID,
+		PackageVersion: node.PackageVersion,
+		DeploymentId:   node.DeploymentID,
+		Namespace:      node.Namespace,
+		NodeType:       node.NodeType,
+		TriggerType:    node.TriggerType,
+		Provider:       node.Provider,
+		FunctionName:   node.FunctionName,
+		BizType:        metadataString(metadata, "biz_type"),
+		Region:         node.Region,
+		Tag:            metadataString(metadata, "tag"),
+		IpAddress:      metadataString(metadata, "ip_address"),
+		Metadata:       st,
+		IsDeleted:      node.IsDeleted,
+		CreateTime:     formatTime(node.CreateTime),
+		ModifyTime:     formatTime(node.ModifyTime),
 	}
 }
 
@@ -1019,14 +1023,11 @@ func nodeMetadataFromPB(node *pb.CloudNode) map[string]any {
 	if node.GetIpAddress() != "" {
 		metadata["ip_address"] = node.GetIpAddress()
 	}
-	if node.GetTimeoutThreshold() != 0 {
-		metadata["timeout_threshold"] = node.GetTimeoutThreshold()
-	}
-	if node.GetProbeEnabled() {
-		metadata["probe_enabled"] = true
-	}
-	if node.GetProbeUrl() != "" {
-		metadata["probe_url"] = node.GetProbeUrl()
-	}
 	return metadata
+}
+
+func removeDeprecatedNodeMetadata(metadata map[string]any) {
+	delete(metadata, "timeout_threshold")
+	delete(metadata, "probe_enabled")
+	delete(metadata, "probe_url")
 }

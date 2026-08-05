@@ -113,9 +113,6 @@ message CloudNode {
   string tag = 15;
   string ip_address = 16;
   google.protobuf.Struct metadata = 18;
-  int32 timeout_threshold = 19;
-  bool probe_enabled = 21;
-  string probe_url = 22;
   bool is_deleted = 25;
   string create_time = 26;     // RFC3339
   string modify_time = 27;     // RFC3339

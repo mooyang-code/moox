@@ -12,9 +12,6 @@ export interface CloudNode {
   package_id?: string;
   package_version?: string;
   metadata: string | Record<string, unknown>;
-  timeout_threshold: number;
-  probe_enabled: boolean;
-  probe_url?: string;
   create_time?: string;
   modify_time?: string;
 }
@@ -49,9 +46,6 @@ export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode
     package_id: String(item.package_id || ""),
     package_version: String(item.package_version || ""),
     metadata: (item.metadata as string | Record<string, unknown>) || "",
-    timeout_threshold: Number(item.timeout_threshold || 0),
-    probe_enabled: Boolean(item.probe_enabled ?? false),
-    probe_url: String(item.probe_url || ""),
     create_time: String(item.create_time || ""),
     modify_time: String(item.modify_time || "")
   }));

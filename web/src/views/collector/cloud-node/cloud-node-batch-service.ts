@@ -42,8 +42,6 @@ export async function submitCloudNodeBatchChange(batchChanges: CloudNodeBatchCha
           biz_type: params.biz_type,
           tag: params.tag,
           function_name_prefix: functionNamePrefix,
-          timeout_threshold: params.timeout_threshold,
-          probe_enabled: params.probe_enabled,
           index
         }
       };

@@ -130,12 +130,12 @@
             @page-size-change="onPageSizeChange"
           >
             <template #columns>
-              <a-table-column title="节点ID" data-index="node_id" :width="120">
+              <a-table-column title="节点ID" data-index="node_id" :width="360">
                 <template #cell="{ record }">
-                  <a-link @click="onViewNodeDetail(record)">{{ record.node_id }}</a-link>
+                  <a-link class="node-id-link" @click="onViewNodeDetail(record)">{{ record.node_id }}</a-link>
                 </template>
               </a-table-column>
-              <a-table-column title="命名空间" data-index="namespace" :width="120"></a-table-column>
+              <a-table-column title="命名空间" data-index="namespace" :width="90"></a-table-column>
               <a-table-column title="节点类型" data-index="node_type" :width="135">
                 <template #cell="{ record }">
                   <a-tag size="small" :color="getNodeTypeColor(record.node_type)">
@@ -146,7 +146,7 @@
               <a-table-column title="触发方式" data-index="trigger_type" :width="100">
                 <template #cell="{ record }">{{ getTriggerTypeLabel(record.trigger_type) }}</template>
               </a-table-column>
-              <a-table-column title="地区" data-index="region" :width="150">
+              <a-table-column title="地区" data-index="region" :width="110">
                 <template #cell="{ record }">
                   {{ getRegionName(record.region) }}
                 </template>
@@ -171,26 +171,21 @@
                   <span v-else>-</span>
                 </template>
               </a-table-column>
-              <a-table-column title="操作" :width="170" align="center" fixed="right">
+              <a-table-column title="操作" :width="72" align="center" fixed="right">
                 <template #cell="{ record }">
-                  <a-space>
-                    <a-button type="outline" size="mini" @click="onEdit(record)" :disabled="batchChangeProcessing">
-                      <template #icon><icon-edit /></template>
-                      <span>编辑</span>
-                    </a-button>
-                    <a-popconfirm
-                      content="确定要删除该节点吗？删除后将无法恢复。"
-                      ok-text="确定"
-                      cancel-text="取消"
-                      @ok="() => onDelete(record)"
-                      position="tr"
-                    >
+                  <a-popconfirm
+                    content="确定要删除该节点吗？删除后将无法恢复。"
+                    ok-text="确定"
+                    cancel-text="取消"
+                    @ok="() => onDelete(record)"
+                    position="tr"
+                  >
+                    <a-tooltip content="删除节点">
                       <a-button type="primary" size="mini" status="danger" :disabled="batchChangeProcessing">
                         <template #icon><icon-delete /></template>
-                        <span>删除</span>
                       </a-button>
-                    </a-popconfirm>
-                  </a-space>
+                    </a-tooltip>
+                  </a-popconfirm>
                 </template>
               </a-table-column>
             </template>
@@ -294,28 +289,6 @@
           />
         </a-form-item>
 
-        <!-- 心跳配置 -->
-        <a-divider orientation="left">心跳配置</a-divider>
-
-        <a-form-item field="timeoutThreshold" label="超时阈值（秒）">
-          <a-input-number
-            v-model="batchAddForm.timeoutThreshold"
-            :min="0"
-            :max="3600"
-            placeholder="0表示使用全局默认值"
-            style="width: 100%"
-          />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">设置为0时将使用全局默认值（通常为30秒）</div>
-          </template>
-        </a-form-item>
-
-        <a-form-item field="probeEnabled" label="启用探测">
-          <a-switch v-model="batchAddForm.probeEnabled" />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">是否启用节点健康检查探测</div>
-          </template>
-        </a-form-item>
       </a-form>
     </a-modal>
 
@@ -550,15 +523,6 @@
           <a-descriptions-item label="代码包版本">
             {{ selectedNodeDetail.package_version || "-" }}
           </a-descriptions-item>
-          <a-descriptions-item label="超时阈值">
-            {{ selectedNodeDetail.timeout_threshold || 0 }}秒
-            <span v-if="selectedNodeDetail.timeout_threshold === 0" style="color: #86909c">（使用全局默认值）</span>
-          </a-descriptions-item>
-          <a-descriptions-item label="启用探测">
-            <a-tag bordered size="small" :color="selectedNodeDetail.probe_enabled ? 'green' : 'red'">
-              {{ selectedNodeDetail.probe_enabled ? "是" : "否" }}
-            </a-tag>
-          </a-descriptions-item>
           <a-descriptions-item label="元数据" :span="2">
             <div
               v-if="selectedNodeDetail.metadata"
@@ -665,48 +629,6 @@
       </div>
     </a-modal>
 
-    <!-- 节点编辑弹窗 -->
-    <a-modal
-      v-model:visible="editNodeVisible"
-      title="编辑云函数节点"
-      :width="600"
-      :mask-closable="false"
-      @cancel="handleEditNodeCancel"
-      @ok="handleEditNodeOk"
-    >
-      <a-form :model="editNodeForm" layout="vertical">
-        <a-form-item label="节点信息">
-          <a-alert type="info" style="margin-bottom: var(--moox-space-2)">
-            <div><strong>节点ID：</strong>{{ editNodeForm.nodeId }}</div>
-            <div><strong>命名空间：</strong>{{ editNodeForm.namespace }}</div>
-            <div><strong>地区：</strong>{{ editNodeForm.region }}</div>
-          </a-alert>
-        </a-form-item>
-
-        <!-- 心跳配置 -->
-        <a-divider orientation="left">心跳配置</a-divider>
-
-        <a-form-item field="timeoutThreshold" label="超时阈值（秒）">
-          <a-input-number
-            v-model="editNodeForm.timeoutThreshold"
-            :min="0"
-            :max="3600"
-            placeholder="0表示使用全局默认值"
-            style="width: 100%"
-          />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">设置为0时将使用全局默认值（通常为30秒）</div>
-          </template>
-        </a-form-item>
-
-        <a-form-item field="probeEnabled" label="启用探测">
-          <a-switch v-model="editNodeForm.probeEnabled" />
-          <template #help>
-            <div style="font-size: 12px; color: #86909c">是否启用节点健康检查探测</div>
-          </template>
-        </a-form-item>
-      </a-form>
-    </a-modal>
   </div>
 </template>
 
@@ -728,7 +650,6 @@ import {
   getNodeList,
   listCloudRegions,
   submitDeployNodes,
-  updateNode,
   type GetNodeBatchChangeResponse,
   type SubmitNodeBatchResponse
 } from "@/api/cloud-node";
@@ -799,8 +720,6 @@ const batchAddForm = reactive({
   packageId: "", // 代码包版本ID
   nodeCount: 5,
   namespace: "",
-	 timeoutThreshold: 0, // 超时阈值（秒），0表示使用全局默认值
-  probeEnabled: true, // 是否启用探测，默认启用
   config: {} as Record<string, string>,
   environment: {} as Record<string, string>
 });
@@ -1058,8 +977,6 @@ const onBatchAdd = async () => {
   batchAddForm.packageId = "";
   batchAddForm.nodeCount = 5;
   batchAddForm.namespace = "";
-  batchAddForm.timeoutThreshold = 0;
-  batchAddForm.probeEnabled = true;
 
   // 加载可用的代码包列表
   await loadAvailablePackagesForCreation();
@@ -1142,9 +1059,7 @@ const buildCreateNodeBatchChange = (region: string, index: number) => ({
     package_id: batchAddForm.packageId,
     config: optionalRecord(batchAddForm.config),
     environment: optionalRecord(batchAddForm.environment),
-    metadata: JSON.stringify({ env: "prod", index }),
-	 timeout_threshold: batchAddForm.timeoutThreshold,
-    probe_enabled: batchAddForm.probeEnabled
+    metadata: JSON.stringify({ env: "prod", index })
   }
 });
 
@@ -1632,16 +1547,6 @@ const packageDetailVisible = ref(false);
 const packageDetail = ref<FunctionPackage | null>(null);
 const downloadProgress = ref<Record<string, number>>({});
 
-// 节点编辑
-const editNodeVisible = ref(false);
-const editNodeForm = reactive({
-  nodeId: "",
-  namespace: "",
-  region: "",
-  timeoutThreshold: 0,
-  probeEnabled: true
-});
-
 // 显示代码包详情
 const onShowPackageDetail = async (record: CloudNode) => {
   // 如果没有package_id，则不显示
@@ -1832,52 +1737,6 @@ const handleSingleDeployOk = async () => {
   }
 };
 
-// 编辑节点
-const onEdit = (record: CloudNode) => {
-  // 填充表单
-  editNodeForm.nodeId = record.node_id;
-  editNodeForm.namespace = record.namespace;
-  editNodeForm.region = getRegionName(record.region);
-  editNodeForm.timeoutThreshold = record.timeout_threshold || 0;
-  editNodeForm.probeEnabled = record.probe_enabled;
-
-  // 打开弹窗
-  editNodeVisible.value = true;
-};
-
-// 取消编辑
-const handleEditNodeCancel = () => {
-  editNodeVisible.value = false;
-  // 重置表单
-  editNodeForm.nodeId = "";
-  editNodeForm.namespace = "";
-  editNodeForm.region = "";
-  editNodeForm.timeoutThreshold = 0;
-  editNodeForm.probeEnabled = true;
-};
-
-// 确认编辑
-const handleEditNodeOk = async () => {
-  try {
-    await updateNode({
-      node_id: editNodeForm.nodeId,
-      timeout_threshold: editNodeForm.timeoutThreshold,
-      probe_enabled: editNodeForm.probeEnabled,
-      metadata: {
-        timeout_threshold: editNodeForm.timeoutThreshold,
-        probe_enabled: editNodeForm.probeEnabled
-      }
-    });
-
-    Message.success("节点配置更新成功");
-    editNodeVisible.value = false;
-    handleEditNodeCancel();
-    await loadData();
-  } catch (error: any) {
-    console.error("更新节点配置失败:", error);
-    Message.error("更新节点配置失败: " + (error?.message || "未知错误"));
-  }
-};
 </script>
 
 <style scoped src="./cloud-node.scss"></style>

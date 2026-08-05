@@ -19,9 +19,6 @@ export interface CloudNode {
   tag?: string;
   ip_address?: string;
   metadata?: Record<string, unknown>;
-  timeout_threshold?: number;
-  probe_enabled?: boolean;
-  probe_url?: string;
   is_deleted?: boolean;
   create_time?: string;
   modify_time?: string;
@@ -60,19 +57,6 @@ export interface GetNodeListRequest {
   keyword?: string;
   page?: Page | number;
   page_size?: number;
-}
-
-export interface UpdateNodeRequest {
-  node_id: string;
-  namespace?: string;
-  region?: string;
-  package_id?: string;
-  package_version?: string;
-  deployment_id?: string;
-  timeout_threshold?: number;
-  probe_enabled?: boolean;
-  probe_url?: string;
-  metadata?: Record<string, unknown> | string;
 }
 
 export interface BatchCreateNodesRequest {
@@ -189,10 +173,6 @@ export const getNodeList = async (
     normalizePageParams(params)
   );
   return { items: rsp.items ?? [], total: rsp.page?.total ?? 0, page: rsp.page };
-};
-
-export const updateNode = async (data: UpdateNodeRequest): Promise<void> => {
-  await callControl<{ node: UpdateNodeRequest }, Record<string, never>>("cloudnode", "UpdateNode", { node: data });
 };
 
 export const submitCreateNodes = async (data: BatchCreateNodesRequest): Promise<SubmitNodeBatchResponse> => {

@@ -54,3 +54,8 @@
 .node-workloads :deep(.arco-tag) {
   flex: 0 0 auto;
 }
+
+.cloud-node-table :deep(.arco-table-td-content),
+.node-id-link {
+  white-space: nowrap;
+}

@@ -87,10 +87,19 @@ func (s *Store) MigrateLegacySchema() error {
 	}
 	return s.db.Exec(`
 UPDATE t_cloud_nodes
-SET c_metadata = json_remove(c_metadata, '$.cls_topic_id', '$.cls_logset_id')
+SET c_metadata = json_remove(
+    c_metadata,
+    '$.cls_topic_id', '$.cls_logset_id',
+    '$.timeout_threshold', '$.probe_enabled', '$.probe_url'
+)
 WHERE json_valid(c_metadata)
-  AND (json_type(c_metadata, '$.cls_topic_id') IS NOT NULL
-       OR json_type(c_metadata, '$.cls_logset_id') IS NOT NULL)
+  AND (
+       json_type(c_metadata, '$.cls_topic_id') IS NOT NULL
+       OR json_type(c_metadata, '$.cls_logset_id') IS NOT NULL
+       OR json_type(c_metadata, '$.timeout_threshold') IS NOT NULL
+       OR json_type(c_metadata, '$.probe_enabled') IS NOT NULL
+       OR json_type(c_metadata, '$.probe_url') IS NOT NULL
+  )
 `).Error
 }
 

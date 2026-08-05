@@ -26,10 +26,11 @@ func TestNodeMetadataBranches(t *testing.T) {
 	require.NoError(t, err)
 	got := nodeMetadataFromPB(&pb.CloudNode{
 		Metadata: metadata, BizType: "market_fetcher", Tag: "prod", IpAddress: "10.0.0.1",
-		TimeoutThreshold: 30, ProbeEnabled: true, ProbeUrl: "https://probe",
 	})
 	assert.Equal(t, "market_fetcher", got["biz_type"])
-	assert.Equal(t, true, got["probe_enabled"])
+	assert.NotContains(t, got, "timeout_threshold")
+	assert.NotContains(t, got, "probe_enabled")
+	assert.NotContains(t, got, "probe_url")
 	assert.Empty(t, nodeMetadataFromPB(nil))
 }
 
