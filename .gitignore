@@ -57,6 +57,7 @@ server/.claude/
 /coverage/
 /modules/*/bin/
 /modules/*/data/
+/modules/*/factors/.versions/
 /modules/*/log/
 /modules/*/logs/
 /modules/*/var/
