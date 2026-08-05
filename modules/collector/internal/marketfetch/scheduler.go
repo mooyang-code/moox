@@ -854,10 +854,10 @@ func (s *Scheduler) expandRule(ctx context.Context, rule domain.TaskRule) ([]dom
 				continue
 			}
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			if !validSubject(subjectID) || strings.TrimSpace(subject.ExternalSymbol) == "" {
-				// Keep one malformed snapshot row from poisoning all timer
+			if strings.TrimSpace(subject.ExternalSymbol) == "" {
+				// Keep one incomplete snapshot row from poisoning all timer
 				// assignments; reconciliation deactivates the stale instance.
-				log.WarnContextf(ctx, "skip invalid market symbol subject=%q external_symbol=%q", subject.SubjectID, subject.ExternalSymbol)
+				log.WarnContextf(ctx, "skip market symbol without external symbol subject=%q", subject.SubjectID)
 				continue
 			}
 			items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: strings.TrimSpace(subject.ExternalSymbol), Provider: provider, MarketType: marketType, DataType: "kline", DatasetID: targetDataset})

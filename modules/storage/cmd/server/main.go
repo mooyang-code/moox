@@ -31,6 +31,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
@@ -45,6 +46,7 @@ import (
 )
 
 func main() {
+	trpclog.InstallServiceName("storage")
 	var err error
 	switch os.Getenv("MOOX_STORAGE_ROLE") {
 	case "", "node":
@@ -342,6 +344,7 @@ func storageViewConsumerOptions() (viewservice.EventConsumerOptions, error) {
 		MaxWorkers:    runtimeConfig.Storage.View.MaxWorkers,
 		MaxAckPending: runtimeConfig.Storage.EventBus.MaxAckPending,
 		Ordering:      runtimeConfig.Storage.View.Ordering,
+		DeliverPolicy: strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_DELIVER_POLICY")),
 	}, nil
 }
 
@@ -553,6 +556,11 @@ func storageEventBusConfig(urls []string, name string) (jetstream.Config, error)
 	if err := cfg.ApplyCredentialFile(path); err != nil {
 		return jetstream.Config{}, fmt.Errorf("storage eventbus credential: %w", err)
 	}
+	// The role-specific URL is an explicit deployment override. Credential
+	// files may carry a default/public URL for other roles, but storage roles
+	// on the EventBus host must be able to select the local loopback endpoint
+	// without editing shared credentials.
+	cfg.URLs = append([]string(nil), urls...)
 	return cfg, nil
 }
 

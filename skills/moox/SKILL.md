@@ -37,7 +37,7 @@ Host Agent deployment:
 - `modules/factor`: factor calculation module.
 - `modules/trade`: trade module.
 - `docs`: architecture, concept, and protocol documents.
-- `scripts`: root build, release, deploy, collector SCF package, storage helper, and node_exporter operation scripts.
+- `scripts`: root build, release, deploy, collector SCF package, storage helper, quality checks, and contract/E2E test scripts.
 
 ## Common Commands
 

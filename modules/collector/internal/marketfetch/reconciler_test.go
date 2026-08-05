@@ -234,6 +234,24 @@ func TestReconcilerDoesNotStormOnTransientTimerReadbackError(t *testing.T) {
 	require.True(t, timerTriggerNeedsRepair(assignment, metadata))
 }
 
+func TestReconcilerIgnoresDNSRotationForDisabledAssignments(t *testing.T) {
+	assignment := NodeAssignment{NodeID: "timer-1", Enabled: false, AssignmentHash: AssignmentHash()}
+	fingerprint := assignment.AssignmentHash + "\x00\x00false\x000 * * * * * *"
+	nodes := []scfinvoker.Node{{NodeID: assignment.NodeID, Metadata: map[string]any{
+		"assignment_hash":        assignment.AssignmentHash,
+		"dns_hash":               "rotated-dns-hash",
+		"timer_enabled":          false,
+		"timer_cron":             "0 * * * * * *",
+		"timer_available_status": "Available",
+		"timer_actual_type":      "timer",
+		"timer_actual_enabled":   false,
+		"timer_actual_cron":      "0 * * * * * *",
+		"timer_actual_qualifier": "$LATEST",
+		"timer_actual_message":   timerTriggerMessage,
+	}}}
+	require.False(t, (&Reconciler{}).shouldPatch(assignment, nodes, fingerprint), "disabled nodes must not be repatched when only DNS rotates")
+}
+
 func TestReconcilerSplitsLongSubjectsBeforeEnvironmentFailure(t *testing.T) {
 	group := TaskGroup{Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m", ExternalSymbols: map[string]string{}}
 	for index := 0; index < 30; index++ {

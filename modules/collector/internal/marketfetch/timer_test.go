@@ -29,6 +29,25 @@ func TestTimerRequestFromEnv(t *testing.T) {
 	require.Equal(t, "BTC-USDT", req.Items[0].SubjectID)
 }
 
+func TestTimerRequestFromEnvAllowsUnicodeSubjectNames(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto_market")
+	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")
+	t.Setenv("MOOX_MARKET_FETCH_MARKET_TYPE", "spot")
+	t.Setenv("MOOX_MARKET_FETCH_DATASET_ID", "bars")
+	t.Setenv("MOOX_MARKET_FETCH_FREQUENCY", "1m")
+	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "币安人生-USDT")
+	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", `{"币安人生-USDT":"BINANCELIFEUSDT"}`)
+	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://10.0.0.1:11003")
+
+	req, _, err := TimerRequestFromEnv("req", "node", time.Date(2026, 8, 4, 1, 2, 3, 0, time.UTC))
+	require.NoError(t, err)
+	require.Len(t, req.Items, 1)
+	if len(req.Items) == 1 {
+		require.Equal(t, "币安人生-USDT", req.Items[0].SubjectID)
+		require.Equal(t, "BINANCELIFEUSDT", req.Items[0].Symbol)
+	}
+}
+
 func TestTimerRequestFromEnvMalformedDNSFallsBackToPlatformResolver(t *testing.T) {
 	t.Setenv("MOOX_SPACE_ID", "crypto_market")
 	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "binance")

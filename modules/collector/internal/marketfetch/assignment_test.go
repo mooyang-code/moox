@@ -42,6 +42,19 @@ func TestBuildAssignmentsRejectsMissingExternalSymbolMapping(t *testing.T) {
 	require.ErrorContains(t, err, "external symbol mapping")
 }
 
+func TestBuildAssignmentsAllowsUnicodeSubjectNames(t *testing.T) {
+	assignments, err := BuildAssignments([]TaskGroup{{
+		Provider: "binance", MarketType: "spot", DatasetID: "bars", Frequency: "1m",
+		Subjects: []string{"币安人生-USDT"}, ExternalSymbols: map[string]string{"币安人生-USDT": "BINANCELIFEUSDT"},
+	}}, []scfinvoker.Node{{NodeID: "n", NodeType: "scf-event", TriggerType: "timer"}}, 30)
+	require.NoError(t, err)
+	require.Len(t, assignments, 1)
+	if len(assignments) == 1 {
+		require.Equal(t, []string{"币安人生-USDT"}, assignments[0].Subjects)
+		require.Equal(t, "BINANCELIFEUSDT", assignments[0].ExternalSymbols["币安人生-USDT"])
+	}
+}
+
 func TestCronForFrequency(t *testing.T) {
 	cron, err := CronForFrequency("1m")
 	require.NoError(t, err)

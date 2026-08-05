@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 )
@@ -66,11 +65,6 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 		group.Subjects = normalizeSubjects(group.Subjects)
 		if group.Provider == "" || group.MarketType == "" || group.DatasetID == "" || len(group.Subjects) == 0 {
 			return nil, fmt.Errorf("task group has incomplete identity or no subjects")
-		}
-		for _, subject := range group.Subjects {
-			if !validSubject(subject) {
-				return nil, fmt.Errorf("invalid subject %q", subject)
-			}
 		}
 		if group.ExternalSymbols == nil {
 			return nil, fmt.Errorf("task group external symbol mapping is required")
@@ -161,18 +155,6 @@ func normalizeSubjects(subjects []string) []string {
 	}
 	sort.Strings(result)
 	return result
-}
-
-func validSubject(subject string) bool {
-	if len(subject) == 0 || len(subject) > 32 || strings.Contains(subject, "|") {
-		return false
-	}
-	for _, r := range subject {
-		if r != '-' && !unicode.IsUpper(r) && !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
 }
 
 func groupKey(group TaskGroup) string {

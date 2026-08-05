@@ -1,4 +1,4 @@
-.PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline proto-check release release-matrix deploy test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-gateway build-storage-linux check-boundaries check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-script-contracts test-script-e2e test-scripts proto-check release release-matrix deploy test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
 
 build:
 	./scripts/build.sh
@@ -111,6 +111,14 @@ test-caddy:
 test-collector-scf-package-contract:
 	bash scripts/build-collector-scf-package_test.sh
 
+test-script-contracts:
+	@set -e; for script in scripts/tests/contract/*.sh; do bash "scripts/$$(basename "$$script")"; done
+
+test-script-e2e:
+	@set -e; for script in scripts/tests/e2e/*.sh; do bash "scripts/$$(basename "$$script")"; done
+
+test-scripts: test-script-contracts test-script-e2e
+
 test-gateway-deploy:
 	bash scripts/test-deploy-moox-gateway.sh
 
@@ -145,5 +153,5 @@ proto:
 	$(MAKE) -C modules/strategy/proto all
 
 clean:
-	rm -rf bin release dist scripts/node_exporter/build
+	rm -rf bin release dist
 	find modules -type d \( -name bin -o -name release -o -name .cache \) -prune -exec rm -rf {} +

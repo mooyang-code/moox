@@ -771,6 +771,13 @@ type timerCoordinationState struct {
 	badNodes                      []string
 }
 
+// A full Tencent runtime-config batch may touch dozens of functions. The
+// coordination timestamp measures completion of that asynchronous batch, not
+// the ten-second Collector timer callback. Keep this threshold above the
+// observed multi-node provider update window; Storage freshness remains the
+// fast alert for an actual missing K-line.
+const timerCoordinationStaleAfter = 15 * time.Minute
+
 // buildMarketFetchCoordination consumes the small Collector coordination
 // metric set. It deliberately does not call Tencent or CloudNode: Collector
 // already reads the trigger readback and publishes it through the shared
@@ -878,7 +885,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 			status, reason = "down", fmt.Sprintf("Timer 节点分配不足：已分配 %.0f 个，需要 %.0f 个", state.active, state.required)
 		case !state.hasLastSuccess || state.lastSuccess <= 0:
 			status, reason = "down", "尚未完成 Timer 配置协调"
-		case now.Sub(unixTime(state.lastSuccess)) > 2*time.Minute:
+		case now.Sub(unixTime(state.lastSuccess)) > timerCoordinationStaleAfter:
 			status, reason = "down", fmt.Sprintf("最近一次 Timer 配置协调已超过允许时间，最后成功时间 %s", unixTime(state.lastSuccess).Format(time.RFC3339))
 		case len(state.badNodes) > 0:
 			sort.Strings(state.badNodes)

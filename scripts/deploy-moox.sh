@@ -905,7 +905,7 @@ patch_configs() {
   # A remote Storage gateway is the native RPC ingress used by short-lived
   # SCF calls. It must not be loopback-only just because CloudNode is absent.
   if [[ "${WITH_GATEWAY}" -eq 1 && ( "${WITH_CLOUDNODE}" -eq 1 || "${WITH_STORAGE}" -eq 1 ) ]]; then
-    perl -0pi -e 's#native_addr:\s*127\.0\.0\.1:11003#native_addr: 0.0.0.0:11003#' \
+    perl -0pi -e 's#native_addr:\s*127\.0\.0\.1:11003#native_addr: 0.0.0.0:11003#; s#health_addr:\s*127\.0\.0\.1:11012#health_addr: 0.0.0.0:11012#' \
       "${STAGE_DIR}/gateway/config/app.yaml"
   fi
   if grep -q '^  ca_file:' "${STAGE_DIR}/gateway/config/app.yaml"; then
@@ -1309,6 +1309,7 @@ EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-__EVENTBUS_URL__}"
 MOOX_EVENTBUS_HOST="${MOOX_EVENTBUS_HOST:-__EVENTBUS_HOST__}"
 MOOX_EVENTBUS_PORT="${MOOX_EVENTBUS_PORT:-__EVENTBUS_PORT__}"
 MOOX_EVENTBUS_ENABLE_TLS="${MOOX_EVENTBUS_ENABLE_TLS:-__EVENTBUS_ENABLE_TLS__}"
+STORAGE_EVENTBUS_URL_ENV="${MOOX_STORAGE_EVENTBUS_URL:-tls://127.0.0.1:${MOOX_EVENTBUS_PORT}}"
 export MOOX_EVENTBUS_NATS_URL="${EVENTBUS_URL_ENV}" MOOX_EVENTBUS_HOST MOOX_EVENTBUS_PORT MOOX_EVENTBUS_ENABLE_TLS
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 
@@ -1552,7 +1553,7 @@ start_storage_process() {
       "MOOX_STORAGE_CONFIG=${ROOT}/storage/config/${storage_conf}" \
       "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
       "MOOX_STORAGE_ROLE=${role}" \
-      "MOOX_STORAGE_EVENTBUS_URL=${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}" \
+      "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
       "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}" \
@@ -1614,7 +1615,8 @@ start_storage_view() {
       "MOOX_STORAGE_CONFIG=${ROOT}/storage-view/config/trpc_go.yaml" \
       "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
       "MOOX_STORAGE_ROLE=view" \
-      "MOOX_STORAGE_EVENTBUS_URL=${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}" \
+      "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
+      "MOOX_STORAGE_VIEW_DELIVER_POLICY=${MOOX_STORAGE_VIEW_DELIVER_POLICY:-}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
       "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}" \
@@ -1638,7 +1640,7 @@ start_storage_node() {
       "MOOX_STORAGE_HOME=${ROOT}/data/storage-node" \
       "MOOX_STORAGE_ROLE=node" \
       "MOOX_STORAGE_NODE_ID=${MOOX_STORAGE_NODE_ID:-storage-node-0}" \
-      "MOOX_STORAGE_EVENTBUS_URL=${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}" \
+      "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "${ROOT}/bin/moox-storage-node" \
       -conf=config/trpc_go.yaml
@@ -1651,7 +1653,7 @@ start_storage() {
   wait_tcp 127.0.0.1 20107 "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
   wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
   wait_tcp 127.0.0.1 20201 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
-  wait_nats storage "${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}" "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
+  wait_nats storage "${STORAGE_EVENTBUS_URL_ENV}" "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
   wait_http http://127.0.0.1:20210/healthz "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
   register_storage_node
 }
@@ -1843,8 +1845,10 @@ start_monitor() {
   gateway_service_env_for monitor
   runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"
   local storage_gateway_target storage_gateway_node_id
-  storage_gateway_target="$(awk '/^[[:space:]]*gateway_target:/ {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]\"]/, ""); print; exit}' "${ROOT}/collector/config/app.yaml")"
-  storage_gateway_node_id="$(awk -F: '/^[[:space:]]*gateway_node_id:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
+  if [[ -f "${ROOT}/collector/config/app.yaml" ]]; then
+    storage_gateway_target="$(awk '/^[[:space:]]*gateway_target:/ {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]\"]/, ""); print; exit}' "${ROOT}/collector/config/app.yaml")"
+    storage_gateway_node_id="$(awk -F: '/^[[:space:]]*gateway_node_id:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
+  fi
   storage_gateway_target="${storage_gateway_target:-ip://127.0.0.1:11003}"
   storage_gateway_node_id="${storage_gateway_node_id:-${MOOX_GATEWAY_NODE_ID}}"
   start_service "monitor" "${ROOT}/monitor" \
@@ -1946,7 +1950,7 @@ case "${SERVICE}" in
       exit 2
     fi
     wait_tcp 127.0.0.1 20201 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
-    wait_nats storage "${MOOX_STORAGE_EVENTBUS_URL:-${EVENTBUS_URL_ENV}}" "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
+    wait_nats storage "${STORAGE_EVENTBUS_URL_ENV}" "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
     start_storage_view
     ;;
   storage-node)

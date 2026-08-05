@@ -43,11 +43,6 @@ func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 	if len(subjects) > 30 {
 		return nil, fmt.Errorf("assignment contains %d subjects; maximum is 30", len(subjects))
 	}
-	for _, subject := range subjects {
-		if !validSubject(subject) {
-			return nil, fmt.Errorf("invalid subject %q", subject)
-		}
-	}
 	routes, dnsHash, updatedAt := normalizeDNSRoutes(snapshot)
 	rawRoutes, err := json.Marshal(routes)
 	if err != nil {

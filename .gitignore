@@ -65,7 +65,6 @@ server/.claude/
 /modules/*/coverage/
 /modules/*/.cache/
 /modules/*/scf-build/
-/modules/collector/collector-scf-*.zip
 /modules/storage/.deps/
 /scripts/node_exporter/build/
 cover.out
@@ -80,6 +79,8 @@ cover.out.tmp
 *.sqlite3
 
 *.log
+*.zip
+*.tmp
 
 # Editor/IDE
 # .idea/

@@ -65,6 +65,9 @@ func TestStorageEventBusConfigLoadsCredentialFromExplicitEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(got.URLs) != 1 || got.URLs[0] != "nats://127.0.0.1:4222" {
+		t.Fatalf("credential file replaced role URL: %v", got.URLs)
+	}
 	if got.Username != "storage-eventbus" || got.Password != "storage-secret" {
 		t.Fatalf("credential config = username %q/password %q", got.Username, got.Password)
 	}
@@ -129,11 +132,12 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
+	t.Setenv("MOOX_STORAGE_VIEW_DELIVER_POLICY", " new ")
 	opts, err := storageViewConsumerOptions()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Consumer != "storage_view" || opts.FetchBatch != 4 || opts.MaxWorkers != 2 || opts.MaxAckPending != 8 || opts.AckWaitMS != 120000 {
+	if opts.Consumer != "storage_view" || opts.FetchBatch != 4 || opts.MaxWorkers != 2 || opts.MaxAckPending != 8 || opts.AckWaitMS != 120000 || opts.DeliverPolicy != "new" {
 		t.Fatalf("consumer options = %+v", opts)
 	}
 }

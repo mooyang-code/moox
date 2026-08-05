@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRotateRulesAfterAdvancesPastLastCappedRule(t *testing.T) {
@@ -119,6 +120,24 @@ func TestExpandRuleUsesExplicitExternalSymbolForKline(t *testing.T) {
 	assert.Equal(t, []string{"1m"}, frequencies)
 	if assert.Len(t, items, 1) {
 		assert.Equal(t, "BTCUSDT", items[0].Symbol)
+	}
+}
+
+func TestExpandRuleAllowsUnicodeSubjectNames(t *testing.T) {
+	scheduler := &Scheduler{
+		SpaceID: "crypto_market",
+		Symbols: datasetSourceStub{subjects: []domain.DatasetSubject{{SubjectID: "币安人生-USDT", ExternalSymbol: "BINANCELIFEUSDT", Status: "active"}}},
+	}
+	items, frequencies, err := scheduler.expandRule(t.Context(), domain.TaskRule{
+		SpaceID: "crypto_market", RuleID: "bars", DataType: "kline", Provider: "binance", MarketType: "spot",
+		CollectParams: `{"provider":"binance","market_type":"spot","symbol_source":"dataset","symbol_dataset_id":"symbols","target_dataset_id":"bars","frequency":"1m"}`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"1m"}, frequencies)
+	require.Len(t, items, 1)
+	if len(items) == 1 {
+		assert.Equal(t, "币安人生-USDT", items[0].SubjectID)
+		assert.Equal(t, "BINANCELIFEUSDT", items[0].Symbol)
 	}
 }
 

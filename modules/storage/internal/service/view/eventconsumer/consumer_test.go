@@ -25,8 +25,21 @@ func TestConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Consumer != "storage_view" || config.AckWaitMS != 120000 || config.FetchBatch != 8 || config.MaxWorkers != 4 || config.MaxRetryAttempts != 10 || config.Ordering != "subject" {
+	if config.Consumer != "storage_view" || config.AckWaitMS != 120000 || config.FetchBatch != 8 || config.MaxWorkers != 4 || config.MaxRetryAttempts != 10 || config.Ordering != "subject" || config.DeliverPolicy != "all" {
 		t.Fatalf("config = %+v", config)
+	}
+}
+
+func TestConfigNormalizesDeliverPolicy(t *testing.T) {
+	config, err := (Config{DeliverPolicy: " NEW "}).withDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.DeliverPolicy != "new" {
+		t.Fatalf("deliver policy = %q, want new", config.DeliverPolicy)
+	}
+	if _, err := (Config{DeliverPolicy: "last"}).withDefaults(); err == nil {
+		t.Fatal("unsupported deliver policy was accepted")
 	}
 }
 

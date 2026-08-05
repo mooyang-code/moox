@@ -23,6 +23,7 @@ type Config struct {
 	MaxWorkers       int
 	MaxAckPending    int
 	Ordering         string
+	DeliverPolicy    string
 	MaxRetryAttempts int
 	ErrorReporter    jetstream.ErrorReporter
 	Metrics          *observability.ViewMetrics
@@ -65,6 +66,13 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	if c.Ordering != "subject" {
 		return c, fmt.Errorf("storage view ordering %q is unsupported", c.Ordering)
+	}
+	c.DeliverPolicy = strings.ToLower(strings.TrimSpace(c.DeliverPolicy))
+	if c.DeliverPolicy == "" {
+		c.DeliverPolicy = "all"
+	}
+	if c.DeliverPolicy != "all" && c.DeliverPolicy != "new" {
+		return c, fmt.Errorf("storage view deliver_policy %q is unsupported", c.DeliverPolicy)
 	}
 	if c.MaxAckPending < 0 {
 		return c, errors.New("storage view max_ack_pending must not be negative")
@@ -127,6 +135,10 @@ func (c *Consumer) bindDelivery(ctx context.Context) (deliveryConsumer, error) {
 		return nil, errors.New("storage view event consumer is not initialized")
 	}
 	opts := c.config
+	deliverPolicy := nats.DeliverAllPolicy
+	if opts.DeliverPolicy == "new" {
+		deliverPolicy = nats.DeliverNewPolicy
+	}
 	return events.NewConsumer(ctx, c.client, c.registry, events.ConsumerConfig{
 		Name:                opts.Consumer,
 		Event:               events.DatasetRowsUpserted,
@@ -134,7 +146,7 @@ func (c *Consumer) bindDelivery(ctx context.Context) (deliveryConsumer, error) {
 		MaxDeliver:          -1,
 		MaxAckPending:       opts.MaxAckPending,
 		FetchMaxWait:        time.Second,
-		DeliverPolicy:       nats.DeliverAllPolicy,
+		DeliverPolicy:       deliverPolicy,
 		DeliverDecodeErrors: true,
 	})
 }

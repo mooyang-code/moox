@@ -153,6 +153,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		if dnsHash == "" && !dnsAvailable {
 			dnsHash = currentDNSHash(assignment.NodeID, nodes)
 		}
+		// Disabled nodes do not execute Timer work, so rotating DNS routes do
+		// not require an environment update for them. Keep their existing DNS
+		// values until the node is enabled again; the next enabled assignment
+		// always carries the current snapshot.
+		if !assignment.Enabled {
+			dnsHash = ""
+		}
 		fingerprint := assignment.AssignmentHash + "\x00" + dnsHash + "\x00" + fmt.Sprint(assignment.Enabled) + "\x00" + cron
 		if !r.shouldPatch(assignment, nodes, fingerprint) {
 			continue
@@ -512,11 +519,10 @@ func (r *Reconciler) groups(ctx context.Context, spaceID string) ([]TaskGroup, e
 				continue
 			}
 			subjectID := strings.ToUpper(strings.TrimSpace(subject.SubjectID))
-			if !validSubject(subjectID) || strings.TrimSpace(subject.ExternalSymbol) == "" {
-				// A malformed/stale symbol must not block the entire full-snapshot
-				// assignment. It is deliberately omitted and will be deactivated
-				// from TaskInstance during the same reconciliation pass.
-				log.WarnContextf(ctx, "skip invalid market symbol subject=%q external_symbol=%q", subject.SubjectID, subject.ExternalSymbol)
+			if strings.TrimSpace(subject.ExternalSymbol) == "" {
+				// A symbol without an external exchange code cannot be executed;
+				// omit it while keeping the remaining assignments healthy.
+				log.WarnContextf(ctx, "skip market symbol without external symbol subject=%q", subject.SubjectID)
 				continue
 			}
 			symbolIDs = append(symbolIDs, subjectID)
@@ -581,7 +587,13 @@ func (r *Reconciler) shouldPatch(assignment NodeAssignment, nodes []scfinvoker.N
 			continue
 		}
 		metadata := node.Metadata
-		stored := fmt.Sprintf("%v\x00%v\x00%v\x00%v", metadata["assignment_hash"], metadata["dns_hash"], metadata["timer_enabled"], metadata["timer_cron"])
+		storedDNSHash := fmt.Sprint(metadata["dns_hash"])
+		if !assignment.Enabled {
+			// DNS is intentionally ignored for disabled assignments; otherwise
+			// every five-minute resolver refresh would rewrite all spare nodes.
+			storedDNSHash = ""
+		}
+		stored := fmt.Sprintf("%v\x00%v\x00%v\x00%v", metadata["assignment_hash"], storedDNSHash, metadata["timer_enabled"], metadata["timer_cron"])
 		if stored == fingerprint {
 			if timerTriggerNeedsRepair(assignment, metadata) {
 				return true

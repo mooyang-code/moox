@@ -74,5 +74,5 @@ cd /home/ubuntu/moox/prod
 bash scripts/test-monitor-coverage-contract.sh
 bash scripts/test-release-contract.sh
 (cd modules/monitor && go test -count=1 ./internal/doctor ./internal/hostmetrics ./internal/rpc)
-(cd modules/cli && go test -count=1 ./internal/doctor/... ./internal/doctorclient/... ./internal/command)
+(cd modules/cli && go test -count=1 ./internal/doctor/... ./internal/command)
 ```

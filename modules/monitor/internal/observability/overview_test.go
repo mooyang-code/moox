@@ -177,6 +177,24 @@ func TestBuilderReportsTimerCoordinationHealth(t *testing.T) {
 	}
 }
 
+func TestBuilderDoesNotAlertDuringExpectedAsyncTimerBatch(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"crypto_market","dataset_id":"bars","frequency":"1m"}`
+		lastSuccess := now.Add(-10 * time.Minute)
+		// Keep the metric series fresh while making the coordination value old;
+		// FindSeriesAt marks an unreported series stale independently of its value.
+		seedOverviewMetricForInstance(t, db, "timer-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "timer-active", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "timer-success", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"crypto_market"}`, float64(lastSuccess.Unix()), now)
+		seedOverviewMetricForInstance(t, db, "timer-trigger", "moox_collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto_market","node_id":"timer-1","enabled":"true"}`, 1, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
+}
+
 func TestBuilderReportsStoppedCollectorForStaleTimerCoordinationSeries(t *testing.T) {
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {

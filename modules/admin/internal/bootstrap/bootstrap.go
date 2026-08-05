@@ -46,7 +46,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerAuthCacheCleanupTimer(s, cache); err != nil {
 		return nil, err
 	}
-	if err := registerCertificateWatchTimer(s, newCertificateWatchFromEnvironment()); err != nil {
+	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment()); err != nil {
 		return nil, err
 	}
 
@@ -110,7 +110,7 @@ func registerMetricsReporter(s *server.Server) {
 	timer.RegisterHandlerService(service, h.Handle)
 }
 
-func registerCertificateWatchTimer(s *server.Server, watch certificateWatch) error {
+func registerCertificateWatchTimer(ctx context.Context, s *server.Server, watch certificateWatch) error {
 	if s == nil {
 		return fmt.Errorf("certificate watch timer requires server")
 	}
@@ -118,7 +118,7 @@ func registerCertificateWatchTimer(s *server.Server, watch certificateWatch) err
 	if service == nil {
 		return fmt.Errorf("certificate watch timer service %q is not configured", certificateWatchTimerService)
 	}
-	if err := watch.Validate(context.Background()); err != nil {
+	if err := watch.Validate(ctx); err != nil {
 		return err
 	}
 	timer.RegisterHandlerService(service, watch.Validate)

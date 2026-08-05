@@ -34,11 +34,6 @@ func TimerRequestFromEnv(requestID, functionName string, now time.Time) (Request
 	if len(subjects) == 0 || len(subjects) > 30 {
 		return Request{}, "", fmt.Errorf("timer market fetch subjects must contain 1..30 values")
 	}
-	for _, subject := range subjects {
-		if !validSubject(subject) {
-			return Request{}, "", fmt.Errorf("invalid timer subject %q", subject)
-		}
-	}
 	dnsRoutes, err := parseDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON"))
 	if err != nil {
 		return Request{}, "", err

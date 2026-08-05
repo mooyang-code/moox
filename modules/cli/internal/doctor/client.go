@@ -1,4 +1,4 @@
-package doctorclient
+package doctor
 
 import (
 	"context"

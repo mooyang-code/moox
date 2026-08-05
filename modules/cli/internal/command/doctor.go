@@ -12,7 +12,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/config"
 	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
-	"github.com/mooyang-code/moox/modules/cli/internal/doctorclient"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	core "github.com/mooyang-code/moox/packages/doctor"
@@ -30,14 +29,14 @@ func (e doctorExitError) ExitCode() int { return e.code }
 
 type doctorCommandDeps struct {
 	loadConfig        func() (*config.Config, error)
-	newClient         func(string, string) *doctorclient.Client
+	newClient         func(string, string) *doctorcli.Client
 	newMetadataClient func(string, string) doctorcli.StorageActivationClient
 }
 
 func init() {
 	rootCmd.AddCommand(newDoctorCommand(doctorCommandDeps{
 		loadConfig:        config.LoadConfig,
-		newClient:         doctorclient.New,
+		newClient:         doctorcli.New,
 		newMetadataClient: newSignedStorageMetadataClient,
 	}))
 }
