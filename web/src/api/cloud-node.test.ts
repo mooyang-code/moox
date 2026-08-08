@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { callControl } = vi.hoisted(() => ({ callControl: vi.fn() }));
 vi.mock("@/api/admin/http", () => ({ callControl }));
 
-import { submitCreateNodes, submitDeployNodes } from "./cloud-node";
+import { importSCFFunctions, previewSCFFunctions, submitCreateNodes, submitDeployNodes } from "./cloud-node";
 
 describe("cloud node batch API", () => {
   beforeEach(() => {
@@ -56,6 +56,23 @@ describe("cloud node batch API", () => {
         { node_id: "node-1", package_id: "pkg-2" },
         { node_id: "node-2", package_id: "pkg-2" }
       ]
+    });
+  });
+
+  it("previews and imports only selected SCF references", async () => {
+    callControl.mockResolvedValueOnce({
+      functions: [{ function: { region: "ap-guangzhou", namespace: "default", function_name: "moox-fetcher" }, importable: true }],
+      region_errors: []
+    });
+    const preview = await previewSCFFunctions("account-1");
+    expect(preview.functions).toHaveLength(1);
+    callControl.mockResolvedValueOnce({ created: 1, restored: 0, unchanged: 0, failed: 0, results: [] });
+    await importSCFFunctions("account-1", [
+      preview.functions[0].function
+    ]);
+    expect(callControl).toHaveBeenLastCalledWith("cloudnode", "ImportSCFFunctions", {
+      account_id: "account-1",
+      functions: [{ region: "ap-guangzhou", namespace: "default", function_name: "moox-fetcher" }]
     });
   });
 });

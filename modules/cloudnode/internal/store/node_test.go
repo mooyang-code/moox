@@ -29,3 +29,18 @@ func TestNodeInvocationSelection(t *testing.T) {
 	require.Equal(t, int64(2), total)
 	require.Len(t, online, 2)
 }
+
+func TestGetNodeIncludingDeletedReturnsSoftDeletedIdentity(t *testing.T) {
+	repo := newTestCatalog(t)
+	ctx := context.Background()
+	require.NoError(t, repo.UpsertNode(ctx, CloudNode{SpaceID: "crypto", NodeID: "node-deleted", Region: "ap-guangzhou"}))
+	require.NoError(t, repo.DeleteNodes(ctx, "crypto", []string{"node-deleted"}))
+
+	current, err := repo.GetNode(ctx, "crypto", "node-deleted")
+	require.NoError(t, err)
+	require.Nil(t, current)
+	deleted, err := repo.GetNodeIncludingDeleted(ctx, "crypto", "node-deleted")
+	require.NoError(t, err)
+	require.NotNil(t, deleted)
+	require.True(t, deleted.IsDeleted)
+}

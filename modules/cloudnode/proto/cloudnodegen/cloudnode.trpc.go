@@ -47,6 +47,10 @@ type CloudNodeMgrService interface {
 
 	ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq) (*ListCloudRegionsRsp, error)
 
+	PreviewSCFFunctions(ctx context.Context, req *PreviewSCFFunctionsReq) (*PreviewSCFFunctionsRsp, error)
+
+	ImportSCFFunctions(ctx context.Context, req *ImportSCFFunctionsReq) (*ImportSCFFunctionsRsp, error)
+
 	GetPackageList(ctx context.Context, req *GetPackageListReq) (*GetPackageListRsp, error)
 
 	GetPackageDetail(ctx context.Context, req *GetPackageDetailReq) (*GetPackageDetailRsp, error)
@@ -322,6 +326,42 @@ func CloudNodeMgrService_ListCloudRegions_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
+func CloudNodeMgrService_PreviewSCFFunctions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PreviewSCFFunctionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeMgrService).PreviewSCFFunctions(ctx, reqbody.(*PreviewSCFFunctionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CloudNodeMgrService_ImportSCFFunctions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ImportSCFFunctionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CloudNodeMgrService).ImportSCFFunctions(ctx, reqbody.(*ImportSCFFunctionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func CloudNodeMgrService_GetPackageList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetPackageListReq{}
 	filters, err := f(req)
@@ -582,6 +622,14 @@ var CloudNodeMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CloudNodeMgrService_ListCloudRegions_Handler,
 		},
 		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/PreviewSCFFunctions",
+			Func: CloudNodeMgrService_PreviewSCFFunctions_Handler,
+		},
+		{
+			Name: "/trpc.moox.cloudnode.CloudNodeMgr/ImportSCFFunctions",
+			Func: CloudNodeMgrService_ImportSCFFunctions_Handler,
+		},
+		{
 			Name: "/trpc.moox.cloudnode.CloudNodeMgr/GetPackageList",
 			Func: CloudNodeMgrService_GetPackageList_Handler,
 		},
@@ -681,6 +729,12 @@ func (s *UnimplementedCloudNodeMgr) DeleteCloudAccount(ctx context.Context, req 
 func (s *UnimplementedCloudNodeMgr) ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq) (*ListCloudRegionsRsp, error) {
 	return nil, errors.New("rpc ListCloudRegions of service CloudNodeMgr is not implemented")
 }
+func (s *UnimplementedCloudNodeMgr) PreviewSCFFunctions(ctx context.Context, req *PreviewSCFFunctionsReq) (*PreviewSCFFunctionsRsp, error) {
+	return nil, errors.New("rpc PreviewSCFFunctions of service CloudNodeMgr is not implemented")
+}
+func (s *UnimplementedCloudNodeMgr) ImportSCFFunctions(ctx context.Context, req *ImportSCFFunctionsReq) (*ImportSCFFunctionsRsp, error) {
+	return nil, errors.New("rpc ImportSCFFunctions of service CloudNodeMgr is not implemented")
+}
 func (s *UnimplementedCloudNodeMgr) GetPackageList(ctx context.Context, req *GetPackageListReq) (*GetPackageListRsp, error) {
 	return nil, errors.New("rpc GetPackageList of service CloudNodeMgr is not implemented")
 }
@@ -750,6 +804,10 @@ type CloudNodeMgrClientProxy interface {
 	DeleteCloudAccount(ctx context.Context, req *DeleteCloudAccountReq, opts ...client.Option) (rsp *DeleteCloudAccountRsp, err error)
 
 	ListCloudRegions(ctx context.Context, req *ListCloudRegionsReq, opts ...client.Option) (rsp *ListCloudRegionsRsp, err error)
+
+	PreviewSCFFunctions(ctx context.Context, req *PreviewSCFFunctionsReq, opts ...client.Option) (rsp *PreviewSCFFunctionsRsp, err error)
+
+	ImportSCFFunctions(ctx context.Context, req *ImportSCFFunctionsReq, opts ...client.Option) (rsp *ImportSCFFunctionsRsp, err error)
 
 	GetPackageList(ctx context.Context, req *GetPackageListReq, opts ...client.Option) (rsp *GetPackageListRsp, err error)
 
@@ -1057,6 +1115,46 @@ func (c *CloudNodeMgrClientProxyImpl) ListCloudRegions(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListCloudRegionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) PreviewSCFFunctions(ctx context.Context, req *PreviewSCFFunctionsReq, opts ...client.Option) (*PreviewSCFFunctionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/PreviewSCFFunctions")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("PreviewSCFFunctions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PreviewSCFFunctionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CloudNodeMgrClientProxyImpl) ImportSCFFunctions(ctx context.Context, req *ImportSCFFunctionsReq, opts ...client.Option) (*ImportSCFFunctionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.cloudnode.CloudNodeMgr/ImportSCFFunctions")
+	msg.WithCalleeServiceName(CloudNodeMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("cloudnode")
+	msg.WithCalleeService("CloudNodeMgr")
+	msg.WithCalleeMethod("ImportSCFFunctions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ImportSCFFunctionsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

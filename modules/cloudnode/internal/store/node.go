@@ -66,6 +66,23 @@ func (r *CatalogRepository) GetNode(ctx context.Context, spaceID string, nodeID 
 	return &node, nil
 }
 
+// GetNodeIncludingDeleted returns a node identity even when it was soft-deleted.
+// Import preview uses this to distinguish a new function from a restorable row.
+func (r *CatalogRepository) GetNodeIncludingDeleted(ctx context.Context, spaceID string, nodeID string) (*CloudNode, error) {
+	q := r.db.WithContext(ctx).Where("c_node_id = ?", nodeID)
+	if spaceID != "" {
+		q = q.Where("c_space_id = ?", spaceID)
+	}
+	var node CloudNode
+	if err := q.First(&node).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &node, nil
+}
+
 func (r *CatalogRepository) UpsertNode(ctx context.Context, node CloudNode) error {
 	now := r.currentTime()
 	if node.CreateTime.IsZero() {

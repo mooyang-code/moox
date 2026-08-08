@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
 
 const (
@@ -513,12 +514,7 @@ func includesSpaceIdentity(value, spaceID string) bool {
 // supportedSCFRegion keeps an operator typo from creating a partial fleet.
 // It intentionally covers the standard Tencent Cloud SCF regions used by MooX.
 func supportedSCFRegion(region string) bool {
-	switch region {
-	case "ap-beijing", "ap-chengdu", "ap-chongqing", "ap-guangzhou", "ap-nanjing", "ap-shanghai", "ap-shanghai-fsi", "ap-shenzhen-fsi", "ap-hongkong", "na-toronto", "na-siliconvalley", "eu-frankfurt", "ap-singapore", "ap-bangkok", "ap-jakarta", "ap-tokyo", "ap-seoul":
-		return true
-	default:
-		return false
-	}
+	return tencent.IsSCFRegion(region)
 }
 
 func validHTTPSWebhook(rawURL string) bool {

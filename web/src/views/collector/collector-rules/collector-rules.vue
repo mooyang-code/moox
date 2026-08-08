@@ -206,7 +206,13 @@ import type { Dataset } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { storeToRefs } from "pinia";
-import { buildCollectorRuleParams, datasetMatchesCollector, type CollectorRuleInput } from "./collector-rule-params";
+import {
+  buildCollectorRuleParams,
+  buildCollectorRuleRequest,
+  datasetMatchesCollector,
+  normalizeCollectorRule,
+  type CollectorRuleInput
+} from "./collector-rule-params";
 
 interface TaskConfig {
   id?: number;
@@ -361,18 +367,7 @@ const normalizeObject = (value: any): Record<string, any> => {
   }
 };
 
-const normalizeTaskConfig = (raw: any): TaskConfig => ({
-  id: raw.id,
-  rule_id: raw.rule_id || "",
-  space_id: raw.space_id || "",
-  data_type: raw.data_type || "",
-  data_source: raw.exchange || raw.data_source || "",
-  collect_params: JSON.stringify(normalizeObject(raw.collect_params)),
-  enabled: (raw.enabled ?? true) ? "true" : "false",
-  creator: raw.creator || "",
-  create_time: raw.create_time || "",
-  modify_time: raw.modify_time || ""
-});
+const normalizeTaskConfig = (raw: any): TaskConfig => normalizeCollectorRule(raw);
 
 const dataSourceOptionsFromConfig = (value: any) => {
   const config = normalizeObject(value);
@@ -487,7 +482,7 @@ const getTaskList = async () => {
 
     if (form.value.ruleId) params.rule_id = form.value.ruleId;
     if (form.value.dataType) params.data_type = form.value.dataType;
-    if (form.value.dataSource) params.exchange = form.value.dataSource;
+    if (form.value.dataSource) params.provider = form.value.dataSource;
     if (form.value.enabled !== null) params.enabled = form.value.enabled;
 
     const data = await callControl<typeof params, { rules?: any[]; page?: { total?: number } }>(
@@ -673,18 +668,20 @@ const handleOk = async (): Promise<boolean> => {
     });
     addForm.value.collect_params = JSON.stringify(collectParams);
 
-    const requestData: any = {
-      space_id: spaceId,
-      data_type: addForm.value.data_type,
-      exchange: addForm.value.data_source,
-      collect_params: collectParams,
-      enabled: addForm.value.enabled !== "false",
-      creator: addForm.value.creator || account.value.user?.userName || ""
-    };
-
-    if (title.value.includes("修改") && addForm.value.rule_id) {
-      requestData.rule_id = addForm.value.rule_id;
-    }
+    const requestData: any = buildCollectorRuleRequest(
+      {
+        dataType: addForm.value.data_type as CollectorRuleInput["dataType"],
+        exchange: addForm.value.data_source,
+        market: marketValue.value,
+        datasetId: datasetIdValue.value,
+        symbolDatasetId: symbolDatasetIdValue.value,
+        scheduleInterval: scheduleIntervalValue.value
+      },
+      spaceId,
+      addForm.value.creator || account.value.user?.userName || "",
+      addForm.value.enabled !== "false",
+      title.value.includes("修改") ? addForm.value.rule_id : undefined
+    );
 
     const method = title.value.includes("新建") ? "CreateTaskRule" : "UpdateTaskRule";
 
@@ -729,15 +726,14 @@ const handleEnableChange = async (record: TaskConfig, value: boolean) => {
       getTaskList();
       return;
     }
-    const rule = {
-      space_id: spaceId,
-      rule_id: record.rule_id,
-      data_type: record.data_type,
-      exchange: record.data_source,
-      collect_params: normalizeObject(record.collect_params),
-      enabled: value,
-      creator: record.creator || account.value.user?.userName || ""
-    };
+    const input = parseStrictRuleParams(record.collect_params);
+    const rule = buildCollectorRuleRequest(
+      input,
+      spaceId,
+      record.creator || account.value.user?.userName || "",
+      value,
+      record.rule_id
+    );
     await callControl<Record<string, any>, Record<string, never>>("collectmgr", "UpdateTaskRule", {
       space_id: spaceId,
       rule_id: record.rule_id,

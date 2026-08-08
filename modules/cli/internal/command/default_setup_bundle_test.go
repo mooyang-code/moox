@@ -57,8 +57,16 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		datasetsBySpace[dataset.SpaceID] = append(datasetsBySpace[dataset.SpaceID], dataset.DatasetID)
 		require.LessOrEqual(t, utf8.RuneCountInString(dataset.Name), 10, dataset.SpaceID+"/"+dataset.DatasetID)
-		if dataset.SpaceID == "crypto_market" && dataset.DatasetID != "binance_spot_symbols" && dataset.DatasetID != "binance_spot_kline_1m" {
+		if dataset.SpaceID == "crypto_market" && dataset.DatasetID != "binance_spot_symbols" && dataset.DatasetID != "binance_swap_symbols" && dataset.DatasetID != "binance_spot_kline_1m" {
 			require.Equal(t, []string{"1H"}, dataset.Freqs, dataset.DatasetID)
+		}
+		if dataset.SpaceID == "crypto_market" {
+			switch dataset.DatasetID {
+			case "binance_spot_symbols", "binance_spot_kline_1m", "spot_kline_1h":
+				require.Equal(t, "spot", dataset.Attributes["market_type"], dataset.DatasetID)
+			case "binance_swap_symbols", "perpetual_kline_1h":
+				require.Equal(t, "swap", dataset.Attributes["market_type"], dataset.DatasetID)
+			}
 		}
 	}
 	for _, column := range seed.DatasetColumns {
@@ -79,7 +87,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		key := dataset.SpaceID + "/" + dataset.DatasetID
 		require.Positive(t, columnCount[key], "Dataset %s has no columns", key)
-		if dataset.DatasetID != "binance_spot_symbols" {
+		if dataset.DatasetID != "binance_spot_symbols" && dataset.DatasetID != "binance_swap_symbols" {
 			require.Positive(t, viewCount[key], "Dataset %s has no View", key)
 		}
 	}
@@ -96,12 +104,13 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		"index_kline",
 		"stock_kline",
 	}, datasetsBySpace["stock_cn"])
-	require.Equal(t, []string{"binance_spot_kline_1m", "binance_spot_symbols", "perpetual_kline_1h", "spot_kline_1h"}, datasetsBySpace["crypto_market"])
+	require.Equal(t, []string{"binance_spot_kline_1m", "binance_spot_symbols", "binance_swap_symbols", "perpetual_kline_1h", "spot_kline_1h"}, datasetsBySpace["crypto_market"])
 }
 
 func TestDefaultSetupBundleUsesOnlyFixedFiles(t *testing.T) {
 	for _, name := range []string{
 		"metadata.yaml",
+		"collector-rules.yaml",
 		"dataset-health-policy.yaml",
 		"service-deployments.yaml",
 	} {

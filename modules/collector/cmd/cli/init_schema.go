@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/ruleseed"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 )
@@ -14,10 +16,12 @@ import (
 const defaultInitDBPath = "./data/moox_collector.db"
 
 type initResult struct {
-	Module string `json:"module"`
-	Action string `json:"action"`
-	Status string `json:"status"`
-	DBPath string `json:"db_path"`
+	Module         string `json:"module"`
+	Action         string `json:"action"`
+	Status         string `json:"status"`
+	DBPath         string `json:"db_path"`
+	RulesCreated   int    `json:"rules_created"`
+	RulesUnchanged int    `json:"rules_unchanged"`
 }
 
 func isInitCommand(args []string) bool {
@@ -38,6 +42,8 @@ func runInitCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	dbPath := defaultInitDBPath
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
+	seedFile := ""
+	fs.StringVar(&seedFile, "seed-file", seedFile, "built-in Collector rule seed YAML")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -47,12 +53,21 @@ func runInitCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 	if err := applySchema(dbPath, collectorschema.AllSQL()); err != nil {
 		return err
 	}
-	return json.NewEncoder(stdout).Encode(initResult{
+	result := initResult{
 		Module: "collector",
 		Action: "init",
 		Status: "ok",
 		DBPath: dbPath,
-	})
+	}
+	if strings.TrimSpace(seedFile) != "" {
+		summary, err := seedRules(dbPath, seedFile)
+		if err != nil {
+			return err
+		}
+		result.RulesCreated = summary.Created
+		result.RulesUnchanged = summary.Unchanged
+	}
+	return json.NewEncoder(stdout).Encode(result)
 }
 
 func printInitError(stderr io.Writer, err error) {
@@ -78,4 +93,21 @@ func applySchema(dbPath string, rawSQL string) error {
 		return fmt.Errorf("apply schema: %w", err)
 	}
 	return nil
+}
+
+func seedRules(dbPath string, seedFile string) (ruleseed.SeedSummary, error) {
+	rules, err := ruleseed.LoadFile(seedFile)
+	if err != nil {
+		return ruleseed.SeedSummary{}, err
+	}
+	db, err := store.Open(&store.Options{Path: dbPath})
+	if err != nil {
+		return ruleseed.SeedSummary{}, fmt.Errorf("open database for rule seed: %w", err)
+	}
+	defer db.Close()
+	summary, err := ruleseed.SeedMissing(context.Background(), db.TaskRules(), rules)
+	if err != nil {
+		return ruleseed.SeedSummary{}, err
+	}
+	return summary, nil
 }

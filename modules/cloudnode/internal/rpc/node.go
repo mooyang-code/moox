@@ -206,6 +206,8 @@ func (s *Service) UpdateNode(ctx context.Context, req *pb.UpdateNodeReq) (*pb.Up
 	if pbNode == nil || pbNode.GetNodeId() == "" {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node.node_id is required")}, nil
 	}
+	unlockNode := lockSCFNode(spaceID, pbNode.GetNodeId())
+	defer unlockNode()
 	existing, err := s.catalog.GetNode(ctx, spaceID, pbNode.GetNodeId())
 	if err != nil {
 		return &pb.UpdateNodeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
@@ -245,6 +247,8 @@ func (s *Service) executeCreateNodeItem(
 		return "", fmt.Errorf("node item is required")
 	}
 	node := cloudNodeFromCreateItem(spaceID, item, index)
+	unlockNode := lockSCFNode(spaceID, node.NodeID)
+	defer unlockNode()
 	if err := validateTriggerType(node.NodeType, item.GetTriggerType()); err != nil {
 		return "", err
 	}
@@ -280,8 +284,13 @@ func (s *Service) BatchDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodes
 	if len(nodeIDs) == 0 {
 		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_ids is required")}, nil
 	}
-	if err := s.catalog.DeleteNodes(ctx, spaceID, nodeIDs); err != nil {
-		return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	for _, nodeID := range nodeIDs {
+		unlock := lockSCFNode(spaceID, nodeID)
+		err := s.catalog.DeleteNodes(ctx, spaceID, []string{nodeID})
+		unlock()
+		if err != nil {
+			return &pb.BatchDeleteNodesRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
 	}
 	return &pb.BatchDeleteNodesRsp{
 		RetInfo:        retOK(),
@@ -300,6 +309,8 @@ func (s *Service) executeDeleteNodeItem(ctx context.Context, spaceID string, ite
 	if node == nil {
 		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
 	}
+	unlockNode := lockSCFNode(spaceID, node.NodeID)
+	defer unlockNode()
 	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
 	if err != nil || account == nil {
 		if err != nil {
@@ -312,6 +323,8 @@ func (s *Service) executeDeleteNodeItem(ctx context.Context, spaceID string, ite
 		return "", err
 	}
 	ref := tencentscf.FunctionRef{Region: node.Region, FunctionName: firstString(node.FunctionName, node.NodeID), Namespace: firstString(node.Namespace, "default")}
+	unlockFunction := lockSCFFunction(ref)
+	defer unlockFunction()
 	if node.TriggerType == "timer" {
 		if err := client.DeleteTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Qualifier: timerTriggerQualifier}); err != nil && !isSCFNotFound(err) {
 			return "", fmt.Errorf("delete timer trigger for %s: %w", node.NodeID, err)
@@ -341,6 +354,8 @@ func (s *Service) executeDeployNodeItem(
 	if node == nil {
 		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
 	}
+	unlockNode := lockSCFNode(spaceID, node.NodeID)
+	defer unlockNode()
 	pkg, err := s.catalog.GetPackage(ctx, spaceID, item.GetPackageId())
 	if err != nil {
 		return "", err
@@ -395,6 +410,8 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		FunctionName: firstString(node.FunctionName, node.NodeID),
 		Namespace:    firstString(node.Namespace, "default"),
 	}
+	unlockFunction := lockSCFFunction(ref)
+	defer unlockFunction()
 	info, err := client.GetFunction(ctx, ref)
 	if err == nil {
 		remotePackageID := strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"])

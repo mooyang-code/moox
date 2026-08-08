@@ -77,8 +77,8 @@ func TestListCloudRegions_ShouldReturnStaticCatalog(t *testing.T) {
 	rsp, err := svc.ListCloudRegions(context.Background(), &pb.ListCloudRegionsReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	assert.Len(t, rsp.GetRegions(), 4)
-	assert.Equal(t, int64(4), rsp.GetTotal())
+	assert.Len(t, rsp.GetRegions(), 18)
+	assert.Equal(t, int64(18), rsp.GetTotal())
 }
 
 type fakeExecutionQueue struct{}

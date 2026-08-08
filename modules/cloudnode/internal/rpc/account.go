@@ -5,6 +5,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
 
 func (s *Service) ListCloudAccounts(ctx context.Context, req *pb.ListCloudAccountsReq) (*pb.ListCloudAccountsRsp, error) {
@@ -58,11 +59,9 @@ func (s *Service) DeleteCloudAccount(ctx context.Context, req *pb.DeleteCloudAcc
 }
 
 func (s *Service) ListCloudRegions(ctx context.Context, req *pb.ListCloudRegionsReq) (*pb.ListCloudRegionsRsp, error) {
-	regions := []*pb.CloudRegion{
-		{Code: "ap-guangzhou", Name: "广州", Tag: "domestic", MaxNodes: 128, MaxNamespacesPerRegion: 32, MaxFunctionsPerNamespace: 1024},
-		{Code: "ap-shanghai", Name: "上海", Tag: "domestic", MaxNodes: 128, MaxNamespacesPerRegion: 32, MaxFunctionsPerNamespace: 1024},
-		{Code: "ap-hongkong", Name: "中国香港", Tag: "overseas", MaxNodes: 128, MaxNamespacesPerRegion: 32, MaxFunctionsPerNamespace: 1024},
-		{Code: "ap-singapore", Name: "新加坡", Tag: "overseas", MaxNodes: 128, MaxNamespacesPerRegion: 32, MaxFunctionsPerNamespace: 1024},
+	regions := make([]*pb.CloudRegion, 0, len(tencent.SCFRegions()))
+	for _, region := range tencent.SCFRegions() {
+		regions = append(regions, &pb.CloudRegion{Code: region.Code, Name: region.Name, Tag: region.Tag, MaxNodes: 128, MaxNamespacesPerRegion: 32, MaxFunctionsPerNamespace: 1024})
 	}
 	return &pb.ListCloudRegionsRsp{RetInfo: retOK(), Regions: regions, Total: int64(len(regions))}, nil
 }

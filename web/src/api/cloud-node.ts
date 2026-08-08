@@ -33,6 +33,51 @@ export interface CloudRegion {
   max_functions_per_namespace?: number;
 }
 
+export interface SCFFunctionRef {
+  region: string;
+  namespace: string;
+  function_name: string;
+}
+
+export interface SCFFunctionCandidate {
+  function: SCFFunctionRef;
+  status: string;
+  runtime: string;
+  function_type: string;
+  package_id: string;
+  node_id: string;
+  trigger_type: string;
+  biz_type: string;
+  import_state: string | number;
+  importable: boolean;
+  reason: string;
+}
+
+export interface SCFRegionScanError {
+  region: string;
+  message: string;
+}
+
+export interface SCFPreviewResponse {
+  functions: SCFFunctionCandidate[];
+  region_errors: SCFRegionScanError[];
+}
+
+export interface SCFFunctionImportResult {
+  function: SCFFunctionRef;
+  node_id: string;
+  action: string;
+  error_message: string;
+}
+
+export interface SCFImportResponse {
+  results: SCFFunctionImportResult[];
+  created: number;
+  restored: number;
+  unchanged: number;
+  failed: number;
+}
+
 export interface Page {
   page?: number;
   size?: number;
@@ -236,4 +281,26 @@ export const listCloudRegions = async (provider = "tencent"): Promise<CloudRegio
     provider ? { provider } : {}
   );
   return rsp.regions ?? [];
+};
+
+export const previewSCFFunctions = async (accountId: string): Promise<SCFPreviewResponse> => {
+  const rsp = await callControl<{ account_id: string }, SCFPreviewResponse>("cloudnode", "PreviewSCFFunctions", {
+    account_id: accountId
+  });
+  return { functions: rsp.functions ?? [], region_errors: rsp.region_errors ?? [] };
+};
+
+export const importSCFFunctions = async (accountId: string, functions: SCFFunctionRef[]): Promise<SCFImportResponse> => {
+  const rsp = await callControl<{ account_id: string; functions: SCFFunctionRef[] }, SCFImportResponse>(
+    "cloudnode",
+    "ImportSCFFunctions",
+    { account_id: accountId, functions }
+  );
+  return {
+    results: rsp.results ?? [],
+    created: Number(rsp.created ?? 0),
+    restored: Number(rsp.restored ?? 0),
+    unchanged: Number(rsp.unchanged ?? 0),
+    failed: Number(rsp.failed ?? 0)
+  };
 };

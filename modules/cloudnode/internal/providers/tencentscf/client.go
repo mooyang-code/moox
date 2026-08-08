@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
@@ -32,6 +33,7 @@ type FunctionInfo struct {
 	RequestID   string
 	Status      string
 	Runtime     string
+	Type        string
 	ModTime     string
 	CodeSize    int64
 	MemorySize  int64
@@ -188,6 +190,7 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	out.RequestID = deref(response.Response.RequestId)
 	out.Status = deref(response.Response.Status)
 	out.Runtime = deref(response.Response.Runtime)
+	out.Type = deref(response.Response.Type)
 	out.ModTime = deref(response.Response.ModTime)
 	if response.Response.Environment != nil {
 		out.Environment = make(map[string]string, len(response.Response.Environment.Variables))
@@ -416,10 +419,17 @@ func (c *Client) InvokeFunction(ctx context.Context, req InvokeFunctionRequest) 
 
 func (c *Client) newClient(region string) (*scf.Client, error) {
 	clientProfile := profile.NewClientProfile()
-	clientProfile.HttpProfile.Endpoint = "scf.tencentcloudapi.com"
+	clientProfile.HttpProfile.Endpoint = scfEndpoint(region)
 	clientProfile.HttpProfile.ReqTimeout = 240
 	credential := common.NewCredential(c.secretID, c.secretKey)
 	return scf.NewClient(credential, region, clientProfile)
+}
+
+func scfEndpoint(region string) string {
+	if strings.HasSuffix(strings.TrimSpace(region), "-fsi") {
+		return "scf." + strings.TrimSpace(region) + ".tencentcloudapi.com"
+	}
+	return "scf.tencentcloudapi.com"
 }
 
 func deref(s *string) string {

@@ -26,6 +26,10 @@
             <template #icon><icon-code /></template>
             <span>代码包版本</span>
           </a-button>
+          <a-button type="outline" @click="onSCFSyncOpen">
+            <template #icon><icon-sync /></template>
+            <span>同步云节点</span>
+          </a-button>
         </a-space>
         <a-space class="cloud-node-filter-bar" wrap>
           <a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>
@@ -456,6 +460,8 @@
     <!-- 云账户管理弹窗 -->
     <CloudAccountManage v-model="cloudAccountManageVisible" @refresh="loadCloudAccounts" />
 
+    <SCFSyncDialog v-model:visible="scfSyncVisible" :accounts="cloudAccountOptions" @refresh="loadData" />
+
     <!-- 代码包版本管理弹窗 -->
     <FunctionPackageManage
       v-model="functionPackageManageVisible"
@@ -657,6 +663,7 @@ import { useSpaceStore } from "@/store/modules/space";
 import { getNodeBatchJobId, setNodeBatchJobId } from "@/utils/cloud-node-batch-change";
 import CloudAccountManage from "../cloud-account/cloud-account-manage.vue";
 import FunctionPackageManage from "./function-package-manage.vue";
+import SCFSyncDialog from "./scf-sync-dialog.vue";
 import CloudNodeTable from "./components/cloud-node-table.vue";
 import { submitCloudNodeBatchChange } from "./cloud-node-batch-service";
 import { createCloudNodeBatchPoller } from "./cloud-node-batch-poller";
@@ -704,6 +711,7 @@ const cloudNodeList = ref<CloudNode[]>([]);
 const selectedKeys = ref<string[]>([]);
 const cloudAccountOptions = ref<CloudAccount[]>([]);
 const regionOptions = ref<RegionInfo[]>([]); // 地区选项
+const scfSyncVisible = ref(false);
 const REGION_UNLIMITED = "all";
 const tagOptions = ["国内", "海外"];
 
@@ -1394,6 +1402,17 @@ const loadCloudAccounts = async () => {
     console.error("加载云账户失败:", error);
     Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署");
   }
+};
+
+const onSCFSyncOpen = async () => {
+  if (cloudAccountOptions.value.length === 0) {
+    await loadCloudAccounts();
+  }
+  if (cloudAccountOptions.value.length === 0) {
+    Message.warning("请先配置云账户");
+    return;
+  }
+  scfSyncVisible.value = true;
 };
 
 // 加载地区列表

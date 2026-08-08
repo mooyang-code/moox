@@ -11,6 +11,8 @@ type functionLockRegistry struct {
 	locks map[string]*sync.Mutex
 }
 
+var scfNodeLocks = functionLockRegistry{locks: make(map[string]*sync.Mutex)}
+
 var scfFunctionLocks = functionLockRegistry{locks: make(map[string]*sync.Mutex)}
 
 func lockSCFFunction(ref tencentscf.FunctionRef) func() {
@@ -22,6 +24,19 @@ func lockSCFFunction(ref tencentscf.FunctionRef) func() {
 		scfFunctionLocks.locks[key] = lock
 	}
 	scfFunctionLocks.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func lockSCFNode(spaceID, nodeID string) func() {
+	key := spaceID + "\x00" + nodeID
+	scfNodeLocks.mu.Lock()
+	lock := scfNodeLocks.locks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		scfNodeLocks.locks[key] = lock
+	}
+	scfNodeLocks.mu.Unlock()
 	lock.Lock()
 	return lock.Unlock
 }

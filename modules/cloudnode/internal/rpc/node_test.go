@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -218,6 +219,7 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 }
 
 type fakeSCFClient struct {
+	mu                   sync.Mutex
 	getResults           []fakeSCFGetResult
 	getCalls             int
 	respectContext       bool
@@ -231,6 +233,15 @@ type fakeSCFClient struct {
 	timerInfoSet         bool
 	timerInfo            *tencentscf.TimerTriggerInfo
 	timerErr             error
+	inventory            []tencentscf.DiscoveryFunction
+	inventoryRegion      string
+}
+
+func (f *fakeSCFClient) ListFunctionInventory(_ context.Context, region string) ([]tencentscf.DiscoveryFunction, error) {
+	if f.inventoryRegion != "" && f.inventoryRegion != region {
+		return nil, nil
+	}
+	return f.inventory, nil
 }
 
 type fakeSCFGetResult struct {
@@ -239,6 +250,8 @@ type fakeSCFGetResult struct {
 }
 
 func (f *fakeSCFClient) GetFunction(ctx context.Context, _ tencentscf.FunctionRef) (*tencentscf.FunctionInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.getCalls++
 	if f.respectContext && ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -280,6 +293,8 @@ func (f *fakeSCFClient) EnsureTimerTrigger(_ context.Context, req tencentscf.Tim
 }
 
 func (f *fakeSCFClient) GetTimerTrigger(_ context.Context, _ tencentscf.FunctionRef, _ string) (*tencentscf.TimerTriggerInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.timerErr != nil {
 		return nil, f.timerErr
 	}

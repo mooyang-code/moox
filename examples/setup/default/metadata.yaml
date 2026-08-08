@@ -140,6 +140,17 @@ datasets:
     market_type: spot
     storage_model: wide_common_metrics
 - space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  data_source_id: binance
+  name: 币安永续交易对
+  data_kind: record
+  data_node_id: storage-node-0
+  keep_duration: '0'
+  status: disabled
+  attributes:
+    market_type: swap
+    storage_model: wide_common_metrics
+- space_id: crypto_market
   dataset_id: binance_spot_kline_1m
   data_source_id: binance
   name: 币安现货一分钟行情
@@ -163,6 +174,7 @@ datasets:
   - 1H
   status: disabled
   attributes:
+    market_type: spot
     source_directories: 现货1小时数据-币对分类|OKX现货1小时数据-币对分类
 - space_id: crypto_market
   dataset_id: perpetual_kline_1h
@@ -175,6 +187,7 @@ datasets:
   - 1H
   status: disabled
   attributes:
+    market_type: swap
     source_directories: 永续合约1小时数据-币对分类|OKX永续合约1小时数据-币对分类
 
 - space_id: moox_system
@@ -228,7 +241,7 @@ datasets:
   description: Historical tRPC application and business metrics
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 4320h
+  keep_duration: 72h
   freqs:
   - 30s
   status: disabled
@@ -798,6 +811,73 @@ dataset_columns:
   origin_id: symbol
   value_type: string
   required: true
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  column_name: symbol
+  origin_type: field
+  origin_id: symbol
+  value_type: string
+  required: true
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  column_name: external_symbol
+  origin_type: field
+  origin_id: external_symbol
+  value_type: string
+  required: true
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  column_name: base_asset
+  origin_type: field
+  origin_id: base_asset
+  value_type: string
+  required: true
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  column_name: quote_asset
+  origin_type: field
+  origin_id: quote_asset
+  value_type: string
+  required: true
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  column_name: status
+  origin_type: field
+  origin_id: status
+  value_type: string
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  column_name: min_qty
+  origin_type: field
+  origin_id: min_qty
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  column_name: max_qty
+  origin_type: field
+  origin_id: max_qty
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  column_name: tick_size
+  origin_type: field
+  origin_id: tick_size
+  value_type: double
+  status: active
+- space_id: crypto_market
+  dataset_id: binance_swap_symbols
+  column_name: lot_size
+  origin_type: field
+  origin_id: lot_size
+  value_type: double
   status: active
 - space_id: crypto_market
   dataset_id: binance_spot_symbols
@@ -1776,7 +1856,7 @@ views:
   - series_tag
   filter_json: '{"freq":"30s"}'
   engine: duckdb
-  keep_duration: 4320h
+  keep_duration: 72h
   status: active
 view_columns:
 - space_id: stock_cn

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCollectorRuleParams, datasetMatchesCollector } from "./collector-rule-params";
+import { buildCollectorRuleParams, buildCollectorRuleRequest, datasetMatchesCollector, normalizeCollectorRule } from "./collector-rule-params";
 
 describe("buildCollectorRuleParams", () => {
   it("builds the dataset-driven Kline contract", () => {
@@ -76,14 +76,35 @@ describe("buildCollectorRuleParams", () => {
   });
 });
 
+describe("collector rule RPC contract", () => {
+  it("emits provider and market_type instead of exchange", () => {
+    const request = buildCollectorRuleRequest(
+      {
+        dataType: "kline",
+        exchange: "binance",
+        market: "spot",
+        datasetId: "binance_spot_kline_1m",
+        symbolDatasetId: "binance_spot_symbols",
+        scheduleInterval: "1m"
+      },
+      "crypto_market",
+      "admin"
+    );
+    expect(request).toMatchObject({ space_id: "crypto_market", data_type: "kline", provider: "binance", market_type: "spot" });
+    expect(request).not.toHaveProperty("exchange");
+  });
+
+  it("normalizes provider responses for the list page", () => {
+    expect(normalizeCollectorRule({ provider: "binance", collect_params: { provider: "binance" } }).data_source).toBe("binance");
+  });
+});
+
 describe("datasetMatchesCollector", () => {
-  it("requires both provider and data shape", () => {
+  it("accepts provider-owned symbols and aggregate kline targets", () => {
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")).toBe(
       true
     );
-    expect(datasetMatchesCollector({ data_source_id: "okx", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")).toBe(
-      false
-    );
+    expect(datasetMatchesCollector({ data_source_id: "crypto_market", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")).toBe(true);
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_RECORD" }, "binance", "kline")).toBe(false);
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: 1 }, "binance", "symbol")).toBe(true);
   });

@@ -8,6 +8,7 @@ require (
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudjobpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudjobqueue v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
@@ -119,6 +120,8 @@ replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonp
 replace github.com/mooyang-code/moox/packages/cloudjobpb => ../../packages/cloudjobpb
 
 replace github.com/mooyang-code/moox/packages/cloudjobqueue => ../../packages/cloudjobqueue
+
+replace github.com/mooyang-code/moox/packages/cloudprovider => ../../packages/cloudprovider
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 

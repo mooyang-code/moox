@@ -904,7 +904,7 @@ patch_configs() {
     "${STAGE_DIR}/gateway/config/app.yaml"
   # A remote Storage gateway is the native RPC ingress used by short-lived
   # SCF calls. It must not be loopback-only just because CloudNode is absent.
-  if [[ "${WITH_GATEWAY}" -eq 1 && ( "${WITH_CLOUDNODE}" -eq 1 || "${WITH_STORAGE}" -eq 1 ) ]]; then
+  if [[ "${WITH_GATEWAY}" -eq 1 && ( "${WITH_CLOUDNODE}" -eq 1 || "${WITH_STORAGE}" -eq 1 || -n "${PUBLIC_HOST}" ) ]]; then
     perl -0pi -e 's#native_addr:\s*127\.0\.0\.1:11003#native_addr: 0.0.0.0:11003#; s#health_addr:\s*127\.0\.0\.1:11012#health_addr: 0.0.0.0:11012#' \
       "${STAGE_DIR}/gateway/config/app.yaml"
   fi
@@ -1031,6 +1031,10 @@ PY
 write_runtime_scripts() {
   local scf_service_gateway_target="http://127.0.0.1:11002"
   local scf_storage_rpc_gateway_target="ip://127.0.0.1:11003"
+  local preserve_storage_routes=0
+  if [[ "${WITH_STORAGE}" == "0" && -z "${DEPLOY_PROFILE}" ]]; then
+    preserve_storage_routes=1
+  fi
   if [[ -n "${PUBLIC_HOST}" ]]; then
     scf_service_gateway_target="https://${PUBLIC_HOST}:${SERVICE_HTTPS_PORT}"
     scf_storage_rpc_gateway_target="ip://${PUBLIC_HOST}:11003"
@@ -1130,6 +1134,7 @@ WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
+PRESERVE_STORAGE_ROUTES="${MOOX_PRESERVE_STORAGE_ROUTES:-__PRESERVE_STORAGE_ROUTES__}"
 PUBLIC_HOST="${MOOX_PUBLIC_HOST:-__PUBLIC_HOST__}"
 SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-__SCF_SERVICE_GATEWAY_TARGET__}"
 SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-__SCF_STORAGE_RPC_GATEWAY_TARGET__}"
@@ -1510,12 +1515,15 @@ init_cloudnode_schema() {
 }
 
 init_collector_schema() {
-  echo "initializing collector schema"
-  mkdir -p "${ROOT}/logs/collector"
-  (
-    cd "${ROOT}/collector"
-    "${ROOT}/bin/moox-collector-cli" init --db-path ../data/collector/moox_collector.db >> "${ROOT}/logs/collector/stdout.log" 2>&1
-  )
+	echo "initializing collector schema"
+	mkdir -p "${ROOT}/logs/collector"
+	(
+		cd "${ROOT}/collector"
+		"${ROOT}/bin/moox-collector-cli" init \
+			--db-path ../data/collector/moox_collector.db \
+			--seed-file ../examples/setup/default/collector-rules.yaml \
+			>> "${ROOT}/logs/collector/stdout.log" 2>&1
+	)
 }
 
 init_trade_schema() {
@@ -1688,9 +1696,11 @@ start_admin() {
       service_seed_args+=(--disable-storage-shard)
     fi
     local disabled_services=()
-    # A control-only package must not publish loopback Storage routes. Storage
-    # is deployed on its own node and the Admin BFF targets that node gateway.
-    [[ "${WITH_STORAGE}" == "1" ]] || disabled_services+=(storage-primary storage-view)
+    # A normal partial deployment preserves the existing Storage routes. A
+    # control profile is intentionally isolated and disables its local routes.
+    if [[ "${WITH_STORAGE}" != "1" && "${PRESERVE_STORAGE_ROUTES}" != "1" ]]; then
+      disabled_services+=(storage-primary storage-view)
+    fi
     [[ "${WITH_ARCHIVE}" == "1" ]] || disabled_services+=(moox_archive)
     [[ "${WITH_CLOUDNODE}" == "1" ]] || disabled_services+=(moox_cloudnode)
     [[ "${WITH_COLLECTOR}" == "1" ]] || disabled_services+=(moox_collector)
@@ -2523,7 +2533,7 @@ ensure_caddy() {
 ) 9>"${ROOT}.maintenance.lock"
 EOF
 
-  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_TRADE__#${WITH_TRADE}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g; s#__PUBLIC_HOST__#${PUBLIC_HOST}#g; s#__SCF_SERVICE_GATEWAY_TARGET__#${scf_service_gateway_target}#g; s#__SCF_STORAGE_RPC_GATEWAY_TARGET__#${scf_storage_rpc_gateway_target}#g" \
+  perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_TRADE__#${WITH_TRADE}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__PRESERVE_STORAGE_ROUTES__#${preserve_storage_routes}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g; s#__PUBLIC_HOST__#${PUBLIC_HOST}#g; s#__SCF_SERVICE_GATEWAY_TARGET__#${scf_service_gateway_target}#g; s#__SCF_STORAGE_RPC_GATEWAY_TARGET__#${scf_storage_rpc_gateway_target}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
@@ -2636,15 +2646,17 @@ prepare_stage() {
         fail "storage DataNode auth secret must contain exactly one line"
       (umask 077; printf 'MOOX_STORAGE_NODE_AUTH_SECRET=%q\n' "${storage_node_auth_secret}" >"${STAGE_DIR}/secrets/storage-node-auth.env")
     fi
-    if [[ "${WITH_STORAGE}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
-      local storage_view_auth_secret="${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
-      if [[ -z "${storage_view_auth_secret}" ]]; then
+    local storage_view_auth_secret="${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
+    if [[ -z "${storage_view_auth_secret}" ]]; then
+      if [[ "${WITH_STORAGE}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
         storage_view_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-view-auth)"
+      else
+        fail "MOOX_STORAGE_VIEW_AUTH_SECRET is required when packaging Factor without Storage"
       fi
-      [[ "${storage_view_auth_secret}" != *$'\n'* && "${storage_view_auth_secret}" != *$'\r'* ]] || \
-        fail "storage View auth secret must contain exactly one line"
-      printf 'MOOX_STORAGE_VIEW_AUTH_SECRET=%q\n' "${storage_view_auth_secret}" >>"${STAGE_DIR}/secrets/storage-internal-auth.env"
     fi
+    [[ "${storage_view_auth_secret}" != *$'\n'* && "${storage_view_auth_secret}" != *$'\r'* ]] || \
+      fail "storage View auth secret must contain exactly one line"
+    printf 'MOOX_STORAGE_VIEW_AUTH_SECRET=%q\n' "${storage_view_auth_secret}" >>"${STAGE_DIR}/secrets/storage-internal-auth.env"
     chmod 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env"
   fi
   cat >"${STAGE_DIR}/secrets/gateway-credentials.json" <<'EOF'
@@ -3082,7 +3094,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
+  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -3098,6 +3110,7 @@ sync_remote_stage() {
   quoted_with_monitor="$(shell_quote "${WITH_MONITOR}")"
   quoted_with_web_host="$(shell_quote "${WITH_WEB_HOST}")"
   quoted_with_admin="$(shell_quote "${WITH_ADMIN}")"
+  quoted_with_gateway="$(shell_quote "${WITH_GATEWAY}")"
   quoted_reset_data="$(shell_quote "${RESET_DATA}")"
   quoted_metrics_metadata_url="$(shell_quote "${METRICS_METADATA_URL}")"
   quoted_eventbus_url="$(shell_quote "${EVENTBUS_URL_ENV}")"
@@ -3113,7 +3126,7 @@ sync_remote_stage() {
   quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
   quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {

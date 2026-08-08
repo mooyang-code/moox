@@ -95,6 +95,14 @@ enum NodeBatchItemStatus {
   NODE_BATCH_ITEM_STATUS_FAILED = 4;
 }
 
+enum SCFFunctionImportState {
+  SCF_FUNCTION_IMPORT_STATE_UNSPECIFIED = 0;
+  SCF_FUNCTION_IMPORT_STATE_NEW = 1;
+  SCF_FUNCTION_IMPORT_STATE_EXISTING = 2;
+  SCF_FUNCTION_IMPORT_STATE_DELETED = 3;
+  SCF_FUNCTION_IMPORT_STATE_BLOCKED = 4;
+}
+
 // CloudNode 云节点。
 message CloudNode {
   int32 id = 1;
@@ -117,6 +125,62 @@ message CloudNode {
   string create_time = 26;     // RFC3339
   string modify_time = 27;     // RFC3339
   string trigger_type = 28;    // invoke or timer
+}
+
+message SCFFunctionRef {
+  string region = 1;
+  string namespace = 2;
+  string function_name = 3;
+}
+
+message SCFFunctionCandidate {
+  SCFFunctionRef function = 1;
+  string status = 2;
+  string runtime = 3;
+  string function_type = 4;
+  string package_id = 5;
+  string node_id = 6;
+  string trigger_type = 7;
+  string biz_type = 8;
+  SCFFunctionImportState import_state = 9;
+  bool importable = 10;
+  string reason = 11;
+}
+
+message SCFRegionScanError {
+  string region = 1;
+  string message = 2;
+}
+
+message PreviewSCFFunctionsReq {
+  string account_id = 1;
+}
+
+message PreviewSCFFunctionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SCFFunctionCandidate functions = 2;
+  repeated SCFRegionScanError region_errors = 3;
+}
+
+message ImportSCFFunctionsReq {
+  string account_id = 1;
+  repeated SCFFunctionRef functions = 2;
+}
+
+message SCFFunctionImportResult {
+  SCFFunctionRef function = 1;
+  string node_id = 2;
+  string action = 3;
+  string error_message = 4;
+}
+
+message ImportSCFFunctionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SCFFunctionImportResult results = 2;
+  int32 created = 3;
+  int32 restored = 4;
+  int32 unchanged = 5;
+  int32 failed = 6;
 }
 
 message GetNodeListReq {
@@ -614,6 +678,9 @@ service CloudNodeMgr {
   rpc DeleteCloudAccount(DeleteCloudAccountReq) returns (DeleteCloudAccountRsp);
 
   rpc ListCloudRegions(ListCloudRegionsReq) returns (ListCloudRegionsRsp);
+
+  rpc PreviewSCFFunctions(PreviewSCFFunctionsReq) returns (PreviewSCFFunctionsRsp);
+  rpc ImportSCFFunctions(ImportSCFFunctionsReq) returns (ImportSCFFunctionsRsp);
 
   rpc GetPackageList(GetPackageListReq) returns (GetPackageListRsp);
   rpc GetPackageDetail(GetPackageDetailReq) returns (GetPackageDetailRsp);
