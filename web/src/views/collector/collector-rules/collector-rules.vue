@@ -787,6 +787,12 @@ watch(
     if (datasetIdValue.value && !availableDatasets.value.some(dataset => dataset.dataset_id === datasetIdValue.value)) {
       datasetIdValue.value = "";
     }
+    if (
+      symbolDatasetIdValue.value &&
+      !availableSymbolDatasets.value.some(dataset => dataset.dataset_id === symbolDatasetIdValue.value)
+    ) {
+      symbolDatasetIdValue.value = "";
+    }
   }
 );
 
