@@ -47,6 +47,7 @@ type Options struct {
 	HealthAuthVersion      string
 	HealthAuthAccessKey    string
 	HealthAuthSecretKey    string
+	InstallStorageWatchdog bool
 	GatewayControlURL      string
 	GatewayControlKey      string
 	GatewayServiceKey      string
@@ -169,6 +170,11 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	for _, stage := range []ReadinessStage{StoragePrimaryReady, StorageViewReady} {
 		if err := deps.Probe.Wait(ctx, transport, stage, opts); err != nil {
 			return fmt.Errorf("storage_deploy_not_ready")
+		}
+	}
+	if opts.InstallStorageWatchdog {
+		if err := InstallStorageViewWatchdog(ctx, transport, opts.RepositoryRoot); err != nil {
+			return fmt.Errorf("storage_watchdog_install_failed")
 		}
 	}
 	installed = false
@@ -483,8 +489,8 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	if err != nil {
 		return "", err
 	}
-	skipBuild := false
-	if opts.TargetGOOS == "linux" && runtime.GOOS != "linux" {
+	skipBuild := os.Getenv("MOOX_SKIP_STORAGE_BUILD") == "1"
+	if opts.TargetGOOS == "linux" && runtime.GOOS != "linux" && !skipBuild {
 		executable, err := os.Executable()
 		if err != nil {
 			return "", err

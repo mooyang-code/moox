@@ -1,0 +1,142 @@
+package deploy
+
+import (
+	"context"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+
+	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+)
+
+const (
+	storageViewWatchdogScriptName = "moox-storage-view-watchdog"
+	storageViewWatchdogService    = "moox-storage-view-watchdog.service"
+	storageViewWatchdogTimer      = "moox-storage-view-watchdog.timer"
+)
+
+// InstallStorageViewWatchdog installs and enables the host-level recovery loop
+// for the independently deployed Storage runtime. The files live in the
+// repository so the CLI can install the same checked-in version during setup.
+func InstallStorageViewWatchdog(ctx context.Context, transport setupssh.Client, repositoryRoot string) error {
+	if transport == nil || strings.TrimSpace(repositoryRoot) == "" {
+		return fmt.Errorf("storage_watchdog_install_invalid")
+	}
+
+	home, user, group, err := remoteIdentity(ctx, transport)
+	if err != nil {
+		return fmt.Errorf("storage_watchdog_remote_identity_failed")
+	}
+	serviceRoot := filepath.ToSlash(filepath.Join(home, "moox", "storage"))
+
+	script, err := readWatchdogAsset(repositoryRoot, filepath.Join("scripts", storageViewWatchdogScriptName+".sh"))
+	if err != nil {
+		return fmt.Errorf("storage_watchdog_asset_invalid")
+	}
+	service, err := readWatchdogAsset(repositoryRoot, filepath.Join("deploy", "systemd", "system", storageViewWatchdogService))
+	if err != nil {
+		return fmt.Errorf("storage_watchdog_asset_invalid")
+	}
+	timer, err := readWatchdogAsset(repositoryRoot, filepath.Join("deploy", "systemd", "system", storageViewWatchdogTimer))
+	if err != nil {
+		return fmt.Errorf("storage_watchdog_asset_invalid")
+	}
+	service = strings.NewReplacer(
+		"__MOOX_HOME__", filepath.ToSlash(home),
+		"__MOOX_STORAGE_ROOT__", serviceRoot,
+		"__MOOX_USER__", user,
+		"__MOOX_GROUP__", group,
+	).Replace(service)
+	if strings.Contains(service, "__MOOX_") {
+		return fmt.Errorf("storage_watchdog_asset_invalid")
+	}
+
+	token, err := newActivationToken()
+	if err != nil {
+		return fmt.Errorf("storage_watchdog_install_invalid")
+	}
+	tmpRoot := "/tmp/moox-storage-view-watchdog-" + token
+	tmpScript := tmpRoot + ".sh"
+	tmpService := tmpRoot + ".service"
+	tmpTimer := tmpRoot + ".timer"
+	cleanup := func() {
+		_, _ = transport.Run(context.Background(), []string{"sh", "-lc", "unlink -- \"$1\" \"$2\" \"$3\" 2>/dev/null || true", "moox-watchdog-cleanup", tmpScript, tmpService, tmpTimer}, nil)
+	}
+	defer cleanup()
+
+	for _, asset := range []struct {
+		name string
+		data string
+		mode fs.FileMode
+	}{
+		{name: tmpScript, data: script, mode: 0o755},
+		{name: tmpService, data: service, mode: 0o644},
+		{name: tmpTimer, data: timer, mode: 0o644},
+	} {
+		if err := uploadWatchdogAsset(ctx, transport, asset.name, asset.data, asset.mode); err != nil {
+			return fmt.Errorf("storage_watchdog_upload_failed")
+		}
+	}
+
+	install := `set -eu
+script="$1"
+service="$2"
+timer="$3"
+sudo -n install -d -m 0755 /usr/local/libexec /etc/systemd/system
+sudo -n install -o root -g root -m 0755 "$script" /usr/local/libexec/moox-storage-view-watchdog
+sudo -n install -o root -g root -m 0644 "$service" /etc/systemd/system/moox-storage-view-watchdog.service
+sudo -n install -o root -g root -m 0644 "$timer" /etc/systemd/system/moox-storage-view-watchdog.timer
+sudo -n systemctl daemon-reload
+sudo -n systemctl reset-failed moox-storage-view-watchdog.service || true
+sudo -n systemctl enable --now moox-storage-view-watchdog.timer
+sudo -n systemctl start moox-storage-view-watchdog.timer
+`
+	if _, err := transport.Run(ctx, []string{"sh", "-lc", install, "moox-install-storage-watchdog", tmpScript, tmpService, tmpTimer}, nil); err != nil {
+		return fmt.Errorf("storage_watchdog_enable_failed")
+	}
+	return nil
+}
+
+func remoteIdentity(ctx context.Context, transport setupssh.Client) (string, string, string, error) {
+	result, err := transport.Run(ctx, []string{"sh", "-lc", `printf '%s\n%s\n%s\n' "$HOME" "$(id -un)" "$(id -gn)"`}, nil)
+	if err != nil {
+		return "", "", "", err
+	}
+	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
+	if len(lines) != 3 || !filepath.IsAbs(lines[0]) || !validIdentityPart(lines[1]) || !validIdentityPart(lines[2]) {
+		return "", "", "", fmt.Errorf("invalid remote identity")
+	}
+	return lines[0], lines[1], lines[2], nil
+}
+
+func validIdentityPart(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func readWatchdogAsset(root, relative string) (string, error) {
+	path := filepath.Join(root, relative)
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		return "", fmt.Errorf("invalid watchdog asset")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func uploadWatchdogAsset(ctx context.Context, transport setupssh.Client, path, contents string, mode fs.FileMode) error {
+	return transport.Upload(ctx, strings.NewReader(contents), int64(len(contents)), path, mode)
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG="${CONFIG:-${ROOT}/custom.toml}"
 REMOTE_ROOT="${REMOTE_ROOT:-/tmp/moox-build}"
 MOOX_CLI="${MOOX_CLI:-${ROOT}/bin/moox-cli}"
@@ -50,7 +50,10 @@ known_hosts_q="$(shell_quote "${KNOWN_HOSTS_PATH}")"
 
 rsync_ssh="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${known_hosts_q}"
 ssh_args=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=${KNOWN_HOSTS_PATH}")
-scp_args=(scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=${KNOWN_HOSTS_PATH}")
+# Use the legacy scp protocol for large immutable binaries.  The default
+# SFTP-backed scp intermittently stalls on this build host; compression keeps
+# the transfer small without changing the produced artifacts.
+scp_args=(scp -O -C -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=${KNOWN_HOSTS_PATH}")
 if [[ "${port}" != "22" ]]; then
   rsync_ssh+=" -p ${port}"
   ssh_args+=(-p "${port}")
@@ -64,6 +67,11 @@ rsync -az --delete \
   --exclude='bin' \
   --exclude='release' \
   --exclude='artifacts' \
+  --exclude='.worktrees' \
+  --exclude='.tmp' \
+  --exclude='.codex' \
+  --exclude='.superpowers' \
+  --exclude='node_modules' \
   --exclude='web/node_modules' \
   --exclude='web/dist' \
   -e "${rsync_ssh}" \

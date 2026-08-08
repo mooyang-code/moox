@@ -38,23 +38,23 @@ func setForwardCommonHeaders(w http.ResponseWriter, origin string) {
 // The direct deployment detail path remains available only for local tests and
 // non-storage admin APIs.
 func forwardStorageToNodeGateway(ctx context.Context, serviceID, method string, body []byte, headers map[string]string) (*http.Response, bool, error) {
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_URL")), "/")
+	native := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NATIVE_URL"))
 	secret := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
 	nodeID := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NODE_ID"))
 	keyID := strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
 	if keyID == "" {
 		keyID = nodeGatewayServiceKeyID
 	}
-	if base == "" || secret == "" || nodeID == "" {
-		return nil, true, fmt.Errorf("storage BFF requires Node Service Gateway configuration")
+	if native == "" || secret == "" || nodeID == "" {
+		return nil, true, fmt.Errorf("storage BFF requires Node Service Gateway configuration (native target, credentials, and node id)")
 	}
 	if keyID != nodeGatewayServiceKeyID {
 		return nil, true, fmt.Errorf("storage BFF key id %q does not match Node Service Gateway key id %q", keyID, nodeGatewayServiceKeyID)
 	}
-	if native := strings.TrimSpace(os.Getenv("MOOX_NODE_GATEWAY_NATIVE_URL")); native != "" {
-		base = native
+	target, err := normalizeNodeGatewayTarget(native)
+	if err != nil {
+		return nil, true, err
 	}
-	target := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
 	servicePath := storageBFFServicePath(serviceID, method)
 	path := "/" + servicePath + "/" + method
 	signed, err := gatewayauth.Sign(gatewayauth.Credentials{KeyID: keyID, Secret: secret}, gatewayauth.Request{
@@ -76,15 +76,38 @@ func forwardStorageToNodeGateway(ctx context.Context, serviceID, method string, 
 	}
 	response := &codec.Body{}
 	codec.Message(ctx).WithClientRPCName(path)
-	invokeOptions := []client.Option{client.WithTarget("ip://" + target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithServiceName(servicePath), client.WithCalleeMethod(method), client.WithSerializationType(codec.SerializationTypeNoop), client.WithCurrentSerializationType(codec.SerializationTypeNoop), client.WithTimeout(30 * time.Second)}
+	invokeOptions := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithServiceName(servicePath), client.WithCalleeMethod(method), client.WithSerializationType(codec.SerializationTypeNoop), client.WithCurrentSerializationType(codec.SerializationTypeNoop), client.WithTimeout(30 * time.Second)}
 	for name, value := range metadata {
 		invokeOptions = append(invokeOptions, client.WithMetaData(name, value))
 	}
 	invokeOptions = append(invokeOptions, client.WithSerializationType(codec.SerializationTypeJSON))
 	if err := client.New().Invoke(ctx, &codec.Body{Data: body}, response, invokeOptions...); err != nil {
-		return nil, true, err
+		return nil, true, fmt.Errorf("Node Service Gateway %s unavailable: %w", target, err)
 	}
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(response.Data))}, true, nil
+}
+
+// normalizeNodeGatewayTarget accepts the deployment formats used by the
+// other native tRPC clients. In particular, do not prepend ip:// twice when
+// the environment already contains a native tRPC target.
+func normalizeNodeGatewayTarget(raw string) (string, error) {
+	target := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if target == "" {
+		return "", fmt.Errorf("Node Service Gateway target is empty")
+	}
+	if strings.HasPrefix(target, "ip://") {
+		return target, nil
+	}
+	if strings.HasPrefix(target, "http://") {
+		return "ip://" + strings.TrimPrefix(target, "http://"), nil
+	}
+	if strings.HasPrefix(target, "https://") {
+		return "ip://" + strings.TrimPrefix(target, "https://"), nil
+	}
+	if strings.Contains(target, "://") {
+		return "", fmt.Errorf("unsupported Node Service Gateway target %q", raw)
+	}
+	return "ip://" + target, nil
 }
 
 func writeNodeGatewayResponse(w http.ResponseWriter, response *http.Response, headers map[string]string) {

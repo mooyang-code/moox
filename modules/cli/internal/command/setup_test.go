@@ -88,9 +88,28 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"init", "hosts", "validate", "trust-host", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus"} {
+	for _, name := range []string{"init", "hosts", "validate", "trust-host", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus"} {
 		require.Contains(t, output.String(), name)
 	}
+}
+
+func TestSetupInstallStorageWatchdogCommand(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	var selectedHost string
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		installStorageWatchdog: func(_ context.Context, _ *setupconfig.Snapshot, host string) error {
+			selectedHost = host
+			return nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"install-storage-watchdog", "--file", "custom.toml", "--host", "compute"})
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, "compute", selectedHost)
+	require.JSONEq(t, `{"host":"compute","status":"ready"}`, output.String())
 }
 
 func TestSetupE2EEventBusWritesOnlyBooleanProof(t *testing.T) {

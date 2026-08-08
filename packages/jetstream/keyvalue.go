@@ -91,10 +91,11 @@ func (c *Client) BindKV(ctx context.Context, bucket string) (KVStore, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := c.alive(); err != nil {
+	js, err := c.jetStream()
+	if err != nil {
 		return nil, err
 	}
-	kv, err := c.js.KeyValue(bucket)
+	kv, err := js.KeyValue(bucket)
 	if err != nil {
 		return nil, mapKVError(err)
 	}

@@ -38,6 +38,8 @@ type ReconcilerOptions struct {
 	Grace    time.Duration
 }
 
+const viewBackfillBatchSize = 10000
+
 func (s *Service) StartReconciler(ctx context.Context, opts ReconcilerOptions) (func(), error) {
 	if opts.Metadata == nil {
 		return nil, errors.New("metadata client is required")
@@ -221,7 +223,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		return err
 	}
 	if view.GetActiveIndexId() != "" && stats.Exists {
-		if err := s.BackfillViewWithReader(ctx, view.GetSpaceId(), view.GetViewId(), 100, opts.Primary); err != nil {
+		if err := s.BackfillViewWithReader(ctx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary); err != nil {
 			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 			return err
 		}
@@ -311,7 +313,7 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, build.GetEntriesWritten()); err != nil {
 			return err
 		}
-		if err := s.BackfillViewWithReader(ctx, view.GetSpaceId(), view.GetViewId(), 100, opts.Primary); err != nil {
+		if err := s.BackfillViewWithReader(ctx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary); err != nil {
 			return err
 		}
 		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_READY, build.GetEntriesWritten()); err != nil {

@@ -5,6 +5,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,14 @@ type IndexManager struct {
 }
 
 var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
+var duckDBMemoryLimitRE = regexp.MustCompile(`^[1-9][0-9]*(?:KB|MB|GB|TB)$`)
+
+const (
+	duckDBMemoryLimitEnv = "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT"
+	duckDBThreadsEnv     = "MOOX_STORAGE_VIEW_DUCKDB_THREADS"
+	defaultDuckDBMemory  = "512MB"
+	defaultDuckDBThreads = 1
+)
 
 func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 	if strings.TrimSpace(opts.Root) == "" {
@@ -156,7 +166,7 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	}
 	defer stmt.Close()
 	for _, write := range batch.RowWrites {
-		args, err := rowArgs(columns, names, write)
+		args, err := rowArgs(columns, names, write, batch.WriteMode)
 		if err != nil {
 			return err
 		}
@@ -200,7 +210,7 @@ func upsertSQL(names []string, mode viewindex.WriteMode) string {
 	return fmt.Sprintf("INSERT INTO view_rows (%s) VALUES (%s) %s", joinQuoted(names), placeholders, conflict)
 }
 
-func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewindex.RowWrite) ([]any, error) {
+func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewindex.RowWrite, mode viewindex.WriteMode) ([]any, error) {
 	key := write.Key.Key.GetTimeSeries()
 	if key == nil {
 		return nil, errors.New("duckdb only accepts time-series row keys")
@@ -221,6 +231,10 @@ func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewind
 		if err != nil {
 			return nil, fmt.Errorf("column %q: %w", field.GetFieldId(), err)
 		}
+		value, err = normalizeColumnValue(value, columns[field.GetFieldId()], mode)
+		if err != nil {
+			return nil, fmt.Errorf("column %q: %w", field.GetFieldId(), err)
+		}
 		values[field.GetFieldId()] = value
 	}
 	for name, typed := range write.Attributes {
@@ -228,6 +242,10 @@ func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewind
 			return nil, fmt.Errorf("unknown view column %q", name)
 		}
 		value, err := typedValueToDB(typed)
+		if err != nil {
+			return nil, fmt.Errorf("column %q: %w", name, err)
+		}
+		value, err = normalizeColumnValue(value, columns[name], mode)
 		if err != nil {
 			return nil, fmt.Errorf("column %q: %w", name, err)
 		}
@@ -239,6 +257,30 @@ func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewind
 		args = append(args, values[name])
 	}
 	return args, nil
+}
+
+func normalizeColumnValue(value any, valueType pb.FieldValueType, mode viewindex.WriteMode) (any, error) {
+	if value == nil || valueType != pb.FieldValueType_FIELD_VALUE_TYPE_JSON {
+		return value, nil
+	}
+	var raw []byte
+	switch v := value.(type) {
+	case string:
+		raw = []byte(v)
+	case []byte:
+		raw = v
+	default:
+		return value, nil
+	}
+	if json.Valid(raw) {
+		return value, nil
+	}
+	if mode == viewindex.Backfill {
+		// Historical rows may contain malformed JSON from older writers. Keep
+		// the time-series row during a rebuild, but do not copy the bad field.
+		return nil, nil
+	}
+	return nil, errors.New("invalid JSON value")
 }
 
 func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
@@ -477,7 +519,38 @@ func open(path string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	memoryLimit := strings.TrimSpace(os.Getenv(duckDBMemoryLimitEnv))
+	if memoryLimit == "" {
+		memoryLimit = defaultDuckDBMemory
+	}
+	if !duckDBMemoryLimitRE.MatchString(memoryLimit) {
+		_ = db.Close()
+		return nil, fmt.Errorf("invalid %s %q", duckDBMemoryLimitEnv, memoryLimit)
+	}
+	threads := defaultDuckDBThreads
+	if raw := strings.TrimSpace(os.Getenv(duckDBThreadsEnv)); raw != "" {
+		threads, err = strconv.Atoi(raw)
+		if err != nil || threads < 1 || threads > 8 {
+			_ = db.Close()
+			return nil, fmt.Errorf("invalid %s %q", duckDBThreadsEnv, raw)
+		}
+	}
+	// The storage host is intentionally small. Bound every view connection and
+	// spill temporary query state beside the index instead of allowing DuckDB's
+	// host-sized default memory limit to compete with the other services.
+	settings := fmt.Sprintf(
+		"SET memory_limit = %s; SET threads = %d; SET temp_directory = %s",
+		sqlStringLiteral(memoryLimit), threads, sqlStringLiteral(filepath.Dir(path)),
+	)
+	if _, err := db.Exec(settings); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure duckdb resource limits: %w", err)
+	}
 	return db, nil
+}
+
+func sqlStringLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func validateSystemSchema(ctx context.Context, db *sql.DB) error {
@@ -757,13 +830,23 @@ func buildWhere(spec viewindex.QuerySpec, columns map[string]pb.FieldValueType) 
 		if err != nil {
 			return whereClause{}, nil, err
 		}
-		parts = append(parts, "(subject_id > ? OR (subject_id = ? AND freq > ?) OR (subject_id = ? AND freq = ? AND data_time > ?) OR (subject_id = ? AND freq = ? AND data_time = ? AND series_tag > ?))")
-		args = append(args,
-			row.GetSubjectId(),
-			row.GetSubjectId(), row.GetFreq(),
-			row.GetSubjectId(), row.GetFreq(), when,
-			row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag(),
-		)
+		if hasDataTimeFirstSort(spec.Sorts) {
+			parts = append(parts, "(data_time > ? OR (data_time = ? AND subject_id > ?) OR (data_time = ? AND subject_id = ? AND freq > ?) OR (data_time = ? AND subject_id = ? AND freq = ? AND series_tag > ?))")
+			args = append(args,
+				when,
+				when, row.GetSubjectId(),
+				when, row.GetSubjectId(), row.GetFreq(),
+				when, row.GetSubjectId(), row.GetFreq(), row.GetSeriesTag(),
+			)
+		} else {
+			parts = append(parts, "(subject_id > ? OR (subject_id = ? AND freq > ?) OR (subject_id = ? AND freq = ? AND data_time > ?) OR (subject_id = ? AND freq = ? AND data_time = ? AND series_tag > ?))")
+			args = append(args,
+				row.GetSubjectId(),
+				row.GetSubjectId(), row.GetFreq(),
+				row.GetSubjectId(), row.GetFreq(), when,
+				row.GetSubjectId(), row.GetFreq(), when, row.GetSeriesTag(),
+			)
+		}
 	}
 	filter, filterArgs, err := filterSQL(spec.Groups, spec.GroupLogical, columns)
 	if err != nil {
@@ -777,6 +860,10 @@ func buildWhere(spec viewindex.QuerySpec, columns map[string]pb.FieldValueType) 
 		return whereClause{}, args, nil
 	}
 	return whereClause{sql: " WHERE " + strings.Join(parts, " AND "), args: args}, args, nil
+}
+
+func hasDataTimeFirstSort(sorts []*pb.SortSpec) bool {
+	return len(sorts) > 0 && sorts[0] != nil && sorts[0].GetFieldName() == "data_time" && !sorts[0].GetDesc()
 }
 
 func filterSQL(groups []viewindex.FilterGroup, groupLogical pb.FilterLogical, columns map[string]pb.FieldValueType) (string, []any, error) {

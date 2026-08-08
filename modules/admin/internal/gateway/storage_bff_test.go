@@ -42,6 +42,30 @@ func TestStorageBFFBodyRequiresTargetAuthSecret(t *testing.T) {
 	}
 }
 
+func TestNormalizeNodeGatewayTarget(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "native target", raw: "ip://127.0.0.1:11003", want: "ip://127.0.0.1:11003"},
+		{name: "native target with slash", raw: "ip://127.0.0.1:11003/", want: "ip://127.0.0.1:11003"},
+		{name: "http target", raw: "http://127.0.0.1:11002", want: "ip://127.0.0.1:11002"},
+		{name: "host and port", raw: "127.0.0.1:11003", want: "ip://127.0.0.1:11003"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := normalizeNodeGatewayTarget(test.raw)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
+
+	for _, raw := range []string{"", "tcp://127.0.0.1:11003"} {
+		_, err := normalizeNodeGatewayTarget(raw)
+		assert.Error(t, err, raw)
+	}
+}
+
 func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *testing.T) {
 	for _, test := range []struct {
 		method  string
@@ -112,7 +136,7 @@ func TestAdminRouterStorageBFFDoesNotUseHTTPServiceDetail(t *testing.T) {
 		Gateway: GatewayConfig{NoAuthMethods: []string{"/api/admin/storage/GetDataSource"}},
 	})
 	t.Setenv("MOOX_NODE_GATEWAY_URL", "http://127.0.0.1:1")
-	t.Setenv("MOOX_NODE_GATEWAY_NATIVE_URL", "")
+	t.Setenv("MOOX_NODE_GATEWAY_NATIVE_URL", "ip://127.0.0.1:1")
 	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "service-secret")
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "moox-gateway-service")
 	t.Setenv("MOOX_NODE_GATEWAY_NODE_ID", "node-a")

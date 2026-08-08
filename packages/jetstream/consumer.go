@@ -69,6 +69,10 @@ func (c *Client) EnsureConsumer(ctx context.Context, cfg ConsumerConfig) (*Consu
 	if c == nil {
 		return nil, fmt.Errorf("%w: client is nil", ErrConnection)
 	}
+	js, err := c.jetStream()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrConnection, err)
+	}
 	if err := c.alive(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConnection, err)
 	}
@@ -82,7 +86,7 @@ func (c *Client) EnsureConsumer(ctx context.Context, cfg ConsumerConfig) (*Consu
 		return nil, err
 	}
 
-	info, err := c.inspectConsumer(ctx, cfg.Stream, cfg.Durable)
+	info, err := c.inspectConsumerWithJS(ctx, js, cfg.Stream, cfg.Durable)
 	if err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
 		return nil, classifyConsumerError("inspect consumer", err)
 	}
@@ -100,14 +104,14 @@ func (c *Client) EnsureConsumer(ctx context.Context, cfg ConsumerConfig) (*Consu
 			MaxAckPending: cfg.MaxAckPending,
 			DeliverPolicy: cfg.DeliverPolicy,
 		}
-		if _, addErr := c.js.AddConsumer(cfg.Stream, consumerCfg, nats.Context(ctx)); addErr != nil && !errors.Is(addErr, nats.ErrConsumerNameAlreadyInUse) {
+		if _, addErr := js.AddConsumer(cfg.Stream, consumerCfg, nats.Context(ctx)); addErr != nil && !errors.Is(addErr, nats.ErrConsumerNameAlreadyInUse) {
 			return nil, classifyConsumerError("create consumer", addErr)
 		}
 		if err := contextErr(ctx, "after consumer creation"); err != nil {
 			return nil, err
 		}
 		// 创建后重新读取，处理同一 Stream 内其他进程抢先创建同名 Consumer 的情况。
-		info, err = c.js.ConsumerInfo(cfg.Stream, cfg.Durable, nats.Context(ctx))
+		info, err = js.ConsumerInfo(cfg.Stream, cfg.Durable, nats.Context(ctx))
 		if err != nil {
 			return nil, classifyConsumerError("inspect created consumer", err)
 		}
@@ -115,10 +119,10 @@ func (c *Client) EnsureConsumer(ctx context.Context, cfg ConsumerConfig) (*Consu
 	if err := contextErr(ctx, "before consumer validation"); err != nil {
 		return nil, err
 	}
-	if err := reconcileConsumerConfig(ctx, c, info, cfg); err != nil {
+	if err := reconcileConsumerConfig(ctx, js, cfg.Stream, cfg.Durable, info, cfg); err != nil {
 		return nil, err
 	}
-	info, err = c.inspectConsumer(ctx, cfg.Stream, cfg.Durable)
+	info, err = c.inspectConsumerWithJS(ctx, js, cfg.Stream, cfg.Durable)
 	if err != nil {
 		return nil, classifyConsumerError("inspect reconciled consumer", err)
 	}
@@ -139,7 +143,11 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 	if c == nil {
 		return nil, fmt.Errorf("%w: client is nil", ErrConnection)
 	}
-	info, err := c.inspectConsumer(ctx, cfg.Stream, cfg.Durable)
+	js, err := c.jetStream()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrConnection, err)
+	}
+	info, err := c.inspectConsumerWithJS(ctx, js, cfg.Stream, cfg.Durable)
 	if errors.Is(err, nats.ErrConsumerNotFound) {
 		return nil, fmt.Errorf("%w: %s/%s", ErrConsumerNotFound, cfg.Stream, cfg.Durable)
 	}
@@ -150,7 +158,7 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 		return nil, fmt.Errorf("%w: consumer %s/%s filter or ack policy differs", ErrConsumerConfigConflict, cfg.Stream, cfg.Durable)
 	}
 	cfg.MaxDeliver = info.Config.MaxDeliver
-	sub, err := c.js.PullSubscribe(cfg.FilterSubject, cfg.Durable, nats.Bind(cfg.Stream, cfg.Durable), nats.ManualAck(), nats.Context(ctx))
+	sub, err := js.PullSubscribe(cfg.FilterSubject, cfg.Durable, nats.Bind(cfg.Stream, cfg.Durable), nats.ManualAck(), nats.Context(ctx))
 	if err != nil {
 		return nil, classifyConsumerError("bind consumer", err)
 	}
@@ -160,12 +168,16 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 func (c *Client) rejectConsumerOwnedByAnotherStream(ctx context.Context, requestedStream, durable string) error {
 	// JetStream 只保证单个 Stream 内名称唯一。这里用于启动时发现静态命名冲突；
 	// V1 依靠单实例 Consumer owner 和固定命名，不为跨 Stream 并发创建引入分布式锁。
-	names := c.js.StreamNames(nats.Context(ctx))
+	js, err := c.jetStream()
+	if err != nil {
+		return err
+	}
+	names := js.StreamNames(nats.Context(ctx))
 	for stream := range names {
 		if stream == requestedStream {
 			continue
 		}
-		_, err := c.js.ConsumerInfo(stream, durable, nats.Context(ctx))
+		_, err := js.ConsumerInfo(stream, durable, nats.Context(ctx))
 		switch {
 		case err == nil:
 			return fmt.Errorf("%w: consumer %s already belongs to stream %s", ErrConsumerConfigConflict, durable, stream)
@@ -178,7 +190,7 @@ func (c *Client) rejectConsumerOwnedByAnotherStream(ctx context.Context, request
 	return contextErr(ctx, "after consumer ownership inspection")
 }
 
-func (c *Client) inspectConsumer(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
+func (c *Client) inspectConsumerWithJS(ctx context.Context, js nats.JetStreamContext, stream, durable string) (*nats.ConsumerInfo, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
@@ -199,7 +211,7 @@ func (c *Client) inspectConsumer(ctx context.Context, stream, durable string) (*
 	if err := c.alive(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConnection, err)
 	}
-	info, err := c.js.ConsumerInfo(stream, durable, nats.Context(ctx))
+	info, err := js.ConsumerInfo(stream, durable, nats.Context(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +241,7 @@ func classifyConsumerError(operation string, err error) error {
 	return fmt.Errorf("%w: %s: %w", ErrInvalidConsumer, operation, err)
 }
 
-func reconcileConsumerConfig(ctx context.Context, client *Client, info *nats.ConsumerInfo, cfg ConsumerConfig) error {
+func reconcileConsumerConfig(ctx context.Context, js nats.JetStreamContext, stream, durable string, info *nats.ConsumerInfo, cfg ConsumerConfig) error {
 	if info == nil {
 		return fmt.Errorf("%w: consumer info is empty", ErrInvalidConsumer)
 	}
@@ -255,7 +267,7 @@ func reconcileConsumerConfig(ctx context.Context, client *Client, info *nats.Con
 	next.AckWait = cfg.AckWait
 	next.MaxDeliver = cfg.MaxDeliver
 	next.MaxAckPending = cfg.MaxAckPending
-	if _, err := client.js.UpdateConsumer(cfg.Stream, &next, nats.Context(ctx)); err != nil {
+	if _, err := js.UpdateConsumer(stream, &next, nats.Context(ctx)); err != nil {
 		return classifyConsumerError("update consumer", err)
 	}
 	return nil
@@ -297,7 +309,7 @@ func (p *Consumer) Fetch(ctx context.Context, batch int) ([]*Delivery, error) {
 	var firstDecodeErr error
 	var transportErr error
 	for _, msg := range msgs {
-		delivery, decodeErr := deliveryFromMessage(msg, p.cfg.Stream, p.cfg.Durable, p.client.cfg.MaxPayload)
+		delivery, decodeErr := deliveryFromMessage(msg, p.cfg.Stream, p.cfg.Durable, p.client.maxPayload())
 		if decodeErr != nil {
 			if !p.cfg.DeliverDecodeErrors {
 				// Poison messages must be terminated even when the caller's fetch context

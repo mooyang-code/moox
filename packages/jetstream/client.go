@@ -22,8 +22,9 @@ type Client struct {
 	js  nats.JetStreamContext
 	cfg Config
 
-	mu     sync.RWMutex
-	closed bool
+	mu          sync.RWMutex
+	reconnectMu sync.Mutex
+	closed      bool
 }
 
 func (c *Client) Ready() bool {
@@ -33,6 +34,67 @@ func (c *Client) Ready() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return !c.closed && c.nc != nil && c.nc.IsConnected()
+}
+
+// Reconnect replaces the underlying NATS connection with a fresh connection.
+// It is intended for JetStream subscriptions that remain invalid after the
+// server has restarted. The durable consumer is preserved on the server and
+// callers can bind a new subscription after this method returns.
+func (c *Client) Reconnect(ctx context.Context) error {
+	if c == nil {
+		return ErrConnection
+	}
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		return ErrClosed
+	}
+	cfg := c.cfg
+	c.mu.RUnlock()
+
+	replacement, err := Connect(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		_ = replacement.Close()
+		return ErrClosed
+	}
+	old := c.nc
+	c.nc = replacement.nc
+	c.js = replacement.js
+	c.cfg = replacement.cfg
+	c.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	return nil
+}
+
+func (c *Client) jetStream() (nats.JetStreamContext, error) {
+	if c == nil {
+		return nil, ErrConnection
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.closed || c.js == nil {
+		return nil, ErrClosed
+	}
+	return c.js, nil
+}
+
+func (c *Client) maxPayload() int {
+	if c == nil {
+		return defaultMaxPayload
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg.MaxPayload
 }
 
 // Connect establishes a NATS connection and creates a JetStream context.
@@ -209,13 +271,14 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) DeleteConsumer(ctx context.Context, stream, durable string) error {
-	if err := c.alive(); err != nil {
+	js, err := c.jetStream()
+	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(stream) == "" || strings.TrimSpace(durable) == "" {
 		return fmt.Errorf("%w: stream and durable are required", ErrInvalidConsumer)
 	}
-	if err := c.js.DeleteConsumer(stream, durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+	if err := js.DeleteConsumer(stream, durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
 		return fmt.Errorf("%w: delete consumer %s/%s: %w", ErrInvalidConsumer, stream, durable, err)
 	}
 	return nil

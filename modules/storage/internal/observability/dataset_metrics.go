@@ -72,6 +72,8 @@ func parseDatasetFrequency(freq string) (time.Duration, error) {
 	}
 	var unit time.Duration
 	switch freq[len(freq)-1] {
+	case 's':
+		unit = time.Second
 	case 'm':
 		unit = time.Minute
 	case 'h', 'H':

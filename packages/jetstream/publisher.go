@@ -36,6 +36,10 @@ func (c *Client) PublishRaw(ctx context.Context, subject, messageID string, payl
 	if err := c.alive(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConnection, err)
 	}
+	js, err := c.jetStream()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrConnection, err)
+	}
 	if err := validateSubject(subject); err != nil {
 		return nil, fmt.Errorf("%w: subject: %v", ErrInvalidMessage, err)
 	}
@@ -45,8 +49,9 @@ func (c *Client) PublishRaw(ctx context.Context, subject, messageID string, payl
 	if len(payload) == 0 {
 		return nil, fmt.Errorf("%w: payload is required", ErrInvalidMessage)
 	}
-	if c.cfg.MaxPayload > 0 && len(payload) > c.cfg.MaxPayload {
-		return nil, fmt.Errorf("%w: payload size %d exceeds %d", ErrInvalidMessage, len(payload), c.cfg.MaxPayload)
+	maxPayload := c.maxPayload()
+	if maxPayload > 0 && len(payload) > maxPayload {
+		return nil, fmt.Errorf("%w: payload size %d exceeds %d", ErrInvalidMessage, len(payload), maxPayload)
 	}
 	contentType = strings.TrimSpace(contentType)
 	if contentType == "" {
@@ -55,7 +60,7 @@ func (c *Client) PublishRaw(ctx context.Context, subject, messageID string, payl
 	natsMsg := &nats.Msg{Subject: subject, Header: nats.Header{}, Data: append([]byte(nil), payload...)}
 	natsMsg.Header.Set(nats.MsgIdHdr, messageID)
 	natsMsg.Header.Set("Content-Type", contentType)
-	ack, err := c.js.PublishMsg(natsMsg, nats.Context(ctx))
+	ack, err := js.PublishMsg(natsMsg, nats.Context(ctx))
 	if err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil, fmt.Errorf("%w: %w", ErrConnection, ctx.Err())

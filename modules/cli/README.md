@@ -108,6 +108,13 @@ moox-cli setup init \
 `stock_cn`、`crypto_market` 写入 Admin，把它们和内部 `moox_system` 元数据写入
 Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且不覆盖。
 
+`deploy-storage` 成功启动 Storage 后会自动安装并启用每 10 秒检查一次的
+`systemd` watchdog；如需只补装或更新 watchdog，可执行：
+
+```bash
+moox-cli setup install-storage-watchdog --file ./custom.toml --host compute
+```
+
 `metadata spaces` 和 `setup metadata-import` 保留给只导入部分业务空间的高级操作；
 标准新系统初始化不需要逐个选择 YAML 或 Space。
 

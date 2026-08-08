@@ -23,25 +23,26 @@ import (
 const defaultSetupFile = "./custom.toml"
 
 type setupDeps struct {
-	load               func(string) (*setupconfig.Snapshot, error)
-	loadInitBundle     func(string) (setupInitBundle, error)
-	validate           func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
-	validateDeployment func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error)
-	trustHost          func(context.Context, *setupconfig.Snapshot, string, string) error
-	deployControl      func(context.Context, *setupconfig.Snapshot, bool) error
-	deployService      func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
-	apply              func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
-	status             func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
-	applySpaces        func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
-	statusSpaces       func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
-	login              func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
-	openInitStorage    func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
-	deployStorage      func(context.Context, *setupconfig.Snapshot, string, bool) error
-	importMetadata     func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
-	verifyStorage      func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
-	e2eStorage         func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
-	browserE2EStorage  func(context.Context, *setupconfig.Snapshot, string, string) (storageBrowserResult, error)
-	e2eEventBus        func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error)
+	load                   func(string) (*setupconfig.Snapshot, error)
+	loadInitBundle         func(string) (setupInitBundle, error)
+	validate               func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
+	validateDeployment     func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error)
+	trustHost              func(context.Context, *setupconfig.Snapshot, string, string) error
+	deployControl          func(context.Context, *setupconfig.Snapshot, bool) error
+	deployService          func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
+	apply                  func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
+	status                 func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
+	applySpaces            func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
+	statusSpaces           func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
+	login                  func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
+	openInitStorage        func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
+	deployStorage          func(context.Context, *setupconfig.Snapshot, string, bool) error
+	installStorageWatchdog func(context.Context, *setupconfig.Snapshot, string) error
+	importMetadata         func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
+	verifyStorage          func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
+	e2eStorage             func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
+	browserE2EStorage      func(context.Context, *setupconfig.Snapshot, string, string) (storageBrowserResult, error)
+	e2eEventBus            func(context.Context, *setupconfig.Snapshot) (eventBusE2EResult, error)
 }
 
 func init() {
@@ -65,6 +66,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
 		newSetupDeployStorageCommand(deps),
+		newSetupInstallStorageWatchdogCommand(deps),
 		newSetupMetadataImportCommand(deps),
 		newSetupVerifyStorageCommand(deps),
 		newSetupE2EStorageCommand(deps),
@@ -327,6 +329,31 @@ func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
+func newSetupInstallStorageWatchdogCommand(deps setupDeps) *cobra.Command {
+	var file, host string
+	cmd := &cobra.Command{Use: "install-storage-watchdog", Short: "在 Storage 主机安装并启用自动恢复监控", RunE: func(cmd *cobra.Command, _ []string) error {
+		snapshot, err := deps.load(file)
+		if err != nil {
+			return err
+		}
+		defer clearSetupSecrets(snapshot)
+		if _, err := findSetupHost(snapshot.Manifest, host); err != nil {
+			return err
+		}
+		if err := deps.installStorageWatchdog(cmd.Context(), snapshot, host); err != nil {
+			return err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return fmt.Errorf("config_changed")
+		}
+		return writeSetupJSON(cmd, map[string]any{"host": host, "status": "ready"})
+	}}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&host, "host", "", "Storage 目标主机名称")
+	_ = cmd.MarkFlagRequired("host")
+	return cmd
+}
+
 func newSetupMetadataImportCommand(deps setupDeps) *cobra.Command {
 	var file, seed, storageHost string
 	var spaces []string
@@ -398,6 +425,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.deployStorage == nil {
 		deps.deployStorage = defaults.deployStorage
 	}
+	if deps.installStorageWatchdog == nil {
+		deps.installStorageWatchdog = defaults.installStorageWatchdog
+	}
 	if deps.importMetadata == nil {
 		deps.importMetadata = defaults.importMetadata
 	}
@@ -425,23 +455,24 @@ func defaultSetupDeps() setupDeps {
 			}
 			return setupconfig.Load(path, root)
 		},
-		loadInitBundle:     loadSetupInitBundle,
-		validate:           defaultSetupValidate,
-		validateDeployment: defaultSetupValidateDeployment,
-		trustHost:          defaultSetupTrustHost,
-		deployControl:      defaultSetupDeploy,
-		deployService:      defaultSetupDeployService,
-		apply:              defaultSetupApply,
-		status:             defaultSetupStatus,
-		applySpaces:        defaultSetupApplyWithSpaces,
-		statusSpaces:       defaultSetupStatusWithSpaces,
-		openInitStorage:    defaultOpenSetupInitStorage,
-		deployStorage:      defaultSetupDeployStorage,
-		importMetadata:     defaultSetupImportMetadata,
-		verifyStorage:      defaultSetupVerifyStorage,
-		e2eStorage:         defaultSetupE2EStorage,
-		browserE2EStorage:  defaultSetupBrowserE2EStorage,
-		e2eEventBus:        defaultSetupE2EEventBus,
+		loadInitBundle:         loadSetupInitBundle,
+		validate:               defaultSetupValidate,
+		validateDeployment:     defaultSetupValidateDeployment,
+		trustHost:              defaultSetupTrustHost,
+		deployControl:          defaultSetupDeploy,
+		deployService:          defaultSetupDeployService,
+		apply:                  defaultSetupApply,
+		status:                 defaultSetupStatus,
+		applySpaces:            defaultSetupApplyWithSpaces,
+		statusSpaces:           defaultSetupStatusWithSpaces,
+		openInitStorage:        defaultOpenSetupInitStorage,
+		deployStorage:          defaultSetupDeployStorage,
+		installStorageWatchdog: defaultSetupInstallStorageWatchdog,
+		importMetadata:         defaultSetupImportMetadata,
+		verifyStorage:          defaultSetupVerifyStorage,
+		e2eStorage:             defaultSetupE2EStorage,
+		browserE2EStorage:      defaultSetupBrowserE2EStorage,
+		e2eEventBus:            defaultSetupE2EEventBus,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost.Address)
 			if setupdeploy.UsesPublicTLS(snapshot.Manifest.ControlHost.Address) {
@@ -491,19 +522,20 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData,
-		UseControlGateway:     useControlGateway,
-		EventBusPublicAddress: snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:          snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:    snapshot.Manifest.EventBus.TLSEnabled,
-		StoragePrimarySecret:  primarySecret,
-		StorageViewSecret:     viewSecret,
-		HealthAuthVersion:     healthVersion,
-		HealthAuthAccessKey:   healthAccessKey,
-		HealthAuthSecretKey:   healthSecret,
-		GatewayControlURL:     controlURL,
-		GatewayControlKey:     controlKey,
-		GatewayServiceKey:     serviceKey,
-		GatewayCABundle:       gatewayCA,
+		UseControlGateway:      useControlGateway,
+		EventBusPublicAddress:  snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:           snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:     snapshot.Manifest.EventBus.TLSEnabled,
+		StoragePrimarySecret:   primarySecret,
+		StorageViewSecret:      viewSecret,
+		InstallStorageWatchdog: true,
+		HealthAuthVersion:      healthVersion,
+		HealthAuthAccessKey:    healthAccessKey,
+		HealthAuthSecretKey:    healthSecret,
+		GatewayControlURL:      controlURL,
+		GatewayControlKey:      controlKey,
+		GatewayServiceKey:      serviceKey,
+		GatewayCABundle:        gatewayCA,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
@@ -528,6 +560,23 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		}
 	}
 	return restartStorageClients(ctx, control)
+}
+
+func defaultSetupInstallStorageWatchdog(ctx context.Context, snapshot *setupconfig.Snapshot, name string) error {
+	host, err := findSetupHost(snapshot.Manifest, name)
+	if err != nil {
+		return err
+	}
+	transport, err := dialSetupHost(ctx, host)
+	if err != nil {
+		return err
+	}
+	defer transport.Close()
+	root, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("storage_watchdog_install_invalid")
+	}
+	return setupdeploy.InstallStorageViewWatchdog(ctx, transport, root)
 }
 
 // configureRemoteCollectorStorageTarget keeps the Collector planner on the

@@ -3,6 +3,7 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,12 +80,47 @@ func TestRebindRetriesUntilSubscriptionIsAvailable(t *testing.T) {
 	}
 }
 
+func TestStartReconnectsClientAfterPersistentBadSubscription(t *testing.T) {
+	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
+		return nil
+	}))
+	consumer.config, _ = consumer.config.withDefaults()
+	consumer.config.ErrorReporter = jetstream.ErrorReporterFunc(func(error) {})
+	consumer.bind = func(context.Context) (deliveryConsumer, error) {
+		return badSubscriptionDeliveryConsumer{}, nil
+	}
+	var reconnects atomic.Int32
+	consumer.reconnect = func(context.Context) error {
+		reconnects.Add(1)
+		return nil
+	}
+	stop, err := consumer.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for reconnects.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	stop()
+	if reconnects.Load() == 0 {
+		t.Fatal("persistent invalid subscription did not trigger a client reconnect")
+	}
+}
+
 type fakeDeliveryConsumer struct{}
 
 func (*fakeDeliveryConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
 	return nil, nats.ErrTimeout
 }
 func (*fakeDeliveryConsumer) Close() error { return nil }
+
+type badSubscriptionDeliveryConsumer struct{}
+
+func (badSubscriptionDeliveryConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
+	return nil, nats.ErrBadSubscription
+}
+func (badSubscriptionDeliveryConsumer) Close() error { return nil }
 
 func TestApplyDeliveryRejectsMalformedAndMismatchedEvents(t *testing.T) {
 	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {

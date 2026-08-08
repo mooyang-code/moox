@@ -16,6 +16,8 @@ import (
 
 const defaultMaxRetryAttempts = 10
 
+const reconnectAfterSubscriptionErrors = 3
+
 type Config struct {
 	Consumer         string
 	AckWaitMS        int
@@ -103,6 +105,9 @@ type Consumer struct {
 	// subscription after a transient NATS disconnect. A durable JetStream
 	// consumer remains intact; only the local subscription is rebound.
 	bind func(context.Context) (deliveryConsumer, error)
+	// reconnect is used as a last resort when the NATS connection reports ready
+	// but repeatedly returns an invalid pull subscription after EventBus restart.
+	reconnect func(context.Context) error
 }
 
 type deliveryConsumer interface {
@@ -127,6 +132,7 @@ func New(client *jetstream.Client, handler DatasetRowsHandler, config Config) (*
 	}
 	consumer := &Consumer{client: client, handler: handler, config: config, registry: registry}
 	consumer.bind = consumer.bindDelivery
+	consumer.reconnect = client.Reconnect
 	return consumer, nil
 }
 
@@ -200,6 +206,7 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 			}
 		}()
 		defer dispatcher.Close()
+		consecutiveSubscriptionErrors := 0
 		for loopCtx.Err() == nil {
 			deliveries, fetchErr := bound.Fetch(loopCtx, opts.FetchBatch)
 			opts.Metrics.AddConsumerLagMessages(int64(len(deliveries)))
@@ -217,10 +224,28 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 				if loopCtx.Err() != nil {
 					return
 				}
-				if !errors.Is(fetchErr, nats.ErrTimeout) {
+				if errors.Is(fetchErr, nats.ErrTimeout) {
+					opts.Metrics.SetConsumerBound(true)
+				} else {
 					opts.Metrics.SetConsumerBound(false)
-					opts.ErrorReporter.Report(fmt.Errorf("fetch storage view deliveries: %w", fetchErr))
 					if shouldRebind(fetchErr) {
+						reportRebind := true
+						if errors.Is(fetchErr, nats.ErrBadSubscription) {
+							consecutiveSubscriptionErrors++
+							reportRebind = consecutiveSubscriptionErrors == 1
+							if consecutiveSubscriptionErrors >= reconnectAfterSubscriptionErrors {
+								reportRebind = true
+								if err := c.reconnectClient(loopCtx); err != nil {
+									opts.ErrorReporter.Report(fmt.Errorf("reconnect storage view eventbus client: %w", err))
+								}
+								consecutiveSubscriptionErrors = 0
+							}
+						} else {
+							consecutiveSubscriptionErrors = 0
+						}
+						if reportRebind {
+							opts.ErrorReporter.Report(fmt.Errorf("rebind storage view deliveries: %w", fetchErr))
+						}
 						if bound != nil {
 							_ = bound.Close()
 							bound = nil
@@ -229,7 +254,9 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 						if bound == nil {
 							return
 						}
-						opts.Metrics.SetConsumerBound(true)
+					} else {
+						consecutiveSubscriptionErrors = 0
+						opts.ErrorReporter.Report(fmt.Errorf("fetch storage view deliveries: %w", fetchErr))
 					}
 				}
 				timer := time.NewTimer(250 * time.Millisecond)
@@ -243,10 +270,20 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 				}
 				continue
 			}
+			consecutiveSubscriptionErrors = 0
 			opts.Metrics.SetConsumerBound(true)
 		}
 	}()
 	return func() { cancel(); <-done }, nil
+}
+
+func (c *Consumer) reconnectClient(ctx context.Context) error {
+	if c == nil || c.reconnect == nil {
+		return errors.New("storage view eventbus client reconnect is unavailable")
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, rebindAttemptLimit)
+	defer cancel()
+	return c.reconnect(attemptCtx)
 }
 
 const (

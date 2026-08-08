@@ -133,6 +133,20 @@ func TestDatasetMetricsAcceptsCanonicalStorageFrequency(t *testing.T) {
 	}
 }
 
+func TestDatasetMetricsAcceptsSecondFrequency(t *testing.T) {
+	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "monitor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := DatasetKey{SpaceID: "moox_system", DatasetID: "moox_service_metrics", Freq: "30s"}
+	if err := metrics.ObserveFact(DatasetObservation{Key: key, Result: "success", FinishedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("second frequency observation rejected: %v", err)
+	}
+	if got, err := ParseDatasetFrequency("30s"); err != nil || got != 30*time.Second {
+		t.Fatalf("ParseDatasetFrequency(30s) = %v, %v", got, err)
+	}
+}
+
 func TestDatasetMetricsUsesCanonicalFrequencyIdentity(t *testing.T) {
 	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "collector")
 	if err != nil {

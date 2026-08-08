@@ -5,6 +5,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,6 +27,37 @@ func duckRowKey(space, dataset, subject, freq, at, tag string) *pb.RowKey {
 }
 
 func stringPtr(value string) *string { return &value }
+
+func TestOpenAppliesResourceLimits(t *testing.T) {
+	t.Setenv(duckDBMemoryLimitEnv, "128MB")
+	t.Setenv(duckDBThreadsEnv, "1")
+
+	db, err := open(filepath.Join(t.TempDir(), "view.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var memoryLimit string
+	if err := db.QueryRow(`SELECT current_setting('memory_limit')`).Scan(&memoryLimit); err != nil {
+		t.Fatal(err)
+	}
+	var memoryMiB float64
+	var memoryUnit string
+	if _, err := fmt.Sscanf(memoryLimit, "%f %s", &memoryMiB, &memoryUnit); err != nil {
+		t.Fatalf("memory_limit=%q is not a DuckDB memory value: %v", memoryLimit, err)
+	}
+	if memoryMiB < 100 || memoryMiB > 130 || !strings.EqualFold(memoryUnit, "MiB") {
+		t.Fatalf("memory_limit=%q, want approximately 128MB", memoryLimit)
+	}
+	var threads int
+	if err := db.QueryRow(`SELECT current_setting('threads')`).Scan(&threads); err != nil {
+		t.Fatal(err)
+	}
+	if threads != 1 {
+		t.Fatalf("threads=%d, want 1", threads)
+	}
+}
 
 func rowTags(rows []*pb.RowFieldValues) []string {
 	tags := make([]string, 0, len(rows))
@@ -701,5 +733,16 @@ func TestDuckDBPrepareDDLAndWriteModes(t *testing.T) {
 	})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("like substring query: rows=%v err=%v", rows, err)
+	}
+}
+
+func TestNormalizeColumnValueDropsMalformedJSONOnlyDuringBackfill(t *testing.T) {
+	value := "map[CalleeContainerName:storage CalleeMethod:GetDataNode]"
+	got, err := normalizeColumnValue(value, pb.FieldValueType_FIELD_VALUE_TYPE_JSON, viewindex.Backfill)
+	if err != nil || got != nil {
+		t.Fatalf("backfill malformed JSON = (%v, %v), want (nil, nil)", got, err)
+	}
+	if _, err := normalizeColumnValue(value, pb.FieldValueType_FIELD_VALUE_TYPE_JSON, viewindex.LiveWrite); err == nil {
+		t.Fatal("live malformed JSON should fail")
 	}
 }

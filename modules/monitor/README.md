@@ -22,7 +22,7 @@ catalog/latest/history API、看板和扁平 AND/OR 规则。Monitor 不抓取�
 
 - 检查结果和告警事件默认保留 14 天。`trpc.moox.monitor.data_cleanup.timer` 启动时执行一次，之后每 6 小时清理一次，单次超时 120 秒。
 - 指标消息去重记录默认有效 7 天，由同一 Timer 删除到期记录。结果、告警和去重三项会全部尝试，一个步骤失败不会阻断其他步骤，最终返回汇总错误。
-- 服务指标和主机指标的时序历史位于 Storage，不存放在 Monitor SQLite。Storage 对四个主机指标 Dataset 默认保留 48 小时；Monitor 不删除任何 Storage 事实。
+- 服务指标和主机指标的时序历史位于 Storage，不存放在 Monitor SQLite。服务指标 Dataset `moox_service_metrics` 默认保留 3 天；四个主机指标 Dataset 默认保留 48 小时；Monitor 不删除任何 Storage 事实。
 - SQLite 异常增长通常意味着清理任务失败、事件数量异常或高基数 catalog 增长，不能只靠缩短 Storage 历史窗口解决。
 
 完整的数据保留矩阵、永久数据和磁盘巡检命令见[数据保留与磁盘空间](../../docs/运维/数据保留与磁盘空间.md)。

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SCRIPT="${ROOT}/scripts/build-storage-linux.sh"
 DEPLOY_SCRIPT="${ROOT}/scripts/deploy-moox.sh"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-build-storage-linux.XXXXXX")"
@@ -74,6 +74,8 @@ bash "${SCRIPT}"
 grep -Fq -- '--exclude=custom.toml' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '--exclude=bin' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '--exclude=release' "${TMP_ROOT}/rsync.log"
+grep -Fq -- '--exclude=.worktrees' "${TMP_ROOT}/rsync.log"
+grep -Fq -- '--exclude=node_modules' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '-p 2200' "${TMP_ROOT}/rsync.log"
 grep -Fq -- '192.0.2.88' "${TMP_ROOT}/rsync.log"
 grep -Fq -- 'StrictHostKeyChecking=yes' "${TMP_ROOT}/rsync.log"

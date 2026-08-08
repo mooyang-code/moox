@@ -48,60 +48,63 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 		}
 		s.mu.RLock()
 		nextSchema := s.schemas[nextID]
+		catalogView := s.catalogViews[viewRef{spaceID: spaceID, viewID: viewID}]
 		s.mu.RUnlock()
-		var after *pb.RowKey
-		for {
-			rows, _, err := active.Query(ctx, activeID, viewindex.QuerySpec{
-				AfterKey: after, Sorts: backfillSorts(active.Engine()), Limit: batchSize, TotalMode: pb.TotalMode_NONE,
-			})
-			if err != nil {
-				return fmt.Errorf("query active view %q for backfill: %w", activeID, err)
-			}
-			if len(rows) == 0 {
-				break
-			}
-			writes := make([]viewindex.RowWrite, 0, len(rows))
-			keys := make([]*pb.RowKey, 0, len(rows))
-			for _, row := range rows {
-				if row == nil || row.GetKey() == nil {
-					continue
-				}
-				keys = append(keys, row.GetKey())
-				writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: proto.Clone(row.GetKey()).(*pb.RowKey)}, Fields: row.GetFields(), Attributes: row.GetAttributes()})
-			}
-			if len(keys) != 0 {
-				liveRows, _, err := next.Query(ctx, nextID, viewindex.QuerySpec{Keys: keys, TotalMode: pb.TotalMode_NONE})
+		for _, timeRange := range backfillTimeRanges(catalogView) {
+			var after *pb.RowKey
+			for {
+				rows, _, err := active.Query(ctx, activeID, viewindex.QuerySpec{
+					AfterKey: after, TimeRange: timeRange, Sorts: backfillSorts(active.Engine()), Limit: batchSize, TotalMode: pb.TotalMode_NONE,
+				})
 				if err != nil {
-					return fmt.Errorf("check live rows in pending view %q: %w", nextID, err)
+					return fmt.Errorf("query active view %q for backfill: %w", activeID, err)
 				}
-				live := make(map[string]struct{}, len(liveRows))
-				for _, row := range liveRows {
-					if row != nil && row.GetKey() != nil {
-						live[viewindex.RowKeyID(row.GetKey())] = struct{}{}
+				if len(rows) == 0 {
+					break
+				}
+				writes := make([]viewindex.RowWrite, 0, len(rows))
+				keys := make([]*pb.RowKey, 0, len(rows))
+				for _, row := range rows {
+					if row == nil || row.GetKey() == nil {
+						continue
+					}
+					keys = append(keys, row.GetKey())
+					writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: proto.Clone(row.GetKey()).(*pb.RowKey)}, Fields: row.GetFields(), Attributes: row.GetAttributes()})
+				}
+				if len(keys) != 0 {
+					liveRows, _, err := next.Query(ctx, nextID, viewindex.QuerySpec{Keys: keys, TotalMode: pb.TotalMode_NONE})
+					if err != nil {
+						return fmt.Errorf("check live rows in pending view %q: %w", nextID, err)
+					}
+					live := make(map[string]struct{}, len(liveRows))
+					for _, row := range liveRows {
+						if row != nil && row.GetKey() != nil {
+							live[viewindex.RowKeyID(row.GetKey())] = struct{}{}
+						}
+					}
+					filtered := writes[:0]
+					for _, write := range writes {
+						if _, exists := live[viewindex.RowKeyID(write.Key.Key)]; !exists {
+							filtered = append(filtered, write)
+						}
+					}
+					writes = filtered
+				}
+				if reader != nil && len(writes) > 0 {
+					if err := s.enrichBackfillRows(ctx, reader, activeID, nextID, writes); err != nil {
+						return err
 					}
 				}
-				filtered := writes[:0]
-				for _, write := range writes {
-					if _, exists := live[viewindex.RowKeyID(write.Key.Key)]; !exists {
-						filtered = append(filtered, write)
+				if len(writes) > 0 {
+					if err := next.Write(ctx, nextID, viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: nextSchema.ViewVersion, ViewSchemaHash: nextSchema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
+						return fmt.Errorf("write view backfill %q: %w", nextID, err)
 					}
 				}
-				writes = filtered
-			}
-			if reader != nil && len(writes) > 0 {
-				if err := s.enrichBackfillRows(ctx, reader, activeID, nextID, writes); err != nil {
-					return err
+				if len(rows) < batchSize {
+					break
 				}
+				after = proto.Clone(rows[len(rows)-1].GetKey()).(*pb.RowKey)
 			}
-			if len(writes) > 0 {
-				if err := next.Write(ctx, nextID, viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: nextSchema.ViewVersion, ViewSchemaHash: nextSchema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
-					return fmt.Errorf("write view backfill %q: %w", nextID, err)
-				}
-			}
-			if len(rows) < batchSize {
-				break
-			}
-			after = proto.Clone(rows[len(rows)-1].GetKey()).(*pb.RowKey)
 		}
 	}
 	runtime.mu.Lock()
@@ -112,12 +115,35 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 	return nil
 }
 
+func backfillTimeRanges(view *pb.View) []*pb.TimeRange {
+	if view == nil || view.GetKeepDuration() == "" || view.GetKeepDuration() == "0" {
+		return []*pb.TimeRange{nil}
+	}
+	keep, err := time.ParseDuration(view.GetKeepDuration())
+	if err != nil || keep <= 0 {
+		return []*pb.TimeRange{nil}
+	}
+	now := time.Now().UTC()
+	start := now.Add(-keep)
+	const chunk = 5 * time.Minute
+	ranges := make([]*pb.TimeRange, 0, int(keep/chunk)+1)
+	for start.Before(now) {
+		end := start.Add(chunk)
+		if end.After(now) {
+			end = now
+		}
+		ranges = append(ranges, &pb.TimeRange{StartTime: start.Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano)})
+		start = end
+	}
+	return ranges
+}
+
 func backfillSorts(engine string) []*pb.SortSpec {
 	if engine == "bleve" {
 		return []*pb.SortSpec{{FieldName: "record_id"}, {FieldName: "version"}}
 	}
 	return []*pb.SortSpec{
-		{FieldName: "subject_id"}, {FieldName: "freq"}, {FieldName: "data_time"}, {FieldName: "series_tag"},
+		{FieldName: "data_time"}, {FieldName: "subject_id"}, {FieldName: "freq"}, {FieldName: "series_tag"},
 		{FieldName: "record_id"}, {FieldName: "version"},
 	}
 }

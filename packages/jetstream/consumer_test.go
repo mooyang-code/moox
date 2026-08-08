@@ -33,6 +33,58 @@ func TestNewConsumerCreatesWhenMissing(t *testing.T) {
 	}
 }
 
+func TestReconnectReplacesUnderlyingConnection(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	old := client.nc
+	if err := client.Reconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if client.nc == old {
+		t.Fatal("Reconnect did not replace the NATS connection")
+	}
+	if !old.IsClosed() {
+		t.Fatal("Reconnect left the old NATS connection open")
+	}
+	if !client.Ready() {
+		t.Fatal("client is not ready after Reconnect")
+	}
+}
+
+func TestReconnectKeepsDurableConsumerBindable(t *testing.T) {
+	srv, url := startTestServer(t)
+	defer srv.Shutdown()
+	client := connectTestClient(t, url)
+	defer client.Close()
+	ensureTestStream(t, client, "TEST", "moox.test.>")
+	cfg := testConsumerConfig("reconnect-durable")
+	oldConsumer, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldConsumer.Close()
+	if _, err := client.PublishRaw(context.Background(), "moox.test.reconnect", "reconnect-1", []byte("payload"), "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Reconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	newConsumer, err := client.NewConsumer(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newConsumer.Close()
+	deliveries, err := newConsumer.Fetch(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 || string(deliveries[0].RawData) != "payload" {
+		t.Fatalf("deliveries after reconnect = %+v", deliveries)
+	}
+}
+
 func TestDeleteConsumerRemovesDurable(t *testing.T) {
 	srv, url := startTestServer(t)
 	defer srv.Shutdown()

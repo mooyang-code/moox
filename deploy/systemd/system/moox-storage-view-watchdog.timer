@@ -1,0 +1,12 @@
+[Unit]
+Description=Run MooX Storage View watchdog every 10 seconds
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=10s
+AccuracySec=1s
+Persistent=true
+Unit=moox-storage-view-watchdog.service
+
+[Install]
+WantedBy=timers.target

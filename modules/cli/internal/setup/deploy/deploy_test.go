@@ -267,6 +267,33 @@ func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
 	require.Equal(t, remoteStorageArchiveNext, transport.uploadPath)
 }
 
+func TestStorageInstallsWatchdogWhenRequested(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "scripts"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "deploy", "systemd", "system"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "moox-storage-view-watchdog.sh"), []byte("#!/bin/sh\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "deploy", "systemd", "system", storageViewWatchdogService), []byte("User=__MOOX_USER__\nGroup=__MOOX_GROUP__\nEnvironment=HOME=__MOOX_HOME__\nEnvironment=MOOX_STORAGE_ROOT=__MOOX_STORAGE_ROOT__\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "deploy", "systemd", "system", storageViewWatchdogTimer), []byte("[Timer]\nOnUnitActiveSec=10s\n"), 0o600))
+	archive := filepath.Join(root, "storage.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("storage-package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events}
+	err := Storage(context.Background(), transport, Options{
+		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64", InstallStorageWatchdog: true,
+	}, Dependencies{Packager: &fakePackager{path: archive, events: &events}, Probe: &fakeProbe{events: &events}})
+	require.NoError(t, err)
+	require.Contains(t, events, "install_watchdog")
+	require.Equal(t, 4, countEvent(events, "upload"), events)
+	var install string
+	for _, command := range transport.commands {
+		if strings.Contains(strings.Join(command, " "), "moox-install-storage-watchdog") {
+			install = strings.Join(command, " ")
+			break
+		}
+	}
+	require.Contains(t, install, "systemctl enable --now moox-storage-view-watchdog.timer")
+}
+
 func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		t.Skip("a native Linux host does not need compile_host")
@@ -809,7 +836,12 @@ func (f *fakeTransport) Run(_ context.Context, argv []string, _ io.Reader) (setu
 	if len(argv) == 2 && argv[0] == "uname" && argv[1] == "-m" {
 		return setupssh.Result{Stdout: f.unameArch}, nil
 	}
-	if len(argv) >= 3 && strings.Contains(argv[2], "install_control") {
+	if len(argv) >= 3 && strings.Contains(argv[2], "printf '%s\\n%s\\n%s\\n'") {
+		return setupssh.Result{Stdout: "/home/ubuntu\nubuntu\nubuntu\n"}, nil
+	}
+	if strings.Contains(strings.Join(argv, " "), "moox-install-storage-watchdog") {
+		*f.events = append(*f.events, "install_watchdog")
+	} else if len(argv) >= 3 && strings.Contains(argv[2], "install_control") {
 		*f.events = append(*f.events, "install", "start")
 	} else if len(argv) >= 3 && strings.Contains(argv[2], "install_storage") {
 		*f.events = append(*f.events, "install_storage")
@@ -837,6 +869,16 @@ func (f *fakeCAStore) Save(string, []byte) error {
 	return nil
 }
 func (f *fakeTransport) Close() error { return nil }
+
+func countEvent(events []string, want string) int {
+	count := 0
+	for _, event := range events {
+		if event == want {
+			count++
+		}
+	}
+	return count
+}
 
 type fakeProbe struct {
 	events *[]string

@@ -1,0 +1,18 @@
+[Unit]
+Description=MooX Storage View watchdog check
+After=network-online.target
+Wants=network-online.target
+# This service is intentionally invoked by a timer every 10 seconds. Do not
+# rate-limit the oneshot itself; a failed recovery must remain retryable.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+KillMode=process
+User=__MOOX_USER__
+Group=__MOOX_GROUP__
+Environment=HOME=__MOOX_HOME__
+Environment=MOOX_STORAGE_ROOT=__MOOX_STORAGE_ROOT__
+Environment=MOOX_STORAGE_EVENTBUS_URL=tls://127.0.0.1:4222
+Environment=MOOX_STORAGE_VIEW_DELIVER_POLICY=new
+ExecStart=/usr/local/libexec/moox-storage-view-watchdog

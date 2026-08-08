@@ -273,6 +273,9 @@ func parseDatasetFrequency(value string) (string, time.Duration, error) {
 	var unit time.Duration
 	var suffix byte
 	switch value[len(value)-1] {
+	case 's':
+		unit = time.Second
+		suffix = 's'
 	case 'm':
 		unit = time.Minute
 		suffix = 'm'

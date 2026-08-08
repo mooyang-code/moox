@@ -49,7 +49,9 @@ if PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
   exit 1
 fi
 expected_storage_primary_secret="factor-storage-contract-secret"
+expected_storage_view_secret="factor-storage-view-contract-secret"
 MOOX_STORAGE_PRIMARY_AUTH_SECRET="${expected_storage_primary_secret}" \
+MOOX_STORAGE_VIEW_AUTH_SECRET="${expected_storage_view_secret}" \
   PATH="${TMP_ROOT}/fake-path:${PATH}" \
   "${FIXTURE_ROOT}/scripts/deploy-moox.sh" "${deploy_args[@]}" >/dev/null
 
@@ -89,6 +91,11 @@ storage_primary_secret="$(
 )"
 [[ -n "${storage_primary_secret}" ]]
 [[ "${storage_primary_secret}" == "${expected_storage_primary_secret}" ]]
+storage_view_secret="$(
+  bash -c 'source "$1"; printf "%s" "${MOOX_STORAGE_VIEW_AUTH_SECRET}"' \
+    _ "${UNPACKED}/secrets/storage-internal-auth.env"
+)"
+[[ "${storage_view_secret}" == "${expected_storage_view_secret}" ]]
 grep -Fxq 'MOOX_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/secrets/gateway-service.env"
 grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}"' "${UNPACKED}/start.sh"
 
