@@ -184,8 +184,12 @@ func (s *Service) inspectSCFFunction(ctx context.Context, spaceID, accountID str
 		return inspection
 	}
 	functionType := firstString(inspection.info.Type, function.Type)
-	if !strings.EqualFold(functionType, "event") && !strings.EqualFold(functionType, "http") {
-		inspection.reason = "function type is not Event or HTTP"
+	if strings.EqualFold(functionType, "http") {
+		inspection.reason = "HTTP 型函数不参与 Collector 调度"
+		return inspection
+	}
+	if !strings.EqualFold(functionType, "event") {
+		inspection.reason = "function type is not Event"
 		return inspection
 	}
 	if node == nil {
@@ -366,8 +370,11 @@ func (s *Service) importSCFFunction(ctx context.Context, spaceID string, account
 		return store.CloudNode{}, "", fmt.Errorf("function is not a MooX market fetcher")
 	}
 	functionType := strings.ToLower(strings.TrimSpace(info.Type))
-	if functionType != "event" && functionType != "http" {
-		return store.CloudNode{}, "", fmt.Errorf("function type is not Event or HTTP")
+	if functionType == "http" {
+		return store.CloudNode{}, "", fmt.Errorf("HTTP 型函数不参与 Collector 调度")
+	}
+	if functionType != "event" {
+		return store.CloudNode{}, "", fmt.Errorf("function type is not Event")
 	}
 	triggerType := "invoke"
 	if trigger, triggerErr := client.GetTimerTrigger(ctx, functionRef, timerTriggerName); triggerErr != nil {
@@ -393,12 +400,7 @@ func (s *Service) importSCFFunction(ctx context.Context, spaceID string, account
 	if err != nil {
 		return store.CloudNode{}, "", err
 	}
-	nodeType := "scf-event"
-	if functionType == "http" {
-		nodeType = "scf-web"
-		triggerType = ""
-	}
-	node := store.CloudNode{SpaceID: spaceID, NodeID: ref.GetFunctionName(), Provider: "tencent-scf", CloudAccountID: account.AccountID, PackageID: packageID, NodeType: nodeType, TriggerType: triggerType, Region: ref.GetRegion(), Namespace: ref.GetNamespace(), FunctionName: ref.GetFunctionName(), Metadata: string(metadata), IsDeleted: false}
+	node := store.CloudNode{SpaceID: spaceID, NodeID: ref.GetFunctionName(), Provider: "tencent-scf", CloudAccountID: account.AccountID, PackageID: packageID, NodeType: "scf-event", TriggerType: triggerType, Region: ref.GetRegion(), Namespace: ref.GetNamespace(), FunctionName: ref.GetFunctionName(), Metadata: string(metadata), IsDeleted: false}
 	if existing != nil {
 		node.PackageVersion = existing.PackageVersion
 		node.DeploymentID = existing.DeploymentID

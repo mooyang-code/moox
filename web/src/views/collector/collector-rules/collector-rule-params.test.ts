@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildCollectorRuleParams, buildCollectorRuleRequest, datasetMatchesCollector, normalizeCollectorRule } from "./collector-rule-params";
+import {
+  buildCollectorRuleParams,
+  buildCollectorRuleRequest,
+  datasetMatchesCollector,
+  normalizeCollectorRule
+} from "./collector-rule-params";
 
 describe("buildCollectorRuleParams", () => {
   it("builds the dataset-driven Kline contract", () => {
@@ -104,8 +109,25 @@ describe("datasetMatchesCollector", () => {
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")).toBe(
       true
     );
-    expect(datasetMatchesCollector({ data_source_id: "crypto_market", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")).toBe(true);
+    expect(
+      datasetMatchesCollector({ data_source_id: "crypto_market", data_kind: "DATA_KIND_TIME_SERIES" }, "binance", "kline")
+    ).toBe(true);
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: "DATA_KIND_RECORD" }, "binance", "kline")).toBe(false);
     expect(datasetMatchesCollector({ data_source_id: "binance", data_kind: 1 }, "binance", "symbol")).toBe(true);
+  });
+
+  it("filters datasets by market type and requested frequency", () => {
+    const spotBars = {
+      data_source_id: "crypto_market",
+      data_kind: "DATA_KIND_TIME_SERIES",
+      attributes: { market_type: "spot" },
+      freqs: ["1H"]
+    };
+    expect(datasetMatchesCollector(spotBars, "binance", "kline", "spot", "1h")).toBe(true);
+    expect(datasetMatchesCollector(spotBars, "binance", "kline", "swap", "1h")).toBe(false);
+    expect(datasetMatchesCollector(spotBars, "binance", "kline", "spot", "4h")).toBe(false);
+    expect(
+      datasetMatchesCollector({ ...spotBars, data_source_id: "binance", attributes: {} }, "binance", "kline", "spot", "1h")
+    ).toBe(false);
   });
 });

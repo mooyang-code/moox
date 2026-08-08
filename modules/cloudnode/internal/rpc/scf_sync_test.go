@@ -48,3 +48,20 @@ func TestPreviewAndImportSCFFunctionsAreSpaceScopedAndIdempotent(t *testing.T) {
 	require.Equal(t, "pkg-1", node.PackageID)
 	require.NotContains(t, node.Metadata, "MOOX_SECRET")
 }
+
+func TestPreviewSCFFunctionsBlocksHTTPMarketFetcher(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	require.NoError(t, catalog.UpsertAccount(context.Background(), store.CloudAccount{AccountID: "account-http", Provider: "tencent", CredentialSecretID: "secret"}))
+	fake := &fakeSCFClient{
+		inventory:       []tencentscf.DiscoveryFunction{{FunctionRef: tencentscf.FunctionRef{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-crypto-market-http"}, Status: "Active", Runtime: "Go1", Type: "HTTP"}},
+		inventoryRegion: "ap-guangzhou",
+		getResults:      []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", Runtime: "Go1", Type: "HTTP", Environment: map[string]string{"MOOX_SPACE_ID": "crypto_market", "MOOX_CODE_PACKAGE_ID": "pkg-http"}}}},
+	}
+	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
+
+	preview, err := svc.PreviewSCFFunctions(spacecontext.WithSpaceID(context.Background(), "crypto_market"), &pb.PreviewSCFFunctionsReq{AccountId: "account-http"})
+	require.NoError(t, err)
+	require.Len(t, preview.GetFunctions(), 1)
+	require.False(t, preview.GetFunctions()[0].GetImportable())
+	require.Contains(t, preview.GetFunctions()[0].GetReason(), "HTTP")
+}

@@ -61,18 +61,30 @@ describe("cloud node batch API", () => {
 
   it("previews and imports only selected SCF references", async () => {
     callControl.mockResolvedValueOnce({
-      functions: [{ function: { region: "ap-guangzhou", namespace: "default", function_name: "moox-fetcher" }, importable: true }],
+      functions: [
+        { function: { region: "ap-guangzhou", namespace: "default", function_name: "moox-fetcher" }, importable: true }
+      ],
       region_errors: []
     });
     const preview = await previewSCFFunctions("account-1");
     expect(preview.functions).toHaveLength(1);
+    expect(callControl).toHaveBeenNthCalledWith(
+      1,
+      "cloudnode",
+      "PreviewSCFFunctions",
+      { account_id: "account-1" },
+      { timeout: 180000 }
+    );
     callControl.mockResolvedValueOnce({ created: 1, restored: 0, unchanged: 0, failed: 0, results: [] });
-    await importSCFFunctions("account-1", [
-      preview.functions[0].function
-    ]);
-    expect(callControl).toHaveBeenLastCalledWith("cloudnode", "ImportSCFFunctions", {
-      account_id: "account-1",
-      functions: [{ region: "ap-guangzhou", namespace: "default", function_name: "moox-fetcher" }]
-    });
+    await importSCFFunctions("account-1", [preview.functions[0].function]);
+    expect(callControl).toHaveBeenLastCalledWith(
+      "cloudnode",
+      "ImportSCFFunctions",
+      {
+        account_id: "account-1",
+        functions: [{ region: "ap-guangzhou", namespace: "default", function_name: "moox-fetcher" }]
+      },
+      { timeout: 180000 }
+    );
   });
 });

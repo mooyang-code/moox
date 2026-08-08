@@ -78,6 +78,8 @@ export interface SCFImportResponse {
   failed: number;
 }
 
+const scfSyncRequestConfig = { timeout: 180000 };
+
 export interface Page {
   page?: number;
   size?: number;
@@ -195,9 +197,7 @@ export interface BatchDeleteNodesResponse {
   processed_count: number;
 }
 
-function normalizePageParams<T extends { page?: Page | number; page_size?: number }>(
-  params: T
-): T & { page?: Page } {
+function normalizePageParams<T extends { page?: Page | number; page_size?: number }>(params: T): T & { page?: Page } {
   const normalized = { ...params } as T & { page?: Page };
   if (typeof params.page === "number" || params.page_size !== undefined) {
     normalized.page = {
@@ -257,21 +257,21 @@ export const getNodeBatchChange = async (jobId: string): Promise<GetNodeBatchCha
   callControl<{ job_id: string }, GetNodeBatchChangeResponse>("cloudnode", "GetNodeBatchChange", { job_id: jobId });
 
 export const batchDeleteNodes = async (data: BatchDeleteNodesRequest): Promise<BatchDeleteNodesResponse> => {
-	const submitted = await callControl<{ node_ids: string[] }, SubmitNodeBatchResponse>("cloudnode", "SubmitDeleteNodes", {
-		node_ids: data.node_ids
-	});
-	const deadline = Date.now() + 2 * 60 * 1000;
-	while (Date.now() < deadline) {
-		const status = await getNodeBatchChange(submitted.job_id);
-		if (status.job.status === "NODE_BATCH_STATUS_SUCCESS") {
-			return { processed_count: status.job.success_count };
-		}
-		if (status.job.status === "NODE_BATCH_STATUS_FAILED" || status.job.status === "NODE_BATCH_STATUS_PARTIAL") {
-			throw new Error(`删除云函数失败：${status.job.failed_count} 个节点未完成`);
-		}
-		await new Promise(resolve => setTimeout(resolve, 250));
-	}
-	throw new Error("删除云函数超时，请在云节点批次中查看结果");
+  const submitted = await callControl<{ node_ids: string[] }, SubmitNodeBatchResponse>("cloudnode", "SubmitDeleteNodes", {
+    node_ids: data.node_ids
+  });
+  const deadline = Date.now() + 2 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const status = await getNodeBatchChange(submitted.job_id);
+    if (status.job.status === "NODE_BATCH_STATUS_SUCCESS") {
+      return { processed_count: status.job.success_count };
+    }
+    if (status.job.status === "NODE_BATCH_STATUS_FAILED" || status.job.status === "NODE_BATCH_STATUS_PARTIAL") {
+      throw new Error(`删除云函数失败：${status.job.failed_count} 个节点未完成`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error("删除云函数超时，请在云节点批次中查看结果");
 };
 
 export const listCloudRegions = async (provider = "tencent"): Promise<CloudRegion[]> => {
@@ -284,9 +284,14 @@ export const listCloudRegions = async (provider = "tencent"): Promise<CloudRegio
 };
 
 export const previewSCFFunctions = async (accountId: string): Promise<SCFPreviewResponse> => {
-  const rsp = await callControl<{ account_id: string }, SCFPreviewResponse>("cloudnode", "PreviewSCFFunctions", {
-    account_id: accountId
-  });
+  const rsp = await callControl<{ account_id: string }, SCFPreviewResponse>(
+    "cloudnode",
+    "PreviewSCFFunctions",
+    {
+      account_id: accountId
+    },
+    scfSyncRequestConfig
+  );
   return { functions: rsp.functions ?? [], region_errors: rsp.region_errors ?? [] };
 };
 
@@ -294,7 +299,8 @@ export const importSCFFunctions = async (accountId: string, functions: SCFFuncti
   const rsp = await callControl<{ account_id: string; functions: SCFFunctionRef[] }, SCFImportResponse>(
     "cloudnode",
     "ImportSCFFunctions",
-    { account_id: accountId, functions }
+    { account_id: accountId, functions },
+    scfSyncRequestConfig
   );
   return {
     results: rsp.results ?? [],

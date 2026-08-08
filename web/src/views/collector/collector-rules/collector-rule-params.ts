@@ -10,6 +10,8 @@ export type CollectorRuleInput = {
 export type CollectorDatasetOption = {
   data_source_id: string;
   data_kind: string | number;
+  attributes?: Record<string, string>;
+  freqs?: string[];
 };
 
 export type CollectorRuleRecord = {
@@ -25,14 +27,26 @@ export type CollectorRuleRecord = {
   modify_time: string;
 };
 
-export function datasetMatchesCollector(dataset: CollectorDatasetOption, exchange: string, dataType: string): boolean {
+export function datasetMatchesCollector(
+  dataset: CollectorDatasetOption,
+  exchange: string,
+  dataType: string,
+  marketType?: string,
+  frequency?: string
+): boolean {
   // K-line targets may be aggregate datasets (for example crypto_market)
   // fed by more than one provider; symbols remain provider-owned.
   if (dataType !== "kline" && dataset.data_source_id !== exchange) {
     return false;
   }
   const expected = dataType === "kline" ? ["DATA_KIND_TIME_SERIES", "time_series", 2] : ["DATA_KIND_RECORD", "record", 1];
-  return expected.includes(dataset.data_kind);
+  if (!expected.includes(dataset.data_kind)) return false;
+  if (marketType && dataset.attributes?.market_type?.toLowerCase() !== marketType.toLowerCase()) return false;
+  if (frequency) {
+    const supportedFrequencies = (dataset.freqs || []).map(value => value.toLowerCase());
+    if (!supportedFrequencies.includes(frequency.toLowerCase())) return false;
+  }
+  return true;
 }
 
 export function buildCollectorRuleParams(input: CollectorRuleInput): Record<string, unknown> {

@@ -137,7 +137,12 @@
         </a-form-item>
 
         <a-form-item v-if="addForm.data_type === 'kline'" label="标的 Dataset" required>
-          <a-select v-model="symbolDatasetIdValue" placeholder="请选择已激活的标的 Dataset" :loading="loadingDatasets" allow-search>
+          <a-select
+            v-model="symbolDatasetIdValue"
+            placeholder="请选择已激活的标的 Dataset"
+            :loading="loadingDatasets"
+            allow-search
+          >
             <a-option v-for="dataset in availableSymbolDatasets" :key="dataset.dataset_id" :value="dataset.dataset_id">
               {{ dataset.name || dataset.dataset_id }} ({{ dataset.dataset_id }})
             </a-option>
@@ -309,13 +314,21 @@ const addForm = ref({
 const availableDatasets = computed(() => {
   if (!addForm.value.data_source || !addForm.value.data_type) return [];
   return activeDatasets.value.filter(dataset =>
-    datasetMatchesCollector(dataset, addForm.value.data_source, addForm.value.data_type)
+    datasetMatchesCollector(
+      dataset,
+      addForm.value.data_source,
+      addForm.value.data_type,
+      marketValue.value,
+      addForm.value.data_type === "kline" ? scheduleIntervalValue.value : undefined
+    )
   );
 });
 
 const availableSymbolDatasets = computed(() => {
   if (!addForm.value.data_source) return [];
-  return activeDatasets.value.filter(dataset => datasetMatchesCollector(dataset, addForm.value.data_source, "symbol"));
+  return activeDatasets.value.filter(dataset =>
+    datasetMatchesCollector(dataset, addForm.value.data_source, "symbol", marketValue.value)
+  );
 });
 
 const rules = {
@@ -768,11 +781,14 @@ watch(
   }
 );
 
-watch([() => addForm.value.data_source, () => addForm.value.data_type], () => {
-  if (datasetIdValue.value && !availableDatasets.value.some(dataset => dataset.dataset_id === datasetIdValue.value)) {
-    datasetIdValue.value = "";
+watch(
+  [() => addForm.value.data_source, () => addForm.value.data_type, () => marketValue.value, () => scheduleIntervalValue.value],
+  () => {
+    if (datasetIdValue.value && !availableDatasets.value.some(dataset => dataset.dataset_id === datasetIdValue.value)) {
+      datasetIdValue.value = "";
+    }
   }
-});
+);
 
 onMounted(() => {
   getTaskList();
