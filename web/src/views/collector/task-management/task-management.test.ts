@@ -55,4 +55,14 @@ describe("collector task management workbench", () => {
     expect(createPosition).toBeLessThan(firstToolbarEnd);
     expect(rules.slice(firstToolbarEnd, tableStart)).not.toContain("新建任务");
   });
+
+  it("clears both Dataset selections when the collector market changes", () => {
+    const rules = fs.readFileSync(path.resolve(__dirname, "../collector-rules/collector-rules.vue"), "utf8");
+    const watcherStart = rules.indexOf("watch(\n  [() => addForm.value.data_source");
+    const watcher = rules.slice(watcherStart, rules.indexOf("onMounted(() =>", watcherStart));
+
+    expect(watcher).toContain('datasetIdValue.value = ""');
+    expect(watcher).toContain('symbolDatasetIdValue.value = ""');
+    expect(watcher).toContain("availableSymbolDatasets.value");
+  });
 });
