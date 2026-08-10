@@ -7,6 +7,7 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 import "moox_common.proto";
 import "common.proto";
 import "rows.proto";
+import "dataset_markers.proto";
 
 message PrimaryUpsertFieldsReq {
   common.AuthInfo auth_info = 1;
@@ -33,6 +34,69 @@ message PrimaryReadFieldsRsp {
   repeated RowKey existing_keys = 3;
 }
 
+message ReportDatasetPeriodCollectedReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  DatasetPeriodCollectedMarker marker = 3;
+}
+
+message ReportDatasetPeriodCollectedRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message ReportFactorPeriodComputedReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  FactorPeriodComputedMarker marker = 3;
+}
+
+message ReportFactorPeriodComputedRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message AppendDatasetSyncPointReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  DatasetSyncPointMarker sync_point = 3;
+}
+
+message AppendDatasetSyncPointRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message GetFactorPeriodComputedReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string source_view_id = 3;
+  string trigger_event_id = 4;
+  int64 period_time = 5;
+}
+
+message GetFactorPeriodComputedRsp {
+  common.RetInfo ret_info = 1;
+  bool found = 2;
+  string event_id = 3;
+  FactorPeriodComputedMarker marker = 4;
+}
+
+message WaitViewSyncPointReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string request_id = 4;
+  repeated string dataset_ids = 5;
+  uint32 wait_timeout_ms = 6;
+}
+
+message WaitViewSyncPointRsp {
+  common.RetInfo ret_info = 1;
+  bool ready = 2;
+  repeated string pending_dataset_ids = 3;
+}
+
 // PrimaryStore is the metadata-validating user boundary. It never exposes
 // DataNode merge/scan terminology and routes one Dataset to its owner node.
 service PrimaryStore {
@@ -41,4 +105,9 @@ service PrimaryStore {
   rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
   rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
+  rpc ReportDatasetPeriodCollected(ReportDatasetPeriodCollectedReq) returns (ReportDatasetPeriodCollectedRsp);
+  rpc ReportFactorPeriodComputed(ReportFactorPeriodComputedReq) returns (ReportFactorPeriodComputedRsp);
+  rpc AppendDatasetSyncPoint(AppendDatasetSyncPointReq) returns (AppendDatasetSyncPointRsp);
+  rpc GetFactorPeriodComputed(GetFactorPeriodComputedReq) returns (GetFactorPeriodComputedRsp);
+  rpc WaitViewSyncPoint(WaitViewSyncPointReq) returns (WaitViewSyncPointRsp);
 }

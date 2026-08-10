@@ -1,11 +1,23 @@
-package scheduler
+package taskrunner
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestOperationGateAcquireContextCanBeCancelled(t *testing.T) {
+	gate := NewOperationGate()
+	release := gate.Acquire()
+	defer release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := gate.AcquireContext(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+}
 
 func TestFactorGateMutationWaitsForRunningTask(t *testing.T) {
 	gate := NewFactorGate()

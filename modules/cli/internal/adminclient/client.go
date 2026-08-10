@@ -120,6 +120,23 @@ func (c *Client) postJSON(ctx context.Context, method, path string, body any) ([
 	return raw, nil
 }
 
+// CallJSON invokes one of the service gateway methods and decodes its JSON
+// response.  Setup workflows use this small escape hatch for services whose
+// generated client is owned by another module (for example FactorMgr).
+func (c *Client) CallJSON(ctx context.Context, method, path string, body, response any) error {
+	raw, err := c.postJSON(ctx, method, path, body)
+	if err != nil {
+		return err
+	}
+	if response == nil || len(raw) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, response); err != nil {
+		return fmt.Errorf("decode service response: %w", err)
+	}
+	return nil
+}
+
 // rewriteToServiceRoute 将 /api/admin/{service}/{method} 改写为 /api/service/{service}/{method}。
 // 仅识别 /api/admin/ 前缀；非该前缀的路径原样返回。
 func rewriteToServiceRoute(path string) string {

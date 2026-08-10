@@ -16,9 +16,9 @@ import (
 	factorobservability "github.com/mooyang-code/moox/modules/factor/internal/observability"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
 	factorsvc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
-	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
@@ -64,8 +64,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	keepResources := false
-	var pythonExec *engine.PythonExecutor
-	var sched *scheduler.Service
+	var pythonPool *engine.PythonWorkerPool
+	var runner *taskrunner.Service
 	var consumer *eventconsumer.Consumer
 	var stopRealtime context.CancelFunc
 	var waitRealtime func()
@@ -81,11 +81,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			if consumer != nil {
 				_ = consumer.Close()
 			}
-			if sched != nil {
-				_ = sched.Stop()
-			}
-			if pythonExec != nil {
-				_ = pythonExec.Close()
+			if pythonPool != nil {
+				_ = pythonPool.Close()
 			}
 			_ = dbm.Close()
 		})
@@ -113,11 +110,17 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		meta,
 		registry.Options{FactorsDir: cfg.Engine.FactorsDir},
 	).WithBindings(bindingRepo)
+	if err := startupRegistry.EnsureSourceArtifacts(ctx); err != nil {
+		return nil, fmt.Errorf("restore factor source artifacts: %w", err)
+	}
 	if err := validateStartupFactorContracts(ctx, startupRegistry); err != nil {
 		return nil, err
 	}
-	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials, authInfo)
-	pythonExec, err = engine.NewPythonExecutor(ctx, cfg.Engine.Workers, process.Config{
+	manifests := dbm.OutputManifests()
+	storage := storageio.NewClientWithCredentials(cfg.Storage.GatewayTarget, cfg.Storage.GatewayNodeID, storageCredentials, authInfo).
+		WithViewAuth(factorViewAuthInfo()).
+		WithOutputManifests(manifests)
+	pythonPool, err = engine.NewPythonWorkerPool(ctx, cfg.Engine.PythonWorkers, process.Config{
 		PythonBin: cfg.Engine.PythonBin, WorkerPath: cfg.Engine.WorkerPath,
 		Args:        []string{"--factors-dir", cfg.Engine.FactorsDir},
 		TaskTimeout: time.Duration(cfg.Engine.TaskTimeoutMS) * time.Millisecond,
@@ -148,32 +151,28 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize factor run metrics: %w", err)
 	}
+	periodMetrics, err := factorobservability.NewPeriodMetrics(prometheus.DefaultRegisterer)
+	if err != nil {
+		return nil, fmt.Errorf("initialize factor period metrics: %w", err)
+	}
 	realtimeInventory := factorobservability.NewRealtimeInventory(bindingRepo, datasetMetrics)
 	if err := realtimeInventory.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initialize factor realtime dataset inventory: %w", err)
 	}
-	factorGate := scheduler.NewFactorGate()
-	sched = scheduler.NewService(scheduler.Config{
-		Workers: cfg.Engine.Workers, QueueCapacity: cfg.Scheduler.QueueCapacity,
-		MaxRetry:               cfg.Scheduler.MaxRetry,
-		ViewSettleDelay:        cfg.Scheduler.ViewSettleDelay,
-		EventReadRetry:         cfg.Scheduler.EventReadRetry,
-		EventReadRetryInterval: cfg.Scheduler.EventReadRetryInterval,
-	}, storage, pythonExec,
-		scheduler.WithDatasetMetrics(runMetrics),
-		scheduler.WithFactorGate(factorGate),
-		scheduler.WithTaskValidator(newTaskValidator(factorRepo, bindingRepo)),
+	factorGate := taskrunner.NewFactorGate()
+	operationGate := taskrunner.NewOperationGate()
+	runner = taskrunner.NewService(cfg.Engine.PythonWorkers, storage, pythonPool,
+		taskrunner.WithViewReadConfig(
+			cfg.Engine.ViewReadWorkers,
+			time.Duration(cfg.Engine.ViewReadTimeoutMS)*time.Millisecond,
+		),
+		taskrunner.WithDatasetMetrics(runMetrics),
+		taskrunner.WithFactorGate(factorGate),
+		taskrunner.WithTaskValidator(newTaskValidator(factorRepo, bindingRepo)),
 	)
-	if err := sched.Start(ctx); err != nil {
-		return nil, fmt.Errorf("start factor scheduler: %w", err)
-	}
 
-	bindings, err := listExecutableBindings(ctx, bindingRepo)
-	if err != nil {
-		log.ErrorContextf(ctx, "加载 factor binding 快照失败: %v", err)
-		return nil, err
-	}
-	eventBatcher := trigger.NewEventBatcher(time.Duration(cfg.Scheduler.EventBatchWindowMS)*time.Millisecond, bindings)
+	viewReadyRunner := trigger.NewViewReadyRunner(bindingRepo, factorRepo, runner, storage, cfg.Engine.FactorsDir,
+		trigger.WithOperationGate(operationGate), trigger.WithPeriodMetrics(periodMetrics))
 	if len(cfg.EventBus.URLs) == 0 {
 		log.WarnContextf(ctx, "factor eventbus.urls is empty, realtime trigger startup skipped")
 	} else {
@@ -181,33 +180,30 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			URLs:           cfg.EventBus.URLs,
 			FetchMaxWait:   cfg.EventBus.FetchMaxWait,
 			CredentialFile: cfg.EventBus.CredentialFile,
-		}, eventBatcher)
+		}, viewReadyRunner)
 		if err := consumer.Start(ctx); err != nil {
 			log.ErrorContextf(ctx, "启动 factor EventBus trigger 失败: %v", err)
 			return nil, err
 		}
-		realtimeCtx, cancelRealtime := context.WithCancel(ctx)
-		stopRealtime = cancelRealtime
-		waitRealtime = startRealtimeLoop(realtimeCtx, realtimeLoopDeps{
-			consumer:         consumer,
-			eventBatcher:     eventBatcher,
-			scheduler:        sched,
-			factors:          factorRepo,
-			bindings:         bindingRepo,
-			factorsDir:       cfg.Engine.FactorsDir,
-			eventBatchWindow: time.Duration(cfg.Scheduler.EventBatchWindowMS) * time.Millisecond,
-		})
 	}
 	registerMetricsReporter(s, realtimeInventory)
 
 	factorService := factorsvc.NewWithRuntime(
 		dbm,
-		sched,
+		runner,
 		factorsvc.WithFactorsDir(cfg.Engine.FactorsDir),
 		factorsvc.WithMetadataSync(meta),
 		factorsvc.WithRealtimeInventory(realtimeInventory),
 		factorsvc.WithFactorGate(factorGate),
+		factorsvc.WithOperationGate(operationGate),
+		factorsvc.WithBindingOutputCleaner(bindingOutputCleaner{storage: storage, manifests: dbm.OutputManifests()}),
+		factorsvc.WithBindingSchemaCleaner(meta),
+		factorsvc.WithViewReadyExecutor(viewReadyRunner, storage),
 	)
+	reconcileCtx, cancelReconcile := context.WithCancel(ctx)
+	stopRealtime = cancelReconcile
+	waitRealtime = startPendingBindingReconciler(reconcileCtx, factorService)
+	startManifestRetention(reconcileCtx, manifests, time.Hour, factorManifestRetention())
 	registered := false
 	for _, name := range []string{"trpc.moox.factor.FactorMgr", "trpc.moox.factor.FactorMgr.trpc"} {
 		if service := s.Service(name); service != nil {
@@ -218,7 +214,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if !registered {
 		log.WarnContextf(ctx, "FactorMgr service is not configured, skip register")
 	}
-	if err := registerHealth(s, cfg, dbm, sched, pythonExec, consumer); err != nil {
+	if err := registerHealth(s, cfg, dbm, runner, pythonPool, consumer); err != nil {
 		return nil, err
 	}
 
@@ -231,6 +227,120 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	log.InfoContextf(ctx, "moox-factor 初始化完成")
 	return s, nil
+}
+
+type bindingOutputCleaner struct {
+	storage interface {
+		ClearFactorOutputs(context.Context, *engine.FactorTask) error
+	}
+	manifests *store.OutputManifestRepository
+}
+
+func (c bindingOutputCleaner) ClearBindingOutputs(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
+	return c.clearBindingOutputs(ctx, binding, factor, func(string) bool { return true })
+}
+
+// ClearBindingOutputsOutsideScope removes only subjects no longer allowed by
+// the updated binding, preserving historical rows for subjects that remain in
+// its include scope.
+func (c bindingOutputCleaner) ClearBindingOutputsOutsideScope(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
+	return c.clearBindingOutputs(ctx, binding, factor, func(subjectID string) bool {
+		return !domain.BindingAllowsSubject(binding, subjectID)
+	})
+}
+
+func (c bindingOutputCleaner) clearBindingOutputs(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef, shouldClear func(string) bool) error {
+	if c.storage == nil || c.manifests == nil {
+		return nil
+	}
+	keys, err := c.manifests.ListByBinding(ctx, binding.BindingID)
+	if err != nil {
+		return err
+	}
+	// A lifecycle cleanup is a new mutation even when it targets the same
+	// period as an earlier cleanup. Keep this invocation's IDs stable while
+	// preventing a later disable/re-enable cycle from reusing old outbox IDs.
+	cleanupID := fmt.Sprintf("binding-cleanup-%s-%d", binding.BindingID, time.Now().UnixNano())
+	for _, key := range keys {
+		if !shouldClear(key.SubjectID) {
+			continue
+		}
+		period := key.PeriodTime.UTC()
+		task := &engine.FactorTask{
+			TaskID: cleanupID + "-" + period.Format(time.RFC3339Nano), BindingID: binding.BindingID,
+			SpaceID: binding.SpaceID, SourceViewID: binding.SourceViewID, ResultDatasetID: binding.ResultDatasetID,
+			SubjectID: key.SubjectID, Freq: key.Frequency, PeriodTime: period.Unix(), TriggerEventID: cleanupID,
+			TriggeredAt: period, Factor: engine.FactorSpec{FactorID: factor.FactorID, Name: factor.Name, SourceHash: factor.SourceHash, Outputs: append([]string(nil), factor.Outputs...)},
+		}
+		if err := c.storage.ClearFactorOutputs(ctx, task); err != nil {
+			return fmt.Errorf("clear binding %s subject %s period %s: %w", binding.BindingID, key.SubjectID, period.Format(time.RFC3339), err)
+		}
+	}
+	return nil
+}
+
+type pendingBindingReconciler interface{ ReconcilePendingBindings(context.Context) error }
+
+func startPendingBindingReconciler(ctx context.Context, reconciler pendingBindingReconciler) func() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := reconciler.ReconcilePendingBindings(ctx); err != nil {
+					log.WarnContextf(ctx, "reconcile pending factor bindings failed: %v", err)
+				}
+			}
+		}
+	}()
+	return wg.Wait
+}
+
+func startManifestRetention(ctx context.Context, manifests *store.OutputManifestRepository, interval, retention time.Duration) {
+	if manifests == nil || retention <= 0 {
+		return
+	}
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	cleanup := func() {
+		if _, err := manifests.DeleteBefore(ctx, time.Now().UTC().Add(-retention)); err != nil {
+			log.WarnContextf(ctx, "factor output manifest retention cleanup failed: %v", err)
+		}
+	}
+	cleanup()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cleanup()
+			}
+		}
+	}()
+}
+
+func factorManifestRetention() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("MOOX_FACTOR_MANIFEST_RETENTION")); raw != "" {
+		if retention, err := time.ParseDuration(raw); err == nil && retention > 0 {
+			return retention
+		}
+		log.Warnf("invalid MOOX_FACTOR_MANIFEST_RETENTION=%q; manifest cleanup disabled", raw)
+	}
+	// Keep manifests by default. They are the only durable ownership index for
+	// lifecycle cleanup, and Result Views may legally retain facts longer than
+	// any single global window. Operators can opt into cleanup after choosing a
+	// cutoff no shorter than their longest managed Result View retention.
+	return 0
 }
 
 type realtimeInventoryReconciler interface {
@@ -288,12 +398,12 @@ type realtimeStatus interface {
 	Ready() bool
 }
 
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, sched *scheduler.Service, pythonExec *engine.PythonExecutor, consumer realtimeStatus) error {
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("factor", "factor-01", "", "")
-	state.SnapshotFunc = factorHealthSnapshot(cfg, dbm, sched, pythonExec, consumer, state)
+	state.SnapshotFunc = factorHealthSnapshot(cfg, dbm, runner, pythonPool, consumer, state)
 	if s == nil {
 		return fmt.Errorf("factor health service is unavailable")
 	}
@@ -303,29 +413,35 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, sched *sche
 	return nil
 }
 
-func factorHealthSnapshot(cfg *Config, dbm *store.Store, sched *scheduler.Service, pythonExec *engine.PythonExecutor, consumer realtimeStatus, state *health.State) healthz.SnapshotFunc {
+func factorHealthSnapshot(cfg *Config, dbm *store.Store, runner *taskrunner.Service, pythonPool *engine.PythonWorkerPool, consumer realtimeStatus, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := dbm != nil && dbm.Ping(ctx) == nil
 		workerStatus := engine.ExecutorStatus{}
-		if pythonExec != nil {
-			workerStatus = pythonExec.Status()
+		if pythonPool != nil {
+			workerStatus = pythonPool.Status()
 		}
 		workerReady := workerStatus.Ready && workerStatus.Workers > 0
-		schedulerReady := sched != nil
+		taskRunnerReady := runner != nil
+		runnerStatus := taskrunner.Status{}
+		if runner != nil {
+			runnerStatus = runner.Status()
+		}
 		eventBusReady := realtimeConsumerReady(cfg, consumer)
-		ready := databaseReady && workerReady && schedulerReady && eventBusReady
+		ready := databaseReady && workerReady && taskRunnerReady && eventBusReady
 		state.SetReady(ready)
 		rsp := healthz.Base("factor", "factor-01", "", "", factorStartedAt, ready)
 		rsp.Details = map[string]any{
-			"database":         databaseReady,
-			"worker_ready":     workerReady,
-			"worker_version":   workerStatus.WorkerVersion,
-			"python_version":   workerStatus.PythonVersion,
-			"scheduler_ready":  schedulerReady,
-			"eventbus_ready":   eventBusReady,
-			"worker_count":     cfg.Engine.Workers,
-			"eventbus_enabled": len(cfg.EventBus.URLs) > 0,
-			"storage_gateway":  cfg.Storage.GatewayTarget,
+			"database":          databaseReady,
+			"worker_ready":      workerReady,
+			"worker_version":    workerStatus.WorkerVersion,
+			"python_version":    workerStatus.PythonVersion,
+			"task_runner_ready": taskRunnerReady,
+			"eventbus_ready":    eventBusReady,
+			"python_workers":    cfg.Engine.PythonWorkers,
+			"active_tasks":      runnerStatus.ActiveTasks,
+			"pending_tasks":     runnerStatus.PendingTasks,
+			"eventbus_enabled":  len(cfg.EventBus.URLs) > 0,
+			"storage_gateway":   cfg.Storage.GatewayTarget,
 		}
 		return rsp
 	}
@@ -401,14 +517,24 @@ func (c *metadataClientAdapter) BindDatasetSubject(ctx context.Context, req *sto
 	return c.client.BindDatasetSubject(ctx, req)
 }
 
-type realtimeLoopDeps struct {
-	consumer         interface{ Close() error }
-	eventBatcher     *trigger.EventBatcher
-	scheduler        *scheduler.Service
-	factors          *store.FactorRepository
-	bindings         *store.BindingRepository
-	eventBatchWindow time.Duration
-	factorsDir       string
+func (c *metadataClientAdapter) CreateView(ctx context.Context, req *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
+	return c.client.CreateView(ctx, req)
+}
+
+func (c *metadataClientAdapter) UpdateView(ctx context.Context, req *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error) {
+	return c.client.UpdateView(ctx, req)
+}
+
+func (c *metadataClientAdapter) GetView(ctx context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
+	return c.client.GetView(ctx, req)
+}
+
+func (c *metadataClientAdapter) ListViewColumns(ctx context.Context, req *storagepb.ListViewColumnsReq) (*storagepb.ListViewColumnsRsp, error) {
+	return c.client.ListViewColumns(ctx, req)
+}
+
+func (c *metadataClientAdapter) UpsertViewColumn(ctx context.Context, req *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
+	return c.client.UpsertViewColumn(ctx, req)
 }
 
 func factorAuthInfo() *commonpb.AuthInfo {
@@ -418,6 +544,14 @@ func factorAuthInfo() *commonpb.AuthInfo {
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}
 	if secret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"); strings.TrimSpace(secret) != "" {
+		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
+	}
+	return auth
+}
+
+func factorViewAuthInfo() *commonpb.AuthInfo {
+	auth := factorAuthInfo()
+	if secret := os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET"); strings.TrimSpace(secret) != "" {
 		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
 	}
 	return auth
@@ -438,8 +572,8 @@ type bindingTaskRepository interface {
 func newTaskValidator(
 	factors factorTaskRepository,
 	bindings bindingTaskRepository,
-) scheduler.TaskValidator {
-	return func(ctx context.Context, task scheduler.Task) error {
+) taskrunner.TaskValidator {
+	return func(ctx context.Context, task taskrunner.Task) error {
 		if factors == nil || bindings == nil {
 			return fmt.Errorf("factor task repositories are unavailable")
 		}
@@ -448,118 +582,46 @@ func newTaskValidator(
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return fmt.Errorf(
 					"%w: factor %q no longer exists: %w",
-					scheduler.ErrStaleTask, task.Factor.FactorID, err,
+					taskrunner.ErrStaleTask, task.Factor.FactorID, err,
 				)
 			}
 			return fmt.Errorf("load factor %q: %w", task.Factor.FactorID, err)
 		}
 		if factor.Status != domain.FactorStatusEnabled {
-			return fmt.Errorf("%w: factor %q is not enabled", scheduler.ErrStaleTask, factor.FactorID)
+			return fmt.Errorf("%w: factor %q is not enabled", taskrunner.ErrStaleTask, factor.FactorID)
 		}
 		if factor.SourceHash != task.Factor.SourceHash {
-			return fmt.Errorf("%w: factor %q source hash changed", scheduler.ErrStaleTask, factor.FactorID)
+			return fmt.Errorf("%w: factor %q source hash changed", taskrunner.ErrStaleTask, factor.FactorID)
 		}
 		if !slices.Equal(factor.InputColumns, task.Factor.InputColumns) ||
 			factor.ParamsJSON != task.Factor.ParamsJSON ||
 			factor.LookbackPeriods != task.LookbackPeriods {
-			return fmt.Errorf("%w: factor %q definition changed", scheduler.ErrStaleTask, factor.FactorID)
+			return fmt.Errorf("%w: factor %q definition changed", taskrunner.ErrStaleTask, factor.FactorID)
 		}
 		executable, err := bindings.ListExecutable(ctx)
 		if err != nil {
 			return fmt.Errorf("list executable bindings: %w", err)
 		}
+		taskSource := task.SourceViewID
+		if taskSource == "" {
+			taskSource = task.SourceDataset
+		}
+		taskResult := task.ResultDatasetID
+		if taskResult == "" {
+			taskResult = task.TargetDataset
+		}
 		for _, binding := range executable {
-			targetDataset := binding.TargetDataset
-			if targetDataset == domain.DefaultBindingTargetID {
-				targetDataset = registry.ResultDataset(binding.SourceDataset)
-			}
+			resultMatches := binding.ResultDatasetID == taskResult || binding.ResultDatasetID == ""
 			if binding.FactorID == task.Factor.FactorID &&
+				(task.BindingID == "" || binding.BindingID == task.BindingID) &&
 				binding.SpaceID == task.SpaceID &&
-				binding.SourceDataset == task.SourceDataset &&
-				targetDataset == task.TargetDataset &&
+				binding.SourceViewID == taskSource &&
+				resultMatches &&
 				binding.Freq == task.Freq &&
 				domain.BindingAllowsSubject(binding, task.SubjectID) {
 				return nil
 			}
 		}
-		return fmt.Errorf("%w: no executable binding matches task scope", scheduler.ErrStaleTask)
+		return fmt.Errorf("%w: no executable binding matches task scope", taskrunner.ErrStaleTask)
 	}
-}
-
-func startRealtimeLoop(ctx context.Context, deps realtimeLoopDeps) func() {
-	flushInterval := deps.eventBatchWindow / 2
-	if flushInterval <= 0 {
-		flushInterval = time.Second
-	}
-	if flushInterval < 200*time.Millisecond {
-		flushInterval = 200 * time.Millisecond
-	}
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		eventBatchTicker := time.NewTicker(flushInterval)
-		defer eventBatchTicker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-eventBatchTicker.C:
-				bindings, err := listExecutableBindings(ctx, deps.bindings)
-				if err != nil {
-					log.WarnContextf(ctx, "刷新 factor executable binding 快照失败: %v", err)
-					continue
-				}
-				deps.eventBatcher.SetBindings(bindings)
-				drainEventBatch(ctx, deps)
-			}
-		}
-	}()
-	return wg.Wait
-}
-
-func drainEventBatch(ctx context.Context, deps realtimeLoopDeps) {
-	tasks := deps.eventBatcher.Flush(time.Now())
-	for _, task := range tasks {
-		schedTasks, err := buildSchedulerTasks(ctx, deps.factors, deps.factorsDir, task)
-		if err != nil {
-			log.WarnContextf(ctx, "factor realtime task lost while building: %v", err)
-			continue
-		}
-		for _, schedTask := range schedTasks {
-			if err := deps.scheduler.Enqueue(ctx, schedTask); err != nil {
-				log.WarnContextf(ctx, "factor realtime task lost while enqueueing: %v", err)
-			}
-		}
-	}
-}
-
-func buildSchedulerTasks(
-	ctx context.Context,
-	repo *store.FactorRepository,
-	factorsDir string,
-	task trigger.Task,
-) ([]scheduler.Task, error) {
-	tasks := make([]scheduler.Task, 0, len(task.FactorIDs))
-	for _, factorID := range task.FactorIDs {
-		factor, err := repo.Get(ctx, factorID)
-		if err != nil {
-			return nil, fmt.Errorf("load factor %s: %w", factorID, err)
-		}
-		if factor.Status != domain.FactorStatusEnabled {
-			continue
-		}
-		built, err := scheduler.BuildTask(scheduler.TaskScope{
-			TriggerType: "event",
-			SpaceID:     task.SpaceID, SourceDataset: task.SourceDataset,
-			TargetDataset: task.TargetDataset, SubjectID: task.SubjectID, Freq: task.Freq,
-			StartTime: task.StartTime, EndTime: task.EndTime,
-		}, *factor, factorsDir)
-		if err != nil {
-			return nil, err
-		}
-		built.TaskID = scheduler.DeterministicTaskID(built)
-		tasks = append(tasks, built)
-	}
-	return tasks, nil
 }

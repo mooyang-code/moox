@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,11 +17,13 @@ type ConsumerConfig struct {
 	Stream        string
 	Durable       string
 	FilterSubject string
-	AckWait       time.Duration
-	MaxDeliver    int
-	MaxAckPending int
-	FetchMaxWait  time.Duration
-	DeliverPolicy nats.DeliverPolicy
+	// FilterSubjects is mutually exclusive with FilterSubject.
+	FilterSubjects []string
+	AckWait        time.Duration
+	MaxDeliver     int
+	MaxAckPending  int
+	FetchMaxWait   time.Duration
+	DeliverPolicy  nats.DeliverPolicy
 	// DeliverDecodeErrors 控制是否把解码失败的消息交给业务层分类处理。
 	DeliverDecodeErrors bool
 }
@@ -38,6 +41,12 @@ type ConsumerInfo struct {
 	MaxDeliver int
 }
 
+// ConsumerState is a point-in-time server view of one durable's backlog.
+type ConsumerState struct {
+	NumPending    uint64
+	NumAckPending int
+}
+
 // NewConsumer keeps the established ensure-then-bind behavior.
 func (c *Client) NewConsumer(ctx context.Context, cfg ConsumerConfig) (*Consumer, error) {
 	if _, err := c.EnsureConsumer(ctx, cfg); err != nil {
@@ -53,15 +62,17 @@ func (c *Client) EnsureConsumer(ctx context.Context, cfg ConsumerConfig) (*Consu
 	}
 	cfg.Stream = strings.TrimSpace(cfg.Stream)
 	cfg.Durable = strings.TrimSpace(cfg.Durable)
-	cfg.FilterSubject = strings.TrimSpace(cfg.FilterSubject)
+	if err := normalizeConsumerFilters(&cfg); err != nil {
+		return nil, err
+	}
 	if cfg.Stream == "" || cfg.Durable == "" {
 		return nil, fmt.Errorf("%w: stream and durable are required", ErrInvalidConsumer)
 	}
 	if strings.ContainsAny(cfg.Stream, " \t\r\n") || strings.ContainsAny(cfg.Durable, " \t\r\n") {
 		return nil, fmt.Errorf("%w: stream and durable cannot contain whitespace", ErrInvalidConsumer)
 	}
-	if cfg.FilterSubject == "" {
-		return nil, fmt.Errorf("%w: filter_subject is required for durable consumers", ErrInvalidConsumer)
+	if cfg.FilterSubject == "" && len(cfg.FilterSubjects) == 0 {
+		return nil, fmt.Errorf("%w: filter_subject or filter_subjects is required for durable consumers", ErrInvalidConsumer)
 	}
 	if err := contextErr(ctx, "before consumer setup"); err != nil {
 		return nil, err
@@ -95,14 +106,15 @@ func (c *Client) EnsureConsumer(ctx context.Context, cfg ConsumerConfig) (*Consu
 	}
 	if errors.Is(err, nats.ErrConsumerNotFound) {
 		consumerCfg := &nats.ConsumerConfig{
-			Name:          cfg.Durable,
-			Durable:       cfg.Durable,
-			FilterSubject: cfg.FilterSubject,
-			AckPolicy:     nats.AckExplicitPolicy,
-			AckWait:       cfg.AckWait,
-			MaxDeliver:    cfg.MaxDeliver,
-			MaxAckPending: cfg.MaxAckPending,
-			DeliverPolicy: cfg.DeliverPolicy,
+			Name:           cfg.Durable,
+			Durable:        cfg.Durable,
+			FilterSubject:  cfg.FilterSubject,
+			FilterSubjects: append([]string(nil), cfg.FilterSubjects...),
+			AckPolicy:      nats.AckExplicitPolicy,
+			AckWait:        cfg.AckWait,
+			MaxDeliver:     cfg.MaxDeliver,
+			MaxAckPending:  cfg.MaxAckPending,
+			DeliverPolicy:  cfg.DeliverPolicy,
 		}
 		if _, addErr := js.AddConsumer(cfg.Stream, consumerCfg, nats.Context(ctx)); addErr != nil && !errors.Is(addErr, nats.ErrConsumerNameAlreadyInUse) {
 			return nil, classifyConsumerError("create consumer", addErr)
@@ -136,9 +148,11 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 	}
 	cfg.Stream = strings.TrimSpace(cfg.Stream)
 	cfg.Durable = strings.TrimSpace(cfg.Durable)
-	cfg.FilterSubject = strings.TrimSpace(cfg.FilterSubject)
-	if cfg.Stream == "" || cfg.Durable == "" || cfg.FilterSubject == "" || cfg.FetchMaxWait <= 0 {
-		return nil, fmt.Errorf("%w: stream, durable, filter_subject and fetch_max_wait are required", ErrInvalidConsumer)
+	if err := normalizeConsumerFilters(&cfg); err != nil {
+		return nil, err
+	}
+	if cfg.Stream == "" || cfg.Durable == "" || (cfg.FilterSubject == "" && len(cfg.FilterSubjects) == 0) || cfg.FetchMaxWait <= 0 {
+		return nil, fmt.Errorf("%w: stream, durable, filter subject and fetch_max_wait are required", ErrInvalidConsumer)
 	}
 	if c == nil {
 		return nil, fmt.Errorf("%w: client is nil", ErrConnection)
@@ -154,11 +168,17 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 	if err != nil {
 		return nil, classifyConsumerError("inspect consumer", err)
 	}
-	if info.Config.FilterSubject != cfg.FilterSubject || info.Config.AckPolicy != nats.AckExplicitPolicy {
+	if info.Config.FilterSubject != cfg.FilterSubject || !slices.Equal(info.Config.FilterSubjects, cfg.FilterSubjects) || info.Config.AckPolicy != nats.AckExplicitPolicy {
 		return nil, fmt.Errorf("%w: consumer %s/%s filter or ack policy differs", ErrConsumerConfigConflict, cfg.Stream, cfg.Durable)
 	}
 	cfg.MaxDeliver = info.Config.MaxDeliver
-	sub, err := js.PullSubscribe(cfg.FilterSubject, cfg.Durable, nats.Bind(cfg.Stream, cfg.Durable), nats.ManualAck(), nats.Context(ctx))
+	subject := cfg.FilterSubject
+	opts := []nats.SubOpt{nats.Bind(cfg.Stream, cfg.Durable), nats.ManualAck(), nats.Context(ctx)}
+	if len(cfg.FilterSubjects) > 0 {
+		subject = ""
+		opts = append(opts, nats.ConsumerFilterSubjects(cfg.FilterSubjects...))
+	}
+	sub, err := js.PullSubscribe(subject, cfg.Durable, opts...)
 	if err != nil {
 		return nil, classifyConsumerError("bind consumer", err)
 	}
@@ -166,15 +186,19 @@ func (c *Client) BindConsumer(ctx context.Context, cfg ConsumerConfig) (*Consume
 }
 
 func (c *Client) rejectConsumerOwnedByAnotherStream(ctx context.Context, requestedStream, durable string) error {
-	// JetStream 只保证单个 Stream 内名称唯一。这里用于启动时发现静态命名冲突；
-	// V1 依靠单实例 Consumer owner 和固定命名，不为跨 Stream 并发创建引入分布式锁。
+	// JetStream only requires durable names to be unique inside one stream. Keep
+	// the cross-stream guard for local/test streams, but do not probe production
+	// streams owned by another role: scoped credentials are deliberately denied
+	// ConsumerInfo there (and on KV streams), so such probes only turn a valid
+	// requested-stream check into a timeout.
 	js, err := c.jetStream()
 	if err != nil {
 		return err
 	}
 	names := js.StreamNames(nats.Context(ctx))
 	for stream := range names {
-		if stream == requestedStream {
+		if stream == requestedStream || strings.HasPrefix(stream, "KV_") ||
+			(requestedStream == "MOOX_STORAGE" && strings.HasPrefix(stream, "MOOX_")) {
 			continue
 		}
 		_, err := js.ConsumerInfo(stream, durable, nats.Context(ctx))
@@ -184,6 +208,9 @@ func (c *Client) rejectConsumerOwnedByAnotherStream(ctx context.Context, request
 		case errors.Is(err, nats.ErrConsumerNotFound):
 			continue
 		default:
+			if strings.Contains(strings.ToLower(err.Error()), "permissions violation") {
+				continue
+			}
 			return classifyConsumerError("inspect consumer ownership", err)
 		}
 	}
@@ -221,6 +248,30 @@ func (c *Client) inspectConsumerWithJS(ctx context.Context, js nats.JetStreamCon
 	return info, nil
 }
 
+// ConsumerState returns the server-side delivery backlog for one durable.
+func (c *Client) ConsumerState(ctx context.Context, stream, durable string) (ConsumerState, error) {
+	if ctx == nil {
+		ctx = trpc.BackgroundContext()
+	}
+	if err := contextErr(ctx, "before consumer state inspection"); err != nil {
+		return ConsumerState{}, err
+	}
+	js, err := c.jetStream()
+	if err != nil {
+		return ConsumerState{}, fmt.Errorf("%w: inspect consumer state: %w", ErrConnection, err)
+	}
+	info, err := c.inspectConsumerWithJS(ctx, js, stream, durable)
+	switch {
+	case errors.Is(err, nats.ErrConsumerNotFound):
+		return ConsumerState{}, fmt.Errorf("%w: %s/%s", ErrConsumerNotFound, strings.TrimSpace(stream), strings.TrimSpace(durable))
+	case errors.Is(err, ErrConnection):
+		return ConsumerState{}, err
+	case err != nil:
+		return ConsumerState{}, classifyConsumerError("inspect consumer state", err)
+	}
+	return ConsumerState{NumPending: info.NumPending, NumAckPending: info.NumAckPending}, nil
+}
+
 func contextErr(ctx context.Context, operation string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrConnection, operation, err)
@@ -241,14 +292,37 @@ func classifyConsumerError(operation string, err error) error {
 	return fmt.Errorf("%w: %s: %w", ErrInvalidConsumer, operation, err)
 }
 
+func normalizeConsumerFilters(cfg *ConsumerConfig) error {
+	cfg.FilterSubject = strings.TrimSpace(cfg.FilterSubject)
+	if cfg.FilterSubject != "" && len(cfg.FilterSubjects) != 0 {
+		return fmt.Errorf("%w: filter_subject and filter_subjects are mutually exclusive", ErrInvalidConsumer)
+	}
+	filters := make([]string, len(cfg.FilterSubjects))
+	for i, filter := range cfg.FilterSubjects {
+		filter = strings.TrimSpace(filter)
+		if filter == "" {
+			return fmt.Errorf("%w: filter_subjects contains an empty subject", ErrInvalidConsumer)
+		}
+		filters[i] = filter
+	}
+	slices.Sort(filters)
+	for i := 1; i < len(filters); i++ {
+		if filters[i] == filters[i-1] {
+			return fmt.Errorf("%w: filter_subjects contains duplicate %q", ErrInvalidConsumer, filters[i])
+		}
+	}
+	cfg.FilterSubjects = filters
+	return nil
+}
+
 func reconcileConsumerConfig(ctx context.Context, js nats.JetStreamContext, stream, durable string, info *nats.ConsumerInfo, cfg ConsumerConfig) error {
 	if info == nil {
 		return fmt.Errorf("%w: consumer info is empty", ErrInvalidConsumer)
 	}
 	actual := info.Config
 	var conflicts []string
-	if actual.FilterSubject != cfg.FilterSubject {
-		conflicts = append(conflicts, "FilterSubject")
+	if actual.FilterSubject != cfg.FilterSubject || !slices.Equal(actual.FilterSubjects, cfg.FilterSubjects) {
+		conflicts = append(conflicts, "FilterSubjects")
 	}
 	if actual.DeliverPolicy != cfg.DeliverPolicy {
 		conflicts = append(conflicts, "DeliverPolicy")

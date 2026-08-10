@@ -46,7 +46,7 @@ func defaultViewEngine(kind pb.DataKind) string {
 }
 
 func validateDatasetID(datasetID string) error {
-	return validateLowerSnakeID("dataset_id", datasetID, 30)
+	return validateLowerSnakeID("dataset_id", datasetID, 50)
 }
 
 func validateViewID(viewID string) error {

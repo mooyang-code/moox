@@ -28,10 +28,10 @@ engine:
   python_bin: /tmp/factor-venv/bin/python
   worker_path: ./pyworker/worker.py
   factors_dir: ./factors
-  workers: 4
+  python_workers: 4
+  view_read_workers: 8
+  view_read_timeout_ms: 7500
   task_timeout_ms: 45000
-scheduler:
-  max_retry: 2
 `), 0o644))
 	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "factor")
 	t.Setenv("MOOX_GATEWAY_CALLER", "factor")
@@ -48,9 +48,10 @@ scheduler:
 	require.Equal(t, "factor", resolved.Credentials.KeyID)
 	require.Equal(t, "factor", resolved.Credentials.Caller)
 	require.Equal(t, "test-secret", resolved.Credentials.Secret)
-	require.Equal(t, 1, resolved.Workers)
+	require.Equal(t, 1, resolved.PythonWorkers)
+	require.Equal(t, 1, resolved.ViewReadWorkers)
+	require.Equal(t, 7500*time.Millisecond, resolved.ViewReadTimeout)
 	require.Equal(t, 45*time.Second, resolved.TaskTimeout)
-	require.Equal(t, 2, resolved.MaxRetry)
 }
 
 func TestRunOnceCLIOverridesAppConfig(t *testing.T) {
@@ -87,7 +88,7 @@ engine:
 	require.Equal(t, "/env/python", resolved.PythonBin)
 	require.Equal(t, "ip://127.0.0.2:11003", resolved.GatewayTarget)
 	require.Equal(t, "env-node", resolved.GatewayNodeID)
-	require.Equal(t, 1, resolved.Workers)
+	require.Equal(t, 1, resolved.PythonWorkers)
 }
 
 func TestRunInitAndImport(t *testing.T) {

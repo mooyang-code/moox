@@ -16,11 +16,12 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
-	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/pyruntime/moduleregistry"
+	publicstoragepb "github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -28,14 +29,41 @@ var _ factorpb.FactorMgrService = (*Service)(nil)
 
 var pythonModuleNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-type schedulerRuntime interface {
-	Status() scheduler.Status
-	Run(context.Context, scheduler.Task) error
+type taskRunnerRuntime interface {
+	Status() taskrunner.Status
+	Run(context.Context, taskrunner.Task) error
 }
 
 type realtimeInventory interface {
 	MarkDirty()
 	Refresh(context.Context) error
+}
+
+type viewReadyExecutor interface {
+	ExecuteSelected(context.Context, string, string, string, *publicstoragepb.ViewSourcePeriodReady) error
+}
+
+type viewReadyExecutorWithGate interface {
+	ExecuteSelectedWithGate(context.Context, string, string, string, *publicstoragepb.ViewSourcePeriodReady) error
+}
+
+type viewSyncWaiter interface {
+	WaitViewSyncPoint(context.Context, string, string, string, []string) error
+}
+
+// bindingOutputCleaner clears manifest-owned Result Dataset rows before a
+// binding leaves the executable set. Production bootstrap wires the concrete
+// Storage client; tests may omit it for bindings that have no outputs.
+type bindingOutputCleaner interface {
+	ClearBindingOutputs(context.Context, domain.FactorBinding, domain.FactorDef) error
+}
+
+type bindingOutputScopeCleaner interface {
+	ClearBindingOutputsOutsideScope(context.Context, domain.FactorBinding, domain.FactorDef) error
+}
+
+type bindingSchemaCleaner interface {
+	RemoveBindingResultColumns(context.Context, domain.FactorBinding, domain.FactorDef) error
 }
 
 // Option customizes a FactorMgr service.
@@ -65,33 +93,57 @@ func WithRealtimeInventory(inventory realtimeInventory) Option {
 	}
 }
 
-func WithFactorGate(gate *scheduler.FactorGate) Option {
+func WithFactorGate(gate *taskrunner.FactorGate) Option {
 	return func(s *Service) {
 		s.factorGate = gate
 	}
 }
 
-// Service implements FactorMgr.
-type Service struct {
-	factors     *store.FactorRepository
-	bindings    *store.BindingRepository
-	scheduler   schedulerRuntime
-	factorsDir  string
-	publisher   *moduleregistry.SourcePublisher
-	meta        *registry.MetadataSync
-	registry    *registry.Service
-	inventory   realtimeInventory
-	factorGate  *scheduler.FactorGate
-	mutationMu  sync.Mutex
-	removeStage func(*factorArtifactStage) error
+func WithOperationGate(gate *taskrunner.OperationGate) Option {
+	return func(s *Service) { s.operationGate = gate }
 }
 
-// NewWithRuntime creates a FactorMgr service with an optional scheduler runtime.
-func NewWithRuntime(persistence *store.Store, sched schedulerRuntime, opts ...Option) *Service {
+func WithViewReadyExecutor(executor viewReadyExecutor, waiter viewSyncWaiter) Option {
+	return func(s *Service) {
+		s.viewReadyExecutor = executor
+		s.viewSyncWaiter = waiter
+	}
+}
+
+func WithBindingOutputCleaner(cleaner bindingOutputCleaner) Option {
+	return func(s *Service) { s.outputCleaner = cleaner }
+}
+
+func WithBindingSchemaCleaner(cleaner bindingSchemaCleaner) Option {
+	return func(s *Service) { s.schemaCleaner = cleaner }
+}
+
+// Service implements FactorMgr.
+type Service struct {
+	factors           *store.FactorRepository
+	bindings          *store.BindingRepository
+	taskRunner        taskRunnerRuntime
+	factorsDir        string
+	publisher         *moduleregistry.SourcePublisher
+	meta              *registry.MetadataSync
+	registry          *registry.Service
+	inventory         realtimeInventory
+	factorGate        *taskrunner.FactorGate
+	viewReadyExecutor viewReadyExecutor
+	viewSyncWaiter    viewSyncWaiter
+	outputCleaner     bindingOutputCleaner
+	schemaCleaner     bindingSchemaCleaner
+	operationGate     *taskrunner.OperationGate
+	mutationMu        sync.Mutex
+	removeStage       func(*factorArtifactStage) error
+}
+
+// NewWithRuntime creates a FactorMgr service with an optional task runner.
+func NewWithRuntime(persistence *store.Store, runner taskRunnerRuntime, opts ...Option) *Service {
 	s := &Service{
 		factors:    persistence.Factors(),
 		bindings:   persistence.Bindings(),
-		scheduler:  sched,
+		taskRunner: runner,
 		factorsDir: "./factors",
 		removeStage: func(stage *factorArtifactStage) error {
 			return stage.Remove()
@@ -177,7 +229,6 @@ func (s *Service) updateFactor(ctx context.Context, factor domain.FactorDef) *fa
 	if err := s.registry.SaveFactorDefinition(ctx, factor); err != nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: inner(err)}
 	}
-	s.dropQueuedFactors(factor.FactorID)
 	s.refreshRealtimeInventory(ctx)
 	got, _ := s.factors.Get(ctx, factor.FactorID)
 	return &factorpb.UpdateFactorRsp{RetInfo: success(), Factor: factorToPB(*got)}
@@ -255,11 +306,33 @@ func (s *Service) setFactorStatus(ctx context.Context, factorID, status string) 
 			return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}
 		}
 	}
+	if status != domain.FactorStatusEnabled && (s.outputCleaner != nil || s.schemaCleaner != nil) {
+		bindings, listErr := s.bindings.ListByFactor(ctx, factorID)
+		if listErr != nil {
+			return &factorpb.SetFactorStatusRsp{RetInfo: inner(listErr)}
+		}
+		for _, binding := range bindings {
+			binding.Status = domain.BindingStatusCleanupPending
+			if upsertErr := s.bindings.Upsert(ctx, binding); upsertErr != nil {
+				return &factorpb.SetFactorStatusRsp{RetInfo: inner(upsertErr)}
+			}
+		}
+		for _, binding := range bindings {
+			// Disabling a factor pauses computation and clears its values, but
+			// keeps the Result View schema stable for downstream readers. Columns
+			// are removed only when the binding is unbound or its schema scope
+			// changes.
+			if cleanErr := s.clearBindingRows(ctx, binding, *existing); cleanErr != nil {
+				return &factorpb.SetFactorStatusRsp{RetInfo: inner(fmt.Errorf("clear binding %s outputs: %w", binding.BindingID, cleanErr))}
+			}
+			binding.Status = domain.BindingStatusDisabled
+			if upsertErr := s.bindings.Upsert(ctx, binding); upsertErr != nil {
+				return &factorpb.SetFactorStatusRsp{RetInfo: inner(upsertErr)}
+			}
+		}
+	}
 	if err := s.factors.SetStatus(ctx, factorID, status); err != nil {
 		return &factorpb.SetFactorStatusRsp{RetInfo: inner(err)}
-	}
-	if status != domain.FactorStatusEnabled {
-		s.dropQueuedFactors(factorID)
 	}
 	s.refreshRealtimeInventory(ctx)
 	got, err := s.factors.Get(ctx, factorID)
@@ -307,7 +380,6 @@ func (s *Service) deleteFactor(ctx context.Context, factorID string) *factorpb.D
 	if err := s.factors.Delete(ctx, factor.FactorID); err != nil {
 		return &factorpb.DeleteFactorRsp{RetInfo: inner(errors.Join(err, stage.Restore()))}
 	}
-	s.dropQueuedFactors(factor.FactorID)
 	s.refreshRealtimeInventory(ctx)
 	if err := s.removeStage(stage); err != nil {
 		return &factorpb.DeleteFactorRsp{RetInfo: inner(fmt.Errorf("remove factor %s staged artifacts: %w", factor.FactorID, err))}
@@ -327,6 +399,25 @@ func (s *Service) UpsertBinding(ctx context.Context, req *factorpb.UpsertBinding
 		return &factorpb.UpsertBindingRsp{RetInfo: inner(fmt.Errorf(
 			"find existing binding %q: %w", binding.BindingID, err,
 		))}, nil
+	}
+	if s.meta != nil && s.meta.SupportsViews() {
+		if found && (binding.Status == domain.BindingStatusDisabled || binding.Status == domain.BindingStatusCleanupPending) {
+			// A deleted/unavailable Source View must not prevent disabling or
+			// cleaning an existing binding. Keep the persisted result namespace.
+			binding.ResultDatasetID = existing.ResultDatasetID
+			binding.ResultViewID = existing.ResultViewID
+		} else {
+			resultDatasetID, resultViewID, resolveErr := s.meta.ResolveManagedResultIDs(
+				ctx, binding.SpaceID, binding.SourceViewID,
+			)
+			if resolveErr != nil {
+				return &factorpb.UpsertBindingRsp{RetInfo: inner(fmt.Errorf(
+					"resolve source View %s/%s: %w", binding.SpaceID, binding.SourceViewID, resolveErr,
+				))}, nil
+			}
+			binding.ResultDatasetID = resultDatasetID
+			binding.ResultViewID = resultViewID
+		}
 	}
 	factorIDs := []string{binding.FactorID}
 	if found {
@@ -361,24 +452,65 @@ func (s *Service) upsertBinding(
 			return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}
 		}
 	}
-	if binding.Status == domain.BindingStatusDisabled {
+	if binding.Status == domain.BindingStatusDisabled || binding.Status == domain.BindingStatusCleanupPending {
+		if (s.outputCleaner != nil || s.schemaCleaner != nil) && binding.Status == domain.BindingStatusDisabled {
+			cleanupBinding, cleanupFactor, cleanupErr := s.bindingCleanupInputs(ctx, binding, expected, *factor)
+			if cleanupErr != nil {
+				return &factorpb.UpsertBindingRsp{RetInfo: inner(cleanupErr)}
+			}
+			if cleanErr := s.clearBindingRows(ctx, cleanupBinding, cleanupFactor); cleanErr != nil {
+				pending := binding
+				if expected != nil {
+					pending = *expected
+				}
+				pending.Status = domain.BindingStatusCleanupPending
+				_ = s.bindings.Upsert(ctx, pending)
+				return &factorpb.UpsertBindingRsp{RetInfo: inner(fmt.Errorf("clear binding outputs: %w", cleanErr)), Binding: bindingToPB(pending)}
+			}
+		}
 		if err := s.bindings.Upsert(ctx, binding); err != nil {
 			return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
 		}
-		s.dropQueuedFactors(factorIDs...)
 		s.refreshRealtimeInventory(ctx)
 		return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}
 	}
 	if err := s.registry.ValidateEnabledBinding(ctx, binding, *factor); err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: invalid(err)}
 	}
-	if err := s.syncBindingMetadata(ctx, binding); err != nil {
+	ready, err := s.syncBindingMetadata(ctx, binding)
+	if err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
+	}
+	if expected != nil && (s.outputCleaner != nil || s.schemaCleaner != nil) && bindingOutputScopeChanged(*expected, binding) {
+		cleanupBinding, cleanupFactor, cleanupErr := s.bindingCleanupInputs(ctx, binding, expected, *factor)
+		if cleanupErr != nil {
+			return &factorpb.UpsertBindingRsp{RetInfo: inner(cleanupErr)}
+		}
+		var cleanErr error
+		if bindingSchemaScopeChanged(*expected, binding) {
+			cleanErr = s.clearBindingOutputs(ctx, cleanupBinding, cleanupFactor)
+		} else {
+			if scoped, ok := s.outputCleaner.(bindingOutputScopeCleaner); ok {
+				cleanErr = scoped.ClearBindingOutputsOutsideScope(ctx, binding, cleanupFactor)
+			} else {
+				cleanErr = s.clearBindingRows(ctx, cleanupBinding, cleanupFactor)
+			}
+		}
+		if cleanErr != nil {
+			old := *expected
+			old.Status = domain.BindingStatusCleanupPending
+			_ = s.bindings.Upsert(ctx, old)
+			return &factorpb.UpsertBindingRsp{RetInfo: inner(fmt.Errorf("clear previous binding outputs: %w", cleanErr)), Binding: bindingToPB(old)}
+		}
+	}
+	if ready {
+		binding.Status = domain.BindingStatusEnabled
+	} else {
+		binding.Status = domain.BindingStatusPendingView
 	}
 	if err := s.bindings.Upsert(ctx, binding); err != nil {
 		return &factorpb.UpsertBindingRsp{RetInfo: inner(err)}
 	}
-	s.dropQueuedFactors(factorIDs...)
 	s.refreshRealtimeInventory(ctx)
 	return &factorpb.UpsertBindingRsp{RetInfo: success(), Binding: bindingToPB(binding)}
 }
@@ -396,7 +528,7 @@ func (s *Service) candidateBindingsForUpsert(
 	for _, existing := range current {
 		sameID := existing.BindingID == binding.BindingID
 		sameNaturalScope := existing.SpaceID == binding.SpaceID &&
-			existing.SourceDataset == binding.SourceDataset &&
+			existing.SourceViewID == binding.SourceViewID &&
 			existing.Freq == binding.Freq
 		if sameID || sameNaturalScope {
 			if !replaced {
@@ -413,9 +545,49 @@ func (s *Service) candidateBindingsForUpsert(
 	return candidate, nil
 }
 
+func bindingOutputScopeChanged(before, after domain.FactorBinding) bool {
+	return before.FactorID != after.FactorID || before.SpaceID != after.SpaceID || before.ResultDatasetID != after.ResultDatasetID || before.ResultViewID != after.ResultViewID || before.SourceViewID != after.SourceViewID || before.Freq != after.Freq || before.SubjectMode != after.SubjectMode || before.SubjectsJSON != after.SubjectsJSON
+}
+
+func bindingSchemaScopeChanged(before, after domain.FactorBinding) bool {
+	return before.FactorID != after.FactorID || before.SpaceID != after.SpaceID || before.ResultDatasetID != after.ResultDatasetID || before.ResultViewID != after.ResultViewID || before.SourceViewID != after.SourceViewID || before.Freq != after.Freq
+}
+
+func (s *Service) bindingCleanupInputs(ctx context.Context, requested domain.FactorBinding, expected *domain.FactorBinding, requestedFactor domain.FactorDef) (domain.FactorBinding, domain.FactorDef, error) {
+	if expected == nil {
+		return requested, requestedFactor, nil
+	}
+	cleanupFactor, err := s.factors.Get(ctx, expected.FactorID)
+	if err != nil {
+		return domain.FactorBinding{}, domain.FactorDef{}, fmt.Errorf("load previous binding factor %s: %w", expected.FactorID, err)
+	}
+	return *expected, *cleanupFactor, nil
+}
+
+func (s *Service) clearBindingOutputs(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
+	if err := s.clearBindingRows(ctx, binding, factor); err != nil {
+		return err
+	}
+	if s.schemaCleaner != nil {
+		if err := s.schemaCleaner.RemoveBindingResultColumns(ctx, binding, factor); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) clearBindingRows(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
+	if s.outputCleaner != nil {
+		if err := s.outputCleaner.ClearBindingOutputs(ctx, binding, factor); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) ListBindings(ctx context.Context, req *factorpb.ListBindingsReq) (*factorpb.ListBindingsRsp, error) {
 	page, size := pageParams(req.GetPage())
-	rows, total, err := s.bindings.List(ctx, store.BindingFilter{SpaceID: req.GetSpaceId(), SourceDataset: req.GetSourceDataset(), Freq: req.GetFreq(), Status: req.GetStatus(), Page: store.Page{Page: int(page), PageSize: int(size)}})
+	rows, total, err := s.bindings.List(ctx, store.BindingFilter{SpaceID: req.GetSpaceId(), SourceViewID: req.GetSourceViewId(), Freq: req.GetFreq(), Status: req.GetStatus(), Page: store.Page{Page: int(page), PageSize: int(size)}})
 	if err != nil {
 		return &factorpb.ListBindingsRsp{RetInfo: inner(err)}, nil
 	}
@@ -448,11 +620,27 @@ func (s *Service) DeleteBinding(ctx context.Context, req *factorpb.DeleteBinding
 			rsp = &factorpb.DeleteBindingRsp{RetInfo: inner(err)}
 			return
 		}
+		factor, factorErr := s.factors.Get(ctx, binding.FactorID)
+		if factorErr != nil {
+			rsp = &factorpb.DeleteBindingRsp{RetInfo: inner(factorErr)}
+			return
+		}
+		if s.outputCleaner != nil || s.schemaCleaner != nil {
+			pending := *binding
+			pending.Status = domain.BindingStatusCleanupPending
+			if err := s.bindings.Upsert(ctx, pending); err != nil {
+				rsp = &factorpb.DeleteBindingRsp{RetInfo: inner(err)}
+				return
+			}
+			if cleanErr := s.clearBindingOutputs(ctx, *binding, *factor); cleanErr != nil {
+				rsp = &factorpb.DeleteBindingRsp{RetInfo: inner(fmt.Errorf("clear binding outputs: %w", cleanErr))}
+				return
+			}
+		}
 		if err := s.bindings.Delete(ctx, bindingID); err != nil {
 			rsp = &factorpb.DeleteBindingRsp{RetInfo: inner(err)}
 			return
 		}
-		s.dropQueuedFactors(binding.FactorID)
 		s.refreshRealtimeInventory(ctx)
 		rsp = &factorpb.DeleteBindingRsp{RetInfo: success()}
 	})
@@ -460,6 +648,11 @@ func (s *Service) DeleteBinding(ctx context.Context, req *factorpb.DeleteBinding
 }
 
 func (s *Service) mutateFactors(factorIDs []string, fn func()) {
+	releaseOperation := func() {}
+	if s.operationGate != nil {
+		releaseOperation = s.operationGate.Acquire()
+	}
+	defer releaseOperation()
 	unique := make([]string, 0, len(factorIDs))
 	seen := make(map[string]struct{}, len(factorIDs))
 	for _, factorID := range factorIDs {
@@ -485,16 +678,6 @@ func (s *Service) mutateFactors(factorIDs []string, fn func()) {
 		})
 	}
 	lock(0)
-}
-
-func (s *Service) dropQueuedFactors(factorIDs ...string) {
-	dropper, ok := s.scheduler.(interface{ DropQueuedFactor(string) int })
-	if !ok {
-		return
-	}
-	for _, factorID := range factorIDs {
-		dropper.DropQueuedFactor(factorID)
-	}
 }
 
 func (s *Service) confirmBindingUnchanged(
@@ -551,10 +734,11 @@ func (s *Service) refreshRealtimeInventory(ctx context.Context) {
 
 func (s *Service) GetEngineStatus(context.Context, *factorpb.GetEngineStatusReq) (*factorpb.GetEngineStatusRsp, error) {
 	rsp := &factorpb.GetEngineStatusRsp{RetInfo: success()}
-	if s.scheduler != nil {
-		status := s.scheduler.Status()
-		rsp.QueueDepth = int32(status.QueueDepth)
-		rsp.QueueOverflowCount = status.QueueOverflowCount
+	if s.taskRunner != nil {
+		status := s.taskRunner.Status()
+		rsp.PythonWorkers = int32(status.Workers)
+		rsp.ActiveTasks = int32(status.ActiveTasks)
+		rsp.PendingTasks = int32(status.PendingTasks)
 	}
 	return rsp, nil
 }
@@ -583,12 +767,11 @@ func (s *Service) normalizeBinding(pb *factorpb.FactorBinding) (domain.FactorBin
 	binding.BindingID = strings.TrimSpace(binding.BindingID)
 	binding.FactorID = strings.TrimSpace(binding.FactorID)
 	binding.SpaceID = strings.TrimSpace(binding.SpaceID)
-	binding.SourceDataset = strings.TrimSpace(binding.SourceDataset)
-	binding.TargetDataset = strings.TrimSpace(binding.TargetDataset)
+	binding.SourceViewID = strings.TrimSpace(binding.SourceViewID)
 	binding.Freq = strings.TrimSpace(binding.Freq)
 	binding.Status = strings.TrimSpace(binding.Status)
-	if binding.FactorID == "" || binding.SpaceID == "" || binding.SourceDataset == "" || binding.Freq == "" {
-		return domain.FactorBinding{}, fmt.Errorf("factor_id, space_id, source_dataset and freq are required")
+	if binding.FactorID == "" || binding.SpaceID == "" || binding.SourceViewID == "" || binding.Freq == "" {
+		return domain.FactorBinding{}, fmt.Errorf("factor_id, space_id, source_view_id and freq are required")
 	}
 	if binding.BindingID == "" {
 		binding.BindingID = fmt.Sprintf("bind-%d", time.Now().UnixNano())
@@ -601,13 +784,13 @@ func (s *Service) normalizeBinding(pb *factorpb.FactorBinding) (domain.FactorBin
 		return domain.FactorBinding{}, err
 	}
 	binding.SubjectsJSON = subjectsJSON
-	if binding.TargetDataset == "" {
-		binding.TargetDataset = registry.ResultDataset(binding.SourceDataset)
-	}
+	binding.ResultDatasetID = registry.ResultDataset(binding.SourceViewID)
+	binding.ResultViewID = registry.ResultView(binding.SourceViewID)
 	if binding.Status == "" {
-		binding.Status = domain.BindingStatusEnabled
+		binding.Status = domain.BindingStatusPendingView
 	}
-	if binding.Status != domain.BindingStatusEnabled && binding.Status != domain.BindingStatusDisabled {
+	if binding.Status != domain.BindingStatusPendingView && binding.Status != domain.BindingStatusEnabled &&
+		binding.Status != domain.BindingStatusDisabled && binding.Status != domain.BindingStatusCleanupPending {
 		return domain.FactorBinding{}, fmt.Errorf("invalid binding status %q", binding.Status)
 	}
 	return binding, nil
@@ -680,46 +863,110 @@ func (s *Service) syncFactorDefinitionBindings(ctx context.Context, factor domai
 		return nil
 	}
 	for _, binding := range bindings {
-		if binding.Status != domain.BindingStatusEnabled {
+		if binding.Status != domain.BindingStatusEnabled && binding.Status != domain.BindingStatusPendingView {
 			continue
 		}
-		if err := s.syncEnabledBindingTarget(ctx, binding, factor); err != nil {
+		ready, err := s.syncEnabledBindingTarget(ctx, binding, factor)
+		if err != nil {
 			return err
+		}
+		if ready && binding.Status == domain.BindingStatusPendingView {
+			binding.Status = domain.BindingStatusEnabled
+			if err := s.bindings.Upsert(ctx, binding); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (s *Service) syncBindingMetadata(ctx context.Context, binding domain.FactorBinding) error {
-	if s.meta == nil {
+// ReconcilePendingBindings promotes bindings only after the desired Result View is active.
+func (s *Service) ReconcilePendingBindings(ctx context.Context) error {
+	if s == nil || s.bindings == nil || s.factors == nil {
 		return nil
+	}
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	const pageSize = 500
+	changed := false
+	for page := 1; ; page++ {
+		bindings, total, err := s.bindings.List(ctx, store.BindingFilter{Status: domain.BindingStatusPendingView, Page: store.Page{Page: page, PageSize: pageSize}})
+		if err != nil {
+			return err
+		}
+		for _, binding := range bindings {
+			factor, loadErr := s.factors.Get(ctx, binding.FactorID)
+			if loadErr != nil {
+				return loadErr
+			}
+			if factor.Status != domain.FactorStatusEnabled {
+				continue
+			}
+			ready, syncErr := s.syncBindingMetadata(ctx, binding)
+			if syncErr != nil {
+				return syncErr
+			}
+			if !ready {
+				continue
+			}
+			// Metadata reconciliation may wait on the Storage View for a full
+			// rebuild interval. Do not hold the factor operation gate across that
+			// network wait; acquire it only for the short executable-state commit.
+			releaseOperation := func() {}
+			if s.operationGate != nil {
+				releaseOperation = s.operationGate.Acquire()
+			}
+			binding.Status = domain.BindingStatusEnabled
+			upsertErr := s.bindings.Upsert(ctx, binding)
+			releaseOperation()
+			if upsertErr != nil {
+				return upsertErr
+			}
+			changed = true
+		}
+		if int64(page*pageSize) >= total {
+			break
+		}
+	}
+	if changed {
+		s.refreshRealtimeInventory(ctx)
+	}
+	return nil
+}
+
+func (s *Service) syncBindingMetadata(ctx context.Context, binding domain.FactorBinding) (bool, error) {
+	if s.meta == nil {
+		return true, nil
 	}
 	factor, err := s.factors.Get(ctx, binding.FactorID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := s.meta.SyncFactorMetadata(ctx, binding.SpaceID, *factor); err != nil {
-		return err
+		return false, err
 	}
-	if binding.Status != domain.BindingStatusEnabled || factor.Status != domain.FactorStatusEnabled {
-		return nil
+	if factor.Status != domain.FactorStatusEnabled {
+		return true, nil
+	}
+	if binding.Status == domain.BindingStatusDisabled || binding.Status == domain.BindingStatusCleanupPending {
+		return false, nil
 	}
 	return s.syncEnabledBindingTarget(ctx, binding, *factor)
 }
 
-func (s *Service) syncEnabledBindingTarget(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) error {
-	targetDataset := binding.TargetDataset
-	if targetDataset == "" {
-		targetDataset = registry.ResultDataset(binding.SourceDataset)
+func (s *Service) syncEnabledBindingTarget(ctx context.Context, binding domain.FactorBinding, factor domain.FactorDef) (bool, error) {
+	// Keep the legacy Dataset metadata path usable for existing in-process
+	// clients while new deployments opt into the explicit Source/Result View
+	// contract. The runtime path is selected by capability, not by a global
+	// migration flag.
+	if !s.meta.SupportsViews() {
+		target := binding.ResultDatasetID
+		if target == "" {
+			target = binding.TargetDataset
+		}
+		return true, s.meta.SyncTargetDataset(ctx, binding.SpaceID, binding.SourceDataset, target, binding.Freq, []domain.FactorDef{factor})
 	}
-	return s.meta.SyncTargetDatasetAfterFactorMetadata(
-		ctx,
-		binding.SpaceID,
-		binding.SourceDataset,
-		targetDataset,
-		binding.Freq,
-		[]domain.FactorDef{factor},
-	)
+	return s.meta.SyncBindingViews(ctx, binding, []domain.FactorDef{factor})
 }
 
 func success() *commonpb.RetInfo {

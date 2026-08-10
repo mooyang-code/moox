@@ -36,6 +36,7 @@ type setupDeps struct {
 	statusSpaces           func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
 	login                  func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
 	openInitStorage        func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
+	openInitFactor         func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error)
 	deployStorage          func(context.Context, *setupconfig.Snapshot, string, bool) error
 	installStorageWatchdog func(context.Context, *setupconfig.Snapshot, string) error
 	importMetadata         func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
@@ -58,6 +59,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.AddCommand(
 		newSetupInitCommand(deps),
+		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
 		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
@@ -422,6 +424,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.openInitStorage == nil {
 		deps.openInitStorage = defaults.openInitStorage
 	}
+	if deps.openInitFactor == nil {
+		deps.openInitFactor = defaults.openInitFactor
+	}
 	if deps.deployStorage == nil {
 		deps.deployStorage = defaults.deployStorage
 	}
@@ -466,6 +471,7 @@ func defaultSetupDeps() setupDeps {
 		applySpaces:            defaultSetupApplyWithSpaces,
 		statusSpaces:           defaultSetupStatusWithSpaces,
 		openInitStorage:        defaultOpenSetupInitStorage,
+		openInitFactor:         defaultOpenSetupFactor,
 		deployStorage:          defaultSetupDeployStorage,
 		installStorageWatchdog: defaultSetupInstallStorageWatchdog,
 		importMetadata:         defaultSetupImportMetadata,

@@ -120,6 +120,25 @@ func TestReconcilerCreatesAndActivatesInitialView(t *testing.T) {
 	}
 }
 
+func TestReconcilerBlocksLegacyInFlightViewWithoutActiveContract(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Make the physical active index look healthy so reconciliation reaches
+	// AttachActiveView rather than silently starting a replacement build.
+	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true}}
+	metadata := &reconcileMetadata{view: &pb.View{
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 2,
+		DatasetIds: []string{"prices", "fundamentals"},
+	}}
+	_, err = svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Interval: time.Hour})
+	if !errors.Is(err, errActiveContractUnavailable) {
+		t.Fatalf("StartReconciler error=%v, want active-contract migration error", err)
+	}
+}
+
 func TestReconcilerUsesDatasetKindForTimeSeriesWithoutGrainKeys(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {

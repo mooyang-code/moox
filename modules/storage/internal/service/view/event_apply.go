@@ -3,6 +3,7 @@ package view
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 
@@ -47,20 +48,73 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			continue
 		}
 		runtime.mu.Lock()
-		if err := s.applyEventToIndex(ctx, runtime.active, datasetID, rows); err != nil {
-			log.Printf("storage view active index write failed space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, runtime.active, datasetID, err)
-			runtime.mu.Unlock()
-			return err
+		activeID, nextID := runtime.active, runtime.next
+		activeReady, activeErr := s.liveIndexReady(ctx, activeID)
+		var activeFailure error
+		if activeErr != nil && activeID != "" {
+			// Stat is inconclusive, so make one write attempt before deciding
+			// whether the active pointer is stale. If the write itself fails and
+			// a replacement is healthy, keep the delivery pending until the
+			// replacement is READY and activation can make it authoritative.
+			if err := s.applyEventToIndex(ctx, activeID, datasetID, rows); err == nil {
+				activeReady, activeErr = true, nil
+			} else if nextID != "" {
+				log.Printf("storage view active index failed while replacement is ready; routing to replacement space=%s view=%s index=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, err)
+				activeFailure = err
+				activeReady, activeErr = false, nil
+			} else {
+				runtime.mu.Unlock()
+				return err
+			}
 		}
-		if runtime.next != "" {
-			if err := s.applyEventToIndex(ctx, runtime.next, datasetID, rows); err != nil {
-				failedID := runtime.next
+		if activeErr != nil && nextID == "" {
+			runtime.mu.Unlock()
+			return activeErr
+		}
+		if activeErr == nil && !activeReady && nextID == "" {
+			runtime.mu.Unlock()
+			return fmt.Errorf("storage view active index %q is unavailable", activeID)
+		}
+		if activeErr == nil && activeReady {
+			if err := s.applyEventToIndex(ctx, activeID, datasetID, rows); err != nil {
+				log.Printf("storage view active index write failed space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, datasetID, err)
+				runtime.mu.Unlock()
+				return err
+			}
+		} else if activeErr == nil {
+			// A stale active pointer can survive a crash while the replacement
+			// index is being prepared. Do not ACK the row by writing nowhere;
+			// continue with the healthy replacement so activation can drain the
+			// consumer and preserve the row-before-marker fence.
+			log.Printf("storage view active index unavailable; applying live row to replacement space=%s view=%s index=%s", viewKey.spaceID, viewKey.viewID, nextID)
+		}
+		if nextID != "" {
+			if err := s.applyEventToIndex(ctx, nextID, datasetID, rows); err != nil {
+				if activeErr != nil || !activeReady {
+					runtime.mu.Unlock()
+					return err
+				}
+				failedID := nextID
 				s.failRuntimeBuild(ctx, viewKey, runtime, err)
 				runtime.next = ""
 				runtime.status = "failed"
 				runtime.mu.Unlock()
 				s.removeFailedBuild(ctx, failedID)
 				continue
+			}
+			if activeFailure != nil {
+				// The replacement received the row, but the active Stat was
+				// inconclusive and its write failed. Keep the delivery pending;
+				// the activation fence can switch to the READY replacement.
+				runtime.mu.Unlock()
+				return activeFailure
+			}
+			if !activeReady && (runtime.status != "active" || runtime.active == "") {
+				// The row is present in the replacement, but it is not yet a
+				// durable READY/active index. Keep the source delivery pending so
+				// a crash before build metadata reaches READY cannot lose the row.
+				runtime.mu.Unlock()
+				return fmt.Errorf("replacement view index %q awaits activation", nextID)
 			}
 		}
 		runtime.mu.Unlock()
@@ -71,6 +125,34 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		}
 	}
 	return nil
+}
+
+// liveIndexReady verifies that an index pointer still names a physical
+// index. Reconcile can briefly retain a stale active pointer while preparing
+// its replacement; callers use this to route rows to the replacement rather
+// than silently dropping them.
+func (s *Service) liveIndexReady(ctx context.Context, indexID string) (bool, error) {
+	if indexID == "" {
+		return false, nil
+	}
+	s.mu.RLock()
+	if len(s.engines) == 0 {
+		s.mu.RUnlock()
+		return true, nil
+	}
+	s.mu.RUnlock()
+	engine, err := s.engineFor(indexID)
+	if err != nil {
+		if errors.Is(err, errViewIndexNotReady) {
+			return false, nil
+		}
+		return false, err
+	}
+	stats, err := engine.Stat(ctx, indexID)
+	if err != nil {
+		return false, err
+	}
+	return stats.Exists, nil
 }
 
 func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, rows []*pb.RowFieldUpsert) error {

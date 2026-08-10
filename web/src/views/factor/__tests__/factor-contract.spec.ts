@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EngineStatus, FactorDef, RecalcFactorReq } from "@/api/factor/types";
 import { validateFactorParamsJSON } from "@/views/factor/definitions/factor-form";
 import factorDefinitionsView from "@/views/factor/definitions/index.vue?raw";
+import factorResultsView from "@/views/factor/results/index.vue?raw";
 
 describe("factor management contract", () => {
   it("uses explicit generic time-series fields", () => {
@@ -32,13 +33,18 @@ describe("factor management contract", () => {
     expect(new Date(request.start_time).getTime()).toBeLessThan(new Date(request.end_time).getTime());
   });
 
-  it("exposes only aggregate queue status", () => {
+  it("exposes global Python worker and task status", () => {
     const status: EngineStatus = {
       ret_info: { code: 0, msg: "success" },
-      queue_depth: 2,
-      queue_overflow_count: 1
+      python_workers: 100,
+      active_tasks: 2,
+      pending_tasks: 1
     };
-    expect(status).toEqual(expect.objectContaining({ queue_depth: 2, queue_overflow_count: 1 }));
+    expect(status).toEqual(expect.objectContaining({ python_workers: 100, active_tasks: 2, pending_tasks: 1 }));
+    expect(status).not.toHaveProperty("queue_depth");
+    expect(status).not.toHaveProperty("queue_overflow_count");
+    expect(factorResultsView).toContain('<template #status-extra>');
+    expect(factorResultsView).toMatch(/ViewBrowse[\s\S]*#status-extra[\s\S]*engine-status/);
   });
 
   it("validates params without rewriting large JSON numbers", () => {

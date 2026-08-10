@@ -14,6 +14,8 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 	metrics.ObserveAssignment("crypto_market", "bars", "1m", 16, 16, 1722652200)
 	metrics.ObserveTimerState("crypto_market", "timer-1", "true", 1)
 	metrics.ObserveAssignmentError("crypto_market", "capacity")
+	metrics.ObservePeriodPending("bars", "1m", 2)
+	metrics.ObservePeriodReportRetry("bars", "1m")
 	families, err := registry.Gather()
 	require.NoError(t, err)
 
@@ -28,6 +30,8 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 		"moox_collector_market_fetch_coordination_healthy":                      {},
 		"moox_collector_market_fetch_timer_available":                           {},
 		"moox_collector_market_fetch_assignment_errors_total":                   {},
+		"moox_collector_period_pending_total":                                   {},
+		"moox_collector_period_report_retry_total":                              {},
 	}
 	for name := range want {
 		if _, ok := got[name]; !ok {

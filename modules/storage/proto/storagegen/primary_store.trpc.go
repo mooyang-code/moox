@@ -27,6 +27,16 @@ type PrimaryStoreService interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
 
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
+
+	ReportDatasetPeriodCollected(ctx context.Context, req *ReportDatasetPeriodCollectedReq) (*ReportDatasetPeriodCollectedRsp, error)
+
+	ReportFactorPeriodComputed(ctx context.Context, req *ReportFactorPeriodComputedReq) (*ReportFactorPeriodComputedRsp, error)
+
+	AppendDatasetSyncPoint(ctx context.Context, req *AppendDatasetSyncPointReq) (*AppendDatasetSyncPointRsp, error)
+
+	GetFactorPeriodComputed(ctx context.Context, req *GetFactorPeriodComputedReq) (*GetFactorPeriodComputedRsp, error)
+
+	WaitViewSyncPoint(ctx context.Context, req *WaitViewSyncPointReq) (*WaitViewSyncPointRsp, error)
 }
 
 func PrimaryStoreService_UpsertFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -101,6 +111,96 @@ func PrimaryStoreService_ReadRecordRows_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
+func PrimaryStoreService_ReportDatasetPeriodCollected_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReportDatasetPeriodCollectedReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).ReportDatasetPeriodCollected(ctx, reqbody.(*ReportDatasetPeriodCollectedReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_ReportFactorPeriodComputed_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReportFactorPeriodComputedReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).ReportFactorPeriodComputed(ctx, reqbody.(*ReportFactorPeriodComputedReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_AppendDatasetSyncPoint_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AppendDatasetSyncPointReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).AppendDatasetSyncPoint(ctx, reqbody.(*AppendDatasetSyncPointReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_GetFactorPeriodComputed_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetFactorPeriodComputedReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).GetFactorPeriodComputed(ctx, reqbody.(*GetFactorPeriodComputedReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func PrimaryStoreService_WaitViewSyncPoint_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &WaitViewSyncPointReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).WaitViewSyncPoint(ctx, reqbody.(*WaitViewSyncPointReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // PrimaryStoreServer_ServiceDesc descriptor for server.RegisterService.
 var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.PrimaryStore",
@@ -121,6 +221,26 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReadRecordRows",
 			Func: PrimaryStoreService_ReadRecordRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/ReportDatasetPeriodCollected",
+			Func: PrimaryStoreService_ReportDatasetPeriodCollected_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/ReportFactorPeriodComputed",
+			Func: PrimaryStoreService_ReportFactorPeriodComputed_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/AppendDatasetSyncPoint",
+			Func: PrimaryStoreService_AppendDatasetSyncPoint_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/GetFactorPeriodComputed",
+			Func: PrimaryStoreService_GetFactorPeriodComputed_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.PrimaryStore/WaitViewSyncPoint",
+			Func: PrimaryStoreService_WaitViewSyncPoint_Handler,
 		},
 	},
 }
@@ -149,6 +269,21 @@ func (s *UnimplementedPrimaryStore) ReadTimeSeriesRows(ctx context.Context, req 
 func (s *UnimplementedPrimaryStore) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
 	return nil, errors.New("rpc ReadRecordRows of service PrimaryStore is not implemented")
 }
+func (s *UnimplementedPrimaryStore) ReportDatasetPeriodCollected(ctx context.Context, req *ReportDatasetPeriodCollectedReq) (*ReportDatasetPeriodCollectedRsp, error) {
+	return nil, errors.New("rpc ReportDatasetPeriodCollected of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) ReportFactorPeriodComputed(ctx context.Context, req *ReportFactorPeriodComputedReq) (*ReportFactorPeriodComputedRsp, error) {
+	return nil, errors.New("rpc ReportFactorPeriodComputed of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) AppendDatasetSyncPoint(ctx context.Context, req *AppendDatasetSyncPointReq) (*AppendDatasetSyncPointRsp, error) {
+	return nil, errors.New("rpc AppendDatasetSyncPoint of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) GetFactorPeriodComputed(ctx context.Context, req *GetFactorPeriodComputedReq) (*GetFactorPeriodComputedRsp, error) {
+	return nil, errors.New("rpc GetFactorPeriodComputed of service PrimaryStore is not implemented")
+}
+func (s *UnimplementedPrimaryStore) WaitViewSyncPoint(ctx context.Context, req *WaitViewSyncPointReq) (*WaitViewSyncPointRsp, error) {
+	return nil, errors.New("rpc WaitViewSyncPoint of service PrimaryStore is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -166,6 +301,16 @@ type PrimaryStoreClientProxy interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
 
 	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
+
+	ReportDatasetPeriodCollected(ctx context.Context, req *ReportDatasetPeriodCollectedReq, opts ...client.Option) (rsp *ReportDatasetPeriodCollectedRsp, err error)
+
+	ReportFactorPeriodComputed(ctx context.Context, req *ReportFactorPeriodComputedReq, opts ...client.Option) (rsp *ReportFactorPeriodComputedRsp, err error)
+
+	AppendDatasetSyncPoint(ctx context.Context, req *AppendDatasetSyncPointReq, opts ...client.Option) (rsp *AppendDatasetSyncPointRsp, err error)
+
+	GetFactorPeriodComputed(ctx context.Context, req *GetFactorPeriodComputedReq, opts ...client.Option) (rsp *GetFactorPeriodComputedRsp, err error)
+
+	WaitViewSyncPoint(ctx context.Context, req *WaitViewSyncPointReq, opts ...client.Option) (rsp *WaitViewSyncPointRsp, err error)
 }
 
 type PrimaryStoreClientProxyImpl struct {
@@ -251,6 +396,106 @@ func (c *PrimaryStoreClientProxyImpl) ReadRecordRows(ctx context.Context, req *R
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReadRecordRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) ReportDatasetPeriodCollected(ctx context.Context, req *ReportDatasetPeriodCollectedReq, opts ...client.Option) (*ReportDatasetPeriodCollectedRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReportDatasetPeriodCollected")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("ReportDatasetPeriodCollected")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReportDatasetPeriodCollectedRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) ReportFactorPeriodComputed(ctx context.Context, req *ReportFactorPeriodComputedReq, opts ...client.Option) (*ReportFactorPeriodComputedRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReportFactorPeriodComputed")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("ReportFactorPeriodComputed")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReportFactorPeriodComputedRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) AppendDatasetSyncPoint(ctx context.Context, req *AppendDatasetSyncPointReq, opts ...client.Option) (*AppendDatasetSyncPointRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/AppendDatasetSyncPoint")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("AppendDatasetSyncPoint")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &AppendDatasetSyncPointRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) GetFactorPeriodComputed(ctx context.Context, req *GetFactorPeriodComputedReq, opts ...client.Option) (*GetFactorPeriodComputedRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/GetFactorPeriodComputed")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("GetFactorPeriodComputed")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetFactorPeriodComputedRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) WaitViewSyncPoint(ctx context.Context, req *WaitViewSyncPointReq, opts ...client.Option) (*WaitViewSyncPointRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/WaitViewSyncPoint")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("WaitViewSyncPoint")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &WaitViewSyncPointRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

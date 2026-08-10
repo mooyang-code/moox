@@ -29,7 +29,7 @@ assert_contains "${RELEASE}" 'obsolete Gateway refresh_interval'
 assert_contains "${RELEASE}" 'copy_binary moox-gateway'
 assert_contains "${RELEASE}" 'copy_binary moox-gateway-cli'
 
-for option in --node-id --gateway-control-url --gateway-ca-bundle --gateway-control-key-file --gateway-service-key-file --monitor-instance-id --no-admin; do
+for option in --node-id --gateway-control-url --gateway-ca-bundle --gateway-control-key-file --gateway-service-key-file --monitor-instance-id --no-admin --component-overlay; do
   assert_contains "${DEPLOY}" "${option}"
 done
 assert_absent "${DEPLOY}" '--monitor-peer'
@@ -49,7 +49,7 @@ assert_contains "${DEPLOY}" 'start_service "gateway"'
 assert_contains "${DEPLOY}" 'stop_service "gateway"'
 assert_contains "${DEPLOY}" 'services+=(gateway)'
 assert_contains "${DEPLOY}" '[[ "${WITH_EVENTBUS}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" eventbus || true'
-assert_contains "${DEPLOY}" '[[ "${WITH_GATEWAY}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" gateway || true'
+assert_contains "${DEPLOY}" '[[ "${WITH_GATEWAY}" == "1" ]] && MOOX_WITH_GATEWAY=1 "${DEPLOY_DIR}/stop.sh" gateway || true'
 assert_absent "${DEPLOY}" '[[ "${WITH_EVENTBUS}" == "1" ]] || disabled_services+=(eventbus)'
 assert_absent "${DEPLOY}" '[[ "${WITH_GATEWAY}" == "1" ]] || disabled_services+=(moox_gateway)'
 assert_absent "${DEPLOY}" 'source "${ROOT}/secrets/gateway-control.env"'
@@ -308,19 +308,18 @@ STARTUP_WAIT_SECONDS=0 "${PEER_ONLY_DEPLOY}/start.sh" monitor >/dev/null
 TEST_PIDS+=("$(cat "${PEER_ONLY_DEPLOY}/run/monitor.pid")")
 mkdir -p "${PEER_ONLY_DEPLOY}/config/caddy"
 printf 'MOOX_CADDY_PORTS=443\n' >"${PEER_ONLY_DEPLOY}/config/caddy/edge.env"
-for mode in no-start missing-public-host; do
-  extra_args=()
-  [[ "${mode}" != no-start ]] || extra_args+=(--no-start)
-  if output=$("${DEPLOY}" --target localhost --dir "${PEER_ONLY_DEPLOY}" --stage "${TMP}/stage-existing-caddy-${mode}" \
-    --skip-build --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor --no-strategy --no-trade \
-    --local-ca skip --target-ca skip --node-id gateway-peer-only \
-    --gateway-control-url 'http://[::1]:11000' --monitor-instance-id monitor-peer-only \
-    --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
-    --gateway-service-key-file "${TMP}/service.key" ${extra_args[@]+"${extra_args[@]}"} 2>&1); then
-    fail "${mode} replaced an existing managed Caddy deployment"
-  fi
-  [[ "${output}" == *'existing managed Caddy'* ]] || fail "${mode} Caddy rejection was unclear"
-done
+# A workload-only overlay does not own Caddy, so a no-start package update may
+# run without repeating the public host and must preserve the edge state.
+if ! output=$("${DEPLOY}" --target localhost --dir "${PEER_ONLY_DEPLOY}" --stage "${TMP}/stage-existing-caddy-overlay" \
+  --skip-build --no-start --component-overlay --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor --no-strategy --no-trade \
+  --local-ca skip --target-ca skip --node-id gateway-peer-only \
+  --gateway-control-url 'http://[::1]:11000' --monitor-instance-id monitor-peer-only \
+  --gateway-ca-bundle "${TMP}/peers.pem" --gateway-control-key-file "${TMP}/control.key" \
+  --gateway-service-key-file "${TMP}/service.key" 2>&1); then
+  fail "no-start workload overlay failed: ${output}"
+fi
+grep -Fxq 'MOOX_CADDY_PORTS=443' "${PEER_ONLY_DEPLOY}/config/caddy/edge.env" || \
+  fail 'workload overlay replaced existing Caddy state'
 
 expect_monitor_arg_rejected() {
   local label="$1"; shift

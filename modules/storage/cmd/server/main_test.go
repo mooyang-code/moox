@@ -128,7 +128,7 @@ func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
 func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 4\n    max_workers: 2\n    ordering: subject\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 1\n    max_workers: 1\n    ordering: subject\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
@@ -137,7 +137,7 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Consumer != "storage_view" || opts.FetchBatch != 4 || opts.MaxWorkers != 2 || opts.MaxAckPending != 8 || opts.AckWaitMS != 120000 || opts.DeliverPolicy != "new" {
+	if opts.Consumer != "storage_view_period_v1" || opts.FetchBatch != 1 || opts.MaxWorkers != 1 || opts.MaxAckPending != 1 || opts.AckWaitMS != 120000 || opts.DeliverPolicy != "new" {
 		t.Fatalf("consumer options = %+v", opts)
 	}
 }

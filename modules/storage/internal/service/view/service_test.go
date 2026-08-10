@@ -5,6 +5,7 @@ package view
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,30 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
+
+func TestAttachActiveViewRefreshesContractWhenIndexChanges(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := &pb.View{SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "a", Engine: "bleve", Status: "active"}
+	if err := svc.AttachActiveView(old); err != nil {
+		t.Fatal(err)
+	}
+	activeIDs, _ := json.Marshal([]string{"prices", "fundamentals"})
+	updated := &pb.View{SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "fundamentals", DatasetIds: []string{"prices", "fundamentals"}, ActiveIndexId: "prices-b", ActiveViewRevision: 2, DesiredViewRevision: 2, ActiveViewSchemaHash: "b", Engine: "bleve", Status: "active", Attributes: map[string]string{activeDatasetIDsAttr: string(activeIDs), activePrimaryDatasetAttr: "fundamentals"}}
+	if err := svc.AttachActiveView(updated); err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.RLock()
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
+	svc.mu.RUnlock()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.active != "prices-b" || !runtime.activeDatasetSet || len(runtime.activeDatasetIDs) != 2 || runtime.activePrimaryDatasetID != "fundamentals" {
+		t.Fatalf("active contract not refreshed: active=%q datasets=%v primary=%q set=%v", runtime.active, runtime.activeDatasetIDs, runtime.activePrimaryDatasetID, runtime.activeDatasetSet)
+	}
+}
 
 type fakeFieldReader struct{}
 
@@ -264,6 +289,11 @@ func TestSecondaryEventRecoversCompleteMissingViewRow(t *testing.T) {
 	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare rsp=%v err=%v", rsp, err)
 	}
+	svc.views[viewRef{spaceID: "space", viewID: "multi"}].mu.Lock()
+	svc.views[viewRef{spaceID: "space", viewID: "multi"}].active = "multi"
+	svc.views[viewRef{spaceID: "space", viewID: "multi"}].next = ""
+	svc.views[viewRef{spaceID: "space", viewID: "multi"}].status = "active"
+	svc.views[viewRef{spaceID: "space", viewID: "multi"}].mu.Unlock()
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view"})
 	svc.SetPrimaryReader(recoveryFieldReader{primaryPresent: true})
 	event := &pb.RowFieldUpsert{
@@ -311,6 +341,11 @@ func TestCompleteEventCreatesMissingViewRowWithoutRecovery(t *testing.T) {
 	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare rsp=%v err=%v", rsp, err)
 	}
+	svc.views[viewRef{spaceID: "space", viewID: "single"}].mu.Lock()
+	svc.views[viewRef{spaceID: "space", viewID: "single"}].active = "single"
+	svc.views[viewRef{spaceID: "space", viewID: "single"}].next = ""
+	svc.views[viewRef{spaceID: "space", viewID: "single"}].status = "active"
+	svc.views[viewRef{spaceID: "space", viewID: "single"}].mu.Unlock()
 	event := &pb.RowFieldUpsert{
 		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 3}}}},
@@ -321,6 +356,55 @@ func TestCompleteEventCreatesMissingViewRowWithoutRecovery(t *testing.T) {
 	rows, err := svc.query(ctx, "single", []*pb.RowKey{event.GetKey()}, nil)
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 {
 		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+}
+
+func TestLiveRowUsesHealthyReplacementWhenActiveIndexIsMissing(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "replacement", Schema: &pb.ViewIndexSchema{
+		SpaceId: "space", ViewId: "prices", PrimaryDatasetId: "market", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
+		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("prepare replacement: rsp=%v err=%v", rsp, err)
+	}
+	viewKey := viewRef{spaceID: "space", viewID: "prices"}
+	svc.views[viewKey].mu.Lock()
+	svc.views[viewKey].active = "missing-active"
+	svc.views[viewKey].next = "replacement"
+	svc.views[viewKey].status = "building"
+	svc.views[viewKey].mu.Unlock()
+	svc.mu.Lock()
+	svc.indexView["missing-active"] = viewKey
+	svc.byData[datasetRef{spaceID: "space", datasetID: "market"}]["missing-active"] = struct{}{}
+	svc.mu.Unlock()
+
+	row := &pb.RowFieldUpsert{
+		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
+	}
+	if err := svc.applyDatasetEvent(ctx, "space", "market", []*pb.RowFieldUpsert{row}); err == nil {
+		t.Fatal("replacement write was ACKed before activation")
+	}
+	svc.views[viewKey].mu.Lock()
+	svc.views[viewKey].active = "replacement"
+	svc.views[viewKey].next = ""
+	svc.views[viewKey].status = "active"
+	svc.views[viewKey].mu.Unlock()
+	if err := svc.applyDatasetEvent(ctx, "space", "market", []*pb.RowFieldUpsert{row}); err != nil {
+		t.Fatalf("replacement live write after activation: %v", err)
+	}
+	engine, err := svc.engineFor("replacement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := engine.Stat(ctx, "replacement")
+	if err != nil || !stats.Exists || stats.EntryCount != 1 {
+		t.Fatalf("replacement stats=%+v err=%v", stats, err)
 	}
 }
 

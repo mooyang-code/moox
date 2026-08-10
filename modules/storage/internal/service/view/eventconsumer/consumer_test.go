@@ -26,7 +26,7 @@ func TestConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Consumer != "storage_view" || config.AckWaitMS != 120000 || config.FetchBatch != 8 || config.MaxWorkers != 4 || config.MaxRetryAttempts != 10 || config.Ordering != "subject" || config.DeliverPolicy != "all" {
+	if config.Consumer != "storage_view_period_v1" || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "subject" || config.DeliverPolicy != "all" {
 		t.Fatalf("config = %+v", config)
 	}
 }
@@ -44,9 +44,12 @@ func TestConfigNormalizesDeliverPolicy(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsNegativeRetryAttempts(t *testing.T) {
-	if _, err := (Config{MaxRetryAttempts: -1}).withDefaults(); err == nil {
-		t.Fatal("negative MaxRetryAttempts was accepted")
+func TestConfigAcceptsUnlimitedRetryAttempts(t *testing.T) {
+	if config, err := (Config{MaxRetryAttempts: -1}).withDefaults(); err != nil || config.MaxRetryAttempts != -1 {
+		t.Fatalf("unlimited MaxRetryAttempts = %+v, err=%v", config, err)
+	}
+	if _, err := (Config{MaxRetryAttempts: -2}).withDefaults(); err == nil {
+		t.Fatal("invalid negative MaxRetryAttempts was accepted")
 	}
 }
 

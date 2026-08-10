@@ -56,3 +56,24 @@ func TestProcessDeliveryTermsAfterRetryExhaustion(t *testing.T) {
 		t.Fatalf("applies=%d terms=%d, want 1/1", applies, terms)
 	}
 }
+
+func TestProcessDeliveryKeepsPermanentEventPendingByDefault(t *testing.T) {
+	consumer := &Consumer{config: Config{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var terms, progress int
+	delivery := &jetstream.Delivery{Subject: "poison", DeliveryCount: 1}
+	err := consumer.processDeliveryWithApplyAndActions(ctx, delivery, nil, -1, func(context.Context, *jetstream.Delivery) error {
+		return Permanent(errors.New("invalid event"))
+	}, deliveryActions{
+		ack:      func(context.Context) error { return errors.New("unexpected ack") },
+		progress: func(context.Context) error { progress++; cancel(); return nil },
+		term:     func(context.Context) error { terms++; return nil },
+	})
+	if err == nil {
+		t.Fatal("poison delivery returned nil")
+	}
+	if terms != 0 || progress != 1 {
+		t.Fatalf("terms=%d progress=%d, want 0/1", terms, progress)
+	}
+}

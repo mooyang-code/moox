@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package trpc.moox.storage.event;
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "github.com/mooyang-code/moox/packages/storagepb;storagepb";
 
 // DatasetRowsUpserted is the public delta event for a Dataset. rows contains
@@ -11,6 +13,75 @@ message DatasetRowsUpserted {
   string dataset_id = 2;
   repeated RowUpsert rows = 3;
   string write_source = 4;
+}
+
+// DatasetPeriodCollected marks a terminal collection outcome for every
+// expected subject in one Dataset period.
+message DatasetPeriodCollected {
+  string dataset_id = 1;
+  string frequency = 2;
+  int64 period_time = 3;
+  string status = 4;
+  repeated string subject_ids = 5;
+  repeated string failed_subjects = 6;
+  google.protobuf.Timestamp collected_at = 7;
+}
+
+message ViewPeriodDatasetState {
+  string dataset_id = 1;
+  string status = 2;
+  repeated string failed_subjects = 3;
+}
+
+// ViewSourcePeriodReady marks a source View period as readable by Factor.
+message ViewSourcePeriodReady {
+  string source_view_id = 1;
+  string frequency = 2;
+  int64 period_time = 3;
+  string status = 4;
+  repeated ViewPeriodDatasetState datasets = 5;
+  repeated string primary_subjects = 6;
+  google.protobuf.Timestamp ready_at = 7;
+}
+
+message FactorBindingPeriodState {
+  string binding_id = 1;
+  string factor_id = 2;
+  string status = 3;
+  repeated string skipped_subjects = 4;
+  repeated string failed_subjects = 5;
+}
+
+// FactorPeriodComputed marks all bindings for a result Dataset period as
+// terminal. The result rows precede this event in the same DataNode outbox.
+message FactorPeriodComputed {
+  string source_view_id = 1;
+  string result_dataset_id = 2;
+  string frequency = 3;
+  int64 period_time = 4;
+  string status = 5;
+  repeated FactorBindingPeriodState bindings = 6;
+  google.protobuf.Timestamp computed_at = 7;
+  string trigger_event_id = 8;
+}
+
+// ViewFactorPeriodReady marks the factor result View period as readable.
+message ViewFactorPeriodReady {
+  string source_view_id = 1;
+  string result_view_id = 2;
+  string frequency = 3;
+  int64 period_time = 4;
+  string status = 5;
+  repeated FactorBindingPeriodState bindings = 6;
+  google.protobuf.Timestamp ready_at = 7;
+}
+
+// DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.
+message DatasetSyncPoint {
+  string sync_point_id = 1;
+  string request_id = 2;
+  string dataset_id = 3;
+  string source = 4;
 }
 
 message RowUpsert {

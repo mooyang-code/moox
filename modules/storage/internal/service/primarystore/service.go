@@ -18,48 +18,85 @@ import (
 type Validator interface {
 	ValidateRow(context.Context, *pb.RowFieldUpsert) error
 }
+type DataNodeClient interface {
+	UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error)
+	ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
+}
+
+// NodeResolver is the legacy resolver shape used by the server and existing
+// in-process tests. Marker-capable calls are discovered with a small
+// type-asserted extension, so old DataNode fakes do not need to implement the
+// new methods.
 type NodeResolver func(context.Context, string, string) (pb.DataNodeRuntimeService, error)
+type dataNodeResolver func(context.Context, string, string) (DataNodeClient, error)
 type ViewResolver func(context.Context, string, string) (pb.DataViewService, string, error)
 type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
 type SnapshotProvider func() metadata.RequestSnapshot
+type ResultDatasetResolver func(context.Context, string, string) (string, error)
+type ViewSyncPointReader interface {
+	MissingViewSyncPointDatasets(context.Context, string, string, string, []string) ([]string, error)
+}
 type routeKey struct{ spaceID, datasetID string }
 type DatasetRunObserver interface {
 	ObserveRun(report.DatasetObservation) error
 }
 
 type Service struct {
-	resolve   NodeResolver
+	resolve   dataNodeResolver
 	validate  Validator
 	sign      AuthSigner
 	authorize Authorizer
 	view      ViewResolver
 	snapshot  SnapshotProvider
 	metrics   DatasetRunObserver
+	result    ResultDatasetResolver
+	syncPoint ViewSyncPointReader
 }
 
 type Options struct {
-	Node           pb.DataNodeRuntimeService
-	Resolver       NodeResolver
+	Node DataNodeClient
+	// Resolver accepts NodeResolver and the minimal function shape used by
+	// focused tests. Keeping this as any preserves source compatibility while
+	// the constructor normalizes it to the internal resolver.
+	Resolver       any
 	Validator      Validator
 	AuthSigner     AuthSigner
 	Authorizer     Authorizer
 	View           ViewResolver
 	Snapshot       SnapshotProvider
 	DatasetMetrics DatasetRunObserver
+	ResultDataset  ResultDatasetResolver
+	SyncPoints     ViewSyncPointReader
 }
 
 func New(opts Options) (*Service, error) {
-	resolve := opts.Resolver
+	var resolve dataNodeResolver
+	switch resolver := opts.Resolver.(type) {
+	case NodeResolver:
+		resolve = func(ctx context.Context, spaceID, datasetID string) (DataNodeClient, error) {
+			return resolver(ctx, spaceID, datasetID)
+		}
+	case func(context.Context, string, string) (pb.DataNodeRuntimeService, error):
+		resolve = func(ctx context.Context, spaceID, datasetID string) (DataNodeClient, error) {
+			return resolver(ctx, spaceID, datasetID)
+		}
+	case func(context.Context, string, string) (DataNodeClient, error):
+		resolve = resolver
+	case nil:
+		// handled by the fixed Node fallback below
+	default:
+		return nil, errors.New("unsupported data node resolver type")
+	}
 	if resolve == nil && opts.Node != nil {
-		resolve = func(context.Context, string, string) (pb.DataNodeRuntimeService, error) { return opts.Node, nil }
+		resolve = func(context.Context, string, string) (DataNodeClient, error) { return opts.Node, nil }
 	}
 	if resolve == nil {
 		return nil, errors.New("data node resolver is required")
 	}
 	return &Service{
 		resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer,
-		view: opts.View, snapshot: opts.Snapshot, metrics: opts.DatasetMetrics,
+		view: opts.View, snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
 	}, nil
 }
 
@@ -95,6 +132,9 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("read-only primary credential"))}, nil
 	}
 	ctx = s.requestContext(ctx)
+	if err := validateDatasetWriteOwner(ctx, req.GetAuthInfo(), req.GetRows()); err != nil {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	groups := make(map[routeKey][]*pb.RowFieldUpsert)
 	order := make([]routeKey, 0)
 	if batchValidator, ok := s.validate.(interface {
@@ -146,6 +186,37 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 		s.observeTimeSeriesRows(ctx, rows, "success", true)
 	}
 	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+}
+
+func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*pb.RowFieldUpsert) error {
+	snapshot := metadata.RequestSnapshotFromContext(ctx)
+	if snapshot == nil {
+		return nil
+	}
+	checked := make(map[routeKey]struct{})
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		key := routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}
+		if _, ok := checked[key]; ok {
+			continue
+		}
+		checked[key] = struct{}{}
+		dataset, ok := snapshot.GetDataset(key.spaceID, key.datasetID)
+		if !ok || dataset == nil {
+			continue
+		}
+		attrs := dataset.GetAttributes()
+		if attrs["dataset_role"] != "factor_result" && attrs["write_owner"] != "factor" {
+			continue
+		}
+		appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
+		if appID != "factor" && appID != "moox-factor" {
+			return fmt.Errorf("dataset %s/%s is writable only by Factor", key.spaceID, key.datasetID)
+		}
+	}
+	return nil
 }
 
 func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed bool) {

@@ -22,7 +22,7 @@ func MetadataStoreCode(err error) pb.ErrorCode {
 	}
 	msg := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(msg, "revision conflict"):
+	case strings.Contains(msg, "revision conflict"), strings.Contains(msg, "state conflict"), strings.Contains(msg, "sync point conflict"):
 		return pb.ErrorCode_CONFLICT
 	case strings.Contains(msg, "binding is locked"),
 		strings.Contains(msg, "data_node_id is immutable"),

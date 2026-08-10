@@ -360,7 +360,7 @@ func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 		},
 	}
 	svc, err := New(Options{
-		Resolver: func(_ context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error) {
+		Resolver: func(_ context.Context, spaceID, datasetID string) (DataNodeClient, error) {
 			resolved = append(resolved, spaceID+"/"+datasetID)
 			return node, nil
 		},

@@ -17,3 +17,11 @@ func invalid(message string) error {
 func invalidf(format string, args ...any) error {
 	return ValidationError{cause: fmt.Errorf(format, args...)}
 }
+
+func ValidationErrorFor(message string) error { return invalid(message) }
+
+type ConflictError struct{ EventID string }
+
+func (e ConflictError) Error() string {
+	return fmt.Sprintf("dataset marker event_id %q already exists with a different payload", e.EventID)
+}

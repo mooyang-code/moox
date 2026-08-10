@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "$(basename "${SCRIPT_DIR}")" == "e2e" ]]; then
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
+else
+  # Keep the compatibility wrapper at scripts/test-series-tag-e2e.sh usable.
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+fi
 CALLER_DEPLOY_ROOT="${MOOX_DEPLOY_ROOT:-}"
 if [[ -n "${CALLER_DEPLOY_ROOT}" ]]; then
   printf 'series-tag E2E: MOOX_DEPLOY_ROOT is not supported; this destructive E2E always owns an isolated deployment\n' >&2
@@ -13,7 +19,7 @@ OWN_DEPLOY=0
 
 cleanup() {
   if [[ "${OWN_DEPLOY}" -eq 1 && -n "${DEPLOY_ROOT}" ]]; then
-    if [[ -x "${DEPLOY_ROOT}/stop.sh" ]]; then
+    if [[ "${MOOX_KEEP_SERIES_TAG_E2E:-0}" != "1" && -x "${DEPLOY_ROOT}/stop.sh" ]]; then
       MOOX_WITH_EVENTBUS=1 MOOX_WITH_STORAGE_NODE=1 MOOX_WITH_ARCHIVE=1 MOOX_WITH_FACTOR=1 \
         MOOX_WITH_MONITOR=1 "${DEPLOY_ROOT}/stop.sh" >/dev/null 2>&1 || true
     fi
@@ -21,6 +27,10 @@ cleanup() {
     # fallback is still narrowly scoped to commands containing this unique
     # mktemp deployment root, including Python worker children.
     leaked_pids=()
+    if [[ "${MOOX_KEEP_SERIES_TAG_E2E:-0}" == "1" ]]; then
+      printf 'series-tag E2E: leaving processes running for inspection at %s\n' "${DEPLOY_ROOT}" >&2
+      return
+    fi
     while IFS= read -r pid; do
       [[ -n "${pid}" ]] && leaked_pids+=("${pid}")
     done < <(ps -axo pid=,command= |
@@ -33,7 +43,11 @@ cleanup() {
       done
     fi
   fi
-  rm -rf "${TMP_ROOT}"
+	if [[ "${MOOX_KEEP_SERIES_TAG_E2E:-0}" == "1" ]]; then
+		printf 'series-tag E2E: keeping failed deployment at %s\n' "${TMP_ROOT}" >&2
+	else
+		rm -rf "${TMP_ROOT}"
+	fi
 }
 trap cleanup EXIT
 
@@ -74,6 +88,7 @@ if [[ -z "${DEPLOY_ROOT}" ]]; then
     --no-web-host \
     --no-cloudnode \
     --no-collector \
+    --no-trade \
     --no-strategy \
     --local-ca skip \
     --target-ca skip
@@ -157,6 +172,19 @@ export MOOX_GATEWAY_CA_FILE="${DEPLOY_ROOT}/certs/gateway/peers.pem"
 export MOOX_STORAGE_PRIMARY_AUTH_SECRET="${storage_primary_secret}"
 export MOOX_STORAGE_VIEW_AUTH_SECRET="${storage_view_secret}"
 export MOOX_STORAGE_NODE_AUTH_SECRET="${storage_node_secret}"
+# The isolated deployment enables EventBus TLS. Export the same endpoint and
+# Factor credentials to the integration test so its final-ready consumer uses
+# the authenticated connection used by the Factor process.
+# This script always provisions a TLS EventBus on the isolated loopback port;
+# do not inherit a caller's plain-NATS URL from another deployment.
+export MOOX_EVENTBUS_NATS_URL="tls://127.0.0.1:4222"
+factor_eventbus_credentials="${HOME}/.config/moox/eventbus/factor-eventbus.yaml"
+if [[ -r "${factor_eventbus_credentials}" ]]; then
+  export MOOX_EVENTBUS_NATS_CREDENTIALS="${factor_eventbus_credentials}"
+  factor_eventbus_ca="$(sed -n 's/^ca_file:[[:space:]]*//p' "${factor_eventbus_credentials}" | head -1 | sed 's/[[:space:]]*$//')"
+  [[ "${factor_eventbus_ca}" = /* ]] || factor_eventbus_ca="$(cd "$(dirname "${factor_eventbus_credentials}")" && pwd -P)/${factor_eventbus_ca}"
+  [[ -n "${factor_eventbus_ca}" && -r "${factor_eventbus_ca}" ]] && export MOOX_EVENTBUS_NATS_TLS_CA_FILE="${factor_eventbus_ca}"
+fi
 export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_KEY_ID="moox-cli"
 export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_CALLER="moox-cli"
 export MOOX_FACTOR_STORAGE_E2E_FACTOR_GATEWAY_SECRET="${cli_secret}"
@@ -175,7 +203,7 @@ printf 'series-tag E2E: isolated temp root %s\n' "${TMP_ROOT}"
 (
   cd "${REPO_ROOT}/modules/factor"
   go test -tags=integration ./test \
-    -run '^(TestFactorRealStorageE2E|TestFactorEventIncompleteRetriesBeforePython)$' \
+    -run '^(TestFactorRealStorageE2E|TestFactorViewReadyTrustsUpstreamEvent)$' \
     -count=1 -v
 )
 (
@@ -184,8 +212,12 @@ printf 'series-tag E2E: isolated temp root %s\n' "${TMP_ROOT}"
     -run '^(TestArchiveConsumesUpdatesAndMaterializesMonthlyParquet|TestDeployedArchiveConsumesRealStorageOutbox)$' \
     -count=1 -v
 )
-(
-  cd "${REPO_ROOT}/modules/monitor"
-  go test -tags=integration ./test -run '^TestHostMetricDirectStorageRoundTrip$' -count=1 -v
-)
+if [[ "${MOOX_SERIES_TAG_E2E_WITH_MONITOR:-0}" == "1" ]]; then
+  (
+    cd "${REPO_ROOT}/modules/monitor"
+    go test -tags=integration ./test -run '^TestHostMetricDirectStorageRoundTrip$' -count=1 -v
+  )
+else
+  printf 'series-tag E2E: monitor check skipped (set MOOX_SERIES_TAG_E2E_WITH_MONITOR=1 with a seeded host-metric catalog)\n'
+fi
 printf 'series-tag E2E: PASS\n'

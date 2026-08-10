@@ -4,37 +4,81 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestFactorConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	cfg := Default()
-	require.Equal(t, 2048, cfg.Scheduler.QueueCapacity)
-	require.Equal(t, 1, cfg.Scheduler.MaxRetry)
-	require.Equal(t, 300*time.Millisecond, cfg.Scheduler.ViewSettleDelay)
-	require.Equal(t, 3, cfg.Scheduler.EventReadRetry)
-	require.Equal(t, 500*time.Millisecond, cfg.Scheduler.EventReadRetryInterval)
+	require.Equal(t, 40, cfg.Engine.PythonWorkers)
+	require.Equal(t, 60, cfg.Engine.ViewReadWorkers)
+	require.Equal(t, 10000, cfg.Engine.ViewReadTimeoutMS)
 	require.NotEmpty(t, cfg.Engine.PythonBin)
 	require.NotEmpty(t, cfg.Engine.WorkerPath)
 	require.NotEmpty(t, cfg.Engine.FactorsDir)
 }
 
-func TestLoadSchedulerViewReadinessFromYAML(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(
-		"scheduler:\n"+
-			"  view_settle_delay: 25ms\n"+
-			"  event_read_retry: 2\n"+
-			"  event_read_retry_interval: 40ms\n",
-	), 0o644))
+func TestViewReadPipelineEnvOverrides(t *testing.T) {
+	t.Setenv("MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS", "24")
+	t.Setenv("MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS", "7500")
+	cfg := Default()
+	cfg.applyEnv()
+	require.Equal(t, 24, cfg.Engine.ViewReadWorkers)
+	require.Equal(t, 7500, cfg.Engine.ViewReadTimeoutMS)
+}
 
-	cfg, err := Load(path)
+func TestInvalidViewReadPipelineEnvKeepsDefaults(t *testing.T) {
+	t.Setenv("MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS", "0")
+	t.Setenv("MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS", "-1")
+	cfg := Default()
+	cfg.applyEnv()
+	require.Equal(t, 60, cfg.Engine.ViewReadWorkers)
+	require.Equal(t, 10000, cfg.Engine.ViewReadTimeoutMS)
+}
+
+func writeConfig(t *testing.T, raw string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(raw), 0o644))
+	return path
+}
+
+func TestLoadUsesPythonWorkersAsOnlyConcurrencySetting(t *testing.T) {
+	cfg, err := Load(writeConfig(t, "engine:\n  python_workers: 100\n"))
 	require.NoError(t, err)
-	require.Equal(t, 25*time.Millisecond, cfg.Scheduler.ViewSettleDelay)
-	require.Equal(t, 2, cfg.Scheduler.EventReadRetry)
-	require.Equal(t, 40*time.Millisecond, cfg.Scheduler.EventReadRetryInterval)
+	require.Equal(t, 100, cfg.Engine.PythonWorkers)
+}
+
+func TestLoadRejectsLegacyWorkersAndScheduler(t *testing.T) {
+	for _, raw := range []string{
+		"engine:\n  workers: 24\n",
+		"scheduler:\n  queue_capacity: 2048\n",
+	} {
+		_, err := Load(writeConfig(t, raw))
+		require.Error(t, err)
+	}
+}
+
+func TestPythonWorkersEnvOverride(t *testing.T) {
+	t.Setenv("MOOX_FACTOR_ENGINE_PYTHON_WORKERS", "37")
+	cfg := Default()
+	cfg.applyEnv()
+	require.Equal(t, 37, cfg.Engine.PythonWorkers)
+}
+
+func TestFactorEventBusCredentialEnvOverride(t *testing.T) {
+	t.Setenv("MOOX_EVENTBUS_CREDENTIAL_FILE", "/tmp/shared.yaml")
+	t.Setenv("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE", "/tmp/factor.yaml")
+	cfg := Default()
+	cfg.applyEnv()
+	require.Equal(t, "/tmp/factor.yaml", cfg.EventBus.CredentialFile)
+}
+
+func TestLegacyWorkersEnvIsIgnored(t *testing.T) {
+	t.Setenv("MOOX_FACTOR_ENGINE_WORKERS", "24")
+	cfg := Default()
+	cfg.applyEnv()
+	require.Equal(t, 40, cfg.Engine.PythonWorkers)
 }
 
 func TestLoadWorkerPathFromYAMLAndEnv(t *testing.T) {

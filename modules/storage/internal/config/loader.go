@@ -54,8 +54,8 @@ type StorageEventBus struct {
 }
 
 const (
-	StorageViewConsumer      = "storage_view"
-	StorageViewMaxAckPending = 8
+	StorageViewConsumer      = "storage_view_period_v1"
+	StorageViewMaxAckPending = 1
 	StorageViewAckWaitMS     = 120000
 )
 
@@ -276,10 +276,10 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.View.BatchWaitMS = 200
 	}
 	if c.View.FetchBatch <= 0 {
-		c.View.FetchBatch = 8
+		c.View.FetchBatch = 1
 	}
 	if c.View.MaxWorkers <= 0 {
-		c.View.MaxWorkers = 4
+		c.View.MaxWorkers = 1
 	}
 	if c.View.Ordering == "" {
 		c.View.Ordering = "subject"

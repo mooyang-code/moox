@@ -134,3 +134,47 @@ ON t_collector_fetch_retry_items (c_space_id, c_retry_key);
 
 CREATE INDEX IF NOT EXISTS idx_collector_fetch_retry_due
 ON t_collector_fetch_retry_items (c_status, c_next_retry_at);
+
+-- Period readiness is the Collector's durable answer to whether all
+-- expected Storage writes for one market period have reached a terminal
+-- state. The task identity/source columns make the expected assignment
+-- immutable even when the next scheduler reconciliation moves a task.
+CREATE TABLE IF NOT EXISTS t_period_readiness (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_period_time DATETIME NOT NULL,
+    c_deadline_at DATETIME NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'waiting',
+    c_report_state TEXT NOT NULL DEFAULT 'waiting',
+    c_event_id TEXT NOT NULL DEFAULT '',
+    c_collected_at DATETIME,
+    c_payload_json TEXT NOT NULL DEFAULT '{}',
+    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('waiting', 'complete', 'degraded')),
+    CHECK (c_report_state IN ('waiting', 'pending', 'reported')),
+    UNIQUE (c_space_id, c_dataset_id, c_frequency, c_period_time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_period_readiness_report
+ON t_period_readiness (c_report_state, c_deadline_at);
+
+CREATE TABLE IF NOT EXISTS t_period_readiness_items (
+    c_readiness_id INTEGER NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_function_name TEXT NOT NULL DEFAULT '',
+    c_write_source TEXT NOT NULL DEFAULT '',
+    c_required_fields_json TEXT NOT NULL DEFAULT '[]',
+    c_state TEXT NOT NULL DEFAULT 'pending',
+    c_updated_at DATETIME NOT NULL,
+    PRIMARY KEY (c_readiness_id, c_task_id),
+    UNIQUE (c_readiness_id, c_subject_id),
+    CHECK (c_state IN ('pending', 'success', 'timed_out')),
+    FOREIGN KEY (c_readiness_id) REFERENCES t_period_readiness(c_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_period_readiness_items_state
+ON t_period_readiness_items (c_readiness_id, c_state);

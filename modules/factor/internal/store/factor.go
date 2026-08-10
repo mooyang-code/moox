@@ -138,6 +138,36 @@ func (r *FactorRepository) SetStatus(ctx context.Context, factorID, status strin
 	return nil
 }
 
+// UpdateSourceArtifact refreshes the immutable runtime artifact location
+// without changing the factor definition or lifecycle status. Deployments may
+// replace the packaged factors directory, so startup must be able to rebuild
+// this derived file for enabled definitions too.
+func (r *FactorRepository) UpdateSourceArtifact(ctx context.Context, factorID, sourceHash, sourcePath string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current domain.FactorDef
+		if err := tx.Where(
+			"c_factor_id = ? AND c_source_hash = ?",
+			strings.TrimSpace(factorID), strings.TrimSpace(sourceHash),
+		).First(&current).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&domain.FactorDef{}).
+			Where("c_factor_id = ? AND c_source_hash = ?", current.FactorID, current.SourceHash).
+			Update("c_source_path", strings.TrimSpace(sourcePath))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		// The legacy SQLite trigger bumps c_mtime for every UPDATE. Restore the
+		// definition timestamp in a second statement; because the value changes
+		// back, the trigger's NEW.c_mtime = OLD.c_mtime guard does not fire.
+		return tx.Model(&domain.FactorDef{}).Where("c_factor_id = ?", current.FactorID).
+			UpdateColumn("c_mtime", current.ModifyTime).Error
+	})
+}
+
 // ListEnabled returns enabled time-series factor definitions.
 func (r *FactorRepository) ListEnabled(ctx context.Context) ([]domain.FactorDef, error) {
 	var rows []domain.FactorDef

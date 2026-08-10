@@ -73,6 +73,21 @@ Collector、CloudNode、Factor、Strategy、Trade、Archive 使用固定低基�
 不把多个时序汇总成一个模块水位。穿过 Storage 的功能检查当前显式延期，不从相邻模块水位
 推断 Storage 已正确处理。
 
+View 驱动因子链路额外暴露以下固定低基数指标（不包含 subject、period 或 row key）：
+
+| 指标 | 标签 | 含义 |
+| --- | --- | --- |
+| `moox_collector_period_pending_total` | `dataset,frequency` | 等待上报 Dataset 周期完成事件的数量 |
+| `moox_collector_period_report_retry_total` | `dataset,frequency` | 周期完成事件上报或落库失败次数 |
+| `moox_storage_view_period_waiting_datasets` | `view,frequency` | Source View 当前尚未收齐的 Dataset 数量 |
+| `moox_storage_view_ready_publish_retry_total` | `view,event` | Source/Result ready 发布失败后重试次数 |
+| `moox_factor_period_running` | `source_view,frequency` | 正在执行的因子周期数量 |
+| `moox_factor_period_degraded_total` | `source_view,frequency` | 输入缺失或因子执行失败而降级的周期数量 |
+| `moox_factor_manifest_clear_total` | `binding` | 因跳过/失败 subject 清理结果 manifest 的次数 |
+| `moox_factor_source_ready_lag_seconds` | `source_view,frequency` | Factor 开始执行时 Source ready 的滞后秒数 |
+
+这些指标只用于运行观测，不改变完成事件的 payload，也不作为是否发布 ready 的判定条件。
+
 ## 看板和规则
 
 看板从 Monitor catalog 选择已发现的 service、instance、metric 和 labels，查询 bounded history 后绘制趋势。不存在“新增监控目标”入口，服务发现来自 SysDeploy 注册表；未知 producer、缺失 schema、无 route 的消息会被拒绝。

@@ -43,6 +43,16 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 		if stream.Name == "MOOX_TRADE" {
 			assert.Equal(t, []string{"moox.trade.target.requested.v1.>"}, stream.Subjects)
 		}
+		if stream.Name == "MOOX_STORAGE" {
+			assert.Equal(t, []string{
+				"moox.storage.dataset.rows.upserted.v2.>",
+				"moox.storage.dataset.period.collected.v1.>",
+				"moox.storage.view.source_period.ready.v1.>",
+				"moox.storage.dataset.factor_period.computed.v1.>",
+				"moox.storage.view.factor_period.ready.v1.>",
+				"moox.storage.dataset.sync_point.v1.>",
+			}, stream.Subjects)
+		}
 		delete(want, stream.Name)
 	}
 	assert.Empty(t, want, "missing streams")

@@ -190,6 +190,36 @@ func TestMarketCanaryStorageRejectionKeepsValidUTF8(t *testing.T) {
 	require.LessOrEqual(t, len([]rune(got)), len([]rune("storage_rejected_query:7:"))+160)
 }
 
+func TestMarketCanaryProbeDetectsPrimaryAuthRejection(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	reader := &canaryReader{retInfo: &storagepb.RetInfo{Code: commonpb.ErrorCode_NO_PERMISSION, Msg: "invalid primary auth"}}
+	canary := MarketCanary{
+		Reader:   reader,
+		AuthInfo: &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "stale-key"},
+		Config: MarketCanaryConfig{
+			SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
+			SeriesTag: stringPtr("venue:binance"),
+		},
+		Now: func() time.Time { return now },
+	}
+	err := canary.ProbeStorageAuth(t.Context())
+	require.Error(t, err)
+	require.True(t, IsStorageAuthError(err))
+	require.Contains(t, err.Error(), "invalid primary auth")
+}
+
+func TestMarketCanaryProbeAcceptsEmptyStorageResponse(t *testing.T) {
+	canary := MarketCanary{
+		Reader:   &canaryReader{retInfo: &storagepb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}},
+		AuthInfo: &commonpb.AuthInfo{AppId: "monitor-market-canary", AppKey: "key"},
+		Config: MarketCanaryConfig{
+			SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "BTC-USDT", Frequency: "1m",
+			SeriesTag: stringPtr("venue:binance"),
+		},
+	}
+	require.NoError(t, canary.ProbeStorageAuth(t.Context()))
+}
+
 func TestMarketCanaryStorageRejectionRedactsSensitiveDetail(t *testing.T) {
 	for _, message := range []string{
 		"query failed token=super-secret-value",

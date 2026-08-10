@@ -13,9 +13,9 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
-	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -45,7 +45,7 @@ func TestCreateFactorUsesGenericContractAndComputedSourceHash(t *testing.T) {
 	factor.SourceHash = "untrusted"
 	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: factor})
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Equal(t, []string{"close"}, rsp.GetFactor().GetInputColumns())
 	require.Equal(t, []string{"bias"}, rsp.GetFactor().GetOutputs())
 	require.NotEqual(t, "untrusted", rsp.GetFactor().GetSourceHash())
@@ -420,7 +420,7 @@ func TestUpsertEnabledBindingValidatesContractBeforePersisting(t *testing.T) {
 
 	rsp, err := svc.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: binding})
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Equal(t, 1, metadata.listViewsCalls)
 	rows, total, listErr := db.Bindings().List(ctx, store.BindingFilter{})
 	require.NoError(t, listErr)
@@ -541,8 +541,8 @@ func TestSetFactorStatusDisableWaitsForRunningTask(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
 	metadata := newRecordingFactorMetadataClient("crypto", "bias")
-	gate := scheduler.NewFactorGate()
-	runner := &fakeRPCScheduler{}
+	gate := taskrunner.NewFactorGate()
+	runner := &fakeRPCTaskRunner{}
 	svc := NewWithRuntime(
 		db,
 		runner,
@@ -571,18 +571,17 @@ func TestSetFactorStatusDisableWaitsForRunningTask(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("disable did not complete after the running task released the gate")
 	}
-	require.Equal(t, 1, runner.dropCalls)
 }
 
-func TestUpdatedFactorDropsQueuedOldTask(t *testing.T) {
+func TestUpdatedDisabledFactorDoesNotNeedQueuedTaskCleanup(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorDefinitionWithStatus(t, db, "factor", domain.FactorStatusDisabled)
-	runner := &fakeRPCScheduler{}
+	runner := &fakeRPCTaskRunner{}
 	svc := NewWithRuntime(
 		db,
 		runner,
 		WithFactorsDir(t.TempDir()),
-		WithFactorGate(scheduler.NewFactorGate()),
+		WithFactorGate(taskrunner.NewFactorGate()),
 	)
 	updated := genericFactorPB("factor", "TestFactor", []string{"value"})
 	updated.Status = domain.FactorStatusDisabled
@@ -593,27 +592,21 @@ func TestUpdatedFactorDropsQueuedOldTask(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, 1, runner.dropCalls)
 }
 
 func TestFactorMutationLifecyclePreventsOldWriteAfterRecalc(t *testing.T) {
 	ctx := context.Background()
 	db := openRPCTestDB(t)
 	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
-	gate := scheduler.NewFactorGate()
+	gate := taskrunner.NewFactorGate()
 	exec := newLifecycleExecutor()
 	storage := &lifecycleStorage{}
-	sched := scheduler.NewService(
-		scheduler.Config{},
-		storage,
-		exec,
-		scheduler.WithFactorGate(gate),
-	)
+	runner := taskrunner.NewService(1, storage, exec, taskrunner.WithFactorGate(gate))
 	metadata := newRecordingFactorMetadataClient("crypto", "bias")
 	metadata.existingTarget = true
 	svc := NewWithRuntime(
 		db,
-		sched,
+		runner,
 		WithFactorsDir(t.TempDir()),
 		WithMetadataSync(registry.NewMetadataSync(metadata, nil)),
 		WithFactorGate(gate),
@@ -621,7 +614,7 @@ func TestFactorMutationLifecyclePreventsOldWriteAfterRecalc(t *testing.T) {
 	factor, err := db.Factors().Get(ctx, "bias")
 	require.NoError(t, err)
 	start := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
-	oldTask, err := scheduler.BuildTask(scheduler.TaskScope{
+	oldTask, err := taskrunner.BuildTask(taskrunner.TaskScope{
 		TaskID: "old", TriggerType: "recalc",
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: "BTC", Freq: "1m", StartTime: start, EndTime: start.Add(time.Nanosecond),
@@ -629,7 +622,7 @@ func TestFactorMutationLifecyclePreventsOldWriteAfterRecalc(t *testing.T) {
 	require.NoError(t, err)
 	oldDone := make(chan error, 1)
 	go func() {
-		oldDone <- sched.Run(ctx, oldTask)
+		oldDone <- runner.Run(ctx, oldTask)
 	}()
 	select {
 	case <-exec.firstStarted:
@@ -674,7 +667,7 @@ func TestFactorMutationLifecyclePreventsOldWriteAfterRecalc(t *testing.T) {
 		FactorId: "bias", SpaceId: "crypto", SourceDataset: "bars",
 		SubjectId: "BTC", Freq: "1m",
 		StartTime: start.Format(time.RFC3339Nano),
-		EndTime:   start.Add(time.Nanosecond).Format(time.RFC3339Nano),
+		EndTime:   start.Add(time.Minute).Format(time.RFC3339Nano),
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, recalcRsp.GetRetInfo().GetCode())
@@ -731,7 +724,7 @@ func TestSetFactorStatusRejectsInvalidStatusWithoutMutationOrSync(t *testing.T) 
 func TestRecalcFactorRunsSynchronousRange(t *testing.T) {
 	db := openRPCTestDB(t)
 	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
-	runner := &fakeRPCScheduler{}
+	runner := &fakeRPCTaskRunner{}
 	svc := NewWithRuntime(db, runner, WithFactorsDir(t.TempDir()))
 	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{
 		FactorId: "bias", SpaceId: "crypto", SourceDataset: "bars",
@@ -745,7 +738,7 @@ func TestRecalcFactorRunsSynchronousRange(t *testing.T) {
 }
 
 func TestRecalcRejectsMissingOrInvalidRange(t *testing.T) {
-	svc := NewWithRuntime(openRPCTestDB(t), &fakeRPCScheduler{}, WithFactorsDir(t.TempDir()))
+	svc := NewWithRuntime(openRPCTestDB(t), &fakeRPCTaskRunner{}, WithFactorsDir(t.TempDir()))
 	for _, req := range []*factorpb.RecalcFactorReq{
 		{SpaceId: "crypto", SourceDataset: "bars", SubjectId: "BTC", Freq: "1m"},
 		{SpaceId: "crypto", SourceDataset: "bars", SubjectId: "BTC", Freq: "1m", StartTime: "bad", EndTime: "2026-07-26T01:00:00Z"},
@@ -762,7 +755,7 @@ func TestRecalcFactorReportsStaleTaskAsConflict(t *testing.T) {
 	seedRPCFactorAndBinding(t, db, domain.FactorStatusEnabled)
 	svc := NewWithRuntime(
 		db,
-		&fakeRPCScheduler{err: errors.Join(scheduler.ErrStaleTask, gorm.ErrRecordNotFound)},
+		&fakeRPCTaskRunner{err: errors.Join(taskrunner.ErrStaleTask, gorm.ErrRecordNotFound)},
 		WithFactorsDir(t.TempDir()),
 	)
 	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{
@@ -783,7 +776,7 @@ func TestRecalcHonorsBindingSubjectScope(t *testing.T) {
 		Freq: "1m", SubjectMode: domain.SubjectModeInclude, SubjectsJSON: `["ETH"]`,
 		TargetDataset: "bars_factor", Status: domain.BindingStatusEnabled,
 	}))
-	runner := &fakeRPCScheduler{}
+	runner := &fakeRPCTaskRunner{}
 	svc := NewWithRuntime(db, runner, WithFactorsDir(t.TempDir()))
 	rsp, err := svc.RecalcFactor(context.Background(), &factorpb.RecalcFactorReq{
 		FactorId: "bias", SpaceId: "crypto", SourceDataset: "bars",
@@ -850,35 +843,29 @@ func testBindingPB(mode, subjectsJSON string) *factorpb.FactorBinding {
 	}
 }
 
-func TestGetEngineStatusIsMinimal(t *testing.T) {
-	runner := &fakeRPCScheduler{status: scheduler.Status{QueueDepth: 3, QueueOverflowCount: 4}}
+func TestGetEngineStatusReportsWorkerAndTaskCounts(t *testing.T) {
+	runner := &fakeRPCTaskRunner{status: taskrunner.Status{Workers: 100, ActiveTasks: 7, PendingTasks: 93}}
 	svc := NewWithRuntime(openRPCTestDB(t), runner)
 	rsp, err := svc.GetEngineStatus(context.Background(), &factorpb.GetEngineStatusReq{})
 	require.NoError(t, err)
-	require.EqualValues(t, 3, rsp.GetQueueDepth())
-	require.EqualValues(t, 4, rsp.GetQueueOverflowCount())
+	require.EqualValues(t, 100, rsp.GetPythonWorkers())
+	require.EqualValues(t, 7, rsp.GetActiveTasks())
+	require.EqualValues(t, 93, rsp.GetPendingTasks())
 }
 
-type fakeRPCScheduler struct {
-	mu        sync.Mutex
-	status    scheduler.Status
-	tasks     []scheduler.Task
-	err       error
-	dropCalls int
+type fakeRPCTaskRunner struct {
+	mu     sync.Mutex
+	status taskrunner.Status
+	tasks  []taskrunner.Task
+	err    error
 }
 
-func (f *fakeRPCScheduler) Status() scheduler.Status { return f.status }
-func (f *fakeRPCScheduler) Run(_ context.Context, task scheduler.Task) error {
+func (f *fakeRPCTaskRunner) Status() taskrunner.Status { return f.status }
+func (f *fakeRPCTaskRunner) Run(_ context.Context, task taskrunner.Task) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.tasks = append(f.tasks, task)
 	return f.err
-}
-func (f *fakeRPCScheduler) DropQueuedFactor(string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.dropCalls++
-	return 0
 }
 
 type lifecycleExecutor struct {

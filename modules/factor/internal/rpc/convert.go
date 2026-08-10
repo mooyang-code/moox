@@ -42,17 +42,20 @@ func factorFromPB(pb *factorpb.FactorDef) domain.FactorDef {
 
 func bindingToPB(b domain.FactorBinding) *factorpb.FactorBinding {
 	return &factorpb.FactorBinding{
-		BindingId:     b.BindingID,
-		FactorId:      b.FactorID,
-		SpaceId:       b.SpaceID,
-		SourceDataset: b.SourceDataset,
-		Freq:          b.Freq,
-		SubjectMode:   b.SubjectMode,
-		SubjectsJson:  b.SubjectsJSON,
-		TargetDataset: b.TargetDataset,
-		Status:        b.Status,
-		CreatedAt:     formatTime(b.CreateTime),
-		UpdatedAt:     formatTime(b.ModifyTime),
+		BindingId:       b.BindingID,
+		FactorId:        b.FactorID,
+		SpaceId:         b.SpaceID,
+		SourceViewId:    b.SourceViewID,
+		Freq:            b.Freq,
+		SubjectMode:     b.SubjectMode,
+		SubjectsJson:    b.SubjectsJSON,
+		ResultDatasetId: b.ResultDatasetID,
+		ResultViewId:    b.ResultViewID,
+		Status:          b.Status,
+		CreatedAt:       formatTime(b.CreateTime),
+		UpdatedAt:       formatTime(b.ModifyTime),
+		SourceDataset:   b.SourceViewID,
+		TargetDataset:   b.ResultDatasetID,
 	}
 }
 
@@ -60,16 +63,27 @@ func bindingFromPB(pb *factorpb.FactorBinding) domain.FactorBinding {
 	if pb == nil {
 		return domain.FactorBinding{}
 	}
+	sourceViewID := pb.GetSourceViewId()
+	if sourceViewID == "" {
+		sourceViewID = pb.GetSourceDataset()
+	}
+	resultDatasetID := pb.GetResultDatasetId()
+	if resultDatasetID == "" && pb.GetTargetDataset() != domain.DefaultBindingTargetID {
+		resultDatasetID = pb.GetTargetDataset()
+	}
 	return domain.FactorBinding{
-		BindingID:     pb.GetBindingId(),
-		FactorID:      pb.GetFactorId(),
-		SpaceID:       pb.GetSpaceId(),
-		SourceDataset: pb.GetSourceDataset(),
-		Freq:          pb.GetFreq(),
-		SubjectMode:   pb.GetSubjectMode(),
-		SubjectsJSON:  pb.GetSubjectsJson(),
-		TargetDataset: pb.GetTargetDataset(),
-		Status:        pb.GetStatus(),
+		BindingID:       pb.GetBindingId(),
+		FactorID:        pb.GetFactorId(),
+		SpaceID:         pb.GetSpaceId(),
+		SourceViewID:    sourceViewID,
+		SourceDataset:   sourceViewID,
+		Freq:            pb.GetFreq(),
+		SubjectMode:     pb.GetSubjectMode(),
+		SubjectsJSON:    pb.GetSubjectsJson(),
+		ResultDatasetID: resultDatasetID,
+		TargetDataset:   resultDatasetID,
+		ResultViewID:    pb.GetResultViewId(),
+		Status:          pb.GetStatus(),
 	}
 }
 

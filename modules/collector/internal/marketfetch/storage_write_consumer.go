@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -18,14 +20,27 @@ import (
 // projects successful writes into task-instance freshness. It is separate from
 // the Invoke completion consumer because Timer SCFs intentionally do not
 // publish market-fetch completion events.
-func StartStorageWriteConsumer(ctx context.Context, spaceID string, instances *store.TaskInstanceRepository) error {
+func StartStorageWriteConsumer(ctx context.Context, spaceID string, instances *store.TaskInstanceRepository, readiness ...*PeriodReadinessService) error {
+	_, err := StartStorageWriteConsumerReady(ctx, spaceID, instances, readiness...)
+	return err
+}
+
+// StartStorageWriteConsumerReady starts the durable projection and returns a
+// one-shot signal after the initial DeliverAll replay is drained. The
+// readiness reporter must not finalize an old period while that replay is
+// still applying rows; otherwise a slow first boot can permanently publish a
+// degraded marker before its historical evidence arrives.
+func StartStorageWriteConsumerReady(ctx context.Context, spaceID string, instances *store.TaskInstanceRepository, readiness ...*PeriodReadinessService) (<-chan struct{}, error) {
 	if instances == nil {
-		return fmt.Errorf("task instance repository is required")
+		return nil, fmt.Errorf("task instance repository is required")
 	}
 	spaceID = strings.TrimSpace(spaceID)
 	if spaceID == "" {
-		return fmt.Errorf("storage write consumer space_id is required")
+		return nil, fmt.Errorf("storage write consumer space_id is required")
 	}
+	replayReady := make(chan struct{})
+	var replayReadyOnce sync.Once
+	markReplayReady := func() { replayReadyOnce.Do(func() { close(replayReady) }) }
 	go func() {
 		backoff := time.Second
 		for ctx.Err() == nil {
@@ -49,7 +64,10 @@ func StartStorageWriteConsumer(ctx context.Context, spaceID string, instances *s
 				}
 				continue
 			}
-			consumer, err := events.NewSpaceConsumer(ctx, client, registry, events.SpaceConsumerConfig{ConsumerConfig: events.ConsumerConfig{Name: storageWriteConsumerName(spaceID), Event: events.DatasetRowsUpserted, AckWait: 30 * time.Second, MaxDeliver: 5, MaxAckPending: 128, FetchMaxWait: 500 * time.Millisecond, DeliverDecodeErrors: true}, SpaceID: spaceID})
+			// A row event is the readiness evidence for a period. Keep it pending
+			// through transient SQLite/EventBus outages instead of TERM'ing it
+			// after a small delivery count and reporting a false degraded period.
+			consumer, err := events.NewSpaceConsumer(ctx, client, registry, events.SpaceConsumerConfig{ConsumerConfig: events.ConsumerConfig{Name: storageWriteConsumerName(spaceID), Event: events.DatasetRowsUpserted, AckWait: 30 * time.Second, MaxDeliver: -1, MaxAckPending: 128, FetchMaxWait: 500 * time.Millisecond, DeliverDecodeErrors: true}, SpaceID: spaceID})
 			if err != nil {
 				client.Close()
 				log.WarnContextf(ctx, "collector storage write consumer unavailable; retrying: %v", err)
@@ -59,7 +77,10 @@ func StartStorageWriteConsumer(ctx context.Context, spaceID string, instances *s
 				continue
 			}
 			backoff = time.Second
-			runStorageWriteConsumer(ctx, consumer, instances)
+			sessionCtx, cancelSession := context.WithCancel(ctx)
+			go waitStorageWriteReplay(sessionCtx, client, spaceID, markReplayReady)
+			runStorageWriteConsumer(sessionCtx, consumer, instances, readiness...)
+			cancelSession()
 			consumer.Close()
 			client.Close()
 			if ctx.Err() == nil {
@@ -67,12 +88,35 @@ func StartStorageWriteConsumer(ctx context.Context, spaceID string, instances *s
 			}
 		}
 	}()
-	return nil
+	return replayReady, nil
+}
+
+func waitStorageWriteReplay(ctx context.Context, client *jetstream.Client, spaceID string, ready func()) {
+	if client == nil {
+		return
+	}
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		state, err := client.ConsumerState(ctx, "MOOX_STORAGE", storageWriteConsumerName(spaceID))
+		if err == nil && state.NumPending == 0 && state.NumAckPending == 0 {
+			ready()
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func storageWriteConsumerName(spaceID string) string {
 	var name strings.Builder
-	name.WriteString("collector-storage-write-v1-")
+	// v2 intentionally starts at DeliverAll. Readiness is a new durable
+	// projection; reusing the v1 cursor could leave a freshly created table
+	// without rows that the old consumer already ACKed during an upgrade.
+	name.WriteString("collector-storage-write-v2-")
 	for _, value := range spaceID {
 		if (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9') || value == '-' || value == '_' {
 			name.WriteRune(value)
@@ -83,7 +127,7 @@ func storageWriteConsumerName(spaceID string) string {
 	return name.String()
 }
 
-func runStorageWriteConsumer(ctx context.Context, consumer *events.Consumer, instances *store.TaskInstanceRepository) {
+func runStorageWriteConsumer(ctx context.Context, consumer *events.Consumer, instances *store.TaskInstanceRepository, readiness ...*PeriodReadinessService) {
 	for ctx.Err() == nil {
 		deliveries, fetchErr := consumer.FetchEvents(ctx, 16)
 		if fetchErr != nil && len(deliveries) == 0 {
@@ -100,7 +144,7 @@ func runStorageWriteConsumer(ctx context.Context, consumer *events.Consumer, ins
 			if delivery == nil || delivery.Delivery == nil {
 				continue
 			}
-			if err := handleStorageWrite(ctx, instances, delivery); err != nil {
+			if err := handleStorageWrite(ctx, instances, delivery, readiness...); err != nil {
 				if delivery.Err != nil {
 					_ = delivery.Delivery.Term(ctx)
 					continue
@@ -114,7 +158,7 @@ func runStorageWriteConsumer(ctx context.Context, consumer *events.Consumer, ins
 	}
 }
 
-func handleStorageWrite(ctx context.Context, instances *store.TaskInstanceRepository, delivery *events.EventDelivery) error {
+func handleStorageWrite(ctx context.Context, instances *store.TaskInstanceRepository, delivery *events.EventDelivery, readiness ...*PeriodReadinessService) error {
 	if delivery.Err != nil {
 		return fmt.Errorf("decode storage write event: %w", delivery.Err)
 	}
@@ -142,6 +186,11 @@ func handleStorageWrite(ctx context.Context, instances *store.TaskInstanceReposi
 			continue
 		}
 		observations = append(observations, store.StorageWriteObservation{SpaceID: payload.GetSpaceId(), DatasetID: payload.GetDatasetId(), SubjectID: key.GetSubjectId(), Frequency: frequency, FunctionName: functionName, At: at})
+	}
+	if len(readiness) > 0 && readiness[0] != nil {
+		if err := readiness[0].ApplyRows(ctx, payload); err != nil {
+			return fmt.Errorf("update period readiness: %w", err)
+		}
 	}
 	updated, err := instances.MarkStorageWrites(ctx, observations)
 	if err != nil {

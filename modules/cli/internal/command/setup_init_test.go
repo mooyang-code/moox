@@ -18,6 +18,17 @@ type fakeSetupInitStorage struct {
 	record func(string)
 }
 
+type fakeSetupInitFactor struct {
+	items []setupFactorItem
+}
+
+func (f *fakeSetupInitFactor) Apply(_ context.Context, items []setupFactorItem) (setupFactorSummary, error) {
+	f.items = append([]setupFactorItem(nil), items...)
+	return setupFactorSummary{Enabled: true, Planned: len(items), Imported: len(items), Bound: len(items)}, nil
+}
+
+func (f *fakeSetupInitFactor) Close() error { return nil }
+
 func (f *fakeSetupInitStorage) recordStage(stage string) {
 	f.stages = append(f.stages, stage)
 	if f.record != nil {
@@ -46,6 +57,29 @@ func TestSetupInitRequiresStorageHost(t *testing.T) {
 	cmd := newSetupCommand(setupDeps{})
 	cmd.SetArgs([]string{"init"})
 	require.Error(t, cmd.Execute())
+}
+
+func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.Factors.Enabled = true
+	snapshot.Manifest.Factors.SourceDir = "../../../../examples/factors"
+	snapshot.Manifest.Factors.Items = []setupconfig.FactorSetupItem{{
+		FactorID: "bias", File: "timeseries/bias.py", InputColumns: []string{"close"},
+		Outputs: []string{"bias_5"}, ParamsJSON: `{"windows":[5]}`, LookbackPeriods: 5,
+		SpaceID: "crypto_market", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
+	}}
+	factor := &fakeSetupInitFactor{}
+	cmd := newSetupCommand(setupDeps{
+		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		openInitFactor: func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error) { return factor, nil },
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"factors", "--file", "custom.toml"})
+	require.NoError(t, cmd.Execute())
+	require.Len(t, factor.items, 1)
+	assert.Equal(t, "bias", factor.items[0].FactorID)
+	assert.Contains(t, output.String(), `"status":"ready"`)
 }
 
 func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {

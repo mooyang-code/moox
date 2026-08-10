@@ -22,11 +22,14 @@ export interface FactorBinding {
   binding_id?: string;
   factor_id: string;
   space_id: string;
-  source_dataset: string;
+  source_view_id?: string;
+  result_dataset_id?: string;
+  result_view_id?: string;
+  source_dataset?: string;
   freq: string;
   subject_mode: SubjectMode;
   subjects_json: string;
-  target_dataset: string;
+  target_dataset?: string;
   status: BindingStatus;
   created_at?: string;
   updated_at?: string;
@@ -34,8 +37,9 @@ export interface FactorBinding {
 
 export interface EngineStatus {
   ret_info: RetInfo;
-  queue_depth: number;
-  queue_overflow_count: number | string;
+  python_workers: number;
+  active_tasks: number;
+  pending_tasks: number;
 }
 
 export interface RecalcFactorReq {
@@ -62,6 +66,7 @@ export interface ListFactorsRsp {
 
 export interface ListBindingsReq {
   space_id?: string;
+  source_view_id?: string;
   source_dataset?: string;
   freq?: string;
   status?: string;

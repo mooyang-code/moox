@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "$(basename "${SCRIPT_DIR}")" == "contract" ]]; then
+  ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
+else
+  ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+fi
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-deploy.XXXXXX")"
 FIXTURE_ROOT="${TMP_ROOT}/repo"
 ARCHIVE="${TMP_ROOT}/strategy.tar.gz"
@@ -10,6 +15,8 @@ trap 'rm -rf "${TMP_ROOT}"' EXIT
 mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
   "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
+cp "${ROOT}/scripts/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-check.sh"
+cp "${ROOT}/scripts/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-rotate.sh"
 ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-caddy-ca.sh"
 ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-managed.sh"
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
@@ -62,7 +69,7 @@ done
 grep -q '^database: ../data/strategy/strategy.sqlite$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml"
 grep -q '^python_bin: ../data/strategy/venv/bin/python$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml"
 grep -q '^  credential_file: ""$' "${TMP_ROOT}/unpacked/strategy/config/app.yaml"
-grep -q 'WITH_STRATEGY="${MOOX_WITH_STRATEGY:-1}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-1}}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'start_strategy' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'strategy) url=http://127.0.0.1:11431/healthz' "${TMP_ROOT}/unpacked/healthcheck.sh"

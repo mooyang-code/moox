@@ -1,6 +1,7 @@
 # 默认初始化配置
 
-这个目录是 `moox-cli setup init --config-dir` 的默认输入，只识别三个固定文件：
+这个目录是 `moox-cli setup init --config-dir` 的默认输入，只识别三个固定文件；Python
+因子由仓库根目录 `custom.toml` 的 `[factors]` 配置控制：
 
 | 文件 | 消费方 | 内容 |
 | --- | --- | --- |
@@ -23,4 +24,11 @@ moox-cli setup init \
 ```
 
 `--storage-host` 必须是 `custom.toml` 中已经部署 Storage 的主机名。命令只读取
-`metadata.yaml` 完成初始化；另外两份文件分别由 Monitor 和 Admin 部署导入读取。
+`metadata.yaml` 完成 Storage 初始化；另外两份文件分别由 Monitor 和 Admin 部署导入读取。
+
+默认因子配置位于仓库根目录的 `custom.toml.example`，当前把 `bias.py` 和 `cci.py`
+关联到 `crypto_market/binance_spot_kline_1m_view`（`1m`）。将示例复制为
+`custom.toml` 后，`setup init` 会导入因子、创建绑定并启用它们；因子源文件路径相对
+`factors.source_dir` 解析。若不需要默认因子，设置 `factors.enabled = false`。如果 Storage
+已存在且 `setup init` 因元数据契约差异停止，可改用 `moox-cli setup factors --file ./custom.toml`
+单独导入因子。

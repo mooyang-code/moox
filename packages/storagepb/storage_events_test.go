@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestDatasetRowsUpsertedRoundTrip(t *testing.T) {
@@ -25,5 +26,76 @@ func TestDatasetRowsUpsertedRoundTrip(t *testing.T) {
 	}
 	if !proto.Equal(in, out) {
 		t.Fatalf("round-trip changed payload: in=%v out=%v", in, out)
+	}
+}
+
+func TestStorageCompletionEventsRoundTrip(t *testing.T) {
+	now := timestamppb.Now()
+	tests := []struct {
+		name    string
+		payload proto.Message
+		new     func() proto.Message
+	}{
+		{
+			name: "dataset period collected",
+			payload: &DatasetPeriodCollected{
+				DatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1786032000,
+				Status: "degraded", SubjectIds: []string{"BTC-USDT", "ETH-USDT"},
+				FailedSubjects: []string{"ETH-USDT"}, CollectedAt: now,
+			},
+			new: func() proto.Message { return new(DatasetPeriodCollected) },
+		},
+		{
+			name: "view source period ready",
+			payload: &ViewSourcePeriodReady{
+				SourceViewId: "source_view", Frequency: "1m", PeriodTime: 1786032000,
+				Status: "degraded", Datasets: []*ViewPeriodDatasetState{{
+					DatasetId: "spot_kline", Status: "degraded", FailedSubjects: []string{"ETH-USDT"},
+				}}, PrimarySubjects: []string{"BTC-USDT"}, ReadyAt: now,
+			},
+			new: func() proto.Message { return new(ViewSourcePeriodReady) },
+		},
+		{
+			name: "factor period computed",
+			payload: &FactorPeriodComputed{
+				SourceViewId: "source_view", ResultDatasetId: "factor_result", Frequency: "1m",
+				PeriodTime: 1786032000, Status: "degraded", Bindings: []*FactorBindingPeriodState{{
+					BindingId: "binding-1", FactorId: "factor-1", Status: "degraded",
+					SkippedSubjects: []string{"ETH-USDT"}, FailedSubjects: []string{"BTC-USDT"},
+				}}, ComputedAt: now, TriggerEventId: "source-ready-1",
+			},
+			new: func() proto.Message { return new(FactorPeriodComputed) },
+		},
+		{
+			name: "view factor period ready",
+			payload: &ViewFactorPeriodReady{
+				SourceViewId: "source_view", ResultViewId: "result_view", Frequency: "1m",
+				PeriodTime: 1786032000, Status: "complete", Bindings: []*FactorBindingPeriodState{{
+					BindingId: "binding-1", FactorId: "factor-1", Status: "complete",
+				}}, ReadyAt: now,
+			},
+			new: func() proto.Message { return new(ViewFactorPeriodReady) },
+		},
+		{
+			name:    "dataset sync point",
+			payload: &DatasetSyncPoint{SyncPointId: "sync-1", RequestId: "request-1", DatasetId: "spot_kline", Source: "import"},
+			new:     func() proto.Message { return new(DatasetSyncPoint) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := proto.Marshal(tt.payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := tt.new()
+			if err := proto.Unmarshal(raw, out); err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(tt.payload, out) {
+				t.Fatalf("round-trip changed payload: in=%v out=%v", tt.payload, out)
+			}
+		})
 	}
 }

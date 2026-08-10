@@ -33,6 +33,8 @@ type ViewMetrics struct {
 	outboxOldestAge             prometheus.Gauge
 	outboxPublishErrorsTotal    prometheus.Counter
 	outboxDuplicatePublish      prometheus.Counter
+	periodWaitingDatasets       *prometheus.GaugeVec
+	readyPublishRetry           *prometheus.CounterVec
 	consumerLagSnapshot         atomic.Int64
 	consumerBoundSnapshot       atomic.Bool
 	outboxObservedSnapshot      atomic.Bool
@@ -138,6 +140,14 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_outbox", Name: "duplicate_publish_total",
 			Help: "Storage outbox publishes acknowledged as duplicates.",
 		}),
+		periodWaitingDatasets: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "period_waiting_datasets",
+			Help: "Number of datasets still missing before a View source period can be published.",
+		}, []string{"view", "frequency"}),
+		readyPublishRetry: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
+			Help: "View source/result ready event publishes that need retry.",
+		}, []string{"view", "event"}),
 		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
 	}
 	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -196,7 +206,32 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.outboxDuplicatePublish, err = registerOrReuse(registerer, metrics.outboxDuplicatePublish); err != nil {
 		return nil, err
 	}
+	if metrics.periodWaitingDatasets, err = registerOrReuse(registerer, metrics.periodWaitingDatasets); err != nil {
+		return nil, err
+	}
+	if metrics.readyPublishRetry, err = registerOrReuse(registerer, metrics.readyPublishRetry); err != nil {
+		return nil, err
+	}
 	return metrics, nil
+}
+
+// ObservePeriodWaiting records the current missing-dataset count for a View
+// period. View and frequency are the only labels so this remains bounded.
+func (m *ViewMetrics) ObservePeriodWaiting(view, frequency string, waiting int) {
+	if m == nil {
+		return
+	}
+	if waiting < 0 {
+		waiting = 0
+	}
+	m.periodWaitingDatasets.WithLabelValues(view, frequency).Set(float64(waiting))
+}
+
+func (m *ViewMetrics) ObserveReadyPublishRetry(view, event string) {
+	if m == nil {
+		return
+	}
+	m.readyPublishRetry.WithLabelValues(view, event).Inc()
 }
 
 func (m *ViewMetrics) SetConsumerBound(bound bool) {

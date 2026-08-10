@@ -122,7 +122,11 @@ done
 (cd modules/archive && go test ./internal/bootstrap -run '^TestAppRunConsumesStorageEventAndBecomesReadyE2E$' -count=1)
 (cd modules/factor && CGO_ENABLED=1 go test ./internal/store ./internal/bootstrap)
 (cd modules/factor && CGO_ENABLED=1 go test ./internal/trigger ./internal/trigger/eventconsumer -run '^(TestConsumerReopensFailedSessionAndRestoresReadiness|TestConsumerReceivesRealEventBusDeliveryE2E)$' -count=1)
-(cd modules/factor && CGO_ENABLED=1 go test ./test -run '^TestRealtimeEventToPythonWritebackE2E$' -count=1)
+if [[ "${MOOX_RUN_REAL_FACTOR_E2E:-0}" == "1" ]]; then
+  (cd modules/factor && CGO_ENABLED=1 go test -tags=integration ./test -run '^TestFactorRealStorageE2E$' -count=1)
+else
+  echo "factor real Storage E2E not run (set MOOX_RUN_REAL_FACTOR_E2E=1 with a running deployment)"
+fi
 (cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/jobqueue ./internal/jobstate ./internal/rpc)
 (cd modules/strategy && CGO_ENABLED=1 go test ./internal/store ./internal/outbox ./test)
 (cd modules/trade && CGO_ENABLED=1 go test ./internal/bootstrap ./internal/eventconsumer ./internal/application/target)

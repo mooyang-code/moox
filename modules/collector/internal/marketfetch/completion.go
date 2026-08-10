@@ -241,6 +241,7 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 			key = retryKey(payload.GetBatchId(), item.GetSubjectId(), item.GetTargetDataTime())
 		}
 		attempt := 1
+		logicalSyncPointID := payload.GetBatchId()
 		if previous, getErr := retries.Get(ctx, spaceID, key); getErr == nil && previous != nil {
 			if lateCompletion {
 				// The timeout recovery already owns this retry key. A late
@@ -254,6 +255,11 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 				continue
 			}
 			attempt = previous.Attempt + 1
+			if previous.SourceBatchID != "" {
+				// Keep the logical fence identity stable across every retry
+				// generation. BatchID is intentionally new for each attempt.
+				logicalSyncPointID = previous.SourceBatchID
+			}
 		} else if getErr != nil && !errors.Is(getErr, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("load retry item %s: %w", key, getErr)
 		}
@@ -271,7 +277,7 @@ func handleCompletion(ctx context.Context, batches *store.FetchBatchRepository, 
 		}
 		collectionItem := retryCollectionItem(original, item, key)
 		raw, _ := json.Marshal(collectionItem)
-		effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: payload.GetBatchId(), BatchKind: batch.BatchKind, DatasetID: collectionItem.DatasetID, SubjectID: collectionItem.SubjectID, Frequency: collectionItem.Frequency, TargetDataTime: target, TaskJSON: string(raw), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: item.GetErrorType(), LastErrorSummary: item.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
+		effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, DatasetID: collectionItem.DatasetID, SubjectID: collectionItem.SubjectID, Frequency: collectionItem.Frequency, TargetDataTime: target, TaskJSON: string(raw), Attempt: attempt, Status: "pending", NextRetryAt: &when, LastErrorType: item.GetErrorType(), LastErrorSummary: item.GetErrorSummary(), CreateTime: completedAt, ModifyTime: completedAt})
 	}
 	updated, err := batches.CompleteWithEffects(ctx, batch, effects)
 	if err != nil {

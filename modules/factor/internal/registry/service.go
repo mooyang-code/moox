@@ -167,6 +167,42 @@ func NewService(factors *store.FactorRepository, meta *MetadataSync, opts Option
 	return &Service{factors: factors, meta: meta, opts: opts, publisher: moduleregistry.NewSourcePublisher(filepath.Join(opts.FactorsDir, ".versions"))}
 }
 
+// EnsureSourceArtifacts reconstructs immutable Python modules from the
+// definitions stored in SQLite. The deploy directory is replaceable while the
+// database is persistent, so source artifacts are derived startup state rather
+// than deployment-owned files.
+func (s *Service) EnsureSourceArtifacts(ctx context.Context) error {
+	if s == nil || s.factors == nil || s.publisher == nil {
+		return fmt.Errorf("factor source artifact dependencies are required")
+	}
+	const pageSize = 1000
+	for page := 1; ; page++ {
+		factors, total, err := s.factors.List(ctx, store.FactorFilter{
+			Page: store.Page{Page: page, PageSize: pageSize},
+		})
+		if err != nil {
+			return fmt.Errorf("list factor source artifacts: %w", err)
+		}
+		for _, factor := range factors {
+			version, err := s.publisher.Publish(ctx, moduleregistry.ModuleSource{
+				Type: "factor", LogicalID: factor.Name, Source: []byte(factor.SourceCode),
+			})
+			if err != nil {
+				return fmt.Errorf("publish factor %q source artifact: %w", factor.FactorID, err)
+			}
+			if version.SourceHash != factor.SourceHash {
+				return fmt.Errorf("factor %q source hash mismatch: stored=%s published=%s", factor.FactorID, factor.SourceHash, version.SourceHash)
+			}
+			if err := s.factors.UpdateSourceArtifact(ctx, factor.FactorID, factor.SourceHash, version.Path); err != nil {
+				return fmt.Errorf("persist factor %q source artifact: %w", factor.FactorID, err)
+			}
+		}
+		if int64(page*pageSize) >= total {
+			return nil
+		}
+	}
+}
+
 // ImportFactorFile imports one trusted Python factor source file into SQLite.
 func (s *Service) ImportFactorFile(ctx context.Context, path string, options ImportOptions) (*domain.FactorDef, error) {
 	name, err := factorNameFromPath(path)

@@ -2,7 +2,9 @@ package command
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -54,7 +57,7 @@ var storageImportCmd = &cobra.Command{
 		opts.Format = defaultFlag(opts.Format, defaultStorageImportFormat)
 		opts.MetadataURL = defaultMetadataImportURL(opts.MetadataURL)
 		meta := httpStorageImportMetadataClient{URL: opts.MetadataURL}
-		writer := httpStorageDataWriter{URL: opts.AccessURL}
+		writer := httpStorageDataWriter{URL: opts.AccessURL, SpaceID: opts.SpaceID}
 		summary, err := runStorageImport(cmd.Context(), opts, meta, writer)
 		if err != nil {
 			return err
@@ -78,6 +81,7 @@ type storageImportOptions struct {
 	TimeColumn   string
 	SeriesTag    string
 	BatchSize    int
+	RequestID    string
 	DryRun       bool
 }
 
@@ -135,6 +139,14 @@ type storageDataWriter interface {
 	UpsertFields(context.Context, *pb.PrimaryUpsertFieldsReq) error
 }
 
+// storageImportSyncWriter is implemented by the real Access client. It is
+// optional so existing offline/test writers can continue to validate batches
+// without needing a Metadata/View service.
+type storageImportSyncWriter interface {
+	AppendDatasetSyncPoint(context.Context, *pb.DatasetSyncPointMarker) error
+	WaitViewSyncPoint(context.Context, *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error)
+}
+
 // storageFileImporter 定义一种本地数据文件格式的导入器。
 type storageFileImporter interface {
 	Format() string
@@ -151,7 +163,8 @@ type httpStorageImportMetadataClient struct {
 
 // httpStorageDataWriter 通过 tRPC 将数据写入 Access 服务。
 type httpStorageDataWriter struct {
-	URL string
+	URL     string
+	SpaceID string
 }
 
 func runStorageImport(ctx context.Context, opts storageImportOptions, meta storageImportMetadataClient, writer storageDataWriter) (storageImportSummary, error) {
@@ -263,7 +276,51 @@ func runStorageImport(ctx context.Context, opts storageImportOptions, meta stora
 		summary.Batches++
 		summary.WrittenRows += end - start
 	}
+	if syncWriter, ok := writer.(storageImportSyncWriter); ok {
+		requestID := strings.TrimSpace(opts.RequestID)
+		if requestID == "" {
+			requestID = stableStorageImportRequestID(opts, result)
+		}
+		if err := syncWriter.AppendDatasetSyncPoint(ctx, &pb.DatasetSyncPointMarker{
+			RequestId: requestID, DatasetId: opts.DatasetID, Source: "import",
+		}); err != nil {
+			return storageImportSummary{}, fmt.Errorf("append import sync point: %w", err)
+		}
+		if opts.ViewID != "" {
+			rsp, err := syncWriter.WaitViewSyncPoint(ctx, &pb.WaitViewSyncPointReq{
+				SpaceId: opts.SpaceID, ViewId: opts.ViewID, RequestId: requestID,
+				DatasetIds: []string{opts.DatasetID}, WaitTimeoutMs: 30000,
+			})
+			if err != nil {
+				return storageImportSummary{}, fmt.Errorf("wait view sync point: %w", err)
+			}
+			if rsp == nil || !rsp.GetReady() {
+				return storageImportSummary{}, fmt.Errorf("view %s did not apply import sync point", opts.ViewID)
+			}
+		}
+	}
 	return summary, nil
+}
+
+func stableStorageImportRequestID(opts storageImportOptions, result storageImportParseResult) string {
+	// Include the canonical parsed rows, not only the path and row count. A
+	// modified file with the same number of rows must receive a new fence;
+	// otherwise the old View sync-point would make a subsequent Recalc race
+	// ahead of the newly written rows.
+	h := sha256.New()
+	for _, value := range []string{opts.SpaceID, opts.DatasetID, opts.SubjectID, opts.Freq, opts.SeriesTag, opts.File, strconv.Itoa(result.Stats.ValidatedRows)} {
+		_, _ = fmt.Fprintf(h, "%d:%s;", len(value), value)
+	}
+	for _, row := range result.Rows {
+		raw, err := (proto.MarshalOptions{Deterministic: true}).Marshal(row)
+		if err != nil {
+			// Parsed rows are already protobuf values; this is defensive only.
+			continue
+		}
+		_, _ = fmt.Fprintf(h, "%d:", len(raw))
+		_, _ = h.Write(raw)
+	}
+	return "import-" + hex.EncodeToString(h.Sum(nil)[:16])
 }
 
 func writeStorageImportRows(ctx context.Context, writer storageDataWriter, req *pb.PrimaryUpsertFieldsReq, allowMetadataRetry bool) error {
@@ -781,6 +838,18 @@ func (w httpStorageDataWriter) UpsertFields(ctx context.Context, req *pb.Primary
 	return postStorage(ctx, w.URL, accessServiceName, "UpsertFields", req, &pb.PrimaryUpsertFieldsRsp{})
 }
 
+func (w httpStorageDataWriter) AppendDatasetSyncPoint(ctx context.Context, marker *pb.DatasetSyncPointMarker) error {
+	return postStorage(ctx, w.URL, accessServiceName, "AppendDatasetSyncPoint", &pb.AppendDatasetSyncPointReq{SpaceId: w.SpaceID, SyncPoint: marker}, &pb.AppendDatasetSyncPointRsp{})
+}
+
+func (w httpStorageDataWriter) WaitViewSyncPoint(ctx context.Context, req *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error) {
+	rsp := &pb.WaitViewSyncPointRsp{}
+	if err := postStorage(ctx, w.URL, accessServiceName, "WaitViewSyncPoint", req, rsp); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func storageImportUpserts(rows []*pb.TimeSeriesRow) []*pb.RowFieldUpsert {
 	out := make([]*pb.RowFieldUpsert, 0, len(rows))
 	for _, row := range rows {
@@ -817,5 +886,6 @@ func init() {
 	storageImportCmd.Flags().StringVar(&storageImportFlags.TimeColumn, "time-column", "candle_begin_time", "CSV 时间列名")
 	storageImportCmd.Flags().StringVar(&storageImportFlags.SeriesTag, "series-tag", "", "序列标签；为空表示默认序列")
 	storageImportCmd.Flags().IntVar(&storageImportFlags.BatchSize, "batch-size", defaultStorageImportBatchSize, "每批写入行数")
+	storageImportCmd.Flags().StringVar(&storageImportFlags.RequestID, "request-id", "", "可选的稳定导入请求 ID；重试同一请求可复用")
 	storageImportCmd.Flags().BoolVar(&storageImportFlags.DryRun, "dry-run", false, "只校验并输出导入计划，不绑定 subject，不写入数据")
 }

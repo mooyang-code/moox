@@ -142,6 +142,34 @@ func TestLoadValidManifest(t *testing.T) {
 	require.NoError(t, snapshot.VerifyUnchanged())
 }
 
+func TestLoadFactorSetupDefaultsAndItems(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "./examples/factors"
+
+[[factors.items]]
+factor_id = "bias"
+file = "timeseries/bias.py"
+input_columns = ["close"]
+outputs = ["bias_5"]
+params_json = '{"windows":[5]}'
+lookback_periods = 5
+space_id = "crypto_market"
+source_view_id = "binance_spot_kline_1m_view"
+freq = "1m"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Manifest.Factors.Enabled)
+	assert.Equal(t, "examples/factors", snapshot.Manifest.Factors.SourceDir)
+	require.Len(t, snapshot.Manifest.Factors.Items, 1)
+	assert.Equal(t, "bias", snapshot.Manifest.Factors.Items[0].FactorID)
+	assert.Equal(t, "all", snapshot.Manifest.Factors.Items[0].SubjectMode)
+	assert.Equal(t, "enabled", snapshot.Manifest.Factors.Items[0].Status)
+}
+
 func TestLoadMonitoringWeComWebhook(t *testing.T) {
 	root := t.TempDir()
 	body := strings.Replace(validManifest, "[control_host]", `[monitoring]

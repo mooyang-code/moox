@@ -630,6 +630,10 @@ func (s *Scheduler) recoverDue(ctx context.Context, spaceID string, nodes []scfi
 		if err := json.Unmarshal([]byte(batch.RequestJSON), &request); err != nil {
 			continue
 		}
+		logicalSyncPointID := strings.TrimSpace(request.SyncPointID)
+		if logicalSyncPointID == "" {
+			logicalSyncPointID = batch.BatchID
+		}
 		effects := store.FetchCompletionEffects{}
 		for _, item := range request.Items {
 			raw, _ := json.Marshal(item)
@@ -642,7 +646,7 @@ func (s *Scheduler) recoverDue(ctx context.Context, spaceID string, nodes []scfi
 			if key == "" {
 				key = retryKey(batch.BatchID, item.SubjectID, item.TargetDataTime)
 			}
-			effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: batch.BatchID, BatchKind: batch.BatchKind, RuleID: batch.RuleID, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: item.Frequency, TargetDataTime: target, TaskJSON: string(raw), Attempt: batch.Attempt, Status: "pending", NextRetryAt: &next, LastErrorType: "scf_completion_timeout", LastErrorSummary: "SCF completion event deadline exceeded", CreateTime: now, ModifyTime: now})
+			effects.Retries = append(effects.Retries, &domain.RetryItem{SpaceID: spaceID, RetryKey: key, SourceBatchID: logicalSyncPointID, BatchKind: batch.BatchKind, RuleID: batch.RuleID, DatasetID: item.DatasetID, SubjectID: item.SubjectID, Frequency: item.Frequency, TargetDataTime: target, TaskJSON: string(raw), Attempt: batch.Attempt, Status: "pending", NextRetryAt: &next, LastErrorType: "scf_completion_timeout", LastErrorSummary: "SCF completion event deadline exceeded", CreateTime: now, ModifyTime: now})
 		}
 		updated, err := s.Batches.CompleteWithEffects(ctx, &batch, effects)
 		if err != nil {
@@ -698,7 +702,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		if batchKind == "" {
 			batchKind = domain.BatchKindRealtime
 		}
-		req := Request{BatchID: batchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
 		raw, _ := json.Marshal(req)
 		if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")

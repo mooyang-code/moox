@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 func (s *Service) initLiveGate() {
@@ -30,6 +31,72 @@ func (s *Service) releaseLiveDelivery() {
 func (s *Service) releaseBackfill() {
 	s.initLiveGate()
 	s.liveGate.releaseWrite()
+}
+
+// acquireActivationFence waits until the durable has no server-side backlog,
+// then excludes live deliveries while metadata and the in-memory active index
+// switch together. When the old physical active index is already unavailable,
+// a READY replacement is the recovery authority; waiting for the pending row
+// would deadlock activation, so the live lease itself becomes the fence.
+func (s *Service) acquireActivationFence(ctx context.Context, spaceID, viewID, buildID string) error {
+	s.mu.RLock()
+	state := s.consumerState
+	s.mu.RUnlock()
+	bypassConsumerFence, err := s.replacementCanBypassConsumerFence(ctx, spaceID, viewID, buildID)
+	if err != nil {
+		return err
+	}
+	if state != nil && !bypassConsumerFence {
+		for {
+			consumerState, err := state(ctx)
+			if err == nil && consumerState.NumPending == 0 && consumerState.NumAckPending == 0 {
+				break
+			}
+			timer := time.NewTimer(50 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				if err != nil {
+					return errors.Join(ctx.Err(), err)
+				}
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return s.acquireBackfill(ctx)
+}
+
+func (s *Service) replacementCanBypassConsumerFence(ctx context.Context, spaceID, viewID, buildID string) (bool, error) {
+	s.mu.RLock()
+	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
+	s.mu.RUnlock()
+	if runtime == nil {
+		return false, nil
+	}
+	runtime.mu.Lock()
+	activeID, nextID := runtime.active, runtime.next
+	runtime.mu.Unlock()
+	if nextID == "" || (buildID != "" && nextID != buildID) {
+		return false, nil
+	}
+	nextEngine, err := s.engineFor(nextID)
+	if err != nil {
+		return false, nil
+	}
+	nextStats, err := nextEngine.Stat(ctx, nextID)
+	if err != nil || !nextStats.Exists {
+		return false, nil
+	}
+	if activeID == "" {
+		return true, nil
+	}
+	activeEngine, err := s.engineFor(activeID)
+	if err != nil {
+		return true, nil
+	}
+	activeStats, err := activeEngine.Stat(ctx, activeID)
+	return err != nil || !activeStats.Exists, nil
 }
 
 type liveLeaseGate struct {

@@ -2,7 +2,7 @@
 
 ## Preconditions
 
-- Storage 与 Factor 使用同一 EventBus，`factor_calc` Consumer 已由拓扑初始化。
+- Storage 与 Factor 使用同一 EventBus，`factor_view_ready_v1` Consumer 已由拓扑初始化。
 - `moox-factor` 能访问 `factors/`、SQLite 和 Storage Gateway。
 - source time-series Dataset/freq 存在 enabled Factor 与 enabled Binding；Factor 显式
   声明完整 `input_columns`，不要求 OHLCV。
@@ -10,24 +10,28 @@
 ## Live Check
 
 1. 启动 EventBus、Storage、Factor 与 Collector。
-2. 向 source 写入一个含两行的 `DatasetRowsUpserted`，例如同一组合的
-   `nav/benchmark_return`，时间分别为整秒和 `+1ns`。
-3. 确认 Factor 收到 `DatasetRowsUpserted`，日志出现 `factor_task_done`。
+2. 等待 View 为 source period 发布 `ViewSourcePeriodReady`。
+3. 确认 Factor 收到 ready 事件，日志出现 `factor_task_done`。
 4. 在目标 Factor Dataset 查询两个 `data_time`，确认半开范围
    `[first, second+1ns)` 的声明输出列均已写入。
-5. 查看 `GetEngineStatus` 的 `queue_depth` 回到 0。
-6. 制造超过 `queue_capacity` 的不同 scope，确认
-   `queue_overflow_count` 增加并记录 task lost 日志。
+5. 查看 `GetEngineStatus`：`python_workers` 等于配置；View RPC 等待期间不增加
+   `active_tasks`，周期结束后 `active_tasks` 与 `pending_tasks` 都回到 0。
+6. 为同一周期配置多个 subject 和多个 Factor，确认日志中的 View read 并发不超过
+   `view_read_workers`，Python 最大并发不超过 `python_workers`，且同一 subject 的不同
+   Factor 可以并行。
+7. 确认相同 subject/period/lookback/trigger 的 Factor 只有一次
+   `factor_view_read_done`，其 `column_count` 是输入列并集；制造一次读取超时后，日志先
+   出现 `retry_position=tail`，其他 subject 仍继续读取和计算。
 
 ## Recovery Check
 
-在事件已 ACK、batch 尚未执行时停止 Factor。重启后该 task 不会自动恢复，这是预期的
-best-effort 行为。使用 `moox-factor-cli run-once` 对相同半开范围补算，并确认结果写回。
+在组合任务执行中停止 Factor。该 source-ready 尚未 ACK，重启后 durable consumer 会
+重投；确认所有组合终态并提交结果 Marker 后才 ACK。无法自动恢复的历史范围使用
+`moox-factor-cli run-once` 或 Recalc 补算。
 
-自动化 `TestRealtimeEventToPythonWritebackE2E` 使用真实 embedded JetStream、
-EventMessage、Factor Consumer、EventBatcher、Scheduler 和 PythonExecutor，但
-StorageIO 是确定性的 fake，用于精确断言只请求 `nav/benchmark_return`、一次 Python
-调用返回两个 output 且两行均写回。
+自动化 Factor 测试使用 embedded JetStream、`ViewSourcePeriodReady`、Factor Consumer、
+TaskRunner、独立 View read pool 和 PythonWorkerPool；StorageIO fake 用于精确断言共享
+读取、滑动窗口、超时队尾重试、列投影和写回。
 
 真实部署验收使用：
 
@@ -43,6 +47,6 @@ MOOX_DEPLOY_ROOT=/absolute/path/to/running/moox \
 测试清理先调用 `DeleteBinding`、`DeleteFactor`，再通过 `DataNodeRuntime` 清空
 source/target Dataset 的物理桶，最后 `DeleteSpace`；任一步失败都会令验收失败。
 
-Realtime 仍是 best-effort：Consumer 在加入内存 batcher 后 ACK，进程退出可丢尚未
-执行的任务。没有持久化 inbox、自动 replay 或 exactly-once；修复方式仍是对明确的
-半开范围执行同步 `run-once`/`RecalcFactor`。
+Realtime 由 durable View-ready consumer 在计算和结果 marker 提交后 ACK；失败消息按
+consumer policy 重投。系统仍不承诺跨服务 exactly-once；修复方式是对明确的半开范围
+执行同步 `run-once`/`RecalcFactor`。

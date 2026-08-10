@@ -29,14 +29,14 @@ type ExecutorStatus struct {
 	RuntimeEnvHash string
 }
 
-// PythonExecutor owns the small local pool of Python factor workers.
-type PythonExecutor struct {
+// PythonWorkerPool owns the local pool of Python factor workers.
+type PythonWorkerPool struct {
 	workers int
 	pool    *pool.Pool
 	hello   protocol.Hello
 }
 
-func NewPythonExecutor(ctx context.Context, workers int, cfg process.Config) (*PythonExecutor, error) {
+func NewPythonWorkerPool(ctx context.Context, workers int, cfg process.Config) (*PythonWorkerPool, error) {
 	if workers < 1 {
 		workers = 1
 	}
@@ -52,12 +52,12 @@ func NewPythonExecutor(ctx context.Context, workers int, cfg process.Config) (*P
 	p := pool.New(workers, func(start context.Context) (process.Worker, error) {
 		return process.NewStdioWorker(start, cfg)
 	})
-	hello, err := p.Warmup(ctx)
+	hello, err := p.WarmupOne(ctx)
 	if err != nil {
 		_ = p.Close()
 		return nil, err
 	}
-	return &PythonExecutor{workers: workers, pool: p, hello: hello}, nil
+	return &PythonWorkerPool{workers: workers, pool: p, hello: hello}, nil
 }
 
 func validateRuntimeConfig(cfg process.Config) error {
@@ -88,7 +88,7 @@ func validateRuntimeConfig(cfg process.Config) error {
 	return nil
 }
 
-func (e *PythonExecutor) Execute(ctx context.Context, task *FactorTask, frame *DataFrame) (*FactorResult, error) {
+func (e *PythonWorkerPool) Execute(ctx context.Context, task *FactorTask, frame *DataFrame) (*FactorResult, error) {
 	meta, err := EncodeJSONRequestMeta(task, frame)
 	if err != nil {
 		return nil, err
@@ -112,12 +112,7 @@ func (e *PythonExecutor) Execute(ctx context.Context, task *FactorTask, frame *D
 			Path: factor.SourcePath, ModuleType: "factor",
 		})
 	}
-	var response process.RunResult
-	if len(loads) > 0 {
-		response, err = e.pool.RunLoadedMany(ctx, task.SubjectID, loads, run)
-	} else {
-		response, err = e.pool.Run(ctx, pool.Request{ShardKey: task.SubjectID, Run: run})
-	}
+	response, err := e.pool.RunAnyLoadedMany(ctx, loads, run)
 	if err != nil {
 		return nil, err
 	}
@@ -128,18 +123,18 @@ func (e *PythonExecutor) Execute(ctx context.Context, task *FactorTask, frame *D
 	return DecodeJSONResponse(out)
 }
 
-func (e *PythonExecutor) Status() ExecutorStatus {
+func (e *PythonWorkerPool) Status() ExecutorStatus {
 	if e == nil {
 		return ExecutorStatus{}
 	}
 	return ExecutorStatus{
-		Workers: e.workers, Ready: e.hello.WorkerVersion != "" && e.pool.Ready(),
+		Workers: e.workers, Ready: e.hello.WorkerVersion != "" && e.pool.ReadyStarted(),
 		WorkerVersion: e.hello.WorkerVersion, PythonVersion: e.hello.PythonVersion,
 		RuntimeEnvHash: e.hello.RuntimeEnvHash,
 	}
 }
 
-func (e *PythonExecutor) Close() error {
+func (e *PythonWorkerPool) Close() error {
 	if e == nil || e.pool == nil {
 		return nil
 	}

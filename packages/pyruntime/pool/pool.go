@@ -16,41 +16,50 @@ type Request struct {
 	Run      process.RunRequest
 }
 type Pool struct {
-	workers []*process.Supervisor
-	next    uint64
-	mu      sync.Mutex
+	workers   []*process.Supervisor
+	available chan int
+	next      uint64
+	mu        sync.Mutex
 }
 
 func New(n int, f Factory) *Pool {
 	if n < 1 {
 		n = 1
 	}
-	p := &Pool{}
+	p := &Pool{available: make(chan int, n)}
 	for i := 0; i < n; i++ {
 		p.workers = append(p.workers, process.NewSupervisor(process.Factory(f), process.SupervisorConfig{}))
+		p.available <- i
 	}
 	return p
 }
 
-// Warmup starts every worker and validates that each one completed the Python
-// hello handshake before the owning service reports readiness.
+// RunAnyLoadedMany waits for any free worker, runs the request, and returns the
+// worker to the pool. It is intended for workloads that do not need affinity.
+func (p *Pool) RunAnyLoadedMany(ctx context.Context, loads []process.LoadRequest, run process.RunRequest) (process.RunResult, error) {
+	if p == nil || len(p.workers) == 0 {
+		return process.RunResult{}, errors.New("pyruntime: empty pool")
+	}
+	select {
+	case index := <-p.available:
+		defer func() { p.available <- index }()
+		return p.workers[index].RunLoadedMany(ctx, loads, run)
+	case <-ctx.Done():
+		return process.RunResult{}, ctx.Err()
+	}
+}
+
+// Warmup starts every worker and validates that each worker exposes matching
+// runtime metadata. Callers that want lazy capacity should use WarmupOne.
 func (p *Pool) Warmup(ctx context.Context) (protocol.Hello, error) {
 	if p == nil || len(p.workers) == 0 {
 		return protocol.Hello{}, errors.New("pyruntime: empty pool")
 	}
 	var first protocol.Hello
 	for i, supervisor := range p.workers {
-		worker, err := supervisor.Ensure(ctx)
+		hello, err := warmupSupervisor(ctx, supervisor, i)
 		if err != nil {
-			return protocol.Hello{}, fmt.Errorf("warm up worker %d: %w", i, err)
-		}
-		provider, ok := worker.(interface{ Hello() protocol.Hello })
-		if !ok {
-			return protocol.Hello{}, fmt.Errorf("warm up worker %d: hello metadata unavailable", i)
-		}
-		hello := provider.Hello()
-		if hello.WorkerVersion == "" || hello.PythonVersion == "" {
-			return protocol.Hello{}, fmt.Errorf("warm up worker %d: worker and python versions are required", i)
+			return protocol.Hello{}, err
 		}
 		if i == 0 {
 			first = hello
@@ -63,9 +72,31 @@ func (p *Pool) Warmup(ctx context.Context) (protocol.Hello, error) {
 	return first, nil
 }
 
-// Ready reports whether every supervised worker has completed startup and is
-// still alive. Busy workers remain ready; only starting/dead workers degrade
-// the runtime readiness signal.
+// WarmupOne validates one worker while leaving remaining capacity lazy.
+func (p *Pool) WarmupOne(ctx context.Context) (protocol.Hello, error) {
+	if p == nil || len(p.workers) == 0 {
+		return protocol.Hello{}, errors.New("pyruntime: empty pool")
+	}
+	return warmupSupervisor(ctx, p.workers[0], 0)
+}
+
+func warmupSupervisor(ctx context.Context, supervisor *process.Supervisor, index int) (protocol.Hello, error) {
+	worker, err := supervisor.Ensure(ctx)
+	if err != nil {
+		return protocol.Hello{}, fmt.Errorf("warm up worker %d: %w", index, err)
+	}
+	provider, ok := worker.(interface{ Hello() protocol.Hello })
+	if !ok {
+		return protocol.Hello{}, fmt.Errorf("warm up worker %d: hello metadata unavailable", index)
+	}
+	hello := provider.Hello()
+	if hello.WorkerVersion == "" || hello.PythonVersion == "" {
+		return protocol.Hello{}, fmt.Errorf("warm up worker %d: worker and python versions are required", index)
+	}
+	return hello, nil
+}
+
+// Ready reports whether every configured worker is running and healthy.
 func (p *Pool) Ready() bool {
 	if p == nil || len(p.workers) == 0 {
 		return false
@@ -77,6 +108,23 @@ func (p *Pool) Ready() bool {
 		}
 	}
 	return true
+}
+
+// ReadyStarted reports whether a lazily warmed pool has at least one usable
+// worker and no slot has entered a permanent crash loop.
+func (p *Pool) ReadyStarted() bool {
+	if p == nil || len(p.workers) == 0 {
+		return false
+	}
+	ready := false
+	for _, supervisor := range p.workers {
+		state := supervisor.State()
+		if state == process.StateDead {
+			return false
+		}
+		ready = ready || state == process.StateReady || state == process.StateBusy
+	}
+	return ready
 }
 func (p *Pool) Run(ctx context.Context, r Request) (process.RunResult, error) {
 	idx, err := p.pick(r.ShardKey)

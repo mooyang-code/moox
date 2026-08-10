@@ -26,6 +26,7 @@ type cliConfig struct {
 	LookbackPeriods   int
 	SpaceID           string
 	DatasetID         string
+	ViewID            string
 	SubjectID         string
 	Freq              string
 	StartTime         time.Time
@@ -107,6 +108,7 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.FactorsDir, "factors-dir", "", "factor source directory (overrides config)")
 		fs.StringVar(&cfg.SpaceID, "space", "", "space id")
 		fs.StringVar(&cfg.DatasetID, "dataset", "", "source dataset id")
+		fs.StringVar(&cfg.ViewID, "view-id", "", "source View id (defaults to dataset id)")
 		fs.StringVar(&cfg.SubjectID, "subject", "", "subject id")
 		fs.StringVar(&cfg.Freq, "freq", "", "frequency")
 		fs.StringVar(&startTime, "start-time", "", "inclusive start time RFC3339")

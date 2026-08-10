@@ -313,11 +313,11 @@ type whereClause struct {
 
 func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[string]pb.FieldValueType, spaceID, datasetID string, spec viewindex.QuerySpec, where string, args []any) ([]*pb.RowFieldValues, error) {
 	selectColumns := []string{"subject_id", "freq", "data_time", "series_tag"}
-	for name := range columns {
-		if !isSystemColumn(name) && (len(spec.Includes) == 0 || contains(spec.Includes, name)) {
-			selectColumns = append(selectColumns, name)
-		}
+	projected, err := resolveIncludedColumns(columns, spec.Includes)
+	if err != nil {
+		return nil, err
 	}
+	selectColumns = append(selectColumns, projected...)
 	sort.Strings(selectColumns[4:])
 	query := "SELECT " + joinQuoted(selectColumns) + " FROM view_rows" + where
 	query += orderSQL(spec.Sorts, spec.Order, columns)
@@ -353,6 +353,12 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		for index, name := range selectColumns[4:] {
 			value := values[index+4]
 			if value == nil {
+				if len(spec.Includes) == 0 {
+					continue
+				}
+				row.Fields = append(row.Fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{
+					Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL},
+				}})
 				continue
 			}
 			typed, err := dbToTypedValue(value, columns[name])
@@ -364,6 +370,44 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+func resolveIncludedColumns(columns map[string]pb.FieldValueType, includes []string) ([]string, error) {
+	if len(includes) == 0 {
+		selected := make([]string, 0, len(columns))
+		for name := range columns {
+			if !isSystemColumn(name) {
+				selected = append(selected, name)
+			}
+		}
+		return selected, nil
+	}
+	selected := make(map[string]struct{}, len(includes))
+	for _, include := range includes {
+		if _, ok := columns[include]; ok && !isSystemColumn(include) {
+			selected[include] = struct{}{}
+			continue
+		}
+		matches := make([]string, 0, 1)
+		for name := range columns {
+			if !isSystemColumn(name) && strings.HasSuffix(name, "."+include) {
+				matches = append(matches, name)
+			}
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("View column %q is not projected", include)
+		}
+		if len(matches) > 1 {
+			sort.Strings(matches)
+			return nil, fmt.Errorf("View column %q is ambiguous: %s", include, strings.Join(matches, ", "))
+		}
+		selected[matches[0]] = struct{}{}
+	}
+	result := make([]string, 0, len(selected))
+	for name := range selected {
+		result = append(result, name)
+	}
+	return result, nil
 }
 
 func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, error) {

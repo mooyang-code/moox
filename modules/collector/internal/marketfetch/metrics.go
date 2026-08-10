@@ -13,6 +13,8 @@ type Metrics struct {
 	assignmentHealthy     *prometheus.GaugeVec
 	timerAvailable        *prometheus.GaugeVec
 	assignmentErrors      *prometheus.CounterVec
+	periodPending         *prometheus.GaugeVec
+	periodReportRetry     *prometheus.CounterVec
 }
 
 // SetDatasetRunObserver is retained as a no-op for the manual/catchup helper
@@ -28,6 +30,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		assignmentHealthy:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_healthy", Help: "Whether the latest Timer assignment reconciliation completed (1 healthy, 0 failed)."}, []string{"space_id"}),
 		timerAvailable:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_timer_available", Help: "Tencent Timer trigger availability for Collector nodes (1 available, 0 unavailable, -1 unknown)."}, []string{"space_id", "node_id", "enabled"}),
 		assignmentErrors:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_fetch_assignment_errors_total", Help: "Timer assignment reconciliation errors."}, []string{"space_id", "reason"}),
+		periodPending:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_period_pending_total", Help: "Collector periods waiting to be reported."}, []string{"dataset", "frequency"}),
+		periodReportRetry:     prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_period_report_retry_total", Help: "Collector period report attempts that need retry."}, []string{"dataset", "frequency"}),
 	}
 	metrics.assignmentRequired = registerGaugeVec(reg, metrics.assignmentRequired)
 	metrics.assignmentActive = registerGaugeVec(reg, metrics.assignmentActive)
@@ -35,6 +39,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	metrics.assignmentHealthy = registerGaugeVec(reg, metrics.assignmentHealthy)
 	metrics.timerAvailable = registerGaugeVec(reg, metrics.timerAvailable)
 	metrics.assignmentErrors = registerCounterVec(reg, metrics.assignmentErrors)
+	metrics.periodPending = registerGaugeVec(reg, metrics.periodPending)
+	metrics.periodReportRetry = registerCounterVec(reg, metrics.periodReportRetry)
 	return metrics
 }
 
@@ -140,6 +146,26 @@ func (m *Metrics) ObserveTimerState(spaceID, nodeID, enabled string, value float
 		value = 1
 	}
 	m.timerAvailable.WithLabelValues(spaceID, nodeID, enabled).Set(value)
+}
+
+// ObservePeriodPending exposes the number of report-pending periods for one
+// Dataset/frequency pair. Labels intentionally omit subject and period to keep
+// the metric useful for a single-user deployment without high cardinality.
+func (m *Metrics) ObservePeriodPending(dataset, frequency string, pending int) {
+	if m == nil {
+		return
+	}
+	if pending < 0 {
+		pending = 0
+	}
+	m.periodPending.WithLabelValues(dataset, frequency).Set(float64(pending))
+}
+
+func (m *Metrics) ObservePeriodReportRetry(dataset, frequency string) {
+	if m == nil {
+		return
+	}
+	m.periodReportRetry.WithLabelValues(dataset, frequency).Inc()
 }
 
 // Observe and SetRetryPending remain no-ops for the retired completion-based

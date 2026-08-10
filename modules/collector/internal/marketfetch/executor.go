@@ -39,7 +39,11 @@ const (
 
 // Request is the JSON payload accepted by a market_fetch SCF invocation.
 type Request struct {
-	BatchID      string                           `json:"batch_id"`
+	BatchID string `json:"batch_id"`
+	// SyncPointID is the stable logical catchup fence identity. Retry batches
+	// get a new BatchID for outbox/write idempotency, but must keep the
+	// original request ID so a later Recalc can wait on the same fence.
+	SyncPointID  string                           `json:"sync_point_id,omitempty"`
 	ScheduleID   string                           `json:"schedule_id,omitempty"`
 	BatchKind    domain.BatchKind                 `json:"batch_kind"`
 	SpaceID      string                           `json:"space_id"`
@@ -121,6 +125,10 @@ type Storage interface {
 
 type sourceStorage interface {
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
+}
+
+type syncPointStorage interface {
+	AppendDatasetSyncPoint(context.Context, string, string, string, string) error
 }
 
 type symbolReconciler interface {
@@ -289,6 +297,31 @@ func (e *Executor) Execute(ctx context.Context, req Request) (*marketfetchpb.Mar
 		}
 	}
 	if writeErr == nil {
+		if req.BatchKind == domain.BatchKindCatchup {
+			// A catchup fence is meaningful only after at least one row from
+			// every item was committed. Empty or failed upstream results must
+			// remain retryable and cannot make View report imported data ready.
+			committed := len(rows) > 0
+			for index, result := range results {
+				if result.Outcome != domain.ItemOutcomeSuccess || rowCountByItem[index] == 0 {
+					committed = false
+					break
+				}
+			}
+			if committed {
+				syncStorage, ok := e.Storage.(syncPointStorage)
+				if !ok {
+					return nil, fmt.Errorf("catchup storage does not support dataset sync points")
+				}
+				syncPointID := strings.TrimSpace(req.SyncPointID)
+				if syncPointID == "" {
+					syncPointID = req.BatchID
+				}
+				if err := syncStorage.AppendDatasetSyncPoint(commitCtx, req.SpaceID, req.DatasetID, syncPointID, "catchup"); err != nil {
+					return nil, fmt.Errorf("append catchup dataset sync point: %w", err)
+				}
+			}
+		}
 		if err := registerSymbols(commitCtx, e.Storage, registrations); err != nil {
 			for index := range results {
 				if results[index].Outcome == domain.ItemOutcomeSuccess {

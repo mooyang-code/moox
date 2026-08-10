@@ -51,10 +51,12 @@ func (f fakeSnapshotSymbols) FetchSymbolSnapshot(context.Context, *sources.Colle
 }
 
 type fakeStorage struct {
-	rows      int
-	commits   int
-	registers int
-	err       error
+	rows         int
+	commits      int
+	registers    int
+	syncPoints   int
+	syncPointIDs []string
+	err          error
 }
 
 type fakeReconcilingStorage struct {
@@ -74,6 +76,12 @@ func (f *fakeStorage) UpsertFields(_ context.Context, rows []*storagepb.RowField
 
 func (f *fakeStorage) RegisterDataSubject(context.Context, *storagepb.RegisterDataSubjectReq) error {
 	f.registers++
+	return f.err
+}
+
+func (f *fakeStorage) AppendDatasetSyncPoint(_ context.Context, _ string, _ string, requestID string, _ string) error {
+	f.syncPoints++
+	f.syncPointIDs = append(f.syncPointIDs, requestID)
 	return f.err
 }
 
@@ -159,8 +167,41 @@ func TestExecutorSupportsSymbolSnapshotAndCatchupBatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if catchupPayload.GetStatus() != "succeeded" || klines.calls.Load() != 1 {
-		t.Fatalf("catchup payload=%s calls=%d", catchupPayload.GetStatus(), klines.calls.Load())
+	if catchupPayload.GetStatus() != "succeeded" || klines.calls.Load() != 1 || storage.syncPoints != 1 {
+		t.Fatalf("catchup payload=%s calls=%d sync_points=%d", catchupPayload.GetStatus(), klines.calls.Load(), storage.syncPoints)
+	}
+	assert.Equal(t, []string{"catchup"}, storage.syncPointIDs)
+}
+
+func TestExecutorKeepsLogicalCatchupSyncPointAcrossRetryBatch(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Hour)
+	storage := &fakeStorage{}
+	klines := &fakeKlines{rows: []*storagepb.RowFieldUpsert{{}}}
+	executor := &Executor{Klines: klines, Catchup: klines, Symbols: fakeSymbols{}, Storage: storage}
+	_, err := executor.Execute(context.Background(), Request{BatchID: "retry-b1", SyncPointID: "initial-b0", SpaceID: "crypto", DatasetID: "bars", BatchKind: domain.BatchKindCatchup, Provider: "binance", MarketType: "spot", Frequency: "1m", Items: []domain.CollectionItem{{DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", StartTime: start.Format(time.RFC3339Nano), BarLimit: 1000}}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"initial-b0"}, storage.syncPointIDs)
+}
+
+func TestExecutorDoesNotAppendCatchupSyncPointForEmptyOrFailedFetch(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	for name, klines := range map[string]*fakeKlines{
+		"empty":  {rows: nil},
+		"failed": {err: errors.New("upstream timeout")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			storage := &fakeStorage{}
+			executor := &Executor{Klines: klines, Catchup: klines, Symbols: fakeSymbols{}, Storage: storage}
+			payload, err := executor.Execute(context.Background(), Request{
+				BatchID: "catchup-" + name, SpaceID: "crypto", DatasetID: "bars", BatchKind: domain.BatchKindCatchup,
+				Provider: "binance", MarketType: "spot", Frequency: "1m",
+				Items: []domain.CollectionItem{{DataType: "kline", DatasetID: "bars", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", StartTime: start, BarLimit: 1000}},
+			})
+			require.NoError(t, err)
+			require.NotEqual(t, "succeeded", payload.GetStatus())
+			assert.Zero(t, storage.commits)
+			assert.Zero(t, storage.syncPoints, "failed catchup must not create a View fence")
+		})
 	}
 }
 

@@ -1,4 +1,4 @@
-package scheduler
+package taskrunner
 
 import (
 	"errors"
@@ -11,18 +11,30 @@ import (
 )
 
 type TaskScope struct {
-	TaskID        string
-	TriggerType   string
-	SpaceID       string
-	SourceDataset string
-	TargetDataset string
-	SubjectID     string
-	Freq          string
-	StartTime     time.Time
-	EndTime       time.Time
+	TaskID          string
+	BindingID       string
+	TriggerType     string
+	SpaceID         string
+	SourceViewID    string
+	ResultDatasetID string
+	SourceDataset   string
+	TargetDataset   string
+	SubjectID       string
+	Freq            string
+	PeriodTime      int64
+	TriggerEventID  string
+	TriggeredAt     time.Time
+	StartTime       time.Time
+	EndTime         time.Time
 }
 
 func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Task, error) {
+	if scope.SourceViewID == "" {
+		scope.SourceViewID = scope.SourceDataset
+	}
+	if scope.ResultDatasetID == "" {
+		scope.ResultDatasetID = scope.TargetDataset
+	}
 	if scope.StartTime.IsZero() || scope.EndTime.IsZero() || !scope.StartTime.Before(scope.EndTime) {
 		return Task{}, errors.New("valid start_time and end_time are required")
 	}
@@ -41,8 +53,11 @@ func BuildTask(scope TaskScope, factor domain.FactorDef, factorsDir string) (Tas
 	}
 	return Task{
 		FactorTask: engine.FactorTask{
-			TaskID: scope.TaskID, SpaceID: scope.SpaceID, SourceDataset: scope.SourceDataset,
-			TargetDataset: scope.TargetDataset, SubjectID: scope.SubjectID, Freq: scope.Freq,
+			TaskID: scope.TaskID, BindingID: scope.BindingID, SpaceID: scope.SpaceID,
+			SourceViewID: scope.SourceViewID, ResultDatasetID: scope.ResultDatasetID,
+			SourceDataset: scope.SourceViewID, TargetDataset: scope.ResultDatasetID,
+			SubjectID: scope.SubjectID, Freq: scope.Freq, PeriodTime: scope.PeriodTime,
+			TriggerEventID: scope.TriggerEventID, TriggeredAt: scope.TriggeredAt.UTC(),
 			StartTime: scope.StartTime.UTC(), EndTime: scope.EndTime.UTC(),
 			LookbackPeriods: factor.LookbackPeriods,
 			Factor: engine.FactorSpec{

@@ -11,6 +11,8 @@ trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
+cp "${ROOT}/scripts/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-check.sh"
+cp "${ROOT}/scripts/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-rotate.sh"
 ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-caddy-ca.sh"
 ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-managed.sh"
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
@@ -52,6 +54,9 @@ mkdir "${TMP_ROOT}/unpacked"
 tar -C "${TMP_ROOT}/unpacked" -xzf "${ARCHIVE}"
 for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-cli; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing storage binary: ${binary}" >&2; exit 1; }
+done
+for helper in moox-storage-auth-check moox-storage-auth-rotate; do
+  [[ -x "${TMP_ROOT}/unpacked/bin/${helper}" ]] || { echo "missing storage auth helper: ${helper}" >&2; exit 1; }
 done
 [[ -x "${TMP_ROOT}/unpacked/bin/moox-cli" ]]
 for binary in moox-storage-view-index moox-storage-view-builder moox-storage-view-query; do

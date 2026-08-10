@@ -49,6 +49,12 @@ type MetadataService interface {
 	ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq) (*ActivateViewIndexRsp, error)
 	// FailViewIndexBuild 记录 View 索引构建失败。
 	FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq) (*FailViewIndexBuildRsp, error)
+
+	UpsertViewPeriodDatasetState(ctx context.Context, req *UpsertViewPeriodDatasetStateReq) (*UpsertViewPeriodDatasetStateRsp, error)
+
+	ListViewPeriodDatasetStates(ctx context.Context, req *ListViewPeriodDatasetStatesReq) (*ListViewPeriodDatasetStatesRsp, error)
+
+	RecordViewSyncPoint(ctx context.Context, req *RecordViewSyncPointReq) (*RecordViewSyncPointRsp, error)
 	// CreateDataSource 创建数据来源。
 	CreateDataSource(ctx context.Context, req *CreateDataSourceReq) (*CreateDataSourceRsp, error)
 	// UpdateDataSource 更新数据来源。
@@ -407,6 +413,60 @@ func MetadataService_FailViewIndexBuild_Handler(svr interface{}, ctx context.Con
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).FailViewIndexBuild(ctx, reqbody.(*FailViewIndexBuildReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_UpsertViewPeriodDatasetState_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertViewPeriodDatasetStateReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).UpsertViewPeriodDatasetState(ctx, reqbody.(*UpsertViewPeriodDatasetStateReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ListViewPeriodDatasetStates_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListViewPeriodDatasetStatesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ListViewPeriodDatasetStates(ctx, reqbody.(*ListViewPeriodDatasetStatesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_RecordViewSyncPoint_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RecordViewSyncPointReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).RecordViewSyncPoint(ctx, reqbody.(*RecordViewSyncPointReq))
 	}
 
 	var rsp interface{}
@@ -1347,6 +1407,18 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_FailViewIndexBuild_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/UpsertViewPeriodDatasetState",
+			Func: MetadataService_UpsertViewPeriodDatasetState_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/ListViewPeriodDatasetStates",
+			Func: MetadataService_ListViewPeriodDatasetStates_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/RecordViewSyncPoint",
+			Func: MetadataService_RecordViewSyncPoint_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/CreateDataSource",
 			Func: MetadataService_CreateDataSource_Handler,
 		},
@@ -1625,6 +1697,15 @@ func (s *UnimplementedMetadata) ActivateViewIndex(ctx context.Context, req *Acti
 // FailViewIndexBuild 记录 View 索引构建失败。
 func (s *UnimplementedMetadata) FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq) (*FailViewIndexBuildRsp, error) {
 	return nil, errors.New("rpc FailViewIndexBuild of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) UpsertViewPeriodDatasetState(ctx context.Context, req *UpsertViewPeriodDatasetStateReq) (*UpsertViewPeriodDatasetStateRsp, error) {
+	return nil, errors.New("rpc UpsertViewPeriodDatasetState of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) ListViewPeriodDatasetStates(ctx context.Context, req *ListViewPeriodDatasetStatesReq) (*ListViewPeriodDatasetStatesRsp, error) {
+	return nil, errors.New("rpc ListViewPeriodDatasetStates of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) RecordViewSyncPoint(ctx context.Context, req *RecordViewSyncPointReq) (*RecordViewSyncPointRsp, error) {
+	return nil, errors.New("rpc RecordViewSyncPoint of service Metadata is not implemented")
 }
 
 // CreateDataSource 创建数据来源。
@@ -1905,6 +1986,12 @@ type MetadataClientProxy interface {
 	ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq, opts ...client.Option) (rsp *ActivateViewIndexRsp, err error)
 	// FailViewIndexBuild 记录 View 索引构建失败。
 	FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq, opts ...client.Option) (rsp *FailViewIndexBuildRsp, err error)
+
+	UpsertViewPeriodDatasetState(ctx context.Context, req *UpsertViewPeriodDatasetStateReq, opts ...client.Option) (rsp *UpsertViewPeriodDatasetStateRsp, err error)
+
+	ListViewPeriodDatasetStates(ctx context.Context, req *ListViewPeriodDatasetStatesReq, opts ...client.Option) (rsp *ListViewPeriodDatasetStatesRsp, err error)
+
+	RecordViewSyncPoint(ctx context.Context, req *RecordViewSyncPointReq, opts ...client.Option) (rsp *RecordViewSyncPointRsp, err error)
 	// CreateDataSource 创建数据来源。
 	CreateDataSource(ctx context.Context, req *CreateDataSourceReq, opts ...client.Option) (rsp *CreateDataSourceRsp, err error)
 	// UpdateDataSource 更新数据来源。
@@ -2306,6 +2393,66 @@ func (c *MetadataClientProxyImpl) FailViewIndexBuild(ctx context.Context, req *F
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &FailViewIndexBuildRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) UpsertViewPeriodDatasetState(ctx context.Context, req *UpsertViewPeriodDatasetStateReq, opts ...client.Option) (*UpsertViewPeriodDatasetStateRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertViewPeriodDatasetState")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("UpsertViewPeriodDatasetState")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpsertViewPeriodDatasetStateRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ListViewPeriodDatasetStates(ctx context.Context, req *ListViewPeriodDatasetStatesReq, opts ...client.Option) (*ListViewPeriodDatasetStatesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListViewPeriodDatasetStates")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ListViewPeriodDatasetStates")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListViewPeriodDatasetStatesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) RecordViewSyncPoint(ctx context.Context, req *RecordViewSyncPointReq, opts ...client.Option) (*RecordViewSyncPointRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/RecordViewSyncPoint")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("RecordViewSyncPoint")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RecordViewSyncPointRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

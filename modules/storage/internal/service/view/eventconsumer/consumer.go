@@ -14,7 +14,9 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-const defaultMaxRetryAttempts = 10
+// A View event must stay pending until its row/marker application succeeds.
+// Operators may still set a positive value for a bounded emergency policy.
+const defaultMaxRetryAttempts = -1
 
 const reconnectAfterSubscriptionErrors = 3
 
@@ -35,22 +37,26 @@ type Config struct {
 
 func (c Config) withDefaults() (Config, error) {
 	if strings.TrimSpace(c.Consumer) == "" {
-		c.Consumer = "storage_view"
+		c.Consumer = "storage_view_period_v1"
 	}
 	if c.AckWaitMS == 0 {
 		c.AckWaitMS = 120000
 	}
 	if c.FetchBatch == 0 {
-		c.FetchBatch = 8
+		c.FetchBatch = 1
 	}
 	if c.MaxAckPending == 0 {
 		c.MaxAckPending = c.FetchBatch
 	}
 	if c.MaxWorkers == 0 {
-		c.MaxWorkers = 4
+		c.MaxWorkers = 1
 	}
 	if c.MaxRetryAttempts == 0 {
-		c.MaxRetryAttempts = defaultMaxRetryAttempts
+		// A View apply must not be TERM'ed after a short transient outage:
+		// MaxAckPending=1 is the ordering fence and the message remains pending
+		// until the row/marker application succeeds. Positive values are kept as
+		// an explicit operator override for tests and emergency recovery.
+		c.MaxRetryAttempts = -1
 	}
 	c.Consumer = strings.TrimSpace(c.Consumer)
 	if strings.TrimSpace(c.Ordering) == "" {
@@ -63,8 +69,8 @@ func (c Config) withDefaults() (Config, error) {
 	if c.MaxWorkers < 1 {
 		return c, errors.New("storage view max_workers must be positive")
 	}
-	if c.MaxRetryAttempts < 1 {
-		return c, errors.New("storage view max_retry_attempts must be positive")
+	if c.MaxRetryAttempts == 0 || c.MaxRetryAttempts < -1 {
+		return c, errors.New("storage view max_retry_attempts must be -1 or positive")
 	}
 	if c.Ordering != "subject" {
 		return c, fmt.Errorf("storage view ordering %q is unsupported", c.Ordering)
@@ -146,8 +152,13 @@ func (c *Consumer) bindDelivery(ctx context.Context) (deliveryConsumer, error) {
 		deliverPolicy = nats.DeliverNewPolicy
 	}
 	return events.NewConsumer(ctx, c.client, c.registry, events.ConsumerConfig{
-		Name:                opts.Consumer,
-		Event:               events.DatasetRowsUpserted,
+		Name: opts.Consumer,
+		Events: []events.Event{
+			events.DatasetRowsUpserted,
+			events.DatasetPeriodCollected,
+			events.FactorPeriodComputed,
+			events.DatasetSyncPoint,
+		},
 		AckWait:             time.Duration(opts.AckWaitMS) * time.Millisecond,
 		MaxDeliver:          -1,
 		MaxAckPending:       opts.MaxAckPending,

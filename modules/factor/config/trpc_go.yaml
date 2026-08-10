@@ -7,7 +7,7 @@ server:
     - recovery
     - validation
     - prometheus
-  timeout: 5000
+  timeout: 120000
   admin:
     ip: 127.0.0.1
     port: 11944
@@ -19,13 +19,13 @@ server:
       port: 11403
       network: tcp
       protocol: trpc
-      timeout: 30000
+      timeout: 120000
     - name: trpc.moox.factor.FactorMgr
       ip: 127.0.0.1
       port: 11404
       network: tcp
       protocol: http
-      timeout: 30000
+      timeout: 120000
     - name: trpc.moox.factor.Health
       ip: 127.0.0.1
       port: 11414

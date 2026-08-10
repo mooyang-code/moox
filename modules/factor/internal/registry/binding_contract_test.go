@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -23,6 +24,16 @@ func TestValidateEnabledBindingAcceptsActiveTimeSeriesViewProjection(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, 1, client.getDatasetCalls)
 	require.Equal(t, 1, client.listViewsCalls)
+}
+
+func TestValidateFactorLookbackKeepDurationAllowsFiniteWindow(t *testing.T) {
+	require.NoError(t, validateFactorLookbackKeepDuration("720h", "1m", 200))
+	require.NoError(t, validateFactorLookbackKeepDuration("0", "1m", 200))
+}
+
+func TestValidateFactorLookbackKeepDurationRejectsShortWindow(t *testing.T) {
+	err := validateFactorLookbackKeepDuration("2m", "1m", 3)
+	require.ErrorContains(t, err, "shorter than lookback window")
 }
 
 func TestValidateCandidateBindingSetRejectsSameBatchCycle(t *testing.T) {
@@ -184,6 +195,32 @@ func contractBinding() domain.FactorBinding {
 
 func contractFactor() domain.FactorDef {
 	return domain.FactorDef{FactorID: "factor", InputColumns: []string{"close", "volume"}}
+}
+
+func TestValidateActiveViewInputsRejectsAmbiguousSuffix(t *testing.T) {
+	view := &storagepb.View{ViewId: "source", ActiveColumns: []*storagepb.ViewColumn{
+		{ColumnName: "prices.close", OriginId: "prices.close"}, {ColumnName: "adjusted.close", OriginId: "adjusted.close"},
+	}}
+	err := validateActiveViewInputs(view, []string{"close"})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("validateActiveViewInputs() error = %v, want ambiguous input", err)
+	}
+	if err := validateActiveViewInputs(view, []string{"prices.close"}); err != nil {
+		t.Fatalf("qualified input should be accepted: %v", err)
+	}
+	if err := validateActiveViewInputs(&storagepb.View{ViewId: "single", ActiveColumns: []*storagepb.ViewColumn{{ColumnName: "prices.close", OriginId: "prices.close"}}}, []string{"close"}); err != nil {
+		t.Fatalf("a duplicated column/origin alias should count once: %v", err)
+	}
+	viewWithRuntimeAlias := &storagepb.View{ViewId: "runtime", ActiveColumns: []*storagepb.ViewColumn{
+		{ColumnName: "close", OriginId: "prices.close"},
+		{ColumnName: "adjusted_close", OriginId: "adjusted.close"},
+	}}
+	if err := validateActiveViewInputs(viewWithRuntimeAlias, []string{"close"}); err != nil {
+		t.Fatalf("exact runtime column should win over a provenance suffix: %v", err)
+	}
+	if err := validateActiveViewInputs(viewWithRuntimeAlias, []string{"prices.close"}); err == nil {
+		t.Fatal("provenance-only qualified name must not be accepted as a runtime column")
+	}
 }
 
 type bindingContractFake struct {

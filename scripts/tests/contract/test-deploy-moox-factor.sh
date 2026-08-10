@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "$(basename "${SCRIPT_DIR}")" == "contract" ]]; then
+  ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
+else
+  # Keep the compatibility wrapper at scripts/test-deploy-moox-factor.sh usable.
+  ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+fi
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-factor-deploy.XXXXXX")"
 FIXTURE_ROOT="${TMP_ROOT}/repo"
 ARCHIVE="${TMP_ROOT}/factor.tar.gz"
@@ -11,6 +17,8 @@ mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
   "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
 cp "${ROOT}/scripts/moox-factor-run-once.sh" "${FIXTURE_ROOT}/scripts/moox-factor-run-once.sh"
+ln -s "${ROOT}/scripts/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-check.sh"
+ln -s "${ROOT}/scripts/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-rotate.sh"
 ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-caddy-ca.sh"
 ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-managed.sh"
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
@@ -97,7 +105,16 @@ storage_view_secret="$(
 )"
 [[ "${storage_view_secret}" == "${expected_storage_view_secret}" ]]
 grep -Fxq 'MOOX_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/secrets/gateway-service.env"
-grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}"' "${UNPACKED}/start.sh"
+grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${UNPACKED}/start.sh"
+grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}"' "${UNPACKED}/start.sh"
+grep -Fq 'elif [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then' "${UNPACKED}/start.sh"
+grep -Fq 'FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/factor-eventbus.yaml")' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-40}' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-60}' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-10000}' "${UNPACKED}/start.sh"
+grep -Fq 'MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers}' "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers}' "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target}' "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
 
 cat >"${UNPACKED}/bin/moox-factor-cli" <<EOF
 #!/usr/bin/env bash
@@ -120,6 +137,7 @@ grep -Fxq "MOOX_FACTOR_DB_PATH=${UNPACKED}/data/factor/factor.db" "${UNPACKED}/c
 grep -Fxq "MOOX_FACTOR_ENGINE_PYTHON_BIN=${UNPACKED}/data/factor/venv/bin/python" "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_FACTOR_ENGINE_WORKER_PATH=${UNPACKED}/factor/pyworker/worker.py" "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_FACTOR_ENGINE_FACTORS_DIR=${UNPACKED}/factor/factors" "${UNPACKED}/captured.env"
+! grep -q '^MOOX_FACTOR_ENGINE_PYTHON_WORKERS=' "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_PYTHON_RUNTIME_PATH=${UNPACKED}/python-runtime" "${UNPACKED}/captured.env"
 grep -Fxq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=ip://127.0.0.1:11003' "${UNPACKED}/captured.env"
 grep -Fxq 'MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/captured.env"
@@ -128,6 +146,7 @@ grep -Fxq 'MOOX_GATEWAY_CALLER=factor' "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_GATEWAY_SERVICE_SECRET_KEY=${factor_secret}" "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_GATEWAY_CA_FILE=${UNPACKED}/certs/gateway/peers.pem" "${UNPACKED}/captured.env"
 grep -Fxq "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${storage_primary_secret}" "${UNPACKED}/captured.env"
+grep -Fxq "MOOX_STORAGE_VIEW_AUTH_SECRET=${storage_view_secret}" "${UNPACKED}/captured.env"
 cat >"${UNPACKED}/expected.argv" <<EOF
 run-once
 --config
@@ -146,6 +165,11 @@ BTC-USDT
 2026-07-28T00:01:00Z
 EOF
 cmp "${UNPACKED}/expected.argv" "${UNPACKED}/captured.argv"
+
+grep -Fq 'python_workers: 40' "${UNPACKED}/factor/config/app.yaml"
+grep -Fq 'view_read_workers: 60' "${UNPACKED}/factor/config/app.yaml"
+grep -Fq 'view_read_timeout_ms: 10000' "${UNPACKED}/factor/config/app.yaml"
+! grep -Fq 'scheduler:' "${UNPACKED}/factor/config/app.yaml"
 
 mv "${UNPACKED}/python-runtime" "${UNPACKED}/python-runtime.missing"
 if env -i HOME="${HOME}" PATH="${PATH}" "${UNPACKED}/bin/moox-factor-run-once" \

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "$(basename "${SCRIPT_DIR}")" == "contract" ]]; then
+  ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
+else
+  ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+fi
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-control-profile.XXXXXX")"
 FIXTURE_ROOT="${TMP_ROOT}/repo"
 ARCHIVE="${TMP_ROOT}/control.tar.gz"
@@ -20,6 +25,8 @@ file_mode() {
 mkdir -p "${FIXTURE_ROOT}/scripts/lib" "${FIXTURE_ROOT}/scripts/deps" \
   "${FIXTURE_ROOT}/deploy" "${FIXTURE_ROOT}/modules" "${FIXTURE_ROOT}/packages" "${FIXTURE_ROOT}/bin"
 cp "${ROOT}/scripts/deploy-moox.sh" "${FIXTURE_ROOT}/scripts/deploy-moox.sh"
+cp "${ROOT}/scripts/moox-storage-auth-check.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-check.sh"
+cp "${ROOT}/scripts/moox-storage-auth-rotate.sh" "${FIXTURE_ROOT}/scripts/moox-storage-auth-rotate.sh"
 ln -s "${ROOT}/scripts/install-caddy-ca.sh" "${FIXTURE_ROOT}/scripts/install-caddy-ca.sh"
 ln -s "${ROOT}/scripts/lib/caddy-managed.sh" "${FIXTURE_ROOT}/scripts/lib/caddy-managed.sh"
 ln -s "${ROOT}/scripts/lib/loopback-listeners.sh" "${FIXTURE_ROOT}/scripts/lib/loopback-listeners.sh"
@@ -85,11 +92,19 @@ for binary in \
   moox-monitor moox-monitor-cli; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing control binary: ${binary}" >&2; exit 1; }
 done
+for helper in moox-storage-auth-check moox-storage-auth-rotate; do
+  [[ -x "${TMP_ROOT}/unpacked/bin/${helper}" ]] || { echo "missing storage auth helper: ${helper}" >&2; exit 1; }
+done
 for binary in moox-storage moox-archive moox-factor; do
   [[ ! -e "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "unexpected control binary: ${binary}" >&2; exit 1; }
 done
 [[ -s "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" ]]
 [[ -s "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env" ]]
+[[ -s "${TMP_ROOT}/unpacked/config/components.env" ]]
+grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR=0' "${TMP_ROOT}/unpacked/config/components.env"
+grep -Fxq 'MOOX_INSTALLED_WITH_ADMIN=1' "${TMP_ROOT}/unpacked/config/components.env"
+MOOX_WITH_FACTOR=1 bash -c 'source "$1"; [[ "${MOOX_WITH_FACTOR}" == 1 ]]' _ "${TMP_ROOT}/unpacked/config/components.env"
+MOOX_WITH_ADMIN=0 bash -c 'source "$1"; [[ "${MOOX_WITH_ADMIN}" == 0 ]]' _ "${TMP_ROOT}/unpacked/config/components.env"
 grep -Eq '^MOOX_STORAGE_PRIMARY_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
 grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
 [[ ! -e "${TMP_ROOT}/unpacked/storage" ]]
@@ -97,8 +112,8 @@ grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/se
 [[ -d "${TMP_ROOT}/unpacked/collector" ]]
 [[ -d "${TMP_ROOT}/unpacked/strategy" ]]
 [[ -d "${TMP_ROOT}/unpacked/trade" ]]
-grep -Fq 'WITH_STRATEGY="${MOOX_WITH_STRATEGY:-1}"' "${TMP_ROOT}/unpacked/start.sh"
-grep -Fq 'WITH_TRADE="${MOOX_WITH_TRADE:-1}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-1}}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-1}}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'RUNTIME_IDENTITY_ENV+=("MOOX_REPORT_IP=${PUBLIC_HOST}")' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'start_strategy' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq 'start_trade' "${TMP_ROOT}/unpacked/start.sh"
@@ -127,6 +142,14 @@ grep -Fq 'SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-https:/
 grep -Fq 'SCF_STORAGE_RPC_GATEWAY_TARGET="${MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET:-ip://106.53.107.122:11003}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq '"MOOX_SCF_SERVICE_GATEWAY_TARGET=${SCF_SERVICE_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
 grep -Fq '"MOOX_SCF_STORAGE_RPC_GATEWAY_TARGET=${SCF_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'LOCAL_STORAGE_RPC_GATEWAY_TARGET="${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-ip://127.0.0.1:11003}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"MOOX_NODE_GATEWAY_NATIVE_URL=${LOCAL_STORAGE_RPC_GATEWAY_ADDRESS}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"MOOX_ADMIN_DB_PATH=${ROOT}/data/admin.db"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq '"MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'reuse EventBus identities and refresh exported endpoints in ${eventbus_credentials_dir}' "${TMP_ROOT}/unpacked/start.sh"
+! grep -Fq 'Reuse Collector' "${TMP_ROOT}/unpacked/start.sh"
 
 PATH="${TMP_ROOT}/fake-path:${PATH}" "${FIXTURE_ROOT}/scripts/deploy-moox.sh" \
   --package-only --archive "${DEFAULT_ARCHIVE}" \

@@ -28,6 +28,7 @@
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
             </a-tag>
             <span>{{ buildTimeText }}</span>
+            <slot name="status-extra" />
             <span v-if="activeView?.active_view_version">活跃版本 {{ activeView.active_view_version }}</span>
           </section>
 
@@ -343,7 +344,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { listDatasetColumns, listDatasets, listFactors, listFields, listViewColumns, listViews } from "@/api/storage/metadata";
 import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
@@ -409,6 +410,7 @@ const props = withDefaults(
     viewRoles?: ViewRole[];
     includeUnowned?: boolean;
     excludeLikelyFactorDatasets?: boolean;
+    autoRefreshIntervalMs?: number;
   }>(),
   {
     embedded: false,
@@ -419,7 +421,8 @@ const props = withDefaults(
     viewOwnerModules: undefined,
     viewRoles: undefined,
     includeUnowned: false,
-    excludeLikelyFactorDatasets: false
+    excludeLikelyFactorDatasets: false,
+    autoRefreshIntervalMs: 0
   }
 );
 
@@ -482,6 +485,7 @@ const klineFreq = ref("");
 const klineRecords = ref<KlineChartRecord[]>([]);
 const klineLoading = ref(false);
 const klineLimit = ref(DEFAULT_KLINE_LIMIT);
+let autoRefreshTimer: ReturnType<typeof setInterval> | undefined;
 const VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS = 24;
 const VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS = 7;
 const DEFAULT_VIEW_PAGE_SIZE = 25;
@@ -714,6 +718,11 @@ async function reloadRows() {
   }
 }
 
+async function refreshRowsInBackground() {
+  if (!activeView.value || loading.value || contextLoading.value) return;
+  await reloadRows();
+}
+
 async function loadTimeSeriesViewRows() {
   const space_id = spaceStore.requireSpaceId();
   const view = activeView.value;
@@ -802,6 +811,13 @@ async function resetQueryControls() {
 }
 
 function resetSortState() {
+  // Results are time-series data. Show the newest calculated period first so
+  // an old first page cannot make a live factor view look stalled.
+  if (mode.value === "time_series") {
+    sortState.fieldName = "data_time";
+    sortState.direction = "desc";
+    return;
+  }
   sortState.fieldName = "";
   sortState.direction = "";
 }
@@ -1057,7 +1073,21 @@ function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
   };
 }
 
-onMounted(loadMeta);
+onMounted(() => {
+  loadMeta();
+  const interval = props.autoRefreshIntervalMs || 0;
+  if (interval > 0) {
+    autoRefreshTimer = setInterval(() => {
+      void refreshRowsInBackground();
+    }, interval);
+  }
+});
+onBeforeUnmount(() => {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = undefined;
+  }
+});
 watch(selectedSpaceId, () => {
   activeViewId.value = "";
   clearViewState();

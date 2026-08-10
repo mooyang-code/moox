@@ -5,6 +5,8 @@ package e2e
 import (
 	"context"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -154,7 +156,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const storageSubject = "moox.storage.dataset.rows.upserted.v2.>"
+	const storageSubject = "moox.storage.>"
 	if _, err := js.AddStream(&nats.StreamConfig{
 		Name: "MOOX_STORAGE", Subjects: []string{storageSubject}, Storage: nats.MemoryStorage,
 	}); err != nil {
@@ -169,18 +171,29 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 	defer eventClient.Close()
 	stopConsumer, err := view.StartEventConsumer(ctx, eventClient, viewservice.EventConsumerOptions{
-		Consumer: "storage_view", FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
+		Consumer: "storage_view_period_v1", FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stopConsumer()
-	consumerInfo, err := js.ConsumerInfo("MOOX_STORAGE", "storage_view")
+	consumerInfo, err := js.ConsumerInfo("MOOX_STORAGE", "storage_view_period_v1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if consumerInfo.Config.FilterSubject != storageSubject {
-		t.Fatalf("storage_view filter=%q want=%q", consumerInfo.Config.FilterSubject, storageSubject)
+	var wantFilters []string
+	for _, event := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint} {
+		filter, filterErr := registry.FamilyPattern(event)
+		if filterErr != nil {
+			t.Fatal(filterErr)
+		}
+		wantFilters = append(wantFilters, filter)
+	}
+	sort.Strings(wantFilters)
+	gotFilters := append([]string(nil), consumerInfo.Config.FilterSubjects...)
+	sort.Strings(gotFilters)
+	if consumerInfo.Config.FilterSubject != "" || !reflect.DeepEqual(gotFilters, wantFilters) {
+		t.Fatalf("storage_view filters=%q/%v want=%v", consumerInfo.Config.FilterSubject, gotFilters, wantFilters)
 	}
 	relayErrors := make(chan error, 1)
 	relay, err := storageoutbox.NewRelay(

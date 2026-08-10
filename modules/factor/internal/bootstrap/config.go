@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -16,11 +15,10 @@ import (
 
 // Config is the root factor service configuration.
 type Config struct {
-	Database  DatabaseConfig  `yaml:"database"`
-	Storage   StorageConfig   `yaml:"storage"`
-	EventBus  EventBusConfig  `yaml:"eventbus"`
-	Engine    EngineConfig    `yaml:"engine"`
-	Scheduler SchedulerConfig `yaml:"scheduler"`
+	Database DatabaseConfig `yaml:"database"`
+	Storage  StorageConfig  `yaml:"storage"`
+	EventBus EventBusConfig `yaml:"eventbus"`
+	Engine   EngineConfig   `yaml:"engine"`
 }
 
 // DatabaseConfig describes local SQLite settings.
@@ -50,22 +48,20 @@ type EventBusConfig struct {
 
 // EngineConfig describes the local Python factor engine.
 type EngineConfig struct {
-	PythonBin     string `yaml:"python_bin"`
-	WorkerPath    string `yaml:"worker_path"`
-	FactorsDir    string `yaml:"factors_dir"`
-	Workers       int    `yaml:"workers"`
-	TaskTimeoutMS int    `yaml:"task_timeout_ms"`
+	PythonBin         string `yaml:"python_bin"`
+	WorkerPath        string `yaml:"worker_path"`
+	FactorsDir        string `yaml:"factors_dir"`
+	PythonWorkers     int    `yaml:"python_workers"`
+	ViewReadWorkers   int    `yaml:"view_read_workers"`
+	ViewReadTimeoutMS int    `yaml:"view_read_timeout_ms"`
+	TaskTimeoutMS     int    `yaml:"task_timeout_ms"`
 }
 
-// SchedulerConfig describes runtime scheduling behavior.
-type SchedulerConfig struct {
-	EventBatchWindowMS     int           `yaml:"event_batch_window_ms"`
-	QueueCapacity          int           `yaml:"queue_capacity"`
-	MaxRetry               int           `yaml:"max_retry"`
-	ViewSettleDelay        time.Duration `yaml:"view_settle_delay"`
-	EventReadRetry         int           `yaml:"event_read_retry"`
-	EventReadRetryInterval time.Duration `yaml:"event_read_retry_interval"`
-}
+const (
+	defaultPythonWorkers     = 40
+	defaultViewReadWorkers   = 60
+	defaultViewReadTimeoutMS = 10000
+)
 
 // Load reads YAML config from path and applies factor-specific env overrides.
 func Load(path string) (*Config, error) {
@@ -89,7 +85,6 @@ func Load(path string) (*Config, error) {
 
 // Default returns safe local development defaults.
 func Default() *Config {
-	workers := defaultWorkerCount()
 	return &Config{
 		Database: DatabaseConfig{
 			Type:            "sqlite",
@@ -108,12 +103,8 @@ func Default() *Config {
 		},
 		Engine: EngineConfig{
 			PythonBin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./factors",
-			Workers: workers, TaskTimeoutMS: 30000,
-		},
-		Scheduler: SchedulerConfig{
-			EventBatchWindowMS: 2000, QueueCapacity: 2048, MaxRetry: 1,
-			ViewSettleDelay: 300 * time.Millisecond, EventReadRetry: 3,
-			EventReadRetryInterval: 500 * time.Millisecond,
+			PythonWorkers: defaultPythonWorkers, ViewReadWorkers: defaultViewReadWorkers,
+			ViewReadTimeoutMS: defaultViewReadTimeoutMS, TaskTimeoutMS: 30000,
 		},
 	}
 }
@@ -155,26 +146,17 @@ func (c *Config) applyDefaults() {
 	if c.Engine.FactorsDir == "" {
 		c.Engine.FactorsDir = "./factors"
 	}
-	if c.Engine.Workers <= 0 {
-		c.Engine.Workers = defaultWorkerCount()
+	if c.Engine.PythonWorkers <= 0 {
+		c.Engine.PythonWorkers = defaultPythonWorkers
+	}
+	if c.Engine.ViewReadWorkers <= 0 {
+		c.Engine.ViewReadWorkers = defaultViewReadWorkers
+	}
+	if c.Engine.ViewReadTimeoutMS <= 0 {
+		c.Engine.ViewReadTimeoutMS = defaultViewReadTimeoutMS
 	}
 	if c.Engine.TaskTimeoutMS == 0 {
 		c.Engine.TaskTimeoutMS = 30000
-	}
-	if c.Scheduler.EventBatchWindowMS == 0 {
-		c.Scheduler.EventBatchWindowMS = 2000
-	}
-	if c.Scheduler.QueueCapacity <= 0 {
-		c.Scheduler.QueueCapacity = 2048
-	}
-	if c.Scheduler.ViewSettleDelay == 0 {
-		c.Scheduler.ViewSettleDelay = 300 * time.Millisecond
-	}
-	if c.Scheduler.EventReadRetryInterval == 0 {
-		c.Scheduler.EventReadRetryInterval = 500 * time.Millisecond
-	}
-	if c.Scheduler.EventReadRetry == 0 {
-		c.Scheduler.EventReadRetry = 3
 	}
 }
 
@@ -197,6 +179,11 @@ func (c *Config) applyEnv() {
 	if v, ok := os.LookupEnv("MOOX_EVENTBUS_NATS_URL"); ok {
 		c.EventBus.URLs = splitEventBusURLs(v)
 	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE")); v != "" {
+		c.EventBus.CredentialFile = v
+	} else if v := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CREDENTIAL_FILE")); v != "" {
+		c.EventBus.CredentialFile = v
+	}
 	if v := os.Getenv("MOOX_FACTOR_ENGINE_PYTHON_BIN"); v != "" {
 		c.Engine.PythonBin = v
 	}
@@ -206,9 +193,19 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_FACTOR_ENGINE_FACTORS_DIR"); v != "" {
 		c.Engine.FactorsDir = v
 	}
-	if v := os.Getenv("MOOX_FACTOR_ENGINE_WORKERS"); v != "" {
+	if v := os.Getenv("MOOX_FACTOR_ENGINE_PYTHON_WORKERS"); v != "" {
 		if workers, err := strconv.Atoi(v); err == nil && workers > 0 {
-			c.Engine.Workers = workers
+			c.Engine.PythonWorkers = workers
+		}
+	}
+	if v := os.Getenv("MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS"); v != "" {
+		if workers, err := strconv.Atoi(v); err == nil && workers > 0 {
+			c.Engine.ViewReadWorkers = workers
+		}
+	}
+	if v := os.Getenv("MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS"); v != "" {
+		if timeoutMS, err := strconv.Atoi(v); err == nil && timeoutMS > 0 {
+			c.Engine.ViewReadTimeoutMS = timeoutMS
 		}
 	}
 }
@@ -225,18 +222,6 @@ func splitEventBusURLs(value string) []string {
 }
 
 func (c *Config) validateStorageTargets() error {
-	if c.Scheduler.MaxRetry < 0 {
-		return fmt.Errorf("scheduler.max_retry must be non-negative")
-	}
-	if c.Scheduler.ViewSettleDelay < 0 {
-		return fmt.Errorf("scheduler.view_settle_delay must be non-negative")
-	}
-	if c.Scheduler.EventReadRetry < 0 {
-		return fmt.Errorf("scheduler.event_read_retry must be non-negative")
-	}
-	if c.Scheduler.EventReadRetryInterval < 0 {
-		return fmt.Errorf("scheduler.event_read_retry_interval must be non-negative")
-	}
 	if !isTRPCTarget(c.Storage.GatewayTarget) {
 		return fmt.Errorf("storage.gateway_target must be a tRPC target, got %q", c.Storage.GatewayTarget)
 	}
@@ -251,15 +236,4 @@ func (c *Config) validateStorageTargets() error {
 func isTRPCTarget(raw string) bool {
 	raw = strings.TrimSpace(strings.ToLower(raw))
 	return raw != "" && !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://")
-}
-
-func defaultWorkerCount() int {
-	n := runtime.NumCPU()
-	if n <= 0 {
-		return 1
-	}
-	if n > 8 {
-		return 8
-	}
-	return n
 }

@@ -27,6 +27,7 @@ WITH_ADMIN=1
 WITH_GATEWAY=1
 BUILD_WEB_ASSETS=1
 RESET_DATA=0
+COMPONENT_OVERLAY=0
 TARGET_GOOS=""
 TARGET_GOARCH=""
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
@@ -120,6 +121,7 @@ Options:
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host. Default when web-host is enabled.
   --reuse-web-assets              Reuse current embedded statik assets when building web-host.
   --reset-data                    Remove target data directory before deploying. Use when rebuilding from examples.
+  --component-overlay             Update selected components in an existing deployment; preserve its control plane and lifecycle.
   --public-host <ip-or-dns>       Certificate SAN and public HTTPS host; enables managed Caddy.
   --tls-mode <auto|public|internal>
                                   TLS issuer. Auto uses public ACME except for private/loopback hosts.
@@ -500,6 +502,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --reset-data)
       RESET_DATA=1
+      shift
+      ;;
+    --component-overlay)
+      COMPONENT_OVERLAY=1
       shift
       ;;
     --public-host) PUBLIC_HOST="${2:-}"; shift 2 ;;
@@ -1044,6 +1050,9 @@ write_runtime_scripts() {
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -r "${ROOT}/config/components.env" ]]; then
+  source "${ROOT}/config/components.env"
+fi
 HEALTH_AUTH_FILE="${ROOT}/secrets/health-auth.env"
 [[ -r "${HEALTH_AUTH_FILE}" ]] || { echo "missing health credentials: ${HEALTH_AUTH_FILE}" >&2; exit 1; }
 [[ -r "${ROOT}/secrets/gateway-control.env" ]] || { echo "missing Gateway control credentials" >&2; exit 1; }
@@ -1075,6 +1084,25 @@ read_env_value() {
   value=$(bash -c 'set -u; source "$1"; printf "%s" "${!2-}"' _ "${file}" "${name}")
   [[ -n "${value}" ]] || { echo "missing ${name} in ${file}" >&2; exit 1; }
   printf '%s' "${value}"
+}
+
+validate_storage_internal_auth() {
+  local file="${ROOT}/secrets/storage-internal-auth.env"
+  [[ -r "${file}" ]] || {
+    echo "missing shared Storage internal auth file: ${file}" >&2
+    exit 1
+  }
+  local primary_file view_file
+  primary_file="$(read_env_value "${file}" MOOX_STORAGE_PRIMARY_AUTH_SECRET)"
+  view_file="$(read_env_value "${file}" MOOX_STORAGE_VIEW_AUTH_SECRET)"
+  [[ "${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}" == "${primary_file}" ]] || {
+    echo "Storage Primary auth secret is not sourced from ${file}; restart the service from start.sh" >&2
+    exit 1
+  }
+  [[ "${MOOX_STORAGE_VIEW_AUTH_SECRET:-}" == "${view_file}" ]] || {
+    echo "Storage View auth secret is not sourced from ${file}; restart the service from start.sh" >&2
+    exit 1
+  }
 }
 
 MSGBOX_ENV=()
@@ -1118,22 +1146,22 @@ ADMIN_SECRET_ENV=("${GATEWAY_CONTROL_ENV[@]}")
 if [[ -r "${ROOT}/secrets/admin-jwt.env" ]]; then
   ADMIN_SECRET_ENV+=("MOOX_ADMIN_JWT_SECRET_KEY=$(read_env_value "${ROOT}/secrets/admin-jwt.env" MOOX_ADMIN_JWT_SECRET_KEY)")
 fi
-WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
-WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}"
-WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
-WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
-WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
-WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
-WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
-WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
-WITH_TRADE="${MOOX_WITH_TRADE:-__WITH_TRADE__}"
+WITH_STORAGE="${MOOX_WITH_STORAGE:-${MOOX_INSTALLED_WITH_STORAGE:-__WITH_STORAGE__}}"
+WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-${MOOX_INSTALLED_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}}"
+WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-${MOOX_INSTALLED_WITH_ARCHIVE:-__WITH_ARCHIVE__}}"
+WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-${MOOX_INSTALLED_WITH_EVENTBUS:-__WITH_EVENTBUS__}}"
+WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-${MOOX_INSTALLED_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}}"
+WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-${MOOX_INSTALLED_WITH_COLLECTOR:-__WITH_COLLECTOR__}}"
+WITH_FACTOR="${MOOX_WITH_FACTOR:-${MOOX_INSTALLED_WITH_FACTOR:-__WITH_FACTOR__}}"
+WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-__WITH_STRATEGY__}}"
+WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-__WITH_TRADE__}}"
 if [[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
   ADMIN_SECRET_ENV+=("MOOX_EVENTBUS_CA_FILE=${HOME}/.config/moox/eventbus/ca.pem")
 fi
-WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
-WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
-WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
-WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
+WITH_MONITOR="${MOOX_WITH_MONITOR:-${MOOX_INSTALLED_WITH_MONITOR:-__WITH_MONITOR__}}"
+WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-${MOOX_INSTALLED_WITH_WEB_HOST:-__WITH_WEB_HOST__}}"
+WITH_ADMIN="${MOOX_WITH_ADMIN:-${MOOX_INSTALLED_WITH_ADMIN:-__WITH_ADMIN__}}"
+WITH_GATEWAY="${MOOX_WITH_GATEWAY:-${MOOX_INSTALLED_WITH_GATEWAY:-__WITH_GATEWAY__}}"
 PRESERVE_STORAGE_ROUTES="${MOOX_PRESERVE_STORAGE_ROUTES:-__PRESERVE_STORAGE_ROUTES__}"
 PUBLIC_HOST="${MOOX_PUBLIC_HOST:-__PUBLIC_HOST__}"
 SCF_SERVICE_GATEWAY_TARGET="${MOOX_SCF_SERVICE_GATEWAY_TARGET:-__SCF_SERVICE_GATEWAY_TARGET__}"
@@ -1146,9 +1174,12 @@ if [[ "${WITH_STORAGE_NODE}" == "1" && ! -d "${ROOT}/storage-node" ]]; then
   echo "storage-node is enabled but its package is missing" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
+if [[ "${WITH_STORAGE}" == "1" && "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
   echo "storage-node package is present but storage-node is disabled" >&2
   exit 2
+fi
+if [[ "${WITH_STORAGE}" == "1" || "${WITH_FACTOR}" == "1" || "${WITH_MONITOR}" == "1" ]]; then
+  validate_storage_internal_auth
 fi
 if [[ "${WITH_STORAGE}" == "1" && -z "${MOOX_STORAGE_NODE_AUTH_SECRET:-}" ]]; then
   echo "missing storage DataNode authentication secret" >&2
@@ -1156,6 +1187,16 @@ if [[ "${WITH_STORAGE}" == "1" && -z "${MOOX_STORAGE_NODE_AUTH_SECRET:-}" ]]; th
 fi
 MOOX_GATEWAY_NODE_ID="${MOOX_GATEWAY_NODE_ID:-__NODE_ID__}"
 export MOOX_GATEWAY_NODE_ID
+LOCAL_STORAGE_RPC_GATEWAY_TARGET="${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-ip://127.0.0.1:11003}"
+case "${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" in
+  ip://127.0.0.1:*|ip://localhost:*|ip://\[::1\]:*) ;;
+  *)
+    echo "MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET must use a loopback address" >&2
+    exit 1
+    ;;
+esac
+LOCAL_STORAGE_RPC_GATEWAY_ADDRESS="${LOCAL_STORAGE_RPC_GATEWAY_TARGET#ip://}"
+LOCAL_STORAGE_GATEWAY_NODE_ID="${MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID:-${MOOX_GATEWAY_NODE_ID}}"
 MOOX_MONITOR_INSTANCE_ID="${MOOX_MONITOR_INSTANCE_ID:-__MONITOR_INSTANCE_ID__}"
 if [[ "${WITH_ADMIN}" == "1" ]]; then
   MOOX_ADMIN_NODE_ID="${MOOX_ADMIN_NODE_ID:-__NODE_ID__}"
@@ -1296,17 +1337,28 @@ COLLECTOR_ENV=(
 
 FACTOR_ENV=(
   "MOOX_FACTOR_ADMIN_GATEWAY_URL=${MOOX_FACTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
-  "MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}"
+  "MOOX_FACTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"
+  "MOOX_FACTOR_STORAGE_RPC_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor/factor.db}"
   "MOOX_FACTOR_ENGINE_WORKER_PATH=${MOOX_FACTOR_ENGINE_WORKER_PATH:-${ROOT}/factor/pyworker/worker.py}"
-  "MOOX_FACTOR_ENGINE_FACTORS_DIR=${MOOX_FACTOR_ENGINE_FACTORS_DIR:-${ROOT}/factor/factors}"
-  "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}"
-  "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
-  "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
+	"MOOX_FACTOR_ENGINE_FACTORS_DIR=${MOOX_FACTOR_ENGINE_FACTORS_DIR:-${ROOT}/factor/factors}"
+	"MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-40}"
+	"MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-60}"
+	"MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-10000}"
+	"MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}"
+	  "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
+	  "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
+	  "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
 )
+if [[ -n "${MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE:-}" ]]; then
+  FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE}")
+elif [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
+  FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/factor-eventbus.yaml")
+fi
 
 MONITOR_ENV=(
   "MOOX_MONITOR_INSTANCE_ID=${MOOX_MONITOR_INSTANCE_ID}"
+	"MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
 )
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
@@ -1315,6 +1367,11 @@ MOOX_EVENTBUS_HOST="${MOOX_EVENTBUS_HOST:-__EVENTBUS_HOST__}"
 MOOX_EVENTBUS_PORT="${MOOX_EVENTBUS_PORT:-__EVENTBUS_PORT__}"
 MOOX_EVENTBUS_ENABLE_TLS="${MOOX_EVENTBUS_ENABLE_TLS:-__EVENTBUS_ENABLE_TLS__}"
 STORAGE_EVENTBUS_URL_ENV="${MOOX_STORAGE_EVENTBUS_URL:-tls://127.0.0.1:${MOOX_EVENTBUS_PORT}}"
+STORAGE_EVENTBUS_CREDENTIAL_FILE="${MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/storage-eventbus.yaml}"
+STORAGE_EVENTBUS_CREDENTIAL_ENV=()
+if [[ -r "${STORAGE_EVENTBUS_CREDENTIAL_FILE}" ]]; then
+  STORAGE_EVENTBUS_CREDENTIAL_ENV=("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE=${STORAGE_EVENTBUS_CREDENTIAL_FILE}")
+fi
 export MOOX_EVENTBUS_NATS_URL="${EVENTBUS_URL_ENV}" MOOX_EVENTBUS_HOST MOOX_EVENTBUS_PORT MOOX_EVENTBUS_ENABLE_TLS
 METRICS_EVENTBUS_URL_ENV="${MOOX_METRICS_EVENTBUS_URL:-}"
 
@@ -1562,6 +1619,7 @@ start_storage_process() {
       "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
       "MOOX_STORAGE_ROLE=${role}" \
       "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
+      "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
       "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}" \
@@ -1624,6 +1682,7 @@ start_storage_view() {
       "MOOX_STORAGE_HOME=${ROOT}/data/storage" \
       "MOOX_STORAGE_ROLE=view" \
       "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
+      "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}" \
       "MOOX_STORAGE_VIEW_DELIVER_POLICY=${MOOX_STORAGE_VIEW_DELIVER_POLICY:-}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
@@ -1649,6 +1708,7 @@ start_storage_node() {
       "MOOX_STORAGE_ROLE=node" \
       "MOOX_STORAGE_NODE_ID=${MOOX_STORAGE_NODE_ID:-storage-node-0}" \
       "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
+      "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "${ROOT}/bin/moox-storage-node" \
       -conf=config/trpc_go.yaml
@@ -1720,38 +1780,41 @@ start_admin() {
     }
   fi
   if [[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]; then
-    mkdir -p "${HOME}/.config/moox/eventbus"
-    "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure \
-      --db-path "${ROOT}/data/admin.db" \
-      --encryption-key-file "${encryption_key_file}" \
-      --node-id "${MOOX_ADMIN_NODE_ID}" \
-      >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
-      { echo "EventBus credential provisioning failed" >&2; exit 1; }
+    local eventbus_credentials_dir="${HOME}/.config/moox/eventbus"
+    local eventbus_credentials_complete=1 credential_name
+    for credential_name in ca.pem server.pem server-key.pem users.yaml internal-admin.yaml \
+      archive-eventbus.yaml cloudnode-eventbus.yaml cloudnode-worker.yaml \
+      hostagent-publisher.yaml market-fetch-publisher.yaml metrics-publisher.yaml \
+      collector-market-fetch-consumer.yaml factor-eventbus.yaml monitor-observability.yaml \
+      storage-eventbus.yaml strategy-eventbus.yaml trade-eventbus.yaml; do
+      [[ -s "${eventbus_credentials_dir}/${credential_name}" ]] || eventbus_credentials_complete=0
+    done
+    if [[ "${eventbus_credentials_complete}" -eq 1 ]]; then
+      echo "reuse EventBus identities and refresh exported endpoints in ${eventbus_credentials_dir}"
+    else
+      mkdir -p "${eventbus_credentials_dir}"
+      "${ROOT}/bin/moox-admin-cli" eventbus-credentials ensure \
+        --db-path "${ROOT}/data/admin.db" \
+        --encryption-key-file "${encryption_key_file}" \
+        --node-id "${MOOX_ADMIN_NODE_ID}" \
+        >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
+        { echo "EventBus credential provisioning failed" >&2; exit 1; }
+    fi
     "${ROOT}/bin/moox-admin-cli" eventbus-credentials export \
       --db-path "${ROOT}/data/admin.db" \
       --encryption-key-file "${encryption_key_file}" \
       --node-id "${MOOX_ADMIN_NODE_ID}" \
-      --output-dir "${HOME}/.config/moox/eventbus" \
+      --output-dir "${eventbus_credentials_dir}" \
       >>"${ROOT}/logs/admin/stdout.log" 2>&1 ||
       { echo "EventBus credential export failed" >&2; exit 1; }
   fi
-  # Storage may live on a dedicated node. Reuse Collector's deployed storage
-  # gateway config so the browser BFF signs requests for the same target.
-  local storage_gateway_target="ip://127.0.0.1:11003"
-  local storage_gateway_node_id="${MOOX_ADMIN_NODE_ID}"
-  if [[ -f "${ROOT}/collector/config/app.yaml" ]]; then
-    storage_gateway_target="$(awk '/^[[:space:]]*gateway_target:/ {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]\"]/, ""); print; exit}' "${ROOT}/collector/config/app.yaml")"
-    storage_gateway_node_id="$(awk -F: '/^[[:space:]]*gateway_node_id:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
-    storage_gateway_target="${storage_gateway_target:-ip://127.0.0.1:11003}"
-    storage_gateway_node_id="${storage_gateway_node_id:-${MOOX_ADMIN_NODE_ID}}"
-  fi
-  storage_gateway_target="${storage_gateway_target#ip://}"
   gateway_service_env_for admin-gateway
   runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${storage_gateway_target}" "MOOX_NODE_GATEWAY_NODE_ID=${storage_gateway_node_id}" \
-      "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
+      "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${LOCAL_STORAGE_RPC_GATEWAY_ADDRESS}" "MOOX_NODE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
+      "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_DB_PATH=${ROOT}/data/admin.db" \
+      "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
 }
 
@@ -1790,11 +1853,12 @@ start_collector() {
   init_collector_schema
   gateway_service_env_for collector
   runtime_identity_env moox_collector "${ROOT}/collector/config/app.yaml"
-  local storage_gateway_node_id
-  storage_gateway_node_id="$(awk -F: '/^[[:space:]]*gateway_node_id:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
-  storage_gateway_node_id="${storage_gateway_node_id:-${MOOX_GATEWAY_NODE_ID}}"
   start_service "collector" "${ROOT}/collector" \
-    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" "MOOX_GATEWAY_TARGET_NODE=${storage_gateway_node_id}" "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
+    env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
+      "MOOX_GATEWAY_TARGET_NODE=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
+      "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" \
+      "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
+      "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
 }
 
 start_factor() {
@@ -1854,17 +1918,10 @@ start_monitor() {
   init_monitor_schema
   gateway_service_env_for monitor
   runtime_identity_env moox_monitor "${ROOT}/monitor/config/app.yaml"
-  local storage_gateway_target storage_gateway_node_id
-  if [[ -f "${ROOT}/collector/config/app.yaml" ]]; then
-    storage_gateway_target="$(awk '/^[[:space:]]*gateway_target:/ {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]\"]/, ""); print; exit}' "${ROOT}/collector/config/app.yaml")"
-    storage_gateway_node_id="$(awk -F: '/^[[:space:]]*gateway_node_id:/ {gsub(/[[:space:]\"]/, "", $2); print $2; exit}' "${ROOT}/collector/config/app.yaml")"
-  fi
-  storage_gateway_target="${storage_gateway_target:-ip://127.0.0.1:11003}"
-  storage_gateway_node_id="${storage_gateway_node_id:-${MOOX_GATEWAY_NODE_ID}}"
   start_service "monitor" "${ROOT}/monitor" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
-      "MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${storage_gateway_target}" "MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${storage_gateway_node_id}" \
+      "MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" "MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
       "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
 
@@ -1996,22 +2053,25 @@ EOF
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -r "${ROOT}/config/components.env" ]]; then
+  source "${ROOT}/config/components.env"
+fi
 set -a
 source "${ROOT}/secrets/health-auth.env"
 set +a
-WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
-WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}"
-WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
-WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
-WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
-WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
-WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
-WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
-WITH_TRADE="${MOOX_WITH_TRADE:-__WITH_TRADE__}"
-WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
-WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
-WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
-WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
+WITH_STORAGE="${MOOX_WITH_STORAGE:-${MOOX_INSTALLED_WITH_STORAGE:-__WITH_STORAGE__}}"
+WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-${MOOX_INSTALLED_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}}"
+WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-${MOOX_INSTALLED_WITH_EVENTBUS:-__WITH_EVENTBUS__}}"
+WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-${MOOX_INSTALLED_WITH_ARCHIVE:-__WITH_ARCHIVE__}}"
+WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-${MOOX_INSTALLED_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}}"
+WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-${MOOX_INSTALLED_WITH_COLLECTOR:-__WITH_COLLECTOR__}}"
+WITH_FACTOR="${MOOX_WITH_FACTOR:-${MOOX_INSTALLED_WITH_FACTOR:-__WITH_FACTOR__}}"
+WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-__WITH_STRATEGY__}}"
+WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-__WITH_TRADE__}}"
+WITH_MONITOR="${MOOX_WITH_MONITOR:-${MOOX_INSTALLED_WITH_MONITOR:-__WITH_MONITOR__}}"
+WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-${MOOX_INSTALLED_WITH_WEB_HOST:-__WITH_WEB_HOST__}}"
+WITH_ADMIN="${MOOX_WITH_ADMIN:-${MOOX_INSTALLED_WITH_ADMIN:-__WITH_ADMIN__}}"
+WITH_GATEWAY="${MOOX_WITH_GATEWAY:-${MOOX_INSTALLED_WITH_GATEWAY:-__WITH_GATEWAY__}}"
 if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
   echo "storage-node requires storage" >&2
   exit 2
@@ -2020,7 +2080,7 @@ if [[ "${WITH_STORAGE_NODE}" == "1" && ! -d "${ROOT}/storage-node" ]]; then
   echo "storage-node is enabled but its package is missing" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
+if [[ "${WITH_STORAGE}" == "1" && "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
   echo "storage-node package is present but storage-node is disabled" >&2
   exit 2
 fi
@@ -2257,19 +2317,22 @@ EOF
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
-WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}"
-WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
-WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
-WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
-WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
-WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
-WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
-WITH_TRADE="${MOOX_WITH_TRADE:-__WITH_TRADE__}"
-WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
-WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
-WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
-WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
+if [[ -r "${ROOT}/config/components.env" ]]; then
+  source "${ROOT}/config/components.env"
+fi
+WITH_STORAGE="${MOOX_WITH_STORAGE:-${MOOX_INSTALLED_WITH_STORAGE:-__WITH_STORAGE__}}"
+WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-${MOOX_INSTALLED_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}}"
+WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-${MOOX_INSTALLED_WITH_EVENTBUS:-__WITH_EVENTBUS__}}"
+WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-${MOOX_INSTALLED_WITH_ARCHIVE:-__WITH_ARCHIVE__}}"
+WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-${MOOX_INSTALLED_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}}"
+WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-${MOOX_INSTALLED_WITH_COLLECTOR:-__WITH_COLLECTOR__}}"
+WITH_FACTOR="${MOOX_WITH_FACTOR:-${MOOX_INSTALLED_WITH_FACTOR:-__WITH_FACTOR__}}"
+WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-__WITH_STRATEGY__}}"
+WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-__WITH_TRADE__}}"
+WITH_MONITOR="${MOOX_WITH_MONITOR:-${MOOX_INSTALLED_WITH_MONITOR:-__WITH_MONITOR__}}"
+WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-${MOOX_INSTALLED_WITH_WEB_HOST:-__WITH_WEB_HOST__}}"
+WITH_ADMIN="${MOOX_WITH_ADMIN:-${MOOX_INSTALLED_WITH_ADMIN:-__WITH_ADMIN__}}"
+WITH_GATEWAY="${MOOX_WITH_GATEWAY:-${MOOX_INSTALLED_WITH_GATEWAY:-__WITH_GATEWAY__}}"
 if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
   echo "storage-node requires storage" >&2
   exit 2
@@ -2278,7 +2341,7 @@ if [[ "${WITH_STORAGE_NODE}" == "1" && ! -d "${ROOT}/storage-node" ]]; then
   echo "storage-node is enabled but its package is missing" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
+if [[ "${WITH_STORAGE}" == "1" && "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
   echo "storage-node package is present but storage-node is disabled" >&2
   exit 2
 fi
@@ -2348,22 +2411,25 @@ EOF
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -r "${ROOT}/config/components.env" ]]; then
+  source "${ROOT}/config/components.env"
+fi
 set -a
 source "${ROOT}/secrets/health-auth.env"
 set +a
-WITH_STORAGE="${MOOX_WITH_STORAGE:-__WITH_STORAGE__}"
-WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}"
-WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-__WITH_EVENTBUS__}"
-WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-__WITH_ARCHIVE__}"
-WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}"
-WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-__WITH_COLLECTOR__}"
-WITH_FACTOR="${MOOX_WITH_FACTOR:-__WITH_FACTOR__}"
-WITH_STRATEGY="${MOOX_WITH_STRATEGY:-__WITH_STRATEGY__}"
-WITH_TRADE="${MOOX_WITH_TRADE:-__WITH_TRADE__}"
-WITH_MONITOR="${MOOX_WITH_MONITOR:-__WITH_MONITOR__}"
-WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-__WITH_WEB_HOST__}"
-WITH_ADMIN="${MOOX_WITH_ADMIN:-__WITH_ADMIN__}"
-WITH_GATEWAY="${MOOX_WITH_GATEWAY:-__WITH_GATEWAY__}"
+WITH_STORAGE="${MOOX_WITH_STORAGE:-${MOOX_INSTALLED_WITH_STORAGE:-__WITH_STORAGE__}}"
+WITH_STORAGE_NODE="${MOOX_WITH_STORAGE_NODE:-${MOOX_INSTALLED_WITH_STORAGE_NODE:-__WITH_STORAGE_NODE__}}"
+WITH_EVENTBUS="${MOOX_WITH_EVENTBUS:-${MOOX_INSTALLED_WITH_EVENTBUS:-__WITH_EVENTBUS__}}"
+WITH_ARCHIVE="${MOOX_WITH_ARCHIVE:-${MOOX_INSTALLED_WITH_ARCHIVE:-__WITH_ARCHIVE__}}"
+WITH_CLOUDNODE="${MOOX_WITH_CLOUDNODE:-${MOOX_INSTALLED_WITH_CLOUDNODE:-__WITH_CLOUDNODE__}}"
+WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-${MOOX_INSTALLED_WITH_COLLECTOR:-__WITH_COLLECTOR__}}"
+WITH_FACTOR="${MOOX_WITH_FACTOR:-${MOOX_INSTALLED_WITH_FACTOR:-__WITH_FACTOR__}}"
+WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-__WITH_STRATEGY__}}"
+WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-__WITH_TRADE__}}"
+WITH_MONITOR="${MOOX_WITH_MONITOR:-${MOOX_INSTALLED_WITH_MONITOR:-__WITH_MONITOR__}}"
+WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-${MOOX_INSTALLED_WITH_WEB_HOST:-__WITH_WEB_HOST__}}"
+WITH_ADMIN="${MOOX_WITH_ADMIN:-${MOOX_INSTALLED_WITH_ADMIN:-__WITH_ADMIN__}}"
+WITH_GATEWAY="${MOOX_WITH_GATEWAY:-${MOOX_INSTALLED_WITH_GATEWAY:-__WITH_GATEWAY__}}"
 if [[ "${WITH_STORAGE_NODE}" == "1" && "${WITH_STORAGE}" != "1" ]]; then
   echo "storage-node requires storage" >&2
   exit 2
@@ -2372,7 +2438,7 @@ if [[ "${WITH_STORAGE_NODE}" == "1" && ! -d "${ROOT}/storage-node" ]]; then
   echo "storage-node is enabled but its package is missing" >&2
   exit 2
 fi
-if [[ "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
+if [[ "${WITH_STORAGE}" == "1" && "${WITH_STORAGE_NODE}" != "1" && -d "${ROOT}/storage-node" ]]; then
   echo "storage-node package is present but storage-node is disabled" >&2
   exit 2
 fi
@@ -2623,13 +2689,13 @@ prepare_stage() {
     printf 'MOOX_GATEWAY_CALLER=admin-gateway\n'
     printf 'MOOX_GATEWAY_SERVICE_SECRET_KEY=%q\n' "${gateway_service_secret}"
   } >"${STAGE_DIR}/secrets/gateway-service.env"
-  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_FACTOR}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
+  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_FACTOR}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
     local storage_primary_auth_secret="${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
     if [[ -z "${storage_primary_auth_secret}" ]]; then
       if [[ "${WITH_STORAGE}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
         storage_primary_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-primary-auth)"
       else
-        fail "MOOX_STORAGE_PRIMARY_AUTH_SECRET is required when packaging Factor without Storage"
+        fail "MOOX_STORAGE_PRIMARY_AUTH_SECRET is required when packaging Factor or Monitor without Storage"
       fi
     fi
     [[ "${storage_primary_auth_secret}" != *$'\n'* && "${storage_primary_auth_secret}" != *$'\r'* ]] || \
@@ -2651,7 +2717,7 @@ prepare_stage() {
       if [[ "${WITH_STORAGE}" -eq 1 || "${DEPLOY_PROFILE}" == "control" ]]; then
         storage_view_auth_secret="$(generate_secret "${ROOT}/bin/moox-admin-cli" storage-view-auth)"
       else
-        fail "MOOX_STORAGE_VIEW_AUTH_SECRET is required when packaging Factor without Storage"
+        fail "MOOX_STORAGE_VIEW_AUTH_SECRET is required when packaging Factor or Monitor without Storage"
       fi
     fi
     [[ "${storage_view_auth_secret}" != *$'\n'* && "${storage_view_auth_secret}" != *$'\r'* ]] || \
@@ -2674,6 +2740,34 @@ EOF
   } >"${STAGE_DIR}/secrets/gateway-moox-cli.env"
   chmod 0600 "${STAGE_DIR}/secrets/gateway-control.env" "${STAGE_DIR}/secrets/gateway-service.env" "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${STAGE_DIR}/secrets/gateway-credentials.json"
   mkdir -p "${STAGE_DIR}/lib" "${STAGE_DIR}/config/caddy"
+  cat >"${STAGE_DIR}/config/components.env" <<EOF
+MOOX_INSTALLED_WITH_STORAGE=${WITH_STORAGE}
+MOOX_INSTALLED_WITH_STORAGE_NODE=${WITH_STORAGE_NODE}
+MOOX_INSTALLED_WITH_ARCHIVE=${WITH_ARCHIVE}
+MOOX_INSTALLED_WITH_EVENTBUS=${WITH_EVENTBUS}
+MOOX_INSTALLED_WITH_CLOUDNODE=${WITH_CLOUDNODE}
+MOOX_INSTALLED_WITH_COLLECTOR=${WITH_COLLECTOR}
+MOOX_INSTALLED_WITH_FACTOR=${WITH_FACTOR}
+MOOX_INSTALLED_WITH_STRATEGY=${WITH_STRATEGY}
+MOOX_INSTALLED_WITH_TRADE=${WITH_TRADE}
+MOOX_INSTALLED_WITH_MONITOR=${WITH_MONITOR}
+MOOX_INSTALLED_WITH_WEB_HOST=${WITH_WEB_HOST}
+MOOX_INSTALLED_WITH_ADMIN=${WITH_ADMIN}
+MOOX_INSTALLED_WITH_GATEWAY=${WITH_GATEWAY}
+MOOX_WITH_STORAGE=\${MOOX_WITH_STORAGE:-\${MOOX_INSTALLED_WITH_STORAGE}}
+MOOX_WITH_STORAGE_NODE=\${MOOX_WITH_STORAGE_NODE:-\${MOOX_INSTALLED_WITH_STORAGE_NODE}}
+MOOX_WITH_ARCHIVE=\${MOOX_WITH_ARCHIVE:-\${MOOX_INSTALLED_WITH_ARCHIVE}}
+MOOX_WITH_EVENTBUS=\${MOOX_WITH_EVENTBUS:-\${MOOX_INSTALLED_WITH_EVENTBUS}}
+MOOX_WITH_CLOUDNODE=\${MOOX_WITH_CLOUDNODE:-\${MOOX_INSTALLED_WITH_CLOUDNODE}}
+MOOX_WITH_COLLECTOR=\${MOOX_WITH_COLLECTOR:-\${MOOX_INSTALLED_WITH_COLLECTOR}}
+MOOX_WITH_FACTOR=\${MOOX_WITH_FACTOR:-\${MOOX_INSTALLED_WITH_FACTOR}}
+MOOX_WITH_STRATEGY=\${MOOX_WITH_STRATEGY:-\${MOOX_INSTALLED_WITH_STRATEGY}}
+MOOX_WITH_TRADE=\${MOOX_WITH_TRADE:-\${MOOX_INSTALLED_WITH_TRADE}}
+MOOX_WITH_MONITOR=\${MOOX_WITH_MONITOR:-\${MOOX_INSTALLED_WITH_MONITOR}}
+MOOX_WITH_WEB_HOST=\${MOOX_WITH_WEB_HOST:-\${MOOX_INSTALLED_WITH_WEB_HOST}}
+MOOX_WITH_ADMIN=\${MOOX_WITH_ADMIN:-\${MOOX_INSTALLED_WITH_ADMIN}}
+MOOX_WITH_GATEWAY=\${MOOX_WITH_GATEWAY:-\${MOOX_INSTALLED_WITH_GATEWAY}}
+EOF
   cp "${ROOT}/scripts/lib/caddy-managed.sh" "${STAGE_DIR}/lib/caddy-managed.sh"
   cp "${ROOT}/scripts/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/loopback-listeners.sh"
   cp "${ROOT}/scripts/install-caddy-ca.sh" "${STAGE_DIR}/lib/install-caddy-ca.sh"
@@ -2724,8 +2818,10 @@ EOF
     fi
   fi
 
-  copy_required_binary "moox-gateway"
-  copy_required_binary "moox-gateway-cli"
+  if [[ "${WITH_GATEWAY}" -eq 1 ]]; then
+    copy_required_binary "moox-gateway"
+    copy_required_binary "moox-gateway-cli"
+  fi
   if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${WITH_STORAGE}" -eq 1 ]]; then
     copy_required_binary "moox-cli"
   fi
@@ -2753,6 +2849,8 @@ EOF
     copy_required_binary "moox-factor-cli"
     install -m 0755 "${ROOT}/scripts/moox-factor-run-once.sh" "${STAGE_DIR}/bin/moox-factor-run-once"
   fi
+  install -m 0755 "${ROOT}/scripts/moox-storage-auth-check.sh" "${STAGE_DIR}/bin/moox-storage-auth-check"
+  install -m 0755 "${ROOT}/scripts/moox-storage-auth-rotate.sh" "${STAGE_DIR}/bin/moox-storage-auth-rotate"
   if [[ "${WITH_STRATEGY}" -eq 1 ]]; then
     copy_required_binary "moox-strategy"
     copy_required_binary "moox-strategy-cli"
@@ -2872,12 +2970,54 @@ prepare_cls_preflight() {
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" "${args[@]}"
 }
 
+persist_selected_components() {
+  local file="$1" assignment key enabled
+  shift
+  mkdir -p "$(dirname "${file}")"
+  touch "${file}"
+  for assignment in "$@"; do
+    key="${assignment%%:*}"
+    enabled="${assignment#*:}"
+    [[ "${enabled}" == "1" ]] || continue
+    if grep -q "^${key}=" "${file}"; then
+      perl -0pi -e "s#^${key}=.*\$#${key}=1#m" "${file}"
+    else
+      printf '%s=1\n' "${key}" >>"${file}"
+    fi
+  done
+  chmod 0600 "${file}"
+}
+
 sync_local_stage() {
-  local deploy_dir
+  local deploy_dir component_overlay="${COMPONENT_OVERLAY}"
   deploy_dir="$(expand_local_path "${DEPLOY_DIR}")"
   mkdir -p "${deploy_dir}"
+  if command -v flock >/dev/null 2>&1; then
+    exec 8>"${deploy_dir}.maintenance.lock"
+    flock 8
+  fi
+  local has_selected_workload=0
+  if [[ "${WITH_ARCHIVE}" -eq 1 || "${WITH_EVENTBUS}" -eq 1 || "${WITH_CLOUDNODE}" -eq 1 || \
+    "${WITH_COLLECTOR}" -eq 1 || "${WITH_FACTOR}" -eq 1 || "${WITH_STRATEGY}" -eq 1 || \
+    "${WITH_TRADE}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${WITH_WEB_HOST}" -eq 1 || \
+    "${WITH_GATEWAY}" -eq 1 ]]; then
+    has_selected_workload=1
+  fi
+  if [[ "${component_overlay}" -eq 1 ]]; then
+    [[ "${WITH_ADMIN}" -eq 0 && "${WITH_STORAGE}" -eq 0 && "${has_selected_workload}" -eq 1 ]] ||
+      fail "--component-overlay requires --no-admin, --no-storage, and at least one selected component"
+    [[ -x "${deploy_dir}/start.sh" ]] || fail "--component-overlay requires an existing executable ${deploy_dir}/start.sh"
+    [[ -r "${deploy_dir}/config/components.env" ]] || fail "--component-overlay requires lifecycle component inventory at ${deploy_dir}/config/components.env"
+    grep -Fq 'MOOX_INSTALLED_WITH_' "${deploy_dir}/config/components.env" || fail "installed component inventory is too old for --component-overlay; run a full deployment first"
+    grep -Fq 'MOOX_INSTALLED_WITH_' "${deploy_dir}/start.sh" || fail "installed lifecycle is too old for --component-overlay; run a full deployment first"
+    [[ "${RESET_DATA}" -eq 0 ]] || fail "--reset-data cannot be used with --component-overlay"
+    log "component overlay requested; preserve the installed control plane, shared credentials, and lifecycle scripts"
+  elif [[ "${WITH_ADMIN}" -eq 0 && "${WITH_STORAGE}" -eq 0 && "${has_selected_workload}" -eq 1 && \
+    ( -d "${deploy_dir}/admin" || -x "${deploy_dir}/bin/moox-admin" ) ]]; then
+    fail "existing control plane detected; use --component-overlay for a partial update"
+  fi
 
-  if [[ -e "${deploy_dir}/config/caddy/edge.env" || -e "${deploy_dir}/config/caddy/Caddyfile" || -e "${deploy_dir}/run/caddy.pid" ]]; then
+  if [[ "${component_overlay}" -eq 0 && ( -e "${deploy_dir}/config/caddy/edge.env" || -e "${deploy_dir}/config/caddy/Caddyfile" || -e "${deploy_dir}/run/caddy.pid" ) ]]; then
     [[ "${NO_START}" -eq 0 ]] || fail "--no-start refuses to replace an existing managed Caddy deployment"
     [[ -n "${PUBLIC_HOST}" ]] || fail "existing managed Caddy deployment requires --public-host"
   fi
@@ -2907,13 +3047,18 @@ sync_local_stage() {
       if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" eventbus || true
       fi
+      if [[ "${WITH_GATEWAY}" -eq 1 ]]; then
+        MOOX_WITH_GATEWAY=1 "${deploy_dir}/stop.sh" gateway || true
+      fi
       if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" archive || true
       fi
       if [[ "${WITH_WEB_HOST}" -eq 1 ]]; then
         "${deploy_dir}/stop.sh" web-host || true
       fi
-      "${deploy_dir}/stop.sh" admin || true
+      if [[ "${WITH_ADMIN}" -eq 1 ]]; then
+        "${deploy_dir}/stop.sh" admin || true
+      fi
     fi
   fi
 
@@ -2923,8 +3068,20 @@ sync_local_stage() {
 
   if command -v rsync >/dev/null 2>&1; then
     local rsync_excludes=(--exclude '/data/' --exclude '/logs/' --exclude '/run/' --exclude '/secrets/' --exclude '/certs/' --exclude '/config/caddy/Caddyfile' --exclude '/config/caddy/Caddyfile.rollback')
+    if [[ "${component_overlay}" -eq 1 ]]; then
+      rsync_excludes+=(--exclude '/admin/' --exclude '/examples/' \
+        --exclude '/config/caddy/' --exclude '/config/components.env' \
+        --exclude '/bin/moox-admin' --exclude '/bin/moox-admin-cli' --exclude '/bin/moox-cli' \
+        --exclude '/start.sh' --exclude '/stop.sh' --exclude '/restart.sh' \
+        --exclude '/status.sh' --exclude '/healthcheck.sh')
+      if [[ "${WITH_GATEWAY}" -eq 0 ]]; then
+        rsync_excludes+=(--exclude '/gateway/' --exclude '/bin/moox-gateway' --exclude '/bin/moox-gateway-cli')
+      fi
+    fi
     if [[ "${WITH_STORAGE}" -eq 0 ]]; then
-      rsync_excludes+=(--exclude '/storage/' --exclude '/storage-view/' --exclude '/storage-node/' --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-primary' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-node')
+      rsync_excludes+=(--exclude '/storage/' --exclude '/storage-view/' --exclude '/storage-node/' \
+        --exclude '/build-provenance.json' --exclude '/reset-storage-view-indexes.sh' \
+        --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-primary' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-node')
     fi
     if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/eventbus/' --exclude '/bin/moox-eventbus')
@@ -2960,10 +3117,12 @@ sync_local_stage() {
       "${rsync_excludes[@]}" \
       "${STAGE_DIR}/" "${deploy_dir}/"
   else
-    rm -rf "${deploy_dir}/admin" "${deploy_dir}/examples" \
-      "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh"
-    rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-admin-cli" \
-      "${deploy_dir}/bin/moox-cli"
+    if [[ "${component_overlay}" -eq 0 ]]; then
+      rm -rf "${deploy_dir}/admin" "${deploy_dir}/examples" \
+        "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/restart.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh"
+      rm -f "${deploy_dir}/bin/moox-admin" "${deploy_dir}/bin/moox-admin-cli" \
+        "${deploy_dir}/bin/moox-cli"
+    fi
     if [[ "${WITH_EVENTBUS}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/eventbus"
       rm -f "${deploy_dir}/bin/moox-eventbus"
@@ -2999,6 +3158,10 @@ sync_local_stage() {
       rm -rf "${deploy_dir}/monitor"
       rm -f "${deploy_dir}/bin/moox-monitor" "${deploy_dir}/bin/moox-monitor-cli"
     fi
+    if [[ "${component_overlay}" -eq 1 && "${WITH_GATEWAY}" -eq 1 ]]; then
+      rm -rf "${deploy_dir}/gateway"
+      rm -f "${deploy_dir}/bin/moox-gateway" "${deploy_dir}/bin/moox-gateway-cli"
+    fi
     if [[ "${WITH_STORAGE}" -eq 1 ]]; then
       rm -rf "${deploy_dir}/storage" "${deploy_dir}/storage-view" "${deploy_dir}/storage-node"
       rm -f "${deploy_dir}/bin/moox-storage" "${deploy_dir}/bin/moox-storage-cli" \
@@ -3006,38 +3169,67 @@ sync_local_stage() {
         "${deploy_dir}/bin/moox-storage-view" \
         "${deploy_dir}/bin/moox-storage-node"
     fi
-    cp -R "${STAGE_DIR}/." "${deploy_dir}/"
+    if [[ "${component_overlay}" -eq 1 ]]; then
+      local overlay_excludes=(
+        --exclude='./admin' --exclude='./examples'
+        --exclude='./bin/moox-admin' --exclude='./bin/moox-admin-cli' --exclude='./bin/moox-cli'
+        --exclude='./start.sh' --exclude='./stop.sh' --exclude='./restart.sh'
+        --exclude='./status.sh' --exclude='./healthcheck.sh'
+        --exclude='./secrets' --exclude='./certs' --exclude='./config/caddy' --exclude='./config/components.env'
+      )
+      if [[ "${WITH_GATEWAY}" -eq 0 ]]; then
+        overlay_excludes+=(--exclude='./gateway' --exclude='./bin/moox-gateway' --exclude='./bin/moox-gateway-cli')
+      fi
+      tar -C "${STAGE_DIR}" -cf - "${overlay_excludes[@]}" . | tar -C "${deploy_dir}" -xf -
+    else
+      cp -R "${STAGE_DIR}/." "${deploy_dir}/"
+    fi
+  fi
+
+  if [[ "${component_overlay}" -eq 1 ]]; then
+    persist_selected_components "${deploy_dir}/config/components.env" \
+      "MOOX_INSTALLED_WITH_ARCHIVE:${WITH_ARCHIVE}" "MOOX_INSTALLED_WITH_EVENTBUS:${WITH_EVENTBUS}" \
+      "MOOX_INSTALLED_WITH_CLOUDNODE:${WITH_CLOUDNODE}" "MOOX_INSTALLED_WITH_COLLECTOR:${WITH_COLLECTOR}" \
+      "MOOX_INSTALLED_WITH_FACTOR:${WITH_FACTOR}" "MOOX_INSTALLED_WITH_STRATEGY:${WITH_STRATEGY}" \
+      "MOOX_INSTALLED_WITH_TRADE:${WITH_TRADE}" "MOOX_INSTALLED_WITH_MONITOR:${WITH_MONITOR}" \
+      "MOOX_INSTALLED_WITH_WEB_HOST:${WITH_WEB_HOST}" "MOOX_INSTALLED_WITH_GATEWAY:${WITH_GATEWAY}"
   fi
 
   mkdir -p "${deploy_dir}/secrets" "${deploy_dir}/certs/gateway"
-  install -m 0600 "${STAGE_DIR}/secrets/gateway-control.key" "${deploy_dir}/secrets/gateway-control.key"
-  install -m 0600 "${STAGE_DIR}/secrets/gateway-service.key" "${deploy_dir}/secrets/gateway-service.key"
-  install -m 0600 "${STAGE_DIR}/secrets/gateway-control.env" "${deploy_dir}/secrets/gateway-control.env"
-  install -m 0600 "${STAGE_DIR}/secrets/gateway-service.env" "${deploy_dir}/secrets/gateway-service.env"
+  for shared_gateway_file in gateway-control.key gateway-service.key gateway-control.env gateway-service.env; do
+    if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/${shared_gateway_file}" ]]; then
+      install -m 0600 "${STAGE_DIR}/secrets/${shared_gateway_file}" "${deploy_dir}/secrets/${shared_gateway_file}"
+    fi
+  done
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/storage-node-auth.env" "${deploy_dir}/secrets/storage-node-auth.env"
-  else
-    rm -f "${deploy_dir}/secrets/storage-node-auth.env"
   fi
   if [[ -f "${STAGE_DIR}/secrets/storage-internal-auth.env" ]]; then
-    install -m 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
-  else
+    if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/storage-internal-auth.env" ]]; then
+      install -m 0600 "${STAGE_DIR}/secrets/storage-internal-auth.env" "${deploy_dir}/secrets/storage-internal-auth.env"
+    fi
+  elif [[ "${component_overlay}" -eq 0 ]]; then
     rm -f "${deploy_dir}/secrets/storage-internal-auth.env"
   fi
   if [[ -f "${STAGE_DIR}/secrets/health-auth.env" ]]; then
-    install -m 0600 "${STAGE_DIR}/secrets/health-auth.env" "${deploy_dir}/secrets/health-auth.env"
+    if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/health-auth.env" ]]; then
+      install -m 0600 "${STAGE_DIR}/secrets/health-auth.env" "${deploy_dir}/secrets/health-auth.env"
+    fi
   fi
   for credential_file in "${STAGE_DIR}"/secrets/gateway-collector.key "${STAGE_DIR}"/secrets/gateway-factor.key "${STAGE_DIR}"/secrets/gateway-monitor.key "${STAGE_DIR}"/secrets/gateway-archive.key "${STAGE_DIR}"/secrets/gateway-storage-view.key "${STAGE_DIR}"/secrets/gateway-storage-primary.key "${STAGE_DIR}"/secrets/gateway-strategy.key "${STAGE_DIR}"/secrets/gateway-trade.key "${STAGE_DIR}"/secrets/gateway-cloudnode.key "${STAGE_DIR}"/secrets/gateway-moox-cli.key; do
-    install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
+    if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/$(basename "${credential_file}")" ]]; then
+      install -m 0600 "${credential_file}" "${deploy_dir}/secrets/$(basename "${credential_file}")"
+    fi
   done
-  install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
-  install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/gateway-credentials.json"
+  if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/secrets/gateway-moox-cli.env" || ! -s "${deploy_dir}/secrets/gateway-credentials.json" ]]; then
+    install -m 0600 "${STAGE_DIR}/secrets/gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env"
+    install -m 0600 "${STAGE_DIR}/secrets/gateway-credentials.json" "${deploy_dir}/secrets/gateway-credentials.json"
+  fi
   if [[ -f "${STAGE_DIR}/secrets/msgbox.env.next" ]]; then
     install -m 0600 "${STAGE_DIR}/secrets/msgbox.env.next" "${deploy_dir}/secrets/msgbox.env"
   fi
-  install -m 0644 "${STAGE_DIR}/certs/gateway/peers.pem" "${deploy_dir}/certs/gateway/peers.pem"
-  if [[ "${WITH_ADMIN}" -eq 0 ]]; then
-    rm -f "${deploy_dir}/secrets/admin-jwt.env"
+  if [[ "${component_overlay}" -eq 0 || ! -s "${deploy_dir}/certs/gateway/peers.pem" ]]; then
+    install -m 0644 "${STAGE_DIR}/certs/gateway/peers.pem" "${deploy_dir}/certs/gateway/peers.pem"
   fi
   chmod +x "${deploy_dir}/start.sh" "${deploy_dir}/stop.sh" "${deploy_dir}/status.sh" "${deploy_dir}/healthcheck.sh" "${deploy_dir}/bin/"*
   mkdir -p "${deploy_dir}/secrets"
@@ -3064,7 +3256,7 @@ sync_local_stage() {
   fi
 
   if [[ "${NO_START}" -eq 0 ]]; then
-    if [[ -n "${PUBLIC_HOST}" ]]; then
+    if [[ -n "${PUBLIC_HOST}" && "${component_overlay}" -eq 0 ]]; then
       local caddy_ports="${SERVICE_HTTPS_PORT}"
       [[ "${WITH_ADMIN}" -eq 0 ]] || caddy_ports="${BROWSER_HTTPS_PORT},${SERVICE_HTTPS_PORT}"
       MOOX_PUBLIC_HOST="${PUBLIC_HOST}" MOOX_BROWSER_HTTPS_PORT="${BROWSER_HTTPS_PORT}" MOOX_SERVICE_HTTPS_PORT="${SERVICE_HTTPS_PORT}" \
@@ -3073,7 +3265,20 @@ sync_local_stage() {
         MOOX_CADDY_ARCHIVE="${deploy_dir}/lib/caddy_2.11.4_$([[ "${TARGET_GOOS}" == darwin ]] && printf mac || printf '%s' "${TARGET_GOOS}")_${TARGET_GOARCH}.tar.gz" \
         "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${caddy_ports}" --config "${deploy_dir}/config/caddy/Caddyfile.next"
     fi
-    "${deploy_dir}/start.sh"
+    if [[ "${component_overlay}" -eq 1 ]]; then
+      [[ "${WITH_GATEWAY}" -eq 0 ]] || MOOX_WITH_GATEWAY=1 "${deploy_dir}/start.sh" gateway
+      [[ "${WITH_EVENTBUS}" -eq 0 ]] || "${deploy_dir}/start.sh" eventbus
+      [[ "${WITH_ARCHIVE}" -eq 0 ]] || "${deploy_dir}/start.sh" archive
+      [[ "${WITH_CLOUDNODE}" -eq 0 ]] || "${deploy_dir}/start.sh" cloudnode
+      [[ "${WITH_COLLECTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" collector
+      [[ "${WITH_FACTOR}" -eq 0 ]] || MOOX_WITH_FACTOR=1 "${deploy_dir}/start.sh" factor
+      [[ "${WITH_STRATEGY}" -eq 0 ]] || "${deploy_dir}/start.sh" strategy
+      [[ "${WITH_TRADE}" -eq 0 ]] || "${deploy_dir}/start.sh" trade
+      [[ "${WITH_MONITOR}" -eq 0 ]] || "${deploy_dir}/start.sh" monitor
+      [[ "${WITH_WEB_HOST}" -eq 0 ]] || "${deploy_dir}/start.sh" web-host
+    else
+      "${deploy_dir}/start.sh"
+    fi
   fi
 }
 
@@ -3094,10 +3299,11 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch
+  local quoted_dir quoted_archive quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
+  quoted_component_overlay="$(shell_quote "${COMPONENT_OVERLAY}")"
   quoted_with_storage="$(shell_quote "${WITH_STORAGE}")"
   quoted_with_storage_node="$(shell_quote "${WITH_STORAGE_NODE}")"
   quoted_with_archive="$(shell_quote "${WITH_ARCHIVE}")"
@@ -3125,8 +3331,13 @@ sync_remote_stage() {
   quoted_service_https_port="$(shell_quote "${SERVICE_HTTPS_PORT}")"
   quoted_target_goos="$(shell_quote "${TARGET_GOOS}")"
   quoted_target_goarch="$(shell_quote "${TARGET_GOARCH}")"
+  quoted_local_storage_gateway_target="$(shell_quote "${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-}")"
+  quoted_local_storage_gateway_node_id="$(shell_quote "${MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID:-}")"
+  quoted_factor_python_workers="$(shell_quote "${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-}")"
+  quoted_factor_view_read_workers="$(shell_quote "${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-}")"
+  quoted_factor_view_read_timeout_ms="$(shell_quote "${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
@@ -3142,6 +3353,24 @@ generate_secret() {
   printf '%s' "${secret}"
 }
 
+persist_selected_components() {
+  local file="$1" assignment key enabled
+  shift
+  mkdir -p "$(dirname "${file}")"
+  touch "${file}"
+  for assignment in "$@"; do
+    key="${assignment%%:*}"
+    enabled="${assignment#*:}"
+    [[ "${enabled}" == "1" ]] || continue
+    if grep -q "^${key}=" "${file}"; then
+      sed -i "s/^${key}=.*/${key}=1/" "${file}"
+    else
+      printf '%s=1\n' "${key}" >>"${file}"
+    fi
+  done
+  chmod 0600 "${file}"
+}
+
 if [[ "${DEPLOY_DIR}" == "~" ]]; then
   DEPLOY_DIR="${HOME}"
 elif [[ "${DEPLOY_DIR}" == "~/"* ]]; then
@@ -3153,13 +3382,36 @@ if command -v flock >/dev/null 2>&1; then
   exec 8>"${DEPLOY_DIR}.maintenance.lock"
   flock 8
 fi
+HAS_SELECTED_WORKLOAD=0
+if [[ "${WITH_ARCHIVE}" == "1" || "${WITH_EVENTBUS}" == "1" || "${WITH_CLOUDNODE}" == "1" || \
+  "${WITH_COLLECTOR}" == "1" || "${WITH_FACTOR}" == "1" || "${WITH_STRATEGY}" == "1" || \
+  "${WITH_TRADE}" == "1" || "${WITH_MONITOR}" == "1" || "${WITH_WEB_HOST}" == "1" || \
+  "${WITH_GATEWAY}" == "1" ]]; then
+  HAS_SELECTED_WORKLOAD=1
+fi
+if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
+  [[ "${WITH_ADMIN}" == "0" && "${WITH_STORAGE}" == "0" && "${HAS_SELECTED_WORKLOAD}" == "1" ]] || {
+    echo "--component-overlay requires --no-admin, --no-storage, and at least one selected component" >&2
+    exit 1
+  }
+  [[ -x "${DEPLOY_DIR}/start.sh" ]] || { echo "--component-overlay requires an existing executable ${DEPLOY_DIR}/start.sh" >&2; exit 1; }
+  [[ -r "${DEPLOY_DIR}/config/components.env" ]] || { echo "--component-overlay requires lifecycle component inventory at ${DEPLOY_DIR}/config/components.env" >&2; exit 1; }
+  grep -Fq 'MOOX_INSTALLED_WITH_' "${DEPLOY_DIR}/config/components.env" || { echo "installed component inventory is too old for --component-overlay; run a full deployment first" >&2; exit 1; }
+  grep -Fq 'MOOX_INSTALLED_WITH_' "${DEPLOY_DIR}/start.sh" || { echo "installed lifecycle is too old for --component-overlay; run a full deployment first" >&2; exit 1; }
+  [[ "${RESET_DATA}" == "0" ]] || { echo "--reset-data cannot be used with --component-overlay" >&2; exit 1; }
+  echo "component overlay requested; preserve the installed control plane, shared credentials, and lifecycle scripts"
+elif [[ "${WITH_ADMIN}" == "0" && "${WITH_STORAGE}" == "0" && "${HAS_SELECTED_WORKLOAD}" == "1" && \
+  ( -d "${DEPLOY_DIR}/admin" || -x "${DEPLOY_DIR}/bin/moox-admin" ) ]]; then
+  echo "existing control plane detected; use --component-overlay for a partial update" >&2
+  exit 1
+fi
 KEY_FILE="${HOME}/.config/moox/credentials/admin-encryption-key"
 if [[ "${WITH_ADMIN}" == "1" && ! -f "${KEY_FILE}" ]]; then
   mkdir -p "${HOME}/.config/moox/credentials"
   if [[ -f "${DEPLOY_DIR}/data/admin.db" ]]; then echo "Admin DB exists but encryption key is missing" >&2; exit 1; fi
   umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "${KEY_FILE}"; chmod 600 "${KEY_FILE}"
 fi
-if [[ -e "${DEPLOY_DIR}/config/caddy/edge.env" || -e "${DEPLOY_DIR}/config/caddy/Caddyfile" || -e "${DEPLOY_DIR}/run/caddy.pid" ]]; then
+if [[ "${COMPONENT_OVERLAY}" == "0" && ( -e "${DEPLOY_DIR}/config/caddy/edge.env" || -e "${DEPLOY_DIR}/config/caddy/Caddyfile" || -e "${DEPLOY_DIR}/run/caddy.pid" ) ]]; then
   if [[ "${NO_START}" -eq 1 ]]; then
     echo "--no-start refuses to replace an existing managed Caddy deployment" >&2
     exit 1
@@ -3181,7 +3433,7 @@ if [[ -x "${DEPLOY_DIR}/stop.sh" && "${NO_START}" -eq 0 ]]; then
     [[ "${WITH_MONITOR}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" monitor || true
     [[ "${WITH_CLOUDNODE}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" cloudnode || true
     [[ "${WITH_EVENTBUS}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" eventbus || true
-    [[ "${WITH_GATEWAY}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" gateway || true
+    [[ "${WITH_GATEWAY}" == "1" ]] && MOOX_WITH_GATEWAY=1 "${DEPLOY_DIR}/stop.sh" gateway || true
     [[ "${WITH_WEB_HOST}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" web-host || true
     [[ "${WITH_ADMIN}" == "1" ]] && "${DEPLOY_DIR}/stop.sh" admin || true
   fi
@@ -3193,10 +3445,16 @@ if [[ "${RESET_DATA}" == "1" ]]; then
   fi
 fi
 
-rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/gateway" "${DEPLOY_DIR}/examples" \
-  "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
-rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-admin-cli" \
-  "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-gateway" "${DEPLOY_DIR}/bin/moox-gateway-cli"
+if [[ "${COMPONENT_OVERLAY}" == "0" ]]; then
+  rm -rf "${DEPLOY_DIR}/admin" "${DEPLOY_DIR}/gateway" "${DEPLOY_DIR}/examples" \
+    "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/restart.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh"
+  rm -f "${DEPLOY_DIR}/bin/moox-admin" "${DEPLOY_DIR}/bin/moox-admin-cli" \
+    "${DEPLOY_DIR}/bin/moox-cli" "${DEPLOY_DIR}/bin/moox-gateway" "${DEPLOY_DIR}/bin/moox-gateway-cli"
+fi
+if [[ "${COMPONENT_OVERLAY}" == "1" && "${WITH_GATEWAY}" == "1" ]]; then
+  rm -rf "${DEPLOY_DIR}/gateway"
+  rm -f "${DEPLOY_DIR}/bin/moox-gateway" "${DEPLOY_DIR}/bin/moox-gateway-cli"
+fi
 if [[ "${WITH_ARCHIVE}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/archive"
   rm -f "${DEPLOY_DIR}/bin/moox-archive" "${DEPLOY_DIR}/bin/moox-archive-cli"
@@ -3239,14 +3497,37 @@ if [[ "${WITH_STORAGE}" == "1" ]]; then
     "${DEPLOY_DIR}/bin/moox-storage-view" \
     "${DEPLOY_DIR}/bin/moox-storage-node"
 fi
-tar -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
+TAR_EXCLUDES=()
+if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
+  TAR_EXCLUDES+=(
+    --exclude='./start.sh' --exclude='./stop.sh' --exclude='./restart.sh'
+    --exclude='./status.sh' --exclude='./healthcheck.sh'
+    --exclude='./admin' --exclude='./examples'
+    --exclude='./bin/moox-admin' --exclude='./bin/moox-admin-cli' --exclude='./bin/moox-cli'
+    --exclude='./config/caddy' --exclude='./config/components.env' --exclude='./certs/caddy'
+    --exclude='./secrets/admin-jwt.env' --exclude='./secrets/health-auth.env'
+    --exclude='./secrets/storage-node-auth.env' --exclude='./secrets/storage-internal-auth.env'
+    --exclude='./certs/gateway' --exclude='./secrets/gateway-*'
+  )
+  if [[ "${WITH_GATEWAY}" == "0" ]]; then
+    TAR_EXCLUDES+=(
+      --exclude='./gateway' --exclude='./bin/moox-gateway' --exclude='./bin/moox-gateway-cli'
+    )
+  fi
+fi
+tar "${TAR_EXCLUDES[@]}" -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"
+if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
+  persist_selected_components "${DEPLOY_DIR}/config/components.env" \
+    "MOOX_INSTALLED_WITH_ARCHIVE:${WITH_ARCHIVE}" "MOOX_INSTALLED_WITH_EVENTBUS:${WITH_EVENTBUS}" \
+    "MOOX_INSTALLED_WITH_CLOUDNODE:${WITH_CLOUDNODE}" "MOOX_INSTALLED_WITH_COLLECTOR:${WITH_COLLECTOR}" \
+    "MOOX_INSTALLED_WITH_FACTOR:${WITH_FACTOR}" "MOOX_INSTALLED_WITH_STRATEGY:${WITH_STRATEGY}" \
+    "MOOX_INSTALLED_WITH_TRADE:${WITH_TRADE}" "MOOX_INSTALLED_WITH_MONITOR:${WITH_MONITOR}" \
+    "MOOX_INSTALLED_WITH_WEB_HOST:${WITH_WEB_HOST}" "MOOX_INSTALLED_WITH_GATEWAY:${WITH_GATEWAY}"
+fi
 if [[ -f "${DEPLOY_DIR}/secrets/msgbox.env.next" ]]; then
   mv -f "${DEPLOY_DIR}/secrets/msgbox.env.next" "${DEPLOY_DIR}/secrets/msgbox.env"
   chmod 0600 "${DEPLOY_DIR}/secrets/msgbox.env"
-fi
-if [[ "${WITH_ADMIN}" == "0" ]]; then
-  rm -f "${DEPLOY_DIR}/secrets/admin-jwt.env"
 fi
 chmod +x "${DEPLOY_DIR}/start.sh" "${DEPLOY_DIR}/stop.sh" "${DEPLOY_DIR}/status.sh" "${DEPLOY_DIR}/healthcheck.sh" "${DEPLOY_DIR}/bin/"*
 mkdir -p "${DEPLOY_DIR}/secrets"
@@ -3264,7 +3545,7 @@ chmod 0600 "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/ga
 [[ "${WITH_ADMIN}" == "0" ]] || chmod 0600 "${DEPLOY_DIR}/secrets/admin-jwt.env"
 
   if [[ "${NO_START}" -eq 0 ]]; then
-  if [[ -n "${PUBLIC_HOST}" ]]; then
+  if [[ -n "${PUBLIC_HOST}" && "${COMPONENT_OVERLAY}" == "0" ]]; then
     CADDY_OS_NAME="${TARGET_GOOS}"
     [[ "${CADDY_OS_NAME}" != darwin ]] || CADDY_OS_NAME=mac
     CADDY_PORTS="${SERVICE_HTTPS_PORT}"
@@ -3275,7 +3556,20 @@ chmod 0600 "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/ga
       MOOX_CADDY_ARCHIVE="${DEPLOY_DIR}/lib/caddy_2.11.4_${CADDY_OS_NAME}_${TARGET_GOARCH}.tar.gz" \
       "${DEPLOY_DIR}/lib/caddy-managed.sh" ensure --deploy-dir "${DEPLOY_DIR}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${CADDY_PORTS}" --config "${DEPLOY_DIR}/config/caddy/Caddyfile.next" 8>&-
   fi
-  "${DEPLOY_DIR}/start.sh" 8>&-
+  if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
+    [[ "${WITH_GATEWAY}" == "0" ]] || MOOX_WITH_GATEWAY=1 "${DEPLOY_DIR}/start.sh" gateway 8>&-
+    [[ "${WITH_EVENTBUS}" == "0" ]] || "${DEPLOY_DIR}/start.sh" eventbus 8>&-
+    [[ "${WITH_ARCHIVE}" == "0" ]] || "${DEPLOY_DIR}/start.sh" archive 8>&-
+    [[ "${WITH_CLOUDNODE}" == "0" ]] || "${DEPLOY_DIR}/start.sh" cloudnode 8>&-
+    [[ "${WITH_COLLECTOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" collector 8>&-
+    [[ "${WITH_FACTOR}" == "0" ]] || MOOX_WITH_FACTOR=1 "${DEPLOY_DIR}/start.sh" factor 8>&-
+    [[ "${WITH_STRATEGY}" == "0" ]] || "${DEPLOY_DIR}/start.sh" strategy 8>&-
+    [[ "${WITH_TRADE}" == "0" ]] || "${DEPLOY_DIR}/start.sh" trade 8>&-
+    [[ "${WITH_MONITOR}" == "0" ]] || "${DEPLOY_DIR}/start.sh" monitor 8>&-
+    [[ "${WITH_WEB_HOST}" == "0" ]] || "${DEPLOY_DIR}/start.sh" web-host 8>&-
+  else
+    "${DEPLOY_DIR}/start.sh" 8>&-
+  fi
 fi
 EOF
   log "deployed to ${TARGET}:${DEPLOY_DIR}"

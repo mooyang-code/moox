@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 DEPLOY_ROOT="${MOOX_DEPLOY_ROOT:-}"
 
 fail() {
@@ -31,6 +31,22 @@ require_running_service() {
   [[ "${pid}" =~ ^[0-9]+$ ]] || fail "${name} has invalid pid file: ${pid_file}"
   kill -0 "${pid}" 2>/dev/null || fail "${name} is not running (pid ${pid})"
 }
+
+# The integration test subscribes to the final ViewFactorPeriodReady event.
+# Reuse the running Factor process' EventBus URL and the deployment-generated
+# Factor credentials instead of relying on the checked-in local defaults.
+factor_pid_file="${DEPLOY_ROOT}/run/factor.pid"
+if [[ -r "/proc/$(tr -d '[:space:]' <"${factor_pid_file}")/environ" ]]; then
+  factor_eventbus_url="$(tr '\0' '\n' <"/proc/$(tr -d '[:space:]' <"${factor_pid_file}")/environ" | sed -n 's/^MOOX_EVENTBUS_NATS_URL=//p' | head -1)"
+  [[ -n "${factor_eventbus_url}" ]] && export MOOX_EVENTBUS_NATS_URL="${factor_eventbus_url}"
+fi
+factor_eventbus_credentials="${HOME}/.config/moox/eventbus/factor-eventbus.yaml"
+if [[ -r "${factor_eventbus_credentials}" ]]; then
+  export MOOX_EVENTBUS_NATS_CREDENTIALS="${factor_eventbus_credentials}"
+  factor_eventbus_ca="$(sed -n 's/^ca_file:[[:space:]]*//p' "${factor_eventbus_credentials}" | head -1 | sed 's/[[:space:]]*$//')"
+  [[ "${factor_eventbus_ca}" = /* ]] || factor_eventbus_ca="$(cd "$(dirname "${factor_eventbus_credentials}")" && pwd -P)/${factor_eventbus_ca}"
+  [[ -n "${factor_eventbus_ca}" && -r "${factor_eventbus_ca}" ]] && export MOOX_EVENTBUS_NATS_TLS_CA_FILE="${factor_eventbus_ca}"
+fi
 
 for service in gateway storage-primary storage-node storage-view factor; do
   require_running_service "${service}"

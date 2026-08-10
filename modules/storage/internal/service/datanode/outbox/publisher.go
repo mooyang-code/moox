@@ -42,7 +42,7 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 	if err := proto.Unmarshal(data, message); err != nil {
 		return "", "", err
 	}
-	if message.GetEventName() != events.DatasetRowsUpserted.Name() || message.GetEventVersion() != events.DatasetRowsUpserted.Version() || message.GetEventId() == "" || message.GetSubjectId() == "" || message.GetSpaceId() == "" {
+	if message.GetEventId() == "" || message.GetSubjectId() == "" || message.GetSpaceId() == "" {
 		return "", "", errors.New("dataset event envelope is incomplete")
 	}
 	if message.GetEventId() == "outbox-pending" {
@@ -52,14 +52,27 @@ func validateDatasetEvent(data []byte) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	subject, err := registry.RenderSubject(events.DatasetRowsUpserted, message.GetSpaceId(), message.GetSubjectId())
+	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
+	if !ok || !dataNodeOutboxEvent(event) {
+		return "", "", fmt.Errorf("unsupported DataNode outbox event %s@%d", message.GetEventName(), message.GetEventVersion())
+	}
+	subject, err := registry.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {
 		return "", "", err
 	}
-	if _, _, err := events.DecodeDatasetRowsUpserted(registry, data, subject, message.GetEventId()); err != nil {
+	if _, _, err := events.DecodeRaw(registry, data, subject, message.GetEventId(), events.ContentType); err != nil {
 		return "", "", fmt.Errorf("validate dataset event: %w", err)
 	}
 	return subject, message.GetEventId(), nil
+}
+
+func dataNodeOutboxEvent(event events.Event) bool {
+	for _, allowed := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint} {
+		if event.Name() == allowed.Name() && event.Version() == allowed.Version() {
+			return true
+		}
+	}
+	return false
 }
 
 func NewJetStreamPublisher(client *jetstream.Client) *JetStreamPublisher {

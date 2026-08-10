@@ -69,16 +69,114 @@ func DecodeDatasetRowsUpserted(registry *Registry, raw []byte, subject, messageI
 // and the structured storage envelope. Live consumers should pass the NATS
 // Content-Type header received with the delivery.
 func DecodeDatasetRowsUpsertedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.DatasetRowsUpserted, error) {
-	message, payload, err := DecodeRaw(registry, raw, subject, messageID, contentType)
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, DatasetRowsUpserted)
 	if err != nil {
 		return message, nil, err
-	}
-	if message.GetEventName() != DatasetRowsUpserted.Name() || message.GetEventVersion() != DatasetRowsUpserted.Version() {
-		return message, nil, fmt.Errorf("unexpected storage event name/version")
 	}
 	storagePayload, ok := payload.(*storagepb.DatasetRowsUpserted)
 	if !ok {
 		return message, nil, fmt.Errorf("storage event payload has type %T", payload)
 	}
 	return message, storagePayload, nil
+}
+
+// DecodeDatasetPeriodCollected validates and decodes a Dataset completion marker.
+func DecodeDatasetPeriodCollected(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.DatasetPeriodCollected, error) {
+	return DecodeDatasetPeriodCollectedWithContentType(registry, raw, subject, messageID, ContentType)
+}
+
+// DecodeDatasetPeriodCollectedWithContentType also validates broker content type.
+func DecodeDatasetPeriodCollectedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.DatasetPeriodCollected, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, DatasetPeriodCollected)
+	if err != nil {
+		return message, nil, err
+	}
+	storagePayload, ok := payload.(*storagepb.DatasetPeriodCollected)
+	if !ok {
+		return message, nil, fmt.Errorf("dataset period collected payload has type %T", payload)
+	}
+	return message, storagePayload, nil
+}
+
+// DecodeViewSourcePeriodReady validates and decodes a source View readiness event.
+func DecodeViewSourcePeriodReady(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.ViewSourcePeriodReady, error) {
+	return DecodeViewSourcePeriodReadyWithContentType(registry, raw, subject, messageID, ContentType)
+}
+
+// DecodeViewSourcePeriodReadyWithContentType also validates broker content type.
+func DecodeViewSourcePeriodReadyWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.ViewSourcePeriodReady, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, ViewSourcePeriodReady)
+	if err != nil {
+		return message, nil, err
+	}
+	storagePayload, ok := payload.(*storagepb.ViewSourcePeriodReady)
+	if !ok {
+		return message, nil, fmt.Errorf("view source period ready payload has type %T", payload)
+	}
+	return message, storagePayload, nil
+}
+
+// DecodeFactorPeriodComputed validates and decodes a factor completion marker.
+func DecodeFactorPeriodComputed(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.FactorPeriodComputed, error) {
+	return DecodeFactorPeriodComputedWithContentType(registry, raw, subject, messageID, ContentType)
+}
+
+// DecodeFactorPeriodComputedWithContentType also validates broker content type.
+func DecodeFactorPeriodComputedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.FactorPeriodComputed, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, FactorPeriodComputed)
+	if err != nil {
+		return message, nil, err
+	}
+	storagePayload, ok := payload.(*storagepb.FactorPeriodComputed)
+	if !ok {
+		return message, nil, fmt.Errorf("factor period computed payload has type %T", payload)
+	}
+	return message, storagePayload, nil
+}
+
+// DecodeViewFactorPeriodReady validates and decodes a result View readiness event.
+func DecodeViewFactorPeriodReady(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.ViewFactorPeriodReady, error) {
+	return DecodeViewFactorPeriodReadyWithContentType(registry, raw, subject, messageID, ContentType)
+}
+
+// DecodeViewFactorPeriodReadyWithContentType also validates broker content type.
+func DecodeViewFactorPeriodReadyWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.ViewFactorPeriodReady, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, ViewFactorPeriodReady)
+	if err != nil {
+		return message, nil, err
+	}
+	storagePayload, ok := payload.(*storagepb.ViewFactorPeriodReady)
+	if !ok {
+		return message, nil, fmt.Errorf("view factor period ready payload has type %T", payload)
+	}
+	return message, storagePayload, nil
+}
+
+// DecodeDatasetSyncPoint validates and decodes an ordered Dataset sync point.
+func DecodeDatasetSyncPoint(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.DatasetSyncPoint, error) {
+	return DecodeDatasetSyncPointWithContentType(registry, raw, subject, messageID, ContentType)
+}
+
+// DecodeDatasetSyncPointWithContentType also validates broker content type.
+func DecodeDatasetSyncPointWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.DatasetSyncPoint, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, DatasetSyncPoint)
+	if err != nil {
+		return message, nil, err
+	}
+	storagePayload, ok := payload.(*storagepb.DatasetSyncPoint)
+	if !ok {
+		return message, nil, fmt.Errorf("dataset sync point payload has type %T", payload)
+	}
+	return message, storagePayload, nil
+}
+
+func decodeStorageEvent(registry *Registry, raw []byte, subject, messageID, contentType string, event Event) (*eventpb.EventMessage, proto.Message, error) {
+	message, payload, err := DecodeRaw(registry, raw, subject, messageID, contentType)
+	if err != nil {
+		return message, nil, err
+	}
+	if message.GetEventName() != event.Name() || message.GetEventVersion() != event.Version() {
+		return message, nil, fmt.Errorf("unexpected storage event name/version")
+	}
+	return message, payload, nil
 }

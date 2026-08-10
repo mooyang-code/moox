@@ -3,6 +3,7 @@ package watchdog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -35,6 +36,35 @@ type MarketCanary struct {
 	AuthInfo *commonpb.AuthInfo
 	Config   MarketCanaryConfig
 	Now      func() time.Time
+}
+
+// ErrStorageUnavailable means the monitor could not reach Primary during its
+// startup probe. This is intentionally non-fatal: Primary may be starting at
+// the same time as Monitor and the periodic canary will retry it.
+var ErrStorageUnavailable = errors.New("storage unavailable")
+
+// StorageAuthError is returned when Primary explicitly rejects the monitor's
+// authentication. Unlike a network failure, continuing to start would leave
+// a permanently noisy canary until someone restarts Monitor with the shared
+// secret, so bootstrap treats this error as fatal.
+type StorageAuthError struct {
+	Code   int32
+	Detail string
+}
+
+func (e *StorageAuthError) Error() string {
+	if e == nil {
+		return "storage primary authentication rejected"
+	}
+	if e.Detail == "" {
+		return fmt.Sprintf("storage primary authentication rejected (code=%d)", e.Code)
+	}
+	return "storage primary authentication rejected: " + e.Detail
+}
+
+func IsStorageAuthError(err error) bool {
+	var target *StorageAuthError
+	return errors.As(err, &target)
 }
 
 type marketBar struct {
@@ -167,6 +197,51 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	result.Connected = true
 	result.Status = domain.CheckStatusOK
 	return result
+}
+
+// ProbeStorageAuth performs the smallest possible Primary read needed to
+// validate credentials. It deliberately does not inspect returned rows, so a
+// newly started collector or an empty dataset does not make Monitor fail its
+// startup. Only an explicit auth/permission rejection is fatal to bootstrap.
+func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
+	config := c.Config
+	if c.Reader == nil || strings.TrimSpace(config.SpaceID) == "" || strings.TrimSpace(config.DatasetID) == "" ||
+		strings.TrimSpace(config.SubjectID) == "" || strings.TrimSpace(config.Frequency) == "" || config.SeriesTag == nil {
+		return fmt.Errorf("invalid market canary configuration")
+	}
+	frequency, err := canonicalStorageFrequency(config.Frequency)
+	if err != nil {
+		return fmt.Errorf("invalid market canary frequency: %w", err)
+	}
+	now := time.Now().UTC()
+	if c.Now != nil {
+		now = c.Now().UTC()
+	}
+	times, err := report.RecentDatasetTimes(frequency, now, 1)
+	if err != nil {
+		return fmt.Errorf("invalid market canary time window: %w", err)
+	}
+	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
+		AuthInfo: c.AuthInfo,
+		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
+		Keys:        recentMarketCanaryKeys(config, frequency, times),
+		ColumnNames: []string{"close"},
+	}, client.WithFilter(trpcretry.ReadOnly()))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrStorageUnavailable, err)
+	}
+	if rsp == nil || rsp.GetRetInfo() == nil {
+		return fmt.Errorf("storage probe returned no response")
+	}
+	retInfo := rsp.GetRetInfo()
+	if retInfo.GetCode() == 0 {
+		return nil
+	}
+	message := strings.ToLower(strings.TrimSpace(retInfo.GetMsg()))
+	if retInfo.GetCode() == commonpb.ErrorCode_NO_PERMISSION || strings.Contains(message, "auth") {
+		return &StorageAuthError{Code: int32(retInfo.GetCode()), Detail: storageRejectionError(retInfo)}
+	}
+	return fmt.Errorf("storage probe rejected: %s", storageRejectionError(retInfo))
 }
 
 func marketCanaryThresholdDetails(previous, current marketBar, priceReturn, volumeRatio float64, config MarketCanaryConfig) string {

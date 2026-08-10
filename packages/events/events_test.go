@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestBuiltInEvents(t *testing.T) {
@@ -21,7 +22,12 @@ func TestBuiltInEvents(t *testing.T) {
 		"observability.health.check.reported@1",
 		"observability.host.snapshot.reported@1",
 		"observability.metrics.snapshot.reported@1",
+		"storage.dataset.factor_period.computed@1",
+		"storage.dataset.period.collected@1",
 		"storage.dataset.rows.upserted@2",
+		"storage.dataset.sync_point@1",
+		"storage.view.factor_period.ready@1",
+		"storage.view.source_period.ready@1",
 		"trade.target.requested@1",
 	}
 	wantOwners := map[string]string{
@@ -30,7 +36,12 @@ func TestBuiltInEvents(t *testing.T) {
 		"observability.host.snapshot.reported@1":    "hostagent",
 		"observability.metrics.snapshot.reported@1": "service",
 		"market.fetch.batch.completed@1":            "collector",
+		"storage.dataset.factor_period.computed@1":  "storage",
+		"storage.dataset.period.collected@1":        "storage",
 		"storage.dataset.rows.upserted@2":           "storage",
+		"storage.dataset.sync_point@1":              "storage",
+		"storage.view.factor_period.ready@1":        "storage",
+		"storage.view.source_period.ready@1":        "storage",
 		"trade.target.requested@1":                  "strategy",
 	}
 	events := registry.Events()
@@ -50,6 +61,79 @@ func TestBuiltInEvents(t *testing.T) {
 		if family, err := registry.FamilyPattern(event); err != nil || family == "" {
 			t.Fatalf("event %s family = %q, err=%v", want[i], family, err)
 		}
+	}
+}
+
+func TestStorageCompletionEventsRoundTrip(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	now := timestamppb.Now()
+	tests := []struct {
+		name      string
+		event     Event
+		payload   proto.Message
+		subjectID string
+		decode    func([]byte, string, string) (proto.Message, error)
+	}{
+		{
+			name: "dataset period collected", event: DatasetPeriodCollected,
+			payload:   &storagepb.DatasetPeriodCollected{DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", SubjectIds: []string{"BTC-USDT"}, CollectedAt: now},
+			subjectID: "dataset",
+			decode: func(raw []byte, subject, id string) (proto.Message, error) {
+				_, payload, err := DecodeDatasetPeriodCollected(registry, raw, subject, id)
+				return payload, err
+			},
+		},
+		{
+			name: "source view ready", event: ViewSourcePeriodReady,
+			payload:   &storagepb.ViewSourcePeriodReady{SourceViewId: "source-view", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "dataset", Status: "complete"}}, PrimarySubjects: []string{"BTC-USDT"}, ReadyAt: now},
+			subjectID: "source-view",
+			decode: func(raw []byte, subject, id string) (proto.Message, error) {
+				_, payload, err := DecodeViewSourcePeriodReady(registry, raw, subject, id)
+				return payload, err
+			},
+		},
+		{
+			name: "factor period computed", event: FactorPeriodComputed,
+			payload:   &storagepb.FactorPeriodComputed{SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}}, ComputedAt: now, TriggerEventId: "source-ready-1"},
+			subjectID: "result-dataset",
+			decode: func(raw []byte, subject, id string) (proto.Message, error) {
+				_, payload, err := DecodeFactorPeriodComputed(registry, raw, subject, id)
+				return payload, err
+			},
+		},
+		{
+			name: "factor view ready", event: ViewFactorPeriodReady,
+			payload:   &storagepb.ViewFactorPeriodReady{SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}}, ReadyAt: now},
+			subjectID: "result-view",
+			decode: func(raw []byte, subject, id string) (proto.Message, error) {
+				_, payload, err := DecodeViewFactorPeriodReady(registry, raw, subject, id)
+				return payload, err
+			},
+		},
+		{
+			name: "dataset sync point", event: DatasetSyncPoint,
+			payload:   &storagepb.DatasetSyncPoint{SyncPointId: "sync-1", RequestId: "request-1", DatasetId: "dataset", Source: "import"},
+			subjectID: "dataset",
+			decode: func(raw []byte, subject, id string) (proto.Message, error) {
+				_, payload, err := DecodeDatasetSyncPoint(registry, raw, subject, id)
+				return payload, err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := registry.Encode(tt.event, tt.payload, PublishOptions{
+				EventID: "event-1", OccurredAt: now.AsTime(), SpaceID: "space", SubjectID: tt.subjectID,
+			})
+			require.NoError(t, err)
+			raw, err := proto.Marshal(encoded.Message)
+			require.NoError(t, err)
+			decoded, err := tt.decode(raw, encoded.Subject, "event-1")
+			require.NoError(t, err)
+			require.True(t, proto.Equal(tt.payload, decoded), "decoded payload = %v", decoded)
+		})
 	}
 }
 

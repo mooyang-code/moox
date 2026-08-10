@@ -78,6 +78,33 @@ type SCFFetcher struct {
 	Spaces  []SCFFetcherSpace `toml:"spaces"`
 }
 
+// FactorSetup describes the local Python factors and their default View
+// bindings imported by `moox-cli setup init` or `setup factors`.
+type FactorSetup struct {
+	Enabled   bool              `toml:"enabled"`
+	SourceDir string            `toml:"source_dir"`
+	Items     []FactorSetupItem `toml:"items"`
+}
+
+// FactorSetupItem is intentionally declarative: the source file remains the
+// source of truth while this block supplies the runtime contract required by
+// FactorMgr and the default source View binding.
+type FactorSetupItem struct {
+	FactorID        string   `toml:"factor_id"`
+	File            string   `toml:"file"`
+	Name            string   `toml:"name"`
+	InputColumns    []string `toml:"input_columns"`
+	Outputs         []string `toml:"outputs"`
+	ParamsJSON      string   `toml:"params_json"`
+	LookbackPeriods int      `toml:"lookback_periods"`
+	SpaceID         string   `toml:"space_id"`
+	SourceViewID    string   `toml:"source_view_id"`
+	Freq            string   `toml:"freq"`
+	SubjectMode     string   `toml:"subject_mode"`
+	Subjects        []string `toml:"subjects"`
+	Status          string   `toml:"status"`
+}
+
 // SCFFetcherSpace describes one separately packaged and deployed source
 // collector fleet. PackageConfigDir is relative to modules/collector/configs.
 type SCFFetcherSpace struct {
@@ -115,6 +142,7 @@ type Manifest struct {
 	TencentCloud TencentCloud `toml:"tencent_cloud"`
 	EventBus     EventBus     `toml:"eventbus"`
 	Monitoring   Monitoring   `toml:"monitoring"`
+	Factors      FactorSetup  `toml:"factors"`
 	SCFFetcher   SCFFetcher   `toml:"scf_fetcher"`
 	ControlHost  Host         `toml:"control_host"`
 	CompileHost  Host         `toml:"compile_host"`
@@ -234,6 +262,12 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("tencent_cloud", "region") {
 		out.TencentCloud.Region = "ap-guangzhou"
 	}
+	if !md.IsDefined("factors", "enabled") {
+		out.Factors.Enabled = true
+	}
+	if !md.IsDefined("factors", "source_dir") || strings.TrimSpace(out.Factors.SourceDir) == "" {
+		out.Factors.SourceDir = "./examples/factors"
+	}
 	if out.HasCompileHost() && out.CompileHost.Port == 0 {
 		out.CompileHost.Port = 22
 	}
@@ -285,6 +319,9 @@ func validate(manifest *Manifest) error {
 	if err := validateSCFFetcher(&manifest.SCFFetcher); err != nil {
 		return err
 	}
+	if err := validateFactorSetup(&manifest.Factors); err != nil {
+		return err
+	}
 
 	names := make(map[string]struct{}, 1+len(manifest.OtherHosts))
 	addresses := make(map[string]struct{}, 1+len(manifest.OtherHosts))
@@ -301,6 +338,64 @@ func validate(manifest *Manifest) error {
 	for i := range manifest.OtherHosts {
 		if err := validateHost(fmt.Sprintf("other_hosts[%d]", i), &manifest.OtherHosts[i], names, addresses, true); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateFactorSetup(cfg *FactorSetup) error {
+	if cfg == nil || !cfg.Enabled {
+		return nil
+	}
+	cfg.SourceDir = filepath.ToSlash(filepath.Clean(strings.TrimSpace(cfg.SourceDir)))
+	if cfg.SourceDir == "" || cfg.SourceDir == "." || filepath.IsAbs(cfg.SourceDir) || cfg.SourceDir == ".." || strings.HasPrefix(cfg.SourceDir, "../") {
+		return fmt.Errorf("config_invalid: factors.source_dir must be a repository-relative directory")
+	}
+	seen := make(map[string]struct{}, len(cfg.Items))
+	for index := range cfg.Items {
+		item := &cfg.Items[index]
+		path := fmt.Sprintf("factors.items[%d]", index)
+		item.FactorID = strings.TrimSpace(item.FactorID)
+		item.File = filepath.ToSlash(filepath.Clean(strings.TrimSpace(item.File)))
+		item.Name = strings.TrimSpace(item.Name)
+		item.SpaceID = strings.TrimSpace(item.SpaceID)
+		item.SourceViewID = strings.TrimSpace(item.SourceViewID)
+		item.Freq = strings.TrimSpace(item.Freq)
+		item.SubjectMode = strings.TrimSpace(item.SubjectMode)
+		item.Status = strings.TrimSpace(item.Status)
+		if item.FactorID == "" || item.File == "" || item.SpaceID == "" || item.SourceViewID == "" || item.Freq == "" {
+			return fmt.Errorf("config_invalid: %s requires factor_id, file, space_id, source_view_id and freq", path)
+		}
+		if filepath.IsAbs(item.File) || item.File == ".." || strings.HasPrefix(item.File, "../") {
+			return fmt.Errorf("config_invalid: %s.file must stay under factors.source_dir", path)
+		}
+		if _, ok := seen[item.FactorID]; ok {
+			return fmt.Errorf("config_invalid: factors item %q is duplicated", item.FactorID)
+		}
+		seen[item.FactorID] = struct{}{}
+		if item.Name == "" {
+			item.Name = item.FactorID
+		}
+		if item.ParamsJSON == "" {
+			item.ParamsJSON = "{}"
+		}
+		if item.LookbackPeriods < 1 {
+			return fmt.Errorf("config_invalid: %s.lookback_periods must be at least 1", path)
+		}
+		if item.SubjectMode == "" {
+			item.SubjectMode = "all"
+		}
+		if item.SubjectMode != "all" && item.SubjectMode != "include" {
+			return fmt.Errorf("config_invalid: %s.subject_mode must be all or include", path)
+		}
+		if item.SubjectMode == "include" && len(item.Subjects) == 0 {
+			return fmt.Errorf("config_invalid: %s.subjects must not be empty for include mode", path)
+		}
+		if item.Status == "" {
+			item.Status = "enabled"
+		}
+		if item.Status != "enabled" && item.Status != "disabled" {
+			return fmt.Errorf("config_invalid: %s.status must be enabled or disabled", path)
 		}
 	}
 	return nil

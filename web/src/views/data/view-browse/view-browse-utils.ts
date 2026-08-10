@@ -107,6 +107,8 @@ export function buildViewColumnLabels(
     const fromDataset = datasetColumnByQualifiedName.get(column.origin_id);
     if (fromDataset) {
       const label =
+        factorOutputName(column.attributes) ||
+        factorOutputName(fromDataset.attributes) ||
         displayName(column.attributes) ||
         datasetColumnLabels[qualifiedDatasetColumnName(fromDataset)] ||
         datasetColumnLabels[fromDataset.column_name] ||
@@ -115,6 +117,7 @@ export function buildViewColumnLabels(
       continue;
     }
     labels[column.column_name] =
+      factorOutputName(column.attributes) ||
       displayName(column.attributes) || systemViewLabels[column.origin_id] || readableViewColumnLabel(column.column_name);
   }
   return labels;
@@ -305,6 +308,10 @@ function qualifiedDatasetColumnName(column: Pick<DatasetColumn, "dataset_id" | "
 
 function displayName(attributes?: Record<string, string>) {
   return attributes?.display_name?.trim() || "";
+}
+
+function factorOutputName(attributes?: Record<string, string>) {
+  return attributes?.factor_output?.trim() || "";
 }
 
 function isOriginType(value: unknown, name: string, alias: number) {

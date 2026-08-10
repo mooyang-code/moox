@@ -197,6 +197,10 @@ func errorCode(err error) pb.ErrorCode {
 	if errors.As(err, &validation) {
 		return pb.ErrorCode_INVALID_PARAM
 	}
+	var conflict pebble.ConflictError
+	if errors.As(err, &conflict) {
+		return pb.ErrorCode_CONFLICT
+	}
 	return pb.ErrorCode_INNER_ERR
 }
 

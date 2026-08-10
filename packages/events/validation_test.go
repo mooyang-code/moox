@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -92,6 +93,64 @@ func TestDatasetRowsUpsertedValidatesSeriesTagShape(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Encode() error = %v, wantErr %v", err, tt.wantErr)
 			}
+		})
+	}
+}
+
+func TestStorageCompletionEventValidation(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	now := timestamppb.Now()
+	tests := []struct {
+		name      string
+		event     Event
+		payload   proto.Message
+		subjectID string
+		mutate    func(proto.Message)
+	}{
+		{
+			name: "dataset route", event: DatasetPeriodCollected, subjectID: "dataset",
+			payload: &storagepb.DatasetPeriodCollected{DatasetId: "dataset", Frequency: "1m", PeriodTime: 1, Status: "complete", SubjectIds: []string{"BTC-USDT"}, CollectedAt: now},
+			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCollected).DatasetId = "other" },
+		},
+		{
+			name: "dataset failed subject subset", event: DatasetPeriodCollected, subjectID: "dataset",
+			payload: &storagepb.DatasetPeriodCollected{DatasetId: "dataset", Frequency: "1m", PeriodTime: 1, Status: "degraded", SubjectIds: []string{"BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"}, CollectedAt: now},
+			mutate: func(value proto.Message) {
+				value.(*storagepb.DatasetPeriodCollected).FailedSubjects = []string{"ETH-USDT"}
+			},
+		},
+		{
+			name: "source view aggregate status", event: ViewSourcePeriodReady, subjectID: "source-view",
+			payload: &storagepb.ViewSourcePeriodReady{SourceViewId: "source-view", Frequency: "1m", PeriodTime: 1, Status: "complete", Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "dataset", Status: "complete"}}, ReadyAt: now},
+			mutate:  func(value proto.Message) { value.(*storagepb.ViewSourcePeriodReady).Datasets[0].Status = "degraded" },
+		},
+		{
+			name: "factor computed trigger", event: FactorPeriodComputed, subjectID: "result-dataset",
+			payload: &storagepb.FactorPeriodComputed{SourceViewId: "source-view", ResultDatasetId: "result-dataset", Frequency: "1m", PeriodTime: 1, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}}, ComputedAt: now, TriggerEventId: "source-ready-1"},
+			mutate:  func(value proto.Message) { value.(*storagepb.FactorPeriodComputed).TriggerEventId = "" },
+		},
+		{
+			name: "factor view route", event: ViewFactorPeriodReady, subjectID: "result-view",
+			payload: &storagepb.ViewFactorPeriodReady{SourceViewId: "source-view", ResultViewId: "result-view", Frequency: "1m", PeriodTime: 1, Status: "complete", Bindings: []*storagepb.FactorBindingPeriodState{{BindingId: "binding-1", FactorId: "factor-1", Status: "complete"}}, ReadyAt: now},
+			mutate:  func(value proto.Message) { value.(*storagepb.ViewFactorPeriodReady).ResultViewId = "other" },
+		},
+		{
+			name: "sync point source", event: DatasetSyncPoint, subjectID: "dataset",
+			payload: &storagepb.DatasetSyncPoint{SyncPointId: "sync-1", RequestId: "request-1", DatasetId: "dataset", Source: "import"},
+			mutate:  func(value proto.Message) { value.(*storagepb.DatasetSyncPoint).Source = "manual" },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			valid := proto.Clone(tt.payload)
+			_, err := registry.Encode(tt.event, valid, validationOptions("event-1", "space", tt.subjectID))
+			require.NoError(t, err)
+			invalid := proto.Clone(tt.payload)
+			tt.mutate(invalid)
+			_, err = registry.Encode(tt.event, invalid, validationOptions("event-1", "space", tt.subjectID))
+			require.Error(t, err)
 		})
 	}
 }

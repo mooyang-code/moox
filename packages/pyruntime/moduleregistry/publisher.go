@@ -41,6 +41,14 @@ func (p *SourcePublisher) Publish(ctx context.Context, src ModuleSource) (Module
 	}
 	path := filepath.Join(dir, "module.py")
 	if _, err := os.Stat(path); err == nil {
+		existing, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return ModuleVersion{}, fmt.Errorf("read published module: %w", readErr)
+		}
+		existingSum := sha256.Sum256(existing)
+		if existingSum != sum {
+			return ModuleVersion{}, fmt.Errorf("pyruntime: published module content does not match path hash %s", hash)
+		}
 		return ModuleVersion{src.Type, src.LogicalID, hash, path}, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ModuleVersion{}, err

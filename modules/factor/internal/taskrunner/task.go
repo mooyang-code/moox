@@ -1,4 +1,4 @@
-package scheduler
+package taskrunner
 
 import (
 	"crypto/sha256"
@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 )
 
-// Task is a scheduler-owned executable task.
+// Task is a task-runner-owned executable task.
 type Task struct {
 	engine.FactorTask
 	TriggerType string
@@ -39,9 +39,10 @@ func DeterministicTaskID(task Task) string {
 		_, _ = h.Write([]byte(fmt.Sprintf("%d:%s;", len(value), value)))
 	}
 	for _, value := range []string{
+		task.BindingID,
 		task.SpaceID,
-		task.SourceDataset,
-		task.TargetDataset,
+		task.SourceViewID,
+		task.ResultDatasetID,
 		task.SubjectID,
 		task.Freq,
 		task.StartTime.UTC().Format(time.RFC3339Nano),
@@ -63,22 +64,7 @@ func encodeTaskIDParts(parts ...string) string {
 	return encoded.String()
 }
 
-type taskKey struct {
-	spaceID       string
-	sourceDataset string
-	targetDataset string
-	subjectID     string
-	freq          string
-	factorID      string
-}
-
-func keyOf(task Task) taskKey {
-	return taskKey{
-		spaceID:       task.SpaceID,
-		sourceDataset: task.SourceDataset,
-		targetDataset: task.TargetDataset,
-		subjectID:     task.SubjectID,
-		freq:          task.Freq,
-		factorID:      task.Factor.FactorID,
-	}
+type Result struct {
+	Task Task
+	Err  error
 }

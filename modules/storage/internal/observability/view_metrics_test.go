@@ -53,6 +53,8 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	metrics.IncOutboxDuplicatePublish()
 	metrics.SetOutboxSnapshotAt(3, time.Now().Add(-4*time.Second))
 	metrics.ObserveDelivery("term", "success")
+	metrics.ObservePeriodWaiting("prices-view", "1m", 1)
+	metrics.ObserveReadyPublishRetry("prices-view", "source_period_ready")
 
 	snapshot := metrics.Snapshot()
 	assert.Equal(t, int64(1), snapshot.ConsumerLagMessages)
@@ -89,6 +91,8 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 		"moox_storage_outbox_oldest_age_seconds":             true,
 		"moox_storage_outbox_publish_errors_total":           true,
 		"moox_storage_outbox_duplicate_publish_total":        true,
+		"moox_storage_view_period_waiting_datasets":          true,
+		"moox_storage_view_ready_publish_retry_total":        true,
 	}
 	for _, family := range families {
 		delete(wantNames, family.GetName())

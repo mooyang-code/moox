@@ -692,7 +692,7 @@ func (s *Store) PrepareOutboxPublication(ctx context.Context, id uint64, now tim
 	if err := proto.Unmarshal(raw, message); err != nil {
 		return nil, fmt.Errorf("unmarshal outbox entry %d: %w", id, err)
 	}
-	if err := validateDatasetRowsUpsertedEvent(message, ""); err != nil {
+	if _, err := validateDataNodeMarkerMessage(raw); err != nil {
 		return nil, fmt.Errorf("validate outbox event %d: %w", id, err)
 	}
 	return raw, nil

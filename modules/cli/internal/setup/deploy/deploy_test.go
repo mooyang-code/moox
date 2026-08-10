@@ -409,6 +409,7 @@ func TestStorageInstallerUsesControlGatewayCredentials(t *testing.T) {
 		"gateway-service.env":         "MOOX_GATEWAY_NODE_ID=control\n",
 		"gateway-storage-primary.key": "primary-key\n",
 		"gateway-storage-view.key":    "view-key\n",
+		"storage-internal-auth.env":   "MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-control\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-control\n",
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(controlSecrets, name), []byte(contents), 0o600))
 	}
@@ -428,6 +429,7 @@ func TestStorageInstallerUsesControlGatewayCredentials(t *testing.T) {
 		"gateway-service.env":         "MOOX_GATEWAY_NODE_ID=control\n",
 		"gateway-storage-primary.key": "primary-key\n",
 		"gateway-storage-view.key":    "view-key\n",
+		"storage-internal-auth.env":   "MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-control\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-control\n",
 	} {
 		require.Equal(t, contents, string(requireFile(t, filepath.Join(home, "moox", "storage", "secrets", name))))
 	}

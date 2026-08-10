@@ -29,9 +29,9 @@ import (
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
-	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
@@ -98,8 +98,11 @@ func runPrimaryRole() error {
 		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for primary role")
 	}
 	resolver := newDataNodeResolver(cached.RequestSnapshot, func(target string) pb.DataNodeRuntimeService {
-		proxy := pb.NewDataNodeRuntimeClientProxy(client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
-		return &dataNodeProxyAdapter{proxy: proxy}
+		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
+		return &dataNodeProxyAdapter{
+			proxy:       pb.NewDataNodeRuntimeClientProxy(opts...),
+			markerProxy: pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+		}
 	})
 	viewTarget := os.Getenv("MOOX_STORAGE_VIEW_TARGET")
 	if viewTarget == "" {
@@ -125,7 +128,25 @@ func runPrimaryRole() error {
 	if err != nil {
 		return fmt.Errorf("initialize storage dataset metrics: %w", err)
 	}
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, Authorizer: func(auth *pb.AuthInfo) error {
+	resultDatasetResolver := func(ctx context.Context, spaceID, sourceViewID string) (string, error) {
+		for pageNo := uint32(1); ; pageNo++ {
+			datasets, page, err := cached.ListDatasets(ctx, metadata.DatasetQuery{SpaceID: spaceID, Page: &pb.Page{Page: pageNo, Size: 100}})
+			if err != nil {
+				return "", err
+			}
+			for _, dataset := range datasets {
+				attrs := dataset.GetAttributes()
+				if attrs["dataset_role"] == "factor_result" && attrs["source_view_id"] == sourceViewID {
+					return dataset.GetDatasetId(), nil
+				}
+			}
+			if page == nil || !page.GetHasMore() || len(datasets) == 0 {
+				break
+			}
+		}
+		return "", fmt.Errorf("factor result dataset for source view %s/%s is not found", spaceID, sourceViewID)
+	}
+	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")
@@ -150,6 +171,7 @@ func runPrimaryRole() error {
 	defer stopCleanup()
 	cleanupAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(secret, "storage-primary")}
 	go runCleanupLoop(cleanupCtx, cached, resolver, cleanupAuth, time.Hour)
+	go runViewPeriodCleanupLoop(cleanupCtx, meta, time.Hour, storageViewPeriodRetention())
 	s := trpc.NewServer()
 	for _, name := range []string{"trpc.moox.storage.PrimaryStore", "trpc.moox.storage.PrimaryStore.trpc", "trpc.moox.storage.PrimaryStore.http"} {
 		if listener := s.Service(name); listener != nil {
@@ -193,6 +215,48 @@ func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarys
 			}
 		}
 	}
+}
+
+func runViewPeriodCleanupLoop(ctx context.Context, store metadata.ViewPeriodStateStore, interval, retention time.Duration) {
+	if store == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	if retention <= 0 {
+		retention = 7 * 24 * time.Hour
+	}
+	cleanup := func() {
+		before := time.Now().UTC().Add(-retention)
+		if _, err := store.DeleteViewPeriodDatasetStatesBefore(ctx, before); err != nil {
+			log.Printf("storage View period state cleanup failed: %v", err)
+		}
+		if _, err := store.DeleteViewSyncPointsBefore(ctx, before); err != nil {
+			log.Printf("storage View sync point cleanup failed: %v", err)
+		}
+	}
+	cleanup()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanup()
+		}
+	}
+}
+
+func storageViewPeriodRetention() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_PERIOD_RETENTION")); raw != "" {
+		if retention, err := time.ParseDuration(raw); err == nil && retention > 0 {
+			return retention
+		}
+		log.Printf("invalid MOOX_STORAGE_VIEW_PERIOD_RETENTION=%q; using 168h", raw)
+	}
+	return 7 * 24 * time.Hour
 }
 
 func cleanupDatasets(ctx context.Context, reader datasetReader, resolver primarystore.NodeResolver, auth *pb.AuthInfo, now time.Time) error {
@@ -363,8 +427,11 @@ type dataNodeProxyKey struct {
 func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newProxy func(string) pb.DataNodeRuntimeService) primarystore.NodeResolver {
 	if newProxy == nil {
 		newProxy = func(target string) pb.DataNodeRuntimeService {
-			proxy := pb.NewDataNodeRuntimeClientProxy(client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"))
-			return &dataNodeProxyAdapter{proxy: proxy}
+			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
+			return &dataNodeProxyAdapter{
+				proxy:       pb.NewDataNodeRuntimeClientProxy(opts...),
+				markerProxy: pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+			}
 		}
 	}
 	proxies := make(map[dataNodeProxyKey]pb.DataNodeRuntimeService)
@@ -443,7 +510,10 @@ func normalizeServiceTarget(raw string) (string, error) {
 	return "ip://" + net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
-type dataNodeProxyAdapter struct{ proxy pb.DataNodeRuntimeClientProxy }
+type dataNodeProxyAdapter struct {
+	proxy       pb.DataNodeRuntimeClientProxy
+	markerProxy pb.DataNodeMarkerRuntimeClientProxy
+}
 type dataViewProxyAdapter struct {
 	proxy pb.DataViewClientProxy
 	auth  *pb.AuthInfo
@@ -460,6 +530,18 @@ func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNode
 }
 func (a *dataNodeProxyAdapter) CleanupExpiredBuckets(ctx context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return a.proxy.CleanupExpiredBuckets(ctx, req)
+}
+func (a *dataNodeProxyAdapter) AppendDatasetPeriodCollected(ctx context.Context, req *pb.AppendDatasetPeriodCollectedReq) (*pb.AppendDatasetPeriodCollectedRsp, error) {
+	return a.markerProxy.AppendDatasetPeriodCollected(ctx, req)
+}
+func (a *dataNodeProxyAdapter) AppendFactorPeriodComputed(ctx context.Context, req *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error) {
+	return a.markerProxy.AppendFactorPeriodComputed(ctx, req)
+}
+func (a *dataNodeProxyAdapter) AppendDatasetSyncPointMarker(ctx context.Context, req *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error) {
+	return a.markerProxy.AppendDatasetSyncPointMarker(ctx, req)
+}
+func (a *dataNodeProxyAdapter) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error) {
+	return a.markerProxy.GetFactorPeriodComputedMarker(ctx, req)
 }
 func (a *dataViewProxyAdapter) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
 	clone := proto.Clone(req).(*pb.QueryTimeSeriesRowsReq)
@@ -523,6 +605,7 @@ func runDataNodeRole() error {
 		return errors.New("DataNode listener is not configured")
 	}
 	pb.RegisterDataNodeRuntimeService(listener, svc)
+	pb.RegisterDataNodeMarkerRuntimeService(listener, svc)
 	if err := registerRoleHealth(s, "storage-node"); err != nil {
 		return err
 	}

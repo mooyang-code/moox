@@ -100,13 +100,26 @@ moox-cli setup init \
   --file ./custom.toml \
   --config-dir ./examples/setup/default \
   --storage-host compute
+
+# 仅导入/更新因子，不重新校验或写入 Storage 元数据
+moox-cli setup factors --file ./custom.toml
 ```
+
+如果 `custom.toml` 启用了 `[factors]`，同一个 `setup init` 还会从
+`factors.source_dir` 读取 Python 因子，调用 FactorMgr 导入定义、建立绑定并启用因子。
+仓库的 `custom.toml.example` 已给出 `bias`、`cci` 到
+`crypto_market/binance_spot_kline_1m_view` 的默认配置；修改
+`[[factors.items]]` 的 `space_id`、`source_view_id`、`freq` 和参数即可切换默认关联。
+重复执行时同源文件和同运行契约会报告 unchanged；如果源码或输入/输出/参数契约不同，命令会停止而不会静默覆盖已有因子。修改同一因子的默认 View 或频率后再次执行，会删除此前由 `setup factors` 创建的旧绑定。
 
 `deploy-storage` 同机部署 `storage-primary` 和统一的 `storage-view`，并更新控制面的 Storage 服务
 位置。在 macOS 上发布 Linux Storage 时，CLI 自动通过 `compile_host` 构建 CGO
 二进制后再打包。`setup init` 固定从配置目录读取 `metadata.yaml`，把
 `stock_cn`、`crypto_market` 写入 Admin，把它们和内部 `moox_system` 元数据写入
 Storage。已有资源逐字段一致时记为 unchanged，不一致时停止且不覆盖。
+
+如果 Storage 已经初始化过且当前 seed 与线上元数据不同，`setup init` 会按设计停止；此时使用
+`setup factors` 可以只补齐因子定义和 View 绑定，不会触碰现有 Storage 元数据。
 
 `deploy-storage` 成功启动 Storage 后会自动安装并启用每 10 秒检查一次的
 `systemd` watchdog；如需只补装或更新 watchdog，可执行：

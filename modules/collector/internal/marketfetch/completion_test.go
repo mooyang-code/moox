@@ -75,6 +75,39 @@ func TestHandleCompletionMarksTaskInstanceFailedWhenRetriesAreExhausted(t *testi
 	assert.Equal(t, "permanent_failed", retry.Status)
 }
 
+func TestHandleCompletionPreservesLogicalSyncPointAcrossRetryGenerations(t *testing.T) {
+	t.Setenv("MOOX_FETCH_MAX_RETRY_ATTEMPTS", "5")
+	db := newCompletionTestStore(t)
+	ctx := context.Background()
+	completedAt := time.Date(2026, time.August, 2, 8, 6, 0, 0, time.UTC)
+	const retryID = "batch-b0|BTC-USDT|2026-08-02T07:59:00Z"
+	for _, batchID := range []string{"b0", "b1"} {
+		batch := completionTestBatch(batchID)
+		batch.BatchKind = domain.BatchKindCatchup
+		created, err := db.FetchBatches().CreatePlanned(ctx, &batch)
+		require.NoError(t, err)
+		require.True(t, created)
+		payload := completionTestPayload(&marketfetchpb.MarketFetchItemResult{
+			TaskId: "task-btc", SubjectId: "BTC-USDT", Symbol: "BTCUSDT", TargetDataTime: "2026-08-02T07:59:00Z",
+			SourceEventId: func() string {
+				if batchID == "b0" {
+					return ""
+				}
+				return retryID
+			}(),
+			Outcome: string(domain.ItemOutcomeHTTP429), ErrorType: "rate_limit", ErrorSummary: "too many requests",
+		}, completedAt)
+		payload.BatchId = batch.BatchID
+		payload.ScheduleId = batch.ScheduleID
+		payload.BatchKind = string(domain.BatchKindCatchup)
+		require.NoError(t, handleCompletion(ctx, db.FetchBatches(), db.FetchRetries(), db.TaskInstances(), nil, completionTestDelivery(payload)))
+		completedAt = completedAt.Add(time.Minute)
+	}
+	retry, err := db.FetchRetries().Get(ctx, "crypto", retryID)
+	require.NoError(t, err)
+	assert.Equal(t, "batch-b0", retry.SourceBatchID)
+}
+
 func TestHandleCompletionKeepsSuccessfulTaskInstanceSuccessful(t *testing.T) {
 	db := newCompletionTestStore(t)
 	ctx := context.Background()

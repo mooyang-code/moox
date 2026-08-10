@@ -137,7 +137,13 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	clearViewIndexRuntimeState(view)
-	updated, err := s.metadata.UpsertView(ctx, view)
+	var updated *pb.View
+	var err error
+	if req.GetReplaceColumns() {
+		updated, err = s.metadata.ReplaceViewColumns(ctx, view)
+	} else {
+		updated, err = s.metadata.UpsertView(ctx, view)
+	}
 	if err != nil {
 		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}

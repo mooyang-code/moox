@@ -3,6 +3,7 @@ package view
 import (
 	"context"
 	"crypto/hmac"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -18,40 +19,79 @@ import (
 	viewbleve "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/bleve"
 	viewduckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
 )
 
 type Service struct {
-	engines      map[string]viewindex.Engine
-	indexEngine  map[string]string
-	schemas      map[string]viewindex.ViewIndexSchema
-	views        map[viewRef]*viewRuntime
-	catalogViews map[viewRef]*pb.View
-	indexView    map[string]viewRef
-	authSecret   string
-	primaryAuth  *pb.AuthInfo
-	primary      FieldReader
-	mu           sync.RWMutex
-	byData       map[datasetRef]map[string]struct{}
-	liveGateOnce sync.Once
-	liveGate     *liveLeaseGate
-	metrics      *observability.ViewMetrics
+	engines        map[string]viewindex.Engine
+	indexEngine    map[string]string
+	schemas        map[string]viewindex.ViewIndexSchema
+	views          map[viewRef]*viewRuntime
+	catalogViews   map[viewRef]*pb.View
+	indexView      map[string]viewRef
+	authSecret     string
+	primaryAuth    *pb.AuthInfo
+	primary        FieldReader
+	mu             sync.RWMutex
+	byData         map[datasetRef]map[string]struct{}
+	liveGateOnce   sync.Once
+	liveGate       *liveLeaseGate
+	metrics        *observability.ViewMetrics
+	periodMetadata PeriodMetadataClient
+	readyPublisher ReadyEventPublisher
+	consumerState  func(context.Context) (jetstream.ConsumerState, error)
 }
 
 type datasetRef struct{ spaceID, datasetID string }
 type viewRef struct{ spaceID, viewID string }
 
 type viewRuntime struct {
-	mu           sync.Mutex
-	active       string
-	statsIndexID string
-	stats        viewindex.ViewIndexStats
-	next         string
-	status       string
-	buildID      string
-	ownerID      string
-	metadata     MetadataClient
-	metadataAuth *pb.AuthInfo
+	mu     sync.Mutex
+	active string
+	// activeDatasetIDs is the dataset contract of the currently readable
+	// index. The metadata View carries the desired contract while an A/B
+	// rebuild is in flight, so period events must not read DatasetIds from it.
+	activeDatasetIDs       []string
+	activeDatasetSet       bool
+	activePrimaryDatasetID string
+	statsIndexID           string
+	stats                  viewindex.ViewIndexStats
+	next                   string
+	nextDatasetIDs         []string
+	nextPrimaryDatasetID   string
+	status                 string
+	buildID                string
+	ownerID                string
+	metadata               MetadataClient
+	metadataAuth           *pb.AuthInfo
+}
+
+const (
+	activeDatasetIDsAttr     = "moox.active_dataset_ids"
+	activePrimaryDatasetAttr = "moox.active_primary_dataset_id"
+)
+
+func cloneViewAttributes(attrs map[string]string) map[string]string {
+	if len(attrs) == 0 {
+		return nil
+	}
+	clone := make(map[string]string, len(attrs))
+	for key, value := range attrs {
+		clone[key] = value
+	}
+	return clone
+}
+
+func persistedActiveDatasetIDs(view *pb.View) []string {
+	if view == nil {
+		return nil
+	}
+	var ids []string
+	if raw := strings.TrimSpace(view.GetAttributes()[activeDatasetIDsAttr]); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &ids)
+	}
+	return ids
 }
 
 func New(root, authSecret string) (*Service, error) {
@@ -137,15 +177,65 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	s.mu.Unlock()
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
+	refreshCatalog := runtime.active == ""
+	if !refreshCatalog {
+		s.mu.RLock()
+		refreshCatalog = s.catalogViews[viewKey] == nil
+		s.mu.RUnlock()
+	}
+	if !refreshCatalog && runtime.active != "" {
+		activeEngine, activeErr := s.engineFor(runtime.active)
+		if activeErr != nil {
+			refreshCatalog = true
+		} else if activeStats, statErr := activeEngine.Stat(ctx, runtime.active); statErr != nil || !activeStats.Exists {
+			refreshCatalog = true
+		}
+	}
 	s.mu.Lock()
 	s.removeIndexMappingsLocked(req.GetIndexId())
 	s.indexEngine[req.GetIndexId()] = engineName
 	s.schemas[req.GetIndexId()] = schema
+	if refreshCatalog {
+		datasetIDs := append([]string(nil), sch.GetDatasetIds()...)
+		seenDatasets := make(map[string]struct{})
+		for _, datasetID := range datasetIDs {
+			if datasetID != "" {
+				seenDatasets[datasetID] = struct{}{}
+			}
+		}
+		for _, column := range sch.GetColumns() {
+			if datasetID := viewColumnDataset(column); datasetID != "" {
+				if _, seen := seenDatasets[datasetID]; !seen {
+					datasetIDs = append(datasetIDs, datasetID)
+					seenDatasets[datasetID] = struct{}{}
+				}
+			}
+		}
+		if schema.PrimaryDatasetID != "" {
+			if _, seen := seenDatasets[schema.PrimaryDatasetID]; !seen {
+				datasetIDs = append(datasetIDs, schema.PrimaryDatasetID)
+			}
+		}
+		columns := make([]*pb.ViewColumn, 0, len(sch.GetColumns()))
+		for _, column := range sch.GetColumns() {
+			if column != nil {
+				columns = append(columns, proto.Clone(column).(*pb.ViewColumn))
+			}
+		}
+		s.catalogViews[viewKey] = &pb.View{
+			SpaceId: schema.SpaceID, ViewId: schema.ViewID, PrimaryDatasetId: schema.PrimaryDatasetID,
+			DatasetIds: datasetIDs, Columns: columns,
+		}
+	}
 	if runtime.active == "" {
 		runtime.next = req.GetIndexId()
+		runtime.nextDatasetIDs = append([]string(nil), sch.GetDatasetIds()...)
+		runtime.nextPrimaryDatasetID = sch.GetPrimaryDatasetId()
 		runtime.status = "building"
 	} else if runtime.active != req.GetIndexId() {
 		runtime.next = req.GetIndexId()
+		runtime.nextDatasetIDs = append([]string(nil), sch.GetDatasetIds()...)
+		runtime.nextPrimaryDatasetID = sch.GetPrimaryDatasetId()
 		runtime.status = "building"
 	}
 	s.indexView[req.GetIndexId()] = viewKey

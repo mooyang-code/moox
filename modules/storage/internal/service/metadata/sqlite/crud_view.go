@@ -10,9 +10,27 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const viewWithTimestampsSQL = `json_set(c_attrs_json, '$.created_at', c_ctime, '$.updated_at', c_mtime)`
+
 // rowScanner 抽象 sql.Row 和 sql.Rows 的扫描能力。
 
 func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error) {
+	// UpsertView is the ordinary metadata update path. A protobuf repeated
+	// field has no portable presence bit, so a non-empty partial columns list
+	// must never be interpreted as a complete replacement. Callers that own the
+	// full desired schema use ReplaceViewColumns explicitly.
+	return s.upsertView(ctx, item, false)
+}
+
+// ReplaceViewColumns applies a complete desired column set, including an
+// intentionally empty set. It is used by lifecycle cleanup because proto3
+// repeated fields cannot preserve the distinction between omitted and empty
+// across an RPC boundary.
+func (s *Store) ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View, error) {
+	return s.upsertView(ctx, item, true)
+}
+
+func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bool) (*pb.View, error) {
 	if item == nil || item.GetSpaceId() == "" || item.GetViewId() == "" || item.GetName() == "" || item.GetPrimaryDatasetId() == "" {
 		return nil, errors.New("space_id, view_id, name and primary_dataset_id are required")
 	}
@@ -104,6 +122,37 @@ func (s *Store) UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 		}
 	}
 	columnsChanged := false
+	if replaceColumns {
+		keep := make(map[string]struct{}, len(columns))
+		for _, column := range columns {
+			if column != nil && column.GetColumnName() != "" {
+				keep[column.GetColumnName()] = struct{}{}
+			}
+		}
+		if len(keep) == 0 {
+			result, err := tx.ExecContext(ctx, `DELETE FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, next.GetSpaceId(), next.GetViewId())
+			if err != nil {
+				return nil, err
+			}
+			if affected, affectedErr := result.RowsAffected(); affectedErr == nil {
+				columnsChanged = affected > 0
+			}
+		} else {
+			placeholders := strings.TrimRight(strings.Repeat("?,", len(keep)), ",")
+			args := make([]any, 0, 2+len(keep))
+			args = append(args, next.GetSpaceId(), next.GetViewId())
+			for name := range keep {
+				args = append(args, name)
+			}
+			result, err := tx.ExecContext(ctx, `DELETE FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name NOT IN (`+placeholders+`)`, args...)
+			if err != nil {
+				return nil, err
+			}
+			if affected, affectedErr := result.RowsAffected(); affectedErr == nil {
+				columnsChanged = affected > 0
+			}
+		}
+	}
 	for _, column := range columns {
 		if column.GetSpaceId() == "" {
 			column.SpaceId = next.GetSpaceId()
@@ -147,7 +196,7 @@ func (s *Store) viewDataKind(ctx context.Context, spaceID, datasetID string) pb.
 }
 
 func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {
-	view, err := getMessage(ctx, s.queryDB(ctx), `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
+	view, err := getMessage(ctx, s.queryDB(ctx), `SELECT `+viewWithTimestampsSQL+` FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{spaceID, viewID}, func() *pb.View { return &pb.View{} })
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +223,7 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 		  ))`
 	args := []any{spaceID, spaceID, status, status, datasetID, datasetID, datasetID}
 	items, pageResult, err := queryPagedMessages(ctx, s.queryDB(ctx),
-		`SELECT c_attrs_json `+where+` ORDER BY c_space_id, c_view_id`,
+		`SELECT `+viewWithTimestampsSQL+` `+where+` ORDER BY c_space_id, c_view_id`,
 		`SELECT COUNT(1) `+where,
 		args,
 		page,

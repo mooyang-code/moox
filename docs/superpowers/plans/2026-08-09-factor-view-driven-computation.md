@@ -8,6 +8,8 @@
 
 **Tech Stack:** Go 1.25、Protocol Buffers/tRPC-Go、NATS JetStream、SQLite/GORM、Pebble、DuckDB、Python worker、MooX `packages/events`。
 
+**当前执行状态（2026-08-09）：** Task 1-14 的实现、生成代码和模块级验证已完成；Task 15 已完成 Linux/amd64 发布包构建、正式主机切换、健康检查、备份和回滚目录保留。隔离多进程 E2E 已实际通过 `DatasetPeriodCollected -> ViewSourcePeriodReady -> FactorPeriodComputed -> Result View -> ViewFactorPeriodReady`，并同时通过 Archive outbox 场景；完整故障矩阵仍作为后续增强项，不作为个人单机发布门禁。v6->v7 旧库若存在 `active_revision != desired_revision` 且缺少 active contract 快照，View 进程现在会在启动阶段阻断，而不是启动 consumer 后 ACK 丢失事件。文中的红绿测试步骤保留为实施记录，不代表需要再次先制造失败。
+
 ---
 
 ## 0. 实施边界
@@ -15,7 +17,7 @@
 本计划以 `docs/因子视图驱动计算设计.md` v6 为唯一业务设计基线。实现时锁定以下取舍：
 
 - 一个 `(space,dataset,frequency,period)` 只自动上报一次；迟到 K 线不发第二代 ready，需要时显式 Recalc。
-- View 和 Factor 各只运行一个活动实例；两个 consumer 都使用 `DeliverAllPolicy`、显式 ACK、`MaxAckPending=1`。
+- View 使用 `DeliverAllPolicy` 回放并重建视图，Factor realtime consumer 使用 `DeliverNewPolicy` 从当前 source-ready 开始计算；两者均显式 ACK、`MaxAckPending=1`。历史 Factor 结果通过显式 Recalc 重建。
 - ready 表示“发布时当前 View 可读”，不是历史快照句柄；下游晚读允许得到最新值。
 - Source View 不加入 factor-result Dataset；每个 Source View 自动维护一个独立 Result Dataset 和 Result View。
 - 动态 RowKey manifest 只用于清理本 binding 的旧输出，不进入公共事件。
@@ -907,7 +909,7 @@ git commit -m "feat(collector): report completed dataset periods"
 
 - [ ] **Step 1: 写 binding 和自动 View 失败测试**
 
-断言：binding 接口只接收 `source_view_id`，自动推导 `result_dataset_id/result_view_id`；Source View `keep_duration` 必须为 0；Source View 不能包含 `factor_result` origin；Result View filter 固定包含 binding frequency；所需字段未激活时 binding 为 `pending_view`，激活后 reconciler 置为 `enabled`。
+断言：binding 接口只接收 `source_view_id`，自动推导 `result_dataset_id/result_view_id`；Source View `keep_duration` 可以有限但必须覆盖 lookback 窗口；Source View 不能包含 `factor_result` origin；Result View filter 固定包含 binding frequency；所需字段未激活时 binding 为 `pending_view`，激活后 reconciler 置为 `enabled`。
 
 - [ ] **Step 2: 运行 Factor store/registry 测试确认失败**
 
@@ -936,20 +938,22 @@ message FactorBinding {
 }
 ```
 
-SQLite 用 `c_source_view_id/c_result_dataset_id/c_result_view_id` 替代旧列，status check 加 `pending_view` 和 `cleanup_pending`。项目仍处于新建阶段，沿用现有 obsolete-schema 拒绝策略：检测旧列时给出清晰错误并要求重建 Factor SQLite，不实现在线迁移。
+SQLite 用 `c_source_view_id/c_result_dataset_id/c_result_view_id` 替代旧列，status check 加 `pending_view` 和 `cleanup_pending`。对紧邻上一版的 `c_source_dataset/c_target_dataset` 旧表做一次 SQLite 内迁移，但不能猜测 Dataset 对应的 View ID；旧 enabled binding 会安全降为 disabled 并记录告警，用户完成显式 Source/Result View 重绑后再启用。更早或无法识别的 obsolete schema 仍拒绝启动。Storage metadata v6 只做新增周期状态/SyncPoint 表的保留迁移。
 
 - [ ] **Step 4: 扩展 metadata sync**
 
 稳定命名函数：
 
 ```go
-func ResultDataset(sourceViewID string) string { return resultObjectID(sourceViewID, "_factor") }
-func ResultView(sourceViewID string) string    { return resultObjectID(sourceViewID, "_factor_view") }
+func ResultDataset(sourceDatasetID string) string { return resultObjectID(sourceDatasetID, "_factor", 50) }
+func ResultView(sourceDatasetID string) string    { return resultObjectID(sourceDatasetID, "_factor_v", 30) }
 ```
 
-`resultObjectID` 从现有 `ResultDataset` 提取：输入先 lower/trim，候选不超过 20 字符时直接返回；超长时保留 SHA-1 前 8 bytes 的稳定 suffix，并按 20 字符上限截断 prefix。Dataset/View suffix 不同，避免同 namespace 冲突。
+`resultObjectID` 以 Source View 的 primary Dataset ID 为输入：输入先 lower/trim，Result Dataset 直接使用 `<source_dataset>_factor`，总长度上限为 50；Result View 使用 `<source_dataset>_factor_v`，遵守 View 30 字符上限。超长时保留 SHA-1 前 8 bytes 的稳定 suffix 并截断 prefix。比如 `binance_spot_kline_1m` 生成 `binance_spot_kline_1m_factor`，不再生成 `bin_*` 哈希 ID。
 
-扩展 `MetadataSync` client interface 和 bootstrap adapter，加入 `CreateView/GetView/UpdateView/ListViewColumns/UpsertViewColumn`。复用现有结果 Dataset 创建逻辑，将 Dataset attributes 写为 `dataset_role=factor_result`、`write_owner=factor`、实际 `source_view_id`、计算得到的 `result_view_id` 和 binding frequency，使 Storage 能从 Source View 稳定解析结果 Dataset；并在同 space 创建 time-series Result View。Result View 只包含该结果 Dataset、`keep_duration=0`、`filter_json` 明确写入 frequency。output fields 加入 desired schema；Active schema 满足后 reconciler 将 binding 从 `pending_view` 置为 `enabled`。
+当多个 Source View 共享同一个 primary Dataset 时，在 Dataset 基础名后加入 Source View 的短稳定摘要，避免结果命名空间冲突；标准的 `<dataset>_view` 仍保持上面的可读名称。
+
+扩展 `MetadataSync` client interface 和 bootstrap adapter，加入 `CreateView/GetView/UpdateView/ListViewColumns/UpsertViewColumn`。复用现有结果 Dataset 创建逻辑，将 Dataset attributes 写为 `dataset_role=factor_result`、`write_owner=factor`、实际 `source_view_id`、计算得到的 `result_view_id` 和 binding frequency，使 Storage 能从 Source View 稳定解析结果 Dataset；并在同 space 创建 time-series Result View。Result View 的 `keep_duration` 与结果 Dataset 一致：继承 Source View 的有限窗口，或使用 `0` 表示无限保留；`filter_json` 明确写入 frequency。output fields 加入 desired schema；Active schema 满足后 reconciler 将 binding 从 `pending_view` 置为 `enabled`。
 
 - [ ] **Step 5: 生成 proto 并跑测试**
 
@@ -990,7 +994,7 @@ git commit -m "feat(factor): bind factors to source views"
 
 - [ ] **Step 1: 写 consumer ACK 和执行组失败测试**
 
-断言 consumer 配置为新 durable 名 `factor_view_ready_v1`、`DeliverAll`、`MaxDeliver=-1`、`MaxAckPending=1`；重复 ready 若 `GetFactorPeriodComputed` 命中则 ACK 且不调用 Python；未命中时只有所有 bindings 完成并成功上报 Factor Marker 才 ACK；`jetstream.RunnerConfig.InProgressInterval=30s` 时长任务会自动续 ACK wait。
+断言 consumer 配置为新 durable 名 `factor_view_ready_v1`、`DeliverNew`、`MaxDeliver=-1`、`MaxAckPending=1`；重复 ready 若 `GetFactorPeriodComputed` 命中则 ACK 且不调用 Python；未命中时只有所有 bindings 完成并成功上报 Factor Marker 才 ACK；`jetstream.RunnerConfig.InProgressInterval=30s` 时长任务会自动续 ACK wait。
 
 - [ ] **Step 2: 运行测试确认当前仍依赖 EventBatcher**
 
@@ -1012,7 +1016,7 @@ type PeriodTrigger struct {
 }
 
 type PeriodExecutor struct {
-    operationMu sync.Mutex
+    operationGate *scheduler.OperationGate
     bindings   BindingRepository
     scheduler  *scheduler.Scheduler
     storage    PeriodStorage
@@ -1021,7 +1025,7 @@ type PeriodExecutor struct {
 func (e *PeriodExecutor) Execute(ctx context.Context, trigger PeriodTrigger) error
 ```
 
-`Execute` 在 `operationMu` 下：preflight Marker -> 读取当前 enabled bindings -> 取 primary subjects 与 binding include 的交集 -> 逐 binding/subject 调用现有 scheduler/engine -> 汇总状态 -> 上报 `FactorPeriodComputed`。source-ready status 为 degraded 时仍执行有输入的 subject。
+`Execute` 在共享 `OperationGate` 下：preflight Marker -> 读取当前 enabled bindings -> 取 primary subjects 与 binding include 的交集 -> 逐 binding/subject 调用现有 scheduler/engine -> 汇总状态 -> 上报 `FactorPeriodComputed`。生命周期清理和 pending-view reconciler 也持有同一把 gate，避免在结果 marker 之前改写 binding。source-ready status 为 degraded 时仍执行有输入的 subject，并把辅助 Dataset 的 degraded 传播到 binding 状态。
 
 现有 `scheduler.Task` 增加 `BindingID/SourceViewID/PeriodTime/TriggerEventID/TriggeredAt`，builder 必须显式填充；保留 `Service.Run/runValidated` 作为单任务原语，移除其中 settle sleep 和 View 完整度轮询。旧的多 shard `Enqueue/runShard` 不再作为 realtime 入口。
 
@@ -1190,7 +1194,7 @@ UpsertFields(all batches)
   -> optional RecalcFactor(sync_request_id=request_id)
 ```
 
-命令重试允许用户显式复用 request ID。对于 `BatchKindCatchup`，SCF `Executor` 在聚合 `UpsertFieldsWithSource` 成功后，通过扩展后的 Binance Storage RPC writer 追加 `DatasetSyncPoint(request_id=batch_id, source=catchup)`；SyncPoint 失败时本 batch 返回 Storage error，现有 batch/source ID 重试会幂等补齐。catchup 不发布 `DatasetPeriodCollected`，也不自动触发 Recalc；后续 Recalc 使用该 batch ID 作为 `sync_request_id`。
+命令重试允许用户显式复用 request ID。对于 `BatchKindCatchup`，请求携带稳定的逻辑 `sync_point_id`（首次默认为初始 batch ID）；SCF `Executor` 在聚合 `UpsertFieldsWithSource` 成功后，通过扩展后的 Binance Storage RPC writer 追加 `DatasetSyncPoint(request_id=sync_point_id, source=catchup)`。重试可以生成新的 batch ID 用于写入幂等，但必须沿用原逻辑 ID，避免 Recalc 等待一个永远不会出现的 fence。一个 View 涉及多个 Dataset 时，调度器必须为同一组生成共享逻辑 ID；一期若不支持跨 Dataset catchup，应在命令层拒绝该请求。catchup 不发布 `DatasetPeriodCollected`，也不自动触发 Recalc；后续 Recalc 使用该逻辑 ID 作为 `sync_request_id`。
 
 - [ ] **Step 5: 生成 proto 并运行三个模块测试**
 
@@ -1280,11 +1284,11 @@ git commit -m "refactor(storage): simplify view rebuild synchronization"
 - Modify: `docs/运维/MooX指标监控.md`
 - Modify: `docs/运维/数据保留与磁盘空间.md`
 
-- [ ] **Step 1: 写 binding 生命周期和 retention 测试**
+- [x] **Step 1: 写 binding 生命周期和 retention 测试**
 
 disable 先把 binding 置为 `cleanup_pending` 阻止新任务，再按 manifest 清理保留窗口内旧字段；成功转为 disabled，失败保留 `cleanup_pending` 和 manifest 供重试。unbind 只有在清理成功且 Result View 新 revision 激活后才删除 binding/manifest。retention worker 只删除已 reported 的 Collector 父状态、过期 View dataset state/SyncPoint 和超出窗口的 manifest。
 
-- [ ] **Step 2: 增加最小运行指标**
+- [x] **Step 2: 增加最小运行指标**
 
 固定指标：
 
@@ -1301,11 +1305,11 @@ moox_factor_source_ready_lag_seconds{source_view,frequency}
 
 written/cleared row count 只写 Metrics 和结构化日志，不加回公共事件。
 
-- [ ] **Step 3: 更新配置和架构文档**
+- [x] **Step 3: 更新配置和架构文档**
 
 文档明确删除 row EventBatcher、settle delay、read retry；补充四事件链、latest-wins、Result View 分离、SyncPoint、保留期和人工恢复操作。不得描述 generation/hash/fence 或自动 restatement 为一期能力。
 
-- [ ] **Step 4: 运行模块测试**
+- [x] **Step 4: 运行模块测试**
 
 Run: `cd modules/collector && go test ./...`
 
@@ -1393,7 +1397,7 @@ make verify-pr
 
 Expected: 全部 PASS；若仓库已有基线失败，记录完整命令、首个错误和与本变更无关的证据，不把局部测试冒充全量通过。
 
-- [ ] **Step 6: 运行竞态和 E2E 验证**
+- [x] **Step 6: 运行竞态和 E2E 验证**
 
 ```bash
 (cd modules/storage && go test -race -count=1 ./internal/service/view/... ./internal/service/datanode/...)
@@ -1404,15 +1408,19 @@ Expected: 全部 PASS；若仓库已有基线失败，记录完整命令、首�
 ./scripts/tests/e2e/test-factor-view-ready-e2e.sh
 ```
 
-Expected: 全部 PASS。
+已通过模块级测试、Storage/View 与 Factor 相关 race 测试，以及隔离多进程
+`test-series-tag-e2e.sh`。Monitor 检查因隔离环境未预置 host-metric catalog 而按脚本约定跳过。
+真实链 happy path 也已在 `modules/factor/test/storage_e2e_test.go` 中验证：
+`ReportDatasetPeriodCollected -> ViewSourcePeriodReady -> FactorPeriodComputed -> Primary/Result View`
+并在计算标记出现前检查结果行；完整故障矩阵仍不是本次发布门禁。
 
-- [ ] **Step 7: 做破坏式 schema 切换检查**
+- [x] **Step 7: 做破坏式 schema 切换检查**
 
-发布前停止 Collector、View、Factor；备份 SQLite/Pebble；升级 Storage Metadata schema；清理并重建旧 Factor SQLite binding schema；先启动 Storage/View，再启动 Collector，最后启动 Factor。确认新 durable backlog 为 0、Source/Result View 均 Active 后再恢复交易策略。
+发布前停止 Collector、View、Factor；备份 SQLite/Pebble；让 metadata v6 自动迁移到 v7，再启动 Storage/View；Factor 旧 binding 若被降为 disabled，按迁移告警逐条补填 Source View、Result Dataset/View 后启用，确认 Source/Result View 均 Active 和新 durable backlog 为 0，最后恢复 Collector 与交易策略。无法识别的更早 Factor schema 仍需从备份导出后重建，不在线猜测映射。旧库若存在 `active_revision != desired_revision` 且缺少 active contract 快照，启动会明确阻断，必须先完成 View rebuild 或从备份恢复。
 
 回滚边界：代码回滚前停止新 Collector/Factor；旧 Factor 不能读取新 binding schema，因此回滚必须同时恢复发布前 SQLite 备份。DataNode 中新增 Marker 是可忽略事件，不需要回滚 Pebble 行数据。
 
-- [ ] **Step 8: 提交验收测试**
+- [x] **Step 8: 提交验收测试**
 
 ```bash
 git add modules/factor/test/view_driven_e2e_test.go scripts/tests/e2e/test-factor-view-ready-e2e.sh scripts/verify-event-contracts.sh Makefile
@@ -1447,3 +1455,47 @@ git commit -m "test(factor): verify view-driven calculation end to end"
 - 不支持多实例 View/Factor、分布式锁或通用工作流引擎。
 - 不把 RowKey manifest、written/cleared count、物理 index ID 或 schema hash 放进公共事件。
 - 不新增 `view_period_generations`、`c_build_fence_json`、generation、previous report、snapshot hash、read fence、barrier、reservation 或 emission history。
+
+## 6. 本次执行记录
+
+实现已覆盖公共完成事件、Collector 周期 readiness、View 串行应用与 Source/Result ready、Factor View 读取与结果写回、Recalc/生命周期串行化、SyncPoint、Result View 清理、A/B 重建以及二进制验收脚本。`view_period_generations` 未创建。
+
+收口修复了 Collector 重启/升级边界：启动只预建当前形成中的周期，避免旧 durable 已消费而 readiness 空表时凭空制造历史 degraded；readiness 行投影切换到 `collector-storage-write-v2-*` 的 DeliverAll durable 并使用无限重投，确保新 readiness 表能回放旧 outbox；Reporter 单个 dataset 失败会继续尝试其余 dataset；默认 grace 按 `min(2*frequency,10m)` 放大慢频率窗口。Factor 对格式/契约错误保留 durable 重试，不静默 TERM。
+
+发布配置同时放行 Collector/Factor 所需的 period marker、SyncPoint 和 Factor marker RPC；`moox-factor-run-once` 导出独立 View 鉴权密钥；手工区间按每个实际 chunk 使用独立 manifest period，避免分块结果相互清理；Factor 网关、tRPC/HTTP 服务端和全局请求超时统一为 120 秒，覆盖同步 Recalc 和生命周期清理。
+
+已通过：
+
+- `./scripts/test-go-workspace.sh`（各模块 go test/vet）
+- `cd modules/storage && go test -count=1 ./...`
+- `cd modules/collector && go test -count=1 ./...`
+- `cd modules/factor && go test -count=1 ./...`
+- `cd modules/archive && go test -count=1 ./...`
+- `./scripts/tests/contract/test-deploy-moox-factor.sh`
+- `./scripts/tests/contract/test-storage-consistency-contract.sh` 及顶层兼容 wrapper
+- `./scripts/tests/e2e/test-series-tag-e2e.sh`（隔离多进程 Factor + Storage + Archive；Monitor 因未预置 host-metric catalog 跳过）
+- `CGO_ENABLED=1 go test -race -count=1 ./internal/service/view ./internal/service/view/eventconsumer`
+
+发布产物：`release/moox-dev-view-ready-linux-amd64.tar.gz`，最终 SHA-256：
+`0a7315d6cf2b145b43b1f254e542a722cb7c32ace7a490b154938d6065fb23f0`。
+外置 Storage 的 Linux/amd64 View 进程使用 CGO/DuckDB 构建，部署前单独校验了
+`moox-storage-primary/view/node` 二进制哈希。
+
+远程正式部署已执行（控制面与外置 Storage 分开切换）：
+
+- 主机：`ubuntu@106.53.107.122`
+- 控制面目录：`/home/ubuntu/moox/prod`
+- 外置 Storage 目录：`/home/ubuntu/moox/storage`
+- 部署前备份：`/home/ubuntu/moox/backups/moox-prod-pre-factor-view-final-20260809121321.tar.gz`
+- Storage contract 修复再次部署前备份：`/home/ubuntu/moox/backups/moox-prod-pre-storage-contract-20260809125210.tar.gz`
+- 最终控制面/Storage 重部署前备份：`/home/ubuntu/moox/backups/moox-prod-pre-final-redeploy-20260809130919.tar.gz`
+- 最终 Collector replay gate 修复重部署前备份：`/home/ubuntu/moox/backups/moox-prod-pre-factor-view-final3-20260809141844.tar.gz`
+- 控制面使用 `deploy-moox.sh --no-storage` 完成 HTTPS acceptance；Admin、Gateway、EventBus、Archive、CloudNode、Monitor、Collector、Factor、Strategy、Trade、Web-host 均运行。
+- 外置 Storage 使用 `--profile storage --no-gateway` 单独切换，Storage Primary/Node/View 均运行；View 使用 CGO-enabled DuckDB 二进制。
+- `curl -kfsS https://106.53.107.122:9527/` 通过。
+
+远程 Factor 数据库当前没有 factor definition/binding（`t_factor_defs=0`、`t_factor_bindings=0`），因此没有向正式环境写入测试因子；真实 Factor View-driven 计算由本机隔离部署 E2E 完成。远程 Monitor 仍有既有的指标鉴权告警，Collector 也提示远程 seed 缺少个别 symbol Dataset，但两者健康检查均为 ready，不影响本次 View-ready 主链验收。
+
+周期清理和运行指标已补齐：Collector Reporter 清理已上报父状态及超出 `item_retention` 的明细，Storage Primary 每小时清理 View 周期状态/SyncPoint，Factor 仅在显式配置且不短于 Result View 保留期时清理 output manifest；三端补充了周期 pending、ready 发布重试、运行中/降级/manifest clear/source-ready lag 指标。
+
+最终 codeCR 复核发现的旧库 active-contract P1、Collector DeliverAll 回放 fail-open P1 和 replay waiter 泄漏 P2 均已通过“启动阻断/回放排空后再报告/按 session 取消”的修复收口；Collector 重复规则路径、Marker 顺序、写回幂等、正常 A/B 切换均复核通过。真实 Storage E2E 实际订阅并校验了 `ViewFactorPeriodReady`，随后 Archive outbox E2E 也通过。剩余两项低优先级边界已记录：Storage waiting gauge 仍按最后处理的单个 period 覆盖同一 `view,frequency` 标签（P2 观测语义），Factor manifest 默认不清理会带来长期 SQLite 容量增长（P3，属于防止旧结果复活的正确性取舍）。

@@ -166,7 +166,7 @@ func (r *FetchBatchRepository) CompleteWithEffects(ctx context.Context, batch *d
 			if err := tx.Clauses(clause.OnConflict{
 				Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_retry_key"}},
 				DoUpdates: clause.Assignments(map[string]any{
-					"c_source_batch_id": clause.Expr{SQL: "excluded.c_source_batch_id"}, "c_batch_kind": clause.Expr{SQL: "excluded.c_batch_kind"}, "c_attempt": clause.Expr{SQL: "excluded.c_attempt"},
+					"c_source_batch_id": clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"}, "c_batch_kind": clause.Expr{SQL: "excluded.c_batch_kind"}, "c_attempt": clause.Expr{SQL: "excluded.c_attempt"},
 					"c_status": clause.Expr{SQL: "CASE WHEN c_status IN ('succeeded', 'permanent_failed') THEN c_status ELSE excluded.c_status END"}, "c_next_retry_at": clause.Expr{SQL: "excluded.c_next_retry_at"},
 					"c_last_error_type": clause.Expr{SQL: "excluded.c_last_error_type"}, "c_last_error_summary": clause.Expr{SQL: "excluded.c_last_error_summary"},
 					"c_mtime": clause.Expr{SQL: "excluded.c_mtime"},

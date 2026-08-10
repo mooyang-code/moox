@@ -2,6 +2,8 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -97,10 +99,49 @@ func TestImportFactorFileRejectsEnabledDefinitionUpdate(t *testing.T) {
 	require.Equal(t, 2, stored.LookbackPeriods)
 }
 
+func TestEnsureSourceArtifactsRestoresEnabledFactorAfterDeployReplacement(t *testing.T) {
+	dir := t.TempDir()
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(factorschema.AllSQL()).Error)
+	repo := store.NewFactorRepository(db)
+	source := "def compute(df, params):\n    return df\n"
+	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{
+		FactorID: "bias", Name: "bias", SourceCode: source,
+		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
+		LookbackPeriods: 5, Status: domain.FactorStatusEnabled,
+	})
+	require.NoError(t, err)
+	sourceSum := sha256.Sum256([]byte(factor.SourceCode))
+	factor.SourceHash = hex.EncodeToString(sourceSum[:])
+	require.NoError(t, repo.Create(context.Background(), factor))
+	before, err := repo.Get(context.Background(), "bias")
+	require.NoError(t, err)
+
+	svc := NewService(repo, nil, Options{FactorsDir: dir})
+	require.NoError(t, svc.EnsureSourceArtifacts(context.Background()))
+
+	stored, err := repo.Get(context.Background(), "bias")
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorStatusEnabled, stored.Status)
+	require.Equal(t, factor.SourceHash, stored.SourceHash)
+	require.Equal(t, before.ModifyTime, stored.ModifyTime)
+	require.FileExists(t, stored.SourcePath)
+	require.Contains(t, stored.SourcePath, filepath.Join(".versions", "factor", "bias", factor.SourceHash))
+}
+
 func TestResultDataset(t *testing.T) {
 	require.Equal(t, "foo_kline_factor", ResultDataset("foo_kline"))
+	require.Equal(t, "binance_spot_kline_1m_factor", ResultDataset("binance_spot_kline_1m"))
+	require.Equal(t, "binance_spot_kline_1m_factor_v", ResultView("binance_spot_kline_1m"))
+	require.Equal(t, "foo_view_factor", ResultDataset("foo_view"))
+	require.Equal(t, ResultDataset("bars"), ResultDatasetForView("bars", "bars_view"))
+	require.NotEqual(t, ResultDatasetForView("bars", "view_a"), ResultDatasetForView("bars", "view_b"))
+	require.LessOrEqual(t, len(ResultDatasetForView("bars", "view_a")), 50)
+	require.LessOrEqual(t, len(ResultViewForView("bars", "view_a")), 30)
 	require.NotEqual(t, ResultDataset("foo"), ResultDataset("foo_kline"))
 	require.NotEqual(t, ResultDataset("same-long-readable-prefix-one"), ResultDataset("same-long-readable-prefix-two"))
 	require.NotEqual(t, ResultDataset("same-long-prefix-138"), ResultDataset("same-long-prefix-489"))
-	require.LessOrEqual(t, len(ResultDataset("same-long-prefix-138")), 20)
+	require.LessOrEqual(t, len(ResultDataset("same-long-prefix-138")), 50)
+	require.LessOrEqual(t, len(ResultView("same-long-prefix-138")), 30)
 }

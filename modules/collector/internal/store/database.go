@@ -21,6 +21,7 @@ type Store struct {
 	taskItems    *TaskInstanceRepository
 	fetchBatches *FetchBatchRepository
 	fetchRetries *FetchRetryRepository
+	periods      *PeriodReadinessRepository
 }
 
 // Options configures the Collector SQLite store.
@@ -50,6 +51,7 @@ func Open(opts *Options) (*Store, error) {
 	s.taskItems = NewTaskInstanceRepository(db)
 	s.fetchBatches = NewFetchBatchRepository(db)
 	s.fetchRetries = NewFetchRetryRepository(db)
+	s.periods = NewPeriodReadinessRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -83,6 +85,14 @@ func (s *Store) FetchRetries() *FetchRetryRepository {
 		return nil
 	}
 	return s.fetchRetries
+}
+
+// PeriodReadiness returns the durable period completion repository.
+func (s *Store) PeriodReadiness() *PeriodReadinessRepository {
+	if s == nil {
+		return nil
+	}
+	return s.periods
 }
 
 // ApplySchema applies schema SQL during service startup.
@@ -159,6 +169,7 @@ func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
 		"_pragma=journal_mode(WAL)",
 		"_pragma=synchronous(OFF)",
+		"_pragma=foreign_keys(ON)",
 		"_pragma=busy_timeout(5000)",
 		"_pragma=temp_store(MEMORY)",
 		"_pragma=cache_size(-64000)",

@@ -46,6 +46,43 @@ func TestSyncTargetDatasetReconcilesOutputsForActiveLockedTarget(t *testing.T) {
 	require.Equal(t, "BTC-USDT", client.boundSubjects[0].GetSubjectId())
 }
 
+func TestResolveManagedResultIDsUsesSourcePrimaryDataset(t *testing.T) {
+	client := &fakeViewMetadataClient{
+		fakeMetadataClient: newFakeMetadataClient(),
+		views: map[string]*storagepb.View{
+			"binance_spot_kline_1m_view": {
+				SpaceId:          "space",
+				ViewId:           "binance_spot_kline_1m_view",
+				PrimaryDatasetId: "binance_spot_kline_1m",
+				DatasetIds:       []string{"binance_spot_kline_1m"},
+			},
+		},
+	}
+	datasetID, viewID, err := NewMetadataSync(client, nil).ResolveManagedResultIDs(
+		context.Background(), "space", "binance_spot_kline_1m_view",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "binance_spot_kline_1m_factor", datasetID)
+	require.Equal(t, "binance_spot_kline_1m_factor_v", viewID)
+}
+
+func TestResolveManagedResultIDsSeparatesViewsSharingPrimaryDataset(t *testing.T) {
+	client := &fakeViewMetadataClient{
+		fakeMetadataClient: newFakeMetadataClient(),
+		views: map[string]*storagepb.View{
+			"view_a": {SpaceId: "space", ViewId: "view_a", PrimaryDatasetId: "bars"},
+			"view_b": {SpaceId: "space", ViewId: "view_b", PrimaryDatasetId: "bars"},
+		},
+	}
+	syncer := NewMetadataSync(client, nil)
+	firstDataset, firstView, err := syncer.ResolveManagedResultIDs(context.Background(), "space", "view_a")
+	require.NoError(t, err)
+	secondDataset, secondView, err := syncer.ResolveManagedResultIDs(context.Background(), "space", "view_b")
+	require.NoError(t, err)
+	require.NotEqual(t, firstDataset, secondDataset)
+	require.NotEqual(t, firstView, secondView)
+}
+
 func TestSyncTargetDatasetUpdatesExistingFactorMetadata(t *testing.T) {
 	client := newFakeMetadataClient()
 	client.datasets["source"] = testSourceDataset()
@@ -175,6 +212,28 @@ type fakeMetadataClient struct {
 	getFactorRet         *commonpb.RetInfo
 	checkActivationCalls int
 	activateCalls        int
+}
+
+type fakeViewMetadataClient struct {
+	*fakeMetadataClient
+	views map[string]*storagepb.View
+}
+
+func (f *fakeViewMetadataClient) CreateView(_ context.Context, req *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error) {
+	f.views[req.GetView().GetViewId()] = req.GetView()
+	return &storagepb.CreateViewRsp{RetInfo: successRet(), View: req.GetView()}, nil
+}
+
+func (f *fakeViewMetadataClient) GetView(_ context.Context, req *storagepb.GetViewReq) (*storagepb.GetViewRsp, error) {
+	view := f.views[req.GetViewId()]
+	if view == nil {
+		return &storagepb.GetViewRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_FOUND}}, nil
+	}
+	return &storagepb.GetViewRsp{RetInfo: successRet(), View: view}, nil
+}
+
+func (f *fakeViewMetadataClient) UpsertViewColumn(_ context.Context, _ *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error) {
+	return &storagepb.UpsertViewColumnRsp{RetInfo: successRet()}, nil
 }
 
 func newFakeMetadataClient() *fakeMetadataClient {

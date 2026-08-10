@@ -24,14 +24,17 @@ message FactorBinding {
   string binding_id = 1;
   string factor_id = 2;
   string space_id = 3;
-  string source_dataset = 4;
+  string source_view_id = 4;
   string freq = 5;
   string subject_mode = 6;
   string subjects_json = 7;
-  string target_dataset = 8;
-  string status = 9;
-  string created_at = 10;
-  string updated_at = 11;
+  string result_dataset_id = 8;
+  string result_view_id = 9;
+  string status = 10;
+  string created_at = 11;
+  string updated_at = 12;
+  string source_dataset = 13 [deprecated = true];
+  string target_dataset = 14 [deprecated = true];
 }
 
 message CreateFactorReq { FactorDef factor = 1; }
@@ -85,7 +88,7 @@ message UpsertBindingRsp {
 
 message ListBindingsReq {
   string space_id = 1;
-  string source_dataset = 2;
+  string source_view_id = 2;
   string freq = 3;
   string status = 4;
   common.Page page = 5;
@@ -102,11 +105,14 @@ message DeleteBindingRsp { common.RetInfo ret_info = 1; }
 message RecalcFactorReq {
   string factor_id = 1;
   string space_id = 2;
-  string source_dataset = 3;
+  string source_dataset = 3 [deprecated = true];
   string subject_id = 4;
   string freq = 5;
   string start_time = 6;
   string end_time = 7;
+  string request_id = 8;
+  string source_view_id = 9;
+  string sync_request_id = 10;
 }
 message RecalcFactorRsp {
   common.RetInfo ret_info = 1;
@@ -115,8 +121,9 @@ message RecalcFactorRsp {
 message GetEngineStatusReq {}
 message GetEngineStatusRsp {
   common.RetInfo ret_info = 1;
-  int32 queue_depth = 2;
-  int64 queue_overflow_count = 3;
+  int32 python_workers = 2;
+  int32 active_tasks = 3;
+  int32 pending_tasks = 4;
 }
 
 service FactorMgr {

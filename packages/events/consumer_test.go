@@ -1,9 +1,61 @@
 package events
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestConsumerEventFiltersSupportOneDurableWithMultipleEvents(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ConsumerConfig{Events: []Event{
+		DatasetRowsUpserted,
+		DatasetPeriodCollected,
+		FactorPeriodComputed,
+		DatasetSyncPoint,
+	}}
+	stream, filters, err := consumerEventFilters(registry, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream != "MOOX_STORAGE" {
+		t.Fatalf("stream = %q", stream)
+	}
+	want := []string{
+		"moox.storage.dataset.rows.upserted.v2.>",
+		"moox.storage.dataset.period.collected.v1.>",
+		"moox.storage.dataset.factor_period.computed.v1.>",
+		"moox.storage.dataset.sync_point.v1.>",
+	}
+	if !reflect.DeepEqual(filters, want) {
+		t.Fatalf("filters = %v, want %v", filters, want)
+	}
+	transport := jetstreamConsumerConfig(cfg, stream, filters)
+	if transport.FilterSubject != "" || !reflect.DeepEqual(transport.FilterSubjects, want) {
+		t.Fatalf("transport filters = %q / %v", transport.FilterSubject, transport.FilterSubjects)
+	}
+}
+
+func TestConsumerEventFiltersRejectAmbiguousOrCrossStreamEvents(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []ConsumerConfig{
+		{Event: DatasetRowsUpserted, Events: []Event{DatasetPeriodCollected}},
+		{Events: []Event{DatasetRowsUpserted, DatasetRowsUpserted}},
+		{Events: []Event{DatasetRowsUpserted, MarketFetchBatchCompleted}},
+		{},
+	}
+	for _, cfg := range tests {
+		if _, _, err := consumerEventFilters(registry, cfg); err == nil {
+			t.Fatalf("consumerEventFilters(%+v) succeeded", cfg)
+		}
+	}
+}
 
 func TestSubjectConsumerFilterUsesRegistryIdentity(t *testing.T) {
 	registry, err := DefaultRegistry()

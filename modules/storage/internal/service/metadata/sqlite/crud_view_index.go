@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -34,6 +35,26 @@ func mergeViewIndexState(existing *pb.View, item *pb.View, shapeChanged bool) {
 	item.ActiveSlot = existing.GetActiveSlot()
 	item.IndexedFrom = existing.GetIndexedFrom()
 	item.IndexedTo = existing.GetIndexedTo()
+	// These reserved attributes are the persisted contract of the readable
+	// index. A desired View update must not overwrite them until activation.
+	if existing != nil {
+		if item.Attributes == nil {
+			item.Attributes = make(map[string]string)
+		}
+		if value := existing.GetAttributes()["moox.active_dataset_ids"]; value != "" {
+			item.Attributes["moox.active_dataset_ids"] = value
+		} else if raw, marshalErr := json.Marshal(existing.GetDatasetIds()); marshalErr == nil {
+			// Legacy metadata has no active DatasetIds column. Before the
+			// first post-upgrade desired update, the persisted desired set is
+			// the only authoritative representation of the old active shape.
+			item.Attributes["moox.active_dataset_ids"] = string(raw)
+		}
+		if value := existing.GetAttributes()["moox.active_primary_dataset_id"]; value != "" {
+			item.Attributes["moox.active_primary_dataset_id"] = value
+		} else if value := existing.GetPrimaryDatasetId(); value != "" {
+			item.Attributes["moox.active_primary_dataset_id"] = value
+		}
+	}
 	item.DesiredViewRevision = existing.GetDesiredViewRevision()
 	if item.DesiredViewRevision == 0 {
 		item.DesiredViewRevision = 1
@@ -194,6 +215,15 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	view.ActiveViewSchemaHash = coreviewindex.HashViewIndexSchema(coreviewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetPrimaryDatasetId(), ViewVersion: view.GetActiveViewRevision(), Engine: view.GetEngine(), Columns: columns,
 	})
+	if view.Attributes == nil {
+		view.Attributes = make(map[string]string)
+	}
+	activeDatasetIDs, err := json.Marshal(view.GetDatasetIds())
+	if err != nil {
+		return nil, err
+	}
+	view.Attributes["moox.active_dataset_ids"] = string(activeDatasetIDs)
+	view.Attributes["moox.active_primary_dataset_id"] = view.GetPrimaryDatasetId()
 	view.Columns = nil
 	view.IndexBuild = nil
 	raw, err := marshal(view)

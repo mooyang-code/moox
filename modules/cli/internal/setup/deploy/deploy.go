@@ -745,7 +745,10 @@ install_storage() {
   mkdir -p "$next/secrets"
   if [ "$use_control_gateway" = "1" ]; then
     control_secrets="$root/prod/secrets"
-    for name in gateway-service.env gateway-storage-primary.key gateway-storage-view.key; do
+    # Control-owned internal auth is the single authority for both packages.
+    # Do not preserve an older storage copy when the control deployment has
+    # rotated the secret.
+    for name in gateway-service.env gateway-storage-primary.key gateway-storage-view.key storage-internal-auth.env; do
       if [ ! -s "$control_secrets/$name" ]; then
         echo "storage_control_gateway_credentials_missing" >&2
         return 1

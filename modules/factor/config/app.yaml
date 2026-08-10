@@ -22,13 +22,7 @@ engine:
   python_bin: python3
   worker_path: ./pyworker/worker.py
   factors_dir: ./factors
-  workers: 8
+  python_workers: 40
+  view_read_workers: 60
+  view_read_timeout_ms: 10000
   task_timeout_ms: 30000
-
-scheduler:
-  event_batch_window_ms: 2000
-  queue_capacity: 2048
-  max_retry: 1
-  view_settle_delay: 300ms
-  event_read_retry: 3
-  event_read_retry_interval: 500ms

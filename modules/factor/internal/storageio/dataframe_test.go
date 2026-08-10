@@ -1,6 +1,7 @@
 package storageio
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -86,9 +87,43 @@ func TestRowsToDataFrameMapsQualifiedViewFieldsToLogicalInputs(t *testing.T) {
 	}
 }
 
-func TestRowsToDataFrameRejectsPlainAndQualifiedProjectionCollision(t *testing.T) {
+func TestRowsToDataFrameMapsOnePhysicalFieldToQualifiedAndLogicalAliases(t *testing.T) {
 	at := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
-	_, err := RowsToDataFrame([]*storagepb.TimeSeriesRow{{
+	frame, err := RowsToDataFrame([]*storagepb.TimeSeriesRow{{
+		Key: &storagepb.TimeSeriesKey{DatasetId: "prices", DataTime: at.Format(time.RFC3339Nano)},
+		Fields: []*storagepb.FieldValue{{
+			FieldId: "prices.close",
+			Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{
+				DoubleValue: 101,
+			}},
+		}},
+	}}, []string{"close", "prices.close"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []any{float64(101), float64(101)}
+	if len(frame.Rows) != 1 || !reflect.DeepEqual(frame.Rows[0], want) {
+		t.Fatalf("physical field aliases = %v, want %v", frame.Rows, want)
+	}
+}
+
+func TestRowsToDataFrameMapsSecondaryQualifiedViewFields(t *testing.T) {
+	at := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	frame, err := RowsToDataFrame([]*storagepb.TimeSeriesRow{{
+		Key:    &storagepb.TimeSeriesKey{DatasetId: "bars", DataTime: at.Format(time.RFC3339Nano)},
+		Fields: []*storagepb.FieldValue{{FieldId: "fundamentals.factor", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 3.5}}}},
+	}}, []string{"factor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := frame.Rows[0][0]; got != float64(3.5) {
+		t.Fatalf("secondary qualified field = %v, want 3.5", got)
+	}
+}
+
+func TestRowsToDataFrameExactRuntimeColumnWinsOverQualifiedSuffix(t *testing.T) {
+	at := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	frame, err := RowsToDataFrame([]*storagepb.TimeSeriesRow{{
 		Key: &storagepb.TimeSeriesKey{
 			DatasetId: "bars", DataTime: at.Format(time.RFC3339Nano),
 		},
@@ -101,7 +136,27 @@ func TestRowsToDataFrameRejectsPlainAndQualifiedProjectionCollision(t *testing.T
 			}},
 		},
 	}}, []string{"close"})
-	if err == nil {
-		t.Fatal("expected plain/qualified projection collision rejection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := frame.Rows[0][0]; got != float64(100) {
+		t.Fatalf("exact close = %v, want 100", got)
+	}
+}
+
+func TestRowsToDataFrameExactNullWinsOverQualifiedSuffix(t *testing.T) {
+	at := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	frame, err := RowsToDataFrame([]*storagepb.TimeSeriesRow{{
+		Key: &storagepb.TimeSeriesKey{DatasetId: "bars", DataTime: at.Format(time.RFC3339Nano)},
+		Fields: []*storagepb.FieldValue{
+			{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}},
+			{FieldId: "bars.close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 101}}},
+		},
+	}}, []string{"close", "bars.close"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Rows[0][0] != nil || frame.Rows[0][1] != float64(101) {
+		t.Fatalf("exact NULL alias resolution = %v", frame.Rows[0])
 	}
 }

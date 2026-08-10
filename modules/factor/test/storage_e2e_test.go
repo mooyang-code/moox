@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -17,16 +19,21 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
-	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
+	eventstoragepb "github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -95,7 +102,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		client.WithNetwork("tcp"),
 		client.WithProtocol("trpc"),
 	)
-	storage := storageio.NewClientWithCredentials(gatewayTarget, gatewayNodeID, credentials, auth)
+	storage := storageio.NewClientWithCredentials(gatewayTarget, gatewayNodeID, credentials, auth).WithViewAuth(viewAuth)
 
 	suffix := fmt.Sprintf("%x", time.Now().UnixNano())
 	if len(suffix) > 8 {
@@ -109,39 +116,55 @@ func TestFactorRealStorageE2E(t *testing.T) {
 	sourceID := "portfolio_" + suffix
 	targetID := "portfolio_factor_" + suffix
 	sourceViewID := "source_view_" + suffix
-	viewID := "factor_view_" + suffix
 	factorID := "venue_spread_" + suffix
 	factorName := "VenueSpread_" + suffix
-	bindingID := "bind-" + suffix
+	bindingID := "bind-spread-" + suffix
+	secondFactorID := "venue_midpoint_" + suffix
+	secondFactorName := "VenueMidpoint_" + suffix
+	secondBindingID := "bind-midpoint-" + suffix
 	subjectID := "fund-" + suffix
+	secondSubjectID := "fund-alt-" + suffix
+	subjectIDs := []string{subjectID, secondSubjectID}
 	const freq = "1m"
 	first := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 	second := first.Add(time.Minute)
 	third := second.Add(time.Minute)
 	end := third.Add(time.Nanosecond)
-	var spaceCreated, factorCreated, bindingCreated bool
+	var spaceCreated bool
+	var createdFactors []struct{ id, name string }
+	var createdBindings []string
+	var resultDatasetID, resultViewID string
 
 	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		// Result-view schema cleanup waits for the storage reconciler to activate a
+		// new revision (normally up to one reconcile tick). Keep teardown separate
+		// from the assertion context and allow that asynchronous handoff to finish.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cleanupCancel()
-		if bindingCreated {
-			if rsp, err := factor.DeleteBinding(cleanupCtx, &factorpb.DeleteBindingReq{BindingId: bindingID}); err != nil ||
+		for i := len(createdBindings) - 1; i >= 0; i-- {
+			id := createdBindings[i]
+			if rsp, err := factor.DeleteBinding(cleanupCtx, &factorpb.DeleteBindingReq{BindingId: id}); err != nil ||
 				rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-				reportCleanupFailure(t, "binding "+bindingID, rsp, err)
+				reportCleanupFailure(t, "binding "+id, rsp, err)
 			}
 		}
-		if factorCreated {
+		for i := len(createdFactors) - 1; i >= 0; i-- {
+			created := createdFactors[i]
 			if rsp, err := factor.DeleteFactor(cleanupCtx, &factorpb.DeleteFactorReq{
-				FactorId: factorID,
+				FactorId: created.id,
 			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-				reportCleanupFailure(t, "factor "+factorID, rsp, err)
+				reportCleanupFailure(t, "factor "+created.id, rsp, err)
 			} else {
-				assertFactorArtifactsRemoved(t, deployRoot, factorName)
+				assertFactorArtifactsRemoved(t, deployRoot, created.name)
 			}
 		}
 		if spaceCreated {
 			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, sourceID)
-			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, targetID)
+			cleanupDataset := resultDatasetID
+			if cleanupDataset == "" {
+				cleanupDataset = targetID
+			}
+			cleanupDatasetBuckets(t, cleanupCtx, dataNode, dataNodeAuth, dataNodeID, spaceID, cleanupDataset)
 			if rsp, err := cleanupMetadata.DeleteSpace(cleanupCtx, &storagepb.DeleteSpaceReq{
 				AuthInfo: auth, SpaceId: spaceID,
 			}); err != nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
@@ -168,14 +191,16 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		},
 	})
 	requireStorageOK(t, "CreateDataSource", dataSourceRsp, err)
-	subjectRsp, err := metadata.UpsertSubject(ctx, &storagepb.UpsertSubjectReq{
-		AuthInfo: auth,
-		Subject: &storagepb.Subject{
-			SpaceId: spaceID, SubjectId: subjectID, SubjectType: "custom",
-			Name: "组合" + displaySuffix, Timezone: "UTC", Status: "active",
-		},
-	})
-	requireStorageOK(t, "UpsertSubject", subjectRsp, err)
+	for index, currentSubjectID := range subjectIDs {
+		subjectRsp, subjectErr := metadata.UpsertSubject(ctx, &storagepb.UpsertSubjectReq{
+			AuthInfo: auth,
+			Subject: &storagepb.Subject{
+				SpaceId: spaceID, SubjectId: currentSubjectID, SubjectType: "custom",
+				Name: fmt.Sprintf("组合%s-%d", displaySuffix, index+1), Timezone: "UTC", Status: "active",
+			},
+		})
+		requireStorageOK(t, "UpsertSubject "+currentSubjectID, subjectRsp, subjectErr)
+	}
 	groupRsp, err := metadata.CreateFieldGroup(ctx, &storagepb.CreateFieldGroupReq{
 		AuthInfo: auth,
 		FieldGroup: &storagepb.FieldGroup{
@@ -202,7 +227,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		Dataset: &storagepb.Dataset{
 			SpaceId: spaceID, DatasetId: sourceID, DataSourceId: "factor_e2e",
 			Name: "时序" + displaySuffix, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freqs: []string{freq}, DataNodeId: dataNodeID, KeepDuration: "24h", Status: "disabled",
+			Freqs: []string{freq}, DataNodeId: dataNodeID, KeepDuration: "0", Status: "disabled",
 		},
 	})
 	require.NoError(t, err)
@@ -223,14 +248,16 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		})
 		requireStorageOK(t, "UpsertDatasetColumn "+column.id, columnRsp, columnErr)
 	}
-	subjectBindingRsp, err := metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{
-		AuthInfo: auth,
-		DatasetSubject: &storagepb.DatasetSubject{
-			SpaceId: spaceID, DatasetId: sourceID, SubjectId: subjectID,
-			SubjectRole: "normal", Status: "active",
-		},
-	})
-	requireStorageOK(t, "BindDatasetSubject", subjectBindingRsp, err)
+	for _, currentSubjectID := range subjectIDs {
+		subjectBindingRsp, bindSubjectErr := metadata.BindDatasetSubject(ctx, &storagepb.BindDatasetSubjectReq{
+			AuthInfo: auth,
+			DatasetSubject: &storagepb.DatasetSubject{
+				SpaceId: spaceID, DatasetId: sourceID, SubjectId: currentSubjectID,
+				SubjectRole: "normal", Status: "active",
+			},
+		})
+		requireStorageOK(t, "BindDatasetSubject "+currentSubjectID, subjectBindingRsp, bindSubjectErr)
+	}
 	checkRsp, err := metadata.CheckDatasetActivation(ctx, &storagepb.CheckDatasetActivationReq{
 		AuthInfo: auth, SpaceId: spaceID, DatasetId: sourceID,
 	})
@@ -248,7 +275,7 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			SpaceId: spaceID, ViewId: sourceViewID, Name: "源视" + displaySuffix,
 			PrimaryDatasetId: sourceID, DatasetIds: []string{sourceID},
 			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb",
-			FilterJson: `{"freq":"1m"}`, KeepDuration: "24h", Status: "active",
+			FilterJson: `{"freq":"1m"}`, KeepDuration: "0", Status: "active",
 			Columns: []*storagepb.ViewColumn{
 				viewColumn(spaceID, sourceViewID, sourceID, "close", "收盘价", 10),
 			},
@@ -267,13 +294,19 @@ func TestFactorRealStorageE2E(t *testing.T) {
 			inputRow(spaceID, sourceID, subjectID, freq, second, "venue:okx", 102),
 			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:binance", 108),
 			inputRow(spaceID, sourceID, subjectID, freq, third, "venue:okx", 105),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:binance", 201),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, first, "venue:okx", 200),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:binance", 204),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, second, "venue:okx", 202),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:binance", 208),
+			inputRow(spaceID, sourceID, secondSubjectID, freq, third, "venue:okx", 205),
 		},
 	})
 	requireStorageOK(t, "PrimaryStore.UpsertFields", writeRsp, err)
 	var sourceChunk *storageio.RangeChunk
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		chunk, readErr := storage.ReadRangeChunk(ctx, storageio.WindowKey{
-			SpaceID: spaceID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
+			SpaceID: spaceID, SourceViewID: sourceViewID, SourceDataset: sourceID, SubjectID: subjectID, Freq: freq,
 		}, first, end, 1, 10, []string{"close"})
 		assert.NoError(collect, readErr)
 		if readErr == nil {
@@ -287,8 +320,9 @@ func TestFactorRealStorageE2E(t *testing.T) {
 		[]string{"venue:binance", "venue:okx", "venue:binance", "venue:okx", "venue:binance", "venue:okx"},
 		sourceChunk.Frame.SeriesTags,
 	)
+	require.Equal(t, [][]any{{101.0}, {100.0}, {104.0}, {102.0}, {108.0}, {105.0}}, sourceChunk.Frame.Rows)
 
-	sourceCode := `import pandas as pd
+	spreadSource := `import pandas as pd
 
 def compute(df, params):
     left = df[df["series_tag"] == params["left_tag"]][["data_time", "close"]]
@@ -302,122 +336,242 @@ def compute(df, params):
         "rolling_spread": spread.rolling(int(params["window"]), min_periods=1).mean(),
     })
 `
-	createFactorRsp, err := factor.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{
-		FactorId: factorID, Name: factorName, SourceCode: sourceCode,
-		InputColumns: []string{"close"},
-		Outputs:      []string{"spread", "rolling_spread"},
-		ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
-			`"output_tag":"venue_pair:binance-okx","window":2}`,
-		LookbackPeriods: 2, Status: "disabled",
-	}})
-	require.NoError(t, err)
-	requireStorageRet(t, "FactorMgr.CreateFactor", createFactorRsp.GetRetInfo())
-	factorCreated = true
-	bindRsp, err := factor.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: &factorpb.FactorBinding{
-		BindingId: bindingID, FactorId: factorID, SpaceId: spaceID,
-		SourceDataset: sourceID, Freq: freq, SubjectMode: "all", SubjectsJson: "[]",
-		TargetDataset: targetID, Status: "enabled",
-	}})
-	require.NoError(t, err)
-	requireStorageRet(t, "FactorMgr.UpsertBinding", bindRsp.GetRetInfo())
-	bindingCreated = true
-	enableRsp, err := factor.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
-		FactorId: factorID,
-		Status:   "enabled",
-	})
-	require.NoError(t, err)
-	requireStorageRet(t, "FactorMgr.SetFactorStatus", enableRsp.GetRetInfo())
-	targetColumnsRsp, err := metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{
-		AuthInfo: auth, SpaceId: spaceID, DatasetId: targetID,
-		Page: &commonpb.Page{Page: 1, Size: 10},
-	})
-	require.NoError(t, err)
-	requireStorageRet(t, "ListDatasetColumns(target)", targetColumnsRsp.GetRetInfo())
-	require.ElementsMatch(t, []string{"spread", "rolling_spread"}, datasetColumnNames(targetColumnsRsp.GetColumns()))
-
-	viewColumns := []*storagepb.ViewColumn{
-		viewColumn(spaceID, viewID, targetID, "spread", "价差", 10),
-		viewColumn(spaceID, viewID, targetID, "rolling_spread", "滚动价差", 20),
-	}
-	createViewRsp, err := metadata.CreateView(ctx, &storagepb.CreateViewReq{
-		AuthInfo: auth,
-		View: &storagepb.View{
-			SpaceId: spaceID, ViewId: viewID, Name: "因视" + displaySuffix,
-			PrimaryDatasetId: targetID, DatasetIds: []string{targetID},
-			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb",
-			FilterJson: `{"freq":"1m"}`, KeepDuration: "24h", Status: "active", Columns: viewColumns,
-		},
-	})
-	requireStorageOK(t, "CreateView", createViewRsp, err)
-	waitForViewReady(t, ctx, metadata, auth, spaceID, viewID)
-	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq, first, end)
-
-	runDeployedFactor(t, ctx, deployRoot, factorID, spaceID, sourceID, subjectID, freq, first, end)
-	assertPrimaryFactorRows(t, ctx, primary, auth, spaceID, targetID, subjectID, freq,
-		[]time.Time{first, second, third}, []float64{1, 2, 3}, []float64{1, 1.5, 2.5}, -1)
-	rows := waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq,
-		[]time.Time{first, second, third}, end, []float64{1, 2, 3}, []float64{1, 1.5, 2.5}, -1)
-	assertFactorRows(t, rows, []time.Time{first, second, third},
-		[]float64{1, 2, 3}, []float64{1, 1.5, 2.5}, -1)
-
-	// Correcting the first source bar emits DatasetRowsUpserted@2. The realtime
-	// scheduler must expand the affected range by lookback-1 actual periods, so
-	// the second rolling value changes even though its source bar was untouched.
-	correctionRsp, err := primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
-		AuthInfo: auth, SourceEventId: "factor-storage-e2e-correction-" + suffix,
-		Rows: []*storagepb.RowFieldUpsert{
-			inputRow(spaceID, sourceID, subjectID, freq, first, "venue:binance", 103),
-		},
-	})
-	requireStorageOK(t, "PrimaryStore.UpsertFields(correction)", correctionRsp, err)
-	rows = waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq,
-		[]time.Time{first, second, third}, end, []float64{3, 2, 3}, []float64{3, 2.5, 2.5}, -1)
-	assertFactorRows(t, rows, []time.Time{first, second, third},
-		[]float64{3, 2, 3}, []float64{3, 2.5, 2.5}, -1)
-
-	nullSource := `import pandas as pd
+	midpointSource := `import pandas as pd
 
 def compute(df, params):
     left = df[df["series_tag"] == params["left_tag"]][["data_time", "close"]]
     right = df[df["series_tag"] == params["right_tag"]][["data_time", "close"]]
     joined = left.merge(right, on="data_time", suffixes=("_left", "_right"))
-    spread = joined["close_left"] - joined["close_right"]
-    rolling = spread.rolling(int(params["window"]), min_periods=1).mean()
-    spread.iloc[-1] = None
-    rolling.iloc[-1] = None
+    midpoint = (joined["close_left"] + joined["close_right"]) / 2
     return pd.DataFrame({
-        "data_time": joined["data_time"], "series_tag": params["output_tag"],
-        "spread": spread, "rolling_spread": rolling,
+        "data_time": joined["data_time"],
+        "series_tag": params["output_tag"],
+        "midpoint": midpoint,
+        "rolling_midpoint": midpoint.rolling(int(params["window"]), min_periods=1).mean(),
     })
 `
-	disableRsp, err := factor.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
-		FactorId: factorID, Status: "disabled",
-	})
-	require.NoError(t, err)
-	requireStorageRet(t, "FactorMgr.SetFactorStatus(disable)", disableRsp.GetRetInfo())
-	updateRsp, err := factor.UpdateFactor(ctx, &factorpb.UpdateFactorReq{
-		FactorId: factorID,
-		Factor: &factorpb.FactorDef{
-			FactorId: factorID, Name: factorName, SourceCode: nullSource,
-			InputColumns: []string{"close"},
-			Outputs:      []string{"spread", "rolling_spread"},
+	factorDefs := []*factorpb.FactorDef{
+		{
+			FactorId: factorID, Name: factorName, SourceCode: spreadSource,
+			InputColumns: []string{"close"}, Outputs: []string{"spread", "rolling_spread"},
 			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
 				`"output_tag":"venue_pair:binance-okx","window":2}`,
 			LookbackPeriods: 2, Status: "disabled",
 		},
+		{
+			FactorId: secondFactorID, Name: secondFactorName, SourceCode: midpointSource,
+			InputColumns: []string{"close"}, Outputs: []string{"midpoint", "rolling_midpoint"},
+			ParamsJson: `{"left_tag":"venue:binance","right_tag":"venue:okx",` +
+				`"output_tag":"venue_pair:binance-okx","window":2}`,
+			LookbackPeriods: 2, Status: "disabled",
+		},
+	}
+	bindingIDs := []string{bindingID, secondBindingID}
+	for i, factorDef := range factorDefs {
+		createFactorRsp, createErr := factor.CreateFactor(ctx, &factorpb.CreateFactorReq{Factor: factorDef})
+		require.NoError(t, createErr)
+		requireStorageRet(t, "FactorMgr.CreateFactor "+factorDef.GetFactorId(), createFactorRsp.GetRetInfo())
+		createdFactors = append(createdFactors, struct{ id, name string }{factorDef.GetFactorId(), factorDef.GetName()})
+
+		bindRsp, bindErr := factor.UpsertBinding(ctx, &factorpb.UpsertBindingReq{Binding: &factorpb.FactorBinding{
+			BindingId: bindingIDs[i], FactorId: factorDef.GetFactorId(), SpaceId: spaceID,
+			SourceViewId: sourceViewID, SourceDataset: sourceID, Freq: freq, SubjectMode: "all", SubjectsJson: "[]",
+			TargetDataset: targetID, Status: "enabled",
+		}})
+		require.NoError(t, bindErr)
+		requireStorageRet(t, "FactorMgr.UpsertBinding "+bindingIDs[i], bindRsp.GetRetInfo())
+		require.NotNil(t, bindRsp.GetBinding())
+		if i == 0 {
+			resultDatasetID = bindRsp.GetBinding().GetResultDatasetId()
+			resultViewID = bindRsp.GetBinding().GetResultViewId()
+			require.NotEmpty(t, resultDatasetID)
+			require.NotEmpty(t, resultViewID)
+		} else {
+			require.Equal(t, resultDatasetID, bindRsp.GetBinding().GetResultDatasetId())
+			require.Equal(t, resultViewID, bindRsp.GetBinding().GetResultViewId())
+		}
+		createdBindings = append(createdBindings, bindingIDs[i])
+
+		enableRsp, enableErr := factor.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
+			FactorId: factorDef.GetFactorId(), Status: "enabled",
+		})
+		require.NoError(t, enableErr)
+		requireStorageRet(t, "FactorMgr.SetFactorStatus "+factorDef.GetFactorId(), enableRsp.GetRetInfo())
+	}
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		bindingsRsp, listErr := factor.ListBindings(ctx, &factorpb.ListBindingsReq{
+			SpaceId: spaceID, SourceViewId: sourceViewID, Freq: freq,
+			Page: &commonpb.Page{Page: 1, Size: 20},
+		})
+		assert.NoError(collect, listErr)
+		if listErr != nil {
+			return
+		}
+		assert.Equal(collect, commonpb.ErrorCode_SUCCESS, bindingsRsp.GetRetInfo().GetCode(), bindingsRsp.GetRetInfo().GetMsg())
+		statuses := make(map[string]string)
+		for _, candidate := range bindingsRsp.GetBindings() {
+			statuses[candidate.GetBindingId()] = candidate.GetStatus()
+		}
+		for _, id := range bindingIDs {
+			assert.Equal(collect, "enabled", statuses[id], "binding_id=%s", id)
+		}
+	}, 60*time.Second, 250*time.Millisecond, "factor bindings did not become executable")
+	var targetColumnsRsp *storagepb.ListDatasetColumnsRsp
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		var listErr error
+		targetColumnsRsp, listErr = metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{
+			AuthInfo: auth, SpaceId: spaceID, DatasetId: resultDatasetID,
+			Page: &commonpb.Page{Page: 1, Size: 10},
+		})
+		assert.NoError(collect, listErr)
+		if listErr == nil {
+			assert.Equal(collect, commonpb.ErrorCode_SUCCESS, targetColumnsRsp.GetRetInfo().GetCode(), targetColumnsRsp.GetRetInfo().GetMsg())
+			assert.ElementsMatch(collect, []string{
+				factorID + "__spread", factorID + "__rolling_spread",
+				secondFactorID + "__midpoint", secondFactorID + "__rolling_midpoint",
+			}, datasetColumnNames(targetColumnsRsp.GetColumns()))
+		}
+	}, 30*time.Second, 250*time.Millisecond, "factor result columns were not synchronized")
+	require.NotNil(t, targetColumnsRsp)
+
+	waitForViewReady(t, ctx, metadata, auth, spaceID, resultViewID)
+	waitForViewQueryable(t, ctx, view, viewAuth, spaceID, resultViewID, resultDatasetID, subjectID, freq, first, end)
+	// Use the deployment-wide EventBus credentials/TLS settings. The local
+	// endpoint is only a fallback for process-local tests; real deployments
+	// require the same authenticated connection as Factor itself.
+	eventCfg := jetstream.ConfigFromEnv([]string{"nats://127.0.0.1:4222"}, "factor-storage-e2e-"+suffix)
+	// Deployment credential files are MooX YAML (username/token/ca_file), not
+	// nats.go .creds files. Resolve them through the shared loader so relative
+	// CA paths and token authentication behave exactly like Factor itself.
+	if credentialFile := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_NATS_CREDENTIALS")); credentialFile != "" {
+		eventCfg.Credentials = ""
+		require.NoError(t, eventCfg.ApplyCredentialFile(credentialFile))
+	}
+	eventClient, err := jetstream.Connect(ctx, eventCfg)
+	require.NoError(t, err)
+	defer eventClient.Close()
+	eventRegistry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	readyConsumer, err := events.NewConsumer(ctx, eventClient, eventRegistry, events.ConsumerConfig{
+		// The Factor EventBus role grants this dedicated durable for the
+		// integration assertion; the production source-ready durable remains
+		// owned by the Factor consumer.
+		Name: "factor_view_ready_e2e", Event: events.ViewFactorPeriodReady,
+		AckWait: time.Minute, MaxDeliver: -1, MaxAckPending: 16,
+		FetchMaxWait: 500 * time.Millisecond, DeliverPolicy: nats.DeliverAllPolicy,
 	})
 	require.NoError(t, err)
-	requireStorageRet(t, "FactorMgr.UpdateFactor", updateRsp.GetRetInfo())
-	enableNullRsp, err := factor.SetFactorStatus(ctx, &factorpb.SetFactorStatusReq{
-		FactorId: factorID, Status: "enabled",
+	defer readyConsumer.Close()
+
+	// Drive the production event chain instead of jumping straight to the
+	// run-once RPC: rows are already committed, then Collector-style period
+	// markers are appended. Storage View must publish source-ready, Factor's
+	// durable consumer must compute, and the result marker must be queryable.
+	collectorAuth := &commonpb.AuthInfo{AppId: "moox-collector", Operator: "factor-storage-e2e"}
+	collectorAuth.AppKey = mooxsecurity.HMACSHA256Hex(
+		requiredEnv(t, "MOOX_STORAGE_PRIMARY_AUTH_SECRET"),
+		[]byte(collectorAuth.GetAppId()),
+	)
+	reportRsp, reportErr := primary.ReportDatasetPeriodCollected(ctx, &storagepb.ReportDatasetPeriodCollectedReq{
+		AuthInfo: collectorAuth, SpaceId: spaceID,
+		Marker: &storagepb.DatasetPeriodCollectedMarker{
+			DatasetId: sourceID, Frequency: freq, PeriodTime: third.Unix(), Status: "complete",
+			SubjectIds: subjectIDs, CollectedAt: timestamppb.New(time.Now().UTC()),
+		},
 	})
-	require.NoError(t, err)
-	requireStorageRet(t, "FactorMgr.SetFactorStatus(re-enable)", enableNullRsp.GetRetInfo())
-	runDeployedFactor(t, ctx, deployRoot, factorID, spaceID, sourceID, subjectID, freq, first, end)
-	rows = waitForViewRows(t, ctx, view, viewAuth, spaceID, viewID, targetID, subjectID, freq,
-		[]time.Time{first, second, third}, end, []float64{3, 2, 0}, []float64{3, 2.5, 0}, 2)
-	assertFactorRows(t, rows, []time.Time{first, second, third},
-		[]float64{3, 2, 0}, []float64{3, 2.5, 0}, 2)
+	requireStorageOK(t, "PrimaryStore.ReportDatasetPeriodCollected", reportRsp, reportErr)
+	thirdSourceReadyID := sourceReadyEventID(spaceID, sourceViewID, freq, third.Unix())
+	var computed *storagepb.FactorPeriodComputedMarker
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		computedRsp, computedErr := primary.GetFactorPeriodComputed(ctx, &storagepb.GetFactorPeriodComputedReq{
+			AuthInfo: auth, SpaceId: spaceID, SourceViewId: sourceViewID,
+			TriggerEventId: thirdSourceReadyID, PeriodTime: third.Unix(),
+		})
+		assert.NoError(collect, computedErr)
+		if computedErr != nil || computedRsp == nil {
+			return
+		}
+		assert.Equal(collect, commonpb.ErrorCode_SUCCESS, computedRsp.GetRetInfo().GetCode(), computedRsp.GetRetInfo().GetMsg())
+		if computedRsp.GetFound() {
+			computed = computedRsp.GetMarker()
+		} else {
+			t.Logf("factor marker still pending: source_ready_event_id=%s", thirdSourceReadyID)
+			assert.True(collect, computedRsp.GetFound(), "factor marker is not persisted yet")
+		}
+	}, 180*time.Second, 250*time.Millisecond, "source-ready did not drive Factor durable computation")
+	require.NotNil(t, computed)
+	require.Equal(t, "complete", computed.GetStatus())
+	assertCompleteBindingStates(t, computed.GetBindings(), map[string]string{
+		bindingID: factorID, secondBindingID: secondFactorID,
+	})
+	t.Logf("durable factor marker: status=%s bindings=%v", computed.GetStatus(), computed.GetBindings())
+	var finalReady *eventstoragepb.ViewFactorPeriodReady
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer fetchCancel()
+		deliveries, fetchErr := readyConsumer.Fetch(fetchCtx, 16)
+		if fetchErr != nil && len(deliveries) == 0 {
+			assert.NoError(collect, fetchErr)
+			return
+		}
+		for _, delivery := range deliveries {
+			decoded := events.DecodeDelivery(eventRegistry, delivery)
+			if decoded.Err != nil {
+				_ = delivery.Ack(fetchCtx)
+				continue
+			}
+			ready, ok := decoded.Payload.(*eventstoragepb.ViewFactorPeriodReady)
+			if ok && ready.GetResultViewId() == resultViewID && ready.GetFrequency() == freq && ready.GetPeriodTime() == third.Unix() {
+				finalReady = ready
+			}
+			_ = delivery.Ack(fetchCtx)
+		}
+		if finalReady == nil {
+			assert.Fail(collect, "result view ready event not found", "view=%s period=%d", resultViewID, third.Unix())
+		}
+	}, 60*time.Second, 250*time.Millisecond, "result View did not publish ViewFactorPeriodReady")
+	require.NotNil(t, finalReady)
+	require.Equal(t, "complete", finalReady.GetStatus())
+	assertEventCompleteBindingStates(t, finalReady.GetBindings(), map[string]string{
+		bindingID: factorID, secondBindingID: secondFactorID,
+	})
+
+	// Assert the durable path before invoking the manual run-once helper. This
+	// prevents a successful CLI recalculation from masking a broken source-ready
+	// consumer or result writeback. Query Result View only after receiving final
+	// ready, then require the rows on that first query to prove ready is not early.
+	expectedOutputs := []factorOutputExpectation{
+		{fieldID: factorID + "__spread", values: []float64{3}},
+		{fieldID: factorID + "__rolling_spread", values: []float64{2.5}},
+		{fieldID: secondFactorID + "__midpoint", values: []float64{106.5}},
+		{fieldID: secondFactorID + "__rolling_midpoint", values: []float64{104.75}},
+	}
+	assertPrimaryFactorRows(t, ctx, primary, auth, spaceID, resultDatasetID, subjectID, freq,
+		[]time.Time{third}, "venue_pair:binance-okx", expectedOutputs)
+	rows := queryViewRowsOnce(t, ctx, view, viewAuth, spaceID, resultViewID, resultDatasetID, subjectID, freq,
+		[]time.Time{third}, end, "venue_pair:binance-okx", expectedOutputs)
+	assertFactorRows(t, rows, []time.Time{third}, "venue_pair:binance-okx", expectedOutputs)
+	secondExpectedOutputs := []factorOutputExpectation{
+		{fieldID: factorID + "__spread", values: []float64{3}},
+		{fieldID: factorID + "__rolling_spread", values: []float64{2.5}},
+		{fieldID: secondFactorID + "__midpoint", values: []float64{206.5}},
+		{fieldID: secondFactorID + "__rolling_midpoint", values: []float64{204.75}},
+	}
+	assertPrimaryFactorRows(t, ctx, primary, auth, spaceID, resultDatasetID, secondSubjectID, freq,
+		[]time.Time{third}, "venue_pair:binance-okx", secondExpectedOutputs)
+	secondRows := queryViewRowsOnce(t, ctx, view, viewAuth, spaceID, resultViewID, resultDatasetID,
+		secondSubjectID, freq, []time.Time{third}, end, "venue_pair:binance-okx", secondExpectedOutputs)
+	assertFactorRows(t, secondRows, []time.Time{third}, "venue_pair:binance-okx", secondExpectedOutputs)
+
+	// Keep the explicit CLI path as a second, independent smoke check after the
+	// event-driven assertions have already passed.
+	runDeployedFactor(t, ctx, deployRoot, []string{factorID, secondFactorID}, spaceID, sourceID, sourceViewID, subjectID, freq, first, end)
+
+}
+
+type factorOutputExpectation struct {
+	fieldID string
+	values  []float64
 }
 
 func assertPrimaryFactorRows(
@@ -427,8 +581,8 @@ func assertPrimaryFactorRows(
 	auth *commonpb.AuthInfo,
 	spaceID, datasetID, subjectID, freq string,
 	times []time.Time,
-	spreads, rolling []float64,
-	nullIndex int,
+	seriesTag string,
+	outputs []factorOutputExpectation,
 ) {
 	t.Helper()
 	keys := make([]*storagepb.RowKey, 0, len(times))
@@ -437,14 +591,19 @@ func assertPrimaryFactorRows(
 			SpaceId: spaceID, DatasetId: datasetID,
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 				SubjectId: subjectID, Freq: freq, DataTime: at.Format(time.RFC3339Nano),
-				SeriesTag: "venue_pair:binance-okx",
+				SeriesTag: seriesTag,
 			}},
 		})
+	}
+	fieldIDs := make([]string, 0, len(outputs))
+	for _, output := range outputs {
+		fieldIDs = append(fieldIDs, output.fieldID)
 	}
 	var lastRows []*storagepb.RowFieldValues
 	ok := assert.EventuallyWithT(t, func(collect *assert.CollectT) {
 		rsp, err := primary.ReadFields(ctx, &storagepb.PrimaryReadFieldsReq{
-			AuthInfo: auth, Keys: keys, FieldIds: []string{"spread", "rolling_spread"},
+			AuthInfo: auth, Keys: keys,
+			FieldIds: fieldIDs,
 		})
 		require.NoError(collect, err)
 		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
@@ -463,10 +622,64 @@ func assertPrimaryFactorRows(
 				Fields: row.GetFields(),
 			})
 		}
-		require.True(collect, factorRowsHaveExpectedValues(rows, times, spreads, rolling, nullIndex))
+		require.True(collect, factorRowsHaveExpectedValues(rows, times, seriesTag, outputs))
 	}, 10*time.Second, 100*time.Millisecond)
 	require.True(t, ok, "last Primary rows: %v", lastRows)
 	t.Log("real Storage PrimaryStore.ReadFields returned exact output identities and values")
+}
+
+func sourceReadyEventID(spaceID, viewID, freq string, periodTime int64) string {
+	parts := strings.Join([]string{"source-ready", spaceID, viewID, freq, strconv.FormatInt(periodTime, 10)}, "\x00")
+	sum := sha256.Sum256([]byte(parts))
+	return "storage-view-" + hex.EncodeToString(sum[:16])
+}
+
+func assertCompleteBindingStates(t *testing.T, bindings []*storagepb.FactorBindingPeriodState, expected map[string]string) {
+	t.Helper()
+	states := make(map[string]bindingPeriodState, len(bindings))
+	for _, binding := range bindings {
+		if binding != nil {
+			states[binding.GetBindingId()] = bindingPeriodState{
+				factorID: binding.GetFactorId(), status: binding.GetStatus(),
+				skippedSubjects: binding.GetSkippedSubjects(), failedSubjects: binding.GetFailedSubjects(),
+			}
+		}
+	}
+	assertBindingStateValues(t, states, expected)
+}
+
+func assertEventCompleteBindingStates(t *testing.T, bindings []*eventstoragepb.FactorBindingPeriodState, expected map[string]string) {
+	t.Helper()
+	states := make(map[string]bindingPeriodState, len(bindings))
+	for _, binding := range bindings {
+		if binding != nil {
+			states[binding.GetBindingId()] = bindingPeriodState{
+				factorID: binding.GetFactorId(), status: binding.GetStatus(),
+				skippedSubjects: binding.GetSkippedSubjects(), failedSubjects: binding.GetFailedSubjects(),
+			}
+		}
+	}
+	assertBindingStateValues(t, states, expected)
+}
+
+type bindingPeriodState struct {
+	factorID        string
+	status          string
+	skippedSubjects []string
+	failedSubjects  []string
+}
+
+func assertBindingStateValues(t *testing.T, states map[string]bindingPeriodState, expected map[string]string) {
+	t.Helper()
+	require.Len(t, states, len(expected))
+	for bindingID, factorID := range expected {
+		state, ok := states[bindingID]
+		require.True(t, ok, "missing binding state %s", bindingID)
+		require.Equal(t, factorID, state.factorID, "binding_id=%s", bindingID)
+		require.Equal(t, "complete", state.status, "binding_id=%s", bindingID)
+		require.Empty(t, state.skippedSubjects, "binding_id=%s", bindingID)
+		require.Empty(t, state.failedSubjects, "binding_id=%s", bindingID)
+	}
 }
 
 type retResponse interface {
@@ -479,7 +692,7 @@ func TestRequiredEnvPreservesNonEmptyValue(t *testing.T) {
 	require.Equal(t, " secret with spaces ", requiredEnv(t, name))
 }
 
-func TestFactorEventIncompleteRetriesBeforePython(t *testing.T) {
+func TestFactorViewReadyTrustsUpstreamEvent(t *testing.T) {
 	factorsDir := t.TempDir()
 	factorPath := filepath.Join(factorsDir, "VenueSpread.py")
 	source := []byte(`import pandas as pd
@@ -497,9 +710,9 @@ def compute(df, params):
 	require.NoError(t, os.WriteFile(factorPath, source, 0o600))
 	hash := sha256.Sum256(source)
 	at := time.Date(2026, 7, 29, 1, 0, 0, 0, time.UTC)
-	task, err := scheduler.BuildTask(scheduler.TaskScope{
-		TaskID: "incomplete-retry-e2e", TriggerType: "event", SpaceID: "quant",
-		SourceDataset: "prices", TargetDataset: "spread", SubjectID: "BTC-USDT",
+	task, err := taskrunner.BuildTask(taskrunner.TaskScope{
+		TaskID: "view-ready-e2e", TriggerType: "view_ready", SpaceID: "quant",
+		SourceViewID: "prices-view", ResultDatasetID: "spread", SubjectID: "BTC-USDT",
 		Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond),
 	}, domain.FactorDef{
 		FactorID: "venue-spread", Name: "VenueSpread",
@@ -510,20 +723,17 @@ def compute(df, params):
 		LookbackPeriods: 1, Status: domain.FactorStatusEnabled,
 	}, factorsDir)
 	require.NoError(t, err)
-	python, err := engine.NewPythonExecutor(context.Background(), 1, process.Config{
+	python, err := engine.NewPythonWorkerPool(context.Background(), 1, process.Config{
 		PythonBin: "python3", WorkerPath: filepath.Join("..", "pyworker", "worker.py"),
 		Args: []string{"--factors-dir", factorsDir}, Limits: process.DefaultLimits(),
 	})
 	require.NoError(t, err)
 	defer python.Close()
 	storage := &incompleteThenCompleteStorage{at: at}
-	service := scheduler.NewService(scheduler.Config{
-		Workers: 1, QueueCapacity: 1, EventReadRetry: 2,
-		EventReadRetryInterval: time.Millisecond,
-	}, storage, python)
+	service := taskrunner.NewService(1, storage, python)
 	require.NoError(t, service.Run(context.Background(), task))
-	require.Equal(t, 2, storage.reads, "event task must reread after complete=false")
-	require.Equal(t, 1, storage.writes, "incomplete cohort must never reach Python/writeback")
+	require.Equal(t, 1, storage.reads, "ViewSourcePeriodReady is the completeness contract")
+	require.Equal(t, 1, storage.writes, "ready input reaches Python/writeback once")
 	require.Len(t, storage.result.Rows, 1)
 	require.Equal(t, "venue_pair:binance-okx", storage.result.Rows[0].SeriesTag)
 	require.InDelta(t, 1.0, storage.result.Rows[0].Values["spread"], 1e-12)
@@ -660,10 +870,6 @@ func assertFactorArtifactsRemoved(t *testing.T, deployRoot, factorName string) {
 
 func reportCleanupFailure(t *testing.T, resource string, rsp any, err error) {
 	t.Helper()
-	if t.Failed() {
-		t.Logf("cleanup %s failed after primary failure: rsp=%v err=%v", resource, rsp, err)
-		return
-	}
 	t.Errorf("cleanup %s failed: rsp=%v err=%v", resource, rsp, err)
 }
 
@@ -737,17 +943,18 @@ func waitForViewQueryable(
 	t.Log("real Storage View runtime accepted a public query")
 }
 
-func runDeployedFactor(t *testing.T, ctx context.Context, deployRoot, factorID, spaceID, sourceID, subjectID, freq string, start, end time.Time) {
+func runDeployedFactor(t *testing.T, ctx context.Context, deployRoot string, factorIDs []string, spaceID, sourceID, sourceViewID, subjectID, freq string, start, end time.Time) {
 	t.Helper()
 	wrapper := filepath.Join(deployRoot, "bin", "moox-factor-run-once")
 	cmd := exec.CommandContext(ctx, wrapper,
 		"--space", spaceID,
 		"--dataset", sourceID,
+		"--view-id", sourceViewID,
 		"--subject", subjectID,
 		"--freq", freq,
 		"--start-time", start.Format(time.RFC3339Nano),
 		"--end-time", end.Format(time.RFC3339Nano),
-		"--factors", factorID,
+		"--factors", strings.Join(factorIDs, ","),
 	)
 	cmd.Env = append(os.Environ(), "MOOX_FACTOR_STORAGE_E2E_CHILD=1")
 	output, err := cmd.CombinedOutput()
@@ -756,7 +963,7 @@ func runDeployedFactor(t *testing.T, ctx context.Context, deployRoot, factorID, 
 	t.Logf("deployed run-once succeeded: %s", strings.TrimSpace(string(output)))
 }
 
-func waitForViewRows(
+func queryViewRowsOnce(
 	t *testing.T,
 	ctx context.Context,
 	view storagepb.DataViewClientProxy,
@@ -764,37 +971,28 @@ func waitForViewRows(
 	spaceID, viewID, targetID, subjectID, freq string,
 	times []time.Time,
 	end time.Time,
-	spreads, rolling []float64,
-	nullIndex int,
+	seriesTag string,
+	outputs []factorOutputExpectation,
 ) []*storagepb.TimeSeriesRow {
 	t.Helper()
-	var rows []*storagepb.TimeSeriesRow
-	var lastRows []*storagepb.TimeSeriesRow
-	ok := assert.EventuallyWithT(t, func(collect *assert.CollectT) {
-		rsp, err := view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
-			AuthInfo: auth, SpaceId: spaceID, ViewId: viewID,
-			Selectors: []*storagepb.TimeSeriesSelector{{
-				SpaceId: spaceID, DatasetId: targetID, SubjectId: subjectID, Freq: freq,
-			}},
-			TimeRange: &storagepb.TimeRange{
-				StartTime: times[0].Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano),
-			},
-			Sorts: []*storagepb.SortSpec{{FieldName: "data_time"}},
-			Page:  &commonpb.Page{Page: 1, Size: 10},
-		})
-		require.NoError(collect, err)
-		require.Equal(collect, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-		lastRows = rsp.GetRows()
-		require.Len(collect, rsp.GetRows(), len(times))
-		require.True(collect, factorRowsHaveExpectedValues(rsp.GetRows(), times, spreads, rolling, nullIndex),
-			"View has not applied the expected factor patch yet")
-		if factorRowsHaveExpectedValues(rsp.GetRows(), times, spreads, rolling, nullIndex) {
-			rows = rsp.GetRows()
-		}
-	}, 30*time.Second, 200*time.Millisecond)
-	require.True(t, ok, "last factor View rows: %v", lastRows)
-	t.Log("real Storage DataView.QueryTimeSeriesRows returned all expected factor rows")
-	return rows
+	rsp, err := view.QueryTimeSeriesRows(ctx, &storagepb.QueryTimeSeriesRowsReq{
+		AuthInfo: auth, SpaceId: spaceID, ViewId: viewID,
+		Selectors: []*storagepb.TimeSeriesSelector{{
+			SpaceId: spaceID, DatasetId: targetID, SubjectId: subjectID, Freq: freq,
+		}},
+		TimeRange: &storagepb.TimeRange{
+			StartTime: times[0].Format(time.RFC3339Nano), EndTime: end.Format(time.RFC3339Nano),
+		},
+		Sorts: []*storagepb.SortSpec{{FieldName: "data_time"}},
+		Page:  &commonpb.Page{Page: 1, Size: 10},
+	})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.Len(t, rsp.GetRows(), len(times), "final-ready was published before Result View rows were readable")
+	require.True(t, factorRowsHaveExpectedValues(rsp.GetRows(), times, seriesTag, outputs),
+		"final-ready was published before Result View applied the exact factor patch")
+	t.Log("first Result View query after final-ready returned all expected factor rows")
+	return rsp.GetRows()
 }
 
 func datasetColumnNames(columns []*storagepb.DatasetColumn) []string {
@@ -809,64 +1007,62 @@ func assertFactorRows(
 	t *testing.T,
 	rows []*storagepb.TimeSeriesRow,
 	times []time.Time,
-	spreads, rolling []float64,
-	nullIndex int,
+	seriesTag string,
+	outputs []factorOutputExpectation,
 ) {
 	t.Helper()
 	require.Len(t, rows, len(times))
 	for i, row := range rows {
 		require.Equal(t, times[i].Format(time.RFC3339Nano), row.GetKey().GetDataTime())
-		require.Equal(t, "venue_pair:binance-okx", row.GetKey().GetSeriesTag())
+		require.Equal(t, seriesTag, row.GetKey().GetSeriesTag())
 		values := rowValues(row)
-		if i == nullIndex {
-			require.Empty(t, rowFieldIDs(row), "cleared null outputs must not expose extra fields")
-			require.Nil(t, values["spread"], "explicit null must clear old spread")
-			require.Nil(t, values["rolling_spread"], "explicit null must clear old rolling spread")
-			continue
+		wantFieldIDs := make([]string, 0, len(outputs))
+		for _, output := range outputs {
+			require.Len(t, output.values, len(times), "field_id=%s", output.fieldID)
+			wantFieldIDs = append(wantFieldIDs, output.fieldID)
+			require.NotNil(t, values[output.fieldID], "field_id=%s", output.fieldID)
+			require.InDelta(t, output.values[i], values[output.fieldID].GetDoubleValue(), 1e-12, "field_id=%s", output.fieldID)
 		}
-		require.ElementsMatch(t, []string{"spread", "rolling_spread"}, rowFieldIDs(row))
-		require.InDelta(t, spreads[i], values["spread"].GetDoubleValue(), 1e-12)
-		require.InDelta(t, rolling[i], values["rolling_spread"].GetDoubleValue(), 1e-12)
+		require.ElementsMatch(t, wantFieldIDs, rowFieldIDs(row))
 	}
 }
 
 func rowFieldIDs(row *storagepb.TimeSeriesRow) []string {
 	ids := make([]string, 0, len(row.GetFields()))
 	for _, field := range row.GetFields() {
-		id := field.GetFieldId()
-		if dot := strings.LastIndexByte(id, '.'); dot >= 0 {
-			id = id[dot+1:]
-		}
-		ids = append(ids, id)
+		ids = append(ids, canonicalFieldID(field.GetFieldId()))
 	}
+	sort.Strings(ids)
 	return ids
 }
 
 func factorRowsHaveExpectedValues(
 	rows []*storagepb.TimeSeriesRow,
 	times []time.Time,
-	spreads, rolling []float64,
-	nullIndex int,
+	seriesTag string,
+	outputs []factorOutputExpectation,
 ) bool {
-	if len(rows) != len(times) || len(spreads) != len(times) || len(rolling) != len(times) {
+	if len(rows) != len(times) {
 		return false
+	}
+	for _, output := range outputs {
+		if len(output.values) != len(times) {
+			return false
+		}
 	}
 	for i, row := range rows {
 		if row.GetKey().GetDataTime() != times[i].Format(time.RFC3339Nano) ||
-			row.GetKey().GetSeriesTag() != "venue_pair:binance-okx" {
+			row.GetKey().GetSeriesTag() != seriesTag {
 			return false
 		}
 		values := rowValues(row)
-		if i == nullIndex {
-			if values["spread"] != nil || values["rolling_spread"] != nil {
+		if len(values) != len(outputs) {
+			return false
+		}
+		for _, output := range outputs {
+			if values[output.fieldID] == nil || !closeEnough(values[output.fieldID].GetDoubleValue(), output.values[i]) {
 				return false
 			}
-			continue
-		}
-		if values["spread"] == nil || values["rolling_spread"] == nil ||
-			!closeEnough(values["spread"].GetDoubleValue(), spreads[i]) ||
-			!closeEnough(values["rolling_spread"].GetDoubleValue(), rolling[i]) {
-			return false
 		}
 	}
 	return true
@@ -881,11 +1077,14 @@ func closeEnough(got, want float64) bool {
 func rowValues(row *storagepb.TimeSeriesRow) map[string]*storagepb.TypedValue {
 	values := make(map[string]*storagepb.TypedValue, len(row.GetFields()))
 	for _, field := range row.GetFields() {
-		id := field.GetFieldId()
-		if dot := strings.LastIndexByte(id, '.'); dot >= 0 {
-			id = id[dot+1:]
-		}
-		values[id] = field.GetValue()
+		values[canonicalFieldID(field.GetFieldId())] = field.GetValue()
 	}
 	return values
+}
+
+func canonicalFieldID(id string) string {
+	if dot := strings.LastIndexByte(id, '.'); dot >= 0 {
+		return id[dot+1:]
+	}
+	return id
 }

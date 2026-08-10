@@ -82,6 +82,21 @@ var (
 	DatasetRowsUpserted = declareEvent("storage.dataset.rows.upserted", 2, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)
+	DatasetPeriodCollected = declareEvent("storage.dataset.period.collected", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+		return &storagepb.DatasetPeriodCollected{}
+	}, validateDatasetPeriodCollected)
+	ViewSourcePeriodReady = declareEvent("storage.view.source_period.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+		return &storagepb.ViewSourcePeriodReady{}
+	}, validateViewSourcePeriodReady)
+	FactorPeriodComputed = declareEvent("storage.dataset.factor_period.computed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+		return &storagepb.FactorPeriodComputed{}
+	}, validateFactorPeriodComputed)
+	ViewFactorPeriodReady = declareEvent("storage.view.factor_period.ready", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+		return &storagepb.ViewFactorPeriodReady{}
+	}, validateViewFactorPeriodReady)
+	DatasetSyncPoint = declareEvent("storage.dataset.sync_point", 1, "MOOX_STORAGE", "storage", func() proto.Message {
+		return &storagepb.DatasetSyncPoint{}
+	}, validateDatasetSyncPoint)
 	MarketFetchBatchCompleted = declareEvent("market.fetch.batch.completed", 1, "MOOX_MARKET_FETCH", "collector", func() proto.Message {
 		return &marketfetchpb.MarketFetchBatchCompleted{}
 	}, validateMarketFetchBatchCompleted)

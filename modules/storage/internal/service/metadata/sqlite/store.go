@@ -142,7 +142,7 @@ func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	return nil
 }
 
-const metadataSchemaVersion = "6"
+const metadataSchemaVersion = "7"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
@@ -170,6 +170,12 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	if err == nil && version == "5" {
 		return errors.New("incompatible storage metadata schema v5; remove the metadata database and run init/import-seed")
 	}
+	if err == nil && version == "6" {
+		if migrateErr := s.migrateV6ToV7(ctx); migrateErr != nil {
+			return migrateErr
+		}
+		return nil
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return errors.New("incompatible storage metadata schema; reset metadata database")
 	}
@@ -177,6 +183,38 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 		return fmt.Errorf("incompatible storage metadata schema v%s; remove the metadata database and run init/import-seed", version)
 	}
 	return err
+}
+
+// migrateV6ToV7 is the only additive metadata migration in this release. It
+// preserves all existing catalog rows and creates the period/sync projections
+// required by the View-ready event chain before advancing the version marker.
+func (s *Store) migrateV6ToV7(ctx context.Context) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS t_view_period_dataset_states (
+			c_space_id TEXT NOT NULL, c_view_id TEXT NOT NULL, c_dataset_id TEXT NOT NULL,
+			c_frequency TEXT NOT NULL, c_period_time INTEGER NOT NULL, c_event_id TEXT NOT NULL,
+			c_status TEXT NOT NULL CHECK (c_status IN ('complete', 'degraded')),
+			c_subject_ids_json TEXT NOT NULL DEFAULT '[]', c_failed_subjects_json TEXT NOT NULL DEFAULT '[]',
+			c_occurred_at TEXT NOT NULL, c_updated_at TEXT NOT NULL,
+			PRIMARY KEY (c_space_id, c_view_id, c_dataset_id, c_frequency, c_period_time),
+			FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_t_view_period_dataset_states_period ON t_view_period_dataset_states (c_space_id, c_view_id, c_frequency, c_period_time)`,
+		`CREATE TABLE IF NOT EXISTS t_view_sync_points (
+			c_space_id TEXT NOT NULL, c_view_id TEXT NOT NULL, c_dataset_id TEXT NOT NULL,
+			c_request_id TEXT NOT NULL, c_sync_point_id TEXT NOT NULL, c_applied_at TEXT NOT NULL,
+			PRIMARY KEY (c_space_id, c_view_id, c_dataset_id, c_request_id),
+			FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_t_view_sync_points_request ON t_view_sync_points (c_space_id, c_view_id, c_request_id)`,
+		`UPDATE t_schema_meta SET c_value = '7' WHERE c_key = 'schema_version'`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("migrate metadata schema v6 to v7: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) nowUTC() time.Time {

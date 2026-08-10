@@ -78,9 +78,13 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 			i.registry.ObserveInventoryRefreshError()
 			return fmt.Errorf("factor binding %q has invalid positive freq %q", binding.BindingID, binding.Freq)
 		}
+		datasetID := strings.TrimSpace(binding.ResultDatasetID)
+		if datasetID == "" {
+			datasetID = strings.TrimSpace(binding.TargetDataset)
+		}
 		key := report.DatasetKey{
 			SpaceID:   strings.TrimSpace(binding.SpaceID),
-			DatasetID: strings.TrimSpace(binding.TargetDataset),
+			DatasetID: datasetID,
 			Freq:      freq,
 		}
 		expected[key] = interval

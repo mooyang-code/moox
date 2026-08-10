@@ -8,16 +8,22 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/nats-io/nats.go"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
-func liveConsumerConfig(cfg Config) events.ConsumerConfig {
+func viewReadyConsumerConfig(cfg Config) events.ConsumerConfig {
 	return events.ConsumerConfig{
-		Name:                DatasetRowsConsumerName,
-		Event:               events.DatasetRowsUpserted,
+		Name:                ViewSourceReadyConsumerName,
+		Event:               events.ViewSourcePeriodReady,
 		AckWait:             time.Minute,
-		MaxDeliver:          5,
-		MaxAckPending:       1000,
+		MaxDeliver:          -1,
+		MaxAckPending:       1,
 		FetchMaxWait:        cfg.FetchMaxWait,
+		// Realtime factor results must follow the current source period. A new
+		// installation (or an intentional history reset) should not replay an
+		// unbounded historical View-ready backlog before it can calculate the
+		// latest K-line. Historical ranges are handled by the explicit Recalc
+		// path instead.
 		DeliverPolicy:       nats.DeliverNewPolicy,
 		DeliverDecodeErrors: true,
 	}
@@ -53,7 +59,7 @@ func (s *jetStreamConsumerSession) Close() error {
 }
 
 func (c *Consumer) open(ctx context.Context) (natsConsumerSession, error) {
-	consumerCfg := liveConsumerConfig(c.cfg)
+	consumerCfg := viewReadyConsumerConfig(c.cfg)
 	urls := append([]string(nil), c.cfg.URLs...)
 	clientCfg := jetstream.ConfigFromEnv(urls, "moox-factor")
 	if c.cfg.CredentialFile != "" {
@@ -75,9 +81,16 @@ func (c *Consumer) open(ctx context.Context) (natsConsumerSession, error) {
 		_ = client.Close()
 		return nil, err
 	}
+	handler := storageEventHandler{executor: c.executor}
+	runnerCfg := jetstream.RunnerConfig{
+		BatchSize: 1, InProgressInterval: 30 * time.Second,
+		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
+			log.ErrorContextf(ctx, "factor ViewSourcePeriodReady consumer error: %v", err)
+		}),
+	}
 	return &jetStreamConsumerSession{
 		client:   client,
 		consumer: consumer,
-		runner:   jetstream.NewRunner(consumer, storageEventHandler{eventBatcher: c.eventBatcher}, jetstream.RunnerConfig{BatchSize: 16}),
+		runner:   jetstream.NewRunner(consumer, handler, runnerCfg),
 	}, nil
 }

@@ -9,9 +9,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
-	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
-	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
+	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
@@ -76,48 +75,6 @@ func TestValidateStartupFactorContractsFailsClosed(t *testing.T) {
 	require.Equal(t, 1, validator.calls)
 }
 
-func TestBuildSchedulerTaskUsesRealtimeHalfOpenRange(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "factor.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
-	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
-		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
-		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
-		LookbackPeriods: 100, Status: domain.FactorStatusEnabled,
-	}))
-	at := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
-	end := at.Add(3*time.Minute + time.Nanosecond)
-	tasks, err := buildSchedulerTasks(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
-		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
-		SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: end, FactorIDs: []string{"bias"},
-	})
-	require.NoError(t, err)
-	require.Len(t, tasks, 1)
-	task := tasks[0]
-	require.Equal(t, at, task.StartTime)
-	require.Equal(t, end, task.EndTime)
-	require.Equal(t, scheduler.DeterministicTaskID(task), task.TaskID)
-}
-
-func TestDisabledFactorMakesRealtimeTaskNoop(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "factor.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
-	require.NoError(t, db.Factors().Create(context.Background(), domain.FactorDef{
-		FactorID: "bias", Name: "Bias", SourceCode: "x", SourceHash: "hash",
-		InputColumns: []string{"close"}, Outputs: []string{"bias"}, ParamsJSON: `{}`,
-		LookbackPeriods: 100, Status: domain.FactorStatusDisabled,
-	}))
-	tasks, err := buildSchedulerTasks(context.Background(), db.Factors(), t.TempDir(), trigger.Task{
-		SpaceID: "crypto", SourceDataset: "bars", SubjectID: "BTC", Freq: "1m",
-		StartTime: time.Now(), EndTime: time.Now().Add(time.Nanosecond), FactorIDs: []string{"bias"},
-	})
-	require.NoError(t, err)
-	require.Empty(t, tasks)
-}
-
 func TestTaskValidatorRechecksDefinitionAndBindingScope(t *testing.T) {
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "factor.db")})
 	require.NoError(t, err)
@@ -138,7 +95,7 @@ func TestTaskValidatorRechecksDefinitionAndBindingScope(t *testing.T) {
 	}
 	require.NoError(t, db.Bindings().Upsert(ctx, binding))
 	validate := newTaskValidator(db.Factors(), db.Bindings())
-	task := scheduler.Task{FactorTask: engine.FactorTask{
+	task := taskrunner.Task{FactorTask: engine.FactorTask{
 		Factor: engine.FactorSpec{
 			FactorID: "bias", SourceHash: "hash",
 			InputColumns: []string{"close"}, ParamsJSON: `{}`,
@@ -153,21 +110,21 @@ func TestTaskValidatorRechecksDefinitionAndBindingScope(t *testing.T) {
 	require.NoError(t, validate(ctx, task))
 
 	require.NoError(t, db.Factors().SetStatus(ctx, factor.FactorID, domain.FactorStatusDisabled))
-	require.ErrorIs(t, validate(ctx, task), scheduler.ErrStaleTask)
+	require.ErrorIs(t, validate(ctx, task), taskrunner.ErrStaleTask)
 
 	factor.Status = domain.FactorStatusDisabled
 	factor.ParamsJSON = `{"window":10}`
 	require.NoError(t, db.Factors().Update(ctx, factor))
 	require.NoError(t, db.Factors().SetStatus(ctx, factor.FactorID, domain.FactorStatusEnabled))
-	require.ErrorIs(t, validate(ctx, task), scheduler.ErrStaleTask)
+	require.ErrorIs(t, validate(ctx, task), taskrunner.ErrStaleTask)
 
 	task.Factor.ParamsJSON = factor.ParamsJSON
 	task.SubjectID = "ETH"
-	require.ErrorIs(t, validate(ctx, task), scheduler.ErrStaleTask)
+	require.ErrorIs(t, validate(ctx, task), taskrunner.ErrStaleTask)
 }
 
 func TestTaskValidatorPreservesRepositoryAndContextErrors(t *testing.T) {
-	task := scheduler.Task{FactorTask: engine.FactorTask{
+	task := taskrunner.Task{FactorTask: engine.FactorTask{
 		Factor: engine.FactorSpec{
 			FactorID: "bias", SourceHash: "hash",
 			InputColumns: []string{"close"}, ParamsJSON: `{}`,
@@ -184,7 +141,7 @@ func TestTaskValidatorPreservesRepositoryAndContextErrors(t *testing.T) {
 	cancel()
 	tests := map[string]struct {
 		ctx      context.Context
-		validate scheduler.TaskValidator
+		validate taskrunner.TaskValidator
 		want     error
 	}{
 		"factor get": {
@@ -216,7 +173,7 @@ func TestTaskValidatorPreservesRepositoryAndContextErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			err := tc.validate(tc.ctx, task)
 			require.ErrorIs(t, err, tc.want)
-			require.NotErrorIs(t, err, scheduler.ErrStaleTask)
+			require.NotErrorIs(t, err, taskrunner.ErrStaleTask)
 		})
 	}
 }
@@ -235,7 +192,7 @@ func TestTaskValidatorTreatsDeletedFactorAsStale(t *testing.T) {
 	require.NoError(t, db.Factors().Delete(ctx, "deleted"))
 	validate := newTaskValidator(db.Factors(), db.Bindings())
 
-	err = validate(ctx, scheduler.Task{FactorTask: engine.FactorTask{
+	err = validate(ctx, taskrunner.Task{FactorTask: engine.FactorTask{
 		Factor: engine.FactorSpec{
 			FactorID: "deleted", SourceHash: "hash",
 			InputColumns: []string{"close"}, ParamsJSON: `{}`,
@@ -243,7 +200,7 @@ func TestTaskValidatorTreatsDeletedFactorAsStale(t *testing.T) {
 		SpaceID: "crypto", SourceDataset: "bars", TargetDataset: "bars_factor",
 		SubjectID: "BTC", Freq: "1m", LookbackPeriods: 2,
 	}})
-	require.ErrorIs(t, err, scheduler.ErrStaleTask)
+	require.ErrorIs(t, err, taskrunner.ErrStaleTask)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 

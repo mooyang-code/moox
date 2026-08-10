@@ -33,7 +33,13 @@ health:
 
 streams:
   - name: MOOX_STORAGE
-    subjects: ["moox.storage.dataset.rows.upserted.v2.>"]
+    subjects:
+      - "moox.storage.dataset.rows.upserted.v2.>"
+      - "moox.storage.dataset.period.collected.v1.>"
+      - "moox.storage.view.source_period.ready.v1.>"
+      - "moox.storage.dataset.factor_period.computed.v1.>"
+      - "moox.storage.view.factor_period.ready.v1.>"
+      - "moox.storage.dataset.sync_point.v1.>"
     retention: limits
     discard: old
     storage: file

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { DatasetColumn, ViewColumn } from "@/api/storage/types";
 import { buildTimeSeriesBrowseSelector, sortBrowseTableRows, timeSeriesRowsToTableRows } from "./browse-utils";
-import { buildKlineChartRecords, buildViewFilterExprs, exactSeriesTagFromFilters } from "../view-browse/view-browse-utils";
+import {
+  buildKlineChartRecords,
+  buildViewColumnLabels,
+  buildViewFilterExprs,
+  exactSeriesTagFromFilters
+} from "../view-browse/view-browse-utils";
 
 describe("timeSeriesRowsToTableRows", () => {
   it("keeps rows with the same timestamp distinct by series tag", () => {
@@ -97,5 +103,35 @@ describe("Kline series tag isolation", () => {
       ],
       group_logical: "FILTER_LOGICAL_AND"
     });
+  });
+});
+
+describe("view factor column labels", () => {
+  it("uses the technical factor output name instead of the localized display name", () => {
+    const columnName = "bin_e0a2079753cf4faf.bias__bias_5";
+    const labels = buildViewColumnLabels(
+      [
+        {
+          column_name: columnName,
+          origin_id: columnName,
+          attributes: { display_name: "因子5" }
+        } as ViewColumn
+      ],
+      [
+        {
+          dataset_id: "bin_e0a2079753cf4faf",
+          column_name: "bias__bias_5",
+          origin_type: 2,
+          origin_id: "bias.bias_5",
+          attributes: { display_name: "因子5", factor_output: "bias_5" }
+        } as DatasetColumn
+      ],
+      [],
+      [],
+      [],
+      { primary_dataset_id: "bin_e0a2079753cf4faf", dataset_ids: ["bin_e0a2079753cf4faf"] }
+    );
+
+    expect(labels[columnName]).toBe("bias_5");
   });
 });

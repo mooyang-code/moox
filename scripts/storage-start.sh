@@ -13,6 +13,20 @@ STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-6}"
 cd "${SCRIPT_DIR}"
 mkdir -p logs database data var/storage
 
+# The package-local file is the authority for the Primary/View credentials.
+# Loading it here prevents a manually started storage process from retaining a
+# stale shell environment after the control package rotates the secret.
+if [[ -r "${SCRIPT_DIR}/secrets/storage-internal-auth.env" ]]; then
+  set -a
+  source "${SCRIPT_DIR}/secrets/storage-internal-auth.env"
+  set +a
+fi
+if [[ -r "${SCRIPT_DIR}/secrets/storage-node-auth.env" ]]; then
+  set -a
+  source "${SCRIPT_DIR}/secrets/storage-node-auth.env"
+  set +a
+fi
+
 if [[ -x "${SCRIPT_DIR}/stop.sh" ]]; then
   APP_NAME="${APP_NAME}" "${SCRIPT_DIR}/stop.sh" || true
 fi

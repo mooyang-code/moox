@@ -4,7 +4,7 @@
       <div class="page-head">
         <h2>因子绑定</h2>
         <a-space wrap>
-          <a-input v-model="filters.source_dataset" allow-clear placeholder="源数据集" @press-enter="reloadFirstPage" />
+          <a-input v-model="filters.source_view_id" allow-clear placeholder="源视图" @press-enter="reloadFirstPage" />
           <a-input v-model="filters.freq" allow-clear placeholder="频率" style="width: 120px" @press-enter="reloadFirstPage" />
           <a-select v-model="filters.status" allow-clear placeholder="状态" style="width: 130px" @change="reloadFirstPage">
             <a-option value="enabled">enabled</a-option>
@@ -34,8 +34,12 @@
         >
           <template #columns>
             <a-table-column title="因子" data-index="factor_id" :width="130" />
-            <a-table-column title="源数据集" data-index="source_dataset" :width="180" />
-            <a-table-column title="目标数据集" data-index="target_dataset" :width="180" />
+            <a-table-column title="源视图" :width="220">
+              <template #cell="{ record }">{{ record.source_view_id || record.source_dataset }}</template>
+            </a-table-column>
+            <a-table-column title="目标数据集" :width="180">
+              <template #cell="{ record }">{{ record.result_dataset_id || record.target_dataset }}</template>
+            </a-table-column>
             <a-table-column title="频率" data-index="freq" :width="90" />
             <a-table-column title="标的模式" data-index="subject_mode" :width="110" />
             <a-table-column title="标的列表" data-index="subjects_json" :width="220" :ellipsis="true" :tooltip="true" />
@@ -83,18 +87,15 @@
             </a-option>
           </a-select>
         </a-form-item>
-        <a-form-item field="source_dataset" label="源数据集" required>
-          <a-select v-model="form.source_dataset" allow-search allow-create @change="onSourceDatasetChange">
-            <a-option v-for="item in datasetOptions" :key="item.dataset_id" :value="item.dataset_id">
-              {{ item.dataset_id }}
+        <a-form-item field="source_view_id" label="源视图" required>
+          <a-select v-model="form.source_view_id" allow-search>
+            <a-option v-for="item in viewOptions" :key="item.view_id" :value="item.view_id">
+              {{ item.view_id }}
             </a-option>
           </a-select>
         </a-form-item>
         <a-form-item field="freq" label="频率" required>
           <a-input v-model="form.freq" placeholder="1m" />
-        </a-form-item>
-        <a-form-item field="target_dataset" label="目标数据集">
-          <a-input v-model="form.target_dataset" placeholder="留空由系统生成" />
         </a-form-item>
         <a-form-item field="subject_mode" label="标的范围">
           <a-select v-model="form.subject_mode">
@@ -126,8 +127,8 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { deleteFactorBinding, listFactorBindings, listFactorDefs, upsertFactorBinding } from "@/api/factor";
 import type { FactorBinding, FactorDef } from "@/api/factor/types";
-import { listDatasets } from "@/api/storage/metadata";
-import type { Dataset } from "@/api/storage/types";
+import { listViews } from "@/api/storage/metadata";
+import type { View } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 
@@ -137,28 +138,27 @@ const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const rows = ref<FactorBinding[]>([]);
 const factors = ref<FactorDef[]>([]);
-const datasets = ref<Dataset[]>([]);
+const views = ref<View[]>([]);
 const loading = ref(false);
 const visible = ref(false);
 const editing = ref(false);
 const pagination = reactive(defaultPagination());
-const filters = reactive({ source_dataset: "", freq: "", status: "" });
+const filters = reactive({ source_view_id: "", freq: "", status: "" });
 
 const form = reactive<FactorBinding>({
   binding_id: "",
   factor_id: "",
   space_id: "",
-  source_dataset: "",
+  source_view_id: "",
   freq: "1m",
   subject_mode: "all",
   subjects_json: "[]",
-  target_dataset: "",
   status: "enabled"
 });
 
 const modalTitle = computed(() => (editing.value ? "编辑绑定" : "新增绑定"));
 const factorOptions = computed(() => factors.value);
-const datasetOptions = computed(() => datasets.value);
+const viewOptions = computed(() => views.value);
 
 async function load() {
   if (!selectedSpaceId.value) {
@@ -167,20 +167,20 @@ async function load() {
   }
   loading.value = true;
   try {
-    const [bindingRsp, factorRsp, datasetRsp] = await Promise.all([
+    const [bindingRsp, factorRsp, viewRsp] = await Promise.all([
       listFactorBindings({
         space_id: selectedSpaceId.value,
-        source_dataset: filters.source_dataset || undefined,
+        source_view_id: filters.source_view_id || undefined,
         freq: filters.freq || undefined,
         status: filters.status || undefined,
         page: { page: pagination.current, size: pagination.pageSize }
       }),
       listFactorDefs({ page: { page: 1, size: 500 } }),
-      listDatasets({ space_id: selectedSpaceId.value, data_kind: "DATA_KIND_TIME_SERIES", page: { page: 1, size: 500 } })
+      listViews({ space_id: selectedSpaceId.value, status: "active", page: { page: 1, size: 500 } })
     ]);
     rows.value = bindingRsp.bindings || [];
     factors.value = factorRsp.factors || [];
-    datasets.value = datasetRsp.datasets || [];
+    views.value = viewRsp.views || [];
     applyPageResult(pagination, bindingRsp.page_result);
   } finally {
     loading.value = false;
@@ -193,16 +193,15 @@ function reloadFirstPage() {
 }
 
 function resetForm() {
-  const datasetID = filters.source_dataset || datasets.value[0]?.dataset_id || "";
+  const viewID = filters.source_view_id || views.value[0]?.view_id || "";
   Object.assign(form, {
     binding_id: "",
     factor_id: factors.value[0]?.factor_id || "",
     space_id: selectedSpaceId.value || "",
-    source_dataset: datasetID,
+    source_view_id: viewID,
     freq: filters.freq || "1m",
     subject_mode: "all",
     subjects_json: "[]",
-    target_dataset: "",
     status: "enabled"
   });
 }
@@ -217,6 +216,7 @@ function openEdit(record: FactorBinding) {
   editing.value = true;
   Object.assign(form, {
     ...record,
+    source_view_id: record.source_view_id || record.source_dataset || "",
     subjects_json: record.subjects_json || "[]"
   });
   visible.value = true;
@@ -224,8 +224,8 @@ function openEdit(record: FactorBinding) {
 
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
-  if (!form.factor_id || !form.source_dataset || !form.freq) {
-    Message.warning("请补全因子、源数据集和频率");
+  if (!form.factor_id || !form.source_view_id || !form.freq) {
+    Message.warning("请补全因子、源视图和频率");
     return;
   }
   try {
@@ -234,7 +234,11 @@ async function submit() {
     Message.warning(`标的白名单不是合法 JSON: ${(err as Error).message}`);
     return;
   }
-  await upsertFactorBinding({ ...form, space_id: spaceId, target_dataset: form.target_dataset || "" });
+  await upsertFactorBinding({
+    ...form,
+    space_id: spaceId,
+    source_view_id: form.source_view_id
+  });
   Message.success("绑定已保存，实时触发将在下一次快照刷新后生效");
   visible.value = false;
   await load();
@@ -251,10 +255,6 @@ async function remove(record: FactorBinding) {
   await deleteFactorBinding(record.binding_id);
   Message.success("绑定已删除");
   await load();
-}
-
-function onSourceDatasetChange() {
-  form.target_dataset = "";
 }
 
 function onPageChange(page: number) {

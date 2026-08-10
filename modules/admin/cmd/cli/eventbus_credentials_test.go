@@ -166,13 +166,26 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, tradeACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_v1")
 	assert.Contains(t, tradeACL, "$JS.ACK.MOOX_TRADE.trade_target_v1.>")
 	storageACL := eventBusACLBlock(yaml, "storage-eventbus")
-	assert.Contains(t, storageACL, "moox.storage.dataset.rows.upserted.v2.>")
+	for _, subject := range []string{
+		"moox.storage.dataset.rows.upserted.v2.>",
+		"moox.storage.dataset.period.collected.v1.>",
+		"moox.storage.view.source_period.ready.v1.>",
+		"moox.storage.dataset.factor_period.computed.v1.>",
+		"moox.storage.view.factor_period.ready.v1.>",
+		"moox.storage.dataset.sync_point.v1.>",
+	} {
+		assert.Contains(t, storageACL, subject)
+	}
 	assert.NotContains(t, storageACL, "moox.dlq.")
 	assert.NotContains(t, storageACL, "moox.storage.rows_committed")
 	assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.*.storage_view")
 	assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view")
 	assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view")
 	assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE.storage_view.>")
+	assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.*.storage_view_period_v1")
+	assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_period_v1")
+	assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_period_v1")
+	assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE.storage_view_period_v1.>")
 	assert.Contains(t, storageACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	assert.NotContains(t, aclLine(storageACL, "subscribe:"), "$JS.API")
 	assert.NotContains(t, aclLine(storageACL, "subscribe:"), "$JS.ACK")
@@ -220,6 +233,16 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.Contains(t, consumerACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>")
 	assert.Contains(t, consumerACL, "$JS.ACK.MOOX_STORAGE.>")
 	assert.NotContains(t, consumerACL, "$JS.API.>")
+	factorACL := eventBusACLBlock(yaml, "factor-eventbus")
+	assert.Contains(t, factorACL, "$JS.API.CONSUMER.INFO.*.factor_calc")
+	assert.Contains(t, factorACL, "$JS.API.CONSUMER.INFO.*.factor_view_ready_v1")
+	assert.Contains(t, factorACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_v1")
+	assert.Contains(t, factorACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_view_ready_v1")
+	assert.Contains(t, factorACL, "$JS.ACK.MOOX_STORAGE.factor_view_ready_v1.>")
+	assert.Contains(t, factorACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_view_ready_e2e")
+	assert.Contains(t, factorACL, "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_view_ready_e2e")
+	assert.Contains(t, factorACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_view_ready_e2e")
+	assert.Contains(t, factorACL, "$JS.ACK.MOOX_STORAGE.factor_view_ready_e2e.>")
 	for _, forbidden := range []string{"CONSUMER.CREATE", "CONSUMER.DELETE", "STREAM.NAMES", "$KV.", "moox.cloudnode.job.execution"} {
 		assert.NotContains(t, workerACL, forbidden)
 	}

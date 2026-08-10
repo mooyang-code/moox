@@ -226,9 +226,14 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 		return
 	}
 	auth := runtimeAuth(deps.ServiceAuth)
-	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.AdminGatewayURL, Auth: auth, Timeout: 5 * time.Second})
+	// CloudNode control calls are service-gateway requests.  The admin gateway
+	// is only used to discover active deployments; using it here makes every
+	// scheduled invocation hit the browser/admin auth surface instead of the
+	// authenticated service route.
+	invoker := scfinvoker.New(scfinvoker.Config{ServiceGatewayTarget: deps.ServiceGatewayTarget, Auth: auth, Timeout: 5 * time.Second})
 	metadataSource := storagesource.NewDatasetSource(cfg.Storage.GatewayTarget)
 	reconciler := &marketfetch.Reconciler{Rules: dbm.TaskRules(), Symbols: metadataSource, Nodes: invoker, Instances: dbm.TaskInstances(), DNS: dnsCache, Metrics: metrics, MaxSubjects: 30}
+	readiness := marketfetch.NewPeriodReadinessService(dbm.TaskInstances(), dbm.PeriodReadiness(), cfg.PeriodReadiness.Grace)
 	invokeScheduler := &marketfetch.Scheduler{
 		Rules: dbm.TaskRules(), Instances: dbm.TaskInstances(), Batches: dbm.FetchBatches(), Retries: dbm.FetchRetries(),
 		// Use the target resolved by discovery rather than the static local
@@ -243,11 +248,37 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 	if completionSpaceID == "" {
 		completionSpaceID = "crypto_market"
 	}
+	if err := readiness.EnsureCurrentAndNext(trpc.BackgroundContext(), completionSpaceID, time.Now().UTC()); err != nil {
+		log.WarnContextf(trpc.BackgroundContext(), "collector period readiness prebuild failed space=%s: %v", completionSpaceID, err)
+	}
 	if err := marketfetch.StartCompletionConsumer(trpc.BackgroundContext(), completionSpaceID, dbm.FetchBatches(), dbm.FetchRetries(), dbm.TaskInstances(), metrics); err != nil {
 		log.WarnContextf(trpc.BackgroundContext(), "collector market fetch completion consumer disabled: %v", err)
 	}
-	if err := marketfetch.StartStorageWriteConsumer(trpc.BackgroundContext(), completionSpaceID, dbm.TaskInstances()); err != nil {
+	replayReady, err := marketfetch.StartStorageWriteConsumerReady(trpc.BackgroundContext(), completionSpaceID, dbm.TaskInstances(), readiness)
+	if err != nil {
 		log.WarnContextf(trpc.BackgroundContext(), "collector storage write consumer disabled: %v", err)
+	}
+	periodStorage, storageErr := binance.NewBatchStorageWithWriteSource(deps.StorageRPCGatewayTarget, "spot", "collector")
+	if storageErr != nil {
+		log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled: %v", storageErr)
+	} else if reporter, ok := periodStorage.(marketfetch.DatasetPeriodReporter); ok {
+		periodReporter := marketfetch.NewPeriodReporter(dbm.PeriodReadiness(), reporter, completionSpaceID, cfg.PeriodReadiness.ParentRetention)
+		periodReporter.SetItemRetention(cfg.PeriodReadiness.ItemRetention)
+		periodReporter.SetMetrics(metrics)
+		// DeliverAll replay is a one-time migration/readiness projection. Do
+		// not finalize deadlines until the replay has drained, otherwise a
+		// slow startup can publish degraded before its historical rows arrive.
+		go func() {
+			// A DeliverAll replay is part of the readiness evidence. Do not
+			// fail open after a wall-clock timeout: starting FinalizeDue while
+			// the row tail is still pending would permanently publish degraded.
+			<-replayReady
+			if err := marketfetch.StartPeriodReporter(trpc.BackgroundContext(), periodReporter, cfg.PeriodReadiness.ReportInterval); err != nil {
+				log.WarnContextf(trpc.BackgroundContext(), "collector period readiness reporter disabled: %v", err)
+			}
+		}()
+	} else {
+		log.Warn("collector Storage adapter does not support period readiness reports")
 	}
 	timer.RegisterScheduler("collectorMarketFetch", &timer.DefaultScheduler{})
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
@@ -259,6 +290,9 @@ func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencie
 			}
 			if err := reconciler.Reconcile(tickCtx, spaceID); err != nil {
 				log.WarnContextf(tickCtx, "collector SCF timer reconciliation failed space=%s: %v", spaceID, err)
+			}
+			if err := readiness.EnsureCurrentAndNext(tickCtx, spaceID, time.Now().UTC()); err != nil {
+				log.WarnContextf(tickCtx, "collector period readiness prebuild failed space=%s: %v", spaceID, err)
 			}
 		}()
 		return nil

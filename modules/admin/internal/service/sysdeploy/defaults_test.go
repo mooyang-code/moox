@@ -91,6 +91,15 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if healthURL(byName["moox_cloudnode"].ExtraConfig) != "http://127.0.0.1:11411/readyz" {
 		t.Fatalf("cloudnode extra_config = %s", byName["moox_cloudnode"].ExtraConfig)
 	}
+	var factorExtra struct {
+		TimeoutMS int64 `json:"timeout_ms"`
+	}
+	if err := json.Unmarshal([]byte(byName["moox_factor"].ExtraConfig), &factorExtra); err != nil {
+		t.Fatalf("unmarshal factor extra_config: %v", err)
+	}
+	if factorExtra.TimeoutMS != 120000 {
+		t.Fatalf("factor gateway timeout = %d, want 120000", factorExtra.TimeoutMS)
+	}
 	var cloudNodeExtra struct {
 		TimeoutMS int64 `json:"timeout_ms"`
 	}
@@ -150,7 +159,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			t.Fatalf("storage-primary gateway methods must not include %s: %v", method, storageExtra.GatewayMethods)
 		}
 	}
-	var metadataRoute, deleteSpaceRoute *struct {
+	var metadataRoute, deleteSpaceRoute, primaryRoute *struct {
 		ServicePath    string   `json:"service_path"`
 		Port           int32    `json:"port"`
 		GatewayMethods []string `json:"gateway_methods"`
@@ -165,6 +174,9 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 			containsString(storageExtra.GatewayRoutes[i].GatewayMethods, "ClaimViewIndexBuild") {
 			metadataRoute = &storageExtra.GatewayRoutes[i]
 		}
+		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.PrimaryStore" {
+			primaryRoute = &storageExtra.GatewayRoutes[i]
+		}
 	}
 	if deleteSpaceRoute == nil || deleteSpaceRoute.Port != 20100 ||
 		!reflect.DeepEqual(deleteSpaceRoute.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
@@ -172,6 +184,14 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	}
 	if metadataRoute == nil || metadataRoute.Port != 20100 || !reflect.DeepEqual(metadataRoute.GatewayMethods, []string{"ClaimViewIndexBuild", "UpdateViewIndexBuild", "ActivateViewIndex", "FailViewIndexBuild"}) || !reflect.DeepEqual(metadataRoute.GatewayCallers, []string{"storage-view"}) {
 		t.Fatalf("storage-view metadata gateway route = %+v", metadataRoute)
+	}
+	if primaryRoute == nil || primaryRoute.Port != 20102 {
+		t.Fatalf("storage-primary gateway route = %+v", primaryRoute)
+	}
+	for _, method := range []string{"ReportDatasetPeriodCollected", "AppendDatasetSyncPoint", "WaitViewSyncPoint", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"} {
+		if !containsString(primaryRoute.GatewayMethods, method) {
+			t.Fatalf("storage-primary gateway route missing %s: %v", method, primaryRoute.GatewayMethods)
+		}
 	}
 	for i := range storageExtra.GatewayRoutes {
 		if storageExtra.GatewayRoutes[i].ServicePath == "trpc.moox.storage.DataShard" {

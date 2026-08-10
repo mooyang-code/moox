@@ -556,7 +556,7 @@ async function submit() {
     Message.warning(nameError);
     return;
   }
-  const idError = validateLowerSnakeId(form.dataset_id, 20);
+  const idError = validateLowerSnakeId(form.dataset_id, 50);
   if (idError) {
     Message.warning(`数据集${idError}`);
     return;

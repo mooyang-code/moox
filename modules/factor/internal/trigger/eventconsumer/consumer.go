@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
+	publicstoragepb "github.com/mooyang-code/moox/packages/storagepb"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -16,31 +16,38 @@ type Config struct {
 	CredentialFile string
 }
 
-// DatasetRowsConsumerName is the fixed durable identity for live Factor input.
-const DatasetRowsConsumerName = "factor_calc"
+const ViewSourceReadyConsumerName = "factor_view_ready_v1"
 
-type Consumer struct {
-	cfg          Config
-	eventBatcher *trigger.EventBatcher
-	openSession  func(context.Context) (natsConsumerSession, error)
-	retryDelay   time.Duration
-	session      natsConsumerSession
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	mu           sync.Mutex
-	runErr       error
-	ready        bool
+type ViewReadyExecutor interface {
+	Execute(context.Context, string, string, *publicstoragepb.ViewSourcePeriodReady) error
 }
 
-func New(cfg Config, eventBatcher *trigger.EventBatcher) *Consumer {
-	consumer := &Consumer{cfg: cfg, eventBatcher: eventBatcher, retryDelay: time.Second}
-	consumer.openSession = consumer.open
-	return consumer
+type Consumer struct {
+	cfg         Config
+	executor    ViewReadyExecutor
+	openSession func(context.Context) (natsConsumerSession, error)
+	retryDelay  time.Duration
+	session     natsConsumerSession
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	runErr      error
+	ready       bool
+}
+
+func New(cfg Config, executor ViewReadyExecutor) *Consumer {
+	return &Consumer{cfg: cfg, executor: executor, retryDelay: time.Second, openSession: nil}
 }
 
 func (c *Consumer) Start(ctx context.Context) error {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
+	}
+	if c.executor == nil {
+		return errors.New("factor View-ready executor is required")
+	}
+	if c.openSession == nil {
+		c.openSession = c.open
 	}
 	session, err := c.openSession(ctx)
 	if err != nil {

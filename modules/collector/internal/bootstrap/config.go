@@ -14,12 +14,13 @@ import (
 
 // Config is the root collector control-plane configuration.
 type Config struct {
-	Database  DatabaseConfig  `yaml:"database"`
-	CloudNode CloudNodeConfig `yaml:"cloudnode"`
-	Storage   StorageConfig   `yaml:"storage"`
-	SysDeploy SysDeployConfig `yaml:"sysdeploy"`
-	Health    HealthConfig    `yaml:"health"`
-	DNS       DNSConfig       `yaml:"dns"`
+	Database        DatabaseConfig        `yaml:"database"`
+	CloudNode       CloudNodeConfig       `yaml:"cloudnode"`
+	Storage         StorageConfig         `yaml:"storage"`
+	PeriodReadiness PeriodReadinessConfig `yaml:"period_readiness"`
+	SysDeploy       SysDeployConfig       `yaml:"sysdeploy"`
+	Health          HealthConfig          `yaml:"health"`
+	DNS             DNSConfig             `yaml:"dns"`
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -44,6 +45,15 @@ type StorageConfig struct {
 	GatewayNodeID string `yaml:"gateway_node_id"`
 	KeyID         string `yaml:"key_id"`
 	HMACKeyFile   string `yaml:"hmac_key_file"`
+}
+
+// PeriodReadinessConfig controls the durable Collector period completion
+// projection and its retry/retention loops.
+type PeriodReadinessConfig struct {
+	Grace           time.Duration `yaml:"grace"`
+	ReportInterval  time.Duration `yaml:"report_interval"`
+	ItemRetention   int           `yaml:"item_retention"`
+	ParentRetention time.Duration `yaml:"parent_retention"`
 }
 
 // SysDeployConfig describes optional dependency discovery through admin SysDeploy.
@@ -183,6 +193,10 @@ func Default() *Config {
 			ServicePath: "trpc.moox.cloudnode.CloudNodeMgr",
 		},
 		Storage: StorageConfig{GatewayTarget: "ip://127.0.0.1:11003"},
+		PeriodReadiness: PeriodReadinessConfig{
+			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
+			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,
+		},
 		SysDeploy: SysDeployConfig{
 			ServiceAuth: ServiceAuthConfig{ExpireSeconds: 60},
 		},

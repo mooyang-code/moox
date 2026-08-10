@@ -240,6 +240,9 @@ func queryErrorCode(err error) pb.ErrorCode {
 		return pb.ErrorCode_VIEW_NOT_READY
 	}
 	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "view column") && (strings.Contains(msg, "not projected") || strings.Contains(msg, "ambiguous")) {
+		return pb.ErrorCode_VIEW_COLUMN_NOT_FOUND
+	}
 	if strings.Contains(msg, "is not prepared") || strings.Contains(msg, "no such file") || strings.Contains(msg, "not found") {
 		return pb.ErrorCode_VIEW_NOT_READY
 	}

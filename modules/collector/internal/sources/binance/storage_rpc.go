@@ -12,6 +12,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
+	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 )
 
 const datasetSubjectPageSize = 1000
@@ -88,6 +89,54 @@ func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowF
 
 func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {
 	return w.upsertFields(ctx, rows, sourceEventID)
+}
+
+// ReportDatasetPeriodCollected appends the completion marker after the
+// executor's row write. It is intentionally exposed as a narrow optional
+// interface so existing BatchStorage fakes do not need the control-plane RPC.
+func (w *storageWriter) ReportDatasetPeriodCollected(ctx context.Context, spaceID string, payload *storageeventpb.DatasetPeriodCollected) error {
+	if payload == nil {
+		return fmt.Errorf("dataset period payload is nil")
+	}
+	if strings.TrimSpace(spaceID) == "" {
+		return fmt.Errorf("space_id is required")
+	}
+	return retryStorageWithAttemptTimeout(ctx, func(attemptCtx context.Context) error {
+		rsp, err := w.access.ReportDatasetPeriodCollected(attemptCtx, &storagepb.ReportDatasetPeriodCollectedReq{
+			AuthInfo: w.authInfo,
+			SpaceId:  spaceID,
+			Marker: &storagepb.DatasetPeriodCollectedMarker{
+				DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
+				Status: payload.GetStatus(), SubjectIds: payload.GetSubjectIds(), FailedSubjects: payload.GetFailedSubjects(), CollectedAt: payload.GetCollectedAt(),
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("report dataset period collected: %w", err)
+		}
+		return ensureStorageOK("report dataset period collected", rsp.GetRetInfo())
+	})
+}
+
+func (w *storageWriter) AppendDatasetSyncPoint(ctx context.Context, spaceID, datasetID, requestID, source string) error {
+	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" || strings.TrimSpace(requestID) == "" {
+		return fmt.Errorf("space_id, dataset_id and request_id are required")
+	}
+	if strings.TrimSpace(source) == "" {
+		source = "catchup"
+	}
+	return retryStorageWithAttemptTimeout(ctx, func(attemptCtx context.Context) error {
+		rsp, err := w.access.AppendDatasetSyncPoint(attemptCtx, &storagepb.AppendDatasetSyncPointReq{
+			AuthInfo: w.authInfo,
+			SpaceId:  spaceID,
+			SyncPoint: &storagepb.DatasetSyncPointMarker{
+				RequestId: requestID, DatasetId: datasetID, Source: source,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("append dataset sync point: %w", err)
+		}
+		return ensureStorageOK("append dataset sync point", rsp.GetRetInfo())
+	})
 }
 
 func (w *storageWriter) upsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {

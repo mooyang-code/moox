@@ -37,8 +37,8 @@ func TestStorageConfigAppliesEventConsumerDefaults(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
 
-	if cfg.Storage.EventBus.MaxAckPending != 8 {
-		t.Fatalf("EventBus.MaxAckPending = %d, want 8", cfg.Storage.EventBus.MaxAckPending)
+	if cfg.Storage.EventBus.MaxAckPending != 1 {
+		t.Fatalf("EventBus.MaxAckPending = %d, want 1", cfg.Storage.EventBus.MaxAckPending)
 	}
 	if cfg.Storage.EventBus.AckWaitMS != 120000 {
 		t.Fatalf("EventBus.AckWaitMS = %d, want 120000", cfg.Storage.EventBus.AckWaitMS)
@@ -48,7 +48,7 @@ func TestStorageConfigAppliesEventConsumerDefaults(t *testing.T) {
 func TestStorageViewConsumerDefaults(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
-	if cfg.Storage.View.FetchBatch != 8 || cfg.Storage.View.MaxWorkers != 4 || cfg.Storage.View.Ordering != "subject" {
+	if cfg.Storage.View.FetchBatch != 1 || cfg.Storage.View.MaxWorkers != 1 || cfg.Storage.View.Ordering != "subject" {
 		t.Fatalf("view consumer defaults = %+v", cfg.Storage.View)
 	}
 }

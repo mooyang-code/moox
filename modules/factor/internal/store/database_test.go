@@ -43,9 +43,9 @@ func TestForeignKeysAreEnabledOnEveryPooledConnection(t *testing.T) {
 		require.Equal(t, 1, enabled)
 		_, insertErr := conn.ExecContext(context.Background(), `
 			INSERT INTO t_factor_bindings (
-				c_binding_id, c_factor_id, c_space_id, c_source_dataset, c_freq,
-				c_subject_mode, c_subjects_json, c_target_dataset, c_status
-			) VALUES (?, 'missing', 'space', 'source', '1m', 'all', '[]', 'target', 'disabled')
+				c_binding_id, c_factor_id, c_space_id, c_source_view_id, c_freq,
+				c_subject_mode, c_subjects_json, c_result_dataset_id, c_result_view_id, c_status
+			) VALUES (?, 'missing', 'space', 'source', '1m', 'all', '[]', 'target', 'target_view', 'disabled')
 		`, "orphan-"+string(rune('a'+index)))
 		require.ErrorContains(t, insertErr, "FOREIGN KEY constraint failed")
 	}
@@ -128,4 +128,36 @@ func TestApplySchemaRejectsLookbackRowsDatabase(t *testing.T) {
 
 	err = db.ApplySchema(factorschema.AllSQL())
 	require.ErrorContains(t, err, "fresh database")
+}
+
+func TestApplySchemaMigratesPreviousDatasetBindingShape(t *testing.T) {
+	db, err := Open(&Options{Path: filepath.Join(t.TempDir(), "factor.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.db.Exec(`
+		CREATE TABLE t_factor_defs (
+			c_factor_id TEXT NOT NULL PRIMARY KEY, c_name TEXT NOT NULL, c_source_code TEXT NOT NULL,
+			c_source_hash TEXT NOT NULL, c_source_path TEXT NOT NULL DEFAULT '', c_input_columns_json TEXT NOT NULL,
+			c_outputs_json TEXT NOT NULL, c_params_json TEXT NOT NULL DEFAULT '{}', c_lookback_periods INTEGER NOT NULL,
+			c_status TEXT NOT NULL DEFAULT 'disabled', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE t_factor_bindings (
+			c_binding_id TEXT NOT NULL PRIMARY KEY, c_factor_id TEXT NOT NULL, c_space_id TEXT NOT NULL,
+			c_source_dataset TEXT NOT NULL, c_freq TEXT NOT NULL, c_subject_mode TEXT NOT NULL DEFAULT 'all',
+			c_subjects_json TEXT NOT NULL DEFAULT '[]', c_target_dataset TEXT NOT NULL,
+			c_status TEXT NOT NULL DEFAULT 'enabled', c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		INSERT INTO t_factor_defs(c_factor_id,c_name,c_source_code,c_source_hash,c_input_columns_json,c_outputs_json,c_lookback_periods)
+		VALUES ('factor','Factor','x','hash','["close"]','["value"]',1);
+		INSERT INTO t_factor_bindings(c_binding_id,c_factor_id,c_space_id,c_source_dataset,c_freq,c_subjects_json,c_target_dataset)
+		VALUES ('binding','factor','space','prices','1m','[]','factor-results');
+	`).Error)
+	require.NoError(t, db.ApplySchema(factorschema.AllSQL()))
+	var sourceView, resultView, status string
+	require.NoError(t, db.db.Raw("SELECT c_source_view_id, c_result_view_id, c_status FROM t_factor_bindings WHERE c_binding_id = 'binding'").Row().Scan(&sourceView, &resultView, &status))
+	require.Equal(t, "prices", sourceView)
+	require.Equal(t, "factor-results", resultView)
+	require.Equal(t, "disabled", status)
 }

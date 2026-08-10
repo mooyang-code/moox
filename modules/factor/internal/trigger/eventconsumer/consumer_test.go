@@ -3,20 +3,18 @@ package eventconsumer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
-	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fakeNATSSession struct {
@@ -24,77 +22,20 @@ type fakeNATSSession struct {
 	closeCalls atomic.Int32
 }
 
-func binding(factorID, sourceDataset, subjectMode, subjectsJSON string) domain.FactorBinding {
-	return domain.FactorBinding{
-		BindingID: "bind-" + factorID, FactorID: factorID, SpaceID: "crypto",
-		SourceDataset: sourceDataset, Freq: "1m", SubjectMode: subjectMode,
-		SubjectsJSON: subjectsJSON, TargetDataset: "binance_spot_factor",
-		Status: domain.BindingStatusEnabled,
-	}
-}
-
-func event(spaceID, datasetID, subjectID, freq string, dataTime time.Time) *storagepb.DatasetRowsUpserted {
-	return &storagepb.DatasetRowsUpserted{
-		SpaceId: spaceID, DatasetId: datasetID,
-		Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{
-			SpaceId: spaceID, DatasetId: datasetID,
-			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: subjectID, Freq: freq, DataTime: dataTime.Format(time.RFC3339),
-			}},
-		}}},
-	}
-}
-
-func (s *fakeNATSSession) Run(ctx context.Context) error {
-	return s.run(ctx)
-}
-
+func (s *fakeNATSSession) Run(ctx context.Context) error { return s.run(ctx) }
 func (s *fakeNATSSession) Close() error {
 	s.closeCalls.Add(1)
 	return nil
 }
 
-func TestBestEffortHandlerACKsAfterMemoryAdd(t *testing.T) {
-	now := time.Date(2026, 7, 26, 9, 30, 0, 0, time.UTC)
-	batcher := trigger.NewEventBatcher(time.Second, []domain.FactorBinding{
-		binding("bias", "spot_kline_1h", domain.SubjectModeAll, "[]"),
-	})
-	handler := storageEventHandler{eventBatcher: batcher}
-	got := handler.Handle(context.Background(), encodedDelivery(t,
-		event("crypto", "spot_kline_1h", "BTC-USDT", "1m", now)))
-	require.Equal(t, jetstream.ACK, got.Decision)
-	require.Len(t, batcher.Flush(time.Now().Add(2*time.Second)), 1)
+type recordingExecutor struct {
+	calls atomic.Int32
+	err   error
 }
 
-func TestBestEffortHandlerRetriesWhenBatcherUnavailable(t *testing.T) {
-	got := (storageEventHandler{}).Handle(context.Background(), encodedDelivery(t,
-		event("crypto", "spot_kline_1h", "BTC-USDT", "1m", time.Now())))
-	require.Equal(t, jetstream.RETRY, got.Decision)
-}
-
-func TestBestEffortHandlerACKsUnmatchedDataset(t *testing.T) {
-	batcher := trigger.NewEventBatcher(time.Second, nil)
-	got := (storageEventHandler{eventBatcher: batcher}).Handle(context.Background(), encodedDelivery(t,
-		event("crypto", "unmatched", "BTC-USDT", "1m", time.Now())))
-	require.Equal(t, jetstream.ACK, got.Decision)
-	require.Empty(t, batcher.Flush(time.Now().Add(2*time.Second)))
-}
-
-func encodedDelivery(t *testing.T, payload *storagepb.DatasetRowsUpserted) *jetstream.Delivery {
-	t.Helper()
-	registry, err := events.DefaultRegistry()
-	require.NoError(t, err)
-	encoded, err := registry.Encode(events.DatasetRowsUpserted, payload, events.PublishOptions{
-		EventID: "factor-best-effort-1", OccurredAt: time.Now().UTC(),
-		SpaceID: payload.GetSpaceId(), SubjectID: payload.GetDatasetId(),
-	})
-	require.NoError(t, err)
-	raw, err := proto.Marshal(encoded.Message)
-	require.NoError(t, err)
-	return &jetstream.Delivery{
-		Subject: encoded.Subject, RawData: raw, RawMessageID: "factor-best-effort-1",
-		ContentType: events.ContentType,
-	}
+func (e *recordingExecutor) Execute(context.Context, string, string, *storagepb.ViewSourcePeriodReady) error {
+	e.calls.Add(1)
+	return e.err
 }
 
 func TestConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
@@ -114,8 +55,8 @@ func TestConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
 		return nil
 	}}
 	var opens atomic.Int32
-	consumer := New(Config{}, nil)
-	consumer.retryDelay = 50 * time.Millisecond
+	consumer := New(Config{}, &recordingExecutor{})
+	consumer.retryDelay = 10 * time.Millisecond
 	consumer.openSession = func(context.Context) (natsConsumerSession, error) {
 		opens.Add(1)
 		return second, nil
@@ -124,229 +65,67 @@ func TestConsumerReopensFailedSessionAndRestoresReadiness(t *testing.T) {
 	t.Cleanup(func() { _ = consumer.Close() })
 
 	<-started
-	if !consumer.Ready() {
-		t.Fatal("consumer must be ready while the initial session is running")
-	}
+	require.True(t, consumer.Ready())
 	close(release)
-	if !eventuallyConsumer(time.Second, func() bool { return !consumer.Ready() }) {
-		t.Fatal("consumer did not become unready after the failed session")
-	}
-	if !eventuallyConsumer(time.Second, func() bool { return consumer.Ready() }) {
-		t.Fatal("consumer did not recover readiness")
-	}
+	require.Eventually(t, func() bool { return !consumer.Ready() }, time.Second, time.Millisecond)
+	require.Eventually(t, consumer.Ready, time.Second, time.Millisecond)
 	<-recovered
-	if opens.Load() != 1 || first.closeCalls.Load() != 1 {
-		t.Fatalf("opens=%d first closes=%d", opens.Load(), first.closeCalls.Load())
-	}
+	require.Equal(t, int32(1), opens.Load())
+	require.Equal(t, int32(1), first.closeCalls.Load())
 }
 
-func eventuallyConsumer(timeout time.Duration, condition func() bool) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return true
-		}
-		time.Sleep(time.Millisecond)
-	}
-	return condition()
+func TestViewReadyConsumerConfig(t *testing.T) {
+	ref := viewReadyConsumerConfig(Config{FetchMaxWait: 2 * time.Second})
+	require.Equal(t, events.ViewSourcePeriodReady.Name(), ref.Event.Name())
+	require.Equal(t, ViewSourceReadyConsumerName, ref.Name)
+	require.Equal(t, 2*time.Second, ref.FetchMaxWait)
+	require.Equal(t, nats.DeliverNewPolicy, ref.DeliverPolicy)
 }
 
-func TestLiveConsumerConfig(t *testing.T) {
-	ref := liveConsumerConfig(Config{FetchMaxWait: 2 * time.Second})
-	if ref.Event.Name() != events.DatasetRowsUpserted.Name() ||
-		ref.Event.Version() != events.DatasetRowsUpserted.Version() ||
-		ref.Name != DatasetRowsConsumerName ||
-		ref.FetchMaxWait != 2*time.Second {
-		t.Fatalf("live consumer bind ref = %+v", ref)
-	}
-}
-
-func TestConsumerReceivesRealEventBusDeliveryE2E(t *testing.T) {
-	ns, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(), NoLog: true, NoSigs: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go ns.Start()
-	if !ns.ReadyForConnections(10 * time.Second) {
-		ns.Shutdown()
-		t.Fatal("factor EventBus fixture did not start")
-	}
-	t.Cleanup(func() {
-		ns.Shutdown()
-		ns.WaitForShutdown()
-	})
-
-	nc, err := nats.Connect(ns.ClientURL())
-	if err != nil {
-		t.Fatal(err)
-	}
-	js, err := nc.JetStream()
-	if err != nil {
-		nc.Close()
-		t.Fatal(err)
-	}
+func TestHandlerExecutesViewReadyEvent(t *testing.T) {
+	executor := &recordingExecutor{}
 	registry, err := events.DefaultRegistry()
-	if err != nil {
-		nc.Close()
-		t.Fatal(err)
-	}
-	family, err := registry.FamilyPattern(events.DatasetRowsUpserted)
-	if err != nil {
-		nc.Close()
-		t.Fatal(err)
-	}
-	if _, err = js.AddStream(&nats.StreamConfig{
-		Name: events.DatasetRowsUpserted.Stream(), Subjects: []string{family}, Storage: nats.MemoryStorage,
-	}); err != nil {
-		nc.Close()
-		t.Fatal(err)
-	}
-	nc.Close()
-
-	now := time.Now().UTC().Truncate(time.Second)
-	batcher := trigger.NewEventBatcher(20*time.Millisecond, []domain.FactorBinding{
-		binding("bias", "spot_kline_1h", domain.SubjectModeAll, "[]"),
+	require.NoError(t, err)
+	readyAt := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
+	payload := &storagepb.ViewSourcePeriodReady{SourceViewId: "prices-view", Frequency: "1m", PeriodTime: readyAt.Unix(), Status: "complete", ReadyAt: timestamppb.New(readyAt), Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "prices", Status: "complete"}}}
+	encoded, err := registry.Encode(events.ViewSourcePeriodReady, payload, events.PublishOptions{
+		EventID: "ready-1", OccurredAt: readyAt, SpaceID: "quant", SubjectID: "prices-view",
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	consumer := New(Config{
-		URLs: []string{ns.ClientURL()}, FetchMaxWait: 50 * time.Millisecond,
-	}, batcher)
-	if err = consumer.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = consumer.Close() })
-	if !consumer.Ready() {
-		t.Fatal("factor consumer is not ready after binding the real session")
-	}
-
-	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv([]string{ns.ClientURL()}, "factor-real-e2e-publisher"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	publisher, err := events.NewPublisher(client, registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := event("crypto", "spot_kline_1h", "BTC-USDT", "1m", now)
-	if _, err = publisher.Publish(ctx, events.DatasetRowsUpserted, payload, events.PublishOptions{
-		EventID: "factor-real-e2e-1", OccurredAt: now, SpaceID: "crypto", SubjectID: "spot_kline_1h",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var tasks []trigger.Task
-	if !eventuallyConsumer(5*time.Second, func() bool {
-		tasks = batcher.Flush(time.Now().Add(time.Second))
-		return len(tasks) == 1
-	}) {
-		t.Fatal("real EventBus delivery did not reach Factor's memory batcher")
-	}
-	if len(tasks) != 1 || tasks[0].SubjectID != "BTC-USDT" {
-		t.Fatalf("factor tasks = %+v", tasks)
-	}
-}
-
-func TestEventStormEmitsOneTaskPerSubject(t *testing.T) {
-	symbols := testSymbols(500)
-	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	d := trigger.NewEventBatcher(time.Second, []domain.FactorBinding{{
-		BindingID:     "b1",
-		FactorID:      "bias",
-		SpaceID:       "crypto",
-		SourceDataset: "spot_kline_1h",
-		Freq:          "1m",
-		SubjectMode:   domain.SubjectModeAll,
-		SubjectsJSON:  "[]",
-		TargetDataset: "binance_spot_factor",
-		Status:        domain.BindingStatusEnabled,
-	}})
-
-	d.Add(rowsChangedEvent("crypto", "spot_kline_1h", "1m", now, symbols), now)
-	tasks := d.Flush(now.Add(time.Second))
-	if len(tasks) != len(symbols) {
-		t.Fatalf("tasks = %d, want %d", len(tasks), len(symbols))
-	}
-	seen := map[string]struct{}{}
-	for _, task := range tasks {
-		if len(task.FactorIDs) != 1 || task.FactorIDs[0] != "bias" {
-			t.Fatalf("factor ids = %#v", task.FactorIDs)
-		}
-		seen[task.SubjectID] = struct{}{}
-	}
-	if len(seen) != len(symbols) {
-		t.Fatalf("unique subjects = %d, want %d", len(seen), len(symbols))
-	}
-}
-
-func TestEventBatcherSplitsTasksByTargetDataset(t *testing.T) {
-	now := time.Date(2026, 7, 6, 9, 15, 0, 0, time.UTC)
-	d := trigger.NewEventBatcher(time.Second, []domain.FactorBinding{
-		{
-			BindingID:     "b1",
-			FactorID:      "bias",
-			SpaceID:       "crypto",
-			SourceDataset: "spot_kline_1h",
-			Freq:          "1m",
-			SubjectMode:   domain.SubjectModeAll,
-			SubjectsJSON:  "[]",
-			TargetDataset: "binance_spot_factor",
-			Status:        domain.BindingStatusEnabled,
-		},
-		{
-			BindingID:     "b2",
-			FactorID:      "volume",
-			SpaceID:       "crypto",
-			SourceDataset: "spot_kline_1h",
-			Freq:          "1m",
-			SubjectMode:   domain.SubjectModeAll,
-			SubjectsJSON:  "[]",
-			TargetDataset: "binance_spot_volume_factor",
-			Status:        domain.BindingStatusEnabled,
-		},
+	require.NoError(t, err)
+	raw, err := proto.Marshal(encoded.Message)
+	require.NoError(t, err)
+	result := (storageEventHandler{executor: executor}).Handle(context.Background(), &jetstream.Delivery{
+		Subject: encoded.Subject, RawData: raw, RawMessageID: "ready-1", ContentType: events.ContentType,
 	})
-
-	d.Add(rowsChangedEvent("crypto", "spot_kline_1h", "1m", now, []string{"BTC-USDT"}), now)
-	tasks := d.Flush(now.Add(time.Second))
-	if len(tasks) != 2 {
-		t.Fatalf("tasks = %d, want 2: %+v", len(tasks), tasks)
-	}
-	byTarget := map[string][]string{}
-	for _, task := range tasks {
-		byTarget[task.TargetDataset] = task.FactorIDs
-	}
-	if got := byTarget["binance_spot_factor"]; len(got) != 1 || got[0] != "bias" {
-		t.Fatalf("binance_spot_factor ids = %#v", got)
-	}
-	if got := byTarget["binance_spot_volume_factor"]; len(got) != 1 || got[0] != "volume" {
-		t.Fatalf("binance_spot_volume_factor ids = %#v", got)
-	}
+	require.Equal(t, jetstream.ACK, result.Decision)
+	require.Equal(t, int32(1), executor.calls.Load())
 }
 
-func rowsChangedEvent(spaceID, datasetID, freq string, barTime time.Time, subjects []string) *storagepb.DatasetRowsUpserted {
-	rows := make([]*storagepb.RowUpsert, 0, len(subjects))
-	for _, subject := range subjects {
-		rows = append(rows, &storagepb.RowUpsert{
-			Key: &storagepb.RowKey{
-				SpaceId:   spaceID,
-				DatasetId: datasetID,
-				Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-					SubjectId: subject,
-					Freq:      freq,
-					DataTime:  barTime.UTC().Format(time.RFC3339),
-				}},
-			},
-		})
+func TestHandlerAcknowledgesNoBindingAndRetriesPendingBinding(t *testing.T) {
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	readyAt := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
+	payload := &storagepb.ViewSourcePeriodReady{
+		SourceViewId: "prices-view", Frequency: "1m", PeriodTime: readyAt.Unix(),
+		Status: "complete", ReadyAt: timestamppb.New(readyAt),
+		Datasets: []*storagepb.ViewPeriodDatasetState{{DatasetId: "prices", Status: "complete"}},
 	}
-	return &storagepb.DatasetRowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: rows}
-}
+	encoded, err := registry.Encode(events.ViewSourcePeriodReady, payload, events.PublishOptions{
+		EventID: "ready-binding-state", OccurredAt: readyAt, SpaceID: "quant", SubjectID: "prices-view",
+	})
+	require.NoError(t, err)
+	raw, err := proto.Marshal(encoded.Message)
+	require.NoError(t, err)
+	delivery := &jetstream.Delivery{
+		Subject: encoded.Subject, RawData: raw, RawMessageID: "ready-binding-state", ContentType: events.ContentType,
+	}
 
-func testSymbols(n int) []string {
-	out := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		out = append(out, fmt.Sprintf("SYM-%03d", i))
-	}
-	return out
+	noBinding := (storageEventHandler{executor: &recordingExecutor{err: trigger.ErrNoExecutableBinding}}).
+		Handle(context.Background(), delivery)
+	require.Equal(t, jetstream.ACK, noBinding.Decision)
+
+	pending := (storageEventHandler{executor: &recordingExecutor{err: trigger.ErrBindingNotReady}}).
+		Handle(context.Background(), delivery)
+	require.Equal(t, jetstream.RETRY, pending.Decision)
+	require.ErrorIs(t, pending.Err, trigger.ErrBindingNotReady)
 }

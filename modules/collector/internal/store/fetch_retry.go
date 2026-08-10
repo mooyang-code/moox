@@ -25,7 +25,7 @@ func (r *FetchRetryRepository) Upsert(ctx context.Context, item *domain.RetryIte
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "c_space_id"}, {Name: "c_retry_key"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"c_source_batch_id":    clause.Expr{SQL: "excluded.c_source_batch_id"},
+			"c_source_batch_id":    clause.Expr{SQL: "CASE WHEN c_source_batch_id <> '' THEN c_source_batch_id ELSE excluded.c_source_batch_id END"},
 			"c_batch_kind":         clause.Expr{SQL: "excluded.c_batch_kind"},
 			"c_attempt":            clause.Expr{SQL: "excluded.c_attempt"},
 			"c_status":             clause.Expr{SQL: "excluded.c_status"},

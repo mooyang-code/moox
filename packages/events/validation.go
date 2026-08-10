@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type EventValidator func(*eventpb.EventMessage, proto.Message) error
@@ -145,6 +146,202 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 		}
 	}
 	return nil
+}
+
+func validateDatasetPeriodCollected(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.DatasetPeriodCollected)
+	if !ok {
+		return fmt.Errorf("dataset period collected payload has type %T", value)
+	}
+	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetCollectedAt(), "dataset period collected"); err != nil {
+		return err
+	}
+	subjects, err := validateUniqueTokens(payload.GetSubjectIds(), true, "dataset period collected subject_ids")
+	if err != nil {
+		return err
+	}
+	failed, err := validateUniqueTokens(payload.GetFailedSubjects(), false, "dataset period collected failed_subjects")
+	if err != nil {
+		return err
+	}
+	for subject := range failed {
+		if _, ok := subjects[subject]; !ok {
+			return fmt.Errorf("dataset period collected failed_subject %q is not expected", subject)
+		}
+	}
+	if payload.GetStatus() == "complete" && len(failed) != 0 {
+		return fmt.Errorf("dataset period collected complete status has failed_subjects")
+	}
+	return nil
+}
+
+func validateViewSourcePeriodReady(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.ViewSourcePeriodReady)
+	if !ok {
+		return fmt.Errorf("view source period ready payload has type %T", value)
+	}
+	if err := validateStoragePeriod(message, payload.GetSourceViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view source period ready"); err != nil {
+		return err
+	}
+	if len(payload.GetDatasets()) == 0 {
+		return fmt.Errorf("view source period ready datasets are required")
+	}
+	seen := make(map[string]struct{}, len(payload.GetDatasets()))
+	hasDegraded := false
+	for i, state := range payload.GetDatasets() {
+		if state == nil || !validRequiredToken(state.GetDatasetId()) {
+			return fmt.Errorf("view source period ready dataset %d identity is invalid", i)
+		}
+		if _, ok := seen[state.GetDatasetId()]; ok {
+			return fmt.Errorf("view source period ready dataset %q is duplicated", state.GetDatasetId())
+		}
+		seen[state.GetDatasetId()] = struct{}{}
+		if !validCompletionStatus(state.GetStatus()) {
+			return fmt.Errorf("view source period ready dataset %q status %q is invalid", state.GetDatasetId(), state.GetStatus())
+		}
+		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("view source period ready dataset %q failed_subjects", state.GetDatasetId()))
+		if err != nil {
+			return err
+		}
+		if state.GetStatus() == "complete" && len(failed) != 0 {
+			return fmt.Errorf("view source period ready complete dataset %q has failed_subjects", state.GetDatasetId())
+		}
+		hasDegraded = hasDegraded || state.GetStatus() == "degraded"
+	}
+	if (payload.GetStatus() == "degraded") != hasDegraded {
+		return fmt.Errorf("view source period ready status does not match datasets")
+	}
+	_, err := validateUniqueTokens(payload.GetPrimarySubjects(), false, "view source period ready primary_subjects")
+	return err
+}
+
+func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.FactorPeriodComputed)
+	if !ok {
+		return fmt.Errorf("factor period computed payload has type %T", value)
+	}
+	if !validRequiredToken(payload.GetSourceViewId()) || !validRequiredToken(payload.GetTriggerEventId()) {
+		return fmt.Errorf("factor period computed source_view_id and trigger_event_id are required")
+	}
+	if err := validateStoragePeriod(message, payload.GetResultDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetComputedAt(), "factor period computed"); err != nil {
+		return err
+	}
+	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "factor period computed")
+}
+
+func validateViewFactorPeriodReady(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.ViewFactorPeriodReady)
+	if !ok {
+		return fmt.Errorf("view factor period ready payload has type %T", value)
+	}
+	if !validRequiredToken(payload.GetSourceViewId()) {
+		return fmt.Errorf("view factor period ready source_view_id is required")
+	}
+	if err := validateStoragePeriod(message, payload.GetResultViewId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetReadyAt(), "view factor period ready"); err != nil {
+		return err
+	}
+	return validateFactorBindingStates(payload.GetBindings(), payload.GetStatus(), "view factor period ready")
+}
+
+func validateDatasetSyncPoint(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.DatasetSyncPoint)
+	if !ok {
+		return fmt.Errorf("dataset sync point payload has type %T", value)
+	}
+	if !validRequiredToken(payload.GetSyncPointId()) || !validRequiredToken(payload.GetRequestId()) || !validRequiredToken(payload.GetDatasetId()) {
+		return fmt.Errorf("dataset sync point identity is incomplete")
+	}
+	if message == nil || payload.GetDatasetId() != message.GetSubjectId() {
+		return fmt.Errorf("dataset sync point dataset_id does not match subject_id")
+	}
+	switch payload.GetSource() {
+	case "import", "catchup":
+		return nil
+	default:
+		return fmt.Errorf("dataset sync point source %q is invalid", payload.GetSource())
+	}
+}
+
+func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency string, periodTime int64, status string, timestamp *timestamppb.Timestamp, label string) error {
+	if !validRequiredToken(routeID) || message == nil || routeID != message.GetSubjectId() {
+		return fmt.Errorf("%s route identity does not match subject_id", label)
+	}
+	if !validRequiredToken(frequency) || periodTime <= 0 {
+		return fmt.Errorf("%s frequency and period_time are required", label)
+	}
+	if !validCompletionStatus(status) {
+		return fmt.Errorf("%s status %q is invalid", label, status)
+	}
+	if timestamp == nil || timestamp.CheckValid() != nil {
+		return fmt.Errorf("%s timestamp is invalid", label)
+	}
+	return nil
+}
+
+func validateFactorBindingStates(states []*storagepb.FactorBindingPeriodState, status, label string) error {
+	if len(states) == 0 {
+		return fmt.Errorf("%s bindings are required", label)
+	}
+	seen := make(map[string]struct{}, len(states))
+	hasDegraded := false
+	for i, state := range states {
+		if state == nil || !validRequiredToken(state.GetBindingId()) || !validRequiredToken(state.GetFactorId()) {
+			return fmt.Errorf("%s binding %d identity is invalid", label, i)
+		}
+		if _, ok := seen[state.GetBindingId()]; ok {
+			return fmt.Errorf("%s binding_id %q is duplicated", label, state.GetBindingId())
+		}
+		seen[state.GetBindingId()] = struct{}{}
+		if !validCompletionStatus(state.GetStatus()) {
+			return fmt.Errorf("%s binding %q status %q is invalid", label, state.GetBindingId(), state.GetStatus())
+		}
+		skipped, err := validateUniqueTokens(state.GetSkippedSubjects(), false, fmt.Sprintf("%s binding %q skipped_subjects", label, state.GetBindingId()))
+		if err != nil {
+			return err
+		}
+		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("%s binding %q failed_subjects", label, state.GetBindingId()))
+		if err != nil {
+			return err
+		}
+		for subject := range skipped {
+			if _, ok := failed[subject]; ok {
+				return fmt.Errorf("%s binding %q subject %q is both skipped and failed", label, state.GetBindingId(), subject)
+			}
+		}
+		if state.GetStatus() == "complete" && (len(skipped) != 0 || len(failed) != 0) {
+			return fmt.Errorf("%s complete binding %q has skipped or failed subjects", label, state.GetBindingId())
+		}
+		hasDegraded = hasDegraded || state.GetStatus() == "degraded"
+	}
+	if (status == "degraded") != hasDegraded {
+		return fmt.Errorf("%s status does not match bindings", label)
+	}
+	return nil
+}
+
+func validateUniqueTokens(values []string, requireNonEmpty bool, label string) (map[string]struct{}, error) {
+	if requireNonEmpty && len(values) == 0 {
+		return nil, fmt.Errorf("%s are required", label)
+	}
+	seen := make(map[string]struct{}, len(values))
+	for i, value := range values {
+		if !validRequiredToken(value) {
+			return nil, fmt.Errorf("%s item %d is invalid", label, i)
+		}
+		if _, ok := seen[value]; ok {
+			return nil, fmt.Errorf("%s item %q is duplicated", label, value)
+		}
+		seen[value] = struct{}{}
+	}
+	return seen, nil
+}
+
+func validRequiredToken(value string) bool {
+	return strings.TrimSpace(value) != "" && strings.TrimSpace(value) == value
+}
+
+func validCompletionStatus(status string) bool {
+	return status == "complete" || status == "degraded"
 }
 
 func validateMarketFetchBatchCompleted(message *eventpb.EventMessage, value proto.Message) error {

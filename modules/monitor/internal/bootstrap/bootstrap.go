@@ -18,6 +18,7 @@ import (
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
+	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -139,10 +140,26 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	resultHook := monitorResultHook(runtime, alertNotifier)
 	probeRunner := buildProbeRunner(cfg)
-	marketCanary, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, resultHook)
+	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, resultHook)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
+	}
+	if marketCanaryProbe != nil {
+		probeCtx, cancelProbe := context.WithTimeout(runtimeCtx, 10*time.Second)
+		probeErr := marketCanaryProbe(probeCtx)
+		cancelProbe()
+		if probeErr != nil {
+			if watchdog.IsStorageAuthError(probeErr) {
+				_ = runtime.Close()
+				return nil, fmt.Errorf("monitor storage primary auth preflight failed; restart Monitor after synchronizing storage-internal-auth.env: %w", probeErr)
+			}
+			// Primary may still be starting or the dataset may be empty. The
+			// periodic canary remains responsible for reporting those conditions.
+			log.WarnContextf(ctx, "monitor storage primary auth preflight deferred: %v", probeErr)
+		} else {
+			log.InfoContextf(ctx, "monitor storage primary auth preflight passed")
+		}
 	}
 	if err := ensureDefaultCheckAlertRules(runtimeCtx, runtime.Repositories); err != nil {
 		_ = runtime.Close()

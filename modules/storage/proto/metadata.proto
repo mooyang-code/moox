@@ -6,6 +6,7 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 
 import "moox_common.proto";
 import "common.proto";
+import "dataset_markers.proto";
 
 // Space 是业务命名空间，也是用户可见 View 的集合。
 message Space {
@@ -215,7 +216,7 @@ message SubjectSymbol {
 message Dataset {
   // space_id 是 Dataset 所属 Space。
   string space_id = 1;
-  // dataset_id 是 Space 内唯一的数据集 ID；必须为 lower_snake_case，最长 30 字符。
+  // dataset_id 是 Space 内唯一的数据集 ID；必须为 lower_snake_case，最长 50 字符。
   string dataset_id = 2;
   // data_source_id 是该 Dataset 绑定的数据来源 ID；一个 Dataset 只绑定一个 DataSource。
   string data_source_id = 3;
@@ -575,6 +576,9 @@ message UpdateViewReq {
   common.AuthInfo auth_info = 1;
   // view 是更新后的查询视图元数据。
   View view = 2;
+  // replace_columns 为 true 时，columns 表示完整期望列集合（可为空）；
+  // 为 false 时仅执行普通视图元数据更新。
+  bool replace_columns = 3;
 }
 
 // UpdateViewRsp 表示更新查询视图的响应。
@@ -1570,6 +1574,39 @@ message FailViewIndexBuildRsp {
   ViewIndexBuild build = 2;
 }
 
+message UpsertViewPeriodDatasetStateReq {
+  common.AuthInfo auth_info = 1;
+  ViewPeriodDatasetState state = 2;
+}
+
+message UpsertViewPeriodDatasetStateRsp {
+  common.RetInfo ret_info = 1;
+  ViewPeriodDatasetState state = 2;
+}
+
+message ListViewPeriodDatasetStatesReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string frequency = 4;
+  int64 period_time = 5;
+}
+
+message ListViewPeriodDatasetStatesRsp {
+  common.RetInfo ret_info = 1;
+  repeated ViewPeriodDatasetState states = 2;
+}
+
+message RecordViewSyncPointReq {
+  common.AuthInfo auth_info = 1;
+  ViewSyncPoint sync_point = 2;
+}
+
+message RecordViewSyncPointRsp {
+  common.RetInfo ret_info = 1;
+  ViewSyncPoint sync_point = 2;
+}
+
 // Metadata 管理量化存储系统的核心元数据。
 service Metadata {
   // 创建使用空间。
@@ -1603,6 +1640,9 @@ service Metadata {
   rpc ActivateViewIndex(ActivateViewIndexReq) returns (ActivateViewIndexRsp);
   // 记录 View 索引构建失败。
   rpc FailViewIndexBuild(FailViewIndexBuildReq) returns (FailViewIndexBuildRsp);
+  rpc UpsertViewPeriodDatasetState(UpsertViewPeriodDatasetStateReq) returns (UpsertViewPeriodDatasetStateRsp);
+  rpc ListViewPeriodDatasetStates(ListViewPeriodDatasetStatesReq) returns (ListViewPeriodDatasetStatesRsp);
+  rpc RecordViewSyncPoint(RecordViewSyncPointReq) returns (RecordViewSyncPointRsp);
 
   // 创建数据来源。
   rpc CreateDataSource(CreateDataSourceReq) returns (CreateDataSourceRsp);

@@ -20,6 +20,12 @@ storage:
   key_id: collector
   hmac_key_file: ""
 
+period_readiness:
+  grace: 2m
+  report_interval: 5s
+  item_retention: 60
+  parent_retention: 168h
+
 sysdeploy:
   # Collector 控制面通过 admin 网关 /api/service/cloudnode/* 提交 JobItem。
   # 同机后台调用默认直连 service gateway；远程环境应使用 HTTPS 11001。

@@ -7,6 +7,7 @@ option go_package = "github.com/mooyang-code/moox/modules/storage/proto/storageg
 import "moox_common.proto";
 import "common.proto";
 import "rows.proto";
+import "dataset_markers.proto";
 
 message UpsertFieldsReq {
   common.AuthInfo auth_info = 1;
@@ -60,11 +61,74 @@ message CleanupExpiredBucketsRsp {
   uint64 deleted_buckets = 2;
 }
 
+message AppendDatasetPeriodCollectedReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string space_id = 3;
+  DatasetPeriodCollectedMarker marker = 4;
+}
+
+message AppendDatasetPeriodCollectedRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message AppendFactorPeriodComputedReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string space_id = 3;
+  FactorPeriodComputedMarker marker = 4;
+}
+
+message AppendFactorPeriodComputedRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message AppendDatasetSyncPointMarkerReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string space_id = 3;
+  DatasetSyncPointMarker sync_point = 4;
+}
+
+message AppendDatasetSyncPointMarkerRsp {
+  common.RetInfo ret_info = 1;
+  string event_id = 2;
+}
+
+message GetFactorPeriodComputedMarkerReq {
+  common.AuthInfo auth_info = 1;
+  string node_id = 2;
+  string space_id = 3;
+  string result_dataset_id = 4;
+  string source_view_id = 5;
+  string trigger_event_id = 6;
+  int64 period_time = 7;
+}
+
+message GetFactorPeriodComputedMarkerRsp {
+  common.RetInfo ret_info = 1;
+  bool found = 2;
+  string event_id = 3;
+  FactorPeriodComputedMarker marker = 4;
+}
+
 // DataNodeRuntime is the storage RPC surface; DataNode names the metadata entity.
 service DataNodeRuntime {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(UpsertFieldsReq) returns (UpsertFieldsRsp);
-  rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
-  rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
-  rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
+	rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
+	rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
+	rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
+}
+
+// DataNodeMarkerRuntime is kept separate from the legacy DataNodeRuntime
+// surface so existing DataNode clients remain source compatible while marker
+// writes gain an explicit, narrow internal API.
+service DataNodeMarkerRuntime {
+  rpc AppendDatasetPeriodCollected(AppendDatasetPeriodCollectedReq) returns (AppendDatasetPeriodCollectedRsp);
+  rpc AppendFactorPeriodComputed(AppendFactorPeriodComputedReq) returns (AppendFactorPeriodComputedRsp);
+  rpc AppendDatasetSyncPointMarker(AppendDatasetSyncPointMarkerReq) returns (AppendDatasetSyncPointMarkerRsp);
+  rpc GetFactorPeriodComputedMarker(GetFactorPeriodComputedMarkerReq) returns (GetFactorPeriodComputedMarkerRsp);
 }

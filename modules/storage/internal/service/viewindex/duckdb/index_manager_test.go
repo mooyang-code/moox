@@ -305,6 +305,26 @@ func TestDuckDBAfterCursorIncludesSeriesTag(t *testing.T) {
 	}
 }
 
+func TestResolveIncludedColumnsMapsUniqueLogicalSuffix(t *testing.T) {
+	columns := map[string]pb.FieldValueType{
+		"prices.close":  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"prices.volume": pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}
+	got, err := resolveIncludedColumns(columns, []string{"close"})
+	if err != nil {
+		t.Fatalf("resolve unique suffix: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"prices.close"}) {
+		t.Fatalf("resolve unique suffix = %v, want [prices.close]", got)
+	}
+
+	columns["adjusted.close"] = pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+	_, err = resolveIncludedColumns(columns, []string{"close"})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("resolve ambiguous suffix error = %v", err)
+	}
+}
+
 func TestDuckDBExactKeyRequiresDataTimeAndAllowsEmptySeriesTag(t *testing.T) {
 	columns := map[string]pb.FieldValueType{}
 	_, _, err := buildWhere(viewindex.QuerySpec{Keys: []*pb.RowKey{
@@ -496,6 +516,25 @@ func TestDuckDBQualifiedViewColumn(t *testing.T) {
 	fields := rows[0].GetFields()
 	if len(fields) != 1 || fields[0].GetFieldId() != column || fields[0].GetValue().GetDoubleValue() != 123.5 {
 		t.Fatalf("qualified field not retained: %v", fields)
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites: []viewindex.RowWrite{{
+			Key: viewindex.RowKey{Key: key},
+			Fields: []*pb.FieldValue{{FieldId: column, Value: &pb.TypedValue{
+				Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL},
+			}}},
+		}},
+		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err = manager.Query(context.Background(), "idx", viewindex.QuerySpec{
+		Includes: []string{column}, Limit: 1, TotalMode: pb.TotalMode_NONE,
+	})
+	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 ||
+		rows[0].GetFields()[0].GetFieldId() != column ||
+		rows[0].GetFields()[0].GetValue().GetNullValue() != pb.NullValue_NULL_VALUE_NULL {
+		t.Fatalf("qualified NULL field not retained: rows=%v err=%v", rows, err)
 	}
 }
 

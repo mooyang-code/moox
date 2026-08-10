@@ -3,12 +3,14 @@ package eventconsumer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepb"
 )
 
 func (c *Consumer) processDeliveryWithPolicy(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int) error {
@@ -60,15 +62,17 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 		heartbeat = newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(120*time.Second), metrics)
 	}
 	defer func() { heartbeat.stop() }()
-	if c.config.Lease != nil {
-		if err := c.config.Lease.Acquire(ctx); err != nil {
-			return errors.Join(err, heartbeat.err())
-		}
-		defer c.config.Lease.Release()
-	}
 	retryCount := 0
 	for ctx.Err() == nil {
+		if c.config.Lease != nil {
+			if err := c.config.Lease.Acquire(ctx); err != nil {
+				return errors.Join(err, heartbeat.err())
+			}
+		}
 		err := apply(ctx, delivery)
+		if c.config.Lease != nil {
+			c.config.Lease.Release()
+		}
 		if err == nil {
 			// Applying an event is deliberately separate from ACK retry:
 			// an ACK transport failure must never repeat an already successful
@@ -90,6 +94,23 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 			return ctx.Err()
 		}
 		if IsPermanent(err) {
+			// A malformed row/marker cannot be skipped: MaxAckPending=1 is the
+			// rows-before-marker ordering fence.  The default unlimited policy
+			// therefore keeps the poison delivery pending for operator repair;
+			// only an explicit positive emergency limit permits TERM.
+			if maxRetryAttempts <= 0 {
+				if progressErr := actions.progress(ctx); progressErr != nil {
+					metrics.IncInProgressError()
+					metrics.ObserveDelivery("in_progress", "error")
+					heartbeat.report(progressErr)
+				} else {
+					metrics.ObserveDelivery("in_progress", "success")
+				}
+				if !sleepDeliveryRetry(ctx, time.Second) {
+					return ctx.Err()
+				}
+				continue
+			}
 			for ctx.Err() == nil {
 				if termErr := actions.term(ctx); termErr == nil {
 					metrics.ObserveDelivery("term", "success")
@@ -110,7 +131,7 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 			return ctx.Err()
 		}
 		retryCount++
-		if retryCount >= maxRetryAttempts {
+		if maxRetryAttempts > 0 && retryCount >= maxRetryAttempts {
 			metrics.IncRetryExhausted()
 			log.Printf("storage view delivery retry exhausted: consumer=%s event_id=%s subject=%s delivery_count=%d decision=TERM reason=%v",
 				delivery.Consumer, delivery.RawMessageID, delivery.Subject, delivery.DeliveryCount, err)
@@ -171,7 +192,7 @@ func (c *Consumer) applyDelivery(ctx context.Context, delivery *jetstream.Delive
 	if delivery.DecodeError != nil {
 		return Permanent(delivery.DecodeError)
 	}
-	message, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(
+	message, payload, err := events.DecodeRaw(
 		c.registry,
 		delivery.RawData,
 		delivery.Subject,
@@ -181,8 +202,28 @@ func (c *Consumer) applyDelivery(ctx context.Context, delivery *jetstream.Delive
 	if err != nil {
 		return Permanent(err)
 	}
-	if err := c.handler.HandleDatasetRows(ctx, message, payload); err != nil {
-		return err
+	switch value := payload.(type) {
+	case *storagepb.DatasetRowsUpserted:
+		return c.handler.HandleDatasetRows(ctx, message, value)
+	case *storagepb.DatasetPeriodCollected:
+		handler, ok := c.handler.(DatasetPeriodCollectedHandler)
+		if !ok {
+			return Permanent(errors.New("storage view dataset-period handler is unavailable"))
+		}
+		return handler.HandleDatasetPeriodCollected(ctx, message, value)
+	case *storagepb.FactorPeriodComputed:
+		handler, ok := c.handler.(FactorPeriodComputedHandler)
+		if !ok {
+			return Permanent(errors.New("storage view factor-period handler is unavailable"))
+		}
+		return handler.HandleFactorPeriodComputed(ctx, message, value)
+	case *storagepb.DatasetSyncPoint:
+		handler, ok := c.handler.(DatasetSyncPointHandler)
+		if !ok {
+			return Permanent(errors.New("storage view sync-point handler is unavailable"))
+		}
+		return handler.HandleDatasetSyncPoint(ctx, message, value)
+	default:
+		return Permanent(fmt.Errorf("unsupported storage view event payload %T", payload))
 	}
-	return nil
 }

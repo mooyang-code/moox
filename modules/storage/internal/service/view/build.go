@@ -13,6 +13,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// errActiveContractUnavailable is a startup-fatal metadata condition. A
+// legacy view already mid-rebuild must not fall back to its desired contract:
+// doing so would acknowledge rows/markers against the wrong View revision.
+var errActiveContractUnavailable = errors.New("active view contract unavailable")
+
 func (s *Service) BackfillView(ctx context.Context, spaceID, viewID string, batchSize int) error {
 	return s.BackfillViewWithReader(ctx, spaceID, viewID, batchSize, nil)
 }
@@ -72,23 +77,11 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 					writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: proto.Clone(row.GetKey()).(*pb.RowKey)}, Fields: row.GetFields(), Attributes: row.GetAttributes()})
 				}
 				if len(keys) != 0 {
-					liveRows, _, err := next.Query(ctx, nextID, viewindex.QuerySpec{Keys: keys, TotalMode: pb.TotalMode_NONE})
-					if err != nil {
-						return fmt.Errorf("check live rows in pending view %q: %w", nextID, err)
-					}
-					live := make(map[string]struct{}, len(liveRows))
-					for _, row := range liveRows {
-						if row != nil && row.GetKey() != nil {
-							live[viewindex.RowKeyID(row.GetKey())] = struct{}{}
-						}
-					}
-					filtered := writes[:0]
-					for _, write := range writes {
-						if _, exists := live[viewindex.RowKeyID(write.Key.Key)]; !exists {
-							filtered = append(filtered, write)
-						}
-					}
-					writes = filtered
+					// Backfill writes use DuckDB's field-level COALESCE semantics. Do
+					// not skip an existing RowKey wholesale: a live delta may contain
+					// only one field while the authoritative active row has others.
+					// Skipping the row would permanently lose those omitted fields in
+					// the newly built index.
 				}
 				if reader != nil && len(writes) > 0 {
 					if err := s.enrichBackfillRows(ctx, reader, activeID, nextID, writes); err != nil {
@@ -236,10 +229,17 @@ func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace 
 		return errors.New("no completed view build to switch")
 	}
 	oldID := runtime.active
+	newDatasetIDs := append([]string(nil), runtime.nextDatasetIDs...)
+	newPrimaryDatasetID := runtime.nextPrimaryDatasetID
 	runtime.active = runtime.next
+	runtime.activeDatasetIDs = newDatasetIDs
+	runtime.activePrimaryDatasetID = newPrimaryDatasetID
+	runtime.activeDatasetSet = true
 	runtime.statsIndexID = ""
 	runtime.stats = viewindex.ViewIndexStats{}
 	runtime.next = ""
+	runtime.nextDatasetIDs = nil
+	runtime.nextPrimaryDatasetID = ""
 	runtime.status = "active"
 	runtime.buildID = ""
 	runtime.ownerID = ""
@@ -254,7 +254,10 @@ func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace 
 		<-timer.C
 		s.removeFailedBuild(context.WithoutCancel(ctx), oldID)
 	}()
-	return ctx.Err()
+	// The in-memory and metadata switch is already committed. Do not report a
+	// cancellation from the caller's context as a failed build: doing so would
+	// discard the newly active index after a successful Activate RPC.
+	return nil
 }
 
 func (s *Service) TrackViewBuild(spaceID, viewID, buildID, ownerID string, metadata MetadataClient, auth *pb.AuthInfo) error {
@@ -295,6 +298,16 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" || view.GetActiveIndexId() == "" {
 		return errors.New("active view metadata is required")
 	}
+	// A legacy metadata row may describe an in-flight rebuild without the
+	// persisted active contract introduced for A/B views. Falling back to the
+	// desired DatasetIds/PrimaryDatasetId would silently route markers and
+	// queries to the next revision. Refuse that ambiguous state so startup or
+	// reconciliation surfaces an actionable migration error instead.
+	if view.GetActiveViewRevision() > 0 && view.GetDesiredViewRevision() > view.GetActiveViewRevision() {
+		if len(persistedActiveDatasetIDs(view)) == 0 || strings.TrimSpace(view.GetAttributes()[activePrimaryDatasetAttr]) == "" {
+			return fmt.Errorf("%w: active view %s/%s is rebuilding without persisted active contract", errActiveContractUnavailable, view.GetSpaceId(), view.GetViewId())
+		}
+	}
 	engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
 	if s.engines[engineName] == nil {
 		return fmt.Errorf("view engine %q is unavailable", engineName)
@@ -303,9 +316,13 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 	if len(columns) == 0 {
 		columns = view.GetColumns()
 	}
+	activePrimaryDatasetID := strings.TrimSpace(view.GetAttributes()[activePrimaryDatasetAttr])
+	if activePrimaryDatasetID == "" {
+		activePrimaryDatasetID = view.GetPrimaryDatasetId()
+	}
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetActiveViewRevision(),
-		PrimaryDatasetID: view.GetPrimaryDatasetId(), Engine: engineName, Columns: columns, SchemaHash: view.GetActiveViewSchemaHash(),
+		PrimaryDatasetID: activePrimaryDatasetID, Engine: engineName, Columns: columns, SchemaHash: view.GetActiveViewSchemaHash(),
 	}
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
 	s.mu.Lock()
@@ -316,7 +333,8 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 	}
 	s.mu.Unlock()
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
+	previousActive := runtime.active
+	activeChanged := previousActive != "" && previousActive != view.GetActiveIndexId()
 	s.mu.Lock()
 	s.catalogViews[viewKey] = proto.Clone(view).(*pb.View)
 	s.indexEngine[view.GetActiveIndexId()] = engineName
@@ -326,6 +344,29 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 		runtime.stats = viewindex.ViewIndexStats{}
 	}
 	runtime.active = view.GetActiveIndexId()
+	// Only initialize the active contract when attaching an index for the first
+	// time. During a desired-metadata refresh the same physical active index is
+	// re-attached with the new desired DatasetIds; replacing the snapshot here
+	// would let period markers observe the next revision before activation.
+	if activeChanged || !runtime.activeDatasetSet {
+		runtime.activeDatasetIDs = persistedActiveDatasetIDs(view)
+		if len(runtime.activeDatasetIDs) == 0 {
+			runtime.activeDatasetIDs = append([]string(nil), view.GetDatasetIds()...)
+		}
+		runtime.activePrimaryDatasetID = activePrimaryDatasetID
+		if runtime.activePrimaryDatasetID == "" {
+			runtime.activePrimaryDatasetID = view.GetPrimaryDatasetId()
+		}
+		runtime.activeDatasetSet = true
+	}
+	if runtime.next == view.GetActiveIndexId() {
+		// First activation attaches the index that PrepareViewIndex stored as
+		// next. Clear that alias so a live row is not written twice and a
+		// transient second write cannot remove the newly active index.
+		runtime.next = ""
+		runtime.nextDatasetIDs = nil
+		runtime.nextPrimaryDatasetID = ""
+	}
 	runtime.status = "active"
 	s.indexView[view.GetActiveIndexId()] = viewKey
 	for _, column := range columns {
@@ -338,6 +379,15 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 		}
 	}
 	s.mu.Unlock()
+	runtime.mu.Unlock()
+	if activeChanged {
+		// An Activate RPC may have committed before its response was lost. The
+		// next reconcile attaches the new active index directly, so schedule the
+		// old physical index for the same grace cleanup SwitchView would perform.
+		go func(oldID string) {
+			s.removeFailedBuild(context.Background(), oldID)
+		}(previousActive)
+	}
 	return nil
 }
 
@@ -398,9 +448,13 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 	runtime.mu.Lock()
 	if runtime.active == "" {
 		runtime.next = build.GetIndexId()
+		runtime.nextDatasetIDs = append([]string(nil), view.GetDatasetIds()...)
+		runtime.nextPrimaryDatasetID = view.GetPrimaryDatasetId()
 		runtime.status = "ready"
 	} else if runtime.active != build.GetIndexId() {
 		runtime.next = build.GetIndexId()
+		runtime.nextDatasetIDs = append([]string(nil), view.GetDatasetIds()...)
+		runtime.nextPrimaryDatasetID = view.GetPrimaryDatasetId()
 		runtime.status = "ready"
 	}
 	runtime.mu.Unlock()

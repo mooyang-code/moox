@@ -15,9 +15,9 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
 	"github.com/mooyang-code/moox/modules/factor/internal/registry"
-	"github.com/mooyang-code/moox/modules/factor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/mooyang-code/moox/modules/factor/internal/taskrunner"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -26,16 +26,17 @@ import (
 )
 
 type runOnceRuntime struct {
-	DBPath        string
-	FactorsDir    string
-	PythonBin     string
-	WorkerPath    string
-	GatewayTarget string
-	GatewayNodeID string
-	Credentials   gatewayauth.Credentials
-	Workers       int
-	TaskTimeout   time.Duration
-	MaxRetry      int
+	DBPath          string
+	FactorsDir      string
+	PythonBin       string
+	WorkerPath      string
+	GatewayTarget   string
+	GatewayNodeID   string
+	Credentials     gatewayauth.Credentials
+	PythonWorkers   int
+	ViewReadWorkers int
+	ViewReadTimeout time.Duration
+	TaskTimeout     time.Duration
 }
 
 func resolveRunOnceRuntime(cli cliConfig) (runOnceRuntime, error) {
@@ -65,16 +66,17 @@ func resolveRunOnceRuntime(cli cliConfig) (runOnceRuntime, error) {
 		return runOnceRuntime{}, err
 	}
 	return runOnceRuntime{
-		DBPath:        resolveRuntimePath(appCfg.Database.Path),
-		FactorsDir:    resolveRuntimePath(appCfg.Engine.FactorsDir),
-		PythonBin:     appCfg.Engine.PythonBin,
-		WorkerPath:    resolveRuntimePath(appCfg.Engine.WorkerPath),
-		GatewayTarget: appCfg.Storage.GatewayTarget,
-		GatewayNodeID: appCfg.Storage.GatewayNodeID,
-		Credentials:   credentials,
-		Workers:       1,
-		TaskTimeout:   time.Duration(appCfg.Engine.TaskTimeoutMS) * time.Millisecond,
-		MaxRetry:      appCfg.Scheduler.MaxRetry,
+		DBPath:          resolveRuntimePath(appCfg.Database.Path),
+		FactorsDir:      resolveRuntimePath(appCfg.Engine.FactorsDir),
+		PythonBin:       appCfg.Engine.PythonBin,
+		WorkerPath:      resolveRuntimePath(appCfg.Engine.WorkerPath),
+		GatewayTarget:   appCfg.Storage.GatewayTarget,
+		GatewayNodeID:   appCfg.Storage.GatewayNodeID,
+		Credentials:     credentials,
+		PythonWorkers:   1,
+		ViewReadWorkers: 1,
+		ViewReadTimeout: time.Duration(appCfg.Engine.ViewReadTimeoutMS) * time.Millisecond,
+		TaskTimeout:     time.Duration(appCfg.Engine.TaskTimeoutMS) * time.Millisecond,
 	}, nil
 }
 
@@ -120,8 +122,8 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	}
 	storageClient := storageio.NewClientWithCredentials(
 		runtimeCfg.GatewayTarget, runtimeCfg.GatewayNodeID, runtimeCfg.Credentials, auth,
-	)
-	pythonExec, err := engine.NewPythonExecutor(ctx, runtimeCfg.Workers, process.Config{
+	).WithViewAuth(serviceViewAuth()).WithOutputManifests(db.OutputManifests())
+	pythonExec, err := engine.NewPythonWorkerPool(ctx, runtimeCfg.PythonWorkers, process.Config{
 		PythonBin:   runtimeCfg.PythonBin,
 		WorkerPath:  runtimeCfg.WorkerPath,
 		Args:        []string{"--factors-dir", runtimeCfg.FactorsDir},
@@ -132,9 +134,8 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return err
 	}
 	defer pythonExec.Close()
-	runner := scheduler.NewService(scheduler.Config{
-		Workers: runtimeCfg.Workers, QueueCapacity: 1, MaxRetry: runtimeCfg.MaxRetry,
-	}, storageClient, pythonExec)
+	runner := taskrunner.NewService(runtimeCfg.PythonWorkers, storageClient, pythonExec,
+		taskrunner.WithViewReadConfig(runtimeCfg.ViewReadWorkers, runtimeCfg.ViewReadTimeout))
 	started := time.Now()
 	targets := make([]string, 0, len(groups))
 	for target := range groups {
@@ -154,10 +155,21 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			if totalFactors > 1 {
 				currentTaskID = fmt.Sprintf("%s-%d", taskID, taskIndex)
 			}
-			task, buildErr := scheduler.BuildTask(scheduler.TaskScope{
-				TaskID: currentTaskID, TriggerType: "manual", SpaceID: cfg.SpaceID,
+			sourceViewID := cfg.ViewID
+			if sourceViewID == "" {
+				sourceViewID = cfg.DatasetID
+			}
+			bindingID := executableBindingID(bindings, factor.FactorID, target, cfg)
+			if bindingID == "" {
+				bindingID = fmt.Sprintf("manual:%s:%s:%s:%s", factor.FactorID, cfg.SpaceID, sourceViewID, cfg.Freq)
+			}
+			task, buildErr := taskrunner.BuildTask(taskrunner.TaskScope{
+				TaskID: currentTaskID, BindingID: bindingID,
+				TriggerType: "manual", SpaceID: cfg.SpaceID,
+				SourceViewID:  cfg.ViewID,
 				SourceDataset: cfg.DatasetID, TargetDataset: target,
 				SubjectID: cfg.SubjectID, Freq: cfg.Freq,
+				TriggerEventID: taskID, TriggeredAt: time.Now().UTC(),
 				StartTime: cfg.StartTime, EndTime: cfg.EndTime,
 			}, factor, runtimeCfg.FactorsDir)
 			if buildErr != nil {
@@ -179,6 +191,28 @@ func runOnce(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	})
 }
 
+func executableBindingID(bindings []domain.FactorBinding, factorID, target string, cfg cliConfig) string {
+	sourceScope := cfg.ViewID
+	if sourceScope == "" {
+		sourceScope = cfg.DatasetID
+	}
+	for _, binding := range bindings {
+		bindingSource := binding.SourceViewID
+		if bindingSource == "" {
+			bindingSource = binding.SourceDataset
+		}
+		bindingTarget := binding.ResultDatasetID
+		if bindingTarget == "" {
+			bindingTarget = binding.TargetDataset
+		}
+		if binding.SpaceID == cfg.SpaceID && bindingSource == sourceScope && binding.Freq == cfg.Freq &&
+			binding.FactorID == factorID && bindingTarget == target && domain.BindingAllowsSubject(binding, cfg.SubjectID) {
+			return binding.BindingID
+		}
+	}
+	return ""
+}
+
 func executableFactorGroups(
 	factors []domain.FactorDef,
 	bindings []domain.FactorBinding,
@@ -194,8 +228,16 @@ func executableFactorGroups(
 	}
 	groups := map[string][]domain.FactorDef{}
 	for _, binding := range bindings {
+		sourceScope := cfg.ViewID
+		if sourceScope == "" {
+			sourceScope = cfg.DatasetID
+		}
+		bindingSource := binding.SourceViewID
+		if bindingSource == "" {
+			bindingSource = binding.SourceDataset
+		}
 		if binding.SpaceID != cfg.SpaceID ||
-			binding.SourceDataset != cfg.DatasetID ||
+			bindingSource != sourceScope ||
 			binding.Freq != cfg.Freq ||
 			!domain.BindingAllowsSubject(binding, cfg.SubjectID) {
 			continue
@@ -211,7 +253,7 @@ func executableFactorGroups(
 		}
 		target := binding.TargetDataset
 		if target == "" {
-			target = registry.ResultDataset(cfg.DatasetID)
+			target = registry.ResultDataset(strings.TrimSuffix(strings.TrimSpace(sourceScope), "_view"))
 		}
 		groups[target] = append(groups[target], factor)
 	}
@@ -224,6 +266,14 @@ func serviceAuth() *commonpb.AuthInfo {
 		RequestId: fmt.Sprintf("factor-%d", time.Now().UnixNano()),
 	}
 	if secret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"); strings.TrimSpace(secret) != "" {
+		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
+	}
+	return auth
+}
+
+func serviceViewAuth() *commonpb.AuthInfo {
+	auth := serviceAuth()
+	if secret := os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET"); strings.TrimSpace(secret) != "" {
 		auth.AppKey = mooxsecurity.HMACSHA256Hex(secret, []byte(auth.AppId))
 	}
 	return auth

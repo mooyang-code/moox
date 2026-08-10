@@ -2,7 +2,6 @@ package storageio
 
 import (
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -47,32 +46,51 @@ func RowsToDataFrame(rows []*storagepb.TimeSeriesRow, columns []string) (*engine
 			return nil, fmt.Errorf("duplicate time-series identity data_time=%s series_tag=%q",
 				item.dataTime.Format(time.RFC3339Nano), item.seriesTag)
 		}
-		valuesByName := make(map[string]any, len(item.row.GetFields()))
-		datasetID := item.row.GetKey().GetDatasetId()
+		rawValues := make(map[string]any, len(item.row.GetFields()))
 		for _, field := range item.row.GetFields() {
-			name := field.GetFieldId()
-			if prefix := datasetID + "."; datasetID != "" && strings.HasPrefix(name, prefix) {
-				name = strings.TrimPrefix(name, prefix)
+			rawName := field.GetFieldId()
+			if _, duplicate := rawValues[rawName]; duplicate {
+				return nil, fmt.Errorf("duplicate physical View field %q", rawName)
 			}
-			if !slices.Contains(columns, name) {
-				continue
-			}
-			if _, duplicate := valuesByName[name]; duplicate {
-				return nil, fmt.Errorf(
-					"duplicate projected field %q for dataset %q", name, datasetID,
-				)
-			}
-			valuesByName[name] = typedValueToAny(field.GetValue())
+			rawValues[rawName] = typedValueToAny(field.GetValue())
 		}
 		out := make([]any, 0, len(columns))
 		for _, name := range columns {
-			out = append(out, valuesByName[name])
+			value, resolveErr := resolveInputValue(rawValues, name)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			out = append(out, value)
 		}
 		frame.DataTimes = append(frame.DataTimes, item.dataTime)
 		frame.SeriesTags = append(frame.SeriesTags, item.seriesTag)
 		frame.Rows = append(frame.Rows, out)
 	}
 	return frame, nil
+}
+
+func resolveInputValue(rawValues map[string]any, input string) (any, error) {
+	if value, ok := rawValues[input]; ok {
+		return value, nil
+	}
+	if strings.Contains(input, ".") {
+		return nil, nil
+	}
+	var matched string
+	for rawName := range rawValues {
+		_, suffix, qualified := strings.Cut(rawName, ".")
+		if !qualified || suffix != input {
+			continue
+		}
+		if matched != "" {
+			return nil, fmt.Errorf("duplicate projected field %q from %q and %q", input, matched, rawName)
+		}
+		matched = rawName
+	}
+	if matched == "" {
+		return nil, nil
+	}
+	return rawValues[matched], nil
 }
 
 func typedValueToAny(value *storagepb.TypedValue) any {

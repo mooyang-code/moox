@@ -20,16 +20,16 @@ func buildMonitorMarketCanary(
 	cfg *config.Config,
 	runtime *Runtime,
 	hook func(context.Context, domain.Check, domain.CheckResult),
-) (func(context.Context) error, error) {
+) (func(context.Context) error, func(context.Context) error, error) {
 	if cfg == nil || !cfg.MarketCanary.Enabled {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if runtime == nil || runtime.Repositories == nil {
-		return nil, fmt.Errorf("monitor market canary requires repositories")
+		return nil, nil, fmt.Errorf("monitor market canary requires repositories")
 	}
 	credentials, err := gatewayauth.ResolveCredentials(cfg.Metrics.Storage.KeyID, cfg.Metrics.Storage.HMACKeyFile)
 	if err != nil {
-		return nil, fmt.Errorf("monitor market canary credentials: %w", err)
+		return nil, nil, fmt.Errorf("monitor market canary credentials: %w", err)
 	}
 	reader := storagepb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(
 		cfg.Metrics.Storage.GatewayTarget,
@@ -55,20 +55,20 @@ func buildMonitorMarketCanary(
 		case getErr == nil:
 			check.ID = existing.ID
 			if err := runtime.Repositories.Checks.Update(ctx, &check); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case errors.Is(getErr, gorm.ErrRecordNotFound):
 			if err := runtime.Repositories.Checks.Create(ctx, &check); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		default:
-			return nil, getErr
+			return nil, nil, getErr
 		}
 		canaries = append(canaries, watchdog.MarketCanary{
 			Reader: reader, AuthInfo: storageauth.Primary("monitor-market-canary"), Config: canaryConfig,
 		})
 	}
-	return func(runCtx context.Context) error {
+	run := func(runCtx context.Context) error {
 		var errs []error
 		for _, canary := range canaries {
 			result := canary.Run(runCtx)
@@ -95,7 +95,16 @@ func buildMonitorMarketCanary(
 			}
 		}
 		return errors.Join(errs...)
-	}, nil
+	}
+	probe := func(probeCtx context.Context) error {
+		for _, canary := range canaries {
+			if err := canary.ProbeStorageAuth(probeCtx); err != nil {
+				return fmt.Errorf("%s: %w", watchdog.MarketCanaryTarget(canary.Config), err)
+			}
+		}
+		return nil
+	}
+	return run, probe, nil
 }
 
 func firstNonEmptyString(values ...string) string {

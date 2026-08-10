@@ -65,11 +65,8 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const subject = "moox.storage.dataset.rows.upserted.v2.>"
+	const subject = "moox.storage.>"
 	if _, err := js.AddStream(&nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{subject}, Storage: nats.MemoryStorage}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := js.AddConsumer("MOOX_STORAGE", &nats.ConsumerConfig{Name: "storage_view", Durable: "storage_view", FilterSubject: subject, AckPolicy: nats.AckExplicitPolicy, AckWait: time.Second, MaxDeliver: 3, MaxAckPending: 8, DeliverPolicy: nats.DeliverAllPolicy}); err != nil {
 		t.Fatal(err)
 	}
 	client, err := jetstream.Connect(ctx, jetstream.ConfigFromEnv([]string{server.ClientURL()}, "storage-view-concurrency-e2e"))
@@ -89,7 +86,7 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	releaseBlocked := make(chan struct{})
 	var blockOnce sync.Once
 	stop, err := service.StartEventConsumer(ctx, client, viewservice.EventConsumerOptions{
-		Consumer: "storage_view", FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
+		Consumer: "storage_view_period_v1", FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
 		BeforeProcess: func(hookCtx context.Context, delivery *jetstream.Delivery) error {
 			_, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(
 				registry,

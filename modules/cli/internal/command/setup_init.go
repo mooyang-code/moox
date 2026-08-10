@@ -53,13 +53,14 @@ type setupInitSummary struct {
 	Metadata         setupInitMetadataCounts       `json:"metadata"`
 	Datasets         setupDatasetActivationSummary `json:"datasets"`
 	Verification     setupInitMetadataCounts       `json:"verification"`
+	Factors          *setupFactorSummary           `json:"factors,omitempty"`
 }
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	var file, configDir, storageHost string
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "导入默认空间、数据集和字段",
+		Short: "导入默认空间、数据集、字段和因子",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			bundle, err := deps.loadInitBundle(configDir)
 			if err != nil {
@@ -110,6 +111,26 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 			if verification.Applied != 0 || verification.Unchanged != len(bundle.Calls) {
 				return fmt.Errorf("metadata_verification_failed")
 			}
+			factorItems, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
+			if err != nil {
+				return err
+			}
+			var factorSummary *setupFactorSummary
+			if len(factorItems) > 0 {
+				factorService, openErr := deps.openInitFactor(cmd.Context(), snapshot)
+				if openErr != nil {
+					return openErr
+				}
+				appliedSummary, applyErr := factorService.Apply(cmd.Context(), sortedFactorItems(factorItems))
+				closeErr := factorService.Close()
+				if applyErr != nil {
+					return applyErr
+				}
+				if closeErr != nil {
+					return closeErr
+				}
+				factorSummary = &appliedSummary
+			}
 			adminStatus, err = deps.statusSpaces(cmd.Context(), snapshot, bundle.Spaces)
 			if err != nil {
 				return err
@@ -130,6 +151,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 				Verification: setupInitMetadataCounts{
 					Planned: verification.Planned, Unchanged: verification.Unchanged,
 				},
+				Factors: factorSummary,
 			})
 		},
 	}
@@ -137,6 +159,50 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&configDir, "config-dir", defaultSetupConfigDir, "默认配置目录")
 	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
 	_ = cmd.MarkFlagRequired("storage-host")
+	return cmd
+}
+
+// newSetupFactorsCommand imports the repository's Python factor definitions
+// without touching Storage metadata.  It is useful when metadata has already
+// been initialized (possibly from an older seed) and a full setup init would
+// correctly refuse to overwrite that existing contract.
+func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
+	var file string
+	cmd := &cobra.Command{
+		Use:   "factors",
+		Short: "导入本地 Python 因子并建立默认 View 绑定",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+			items, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
+			if err != nil {
+				return err
+			}
+			summary := setupFactorSummary{Enabled: len(items) > 0, Planned: len(items)}
+			if len(items) > 0 {
+				service, openErr := deps.openInitFactor(cmd.Context(), snapshot)
+				if openErr != nil {
+					return openErr
+				}
+				summary, err = service.Apply(cmd.Context(), sortedFactorItems(items))
+				closeErr := service.Close()
+				if err != nil {
+					return err
+				}
+				if closeErr != nil {
+					return closeErr
+				}
+			}
+			if err := snapshot.VerifyUnchanged(); err != nil {
+				return fmt.Errorf("config_changed")
+			}
+			return writeSetupJSON(cmd, map[string]any{"status": "ready", "factors": summary})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	return cmd
 }
 

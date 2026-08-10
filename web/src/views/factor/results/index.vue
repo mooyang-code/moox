@@ -2,10 +2,6 @@
   <div class="moox-page factor-results-workbench">
     <div class="moox-inner">
       <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="因子结果" @change="syncRoute" />
-      <div class="engine-status">
-        <span>队列深度 {{ engineStatus.queue_depth }}</span>
-        <span>队列满丢失 {{ engineStatus.queue_overflow_count }}</span>
-      </div>
       <section class="factor-results-content">
         <ViewDefinitions
           v-if="activeTab === 'definitions'"
@@ -25,14 +21,23 @@
           :allowed-primary-dataset-ids="targetDatasetIds"
           :view-owner-modules="['factor']"
           :view-roles="['factor_result']"
-        />
+          :auto-refresh-interval-ms="60000"
+        >
+          <template #status-extra>
+            <span class="engine-status">
+              <span>Python Workers {{ engineStatus.python_workers }}</span>
+              <span>执行中 {{ engineStatus.active_tasks }}</span>
+              <span>等待中 {{ engineStatus.pending_tasks }}</span>
+            </span>
+          </template>
+        </ViewBrowse>
       </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { getEngineStatus, listFactorBindings } from "@/api/factor";
@@ -49,8 +54,15 @@ const router = useRouter();
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const bindings = ref<FactorBinding[]>([]);
-const engineStatus = ref<EngineStatus>({ ret_info: { code: 0, msg: "" }, queue_depth: 0, queue_overflow_count: 0 });
+const engineStatus = ref<EngineStatus>({
+  ret_info: { code: 0, msg: "" },
+  python_workers: 0,
+  active_tasks: 0,
+  pending_tasks: 0
+});
 const activeTab = ref(tabFromRoute());
+const spaceResolved = ref(false);
+let engineStatusTimer: number | undefined;
 type FactorResultTab = "definitions" | "browse";
 
 const tabs = [
@@ -76,7 +88,39 @@ async function loadBindings() {
     bindings.value = [];
     return;
   }
-  bindings.value = await listAllBindings(selectedSpaceId.value);
+  // The layout loads the space list in parallel with this page. Do not mark
+  // the lookup resolved until that list is available, otherwise a persisted
+  // space ID could suppress the cross-space fallback on the first render.
+  if (spaceStore.spaces.length === 0) {
+    return;
+  }
+  const currentSpaceId = selectedSpaceId.value;
+  const currentBindings = await listAllBindings(currentSpaceId);
+  if (currentBindings.length > 0 || spaceResolved.value) {
+    bindings.value = currentBindings;
+    spaceResolved.value = true;
+    return;
+  }
+
+  // The global space selector defaults to the first business space (usually
+  // stock_cn). Factor result views are scoped by space, so a default factor
+  // binding in another space would otherwise look like "no result view".
+  // Resolve that once on entry, while still allowing the user to switch back
+  // manually after the page has loaded.
+  for (const space of spaceStore.spaces) {
+    if (space.space_id === currentSpaceId) {
+      continue;
+    }
+    const candidateBindings = await listAllBindings(space.space_id);
+    if (candidateBindings.length === 0) {
+      continue;
+    }
+    spaceResolved.value = true;
+    spaceStore.setSelectedSpace(space.space_id);
+    return;
+  }
+  bindings.value = currentBindings;
+  spaceResolved.value = true;
 }
 
 async function loadEngineStatus() {
@@ -100,12 +144,26 @@ async function listAllBindings(spaceId: string) {
 }
 
 watch(selectedSpaceId, loadBindings);
+watch(
+  () => spaceStore.spaces.length,
+  () => {
+    if (!spaceResolved.value) {
+      loadBindings();
+    }
+  }
+);
 watch(normalizedQuery, () => {
   activeTab.value = tabFromRoute();
 });
 onMounted(() => {
   loadBindings();
   loadEngineStatus();
+  engineStatusTimer = window.setInterval(loadEngineStatus, 5000);
+});
+onBeforeUnmount(() => {
+  if (engineStatusTimer !== undefined) {
+    window.clearInterval(engineStatusTimer);
+  }
 });
 </script>
 
@@ -131,11 +189,11 @@ onMounted(() => {
   overflow: hidden;
 }
 .engine-status {
-  display: flex;
+  display: inline-flex;
   gap: var(--moox-space-5);
-  margin-top: var(--moox-space-3);
   color: var(--color-text-2);
   font-size: 13px;
+  line-height: 20px;
 }
 .factor-results-content :deep(.moox-page) {
   height: 100%;

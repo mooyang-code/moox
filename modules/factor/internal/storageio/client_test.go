@@ -2,6 +2,7 @@ package storageio
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"testing"
 	"time"
@@ -33,6 +34,77 @@ func TestReadRangeChunkPrependsLookbackAndReturnsTargetPeriods(t *testing.T) {
 	require.Equal(t, []string{"bars.close"}, access.readReqs[1].GetColumnNames())
 	require.Equal(t, storagepb.SortOrder_SORT_ORDER_ASC, access.readReqs[0].GetOrder())
 	require.Equal(t, storagepb.SortOrder_SORT_ORDER_DESC, access.readReqs[1].GetOrder())
+}
+
+func TestReadRangeChunkQueriesExplicitViewAndScopesByFilter(t *testing.T) {
+	base := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
+	view := &fakeViewClient{rows: [][]*storagepb.TimeSeriesRow{{klineRow(base, 1)}}}
+	client := &Client{access: &fakeAccessClient{}, view: view}
+	_, err := client.ReadRangeChunk(context.Background(), WindowKey{SpaceID: "crypto", SourceViewID: "source_view", SubjectID: "BTC-USDT", Freq: "1m"}, base, base.Add(time.Minute), 1, 10, []string{"close"})
+	require.NoError(t, err)
+	require.Len(t, view.reqs, 1)
+	require.Equal(t, []int{0}, view.optionCounts)
+	require.Equal(t, "source_view", view.reqs[0].GetViewId())
+	require.Empty(t, view.reqs[0].GetSelectors())
+	require.Len(t, view.reqs[0].GetFilter().GetGroups()[0].GetConds(), 2)
+	require.Equal(t, []string{"close"}, view.reqs[0].GetColumnNames())
+	require.Equal(t, storagepb.TotalMode_NONE, view.reqs[0].GetTotalMode())
+}
+
+func TestReadPeriodChunkClassifiesMalformedRowsAsNonRetryable(t *testing.T) {
+	row := klineRow(time.Now().UTC(), 1)
+	row.Key.DataTime = "not-a-time"
+	client := &Client{view: &fakeViewClient{rows: [][]*storagepb.TimeSeriesRow{{row}}}}
+	_, err := client.ReadPeriodChunk(context.Background(), WindowKey{
+		SpaceID: "crypto", SourceViewID: "source_view", SubjectID: "BTC-USDT", Freq: "1m",
+	}, time.Now().UTC(), time.Now().UTC().Add(time.Minute), 1, []string{"close"})
+	require.Error(t, err)
+	var nonRetryable engine.NonRetryableError
+	require.ErrorAs(t, err, &nonRetryable)
+}
+
+func TestReadPeriodChunkClassifiesViewResponseErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		code         commonpb.ErrorCode
+		nonRetryable bool
+	}{
+		{name: "not ready", code: commonpb.ErrorCode_VIEW_NOT_READY},
+		{name: "inner", code: commonpb.ErrorCode_INNER_ERR},
+		{name: "bad column", code: commonpb.ErrorCode_VIEW_COLUMN_NOT_FOUND, nonRetryable: true},
+		{name: "bad query", code: commonpb.ErrorCode_QUERY_SHAPE_UNSUPPORTED, nonRetryable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view := &fakeViewClient{ret: &commonpb.RetInfo{Code: tc.code, Msg: tc.name}}
+			client := &Client{view: view}
+			_, err := client.ReadPeriodChunk(context.Background(), WindowKey{
+				SpaceID: "crypto", SourceViewID: "source_view", SubjectID: "BTC-USDT", Freq: "1m",
+			}, time.Now().UTC(), time.Now().UTC().Add(time.Minute), 1, []string{"close"})
+			require.Error(t, err)
+			var nonRetryable engine.NonRetryableError
+			require.Equal(t, tc.nonRetryable, errors.As(err, &nonRetryable))
+		})
+	}
+}
+
+func TestReadPeriodChunkReadsTargetAndLookbackInOneViewQuery(t *testing.T) {
+	base := time.Date(2026, 8, 10, 6, 10, 0, 0, time.UTC)
+	view := &fakeViewClient{rows: [][]*storagepb.TimeSeriesRow{{
+		klineRow(base, 3), klineRow(base.Add(-time.Minute), 2), klineRow(base.Add(-2*time.Minute), 1),
+	}}}
+	client := &Client{access: &fakeAccessClient{}, view: view}
+
+	chunk, err := client.ReadPeriodChunk(context.Background(), WindowKey{
+		SpaceID: "crypto", SourceViewID: "source_view", SubjectID: "BTC-USDT", Freq: "1m",
+	}, base, base.Add(time.Minute), 3, []string{"close"})
+
+	require.NoError(t, err)
+	require.Len(t, view.reqs, 1)
+	require.Equal(t, []time.Time{base}, chunk.TargetPeriods)
+	require.Equal(t, []time.Time{base.Add(-2 * time.Minute), base.Add(-time.Minute), base}, chunk.Frame.DataTimes)
+	require.Empty(t, view.reqs[0].GetTimeRange().GetStartTime())
+	require.Equal(t, base.Add(time.Minute).Format(time.RFC3339Nano), view.reqs[0].GetTimeRange().GetEndTime())
+	require.True(t, view.reqs[0].GetSorts()[0].GetDesc())
 }
 
 func TestReadRangeChunkUsesCompleteTimeCohorts(t *testing.T) {
@@ -161,6 +233,27 @@ type fakeAccessClient struct {
 	servedIndexedTo []string
 	readReqs        []*storagepb.ReadTimeSeriesRowsReq
 	writeReqs       []*storagepb.PrimaryUpsertFieldsReq
+}
+
+type fakeViewClient struct {
+	rows         [][]*storagepb.TimeSeriesRow
+	reqs         []*storagepb.QueryTimeSeriesRowsReq
+	optionCounts []int
+	ret          *commonpb.RetInfo
+}
+
+func (f *fakeViewClient) QueryTimeSeriesRows(_ context.Context, req *storagepb.QueryTimeSeriesRowsReq, opts ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error) {
+	f.reqs = append(f.reqs, req)
+	f.optionCounts = append(f.optionCounts, len(opts))
+	var rows []*storagepb.TimeSeriesRow
+	if len(f.rows) > 0 {
+		rows, f.rows = f.rows[0], f.rows[1:]
+	}
+	ret := f.ret
+	if ret == nil {
+		ret = successRet()
+	}
+	return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: ret, Rows: rows, Complete: true}, nil
 }
 
 func (f *fakeAccessClient) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {

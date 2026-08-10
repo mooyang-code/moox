@@ -4,15 +4,137 @@ import (
 	"context"
 	"errors"
 	"github.com/mooyang-code/moox/packages/pyruntime/process"
+	"github.com/mooyang-code/moox/packages/pyruntime/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"sync"
 	"testing"
+	"time"
 )
 
 type stubWorker struct {
 	state    process.State
 	closeErr error
 	closed   bool
+}
+
+type helloWorker struct{ stubWorker }
+
+func (*helloWorker) Hello() protocol.Hello {
+	return protocol.Hello{ProtocolVersion: "1", WorkerVersion: "test", PythonVersion: "3.12"}
+}
+
+func TestWarmupStartsOnlyOneLazyWorker(t *testing.T) {
+	started := 0
+	p := New(100, func(context.Context) (process.Worker, error) {
+		started++
+		return &helloWorker{stubWorker: stubWorker{state: process.StateReady}}, nil
+	})
+	t.Cleanup(func() { require.NoError(t, p.Close()) })
+
+	hello, err := p.WarmupOne(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "test", hello.WorkerVersion)
+	require.Equal(t, 1, started)
+	require.True(t, p.ReadyStarted())
+}
+
+type blockingWorker struct {
+	entered chan<- string
+	release <-chan struct{}
+}
+
+func (*blockingWorker) Load(context.Context, process.LoadRequest) error { return nil }
+func (w *blockingWorker) Run(_ context.Context, req process.RunRequest) (process.RunResult, error) {
+	w.entered <- req.RequestID
+	<-w.release
+	return process.RunResult{Meta: []byte(`{"results":[]}`)}, nil
+}
+func (*blockingWorker) State() process.State { return process.StateReady }
+func (*blockingWorker) Close() error         { return nil }
+
+func TestRunAnyLoadedManyUsesTwoFreeWorkersForSameShard(t *testing.T) {
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	workers := []process.Worker{
+		&blockingWorker{entered: entered, release: release},
+		&blockingWorker{entered: entered, release: release},
+	}
+	var factoryMu sync.Mutex
+	next := 0
+	p := New(2, func(context.Context) (process.Worker, error) {
+		factoryMu.Lock()
+		defer factoryMu.Unlock()
+		worker := workers[next]
+		next++
+		return worker, nil
+	})
+	t.Cleanup(func() { require.NoError(t, p.Close()) })
+
+	errCh := make(chan error, 2)
+	for _, id := range []string{"bias-5", "bias-20"} {
+		go func(id string) {
+			_, err := p.RunAnyLoadedMany(context.Background(), nil, process.RunRequest{RequestID: id})
+			errCh <- err
+		}(id)
+	}
+
+	require.ElementsMatch(t, []string{"bias-5", "bias-20"}, []string{<-entered, <-entered})
+	close(release)
+	require.NoError(t, <-errCh)
+	require.NoError(t, <-errCh)
+}
+
+func TestRunAnyLoadedManyNeverExceedsPoolSize(t *testing.T) {
+	entered := make(chan string, 3)
+	release := make(chan struct{})
+	p := New(2, func(context.Context) (process.Worker, error) {
+		return &blockingWorker{entered: entered, release: release}, nil
+	})
+	t.Cleanup(func() { require.NoError(t, p.Close()) })
+
+	errCh := make(chan error, 3)
+	for _, id := range []string{"one", "two", "three"} {
+		go func(id string) {
+			_, err := p.RunAnyLoadedMany(context.Background(), nil, process.RunRequest{RequestID: id})
+			errCh <- err
+		}(id)
+	}
+	<-entered
+	<-entered
+	select {
+	case id := <-entered:
+		t.Fatalf("third request %q entered before a worker was released", id)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-entered
+	for range 3 {
+		require.NoError(t, <-errCh)
+	}
+}
+
+func TestRunAnyLoadedManyHonorsContextWhileWaiting(t *testing.T) {
+	entered := make(chan string, 1)
+	release := make(chan struct{})
+	p := New(1, func(context.Context) (process.Worker, error) {
+		return &blockingWorker{entered: entered, release: release}, nil
+	})
+	t.Cleanup(func() { require.NoError(t, p.Close()) })
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := p.RunAnyLoadedMany(context.Background(), nil, process.RunRequest{RequestID: "first"})
+		firstDone <- err
+	}()
+	<-entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := p.RunAnyLoadedMany(ctx, nil, process.RunRequest{RequestID: "second"})
+	require.ErrorIs(t, err, context.Canceled)
+	close(release)
+	require.NoError(t, <-firstDone)
 }
 
 func (s *stubWorker) Load(context.Context, process.LoadRequest) error { return nil }
@@ -118,6 +240,8 @@ func TestPoolPickEmptyPool(t *testing.T) {
 	_, err = empty.RunLoaded(context.Background(), "s", process.LoadRequest{}, process.RunRequest{})
 	require.Error(t, err)
 	_, err = empty.RunLoadedMany(context.Background(), "s", nil, process.RunRequest{})
+	require.Error(t, err)
+	_, err = empty.RunAnyLoadedMany(context.Background(), nil, process.RunRequest{})
 	require.Error(t, err)
 	assert.NoError(t, empty.Close())
 }
