@@ -42,6 +42,7 @@ const (
 	duckDBThreadsEnv     = "MOOX_STORAGE_VIEW_DUCKDB_THREADS"
 	defaultDuckDBMemory  = "512MB"
 	defaultDuckDBThreads = 1
+	defaultMaxOpenConns  = 8
 )
 
 func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
@@ -447,6 +448,18 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 	return stats, nil
 }
 
+func (m *IndexManager) Exists(_ context.Context, id string) (bool, error) {
+	path, err := m.path(id)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (m *IndexManager) Remove(_ context.Context, id string) error {
 	path, err := m.path(id)
 	if err != nil {
@@ -561,8 +574,14 @@ func open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	// Factor reads arrive concurrently while the View consumer keeps applying
+	// result rows. A single database/sql connection serializes all readers and
+	// can starve the writer behind an entire read-worker window. DuckDB supports
+	// concurrent readers and one writer within the same process; keep a modest
+	// fixed pool so read concurrency is useful without mirroring the much larger
+	// Factor worker count.
+	db.SetMaxOpenConns(defaultMaxOpenConns)
+	db.SetMaxIdleConns(defaultMaxOpenConns)
 	memoryLimit := strings.TrimSpace(os.Getenv(duckDBMemoryLimitEnv))
 	if memoryLimit == "" {
 		memoryLimit = defaultDuckDBMemory

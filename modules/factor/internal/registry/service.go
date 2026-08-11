@@ -159,6 +159,54 @@ func (s *Service) ValidateAllEnabledBindings(ctx context.Context) error {
 	}
 }
 
+// ReconcileAllEnabledBindings validates persisted executable contracts and
+// refreshes their managed Result Dataset/View metadata before event consumers
+// start. A schema revision that is not active yet moves the binding back to
+// pending_view so calculation cannot race the Result View rebuild.
+func (s *Service) ReconcileAllEnabledBindings(ctx context.Context) error {
+	if err := s.ValidateAllEnabledBindings(ctx); err != nil {
+		return err
+	}
+	if s.bindings == nil || s.meta == nil {
+		return nil
+	}
+	const pageSize = 1000
+	for page := 1; ; page++ {
+		factors, total, err := s.factors.List(ctx, store.FactorFilter{
+			Status: domain.FactorStatusEnabled,
+			Page:   store.Page{Page: page, PageSize: pageSize},
+		})
+		if err != nil {
+			return fmt.Errorf("list enabled factors for metadata reconciliation: %w", err)
+		}
+		for _, factor := range factors {
+			bindings, err := s.bindings.ListByFactor(ctx, factor.FactorID)
+			if err != nil {
+				return fmt.Errorf("list factor %q bindings: %w", factor.FactorID, err)
+			}
+			for _, binding := range bindings {
+				if binding.Status != domain.BindingStatusEnabled {
+					continue
+				}
+				ready, err := s.meta.SyncBindingViews(ctx, binding, []domain.FactorDef{factor})
+				if err != nil {
+					return fmt.Errorf("reconcile binding %q result metadata: %w", binding.BindingID, err)
+				}
+				if ready {
+					continue
+				}
+				binding.Status = domain.BindingStatusPendingView
+				if err := s.bindings.Upsert(ctx, binding); err != nil {
+					return fmt.Errorf("mark binding %q pending_view: %w", binding.BindingID, err)
+				}
+			}
+		}
+		if int64(page*pageSize) >= total {
+			return nil
+		}
+	}
+}
+
 // NewService creates a registry service.
 func NewService(factors *store.FactorRepository, meta *MetadataSync, opts Options) *Service {
 	if opts.FactorsDir == "" {

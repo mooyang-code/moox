@@ -69,17 +69,47 @@ func validateChineseDisplayName(field string, value string) error {
 	return fmt.Errorf("%s must contain Chinese characters", field)
 }
 
-func validateColumnDisplayName(field string, spaceID string, attrs map[string]string) error {
+func validateColumnDisplayName(field string, spaceID string, attrs map[string]string, factorOutputColumn bool) error {
 	if attrs == nil {
 		return validateChineseDisplayName(field, "")
 	}
+	displayName := strings.TrimSpace(attrs["display_name"])
+	factorOutput := strings.TrimSpace(attrs["factor_output"])
+	if factorOutputColumn {
+		if displayName != factorOutput {
+			return fmt.Errorf("%s must match factor_output", field)
+		}
+		return nil
+	}
 	if spaceID == "moox_system" {
-		if strings.TrimSpace(attrs["display_name"]) == "" {
+		if displayName == "" {
 			return fmt.Errorf("%s is required", field)
 		}
 		return nil
 	}
-	return validateChineseDisplayName(field, attrs["display_name"])
+	return validateChineseDisplayName(field, displayName)
+}
+
+func isFactorDatasetColumn(column *pb.DatasetColumn) bool {
+	if column == nil || column.GetOriginType() != pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR {
+		return false
+	}
+	attrs := column.GetAttributes()
+	factorID := strings.TrimSpace(attrs["origin_factor_id"])
+	output := strings.TrimSpace(attrs["factor_output"])
+	return factorID != "" && output != "" && strings.TrimSpace(column.GetOriginId()) == factorID+"."+output
+}
+
+func isFactorViewColumn(column *pb.ViewColumn) bool {
+	if column == nil || column.GetOriginType() != pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
+		return false
+	}
+	attrs := column.GetAttributes()
+	factorID := strings.TrimSpace(attrs["origin_factor_id"])
+	output := strings.TrimSpace(attrs["factor_output"])
+	originID := strings.TrimSpace(column.GetOriginId())
+	return factorID != "" && output != "" && originID == strings.TrimSpace(column.GetColumnName()) &&
+		strings.HasSuffix(originID, "."+factorID+"__"+output)
 }
 
 func validateLowerSnakeID(field string, value string, maxLen int) error {

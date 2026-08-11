@@ -83,6 +83,24 @@ func TestResolveManagedResultIDsSeparatesViewsSharingPrimaryDataset(t *testing.T
 	require.NotEqual(t, firstView, secondView)
 }
 
+func TestResultViewReadyWaitsForDesiredRevision(t *testing.T) {
+	client := &fakeViewMetadataClient{
+		fakeMetadataClient: newFakeMetadataClient(),
+		views: map[string]*storagepb.View{
+			"result_view": {
+				SpaceId: "space", ViewId: "result_view", Status: "active", ActiveIndexId: "index-a",
+				ActiveViewRevision: 1, DesiredViewRevision: 2,
+				ActiveColumns: []*storagepb.ViewColumn{{ColumnName: "result.bias__bias_20"}},
+			},
+		},
+	}
+	ready, err := NewMetadataSync(client, nil).resultViewReady(context.Background(), domain.FactorBinding{
+		SpaceID: "space", ResultDatasetID: "result", ResultViewID: "result_view",
+	}, []domain.FactorDef{{FactorID: "bias", Outputs: []string{"bias_20"}}})
+	require.NoError(t, err)
+	require.False(t, ready)
+}
+
 func TestSyncTargetDatasetUpdatesExistingFactorMetadata(t *testing.T) {
 	client := newFakeMetadataClient()
 	client.datasets["source"] = testSourceDataset()
@@ -106,7 +124,7 @@ func TestSyncTargetDatasetUpdatesExistingFactorMetadata(t *testing.T) {
 	require.Len(t, client.upsertedColumns, 2)
 	require.Equal(t, "excess.excess_return", client.upsertedColumns[0].GetOriginId())
 	require.Equal(t, map[string]string{
-		"display_name":     columnDisplayName("excess_return"),
+		"display_name":     "excess_return",
 		"origin_factor_id": "excess",
 		"factor_output":    "excess_return",
 	}, client.upsertedColumns[0].GetAttributes())
@@ -325,12 +343,18 @@ func successRet() *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
 }
 
-func TestColumnAndDatasetDisplayName(t *testing.T) {
-	assert.Equal(t, "因子14", columnDisplayName("sma_14"))
-	assert.Equal(t, "因子", columnDisplayName("nounderscore"))
+func TestDatasetDisplayName(t *testing.T) {
 	name := datasetDisplayName("spot_kline_1h")
 	assert.Contains(t, name, "因子")
 	assert.LessOrEqual(t, len([]rune(name)), 10)
+}
+
+func TestFactorOutputAttributesUseDefinitionOutputAsDisplayName(t *testing.T) {
+	assert.Equal(t, map[string]string{
+		"display_name":     "bias_20",
+		"origin_factor_id": "bias",
+		"factor_output":    "bias_20",
+	}, factorOutputAttributes("bias", "bias_20"))
 }
 
 func TestFactorResultAttributesAndMerge(t *testing.T) {

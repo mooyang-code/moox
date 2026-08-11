@@ -179,6 +179,13 @@ type Engine interface {
 	Remove(context.Context, string) error
 }
 
+// ExistenceChecker is the lightweight physical-index probe used by the live
+// event path. Stat may scan the whole index to calculate coverage and counts,
+// which is far too expensive to run before every row write.
+type ExistenceChecker interface {
+	Exists(context.Context, string) (bool, error)
+}
+
 func RowKeyID(k *pb.RowKey) string {
 	raw, _ := protojson.Marshal(k)
 	sum := sha256.Sum256(raw)

@@ -63,12 +63,12 @@ func (s bindingTaskRepositoryStub) ListExecutable(context.Context) ([]domain.Fac
 	return s.bindings, s.err
 }
 
-func (s *startupContractValidatorStub) ValidateAllEnabledBindings(context.Context) error {
+func (s *startupContractValidatorStub) ReconcileAllEnabledBindings(context.Context) error {
 	s.calls++
 	return s.err
 }
 
-func TestValidateStartupFactorContractsFailsClosed(t *testing.T) {
+func TestReconcileStartupFactorContractsFailsClosed(t *testing.T) {
 	validator := &startupContractValidatorStub{err: errors.New("persisted binding cycle")}
 	err := validateStartupFactorContracts(context.Background(), validator)
 	require.ErrorContains(t, err, "persisted binding cycle")

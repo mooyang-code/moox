@@ -107,14 +107,14 @@ describe("Kline series tag isolation", () => {
 });
 
 describe("view factor column labels", () => {
-  it("uses the technical factor output name instead of the localized display name", () => {
+  it("uses the factor output name stored in result metadata", () => {
     const columnName = "bin_e0a2079753cf4faf.bias__bias_5";
     const labels = buildViewColumnLabels(
       [
         {
           column_name: columnName,
           origin_id: columnName,
-          attributes: { display_name: "因子5" }
+          attributes: { display_name: "bias_5", factor_output: "bias_5" }
         } as ViewColumn
       ],
       [
@@ -123,7 +123,7 @@ describe("view factor column labels", () => {
           column_name: "bias__bias_5",
           origin_type: 2,
           origin_id: "bias.bias_5",
-          attributes: { display_name: "因子5", factor_output: "bias_5" }
+          attributes: { display_name: "bias_5", factor_output: "bias_5" }
         } as DatasetColumn
       ],
       [],

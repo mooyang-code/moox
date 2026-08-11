@@ -86,9 +86,32 @@ func TestLoadSetupFactorsUsesRepositoryDefaultsWhenItemsAreOmitted(t *testing.T)
 		Enabled: true, SourceDir: "examples/factors",
 	}}, root)
 	require.NoError(t, err)
-	require.Len(t, items, 2)
+	require.Len(t, items, 4)
 	require.Equal(t, "bias", items[0].FactorID)
 	require.Equal(t, "cci", items[1].FactorID)
+	require.Equal(t, "ma", items[2].FactorID)
+	require.Equal(t, "sma", items[3].FactorID)
+}
+
+func TestDefaultSetupFactorItemsIncludeMovingAverages(t *testing.T) {
+	items := defaultSetupFactorItems()
+	byID := make(map[string]setupconfig.FactorSetupItem, len(items))
+	for _, item := range items {
+		byID[item.FactorID] = item
+	}
+
+	ma, ok := byID["ma"]
+	require.True(t, ok)
+	require.Equal(t, "timeseries/ma.py", ma.File)
+	require.Equal(t, []string{"ma_5", "ma_20"}, ma.Outputs)
+	require.Equal(t, 20, ma.LookbackPeriods)
+
+	sma, ok := byID["sma"]
+	require.True(t, ok)
+	require.Equal(t, "timeseries/sma.py", sma.File)
+	require.Equal(t, []string{"sma_5", "sma_20"}, sma.Outputs)
+	require.JSONEq(t, `{"windows":[5,20],"m":1}`, sma.ParamsJSON)
+	require.Equal(t, 600, sma.LookbackPeriods)
 }
 
 func TestLoadSetupFactorsRejectsSourcePathEscape(t *testing.T) {

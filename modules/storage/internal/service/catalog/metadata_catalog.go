@@ -609,7 +609,7 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
 	}
-	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetAttributes()); err != nil {
+	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetAttributes(), isFactorDatasetColumn(item)); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)

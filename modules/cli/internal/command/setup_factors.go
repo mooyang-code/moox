@@ -70,6 +70,20 @@ func defaultSetupFactorItems() []setupconfig.FactorSetupItem {
 			SpaceID: "crypto_market", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
 			SubjectMode: "all", Status: "enabled",
 		},
+		{
+			FactorID: "ma", File: "timeseries/ma.py", Name: "ma",
+			InputColumns: []string{"close"}, Outputs: []string{"ma_5", "ma_20"},
+			ParamsJSON: `{"windows":[5,20]}`, LookbackPeriods: 20,
+			SpaceID: "crypto_market", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
+			SubjectMode: "all", Status: "enabled",
+		},
+		{
+			FactorID: "sma", File: "timeseries/sma.py", Name: "sma",
+			InputColumns: []string{"close"}, Outputs: []string{"sma_5", "sma_20"},
+			ParamsJSON: `{"windows":[5,20],"m":1}`, LookbackPeriods: 600,
+			SpaceID: "crypto_market", SourceViewID: "binance_spot_kline_1m_view", Freq: "1m",
+			SubjectMode: "all", Status: "enabled",
+		},
 	}
 }
 

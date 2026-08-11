@@ -545,11 +545,7 @@ func (s *MetadataSync) upsertColumn(ctx context.Context, spaceID string, dataset
 			ValueType:  storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			Required:   false,
 			Status:     "active",
-			Attributes: map[string]string{
-				"display_name":     columnDisplayName(columnName),
-				"origin_factor_id": factor.FactorID,
-				"factor_output":    columnName,
-			},
+			Attributes: factorOutputAttributes(factor.FactorID, columnName),
 		},
 	}
 	rsp, err := s.client.UpsertDatasetColumn(ctx, req)
@@ -706,9 +702,8 @@ func (s *MetadataSync) upsertResultColumn(ctx context.Context, spaceID, datasetI
 		SpaceId: spaceID, DatasetId: datasetID, ColumnName: fieldID,
 		OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
 		OriginId:   factorColumnOriginID(factor.FactorID, output), ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		Status: "active", Attributes: map[string]string{
-			"display_name": columnDisplayName(output), "origin_factor_id": factor.FactorID, "factor_output": output,
-		},
+		Status:     "active",
+		Attributes: factorOutputAttributes(factor.FactorID, output),
 	}})
 	if err != nil {
 		return err
@@ -809,7 +804,7 @@ func (s *MetadataSync) ensureManagedResultView(ctx context.Context, binding doma
 				SpaceId: binding.SpaceID, ViewId: binding.ResultViewID, ColumnName: qualified,
 				OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 				OriginId:   qualified, ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-				Attributes: map[string]string{"display_name": columnDisplayName(output)},
+				Attributes: factorOutputAttributes(factor.FactorID, output),
 			}})
 			if upsertErr != nil {
 				return upsertErr
@@ -851,6 +846,9 @@ func (s *MetadataSync) resultViewReady(ctx context.Context, binding domain.Facto
 		return false, err
 	}
 	if view.GetStatus() != "active" || strings.TrimSpace(view.GetActiveIndexId()) == "" {
+		return false, nil
+	}
+	if view.GetActiveViewRevision() < view.GetDesiredViewRevision() {
 		return false, nil
 	}
 	active := make(map[string]struct{}, len(view.GetActiveColumns()))
@@ -997,16 +995,13 @@ func activationNotReadyError(spaceID, datasetID string, checks []*storagepb.Data
 	return fmt.Errorf("dataset %s/%s activation readiness failed: %s", spaceID, datasetID, strings.Join(failed, "; "))
 }
 
-func columnDisplayName(columnName string) string {
-	suffix := ""
-	if idx := strings.LastIndex(columnName, "_"); idx >= 0 && idx+1 < len(columnName) {
-		suffix = columnName[idx+1:]
+func factorOutputAttributes(factorID, output string) map[string]string {
+	output = strings.TrimSpace(output)
+	return map[string]string{
+		"display_name":     output,
+		"origin_factor_id": strings.TrimSpace(factorID),
+		"factor_output":    output,
 	}
-	name := "因子" + suffix
-	if len([]rune(name)) <= 10 {
-		return name
-	}
-	return "因子列"
 }
 
 func datasetDisplayName(datasetID string) string {

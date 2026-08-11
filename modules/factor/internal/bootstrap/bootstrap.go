@@ -353,15 +353,15 @@ type metricsReporter interface {
 }
 
 type startupContractValidator interface {
-	ValidateAllEnabledBindings(context.Context) error
+	ReconcileAllEnabledBindings(context.Context) error
 }
 
 func validateStartupFactorContracts(ctx context.Context, validator startupContractValidator) error {
 	if validator == nil {
 		return fmt.Errorf("factor startup contract validator is required")
 	}
-	if err := validator.ValidateAllEnabledBindings(ctx); err != nil {
-		return fmt.Errorf("validate persisted factor contracts: %w", err)
+	if err := validator.ReconcileAllEnabledBindings(ctx); err != nil {
+		return fmt.Errorf("reconcile persisted factor contracts: %w", err)
 	}
 	return nil
 }

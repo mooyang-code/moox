@@ -136,7 +136,7 @@ message ViewColumn {
   string created_at = 9;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 10;
-  // attributes 是扩展属性；display_name 是用户可见中文列名，创建和更新时必须包含中文且不超过 10 个字符。
+  // attributes 是扩展属性；Factor 结果列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 11;
 }
 
@@ -376,7 +376,7 @@ message DatasetColumn {
   string created_at = 10;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
   string updated_at = 11;
-  // attributes 是扩展属性；display_name 是用户可见中文列名，创建和更新时必须包含中文且不超过 10 个字符。
+  // attributes 是扩展属性；Factor 结果列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
   map<string, string> attributes = 12;
 }
 

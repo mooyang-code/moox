@@ -26,5 +26,6 @@ func (*IndexManager) Query(context.Context, string, viewindex.QuerySpec) ([]*pb.
 func (*IndexManager) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
 	return viewindex.ViewIndexStats{}, ErrUnavailable
 }
-func (*IndexManager) Remove(context.Context, string) error { return ErrUnavailable }
-func (*IndexManager) Close() error                         { return nil }
+func (*IndexManager) Exists(context.Context, string) (bool, error) { return false, ErrUnavailable }
+func (*IndexManager) Remove(context.Context, string) error         { return ErrUnavailable }
+func (*IndexManager) Close() error                                 { return nil }

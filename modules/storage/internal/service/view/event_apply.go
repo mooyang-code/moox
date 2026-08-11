@@ -78,8 +78,16 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		if activeErr == nil && activeReady {
 			if err := s.applyEventToIndex(ctx, activeID, datasetID, rows); err != nil {
 				log.Printf("storage view active index write failed space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, datasetID, err)
-				runtime.mu.Unlock()
-				return err
+				if nextID == "" {
+					runtime.mu.Unlock()
+					return err
+				}
+				// A lightweight existence check only proves that the index path is
+				// present. If the active index is corrupt or otherwise unwritable,
+				// preserve the row in the replacement before keeping this delivery
+				// pending for activation.
+				activeFailure = err
+				activeReady = false
 			}
 		} else if activeErr == nil {
 			// A stale active pointer can survive a crash while the replacement
@@ -147,6 +155,9 @@ func (s *Service) liveIndexReady(ctx context.Context, indexID string) (bool, err
 			return false, nil
 		}
 		return false, err
+	}
+	if checker, ok := engine.(viewindex.ExistenceChecker); ok {
+		return checker.Exists(ctx, indexID)
 	}
 	stats, err := engine.Stat(ctx, indexID)
 	if err != nil {

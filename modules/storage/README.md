@@ -72,7 +72,11 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 - Record View 使用真实 Bleve 索引并支持全文搜索。
 - 每个 View 使用 A/B 两个独立索引。
 - 重建期间实时消息同时写 Active 和 New。
-- Backfill 每批最多 100 行，只填充缺失值，不覆盖实时写。
+- Backfill 每批最多 10000 行，只填充缺失值，不覆盖实时写。
+- DuckDB 默认内存上限为 `512MB`；需要重建较大 View 时可通过
+  `MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT` 调整。
+- 每个 DuckDB View 最多保留 8 个连接，允许因子读取与实时写入并行，
+  避免读取窗口把结果写入长期堵在单连接队列后。
 - Desired Revision、关联 Dataset 或超过 `2 * keep_duration` 会触发 Reconcile。
 - Metadata 激活后，DataView 原子切换 Active 索引；宽限期后删除 OldView。
 

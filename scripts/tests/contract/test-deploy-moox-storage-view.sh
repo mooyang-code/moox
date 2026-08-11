@@ -113,7 +113,7 @@ GATEWAY_ARGS=(
   --gateway-service-key-file "${TMP_ROOT}/service.key"
 )
 
-MOOX_EVENTBUS_ENABLE_TLS=1 "${ROOT}/scripts/deploy-moox.sh" \
+MOOX_EVENTBUS_ENABLE_TLS=1 MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=256MB "${ROOT}/scripts/deploy-moox.sh" \
   --target localhost \
   --dir "${DEPLOY_DIR}" \
   --stage "${STAGE_DIR}" \
@@ -148,7 +148,7 @@ assert_grep '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${DEPLOY_DIR}/secret
 assert_grep '^MOOX_HEALTH_AUTH_VERSION=moox-health-v1$' "${DEPLOY_DIR}/secrets/health-auth.env"
 assert_grep '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DEPLOY_DIR}/secrets/health-auth.env"
 secret_before=$(cat "${DEPLOY_DIR}/secrets/health-auth.env")
-MOOX_EVENTBUS_ENABLE_TLS=1 "${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --with-storage-node --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
+MOOX_EVENTBUS_ENABLE_TLS=1 MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=256MB "${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${DEPLOY_DIR}" --stage "${STAGE_DIR}" --skip-build --with-storage-node --no-start --no-web-host --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null
 [[ $(cat "${DEPLOY_DIR}/secrets/health-auth.env") == "${secret_before}" ]] || { echo 'health auth secret changed on redeploy' >&2; exit 1; }
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'source "\$\{ROOT\}/secrets/health-auth.env"' "${DEPLOY_DIR}/healthcheck.sh"
@@ -187,6 +187,10 @@ fi
 assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
+assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-512MB\}' "${DEPLOY_DIR}/start.sh"
+assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{quoted_storage_view_duckdb_memory_limit\}' "${ROOT}/scripts/deploy-moox.sh"
+assert_grep '^MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=256MB$' "${DEPLOY_DIR}/config/components.env"
+assert_grep '^MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-\$\{MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT\}\}$' "${DEPLOY_DIR}/config/components.env"
 if grep -Eq 'wait_eventbus_storage_view_topology|storage_view durable topology' "${DEPLOY_DIR}/start.sh"; then
   echo "storage-view must create and own its Consumer instead of waiting for EventBus topology" >&2
   exit 1

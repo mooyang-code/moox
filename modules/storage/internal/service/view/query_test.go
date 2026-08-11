@@ -18,14 +18,32 @@ type queryEngine struct {
 	statErr   error
 	calls     int
 	statCalls int
+	writeErrs map[string]error
+	writes    map[string]int
+}
+
+type existenceQueryEngine struct {
+	*queryEngine
+	exists      bool
+	existsErr   error
+	existsCalls int
+}
+
+func (e *existenceQueryEngine) Exists(context.Context, string) (bool, error) {
+	e.existsCalls++
+	return e.exists, e.existsErr
 }
 
 func (*queryEngine) Engine() string { return "query-test" }
 func (*queryEngine) Prepare(context.Context, string, viewindex.ViewIndexSchema) error {
 	return nil
 }
-func (*queryEngine) Write(context.Context, string, viewindex.ViewIndexWriteBatch) error {
-	return nil
+func (e *queryEngine) Write(_ context.Context, indexID string, _ viewindex.ViewIndexWriteBatch) error {
+	if e.writes == nil {
+		e.writes = map[string]int{}
+	}
+	e.writes[indexID]++
+	return e.writeErrs[indexID]
 }
 func (e *queryEngine) Query(_ context.Context, _ string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
 	e.calls++
@@ -37,6 +55,54 @@ func (e *queryEngine) Stat(context.Context, string) (viewindex.ViewIndexStats, e
 	return e.stats, e.statErr
 }
 func (*queryEngine) Remove(context.Context, string) error { return nil }
+
+func TestLiveIndexReadyUsesLightweightExistenceCheck(t *testing.T) {
+	engine := &existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}
+	svc, _ := queryTestService(engine, true)
+	ready, err := svc.liveIndexReady(context.Background(), "prices-index")
+	if err != nil || !ready {
+		t.Fatalf("liveIndexReady ready=%v err=%v", ready, err)
+	}
+	if engine.existsCalls != 1 || engine.statCalls != 0 {
+		t.Fatalf("exists calls=%d stat calls=%d, want 1 and 0", engine.existsCalls, engine.statCalls)
+	}
+}
+
+func TestLiveWritePreservesRowInReplacementWhenExistingActiveIsUnwritable(t *testing.T) {
+	activeErr := errors.New("active index is corrupt")
+	engine := &existenceQueryEngine{
+		queryEngine: &queryEngine{writeErrs: map[string]error{"prices-index": activeErr}},
+		exists:      true,
+	}
+	svc, _ := queryTestService(engine, true)
+	key := viewRef{spaceID: "space", viewID: "prices"}
+	svc.views[key].next = "prices-next"
+	svc.views[key].status = "building"
+	svc.indexEngine["prices-next"] = "query-test"
+	svc.schemas["prices-index"] = viewindex.ViewIndexSchema{
+		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market",
+		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+	}
+	svc.schemas["prices-next"] = svc.schemas["prices-index"]
+	svc.indexView = map[string]viewRef{"prices-index": key, "prices-next": key}
+	svc.byData = map[datasetRef]map[string]struct{}{
+		{spaceID: "space", datasetID: "market"}: {"prices-index": {}, "prices-next": {}},
+	}
+
+	err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{{
+		Key: timeSeriesTestRowKey("venue:binance"),
+		Fields: []*pb.FieldValue{{
+			FieldId: "close",
+			Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
+		}},
+	}})
+	if !errors.Is(err, activeErr) {
+		t.Fatalf("apply error=%v, want active failure", err)
+	}
+	if engine.writes["prices-index"] != 1 || engine.writes["prices-next"] != 1 {
+		t.Fatalf("writes=%v, want one active attempt and one replacement write", engine.writes)
+	}
+}
 
 func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testing.T) {
 	engine := &queryEngine{}

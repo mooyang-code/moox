@@ -202,6 +202,18 @@ func (i *Index) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, 
 	return stats, nil
 }
 
+func (i *Index) Exists(_ context.Context, id string) (bool, error) {
+	path, err := i.path(id)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (i *Index) Remove(_ context.Context, id string) error {
 	if err := i.close(id); err != nil {
 		return err

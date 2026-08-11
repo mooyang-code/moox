@@ -675,7 +675,7 @@ type ViewColumn struct {
 	CreatedAt string `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// updated_at 是最后更新时间，使用项目统一时间字符串格式。
 	UpdatedAt string `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// attributes 是扩展属性；display_name 是用户可见中文列名，创建和更新时必须包含中文且不超过 10 个字符。
+	// attributes 是扩展属性；Factor 结果列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
 	Attributes map[string]string `protobuf:"bytes,11,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
@@ -1946,7 +1946,7 @@ type DatasetColumn struct {
 	CreatedAt string `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// updated_at 是最后更新时间，使用项目统一时间字符串格式。
 	UpdatedAt string `protobuf:"bytes,11,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// attributes 是扩展属性；display_name 是用户可见中文列名，创建和更新时必须包含中文且不超过 10 个字符。
+	// attributes 是扩展属性；Factor 结果列的 display_name 必须等于 factor_output，其他业务列必须包含中文且不超过 10 个字符。
 	Attributes map[string]string `protobuf:"bytes,12,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 

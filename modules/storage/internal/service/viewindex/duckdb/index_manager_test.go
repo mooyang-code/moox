@@ -59,6 +59,31 @@ func TestOpenAppliesResourceLimits(t *testing.T) {
 	}
 }
 
+func TestOpenUsesDefaultMemoryLimit(t *testing.T) {
+	t.Setenv(duckDBMemoryLimitEnv, "")
+	db, err := open(filepath.Join(t.TempDir(), "view.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got := db.Stats().MaxOpenConnections; got != defaultMaxOpenConns {
+		t.Fatalf("max open connections=%d, want %d", got, defaultMaxOpenConns)
+	}
+
+	var memoryLimit string
+	if err := db.QueryRow(`SELECT current_setting('memory_limit')`).Scan(&memoryLimit); err != nil {
+		t.Fatal(err)
+	}
+	var memoryMiB float64
+	var memoryUnit string
+	if _, err := fmt.Sscanf(memoryLimit, "%f %s", &memoryMiB, &memoryUnit); err != nil {
+		t.Fatalf("memory_limit=%q is not a DuckDB memory value: %v", memoryLimit, err)
+	}
+	if memoryMiB < 480 || memoryMiB > 500 || !strings.EqualFold(memoryUnit, "MiB") {
+		t.Fatalf("memory_limit=%q, want approximately 512MB", memoryLimit)
+	}
+}
+
 func rowTags(rows []*pb.RowFieldValues) []string {
 	tags := make([]string, 0, len(rows))
 	for _, row := range rows {
