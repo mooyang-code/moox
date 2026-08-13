@@ -157,7 +157,7 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("expected command: init, import-seed, register-node, or activate-datasets")
+		return fmt.Errorf("expected command: init, import-seed, register-node, activate-datasets, or repair-view")
 	}
 	switch args[0] {
 	case "init":
@@ -168,8 +168,10 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		return runRegisterNode(trpc.BackgroundContext(), args[1:], stdout, newMetadataDeploymentClient, newDataNodeRuntimeClient)
 	case "activate-datasets":
 		return runActivateDatasets(trpc.BackgroundContext(), args[1:], stdout, newMetadataDeploymentClient)
+	case "repair-view":
+		return runRepairView(args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("unknown command %q: use init, import-seed, register-node, or activate-datasets", args[0])
+		return fmt.Errorf("unknown command %q: use init, import-seed, register-node, activate-datasets, or repair-view", args[0])
 	}
 }
 

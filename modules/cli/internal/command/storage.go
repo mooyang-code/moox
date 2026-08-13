@@ -1,6 +1,17 @@
 package command
 
-import "github.com/spf13/cobra"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
 
 var storageCmd = &cobra.Command{
 	Use:     "storage",
@@ -14,4 +25,74 @@ var storageCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(storageCmd)
+	storageCmd.AddCommand(storageRepairViewCmd)
+}
+
+// storageRepairViewCmd delegates the maintenance implementation to the
+// storage module binary. Keeping the SQLite/NATS maintenance code next to the
+// storage schema avoids duplicating internal storage knowledge in the root
+// CLI, while still exposing one self-service moox-cli command.
+var storageRepairViewCmd = &cobra.Command{
+	Use:                "repair-view [flags]",
+	Aliases:            []string{"修复视图", "repair"},
+	Short:              "清理 View 消费积压并触发安全的 A/B 重建",
+	DisableFlagParsing: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runStorageMaintenanceBinary(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), args)
+	},
+}
+
+func runStorageMaintenanceBinary(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args []string) error {
+	path, err := resolveStorageMaintenanceBinary()
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 {
+		args = []string{"--help"}
+	}
+	cmd := exec.CommandContext(ctx, path, append([]string{"repair-view"}, args...)...)
+	cmd.Stdin = stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return fmt.Errorf("moox-storage-cli repair-view failed with exit code %d", exitErr.ExitCode())
+		}
+		return fmt.Errorf("run moox-storage-cli repair-view: %w", err)
+	}
+	return nil
+}
+
+func resolveStorageMaintenanceBinary() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CLI")); configured != "" {
+		if isExecutableFile(configured) {
+			return configured, nil
+		}
+		return "", fmt.Errorf("MOOX_STORAGE_CLI %q is not executable", configured)
+	}
+	if executable, err := os.Executable(); err == nil {
+		dir := filepath.Dir(executable)
+		for _, candidate := range []string{
+			filepath.Join(dir, "moox-storage-cli"),
+			filepath.Join(dir, "moox-storage-primary-cli"),
+			filepath.Join(dir, "..", "storage-primary", "bin", "moox-storage-primary-cli"),
+		} {
+			if isExecutableFile(candidate) {
+				return candidate, nil
+			}
+		}
+	}
+	if path, err := exec.LookPath("moox-storage-cli"); err == nil {
+		return path, nil
+	}
+	if path, err := exec.LookPath("moox-storage-primary-cli"); err == nil {
+		return path, nil
+	}
+	return "", errors.New("moox-storage-cli was not found; set MOOX_STORAGE_CLI or install the storage CLI beside moox-cli")
+}
+
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }

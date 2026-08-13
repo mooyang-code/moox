@@ -9,6 +9,7 @@ moox-cli metadata import ...        # 导入 Storage 元数据 seed
 moox-cli metadata apply ...         # 创建并校验 Storage 元数据契约（不覆盖已有不兼容资源）
 moox-cli setup init ...             # 一次初始化 Admin 空间、Storage 元数据与 Dataset
 moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
+moox-cli storage repair-view ...    # 清理 View durable consumer 积压并触发 A/B 重建
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
@@ -16,6 +17,35 @@ moox-cli setup ...                  # 初始化控制面、发布服务包、部
 ```
 
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
+
+### View 自助修复
+
+当 Storage View 因 durable consumer 积压、重建失败或旧索引占用空间而停止追赶时，
+可在 Storage 主机上执行：
+
+```bash
+moox-cli storage repair-view \
+  --storage-conf /home/ubuntu/moox/storage/config/storage.yaml \
+  --package-root /home/ubuntu/moox/storage \
+  --space-id crypto_market \
+  --view-id binance_spot_kline_1m_factor \
+  --yes
+```
+
+默认流程会停止并重启 `storage-view`、删除 `storage_view_period_v1` durable consumer、
+备份 Metadata SQLite，并递增 View desired revision，让服务走正常的 A/B 构建和切换；
+active 索引不会被删除。NATS 删除 consumer 需要 EventBus internal-admin 凭据，使用
+`--credential-file` 或 `MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE` 指定，命令不会输出凭据。
+先执行 `--dry-run` 可只检查 View 和将要执行的动作。
+
+只有在确认保留的 Source 事件能够完整重放时，才使用高风险的全量索引重置：
+
+```bash
+moox-cli storage repair-view ... --reset-view-indexes --deliver-policy=all --yes
+```
+
+该选项会删除 active/inactive 两个物理索引并清空 Metadata active 指针，依赖 JetStream
+保留的 Source 事件重新生成；命令仍会先备份 Metadata。默认的安全修复不需要该选项。
 
 ## 控制面初始化
 
