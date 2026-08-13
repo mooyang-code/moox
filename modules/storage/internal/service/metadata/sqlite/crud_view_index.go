@@ -54,6 +54,9 @@ func mergeViewIndexState(existing *pb.View, item *pb.View, shapeChanged bool) {
 		} else if value := existing.GetPrimaryDatasetId(); value != "" {
 			item.Attributes["moox.active_primary_dataset_id"] = value
 		}
+		if value := existing.GetAttributes()["moox.columns_explicit"]; value != "" && item.Attributes["moox.columns_explicit"] == "" {
+			item.Attributes["moox.columns_explicit"] = value
+		}
 	}
 	item.DesiredViewRevision = existing.GetDesiredViewRevision()
 	if item.DesiredViewRevision == 0 {
@@ -69,8 +72,7 @@ func viewIndexShapeChanged(existing *pb.View, next *pb.View) bool {
 		!slices.Equal(existing.GetDatasetIds(), next.GetDatasetIds()) ||
 		!slices.Equal(existing.GetGrainKeys(), next.GetGrainKeys()) ||
 		existing.GetFilterJson() != next.GetFilterJson() ||
-		existing.GetEngine() != next.GetEngine() ||
-		existing.GetKeepDuration() != next.GetKeepDuration()
+		existing.GetEngine() != next.GetEngine()
 }
 
 func bumpViewVersion(ctx context.Context, tx *sql.Tx, spaceID, viewID string) error {

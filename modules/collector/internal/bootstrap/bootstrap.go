@@ -5,21 +5,25 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	runtimeapp "github.com/mooyang-code/moox/modules/collector/internal/app/runtime"
 	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
+	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectsvc "github.com/mooyang-code/moox/modules/collector/internal/rpc"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -102,13 +106,49 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)
 	marketFetchMetrics.SetDatasetRunObserver(datasetRunObserver)
-	dnsCache := dnscache.New(dnscache.Config{Domains: cfg.DNS.Domains, RefreshInterval: cfg.DNS.RefreshInterval, ResolveTimeout: cfg.DNS.ResolveTimeout, Nameservers: cfg.DNS.Nameservers})
-	if err := dnsCache.Refresh(ctx); err != nil {
+	dnsDomains := append([]string(nil), cfg.DNS.Domains...)
+	if cfg.DNSResolver.Enabled {
+		dnsDomains = append(dnsDomains, cfg.DNSResolver.Domains...)
+	}
+	localDNS := dnscache.New(dnscache.Config{Domains: dnsDomains, RefreshInterval: cfg.DNS.RefreshInterval, ResolveTimeout: cfg.DNS.ResolveTimeout, Nameservers: cfg.DNS.Nameservers})
+	var remoteDNS collectordns.DomainResolver
+	if cfg.DNSResolver.Enabled {
+		// The resolver call is a native Gateway call made as the collector
+		// caller. SysDeploy's service credential is reserved for the control
+		// plane dependency API and must not be reused for Trade RPCs.
+		remoteDNS = collectordns.NewTradeClient(
+			cfg.DNSResolver.Target,
+			cfg.DNSResolver.NodeID,
+			gatewayauth.CredentialsFromEnv(),
+			cfg.DNSResolver.RequestTimeout,
+		)
+	}
+	refreshInterval, cacheTTL := cfg.DNS.RefreshInterval, cfg.DNS.RefreshInterval
+	if cfg.DNSResolver.Enabled {
+		refreshInterval, cacheTTL = cfg.DNSResolver.RefreshInterval, cfg.DNSResolver.CacheTTL
+	} else {
+		cacheTTL = 0 // preserve dnscache's last-good local snapshot semantics
+	}
+	var dnsMetrics *collectordns.Metrics
+	if metrics, metricsErr := collectordns.NewMetrics(prometheus.DefaultRegisterer); metricsErr != nil {
+		log.WarnContextf(ctx, "collector DNS resolver metrics disabled: %v", metricsErr)
+	} else {
+		dnsMetrics = metrics
+	}
+	dnsPersistencePath := ""
+	if cfg.DNSResolver.Enabled {
+		dnsPersistencePath = filepath.Join(filepath.Dir(cfg.Database.Path), "dns_resolver_snapshot.json")
+	}
+	dnsSnapshot := collectordns.NewCoordinatorWithMetricsAndPersistence(localDNS, remoteDNS, dnsDomains, refreshInterval, cacheTTL, dnsMetrics, dnsPersistencePath)
+	if err := dnsSnapshot.RestoreLastGoodSnapshot(); err != nil {
+		log.WarnContextf(ctx, "restore collector DNS last-good snapshot failed: %v", err)
+	}
+	if err := dnsSnapshot.Refresh(ctx); err != nil {
 		log.WarnContextf(ctx, "collector initial DNS snapshot refresh failed: %v", err)
 	}
-	registerDNSRefreshSchedule(s, dnsCache)
-	registerMarketFetchSchedule(s, cfg, deps, dbm, dnsCache, marketFetchMetrics)
-	if err := registerHealth(s, cfg, dbm); err != nil {
+	registerDNSRefreshSchedule(s, dnsSnapshot)
+	registerMarketFetchSchedule(s, cfg, deps, dbm, dnsSnapshot, marketFetchMetrics)
+	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {
 		return nil, err
 	}
 	registerMetricsReporter(s, realtimeInventory)
@@ -161,12 +201,16 @@ func metricsTimerHandler(inventory realtimeInventoryReconciler, reporter metrics
 	}
 }
 
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store) error {
+type dnsStatusProvider interface {
+	Status() collectordns.Status
+}
+
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, dns ...dnsStatusProvider) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("collector", "collector", "", "")
-	state.SnapshotFunc = collectorHealthSnapshot(cfg, dbm, state)
+	state.SnapshotFunc = collectorHealthSnapshot(cfg, dbm, state, dns...)
 	if s == nil {
 		return fmt.Errorf("collector health service is unavailable")
 	}
@@ -176,7 +220,7 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store) error {
 	return nil
 }
 
-func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {
+func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State, dns ...dnsStatusProvider) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		// Do not synchronously ping SQLite from /readyz. The collector's single
 		// SQLite connection is intentionally shared by the scheduler and the
@@ -190,11 +234,44 @@ func collectorHealthSnapshot(cfg *Config, dbm *store.Store, state *health.State)
 			"cloudnode_address":          cfg.CloudNode.Address,
 			"storage_rpc_gateway_target": cfg.Storage.GatewayTarget,
 		}
+		if cfg.DNSResolver.Enabled {
+			if len(dns) > 0 && dns[0] != nil {
+				status := dns[0].Status()
+				rsp.Details["dns_resolver"] = map[string]any{
+					"enabled":             true,
+					"source":              status.Source,
+					"hash":                status.Hash,
+					"managed_hash":        status.ManagedHash,
+					"route_count":         status.RouteCount,
+					"route_age_seconds":   status.RouteAgeSeconds,
+					"last_refresh_at":     formatHealthTime(status.LastRefreshAt),
+					"last_success_at":     formatHealthTime(status.LastSuccessAt),
+					"last_error_category": status.LastErrorCategory,
+				}
+			} else {
+				rsp.Details["dns_resolver"] = map[string]any{"enabled": true, "source": "unavailable"}
+			}
+		} else {
+			rsp.Details["dns_resolver"] = map[string]any{"enabled": false, "source": "local"}
+		}
 		return rsp
 	}
 }
 
-func registerDNSRefreshSchedule(s *server.Server, cache *dnscache.Cache) {
+func formatHealthTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+type dnsSnapshotter interface {
+	Due(time.Time) bool
+	Refresh(context.Context) error
+	Snapshot() map[string]sources.DNSResolution
+}
+
+func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter) {
 	if s == nil || cache == nil {
 		return
 	}
@@ -216,7 +293,7 @@ func registerDNSRefreshSchedule(s *server.Server, cache *dnscache.Cache) {
 	})
 }
 
-func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, dnsCache *dnscache.Cache, metrics *marketfetch.Metrics) {
+func registerMarketFetchSchedule(s *server.Server, cfg *Config, deps Dependencies, dbm *store.Store, dnsCache dnsSnapshotter, metrics *marketfetch.Metrics) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}

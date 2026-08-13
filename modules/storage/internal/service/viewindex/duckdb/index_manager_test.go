@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,6 +82,43 @@ func TestOpenUsesDefaultMemoryLimit(t *testing.T) {
 	}
 	if memoryMiB < 480 || memoryMiB > 500 || !strings.EqualFold(memoryUnit, "MiB") {
 		t.Fatalf("memory_limit=%q, want approximately 512MB", memoryLimit)
+	}
+}
+
+func TestConcurrentColdOpenDoesNotLeaveManagerLocked(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "duckdb")
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
+	first, err := OpenIndexManager(IndexManagerOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, _, _, err := manager.getIndex(context.Background(), "idx")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -455,6 +493,80 @@ func TestOpenIndexManagerAcceptsCurrentSchema(t *testing.T) {
 	if err != nil || !stats.Exists {
 		t.Fatalf("stats=%+v err=%v", stats, err)
 	}
+	if stats.PhysicalBytes == 0 {
+		t.Fatalf("physical bytes=%d, want non-zero", stats.PhysicalBytes)
+	}
+}
+
+func TestOpenIndexManagerDefersExistingIndexValidation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "duckdb")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "inactive.duckdb")
+	db, err := sql.Open("duckdb", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE not_a_view (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: root})
+	if err != nil {
+		t.Fatalf("incompatible inactive index blocked startup: %v", err)
+	}
+	defer manager.Close()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("existing index should remain for metadata recovery, stat err=%v", err)
+	}
+}
+
+func TestOpenIndexManagerRemovesInterruptedPrepareFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "duckdb")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tempPath := filepath.Join(root, "slot.duckdb.prepare-123")
+	if err := os.WriteFile(tempPath, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenIndexManager(IndexManagerOptions{Root: root}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("interrupted prepare file remains, stat err=%v", err)
+	}
+}
+
+func TestRemoveDeletesDatabaseAndWAL(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "duckdb")
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Prepare(context.Background(), "retired", viewindex.ViewIndexSchema{
+		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path, err := manager.path("retired")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".wal", []byte("stale wal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Remove(context.Background(), "retired"); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{path, path + ".wal"} {
+		if _, err := os.Stat(file); !os.IsNotExist(err) {
+			t.Fatalf("retired index artifact %q still exists, err=%v", file, err)
+		}
+	}
 }
 
 func TestDuckDBPrepareWriteAndPushdownQuery(t *testing.T) {
@@ -745,7 +857,8 @@ func TestDuckDBPrepareDDLAndWriteModes(t *testing.T) {
 		{FieldId: "volume", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: 10}}},
 		{FieldId: "symbol", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "btc-usd"}}},
 	})
-	// LiveWrite overwrites omitted columns to NULL.
+	// LiveWrite updates only the fields present in the patch; omitted columns
+	// remain available for the next factor read.
 	write(viewindex.LiveWrite, []*pb.FieldValue{
 		{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 110}}},
 	})
@@ -759,8 +872,8 @@ func TestDuckDBPrepareDDLAndWriteModes(t *testing.T) {
 			volumePresent = true
 		}
 	}
-	if volumePresent {
-		t.Fatalf("live write should overwrite omitted columns to null: %v", rows[0].GetFields())
+	if !volumePresent {
+		t.Fatalf("live write should preserve omitted columns: %v", rows[0].GetFields())
 	}
 	// Seed again, then Backfill only fills missing.
 	write(viewindex.LiveWrite, []*pb.FieldValue{
@@ -788,8 +901,8 @@ func TestDuckDBPrepareDDLAndWriteModes(t *testing.T) {
 			volumeVal = field.GetValue().GetIntValue()
 		}
 	}
-	if closeVal != 100 || volumeVal != 42 {
-		t.Fatalf("backfill should keep existing close and fill volume: close=%v volume=%v fields=%v", closeVal, volumeVal, rows[0].GetFields())
+	if closeVal != 100 || volumeVal != 10 {
+		t.Fatalf("backfill should keep existing close and volume: close=%v volume=%v fields=%v", closeVal, volumeVal, rows[0].GetFields())
 	}
 	rows, _, err = manager.Query(context.Background(), "idx", viewindex.QuerySpec{
 		Groups: []viewindex.FilterGroup{{Conds: []viewindex.Filter{{Column: "symbol", Op: pb.FilterOp_FILTER_OP_LIKE, Values: []*pb.TypedValue{{Value: &pb.TypedValue_StringValue{StringValue: "bt"}}}}}}},
@@ -797,6 +910,124 @@ func TestDuckDBPrepareDDLAndWriteModes(t *testing.T) {
 	})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("like substring query: rows=%v err=%v", rows, err)
+	}
+}
+
+func TestDuckDBDuplicateRowKeyUsesLastFieldValue(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	key := duckRowKey("s", "prices", "BTC", "1m", "2026-07-20T00:00:00Z", "venue:binance")
+	value := func(v float64) *pb.FieldValue {
+		return &pb.FieldValue{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: v}}}
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites: []viewindex.RowWrite{
+			{Key: viewindex.RowKey{Key: key}, Fields: []*pb.FieldValue{value(10)}},
+			{Key: viewindex.RowKey{Key: key}, Fields: []*pb.FieldValue{value(20)}},
+		},
+		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{Keys: []*pb.RowKey{key}, Limit: 1})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("query rows=%v err=%v", rows, err)
+	}
+	if got := rows[0].GetFields()[0].GetValue().GetDoubleValue(); got != 20 {
+		t.Fatalf("close = %v, want last value 20", got)
+	}
+}
+
+func TestDuckDBDuplicatePhysicalRowKeyCollapsesMetadataDifferences(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	value := func(v float64) *pb.FieldValue {
+		return &pb.FieldValue{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: v}}}
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites: []viewindex.RowWrite{
+			{Key: viewindex.RowKey{Key: duckRowKey("space-a", "prices", "BTC", "1m", "2026-07-20T00:00:00Z", "venue:binance")}, Fields: []*pb.FieldValue{value(10)}},
+			{Key: viewindex.RowKey{Key: duckRowKey("space-b", "other-dataset", "BTC", "1m", "2026-07-20T00:00:00Z", "venue:binance")}, Fields: []*pb.FieldValue{value(20)}},
+		},
+		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key := duckRowKey("s", "prices", "BTC", "1m", "2026-07-20T00:00:00Z", "venue:binance")
+	rows, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{Keys: []*pb.RowKey{key}, Limit: 1})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("query rows=%v err=%v", rows, err)
+	}
+	if got := rows[0].GetFields()[0].GetValue().GetDoubleValue(); got != 20 {
+		t.Fatalf("close = %v, want last value 20", got)
+	}
+}
+
+func TestPhysicalRowKeyIDAvoidsDelimiterCollisions(t *testing.T) {
+	first := &pb.RowKey{Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+		SubjectId: "a", Freq: "b\x00c", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "tag",
+	}}}
+	second := &pb.RowKey{Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+		SubjectId: "a\x00b", Freq: "c", DataTime: "2026-07-20T00:00:00Z", SeriesTag: "tag",
+	}}}
+	if got, want := physicalRowKeyID(first), physicalRowKeyID(second); got == want {
+		t.Fatalf("physical row key IDs collide: %q", got)
+	}
+}
+
+func TestPhysicalRowKeyIDCanonicalizesEquivalentTimes(t *testing.T) {
+	first := &pb.RowKey{Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+		SubjectId: "BTC", Freq: "1m", DataTime: "2026-01-01T00:00:00Z", SeriesTag: "venue:binance",
+	}}}
+	second := &pb.RowKey{Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+		SubjectId: "BTC", Freq: "1m", DataTime: "2026-01-01T08:00:00+08:00", SeriesTag: "venue:binance",
+	}}}
+	if got, want := physicalRowKeyID(first), physicalRowKeyID(second); got != want {
+		t.Fatalf("equivalent RFC3339 times have different IDs: %q != %q", got, want)
+	}
+}
+
+func TestDuckDBEquivalentPhysicalTimesCollapseInOneWrite(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash", Columns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	value := func(v float64) *pb.FieldValue {
+		return &pb.FieldValue{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: v}}}
+	}
+	rows := []viewindex.RowWrite{
+		{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", "BTC", "1m", "2026-01-01T00:00:00Z", "venue:binance")}, Fields: []*pb.FieldValue{value(10)}},
+		{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", "BTC", "1m", "2026-01-01T08:00:00+08:00", "venue:binance")}, Fields: []*pb.FieldValue{value(20)}},
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: rows, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}); err != nil {
+		t.Fatal(err)
+	}
+	key := duckRowKey("s", "prices", "BTC", "1m", "2026-01-01T00:00:00Z", "venue:binance")
+	got, _, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{Keys: []*pb.RowKey{key}, Limit: 1})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("query rows=%v err=%v", got, err)
+	}
+	if value := got[0].GetFields()[0].GetValue().GetDoubleValue(); value != 20 {
+		t.Fatalf("close = %v, want last value 20", value)
 	}
 }
 

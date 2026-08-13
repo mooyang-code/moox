@@ -18,7 +18,7 @@ func TestLoadServiceDeploymentSeed_Example(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, seed.Version)
 	require.Equal(t, "control", seed.Node.ID)
-	require.Len(t, seed.Services, 25)
+	require.Len(t, seed.Services, 26)
 	processes := 0
 	for _, service := range seed.Services {
 		if service.DeploymentMode == "process" {
@@ -72,13 +72,68 @@ func TestRunServiceDeploymentsCommand_IsIdempotent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(second.Bytes(), &result))
 	require.Equal(t, 0, result.Created)
-	require.Equal(t, 25, result.Updated)
+	require.Equal(t, 26, result.Updated)
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, db.Table("t_service_deployments").Count(&count).Error)
-	require.Equal(t, int64(25), count)
+	require.Equal(t, int64(26), count)
+}
+
+func TestRunServiceDeploymentsCommand_AllowsScopedResolverImport(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "admin.db")
+	seedPath := filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml")
+	var output bytes.Buffer
+	require.NoError(t, runServiceDeploymentsCommand([]string{
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--node-id", "compute-1", "--public-host", "43.132.204.177",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_dns_resolver",
+	}, &output, &bytes.Buffer{}))
+	var result struct {
+		Services int `json:"services"`
+	}
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+	require.Equal(t, 1, result.Services)
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	var rows []sysdeploy.Deployment
+	require.NoError(t, db.Where("c_node_id = ?", "compute-1").Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, "trade_dns_resolver", rows[0].ServiceName)
+	require.True(t, rows[0].GatewayEnabled)
+	var node sysdeploy.GatewayNode
+	require.NoError(t, db.Where("c_node_id = ?", "compute-1").First(&node).Error)
+	require.Equal(t, "compute-1", node.Name)
+	require.Equal(t, "enabled", node.Status)
+}
+
+func TestScopedResolverImportPreservesExistingNodeMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "admin.db")
+	require.NoError(t, ensureAdminSchema(dbPath))
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&sysdeploy.GatewayNode{NodeID: "compute-1", Name: "operator-name", PublicAddress: "old.example", Status: "disabled"}).Error)
+	var node sysdeploy.GatewayNode
+	seedPath := filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml")
+	var output bytes.Buffer
+	require.NoError(t, runServiceDeploymentsCommand([]string{
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--node-id", "compute-1", "--public-host", "43.132.204.177",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_dns_resolver",
+	}, &output, &bytes.Buffer{}))
+	output.Reset()
+	require.NoError(t, runServiceDeploymentsCommand([]string{
+		"service-deployments", "import", "--db-path", dbPath, "--file", seedPath,
+		"--node-id", "compute-1", "--public-host", "43.132.204.177",
+		"--eventbus-nats-url", "tls://127.0.0.1:4222", "--only-services", "trade_dns_resolver",
+	}, &output, &bytes.Buffer{}))
+	require.NoError(t, db.Where("c_node_id = ?", "compute-1").First(&node).Error)
+	require.Equal(t, "operator-name", node.Name)
+	require.Equal(t, "old.example", node.PublicAddress)
+	require.Equal(t, "disabled", node.Status)
 }
 
 func TestSetSeedEventBusNATSURLPreservesExtraConfig(t *testing.T) {
@@ -149,7 +204,7 @@ func TestEnableOptionalStorageShardReplacesEmbeddedRoute(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, enableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 26)
+	require.Len(t, seed.Services, 27)
 
 	var primary, shard serviceDeploymentEntry
 	for _, item := range seed.Services {
@@ -220,7 +275,7 @@ func TestDisableOptionalStorageShardAddsInactiveOverride(t *testing.T) {
 	seed, err := loadServiceDeploymentSeed(filepath.Join("..", "..", "..", "..", "examples", "setup", "default", "service-deployments.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, disableOptionalStorageShard(&seed))
-	require.Len(t, seed.Services, 26)
+	require.Len(t, seed.Services, 27)
 	shard := seed.Services[len(seed.Services)-1]
 	require.Equal(t, "storage-shard", shard.Name)
 	require.False(t, shard.GatewayEnabled)

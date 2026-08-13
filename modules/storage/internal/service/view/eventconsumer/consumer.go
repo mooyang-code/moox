@@ -60,7 +60,7 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	c.Consumer = strings.TrimSpace(c.Consumer)
 	if strings.TrimSpace(c.Ordering) == "" {
-		c.Ordering = "subject"
+		c.Ordering = "dataset"
 	}
 	c.Ordering = strings.ToLower(strings.TrimSpace(c.Ordering))
 	if c.FetchBatch < 1 {
@@ -72,8 +72,8 @@ func (c Config) withDefaults() (Config, error) {
 	if c.MaxRetryAttempts == 0 || c.MaxRetryAttempts < -1 {
 		return c, errors.New("storage view max_retry_attempts must be -1 or positive")
 	}
-	if c.Ordering != "subject" {
-		return c, fmt.Errorf("storage view ordering %q is unsupported", c.Ordering)
+	if c.Ordering != "dataset" {
+		return c, fmt.Errorf("storage view ordering %q is unsupported; want dataset", c.Ordering)
 	}
 	c.DeliverPolicy = strings.ToLower(strings.TrimSpace(c.DeliverPolicy))
 	if c.DeliverPolicy == "" {
@@ -185,14 +185,16 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 	}
 	opts.Metrics.SetConsumerBound(true)
 	loopCtx, cancel := context.WithCancel(ctx)
-	dispatcher := newSubjectDispatcher(loopCtx, opts.MaxWorkers, opts.MaxAckPending, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+	dispatcher := newSubjectDispatcherWithKey(loopCtx, opts.MaxWorkers, opts.MaxAckPending, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
 		if opts.BeforeProcess != nil {
 			if err := opts.BeforeProcess(ctx, delivery); err != nil {
 				return err
 			}
 		}
 		return c.processDeliveryWithPolicy(ctx, delivery, heartbeat, opts.MaxRetryAttempts)
-	}, opts.ErrorReporter, subjectDispatcherMetricsHooks{
+	}, opts.ErrorReporter, func(delivery *jetstream.Delivery) (string, error) {
+		return datasetQueueKey(c.registry, delivery)
+	}, subjectDispatcherMetricsHooks{
 		newHeartbeat: func(ctx context.Context, delivery *jetstream.Delivery) *deliveryHeartbeat {
 			return newDeliveryHeartbeat(ctx, delivery, deliveryHeartbeatInterval(time.Duration(opts.AckWaitMS)*time.Millisecond), opts.Metrics)
 		},
@@ -240,6 +242,14 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 				} else {
 					opts.Metrics.SetConsumerBound(false)
 					if shouldRebind(fetchErr) {
+						// Tear down the old pull subscription before replacing the
+						// shared NATS connection. Keeping it alive while Reconnect
+						// swaps connections can leave the server with the old pull
+						// binding and make every newly-created subscription invalid.
+						if bound != nil {
+							_ = bound.Close()
+							bound = nil
+						}
 						reportRebind := true
 						if errors.Is(fetchErr, nats.ErrBadSubscription) {
 							consecutiveSubscriptionErrors++
@@ -256,10 +266,6 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 						}
 						if reportRebind {
 							opts.ErrorReporter.Report(fmt.Errorf("rebind storage view deliveries: %w", fetchErr))
-						}
-						if bound != nil {
-							_ = bound.Close()
-							bound = nil
 						}
 						bound = c.rebind(loopCtx, opts)
 						if bound == nil {

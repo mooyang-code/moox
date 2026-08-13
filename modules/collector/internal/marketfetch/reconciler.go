@@ -151,6 +151,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		}
 		dnsHash := environment["MOOX_MARKET_FETCH_DNS_HASH"]
 		if dnsHash == "" && !dnsAvailable {
+			// A failed refresh must not erase the last-known-good SCF route. Keep
+			// the stored identity in the fingerprint so the same stale snapshot
+			// is not submitted on every market-fetch tick. The SCF runtime still
+			// falls back to the hostname whenever its stored route is unusable.
 			dnsHash = currentDNSHash(assignment.NodeID, nodes)
 		}
 		// Disabled nodes do not execute Timer work, so rotating DNS routes do

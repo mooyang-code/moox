@@ -55,6 +55,7 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	metrics.ObserveDelivery("term", "success")
 	metrics.ObservePeriodWaiting("prices-view", "1m", 1)
 	metrics.ObserveReadyPublishRetry("prices-view", "source_period_ready")
+	metrics.ObserveRestore(true, 250*time.Millisecond)
 
 	snapshot := metrics.Snapshot()
 	assert.Equal(t, int64(1), snapshot.ConsumerLagMessages)
@@ -68,6 +69,8 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	assert.Equal(t, int64(1), snapshot.InProgressErrorsTotal)
 	assert.Equal(t, int64(1), snapshot.OutboxPublishErrorsTotal)
 	assert.Equal(t, int64(1), snapshot.OutboxDuplicatePublishTotal)
+	assert.True(t, snapshot.RestoreReady)
+	assert.Equal(t, 250*time.Millisecond, snapshot.RestoreDuration)
 
 	metrics.DecLaneActive()
 	metrics.CompletePendingDelivery(delivery, time.Now())
@@ -93,6 +96,9 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 		"moox_storage_outbox_duplicate_publish_total":        true,
 		"moox_storage_view_period_waiting_datasets":          true,
 		"moox_storage_view_ready_publish_retry_total":        true,
+		"moox_storage_view_restore_duration_seconds":         true,
+		"moox_storage_view_restore_ready":                    true,
+		"moox_storage_view_restore_failures_total":           true,
 	}
 	for _, family := range families {
 		delete(wantNames, family.GetName())

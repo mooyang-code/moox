@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "$(basename "${SCRIPT_DIR}")" == "contract" ]]; then
+  ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
+else
+  ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+fi
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-deploy-storage-view.XXXXXX")"
 DEPLOY_DIR="${TMP_ROOT}/deploy"
 STAGE_DIR="${TMP_ROOT}/stage"
@@ -165,6 +170,10 @@ for mapping in \
   assert_grep "${mapping}" "${DEPLOY_DIR}/healthcheck.sh"
 done
 assert_grep 'health probe failed' "${DEPLOY_DIR}/healthcheck.sh"
+assert_grep 'health-failures' "${DEPLOY_DIR}/healthcheck.sh"
+assert_grep 'holding restart' "${DEPLOY_DIR}/healthcheck.sh"
+assert_grep 'MOOX_HEALTHCHECK_FAILURE_THRESHOLD' "${DEPLOY_DIR}/healthcheck.sh"
+assert_grep 'storage-view.*127\.0\.0\.1:20211/readyz' "${DEPLOY_DIR}/healthcheck.sh"
 assert_grep '"\$\{ROOT\}/stop\.sh" "\$\{name\}"' "${DEPLOY_DIR}/healthcheck.sh"
 assert_grep '"\$\{ROOT\}/start\.sh" "\$\{name\}" 9>&-' "${DEPLOY_DIR}/healthcheck.sh"
 
@@ -188,6 +197,7 @@ assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-512MB\}' "${DEPLOY_DIR}/start.sh"
+assert_grep '^    rebuild_check_interval: 1m$' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{quoted_storage_view_duckdb_memory_limit\}' "${ROOT}/scripts/deploy-moox.sh"
 assert_grep '^MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=256MB$' "${DEPLOY_DIR}/config/components.env"
 assert_grep '^MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-\$\{MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT\}\}$' "${DEPLOY_DIR}/config/components.env"
@@ -208,7 +218,7 @@ assert_order "${DEPLOY_DIR}/start.sh" \
   'wait_tcp 127\.0\.0\.1 20107' \
   '^  register_storage_node$' \
   '^  start_storage_view$' \
-  'wait_http http://127\.0\.0\.1:20211/healthz' \
+  'wait_http http://127\.0\.0\.1:20211/readyz' \
   '^  if run_storage_doctor; then$' \
   '^    activate_storage_datasets$'
 doctor_body="$(awk '/^run_storage_doctor\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${DEPLOY_DIR}/start.sh")"

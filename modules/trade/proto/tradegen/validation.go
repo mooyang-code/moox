@@ -98,6 +98,28 @@ func (r *SyncAccountReq) Validate() error {
 	return nil
 }
 
+// Validate enforces the transport-level bounds for the batch DNS resolver
+// request. Domain syntax and the configured allowlist are checked by the
+// resolver service after normalization; this keeps generated RPC validation
+// aligned with the public request contract without duplicating resolver state.
+func (r *ResolveDomainsReq) Validate() error {
+	if r == nil || len(r.Domains) == 0 {
+		return fmt.Errorf("domains are required")
+	}
+	if len(r.Domains) > 16 {
+		return fmt.Errorf("at most 16 domains are allowed")
+	}
+	if r.MaxIpsPerDomain > 4 {
+		return fmt.Errorf("max_ips_per_domain must be at most 4")
+	}
+	for _, domain := range r.Domains {
+		if strings.TrimSpace(domain) == "" {
+			return fmt.Errorf("domain must not be empty")
+		}
+	}
+	return nil
+}
+
 func (r *CreateLogicalAccountReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.Name) == "" ||
 		!validExecutionMode(r.ExecutionMode) ||

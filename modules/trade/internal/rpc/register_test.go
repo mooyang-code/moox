@@ -12,4 +12,10 @@ func TestServiceNames(t *testing.T) {
 	if TradeExecutionServiceName != "trpc.moox.trade.TradeExecutionService" {
 		t.Fatalf("execution service name = %q", TradeExecutionServiceName)
 	}
+	if TradeDNSResolverServiceName != "trpc.moox.trade.TradeDNSResolverService" {
+		t.Fatalf("dns resolver service name = %q", TradeDNSResolverServiceName)
+	}
+	if TradeDNSResolverTRPCName != "trpc.moox.trade.TradeDNSResolverService.trpc" {
+		t.Fatalf("dns resolver trpc service name = %q", TradeDNSResolverTRPCName)
+	}
 }

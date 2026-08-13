@@ -81,6 +81,9 @@ View 驱动因子链路额外暴露以下固定低基数指标（不包含 subje
 | `moox_collector_period_report_retry_total` | `dataset,frequency` | 周期完成事件上报或落库失败次数 |
 | `moox_storage_view_period_waiting_datasets` | `view,frequency` | Source View 当前尚未收齐的 Dataset 数量 |
 | `moox_storage_view_ready_publish_retry_total` | `view,event` | Source/Result ready 发布失败后重试次数 |
+| `moox_storage_view_restore_duration_seconds` | 无 | 最近一次 View 索引恢复耗时 |
+| `moox_storage_view_restore_ready` | 无 | 最近一次 View 索引恢复是否完成 |
+| `moox_storage_view_restore_failures_total` | 无 | View 索引恢复失败累计次数 |
 | `moox_factor_period_running` | `source_view,frequency` | 正在执行的因子周期数量 |
 | `moox_factor_period_degraded_total` | `source_view,frequency` | 输入缺失或因子执行失败而降级的周期数量 |
 | `moox_factor_manifest_clear_total` | `binding` | 因跳过/失败 subject 清理结果 manifest 的次数 |

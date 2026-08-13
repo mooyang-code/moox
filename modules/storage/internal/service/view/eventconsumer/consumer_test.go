@@ -26,7 +26,7 @@ func TestConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Consumer != "storage_view_period_v1" || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "subject" || config.DeliverPolicy != "all" {
+	if config.Consumer != "storage_view_period_v1" || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "dataset" || config.DeliverPolicy != "all" {
 		t.Fatalf("config = %+v", config)
 	}
 }
@@ -111,6 +111,50 @@ func TestStartReconnectsClientAfterPersistentBadSubscription(t *testing.T) {
 	}
 }
 
+func TestStartClosesSubscriptionBeforeReconnect(t *testing.T) {
+	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
+		return nil
+	}))
+	consumer.config, _ = consumer.config.withDefaults()
+	consumer.config.ErrorReporter = jetstream.ErrorReporterFunc(func(error) {})
+	closed := make(chan struct{})
+	consumer.bind = func(context.Context) (deliveryConsumer, error) {
+		select {
+		case <-closed:
+			return &fakeDeliveryConsumer{}, nil
+		default:
+			return orderedBadSubscriptionConsumer{closed: closed}, nil
+		}
+	}
+	consumer.reconnect = func(context.Context) error {
+		select {
+		case <-closed:
+			return nil
+		default:
+			t.Fatal("client reconnect started before the invalid subscription was closed")
+			return nil
+		}
+	}
+	stop, err := consumer.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		select {
+		case <-closed:
+			stop()
+			return
+		default:
+		}
+		if time.Now().After(deadline) {
+			stop()
+			t.Fatal("subscription was not closed before reconnect")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 type fakeDeliveryConsumer struct{}
 
 func (*fakeDeliveryConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
@@ -124,6 +168,23 @@ func (badSubscriptionDeliveryConsumer) Fetch(context.Context, int) ([]*jetstream
 	return nil, nats.ErrBadSubscription
 }
 func (badSubscriptionDeliveryConsumer) Close() error { return nil }
+
+type orderedBadSubscriptionConsumer struct {
+	closed chan struct{}
+}
+
+func (c orderedBadSubscriptionConsumer) Fetch(context.Context, int) ([]*jetstream.Delivery, error) {
+	return nil, nats.ErrBadSubscription
+}
+
+func (c orderedBadSubscriptionConsumer) Close() error {
+	select {
+	case <-c.closed:
+	default:
+		close(c.closed)
+	}
+	return nil
+}
 
 func TestApplyDeliveryRejectsMalformedAndMismatchedEvents(t *testing.T) {
 	consumer := testConsumer(t, datasetRowsHandlerFunc(func(context.Context, *eventpb.EventMessage, *storagepb.DatasetRowsUpserted) error {
@@ -156,6 +217,21 @@ func TestApplyDeliveryPassesGovernedEventToHandler(t *testing.T) {
 	}
 	if !handled {
 		t.Fatal("typed handler was not called")
+	}
+}
+
+func TestDatasetQueueKeyUsesEnvelopeDatasetIdentity(t *testing.T) {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, raw := validDatasetDelivery(t)
+	key, err := datasetQueueKey(registry, &jetstream.Delivery{Subject: encoded.Subject, RawData: raw, RawMessageID: encoded.Message.GetEventId(), ContentType: events.ContentType})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "foo\x00bar" {
+		t.Fatalf("dataset queue key = %q, want foo\\x00bar", key)
 	}
 }
 

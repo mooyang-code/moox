@@ -163,18 +163,28 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 		return err
 	}
 	definitions := map[string]string{
-		hostmetrics.HostMetricCPU:             `{"threshold":90,"recovery_threshold":80}`,
-		hostmetrics.HostMetricMemory:          `{"threshold":90,"recovery_threshold":80}`,
-		hostmetrics.HostMetricFilesystemUsage: `{"threshold":90,"recovery_threshold":85}`,
+		hostmetrics.HostMetricCPU:    `{"threshold":90,"recovery_threshold":80}`,
+		hostmetrics.HostMetricMemory: `{"threshold":90,"recovery_threshold":80}`,
+		// Filesystem pressure is the leading cause of Storage/View outages. Start
+		// warning before the disk is full and evaluate it quickly enough to leave
+		// room for cleanup or an operator intervention.
+		hostmetrics.HostMetricFilesystemUsage: `{"threshold":85,"recovery_threshold":80}`,
 		hostmetrics.HostMetricDiskUtilization: `{"threshold":90,"recovery_threshold":85}`,
 		hostmetrics.HostMetricNetworkErrors:   `{"threshold":1,"recovery_threshold":0.1}`,
 	}
 	for _, agent := range agents {
 		for metric, definition := range definitions {
+			failureThreshold := 20
+			if metric == hostmetrics.HostMetricFilesystemUsage {
+				// HostAgent samples every 15 seconds. Three consecutive samples
+				// provide a short, debounced disk alert without paging on one
+				// transient statfs result.
+				failureThreshold = 3
+			}
 			checkID := hostmetrics.HostRuleKey(agent.AgentID, metric)
 			rule := &domain.AlertRule{
 				SpaceID: hostmetrics.SpaceID, RuleID: "default:" + checkID, CheckID: checkID,
-				WebhookID: defaultWebhookID, FailureThreshold: 20, SuccessThreshold: 1,
+				WebhookID: defaultWebhookID, FailureThreshold: failureThreshold, SuccessThreshold: 1,
 				MinimumReminderIntervalSeconds: 300, SendOnResolved: true, Enabled: true,
 				Description: definition,
 			}

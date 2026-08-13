@@ -23,6 +23,15 @@ Invoke 会增加函数运行时长或控制面排队，不能重新引入。维�
 | `modules/storage` | 行情数据和最新时间水位真值 |
 | `modules/monitor` | Dataset freshness、部署状态和中文异常诊断 |
 
+### DNS 解析来源
+
+`custom.toml` 由 `moox-cli` 解析一次，并把脱敏的 Trade 配置和 Collector 连接配置分别渲染到
+运行时 `app.yaml`。Trade Resolver 固定部署在配置选择的 `compute-1` 节点（当前为
+`43.132.204.177`），通过 `ResolveDomains` 返回最多 4 个经过 Trade 节点 TCP 探测的 IPv4；
+Collector 每 5 分钟批量请求一次，保留 Trade 提供的延迟排序，并在请求失败或单域未解析时保留
+上次成功快照，再回退本地 DNS。Trade 不读取完整 `custom.toml`，Collector 也不把凭据写入 SCF
+Environment。SCF 仍使用原域名作为 Host/SNI，IP 只用于拨号，所有 IP 失败后继续尝试域名直连。
+
 实时主链：
 
 ```text

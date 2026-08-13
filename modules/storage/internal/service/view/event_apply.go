@@ -40,6 +40,20 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		}
 	}
 	s.mu.RUnlock()
+	if len(viewKeys) == 0 && len(standalone) == 0 {
+		// Startup/recovery may not have attached the active or first-build index
+		// yet. Keep managed Dataset deliveries pending instead of ACKing a row
+		// that cannot be recovered by a later range scan. An unrelated Dataset
+		// is safe to ACK after discovery confirms no active View projects it.
+		managed, err := s.datasetHasActiveView(ctx, spaceID, datasetID)
+		if err != nil {
+			return err
+		}
+		if managed {
+			return errors.New("storage view index mapping is pending")
+		}
+		return nil
+	}
 	for viewKey := range viewKeys {
 		s.mu.RLock()
 		runtime := s.views[viewKey]
@@ -48,6 +62,34 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			continue
 		}
 		runtime.mu.Lock()
+		// A previous B write may have failed while the metadata Fail RPC was
+		// temporarily unavailable. Keep the Dataset delivery pending and retry
+		// persisting the failure before attempting another write. Otherwise a
+		// later successful redelivery could leave buildFailed set forever and
+		// block activation without ever converging the metadata state.
+		if runtime.buildFailed && runtime.next != "" {
+			failedID := runtime.next
+			failedGeneration := s.indexGenerationOf(failedID)
+			if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, errors.New("retrying failed replacement build")); failErr != nil {
+				runtime.mu.Unlock()
+				return failErr
+			}
+			runtime.next = ""
+			runtime.nextDatasetIDs = nil
+			runtime.nextPrimaryDatasetID = ""
+			runtime.buildFailed = false
+			runtime.buildID = ""
+			runtime.ownerID = ""
+			runtime.buildCancel = nil
+			if runtime.active == "" {
+				runtime.status = "failed"
+			} else {
+				runtime.status = "active"
+			}
+			runtime.mu.Unlock()
+			s.removeFailedBuildAtGeneration(ctx, failedID, failedGeneration)
+			return errors.New("replacement view build failed")
+		}
 		activeID, nextID := runtime.active, runtime.next
 		activeReady, activeErr := s.liveIndexReady(ctx, activeID)
 		var activeFailure error
@@ -98,16 +140,39 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		}
 		if nextID != "" {
 			if err := s.applyEventToIndex(ctx, nextID, datasetID, rows); err != nil {
+				failedID := nextID
+				failedGeneration := s.indexGenerationOf(failedID)
 				if activeErr != nil || !activeReady {
+					// A first build has no authoritative A. Persist the failed
+					// state before returning; the delivery itself must remain
+					// pending so the replacement build can receive this row. Once
+					// the FAILED state is durable, remove this inactive slot now
+					// instead of waiting for the periodic reconciler. This also
+					// makes a lost Fail RPC response converge on the next retry.
+					if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, err); failErr != nil {
+						runtime.mu.Unlock()
+						return errors.Join(err, failErr)
+					}
+					runtime.next = ""
+					runtime.nextDatasetIDs = nil
+					runtime.nextPrimaryDatasetID = ""
+					if runtime.active == "" {
+						runtime.status = "failed"
+					} else {
+						runtime.status = "active"
+					}
 					runtime.mu.Unlock()
+					s.removeFailedBuildAtGeneration(ctx, failedID, failedGeneration)
 					return err
 				}
-				failedID := nextID
-				s.failRuntimeBuild(ctx, viewKey, runtime, err)
+				if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, err); failErr != nil {
+					runtime.mu.Unlock()
+					return errors.Join(err, failErr)
+				}
 				runtime.next = ""
 				runtime.status = "failed"
 				runtime.mu.Unlock()
-				s.removeFailedBuild(ctx, failedID)
+				s.removeFailedBuildAtGeneration(ctx, failedID, failedGeneration)
 				continue
 			}
 			if activeFailure != nil {
@@ -192,7 +257,7 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if len(complete) == 0 {
 		return nil
 	}
-	return engine.Write(ctx, id, viewindex.ViewIndexWriteBatch{RowWrites: complete, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite})
+	return s.writeIndex(ctx, id, engine, viewindex.ViewIndexWriteBatch{RowWrites: complete, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite})
 }
 
 func partitionCompleteWrites(schema viewindex.ViewIndexSchema, writes []viewindex.RowWrite) (complete, incomplete []viewindex.RowWrite) {

@@ -342,17 +342,47 @@ func runViewRole() error {
 	primaryProxy := pb.NewPrimaryStoreClientProxy(client.WithTarget(primaryTarget), client.WithNetwork(primaryNetwork), client.WithProtocol(primaryProtocol))
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
-	stopReconciler, err := svc.StartReconciler(trpc.BackgroundContext(), viewservice.ReconcilerOptions{
-		Metadata: metadataProxy,
-		Primary:  primaryProxy,
-		OwnerID:  "storage-view",
-		Interval: 30 * time.Second,
-		Grace:    time.Minute,
-	})
+	rebuildCheckInterval, maxViewFileBytes, err := storageViewRebuildSettings()
 	if err != nil {
 		return err
 	}
-	defer stopReconciler()
+	reconcilerOptions := viewservice.ReconcilerOptions{
+		Metadata:         metadataProxy,
+		Primary:          primaryProxy,
+		OwnerID:          "storage-view",
+		Interval:         rebuildCheckInterval,
+		Grace:            time.Minute,
+		MaxViewFileBytes: maxViewFileBytes,
+	}
+	// Bind the listeners before opening/validating historical indexes. View
+	// restoration can still take time on a large deployment; keeping the
+	// process reachable lets liveness probes observe the process while
+	// readiness remains false until the consumer is bound.
+	s := trpc.NewServer()
+	indexListener := s.Service("trpc.moox.storage.ViewIndex")
+	if indexListener == nil {
+		return errors.New("ViewIndex listener is not configured")
+	}
+	pb.RegisterViewIndexService(indexListener, svc)
+	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc", "trpc.moox.storage.DataView.http"} {
+		if listener := s.Service(name); listener != nil {
+			pb.RegisterDataViewService(listener, svc)
+		}
+	}
+	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
+		return err
+	}
+	if err := registerRoleHealth(s, "storage-view"); err != nil {
+		return err
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- s.Serve() }()
+	restoreStarted := time.Now()
+	if err := svc.RestoreActiveViews(trpc.BackgroundContext(), reconcilerOptions); err != nil {
+		observability.DefaultViewMetrics.ObserveRestore(false, time.Since(restoreStarted))
+		return err
+	}
+	observability.DefaultViewMetrics.ObserveRestore(true, time.Since(restoreStarted))
 	eventConfig, err := storageEventBusConfig([]string{rawURL}, "storage-view")
 	if err != nil {
 		return err
@@ -371,24 +401,12 @@ func runViewRole() error {
 		return err
 	}
 	defer stopConsumer()
-	s := trpc.NewServer()
-	indexListener := s.Service("trpc.moox.storage.ViewIndex")
-	if indexListener == nil {
-		return errors.New("ViewIndex listener is not configured")
-	}
-	pb.RegisterViewIndexService(indexListener, svc)
-	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc", "trpc.moox.storage.DataView.http"} {
-		if listener := s.Service(name); listener != nil {
-			pb.RegisterDataViewService(listener, svc)
-		}
-	}
-	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
+	stopReconciler, err := svc.StartReconcilerAsync(trpc.BackgroundContext(), reconcilerOptions)
+	if err != nil {
 		return err
 	}
-	if err := registerRoleHealth(s, "storage-view"); err != nil {
-		return err
-	}
-	return s.Serve()
+	defer stopReconciler()
+	return <-serveErr
 }
 
 func storageViewConsumerOptions() (viewservice.EventConsumerOptions, error) {
@@ -410,6 +428,30 @@ func storageViewConsumerOptions() (viewservice.EventConsumerOptions, error) {
 		Ordering:      runtimeConfig.Storage.View.Ordering,
 		DeliverPolicy: strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_DELIVER_POLICY")),
 	}, nil
+}
+
+func storageViewRebuildSettings() (time.Duration, int64, error) {
+	const defaultInterval = time.Minute
+	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if path == "" {
+		return defaultInterval, 1 << 30, nil
+	}
+	var runtimeConfig storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
+		return 0, 0, fmt.Errorf("load storage view rebuild config: %w", err)
+	}
+	interval, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.RebuildCheckInterval))
+	if err != nil || interval <= 0 {
+		return 0, 0, fmt.Errorf("storage view rebuild_check_interval must be a positive duration")
+	}
+	if interval < 30*time.Second {
+		return 0, 0, errors.New("storage view rebuild_check_interval must be at least 30s")
+	}
+	if runtimeConfig.Storage.View.MaxViewFileBytes <= 0 {
+		return 0, 0, errors.New("storage view max_view_file_bytes must be positive")
+	}
+	return interval, runtimeConfig.Storage.View.MaxViewFileBytes, nil
 }
 
 func envOrDefault(name, fallback string) string {

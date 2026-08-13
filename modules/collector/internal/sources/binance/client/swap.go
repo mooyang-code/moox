@@ -26,6 +26,12 @@ func (api *SwapAPI) GetRecentTrades(ctx context.Context, req *exchange.TradeRequ
 	return getRecentTrades(ctx, api.client, api.client.SwapDomain(), SwapTradesEndpoint, "SwapAPI", true, req)
 }
 
+// GetRecentTradesWithIPs uses the Collector DNS snapshot when available and
+// falls back to the hostname resolver when every snapshot address fails.
+func (api *SwapAPI) GetRecentTradesWithIPs(ctx context.Context, req *exchange.TradeRequest, ips []string) ([]*exchange.Trade, error) {
+	return getRecentTradesWithIPs(ctx, api.client, api.client.SwapDomain(), ips, SwapTradesEndpoint, "SwapAPI", true, req)
+}
+
 // GetKline 获取永续合约K线数据
 // API: GET https://fapi.binance.com/fapi/v1/klines
 func (api *SwapAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {

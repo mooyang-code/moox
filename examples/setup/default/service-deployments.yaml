@@ -400,3 +400,18 @@ services:
     status: active
     description: 逻辑账户、执行归属与人工干预服务
     extra_config: {}
+  - name: trade_dns_resolver
+    kind: trade
+    deployment_mode: endpoint
+    protocol: http
+    host: 127.0.0.1
+    port: 11203
+    gateway_path: trpc.moox.trade.TradeDNSResolverService
+    gateway_enabled: true
+    gateway_service_id: trade_dns_resolver
+    scope: internal
+    status: active
+    description: 交易节点 DNS 解析与连通性探测服务
+    extra_config:
+      gateway_methods: [ResolveDomains]
+      gateway_callers: [collector]

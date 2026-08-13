@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,10 @@ type reconcileMetadata struct {
 	activated    bool
 	claims       int
 	claimedIndex string
+	activateErr  error
+	activateRet  *pb.RetInfo
+	failCalls    int
+	failErr      error
 }
 
 func (m *reconcileMetadata) ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error) {
@@ -44,13 +49,27 @@ func (m *reconcileMetadata) UpdateViewIndexBuild(_ context.Context, req *pb.Upda
 }
 func (m *reconcileMetadata) ActivateViewIndex(context.Context, *pb.ActivateViewIndexReq, ...client.Option) (*pb.ActivateViewIndexRsp, error) {
 	m.activated = true
+	if m.activateErr != nil {
+		return nil, m.activateErr
+	}
 	view := proto.Clone(m.view).(*pb.View)
 	if m.claimedIndex != "" {
 		view.ActiveIndexId = m.claimedIndex
 	}
-	return &pb.ActivateViewIndexRsp{RetInfo: successRetInfo(), View: view}, nil
+	ret := m.activateRet
+	if ret == nil {
+		ret = successRetInfo()
+	}
+	return &pb.ActivateViewIndexRsp{RetInfo: ret, View: view}, nil
 }
+
 func (m *reconcileMetadata) FailViewIndexBuild(context.Context, *pb.FailViewIndexBuildReq, ...client.Option) (*pb.FailViewIndexBuildRsp, error) {
+	m.failCalls++
+	if m.failErr != nil {
+		err := m.failErr
+		m.failErr = nil
+		return nil, err
+	}
 	return &pb.FailViewIndexBuildRsp{RetInfo: successRetInfo()}, nil
 }
 
@@ -80,6 +99,74 @@ func TestNeedsRebuildTriggers(t *testing.T) {
 	permanent.KeepDuration = "0"
 	if needsRebuild(permanent, wide) {
 		t.Fatal("permanent view triggered time-based rebuild")
+	}
+	if !needsSizeLimitRebuild(base, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 512}, ReconcilerOptions{MaxViewFileBytes: 512}) {
+		t.Fatal("physical byte watermark did not trigger rebuild")
+	}
+	if needsSizeLimitRebuild(permanent, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 40}, ReconcilerOptions{MaxViewFileBytes: 1}) {
+		t.Fatal("permanent view triggered an unrecoverable physical rebuild")
+	}
+}
+
+func TestSizeLimitBuildCooldownPreventsImmediateRepeat(t *testing.T) {
+	s := &Service{views: map[viewRef]*viewRuntime{}}
+	runtime := &viewRuntime{}
+	s.views[viewRef{spaceID: "s", viewID: "v"}] = runtime
+	now := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+	s.markSizeLimitBuild("s", "v", now)
+	if s.sizeLimitBuildAllowed("s", "v", now.Add(1*time.Minute)) {
+		t.Fatal("size-limit rebuild was allowed before cooldown elapsed")
+	}
+	if !s.sizeLimitBuildAllowed("s", "v", now.Add(sizeLimitRebuildRetryInterval)) {
+		t.Fatal("size-limit rebuild remained blocked after cooldown elapsed")
+	}
+}
+
+func TestFailedMaintenanceBuildStopsWhenWatermarkIsCleared(t *testing.T) {
+	view := &pb.View{
+		SpaceId: "s", ViewId: "v", ActiveIndexId: "idx",
+		DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h",
+	}
+	sizeLimitExceeded := needsSizeLimitRebuild(view, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 20}, ReconcilerOptions{MaxViewFileBytes: 1 << 30})
+	if sizeLimitExceeded {
+		t.Fatal("watermark unexpectedly exceeded")
+	}
+	// A failed maintenance build with an unchanged revision is safe to stop;
+	// the active index is still serving reads and the next watermark crossing
+	// will request a fresh A/B build.
+	if view.GetDesiredViewRevision() != view.GetActiveViewRevision() {
+		t.Fatal("test view is not revision-stable")
+	}
+	failed := &pb.ViewIndexBuild{UpdatedAt: "2026-08-12T00:00:00Z"}
+	if shouldRetryFailedBuild(view, failed, sizeLimitExceeded, time.Date(2026, 8, 12, 0, 1, 0, 0, time.UTC)) {
+		t.Fatal("failed maintenance build kept retrying after watermark cleared")
+	}
+	view.DesiredViewRevision++
+	if !shouldRetryFailedBuild(view, failed, true, time.Date(2026, 8, 12, 0, 1, 0, 0, time.UTC)) {
+		t.Fatal("failed revision build did not remain retryable")
+	}
+}
+
+func TestFailedSizeLimitBuildWaitsForCooldown(t *testing.T) {
+	view := &pb.View{DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h"}
+	failed := &pb.ViewIndexBuild{UpdatedAt: "2026-08-12T00:00:00Z"}
+	if shouldRetryFailedBuild(view, failed, true, time.Date(2026, 8, 12, 0, 29, 59, 0, time.UTC)) {
+		t.Fatal("size-limit rebuild retried before cooldown")
+	}
+	if !shouldRetryFailedBuild(view, failed, true, time.Date(2026, 8, 12, 0, 30, 0, 0, time.UTC)) {
+		t.Fatal("size-limit rebuild did not retry after cooldown")
+	}
+}
+
+func TestFailedBuildMissingActiveIsNotHeldBySizeCooldown(t *testing.T) {
+	view := &pb.View{ActiveIndexId: "idx", DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h"}
+	failed := &pb.ViewIndexBuild{UpdatedAt: "2026-08-12T00:00:00Z"}
+	stats := viewindex.ViewIndexStats{Exists: false, PhysicalBytes: 1 << 40}
+	if !needsSizeLimitRebuild(view, stats, ReconcilerOptions{MaxViewFileBytes: 1}) {
+		t.Fatal("missing active physical index should request repair")
+	}
+	if !shouldRetryFailedBuildWithCause(view, failed, true, false, time.Date(2026, 8, 12, 0, 1, 0, 0, time.UTC)) {
+		t.Fatal("missing active physical index was incorrectly held by size cooldown")
 	}
 }
 
@@ -120,6 +207,121 @@ func TestReconcilerCreatesAndActivatesInitialView(t *testing.T) {
 	}
 }
 
+func TestRestoreActiveViewsAttachesExistingPhysicalIndex(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Restore must select the engine from View metadata. A fresh Service has
+	// no indexID -> engine mapping yet; that mapping is created by attach.
+	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1}}
+	metadata := &reconcileMetadata{view: &pb.View{
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
+	}}
+	if err := svc.RestoreActiveViews(context.Background(), ReconcilerOptions{Metadata: metadata}); err != nil {
+		t.Fatalf("restore active view: %v", err)
+	}
+	svc.mu.RLock()
+	engineName := svc.indexEngine["prices-a"]
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
+	svc.mu.RUnlock()
+	if engineName != "bleve" {
+		t.Fatalf("restored index engine=%q, want bleve", engineName)
+	}
+	if runtime == nil {
+		t.Fatal("restore did not create view runtime")
+	}
+	runtime.mu.Lock()
+	active := runtime.active
+	runtime.mu.Unlock()
+	if active != "prices-a" {
+		t.Fatalf("restored active index=%q, want prices-a", active)
+	}
+}
+
+func TestRestoreActiveViewsFailsWhenMetadataActiveIndexIsMissing(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.engines["bleve"] = &queryEngine{}
+	metadata := &reconcileMetadata{view: &pb.View{
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		ActiveIndexId: "missing-active", ActiveViewRevision: 1, DesiredViewRevision: 1,
+	}}
+	if err := svc.RestoreActiveViews(context.Background(), ReconcilerOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("restore missing active error = %v", err)
+	}
+}
+
+func TestRestoreActiveViewsRejectsPhysicalContractMismatch(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: "old"}}
+	metadata := &reconcileMetadata{view: &pb.View{
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		ActiveIndexId: "prices-a", ActiveViewRevision: 2, ActiveViewSchemaHash: "new",
+	}}
+	if err := svc.RestoreActiveViews(context.Background(), ReconcilerOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "contract mismatch") {
+		t.Fatalf("restore mismatch error = %v", err)
+	}
+}
+
+func TestAttachPendingViewBuildRejectsPhysicalSchemaMismatch(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	column := &pb.ViewColumn{SpaceId: "space", ViewId: "prices", ColumnName: "close", OriginId: "prices.close"}
+	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 2, SchemaHash: "wrong"}}
+	view := &pb.View{
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
+		DesiredViewRevision: 2, Columns: []*pb.ViewColumn{column},
+		IndexBuild: &pb.ViewIndexBuild{IndexId: "prices-b", Engine: "bleve", TargetViewVersion: 2},
+	}
+	if err := svc.AttachPendingViewBuild(context.Background(), view); err == nil || !strings.Contains(err.Error(), "schema hash mismatch") {
+		t.Fatalf("pending schema mismatch error = %v", err)
+	}
+}
+
+func TestActivateResponseErrorReadsBackCommittedActiveIndex(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	const indexID = "records-b"
+	columns := []*pb.ViewColumn{{SpaceId: "space", ViewId: "records", OriginId: "records.title", ColumnName: "records.title"}}
+	prepared, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: indexID, Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "records", PrimaryDatasetId: "records", DatasetIds: []string{"records"}, ViewVersion: 2, Engine: "bleve", ViewSchemaHash: "schema-2", Columns: columns}})
+	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("prepare: rsp=%v err=%v", prepared, err)
+	}
+	metadata := &reconcileMetadata{view: &pb.View{SpaceId: "space", ViewId: "records", PrimaryDatasetId: "records", DatasetIds: []string{"records"}, ActiveIndexId: "records-a", ActiveViewRevision: 1, DesiredViewRevision: 2, Engine: "bleve", ActiveColumns: columns}, activateErr: errors.New("response lost")}
+	gotErr := svc.activateViewBuild(ctx, ReconcilerOptions{Metadata: metadata, OwnerID: "storage-view", Grace: time.Hour}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns)
+	if gotErr == nil {
+		t.Fatal("expected activation retry when readback does not commit")
+	}
+	// The previous call did not expose an active index because the fake had not
+	// committed it. Simulate the Metadata transaction having committed before
+	// the response was lost and retry.
+	metadata.view.ActiveIndexId = indexID
+	if err := svc.activateViewBuild(ctx, ReconcilerOptions{Metadata: metadata, OwnerID: "storage-view", Grace: time.Hour}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns); err != nil {
+		t.Fatalf("readback activation: %v", err)
+	}
+	svc.mu.RLock()
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "records"}]
+	svc.mu.RUnlock()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.active != indexID || runtime.next != "" {
+		t.Fatalf("runtime after readback activation: active=%q next=%q", runtime.active, runtime.next)
+	}
+}
+
 func TestReconcilerBlocksLegacyInFlightViewWithoutActiveContract(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
@@ -127,7 +329,7 @@ func TestReconcilerBlocksLegacyInFlightViewWithoutActiveContract(t *testing.T) {
 	}
 	// Make the physical active index look healthy so reconciliation reaches
 	// AttachActiveView rather than silently starting a replacement build.
-	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true}}
+	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1}}
 	metadata := &reconcileMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 2,
@@ -210,29 +412,10 @@ func TestReconcileRebuildsMissingPhysicalActiveIndex(t *testing.T) {
 	err = svc.reconcileView(context.Background(), ReconcilerOptions{
 		Metadata: metadata, OwnerID: "owner",
 	}, svc.internalAuth(), metadata.view)
-	if err != nil {
-		t.Fatalf("reconcile missing active: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "cannot be rebuilt without a range reader") {
+		t.Fatalf("missing active should fail closed, err=%v", err)
 	}
-	if metadata.claims != 1 || !metadata.activated {
-		t.Fatalf("claims=%d activated=%v", metadata.claims, metadata.activated)
-	}
-	if metadata.claimedIndex == "" || metadata.claimedIndex == "prices-a" {
-		t.Fatalf("replacement index=%q", metadata.claimedIndex)
-	}
-	svc.mu.RLock()
-	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
-	_, staleAttached := svc.indexEngine["prices-a"]
-	svc.mu.RUnlock()
-	if staleAttached {
-		t.Fatal("missing physical active index was attached")
-	}
-	if runtime == nil {
-		t.Fatal("replacement runtime was not attached")
-	}
-	runtime.mu.Lock()
-	active := runtime.active
-	runtime.mu.Unlock()
-	if active != metadata.claimedIndex {
-		t.Fatalf("active=%q want replacement %q", active, metadata.claimedIndex)
+	if metadata.claims != 1 || metadata.activated {
+		t.Fatalf("missing active unexpectedly claimed/activated replacement: claims=%d activated=%v", metadata.claims, metadata.activated)
 	}
 }

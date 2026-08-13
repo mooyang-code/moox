@@ -18,6 +18,9 @@ func TestBuildManagedEnvironmentCanonicalizesDNS(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "BTC-USDT|ETH-USDT", env["MOOX_MARKET_FETCH_SUBJECTS"])
 	require.Equal(t, `{"api.binance.com":["203.0.113.1","203.0.113.2"]}`, env["MOOX_MARKET_FETCH_DNS_ROUTES_JSON"])
+	require.Equal(t, ManagedDNSHash(map[string]sources.DNSResolution{
+		"API.BINANCE.COM.": {IPs: []string{"203.0.113.2", "203.0.113.1"}, ResolvedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)},
+	}), env["MOOX_MARKET_FETCH_DNS_HASH"])
 	require.Equal(t, "2026-08-04T00:00:00Z", env["MOOX_MARKET_FETCH_DNS_UPDATED_AT"])
 }
 

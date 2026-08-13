@@ -10,6 +10,10 @@ import (
 )
 
 func getRecentTrades(ctx context.Context, client *Client, domain, endpoint, label string, supportsFromID bool, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
+	return getRecentTradesWithIPs(ctx, client, domain, nil, endpoint, label, supportsFromID, req)
+}
+
+func getRecentTradesWithIPs(ctx context.Context, client *Client, domain string, ips []string, endpoint, label string, supportsFromID bool, req *exchange.TradeRequest) ([]*exchange.Trade, error) {
 	if client == nil || req == nil || req.Symbol == "" {
 		return nil, fmt.Errorf("%s trade request is invalid", label)
 	}
@@ -30,7 +34,7 @@ func getRecentTrades(ctx context.Context, client *Client, domain, endpoint, labe
 
 	var raw []AggregateTrade
 	err := retryBinance(ctx, func() error {
-		return client.GetDirect(ctx, domain, endpoint, params, &raw)
+		return client.GetDirectWithIPs(ctx, domain, ips, endpoint, params, &raw)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("获取%s最近成交失败: %w", label, err)

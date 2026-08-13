@@ -58,8 +58,8 @@ type EngineConfig struct {
 }
 
 const (
-	defaultPythonWorkers     = 40
-	defaultViewReadWorkers   = 60
+	defaultPythonWorkers     = 32
+	defaultViewReadWorkers   = 64
 	defaultViewReadTimeoutMS = 10000
 )
 

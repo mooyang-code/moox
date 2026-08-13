@@ -613,13 +613,52 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	case successLag > 0 && now.Sub(item.LastSuccessAt) > successLag:
 		item.Status, item.Reason = "degraded", "success stale"
 	case watermarkLag > 0 && item.LagSeconds > int64(watermarkLag/time.Second):
-		item.Status, item.Reason = "stale", "watermark stale"
+		item.Status, item.Reason = "stale", datasetWatermarkStaleReason(item, now)
 	case item.OutputWatermarkAt.IsZero():
 		item.Status, item.Reason = "healthy", "正常但空结果"
 	default:
 		item.Status, item.Reason = "healthy", "normal"
 	}
 	return item
+}
+
+// datasetWatermarkStaleReason keeps the alert useful without requiring an
+// operator to translate the internal "watermark" term. Timestamps are
+// explicitly UTC so the value can be compared with Collector/Storage logs.
+func datasetWatermarkStaleReason(item DatasetFrequencyStatus, now time.Time) string {
+	lag := formatDatasetLag(item.LagSeconds)
+	latest := "未产生"
+	if !item.OutputWatermarkAt.IsZero() {
+		latest = item.OutputWatermarkAt.UTC().Format("2006-01-02 15:04:05 UTC")
+	}
+	reason := fmt.Sprintf("输出水位已落后 %s，最新输出时间 %s", lag, latest)
+	if !item.InputWatermarkAt.IsZero() {
+		reason += fmt.Sprintf("，输入水位 %s", item.InputWatermarkAt.UTC().Format("2006-01-02 15:04:05 UTC"))
+	}
+	if !now.IsZero() {
+		reason += fmt.Sprintf("（检查时间 %s）", now.UTC().Format("2006-01-02 15:04:05 UTC"))
+	}
+	return reason
+}
+
+func formatDatasetLag(seconds int64) string {
+	if seconds < 60 {
+		return fmt.Sprintf("%d 秒", max(int64(0), seconds))
+	}
+	minutes := seconds / 60
+	remainingSeconds := seconds % 60
+	if minutes < 60 {
+		if remainingSeconds == 0 {
+			return fmt.Sprintf("%d 分钟", minutes)
+		}
+		return fmt.Sprintf("%d 分 %d 秒", minutes, remainingSeconds)
+	}
+	hours := minutes / 60
+	remainingMinutes := minutes % 60
+	if remainingMinutes == 0 {
+		return fmt.Sprintf("%d 小时", hours)
+	}
+	return fmt.Sprintf("%d 小时 %d 分钟", hours, remainingMinutes)
 }
 
 func ownsExpectedDatasetInventory(producer string) bool {
@@ -852,13 +891,21 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		return nil, err
 	}
 	if err := load("moox_collector_market_fetch_coordination_healthy", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		state.healthy = value
+		// A space may be reported by more than one Collector during a rolling
+		// restart.  Aggregate conservatively: one failed reporter must not be
+		// hidden by whichever series happens to sort last.
+		if !state.hasHealth || value <= 0 {
+			state.healthy = value
+		}
 		state.hasHealth = true
 	}); err != nil {
 		return nil, err
 	}
 	if err := load("moox_collector_market_fetch_timer_available", func(state *timerCoordinationState, labels map[string]string, value float64) {
-		if value > 0 {
+		// CloudNode reports -1 while a provider readback is unknown.  That is a
+		// transient observation, not proof that the trigger is unavailable; the
+		// next reconciliation will either confirm it or publish a real 0.
+		if value != 0 {
 			return
 		}
 		if nodeID := strings.TrimSpace(labels["node_id"]); nodeID != "" {

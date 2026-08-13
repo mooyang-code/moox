@@ -504,6 +504,27 @@ message ListPositionsRsp {
   repeated Position positions = 2;
 }
 
+message ResolveDomainsReq {
+  repeated string domains = 1;
+  uint32 max_ips_per_domain = 2;
+}
+
+message ResolvedIP {
+  string ip = 1;
+  uint32 tcp_connect_latency_ms = 2;
+}
+
+message DomainResolution {
+  string domain = 1;
+  repeated ResolvedIP ips = 2;
+}
+
+message ResolveDomainsRsp {
+  common.RetInfo ret_info = 1;
+  repeated DomainResolution resolutions = 2;
+  repeated string unresolved_domains = 3;
+}
+
 service ExchangeAccountService {
   rpc CreateAccount(CreateAccountReq) returns (CreateAccountRsp);
   rpc UpdateAccount(UpdateAccountReq) returns (UpdateAccountRsp);
@@ -536,4 +557,8 @@ service TradeExecutionService {
   rpc ListOrders(ListOrdersReq) returns (ListOrdersRsp);
   rpc ListFills(ListFillsReq) returns (ListFillsRsp);
   rpc ListPositions(ListPositionsReq) returns (ListPositionsRsp);
+}
+
+service TradeDNSResolverService {
+  rpc ResolveDomains(ResolveDomainsReq) returns (ResolveDomainsRsp);
 }

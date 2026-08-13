@@ -29,8 +29,8 @@ func DefaultConfig() *AppConfig {
 	return &AppConfig{
 		Database: DatabaseConfig{
 			Path:            "./data/admin.db",
-			MaxIdleConns:    10,
-			MaxOpenConns:    100,
+			MaxIdleConns:    4,
+			MaxOpenConns:    8,
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},

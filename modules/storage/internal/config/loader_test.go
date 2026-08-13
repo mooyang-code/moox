@@ -24,12 +24,11 @@ func TestStorageConfigRolesAreExplicit(t *testing.T) {
 	}
 }
 
-func TestStorageViewMaintenanceTargetStaysBelowCustomMaximum(t *testing.T) {
-	cfg := StorageConfig{View: StorageView{Maintenance: StorageViewMaintenance{MaxEntries: 100}}}
+func TestStorageViewRebuildDefaults(t *testing.T) {
+	cfg := StorageConfig{}
 	cfg.ApplyDefaults()
-
-	if cfg.View.Maintenance.TargetEntries != 75 {
-		t.Fatalf("TargetEntries = %d, want 75", cfg.View.Maintenance.TargetEntries)
+	if cfg.View.RebuildCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 {
+		t.Fatalf("view rebuild defaults = %q/%d", cfg.View.RebuildCheckInterval, cfg.View.MaxViewFileBytes)
 	}
 }
 
@@ -37,8 +36,8 @@ func TestStorageConfigAppliesEventConsumerDefaults(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
 
-	if cfg.Storage.EventBus.MaxAckPending != 1 {
-		t.Fatalf("EventBus.MaxAckPending = %d, want 1", cfg.Storage.EventBus.MaxAckPending)
+	if cfg.Storage.EventBus.MaxAckPending != 256 {
+		t.Fatalf("EventBus.MaxAckPending = %d, want 256 for the default view role", cfg.Storage.EventBus.MaxAckPending)
 	}
 	if cfg.Storage.EventBus.AckWaitMS != 120000 {
 		t.Fatalf("EventBus.AckWaitMS = %d, want 120000", cfg.Storage.EventBus.AckWaitMS)
@@ -48,7 +47,7 @@ func TestStorageConfigAppliesEventConsumerDefaults(t *testing.T) {
 func TestStorageViewConsumerDefaults(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
-	if cfg.Storage.View.FetchBatch != 1 || cfg.Storage.View.MaxWorkers != 1 || cfg.Storage.View.Ordering != "subject" {
+	if cfg.Storage.View.FetchBatch != 1 || cfg.Storage.View.MaxWorkers != 1 || cfg.Storage.View.Ordering != "dataset" {
 		t.Fatalf("view consumer defaults = %+v", cfg.Storage.View)
 	}
 }
@@ -140,6 +139,9 @@ func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
 			if cfg.Storage.EventBus.CredentialFile != "~/.config/moox/eventbus/storage-eventbus.yaml" {
 				t.Fatalf("EventBus.CredentialFile = %q", cfg.Storage.EventBus.CredentialFile)
 			}
+			if tt.file == "storage_view/trpc_go.yaml" && cfg.Storage.EventBus.MaxAckPending != 256 {
+				t.Fatalf("EventBus.MaxAckPending = %d, want 256 for view consumer", cfg.Storage.EventBus.MaxAckPending)
+			}
 			if cfg.Storage.Health.Addr != tt.wantHealth {
 				t.Fatalf("Health.Addr = %q, want %q", cfg.Storage.Health.Addr, tt.wantHealth)
 			}
@@ -206,34 +208,18 @@ func TestStorageConfigsContainNoLegacyPathsOrRotationAndDependentsDoNotOwnIndexR
 	}
 }
 
-func TestStorageViewMaintenanceDefaults(t *testing.T) {
+func TestStorageViewRebuildConfigDefaults(t *testing.T) {
 	var cfg StorageConfig
 	cfg.ApplyDefaults()
 
-	maintenance := cfg.View.Maintenance
-	if !maintenance.IsEnabled() {
-		t.Fatal("maintenance enabled = false, want true")
-	}
 	if cfg.Devices.ViewIndexRoot != "var/storage/view-indexes" {
 		t.Fatalf("view index root = %q, want var/storage/view-indexes", cfg.Devices.ViewIndexRoot)
 	}
 	if cfg.View.IndexServiceName != "trpc.moox.storage.ViewIndex" {
 		t.Fatalf("index service name = %q", cfg.View.IndexServiceName)
 	}
-	if maintenance.LeaseTTL != "90s" || maintenance.RunBudget != "20s" {
-		t.Fatalf("maintenance lease/run = %q/%q", maintenance.LeaseTTL, maintenance.RunBudget)
-	}
-	if maintenance.MaxEntries != 200000 || maintenance.TargetEntries != 150000 {
-		t.Fatalf("entry watermarks = %d/%d", maintenance.MaxEntries, maintenance.TargetEntries)
-	}
-	if maintenance.MaxPhysicalBytes != 512*1024*1024 || maintenance.MinFreeDiskBytes != 1024*1024*1024 {
-		t.Fatalf("byte watermarks = %d/%d", maintenance.MaxPhysicalBytes, maintenance.MinFreeDiskBytes)
-	}
-	if maintenance.TimeSeries.KeepByFreq["1d"] != "730d" {
-		t.Fatalf("1d retention window = %q, want 730d", maintenance.TimeSeries.KeepByFreq["1d"])
-	}
-	if maintenance.Record.KeepDuration != "30d" {
-		t.Fatalf("record retention window = %q, want 30d", maintenance.Record.KeepDuration)
+	if cfg.View.RebuildCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 {
+		t.Fatalf("rebuild config defaults = %q/%d", cfg.View.RebuildCheckInterval, cfg.View.MaxViewFileBytes)
 	}
 	cleanup := cfg.Maintenance.HostMetricsCleanup
 	if !cleanup.IsEnabled() || cleanup.MaxAge != "48h" || cleanup.BatchSize != 1000 || cleanup.MaxBatchesPerRun != 10 || len(cleanup.DatasetIDs) != 4 {
@@ -282,33 +268,15 @@ func TestHostMetricsCleanupValidation(t *testing.T) {
 	}
 }
 
-func TestStorageViewMaintenanceYAMLOverrides(t *testing.T) {
+func TestStorageViewRebuildYAMLOverrides(t *testing.T) {
 	raw := []byte(`
 storage:
   devices:
     view_index_root: /indexes
   view:
     index_service_name: custom.ViewIndex
-    maintenance:
-      enabled: true
-      lease_ttl: 2m
-      run_budget: 30s
-      page_size: 750
-      max_entries: 300000
-      target_entries: 220000
-      max_physical_bytes: 805306368
-      min_free_disk_bytes: 2147483648
-      min_ready_entries: 8000
-      overlap_window: 45m
-      allowed_lag: 5m
-      remove_grace: 2m
-      time_series:
-        default_keep_duration: 14d
-        keep_by_freq:
-          1h: 60d
-          1d: 1095d
-      record:
-        keep_duration: 45d
+    rebuild_check_interval: 2h
+    max_view_file_bytes: 805306368
 `)
 	var cfg RuntimeConfig
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
@@ -316,34 +284,21 @@ storage:
 	}
 	cfg.ApplyDefaults()
 
-	maintenance := cfg.Storage.View.Maintenance
 	if cfg.Storage.Devices.ViewIndexRoot != "/indexes" || cfg.Storage.View.IndexServiceName != "custom.ViewIndex" {
 		t.Fatalf("owner config = %q/%q", cfg.Storage.Devices.ViewIndexRoot, cfg.Storage.View.IndexServiceName)
 	}
-	if maintenance.MaxEntries != 300000 || maintenance.TargetEntries != 220000 {
-		t.Fatalf("entry watermarks = %d/%d", maintenance.MaxEntries, maintenance.TargetEntries)
-	}
-	if maintenance.TimeSeries.KeepByFreq["1h"] != "60d" {
-		t.Fatalf("1h window = %q, want 60d", maintenance.TimeSeries.KeepByFreq["1h"])
-	}
-	if maintenance.Record.KeepDuration != "45d" {
-		t.Fatalf("record retention window = %q, want 45d", maintenance.Record.KeepDuration)
+	if cfg.Storage.View.RebuildCheckInterval != "2h" || cfg.Storage.View.MaxViewFileBytes != 805306368 {
+		t.Fatalf("rebuild config = %q/%d", cfg.Storage.View.RebuildCheckInterval, cfg.Storage.View.MaxViewFileBytes)
 	}
 }
 
-func TestStorageViewMaintenanceYAMLDisableKillSwitch(t *testing.T) {
-	raw := []byte(`
-storage:
-  view:
-    maintenance:
-      enabled: false
-`)
+func TestStorageViewExplicitZeroWatermarkIsNotDefaulted(t *testing.T) {
 	var cfg RuntimeConfig
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte("storage:\n  view:\n    max_view_file_bytes: 0\n"), &cfg); err != nil {
 		t.Fatalf("unmarshal config: %v", err)
 	}
 	cfg.ApplyDefaults()
-	if cfg.Storage.View.Maintenance.IsEnabled() {
-		t.Fatal("maintenance enabled = true after explicit false, want false")
+	if cfg.Storage.View.MaxViewFileBytes != 0 {
+		t.Fatalf("explicit zero watermark was defaulted to %d", cfg.Storage.View.MaxViewFileBytes)
 	}
 }

@@ -2,12 +2,37 @@ package eventconsumer
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
+
+func TestDatasetQueueKeyUsesGovernedSubjectForMalformedPayload(t *testing.T) {
+	space, err := jetstream.EncodeSubjectToken("space")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset, err := jetstream.EncodeSubjectToken("bars")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowSubject := "moox.storage.dataset_rows_upserted.v1." + space + "." + dataset
+	markerSubject := "moox.storage.dataset_period_collected.v1." + space + "." + dataset
+	row, err := datasetQueueKey(nil, &jetstream.Delivery{Subject: rowSubject, DecodeError: errors.New("bad row")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, err := datasetQueueKey(nil, &jetstream.Delivery{Subject: markerSubject, DecodeError: errors.New("bad marker")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row != "space\x00bars" || marker != row {
+		t.Fatalf("queue keys row=%q marker=%q", row, marker)
+	}
+}
 
 func TestDeliveryHeartbeatIntervalUsesAckWait(t *testing.T) {
 	if got := deliveryHeartbeatInterval(120 * time.Second); got != 30*time.Second {
@@ -100,6 +125,47 @@ func TestSubjectDispatcherPreservesSubjectOrder(t *testing.T) {
 	defer mu.Unlock()
 	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
 		t.Fatalf("order = %v", order)
+	}
+}
+
+func TestDatasetQueueKeySerializesRowsAndMarkersForOneDataset(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	firstStarted, releaseFirst, secondDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	d := newSubjectDispatcherWithKey(ctx, 2, 8, func(_ context.Context, delivery *jetstream.Delivery, _ *deliveryHeartbeat) error {
+		if delivery.RawMessageID == "row" {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		if delivery.RawMessageID == "marker" {
+			close(secondDone)
+		}
+		return nil
+	}, nil, func(delivery *jetstream.Delivery) (string, error) {
+		return "space/dataset", nil
+	})
+	defer d.Close()
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "rows.upserted", RawMessageID: "row"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Dispatch(&jetstream.Delivery{Subject: "period.collected", RawMessageID: "marker"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("row delivery did not start")
+	}
+	select {
+	case <-secondDone:
+		t.Fatal("marker overtook the dataset row")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseFirst)
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("marker did not run after row completed")
 	}
 }
 

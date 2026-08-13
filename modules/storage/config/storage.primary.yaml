@@ -17,28 +17,8 @@ storage:
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 2
-    maintenance:
-      enabled: true
-      owner_id: ""
-      lease_ttl: 90s
-      run_budget: 20s
-      page_size: 500
-      max_entries: 200000
-      target_entries: 150000
-      max_physical_bytes: 536870912
-      min_free_disk_bytes: 1073741824
-      min_ready_entries: 1000
-      overlap_window: 30m
-      allowed_lag: 2m
-      remove_grace: 60s
-      time_series:
-        default_keep_duration: 7d
-        keep_by_freq:
-          1m: 24h
-          1h: 90d
-          1d: 730d
-      record:
-        keep_duration: 30d
+    rebuild_check_interval: 1m
+    max_view_file_bytes: 1073741824
   maintenance:
     host_metrics_cleanup:
       enabled: true

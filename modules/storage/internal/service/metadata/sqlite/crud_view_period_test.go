@@ -10,6 +10,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func TestViewKeepDurationChangeDoesNotRequireABRebuild(t *testing.T) {
+	existing := &pb.View{PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, Engine: "duckdb", KeepDuration: "24h"}
+	next := &pb.View{PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, Engine: "duckdb", KeepDuration: "168h"}
+	if viewIndexShapeChanged(existing, next) {
+		t.Fatal("keep_duration-only change must not trigger an A/B rebuild")
+	}
+}
+
 func TestViewPeriodDatasetStateInsertIdempotencyAndConflict(t *testing.T) {
 	ctx := context.Background()
 	store := openViewPeriodTestStore(t, ctx)
@@ -113,6 +121,64 @@ func TestUpsertViewMergesPartialColumnsAndReplaceViewColumnsReplaces(t *testing.
 	}
 	if len(columns) != 0 {
 		t.Fatalf("columns after empty replacement = %v", columns)
+	}
+	stored, err := store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.GetAttributes()["moox.columns_explicit"] != "true" {
+		t.Fatalf("empty replacement lost explicit-column marker: attrs=%v", stored.GetAttributes())
+	}
+	stored.Attributes = nil
+	stored.Description = "ordinary metadata update"
+	if _, err := store.UpsertView(ctx, stored); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.GetAttributes()["moox.columns_explicit"] != "true" {
+		t.Fatalf("ordinary update cleared explicit-column marker: attrs=%v", stored.GetAttributes())
+	}
+}
+
+func TestUpsertViewRejectsEngineAndPrimaryChangeWithActiveIndex(t *testing.T) {
+	ctx := context.Background()
+	store := openViewPeriodTestStore(t, ctx)
+	view, err := store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view.ActiveIndexId = "source-a"
+	view.Engine = "duckdb"
+	view.PrimaryDatasetId = "prices"
+	raw, err := marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE t_views SET c_active_index_id = ?, c_engine = ?, c_primary_dataset_id = ?, c_attrs_json = ? WHERE c_space_id = ? AND c_view_id = ?`, "source-a", "duckdb", "prices", raw, "space", "source-view"); err != nil {
+		t.Fatal(err)
+	}
+	view, err = store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view.Engine = "bleve"
+	if _, err := store.UpsertView(ctx, view); err == nil || !strings.Contains(err.Error(), "engine change is unsupported") {
+		t.Fatalf("engine change error = %v", err)
+	}
+	view.Engine = "duckdb"
+	view.PrimaryDatasetId = "fundamentals"
+	if _, err := store.UpsertView(ctx, view); err == nil || !strings.Contains(err.Error(), "primary dataset change is unsupported") {
+		t.Fatalf("primary change error = %v", err)
+	}
+	unchanged, err := store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.GetActiveIndexId() != "source-a" || unchanged.GetEngine() != "duckdb" || unchanged.GetPrimaryDatasetId() != "prices" {
+		t.Fatalf("active view mutated after rejected update: %v", unchanged)
 	}
 }
 

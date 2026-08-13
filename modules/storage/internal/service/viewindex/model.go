@@ -91,16 +91,10 @@ func (b ViewIndexWriteBatch) Validate() error {
 	if b.WriteMode == 0 {
 		return errors.New("write_mode is required")
 	}
-	seen := make(map[string]struct{}, len(b.RowWrites))
 	for i, w := range b.RowWrites {
 		if err := w.Validate(); err != nil {
 			return fmt.Errorf("row write %d: %w", i, err)
 		}
-		id := RowKeyID(w.Key.Key)
-		if _, ok := seen[id]; ok {
-			return fmt.Errorf("row write %d duplicates row key", i)
-		}
-		seen[id] = struct{}{}
 	}
 	return nil
 }
@@ -119,6 +113,7 @@ type ViewIndexStats struct {
 	Exists        bool
 	ViewVersion   uint64
 	EntryCount    int64
+	PhysicalBytes uint64
 	MinVersion    string
 	MaxVersion    string
 	SchemaHash    string
@@ -184,6 +179,15 @@ type Engine interface {
 // which is far too expensive to run before every row write.
 type ExistenceChecker interface {
 	Exists(context.Context, string) (bool, error)
+}
+
+// MetadataStatReader returns the persisted schema contract without scanning
+// all rows. Startup and restore only need to verify that an active index is
+// present and matches Metadata; the full Stat operation may execute COUNT/MIN
+// and MAX over a large DuckDB file and must remain on the periodic reconcile
+// path.
+type MetadataStatReader interface {
+	StatMetadata(context.Context, string) (ViewIndexStats, error)
 }
 
 func RowKeyID(k *pb.RowKey) string {

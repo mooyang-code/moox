@@ -89,9 +89,19 @@ func TestDatasetStatusMarksCanonicalFrequencyWatermarkStale(t *testing.T) {
 		lastSuccess: float64(now.Unix()), output: float64(now.Add(-4 * time.Hour).Unix()),
 	}, testRealtimePolicy())
 
-	if got.Status != "stale" || got.Reason != "watermark stale" {
+	if got.Status != "stale" || !strings.Contains(got.Reason, "输出水位已落后 4 小时") || !strings.Contains(got.Reason, "最新输出时间 2026-07-29 08:00:00 UTC") {
 		t.Fatalf("status = %+v", got)
 	}
+}
+
+func TestDatasetWatermarkStaleReasonUsesUTCAndLag(t *testing.T) {
+	now := time.Date(2026, 8, 13, 4, 0, 0, 0, time.UTC)
+	got := datasetWatermarkStaleReason(DatasetFrequencyStatus{
+		OutputWatermarkAt: now.Add(-2*time.Hour - 3*time.Minute),
+		InputWatermarkAt:  now.Add(-time.Minute),
+		LagSeconds:        2*60*60 + 3*60,
+	}, now)
+	require.Equal(t, "输出水位已落后 2 小时 3 分钟，最新输出时间 2026-08-13 01:57:00 UTC，输入水位 2026-08-13 03:59:00 UTC（检查时间 2026-08-13 04:00:00 UTC）", got)
 }
 
 func TestDatasetStatusRejectsStaleInventory(t *testing.T) {
@@ -237,6 +247,35 @@ func TestBuilderReportsInitialTimerCoordinationFailure(t *testing.T) {
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "down", got.BusinessChecks[0].Status)
 	require.Contains(t, got.BusinessChecks[0].Reason, "协调失败")
+}
+
+func TestBuilderAggregatesTimerCoordinationAcrossCollectors(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"crypto_market"}`
+		seedOverviewMetricForInstance(t, db, "coord-good", "moox_collector", "collector@a", "moox_collector_market_fetch_coordination_healthy", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "coord-bad", "moox_collector", "collector@b", "moox_collector_market_fetch_coordination_healthy", labels, 0, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "协调失败")
+}
+
+func TestBuilderDoesNotTreatUnknownTimerReadbackAsUnavailable(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"crypto_market","dataset_id":"bars","frequency":"1m"}`
+		seedOverviewMetricForInstance(t, db, "unknown-required", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "unknown-active", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 1, now)
+		seedOverviewMetricForInstance(t, db, "unknown-success", "moox_collector", "collector@control", "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", `{"space_id":"crypto_market"}`, float64(now.Unix()), now)
+		seedOverviewMetricForInstance(t, db, "unknown-trigger", "moox_collector", "collector@control", "moox_collector_market_fetch_timer_available", `{"space_id":"crypto_market","node_id":"timer-1","enabled":"true"}`, -1, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
 }
 
 func TestBuilderSysDeployFailureOverridesFreshReporter(t *testing.T) {

@@ -35,6 +35,8 @@ done
 assert_absent "${DEPLOY}" '--monitor-peer'
 assert_contains "${DEPLOY}" 'MOOX_ADMIN_NODE_ID'
 assert_contains "${DEPLOY}" 'MOOX_GATEWAY_NODE_ID'
+assert_contains "${DEPLOY}" 'MOOX_RUNTIME_NODE_ID'
+assert_contains "${DEPLOY}" 'MOOX_ADMIN_NODE_ID="${MOOX_ADMIN_NODE_ID:-${MOOX_RUNTIME_NODE_ID}}"'
 assert_contains "${DEPLOY}" 'gateway-control.env'
 assert_contains "${DEPLOY}" 'gateway-service.env'
 assert_contains "${DEPLOY}" 'chmod 0600'
@@ -227,7 +229,10 @@ kill -0 "${unrelated_pid}" 2>/dev/null || fail 'Gateway stop killed an unrelated
 
 # A no-Admin Monitor node still needs moox-cli for metadata apply, and only
 # Monitor (not Gateway) may inherit the cluster service credential.
-MOOX_EVENTBUS_ENABLE_TLS=1 "${DEPLOY}" --target localhost --dir "${TMP}/deploy-monitor" --stage "${TMP}/stage-monitor" \
+MOOX_EVENTBUS_ENABLE_TLS=1 \
+MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
+MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
+  "${DEPLOY}" --target localhost --dir "${TMP}/deploy-monitor" --stage "${TMP}/stage-monitor" \
   --skip-build --no-start --no-admin --no-storage --no-archive \
   --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --local-ca skip --target-ca skip \
   --node-id gateway-monitor --gateway-control-url 'http://[::1]:11000' \
@@ -288,6 +293,8 @@ grep -Fq 'MOOX_MONITOR_INSTANCE_ID=monitor-local' "${TMP}/captures/monitor.env" 
 
 # A Gateway + Monitor-only node must start without an EventBus or Storage
 # metadata endpoint; availability checks remain usable without metric storage.
+MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
+MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
 "${DEPLOY}" --target localhost --dir "${TMP}/deploy-peer-only" --stage "${TMP}/stage-peer-only" \
   --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
   --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --local-ca skip --target-ca skip \
@@ -310,7 +317,9 @@ mkdir -p "${PEER_ONLY_DEPLOY}/config/caddy"
 printf 'MOOX_CADDY_PORTS=443\n' >"${PEER_ONLY_DEPLOY}/config/caddy/edge.env"
 # A workload-only overlay does not own Caddy, so a no-start package update may
 # run without repeating the public host and must preserve the edge state.
-if ! output=$("${DEPLOY}" --target localhost --dir "${PEER_ONLY_DEPLOY}" --stage "${TMP}/stage-existing-caddy-overlay" \
+	if ! output=$(MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
+	  MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
+	  "${DEPLOY}" --target localhost --dir "${PEER_ONLY_DEPLOY}" --stage "${TMP}/stage-existing-caddy-overlay" \
   --skip-build --no-start --component-overlay --no-admin --no-storage --no-archive --no-eventbus --no-cloudnode --no-collector --no-factor --no-strategy --no-trade \
   --local-ca skip --target-ca skip --node-id gateway-peer-only \
   --gateway-control-url 'http://[::1]:11000' --monitor-instance-id monitor-peer-only \
@@ -324,7 +333,9 @@ grep -Fxq 'MOOX_CADDY_PORTS=443' "${PEER_ONLY_DEPLOY}/config/caddy/edge.env" || 
 expect_monitor_arg_rejected() {
   local label="$1"; shift
   local output
-  if output=$("${DEPLOY}" --target localhost --dir "${TMP}/reject-${label}" --stage "${TMP}/reject-stage-${label}" \
+  if output=$(MOOX_STORAGE_PRIMARY_AUTH_SECRET=gateway-contract-primary \
+    MOOX_STORAGE_VIEW_AUTH_SECRET=gateway-contract-view \
+    "${DEPLOY}" --target localhost --dir "${TMP}/reject-${label}" --stage "${TMP}/reject-stage-${label}" \
     --skip-build --no-start --no-admin --no-storage --no-archive --no-eventbus \
     --no-cloudnode --no-collector --no-factor --no-strategy --no-trade --local-ca skip --target-ca skip \
     --node-id gateway-monitor --gateway-control-url 'http://127.0.0.1:11000' \

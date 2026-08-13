@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -13,6 +14,12 @@ func TestMetadataStoreCodeMapsMissingRowsToNotFound(t *testing.T) {
 
 	if got := MetadataStoreCode(err); got != pb.ErrorCode_NOT_FOUND {
 		t.Fatalf("MetadataStoreCode() = %v, want %v", got, pb.ErrorCode_NOT_FOUND)
+	}
+}
+
+func TestMetadataStoreCodeMapsViewIndexBuildConflict(t *testing.T) {
+	if got := MetadataStoreCode(metadatastore.ErrViewIndexBuildConflict); got != pb.ErrorCode_CONFLICT {
+		t.Fatalf("MetadataStoreCode() = %v, want %v", got, pb.ErrorCode_CONFLICT)
 	}
 }
 

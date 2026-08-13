@@ -114,8 +114,9 @@ type CollectParams struct {
 // DNSResolution is intentionally small: the scheduler only needs the
 // hostname-to-address mapping captured before dispatching an SCF invocation.
 type DNSResolution struct {
-	IPs        []string  `json:"ips,omitempty"`
-	ResolvedAt time.Time `json:"resolved_at,omitempty"`
+	IPs        []string          `json:"ips,omitempty"`
+	ResolvedAt time.Time         `json:"resolved_at,omitempty"`
+	LatencyMS  map[string]uint32 `json:"latency_ms,omitempty"`
 }
 
 // DNSIPs returns a defensive copy of the addresses for host.

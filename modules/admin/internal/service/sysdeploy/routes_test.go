@@ -2,6 +2,7 @@ package sysdeploy
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -156,4 +157,14 @@ func TestEndpointMap_UsesCompositeKeysWithoutNodeFilter(t *testing.T) {
 	items := endpointMap(rows, true)
 	assert.Contains(t, items, "a/monitor")
 	assert.Contains(t, items, "b/monitor")
+}
+
+func TestIsSQLiteLockError(t *testing.T) {
+	for _, err := range []error{
+		fmt.Errorf("database is locked"),
+		fmt.Errorf("SQLITE_BUSY: database table is locked"),
+	} {
+		assert.True(t, isSQLiteLockError(err))
+	}
+	assert.False(t, isSQLiteLockError(fmt.Errorf("constraint failed")))
 }

@@ -25,9 +25,10 @@ import (
 type Options struct{ Path string }
 
 type Index struct {
-	root string
-	mu   sync.Mutex
-	open map[string]*handle
+	root   string
+	mu     sync.Mutex
+	openMu sync.Mutex
+	open   map[string]*handle
 }
 
 type handle struct {
@@ -98,16 +99,28 @@ func (i *Index) Write(ctx context.Context, id string, batch viewindex.ViewIndexW
 		return errors.New("view schema hash conflict")
 	}
 	writeBatch := h.index.NewBatch()
+	pending := make(map[string]map[string]any, len(batch.RowWrites))
 	for _, write := range batch.RowWrites {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// Record views overwrite by document id; no read-modify-write merge.
-		row, err := documentRow(write, h.meta, h.index, batch.WriteMode)
+		// Record documents are upserts too. Read-modify-write preserves fields
+		// omitted by a partial LiveWrite, and Backfill never overwrites a value
+		// that arrived through the live stream first.
+		rowID := viewindex.RowKeyID(write.Key.Key)
+		base, ok := pending[rowID]
+		if !ok {
+			base, err = existingDocument(ctx, h.index, rowID, h.meta)
+			if err != nil {
+				return err
+			}
+		}
+		row, err := documentRowFromBase(ctx, write, h.meta, base, batch.WriteMode)
 		if err != nil {
 			return err
 		}
-		if err := writeBatch.Index(viewindex.RowKeyID(write.Key.Key), row); err != nil {
+		pending[rowID] = row
+		if err := writeBatch.Index(rowID, row); err != nil {
 			return err
 		}
 	}
@@ -202,6 +215,27 @@ func (i *Index) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, 
 	return stats, nil
 }
 
+// StatMetadata avoids a full DocCount during startup restore. The count is
+// still collected by Stat during periodic reconciliation.
+func (i *Index) StatMetadata(ctx context.Context, id string) (viewindex.ViewIndexStats, error) {
+	path, err := i.path(id)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return viewindex.ViewIndexStats{}, nil
+	} else if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	h, err := i.get(id)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return viewindex.ViewIndexStats{Exists: true, ViewVersion: h.meta.ViewVersion, SchemaHash: h.meta.SchemaHash, UpdatedAt: h.meta.UpdatedAt}, nil
+}
+
 func (i *Index) Exists(_ context.Context, id string) (bool, error) {
 	path, err := i.path(id)
 	if err != nil {
@@ -262,6 +296,17 @@ func (i *Index) get(id string) (*handle, error) {
 		return h, nil
 	}
 	i.mu.Unlock()
+	// Bleve's bbolt backend permits only one process-level opener for an index.
+	// Serialize cold opens while keeping the fast cached path lock-free for the
+	// expensive backend operation.
+	i.openMu.Lock()
+	defer i.openMu.Unlock()
+	i.mu.Lock()
+	if h := i.open[id]; h != nil {
+		i.mu.Unlock()
+		return h, nil
+	}
+	i.mu.Unlock()
 	meta, err := i.readMeta(id)
 	if err != nil {
 		return nil, err
@@ -274,6 +319,7 @@ func (i *Index) get(id string) (*handle, error) {
 	i.mu.Lock()
 	if existing := i.open[id]; existing != nil {
 		_ = index.Close()
+		i.mu.Unlock()
 		return existing, nil
 	}
 	i.open[id] = h
@@ -381,14 +427,36 @@ func schemaColumns(columns []*pb.ViewColumn) map[string]pb.FieldValueType {
 	return out
 }
 
-func documentRow(write viewindex.RowWrite, meta indexMeta, _ blevelib.Index, _ viewindex.WriteMode) (map[string]any, error) {
+func documentRow(ctx context.Context, write viewindex.RowWrite, meta indexMeta, index blevelib.Index, mode viewindex.WriteMode) (map[string]any, error) {
 	key := write.Key.Key.GetRecord()
 	if key == nil {
 		return nil, errors.New("bleve only accepts record row keys")
 	}
-	doc := map[string]any{"record_id": key.GetRecordId(), "version": key.GetVersion()}
-	text := make([]string, 0, len(write.Fields)+len(write.Attributes)+2)
-	text = append(text, key.GetRecordId(), key.GetVersion())
+	doc, err := existingDocument(ctx, index, viewindex.RowKeyID(write.Key.Key), meta)
+	if err != nil {
+		return nil, err
+	}
+	return documentRowFromBase(ctx, write, meta, doc, mode)
+}
+
+func documentRowFromBase(ctx context.Context, write viewindex.RowWrite, meta indexMeta, doc map[string]any, mode viewindex.WriteMode) (map[string]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	key := write.Key.Key.GetRecord()
+	if key == nil {
+		return nil, errors.New("bleve only accepts record row keys")
+	}
+	if doc != nil {
+		copyDoc := make(map[string]any, len(doc)+len(meta.Columns)*2)
+		for name, value := range doc {
+			copyDoc[name] = value
+		}
+		doc = copyDoc
+	}
+	if doc == nil {
+		doc = map[string]any{"record_id": key.GetRecordId(), "version": key.GetVersion()}
+	}
 	for _, field := range write.Fields {
 		if field == nil {
 			continue
@@ -400,34 +468,76 @@ func documentRow(write viewindex.RowWrite, meta indexMeta, _ blevelib.Index, _ v
 		if _, ok := meta.Columns[field.GetFieldId()]; !ok {
 			return nil, fmt.Errorf("unknown view column %q", field.GetFieldId())
 		}
+		if mode == viewindex.Backfill {
+			if _, exists := doc[field.GetFieldId()]; exists {
+				continue
+			}
+		}
 		if value == nil {
+			delete(doc, field.GetFieldId())
 			doc[nullMarker(field.GetFieldId())] = "true"
 		} else {
+			delete(doc, nullMarker(field.GetFieldId()))
 			doc[field.GetFieldId()] = value
 		}
-		text = append(text, fmt.Sprint(value))
 	}
 	for name, typed := range write.Attributes {
 		if _, ok := meta.Columns[name]; !ok {
 			return nil, fmt.Errorf("unknown view column %q", name)
+		}
+		if mode == viewindex.Backfill {
+			if _, exists := doc[name]; exists {
+				continue
+			}
 		}
 		value, err := typedValueToNative(typed)
 		if err != nil {
 			return nil, err
 		}
 		if value == nil {
+			delete(doc, name)
 			doc[nullMarker(name)] = "true"
 		} else {
+			delete(doc, nullMarker(name))
 			doc[name] = value
 		}
-		text = append(text, fmt.Sprint(value))
 	}
 	for name := range meta.Columns {
 		if _, ok := doc[name]; !ok {
 			doc[nullMarker(name)] = "true"
 		}
 	}
+	text := make([]string, 0, len(meta.Columns)+2)
+	text = append(text, key.GetRecordId(), key.GetVersion())
+	for name := range meta.Columns {
+		if value, ok := doc[name]; ok {
+			text = append(text, fmt.Sprint(value))
+		}
+	}
 	doc["all_text"] = strings.Join(text, " ")
+	return doc, nil
+}
+
+func existingDocument(ctx context.Context, index blevelib.Index, id string, meta indexMeta) (map[string]any, error) {
+	request := blevelib.NewSearchRequestOptions(blevequery.NewDocIDQuery([]string{id}), 1, 0, false)
+	fields := make([]string, 0, len(meta.Columns)+2)
+	fields = append(fields, "record_id", "version")
+	for name := range meta.Columns {
+		fields = append(fields, name)
+	}
+	sort.Strings(fields)
+	request.Fields = fields
+	result, err := index.SearchInContext(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Hits) == 0 {
+		return nil, nil
+	}
+	doc := make(map[string]any, len(result.Hits[0].Fields))
+	for name, value := range result.Hits[0].Fields {
+		doc[name] = value
+	}
 	return doc, nil
 }
 

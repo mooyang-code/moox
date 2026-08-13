@@ -88,7 +88,10 @@ func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
 		"_pragma=journal_mode(WAL)",
 		"_pragma=synchronous(OFF)",
-		"_pragma=busy_timeout(5000)",
+		// SQLite has one writer. Keep a bounded wait for short lock
+		// contention, while the application-level retry handles the few
+		// bookkeeping updates that race with route/health writes.
+		"_pragma=busy_timeout(10000)",
 		"_pragma=temp_store(MEMORY)",
 		"_pragma=cache_size(-64000)",
 		"_pragma=wal_autocheckpoint(1000)",
@@ -106,8 +109,8 @@ func applySQLitePoolConfig(db *gorm.DB, cfg *config.DatabaseConfig) {
 		return
 	}
 
-	maxOpen := 30
-	maxIdle := 20
+	maxOpen := 8
+	maxIdle := 4
 	if cfg != nil {
 		if cfg.MaxOpenConns > 0 {
 			maxOpen = cfg.MaxOpenConns

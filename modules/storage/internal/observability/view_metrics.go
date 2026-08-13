@@ -35,6 +35,9 @@ type ViewMetrics struct {
 	outboxDuplicatePublish      prometheus.Counter
 	periodWaitingDatasets       *prometheus.GaugeVec
 	readyPublishRetry           *prometheus.CounterVec
+	restoreDuration             prometheus.Gauge
+	restoreReady                prometheus.Gauge
+	restoreFailures             prometheus.Counter
 	consumerLagSnapshot         atomic.Int64
 	consumerBoundSnapshot       atomic.Bool
 	outboxObservedSnapshot      atomic.Bool
@@ -49,6 +52,9 @@ type ViewMetrics struct {
 	retryExhaustedSnapshot      atomic.Int64
 	outboxPublishErrorsSnapshot atomic.Int64
 	outboxDuplicateSnapshot     atomic.Int64
+	restoreDurationSnapshot     atomic.Int64
+	restoreReadySnapshot        atomic.Bool
+	restoreFailuresSnapshot     atomic.Int64
 	pendingMu                   sync.Mutex
 	pendingDeliveries           map[*jetstream.Delivery]time.Time
 }
@@ -69,6 +75,9 @@ type ViewMetricsSnapshot struct {
 	RetryExhaustedTotal         int64
 	OutboxPublishErrorsTotal    int64
 	OutboxDuplicatePublishTotal int64
+	RestoreDuration             time.Duration
+	RestoreReady                bool
+	RestoreFailures             int64
 }
 
 func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
@@ -148,6 +157,18 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
 			Help: "View source/result ready event publishes that need retry.",
 		}, []string{"view", "event"}),
+		restoreDuration: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "restore_duration_seconds",
+			Help: "Duration of the latest active View restore pass.",
+		}),
+		restoreReady: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "restore_ready",
+			Help: "Whether the latest active View restore pass completed successfully.",
+		}),
+		restoreFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "restore_failures_total",
+			Help: "Number of failed active View restore passes.",
+		}),
 		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
 	}
 	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -212,6 +233,15 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.readyPublishRetry, err = registerOrReuse(registerer, metrics.readyPublishRetry); err != nil {
 		return nil, err
 	}
+	if metrics.restoreDuration, err = registerOrReuse(registerer, metrics.restoreDuration); err != nil {
+		return nil, err
+	}
+	if metrics.restoreReady, err = registerOrReuse(registerer, metrics.restoreReady); err != nil {
+		return nil, err
+	}
+	if metrics.restoreFailures, err = registerOrReuse(registerer, metrics.restoreFailures); err != nil {
+		return nil, err
+	}
 	return metrics, nil
 }
 
@@ -232,6 +262,29 @@ func (m *ViewMetrics) ObserveReadyPublishRetry(view, event string) {
 		return
 	}
 	m.readyPublishRetry.WithLabelValues(view, event).Inc()
+}
+
+// ObserveRestore records the latest startup restore result without adding
+// View- or dataset-level labels. A failed pass leaves readiness false while
+// the liveness endpoint remains available for diagnostics.
+func (m *ViewMetrics) ObserveRestore(success bool, elapsed time.Duration) {
+	if m == nil {
+		return
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	m.restoreDurationSnapshot.Store(elapsed.Nanoseconds())
+	m.restoreDuration.Set(elapsed.Seconds())
+	if success {
+		m.restoreReadySnapshot.Store(true)
+		m.restoreReady.Set(1)
+		return
+	}
+	m.restoreReadySnapshot.Store(false)
+	m.restoreReady.Set(0)
+	m.restoreFailuresSnapshot.Add(1)
+	m.restoreFailures.Inc()
 }
 
 func (m *ViewMetrics) SetConsumerBound(bound bool) {
@@ -514,6 +567,9 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 		RetryExhaustedTotal:         m.retryExhaustedSnapshot.Load(),
 		OutboxPublishErrorsTotal:    m.outboxPublishErrorsSnapshot.Load(),
 		OutboxDuplicatePublishTotal: m.outboxDuplicateSnapshot.Load(),
+		RestoreDuration:             time.Duration(m.restoreDurationSnapshot.Load()),
+		RestoreReady:                m.restoreReadySnapshot.Load(),
+		RestoreFailures:             m.restoreFailuresSnapshot.Load(),
 	}
 }
 

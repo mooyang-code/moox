@@ -10,6 +10,7 @@ storage:
     view_index_root: ./var/storage/view-indexes
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
+    max_ack_pending: 8
   primary:
     service_name: ""
     node_id: storage-node-0
@@ -35,29 +36,9 @@ storage:
     batch_wait_ms: 200
     fetch_batch: 1
     max_workers: 1
-    ordering: subject
-    maintenance:
-      enabled: true
-      owner_id: ""
-      lease_ttl: 90s
-      run_budget: 20s
-      page_size: 500
-      max_entries: 200000
-      target_entries: 150000
-      max_physical_bytes: 536870912
-      min_free_disk_bytes: 1073741824
-      min_ready_entries: 1000
-      overlap_window: 30m
-      allowed_lag: 2m
-      remove_grace: 60s
-      time_series:
-        default_keep_duration: 7d
-        keep_by_freq:
-          1m: 24h
-          1h: 90d
-          1d: 730d
-      record:
-        keep_duration: 30d
+    ordering: dataset
+    rebuild_check_interval: 1m
+    max_view_file_bytes: 1073741824
   maintenance:
     host_metrics_cleanup:
       enabled: true

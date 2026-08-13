@@ -29,6 +29,9 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills",
 			"ListPositions",
 		},
+		"trpc.moox.trade.TradeDNSResolverService": {
+			"ResolveDomains",
+		},
 	}
 	services := File_trade_service_proto.Services()
 	if services.Len() != len(want) {

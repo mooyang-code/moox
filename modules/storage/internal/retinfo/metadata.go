@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -19,6 +20,9 @@ func MetadataStoreCode(err error) pb.ErrorCode {
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return pb.ErrorCode_NOT_FOUND
+	}
+	if errors.Is(err, metadatastore.ErrViewIndexBuildConflict) {
+		return pb.ErrorCode_CONFLICT
 	}
 	msg := strings.ToLower(err.Error())
 	switch {

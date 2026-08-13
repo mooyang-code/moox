@@ -29,6 +29,14 @@ Trade 是 MooX 的交易执行与交易事实源，负责 Exchange 账户、逻�
 | `LogicalAccountService` | `11202` | 逻辑账户、成员、归属、暂停、恢复和清仓 |
 | Health | `11210` | `/healthz`、`/readyz`、`/metrics` |
 
+### DNS Resolver
+
+启用后，Trade 通过鉴权 Gateway 暴露独立的 `TradeDNSResolverService.ResolveDomains`，供
+Collector 批量解析行情域名。Resolver 只读取部署时由 `moox-cli` 从 `custom.toml` 提取的
+`dns_resolver` YAML 子树，不读取完整 TOML，也不接触 SSH、云账号或交易凭据。每个候选 IPv4
+会在 Trade 节点执行有界 TCP 探测并返回延迟排序；单域失败通过响应级未解析列表表达，不阻断同批
+其他域名。Resolver 是辅助能力，暂时不可用不会让 Trade `/readyz` 失败。
+
 策略目标经 `moox.trade.target.requested.v1` 事件进入 Trade，不通过公开 RPC 伪造
 订单 owner。订单归属由服务端写入：
 

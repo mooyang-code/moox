@@ -53,6 +53,23 @@ func TestNativeServiceDescUsesWildcardMethod(t *testing.T) {
 	}
 }
 
+func TestNativeReadOnlyMethodAllowlist(t *testing.T) {
+	for _, test := range []struct {
+		method string
+		read   bool
+	}{
+		{method: "ListViews", read: true},
+		{method: "QueryTimeSeriesRows", read: true},
+		{method: "GetSpace", read: true},
+		{method: "UpdateView", read: false},
+		{method: "ActivateViewIndex", read: false},
+	} {
+		if got := nativeReadOnlyMethod(test.method); got != test.read {
+			t.Fatalf("nativeReadOnlyMethod(%q) = %v, want %v", test.method, got, test.read)
+		}
+	}
+}
+
 func TestNativeGatewayRoundTripsJSONThroughGeneratedStorageHandler(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

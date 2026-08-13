@@ -40,3 +40,19 @@ WHERE type = 'table'
 		t.Fatalf("Initialize() created %d admin tables, want 0", count)
 	}
 }
+
+func TestInitializeUsesBoundedSQLitePool(t *testing.T) {
+	mgr := NewManager()
+	if err := mgr.Initialize(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "admin.db")}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	sqlDB, err := mgr.GetDB().DB()
+	if err != nil {
+		t.Fatalf("DB() error = %v", err)
+	}
+	defer sqlDB.Close()
+	stats := sqlDB.Stats()
+	if stats.MaxOpenConnections != 8 {
+		t.Fatalf("MaxOpenConnections = %d, want 8", stats.MaxOpenConnections)
+	}
+}

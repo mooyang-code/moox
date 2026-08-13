@@ -27,6 +27,13 @@ func BuildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sour
 	return buildManagedEnvironment(assignment, snapshot, maxManagedEnvironmentSize)
 }
 
+// ManagedDNSHash returns the short hash embedded in the CloudNode-managed
+// environment. Health diagnostics use the same hash as SCF propagation.
+func ManagedDNSHash(snapshot map[string]sources.DNSResolution) string {
+	_, hash, _ := normalizeDNSRoutes(snapshot)
+	return hash
+}
+
 func buildManagedEnvironment(assignment NodeAssignment, snapshot map[string]sources.DNSResolution, maxSize int) (map[string]string, error) {
 	if maxSize <= 0 {
 		return nil, fmt.Errorf("timer managed environment budget must be positive")
@@ -115,7 +122,9 @@ func normalizeDNSRoutes(snapshot map[string]sources.DNSResolution) (map[string][
 			delete(routes, host)
 			continue
 		}
-		sort.Strings(routes[host])
+		if len(resolution.LatencyMS) == 0 {
+			sort.Strings(routes[host])
+		}
 		if resolution.ResolvedAt.After(latest) {
 			latest = resolution.ResolvedAt
 		}

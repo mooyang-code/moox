@@ -127,6 +127,7 @@ func TestTimerMarketFetchHandlerE2E(t *testing.T) {
 	t.Setenv("MOOX_MARKET_FETCH_SUBJECTS", "BTC-USDT")
 	t.Setenv("MOOX_MARKET_FETCH_SYMBOLS_JSON", `{"BTC-USDT":"BTCUSDT"}`)
 	t.Setenv("MOOX_MARKET_FETCH_ASSIGNMENT_HASH", "assignment")
+	t.Setenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON", `{"api.binance.com":["203.0.113.1"],"fapi.binance.com":["203.0.113.2"]}`)
 	t.Setenv("MOOX_STORAGE_RPC_GATEWAY_TARGET", "ip://127.0.0.1:11003")
 	var captured marketfetch.Request
 	handler := &Handler{
@@ -149,4 +150,5 @@ func TestTimerMarketFetchHandlerE2E(t *testing.T) {
 	require.Equal(t, domain.BatchKindRealtime, captured.BatchKind)
 	require.Len(t, captured.Items, 1)
 	require.Equal(t, "BTCUSDT", captured.Items[0].Symbol)
+	require.Equal(t, []string{"203.0.113.1"}, captured.DNSRoutes["api.binance.com"].IPs)
 }

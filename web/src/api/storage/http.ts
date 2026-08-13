@@ -4,13 +4,69 @@ import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
 import { getStorageAuthInfo } from "./auth";
 import type { RetInfo } from "./types";
-import { installSpaceAwareSignedClient } from "../admin/signed-client";
+import { installSpaceAwareSignedClient, readPersistedAuth } from "../admin/signed-client";
+import { readSelectedSpaceId } from "../admin/space-header";
 
 const storageClient = axios.create({
   baseURL: gatewayOrigin(),
   timeout: 30000,
   headers: { "Content-Type": "application/json" }
 });
+
+const STORAGE_READ_CACHE_TTL_MS = 3000;
+const storageReadCache = new Map<string, { expiresAt: number; data: unknown }>();
+const storageReadInflight = new Map<string, Promise<unknown>>();
+let storageReadGeneration = 0;
+
+// Only idempotent metadata/data reads are cached. Mutation responses invalidate
+// the short cache so a newly created View or Dataset is visible immediately.
+const storageReadMethods = new Set([
+  "GetDataSource",
+  "ListDataSources",
+  "GetSubject",
+  "ListSubjects",
+  "ListSubjectSymbols",
+  "GetDataset",
+  "ListDatasets",
+  "ListDatasetSubjects",
+  "GetFieldGroup",
+  "ListFieldGroups",
+  "GetField",
+  "ListFields",
+  "GetFactor",
+  "ListFactors",
+  "ListDatasetColumns",
+  "GetView",
+  "ListViews",
+  "ListViewColumns",
+  "GetDataNode",
+  "ListDataNodes",
+  "CheckDatasetActivation",
+  "ListArchiveFiles",
+  "ReadFields",
+  "ReadTimeSeriesRows",
+  "ReadRecordRows",
+  "QueryTimeSeriesRows",
+  "SearchRecordRows"
+]);
+
+function storageCacheKey(method: string, req: object): string {
+  const auth = readPersistedAuth();
+  const spaceID = readSelectedSpaceId();
+  return JSON.stringify({
+    method,
+    req,
+    sessionID: auth.sessionId || "",
+    token: auth.token || "",
+    spaceID: spaceID || ""
+  });
+}
+
+function invalidateStorageReadCache(): void {
+  storageReadCache.clear();
+  storageReadInflight.clear();
+  storageReadGeneration += 1;
+}
 
 function assertSuccess(retInfo?: RetInfo) {
   if (!retInfo) {
@@ -26,12 +82,50 @@ function assertSuccess(retInfo?: RetInfo) {
 }
 
 async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo }>(method: string, req: TReq): Promise<TRsp> {
-  const rsp = await storageClient.post<TRsp>(`/api/admin/storage/${method}`, {
-    auth_info: getStorageAuthInfo(),
-    ...req
-  });
-  assertSuccess(rsp.data.ret_info);
-  return rsp.data;
+  const readOnly = storageReadMethods.has(method);
+  if (!readOnly) {
+    invalidateStorageReadCache();
+  }
+  const key = readOnly ? storageCacheKey(method, req) : "";
+  if (readOnly) {
+    const cached = storageReadCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data as TRsp;
+    }
+    storageReadCache.delete(key);
+    const pending = storageReadInflight.get(key);
+    if (pending) {
+      return (await pending) as TRsp;
+    }
+  }
+
+  const generation = storageReadGeneration;
+  const request = (async () => {
+    const rsp = await storageClient.post<TRsp>(`/api/admin/storage/${method}`, {
+      auth_info: getStorageAuthInfo(),
+      ...req
+    });
+    assertSuccess(rsp.data.ret_info);
+    if (readOnly && generation === storageReadGeneration) {
+      storageReadCache.set(key, { expiresAt: Date.now() + STORAGE_READ_CACHE_TTL_MS, data: rsp.data });
+    }
+    return rsp.data;
+  })();
+  if (readOnly) {
+    storageReadInflight.set(key, request);
+    try {
+      return await request;
+    } finally {
+      if (storageReadInflight.get(key) === request) {
+        storageReadInflight.delete(key);
+      }
+    }
+  }
+  const response = await request;
+  // A read that raced the mutation may have captured the pre-commit value;
+  // invalidate again after success so it cannot survive the write boundary.
+  invalidateStorageReadCache();
+  return response;
 }
 
 export { callStorage };

@@ -17,7 +17,8 @@ MooX 使用 SCF 不是为了常驻计算，而是为了利用不同地域、不�
 ```mermaid
 flowchart LR
   Rule["Collector 读取启用规则和 Symbol Dataset"] --> Assign["确定性分片，每函数不超过 30 个标的"]
-  DNS["Collector 定时解析 DNS"] --> Reconcile["任务和公共 DNS 环境变量协调"]
+  TradeDNS["Trade Resolver (compute-1)"] --> DNS["Collector DNS 快照"]
+  DNS --> Reconcile["任务和公共 DNS 环境变量协调"]
   Assign --> Reconcile
   Reconcile --> CloudNode["CloudNode 合并并更新函数配置"]
   CloudNode --> Timer["腾讯云 Timer Trigger"]
@@ -29,7 +30,7 @@ flowchart LR
 ```
 
 1. 实时 K 线由每个函数自己的 Timer Trigger 触发，不再由 Collector 在每分钟调用每个函数。
-2. Collector 仍是控制面：扫描启用规则、读取关联 Symbol Dataset、生成稳定分片，并在 Symbol、规则或 DNS 变化时协调函数环境变量。
+2. Collector 仍是控制面：扫描启用规则、读取关联 Symbol Dataset、生成稳定分片，并在 Symbol、规则或 DNS 变化时协调函数环境变量。DNS 默认由 `custom.toml` 选择的 Trade `compute-1` 解析；Collector 通过 Gateway 批量请求 `ResolveDomains`，本地 DNS 只作为缺失域名或 Trade 不可用时的回退。
 3. 每个定时函数只承载一个 `provider + market_type + dataset_id + frequency` 组合，最多 30 个标的。30 是业务上限；Collector 先按约 1.8KB 的受管 Environment 预算拆分，为 provider、代码包、CLS、Storage 等未知变量预留空间；如果长标的或 DNS 路由仍使完整 Environment 接近 4KB，Collector 会进一步拆小分片，而不是反复提交必失败的配置。函数每次触发后从环境变量读取任务，不调用 Collector 或 Admin 配置接口。
 4. SCF 并发请求行情，聚合后只调用一次 Storage。定时函数不发布逐批 Completion 事件；下一周期天然重试最近 3 根已收盘 K 线，Storage RowKey Upsert 负责幂等。
 5. 长时间缺口、Symbol 全量快照、出口探针和人工 E2E 仍走有界的按需调用，不和实时 Timer 链路混在一起。
@@ -84,9 +85,9 @@ flowchart LR
 | `MOOX_MARKET_FETCH_DNS_UPDATED_AT` | 最近一次成功解析时间，RFC3339 |
 | `MOOX_STORAGE_RPC_GATEWAY_TARGET` | 发布时从 `scf_fetcher.spaces[].storage_rpc_gateway_target` 写入的固定 Storage 数据面地址 |
 
-DNS 仍采用“缓存 IP 优先、失败后域名直连”的简单策略，不做测速、排序或健康打分。Collector 每 5 分钟解析配置域名，单域失败保留上次成功值；内容哈希未变化时不更新腾讯函数配置。SCF 遇到环境变量缺失、JSON 非法或 IP 请求失败时，记录警告并回退系统 DNS，不能让整个批次因 DNS 缓存失效。
+DNS 仍采用“缓存 IP 优先、失败后域名直连”的简单策略。Trade Resolver 在 `compute-1` 的网络出口执行 DNS 查询，并对候选 IPv4 做 TCP/443 探测；Collector 每 5 分钟批量请求一次，按探测延迟保留最多 4 个地址。单域失败保留上次成功值；内容哈希未变化时不更新腾讯函数配置。延迟只用于 Collector 内部排序，不写入 SCF 路由 JSON。SCF 遇到环境变量缺失、JSON 非法或 IP 请求失败时，记录警告并回退系统 DNS，不能让整个批次因 DNS 缓存失效。
 
-Collector 是 DNS 信息的唯一更新者：它定时解析配置中的币安域名，把成功结果保存在进程内缓存，并在下一次配置协调时复制到每个相关 SCF 的环境变量。SCF 不回调 Collector 获取任务或 DNS，因此采集链路不依赖 Collector 的在线请求接口。Storage 地址同样在发布时固定写入环境变量；Collector 不在每分钟协调中修改该地址。Timer 发布拒绝空值和 loopback Storage 地址。
+Collector 是 DNS 信息的唯一更新者：它从 `custom.toml` 派生的配置中读取域名和 Trade 目标，通过已鉴权的 Gateway 调用 `ResolveDomains`，把成功结果保存在进程内缓存，并在下一次配置协调时复制到每个相关 SCF 的环境变量。SCF 不回调 Collector 获取任务或 DNS，因此采集链路不依赖 Collector 的在线请求接口。Storage 地址同样在发布时固定写入环境变量；Collector 不在每分钟协调中修改该地址。Timer 发布拒绝空值和 loopback Storage 地址。
 
 腾讯云限制单函数环境变量总大小为 4KB，本方案不把任务 JSON、证书和无关控制面配置无限塞入函数。定时函数不携带 EventBus 与 Collector 调用凭据；发布和每次配置协调都按完整环境计算 UTF-8 字节数并预留空间，超过限制时在调用腾讯 API 前失败。每函数 30 个标的是容量上限，不是保证一定能放下的替代校验；Collector 会在 30 以内按实际受管 Environment 大小继续拆分。[腾讯云配额限制说明](https://cloud.tencent.com/document/product/583/11637)
 

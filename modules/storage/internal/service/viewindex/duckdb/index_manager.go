@@ -43,6 +43,10 @@ const (
 	defaultDuckDBMemory  = "512MB"
 	defaultDuckDBThreads = 1
 	defaultMaxOpenConns  = 8
+	// DuckDB accepts a large parameter count, but keeping each statement
+	// bounded avoids oversized SQL packets during a 10k-row backfill while
+	// still amortizing per-row Exec overhead for the event consumer.
+	maxWriteRowsPerStatement = 256
 )
 
 func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
@@ -57,22 +61,12 @@ func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 		return nil, err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".duckdb") {
-			continue
-		}
-		db, err := open(filepath.Join(opts.Root, entry.Name()))
-		if err != nil {
-			return nil, fmt.Errorf("open existing duckdb view %q: %w", entry.Name(), err)
-		}
-		validateCtx, cancelValidate := context.WithTimeout(context.TODO(), 30*time.Second)
-		validateErr := validateSystemSchema(validateCtx, db)
-		cancelValidate()
-		closeErr := db.Close()
-		if validateErr != nil {
-			return nil, fmt.Errorf("validate existing duckdb view %q: %w", entry.Name(), validateErr)
-		}
-		if closeErr != nil {
-			return nil, fmt.Errorf("close existing duckdb view %q: %w", entry.Name(), closeErr)
+		if strings.Contains(entry.Name(), ".duckdb.prepare-") {
+			// A process may have been interrupted after creating the temporary
+			// build file. It is never an authoritative slot and is safe to
+			// remove before Metadata restores active indexes.
+			_ = os.Remove(filepath.Join(opts.Root, entry.Name()))
+			_ = os.Remove(filepath.Join(opts.Root, entry.Name()+".wal"))
 		}
 	}
 	return &IndexManager{root: opts.Root, dbs: make(map[string]*sql.DB), schema: make(map[string]map[string]pb.FieldValueType), dataset: make(map[string]string), space: make(map[string]string)}, nil
@@ -85,15 +79,20 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 	if err != nil {
 		return err
 	}
-	if err := m.closeIndex(id); err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	db, err := open(path)
+	// Build into a sibling temporary file. The active slot stays intact until
+	// the complete schema and metadata have been committed and the file is
+	// closed; the final rename is atomic on the same filesystem. A crash during
+	// DDL therefore leaves the previous active file (or only an ignored temp
+	// file), never a half-created official slot.
+	tempPath := fmt.Sprintf("%s.prepare-%d", path, time.Now().UnixNano())
+	db, err := open(tempPath)
 	if err != nil {
 		return err
+	}
+	cleanupTemp := func() {
+		_ = db.Close()
+		_ = os.Remove(tempPath)
+		_ = os.Remove(tempPath + ".wal")
 	}
 	columns := schemaColumns(schema.Columns)
 	createColumns := []string{
@@ -114,18 +113,37 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
 		CREATE INDEX idx_view_rows_data_time ON view_rows (data_time);`, strings.Join(createColumns, ", "))
 	if _, err := db.ExecContext(ctx, statement); err != nil {
-		_ = db.Close()
+		cleanupTemp()
 		return err
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta VALUES (1, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-		_ = db.Close()
+		cleanupTemp()
 		return err
 	}
 	for name, valueType := range columns {
 		if _, err := db.ExecContext(ctx, `INSERT INTO view_columns VALUES (?, ?)`, name, int32(valueType)); err != nil {
-			_ = db.Close()
+			cleanupTemp()
 			return err
 		}
+	}
+	if err := db.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		_ = os.Remove(tempPath + ".wal")
+		return err
+	}
+	if err := m.closeIndex(id); err != nil {
+		_ = os.Remove(tempPath)
+		_ = os.Remove(tempPath + ".wal")
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath)
+		_ = os.Remove(tempPath + ".wal")
+		return err
+	}
+	db, err = open(path)
+	if err != nil {
+		return err
 	}
 	m.mu.Lock()
 	m.dbs[id] = db
@@ -140,6 +158,7 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if err := batch.Validate(); err != nil {
 		return err
 	}
+	batch.RowWrites = collapseRowWrites(batch.RowWrites)
 	db, columns, _, _, err := m.getIndex(ctx, id)
 	if err != nil {
 		return err
@@ -160,25 +179,155 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if schemaHash != batch.ViewSchemaHash {
 		return errors.New("view schema hash conflict")
 	}
-	names := upsertColumnNames(columns)
-	stmt, err := tx.PrepareContext(ctx, upsertSQL(names, batch.WriteMode))
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, write := range batch.RowWrites {
-		args, err := rowArgs(columns, names, write, batch.WriteMode)
-		if err != nil {
-			return err
-		}
-		if _, err := stmt.ExecContext(ctx, args...); err != nil {
-			return err
+	for _, group := range groupRowWrites(batch.RowWrites) {
+		names := append([]string{"subject_id", "freq", "data_time", "series_tag"}, group.columns...)
+		for start := 0; start < len(group.writes); start += maxWriteRowsPerStatement {
+			end := start + maxWriteRowsPerStatement
+			if end > len(group.writes) {
+				end = len(group.writes)
+			}
+			args := make([]any, 0, (end-start)*len(names))
+			for _, write := range group.writes[start:end] {
+				rowValues, err := rowArgs(columns, names, write, batch.WriteMode)
+				if err != nil {
+					return err
+				}
+				args = append(args, rowValues...)
+			}
+			if _, err := tx.ExecContext(ctx, upsertSQLBatch(names, batch.WriteMode, end-start), args...); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+type rowWriteGroup struct {
+	columns []string
+	writes  []viewindex.RowWrite
+}
+
+func collapseRowWrites(writes []viewindex.RowWrite) []viewindex.RowWrite {
+	if len(writes) < 2 {
+		return writes
+	}
+	result := make([]viewindex.RowWrite, 0, len(writes))
+	positions := make(map[string]int, len(writes))
+	for _, write := range writes {
+		// DuckDB's primary key intentionally contains only the four physical
+		// time-series columns below. RowKey also carries space/dataset metadata,
+		// which may differ between equivalent source rows; using the full
+		// protobuf here would leave those rows in one multi-value INSERT and
+		// DuckDB would reject the batch with a duplicate primary key.
+		id := physicalRowKeyID(write.Key.Key)
+		position, ok := positions[id]
+		if !ok {
+			clone := viewindex.RowWrite{Key: write.Key, Fields: append([]*pb.FieldValue(nil), write.Fields...), Attributes: cloneAttributes(write.Attributes)}
+			positions[id] = len(result)
+			result = append(result, clone)
+			continue
+		}
+		mergeRowWrite(&result[position], write)
+	}
+	return result
+}
+
+func physicalRowKeyID(key *pb.RowKey) string {
+	if series := key.GetTimeSeries(); series != nil {
+		dataTime := series.GetDataTime()
+		if parsed, err := time.Parse(time.RFC3339Nano, dataTime); err == nil {
+			// rowArgs converts the same value to time.Time before binding it to
+			// DuckDB. Canonicalize here too so equivalent RFC3339 spellings
+			// collapse to one physical primary key within a batch.
+			dataTime = parsed.UTC().Format("2006-01-02T15:04:05.000000000Z")
+		}
+		// Length-prefix every component instead of joining with a delimiter.
+		// User-controlled subject/frequency/tag values may contain any byte
+		// sequence accepted by the protobuf contract, including NUL.
+		return encodePhysicalKeyParts(series.GetSubjectId(), series.GetFreq(), dataTime, series.GetSeriesTag())
+	}
+	return viewindex.RowKeyID(key)
+}
+
+func encodePhysicalKeyParts(parts ...string) string {
+	var builder strings.Builder
+	for _, part := range parts {
+		builder.WriteString(strconv.Itoa(len(part)))
+		builder.WriteByte(':')
+		builder.WriteString(part)
+	}
+	return builder.String()
+}
+
+func mergeRowWrite(dst *viewindex.RowWrite, src viewindex.RowWrite) {
+	for _, field := range src.Fields {
+		if field == nil {
+			continue
+		}
+		replaced := false
+		for index, existing := range dst.Fields {
+			if existing != nil && existing.GetFieldId() == field.GetFieldId() {
+				dst.Fields[index] = field
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			dst.Fields = append(dst.Fields, field)
+		}
+	}
+	if len(src.Attributes) > 0 {
+		if dst.Attributes == nil {
+			dst.Attributes = make(map[string]*pb.TypedValue, len(src.Attributes))
+		}
+		for name, value := range src.Attributes {
+			dst.Attributes[name] = value
+		}
+	}
+}
+
+func cloneAttributes(attributes map[string]*pb.TypedValue) map[string]*pb.TypedValue {
+	if len(attributes) == 0 {
+		return nil
+	}
+	cloned := make(map[string]*pb.TypedValue, len(attributes))
+	for name, value := range attributes {
+		cloned[name] = value
+	}
+	return cloned
+}
+
+func groupRowWrites(writes []viewindex.RowWrite) []rowWriteGroup {
+	groups := make([]rowWriteGroup, 0)
+	byKey := make(map[string]int)
+	for _, write := range writes {
+		fieldSet := make(map[string]struct{}, len(write.Fields)+len(write.Attributes))
+		for _, field := range write.Fields {
+			if field != nil {
+				fieldSet[field.GetFieldId()] = struct{}{}
+			}
+		}
+		for name := range write.Attributes {
+			fieldSet[name] = struct{}{}
+		}
+		fieldNames := make([]string, 0, len(fieldSet))
+		for name := range fieldSet {
+			fieldNames = append(fieldNames, name)
+		}
+		sort.Strings(fieldNames)
+		key := strings.Join(fieldNames, "\x00")
+		groupIndex, ok := byKey[key]
+		if !ok {
+			groupIndex = len(groups)
+			byKey[key] = groupIndex
+			groups = append(groups, rowWriteGroup{columns: fieldNames})
+		}
+		groups[groupIndex].writes = append(groups[groupIndex].writes, write)
+	}
+	return groups
 }
 
 func upsertColumnNames(columns map[string]pb.FieldValueType) []string {
@@ -194,7 +343,18 @@ func upsertColumnNames(columns map[string]pb.FieldValueType) []string {
 }
 
 func upsertSQL(names []string, mode viewindex.WriteMode) string {
+	return upsertSQLBatch(names, mode, 1)
+}
+
+func upsertSQLBatch(names []string, mode viewindex.WriteMode, rowCount int) string {
+	if rowCount < 1 {
+		rowCount = 1
+	}
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(names)), ",")
+	values := make([]string, rowCount)
+	for i := range values {
+		values[i] = "(" + placeholders + ")"
+	}
 	sets := make([]string, 0, len(names)-4)
 	for _, name := range names[4:] {
 		// Live writes overwrite complete rows. Backfill only fills missing values.
@@ -208,7 +368,7 @@ func upsertSQL(names []string, mode viewindex.WriteMode) string {
 	if len(sets) > 0 {
 		conflict = "ON CONFLICT (subject_id, freq, data_time, series_tag) DO UPDATE SET " + strings.Join(sets, ", ")
 	}
-	return fmt.Sprintf("INSERT INTO view_rows (%s) VALUES (%s) %s", joinQuoted(names), placeholders, conflict)
+	return fmt.Sprintf("INSERT INTO view_rows (%s) VALUES %s %s", joinQuoted(names), strings.Join(values, ","), conflict)
 }
 
 func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewindex.RowWrite, mode viewindex.WriteMode) ([]any, error) {
@@ -416,7 +576,7 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
-	_, err = os.Stat(path)
+	fileInfo, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return viewindex.ViewIndexStats{}, nil
 	}
@@ -445,6 +605,42 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		stats.IndexedTo = to.Time.UTC().Format(time.RFC3339Nano)
 	}
 	stats.Exists = true
+	stats.PhysicalBytes = uint64(fileInfo.Size())
+	if walInfo, walErr := os.Stat(path + ".wal"); walErr == nil {
+		stats.PhysicalBytes += uint64(walInfo.Size())
+	}
+	return stats, nil
+}
+
+// StatMetadata is the lightweight counterpart used during process startup.
+// It deliberately avoids COUNT/MIN/MAX over view_rows; those scans belong to
+// periodic reconciliation and can otherwise keep the RPC listeners offline
+// for the duration of a large View restore.
+func (m *IndexManager) StatMetadata(ctx context.Context, id string) (viewindex.ViewIndexStats, error) {
+	path, err := m.path(id)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	fileInfo, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return viewindex.ViewIndexStats{}, nil
+	}
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	var stats viewindex.ViewIndexStats
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
+	stats.Exists = true
+	stats.PhysicalBytes = uint64(fileInfo.Size())
+	if walInfo, walErr := os.Stat(path + ".wal"); walErr == nil {
+		stats.PhysicalBytes += uint64(walInfo.Size())
+	}
 	return stats, nil
 }
 
@@ -469,6 +665,11 @@ func (m *IndexManager) Remove(_ context.Context, id string) error {
 		return err
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// DuckDB may leave a write-ahead log beside the database. Remove it with
+	// the retired index so an A/B rotation does not strand storage on disk.
+	if err := os.Remove(path + ".wal"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -511,8 +712,10 @@ func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[st
 	m.mu.Lock()
 	if db := m.dbs[id]; db != nil {
 		columns := m.schema[id]
+		datasetID := m.dataset[id]
+		spaceID := m.space[id]
 		m.mu.Unlock()
-		return db, columns, m.dataset[id], m.space[id], nil
+		return db, columns, datasetID, spaceID, nil
 	}
 	m.mu.Unlock()
 	if _, err := os.Stat(path); err != nil {
@@ -554,7 +757,11 @@ func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[st
 	m.mu.Lock()
 	if existing := m.dbs[id]; existing != nil {
 		_ = db.Close()
-		return existing, m.schema[id], m.dataset[id], m.space[id], nil
+		columns := m.schema[id]
+		datasetID := m.dataset[id]
+		spaceID := m.space[id]
+		m.mu.Unlock()
+		return existing, columns, datasetID, spaceID, nil
 	}
 	m.dbs[id], m.schema[id], m.dataset[id] = db, columns, datasetID
 	m.space[id] = spaceID

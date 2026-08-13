@@ -88,11 +88,11 @@ exactly-once，缺口可用 `run-once` 或同步 `RecalcFactor` 修复。
 
 常驻服务把 View 读取与 Python 计算拆成两个独立的有界并发阶段：
 
-- `engine.view_read_workers` 默认 `60`，控制不同 subject 的并行 View 读取；任意读取完成
+- `engine.view_read_workers` 默认 `64`，控制不同 subject 的并行 View 读取；任意读取完成
   后立即补入下一个 subject，不等待固定批次。
 - `engine.view_read_timeout_ms` 默认 `10000`，控制单次 View RPC；超时任务释放读取槽位并
   移到队尾重试一次，不阻塞其他 subject。
-- `engine.python_workers` 默认 `40`，控制全局 Python 计算进程和数据就绪任务并发；启动
+- `engine.python_workers` 默认 `32`，控制全局 Python 计算进程和数据就绪任务并发；启动
   时只预热一个 Python 进程，其余槽位按任务需要惰性启动。
 
 相同 subject、period、lookback 和 trigger 的多个因子共享一次 View 读取，读取列为这些

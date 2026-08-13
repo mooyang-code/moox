@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "$(basename "${SCRIPT_DIR}")" == "contract" ]]; then
+  ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
+else
+  ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+fi
 SCRIPT="${ROOT}/scripts/build-storage-linux.sh"
 DEPLOY_SCRIPT="${ROOT}/scripts/deploy-moox.sh"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-build-storage-linux.XXXXXX")"

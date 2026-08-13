@@ -49,28 +49,53 @@ type StorageDevices struct {
 type StorageEventBus struct {
 	CredentialFile string `yaml:"credential_file"`
 	Consumer       string `yaml:"-"`
-	MaxAckPending  int    `yaml:"-"`
-	AckWaitMS      int    `yaml:"-"`
+	// MaxAckPending bounds the number of View events that may be in flight.
+	// The subject dispatcher still serializes events for the same dataset/view,
+	// so different dataset subjects can make progress concurrently.
+	MaxAckPending int `yaml:"max_ack_pending"`
+	AckWaitMS     int `yaml:"-"`
 }
 
 const (
-	StorageViewConsumer      = "storage_view_period_v1"
-	StorageViewMaxAckPending = 1
-	StorageViewAckWaitMS     = 120000
+	StorageViewConsumer         = "storage_view_period_v1"
+	StorageDefaultMaxAckPending = 8
+	StorageViewMaxAckPending    = 256
+	StorageViewAckWaitMS        = 120000
 )
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName     string                 `yaml:"metadata_service_name"`
-	PrimaryStoreServiceName string                 `yaml:"primary_store_service_name"`
-	IndexServiceName        string                 `yaml:"index_service_name"`
-	BatchSize               int                    `yaml:"batch_size"`
-	BatchWaitMS             int                    `yaml:"batch_wait_ms"`
-	FetchBatch              int                    `yaml:"fetch_batch"`
-	MaxWorkers              int                    `yaml:"max_workers"`
-	Ordering                string                 `yaml:"ordering"`
-	Maintenance             StorageViewMaintenance `yaml:"maintenance"`
-	StorageRPC              StorageRPCConfig       `yaml:"storage_rpc"`
+	MetadataServiceName     string           `yaml:"metadata_service_name"`
+	PrimaryStoreServiceName string           `yaml:"primary_store_service_name"`
+	IndexServiceName        string           `yaml:"index_service_name"`
+	BatchSize               int              `yaml:"batch_size"`
+	BatchWaitMS             int              `yaml:"batch_wait_ms"`
+	FetchBatch              int              `yaml:"fetch_batch"`
+	MaxWorkers              int              `yaml:"max_workers"`
+	Ordering                string           `yaml:"ordering"`
+	RebuildCheckInterval    string           `yaml:"rebuild_check_interval"`
+	MaxViewFileBytes        int64            `yaml:"max_view_file_bytes"`
+	StorageRPC              StorageRPCConfig `yaml:"storage_rpc"`
+	maxViewFileBytesSet     bool
+}
+
+// UnmarshalYAML remembers whether max_view_file_bytes was explicitly present.
+// This lets defaults preserve omitted legacy configuration while allowing the
+// server to reject an explicit zero/negative value instead of silently
+// replacing it with the default watermark.
+func (v *StorageView) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	type plain StorageView
+	var decoded plain
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	var raw map[interface{}]interface{}
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	*v = StorageView(decoded)
+	_, v.maxViewFileBytesSet = raw["max_view_file_bytes"]
+	return nil
 }
 
 type StorageRPCConfig struct {
@@ -78,24 +103,6 @@ type StorageRPCConfig struct {
 	GatewayNodeID string `yaml:"gateway_node_id"`
 	KeyID         string `yaml:"key_id"`
 	HMACKeyFile   string `yaml:"hmac_key_file"`
-}
-
-type StorageViewMaintenance struct {
-	Enabled          *bool                        `yaml:"enabled"`
-	OwnerID          string                       `yaml:"owner_id"`
-	LeaseTTL         string                       `yaml:"lease_ttl"`
-	RunBudget        string                       `yaml:"run_budget"`
-	PageSize         int                          `yaml:"page_size"`
-	MaxEntries       int                          `yaml:"max_entries"`
-	TargetEntries    int                          `yaml:"target_entries"`
-	MaxPhysicalBytes int64                        `yaml:"max_physical_bytes"`
-	MinFreeDiskBytes int64                        `yaml:"min_free_disk_bytes"`
-	MinReadyEntries  int                          `yaml:"min_ready_entries"`
-	AllowedLag       string                       `yaml:"allowed_lag"`
-	OverlapWindow    string                       `yaml:"overlap_window"`
-	RemoveGrace      string                       `yaml:"remove_grace"`
-	TimeSeries       StorageTimeSeriesMaintenance `yaml:"time_series"`
-	Record           StorageRecordMaintenance     `yaml:"record"`
 }
 
 // StorageMaintenance owns maintenance that applies to authoritative Storage facts.
@@ -143,19 +150,6 @@ func (c HostMetricsCleanupConfig) Validate() error {
 		seen[datasetID] = struct{}{}
 	}
 	return nil
-}
-
-type StorageTimeSeriesMaintenance struct {
-	DefaultKeepDuration string            `yaml:"default_keep_duration"`
-	KeepByFreq          map[string]string `yaml:"keep_by_freq"`
-}
-
-type StorageRecordMaintenance struct {
-	KeepDuration string `yaml:"keep_duration"`
-}
-
-func (m StorageViewMaintenance) IsEnabled() bool {
-	return m.Enabled == nil || *m.Enabled
 }
 
 // StoragePrimary 保存主存服务访问配置。
@@ -231,7 +225,10 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.EventBus.Consumer = StorageViewConsumer
 	}
 	if c.EventBus.MaxAckPending == 0 {
-		c.EventBus.MaxAckPending = StorageViewMaxAckPending
+		c.EventBus.MaxAckPending = StorageDefaultMaxAckPending
+		if c.HasRole("view") {
+			c.EventBus.MaxAckPending = StorageViewMaxAckPending
+		}
 	}
 	if c.EventBus.AckWaitMS == 0 {
 		c.EventBus.AckWaitMS = StorageViewAckWaitMS
@@ -282,65 +279,13 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.View.MaxWorkers = 1
 	}
 	if c.View.Ordering == "" {
-		c.View.Ordering = "subject"
+		c.View.Ordering = "dataset"
 	}
-	if c.View.Maintenance.Enabled == nil {
-		enabled := true
-		c.View.Maintenance.Enabled = &enabled
+	if strings.TrimSpace(c.View.RebuildCheckInterval) == "" {
+		c.View.RebuildCheckInterval = "1m"
 	}
-	if c.View.Maintenance.LeaseTTL == "" {
-		c.View.Maintenance.LeaseTTL = "90s"
-	}
-	if c.View.Maintenance.RunBudget == "" {
-		c.View.Maintenance.RunBudget = "20s"
-	}
-	if c.View.Maintenance.PageSize <= 0 {
-		c.View.Maintenance.PageSize = 500
-	}
-	if c.View.Maintenance.MaxEntries <= 0 {
-		c.View.Maintenance.MaxEntries = 200000
-	}
-	if c.View.Maintenance.TargetEntries <= 0 || c.View.Maintenance.TargetEntries >= c.View.Maintenance.MaxEntries {
-		c.View.Maintenance.TargetEntries = c.View.Maintenance.MaxEntries * 3 / 4
-		if c.View.Maintenance.TargetEntries <= 0 {
-			c.View.Maintenance.TargetEntries = 1
-		}
-	}
-	if c.View.Maintenance.MaxPhysicalBytes <= 0 {
-		c.View.Maintenance.MaxPhysicalBytes = 512 * 1024 * 1024
-	}
-	if c.View.Maintenance.MinFreeDiskBytes <= 0 {
-		c.View.Maintenance.MinFreeDiskBytes = 1024 * 1024 * 1024
-	}
-	if c.View.Maintenance.MinReadyEntries <= 0 {
-		c.View.Maintenance.MinReadyEntries = 1000
-	}
-	if c.View.Maintenance.AllowedLag == "" {
-		c.View.Maintenance.AllowedLag = "2m"
-	}
-	if c.View.Maintenance.OverlapWindow == "" {
-		c.View.Maintenance.OverlapWindow = "30m"
-	}
-	if c.View.Maintenance.RemoveGrace == "" {
-		c.View.Maintenance.RemoveGrace = "60s"
-	}
-	if c.View.Maintenance.TimeSeries.DefaultKeepDuration == "" {
-		c.View.Maintenance.TimeSeries.DefaultKeepDuration = "7d"
-	}
-	if c.View.Maintenance.TimeSeries.KeepByFreq == nil {
-		c.View.Maintenance.TimeSeries.KeepByFreq = map[string]string{}
-	}
-	if c.View.Maintenance.TimeSeries.KeepByFreq["1m"] == "" {
-		c.View.Maintenance.TimeSeries.KeepByFreq["1m"] = "24h"
-	}
-	if c.View.Maintenance.TimeSeries.KeepByFreq["1h"] == "" {
-		c.View.Maintenance.TimeSeries.KeepByFreq["1h"] = "90d"
-	}
-	if c.View.Maintenance.TimeSeries.KeepByFreq["1d"] == "" {
-		c.View.Maintenance.TimeSeries.KeepByFreq["1d"] = "730d"
-	}
-	if c.View.Maintenance.Record.KeepDuration == "" {
-		c.View.Maintenance.Record.KeepDuration = "30d"
+	if c.View.MaxViewFileBytes <= 0 && !c.View.maxViewFileBytesSet {
+		c.View.MaxViewFileBytes = 1 << 30
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"

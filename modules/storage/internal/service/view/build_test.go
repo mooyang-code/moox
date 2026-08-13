@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -20,6 +21,26 @@ func TestBackfillSortsUseCompleteTimeSeriesIdentity(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("backfill sorts=%v want=%v", got, want)
+	}
+}
+
+func TestProjectBackfillFieldsUsesNextSchemaShape(t *testing.T) {
+	active := viewindex.ViewIndexSchema{Columns: []*pb.ViewColumn{
+		{ColumnName: "close", OriginId: "prices.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "old", OriginId: "prices.old", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	}}
+	next := viewindex.ViewIndexSchema{Columns: []*pb.ViewColumn{
+		{ColumnName: "close", OriginId: "prices.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "old", OriginId: "prices.new", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+	}}
+	fields := []*pb.FieldValue{
+		{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}},
+		{FieldId: "old", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}},
+		{FieldId: "removed", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 3}}},
+	}
+	got := projectBackfillFields(fields, active, next)
+	if len(got) != 1 || got[0].GetFieldId() != "close" {
+		t.Fatalf("projected fields=%v, want only unchanged close", got)
 	}
 }
 

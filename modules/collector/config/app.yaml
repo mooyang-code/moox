@@ -50,3 +50,12 @@ dns:
   refresh_interval: 5m
   resolve_timeout: 5s
   # nameservers: ["119.29.29.29", "1.1.1.1"]
+
+dns_resolver:
+  enabled: false
+  target: ip://127.0.0.1:11003
+  node_id: ""
+  domains: []
+  refresh_interval: 5m
+  request_timeout: 3s
+  cache_ttl: 5m

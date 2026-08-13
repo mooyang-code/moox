@@ -73,10 +73,17 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 - 每个 View 使用 A/B 两个独立索引。
 - 重建期间实时消息同时写 Active 和 New。
 - Backfill 每批最多 10000 行，只填充缺失值，不覆盖实时写。
-- DuckDB 默认内存上限为 `512MB`；需要重建较大 View 时可通过
+- DuckDB 默认内存上限为 `512MB`；View 文件大小上限默认为 `1GiB`，需要重建较大 View 时可通过
   `MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT` 调整。
 - 每个 DuckDB View 最多保留 8 个连接，允许因子读取与实时写入并行，
   避免读取窗口把结果写入长期堵在单连接队列后。
+- View 角色按 `rebuild_check_interval`（重建检查周期）检查 DuckDB 文件大小；超过
+  `max_view_file_bytes` 且 View 有限 `keep_duration` 时启动 A/B 重建。新索引只
+  backfill 保留窗口，切换完成后按固定 grace 删除旧 DuckDB 文件，不在 active 索引
+  上逐行删除。配置统一使用：
+  `storage.view.rebuild_check_interval` 和 `storage.view.max_view_file_bytes`。
+- 文件超限重建失败后使用固定 30 分钟的“超限重建重试间隔”，只抑制重复的全量回填尝试；
+  Active View 继续提供查询和实时写入，desired revision 变化时立即允许新重建。
 - Desired Revision、关联 Dataset 或超过 `2 * keep_duration` 会触发 Reconcile。
 - Metadata 激活后，DataView 原子切换 Active 索引；宽限期后删除 OldView。
 
@@ -89,9 +96,11 @@ moox.storage.dataset.rows.upserted.v2.<space-token>.<dataset-token>
 ```
 
 Token 是可逆的小写无 Padding Base32。View 使用唯一 Consumer
-`storage_view`，`Fetch(1)`、`MaxAckPending=1`。View 启动时创建并持有该 Consumer，filter、ACK、DeliverPolicy 和投递限制由 View 在代码中明确声明。Active 写失败时保持当前
-Delivery 并本地退避；无法恢复的 Subject/Proto/Payload 错误执行 `Term`，避免
-毒消息永久阻塞全部 Dataset。
+`storage_view`，默认 `Fetch(8)`、`MaxAckPending=8`。View 启动时创建并持有该
+Consumer；同一 Dataset 的 rows、Marker 和 SyncPoint 进入同一个 Dataset 队列（队列键为
+`space_id + dataset_id`，全文统一称为“Dataset 队列键”，
+不同 Dataset 可并行。Active 写失败时保持当前 Delivery 并本地退避；无法恢复的
+Subject/Proto/Payload 错误执行 `Term`，避免毒消息永久阻塞全部 Dataset。
 
 ## 认证
 

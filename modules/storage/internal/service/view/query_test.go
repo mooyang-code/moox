@@ -104,6 +104,69 @@ func TestLiveWritePreservesRowInReplacementWhenExistingActiveIsUnwritable(t *tes
 	}
 }
 
+func TestReplacementFailurePersistenceRetriesBeforeAcknowledgingRedelivery(t *testing.T) {
+	engine := &existenceQueryEngine{queryEngine: &queryEngine{writeErrs: map[string]error{"prices-b": errors.New("replacement write failed")}}, exists: true}
+	svc, _ := queryTestService(engine, false)
+	svc.engines["query-test"] = engine
+	key := viewRef{spaceID: "space", viewID: "prices"}
+	svc.views[key] = &viewRuntime{}
+	svc.indexView = map[string]viewRef{"prices-a": key, "prices-b": key}
+	svc.indexEngine = map[string]string{"prices-a": "query-test", "prices-b": "query-test"}
+	svc.schemas["prices-a"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}}}
+	svc.schemas["prices-b"] = svc.schemas["prices-a"]
+	svc.byData = map[datasetRef]map[string]struct{}{
+		{spaceID: "space", datasetID: "market"}: {"prices-a": {}, "prices-b": {}},
+	}
+	metadata := &reconcileMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", ActiveIndexId: "prices-a"}, failErr: errors.New("metadata temporarily unavailable")}
+	runtime := svc.views[key]
+	runtime.active = "prices-a"
+	runtime.next = "prices-b"
+	runtime.status = "building"
+	runtime.buildID = "build-1"
+	runtime.ownerID = "owner-1"
+	runtime.metadata = metadata
+	runtime.metadataAuth = &pb.AuthInfo{AppId: "view"}
+	row := &pb.RowFieldUpsert{
+		Key:    timeSeriesTestRowKey("venue:binance"),
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
+	}
+
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil {
+		t.Fatal("first replacement failure was ACKed")
+	}
+	if !runtime.buildFailed || runtime.next != "prices-b" || metadata.failCalls != 1 {
+		t.Fatalf("after transient metadata failure: failed=%v next=%q fail_calls=%d", runtime.buildFailed, runtime.next, metadata.failCalls)
+	}
+	engine.queryEngine.writeErrs["prices-b"] = nil
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil {
+		t.Fatal("redelivery after persisting failure was ACKed")
+	}
+	if runtime.buildFailed || runtime.next != "" || metadata.failCalls != 2 {
+		t.Fatalf("failed replacement was not cleared: failed=%v next=%q fail_calls=%d", runtime.buildFailed, runtime.next, metadata.failCalls)
+	}
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err != nil {
+		t.Fatalf("post-cleanup redelivery did not ACK: %v", err)
+	}
+}
+
+func TestFailedBuildCleanupDoesNotRemoveReusedSlotGeneration(t *testing.T) {
+	engine := &queryEngine{}
+	svc, _ := queryTestService(engine, false)
+	key := viewRef{spaceID: "space", viewID: "prices"}
+	svc.indexView = make(map[string]viewRef)
+	svc.indexEngine = make(map[string]string)
+	svc.schemas = make(map[string]viewindex.ViewIndexSchema)
+	svc.indexGeneration = make(map[string]uint64)
+	svc.indexView["prices-b"] = key
+	svc.indexEngine["prices-b"] = "query-test"
+	svc.schemas["prices-b"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market"}
+	svc.indexGeneration["prices-b"] = 2
+	svc.removeFailedBuildAtGeneration(context.Background(), "prices-b", 1)
+	if _, ok := svc.indexView["prices-b"]; !ok {
+		t.Fatal("stale cleanup removed a newer slot generation")
+	}
+}
+
 func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testing.T) {
 	engine := &queryEngine{}
 	svc, auth := queryTestService(engine, true)

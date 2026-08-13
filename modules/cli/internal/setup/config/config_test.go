@@ -215,6 +215,57 @@ password = "compute-password"
 	assert.Equal(t, 22, snapshot.Manifest.OtherHosts[0].Port)
 }
 
+func TestLoadDNSResolverConfiguration(t *testing.T) {
+	valid := validManifest + `
+[[other_hosts]]
+name = "compute-1"
+address = "43.132.204.177"
+username = "ubuntu"
+password = "compute-password"
+
+[dns_resolver]
+enabled = true
+trade_node = "compute-1"
+refresh_interval_seconds = 300
+request_timeout_ms = 3000
+lookup_timeout_ms = 1500
+probe_timeout_ms = 500
+probe_port = 443
+cache_ttl_seconds = 300
+max_ips_per_domain = 4
+domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
+`
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, valid, 0o600), root)
+	require.NoError(t, err)
+	require.True(t, snapshot.Manifest.DNSResolver.Enabled)
+	require.Equal(t, "compute-1", snapshot.Manifest.DNSResolver.TradeNode)
+	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, snapshot.Manifest.DNSResolver.Domains)
+
+	for name, mutate := range map[string]func(*DNSResolver){
+		"missing trade node": func(cfg *DNSResolver) { cfg.TradeNode = "missing" },
+		"duplicate domain":   func(cfg *DNSResolver) { cfg.Domains = []string{"api.binance.com", "API.BINANCE.COM."} },
+		"invalid interval":   func(cfg *DNSResolver) { cfg.RequestTimeoutMS = 0 },
+		"invalid port":       func(cfg *DNSResolver) { cfg.ProbePort = 70000 },
+		"invalid cap":        func(cfg *DNSResolver) { cfg.MaxIPsPerDomain = 5 },
+		"too many domains":   func(cfg *DNSResolver) { cfg.Domains = make([]string, 17) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			manifest := snapshot.Manifest
+			mutate(&manifest.DNSResolver)
+			err := validateDNSResolver(&manifest.DNSResolver, &manifest)
+			require.Error(t, err)
+		})
+	}
+	unsafe := snapshot.Manifest
+	unsafe.OtherHosts[0].Address = "127.0.0.1"
+	require.ErrorContains(t, validateDNSResolver(&unsafe.DNSResolver, &unsafe), "public address")
+
+	disabled := snapshot.Manifest
+	disabled.DNSResolver = DNSResolver{Enabled: false, TradeNode: "missing"}
+	require.NoError(t, validateDNSResolver(&disabled.DNSResolver, &disabled))
+}
+
 func TestLoadOptionalCompileHost(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `

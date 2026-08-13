@@ -37,4 +37,15 @@ describe("Storage HTTP facade", () => {
       })
     );
   });
+
+  it("deduplicates short-lived read requests and invalidates them on writes", async () => {
+    const req = { space_id: "cache-space", data_source_id: "source-cache" };
+    await callStorage("GetDataSource", req);
+    await callStorage("GetDataSource", req);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    await callStorage("UpdateDataSource", { space_id: "cache-space", data_source_id: "source-cache" });
+    await callStorage("GetDataSource", req);
+    expect(mocks.post).toHaveBeenCalledTimes(3);
+  });
 });

@@ -22,7 +22,7 @@ engine:
   python_bin: python3
   worker_path: ./pyworker/worker.py
   factors_dir: ./factors
-  python_workers: 40
-  view_read_workers: 60
+  python_workers: 32
+  view_read_workers: 64
   view_read_timeout_ms: 10000
   task_timeout_ms: 30000

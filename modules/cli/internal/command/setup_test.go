@@ -91,6 +91,29 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	for _, name := range []string{"init", "hosts", "validate", "trust-host", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus"} {
 		require.Contains(t, output.String(), name)
 	}
+	require.Contains(t, output.String(), "render-runtime-config")
+}
+
+func TestSetupRenderRuntimeConfigUsesOneSnapshot(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	tradePath := filepath.Join(t.TempDir(), "trade", "app.yaml")
+	collectorPath := filepath.Join(t.TempDir(), "collector", "app.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(tradePath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(collectorPath), 0o755))
+	require.NoError(t, os.WriteFile(tradePath, []byte("database:\n  path: ./trade.db\n"), 0o644))
+	require.NoError(t, os.WriteFile(collectorPath, []byte("database:\n  path: ./collector.db\n"), 0o644))
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"render-runtime-config", "--file", "custom.toml", "--trade-output", tradePath, "--collector-output", collectorPath})
+	require.NoError(t, cmd.Execute())
+	require.JSONEq(t, fmt.Sprintf(`{"status":"rendered","trade_output":%q,"collector_output":%q,"dns_resolver_enabled":false,"dns_resolver_node_id":"","dns_resolver_target":"ip://127.0.0.1:11003"}`, tradePath, collectorPath), output.String())
+	tradeRaw, err := os.ReadFile(tradePath)
+	require.NoError(t, err)
+	require.Contains(t, string(tradeRaw), "dns_resolver:")
+	collectorRaw, err := os.ReadFile(collectorPath)
+	require.NoError(t, err)
+	require.Contains(t, string(collectorRaw), "dns_resolver:")
 }
 
 func TestSetupInstallStorageWatchdogCommand(t *testing.T) {
@@ -316,6 +339,30 @@ func TestSetupDeployControlAcceptsExplicitResetFlag(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	require.True(t, reset)
 	require.JSONEq(t, `{"host":"control","status":"ready","reset_data":true,"certificate":{"mode":"public","issuer":"letsencrypt","automatic_renewal":true,"renewal":"caddy_acme_ari"}}`, output.String())
+}
+
+func TestSetupDeployControlValidatesConfiguredResolverHost(t *testing.T) {
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.OtherHosts[0].Name = "compute-1"
+	snapshot.Manifest.DNSResolver = setupconfig.DNSResolver{
+		Enabled: true, TradeNode: "compute-1", Domains: []string{"fapi.binance.com"},
+	}
+	var hosts []setupconfig.Host
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(_ context.Context, _ *setupconfig.Snapshot, values []setupconfig.Host) (setupvalidate.Result, error) {
+			hosts = append([]setupconfig.Host(nil), values...)
+			return setupvalidate.Result{}, nil
+		},
+		deployControl: func(context.Context, *setupconfig.Snapshot, bool) error { return nil },
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-control", "--file", "custom.toml"})
+	require.NoError(t, cmd.Execute())
+	require.Len(t, hosts, 2)
+	require.Equal(t, "control", hosts[0].Name)
+	require.Equal(t, "compute-1", hosts[1].Name)
 }
 
 func TestSetupCertificateSummarySelectsTrustModel(t *testing.T) {

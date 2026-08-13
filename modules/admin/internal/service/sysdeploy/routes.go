@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
 	"gorm.io/gorm"
@@ -51,6 +53,17 @@ func (d *DAO) CompileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return gatewayproxy.Snapshot{}, fmt.Errorf("%w: %w", gatewayproxy.ErrGatewayNodeNotFound, err)
 	}
+	if err == nil {
+		// Keep operator-facing route bookkeeping outside the read transaction.
+		// A concurrent writer can otherwise turn an otherwise valid snapshot
+		// into SQLITE_BUSY_SNAPSHOT while the Gateway is pulling routes.
+		bookkeepingCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+		updateErr := updateGatewayNodeRouteBookkeeping(bookkeepingCtx, d.db, nodeID, snapshot)
+		cancel()
+		if updateErr != nil {
+			log.WarnContextf(ctx, "record gateway route snapshot status failed node_id=%s: %v", nodeID, updateErr)
+		}
+	}
 	return snapshot, err
 }
 
@@ -81,13 +94,35 @@ func (d *DAO) compileGatewaySnapshot(ctx context.Context, nodeID string) (gatewa
 	if err != nil {
 		return gatewayproxy.Snapshot{}, &RouteConfigError{Err: err}
 	}
-	if err := d.db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", nodeID).Updates(map[string]interface{}{"c_route_hash": snapshot.RouteHash, "c_route_count": len(snapshot.Routes)}).Error; err != nil {
-		// Route compilation is read-only from Gateway's perspective. The status
-		// fields are operator-facing bookkeeping, so a transient SQLite writer
-		// conflict must not make an otherwise valid route snapshot unavailable.
-		log.WarnContextf(ctx, "record gateway route snapshot status failed node_id=%s: %v", nodeID, err)
-	}
 	return snapshot, nil
+}
+
+func updateGatewayNodeRouteBookkeeping(ctx context.Context, db *gorm.DB, nodeID string, snapshot gatewayproxy.Snapshot) error {
+	values := map[string]interface{}{"c_route_hash": snapshot.RouteHash, "c_route_count": len(snapshot.Routes)}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		lastErr = db.WithContext(ctx).Model(&GatewayNode{}).Where("c_node_id = ?", nodeID).Updates(values).Error
+		if lastErr == nil || !isSQLiteLockError(lastErr) || attempt == 2 {
+			return lastErr
+		}
+		wait := time.Duration(50*(1<<attempt)) * time.Millisecond
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
+}
+
+func isSQLiteLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") || strings.Contains(message, "sqlite_busy") || strings.Contains(message, "database table is locked")
 }
 
 func deploymentGatewayRoutes(row Deployment, extra routeExtraConfig) ([]gatewayproxy.Route, error) {

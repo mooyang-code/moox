@@ -13,8 +13,8 @@ func TestAppConfig_DefaultConfig_ShouldReturnValidDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 	require.NotNil(t, cfg)
 	assert.Equal(t, "./data/admin.db", cfg.Database.Path)
-	assert.Equal(t, 10, cfg.Database.MaxIdleConns)
-	assert.Equal(t, 100, cfg.Database.MaxOpenConns)
+	assert.Equal(t, 4, cfg.Database.MaxIdleConns)
+	assert.Equal(t, 8, cfg.Database.MaxOpenConns)
 }
 
 func TestAppConfig_Validate_EmptyPath_ShouldReturnError(t *testing.T) {

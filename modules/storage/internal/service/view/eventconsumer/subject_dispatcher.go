@@ -2,14 +2,18 @@ package eventconsumer
 
 import (
 	"context"
+	"encoding/base32"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 )
 
 type subjectDeliveryHandler func(context.Context, *jetstream.Delivery, *deliveryHeartbeat) error
+type deliveryQueueKey func(*jetstream.Delivery) (string, error)
 
 type subjectDispatcherMetricsHooks struct {
 	newHeartbeat func(context.Context, *jetstream.Delivery) *deliveryHeartbeat
@@ -39,6 +43,7 @@ type subjectDispatcher struct {
 	handler    subjectDeliveryHandler
 	reporter   jetstream.ErrorReporter
 	hooks      subjectDispatcherMetricsHooks
+	queueKey   deliveryQueueKey
 	ready      chan *subjectQueue
 	pending    chan struct{}
 	queues     map[string]*subjectQueue
@@ -48,6 +53,10 @@ type subjectDispatcher struct {
 }
 
 func newSubjectDispatcher(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
+	return newSubjectDispatcherWithKey(parent, maxWorkers, maxPending, handler, reporter, nil, hooks...)
+}
+
+func newSubjectDispatcherWithKey(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, queueKey deliveryQueueKey, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
 	if maxWorkers < 1 {
 		maxWorkers = 1
 	}
@@ -61,7 +70,7 @@ func newSubjectDispatcher(parent context.Context, maxWorkers, maxPending int, ha
 	}
 	d := &subjectDispatcher{
 		ctx: ctx, cancel: cancel, maxWorkers: maxWorkers, handler: handler, reporter: reporter,
-		hooks: metricsHooks,
+		hooks: metricsHooks, queueKey: queueKey,
 		ready: make(chan *subjectQueue, maxWorkers), pending: make(chan struct{}, maxPending), queues: make(map[string]*subjectQueue),
 	}
 	d.wg.Add(maxWorkers)
@@ -80,16 +89,29 @@ func (d *subjectDispatcher) Dispatch(delivery *jetstream.Delivery) error {
 	case <-d.ctx.Done():
 		return d.ctx.Err()
 	}
+	queueName := delivery.Subject
+	if d.queueKey != nil {
+		var err error
+		queueName, err = d.queueKey(delivery)
+		if err != nil {
+			<-d.pending
+			return fmt.Errorf("resolve delivery queue: %w", err)
+		}
+		if queueName == "" {
+			<-d.pending
+			return errors.New("delivery queue key is empty")
+		}
+	}
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
 		<-d.pending
 		return errors.New("storage view subject dispatcher is closed")
 	}
-	queue := d.queues[delivery.Subject]
+	queue := d.queues[queueName]
 	if queue == nil {
-		queue = &subjectQueue{subject: delivery.Subject}
-		d.queues[delivery.Subject] = queue
+		queue = &subjectQueue{subject: queueName}
+		d.queues[queueName] = queue
 	}
 	var heartbeat *deliveryHeartbeat
 	if d.hooks.newHeartbeat != nil {
@@ -112,6 +134,65 @@ func (d *subjectDispatcher) Dispatch(delivery *jetstream.Delivery) error {
 		}
 	}
 	return nil
+}
+
+func datasetQueueKey(registry *events.Registry, delivery *jetstream.Delivery) (string, error) {
+	if delivery == nil {
+		return "", errors.New("delivery is nil")
+	}
+	if delivery.DecodeError != nil {
+		// Keep malformed deliveries in a deterministic subject queue so the
+		// normal delivery policy can heartbeat/retry/TERM them. Dispatch must
+		// not drop the pending message before policy classification runs.
+		if key, ok := subjectDatasetQueueKey(delivery.Subject); ok {
+			return key, nil
+		}
+		return delivery.Subject, nil
+	}
+	message, _, err := events.DecodeRaw(registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+	if err != nil {
+		if key, ok := subjectDatasetQueueKey(delivery.Subject); ok {
+			return key, nil
+		}
+		return delivery.Subject, nil
+	}
+	if message == nil {
+		if key, ok := subjectDatasetQueueKey(delivery.Subject); ok {
+			return key, nil
+		}
+		return delivery.Subject, nil
+	}
+	if message.GetSpaceId() == "" || message.GetSubjectId() == "" {
+		return delivery.Subject, nil
+	}
+	return message.GetSpaceId() + "\x00" + message.GetSubjectId(), nil
+}
+
+// subjectDatasetQueueKey is deliberately independent of payload decoding. A
+// malformed row still has a governed event subject, and must share the same
+// Dataset queue as a valid period/sync marker so a poison message cannot be
+// bypassed by the marker lane.
+func subjectDatasetQueueKey(subject string) (string, bool) {
+	parts := strings.Split(strings.TrimSpace(subject), ".")
+	if len(parts) < 5 || parts[0] != "moox" {
+		return "", false
+	}
+	decode := func(token string) (string, bool) {
+		if token == "" {
+			return "", false
+		}
+		value, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(token))
+		return string(value), err == nil && len(value) > 0
+	}
+	spaceID, ok := decode(parts[len(parts)-2])
+	if !ok {
+		return "", false
+	}
+	datasetID, ok := decode(parts[len(parts)-1])
+	if !ok {
+		return "", false
+	}
+	return spaceID + "\x00" + datasetID, true
 }
 
 func (d *subjectDispatcher) worker() {

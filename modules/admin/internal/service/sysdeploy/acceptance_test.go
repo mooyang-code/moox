@@ -170,6 +170,7 @@ func TestSeedDefaultsBootstrapsConfiguredNodeAndAttachesMatchingHost(t *testing.
 			for _, serviceID := range []string{"trade_exchange_account", "trade_execution", "trade_logical_account"} {
 				assert.False(t, enabledIDs[serviceID], "sensitive gateway service %s exposed", serviceID)
 			}
+			assert.True(t, enabledIDs["trade_dns_resolver"], "trade DNS resolver gateway service missing")
 		})
 	}
 }
@@ -304,6 +305,12 @@ func TestDefaultDeploymentsExposeOnlyMachineModuleManagers(t *testing.T) {
 		if sensitive[row.ServiceName] {
 			assert.False(t, row.GatewayEnabled)
 			assert.Empty(t, row.GatewayServiceID)
+		}
+		if row.ServiceName == "trade_dns_resolver" {
+			assert.True(t, row.GatewayEnabled)
+			assert.Equal(t, "trade_dns_resolver", row.GatewayServiceID)
+			assert.Contains(t, row.ExtraConfig, `"ResolveDomains"`)
+			assert.Contains(t, row.ExtraConfig, `"collector"`)
 		}
 	}
 }

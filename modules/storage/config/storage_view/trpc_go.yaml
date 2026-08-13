@@ -99,6 +99,9 @@ storage:
     service_name: trpc.moox.storage.DataNode
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
+    # Keep enough deliveries in flight for different Dataset lanes to make
+    # progress while the dispatcher still serializes each Dataset lane.
+    max_ack_pending: 256
   view:
     storage_rpc:
       gateway_target: ip://127.0.0.1:11003
@@ -110,28 +113,10 @@ storage:
     index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200
-    max_workers: 2
-    maintenance:
-      enabled: true
-      owner_id: ""
-      lease_ttl: 90s
-      run_budget: 20s
-      page_size: 500
-      max_entries: 200000
-      target_entries: 150000
-      max_physical_bytes: 536870912
-      min_free_disk_bytes: 1073741824
-      min_ready_entries: 1000
-      overlap_window: 30m
-      allowed_lag: 2m
-      remove_grace: 60s
-      time_series:
-        default_keep_duration: 7d
-        keep_by_freq:
-          1m: 24h
-          1h: 90d
-          1d: 730d
-      record:
-        keep_duration: 30d
+    fetch_batch: 256
+    max_workers: 8
+    ordering: dataset
+    rebuild_check_interval: 1m
+    max_view_file_bytes: 1073741824
   health:
     addr: ":20211"

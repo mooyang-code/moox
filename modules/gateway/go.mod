@@ -9,6 +9,7 @@ require (
 	github.com/mooyang-code/moox/packages/gatewayproxy v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/trpcretry v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -88,6 +89,8 @@ require (
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 
 replace github.com/mooyang-code/moox/packages/gatewayproxy => ../../packages/gatewayproxy
+
+replace github.com/mooyang-code/moox/packages/trpcretry => ../../packages/trpcretry
 
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
 

@@ -70,6 +70,16 @@ watermarks only after `WriteFactorPatch` succeeds.
 | EventBus is unavailable | Monitor readiness becomes false. SCF health publication fails and the Sentinel uses direct `msgbox`. |
 | A business check fails while the central path is healthy | The result goes through EventBus and Monitor; SCF does not bypass Monitor. |
 
+When a HostAgent is registered and the WeCom webhook is configured, Monitor
+creates a per-agent `filesystem_usage` alert in `moox_system`. It fires after
+three consecutive 15-second samples at 85% filesystem usage and resolves at
+80%. This is intentionally earlier and faster than the CPU/memory defaults so
+Storage/View operators still have time to remove stale release artifacts
+before the host reaches `ENOSPC`. A machine without a running HostAgent has no
+filesystem sample and therefore cannot produce this alert; deploy and verify
+the agent's EventBus credentials before treating the absence of an alert as a
+healthy disk.
+
 Only one Collector SCF node should enable the Sentinel. Its 30-second timer runs
 inside the verified resident SCF process. If the platform freezes the process
 before the final resident window completes, one last external alert may be

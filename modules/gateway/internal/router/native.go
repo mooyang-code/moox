@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayproxy"
+	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -103,6 +104,9 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 			client.WithSerializationType(serializationType), client.WithCurrentSerializationType(codec.SerializationTypeNoop),
 			client.WithTimeout(time.Duration(route.TimeoutMS) * time.Millisecond),
 		}
+		if nativeReadOnlyMethod(method) {
+			invokeOptions = append(invokeOptions, client.WithFilter(trpcretry.ReadOnly()))
+		}
 		codec.Message(upstreamCtx).WithClientRPCName("/" + route.ServicePath + "/" + method)
 		for key, value := range metadata {
 			if strings.HasPrefix(strings.ToLower(key), "x-moox-") {
@@ -120,6 +124,23 @@ func (proxy *nativeProxy) handle(_ interface{}, ctx context.Context, f server.Fi
 		}
 		return response, nil
 	})
+}
+
+// nativeReadOnlyMethod keeps retries limited to idempotent reads. Gateway
+// routes also carry mutating RPCs, so relying on method-name prefixes alone
+// would make an accidental write retry possible.
+func nativeReadOnlyMethod(method string) bool {
+	switch method {
+	case "GetSpace", "ListSpaces", "GetDataSource", "ListDataSources", "GetSubject", "ListSubjects", "ListSubjectSymbols",
+		"GetDataset", "ListDatasets", "ListDatasetSubjects", "GetFieldGroup", "ListFieldGroups",
+		"GetField", "ListFields", "GetFactor", "ListFactors", "ListDatasetColumns", "GetView",
+		"ListViews", "ListViewColumns", "GetDataNode", "ListDataNodes", "CheckDatasetActivation",
+		"ListArchiveFiles", "ReadFields", "ReadTimeSeriesRows", "ReadRecordRows", "QueryTimeSeriesRows",
+		"SearchRecordRows":
+		return true
+	default:
+		return false
+	}
 }
 
 func (proxy *nativeProxy) verify(request gatewayauth.Request, header http.Header) (gatewayauth.Claims, error) {

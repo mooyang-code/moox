@@ -80,6 +80,7 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	withStorageShard := false
 	disableStorageShard := false
 	disabledServices := ""
+	onlyServices := ""
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&seedPath, "file", seedPath, "service deployment seed YAML")
 	fs.StringVar(&nodeID, "node-id", nodeID, "override the seed node ID")
@@ -88,6 +89,7 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 	fs.BoolVar(&withStorageShard, "with-storage-shard", false, "enable the independent DataShard route")
 	fs.BoolVar(&disableStorageShard, "disable-storage-shard", false, "disable the independent DataShard route")
 	fs.StringVar(&disabledServices, "disabled-services", "", "comma-separated services omitted from this deployment")
+	fs.StringVar(&onlyServices, "only-services", "", "comma-separated services to import; all other seed services are ignored")
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
 	}
@@ -112,17 +114,32 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 			return errors.New("--node-id must not contain leading or trailing whitespace")
 		}
 		seed.Node.ID = nodeID
+		if strings.TrimSpace(onlyServices) != "" {
+			// A scoped import may target a node absent from the seed file. Use
+			// the requested ID for newly-created metadata, while existing node
+			// name/status are preserved by importServiceDeploymentSeed.
+			seed.Node.Name = nodeID
+		}
+	}
+	if strings.TrimSpace(onlyServices) != "" {
+		if err := selectSeedServices(&seed, onlyServices); err != nil {
+			return err
+		}
 	}
 	if err := validateServiceDeploymentSeed(seed); err != nil {
 		return err
 	}
-	if err := setSeedEventBusNATSURL(&seed, eventBusNATSURL); err != nil {
-		return err
+	if hasSeedService(seed, "eventbus") {
+		if err := setSeedEventBusNATSURL(&seed, eventBusNATSURL); err != nil {
+			return err
+		}
 	}
 	if err := setSeedPublicHost(&seed, publicHost); err != nil {
 		return err
 	}
-	if withStorageShard {
+	if strings.TrimSpace(onlyServices) != "" {
+		// A scoped import must not mutate unrelated optional routes.
+	} else if withStorageShard {
 		if err := enableOptionalStorageShard(&seed); err != nil {
 			return err
 		}
@@ -131,7 +148,15 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 			return err
 		}
 	}
-	if err := disableSeedServices(&seed, disabledServices); err != nil {
+	if strings.TrimSpace(onlyServices) == "" {
+		if err := disableSeedServices(&seed, disabledServices); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(onlyServices) != "" && strings.TrimSpace(disabledServices) != "" {
+		return errors.New("--only-services and --disabled-services are mutually exclusive")
+	}
+	if err := validateServiceDeploymentSeed(seed); err != nil {
 		return err
 	}
 	if err := ensureAdminSchema(dbPath); err != nil {
@@ -142,7 +167,7 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 		return err
 	}
 	defer closeAdminCLIDB(db)
-	created, updated, err := importServiceDeploymentSeed(db, seed)
+	created, updated, err := importServiceDeploymentSeed(db, seed, strings.TrimSpace(onlyServices) != "")
 	if err != nil {
 		return err
 	}
@@ -150,6 +175,46 @@ func runServiceDeploymentsCommand(args []string, stdout io.Writer, stderr io.Wri
 		"status": "ok", "command": "service-deployments.import", "node_id": seed.Node.ID,
 		"created": created, "updated": updated, "services": len(seed.Services),
 	})
+}
+
+func hasSeedService(seed serviceDeploymentSeed, name string) bool {
+	for _, item := range seed.Services {
+		if item.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func selectSeedServices(seed *serviceDeploymentSeed, raw string) error {
+	if seed == nil {
+		return errors.New("service deployment seed is required")
+	}
+	wanted := make(map[string]struct{})
+	for _, name := range strings.Split(raw, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return errors.New("--only-services contains an empty service name")
+		}
+		wanted[name] = struct{}{}
+	}
+	selected := make([]serviceDeploymentEntry, 0, len(wanted))
+	for _, item := range seed.Services {
+		if _, ok := wanted[item.Name]; ok {
+			selected = append(selected, item)
+			delete(wanted, item.Name)
+		}
+	}
+	if len(wanted) > 0 {
+		names := make([]string, 0, len(wanted))
+		for name := range wanted {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return fmt.Errorf("--only-services contains unknown services: %s", strings.Join(names, ","))
+	}
+	seed.Services = selected
+	return nil
 }
 
 func disableSeedServices(seed *serviceDeploymentSeed, raw string) error {
@@ -607,7 +672,7 @@ func seedOptionalInt(values map[string]any, key string) (int64, error) {
 	}
 }
 
-func importServiceDeploymentSeed(db *gorm.DB, seed serviceDeploymentSeed) (created, updated int, err error) {
+func importServiceDeploymentSeed(db *gorm.DB, seed serviceDeploymentSeed, preserveExistingNodeMetadata bool) (created, updated int, err error) {
 	err = db.Transaction(func(tx *gorm.DB) error {
 		var node sysdeploy.GatewayNode
 		nodeResult := tx.Where("c_node_id = ?", seed.Node.ID).Find(&node)
@@ -615,10 +680,12 @@ func importServiceDeploymentSeed(db *gorm.DB, seed serviceDeploymentSeed) (creat
 			return fmt.Errorf("find gateway node: %w", nodeResult.Error)
 		}
 		if nodeResult.RowsAffected > 0 {
-			if err := tx.Model(&sysdeploy.GatewayNode{}).Where("c_node_id = ?", seed.Node.ID).Updates(map[string]any{
-				"c_name": seed.Node.Name, "c_public_address": seed.Node.PublicAddress, "c_status": seed.Node.Status,
-			}).Error; err != nil {
-				return fmt.Errorf("update gateway node: %w", err)
+			if !preserveExistingNodeMetadata {
+				if err := tx.Model(&sysdeploy.GatewayNode{}).Where("c_node_id = ?", seed.Node.ID).Updates(map[string]any{
+					"c_name": seed.Node.Name, "c_public_address": seed.Node.PublicAddress, "c_status": seed.Node.Status,
+				}).Error; err != nil {
+					return fmt.Errorf("update gateway node: %w", err)
+				}
 			}
 		} else {
 			if err := tx.Create(&sysdeploy.GatewayNode{NodeID: seed.Node.ID, Name: seed.Node.Name, PublicAddress: seed.Node.PublicAddress, Status: seed.Node.Status}).Error; err != nil {

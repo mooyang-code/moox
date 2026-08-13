@@ -27,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradeobservability "github.com/mooyang-code/moox/modules/trade/internal/observability"
+	tradeResolver "github.com/mooyang-code/moox/modules/trade/internal/resolver"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
@@ -184,6 +185,23 @@ func initialize(
 		}, nil
 	}
 
+	var dnsResolver *tradeResolver.Resolver
+	if cfg.DNSResolver.Enabled {
+		dnsMetrics, metricsErr := tradeResolver.NewMetrics(prometheus.DefaultRegisterer)
+		if metricsErr != nil {
+			return nil, fmt.Errorf("register Trade DNS resolver metrics: %w", metricsErr)
+		}
+		dnsResolver = tradeResolver.New(tradeResolver.Config{
+			Domains:         cfg.DNSResolver.Domains,
+			LookupTimeout:   time.Duration(cfg.DNSResolver.LookupTimeoutMS) * time.Millisecond,
+			ProbeTimeout:    time.Duration(cfg.DNSResolver.ProbeTimeoutMS) * time.Millisecond,
+			ProbePort:       cfg.DNSResolver.ProbePort,
+			CacheTTL:        time.Duration(cfg.DNSResolver.CacheTTLSeconds) * time.Second,
+			MaxIPsPerDomain: cfg.DNSResolver.MaxIPsPerDomain,
+			Metrics:         dnsMetrics,
+		})
+	}
+
 	var eventBus *jetstream.Client
 	var targetConsumerReady atomic.Bool
 	if cfg.EventBus.Enabled {
@@ -227,7 +245,6 @@ func initialize(
 			})
 		})
 	}
-
 	rpc.RegisterAll(
 		serverInstance,
 		&rpc.AccountServer{Accounts: accounts, Sync: syncService, Store: tradeStore},
@@ -289,6 +306,7 @@ func initialize(
 				return result.Action, result.Order, cancelErr
 			},
 		},
+		&rpc.DNSResolverServer{Resolver: dnsResolver},
 	)
 	if err := registerHealth(
 		serverInstance,

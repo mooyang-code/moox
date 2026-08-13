@@ -90,6 +90,32 @@ func TestStorageEventBusConfigHonorsExplicitReconnectBuffer(t *testing.T) {
 	}
 }
 
+func TestStorageViewRebuildSettingsRejectsTooShortInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "storage.yaml")
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_check_interval: 10s\n    max_view_file_bytes: 1048576\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_STORAGE_CONFIG", path)
+	if _, _, err := storageViewRebuildSettings(); err == nil {
+		t.Fatal("accepted a rebuild interval below the safety floor")
+	}
+}
+
+func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "storage.yaml")
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_check_interval: 2m\n    max_view_file_bytes: 2097152\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_STORAGE_CONFIG", path)
+	interval, maxBytes, err := storageViewRebuildSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interval != 2*time.Minute || maxBytes != 2097152 {
+		t.Fatalf("settings = %s/%d", interval, maxBytes)
+	}
+}
+
 func TestStorageEventBusConfigRejectsInvalidReconnectBuffer(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_EVENTBUS_CREDENTIAL_FILE", "")
 	t.Setenv("MOOX_STORAGE_CONFIG", "")
@@ -128,7 +154,7 @@ func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
 func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 1\n    max_workers: 1\n    ordering: subject\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 1\n    max_workers: 1\n    ordering: dataset\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
@@ -137,7 +163,7 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Consumer != "storage_view_period_v1" || opts.FetchBatch != 1 || opts.MaxWorkers != 1 || opts.MaxAckPending != 1 || opts.AckWaitMS != 120000 || opts.DeliverPolicy != "new" {
+	if opts.Consumer != "storage_view_period_v1" || opts.FetchBatch != 1 || opts.MaxWorkers != 1 || opts.MaxAckPending != 256 || opts.AckWaitMS != 120000 || opts.Ordering != "dataset" || opts.DeliverPolicy != "new" {
 		t.Fatalf("consumer options = %+v", opts)
 	}
 }

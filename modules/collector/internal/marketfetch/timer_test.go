@@ -27,6 +27,7 @@ func TestTimerRequestFromEnv(t *testing.T) {
 	require.Equal(t, 30, req.Concurrency)
 	require.Equal(t, "BTCUSDT", req.Items[0].Symbol)
 	require.Equal(t, "BTC-USDT", req.Items[0].SubjectID)
+	require.Equal(t, []string{"203.0.113.1"}, req.DNSRoutes["api.binance.com"].IPs)
 }
 
 func TestTimerRequestFromEnvAllowsUnicodeSubjectNames(t *testing.T) {

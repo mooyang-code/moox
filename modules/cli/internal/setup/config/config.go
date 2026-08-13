@@ -47,6 +47,22 @@ type EventBus struct {
 	TLSEnabled    bool   `toml:"tls_enabled"`
 }
 
+// DNSResolver configures the single Trade node that resolves and probes
+// market API domains for Collector. custom.toml is the source of truth; the
+// CLI renders the Trade-owned subset into Trade's app.yaml at deployment time.
+type DNSResolver struct {
+	Enabled                bool     `toml:"enabled"`
+	TradeNode              string   `toml:"trade_node"`
+	RefreshIntervalSeconds int      `toml:"refresh_interval_seconds"`
+	RequestTimeoutMS       int      `toml:"request_timeout_ms"`
+	LookupTimeoutMS        int      `toml:"lookup_timeout_ms"`
+	ProbeTimeoutMS         int      `toml:"probe_timeout_ms"`
+	ProbePort              int      `toml:"probe_port"`
+	CacheTTLSeconds        int      `toml:"cache_ttl_seconds"`
+	MaxIPsPerDomain        int      `toml:"max_ips_per_domain"`
+	Domains                []string `toml:"domains"`
+}
+
 type Monitoring struct {
 	WeComWebhook string `toml:"wecom_webhook"`
 }
@@ -141,6 +157,7 @@ type Manifest struct {
 	Admin        Admin        `toml:"admin"`
 	TencentCloud TencentCloud `toml:"tencent_cloud"`
 	EventBus     EventBus     `toml:"eventbus"`
+	DNSResolver  DNSResolver  `toml:"dns_resolver"`
 	Monitoring   Monitoring   `toml:"monitoring"`
 	Factors      FactorSetup  `toml:"factors"`
 	SCFFetcher   SCFFetcher   `toml:"scf_fetcher"`
@@ -340,7 +357,89 @@ func validate(manifest *Manifest) error {
 			return err
 		}
 	}
+	if err := validateDNSResolver(&manifest.DNSResolver, manifest); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateDNSResolver(cfg *DNSResolver, manifest *Manifest) error {
+	if cfg == nil || !cfg.Enabled {
+		return nil
+	}
+	cfg.TradeNode = strings.TrimSpace(cfg.TradeNode)
+	if cfg.TradeNode == "" {
+		return fmt.Errorf("config_invalid: dns_resolver.trade_node is required when enabled")
+	}
+	if strings.EqualFold(cfg.TradeNode, manifest.ControlHost.Name) {
+		return fmt.Errorf("config_invalid: dns_resolver.trade_node must not be control_host")
+	}
+	var selected *Host
+	for i := range manifest.OtherHosts {
+		if strings.EqualFold(strings.TrimSpace(manifest.OtherHosts[i].Name), cfg.TradeNode) {
+			selected = &manifest.OtherHosts[i]
+			break
+		}
+	}
+	if selected == nil || strings.TrimSpace(selected.Address) == "" {
+		return fmt.Errorf("config_invalid: dns_resolver.trade_node %q must match an other_hosts entry with an address", cfg.TradeNode)
+	}
+	if ip := net.ParseIP(strings.TrimSpace(selected.Address)); ip == nil || !isPublicResolverIP(ip) {
+		return fmt.Errorf("config_invalid: dns_resolver.trade_node %q must use a public address", cfg.TradeNode)
+	}
+	if cfg.RefreshIntervalSeconds <= 0 {
+		return fmt.Errorf("config_invalid: dns_resolver.refresh_interval_seconds must be positive")
+	}
+	if cfg.RequestTimeoutMS <= 0 {
+		return fmt.Errorf("config_invalid: dns_resolver.request_timeout_ms must be positive")
+	}
+	if cfg.LookupTimeoutMS <= 0 {
+		return fmt.Errorf("config_invalid: dns_resolver.lookup_timeout_ms must be positive")
+	}
+	if cfg.ProbeTimeoutMS <= 0 {
+		return fmt.Errorf("config_invalid: dns_resolver.probe_timeout_ms must be positive")
+	}
+	if cfg.ProbePort < 1 || cfg.ProbePort > 65535 {
+		return fmt.Errorf("config_invalid: dns_resolver.probe_port must be between 1 and 65535")
+	}
+	if cfg.CacheTTLSeconds <= 0 {
+		return fmt.Errorf("config_invalid: dns_resolver.cache_ttl_seconds must be positive")
+	}
+	if cfg.MaxIPsPerDomain < 1 || cfg.MaxIPsPerDomain > 4 {
+		return fmt.Errorf("config_invalid: dns_resolver.max_ips_per_domain must be between 1 and 4")
+	}
+	seen := make(map[string]struct{}, len(cfg.Domains))
+	for i := range cfg.Domains {
+		domain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(cfg.Domains[i]), "."))
+		if !validDNSResolverDomain(domain) {
+			return fmt.Errorf("config_invalid: dns_resolver.domains[%d] must be a public DNS hostname", i)
+		}
+		if _, ok := seen[domain]; ok {
+			return fmt.Errorf("config_invalid: dns_resolver domain %q is duplicated", domain)
+		}
+		seen[domain] = struct{}{}
+		cfg.Domains[i] = domain
+	}
+	if len(cfg.Domains) == 0 {
+		return fmt.Errorf("config_invalid: dns_resolver.domains must not be empty when enabled")
+	}
+	if len(cfg.Domains) > 16 {
+		return fmt.Errorf("config_invalid: dns_resolver.domains must contain at most 16 entries")
+	}
+	return nil
+}
+
+func isPublicResolverIP(ip net.IP) bool {
+	ip = ip.To4()
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return false
+	}
+	first, second, third := ip[0], ip[1], ip[2]
+	return first != 0 && first < 224 &&
+		!(first == 100 && second >= 64 && second <= 127) &&
+		!(first == 192 && second == 0 && (third == 0 || third == 2)) &&
+		!(first == 198 && (second == 18 || second == 19 || (second == 51 && third == 100))) &&
+		!(first == 203 && second == 0 && third == 113)
 }
 
 func validateFactorSetup(cfg *FactorSetup) error {
@@ -634,6 +733,22 @@ func validEventBusAddress(address string) bool {
 		return false
 	}
 	labels := strings.Split(address, ".")
+	for _, label := range labels {
+		if !dnsLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func validDNSResolverDomain(domain string) bool {
+	if domain == "" || len(domain) > 253 || net.ParseIP(domain) != nil || strings.Contains(domain, "..") {
+		return false
+	}
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return false
+	}
 	for _, label := range labels {
 		if !dnsLabelPattern.MatchString(label) {
 			return false

@@ -152,3 +152,17 @@ address = ""
 port = 22
 username = "ubuntu"
 password = ""
+
+# moox-cli renders the non-sensitive resolver fields below into Trade's
+# config/app.yaml. Trade does not read this full custom.toml directly.
+[dns_resolver]
+enabled = false
+trade_node = "compute-1"
+refresh_interval_seconds = 300
+request_timeout_ms = 3000
+lookup_timeout_ms = 1500
+probe_timeout_ms = 500
+probe_port = 443
+cache_ttl_seconds = 300
+max_ips_per_domain = 4
+domains = ["data-api.binance.vision", "api.binance.com", "fapi.binance.com"]

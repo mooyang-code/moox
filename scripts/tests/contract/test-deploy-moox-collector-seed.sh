@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "$(basename "${SCRIPT_DIR}")" == "contract" ]]; then
+  ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
+else
+  ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+fi
 DEPLOY="${ROOT}/scripts/deploy-moox.sh"
 
 grep -q 'collector-rules.yaml' "${DEPLOY}"

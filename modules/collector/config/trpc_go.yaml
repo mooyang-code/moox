@@ -38,7 +38,7 @@ server:
       timeout: 10000
     - name: trpc.moox.collector.dns.timer
       port: 11414
-      network: "0 */5 * * * *"
+      network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
 

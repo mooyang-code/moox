@@ -671,6 +671,48 @@ func RegisterTradeExecutionServiceService(s server.Service, svr TradeExecutionSe
 	}
 }
 
+// TradeDNSResolverServiceService defines service.
+type TradeDNSResolverServiceService interface {
+	ResolveDomains(ctx context.Context, req *ResolveDomainsReq) (*ResolveDomainsRsp, error)
+}
+
+func TradeDNSResolverServiceService_ResolveDomains_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ResolveDomainsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeDNSResolverServiceService).ResolveDomains(ctx, reqbody.(*ResolveDomainsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// TradeDNSResolverServiceServer_ServiceDesc descriptor for server.RegisterService.
+var TradeDNSResolverServiceServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.trade.TradeDNSResolverService",
+	HandlerType: ((*TradeDNSResolverServiceService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.trade.TradeDNSResolverService/ResolveDomains",
+			Func: TradeDNSResolverServiceService_ResolveDomains_Handler,
+		},
+	},
+}
+
+// RegisterTradeDNSResolverServiceService registers service.
+func RegisterTradeDNSResolverServiceService(s server.Service, svr TradeDNSResolverServiceService) {
+	if err := s.Register(&TradeDNSResolverServiceServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("TradeDNSResolverService register error:%v", err))
+	}
+}
+
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
 
 type UnimplementedExchangeAccountService struct{}
@@ -755,6 +797,12 @@ func (s *UnimplementedTradeExecutionService) ListFills(ctx context.Context, req 
 }
 func (s *UnimplementedTradeExecutionService) ListPositions(ctx context.Context, req *ListPositionsReq) (*ListPositionsRsp, error) {
 	return nil, errors.New("rpc ListPositions of service TradeExecutionService is not implemented")
+}
+
+type UnimplementedTradeDNSResolverService struct{}
+
+func (s *UnimplementedTradeDNSResolverService) ResolveDomains(ctx context.Context, req *ResolveDomainsReq) (*ResolveDomainsRsp, error) {
+	return nil, errors.New("rpc ResolveDomains of service TradeDNSResolverService is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1343,6 +1391,40 @@ func (c *TradeExecutionServiceClientProxyImpl) ListPositions(ctx context.Context
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListPositionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// TradeDNSResolverServiceClientProxy defines service client proxy
+type TradeDNSResolverServiceClientProxy interface {
+	ResolveDomains(ctx context.Context, req *ResolveDomainsReq, opts ...client.Option) (rsp *ResolveDomainsRsp, err error)
+}
+
+type TradeDNSResolverServiceClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewTradeDNSResolverServiceClientProxy = func(opts ...client.Option) TradeDNSResolverServiceClientProxy {
+	return &TradeDNSResolverServiceClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *TradeDNSResolverServiceClientProxyImpl) ResolveDomains(ctx context.Context, req *ResolveDomainsReq, opts ...client.Option) (*ResolveDomainsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeDNSResolverService/ResolveDomains")
+	msg.WithCalleeServiceName(TradeDNSResolverServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeDNSResolverService")
+	msg.WithCalleeMethod("ResolveDomains")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ResolveDomainsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

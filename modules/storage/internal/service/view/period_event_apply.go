@@ -42,6 +42,16 @@ func (s *Service) HandleDatasetPeriodCollected(ctx context.Context, message *eve
 		return errors.New("storage View period dependencies are unavailable")
 	}
 	views := s.activeViewsForDataset(message.GetSpaceId(), payload.GetDatasetId())
+	if len(views) == 0 {
+		managed, err := s.datasetHasActiveView(ctx, message.GetSpaceId(), payload.GetDatasetId())
+		if err != nil {
+			return err
+		}
+		if managed {
+			return errors.New("storage view index mapping is pending")
+		}
+		return nil
+	}
 	for _, view := range views {
 		state := &pb.ViewPeriodDatasetState{
 			SpaceId: message.GetSpaceId(), ViewId: view.GetViewId(), DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(),
@@ -106,6 +116,16 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 		return errors.New("storage View ready publisher is unavailable")
 	}
 	views := s.activeViewsForDataset(message.GetSpaceId(), payload.GetResultDatasetId())
+	if len(views) == 0 {
+		managed, err := s.datasetHasActiveView(ctx, message.GetSpaceId(), payload.GetResultDatasetId())
+		if err != nil {
+			return err
+		}
+		if managed {
+			return errors.New("storage view index mapping is pending")
+		}
+		return nil
+	}
 	for _, view := range views {
 		bindings := make([]*storageeventpb.FactorBindingPeriodState, 0, len(payload.GetBindings()))
 		for _, state := range payload.GetBindings() {
@@ -136,7 +156,18 @@ func (s *Service) HandleDatasetSyncPoint(ctx context.Context, message *eventpb.E
 	if metadata == nil {
 		return errors.New("storage View period metadata is unavailable")
 	}
-	for _, view := range s.syncPointViewsForDataset(message.GetSpaceId(), payload.GetDatasetId()) {
+	views := s.syncPointViewsForDataset(message.GetSpaceId(), payload.GetDatasetId())
+	if len(views) == 0 {
+		managed, err := s.datasetHasActiveView(ctx, message.GetSpaceId(), payload.GetDatasetId())
+		if err != nil {
+			return err
+		}
+		if managed {
+			return errors.New("storage view index mapping is pending")
+		}
+		return nil
+	}
+	for _, view := range views {
 		ready, readyErr := s.hasReadyViewIndex(ctx, view)
 		if readyErr != nil {
 			return readyErr

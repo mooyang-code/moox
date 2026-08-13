@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -65,6 +66,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupTrustHostCommand(deps),
 		newSetupDeployCommand(deps),
 		newSetupDeployServiceCommand(deps),
+		newSetupRenderRuntimeConfigCommand(deps),
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
 		newSetupDeployStorageCommand(deps),
@@ -76,6 +78,113 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupE2EEventBusCommand(deps),
 	)
 	return cmd
+}
+
+func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
+	var file, tradeOutput, collectorOutput, nodeID string
+	cmd := &cobra.Command{
+		Use:   "render-runtime-config",
+		Short: "从 custom.toml 渲染 Trade/Collector 运行配置",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			tradeOutput = strings.TrimSpace(tradeOutput)
+			collectorOutput = strings.TrimSpace(collectorOutput)
+			if tradeOutput == "" && collectorOutput == "" {
+				return fmt.Errorf("runtime_config: at least one output path is required")
+			}
+			if tradeOutput != "" && collectorOutput != "" {
+				tradeCanonical, err := canonicalRuntimeOutputPath(tradeOutput)
+				if err != nil {
+					return err
+				}
+				collectorCanonical, err := canonicalRuntimeOutputPath(collectorOutput)
+				if err != nil {
+					return err
+				}
+				if tradeCanonical == collectorCanonical {
+					return fmt.Errorf("runtime_config: trade and collector outputs must be different")
+				}
+			}
+			snapshot, err := deps.load(file)
+			if err != nil {
+				return err
+			}
+			defer clearSetupSecrets(snapshot)
+
+			// Render both files before mutating either one. The deployment script
+			// can therefore fail before a service restart if custom.toml or YAML
+			// validation is invalid.
+			var tradeRaw, collectorRaw []byte
+			if tradeOutput != "" {
+				tradeRaw, err = readRuntimeConfigFile(tradeOutput)
+				if err != nil {
+					return err
+				}
+				tradeRaw, err = setupconfig.RenderTradeDNSResolverConfigForNode(snapshot, nodeID, tradeRaw)
+				if err != nil {
+					return err
+				}
+			}
+			if collectorOutput != "" {
+				collectorRaw, err = readRuntimeConfigFile(collectorOutput)
+				if err != nil {
+					return err
+				}
+				collectorRaw, err = setupconfig.RenderCollectorDNSResolverConfig(snapshot, collectorRaw)
+				if err != nil {
+					return err
+				}
+			}
+			if err := snapshot.VerifyUnchanged(); err != nil {
+				return fmt.Errorf("config_changed")
+			}
+			if tradeOutput != "" {
+				if err := setupconfig.WriteRenderedRuntimeConfig(tradeOutput, tradeRaw); err != nil {
+					return err
+				}
+			}
+			if collectorOutput != "" {
+				if err := setupconfig.WriteRenderedRuntimeConfig(collectorOutput, collectorRaw); err != nil {
+					return err
+				}
+			}
+			resolverNodeID, resolverTarget, resolverErr := setupconfig.DNSResolverRuntimeTarget(snapshot)
+			if resolverErr != nil {
+				return resolverErr
+			}
+			return writeSetupJSON(cmd, map[string]any{
+				"status":               "rendered",
+				"trade_output":         tradeOutput,
+				"collector_output":     collectorOutput,
+				"dns_resolver_enabled": snapshot.Manifest.DNSResolver.Enabled,
+				"dns_resolver_node_id": resolverNodeID,
+				"dns_resolver_target":  resolverTarget,
+			})
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&tradeOutput, "trade-output", "", "Trade app.yaml 输出路径")
+	cmd.Flags().StringVar(&collectorOutput, "collector-output", "", "Collector app.yaml 输出路径")
+	cmd.Flags().StringVar(&nodeID, "node-id", "", "当前部署节点 ID；非 Resolver 节点上的 Trade 会禁用 Resolver")
+	return cmd
+}
+
+func canonicalRuntimeOutputPath(path string) (string, error) {
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", fmt.Errorf("runtime_config: resolve output %q: %w", path, err)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	return abs, nil
+}
+
+func readRuntimeConfigFile(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("runtime_config: read %s: %w", path, err)
+	}
+	return raw, nil
 }
 
 type setupHostChoice struct {
@@ -165,7 +274,15 @@ func newSetupDeployCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
-		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost})
+		deploymentHosts := []setupconfig.Host{snapshot.Manifest.ControlHost}
+		if snapshot.Manifest.DNSResolver.Enabled {
+			resolverHost, resolveErr := findSetupHost(snapshot.Manifest, snapshot.Manifest.DNSResolver.TradeNode)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			deploymentHosts = append(deploymentHosts, resolverHost)
+		}
+		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, deploymentHosts)
 		if validationErr != nil {
 			if encodeErr := writeSetupJSON(cmd, result); encodeErr != nil {
 				return encodeErr

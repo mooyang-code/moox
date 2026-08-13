@@ -6,9 +6,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +52,35 @@ func (fakeFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsRe
 			Fields: []*pb.FieldValue{{
 				FieldId: "factor",
 				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}},
+			}},
+		})
+	}
+	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+}
+
+type blockingFieldReader struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingFieldReader) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+	select {
+	case <-r.started:
+	default:
+		close(r.started)
+	}
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
+	for _, key := range req.GetKeys() {
+		rows = append(rows, &pb.RowFieldValues{
+			Key: key,
+			Fields: []*pb.FieldValue{{
+				FieldId: "extra",
+				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 7}},
 			}},
 		})
 	}
@@ -129,6 +158,178 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	}
 }
 
+func TestDuckDBABSwitchKeepsActiveReadableAndDeletesOldFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "views")
+	svc, err := New(root, "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	schema := func(indexID string, version uint64) *pb.ViewIndexSchema {
+		return &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", PrimaryDatasetId: "prices", ViewVersion: version, Engine: "duckdb", ViewSchemaHash: fmt.Sprintf("schema-%d", version), Columns: columns, DatasetIds: []string{"prices"}}
+	}
+	prepare := func(indexID string, version uint64) {
+		t.Helper()
+		rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: indexID, Schema: schema(indexID, version)})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("prepare %s: rsp=%v err=%v", indexID, rsp, err)
+		}
+	}
+	key := func(at string, close float64) *pb.ViewIndexRowWrite {
+		return &pb.ViewIndexRowWrite{
+			Key:    &pb.ViewIndexRowKey{RowKey: &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: at}}}},
+			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: close}}}},
+		}
+	}
+	apply := func(indexID string, version uint64, mode string, rows ...*pb.ViewIndexRowWrite) {
+		t.Helper()
+		rsp, err := svc.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: indexID, Batch: &pb.ViewIndexWriteBatch{ViewRevision: version, ViewSchemaHash: fmt.Sprintf("schema-%d", version), WriteMode: mode, RowWrites: rows}})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("apply %s: rsp=%v err=%v", indexID, rsp, err)
+		}
+	}
+	attach := func(indexID string, version uint64) {
+		t.Helper()
+		if err := svc.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "prices-view", PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, ActiveIndexId: indexID, ActiveViewRevision: version, ActiveViewSchemaHash: fmt.Sprintf("schema-%d", version), Engine: "duckdb", ActiveColumns: columns, Status: "active"}); err != nil {
+			t.Fatalf("attach %s: %v", indexID, err)
+		}
+	}
+	query := func(want int, wantLast float64) {
+		t.Helper()
+		rsp, err := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{AuthInfo: auth, SpaceId: "quant", ViewId: "prices-view", Selectors: []*pb.TimeSeriesSelector{{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m"}}, ColumnNames: []string{"close"}, Sorts: []*pb.SortSpec{{FieldName: "data_time"}}})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != want {
+			t.Fatalf("query rows=%d want=%d rsp=%v err=%v", len(rsp.GetRows()), want, rsp, err)
+		}
+		last := rsp.GetRows()[len(rsp.GetRows())-1].GetFields()[0].GetValue().GetDoubleValue()
+		if last != wantLast {
+			t.Fatalf("query last close=%v want=%v", last, wantLast)
+		}
+	}
+
+	prepare("prices-a", 1)
+	apply("prices-a", 1, "LIVE_WRITE", key("2026-08-11T00:00:00Z", 100))
+	attach("prices-a", 1)
+	prepare("prices-b", 2)
+	if err := svc.BackfillView(ctx, "quant", "prices-view", 100); err != nil {
+		t.Fatal(err)
+	}
+	// A live delta is written to both sides while B is ready but not active.
+	apply("prices-a", 1, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
+	apply("prices-b", 2, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
+	query(2, 101)
+	if err := svc.SwitchView(ctx, "quant", "prices-view", 0); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(root, "duckdb", "prices-a.duckdb")
+	newPath := filepath.Join(root, "duckdb", "prices-b.duckdb")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, oldErr := os.Stat(oldPath)
+		if os.IsNotExist(oldErr) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("old DuckDB file was not removed: err=%v", oldErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("new active DuckDB file missing: %v", err)
+	}
+	query(2, 101)
+}
+
+func TestDuckDBBackfillDoesNotBlockActiveLiveWrite(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "views")
+	svc, err := New(root, "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	aColumns := []*pb.ViewColumn{{SpaceId: "quant", ViewId: "prices-view", OriginId: "prices.close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	bColumns := append(append([]*pb.ViewColumn(nil), aColumns...), &pb.ViewColumn{SpaceId: "quant", ViewId: "prices-view", OriginId: "prices.extra", ColumnName: "extra", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
+	schema := func(version uint64, columns []*pb.ViewColumn) *pb.ViewIndexSchema {
+		return &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, ViewVersion: version, Engine: "duckdb", ViewSchemaHash: fmt.Sprintf("schema-%d", version), Columns: columns}
+	}
+	prepare := func(indexID string, version uint64, columns []*pb.ViewColumn) {
+		t.Helper()
+		rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: indexID, Schema: schema(version, columns)})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("prepare %s: rsp=%v err=%v", indexID, rsp, err)
+		}
+	}
+	key := func(at string) *pb.RowKey {
+		return &pb.RowKey{SpaceId: "quant", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: at}}}
+	}
+	apply := func(indexID string, version uint64, rows []*pb.ViewIndexRowWrite) {
+		t.Helper()
+		rsp, err := svc.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{AuthInfo: auth, IndexId: indexID, Batch: &pb.ViewIndexWriteBatch{ViewRevision: version, ViewSchemaHash: fmt.Sprintf("schema-%d", version), WriteMode: "LIVE_WRITE", RowWrites: rows}})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("apply %s: rsp=%v err=%v", indexID, rsp, err)
+		}
+	}
+	prepare("prices-a", 1, aColumns)
+	if err := svc.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "prices-view", PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", Engine: "duckdb", ActiveColumns: aColumns, Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	apply("prices-a", 1, []*pb.ViewIndexRowWrite{{
+		Key:    &pb.ViewIndexRowKey{RowKey: key("2026-08-11T00:00:00Z")},
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
+	}})
+	prepare("prices-b", 2, bColumns)
+	svc.SetPrimaryAuth(auth)
+	reader := &blockingFieldReader{started: make(chan struct{}), release: make(chan struct{})}
+	backfillErr := make(chan error, 1)
+	go func() { backfillErr <- svc.BackfillViewWithReader(ctx, "quant", "prices-view", 100, reader) }()
+	select {
+	case <-reader.started:
+	case <-ctx.Done():
+		t.Fatalf("backfill did not reach the blocked field read: %v", ctx.Err())
+	}
+	liveErr := make(chan error, 1)
+	go func() {
+		liveErr <- svc.applyDatasetEvent(ctx, "quant", "prices", []*pb.RowFieldUpsert{{
+			Key: key("2026-08-11T00:01:00Z"),
+			Fields: []*pb.FieldValue{
+				{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 101}}},
+				{FieldId: "extra", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 8}}},
+			}}})
+	}()
+	select {
+	case err := <-liveErr:
+		if err != nil {
+			t.Fatalf("live write blocked/failed while backfill was reading: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active live write was blocked by backfill field read")
+	}
+	close(reader.release)
+	if err := <-backfillErr; err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if err := svc.SwitchView(ctx, "quant", "prices-view", 0); err != nil {
+		t.Fatalf("switch: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rsp, queryErr := svc.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{AuthInfo: auth, SpaceId: "quant", ViewId: "prices-view", Selectors: []*pb.TimeSeriesSelector{{SpaceId: "quant", DatasetId: "prices", SubjectId: "BTC-USDT", Freq: "1m"}}, ColumnNames: []string{"close", "extra"}, Sorts: []*pb.SortSpec{{FieldName: "data_time"}}})
+		if queryErr == nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS && len(rsp.GetRows()) == 2 {
+			if got := rsp.GetRows()[1].GetFields()[0].GetValue().GetDoubleValue(); got != 101 {
+				t.Fatalf("switched latest close=%v, want 101", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("switched view did not expose historical and live rows: rsp=%v err=%v", rsp, queryErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestViewServiceRequiresSecretAndAuth(t *testing.T) {
 	if _, err := New(filepath.Join(t.TempDir(), "views"), ""); err == nil {
 		t.Fatal("expected missing view auth secret to be rejected")
@@ -146,7 +347,7 @@ func TestViewServiceRequiresSecretAndAuth(t *testing.T) {
 	}
 }
 
-func TestViewServicePropagatesIncompatibleDuckDBSchema(t *testing.T) {
+func TestViewServiceDefersIncompatibleDuckDBSchemaToMetadataRecovery(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "views")
 	duckdbRoot := filepath.Join(root, "duckdb")
 	if err := os.MkdirAll(duckdbRoot, 0o755); err != nil {
@@ -171,9 +372,11 @@ func TestViewServicePropagatesIncompatibleDuckDBSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = New(root, "view-secret")
-	if err == nil || !strings.Contains(err.Error(), "clean the index and rebuild it") {
-		t.Fatalf("New() error = %v", err)
+	if _, err = New(root, "view-secret"); err != nil {
+		t.Fatalf("New() should defer existing index validation until metadata recovery: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(duckdbRoot, "legacy.duckdb")); err != nil {
+		t.Fatalf("existing index should remain for metadata recovery, stat err=%v", err)
 	}
 }
 
@@ -356,6 +559,55 @@ func TestCompleteEventCreatesMissingViewRowWithoutRecovery(t *testing.T) {
 	rows, err := svc.query(ctx, "single", []*pb.RowKey{event.GetKey()}, nil)
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 {
 		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+}
+
+func TestDatasetEventAcksUnmanagedBeforeInitialReconcile(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err != nil {
+		t.Fatalf("unmanaged Dataset row should ACK during initial reconcile: %v", err)
+	}
+}
+
+func TestDatasetEventStaysPendingWhenNewManagedViewIsNotAttached(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := &reconcileMetadata{view: &pb.View{
+		SpaceId: "space", ViewId: "prices", Status: "active", DatasetIds: []string{"market"},
+	}}
+	svc.setMetadataClient(metadata)
+	svc.setReconcileReady(true)
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil {
+		t.Fatal("managed Dataset row was ACKable before its View mapping was attached")
+	}
+}
+
+func TestExplicitEmptyViewRoutesDatasetEventsWithoutBlocking(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "empty-view", Schema: &pb.ViewIndexSchema{
+		SpaceId: "space", ViewId: "empty", PrimaryDatasetId: "market", DatasetIds: []string{"market"}, ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
+	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("prepare empty view: rsp=%v err=%v", rsp, err)
+	}
+	view := &pb.View{SpaceId: "space", ViewId: "empty", PrimaryDatasetId: "market", DatasetIds: []string{"market"}, ActiveIndexId: "empty-view", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: "bleve", Status: "active", Attributes: map[string]string{viewColumnsExplicitAttr: "true"}}
+	if err := svc.AttachActiveView(view); err != nil {
+		t.Fatal(err)
+	}
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
+	if err := svc.applyDatasetEvent(ctx, "space", "market", []*pb.RowFieldUpsert{row}); err != nil {
+		t.Fatalf("explicit empty view must ACK its Dataset event: %v", err)
 	}
 }
 

@@ -14,6 +14,23 @@ func TestDefaultConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	assert.Equal(t, "./data/moox_trade.db", cfg.Database.Path)
 	assert.Equal(t, "https://106.53.107.122:11001", cfg.Admin.BaseURL)
 	assert.True(t, cfg.EventBus.Enabled)
+	assert.False(t, cfg.DNSResolver.Enabled)
+	assert.Equal(t, 4, cfg.DNSResolver.MaxIPsPerDomain)
+}
+
+func TestValidateDNSResolver(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EventBus.Enabled = false
+	cfg.DNSResolver = DNSResolverConfig{
+		Enabled: true, Domains: []string{"fapi.binance.com"}, LookupTimeoutMS: 1500,
+		ProbeTimeoutMS: 500, ProbePort: 443, CacheTTLSeconds: 300, MaxIPsPerDomain: 4,
+	}
+	require.NoError(t, cfg.Validate())
+
+	cfg.DNSResolver.ProbePort = 0
+	err := cfg.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "probe_port")
 }
 
 func TestLoad_FromValidYAML_ShouldApplyAndValidate(t *testing.T) {

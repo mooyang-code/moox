@@ -16,6 +16,13 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
+// Primary dataset changes are intentionally rejected by this simple A/B
+// implementation. A backfill can enumerate the old active index, but it has
+// no range-scan API to discover historical rows that exist only in the new
+// primary dataset. Activating such a build would silently publish an
+// incomplete View, so operators must create a new View for that migration.
+var errPrimaryDatasetChangeUnsupported = errors.New("changing primary dataset requires a new View")
+
 type MetadataClient interface {
 	ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error)
 	GetDataset(context.Context, *pb.GetDatasetReq, ...client.Option) (*pb.GetDatasetRsp, error)
@@ -36,9 +43,14 @@ type ReconcilerOptions struct {
 	Interval time.Duration
 	OwnerID  string
 	Grace    time.Duration
+	// MaxViewFileBytes triggers an A/B rebuild for a
+	// finite-retention View. The rebuilt index contains only its keep window;
+	// SwitchView then removes the old DuckDB file after the grace period.
+	MaxViewFileBytes int64
 }
 
 const viewBackfillBatchSize = 10000
+const sizeLimitRebuildRetryInterval = 30 * time.Minute
 
 // viewColumnsExplicitAttr preserves the distinction between a view that
 // intentionally exposes no columns and a legacy view whose empty definition
@@ -46,8 +58,61 @@ const viewBackfillBatchSize = 10000
 const viewColumnsExplicitAttr = "moox.columns_explicit"
 
 func (s *Service) StartReconciler(ctx context.Context, opts ReconcilerOptions) (func(), error) {
+	var err error
+	opts, err = s.normalizeReconcilerOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.reconcileOnce(ctx, opts); err != nil {
+		return nil, err
+	}
+	s.setReconcileReady(true)
+	return s.startReconcilerLoop(ctx, opts), nil
+}
+
+// StartReconcilerAsync starts the periodic check without making process
+// startup wait for a potentially large historical backfill. Until the first
+// successful pass completes, event handlers keep deliveries pending.
+func (s *Service) StartReconcilerAsync(ctx context.Context, opts ReconcilerOptions) (func(), error) {
+	var err error
+	opts, err = s.normalizeReconcilerOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	s.setReconcileReady(false)
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		firstPass := true
+		run := func() {
+			if err := s.reconcileOnce(loopCtx, opts); err != nil {
+				log.Printf("storage view reconcile failed: %v", err)
+				return
+			}
+			if firstPass {
+				s.setReconcileReady(true)
+				firstPass = false
+			}
+		}
+		run()
+		ticker := time.NewTicker(opts.Interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
+	}()
+	return func() { cancel(); <-done }, nil
+}
+
+func (s *Service) normalizeReconcilerOptions(opts ReconcilerOptions) (ReconcilerOptions, error) {
 	if opts.Metadata == nil {
-		return nil, errors.New("metadata client is required")
+		return opts, errors.New("metadata client is required")
 	}
 	if opts.Interval <= 0 {
 		opts.Interval = 30 * time.Second
@@ -57,12 +122,14 @@ func (s *Service) StartReconciler(ctx context.Context, opts ReconcilerOptions) (
 		s.periodMetadata = periodMetadata
 		s.mu.Unlock()
 	}
+	s.setMetadataClient(opts.Metadata)
 	if strings.TrimSpace(opts.OwnerID) == "" {
 		opts.OwnerID = "storage-view"
 	}
-	if err := s.reconcileOnce(ctx, opts); err != nil {
-		return nil, err
-	}
+	return opts, nil
+}
+
+func (s *Service) startReconcilerLoop(ctx context.Context, opts ReconcilerOptions) func() {
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -80,11 +147,105 @@ func (s *Service) StartReconciler(ctx context.Context, opts ReconcilerOptions) (
 			}
 		}
 	}()
-	return func() { cancel(); <-done }, nil
+	return func() { cancel(); <-done }
+}
+
+// RestoreActiveViews restores only the indexes already declared active by
+// Metadata. It never claims or backfills a new index, so callers can run it
+// before starting the EventBus consumer without holding up the live stream.
+func (s *Service) RestoreActiveViews(ctx context.Context, opts ReconcilerOptions) error {
+	if opts.Metadata == nil {
+		return errors.New("metadata client is required")
+	}
+	if strings.TrimSpace(opts.OwnerID) == "" {
+		opts.OwnerID = "storage-view"
+	}
+	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
+		s.mu.Lock()
+		s.periodMetadata = periodMetadata
+		s.mu.Unlock()
+	}
+	s.setMetadataClient(opts.Metadata)
+	auth := s.internalAuth()
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
+		if err != nil {
+			return err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return err
+		}
+		for _, view := range rsp.GetViews() {
+			if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
+				continue
+			}
+			if activeID := view.GetActiveIndexId(); activeID != "" {
+				engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
+				engine := s.engines[engineName]
+				if engine == nil {
+					return fmt.Errorf("view engine %q is unavailable", engineName)
+				}
+				stats, err := restoreIndexStats(ctx, engine, activeID)
+				if err != nil {
+					return err
+				}
+				if !stats.Exists {
+					return fmt.Errorf("active view index %q is missing; refusing to start without a readable active view", activeID)
+				}
+				if err := validatePhysicalViewContract(view, stats); err != nil {
+					return err
+				}
+				if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
+					return err
+				}
+			}
+			build := view.GetIndexBuild()
+			if build == nil || build.GetIndexId() == "" {
+				continue
+			}
+			if build.GetIndexId() == view.GetActiveIndexId() {
+				// Metadata activation is authoritative. A stale READY build
+				// query must never delete the active physical index.
+				continue
+			}
+			if build.GetState() == pb.ViewIndexBuild_READY {
+				// Attach a READY first-build index before the consumer starts so
+				// rows can be routed while the initial reconcile is pending.
+				if view.GetActiveIndexId() == "" {
+					if err := s.AttachPendingViewBuild(ctx, view); err != nil {
+						return err
+					}
+					if err := s.TrackViewBuild(ctx, view.GetSpaceId(), view.GetViewId(), build.GetBuildId(), opts.OwnerID, opts.Metadata, auth); err != nil {
+						return err
+					}
+					continue
+				}
+			}
+			// An unfinished build is not resumable. A READY build with an
+			// existing active index is also stale after restart; the active
+			// index remains authoritative and the next build will be recreated.
+			if build.GetState() == pb.ViewIndexBuild_PREPARING || build.GetState() == pb.ViewIndexBuild_BUILDING || build.GetState() == pb.ViewIndexBuild_CATCHING_UP || (build.GetState() == pb.ViewIndexBuild_READY && view.GetActiveIndexId() != "") {
+				if err := s.failInterruptedBuild(ctx, opts, auth, view, build); err != nil {
+					return err
+				}
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
+			return nil
+		}
+	}
+}
+
+func restoreIndexStats(ctx context.Context, engine viewindex.Engine, indexID string) (viewindex.ViewIndexStats, error) {
+	if reader, ok := engine.(viewindex.MetadataStatReader); ok {
+		return reader.StatMetadata(ctx, indexID)
+	}
+	return engine.Stat(ctx, indexID)
 }
 
 func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) error {
 	auth := s.internalAuth()
+	var firstErr error
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
@@ -104,11 +265,14 @@ func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) err
 				if view != nil {
 					log.Printf("storage view reconcile %s/%s failed: %v", view.GetSpaceId(), view.GetViewId(), err)
 				}
+				if firstErr == nil {
+					firstErr = err
+				}
 				continue
 			}
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
-			return nil
+			return firstErr
 		}
 	}
 }
@@ -130,51 +294,67 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			return err
 		}
 		if stats.Exists {
-			if err := s.AttachActiveView(view); err != nil {
+			if err := validatePhysicalViewContract(view, stats); err != nil {
+				return err
+			}
+			if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
 				return err
 			}
 			_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
 			s.cacheActiveIndexStats(runtime, view.GetActiveIndexId(), stats)
+			if runtime != nil {
+				runtime.mu.Lock()
+				primaryChanged := runtime.active == view.GetActiveIndexId() && runtime.activePrimaryDatasetID != "" && view.GetPrimaryDatasetId() != "" && runtime.activePrimaryDatasetID != view.GetPrimaryDatasetId()
+				runtime.mu.Unlock()
+				if primaryChanged {
+					return errPrimaryDatasetChangeUnsupported
+				}
+			}
 		}
 	}
-	failedBuild := false
+	var failedBuild *pb.ViewIndexBuild
 	if build := view.GetIndexBuild(); build != nil {
 		switch build.GetState() {
 		case pb.ViewIndexBuild_FAILED:
-			s.removeFailedBuild(ctx, build.GetIndexId())
+			failedBuild = proto.Clone(build).(*pb.ViewIndexBuild)
+			s.discardFailedBuild(ctx, view.GetSpaceId(), view.GetViewId(), build.GetIndexId(), build.GetEngine())
 			view.IndexBuild = nil
-			failedBuild = true
 		case pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP:
 			// There is deliberately no resumable build cursor. A process exit
 			// discards the partial inactive index and the next reconcile starts
 			// a complete rebuild.
-			s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), errors.New("discard interrupted view build"))
+			if err := s.failInterruptedBuild(ctx, opts, auth, view, build); err != nil {
+				return err
+			}
 			return nil
 		case pb.ViewIndexBuild_READY:
+			if build.GetTargetViewVersion() != view.GetDesiredViewRevision() {
+				staleErr := fmt.Errorf("view build revision %d is stale; desired revision is %d", build.GetTargetViewVersion(), view.GetDesiredViewRevision())
+				s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), staleErr)
+				return nil
+			}
 			if err := s.AttachPendingViewBuild(ctx, view); err != nil {
 				s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
 				return err
 			}
-			if err := s.acquireActivationFence(ctx, view.GetSpaceId(), view.GetViewId(), build.GetIndexId()); err != nil {
-				return err
-			}
-			defer s.releaseBackfill()
-			activated, err := opts.Metadata.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: build.GetBuildId(), OwnerId: opts.OwnerID})
-			if err != nil {
-				return activationRetry{cause: err}
-			}
-			if err := requireSuccess(activated.GetRetInfo()); err != nil {
-				s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
-				return err
-			}
-			if view.GetActiveIndexId() != "" {
-				return s.SwitchView(ctx, view.GetSpaceId(), view.GetViewId(), opts.Grace)
-			}
-			return s.AttachActiveView(activatedViewMetadata(activated.GetView(), view, build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns()))
+			return s.activateViewBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns())
 		}
 	}
-	if !failedBuild && !needsRebuild(view, stats) {
+	rebuildNeeded := needsSizeLimitRebuild(view, stats, opts)
+	sizeLimitOnly := needsSizeLimitWatermark(view, stats, opts)
+	now := time.Now().UTC()
+	if sizeLimitOnly && !s.sizeLimitBuildAllowed(view.GetSpaceId(), view.GetViewId(), now) {
 		return nil
+	}
+	// A failed size-limit rebuild must not be retried forever when the
+	// watermark is no longer exceeded. This is especially important for a
+	// large DuckDB view on a memory-constrained host: the failed inactive
+	// index is removed above, while the healthy active index remains usable.
+	if !shouldRetryFailedBuildWithCause(view, failedBuild, rebuildNeeded, sizeLimitOnly, now) {
+		return nil
+	}
+	if sizeLimitOnly {
+		s.markSizeLimitBuild(view.GetSpaceId(), view.GetViewId(), now)
 	}
 	columns := view.GetColumns()
 	if len(columns) == 0 && view.GetAttributes()[viewColumnsExplicitAttr] != "true" {
@@ -190,6 +370,11 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	indexID := viewindex.InactiveViewIndexID(view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId())
+	if s.isIndexRetiring(indexID) {
+		// Keep the old active index readable until its grace period has elapsed.
+		// Reusing the slot would close a reader that already captured the old ID.
+		return nil
+	}
 	buildID := "build-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
 	claim, err := opts.Metadata.ClaimViewIndexBuild(ctx, &pb.ClaimViewIndexBuildReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID,
@@ -218,23 +403,45 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, fmt.Errorf("prepare view index: %w", prepareErr))
 		return prepareErr
 	}
-	if view.GetActiveIndexId() != "" {
-		if err := s.TrackViewBuild(view.GetSpaceId(), view.GetViewId(), buildID, opts.OwnerID, opts.Metadata, auth); err != nil {
-			return err
-		}
+	if err := s.TrackViewBuild(ctx, view.GetSpaceId(), view.GetViewId(), buildID, opts.OwnerID, opts.Metadata, auth); err != nil {
+		return err
 	}
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, 0); err != nil {
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 		return err
 	}
+	if view.GetActiveIndexId() != "" && !stats.Exists {
+		// DataNode intentionally has no range scan API. Once the old physical
+		// index is gone, a new empty B cannot reconstruct already-ACKed history;
+		// refuse to activate it rather than replacing a durable view with a
+		// silently incomplete index.
+		err := fmt.Errorf("active view index %q is missing and cannot be rebuilt without a range reader", view.GetActiveIndexId())
+		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
+		return err
+	}
 	if view.GetActiveIndexId() != "" && stats.Exists {
-		if err := s.BackfillViewWithReader(ctx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary); err != nil {
+		buildCtx := ctx
+		s.mu.RLock()
+		runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
+		s.mu.RUnlock()
+		if runtime != nil {
+			runtime.mu.Lock()
+			if runtime.buildContext != nil {
+				buildCtx = runtime.buildContext
+			}
+			runtime.mu.Unlock()
+		}
+		if err := s.BackfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary); err != nil {
 			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 			return err
 		}
 	} else {
 		// A first build starts empty and is filled by the subscribed change stream.
-		// DataNode deliberately exposes no range scan API.
+		// Do not wait for the durable consumer here: rows delivered before B is
+		// active are intentionally NAKed by applyDatasetEvent and will be retried
+		// after the pointer switch. Waiting for NumPending/NumAckPending would
+		// deadlock this first activation because the consumer cannot ACK until B
+		// becomes authoritative.
 	}
 	err = s.catchUpAndActivateViewBuild(ctx, opts, auth, view, buildID, indexID, schema.Engine, schema.ViewVersion, schema.SchemaHash, columns, uint64(stats.EntryCount))
 	if err != nil {
@@ -244,6 +451,59 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		}
 	}
 	return err
+}
+
+func (s *Service) sizeLimitBuildAllowed(spaceID, viewID string, now time.Time) bool {
+	s.mu.RLock()
+	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
+	s.mu.RUnlock()
+	if runtime == nil {
+		return true
+	}
+	runtime.mu.Lock()
+	last := runtime.lastSizeLimitBuildAt
+	runtime.mu.Unlock()
+	return last.IsZero() || !now.Before(last.Add(sizeLimitRebuildRetryInterval))
+}
+
+func (s *Service) markSizeLimitBuild(spaceID, viewID string, now time.Time) {
+	s.mu.RLock()
+	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
+	s.mu.RUnlock()
+	if runtime == nil {
+		return
+	}
+	runtime.mu.Lock()
+	runtime.lastSizeLimitBuildAt = now
+	runtime.mu.Unlock()
+}
+
+func shouldRetryFailedBuild(view *pb.View, failedBuild *pb.ViewIndexBuild, sizeLimitExceeded bool, now time.Time) bool {
+	return shouldRetryFailedBuildWithCause(view, failedBuild, sizeLimitExceeded, sizeLimitExceeded, now)
+}
+
+func shouldRetryFailedBuildWithCause(view *pb.View, failedBuild *pb.ViewIndexBuild, rebuildNeeded, sizeLimitOnly bool, now time.Time) bool {
+	if failedBuild == nil {
+		return rebuildNeeded
+	}
+	if view != nil && view.GetDesiredViewRevision() != view.GetActiveViewRevision() {
+		return true
+	}
+	if !rebuildNeeded {
+		return false
+	}
+	// Missing active files and coverage/revision repairs must be retried on the
+	// next reconciliation. The cooldown is only a guard for repeated physical
+	// watermark rebuilds, which are intentionally optional while A remains
+	// healthy.
+	if !sizeLimitOnly {
+		return true
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, failedBuild.GetUpdatedAt())
+	if err != nil || updatedAt.IsZero() {
+		return true
+	}
+	return !now.Before(updatedAt.Add(sizeLimitRebuildRetryInterval))
 }
 
 type resumeBuildRetry struct{ cause error }
@@ -270,29 +530,13 @@ func (s *Service) catchUpAndActivateViewBuild(
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, entries); err != nil {
 		return err
 	}
-	if err := s.acquireActivationFence(ctx, view.GetSpaceId(), view.GetViewId(), indexID); err != nil {
-		return err
-	}
-	defer s.releaseBackfill()
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_READY, entries); err != nil {
 		return err
 	}
 	if err := s.MarkViewBuildReady(view.GetSpaceId(), view.GetViewId()); err != nil {
 		return err
 	}
-	activated, err := opts.Metadata.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{
-		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, OwnerId: opts.OwnerID,
-	})
-	if err != nil {
-		return activationRetry{cause: err}
-	}
-	if err := requireSuccess(activated.GetRetInfo()); err != nil {
-		return err
-	}
-	if view.GetActiveIndexId() != "" {
-		return s.SwitchView(ctx, view.GetSpaceId(), view.GetViewId(), opts.Grace)
-	}
-	return s.AttachActiveView(activatedViewMetadata(activated.GetView(), view, indexID, engine, revision, schemaHash, columns))
+	return s.activateViewBuild(ctx, opts, auth, view, buildID, indexID, engine, revision, schemaHash, columns)
 }
 
 func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, previous *pb.ViewIndexBuild) error {
@@ -315,7 +559,7 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 	if err := s.AttachPendingViewBuild(ctx, view); err != nil {
 		return err
 	}
-	if err := s.TrackViewBuild(view.GetSpaceId(), view.GetViewId(), build.GetBuildId(), opts.OwnerID, opts.Metadata, auth); err != nil {
+	if err := s.TrackViewBuild(ctx, view.GetSpaceId(), view.GetViewId(), build.GetBuildId(), opts.OwnerID, opts.Metadata, auth); err != nil {
 		return err
 	}
 	if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, build.GetEntriesWritten()); err != nil {
@@ -343,24 +587,142 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, build.GetEntriesWritten()); err != nil {
 			return err
 		}
-		if err := s.BackfillViewWithReader(ctx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary); err != nil {
+		buildCtx := ctx
+		s.mu.RLock()
+		runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
+		s.mu.RUnlock()
+		if runtime != nil {
+			runtime.mu.Lock()
+			if runtime.buildContext != nil {
+				buildCtx = runtime.buildContext
+			}
+			runtime.mu.Unlock()
+		}
+		if err := s.BackfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary); err != nil {
 			return err
 		}
 		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_READY, build.GetEntriesWritten()); err != nil {
 			return err
 		}
 	}
-	activated, err := opts.Metadata.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: build.GetBuildId(), OwnerId: opts.OwnerID})
+	return s.activateViewBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns())
+}
+
+// activateViewBuild makes the metadata commit and the in-memory pointer switch
+// one short View operation. A live writer cannot fail/remove the replacement
+// between those two transitions. Any non-success response is read back before
+// deciding whether the build is still pending; an ambiguous response must not
+// discard an index that metadata may already have made active.
+func (s *Service) activateViewBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID, engineName string, revision uint64, schemaHash string, columns []*pb.ViewColumn) error {
+	s.mu.RLock()
+	runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
+	s.mu.RUnlock()
+	if runtime == nil {
+		return activationRetry{cause: errors.New("view runtime is not prepared")}
+	}
+	runtime.mu.Lock()
+	if runtime.next != indexID || runtime.buildFailed {
+		runtime.mu.Unlock()
+		return activationRetry{cause: errViewBuildFailed}
+	}
+	runtime.status = "ready"
+	activated, callErr := opts.Metadata.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{
+		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, OwnerId: opts.OwnerID,
+	})
+	retErr := callErr
+	if retErr == nil {
+		retErr = requireSuccess(activated.GetRetInfo())
+	}
+	committed := activated.GetView()
+	if retErr != nil {
+		readback, readErr := s.readActiveView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId())
+		if readErr == nil && readback != nil && readback.GetActiveIndexId() == indexID {
+			committed = readback
+			retErr = nil
+		} else {
+			if readErr != nil {
+				retErr = errors.Join(retErr, readErr)
+			}
+			runtime.mu.Unlock()
+			return activationRetry{cause: retErr}
+		}
+	}
+	if committed == nil || committed.GetActiveIndexId() != indexID {
+		readback, readErr := s.readActiveView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId())
+		if readErr != nil {
+			runtime.mu.Unlock()
+			return activationRetry{cause: readErr}
+		}
+		committed = readback
+	}
+	if committed == nil || committed.GetActiveIndexId() != indexID {
+		runtime.mu.Unlock()
+		return activationRetry{cause: fmt.Errorf("metadata activation did not expose index %q", indexID)}
+	}
+	var oldID string
+	var oldGeneration uint64
+	var err error
+	if runtime.active != "" {
+		oldID, oldGeneration, err = s.switchViewLocked(runtime)
+	} else {
+		activePrimary := committed.GetPrimaryDatasetId()
+		if raw := committed.GetAttributes()[activePrimaryDatasetAttr]; raw != "" {
+			activePrimary = raw
+		}
+		s.mu.RLock()
+		sch := s.schemas[indexID]
+		engine := s.indexEngine[indexID]
+		s.mu.RUnlock()
+		if engine == "" {
+			engine = engineName
+		}
+		s.attachActiveViewLocked(activatedViewMetadata(committed, view, indexID, engine, revision, schemaHash, columns), runtime, sch, columns, activePrimary, engine)
+	}
+	runtime.mu.Unlock()
+	s.mu.Lock()
+	s.catalogViews[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}] = proto.Clone(committed).(*pb.View)
+	s.mu.Unlock()
 	if err != nil {
 		return activationRetry{cause: err}
 	}
-	if err := requireSuccess(activated.GetRetInfo()); err != nil {
-		return err
+	s.scheduleOldIndexRemoval(ctx, oldID, oldGeneration, opts.Grace)
+	return nil
+}
+
+func (s *Service) readActiveView(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, spaceID, viewID string) (*pb.View, error) {
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, SpaceId: spaceID, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
+		if err != nil {
+			return nil, err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, candidate := range rsp.GetViews() {
+			if candidate != nil && candidate.GetSpaceId() == spaceID && candidate.GetViewId() == viewID {
+				return candidate, nil
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
+			return nil, fmt.Errorf("active view %s/%s was not found", spaceID, viewID)
+		}
 	}
-	if view.GetActiveIndexId() != "" {
-		return s.SwitchView(ctx, view.GetSpaceId(), view.GetViewId(), opts.Grace)
+}
+
+// validatePhysicalViewContract prevents a same-named stale/corrupt index from
+// being attached after restart. Existence alone is not enough: the metadata
+// revision and schema hash are the authority for the active pointer.
+func validatePhysicalViewContract(view *pb.View, stats viewindex.ViewIndexStats) error {
+	if view == nil {
+		return errors.New("active view metadata is required")
 	}
-	return s.AttachActiveView(activatedViewMetadata(activated.GetView(), view, build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns()))
+	if expected := view.GetActiveViewRevision(); expected > 0 && stats.ViewVersion != expected {
+		return fmt.Errorf("active view index contract mismatch: metadata revision=%d physical revision=%d", expected, stats.ViewVersion)
+	}
+	if expected := strings.TrimSpace(view.GetActiveViewSchemaHash()); expected != "" && expected != strings.TrimSpace(stats.SchemaHash) {
+		return fmt.Errorf("active view index contract mismatch: metadata schema_hash=%q physical schema_hash=%q", expected, stats.SchemaHash)
+	}
+	return nil
 }
 
 func activatedViewMetadata(response, source *pb.View, indexID, engine string, revision uint64, schemaHash string, columns []*pb.ViewColumn) *pb.View {
@@ -384,7 +746,7 @@ func activatedViewMetadata(response, source *pb.View, indexID, engine string, re
 	if result.GetActiveViewSchemaHash() == "" {
 		result.ActiveViewSchemaHash = schemaHash
 	}
-	if len(result.GetActiveColumns()) == 0 {
+	if len(result.GetActiveColumns()) == 0 && result.GetAttributes()[viewColumnsExplicitAttr] != "true" {
 		result.ActiveColumns = columns
 	}
 	return result
@@ -431,40 +793,81 @@ func (s *Service) updateBuild(ctx context.Context, opts ReconcilerOptions, auth 
 	return requireSuccess(rsp.GetRetInfo())
 }
 
-func (s *Service) failBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID string, cause error) {
+// failInterruptedBuild keeps the consumer in its pending state when a
+// restart/response loss prevents us from durably discarding an inactive build.
+// A later reconciliation may retry the CAS, but it must not declare the View
+// ready while the same non-active build is still present in Metadata.
+func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, build *pb.ViewIndexBuild) error {
+	if build == nil {
+		return nil
+	}
+	if s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), errors.New("discard interrupted view build")) {
+		return nil
+	}
+	current, err := s.readActiveView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId())
+	if err != nil {
+		return err
+	}
+	if current.GetActiveIndexId() == build.GetIndexId() {
+		return nil
+	}
+	if currentBuild := current.GetIndexBuild(); currentBuild != nil && currentBuild.GetBuildId() == build.GetBuildId() {
+		return fmt.Errorf("view build %q could not be durably discarded", build.GetBuildId())
+	}
+	return nil
+}
+
+func (s *Service) failBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID string, cause error) bool {
+	if active, err := s.readActiveView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId()); err == nil && active.GetActiveIndexId() == indexID {
+		// Metadata has already committed this build. Never remove its physical
+		// index merely because a stale/ambiguous failure response arrived.
+		return false
+	}
 	message := "view build failed"
 	if cause != nil {
 		message = cause.Error()
 	}
-	if _, err := opts.Metadata.FailViewIndexBuild(ctx, &pb.FailViewIndexBuildReq{
+	rsp, err := opts.Metadata.FailViewIndexBuild(ctx, &pb.FailViewIndexBuildReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(),
 		BuildId: buildID, OwnerId: opts.OwnerID, Error: message,
-	}); err != nil {
-		log.Printf("storage view failed to mark build %s/%s as failed: %v", view.GetSpaceId(), view.GetViewId(), err)
+	})
+	retErr := error(nil)
+	if err == nil {
+		retErr = requireSuccess(rsp.GetRetInfo())
+	} else {
+		retErr = err
 	}
-	s.discardFailedBuild(ctx, view.GetSpaceId(), view.GetViewId(), indexID)
+	if retErr != nil {
+		log.Printf("storage view failed to mark build %s/%s as failed: %v", view.GetSpaceId(), view.GetViewId(), retErr)
+		return false
+	}
+	if active, err := s.readActiveView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId()); err == nil && active.GetActiveIndexId() == indexID {
+		return false
+	}
+	s.discardFailedBuild(ctx, view.GetSpaceId(), view.GetViewId(), indexID, view.GetEngine())
+	return true
 }
 
-func (s *Service) discardFailedBuild(ctx context.Context, spaceID, viewID, indexID string) {
+func (s *Service) discardFailedBuild(ctx context.Context, spaceID, viewID, indexID string, engineOverride ...string) {
 	if indexID == "" {
 		return
 	}
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
-	if runtime == nil {
-		return
+	expectedGeneration := s.indexGenerationOf(indexID)
+	if runtime != nil {
+		runtime.mu.Lock()
+		if runtime.next == indexID {
+			runtime.next = ""
+			runtime.status = "active"
+		} else if runtime.active == indexID {
+			runtime.active = ""
+			runtime.status = "failed"
+		}
+		runtime.mu.Unlock()
 	}
-	runtime.mu.Lock()
-	if runtime.next == indexID {
-		runtime.next = ""
-		runtime.status = "active"
-	} else if runtime.active == indexID {
-		runtime.active = ""
-		runtime.status = "failed"
-	}
-	runtime.mu.Unlock()
-	s.removeFailedBuild(ctx, indexID)
+	s.removeFailedBuildAtGeneration(ctx, indexID, expectedGeneration, engineOverride...)
 }
 
 func needsRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
@@ -487,6 +890,36 @@ func needsRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
 	}
 	to, err := time.Parse(time.RFC3339Nano, stats.IndexedTo)
 	return err == nil && to.Sub(from) > 2*keep
+}
+
+func needsSizeLimitRebuild(view *pb.View, stats viewindex.ViewIndexStats, opts ReconcilerOptions) bool {
+	if needsRebuild(view, stats) {
+		return true
+	}
+	if view == nil || view.GetKeepDuration() == "" || view.GetKeepDuration() == "0" {
+		// A permanent View cannot become smaller through an A/B rebuild, so do
+		// not continuously rebuild it just because a byte watermark is crossed.
+		return false
+	}
+	keep, err := time.ParseDuration(view.GetKeepDuration())
+	if err != nil || keep <= 0 {
+		return false
+	}
+	if opts.MaxViewFileBytes > 0 && stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes) {
+		return true
+	}
+	return false
+}
+
+func needsSizeLimitWatermark(view *pb.View, stats viewindex.ViewIndexStats, opts ReconcilerOptions) bool {
+	if view == nil || !stats.Exists || view.GetKeepDuration() == "" || view.GetKeepDuration() == "0" {
+		return false
+	}
+	keep, err := time.ParseDuration(view.GetKeepDuration())
+	if err != nil || keep <= 0 || opts.MaxViewFileBytes <= 0 {
+		return false
+	}
+	return stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes) && !needsRebuild(view, stats)
 }
 
 func (s *Service) internalAuth() *pb.AuthInfo {

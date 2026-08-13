@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +21,11 @@ import (
 type HTTPClient struct{ httpClient *http.Client }
 
 const defaultRequestTimeout = 5 * time.Second
+
+// Keep a small portion of a bounded invocation for the hostname fallback. A
+// stale SCF address must not consume the entire K-line request deadline before
+// the platform resolver gets a chance to try the original domain.
+const hostnameFallbackReserve = time.Second
 
 // StatusError reports a non-success HTTP response.
 type StatusError struct{ StatusCode int }
@@ -79,19 +85,77 @@ func (c *HTTPClient) GetStreamWithIPs(ctx context.Context, domain string, ips []
 }
 
 func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string, path string, query url.Values, consume func(io.Reader) error) error {
-	for _, ip := range uniqueIPs(ips) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	candidates := uniqueIPs(ips)
+	ipCtx, cancel := ipAttemptContext(ctx)
+	defer cancel()
+	source := dnsSource(len(candidates) > 0)
+	for _, ip := range candidates {
 		client := c.clientForIP(ip)
 		if client == nil {
-			break
+			// A custom RoundTripper may not be cloneable. Skip that address and
+			// continue with the remaining snapshot entries before falling back to
+			// the platform resolver.
+			continue
 		}
-		if err := c.getWithClient(ctx, client, domain, path, query, consume); err == nil {
+		log.InfoContextf(ctx, "collector_http_resolved_ip_attempted domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s", domain, ip, source, dnsHash(), dnsRouteAge())
+		if err := c.getWithClient(ipCtx, client, domain, path, query, consume); err == nil {
 			return nil
 		} else {
-			log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s error=%v", domain, ip, err)
+			log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s error=%v", domain, ip, source, dnsHash(), dnsRouteAge(), err)
 		}
 	}
-	log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d", domain, len(uniqueIPs(ips)))
+	log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d dns_source=system dns_snapshot_candidates=%d dns_hash=%s dns_route_age_seconds=%s", domain, len(candidates), len(candidates), dnsHash(), dnsRouteAge())
 	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
+}
+
+func ipAttemptContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx, func() {}
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return ctx, func() {}
+	}
+	reserve := hostnameFallbackReserve
+	if half := remaining / 2; half < reserve {
+		reserve = half
+	}
+	if reserve <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, deadline.Add(-reserve))
+}
+
+func dnsSource(hasSnapshot bool) string {
+	if hasSnapshot {
+		return "scf_snapshot"
+	}
+	return "system"
+}
+
+func dnsHash() string { return strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_HASH")) }
+
+func dnsRouteAge() string {
+	value := strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_UPDATED_AT"))
+	if value == "" {
+		return "unknown"
+	}
+	updated, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return "unknown"
+	}
+	age := time.Since(updated.UTC()).Seconds()
+	if age < 0 {
+		age = 0
+	}
+	return fmt.Sprintf("%.0f", age)
 }
 
 func (c *HTTPClient) clientForIP(ip string) *http.Client {
@@ -127,6 +191,9 @@ func (c *HTTPClient) clientForIP(ip string) *http.Client {
 func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, domain, path string, query url.Values, consume func(io.Reader) error) error {
 	if client == nil {
 		return fmt.Errorf("HTTP client is not initialized")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	fullURL := fmt.Sprintf("https://%s%s", domain, path)
 	if len(query) > 0 {

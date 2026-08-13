@@ -10,8 +10,8 @@ import (
 
 func TestFactorConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	cfg := Default()
-	require.Equal(t, 40, cfg.Engine.PythonWorkers)
-	require.Equal(t, 60, cfg.Engine.ViewReadWorkers)
+	require.Equal(t, 32, cfg.Engine.PythonWorkers)
+	require.Equal(t, 64, cfg.Engine.ViewReadWorkers)
 	require.Equal(t, 10000, cfg.Engine.ViewReadTimeoutMS)
 	require.NotEmpty(t, cfg.Engine.PythonBin)
 	require.NotEmpty(t, cfg.Engine.WorkerPath)
@@ -32,7 +32,7 @@ func TestInvalidViewReadPipelineEnvKeepsDefaults(t *testing.T) {
 	t.Setenv("MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS", "-1")
 	cfg := Default()
 	cfg.applyEnv()
-	require.Equal(t, 60, cfg.Engine.ViewReadWorkers)
+	require.Equal(t, 64, cfg.Engine.ViewReadWorkers)
 	require.Equal(t, 10000, cfg.Engine.ViewReadTimeoutMS)
 }
 
@@ -78,7 +78,7 @@ func TestLegacyWorkersEnvIsIgnored(t *testing.T) {
 	t.Setenv("MOOX_FACTOR_ENGINE_WORKERS", "24")
 	cfg := Default()
 	cfg.applyEnv()
-	require.Equal(t, 40, cfg.Engine.PythonWorkers)
+	require.Equal(t, 32, cfg.Engine.PythonWorkers)
 }
 
 func TestLoadWorkerPathFromYAMLAndEnv(t *testing.T) {

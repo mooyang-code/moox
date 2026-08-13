@@ -13,15 +13,16 @@ import (
 type EventConsumerOptions = eventconsumer.Config
 
 type liveDeliveryLease struct {
-	service *Service
 }
 
 func (l liveDeliveryLease) Acquire(ctx context.Context) error {
-	return l.service.acquireLiveDelivery(ctx)
+	if ctx == nil {
+		return errors.New("storage view delivery context is required")
+	}
+	return ctx.Err()
 }
 
 func (l liveDeliveryLease) Release() {
-	l.service.releaseLiveDelivery()
 }
 
 func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Client, configured ...EventConsumerOptions) (func(), error) {
@@ -55,7 +56,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	s.readyPublisher = publisher
 	s.consumerState = stateReader
 	s.mu.Unlock()
-	opts.Lease = liveDeliveryLease{service: s}
+	opts.Lease = liveDeliveryLease{}
 	consumer, err := eventconsumer.New(client, s, opts)
 	if err != nil {
 		s.mu.Lock()

@@ -26,6 +26,12 @@ func (api *SpotAPI) GetRecentTrades(ctx context.Context, req *exchange.TradeRequ
 	return getRecentTrades(ctx, api.client, api.client.SpotDomain(), SpotTradesEndpoint, "SpotAPI", true, req)
 }
 
+// GetRecentTradesWithIPs uses the Collector DNS snapshot when available and
+// falls back to the hostname resolver when every snapshot address fails.
+func (api *SpotAPI) GetRecentTradesWithIPs(ctx context.Context, req *exchange.TradeRequest, ips []string) ([]*exchange.Trade, error) {
+	return getRecentTradesWithIPs(ctx, api.client, api.client.SpotDomain(), ips, SpotTradesEndpoint, "SpotAPI", true, req)
+}
+
 // GetKline 获取现货K线数据
 // API: GET https://api.binance.com/api/v3/klines
 func (api *SpotAPI) GetKline(ctx context.Context, req *exchange.KlineRequest) ([]*exchange.Kline, error) {

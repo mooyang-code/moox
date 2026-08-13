@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -32,13 +33,13 @@ func TestOverviewToPBPreservesDatasetLagAndBusinessReason(t *testing.T) {
 		GeneratedAt: now,
 		Datasets: []monitorobservability.DatasetFrequencyStatus{{
 			Producer: "collector", SpaceID: "moox_system", DatasetID: "bars", Freq: "1m",
-			Status: "stale", Reason: "watermark stale", OutputWatermarkAt: now.Add(-time.Minute), LagSeconds: 60,
+			Status: "stale", Reason: "输出水位已落后 1 分钟，最新输出时间 2026-07-28 11:59:00 UTC（检查时间 2026-07-28 12:00:00 UTC）", OutputWatermarkAt: now.Add(-time.Minute), LagSeconds: 60,
 		}},
 		BusinessChecks: []monitorobservability.BusinessStatus{{
 			Kind: "canary", Module: "monitor", Status: "down", Reason: "market jump", LastCheckedAt: now,
 		}},
 	})
-	if got.GetDatasets()[0].GetLagSeconds() != 60 || got.GetDatasets()[0].GetReason() != "watermark stale" {
+	if got.GetDatasets()[0].GetLagSeconds() != 60 || !strings.Contains(got.GetDatasets()[0].GetReason(), "输出水位已落后") {
 		t.Fatalf("dataset = %+v", got.GetDatasets()[0])
 	}
 	if got.GetBusinessChecks()[0].GetReason() != "market jump" {

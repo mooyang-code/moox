@@ -1053,6 +1053,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -r "${ROOT}/config/components.env" ]]; then
   source "${ROOT}/config/components.env"
 fi
+if [[ -r "${ROOT}/config/runtime.env" ]]; then
+  set -a
+  source "${ROOT}/config/runtime.env"
+  set +a
+fi
 HEALTH_AUTH_FILE="${ROOT}/secrets/health-auth.env"
 [[ -r "${HEALTH_AUTH_FILE}" ]] || { echo "missing health credentials: ${HEALTH_AUTH_FILE}" >&2; exit 1; }
 [[ -r "${ROOT}/secrets/gateway-control.env" ]] || { echo "missing Gateway control credentials" >&2; exit 1; }
@@ -1078,6 +1083,34 @@ fi
 MOOX_GATEWAY_CA_FILE="${ROOT}/certs/gateway/peers.pem"
 export MOOX_SERVICE_GATEWAY_CA_FILE MOOX_SERVICE_GATEWAY_CA_PEM_B64 MOOX_GATEWAY_CA_FILE
 set +a
+
+disable_conflicting_eventbus_supervisor() {
+  local runtime_dir unit_exec active_state enabled_state
+  # MooX's generated lifecycle scripts are the single owner of packaged
+  # services. A leftover user-level systemd unit for the same EventBus binary
+  # would restart it immediately after stop_service kills the old process,
+  # creating two owners that fight over 4222/12970.
+  command -v systemctl >/dev/null 2>&1 || return 0
+  runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  [[ -d "${runtime_dir}" ]] || return 0
+  unit_exec="$(XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user show -p ExecStart --value moox-eventbus.service 2>/dev/null || true)"
+  [[ "${unit_exec}" == *"${ROOT}/bin/moox-eventbus"* ]] || return 0
+  echo "disabling conflicting user supervisor for ${ROOT}/bin/moox-eventbus" >&2
+  active_state="$(XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user is-active moox-eventbus.service 2>/dev/null || true)"
+  if [[ "${active_state}" == "active" || "${active_state}" == "activating" ]]; then
+    XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user stop moox-eventbus.service >/dev/null 2>&1 || {
+      echo "cannot stop conflicting EventBus user supervisor" >&2
+      return 1
+    }
+  fi
+  enabled_state="$(XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user is-enabled moox-eventbus.service 2>/dev/null || true)"
+  if [[ "${enabled_state}" == "enabled" || "${enabled_state}" == "enabled-runtime" ]]; then
+    XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user disable moox-eventbus.service >/dev/null 2>&1 || {
+      echo "cannot disable conflicting EventBus user supervisor" >&2
+      return 1
+    }
+  fi
+}
 
 read_env_value() {
   local file="$1" name="$2" value
@@ -1187,6 +1220,15 @@ if [[ "${WITH_STORAGE}" == "1" && -z "${MOOX_STORAGE_NODE_AUTH_SECRET:-}" ]]; th
 fi
 MOOX_GATEWAY_NODE_ID="${MOOX_GATEWAY_NODE_ID:-__NODE_ID__}"
 export MOOX_GATEWAY_NODE_ID
+if [[ "${WITH_ADMIN}" == "1" ]]; then
+  # Seed routes under the same node identity the Gateway presents when it
+  # pulls them. Operators can still separate the control-plane identity by
+  # explicitly setting MOOX_RUNTIME_NODE_ID/MOOX_ADMIN_NODE_ID.
+  MOOX_RUNTIME_NODE_ID="${MOOX_RUNTIME_NODE_ID:-${MOOX_ADMIN_NODE_ID:-${MOOX_GATEWAY_NODE_ID}}}"
+else
+  MOOX_RUNTIME_NODE_ID="${MOOX_RUNTIME_NODE_ID:-${MOOX_GATEWAY_NODE_ID}}"
+fi
+export MOOX_RUNTIME_NODE_ID
 LOCAL_STORAGE_RPC_GATEWAY_TARGET="${MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET:-ip://127.0.0.1:11003}"
 case "${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" in
   ip://127.0.0.1:*|ip://localhost:*|ip://\[::1\]:*) ;;
@@ -1199,7 +1241,9 @@ LOCAL_STORAGE_RPC_GATEWAY_ADDRESS="${LOCAL_STORAGE_RPC_GATEWAY_TARGET#ip://}"
 LOCAL_STORAGE_GATEWAY_NODE_ID="${MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID:-${MOOX_GATEWAY_NODE_ID}}"
 MOOX_MONITOR_INSTANCE_ID="${MOOX_MONITOR_INSTANCE_ID:-__MONITOR_INSTANCE_ID__}"
 if [[ "${WITH_ADMIN}" == "1" ]]; then
-  MOOX_ADMIN_NODE_ID="${MOOX_ADMIN_NODE_ID:-__NODE_ID__}"
+  # The Admin SysDeploy registry identifies the local control-plane node.  It
+  # must not inherit the Gateway routing node when those identities differ.
+  MOOX_ADMIN_NODE_ID="${MOOX_ADMIN_NODE_ID:-${MOOX_RUNTIME_NODE_ID}}"
 fi
 STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-3}"
 mkdir -p "${ROOT}/run" "${ROOT}/data" "${ROOT}/data/gateway" "${ROOT}/data/eventbus/jetstream" "${ROOT}/data/cloudnode" "${ROOT}/data/cloudnode/jobs" "${ROOT}/data/collector" "${ROOT}/data/factor" "${ROOT}/data/strategy" "${ROOT}/data/trade" "${ROOT}/data/monitor" "${ROOT}/logs/admin" "${ROOT}/logs/gateway" "${ROOT}/logs/eventbus" "${ROOT}/logs/storage" "${ROOT}/logs/storage-primary" "${ROOT}/logs/storage-view" "${ROOT}/logs/web-host" "${ROOT}/logs/cloudnode" "${ROOT}/logs/collector" "${ROOT}/logs/factor" "${ROOT}/logs/strategy" "${ROOT}/logs/trade" "${ROOT}/logs/monitor"
@@ -1299,8 +1343,8 @@ runtime_identity_env() {
   fi
   RUNTIME_IDENTITY_ENV=(
     "MOOX_SERVICE_NAME=${service_name}"
-    "MOOX_INSTANCE_ID=${service_name}@${MOOX_GATEWAY_NODE_ID}"
-    "MOOX_NODE_ID=${MOOX_GATEWAY_NODE_ID}"
+    "MOOX_INSTANCE_ID=${service_name}@${MOOX_RUNTIME_NODE_ID}"
+    "MOOX_NODE_ID=${MOOX_RUNTIME_NODE_ID}"
     "MOOX_BOOT_ID=${boot_id}"
   )
   if [[ -n "${PUBLIC_HOST:-}" ]]; then
@@ -1342,8 +1386,8 @@ FACTOR_ENV=(
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor/factor.db}"
   "MOOX_FACTOR_ENGINE_WORKER_PATH=${MOOX_FACTOR_ENGINE_WORKER_PATH:-${ROOT}/factor/pyworker/worker.py}"
 	"MOOX_FACTOR_ENGINE_FACTORS_DIR=${MOOX_FACTOR_ENGINE_FACTORS_DIR:-${ROOT}/factor/factors}"
-	"MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-40}"
-	"MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-60}"
+	"MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-32}"
+	"MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-64}"
 	"MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-10000}"
 	"MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}"
 	  "MOOX_PYTHON_RUNTIME_PATH=${ROOT}/python-runtime"
@@ -1352,7 +1396,10 @@ FACTOR_ENV=(
 )
 if [[ -n "${MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE:-}" ]]; then
   FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE}")
-elif [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
+elif [[ -r "${HOME}/.config/moox/eventbus/factor-eventbus.yaml" ]]; then
+  # Do not let the process-wide collector credential leak into Factor. The
+  # factor consumer has its own JetStream permissions and must be explicit
+  # even when the shared EventBus URL is configured without TLS.
   FACTOR_ENV+=("MOOX_FACTOR_EVENTBUS_CREDENTIAL_FILE=${HOME}/.config/moox/eventbus/factor-eventbus.yaml")
 fi
 
@@ -1482,7 +1529,7 @@ sign_health_request() {
 }
 
 probe_service() {
-  local name="$1" url=""
+  local name="$1" url="" health_path=/healthz
   case "${name}" in
     admin) url=http://127.0.0.1:11010/readyz ;;
     gateway) url=http://127.0.0.1:11012/readyz ;;
@@ -1496,11 +1543,26 @@ probe_service() {
     monitor) url=http://127.0.0.1:11409/readyz ;;
     web-host) url=http://127.0.0.1:19527/readyz ;;
     storage-primary) url=http://127.0.0.1:20210/readyz ;;
-    storage-view) url=http://127.0.0.1:20211/readyz ;;
+    storage-view) url=http://127.0.0.1:20211/readyz; health_path=/readyz ;;
     storage-node) url=http://127.0.0.1:20212/readyz ;;
     *) echo "unknown service health mapping: ${name}" >&2; return 1 ;;
   esac
   curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /readyz)" "${url}" >/dev/null
+}
+
+listener_open() {
+  local name="$1" port
+  case "${name}" in
+    admin) port=11010 ;; gateway) port=11012 ;; archive) port=11416 ;;
+    cloudnode) port=11411 ;; collector) port=11412 ;; eventbus) port=11419 ;;
+    factor) port=11414 ;; strategy) port=11431 ;; trade) port=11210 ;;
+    monitor) port=11409 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
+    storage-view) port=20211 ;; storage-node) port=20212 ;; *) return 1 ;;
+  esac
+  # Do not use --fail: a 401/503 proves that the listener accepts TCP while
+  # readiness is still being established. Connection refusal is the only
+  # state that should keep the startup grace from masking a bad bind.
+  curl --silent --output /dev/null --connect-timeout 1 --max-time 1 "http://127.0.0.1:${port}/healthz"
 }
 
 init_storage_schema() {
@@ -1647,6 +1709,9 @@ start_eventbus() {
     perl -0pi -e 's#credential_file:\s*""#credential_file: "'"${credential_dir}"'/internal-admin.yaml"#; s#tls_ca_file:\s*""#tls_ca_file: "'"${credential_dir}"'/ca.pem"#' \
       "${ROOT}/eventbus/config/app.yaml"
   fi
+  # Validate TLS/config prerequisites before disabling an existing supervisor;
+  # a bad package must not turn a healthy EventBus into an avoidable outage.
+  disable_conflicting_eventbus_supervisor
   runtime_identity_env eventbus "${ROOT}/eventbus/config/app.yaml"
   start_service "eventbus" "${ROOT}/eventbus" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${ROOT}/bin/moox-eventbus" -conf=config/trpc_go.yaml
@@ -1731,7 +1796,7 @@ complete_storage_bootstrap() {
   start_storage_view
   wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
   wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
-  wait_http http://127.0.0.1:20211/healthz "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
+  wait_http http://127.0.0.1:20211/readyz "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
   if run_storage_doctor; then
     activate_storage_datasets
   else
@@ -1756,6 +1821,21 @@ start_admin() {
     else
       service_seed_args+=(--disable-storage-shard)
     fi
+    local resolver_enabled=0 resolver_node="" resolver_target=""
+    local resolver_json="${ROOT}/config/render-runtime-config.json"
+    if [[ -r "${resolver_json}" ]]; then
+      IFS=$'\t' read -r resolver_enabled resolver_node resolver_target < <(python3 - "${resolver_json}" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+print("\t".join([
+    "1" if value.get("dns_resolver_enabled") else "0",
+    value.get("dns_resolver_node_id", ""),
+    value.get("dns_resolver_target", ""),
+]))
+PY
+      )
+    fi
     local disabled_services=()
     # A normal partial deployment preserves the existing Storage routes. A
     # control profile is intentionally isolated and disables its local routes.
@@ -1769,6 +1849,9 @@ start_admin() {
     [[ "${WITH_MONITOR}" == "1" ]] || disabled_services+=(moox_monitor)
     [[ "${WITH_STRATEGY}" == "1" ]] || disabled_services+=(moox_strategy)
     [[ "${WITH_TRADE}" == "1" ]] || disabled_services+=(moox_trade)
+    if [[ "${resolver_enabled}" != "1" || -z "${resolver_node}" || "${resolver_node}" != "${MOOX_ADMIN_NODE_ID}" ]]; then
+      disabled_services+=(trade_dns_resolver)
+    fi
     [[ "${WITH_WEB_HOST}" == "1" ]] || disabled_services+=(web_host)
     if (( ${#disabled_services[@]} > 0 )); then
       local disabled_services_csv
@@ -1779,6 +1862,24 @@ start_admin() {
         echo "Storage shard service deployment import failed" >&2
         exit 1
     }
+    # A DNS resolver may live on a separate Trade node. Import only its route
+    # for that node so the native Gateway does not advertise unrelated local
+    # loopback services there.
+    if [[ "${resolver_enabled}" == "1" && -n "${resolver_node}" && "${resolver_node}" != "${MOOX_ADMIN_NODE_ID}" ]]; then
+        local resolver_public_host="${resolver_target#ip://}"
+        resolver_public_host="${resolver_public_host%:*}"
+        "${ROOT}/bin/moox-admin-cli" service-deployments import \
+          --db-path "${ROOT}/data/admin.db" \
+          --file "${ROOT}/examples/setup/default/service-deployments.yaml" \
+          --node-id "${resolver_node}" \
+          --public-host "${resolver_public_host}" \
+          --eventbus-nats-url "${MOOX_EVENTBUS_NATS_URL}" \
+          --only-services trade_dns_resolver \
+          >>"${ROOT}/logs/admin/stdout.log" 2>&1 || {
+            echo "Trade DNS resolver service deployment import failed" >&2
+            exit 1
+          }
+    fi
   fi
   if [[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" && -x "${ROOT}/bin/moox-admin-cli" ]]; then
     local eventbus_credentials_dir="${HOME}/.config/moox/eventbus"
@@ -1813,7 +1914,7 @@ start_admin() {
   runtime_identity_env admin_gateway "${ROOT}/admin/config/trpc_go.yaml"
   start_service "admin" "${ROOT}/admin" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${ADMIN_SECRET_ENV[@]}" "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${LOCAL_STORAGE_RPC_GATEWAY_ADDRESS}" "MOOX_NODE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
+      "MOOX_NODE_GATEWAY_URL=http://127.0.0.1:11002" "MOOX_NODE_GATEWAY_NATIVE_URL=${LOCAL_STORAGE_RPC_GATEWAY_ADDRESS}" "MOOX_NODE_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" \
       "MOOX_ADMIN_NODE_ID=${MOOX_ADMIN_NODE_ID}" "MOOX_ADMIN_DB_PATH=${ROOT}/data/admin.db" \
       "MOOX_ADMIN_ENCRYPTION_KEY_FILE=${encryption_key_file}" "MOOX_OTEL_SERVICE_NAME=moox-admin" \
       "${ROOT}/bin/moox-admin" -conf=config/trpc_go.yaml
@@ -1856,7 +1957,7 @@ start_collector() {
   runtime_identity_env moox_collector "${ROOT}/collector/config/app.yaml"
   start_service "collector" "${ROOT}/collector" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "MOOX_GATEWAY_TARGET_NODE=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
+      "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
       "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" \
       "MOOX_COLLECTOR_STORAGE_RPC_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
       "${COLLECTOR_ENV[@]}" "${ROOT}/bin/moox-collector" -conf=config/trpc_go.yaml
@@ -1922,7 +2023,7 @@ start_monitor() {
   start_service "monitor" "${ROOT}/monitor" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "${MSGBOX_ENV[@]+"${MSGBOX_ENV[@]}"}" "MOOX_GATEWAY_TARGET_NODE=${MOOX_GATEWAY_NODE_ID}" \
-      "MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" "MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}" \
+      "MOOX_MONITOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}" "MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID=${MOOX_GATEWAY_NODE_ID}" \
       "${MONITOR_ENV[@]}" "${ROOT}/bin/moox-monitor" -conf=config/trpc_go.yaml
 }
 
@@ -2093,6 +2194,30 @@ process_matches_service() {
   [[ "${command}" == "${expected}" || "${command}" == "${expected} "* ]]
 }
 
+disable_conflicting_eventbus_supervisor() {
+  local runtime_dir unit_exec active_state enabled_state
+  command -v systemctl >/dev/null 2>&1 || return 0
+  runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  [[ -d "${runtime_dir}" ]] || return 0
+  unit_exec="$(XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user show -p ExecStart --value moox-eventbus.service 2>/dev/null || true)"
+  [[ "${unit_exec}" == *"${ROOT}/bin/moox-eventbus"* ]] || return 0
+  echo "disabling conflicting user supervisor for ${ROOT}/bin/moox-eventbus" >&2
+  active_state="$(XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user is-active moox-eventbus.service 2>/dev/null || true)"
+  if [[ "${active_state}" == "active" || "${active_state}" == "activating" ]]; then
+    XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user stop moox-eventbus.service >/dev/null 2>&1 || {
+      echo "cannot stop conflicting EventBus user supervisor" >&2
+      return 1
+    }
+  fi
+  enabled_state="$(XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user is-enabled moox-eventbus.service 2>/dev/null || true)"
+  if [[ "${enabled_state}" == "enabled" || "${enabled_state}" == "enabled-runtime" ]]; then
+    XDG_RUNTIME_DIR="${runtime_dir}" systemctl --user disable moox-eventbus.service >/dev/null 2>&1 || {
+      echo "cannot disable conflicting EventBus user supervisor" >&2
+      return 1
+    }
+  fi
+}
+
 stop_processes_by_binary() {
   local name="$1" expected="${ROOT}/bin/moox-${name}" proc pid exe
   for proc in /proc/[0-9]*; do
@@ -2118,6 +2243,9 @@ stop_service() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
   local pattern="${ROOT}/bin/moox-${name}([[:space:]]|$)"
+  if [[ "${name}" == "eventbus" ]]; then
+    disable_conflicting_eventbus_supervisor
+  fi
   if [[ ! -f "${pid_file}" ]]; then
     stop_processes_by_binary "${name}"
     if pkill -f -- "${pattern}" 2>/dev/null; then
@@ -2457,7 +2585,7 @@ sign_health_request() {
 }
 
 probe_service() {
-  local name="$1" url=""
+  local name="$1" url="" health_path=/healthz
   case "${name}" in
     admin) url=http://127.0.0.1:11010/healthz ;;
     gateway) url=http://127.0.0.1:11012/healthz ;;
@@ -2471,11 +2599,26 @@ probe_service() {
     monitor) url=http://127.0.0.1:11409/healthz ;;
     web-host) url=http://127.0.0.1:19527/healthz ;;
     storage-primary) url=http://127.0.0.1:20210/healthz ;;
-    storage-view) url=http://127.0.0.1:20211/healthz ;;
+    # View readiness is intentionally different from process liveness: the
+    # listener opens before index restore, but a failed restore must not be
+    # considered healthy after the startup grace window.
+    storage-view) url=http://127.0.0.1:20211/readyz; health_path=/readyz ;;
     storage-node) url=http://127.0.0.1:20212/healthz ;;
     *) echo "unknown service health mapping: ${name}" >&2; return 1 ;;
   esac
-  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}" >/dev/null
+  curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET "${health_path}")" "${url}" >/dev/null
+}
+
+listener_open() {
+  local name="$1" port
+  case "${name}" in
+    admin) port=11010 ;; gateway) port=11012 ;; archive) port=11416 ;;
+    cloudnode) port=11411 ;; collector) port=11412 ;; eventbus) port=11419 ;;
+    factor) port=11414 ;; strategy) port=11431 ;; trade) port=11210 ;;
+    monitor) port=11409 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
+    storage-view) port=20211 ;; storage-node) port=20212 ;; *) return 1 ;;
+  esac
+  curl --silent --output /dev/null --connect-timeout 1 --max-time 1 "http://127.0.0.1:${port}/healthz"
 }
 
 default_services=()
@@ -2528,21 +2671,61 @@ log_line() {
   echo "$(date -Is) $*" >> "${LOG_FILE}"
 }
 
+startup_grace_seconds() {
+  local name="$1" configured default
+  default=60
+  # View restore may open and validate large DuckDB indexes before it starts
+  # listening. Do not kill that healthy process just because /healthz is not
+  # available during the restore window.
+  [[ "${name}" == "storage-view" ]] && default=900
+  configured="${MOOX_HEALTHCHECK_STARTUP_GRACE_SECONDS:-${default}}"
+  if [[ "${configured}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "${configured}"
+  else
+    printf '%s' "${default}"
+  fi
+}
+
 ensure_service() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
-  local pid=""
+  local pid="" age grace failures threshold failure_file
+  failure_file="${ROOT}/run/${name}.health-failures"
   if [[ -f "${pid_file}" ]]; then
     pid="$(cat "${pid_file}" 2>/dev/null || true)"
   fi
 
   if [[ -n "${pid}" ]] && ps -p "${pid}" >/dev/null 2>&1; then
     if probe_service "${name}"; then
+      rm -f "${failure_file}"
       echo "${name}: running pid=${pid} ready"
       return 0
     fi
-    log_line "${name}: health probe failed pid=${pid}; restarting"
-    echo "${name}: health probe failed; restarting"
+    age="$(ps -o etimes= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+    grace="$(startup_grace_seconds "${name}")"
+    if [[ "${age}" =~ ^[0-9]+$ ]] && (( age < grace )) && listener_open "${name}"; then
+      log_line "${name}: health probe unavailable during startup pid=${pid} age=${age}s grace=${grace}s"
+      echo "${name}: starting pid=${pid} (${age}s/${grace}s grace)"
+      return 0
+    fi
+    failures=0
+    if [[ -r "${failure_file}" ]]; then
+      failures="$(cat "${failure_file}" 2>/dev/null || printf '0')"
+    fi
+    [[ "${failures}" =~ ^[0-9]+$ ]] || failures=0
+    failures=$((failures + 1))
+    printf '%s\n' "${failures}" > "${failure_file}.tmp"
+    mv -f "${failure_file}.tmp" "${failure_file}"
+    threshold="${MOOX_HEALTHCHECK_FAILURE_THRESHOLD:-3}"
+    [[ "${threshold}" =~ ^[1-9][0-9]*$ ]] || threshold=3
+    if (( failures < threshold )); then
+      log_line "${name}: health probe failed pid=${pid}; holding restart (${failures}/${threshold})"
+      echo "${name}: health probe failed; holding restart (${failures}/${threshold})"
+      return 0
+    fi
+    rm -f "${failure_file}"
+    log_line "${name}: health probe failed pid=${pid}; restarting after ${failures} consecutive failures"
+    echo "${name}: health probe failed; restarting after ${failures} consecutive failures"
     "${ROOT}/stop.sh" "${name}" >> "${LOG_FILE}" 2>&1 || true
   fi
 
@@ -2828,7 +3011,8 @@ EOF
     copy_required_binary "moox-gateway"
     copy_required_binary "moox-gateway-cli"
   fi
-  if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${WITH_STORAGE}" -eq 1 ]]; then
+  if [[ "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${WITH_STORAGE}" -eq 1 || \
+        "${WITH_COLLECTOR}" -eq 1 || "${WITH_TRADE}" -eq 1 ]]; then
     copy_required_binary "moox-cli"
   fi
   if [[ "${WITH_ADMIN}" -eq 1 ]]; then
@@ -2919,6 +3103,20 @@ EOF
   fi
   if [[ "${WITH_TRADE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/trade/config/." "${STAGE_DIR}/trade/config/"
+  fi
+  if [[ -f "${ROOT}/custom.toml" && -x "${STAGE_DIR}/bin/moox-cli" && \
+        ("${WITH_TRADE}" -eq 1 || "${WITH_COLLECTOR}" -eq 1) ]]; then
+    render_args=(--file "${ROOT}/custom.toml")
+    if [[ "${WITH_TRADE}" -eq 1 ]]; then
+      render_args+=(--trade-output "${STAGE_DIR}/trade/config/app.yaml")
+    fi
+    if [[ "${WITH_COLLECTOR}" -eq 1 ]]; then
+      render_args+=(--collector-output "${STAGE_DIR}/collector/config/app.yaml")
+    fi
+    render_args+=(--node-id "${NODE_ID}")
+    log "render Trade/Collector DNS resolver runtime config from custom.toml"
+    (cd "${ROOT}" && "${STAGE_DIR}/bin/moox-cli" setup render-runtime-config "${render_args[@]}") \
+      >"${STAGE_DIR}/config/render-runtime-config.json"
   fi
   if [[ "${WITH_FACTOR}" -eq 1 || "${WITH_STRATEGY}" -eq 1 ]]; then
     cp -R "${ROOT}/packages/pyruntime/python/." "${STAGE_DIR}/python-runtime/"

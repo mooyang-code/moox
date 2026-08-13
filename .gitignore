@@ -83,6 +83,9 @@ cover.out.tmp
 *.zip
 *.tmp
 
+# trpc-open temporary generation workspaces
+/modules/*/proto/*/tmp-*/
+
 # Editor/IDE
 # .idea/
 # .vscode/

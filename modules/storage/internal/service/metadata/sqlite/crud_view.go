@@ -36,6 +36,15 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 	}
 	columns := item.GetColumns()
 	next := proto.Clone(item).(*pb.View)
+	if replaceColumns {
+		// proto3 repeated fields do not carry presence. Persist the explicit
+		// replacement intent so an intentionally empty projection is not later
+		// expanded to the primary dataset's default columns by the reconciler.
+		if next.Attributes == nil {
+			next.Attributes = make(map[string]string)
+		}
+		next.Attributes["moox.columns_explicit"] = "true"
+	}
 	next.Columns = nil
 	next.IndexBuild = nil
 	next.Status = defaultStatus(next.GetStatus())
@@ -83,6 +92,14 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 	existing, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), item.GetViewId()}, func() *pb.View { return &pb.View{} })
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
+	}
+	if existing != nil && existing.GetActiveIndexId() != "" {
+		if existing.GetEngine() != "" && existing.GetEngine() != next.GetEngine() {
+			return nil, errors.New("active view engine change is unsupported; create a new view")
+		}
+		if existing.GetPrimaryDatasetId() != "" && existing.GetPrimaryDatasetId() != next.GetPrimaryDatasetId() {
+			return nil, errors.New("active view primary dataset change is unsupported; create a new view")
+		}
 	}
 	shapeChanged := existing != nil && viewIndexShapeChanged(existing, next)
 	mergeViewIndexState(existing, next, shapeChanged)

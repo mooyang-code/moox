@@ -23,10 +23,6 @@ func (s *Service) BackfillView(ctx context.Context, spaceID, viewID string, batc
 }
 
 func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader) error {
-	if err := s.acquireBackfill(ctx); err != nil {
-		return err
-	}
-	defer s.releaseBackfill()
 	if batchSize <= 0 {
 		batchSize = 100
 	}
@@ -53,6 +49,7 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 		}
 		s.mu.RLock()
 		nextSchema := s.schemas[nextID]
+		activeSchema := s.schemas[activeID]
 		catalogView := s.catalogViews[viewRef{spaceID: spaceID, viewID: viewID}]
 		s.mu.RUnlock()
 		for _, timeRange := range backfillTimeRanges(catalogView) {
@@ -74,7 +71,11 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 						continue
 					}
 					keys = append(keys, row.GetKey())
-					writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: proto.Clone(row.GetKey()).(*pb.RowKey)}, Fields: row.GetFields(), Attributes: row.GetAttributes()})
+					writes = append(writes, viewindex.RowWrite{
+						Key:        viewindex.RowKey{Key: proto.Clone(row.GetKey()).(*pb.RowKey)},
+						Fields:     projectBackfillFields(row.GetFields(), activeSchema, nextSchema),
+						Attributes: row.GetAttributes(),
+					})
 				}
 				if len(keys) != 0 {
 					// Backfill writes use DuckDB's field-level COALESCE semantics. Do
@@ -88,8 +89,15 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 						return err
 					}
 				}
-				if len(writes) > 0 {
-					if err := next.Write(ctx, nextID, viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: nextSchema.ViewVersion, ViewSchemaHash: nextSchema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
+				for offset := 0; offset < len(writes); offset += 256 {
+					end := offset + 256
+					if end > len(writes) {
+						end = len(writes)
+					}
+					if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
+						return err
+					}
+					if err := s.writeIndex(ctx, nextID, next, viewindex.ViewIndexWriteBatch{RowWrites: writes[offset:end], ViewRevision: nextSchema.ViewVersion, ViewSchemaHash: nextSchema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
 						return fmt.Errorf("write view backfill %q: %w", nextID, err)
 					}
 				}
@@ -101,10 +109,31 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 		}
 	}
 	runtime.mu.Lock()
+	if runtime.next != nextID || runtime.buildFailed {
+		runtime.mu.Unlock()
+		return errViewBuildFailed
+	}
 	if runtime.next == nextID {
 		runtime.status = "ready"
 	}
 	runtime.mu.Unlock()
+	return nil
+}
+
+var errViewBuildFailed = errors.New("view build has been marked failed")
+
+func (s *Service) backfillStillActive(spaceID, viewID, nextID string) error {
+	s.mu.RLock()
+	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
+	s.mu.RUnlock()
+	if runtime == nil {
+		return errViewBuildFailed
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.next != nextID || runtime.buildFailed {
+		return errViewBuildFailed
+	}
 	return nil
 }
 
@@ -146,10 +175,10 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 	activeSchema := s.schemas[activeID]
 	nextSchema := s.schemas[nextID]
 	s.mu.RUnlock()
-	activeColumns := make(map[string]struct{}, len(activeSchema.Columns))
+	activeColumns := make(map[string]viewColumnShape, len(activeSchema.Columns))
 	for _, column := range activeSchema.Columns {
 		if column != nil {
-			activeColumns[column.GetColumnName()] = struct{}{}
+			activeColumns[column.GetColumnName()] = viewColumnShapeOf(column)
 		}
 	}
 	type requestedField struct {
@@ -161,7 +190,7 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 		if column == nil {
 			continue
 		}
-		if _, exists := activeColumns[column.GetColumnName()]; exists {
+		if active, exists := activeColumns[column.GetColumnName()]; exists && active.equal(viewColumnShapeOf(column)) {
 			continue
 		}
 		datasetID := viewColumnDataset(column)
@@ -216,6 +245,51 @@ func (s *Service) enrichBackfillRows(ctx context.Context, reader FieldReader, ac
 	return nil
 }
 
+type viewColumnShape struct {
+	origin     string
+	originType pb.ColumnOriginType
+	valueType  pb.FieldValueType
+}
+
+func viewColumnShapeOf(column *pb.ViewColumn) viewColumnShape {
+	if column == nil {
+		return viewColumnShape{}
+	}
+	return viewColumnShape{origin: column.GetOriginId(), originType: column.GetOriginType(), valueType: column.GetValueType()}
+}
+
+func (s viewColumnShape) equal(other viewColumnShape) bool {
+	return s.origin == other.origin && s.originType == other.originType && s.valueType == other.valueType
+}
+
+func projectBackfillFields(fields []*pb.FieldValue, active, next viewindex.ViewIndexSchema) []*pb.FieldValue {
+	activeShapes := make(map[string]viewColumnShape, len(active.Columns))
+	for _, column := range active.Columns {
+		if column != nil {
+			activeShapes[column.GetColumnName()] = viewColumnShapeOf(column)
+		}
+	}
+	nextShapes := make(map[string]viewColumnShape, len(next.Columns))
+	for _, column := range next.Columns {
+		if column != nil {
+			nextShapes[column.GetColumnName()] = viewColumnShapeOf(column)
+		}
+	}
+	projected := make([]*pb.FieldValue, 0, len(fields))
+	for _, field := range fields {
+		if field == nil {
+			continue
+		}
+		name := field.GetFieldId()
+		nextShape, ok := nextShapes[name]
+		activeShape, activeOK := activeShapes[name]
+		if ok && activeOK && activeShape.equal(nextShape) {
+			projected = append(projected, field)
+		}
+	}
+	return projected
+}
+
 func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace time.Duration) error {
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
@@ -224,16 +298,29 @@ func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace 
 		return errors.New("view runtime is not prepared")
 	}
 	runtime.mu.Lock()
-	if runtime.next == "" || runtime.status != "ready" {
+	oldID, oldGeneration, err := s.switchViewLocked(runtime)
+	if err != nil {
 		runtime.mu.Unlock()
-		return errors.New("no completed view build to switch")
+		return err
+	}
+	runtime.mu.Unlock()
+	s.scheduleOldIndexRemoval(ctx, oldID, oldGeneration, grace)
+	// The in-memory and metadata switch is already committed. Do not report a
+	// cancellation from the caller's context as a failed build: doing so would
+	// discard the newly active index after a successful Activate RPC.
+	return nil
+}
+
+func (s *Service) switchViewLocked(runtime *viewRuntime) (string, uint64, error) {
+	if runtime == nil || runtime.next == "" || runtime.status != "ready" || runtime.buildFailed {
+		return "", 0, errors.New("no completed view build to switch")
 	}
 	oldID := runtime.active
-	newDatasetIDs := append([]string(nil), runtime.nextDatasetIDs...)
-	newPrimaryDatasetID := runtime.nextPrimaryDatasetID
+	oldGeneration := s.indexGenerationOf(oldID)
+	s.markIndexRetiring(oldID)
 	runtime.active = runtime.next
-	runtime.activeDatasetIDs = newDatasetIDs
-	runtime.activePrimaryDatasetID = newPrimaryDatasetID
+	runtime.activeDatasetIDs = append([]string(nil), runtime.nextDatasetIDs...)
+	runtime.activePrimaryDatasetID = runtime.nextPrimaryDatasetID
 	runtime.activeDatasetSet = true
 	runtime.statsIndexID = ""
 	runtime.stats = viewindex.ViewIndexStats{}
@@ -245,22 +332,37 @@ func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace 
 	runtime.ownerID = ""
 	runtime.metadata = nil
 	runtime.metadataAuth = nil
-	runtime.mu.Unlock()
+	runtime.buildFailed = false
+	if runtime.buildCancel != nil {
+		runtime.buildCancel()
+	}
+	runtime.buildCancel = nil
+	runtime.buildContext = nil
+	return oldID, oldGeneration, nil
+}
+
+func (s *Service) scheduleOldIndexRemoval(ctx context.Context, indexID string, generation uint64, grace time.Duration) {
+	if indexID == "" {
+		return
+	}
 	if grace < 0 {
 		grace = 0
 	}
+	s.markIndexRetiring(indexID)
 	go func() {
 		timer := time.NewTimer(grace)
-		<-timer.C
-		s.removeFailedBuild(context.WithoutCancel(ctx), oldID)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			s.removeIndexAfterGrace(context.WithoutCancel(ctx), indexID, generation)
+		case <-ctx.Done():
+			// A successful switch must still clean the old slot on shutdown.
+			s.removeIndexAfterGrace(context.Background(), indexID, generation)
+		}
 	}()
-	// The in-memory and metadata switch is already committed. Do not report a
-	// cancellation from the caller's context as a failed build: doing so would
-	// discard the newly active index after a successful Activate RPC.
-	return nil
 }
 
-func (s *Service) TrackViewBuild(spaceID, viewID, buildID, ownerID string, metadata MetadataClient, auth *pb.AuthInfo) error {
+func (s *Service) TrackViewBuild(ctx context.Context, spaceID, viewID, buildID, ownerID string, metadata MetadataClient, auth *pb.AuthInfo) error {
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
@@ -269,6 +371,13 @@ func (s *Service) TrackViewBuild(spaceID, viewID, buildID, ownerID string, metad
 	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
+	if runtime.buildCancel != nil {
+		runtime.buildCancel()
+	}
+	buildCtx, cancel := context.WithCancel(ctx)
+	runtime.buildContext = buildCtx
+	runtime.buildCancel = cancel
+	runtime.buildFailed = false
 	runtime.buildID = buildID
 	runtime.ownerID = ownerID
 	runtime.metadata = metadata
@@ -278,23 +387,48 @@ func (s *Service) TrackViewBuild(spaceID, viewID, buildID, ownerID string, metad
 	return nil
 }
 
-func (s *Service) failRuntimeBuild(ctx context.Context, key viewRef, runtime *viewRuntime, cause error) {
+func (s *Service) failRuntimeBuild(ctx context.Context, key viewRef, runtime *viewRuntime, cause error) error {
 	if runtime == nil || runtime.metadata == nil || runtime.buildID == "" || runtime.ownerID == "" {
-		return
+		return errors.New("view build failure cannot be persisted")
+	}
+	if current, err := s.readActiveView(ctx, runtime.metadata, runtime.metadataAuth, key.spaceID, key.viewID); err == nil {
+		if build := current.GetIndexBuild(); build != nil && build.GetBuildId() == runtime.buildID && build.GetState() == pb.ViewIndexBuild_FAILED {
+			// A previous redelivery may have committed the failure while its RPC
+			// response was lost. Treat the state as idempotently persisted so the
+			// caller can discard the failed inactive slot.
+			runtime.buildFailed = true
+			runtime.status = "failing"
+			return nil
+		}
+	}
+	runtime.buildFailed = true
+	runtime.status = "failing"
+	if runtime.buildCancel != nil {
+		runtime.buildCancel()
 	}
 	message := "new view live write failed"
 	if cause != nil {
 		message = cause.Error()
 	}
-	if _, err := runtime.metadata.FailViewIndexBuild(ctx, &pb.FailViewIndexBuildReq{
+	rsp, err := runtime.metadata.FailViewIndexBuild(ctx, &pb.FailViewIndexBuildReq{
 		AuthInfo: runtime.metadataAuth, SpaceId: key.spaceID, ViewId: key.viewID,
 		BuildId: runtime.buildID, OwnerId: runtime.ownerID, Error: message,
-	}); err != nil {
+	})
+	if err != nil {
 		log.Printf("storage view failed to mark build %s/%s as failed: %v", key.spaceID, key.viewID, err)
+		return err
 	}
+	if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Service) AttachActiveView(view *pb.View) error {
+	return s.AttachActiveViewWithGrace(context.Background(), view, 0)
+}
+
+func (s *Service) AttachActiveViewWithGrace(ctx context.Context, view *pb.View, grace time.Duration) error {
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" || view.GetActiveIndexId() == "" {
 		return errors.New("active view metadata is required")
 	}
@@ -313,7 +447,7 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 		return fmt.Errorf("view engine %q is unavailable", engineName)
 	}
 	columns := view.GetActiveColumns()
-	if len(columns) == 0 {
+	if len(columns) == 0 && view.GetAttributes()[viewColumnsExplicitAttr] != "true" {
 		columns = view.GetColumns()
 	}
 	activePrimaryDatasetID := strings.TrimSpace(view.GetAttributes()[activePrimaryDatasetAttr])
@@ -335,6 +469,27 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 	runtime.mu.Lock()
 	previousActive := runtime.active
 	activeChanged := previousActive != "" && previousActive != view.GetActiveIndexId()
+	previousGeneration := uint64(0)
+	if activeChanged {
+		// Capture the generation while runtime.mu still excludes PrepareViewIndex
+		// for this View. Reading it after unlock could accidentally associate the
+		// grace cleanup with a newly reused slot.
+		previousGeneration = s.indexGenerationOf(previousActive)
+	}
+	s.attachActiveViewLocked(view, runtime, schema, columns, activePrimaryDatasetID, engineName)
+	runtime.mu.Unlock()
+	if activeChanged {
+		s.scheduleOldIndexRemoval(ctx, previousActive, previousGeneration, grace)
+	}
+	return nil
+}
+
+// attachActiveViewLocked updates the in-memory active contract. The caller
+// must hold runtime.mu; it is used by both restart recovery and the short
+// activation critical section.
+func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, schema viewindex.ViewIndexSchema, columns []*pb.ViewColumn, activePrimaryDatasetID, engineName string) {
+	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	activeChanged := runtime.active != "" && runtime.active != view.GetActiveIndexId()
 	s.mu.Lock()
 	s.catalogViews[viewKey] = proto.Clone(view).(*pb.View)
 	s.indexEngine[view.GetActiveIndexId()] = engineName
@@ -366,6 +521,16 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 		runtime.next = ""
 		runtime.nextDatasetIDs = nil
 		runtime.nextPrimaryDatasetID = ""
+		runtime.buildID = ""
+		runtime.ownerID = ""
+		runtime.metadata = nil
+		runtime.metadataAuth = nil
+		runtime.buildFailed = false
+		if runtime.buildCancel != nil {
+			runtime.buildCancel()
+		}
+		runtime.buildCancel = nil
+		runtime.buildContext = nil
 	}
 	runtime.status = "active"
 	s.indexView[view.GetActiveIndexId()] = viewKey
@@ -378,17 +543,34 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 			s.byData[ref][view.GetActiveIndexId()] = struct{}{}
 		}
 	}
-	s.mu.Unlock()
-	runtime.mu.Unlock()
-	if activeChanged {
-		// An Activate RPC may have committed before its response was lost. The
-		// next reconcile attaches the new active index directly, so schedule the
-		// old physical index for the same grace cleanup SwitchView would perform.
-		go func(oldID string) {
-			s.removeFailedBuild(context.Background(), oldID)
-		}(previousActive)
+	// An explicit zero-column projection still owns its Dataset events. Route
+	// those events to the index so rows/markers can be acknowledged without
+	// pretending the mapping is missing; the index write is intentionally a
+	// key/attribute-only no-op for the empty schema.
+	if len(columns) == 0 && view.GetAttributes()[viewColumnsExplicitAttr] == "true" {
+		s.attachExplicitEmptyDatasetMappingsLocked(view, view.GetActiveIndexId())
 	}
-	return nil
+	s.mu.Unlock()
+}
+
+func (s *Service) attachExplicitEmptyDatasetMappingsLocked(view *pb.View, indexID string) {
+	if view == nil || indexID == "" {
+		return
+	}
+	datasetIDs := append([]string(nil), view.GetDatasetIds()...)
+	if len(datasetIDs) == 0 && view.GetPrimaryDatasetId() != "" {
+		datasetIDs = []string{view.GetPrimaryDatasetId()}
+	}
+	for _, datasetID := range datasetIDs {
+		if datasetID == "" {
+			continue
+		}
+		ref := datasetRef{spaceID: view.GetSpaceId(), datasetID: datasetID}
+		if s.byData[ref] == nil {
+			s.byData[ref] = make(map[string]struct{})
+		}
+		s.byData[ref][indexID] = struct{}{}
+	}
 }
 
 func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) error {
@@ -411,8 +593,11 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 	if !stats.Exists {
 		return fmt.Errorf("pending view index %q is missing", build.GetIndexId())
 	}
+	if expected := build.GetTargetViewVersion(); expected > 0 && stats.ViewVersion != expected {
+		return fmt.Errorf("pending view index %q revision mismatch: metadata=%d physical=%d", build.GetIndexId(), expected, stats.ViewVersion)
+	}
 	columns := build.GetColumns()
-	if len(columns) == 0 {
+	if len(columns) == 0 && view.GetAttributes()[viewColumnsExplicitAttr] != "true" {
 		columns = view.GetColumns()
 	}
 	version := build.GetTargetViewVersion()
@@ -423,8 +608,19 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 	if hash == "" {
 		hash = viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, PrimaryDatasetID: view.GetPrimaryDatasetId()})
 	}
+	physicalSchemaHash := viewindex.HashViewIndexSchema(viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, PrimaryDatasetID: view.GetPrimaryDatasetId()})
+	if hash != physicalSchemaHash {
+		return fmt.Errorf("pending view index %q metadata schema hash is stale: build=%q desired=%q", build.GetIndexId(), hash, physicalSchemaHash)
+	}
+	if stats.SchemaHash != physicalSchemaHash {
+		return fmt.Errorf("pending view index %q schema hash mismatch: expected=%q physical=%q", build.GetIndexId(), physicalSchemaHash, stats.SchemaHash)
+	}
 	schema := viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, SchemaHash: hash, PrimaryDatasetID: view.GetPrimaryDatasetId()}
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	// Recovery may attach a prepared slot without calling PrepareViewIndex in
+	// this process. Treat it as a fresh generation so an old grace cleanup
+	// cannot remove the recovered file.
+	s.nextIndexGeneration(build.GetIndexId())
 	s.mu.Lock()
 	s.catalogViews[viewKey] = proto.Clone(view).(*pb.View)
 	runtime := s.views[viewKey]
@@ -443,6 +639,9 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 			}
 			s.byData[ref][build.GetIndexId()] = struct{}{}
 		}
+	}
+	if len(columns) == 0 && view.GetAttributes()[viewColumnsExplicitAttr] == "true" {
+		s.attachExplicitEmptyDatasetMappingsLocked(view, build.GetIndexId())
 	}
 	s.mu.Unlock()
 	runtime.mu.Lock()

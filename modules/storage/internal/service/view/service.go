@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
@@ -24,23 +25,27 @@ import (
 )
 
 type Service struct {
-	engines        map[string]viewindex.Engine
-	indexEngine    map[string]string
-	schemas        map[string]viewindex.ViewIndexSchema
-	views          map[viewRef]*viewRuntime
-	catalogViews   map[viewRef]*pb.View
-	indexView      map[string]viewRef
-	authSecret     string
-	primaryAuth    *pb.AuthInfo
-	primary        FieldReader
-	mu             sync.RWMutex
-	byData         map[datasetRef]map[string]struct{}
-	liveGateOnce   sync.Once
-	liveGate       *liveLeaseGate
-	metrics        *observability.ViewMetrics
-	periodMetadata PeriodMetadataClient
-	readyPublisher ReadyEventPublisher
-	consumerState  func(context.Context) (jetstream.ConsumerState, error)
+	engines         map[string]viewindex.Engine
+	indexEngine     map[string]string
+	schemas         map[string]viewindex.ViewIndexSchema
+	views           map[viewRef]*viewRuntime
+	catalogViews    map[viewRef]*pb.View
+	indexView       map[string]viewRef
+	authSecret      string
+	primaryAuth     *pb.AuthInfo
+	primary         FieldReader
+	mu              sync.RWMutex
+	byData          map[datasetRef]map[string]struct{}
+	metrics         *observability.ViewMetrics
+	periodMetadata  PeriodMetadataClient
+	metadataClient  MetadataClient
+	readyPublisher  ReadyEventPublisher
+	consumerState   func(context.Context) (jetstream.ConsumerState, error)
+	indexGatesMu    sync.Mutex
+	indexGates      map[string]*indexWriteGate
+	indexGeneration map[string]uint64
+	retiringIndexes map[string]struct{}
+	reconcileReady  bool
 }
 
 type datasetRef struct{ spaceID, datasetID string }
@@ -65,6 +70,10 @@ type viewRuntime struct {
 	ownerID                string
 	metadata               MetadataClient
 	metadataAuth           *pb.AuthInfo
+	buildCancel            context.CancelFunc
+	buildFailed            bool
+	buildContext           context.Context
+	lastSizeLimitBuildAt   time.Time
 }
 
 const (
@@ -110,17 +119,72 @@ func New(root, authSecret string) (*Service, error) {
 		return nil, fmt.Errorf("open duckdb view indexes: %w", err)
 	}
 	service := &Service{
-		engines:      engines,
-		indexEngine:  make(map[string]string),
-		schemas:      make(map[string]viewindex.ViewIndexSchema),
-		views:        make(map[viewRef]*viewRuntime),
-		catalogViews: make(map[viewRef]*pb.View),
-		indexView:    make(map[string]viewRef),
-		authSecret:   authSecret,
-		byData:       make(map[datasetRef]map[string]struct{}),
-		metrics:      observability.DefaultViewMetrics,
+		engines:         engines,
+		indexEngine:     make(map[string]string),
+		schemas:         make(map[string]viewindex.ViewIndexSchema),
+		views:           make(map[viewRef]*viewRuntime),
+		catalogViews:    make(map[viewRef]*pb.View),
+		indexView:       make(map[string]viewRef),
+		authSecret:      authSecret,
+		byData:          make(map[datasetRef]map[string]struct{}),
+		indexGates:      make(map[string]*indexWriteGate),
+		indexGeneration: make(map[string]uint64),
+		retiringIndexes: make(map[string]struct{}),
+		metrics:         observability.DefaultViewMetrics,
 	}
 	return service, nil
+}
+
+func (s *Service) markIndexRetiring(id string) {
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.retiringIndexes == nil {
+		s.retiringIndexes = make(map[string]struct{})
+	}
+	s.retiringIndexes[id] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *Service) clearIndexRetiring(id string) {
+	s.mu.Lock()
+	delete(s.retiringIndexes, id)
+	s.mu.Unlock()
+}
+
+func (s *Service) isIndexRetiring(id string) bool {
+	s.mu.RLock()
+	_, ok := s.retiringIndexes[id]
+	s.mu.RUnlock()
+	return ok
+}
+
+func (s *Service) setReconcileReady(ready bool) {
+	s.mu.Lock()
+	s.reconcileReady = ready
+	s.mu.Unlock()
+}
+
+func (s *Service) isReconcileReady() bool {
+	s.mu.RLock()
+	ready := s.reconcileReady
+	s.mu.RUnlock()
+	return ready
+}
+
+func (s *Service) nextIndexGeneration(indexID string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexGeneration[indexID]++
+	return s.indexGeneration[indexID]
+}
+
+func (s *Service) indexGenerationOf(indexID string) uint64 {
+	s.mu.RLock()
+	generation := s.indexGeneration[indexID]
+	s.mu.RUnlock()
+	return generation
 }
 
 // SetMetrics replaces the aggregate view metrics sink. It is intended for
@@ -134,6 +198,44 @@ func (s *Service) SetMetrics(metrics *observability.ViewMetrics) {
 		metrics = observability.DefaultViewMetrics
 	}
 	s.metrics = metrics
+}
+
+func (s *Service) indexWriteGate(indexID string) *indexWriteGate {
+	s.indexGatesMu.Lock()
+	defer s.indexGatesMu.Unlock()
+	if s.indexGates == nil {
+		s.indexGates = make(map[string]*indexWriteGate)
+	}
+	gate := s.indexGates[indexID]
+	if gate == nil {
+		gate = newIndexWriteGate()
+		s.indexGates[indexID] = gate
+	}
+	return gate
+}
+
+func (s *Service) writeIndex(ctx context.Context, indexID string, engine viewindex.Engine, batch viewindex.ViewIndexWriteBatch) error {
+	if engine == nil {
+		return errors.New("view index engine is unavailable")
+	}
+	release, err := s.indexWriteGate(indexID).lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return engine.Write(ctx, indexID, batch)
+}
+
+func (s *Service) removeIndex(ctx context.Context, indexID string, engine viewindex.Engine) error {
+	if engine == nil {
+		return errors.New("view index engine is unavailable")
+	}
+	release, err := s.indexWriteGate(indexID).lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return engine.Remove(ctx, indexID)
 }
 
 func (s *Service) HasEngine(name string) bool {
@@ -162,8 +264,20 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 	if engine == nil {
 		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("view engine %q is unavailable", engineName))}, nil
 	}
+	if s.isIndexRetiring(req.GetIndexId()) {
+		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("view index %q is still in grace cleanup", req.GetIndexId()))}, nil
+	}
 	schema := viewindex.ViewIndexSchema{SpaceID: sch.GetSpaceId(), ViewID: sch.GetViewId(), PrimaryDatasetID: sch.GetPrimaryDatasetId(), ViewVersion: sch.GetViewVersion(), Engine: engineName, Columns: sch.GetColumns(), SchemaHash: sch.GetViewSchemaHash()}
-	err := engine.Prepare(ctx, req.GetIndexId(), schema)
+	release, err := s.indexWriteGate(req.GetIndexId()).lock(ctx)
+	if err != nil {
+		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+	}
+	// Advance the physical slot generation while holding the same gate used by
+	// delayed old-slot removal. A grace cleanup that was already queued must
+	// not delete this newly prepared generation.
+	s.nextIndexGeneration(req.GetIndexId())
+	err = engine.Prepare(ctx, req.GetIndexId(), schema)
+	release()
 	if err != nil {
 		return &pb.PrepareViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
@@ -276,17 +390,6 @@ func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq)
 	default:
 		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("unsupported write mode %q", b.GetWriteMode()))}, nil
 	}
-	if mode == viewindex.LiveWrite {
-		if err := s.acquireLiveDelivery(ctx); err != nil {
-			return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-		}
-		defer s.releaseLiveDelivery()
-	} else {
-		if err := s.acquireBackfill(ctx); err != nil {
-			return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
-		}
-		defer s.releaseBackfill()
-	}
 	s.mu.RLock()
 	viewKey, hasView := s.indexView[req.GetIndexId()]
 	runtime := s.views[viewKey]
@@ -297,7 +400,7 @@ func (s *Service) ApplyViewIndex(ctx context.Context, req *pb.ApplyViewIndexReq)
 	}
 	engine, err := s.engineFor(req.GetIndexId())
 	if err == nil {
-		err = engine.Write(ctx, req.GetIndexId(), viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: b.GetViewRevision(), ViewSchemaHash: b.GetViewSchemaHash(), WriteMode: mode})
+		err = s.writeIndex(ctx, req.GetIndexId(), engine, viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: b.GetViewRevision(), ViewSchemaHash: b.GetViewSchemaHash(), WriteMode: mode})
 	}
 	if err != nil {
 		return &pb.ApplyViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
@@ -334,7 +437,7 @@ func (s *Service) RemoveViewIndex(ctx context.Context, req *pb.RemoveViewIndexRe
 	if err != nil {
 		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	if err := engine.Remove(ctx, req.GetIndexId()); err != nil {
+	if err := s.removeIndex(ctx, req.GetIndexId(), engine); err != nil {
 		return &pb.RemoveViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	s.mu.Lock()
@@ -431,20 +534,159 @@ func (s *Service) SetPrimaryReader(reader FieldReader) {
 	s.primary = reader
 }
 
+func (s *Service) setMetadataClient(metadata MetadataClient) {
+	s.mu.Lock()
+	s.metadataClient = metadata
+	s.mu.Unlock()
+}
+
+func (s *Service) metadataClientSnapshot() MetadataClient {
+	s.mu.RLock()
+	metadata := s.metadataClient
+	s.mu.RUnlock()
+	return metadata
+}
+
+// datasetHasActiveView distinguishes an unprojected Dataset (whose row event
+// can be ACKed) from a managed Dataset whose View mapping is temporarily
+// missing during discovery/recovery. The latter must remain pending so a
+// newly-created View cannot miss rows before the next reconcile tick.
+func (s *Service) datasetHasActiveView(ctx context.Context, spaceID, datasetID string) (bool, error) {
+	metadata := s.metadataClientSnapshot()
+	if metadata == nil {
+		// Lightweight embedders may not configure MetadataClient. In production
+		// the reconciler installs it before readiness is advertised; without it
+		// there is no managed-view contract to protect and unrelated rows may ACK.
+		return false, nil
+	}
+	auth := s.internalAuth()
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, SpaceId: spaceID, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
+		if err != nil {
+			return false, err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return false, err
+		}
+		for _, view := range rsp.GetViews() {
+			if view == nil || view.GetSpaceId() != spaceID {
+				continue
+			}
+			for _, projected := range view.GetDatasetIds() {
+				if projected == datasetID {
+					return true, nil
+				}
+			}
+			for _, column := range view.GetColumns() {
+				if viewColumnDataset(column) == datasetID {
+					return true, nil
+				}
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
+			return false, nil
+		}
+	}
+}
+
 func (s *Service) removeFailedBuild(ctx context.Context, id string) {
-	engine, err := s.engineFor(id)
-	if err == nil {
+	s.removeFailedBuildAtGeneration(ctx, id, s.indexGenerationOf(id))
+}
+
+// removeFailedBuildAtGeneration prevents cleanup from deleting a newer
+// incarnation of a reused A/B slot. PrepareViewIndex advances the generation
+// while holding the same per-index gate, so checking it after acquiring that
+// gate closes the gap between a failed build and its asynchronous cleanup.
+func (s *Service) removeFailedBuildAtGeneration(ctx context.Context, id string, expectedGeneration uint64, engineOverride ...string) {
+	// A failure cleanup must serialize with writers and pointer switches. The
+	// runtime lock is acquired before the per-index gate, matching the live
+	// write path (runtime -> gate), so a failed cleanup cannot remove a slot
+	// after another goroutine has made that same slot active/next.
+	s.mu.RLock()
+	viewKey, mapped := s.indexView[id]
+	runtime := s.views[viewKey]
+	engineName := s.indexEngine[id]
+	if engineName == "" && len(engineOverride) > 0 {
+		engineName = strings.ToLower(strings.TrimSpace(engineOverride[0]))
+	}
+	engine := s.engines[engineName]
+	s.mu.RUnlock()
+	if mapped && runtime != nil {
+		runtime.mu.Lock()
+		defer runtime.mu.Unlock()
+	}
+	release, err := s.indexWriteGate(id).lock(ctx)
+	if err != nil {
+		return
+	}
+	defer release()
+	s.mu.RLock()
+	if s.indexGeneration[id] != expectedGeneration {
+		s.mu.RUnlock()
+		return
+	}
+	s.mu.RUnlock()
+	if runtime != nil && (runtime.active == id || runtime.next == id) {
+		return
+	}
+	if engine != nil {
 		if err := engine.Remove(ctx, id); err != nil {
 			log.Printf("storage view failed to remove index %q: %v", id, err)
+			return
 		}
 	} else {
-		log.Printf("storage view failed to resolve index %q for removal: %v", id, err)
+		log.Printf("storage view failed to resolve index %q for removal", id)
+		return
 	}
 	s.mu.Lock()
-	s.removeIndexMappingsLocked(id)
-	delete(s.indexEngine, id)
-	delete(s.schemas, id)
-	delete(s.indexView, id)
+	// Keep the mapping if a concurrent attach/prepare made this generation
+	// authoritative while the engine removal was in flight.
+	if runtime == nil || (runtime.active != id && runtime.next != id) {
+		s.removeIndexMappingsLocked(id)
+		delete(s.indexEngine, id)
+		delete(s.schemas, id)
+		delete(s.indexView, id)
+	}
+	s.mu.Unlock()
+}
+
+// removeIndexAfterGrace removes an old physical slot only when the slot has
+// not been prepared again since the switch scheduled its cleanup. A/B slots
+// are intentionally reused, so the generation check is required in addition
+// to the per-index write gate.
+func (s *Service) removeIndexAfterGrace(ctx context.Context, id string, expectedGeneration uint64) {
+	if id == "" {
+		return
+	}
+	release, err := s.indexWriteGate(id).lock(ctx)
+	if err != nil {
+		return
+	}
+	defer release()
+	s.mu.RLock()
+	currentGeneration := s.indexGeneration[id]
+	engineName := s.indexEngine[id]
+	engine := s.engines[engineName]
+	s.mu.RUnlock()
+	if currentGeneration != expectedGeneration || engine == nil {
+		return
+	}
+	if err := engine.Remove(ctx, id); err != nil {
+		log.Printf("storage view failed to remove old index %q: %v", id, err)
+		go func() {
+			time.Sleep(30 * time.Second)
+			s.removeIndexAfterGrace(context.Background(), id, expectedGeneration)
+		}()
+		return
+	}
+	s.clearIndexRetiring(id)
+	s.mu.Lock()
+	if s.indexGeneration[id] == expectedGeneration {
+		s.removeIndexMappingsLocked(id)
+		delete(s.indexEngine, id)
+		delete(s.schemas, id)
+		delete(s.indexView, id)
+	}
 	s.mu.Unlock()
 }
 

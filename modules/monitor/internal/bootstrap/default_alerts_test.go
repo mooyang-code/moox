@@ -88,8 +88,16 @@ func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
 	for _, rule := range rules {
 		if _, _, ok := hostmetrics.ParseHostRuleKey(rule.CheckID); ok {
 			hostRules++
-			if rule.FailureThreshold != 20 {
-				t.Fatalf("host failure threshold = %d", rule.FailureThreshold)
+			_, metric, _ := hostmetrics.ParseHostRuleKey(rule.CheckID)
+			wantFailureThreshold := 20
+			if metric == hostmetrics.HostMetricFilesystemUsage {
+				wantFailureThreshold = 3
+			}
+			if rule.FailureThreshold != wantFailureThreshold {
+				t.Fatalf("host %s failure threshold = %d, want %d", metric, rule.FailureThreshold, wantFailureThreshold)
+			}
+			if metric == hostmetrics.HostMetricFilesystemUsage && rule.Description != `{"threshold":85,"recovery_threshold":80}` {
+				t.Fatalf("filesystem alert definition = %s", rule.Description)
 			}
 		}
 	}

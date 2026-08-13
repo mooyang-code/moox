@@ -57,6 +57,7 @@ func DefaultDeployments(nodeID string) []Deployment {
 		deployment("trade_exchange_account", "trade", "http", "127.0.0.1", 11200, "trpc.moox.trade.ExchangeAccountService", "internal", "Exchange 账户管理与同步服务"),
 		deployment("trade_execution", "trade", "http", "127.0.0.1", 11201, "trpc.moox.trade.TradeExecutionService", "internal", "订单、成交、持仓与目标执行服务"),
 		deployment("trade_logical_account", "trade", "http", "127.0.0.1", 11202, "trpc.moox.trade.LogicalAccountService", "internal", "逻辑账户、执行归属与人工干预服务"),
+		withExtra(deployment("trade_dns_resolver", "trade", "http", "127.0.0.1", 11203, "trpc.moox.trade.TradeDNSResolverService", "internal", "交易节点 DNS 解析与连通性探测服务"), `{"gateway_methods":["ResolveDomains"],"gateway_callers":["collector"]}`),
 	}
 	canonical := map[string]string{
 		"moox_collector": "collectmgr", "moox_cloudnode": "cloudnode", "moox_factor": "factormgr", "moox_strategy": "strategymgr", "moox_monitor": "monitor", "moox_hostagent": "hostagent", "sysdeploy": "sysdeploy", "secret": "secret",
@@ -71,6 +72,9 @@ func DefaultDeployments(nodeID string) []Deployment {
 			// Storage BFF traffic enters the node gateway; keep both independently
 			// deployed storage roles in the route snapshot by default.
 			rows[i].Host = "127.0.0.1"
+			rows[i].GatewayServiceID = rows[i].ServiceName
+			rows[i].GatewayEnabled = true
+		case "trade_dns_resolver":
 			rows[i].GatewayServiceID = rows[i].ServiceName
 			rows[i].GatewayEnabled = true
 		}

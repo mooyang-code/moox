@@ -6,9 +6,11 @@ import (
 )
 
 const (
-	ExchangeAccountServiceName = "trpc.moox.trade.ExchangeAccountService"
-	LogicalAccountServiceName  = "trpc.moox.trade.LogicalAccountService"
-	TradeExecutionServiceName  = "trpc.moox.trade.TradeExecutionService"
+	ExchangeAccountServiceName  = "trpc.moox.trade.ExchangeAccountService"
+	LogicalAccountServiceName   = "trpc.moox.trade.LogicalAccountService"
+	TradeExecutionServiceName   = "trpc.moox.trade.TradeExecutionService"
+	TradeDNSResolverServiceName = "trpc.moox.trade.TradeDNSResolverService"
+	TradeDNSResolverTRPCName    = TradeDNSResolverServiceName + ".trpc"
 )
 
 func RegisterAll(
@@ -16,6 +18,7 @@ func RegisterAll(
 	accounts *AccountServer,
 	logicalAccounts *LogicalAccountServer,
 	execution *ExecutionServer,
+	dnsResolver *DNSResolverServer,
 ) {
 	tradepb.RegisterExchangeAccountServiceService(
 		s.Service(ExchangeAccountServiceName),
@@ -29,4 +32,14 @@ func RegisterAll(
 		s.Service(TradeExecutionServiceName),
 		execution,
 	)
+	dnsRegistered := false
+	for _, name := range []string{TradeDNSResolverTRPCName, TradeDNSResolverServiceName} {
+		if service := s.Service(name); service != nil {
+			tradepb.RegisterTradeDNSResolverServiceService(service, dnsResolver)
+			dnsRegistered = true
+		}
+	}
+	if !dnsRegistered {
+		panic("TradeDNSResolverService is not configured")
+	}
 }

@@ -60,6 +60,9 @@ func SnapshotForRoleWithOptions(instance string, metrics *observability.ViewMetr
 			"outbox_oldest_age_seconds":        snapshot.OutboxOldestAge.Seconds(),
 			"oldest_pending_age_seconds":       snapshot.OldestPendingAge.Seconds(),
 			"oldest_pending_threshold_seconds": threshold.Seconds(),
+			"restore_duration_seconds":         snapshot.RestoreDuration.Seconds(),
+			"restore_ready":                    snapshot.RestoreReady,
+			"restore_failures":                 snapshot.RestoreFailures,
 		}
 		return rsp
 	}
