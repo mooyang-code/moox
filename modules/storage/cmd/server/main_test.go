@@ -96,7 +96,7 @@ func TestStorageViewRebuildSettingsRejectsTooShortInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, _, err := storageViewRebuildSettings(); err == nil {
+	if _, _, _, _, err := storageViewRebuildSettings(); err == nil {
 		t.Fatal("accepted a rebuild interval below the safety floor")
 	}
 }
@@ -107,12 +107,15 @@ func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	interval, maxBytes, err := storageViewRebuildSettings()
+	interval, maxBytes, maxPending, idleChecks, err := storageViewRebuildSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if interval != 2*time.Minute || maxBytes != 2097152 {
 		t.Fatalf("settings = %s/%d", interval, maxBytes)
+	}
+	if maxPending != 32 || idleChecks != 3 {
+		t.Fatalf("gate defaults = %d/%d", maxPending, idleChecks)
 	}
 }
 

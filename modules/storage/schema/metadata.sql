@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '7')
+VALUES ('schema_version', '8')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -114,6 +114,41 @@ CREATE TABLE IF NOT EXISTS t_view_index_builds (
 
 CREATE INDEX IF NOT EXISTS idx_t_view_index_builds_status
 ON t_view_index_builds (c_status, c_started_at);
+
+CREATE TABLE IF NOT EXISTS t_view_rebuild_logs (
+    c_log_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_view_id TEXT NOT NULL,
+    c_build_id TEXT NOT NULL DEFAULT '',
+    c_index_id TEXT NOT NULL DEFAULT '',
+    c_trigger_reason INTEGER NOT NULL,
+    c_result INTEGER NOT NULL,
+    c_block_reason TEXT NOT NULL DEFAULT '',
+    c_target_view_revision INTEGER NOT NULL DEFAULT 0,
+    c_active_view_revision INTEGER NOT NULL DEFAULT 0,
+    c_physical_bytes INTEGER NOT NULL DEFAULT 0,
+    c_num_pending INTEGER NOT NULL DEFAULT 0,
+    c_num_ack_pending INTEGER NOT NULL DEFAULT 0,
+    c_entries_written INTEGER NOT NULL DEFAULT 0,
+    c_started_at TEXT NOT NULL DEFAULT '',
+    c_finished_at TEXT NOT NULL DEFAULT '',
+    c_first_checked_at TEXT NOT NULL DEFAULT '',
+    c_last_checked_at TEXT NOT NULL DEFAULT '',
+    c_skip_count INTEGER NOT NULL DEFAULT 0,
+    c_error_summary TEXT NOT NULL DEFAULT '',
+    c_details_json TEXT NOT NULL DEFAULT '{}',
+    c_created_at TEXT NOT NULL,
+    c_updated_at TEXT NOT NULL,
+    FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
+    CHECK (c_result BETWEEN 1 AND 4),
+    CHECK (c_trigger_reason BETWEEN 1 AND 8)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_view_rebuild_logs_view_time
+ON t_view_rebuild_logs (c_space_id, c_view_id, c_created_at DESC, c_log_id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_t_view_rebuild_logs_skip_key
+ON t_view_rebuild_logs (c_space_id, c_view_id, c_trigger_reason, c_block_reason, c_result, c_updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS t_view_period_dataset_states (
     c_space_id TEXT NOT NULL,

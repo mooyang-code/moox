@@ -4,7 +4,7 @@
 
 **Goal:** 在不改变 Collector、Factor 和 Dataset 独立处理边界的前提下，限制高成本 A/B 容量重建的启动时机，持久化重建历史，并在 View 浏览页提供日志弹窗。
 
-**Architecture:** 保留 `t_view_index_builds` 作为当前构建 CAS 状态，新增 `t_view_rebuild_logs` 作为 append-only 历史表。必要修复类重建绕过消费积压门禁；容量整理类重建要求 consumer 已恢复、积压低于阈值、连续空闲检查通过，并由进程级许可保证同一时刻只有一个重建。Metadata 新增只读分页 RPC，Web 在已有构建时间旁按需读取日志。
+**Architecture:** 保留 `t_view_index_builds` 作为当前构建 CAS 状态，新增 `t_view_rebuild_logs` 作为 append-only 历史表。必要修复类重建绕过消费积压门禁；容量整理类重建要求 consumer 已恢复、积压低于阈值、连续空闲检查通过，并由进程级许可保证同一时刻只有一个重建。Metadata 新增构建日志写入 RPC 与只读分页 RPC，Web 在已有构建时间旁按需读取日志。
 
 **Tech Stack:** Go、SQLite、protobuf/tRPC、Vue 3、Arco Design、现有 Storage Metadata/View Reconciler 测试体系。
 
@@ -18,7 +18,7 @@
 - Generate: `modules/storage/proto/storagegen/metadata.trpc.go`
 - Test: `modules/storage/proto/metadata_proto_test.go`
 
-- [ ] **Step 1: 添加重建日志消息和枚举**
+- [x] **Step 1: 添加重建日志消息和枚举**
 
 在 `metadata.proto` 中新增：
 
@@ -84,13 +84,13 @@ message ListViewRebuildLogsRsp {
 }
 ```
 
-Add `ListViewRebuildLogs` to `Metadata`.
+Add `CreateViewRebuildLog`, `UpdateViewRebuildLog`, `UpsertSkippedViewRebuildLog` and `ListViewRebuildLogs` to `Metadata`.
 
-- [ ] **Step 2: Add descriptor and RPC contract tests**
+- [x] **Step 2: Add descriptor and RPC contract tests**
 
 Extend `metadata_proto_test.go` to assert the new messages, enums, and `Metadata/ListViewRebuildLogs` descriptor exist.
 
-- [ ] **Step 3: Regenerate generated code and verify drift**
+- [x] **Step 3: Regenerate generated code and verify drift**
 
 Run:
 
@@ -113,13 +113,13 @@ Expected: generated metadata files update without unrelated proto changes.
 - Modify: `modules/storage/internal/service/metadata/sqlite/crud_view_rebuild_log_test.go`
 - Modify: `modules/storage/internal/service/metadata/service.go` or current Metadata RPC implementation
 
-- [ ] **Step 1: Add SQLite table and indexes**
+- [x] **Step 1: Add SQLite table and indexes**
 
 Create `t_view_rebuild_logs` with the fields in the design document. Add indexes for `(c_space_id, c_view_id, c_created_at DESC)` and `(c_space_id, c_view_id, c_trigger_reason, c_block_reason, c_result, c_updated_at DESC)`.
 
 Use `ON DELETE CASCADE` from `(space_id, view_id)` to `t_views`. Keep `t_view_index_builds` unchanged.
 
-- [ ] **Step 2: Extend metadata Reader/Writer interfaces**
+- [x] **Step 2: Extend metadata Reader/Writer interfaces**
 
 Add methods equivalent to:
 
@@ -132,15 +132,15 @@ ListViewRebuildLogs(context.Context, spaceID, viewID string, result pb.ViewRebui
 
 `FindOpenSkippedViewRebuildLog` must only match the latest `skipped` row for the exact trigger/block reason. It must increment `skip_count`, update `last_checked_at`, metrics, and `updated_at` in one transaction.
 
-- [ ] **Step 3: Implement deterministic scanning and pagination**
+- [x] **Step 3: Implement deterministic scanning and pagination**
 
 Order by `c_created_at DESC, c_log_id DESC`. Clamp page size using the existing metadata pagination helper. Return `NOT_FOUND` only for invalid View scope; an empty valid View returns an empty page.
 
-- [ ] **Step 4: Add persistence tests**
+- [x] **Step 4: Add persistence tests**
 
 Cover schema creation, running-to-success, running-to-failed, skipped deduplication, new row after block reason changes, pagination order, result filtering, and View cascade deletion.
 
-- [ ] **Step 5: Add Metadata RPC handler and tests**
+- [x] **Step 5: Add Metadata RPC handler and tests**
 
 Validate auth, `space_id`, `view_id`, and page. Map storage errors through existing `retinfo` helpers. Test RPC success, empty result, invalid request, and pagination.
 
@@ -157,7 +157,7 @@ Validate auth, `space_id`, `view_id`, and page. Map storage errors through exist
 - Test: `modules/storage/internal/config/loader_test.go`
 - Test: `modules/storage/internal/service/view/reconcile_test.go`
 
-- [ ] **Step 1: Add validated configuration**
+- [x] **Step 1: Add validated configuration**
 
 Add:
 
@@ -168,23 +168,23 @@ RebuildIdleChecks uint32 `yaml:"rebuild_idle_checks"`
 
 Default to `32` and `3`. Reject negative/zero `rebuild_idle_checks` and invalid negative pending values at load time; do not silently clamp invalid values.
 
-- [ ] **Step 2: Track process-level rebuild ownership**
+- [x] **Step 2: Track process-level rebuild ownership**
 
 Add a process-level mutex/token in the View Service. `tryAcquireRebuildPermit` must return false immediately if another build owns the permit. Release it on every success, failure, panic-safe defer, and activation retry path.
 
-- [ ] **Step 3: Track consecutive idle checks per View**
+- [x] **Step 3: Track consecutive idle checks per View**
 
 Store an in-memory counter keyed by `space_id/view_id`. Reset to zero when consumer state is unavailable, consumer is not bound, restore is not ready, or total backlog exceeds the configured threshold. Increment only when all capacity gate conditions pass. Permit a size-limit build only when the counter reaches `RebuildIdleChecks`.
 
-- [ ] **Step 4: Separate necessary and optional rebuild paths**
+- [x] **Step 4: Separate necessary and optional rebuild paths**
 
 Classify `needsRebuild` causes before applying the gate. Necessary causes (`initial_build`, revision/contract repair, active missing/invalid, coverage repair, manual repair) bypass backlog and idle checks. `size_limit` alone uses the gate and process-level permit.
 
-- [ ] **Step 5: Record gate skips**
+- [x] **Step 5: Record gate skips**
 
 When a size-limit build is skipped, call the metadata history writer with `result=SKIPPED` and the exact blocker. Deduplicate by View, trigger reason, and blocker. Do not write a new row on every reconcile.
 
-- [ ] **Step 6: Add gate tests**
+- [x] **Step 6: Add gate tests**
 
 Cover backlog threshold, three consecutive idle checks, counter reset, unavailable consumer fail-closed, another View already building, necessary rebuild bypass, cooldown, and retiring slot behavior.
 
@@ -199,27 +199,27 @@ Cover backlog threshold, three consecutive idle checks, counter reset, unavailab
 - Modify: `modules/storage/internal/service/view/reconcile_test.go`
 - Modify: `modules/storage/internal/service/view/service_test.go`
 
-- [ ] **Step 1: Add safe reason classification**
+- [x] **Step 1: Add safe reason classification**
 
 Create one helper mapping each reconcile path to the protocol enum. Do not infer reasons from user-visible error strings. Keep `error_summary` bounded and strip credentials, request bodies, and raw SQL.
 
-- [ ] **Step 2: Insert running history at claim success**
+- [x] **Step 2: Insert running history at claim success**
 
 After `ClaimViewIndexBuild` succeeds and the process owns the build, create a `running` history row with target revision, active revision, file size, consumer snapshot, `build_id`, and `index_id`.
 
-- [ ] **Step 3: Mark success only after switch**
+- [x] **Step 3: Mark success only after switch**
 
 Update the history row to `succeeded` only after Metadata activation succeeds, runtime Active points to the new index, and the old index cleanup has been scheduled. Fill `finished_at`, entries written, and duration inputs.
 
-- [ ] **Step 4: Mark failure and interrupted builds**
+- [x] **Step 4: Mark failure and interrupted builds**
 
 On a confirmed build failure, update the matching row to `failed`. During startup/reconcile cleanup, update an existing `running` row to `failed` with `interrupted_build`; create a fallback row if no matching history exists. Activation response-loss readback must decide the final result rather than guessing from the transport error.
 
-- [ ] **Step 5: Keep history failures non-fatal**
+- [x] **Step 5: Keep history failures non-fatal**
 
 If history persistence fails, preserve the existing A/B state transition and expose a structured warning/metric. Never turn a successful active switch into a failed View solely because the audit row failed.
 
-- [ ] **Step 6: Add lifecycle tests**
+- [x] **Step 6: Add lifecycle tests**
 
 Cover successful switch, failed backfill, failed activation, lost activation response readback, restart-interrupted build, and history-write failure. Assert Active A remains usable where the existing A/B contract requires it.
 
@@ -236,7 +236,7 @@ Cover successful switch, failed backfill, failed activation, lost activation res
 - Test: `web/src/views/data/view-browse/view-rebuild-log.test.ts`
 - Test: existing view-browse component/API tests
 
-- [ ] **Step 1: Add TypeScript protocol types and API wrapper**
+- [x] **Step 1: Add TypeScript protocol types and API wrapper**
 
 Mirror the generated response shape and add:
 
@@ -249,19 +249,19 @@ listViewRebuildLogs(params: {
 }): Promise<{ logs: ViewRebuildLog[]; page_result: PageResult }>;
 ```
 
-- [ ] **Step 2: Add display helpers**
+- [x] **Step 2: Add display helpers**
 
 Map trigger reasons and result enums to concise Chinese labels. Format UTC server timestamps through the existing `formatTime` helper. Display skip count and error summary without exposing internal credentials.
 
-- [ ] **Step 3: Add the adjacent `日志` button**
+- [x] **Step 3: Add the adjacent `日志` button**
 
 Place a small text button immediately after `buildTimeText` in the shared View browse status line. Keep the existing build status and timestamp unchanged.
 
-- [ ] **Step 4: Add the log modal**
+- [x] **Step 4: Add the log modal**
 
 Load only when opened. Show a compact table with time, reason, result, duration, entries, and description. Support server pagination, loading, empty, and error states. Do not poll while closed.
 
-- [ ] **Step 5: Add Web tests**
+- [x] **Step 5: Add Web tests**
 
 Test helper mappings, skip aggregation text, pagination request scope, empty state, and API failure display. Confirm the embedded Factor results page receives the same button through the shared component.
 
@@ -294,14 +294,14 @@ Assert generated Storage configuration includes the new defaults and the Storage
 **Files:**
 - No source ownership; inspect all changes from Tasks 1-6.
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 ```bash
 cd modules/storage && go test ./proto ./internal/config ./internal/service/metadata/... ./internal/service/view/... -count=1
 cd ../../web && npm run test -- --run view-browse
 ```
 
-- [ ] **Step 2: Run race, vet, generated-code, and contract checks**
+- [x] **Step 2: Run race, vet, generated-code, and contract checks**
 
 ```bash
 cd modules/storage && go test -race ./internal/service/metadata/... ./internal/service/view/... ./internal/service/viewindex/duckdb/... -count=1
@@ -311,7 +311,7 @@ bash scripts/tests/contract/test-deploy-moox-storage-view.sh
 bash scripts/tests/contract/test-storage-view-watchdog.sh
 ```
 
-- [ ] **Step 3: Request a fresh codeCR review**
+- [x] **Step 3: Request a fresh codeCR review**
 
 The reviewer must inspect gate bypass classification, history CAS/update semantics, log deduplication, migration safety, RPC authorization, and Web scope filtering. Record every finding with file/symbol/line evidence and fix all P0-P2 findings before release.
 

@@ -75,6 +75,8 @@ type StorageView struct {
 	Ordering                string           `yaml:"ordering"`
 	RebuildCheckInterval    string           `yaml:"rebuild_check_interval"`
 	MaxViewFileBytes        int64            `yaml:"max_view_file_bytes"`
+	RebuildMaxPending       uint64           `yaml:"rebuild_max_pending"`
+	RebuildIdleChecks       uint32           `yaml:"rebuild_idle_checks"`
 	StorageRPC              StorageRPCConfig `yaml:"storage_rpc"`
 	maxViewFileBytesSet     bool
 }
@@ -286,6 +288,12 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.View.MaxViewFileBytes <= 0 && !c.View.maxViewFileBytesSet {
 		c.View.MaxViewFileBytes = 1 << 30
+	}
+	if c.View.RebuildMaxPending == 0 {
+		c.View.RebuildMaxPending = 32
+	}
+	if c.View.RebuildIdleChecks == 0 {
+		c.View.RebuildIdleChecks = 3
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"

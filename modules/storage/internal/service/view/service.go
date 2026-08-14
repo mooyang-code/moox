@@ -45,6 +45,9 @@ type Service struct {
 	indexGates      map[string]*indexWriteGate
 	indexGeneration map[string]uint64
 	retiringIndexes map[string]struct{}
+	rebuildMu       sync.Mutex
+	rebuildRunning  bool
+	idleChecks      map[viewRef]uint32
 	reconcileReady  bool
 }
 
@@ -130,6 +133,7 @@ func New(root, authSecret string) (*Service, error) {
 		indexGates:      make(map[string]*indexWriteGate),
 		indexGeneration: make(map[string]uint64),
 		retiringIndexes: make(map[string]struct{}),
+		idleChecks:      make(map[viewRef]uint32),
 		metrics:         observability.DefaultViewMetrics,
 	}
 	return service, nil

@@ -39,6 +39,8 @@ storage:
     ordering: dataset
     rebuild_check_interval: 1m
     max_view_file_bytes: 1073741824
+    rebuild_max_pending: 32
+    rebuild_idle_checks: 3
   maintenance:
     host_metrics_cleanup:
       enabled: true

@@ -342,17 +342,19 @@ func runViewRole() error {
 	primaryProxy := pb.NewPrimaryStoreClientProxy(client.WithTarget(primaryTarget), client.WithNetwork(primaryNetwork), client.WithProtocol(primaryProtocol))
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
-	rebuildCheckInterval, maxViewFileBytes, err := storageViewRebuildSettings()
+	rebuildCheckInterval, maxViewFileBytes, rebuildMaxPending, rebuildIdleChecks, err := storageViewRebuildSettings()
 	if err != nil {
 		return err
 	}
 	reconcilerOptions := viewservice.ReconcilerOptions{
-		Metadata:         metadataProxy,
-		Primary:          primaryProxy,
-		OwnerID:          "storage-view",
-		Interval:         rebuildCheckInterval,
-		Grace:            time.Minute,
-		MaxViewFileBytes: maxViewFileBytes,
+		Metadata:          metadataProxy,
+		Primary:           primaryProxy,
+		OwnerID:           "storage-view",
+		Interval:          rebuildCheckInterval,
+		Grace:             time.Minute,
+		MaxViewFileBytes:  maxViewFileBytes,
+		RebuildMaxPending: rebuildMaxPending,
+		RebuildIdleChecks: rebuildIdleChecks,
 	}
 	// Bind the listeners before opening/validating historical indexes. View
 	// restoration can still take time on a large deployment; keeping the
@@ -430,28 +432,34 @@ func storageViewConsumerOptions() (viewservice.EventConsumerOptions, error) {
 	}, nil
 }
 
-func storageViewRebuildSettings() (time.Duration, int64, error) {
+func storageViewRebuildSettings() (time.Duration, int64, uint64, uint32, error) {
 	const defaultInterval = time.Minute
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
-		return defaultInterval, 1 << 30, nil
+		return defaultInterval, 1 << 30, 32, 3, nil
 	}
 	var runtimeConfig storageconfig.RuntimeConfig
 	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
 	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return 0, 0, fmt.Errorf("load storage view rebuild config: %w", err)
+		return 0, 0, 0, 0, fmt.Errorf("load storage view rebuild config: %w", err)
 	}
 	interval, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.RebuildCheckInterval))
 	if err != nil || interval <= 0 {
-		return 0, 0, fmt.Errorf("storage view rebuild_check_interval must be a positive duration")
+		return 0, 0, 0, 0, fmt.Errorf("storage view rebuild_check_interval must be a positive duration")
 	}
 	if interval < 30*time.Second {
-		return 0, 0, errors.New("storage view rebuild_check_interval must be at least 30s")
+		return 0, 0, 0, 0, errors.New("storage view rebuild_check_interval must be at least 30s")
 	}
 	if runtimeConfig.Storage.View.MaxViewFileBytes <= 0 {
-		return 0, 0, errors.New("storage view max_view_file_bytes must be positive")
+		return 0, 0, 0, 0, errors.New("storage view max_view_file_bytes must be positive")
 	}
-	return interval, runtimeConfig.Storage.View.MaxViewFileBytes, nil
+	if runtimeConfig.Storage.View.RebuildMaxPending == 0 {
+		return 0, 0, 0, 0, errors.New("storage view rebuild_max_pending must be positive")
+	}
+	if runtimeConfig.Storage.View.RebuildIdleChecks == 0 {
+		return 0, 0, 0, 0, errors.New("storage view rebuild_idle_checks must be positive")
+	}
+	return interval, runtimeConfig.Storage.View.MaxViewFileBytes, runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks, nil
 }
 
 func envOrDefault(name, fallback string) string {

@@ -18,7 +18,8 @@ import type {
   Subject,
   SubjectSymbol,
   View,
-  ViewColumn
+  ViewColumn,
+  ViewRebuildLog
 } from "./types";
 
 type RetRsp = { ret_info: RetInfo };
@@ -247,6 +248,10 @@ export async function upsertViewColumn(view_column: ViewColumn) {
 
 export function listViewColumns(params: { space_id: string; view_id: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { columns: ViewColumn[]; page_result: PageResult }>("ListViewColumns", params);
+}
+
+export function listViewRebuildLogs(params: { space_id: string; view_id: string; result?: number; page?: Page }) {
+  return callMetadata<typeof params, RetRsp & { logs: ViewRebuildLog[]; page_result: PageResult }>("ListViewRebuildLogs", params);
 }
 
 export function getDataNode(params: { node_id: string }) {

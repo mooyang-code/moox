@@ -261,6 +261,50 @@ func (s *Service) ListViews(ctx context.Context, req *pb.ListViewsReq) (*pb.List
 	return &pb.ListViewsRsp{RetInfo: retinfo.Success("success"), Views: items, PageResult: page}, nil
 }
 
+func (s *Service) ListViewRebuildLogs(ctx context.Context, req *pb.ListViewRebuildLogsReq) (*pb.ListViewRebuildLogsRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
+		return &pb.ListViewRebuildLogsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+	}
+	items, page, err := s.metadata.ListViewRebuildLogs(ctx, req.GetSpaceId(), req.GetViewId(), req.GetResult(), req.GetPage())
+	if err != nil {
+		return &pb.ListViewRebuildLogsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.ListViewRebuildLogsRsp{RetInfo: retinfo.Success("success"), Logs: items, PageResult: page}, nil
+}
+
+func (s *Service) CreateViewRebuildLog(ctx context.Context, req *pb.CreateViewRebuildLogReq) (*pb.CreateViewRebuildLogRsp, error) {
+	if req == nil || req.GetLog() == nil {
+		return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
+	}
+	item, err := s.metadata.CreateViewRebuildLog(ctx, req.GetLog())
+	if err != nil {
+		return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Success("success"), Log: item}, nil
+}
+
+func (s *Service) UpdateViewRebuildLog(ctx context.Context, req *pb.UpdateViewRebuildLogReq) (*pb.UpdateViewRebuildLogRsp, error) {
+	if req == nil || req.GetLog() == nil {
+		return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
+	}
+	item, err := s.metadata.UpdateViewRebuildLog(ctx, req.GetLog())
+	if err != nil {
+		return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Success("success"), Log: item}, nil
+}
+
+func (s *Service) UpsertSkippedViewRebuildLog(ctx context.Context, req *pb.UpsertSkippedViewRebuildLogReq) (*pb.UpsertSkippedViewRebuildLogRsp, error) {
+	if req == nil || req.GetLog() == nil {
+		return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
+	}
+	item, err := s.metadata.UpsertSkippedViewRebuildLog(ctx, req.GetLog())
+	if err != nil {
+		return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Success("success"), Log: item}, nil
+}
+
 func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumnReq) (*pb.UpsertViewColumnRsp, error) {
 	column := req.GetColumn()
 	if column == nil || column.GetSpaceId() == "" || column.GetViewId() == "" || column.GetColumnName() == "" {

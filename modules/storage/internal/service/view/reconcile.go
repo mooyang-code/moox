@@ -33,6 +33,13 @@ type MetadataClient interface {
 	FailViewIndexBuild(context.Context, *pb.FailViewIndexBuildReq, ...client.Option) (*pb.FailViewIndexBuildRsp, error)
 }
 
+type rebuildLogMetadataClient interface {
+	ListViewRebuildLogs(context.Context, *pb.ListViewRebuildLogsReq, ...client.Option) (*pb.ListViewRebuildLogsRsp, error)
+	CreateViewRebuildLog(context.Context, *pb.CreateViewRebuildLogReq, ...client.Option) (*pb.CreateViewRebuildLogRsp, error)
+	UpdateViewRebuildLog(context.Context, *pb.UpdateViewRebuildLogReq, ...client.Option) (*pb.UpdateViewRebuildLogRsp, error)
+	UpsertSkippedViewRebuildLog(context.Context, *pb.UpsertSkippedViewRebuildLogReq, ...client.Option) (*pb.UpsertSkippedViewRebuildLogRsp, error)
+}
+
 type FieldReader interface {
 	ReadFields(context.Context, *pb.PrimaryReadFieldsReq, ...client.Option) (*pb.PrimaryReadFieldsRsp, error)
 }
@@ -47,10 +54,17 @@ type ReconcilerOptions struct {
 	// finite-retention View. The rebuilt index contains only its keep window;
 	// SwitchView then removes the old DuckDB file after the grace period.
 	MaxViewFileBytes int64
+	// RebuildMaxPending and RebuildIdleChecks gate optional size-limit
+	// rebuilds. Necessary repairs bypass this capacity gate.
+	RebuildMaxPending uint64
+	RebuildIdleChecks uint32
 }
 
 const viewBackfillBatchSize = 10000
 const sizeLimitRebuildRetryInterval = 30 * time.Minute
+const defaultRebuildMaxPending uint64 = 32
+const defaultRebuildIdleChecks uint32 = 3
+const sizeLimitBuildBacklogThreshold = defaultRebuildMaxPending
 
 // viewColumnsExplicitAttr preserves the distinction between a view that
 // intentionally exposes no columns and a legacy view whose empty definition
@@ -116,6 +130,12 @@ func (s *Service) normalizeReconcilerOptions(opts ReconcilerOptions) (Reconciler
 	}
 	if opts.Interval <= 0 {
 		opts.Interval = 30 * time.Second
+	}
+	if opts.RebuildMaxPending == 0 {
+		opts.RebuildMaxPending = defaultRebuildMaxPending
+	}
+	if opts.RebuildIdleChecks == 0 {
+		opts.RebuildIdleChecks = defaultRebuildIdleChecks
 	}
 	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
 		s.mu.Lock()
@@ -193,6 +213,7 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts ReconcilerOptions
 					return fmt.Errorf("active view index %q is missing; refusing to start without a readable active view", activeID)
 				}
 				if err := validatePhysicalViewContract(view, stats); err != nil {
+					s.recordFailedRebuild(ctx, opts, auth, view, pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_INVALID, err, stats)
 					return err
 				}
 				if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
@@ -282,6 +303,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		return nil
 	}
 	var stats viewindex.ViewIndexStats
+	var activeInvalidErr error
 	if view.GetActiveIndexId() != "" {
 		engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
 		engine := s.engines[engineName]
@@ -295,19 +317,25 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		}
 		if stats.Exists {
 			if err := validatePhysicalViewContract(view, stats); err != nil {
-				return err
-			}
-			if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
-				return err
-			}
-			_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
-			s.cacheActiveIndexStats(runtime, view.GetActiveIndexId(), stats)
-			if runtime != nil {
-				runtime.mu.Lock()
-				primaryChanged := runtime.active == view.GetActiveIndexId() && runtime.activePrimaryDatasetID != "" && view.GetPrimaryDatasetId() != "" && runtime.activePrimaryDatasetID != view.GetPrimaryDatasetId()
-				runtime.mu.Unlock()
-				if primaryChanged {
-					return errPrimaryDatasetChangeUnsupported
+				// Keep the safety behavior (do not attach a stale physical
+				// index), but classify it as a necessary repair. If this is a
+				// live runtime we can build a replacement from the still-readable
+				// index; on startup RestoreActiveViews will fail closed and leave
+				// the actionable failed history row below.
+				activeInvalidErr = err
+			} else {
+				if err := s.AttachActiveViewWithGrace(ctx, view, opts.Grace); err != nil {
+					return err
+				}
+				_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
+				s.cacheActiveIndexStats(runtime, view.GetActiveIndexId(), stats)
+				if runtime != nil {
+					runtime.mu.Lock()
+					primaryChanged := runtime.active == view.GetActiveIndexId() && runtime.activePrimaryDatasetID != "" && view.GetPrimaryDatasetId() != "" && runtime.activePrimaryDatasetID != view.GetPrimaryDatasetId()
+					runtime.mu.Unlock()
+					if primaryChanged {
+						return errPrimaryDatasetChangeUnsupported
+					}
 				}
 			}
 		}
@@ -337,14 +365,68 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 				s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
 				return err
 			}
-			return s.activateViewBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns())
+			err := s.activateViewBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns())
+			if err == nil {
+				s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED, build.GetEntriesWritten(), nil)
+			}
+			return err
 		}
 	}
 	rebuildNeeded := needsSizeLimitRebuild(view, stats, opts)
-	sizeLimitOnly := needsSizeLimitWatermark(view, stats, opts)
+	if activeInvalidErr != nil {
+		rebuildNeeded = true
+	}
+	sizeLimitOnly := activeInvalidErr == nil && needsSizeLimitWatermark(view, stats, opts)
 	now := time.Now().UTC()
+	triggerReason := rebuildTriggerReason(view, stats, sizeLimitOnly)
+	if activeInvalidErr != nil {
+		triggerReason = pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_INVALID
+	}
+	if activeInvalidErr != nil {
+		// A stale/corrupt active file must never be exposed. If there is no
+		// already-attached runtime from which to backfill, fail closed and leave
+		// an audit row rather than activating an empty replacement.
+		s.mu.RLock()
+		runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
+		s.mu.RUnlock()
+		if runtime == nil {
+			s.recordFailedRebuild(ctx, opts, auth, view, triggerReason, activeInvalidErr, stats)
+			return activeInvalidErr
+		}
+	}
+	maxPending := opts.RebuildMaxPending
+	if maxPending == 0 {
+		maxPending = defaultRebuildMaxPending
+	}
+	idleChecks := opts.RebuildIdleChecks
+	if idleChecks == 0 {
+		idleChecks = defaultRebuildIdleChecks
+	}
+	var pending, ackPending uint64
+	if sizeLimitOnly {
+		pending, ackPending, _ = s.consumerBacklog(ctx)
+	}
 	if sizeLimitOnly && !s.sizeLimitBuildAllowed(view.GetSpaceId(), view.GetViewId(), now) {
+		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "cooldown", stats, stats.PhysicalBytes, pending, ackPending)
 		return nil
+	}
+	if sizeLimitOnly && !s.sizeLimitBuildIdleFor(ctx, viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}, maxPending, idleChecks) {
+		// A byte-watermark rebuild is optional while the durable consumer is
+		// catching up. Backfill competes with live A/B writes for the same
+		// DuckDB memory and I/O; starting it under backlog can turn one large
+		// system View into cross-Dataset head-of-line blocking.
+		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "consumer_not_idle", stats, stats.PhysicalBytes, pending, ackPending)
+		return nil
+	}
+	if sizeLimitOnly && !s.tryAcquireRebuild() {
+		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "another_rebuild_running", stats, stats.PhysicalBytes, pending, ackPending)
+		return nil
+	}
+	if sizeLimitOnly {
+		s.resetIdleChecks(viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()})
+	}
+	if sizeLimitOnly {
+		defer s.releaseRebuild()
 	}
 	// A failed size-limit rebuild must not be retried forever when the
 	// watermark is no longer exceeded. This is especially important for a
@@ -388,6 +470,10 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	if err := requireSuccess(claim.GetRetInfo()); err != nil {
 		return err
 	}
+	buildLog := s.createRunningRebuildLog(ctx, opts, auth, view, buildID, indexID, triggerReason, stats, stats.PhysicalBytes, pending, ackPending)
+	finishLog := func(result pb.ViewRebuildResult, entries uint64, cause error) {
+		s.finishRebuildLog(ctx, opts, auth, buildLog, result, entries, cause)
+	}
 	prepared, err := s.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
 		AuthInfo: auth, IndexId: indexID, Engine: schema.Engine,
 		Schema: &pb.ViewIndexSchema{
@@ -401,13 +487,16 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			prepareErr = requireSuccess(prepared.GetRetInfo())
 		}
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, fmt.Errorf("prepare view index: %w", prepareErr))
+		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, prepareErr)
 		return prepareErr
 	}
 	if err := s.TrackViewBuild(ctx, view.GetSpaceId(), view.GetViewId(), buildID, opts.OwnerID, opts.Metadata, auth); err != nil {
+		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
 		return err
 	}
 	if err := s.updateBuild(ctx, opts, auth, view, buildID, pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, 0); err != nil {
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
+		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
 		return err
 	}
 	if view.GetActiveIndexId() != "" && !stats.Exists {
@@ -417,6 +506,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		// silently incomplete index.
 		err := fmt.Errorf("active view index %q is missing and cannot be rebuilt without a range reader", view.GetActiveIndexId())
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
+		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
 		return err
 	}
 	if view.GetActiveIndexId() != "" && stats.Exists {
@@ -433,6 +523,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		}
 		if err := s.BackfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary); err != nil {
 			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
+			finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
 			return err
 		}
 	} else {
@@ -446,11 +537,83 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	err = s.catchUpAndActivateViewBuild(ctx, opts, auth, view, buildID, indexID, schema.Engine, schema.ViewVersion, schema.SchemaHash, columns, uint64(stats.EntryCount))
 	if err != nil {
 		var activation activationRetry
-		if !errors.As(err, &activation) {
-			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
+		if errors.As(err, &activation) {
+			// Activation retries are still part of the same running build. Do
+			// not turn a transient metadata/cache response into a failed log.
+			return err
 		}
+		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
+		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, uint64(stats.EntryCount), err)
+	} else {
+		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED, uint64(stats.EntryCount), nil)
 	}
 	return err
+}
+
+func (s *Service) sizeLimitBuildIdle(ctx context.Context) bool {
+	return s.sizeLimitBuildIdleFor(ctx, viewRef{}, sizeLimitBuildBacklogThreshold, 1)
+}
+
+func (s *Service) sizeLimitBuildIdleFor(ctx context.Context, ref viewRef, maxPending uint64, requiredChecks uint32) bool {
+	pending, ackPending, err := s.consumerBacklog(ctx)
+	if err != nil {
+		// Fail closed for optional capacity work. Schema/contract repairs do not
+		// use this gate and continue to reconcile normally.
+		s.resetIdleChecks(ref)
+		return false
+	}
+	if pending+ackPending > maxPending {
+		s.resetIdleChecks(ref)
+		return false
+	}
+	s.rebuildMu.Lock()
+	if s.idleChecks == nil {
+		s.idleChecks = make(map[viewRef]uint32)
+	}
+	s.idleChecks[ref]++
+	checks := s.idleChecks[ref]
+	s.rebuildMu.Unlock()
+	return checks >= requiredChecks
+}
+
+func (s *Service) consumerBacklog(ctx context.Context) (uint64, uint64, error) {
+	s.mu.RLock()
+	stateReader := s.consumerState
+	s.mu.RUnlock()
+	if stateReader == nil {
+		return 0, 0, errors.New("storage view consumer is not bound")
+	}
+	stateCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	state, err := stateReader(stateCtx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return state.NumPending, uint64(state.NumAckPending), nil
+}
+
+func (s *Service) resetIdleChecks(ref viewRef) {
+	s.rebuildMu.Lock()
+	if s.idleChecks != nil {
+		delete(s.idleChecks, ref)
+	}
+	s.rebuildMu.Unlock()
+}
+
+func (s *Service) tryAcquireRebuild() bool {
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+	if s.rebuildRunning {
+		return false
+	}
+	s.rebuildRunning = true
+	return true
+}
+
+func (s *Service) releaseRebuild() {
+	s.rebuildMu.Lock()
+	s.rebuildRunning = false
+	s.rebuildMu.Unlock()
 }
 
 func (s *Service) sizeLimitBuildAllowed(spaceID, viewID string, now time.Time) bool {
@@ -801,7 +964,9 @@ func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptio
 	if build == nil {
 		return nil
 	}
-	if s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), errors.New("discard interrupted view build")) {
+	cause := errors.New("discard interrupted view build")
+	if s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), cause) {
+		s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
 		return nil
 	}
 	current, err := s.readActiveView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId())
@@ -814,6 +979,7 @@ func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptio
 	if currentBuild := current.GetIndexBuild(); currentBuild != nil && currentBuild.GetBuildId() == build.GetBuildId() {
 		return fmt.Errorf("view build %q could not be durably discarded", build.GetBuildId())
 	}
+	s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
 	return nil
 }
 

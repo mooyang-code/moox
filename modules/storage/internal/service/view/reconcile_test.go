@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -120,6 +121,54 @@ func TestSizeLimitBuildCooldownPreventsImmediateRepeat(t *testing.T) {
 	if !s.sizeLimitBuildAllowed("s", "v", now.Add(sizeLimitRebuildRetryInterval)) {
 		t.Fatal("size-limit rebuild remained blocked after cooldown elapsed")
 	}
+}
+
+func TestSizeLimitBuildWaitsForConsumerToBecomeIdle(t *testing.T) {
+	s := &Service{}
+	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
+		return jetstream.ConsumerState{NumPending: sizeLimitBuildBacklogThreshold, NumAckPending: 1}, nil
+	}
+	if s.sizeLimitBuildIdle(context.Background()) {
+		t.Fatal("size-limit rebuild was allowed while the consumer had backlog")
+	}
+	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
+		return jetstream.ConsumerState{}, nil
+	}
+	if !s.sizeLimitBuildIdle(context.Background()) {
+		t.Fatal("size-limit rebuild remained blocked after the consumer became idle")
+	}
+	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
+		return jetstream.ConsumerState{NumPending: 1, NumAckPending: 1}, nil
+	}
+	if !s.sizeLimitBuildIdle(context.Background()) {
+		t.Fatal("one poison delivery permanently blocked all size-limit rebuilds")
+	}
+	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
+		return jetstream.ConsumerState{}, errors.New("eventbus unavailable")
+	}
+	if s.sizeLimitBuildIdle(context.Background()) {
+		t.Fatal("optional size-limit rebuild failed open when backlog state was unavailable")
+	}
+}
+
+func TestSizeLimitBuildRequiresConsecutiveIdleChecks(t *testing.T) {
+	s := &Service{}
+	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
+		return jetstream.ConsumerState{}, nil
+	}
+	ref := viewRef{spaceID: "space", viewID: "metrics"}
+	for i := uint32(1); i < defaultRebuildIdleChecks; i++ {
+		if s.sizeLimitBuildIdleFor(context.Background(), ref, defaultRebuildMaxPending, defaultRebuildIdleChecks) {
+			t.Fatalf("size-limit gate opened after %d idle checks", i)
+		}
+	}
+	if !s.sizeLimitBuildIdleFor(context.Background(), ref, defaultRebuildMaxPending, defaultRebuildIdleChecks) {
+		t.Fatal("size-limit gate did not open after consecutive idle checks")
+	}
+	if s.tryAcquireRebuild() == false || s.tryAcquireRebuild() == true {
+		t.Fatal("global rebuild permit did not serialize optional rebuilds")
+	}
+	s.releaseRebuild()
 }
 
 func TestFailedMaintenanceBuildStopsWhenWatermarkIsCleared(t *testing.T) {

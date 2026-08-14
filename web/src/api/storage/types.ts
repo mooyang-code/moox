@@ -295,6 +295,32 @@ export interface ViewIndexBuild {
   error?: string;
 }
 
+export interface ViewRebuildLog {
+  log_id: number | string;
+  space_id: string;
+  view_id: string;
+  build_id?: string;
+  index_id?: string;
+  trigger_reason: number | string;
+  result: number | string;
+  block_reason?: string;
+  target_view_revision?: number | string;
+  active_view_revision?: number | string;
+  physical_bytes?: number | string;
+  num_pending?: number | string;
+  num_ack_pending?: number | string;
+  entries_written?: number | string;
+  started_at?: string;
+  finished_at?: string;
+  first_checked_at?: string;
+  last_checked_at?: string;
+  skip_count?: number | string;
+  error_summary?: string;
+  details_json?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ViewColumn {
   space_id: string;
   view_id: string;

@@ -142,7 +142,7 @@ func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	return nil
 }
 
-const metadataSchemaVersion = "7"
+const metadataSchemaVersion = "8"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
@@ -172,6 +172,12 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	}
 	if err == nil && version == "6" {
 		if migrateErr := s.migrateV6ToV7(ctx); migrateErr != nil {
+			return migrateErr
+		}
+		version = "7"
+	}
+	if err == nil && version == "7" {
+		if migrateErr := s.migrateV7ToV8(ctx); migrateErr != nil {
 			return migrateErr
 		}
 		return nil
@@ -212,6 +218,36 @@ func (s *Store) migrateV6ToV7(ctx context.Context) error {
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("migrate metadata schema v6 to v7: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrateV7ToV8(ctx context.Context) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS t_view_rebuild_logs (
+			c_log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			c_space_id TEXT NOT NULL, c_view_id TEXT NOT NULL,
+			c_build_id TEXT NOT NULL DEFAULT '', c_index_id TEXT NOT NULL DEFAULT '',
+			c_trigger_reason INTEGER NOT NULL, c_result INTEGER NOT NULL,
+			c_block_reason TEXT NOT NULL DEFAULT '', c_target_view_revision INTEGER NOT NULL DEFAULT 0,
+			c_active_view_revision INTEGER NOT NULL DEFAULT 0, c_physical_bytes INTEGER NOT NULL DEFAULT 0,
+			c_num_pending INTEGER NOT NULL DEFAULT 0, c_num_ack_pending INTEGER NOT NULL DEFAULT 0,
+			c_entries_written INTEGER NOT NULL DEFAULT 0, c_started_at TEXT NOT NULL DEFAULT '',
+			c_finished_at TEXT NOT NULL DEFAULT '', c_first_checked_at TEXT NOT NULL DEFAULT '',
+			c_last_checked_at TEXT NOT NULL DEFAULT '', c_skip_count INTEGER NOT NULL DEFAULT 0,
+			c_error_summary TEXT NOT NULL DEFAULT '', c_details_json TEXT NOT NULL DEFAULT '{}',
+			c_created_at TEXT NOT NULL, c_updated_at TEXT NOT NULL,
+			FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views(c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
+			CHECK (c_result BETWEEN 1 AND 4), CHECK (c_trigger_reason BETWEEN 1 AND 8)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_t_view_rebuild_logs_view_time ON t_view_rebuild_logs (c_space_id, c_view_id, c_created_at DESC, c_log_id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_t_view_rebuild_logs_skip_key ON t_view_rebuild_logs (c_space_id, c_view_id, c_trigger_reason, c_result, c_block_reason)`,
+		`UPDATE t_schema_meta SET c_value = '8' WHERE c_key = 'schema_version'`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("migrate metadata schema v7 to v8: %w", err)
 		}
 	}
 	return nil

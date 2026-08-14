@@ -28,6 +28,7 @@
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
             </a-tag>
             <span>{{ buildTimeText }}</span>
+            <a-button type="text" size="mini" :loading="rebuildLogsLoading" @click="openRebuildLogs">日志</a-button>
             <slot name="status-extra" />
             <span v-if="activeView?.active_view_version">活跃版本 {{ activeView.active_view_version }}</span>
           </section>
@@ -331,6 +332,29 @@
       </div>
     </a-modal>
 
+    <a-modal v-model:visible="rebuildLogsVisible" title="视图构建日志" width="960px" :footer="false">
+      <a-spin :loading="rebuildLogsLoading">
+        <a-empty v-if="rebuildLogs.length === 0" description="暂无构建日志" />
+        <a-table v-else :data="rebuildLogs" :pagination="false" :bordered="{ cell: true }" size="small">
+          <template #columns>
+            <a-table-column title="时间" :width="180">
+              <template #cell="{ record }">{{ formatRebuildLogTime(record.finished_at || record.created_at || record.started_at) }}</template>
+            </a-table-column>
+            <a-table-column title="原因" :width="130">
+              <template #cell="{ record }">{{ rebuildReasonLabel(record.trigger_reason) }}</template>
+            </a-table-column>
+            <a-table-column title="结果" :width="100">
+              <template #cell="{ record }">{{ rebuildResultLabel(record.result) }}</template>
+            </a-table-column>
+            <a-table-column title="详情" :ellipsis="true" :tooltip="true">
+              <template #cell="{ record }">{{ rebuildLogDetail(record) }}</template>
+            </a-table-column>
+          </template>
+        </a-table>
+        <div v-if="rebuildLogsPage.has_more" class="rebuild-logs-more">仅展示最近 100 条</div>
+      </a-spin>
+    </a-modal>
+
     <KlineModal
       v-model:visible="klineVisible"
       v-model:limit="klineLimit"
@@ -346,7 +370,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { listDatasetColumns, listDatasets, listFactors, listFields, listViewColumns, listViews } from "@/api/storage/metadata";
+import { listDatasetColumns, listDatasets, listFactors, listFields, listViewColumns, listViewRebuildLogs, listViews } from "@/api/storage/metadata";
 import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
 import type {
   Dataset,
@@ -357,7 +381,8 @@ import type {
   RecordRow,
   TimeSeriesRow,
   View,
-  ViewColumn
+  ViewColumn,
+  ViewRebuildLog
 } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import {
@@ -470,6 +495,10 @@ const tableRows = ref<ViewBrowseTableRow[]>([]);
 const tableColumnNames = ref<string[]>([]);
 const detailRow = ref<ViewBrowseTableRow>();
 const detailVisible = ref(false);
+const rebuildLogsVisible = ref(false);
+const rebuildLogsLoading = ref(false);
+const rebuildLogs = ref<ViewRebuildLog[]>([]);
+const rebuildLogsPage = ref({ has_more: false });
 const recordKeyword = ref("");
 const filters = ref<ViewFilterState[]>([]);
 const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "", direction: "" });
@@ -579,6 +608,70 @@ const detailColumns = computed(() => {
 });
 const normalizedKlineLimit = computed(() => normalizeKlineLimit(klineLimit.value));
 
+const rebuildReasonLabels: Record<string, string> = {
+  "1": "首次构建",
+  "2": "定义变更",
+  "3": "活跃索引缺失",
+  "4": "活跃索引异常",
+  "5": "覆盖修复",
+  "6": "容量限制",
+  "7": "手动修复",
+  "8": "中断重试",
+  VIEW_REBUILD_TRIGGER_INITIAL_BUILD: "首次构建",
+  VIEW_REBUILD_TRIGGER_DEFINITION_CHANGE: "定义变更",
+  VIEW_REBUILD_TRIGGER_ACTIVE_MISSING: "活跃索引缺失",
+  VIEW_REBUILD_TRIGGER_ACTIVE_INVALID: "活跃索引异常",
+  VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR: "覆盖修复",
+  VIEW_REBUILD_TRIGGER_SIZE_LIMIT: "容量限制",
+  VIEW_REBUILD_TRIGGER_MANUAL_REPAIR: "手动修复",
+  VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY: "中断重试"
+};
+const rebuildResultLabels: Record<string, string> = {
+  "1": "进行中", "2": "成功", "3": "失败", "4": "已跳过",
+  VIEW_REBUILD_RESULT_RUNNING: "进行中",
+  VIEW_REBUILD_RESULT_SUCCEEDED: "成功",
+  VIEW_REBUILD_RESULT_FAILED: "失败",
+  VIEW_REBUILD_RESULT_SKIPPED: "已跳过"
+};
+function rebuildReasonLabel(value: number | string) {
+  return rebuildReasonLabels[String(value)] || "未知原因";
+}
+function rebuildResultLabel(value: number | string) {
+  return rebuildResultLabels[String(value)] || "未知";
+}
+function formatRebuildLogTime(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN");
+}
+function rebuildLogDetail(log: ViewRebuildLog) {
+  if (log.result === 4 || String(log.result) === "4" || log.result === "VIEW_REBUILD_RESULT_SKIPPED") {
+    return `${log.block_reason || "等待前置条件"}${Number(log.skip_count || 0) > 1 ? `（${log.skip_count} 次）` : ""}`;
+  }
+  if (log.error_summary) return log.error_summary;
+  return log.finished_at && log.started_at ? `写入 ${log.entries_written || 0} 条` : "构建中";
+}
+
+async function openRebuildLogs() {
+  const view = activeView.value;
+  const space_id = selectedSpaceId.value;
+  if (!view || !space_id) return;
+  rebuildLogsVisible.value = true;
+  rebuildLogsLoading.value = true;
+  rebuildLogs.value = [];
+  rebuildLogsPage.value = { has_more: false };
+  try {
+    const rsp = await listViewRebuildLogs({ space_id, view_id: view.view_id, page: { page: 1, size: 100 } });
+    rebuildLogs.value = rsp.logs || [];
+    rebuildLogsPage.value = rsp.page_result || { has_more: false };
+  } catch (error) {
+    rebuildLogs.value = [];
+    Message.error(error instanceof Error ? error.message : "加载构建日志失败");
+  } finally {
+    rebuildLogsLoading.value = false;
+  }
+}
+
 async function loadMeta() {
   const space_id = selectedSpaceId.value;
   if (!space_id) return;
@@ -676,6 +769,8 @@ function clearViewState() {
   hasQueried.value = false;
   previewHasMore.value = false;
   pagination.current = 1;
+  rebuildLogsVisible.value = false;
+  rebuildLogs.value = [];
 }
 
 async function loadViewContext() {

@@ -78,6 +78,7 @@ func TestStorageBFFMethodRouteMapsPublicMethodsAndRejectsInternalMethods(t *test
 		{method: "RegisterDataSubject", service: "storage-primary", allowed: true},
 		{method: "GetDataNode", service: "storage-primary", allowed: true},
 		{method: "ListDataNodes", service: "storage-primary", allowed: true},
+		{method: "ListViewRebuildLogs", service: "storage-primary", allowed: true},
 		{method: "UpdateDataNode", service: "storage-primary", allowed: true},
 		{method: "DeleteDataNode", service: "storage-primary", allowed: true},
 		{method: "CheckDatasetActivation", service: "storage-primary", allowed: true},

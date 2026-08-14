@@ -49,6 +49,14 @@ type MetadataService interface {
 	ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq) (*ActivateViewIndexRsp, error)
 	// FailViewIndexBuild 记录 View 索引构建失败。
 	FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq) (*FailViewIndexBuildRsp, error)
+	// ListViewRebuildLogs 查询 View 索引构建历史。
+	ListViewRebuildLogs(ctx context.Context, req *ListViewRebuildLogsReq) (*ListViewRebuildLogsRsp, error)
+	// CreateViewRebuildLog 写入 View 索引构建历史。
+	CreateViewRebuildLog(ctx context.Context, req *CreateViewRebuildLogReq) (*CreateViewRebuildLogRsp, error)
+
+	UpdateViewRebuildLog(ctx context.Context, req *UpdateViewRebuildLogReq) (*UpdateViewRebuildLogRsp, error)
+
+	UpsertSkippedViewRebuildLog(ctx context.Context, req *UpsertSkippedViewRebuildLogReq) (*UpsertSkippedViewRebuildLogRsp, error)
 
 	UpsertViewPeriodDatasetState(ctx context.Context, req *UpsertViewPeriodDatasetStateReq) (*UpsertViewPeriodDatasetStateRsp, error)
 
@@ -413,6 +421,78 @@ func MetadataService_FailViewIndexBuild_Handler(svr interface{}, ctx context.Con
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).FailViewIndexBuild(ctx, reqbody.(*FailViewIndexBuildReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_ListViewRebuildLogs_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListViewRebuildLogsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).ListViewRebuildLogs(ctx, reqbody.(*ListViewRebuildLogsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_CreateViewRebuildLog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateViewRebuildLogReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).CreateViewRebuildLog(ctx, reqbody.(*CreateViewRebuildLogReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_UpdateViewRebuildLog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateViewRebuildLogReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).UpdateViewRebuildLog(ctx, reqbody.(*UpdateViewRebuildLogReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_UpsertSkippedViewRebuildLog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertSkippedViewRebuildLogReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).UpsertSkippedViewRebuildLog(ctx, reqbody.(*UpsertSkippedViewRebuildLogReq))
 	}
 
 	var rsp interface{}
@@ -1407,6 +1487,22 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_FailViewIndexBuild_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/ListViewRebuildLogs",
+			Func: MetadataService_ListViewRebuildLogs_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/CreateViewRebuildLog",
+			Func: MetadataService_CreateViewRebuildLog_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/UpdateViewRebuildLog",
+			Func: MetadataService_UpdateViewRebuildLog_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.Metadata/UpsertSkippedViewRebuildLog",
+			Func: MetadataService_UpsertSkippedViewRebuildLog_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/UpsertViewPeriodDatasetState",
 			Func: MetadataService_UpsertViewPeriodDatasetState_Handler,
 		},
@@ -1698,6 +1794,22 @@ func (s *UnimplementedMetadata) ActivateViewIndex(ctx context.Context, req *Acti
 func (s *UnimplementedMetadata) FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq) (*FailViewIndexBuildRsp, error) {
 	return nil, errors.New("rpc FailViewIndexBuild of service Metadata is not implemented")
 }
+
+// ListViewRebuildLogs 查询 View 索引构建历史。
+func (s *UnimplementedMetadata) ListViewRebuildLogs(ctx context.Context, req *ListViewRebuildLogsReq) (*ListViewRebuildLogsRsp, error) {
+	return nil, errors.New("rpc ListViewRebuildLogs of service Metadata is not implemented")
+}
+
+// CreateViewRebuildLog 写入 View 索引构建历史。
+func (s *UnimplementedMetadata) CreateViewRebuildLog(ctx context.Context, req *CreateViewRebuildLogReq) (*CreateViewRebuildLogRsp, error) {
+	return nil, errors.New("rpc CreateViewRebuildLog of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) UpdateViewRebuildLog(ctx context.Context, req *UpdateViewRebuildLogReq) (*UpdateViewRebuildLogRsp, error) {
+	return nil, errors.New("rpc UpdateViewRebuildLog of service Metadata is not implemented")
+}
+func (s *UnimplementedMetadata) UpsertSkippedViewRebuildLog(ctx context.Context, req *UpsertSkippedViewRebuildLogReq) (*UpsertSkippedViewRebuildLogRsp, error) {
+	return nil, errors.New("rpc UpsertSkippedViewRebuildLog of service Metadata is not implemented")
+}
 func (s *UnimplementedMetadata) UpsertViewPeriodDatasetState(ctx context.Context, req *UpsertViewPeriodDatasetStateReq) (*UpsertViewPeriodDatasetStateRsp, error) {
 	return nil, errors.New("rpc UpsertViewPeriodDatasetState of service Metadata is not implemented")
 }
@@ -1986,6 +2098,14 @@ type MetadataClientProxy interface {
 	ActivateViewIndex(ctx context.Context, req *ActivateViewIndexReq, opts ...client.Option) (rsp *ActivateViewIndexRsp, err error)
 	// FailViewIndexBuild 记录 View 索引构建失败。
 	FailViewIndexBuild(ctx context.Context, req *FailViewIndexBuildReq, opts ...client.Option) (rsp *FailViewIndexBuildRsp, err error)
+	// ListViewRebuildLogs 查询 View 索引构建历史。
+	ListViewRebuildLogs(ctx context.Context, req *ListViewRebuildLogsReq, opts ...client.Option) (rsp *ListViewRebuildLogsRsp, err error)
+	// CreateViewRebuildLog 写入 View 索引构建历史。
+	CreateViewRebuildLog(ctx context.Context, req *CreateViewRebuildLogReq, opts ...client.Option) (rsp *CreateViewRebuildLogRsp, err error)
+
+	UpdateViewRebuildLog(ctx context.Context, req *UpdateViewRebuildLogReq, opts ...client.Option) (rsp *UpdateViewRebuildLogRsp, err error)
+
+	UpsertSkippedViewRebuildLog(ctx context.Context, req *UpsertSkippedViewRebuildLogReq, opts ...client.Option) (rsp *UpsertSkippedViewRebuildLogRsp, err error)
 
 	UpsertViewPeriodDatasetState(ctx context.Context, req *UpsertViewPeriodDatasetStateReq, opts ...client.Option) (rsp *UpsertViewPeriodDatasetStateRsp, err error)
 
@@ -2393,6 +2513,86 @@ func (c *MetadataClientProxyImpl) FailViewIndexBuild(ctx context.Context, req *F
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &FailViewIndexBuildRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) ListViewRebuildLogs(ctx context.Context, req *ListViewRebuildLogsReq, opts ...client.Option) (*ListViewRebuildLogsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListViewRebuildLogs")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("ListViewRebuildLogs")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListViewRebuildLogsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) CreateViewRebuildLog(ctx context.Context, req *CreateViewRebuildLogReq, opts ...client.Option) (*CreateViewRebuildLogRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/CreateViewRebuildLog")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("CreateViewRebuildLog")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CreateViewRebuildLogRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) UpdateViewRebuildLog(ctx context.Context, req *UpdateViewRebuildLogReq, opts ...client.Option) (*UpdateViewRebuildLogRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpdateViewRebuildLog")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("UpdateViewRebuildLog")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateViewRebuildLogRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) UpsertSkippedViewRebuildLog(ctx context.Context, req *UpsertSkippedViewRebuildLogReq, opts ...client.Option) (*UpsertSkippedViewRebuildLogRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/UpsertSkippedViewRebuildLog")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("UpsertSkippedViewRebuildLog")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpsertSkippedViewRebuildLogRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

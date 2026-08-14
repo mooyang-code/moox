@@ -1607,6 +1607,96 @@ message RecordViewSyncPointRsp {
   ViewSyncPoint sync_point = 2;
 }
 
+enum ViewRebuildTriggerReason {
+  VIEW_REBUILD_TRIGGER_UNSPECIFIED = 0;
+  VIEW_REBUILD_TRIGGER_INITIAL_BUILD = 1;
+  VIEW_REBUILD_TRIGGER_DEFINITION_CHANGE = 2;
+  VIEW_REBUILD_TRIGGER_ACTIVE_MISSING = 3;
+  VIEW_REBUILD_TRIGGER_ACTIVE_INVALID = 4;
+  VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR = 5;
+  VIEW_REBUILD_TRIGGER_SIZE_LIMIT = 6;
+  VIEW_REBUILD_TRIGGER_MANUAL_REPAIR = 7;
+  VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY = 8;
+}
+
+enum ViewRebuildResult {
+  VIEW_REBUILD_RESULT_UNSPECIFIED = 0;
+  VIEW_REBUILD_RESULT_RUNNING = 1;
+  VIEW_REBUILD_RESULT_SUCCEEDED = 2;
+  VIEW_REBUILD_RESULT_FAILED = 3;
+  VIEW_REBUILD_RESULT_SKIPPED = 4;
+}
+
+message ViewRebuildLog {
+  int64 log_id = 1;
+  string space_id = 2;
+  string view_id = 3;
+  string build_id = 4;
+  string index_id = 5;
+  ViewRebuildTriggerReason trigger_reason = 6;
+  ViewRebuildResult result = 7;
+  string block_reason = 8;
+  uint64 target_view_revision = 9;
+  uint64 active_view_revision = 10;
+  uint64 physical_bytes = 11;
+  uint64 num_pending = 12;
+  uint64 num_ack_pending = 13;
+  uint64 entries_written = 14;
+  string started_at = 15;
+  string finished_at = 16;
+  string first_checked_at = 17;
+  string last_checked_at = 18;
+  uint64 skip_count = 19;
+  string error_summary = 20;
+  string details_json = 21;
+  string created_at = 22;
+  string updated_at = 23;
+}
+
+message ListViewRebuildLogsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  ViewRebuildResult result = 4;
+  common.Page page = 5;
+}
+
+message CreateViewRebuildLogReq {
+  common.AuthInfo auth_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message CreateViewRebuildLogRsp {
+  common.RetInfo ret_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message UpdateViewRebuildLogReq {
+  common.AuthInfo auth_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message UpdateViewRebuildLogRsp {
+  common.RetInfo ret_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message UpsertSkippedViewRebuildLogReq {
+  common.AuthInfo auth_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message UpsertSkippedViewRebuildLogRsp {
+  common.RetInfo ret_info = 1;
+  ViewRebuildLog log = 2;
+}
+
+message ListViewRebuildLogsRsp {
+  common.RetInfo ret_info = 1;
+  repeated ViewRebuildLog logs = 2;
+  common.PageResult page_result = 3;
+}
+
 // Metadata 管理量化存储系统的核心元数据。
 service Metadata {
   // 创建使用空间。
@@ -1640,6 +1730,12 @@ service Metadata {
   rpc ActivateViewIndex(ActivateViewIndexReq) returns (ActivateViewIndexRsp);
   // 记录 View 索引构建失败。
   rpc FailViewIndexBuild(FailViewIndexBuildReq) returns (FailViewIndexBuildRsp);
+  // 查询 View 索引构建历史。
+  rpc ListViewRebuildLogs(ListViewRebuildLogsReq) returns (ListViewRebuildLogsRsp);
+  // 写入 View 索引构建历史。
+  rpc CreateViewRebuildLog(CreateViewRebuildLogReq) returns (CreateViewRebuildLogRsp);
+  rpc UpdateViewRebuildLog(UpdateViewRebuildLogReq) returns (UpdateViewRebuildLogRsp);
+  rpc UpsertSkippedViewRebuildLog(UpsertSkippedViewRebuildLogReq) returns (UpsertSkippedViewRebuildLogRsp);
   rpc UpsertViewPeriodDatasetState(UpsertViewPeriodDatasetStateReq) returns (UpsertViewPeriodDatasetStateRsp);
   rpc ListViewPeriodDatasetStates(ListViewPeriodDatasetStatesReq) returns (ListViewPeriodDatasetStatesRsp);
   rpc RecordViewSyncPoint(RecordViewSyncPointReq) returns (RecordViewSyncPointRsp);

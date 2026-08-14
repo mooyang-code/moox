@@ -105,6 +105,13 @@ type Reader interface {
 	ListArchiveFiles(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error)
 }
 
+// ViewRebuildLogReader is intentionally separate from Reader so the hot-path
+// metadata snapshot/cache implementations do not have to model an append-only
+// operational history stream.
+type ViewRebuildLogReader interface {
+	ListViewRebuildLogs(ctx context.Context, spaceID string, viewID string, result pb.ViewRebuildResult, page *pb.Page) ([]*pb.ViewRebuildLog, *pb.PageResult, error)
+}
+
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
 	UpsertSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
@@ -116,6 +123,9 @@ type Writer interface {
 	UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewIndexBuildReq) (*pb.ViewIndexBuild, error)
 	ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq) (*pb.View, error)
 	FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.ViewIndexBuild, error)
+	CreateViewRebuildLog(ctx context.Context, item *pb.ViewRebuildLog) (*pb.ViewRebuildLog, error)
+	UpdateViewRebuildLog(ctx context.Context, item *pb.ViewRebuildLog) (*pb.ViewRebuildLog, error)
+	UpsertSkippedViewRebuildLog(ctx context.Context, item *pb.ViewRebuildLog) (*pb.ViewRebuildLog, error)
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
 	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
@@ -158,6 +168,7 @@ type Store interface {
 	InitSchema(ctx context.Context) error
 	TableNames(ctx context.Context) ([]string, error)
 	Reader
+	ViewRebuildLogReader
 	Writer
 	ViewPeriodStateStore
 }

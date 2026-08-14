@@ -11,6 +11,7 @@ import {
   getDataNode,
   listDataNodes,
   listDatasets,
+  listViewRebuildLogs,
   rebindDatasetDataNode,
   updateDataNode
 } from "./metadata";
@@ -96,6 +97,15 @@ describe("Storage metadata DataNode APIs", () => {
       dataset_id: "dataset-a",
       data_node_id: "node-b",
       expected_revision: 8
+    });
+  });
+
+  it("loads View rebuild history on demand", async () => {
+    await listViewRebuildLogs({ space_id: "space-a", view_id: "view-a", page: { page: 1, size: 100 } });
+    expect(mocks.callStorage).toHaveBeenLastCalledWith("ListViewRebuildLogs", {
+      space_id: "space-a",
+      view_id: "view-a",
+      page: { page: 1, size: 100 }
     });
   });
 });

@@ -182,7 +182,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 		!reflect.DeepEqual(deleteSpaceRoute.GatewayCallers, []string{"admin-gateway", "moox-cli"}) {
 		t.Fatalf("DeleteSpace gateway route = %+v", deleteSpaceRoute)
 	}
-	if metadataRoute == nil || metadataRoute.Port != 20100 || !reflect.DeepEqual(metadataRoute.GatewayMethods, []string{"ClaimViewIndexBuild", "UpdateViewIndexBuild", "ActivateViewIndex", "FailViewIndexBuild"}) || !reflect.DeepEqual(metadataRoute.GatewayCallers, []string{"storage-view"}) {
+	if metadataRoute == nil || metadataRoute.Port != 20100 || !reflect.DeepEqual(metadataRoute.GatewayMethods, []string{"ClaimViewIndexBuild", "UpdateViewIndexBuild", "ActivateViewIndex", "FailViewIndexBuild", "CreateViewRebuildLog", "UpdateViewRebuildLog", "UpsertSkippedViewRebuildLog"}) || !reflect.DeepEqual(metadataRoute.GatewayCallers, []string{"storage-view"}) {
 		t.Fatalf("storage-view metadata gateway route = %+v", metadataRoute)
 	}
 	if primaryRoute == nil || primaryRoute.Port != 20102 {
