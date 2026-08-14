@@ -50,6 +50,10 @@ func (s *Service) finishRunningRebuildLog(ctx context.Context, opts ReconcilerOp
 				err = fmt.Errorf("list rebuild logs: %s", rsp.GetRetInfo().GetMsg())
 			}
 			log.Printf("storage view rebuild log lookup failed for %s/%s: %v", view.GetSpaceId(), view.GetViewId(), err)
+			s.queueRebuildLogRetry(pendingRebuildLog{
+				opts: opts, auth: auth, view: proto.Clone(view).(*pb.View), buildID: buildID,
+				result: result, entries: entries, cause: cause,
+			})
 			return found, false, false
 		}
 		for _, item := range rsp.GetLogs() {
@@ -68,6 +72,8 @@ func (s *Service) finishRunningRebuildLog(ctx context.Context, opts ReconcilerOp
 	return found, updated, true
 }
 
+const maxRebuildLogRetries = 256
+
 func rebuildLogRetryKey(item *pb.ViewRebuildLog) string {
 	if item == nil {
 		return ""
@@ -75,8 +81,18 @@ func rebuildLogRetryKey(item *pb.ViewRebuildLog) string {
 	return fmt.Sprintf("%s\x00%s\x00%s\x00%d", item.GetSpaceId(), item.GetViewId(), item.GetBuildId(), item.GetLogId())
 }
 
+func rebuildLogLookupRetryKey(view *pb.View, buildID string, result pb.ViewRebuildResult) string {
+	if view == nil || strings.TrimSpace(buildID) == "" {
+		return ""
+	}
+	return fmt.Sprintf("lookup\x00%s\x00%s\x00%s\x00%d", view.GetSpaceId(), view.GetViewId(), buildID, result)
+}
+
 func (s *Service) queueRebuildLogRetry(entry pendingRebuildLog) {
 	key := rebuildLogRetryKey(entry.item)
+	if key == "" {
+		key = rebuildLogLookupRetryKey(entry.view, entry.buildID, entry.result)
+	}
 	if key == "" {
 		return
 	}
@@ -84,20 +100,47 @@ func (s *Service) queueRebuildLogRetry(entry pendingRebuildLog) {
 	if s.rebuildLogRetry == nil {
 		s.rebuildLogRetry = make(map[string]pendingRebuildLog)
 	}
+	if _, exists := s.rebuildLogRetry[key]; !exists && len(s.rebuildLogRetry) >= maxRebuildLogRetries {
+		s.rebuildMu.Unlock()
+		log.Printf("storage view rebuild audit retry queue is full; dropping %s", key)
+		return
+	}
 	s.rebuildLogRetry[key] = entry
 	s.rebuildMu.Unlock()
 }
 
 func (s *Service) drainRebuildLogRetries(ctx context.Context) {
 	s.rebuildMu.Lock()
-	pending := make([]pendingRebuildLog, 0, len(s.rebuildLogRetry))
+	pending := make([]pendingRebuildLog, 0, 4)
 	for _, entry := range s.rebuildLogRetry {
 		pending = append(pending, entry)
+		if len(pending) == cap(pending) {
+			break
+		}
 	}
 	s.rebuildMu.Unlock()
+	retryCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
 	for _, entry := range pending {
-		if s.finishRebuildLog(ctx, entry.opts, entry.auth, entry.item, entry.result, entry.entries, entry.cause) {
-			key := rebuildLogRetryKey(entry.item)
+		key := rebuildLogRetryKey(entry.item)
+		if entry.item == nil {
+			found, updated, lookupOK := s.finishRunningRebuildLog(retryCtx, entry.opts, entry.auth, entry.view, entry.buildID, entry.result, entry.entries, entry.cause)
+			key = rebuildLogLookupRetryKey(entry.view, entry.buildID, entry.result)
+			if !lookupOK {
+				continue
+			}
+			if found && !updated {
+				// The concrete log update was re-queued by finishRunningRebuildLog;
+				// remove this lookup placeholder to avoid duplicate retries.
+				s.rebuildMu.Lock()
+				delete(s.rebuildLogRetry, key)
+				s.rebuildMu.Unlock()
+				continue
+			}
+		} else if !s.finishRebuildLog(retryCtx, entry.opts, entry.auth, entry.item, entry.result, entry.entries, entry.cause) {
+			continue
+		}
+		if key != "" {
 			s.rebuildMu.Lock()
 			delete(s.rebuildLogRetry, key)
 			s.rebuildMu.Unlock()
@@ -223,6 +266,9 @@ func (s *Service) finishRebuildLog(ctx context.Context, opts ReconcilerOptions, 
 		if err == nil && rsp != nil {
 			err = fmt.Errorf("update rebuild log: %s", rsp.GetRetInfo().GetMsg())
 		}
+		if s.rebuildLogAlreadyTerminal(ctx, opts, auth, item, result, entries) {
+			return true
+		}
 		log.Printf("storage view rebuild log update failed for %s/%s: %v", item.GetSpaceId(), item.GetViewId(), err)
 		s.queueRebuildLogRetry(pendingRebuildLog{opts: opts, auth: auth, item: item, result: result, entries: entries, cause: cause})
 		return false
@@ -232,6 +278,28 @@ func (s *Service) finishRebuildLog(ctx context.Context, opts ReconcilerOptions, 
 	delete(s.rebuildLogRetry, key)
 	s.rebuildMu.Unlock()
 	return true
+}
+
+func (s *Service) rebuildLogAlreadyTerminal(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog, result pb.ViewRebuildResult, entries uint64) bool {
+	client, ok := opts.Metadata.(rebuildLogMetadataClient)
+	if !ok || item == nil || item.GetLogId() == 0 {
+		return false
+	}
+	readCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	rsp, err := client.ListViewRebuildLogs(readCtx, &pb.ListViewRebuildLogsReq{
+		AuthInfo: auth, SpaceId: item.GetSpaceId(), ViewId: item.GetViewId(),
+		Page: &pb.Page{Page: 1, Size: 100},
+	})
+	if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return false
+	}
+	for _, candidate := range rsp.GetLogs() {
+		if candidate != nil && candidate.GetLogId() == item.GetLogId() && candidate.GetResult() == result && candidate.GetEntriesWritten() == entries {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) recordSkippedRebuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, reason pb.ViewRebuildTriggerReason, blockReason string, stats viewindex.ViewIndexStats, physicalBytes, pending, ackPending uint64) {
