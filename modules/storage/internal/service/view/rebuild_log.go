@@ -171,6 +171,9 @@ func (s *Service) createRebuildLogFallback(ctx context.Context, opts ReconcilerO
 	if !ok || item == nil {
 		return false
 	}
+	if s.rebuildLogExists(ctx, opts, auth, item) {
+		return true
+	}
 	rsp, err := client.CreateViewRebuildLog(ctx, &pb.CreateViewRebuildLogReq{AuthInfo: auth, Log: item})
 	if err == nil && rsp != nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
 		return true
@@ -180,6 +183,32 @@ func (s *Service) createRebuildLogFallback(ctx context.Context, opts ReconcilerO
 	}
 	log.Printf("storage view rebuild fallback log failed for %s/%s: %v", item.GetSpaceId(), item.GetViewId(), err)
 	return false
+}
+
+func (s *Service) rebuildLogExists(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog) bool {
+	client, ok := opts.Metadata.(rebuildLogMetadataClient)
+	if !ok || item == nil {
+		return false
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	for page := uint32(1); ; page++ {
+		rsp, err := client.ListViewRebuildLogs(checkCtx, &pb.ListViewRebuildLogsReq{
+			AuthInfo: auth, SpaceId: item.GetSpaceId(), ViewId: item.GetViewId(),
+			Page: &pb.Page{Page: page, Size: 1000},
+		})
+		if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return false
+		}
+		for _, candidate := range rsp.GetLogs() {
+			if candidate != nil && candidate.GetBuildId() == item.GetBuildId() && candidate.GetResult() == item.GetResult() {
+				return true
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetLogs()) == 0 {
+			return false
+		}
+	}
 }
 
 func rebuildErrorSummary(cause error) string {
@@ -313,12 +342,12 @@ func (s *Service) rebuildLogAlreadyTerminal(ctx context.Context, opts Reconciler
 	if !ok || item == nil || item.GetLogId() == 0 {
 		return false
 	}
-	readCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	readCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
 	for page := uint32(1); ; page++ {
 		rsp, err := client.ListViewRebuildLogs(readCtx, &pb.ListViewRebuildLogsReq{
 			AuthInfo: auth, SpaceId: item.GetSpaceId(), ViewId: item.GetViewId(),
-			Page: &pb.Page{Page: page, Size: 100},
+			Result: result, Page: &pb.Page{Page: page, Size: 1000},
 		})
 		if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			return false
