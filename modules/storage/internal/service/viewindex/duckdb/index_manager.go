@@ -665,9 +665,11 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		stats.IndexedTo = canonicalCoverageTime(to.Time)
 	}
 	if stats.IndexedFrom != "" || stats.IndexedTo != "" {
-		if err := persistCoverageBounds(ctx, db, stats.IndexedFrom, stats.IndexedTo); err != nil {
+		mergedFrom, mergedTo, err := persistCoverageBounds(ctx, db, stats.IndexedFrom, stats.IndexedTo)
+		if err != nil {
 			return viewindex.ViewIndexStats{}, err
 		}
+		stats.IndexedFrom, stats.IndexedTo = mergedFrom, mergedTo
 	}
 	stats.Exists = true
 	stats.PhysicalBytes = uint64(fileInfo.Size())
@@ -677,21 +679,26 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 	return stats, nil
 }
 
-func persistCoverageBounds(ctx context.Context, db *sql.DB, from, to string) error {
+func persistCoverageBounds(ctx context.Context, db *sql.DB, from, to string) (string, string, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var currentFrom, currentTo string
 	if err := tx.QueryRowContext(ctx, `SELECT indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&currentFrom, &currentTo); err != nil {
-		return err
+		return "", "", err
 	}
 	mergedFrom, mergedTo := mergeCoverageBounds(currentFrom, currentTo, from, to)
-	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ?, indexed_to = ? WHERE singleton = 1`, mergedFrom, mergedTo); err != nil {
-		return err
+	if mergedFrom != canonicalizeCoverageTime(currentFrom) || mergedTo != canonicalizeCoverageTime(currentTo) {
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ?, indexed_to = ? WHERE singleton = 1`, mergedFrom, mergedTo); err != nil {
+			return "", "", err
+		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", "", err
+	}
+	return mergedFrom, mergedTo, nil
 }
 
 func mergeCoverageBounds(currentFrom, currentTo, observedFrom, observedTo string) (string, string) {
