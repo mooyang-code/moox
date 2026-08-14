@@ -359,6 +359,9 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			found, updated, lookupOK := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
 			if !lookupOK || (found && !updated) {
 				log.Printf("storage view rebuild failure history will be retried for %s/%s/%s", view.GetSpaceId(), view.GetViewId(), build.GetBuildId())
+				if !lookupOK {
+					s.attachRebuildLogFallback(view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, interruptedRebuildFailureItem(view, build, cause))
+				}
 			}
 			if lookupOK && !found {
 				// A failure can be persisted after the original RUNNING log RPC
@@ -1006,6 +1009,9 @@ func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptio
 		found, updated, lookupOK := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
 		if !lookupOK || (found && !updated) {
 			log.Printf("storage view interrupted failure history will be retried for %s/%s/%s", view.GetSpaceId(), view.GetViewId(), build.GetBuildId())
+			if !lookupOK {
+				s.attachRebuildLogFallback(view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, interruptedRebuildFailureItem(view, build, cause))
+			}
 		}
 		if lookupOK && !found {
 			s.recordInterruptedRebuildFailure(ctx, opts, auth, view, build, cause)
@@ -1025,6 +1031,9 @@ func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptio
 	found, updated, lookupOK := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
 	if !lookupOK || (found && !updated) {
 		log.Printf("storage view interrupted failure history will be retried for %s/%s/%s", view.GetSpaceId(), view.GetViewId(), build.GetBuildId())
+		if !lookupOK {
+			s.attachRebuildLogFallback(view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, interruptedRebuildFailureItem(view, build, cause))
+		}
 	}
 	if lookupOK && !found {
 		s.recordInterruptedRebuildFailure(ctx, opts, auth, view, build, cause)

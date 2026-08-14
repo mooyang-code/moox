@@ -54,14 +54,15 @@ type Service struct {
 }
 
 type pendingRebuildLog struct {
-	opts    ReconcilerOptions
-	auth    *pb.AuthInfo
-	item    *pb.ViewRebuildLog
-	view    *pb.View
-	buildID string
-	result  pb.ViewRebuildResult
-	entries uint64
-	cause   error
+	opts     ReconcilerOptions
+	auth     *pb.AuthInfo
+	item     *pb.ViewRebuildLog
+	view     *pb.View
+	buildID  string
+	result   pb.ViewRebuildResult
+	entries  uint64
+	cause    error
+	fallback *pb.ViewRebuildLog
 }
 
 type datasetRef struct{ spaceID, datasetID string }

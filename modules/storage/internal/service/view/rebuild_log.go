@@ -109,6 +109,19 @@ func (s *Service) queueRebuildLogRetry(entry pendingRebuildLog) {
 	s.rebuildMu.Unlock()
 }
 
+func (s *Service) attachRebuildLogFallback(view *pb.View, buildID string, result pb.ViewRebuildResult, fallback *pb.ViewRebuildLog) {
+	key := rebuildLogLookupRetryKey(view, buildID, result)
+	if key == "" || fallback == nil {
+		return
+	}
+	s.rebuildMu.Lock()
+	if entry, ok := s.rebuildLogRetry[key]; ok {
+		entry.fallback = fallback
+		s.rebuildLogRetry[key] = entry
+	}
+	s.rebuildMu.Unlock()
+}
+
 func (s *Service) drainRebuildLogRetries(ctx context.Context) {
 	s.rebuildMu.Lock()
 	pending := make([]pendingRebuildLog, 0, 4)
@@ -137,6 +150,11 @@ func (s *Service) drainRebuildLogRetries(ctx context.Context) {
 				s.rebuildMu.Unlock()
 				continue
 			}
+			if !found && entry.fallback != nil {
+				if !s.createRebuildLogFallback(retryCtx, entry.opts, entry.auth, entry.fallback) {
+					continue
+				}
+			}
 		} else if !s.finishRebuildLog(retryCtx, entry.opts, entry.auth, entry.item, entry.result, entry.entries, entry.cause) {
 			continue
 		}
@@ -146,6 +164,22 @@ func (s *Service) drainRebuildLogRetries(ctx context.Context) {
 			s.rebuildMu.Unlock()
 		}
 	}
+}
+
+func (s *Service) createRebuildLogFallback(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog) bool {
+	client, ok := opts.Metadata.(rebuildLogMetadataClient)
+	if !ok || item == nil {
+		return false
+	}
+	rsp, err := client.CreateViewRebuildLog(ctx, &pb.CreateViewRebuildLogReq{AuthInfo: auth, Log: item})
+	if err == nil && rsp != nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
+		return true
+	}
+	if err == nil && rsp != nil {
+		err = fmt.Errorf("create rebuild log: %s", rsp.GetRetInfo().GetMsg())
+	}
+	log.Printf("storage view rebuild fallback log failed for %s/%s: %v", item.GetSpaceId(), item.GetViewId(), err)
+	return false
 }
 
 func rebuildErrorSummary(cause error) string {
@@ -170,15 +204,11 @@ func rebuildErrorSummary(cause error) string {
 	return message
 }
 
-func (s *Service) recordInterruptedRebuildFailure(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, build *pb.ViewIndexBuild, cause error) {
+func interruptedRebuildFailureItem(view *pb.View, build *pb.ViewIndexBuild, cause error) *pb.ViewRebuildLog {
 	if view == nil || build == nil {
-		return
+		return nil
 	}
-	client, ok := opts.Metadata.(rebuildLogMetadataClient)
-	if !ok {
-		return
-	}
-	item := &pb.ViewRebuildLog{
+	return &pb.ViewRebuildLog{
 		SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: build.GetBuildId(), IndexId: build.GetIndexId(),
 		TriggerReason:      pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY,
 		Result:             pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED,
@@ -186,16 +216,14 @@ func (s *Service) recordInterruptedRebuildFailure(ctx context.Context, opts Reco
 		EntriesWritten: build.GetEntriesWritten(), StartedAt: build.GetStartedAt(), FinishedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		ErrorSummary: rebuildErrorSummary(cause), DetailsJson: `{"phase":"interrupted"}`,
 	}
-	rsp, err := client.CreateViewRebuildLog(ctx, &pb.CreateViewRebuildLogReq{AuthInfo: auth, Log: item})
-	if err == nil && (rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS) {
-		if rsp == nil {
-			err = errors.New("empty ret_info")
-		} else {
-			err = fmt.Errorf("create rebuild log: %s", rsp.GetRetInfo().GetMsg())
+}
+
+func (s *Service) recordInterruptedRebuildFailure(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, build *pb.ViewIndexBuild, cause error) {
+	item := interruptedRebuildFailureItem(view, build, cause)
+	if item == nil || !s.createRebuildLogFallback(ctx, opts, auth, item) {
+		if view != nil {
+			log.Printf("storage view interrupted rebuild log failed for %s/%s", view.GetSpaceId(), view.GetViewId())
 		}
-	}
-	if err != nil {
-		log.Printf("storage view interrupted rebuild log failed for %s/%s: %v", view.GetSpaceId(), view.GetViewId(), err)
 	}
 }
 
@@ -287,19 +315,23 @@ func (s *Service) rebuildLogAlreadyTerminal(ctx context.Context, opts Reconciler
 	}
 	readCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	rsp, err := client.ListViewRebuildLogs(readCtx, &pb.ListViewRebuildLogsReq{
-		AuthInfo: auth, SpaceId: item.GetSpaceId(), ViewId: item.GetViewId(),
-		Page: &pb.Page{Page: 1, Size: 100},
-	})
-	if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		return false
-	}
-	for _, candidate := range rsp.GetLogs() {
-		if candidate != nil && candidate.GetLogId() == item.GetLogId() && candidate.GetResult() == result && candidate.GetEntriesWritten() == entries {
-			return true
+	for page := uint32(1); ; page++ {
+		rsp, err := client.ListViewRebuildLogs(readCtx, &pb.ListViewRebuildLogsReq{
+			AuthInfo: auth, SpaceId: item.GetSpaceId(), ViewId: item.GetViewId(),
+			Page: &pb.Page{Page: page, Size: 100},
+		})
+		if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return false
+		}
+		for _, candidate := range rsp.GetLogs() {
+			if candidate != nil && candidate.GetLogId() == item.GetLogId() && candidate.GetResult() == result && candidate.GetEntriesWritten() == entries {
+				return true
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetLogs()) == 0 {
+			return false
 		}
 	}
-	return false
 }
 
 func (s *Service) recordSkippedRebuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, reason pb.ViewRebuildTriggerReason, blockReason string, stats viewindex.ViewIndexStats, physicalBytes, pending, ackPending uint64) {
