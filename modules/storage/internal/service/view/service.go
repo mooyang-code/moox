@@ -49,7 +49,17 @@ type Service struct {
 	rebuildMu       sync.Mutex
 	rebuildRunning  bool
 	idleChecks      map[viewRef]uint32
+	rebuildLogRetry map[string]pendingRebuildLog
 	reconcileReady  bool
+}
+
+type pendingRebuildLog struct {
+	opts    ReconcilerOptions
+	auth    *pb.AuthInfo
+	item    *pb.ViewRebuildLog
+	result  pb.ViewRebuildResult
+	entries uint64
+	cause   error
 }
 
 type datasetRef struct{ spaceID, datasetID string }
@@ -135,6 +145,7 @@ func New(root, authSecret string) (*Service, error) {
 		indexGeneration: make(map[string]uint64),
 		retiringIndexes: make(map[string]struct{}),
 		idleChecks:      make(map[viewRef]uint32),
+		rebuildLogRetry: make(map[string]pendingRebuildLog),
 		metrics:         observability.DefaultViewMetrics,
 	}
 	return service, nil

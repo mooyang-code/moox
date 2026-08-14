@@ -455,8 +455,13 @@ func storageViewRebuildSettings() (time.Duration, int64, uint64, uint32, bool, b
 	if runtimeConfig.Storage.View.MaxViewFileBytes <= 0 {
 		return 0, 0, 0, 0, false, false, errors.New("storage view max_view_file_bytes must be positive")
 	}
+	maxPendingConfigured := runtimeConfig.Storage.View.HasRebuildMaxPendingSetting()
+	idleChecksConfigured := runtimeConfig.Storage.View.HasRebuildIdleChecksSetting()
+	if idleChecksConfigured && runtimeConfig.Storage.View.RebuildIdleChecks == 0 {
+		return 0, 0, 0, 0, false, false, errors.New("storage view rebuild_idle_checks must be greater than zero")
+	}
 	return interval, runtimeConfig.Storage.View.MaxViewFileBytes, runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
-		runtimeConfig.Storage.View.HasRebuildMaxPendingSetting(), runtimeConfig.Storage.View.HasRebuildIdleChecksSetting(), nil
+		maxPendingConfigured, idleChecksConfigured, nil
 }
 
 func envOrDefault(name, fallback string) string {

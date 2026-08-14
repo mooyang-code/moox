@@ -122,18 +122,21 @@ func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	}
 }
 
-func TestStorageViewRebuildSettingsAllowsExplicitZeroGateValues(t *testing.T) {
+func TestStorageViewRebuildSettingsAllowsExplicitZeroMaxPending(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
 	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	_, _, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
-	if err != nil {
+	if _, _, _, _, _, _, err := storageViewRebuildSettings(); err == nil {
+		t.Fatal("accepted explicit zero idle checks")
+	}
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if maxPending != 0 || idleChecks != 0 || !maxPendingConfigured || !idleChecksConfigured {
-		t.Fatalf("explicit zero gate settings = %d/%d configured=%v/%v", maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured)
+	_, _, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	if err != nil || maxPending != 0 || idleChecks != 3 || !maxPendingConfigured || !idleChecksConfigured {
+		t.Fatalf("explicit zero max pending settings = %d/%d configured=%v/%v err=%v", maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err)
 	}
 }
 

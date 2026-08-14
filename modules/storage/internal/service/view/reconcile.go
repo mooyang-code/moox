@@ -270,6 +270,9 @@ func restoreIndexStats(ctx context.Context, engine viewindex.Engine, indexID str
 
 func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) error {
 	auth := s.internalAuth()
+	// Audit persistence is best-effort and must never hold up View state
+	// transitions. Retry terminal log updates before processing the next pass.
+	s.drainRebuildLogRetries(ctx)
 	var firstErr error
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
@@ -353,11 +356,11 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			if build.GetError() == "" {
 				cause = errors.New("view rebuild failed")
 			}
-			found, updated := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
-			if found && !updated {
-				return errors.New("view rebuild failure history update is pending")
+			found, updated, lookupOK := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
+			if !lookupOK || (found && !updated) {
+				log.Printf("storage view rebuild failure history will be retried for %s/%s/%s", view.GetSpaceId(), view.GetViewId(), build.GetBuildId())
 			}
-			if !found {
+			if lookupOK && !found {
 				// A failure can be persisted after the original RUNNING log RPC
 				// response was lost. Keep an auditable terminal record instead of
 				// leaving the old history row permanently in progress.
@@ -1000,11 +1003,11 @@ func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptio
 	}
 	cause := errors.New("discard interrupted view build")
 	if s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), cause) {
-		found, updated := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
-		if found && !updated {
-			return errors.New("interrupted rebuild failure history update is pending")
+		found, updated, lookupOK := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
+		if !lookupOK || (found && !updated) {
+			log.Printf("storage view interrupted failure history will be retried for %s/%s/%s", view.GetSpaceId(), view.GetViewId(), build.GetBuildId())
 		}
-		if !found {
+		if lookupOK && !found {
 			s.recordInterruptedRebuildFailure(ctx, opts, auth, view, build, cause)
 		}
 		return nil
@@ -1019,11 +1022,11 @@ func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptio
 	if currentBuild := current.GetIndexBuild(); currentBuild != nil && currentBuild.GetBuildId() == build.GetBuildId() {
 		return fmt.Errorf("view build %q could not be durably discarded", build.GetBuildId())
 	}
-	found, updated := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
-	if found && !updated {
-		return errors.New("interrupted rebuild failure history update is pending")
+	found, updated, lookupOK := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
+	if !lookupOK || (found && !updated) {
+		log.Printf("storage view interrupted failure history will be retried for %s/%s/%s", view.GetSpaceId(), view.GetViewId(), build.GetBuildId())
 	}
-	if !found {
+	if lookupOK && !found {
 		s.recordInterruptedRebuildFailure(ctx, opts, auth, view, build, cause)
 	}
 	return nil
