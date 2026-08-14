@@ -179,8 +179,15 @@ func (s *Service) createRebuildLogFallback(ctx context.Context, opts ReconcilerO
 	if !ok || item == nil {
 		return false
 	}
-	if s.rebuildLogExists(ctx, opts, auth, item) {
+	exists, lookupOK := s.rebuildLogExists(ctx, opts, auth, item)
+	if exists {
 		return true
+	}
+	if !lookupOK {
+		// A failed readback is not evidence that the row is absent. Keep the
+		// fallback queued so a committed Create whose response was lost cannot
+		// be duplicated on the next retry.
+		return false
 	}
 	rsp, err := client.CreateViewRebuildLog(ctx, &pb.CreateViewRebuildLogReq{AuthInfo: auth, Log: item})
 	if err == nil && rsp != nil && rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
@@ -194,10 +201,10 @@ func (s *Service) createRebuildLogFallback(ctx context.Context, opts ReconcilerO
 	return false
 }
 
-func (s *Service) rebuildLogExists(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog) bool {
+func (s *Service) rebuildLogExists(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog) (exists, lookupOK bool) {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok || item == nil {
-		return false
+		return false, false
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
@@ -207,15 +214,15 @@ func (s *Service) rebuildLogExists(ctx context.Context, opts ReconcilerOptions, 
 			Page: &pb.Page{Page: page, Size: 1000},
 		})
 		if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return false
+			return false, false
 		}
 		for _, candidate := range rsp.GetLogs() {
 			if candidate != nil && candidate.GetBuildId() == item.GetBuildId() && candidate.GetResult() == item.GetResult() {
-				return true
+				return true, true
 			}
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetLogs()) == 0 {
-			return false
+			return false, true
 		}
 	}
 }
