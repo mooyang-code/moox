@@ -524,7 +524,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			if !s.createRebuildLogFallback(ctx, opts, auth, fallback) {
 				s.queueRebuildLogRetry(pendingRebuildLog{opts: opts, auth: auth, view: proto.Clone(view).(*pb.View), buildID: buildID, result: result, entries: entries, cause: cause, fallback: fallback})
 			}
-		} else if !lookupOK && result == pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED {
+		} else if !lookupOK {
 			s.attachRebuildLogFallback(view, buildID, result, &pb.ViewRebuildLog{
 				SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, IndexId: indexID,
 				TriggerReason: triggerReason, Result: result, TargetViewRevision: view.GetDesiredViewRevision(),
