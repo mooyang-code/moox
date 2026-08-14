@@ -508,7 +508,30 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	}
 	buildLog := s.createRunningRebuildLog(ctx, opts, auth, view, buildID, indexID, triggerReason, stats, stats.PhysicalBytes, pending, ackPending)
 	finishLog := func(result pb.ViewRebuildResult, entries uint64, cause error) {
-		s.finishRebuildLog(ctx, opts, auth, buildLog, result, entries, cause)
+		if buildLog != nil {
+			s.finishRebuildLog(ctx, opts, auth, buildLog, result, entries, cause)
+			return
+		}
+		found, _, lookupOK := s.finishRunningRebuildLog(ctx, opts, auth, view, buildID, result, entries, cause)
+		if lookupOK && !found {
+			fallback := &pb.ViewRebuildLog{
+				SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, IndexId: indexID,
+				TriggerReason: triggerReason, Result: result, TargetViewRevision: view.GetDesiredViewRevision(),
+				ActiveViewRevision: view.GetActiveViewRevision(), EntriesWritten: entries,
+				FinishedAt: time.Now().UTC().Format(time.RFC3339Nano), ErrorSummary: rebuildErrorSummary(cause),
+				DetailsJson: `{"phase":"reconcile_fallback"}`,
+			}
+			if !s.createRebuildLogFallback(ctx, opts, auth, fallback) {
+				s.queueRebuildLogRetry(pendingRebuildLog{opts: opts, auth: auth, view: proto.Clone(view).(*pb.View), buildID: buildID, result: result, entries: entries, cause: cause, fallback: fallback})
+			}
+		} else if !lookupOK && result == pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED {
+			s.attachRebuildLogFallback(view, buildID, result, &pb.ViewRebuildLog{
+				SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, IndexId: indexID,
+				TriggerReason: triggerReason, Result: result, TargetViewRevision: view.GetDesiredViewRevision(),
+				ActiveViewRevision: view.GetActiveViewRevision(), EntriesWritten: entries,
+				FinishedAt: time.Now().UTC().Format(time.RFC3339Nano), ErrorSummary: rebuildErrorSummary(cause), DetailsJson: `{"phase":"reconcile_fallback"}`,
+			})
+		}
 	}
 	prepared, err := s.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
 		AuthInfo: auth, IndexId: indexID, Engine: schema.Engine,

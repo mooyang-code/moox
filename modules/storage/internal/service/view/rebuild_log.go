@@ -262,6 +262,9 @@ func (s *Service) recordInterruptedRebuildFailure(ctx context.Context, opts Reco
 		if view != nil {
 			log.Printf("storage view interrupted rebuild log failed for %s/%s", view.GetSpaceId(), view.GetViewId())
 		}
+		if item != nil {
+			s.queueRebuildLogRetry(pendingRebuildLog{opts: opts, auth: auth, view: proto.Clone(view).(*pb.View), buildID: item.GetBuildId(), result: item.GetResult(), entries: item.GetEntriesWritten(), cause: cause, fallback: item})
+		}
 	}
 }
 
