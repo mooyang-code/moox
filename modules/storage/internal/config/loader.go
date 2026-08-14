@@ -83,6 +83,9 @@ type StorageView struct {
 	rebuildIdleChecksSet    bool
 }
 
+func (v StorageView) HasRebuildMaxPendingSetting() bool { return v.rebuildMaxPendingSet }
+func (v StorageView) HasRebuildIdleChecksSetting() bool { return v.rebuildIdleChecksSet }
+
 // UnmarshalYAML remembers whether max_view_file_bytes was explicitly present.
 // This lets defaults preserve omitted legacy configuration while allowing the
 // server to reject an explicit zero/negative value instead of silently

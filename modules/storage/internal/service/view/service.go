@@ -41,6 +41,7 @@ type Service struct {
 	metadataClient  MetadataClient
 	readyPublisher  ReadyEventPublisher
 	consumerState   func(context.Context) (jetstream.ConsumerState, error)
+	consumerBound   func() bool
 	indexGatesMu    sync.Mutex
 	indexGates      map[string]*indexWriteGate
 	indexGeneration map[string]uint64

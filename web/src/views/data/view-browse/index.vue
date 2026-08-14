@@ -346,6 +346,12 @@
             <a-table-column title="结果" :width="100">
               <template #cell="{ record }">{{ rebuildResultLabel(record.result) }}</template>
             </a-table-column>
+            <a-table-column title="耗时" :width="90">
+              <template #cell="{ record }">{{ rebuildLogDuration(record) }}</template>
+            </a-table-column>
+            <a-table-column title="写入行数" :width="100">
+              <template #cell="{ record }">{{ record.entries_written || 0 }}</template>
+            </a-table-column>
             <a-table-column title="详情" :ellipsis="true" :tooltip="true">
               <template #cell="{ record }">{{ rebuildLogDetail(record) }}</template>
             </a-table-column>
@@ -653,6 +659,13 @@ function rebuildLogDetail(log: ViewRebuildLog) {
   }
   if (log.error_summary) return log.error_summary;
   return log.finished_at && log.started_at ? `写入 ${log.entries_written || 0} 条` : "构建中";
+}
+function rebuildLogDuration(log: ViewRebuildLog) {
+  if (!log.started_at || !log.finished_at) return "-";
+  const durationMs = new Date(log.finished_at).valueOf() - new Date(log.started_at).valueOf();
+  if (!Number.isFinite(durationMs) || durationMs < 0) return "-";
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
 async function openRebuildLogs() {

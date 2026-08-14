@@ -56,8 +56,10 @@ type ReconcilerOptions struct {
 	MaxViewFileBytes int64
 	// RebuildMaxPending and RebuildIdleChecks gate optional size-limit
 	// rebuilds. Necessary repairs bypass this capacity gate.
-	RebuildMaxPending uint64
-	RebuildIdleChecks uint32
+	RebuildMaxPending           uint64
+	RebuildIdleChecks           uint32
+	RebuildMaxPendingConfigured bool
+	RebuildIdleChecksConfigured bool
 }
 
 const viewBackfillBatchSize = 10000
@@ -131,10 +133,10 @@ func (s *Service) normalizeReconcilerOptions(opts ReconcilerOptions) (Reconciler
 	if opts.Interval <= 0 {
 		opts.Interval = 30 * time.Second
 	}
-	if opts.RebuildMaxPending == 0 {
+	if opts.RebuildMaxPending == 0 && !opts.RebuildMaxPendingConfigured {
 		opts.RebuildMaxPending = defaultRebuildMaxPending
 	}
-	if opts.RebuildIdleChecks == 0 {
+	if opts.RebuildIdleChecks == 0 && !opts.RebuildIdleChecksConfigured {
 		opts.RebuildIdleChecks = defaultRebuildIdleChecks
 	}
 	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
@@ -210,7 +212,9 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts ReconcilerOptions
 					return err
 				}
 				if !stats.Exists {
-					return fmt.Errorf("active view index %q is missing; refusing to start without a readable active view", activeID)
+					err := fmt.Errorf("active view index %q is missing; refusing to start without a readable active view", activeID)
+					s.recordFailedRebuild(ctx, opts, auth, view, pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_MISSING, err, stats)
+					return err
 				}
 				if err := validatePhysicalViewContract(view, stats); err != nil {
 					s.recordFailedRebuild(ctx, opts, auth, view, pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_INVALID, err, stats)
@@ -349,7 +353,11 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			if build.GetError() == "" {
 				cause = errors.New("view rebuild failed")
 			}
-			if !s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause) {
+			found, updated := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
+			if found && !updated {
+				return errors.New("view rebuild failure history update is pending")
+			}
+			if !found {
 				// A failure can be persisted after the original RUNNING log RPC
 				// response was lost. Keep an auditable terminal record instead of
 				// leaving the old history row permanently in progress.
@@ -405,11 +413,11 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		}
 	}
 	maxPending := opts.RebuildMaxPending
-	if maxPending == 0 {
+	if maxPending == 0 && !opts.RebuildMaxPendingConfigured {
 		maxPending = defaultRebuildMaxPending
 	}
 	idleChecks := opts.RebuildIdleChecks
-	if idleChecks == 0 {
+	if idleChecks == 0 && !opts.RebuildIdleChecksConfigured {
 		idleChecks = defaultRebuildIdleChecks
 	}
 	var pending, ackPending uint64
@@ -601,9 +609,13 @@ func (s *Service) sizeLimitBuildIdleFor(ctx context.Context, ref viewRef, maxPen
 func (s *Service) consumerBacklog(ctx context.Context) (uint64, uint64, error) {
 	s.mu.RLock()
 	stateReader := s.consumerState
+	boundReader := s.consumerBound
 	s.mu.RUnlock()
 	if stateReader == nil {
 		return 0, 0, errors.New("storage view consumer is not bound")
+	}
+	if boundReader != nil && !boundReader() {
+		return 0, 0, errors.New("storage view consumer subscription is not bound")
 	}
 	stateCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
@@ -988,7 +1000,13 @@ func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptio
 	}
 	cause := errors.New("discard interrupted view build")
 	if s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), cause) {
-		s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
+		found, updated := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
+		if found && !updated {
+			return errors.New("interrupted rebuild failure history update is pending")
+		}
+		if !found {
+			s.recordInterruptedRebuildFailure(ctx, opts, auth, view, build, cause)
+		}
 		return nil
 	}
 	current, err := s.readActiveView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId())
@@ -1001,7 +1019,13 @@ func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptio
 	if currentBuild := current.GetIndexBuild(); currentBuild != nil && currentBuild.GetBuildId() == build.GetBuildId() {
 		return fmt.Errorf("view build %q could not be durably discarded", build.GetBuildId())
 	}
-	s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
+	found, updated := s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause)
+	if found && !updated {
+		return errors.New("interrupted rebuild failure history update is pending")
+	}
+	if !found {
+		s.recordInterruptedRebuildFailure(ctx, opts, auth, view, build, cause)
+	}
 	return nil
 }
 

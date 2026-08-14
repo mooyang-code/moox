@@ -96,7 +96,7 @@ func TestStorageViewRebuildSettingsRejectsTooShortInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, _, _, _, err := storageViewRebuildSettings(); err == nil {
+	if _, _, _, _, _, _, err := storageViewRebuildSettings(); err == nil {
 		t.Fatal("accepted a rebuild interval below the safety floor")
 	}
 }
@@ -107,7 +107,7 @@ func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	interval, maxBytes, maxPending, idleChecks, err := storageViewRebuildSettings()
+	interval, maxBytes, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +116,24 @@ func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	}
 	if maxPending != 32 || idleChecks != 3 {
 		t.Fatalf("gate defaults = %d/%d", maxPending, idleChecks)
+	}
+	if maxPendingConfigured || idleChecksConfigured {
+		t.Fatal("omitted gate values were marked configured")
+	}
+}
+
+func TestStorageViewRebuildSettingsAllowsExplicitZeroGateValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "storage.yaml")
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MOOX_STORAGE_CONFIG", path)
+	_, _, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if maxPending != 0 || idleChecks != 0 || !maxPendingConfigured || !idleChecksConfigured {
+		t.Fatalf("explicit zero gate settings = %d/%d configured=%v/%v", maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured)
 	}
 }
 

@@ -247,6 +247,10 @@ func (s *Store) ListViewRebuildLogs(ctx context.Context, spaceID string, viewID 
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" {
 		return nil, nil, errors.New("space_id and view_id are required")
 	}
+	var exists int
+	if err := s.queryDB(ctx).QueryRowContext(ctx, `SELECT 1 FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID).Scan(&exists); err != nil {
+		return nil, nil, err
+	}
 	if result < pb.ViewRebuildResult_VIEW_REBUILD_RESULT_UNSPECIFIED || result > pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SKIPPED {
 		return nil, nil, errors.New("invalid view rebuild result")
 	}

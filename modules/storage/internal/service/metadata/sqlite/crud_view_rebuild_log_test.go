@@ -10,6 +10,14 @@ import (
 func TestViewRebuildLogLifecycleAndSkippedDeduplication(t *testing.T) {
 	ctx := context.Background()
 	store := openViewPeriodTestStore(t, ctx)
+	seedDatasetParents(t, ctx, store)
+	registerActiveNode(t, ctx, store, "node-a")
+	if _, err := store.CreateDataset(ctx, &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a", Name: "Dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "源视图", PrimaryDatasetId: "dataset", Engine: "duckdb"}); err != nil {
+		t.Fatal(err)
+	}
 
 	running, err := store.CreateViewRebuildLog(ctx, &pb.ViewRebuildLog{
 		SpaceId: "space", ViewId: "source-view", BuildId: "build-1", IndexId: "index-b",

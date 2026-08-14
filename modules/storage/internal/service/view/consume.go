@@ -55,12 +55,16 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	s.mu.Lock()
 	s.readyPublisher = publisher
 	s.consumerState = stateReader
+	s.consumerBound = func() bool {
+		return s.metrics == nil || s.metrics.Snapshot().ConsumerBound
+	}
 	s.mu.Unlock()
 	opts.Lease = liveDeliveryLease{}
 	consumer, err := eventconsumer.New(client, s, opts)
 	if err != nil {
 		s.mu.Lock()
 		s.consumerState = nil
+		s.consumerBound = nil
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -68,6 +72,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	if err != nil {
 		s.mu.Lock()
 		s.consumerState = nil
+		s.consumerBound = nil
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -75,6 +80,7 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		stop()
 		s.mu.Lock()
 		s.consumerState = nil
+		s.consumerBound = nil
 		s.mu.Unlock()
 	}, nil
 }

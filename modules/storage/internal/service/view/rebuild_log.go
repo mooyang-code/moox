@@ -15,7 +15,8 @@ import (
 )
 
 var rebuildSensitiveValue = regexp.MustCompile(`(?i)(password|passwd|secret|token|authorization|api[_-]?key)=([^\s,;]+)`)
-var rebuildBearerValue = regexp.MustCompile(`(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+`)
+var rebuildJSONSensitiveValue = regexp.MustCompile(`(?i)(["']?(?:password|passwd|secret|token|authorization|api[_-]?key)["']?\s*:\s*["'])([^"']*)(["'])`)
+var rebuildAuthHeaderValue = regexp.MustCompile(`(?i)(authorization\s*:\s*(?:basic|bearer)\s+)[^\s,;]+`)
 
 func rebuildTriggerReason(view *pb.View, stats viewindex.ViewIndexStats, sizeLimitOnly bool) pb.ViewRebuildTriggerReason {
 	if view == nil || view.GetActiveIndexId() == "" {
@@ -33,33 +34,39 @@ func rebuildTriggerReason(view *pb.View, stats viewindex.ViewIndexStats, sizeLim
 	return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR
 }
 
-func (s *Service) finishRunningRebuildLog(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, result pb.ViewRebuildResult, entries uint64, cause error) bool {
+func (s *Service) finishRunningRebuildLog(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, result pb.ViewRebuildResult, entries uint64, cause error) (bool, bool) {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok || view == nil || strings.TrimSpace(buildID) == "" {
-		return false
+		return false, false
 	}
-	rsp, err := client.ListViewRebuildLogs(ctx, &pb.ListViewRebuildLogsReq{
-		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(),
-		Result: pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING,
-		Page:   &pb.Page{Page: 1, Size: 100},
-	})
-	if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		if err == nil && rsp != nil {
-			err = fmt.Errorf("list rebuild logs: %s", rsp.GetRetInfo().GetMsg())
+	found, updated := false, false
+	for page := uint32(1); ; page++ {
+		rsp, err := client.ListViewRebuildLogs(ctx, &pb.ListViewRebuildLogsReq{
+			AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(),
+			Result: pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING,
+			Page:   &pb.Page{Page: page, Size: 100},
+		})
+		if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			if err == nil && rsp != nil {
+				err = fmt.Errorf("list rebuild logs: %s", rsp.GetRetInfo().GetMsg())
+			}
+			log.Printf("storage view rebuild log lookup failed for %s/%s: %v", view.GetSpaceId(), view.GetViewId(), err)
+			return found, false
 		}
-		log.Printf("storage view rebuild log lookup failed for %s/%s: %v", view.GetSpaceId(), view.GetViewId(), err)
-		return false
+		for _, item := range rsp.GetLogs() {
+			if item == nil || item.GetBuildId() != buildID || item.GetResult() != pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING {
+				continue
+			}
+			found = true
+			if s.finishRebuildLog(ctx, opts, auth, item, result, entries, cause) {
+				updated = true
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetLogs()) == 0 {
+			break
+		}
 	}
-	updated := false
-	for _, item := range rsp.GetLogs() {
-		if item == nil || item.GetBuildId() != buildID || item.GetResult() != pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING {
-			continue
-		}
-		if s.finishRebuildLog(ctx, opts, auth, item, result, entries, cause) {
-			updated = true
-		}
-	}
-	return updated
+	return found, updated
 }
 
 func rebuildErrorSummary(cause error) string {
@@ -68,7 +75,8 @@ func rebuildErrorSummary(cause error) string {
 	}
 	message := strings.Join(strings.Fields(cause.Error()), " ")
 	message = rebuildSensitiveValue.ReplaceAllString(message, `$1=<redacted>`)
-	message = rebuildBearerValue.ReplaceAllString(message, `${1}<redacted>`)
+	message = rebuildJSONSensitiveValue.ReplaceAllString(message, `${1}<redacted>${3}`)
+	message = rebuildAuthHeaderValue.ReplaceAllString(message, `${1}<redacted>`)
 	upper := strings.ToUpper(message)
 	for _, keyword := range []string{"SELECT ", "INSERT ", "UPDATE ", "DELETE ", "DROP TABLE ", "CREATE TABLE "} {
 		if strings.Contains(upper, keyword) {
