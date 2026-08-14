@@ -3115,7 +3115,15 @@ EOF
     fi
     render_args+=(--node-id "${NODE_ID}")
     log "render Trade/Collector DNS resolver runtime config from custom.toml"
-    (cd "${ROOT}" && "${STAGE_DIR}/bin/moox-cli" setup render-runtime-config "${render_args[@]}") \
+    # The staged CLI is built for the deployment target. When packaging a
+    # Linux bundle on macOS, execute the host tool instead of trying to run
+    # the staged ELF binary locally; the staged target CLI remains in the
+    # archive for operators and remote lifecycle scripts.
+    runtime_config_cli=("${STAGE_DIR}/bin/moox-cli")
+    if [[ "${TARGET_GOOS}" != "${HOST_GOOS}" || "${TARGET_GOARCH}" != "${HOST_GOARCH}" ]]; then
+      runtime_config_cli=(go run ./modules/cli/cmd/moox-cli)
+    fi
+    (cd "${ROOT}" && "${runtime_config_cli[@]}" setup render-runtime-config "${render_args[@]}") \
       >"${STAGE_DIR}/config/render-runtime-config.json"
   fi
   if [[ "${WITH_FACTOR}" -eq 1 || "${WITH_STRATEGY}" -eq 1 ]]; then
