@@ -73,15 +73,22 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 - 每个 View 使用 A/B 两个独立索引。
 - 重建期间实时消息同时写 Active 和 New。
 - Backfill 每批最多 10000 行，只填充缺失值，不覆盖实时写。
-- DuckDB 默认内存上限为 `512MB`；View 文件大小上限默认为 `1GiB`，需要重建较大 View 时可通过
+- DuckDB 默认内存上限为 `256MB`；View 文件大小上限默认为 `1GiB`，需要重建较大 View 时可通过
   `MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT` 调整。
-- 每个 DuckDB View 最多保留 8 个连接，允许因子读取与实时写入并行，
+- 每个 DuckDB View 最多打开 4 个连接、保留 1 个空闲连接，允许因子读取与实时写入并行，
   避免读取窗口把结果写入长期堵在单连接队列后。
 - View 角色按 `rebuild_check_interval`（重建检查周期）检查 DuckDB 文件大小；超过
   `max_view_file_bytes` 且 View 有限 `keep_duration` 时启动 A/B 重建。新索引只
   backfill 保留窗口，切换完成后按固定 grace 删除旧 DuckDB 文件，不在 active 索引
   上逐行删除。配置统一使用：
   `storage.view.rebuild_check_interval` 和 `storage.view.max_view_file_bytes`。
+- 仅由文件大小触发的容量整理会等待 View consumer 已恢复、总积压不超过
+  `storage.view.rebuild_max_pending`（默认 `32`），并连续满足
+  `storage.view.rebuild_idle_checks`（默认 `3`）次检查；同一进程同时只运行一个
+  容量重建。缺失/损坏 Active、revision 或覆盖范围修复等必要重建不受该门禁阻塞。
+- 每次实际重建和容量门禁跳过都会写入 Metadata 的 `t_view_rebuild_logs`。该表是
+  重建历史的权威来源，`t_view_index_builds` 只表示当前 CAS 构建状态；相同 View、
+  原因和阻塞原因连续跳过时会聚合 `skip_count`，不会按检查周期无限新增行。
 - 文件超限重建失败后使用固定 30 分钟的“超限重建重试间隔”，只抑制重复的全量回填尝试；
   Active View 继续提供查询和实时写入，desired revision 变化时立即允许新重建。
 - Desired Revision、关联 Dataset 或超过 `2 * keep_duration` 会触发 Reconcile。

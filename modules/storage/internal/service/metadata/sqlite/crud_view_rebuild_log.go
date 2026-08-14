@@ -124,19 +124,19 @@ func (s *Store) UpdateViewRebuildLog(ctx context.Context, item *pb.ViewRebuildLo
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE t_view_rebuild_logs SET
-			c_space_id = ?, c_view_id = ?, c_build_id = ?, c_index_id = ?,
-			c_trigger_reason = ?, c_result = ?, c_block_reason = ?,
+			c_result = ?, c_block_reason = ?,
 			c_target_view_revision = ?, c_active_view_revision = ?, c_physical_bytes = ?,
 			c_num_pending = ?, c_num_ack_pending = ?, c_entries_written = ?,
 			c_started_at = ?, c_finished_at = ?, c_first_checked_at = ?,
 			c_last_checked_at = ?, c_skip_count = ?, c_error_summary = ?,
 			c_details_json = ?, c_updated_at = ?
 		WHERE c_log_id = ?
-	`, item.GetSpaceId(), item.GetViewId(), item.GetBuildId(), item.GetIndexId(), item.GetTriggerReason(),
-		item.GetResult(), item.GetBlockReason(), item.GetTargetViewRevision(), item.GetActiveViewRevision(), item.GetPhysicalBytes(),
+		  AND c_space_id = ? AND c_view_id = ? AND c_build_id = ? AND c_index_id = ?
+		  AND c_result = ?
+	`, item.GetResult(), item.GetBlockReason(), item.GetTargetViewRevision(), item.GetActiveViewRevision(), item.GetPhysicalBytes(),
 		item.GetNumPending(), item.GetNumAckPending(), item.GetEntriesWritten(), item.GetStartedAt(), item.GetFinishedAt(),
 		item.GetFirstCheckedAt(), item.GetLastCheckedAt(), item.GetSkipCount(), item.GetErrorSummary(), defaultJSON(item.GetDetailsJson()), updatedAt,
-		item.GetLogId())
+		item.GetLogId(), item.GetSpaceId(), item.GetViewId(), item.GetBuildId(), item.GetIndexId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING)
 	if err != nil {
 		return nil, err
 	}
@@ -161,12 +161,20 @@ func (s *Store) UpsertSkippedViewRebuildLog(ctx context.Context, item *pb.ViewRe
 	}
 	defer func() { _ = tx.Rollback() }()
 	var logID int64
+	var latestResult, latestReason int32
+	var latestBlockReason string
 	err = tx.QueryRowContext(ctx, `
-		SELECT c_log_id FROM t_view_rebuild_logs
-		WHERE c_space_id = ? AND c_view_id = ? AND c_trigger_reason = ?
-		  AND c_result = ? AND c_block_reason = ?
+		SELECT c_log_id, c_trigger_reason, c_result, c_block_reason
+		FROM t_view_rebuild_logs
+		WHERE c_space_id = ? AND c_view_id = ?
 		ORDER BY c_log_id DESC LIMIT 1
-	`, item.GetSpaceId(), item.GetViewId(), item.GetTriggerReason(), item.GetResult(), item.GetBlockReason()).Scan(&logID)
+	`, item.GetSpaceId(), item.GetViewId()).Scan(&logID, &latestReason, &latestResult, &latestBlockReason)
+	if err == nil && (pb.ViewRebuildTriggerReason(latestReason) != item.GetTriggerReason() || pb.ViewRebuildResult(latestResult) != item.GetResult() || latestBlockReason != item.GetBlockReason()) {
+		// Only merge a skip into the immediately preceding log. A successful or
+		// failed build closes the prior skip streak; a later skip starts a new
+		// audit row even when its reason is identical.
+		err = sql.ErrNoRows
+	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}

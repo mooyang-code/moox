@@ -33,6 +33,10 @@ func TestViewRebuildLogLifecycleAndSkippedDeduplication(t *testing.T) {
 	if updated.GetResult() != pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED || updated.GetEntriesWritten() != 42 {
 		t.Fatalf("updated log = %v", updated)
 	}
+	updated.Result = pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED
+	if _, err := store.UpdateViewRebuildLog(ctx, updated); err == nil {
+		t.Fatal("terminal rebuild log was overwritten")
+	}
 
 	for i := 0; i < 2; i++ {
 		if _, err := store.UpsertSkippedViewRebuildLog(ctx, &pb.ViewRebuildLog{
@@ -60,5 +64,24 @@ func TestViewRebuildLogLifecycleAndSkippedDeduplication(t *testing.T) {
 	}
 	if skipped == nil || skipped.GetSkipCount() != 2 || skipped.GetNumPending() != 2 {
 		t.Fatalf("deduplicated skipped log = %v", skipped)
+	}
+	if _, err := store.CreateViewRebuildLog(ctx, &pb.ViewRebuildLog{
+		SpaceId: "space", ViewId: "source-view", BuildId: "build-2", IndexId: "index-a",
+		TriggerReason: pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SIZE_LIMIT,
+		Result:        pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertSkippedViewRebuildLog(ctx, &pb.ViewRebuildLog{
+		SpaceId: "space", ViewId: "source-view",
+		TriggerReason: pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SIZE_LIMIT,
+		Result:        pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SKIPPED,
+		BlockReason:   "pending backlog", NumPending: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	logs, _, err = store.ListViewRebuildLogs(ctx, "space", "source-view", pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SKIPPED, &pb.Page{Page: 1, Size: 20})
+	if err != nil || len(logs) != 2 || logs[0].GetSkipCount() != 1 {
+		t.Fatalf("skip streak should restart after success: logs=%v err=%v", logs, err)
 	}
 }

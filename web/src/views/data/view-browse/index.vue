@@ -351,7 +351,9 @@
             </a-table-column>
           </template>
         </a-table>
-        <div v-if="rebuildLogsPage.has_more" class="rebuild-logs-more">仅展示最近 100 条</div>
+        <div v-if="rebuildLogsPage.has_more" class="rebuild-logs-more">
+          <a-button size="small" :loading="rebuildLogsLoading" @click="loadMoreRebuildLogs">加载更多</a-button>
+        </div>
       </a-spin>
     </a-modal>
 
@@ -498,7 +500,8 @@ const detailVisible = ref(false);
 const rebuildLogsVisible = ref(false);
 const rebuildLogsLoading = ref(false);
 const rebuildLogs = ref<ViewRebuildLog[]>([]);
-const rebuildLogsPage = ref({ has_more: false });
+const rebuildLogsPage = ref<{ page?: number; has_more: boolean }>({ has_more: false });
+const rebuildLogsRequestId = ref(0);
 const recordKeyword = ref("");
 const filters = ref<ViewFilterState[]>([]);
 const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "", direction: "" });
@@ -656,19 +659,41 @@ async function openRebuildLogs() {
   const view = activeView.value;
   const space_id = selectedSpaceId.value;
   if (!view || !space_id) return;
+  const requestId = ++rebuildLogsRequestId.value;
   rebuildLogsVisible.value = true;
   rebuildLogsLoading.value = true;
   rebuildLogs.value = [];
   rebuildLogsPage.value = { has_more: false };
   try {
     const rsp = await listViewRebuildLogs({ space_id, view_id: view.view_id, page: { page: 1, size: 100 } });
+    if (requestId !== rebuildLogsRequestId.value || activeView.value?.view_id !== view.view_id || selectedSpaceId.value !== space_id) return;
     rebuildLogs.value = rsp.logs || [];
     rebuildLogsPage.value = rsp.page_result || { has_more: false };
   } catch (error) {
+    if (requestId !== rebuildLogsRequestId.value) return;
     rebuildLogs.value = [];
     Message.error(error instanceof Error ? error.message : "加载构建日志失败");
   } finally {
-    rebuildLogsLoading.value = false;
+    if (requestId === rebuildLogsRequestId.value) rebuildLogsLoading.value = false;
+  }
+}
+
+async function loadMoreRebuildLogs() {
+  const view = activeView.value;
+  const space_id = selectedSpaceId.value;
+  if (!view || !space_id || !rebuildLogsPage.value.has_more || rebuildLogsLoading.value) return;
+  const requestId = rebuildLogsRequestId.value;
+  const nextPage = (rebuildLogsPage.value.page || 1) + 1;
+  rebuildLogsLoading.value = true;
+  try {
+    const rsp = await listViewRebuildLogs({ space_id, view_id: view.view_id, page: { page: nextPage, size: 100 } });
+    if (requestId !== rebuildLogsRequestId.value || activeView.value?.view_id !== view.view_id || selectedSpaceId.value !== space_id) return;
+    rebuildLogs.value = rebuildLogs.value.concat(rsp.logs || []);
+    rebuildLogsPage.value = rsp.page_result || { has_more: false };
+  } catch (error) {
+    if (requestId === rebuildLogsRequestId.value) Message.error(error instanceof Error ? error.message : "加载构建日志失败");
+  } finally {
+    if (requestId === rebuildLogsRequestId.value) rebuildLogsLoading.value = false;
   }
 }
 
@@ -771,6 +796,7 @@ function clearViewState() {
   pagination.current = 1;
   rebuildLogsVisible.value = false;
   rebuildLogs.value = [];
+  rebuildLogsRequestId.value += 1;
 }
 
 async function loadViewContext() {

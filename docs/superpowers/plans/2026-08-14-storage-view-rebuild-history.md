@@ -275,15 +275,15 @@ Test helper mappings, skip aggregation text, pagination request scope, empty sta
 - Modify: `skills/moox/references/cli-operations.md` if operational rebuild history is documented there
 - Modify: active Storage config examples
 
-- [ ] **Step 1: Document gate semantics**
+- [x] **Step 1: Document gate semantics**
 
 Describe necessary versus capacity rebuilds, defaults `32/3`, skip aggregation, and why increasing worker counts is not a substitute for reducing queue pressure.
 
-- [ ] **Step 2: Document UI log fields**
+- [x] **Step 2: Document UI log fields**
 
 Explain that the View page log is the authoritative rebuild history, while `t_view_index_builds` is only current state.
 
-- [ ] **Step 3: Add deployment contract checks**
+- [x] **Step 3: Add deployment contract checks**
 
 Assert generated Storage configuration includes the new defaults and the Storage build package contains the Metadata RPC generated descriptors.
 
@@ -315,15 +315,15 @@ bash scripts/tests/contract/test-storage-view-watchdog.sh
 
 The reviewer must inspect gate bypass classification, history CAS/update semantics, log deduplication, migration safety, RPC authorization, and Web scope filtering. Record every finding with file/symbol/line evidence and fix all P0-P2 findings before release.
 
-- [ ] **Step 4: Build release artifacts**
+- [x] **Step 4: Build release artifacts**
 
 Build Linux/amd64 Storage primary, Storage View, Storage Node, Storage CLI, Admin/Gateway metadata proxies as required by the existing release script, plus the Web production bundle. Record SHA-256 values.
 
-- [ ] **Step 5: Deploy with rollback evidence**
+- [x] **Step 5: Deploy with rollback evidence**
 
 Back up the Storage Metadata SQLite database and current binaries. Deploy using the canonical production path, verify the Storage View watchdog timer is active and waiting, then check `/healthz` and `/readyz`.
 
-- [ ] **Step 6: Run live functional verification**
+- [x] **Step 6: Run live functional verification**
 
 On the production host:
 
@@ -334,6 +334,6 @@ On the production host:
 5. Verify the final row is `SUCCEEDED` or a safely recorded `FAILED`, Active queries remain available, and the Web log button displays the same record.
 6. Restore production thresholds and remove only the temporary test View/metadata.
 
-- [ ] **Step 7: Record release status**
+- [x] **Step 7: Record release status**
 
 Report local tests, codeCR result, binary hashes, deployment host/time, live API evidence, and any acceptance gaps separately. Do not claim completion until each requirement has direct evidence.

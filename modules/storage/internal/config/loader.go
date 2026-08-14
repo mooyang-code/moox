@@ -79,6 +79,8 @@ type StorageView struct {
 	RebuildIdleChecks       uint32           `yaml:"rebuild_idle_checks"`
 	StorageRPC              StorageRPCConfig `yaml:"storage_rpc"`
 	maxViewFileBytesSet     bool
+	rebuildMaxPendingSet    bool
+	rebuildIdleChecksSet    bool
 }
 
 // UnmarshalYAML remembers whether max_view_file_bytes was explicitly present.
@@ -97,6 +99,8 @@ func (v *StorageView) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	}
 	*v = StorageView(decoded)
 	_, v.maxViewFileBytesSet = raw["max_view_file_bytes"]
+	_, v.rebuildMaxPendingSet = raw["rebuild_max_pending"]
+	_, v.rebuildIdleChecksSet = raw["rebuild_idle_checks"]
 	return nil
 }
 
@@ -289,10 +293,10 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.MaxViewFileBytes <= 0 && !c.View.maxViewFileBytesSet {
 		c.View.MaxViewFileBytes = 1 << 30
 	}
-	if c.View.RebuildMaxPending == 0 {
+	if c.View.RebuildMaxPending == 0 && !c.View.rebuildMaxPendingSet {
 		c.View.RebuildMaxPending = 32
 	}
-	if c.View.RebuildIdleChecks == 0 {
+	if c.View.RebuildIdleChecks == 0 && !c.View.rebuildIdleChecksSet {
 		c.View.RebuildIdleChecks = 3
 	}
 	if c.Health.Addr == "" {

@@ -294,11 +294,14 @@ storage:
 
 func TestStorageViewExplicitZeroWatermarkIsNotDefaulted(t *testing.T) {
 	var cfg RuntimeConfig
-	if err := yaml.Unmarshal([]byte("storage:\n  view:\n    max_view_file_bytes: 0\n"), &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte("storage:\n  view:\n    max_view_file_bytes: 0\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), &cfg); err != nil {
 		t.Fatalf("unmarshal config: %v", err)
 	}
 	cfg.ApplyDefaults()
 	if cfg.Storage.View.MaxViewFileBytes != 0 {
 		t.Fatalf("explicit zero watermark was defaulted to %d", cfg.Storage.View.MaxViewFileBytes)
+	}
+	if cfg.Storage.View.RebuildMaxPending != 0 || cfg.Storage.View.RebuildIdleChecks != 0 {
+		t.Fatalf("explicit zero gate values were defaulted to %d/%d", cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks)
 	}
 }

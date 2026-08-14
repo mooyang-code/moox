@@ -345,6 +345,16 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		switch build.GetState() {
 		case pb.ViewIndexBuild_FAILED:
 			failedBuild = proto.Clone(build).(*pb.ViewIndexBuild)
+			cause := errors.New(build.GetError())
+			if build.GetError() == "" {
+				cause = errors.New("view rebuild failed")
+			}
+			if !s.finishRunningRebuildLog(ctx, opts, auth, view, build.GetBuildId(), pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, build.GetEntriesWritten(), cause) {
+				// A failure can be persisted after the original RUNNING log RPC
+				// response was lost. Keep an auditable terminal record instead of
+				// leaving the old history row permanently in progress.
+				s.recordInterruptedRebuildFailure(ctx, opts, auth, view, build, cause)
+			}
 			s.discardFailedBuild(ctx, view.GetSpaceId(), view.GetViewId(), build.GetIndexId(), build.GetEngine())
 			view.IndexBuild = nil
 		case pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP:
@@ -403,8 +413,17 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		idleChecks = defaultRebuildIdleChecks
 	}
 	var pending, ackPending uint64
+	gateBlockReason := "consumer_not_idle"
 	if sizeLimitOnly {
-		pending, ackPending, _ = s.consumerBacklog(ctx)
+		var backlogErr error
+		pending, ackPending, backlogErr = s.consumerBacklog(ctx)
+		if backlogErr != nil {
+			gateBlockReason = "consumer_unavailable"
+		} else if pending+ackPending > maxPending {
+			gateBlockReason = "consumer_backlog"
+		} else {
+			gateBlockReason = "consumer_idle_checks"
+		}
 	}
 	if sizeLimitOnly && !s.sizeLimitBuildAllowed(view.GetSpaceId(), view.GetViewId(), now) {
 		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "cooldown", stats, stats.PhysicalBytes, pending, ackPending)
@@ -415,7 +434,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		// catching up. Backfill competes with live A/B writes for the same
 		// DuckDB memory and I/O; starting it under backlog can turn one large
 		// system View into cross-Dataset head-of-line blocking.
-		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "consumer_not_idle", stats, stats.PhysicalBytes, pending, ackPending)
+		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, gateBlockReason, stats, stats.PhysicalBytes, pending, ackPending)
 		return nil
 	}
 	if sizeLimitOnly && !s.tryAcquireRebuild() {
@@ -455,6 +474,9 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	if s.isIndexRetiring(indexID) {
 		// Keep the old active index readable until its grace period has elapsed.
 		// Reusing the slot would close a reader that already captured the old ID.
+		if sizeLimitOnly {
+			s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "inactive_slot_retiring", stats, stats.PhysicalBytes, pending, ackPending)
+		}
 		return nil
 	}
 	buildID := "build-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
