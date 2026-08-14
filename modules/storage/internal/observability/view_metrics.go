@@ -21,42 +21,48 @@ type ViewMetrics struct {
 	deliveryTotal   *prometheus.CounterVec
 	redeliveryTotal prometheus.Counter
 
-	consumerLagMessages         prometheus.Gauge
-	consumerBound               prometheus.Gauge
-	oldestPendingEventAge       prometheus.GaugeFunc
-	deliveryDuration            prometheus.Histogram
-	ackErrorsTotal              prometheus.Counter
-	inProgressErrorsTotal       prometheus.Counter
-	retryExhaustedTotal         prometheus.Counter
-	laneActive                  prometheus.Gauge
-	outboxPendingEntries        prometheus.Gauge
-	outboxOldestAge             prometheus.Gauge
-	outboxPublishErrorsTotal    prometheus.Counter
-	outboxDuplicatePublish      prometheus.Counter
-	periodWaitingDatasets       *prometheus.GaugeVec
-	readyPublishRetry           *prometheus.CounterVec
-	restoreDuration             prometheus.Gauge
-	restoreReady                prometheus.Gauge
-	restoreFailures             prometheus.Counter
-	consumerLagSnapshot         atomic.Int64
-	consumerBoundSnapshot       atomic.Bool
-	outboxObservedSnapshot      atomic.Bool
-	outboxDynamicAge            atomic.Bool
-	outboxOldestEventAt         atomic.Int64
-	laneActiveSnapshot          atomic.Int64
-	outboxPendingSnapshot       atomic.Int64
-	outboxOldestAgeSnapshot     atomic.Int64
-	oldestPendingAgeSnapshot    atomic.Int64
-	ackErrorsSnapshot           atomic.Int64
-	inProgressErrorsSnapshot    atomic.Int64
-	retryExhaustedSnapshot      atomic.Int64
-	outboxPublishErrorsSnapshot atomic.Int64
-	outboxDuplicateSnapshot     atomic.Int64
-	restoreDurationSnapshot     atomic.Int64
-	restoreReadySnapshot        atomic.Bool
-	restoreFailuresSnapshot     atomic.Int64
-	pendingMu                   sync.Mutex
-	pendingDeliveries           map[*jetstream.Delivery]time.Time
+	consumerLagMessages          prometheus.Gauge
+	consumerBound                prometheus.Gauge
+	oldestPendingEventAge        prometheus.GaugeFunc
+	deliveryDuration             prometheus.Histogram
+	ackErrorsTotal               prometheus.Counter
+	inProgressErrorsTotal        prometheus.Counter
+	retryExhaustedTotal          prometheus.Counter
+	laneActive                   prometheus.Gauge
+	outboxPendingEntries         prometheus.Gauge
+	outboxOldestAge              prometheus.Gauge
+	outboxPublishErrorsTotal     prometheus.Counter
+	outboxDuplicatePublish       prometheus.Counter
+	periodWaitingDatasets        *prometheus.GaugeVec
+	readyPublishRetry            *prometheus.CounterVec
+	restoreDuration              prometheus.Gauge
+	restoreReady                 prometheus.Gauge
+	restoreFailures              prometheus.Counter
+	rebuildAuditPending          prometheus.Gauge
+	rebuildAuditFailures         prometheus.Counter
+	rebuildAuditDropped          prometheus.Counter
+	consumerLagSnapshot          atomic.Int64
+	consumerBoundSnapshot        atomic.Bool
+	outboxObservedSnapshot       atomic.Bool
+	outboxDynamicAge             atomic.Bool
+	outboxOldestEventAt          atomic.Int64
+	laneActiveSnapshot           atomic.Int64
+	outboxPendingSnapshot        atomic.Int64
+	outboxOldestAgeSnapshot      atomic.Int64
+	oldestPendingAgeSnapshot     atomic.Int64
+	ackErrorsSnapshot            atomic.Int64
+	inProgressErrorsSnapshot     atomic.Int64
+	retryExhaustedSnapshot       atomic.Int64
+	outboxPublishErrorsSnapshot  atomic.Int64
+	outboxDuplicateSnapshot      atomic.Int64
+	restoreDurationSnapshot      atomic.Int64
+	restoreReadySnapshot         atomic.Bool
+	restoreFailuresSnapshot      atomic.Int64
+	rebuildAuditPendingSnapshot  atomic.Int64
+	rebuildAuditFailuresSnapshot atomic.Int64
+	rebuildAuditDroppedSnapshot  atomic.Int64
+	pendingMu                    sync.Mutex
+	pendingDeliveries            map[*jetstream.Delivery]time.Time
 }
 
 // ViewMetricsSnapshot is the aggregate runtime state exported by the view and
@@ -78,6 +84,9 @@ type ViewMetricsSnapshot struct {
 	RestoreDuration             time.Duration
 	RestoreReady                bool
 	RestoreFailures             int64
+	RebuildAuditPending         int64
+	RebuildAuditFailures        int64
+	RebuildAuditDropped         int64
 }
 
 func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
@@ -169,6 +178,18 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "restore_failures_total",
 			Help: "Number of failed active View restore passes.",
 		}),
+		rebuildAuditPending: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "rebuild_audit_pending",
+			Help: "Number of View rebuild audit records waiting for metadata persistence.",
+		}),
+		rebuildAuditFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "rebuild_audit_write_failures_total",
+			Help: "View rebuild audit persistence failures.",
+		}),
+		rebuildAuditDropped: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "rebuild_audit_dropped_total",
+			Help: "View rebuild audit retry records dropped after reaching the queue limit.",
+		}),
 		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
 	}
 	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -240,6 +261,15 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	if metrics.restoreFailures, err = registerOrReuse(registerer, metrics.restoreFailures); err != nil {
+		return nil, err
+	}
+	if metrics.rebuildAuditPending, err = registerOrReuse(registerer, metrics.rebuildAuditPending); err != nil {
+		return nil, err
+	}
+	if metrics.rebuildAuditFailures, err = registerOrReuse(registerer, metrics.rebuildAuditFailures); err != nil {
+		return nil, err
+	}
+	if metrics.rebuildAuditDropped, err = registerOrReuse(registerer, metrics.rebuildAuditDropped); err != nil {
 		return nil, err
 	}
 	return metrics, nil
@@ -570,7 +600,37 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 		RestoreDuration:             time.Duration(m.restoreDurationSnapshot.Load()),
 		RestoreReady:                m.restoreReadySnapshot.Load(),
 		RestoreFailures:             m.restoreFailuresSnapshot.Load(),
+		RebuildAuditPending:         m.rebuildAuditPendingSnapshot.Load(),
+		RebuildAuditFailures:        m.rebuildAuditFailuresSnapshot.Load(),
+		RebuildAuditDropped:         m.rebuildAuditDroppedSnapshot.Load(),
 	}
+}
+
+func (m *ViewMetrics) SetRebuildAuditPending(value int64) {
+	if m == nil {
+		return
+	}
+	if value < 0 {
+		value = 0
+	}
+	m.rebuildAuditPendingSnapshot.Store(value)
+	m.rebuildAuditPending.Set(float64(value))
+}
+
+func (m *ViewMetrics) IncRebuildAuditFailure() {
+	if m == nil {
+		return
+	}
+	m.rebuildAuditFailuresSnapshot.Add(1)
+	m.rebuildAuditFailures.Inc()
+}
+
+func (m *ViewMetrics) IncRebuildAuditDropped() {
+	if m == nil {
+		return
+	}
+	m.rebuildAuditDroppedSnapshot.Add(1)
+	m.rebuildAuditDropped.Inc()
 }
 
 func deriveKind(value string) string {

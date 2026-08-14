@@ -63,6 +63,9 @@ func SnapshotForRoleWithOptions(instance string, metrics *observability.ViewMetr
 			"restore_duration_seconds":         snapshot.RestoreDuration.Seconds(),
 			"restore_ready":                    snapshot.RestoreReady,
 			"restore_failures":                 snapshot.RestoreFailures,
+			"rebuild_audit_pending":            snapshot.RebuildAuditPending,
+			"rebuild_audit_write_failures":     snapshot.RebuildAuditFailures,
+			"rebuild_audit_dropped":            snapshot.RebuildAuditDropped,
 		}
 		return rsp
 	}
