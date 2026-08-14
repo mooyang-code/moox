@@ -90,6 +90,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		} else {
 			hasStats = true
 			s.cacheActiveIndexStats(runtime, indexID, stats)
+			markCoverageRefresh(runtime)
 		}
 	}
 	complete := hasStats && len(out) > 0 && runtimeCoverageComplete(runtime, req.GetTimeRange(), stats)
@@ -250,7 +251,10 @@ func queryErrorCode(err error) pb.ErrorCode {
 }
 
 func queryCoverageComplete(rng *pb.TimeRange, stats viewindex.ViewIndexStats) bool {
-	if !stats.Exists || stats.EntryCount == 0 || stats.IndexedFrom == "" || stats.IndexedTo == "" {
+	// Persisted bounds are maintained transactionally with writes. They are a
+	// stronger signal than the optional full-scan row count, which may be zero
+	// on a cold start of a legacy index until its first low-frequency scan.
+	if !stats.Exists || stats.IndexedFrom == "" || stats.IndexedTo == "" {
 		return false
 	}
 	if rng == nil {

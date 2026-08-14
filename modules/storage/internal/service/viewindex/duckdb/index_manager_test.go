@@ -70,6 +70,12 @@ func TestOpenUsesDefaultMemoryLimit(t *testing.T) {
 	if got := db.Stats().MaxOpenConnections; got != defaultMaxOpenConns {
 		t.Fatalf("max open connections=%d, want %d", got, defaultMaxOpenConns)
 	}
+	if _, err := db.ExecContext(context.Background(), "SELECT 1"); err != nil {
+		t.Fatalf("prime connection pool: %v", err)
+	}
+	if got := db.Stats().Idle; got > defaultMaxIdleConns {
+		t.Fatalf("idle connections=%d, want <= %d", got, defaultMaxIdleConns)
+	}
 
 	var memoryLimit string
 	if err := db.QueryRow(`SELECT current_setting('memory_limit')`).Scan(&memoryLimit); err != nil {
@@ -80,8 +86,8 @@ func TestOpenUsesDefaultMemoryLimit(t *testing.T) {
 	if _, err := fmt.Sscanf(memoryLimit, "%f %s", &memoryMiB, &memoryUnit); err != nil {
 		t.Fatalf("memory_limit=%q is not a DuckDB memory value: %v", memoryLimit, err)
 	}
-	if memoryMiB < 480 || memoryMiB > 500 || !strings.EqualFold(memoryUnit, "MiB") {
-		t.Fatalf("memory_limit=%q, want approximately 512MB", memoryLimit)
+	if memoryMiB < 230 || memoryMiB > 260 || !strings.EqualFold(memoryUnit, "MiB") {
+		t.Fatalf("memory_limit=%q, want approximately 256MB", memoryLimit)
 	}
 }
 
@@ -601,6 +607,52 @@ func TestDuckDBPrepareWriteAndPushdownQuery(t *testing.T) {
 	})
 	if err != nil || total != 1 || len(rows) != 1 || rows[0].GetKey().GetSpaceId() != "s" || rows[0].GetKey().GetTimeSeries().GetSubjectId() != "ETH" {
 		t.Fatalf("rows=%v total=%d err=%v", rows, total, err)
+	}
+}
+
+func TestStatMetadataTracksCoverageWithoutScanningRows(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	row := func(at string) viewindex.RowWrite {
+		return viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", "BTC", "1m", at, "")}}
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
+		RowWrites: []viewindex.RowWrite{
+			row("2026-07-20T00:01:00Z"),
+			row("2026-07-20T00:00:00Z"),
+		}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := manager.StatMetadata(context.Background(), "idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.IndexedFrom != "2026-07-20T00:00:00.000000000Z" || stats.IndexedTo != "2026-07-20T00:01:00.000000000Z" {
+		t.Fatalf("coverage=%s..%s", stats.IndexedFrom, stats.IndexedTo)
+	}
+}
+
+func TestMergeCoverageBoundsIsMonotonicAndCanonical(t *testing.T) {
+	from, to := mergeCoverageBounds(
+		"2026-08-12T00:00:00Z", "2026-08-12T01:00:00.1Z",
+		"2026-08-12T00:30:00.123456789Z", "2026-08-12T00:45:00Z",
+	)
+	if from != "2026-08-12T00:00:00.000000000Z" || to != "2026-08-12T01:00:00.100000000Z" {
+		t.Fatalf("bounds moved backwards or were not canonical: %s..%s", from, to)
+	}
+	from, to = mergeCoverageBounds(
+		"", "", "2026-08-12T00:00:00.1+00:00", "2026-08-12T00:00:00.9+00:00",
+	)
+	if from != "2026-08-12T00:00:00.100000000Z" || to != "2026-08-12T00:00:00.900000000Z" {
+		t.Fatalf("bounds were not normalized: %s..%s", from, to)
 	}
 }
 

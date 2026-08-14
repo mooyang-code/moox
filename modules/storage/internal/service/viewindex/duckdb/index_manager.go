@@ -26,12 +26,13 @@ import (
 type IndexManagerOptions struct{ Root string }
 
 type IndexManager struct {
-	root    string
-	mu      sync.Mutex
-	dbs     map[string]*sql.DB
-	schema  map[string]map[string]pb.FieldValueType
-	dataset map[string]string
-	space   map[string]string
+	root       string
+	mu         sync.Mutex
+	dbs        map[string]*sql.DB
+	schema     map[string]map[string]pb.FieldValueType
+	dataset    map[string]string
+	space      map[string]string
+	coverageMu sync.Mutex
 }
 
 var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
@@ -40,9 +41,10 @@ var duckDBMemoryLimitRE = regexp.MustCompile(`^[1-9][0-9]*(?:KB|MB|GB|TB)$`)
 const (
 	duckDBMemoryLimitEnv = "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT"
 	duckDBThreadsEnv     = "MOOX_STORAGE_VIEW_DUCKDB_THREADS"
-	defaultDuckDBMemory  = "512MB"
+	defaultDuckDBMemory  = "256MB"
 	defaultDuckDBThreads = 1
-	defaultMaxOpenConns  = 8
+	defaultMaxOpenConns  = 4
+	defaultMaxIdleConns  = 1
 	// DuckDB accepts a large parameter count, but keeping each statement
 	// bounded avoids oversized SQL packets during a 10k-row backfill while
 	// still amortizing per-row Exec overhead for the event consumer.
@@ -108,7 +110,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		createColumns = append(createColumns, quote(name)+" "+duckType(valueType))
 	}
 	statement := fmt.Sprintf(`
-		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL);
+		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '');
 		CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
 		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
 		CREATE INDEX idx_view_rows_data_time ON view_rows (data_time);`, strings.Join(createColumns, ", "))
@@ -116,7 +118,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		cleanupTemp()
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta VALUES (1, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at) VALUES (1, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		cleanupTemp()
 		return err
 	}
@@ -199,10 +201,68 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 			}
 		}
 	}
+	if from, to, ok := batchCoverage(batch.RowWrites); ok {
+		var currentFrom, currentTo string
+		if err := tx.QueryRowContext(ctx, `SELECT indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&currentFrom, &currentTo); err != nil {
+			return err
+		}
+		if currentFrom == "" || beforeCanonicalTime(from, currentFrom) {
+			currentFrom = from
+		}
+		if currentTo == "" || beforeCanonicalTime(currentTo, to) {
+			currentTo = to
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ?, indexed_to = ? WHERE singleton = 1`, currentFrom, currentTo); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func batchCoverage(writes []viewindex.RowWrite) (string, string, bool) {
+	var from, to time.Time
+	for _, write := range writes {
+		if write.Key.Key == nil {
+			continue
+		}
+		series := write.Key.Key.GetTimeSeries()
+		if series == nil {
+			continue
+		}
+		value, err := time.Parse(time.RFC3339Nano, series.GetDataTime())
+		if err != nil {
+			continue
+		}
+		value = value.UTC()
+		if from.IsZero() || value.Before(from) {
+			from = value
+		}
+		if to.IsZero() || value.After(to) {
+			to = value
+		}
+	}
+	if from.IsZero() || to.IsZero() {
+		return "", "", false
+	}
+	return canonicalCoverageTime(from), canonicalCoverageTime(to), true
+}
+
+const canonicalCoverageLayout = "2006-01-02T15:04:05.000000000Z"
+
+func canonicalCoverageTime(value time.Time) string {
+	return value.UTC().Format(canonicalCoverageLayout)
+}
+
+func beforeCanonicalTime(left, right string) bool {
+	l, lerr := time.Parse(time.RFC3339Nano, left)
+	r, rerr := time.Parse(time.RFC3339Nano, right)
+	if lerr == nil && rerr == nil {
+		return l.Before(r)
+	}
+	return left < right
 }
 
 type rowWriteGroup struct {
@@ -588,7 +648,7 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM view_rows`).Scan(&stats.EntryCount); err != nil {
@@ -599,10 +659,15 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		return viewindex.ViewIndexStats{}, err
 	}
 	if from.Valid {
-		stats.IndexedFrom = from.Time.UTC().Format(time.RFC3339Nano)
+		stats.IndexedFrom = canonicalCoverageTime(from.Time)
 	}
 	if to.Valid {
-		stats.IndexedTo = to.Time.UTC().Format(time.RFC3339Nano)
+		stats.IndexedTo = canonicalCoverageTime(to.Time)
+	}
+	if stats.IndexedFrom != "" || stats.IndexedTo != "" {
+		if err := persistCoverageBounds(ctx, db, stats.IndexedFrom, stats.IndexedTo); err != nil {
+			return viewindex.ViewIndexStats{}, err
+		}
 	}
 	stats.Exists = true
 	stats.PhysicalBytes = uint64(fileInfo.Size())
@@ -610,6 +675,48 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		stats.PhysicalBytes += uint64(walInfo.Size())
 	}
 	return stats, nil
+}
+
+func persistCoverageBounds(ctx context.Context, db *sql.DB, from, to string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var currentFrom, currentTo string
+	if err := tx.QueryRowContext(ctx, `SELECT indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&currentFrom, &currentTo); err != nil {
+		return err
+	}
+	mergedFrom, mergedTo := mergeCoverageBounds(currentFrom, currentTo, from, to)
+	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ?, indexed_to = ? WHERE singleton = 1`, mergedFrom, mergedTo); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func mergeCoverageBounds(currentFrom, currentTo, observedFrom, observedTo string) (string, string) {
+	currentFrom = canonicalizeCoverageTime(currentFrom)
+	currentTo = canonicalizeCoverageTime(currentTo)
+	observedFrom = canonicalizeCoverageTime(observedFrom)
+	observedTo = canonicalizeCoverageTime(observedTo)
+	if observedFrom != "" && (currentFrom == "" || beforeCanonicalTime(observedFrom, currentFrom)) {
+		currentFrom = observedFrom
+	}
+	if observedTo != "" && (currentTo == "" || beforeCanonicalTime(currentTo, observedTo)) {
+		currentTo = observedTo
+	}
+	return currentFrom, currentTo
+}
+
+func canonicalizeCoverageTime(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return value
+	}
+	return canonicalCoverageTime(parsed)
 }
 
 // StatMetadata is the lightweight counterpart used during process startup.
@@ -633,7 +740,7 @@ func (m *IndexManager) StatMetadata(ctx context.Context, id string) (viewindex.V
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	stats.Exists = true
@@ -725,6 +832,10 @@ func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[st
 	if err != nil {
 		return nil, nil, "", "", err
 	}
+	if err := m.ensureCoverageColumns(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, nil, "", "", err
+	}
 	if err := validateSystemSchema(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, nil, "", "", err
@@ -769,6 +880,24 @@ func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[st
 	return db, columns, datasetID, spaceID, nil
 }
 
+func (m *IndexManager) ensureCoverageColumns(ctx context.Context, db *sql.DB) error {
+	m.coverageMu.Lock()
+	defer m.coverageMu.Unlock()
+	for _, column := range []string{"indexed_from", "indexed_to"} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'view_meta' AND column_name = ?`, column).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, `ALTER TABLE view_meta ADD COLUMN `+column+` VARCHAR DEFAULT ''`); err != nil {
+			return fmt.Errorf("add view_meta coverage column %s: %w", column, err)
+		}
+	}
+	return nil
+}
+
 func (m *IndexManager) path(id string) (string, error) {
 	if id == "" || filepath.Base(id) != id {
 		return "", errors.New("invalid view index id")
@@ -788,7 +917,7 @@ func open(path string) (*sql.DB, error) {
 	// fixed pool so read concurrency is useful without mirroring the much larger
 	// Factor worker count.
 	db.SetMaxOpenConns(defaultMaxOpenConns)
-	db.SetMaxIdleConns(defaultMaxOpenConns)
+	db.SetMaxIdleConns(defaultMaxIdleConns)
 	memoryLimit := strings.TrimSpace(os.Getenv(duckDBMemoryLimitEnv))
 	if memoryLimit == "" {
 		memoryLimit = defaultDuckDBMemory

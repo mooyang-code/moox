@@ -68,6 +68,12 @@ const defaultRebuildMaxPending uint64 = 32
 const defaultRebuildIdleChecks uint32 = 3
 const sizeLimitBuildBacklogThreshold = defaultRebuildMaxPending
 
+// Coverage scans are intentionally decoupled from the cheap physical
+// contract check. A large DuckDB View must not be COUNT/MIN/MAX-scanned on
+// every reconcile tick.
+const coverageRefreshInterval = 5 * time.Minute
+const coverageStatTimeout = 5 * time.Second
+
 // viewColumnsExplicitAttr preserves the distinction between a view that
 // intentionally exposes no columns and a legacy view whose empty definition
 // means "all primary dataset columns".
@@ -318,9 +324,46 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			return fmt.Errorf("view engine %q is unavailable", engineName)
 		}
 		var err error
-		stats, err = engine.Stat(ctx, view.GetActiveIndexId())
+		// Reconciliation runs on every interval.  A full DuckDB Stat performs
+		// COUNT/MIN/MAX scans over the entire View and can time out on a large
+		// index, making a healthy active index look invalid and starting a
+		// needless A/B rebuild.  Use the metadata-only contract check here;
+		// the physical size is still available for the watermark gate.
+		var metadataOnly bool
+		stats, metadataOnly, err = reconcileIndexStats(ctx, engine, view.GetActiveIndexId())
 		if err != nil {
 			return err
+		}
+		// Metadata-only stats deliberately omit coverage fields. Preserve the
+		// last full coverage snapshot instead of replacing it with empty values;
+		// otherwise TotalMode=NONE queries lose their completeness information
+		// and retention checks are silently disabled.
+		_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
+		if metadataOnly {
+			if cached, ok := cachedActiveIndexStats(runtime, view.GetActiveIndexId()); ok {
+				if stats.EntryCount == 0 {
+					stats.EntryCount = cached.EntryCount
+				}
+				if stats.IndexedFrom == "" {
+					stats.IndexedFrom = cached.IndexedFrom
+				}
+				if stats.IndexedTo == "" {
+					stats.IndexedTo = cached.IndexedTo
+				}
+			}
+			if shouldRefreshCoverage(runtime) {
+				coverageCtx, cancel := context.WithTimeout(ctx, coverageStatTimeout)
+				fullStats, fullErr := engine.Stat(coverageCtx, view.GetActiveIndexId())
+				cancel()
+				markCoverageRefresh(runtime)
+				if fullErr == nil && fullStats.Exists {
+					stats = fullStats
+					metadataOnly = false
+					markCoverageRefresh(runtime)
+				} else if fullErr != nil {
+					log.Printf("storage view coverage refresh deferred space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), fullErr)
+				}
+			}
 		}
 		if stats.Exists {
 			if err := validatePhysicalViewContract(view, stats); err != nil {
@@ -335,7 +378,9 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 					return err
 				}
 				_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
-				s.cacheActiveIndexStats(runtime, view.GetActiveIndexId(), stats)
+				if !metadataOnly || stats.IndexedFrom != "" || stats.IndexedTo != "" || stats.EntryCount != 0 {
+					s.cacheActiveIndexStats(runtime, view.GetActiveIndexId(), stats)
+				}
 				if runtime != nil {
 					runtime.mu.Lock()
 					primaryChanged := runtime.active == view.GetActiveIndexId() && runtime.activePrimaryDatasetID != "" && view.GetPrimaryDatasetId() != "" && runtime.activePrimaryDatasetID != view.GetPrimaryDatasetId()
@@ -607,6 +652,33 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED, uint64(stats.EntryCount), nil)
 	}
 	return err
+}
+
+func reconcileIndexStats(ctx context.Context, engine viewindex.Engine, indexID string) (viewindex.ViewIndexStats, bool, error) {
+	if reader, ok := engine.(viewindex.MetadataStatReader); ok {
+		stats, err := reader.StatMetadata(ctx, indexID)
+		return stats, true, err
+	}
+	stats, err := engine.Stat(ctx, indexID)
+	return stats, false, err
+}
+
+func shouldRefreshCoverage(runtime *viewRuntime) bool {
+	if runtime == nil {
+		return true
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.statsRefreshedAt.IsZero() || time.Since(runtime.statsRefreshedAt) >= coverageRefreshInterval
+}
+
+func markCoverageRefresh(runtime *viewRuntime) {
+	if runtime == nil {
+		return
+	}
+	runtime.mu.Lock()
+	runtime.statsRefreshedAt = time.Now().UTC()
+	runtime.mu.Unlock()
 }
 
 func (s *Service) sizeLimitBuildIdle(ctx context.Context) bool {

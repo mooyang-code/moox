@@ -79,6 +79,7 @@ type viewRuntime struct {
 	activePrimaryDatasetID string
 	statsIndexID           string
 	stats                  viewindex.ViewIndexStats
+	statsRefreshedAt       time.Time
 	next                   string
 	nextDatasetIDs         []string
 	nextPrimaryDatasetID   string
