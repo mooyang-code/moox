@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="${CONFIG:-${ROOT}/custom.toml}"
 REMOTE_ROOT="${REMOTE_ROOT:-/tmp/moox-build}"
 MOOX_CLI="${MOOX_CLI:-${ROOT}/bin/moox-cli}"

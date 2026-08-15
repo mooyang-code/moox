@@ -55,7 +55,7 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 		require.NotEmpty(t, item.KeepDuration, item.DatasetID)
 		require.Equal(t, "disabled", item.Status, item.DatasetID)
 		if item.SpaceID == "moox_system" && item.DatasetID == "moox_service_metrics" {
-			require.Equal(t, "72h", item.KeepDuration)
+			require.Equal(t, "24h", item.KeepDuration)
 		}
 		if item.SpaceID == "crypto_market" && item.DatasetID != "binance_spot_symbols" && item.DatasetID != "binance_swap_symbols" && item.DatasetID != "binance_spot_kline_1m" {
 			require.Equal(t, "crypto_market", item.DataSourceID, item.DatasetID)
@@ -66,7 +66,7 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 			require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, item.GrainKeys, item.ViewID)
 		}
 		if item.SpaceID == "moox_system" && item.ViewID == "moox_service_metrics_view" {
-			require.Equal(t, "72h", item.KeepDuration)
+			require.Equal(t, "24h", item.KeepDuration)
 		}
 	}
 }

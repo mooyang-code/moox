@@ -35,6 +35,12 @@ Factor 是面向个人量化的单实例时序因子服务。它只持久化因�
   --freq 1m \
   --start-time 2026-07-26T00:00:00Z \
   --end-time 2026-07-27T00:00:00Z
+
+# 清理历史 ViewSourcePeriodReady 积压（仅删除 durable consumer，不删除数据）
+./bin/moox-factor-cli clear-queue \
+  --package-root /home/ubuntu/moox/prod \
+  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
+  --yes
 ```
 
 ## Runtime Contract
@@ -99,6 +105,21 @@ exactly-once，缺口可用 `run-once` 或同步 `RecalcFactor` 修复。
 因子输入列的并集；任务获得 Python worker 时再按因子投影。读取结果通过容量为
 `2 * python_workers` 的内部队列形成背压，不增加可调批次、每 binding 并发或第三个队列
 配置。同一 subject 的多个因子可以并行，Python worker 总是领取下一个数据已就绪任务。
+
+### CLS 运行日志
+
+启用 CLS 的生产发布会在 Factor 配置中注入 `info` 级别的 CLS writer，保留本地
+console writer；Topic ID 由发布前的 CLS 预检解析，不写入源码。以下记录用于定位
+计算延迟、读取超时和写回失败：
+
+- `factor_view_read_done`：一次共享 View 读取的 subject、period、attempt、耗时和列数。
+- `factor_view_read_retry`：读取失败后移到队尾重试。
+- `factor_task_start` / `factor_task_done`：因子任务的输入范围、输出 Dataset、状态和耗时。
+- `factor_view_ready_done`：本周期全部任务与结果 Marker 已提交。
+- `factor_view_ready_report_failed`：结果 Marker 上报失败，事件会保持待处理并重试。
+
+日志不包含源码、凭证或请求体；可在 CLS 固定 Topic 中按 `service_name=factor` 和上述
+事件名筛选。
 
 Bias 和 CCI 是 K 线模板示例，不是运行时协议。核心模块不提供 `period`、
 `Depends`、Dimensions Map、多 tag、Factor DAG、持久化 inbox 或 exactly-once。

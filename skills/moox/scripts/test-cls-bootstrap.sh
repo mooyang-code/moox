@@ -51,7 +51,7 @@ printf "MOOX_CLS_SECRET_ID='%s-id'\nMOOX_CLS_SECRET_KEY='%s-key'\nMOOX_CLS_REGIO
 chmod 0600 "${output}"
 case "$(cat "${MOOX_TEST_MODE}")" in
   success)
-    printf '{"status":"configured","resources":{"account_id":"acct-first","topic_id":"%s"}}\n' "${topic}"
+    printf '{"status":"configured","resources":{"account_id":"acct-first","region":"ap-guangzhou","logset_id":"logset-fixed","topic_id":"%s"}}\n' "${topic}"
     ;;
   missing-topic)
     printf '{"status":"configured","resources":{"account_id":"acct-first"}}\n'
@@ -103,6 +103,7 @@ assert_no_transaction_artifacts() {
   local stage=$1 deploy=$2
   [[ -z "$(find "${stage}" -type f -name '*.cls.*' -print -quit)" ]]
   [[ -z "$(find "${deploy}/secrets" -type f \( -name '.cls.env.*.next' -o -name '.cls.env.*.backup' \) -print -quit)" ]]
+  [[ -z "$(find "${deploy}/config" -type f -name '.resources.env.*' -print -quit 2>/dev/null)" ]]
 }
 
 assert_no_secrets() {
@@ -112,14 +113,17 @@ assert_no_secrets() {
 }
 
 assert_cls_log_writer() {
-  awk '
+  local config=$1 expected_level=${2:-warn}
+  MOOX_EXPECT_CLS_LEVEL="${expected_level}" awk '
+    BEGIN { expected = ENVIRON["MOOX_EXPECT_CLS_LEVEL"] }
     /^plugins:[[:space:]]*$/ { plugins=1; next }
     plugins && /^[^[:space:]#]/ { plugins=0; in_log=0 }
     plugins && /^  log:[[:space:]]*$/ { in_log=1; next }
     in_log && /^  [^[:space:]#][^:]*:/ { in_log=0 }
-    in_log && /^      - writer: cls[[:space:]]*$/ { found++ }
-    END { exit(found == 1 ? 0 : 1) }
-  ' "$1"
+    in_log && /^      - writer: cls[[:space:]]*$/ { found++; waiting_level=1; next }
+    waiting_level && /^        level: / { level=$2; waiting_level=0 }
+    END { exit(found == 1 && level == expected ? 0 : 1) }
+  ' "${config}"
 }
 
 write_lock_owner() {
@@ -147,9 +151,14 @@ if grep -q -- '--cloud-account-id' "${calls}"; then
   exit 1
 fi
 grep -q 'writer: cls' "${STAGE}/factor/config/trpc_go.yaml"
-grep -q 'topic_id: topic-fixed' "${STAGE}/factor/config/trpc_go.yaml"
-grep -q 'topic_id: topic-fixed' "${STAGE}/storage/config/trpc_go-prod.yaml"
-assert_cls_log_writer "${STAGE}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${STAGE}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${STAGE}/storage/config/trpc_go-prod.yaml"
+grep -q "^MOOX_CLS_LOGSET_ID='logset-fixed'$" "${STAGE}/config/resources.env"
+grep -q "^MOOX_CLS_TOPIC_ID='topic-fixed'$" "${STAGE}/config/resources.env"
+grep -q "^MOOX_CLS_ACCOUNT_ID='acct-first'$" "${STAGE}/config/resources.env"
+[[ $(file_mode "${STAGE}/config/resources.env") == 644 ]]
+! grep -q 'MOOX_CLS_SECRET_' "${STAGE}/config/resources.env"
+assert_cls_log_writer "${STAGE}/factor/config/trpc_go.yaml" info
 assert_cls_log_writer "${STAGE}/storage/config/trpc_go-prod.yaml"
 assert_cls_log_writer "${STAGE}/nolog/config/trpc_go.yaml"
 assert_cls_log_writer "${STAGE}/bare/config/trpc_go-test.yaml"
@@ -286,7 +295,7 @@ MOOX_TEST_CALLS="${calls}" MOOX_TEST_MODE="${mode_file}" \
   "${ROOT}/skills/moox/scripts/cls-bootstrap.sh" --target localhost \
   --deploy-dir "${DEAD_DEPLOY}" --stage-dir "${DEAD_STAGE}" \
   --admin-url http://127.0.0.1:11002 >>"${output}" 2>&1
-grep -q 'topic_id: topic-fixed' "${DEAD_STAGE}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${DEAD_STAGE}/factor/config/trpc_go.yaml"
 [[ ! -e "${DEAD_STAGE}/.cls-bootstrap.lock" ]]
 
 # A failure during either stage or credential commit restores the whole release.
@@ -506,13 +515,13 @@ else
   [[ ${status_b} -eq 0 ]]
 fi
 concurrent_env=$(cat "${CONCURRENT_DEPLOY}/secrets/cls.env")
-if grep -q 'topic_id: topic-a' "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"; then
+if grep -q "^MOOX_CLS_TOPIC_ID='topic-a'$" "${CONCURRENT_STAGE}/config/resources.env"; then
   [[ "${concurrent_env}" == *concurrent-a-id* && "${concurrent_env}" == *concurrent-a-key* ]]
 else
-  grep -q 'topic_id: topic-b' "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"
+  grep -q "^MOOX_CLS_TOPIC_ID='topic-b'$" "${CONCURRENT_STAGE}/config/resources.env"
   [[ "${concurrent_env}" == *concurrent-b-id* && "${concurrent_env}" == *concurrent-b-key* ]]
 fi
-assert_cls_log_writer "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml"
+assert_cls_log_writer "${CONCURRENT_STAGE}/factor/config/trpc_go.yaml" info
 assert_no_transaction_artifacts "${CONCURRENT_STAGE}" "${CONCURRENT_DEPLOY}"
 [[ ! -e "${CONCURRENT_STAGE}/.cls-bootstrap.lock" ]]
 [[ ! -e "${CONCURRENT_DEPLOY}/secrets/.cls-bootstrap.lock" ]]
@@ -641,7 +650,11 @@ PATH="${FAKE_BIN}:${PATH}" MOOX_TEST_CALLS="${calls}" \
   --admin-url http://127.0.0.1:11002 --cloud-account-id 'explicit-account' \
   >"${remote_output}" 2>&1
 grep -q -- '--cloud-account-id explicit-account' "${calls}"
-grep -q 'topic_id: topic-fixed' "${REMOTE_STAGE}/factor/config/trpc_go.yaml"
+grep -q 'topic_id: \${MOOX_CLS_TOPIC_ID}' "${REMOTE_STAGE}/factor/config/trpc_go.yaml"
+grep -q "^MOOX_CLS_TOPIC_ID='topic-fixed'$" "${REMOTE_HOME}/moox/config/resources.env"
+grep -q "^MOOX_CLS_ACCOUNT_ID='acct-first'$" "${REMOTE_HOME}/moox/config/resources.env"
+[[ $(file_mode "${REMOTE_HOME}/moox/config/resources.env") == 644 ]]
+! grep -q 'MOOX_CLS_SECRET_' "${REMOTE_HOME}/moox/config/resources.env"
 [[ $(file_mode "${REMOTE_HOME}/moox/secrets/cls.env") == 600 ]]
 [[ ! -e "${REMOTE_HOME}/moox/secrets/cls.env.next" ]]
 while IFS= read -r remote_path; do [[ ! -e "${remote_path}" ]]; done <"${REMOTE_PATHS}"

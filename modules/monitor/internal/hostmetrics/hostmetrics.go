@@ -93,7 +93,7 @@ func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error
 	if occurred.Before(now.Add(-15*time.Minute)) || occurred.After(now.Add(2*time.Minute)) {
 		return nil, errors.New("host metric occurred_at is outside the accepted clock-skew window")
 	}
-	if uuid.Validate(msg.GetSubjectId()) != nil {
+	if !hostmetricpb.IsCompatibleAgentID(msg.GetSubjectId()) {
 		return nil, errors.New("host metric producer identity is invalid")
 	}
 	metric := new(hostmetricpb.HostMetric)
@@ -231,6 +231,7 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	}
 	occurredAt := msg.GetOccurredAt().AsTime().UTC()
 	current := true
+	canonicalAgentID := metric.GetAgentId()
 	if s.registry != nil {
 		result, err := s.registry.Observe(ctx, HostObservation{
 			AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
@@ -240,6 +241,9 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 			return fmt.Errorf("update host agent registry: %w", err)
 		}
 		current = result.Current
+		if result.AgentID != "" {
+			canonicalAgentID = result.AgentID
+		}
 		if result.Transition != nil && s.presence != nil {
 			_ = s.presence.HandlePresenceTransition(ctx, *result.Transition)
 		}
@@ -253,11 +257,11 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	if s.writer == nil {
 		return errors.New("host metric storage writer is not configured")
 	}
-	if err := s.writer.WriteSnapshot(ctx, metric.GetSnapshot(), metric.GetAgentId(), occurredAt, msg.GetEventId()); err != nil {
+	if err := s.writer.WriteSnapshot(ctx, metric.GetSnapshot(), canonicalAgentID, occurredAt, msg.GetEventId()); err != nil {
 		return fmt.Errorf("write host metric snapshot: %w", err)
 	}
 	view := AgentView{
-		AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
+		AgentID: canonicalAgentID, Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
 		LastSeenAt: occurredAt.Format(time.RFC3339Nano), Reachable: true,
 		Snapshot: cloneSnapshot(metric.GetSnapshot()),
 	}
@@ -272,7 +276,7 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	}
 	s.mu.Unlock()
 	if s.alert != nil {
-		_ = s.alert.Evaluate(ctx, metric.GetAgentId(), msg.GetEventId(), metric.GetSnapshot(), occurredAt)
+		_ = s.alert.Evaluate(ctx, canonicalAgentID, msg.GetEventId(), metric.GetSnapshot(), occurredAt)
 	}
 	return nil
 }

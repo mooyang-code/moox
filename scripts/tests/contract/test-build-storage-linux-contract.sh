@@ -14,6 +14,7 @@ trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 command -v jq >/dev/null 2>&1 || { echo 'jq is required' >&2; exit 1; }
 ! grep -Fq '106.53.107.122' "${SCRIPT}"
+grep -Fq '$(dirname "${BASH_SOURCE[0]}")/.."' "${SCRIPT}"
 grep -Fq '"${ROOT}/scripts/build-storage-linux.sh"' "${DEPLOY_SCRIPT}"
 grep -Fq '"${WITH_STORAGE}" -eq 1 || "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1' "${DEPLOY_SCRIPT}"
 grep -Fq '"${TARGET_GOARCH}" == amd64' "${DEPLOY_SCRIPT}"

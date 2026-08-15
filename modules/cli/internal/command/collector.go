@@ -456,7 +456,7 @@ type collectorCLSSink struct {
 	Resources tencent.CLSBootstrapResult
 }
 
-func resolveCollectorCLSSink(ctx context.Context, control *adminclient.Client, account adminclient.CloudAccount) (collectorCLSSink, error) {
+func resolveCollectorCLSSink(ctx context.Context, control *adminclient.Client, account adminclient.CloudAccount, region string) (collectorCLSSink, error) {
 	if control == nil || strings.TrimSpace(account.CredentialSecretID) == "" {
 		return collectorCLSSink{}, fmt.Errorf("Tencent cloud account %q has no CLS credential secret", account.AccountID)
 	}
@@ -467,7 +467,11 @@ func resolveCollectorCLSSink(ctx context.Context, control *adminclient.Client, a
 	if secret == nil || secret.Provider != "tencent" || secret.Category != "cloud" || secret.Status != "active" || strings.TrimSpace(secret.KeyID) == "" || strings.TrimSpace(secret.SecretValue) == "" {
 		return collectorCLSSink{}, fmt.Errorf("Tencent cloud account %q returned incomplete active cloud credentials for CLS", account.AccountID)
 	}
-	api, err := newCollectorCLSAPI(secret.KeyID, secret.SecretValue, clsprepare.Region)
+	region = strings.TrimSpace(region)
+	if region == "" {
+		region = clsprepare.Region
+	}
+	api, err := newCollectorCLSAPI(secret.KeyID, secret.SecretValue, region)
 	if err != nil {
 		return collectorCLSSink{}, fmt.Errorf("create central CLS client for collector package: %w", err)
 	}
@@ -572,7 +576,11 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	if !ok || clsAccount.IsDeleted {
 		return collectorPublishSummary{}, fmt.Errorf("central CLS cloud account %q not found", clsAccountID)
 	}
-	clsSink, err := resolveCollectorCLSSink(ctx, client, clsAccount)
+	clsRegion := clsprepare.Region
+	if manifest != nil {
+		clsRegion = firstNonEmpty(manifest.Manifest.TencentCloud.Region, clsRegion)
+	}
+	clsSink, err := resolveCollectorCLSSink(ctx, client, clsAccount, clsRegion)
 	if err != nil {
 		return collectorPublishSummary{}, err
 	}
@@ -585,7 +593,7 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 	// The shared Topic is in Guangzhou but the short-lived functions run in
 	// overseas regions. They must use CLS's public ingestion endpoint rather
 	// than the Guangzhou VPC-only tencentyun.com address.
-	opts.CLSHost = scfCLSIngestHost(clsprepare.Host)
+	opts.CLSHost = scfCLSIngestHost(clsRegion + ".cls.tencentyun.com")
 	zipPath := opts.ZipPath
 	if zipPath == "" {
 		result, err := packageCollectorFunction(ctx, opts.collectorPackageOptions)

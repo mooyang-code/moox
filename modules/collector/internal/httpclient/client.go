@@ -89,10 +89,9 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 		ctx = context.Background()
 	}
 	candidates := uniqueIPs(ips)
-	ipCtx, cancel := ipAttemptContext(ctx)
-	defer cancel()
+	ipDeadline, hasIPDeadline := ipAttemptDeadline(ctx)
 	source := dnsSource(len(candidates) > 0)
-	for _, ip := range candidates {
+	for index, ip := range candidates {
 		client := c.clientForIP(ip)
 		if client == nil {
 			// A custom RoundTripper may not be cloneable. Skip that address and
@@ -100,37 +99,60 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 			// the platform resolver.
 			continue
 		}
+		ipCtx, cancel := ipCandidateContext(ctx, ipDeadline, hasIPDeadline, len(candidates)-index)
 		log.InfoContextf(ctx, "collector_http_resolved_ip_attempted domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s", domain, ip, source, dnsHash(), dnsRouteAge())
-		if err := c.getWithClient(ipCtx, client, domain, path, query, consume); err == nil {
+		err := c.getWithClient(ipCtx, client, domain, path, query, consume)
+		cancel()
+		if err == nil {
 			return nil
-		} else {
-			log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s error=%v", domain, ip, source, dnsHash(), dnsRouteAge(), err)
 		}
+		log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s error=%v", domain, ip, source, dnsHash(), dnsRouteAge(), err)
 	}
 	log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d dns_source=system dns_snapshot_candidates=%d dns_hash=%s dns_route_age_seconds=%s", domain, len(candidates), len(candidates), dnsHash(), dnsRouteAge())
 	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
 }
 
-func ipAttemptContext(ctx context.Context) (context.Context, context.CancelFunc) {
+func ipAttemptDeadline(ctx context.Context) (time.Time, bool) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	deadline, ok := ctx.Deadline()
 	if !ok {
-		return ctx, func() {}
+		return time.Time{}, false
 	}
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
-		return ctx, func() {}
+		return deadline, true
 	}
 	reserve := hostnameFallbackReserve
 	if half := remaining / 2; half < reserve {
 		reserve = half
 	}
 	if reserve <= 0 {
-		return ctx, func() {}
+		return deadline, true
 	}
-	return context.WithDeadline(ctx, deadline.Add(-reserve))
+	return deadline.Add(-reserve), true
+}
+
+func ipCandidateContext(parent context.Context, deadline time.Time, hasDeadline bool, remainingCandidates int) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if !hasDeadline {
+		return parent, func() {}
+	}
+	if remainingCandidates <= 0 {
+		remainingCandidates = 1
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return context.WithDeadline(parent, deadline)
+	}
+	budget := remaining / time.Duration(remainingCandidates)
+	if budget <= 0 {
+		budget = remaining
+	}
+	return context.WithTimeout(parent, budget)
 }
 
 func dnsSource(hasSnapshot bool) string {

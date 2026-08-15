@@ -264,7 +264,7 @@ func TestStorageDeploysAllComponentsAsOneUnit(t *testing.T) {
 	require.Equal(t, []string{
 		"package", "upload", "install_storage", "storage_primary_ready", "storage_view_ready", "finalize_storage", "cleanup",
 	}, events)
-	require.Equal(t, remoteStorageArchiveNext, transport.uploadPath)
+	require.Regexp(t, `^/tmp/moox-storage-[A-Za-z0-9._-]+\.tar\.gz$`, transport.uploadPath)
 }
 
 func TestStorageInstallsWatchdogWhenRequested(t *testing.T) {
@@ -273,7 +273,7 @@ func TestStorageInstallsWatchdogWhenRequested(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "deploy", "systemd", "system"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "moox-storage-view-watchdog.sh"), []byte("#!/bin/sh\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "deploy", "systemd", "system", storageViewWatchdogService), []byte("User=__MOOX_USER__\nGroup=__MOOX_GROUP__\nEnvironment=HOME=__MOOX_HOME__\nEnvironment=MOOX_STORAGE_ROOT=__MOOX_STORAGE_ROOT__\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "deploy", "systemd", "system", storageViewWatchdogTimer), []byte("[Timer]\nOnUnitActiveSec=10s\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "deploy", "systemd", "system", storageViewWatchdogTimer), []byte("[Timer]\nOnActiveSec=10s\nOnUnitActiveSec=10s\n"), 0o600))
 	archive := filepath.Join(root, "storage.tar.gz")
 	require.NoError(t, os.WriteFile(archive, []byte("storage-package"), 0o600))
 	events := []string{}
@@ -291,7 +291,11 @@ func TestStorageInstallsWatchdogWhenRequested(t *testing.T) {
 			break
 		}
 	}
-	require.Contains(t, install, "systemctl enable --now moox-storage-view-watchdog.timer")
+	require.Contains(t, install, "systemctl enable moox-storage-view-watchdog.timer")
+	require.Contains(t, install, "systemctl restart moox-storage-view-watchdog.timer")
+	require.Contains(t, install, "NextElapseUSecMonotonic")
+	require.NotContains(t, install, "systemctl start moox-storage-view-watchdog.timer")
+	require.Contains(t, string(requireFile(t, filepath.Join(root, "deploy", "systemd", "system", storageViewWatchdogTimer))), "OnActiveSec=10s")
 }
 
 func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
@@ -339,8 +343,10 @@ func TestStoragePassesResetStorageDataAsBoundedPositionalFlag(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, install)
-	require.Equal(t, "1", install[len(install)-2], "reset is a bounded positional flag, not shell text")
-	require.Equal(t, "0", install[len(install)-1])
+	require.Equal(t, "1", install[len(install)-4], "reset is a bounded positional flag, not shell text")
+	require.Equal(t, "0", install[len(install)-3])
+	require.Regexp(t, `^[A-Za-z0-9._-]+$`, install[len(install)-2])
+	require.Equal(t, storageArchivePath(install[len(install)-2]), install[len(install)-1])
 }
 
 func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {
@@ -363,11 +369,12 @@ func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
 	command := exec.Command("tar", "-C", archiveDir, "-czf", archive, ".")
 	require.NoError(t, command.Run())
-	previousArchive := remoteStorageArchiveNext
+	const token = "reset-test"
+	previousArchive := storageArchivePath(token)
 	defer os.Remove(previousArchive)
 	require.NoError(t, copyFileForTest(archive, previousArchive))
-	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "1", "0")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "1", "0", token, previousArchive)
+	cmd.Env = storageInstallerEnv(t, home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 	_, err = os.Stat(filepath.Join(deploy, "data", "old.db"))
@@ -390,15 +397,16 @@ func TestStorageInstallerDefaultPreservesExistingData(t *testing.T) {
 	require.NoError(t, os.WriteFile(start, []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
 	require.NoError(t, exec.Command("tar", "-C", archiveDir, "-czf", archive, ".").Run())
-	previousArchive := remoteStorageArchiveNext
+	const token = "preserve-test"
+	previousArchive := storageArchivePath(token)
 	defer os.Remove(previousArchive)
 	require.NoError(t, copyFileForTest(archive, previousArchive))
-	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0", token, previousArchive)
+	cmd.Env = storageInstallerEnv(t, home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 	require.FileExists(t, filepath.Join(deploy, "data", "old.db"))
-	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
+	require.NoFileExists(t, filepath.Join(deploy, "data", "new.db"))
 }
 
 func TestStorageInstallerUsesControlGatewayCredentials(t *testing.T) {
@@ -418,11 +426,13 @@ func TestStorageInstallerUsesControlGatewayCredentials(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "start.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
 	require.NoError(t, exec.Command("tar", "-C", archiveDir, "-czf", archive, ".").Run())
-	defer os.Remove(remoteStorageArchiveNext)
-	require.NoError(t, copyFileForTest(archive, remoteStorageArchiveNext))
+	const token = "gateway-test"
+	remoteArchive := storageArchivePath(token)
+	defer os.Remove(remoteArchive)
+	require.NoError(t, copyFileForTest(archive, remoteArchive))
 
-	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "1")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "1", token, remoteArchive)
+	cmd.Env = storageInstallerEnv(t, home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 	for name, contents := range map[string]string{
@@ -495,7 +505,8 @@ func TestControlInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
-	require.Contains(t, string(requireFile(t, crontabLog)), `* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin $HOME/moox/prod/healthcheck.sh >/dev/null 2>&1`)
+	require.Contains(t, string(requireFile(t, crontabLog)), `for healthcheck in "$HOME"/moox/*/healthcheck.sh`)
+	require.Contains(t, string(requireFile(t, crontabLog)), `# moox-healthchecks`)
 	require.NoFileExists(t, filepath.Join(deploy, "data", "old.db"))
 	require.FileExists(t, filepath.Join(deploy, "data", "new.db"))
 	require.Equal(t, "account", string(requireFile(t, filepath.Join(deploy, "data", "caddy", "acme-account.json"))))
@@ -631,6 +642,22 @@ func TestStorageRollsBackAfterReadinessFailure(t *testing.T) {
 	require.Equal(t, "cleanup", events[len(events)-1])
 }
 
+func TestStorageRollbackBudgetCoversSerializedServices(t *testing.T) {
+	require.GreaterOrEqual(t, storageRollbackTimeout, 5*time.Minute)
+}
+
+func TestStorageReportsRollbackFailure(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	require.NoError(t, os.WriteFile(archive, []byte("package"), 0o600))
+	events := []string{}
+	transport := &fakeTransport{events: &events, failStorageRollback: true}
+	err := Storage(context.Background(), transport, Options{RepositoryRoot: t.TempDir(), PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64"}, Dependencies{
+		Packager: &fakePackager{path: archive, events: &events},
+		Probe:    &fakeProbe{events: &events, failAt: StoragePrimaryReady},
+	})
+	require.EqualError(t, err, "storage_deploy_not_ready; storage_rollback_failed")
+}
+
 func TestStorageRollbackDoesNotDeleteDeploymentWhenInstallerAlreadyRestoredPrevious(t *testing.T) {
 	home := t.TempDir()
 	deploy := filepath.Join(home, "moox", "storage")
@@ -638,12 +665,88 @@ func TestStorageRollbackDoesNotDeleteDeploymentWhenInstallerAlreadyRestoredPrevi
 	marker := filepath.Join(home, "restored")
 	start := filepath.Join(deploy, "start.sh")
 	require.NoError(t, os.WriteFile(start, []byte("#!/bin/sh\nprintf restored >\""+marker+"\"\n"), 0o700))
-	command := exec.Command("bash", "-c", rollbackStorageScript)
-	command.Env = append(os.Environ(), "HOME="+home)
+	command := exec.Command("bash", "-c", rollbackStorageScript, "moox-rollback-storage", "rollback-test")
+	command.Env = storageInstallerEnv(t, home)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 	require.FileExists(t, start)
 	require.NoFileExists(t, marker)
+}
+
+func TestStorageFirstDeploymentRollbackStopsAndRetainsFailedDeployment(t *testing.T) {
+	home := t.TempDir()
+	const token = "first-deploy-rollback"
+	deploy := filepath.Join(home, "moox", "storage")
+	require.NoError(t, os.MkdirAll(deploy, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, ".storage-activation-token"), []byte(token+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "stop.sh"), []byte("#!/bin/sh\nprintf stopped >\"$HOME/stopped\"\n"), 0o700))
+
+	command := exec.Command("bash", "-c", rollbackStorageScript, "moox-rollback-storage", token)
+	command.Env = storageInstallerEnv(t, home)
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.FileExists(t, filepath.Join(home, "stopped"))
+	require.NoDirExists(t, deploy)
+	require.DirExists(t, filepath.Join(home, "moox", "storage.failed."+token))
+}
+
+func TestStorageDelayedRollbackPreservesMovedData(t *testing.T) {
+	home := t.TempDir()
+	deploy := filepath.Join(home, "moox", "storage")
+	require.NoError(t, os.MkdirAll(filepath.Join(deploy, "data"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, "data", "facts.db"), []byte("facts"), 0o600))
+	for _, name := range []string{"start.sh", "stop.sh"} {
+		require.NoError(t, os.WriteFile(filepath.Join(deploy, name), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	}
+	archiveDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(archiveDir, "secrets"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(archiveDir, "secrets", "health-auth.env"), []byte("health"), 0o600))
+	for _, name := range []string{"start.sh", "stop.sh"} {
+		require.NoError(t, os.WriteFile(filepath.Join(archiveDir, name), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	}
+	archive := filepath.Join(t.TempDir(), "storage.tar.gz")
+	require.NoError(t, exec.Command("tar", "-C", archiveDir, "-czf", archive, ".").Run())
+	const token = "delayed-rollback-test"
+	remoteArchive := storageArchivePath(token)
+	defer os.Remove(remoteArchive)
+	require.NoError(t, copyFileForTest(archive, remoteArchive))
+
+	install := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0", token, remoteArchive)
+	install.Env = storageInstallerEnv(t, home)
+	output, err := install.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, "facts", string(requireFile(t, filepath.Join(deploy, "data", "facts.db"))))
+
+	rollback := exec.Command("bash", "-c", rollbackStorageScript, "moox-rollback-storage", token)
+	rollback.Env = storageInstallerEnv(t, home)
+	output, err = rollback.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, "facts", string(requireFile(t, filepath.Join(deploy, "data", "facts.db"))))
+}
+
+func TestStorageFinalizeUsesStagingMarkerAgeForCleanup(t *testing.T) {
+	home := t.TempDir()
+	const token = "finalize-marker-test"
+	deploy := filepath.Join(home, "moox", "storage")
+	other := filepath.Join(home, "moox", "storage.previous.other")
+	require.NoError(t, os.MkdirAll(deploy, 0o700))
+	require.NoError(t, os.MkdirAll(other, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(deploy, ".storage-activation-token"), []byte(token+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(other, ".storage-staged-at"), []byte("now\n"), 0o600))
+	old := time.Now().Add(-72 * time.Hour)
+	require.NoError(t, os.Chtimes(other, old, old))
+
+	run := func() {
+		command := exec.Command("bash", "-c", finalizeStorageScript, "moox-finalize-storage", token)
+		command.Env = storageInstallerEnv(t, home)
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, string(output))
+	}
+	run()
+	require.DirExists(t, other, "a recently staged transaction must survive even when its renamed directory has an old mtime")
+	require.NoError(t, os.Chtimes(filepath.Join(other, ".storage-staged-at"), old, old))
+	run()
+	require.NoDirExists(t, other)
 }
 
 func copyFileForTest(source, destination string) error {
@@ -720,7 +823,16 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 	)
 	require.Contains(t, installControlScript, "trap on_install_control_exit EXIT", "pre-activation failures must restart the stopped Caddy")
 	require.Contains(t, installControlScript, "install_control_healthcheck_cron", "control install must schedule Caddy and service recovery after reboot")
-	require.Contains(t, installControlScript, `* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin $HOME/moox/prod/healthcheck.sh >/dev/null 2>&1`, "control healthcheck must run every minute with system administration tools available")
+	require.Contains(t, installControlScript, `for healthcheck in "$HOME"/moox/*/healthcheck.sh`, "the host watchdog must cover every installed MooX package root")
+	require.Contains(t, installControlScript, `# moox-healthchecks`, "the host watchdog cron entry must be replaced idempotently")
+	require.Contains(t, installControlScript, `*.next.*|*.previous|*.previous.*|*.failed`, "the host watchdog must ignore deployment staging and rollback directories")
+	require.Contains(t, installStorageScript, `for healthcheck in "$HOME"/moox/*/healthcheck.sh`, "an independently installed Storage package must register the host watchdog")
+	require.Contains(t, installStorageScript, `"$deploy.maintenance.lock"`, "storage install and host watchdogs must share the deployment maintenance lock")
+	require.Contains(t, installStorageScript, `"$deploy/start.sh" 8>&-`, "storage services must not inherit the deployment maintenance lock")
+	require.Contains(t, rollbackStorageScript, `"$deploy.maintenance.lock"`, "storage rollback must serialize with watchdogs")
+	require.Contains(t, rollbackStorageScript, `"$deploy/start.sh" 8>&-`, "rolled-back services must not inherit the deployment maintenance lock")
+	require.Contains(t, finalizeStorageScript, `-mtime +1`, "old tokenized staging directories must be reclaimed after a successful deployment")
+	require.Contains(t, finalizeStorageScript, `storage.maintenance.lock`, "storage finalize must serialize with watchdogs")
 	require.Contains(t, installControlScript, "systemctl is-enabled --quiet", "control install must verify that cron survives reboot")
 	require.Contains(t, installControlScript, `"$deploy.maintenance.lock"`, "installer and healthcheck must share a lock outside the renamed deployment directory")
 	require.Contains(t, installControlScript, `"$deploy/start.sh" 8>&-`, "services must not inherit the deployment maintenance lock")
@@ -795,6 +907,22 @@ func requireFile(t *testing.T, path string) []byte {
 	return raw
 }
 
+func storageInstallerEnv(t *testing.T, home string) []string {
+	t.Helper()
+	crontabLog := filepath.Join(t.TempDir(), "crontab")
+	toolsDir := t.TempDir()
+	crontabCommand := filepath.Join(toolsDir, "crontab")
+	require.NoError(t, os.WriteFile(crontabCommand, []byte("#!/bin/sh\nif [ \"$1\" = -l ]; then exit 0; fi\ncat >\"$MOOX_CRONTAB_LOG\"\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(toolsDir, "flock"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	return append(os.Environ(),
+		"HOME="+home,
+		"PATH="+toolsDir+":"+os.Getenv("PATH"),
+		"MOOX_CRONTAB_COMMAND="+crontabCommand,
+		"MOOX_CRONTAB_LOG="+crontabLog,
+		"MOOX_CRON_DAEMON_CHECK_COMMAND=/usr/bin/true",
+	)
+}
+
 type fakePackager struct {
 	path     string
 	events   *[]string
@@ -810,14 +938,15 @@ func (f *fakePackager) Package(_ context.Context, opts Options) (string, error) 
 }
 
 type fakeTransport struct {
-	events       *[]string
-	uploadPath   string
-	uploadMode   fs.FileMode
-	uploaded     bytes.Buffer
-	commands     [][]string
-	unameOS      string
-	unameArch    string
-	failFinalize bool
+	events              *[]string
+	uploadPath          string
+	uploadMode          fs.FileMode
+	uploaded            bytes.Buffer
+	commands            [][]string
+	unameOS             string
+	unameArch           string
+	failFinalize        bool
+	failStorageRollback bool
 }
 
 func (f *fakeTransport) Check(context.Context) error { return nil }
@@ -858,6 +987,9 @@ func (f *fakeTransport) Run(_ context.Context, argv []string, _ io.Reader) (setu
 		*f.events = append(*f.events, "rollback")
 	} else if len(argv) >= 3 && strings.Contains(argv[2], "stop.sh") && strings.Contains(argv[2], "storage.previous") {
 		*f.events = append(*f.events, "rollback_storage")
+		if f.failStorageRollback {
+			return setupssh.Result{}, os.ErrDeadlineExceeded
+		}
 	} else if len(argv) > 0 && argv[0] == "rm" {
 		*f.events = append(*f.events, "cleanup")
 	}

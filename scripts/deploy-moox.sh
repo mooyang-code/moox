@@ -1058,6 +1058,11 @@ if [[ -r "${ROOT}/config/runtime.env" ]]; then
   source "${ROOT}/config/runtime.env"
   set +a
 fi
+if [[ -r "${ROOT}/config/resources.env" ]]; then
+  set -a
+  source "${ROOT}/config/resources.env"
+  set +a
+fi
 HEALTH_AUTH_FILE="${ROOT}/secrets/health-auth.env"
 [[ -r "${HEALTH_AUTH_FILE}" ]] || { echo "missing health credentials: ${HEALTH_AUTH_FILE}" >&2; exit 1; }
 [[ -r "${ROOT}/secrets/gateway-control.env" ]] || { echo "missing Gateway control credentials" >&2; exit 1; }
@@ -1517,6 +1522,24 @@ wait_http() {
   return 1
 }
 
+wait_storage_view_live() {
+  local attempts="${1:-30}" body
+  echo "waiting for storage-view restore and consumer binding"
+  for _ in $(seq 1 "${attempts}"); do
+    body=$(curl --fail --silent --max-time 2 \
+      -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" \
+      http://127.0.0.1:20211/healthz 2>/dev/null || true)
+    if grep -Eq '"process_alive"[[:space:]]*:[[:space:]]*true' <<<"${body}" &&
+      grep -Eq '"consumer_bound"[[:space:]]*:[[:space:]]*true' <<<"${body}" &&
+      grep -Eq '"restore_ready"[[:space:]]*:[[:space:]]*true' <<<"${body}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "storage-view restore or consumer binding not ready after ${attempts}s" >&2
+  return 1
+}
+
 sign_health_request() {
   local method="$1" path="$2" timestamp nonce body_hash canonical signature
   path="/${path#/}"
@@ -1738,6 +1761,10 @@ start_storage_primary() {
 start_storage_view() {
   gateway_service_env_for storage-view
   runtime_identity_env storage-view "${ROOT}/storage-view/config/trpc_go.yaml"
+  # Deliver policy is immutable after a JetStream durable is created. The
+  # production storage_view_period_v1 durable was created with `new`; keep
+  # that deployment default so upgrades bind the existing backlog instead of
+  # terminating on a consumer config conflict.
   start_service "storage-view" "${ROOT}/storage-view" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_OTEL_SERVICE_NAME=moox-storage-view" \
@@ -1748,8 +1775,8 @@ start_storage_view() {
       "MOOX_STORAGE_ROLE=view" \
       "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
       "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}" \
-      "MOOX_STORAGE_VIEW_DELIVER_POLICY=${MOOX_STORAGE_VIEW_DELIVER_POLICY:-}" \
-      "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-512MB}" \
+      "MOOX_STORAGE_VIEW_DELIVER_POLICY=${MOOX_STORAGE_VIEW_DELIVER_POLICY:-new}" \
+      "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
       "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}" \
@@ -1794,9 +1821,12 @@ start_storage() {
 
 complete_storage_bootstrap() {
   start_storage_view
-  wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
-  wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
-  wait_http http://127.0.0.1:20211/readyz "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-30}"
+  wait_tcp 127.0.0.1 20104 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-900}"
+  wait_tcp 127.0.0.1 20202 "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-900}"
+  # A durable backlog makes /readyz return 503 even when the restored View is
+  # correctly consuming. Deployment requires a healthy restore and a bound
+  # consumer, not an already-drained backlog.
+  wait_storage_view_live "${MOOX_WAIT_STORAGE_VIEW_SECONDS:-900}"
   if run_storage_doctor; then
     activate_storage_datasets
   else
@@ -2609,6 +2639,23 @@ probe_service() {
   curl --fail --silent --max-time 2 -H "X-Moox-Health-Auth: $(sign_health_request GET "${health_path}")" "${url}" >/dev/null
 }
 
+probe_liveness() {
+  local name="$1" url body
+  if [[ "${name}" != "storage-view" ]]; then
+    probe_service "${name}"
+    return
+  fi
+  url=http://127.0.0.1:20211/healthz
+  body=$(curl --fail --silent --max-time 2 \
+    -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}") || return 1
+  # A large durable backlog makes readiness false but remains recoverable.
+  # A lost consumer binding or failed restore is not healthy enough to leave
+  # running forever merely because the HTTP listener still answers.
+  grep -Eq '"process_alive"[[:space:]]*:[[:space:]]*true' <<<"${body}" &&
+    grep -Eq '"consumer_bound"[[:space:]]*:[[:space:]]*true' <<<"${body}" &&
+    grep -Eq '"restore_ready"[[:space:]]*:[[:space:]]*true' <<<"${body}"
+}
+
 listener_open() {
   local name="$1" port
   case "${name}" in
@@ -2701,6 +2748,16 @@ ensure_service() {
       echo "${name}: running pid=${pid} ready"
       return 0
     fi
+    # Readiness is an operator signal, not a restart trigger. Storage View can
+    # legitimately remain unready while a durable backlog drains for longer
+    # than the startup grace; restarting it would discard progress and create
+    # an endless recovery loop. Restart only when liveness also fails.
+    if probe_liveness "${name}"; then
+      rm -f "${failure_file}"
+      log_line "${name}: process is live but readiness is degraded; leaving it running"
+      echo "${name}: running pid=${pid} not ready"
+      return 0
+    fi
     age="$(ps -o etimes= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
     grace="$(startup_grace_seconds "${name}")"
     if [[ "${age}" =~ ^[0-9]+$ ]] && (( age < grace )) && listener_open "${name}"; then
@@ -2789,7 +2846,7 @@ EOF
 }
 
 prepare_stage() {
-  local storage_view_duckdb_memory_limit="${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-512MB}"
+  local storage_view_duckdb_memory_limit="${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB}"
   [[ "${storage_view_duckdb_memory_limit}" =~ ^[1-9][0-9]*(KB|MB|GB|TB)$ ]] || \
     fail "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT must be a positive KB/MB/GB/TB value"
   rm -rf "${STAGE_DIR}"
@@ -3286,6 +3343,12 @@ sync_local_stage() {
         --exclude '/bin/moox-admin' --exclude '/bin/moox-admin-cli' --exclude '/bin/moox-cli' \
         --exclude '/start.sh' --exclude '/stop.sh' --exclude '/restart.sh' \
         --exclude '/status.sh' --exclude '/healthcheck.sh')
+      if [[ "${ENABLE_CLS}" -eq 0 ]]; then
+        # A non-CLS component overlay must preserve the resource IDs used by
+        # already-installed services. Only an explicit CLS preflight may
+        # replace this generated file.
+        rsync_excludes+=(--exclude '/config/resources.env')
+      fi
       if [[ "${WITH_GATEWAY}" -eq 0 ]]; then
         rsync_excludes+=(--exclude '/gateway/' --exclude '/bin/moox-gateway' --exclude '/bin/moox-gateway-cli')
       fi
@@ -3475,21 +3538,21 @@ sync_local_stage() {
         MOOX_TLS_MODE="${TLS_MODE_RESOLVED}" \
         MOOX_CADDY_CHECKSUMS="${deploy_dir}/lib/caddy-v2.11.4-checksums.txt" \
         MOOX_CADDY_ARCHIVE="${deploy_dir}/lib/caddy_2.11.4_$([[ "${TARGET_GOOS}" == darwin ]] && printf mac || printf '%s' "${TARGET_GOOS}")_${TARGET_GOARCH}.tar.gz" \
-        "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${caddy_ports}" --config "${deploy_dir}/config/caddy/Caddyfile.next"
+        "${deploy_dir}/lib/caddy-managed.sh" ensure --deploy-dir "${deploy_dir}" --os "${TARGET_GOOS}" --arch "${TARGET_GOARCH}" --ports "${caddy_ports}" --config "${deploy_dir}/config/caddy/Caddyfile.next" 8>&-
     fi
     if [[ "${component_overlay}" -eq 1 ]]; then
-      [[ "${WITH_GATEWAY}" -eq 0 ]] || MOOX_WITH_GATEWAY=1 "${deploy_dir}/start.sh" gateway
-      [[ "${WITH_EVENTBUS}" -eq 0 ]] || "${deploy_dir}/start.sh" eventbus
-      [[ "${WITH_ARCHIVE}" -eq 0 ]] || "${deploy_dir}/start.sh" archive
-      [[ "${WITH_CLOUDNODE}" -eq 0 ]] || "${deploy_dir}/start.sh" cloudnode
-      [[ "${WITH_COLLECTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" collector
-      [[ "${WITH_FACTOR}" -eq 0 ]] || MOOX_WITH_FACTOR=1 "${deploy_dir}/start.sh" factor
-      [[ "${WITH_STRATEGY}" -eq 0 ]] || "${deploy_dir}/start.sh" strategy
-      [[ "${WITH_TRADE}" -eq 0 ]] || "${deploy_dir}/start.sh" trade
-      [[ "${WITH_MONITOR}" -eq 0 ]] || "${deploy_dir}/start.sh" monitor
-      [[ "${WITH_WEB_HOST}" -eq 0 ]] || "${deploy_dir}/start.sh" web-host
+      [[ "${WITH_GATEWAY}" -eq 0 ]] || MOOX_WITH_GATEWAY=1 "${deploy_dir}/start.sh" gateway 8>&-
+      [[ "${WITH_EVENTBUS}" -eq 0 ]] || "${deploy_dir}/start.sh" eventbus 8>&-
+      [[ "${WITH_ARCHIVE}" -eq 0 ]] || "${deploy_dir}/start.sh" archive 8>&-
+      [[ "${WITH_CLOUDNODE}" -eq 0 ]] || "${deploy_dir}/start.sh" cloudnode 8>&-
+      [[ "${WITH_COLLECTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" collector 8>&-
+      [[ "${WITH_FACTOR}" -eq 0 ]] || MOOX_WITH_FACTOR=1 "${deploy_dir}/start.sh" factor 8>&-
+      [[ "${WITH_STRATEGY}" -eq 0 ]] || "${deploy_dir}/start.sh" strategy 8>&-
+      [[ "${WITH_TRADE}" -eq 0 ]] || "${deploy_dir}/start.sh" trade 8>&-
+      [[ "${WITH_MONITOR}" -eq 0 ]] || "${deploy_dir}/start.sh" monitor 8>&-
+      [[ "${WITH_WEB_HOST}" -eq 0 ]] || "${deploy_dir}/start.sh" web-host 8>&-
     else
-      "${deploy_dir}/start.sh"
+      "${deploy_dir}/start.sh" 8>&-
     fi
   fi
 }

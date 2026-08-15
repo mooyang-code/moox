@@ -34,6 +34,7 @@ type Handler struct {
 	cfg             Config
 	gatherer        prometheus.Gatherer
 	connector       Connector
+	handleMu        sync.Mutex
 	mu              sync.Mutex
 	client          Publisher
 	sequence        atomic.Uint64
@@ -94,6 +95,11 @@ func newHandler(cfg Config, registerer prometheus.Registerer, gatherer prometheu
 }
 
 func (h *Handler) Handle(ctx context.Context) error {
+	// A handler owns one monotonic report sequence and one reconnectable
+	// publisher. Serializing timer/manual invocations prevents a stale failing
+	// call from invalidating a publisher installed by a concurrent call.
+	h.handleMu.Lock()
+	defer h.handleMu.Unlock()
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
@@ -107,10 +113,41 @@ func (h *Handler) Handle(ctx context.Context) error {
 	if err != nil {
 		return h.reportError(ctx, err)
 	}
-	if _, err := client.Publish(ctx, events.ObservabilityMetricsSnapshotReported, &metricspb.MetricReport{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, ServiceVersion: h.cfg.Version, Sequence: seq, Snapshot: snapshot}, events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: h.cfg.SpaceID, SubjectID: h.cfg.ServiceName + "/" + h.cfg.InstanceID}); err != nil {
-		return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
+	report := &metricspb.MetricReport{ServiceName: h.cfg.ServiceName, InstanceId: h.cfg.InstanceID, NodeId: h.cfg.NodeID, BootId: h.bootID, ServiceVersion: h.cfg.Version, Sequence: seq, Snapshot: snapshot}
+	options := events.PublishOptions{EventID: messageID, OccurredAt: time.Now().UTC(), SpaceID: h.cfg.SpaceID, SubjectID: h.cfg.ServiceName + "/" + h.cfg.InstanceID}
+	if _, err := client.Publish(ctx, events.ObservabilityMetricsSnapshotReported, report, options); err != nil {
+		if !isTransientPublishError(err) {
+			return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
+		}
+		if ctx.Err() != nil {
+			return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: %w", err))
+		}
+		h.invalidatePublisher(client)
+		client, reconnectErr := h.publisher(ctx)
+		if reconnectErr != nil {
+			return h.reportError(ctx, fmt.Errorf("publish metrics snapshot: reconnect after %v: %w", err, reconnectErr))
+		}
+		if _, retryErr := client.Publish(ctx, events.ObservabilityMetricsSnapshotReported, report, options); retryErr != nil {
+			if isTransientPublishError(retryErr) && ctx.Err() == nil {
+				h.invalidatePublisher(client)
+			}
+			return h.reportError(ctx, fmt.Errorf("publish metrics snapshot after reconnect: %w", retryErr))
+		}
 	}
 	return nil
+}
+
+func isTransientPublishError(err error) bool {
+	return errors.Is(err, jetstream.ErrConnection) || errors.Is(err, jetstream.ErrPublishTimeout)
+}
+
+func (h *Handler) invalidatePublisher(client Publisher) {
+	h.mu.Lock()
+	h.client = nil
+	h.mu.Unlock()
+	if closer, ok := client.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
 }
 
 func (h *Handler) EventReporter(ctx context.Context) (*EventReporter, error) {

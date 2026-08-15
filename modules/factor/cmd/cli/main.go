@@ -34,6 +34,15 @@ type cliConfig struct {
 	FactorIDs         []string
 	TaskID            string
 	FactorSourcePaths map[string]string
+	Stream            string
+	Consumer          string
+	CredentialFile    string
+	EventBusURL       string
+	PackageRoot       string
+	Timeout           time.Duration
+	Yes               bool
+	DryRun            bool
+	Restart           bool
 }
 
 func main() {
@@ -55,6 +64,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runImport(ctx, cfg, out)
 	case "run-once":
 		return runOnce(ctx, cfg, out)
+	case "clear-queue":
+		return runClearQueue(ctx, cfg, out)
 	default:
 		return fmt.Errorf("unknown command %q", cfg.Command)
 	}
@@ -128,6 +139,24 @@ func parseArgs(args []string) (cliConfig, error) {
 			return cliConfig{}, errors.New("--start-time must be before --end-time")
 		}
 		cfg.FactorIDs = parseStringCSV(factors)
+	case "clear-queue":
+		cfg.Stream = "MOOX_STORAGE"
+		cfg.Consumer = "factor_view_ready_v1"
+		cfg.Timeout = 2 * time.Minute
+		cfg.Restart = true
+		fs := newFlagSet("clear-queue")
+		fs.StringVar(&cfg.Stream, "stream", cfg.Stream, "JetStream stream")
+		fs.StringVar(&cfg.Consumer, "consumer", cfg.Consumer, "durable Factor consumer")
+		fs.StringVar(&cfg.CredentialFile, "credential-file", "", "NATS admin credential file")
+		fs.StringVar(&cfg.EventBusURL, "eventbus-url", "", "NATS URL override")
+		fs.StringVar(&cfg.PackageRoot, "package-root", "", "MooX deployment root containing restart.sh")
+		fs.DurationVar(&cfg.Timeout, "timeout", cfg.Timeout, "overall operation timeout")
+		fs.BoolVar(&cfg.Yes, "yes", false, "confirm clearing the durable consumer")
+		fs.BoolVar(&cfg.DryRun, "dry-run", false, "validate the operation without changing the consumer or restarting Factor")
+		fs.BoolVar(&cfg.Restart, "restart", cfg.Restart, "stop and restart Factor around the consumer reset")
+		if err := fs.Parse(args[1:]); err != nil {
+			return cliConfig{}, err
+		}
 	default:
 		return cliConfig{}, fmt.Errorf("unknown command %q", args[0])
 	}

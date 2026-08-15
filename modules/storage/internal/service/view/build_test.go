@@ -45,7 +45,7 @@ func TestProjectBackfillFieldsUsesNextSchemaShape(t *testing.T) {
 }
 
 func TestBackfillTimeRangesUseViewRetention(t *testing.T) {
-	ranges := backfillTimeRanges(&pb.View{KeepDuration: "72h"})
+	ranges := backfillTimeRanges(&pb.View{KeepDuration: "72h"}, 0)
 	if len(ranges) < 72*12 {
 		t.Fatalf("backfill ranges = %d, want at least %d", len(ranges), 72*12)
 	}
@@ -63,8 +63,33 @@ func TestBackfillTimeRangesUseViewRetention(t *testing.T) {
 }
 
 func TestBackfillTimeRangeSkipsPermanentRetention(t *testing.T) {
-	got := backfillTimeRanges(&pb.View{KeepDuration: "0"})
+	got := backfillTimeRanges(&pb.View{KeepDuration: "0"}, 0)
 	if len(got) != 1 || got[0] != nil {
 		t.Fatalf("permanent retention ranges = %+v, want one nil range", got)
+	}
+}
+
+func TestBackfillTimeRangesHonorMinimumLookback(t *testing.T) {
+	ranges := backfillTimeRanges(&pb.View{KeepDuration: "1h"}, 2*time.Hour)
+	if len(ranges) < 2*12 {
+		t.Fatalf("backfill ranges = %d, want at least %d", len(ranges), 2*12)
+	}
+	start, err := time.Parse(time.RFC3339Nano, ranges[0].GetStartTime())
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary := time.Now().UTC().Add(-2 * time.Hour)
+	if start.Before(boundary.Add(-time.Second)) || start.After(boundary.Add(time.Second)) {
+		t.Fatalf("start time %s is not near minimum lookback boundary", start)
+	}
+}
+
+func TestRebuildLookbackRequiresCoverageFromWallClock(t *testing.T) {
+	now := time.Now().UTC()
+	if err := validateRebuildLookback(viewindex.ViewIndexStats{Exists: true, IndexedFrom: now.Add(-3 * time.Hour).Format(time.RFC3339Nano), IndexedTo: now.Format(time.RFC3339Nano)}, time.Hour); err != nil {
+		t.Fatalf("coverage should satisfy lookback: %v", err)
+	}
+	if err := validateRebuildLookback(viewindex.ViewIndexStats{Exists: true, IndexedFrom: now.Add(-30 * time.Minute).Format(time.RFC3339Nano), IndexedTo: now.Format(time.RFC3339Nano)}, time.Hour); err == nil {
+		t.Fatal("insufficient coverage must not be activatable")
 	}
 }

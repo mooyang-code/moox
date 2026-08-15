@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -88,6 +89,16 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 	if err := decodeRequest(event.Data, &req); err != nil {
 		return &model.Response{Success: false, Message: err.Error(), RequestID: event.RequestID, Timestamp: time.Now().UTC()}, nil
 	}
+	// Invoke functions do not necessarily receive the timer reconciler's
+	// managed environment. When an invocation payload is old, retried, or was
+	// produced by a caller that omitted DNSRoutes, use the SCF environment
+	// snapshot as the primary route source and keep payload routes as a
+	// secondary fallback. The HTTP client still falls back to the hostname when
+	// every snapshot address fails.
+	if envRoutes, routeErr := parseDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON")); routeErr == nil && len(envRoutes) > 0 {
+		req.DNSRoutes = mergeDNSRoutes(envRoutes, req.DNSRoutes)
+		log.InfoContextf(ctx, "market_fetch_dns_snapshot_loaded source=scf_environment route_count=%d dns_hash=%s", len(envRoutes), strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_DNS_HASH")))
+	}
 	if req.RequestID == "" {
 		req.RequestID = event.RequestID
 	}
@@ -111,6 +122,50 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
 	}
 	return h.handleRequest(ctx, req, storageTarget, publish)
+}
+
+// mergeDNSRoutes puts the preferred route map first and appends unique
+// fallback addresses from the secondary map. This keeps the environment
+// snapshot authoritative while allowing an invocation payload captured just
+// before a refresh to contribute an address if the environment is incomplete.
+func mergeDNSRoutes(preferred, fallback map[string]sources.DNSResolution) map[string]sources.DNSResolution {
+	if len(preferred) == 0 && len(fallback) == 0 {
+		return nil
+	}
+	merged := make(map[string]sources.DNSResolution, len(preferred)+len(fallback))
+	add := func(routes map[string]sources.DNSResolution) {
+		for rawHost, route := range routes {
+			host := sources.NormalizeDNSHost(rawHost)
+			if host == "" {
+				continue
+			}
+			current := merged[host]
+			seen := make(map[string]struct{}, len(current.IPs)+len(route.IPs))
+			for _, ip := range current.IPs {
+				seen[ip] = struct{}{}
+			}
+			for _, ip := range route.IPs {
+				if _, exists := seen[ip]; exists {
+					continue
+				}
+				current.IPs = append(current.IPs, ip)
+				seen[ip] = struct{}{}
+			}
+			if current.ResolvedAt.IsZero() {
+				current.ResolvedAt = route.ResolvedAt
+			}
+			if len(current.LatencyMS) == 0 && len(route.LatencyMS) > 0 {
+				current.LatencyMS = make(map[string]uint32, len(route.LatencyMS))
+				for ip, latency := range route.LatencyMS {
+					current.LatencyMS[ip] = latency
+				}
+			}
+			merged[host] = current
+		}
+	}
+	add(preferred)
+	add(fallback)
+	return merged
 }
 
 func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget string, publish bool) (*model.Response, error) {

@@ -11,7 +11,8 @@
 
 1. 启动 EventBus、Storage、Factor 与 Collector。
 2. 等待 View 为 source period 发布 `ViewSourcePeriodReady`。
-3. 确认 Factor 收到 ready 事件，日志出现 `factor_task_done`。
+3. 确认 Factor 收到 ready 事件，日志依次出现 `factor_view_ready_done` 和
+   `factor_task_done`；启用 CLS 的部署中这两类 info 日志会进入固定 Topic。
 4. 在目标 Factor Dataset 查询两个 `data_time`，确认半开范围
    `[first, second+1ns)` 的声明输出列均已写入。
 5. 查看 `GetEngineStatus`：`python_workers` 等于配置；View RPC 等待期间不增加
@@ -21,7 +22,8 @@
    Factor 可以并行。
 7. 确认相同 subject/period/lookback/trigger 的 Factor 只有一次
    `factor_view_read_done`，其 `column_count` 是输入列并集；制造一次读取超时后，日志先
-   出现 `retry_position=tail`，其他 subject 仍继续读取和计算。
+   出现 `retry_position=tail`，其他 subject 仍继续读取和计算。写回/Marker 失败时应分别
+   出现 `factor_task_done ... status=failed` 或 `factor_view_ready_report_failed`。
 
 ## Recovery Check
 

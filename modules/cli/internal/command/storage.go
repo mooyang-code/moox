@@ -26,6 +26,7 @@ var storageCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(storageCmd)
 	storageCmd.AddCommand(storageRepairViewCmd)
+	storageCmd.AddCommand(storageForceRebuildViewCmd)
 }
 
 // storageRepairViewCmd delegates the maintenance implementation to the
@@ -42,7 +43,21 @@ var storageRepairViewCmd = &cobra.Command{
 	},
 }
 
+var storageForceRebuildViewCmd = &cobra.Command{
+	Use:                "force-rebuild-view [flags]",
+	Aliases:            []string{"强制重建视图", "重建视图"},
+	Short:              "删除旧 View、清空 durable consumer 状态并从头重建",
+	DisableFlagParsing: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runStorageMaintenanceBinaryAction(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), "force-rebuild-view", args)
+	},
+}
+
 func runStorageMaintenanceBinary(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args []string) error {
+	return runStorageMaintenanceBinaryAction(ctx, stdin, stdout, stderr, "repair-view", args)
+}
+
+func runStorageMaintenanceBinaryAction(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, action string, args []string) error {
 	path, err := resolveStorageMaintenanceBinary()
 	if err != nil {
 		return err
@@ -50,16 +65,16 @@ func runStorageMaintenanceBinary(ctx context.Context, stdin io.Reader, stdout, s
 	if len(args) == 0 {
 		args = []string{"--help"}
 	}
-	cmd := exec.CommandContext(ctx, path, append([]string{"repair-view"}, args...)...)
+	cmd := exec.CommandContext(ctx, path, append([]string{action}, args...)...)
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return fmt.Errorf("moox-storage-cli repair-view failed with exit code %d", exitErr.ExitCode())
+			return fmt.Errorf("moox-storage-cli %s failed with exit code %d", action, exitErr.ExitCode())
 		}
-		return fmt.Errorf("run moox-storage-cli repair-view: %w", err)
+		return fmt.Errorf("run moox-storage-cli %s: %w", action, err)
 	}
 	return nil
 }

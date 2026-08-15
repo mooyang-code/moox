@@ -24,10 +24,6 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-const (
-	remoteStorageArchiveNext = "/tmp/moox-storage.tar.gz.next"
-)
-
 type Options struct {
 	RepositoryRoot         string
 	PublicHost             string
@@ -62,6 +58,7 @@ const (
 	TLSModeInternal TLSMode = "internal"
 
 	controlRollbackTimeout = 5 * time.Minute
+	storageRollbackTimeout = 5 * time.Minute
 )
 
 func resolveTLSMode(mode TLSMode, publicHost string) TLSMode {
@@ -127,6 +124,11 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		return fmt.Errorf("storage_package_failed")
 	}
 	defer os.Remove(archive)
+	activationToken, err := newActivationToken()
+	if err != nil {
+		return fmt.Errorf("storage_package_failed")
+	}
+	remoteArchive := storageArchivePath(activationToken)
 	file, err := os.Open(archive)
 	if err != nil {
 		return fmt.Errorf("storage_package_failed")
@@ -136,7 +138,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		_ = file.Close()
 		return fmt.Errorf("storage_package_failed")
 	}
-	if err := transport.Upload(ctx, file, info.Size(), remoteStorageArchiveNext, fs.FileMode(0o600)); err != nil {
+	if err := transport.Upload(ctx, file, info.Size(), remoteArchive, fs.FileMode(0o600)); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("storage_upload_failed")
 	}
@@ -144,7 +146,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 10*time.Second)
 		defer cancel()
-		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteStorageArchiveNext}, nil)
+		_, _ = transport.Run(cleanupCtx, []string{"rm", "-f", remoteArchive}, nil)
 	}()
 	reset := "0"
 	if opts.ResetStorageData {
@@ -155,16 +157,18 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		controlGateway = "1"
 	}
 	if _, err := transport.Run(ctx, []string{
-		"sh", "-lc", installStorageScript, "moox-install-storage", reset, controlGateway,
+		"sh", "-lc", installStorageScript, "moox-install-storage", reset, controlGateway, activationToken, remoteArchive,
 	}, nil); err != nil {
 		return fmt.Errorf("storage_install_failed")
 	}
 	installed := true
 	defer func() {
 		if returnErr != nil && installed {
-			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 30*time.Second)
+			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), storageRollbackTimeout)
 			defer cancel()
-			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript}, nil)
+			if _, rollbackErr := transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript, "moox-rollback-storage", activationToken}, nil); rollbackErr != nil {
+				returnErr = fmt.Errorf("%v; storage_rollback_failed", returnErr)
+			}
 		}
 	}()
 	for _, stage := range []ReadinessStage{StoragePrimaryReady, StorageViewReady} {
@@ -178,8 +182,12 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		}
 	}
 	installed = false
-	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeStorageScript}, nil)
+	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeStorageScript, "moox-finalize-storage", activationToken}, nil)
 	return nil
+}
+
+func storageArchivePath(activationToken string) string {
+	return "/tmp/moox-storage-" + activationToken + ".tar.gz"
 }
 
 type Dependencies struct {
@@ -720,18 +728,68 @@ const installStorageScript = `set -eu
 install_storage() {
   reset_storage_data="$1"
   use_control_gateway="$2"
+  activation_token="$3"
+  archive="$4"
   case "$reset_storage_data" in 0|1) ;; *) echo storage_reset_invalid >&2; return 1 ;; esac
   case "$use_control_gateway" in 0|1) ;; *) echo storage_gateway_invalid >&2; return 1 ;; esac
+  case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo storage_activation_token_invalid >&2; return 1 ;; esac
+  [ "$archive" = "/tmp/moox-storage-$activation_token.tar.gz" ] || { echo storage_archive_invalid >&2; return 1; }
   root="$HOME/moox"
   deploy="$root/storage"
-  next="$root/storage.next"
-  previous="$root/storage.previous"
-  failed="$root/storage.failed"
-  archive=/tmp/moox-storage.tar.gz.next
+	mkdir -p "$root"
+	# Serialize package replacement with generated healthchecks. The lock lives
+	# beside the directory so it survives atomic renames of the deployment.
+	exec 8>"$deploy.maintenance.lock"
+	flock -x 8
+  next="$root/storage.next.$activation_token"
+  previous="$root/storage.previous.$activation_token"
+  failed="$root/storage.failed.$activation_token"
+  install_healthcheck_cron() {
+    if [ -n "${MOOX_CRON_DAEMON_CHECK_COMMAND:-}" ]; then
+      "$MOOX_CRON_DAEMON_CHECK_COMMAND" || {
+        echo 'storage_healthcheck_daemon_unavailable' >&2
+        return 1
+      }
+    else
+      command -v systemctl >/dev/null 2>&1 || {
+        echo 'storage_healthcheck_daemon_unavailable' >&2
+        return 1
+      }
+      cron_unit=""
+      for unit in cron.service crond.service; do
+        if systemctl is-active --quiet "$unit" && systemctl is-enabled --quiet "$unit"; then
+          cron_unit="$unit"
+          break
+        fi
+      done
+      [ -n "$cron_unit" ] || {
+        echo 'storage_healthcheck_daemon_unavailable' >&2
+        return 1
+      }
+    fi
+    crontab_command="${MOOX_CRONTAB_COMMAND:-crontab}"
+    command -v "$crontab_command" >/dev/null 2>&1 || {
+      echo 'storage_healthcheck_scheduler_unavailable' >&2
+      return 1
+    }
+    cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for healthcheck in "$HOME"/moox/*/healthcheck.sh; do root=$(dirname "$healthcheck"); case "$root" in *.next|*.next.*|*.previous|*.previous.*|*.failed|*.failed.*) continue ;; esac; if [ -x "$healthcheck" ]; then "$healthcheck" >/dev/null 2>&1 & fi; done; wait # moox-healthchecks'
+    current=$("$crontab_command" -l 2>/dev/null || true)
+    {
+      printf '%s\n' "$current" | grep -Fv '/moox/prod/healthcheck.sh' | grep -Fv '# moox-healthchecks' || true
+      printf '%s\n' "$cron_line"
+    } | "$crontab_command" -
+  }
+  # Every independently installed MooX package participates in the same
+  # host-level watchdog. Install the scheduler before replacing a working
+  # Storage package so a missing cron daemon cannot leave it unsupervised.
+  install_healthcheck_cron
   rm -rf "$next" "$previous" "$failed"
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
-  if [ "$reset_storage_data" = "0" ] && [ -d "$deploy/data" ]; then cp -R "$deploy/data/." "$next/data/"; fi
+  printf '%s\n' "$activation_token" >"$next/.storage-activation-token"
+  date +%s >"$next/.storage-staged-at"
+  preserve_data=0
+  if [ "$reset_storage_data" = "0" ] && [ -d "$deploy/data" ]; then preserve_data=1; fi
   if [ -d "$deploy/secrets" ]; then
     for secret in "$deploy/secrets/"*; do
       [ -e "$secret" ] || continue
@@ -762,35 +820,82 @@ install_storage() {
     printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$secret" >"$next/secrets/health-auth.env"
   fi
   chmod 600 "$next/secrets/health-auth.env"
-  if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" || true; return 1; fi
-  if [ -d "$deploy" ]; then mv "$deploy" "$previous"; fi
+  if [ -x "$deploy/stop.sh" ] && ! "$deploy/stop.sh"; then "$deploy/start.sh" 8>&- || true; return 1; fi
+  # Storage data is normally the largest part of the package. Move it only
+  # after the old processes stop instead of copying it into staging; copying
+  # temporarily doubles disk use and can make an otherwise healthy upgrade
+  # fail on a nearly-full volume.
+  if [ "$preserve_data" = "1" ]; then
+    rm -rf "$next/data"
+    mv "$deploy/data" "$next/data"
+  fi
+  if [ -d "$deploy" ]; then mv "$deploy" "$previous"; date +%s >"$previous/.storage-staged-at"; fi
   mv "$next" "$deploy"
-  if ! "$deploy/start.sh"; then
+  if ! "$deploy/start.sh" 8>&-; then
     "$deploy/stop.sh" || true
+    restore_data="$root/storage.data.restore"
+    rm -rf "$restore_data"
+    if [ "$preserve_data" = "1" ] && [ -d "$deploy/data" ]; then mv "$deploy/data" "$restore_data"; fi
     mv "$deploy" "$failed"
-    if [ -d "$previous" ]; then mv "$previous" "$deploy"; "$deploy/start.sh" || true; fi
+    date +%s >"$failed/.storage-staged-at"
+    if [ -d "$previous" ]; then
+      mv "$previous" "$deploy"
+      rm -f "$deploy/.storage-staged-at"
+      if [ -d "$restore_data" ]; then rm -rf "$deploy/data"; mv "$restore_data" "$deploy/data"; fi
+      "$deploy/start.sh" 8>&- || true
+    fi
     return 1
   fi
 }
-install_storage "$1" "$2"
+install_storage "$1" "$2" "$3" "$4"
 `
 
 const rollbackStorageScript = `set -eu
+activation_token="$1"
+case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo storage_activation_token_invalid >&2; exit 1 ;; esac
 deploy="$HOME/moox/storage"
-previous="$HOME/moox/storage.previous"
+exec 8>"$deploy.maintenance.lock"
+flock -x 8
+previous="$HOME/moox/storage.previous.$activation_token"
+[ -s "$deploy/.storage-activation-token" ] || exit 0
+[ "$(cat "$deploy/.storage-activation-token")" = "$activation_token" ] || exit 0
 if [ ! -d "$previous" ]; then
-  # The installer already restored the previous deployment after an atomic
-  # start failure. A second rollback must not delete that restored deployment.
+  # A matching activation marker without a previous deployment is a failed
+  # first installation. Stop and retain it for diagnosis instead of leaving a
+  # deployment running after the CLI has reported failure.
+  if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
+  failed="$HOME/moox/storage.failed.$activation_token"
+  rm -rf "$failed"
+  mv "$deploy" "$failed"
+  date +%s >"$failed/.storage-staged-at"
   exit 0
 fi
 if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
+restore_data="$HOME/moox/storage.data.rollback.$activation_token"
+rm -rf "$restore_data"
+if [ -d "$deploy/data" ]; then mv "$deploy/data" "$restore_data"; fi
 rm -rf "$deploy"
 mv "$previous" "$deploy"
-"$deploy/start.sh" || true
+rm -f "$deploy/.storage-staged-at"
+if [ -d "$restore_data" ]; then rm -rf "$deploy/data"; mv "$restore_data" "$deploy/data"; fi
+"$deploy/start.sh" 8>&-
 `
 
 const finalizeStorageScript = `set -eu
-rm -rf "$HOME/moox/storage.previous"
+activation_token="$1"
+case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo storage_activation_token_invalid >&2; exit 1 ;; esac
+deploy="$HOME/moox/storage"
+exec 8>"$HOME/moox/storage.maintenance.lock"
+flock -x 8
+[ -s "$deploy/.storage-activation-token" ] || exit 0
+[ "$(cat "$deploy/.storage-activation-token")" = "$activation_token" ] || exit 0
+rm -rf "$HOME/moox/storage.previous.$activation_token"
+rm -f "$deploy/.storage-staged-at"
+# Abandoned token directories are never authoritative. Keep recent ones for
+# diagnosis and concurrent deployment fencing, but reclaim older leftovers so
+# failed upgrades cannot slowly consume the Storage volume.
+find "$HOME/moox" -mindepth 2 -maxdepth 2 -type f -name '.storage-staged-at' -mtime +1 \
+  -exec sh -c 'for marker do dir=${marker%/*}; case ${dir##*/} in storage.next.*|storage.failed.*|storage.previous.*) rm -rf -- "$dir" ;; esac; done' sh {} +
 `
 
 // The script is constant. Positional arguments contain only public deployment metadata.
@@ -847,10 +952,10 @@ install_control() {
       echo 'control_healthcheck_scheduler_unavailable' >&2
       return 1
     }
-    cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin $HOME/moox/prod/healthcheck.sh >/dev/null 2>&1'
+    cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for healthcheck in "$HOME"/moox/*/healthcheck.sh; do root=$(dirname "$healthcheck"); case "$root" in *.next|*.next.*|*.previous|*.previous.*|*.failed|*.failed.*) continue ;; esac; if [ -x "$healthcheck" ]; then "$healthcheck" >/dev/null 2>&1 & fi; done; wait # moox-healthchecks'
     current=$("$crontab_command" -l 2>/dev/null || true)
     {
-      printf '%s\n' "$current" | grep -Fv '/moox/prod/healthcheck.sh' || true
+      printf '%s\n' "$current" | grep -Fv '/moox/prod/healthcheck.sh' | grep -Fv '# moox-healthchecks' || true
       printf '%s\n' "$cron_line"
     } | "$crontab_command" -
   }

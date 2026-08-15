@@ -65,22 +65,25 @@ const (
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName     string           `yaml:"metadata_service_name"`
-	PrimaryStoreServiceName string           `yaml:"primary_store_service_name"`
-	IndexServiceName        string           `yaml:"index_service_name"`
-	BatchSize               int              `yaml:"batch_size"`
-	BatchWaitMS             int              `yaml:"batch_wait_ms"`
-	FetchBatch              int              `yaml:"fetch_batch"`
-	MaxWorkers              int              `yaml:"max_workers"`
-	Ordering                string           `yaml:"ordering"`
-	RebuildCheckInterval    string           `yaml:"rebuild_check_interval"`
-	MaxViewFileBytes        int64            `yaml:"max_view_file_bytes"`
-	RebuildMaxPending       uint64           `yaml:"rebuild_max_pending"`
-	RebuildIdleChecks       uint32           `yaml:"rebuild_idle_checks"`
-	StorageRPC              StorageRPCConfig `yaml:"storage_rpc"`
-	maxViewFileBytesSet     bool
-	rebuildMaxPendingSet    bool
-	rebuildIdleChecksSet    bool
+	MetadataServiceName     string `yaml:"metadata_service_name"`
+	PrimaryStoreServiceName string `yaml:"primary_store_service_name"`
+	IndexServiceName        string `yaml:"index_service_name"`
+	BatchSize               int    `yaml:"batch_size"`
+	BatchWaitMS             int    `yaml:"batch_wait_ms"`
+	FetchBatch              int    `yaml:"fetch_batch"`
+	MaxWorkers              int    `yaml:"max_workers"`
+	Ordering                string `yaml:"ordering"`
+	RebuildCheckInterval    string `yaml:"rebuild_check_interval"`
+	// RebuildLookback is the minimum wall-clock history that every View build
+	// must cover before its replacement can become active.
+	RebuildLookback      string           `yaml:"rebuild_lookback"`
+	MaxViewFileBytes     int64            `yaml:"max_view_file_bytes"`
+	RebuildMaxPending    uint64           `yaml:"rebuild_max_pending"`
+	RebuildIdleChecks    uint32           `yaml:"rebuild_idle_checks"`
+	StorageRPC           StorageRPCConfig `yaml:"storage_rpc"`
+	maxViewFileBytesSet  bool
+	rebuildMaxPendingSet bool
+	rebuildIdleChecksSet bool
 }
 
 func (v StorageView) HasRebuildMaxPendingSetting() bool { return v.rebuildMaxPendingSet }
@@ -295,6 +298,9 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.View.MaxViewFileBytes <= 0 && !c.View.maxViewFileBytesSet {
 		c.View.MaxViewFileBytes = 1 << 30
+	}
+	if strings.TrimSpace(c.View.RebuildLookback) == "" {
+		c.View.RebuildLookback = "72h"
 	}
 	if c.View.RebuildMaxPending == 0 && !c.View.rebuildMaxPendingSet {
 		c.View.RebuildMaxPending = 32

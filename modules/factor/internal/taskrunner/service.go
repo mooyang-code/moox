@@ -202,6 +202,10 @@ func (s *Service) runValidated(ctx context.Context, task Task, prepared *storage
 	started := time.Now()
 	chunks := 0
 	var runErr error
+	log.InfoContextf(ctx, "factor_task_start task_id=%s trigger_type=%s space_id=%s source_view_id=%s result_dataset_id=%s subject_id=%s freq=%s start_time=%s end_time=%s factor_id=%s",
+		task.TaskID, task.TriggerType, task.SpaceID, taskSourceView(task), taskResultDataset(task),
+		task.SubjectID, task.Freq, task.StartTime.UTC().Format(time.RFC3339Nano),
+		task.EndTime.UTC().Format(time.RFC3339Nano), task.Factor.FactorID)
 	defer func() {
 		status := "succeeded"
 		if runErr != nil {

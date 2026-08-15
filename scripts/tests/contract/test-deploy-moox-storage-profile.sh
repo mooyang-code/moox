@@ -110,7 +110,7 @@ grep -q 'doctor bootstrap --format json' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'activate-datasets' "${TMP_ROOT}/unpacked/start.sh"
 [[ "$(grep -Fc 'MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}' "${TMP_ROOT}/unpacked/start.sh")" == "3" ]]
 [[ "$(grep -Fc 'wait_nats storage "${STORAGE_EVENTBUS_URL_ENV}"' "${TMP_ROOT}/unpacked/start.sh")" == "2" ]]
-grep -Fq 'MOOX_STORAGE_VIEW_DELIVER_POLICY=${MOOX_STORAGE_VIEW_DELIVER_POLICY:-}' "${TMP_ROOT}/unpacked/start.sh"
+grep -Fq 'MOOX_STORAGE_VIEW_DELIVER_POLICY=${MOOX_STORAGE_VIEW_DELIVER_POLICY:-new}' "${TMP_ROOT}/unpacked/start.sh"
 if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${FIXTURE_ROOT}/scripts/deploy-moox.sh"; then
   echo 'legacy storage route seed environment remains in deployment script' >&2
   exit 1
@@ -134,7 +134,7 @@ assert_order "${TMP_ROOT}/unpacked/start.sh" \
   'wait_tcp 127\.0\.0\.1 20107' \
   '^  register_storage_node$' \
   '^  start_storage_view$' \
-  'wait_http http://127\.0\.0\.1:20211/healthz' \
+  'wait_storage_view_live "\$\{MOOX_WAIT_STORAGE_VIEW_SECONDS:-900\}"' \
   '^  if run_storage_doctor; then$' \
   '^    activate_storage_datasets$'
 doctor_body="$(awk '/^run_storage_doctor\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${TMP_ROOT}/unpacked/start.sh")"

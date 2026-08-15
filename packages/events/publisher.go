@@ -20,6 +20,20 @@ type Publisher struct {
 	registry *Registry
 }
 
+// Close releases the underlying transport when it owns a closeable client.
+// Publishers backed by test or embedded transports that do not expose Close
+// remain valid no-ops.
+func (p *Publisher) Close() error {
+	if p == nil || p.client == nil {
+		return nil
+	}
+	closer, ok := p.client.(interface{ Close() error })
+	if !ok {
+		return nil
+	}
+	return closer.Close()
+}
+
 func NewPublisher(client RawPublisher, registry *Registry) (*Publisher, error) {
 	if client == nil {
 		return nil, fmt.Errorf("event publisher client is nil")

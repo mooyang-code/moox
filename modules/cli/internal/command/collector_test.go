@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -768,11 +767,11 @@ func TestResolveCollectorCLSSinkUsesSelectedCloudAccountSecret(t *testing.T) {
 		gotID, gotKey, gotRegion = secretID, secretKey, region
 		return collectorCLSAPI{}, nil
 	}
-	_, err := resolveCollectorCLSSink(context.Background(), client, adminclient.CloudAccount{AccountID: "tencent-scf-shanghai", CredentialSecretID: "secret-shanghai"})
+	_, err := resolveCollectorCLSSink(context.Background(), client, adminclient.CloudAccount{AccountID: "tencent-scf-shanghai", CredentialSecretID: "secret-shanghai"}, "ap-shanghai")
 	require.NoError(t, err)
 	assert.Equal(t, "shanghai-id", gotID)
 	assert.Equal(t, "shanghai-key", gotKey)
-	assert.Equal(t, clsprepare.Region, gotRegion)
+	assert.Equal(t, "ap-shanghai", gotRegion)
 }
 
 func TestBuildCollectorCreateNodeItemRejectsLegacyJobItemWorkloads(t *testing.T) {

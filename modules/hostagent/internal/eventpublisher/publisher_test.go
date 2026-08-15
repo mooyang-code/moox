@@ -57,7 +57,7 @@ func TestJetStreamPublisherCloseWaitsForPublish(t *testing.T) {
 		publishDone <- publisher.PublishHostMetric(
 			context.Background(),
 			"message",
-			&hostmetricpb.HostMetric{AgentId: "agent", Hostname: "host", Snapshot: &hostmetricpb.HostSnapshot{}},
+			&hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host", Snapshot: &hostmetricpb.HostSnapshot{}},
 			time.Now(),
 		)
 	}()
@@ -81,7 +81,7 @@ func TestJetStreamPublisherCloseWaitsForPublish(t *testing.T) {
 	if err := publisher.PublishHostMetric(
 		context.Background(),
 		"message-2",
-		&hostmetricpb.HostMetric{AgentId: "agent", Hostname: "host", Snapshot: &hostmetricpb.HostSnapshot{}},
+		&hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host", Snapshot: &hostmetricpb.HostSnapshot{}},
 		time.Now(),
 	); err == nil {
 		t.Fatal("closed publisher accepted a metric")

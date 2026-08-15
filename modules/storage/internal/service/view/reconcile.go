@@ -54,6 +54,10 @@ type ReconcilerOptions struct {
 	// finite-retention View. The rebuilt index contains only its keep window;
 	// SwitchView then removes the old DuckDB file after the grace period.
 	MaxViewFileBytes int64
+	// RebuildLookback is the minimum wall-clock history every newly built
+	// index must cover before activation. Production config supplies this;
+	// zero keeps direct unit-test callers backwards compatible.
+	RebuildLookback time.Duration
 	// RebuildMaxPending and RebuildIdleChecks gate optional size-limit
 	// rebuilds. Necessary repairs bypass this capacity gate.
 	RebuildMaxPending           uint64
@@ -274,6 +278,47 @@ func restoreIndexStats(ctx context.Context, engine viewindex.Engine, indexID str
 	return engine.Stat(ctx, indexID)
 }
 
+func validateRebuildLookback(stats viewindex.ViewIndexStats, lookback time.Duration) error {
+	if lookback <= 0 {
+		return nil
+	}
+	if !stats.Exists {
+		return errors.New("rebuilt View index does not exist")
+	}
+	if strings.TrimSpace(stats.IndexedFrom) == "" || strings.TrimSpace(stats.IndexedTo) == "" {
+		return fmt.Errorf("%w: rebuilt View index has no coverage; minimum lookback is %s", errRebuildLookbackInsufficient, lookback)
+	}
+	from, err := time.Parse(time.RFC3339Nano, stats.IndexedFrom)
+	if err != nil {
+		return fmt.Errorf("invalid rebuilt View indexed_from %q: %w", stats.IndexedFrom, err)
+	}
+	to, err := time.Parse(time.RFC3339Nano, stats.IndexedTo)
+	if err != nil {
+		return fmt.Errorf("invalid rebuilt View indexed_to %q: %w", stats.IndexedTo, err)
+	}
+	if from.After(time.Now().UTC().Add(-lookback)) {
+		return fmt.Errorf("%w: rebuilt View coverage starts at %s, before %s is required", errRebuildLookbackInsufficient, from.Format(time.RFC3339Nano), lookback)
+	}
+	if to.Before(from) {
+		return fmt.Errorf("rebuilt View coverage is inverted: %s > %s", from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano))
+	}
+	return nil
+}
+
+var errRebuildLookbackInsufficient = errors.New("rebuilt View lookback is insufficient")
+
+func (s *Service) validatePendingBuildCoverage(ctx context.Context, indexID, engineName string, lookback time.Duration) error {
+	engine := s.engines[strings.ToLower(strings.TrimSpace(engineName))]
+	if engine == nil {
+		return fmt.Errorf("view engine %q is unavailable", engineName)
+	}
+	stats, err := restoreIndexStats(ctx, engine, indexID)
+	if err != nil {
+		return fmt.Errorf("stat rebuilt View index %q coverage: %w", indexID, err)
+	}
+	return validateRebuildLookback(stats, lookback)
+}
+
 func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) error {
 	auth := s.internalAuth()
 	// Audit persistence is best-effort and must never hold up View state
@@ -417,6 +462,19 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			s.discardFailedBuild(ctx, view.GetSpaceId(), view.GetViewId(), build.GetIndexId(), build.GetEngine())
 			view.IndexBuild = nil
 		case pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP:
+			if view.GetActiveIndexId() == "" && build.GetState() != pb.ViewIndexBuild_PREPARING {
+				if err := s.validatePendingBuildCoverage(ctx, build.GetIndexId(), build.GetEngine(), opts.RebuildLookback); err != nil {
+					if errors.Is(err, errRebuildLookbackInsufficient) {
+						log.Printf("storage view initial rebuild is still priming space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
+						return nil
+					}
+					return err
+				}
+				if err := s.catchUpAndActivateViewBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns(), build.GetEntriesWritten()); err != nil {
+					return err
+				}
+				return nil
+			}
 			// There is deliberately no resumable build cursor. A process exit
 			// discards the partial inactive index and the next reconcile starts
 			// a complete rebuild.
@@ -625,18 +683,27 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			}
 			runtime.mu.Unlock()
 		}
-		if err := s.BackfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary); err != nil {
+		if err := s.backfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary, opts.RebuildLookback); err != nil {
 			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 			finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
 			return err
 		}
 	} else {
 		// A first build starts empty and is filled by the subscribed change stream.
-		// Do not wait for the durable consumer here: rows delivered before B is
-		// active are intentionally NAKed by applyDatasetEvent and will be retried
-		// after the pointer switch. Waiting for NumPending/NumAckPending would
-		// deadlock this first activation because the consumer cannot ACK until B
-		// becomes authoritative.
+		// Do not wait for the durable consumer here: rows are written to B and
+		// acknowledged while it is priming, but the lookback gate keeps B
+		// non-authoritative until the configured history has been covered.
+	}
+	if opts.RebuildLookback > 0 {
+		if err := s.validatePendingBuildCoverage(ctx, indexID, schema.Engine, opts.RebuildLookback); err != nil {
+			if view.GetActiveIndexId() == "" && errors.Is(err, errRebuildLookbackInsufficient) {
+				log.Printf("storage view initial rebuild is priming space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
+				return nil
+			}
+			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
+			finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, uint64(stats.EntryCount), err)
+			return err
+		}
 	}
 	err = s.catchUpAndActivateViewBuild(ctx, opts, auth, view, buildID, indexID, schema.Engine, schema.ViewVersion, schema.SchemaHash, columns, uint64(stats.EntryCount))
 	if err != nil {
@@ -896,10 +963,15 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 			}
 			runtime.mu.Unlock()
 		}
-		if err := s.BackfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary); err != nil {
+		if err := s.backfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary, opts.RebuildLookback); err != nil {
 			return err
 		}
 		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_READY, build.GetEntriesWritten()); err != nil {
+			return err
+		}
+	}
+	if opts.RebuildLookback > 0 {
+		if err := s.validatePendingBuildCoverage(ctx, build.GetIndexId(), build.GetEngine(), opts.RebuildLookback); err != nil {
 			return err
 		}
 	}

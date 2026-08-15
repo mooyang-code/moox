@@ -38,6 +38,7 @@ storage:
     max_workers: 1
     ordering: dataset
     rebuild_check_interval: 1m
+    rebuild_lookback: 72h
     max_view_file_bytes: 1073741824
     rebuild_max_pending: 32
     rebuild_idle_checks: 3

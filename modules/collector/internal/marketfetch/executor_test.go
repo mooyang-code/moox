@@ -126,6 +126,23 @@ func TestExecutorTurnsSuccessfulItemsIntoStorageErrors(t *testing.T) {
 	assert.Equal(t, "0", reporter.entries[0].Fields["rows"])
 }
 
+func TestExecutorReportsDNSRouteSourceForItemFailures(t *testing.T) {
+	klines := &fakeKlines{rows: []*storagepb.RowFieldUpsert{{}}}
+	reporter := &recordingItemReporter{}
+	executor := &Executor{Klines: klines, Symbols: fakeSymbols{}, Storage: &fakeStorage{err: errors.New("storage unavailable")}, Reporter: reporter}
+	_, err := executor.Execute(context.Background(), Request{
+		BatchID: "dns-batch", SpaceID: "crypto", DatasetID: "bars", BatchKind: domain.BatchKindRealtime,
+		Provider: "binance", MarketType: "swap", DNSRoutes: map[string]sources.DNSResolution{
+			"FAPI.BINANCE.COM.": {IPs: []string{"203.0.113.7"}, ResolvedAt: time.Now().UTC().Add(-time.Minute)},
+		},
+		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", MarketType: "swap", DataType: "kline", DatasetID: "bars", Frequency: "1m"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, reporter.entries, 1)
+	assert.Equal(t, "scf_snapshot", reporter.entries[0].Fields["dns_source"])
+	assert.Equal(t, "1", reporter.entries[0].Fields["dns_route_count"])
+}
+
 func TestResultErrorSummaryUsesFirstActionableItemError(t *testing.T) {
 	results := []domain.ItemResult{
 		{Outcome: domain.ItemOutcomeStorageError, ErrorSummary: ""},
@@ -310,4 +327,43 @@ func TestHandlerUsesRuntimeFunctionNameForStorageWriteSource(t *testing.T) {
 	}, "actual-function")
 	require.NoError(t, err)
 	assert.Equal(t, "scf:actual-function", writeSource)
+}
+
+func TestHandlerUsesEnvironmentDNSRoutesForInvokeWhenPayloadOmitsThem(t *testing.T) {
+	t.Setenv("MOOX_SPACE_ID", "crypto")
+	t.Setenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON", `{"FAPI.BINANCE.COM.":["203.0.113.9"]}`)
+	var captured Request
+	handler := NewHandler()
+	handler.NewStorage = func(string, string, string) (Storage, error) { return &fakeStorage{}, nil }
+	handler.Publish = func(context.Context, Request, proto.Message) error { return nil }
+	handler.Execute = func(_ context.Context, request Request, _ Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
+		captured = request
+		return &marketfetchpb.MarketFetchBatchCompleted{Status: "succeeded"}, nil
+	}
+	_, err := handler.HandleWithFunctionName(context.Background(), model.CloudFunctionEvent{
+		RequestID: "request-1", StorageRPCGatewayTarget: "ip://127.0.0.1:11003",
+		Data: map[string]any{
+			"batch_id": "batch-1", "space_id": "crypto", "dataset_id": "symbols", "batch_kind": "symbol_snapshot", "provider": "binance", "market_type": "swap",
+			"items": []any{map[string]any{"dataset_id": "symbols", "data_type": "symbol"}},
+		},
+	}, "moox-fetcher-crypto-market-invoke-ap-beijing-0")
+	require.NoError(t, err)
+	require.Equal(t, []string{"203.0.113.9"}, captured.DNSRoutes["fapi.binance.com"].IPs)
+}
+
+func TestMergeDNSRoutesPrefersEnvironmentAddresses(t *testing.T) {
+	merged := mergeDNSRoutes(
+		map[string]sources.DNSResolution{"fapi.binance.com": {IPs: []string{"203.0.113.9"}}},
+		map[string]sources.DNSResolution{"FAPI.BINANCE.COM.": {IPs: []string{"203.0.113.10", "203.0.113.9"}}},
+	)
+	require.Equal(t, []string{"203.0.113.9", "203.0.113.10"}, merged["fapi.binance.com"].IPs)
+}
+
+func TestMergeDNSRoutesRetainsPayloadAfterEnvironmentCap(t *testing.T) {
+	envIPs := []string{"203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.4"}
+	merged := mergeDNSRoutes(
+		map[string]sources.DNSResolution{"fapi.binance.com": {IPs: envIPs}},
+		map[string]sources.DNSResolution{"fapi.binance.com": {IPs: []string{"203.0.113.5"}}},
+	)
+	assert.Equal(t, append(envIPs, "203.0.113.5"), merged["fapi.binance.com"].IPs)
 }

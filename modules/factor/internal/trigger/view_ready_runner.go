@@ -111,6 +111,7 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		defer releaseOperation()
 	}
 
+	started := time.Now()
 	log.InfoContextf(ctx, "factor View-ready execution start event_id=%s space_id=%s view_id=%s period=%d", triggerEventID, spaceID, ready.GetSourceViewId(), ready.GetPeriodTime())
 	r.periodMetrics.Begin(ready.GetSourceViewId(), ready.GetFrequency())
 	defer r.periodMetrics.End(ready.GetSourceViewId(), ready.GetFrequency())
@@ -257,7 +258,14 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		Frequency: ready.GetFrequency(), PeriodTime: ready.GetPeriodTime(), Status: groupStatus,
 		Bindings: markerStates, ComputedAt: timestamppb.Now(), TriggerEventId: triggerEventID,
 	}
-	return r.storage.ReportFactorPeriodComputed(ctx, spaceID, marker)
+	if err := r.storage.ReportFactorPeriodComputed(ctx, spaceID, marker); err != nil {
+		log.ErrorContextf(ctx, "factor_view_ready_report_failed event_id=%s space_id=%s source_view_id=%s result_dataset_id=%s freq=%s period_time=%d binding_count=%d subject_count=%d error=%q",
+			triggerEventID, spaceID, ready.GetSourceViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(subjects), err.Error())
+		return err
+	}
+	log.InfoContextf(ctx, "factor_view_ready_done event_id=%s space_id=%s source_view_id=%s result_dataset_id=%s freq=%s period_time=%d binding_count=%d task_count=%d subject_count=%d status=%s elapsed_ms=%d",
+		triggerEventID, spaceID, ready.GetSourceViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(tasks), len(subjects), groupStatus, time.Since(started).Milliseconds())
+	return nil
 }
 
 func selectPeriodBindings(bindings []domain.FactorBinding, spaceID string, ready *publicstoragepb.ViewSourcePeriodReady) []domain.FactorBinding {

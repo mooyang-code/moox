@@ -90,8 +90,17 @@ sudo -n install -o root -g root -m 0644 "$service" /etc/systemd/system/moox-stor
 sudo -n install -o root -g root -m 0644 "$timer" /etc/systemd/system/moox-storage-view-watchdog.timer
 sudo -n systemctl daemon-reload
 sudo -n systemctl reset-failed moox-storage-view-watchdog.service || true
-sudo -n systemctl enable --now moox-storage-view-watchdog.timer
-sudo -n systemctl start moox-storage-view-watchdog.timer
+sudo -n systemctl enable moox-storage-view-watchdog.timer
+# A timer whose previous schedule elapsed remains "active (elapsed)" and a
+# plain start is a no-op. Restart always arms the newly installed schedule.
+sudo -n systemctl restart moox-storage-view-watchdog.timer
+sudo -n systemctl is-enabled --quiet moox-storage-view-watchdog.timer
+sudo -n systemctl is-active --quiet moox-storage-view-watchdog.timer
+next=$(sudo -n systemctl show -p NextElapseUSecMonotonic --value moox-storage-view-watchdog.timer)
+[ -n "$next" ] && [ "$next" != infinity ] && [ "$next" != 0 ] || {
+  echo storage_watchdog_timer_not_armed >&2
+  exit 1
+}
 `
 	if _, err := transport.Run(ctx, []string{"sh", "-lc", install, "moox-install-storage-watchdog", tmpScript, tmpService, tmpTimer}, nil); err != nil {
 		return fmt.Errorf("storage_watchdog_enable_failed")

@@ -71,6 +71,14 @@ make proto
 
 Prefer bundled scripts in this skill when a workflow needs deterministic parsing or repeated `moox-cli` argument assembly.
 
+For queue backlog and View recovery, read
+[`references/cli-operations.md`](references/cli-operations.md) before operating. It documents
+the safe dry-run-first workflow, the Factor `clear-queue` command, Storage `repair-view`,
+Storage `force-rebuild-view`, durable names, defaults, credential lookup, backups, the
+`storage.view.rebuild_lookback` coverage gate, and the high-risk full index reset.
+Never delete a durable consumer or a View index by hand when the corresponding `moox-cli`
+operation is available.
+
 ### Tencent Lighthouse Firewall
 
 When the user provides a Tencent Cloud Lighthouse instance detail URL, use the bundled script to parse the instance ID and call `moox-cli`:
@@ -114,12 +122,18 @@ skills/moox/scripts/cls-bootstrap.sh \
 ```
 
 The script selects the first Tencent cloud account unless
-`--cloud-account-id` is set. It always queries the fixed `ap-guangzhou` CLS
-resources: Logset `moox` and Topic `moox-application`. Missing resources are
-created; existing resources are reused. The verified Topic ID is written only
-to staged `trpc_go*.yaml` files. Writer credentials are installed only in the
-target's `secrets/cls.env`, with mode `0600`, and remain placeholders in the
-staged configuration.
+`--cloud-account-id` is set. It queries the fixed `ap-guangzhou` Tencent Cloud
+region for Logset `moox` and Topic `moox-application`. Missing
+resources are created; existing resources are reused. The resolved non-secret
+metadata is written to the generated `config/resources.env`, while staged
+`trpc_go*.yaml` files reference `${MOOX_CLS_TOPIC_ID}`. Writer credentials are
+installed only in the target's `secrets/cls.env`, with mode `0600`.
+
+`custom.toml` contains only Tencent Cloud input credentials and region. The
+generated `config/resources.env` is the canonical runtime source for the
+selected cloud account, resolved Logset/Topic IDs, and CLS endpoint; it is non-secret, mode `0644`, and
+is atomically replaced with the release stage. Never add resource IDs or
+credentials to tracked examples, staged YAML, or command output.
 
 ## Development Rules
 
@@ -189,6 +203,10 @@ shutdown.
 That check requires the already-running Admin/CloudNode control plane and at
 least one Tencent cloud account; a failed check must not stop the current
 deployment.
+The managed Factor configuration uses an `info` CLS writer so
+`factor_view_read_done`, `factor_task_done`, and `factor_view_ready_done` can
+be used to diagnose calculation freshness; other services keep the lower
+volume `warn` policy.
 
 ### Tencent CLS Log Query And Verification
 

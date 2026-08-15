@@ -4,7 +4,7 @@
 
 MooX 的 11 个 tRPC 服务已经注册 `trpc-log-cls`，但仓库中的 `trpc_go.yaml` 默认只启用本地 writer。现有 `deploy-moox.sh --enable-cls` 在目标机启动时创建或复用 CLS 资源，再通过环境变量提供 Topic ID。该流程没有纳入 MooX Skill 的系统初始化，也没有在发布前核对云账户下的 CLS 资源。
 
-本设计把 CLS 检查前移到每次发布之前。初始化程序使用云账户管理中保存的腾讯云凭证，查询固定名称的 CLS 日志集和日志主题，复用或创建资源，并把 Topic ID 写入待发布配置。
+本设计把 CLS 检查前移到每次发布之前。初始化程序使用云账户管理中保存的腾讯云凭证，查询固定名称的 CLS 日志集和日志主题，复用或创建资源，并把非敏感资源元数据写入自动生成的 `config/resources.env`；待发布配置只引用环境变量。
 
 ## 固定约定
 
@@ -13,7 +13,7 @@ MooX 的 11 个 tRPC 服务已经注册 `trpc-log-cls`，但仓库中的 `trpc_g
 - CLS 地域固定为现有部署默认值 `ap-guangzhou`。
 - 所有 MooX tRPC 服务共用该 Topic，通过 module、service、method 和 deployment version 字段区分来源。
 - 初始化不允许覆盖日志集或主题名称，避免同一账号产生多套资源。
-- CLS writer 初始级别保持 `warn`。
+- 非 Factor 服务的 CLS writer 初始级别保持 `warn`；Factor 使用 `info`，以保留计算任务和 View 读取完成记录。
 
 ## 云账户选择
 
@@ -58,10 +58,11 @@ MooX 的 11 个 tRPC 服务已经注册 `trpc-log-cls`，但仓库中的 `trpc_g
 
 prepare 成功后生成两类产物：
 
-- stage 中每个启用服务的 `trpc_go*.yaml` 获得 `writer: cls`，其中 `topic_id` 写入本次从腾讯云查询得到的实际 Topic ID。
+- stage 中每个启用服务的 `trpc_go*.yaml` 获得 `writer: cls`，其中 `topic_id` 引用 `${MOOX_CLS_TOPIC_ID}`。
+- stage/部署根目录生成 `config/resources.env`，记录云账户 ID、region、CLS host、Logset ID 和 Topic ID；该文件不包含凭证。
 - 目标机 `${deploy_dir}/secrets/cls.env` 保存 CLS writer 所需的 SecretId、SecretKey、region 和 host，权限固定为 `0600`。
 
-Topic ID 不是凭证，可以写入 stage 配置，但不得修改仓库中的模块源配置。SecretId 和 SecretKey 只能存在于进程内存、受保护的临时文件和目标机 `0600` 文件中。脚本退出时必须删除本地临时凭证文件。
+Topic/Logset ID 虽然不是凭证，也不写入 `custom.toml` 或模块源配置；它们只进入自动生成的 `config/resources.env`。SecretId 和 SecretKey 只能存在于进程内存、受保护的临时文件和目标机 `0600` 文件中。脚本退出时必须删除本地临时凭证文件。
 
 ## 发布数据流
 
@@ -85,7 +86,7 @@ sequenceDiagram
     end
     CLS-->>CLI: Logset ID and Topic ID
     CLI-->>Skill: sanitized result and protected credential file
-    Skill->>Stage: inject CLS writer and literal Topic ID
+    Skill->>Stage: inject CLS writer and generated resources.env
     Skill->>Target: install cls.env with mode 0600
     Skill->>Target: upload and start release
 ```
@@ -97,7 +98,7 @@ sequenceDiagram
 发布前初始化已接入当前实现：`moox-cli ops tencent cls prepare` 负责通过
 带 service-auth 的 CloudNode 控制面选择账户并核对固定 CLS 资源，
 `skills/moox/scripts/cls-bootstrap.sh` 负责在目标机安全安装 `0600` 的
-`secrets/cls.env`，只把验证后的 Topic ID 写入 stage 配置；远程场景的
+`secrets/cls.env`，并生成 `config/resources.env` 供所有模块读取；远程场景的
 临时 helper 在预检后立即清理。`scripts/deploy-moox.sh` 的
 `prepare_cls_preflight` 在 release archive 同步或停止旧服务前执行。对应的部署、Skill、CLI
 和 tRPC 配置契约测试覆盖账户选择、Topic ID/credential placeholders、
@@ -130,7 +131,7 @@ sequenceDiagram
 
 ## Factor 与其他服务
 
-Factor 不使用独立 CLS 资源。发布前初始化成功后，Factor 的 `trpc_go.yaml` 与其他服务配置同样加入 CLS writer，并使用固定 Topic ID。Factor 保留 console writer，warn/error 同时发送到 CLS。
+Factor 不使用独立 CLS 资源。发布前初始化成功后，Factor 的 `trpc_go.yaml` 与其他服务配置同样加入 CLS writer，并通过 `config/resources.env` 使用生成的 Topic ID。Factor 保留 console writer，并以 `info` 级别同步计算任务和 View 读取流水线记录；其他服务仍以 `warn` 级别追加 CLS。
 
 Storage 的多个 `trpc_go*.yaml` 都要更新。未包含在本次发布 stage 中的服务不修改远程配置，也不能因为初始化脚本扫描了仓库而被意外启用。
 
@@ -144,7 +145,7 @@ Storage 的多个 `trpc_go*.yaml` 都要更新。未包含在本次发布 stage 
 - 已有固定 Logset、Topic 和索引时只查询不创建。
 - 缺少资源时按 Logset、Topic、索引顺序创建。
 - 每次执行都查询 CLS，不使用旧 Topic ID 跳过查询。
-- 只更新 stage 内的 `trpc_go*.yaml`，并写入真实 Topic ID。
+- 只更新 stage 内的 `trpc_go*.yaml`，并生成 `config/resources.env`。
 - Factor 和 Storage 多配置文件获得 CLS writer；写入操作可重复执行且不产生重复 writer。
 - `cls.env` 权限为 `0600`，传输失败时不替换旧文件。
 - 任一准备步骤失败时，部署脚本尚未停止当前服务。
@@ -152,10 +153,11 @@ Storage 的多个 `trpc_go*.yaml` 都要更新。未包含在本次发布 stage 
 发布验收要求：
 
 1. prepare 输出显示固定 Logset 和 Topic 的实际 ID。
-2. stage 中 Factor 配置包含一个 CLS writer 和实际 Topic ID。
-3. 目标机 `cls.env` 权限为 `0600`。
-4. 启动 Factor 后写入一条不含敏感内容的 warn 测试日志。
-5. 在固定 Topic 中按 Factor service name 查到该日志。
+2. stage 中 Factor 配置包含一个 CLS writer 和 `${MOOX_CLS_TOPIC_ID}` 占位符。
+3. `config/resources.env` 包含解析后的资源 ID，且不含凭证。
+4. 目标机 `cls.env` 权限为 `0600`。
+5. 启动 Factor 后写入一条不含敏感内容的 info 测试日志（验证计算流水线记录可达 CLS）。
+6. 在固定 Topic 中按 Factor service name 查到该日志。
 
 ## 非目标
 

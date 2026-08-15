@@ -186,8 +186,8 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 		},
 		{
 			name: "host agent", event: ObservabilityHostSnapshotReported,
-			payload: &hostmetricpb.HostMetric{AgentId: "agent-1", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
-			opts:    validationOptions("host-event-1", "moox_system", "agent-1"),
+			payload: &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
+			opts:    validationOptions("host-event-1", "moox_system", "aB3x"),
 			mutate:  func(value proto.Message) { value.(*hostmetricpb.HostMetric).AgentId = "other" },
 		},
 		{

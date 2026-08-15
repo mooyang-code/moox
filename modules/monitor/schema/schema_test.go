@@ -26,7 +26,7 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 			"t_monitor_alert_rules",
 			"t_monitor_alert_states",
 			"t_monitor_alert_events",
-			"t_monitor_host_agents",
+			"t_monitor_host_agents", "t_monitor_host_agent_aliases",
 			"t_monitor_metric_services", "t_monitor_metric_series", "t_monitor_metric_latest", "t_monitor_metric_ingest_messages",
 			"t_monitor_metric_rules", "t_monitor_metric_rule_states", "t_monitor_metric_rule_evaluations", "t_monitor_metric_rule_channels",
 		} {

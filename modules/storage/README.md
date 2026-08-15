@@ -81,7 +81,13 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
   `max_view_file_bytes` 且 View 有限 `keep_duration` 时启动 A/B 重建。新索引只
   backfill 保留窗口，切换完成后按固定 grace 删除旧 DuckDB 文件，不在 active 索引
   上逐行删除。配置统一使用：
-  `storage.view.rebuild_check_interval` 和 `storage.view.max_view_file_bytes`。
+  `storage.view.rebuild_check_interval`、`storage.view.rebuild_lookback` 和
+  `storage.view.max_view_file_bytes`。每一种重建在激活前都必须覆盖至少
+  `rebuild_lookback` 的墙上时钟历史；不足时保持构建中，不发布不完整 View。
+- `moox-cli storage force-rebuild-view` 可在确认后删除 View 的 A/B 物理索引、清理
+  durable consumer、period/sync checkpoint 状态并从 `DeliverAll` 事件重新建 View。该命令要求显式指定
+  `--lookback`，用于一次性覆盖配置；旧 View 数据不可恢复，执行前必须确认 Source
+  事件仍在 JetStream 保留窗口内。
 - 仅由文件大小触发的容量整理会等待 View consumer 已恢复、总积压不超过
   `storage.view.rebuild_max_pending`（默认 `32`），并连续满足
   `storage.view.rebuild_idle_checks`（默认 `3`）次检查；同一进程同时只运行一个

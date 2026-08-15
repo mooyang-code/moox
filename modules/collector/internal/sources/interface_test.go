@@ -23,3 +23,10 @@ func TestCollectResultContractIsMinimal(t *testing.T) {
 	}`, string(raw))
 	assert.LessOrEqual(t, len(raw), 1024)
 }
+
+func TestCollectParamsDNSIPsNormalizesHostAndAddresses(t *testing.T) {
+	params := &CollectParams{DNSRoutes: map[string]DNSResolution{
+		"FAPI.BINANCE.COM.": {IPs: []string{" 203.0.113.2 ", "203.0.113.2", "bad"}},
+	}}
+	assert.Equal(t, []string{"203.0.113.2"}, params.DNSIPs("fapi.binance.com."))
+}

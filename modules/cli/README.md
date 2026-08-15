@@ -10,6 +10,7 @@ moox-cli metadata apply ...         # 创建并校验 Storage 元数据契约（
 moox-cli setup init ...             # 一次初始化 Admin 空间、Storage 元数据与 Dataset
 moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
 moox-cli storage repair-view ...    # 清理 View durable consumer 积压并触发 A/B 重建
+moox-cli factor clear-queue ...     # 清空 Factor durable consumer 历史积压并重启 Factor
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
 moox-cli ops tencent lighthouse ... # 腾讯云 Lighthouse 防火墙规则
@@ -38,6 +39,23 @@ active 索引不会被删除。NATS 删除 consumer 需要 EventBus internal-adm
 `--credential-file` 或 `MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE` 指定，命令不会输出凭据。
 先执行 `--dry-run` 可只检查 View 和将要执行的动作。
 
+### Factor 队列积压清理
+
+当 Factor 因历史 `ViewSourcePeriodReady` 事件积压而长期重算旧周期时，可在部署根目录执行：
+
+```bash
+moox-cli factor clear-queue \
+  --package-root /home/ubuntu/moox/prod \
+  --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
+  --yes
+```
+
+命令会先停止 Factor，读取并删除 `MOOX_STORAGE/factor_view_ready_v1` durable consumer，
+再启动 Factor。新建 consumer 使用 `DeliverNew`，因此只处理清理完成后的新事件；命令不会删除
+View、Factor 结果或其他数据。可先用 `--dry-run` 检查参数，若不希望自动重启可传
+`--restart=false`。若部署环境无法从 `moox-factor-cli` 自动定位根目录，请显式传
+`--package-root`；NATS 管理凭据也可通过 `MOOX_EVENTBUS_INTERNAL_ADMIN_CREDENTIAL_FILE` 提供。
+
 只有在确认保留的 Source 事件能够完整重放时，才使用高风险的全量索引重置：
 
 ```bash
@@ -59,6 +77,25 @@ moox-cli setup apply --file ./custom.toml
 moox-cli setup status --file ./custom.toml
 moox-cli setup e2e-eventbus --file ./custom.toml
 ```
+
+`[tencent_cloud]` 中的 `secret_id`/`secret_key` 是腾讯云 API 凭据，也用于
+访问 CLS；不要在仓库或部署包中重复保存 SecretKey。CLS Logset/Topic 是初始化后
+由云端生成的资源，不写入 `custom.toml`。启用 CLS 的发布会运行
+`moox-cli ops tencent cls prepare`，并在部署根目录生成只读的
+`config/resources.env`，供各服务统一读取：
+
+```dotenv
+MOOX_CLS_ACCOUNT_ID='<cloud account id>'
+MOOX_CLS_REGION='ap-guangzhou'
+MOOX_CLS_HOST='ap-guangzhou.cls.tencentyun.com'
+MOOX_CLS_LOGSET_ID='<resolved logset id>'
+MOOX_CLS_TOPIC_ID='<resolved topic id>'
+```
+
+该文件不包含 SecretId/SecretKey，服务启动脚本会自动加载；凭据仍只通过受保护的
+`secrets/cls.env` 或云账户凭据链提供。需要诊断资源时使用
+`moox-cli ops tencent cls resolve --region ap-guangzhou`，不要把返回的 ID 回写到
+`custom.toml`。
 
 `setup deploy-control` also installs the managed Caddy edge, selects the
 certificate trust model, performs HTTPS acceptance, and installs the

@@ -22,9 +22,10 @@ type hostStorageRead interface {
 
 // StorageReader reconstructs host history from Storage's four datasets.
 type StorageReader struct {
-	access hostStorageRead
-	auth   *commonpb.AuthInfo
-	cfg    monconfig.HostStorageConfig
+	access  hostStorageRead
+	auth    *commonpb.AuthInfo
+	cfg     monconfig.HostStorageConfig
+	aliases func(context.Context, string) ([]string, error)
 }
 
 // ForecastHistoryLimit covers seven days of one-minute samples plus a small
@@ -37,6 +38,14 @@ const maxHistoryPageSize = 500
 
 func NewStorageReader(access hostStorageRead, cfg monconfig.HostStorageConfig) *StorageReader {
 	return &StorageReader{access: access, auth: storageauth.Primary(cfg.KeyID), cfg: cfg}
+}
+
+// SetAgentAliases keeps compact IDs as the public identity while allowing
+// history reads to include rows written by the pre-migration UUID identity.
+func (r *StorageReader) SetAgentAliases(resolve func(context.Context, string) ([]string, error)) {
+	if r != nil {
+		r.aliases = resolve
+	}
 }
 
 func (r *StorageReader) History(ctx context.Context, agentID string, start, end time.Time, limit int) ([]HistoryPoint, error) {
@@ -80,24 +89,37 @@ func (r *StorageReader) HistoryAt(ctx context.Context, agentID string, start, en
 			start = windowStart
 		}
 	}
-	points := make(map[string]*HistoryPoint)
-	for _, dataset := range []string{r.cfg.ResourceDatasetID, r.cfg.FilesystemDatasetID, r.cfg.DiskDatasetID, r.cfg.NetworkDatasetID} {
-		rows, err := r.scan(ctx, dataset, agentID, start, end, limit)
+	ids := []string{agentID}
+	if r.aliases != nil {
+		resolved, err := r.aliases(ctx, agentID)
 		if err != nil {
 			return nil, err
 		}
-		for _, row := range rows {
-			if row == nil || row.GetKey() == nil || row.GetKey().GetSubjectId() != agentID {
-				continue
-			}
-			at := row.GetKey().GetDataTime()
-			point := points[at]
-			if point == nil {
-				point = &HistoryPoint{AgentID: agentID, ObservedAt: at, Snapshot: &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{}, Memory: &hostmetricpb.MemoryMetric{}}}
-				points[at] = point
-			}
-			if err := mergeRow(point.Snapshot, dataset, r.cfg, row); err != nil {
+		if len(resolved) > 0 {
+			ids = resolved
+			agentID = resolved[0]
+		}
+	}
+	points := make(map[string]*HistoryPoint)
+	for _, dataset := range []string{r.cfg.ResourceDatasetID, r.cfg.FilesystemDatasetID, r.cfg.DiskDatasetID, r.cfg.NetworkDatasetID} {
+		for _, id := range ids {
+			rows, err := r.scan(ctx, dataset, id, start, end, limit)
+			if err != nil {
 				return nil, err
+			}
+			for _, row := range rows {
+				if row == nil || row.GetKey() == nil || row.GetKey().GetSubjectId() != id {
+					continue
+				}
+				at := row.GetKey().GetDataTime()
+				point := points[at]
+				if point == nil {
+					point = &HistoryPoint{AgentID: agentID, ObservedAt: at, Snapshot: &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{}, Memory: &hostmetricpb.MemoryMetric{}}}
+					points[at] = point
+				}
+				if err := mergeRow(point.Snapshot, dataset, r.cfg, row); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

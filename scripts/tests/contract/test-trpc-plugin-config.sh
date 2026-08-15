@@ -143,20 +143,20 @@ require_text scripts/deploy-moox.sh 'source "${ROOT}/secrets/otel.env"' 'OTel en
 require_text scripts/deploy-moox.sh '--cloud-account-id' 'deployment must allow explicit CLS cloud account selection'
 require_text scripts/deploy-moox.sh 'prepare_cls_preflight' 'deployment must prepare CLS before sync'
 require_text skills/moox/scripts/cls-bootstrap.sh 'ops tencent cls prepare' 'MooX Skill must prepare CLS through moox-cli'
-require_text skills/moox/scripts/cls-bootstrap.sh 'topic_id: ${topic_id}' 'staged CLS writer must contain the verified Topic ID'
+require_text skills/moox/scripts/cls-bootstrap.sh 'topic_id: ${MOOX_CLS_TOPIC_ID}' 'staged CLS writer must use the generated Topic ID resource'
+require_text skills/moox/scripts/cls-bootstrap.sh 'MOOX_CLS_LOGSET_ID' 'CLS bootstrap must persist generated resource metadata'
+require_text skills/moox/scripts/cls-bootstrap.sh 'MOOX_CLS_ACCOUNT_ID' 'CLS bootstrap must persist selected cloud account metadata'
+require_text scripts/deploy-moox.sh 'source "${ROOT}/config/resources.env"' 'lifecycle must load generated resource metadata'
 require_text skills/moox/scripts/cls-bootstrap.sh 'secret_id: \${MOOX_CLS_SECRET_ID}' 'staged CLS writer must retain credential placeholders'
+require_text skills/moox/scripts/cls-bootstrap.sh '*/factor/config/trpc_go*.yaml' 'Factor CLS rendering must cover the service config'
+require_text skills/moox/scripts/cls-bootstrap.sh 'level: " level' 'Factor CLS rendering must retain calculation info logs'
 bash skills/moox/scripts/test-cls-query.sh >/dev/null
-require_text 'docs/运维/tRPC插件运行基线.md' 'literal Topic ID' 'operations baseline must distinguish literal Topic IDs from credential placeholders'
+require_text 'docs/运维/tRPC插件运行基线.md' 'config/resources.env' 'operations baseline must document generated CLS resource metadata'
 require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_SECRET_ID}' 'operations baseline must name the CLS secret-id placeholder'
 require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_SECRET_KEY}' 'operations baseline must name the CLS secret-key placeholder'
 require_text 'docs/运维/tRPC插件运行基线.md' 'service_name' 'operations baseline must document the CLS service identity field'
 require_text 'docs/运维/tRPC插件运行基线.md' 'release archive sync or service shutdown' 'operations baseline must distinguish helper upload from release sync'
 require_text skills/moox/SKILL.md 'architecture-matched `moox-cli` helper solely for preflight' 'MooX Skill must document temporary preflight helper cleanup'
-if grep -Fq -- '${MOOX_CLS_*}' 'docs/运维/tRPC插件运行基线.md'; then
-  fail 'operations baseline must not imply a Topic ID placeholder remains in staged configs'
-fi
-if grep -Fq -- '${MOOX_CLS_TOPIC_ID}' 'docs/运维/tRPC插件运行基线.md'; then
-  fail 'operations baseline must not imply a Topic ID environment placeholder remains in staged configs'
-fi
+require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_TOPIC_ID}' 'operations baseline must document the generated Topic ID placeholder'
 
 printf 'PASS: tRPC plugin configuration and registration matrix\n'

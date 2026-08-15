@@ -14,5 +14,5 @@ Group=__MOOX_GROUP__
 Environment=HOME=__MOOX_HOME__
 Environment=MOOX_STORAGE_ROOT=__MOOX_STORAGE_ROOT__
 Environment=MOOX_STORAGE_EVENTBUS_URL=tls://127.0.0.1:4222
-Environment=MOOX_STORAGE_VIEW_DELIVER_POLICY=all
+Environment=MOOX_STORAGE_VIEW_DELIVER_POLICY=new
 ExecStart=/usr/local/libexec/moox-storage-view-watchdog

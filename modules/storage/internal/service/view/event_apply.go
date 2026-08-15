@@ -182,7 +182,15 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 				runtime.mu.Unlock()
 				return activeFailure
 			}
-			if !activeReady && (runtime.status != "active" || runtime.active == "") {
+			if !activeReady && runtime.active == "" {
+				// A from-scratch build is primed directly from the replayed
+				// durable stream. Once the row is safely written to B it may be
+				// ACKed; reconciliation keeps B non-authoritative until the
+				// configured minimum lookback is covered.
+				runtime.mu.Unlock()
+				continue
+			}
+			if !activeReady && runtime.status != "active" {
 				// The row is present in the replacement, but it is not yet a
 				// durable READY/active index. Keep the source delivery pending so
 				// a crash before build metadata reaches READY cannot lose the row.

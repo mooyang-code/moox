@@ -241,7 +241,7 @@ datasets:
   description: Historical tRPC application and business metrics
   data_kind: time_series
   data_node_id: storage-node-0
-  keep_duration: 72h
+  keep_duration: 24h
   freqs:
   - 30s
   status: disabled
@@ -1856,7 +1856,7 @@ views:
   - series_tag
   filter_json: '{"freq":"30s"}'
   engine: duckdb
-  keep_duration: 72h
+  keep_duration: 24h
   status: active
 view_columns:
 - space_id: stock_cn

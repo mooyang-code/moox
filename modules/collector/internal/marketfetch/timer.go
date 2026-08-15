@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -91,8 +92,44 @@ func parseDNSRoutes(raw string) (map[string]sources.DNSResolution, error) {
 		return nil, nil
 	}
 	result := make(map[string]sources.DNSResolution, len(routes))
-	for host, ips := range routes {
-		result[host] = sources.DNSResolution{IPs: append([]string(nil), ips...)}
+	for rawHost, ips := range routes {
+		host := sources.NormalizeDNSHost(rawHost)
+		if host == "" {
+			continue
+		}
+		// Keep only canonical IP strings and deduplicate the payload. A malformed
+		// entry must not make the whole invocation fail; the HTTP client will
+		// still fall back to the original hostname when no usable address remains.
+		seen := make(map[string]struct{}, len(ips))
+		canonical := make([]string, 0, len(ips))
+		for _, rawIP := range ips {
+			ip := net.ParseIP(strings.TrimSpace(rawIP))
+			if ip == nil {
+				continue
+			}
+			value := ip.String()
+			if _, exists := seen[value]; exists {
+				continue
+			}
+			seen[value] = struct{}{}
+			canonical = append(canonical, value)
+		}
+		if len(canonical) == 0 {
+			continue
+		}
+		route := result[host]
+		routeSeen := make(map[string]struct{}, len(route.IPs)+len(canonical))
+		for _, value := range route.IPs {
+			routeSeen[value] = struct{}{}
+		}
+		for _, value := range canonical {
+			if _, exists := routeSeen[value]; exists {
+				continue
+			}
+			route.IPs = append(route.IPs, value)
+			routeSeen[value] = struct{}{}
+		}
+		result[host] = route
 	}
 	return result, nil
 }

@@ -23,6 +23,10 @@ func (s *Service) BackfillView(ctx context.Context, spaceID, viewID string, batc
 }
 
 func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader) error {
+	return s.backfillViewWithReader(ctx, spaceID, viewID, batchSize, reader, 0)
+}
+
+func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, minimumLookback time.Duration) error {
 	if batchSize <= 0 {
 		batchSize = 100
 	}
@@ -52,7 +56,7 @@ func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID st
 		activeSchema := s.schemas[activeID]
 		catalogView := s.catalogViews[viewRef{spaceID: spaceID, viewID: viewID}]
 		s.mu.RUnlock()
-		for _, timeRange := range backfillTimeRanges(catalogView) {
+		for _, timeRange := range backfillTimeRanges(catalogView, minimumLookback) {
 			var after *pb.RowKey
 			for {
 				rows, _, err := active.Query(ctx, activeID, viewindex.QuerySpec{
@@ -137,12 +141,18 @@ func (s *Service) backfillStillActive(spaceID, viewID, nextID string) error {
 	return nil
 }
 
-func backfillTimeRanges(view *pb.View) []*pb.TimeRange {
-	if view == nil || view.GetKeepDuration() == "" || view.GetKeepDuration() == "0" {
-		return []*pb.TimeRange{nil}
+func backfillTimeRanges(view *pb.View, minimumLookback time.Duration) []*pb.TimeRange {
+	var keep time.Duration
+	if view != nil && view.GetKeepDuration() != "" && view.GetKeepDuration() != "0" {
+		parsed, err := time.ParseDuration(view.GetKeepDuration())
+		if err == nil && parsed > 0 {
+			keep = parsed
+		}
 	}
-	keep, err := time.ParseDuration(view.GetKeepDuration())
-	if err != nil || keep <= 0 {
+	if minimumLookback > keep {
+		keep = minimumLookback
+	}
+	if keep <= 0 {
 		return []*pb.TimeRange{nil}
 	}
 	now := time.Now().UTC()

@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -18,9 +19,12 @@ import (
 )
 
 type fakePublisher struct {
-	events   []events.Event
-	payloads []proto.Message
-	options  []events.PublishOptions
+	events     []events.Event
+	payloads   []proto.Message
+	options    []events.PublishOptions
+	publishErr error
+	closed     bool
+	onPublish  func()
 }
 
 func validConfig(serviceName string) Config {
@@ -45,7 +49,18 @@ func (f *fakePublisher) Publish(_ context.Context, event events.Event, payload p
 	f.events = append(f.events, event)
 	f.payloads = append(f.payloads, payload)
 	f.options = append(f.options, opts)
+	if f.onPublish != nil {
+		f.onPublish()
+	}
+	if f.publishErr != nil {
+		return nil, f.publishErr
+	}
 	return &jetstream.PublishAck{Stream: "MOOX_OBSERVABILITY", Sequence: uint64(len(f.events))}, nil
+}
+
+func (f *fakePublisher) Close() error {
+	f.closed = true
+	return nil
 }
 
 func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
@@ -185,4 +200,73 @@ func TestHandleReportsPublisherError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "eventbus down")
+}
+
+func TestHandleReconnectsAndRetriesTransientPublisherError(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	first := &fakePublisher{publishErr: fmt.Errorf("%w: outbound buffer limit exceeded", jetstream.ErrConnection)}
+	second := &fakePublisher{}
+	h, err := NewHandlerWithPublisher(validConfig("storage-view"), first, registry)
+	require.NoError(t, err)
+	connectCalls := 0
+	h.connector = func(context.Context, Config) (Publisher, error) {
+		connectCalls++
+		return second, nil
+	}
+
+	require.NoError(t, h.Handle(context.Background()))
+	require.True(t, first.closed)
+	require.Equal(t, 1, connectCalls)
+	require.Len(t, first.options, 1)
+	require.Len(t, second.options, 1)
+	require.Equal(t, first.options[0].EventID, second.options[0].EventID)
+	require.Equal(t, uint64(1), second.payloads[0].(*metricspb.MetricReport).GetSequence())
+}
+
+func TestHandleDoesNotReconnectPermanentPublisherError(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	first := &fakePublisher{publishErr: jetstream.ErrInvalidMessage}
+	h, err := NewHandlerWithPublisher(validConfig("storage-view"), first, registry)
+	require.NoError(t, err)
+	connectCalls := 0
+	h.connector = func(context.Context, Config) (Publisher, error) {
+		connectCalls++
+		return &fakePublisher{}, nil
+	}
+
+	require.Error(t, h.Handle(context.Background()))
+	require.False(t, first.closed)
+	require.Zero(t, connectCalls)
+}
+
+func TestHandleDoesNotReconnectAfterCallerCancellation(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	first := &fakePublisher{publishErr: fmt.Errorf("%w: %w", jetstream.ErrConnection, context.Canceled)}
+	h, err := NewHandlerWithPublisher(validConfig("storage-view"), first, registry)
+	require.NoError(t, err)
+	connectCalls := 0
+	h.connector = func(context.Context, Config) (Publisher, error) {
+		connectCalls++
+		return &fakePublisher{}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.Error(t, h.Handle(ctx))
+	require.False(t, first.closed)
+	require.Zero(t, connectCalls)
+}
+
+func TestHandleKeepsReconnectedPublisherWhenRetryContextExpires(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	first := &fakePublisher{publishErr: jetstream.ErrConnection}
+	ctx, cancel := context.WithCancel(context.Background())
+	second := &fakePublisher{publishErr: jetstream.ErrPublishTimeout, onPublish: cancel}
+	h, err := NewHandlerWithPublisher(validConfig("storage-view"), first, registry)
+	require.NoError(t, err)
+	h.connector = func(context.Context, Config) (Publisher, error) { return second, nil }
+
+	require.Error(t, h.Handle(ctx))
+	require.True(t, first.closed)
+	require.False(t, second.closed)
 }

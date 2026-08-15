@@ -9,23 +9,27 @@
 | 环境 | Writer | 必填字段 | 禁止内容 |
 |---|---|---|---|
 | local/test | console | module、service、method、trace ID、code、duration | 凭证、原始 body、JWT、HMAC、API secret |
-| production | console；warn/error 追加 CLS | 同上加 deployment version | 同上 |
+| production | console；Factor 的计算/读取流水线使用 info 追加 CLS，其他服务 warn/error 追加 CLS | 同上加 deployment version | 同上 |
 | incident debug | 有时限、仅指定 method | trace ID 与批准的标识 | 未经脱敏测试的敏感字段 |
 
 CLS-enabled releases run a predeploy check before release archive sync or
 service shutdown. The check
 uses the selected cloud account, or the first Tencent account when no ID is
-supplied, and queries fixed `ap-guangzhou` resources: Logset `moox` and Topic
-`moox-application`. It creates only missing resources and writes the verified
-Topic ID into staged `trpc_go*.yaml` files. Writer credentials remain in the
-target `secrets/cls.env` with mode `0600`; staged configs contain the verified
-literal Topic ID and only `${MOOX_CLS_SECRET_ID}` and
-`${MOOX_CLS_SECRET_KEY}` credential placeholders. A failed Admin/CloudNode service-auth check,
+supplied, and queries the fixed `ap-guangzhou` Tencent Cloud region for
+Logset `moox` and Topic `moox-application`. It creates only missing resources
+and writes the resolved non-secret IDs to the generated
+`config/resources.env`. Staged `trpc_go*.yaml` files reference
+`${MOOX_CLS_TOPIC_ID}`; writer credentials remain in the target
+`secrets/cls.env` with mode `0600`, and only `${MOOX_CLS_SECRET_ID}` and
+`${MOOX_CLS_SECRET_KEY}` credential placeholders are used in staged configs. A failed Admin/CloudNode service-auth check,
 account lookup, credential reveal, or CLS API call stops the release before
 release archive sync or service shutdown. On remote targets, the Skill may
 upload a temporary architecture-matched `moox-cli` helper solely for this
-check; it is removed immediately and is not release archive sync. The initial
-remote level remains `warn`.
+check; it is removed immediately and is not release archive sync. The default
+remote level remains `warn` for non-Factor services. Factor is rendered with
+an `info` CLS writer so `factor_view_read_done` and `factor_task_done` records
+are available for freshness and retry diagnosis; the repository's local
+console configuration is unchanged.
 
 直接执行发布前初始化与预检：
 

@@ -147,12 +147,15 @@ printf 'keep-admin-jwt\n' >"${DEPLOY_DIR}/secrets/admin-jwt.env"
 printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=monitor\nMOOX_HEALTH_AUTH_SECRET_KEY=keep-health\n' >"${DEPLOY_DIR}/secrets/health-auth.env"
 printf 'keep-storage-node-auth\n' >"${DEPLOY_DIR}/secrets/storage-node-auth.env"
 printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET=keep-primary\nMOOX_STORAGE_VIEW_AUTH_SECRET=keep-view\n' >"${DEPLOY_DIR}/secrets/storage-internal-auth.env"
+printf "MOOX_CLS_ACCOUNT_ID='acct-existing'\nMOOX_CLS_REGION='ap-guangzhou'\nMOOX_CLS_HOST='ap-guangzhou.cls.tencentyun.com'\nMOOX_CLS_LOGSET_ID='logset-existing'\nMOOX_CLS_TOPIC_ID='topic-existing'\n" >"${DEPLOY_DIR}/config/resources.env"
+chmod 0644 "${DEPLOY_DIR}/config/resources.env"
 mkdir -p "${DEPLOY_DIR}/config/caddy"
 printf 'keep-edge-config\n' >"${DEPLOY_DIR}/config/caddy/edge.env"
 for path in start.sh stop.sh status.sh healthcheck.sh; do
   cp "${DEPLOY_DIR}/${path}" "${TMP_ROOT}/${path}.before"
 done
 grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR=0' "${DEPLOY_DIR}/config/components.env"
+grep -Fxq "MOOX_CLS_TOPIC_ID='topic-existing'" "${DEPLOY_DIR}/config/resources.env"
 for path in \
   secrets/gateway-control.key \
   secrets/gateway-service.key \
@@ -209,6 +212,7 @@ done
 grep -Fxq 'MOOX_INSTALLED_WITH_FACTOR=1' "${DEPLOY_DIR}/config/components.env"
 grep -Fxq 'MOOX_INSTALLED_WITH_ADMIN=1' "${DEPLOY_DIR}/config/components.env"
 grep -Fxq 'MOOX_INSTALLED_WITH_GATEWAY=1' "${DEPLOY_DIR}/config/components.env"
+grep -Fxq "MOOX_CLS_TOPIC_ID='topic-existing'" "${DEPLOY_DIR}/config/resources.env"
 for path in start.sh stop.sh status.sh healthcheck.sh; do
   grep -Fq 'config/components.env' "${DEPLOY_DIR}/${path}" || {
     echo "component-only update left lifecycle without component inventory support: ${path}" >&2

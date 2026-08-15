@@ -27,8 +27,19 @@ func TestStorageConfigRolesAreExplicit(t *testing.T) {
 func TestStorageViewRebuildDefaults(t *testing.T) {
 	cfg := StorageConfig{}
 	cfg.ApplyDefaults()
-	if cfg.View.RebuildCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 {
-		t.Fatalf("view rebuild defaults = %q/%d/%d/%d", cfg.View.RebuildCheckInterval, cfg.View.MaxViewFileBytes, cfg.View.RebuildMaxPending, cfg.View.RebuildIdleChecks)
+	if cfg.View.RebuildCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 || cfg.View.RebuildLookback != "72h" {
+		t.Fatalf("view rebuild defaults = %q/%d/%d/%d/%s", cfg.View.RebuildCheckInterval, cfg.View.MaxViewFileBytes, cfg.View.RebuildMaxPending, cfg.View.RebuildIdleChecks, cfg.View.RebuildLookback)
+	}
+}
+
+func TestStorageViewRebuildLookbackCanBeConfigured(t *testing.T) {
+	var cfg RuntimeConfig
+	if err := yaml.Unmarshal([]byte("storage:\n  view:\n    rebuild_lookback: 48h\n"), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyDefaults()
+	if cfg.Storage.View.RebuildLookback != "48h" {
+		t.Fatalf("rebuild lookback = %q, want 48h", cfg.Storage.View.RebuildLookback)
 	}
 }
 
@@ -287,8 +298,8 @@ storage:
 	if cfg.Storage.Devices.ViewIndexRoot != "/indexes" || cfg.Storage.View.IndexServiceName != "custom.ViewIndex" {
 		t.Fatalf("owner config = %q/%q", cfg.Storage.Devices.ViewIndexRoot, cfg.Storage.View.IndexServiceName)
 	}
-	if cfg.Storage.View.RebuildCheckInterval != "2h" || cfg.Storage.View.MaxViewFileBytes != 805306368 || cfg.Storage.View.RebuildMaxPending != 32 || cfg.Storage.View.RebuildIdleChecks != 3 {
-		t.Fatalf("rebuild config = %q/%d/%d/%d", cfg.Storage.View.RebuildCheckInterval, cfg.Storage.View.MaxViewFileBytes, cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks)
+	if cfg.Storage.View.RebuildCheckInterval != "2h" || cfg.Storage.View.MaxViewFileBytes != 805306368 || cfg.Storage.View.RebuildMaxPending != 32 || cfg.Storage.View.RebuildIdleChecks != 3 || cfg.Storage.View.RebuildLookback != "72h" {
+		t.Fatalf("rebuild config = %q/%d/%d/%d/%s", cfg.Storage.View.RebuildCheckInterval, cfg.Storage.View.MaxViewFileBytes, cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks, cfg.Storage.View.RebuildLookback)
 	}
 }
 

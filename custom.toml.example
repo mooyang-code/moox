@@ -5,6 +5,7 @@ password = ""
 [tencent_cloud]
 secret_id = ""
 secret_key = ""
+region = "ap-guangzhou"
 
 [eventbus]
 public_address = ""

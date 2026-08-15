@@ -112,7 +112,7 @@ func (s *Scheduler) Tick(ctx context.Context, spaceID string) error {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
-	dnsRoutes := s.dnsSnapshot()
+	dnsRoutes := s.dnsSnapshot(ctx)
 	allRules, err := s.Rules.ListEnabled(ctx, spaceID)
 	if err != nil {
 		return fmt.Errorf("list enabled collection rules: %w", err)
@@ -301,11 +301,30 @@ func isKlineRule(rule domain.TaskRule) bool {
 	return err == nil && strings.EqualFold(strings.TrimSpace(params.Collector.DataType), "kline")
 }
 
-func (s *Scheduler) dnsSnapshot() map[string]sources.DNSResolution {
+type dnsRefreshable interface {
+	Due(time.Time) bool
+	Refresh(context.Context) error
+}
+
+func (s *Scheduler) dnsSnapshot(ctx context.Context) map[string]sources.DNSResolution {
 	if s == nil || s.DNSCache == nil {
 		return nil
 	}
-	return s.DNSCache.Snapshot()
+	snapshot := s.DNSCache.Snapshot()
+	// DNS refresh and market scheduling are independent timer services. At the
+	// TTL boundary the scheduler can otherwise observe an empty snapshot just
+	// before the refresh timer runs and persist an invocation without fapi/api
+	// routes. Refresh once when the snapshot is empty and the coordinator is due;
+	// the SCF still has hostname fallback if this bounded refresh fails.
+	if len(snapshot) == 0 {
+		if refreshable, ok := s.DNSCache.(dnsRefreshable); ok && refreshable.Due(time.Now().UTC()) {
+			if err := refreshable.Refresh(ctx); err != nil {
+				log.WarnContextf(ctx, "market_fetch_dns_refresh_before_schedule_failed error=%v", err)
+			}
+			snapshot = s.DNSCache.Snapshot()
+		}
+	}
+	return snapshot
 }
 
 func normalizedBatchIdentity(item domain.CollectionItem, rule domain.TaskRule) (string, string) {
@@ -463,7 +482,7 @@ func (s *Scheduler) auditGaps(ctx context.Context, spaceID string, rules []domai
 		// stalls large gaps for nine unnecessary minutes.
 		scheduleID := fmt.Sprintf("catchup:%s:%s", candidate.instance.TaskID, now.Truncate(time.Minute).Format(time.RFC3339Nano))
 		batchID := stableID(spaceID, scheduleID, string(domain.BatchKindCatchup), "0", "1")
-		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindCatchup, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, ScheduleID: scheduleID, BatchKind: domain.BatchKindCatchup, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		if _, err := s.planOne(ctx, candidate.rule, req, node, nodes); err != nil {
 			return err
 		}
@@ -702,7 +721,7 @@ func (s *Scheduler) dispatchDueRetries(ctx context.Context, spaceID string, node
 		if batchKind == "" {
 			batchKind = domain.BatchKindRealtime
 		}
-		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(), Items: []domain.CollectionItem{item}}
+		req := Request{BatchID: batchID, SyncPointID: retry.SourceBatchID, ScheduleID: "retry:" + retry.RetryKey, BatchKind: batchKind, SpaceID: spaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, Provider: item.Provider, MarketType: item.MarketType, Region: node.Region, NodeID: node.NodeID, FunctionName: node.FunctionName, DNSRoutes: s.dnsSnapshot(ctx), Items: []domain.CollectionItem{item}}
 		raw, _ := json.Marshal(req)
 		if _, err := marketFetchEvent(req, s.StorageTarget); err != nil {
 			_ = s.Retries.MarkStatus(ctx, spaceID, retry.RetryKey, "permanent_failed")

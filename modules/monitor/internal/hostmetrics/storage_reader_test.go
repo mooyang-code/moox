@@ -8,6 +8,7 @@ import (
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -95,6 +96,23 @@ func TestStorageReaderDoesNotTruncateLongMultiEntityHistory(t *testing.T) {
 	if len(points) != 30 {
 		t.Fatalf("points=%d, want 30", len(points))
 	}
+}
+
+func TestStorageReaderIncludesLegacyRowsForCompactAgentID(t *testing.T) {
+	cfg := monconfig.Default().Metrics.HostStorage
+	at := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	legacyID := "550e8400-e29b-41d4-a716-446655440000"
+	fake := &readerAccessFake{rows: []*storagepb.TimeSeriesRow{
+		readRow(resourceRow(SpaceID, cfg.ResourceDatasetID, "1m", at, &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 4}, Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100}}, legacyID)),
+	}}
+	reader := NewStorageReader(fake, cfg)
+	reader.SetAgentAliases(func(context.Context, string) ([]string, error) {
+		return []string{"aB3x", legacyID}, nil
+	})
+	points, err := reader.History(context.Background(), "aB3x", time.Unix(0, 0), time.Now().UTC(), 10)
+	require.NoError(t, err)
+	require.Len(t, points, 1)
+	require.Equal(t, "aB3x", points[0].AgentID)
 }
 
 func readRow(row *storagepb.RowFieldUpsert) *storagepb.TimeSeriesRow {

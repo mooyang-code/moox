@@ -101,3 +101,28 @@ func TestHTTPClientGetWithIPsReservesTimeForHostnameAfterIPTimeout(t *testing.T)
 	assert.Equal(t, parsed.Host, result["host"])
 	assert.Less(t, time.Since(started), time.Second, "hostname fallback should receive a reserved portion of the request deadline")
 }
+
+func TestHTTPClientGetWithIPsTriesNextAddressAfterFirstTimeout(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"host": r.Host})
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	base, ok := server.Client().Transport.(*http.Transport)
+	require.True(t, ok)
+	transport := base.Clone()
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if strings.HasPrefix(address, "192.0.2.1:") {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}
+	client := NewHTTPClient(&http.Client{Transport: transport})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	var result map[string]string
+	require.NoError(t, client.GetWithIPs(ctx, parsed.Host, []string{"192.0.2.1", "127.0.0.1"}, parsed.Path, nil, &result))
+	assert.Equal(t, parsed.Host, result["host"])
+}

@@ -47,7 +47,7 @@ func validateObservabilityHostSnapshotReported(message *eventpb.EventMessage, va
 	if !ok {
 		return fmt.Errorf("host metric payload has type %T", value)
 	}
-	if strings.TrimSpace(payload.GetAgentId()) == "" ||
+	if !hostmetricpb.IsCompatibleAgentID(payload.GetAgentId()) ||
 		strings.TrimSpace(payload.GetHostname()) == "" ||
 		payload.GetSnapshot() == nil {
 		return fmt.Errorf("host metric identity or snapshot is incomplete")

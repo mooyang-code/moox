@@ -371,8 +371,40 @@ func (e *Executor) reportResults(req Request, results []domain.ItemResult, execu
 			"error_kind": result.ErrorType, "error_message": truncateErrorString(result.ErrorSummary),
 			"elapsed_ms": strconv.FormatInt(executions[index].elapsed.Milliseconds(), 10), "rows": strconv.Itoa(rowCountByItem[index]),
 		}
+		for key, value := range dnsReportFields(req) {
+			fields[key] = value
+		}
 		e.Reporter.Report(clsreporter.Entry{Timestamp: time.Now().UTC(), Fields: fields})
 	}
+}
+
+func dnsReportFields(req Request) map[string]string {
+	fields := map[string]string{"dns_source": "system", "dns_route_count": "0"}
+	host := "api.binance.com"
+	if strings.EqualFold(strings.TrimSpace(req.MarketType), "swap") {
+		host = "fapi.binance.com"
+	}
+	var route sources.DNSResolution
+	found := false
+	for rawHost, candidate := range req.DNSRoutes {
+		if sources.NormalizeDNSHost(rawHost) == host {
+			route, found = candidate, true
+			break
+		}
+	}
+	if !found || len(route.IPs) == 0 {
+		return fields
+	}
+	fields["dns_source"] = "scf_snapshot"
+	fields["dns_route_count"] = strconv.Itoa(len(route.IPs))
+	if !route.ResolvedAt.IsZero() {
+		age := time.Since(route.ResolvedAt.UTC()).Seconds()
+		if age < 0 {
+			age = 0
+		}
+		fields["dns_route_age_seconds"] = strconv.FormatInt(int64(age), 10)
+	}
+	return fields
 }
 
 func resultErrorSummary(results []domain.ItemResult) string {

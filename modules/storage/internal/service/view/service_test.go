@@ -589,6 +589,29 @@ func TestDatasetEventStaysPendingWhenNewManagedViewIsNotAttached(t *testing.T) {
 	}
 }
 
+func TestInitialPrimingBuildAcksRowsAfterWritingReplacement(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	columns := []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "priming-view", Schema: &pb.ViewIndexSchema{
+		SpaceId: "space", ViewId: "priming", PrimaryDatasetId: "market", DatasetIds: []string{"market"}, ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash", Columns: columns,
+	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("prepare priming view: rsp=%v err=%v", rsp, err)
+	}
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 3}}}}}
+	if err := svc.applyDatasetEvent(ctx, "space", "market", []*pb.RowFieldUpsert{row}); err != nil {
+		t.Fatalf("priming row should ACK after replacement write: %v", err)
+	}
+	rows, err := svc.query(ctx, "priming-view", []*pb.RowKey{row.GetKey()}, nil)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("priming row was not written: rows=%v err=%v", rows, err)
+	}
+}
+
 func TestExplicitEmptyViewRoutesDatasetEventsWithoutBlocking(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {

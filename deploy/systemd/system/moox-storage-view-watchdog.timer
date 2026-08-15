@@ -3,6 +3,10 @@ Description=Run MooX Storage View watchdog every 10 seconds
 
 [Timer]
 OnBootSec=15s
+# Reinstalling/restarting the timer long after boot must arm a fresh trigger.
+# OnBootSec alone is already elapsed, while OnUnitActiveSec cannot schedule
+# until the oneshot has run at least once.
+OnActiveSec=10s
 OnUnitActiveSec=10s
 AccuracySec=1s
 Persistent=true
