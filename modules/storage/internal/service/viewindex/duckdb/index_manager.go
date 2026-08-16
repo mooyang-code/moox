@@ -188,16 +188,33 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 			if end > len(group.writes) {
 				end = len(group.writes)
 			}
-			args := make([]any, 0, (end-start)*len(names))
-			for _, write := range group.writes[start:end] {
+			writes := group.writes[start:end]
+			args := make([]any, 0, len(writes)*len(names))
+			for _, write := range writes {
 				rowValues, err := rowArgs(columns, names, write, batch.WriteMode)
 				if err != nil {
 					return err
 				}
 				args = append(args, rowValues...)
 			}
-			if _, err := tx.ExecContext(ctx, upsertSQLBatch(names, batch.WriteMode, end-start), args...); err != nil {
-				return err
+			if _, err := tx.ExecContext(ctx, upsertSQLBatch(names, batch.WriteMode, len(writes)), args...); err != nil {
+				// Older DuckDB builds can still reject a multi-value UPSERT when
+				// equivalent physical keys arrive through differently shaped event
+				// fragments. Retry the same rows one at a time so an existing row is
+				// resolved by the conflict clause instead of poisoning the durable
+				// consumer forever. Non-duplicate constraint errors remain fatal.
+				if !isDuplicateConstraintError(err) {
+					return err
+				}
+				for _, write := range writes {
+					rowValues, rowErr := rowArgs(columns, names, write, batch.WriteMode)
+					if rowErr != nil {
+						return rowErr
+					}
+					if _, rowErr = tx.ExecContext(ctx, upsertSQLBatch(names, batch.WriteMode, 1), rowValues...); rowErr != nil {
+						return rowErr
+					}
+				}
 			}
 		}
 	}
@@ -429,6 +446,15 @@ func upsertSQLBatch(names []string, mode viewindex.WriteMode, rowCount int) stri
 		conflict = "ON CONFLICT (subject_id, freq, data_time, series_tag) DO UPDATE SET " + strings.Join(sets, ", ")
 	}
 	return fmt.Sprintf("INSERT INTO view_rows (%s) VALUES %s %s", joinQuoted(names), strings.Join(values, ","), conflict)
+}
+
+func isDuplicateConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "duplicate key") ||
+		(strings.Contains(message, "primary key") && strings.Contains(message, "constraint"))
 }
 
 func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewindex.RowWrite, mode viewindex.WriteMode) ([]any, error) {
