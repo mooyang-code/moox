@@ -2649,11 +2649,12 @@ probe_liveness() {
   body=$(curl --fail --silent --max-time 2 \
     -H "X-Moox-Health-Auth: $(sign_health_request GET /healthz)" "${url}") || return 1
   # A large durable backlog makes readiness false but remains recoverable.
-  # A lost consumer binding or failed restore is not healthy enough to leave
-  # running forever merely because the HTTP listener still answers.
+  # /healthz is the liveness endpoint and intentionally does not expose every
+  # /readyz detail (notably restore_ready). Do not turn that omitted detail
+  # into a false liveness failure, or the supervisor will restart a draining
+  # View after the startup grace window and discard its progress.
   grep -Eq '"process_alive"[[:space:]]*:[[:space:]]*true' <<<"${body}" &&
-    grep -Eq '"consumer_bound"[[:space:]]*:[[:space:]]*true' <<<"${body}" &&
-    grep -Eq '"restore_ready"[[:space:]]*:[[:space:]]*true' <<<"${body}"
+    grep -Eq '"consumer_bound"[[:space:]]*:[[:space:]]*true' <<<"${body}"
 }
 
 listener_open() {
