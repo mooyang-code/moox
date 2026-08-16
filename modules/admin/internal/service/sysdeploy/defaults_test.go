@@ -299,6 +299,38 @@ func TestMergeDefaultExtraConfigBackfillsMissingFields(t *testing.T) {
 	}
 }
 
+func TestMergeDefaultExtraConfigBackfillsNewGatewayMethods(t *testing.T) {
+	merged, changed := mergeDefaultExtraConfig(
+		`{"gateway_methods":["GetView"],"gateway_callers":["admin-gateway"]}`,
+		`{"gateway_methods":["GetView","ListViews"]}`,
+	)
+	if !changed {
+		t.Fatal("changed = false, want ListViews to be added")
+	}
+	var extra struct {
+		GatewayMethods []string `json:"gateway_methods"`
+	}
+	if err := json.Unmarshal([]byte(merged), &extra); err != nil {
+		t.Fatalf("unmarshal merged: %v", err)
+	}
+	if !containsString(extra.GatewayMethods, "GetView") || !containsString(extra.GatewayMethods, "ListViews") {
+		t.Fatalf("gateway methods = %v", extra.GatewayMethods)
+	}
+}
+
+func TestMergeDefaultExtraConfigPreservesWildcardGatewayMethods(t *testing.T) {
+	merged, changed := mergeDefaultExtraConfig(
+		`{"gateway_methods":["*"]}`,
+		`{"gateway_methods":["ListViews"]}`,
+	)
+	if changed {
+		t.Fatal("wildcard gateway methods should not be rewritten")
+	}
+	if merged != `{"gateway_methods":["*"]}` {
+		t.Fatalf("merged = %s", merged)
+	}
+}
+
 func healthURL(raw string) string {
 	var extra struct {
 		HealthURL string `json:"health_url"`

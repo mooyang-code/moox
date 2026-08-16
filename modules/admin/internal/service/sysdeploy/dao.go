@@ -236,7 +236,18 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 	}
 	changed := false
 	for key, value := range defaults {
-		if _, ok := existing[key]; ok {
+		if existingValue, ok := existing[key]; ok {
+			// Gateway method ACLs are versioned defaults. Preserve any
+			// operator-added methods, but append methods introduced by a newer
+			// release so an existing deployment does not keep a stale route
+			// snapshot (for example, ListViews after the View API was added).
+			if key == "gateway_methods" {
+				merged, listChanged := mergeDefaultGatewayMethods(existingValue, value)
+				if listChanged {
+					existing[key] = merged
+					changed = true
+				}
+			}
 			continue
 		}
 		existing[key] = value
@@ -250,6 +261,46 @@ func mergeDefaultExtraConfig(existingRaw, defaultRaw string) (string, bool) {
 		return existingRaw, false
 	}
 	return string(raw), true
+}
+
+func mergeDefaultGatewayMethods(existingValue, defaultValue any) ([]string, bool) {
+	existingRaw, err := json.Marshal(existingValue)
+	if err != nil {
+		return nil, false
+	}
+	defaultRaw, err := json.Marshal(defaultValue)
+	if err != nil {
+		return nil, false
+	}
+	var existing, defaults []string
+	if json.Unmarshal(existingRaw, &existing) != nil || json.Unmarshal(defaultRaw, &defaults) != nil {
+		return nil, false
+	}
+	seen := make(map[string]struct{}, len(existing)+len(defaults))
+	for _, method := range existing {
+		method = strings.TrimSpace(method)
+		if method != "" {
+			seen[method] = struct{}{}
+		}
+	}
+	if _, wildcard := seen["*"]; wildcard {
+		return existing, false
+	}
+	merged := append([]string(nil), existing...)
+	changed := false
+	for _, method := range defaults {
+		method = strings.TrimSpace(method)
+		if method == "" {
+			continue
+		}
+		if _, ok := seen[method]; ok {
+			continue
+		}
+		seen[method] = struct{}{}
+		merged = append(merged, method)
+		changed = true
+	}
+	return merged, changed
 }
 
 func (d *DAO) exists(ctx context.Context, nodeID, serviceName string) (bool, error) {
