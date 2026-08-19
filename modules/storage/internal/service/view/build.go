@@ -210,7 +210,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 			if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
 				return written, err
 			}
-			rsp, err := rangeReader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+			rsp, err := readPrimaryTimeSeriesRows(ctx, rangeReader, &pb.ReadTimeSeriesRowsReq{
 				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), TimeRange: timeRange,
 				Order: pb.SortOrder_SORT_ORDER_ASC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
 			})
@@ -293,7 +293,7 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 				// Probe Primary before failing: empty Primary means there is simply
 				// nothing to backfill, while non-empty Primary falls back to the
 				// authoritative scan rather than activating a partial index.
-				probe, probeErr := rangeReader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+				probe, probeErr := readPrimaryTimeSeriesRows(ctx, rangeReader, &pb.ReadTimeSeriesRowsReq{
 					AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
 					Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 1},
 				})
@@ -341,7 +341,7 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 		if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
 			return written, err
 		}
-		rsp, err := rangeReader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+		rsp, err := readPrimaryTimeSeriesRows(ctx, rangeReader, &pb.ReadTimeSeriesRowsReq{
 			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), Selectors: selectors,
 			Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: uint32(batchSize)}, AfterKey: afterKey,
 		})
@@ -451,7 +451,7 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 			if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
 				return written, err
 			}
-			rsp, err := rangeReader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+			rsp, err := readPrimaryTimeSeriesRows(ctx, rangeReader, &pb.ReadTimeSeriesRowsReq{
 				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
 				Selectors: []*pb.TimeSeriesSelector{{SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), SubjectId: subject, Freq: frequency}},
 				Order:     pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 10000}, AfterKey: afterKey,

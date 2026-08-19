@@ -1808,10 +1808,13 @@ start_storage_node() {
 
 start_storage() {
   [[ "${WITH_STORAGE_NODE}" == "1" ]] || { echo "storage deployment requires a DataNode" >&2; exit 1; }
-  start_storage_primary
   start_storage_node
   wait_tcp 127.0.0.1 20107 "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
   wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
+  # Primary performs an initial DataNode cleanup during startup. Start it only
+  # after the node is serving so that cleanup and history reads cannot race the
+  # DataNode listener during a deployment restart.
+  start_storage_primary
   wait_tcp 127.0.0.1 20201 "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
   wait_nats storage "${STORAGE_EVENTBUS_URL_ENV}" "${MOOX_WAIT_STORAGE_NATS_SECONDS:-30}"
   wait_http http://127.0.0.1:20210/healthz "${MOOX_WAIT_STORAGE_ACCESS_SECONDS:-30}"
@@ -2140,6 +2143,8 @@ case "${SERVICE}" in
       exit 2
     fi
     init_storage_schema
+    wait_tcp 127.0.0.1 20107 "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
+    wait_http http://127.0.0.1:20212/healthz "${MOOX_WAIT_STORAGE_NODE_SECONDS:-30}"
     start_storage_primary
     ;;
   storage-view)
@@ -2349,11 +2354,11 @@ case "${SERVICE}" in
       stop_service "cloudnode"
     fi
     if [[ "${WITH_STORAGE}" == "1" ]]; then
+      stop_service "storage-view"
+      stop_service "storage-primary"
       if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
         stop_service "storage-node"
       fi
-      stop_service "storage-view"
-      stop_service "storage-primary"
       stop_service "storage"
     fi
     if [[ "${WITH_EVENTBUS}" == "1" ]]; then
@@ -2368,11 +2373,11 @@ case "${SERVICE}" in
       echo "storage is disabled in this deployment package" >&2
       exit 2
     fi
+    stop_service "storage-view"
+    stop_service "storage-primary"
     if [[ "${WITH_STORAGE_NODE}" == "1" ]]; then
       stop_service "storage-node"
     fi
-    stop_service "storage-view"
-    stop_service "storage-primary"
     stop_service "storage"
     ;;
   eventbus)

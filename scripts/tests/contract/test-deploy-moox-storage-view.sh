@@ -250,14 +250,21 @@ if grep -Eq 'storage-view-(index|builder|query)|storage\.view_(index|builder|que
 fi
 
 assert_order "${DEPLOY_DIR}/start.sh" \
-  '^  start_storage_primary$' \
   '^  start_storage_node$' \
   'wait_tcp 127\.0\.0\.1 20107' \
+  'wait_http http://127\.0\.0\.1:20212/healthz' \
+  '^  start_storage_primary$' \
   '^  register_storage_node$' \
   '^  start_storage_view$' \
   '^  wait_storage_view_live' \
   '^  if run_storage_doctor; then$' \
   '^    activate_storage_datasets$'
+awk '/^  storage-primary\)/,/^  storage-view\)/' "${DEPLOY_DIR}/start.sh" >"${TMP_ROOT}/storage-primary-case.sh"
+assert_order "${TMP_ROOT}/storage-primary-case.sh" \
+  '^  storage-primary\)' \
+  'wait_tcp 127\.0\.0\.1 20107' \
+  'wait_http http://127\.0\.0\.1:20212/healthz' \
+  '^    start_storage_primary$'
 doctor_body="$(awk '/^run_storage_doctor\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${DEPLOY_DIR}/start.sh")"
 grep -q 'doctor bootstrap --format json' <<<"${doctor_body}"
 grep -q 'cd "${ROOT}"' <<<"${doctor_body}"
@@ -267,7 +274,8 @@ if grep -q 'activate-datasets' <<<"${doctor_body}"; then
 fi
 assert_order "${DEPLOY_DIR}/stop.sh" \
   'stop_service "storage-view"' \
-  'stop_service "storage-primary"'
+  'stop_service "storage-primary"' \
+  'stop_service "storage-node"'
 
 assert_file "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_file "${DEPLOY_DIR}/archive/config/app.yaml"

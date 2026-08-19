@@ -140,14 +140,21 @@ assert_order() {
   done
 }
 assert_order "${TMP_ROOT}/unpacked/start.sh" \
-  '^  start_storage_primary$' \
   '^  start_storage_node$' \
   'wait_tcp 127\.0\.0\.1 20107' \
+  'wait_http http://127\.0\.0\.1:20212/healthz' \
+  '^  start_storage_primary$' \
   '^  register_storage_node$' \
   '^  start_storage_view$' \
   'wait_storage_view_live "\$\{MOOX_WAIT_STORAGE_VIEW_SECONDS:-900\}"' \
   '^  if run_storage_doctor; then$' \
   '^    activate_storage_datasets$'
+awk '/^  storage-primary\)/,/^  storage-view\)/' "${TMP_ROOT}/unpacked/start.sh" >"${TMP_ROOT}/storage-primary-case.sh"
+assert_order "${TMP_ROOT}/storage-primary-case.sh" \
+  '^  storage-primary\)' \
+  'wait_tcp 127\.0\.0\.1 20107' \
+  'wait_http http://127\.0\.0\.1:20212/healthz' \
+  '^    start_storage_primary$'
 doctor_body="$(awk '/^run_storage_doctor\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "${TMP_ROOT}/unpacked/start.sh")"
 grep -q 'doctor bootstrap --format json' <<<"${doctor_body}"
 grep -q 'return 1' <<<"${doctor_body}"
@@ -205,6 +212,10 @@ if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${FIXTURE_ROOT}/scripts/de
   exit 1
 fi
 grep -q 'stop_service "storage-node"' "${TMP_ROOT}/unpacked-shard/stop.sh"
+assert_order "${TMP_ROOT}/unpacked-shard/stop.sh" \
+  'stop_service "storage-view"' \
+  'stop_service "storage-primary"' \
+  'stop_service "storage-node"'
 
 TLS_ARCHIVE="${TMP_ROOT}/storage-tls.tar.gz"
 MOOX_EVENTBUS_ENABLE_TLS=1 MOOX_EVENTBUS_PUBLIC_IP=203.0.113.10 \
