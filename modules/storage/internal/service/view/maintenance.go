@@ -1544,10 +1544,7 @@ func needsRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
 	if view == nil {
 		return false
 	}
-	if view.GetActiveIndexId() == "" || view.GetDesiredViewRevision() > view.GetActiveViewRevision() {
-		return true
-	}
-	if !stats.Exists {
+	if needsActiveOrRevisionRebuild(view, stats) {
 		return true
 	}
 	keep, err := time.ParseDuration(view.GetKeepDuration())
@@ -1560,6 +1557,13 @@ func needsRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
 	}
 	to, err := time.Parse(time.RFC3339Nano, stats.IndexedTo)
 	return err == nil && to.Sub(from) > 2*keep
+}
+
+func needsActiveOrRevisionRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
+	if view == nil {
+		return false
+	}
+	return view.GetActiveIndexId() == "" || view.GetDesiredViewRevision() > view.GetActiveViewRevision() || !stats.Exists
 }
 
 // needsLookbackRepair reports a known-short time-series active index. Empty
@@ -1577,7 +1581,14 @@ func needsLookbackRepair(view *pb.View, stats viewindex.ViewIndexStats, lookback
 }
 
 func needsCapacityMaintenanceRebuild(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) bool {
-	if needsRebuild(view, stats) {
+	// Period-based Views intentionally retain a fixed number of completed bars
+	// per series. Their global indexed_from/indexed_to span can legitimately
+	// exceed 2*keep_duration when symbols have different listing histories or
+	// trading gaps; treating that span as a retention watermark would launch a
+	// coverage rebuild on every maintenance tick. Keep missing/definition
+	// repairs, but leave the global span check to duration-based Views.
+	periodBased := rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods) > 0
+	if needsActiveOrRevisionRebuild(view, stats) || (!periodBased && needsRebuild(view, stats)) {
 		return true
 	}
 	if view == nil || view.GetKeepDuration() == "" || view.GetKeepDuration() == "0" {
@@ -1603,7 +1614,14 @@ func needsCapacityMaintenanceWatermark(view *pb.View, stats viewindex.ViewIndexS
 	if err != nil || keep <= 0 || opts.MaxViewFileBytes <= 0 {
 		return false
 	}
-	return stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes) && !needsRebuild(view, stats)
+	if needsActiveOrRevisionRebuild(view, stats) {
+		return false
+	}
+	periodBased := rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods) > 0
+	if !periodBased && needsRebuild(view, stats) {
+		return false
+	}
+	return stats.PhysicalBytes >= uint64(opts.MaxViewFileBytes)
 }
 
 func (s *Service) internalAuth() *pb.AuthInfo {

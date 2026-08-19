@@ -142,6 +142,40 @@ func TestNeedsRebuildTriggers(t *testing.T) {
 	}
 }
 
+func TestPeriodCapacityPolicyIgnoresGlobalCoverageSpan(t *testing.T) {
+	view := &pb.View{
+		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
+		KeepDuration: "24h",
+		FilterJson:   `{"freq":"1m"}`,
+	}
+	wide := viewindex.ViewIndexStats{
+		Exists: true, IndexedFrom: "2026-01-01T00:00:00Z", IndexedTo: "2026-01-10T00:00:00Z",
+		PhysicalBytes: 1 << 20,
+	}
+	periodPolicy := MaintenanceOptions{RebuildLookbackPeriods: map[string]uint64{"default": 1000}, MaxViewFileBytes: 1 << 30}
+	if needsCapacityMaintenanceRebuild(view, wide, periodPolicy) {
+		t.Fatal("period-based View must not rebuild repeatedly because global series timestamps span more than keep_duration")
+	}
+	if needsCapacityMaintenanceWatermark(view, wide, periodPolicy) {
+		t.Fatal("period-based View incorrectly crossed the byte watermark")
+	}
+}
+
+func TestDurationCapacityPolicyStillHonorsGlobalCoverageSpan(t *testing.T) {
+	view := &pb.View{
+		ActiveIndexId: "metrics-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
+		KeepDuration: "24h",
+	}
+	wide := viewindex.ViewIndexStats{
+		Exists: true, IndexedFrom: "2026-01-01T00:00:00Z", IndexedTo: "2026-01-10T00:00:00Z",
+		PhysicalBytes: 1 << 20,
+	}
+	policy := MaintenanceOptions{RebuildLookbackPeriods: map[string]uint64{"default": 1000}, MaxViewFileBytes: 1 << 30}
+	if !needsCapacityMaintenanceRebuild(view, wide, policy) {
+		t.Fatal("duration-based View must rebuild when global coverage exceeds retention span")
+	}
+}
+
 func TestRebuildLookbackUsesViewRetentionPerFrequency(t *testing.T) {
 	view := &pb.View{KeepDuration: "6h"}
 	if got := rebuildLookbackForView(view, 24*time.Hour); got != 6*time.Hour {
