@@ -17,8 +17,8 @@ import (
 
 // subjectCatalogClient is optional so lightweight embedders and existing
 // tests do not have to implement the broader MetadataClient surface. The
-// production metadata proxy implements it and lets period backfills issue
-// bounded per-subject selectors instead of scanning every historical row.
+// production metadata proxy implements it and lets period backfills constrain
+// one time-first Primary scan to the dataset's declared subject universe.
 type subjectCatalogClient interface {
 	ListSubjects(context.Context, *pb.ListSubjectsReq, ...client.Option) (*pb.ListSubjectsRsp, error)
 }
@@ -270,19 +270,16 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 }
 
 // backfillPrimaryHistoryByPeriods rebuilds the most recent completed bars for
-// every subject in the View's primary dataset. The Primary scan is descending
-// so weekends, holidays, and other market gaps do not consume the configured
-// bar budget. The metadata subject binding catalog is intentionally not used
-// as a completeness boundary; Primary is authoritative for the rebuild.
+// every subject bound to the View's primary dataset. The Primary scan is
+// descending so weekends, holidays, and other market gaps do not consume the
+// configured bar budget. The subject catalog constrains one physical scan;
+// Primary rows remain authoritative for series and tag coverage.
 func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, periods, maxHistoryScanRows uint64) (uint64, error) {
-	// Do not rely on the metadata subject binding table here. It is an
-	// optimization catalog and can be stale or incomplete while a collector is
-	// registering symbols. A rebuild must be complete from Primary, so scan the
-	// dataset and filter the requested frequency instead of silently omitting
-	// unbound subjects.
+	// Use the metadata subject binding table to avoid repeating the time-first
+	// Primary walk for every subject. If it is unavailable or empty, fall back
+	// to an unconstrained Primary scan rather than publishing an incomplete B.
 	expected := make(map[string]struct{})
 	counts := make(map[string]uint64, len(expected))
-	subjectCounts := make(map[string]uint64)
 	var selectors []*pb.TimeSeriesSelector
 	if metadata := s.metadataClientSnapshot(); metadata != nil {
 		if catalog, ok := metadata.(subjectCatalogClient); ok {
@@ -313,16 +310,11 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 				log.Printf("storage view history backfill subject catalog is empty; using authoritative Primary scan space=%s dataset=%s", view.GetSpaceId(), view.GetPrimaryDatasetId())
 			}
 			if len(subjects) > 0 {
-				// The global subject table can be much larger than this Dataset
-				// (for example spot and swap share one subject registry). Use one
-				// bounded recent Primary page to narrow that fallback universe
-				// before issuing the multi-subject bounded history query.
-				discovered, discoverErr := discoverPeriodSubjects(ctx, rangeReader, auth, view, frequency, subjects)
-				if discoverErr != nil {
-					return 0, fmt.Errorf("discover Primary subjects for %s/%s: %w", view.GetSpaceId(), view.GetPrimaryDatasetId(), discoverErr)
-				}
-				log.Printf("storage view history backfill subject catalog space=%s dataset=%s candidates=%d discovered=%d", view.GetSpaceId(), view.GetPrimaryDatasetId(), len(subjects), len(discovered))
-				selectors, _ = buildPeriodHistorySelectors(view.GetSpaceId(), view.GetPrimaryDatasetId(), frequency, discovered)
+				// The subject-first Primary history index lets us read each bound
+				// subject without repeating a full time-first dataset scan. The helper
+				// discovers all tags for that subject and writes only the configured
+				// latest periods per series.
+				return s.backfillPrimaryHistoryBySubjectCatalog(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, frequency, subjects, periods)
 			}
 		}
 	}
@@ -336,6 +328,14 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 	var scanned uint64
 	if maxHistoryScanRows == 0 {
 		maxHistoryScanRows = defaultMaxHistoryScanRows
+	}
+	if useCatalog {
+		// A complete dataset subject catalog gives us a bounded selector universe,
+		// while the time-first Primary history index may still contain many older
+		// rows before EOF. Do not apply the generic safety fuse here: doing so would
+		// reject the normal 5M-row Binance history before discovering quiet/older
+		// series. The per-series write quota remains the hard output bound.
+		maxHistoryScanRows = ^uint64(0)
 	}
 	for {
 		if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
@@ -376,7 +376,6 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 				continue
 			}
 			counts[seriesKey]++
-			subjectCounts[key.GetSubjectId()]++
 			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{
 				SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
 				Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()}},
@@ -420,24 +419,11 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 			}
 			return written, nil
 		}
-		// The catalog bounds the rebuild to the configured instrument universe.
-		// Series tags are part of the row identity, but the K-line datasets use a
-		// single stable tag per instrument. Counting by subject lets us stop after
-		// the requested bar budget instead of scanning millions of older rows.
-		// EOF still performs the stricter subject/frequency/tag coverage check for
-		// deployments that do not have a catalog.
-		if useCatalog && len(knownSubjects) > 0 {
-			complete := true
-			for subjectID := range knownSubjects {
-				if subjectCounts[subjectID] < periods {
-					complete = false
-					break
-				}
-			}
-			if complete {
-				return written, nil
-			}
-		}
+		// Do not finish early based on the series discovered so far. The history
+		// index is ordered by time, so a quiet subject or an older series_tag may
+		// appear only after the currently active series have reached their quota.
+		// Scanning to EOF is what makes the per-series lookback guarantee true;
+		// the row cap still bounds how much data can be returned and written.
 		last := rows[len(rows)-1].GetKey()
 		if last == nil {
 			return written, errors.New("Primary history page ended without a cursor key")
@@ -449,43 +435,91 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 	}
 }
 
-func discoverPeriodSubjects(ctx context.Context, rangeReader TimeSeriesRangeReader, auth *pb.AuthInfo, view *pb.View, frequency string, candidates []string) ([]string, error) {
-	if rangeReader == nil || view == nil {
-		return nil, errors.New("Primary history range reader is required for subject discovery")
+// backfillPrimaryHistoryBySubjectCatalog uses the subject-first Primary
+// history index. It avoids rescanning a multi-million-row dataset for every
+// page while still walking each bound subject to EOF, so quiet subjects and
+// older series tags cannot be mistaken for complete coverage.
+func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, subjects []string, periods uint64) (uint64, error) {
+	if reader == nil || rangeReader == nil {
+		return 0, errors.New("Primary readers are required for subject-catalog history backfill")
 	}
-	allowed := make(map[string]struct{}, len(candidates))
-	for _, subjectID := range candidates {
-		allowed[strings.TrimSpace(subjectID)] = struct{}{}
-	}
-	rsp, err := rangeReader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), Order: pb.SortOrder_SORT_ORDER_DESC,
-		Page: &pb.Page{Page: 1, Size: 1000},
-	})
-	if err != nil {
-		return nil, err
-	}
-	if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-		return nil, err
-	}
-	seen := make(map[string]struct{})
-	for _, row := range rsp.GetRows() {
-		if row == nil || row.GetKey() == nil || !strings.EqualFold(strings.TrimSpace(row.GetKey().GetFreq()), strings.TrimSpace(frequency)) {
-			continue
+	var written uint64
+	for _, subject := range subjects {
+		counts := make(map[string]uint64)
+		var afterKey []byte
+		for {
+			if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
+				return written, err
+			}
+			rsp, err := rangeReader.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
+				AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(),
+				Selectors: []*pb.TimeSeriesSelector{{SpaceId: view.GetSpaceId(), DatasetId: view.GetPrimaryDatasetId(), SubjectId: subject, Freq: frequency}},
+				Order:     pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 10000}, AfterKey: afterKey,
+			})
+			if err != nil {
+				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetPrimaryDatasetId(), subject, err)
+			}
+			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+				return written, fmt.Errorf("scan Primary history for %s/%s subject %s: %w", spaceID, view.GetPrimaryDatasetId(), subject, err)
+			}
+			rows := rsp.GetRows()
+			writes := make([]viewindex.RowWrite, 0, len(rows))
+			for _, row := range rows {
+				if row == nil || row.GetKey() == nil || !strings.EqualFold(strings.TrimSpace(row.GetKey().GetFreq()), strings.TrimSpace(frequency)) {
+					continue
+				}
+				key := row.GetKey()
+				seriesKey := periodSeriesIdentity(key.GetSubjectId(), key.GetFreq(), key.GetSeriesTag())
+				if counts[seriesKey] >= periods {
+					continue
+				}
+				counts[seriesKey]++
+				writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{
+					SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
+					Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()}},
+				}}})
+			}
+			if len(writes) > 0 {
+				if err := s.enrichBackfillRows(ctx, reader, "", nextID, writes); err != nil {
+					return written, fmt.Errorf("enrich Primary history for %s/%s subject %s: %w", spaceID, view.GetPrimaryDatasetId(), subject, err)
+				}
+			}
+			for offset := 0; offset < len(writes); offset += 256 {
+				end := offset + 256
+				if end > len(writes) {
+					end = len(writes)
+				}
+				if err := s.backfillStillActive(spaceID, viewID, nextID); err != nil {
+					return written, err
+				}
+				engine, err := s.engineFor(nextID)
+				if err != nil {
+					return written, err
+				}
+				if err := s.writeIndex(ctx, nextID, engine, viewindex.ViewIndexWriteBatch{RowWrites: writes[offset:end], ViewRevision: nextSchema.ViewVersion, ViewSchemaHash: nextSchema.SchemaHash, WriteMode: viewindex.Backfill}); err != nil {
+					return written, fmt.Errorf("write Primary period backfill %q: %w", nextID, err)
+				}
+				written += uint64(end - offset)
+			}
+			if len(rows) == 0 || rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+				break
+			}
+			last := rows[len(rows)-1].GetKey()
+			if last == nil {
+				return written, errors.New("Primary subject history page ended without a cursor key")
+			}
+			afterKey, err = marshalTimeSeriesHistoryCursor(last)
+			if err != nil {
+				return written, fmt.Errorf("encode Primary subject history cursor: %w", err)
+			}
 		}
-		subjectID := strings.TrimSpace(row.GetKey().GetSubjectId())
-		if _, ok := allowed[subjectID]; ok {
-			seen[subjectID] = struct{}{}
+		for seriesKey, count := range counts {
+			if count < periods {
+				return written, fmt.Errorf("Primary history has fewer than %d bars for series %s", periods, seriesKey)
+			}
 		}
 	}
-	if len(seen) == 0 {
-		return nil, errors.New("recent Primary page did not contain catalog subjects")
-	}
-	result := make([]string, 0, len(seen))
-	for subjectID := range seen {
-		result = append(result, subjectID)
-	}
-	sort.Strings(result)
-	return result, nil
+	return written, nil
 }
 
 // marshalTimeSeriesHistoryCursor converts the public range-read key into the
@@ -860,6 +894,7 @@ func projectBackfillFields(fields []*pb.FieldValue, active, next viewindex.ViewI
 }
 
 func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace time.Duration) error {
+	_ = grace
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
@@ -867,26 +902,29 @@ func (s *Service) SwitchView(ctx context.Context, spaceID, viewID string, grace 
 		return errors.New("view runtime is not prepared")
 	}
 	runtime.mu.Lock()
-	oldID, oldGeneration, err := s.switchViewLocked(runtime)
+	_, _, err := s.switchViewLocked(context.WithoutCancel(ctx), runtime)
 	if err != nil {
 		runtime.mu.Unlock()
 		return err
 	}
 	runtime.mu.Unlock()
-	s.scheduleOldIndexRemoval(ctx, oldID, oldGeneration, grace)
 	// The in-memory and metadata switch is already committed. Do not report a
 	// cancellation from the caller's context as a failed build: doing so would
 	// discard the newly active index after a successful Activate RPC.
 	return nil
 }
 
-func (s *Service) switchViewLocked(runtime *viewRuntime) (string, uint64, error) {
+func (s *Service) switchViewLocked(ctx context.Context, runtime *viewRuntime) (string, uint64, error) {
 	if runtime == nil || runtime.next == "" || runtime.status != "ready" || runtime.buildFailed {
 		return "", 0, errors.New("no completed view build to switch")
 	}
 	oldID := runtime.active
 	oldGeneration := s.indexGenerationOf(oldID)
-	s.markIndexRetiring(oldID)
+	if oldID != "" {
+		if err := s.retireIndex(ctx, oldID, oldGeneration); err != nil {
+			return "", 0, fmt.Errorf("mark old view index retiring: %w", err)
+		}
+	}
 	runtime.active = runtime.next
 	runtime.activeDatasetIDs = append([]string(nil), runtime.nextDatasetIDs...)
 	runtime.activePrimaryDatasetID = runtime.nextPrimaryDatasetID
@@ -908,27 +946,6 @@ func (s *Service) switchViewLocked(runtime *viewRuntime) (string, uint64, error)
 	runtime.buildCancel = nil
 	runtime.buildContext = nil
 	return oldID, oldGeneration, nil
-}
-
-func (s *Service) scheduleOldIndexRemoval(ctx context.Context, indexID string, generation uint64, grace time.Duration) {
-	if indexID == "" {
-		return
-	}
-	if grace < 0 {
-		grace = 0
-	}
-	s.markIndexRetiring(indexID)
-	go func() {
-		timer := time.NewTimer(grace)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-			s.removeIndexAfterGrace(context.WithoutCancel(ctx), indexID, generation)
-		case <-ctx.Done():
-			// A successful switch must still clean the old slot on shutdown.
-			s.removeIndexAfterGrace(context.Background(), indexID, generation)
-		}
-	}()
 }
 
 func (s *Service) TrackViewBuild(ctx context.Context, spaceID, viewID, buildID, ownerID string, metadata MetadataClient, auth *pb.AuthInfo) error {
@@ -998,6 +1015,7 @@ func (s *Service) AttachActiveView(view *pb.View) error {
 }
 
 func (s *Service) AttachActiveViewWithGrace(ctx context.Context, view *pb.View, grace time.Duration) error {
+	_ = grace
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" || view.GetActiveIndexId() == "" {
 		return errors.New("active view metadata is required")
 	}
@@ -1042,14 +1060,17 @@ func (s *Service) AttachActiveViewWithGrace(ctx context.Context, view *pb.View, 
 	if activeChanged {
 		// Capture the generation while runtime.mu still excludes PrepareViewIndex
 		// for this View. Reading it after unlock could accidentally associate the
-		// grace cleanup with a newly reused slot.
+		// retired-index candidate with a newly reused slot.
 		previousGeneration = s.indexGenerationOf(previousActive)
+	}
+	if activeChanged {
+		if err := s.retireIndex(context.WithoutCancel(ctx), previousActive, previousGeneration); err != nil {
+			runtime.mu.Unlock()
+			return fmt.Errorf("mark displaced view index retiring: %w", err)
+		}
 	}
 	s.attachActiveViewLocked(view, runtime, schema, columns, activePrimaryDatasetID, engineName)
 	runtime.mu.Unlock()
-	if activeChanged {
-		s.scheduleOldIndexRemoval(ctx, previousActive, previousGeneration, grace)
-	}
 	return nil
 }
 
@@ -1186,17 +1207,26 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 	}
 	schema := viewindex.ViewIndexSchema{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: version, Engine: engineName, Columns: columns, SchemaHash: hash, PrimaryDatasetID: view.GetPrimaryDatasetId()}
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
-	// Recovery may attach a prepared slot without calling PrepareViewIndex in
-	// this process. Treat it as a fresh generation so an old grace cleanup
-	// cannot remove the recovered file.
-	s.nextIndexGeneration(build.GetIndexId())
 	s.mu.Lock()
-	s.catalogViews[viewKey] = proto.Clone(view).(*pb.View)
 	runtime := s.views[viewKey]
 	if runtime == nil {
 		runtime = &viewRuntime{}
 		s.views[viewKey] = runtime
 	}
+	s.mu.Unlock()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	release, err := s.indexWriteGate(build.GetIndexId()).lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	// Recovery may attach a prepared slot without calling PrepareViewIndex in
+	// this process. Treat it as a fresh generation so a stale cleanup candidate
+	// cannot remove the recovered file.
+	s.nextIndexGeneration(build.GetIndexId())
+	s.mu.Lock()
+	s.catalogViews[viewKey] = proto.Clone(view).(*pb.View)
 	s.indexEngine[build.GetIndexId()] = engineName
 	s.schemas[build.GetIndexId()] = schema
 	s.indexView[build.GetIndexId()] = viewKey
@@ -1213,7 +1243,6 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 		s.attachExplicitEmptyDatasetMappingsLocked(view, build.GetIndexId())
 	}
 	s.mu.Unlock()
-	runtime.mu.Lock()
 	if runtime.active == "" {
 		runtime.next = build.GetIndexId()
 		runtime.nextDatasetIDs = append([]string(nil), view.GetDatasetIds()...)
@@ -1225,7 +1254,6 @@ func (s *Service) AttachPendingViewBuild(ctx context.Context, view *pb.View) err
 		runtime.nextPrimaryDatasetID = view.GetPrimaryDatasetId()
 		runtime.status = "ready"
 	}
-	runtime.mu.Unlock()
 	return nil
 }
 

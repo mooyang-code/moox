@@ -24,6 +24,7 @@ storage:
       backoff_base_ms: 200
       backoff_max_ms: 30000
   view:
+    maintenance_policy_file: config/maintenance.json
     storage_rpc:
       gateway_target: ip://127.0.0.1:11003
       gateway_node_id: ""
@@ -78,7 +79,7 @@ storage:
         ordering: dataset
         deliver_policy: new
         max_retry_attempts: -1
-    rebuild_check_interval: 1m
+    maintenance_check_interval: 1m
     # Time-series Views use the completed-bar targets below. Keep this global
     # duration only as a compatibility fallback for legacy Views without freq.
     rebuild_lookback: 24h

@@ -11,12 +11,31 @@ import (
 	"strings"
 	"time"
 
+	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
+
+func seriesCapacityDetails(offender viewindex.SeriesCapacityResult, maxPeriods, lookbackPeriods, physicalBytes uint64) string {
+	details := map[string]any{
+		"trigger":                  "SERIES_CAPACITY",
+		"subject_id":               offender.SubjectID,
+		"frequency":                offender.Freq,
+		"series_tag":               offender.SeriesTag,
+		"observed_periods":         offender.Rows,
+		"max_periods_per_series":   maxPeriods,
+		"rebuild_lookback_periods": lookbackPeriods,
+		"physical_bytes":           physicalBytes,
+	}
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		return `{"trigger":"SERIES_CAPACITY"}`
+	}
+	return string(encoded)
+}
 
 // Primary dataset changes are intentionally rejected by this simple A/B
 // implementation. A backfill can enumerate the old active index, but it has
@@ -54,7 +73,7 @@ type TimeSeriesRangeReader interface {
 	ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq, ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error)
 }
 
-type ReconcilerOptions struct {
+type MaintenanceOptions struct {
 	Metadata     MetadataClient
 	Primary      FieldReader
 	PrimaryRange TimeSeriesRangeReader
@@ -63,8 +82,9 @@ type ReconcilerOptions struct {
 	Grace        time.Duration
 	// MaxViewFileBytes triggers an A/B rebuild for a
 	// finite-retention View. The rebuilt index contains only its keep window;
-	// SwitchView then removes the old DuckDB file after the grace period.
-	MaxViewFileBytes int64
+	// the tRPC cleanup Timer removes the retired physical slot later.
+	MaxViewFileBytes    int64
+	MaxPeriodsPerSeries uint64
 	// RebuildLookback is the minimum wall-clock history every newly built
 	// index must cover before activation. Production config supplies this;
 	// zero keeps direct unit-test callers backwards compatible.
@@ -79,6 +99,7 @@ type ReconcilerOptions struct {
 	RebuildIdleChecks           uint32
 	RebuildMaxPendingConfigured bool
 	RebuildIdleChecksConfigured bool
+	Policy                      storageconfig.ViewMaintenancePolicy
 	// MaxHistoryScanRows bounds the Primary discovery scan used by a
 	// period-based rebuild. It is a safety fuse: the per-series bar target
 	// limits writes, while this limit prevents an incomplete/huge catalog from
@@ -94,16 +115,16 @@ type ReconcilerOptions struct {
 // a bounded 1,000-bar rebuild does not spend minutes on avoidable RPC/page
 // overhead. Enrichment and index writes remain chunked independently.
 const viewBackfillBatchSize = 10000
-const sizeLimitRebuildRetryInterval = 30 * time.Minute
+const capacityMaintenanceRetryInterval = 30 * time.Minute
 const defaultRebuildMaxPending uint64 = 32
 const defaultRebuildIdleChecks uint32 = 3
 const defaultRebuildLookbackPeriods uint64 = 1000
 const defaultMaxHistoryScanRows uint64 = 1_000_000
-const sizeLimitBuildBacklogThreshold = defaultRebuildMaxPending
+const capacityMaintenanceBuildBacklogThreshold = defaultRebuildMaxPending
 
 // Coverage scans are intentionally decoupled from the cheap physical
 // contract check. A large DuckDB View must not be COUNT/MIN/MAX-scanned on
-// every reconcile tick.
+// every maintenance tick.
 const coverageRefreshInterval = 5 * time.Minute
 const coverageStatTimeout = 5 * time.Second
 
@@ -112,41 +133,41 @@ const coverageStatTimeout = 5 * time.Second
 // means "all primary dataset columns".
 const viewColumnsExplicitAttr = "moox.columns_explicit"
 
-func (s *Service) StartReconciler(ctx context.Context, opts ReconcilerOptions) (func(), error) {
+func (s *Service) StartViewMaintainer(ctx context.Context, opts MaintenanceOptions) (func(), error) {
 	var err error
-	opts, err = s.normalizeReconcilerOptions(opts)
+	opts, err = s.normalizeMaintenanceOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.reconcileOnce(ctx, opts); err != nil {
+	if err := s.maintainOnce(ctx, opts); err != nil {
 		return nil, err
 	}
-	s.setReconcileReady(true)
-	return s.startReconcilerLoop(ctx, opts), nil
+	s.setMaintenanceReady(true)
+	return s.startViewMaintenanceLoop(ctx, opts), nil
 }
 
-// StartReconcilerAsync starts the periodic check without making process
+// StartViewMaintainerAsync starts the periodic check without making process
 // startup wait for a potentially large historical backfill. Until the first
 // successful pass completes, event handlers keep deliveries pending.
-func (s *Service) StartReconcilerAsync(ctx context.Context, opts ReconcilerOptions) (func(), error) {
+func (s *Service) StartViewMaintainerAsync(ctx context.Context, opts MaintenanceOptions) (func(), error) {
 	var err error
-	opts, err = s.normalizeReconcilerOptions(opts)
+	opts, err = s.normalizeMaintenanceOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	s.setReconcileReady(false)
+	s.setMaintenanceReady(false)
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		firstPass := true
 		run := func() {
-			if err := s.reconcileOnce(loopCtx, opts); err != nil {
-				log.Printf("storage view reconcile failed: %v", err)
+			if err := s.maintainOnce(loopCtx, opts); err != nil {
+				log.Printf("storage view maintenance failed: %v", err)
 				return
 			}
 			if firstPass {
-				s.setReconcileReady(true)
+				s.setMaintenanceReady(true)
 				firstPass = false
 			}
 		}
@@ -165,7 +186,7 @@ func (s *Service) StartReconcilerAsync(ctx context.Context, opts ReconcilerOptio
 	return func() { cancel(); <-done }, nil
 }
 
-func (s *Service) normalizeReconcilerOptions(opts ReconcilerOptions) (ReconcilerOptions, error) {
+func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (MaintenanceOptions, error) {
 	if opts.Metadata == nil {
 		return opts, errors.New("metadata client is required")
 	}
@@ -193,7 +214,7 @@ func (s *Service) normalizeReconcilerOptions(opts ReconcilerOptions) (Reconciler
 	return opts, nil
 }
 
-func (s *Service) startReconcilerLoop(ctx context.Context, opts ReconcilerOptions) func() {
+func (s *Service) startViewMaintenanceLoop(ctx context.Context, opts MaintenanceOptions) func() {
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -205,8 +226,8 @@ func (s *Service) startReconcilerLoop(ctx context.Context, opts ReconcilerOption
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
-				if err := s.reconcileOnce(loopCtx, opts); err != nil {
-					log.Printf("storage view reconcile failed: %v", err)
+				if err := s.maintainOnce(loopCtx, opts); err != nil {
+					log.Printf("storage view maintenance failed: %v", err)
 				}
 			}
 		}
@@ -217,7 +238,7 @@ func (s *Service) startReconcilerLoop(ctx context.Context, opts ReconcilerOption
 // RestoreActiveViews restores only the indexes already declared active by
 // Metadata. It never claims or backfills a new index, so callers can run it
 // before starting the EventBus consumer without holding up the live stream.
-func (s *Service) RestoreActiveViews(ctx context.Context, opts ReconcilerOptions) error {
+func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOptions) error {
 	if opts.Metadata == nil {
 		return errors.New("metadata client is required")
 	}
@@ -240,11 +261,11 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts ReconcilerOptions
 			return err
 		}
 		// Keep the primary K-line View ahead of derived/factor Views during a
-		// cold rebuild. Reconcile is deliberately single-flight; prioritizing
+		// cold rebuild. Maintenance is deliberately single-flight; prioritizing
 		// the business source prevents a slow factor backfill from delaying the
 		// data View that downstream calculations depend on.
 		sort.SliceStable(rsp.GetViews(), func(i, j int) bool {
-			return viewReconcilePriority(rsp.GetViews()[i]) < viewReconcilePriority(rsp.GetViews()[j])
+			return viewMaintenancePriority(rsp.GetViews()[i]) < viewMaintenancePriority(rsp.GetViews()[j])
 		})
 		for _, view := range rsp.GetViews() {
 			if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
@@ -284,7 +305,7 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts ReconcilerOptions
 			}
 			if build.GetState() == pb.ViewIndexBuild_READY {
 				// Attach a READY first-build index before the consumer starts so
-				// rows can be routed while the initial reconcile is pending.
+				// rows can be routed while the initial maintenance is pending.
 				if view.GetActiveIndexId() == "" {
 					if err := s.AttachPendingViewBuild(ctx, view); err != nil {
 						return err
@@ -372,7 +393,7 @@ func (s *Service) validatePendingBuildCoverage(ctx context.Context, indexID, eng
 	return validateRebuildLookback(stats, lookback)
 }
 
-func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) error {
+func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) error {
 	auth := s.internalAuth()
 	// Audit persistence is best-effort and must never hold up View state
 	// transitions. Retry terminal log updates before processing the next pass.
@@ -391,10 +412,10 @@ func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) err
 		// this pass; ordering only prevents a large metrics rebuild from
 		// monopolizing the PrimaryStore while the user-facing K-line is empty.
 		sort.SliceStable(rsp.GetViews(), func(i, j int) bool {
-			return viewReconcilePriority(rsp.GetViews()[i]) < viewReconcilePriority(rsp.GetViews()[j])
+			return viewMaintenancePriority(rsp.GetViews()[i]) < viewMaintenancePriority(rsp.GetViews()[j])
 		})
 		for _, view := range rsp.GetViews() {
-			if err := s.reconcileView(ctx, opts, auth, view); err != nil {
+			if err := s.maintainView(ctx, opts, auth, view); err != nil {
 				if errors.Is(err, errActiveContractUnavailable) {
 					// Do not let the EventBus consumer ACK a legacy in-flight
 					// rebuild whose active contract cannot be recovered. The
@@ -402,7 +423,7 @@ func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) err
 					return err
 				}
 				if view != nil {
-					log.Printf("storage view reconcile %s/%s failed: %v", view.GetSpaceId(), view.GetViewId(), err)
+					log.Printf("storage view maintenance %s/%s failed: %v", view.GetSpaceId(), view.GetViewId(), err)
 				}
 				if firstErr == nil {
 					firstErr = err
@@ -416,7 +437,7 @@ func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) err
 	}
 }
 
-func viewReconcilePriority(view *pb.View) int {
+func viewMaintenancePriority(view *pb.View) int {
 	if view == nil {
 		return 100
 	}
@@ -430,9 +451,15 @@ func viewReconcilePriority(view *pb.View) int {
 	}
 }
 
-func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View) error {
+func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View) error {
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 		return nil
+	}
+	if opts.Policy.MaxPeriodsPerSeries > 0 {
+		resolved := opts.Policy.ResolvePolicy(view.GetSpaceId(), view.GetViewId())
+		opts.MaxViewFileBytes = resolved.MaxViewFileBytes
+		opts.MaxPeriodsPerSeries = resolved.MaxPeriodsPerSeries
+		opts.RebuildLookbackPeriods = map[string]uint64{"default": resolved.RebuildLookbackPeriods}
 	}
 	// Time-series Views use a completed-bar budget rather than wall-clock
 	// retention. This keeps weekends/holidays from shortening the rebuild. The
@@ -447,6 +474,8 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	}
 	var stats viewindex.ViewIndexStats
 	var activeInvalidErr error
+	var capacityOffender viewindex.SeriesCapacityResult
+	var capacityDetails string
 	if view.GetActiveIndexId() != "" {
 		engineName := strings.ToLower(strings.TrimSpace(view.GetEngine()))
 		engine := s.engines[engineName]
@@ -460,7 +489,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		// needless A/B rebuild.  Use the metadata-only contract check here;
 		// the physical size is still available for the watermark gate.
 		var metadataOnly bool
-		stats, metadataOnly, err = reconcileIndexStats(ctx, engine, view.GetActiveIndexId())
+		stats, metadataOnly, err = maintainIndexStats(ctx, engine, view.GetActiveIndexId())
 		if err != nil {
 			return err
 		}
@@ -496,6 +525,17 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			}
 		}
 		if stats.Exists {
+			if lookbackPeriods > 0 && opts.MaxPeriodsPerSeries > 0 {
+				if reader, ok := engine.(viewindex.SeriesCapacityReader); ok {
+					capacityOffender, err = reader.SeriesCapacity(ctx, view.GetActiveIndexId(), opts.MaxPeriodsPerSeries)
+					if err != nil {
+						return fmt.Errorf("check View series capacity: %w", err)
+					}
+					if capacityOffender.Exceeded {
+						capacityDetails = seriesCapacityDetails(capacityOffender, opts.MaxPeriodsPerSeries, lookbackPeriods, stats.PhysicalBytes)
+					}
+				}
+			}
 			if err := validatePhysicalViewContract(view, stats); err != nil {
 				// Keep the safety behavior (do not attach a stale physical
 				// index), but classify it as a necessary repair. If this is a
@@ -561,7 +601,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 				return nil
 			}
 			// There is deliberately no resumable build cursor. A process exit
-			// discards the partial inactive index and the next reconcile starts
+			// discards the partial inactive index and the next maintenance starts
 			// a complete rebuild.
 			if err := s.failInterruptedBuild(ctx, opts, auth, view, build); err != nil {
 				return err
@@ -595,7 +635,8 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		}
 	}
 	coverageRepair := needsLookbackRepair(view, stats, opts.RebuildLookback)
-	rebuildNeeded := needsSizeLimitRebuild(view, stats, opts) || coverageRepair
+	seriesCapacityExceeded := capacityOffender.Exceeded
+	rebuildNeeded := needsCapacityMaintenanceRebuild(view, stats, opts) || coverageRepair || seriesCapacityExceeded
 	if activeInvalidErr != nil {
 		rebuildNeeded = true
 	}
@@ -603,9 +644,12 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	// Coverage repair is mandatory: it must run even while an unrelated
 	// partition has backlog. The size watermark rebuild remains optional and
 	// continues to use the idle/backlog gate below.
-	sizeLimitOnly := activeInvalidErr == nil && !coverageRepair && !manualRequested && needsSizeLimitWatermark(view, stats, opts)
+	capacityMaintenanceOnly := activeInvalidErr == nil && !coverageRepair && !manualRequested && (seriesCapacityExceeded || needsCapacityMaintenanceWatermark(view, stats, opts))
 	now := time.Now().UTC()
-	triggerReason := rebuildTriggerReason(view, stats, sizeLimitOnly)
+	triggerReason := rebuildTriggerReason(view, stats, capacityMaintenanceOnly, seriesCapacityExceeded)
+	if seriesCapacityExceeded {
+		log.Printf("storage view series capacity exceeded space=%s view=%s subject=%s freq=%s series_tag=%s rows=%d limit=%d", view.GetSpaceId(), view.GetViewId(), capacityOffender.SubjectID, capacityOffender.Freq, capacityOffender.SeriesTag, capacityOffender.Rows, opts.MaxPeriodsPerSeries)
+	}
 	if coverageRepair && !manualRequested {
 		triggerReason = pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR
 	}
@@ -634,7 +678,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	}
 	var pending, ackPending uint64
 	gateBlockReason := "consumer_not_idle"
-	if sizeLimitOnly {
+	if capacityMaintenanceOnly {
 		var backlogErr error
 		pending, ackPending, backlogErr = s.consumerBacklogForView(ctx, viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()})
 		if backlogErr != nil {
@@ -645,37 +689,37 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			gateBlockReason = "consumer_idle_checks"
 		}
 	}
-	if sizeLimitOnly && !s.sizeLimitBuildAllowed(view.GetSpaceId(), view.GetViewId(), now) {
-		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "cooldown", stats, stats.PhysicalBytes, pending, ackPending)
+	if capacityMaintenanceOnly && !s.capacityMaintenanceBuildAllowed(view.GetSpaceId(), view.GetViewId(), now) {
+		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "cooldown", stats, stats.PhysicalBytes, pending, ackPending, capacityDetails)
 		return nil
 	}
-	if sizeLimitOnly && !s.sizeLimitBuildIdleFor(ctx, viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}, maxPending, idleChecks) {
+	if capacityMaintenanceOnly && !s.capacityMaintenanceBuildIdleFor(ctx, viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}, maxPending, idleChecks) {
 		// A byte-watermark rebuild is optional while the durable consumer is
 		// catching up. Backfill competes with live A/B writes for the same
 		// DuckDB memory and I/O; starting it under backlog can turn one large
 		// system View into cross-Dataset head-of-line blocking.
-		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, gateBlockReason, stats, stats.PhysicalBytes, pending, ackPending)
+		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, gateBlockReason, stats, stats.PhysicalBytes, pending, ackPending, capacityDetails)
 		return nil
 	}
-	if sizeLimitOnly && !s.tryAcquireRebuild() {
-		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "another_rebuild_running", stats, stats.PhysicalBytes, pending, ackPending)
+	if capacityMaintenanceOnly && !s.tryAcquireRebuild() {
+		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "another_rebuild_running", stats, stats.PhysicalBytes, pending, ackPending, capacityDetails)
 		return nil
 	}
-	if sizeLimitOnly {
+	if capacityMaintenanceOnly {
 		s.resetIdleChecks(viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()})
 	}
-	if sizeLimitOnly {
+	if capacityMaintenanceOnly {
 		defer s.releaseRebuild()
 	}
 	// A failed size-limit rebuild must not be retried forever when the
 	// watermark is no longer exceeded. This is especially important for a
 	// large DuckDB view on a memory-constrained host: the failed inactive
 	// index is removed above, while the healthy active index remains usable.
-	if !shouldRetryFailedBuildWithCause(view, failedBuild, rebuildNeeded, sizeLimitOnly, now) {
+	if !shouldRetryFailedBuildWithCause(view, failedBuild, rebuildNeeded, capacityMaintenanceOnly, now) {
 		return nil
 	}
-	if sizeLimitOnly {
-		s.markSizeLimitBuild(view.GetSpaceId(), view.GetViewId(), now)
+	if capacityMaintenanceOnly {
+		s.markCapacityMaintenanceBuild(view.GetSpaceId(), view.GetViewId(), now)
 	}
 	columns := view.GetColumns()
 	if len(columns) == 0 && view.GetAttributes()[viewColumnsExplicitAttr] != "true" {
@@ -701,8 +745,8 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	if s.isIndexRetiring(indexID) {
 		// Keep the old active index readable until its grace period has elapsed.
 		// Reusing the slot would close a reader that already captured the old ID.
-		if sizeLimitOnly {
-			s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "inactive_slot_retiring", stats, stats.PhysicalBytes, pending, ackPending)
+		if capacityMaintenanceOnly {
+			s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "inactive_slot_retiring", stats, stats.PhysicalBytes, pending, ackPending, capacityDetails)
 		}
 		return nil
 	}
@@ -719,7 +763,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	if err := requireSuccess(claim.GetRetInfo()); err != nil {
 		return err
 	}
-	buildLog := s.createRunningRebuildLog(ctx, opts, auth, view, buildID, indexID, triggerReason, stats, stats.PhysicalBytes, pending, ackPending)
+	buildLog := s.createRunningRebuildLog(ctx, opts, auth, view, buildID, indexID, triggerReason, stats, stats.PhysicalBytes, pending, ackPending, capacityDetails)
 	finishLog := func(result pb.ViewRebuildResult, entries uint64, cause error) {
 		if buildLog != nil {
 			s.finishRebuildLog(ctx, opts, auth, buildLog, result, entries, cause)
@@ -732,7 +776,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 				TriggerReason: triggerReason, Result: result, TargetViewRevision: view.GetDesiredViewRevision(),
 				ActiveViewRevision: view.GetActiveViewRevision(), EntriesWritten: entries,
 				FinishedAt: time.Now().UTC().Format(time.RFC3339Nano), ErrorSummary: rebuildErrorSummary(cause),
-				DetailsJson: `{"phase":"reconcile_fallback"}`,
+				DetailsJson: appendRebuildPhase(capacityDetails, "maintenance_fallback"),
 			}
 			if !s.createRebuildLogFallback(ctx, opts, auth, fallback) {
 				s.queueRebuildLogRetry(pendingRebuildLog{opts: opts, auth: auth, view: proto.Clone(view).(*pb.View), buildID: buildID, result: result, entries: entries, cause: cause, fallback: fallback})
@@ -742,7 +786,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 				SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, IndexId: indexID,
 				TriggerReason: triggerReason, Result: result, TargetViewRevision: view.GetDesiredViewRevision(),
 				ActiveViewRevision: view.GetActiveViewRevision(), EntriesWritten: entries,
-				FinishedAt: time.Now().UTC().Format(time.RFC3339Nano), ErrorSummary: rebuildErrorSummary(cause), DetailsJson: `{"phase":"reconcile_fallback"}`,
+				FinishedAt: time.Now().UTC().Format(time.RFC3339Nano), ErrorSummary: rebuildErrorSummary(cause), DetailsJson: appendRebuildPhase(capacityDetails, "maintenance_fallback"),
 			})
 		}
 	}
@@ -800,7 +844,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			if isPrimaryHistoryIndexNotReady(backfillErr) {
 				// The derived Primary history index is materialized asynchronously
 				// on first use. Keep this build out of the active path, but do not
-				// turn a normal warm-up wait into a failed reconcile/health cycle.
+				// turn a normal warm-up wait into a failed maintenance/health cycle.
 				finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SKIPPED, entriesWritten, backfillErr)
 				return nil
 			}
@@ -886,7 +930,7 @@ func rebuildLookbackPeriodsForView(view *pb.View, configured map[string]uint64) 
 	return defaultRebuildLookbackPeriods
 }
 
-func reconcileIndexStats(ctx context.Context, engine viewindex.Engine, indexID string) (viewindex.ViewIndexStats, bool, error) {
+func maintainIndexStats(ctx context.Context, engine viewindex.Engine, indexID string) (viewindex.ViewIndexStats, bool, error) {
 	if reader, ok := engine.(viewindex.MetadataStatReader); ok {
 		stats, err := reader.StatMetadata(ctx, indexID)
 		return stats, true, err
@@ -913,15 +957,15 @@ func markCoverageRefresh(runtime *viewRuntime) {
 	runtime.mu.Unlock()
 }
 
-func (s *Service) sizeLimitBuildIdle(ctx context.Context) bool {
-	return s.sizeLimitBuildIdleFor(ctx, viewRef{}, sizeLimitBuildBacklogThreshold, 1)
+func (s *Service) capacityMaintenanceBuildIdle(ctx context.Context) bool {
+	return s.capacityMaintenanceBuildIdleFor(ctx, viewRef{}, capacityMaintenanceBuildBacklogThreshold, 1)
 }
 
-func (s *Service) sizeLimitBuildIdleFor(ctx context.Context, ref viewRef, maxPending uint64, requiredChecks uint32) bool {
+func (s *Service) capacityMaintenanceBuildIdleFor(ctx context.Context, ref viewRef, maxPending uint64, requiredChecks uint32) bool {
 	pending, ackPending, err := s.consumerBacklogForView(ctx, ref)
 	if err != nil {
 		// Fail closed for optional capacity work. Schema/contract repairs do not
-		// use this gate and continue to reconcile normally.
+		// use this gate and continue to maintenance normally.
 		s.resetIdleChecks(ref)
 		return false
 	}
@@ -1039,7 +1083,7 @@ func (s *Service) releaseRebuild() {
 	s.rebuildMu.Unlock()
 }
 
-func (s *Service) sizeLimitBuildAllowed(spaceID, viewID string, now time.Time) bool {
+func (s *Service) capacityMaintenanceBuildAllowed(spaceID, viewID string, now time.Time) bool {
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
@@ -1047,12 +1091,12 @@ func (s *Service) sizeLimitBuildAllowed(spaceID, viewID string, now time.Time) b
 		return true
 	}
 	runtime.mu.Lock()
-	last := runtime.lastSizeLimitBuildAt
+	last := runtime.lastCapacityMaintenanceBuildAt
 	runtime.mu.Unlock()
-	return last.IsZero() || !now.Before(last.Add(sizeLimitRebuildRetryInterval))
+	return last.IsZero() || !now.Before(last.Add(capacityMaintenanceRetryInterval))
 }
 
-func (s *Service) markSizeLimitBuild(spaceID, viewID string, now time.Time) {
+func (s *Service) markCapacityMaintenanceBuild(spaceID, viewID string, now time.Time) {
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
@@ -1060,15 +1104,15 @@ func (s *Service) markSizeLimitBuild(spaceID, viewID string, now time.Time) {
 		return
 	}
 	runtime.mu.Lock()
-	runtime.lastSizeLimitBuildAt = now
+	runtime.lastCapacityMaintenanceBuildAt = now
 	runtime.mu.Unlock()
 }
 
-func shouldRetryFailedBuild(view *pb.View, failedBuild *pb.ViewIndexBuild, sizeLimitExceeded bool, now time.Time) bool {
-	return shouldRetryFailedBuildWithCause(view, failedBuild, sizeLimitExceeded, sizeLimitExceeded, now)
+func shouldRetryFailedBuild(view *pb.View, failedBuild *pb.ViewIndexBuild, capacityMaintenanceExceeded bool, now time.Time) bool {
+	return shouldRetryFailedBuildWithCause(view, failedBuild, capacityMaintenanceExceeded, capacityMaintenanceExceeded, now)
 }
 
-func shouldRetryFailedBuildWithCause(view *pb.View, failedBuild *pb.ViewIndexBuild, rebuildNeeded, sizeLimitOnly bool, now time.Time) bool {
+func shouldRetryFailedBuildWithCause(view *pb.View, failedBuild *pb.ViewIndexBuild, rebuildNeeded, capacityMaintenanceOnly bool, now time.Time) bool {
 	if failedBuild == nil {
 		return rebuildNeeded
 	}
@@ -1083,7 +1127,7 @@ func shouldRetryFailedBuildWithCause(view *pb.View, failedBuild *pb.ViewIndexBui
 			if err != nil || updatedAt.IsZero() {
 				return false
 			}
-			return !now.Before(updatedAt.Add(sizeLimitRebuildRetryInterval))
+			return !now.Before(updatedAt.Add(capacityMaintenanceRetryInterval))
 		}
 		return true
 	}
@@ -1094,14 +1138,14 @@ func shouldRetryFailedBuildWithCause(view *pb.View, failedBuild *pb.ViewIndexBui
 	// next reconciliation. The cooldown is only a guard for repeated physical
 	// watermark rebuilds, which are intentionally optional while A remains
 	// healthy.
-	if !sizeLimitOnly {
+	if !capacityMaintenanceOnly {
 		return true
 	}
 	updatedAt, err := time.Parse(time.RFC3339Nano, failedBuild.GetUpdatedAt())
 	if err != nil || updatedAt.IsZero() {
 		return true
 	}
-	return !now.Before(updatedAt.Add(sizeLimitRebuildRetryInterval))
+	return !now.Before(updatedAt.Add(capacityMaintenanceRetryInterval))
 }
 
 type resumeBuildRetry struct{ cause error }
@@ -1116,7 +1160,7 @@ func (e activationRetry) Unwrap() error { return e.cause }
 
 func (s *Service) catchUpAndActivateViewBuild(
 	ctx context.Context,
-	opts ReconcilerOptions,
+	opts MaintenanceOptions,
 	auth *pb.AuthInfo,
 	view *pb.View,
 	buildID, indexID, engine string,
@@ -1137,7 +1181,7 @@ func (s *Service) catchUpAndActivateViewBuild(
 	return s.activateViewBuild(ctx, opts, auth, view, buildID, indexID, engine, revision, schemaHash, columns)
 }
 
-func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, previous *pb.ViewIndexBuild) error {
+func (s *Service) resumeViewBuild(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, previous *pb.ViewIndexBuild) error {
 	lookbackPeriods := rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods)
 	claim, err := opts.Metadata.ClaimViewIndexBuild(ctx, &pb.ClaimViewIndexBuildReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: previous.GetBuildId(),
@@ -1221,7 +1265,7 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 // between those two transitions. Any non-success response is read back before
 // deciding whether the build is still pending; an ambiguous response must not
 // discard an index that metadata may already have made active.
-func (s *Service) activateViewBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID, engineName string, revision uint64, schemaHash string, columns []*pb.ViewColumn) error {
+func (s *Service) activateViewBuild(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID, engineName string, revision uint64, schemaHash string, columns []*pb.ViewColumn) error {
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
 	s.mu.RUnlock()
@@ -1267,11 +1311,9 @@ func (s *Service) activateViewBuild(ctx context.Context, opts ReconcilerOptions,
 		runtime.mu.Unlock()
 		return activationRetry{cause: fmt.Errorf("metadata activation did not expose index %q", indexID)}
 	}
-	var oldID string
-	var oldGeneration uint64
 	var err error
 	if runtime.active != "" {
-		oldID, oldGeneration, err = s.switchViewLocked(runtime)
+		_, _, err = s.switchViewLocked(context.WithoutCancel(ctx), runtime)
 	} else {
 		activePrimary := committed.GetPrimaryDatasetId()
 		if raw := committed.GetAttributes()[activePrimaryDatasetAttr]; raw != "" {
@@ -1293,7 +1335,6 @@ func (s *Service) activateViewBuild(ctx context.Context, opts ReconcilerOptions,
 	if err != nil {
 		return activationRetry{cause: err}
 	}
-	s.scheduleOldIndexRemoval(ctx, oldID, oldGeneration, opts.Grace)
 	return nil
 }
 
@@ -1390,7 +1431,7 @@ func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *
 	}
 }
 
-func (s *Service) updateBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, from, to pb.ViewIndexBuild_State, rows uint64) error {
+func (s *Service) updateBuild(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, buildID string, from, to pb.ViewIndexBuild_State, rows uint64) error {
 	rsp, err := opts.Metadata.UpdateViewIndexBuild(ctx, &pb.UpdateViewIndexBuildReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID,
 		OwnerId: opts.OwnerID, ExpectedState: from, NextState: to, EntriesWritten: rows,
@@ -1405,7 +1446,7 @@ func (s *Service) updateBuild(ctx context.Context, opts ReconcilerOptions, auth 
 // restart/response loss prevents us from durably discarding an inactive build.
 // A later reconciliation may retry the CAS, but it must not declare the View
 // ready while the same non-active build is still present in Metadata.
-func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, build *pb.ViewIndexBuild) error {
+func (s *Service) failInterruptedBuild(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, build *pb.ViewIndexBuild) error {
 	if build == nil {
 		return nil
 	}
@@ -1446,7 +1487,7 @@ func (s *Service) failInterruptedBuild(ctx context.Context, opts ReconcilerOptio
 	return nil
 }
 
-func (s *Service) failBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID string, cause error) bool {
+func (s *Service) failBuild(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID string, cause error) bool {
 	if active, err := s.readActiveView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId()); err == nil && active.GetActiveIndexId() == indexID {
 		// Metadata has already committed this build. Never remove its physical
 		// index merely because a stale/ambiguous failure response arrived.
@@ -1535,7 +1576,7 @@ func needsLookbackRepair(view *pb.View, stats viewindex.ViewIndexStats, lookback
 	return errors.Is(validateRebuildLookback(stats, lookback), errRebuildLookbackInsufficient)
 }
 
-func needsSizeLimitRebuild(view *pb.View, stats viewindex.ViewIndexStats, opts ReconcilerOptions) bool {
+func needsCapacityMaintenanceRebuild(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) bool {
 	if needsRebuild(view, stats) {
 		return true
 	}
@@ -1554,7 +1595,7 @@ func needsSizeLimitRebuild(view *pb.View, stats viewindex.ViewIndexStats, opts R
 	return false
 }
 
-func needsSizeLimitWatermark(view *pb.View, stats viewindex.ViewIndexStats, opts ReconcilerOptions) bool {
+func needsCapacityMaintenanceWatermark(view *pb.View, stats viewindex.ViewIndexStats, opts MaintenanceOptions) bool {
 	if view == nil || !stats.Exists || view.GetKeepDuration() == "" || view.GetKeepDuration() == "0" {
 		return false
 	}

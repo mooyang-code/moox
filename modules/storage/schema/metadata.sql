@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '8')
+VALUES ('schema_version', '9')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS t_view_rebuild_logs (
     c_updated_at TEXT NOT NULL,
     FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
     CHECK (c_result BETWEEN 1 AND 4),
-    CHECK (c_trigger_reason BETWEEN 1 AND 8)
+    CHECK (c_trigger_reason BETWEEN 1 AND 9)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_view_rebuild_logs_view_time

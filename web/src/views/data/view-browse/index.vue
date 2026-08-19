@@ -660,12 +660,14 @@ const rebuildReasonLabels: Record<string, string> = {
   "6": "容量限制",
   "7": "手动修复",
   "8": "中断重试",
+  "9": "序列容量维护",
   VIEW_REBUILD_TRIGGER_INITIAL_BUILD: "首次构建",
   VIEW_REBUILD_TRIGGER_DEFINITION_CHANGE: "定义变更",
   VIEW_REBUILD_TRIGGER_ACTIVE_MISSING: "活跃索引缺失",
   VIEW_REBUILD_TRIGGER_ACTIVE_INVALID: "活跃索引异常",
   VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR: "覆盖修复",
   VIEW_REBUILD_TRIGGER_SIZE_LIMIT: "容量限制",
+  VIEW_REBUILD_TRIGGER_SERIES_CAPACITY: "序列容量维护",
   VIEW_REBUILD_TRIGGER_MANUAL_REPAIR: "手动修复",
   VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY: "中断重试"
 };
@@ -690,7 +692,7 @@ function rebuildResultLabel(value: number | string) {
   return rebuildResultLabels[String(value)] || "未知";
 }
 const rebuildPhaseLabels: Record<string, string> = {
-  reconcile: "准备协调",
+  maintenance: "视图维护",
   prepare: "准备索引",
   backfill: "回溯写入",
   catch_up: "追平实时数据",
@@ -716,6 +718,29 @@ function formatRebuildLogTime(value?: string) {
 function rebuildLogDetail(log: ViewRebuildLog) {
   if (log.result === 4 || String(log.result) === "4" || log.result === "VIEW_REBUILD_RESULT_SKIPPED") {
     return `${log.block_reason || "等待前置条件"}${Number(log.skip_count || 0) > 1 ? `（${log.skip_count} 次）` : ""}`;
+  }
+  if (String(log.trigger_reason) === "9" || log.trigger_reason === "VIEW_REBUILD_TRIGGER_SERIES_CAPACITY") {
+    try {
+      const details = JSON.parse(log.details_json || "{}") as {
+        subject_id?: string;
+        frequency?: string;
+        series_tag?: string;
+        observed_periods?: number;
+        max_periods_per_series?: number;
+        rebuild_lookback_periods?: number;
+      };
+      if (details.subject_id) {
+        const series = [details.subject_id, details.frequency, details.series_tag || "-"]
+          .filter(Boolean)
+          .join(" · ");
+        const observed = details.observed_periods || 0;
+        const max = details.max_periods_per_series || 0;
+        const lookback = details.rebuild_lookback_periods || max;
+        return `${series}：${observed} / ${max} 根，重建后保留 ${lookback} 根`;
+      }
+    } catch {
+      // Keep the generic phase/error text for legacy or malformed details.
+    }
   }
   if (log.error_summary) return log.error_summary;
   const phase = rebuildLogPhase(log);

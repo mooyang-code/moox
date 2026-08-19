@@ -14,8 +14,8 @@ func TestMetadataSchemaVersionIsExact(t *testing.T) {
 			t.Fatalf("test case %q unexpectedly equals current schema version", version)
 		}
 	}
-	if metadataSchemaVersion != "8" {
-		t.Fatalf("metadata schema version = %q, want 8", metadataSchemaVersion)
+	if metadataSchemaVersion != "9" {
+		t.Fatalf("metadata schema version = %q, want 9", metadataSchemaVersion)
 	}
 }
 
@@ -40,8 +40,8 @@ func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "8" {
-		t.Fatalf("fresh database schema version = %q, want 8", version)
+	if version != "9" {
+		t.Fatalf("fresh database schema version = %q, want 9", version)
 	}
 }
 
@@ -140,7 +140,7 @@ func TestInitSchemaMigratesV7RebuildLogs(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "8" {
+	if version != "9" {
 		t.Fatalf("migrated schema version = %q", version)
 	}
 	var logTable int

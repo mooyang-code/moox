@@ -133,6 +133,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 	statement := fmt.Sprintf(`
 		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '');
 		CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
+		CREATE TABLE view_series_counts (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, series_tag VARCHAR NOT NULL, row_count UBIGINT NOT NULL, PRIMARY KEY (subject_id, freq, series_tag));
 		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
 		CREATE INDEX idx_view_rows_data_time ON view_rows (data_time);`, strings.Join(createColumns, ", "))
 	if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -207,6 +208,9 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 		return errors.New("view schema hash conflict")
 	}
 	for _, group := range groupRowWrites(batch.RowWrites) {
+		if err := ensureSeriesRowsAndCounts(ctx, tx, group.writes); err != nil {
+			return err
+		}
 		names := append([]string{"subject_id", "freq", "data_time", "series_tag"}, group.columns...)
 		for start := 0; start < len(group.writes); start += maxWriteRowsPerStatement {
 			end := start + maxWriteRowsPerStatement
@@ -262,6 +266,123 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 		return err
 	}
 	return tx.Commit()
+}
+
+func ensureSeriesRowsAndCounts(ctx context.Context, tx *sql.Tx, writes []viewindex.RowWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	type candidate struct {
+		subject, freq, tag string
+		when               time.Time
+	}
+	unique := make(map[string]candidate, len(writes))
+	for _, write := range writes {
+		key := write.Key.Key.GetTimeSeries()
+		if key == nil {
+			continue
+		}
+		when, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
+		if err != nil {
+			return fmt.Errorf("invalid data_time: %w", err)
+		}
+		when = when.UTC()
+		item := candidate{subject: key.GetSubjectId(), freq: key.GetFreq(), tag: key.GetSeriesTag(), when: when}
+		unique[encodePhysicalKeyParts(item.subject, item.freq, canonicalCoverageTime(when), item.tag)] = item
+	}
+	items := make([]candidate, 0, len(unique))
+	for _, item := range unique {
+		items = append(items, item)
+	}
+	counts := make(map[string]struct {
+		subject string
+		freq    string
+		tag     string
+		count   uint64
+	})
+	for start := 0; start < len(items); start += maxWriteRowsPerStatement {
+		end := min(start+maxWriteRowsPerStatement, len(items))
+		chunk := items[start:end]
+		placeholders := make([]string, 0, len(chunk))
+		args := make([]any, 0, len(chunk)*4)
+		for _, item := range chunk {
+			placeholders = append(placeholders, "(?, ?, ?, ?)")
+			args = append(args, item.subject, item.freq, item.when, item.tag)
+		}
+		query := `INSERT INTO view_rows (subject_id, freq, data_time, series_tag) VALUES ` + strings.Join(placeholders, ",") + ` ON CONFLICT (subject_id, freq, data_time, series_tag) DO NOTHING RETURNING subject_id, freq, data_time, series_tag`
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var subject, freq, tag string
+			var when time.Time
+			if err := rows.Scan(&subject, &freq, &when, &tag); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			countKey := subject + "\x00" + freq + "\x00" + tag
+			entry := counts[countKey]
+			entry.subject, entry.freq, entry.tag = subject, freq, tag
+			entry.count++
+			counts[countKey] = entry
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+	}
+	countItems := make([]struct {
+		subject string
+		freq    string
+		tag     string
+		count   uint64
+	}, 0, len(counts))
+	for _, item := range counts {
+		countItems = append(countItems, item)
+	}
+	for start := 0; start < len(countItems); start += maxWriteRowsPerStatement {
+		end := min(start+maxWriteRowsPerStatement, len(countItems))
+		chunk := countItems[start:end]
+		values := make([]string, 0, len(chunk))
+		args := make([]any, 0, len(chunk)*4)
+		for _, item := range chunk {
+			values = append(values, "(?, ?, ?, ?)")
+			args = append(args, item.subject, item.freq, item.tag, item.count)
+		}
+		query := `INSERT INTO view_series_counts (subject_id, freq, series_tag, row_count) VALUES ` + strings.Join(values, ",") + ` ON CONFLICT (subject_id, freq, series_tag) DO UPDATE SET row_count = view_series_counts.row_count + excluded.row_count`
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *IndexManager) SeriesCapacity(ctx context.Context, id string, maxPeriods uint64) (viewindex.SeriesCapacityResult, error) {
+	if maxPeriods == 0 {
+		return viewindex.SeriesCapacityResult{}, nil
+	}
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return viewindex.SeriesCapacityResult{}, err
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return viewindex.SeriesCapacityResult{}, err
+	}
+	var result viewindex.SeriesCapacityResult
+	var rows uint64
+	err = db.QueryRowContext(ctx, `SELECT subject_id, freq, series_tag, row_count FROM view_series_counts WHERE row_count > ? ORDER BY row_count DESC, subject_id, freq, series_tag LIMIT 1`, maxPeriods).Scan(&result.SubjectID, &result.Freq, &result.SeriesTag, &rows)
+	if errors.Is(err, sql.ErrNoRows) {
+		return result, nil
+	}
+	if err != nil {
+		return result, err
+	}
+	result.Exceeded = true
+	result.Rows = rows
+	return result, nil
 }
 
 func batchCoverage(writes []viewindex.RowWrite) (string, string, bool) {
@@ -841,12 +962,14 @@ func (m *IndexManager) Remove(_ context.Context, id string) error {
 	if err := m.closeIndex(id); err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	// DuckDB may leave a write-ahead log beside the database. Remove it with
+	// the retired index so an A/B rotation does not strand storage on disk. The
+	// WAL is removed first: if that removal fails, the main managed file remains
+	// discoverable and the cleanup Timer can retry the complete artifact.
+	if err := os.Remove(path + ".wal"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	// DuckDB may leave a write-ahead log beside the database. Remove it with
-	// the retired index so an A/B rotation does not strand storage on disk.
-	if err := os.Remove(path + ".wal"); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -981,6 +1104,29 @@ func (m *IndexManager) path(id string) (string, error) {
 		return "", errors.New("invalid view index id")
 	}
 	return filepath.Join(m.root, id+".duckdb"), nil
+}
+
+func (m *IndexManager) ListManagedIndexes(ctx context.Context) ([]string, error) {
+	entries, err := os.ReadDir(m.root)
+	if err != nil {
+		return nil, fmt.Errorf("list DuckDB view indexes: %w", err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".duckdb") || strings.Contains(entry.Name(), ".prepare-") {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".duckdb")
+		if _, err := viewindex.ParseViewIndexID(id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 func open(path string) (*sql.DB, error) {

@@ -21,7 +21,7 @@ var rebuildSensitiveValue = regexp.MustCompile(`(?i)(password|passwd|secret|toke
 var rebuildJSONSensitiveValue = regexp.MustCompile(`(?i)(["']?(?:password|passwd|secret|token|authorization|api[_-]?key)["']?\s*:\s*["'])([^"']*)(["'])`)
 var rebuildAuthHeaderValue = regexp.MustCompile(`(?i)(authorization\s*:\s*(?:basic|bearer)\s+)[^\s,;]+`)
 
-func rebuildTriggerReason(view *pb.View, stats viewindex.ViewIndexStats, sizeLimitOnly bool) pb.ViewRebuildTriggerReason {
+func rebuildTriggerReason(view *pb.View, stats viewindex.ViewIndexStats, capacityMaintenanceOnly, seriesCapacity bool) pb.ViewRebuildTriggerReason {
 	if view == nil || view.GetActiveIndexId() == "" {
 		return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_INITIAL_BUILD
 	}
@@ -34,7 +34,10 @@ func rebuildTriggerReason(view *pb.View, stats viewindex.ViewIndexStats, sizeLim
 	if view.GetDesiredViewRevision() > view.GetActiveViewRevision() {
 		return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_DEFINITION_CHANGE
 	}
-	if sizeLimitOnly {
+	if seriesCapacity {
+		return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SERIES_CAPACITY
+	}
+	if capacityMaintenanceOnly {
 		return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SIZE_LIMIT
 	}
 	return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR
@@ -49,7 +52,7 @@ func manualRebuildRequested(view *pb.View) bool {
 	return err == nil && revision == view.GetDesiredViewRevision()
 }
 
-func (s *Service) finishRunningRebuildLog(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, result pb.ViewRebuildResult, entries uint64, cause error) (found, updated, lookupOK bool) {
+func (s *Service) finishRunningRebuildLog(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, buildID string, result pb.ViewRebuildResult, entries uint64, cause error) (found, updated, lookupOK bool) {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok || view == nil || strings.TrimSpace(buildID) == "" {
 		return false, false, false
@@ -189,7 +192,7 @@ func (s *Service) drainRebuildLogRetries(ctx context.Context) {
 	}
 }
 
-func (s *Service) createRebuildLogFallback(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog) bool {
+func (s *Service) createRebuildLogFallback(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog) bool {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok || item == nil {
 		return false
@@ -216,7 +219,7 @@ func (s *Service) createRebuildLogFallback(ctx context.Context, opts ReconcilerO
 	return false
 }
 
-func (s *Service) rebuildLogExists(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog) (exists, lookupOK bool) {
+func (s *Service) rebuildLogExists(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog) (exists, lookupOK bool) {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok || item == nil {
 		return false, false
@@ -278,7 +281,7 @@ func interruptedRebuildFailureItem(view *pb.View, build *pb.ViewIndexBuild, caus
 	}
 }
 
-func (s *Service) recordInterruptedRebuildFailure(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, build *pb.ViewIndexBuild, cause error) {
+func (s *Service) recordInterruptedRebuildFailure(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, build *pb.ViewIndexBuild, cause error) {
 	item := interruptedRebuildFailureItem(view, build, cause)
 	if item == nil || !s.createRebuildLogFallback(ctx, opts, auth, item) {
 		if view != nil {
@@ -290,7 +293,7 @@ func (s *Service) recordInterruptedRebuildFailure(ctx context.Context, opts Reco
 	}
 }
 
-func (s *Service) recordFailedRebuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, reason pb.ViewRebuildTriggerReason, cause error, stats viewindex.ViewIndexStats) {
+func (s *Service) recordFailedRebuild(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, reason pb.ViewRebuildTriggerReason, cause error, stats viewindex.ViewIndexStats) {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok || view == nil {
 		return
@@ -315,17 +318,21 @@ func (s *Service) recordFailedRebuild(ctx context.Context, opts ReconcilerOption
 	}
 }
 
-func (s *Service) createRunningRebuildLog(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID string, reason pb.ViewRebuildTriggerReason, stats viewindex.ViewIndexStats, physicalBytes, pending, ackPending uint64) *pb.ViewRebuildLog {
+func (s *Service) createRunningRebuildLog(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, buildID, indexID string, reason pb.ViewRebuildTriggerReason, stats viewindex.ViewIndexStats, physicalBytes, pending, ackPending uint64, detailsJSON ...string) *pb.ViewRebuildLog {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok {
 		return nil
 	}
 	started := time.Now().UTC().Format(time.RFC3339Nano)
+	details := `{"phase":"maintenance"}`
+	if len(detailsJSON) > 0 && strings.TrimSpace(detailsJSON[0]) != "" {
+		details = appendRebuildPhase(detailsJSON[0], "maintenance")
+	}
 	item := &pb.ViewRebuildLog{
 		SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: buildID, IndexId: indexID,
 		TriggerReason: reason, Result: pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING,
 		TargetViewRevision: view.GetDesiredViewRevision(), ActiveViewRevision: view.GetActiveViewRevision(),
-		PhysicalBytes: physicalBytes, NumPending: pending, NumAckPending: ackPending, StartedAt: started, DetailsJson: `{"phase":"reconcile"}`,
+		PhysicalBytes: physicalBytes, NumPending: pending, NumAckPending: ackPending, StartedAt: started, DetailsJson: details,
 	}
 	rsp, err := client.CreateViewRebuildLog(ctx, &pb.CreateViewRebuildLogReq{AuthInfo: auth, Log: item})
 	if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -339,7 +346,7 @@ func (s *Service) createRunningRebuildLog(ctx context.Context, opts ReconcilerOp
 	return rsp.GetLog()
 }
 
-func (s *Service) finishRebuildLog(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog, result pb.ViewRebuildResult, entries uint64, cause error) bool {
+func (s *Service) finishRebuildLog(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog, result pb.ViewRebuildResult, entries uint64, cause error) bool {
 	if item == nil {
 		return false
 	}
@@ -433,7 +440,7 @@ func appendRebuildPhase(raw, phase string) string {
 // updateRunningRebuildLogPhase is best-effort observability. A failure here
 // must never change the A/B state machine; the terminal update/retry path is
 // still responsible for closing the audit row.
-func (s *Service) updateRunningRebuildLogPhase(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, item *pb.ViewRebuildLog, phase string) {
+func (s *Service) updateRunningRebuildLogPhase(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, buildID string, item *pb.ViewRebuildLog, phase string) {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok || view == nil || strings.TrimSpace(buildID) == "" || strings.TrimSpace(phase) == "" {
 		return
@@ -467,7 +474,7 @@ func (s *Service) updateRunningRebuildLogPhase(ctx context.Context, opts Reconci
 	}
 }
 
-func (s *Service) rebuildLogAlreadyTerminal(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog, result pb.ViewRebuildResult, entries uint64) bool {
+func (s *Service) rebuildLogAlreadyTerminal(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog, result pb.ViewRebuildResult, entries uint64) bool {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok || item == nil || item.GetLogId() == 0 {
 		return false
@@ -493,17 +500,21 @@ func (s *Service) rebuildLogAlreadyTerminal(ctx context.Context, opts Reconciler
 	}
 }
 
-func (s *Service) recordSkippedRebuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, reason pb.ViewRebuildTriggerReason, blockReason string, stats viewindex.ViewIndexStats, physicalBytes, pending, ackPending uint64) {
+func (s *Service) recordSkippedRebuild(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, reason pb.ViewRebuildTriggerReason, blockReason string, stats viewindex.ViewIndexStats, physicalBytes, pending, ackPending uint64, detailsJSON ...string) {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
 	if !ok || view == nil {
 		return
+	}
+	details := `{"phase":"gate"}`
+	if len(detailsJSON) > 0 && strings.TrimSpace(detailsJSON[0]) != "" {
+		details = appendRebuildPhase(detailsJSON[0], "gate")
 	}
 	item := &pb.ViewRebuildLog{
 		SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), TriggerReason: reason,
 		Result: pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SKIPPED, BlockReason: blockReason,
 		TargetViewRevision: view.GetDesiredViewRevision(), ActiveViewRevision: view.GetActiveViewRevision(),
 		PhysicalBytes: physicalBytes, NumPending: pending, NumAckPending: ackPending,
-		DetailsJson: `{"phase":"gate"}`,
+		DetailsJson: details,
 	}
 	rsp, err := client.UpsertSkippedViewRebuildLog(ctx, &pb.UpsertSkippedViewRebuildLogReq{AuthInfo: auth, Log: item})
 	if err == nil && (rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS) {

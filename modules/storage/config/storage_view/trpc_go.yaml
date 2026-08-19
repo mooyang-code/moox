@@ -46,6 +46,11 @@ server:
       network: "*/30 * * * * *"
       protocol: timer
       timeout: 10000
+    - name: trpc.moox.storage.view.cleanup.timer
+      port: 20308
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 20000
 
 client:
   filter:
@@ -159,7 +164,8 @@ storage:
         ordering: dataset
         deliver_policy: new
         max_retry_attempts: -1
-    rebuild_check_interval: 1m
+    maintenance_check_interval: 1m
+    maintenance_policy_file: config/maintenance.json
     rebuild_lookback: 24h
     rebuild_lookback_periods:
       1m: 1000

@@ -662,6 +662,55 @@ func TestStatMetadataTracksCoverageWithoutScanningRows(t *testing.T) {
 	}
 }
 
+func TestDuckDBSeriesCapacityTracksEachSeriesIndependently(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	row := func(subject, tag string, minute int) viewindex.RowWrite {
+		return viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", subject, "1m", fmt.Sprintf("2026-07-20T00:%02d:00Z", minute), tag)}}
+	}
+	rows := []viewindex.RowWrite{row("BTC", "venue:binance", 0), row("BTC", "venue:binance", 1), row("BTC", "venue:binance", 2), row("BTC", "venue:other", 0), row("ETH", "venue:binance", 0)}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: rows, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}); err != nil {
+		t.Fatal(err)
+	}
+	// A field patch for an existing row must not increase the physical count.
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{row("BTC", "venue:binance", 1)}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := manager.SeriesCapacity(context.Background(), "idx", 3); err != nil || got.Exceeded {
+		t.Fatalf("capacity at exact limit = %#v, err=%v", got, err)
+	}
+	got, err := manager.SeriesCapacity(context.Background(), "idx", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Exceeded || got.SubjectID != "BTC" || got.Freq != "1m" || got.SeriesTag != "venue:binance" || got.Rows != 3 {
+		db, _, _, _, dbErr := manager.getIndex(context.Background(), "idx")
+		if dbErr == nil {
+			rows, queryErr := db.Query(`SELECT subject_id, freq, series_tag, row_count FROM view_series_counts ORDER BY subject_id, series_tag`)
+			if queryErr == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var subject, freq, tag string
+					var count uint64
+					_ = rows.Scan(&subject, &freq, &tag, &count)
+					t.Logf("count row subject=%s freq=%s tag=%s count=%d", subject, freq, tag, count)
+				}
+			}
+		}
+		t.Fatalf("unexpected capacity offender: %#v", got)
+	}
+	if got, err := manager.SeriesCapacity(context.Background(), "idx", 99); err != nil || got.Exceeded {
+		t.Fatalf("below-capacity result = %#v, err=%v", got, err)
+	}
+}
+
 func TestMergeCoverageBoundsIsMonotonicAndCanonical(t *testing.T) {
 	from, to := mergeCoverageBounds(
 		"2026-08-12T00:00:00Z", "2026-08-12T01:00:00.1Z",

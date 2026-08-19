@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
@@ -66,10 +67,59 @@ type DNSResolver struct {
 	Domains                []string `toml:"domains"`
 }
 
-// StorageView contains the deployment-wide View rebuild policy. The single
-// value intentionally applies to every frequency.
+// StorageView contains the deployment-wide View maintenance policy. Zero values
+// in nested overrides inherit the global value.
 type StorageView struct {
-	RebuildLookbackPeriods uint64 `toml:"rebuild_lookback_periods"`
+	MaintenanceCheckInterval string                      `toml:"maintenance_check_interval" json:"maintenance_check_interval"`
+	RebuildLookbackPeriods   uint64                      `toml:"rebuild_lookback_periods" json:"rebuild_lookback_periods"`
+	MaxPeriodsPerSeries      uint64                      `toml:"max_periods_per_series" json:"max_periods_per_series"`
+	MaxViewFileBytes         int64                       `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
+	SystemMonitor            StorageViewPolicyOverride   `toml:"system_monitor" json:"system_monitor"`
+	Views                    []StorageViewPolicyOverride `toml:"views" json:"views"`
+}
+
+type StorageViewPolicyOverride struct {
+	SpaceID                string `toml:"space_id" json:"space_id"`
+	ViewID                 string `toml:"view_id" json:"view_id"`
+	RebuildLookbackPeriods uint64 `toml:"rebuild_lookback_periods" json:"rebuild_lookback_periods"`
+	MaxPeriodsPerSeries    uint64 `toml:"max_periods_per_series" json:"max_periods_per_series"`
+	MaxViewFileBytes       int64  `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
+}
+
+type ResolvedStorageViewPolicy struct {
+	MaintenanceCheckInterval string `json:"maintenance_check_interval"`
+	RebuildLookbackPeriods   uint64 `json:"rebuild_lookback_periods"`
+	MaxPeriodsPerSeries      uint64 `json:"max_periods_per_series"`
+	MaxViewFileBytes         int64  `json:"max_view_file_bytes"`
+}
+
+func (s StorageView) ResolvePolicy(spaceID, viewID string) ResolvedStorageViewPolicy {
+	policy := ResolvedStorageViewPolicy{
+		MaintenanceCheckInterval: s.MaintenanceCheckInterval,
+		RebuildLookbackPeriods:   s.RebuildLookbackPeriods,
+		MaxPeriodsPerSeries:      s.MaxPeriodsPerSeries,
+		MaxViewFileBytes:         s.MaxViewFileBytes,
+	}
+	apply := func(override StorageViewPolicyOverride) {
+		if override.RebuildLookbackPeriods > 0 {
+			policy.RebuildLookbackPeriods = override.RebuildLookbackPeriods
+		}
+		if override.MaxPeriodsPerSeries > 0 {
+			policy.MaxPeriodsPerSeries = override.MaxPeriodsPerSeries
+		}
+		if override.MaxViewFileBytes > 0 {
+			policy.MaxViewFileBytes = override.MaxViewFileBytes
+		}
+	}
+	if spaceID == "moox_system" {
+		apply(s.SystemMonitor)
+	}
+	for _, override := range s.Views {
+		if strings.TrimSpace(override.SpaceID) == strings.TrimSpace(spaceID) && strings.TrimSpace(override.ViewID) == strings.TrimSpace(viewID) {
+			apply(override)
+		}
+	}
+	return policy
 }
 
 type Monitoring struct {
@@ -290,10 +340,19 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.TencentCloud.Region = "ap-guangzhou"
 	}
 	if !md.IsDefined("factors", "enabled") {
-		out.Factors.Enabled = true
+		out.Factors.Enabled = false
 	}
 	if !md.IsDefined("storage_view", "rebuild_lookback_periods") {
 		out.StorageView.RebuildLookbackPeriods = DefaultStorageViewRebuildLookbackPeriods
+	}
+	if !md.IsDefined("storage_view", "maintenance_check_interval") {
+		out.StorageView.MaintenanceCheckInterval = "1m"
+	}
+	if !md.IsDefined("storage_view", "max_periods_per_series") {
+		out.StorageView.MaxPeriodsPerSeries = 2000
+	}
+	if !md.IsDefined("storage_view", "max_view_file_bytes") {
+		out.StorageView.MaxViewFileBytes = 1 << 30
 	}
 	if !md.IsDefined("factors", "source_dir") || strings.TrimSpace(out.Factors.SourceDir) == "" {
 		out.Factors.SourceDir = "./examples/factors"
@@ -382,6 +441,51 @@ func validate(manifest *Manifest) error {
 func validateStorageView(cfg *StorageView) error {
 	if cfg.RebuildLookbackPeriods == 0 || cfg.RebuildLookbackPeriods > 1_000_000 {
 		return fmt.Errorf("config_invalid: storage_view.rebuild_lookback_periods must be between 1 and 1000000")
+	}
+	interval, err := time.ParseDuration(strings.TrimSpace(cfg.MaintenanceCheckInterval))
+	if err != nil || interval < 30*time.Second {
+		return fmt.Errorf("config_invalid: storage_view.maintenance_check_interval must be at least 30s")
+	}
+	if cfg.MaxPeriodsPerSeries == 0 || cfg.MaxPeriodsPerSeries > 1_000_000 {
+		return fmt.Errorf("config_invalid: storage_view.max_periods_per_series must be between 1 and 1000000")
+	}
+	if cfg.MaxPeriodsPerSeries <= cfg.RebuildLookbackPeriods {
+		return fmt.Errorf("config_invalid: storage_view.max_periods_per_series must be greater than rebuild_lookback_periods")
+	}
+	if cfg.MaxViewFileBytes <= 0 {
+		return fmt.Errorf("config_invalid: storage_view.max_view_file_bytes must be positive")
+	}
+	seen := make(map[string]struct{}, len(cfg.Views))
+	for i, override := range cfg.Views {
+		spaceID := strings.TrimSpace(override.SpaceID)
+		viewID := strings.TrimSpace(override.ViewID)
+		if spaceID == "" || viewID == "" {
+			return fmt.Errorf("config_invalid: storage_view.views[%d] requires space_id and view_id", i)
+		}
+		key := spaceID + "\x00" + viewID
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("config_invalid: duplicate storage_view.views entry %s/%s", spaceID, viewID)
+		}
+		seen[key] = struct{}{}
+		if override.RebuildLookbackPeriods > 1_000_000 || override.MaxPeriodsPerSeries > 1_000_000 || (override.MaxPeriodsPerSeries > 0 && override.RebuildLookbackPeriods > 0 && override.MaxPeriodsPerSeries <= override.RebuildLookbackPeriods) || override.MaxViewFileBytes < 0 {
+			return fmt.Errorf("config_invalid: storage_view.views[%d] contains invalid limits", i)
+		}
+	}
+	if cfg.SystemMonitor.MaxPeriodsPerSeries > 1_000_000 || cfg.SystemMonitor.RebuildLookbackPeriods > 1_000_000 || (cfg.SystemMonitor.MaxPeriodsPerSeries > 0 && cfg.SystemMonitor.RebuildLookbackPeriods > 0 && cfg.SystemMonitor.MaxPeriodsPerSeries <= cfg.SystemMonitor.RebuildLookbackPeriods) || cfg.SystemMonitor.MaxViewFileBytes < 0 {
+		return fmt.Errorf("config_invalid: storage_view.system_monitor contains invalid limits")
+	}
+	if strings.TrimSpace(cfg.SystemMonitor.SpaceID) != "" || strings.TrimSpace(cfg.SystemMonitor.ViewID) != "" {
+		return fmt.Errorf("config_invalid: storage_view.system_monitor must not set space_id or view_id")
+	}
+	resolved := cfg.ResolvePolicy("moox_system", "__default__")
+	if resolved.MaxPeriodsPerSeries <= resolved.RebuildLookbackPeriods {
+		return fmt.Errorf("config_invalid: resolved system monitor max_periods_per_series must be greater than rebuild_lookback_periods")
+	}
+	for _, override := range cfg.Views {
+		resolved = cfg.ResolvePolicy(override.SpaceID, override.ViewID)
+		if resolved.MaxPeriodsPerSeries <= resolved.RebuildLookbackPeriods {
+			return fmt.Errorf("config_invalid: resolved policy for %s/%s has max_periods_per_series not greater than rebuild_lookback_periods", override.SpaceID, override.ViewID)
+		}
 	}
 	return nil
 }

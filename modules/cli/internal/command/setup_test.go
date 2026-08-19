@@ -254,7 +254,7 @@ func TestSetupDeployStorageRequiresAndPassesSelectedHost(t *testing.T) {
 		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "completed"}, nil
 		},
-		deployStorage: func(_ context.Context, _ *setupconfig.Snapshot, host string, selectedReset bool) error {
+		deployStorage: func(_ context.Context, _ *setupconfig.Snapshot, host string, selectedReset, _ bool) error {
 			selected = host
 			reset = selectedReset
 			return nil
@@ -267,7 +267,7 @@ func TestSetupDeployStorageRequiresAndPassesSelectedHost(t *testing.T) {
 	require.Equal(t, "compute", selected)
 	require.Equal(t, []string{"control", "compute"}, validatedHosts)
 	require.False(t, reset, "reset must default to false")
-	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":false}`, output.String())
+	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":false,"reset_view_data":false}`, output.String())
 }
 
 func TestNormalizeStorageInternalAuthRejectsShellContent(t *testing.T) {
@@ -470,7 +470,7 @@ func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {
 		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "completed"}, nil
 		},
-		deployStorage: func(_ context.Context, _ *setupconfig.Snapshot, _ string, selectedReset bool) error {
+		deployStorage: func(_ context.Context, _ *setupconfig.Snapshot, _ string, selectedReset, _ bool) error {
 			reset = selectedReset
 			return nil
 		},
@@ -480,7 +480,45 @@ func TestSetupDeployStoragePassesExplicitResetFlag(t *testing.T) {
 	cmd.SetArgs([]string{"deploy-storage", "--file", "custom.toml", "--host", "compute", "--reset-storage-data"})
 	require.NoError(t, cmd.Execute())
 	require.True(t, reset)
-	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":true}`, output.String())
+	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":true,"reset_view_data":false}`, output.String())
+}
+
+func TestSetupDeployStoragePassesViewResetFlagAndRejectsCombinedReset(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	var resetView bool
+	cmd := newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, nil
+		},
+		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
+			return setupclient.StatusResult{State: "completed"}, nil
+		},
+		deployStorage: func(_ context.Context, _ *setupconfig.Snapshot, _ string, _, selectedResetView bool) error {
+			resetView = selectedResetView
+			return nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"deploy-storage", "--file", "custom.toml", "--host", "compute", "--reset-view-data"})
+	require.NoError(t, cmd.Execute())
+	require.True(t, resetView)
+	require.JSONEq(t, `{"host":"compute","status":"ready","reset_storage_data":false,"reset_view_data":true}`, output.String())
+
+	cmd = newSetupCommand(setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validateDeployment: func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error) {
+			return setupvalidate.Result{}, nil
+		},
+		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
+			return setupclient.StatusResult{State: "completed"}, nil
+		},
+		deployStorage: func(context.Context, *setupconfig.Snapshot, string, bool, bool) error { return nil },
+	})
+	cmd.SetArgs([]string{"deploy-storage", "--file", "custom.toml", "--host", "compute", "--reset-view-data", "--reset-storage-data"})
+	require.EqualError(t, cmd.Execute(), "--reset-storage-data and --reset-view-data are mutually exclusive")
 }
 
 func TestSetupDeployStorageRequiresCompletedControlSetup(t *testing.T) {
@@ -495,7 +533,7 @@ func TestSetupDeployStorageRequiresCompletedControlSetup(t *testing.T) {
 		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
 			return setupclient.StatusResult{State: "incomplete"}, nil
 		},
-		deployStorage: func(context.Context, *setupconfig.Snapshot, string, bool) error {
+		deployStorage: func(context.Context, *setupconfig.Snapshot, string, bool, bool) error {
 			deployed = true
 			return nil
 		},

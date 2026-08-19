@@ -162,8 +162,14 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 	// The dedicated history index is ordered by the same logical tuple used by
 	// the API (data_time, subject, frequency, tag). This makes cursor paging a
 	// single seekable scan rather than a repeated scan of every field/attribute
-	// key in the current time bucket.
+	// key in the current time bucket. A single subject/frequency selector uses
+	// the companion subject-first index, avoiding a full-dataset walk while the
+	// maintainer discovers each bound series.
+	seriesIndexed := len(selectors) == 1 && selectors[0].subject != "" && selectors[0].freq != "" && req.GetTimeRange() == nil
 	prefix := historyDatasetPrefix(req.GetSpaceId(), req.GetDatasetId())
+	if seriesIndexed {
+		prefix = seriesHistoryPrefix(req.GetSpaceId(), req.GetDatasetId(), selectors[0])
+	}
 	lower := append([]byte(nil), prefix...)
 	upper := nextPrefix(prefix)
 	if !start.IsZero() {
@@ -172,8 +178,11 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 	if !end.IsZero() {
 		upper = historyTimeBound(prefix, end)
 	}
-	if after != nil {
+	if after != nil && (!seriesIndexed || selectors[0].hasTag) {
 		afterKey, keyErr := encodeHistoryKey(after, s.bucketDuration)
+		if seriesIndexed {
+			afterKey, keyErr = encodeSeriesHistoryKey(after, s.bucketDuration)
+		}
 		if keyErr != nil {
 			return nil, fmt.Errorf("invalid after_key: %w", keyErr)
 		}
@@ -204,11 +213,14 @@ func (s *Store) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRo
 			return nil, err
 		}
 		key, ok := parseHistoryKey(iter.Key())
+		if seriesIndexed {
+			key, ok = parseSeriesHistoryKey(iter.Key())
+		}
 		if !ok || !historyMatches(key, selectorSet, start, end) {
 			continue
 		}
 		insertCandidate(key)
-		if candidates.Len() >= limit {
+		if candidates.Len() >= limit && !seriesIndexed {
 			break
 		}
 	}
@@ -312,6 +324,16 @@ func (s *Store) ensureHistoryIndex(ctx context.Context, spaceID, datasetID strin
 		s.historyMu.Unlock()
 		return nil
 	}
+	markerKey := historyMaterializedMarker(spaceID, datasetID)
+	if _, closer, err := s.db.Get(markerKey); err == nil {
+		_ = closer.Close()
+		s.historyBackfilled[cacheKey] = true
+		s.historyMu.Unlock()
+		return nil
+	} else if !errors.Is(err, cpebble.ErrNotFound) {
+		s.historyMu.Unlock()
+		return err
+	}
 	if s.historyBackfillStarted[cacheKey] {
 		s.historyMu.Unlock()
 		return errHistoryIndexNotReady
@@ -319,7 +341,9 @@ func (s *Store) ensureHistoryIndex(ctx context.Context, spaceID, datasetID strin
 	s.historyBackfillStarted[cacheKey] = true
 	s.historyMu.Unlock()
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		s.historyBackfillMu.Lock()
 		err := s.backfillHistoryIndexSync(ctx, spaceID, datasetID)
+		s.historyBackfillMu.Unlock()
 		s.historyMu.Lock()
 		if err == nil {
 			s.historyBackfilled[cacheKey] = true
@@ -329,7 +353,7 @@ func (s *Store) ensureHistoryIndex(ctx context.Context, spaceID, datasetID strin
 	}
 	// Legacy stores may contain millions of field keys. Do not spend the
 	// request's short RPC deadline rebuilding the derived history namespace;
-	// start one bounded-by-dataset background pass and let the next reconcile
+	// start one bounded-by-dataset background pass and let the next View Maintainer
 	// observe the completed markers.
 	log.Printf("DataNode history index backfill started space=%s dataset=%s", spaceID, datasetID)
 	s.maintenanceMu.Lock()
@@ -367,7 +391,7 @@ func (s *Store) backfillHistoryIndex(cacheKey, spaceID, datasetID string) {
 	// history materialization per dataset in parallel monopolizes Pebble's
 	// compaction/read budget and starves live PrimaryStore requests. Serialize
 	// these derived-index passes; the caller remains asynchronous and the next
-	// reconcile observes each dataset as it completes.
+	// View Maintainer observes each dataset as it completes.
 	s.historyBackfillMu.Lock()
 	defer s.historyBackfillMu.Unlock()
 	err := s.backfillHistoryIndexSync(s.historyContext(), spaceID, datasetID)
@@ -406,6 +430,7 @@ func (s *Store) backfillHistoryIndexSync(ctx context.Context, spaceID, datasetID
 	defer batch.Close()
 	pending := 0
 	lastHistoryKey := ""
+	lastSeriesHistoryKey := ""
 	commit := func() error {
 		if pending == 0 {
 			return nil
@@ -440,6 +465,16 @@ func (s *Store) backfillHistoryIndexSync(ctx context.Context, spaceID, datasetID
 		if err := batch.Set(historyKey, nil, s.writeOptions); err != nil {
 			return err
 		}
+		seriesHistoryKey, err := encodeSeriesHistoryKey(row, s.bucketDuration)
+		if err != nil {
+			continue
+		}
+		if string(seriesHistoryKey) != lastSeriesHistoryKey {
+			if err := batch.Set(seriesHistoryKey, nil, s.writeOptions); err != nil {
+				return err
+			}
+			lastSeriesHistoryKey = string(seriesHistoryKey)
+		}
 		lastHistoryKey = string(historyKey)
 		pending++
 		if pending >= 4096 {
@@ -454,6 +489,10 @@ func (s *Store) backfillHistoryIndexSync(ctx context.Context, spaceID, datasetID
 	if err := commit(); err != nil {
 		return err
 	}
+	marker := historyMaterializedMarker(spaceID, datasetID)
+	if err := s.db.Set(marker, nil, s.writeOptions); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -461,6 +500,24 @@ func historyDatasetPrefix(spaceID, datasetID string) []byte {
 	prefix := []byte{historyNamespace, timeSeriesKind}
 	prefix = appendRawPart(prefix, []byte(spaceID))
 	return appendRawPart(prefix, []byte(datasetID))
+}
+
+func historyMaterializedMarker(spaceID, datasetID string) []byte {
+	marker := []byte{seriesHistoryNamespace, 0}
+	marker = appendRawPart(marker, []byte(spaceID))
+	return appendRawPart(marker, []byte(datasetID))
+}
+
+func seriesHistoryPrefix(spaceID, datasetID string, selector historySelector) []byte {
+	prefix := []byte{seriesHistoryNamespace, timeSeriesKind}
+	prefix = appendRawPart(prefix, []byte(spaceID))
+	prefix = appendRawPart(prefix, []byte(datasetID))
+	prefix = appendRawPart(prefix, []byte(selector.subject))
+	prefix = appendRawPart(prefix, []byte(selector.freq))
+	if selector.hasTag {
+		prefix = appendRawPart(prefix, []byte(selector.tag))
+	}
+	return prefix
 }
 
 func historyTimeBound(prefix []byte, at time.Time) []byte {
@@ -582,4 +639,24 @@ func parseHistoryKey(key []byte) (*pb.RowKey, bool) {
 		return nil, false
 	}
 	return &pb.RowKey{SpaceId: parts[0], DatasetId: parts[1], Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{DataTime: parts[2], SubjectId: parts[3], Freq: parts[4], SeriesTag: parts[5]}}}, true
+}
+
+func parseSeriesHistoryKey(key []byte) (*pb.RowKey, bool) {
+	if len(key) < 2 || key[0] != seriesHistoryNamespace || key[1] != timeSeriesKind {
+		return nil, false
+	}
+	rest := key[2:]
+	parts := make([]string, 0, 6)
+	for i := 0; i < 6; i++ {
+		part, next, err := decodePart(rest)
+		if err != nil {
+			return nil, false
+		}
+		parts = append(parts, part)
+		rest = next
+	}
+	if len(parts) != 6 {
+		return nil, false
+	}
+	return &pb.RowKey{SpaceId: parts[0], DatasetId: parts[1], Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: parts[2], Freq: parts[3], SeriesTag: parts[4], DataTime: parts[5]}}}, true
 }

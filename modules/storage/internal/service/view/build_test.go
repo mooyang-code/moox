@@ -64,7 +64,7 @@ func TestPeriodBackfillUsesPrimaryInsteadOfCopyingActiveAndReportsRowsWritten(t 
 		PrimaryDatasetId: "market",
 		FilterJson:       `{"freq":"1m"}`,
 	}
-	metadata := &reconcileMetadata{view: view}
+	metadata := &maintenanceMetadata{view: view}
 	svc := &Service{
 		engines:        map[string]viewindex.Engine{"duckdb": engine},
 		indexEngine:    map[string]string{"prices-a": "duckdb", "prices-b": "duckdb"},

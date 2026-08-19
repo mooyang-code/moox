@@ -80,16 +80,15 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
   `MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT` 调整。
 - 每个 DuckDB View 最多打开 4 个连接、保留 1 个空闲连接，允许因子读取与实时写入并行，
   避免读取窗口把结果写入长期堵在单连接队列后。
-- View 角色按 `rebuild_check_interval`（重建检查周期）检查 DuckDB 文件大小；超过
-  `max_view_file_bytes` 且 View 有限 `keep_duration` 时启动 A/B 重建。新索引只
-  backfill 保留窗口，切换完成后按固定 grace 删除旧 DuckDB 文件，不在 active 索引
-  上逐行删除。配置统一使用：
-  `storage.view.rebuild_check_interval`、`storage.view.rebuild_lookback_periods`、
-  `storage.view.rebuild_lookback` 和 `storage.view.max_view_file_bytes`。
+- View Maintainer 按 `maintenance_check_interval` 检查 DuckDB 文件和每个序列的行数；任意
+  一个 `(subject_id, frequency, series_tag)` 超过 `max_periods_per_series` 即启动 A/B
+  重建，不等待其他序列。超过 `max_view_file_bytes` 也会触发容量重建。新索引只
+  backfill 保留窗口，切换完成后由独立 Cleanup Timer 删除旧 DuckDB 文件，不在 active
+  索引上逐行删除。完整策略来自包内 `storage-view/config/maintenance.json`，由根目录
+  `custom.toml` 的 `[storage_view]` 生成；支持 `system_monitor` 和精确 View 覆盖。
   时序 View 按每个 subject/frequency 回溯已完成的 K 线根数，不按自然时间计算，
   因此周末、节假日不会减少有效回溯量。默认所有频率均回溯 `1000` 根；根目录
-  `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一覆盖该值；全局 `rebuild_lookback`（默认 `24h`）
-  仅作为没有可解析 frequency 的旧 View 的兼容兜底。某个 subject 历史不足目标根数
+  `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一覆盖该值。某个 subject 历史不足目标根数
   时保持构建中，不发布不完整 View；`keep_duration` 仍只控制索引保留/容量整理，
   不再决定时序回填根数。
 - `moox-cli storage force-rebuild-view` 可在确认后删除 View 的 A/B 物理索引、清理
@@ -105,7 +104,7 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
   原因和阻塞原因连续跳过时会聚合 `skip_count`，不会按检查周期无限新增行。
 - 文件超限重建失败后使用固定 30 分钟的“超限重建重试间隔”，只抑制重复的全量回填尝试；
   Active View 继续提供查询和实时写入，desired revision 变化时立即允许新重建。
-- Desired Revision、关联 Dataset 或超过 `2 * keep_duration` 会触发 Reconcile。
+- Desired Revision、关联 Dataset 或超过 `2 * keep_duration` 会触发 Maintenance。
 - Metadata 激活后，DataView 原子切换 Active 索引；宽限期后删除 OldView。
 
 ## EventBus

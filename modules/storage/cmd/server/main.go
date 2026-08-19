@@ -354,24 +354,38 @@ func runViewRole() error {
 	)
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
-	rebuildCheckInterval, rebuildLookback, maxViewFileBytes, rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	rebuildCheckInterval, rebuildLookback, _, rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
 	if err != nil {
 		return err
 	}
-	reconcilerOptions := viewservice.ReconcilerOptions{
+	maintenancePolicy, err := storageViewMaintenancePolicy()
+	if err != nil {
+		return err
+	}
+	if policyInterval, parseErr := time.ParseDuration(strings.TrimSpace(maintenancePolicy.MaintenanceCheckInterval)); parseErr != nil || policyInterval < 30*time.Second {
+		return fmt.Errorf("storage view maintenance_check_interval must be at least 30s")
+	} else {
+		rebuildCheckInterval = policyInterval
+	}
+	if maintenancePolicy.MaxViewFileBytes <= 0 || maintenancePolicy.MaxPeriodsPerSeries <= maintenancePolicy.RebuildLookbackPeriods {
+		return errors.New("storage view maintenance policy limits are invalid")
+	}
+	maintenanceOptions := viewservice.MaintenanceOptions{
 		Metadata:                    metadataProxy,
 		Primary:                     primaryProxy,
 		PrimaryRange:                primaryProxy,
 		OwnerID:                     "storage-view",
 		Interval:                    rebuildCheckInterval,
 		RebuildLookback:             rebuildLookback,
-		RebuildLookbackPeriods:      storageViewRebuildPeriods(),
+		RebuildLookbackPeriods:      map[string]uint64{"default": maintenancePolicy.RebuildLookbackPeriods},
 		Grace:                       time.Minute,
-		MaxViewFileBytes:            maxViewFileBytes,
+		MaxViewFileBytes:            maintenancePolicy.MaxViewFileBytes,
 		RebuildMaxPending:           rebuildMaxPending,
 		RebuildIdleChecks:           rebuildIdleChecks,
 		RebuildMaxPendingConfigured: maxPendingConfigured,
 		RebuildIdleChecksConfigured: idleChecksConfigured,
+		Policy:                      maintenancePolicy,
+		MaxPeriodsPerSeries:         maintenancePolicy.MaxPeriodsPerSeries,
 	}
 	// Bind the listeners before opening/validating historical indexes. View
 	// restoration can still take time on a large deployment; keeping the
@@ -391,13 +405,22 @@ func runViewRole() error {
 	if err := storagebootstrap.RegisterMetricsReporter(s, "view"); err != nil {
 		return err
 	}
+	cleanupOptions := viewservice.RetiredIndexCleanupOptions{
+		Metadata:           metadataProxy,
+		MinUnreferencedAge: time.Minute,
+	}
+	if err := storagebootstrap.RegisterViewIndexCleanupTimer(s, func(ctx context.Context) error {
+		return svc.CleanupRetiredIndexes(ctx, cleanupOptions)
+	}); err != nil {
+		return err
+	}
 	if err := registerRoleHealth(s, "storage-view"); err != nil {
 		return err
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- s.Serve() }()
 	restoreStarted := time.Now()
-	if err := svc.RestoreActiveViews(trpc.BackgroundContext(), reconcilerOptions); err != nil {
+	if err := svc.RestoreActiveViews(trpc.BackgroundContext(), maintenanceOptions); err != nil {
 		observability.DefaultViewMetrics.ObserveRestore(false, time.Since(restoreStarted))
 		return err
 	}
@@ -423,12 +446,41 @@ func runViewRole() error {
 		return err
 	}
 	defer stopConsumer()
-	stopReconciler, err := svc.StartReconcilerAsync(trpc.BackgroundContext(), reconcilerOptions)
+	stopViewMaintainer, err := svc.StartViewMaintainerAsync(trpc.BackgroundContext(), maintenanceOptions)
 	if err != nil {
 		return err
 	}
-	defer stopReconciler()
+	defer stopViewMaintainer()
 	return <-serveErr
+}
+
+func storageViewMaintenancePolicy() (storageconfig.ViewMaintenancePolicy, error) {
+	policy := storageconfig.ViewMaintenancePolicy{
+		MaintenanceCheckInterval: "1m",
+		RebuildLookbackPeriods:   1000,
+		MaxPeriodsPerSeries:      2000,
+		MaxViewFileBytes:         1 << 30,
+	}
+	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if path == "" {
+		return policy, nil
+	}
+	var runtimeConfig storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
+		return policy, fmt.Errorf("load storage view maintenance config: %w", err)
+	}
+	policyPath := strings.TrimSpace(runtimeConfig.Storage.View.MaintenancePolicyFile)
+	if policyPath == "" {
+		return policy, nil
+	}
+	if !filepath.IsAbs(policyPath) {
+		// MOOX_STORAGE_CONFIG points at <package>/config/*.yaml while the
+		// deployed policy path is expressed from the package root.
+		packageRoot := filepath.Dir(filepath.Dir(path))
+		policyPath = filepath.Join(packageRoot, policyPath)
+	}
+	return storageconfig.LoadViewMaintenancePolicy(policyPath)
 }
 
 func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy pb.MetadataClientProxy, auth *pb.AuthInfo, options *viewservice.EventConsumerOptions) error {
@@ -643,68 +695,27 @@ func storageViewDeliverPolicy(configured string) string {
 	return configured
 }
 
-func storageViewRebuildPeriods() map[string]uint64 {
-	defaults := uniformRebuildPeriods(1000)
-	if raw := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS")); raw != "" {
-		if value, err := strconv.ParseUint(raw, 10, 64); err == nil && value > 0 && value <= 1_000_000 {
-			return uniformRebuildPeriods(value)
-		}
-	}
-	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
-	if path == "" {
-		return defaults
-	}
-	var runtimeConfig storageconfig.RuntimeConfig
-	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
-	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return defaults
-	}
-	if len(runtimeConfig.Storage.View.RebuildLookbackPeriods) == 0 {
-		return defaults
-	}
-	periods := make(map[string]uint64, len(runtimeConfig.Storage.View.RebuildLookbackPeriods))
-	for frequency, count := range runtimeConfig.Storage.View.RebuildLookbackPeriods {
-		frequency = strings.ToLower(strings.TrimSpace(frequency))
-		if frequency != "" && count > 0 {
-			periods[frequency] = count
-		}
-	}
-	if periods["default"] == 0 {
-		periods["default"] = defaults["default"]
-	}
-	return periods
-}
-
-func uniformRebuildPeriods(value uint64) map[string]uint64 {
-	return map[string]uint64{"1m": value, "1h": value, "1d": value, "default": value}
-}
-
 func storageViewRebuildSettings() (time.Duration, time.Duration, int64, uint64, uint32, bool, bool, error) {
 	const defaultInterval = time.Minute
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
-		lookback, err := rebuildLookbackOverride(24 * time.Hour)
-		return defaultInterval, lookback, 1 << 30, 32, 3, false, false, err
+		return defaultInterval, 24 * time.Hour, 1 << 30, 32, 3, false, false, nil
 	}
 	var runtimeConfig storageconfig.RuntimeConfig
 	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
 	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
 		return 0, 0, 0, 0, 0, false, false, fmt.Errorf("load storage view rebuild config: %w", err)
 	}
-	interval, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.RebuildCheckInterval))
+	interval, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.MaintenanceCheckInterval))
 	if err != nil || interval <= 0 {
-		return 0, 0, 0, 0, 0, false, false, fmt.Errorf("storage view rebuild_check_interval must be a positive duration")
+		return 0, 0, 0, 0, 0, false, false, fmt.Errorf("storage view maintenance_check_interval must be a positive duration")
 	}
 	if interval < 30*time.Second {
-		return 0, 0, 0, 0, 0, false, false, errors.New("storage view rebuild_check_interval must be at least 30s")
+		return 0, 0, 0, 0, 0, false, false, errors.New("storage view maintenance_check_interval must be at least 30s")
 	}
 	lookback, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.RebuildLookback))
 	if err != nil || lookback <= 0 {
 		return 0, 0, 0, 0, 0, false, false, errors.New("storage view rebuild_lookback must be a positive duration")
-	}
-	lookback, err = rebuildLookbackOverride(lookback)
-	if err != nil {
-		return 0, 0, 0, 0, 0, false, false, err
 	}
 	if runtimeConfig.Storage.View.MaxViewFileBytes <= 0 {
 		return 0, 0, 0, 0, 0, false, false, errors.New("storage view max_view_file_bytes must be positive")
@@ -716,18 +727,6 @@ func storageViewRebuildSettings() (time.Duration, time.Duration, int64, uint64, 
 	}
 	return interval, lookback, runtimeConfig.Storage.View.MaxViewFileBytes, runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
 		maxPendingConfigured, idleChecksConfigured, nil
-}
-
-func rebuildLookbackOverride(fallback time.Duration) (time.Duration, error) {
-	raw := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_REBUILD_LOOKBACK"))
-	if raw == "" {
-		return fallback, nil
-	}
-	lookback, err := time.ParseDuration(raw)
-	if err != nil || lookback <= 0 {
-		return 0, errors.New("MOOX_STORAGE_VIEW_REBUILD_LOOKBACK must be a positive duration")
-	}
-	return lookback, nil
 }
 
 func envOrDefault(name, fallback string) string {

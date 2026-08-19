@@ -155,6 +155,19 @@ rebuild_lookback_periods = 777
 	assert.Equal(t, uint64(777), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
 }
 
+func TestLoadRejectsSystemMonitorIdentityOverride(t *testing.T) {
+	body := validManifest + `
+[storage_view.system_monitor]
+space_id = "moox_system"
+view_id = "host_disk_view"
+`
+	root := t.TempDir()
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	if err == nil || !strings.Contains(err.Error(), "system_monitor must not set space_id or view_id") {
+		t.Fatalf("expected system monitor identity validation error, got %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidStorageViewRebuildLookbackPeriods(t *testing.T) {
 	for _, value := range []string{"0", "1000001"} {
 		t.Run(value, func(t *testing.T) {
@@ -193,6 +206,13 @@ freq = "1m"
 	assert.Equal(t, "bias", snapshot.Manifest.Factors.Items[0].FactorID)
 	assert.Equal(t, "all", snapshot.Manifest.Factors.Items[0].SubjectMode)
 	assert.Equal(t, "enabled", snapshot.Manifest.Factors.Items[0].Status)
+}
+
+func TestLoadDefaultsDisableFactors(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
+	require.NoError(t, err)
+	assert.False(t, snapshot.Manifest.Factors.Enabled)
 }
 
 func TestLoadMonitoringWeComWebhook(t *testing.T) {

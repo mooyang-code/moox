@@ -98,6 +98,7 @@ chmod +x "${HEALTH_SECRET_CLI}"
 export MOOX_HEALTH_SECRET_CLI="${HEALTH_SECRET_CLI}"
 export HOME="${TMP_ROOT}/home"
 mkdir -p "${HOME}/.config/moox/credentials" "${DEPLOY_DIR}/data"
+export MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64="$(printf '%s' '{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":2000},"views":[]}' | base64 | tr -d '\n')"
 printf 'fixture-encryption-key' >"${HOME}/.config/moox/credentials/admin-encryption-key"
 chmod 0600 "${HOME}/.config/moox/credentials/admin-encryption-key"
 : >"${DEPLOY_DIR}/data/admin.db"
@@ -203,17 +204,24 @@ assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB\}' "${DEPLOY_DIR}/start.sh"
-assert_grep 'MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS=\$\{MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS:-1000\}' "${DEPLOY_DIR}/start.sh"
+if grep -q 'MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS' "${DEPLOY_DIR}/start.sh"; then
+  echo "legacy Storage View lookback environment remains in package" >&2
+  exit 1
+fi
 if grep -q 'MOOX_STORAGE_VIEW_DELIVER_POLICY' "${DEPLOY_DIR}/start.sh"; then
   echo "unexpected global Storage View deliver policy override" >&2
   exit 1
 fi
-assert_grep '^    rebuild_check_interval: 1m$' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep '^    maintenance_check_interval: 1m$' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep '^    rebuild_max_pending: 32$' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep '^    rebuild_idle_checks: 3$' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
-for frequency in 1m 1h 1d default; do
-  assert_grep "^      ${frequency}: 1000$" "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
-done
+assert_file "${DEPLOY_DIR}/storage-view/config/maintenance.json"
+assert_grep '"max_periods_per_series": 2000' "${DEPLOY_DIR}/storage-view/config/maintenance.json"
+assert_grep 'maintenance_policy_file: config/maintenance.json' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'name: trpc.moox.storage.view.cleanup.timer' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'port: 20308' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'network: "\*/30 \* \* \* \* \*"' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'timeout: 20000' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 for durable in storage_view_kline_v2 storage_view_metrics_v2 storage_view_other_v2; do
   assert_grep "durable: ${durable}" "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 done
@@ -223,9 +231,11 @@ if grep -q 'storage_view_period_v1' "${DEPLOY_DIR}/storage-view/config/trpc_go.y
 fi
 assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{quoted_storage_view_duckdb_memory_limit\}' "${ROOT}/scripts/deploy-moox.sh"
 assert_grep '^MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=256MB$' "${DEPLOY_DIR}/config/components.env"
-assert_grep '^MOOX_INSTALLED_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS=1000$' "${DEPLOY_DIR}/config/components.env"
+if grep -Eq 'MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS|MOOX_INSTALLED_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS' "${DEPLOY_DIR}/config/components.env"; then
+  echo "legacy Storage View lookback settings remain in components.env" >&2
+  exit 1
+fi
 assert_grep '^MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-\$\{MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT\}\}$' "${DEPLOY_DIR}/config/components.env"
-assert_grep '^MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS=\$\{MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS:-\$\{MOOX_INSTALLED_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS\}\}$' "${DEPLOY_DIR}/config/components.env"
 assert_grep 'storage_internal_auth_mismatch_preflight' "${ROOT}/scripts/deploy-moox.sh"
 assert_grep 'check_storage_auth_files' "${DEPLOY_DIR}/healthcheck.sh"
 if grep -Eq 'wait_eventbus_storage_view_topology|storage_view durable topology' "${DEPLOY_DIR}/start.sh"; then

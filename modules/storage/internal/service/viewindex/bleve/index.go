@@ -334,6 +334,28 @@ func (i *Index) path(id string) (string, error) {
 	return filepath.Join(i.root, id), nil
 }
 
+func (i *Index) ListManagedIndexes(ctx context.Context) ([]string, error) {
+	entries, err := os.ReadDir(i.root)
+	if err != nil {
+		return nil, fmt.Errorf("list Bleve view indexes: %w", err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !entry.IsDir() || strings.Contains(entry.Name(), ".prepare-") {
+			continue
+		}
+		if _, err := viewindex.ParseViewIndexID(entry.Name()); err != nil {
+			continue
+		}
+		ids = append(ids, entry.Name())
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
 func (i *Index) readMeta(id string) (indexMeta, error) {
 	path, err := i.path(id)
 	if err != nil {

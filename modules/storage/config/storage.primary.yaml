@@ -17,7 +17,7 @@ storage:
     batch_size: 500
     batch_wait_ms: 200
     max_workers: 2
-    rebuild_check_interval: 1m
+    maintenance_check_interval: 1m
     rebuild_lookback: 72h
     max_view_file_bytes: 1073741824
   maintenance:

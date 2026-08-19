@@ -12,11 +12,14 @@ import (
 const (
 	layoutMarkerName       = "storage_layout_version"
 	layoutMarkerTempPrefix = "." + layoutMarkerName + ".tmp-"
-	// Version 3 adds the logical time-ordered history-row index. Existing
+	// Version 4 adds the subject-first series history index. Existing
+	// stores must materialize both derived namespaces before serving a history
+	// read; the legacy field namespace remains authoritative.
+	// Version 3 added the logical time-ordered history-row index. Existing
 	// stores cannot satisfy the rebuild lookback contract without that index;
 	// operators must perform the explicit reset-all operation instead of
 	// silently activating a View with an incomplete history.
-	layoutVersion = "3\n"
+	layoutVersion = "4\n"
 )
 
 func ensureLayout(path string) error {
@@ -32,9 +35,14 @@ func ensureLayout(path string) error {
 		case layoutVersion:
 			return cleanupLayoutMarkerTemps(path)
 		case "2\n":
-			// Version 3 adds a derived history namespace. The legacy field
+			// Version 4 adds derived history namespaces. The legacy field
 			// namespace remains readable, so upgrade the marker in place and
 			// let ensureHistoryIndex lazily materialize markers per dataset.
+			if err := upgradeLayoutMarker(path, markerPath); err != nil {
+				return err
+			}
+			return cleanupLayoutMarkerTemps(path)
+		case "3\n":
 			if err := upgradeLayoutMarker(path, markerPath); err != nil {
 				return err
 			}

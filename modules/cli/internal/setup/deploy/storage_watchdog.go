@@ -96,8 +96,16 @@ sudo -n systemctl enable moox-storage-view-watchdog.timer
 sudo -n systemctl restart moox-storage-view-watchdog.timer
 sudo -n systemctl is-enabled --quiet moox-storage-view-watchdog.timer
 sudo -n systemctl is-active --quiet moox-storage-view-watchdog.timer
-next=$(sudo -n systemctl show -p NextElapseUSecMonotonic --value moox-storage-view-watchdog.timer)
-[ -n "$next" ] && [ "$next" != infinity ] && [ "$next" != 0 ] || {
+armed=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  next=$(sudo -n systemctl show -p NextElapseUSecMonotonic --value moox-storage-view-watchdog.timer)
+  if [ -n "$next" ] && [ "$next" != infinity ] && [ "$next" != 0 ]; then
+    armed=1
+    break
+  fi
+  sleep 1
+done
+[ "$armed" = 1 ] || {
   echo storage_watchdog_timer_not_armed >&2
   exit 1
 }

@@ -155,7 +155,7 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 }
 
 // RequestViewRebuild records a revision-scoped manual rebuild request and
-// returns immediately. The View reconciler performs the A/B work in the
+// returns immediately. The View Maintainer performs the A/B work in the
 // background while the current active index remains readable.
 func (s *Service) RequestViewRebuild(ctx context.Context, req *pb.RequestViewRebuildReq) (*pb.RequestViewRebuildRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
@@ -175,7 +175,7 @@ func (s *Service) RequestViewRebuild(ctx context.Context, req *pb.RequestViewReb
 	if err != nil {
 		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	// Metadata is already committed and the reconciler can safely read it from
+	// Metadata is already committed and the View Maintainer can safely read it from
 	// SQLite. Cache publication is best-effort here; a transient cache failure
 	// must not make the browser retry and advance the revision again.
 	s.refreshMetadataCacheAfterCommit(ctx, "RequestViewRebuild")

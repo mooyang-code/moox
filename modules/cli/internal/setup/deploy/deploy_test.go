@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/require"
 )
@@ -308,15 +309,15 @@ func TestStoragePackagerUsesCompileHostBuildForLinuxCrossBuild(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "custom.toml"), []byte("placeholder"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "bin", "moox-cli"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "build-storage-linux.sh"), []byte("#!/bin/sh\nset -eu\n: \"${MOOX_CLI:?}\"\n: \"${CONFIG:?}\"\ntouch ./compiled\n"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ntest \"$MOOX_EVENTBUS_ENABLE_TLS\" = 1\ntest \"$MOOX_EVENTBUS_PUBLIC_IP\" = eventbus.example.test\ntest \"$MOOX_EVENTBUS_PORT\" = 4222\ntest \"$MOOX_STORAGE_PRIMARY_AUTH_SECRET\" = primary-secret\ntest \"$MOOX_STORAGE_VIEW_AUTH_SECRET\" = view-secret\ntest \"$MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS\" = 777\ntest \"$MOOX_HEALTH_AUTH_VERSION\" = moox-health-v1\ntest \"$MOOX_HEALTH_AUTH_ACCESS_KEY\" = monitor\ntest \"$MOOX_HEALTH_AUTH_SECRET_KEY\" = health-secret\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --no-gateway '*) ;; *) exit 4 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then printf package >\"$2\"; exit 0; fi\n  shift\ndone\nexit 3\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "scripts", "deploy-moox.sh"), []byte("#!/bin/sh\nset -eu\ntest -f ./compiled\ntest \"$MOOX_EVENTBUS_ENABLE_TLS\" = 1\ntest \"$MOOX_EVENTBUS_PUBLIC_IP\" = eventbus.example.test\ntest \"$MOOX_EVENTBUS_PORT\" = 4222\ntest \"$MOOX_STORAGE_PRIMARY_AUTH_SECRET\" = primary-secret\ntest \"$MOOX_STORAGE_VIEW_AUTH_SECRET\" = view-secret\ntest -n \"$MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64\"\ntest \"$MOOX_HEALTH_AUTH_VERSION\" = moox-health-v1\ntest \"$MOOX_HEALTH_AUTH_ACCESS_KEY\" = monitor\ntest \"$MOOX_HEALTH_AUTH_SECRET_KEY\" = health-secret\ncase \" $* \" in *' --skip-build '*) ;; *) exit 2 ;; esac\ncase \" $* \" in *' --no-gateway '*) ;; *) exit 4 ;; esac\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --archive ]; then printf package >\"$2\"; exit 0; fi\n  shift\ndone\nexit 3\n"), 0o700))
 
 	archive, err := (StoragePackager{}).Package(context.Background(), Options{
 		RepositoryRoot: root, PublicHost: "203.0.113.9", TargetGOOS: "linux", TargetGOARCH: "amd64",
 		UseControlGateway: true, EventBusPublicAddress: "eventbus.example.test",
 		EventBusPort: 4222, EventBusTLSEnabled: true,
 		StoragePrimarySecret: "primary-secret", StorageViewSecret: "view-secret",
-		StorageViewRebuildLookbackPeriods: 777,
-		HealthAuthVersion:                 "moox-health-v1", HealthAuthAccessKey: "monitor", HealthAuthSecretKey: "health-secret",
+		StorageViewPolicy: setupconfig.StorageView{MaintenanceCheckInterval: "1m", RebuildLookbackPeriods: 777, MaxPeriodsPerSeries: 1600, MaxViewFileBytes: 805306368},
+		HealthAuthVersion: "moox-health-v1", HealthAuthAccessKey: "monitor", HealthAuthSecretKey: "health-secret",
 	})
 	require.NoError(t, err)
 	defer os.Remove(archive)
@@ -344,7 +345,8 @@ func TestStoragePassesResetStorageDataAsBoundedPositionalFlag(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, install)
-	require.Equal(t, "1", install[len(install)-4], "reset is a bounded positional flag, not shell text")
+	require.Equal(t, "1", install[len(install)-5], "reset is a bounded positional flag, not shell text")
+	require.Equal(t, "0", install[len(install)-4], "view reset is a bounded positional flag")
 	require.Equal(t, "0", install[len(install)-3])
 	require.Regexp(t, `^[A-Za-z0-9._-]+$`, install[len(install)-2])
 	require.Equal(t, storageArchivePath(install[len(install)-2]), install[len(install)-1])
@@ -374,7 +376,7 @@ func TestStorageInstallerResetPreservesSecretsButDropsData(t *testing.T) {
 	previousArchive := storageArchivePath(token)
 	defer os.Remove(previousArchive)
 	require.NoError(t, copyFileForTest(archive, previousArchive))
-	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "1", "0", token, previousArchive)
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "1", "0", "0", token, previousArchive)
 	cmd.Env = storageInstallerEnv(t, home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
@@ -402,7 +404,7 @@ func TestStorageInstallerDefaultPreservesExistingData(t *testing.T) {
 	previousArchive := storageArchivePath(token)
 	defer os.Remove(previousArchive)
 	require.NoError(t, copyFileForTest(archive, previousArchive))
-	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0", token, previousArchive)
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0", "0", token, previousArchive)
 	cmd.Env = storageInstallerEnv(t, home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
@@ -432,7 +434,7 @@ func TestStorageInstallerUsesControlGatewayCredentials(t *testing.T) {
 	defer os.Remove(remoteArchive)
 	require.NoError(t, copyFileForTest(archive, remoteArchive))
 
-	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "1", token, remoteArchive)
+	cmd := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0", "1", token, remoteArchive)
 	cmd.Env = storageInstallerEnv(t, home)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
@@ -712,7 +714,7 @@ func TestStorageDelayedRollbackPreservesMovedData(t *testing.T) {
 	defer os.Remove(remoteArchive)
 	require.NoError(t, copyFileForTest(archive, remoteArchive))
 
-	install := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0", token, remoteArchive)
+	install := exec.Command("bash", "-c", installStorageScript, "moox-install-storage", "0", "0", "0", token, remoteArchive)
 	install.Env = storageInstallerEnv(t, home)
 	output, err := install.CombinedOutput()
 	require.NoError(t, err, string(output))
@@ -830,6 +832,10 @@ func TestRemoteInstallerScriptsParse(t *testing.T) {
 	require.Contains(t, installStorageScript, `for healthcheck in "$HOME"/moox/*/healthcheck.sh`, "an independently installed Storage package must register the host watchdog")
 	require.Contains(t, installStorageScript, `"$deploy.maintenance.lock"`, "storage install and host watchdogs must share the deployment maintenance lock")
 	require.Contains(t, installStorageScript, `"$deploy/start.sh" 8>&-`, "storage services must not inherit the deployment maintenance lock")
+	require.Contains(t, installStorageScript, `reset_view_data="$2"`, "view reset must be an explicit installer flag")
+	require.Contains(t, installStorageScript, `moox-storage-cli" reset-view-consumers`, "view reset must run before the new Storage process starts")
+	require.Contains(t, installStorageScript, `--maintenance-lock-held --yes`, "view reset must reuse the installer's maintenance lock")
+	require.Contains(t, installStorageScript, `credential="$HOME/.config/moox/eventbus/internal-admin.yaml"`, "view reset must use JetStream management credentials")
 	require.Contains(t, rollbackStorageScript, `"$deploy.maintenance.lock"`, "storage rollback must serialize with watchdogs")
 	require.Contains(t, rollbackStorageScript, `"$deploy/start.sh" 8>&-`, "rolled-back services must not inherit the deployment maintenance lock")
 	require.Contains(t, finalizeStorageScript, `-mtime +1`, "old tokenized staging directories must be reclaimed after a successful deployment")

@@ -39,6 +39,8 @@ An index is protected when any of the following is true:
 
 Metadata is authoritative. If the complete paginated View listing fails, the cleanup run performs no deletions and returns an error for tRPC timer observability.
 
+Protection keys include both engine and index ID. A DuckDB active index does not permanently protect a stale Bleve directory with the same logical A/B ID. Legacy rows without an engine are treated as wildcard protection and remain fail-closed.
+
 Only artifacts returned by a View engine's managed-index listing API are eligible. The cleaner does not walk outside the configured DuckDB or Bleve roots and does not accept arbitrary filesystem paths.
 
 ## Candidate Lifecycle
@@ -57,11 +59,13 @@ Each timer run follows this sequence:
 4. Remove protected indexes from the candidate map and clear matching retiring state.
 5. Record newly unreferenced indexes as candidates without deleting them.
 6. For candidates unreferenced for at least 60 seconds, acquire the per-index gate.
-7. Re-read Metadata and local runtime state while holding the cleanup guard.
+7. Re-read Metadata under the per-index gate and re-check local runtime state.
 8. Confirm the index remains unreferenced and its generation still matches.
 9. Call the engine's `Remove` method and then clear in-memory mappings and retiring state.
 
 A failed deletion remains a candidate and is retried by later tRPC timer runs. A failed metadata read never advances candidate age into a deletion decision.
+
+If a successful engine inventory proves that a retiring slot is already physically absent, the cleaner clears the in-memory retirement marker immediately. This lets an active-missing repair reuse that A/B slot instead of waiting for a candidate that can never be discovered.
 
 The 30-second schedule and 60-second minimum unreferenced age mean normal deletion occurs roughly 60 to 90 seconds after first observation.
 

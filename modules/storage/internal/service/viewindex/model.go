@@ -174,6 +174,13 @@ type Engine interface {
 	Remove(context.Context, string) error
 }
 
+// ManagedIndexLister returns only official physical index IDs owned by this
+// engine. Callers may remove returned IDs through Engine.Remove; filesystem
+// paths never cross this boundary.
+type ManagedIndexLister interface {
+	ListManagedIndexes(context.Context) ([]string, error)
+}
+
 // ExistenceChecker is the lightweight physical-index probe used by the live
 // event path. Stat may scan the whole index to calculate coverage and counts,
 // which is far too expensive to run before every row write.
@@ -184,10 +191,25 @@ type ExistenceChecker interface {
 // MetadataStatReader returns the persisted schema contract without scanning
 // all rows. Startup and restore only need to verify that an active index is
 // present and matches Metadata; the full Stat operation may execute COUNT/MIN
-// and MAX over a large DuckDB file and must remain on the periodic reconcile
+// and MAX over a large DuckDB file and must remain on the periodic View Maintainer
 // path.
 type MetadataStatReader interface {
 	StatMetadata(context.Context, string) (ViewIndexStats, error)
+}
+
+type SeriesCapacityResult struct {
+	Exceeded  bool
+	SubjectID string
+	Freq      string
+	SeriesTag string
+	Rows      uint64
+}
+
+// SeriesCapacityReader reports the first sequence whose physical row count
+// exceeds the configured limit. It is intentionally optional so record
+// indexes do not need to invent a time-series capacity model.
+type SeriesCapacityReader interface {
+	SeriesCapacity(context.Context, string, uint64) (SeriesCapacityResult, error)
 }
 
 func RowKeyID(k *pb.RowKey) string {

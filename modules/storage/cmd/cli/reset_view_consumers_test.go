@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	"github.com/mooyang-code/moox/packages/events"
 	_ "modernc.org/sqlite"
 )
@@ -24,6 +26,40 @@ func TestValidateResetViewConsumersRequiresExplicitConfirmation(t *testing.T) {
 	opts.dryRun = true
 	if err := validateResetViewConsumersOptions(opts); err != nil {
 		t.Fatalf("dry-run should not require confirmation: %v", err)
+	}
+}
+
+func TestStageResetViewIndexesRestoresBothSlots(t *testing.T) {
+	root := t.TempDir()
+	view := resetViewRecord{SpaceID: "crypto_market", ViewID: "kline", Engine: "duckdb"}
+	for _, slot := range []viewindex.Slot{viewindex.SlotA, viewindex.SlotB} {
+		id := viewindex.ViewIndexID(view.SpaceID, view.ViewID, slot)
+		path := filepath.Join(root, "duckdb", id+".duckdb")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(id), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staging, moves, err := stageResetViewIndexes(root, []resetViewRecord{view})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, move := range moves {
+		if _, err := os.Stat(move.original); !os.IsNotExist(err) {
+			t.Fatalf("original index still exists after staging: %s", move.original)
+		}
+	}
+	if err := restoreResetViewIndexes(moves); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(staging)
+	for _, slot := range []viewindex.Slot{viewindex.SlotA, viewindex.SlotB} {
+		id := viewindex.ViewIndexID(view.SpaceID, view.ViewID, slot)
+		if _, err := os.Stat(filepath.Join(root, "duckdb", id+".duckdb")); err != nil {
+			t.Fatalf("restored index missing: %v", err)
+		}
 	}
 }
 

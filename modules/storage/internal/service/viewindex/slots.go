@@ -23,8 +23,11 @@ func ParseViewIndexID(id string) (ViewIndexRef, error) {
 	}
 	ref.SpaceID = decode(parts[1][1:])
 	ref.ViewID = decode(parts[2][1:])
-	ref.Slot = normalizeSlot(Slot(parts[3]))
-	if ref.SpaceID == "" || ref.ViewID == "" {
+	if parts[3] != string(SlotA) && parts[3] != string(SlotB) {
+		return ref, errors.New("invalid view index slot")
+	}
+	ref.Slot = Slot(parts[3])
+	if ref.SpaceID == "" || ref.ViewID == "" || ViewIndexID(ref.SpaceID, ref.ViewID, ref.Slot) != id {
 		return ref, errors.New("invalid view index id")
 	}
 	return ref, nil

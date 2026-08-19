@@ -12,9 +12,24 @@ public_address = ""
 port = 4222
 tls_enabled = true
 
-# View 重建统一回溯的已完成 K 线根数，所有频率使用同一个值。
+# View 维护策略。每个时序序列超过 max_periods_per_series 即触发 A/B 重建，
+# 新 View 至少回溯 rebuild_lookback_periods 根已完成 K 线后才允许激活。
 [storage_view]
+maintenance_check_interval = "1m"
 rebuild_lookback_periods = 1000
+max_periods_per_series = 2000
+max_view_file_bytes = 1073741824
+
+# 系统监控 View 可单独配置；省略字段继承 storage_view 全局值。
+[storage_view.system_monitor]
+max_periods_per_series = 2000
+
+# 单个 View 覆盖优先级最高；省略字段继承 system_monitor 或全局值。
+[[storage_view.views]]
+space_id = "crypto_market"
+view_id = "binance_spot_kline_1m_view"
+rebuild_lookback_periods = 1000
+max_periods_per_series = 2000
 
 # 留空时仍采集和展示监控数据，但不发送站外告警。
 [monitoring]
@@ -24,7 +39,7 @@ wecom_webhook = ""
 # outputs 同时作为结果列的 display_name，例如 bias_20、ma_20。
 # 关闭默认因子导入请设置 factors.enabled = false；也可以复制条目改成自己的 View、频率和参数。
 [factors]
-enabled = true
+enabled = false
 source_dir = "./examples/factors"
 
 [[factors.items]]

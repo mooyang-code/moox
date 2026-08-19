@@ -34,7 +34,7 @@ func TestOpenInitializesLayoutMarkerForNewAndEmptyPaths(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(data) != "3\n" {
+			if string(data) != "4\n" {
 				t.Fatalf("layout marker = %q", data)
 			}
 		})

@@ -117,7 +117,7 @@ func TestReplacementFailurePersistenceRetriesBeforeAcknowledgingRedelivery(t *te
 	svc.byData = map[datasetRef]map[string]struct{}{
 		{spaceID: "space", datasetID: "market"}: {"prices-a": {}, "prices-b": {}},
 	}
-	metadata := &reconcileMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", ActiveIndexId: "prices-a"}, failErr: errors.New("metadata temporarily unavailable")}
+	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", ActiveIndexId: "prices-a"}, failErr: errors.New("metadata temporarily unavailable")}
 	runtime := svc.views[key]
 	runtime.active = "prices-a"
 	runtime.next = "prices-b"

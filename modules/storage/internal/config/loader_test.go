@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,8 +28,8 @@ func TestStorageConfigRolesAreExplicit(t *testing.T) {
 func TestStorageViewRebuildDefaults(t *testing.T) {
 	cfg := StorageConfig{}
 	cfg.ApplyDefaults()
-	if cfg.View.RebuildCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 || cfg.View.RebuildLookback != "24h" {
-		t.Fatalf("view rebuild defaults = %q/%d/%d/%d/%s", cfg.View.RebuildCheckInterval, cfg.View.MaxViewFileBytes, cfg.View.RebuildMaxPending, cfg.View.RebuildIdleChecks, cfg.View.RebuildLookback)
+	if cfg.View.MaintenanceCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 || cfg.View.RebuildLookback != "24h" {
+		t.Fatalf("view rebuild defaults = %q/%d/%d/%d/%s", cfg.View.MaintenanceCheckInterval, cfg.View.MaxViewFileBytes, cfg.View.RebuildMaxPending, cfg.View.RebuildIdleChecks, cfg.View.RebuildLookback)
 	}
 	want := map[string]uint64{"1m": 1000, "1h": 1000, "1d": 1000, "default": 1000}
 	for frequency, periods := range want {
@@ -57,6 +58,29 @@ func TestStorageViewRebuildLookbackPeriodsNormalizeFrequency(t *testing.T) {
 	cfg.ApplyDefaults()
 	if cfg.Storage.View.RebuildLookbackPeriods["1h"] != 123 || cfg.Storage.View.RebuildLookbackPeriods["30s"] != 456 || cfg.Storage.View.RebuildLookbackPeriods["default"] != 1000 {
 		t.Fatalf("normalized rebuild periods = %#v", cfg.Storage.View.RebuildLookbackPeriods)
+	}
+}
+
+func TestLoadViewMaintenancePolicyRejectsUnknownFieldsAndResolvesOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "maintenance.json")
+	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":3000},"views":[{"space_id":"crypto_market","view_id":"binance_spot_kline_1m_view","rebuild_lookback_periods":500}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := LoadViewMaintenancePolicy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := policy.ResolvePolicy("moox_system", "host_disk_view"); got.MaxPeriodsPerSeries != 3000 {
+		t.Fatalf("system policy=%#v", got)
+	}
+	if got := policy.ResolvePolicy("crypto_market", "binance_spot_kline_1m_view"); got.RebuildLookbackPeriods != 500 || got.MaxPeriodsPerSeries != 2000 {
+		t.Fatalf("view policy=%#v", got)
+	}
+	if err := os.WriteFile(path, []byte(`{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"unexpected":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadViewMaintenancePolicy(path); err == nil {
+		t.Fatal("unknown maintenance policy field was accepted")
 	}
 }
 
@@ -311,8 +335,8 @@ func TestStorageViewRebuildConfigDefaults(t *testing.T) {
 	if cfg.View.IndexServiceName != "trpc.moox.storage.ViewIndex" {
 		t.Fatalf("index service name = %q", cfg.View.IndexServiceName)
 	}
-	if cfg.View.RebuildCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 {
-		t.Fatalf("rebuild config defaults = %q/%d", cfg.View.RebuildCheckInterval, cfg.View.MaxViewFileBytes)
+	if cfg.View.MaintenanceCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 {
+		t.Fatalf("rebuild config defaults = %q/%d", cfg.View.MaintenanceCheckInterval, cfg.View.MaxViewFileBytes)
 	}
 	cleanup := cfg.Maintenance.HostMetricsCleanup
 	if !cleanup.IsEnabled() || cleanup.MaxAge != "48h" || cleanup.BatchSize != 1000 || cleanup.MaxBatchesPerRun != 10 || len(cleanup.DatasetIDs) != 4 {
@@ -368,7 +392,7 @@ storage:
     view_index_root: /indexes
   view:
     index_service_name: custom.ViewIndex
-    rebuild_check_interval: 2h
+    maintenance_check_interval: 2h
     max_view_file_bytes: 805306368
 `)
 	var cfg RuntimeConfig
@@ -380,8 +404,8 @@ storage:
 	if cfg.Storage.Devices.ViewIndexRoot != "/indexes" || cfg.Storage.View.IndexServiceName != "custom.ViewIndex" {
 		t.Fatalf("owner config = %q/%q", cfg.Storage.Devices.ViewIndexRoot, cfg.Storage.View.IndexServiceName)
 	}
-	if cfg.Storage.View.RebuildCheckInterval != "2h" || cfg.Storage.View.MaxViewFileBytes != 805306368 || cfg.Storage.View.RebuildMaxPending != 32 || cfg.Storage.View.RebuildIdleChecks != 3 || cfg.Storage.View.RebuildLookback != "24h" {
-		t.Fatalf("rebuild config = %q/%d/%d/%d/%s", cfg.Storage.View.RebuildCheckInterval, cfg.Storage.View.MaxViewFileBytes, cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks, cfg.Storage.View.RebuildLookback)
+	if cfg.Storage.View.MaintenanceCheckInterval != "2h" || cfg.Storage.View.MaxViewFileBytes != 805306368 || cfg.Storage.View.RebuildMaxPending != 32 || cfg.Storage.View.RebuildIdleChecks != 3 || cfg.Storage.View.RebuildLookback != "24h" {
+		t.Fatalf("rebuild config = %q/%d/%d/%d/%s", cfg.Storage.View.MaintenanceCheckInterval, cfg.Storage.View.MaxViewFileBytes, cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks, cfg.Storage.View.RebuildLookback)
 	}
 }
 

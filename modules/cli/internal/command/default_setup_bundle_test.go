@@ -87,7 +87,7 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		key := dataset.SpaceID + "/" + dataset.DatasetID
 		require.Positive(t, columnCount[key], "Dataset %s has no columns", key)
-		if dataset.DatasetID != "binance_spot_symbols" && dataset.DatasetID != "binance_swap_symbols" {
+		if dataset.SpaceID != "stock_cn" && dataset.DatasetID != "binance_spot_symbols" && dataset.DatasetID != "binance_swap_symbols" {
 			require.Positive(t, viewCount[key], "Dataset %s has no View", key)
 		}
 	}

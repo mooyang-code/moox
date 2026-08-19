@@ -16,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-type reconcileMetadata struct {
+type maintenanceMetadata struct {
 	view         *pb.View
 	activated    bool
 	claims       int
@@ -27,31 +27,61 @@ type reconcileMetadata struct {
 	failErr      error
 }
 
-func (m *reconcileMetadata) ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error) {
+// capacityMaintenanceMetadata records the audit calls made by a real
+// maintainer pass while retaining the lightweight metadata fake used by the
+// surrounding lifecycle tests.
+type capacityMaintenanceMetadata struct {
+	maintenanceMetadata
+	created *pb.ViewRebuildLog
+	updated []*pb.ViewRebuildLog
+}
+
+func (m *capacityMaintenanceMetadata) CreateViewRebuildLog(_ context.Context, req *pb.CreateViewRebuildLogReq, _ ...client.Option) (*pb.CreateViewRebuildLogRsp, error) {
+	m.created = proto.Clone(req.GetLog()).(*pb.ViewRebuildLog)
+	return &pb.CreateViewRebuildLogRsp{RetInfo: successRetInfo(), Log: proto.Clone(m.created).(*pb.ViewRebuildLog)}, nil
+}
+
+func (m *capacityMaintenanceMetadata) UpdateViewRebuildLog(_ context.Context, req *pb.UpdateViewRebuildLogReq, _ ...client.Option) (*pb.UpdateViewRebuildLogRsp, error) {
+	log := proto.Clone(req.GetLog()).(*pb.ViewRebuildLog)
+	m.updated = append(m.updated, log)
+	return &pb.UpdateViewRebuildLogRsp{RetInfo: successRetInfo(), Log: log}, nil
+}
+
+func (m *capacityMaintenanceMetadata) ListViewRebuildLogs(context.Context, *pb.ListViewRebuildLogsReq, ...client.Option) (*pb.ListViewRebuildLogsRsp, error) {
+	return &pb.ListViewRebuildLogsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 100}}, nil
+}
+
+func (m *capacityMaintenanceMetadata) UpsertSkippedViewRebuildLog(_ context.Context, req *pb.UpsertSkippedViewRebuildLogReq, _ ...client.Option) (*pb.UpsertSkippedViewRebuildLogRsp, error) {
+	log := proto.Clone(req.GetLog()).(*pb.ViewRebuildLog)
+	m.updated = append(m.updated, log)
+	return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: successRetInfo(), Log: log}, nil
+}
+
+func (m *maintenanceMetadata) ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error) {
 	return &pb.ListViewsRsp{RetInfo: successRetInfo(), Views: []*pb.View{m.view}, PageResult: &pb.PageResult{Page: 1, Size: 100}}, nil
 }
-func (m *reconcileMetadata) GetDataset(_ context.Context, req *pb.GetDatasetReq, _ ...client.Option) (*pb.GetDatasetRsp, error) {
+func (m *maintenanceMetadata) GetDataset(_ context.Context, req *pb.GetDatasetReq, _ ...client.Option) (*pb.GetDatasetRsp, error) {
 	kind := pb.DataKind_DATA_KIND_RECORD
 	if req.GetDatasetId() == "prices" {
 		kind = pb.DataKind_DATA_KIND_TIME_SERIES
 	}
 	return &pb.GetDatasetRsp{RetInfo: successRetInfo(), Dataset: &pb.Dataset{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), DataKind: kind}}, nil
 }
-func (m *reconcileMetadata) ListDatasetSubjects(context.Context, *pb.ListDatasetSubjectsReq, ...client.Option) (*pb.ListDatasetSubjectsRsp, error) {
+func (m *maintenanceMetadata) ListDatasetSubjects(context.Context, *pb.ListDatasetSubjectsReq, ...client.Option) (*pb.ListDatasetSubjectsRsp, error) {
 	return &pb.ListDatasetSubjectsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
 }
-func (m *reconcileMetadata) ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error) {
+func (m *maintenanceMetadata) ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error) {
 	return &pb.ListDatasetColumnsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
 }
-func (m *reconcileMetadata) ClaimViewIndexBuild(_ context.Context, req *pb.ClaimViewIndexBuildReq, _ ...client.Option) (*pb.ClaimViewIndexBuildRsp, error) {
+func (m *maintenanceMetadata) ClaimViewIndexBuild(_ context.Context, req *pb.ClaimViewIndexBuildReq, _ ...client.Option) (*pb.ClaimViewIndexBuildRsp, error) {
 	m.claims++
 	m.claimedIndex = req.GetIndexId()
 	return &pb.ClaimViewIndexBuildRsp{RetInfo: successRetInfo(), Build: &pb.ViewIndexBuild{BuildId: req.GetBuildId(), State: pb.ViewIndexBuild_PREPARING}}, nil
 }
-func (m *reconcileMetadata) UpdateViewIndexBuild(_ context.Context, req *pb.UpdateViewIndexBuildReq, _ ...client.Option) (*pb.UpdateViewIndexBuildRsp, error) {
+func (m *maintenanceMetadata) UpdateViewIndexBuild(_ context.Context, req *pb.UpdateViewIndexBuildReq, _ ...client.Option) (*pb.UpdateViewIndexBuildRsp, error) {
 	return &pb.UpdateViewIndexBuildRsp{RetInfo: successRetInfo(), Build: &pb.ViewIndexBuild{BuildId: req.GetBuildId(), State: req.GetNextState()}}, nil
 }
-func (m *reconcileMetadata) ActivateViewIndex(context.Context, *pb.ActivateViewIndexReq, ...client.Option) (*pb.ActivateViewIndexRsp, error) {
+func (m *maintenanceMetadata) ActivateViewIndex(context.Context, *pb.ActivateViewIndexReq, ...client.Option) (*pb.ActivateViewIndexRsp, error) {
 	m.activated = true
 	if m.activateErr != nil {
 		return nil, m.activateErr
@@ -67,7 +97,7 @@ func (m *reconcileMetadata) ActivateViewIndex(context.Context, *pb.ActivateViewI
 	return &pb.ActivateViewIndexRsp{RetInfo: ret, View: view}, nil
 }
 
-func (m *reconcileMetadata) FailViewIndexBuild(context.Context, *pb.FailViewIndexBuildReq, ...client.Option) (*pb.FailViewIndexBuildRsp, error) {
+func (m *maintenanceMetadata) FailViewIndexBuild(context.Context, *pb.FailViewIndexBuildReq, ...client.Option) (*pb.FailViewIndexBuildRsp, error) {
 	m.failCalls++
 	if m.failErr != nil {
 		err := m.failErr
@@ -104,10 +134,10 @@ func TestNeedsRebuildTriggers(t *testing.T) {
 	if needsRebuild(permanent, wide) {
 		t.Fatal("permanent view triggered time-based rebuild")
 	}
-	if !needsSizeLimitRebuild(base, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 512}, ReconcilerOptions{MaxViewFileBytes: 512}) {
+	if !needsCapacityMaintenanceRebuild(base, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 512}, MaintenanceOptions{MaxViewFileBytes: 512}) {
 		t.Fatal("physical byte watermark did not trigger rebuild")
 	}
-	if needsSizeLimitRebuild(permanent, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 40}, ReconcilerOptions{MaxViewFileBytes: 1}) {
+	if needsCapacityMaintenanceRebuild(permanent, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 40}, MaintenanceOptions{MaxViewFileBytes: 1}) {
 		t.Fatal("permanent view triggered an unrecoverable physical rebuild")
 	}
 }
@@ -172,60 +202,60 @@ func TestNeedsLookbackRepairDetectsShortTimeSeriesCoverage(t *testing.T) {
 	}
 }
 
-func TestSizeLimitBuildCooldownPreventsImmediateRepeat(t *testing.T) {
+func TestCapacityMaintenanceBuildCooldownPreventsImmediateRepeat(t *testing.T) {
 	s := &Service{views: map[viewRef]*viewRuntime{}}
 	runtime := &viewRuntime{}
 	s.views[viewRef{spaceID: "s", viewID: "v"}] = runtime
 	now := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
-	s.markSizeLimitBuild("s", "v", now)
-	if s.sizeLimitBuildAllowed("s", "v", now.Add(1*time.Minute)) {
+	s.markCapacityMaintenanceBuild("s", "v", now)
+	if s.capacityMaintenanceBuildAllowed("s", "v", now.Add(1*time.Minute)) {
 		t.Fatal("size-limit rebuild was allowed before cooldown elapsed")
 	}
-	if !s.sizeLimitBuildAllowed("s", "v", now.Add(sizeLimitRebuildRetryInterval)) {
+	if !s.capacityMaintenanceBuildAllowed("s", "v", now.Add(capacityMaintenanceRetryInterval)) {
 		t.Fatal("size-limit rebuild remained blocked after cooldown elapsed")
 	}
 }
 
-func TestSizeLimitBuildWaitsForConsumerToBecomeIdle(t *testing.T) {
+func TestCapacityMaintenanceBuildWaitsForConsumerToBecomeIdle(t *testing.T) {
 	s := &Service{}
 	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
-		return jetstream.ConsumerState{NumPending: sizeLimitBuildBacklogThreshold, NumAckPending: 1}, nil
+		return jetstream.ConsumerState{NumPending: capacityMaintenanceBuildBacklogThreshold, NumAckPending: 1}, nil
 	}
-	if s.sizeLimitBuildIdle(context.Background()) {
+	if s.capacityMaintenanceBuildIdle(context.Background()) {
 		t.Fatal("size-limit rebuild was allowed while the consumer had backlog")
 	}
 	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
 		return jetstream.ConsumerState{}, nil
 	}
-	if !s.sizeLimitBuildIdle(context.Background()) {
+	if !s.capacityMaintenanceBuildIdle(context.Background()) {
 		t.Fatal("size-limit rebuild remained blocked after the consumer became idle")
 	}
 	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
 		return jetstream.ConsumerState{NumPending: 1, NumAckPending: 1}, nil
 	}
-	if !s.sizeLimitBuildIdle(context.Background()) {
+	if !s.capacityMaintenanceBuildIdle(context.Background()) {
 		t.Fatal("one poison delivery permanently blocked all size-limit rebuilds")
 	}
 	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
 		return jetstream.ConsumerState{}, errors.New("eventbus unavailable")
 	}
-	if s.sizeLimitBuildIdle(context.Background()) {
+	if s.capacityMaintenanceBuildIdle(context.Background()) {
 		t.Fatal("optional size-limit rebuild failed open when backlog state was unavailable")
 	}
 }
 
-func TestSizeLimitBuildRequiresConsecutiveIdleChecks(t *testing.T) {
+func TestCapacityMaintenanceBuildRequiresConsecutiveIdleChecks(t *testing.T) {
 	s := &Service{}
 	s.consumerState = func(context.Context) (jetstream.ConsumerState, error) {
 		return jetstream.ConsumerState{}, nil
 	}
 	ref := viewRef{spaceID: "space", viewID: "metrics"}
 	for i := uint32(1); i < defaultRebuildIdleChecks; i++ {
-		if s.sizeLimitBuildIdleFor(context.Background(), ref, defaultRebuildMaxPending, defaultRebuildIdleChecks) {
+		if s.capacityMaintenanceBuildIdleFor(context.Background(), ref, defaultRebuildMaxPending, defaultRebuildIdleChecks) {
 			t.Fatalf("size-limit gate opened after %d idle checks", i)
 		}
 	}
-	if !s.sizeLimitBuildIdleFor(context.Background(), ref, defaultRebuildMaxPending, defaultRebuildIdleChecks) {
+	if !s.capacityMaintenanceBuildIdleFor(context.Background(), ref, defaultRebuildMaxPending, defaultRebuildIdleChecks) {
 		t.Fatal("size-limit gate did not open after consecutive idle checks")
 	}
 	if s.tryAcquireRebuild() == false || s.tryAcquireRebuild() == true {
@@ -239,8 +269,8 @@ func TestFailedMaintenanceBuildStopsWhenWatermarkIsCleared(t *testing.T) {
 		SpaceId: "s", ViewId: "v", ActiveIndexId: "idx",
 		DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h",
 	}
-	sizeLimitExceeded := needsSizeLimitRebuild(view, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 20}, ReconcilerOptions{MaxViewFileBytes: 1 << 30})
-	if sizeLimitExceeded {
+	capacityMaintenanceExceeded := needsCapacityMaintenanceRebuild(view, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 20}, MaintenanceOptions{MaxViewFileBytes: 1 << 30})
+	if capacityMaintenanceExceeded {
 		t.Fatal("watermark unexpectedly exceeded")
 	}
 	// A failed maintenance build with an unchanged revision is safe to stop;
@@ -250,7 +280,7 @@ func TestFailedMaintenanceBuildStopsWhenWatermarkIsCleared(t *testing.T) {
 		t.Fatal("test view is not revision-stable")
 	}
 	failed := &pb.ViewIndexBuild{UpdatedAt: "2026-08-12T00:00:00Z"}
-	if shouldRetryFailedBuild(view, failed, sizeLimitExceeded, time.Date(2026, 8, 12, 0, 1, 0, 0, time.UTC)) {
+	if shouldRetryFailedBuild(view, failed, capacityMaintenanceExceeded, time.Date(2026, 8, 12, 0, 1, 0, 0, time.UTC)) {
 		t.Fatal("failed maintenance build kept retrying after watermark cleared")
 	}
 	view.DesiredViewRevision++
@@ -259,7 +289,7 @@ func TestFailedMaintenanceBuildStopsWhenWatermarkIsCleared(t *testing.T) {
 	}
 }
 
-func TestFailedSizeLimitBuildWaitsForCooldown(t *testing.T) {
+func TestFailedCapacityMaintenanceBuildWaitsForCooldown(t *testing.T) {
 	view := &pb.View{DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h"}
 	failed := &pb.ViewIndexBuild{UpdatedAt: "2026-08-12T00:00:00Z"}
 	if shouldRetryFailedBuild(view, failed, true, time.Date(2026, 8, 12, 0, 29, 59, 0, time.UTC)) {
@@ -274,7 +304,7 @@ func TestFailedBuildMissingActiveIsNotHeldBySizeCooldown(t *testing.T) {
 	view := &pb.View{ActiveIndexId: "idx", DesiredViewRevision: 1, ActiveViewRevision: 1, KeepDuration: "24h"}
 	failed := &pb.ViewIndexBuild{UpdatedAt: "2026-08-12T00:00:00Z"}
 	stats := viewindex.ViewIndexStats{Exists: false, PhysicalBytes: 1 << 40}
-	if !needsSizeLimitRebuild(view, stats, ReconcilerOptions{MaxViewFileBytes: 1}) {
+	if !needsCapacityMaintenanceRebuild(view, stats, MaintenanceOptions{MaxViewFileBytes: 1}) {
 		t.Fatal("missing active physical index should request repair")
 	}
 	if !shouldRetryFailedBuildWithCause(view, failed, true, false, time.Date(2026, 8, 12, 0, 1, 0, 0, time.UTC)) {
@@ -282,12 +312,12 @@ func TestFailedBuildMissingActiveIsNotHeldBySizeCooldown(t *testing.T) {
 	}
 }
 
-func TestReconcilerCreatesAndActivatesInitialView(t *testing.T) {
+func TestMaintainerCreatesAndActivatesInitialView(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := &reconcileMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "records", Engine: "bleve",
 		PrimaryDatasetId:    "records",
 		DesiredViewRevision: 1,
@@ -295,7 +325,7 @@ func TestReconcilerCreatesAndActivatesInitialView(t *testing.T) {
 			SpaceId: "space", ViewId: "records", OriginId: "records.title", ColumnName: "records.title",
 		}},
 	}}
-	stop, err := svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Interval: time.Hour})
+	stop, err := svc.StartViewMaintainer(context.Background(), MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,11 +357,11 @@ func TestRestoreActiveViewsAttachesExistingPhysicalIndex(t *testing.T) {
 	// Restore must select the engine from View metadata. A fresh Service has
 	// no indexID -> engine mapping yet; that mapping is created by attach.
 	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1}}
-	metadata := &reconcileMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
 	}}
-	if err := svc.RestoreActiveViews(context.Background(), ReconcilerOptions{Metadata: metadata}); err != nil {
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
 		t.Fatalf("restore active view: %v", err)
 	}
 	svc.mu.RLock()
@@ -358,11 +388,11 @@ func TestRestoreActiveViewsFailsWhenMetadataActiveIndexIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.engines["bleve"] = &queryEngine{}
-	metadata := &reconcileMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
 		ActiveIndexId: "missing-active", ActiveViewRevision: 1, DesiredViewRevision: 1,
 	}}
-	if err := svc.RestoreActiveViews(context.Background(), ReconcilerOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "missing") {
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("restore missing active error = %v", err)
 	}
 }
@@ -373,11 +403,11 @@ func TestRestoreActiveViewsRejectsPhysicalContractMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: "old"}}
-	metadata := &reconcileMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 2, ActiveViewSchemaHash: "new",
 	}}
-	if err := svc.RestoreActiveViews(context.Background(), ReconcilerOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "contract mismatch") {
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "contract mismatch") {
 		t.Fatalf("restore mismatch error = %v", err)
 	}
 }
@@ -412,8 +442,8 @@ func TestActivateResponseErrorReadsBackCommittedActiveIndex(t *testing.T) {
 	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare: rsp=%v err=%v", prepared, err)
 	}
-	metadata := &reconcileMetadata{view: &pb.View{SpaceId: "space", ViewId: "records", PrimaryDatasetId: "records", DatasetIds: []string{"records"}, ActiveIndexId: "records-a", ActiveViewRevision: 1, DesiredViewRevision: 2, Engine: "bleve", ActiveColumns: columns}, activateErr: errors.New("response lost")}
-	gotErr := svc.activateViewBuild(ctx, ReconcilerOptions{Metadata: metadata, OwnerID: "storage-view", Grace: time.Hour}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns)
+	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "records", PrimaryDatasetId: "records", DatasetIds: []string{"records"}, ActiveIndexId: "records-a", ActiveViewRevision: 1, DesiredViewRevision: 2, Engine: "bleve", ActiveColumns: columns}, activateErr: errors.New("response lost")}
+	gotErr := svc.activateViewBuild(ctx, MaintenanceOptions{Metadata: metadata, OwnerID: "storage-view", Grace: time.Hour}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns)
 	if gotErr == nil {
 		t.Fatal("expected activation retry when readback does not commit")
 	}
@@ -421,7 +451,7 @@ func TestActivateResponseErrorReadsBackCommittedActiveIndex(t *testing.T) {
 	// committed it. Simulate the Metadata transaction having committed before
 	// the response was lost and retry.
 	metadata.view.ActiveIndexId = indexID
-	if err := svc.activateViewBuild(ctx, ReconcilerOptions{Metadata: metadata, OwnerID: "storage-view", Grace: time.Hour}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns); err != nil {
+	if err := svc.activateViewBuild(ctx, MaintenanceOptions{Metadata: metadata, OwnerID: "storage-view", Grace: time.Hour}, auth, metadata.view, "build-1", indexID, "bleve", 2, "schema-2", columns); err != nil {
 		t.Fatalf("readback activation: %v", err)
 	}
 	svc.mu.RLock()
@@ -434,7 +464,7 @@ func TestActivateResponseErrorReadsBackCommittedActiveIndex(t *testing.T) {
 	}
 }
 
-func TestReconcilerBlocksLegacyInFlightViewWithoutActiveContract(t *testing.T) {
+func TestMaintainerBlocksLegacyInFlightViewWithoutActiveContract(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
@@ -442,27 +472,27 @@ func TestReconcilerBlocksLegacyInFlightViewWithoutActiveContract(t *testing.T) {
 	// Make the physical active index look healthy so reconciliation reaches
 	// AttachActiveView rather than silently starting a replacement build.
 	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1}}
-	metadata := &reconcileMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 2,
 		DatasetIds: []string{"prices", "fundamentals"},
 	}}
-	_, err = svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Interval: time.Hour})
+	_, err = svc.StartViewMaintainer(context.Background(), MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
 	if !errors.Is(err, errActiveContractUnavailable) {
-		t.Fatalf("StartReconciler error=%v, want active-contract migration error", err)
+		t.Fatalf("StartViewMaintainer error=%v, want active-contract migration error", err)
 	}
 }
 
-func TestReconcilerUsesDatasetKindForTimeSeriesWithoutGrainKeys(t *testing.T) {
+func TestMaintainerUsesDatasetKindForTimeSeriesWithoutGrainKeys(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := &reconcileMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", PrimaryDatasetId: "prices", DesiredViewRevision: 1,
 		Columns: []*pb.ViewColumn{{SpaceId: "space", ViewId: "prices", OriginId: "prices.close", ColumnName: "prices.close"}},
 	}}
-	stop, err := svc.StartReconciler(context.Background(), ReconcilerOptions{Metadata: metadata, Interval: time.Hour})
+	stop, err := svc.StartViewMaintainer(context.Background(), MaintenanceOptions{Metadata: metadata, Interval: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +508,7 @@ func TestReconcilerUsesDatasetKindForTimeSeriesWithoutGrainKeys(t *testing.T) {
 	}
 }
 
-func TestReconcileStatsActiveIndexBeforeAttachingIt(t *testing.T) {
+func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
@@ -490,9 +520,9 @@ func TestReconcileStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 		SpaceId: "space", ViewId: "prices", Engine: "duckdb", PrimaryDatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
 	}
-	err = svc.reconcileView(context.Background(), ReconcilerOptions{}, svc.internalAuth(), view)
+	err = svc.maintainView(context.Background(), MaintenanceOptions{}, svc.internalAuth(), view)
 	if !errors.Is(err, statErr) {
-		t.Fatalf("reconcile error=%v want=%v", err, statErr)
+		t.Fatalf("maintenance error=%v want=%v", err, statErr)
 	}
 	svc.mu.RLock()
 	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
@@ -510,18 +540,18 @@ func TestReconcileStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 	}
 }
 
-func TestReconcileRebuildsMissingPhysicalActiveIndex(t *testing.T) {
+func TestMaintenanceRebuildsMissingPhysicalActiveIndex(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
 	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: false}}
 	svc.engines["duckdb"] = engine
-	metadata := &reconcileMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "duckdb", PrimaryDatasetId: "prices",
 		ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
 	}}
-	err = svc.reconcileView(context.Background(), ReconcilerOptions{
+	err = svc.maintainView(context.Background(), MaintenanceOptions{
 		Metadata: metadata, OwnerID: "owner",
 	}, svc.internalAuth(), metadata.view)
 	if err == nil || !strings.Contains(err.Error(), "cannot be rebuilt without a range reader") {

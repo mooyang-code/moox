@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -20,36 +22,38 @@ import (
 	"strings"
 	"time"
 
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
 type Options struct {
-	RepositoryRoot                    string
-	PublicHost                        string
-	NodeID                            string
-	BrowserPort                       int
-	TargetGOOS                        string
-	TargetGOARCH                      string
-	ResetControlData                  bool
-	ResetStorageData                  bool
-	UseControlGateway                 bool
-	EventBusPublicAddress             string
-	EventBusPort                      int
-	EventBusTLSEnabled                bool
-	MonitoringWeComWebhook            string
-	StoragePrimarySecret              string
-	StorageViewSecret                 string
-	StorageViewRebuildLookbackPeriods uint64
-	HealthAuthVersion                 string
-	HealthAuthAccessKey               string
-	HealthAuthSecretKey               string
-	InstallStorageWatchdog            bool
-	GatewayControlURL                 string
-	GatewayControlKey                 string
-	GatewayServiceKey                 string
-	GatewayCABundle                   []byte
-	TLSMode                           TLSMode
+	RepositoryRoot         string
+	PublicHost             string
+	NodeID                 string
+	BrowserPort            int
+	TargetGOOS             string
+	TargetGOARCH           string
+	ResetControlData       bool
+	ResetStorageData       bool
+	ResetViewData          bool
+	UseControlGateway      bool
+	EventBusPublicAddress  string
+	EventBusPort           int
+	EventBusTLSEnabled     bool
+	MonitoringWeComWebhook string
+	StoragePrimarySecret   string
+	StorageViewSecret      string
+	StorageViewPolicy      setupconfig.StorageView
+	HealthAuthVersion      string
+	HealthAuthAccessKey    string
+	HealthAuthSecretKey    string
+	InstallStorageWatchdog bool
+	GatewayControlURL      string
+	GatewayControlKey      string
+	GatewayServiceKey      string
+	GatewayCABundle        []byte
+	TLSMode                TLSMode
 }
 
 type TLSMode string
@@ -157,8 +161,12 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	if opts.UseControlGateway {
 		controlGateway = "1"
 	}
+	viewReset := "0"
+	if opts.ResetViewData {
+		viewReset = "1"
+	}
 	if _, err := transport.Run(ctx, []string{
-		"sh", "-lc", installStorageScript, "moox-install-storage", reset, controlGateway, activationToken, remoteArchive,
+		"sh", "-lc", installStorageScript, "moox-install-storage", reset, viewReset, controlGateway, activationToken, remoteArchive,
 	}, nil); err != nil {
 		return fmt.Errorf("storage_install_failed")
 	}
@@ -596,7 +604,14 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		"MOOX_STORAGE_PRIMARY_AUTH_SECRET="+opts.StoragePrimarySecret,
 		"MOOX_STORAGE_VIEW_AUTH_SECRET="+opts.StorageViewSecret,
 	)
-	command.Env = setCommandEnv(command.Env, "MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS", strconv.FormatUint(storageViewRebuildLookbackPeriods(opts.StorageViewRebuildLookbackPeriods), 10))
+	policyPayload, err := json.Marshal(opts.StorageViewPolicy)
+	if err != nil {
+		_ = os.Remove(archive)
+		return "", fmt.Errorf("encode storage view maintenance policy: %w", err)
+	}
+	// Keep standard padding: the deployment shell validates the payload with
+	// Python's strict base64 decoder, which intentionally rejects raw encoding.
+	command.Env = setCommandEnv(command.Env, "MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64", base64.StdEncoding.EncodeToString(policyPayload))
 	if strings.TrimSpace(opts.HealthAuthVersion) == "" ||
 		strings.TrimSpace(opts.HealthAuthAccessKey) == "" ||
 		strings.TrimSpace(opts.HealthAuthSecretKey) == "" {
@@ -613,13 +628,6 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	return archive, nil
-}
-
-func storageViewRebuildLookbackPeriods(value uint64) uint64 {
-	if value == 0 {
-		return 1000
-	}
-	return value
 }
 
 func setCommandEnv(base []string, key, value string) []string {
@@ -748,10 +756,13 @@ func probeCommand(stage ReadinessStage) string {
 const installStorageScript = `set -eu
 install_storage() {
   reset_storage_data="$1"
-  use_control_gateway="$2"
-  activation_token="$3"
-  archive="$4"
+  reset_view_data="$2"
+  use_control_gateway="$3"
+  activation_token="$4"
+  archive="$5"
   case "$reset_storage_data" in 0|1) ;; *) echo storage_reset_invalid >&2; return 1 ;; esac
+  case "$reset_view_data" in 0|1) ;; *) echo storage_view_reset_invalid >&2; return 1 ;; esac
+  if [ "$reset_storage_data" = "1" ] && [ "$reset_view_data" = "1" ]; then echo storage_reset_flags_mutually_exclusive >&2; return 1; fi
   case "$use_control_gateway" in 0|1) ;; *) echo storage_gateway_invalid >&2; return 1 ;; esac
   case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo storage_activation_token_invalid >&2; return 1 ;; esac
   [ "$archive" = "/tmp/moox-storage-$activation_token.tar.gz" ] || { echo storage_archive_invalid >&2; return 1; }
@@ -852,7 +863,7 @@ install_storage() {
   fi
   if [ -d "$deploy" ]; then mv "$deploy" "$previous"; date +%s >"$previous/.storage-staged-at"; fi
   mv "$next" "$deploy"
-  if ! "$deploy/start.sh" 8>&-; then
+  rollback_failed_install() {
     "$deploy/stop.sh" || true
     restore_data="$root/storage.data.restore"
     rm -rf "$restore_data"
@@ -866,9 +877,28 @@ install_storage() {
       "$deploy/start.sh" 8>&- || true
     fi
     return 1
+  }
+  if [ "$reset_view_data" = "1" ]; then
+		# Reset needs JetStream management permissions (consumer delete and
+		# subject purge); the storage consumer credential is intentionally scoped
+		# to data delivery and cannot publish to $JS.API.STREAM.INFO.*.
+		credential="$HOME/.config/moox/eventbus/internal-admin.yaml"
+    [ -r "$credential" ] || { echo storage_view_reset_credential_missing >&2; rollback_failed_install; return 1; }
+    if ! "$deploy/bin/moox-storage-cli" reset-view-consumers \
+      --storage-conf "$deploy/storage/config/storage.yaml" \
+      --package-root "$deploy" \
+      --credential-file "$credential" \
+      --restart=false --maintenance-lock-held --yes; then
+      echo storage_view_reset_failed >&2
+      rollback_failed_install
+      return 1
+    fi
+  fi
+  if ! "$deploy/start.sh" 8>&-; then
+    rollback_failed_install
   fi
 }
-install_storage "$1" "$2" "$3" "$4"
+install_storage "$1" "$2" "$3" "$4" "$5"
 `
 
 const rollbackStorageScript = `set -eu

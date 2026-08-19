@@ -162,6 +162,30 @@ moox-cli storage force-rebuild-view \
 重新消费 Source 事件；原 View 历史数据不可恢复。`--lookback` 是本次重建的最低历史覆盖要求，
 新索引未覆盖该时长前不会被激活。
 
+## 收敛默认 View 集合
+
+新项目只保留三个行情 View 和五个系统监控 View。需要删除其他 View 定义时，先停止
+`storage-view`，再执行一次性元数据收敛命令：
+
+```bash
+/home/<user>/moox/storage/bin/moox-storage-cli retain-views \
+  --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
+  --package-root /home/<user>/moox/storage \
+  --keep-view crypto_market/binance_spot_kline_1m_view \
+  --keep-view crypto_market/perpetual_kline_1h_view \
+  --keep-view crypto_market/spot_kline_1h_view \
+  --keep-view moox_system/host_resource_view \
+  --keep-view moox_system/host_fs_view \
+  --keep-view moox_system/host_disk_view \
+  --keep-view moox_system/host_net_view \
+  --keep-view moox_system/moox_service_metrics_view \
+  --yes
+```
+
+命令要求精确传入八个活动 View，并且 `storage-view` 必须已经停止。它只删除 SQLite
+中的非保留 View、列、构建和日志记录，输出待清理的 `engine/index_id`；不会直接删除
+物理 A/B 文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
+
 Storage 服务的时序 View 默认按所有频率回溯 `1000` 根；可在根目录
 `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 统一调整，适用于自动 A/B、启动恢复和手动
 重建。无 frequency 的旧 View 才使用 `storage.view.rebuild_lookback`（默认 `24h`）兜底；若 Source

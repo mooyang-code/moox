@@ -21,10 +21,15 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 	if beforeBucket.IsZero() {
 		return 0, invalid("before bucket is required")
 	}
+	// History materialization and TTL deletion must not interleave. Otherwise
+	// an old field snapshot can republish markers after cleanup and the
+	// completion marker would permanently bless stale history.
+	s.historyBackfillMu.Lock()
+	defer s.historyBackfillMu.Unlock()
 	before := beforeBucket.UTC().Format(canonicalTimeLayout)
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	ranges := make([][2][]byte, 0, 3)
+	ranges := make([][2][]byte, 0, 4)
 	buckets := make(map[string]struct{})
 	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
 		prefix := []byte{namespace, timeSeriesKind}
@@ -69,11 +74,75 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 		}
 		ranges = append(ranges, [2][]byte{historyPrefix, historyUpper})
 	}
+	// The subject-first index has tag before data_time, so one dataset-wide
+	// DeleteRange cannot express the TTL boundary. Walk one key per
+	// (subject,freq,tag) group and seek directly to the next tag prefix. The
+	// first key in a group is its oldest row, so this avoids rescanning every
+	// marker on every hourly cleanup tick.
+	seriesDatasetPrefix := []byte{seriesHistoryNamespace, timeSeriesKind}
+	seriesDatasetPrefix = appendRawPart(seriesDatasetPrefix, []byte(spaceID))
+	seriesDatasetPrefix = appendRawPart(seriesDatasetPrefix, []byte(datasetID))
+	expiredSeries := 0
+	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: seriesDatasetPrefix, UpperBound: nextPrefix(seriesDatasetPrefix)})
+	if err != nil {
+		return 0, err
+	}
+	for valid := iter.First(); valid; {
+		if err := ctx.Err(); err != nil {
+			_ = iter.Close()
+			return 0, err
+		}
+		key, ok := parseSeriesHistoryKey(iter.Key())
+		if !ok || key.GetTimeSeries() == nil {
+			valid = iter.Next()
+			continue
+		}
+		series := key.GetTimeSeries()
+		tagPrefix := seriesHistoryPrefix(spaceID, datasetID, historySelector{
+			subject: series.GetSubjectId(),
+			freq:    series.GetFreq(),
+			tag:     series.GetSeriesTag(),
+			hasTag:  true,
+		})
+		nextTagPrefix := nextPrefix(tagPrefix)
+		// Keys inside a tag prefix are ordered by canonical data_time. A
+		// malformed legacy timestamp is left untouched rather than causing a
+		// broad delete; the next cleanup can retry after repair.
+		if _, parseErr := time.Parse(canonicalTimeLayout, series.GetDataTime()); parseErr == nil && series.GetDataTime() < before {
+			upper := appendPart(append([]byte(nil), tagPrefix...), before)
+			if err := batch.DeleteRange(tagPrefix, upper, s.writeOptions); err != nil {
+				_ = iter.Close()
+				return 0, err
+			}
+			ranges = append(ranges, [2][]byte{tagPrefix, upper})
+			expiredSeries++
+		}
+		if nextTagPrefix == nil {
+			break
+		}
+		valid = iter.SeekGE(nextTagPrefix)
+	}
+	iterErr := iter.Error()
+	_ = iter.Close()
+	if iterErr != nil {
+		return 0, iterErr
+	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return 0, err
 	}
 	for _, bounds := range ranges {
+		// The subject-first index can have hundreds of tag ranges. Compact it
+		// once per dataset instead of starting one goroutine per series.
+		if len(bounds[0]) >= 2 && bounds[0][0] == seriesHistoryNamespace {
+			continue
+		}
 		s.compactAsync(bounds[0], bounds[1])
+	}
+	if expiredSeries > 0 {
+		seriesCompactPrefix := []byte{seriesHistoryNamespace, timeSeriesKind}
+		seriesCompactPrefix = appendRawPart(seriesCompactPrefix, []byte(spaceID))
+		seriesCompactPrefix = appendRawPart(seriesCompactPrefix, []byte(datasetID))
+		s.compactAsync(seriesCompactPrefix, nextPrefix(seriesCompactPrefix))
 	}
 	return uint64(len(buckets)), nil
 }

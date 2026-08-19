@@ -27,9 +27,9 @@ import (
 )
 
 type resetViewConsumersOptions struct {
-	storageConf, packageRoot, stream, credentialFile, eventBusURL string
-	timeout, lookback                                             time.Duration
-	yes, dryRun, resetAllStorageData, restart                     bool
+	storageConf, packageRoot, stream, credentialFile, eventBusURL  string
+	timeout, lookback                                              time.Duration
+	yes, dryRun, resetAllStorageData, restart, maintenanceLockHeld bool
 }
 
 type resetViewConsumersSummary struct {
@@ -51,6 +51,11 @@ type resetViewRecord struct {
 	DatasetIDs                                               []string
 }
 
+type resetIndexMove struct {
+	original string
+	staged   string
+}
+
 func runResetViewConsumers(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("reset-view-consumers", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -69,6 +74,9 @@ func runResetViewConsumers(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "inspect the operation without mutating state")
 	fs.BoolVar(&opts.resetAllStorageData, "reset-all-storage-data", false, "also delete Primary Pebble/outbox data")
 	fs.BoolVar(&opts.restart, "restart", opts.restart, "restart storage-view after reset")
+	// The storage installer already owns the package maintenance lock. This
+	// internal flag avoids a child process waiting on its parent's flock.
+	fs.BoolVar(&opts.maintenanceLockHeld, "maintenance-lock-held", false, "internal: caller already holds the package maintenance lock")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -96,7 +104,7 @@ func validateResetViewConsumersOptions(opts resetViewConsumersOptions) error {
 	return nil
 }
 
-func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, stdout, stderr io.Writer) error {
+func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, stdout, stderr io.Writer) (retErr error) {
 	storage, err := loadStorage(opts.storageConf)
 	if err != nil {
 		return err
@@ -105,11 +113,13 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		return fmt.Errorf("refusing destructive reset with invalid consumer topology: %w", err)
 	}
 	packageRoot := resolveRepairPackageRoot(opts.packageRoot, opts.storageConf)
-	unlock, err := acquireResetMaintenanceLock(ctx, packageRoot)
-	if err != nil {
-		return err
+	if !opts.maintenanceLockHeld {
+		unlock, err := acquireResetMaintenanceLock(ctx, packageRoot)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 	}
-	defer unlock()
 	storage = resolveRepairStoragePaths(storage, packageRoot, opts.storageConf)
 	dbPath := metadataDBPath(storage)
 	views, err := listResetViewRecords(ctx, dbPath)
@@ -133,6 +143,12 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	if opts.dryRun {
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: "reset-view-consumers", Status: "dry_run", Summary: summary})
 	}
+	// Complete all non-destructive EventBus checks before touching local
+	// metadata or index files. A missing credential, invalid URL, unavailable
+	// stream, or failed NATS connection must remain fully recoverable.
+	if err := preflightResetEventBus(ctx, opts, storage.View, views); err != nil {
+		return fmt.Errorf("preflight EventBus reset: %w", err)
+	}
 	// Metadata and Primary/DataNode share the same deployment transaction as
 	// View. Stop the whole Storage role before touching SQLite/Pebble so the
 	// backup and destructive reset cannot race an RPC writer or an open Pebble
@@ -145,18 +161,37 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	stopped := true
 	started := false
 	resetCommitted := false
+	backupPath := ""
+	recoveryOK := true
 	defer func() {
-		if stopped && !started && opts.restart && resetCommitted {
+		if stopped && !started && !resetCommitted && backupPath != "" {
+			if restoreErr := restoreRepairDB(backupPath, dbPath); restoreErr != nil {
+				recoveryOK = false
+				retErr = fmt.Errorf("%w; storage metadata recovery failed: %v", retErr, restoreErr)
+			}
+		}
+		if stopped && !started && !resetCommitted && recoveryOK {
 			_ = runStorageComponentLifecycle(context.Background(), packageRoot, "start", lifecycleService, opts.lookback, stderr)
 		}
 	}()
-	if _, err := backupRepairDB(dbPath); err != nil {
+	backupPath, err = backupRepairDB(dbPath)
+	if err != nil {
 		return fmt.Errorf("backup storage metadata: %w", err)
 	}
-	if err := resetStorageViewConsumers(ctx, opts, storage.View, views); err != nil {
-		return err
+	stagingDir, stagedIndexes, err := stageResetViewIndexes(storage.Devices.ViewIndexRoot, views)
+	if err != nil {
+		return fmt.Errorf("stage View indexes for reset recovery: %w", err)
 	}
-	summary.QueuePurged = true
+	defer func() {
+		if resetCommitted {
+			_ = os.RemoveAll(stagingDir)
+			return
+		}
+		if restoreErr := restoreResetViewIndexes(stagedIndexes); restoreErr != nil {
+			recoveryOK = false
+			retErr = fmt.Errorf("%w; View index recovery failed: %v", retErr, restoreErr)
+		}
+	}()
 	for _, view := range views {
 		if err := resetRepairViewMetadata(ctx, dbPath, view.SpaceID, view.ViewID, nextViewRevision(view.DesiredRevision)); err != nil {
 			return fmt.Errorf("reset View metadata %s/%s: %w", view.SpaceID, view.ViewID, err)
@@ -168,6 +203,21 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		}
 	}
 	summary.ViewMetadataReset = true
+	// Purge the EventBus only after local metadata and physical files have been
+	// staged/reset successfully.
+	mutationStarted, err := resetStorageViewConsumers(ctx, opts, storage.View, views)
+	if err != nil {
+		// Once a broker mutation may have happened, the old local incarnation
+		// cannot be restored safely because its pending events are gone. Keep the
+		// reset state and leave Storage stopped so the operator can retry.
+		if mutationStarted {
+			resetCommitted = true
+		}
+		return err
+	}
+	// From this point both local state and EventBus state are committed.
+	resetCommitted = true
+	summary.QueuePurged = true
 	if opts.resetAllStorageData {
 		paths := []string{storage.Devices.PebblePath, filepath.Join(packageRoot, "data", "storage-node", "pebble")}
 		seen := make(map[string]struct{}, len(paths))
@@ -186,7 +236,6 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		}
 		summary.PrimaryDataRemoved = true
 	}
-	resetCommitted = true
 	if opts.restart {
 		if err := runStorageComponentLifecycle(ctx, packageRoot, "start", lifecycleService, opts.lookback, stderr); err != nil {
 			return fmt.Errorf("start storage-view: %w", err)
@@ -204,6 +253,119 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	}
 	stopped = false
 	return writeOperationResult(stdout, operationResult{Module: "storage", Action: "reset-view-consumers", Status: "ok", Summary: summary})
+}
+
+func resetViewIndexPaths(root, engine, id string) []string {
+	if id == "" {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "duckdb":
+		return []string{filepath.Join(root, "duckdb", id+".duckdb"), filepath.Join(root, "duckdb", id+".duckdb.wal")}
+	case "bleve":
+		return []string{filepath.Join(root, "bleve", id)}
+	default:
+		return nil
+	}
+}
+
+// stageResetViewIndexes moves both A/B slots out of the live inventory before
+// any metadata or stream mutation. A failed reset can therefore put the
+// physical files back before the old package is restarted.
+func stageResetViewIndexes(root string, views []resetViewRecord) (string, []resetIndexMove, error) {
+	if strings.TrimSpace(root) == "" {
+		return "", nil, errors.New("View index root is required")
+	}
+	stagingDir := filepath.Join(root, ".reset-"+time.Now().UTC().Format("20060102T150405.000000000Z"))
+	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
+		return "", nil, err
+	}
+	var moves []resetIndexMove
+	restore := func() {
+		_ = restoreResetViewIndexes(moves)
+		_ = os.RemoveAll(stagingDir)
+	}
+	for _, view := range views {
+		ids := []string{
+			viewindex.ViewIndexID(view.SpaceID, view.ViewID, viewindex.SlotA),
+			viewindex.ViewIndexID(view.SpaceID, view.ViewID, viewindex.SlotB),
+		}
+		for _, original := range resetViewIndexPaths(root, view.Engine, ids[0]) {
+			if _, err := os.Stat(original); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				restore()
+				return "", nil, err
+			}
+			rel, err := filepath.Rel(root, original)
+			if err != nil {
+				restore()
+				return "", nil, err
+			}
+			staged := filepath.Join(stagingDir, rel)
+			if err := os.MkdirAll(filepath.Dir(staged), 0o700); err != nil {
+				restore()
+				return "", nil, err
+			}
+			if err := os.Rename(original, staged); err != nil {
+				restore()
+				return "", nil, err
+			}
+			moves = append(moves, resetIndexMove{original: original, staged: staged})
+		}
+		for _, original := range resetViewIndexPaths(root, view.Engine, ids[1]) {
+			if _, err := os.Stat(original); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				restore()
+				return "", nil, err
+			}
+			rel, err := filepath.Rel(root, original)
+			if err != nil {
+				restore()
+				return "", nil, err
+			}
+			staged := filepath.Join(stagingDir, rel)
+			if err := os.MkdirAll(filepath.Dir(staged), 0o700); err != nil {
+				restore()
+				return "", nil, err
+			}
+			if err := os.Rename(original, staged); err != nil {
+				restore()
+				return "", nil, err
+			}
+			moves = append(moves, resetIndexMove{original: original, staged: staged})
+		}
+	}
+	return stagingDir, moves, nil
+}
+
+func restoreResetViewIndexes(moves []resetIndexMove) error {
+	var firstErr error
+	for i := len(moves) - 1; i >= 0; i-- {
+		move := moves[i]
+		if _, err := os.Stat(move.staged); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(move.original), 0o700); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if _, err := os.Stat(move.original); err == nil {
+			_ = os.RemoveAll(move.original)
+		}
+		if err := os.Rename(move.staged, move.original); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func acquireResetMaintenanceLock(ctx context.Context, packageRoot string) (func(), error) {
@@ -414,7 +576,7 @@ func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord
 	return result, rows.Err()
 }
 
-func resetStorageViewConsumers(ctx context.Context, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) error {
+func preflightResetEventBus(ctx context.Context, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) error {
 	credentialPath := resolveRepairCredentialFile(opts.credentialFile)
 	if credentialPath == "" {
 		return errors.New("NATS admin credential is required; pass --credential-file or MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE")
@@ -449,15 +611,78 @@ func resetStorageViewConsumers(ctx context.Context, opts resetViewConsumersOptio
 	if err != nil {
 		return err
 	}
-	for _, durable := range []string{events.StorageViewLegacyBroadConsumer, events.StorageViewLegacyConsumer, events.StorageViewKlineConsumer, events.StorageViewMetricsConsumer, events.StorageViewOtherConsumer} {
-		if err := js.DeleteConsumer(opts.stream, durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
-			return fmt.Errorf("delete consumer %s: %w", durable, err)
-		}
+	if _, err := js.StreamInfo(opts.stream, nats.Context(ctx)); err != nil {
+		return fmt.Errorf("inspect stream %s: %w", opts.stream, err)
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return err
 	}
+	if _, err := resetEventSubjects(registry, viewConfig, views); err != nil {
+		return err
+	}
+	return nil
+}
+
+func resetStorageViewConsumers(ctx context.Context, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) (mutationStarted bool, err error) {
+	credentialPath := resolveRepairCredentialFile(opts.credentialFile)
+	if credentialPath == "" {
+		return false, errors.New("NATS admin credential is required; pass --credential-file or MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE")
+	}
+	cred, err := jetstream.LoadCredentialFile(credentialPath)
+	if err != nil {
+		return false, err
+	}
+	urls := cred.URLs
+	if strings.TrimSpace(opts.eventBusURL) != "" {
+		urls = []string{strings.TrimSpace(opts.eventBusURL)}
+	}
+	if err := validatePurgeEventBusURLs(urls, cred.CAFile); err != nil {
+		return false, err
+	}
+	natsOpts := []nats.Option{nats.Name("moox-storage-cli-reset-view-consumers"), nats.UserInfo(cred.Username, cred.Password), nats.Timeout(15 * time.Second)}
+	if cred.CAFile != "" {
+		caPath := jetstream.ExpandCredentialPath(cred.CAFile)
+		if !filepath.IsAbs(caPath) {
+			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
+		}
+		if err := appendNATSTLSOptions(&natsOpts, caPath); err != nil {
+			return false, err
+		}
+	}
+	nc, err := nats.Connect(strings.Join(urls, ","), natsOpts...)
+	if err != nil {
+		return false, err
+	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		return false, err
+	}
+	for _, durable := range []string{events.StorageViewLegacyBroadConsumer, events.StorageViewLegacyConsumer, events.StorageViewKlineConsumer, events.StorageViewMetricsConsumer, events.StorageViewOtherConsumer} {
+		mutationStarted = true
+		if err := js.DeleteConsumer(opts.stream, durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+			return mutationStarted, fmt.Errorf("delete consumer %s: %w", durable, err)
+		}
+	}
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return mutationStarted, err
+	}
+	ordered, err := resetEventSubjects(registry, viewConfig, views)
+	if err != nil {
+		return mutationStarted, err
+	}
+	for _, subject := range ordered {
+		mutationStarted = true
+		if err := js.PurgeStream(opts.stream, &nats.StreamPurgeRequest{Subject: subject}, nats.Context(ctx)); err != nil {
+			return mutationStarted, fmt.Errorf("purge stream %s subject %s: %w", opts.stream, subject, err)
+		}
+	}
+	return mutationStarted, nil
+}
+
+func resetEventSubjects(registry *events.Registry, viewConfig storageconfig.StorageView, views []resetViewRecord) ([]string, error) {
 	// This command is intentionally destructive: all View histories, including
 	// record/Bleve histories, are discarded and recreated from the post-reset
 	// stream. There is no compatibility-preservation exception.
@@ -465,12 +690,21 @@ func resetStorageViewConsumers(ctx context.Context, opts resetViewConsumersOptio
 	subjects := make(map[string]struct{})
 	for _, partition := range viewConfig.ConsumerPartitions {
 		for _, dataset := range partition.Datasets() {
-			for _, event := range eventsToPurge {
-				subject, renderErr := registry.RenderSubject(event, dataset.SpaceID, dataset.DatasetID)
-				if renderErr != nil {
-					return fmt.Errorf("render purge subject %s/%s: %w", dataset.SpaceID, dataset.DatasetID, renderErr)
+			datasetIDs := []string{dataset.DatasetID}
+			if dataset.DatasetID == "*" {
+				datasetIDs = datasetIDsForWildcardRoute(dataset.SpaceID, views)
+				if len(datasetIDs) == 0 {
+					return nil, fmt.Errorf("cannot expand wildcard purge route for space %s: no View dataset is known", dataset.SpaceID)
 				}
-				subjects[subject] = struct{}{}
+			}
+			for _, datasetID := range datasetIDs {
+				for _, event := range eventsToPurge {
+					subject, renderErr := registry.RenderSubject(event, dataset.SpaceID, datasetID)
+					if renderErr != nil {
+						return nil, fmt.Errorf("render purge subject %s/%s: %w", dataset.SpaceID, datasetID, renderErr)
+					}
+					subjects[subject] = struct{}{}
+				}
 			}
 		}
 	}
@@ -479,10 +713,30 @@ func resetStorageViewConsumers(ctx context.Context, opts resetViewConsumersOptio
 		ordered = append(ordered, subject)
 	}
 	slices.Sort(ordered)
-	for _, subject := range ordered {
-		if err := js.PurgeStream(opts.stream, &nats.StreamPurgeRequest{Subject: subject}, nats.Context(ctx)); err != nil {
-			return fmt.Errorf("purge stream %s subject %s: %w", opts.stream, subject, err)
+	return ordered, nil
+}
+
+func datasetIDsForWildcardRoute(spaceID string, views []resetViewRecord) []string {
+	seen := make(map[string]struct{})
+	for _, view := range views {
+		if view.SpaceID != spaceID {
+			continue
+		}
+		ids := view.DatasetIDs
+		if len(ids) == 0 && view.PrimaryDatasetID != "" {
+			ids = []string{view.PrimaryDatasetID}
+		}
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id != "" && id != "*" {
+				seen[id] = struct{}{}
+			}
 		}
 	}
-	return nil
+	result := make([]string, 0, len(seen))
+	for id := range seen {
+		result = append(result, id)
+	}
+	slices.Sort(result)
+	return result
 }

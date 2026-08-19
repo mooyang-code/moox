@@ -12,7 +12,7 @@ import (
 )
 
 // RequestViewRebuild advances only the desired View revision. The active
-// index and its coverage remain untouched until the reconciler has prepared,
+// index and its coverage remain untouched until the View Maintainer has prepared,
 // backfilled, and atomically activated the replacement index.
 func (s *Store) RequestViewRebuild(ctx context.Context, spaceID, viewID string) (*pb.View, error) {
 	if spaceID == "" || viewID == "" {
@@ -61,7 +61,7 @@ func (s *Store) RequestViewRebuild(ctx context.Context, spaceID, viewID string) 
 			return nil, err
 		}
 		// No build row means the first request may have committed while the
-		// reconciler has not claimed it yet. Treat that retry as idempotent;
+		// View Maintainer has not claimed it yet. Treat that retry as idempotent;
 		// only a recorded failed build permits an explicit retry to advance the
 		// revision again.
 		if activeBuilds > 0 || failedBuilds == 0 {
@@ -101,7 +101,7 @@ func (s *Store) RequestViewRebuild(ctx context.Context, spaceID, viewID string) 
 		return s.GetView(ctx, spaceID, viewID)
 	}
 	// A failed build for the previous revision must not prevent the requested
-	// revision from being claimed by the reconciler.
+	// revision from being claimed by the View Maintainer.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM t_view_index_builds
 		WHERE c_space_id = ? AND c_view_id = ? AND c_status = 'failed'

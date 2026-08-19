@@ -39,7 +39,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns bo
 	if replaceColumns {
 		// proto3 repeated fields do not carry presence. Persist the explicit
 		// replacement intent so an intentionally empty projection is not later
-		// expanded to the primary dataset's default columns by the reconciler.
+		// expanded to the primary dataset's default columns by the View Maintainer.
 		if next.Attributes == nil {
 			next.Attributes = make(map[string]string)
 		}

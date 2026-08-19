@@ -92,7 +92,7 @@ func TestStorageEventBusConfigHonorsExplicitReconnectBuffer(t *testing.T) {
 
 func TestStorageViewRebuildSettingsRejectsTooShortInterval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_check_interval: 10s\n    max_view_file_bytes: 1048576\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 10s\n    max_view_file_bytes: 1048576\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
@@ -103,7 +103,7 @@ func TestStorageViewRebuildSettingsRejectsTooShortInterval(t *testing.T) {
 
 func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_check_interval: 2m\n    max_view_file_bytes: 2097152\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 2m\n    max_view_file_bytes: 2097152\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
@@ -125,27 +125,16 @@ func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	}
 }
 
-func TestStorageViewRebuildPeriodsUsesUniformEnvironmentOverride(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_CONFIG", "")
-	t.Setenv("MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS", "777")
-	got := storageViewRebuildPeriods()
-	for _, frequency := range []string{"1m", "1h", "1d", "default"} {
-		if got[frequency] != 777 {
-			t.Fatalf("rebuild periods[%q] = %d, want 777: %#v", frequency, got[frequency], got)
-		}
-	}
-}
-
 func TestStorageViewRebuildSettingsAllowsExplicitZeroMaxPending(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
 	if _, _, _, _, _, _, _, err := storageViewRebuildSettings(); err == nil {
 		t.Fatal("accepted explicit zero idle checks")
 	}
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 3\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    maintenance_check_interval: 2m\n    max_view_file_bytes: 1048576\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, _, _, maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()

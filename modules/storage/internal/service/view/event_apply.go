@@ -156,7 +156,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 					// state before returning; the delivery itself must remain
 					// pending so the replacement build can receive this row. Once
 					// the FAILED state is durable, remove this inactive slot now
-					// instead of waiting for the periodic reconciler. This also
+					// instead of waiting for the periodic maintainer. This also
 					// makes a lost Fail RPC response converge on the next retry.
 					if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, err); failErr != nil {
 						runtime.mu.Unlock()
@@ -233,7 +233,7 @@ func isTransientBuildWriteError(err error) bool {
 }
 
 // liveIndexReady verifies that an index pointer still names a physical
-// index. Reconcile can briefly retain a stale active pointer while preparing
+// index. Maintenance can briefly retain a stale active pointer while preparing
 // its replacement; callers use this to route rows to the replacement rather
 // than silently dropping them.
 func (s *Service) liveIndexReady(ctx context.Context, indexID string) (bool, error) {

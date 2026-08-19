@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -67,15 +68,15 @@ const (
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	MetadataServiceName     string `yaml:"metadata_service_name"`
-	PrimaryStoreServiceName string `yaml:"primary_store_service_name"`
-	IndexServiceName        string `yaml:"index_service_name"`
-	BatchSize               int    `yaml:"batch_size"`
-	BatchWaitMS             int    `yaml:"batch_wait_ms"`
-	FetchBatch              int    `yaml:"fetch_batch"`
-	MaxWorkers              int    `yaml:"max_workers"`
-	Ordering                string `yaml:"ordering"`
-	RebuildCheckInterval    string `yaml:"rebuild_check_interval"`
+	MetadataServiceName      string `yaml:"metadata_service_name"`
+	PrimaryStoreServiceName  string `yaml:"primary_store_service_name"`
+	IndexServiceName         string `yaml:"index_service_name"`
+	BatchSize                int    `yaml:"batch_size"`
+	BatchWaitMS              int    `yaml:"batch_wait_ms"`
+	FetchBatch               int    `yaml:"fetch_batch"`
+	MaxWorkers               int    `yaml:"max_workers"`
+	Ordering                 string `yaml:"ordering"`
+	MaintenanceCheckInterval string `yaml:"maintenance_check_interval"`
 	// RebuildLookback is the wall-clock fallback for legacy Views without a
 	// frequency-specific completed-bar target.
 	RebuildLookback        string                         `yaml:"rebuild_lookback"`
@@ -85,9 +86,116 @@ type StorageView struct {
 	RebuildIdleChecks      uint32                         `yaml:"rebuild_idle_checks"`
 	ConsumerPartitions     []StorageViewConsumerPartition `yaml:"consumer_partitions"`
 	StorageRPC             StorageRPCConfig               `yaml:"storage_rpc"`
+	MaintenancePolicyFile  string                         `yaml:"maintenance_policy_file"`
 	maxViewFileBytesSet    bool
 	rebuildMaxPendingSet   bool
 	rebuildIdleChecksSet   bool
+}
+
+type ViewMaintenancePolicyOverride struct {
+	SpaceID                string `json:"space_id"`
+	ViewID                 string `json:"view_id"`
+	RebuildLookbackPeriods uint64 `json:"rebuild_lookback_periods"`
+	MaxPeriodsPerSeries    uint64 `json:"max_periods_per_series"`
+	MaxViewFileBytes       int64  `json:"max_view_file_bytes"`
+}
+
+type ViewMaintenancePolicy struct {
+	MaintenanceCheckInterval string                          `json:"maintenance_check_interval"`
+	RebuildLookbackPeriods   uint64                          `json:"rebuild_lookback_periods"`
+	MaxPeriodsPerSeries      uint64                          `json:"max_periods_per_series"`
+	MaxViewFileBytes         int64                           `json:"max_view_file_bytes"`
+	SystemMonitor            ViewMaintenancePolicyOverride   `json:"system_monitor"`
+	Views                    []ViewMaintenancePolicyOverride `json:"views"`
+}
+
+func (p ViewMaintenancePolicy) ResolvePolicy(spaceID, viewID string) ViewMaintenancePolicy {
+	resolved := p
+	apply := func(override ViewMaintenancePolicyOverride) {
+		if override.RebuildLookbackPeriods > 0 {
+			resolved.RebuildLookbackPeriods = override.RebuildLookbackPeriods
+		}
+		if override.MaxPeriodsPerSeries > 0 {
+			resolved.MaxPeriodsPerSeries = override.MaxPeriodsPerSeries
+		}
+		if override.MaxViewFileBytes > 0 {
+			resolved.MaxViewFileBytes = override.MaxViewFileBytes
+		}
+	}
+	if strings.TrimSpace(spaceID) == "moox_system" {
+		apply(p.SystemMonitor)
+	}
+	for _, override := range p.Views {
+		if strings.TrimSpace(override.SpaceID) == strings.TrimSpace(spaceID) && strings.TrimSpace(override.ViewID) == strings.TrimSpace(viewID) {
+			apply(override)
+		}
+	}
+	return resolved
+}
+
+func (p ViewMaintenancePolicy) Validate() error {
+	interval, err := time.ParseDuration(strings.TrimSpace(p.MaintenanceCheckInterval))
+	if err != nil || interval < 30*time.Second {
+		return errors.New("maintenance_check_interval must be at least 30s")
+	}
+	if p.RebuildLookbackPeriods == 0 || p.RebuildLookbackPeriods > 1_000_000 || p.MaxPeriodsPerSeries == 0 || p.MaxPeriodsPerSeries > 1_000_000 || p.MaxPeriodsPerSeries <= p.RebuildLookbackPeriods || p.MaxViewFileBytes <= 0 {
+		return errors.New("view maintenance limits are invalid")
+	}
+	seen := make(map[string]struct{}, len(p.Views))
+	if p.SystemMonitor.SpaceID != "" || p.SystemMonitor.ViewID != "" {
+		return errors.New("system_monitor override must not set space_id or view_id")
+	}
+	systemResolved := p.ResolvePolicy("moox_system", "")
+	if systemResolved.MaxPeriodsPerSeries <= systemResolved.RebuildLookbackPeriods || systemResolved.MaxViewFileBytes <= 0 {
+		return errors.New("system_monitor override has invalid limits")
+	}
+	for _, override := range p.Views {
+		if strings.TrimSpace(override.SpaceID) == "" || strings.TrimSpace(override.ViewID) == "" {
+			return errors.New("view maintenance override requires space_id and view_id")
+		}
+		key := strings.TrimSpace(override.SpaceID) + "/" + strings.TrimSpace(override.ViewID)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("duplicate view maintenance override %s", key)
+		}
+		seen[key] = struct{}{}
+		if override.RebuildLookbackPeriods > 1_000_000 || override.MaxPeriodsPerSeries > 1_000_000 || override.MaxViewFileBytes < 0 {
+			return fmt.Errorf("view maintenance override %s is out of range", key)
+		}
+		resolved := p.ResolvePolicy(override.SpaceID, override.ViewID)
+		if resolved.MaxPeriodsPerSeries <= resolved.RebuildLookbackPeriods || resolved.MaxViewFileBytes <= 0 {
+			return fmt.Errorf("view maintenance override %s has invalid limits", key)
+		}
+	}
+	return nil
+}
+
+func LoadViewMaintenancePolicy(path string) (ViewMaintenancePolicy, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ViewMaintenancePolicy{}, fmt.Errorf("read view maintenance policy: %w", err)
+	}
+	var policy ViewMaintenancePolicy
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&policy); err != nil {
+		return ViewMaintenancePolicy{}, fmt.Errorf("decode view maintenance policy: %w", err)
+	}
+	if strings.TrimSpace(policy.MaintenanceCheckInterval) == "" {
+		policy.MaintenanceCheckInterval = "1m"
+	}
+	if policy.RebuildLookbackPeriods == 0 {
+		policy.RebuildLookbackPeriods = 1000
+	}
+	if policy.MaxPeriodsPerSeries == 0 {
+		policy.MaxPeriodsPerSeries = 2000
+	}
+	if policy.MaxViewFileBytes == 0 {
+		policy.MaxViewFileBytes = 1 << 30
+	}
+	if err := policy.Validate(); err != nil {
+		return ViewMaintenancePolicy{}, err
+	}
+	return policy, nil
 }
 
 // StorageViewConsumerRoute identifies the Dataset subjects owned by a
@@ -516,8 +624,8 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.Ordering == "" {
 		c.View.Ordering = "dataset"
 	}
-	if strings.TrimSpace(c.View.RebuildCheckInterval) == "" {
-		c.View.RebuildCheckInterval = "1m"
+	if strings.TrimSpace(c.View.MaintenanceCheckInterval) == "" {
+		c.View.MaintenanceCheckInterval = "1m"
 	}
 	if c.View.MaxViewFileBytes <= 0 && !c.View.maxViewFileBytesSet {
 		c.View.MaxViewFileBytes = 1 << 30

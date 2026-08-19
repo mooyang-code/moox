@@ -237,6 +237,13 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 			if err := batch.Set(historyKey, nil, s.writeOptions); err != nil {
 				return nil, err
 			}
+			seriesHistoryKey, err := encodeSeriesHistoryKey(row.GetKey(), s.bucketDuration)
+			if err != nil {
+				return nil, err
+			}
+			if err := batch.Set(seriesHistoryKey, nil, s.writeOptions); err != nil {
+				return nil, err
+			}
 		}
 		for _, field := range row.GetFields() {
 			key, err := encodeFieldKey(row.GetKey(), field.GetFieldId(), s.bucketDuration)

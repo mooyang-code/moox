@@ -527,6 +527,65 @@ func backupRepairDB(path string) (string, error) {
 	return backup, nil
 }
 
+// restoreRepairDB restores the SQLite main file and its WAL sidecars from a
+// reset backup. Reset is deliberately destructive, so callers use this only
+// on a pre-commit failure while the storage role is stopped. Copying to
+// temporary files before rename keeps a partial restore from becoming the
+// next failure mode.
+func restoreRepairDB(backup, path string) error {
+	if strings.TrimSpace(backup) == "" || strings.TrimSpace(path) == "" {
+		return errors.New("repair database backup and destination are required")
+	}
+	copyReplace := func(source, target string) error {
+		tmp := target + ".restore-tmp"
+		_ = os.Remove(tmp)
+		if err := copyFile(source, tmp); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		if err := os.Rename(tmp, target); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		return nil
+	}
+	if err := copyReplace(backup, path); err != nil {
+		return err
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		source := backup + suffix
+		target := path + suffix
+		if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+			_ = os.Remove(target)
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := copyReplace(source, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(source, target string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
 func copyOptionalFile(source, target string) error {
 	input, err := os.Open(source)
 	if errors.Is(err, os.ErrNotExist) {
@@ -798,9 +857,10 @@ func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, a
 	cmd.Stderr = stderr
 	cmd.Stdout = stderr
 	env := append([]string(nil), os.Environ()...)
-	if lookback > 0 {
-		env = append(env, "MOOX_STORAGE_VIEW_REBUILD_LOOKBACK="+lookback.String())
-	}
+	// Rebuild lookback is owned by storage-view/config/maintenance.json. The
+	// lifecycle helper keeps the argument for readiness validation but never
+	// mutates the service's policy through an ad-hoc environment override.
+	_ = lookback
 	if replayPending {
 		env = append(env, "MOOX_STORAGE_VIEW_REPLAY_PENDING=1")
 	}

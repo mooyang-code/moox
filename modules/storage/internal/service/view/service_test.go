@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -158,7 +159,7 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	}
 }
 
-func TestDuckDBABSwitchKeepsActiveReadableAndDeletesOldFile(t *testing.T) {
+func TestDuckDBABSwitchKeepsActiveReadableUntilCollectorDeletesOldFile(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "views")
 	svc, err := New(root, "view-secret")
 	if err != nil {
@@ -167,12 +168,12 @@ func TestDuckDBABSwitchKeepsActiveReadableAndDeletesOldFile(t *testing.T) {
 	ctx := context.Background()
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
 	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
-	schema := func(indexID string, version uint64) *pb.ViewIndexSchema {
+	schema := func(version uint64) *pb.ViewIndexSchema {
 		return &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", PrimaryDatasetId: "prices", ViewVersion: version, Engine: "duckdb", ViewSchemaHash: fmt.Sprintf("schema-%d", version), Columns: columns, DatasetIds: []string{"prices"}}
 	}
 	prepare := func(indexID string, version uint64) {
 		t.Helper()
-		rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: indexID, Schema: schema(indexID, version)})
+		rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: indexID, Schema: schema(version)})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("prepare %s: rsp=%v err=%v", indexID, rsp, err)
 		}
@@ -208,35 +209,59 @@ func TestDuckDBABSwitchKeepsActiveReadableAndDeletesOldFile(t *testing.T) {
 		}
 	}
 
-	prepare("prices-a", 1)
-	apply("prices-a", 1, "LIVE_WRITE", key("2026-08-11T00:00:00Z", 100))
-	attach("prices-a", 1)
-	prepare("prices-b", 2)
+	oldID := viewindex.ViewIndexID("quant", "prices-view", viewindex.SlotA)
+	newID := viewindex.ViewIndexID("quant", "prices-view", viewindex.SlotB)
+	prepare(oldID, 1)
+	apply(oldID, 1, "LIVE_WRITE", key("2026-08-11T00:00:00Z", 100))
+	attach(oldID, 1)
+	prepare(newID, 2)
 	if err := svc.BackfillView(ctx, "quant", "prices-view", 100); err != nil {
 		t.Fatal(err)
 	}
 	// A live delta is written to both sides while B is ready but not active.
-	apply("prices-a", 1, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
-	apply("prices-b", 2, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
+	apply(oldID, 1, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
+	apply(newID, 2, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
 	query(2, 101)
 	if err := svc.SwitchView(ctx, "quant", "prices-view", 0); err != nil {
 		t.Fatal(err)
 	}
-	oldPath := filepath.Join(root, "duckdb", "prices-a.duckdb")
-	newPath := filepath.Join(root, "duckdb", "prices-b.duckdb")
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		_, oldErr := os.Stat(oldPath)
-		if os.IsNotExist(oldErr) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("old DuckDB file was not removed: err=%v", oldErr)
-		}
-		time.Sleep(10 * time.Millisecond)
+	oldPath := filepath.Join(root, "duckdb", oldID+".duckdb")
+	newPath := filepath.Join(root, "duckdb", newID+".duckdb")
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("old DuckDB file disappeared before cleanup: %v", err)
+	}
+	if err := os.WriteFile(oldPath+".wal", []byte("retired"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := os.Stat(newPath); err != nil {
 		t.Fatalf("new active DuckDB file missing: %v", err)
+	}
+	query(2, 101)
+
+	metadata := &cleanupMetadata{views: []*pb.View{{
+		SpaceId: "quant", ViewId: "prices-view", ActiveIndexId: newID, Engine: "duckdb", Status: "active",
+	}}}
+	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
+	opts := RetiredIndexCleanupOptions{Metadata: metadata, MinUnreferencedAge: time.Minute, Now: func() time.Time { return now }}
+	if err := svc.CleanupRetiredIndexes(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("first discovery removed old DuckDB file: %v", err)
+	}
+	query(2, 101)
+
+	now = now.Add(time.Minute)
+	if err := svc.CleanupRetiredIndexes(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{oldPath, oldPath + ".wal"} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("retired DuckDB artifact still exists path=%s err=%v", path, err)
+		}
+	}
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("active DuckDB file was deleted: %v", err)
 	}
 	query(2, 101)
 }
@@ -562,14 +587,14 @@ func TestCompleteEventCreatesMissingViewRowWithoutRecovery(t *testing.T) {
 	}
 }
 
-func TestDatasetEventAcksUnmanagedBeforeInitialReconcile(t *testing.T) {
+func TestDatasetEventAcksUnmanagedBeforeInitialMaintenance(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err != nil {
-		t.Fatalf("unmanaged Dataset row should ACK during initial reconcile: %v", err)
+		t.Fatalf("unmanaged Dataset row should ACK during initial maintenance: %v", err)
 	}
 }
 
@@ -578,11 +603,11 @@ func TestDatasetEventStaysPendingWhenNewManagedViewIsNotAttached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := &reconcileMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Status: "active", DatasetIds: []string{"market"},
 	}}
 	svc.setMetadataClient(metadata)
-	svc.setReconcileReady(true)
+	svc.setMaintenanceReady(true)
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil {
 		t.Fatal("managed Dataset row was ACKable before its View mapping was attached")

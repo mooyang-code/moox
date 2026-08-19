@@ -63,6 +63,31 @@ func TestReadTimeSeriesRowsScansPrimaryHistoryWithoutView(t *testing.T) {
 	}
 }
 
+func TestReadTimeSeriesRowsUsesSubjectSeriesIndex(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for i := 0; i < 3; i++ {
+		for _, tag := range []string{"venue:a", "venue:b"} {
+			key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: "BTC-USDT", Freq: "1m", DataTime: time.Date(2026, 8, 16, 0, i, 0, 0, time.UTC).Format(time.RFC3339), SeriesTag: tag,
+			}}}
+			if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i)}}}}}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	rsp, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		SpaceId: "s", DatasetId: "d", Selectors: []*pb.TimeSeriesSelector{{SpaceId: "s", DatasetId: "d", SubjectId: "BTC-USDT", Freq: "1m"}},
+		Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 100},
+	})
+	if err != nil || len(rsp.GetRows()) != 6 || rsp.GetRows()[0].GetKey().GetSubjectId() != "BTC-USDT" {
+		t.Fatalf("subject-index rsp=%v err=%v", rsp, err)
+	}
+}
+
 func TestReadTimeSeriesRowsBackfillsHistoryFromLegacyFieldKeys(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
 	if err != nil {

@@ -591,7 +591,7 @@ message UpdateViewRsp {
 
 // RequestViewRebuildReq 表示请求对现有查询视图执行一次手动 A/B 重建。
 // 请求只推进待构建修订号，不影响当前 active 索引；实际构建由 View
-// reconciler 异步执行，并通过 ViewRebuildLog 暴露进度和结果。
+// View Maintainer 异步执行，并通过 ViewRebuildLog 暴露进度和结果。
 message RequestViewRebuildReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -1631,6 +1631,7 @@ enum ViewRebuildTriggerReason {
   VIEW_REBUILD_TRIGGER_SIZE_LIMIT = 6;
   VIEW_REBUILD_TRIGGER_MANUAL_REPAIR = 7;
   VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY = 8;
+  VIEW_REBUILD_TRIGGER_SERIES_CAPACITY = 9;
 }
 
 enum ViewRebuildResult {

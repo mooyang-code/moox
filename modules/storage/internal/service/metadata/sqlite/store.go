@@ -142,7 +142,7 @@ func (s *Store) ValidateSchemaVersion(ctx context.Context) error {
 	return nil
 }
 
-const metadataSchemaVersion = "8"
+const metadataSchemaVersion = "9"
 
 func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	var schemaTableCount int
@@ -178,6 +178,12 @@ func (s *Store) checkSchemaVersion(ctx context.Context) error {
 	}
 	if err == nil && version == "7" {
 		if migrateErr := s.migrateV7ToV8(ctx); migrateErr != nil {
+			return migrateErr
+		}
+		version = "8"
+	}
+	if err == nil && version == "8" {
+		if migrateErr := s.migrateV8ToV9(ctx); migrateErr != nil {
 			return migrateErr
 		}
 		return nil
@@ -239,7 +245,7 @@ func (s *Store) migrateV7ToV8(ctx context.Context) error {
 			c_error_summary TEXT NOT NULL DEFAULT '', c_details_json TEXT NOT NULL DEFAULT '{}',
 			c_created_at TEXT NOT NULL, c_updated_at TEXT NOT NULL,
 			FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views(c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
-			CHECK (c_result BETWEEN 1 AND 4), CHECK (c_trigger_reason BETWEEN 1 AND 8)
+			CHECK (c_result BETWEEN 1 AND 4), CHECK (c_trigger_reason BETWEEN 1 AND 9)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_t_view_rebuild_logs_view_time ON t_view_rebuild_logs (c_space_id, c_view_id, c_created_at DESC, c_log_id DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_t_view_rebuild_logs_skip_key ON t_view_rebuild_logs (c_space_id, c_view_id, c_trigger_reason, c_result, c_block_reason)`,
@@ -249,6 +255,67 @@ func (s *Store) migrateV7ToV8(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("migrate metadata schema v7 to v8: %w", err)
 		}
+	}
+	return nil
+}
+
+// migrateV8ToV9 widens the rebuild-log trigger check to include the
+// single-series capacity trigger. SQLite cannot alter a CHECK constraint, so
+// rebuild the small audit table while preserving every existing row.
+func (s *Store) migrateV8ToV9(ctx context.Context) error {
+	var viewsTableCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 't_views'`).Scan(&viewsTableCount); err != nil {
+		return fmt.Errorf("migrate metadata schema v8 to v9: %w", err)
+	}
+	// A v7/v8 marker-only database is completed by the following InitSchema
+	// call, which creates the table with the current constraint.
+	if viewsTableCount == 0 {
+		if _, err := s.db.ExecContext(ctx, `UPDATE t_schema_meta SET c_value = '9' WHERE c_key = 'schema_version'`); err != nil {
+			return fmt.Errorf("migrate metadata schema v8 to v9: %w", err)
+		}
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("migrate metadata schema v8 to v9: %w", err)
+	}
+	rollback := func(cause error) error {
+		_ = tx.Rollback()
+		return fmt.Errorf("migrate metadata schema v8 to v9: %w", cause)
+	}
+	statements := []string{
+		`ALTER TABLE t_view_rebuild_logs RENAME TO t_view_rebuild_logs_v8`,
+		`DROP INDEX IF EXISTS idx_t_view_rebuild_logs_view_time`,
+		`DROP INDEX IF EXISTS idx_t_view_rebuild_logs_skip_key`,
+		`CREATE TABLE t_view_rebuild_logs (
+			c_log_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			c_space_id TEXT NOT NULL, c_view_id TEXT NOT NULL,
+			c_build_id TEXT NOT NULL DEFAULT '', c_index_id TEXT NOT NULL DEFAULT '',
+			c_trigger_reason INTEGER NOT NULL, c_result INTEGER NOT NULL,
+			c_block_reason TEXT NOT NULL DEFAULT '', c_target_view_revision INTEGER NOT NULL DEFAULT 0,
+			c_active_view_revision INTEGER NOT NULL DEFAULT 0, c_physical_bytes INTEGER NOT NULL DEFAULT 0,
+			c_num_pending INTEGER NOT NULL DEFAULT 0, c_num_ack_pending INTEGER NOT NULL DEFAULT 0,
+			c_entries_written INTEGER NOT NULL DEFAULT 0, c_started_at TEXT NOT NULL DEFAULT '',
+			c_finished_at TEXT NOT NULL DEFAULT '', c_first_checked_at TEXT NOT NULL DEFAULT '',
+			c_last_checked_at TEXT NOT NULL DEFAULT '', c_skip_count INTEGER NOT NULL DEFAULT 0,
+			c_error_summary TEXT NOT NULL DEFAULT '', c_details_json TEXT NOT NULL DEFAULT '{}',
+			c_created_at TEXT NOT NULL, c_updated_at TEXT NOT NULL,
+			FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views(c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
+			CHECK (c_result BETWEEN 1 AND 4), CHECK (c_trigger_reason BETWEEN 1 AND 9)
+		)`,
+		`INSERT INTO t_view_rebuild_logs SELECT * FROM t_view_rebuild_logs_v8`,
+		`DROP TABLE t_view_rebuild_logs_v8`,
+		`CREATE INDEX idx_t_view_rebuild_logs_view_time ON t_view_rebuild_logs (c_space_id, c_view_id, c_created_at DESC, c_log_id DESC)`,
+		`CREATE INDEX idx_t_view_rebuild_logs_skip_key ON t_view_rebuild_logs (c_space_id, c_view_id, c_trigger_reason, c_result, c_block_reason)`,
+		`UPDATE t_schema_meta SET c_value = '9' WHERE c_key = 'schema_version'`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return rollback(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("migrate metadata schema v8 to v9: %w", err)
 	}
 	return nil
 }

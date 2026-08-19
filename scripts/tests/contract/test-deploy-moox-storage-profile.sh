@@ -37,6 +37,7 @@ for binary in moox-storage-primary moox-storage-view moox-storage-cli moox-stora
 done
 printf '#!/usr/bin/env bash\nprintf "%%064d\\n" 0\n' >"${FIXTURE_ROOT}/bin/moox-admin-cli"
 chmod +x "${FIXTURE_ROOT}/bin/moox-admin-cli"
+export MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64="$(printf '%s' '{"maintenance_check_interval":"1m","rebuild_lookback_periods":1000,"max_periods_per_series":2000,"max_view_file_bytes":1073741824,"system_monitor":{"max_periods_per_series":2000},"views":[]}' | base64 | tr -d '\n')"
 
 mkdir "${TMP_ROOT}/fake-path"
 for command in ssh scp rsync; do
@@ -80,6 +81,8 @@ grep -Eq '^MOOX_STORAGE_PRIMARY_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked
 grep -Eq '^MOOX_STORAGE_VIEW_AUTH_SECRET=[0-9a-f]{64}$' "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env"
 [[ -d "${TMP_ROOT}/unpacked/storage/config" ]]
 [[ -f "${TMP_ROOT}/unpacked/storage-view/config/trpc_go.yaml" ]]
+[[ -f "${TMP_ROOT}/unpacked/storage-view/config/maintenance.json" ]]
+grep -q '"max_periods_per_series": 2000' "${TMP_ROOT}/unpacked/storage-view/config/maintenance.json"
 [[ -f "${TMP_ROOT}/unpacked/storage-node/config/trpc_go.yaml" ]]
 [[ $(find "${TMP_ROOT}/unpacked/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]]
 [[ ! -e "${TMP_ROOT}/unpacked/admin" ]]

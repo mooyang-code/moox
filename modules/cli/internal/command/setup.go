@@ -38,7 +38,7 @@ type setupDeps struct {
 	login                  func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
 	openInitStorage        func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
 	openInitFactor         func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error)
-	deployStorage          func(context.Context, *setupconfig.Snapshot, string, bool) error
+	deployStorage          func(context.Context, *setupconfig.Snapshot, string, bool, bool) error
 	installStorageWatchdog func(context.Context, *setupconfig.Snapshot, string) error
 	importMetadata         func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
 	verifyStorage          func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
@@ -411,7 +411,7 @@ func newSetupStatusCommand(deps setupDeps) *cobra.Command {
 
 func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
 	var file, host string
-	var resetStorageData bool
+	var resetStorageData, resetViewData bool
 	cmd := &cobra.Command{Use: "deploy-storage", Short: "将 Storage 组件部署到用户选择的主机", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
@@ -433,17 +433,21 @@ func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
 		if err != nil || status.State != "completed" {
 			return fmt.Errorf("setup_incomplete")
 		}
-		if err := deps.deployStorage(cmd.Context(), snapshot, host, resetStorageData); err != nil {
+		if resetStorageData && resetViewData {
+			return fmt.Errorf("--reset-storage-data and --reset-view-data are mutually exclusive")
+		}
+		if err := deps.deployStorage(cmd.Context(), snapshot, host, resetStorageData, resetViewData); err != nil {
 			return err
 		}
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
 		}
-		return writeSetupJSON(cmd, map[string]any{"host": host, "status": "ready", "reset_storage_data": resetStorageData})
+		return writeSetupJSON(cmd, map[string]any{"host": host, "status": "ready", "reset_storage_data": resetStorageData, "reset_view_data": resetViewData})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&host, "host", "", "Storage 目标主机名称")
 	cmd.Flags().BoolVar(&resetStorageData, "reset-storage-data", false, "仅用于已确认的破坏性 Schema 切换，清空旧 Storage data")
+	cmd.Flags().BoolVar(&resetViewData, "reset-view-data", false, "清空 View A/B 索引和消费状态，但保留 Primary 数据")
 	_ = cmd.MarkFlagRequired("host")
 	return cmd
 }
@@ -606,7 +610,7 @@ func defaultSetupDeps() setupDeps {
 	}
 }
 
-func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string, resetStorageData bool) error {
+func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string, resetStorageData, resetViewData bool) error {
 	host, err := findSetupHost(snapshot.Manifest, name)
 	if err != nil {
 		return err
@@ -644,22 +648,22 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 		return fmt.Errorf("storage_deploy_invalid")
 	}
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
-		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData,
-		UseControlGateway:                 useControlGateway,
-		EventBusPublicAddress:             snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:                      snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:                snapshot.Manifest.EventBus.TLSEnabled,
-		StoragePrimarySecret:              primarySecret,
-		StorageViewSecret:                 viewSecret,
-		StorageViewRebuildLookbackPeriods: snapshot.Manifest.StorageView.RebuildLookbackPeriods,
-		InstallStorageWatchdog:            true,
-		HealthAuthVersion:                 healthVersion,
-		HealthAuthAccessKey:               healthAccessKey,
-		HealthAuthSecretKey:               healthSecret,
-		GatewayControlURL:                 controlURL,
-		GatewayControlKey:                 controlKey,
-		GatewayServiceKey:                 serviceKey,
-		GatewayCABundle:                   gatewayCA,
+		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData, ResetViewData: resetViewData,
+		UseControlGateway:      useControlGateway,
+		EventBusPublicAddress:  snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:           snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:     snapshot.Manifest.EventBus.TLSEnabled,
+		StoragePrimarySecret:   primarySecret,
+		StorageViewSecret:      viewSecret,
+		StorageViewPolicy:      snapshot.Manifest.StorageView,
+		InstallStorageWatchdog: true,
+		HealthAuthVersion:      healthVersion,
+		HealthAuthAccessKey:    healthAccessKey,
+		HealthAuthSecretKey:    healthSecret,
+		GatewayControlURL:      controlURL,
+		GatewayControlKey:      controlKey,
+		GatewayServiceKey:      serviceKey,
+		GatewayCABundle:        gatewayCA,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}

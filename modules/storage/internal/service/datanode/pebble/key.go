@@ -13,12 +13,13 @@ import (
 // deliberately separate so a user supplied name can never collide with the
 // other value kind. There is intentionally no row-marker namespace.
 const (
-	fieldNamespace      byte = 0x01
-	attributeNamespace  byte = 0x02
-	historyNamespace    byte = 0x03
-	timeSeriesKind      byte = 0x01
-	recordKind          byte = 0x02
-	canonicalTimeLayout      = "2006-01-02T15:04:05.000000000Z"
+	fieldNamespace         byte = 0x01
+	attributeNamespace     byte = 0x02
+	historyNamespace       byte = 0x03
+	seriesHistoryNamespace byte = 0x04
+	timeSeriesKind         byte = 0x01
+	recordKind             byte = 0x02
+	canonicalTimeLayout         = "2006-01-02T15:04:05.000000000Z"
 )
 
 func appendPart(dst []byte, value string) []byte {
@@ -148,6 +149,25 @@ func encodeHistoryKey(key *pb.RowKey, bucketDuration time.Duration) ([]byte, err
 	}
 	out := []byte{historyNamespace, timeSeriesKind}
 	for _, index := range []int{0, 1, 5, 3, 4, 6} {
+		out = appendRawPart(out, parts[index])
+	}
+	return out, nil
+}
+
+// encodeSeriesHistoryKey stores the same logical row in a subject-first
+// namespace. It complements the time-first history index: rebuilds can seek
+// directly to one subject/frequency and read only its recent rows instead of
+// walking the entire dataset history.
+func encodeSeriesHistoryKey(key *pb.RowKey, bucketDuration time.Duration) ([]byte, error) {
+	kind, parts, err := rowParts(key, bucketDuration)
+	if err != nil {
+		return nil, err
+	}
+	if kind != timeSeriesKind {
+		return nil, invalid("series history index requires a time-series row key")
+	}
+	out := []byte{seriesHistoryNamespace, timeSeriesKind}
+	for _, index := range []int{0, 1, 3, 4, 6, 5} {
 		out = appendRawPart(out, parts[index])
 	}
 	return out, nil

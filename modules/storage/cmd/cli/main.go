@@ -157,7 +157,7 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("expected command: init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, or purge-dataset-events")
+		return fmt.Errorf("expected command: init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, retain-views, or purge-dataset-events")
 	}
 	switch args[0] {
 	case "init":
@@ -174,10 +174,12 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		return runForceRebuildView(args[1:], stdout, stderr)
 	case "reset-view-consumers":
 		return runResetViewConsumers(args[1:], stdout, stderr)
+	case "retain-views":
+		return runRetainViews(args[1:], stdout, stderr)
 	case "purge-dataset-events":
 		return runPurgeDatasetEvents(trpc.BackgroundContext(), args[1:], stdout)
 	default:
-		return fmt.Errorf("unknown command %q: use init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, or purge-dataset-events", args[0])
+		return fmt.Errorf("unknown command %q: use init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, retain-views, or purge-dataset-events", args[0])
 	}
 }
 
