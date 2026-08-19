@@ -203,13 +203,31 @@ assert_grep 'conf=config/trpc_go\.yaml' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_storage_view' "${DEPLOY_DIR}/start.sh"
 assert_grep 'start_service "storage-view" "\$\{ROOT\}/storage-view"' "${DEPLOY_DIR}/start.sh"
 assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB\}' "${DEPLOY_DIR}/start.sh"
-assert_grep 'MOOX_STORAGE_VIEW_DELIVER_POLICY=\$\{MOOX_STORAGE_VIEW_DELIVER_POLICY:-new\}' "${DEPLOY_DIR}/start.sh"
+assert_grep 'MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS=\$\{MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS:-1000\}' "${DEPLOY_DIR}/start.sh"
+if grep -q 'MOOX_STORAGE_VIEW_DELIVER_POLICY' "${DEPLOY_DIR}/start.sh"; then
+  echo "unexpected global Storage View deliver policy override" >&2
+  exit 1
+fi
 assert_grep '^    rebuild_check_interval: 1m$' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep '^    rebuild_max_pending: 32$' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep '^    rebuild_idle_checks: 3$' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+for frequency in 1m 1h 1d default; do
+  assert_grep "^      ${frequency}: 1000$" "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+done
+for durable in storage_view_kline_v2 storage_view_metrics_v2 storage_view_other_v2; do
+  assert_grep "durable: ${durable}" "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+done
+if grep -q 'storage_view_period_v1' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"; then
+  echo "legacy Storage View durable remains in package" >&2
+  exit 1
+fi
 assert_grep 'MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{quoted_storage_view_duckdb_memory_limit\}' "${ROOT}/scripts/deploy-moox.sh"
 assert_grep '^MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=256MB$' "${DEPLOY_DIR}/config/components.env"
+assert_grep '^MOOX_INSTALLED_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS=1000$' "${DEPLOY_DIR}/config/components.env"
 assert_grep '^MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\$\{MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-\$\{MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT\}\}$' "${DEPLOY_DIR}/config/components.env"
+assert_grep '^MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS=\$\{MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS:-\$\{MOOX_INSTALLED_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS\}\}$' "${DEPLOY_DIR}/config/components.env"
+assert_grep 'storage_internal_auth_mismatch_preflight' "${ROOT}/scripts/deploy-moox.sh"
+assert_grep 'check_storage_auth_files' "${DEPLOY_DIR}/healthcheck.sh"
 if grep -Eq 'wait_eventbus_storage_view_topology|storage_view durable topology' "${DEPLOY_DIR}/start.sh"; then
   echo "storage-view must create and own its Consumer instead of waiting for EventBus topology" >&2
   exit 1
@@ -312,5 +330,32 @@ if "${DEPLOY_DIR}/reset-storage-view-indexes.sh" --root "${TMP_ROOT}/unsafe-stor
 	echo "reset script must reject a storage root symlink resolving to /" >&2
 	exit 1
 fi
+
+# A storage package deployed with a different internal-auth pair must fail
+# before it stops the existing services. This is the release gate for the
+# browser-facing Admin BFF -> Storage View HMAC contract.
+GUARD_DEPLOY_DIR="${TMP_ROOT}/storage"
+cp -a "${DEPLOY_DIR}" "${GUARD_DEPLOY_DIR}"
+CONTROL_AUTH_ROOT="${TMP_ROOT}/control-root"
+mkdir -p "${CONTROL_AUTH_ROOT}/secrets"
+printf 'MOOX_STORAGE_PRIMARY_AUTH_SECRET=%064x\nMOOX_STORAGE_VIEW_AUTH_SECRET=%064x\n' 1 2 \
+  >"${CONTROL_AUTH_ROOT}/secrets/storage-internal-auth.env"
+chmod 600 "${CONTROL_AUTH_ROOT}/secrets/storage-internal-auth.env"
+guard_auth_before="$(cat "${GUARD_DEPLOY_DIR}/secrets/storage-internal-auth.env")"
+if MOOX_CONTROL_ROOT="${CONTROL_AUTH_ROOT}" \
+  MOOX_STORAGE_PRIMARY_AUTH_SECRET="$(printf '%064x' 3)" \
+  MOOX_STORAGE_VIEW_AUTH_SECRET="$(printf '%064x' 4)" \
+  MOOX_STORAGE_NODE_AUTH_SECRET="$(printf '%064x' 5)" \
+  MOOX_EVENTBUS_ENABLE_TLS=1 MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=256MB \
+  "${ROOT}/scripts/deploy-moox.sh" --target localhost --dir "${GUARD_DEPLOY_DIR}" --stage "${STAGE_DIR}" \
+  --skip-build --with-storage-node --no-start --no-admin --no-web-host --no-cloudnode --no-collector \
+  --no-factor --no-strategy --no-trade --no-monitor "${GATEWAY_ARGS[@]}" >/dev/null 2>&1; then
+  echo "storage auth mismatch must fail before a local storage deployment mutates" >&2
+  exit 1
+fi
+[[ "$(cat "${GUARD_DEPLOY_DIR}/secrets/storage-internal-auth.env")" == "${guard_auth_before}" ]] || {
+  echo "storage auth preflight changed the existing deployment" >&2
+  exit 1
+}
 
 echo "storage-primary plus unified storage-view deployment package verified"

@@ -10,7 +10,7 @@ MooX Storage 是字段级事实存储和可重建 View 服务。当前实现只�
 | --- | --- |
 | `primary` | Metadata SQLite v6、snapshotcache、PrimaryStore 校验与 Dataset 路由 |
 | `node` | 单个 DataNode 的 Pebble 字段存储、原子 Outbox、过期时间桶清理 |
-| `view` | 单 JetStream Consumer、DuckDB/Bleve ViewIndex、A/B 重建与 DataView 查询 |
+| `view` | 三个按 Dataset 隔离的 JetStream Consumer、DuckDB/Bleve ViewIndex、A/B 重建与 DataView 查询 |
 
 Dataset 创建时直接绑定不可修改的 `data_node_id`。
 
@@ -37,6 +37,9 @@ space_id + dataset_id + record_id + version
 - Record 写入必须提供非空 `version`。
 - Record 读取时 version 为空表示读取 UTF-8 字节顺序最大的版本。
 - Field 和 Attribute 分别使用 Pebble `0x01`、`0x02` 命名空间。
+- Time-series Primary 同步维护 `0x03` 历史索引；DataNode 布局版本为 v3。旧的 v2
+  DataNode 不包含该索引，必须用 `moox-cli storage reset-view-consumers --reset-all-storage-data`
+  清空后重新初始化，不能在未回溯的情况下激活 View。
 - 写入是字段级 Upsert，可以新增、覆盖或补写历史 RowKey 的字段。
 
 ## 物理存储
@@ -81,9 +84,14 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
   `max_view_file_bytes` 且 View 有限 `keep_duration` 时启动 A/B 重建。新索引只
   backfill 保留窗口，切换完成后按固定 grace 删除旧 DuckDB 文件，不在 active 索引
   上逐行删除。配置统一使用：
-  `storage.view.rebuild_check_interval`、`storage.view.rebuild_lookback` 和
-  `storage.view.max_view_file_bytes`。每一种重建在激活前都必须覆盖至少
-  `rebuild_lookback` 的墙上时钟历史；不足时保持构建中，不发布不完整 View。
+  `storage.view.rebuild_check_interval`、`storage.view.rebuild_lookback_periods`、
+  `storage.view.rebuild_lookback` 和 `storage.view.max_view_file_bytes`。
+  时序 View 按每个 subject/frequency 回溯已完成的 K 线根数，不按自然时间计算，
+  因此周末、节假日不会减少有效回溯量。默认所有频率均回溯 `1000` 根；根目录
+  `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一覆盖该值；全局 `rebuild_lookback`（默认 `24h`）
+  仅作为没有可解析 frequency 的旧 View 的兼容兜底。某个 subject 历史不足目标根数
+  时保持构建中，不发布不完整 View；`keep_duration` 仍只控制索引保留/容量整理，
+  不再决定时序回填根数。
 - `moox-cli storage force-rebuild-view` 可在确认后删除 View 的 A/B 物理索引、清理
   durable consumer、period/sync checkpoint 状态并从 `DeliverAll` 事件重新建 View。该命令要求显式指定
   `--lookback`，用于一次性覆盖配置；旧 View 数据不可恢复，执行前必须确认 Source
@@ -109,11 +117,21 @@ moox.storage.dataset.rows.upserted.v2.<space-token>.<dataset-token>
 ```
 
 Token 是可逆的小写无 Padding Base32。View 使用唯一 Consumer
-`storage_view`，默认 `Fetch(8)`、`MaxAckPending=8`。View 启动时创建并持有该
-Consumer；同一 Dataset 的 rows、Marker 和 SyncPoint 进入同一个 Dataset 队列（队列键为
-`space_id + dataset_id`，全文统一称为“Dataset 队列键”，
-不同 Dataset 可并行。Active 写失败时保持当前 Delivery 并本地退避；无法恢复的
+View 使用三个相互独立的 durable：`storage_view_kline_v2`、
+`storage_view_metrics_v2`、`storage_view_other_v2`。每个 durable 的
+`FetchBatch`、`MaxAckPending`、worker 和精确 Dataset subject 都在
+`storage.view.consumer_partitions` 中配置；K 线分区默认只接收
+`crypto_market/binance_spot_kline_1m`。同一 Dataset 的 rows、Marker 和 SyncPoint
+进入同一个 Dataset 队列（队列键为 `space_id + dataset_id`），不同分区和 Dataset 可并行。
+Active 写失败时保持当前 Delivery 并本地退避；无法恢复的
 Subject/Proto/Payload 错误执行 `Term`，避免毒消息永久阻塞全部 Dataset。
+
+新增或重建 View 必须至少覆盖 `storage.view.rebuild_lookback_periods` 指定的每频率根数，未达到
+回溯水位不会激活新索引。未上线环境可使用 `moox-cli storage reset-view-consumers
+--dry-run` 检查清理范围；确认后加 `--yes` 会停止整个 Storage 生命周期，删除旧/新 View
+durable，按精确 Dataset subject 清理时序队列并删除时序 View A/B 索引，但默认保留 Primary
+事实数据。Record/Bleve View 也会删除 A/B 索引并从清空后的新事件开始，历史记录不保留；只有
+`--reset-all-storage-data` 才会删除 Primary/DataNode Pebble 数据，并在重启后只等待服务健康。
 
 ## 认证
 

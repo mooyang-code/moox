@@ -29,6 +29,20 @@ type primaryFieldReader struct {
 	service *primarystore.Service
 }
 
+func exactDatasetEventSubjects(t *testing.T, registry *events.Registry, spaceID, datasetID string) []string {
+	t.Helper()
+	filters := make([]string, 0, 4)
+	for _, event := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint} {
+		filter, err := registry.RenderSubject(event, spaceID, datasetID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		filters = append(filters, filter)
+	}
+	sort.Strings(filters)
+	return filters
+}
+
 func (r primaryFieldReader) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
 	return r.service.ReadFields(ctx, req)
 }
@@ -171,24 +185,17 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 	defer eventClient.Close()
 	stopConsumer, err := view.StartEventConsumer(ctx, eventClient, viewservice.EventConsumerOptions{
-		Consumer: "storage_view_period_v1", FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
+		PartitionID: "kline", Consumer: events.StorageViewKlineConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "prices"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stopConsumer()
-	consumerInfo, err := js.ConsumerInfo("MOOX_STORAGE", "storage_view_period_v1")
+	consumerInfo, err := js.ConsumerInfo("MOOX_STORAGE", events.StorageViewKlineConsumer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var wantFilters []string
-	for _, event := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint} {
-		filter, filterErr := registry.FamilyPattern(event)
-		if filterErr != nil {
-			t.Fatal(filterErr)
-		}
-		wantFilters = append(wantFilters, filter)
-	}
+	wantFilters := exactDatasetEventSubjects(t, registry, "quant", "prices")
 	sort.Strings(wantFilters)
 	gotFilters := append([]string(nil), consumerInfo.Config.FilterSubjects...)
 	sort.Strings(gotFilters)

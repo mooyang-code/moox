@@ -37,8 +37,56 @@ storage:
     fetch_batch: 1
     max_workers: 1
     ordering: dataset
+    consumer_partitions:
+      - id: kline
+        durable: storage_view_kline_v2
+        routes:
+          - space_id: crypto_market
+            dataset_ids: [binance_spot_kline_1m]
+        fetch_batch: 4
+        max_workers: 2
+        max_ack_pending: 16
+        ack_wait_ms: 120000
+        ordering: dataset
+        deliver_policy: new
+        max_retry_attempts: -1
+      - id: system_metrics
+        durable: storage_view_metrics_v2
+        routes:
+          - space_id: moox_system
+            dataset_ids: [moox_service_metrics]
+        fetch_batch: 2
+        max_workers: 1
+        max_ack_pending: 8
+        ack_wait_ms: 120000
+        ordering: dataset
+        deliver_policy: new
+        max_retry_attempts: -1
+      - id: other
+        durable: storage_view_other_v2
+        routes:
+          - space_id: crypto_market
+            dataset_ids: ["*"]
+          - space_id: moox_system
+            dataset_ids: [host_disk_v1, host_fs_v1, host_net_v1, host_resource_v1]
+          - space_id: stock_cn
+            dataset_ids: [financial_statement_metric, financial_summary, index_kline, stock_kline]
+        fetch_batch: 4
+        max_workers: 2
+        max_ack_pending: 16
+        ack_wait_ms: 120000
+        ordering: dataset
+        deliver_policy: new
+        max_retry_attempts: -1
     rebuild_check_interval: 1m
-    rebuild_lookback: 72h
+    # Time-series Views use the completed-bar targets below. Keep this global
+    # duration only as a compatibility fallback for legacy Views without freq.
+    rebuild_lookback: 24h
+    rebuild_lookback_periods:
+      1m: 1000
+      1h: 1000
+      1d: 1000
+      default: 1000
     max_view_file_bytes: 1073741824
     rebuild_max_pending: 32
     rebuild_idle_checks: 3

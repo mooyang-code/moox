@@ -17,12 +17,18 @@ type Service struct {
 	metadata       metadata.Store
 	metadataCache  *metacache.Store
 	nodeAuthSecret string
+	operatorSecret string
 	nodeState      NodeStateChecker
 }
 
 type Options struct {
-	AuthSecret       string
-	NodeStateChecker NodeStateChecker
+	AuthSecret string
+	// OperatorAuthSecret authenticates expensive admin/CLI metadata actions.
+	// It is separate from the DataNode registration secret used by the
+	// storage-primary role, while tests and legacy callers may use AuthSecret
+	// as a fallback.
+	OperatorAuthSecret string
+	NodeStateChecker   NodeStateChecker
 }
 
 func NewMetadataService(store metadata.Store, cache *metacache.Store, options Options) (*Service, error) {
@@ -33,10 +39,17 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	if secret == "" {
 		secret = os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
 	}
+	operatorSecret := options.OperatorAuthSecret
+	if operatorSecret == "" {
+		operatorSecret = os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+	}
+	if operatorSecret == "" {
+		operatorSecret = secret
+	}
 	if options.NodeStateChecker == nil {
 		options.NodeStateChecker = rpcNodeStateChecker{}
 	}
-	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, nodeState: options.NodeStateChecker}, nil
+	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, operatorSecret: operatorSecret, nodeState: options.NodeStateChecker}, nil
 }
 
 func (s *Service) refreshMetadataCache(ctx context.Context) error {

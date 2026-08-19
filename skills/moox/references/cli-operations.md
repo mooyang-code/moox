@@ -60,11 +60,11 @@ moox-factor-cli clear-queue --package-root /home/<user>/moox/prod --yes
 
 ## 清理 Storage View 积压并触发 A/B 重建
 
-当 Storage View 的 `storage_view_period_v1` 积压、View 不再追赶 Source，或需要重新触发一次安全重建时，使用：
+当某个 Storage View 分区积压、View 不再追赶 Source，或需要重新触发一次安全重建时，使用：
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /home/<user>/moox/prod/storage-view/config/storage.yaml \
+  --storage-conf /home/<user>/moox/prod/storage-view/config/trpc_go.yaml \
   --package-root /home/<user>/moox/prod \
   --space-id crypto_market \
   --view-id binance_spot_kline_1m_factor \
@@ -75,7 +75,7 @@ moox-cli storage repair-view \
 
 1. 停止 `storage-view`。
 2. 备份 Metadata SQLite。
-3. 删除 `MOOX_STORAGE/storage_view_period_v1` durable consumer。
+3. 删除目标分区对应的 durable consumer（Kline/metrics/other 之一）。
 4. 递增 View desired revision，交由服务正常执行 A/B 构建和切换。
 5. 重启 `storage-view`。
 
@@ -85,7 +85,7 @@ moox-cli storage repair-view \
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /home/<user>/moox/prod/storage-view/config/storage.yaml \
+  --storage-conf /home/<user>/moox/prod/storage-view/config/trpc_go.yaml \
   --package-root /home/<user>/moox/prod \
   --space-id crypto_market \
   --view-id binance_spot_kline_1m_factor \
@@ -101,7 +101,7 @@ moox-cli storage repair-view \
 | `--storage-conf` | `MOOX_STORAGE_CONFIG` 或 `config/storage.yaml` | Storage 配置 |
 | `--package-root` | `MOOX_STORAGE_PACKAGE_ROOT` 或配置路径推导值 | `start.sh`/`stop.sh` 所在根目录 |
 | `--stream` | `MOOX_STORAGE` | JetStream stream |
-| `--consumer` | `storage_view_period_v1` | Storage View durable consumer |
+| `--consumer` | 配置中的分区 durable | Storage View durable consumer；不再使用全局旧 durable |
 | `--deliver-policy` | `new` | 重建 consumer 的投递策略；重放时才使用 `all` |
 | `--credential-file` | Storage/EventBus admin 环境变量 | NATS admin 凭据 |
 | `--eventbus-url` | 凭据文件/环境配置 | 覆盖 EventBus 地址 |
@@ -157,14 +157,15 @@ moox-cli storage force-rebuild-view \
   --dry-run
 ```
 
-确认目标后再执行同样命令并增加 `--yes`。该命令会停止 `storage-view`、备份 Metadata、
+确认目标后再执行同样命令并增加 `--yes`。该命令会停止整个 Storage 生命周期、备份 Metadata、
 删除 durable consumer、清空 View active/build/period/sync 状态、删除 A/B 物理索引，并以 `DeliverAll`
 重新消费 Source 事件；原 View 历史数据不可恢复。`--lookback` 是本次重建的最低历史覆盖要求，
 新索引未覆盖该时长前不会被激活。
 
-Storage 服务默认使用 `storage.view.rebuild_lookback: 72h`，适用于自动 A/B、启动恢复和手动
-重建。若 View 的 `keep_duration` 更长，实际回溯窗口取两者较大值；若 Source 事件保留不足，
-构建会保持未完成状态，不会发布一个短历史 View。
+Storage 服务的时序 View 默认按所有频率回溯 `1000` 根；可在根目录
+`custom.toml` 的 `[storage_view] rebuild_lookback_periods` 统一调整，适用于自动 A/B、启动恢复和手动
+重建。无 frequency 的旧 View 才使用 `storage.view.rebuild_lookback`（默认 `24h`）兜底；若 Source
+历史不足配置根数，构建会保持未完成状态，不会发布一个短历史 View。
 
 ## Agent 处理顺序
 

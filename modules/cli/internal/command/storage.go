@@ -27,6 +27,7 @@ func init() {
 	rootCmd.AddCommand(storageCmd)
 	storageCmd.AddCommand(storageRepairViewCmd)
 	storageCmd.AddCommand(storageForceRebuildViewCmd)
+	storageCmd.AddCommand(storageResetViewConsumersCmd)
 }
 
 // storageRepairViewCmd delegates the maintenance implementation to the
@@ -50,6 +51,16 @@ var storageForceRebuildViewCmd = &cobra.Command{
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runStorageMaintenanceBinaryAction(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), "force-rebuild-view", args)
+	},
+}
+
+var storageResetViewConsumersCmd = &cobra.Command{
+	Use:                "reset-view-consumers [flags]",
+	Aliases:            []string{"重置视图消费", "清理视图队列"},
+	Short:              "删除所有 View durable/历史消息/索引并按回溯窗口重新构建",
+	DisableFlagParsing: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runStorageMaintenanceBinaryAction(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), "reset-view-consumers", args)
 	},
 }
 

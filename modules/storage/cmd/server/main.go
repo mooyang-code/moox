@@ -29,6 +29,7 @@ import (
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -100,8 +101,9 @@ func runPrimaryRole() error {
 	resolver := newDataNodeResolver(cached.RequestSnapshot, func(target string) pb.DataNodeRuntimeService {
 		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
 		return &dataNodeProxyAdapter{
-			proxy:       pb.NewDataNodeRuntimeClientProxy(opts...),
-			markerProxy: pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+			proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
+			markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+			historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
 		}
 	})
 	viewTarget := os.Getenv("MOOX_STORAGE_VIEW_TARGET")
@@ -163,7 +165,7 @@ func runPrimaryRole() error {
 	if err != nil {
 		return err
 	}
-	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{})
+	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{AuthSecret: secret, OperatorAuthSecret: primarySecret})
 	if err != nil {
 		return err
 	}
@@ -339,7 +341,17 @@ func runViewRole() error {
 	if primarySecret == "" {
 		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for view role")
 	}
-	primaryProxy := pb.NewPrimaryStoreClientProxy(client.WithTarget(primaryTarget), client.WithNetwork(primaryNetwork), client.WithProtocol(primaryProtocol))
+	// Primary history pages are key-only and bounded by the rebuild lookback,
+	// but a cold Pebble history index can still take longer than the ordinary
+	// 30s request budget while it is being compacted. Keep this timeout scoped
+	// to the view's rebuild reader; live PrimaryStore traffic keeps its normal
+	// service timeout.
+	primaryProxy := pb.NewPrimaryStoreClientProxy(
+		client.WithTarget(primaryTarget),
+		client.WithNetwork(primaryNetwork),
+		client.WithProtocol(primaryProtocol),
+		client.WithTimeout(5*time.Minute),
+	)
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
 	rebuildCheckInterval, rebuildLookback, maxViewFileBytes, rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
@@ -349,9 +361,11 @@ func runViewRole() error {
 	reconcilerOptions := viewservice.ReconcilerOptions{
 		Metadata:                    metadataProxy,
 		Primary:                     primaryProxy,
+		PrimaryRange:                primaryProxy,
 		OwnerID:                     "storage-view",
 		Interval:                    rebuildCheckInterval,
 		RebuildLookback:             rebuildLookback,
+		RebuildLookbackPeriods:      storageViewRebuildPeriods(),
 		Grace:                       time.Minute,
 		MaxViewFileBytes:            maxViewFileBytes,
 		RebuildMaxPending:           rebuildMaxPending,
@@ -401,6 +415,9 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
+	if err := validateStorageViewConsumerPartitions(trpc.BackgroundContext(), metadataProxy, &pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")}, &consumerOptions); err != nil {
+		return err
+	}
 	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient, consumerOptions)
 	if err != nil {
 		return err
@@ -414,32 +431,259 @@ func runViewRole() error {
 	return <-serveErr
 }
 
+func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy pb.MetadataClientProxy, auth *pb.AuthInfo, options *viewservice.EventConsumerOptions) error {
+	if options == nil {
+		return errors.New("storage view consumer options are required")
+	}
+	if metadataProxy == nil {
+		return errors.New("storage view metadata client is required for consumer partition validation")
+	}
+	managed := make([]storageconfig.StorageViewConsumerDataset, 0)
+	seen := make(map[string]struct{})
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := metadataProxy.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
+		if err != nil {
+			return fmt.Errorf("list managed views for consumer partition validation: %w", err)
+		}
+		if rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			if rsp == nil {
+				return errors.New("list managed views for consumer partition validation returned nil response")
+			}
+			return fmt.Errorf("list managed views for consumer partition validation: %s", rsp.GetRetInfo().GetMsg())
+		}
+		for _, view := range rsp.GetViews() {
+			if view == nil {
+				continue
+			}
+			ids := append([]string{}, view.GetDatasetIds()...)
+			if view.GetPrimaryDatasetId() != "" {
+				ids = append(ids, view.GetPrimaryDatasetId())
+			}
+			for _, column := range view.GetColumns() {
+				origin := strings.TrimSpace(column.GetOriginId())
+				if datasetID, _, ok := strings.Cut(origin, "."); ok && datasetID != "" {
+					ids = append(ids, datasetID)
+				}
+			}
+			for _, datasetID := range ids {
+				datasetID = strings.TrimSpace(datasetID)
+				if datasetID == "" {
+					continue
+				}
+				key := view.GetSpaceId() + "\x00" + datasetID
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				managed = append(managed, storageconfig.StorageViewConsumerDataset{SpaceID: view.GetSpaceId(), DatasetID: datasetID})
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
+			break
+		}
+	}
+	if err := expandStorageViewConsumerRoutes(options, managed); err != nil {
+		return err
+	}
+	partitions := storageconfig.StorageView{ConsumerPartitions: nil}
+	// Options have already been rendered from the normalized config. Rebuild a
+	// minimal topology from those routes for validation without duplicating the
+	// YAML loader in this process.
+	for _, partition := range options.PartitionConfigs {
+		routes := make([]storageconfig.StorageViewConsumerRoute, 0, len(partition.DatasetRoutes))
+		for _, route := range partition.DatasetRoutes {
+			routes = append(routes, storageconfig.StorageViewConsumerRoute{SpaceID: route.SpaceID, DatasetIDs: []string{route.DatasetID}})
+		}
+		partitions.ConsumerPartitions = append(partitions.ConsumerPartitions, storageconfig.StorageViewConsumerPartition{
+			ID: partition.PartitionID, Durable: partition.Consumer, Routes: routes,
+			AckWaitMS: partition.AckWaitMS, FetchBatch: partition.FetchBatch, MaxWorkers: partition.MaxWorkers,
+			MaxAckPending: partition.MaxAckPending, Ordering: partition.Ordering, DeliverPolicy: partition.DeliverPolicy,
+			MaxRetryAttempts: partition.MaxRetryAttempts,
+		})
+	}
+	// A fresh installation can legitimately have no active View metadata yet.
+	// In that state the configured routes are the allow-list for future Views;
+	// enforce the exact inventory match only once metadata has an inventory.
+	var managedInventory []storageconfig.StorageViewConsumerDataset
+	if len(managed) > 0 {
+		managedInventory = managed
+	}
+	if err := partitions.ValidateConsumerPartitions(managedInventory); err != nil {
+		return fmt.Errorf("storage view consumer partition validation failed: %w", err)
+	}
+	return nil
+}
+
+// expandStorageViewConsumerRoutes turns an explicit wildcard route into
+// concrete metadata routes before JetStream subjects are rendered. Exact
+// routes win, so the latency-sensitive Kline and metrics partitions can never
+// be pulled into the catch-all "other" partition.
+func expandStorageViewConsumerRoutes(options *viewservice.EventConsumerOptions, managed []storageconfig.StorageViewConsumerDataset) error {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
+	}
+	eventFamilies := []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCollected, events.FactorPeriodComputed, events.DatasetSyncPoint}
+	explicit := make(map[string]struct{})
+	for _, partition := range options.PartitionConfigs {
+		for _, route := range partition.DatasetRoutes {
+			if route.DatasetID != "*" {
+				explicit[route.SpaceID+"\x00"+route.DatasetID] = struct{}{}
+			}
+		}
+	}
+	for i := range options.PartitionConfigs {
+		partition := &options.PartitionConfigs[i]
+		routes := make([]viewservice.DatasetRoute, 0, len(partition.DatasetRoutes))
+		for _, route := range partition.DatasetRoutes {
+			if route.DatasetID != "*" {
+				routes = append(routes, route)
+				continue
+			}
+			for _, dataset := range managed {
+				if dataset.SpaceID != route.SpaceID {
+					continue
+				}
+				key := dataset.SpaceID + "\x00" + dataset.DatasetID
+				if _, exists := explicit[key]; exists {
+					continue
+				}
+				routes = append(routes, viewservice.DatasetRoute{SpaceID: dataset.SpaceID, DatasetID: dataset.DatasetID})
+				for _, event := range eventFamilies {
+					filter, renderErr := registry.RenderSubject(event, dataset.SpaceID, dataset.DatasetID)
+					if renderErr != nil {
+						return fmt.Errorf("render consumer partition %q filter: %w", partition.PartitionID, renderErr)
+					}
+					partition.FilterSubjects = appendUniqueString(partition.FilterSubjects, filter)
+				}
+			}
+		}
+		partition.DatasetRoutes = routes
+	}
+	return nil
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
 func storageViewConsumerOptions() (viewservice.EventConsumerOptions, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
-		return viewservice.EventConsumerOptions{}, nil
+		var runtimeConfig storageconfig.RuntimeConfig
+		runtimeConfig.ApplyDefaults()
+		return buildStorageViewConsumerOptions(runtimeConfig)
 	}
 	var runtimeConfig storageconfig.RuntimeConfig
 	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
 	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
 		return viewservice.EventConsumerOptions{}, fmt.Errorf("load storage view consumer config: %w", err)
 	}
-	return viewservice.EventConsumerOptions{
-		Consumer:      runtimeConfig.Storage.EventBus.Consumer,
-		AckWaitMS:     runtimeConfig.Storage.EventBus.AckWaitMS,
-		FetchBatch:    runtimeConfig.Storage.View.FetchBatch,
-		MaxWorkers:    runtimeConfig.Storage.View.MaxWorkers,
-		MaxAckPending: runtimeConfig.Storage.EventBus.MaxAckPending,
-		Ordering:      runtimeConfig.Storage.View.Ordering,
-		DeliverPolicy: strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_DELIVER_POLICY")),
-	}, nil
+	return buildStorageViewConsumerOptions(runtimeConfig)
+}
+
+func buildStorageViewConsumerOptions(runtimeConfig storageconfig.RuntimeConfig) (viewservice.EventConsumerOptions, error) {
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return viewservice.EventConsumerOptions{}, err
+	}
+	eventFamilies := []events.Event{
+		events.DatasetRowsUpserted,
+		events.DatasetPeriodCollected,
+		events.FactorPeriodComputed,
+		events.DatasetSyncPoint,
+	}
+	partitions := make([]viewservice.EventConsumerOptions, 0, len(runtimeConfig.Storage.View.ConsumerPartitions))
+	for _, partition := range runtimeConfig.Storage.View.ConsumerPartitions {
+		filters := make([]string, 0, len(partition.Datasets())*len(eventFamilies))
+		for _, dataset := range partition.Datasets() {
+			if dataset.DatasetID == "*" {
+				continue
+			}
+			for _, event := range eventFamilies {
+				filter, err := registry.RenderSubject(event, dataset.SpaceID, dataset.DatasetID)
+				if err != nil {
+					return viewservice.EventConsumerOptions{}, fmt.Errorf("render consumer partition %q filter: %w", partition.ID, err)
+				}
+				filters = append(filters, filter)
+			}
+		}
+		partitions = append(partitions, viewservice.EventConsumerOptions{
+			PartitionID:    partition.ID,
+			FilterSubjects: filters,
+			DatasetRoutes: func() []viewservice.DatasetRoute {
+				routes := make([]viewservice.DatasetRoute, 0, len(partition.Datasets()))
+				for _, dataset := range partition.Datasets() {
+					routes = append(routes, viewservice.DatasetRoute{SpaceID: dataset.SpaceID, DatasetID: dataset.DatasetID})
+				}
+				return routes
+			}(),
+			Consumer:         partition.Durable,
+			AckWaitMS:        partition.AckWaitMS,
+			FetchBatch:       partition.FetchBatch,
+			MaxWorkers:       partition.MaxWorkers,
+			MaxAckPending:    partition.MaxAckPending,
+			Ordering:         partition.Ordering,
+			DeliverPolicy:    storageViewDeliverPolicy(partition.DeliverPolicy),
+			MaxRetryAttempts: partition.MaxRetryAttempts,
+		})
+	}
+	return viewservice.EventConsumerOptions{PartitionConfigs: partitions}, nil
+}
+
+func storageViewDeliverPolicy(configured string) string {
+	if strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_REPLAY_PENDING")) == "1" {
+		return "all"
+	}
+	return configured
+}
+
+func storageViewRebuildPeriods() map[string]uint64 {
+	defaults := uniformRebuildPeriods(1000)
+	if raw := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS")); raw != "" {
+		if value, err := strconv.ParseUint(raw, 10, 64); err == nil && value > 0 && value <= 1_000_000 {
+			return uniformRebuildPeriods(value)
+		}
+	}
+	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if path == "" {
+		return defaults
+	}
+	var runtimeConfig storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
+		return defaults
+	}
+	if len(runtimeConfig.Storage.View.RebuildLookbackPeriods) == 0 {
+		return defaults
+	}
+	periods := make(map[string]uint64, len(runtimeConfig.Storage.View.RebuildLookbackPeriods))
+	for frequency, count := range runtimeConfig.Storage.View.RebuildLookbackPeriods {
+		frequency = strings.ToLower(strings.TrimSpace(frequency))
+		if frequency != "" && count > 0 {
+			periods[frequency] = count
+		}
+	}
+	if periods["default"] == 0 {
+		periods["default"] = defaults["default"]
+	}
+	return periods
+}
+
+func uniformRebuildPeriods(value uint64) map[string]uint64 {
+	return map[string]uint64{"1m": value, "1h": value, "1d": value, "default": value}
 }
 
 func storageViewRebuildSettings() (time.Duration, time.Duration, int64, uint64, uint32, bool, bool, error) {
 	const defaultInterval = time.Minute
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
-		lookback, err := rebuildLookbackOverride(72 * time.Hour)
+		lookback, err := rebuildLookbackOverride(24 * time.Hour)
 		return defaultInterval, lookback, 1 << 30, 32, 3, false, false, err
 	}
 	var runtimeConfig storageconfig.RuntimeConfig
@@ -503,8 +747,9 @@ func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newPr
 		newProxy = func(target string) pb.DataNodeRuntimeService {
 			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
 			return &dataNodeProxyAdapter{
-				proxy:       pb.NewDataNodeRuntimeClientProxy(opts...),
-				markerProxy: pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+				proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
+				markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+				historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
 			}
 		}
 	}
@@ -585,9 +830,18 @@ func normalizeServiceTarget(raw string) (string, error) {
 }
 
 type dataNodeProxyAdapter struct {
-	proxy       pb.DataNodeRuntimeClientProxy
-	markerProxy pb.DataNodeMarkerRuntimeClientProxy
+	proxy        pb.DataNodeRuntimeClientProxy
+	markerProxy  pb.DataNodeMarkerRuntimeClientProxy
+	historyProxy pb.DataNodeHistoryRuntimeClientProxy
 }
+
+func (a *dataNodeProxyAdapter) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	if a == nil || a.historyProxy == nil {
+		return nil, errors.New("DataNode history runtime is unavailable")
+	}
+	return a.historyProxy.ReadTimeSeriesRows(ctx, req)
+}
+
 type dataViewProxyAdapter struct {
 	proxy pb.DataViewClientProxy
 	auth  *pb.AuthInfo
@@ -654,7 +908,7 @@ func runDataNodeRole() error {
 		NodeID: nodeID, AuthSecret: authSecret,
 		Pebble: pebble.Options{
 			NodeID: nodeID, Path: filepath.Join(root, "pebble", nodeID),
-			MaxEventBytes: eventConfig.MaxPayloadBytes(),
+			MaxEventBytes: eventConfig.MaxPayloadBytes(), BucketDuration: cleanupBucketDuration(),
 		},
 	})
 	if err != nil {
@@ -680,6 +934,7 @@ func runDataNodeRole() error {
 	}
 	pb.RegisterDataNodeRuntimeService(listener, svc)
 	pb.RegisterDataNodeMarkerRuntimeService(listener, svc)
+	pb.RegisterDataNodeHistoryRuntimeService(listener, svc)
 	if err := registerRoleHealth(s, "storage-node"); err != nil {
 		return err
 	}

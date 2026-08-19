@@ -25,30 +25,31 @@ import (
 )
 
 type Options struct {
-	RepositoryRoot         string
-	PublicHost             string
-	NodeID                 string
-	BrowserPort            int
-	TargetGOOS             string
-	TargetGOARCH           string
-	ResetControlData       bool
-	ResetStorageData       bool
-	UseControlGateway      bool
-	EventBusPublicAddress  string
-	EventBusPort           int
-	EventBusTLSEnabled     bool
-	MonitoringWeComWebhook string
-	StoragePrimarySecret   string
-	StorageViewSecret      string
-	HealthAuthVersion      string
-	HealthAuthAccessKey    string
-	HealthAuthSecretKey    string
-	InstallStorageWatchdog bool
-	GatewayControlURL      string
-	GatewayControlKey      string
-	GatewayServiceKey      string
-	GatewayCABundle        []byte
-	TLSMode                TLSMode
+	RepositoryRoot                    string
+	PublicHost                        string
+	NodeID                            string
+	BrowserPort                       int
+	TargetGOOS                        string
+	TargetGOARCH                      string
+	ResetControlData                  bool
+	ResetStorageData                  bool
+	UseControlGateway                 bool
+	EventBusPublicAddress             string
+	EventBusPort                      int
+	EventBusTLSEnabled                bool
+	MonitoringWeComWebhook            string
+	StoragePrimarySecret              string
+	StorageViewSecret                 string
+	StorageViewRebuildLookbackPeriods uint64
+	HealthAuthVersion                 string
+	HealthAuthAccessKey               string
+	HealthAuthSecretKey               string
+	InstallStorageWatchdog            bool
+	GatewayControlURL                 string
+	GatewayControlKey                 string
+	GatewayServiceKey                 string
+	GatewayCABundle                   []byte
+	TLSMode                           TLSMode
 }
 
 type TLSMode string
@@ -595,6 +596,7 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		"MOOX_STORAGE_PRIMARY_AUTH_SECRET="+opts.StoragePrimarySecret,
 		"MOOX_STORAGE_VIEW_AUTH_SECRET="+opts.StorageViewSecret,
 	)
+	command.Env = setCommandEnv(command.Env, "MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS", strconv.FormatUint(storageViewRebuildLookbackPeriods(opts.StorageViewRebuildLookbackPeriods), 10))
 	if strings.TrimSpace(opts.HealthAuthVersion) == "" ||
 		strings.TrimSpace(opts.HealthAuthAccessKey) == "" ||
 		strings.TrimSpace(opts.HealthAuthSecretKey) == "" {
@@ -611,6 +613,25 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 		return "", err
 	}
 	return archive, nil
+}
+
+func storageViewRebuildLookbackPeriods(value uint64) uint64 {
+	if value == 0 {
+		return 1000
+	}
+	return value
+}
+
+func setCommandEnv(base []string, key, value string) []string {
+	env := make([]string, 0, len(base)+1)
+	for _, entry := range base {
+		entryKey, _, found := strings.Cut(entry, "=")
+		if found && entryKey == key {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return append(env, key+"="+value)
 }
 
 func storageNodeID(nodeID string) string {
@@ -965,6 +986,23 @@ install_control() {
   rm -rf "$next" "$previous"
   mkdir -p "$next"
   tar -C "$next" -xzf "$archive"
+  # Storage can be installed independently after the control package.  Keep
+  # that explicit topology decision across a later control upgrade; the
+  # freshly packaged default is zero because the control package cannot know
+  # which Storage roots exist on the target host.
+  old_components="$deploy/config/components.env"
+  next_components="$next/config/components.env"
+  if [ -r "$old_components" ] && [ -r "$next_components" ] &&
+    grep -q '^MOOX_PRESERVE_STORAGE_ROUTES=1$' "$old_components" &&
+    ! grep -q '^MOOX_PRESERVE_STORAGE_ROUTES=1$' "$next_components"; then
+    policy_tmp="$next_components.tmp.$$"
+    trap 'rm -f "$policy_tmp"' EXIT
+    awk '!/^MOOX_PRESERVE_STORAGE_ROUTES=/' "$next_components" >"$policy_tmp"
+    printf '%s\n' 'MOOX_PRESERVE_STORAGE_ROUTES=1' >>"$policy_tmp"
+    chmod --reference="$next_components" "$policy_tmp" 2>/dev/null || chmod 0600 "$policy_tmp"
+    mv -f "$policy_tmp" "$next_components"
+    trap - EXIT
+  fi
   printf '%s\n' "$activation_token" >"$next/.control-activation-token"
   caddy_stopped=0
   restart_stopped_caddy() {

@@ -35,6 +35,23 @@ type IndexManager struct {
 	coverageMu sync.Mutex
 }
 
+// duckDBContext checks cancellation before entering DuckDB, then detaches it
+// for the duration of the operation. go-duckdb implements QueryContext and
+// ExecContext by calling duckdb_interrupt when a context is cancelled. Under
+// concurrent connections that interrupt can cross the cgo boundary as an
+// uncaught C++ exception ("duckdb::Exception: Interrupted!") and abort the
+// storage-view process. A request may still be rejected before it starts, but
+// an in-flight DuckDB operation must run to its transaction/query boundary.
+func duckDBContext(ctx context.Context) (context.Context, error) {
+	if ctx == nil {
+		return context.Background(), nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return context.WithoutCancel(ctx), nil
+}
+
 var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
 var duckDBMemoryLimitRE = regexp.MustCompile(`^[1-9][0-9]*(?:KB|MB|GB|TB)$`)
 
@@ -77,6 +94,10 @@ func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 func (m *IndexManager) Engine() string { return "duckdb" }
 
 func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.ViewIndexSchema) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
 	path, err := m.path(id)
 	if err != nil {
 		return err
@@ -157,6 +178,10 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 }
 
 func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.ViewIndexWriteBatch) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
 	if err := batch.Validate(); err != nil {
 		return err
 	}
@@ -531,6 +556,10 @@ func normalizeColumnValue(value any, valueType pb.FieldValueType, mode viewindex
 }
 
 func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return nil, 0, err
+	}
 	db, columns, datasetID, spaceID, err := m.getIndex(ctx, id)
 	if err != nil {
 		return nil, 0, err
@@ -658,6 +687,10 @@ func resolveIncludedColumns(columns map[string]pb.FieldValueType, includes []str
 }
 
 func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
 	path, err := m.path(id)
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
@@ -757,6 +790,10 @@ func canonicalizeCoverageTime(value string) string {
 // periodic reconciliation and can otherwise keep the RPC listeners offline
 // for the duration of a large View restore.
 func (m *IndexManager) StatMetadata(ctx context.Context, id string) (viewindex.ViewIndexStats, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return viewindex.ViewIndexStats{}, err
+	}
 	path, err := m.path(id)
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
@@ -845,6 +882,10 @@ func (m *IndexManager) closeIndex(id string) error {
 }
 
 func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[string]pb.FieldValueType, string, string, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return nil, nil, "", "", err
+	}
 	path, err := m.path(id)
 	if err != nil {
 		return nil, nil, "", "", err
@@ -914,6 +955,10 @@ func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[st
 }
 
 func (m *IndexManager) ensureCoverageColumns(ctx context.Context, db *sql.DB) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
 	m.coverageMu.Lock()
 	defer m.coverageMu.Unlock()
 	for _, column := range []string{"indexed_from", "indexed_to"} {

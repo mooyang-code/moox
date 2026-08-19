@@ -26,7 +26,7 @@ func TestConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Consumer != "storage_view_period_v1" || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "dataset" || config.DeliverPolicy != "all" {
+	if config.Consumer != events.StorageViewKlineConsumer || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "dataset" || config.DeliverPolicy != "all" {
 		t.Fatalf("config = %+v", config)
 	}
 }
@@ -41,6 +41,19 @@ func TestConfigNormalizesDeliverPolicy(t *testing.T) {
 	}
 	if _, err := (Config{DeliverPolicy: "last"}).withDefaults(); err == nil {
 		t.Fatal("unsupported deliver policy was accepted")
+	}
+}
+
+func TestConfigAcceptsExactPartitionFilters(t *testing.T) {
+	config, err := (Config{
+		PartitionID:    "kline",
+		FilterSubjects: []string{"moox.storage.dataset.rows.upserted.v2.crypto.binance"},
+	}).withDefaults()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.PartitionID != "kline" || len(config.FilterSubjects) != 1 {
+		t.Fatalf("partition config = %+v", config)
 	}
 }
 

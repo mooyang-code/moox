@@ -27,6 +27,28 @@ type Client struct {
 	closed      bool
 }
 
+// Fork opens an independent NATS/JetStream connection using the same
+// credentials and endpoint configuration. Long-lived consumers that must be
+// failure-isolated should use a fork instead of sharing a connection whose
+// reconnect can invalidate unrelated subscriptions.
+func (c *Client) Fork(ctx context.Context, name string) (*Client, error) {
+	if c == nil {
+		return nil, ErrConnection
+	}
+	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		return nil, ErrClosed
+	}
+	cfg := c.cfg
+	cfg.URLs = append([]string(nil), c.cfg.URLs...)
+	c.mu.RUnlock()
+	if strings.TrimSpace(name) != "" {
+		cfg.Name = strings.TrimSpace(name)
+	}
+	return Connect(ctx, cfg)
+}
+
 func (c *Client) Ready() bool {
 	if c == nil {
 		return false

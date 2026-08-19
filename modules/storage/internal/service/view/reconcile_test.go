@@ -37,6 +37,9 @@ func (m *reconcileMetadata) GetDataset(_ context.Context, req *pb.GetDatasetReq,
 	}
 	return &pb.GetDatasetRsp{RetInfo: successRetInfo(), Dataset: &pb.Dataset{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), DataKind: kind}}, nil
 }
+func (m *reconcileMetadata) ListDatasetSubjects(context.Context, *pb.ListDatasetSubjectsReq, ...client.Option) (*pb.ListDatasetSubjectsRsp, error) {
+	return &pb.ListDatasetSubjectsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
+}
 func (m *reconcileMetadata) ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error) {
 	return &pb.ListDatasetColumnsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
 }
@@ -106,6 +109,66 @@ func TestNeedsRebuildTriggers(t *testing.T) {
 	}
 	if needsSizeLimitRebuild(permanent, viewindex.ViewIndexStats{Exists: true, PhysicalBytes: 1 << 40}, ReconcilerOptions{MaxViewFileBytes: 1}) {
 		t.Fatal("permanent view triggered an unrecoverable physical rebuild")
+	}
+}
+
+func TestRebuildLookbackUsesViewRetentionPerFrequency(t *testing.T) {
+	view := &pb.View{KeepDuration: "6h"}
+	if got := rebuildLookbackForView(view, 24*time.Hour); got != 6*time.Hour {
+		t.Fatalf("view-specific lookback = %s, want 6h", got)
+	}
+	if got := rebuildLookbackForView(&pb.View{KeepDuration: "0"}, 24*time.Hour); got != 24*time.Hour {
+		t.Fatalf("fallback lookback = %s, want 24h", got)
+	}
+	if got := rebuildLookbackForView(&pb.View{KeepDuration: "not-a-duration"}, 24*time.Hour); got != 24*time.Hour {
+		t.Fatalf("invalid view retention should use fallback, got %s", got)
+	}
+}
+
+func TestRebuildLookbackPeriodsSelectsFrequencyAndDefault(t *testing.T) {
+	configured := map[string]uint64{"1m": 4320, "1h": 2880, "1d": 360, "default": 2000}
+	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1m"}`}, configured); got != 4320 {
+		t.Fatalf("1m periods = %d, want 4320", got)
+	}
+	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1H"}`}, configured); got != 2880 {
+		t.Fatalf("1H periods = %d, want 2880", got)
+	}
+	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1d"}`}, configured); got != 360 {
+		t.Fatalf("1d periods = %d, want 360", got)
+	}
+	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"30s"}`}, configured); got != 2000 {
+		t.Fatalf("default periods = %d, want 2000", got)
+	}
+	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"foo":"bar"}`}, configured); got != 0 {
+		t.Fatalf("missing frequency periods = %d, want 0", got)
+	}
+	if got := rebuildLookbackPeriodsForView(&pb.View{FilterJson: `{"freq":"1m"}`}, nil); got != defaultRebuildLookbackPeriods {
+		t.Fatalf("missing configured periods = %d, want default %d", got, defaultRebuildLookbackPeriods)
+	}
+	if got := rebuildLookbackPeriodsForView(&pb.View{Engine: "duckdb", FilterJson: `{"foo":"bar"}`}, nil); got != 0 {
+		t.Fatalf("frequency-less View periods = %d, want 0", got)
+	}
+}
+
+func TestNeedsLookbackRepairDetectsShortTimeSeriesCoverage(t *testing.T) {
+	view := &pb.View{Engine: "duckdb", ActiveIndexId: "idx", KeepDuration: "24h"}
+	short := viewindex.ViewIndexStats{
+		Exists:      true,
+		IndexedFrom: time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339Nano),
+		IndexedTo:   time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if !needsLookbackRepair(view, short, time.Hour) {
+		t.Fatal("short active coverage did not request Primary-backed repair")
+	}
+	bleve := proto.Clone(view).(*pb.View)
+	bleve.Engine = "bleve"
+	if needsLookbackRepair(bleve, short, time.Hour) {
+		t.Fatal("record View should not request time-series coverage repair")
+	}
+	complete := short
+	complete.IndexedFrom = time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	if needsLookbackRepair(view, complete, time.Hour) {
+		t.Fatal("complete active coverage requested an unnecessary repair")
 	}
 }
 

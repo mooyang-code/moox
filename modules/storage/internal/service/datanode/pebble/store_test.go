@@ -3,10 +3,12 @@ package pebble
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
@@ -36,6 +38,129 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 	remaining, err := s.ReadFields(context.Background(), []*pb.RowKey{rows[2].GetKey()}, []string{"f"}, nil)
 	if err != nil || len(remaining) != 1 || len(remaining[0].GetFields()) != 1 {
 		t.Fatalf("newer bucket was removed: rows=%v err=%v", remaining, err)
+	}
+}
+
+func TestReadTimeSeriesRowsScansPrimaryHistoryWithoutView(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows := []*pb.RowFieldUpsert{
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}}}},
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-16T00:01:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 11}}}}},
+	}
+	if err := store.UpsertFields(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	rsp, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		SpaceId: "s", DatasetId: "d", TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:02:00Z"},
+		ColumnNames: []string{"close"}, Page: &pb.Page{Page: 1, Size: 10},
+	})
+	if err != nil || len(rsp.GetRows()) != 2 || rsp.GetRows()[1].GetKey().GetDataTime() != "2026-08-16T00:01:00.000000000Z" {
+		t.Fatalf("scan rsp=%v err=%v", rsp, err)
+	}
+}
+
+func TestReadTimeSeriesRowsBackfillsHistoryFromLegacyFieldKeys(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "legacy", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-14T00:00:00Z",
+	}}}
+	if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{
+		Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	historyKey, err := encodeHistoryKey(key, store.bucketDuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Delete(historyKey, store.writeOptions); err != nil {
+		t.Fatal(err)
+	}
+	rsp, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		SpaceId: "s", DatasetId: "legacy", TimeRange: &pb.TimeRange{StartTime: "2026-08-14T00:00:00Z", EndTime: "2026-08-14T00:01:00Z"},
+		ColumnNames: []string{"close"}, Page: &pb.Page{Page: 1, Size: 10},
+	})
+	if err != nil || len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetDataTime() != "2026-08-14T00:00:00.000000000Z" {
+		t.Fatalf("legacy history rsp=%v err=%v", rsp, err)
+	}
+}
+
+func TestReadTimeSeriesRowsUsesCursorWithoutRepeatingPage(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for i := 0; i < 3; i++ {
+		key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: time.Date(2026, 8, 16, 0, i, 0, 0, time.UTC).Format(time.RFC3339)}}}
+		if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i)}}}}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "d", TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:03:00Z"}, ColumnNames: []string{"close"}, Page: &pb.Page{Page: 1, Size: 1}})
+	if err != nil || len(first.GetRows()) != 1 {
+		t.Fatalf("first page=%v err=%v", first, err)
+	}
+	firstKey := first.GetRows()[0].GetKey()
+	cursor, err := proto.Marshal(&pb.RowKey{SpaceId: firstKey.GetSpaceId(), DatasetId: firstKey.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: firstKey.GetSubjectId(), Freq: firstKey.GetFreq(), DataTime: firstKey.GetDataTime(), SeriesTag: firstKey.GetSeriesTag()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "d", AfterKey: cursor, TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:03:00Z"}, ColumnNames: []string{"close"}, Page: &pb.Page{Page: 1, Size: 2}})
+	if err != nil || len(second.GetRows()) != 2 || second.GetRows()[0].GetKey().GetDataTime() != "2026-08-16T00:01:00Z" && second.GetRows()[0].GetKey().GetDataTime() != "2026-08-16T00:01:00.000000000Z" {
+		t.Fatalf("cursor page=%v err=%v", second, err)
+	}
+}
+
+func TestReadTimeSeriesRowsCursorUsesLogicalTimeAcrossSubjects(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	// Physical keys sort by subject before data_time. The second row is later
+	// in the logical time order but physically precedes the cursor subject.
+	rows := []*pb.RowFieldUpsert{
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "Z", Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
+		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "A", Freq: "1m", DataTime: "2026-08-16T00:01:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}},
+	}
+	if err := store.UpsertFields(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "d", TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:02:00Z"}, Page: &pb.Page{Page: 1, Size: 1}})
+	if err != nil || len(first.GetRows()) != 1 {
+		t.Fatalf("first page=%v err=%v", first, err)
+	}
+	row := first.GetRows()[0].GetKey()
+	cursor, err := proto.Marshal(&pb.RowKey{SpaceId: row.GetSpaceId(), DatasetId: row.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: row.GetSubjectId(), Freq: row.GetFreq(), DataTime: row.GetDataTime(), SeriesTag: row.GetSeriesTag()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "d", AfterKey: cursor, TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:02:00Z"}, Page: &pb.Page{Page: 1, Size: 1}})
+	if err != nil || len(second.GetRows()) != 1 || second.GetRows()[0].GetKey().GetSubjectId() != "A" {
+		t.Fatalf("logical cursor page=%v err=%v", second, err)
+	}
+}
+
+func TestReadTimeSeriesRowsRejectsLargePageOffset(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, err = store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+		SpaceId: "s", DatasetId: "d", Page: &pb.Page{Page: 1001, Size: 1000},
+	})
+	if err == nil || !strings.Contains(err.Error(), "after_key") {
+		t.Fatalf("large page offset error = %v, want cursor guidance", err)
 	}
 }
 

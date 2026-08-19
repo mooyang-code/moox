@@ -21,6 +21,10 @@ const defaultMaxRetryAttempts = -1
 const reconnectAfterSubscriptionErrors = 3
 
 type Config struct {
+	PartitionID      string
+	FilterSubjects   []string
+	PartitionConfigs []Config
+	DatasetRoutes    []DatasetRoute
 	Consumer         string
 	AckWaitMS        int
 	FetchBatch       int
@@ -33,11 +37,32 @@ type Config struct {
 	Metrics          *observability.ViewMetrics
 	BeforeProcess    func(context.Context, *jetstream.Delivery) error
 	Lease            DeliveryLease
+	BoundReporter    func(bool)
+}
+
+type DatasetRoute struct {
+	SpaceID   string
+	DatasetID string
 }
 
 func (c Config) withDefaults() (Config, error) {
+	c.PartitionID = strings.TrimSpace(c.PartitionID)
+	filters := make([]string, 0, len(c.FilterSubjects))
+	seenFilters := make(map[string]struct{}, len(c.FilterSubjects))
+	for _, raw := range c.FilterSubjects {
+		filter := strings.TrimSpace(raw)
+		if filter == "" || strings.ContainsAny(filter, ">* ") {
+			return c, fmt.Errorf("storage view partition filter %q is invalid", raw)
+		}
+		if _, ok := seenFilters[filter]; ok {
+			return c, fmt.Errorf("storage view partition filter %q is duplicated", filter)
+		}
+		seenFilters[filter] = struct{}{}
+		filters = append(filters, filter)
+	}
+	c.FilterSubjects = filters
 	if strings.TrimSpace(c.Consumer) == "" {
-		c.Consumer = "storage_view_period_v1"
+		c.Consumer = events.StorageViewKlineConsumer
 	}
 	if c.AckWaitMS == 0 {
 		c.AckWaitMS = 120000
@@ -146,26 +171,36 @@ func (c *Consumer) bindDelivery(ctx context.Context) (deliveryConsumer, error) {
 	if c == nil || c.client == nil || c.registry == nil {
 		return nil, errors.New("storage view event consumer is not initialized")
 	}
-	opts := c.config
-	deliverPolicy := nats.DeliverAllPolicy
-	if opts.DeliverPolicy == "new" {
-		deliverPolicy = nats.DeliverNewPolicy
-	}
-	return events.NewConsumer(ctx, c.client, c.registry, events.ConsumerConfig{
-		Name: opts.Consumer,
-		Events: []events.Event{
-			events.DatasetRowsUpserted,
-			events.DatasetPeriodCollected,
-			events.FactorPeriodComputed,
-			events.DatasetSyncPoint,
-		},
-		AckWait:             time.Duration(opts.AckWaitMS) * time.Millisecond,
-		MaxDeliver:          -1,
-		MaxAckPending:       opts.MaxAckPending,
-		FetchMaxWait:        time.Second,
-		DeliverPolicy:       deliverPolicy,
+	return events.NewConsumer(ctx, c.client, c.registry, eventConsumerConfig(c.config))
+}
+
+func eventConsumerConfig(opts Config) events.ConsumerConfig {
+	cfg := events.ConsumerConfig{
+		Name:          opts.Consumer,
+		AckWait:       time.Duration(opts.AckWaitMS) * time.Millisecond,
+		MaxDeliver:    -1,
+		MaxAckPending: opts.MaxAckPending,
+		FetchMaxWait:  time.Second,
+		DeliverPolicy: func() nats.DeliverPolicy {
+			if opts.DeliverPolicy == "new" {
+				return nats.DeliverNewPolicy
+			}
+			return nats.DeliverAllPolicy
+		}(),
 		DeliverDecodeErrors: true,
-	})
+	}
+	if len(opts.FilterSubjects) != 0 {
+		cfg.Stream = events.DatasetRowsUpserted.Stream()
+		cfg.FilterSubjects = append([]string(nil), opts.FilterSubjects...)
+		return cfg
+	}
+	cfg.Events = []events.Event{
+		events.DatasetRowsUpserted,
+		events.DatasetPeriodCollected,
+		events.FactorPeriodComputed,
+		events.DatasetSyncPoint,
+	}
+	return cfg
 }
 
 func (c *Consumer) Start(ctx context.Context) (func(), error) {
@@ -176,6 +211,11 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 		return nil, errors.New("storage view consumer context is required")
 	}
 	opts := c.config
+	partitionID := strings.TrimSpace(opts.PartitionID)
+	if partitionID == "" {
+		partitionID = strings.TrimSpace(opts.Consumer)
+	}
+	durable := strings.TrimSpace(opts.Consumer)
 	if c.bind == nil {
 		c.bind = c.bindDelivery
 	}
@@ -183,7 +223,17 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	opts.Metrics.SetConsumerBound(true)
+	// Multi-partition Storage View owns the aggregate bound state in
+	// StartEventConsumer. Keep the legacy single-consumer metric behavior when
+	// no partition callback is supplied, but do not let one partition overwrite
+	// the aggregate with its own state.
+	if opts.BoundReporter == nil {
+		opts.Metrics.SetConsumerBound(true)
+	}
+	opts.Metrics.SetConsumerPartitionBound(partitionID, durable, true)
+	if opts.BoundReporter != nil {
+		opts.BoundReporter(true)
+	}
 	loopCtx, cancel := context.WithCancel(ctx)
 	dispatcher := newSubjectDispatcherWithKey(loopCtx, opts.MaxWorkers, opts.MaxAckPending, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
 		if opts.BeforeProcess != nil {
@@ -206,13 +256,22 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 		onFinish: func(delivery *jetstream.Delivery) {
 			opts.Metrics.DecLaneActive()
 			opts.Metrics.AddConsumerLagMessages(-1)
+			opts.Metrics.AddConsumerPartitionLag(partitionID, durable, -1)
 			opts.Metrics.CompletePendingDelivery(delivery, time.Now().UTC())
 		},
 	})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		defer opts.Metrics.SetConsumerBound(false)
+		if opts.BoundReporter == nil {
+			defer opts.Metrics.SetConsumerBound(false)
+		}
+		defer opts.Metrics.SetConsumerPartitionBound(partitionID, durable, false)
+		defer func() {
+			if opts.BoundReporter != nil {
+				opts.BoundReporter(false)
+			}
+		}()
 		defer func() {
 			if bound != nil {
 				_ = bound.Close()
@@ -223,10 +282,12 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 		for loopCtx.Err() == nil {
 			deliveries, fetchErr := bound.Fetch(loopCtx, opts.FetchBatch)
 			opts.Metrics.AddConsumerLagMessages(int64(len(deliveries)))
+			opts.Metrics.AddConsumerPartitionLag(partitionID, durable, int64(len(deliveries)))
 			for _, delivery := range deliveries {
 				opts.Metrics.ObservePendingDelivery(delivery, time.Now().UTC())
 				if err := dispatcher.Dispatch(delivery); err != nil {
 					opts.Metrics.AddConsumerLagMessages(-1)
+					opts.Metrics.AddConsumerPartitionLag(partitionID, durable, -1)
 					opts.Metrics.CompletePendingDelivery(delivery, time.Now().UTC())
 					if loopCtx.Err() == nil {
 						opts.ErrorReporter.Report(fmt.Errorf("dispatch storage view delivery: %w", err))
@@ -238,9 +299,21 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 					return
 				}
 				if errors.Is(fetchErr, nats.ErrTimeout) {
-					opts.Metrics.SetConsumerBound(true)
+					if opts.BoundReporter == nil {
+						opts.Metrics.SetConsumerBound(true)
+					}
+					if opts.BoundReporter != nil {
+						opts.BoundReporter(true)
+					}
+					opts.Metrics.SetConsumerPartitionBound(partitionID, durable, true)
 				} else {
-					opts.Metrics.SetConsumerBound(false)
+					if opts.BoundReporter == nil {
+						opts.Metrics.SetConsumerBound(false)
+					}
+					if opts.BoundReporter != nil {
+						opts.BoundReporter(false)
+					}
+					opts.Metrics.SetConsumerPartitionBound(partitionID, durable, false)
 					if shouldRebind(fetchErr) {
 						// Tear down the old pull subscription before replacing the
 						// shared NATS connection. Keeping it alive while Reconnect
@@ -271,6 +344,9 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 						if bound == nil {
 							return
 						}
+						if opts.BoundReporter != nil {
+							opts.BoundReporter(true)
+						}
 					} else {
 						consecutiveSubscriptionErrors = 0
 						opts.ErrorReporter.Report(fmt.Errorf("fetch storage view deliveries: %w", fetchErr))
@@ -288,7 +364,12 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 				continue
 			}
 			consecutiveSubscriptionErrors = 0
-			opts.Metrics.SetConsumerBound(true)
+			if opts.BoundReporter == nil {
+				opts.Metrics.SetConsumerBound(true)
+			} else {
+				opts.BoundReporter(true)
+			}
+			opts.Metrics.SetConsumerPartitionBound(partitionID, durable, true)
 		}
 	}()
 	return func() { cancel(); <-done }, nil

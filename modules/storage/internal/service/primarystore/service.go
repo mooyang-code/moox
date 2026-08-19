@@ -23,6 +23,10 @@ type DataNodeClient interface {
 	ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
 }
 
+type historyDataNodeClient interface {
+	ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
+}
+
 // NodeResolver is the legacy resolver shape used by the server and existing
 // in-process tests. Marker-capable calls are discovered with a small
 // type-asserted extension, so old DataNode fakes do not need to implement the

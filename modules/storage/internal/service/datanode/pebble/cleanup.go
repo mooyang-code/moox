@@ -24,7 +24,7 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 	before := beforeBucket.UTC().Format(canonicalTimeLayout)
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	ranges := make([][2][]byte, 0, 2)
+	ranges := make([][2][]byte, 0, 3)
 	buckets := make(map[string]struct{})
 	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
 		prefix := []byte{namespace, timeSeriesKind}
@@ -56,6 +56,18 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 			}
 			ranges = append(ranges, [2][]byte{append([]byte(nil), prefix...), append([]byte(nil), upper...)})
 		}
+	}
+	// History markers are ordered by logical data time, so they can be
+	// removed with one bounded range instead of scanning every field key.
+	historyPrefix := []byte{historyNamespace, timeSeriesKind}
+	historyPrefix = appendRawPart(historyPrefix, []byte(spaceID))
+	historyPrefix = appendRawPart(historyPrefix, []byte(datasetID))
+	historyUpper := appendPart(append([]byte(nil), historyPrefix...), before)
+	if !bytes.Equal(historyPrefix, historyUpper) {
+		if err := batch.DeleteRange(historyPrefix, historyUpper, s.writeOptions); err != nil {
+			return 0, err
+		}
+		ranges = append(ranges, [2][]byte{historyPrefix, historyUpper})
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return 0, err

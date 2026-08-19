@@ -12,6 +12,10 @@ public_address = ""
 port = 4222
 tls_enabled = true
 
+# View 重建统一回溯的已完成 K 线根数，所有频率使用同一个值。
+[storage_view]
+rebuild_lookback_periods = 1000
+
 # 留空时仍采集和展示监控数据，但不发送站外告警。
 [monitoring]
 wecom_webhook = ""

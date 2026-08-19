@@ -59,13 +59,10 @@ printf '%s\n' "${now}" >"${ATTEMPT_FILE}"
   printf '[%s] storage-view is unhealthy; pid=%s alive=%s age=%ss\n' \
     "$(date -Is)" "${pid:-none}" "${process_alive}" "${process_age}"
   free -h || true
-  # Rebind the existing durable with the same DeliverNew policy used by the
-  # production start path; changing policy would conflict with the durable.
   MOOX_WITH_STORAGE=1 \
   MOOX_WITH_STORAGE_NODE=1 \
   MOOX_GATEWAY_NODE_ID="${MOOX_GATEWAY_NODE_ID:-control}" \
   MOOX_STORAGE_EVENTBUS_URL="${MOOX_STORAGE_EVENTBUS_URL:-tls://127.0.0.1:4222}" \
-  MOOX_STORAGE_VIEW_DELIVER_POLICY="${MOOX_STORAGE_VIEW_DELIVER_POLICY:-new}" \
     "${ROOT}/start.sh" storage-view 8>&- 9>&-
   printf '[%s] storage-view restart command completed\n' "$(date -Is)"
 } >>"${LOG_FILE}" 2>&1

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "$(basename "${SCRIPT_DIR}")" == "contract" ]]; then
+  ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
+else
+  ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+fi
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-storage-profile.XXXXXX")"
 FIXTURE_ROOT="${TMP_ROOT}/repo"
 ARCHIVE="${TMP_ROOT}/storage.tar.gz"
@@ -110,7 +115,10 @@ grep -q 'doctor bootstrap --format json' "${TMP_ROOT}/unpacked/start.sh"
 grep -q 'activate-datasets' "${TMP_ROOT}/unpacked/start.sh"
 [[ "$(grep -Fc 'MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}' "${TMP_ROOT}/unpacked/start.sh")" == "3" ]]
 [[ "$(grep -Fc 'wait_nats storage "${STORAGE_EVENTBUS_URL_ENV}"' "${TMP_ROOT}/unpacked/start.sh")" == "2" ]]
-grep -Fq 'MOOX_STORAGE_VIEW_DELIVER_POLICY=${MOOX_STORAGE_VIEW_DELIVER_POLICY:-new}' "${TMP_ROOT}/unpacked/start.sh"
+if grep -Fq 'MOOX_STORAGE_VIEW_DELIVER_POLICY' "${TMP_ROOT}/unpacked/start.sh"; then
+  echo "unexpected global Storage View deliver policy override" >&2
+  exit 1
+fi
 if grep -Eq 'MOOX_(METRICS|HOST)_STORAGE_ROUTE_SEED' "${FIXTURE_ROOT}/scripts/deploy-moox.sh"; then
   echo 'legacy storage route seed environment remains in deployment script' >&2
   exit 1

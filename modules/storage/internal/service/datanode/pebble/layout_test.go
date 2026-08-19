@@ -34,7 +34,7 @@ func TestOpenInitializesLayoutMarkerForNewAndEmptyPaths(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(data) != "2\n" {
+			if string(data) != "3\n" {
 				t.Fatalf("layout marker = %q", data)
 			}
 		})
@@ -59,7 +59,7 @@ func TestOpenRejectsNonEmptyStoreWithoutLayoutMarker(t *testing.T) {
 }
 
 func TestOpenRejectsUnsupportedOrDamagedLayoutMarkerWithoutCleanup(t *testing.T) {
-	for _, content := range []string{"1\n", "3\n", "2", "garbage\n"} {
+	for _, content := range []string{"1\n", "2", "garbage\n"} {
 		t.Run(strings.TrimSpace(content), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "db")
 			if err := os.Mkdir(path, 0o755); err != nil {
@@ -86,7 +86,31 @@ func TestOpenRejectsUnsupportedOrDamagedLayoutMarkerWithoutCleanup(t *testing.T)
 	}
 }
 
-func TestOpenReopensVersionTwoLayout(t *testing.T) {
+func TestEnsureLayoutUpgradesVersionTwoWithoutDeletingData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(path, layoutMarkerName)
+	if err := os.WriteFile(marker, []byte("2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(path, "CURRENT")
+	if err := os.WriteFile(sentinel, []byte("legacy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureLayout(path); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != layoutVersion {
+		t.Fatalf("layout marker = %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "legacy" {
+		t.Fatalf("legacy data changed: data=%q err=%v", data, err)
+	}
+}
+
+func TestOpenReopensVersionThreeLayout(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db")
 	store, err := Open(Options{Path: path, NodeID: "node-1"})
 	if err != nil {

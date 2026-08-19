@@ -2,12 +2,14 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events"
 	"gopkg.in/yaml.v2"
 )
 
@@ -57,7 +59,7 @@ type StorageEventBus struct {
 }
 
 const (
-	StorageViewConsumer         = "storage_view_period_v1"
+	StorageViewConsumer         = events.StorageViewKlineConsumer
 	StorageDefaultMaxAckPending = 8
 	StorageViewMaxAckPending    = 256
 	StorageViewAckWaitMS        = 120000
@@ -74,16 +76,237 @@ type StorageView struct {
 	MaxWorkers              int    `yaml:"max_workers"`
 	Ordering                string `yaml:"ordering"`
 	RebuildCheckInterval    string `yaml:"rebuild_check_interval"`
-	// RebuildLookback is the minimum wall-clock history that every View build
-	// must cover before its replacement can become active.
-	RebuildLookback      string           `yaml:"rebuild_lookback"`
-	MaxViewFileBytes     int64            `yaml:"max_view_file_bytes"`
-	RebuildMaxPending    uint64           `yaml:"rebuild_max_pending"`
-	RebuildIdleChecks    uint32           `yaml:"rebuild_idle_checks"`
-	StorageRPC           StorageRPCConfig `yaml:"storage_rpc"`
-	maxViewFileBytesSet  bool
-	rebuildMaxPendingSet bool
-	rebuildIdleChecksSet bool
+	// RebuildLookback is the wall-clock fallback for legacy Views without a
+	// frequency-specific completed-bar target.
+	RebuildLookback        string                         `yaml:"rebuild_lookback"`
+	RebuildLookbackPeriods map[string]uint64              `yaml:"rebuild_lookback_periods"`
+	MaxViewFileBytes       int64                          `yaml:"max_view_file_bytes"`
+	RebuildMaxPending      uint64                         `yaml:"rebuild_max_pending"`
+	RebuildIdleChecks      uint32                         `yaml:"rebuild_idle_checks"`
+	ConsumerPartitions     []StorageViewConsumerPartition `yaml:"consumer_partitions"`
+	StorageRPC             StorageRPCConfig               `yaml:"storage_rpc"`
+	maxViewFileBytesSet    bool
+	rebuildMaxPendingSet   bool
+	rebuildIdleChecksSet   bool
+}
+
+// StorageViewConsumerRoute identifies the Dataset subjects owned by a
+// consumer partition. A route may use dataset_ids: ["*"] as a metadata
+// inventory expansion point; runtime rendering expands it to concrete
+// datasets and always gives explicit routes precedence.
+type StorageViewConsumerRoute struct {
+	SpaceID    string   `yaml:"space_id"`
+	DatasetIDs []string `yaml:"dataset_ids"`
+}
+
+// StorageViewConsumerPartition owns one independent JetStream durable and
+// its delivery budget. A partition may contain several explicit routes, but a
+// Dataset route must occur in exactly one partition.
+type StorageViewConsumerPartition struct {
+	ID               string                     `yaml:"id"`
+	Durable          string                     `yaml:"durable"`
+	SpaceID          string                     `yaml:"space_id"` // shorthand for one route
+	DatasetIDs       []string                   `yaml:"dataset_ids"`
+	Routes           []StorageViewConsumerRoute `yaml:"routes"`
+	AckWaitMS        int                        `yaml:"ack_wait_ms"`
+	FetchBatch       int                        `yaml:"fetch_batch"`
+	MaxWorkers       int                        `yaml:"max_workers"`
+	MaxAckPending    int                        `yaml:"max_ack_pending"`
+	Ordering         string                     `yaml:"ordering"`
+	DeliverPolicy    string                     `yaml:"deliver_policy"`
+	MaxRetryAttempts int                        `yaml:"max_retry_attempts"`
+}
+
+type StorageViewConsumerDataset struct {
+	SpaceID   string
+	DatasetID string
+}
+
+func (p StorageViewConsumerPartition) normalizedRoutes() []StorageViewConsumerRoute {
+	routes := make([]StorageViewConsumerRoute, 0, len(p.Routes)+1)
+	if strings.TrimSpace(p.SpaceID) != "" || len(p.DatasetIDs) != 0 {
+		routes = append(routes, StorageViewConsumerRoute{SpaceID: p.SpaceID, DatasetIDs: p.DatasetIDs})
+	}
+	routes = append(routes, p.Routes...)
+	return routes
+}
+
+func (p StorageViewConsumerPartition) Datasets() []StorageViewConsumerDataset {
+	var out []StorageViewConsumerDataset
+	for _, route := range p.normalizedRoutes() {
+		spaceID := strings.TrimSpace(route.SpaceID)
+		for _, datasetID := range route.DatasetIDs {
+			out = append(out, StorageViewConsumerDataset{SpaceID: spaceID, DatasetID: strings.TrimSpace(datasetID)})
+		}
+	}
+	return out
+}
+
+func (v *StorageView) applyConsumerPartitionDefaults() {
+	if len(v.ConsumerPartitions) == 0 {
+		v.ConsumerPartitions = []StorageViewConsumerPartition{
+			{ID: "kline", Durable: "storage_view_kline_v2", Routes: []StorageViewConsumerRoute{{SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
+			{ID: "system_metrics", Durable: "storage_view_metrics_v2", Routes: []StorageViewConsumerRoute{{SpaceID: "moox_system", DatasetIDs: []string{"moox_service_metrics"}}}, FetchBatch: 2, MaxWorkers: 1, MaxAckPending: 8},
+			{ID: "other", Durable: "storage_view_other_v2", Routes: []StorageViewConsumerRoute{
+				{SpaceID: "crypto_market", DatasetIDs: []string{"perpetual_kline_1h", "spot_kline_1h", "binance_spot_kline_1m_factor"}},
+				{SpaceID: "moox_system", DatasetIDs: []string{"host_disk_v1", "host_fs_v1", "host_net_v1", "host_resource_v1"}},
+				{SpaceID: "stock_cn", DatasetIDs: []string{"financial_statement_metric", "financial_summary", "index_kline", "stock_kline"}},
+			}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
+		}
+	}
+	for i := range v.ConsumerPartitions {
+		p := &v.ConsumerPartitions[i]
+		p.ID = strings.TrimSpace(p.ID)
+		p.Durable = strings.TrimSpace(p.Durable)
+		if p.AckWaitMS <= 0 {
+			p.AckWaitMS = StorageViewAckWaitMS
+		}
+		if p.FetchBatch <= 0 {
+			p.FetchBatch = 1
+		}
+		if p.MaxWorkers <= 0 {
+			p.MaxWorkers = 1
+		}
+		if p.MaxAckPending <= 0 {
+			p.MaxAckPending = p.FetchBatch
+		}
+		if strings.TrimSpace(p.Ordering) == "" {
+			p.Ordering = "dataset"
+		}
+		p.Ordering = strings.ToLower(strings.TrimSpace(p.Ordering))
+		if strings.TrimSpace(p.DeliverPolicy) == "" {
+			p.DeliverPolicy = "new"
+		}
+		p.DeliverPolicy = strings.ToLower(strings.TrimSpace(p.DeliverPolicy))
+		if p.MaxRetryAttempts == 0 {
+			p.MaxRetryAttempts = -1
+		}
+	}
+}
+
+// ValidateConsumerPartitions validates partition topology. When managed is
+// non-nil it additionally requires an exact one-to-one assignment with the
+// View source Dataset inventory.
+func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDataset) error {
+	if len(v.ConsumerPartitions) == 0 {
+		return errors.New("storage view consumer_partitions must not be empty")
+	}
+	partitionIDs := make(map[string]struct{}, len(v.ConsumerPartitions))
+	durables := make(map[string]struct{}, len(v.ConsumerPartitions))
+	routes := make(map[string]string)
+	for _, partition := range v.ConsumerPartitions {
+		id := strings.TrimSpace(partition.ID)
+		durable := strings.TrimSpace(partition.Durable)
+		if id == "" || durable == "" {
+			return errors.New("storage view consumer partition id and durable are required")
+		}
+		if !validConsumerName(id) || !validConsumerName(durable) {
+			return fmt.Errorf("storage view consumer partition %q has an invalid id or durable name", id)
+		}
+		if durable != events.StorageViewKlineConsumer && durable != events.StorageViewMetricsConsumer && durable != events.StorageViewOtherConsumer {
+			return fmt.Errorf("storage view durable %q is not one of the managed partition durables", durable)
+		}
+		if _, exists := partitionIDs[id]; exists {
+			return fmt.Errorf("storage view consumer partition %q is duplicated", id)
+		}
+		if _, exists := durables[durable]; exists {
+			return fmt.Errorf("storage view durable %q is duplicated", durable)
+		}
+		partitionIDs[id] = struct{}{}
+		durables[durable] = struct{}{}
+		if partition.FetchBatch < 1 || partition.MaxWorkers < 1 || partition.MaxAckPending < 1 || partition.AckWaitMS < 1 {
+			return fmt.Errorf("storage view consumer partition %q has non-positive delivery settings", id)
+		}
+		if partition.FetchBatch > partition.MaxAckPending {
+			return fmt.Errorf("storage view consumer partition %q fetch_batch %d exceeds max_ack_pending %d", id, partition.FetchBatch, partition.MaxAckPending)
+		}
+		if partition.Ordering != "" && strings.ToLower(strings.TrimSpace(partition.Ordering)) != "dataset" {
+			return fmt.Errorf("storage view consumer partition %q ordering must be dataset", id)
+		}
+		policy := strings.ToLower(strings.TrimSpace(partition.DeliverPolicy))
+		if policy != "" && policy != "all" && policy != "new" {
+			return fmt.Errorf("storage view consumer partition %q deliver_policy %q is unsupported", id, partition.DeliverPolicy)
+		}
+		if partition.MaxRetryAttempts < -1 {
+			return fmt.Errorf("storage view consumer partition %q max_retry_attempts must be -1 or positive", id)
+		}
+		datasets := partition.Datasets()
+		if len(datasets) == 0 {
+			return fmt.Errorf("storage view consumer partition %q has no Dataset routes", id)
+		}
+		for _, dataset := range datasets {
+			if dataset.SpaceID == "" || dataset.DatasetID == "" {
+				return fmt.Errorf("storage view consumer partition %q contains an incomplete Dataset route", id)
+			}
+			if dataset.DatasetID == "*" {
+				continue
+			}
+			key := dataset.SpaceID + "\x00" + dataset.DatasetID
+			if previous, exists := routes[key]; exists {
+				return fmt.Errorf("Dataset %s/%s is assigned to partitions %q and %q", dataset.SpaceID, dataset.DatasetID, previous, id)
+			}
+			routes[key] = id
+		}
+	}
+	if managed != nil {
+		for _, dataset := range managed {
+			key := strings.TrimSpace(dataset.SpaceID) + "\x00" + strings.TrimSpace(dataset.DatasetID)
+			if _, exists := routes[key]; !exists {
+				if _, wildcard := routes[strings.TrimSpace(dataset.SpaceID)+"\x00*"]; wildcard {
+					continue
+				}
+				return fmt.Errorf("managed Dataset %s/%s is not assigned to a consumer partition", dataset.SpaceID, dataset.DatasetID)
+			}
+		}
+		// Configuration is intentionally an allow-list for Views that may be
+		// created later (for example a Factor result Dataset). Only the active
+		// metadata inventory must be covered; rejecting configured-but-not-yet
+		// created routes would make a fresh deployment unable to start before
+		// those optional Views exist.
+	}
+	// The three durable consumers are an intentional topology contract, not
+	// optional tuning knobs. A partial or overlapping config would silently put
+	// Kline back behind system metrics, defeating the partitioning guarantee.
+	if len(durables) != 3 {
+		return fmt.Errorf("storage view consumer topology must define exactly three durables (kline, metrics, other); got %d", len(durables))
+	}
+	requiredRoutes := map[string]struct {
+		durable string
+		space   string
+		dataset string
+	}{
+		"kline":   {durable: events.StorageViewKlineConsumer, space: "crypto_market", dataset: "binance_spot_kline_1m"},
+		"metrics": {durable: events.StorageViewMetricsConsumer, space: "moox_system", dataset: "moox_service_metrics"},
+	}
+	for name, required := range requiredRoutes {
+		partitionID, ok := routes[required.space+"\x00"+required.dataset]
+		if !ok {
+			return fmt.Errorf("storage view %s route %s/%s is missing", name, required.space, required.dataset)
+		}
+		partitionIndex := -1
+		for i := range v.ConsumerPartitions {
+			if v.ConsumerPartitions[i].ID == partitionID {
+				partitionIndex = i
+				break
+			}
+		}
+		if partitionIndex < 0 || v.ConsumerPartitions[partitionIndex].Durable != required.durable {
+			return fmt.Errorf("storage view %s route %s/%s must use durable %s", name, required.space, required.dataset, required.durable)
+		}
+	}
+	return nil
+}
+
+func validConsumerName(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func (v StorageView) HasRebuildMaxPendingSetting() bool { return v.rebuildMaxPendingSet }
@@ -300,7 +523,27 @@ func (c *StorageConfig) ApplyDefaults() {
 		c.View.MaxViewFileBytes = 1 << 30
 	}
 	if strings.TrimSpace(c.View.RebuildLookback) == "" {
-		c.View.RebuildLookback = "72h"
+		c.View.RebuildLookback = "24h"
+	}
+	if len(c.View.RebuildLookbackPeriods) == 0 {
+		c.View.RebuildLookbackPeriods = map[string]uint64{
+			"1m":      1000,
+			"1h":      1000,
+			"1d":      1000,
+			"default": 1000,
+		}
+	} else {
+		normalized := make(map[string]uint64, len(c.View.RebuildLookbackPeriods)+1)
+		for frequency, periods := range c.View.RebuildLookbackPeriods {
+			frequency = strings.ToLower(strings.TrimSpace(frequency))
+			if frequency != "" {
+				normalized[frequency] = periods
+			}
+		}
+		if normalized["default"] == 0 {
+			normalized["default"] = 1000
+		}
+		c.View.RebuildLookbackPeriods = normalized
 	}
 	if c.View.RebuildMaxPending == 0 && !c.View.rebuildMaxPendingSet {
 		c.View.RebuildMaxPending = 32
@@ -308,6 +551,7 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.RebuildIdleChecks == 0 && !c.View.rebuildIdleChecksSet {
 		c.View.RebuildIdleChecks = 3
 	}
+	c.View.applyConsumerPartitionDefaults()
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"
 	}

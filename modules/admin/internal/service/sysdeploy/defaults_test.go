@@ -140,7 +140,7 @@ func TestDefaultDeploymentsIncludeMonitorHealthMetadata(t *testing.T) {
 	if err := json.Unmarshal([]byte(byName["storage-primary"].ExtraConfig), &storageExtra); err != nil {
 		t.Fatalf("unmarshal storage-primary extra_config: %v", err)
 	}
-	for _, method := range []string{"GetDataNode", "ListDataNodes", "UpdateDataNode", "DeleteDataNode", "CheckDatasetActivation", "ActivateDataset", "RebindDatasetDataNode"} {
+	for _, method := range []string{"GetDataNode", "ListDataNodes", "UpdateDataNode", "DeleteDataNode", "CheckDatasetActivation", "ActivateDataset", "RebindDatasetDataNode", "RequestViewRebuild"} {
 		if !containsString(storageExtra.GatewayMethods, method) {
 			t.Fatalf("storage-primary gateway methods missing %s: %v", method, storageExtra.GatewayMethods)
 		}

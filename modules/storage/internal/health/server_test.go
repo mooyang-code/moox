@@ -59,7 +59,7 @@ func TestSnapshotForRole_ViewRequiresBoundConsumer(t *testing.T) {
 	assert.True(t, state.Snapshot(context.Background()).Ready)
 }
 
-func TestSnapshotForRole_ViewRejectsStalePendingDelivery(t *testing.T) {
+func TestSnapshotForRole_ViewBacklogDoesNotBlockReadiness(t *testing.T) {
 	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)
 	state := New("storage", InstanceStorageView, "", "")
@@ -71,8 +71,8 @@ func TestSnapshotForRole_ViewRejectsStalePendingDelivery(t *testing.T) {
 	metrics.ObservePendingDelivery(delivery, time.Now().Add(-2*time.Minute))
 	rsp := state.Snapshot(context.Background())
 
-	assert.False(t, rsp.Ready)
-	assert.Equal(t, false, rsp.Details["consumer_draining"])
+	assert.True(t, rsp.Ready)
+	assert.Equal(t, true, rsp.Details["consumer_draining"])
 	metrics.CompletePendingDelivery(delivery, time.Now())
 	assert.True(t, state.Snapshot(context.Background()).Ready)
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,10 +137,34 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, 4222, snapshot.Manifest.EventBus.Port)
 	assert.True(t, snapshot.Manifest.EventBus.TLSEnabled)
 	assert.Equal(t, "ap-guangzhou", snapshot.Manifest.TencentCloud.Region)
+	assert.Equal(t, uint64(1000), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
 	assert.Empty(t, snapshot.Manifest.Monitoring.WeComWebhook)
 	assert.Empty(t, snapshot.Manifest.OtherHosts)
 	require.NoError(t, snapshot.VerifyUnchanged())
+}
+
+func TestLoadStorageViewRebuildLookbackPeriodsFromManifest(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[storage_view]
+rebuild_lookback_periods = 777
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(777), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
+}
+
+func TestLoadRejectsInvalidStorageViewRebuildLookbackPeriods(t *testing.T) {
+	for _, value := range []string{"0", "1000001"} {
+		t.Run(value, func(t *testing.T) {
+			root := t.TempDir()
+			body := validManifest + fmt.Sprintf("\n[storage_view]\nrebuild_lookback_periods = %s\n", value)
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "storage_view.rebuild_lookback_periods")
+		})
+	}
 }
 
 func TestLoadFactorSetupDefaultsAndItems(t *testing.T) {

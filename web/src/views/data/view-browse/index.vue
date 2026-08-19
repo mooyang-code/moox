@@ -29,8 +29,18 @@
             </a-tag>
             <span>{{ buildTimeText }}</span>
             <a-button type="text" size="mini" :loading="rebuildLogsLoading" @click="openRebuildLogs">日志</a-button>
+            <a-button
+              type="text"
+              size="mini"
+              :loading="rebuildRequestLoading"
+              :disabled="!activeView || rebuildPollActive"
+              @click="requestViewRebuild"
+            >
+              <template #icon><icon-refresh /></template>
+              重建视图
+            </a-button>
             <slot name="status-extra" />
-            <span v-if="activeView?.active_view_version">活跃版本 {{ activeView.active_view_version }}</span>
+            <span v-if="activeView?.active_view_revision">活跃版本 {{ activeView.active_view_revision }}</span>
           </section>
 
           <a-alert v-if="queryError" class="query-alert" type="error" show-icon>{{ queryError }}</a-alert>
@@ -117,7 +127,9 @@
               >
                 <template #columns>
                   <a-table-column title="序号" :width="72" align="center" fixed="left">
-                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1 }}</template>
+                    <template #cell="{ rowIndex }">{{
+                      (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1
+                    }}</template>
                   </a-table-column>
                   <a-table-column data-index="key" :width="180" fixed="left">
                     <template #title
@@ -232,7 +244,9 @@
               >
                 <template #columns>
                   <a-table-column title="序号" :width="72" align="center" fixed="left">
-                    <template #cell="{ rowIndex }">{{ (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1 }}</template>
+                    <template #cell="{ rowIndex }">{{
+                      (pagination.current - 1) * DEFAULT_VIEW_PAGE_SIZE + rowIndex + 1
+                    }}</template>
                   </a-table-column>
                   <a-table-column data-index="key" :width="200" fixed="left">
                     <template #title
@@ -338,7 +352,9 @@
         <a-table v-else :data="rebuildLogs" :pagination="false" :bordered="{ cell: true }" size="small">
           <template #columns>
             <a-table-column title="时间" :width="180">
-              <template #cell="{ record }">{{ formatRebuildLogTime(record.finished_at || record.created_at || record.started_at) }}</template>
+              <template #cell="{ record }">{{
+                formatRebuildLogTime(record.finished_at || record.created_at || record.started_at)
+              }}</template>
             </a-table-column>
             <a-table-column title="原因" :width="130">
               <template #cell="{ record }">{{ rebuildReasonLabel(record.trigger_reason) }}</template>
@@ -377,8 +393,17 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
-import { listDatasetColumns, listDatasets, listFactors, listFields, listViewColumns, listViewRebuildLogs, listViews } from "@/api/storage/metadata";
+import { Message, Modal } from "@arco-design/web-vue";
+import {
+  listDatasetColumns,
+  listDatasets,
+  listFactors,
+  listFields,
+  listViewColumns,
+  listViewRebuildLogs,
+  listViews,
+  requestViewRebuild as requestViewRebuildTask
+} from "@/api/storage/metadata";
 import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
 import type {
   Dataset,
@@ -508,6 +533,15 @@ const rebuildLogsLoading = ref(false);
 const rebuildLogs = ref<ViewRebuildLog[]>([]);
 const rebuildLogsPage = ref<{ page?: number; has_more: boolean }>({ has_more: false });
 const rebuildLogsRequestId = ref(0);
+const rebuildRequestLoading = ref(false);
+// Keep the action disabled for the whole asynchronous build, not just the
+// short HTTP request. A second request would advance desired_view_revision
+// and make the first A/B build stale.
+const rebuildPollActive = ref(false);
+const rebuildPollRevision = ref(0);
+let rebuildPollTimer: ReturnType<typeof setTimeout> | undefined;
+let rebuildPollDeadline = 0;
+let rebuildPollToken = 0;
 const recordKeyword = ref("");
 const filters = ref<ViewFilterState[]>([]);
 const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "", direction: "" });
@@ -636,17 +670,43 @@ const rebuildReasonLabels: Record<string, string> = {
   VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY: "中断重试"
 };
 const rebuildResultLabels: Record<string, string> = {
-  "1": "进行中", "2": "成功", "3": "失败", "4": "已跳过",
+  "1": "进行中",
+  "2": "成功",
+  "3": "失败",
+  "4": "已跳过",
   VIEW_REBUILD_RESULT_RUNNING: "进行中",
   VIEW_REBUILD_RESULT_SUCCEEDED: "成功",
   VIEW_REBUILD_RESULT_FAILED: "失败",
   VIEW_REBUILD_RESULT_SKIPPED: "已跳过"
 };
+function isRunningRebuildLog(log: ViewRebuildLog) {
+  return Number(log.result) === 1 || log.result === "VIEW_REBUILD_RESULT_RUNNING";
+}
+
 function rebuildReasonLabel(value: number | string) {
   return rebuildReasonLabels[String(value)] || "未知原因";
 }
 function rebuildResultLabel(value: number | string) {
   return rebuildResultLabels[String(value)] || "未知";
+}
+const rebuildPhaseLabels: Record<string, string> = {
+  reconcile: "准备协调",
+  prepare: "准备索引",
+  backfill: "回溯写入",
+  catch_up: "追平实时数据",
+  activate: "切换索引",
+  completed: "已完成",
+  interrupted: "中断清理",
+  preflight: "前置检查"
+};
+function rebuildLogPhase(log: ViewRebuildLog) {
+  if (!log.details_json) return "";
+  try {
+    const details = JSON.parse(log.details_json) as { phase?: string };
+    return details.phase ? rebuildPhaseLabels[details.phase] || details.phase : "";
+  } catch {
+    return "";
+  }
 }
 function formatRebuildLogTime(value?: string) {
   if (!value) return "-";
@@ -658,6 +718,8 @@ function rebuildLogDetail(log: ViewRebuildLog) {
     return `${log.block_reason || "等待前置条件"}${Number(log.skip_count || 0) > 1 ? `（${log.skip_count} 次）` : ""}`;
   }
   if (log.error_summary) return log.error_summary;
+  const phase = rebuildLogPhase(log);
+  if (phase) return phase;
   return log.finished_at && log.started_at ? `写入 ${log.entries_written || 0} 条` : "构建中";
 }
 function rebuildLogDuration(log: ViewRebuildLog) {
@@ -668,18 +730,25 @@ function rebuildLogDuration(log: ViewRebuildLog) {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
-async function openRebuildLogs() {
+async function openRebuildLogs(reset = true, showModal = true) {
   const view = activeView.value;
   const space_id = selectedSpaceId.value;
   if (!view || !space_id) return;
   const requestId = ++rebuildLogsRequestId.value;
-  rebuildLogsVisible.value = true;
+  if (showModal) rebuildLogsVisible.value = true;
   rebuildLogsLoading.value = true;
-  rebuildLogs.value = [];
-  rebuildLogsPage.value = { has_more: false };
+  if (reset) {
+    rebuildLogs.value = [];
+    rebuildLogsPage.value = { has_more: false };
+  }
   try {
     const rsp = await listViewRebuildLogs({ space_id, view_id: view.view_id, page: { page: 1, size: 100 } });
-    if (requestId !== rebuildLogsRequestId.value || activeView.value?.view_id !== view.view_id || selectedSpaceId.value !== space_id) return;
+    if (
+      requestId !== rebuildLogsRequestId.value ||
+      activeView.value?.view_id !== view.view_id ||
+      selectedSpaceId.value !== space_id
+    )
+      return;
     rebuildLogs.value = rsp.logs || [];
     rebuildLogsPage.value = rsp.page_result || { has_more: false };
   } catch (error) {
@@ -691,6 +760,72 @@ async function openRebuildLogs() {
   }
 }
 
+function stopRebuildPolling() {
+  if (rebuildPollTimer) {
+    clearTimeout(rebuildPollTimer);
+    rebuildPollTimer = undefined;
+  }
+  rebuildPollToken += 1;
+}
+
+function scheduleRebuildLogPolling() {
+  if (rebuildPollTimer || Date.now() >= rebuildPollDeadline) return;
+  const token = rebuildPollToken;
+  rebuildPollTimer = setTimeout(async () => {
+    rebuildPollTimer = undefined;
+    if (token !== rebuildPollToken) return;
+    await openRebuildLogs(false, false);
+    if (token !== rebuildPollToken) return;
+    const revision = rebuildPollRevision.value;
+    const current =
+      rebuildLogs.value.find(log => Number(log.target_view_revision || 0) === revision) ||
+      rebuildLogs.value.find(log => Number(log.target_view_revision || 0) > revision);
+    if (current && !isRunningRebuildLog(current)) {
+      if (current.result === 2 || current.result === "2" || current.result === "VIEW_REBUILD_RESULT_SUCCEEDED") {
+        await loadMeta();
+      }
+      rebuildPollActive.value = false;
+      return;
+    }
+    if (Date.now() >= rebuildPollDeadline) {
+      rebuildPollActive.value = false;
+      Message.warning("重建任务仍在后台运行，可在日志中查看最新进度");
+      return;
+    }
+    scheduleRebuildLogPolling();
+  }, 2000);
+}
+
+async function requestViewRebuild() {
+  const view = activeView.value;
+  const space_id = selectedSpaceId.value;
+  if (!view || !space_id || rebuildRequestLoading.value) return;
+  Modal.confirm({
+    title: "确认重建视图",
+    content: "将异步创建新的 A/B 索引。当前视图仍保持可读，完成后新索引会自动切换生效。是否继续？",
+    okText: "开始重建",
+    cancelText: "取消",
+    onOk: async () => {
+      rebuildRequestLoading.value = true;
+      try {
+        const rsp = await requestViewRebuildTask({ space_id, view_id: view.view_id });
+        rebuildPollRevision.value = Number(rsp.view?.desired_view_revision || 0);
+        stopRebuildPolling();
+        rebuildPollDeadline = Date.now() + 15 * 60 * 1000;
+        rebuildPollActive.value = true;
+        Message.success("已提交重建任务");
+        await openRebuildLogs();
+        scheduleRebuildLogPolling();
+      } catch (error) {
+        Message.error(error instanceof Error ? error.message : "提交视图重建失败");
+        throw error;
+      } finally {
+        rebuildRequestLoading.value = false;
+      }
+    }
+  });
+}
+
 async function loadMoreRebuildLogs() {
   const view = activeView.value;
   const space_id = selectedSpaceId.value;
@@ -700,7 +835,12 @@ async function loadMoreRebuildLogs() {
   rebuildLogsLoading.value = true;
   try {
     const rsp = await listViewRebuildLogs({ space_id, view_id: view.view_id, page: { page: nextPage, size: 100 } });
-    if (requestId !== rebuildLogsRequestId.value || activeView.value?.view_id !== view.view_id || selectedSpaceId.value !== space_id) return;
+    if (
+      requestId !== rebuildLogsRequestId.value ||
+      activeView.value?.view_id !== view.view_id ||
+      selectedSpaceId.value !== space_id
+    )
+      return;
     rebuildLogs.value = rebuildLogs.value.concat(rsp.logs || []);
     rebuildLogsPage.value = rsp.page_result || { has_more: false };
   } catch (error) {
@@ -810,6 +950,8 @@ function clearViewState() {
   rebuildLogsVisible.value = false;
   rebuildLogs.value = [];
   rebuildLogsRequestId.value += 1;
+  stopRebuildPolling();
+  rebuildPollActive.value = false;
 }
 
 async function loadViewContext() {
@@ -1217,6 +1359,7 @@ onMounted(() => {
   }
 });
 onBeforeUnmount(() => {
+  stopRebuildPolling();
   if (autoRefreshTimer) {
     clearInterval(autoRefreshTimer);
     autoRefreshTimer = undefined;

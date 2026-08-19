@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"crypto/hmac"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -151,6 +152,56 @@ func (s *Service) UpdateView(ctx context.Context, req *pb.UpdateViewReq) (*pb.Up
 		return &pb.UpdateViewRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.UpdateViewRsp{RetInfo: retinfo.Success("success"), View: updated}, nil
+}
+
+// RequestViewRebuild records a revision-scoped manual rebuild request and
+// returns immediately. The View reconciler performs the A/B work in the
+// background while the current active index remains readable.
+func (s *Service) RequestViewRebuild(ctx context.Context, req *pb.RequestViewRebuildReq) (*pb.RequestViewRebuildRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
+	}
+	if err := s.validateManualRebuildAuth(req.GetAuthInfo()); err != nil {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	current, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
+	}
+	if current == nil || !strings.EqualFold(strings.TrimSpace(current.GetStatus()), "active") {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("only active views can be rebuilt"))}, nil
+	}
+	view, err := s.metadata.RequestViewRebuild(ctx, req.GetSpaceId(), req.GetViewId())
+	if err != nil {
+		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	// Metadata is already committed and the reconciler can safely read it from
+	// SQLite. Cache publication is best-effort here; a transient cache failure
+	// must not make the browser retry and advance the revision again.
+	s.refreshMetadataCacheAfterCommit(ctx, "RequestViewRebuild")
+	return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Success("rebuild requested"), View: view}, nil
+}
+
+// validateManualRebuildAuth keeps this expensive operator action restricted at
+// the Storage boundary as well as at the browser gateway. The gateway route
+// allow-list is defense in depth, not an authentication mechanism: a service
+// credential must not be able to forge admin-gateway by only changing AppId.
+func (s *Service) validateManualRebuildAuth(auth *pb.AuthInfo) error {
+	if strings.TrimSpace(s.operatorSecret) == "" {
+		return errors.New("storage auth secret is not configured")
+	}
+	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
+		return errors.New("administrator service auth is required")
+	}
+	appID := strings.TrimSpace(auth.GetAppId())
+	if appID != "admin-gateway" && appID != "moox-cli" {
+		return errors.New("administrator identity required")
+	}
+	expected := serviceAuthKey(s.operatorSecret, appID)
+	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(auth.GetAppKey()))), []byte(expected)) {
+		return errors.New("invalid administrator service HMAC")
+	}
+	return nil
 }
 
 func clearViewIndexRuntimeState(view *pb.View) {

@@ -21,6 +21,7 @@ import (
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -28,7 +29,7 @@ import (
 
 const (
 	defaultRepairStream   = "MOOX_STORAGE"
-	defaultRepairConsumer = "storage_view_period_v1"
+	defaultRepairConsumer = events.StorageViewKlineConsumer
 	defaultRepairTimeout  = 2 * time.Minute
 )
 
@@ -215,7 +216,7 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 		return err
 	}
 	packageRoot := resolveRepairPackageRoot(opts.packageRoot, opts.storageConf)
-	storage = resolveRepairStoragePaths(storage, packageRoot)
+	storage = resolveRepairStoragePaths(storage, packageRoot, opts.storageConf)
 	dbPath := metadataDBPath(storage)
 	record, err := inspectRepairView(ctx, dbPath, opts.spaceID, opts.viewID)
 	if err != nil {
@@ -404,23 +405,47 @@ func validateRepairViewOptions(opts *repairViewOptions) error {
 
 func resolveRepairPackageRoot(configured, configPath string) string {
 	if root := strings.TrimSpace(configured); root != "" {
-		return root
+		return findLifecycleRoot(root)
 	}
 	if root := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PACKAGE_ROOT")); root != "" {
-		return root
+		return findLifecycleRoot(root)
 	}
 	if abs, err := filepath.Abs(configPath); err == nil {
-		return filepath.Dir(filepath.Dir(abs))
+		return findLifecycleRoot(filepath.Dir(filepath.Dir(abs)))
 	}
 	return "."
 }
 
-func resolveRepairStoragePaths(storage storageconfig.StorageConfig, packageRoot string) storageconfig.StorageConfig {
+// Config files live under <deploy-root>/storage/config while lifecycle
+// scripts live at <deploy-root>. Accept either layout so the destructive CLI
+// cannot accidentally operate on a data-only subdirectory.
+func findLifecycleRoot(candidate string) string {
+	candidate = filepath.Clean(candidate)
+	for current := candidate; ; current = filepath.Dir(current) {
+		if _, err := os.Stat(filepath.Join(current, "start.sh")); err == nil {
+			return current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return candidate
+		}
+	}
+}
+
+func resolveRepairStoragePaths(storage storageconfig.StorageConfig, packageRoot, configPath string) storageconfig.StorageConfig {
+	// Runtime configs use paths relative to their component directory while
+	// lifecycle scripts live at the deployment root. Keep those bases separate:
+	// <deploy>/storage/config/storage.yaml with root ../data/storage resolves to
+	// <deploy>/data/storage, not <deploy>/../data/storage.
+	base := strings.TrimSpace(packageRoot)
+	if abs, err := filepath.Abs(configPath); err == nil {
+		base = filepath.Dir(filepath.Dir(abs))
+	}
 	resolve := func(path string) string {
 		if strings.TrimSpace(path) == "" || filepath.IsAbs(path) {
 			return path
 		}
-		return filepath.Join(packageRoot, path)
+		return filepath.Clean(filepath.Join(base, path))
 	}
 	storage.Root = resolve(storage.Root)
 	storage.Metadata.Path = resolve(storage.Metadata.Path)
@@ -488,7 +513,44 @@ func backupRepairDB(path string) (string, error) {
 		_ = os.Remove(backup)
 		return "", closeErr
 	}
+	// SQLite may keep committed metadata in sidecar files while the database
+	// is in WAL mode. Preserve those files alongside the main backup so a
+	// recovery copy cannot silently lose the latest View state.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := copyOptionalFile(path+suffix, backup+suffix); err != nil {
+			_ = os.Remove(backup)
+			_ = os.Remove(backup + "-wal")
+			_ = os.Remove(backup + "-shm")
+			return "", err
+		}
+	}
 	return backup, nil
+}
+
+func copyOptionalFile(source, target string) error {
+	input, err := os.Open(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(output, input)
+	closeErr := output.Close()
+	if copyErr != nil {
+		_ = os.Remove(target)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(target)
+		return closeErr
+	}
+	return nil
 }
 
 func forceRepairViewRevision(ctx context.Context, dbPath, spaceID, viewID string, revision uint64) error {
@@ -711,6 +773,18 @@ func resolveRepairCredentialFile(configured string) string {
 }
 
 func runStorageViewLifecycle(ctx context.Context, packageRoot, action, deliverPolicy string, lookback time.Duration, stderr io.Writer) error {
+	return runStorageComponentLifecycle(ctx, packageRoot, action, "storage-view", lookback, stderr)
+}
+
+func runStorageComponentLifecycle(ctx context.Context, packageRoot, action, serviceName string, lookback time.Duration, stderr io.Writer) error {
+	return runStorageComponentLifecycleWithOptions(ctx, packageRoot, action, serviceName, lookback, false, stderr)
+}
+
+func runStorageComponentLifecycleWithReplay(ctx context.Context, packageRoot, action, serviceName string, lookback time.Duration, stderr io.Writer) error {
+	return runStorageComponentLifecycleWithOptions(ctx, packageRoot, action, serviceName, lookback, true, stderr)
+}
+
+func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, action, serviceName string, lookback time.Duration, replayPending bool, stderr io.Writer) error {
 	packageRoot = strings.TrimSpace(packageRoot)
 	if packageRoot == "" {
 		return errors.New("storage package root is empty; pass --package-root")
@@ -719,14 +793,16 @@ func runStorageViewLifecycle(ctx context.Context, packageRoot, action, deliverPo
 	if info, err := os.Stat(script); err != nil || info.IsDir() {
 		return fmt.Errorf("storage package %s is unavailable", packageRoot)
 	}
-	cmd := exec.CommandContext(ctx, script, "storage-view")
+	cmd := exec.CommandContext(ctx, script, serviceName)
 	cmd.Dir = packageRoot
 	cmd.Stderr = stderr
 	cmd.Stdout = stderr
 	env := append([]string(nil), os.Environ()...)
-	env = append(env, "MOOX_STORAGE_VIEW_DELIVER_POLICY="+deliverPolicy)
 	if lookback > 0 {
 		env = append(env, "MOOX_STORAGE_VIEW_REBUILD_LOOKBACK="+lookback.String())
+	}
+	if replayPending {
+		env = append(env, "MOOX_STORAGE_VIEW_REPLAY_PENDING=1")
 	}
 	cmd.Env = env
 	if err := cmd.Run(); err != nil {

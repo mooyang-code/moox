@@ -645,20 +645,21 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 	}
 	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
 		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData,
-		UseControlGateway:      useControlGateway,
-		EventBusPublicAddress:  snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:           snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:     snapshot.Manifest.EventBus.TLSEnabled,
-		StoragePrimarySecret:   primarySecret,
-		StorageViewSecret:      viewSecret,
-		InstallStorageWatchdog: true,
-		HealthAuthVersion:      healthVersion,
-		HealthAuthAccessKey:    healthAccessKey,
-		HealthAuthSecretKey:    healthSecret,
-		GatewayControlURL:      controlURL,
-		GatewayControlKey:      controlKey,
-		GatewayServiceKey:      serviceKey,
-		GatewayCABundle:        gatewayCA,
+		UseControlGateway:                 useControlGateway,
+		EventBusPublicAddress:             snapshot.Manifest.EventBus.PublicAddress,
+		EventBusPort:                      snapshot.Manifest.EventBus.Port,
+		EventBusTLSEnabled:                snapshot.Manifest.EventBus.TLSEnabled,
+		StoragePrimarySecret:              primarySecret,
+		StorageViewSecret:                 viewSecret,
+		StorageViewRebuildLookbackPeriods: snapshot.Manifest.StorageView.RebuildLookbackPeriods,
+		InstallStorageWatchdog:            true,
+		HealthAuthVersion:                 healthVersion,
+		HealthAuthAccessKey:               healthAccessKey,
+		HealthAuthSecretKey:               healthSecret,
+		GatewayControlURL:                 controlURL,
+		GatewayControlKey:                 controlKey,
+		GatewayServiceKey:                 serviceKey,
+		GatewayCABundle:                   gatewayCA,
 	}, setupdeploy.Dependencies{}); err != nil {
 		return err
 	}
@@ -682,7 +683,45 @@ func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapsh
 			return err
 		}
 	}
+	// Storage may be deployed in its own root while Admin/Gateway remains in
+	// the control root. Persist the placement decision so a later Admin
+	// restart does not re-import the control profile with Storage routes
+	// disabled. The update is atomic and guarded by a per-config lock.
+	if err := persistControlStorageRoutePolicy(ctx, control, true); err != nil {
+		return err
+	}
 	return restartStorageClients(ctx, control)
+}
+
+func persistControlStorageRoutePolicy(ctx context.Context, control setupssh.Client, preserve bool) error {
+	if control == nil {
+		return fmt.Errorf("storage_route_policy_persist_failed")
+	}
+	value := "0"
+	if preserve {
+		value = "1"
+	}
+	_, err := control.Run(ctx, []string{
+		"sh", "-lc", `set -eu
+config="$HOME/moox/prod/config/components.env"
+test -f "$config"
+lock="$HOME/moox/prod.maintenance.lock"
+(
+  flock -x 9
+  tmp="$config.tmp.$$"
+  trap 'rm -f "$tmp"' EXIT
+  awk '!/^MOOX_PRESERVE_STORAGE_ROUTES=/' "$config" >"$tmp"
+  printf 'MOOX_PRESERVE_STORAGE_ROUTES=%s\n' "$1" >>"$tmp"
+  chmod --reference="$config" "$tmp" 2>/dev/null || chmod 0600 "$tmp"
+  mv -f "$tmp" "$config"
+  trap - EXIT
+) 9>"$lock"
+`, "moox-persist-storage-route-policy", value,
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("storage_route_policy_persist_failed")
+	}
+	return nil
 }
 
 func defaultSetupInstallStorageWatchdog(ctx context.Context, snapshot *setupconfig.Snapshot, name string) error {

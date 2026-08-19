@@ -2,9 +2,11 @@ package view
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +28,7 @@ var errPrimaryDatasetChangeUnsupported = errors.New("changing primary dataset re
 type MetadataClient interface {
 	ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error)
 	GetDataset(context.Context, *pb.GetDatasetReq, ...client.Option) (*pb.GetDatasetRsp, error)
+	ListDatasetSubjects(context.Context, *pb.ListDatasetSubjectsReq, ...client.Option) (*pb.ListDatasetSubjectsRsp, error)
 	ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error)
 	ClaimViewIndexBuild(context.Context, *pb.ClaimViewIndexBuildReq, ...client.Option) (*pb.ClaimViewIndexBuildRsp, error)
 	UpdateViewIndexBuild(context.Context, *pb.UpdateViewIndexBuildReq, ...client.Option) (*pb.UpdateViewIndexBuildRsp, error)
@@ -44,12 +47,20 @@ type FieldReader interface {
 	ReadFields(context.Context, *pb.PrimaryReadFieldsReq, ...client.Option) (*pb.PrimaryReadFieldsRsp, error)
 }
 
+// TimeSeriesRangeReader is the internal Primary history path used when a View
+// has no readable active index. It must enumerate the Primary dataset rather
+// than routing a range read back through the View being rebuilt.
+type TimeSeriesRangeReader interface {
+	ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq, ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error)
+}
+
 type ReconcilerOptions struct {
-	Metadata MetadataClient
-	Primary  FieldReader
-	Interval time.Duration
-	OwnerID  string
-	Grace    time.Duration
+	Metadata     MetadataClient
+	Primary      FieldReader
+	PrimaryRange TimeSeriesRangeReader
+	Interval     time.Duration
+	OwnerID      string
+	Grace        time.Duration
 	// MaxViewFileBytes triggers an A/B rebuild for a
 	// finite-retention View. The rebuilt index contains only its keep window;
 	// SwitchView then removes the old DuckDB file after the grace period.
@@ -58,18 +69,36 @@ type ReconcilerOptions struct {
 	// index must cover before activation. Production config supplies this;
 	// zero keeps direct unit-test callers backwards compatible.
 	RebuildLookback time.Duration
+	// RebuildLookbackPeriods specifies the minimum completed bars required for
+	// each time-series (subject, frequency, series tag) during Primary history
+	// backfill. A frequency-specific value wins over default.
+	RebuildLookbackPeriods map[string]uint64
 	// RebuildMaxPending and RebuildIdleChecks gate optional size-limit
 	// rebuilds. Necessary repairs bypass this capacity gate.
 	RebuildMaxPending           uint64
 	RebuildIdleChecks           uint32
 	RebuildMaxPendingConfigured bool
 	RebuildIdleChecksConfigured bool
+	// MaxHistoryScanRows bounds the Primary discovery scan used by a
+	// period-based rebuild. It is a safety fuse: the per-series bar target
+	// limits writes, while this limit prevents an incomplete/huge catalog from
+	// reading millions of rows before discovering that target.
+	MaxHistoryScanRows uint64
 }
 
+// Keep Primary history requests below the DataNode point-read budget. A
+// 10k-row page becomes 100k+ Pebble gets for a wide K-line schema and can
+// starve live reads; cursor pagination keeps the scan bounded instead.
+// History pages contain keys only; field enrichment is split below the
+// PrimaryStore key/field limit. Use the history reader's 10k page ceiling so
+// a bounded 1,000-bar rebuild does not spend minutes on avoidable RPC/page
+// overhead. Enrichment and index writes remain chunked independently.
 const viewBackfillBatchSize = 10000
 const sizeLimitRebuildRetryInterval = 30 * time.Minute
 const defaultRebuildMaxPending uint64 = 32
 const defaultRebuildIdleChecks uint32 = 3
+const defaultRebuildLookbackPeriods uint64 = 1000
+const defaultMaxHistoryScanRows uint64 = 1_000_000
 const sizeLimitBuildBacklogThreshold = defaultRebuildMaxPending
 
 // Coverage scans are intentionally decoupled from the cheap physical
@@ -149,6 +178,9 @@ func (s *Service) normalizeReconcilerOptions(opts ReconcilerOptions) (Reconciler
 	if opts.RebuildIdleChecks == 0 && !opts.RebuildIdleChecksConfigured {
 		opts.RebuildIdleChecks = defaultRebuildIdleChecks
 	}
+	if opts.MaxHistoryScanRows == 0 {
+		opts.MaxHistoryScanRows = defaultMaxHistoryScanRows
+	}
 	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
 		s.mu.Lock()
 		s.periodMetadata = periodMetadata
@@ -207,6 +239,13 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts ReconcilerOptions
 		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
 			return err
 		}
+		// Keep the primary K-line View ahead of derived/factor Views during a
+		// cold rebuild. Reconcile is deliberately single-flight; prioritizing
+		// the business source prevents a slow factor backfill from delaying the
+		// data View that downstream calculations depend on.
+		sort.SliceStable(rsp.GetViews(), func(i, j int) bool {
+			return viewReconcilePriority(rsp.GetViews()[i]) < viewReconcilePriority(rsp.GetViews()[j])
+		})
 		for _, view := range rsp.GetViews() {
 			if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 				continue
@@ -296,7 +335,11 @@ func validateRebuildLookback(stats viewindex.ViewIndexStats, lookback time.Durat
 	if err != nil {
 		return fmt.Errorf("invalid rebuilt View indexed_to %q: %w", stats.IndexedTo, err)
 	}
-	if from.After(time.Now().UTC().Add(-lookback)) {
+	// Compare against the same minute-aligned boundary used by backfill. A
+	// 1-minute bar at the boundary must count as covering the requested window,
+	// rather than failing because validation happened a few seconds later.
+	cutoff := time.Now().UTC().Add(-lookback).Truncate(time.Minute)
+	if from.After(cutoff) {
 		return fmt.Errorf("%w: rebuilt View coverage starts at %s, before %s is required", errRebuildLookbackInsufficient, from.Format(time.RFC3339Nano), lookback)
 	}
 	if to.Before(from) {
@@ -307,7 +350,17 @@ func validateRebuildLookback(stats viewindex.ViewIndexStats, lookback time.Durat
 
 var errRebuildLookbackInsufficient = errors.New("rebuilt View lookback is insufficient")
 
+func isPrimaryHistoryIndexNotReady(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "primary history index is still being materialized")
+}
+
 func (s *Service) validatePendingBuildCoverage(ctx context.Context, indexID, engineName string, lookback time.Duration) error {
+	// Bleve indexes are record-oriented and do not expose a time-series
+	// coverage watermark. The rebuild lookback contract applies to temporal
+	// Views; record Views are complete when their schema/index is ready.
+	if strings.EqualFold(strings.TrimSpace(engineName), "bleve") {
+		return nil
+	}
 	engine := s.engines[strings.ToLower(strings.TrimSpace(engineName))]
 	if engine == nil {
 		return fmt.Errorf("view engine %q is unavailable", engineName)
@@ -333,6 +386,13 @@ func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) err
 		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
 			return err
 		}
+		// Rebuild the business K-line View before lower-priority system and
+		// derived Views during a cold start. All Views still get processed in
+		// this pass; ordering only prevents a large metrics rebuild from
+		// monopolizing the PrimaryStore while the user-facing K-line is empty.
+		sort.SliceStable(rsp.GetViews(), func(i, j int) bool {
+			return viewReconcilePriority(rsp.GetViews()[i]) < viewReconcilePriority(rsp.GetViews()[j])
+		})
 		for _, view := range rsp.GetViews() {
 			if err := s.reconcileView(ctx, opts, auth, view); err != nil {
 				if errors.Is(err, errActiveContractUnavailable) {
@@ -356,9 +416,34 @@ func (s *Service) reconcileOnce(ctx context.Context, opts ReconcilerOptions) err
 	}
 }
 
+func viewReconcilePriority(view *pb.View) int {
+	if view == nil {
+		return 100
+	}
+	switch view.GetViewId() {
+	case "binance_spot_kline_1m_view":
+		return 0
+	case "binance_spot_kline_1m_factor_v":
+		return 10
+	default:
+		return 50
+	}
+}
+
 func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View) error {
 	if view == nil || view.GetSpaceId() == "" || view.GetViewId() == "" {
 		return nil
+	}
+	// Time-series Views use a completed-bar budget rather than wall-clock
+	// retention. This keeps weekends/holidays from shortening the rebuild. The
+	// duration fallback remains for legacy Views whose frequency is unknown.
+	lookbackPeriods := rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods)
+	if lookbackPeriods > 0 {
+		opts.RebuildLookback = 0
+	} else {
+		// A View's retention remains the fallback for legacy definitions that do
+		// not expose a frequency in filter_json.
+		opts.RebuildLookback = rebuildLookbackForView(view, opts.RebuildLookback)
 	}
 	var stats viewindex.ViewIndexStats
 	var activeInvalidErr error
@@ -488,6 +573,16 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 				s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), staleErr)
 				return nil
 			}
+			if opts.RebuildLookback > 0 {
+				if err := s.validatePendingBuildCoverage(ctx, build.GetIndexId(), build.GetEngine(), opts.RebuildLookback); err != nil {
+					if errors.Is(err, errRebuildLookbackInsufficient) && view.GetActiveIndexId() == "" {
+						log.Printf("storage view READY rebuild is still priming space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), err)
+						return nil
+					}
+					s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
+					return err
+				}
+			}
 			if err := s.AttachPendingViewBuild(ctx, view); err != nil {
 				s.failBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), err)
 				return err
@@ -499,13 +594,21 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			return err
 		}
 	}
-	rebuildNeeded := needsSizeLimitRebuild(view, stats, opts)
+	coverageRepair := needsLookbackRepair(view, stats, opts.RebuildLookback)
+	rebuildNeeded := needsSizeLimitRebuild(view, stats, opts) || coverageRepair
 	if activeInvalidErr != nil {
 		rebuildNeeded = true
 	}
-	sizeLimitOnly := activeInvalidErr == nil && needsSizeLimitWatermark(view, stats, opts)
+	manualRequested := manualRebuildRequested(view)
+	// Coverage repair is mandatory: it must run even while an unrelated
+	// partition has backlog. The size watermark rebuild remains optional and
+	// continues to use the idle/backlog gate below.
+	sizeLimitOnly := activeInvalidErr == nil && !coverageRepair && !manualRequested && needsSizeLimitWatermark(view, stats, opts)
 	now := time.Now().UTC()
 	triggerReason := rebuildTriggerReason(view, stats, sizeLimitOnly)
+	if coverageRepair && !manualRequested {
+		triggerReason = pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR
+	}
 	if activeInvalidErr != nil {
 		triggerReason = pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_INVALID
 	}
@@ -533,7 +636,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 	gateBlockReason := "consumer_not_idle"
 	if sizeLimitOnly {
 		var backlogErr error
-		pending, ackPending, backlogErr = s.consumerBacklog(ctx)
+		pending, ackPending, backlogErr = s.consumerBacklogForView(ctx, viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()})
 		if backlogErr != nil {
 			gateBlockReason = "consumer_unavailable"
 		} else if pending+ackPending > maxPending {
@@ -582,6 +685,13 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			return err
 		}
 	}
+	// PrepareViewIndex may need the full catalog contract while it attaches a
+	// first index. Keep metadata fields (notably filter_json/frequency)
+	// available to Primary history backfill instead of reconstructing a reduced
+	// View from the physical schema alone.
+	s.mu.Lock()
+	s.catalogViews[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}] = proto.Clone(view).(*pb.View)
+	s.mu.Unlock()
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetDesiredViewRevision(),
 		PrimaryDatasetID: view.GetPrimaryDatasetId(), Engine: strings.ToLower(view.GetEngine()), Columns: columns,
@@ -652,6 +762,7 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, prepareErr)
 		return prepareErr
 	}
+	s.updateRunningRebuildLogPhase(ctx, opts, auth, view, buildID, buildLog, "prepare")
 	if err := s.TrackViewBuild(ctx, view.GetSpaceId(), view.GetViewId(), buildID, opts.OwnerID, opts.Metadata, auth); err != nil {
 		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
 		return err
@@ -661,17 +772,16 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
 		return err
 	}
-	if view.GetActiveIndexId() != "" && !stats.Exists {
-		// DataNode intentionally has no range scan API. Once the old physical
-		// index is gone, a new empty B cannot reconstruct already-ACKed history;
-		// refuse to activate it rather than replacing a durable view with a
-		// silently incomplete index.
+	var entriesWritten uint64
+	if view.GetActiveIndexId() != "" && !stats.Exists && opts.PrimaryRange == nil {
 		err := fmt.Errorf("active view index %q is missing and cannot be rebuilt without a range reader", view.GetActiveIndexId())
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
 		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
 		return err
 	}
-	if view.GetActiveIndexId() != "" && stats.Exists {
+	primaryHistoryRequired := lookbackPeriods > 0 && !strings.EqualFold(strings.TrimSpace(schema.Engine), "bleve")
+	if (view.GetActiveIndexId() != "" && stats.Exists) || opts.PrimaryRange != nil || primaryHistoryRequired {
+		s.updateRunningRebuildLogPhase(ctx, opts, auth, view, buildID, buildLog, "backfill")
 		buildCtx := ctx
 		s.mu.RLock()
 		runtime := s.views[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}]
@@ -683,16 +793,21 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			}
 			runtime.mu.Unlock()
 		}
-		if err := s.backfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary, opts.RebuildLookback); err != nil {
-			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-			finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, 0, err)
-			return err
+		var backfillErr error
+		entriesWritten, backfillErr = s.backfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary, opts.PrimaryRange, opts.RebuildLookback, lookbackPeriods, opts.MaxHistoryScanRows)
+		if backfillErr != nil {
+			s.failBuild(ctx, opts, auth, view, buildID, indexID, backfillErr)
+			if isPrimaryHistoryIndexNotReady(backfillErr) {
+				// The derived Primary history index is materialized asynchronously
+				// on first use. Keep this build out of the active path, but do not
+				// turn a normal warm-up wait into a failed reconcile/health cycle.
+				finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SKIPPED, entriesWritten, backfillErr)
+				return nil
+			}
+			finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, entriesWritten, backfillErr)
+			return backfillErr
 		}
-	} else {
-		// A first build starts empty and is filled by the subscribed change stream.
-		// Do not wait for the durable consumer here: rows are written to B and
-		// acknowledged while it is priming, but the lookback gate keeps B
-		// non-authoritative until the configured history has been covered.
+		s.updateRunningRebuildLogPhase(ctx, opts, auth, view, buildID, buildLog, "catch_up")
 	}
 	if opts.RebuildLookback > 0 {
 		if err := s.validatePendingBuildCoverage(ctx, indexID, schema.Engine, opts.RebuildLookback); err != nil {
@@ -701,11 +816,12 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 				return nil
 			}
 			s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-			finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, uint64(stats.EntryCount), err)
+			finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, entriesWritten, err)
 			return err
 		}
 	}
-	err = s.catchUpAndActivateViewBuild(ctx, opts, auth, view, buildID, indexID, schema.Engine, schema.ViewVersion, schema.SchemaHash, columns, uint64(stats.EntryCount))
+	s.updateRunningRebuildLogPhase(ctx, opts, auth, view, buildID, buildLog, "activate")
+	err = s.catchUpAndActivateViewBuild(ctx, opts, auth, view, buildID, indexID, schema.Engine, schema.ViewVersion, schema.SchemaHash, columns, entriesWritten)
 	if err != nil {
 		var activation activationRetry
 		if errors.As(err, &activation) {
@@ -714,11 +830,60 @@ func (s *Service) reconcileView(ctx context.Context, opts ReconcilerOptions, aut
 			return err
 		}
 		s.failBuild(ctx, opts, auth, view, buildID, indexID, err)
-		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, uint64(stats.EntryCount), err)
+		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, entriesWritten, err)
 	} else {
-		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED, uint64(stats.EntryCount), nil)
+		finishLog(pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED, entriesWritten, nil)
 	}
 	return err
+}
+
+func rebuildLookbackForView(view *pb.View, fallback time.Duration) time.Duration {
+	if view == nil {
+		return fallback
+	}
+	raw := strings.TrimSpace(view.GetKeepDuration())
+	if raw == "" || raw == "0" {
+		return fallback
+	}
+	lookback, err := time.ParseDuration(raw)
+	if err != nil || lookback <= 0 {
+		return fallback
+	}
+	return lookback
+}
+
+func viewFrequencyValue(view *pb.View) string {
+	if view == nil || strings.TrimSpace(view.GetFilterJson()) == "" {
+		return ""
+	}
+	var filter struct {
+		Frequency string `json:"freq"`
+	}
+	if err := json.Unmarshal([]byte(view.GetFilterJson()), &filter); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(filter.Frequency)
+}
+
+func rebuildLookbackPeriodsForView(view *pb.View, configured map[string]uint64) uint64 {
+	frequency := strings.ToLower(viewFrequencyValue(view))
+	if frequency == "" {
+		// A period budget is meaningful only for a frequency-bound time-series
+		// View. Record/metrics Views without a freq filter continue to use their
+		// wall-clock retention lookback; forcing the default 1,000 bars here
+		// would make every such rebuild fail with "frequency is required".
+		return 0
+	}
+	if len(configured) == 0 {
+		return defaultRebuildLookbackPeriods
+	}
+	if periods := configured[frequency]; periods > 0 {
+		return periods
+	}
+	if periods := configured["default"]; periods > 0 {
+		return periods
+	}
+	return defaultRebuildLookbackPeriods
 }
 
 func reconcileIndexStats(ctx context.Context, engine viewindex.Engine, indexID string) (viewindex.ViewIndexStats, bool, error) {
@@ -753,7 +918,7 @@ func (s *Service) sizeLimitBuildIdle(ctx context.Context) bool {
 }
 
 func (s *Service) sizeLimitBuildIdleFor(ctx context.Context, ref viewRef, maxPending uint64, requiredChecks uint32) bool {
-	pending, ackPending, err := s.consumerBacklog(ctx)
+	pending, ackPending, err := s.consumerBacklogForView(ctx, ref)
 	if err != nil {
 		// Fail closed for optional capacity work. Schema/contract repairs do not
 		// use this gate and continue to reconcile normally.
@@ -775,10 +940,66 @@ func (s *Service) sizeLimitBuildIdleFor(ctx context.Context, ref viewRef, maxPen
 }
 
 func (s *Service) consumerBacklog(ctx context.Context) (uint64, uint64, error) {
+	return s.consumerBacklogForView(ctx, viewRef{})
+}
+
+func (s *Service) consumerBacklogForView(ctx context.Context, ref viewRef) (uint64, uint64, error) {
 	s.mu.RLock()
 	stateReader := s.consumerState
 	boundReader := s.consumerBound
+	partitionStates := s.consumerStates
+	partitionBounds := s.consumerBounds
+	partitionByDataset := s.consumerPartitionByDataset
+	view := s.catalogViews[ref]
 	s.mu.RUnlock()
+	partitionIDs := make(map[string]struct{})
+	if ref != (viewRef{}) && view != nil {
+		datasetIDs := append([]string(nil), view.GetDatasetIds()...)
+		if primary := strings.TrimSpace(view.GetPrimaryDatasetId()); primary != "" {
+			datasetIDs = append(datasetIDs, primary)
+		}
+		// A View may project columns from secondary Datasets even when those
+		// Datasets are not listed in DatasetIds. Include their origin prefix so
+		// every partition that can deliver live changes participates in the
+		// rebuild gate.
+		for _, column := range view.GetColumns() {
+			if datasetID, _, ok := strings.Cut(strings.TrimSpace(column.GetOriginId()), "."); ok && datasetID != "" {
+				datasetIDs = append(datasetIDs, datasetID)
+			}
+		}
+		for _, datasetID := range datasetIDs {
+			if partitionID := partitionByDataset[datasetRef{spaceID: ref.spaceID, datasetID: strings.TrimSpace(datasetID)}]; partitionID != "" {
+				partitionIDs[partitionID] = struct{}{}
+			}
+		}
+	}
+	if len(partitionIDs) != 0 && len(partitionStates) != 0 {
+		stateCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		var pending, ackPending uint64
+		for partitionID := range partitionIDs {
+			bound := partitionBounds[partitionID]
+			if bound == nil || !bound() {
+				return 0, 0, fmt.Errorf("storage view consumer partition %q is not bound", partitionID)
+			}
+			reader := partitionStates[partitionID]
+			if reader == nil {
+				return 0, 0, fmt.Errorf("storage view consumer partition %q is unavailable", partitionID)
+			}
+			state, err := reader(stateCtx)
+			if err != nil {
+				return 0, 0, fmt.Errorf("consumer partition %q: %w", partitionID, err)
+			}
+			if s.metrics != nil {
+				// The durable is already exposed by the partition metric state;
+				// update pending values without introducing dataset labels.
+				s.metrics.ObserveConsumerPartitionBacklog(partitionID, state.NumPending, uint64(state.NumAckPending))
+			}
+			pending += state.NumPending
+			ackPending += uint64(state.NumAckPending)
+		}
+		return pending, ackPending, nil
+	}
 	if stateReader == nil {
 		return 0, 0, errors.New("storage view consumer is not bound")
 	}
@@ -852,6 +1073,18 @@ func shouldRetryFailedBuildWithCause(view *pb.View, failedBuild *pb.ViewIndexBui
 		return rebuildNeeded
 	}
 	if view != nil && view.GetDesiredViewRevision() != view.GetActiveViewRevision() {
+		// A bounded Primary discovery scan can fail because the dataset has
+		// more history than the safety fuse. Do not immediately repeat the same
+		// million-row scan every minute; an operator can request a new revision
+		// after fixing the catalog/filter, while the failed build remains
+		// auditable in Metadata during the cooldown.
+		if strings.Contains(strings.ToLower(failedBuild.GetError()), "history scan exceeded") {
+			updatedAt, err := time.Parse(time.RFC3339Nano, failedBuild.GetUpdatedAt())
+			if err != nil || updatedAt.IsZero() {
+				return false
+			}
+			return !now.Before(updatedAt.Add(sizeLimitRebuildRetryInterval))
+		}
 		return true
 	}
 	if !rebuildNeeded {
@@ -905,6 +1138,7 @@ func (s *Service) catchUpAndActivateViewBuild(
 }
 
 func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, previous *pb.ViewIndexBuild) error {
+	lookbackPeriods := rebuildLookbackPeriodsForView(view, opts.RebuildLookbackPeriods)
 	claim, err := opts.Metadata.ClaimViewIndexBuild(ctx, &pb.ClaimViewIndexBuildReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), BuildId: previous.GetBuildId(),
 		IndexId: previous.GetIndexId(), Engine: previous.GetEngine(), TargetViewVersion: previous.GetTargetViewVersion(),
@@ -930,6 +1164,8 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 	if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_PREPARING, pb.ViewIndexBuild_BUILDING, build.GetEntriesWritten()); err != nil {
 		return err
 	}
+	s.updateRunningRebuildLogPhase(ctx, opts, auth, view, build.GetBuildId(), nil, "backfill")
+	var entriesWritten uint64
 	activePhysicalExists := view.GetActiveIndexId() != ""
 	if activePhysicalExists {
 		activeEngine, err := s.engineFor(view.GetActiveIndexId())
@@ -942,14 +1178,9 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 		}
 		activePhysicalExists = activeStats.Exists
 	}
-	if !activePhysicalExists {
-		// A recovered build without a physical active index also resumes from
-		// the change stream; historical enumeration is intentionally absent.
-		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_READY, build.GetEntriesWritten()); err != nil {
-			return err
-		}
-	} else {
-		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, build.GetEntriesWritten()); err != nil {
+	needsPrimaryHistory := opts.PrimaryRange != nil || (lookbackPeriods > 0 && !strings.EqualFold(strings.TrimSpace(previous.GetEngine()), "bleve"))
+	if activePhysicalExists || needsPrimaryHistory {
+		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_CATCHING_UP, entriesWritten); err != nil {
 			return err
 		}
 		buildCtx := ctx
@@ -963,10 +1194,16 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 			}
 			runtime.mu.Unlock()
 		}
-		if err := s.backfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary, opts.RebuildLookback); err != nil {
+		var backfillErr error
+		entriesWritten, backfillErr = s.backfillViewWithReader(buildCtx, view.GetSpaceId(), view.GetViewId(), viewBackfillBatchSize, opts.Primary, opts.PrimaryRange, opts.RebuildLookback, lookbackPeriods, opts.MaxHistoryScanRows)
+		if backfillErr != nil {
+			return backfillErr
+		}
+		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_READY, entriesWritten); err != nil {
 			return err
 		}
-		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_CATCHING_UP, pb.ViewIndexBuild_READY, build.GetEntriesWritten()); err != nil {
+	} else {
+		if err := s.updateBuild(ctx, opts, auth, view, build.GetBuildId(), pb.ViewIndexBuild_BUILDING, pb.ViewIndexBuild_READY, entriesWritten); err != nil {
 			return err
 		}
 	}
@@ -975,6 +1212,7 @@ func (s *Service) resumeViewBuild(ctx context.Context, opts ReconcilerOptions, a
 			return err
 		}
 	}
+	s.updateRunningRebuildLogPhase(ctx, opts, auth, view, build.GetBuildId(), nil, "activate")
 	return s.activateViewBuild(ctx, opts, auth, view, build.GetBuildId(), build.GetIndexId(), build.GetEngine(), build.GetTargetViewVersion(), build.GetSchemaHash(), build.GetColumns())
 }
 
@@ -1281,6 +1519,20 @@ func needsRebuild(view *pb.View, stats viewindex.ViewIndexStats) bool {
 	}
 	to, err := time.Parse(time.RFC3339Nano, stats.IndexedTo)
 	return err == nil && to.Sub(from) > 2*keep
+}
+
+// needsLookbackRepair reports a known-short time-series active index. Empty
+// coverage is deliberately not treated as a repair here: it can mean that a
+// large index has not completed its periodic full Stat yet. Once persisted
+// bounds are available, a short active index must be rebuilt from Primary.
+func needsLookbackRepair(view *pb.View, stats viewindex.ViewIndexStats, lookback time.Duration) bool {
+	if view == nil || lookback <= 0 || !stats.Exists || stats.IndexedFrom == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(view.GetEngine()), "bleve") {
+		return false
+	}
+	return errors.Is(validateRebuildLookback(stats, lookback), errRebuildLookbackInsufficient)
 }
 
 func needsSizeLimitRebuild(view *pb.View, stats viewindex.ViewIndexStats, opts ReconcilerOptions) bool {

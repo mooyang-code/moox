@@ -10,7 +10,7 @@ import (
 
 func TestMetadataProtoDataNodeContract(t *testing.T) {
 	file := storagepb.File_metadata_proto
-	for _, messageName := range []protoreflect.Name{"ViewRebuildLog", "CreateViewRebuildLogReq", "UpdateViewRebuildLogReq", "UpsertSkippedViewRebuildLogReq", "ListViewRebuildLogsReq", "ListViewRebuildLogsRsp"} {
+	for _, messageName := range []protoreflect.Name{"ViewRebuildLog", "CreateViewRebuildLogReq", "UpdateViewRebuildLogReq", "UpsertSkippedViewRebuildLogReq", "ListViewRebuildLogsReq", "ListViewRebuildLogsRsp", "RequestViewRebuildReq", "RequestViewRebuildRsp"} {
 		if file.Messages().ByName(messageName) == nil {
 			t.Fatalf("message %q is missing", messageName)
 		}
@@ -71,7 +71,7 @@ func TestMetadataProtoDataNodeContract(t *testing.T) {
 	for _, methodName := range []protoreflect.Name{
 		"RegisterDataNode", "UpdateDataNode", "GetDataNode", "ListDataNodes",
 		"DeleteDataNode", "RebindDatasetDataNode", "CheckDatasetActivation", "ActivateDataset",
-		"CreateViewRebuildLog", "UpdateViewRebuildLog", "UpsertSkippedViewRebuildLog", "ListViewRebuildLogs",
+		"CreateViewRebuildLog", "UpdateViewRebuildLog", "UpsertSkippedViewRebuildLog", "ListViewRebuildLogs", "RequestViewRebuild",
 	} {
 		if service.Methods().ByName(methodName) == nil {
 			t.Fatalf("Metadata RPC %q is missing", methodName)

@@ -62,6 +62,13 @@ type Store struct {
 	outboxMu                sync.Mutex
 	maintenanceMu           sync.Mutex
 	maintenanceWG           sync.WaitGroup
+	historyWG               sync.WaitGroup
+	historyMu               sync.Mutex
+	historyBackfillMu       sync.Mutex
+	historyCtx              context.Context
+	historyCancel           context.CancelFunc
+	historyBackfilled       map[string]bool
+	historyBackfillStarted  map[string]bool
 	closing                 bool
 }
 
@@ -89,7 +96,8 @@ func Open(opts Options) (*Store, error) {
 	if opts.DisableSyncWrites {
 		writeOptions = cpebble.NoSync
 	}
-	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention}, nil
+	historyCtx, historyCancel := context.WithCancel(context.Background())
+	return &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool)}, nil
 }
 
 func (s *Store) Close() error {
@@ -99,7 +107,11 @@ func (s *Store) Close() error {
 	s.maintenanceMu.Lock()
 	s.closing = true
 	s.maintenanceMu.Unlock()
+	if s.historyCancel != nil {
+		s.historyCancel()
+	}
 	s.maintenanceWG.Wait()
+	s.historyWG.Wait()
 	return s.db.Close()
 }
 
@@ -212,6 +224,19 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 	for _, row := range normalizedRows {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		// Keep a single logical row marker alongside the field/attribute values.
+		// The marker is an ordered, time-first index used by history backfills;
+		// writing it in the same batch makes a committed row immediately visible
+		// to the history reader.
+		if row.GetKey().GetTimeSeries() != nil {
+			historyKey, err := encodeHistoryKey(row.GetKey(), s.bucketDuration)
+			if err != nil {
+				return nil, err
+			}
+			if err := batch.Set(historyKey, nil, s.writeOptions); err != nil {
+				return nil, err
+			}
 		}
 		for _, field := range row.GetFields() {
 			key, err := encodeFieldKey(row.GetKey(), field.GetFieldId(), s.bucketDuration)

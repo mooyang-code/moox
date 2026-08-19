@@ -48,6 +48,7 @@ var storageBFFMethods = map[string]string{
 	"ListDatasetColumns":     "storage-primary",
 	"CreateView":             "storage-primary",
 	"UpdateView":             "storage-primary",
+	"RequestViewRebuild":     "storage-primary",
 	"GetView":                "storage-primary",
 	"ListViews":              "storage-primary",
 	"UpsertViewColumn":       "storage-primary",

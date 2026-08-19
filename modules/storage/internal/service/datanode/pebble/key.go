@@ -15,6 +15,7 @@ import (
 const (
 	fieldNamespace      byte = 0x01
 	attributeNamespace  byte = 0x02
+	historyNamespace    byte = 0x03
 	timeSeriesKind      byte = 0x01
 	recordKind          byte = 0x02
 	canonicalTimeLayout      = "2006-01-02T15:04:05.000000000Z"
@@ -131,6 +132,59 @@ func encodeNamespacePrefix(namespace byte, key *pb.RowKey, bucketDuration time.D
 		return nil, err
 	}
 	return append([]byte{namespace}, prefix...), nil
+}
+
+// encodeHistoryKey is a dedicated logical row index. Unlike field keys, it
+// orders data_time before subject/frequency so a backfill cursor can seek
+// directly to the next logical row instead of rescanning a subject-first day
+// bucket on every page.
+func encodeHistoryKey(key *pb.RowKey, bucketDuration time.Duration) ([]byte, error) {
+	kind, parts, err := rowParts(key, bucketDuration)
+	if err != nil {
+		return nil, err
+	}
+	if kind != timeSeriesKind {
+		return nil, invalid("history index requires a time-series row key")
+	}
+	out := []byte{historyNamespace, timeSeriesKind}
+	for _, index := range []int{0, 1, 5, 3, 4, 6} {
+		out = appendRawPart(out, parts[index])
+	}
+	return out, nil
+}
+
+// parseTimeSeriesFieldKey extracts the row identity from a legacy field or
+// attribute key. Older stores predate the dedicated history namespace, but
+// their row identity is still encoded losslessly in every field key. The
+// history reader uses this parser once per dataset to backfill the compact
+// time-ordered index without reading field values.
+func parseTimeSeriesFieldKey(key []byte) (*pb.RowKey, bool) {
+	if len(key) < 2 || (key[0] != fieldNamespace && key[0] != attributeNamespace) || key[1] != timeSeriesKind {
+		return nil, false
+	}
+	rest := key[2:]
+	parts := make([]string, 0, 7)
+	for i := 0; i < 7; i++ {
+		part, next, err := decodePart(rest)
+		if err != nil {
+			return nil, false
+		}
+		parts = append(parts, part)
+		rest = next
+	}
+	if len(parts) != 7 {
+		return nil, false
+	}
+	return &pb.RowKey{
+		SpaceId:   parts[0],
+		DatasetId: parts[1],
+		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+			SubjectId: parts[3],
+			Freq:      parts[4],
+			DataTime:  parts[5],
+			SeriesTag: parts[6],
+		}},
+	}, true
 }
 
 func decodePart(data []byte) (string, []byte, error) {

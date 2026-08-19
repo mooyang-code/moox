@@ -1751,7 +1751,10 @@ views:
   - series_tag
   filter_json: '{"freq":"1m"}'
   engine: duckdb
-  keep_duration: 720h
+  # View rebuilds only need one day of bars for the current 20-period
+  # factor warm-up. Keep the Primary retention independent so historical
+  # facts remain available for an explicit, longer rebuild when needed.
+  keep_duration: 24h
   status: active
 - space_id: crypto_market
   view_id: spot_kline_1h_view

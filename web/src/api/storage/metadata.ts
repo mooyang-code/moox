@@ -231,6 +231,10 @@ export async function updateView(view: View) {
   return rsp.view;
 }
 
+export function requestViewRebuild(params: { space_id: string; view_id: string }) {
+  return callMetadata<typeof params, RetRsp & { view: View }>("RequestViewRebuild", params);
+}
+
 export function getView(params: { space_id: string; view_id: string }) {
   return callMetadata<typeof params, RetRsp & { view: View }>("GetView", params);
 }

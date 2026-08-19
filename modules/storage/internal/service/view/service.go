@@ -25,32 +25,35 @@ import (
 )
 
 type Service struct {
-	engines         map[string]viewindex.Engine
-	indexEngine     map[string]string
-	schemas         map[string]viewindex.ViewIndexSchema
-	views           map[viewRef]*viewRuntime
-	catalogViews    map[viewRef]*pb.View
-	indexView       map[string]viewRef
-	authSecret      string
-	primaryAuth     *pb.AuthInfo
-	primary         FieldReader
-	mu              sync.RWMutex
-	byData          map[datasetRef]map[string]struct{}
-	metrics         *observability.ViewMetrics
-	periodMetadata  PeriodMetadataClient
-	metadataClient  MetadataClient
-	readyPublisher  ReadyEventPublisher
-	consumerState   func(context.Context) (jetstream.ConsumerState, error)
-	consumerBound   func() bool
-	indexGatesMu    sync.Mutex
-	indexGates      map[string]*indexWriteGate
-	indexGeneration map[string]uint64
-	retiringIndexes map[string]struct{}
-	rebuildMu       sync.Mutex
-	rebuildRunning  bool
-	idleChecks      map[viewRef]uint32
-	rebuildLogRetry map[string]pendingRebuildLog
-	reconcileReady  bool
+	engines                    map[string]viewindex.Engine
+	indexEngine                map[string]string
+	schemas                    map[string]viewindex.ViewIndexSchema
+	views                      map[viewRef]*viewRuntime
+	catalogViews               map[viewRef]*pb.View
+	indexView                  map[string]viewRef
+	authSecret                 string
+	primaryAuth                *pb.AuthInfo
+	primary                    FieldReader
+	mu                         sync.RWMutex
+	byData                     map[datasetRef]map[string]struct{}
+	metrics                    *observability.ViewMetrics
+	periodMetadata             PeriodMetadataClient
+	metadataClient             MetadataClient
+	readyPublisher             ReadyEventPublisher
+	consumerState              func(context.Context) (jetstream.ConsumerState, error)
+	consumerBound              func() bool
+	consumerStates             map[string]func(context.Context) (jetstream.ConsumerState, error)
+	consumerBounds             map[string]func() bool
+	consumerPartitionByDataset map[datasetRef]string
+	indexGatesMu               sync.Mutex
+	indexGates                 map[string]*indexWriteGate
+	indexGeneration            map[string]uint64
+	retiringIndexes            map[string]struct{}
+	rebuildMu                  sync.Mutex
+	rebuildRunning             bool
+	idleChecks                 map[viewRef]uint32
+	rebuildLogRetry            map[string]pendingRebuildLog
+	reconcileReady             bool
 }
 
 type pendingRebuildLog struct {
@@ -137,20 +140,23 @@ func New(root, authSecret string) (*Service, error) {
 		return nil, fmt.Errorf("open duckdb view indexes: %w", err)
 	}
 	service := &Service{
-		engines:         engines,
-		indexEngine:     make(map[string]string),
-		schemas:         make(map[string]viewindex.ViewIndexSchema),
-		views:           make(map[viewRef]*viewRuntime),
-		catalogViews:    make(map[viewRef]*pb.View),
-		indexView:       make(map[string]viewRef),
-		authSecret:      authSecret,
-		byData:          make(map[datasetRef]map[string]struct{}),
-		indexGates:      make(map[string]*indexWriteGate),
-		indexGeneration: make(map[string]uint64),
-		retiringIndexes: make(map[string]struct{}),
-		idleChecks:      make(map[viewRef]uint32),
-		rebuildLogRetry: make(map[string]pendingRebuildLog),
-		metrics:         observability.DefaultViewMetrics,
+		engines:                    engines,
+		indexEngine:                make(map[string]string),
+		schemas:                    make(map[string]viewindex.ViewIndexSchema),
+		views:                      make(map[viewRef]*viewRuntime),
+		catalogViews:               make(map[viewRef]*pb.View),
+		indexView:                  make(map[string]viewRef),
+		authSecret:                 authSecret,
+		byData:                     make(map[datasetRef]map[string]struct{}),
+		indexGates:                 make(map[string]*indexWriteGate),
+		indexGeneration:            make(map[string]uint64),
+		retiringIndexes:            make(map[string]struct{}),
+		consumerStates:             make(map[string]func(context.Context) (jetstream.ConsumerState, error)),
+		consumerBounds:             make(map[string]func() bool),
+		consumerPartitionByDataset: make(map[datasetRef]string),
+		idleChecks:                 make(map[viewRef]uint32),
+		rebuildLogRetry:            make(map[string]pendingRebuildLog),
+		metrics:                    observability.DefaultViewMetrics,
 	}
 	return service, nil
 }
@@ -356,10 +362,21 @@ func (s *Service) PrepareViewIndex(ctx context.Context, req *pb.PrepareViewIndex
 				columns = append(columns, proto.Clone(column).(*pb.ViewColumn))
 			}
 		}
-		s.catalogViews[viewKey] = &pb.View{
-			SpaceId: schema.SpaceID, ViewId: schema.ViewID, PrimaryDatasetId: schema.PrimaryDatasetID,
-			DatasetIds: datasetIDs, Columns: columns,
+		catalogView := s.catalogViews[viewKey]
+		if catalogView == nil {
+			catalogView = &pb.View{}
+		} else {
+			catalogView = proto.Clone(catalogView).(*pb.View)
 		}
+		catalogView.SpaceId = schema.SpaceID
+		catalogView.ViewId = schema.ViewID
+		catalogView.PrimaryDatasetId = schema.PrimaryDatasetID
+		catalogView.DatasetIds = datasetIDs
+		catalogView.Columns = columns
+		if catalogView.Engine == "" {
+			catalogView.Engine = engineName
+		}
+		s.catalogViews[viewKey] = catalogView
 	}
 	if runtime.active == "" {
 		runtime.next = req.GetIndexId()

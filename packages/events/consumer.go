@@ -40,10 +40,14 @@ type Consumer struct {
 }
 
 type ConsumerConfig struct {
-	Name  string
-	Event Event
+	Name   string
+	Event  Event
+	Stream string
 	// Events binds one durable to multiple governed families in the same Stream.
-	Events              []Event
+	Events []Event
+	// FilterSubjects binds one durable to an explicit set of exact subjects.
+	// It is mutually exclusive with Event/Events and requires Stream.
+	FilterSubjects      []string
 	AckWait             time.Duration
 	MaxDeliver          int
 	MaxAckPending       int
@@ -167,6 +171,32 @@ func jetstreamConsumerConfig(cfg ConsumerConfig, stream string, filters []string
 func consumerEventFilters(registry *Registry, cfg ConsumerConfig) (string, []string, error) {
 	if err := registry.Validate(); err != nil {
 		return "", nil, err
+	}
+	if len(cfg.FilterSubjects) != 0 {
+		if cfg.Event.Name() != "" || len(cfg.Events) != 0 {
+			return "", nil, fmt.Errorf("event consumer exact filters cannot be combined with Event/Events")
+		}
+		stream := strings.TrimSpace(cfg.Stream)
+		if stream == "" {
+			return "", nil, fmt.Errorf("event consumer exact filters require stream")
+		}
+		filters := make([]string, 0, len(cfg.FilterSubjects))
+		seen := make(map[string]struct{}, len(cfg.FilterSubjects))
+		for _, raw := range cfg.FilterSubjects {
+			filter := strings.TrimSpace(raw)
+			if filter == "" || strings.ContainsAny(filter, ">* ") {
+				return "", nil, fmt.Errorf("event consumer exact filter %q is invalid", raw)
+			}
+			if _, ok := seen[filter]; ok {
+				return "", nil, fmt.Errorf("event consumer exact filter %q is duplicated", filter)
+			}
+			seen[filter] = struct{}{}
+			filters = append(filters, filter)
+		}
+		return stream, filters, nil
+	}
+	if strings.TrimSpace(cfg.Stream) != "" {
+		return "", nil, fmt.Errorf("event consumer stream requires exact filter subjects")
 	}
 	if cfg.Event.Name() != "" && len(cfg.Events) != 0 {
 		return "", nil, fmt.Errorf("event consumer Event and Events are mutually exclusive")

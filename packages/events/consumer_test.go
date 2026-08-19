@@ -57,6 +57,44 @@ func TestConsumerEventFiltersRejectAmbiguousOrCrossStreamEvents(t *testing.T) {
 	}
 }
 
+func TestConsumerEventFiltersAcceptExactSubjectPartition(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := registry.RenderSubject(DatasetRowsUpserted, "crypto_market", "binance_spot_kline_1m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, err := registry.RenderSubject(DatasetPeriodCollected, "crypto_market", "binance_spot_kline_1m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ConsumerConfig{Stream: DatasetRowsUpserted.Stream(), FilterSubjects: []string{row, marker}}
+	stream, filters, err := consumerEventFilters(registry, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream != DatasetRowsUpserted.Stream() || !reflect.DeepEqual(filters, []string{row, marker}) {
+		t.Fatalf("exact filters = %q/%v", stream, filters)
+	}
+}
+
+func TestConsumerEventFiltersRejectExactSubjectWithoutStreamOrMixedMode(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cfg := range []ConsumerConfig{
+		{FilterSubjects: []string{"moox.storage.dataset.rows.upserted.v2.crypto.binance"}},
+		{Stream: DatasetRowsUpserted.Stream(), FilterSubjects: []string{"moox.storage.dataset.rows.upserted.v2.crypto.binance"}, Event: DatasetRowsUpserted},
+	} {
+		if _, _, err := consumerEventFilters(registry, cfg); err == nil {
+			t.Fatalf("consumerEventFilters(%+v) accepted invalid exact filter config", cfg)
+		}
+	}
+}
+
 func TestSubjectConsumerFilterUsesRegistryIdentity(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {

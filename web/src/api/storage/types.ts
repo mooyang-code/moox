@@ -266,6 +266,8 @@ export interface View {
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
+  desired_view_revision?: number | string;
+  active_view_revision?: number | string;
   view_version?: number | string;
   active_view_version?: number | string;
   active_columns?: ViewColumn[];

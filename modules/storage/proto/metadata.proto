@@ -589,6 +589,20 @@ message UpdateViewRsp {
   View view = 2;
 }
 
+// RequestViewRebuildReq 表示请求对现有查询视图执行一次手动 A/B 重建。
+// 请求只推进待构建修订号，不影响当前 active 索引；实际构建由 View
+// reconciler 异步执行，并通过 ViewRebuildLog 暴露进度和结果。
+message RequestViewRebuildReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+}
+
+message RequestViewRebuildRsp {
+  common.RetInfo ret_info = 1;
+  View view = 2;
+}
+
 // GetViewReq 表示获取查询视图的请求。
 message GetViewReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -1714,6 +1728,8 @@ service Metadata {
   rpc CreateView(CreateViewReq) returns (CreateViewRsp);
   // 更新查询视图。
   rpc UpdateView(UpdateViewReq) returns (UpdateViewRsp);
+  // 请求异步手动重建查询视图；当前 active 索引保持可读。
+  rpc RequestViewRebuild(RequestViewRebuildReq) returns (RequestViewRebuildRsp);
   // 按 ID 获取查询视图。
   rpc GetView(GetViewReq) returns (GetViewRsp);
   // 列出查询视图。

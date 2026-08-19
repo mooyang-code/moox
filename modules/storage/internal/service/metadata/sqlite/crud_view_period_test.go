@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,53 @@ func TestViewKeepDurationChangeDoesNotRequireABRebuild(t *testing.T) {
 	next := &pb.View{PrimaryDatasetId: "prices", DatasetIds: []string{"prices"}, Engine: "duckdb", KeepDuration: "168h"}
 	if viewIndexShapeChanged(existing, next) {
 		t.Fatal("keep_duration-only change must not trigger an A/B rebuild")
+	}
+}
+
+func TestRequestViewRebuildAdvancesDesiredRevisionWithoutChangingActiveIndex(t *testing.T) {
+	ctx := context.Background()
+	store := openViewPeriodTestStore(t, ctx)
+	before, err := store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested, err := store.RequestViewRebuild(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested.GetDesiredViewRevision() != before.GetDesiredViewRevision()+1 {
+		t.Fatalf("desired revision = %d, want %d", requested.GetDesiredViewRevision(), before.GetDesiredViewRevision()+1)
+	}
+	if requested.GetActiveIndexId() != before.GetActiveIndexId() || requested.GetActiveViewRevision() != before.GetActiveViewRevision() {
+		t.Fatalf("manual rebuild changed active state: before=%v after=%v", before, requested)
+	}
+	if got := requested.GetAttributes()["moox.manual_rebuild_revision"]; got != fmt.Sprint(requested.GetDesiredViewRevision()) {
+		t.Fatalf("manual rebuild marker = %q, want revision %d", got, requested.GetDesiredViewRevision())
+	}
+	again, err := store.RequestViewRebuild(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.GetDesiredViewRevision() != requested.GetDesiredViewRevision() {
+		t.Fatalf("duplicate request advanced desired revision = %d, want idempotent revision %d", again.GetDesiredViewRevision(), requested.GetDesiredViewRevision())
+	}
+}
+
+func TestRequestViewRebuildUsesAuthoritativeRevisionColumn(t *testing.T) {
+	ctx := context.Background()
+	store := openViewPeriodTestStore(t, ctx)
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE t_views SET c_desired_view_revision = c_desired_view_revision + 3
+		WHERE c_space_id = ? AND c_view_id = ?
+	`, "space", "source-view"); err != nil {
+		t.Fatal(err)
+	}
+	requested, err := store.RequestViewRebuild(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested.GetDesiredViewRevision() != 5 {
+		t.Fatalf("desired revision = %d, want authoritative revision + 1 = 5", requested.GetDesiredViewRevision())
 	}
 }
 

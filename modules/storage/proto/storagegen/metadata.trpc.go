@@ -33,6 +33,8 @@ type MetadataService interface {
 	CreateView(ctx context.Context, req *CreateViewReq) (*CreateViewRsp, error)
 	// UpdateView 更新查询视图。
 	UpdateView(ctx context.Context, req *UpdateViewReq) (*UpdateViewRsp, error)
+	// RequestViewRebuild 请求异步手动重建查询视图；当前 active 索引保持可读。
+	RequestViewRebuild(ctx context.Context, req *RequestViewRebuildReq) (*RequestViewRebuildRsp, error)
 	// GetView 按 ID 获取查询视图。
 	GetView(ctx context.Context, req *GetViewReq) (*GetViewRsp, error)
 	// ListViews 列出查询视图。
@@ -277,6 +279,24 @@ func MetadataService_UpdateView_Handler(svr interface{}, ctx context.Context, f 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MetadataService).UpdateView(ctx, reqbody.(*UpdateViewReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MetadataService_RequestViewRebuild_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RequestViewRebuildReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MetadataService).RequestViewRebuild(ctx, reqbody.(*RequestViewRebuildReq))
 	}
 
 	var rsp interface{}
@@ -1455,6 +1475,10 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_UpdateView_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.Metadata/RequestViewRebuild",
+			Func: MetadataService_RequestViewRebuild_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.Metadata/GetView",
 			Func: MetadataService_GetView_Handler,
 		},
@@ -1753,6 +1777,11 @@ func (s *UnimplementedMetadata) CreateView(ctx context.Context, req *CreateViewR
 // UpdateView 更新查询视图。
 func (s *UnimplementedMetadata) UpdateView(ctx context.Context, req *UpdateViewReq) (*UpdateViewRsp, error) {
 	return nil, errors.New("rpc UpdateView of service Metadata is not implemented")
+}
+
+// RequestViewRebuild 请求异步手动重建查询视图；当前 active 索引保持可读。
+func (s *UnimplementedMetadata) RequestViewRebuild(ctx context.Context, req *RequestViewRebuildReq) (*RequestViewRebuildRsp, error) {
+	return nil, errors.New("rpc RequestViewRebuild of service Metadata is not implemented")
 }
 
 // GetView 按 ID 获取查询视图。
@@ -2082,6 +2111,8 @@ type MetadataClientProxy interface {
 	CreateView(ctx context.Context, req *CreateViewReq, opts ...client.Option) (rsp *CreateViewRsp, err error)
 	// UpdateView 更新查询视图。
 	UpdateView(ctx context.Context, req *UpdateViewReq, opts ...client.Option) (rsp *UpdateViewRsp, err error)
+	// RequestViewRebuild 请求异步手动重建查询视图；当前 active 索引保持可读。
+	RequestViewRebuild(ctx context.Context, req *RequestViewRebuildReq, opts ...client.Option) (rsp *RequestViewRebuildRsp, err error)
 	// GetView 按 ID 获取查询视图。
 	GetView(ctx context.Context, req *GetViewReq, opts ...client.Option) (rsp *GetViewRsp, err error)
 	// ListViews 列出查询视图。
@@ -2353,6 +2384,26 @@ func (c *MetadataClientProxyImpl) UpdateView(ctx context.Context, req *UpdateVie
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateViewRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MetadataClientProxyImpl) RequestViewRebuild(ctx context.Context, req *RequestViewRebuildReq, opts ...client.Option) (*RequestViewRebuildRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.Metadata/RequestViewRebuild")
+	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("Metadata")
+	msg.WithCalleeMethod("RequestViewRebuild")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RequestViewRebuildRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

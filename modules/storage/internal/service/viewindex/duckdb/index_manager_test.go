@@ -29,6 +29,28 @@ func duckRowKey(space, dataset, subject, freq, at, tag string) *pb.RowKey {
 
 func stringPtr(value string) *string { return &value }
 
+func TestDuckDBContextDetachesCancellationAfterStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	detached, err := duckDBContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case <-detached.Done():
+		t.Fatal("DuckDB context must not be cancelled after an operation starts")
+	default:
+	}
+}
+
+func TestDuckDBContextRejectsAlreadyCancelledRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := duckDBContext(ctx); err != context.Canceled {
+		t.Fatalf("duckDBContext error = %v, want context.Canceled", err)
+	}
+}
+
 func TestOpenAppliesResourceLimits(t *testing.T) {
 	t.Setenv(duckDBMemoryLimitEnv, "128MB")
 	t.Setenv(duckDBThreadsEnv, "1")

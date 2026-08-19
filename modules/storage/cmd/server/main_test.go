@@ -114,14 +114,25 @@ func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
 	if interval != 2*time.Minute || maxBytes != 2097152 {
 		t.Fatalf("settings = %s/%d", interval, maxBytes)
 	}
-	if lookback != 72*time.Hour {
-		t.Fatalf("lookback = %s, want 72h", lookback)
+	if lookback != 24*time.Hour {
+		t.Fatalf("lookback = %s, want 24h", lookback)
 	}
 	if maxPending != 32 || idleChecks != 3 {
 		t.Fatalf("gate defaults = %d/%d", maxPending, idleChecks)
 	}
 	if maxPendingConfigured || idleChecksConfigured {
 		t.Fatal("omitted gate values were marked configured")
+	}
+}
+
+func TestStorageViewRebuildPeriodsUsesUniformEnvironmentOverride(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_CONFIG", "")
+	t.Setenv("MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS", "777")
+	got := storageViewRebuildPeriods()
+	for _, frequency := range []string{"1m", "1h", "1d", "default"} {
+		if got[frequency] != 777 {
+			t.Fatalf("rebuild periods[%q] = %d, want 777: %#v", frequency, got[frequency], got)
+		}
 	}
 }
 
@@ -185,13 +196,15 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	t.Setenv("MOOX_STORAGE_VIEW_DELIVER_POLICY", " new ")
 	opts, err := storageViewConsumerOptions()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Consumer != "storage_view_period_v1" || opts.FetchBatch != 1 || opts.MaxWorkers != 1 || opts.MaxAckPending != 256 || opts.AckWaitMS != 120000 || opts.Ordering != "dataset" || opts.DeliverPolicy != "new" {
-		t.Fatalf("consumer options = %+v", opts)
+	if len(opts.PartitionConfigs) != 3 {
+		t.Fatalf("consumer partitions = %+v", opts.PartitionConfigs)
+	}
+	if opts.PartitionConfigs[0].PartitionID != "kline" || opts.PartitionConfigs[0].Consumer != "storage_view_kline_v2" || len(opts.PartitionConfigs[0].FilterSubjects) != 4 || opts.PartitionConfigs[0].FetchBatch != 4 || opts.PartitionConfigs[0].MaxWorkers != 2 || opts.PartitionConfigs[0].MaxAckPending != 16 || opts.PartitionConfigs[0].AckWaitMS != 120000 || opts.PartitionConfigs[0].Ordering != "dataset" || opts.PartitionConfigs[0].DeliverPolicy != "new" {
+		t.Fatalf("kline consumer options = %+v", opts.PartitionConfigs[0])
 	}
 }
 

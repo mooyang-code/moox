@@ -11,14 +11,25 @@ import (
 // These RPC handlers preserve the public PrimaryStore row contract while
 // exact reads use the field API and range reads use the registered View.
 func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
-	if req == nil || (len(req.GetSelectors()) == 0 && len(req.GetKeys()) == 0) {
+	if req == nil || (len(req.GetSelectors()) == 0 && len(req.GetKeys()) == 0 && req.GetAuthInfo().GetAppId() != "storage-view") {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("selectors or keys are required"))}, nil
 	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if _, _, err := timeSeriesDataset(req); err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	if req.GetAuthInfo().GetAppId() != "storage-view" {
+		if _, _, err := timeSeriesDataset(req); err != nil {
+			return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+		}
+	} else if req.GetSpaceId() == "" || req.GetDatasetId() == "" {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	// Storage View uses the same PrimaryStore endpoint for historical rebuilds,
+	// but must bypass the normal range-read -> View resolver or it would recurse
+	// into the empty/new View. The internal app identity is authenticated by the
+	// PrimaryStore caller and the DataNode history runtime performs the scan.
+	if req.GetAuthInfo().GetAppId() == "storage-view" && len(req.GetKeys()) == 0 {
+		return s.readHistoricalTimeSeriesRows(ctx, req)
 	}
 	if len(req.GetKeys()) == 0 {
 		return s.readTimeSeriesView(ctx, req)
@@ -43,6 +54,26 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 		rows = append(rows, &pb.TimeSeriesRow{Key: timeSeriesKeyFromRowKey(row.GetKey()), Fields: row.GetFields()})
 	}
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
+}
+
+func (s *Service) readHistoricalTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return nil, err
+	}
+	history, ok := node.(historyDataNodeClient)
+	if !ok {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode history runtime is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	clone := &pb.ReadTimeSeriesRowsReq{
+		AuthInfo: auth, Selectors: req.GetSelectors(), TimeRange: req.GetTimeRange(), Order: req.GetOrder(),
+		ColumnNames: req.GetColumnNames(), Page: req.GetPage(), SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), AfterKey: req.GetAfterKey(),
+	}
+	return history.ReadTimeSeriesRows(ctx, clone)
 }
 
 func (s *Service) ReadRecordRows(ctx context.Context, req *pb.ReadRecordRowsReq) (*pb.ReadRecordRowsRsp, error) {

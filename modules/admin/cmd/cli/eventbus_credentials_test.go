@@ -178,14 +178,13 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	}
 	assert.NotContains(t, storageACL, "moox.dlq.")
 	assert.NotContains(t, storageACL, "moox.storage.rows_committed")
-	assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.*.storage_view")
-	assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view")
-	assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view")
-	assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE.storage_view.>")
-	assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.*.storage_view_period_v1")
-	assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_period_v1")
-	assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_period_v1")
-	assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE.storage_view_period_v1.>")
+	for _, durable := range []string{"storage_view_kline_v2", "storage_view_metrics_v2", "storage_view_other_v2"} {
+		assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.*."+durable)
+		assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE."+durable)
+		assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE."+durable)
+		assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE."+durable+".>")
+	}
+	assert.NotContains(t, storageACL, "storage_view_period_v1")
 	assert.Contains(t, storageACL, `subscribe: {allow: ["_INBOX.>"]}`)
 	assert.NotContains(t, aclLine(storageACL, "subscribe:"), "$JS.API")
 	assert.NotContains(t, aclLine(storageACL, "subscribe:"), "$JS.ACK")

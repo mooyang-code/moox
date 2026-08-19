@@ -1037,10 +1037,11 @@ PY
 write_runtime_scripts() {
   local scf_service_gateway_target="http://127.0.0.1:11002"
   local scf_storage_rpc_gateway_target="ip://127.0.0.1:11003"
-  local preserve_storage_routes=0
-  if [[ "${WITH_STORAGE}" == "0" && -z "${DEPLOY_PROFILE}" ]]; then
-    preserve_storage_routes=1
-  fi
+  # Storage route retention is an explicit topology decision.  Do not infer
+  # it from an omitted profile: a no-storage full deployment may intentionally
+  # remove an old local Storage placement, while an independent Storage root
+  # must opt in with MOOX_PRESERVE_STORAGE_ROUTES=1.
+  local preserve_storage_routes="${MOOX_PRESERVE_STORAGE_ROUTES:-0}"
   if [[ -n "${PUBLIC_HOST}" ]]; then
     scf_service_gateway_target="https://${PUBLIC_HOST}:${SERVICE_HTTPS_PORT}"
     scf_storage_rpc_gateway_target="ip://${PUBLIC_HOST}:11003"
@@ -1761,10 +1762,9 @@ start_storage_primary() {
 start_storage_view() {
   gateway_service_env_for storage-view
   runtime_identity_env storage-view "${ROOT}/storage-view/config/trpc_go.yaml"
-  # Deliver policy is immutable after a JetStream durable is created. The
-  # production storage_view_period_v1 durable was created with `new`; keep
-  # that deployment default so upgrades bind the existing backlog instead of
-  # terminating on a consumer config conflict.
+  # Storage View creates one durable per configured consumer partition. The
+  # policy is injected from the partition config so Kline, metrics and other
+  # datasets have independent delivery lifecycles.
   start_service "storage-view" "${ROOT}/storage-view" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
       "MOOX_OTEL_SERVICE_NAME=moox-storage-view" \
@@ -1775,8 +1775,8 @@ start_storage_view() {
       "MOOX_STORAGE_ROLE=view" \
       "MOOX_STORAGE_EVENTBUS_URL=${STORAGE_EVENTBUS_URL_ENV}" \
       "${STORAGE_EVENTBUS_CREDENTIAL_ENV[@]}" \
-      "MOOX_STORAGE_VIEW_DELIVER_POLICY=${MOOX_STORAGE_VIEW_DELIVER_POLICY:-new}" \
       "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB}" \
+      "MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS=${MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS:-1000}" \
       "MOOX_STORAGE_NODE_AUTH_SECRET=${MOOX_STORAGE_NODE_AUTH_SECRET:?MOOX_STORAGE_NODE_AUTH_SECRET is required}" \
       "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:?MOOX_STORAGE_PRIMARY_AUTH_SECRET is required}" \
       "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:?MOOX_STORAGE_VIEW_AUTH_SECRET is required}" \
@@ -2719,6 +2719,48 @@ log_line() {
   echo "$(date -Is) $*" >> "${LOG_FILE}"
 }
 
+check_storage_auth_files() {
+  local control_auth storage_auth
+  if [[ "${MOOX_INSTALLED_WITH_STORAGE:-0}" == "1" && "${MOOX_INSTALLED_WITH_ADMIN:-0}" == "0" ]]; then
+      control_auth="${MOOX_CONTROL_ROOT:-${MOOX_INSTALLED_CONTROL_ROOT:-$(dirname "${ROOT}")/prod}}/secrets/storage-internal-auth.env"
+      storage_auth="${ROOT}/secrets/storage-internal-auth.env"
+  elif [[ "${MOOX_INSTALLED_WITH_ADMIN:-0}" == "1" && "${MOOX_INSTALLED_WITH_STORAGE:-0}" == "0" ]]; then
+      control_auth="${ROOT}/secrets/storage-internal-auth.env"
+      storage_auth="${MOOX_STORAGE_ROOT:-${MOOX_INSTALLED_STORAGE_ROOT:-$(dirname "${ROOT}")/storage}}/secrets/storage-internal-auth.env"
+  elif [[ "${MOOX_INSTALLED_WITH_ADMIN:-0}" == "1" && "${MOOX_INSTALLED_WITH_STORAGE:-0}" == "1" ]]; then
+    # A monolithic package owns both sides of the contract in one file.
+    return 0
+  elif [[ "${MOOX_INSTALLED_WITH_ADMIN-}" == "0" && "${MOOX_INSTALLED_WITH_STORAGE-}" == "0" ]]; then
+    # Explicit component-only packages (for example Factor/Monitor) consume
+    # the shared credential but do not own either side of the Admin/Storage
+    # signing contract, so there is no local counterpart to compare.
+    return 0
+  else
+    # A legacy or partially written inventory must not silently bypass the
+    # shared-auth guard.  If either side is present, fail closed until the
+    # deployment is refreshed with an explicit component inventory.
+    local sibling_prod sibling_storage
+    sibling_prod="${MOOX_CONTROL_ROOT:-${MOOX_INSTALLED_CONTROL_ROOT:-$(dirname "${ROOT}")/prod}}/secrets/storage-internal-auth.env"
+    sibling_storage="${MOOX_STORAGE_ROOT:-${MOOX_INSTALLED_STORAGE_ROOT:-$(dirname "${ROOT}")/storage}}/secrets/storage-internal-auth.env"
+    if [[ -e "${ROOT}/secrets/storage-internal-auth.env" || -e "${sibling_prod}" || -e "${sibling_storage}" ]]; then
+      log_line "storage-auth: component inventory is missing or ambiguous; refusing to report a healthy deployment"
+      echo "storage-auth unavailable: refresh the deployment component inventory before health checks" >&2
+      return 1
+    fi
+    return 0
+  fi
+  if [[ ! -r "${control_auth}" || ! -r "${storage_auth}" ]]; then
+    log_line "storage-auth: control or storage credentials are missing or unreadable; refusing to report a healthy deployment"
+    echo "storage-auth unavailable: control and Storage credentials must both be readable" >&2
+    return 1
+  fi
+  if ! cmp -s "${control_auth}" "${storage_auth}"; then
+    log_line "storage-auth: control and storage credentials differ; refusing to report a healthy deployment"
+    echo "storage-auth mismatch: control and Storage credentials differ; run moox-storage-auth-rotate" >&2
+    return 1
+  fi
+}
+
 startup_grace_seconds() {
   local name="$1" configured default
   default=60
@@ -2833,6 +2875,7 @@ ensure_caddy() {
 (
   flock -n 9 || exit 0
   failed=0
+  check_storage_auth_files || failed=1
   ensure_caddy || failed=1
   for name in "${services[@]}"; do
     ensure_service "${name}" || failed=1
@@ -2848,8 +2891,18 @@ EOF
 
 prepare_stage() {
   local storage_view_duckdb_memory_limit="${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-256MB}"
+  local storage_view_rebuild_lookback_periods="${MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS:-1000}"
+  # Keep the storage route placement durable across lifecycle restarts.  A
+  # control-only package may share a host with an independently deployed
+  # Storage root; in that layout its generated start.sh must not disable the
+  # already-active local Storage routes on the next Admin restart.
+  local preserve_storage_routes="${MOOX_PRESERVE_STORAGE_ROUTES:-0}"
   [[ "${storage_view_duckdb_memory_limit}" =~ ^[1-9][0-9]*(KB|MB|GB|TB)$ ]] || \
     fail "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT must be a positive KB/MB/GB/TB value"
+  [[ "${storage_view_rebuild_lookback_periods}" =~ ^[1-9][0-9]*$ ]] || \
+    fail "MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS must be a positive integer"
+  (( storage_view_rebuild_lookback_periods <= 1000000 )) || \
+    fail "MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS must not exceed 1000000"
   rm -rf "${STAGE_DIR}"
   mkdir -p \
     "${STAGE_DIR}/bin" \
@@ -3000,6 +3053,10 @@ MOOX_INSTALLED_WITH_WEB_HOST=${WITH_WEB_HOST}
 MOOX_INSTALLED_WITH_ADMIN=${WITH_ADMIN}
 MOOX_INSTALLED_WITH_GATEWAY=${WITH_GATEWAY}
 MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${storage_view_duckdb_memory_limit}
+MOOX_INSTALLED_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS=${storage_view_rebuild_lookback_periods}
+MOOX_INSTALLED_PRESERVE_STORAGE_ROUTES=${preserve_storage_routes}
+MOOX_INSTALLED_CONTROL_ROOT=$(printf '%q' "${MOOX_CONTROL_ROOT:-}")
+MOOX_INSTALLED_STORAGE_ROOT=$(printf '%q' "${MOOX_STORAGE_ROOT:-}")
 MOOX_WITH_STORAGE=\${MOOX_WITH_STORAGE:-\${MOOX_INSTALLED_WITH_STORAGE}}
 MOOX_WITH_STORAGE_NODE=\${MOOX_WITH_STORAGE_NODE:-\${MOOX_INSTALLED_WITH_STORAGE_NODE}}
 MOOX_WITH_ARCHIVE=\${MOOX_WITH_ARCHIVE:-\${MOOX_INSTALLED_WITH_ARCHIVE}}
@@ -3014,6 +3071,8 @@ MOOX_WITH_WEB_HOST=\${MOOX_WITH_WEB_HOST:-\${MOOX_INSTALLED_WITH_WEB_HOST}}
 MOOX_WITH_ADMIN=\${MOOX_WITH_ADMIN:-\${MOOX_INSTALLED_WITH_ADMIN}}
 MOOX_WITH_GATEWAY=\${MOOX_WITH_GATEWAY:-\${MOOX_INSTALLED_WITH_GATEWAY}}
 MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=\${MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT:-\${MOOX_INSTALLED_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT}}
+MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS=\${MOOX_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS:-\${MOOX_INSTALLED_STORAGE_VIEW_REBUILD_LOOKBACK_PERIODS}}
+MOOX_PRESERVE_STORAGE_ROUTES=\${MOOX_PRESERVE_STORAGE_ROUTES:-\${MOOX_INSTALLED_PRESERVE_STORAGE_ROUTES}}
 EOF
   cp "${ROOT}/scripts/lib/caddy-managed.sh" "${STAGE_DIR}/lib/caddy-managed.sh"
   cp "${ROOT}/scripts/lib/loopback-listeners.sh" "${STAGE_DIR}/lib/loopback-listeners.sh"
@@ -3265,6 +3324,29 @@ sync_local_stage() {
   if command -v flock >/dev/null 2>&1; then
     exec 8>"${deploy_dir}.maintenance.lock"
     flock 8
+  fi
+
+  # The control package signs browser-facing Storage BFF requests, while the
+  # independent storage package verifies them.  A storage deployment must use
+  # the control package's exact credential file; otherwise the deployment can
+  # look healthy but every View query fails with "invalid view HMAC".  Check
+  # this before stopping any existing service or mutating the deployment.
+  if [[ -r "${STAGE_DIR}/secrets/storage-internal-auth.env" ]]; then
+    local storage_root counterpart_auth
+    if [[ "${WITH_STORAGE}" == "1" && "${WITH_ADMIN}" == "0" ]]; then
+        counterpart_auth="${MOOX_CONTROL_ROOT:-$(dirname "${deploy_dir}")/prod}/secrets/storage-internal-auth.env"
+    elif [[ "${WITH_ADMIN}" == "1" && "${WITH_STORAGE}" == "0" ]]; then
+        storage_root="${MOOX_STORAGE_ROOT:-$(dirname "${deploy_dir}")/storage}"
+        counterpart_auth="${storage_root}/secrets/storage-internal-auth.env"
+    else
+      counterpart_auth=""
+    fi
+    if [[ -n "${counterpart_auth}" ]]; then
+      [[ -r "${counterpart_auth}" ]] ||
+        fail "storage_internal_auth_missing_preflight: counterpart credentials are missing at ${counterpart_auth}"
+      cmp -s "${STAGE_DIR}/secrets/storage-internal-auth.env" "${counterpart_auth}" ||
+        fail "storage_internal_auth_mismatch_preflight: staged credentials differ from ${counterpart_auth}; synchronize credentials before deployment"
+    fi
   fi
   local has_selected_workload=0
   if [[ "${WITH_ARCHIVE}" -eq 1 || "${WITH_EVENTBUS}" -eq 1 || "${WITH_CLOUDNODE}" -eq 1 || \
@@ -3575,7 +3657,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms
+  local quoted_dir quoted_archive quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms quoted_control_root quoted_storage_root
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -3613,8 +3695,10 @@ sync_remote_stage() {
   quoted_factor_python_workers="$(shell_quote "${MOOX_FACTOR_ENGINE_PYTHON_WORKERS:-}")"
   quoted_factor_view_read_workers="$(shell_quote "${MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS:-}")"
   quoted_factor_view_read_timeout_ms="$(shell_quote "${MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS:-}")"
+  quoted_control_root="$(shell_quote "${MOOX_CONTROL_ROOT:-}")"
+  quoted_storage_root="$(shell_quote "${MOOX_STORAGE_ROOT:-}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
@@ -3658,6 +3742,33 @@ mkdir -p "${DEPLOY_DIR}"
 if command -v flock >/dev/null 2>&1; then
   exec 8>"${DEPLOY_DIR}.maintenance.lock"
   flock 8
+fi
+# Keep the control package and the independent Storage package on the same
+# internal auth material. Inspect the uploaded archive before stopping the
+# existing deployment so a mismatch fails without causing downtime.
+COUNTERPART_AUTH_FOR_DEPLOY=""
+if [[ "${WITH_STORAGE}" == "1" && "${WITH_ADMIN}" == "0" ]]; then
+    COUNTERPART_AUTH_FOR_DEPLOY="${MOOX_CONTROL_ROOT:-$(dirname "${DEPLOY_DIR}")/prod}/secrets/storage-internal-auth.env"
+elif [[ "${WITH_ADMIN}" == "1" && "${WITH_STORAGE}" == "0" ]]; then
+    COUNTERPART_AUTH_FOR_DEPLOY="${MOOX_STORAGE_ROOT:-$(dirname "${DEPLOY_DIR}")/storage}/secrets/storage-internal-auth.env"
+fi
+if [[ -n "${COUNTERPART_AUTH_FOR_DEPLOY}" ]]; then
+  STAGED_STORAGE_AUTH="$(mktemp "${TMPDIR:-/tmp}/moox-storage-auth.XXXXXX")"
+  trap 'rm -f "${STAGED_STORAGE_AUTH:-}"' EXIT
+  if ! tar -xOzf "${ARCHIVE}" ./secrets/storage-internal-auth.env >"${STAGED_STORAGE_AUTH}" 2>/dev/null; then
+    if [[ -e "${COUNTERPART_AUTH_FOR_DEPLOY}" ]]; then
+      echo "storage_internal_auth_missing_preflight: uploaded package has no storage credentials while ${COUNTERPART_AUTH_FOR_DEPLOY} exists" >&2
+      exit 1
+    fi
+  elif [[ ! -r "${COUNTERPART_AUTH_FOR_DEPLOY}" ]]; then
+    echo "storage_internal_auth_missing_preflight: counterpart credentials are missing or unreadable at ${COUNTERPART_AUTH_FOR_DEPLOY}" >&2
+    exit 1
+  elif ! cmp -s "${STAGED_STORAGE_AUTH}" "${COUNTERPART_AUTH_FOR_DEPLOY}"; then
+    echo "storage_internal_auth_mismatch_preflight: uploaded credentials differ from ${COUNTERPART_AUTH_FOR_DEPLOY}; synchronize credentials before deployment" >&2
+    exit 1
+  fi
+  rm -f "${STAGED_STORAGE_AUTH}"
+  trap - EXIT
 fi
 HAS_SELECTED_WORKLOAD=0
 if [[ "${WITH_ARCHIVE}" == "1" || "${WITH_EVENTBUS}" == "1" || "${WITH_CLOUDNODE}" == "1" || \

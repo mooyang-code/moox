@@ -36,6 +36,7 @@ func ServiceAuthKey(secret, appID string) string {
 }
 
 var _ pb.DataNodeRuntimeService = (*Service)(nil)
+var _ pb.DataNodeHistoryRuntimeService = (*Service)(nil)
 
 func NewService(opts Options) (*Service, error) {
 	store := opts.Store
@@ -136,6 +137,24 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.Re
 		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	return &pb.ReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
+}
+
+// ReadTimeSeriesRows is intentionally exposed on the narrow history runtime
+// service, not on DataNodeRuntime. Primary uses it only for View backfill;
+// normal callers continue to use point reads through PrimaryStore.
+func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
+	if req == nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rows, err := s.store.ReadTimeSeriesRows(ctx, req)
+	if err != nil {
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	rows.RetInfo = retinfo.Success("success")
+	return rows, nil
 }
 
 func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {

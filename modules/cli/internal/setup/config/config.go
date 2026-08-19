@@ -19,6 +19,9 @@ import (
 const (
 	manifestName = "custom.toml"
 	maxFileSize  = 1 << 20
+	// DefaultStorageViewRebuildLookbackPeriods is the number of completed bars
+	// every View rebuild replays when no explicit manifest value is supplied.
+	DefaultStorageViewRebuildLookbackPeriods uint64 = 1000
 	// SCFCLSReserveMilliseconds is injected into every short-lived market SCF.
 	// Keep setup validation aligned with the runtime's CLS flush reservation.
 	SCFCLSReserveMilliseconds = 3000
@@ -61,6 +64,12 @@ type DNSResolver struct {
 	CacheTTLSeconds        int      `toml:"cache_ttl_seconds"`
 	MaxIPsPerDomain        int      `toml:"max_ips_per_domain"`
 	Domains                []string `toml:"domains"`
+}
+
+// StorageView contains the deployment-wide View rebuild policy. The single
+// value intentionally applies to every frequency.
+type StorageView struct {
+	RebuildLookbackPeriods uint64 `toml:"rebuild_lookback_periods"`
 }
 
 type Monitoring struct {
@@ -158,6 +167,7 @@ type Manifest struct {
 	TencentCloud TencentCloud `toml:"tencent_cloud"`
 	EventBus     EventBus     `toml:"eventbus"`
 	DNSResolver  DNSResolver  `toml:"dns_resolver"`
+	StorageView  StorageView  `toml:"storage_view"`
 	Monitoring   Monitoring   `toml:"monitoring"`
 	Factors      FactorSetup  `toml:"factors"`
 	SCFFetcher   SCFFetcher   `toml:"scf_fetcher"`
@@ -282,6 +292,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("factors", "enabled") {
 		out.Factors.Enabled = true
 	}
+	if !md.IsDefined("storage_view", "rebuild_lookback_periods") {
+		out.StorageView.RebuildLookbackPeriods = DefaultStorageViewRebuildLookbackPeriods
+	}
 	if !md.IsDefined("factors", "source_dir") || strings.TrimSpace(out.Factors.SourceDir) == "" {
 		out.Factors.SourceDir = "./examples/factors"
 	}
@@ -339,6 +352,9 @@ func validate(manifest *Manifest) error {
 	if err := validateFactorSetup(&manifest.Factors); err != nil {
 		return err
 	}
+	if err := validateStorageView(&manifest.StorageView); err != nil {
+		return err
+	}
 
 	names := make(map[string]struct{}, 1+len(manifest.OtherHosts))
 	addresses := make(map[string]struct{}, 1+len(manifest.OtherHosts))
@@ -359,6 +375,13 @@ func validate(manifest *Manifest) error {
 	}
 	if err := validateDNSResolver(&manifest.DNSResolver, manifest); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateStorageView(cfg *StorageView) error {
+	if cfg.RebuildLookbackPeriods == 0 || cfg.RebuildLookbackPeriods > 1_000_000 {
+		return fmt.Errorf("config_invalid: storage_view.rebuild_lookback_periods must be between 1 and 1000000")
 	}
 	return nil
 }

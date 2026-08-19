@@ -86,7 +86,7 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	releaseBlocked := make(chan struct{})
 	var blockOnce sync.Once
 	stop, err := service.StartEventConsumer(ctx, client, viewservice.EventConsumerOptions{
-		Consumer: "storage_view_period_v1", FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
+		PartitionID: "kline", Consumer: events.StorageViewKlineConsumer, FilterSubjects: append(exactDatasetEventSubjects(t, registry, "quant", "prices_a"), exactDatasetEventSubjects(t, registry, "quant", "prices_b")...), FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
 		BeforeProcess: func(hookCtx context.Context, delivery *jetstream.Delivery) error {
 			_, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(
 				registry,

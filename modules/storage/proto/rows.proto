@@ -111,6 +111,9 @@ message ReadTimeSeriesRowsReq {
   string dataset_id = 8;
   // keys are exact PrimaryStore point reads. Range reads use selectors.
   repeated TimeSeriesKey keys = 9;
+  // after_key is an opaque RowKey cursor used by internal history backfills.
+  // It keeps paging streaming and avoids rescanning all earlier rows.
+  bytes after_key = 10;
 }
 
 message ReadTimeSeriesRowsRsp {

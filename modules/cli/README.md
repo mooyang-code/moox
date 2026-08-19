@@ -10,6 +10,7 @@ moox-cli metadata apply ...         # 创建并校验 Storage 元数据契约（
 moox-cli setup init ...             # 一次初始化 Admin 空间、Storage 元数据与 Dataset
 moox-cli storage import ...         # 导入历史 CSV 到已登记 Dataset
 moox-cli storage repair-view ...    # 清理 View durable consumer 积压并触发 A/B 重建
+moox-cli storage reset-view-consumers ... # 删除全部 View durable/消息/索引并从 Primary 回溯重建
 moox-cli factor clear-queue ...     # 清空 Factor durable consumer 历史积压并重启 Factor
 moox-cli data rows export ...       # 导出行数据
 moox-cli collector function ...     # 采集 SCF 代码包打包/发布/部署辅助
@@ -20,6 +21,30 @@ moox-cli setup ...                  # 初始化控制面、发布服务包、部
 中文别名：`认证`、`注册`、`存储`（见各子命令 `--help`）。
 
 ### View 自助修复
+
+项目尚未上线或需要彻底丢弃 View 历史时，可先预览再执行一次性分区清理：
+
+```bash
+moox-cli storage reset-view-consumers \
+  --storage-conf /home/ubuntu/moox/storage/config/storage.yaml \
+  --package-root /home/ubuntu/moox/storage \
+  --lookback 24h --dry-run
+moox-cli storage reset-view-consumers \
+  --storage-conf /home/ubuntu/moox/storage/config/storage.yaml \
+  --package-root /home/ubuntu/moox/storage \
+  --lookback 24h --yes
+```
+
+命令停止整个 Storage 生命周期（Primary、DataNode、View），删除旧的
+`storage_view_period_v1`/`storage_view` 与新的 Kline、metrics、other durable，并清理
+所有配置 Dataset 的精确 Storage subjects。该命令是破坏性“新一代”操作：Record/Bleve
+View 也会删除 A/B 索引和元数据，历史记录不保留；重启后只接收清理完成后的新事件。时序 View
+时序 View 会按 Storage 配置中的 `rebuild_lookback_periods` 从 Primary 回溯（默认所有频率 `1000` 根；
+根目录 `custom.toml` 的 `[storage_view] rebuild_lookback_periods` 可统一配置），未达到对应根数不会激活；`--lookback` 仅覆盖没有
+frequency 的旧 View 兼容兜底。默认不删 Primary 事实数据；只有明确传
+`--reset-all-storage-data` 才会停止全 Storage 并删除 Primary/DataNode Pebble 数据，此模式
+只等待服务健康，不要求不存在的历史回溯水位。若 purge 或索引清理中途失败，命令会保留 Storage
+停止状态并返回非零，避免在已部分删除历史后自动启动一个不一致的 View；修复原因后重新执行命令。
 
 当 Storage View 因 durable consumer 积压、重建失败或旧索引占用空间而停止追赶时，
 可在 Storage 主机上执行：
@@ -33,7 +58,7 @@ moox-cli storage repair-view \
   --yes
 ```
 
-默认流程会停止并重启 `storage-view`、删除 `storage_view_period_v1` durable consumer、
+默认流程会停止并重启 `storage-view`、删除指定 durable consumer、
 备份 Metadata SQLite，并递增 View desired revision，让服务走正常的 A/B 构建和切换；
 active 索引不会被删除。NATS 删除 consumer 需要 EventBus internal-admin 凭据，使用
 `--credential-file` 或 `MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE` 指定，命令不会输出凭据。
@@ -56,14 +81,8 @@ View、Factor 结果或其他数据。可先用 `--dry-run` 检查参数，若�
 `--restart=false`。若部署环境无法从 `moox-factor-cli` 自动定位根目录，请显式传
 `--package-root`；NATS 管理凭据也可通过 `MOOX_EVENTBUS_INTERNAL_ADMIN_CREDENTIAL_FILE` 提供。
 
-只有在确认保留的 Source 事件能够完整重放时，才使用高风险的全量索引重置：
-
-```bash
-moox-cli storage repair-view ... --reset-view-indexes --deliver-policy=all --yes
-```
-
-该选项会删除 active/inactive 两个物理索引并清空 Metadata active 指针，依赖 JetStream
-保留的 Source 事件重新生成；命令仍会先备份 Metadata。默认的安全修复不需要该选项。
+全量丢弃 View 历史时优先使用上面的 `reset-view-consumers`。它直接从保留的 Primary
+事实数据回溯构建，不依赖 JetStream 旧消息，也不会误删 Primary。
 
 ## 控制面初始化
 

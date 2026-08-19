@@ -47,7 +47,11 @@ func SnapshotForRoleWithOptions(instance string, metrics *observability.ViewMetr
 	return func(context.Context) healthz.Response {
 		snapshot := metrics.Snapshot()
 		consumerBound := instance != InstanceStorageView || snapshot.ConsumerBound
-		consumerDraining := instance != InstanceStorageView || snapshot.OldestPendingAge <= threshold
+		// View backlog is partitioned by durable. A system-metrics poison message
+		// must not make the Kline View fail readiness (and trigger a whole-process
+		// restart); bound/restore state is the liveness gate. Partition backlog and
+		// age remain exposed in readiness details for operators.
+		consumerDraining := true
 		outboxDraining := instance != InstanceStorageNode || (snapshot.OutboxObserved && (snapshot.OutboxPendingEntries == 0 || snapshot.OutboxOldestAge <= threshold))
 		ready := consumerBound && consumerDraining && outboxDraining
 		rsp := healthz.Base("storage", instance, "", "", time.Time{}, ready)
@@ -66,6 +70,7 @@ func SnapshotForRoleWithOptions(instance string, metrics *observability.ViewMetr
 			"rebuild_audit_pending":            snapshot.RebuildAuditPending,
 			"rebuild_audit_write_failures":     snapshot.RebuildAuditFailures,
 			"rebuild_audit_dropped":            snapshot.RebuildAuditDropped,
+			"consumer_partitions":              metrics.ConsumerPartitionsSnapshot(),
 		}
 		return rsp
 	}

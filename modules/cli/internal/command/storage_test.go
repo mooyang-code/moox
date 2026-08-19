@@ -23,3 +23,17 @@ func TestRunStorageMaintenanceBinaryDelegatesForceRebuildView(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "force-rebuild-view\n--lookback\n72h\n--yes\n", string(raw))
 }
+
+func TestRunStorageMaintenanceBinaryDelegatesResetViewConsumers(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	script := filepath.Join(dir, "storage-cli")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+argsFile+"\"\n"), 0o755))
+	t.Setenv("MOOX_STORAGE_CLI", script)
+
+	var stdout, stderr bytes.Buffer
+	require.NoError(t, runStorageMaintenanceBinaryAction(context.Background(), nil, &stdout, &stderr, "reset-view-consumers", []string{"--lookback", "72h", "--dry-run"}))
+	raw, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+	require.Equal(t, "reset-view-consumers\n--lookback\n72h\n--dry-run\n", string(raw))
+}

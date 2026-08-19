@@ -142,6 +142,15 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			if err := s.applyEventToIndex(ctx, nextID, datasetID, rows); err != nil {
 				failedID := nextID
 				failedGeneration := s.indexGenerationOf(failedID)
+				// A live delivery has a short deadline. A timeout while the
+				// replacement is holding its per-index write gate is backpressure,
+				// not evidence that the B index is corrupt. Keep the delivery pending
+				// and let the next attempt retry the write; marking the whole build
+				// FAILED here would make every large backfill self-cancel.
+				if isTransientBuildWriteError(err) {
+					runtime.mu.Unlock()
+					return err
+				}
 				if activeErr != nil || !activeReady {
 					// A first build has no authoritative A. Persist the failed
 					// state before returning; the delivery itself must remain
@@ -206,6 +215,21 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		}
 	}
 	return nil
+}
+
+func isTransientBuildWriteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	// tRPC transport errors may wrap the context error in a framework error
+	// whose Unwrap chain is not preserved. Keep a conservative textual check so
+	// a short delivery deadline cannot mark a healthy, merely busy B index as
+	// permanently failed.
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "context deadline exceeded") || strings.Contains(message, "context canceled")
 }
 
 // liveIndexReady verifies that an index pointer still names a physical

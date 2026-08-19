@@ -27,8 +27,14 @@ func TestStorageConfigRolesAreExplicit(t *testing.T) {
 func TestStorageViewRebuildDefaults(t *testing.T) {
 	cfg := StorageConfig{}
 	cfg.ApplyDefaults()
-	if cfg.View.RebuildCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 || cfg.View.RebuildLookback != "72h" {
+	if cfg.View.RebuildCheckInterval != "1m" || cfg.View.MaxViewFileBytes != 1<<30 || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 || cfg.View.RebuildLookback != "24h" {
 		t.Fatalf("view rebuild defaults = %q/%d/%d/%d/%s", cfg.View.RebuildCheckInterval, cfg.View.MaxViewFileBytes, cfg.View.RebuildMaxPending, cfg.View.RebuildIdleChecks, cfg.View.RebuildLookback)
+	}
+	want := map[string]uint64{"1m": 1000, "1h": 1000, "1d": 1000, "default": 1000}
+	for frequency, periods := range want {
+		if cfg.View.RebuildLookbackPeriods[frequency] != periods {
+			t.Fatalf("view rebuild periods[%q] = %d, want %d", frequency, cfg.View.RebuildLookbackPeriods[frequency], periods)
+		}
 	}
 }
 
@@ -40,6 +46,17 @@ func TestStorageViewRebuildLookbackCanBeConfigured(t *testing.T) {
 	cfg.ApplyDefaults()
 	if cfg.Storage.View.RebuildLookback != "48h" {
 		t.Fatalf("rebuild lookback = %q, want 48h", cfg.Storage.View.RebuildLookback)
+	}
+}
+
+func TestStorageViewRebuildLookbackPeriodsNormalizeFrequency(t *testing.T) {
+	var cfg RuntimeConfig
+	if err := yaml.Unmarshal([]byte("storage:\n  view:\n    rebuild_lookback_periods:\n      1H: 123\n      30s: 456\n"), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyDefaults()
+	if cfg.Storage.View.RebuildLookbackPeriods["1h"] != 123 || cfg.Storage.View.RebuildLookbackPeriods["30s"] != 456 || cfg.Storage.View.RebuildLookbackPeriods["default"] != 1000 {
+		t.Fatalf("normalized rebuild periods = %#v", cfg.Storage.View.RebuildLookbackPeriods)
 	}
 }
 
@@ -60,6 +77,71 @@ func TestStorageViewConsumerDefaults(t *testing.T) {
 	cfg.ApplyDefaults()
 	if cfg.Storage.View.FetchBatch != 1 || cfg.Storage.View.MaxWorkers != 1 || cfg.Storage.View.Ordering != "dataset" {
 		t.Fatalf("view consumer defaults = %+v", cfg.Storage.View)
+	}
+}
+
+func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
+	var cfg RuntimeConfig
+	cfg.ApplyDefaults()
+	partitions := cfg.Storage.View.ConsumerPartitions
+	if len(partitions) != 3 {
+		t.Fatalf("consumer partitions = %+v, want kline/metrics/other", partitions)
+	}
+	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err != nil {
+		t.Fatalf("ValidateConsumerPartitions() error = %v", err)
+	}
+	klineDatasets := partitions[0].Datasets()
+	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline_v2" || len(klineDatasets) != 1 || klineDatasets[0].SpaceID != "crypto_market" || klineDatasets[0].DatasetID != "binance_spot_kline_1m" {
+		t.Fatalf("kline partition = %+v", partitions[0])
+	}
+	if partitions[1].ID != "system_metrics" || partitions[1].Durable != "storage_view_metrics_v2" {
+		t.Fatalf("metrics partition = %+v", partitions[1])
+	}
+}
+
+func TestStorageViewConsumerPartitionsRejectOverlapAndInvalidLimits(t *testing.T) {
+	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
+		{ID: "a", Durable: "storage_view_kline_v2", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 4, MaxAckPending: 8, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "b", Durable: "storage_view_metrics_v2", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+	}}
+	if err := view.ValidateConsumerPartitions(nil); err == nil {
+		t.Fatal("overlapping Dataset partition was accepted")
+	}
+	view.ConsumerPartitions[1].DatasetIDs = []string{"other"}
+	view.ConsumerPartitions[1].FetchBatch = 2
+	if err := view.ValidateConsumerPartitions(nil); err == nil {
+		t.Fatal("fetch_batch exceeding max_ack_pending was accepted")
+	}
+}
+
+func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
+	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{{
+		ID: "kline", Durable: "storage.view", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"},
+		FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, AckWaitMS: 1000,
+	}}}
+	if err := view.ValidateConsumerPartitions(nil); err == nil {
+		t.Fatal("invalid durable name was accepted")
+	}
+}
+
+func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T) {
+	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
+		{ID: "kline", Durable: "storage_view_kline_v2", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "system_metrics", Durable: "storage_view_metrics_v2", SpaceID: "moox_system", DatasetIDs: []string{"moox_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "other", Durable: "storage_view_other_v2", SpaceID: "crypto_market", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+	}}
+	managed := []StorageViewConsumerDataset{{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m"}}
+	if err := view.ValidateConsumerPartitions(managed); err != nil {
+		t.Fatalf("future configured Dataset should not block startup: %v", err)
+	}
+}
+
+func TestStorageViewConsumerPartitionsRequireAllManagedDurables(t *testing.T) {
+	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
+		{ID: "kline", Durable: "storage_view_kline_v2", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+	}}
+	if err := view.ValidateConsumerPartitions(nil); err == nil {
+		t.Fatal("partial consumer topology was accepted")
 	}
 }
 
@@ -298,7 +380,7 @@ storage:
 	if cfg.Storage.Devices.ViewIndexRoot != "/indexes" || cfg.Storage.View.IndexServiceName != "custom.ViewIndex" {
 		t.Fatalf("owner config = %q/%q", cfg.Storage.Devices.ViewIndexRoot, cfg.Storage.View.IndexServiceName)
 	}
-	if cfg.Storage.View.RebuildCheckInterval != "2h" || cfg.Storage.View.MaxViewFileBytes != 805306368 || cfg.Storage.View.RebuildMaxPending != 32 || cfg.Storage.View.RebuildIdleChecks != 3 || cfg.Storage.View.RebuildLookback != "72h" {
+	if cfg.Storage.View.RebuildCheckInterval != "2h" || cfg.Storage.View.MaxViewFileBytes != 805306368 || cfg.Storage.View.RebuildMaxPending != 32 || cfg.Storage.View.RebuildIdleChecks != 3 || cfg.Storage.View.RebuildLookback != "24h" {
 		t.Fatalf("rebuild config = %q/%d/%d/%d/%s", cfg.Storage.View.RebuildCheckInterval, cfg.Storage.View.MaxViewFileBytes, cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks, cfg.Storage.View.RebuildLookback)
 	}
 }

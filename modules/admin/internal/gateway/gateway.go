@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -170,6 +171,14 @@ func (hr *HTTPRouter) handleGatewayRequest(w http.ResponseWriter, r *http.Reques
 			trpc.SetMetaData(ctx, authmodel.CtxUsername, []byte(claims.Username))
 			trpc.SetMetaData(ctx, authmodel.CtxUserRole, []byte(fmt.Sprintf("%d", claims.Role)))
 			trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte(claims.SessionID))
+		}
+	}
+	if storageFacade && method == "RequestViewRebuild" {
+		role, err := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
+		if err != nil || role < 2 {
+			log.WarnContextf(ctx, "manual view rebuild denied: administrator role required")
+			http.Error(w, "administrator role required", http.StatusForbidden)
+			return
 		}
 	}
 

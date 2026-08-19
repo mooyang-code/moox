@@ -37,6 +37,20 @@ func TestValidateRepairViewRequiresExplicitReplayForFullReset(t *testing.T) {
 	}
 }
 
+func TestResolveRepairPackageRootWalksUpFromStorageConfig(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "start.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configDir := filepath.Join(root, "storage", "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveRepairPackageRoot("", filepath.Join(configDir, "storage.yaml")); got != root {
+		t.Fatalf("package root = %q, want %q", got, root)
+	}
+}
+
 func TestForceRepairViewRevisionPreservesActiveIndexAndUpdatesAttrs(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "metadata.db")
 	db, err := sql.Open("sqlite", dbPath)

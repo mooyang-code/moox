@@ -2,13 +2,16 @@ package view
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
@@ -25,6 +28,9 @@ func rebuildTriggerReason(view *pb.View, stats viewindex.ViewIndexStats, sizeLim
 	if !stats.Exists {
 		return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_ACTIVE_MISSING
 	}
+	if manualRebuildRequested(view) {
+		return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_MANUAL_REPAIR
+	}
 	if view.GetDesiredViewRevision() > view.GetActiveViewRevision() {
 		return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_DEFINITION_CHANGE
 	}
@@ -32,6 +38,15 @@ func rebuildTriggerReason(view *pb.View, stats viewindex.ViewIndexStats, sizeLim
 		return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SIZE_LIMIT
 	}
 	return pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR
+}
+
+func manualRebuildRequested(view *pb.View) bool {
+	if view == nil || view.GetDesiredViewRevision() == 0 || view.GetDesiredViewRevision() <= view.GetActiveViewRevision() {
+		return false
+	}
+	raw := strings.TrimSpace(view.GetAttributes()[coremetadata.ManualRebuildRevisionAttribute])
+	revision, err := strconv.ParseUint(raw, 10, 64)
+	return err == nil && revision == view.GetDesiredViewRevision()
 }
 
 func (s *Service) finishRunningRebuildLog(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, result pb.ViewRebuildResult, entries uint64, cause error) (found, updated, lookupOK bool) {
@@ -336,6 +351,7 @@ func (s *Service) finishRebuildLog(ctx context.Context, opts ReconcilerOptions, 
 	updated.Result = result
 	updated.EntriesWritten = entries
 	updated.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	updated.DetailsJson = appendRebuildPhase(item.GetDetailsJson(), terminalRebuildPhase(result))
 	if cause != nil {
 		updated.ErrorSummary = rebuildErrorSummary(cause)
 	}
@@ -359,6 +375,96 @@ func (s *Service) finishRebuildLog(ctx context.Context, opts ReconcilerOptions, 
 	s.rebuildMu.Unlock()
 	s.metrics.SetRebuildAuditPending(int64(pending))
 	return true
+}
+
+func terminalRebuildPhase(result pb.ViewRebuildResult) string {
+	switch result {
+	case pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED:
+		return "completed"
+	case pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED:
+		return "failed"
+	case pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SKIPPED:
+		return "skipped"
+	default:
+		return "finished"
+	}
+}
+
+// appendRebuildPhase keeps the current phase and a compact ordered history in
+// the same audit row. This makes a completed build useful after the short
+// polling window has passed, without creating a second mutable log row per
+// phase or coupling observability to the A/B state machine.
+func appendRebuildPhase(raw, phase string) string {
+	if strings.TrimSpace(phase) == "" {
+		return raw
+	}
+	details := map[string]any{}
+	if strings.TrimSpace(raw) != "" {
+		_ = json.Unmarshal([]byte(raw), &details)
+	}
+	history := make([]string, 0, 6)
+	if values, ok := details["phase_history"].([]any); ok {
+		for _, value := range values {
+			if text, ok := value.(string); ok && text != "" {
+				history = append(history, text)
+			}
+		}
+	}
+	if len(history) == 0 {
+		if previous, ok := details["phase"].(string); ok && previous != "" {
+			history = append(history, previous)
+		}
+	}
+	if len(history) == 0 || history[len(history)-1] != phase {
+		history = append(history, phase)
+	}
+	if len(history) > 12 {
+		history = history[len(history)-12:]
+	}
+	details["phase"] = phase
+	details["phase_history"] = history
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		return fmt.Sprintf(`{"phase":%q}`, phase)
+	}
+	return string(encoded)
+}
+
+// updateRunningRebuildLogPhase is best-effort observability. A failure here
+// must never change the A/B state machine; the terminal update/retry path is
+// still responsible for closing the audit row.
+func (s *Service) updateRunningRebuildLogPhase(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, view *pb.View, buildID string, item *pb.ViewRebuildLog, phase string) {
+	client, ok := opts.Metadata.(rebuildLogMetadataClient)
+	if !ok || view == nil || strings.TrimSpace(buildID) == "" || strings.TrimSpace(phase) == "" {
+		return
+	}
+	for page := uint32(1); ; page++ {
+		rsp, err := client.ListViewRebuildLogs(ctx, &pb.ListViewRebuildLogsReq{
+			AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(),
+			Result: pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING,
+			Page:   &pb.Page{Page: page, Size: 100},
+		})
+		if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return
+		}
+		for _, item := range rsp.GetLogs() {
+			if item == nil || item.GetBuildId() != buildID || item.GetResult() != pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING {
+				continue
+			}
+			updated := proto.Clone(item).(*pb.ViewRebuildLog)
+			updated.DetailsJson = appendRebuildPhase(item.GetDetailsJson(), phase)
+			if rsp, err := client.UpdateViewRebuildLog(ctx, &pb.UpdateViewRebuildLogReq{AuthInfo: auth, Log: updated}); err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+				return
+			}
+			if logItem := item; logItem != nil {
+				logItem.DetailsJson = updated.DetailsJson
+			}
+			return
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetLogs()) == 0 {
+			return
+		}
+	}
 }
 
 func (s *Service) rebuildLogAlreadyTerminal(ctx context.Context, opts ReconcilerOptions, auth *pb.AuthInfo, item *pb.ViewRebuildLog, result pb.ViewRebuildResult, entries uint64) bool {

@@ -3,6 +3,8 @@ package observability
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +25,8 @@ type ViewMetrics struct {
 
 	consumerLagMessages          prometheus.Gauge
 	consumerBound                prometheus.Gauge
+	consumerPartitionLag         *prometheus.GaugeVec
+	consumerPartitionBound       *prometheus.GaugeVec
 	oldestPendingEventAge        prometheus.GaugeFunc
 	deliveryDuration             prometheus.Histogram
 	ackErrorsTotal               prometheus.Counter
@@ -43,6 +47,8 @@ type ViewMetrics struct {
 	rebuildAuditDropped          prometheus.Counter
 	consumerLagSnapshot          atomic.Int64
 	consumerBoundSnapshot        atomic.Bool
+	partitionMu                  sync.RWMutex
+	partitionStates              map[string]ConsumerPartitionSnapshot
 	outboxObservedSnapshot       atomic.Bool
 	outboxDynamicAge             atomic.Bool
 	outboxOldestEventAt          atomic.Int64
@@ -89,6 +95,21 @@ type ViewMetricsSnapshot struct {
 	RebuildAuditDropped         int64
 }
 
+// ConsumerPartitionSnapshot is a low-cardinality status projection for one
+// Storage View durable. It is intentionally keyed only by configured
+// partition id, never by dataset or subject.
+type ConsumerPartitionSnapshot struct {
+	PartitionID      string
+	Durable          string
+	Bound            bool
+	LagMessages      int64
+	Pending          uint64
+	AckPending       uint64
+	OldestPendingAge time.Duration
+	LastDeliveryAt   time.Time
+	backlogSince     time.Time
+}
+
 func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if registerer == nil {
 		return nil, fmt.Errorf("storage view metrics registerer is nil")
@@ -122,6 +143,14 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_bound",
 			Help: "Whether the Storage view durable consumer is currently bound.",
 		}),
+		consumerPartitionLag: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_partition_lag_messages",
+			Help: "Storage view deliveries fetched but not finished, by configured partition.",
+		}, []string{"partition", "durable"}),
+		consumerPartitionBound: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "consumer_partition_bound",
+			Help: "Whether a configured Storage view durable is currently bound.",
+		}, []string{"partition", "durable"}),
 		deliveryDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "delivery_duration_seconds",
 			Help: "Storage view delivery processing duration.",
@@ -191,6 +220,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Help: "View rebuild audit retry records dropped after reaching the queue limit.",
 		}),
 		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
+		partitionStates:   make(map[string]ConsumerPartitionSnapshot),
 	}
 	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: "moox", Subsystem: "storage_view", Name: "oldest_pending_event_age_seconds",
@@ -216,6 +246,12 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	if metrics.consumerBound, err = registerOrReuse(registerer, metrics.consumerBound); err != nil {
+		return nil, err
+	}
+	if metrics.consumerPartitionLag, err = registerOrReuse(registerer, metrics.consumerPartitionLag); err != nil {
+		return nil, err
+	}
+	if metrics.consumerPartitionBound, err = registerOrReuse(registerer, metrics.consumerPartitionBound); err != nil {
 		return nil, err
 	}
 	if metrics.oldestPendingEventAge, err = registerOrReuse(registerer, metrics.oldestPendingEventAge); err != nil {
@@ -327,6 +363,113 @@ func (m *ViewMetrics) SetConsumerBound(bound bool) {
 	} else {
 		m.consumerBound.Set(0)
 	}
+}
+
+func (m *ViewMetrics) SetConsumerPartitionBound(partition, durable string, bound bool) {
+	if m == nil || strings.TrimSpace(partition) == "" {
+		return
+	}
+	partition = strings.TrimSpace(partition)
+	durable = strings.TrimSpace(durable)
+	m.partitionMu.Lock()
+	state := m.partitionStates[partition]
+	state.PartitionID = partition
+	state.Durable = durable
+	state.Bound = bound
+	m.partitionStates[partition] = state
+	m.partitionMu.Unlock()
+	value := float64(0)
+	if bound {
+		value = 1
+	}
+	m.consumerPartitionBound.WithLabelValues(partition, durable).Set(value)
+}
+
+func (m *ViewMetrics) AddConsumerPartitionLag(partition, durable string, delta int64) {
+	if m == nil || strings.TrimSpace(partition) == "" {
+		return
+	}
+	partition = strings.TrimSpace(partition)
+	durable = strings.TrimSpace(durable)
+	m.partitionMu.Lock()
+	state := m.partitionStates[partition]
+	state.PartitionID = partition
+	state.Durable = durable
+	state.LagMessages += delta
+	if state.LagMessages < 0 {
+		state.LagMessages = 0
+	}
+	m.partitionStates[partition] = state
+	lag := state.LagMessages
+	m.partitionMu.Unlock()
+	m.consumerPartitionLag.WithLabelValues(partition, durable).Set(float64(lag))
+}
+
+func (m *ViewMetrics) SetConsumerPartitionBacklog(partition, durable string, pending, ackPending uint64) {
+	if m == nil || strings.TrimSpace(partition) == "" {
+		return
+	}
+	partition = strings.TrimSpace(partition)
+	durable = strings.TrimSpace(durable)
+	m.partitionMu.Lock()
+	state := m.partitionStates[partition]
+	state.PartitionID = partition
+	state.Durable = durable
+	state.Pending = pending
+	state.AckPending = ackPending
+	if pending+ackPending > 0 && state.backlogSince.IsZero() {
+		state.backlogSince = time.Now().UTC()
+	}
+	if pending+ackPending == 0 {
+		state.backlogSince = time.Time{}
+		state.OldestPendingAge = 0
+	}
+	m.partitionStates[partition] = state
+	m.partitionMu.Unlock()
+}
+
+func (m *ViewMetrics) ObserveConsumerPartitionBacklog(partition string, pending, ackPending uint64) {
+	if m == nil || strings.TrimSpace(partition) == "" {
+		return
+	}
+	partition = strings.TrimSpace(partition)
+	m.partitionMu.Lock()
+	state := m.partitionStates[partition]
+	state.PartitionID = partition
+	state.Pending = pending
+	state.AckPending = ackPending
+	now := time.Now().UTC()
+	state.LastDeliveryAt = now
+	if pending+ackPending > 0 {
+		if state.backlogSince.IsZero() {
+			state.backlogSince = now
+		}
+		state.OldestPendingAge = now.Sub(state.backlogSince)
+	} else {
+		state.backlogSince = time.Time{}
+		state.OldestPendingAge = 0
+	}
+	m.partitionStates[partition] = state
+	m.partitionMu.Unlock()
+}
+
+func (m *ViewMetrics) ConsumerPartitionsSnapshot() []ConsumerPartitionSnapshot {
+	if m == nil {
+		return nil
+	}
+	m.partitionMu.RLock()
+	result := make([]ConsumerPartitionSnapshot, 0, len(m.partitionStates))
+	now := time.Now().UTC()
+	for _, state := range m.partitionStates {
+		if !state.backlogSince.IsZero() && now.After(state.backlogSince) {
+			state.OldestPendingAge = now.Sub(state.backlogSince)
+		}
+		state.backlogSince = time.Time{}
+		result = append(result, state)
+	}
+	m.partitionMu.RUnlock()
+	sort.Slice(result, func(i, j int) bool { return result[i].PartitionID < result[j].PartitionID })
+	return result
 }
 
 func registerOrReuse[T prometheus.Collector](registerer prometheus.Registerer, collector T) (T, error) {

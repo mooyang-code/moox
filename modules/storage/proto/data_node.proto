@@ -132,3 +132,11 @@ service DataNodeMarkerRuntime {
   rpc AppendDatasetSyncPointMarker(AppendDatasetSyncPointMarkerReq) returns (AppendDatasetSyncPointMarkerRsp);
   rpc GetFactorPeriodComputedMarker(GetFactorPeriodComputedMarkerReq) returns (GetFactorPeriodComputedMarkerRsp);
 }
+
+// DataNodeHistoryRuntime is an internal range-scan surface used only when a
+// View is initialized from Primary history. It is kept separate from the
+// point-read/write service so existing runtime fakes and callers remain
+// narrow, while the View can rebuild after its physical indexes are removed.
+service DataNodeHistoryRuntime {
+	 rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
+}

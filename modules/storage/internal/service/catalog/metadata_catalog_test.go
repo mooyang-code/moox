@@ -30,6 +30,25 @@ type registerDataSubjectMetadataStore struct {
 	registered bool
 }
 
+type manualRebuildMetadataStore struct {
+	metadata.Store
+	view       *pb.View
+	requestCnt int
+}
+
+func (s *manualRebuildMetadataStore) GetView(context.Context, string, string) (*pb.View, error) {
+	if s.view == nil {
+		return nil, sql.ErrNoRows
+	}
+	return s.view, nil
+}
+
+func (s *manualRebuildMetadataStore) RequestViewRebuild(context.Context, string, string) (*pb.View, error) {
+	s.requestCnt++
+	s.view.DesiredViewRevision++
+	return s.view, nil
+}
+
 func (s *registerDataSubjectMetadataStore) RegisterDataSubject(
 	_ context.Context,
 	subject *pb.Subject,
@@ -95,6 +114,54 @@ func TestCheckDatasetActivationIsReadOnly(t *testing.T) {
 	require.Equal(t, uint64(7), rsp.GetDatasetRevision())
 	require.Zero(t, store.commitCalls)
 	require.Equal(t, activationCheckIDs, checkIDs(rsp.GetChecks()))
+}
+
+func TestRequestViewRebuildReturnsImmediatelyAndPreservesActiveView(t *testing.T) {
+	store := &manualRebuildMetadataStore{view: &pb.View{
+		SpaceId: "space-a", ViewId: "view-a", Name: "视图", PrimaryDatasetId: "dataset-a",
+		Status:        "active",
+		ActiveIndexId: "index-a", ActiveViewRevision: 4, DesiredViewRevision: 4,
+	}}
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
+	require.NoError(t, err)
+
+	rsp, err := svc.RequestViewRebuild(context.Background(), &pb.RequestViewRebuildReq{
+		AuthInfo: &pb.AuthInfo{AppId: "admin-gateway", AppKey: serviceAuthKey("secret", "admin-gateway")},
+		SpaceId:  "space-a", ViewId: "view-a",
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, 1, store.requestCnt)
+	require.Equal(t, uint64(5), rsp.GetView().GetDesiredViewRevision())
+	require.Equal(t, "index-a", rsp.GetView().GetActiveIndexId())
+	require.Equal(t, uint64(4), rsp.GetView().GetActiveViewRevision())
+}
+
+func TestRequestViewRebuildRejectsNonAdminIdentity(t *testing.T) {
+	store := &manualRebuildMetadataStore{view: &pb.View{SpaceId: "space-a", ViewId: "view-a", Status: "active"}}
+	svc, err := NewMetadataService(store, nil, Options{})
+	require.NoError(t, err)
+	rsp, err := svc.RequestViewRebuild(context.Background(), &pb.RequestViewRebuildReq{
+		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "space-a", ViewId: "view-a",
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NO_PERMISSION, rsp.GetRetInfo().GetCode())
+	require.Zero(t, store.requestCnt)
+}
+
+func TestRequestViewRebuildRejectsMissingOrForgedIdentity(t *testing.T) {
+	store := &manualRebuildMetadataStore{view: &pb.View{SpaceId: "space-a", ViewId: "view-a", Status: "active"}}
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
+	require.NoError(t, err)
+	for _, auth := range []*pb.AuthInfo{
+		nil,
+		{AppId: "admin-gateway", AppKey: "wrong"},
+		{AppId: "collector", AppKey: serviceAuthKey("secret", "collector")},
+	} {
+		rsp, callErr := svc.RequestViewRebuild(context.Background(), &pb.RequestViewRebuildReq{AuthInfo: auth, SpaceId: "space-a", ViewId: "view-a"})
+		require.NoError(t, callErr)
+		require.Equal(t, pb.ErrorCode_NO_PERMISSION, rsp.GetRetInfo().GetCode())
+	}
 }
 
 func TestActivateDatasetCommitsWithExpectedRevision(t *testing.T) {

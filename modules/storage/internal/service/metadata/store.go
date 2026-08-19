@@ -112,12 +112,18 @@ type ViewRebuildLogReader interface {
 	ListViewRebuildLogs(ctx context.Context, spaceID string, viewID string, result pb.ViewRebuildResult, page *pb.Page) ([]*pb.ViewRebuildLog, *pb.PageResult, error)
 }
 
+// ManualRebuildRevisionAttribute is persisted on a View when an operator asks
+// for an asynchronous A/B rebuild. The marker is revision-scoped, so it stops
+// being active automatically once that revision is activated.
+const ManualRebuildRevisionAttribute = "moox.manual_rebuild_revision"
+
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
 	UpsertSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
 	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View, error)
+	RequestViewRebuild(ctx context.Context, spaceID string, viewID string) (*pb.View, error)
 	UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.ViewColumn, error)
 	ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ViewIndexBuild, bool, error)
 	UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewIndexBuildReq) (*pb.ViewIndexBuild, error)
