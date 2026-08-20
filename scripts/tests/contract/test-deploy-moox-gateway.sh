@@ -244,6 +244,8 @@ MONITOR_DEPLOY="${TMP}/deploy-monitor"
 grep -Fq 'instance_id: "monitor-local"' "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'stable Monitor instance ID was not rendered'
 grep -Fq 'credential_file: ~/.config/moox/eventbus/monitor-observability.yaml' \
   "${MONITOR_DEPLOY}/monitor/config/app.yaml" || fail 'Monitor observability credential was not rendered'
+grep -Fq 'MOOX_OBSERVABILITY_CREDENTIAL_FILE=${MONITOR_OBSERVABILITY_CREDENTIAL_FILE}' \
+  "${MONITOR_DEPLOY}/start.sh" || fail 'Monitor lifecycle did not pass observability credentials'
 mkdir -p "${TMP}/captures"
 cat >"${MONITOR_DEPLOY}/bin/moox-gateway" <<'SH'
 #!/usr/bin/env bash

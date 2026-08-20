@@ -1183,9 +1183,35 @@ func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapsh
 		return setupdeploy.ServiceResult{}, err
 	}
 	defer transport.Close()
-	return setupdeploy.Service(ctx, transport, setupdeploy.ServiceOptions{
+	result, err := setupdeploy.Service(ctx, transport, setupdeploy.ServiceOptions{
 		PackagePath: packagePath, ServiceName: service, DeployDir: deployDir,
 	})
+	if err != nil {
+		return setupdeploy.ServiceResult{}, err
+	}
+
+	// Keep the Admin deployment directory in sync with every successful
+	// package deployment. Monitor derives system checks from this store, so a
+	// service published only through SSH must still become visible in the
+	// operations overview. Reuse the target connection for control deployments;
+	// remote-node deployments open a short-lived control-plane tunnel.
+	control := transport
+	closeControl := false
+	if !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost.Name) {
+		control, err = dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+		if err != nil {
+			return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
+		}
+		closeControl = true
+	}
+	if closeControl {
+		defer control.Close()
+	}
+	if err := setupclient.New(control).RegisterServiceDeployment(ctx, host.Name, service, host.Address); err != nil {
+		return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
+	}
+	result.RegistrySynced = true
+	return result, nil
 }
 
 func defaultSetupApply(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.ApplyResult, error) {

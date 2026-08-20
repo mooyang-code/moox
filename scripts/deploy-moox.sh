@@ -948,7 +948,10 @@ patch_configs() {
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     perl -0pi -e 's#path:\s*\./data/monitor/monitor\.db#path: ../data/monitor/monitor.db#g' \
       "${STAGE_DIR}/monitor/config/app.yaml"
-    if [[ "${WITH_STORAGE}" -eq 0 && "${WITH_EVENTBUS}" -eq 0 ]]; then
+    if [[ "${COMPONENT_OVERLAY:-0}" -eq 0 && "${WITH_STORAGE}" -eq 0 && "${WITH_EVENTBUS}" -eq 0 ]]; then
+      # A full client-only package has no metrics dependencies.  During a
+      # component overlay, however, Storage/EventBus may already be installed
+      # and must keep its existing metrics ingestion configuration.
       perl -0pi -e 's#(metrics:\n  enabled:) true#$1 false#' \
         "${STAGE_DIR}/monitor/config/app.yaml"
     fi
@@ -988,7 +991,9 @@ PY
     [[ "${WITH_FACTOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/factor/config/app.yaml"
     [[ "${WITH_STRATEGY}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/strategy/config/app.yaml"
     [[ "${WITH_TRADE}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/trade/config/app.yaml"
-    [[ "${WITH_MONITOR}" -eq 1 ]] && perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/monitor/config/app.yaml"
+    if [[ "${WITH_MONITOR}" -eq 1 && "${COMPONENT_OVERLAY:-0}" -eq 0 ]]; then
+      perl -0pi -e 's#credential_file:\s*.*#credential_file: ""#' "${STAGE_DIR}/monitor/config/app.yaml"
+    fi
   fi
 
   [[ "${WITH_STORAGE}" -eq 1 ]] || return 0
@@ -1413,6 +1418,14 @@ MONITOR_ENV=(
   "MOOX_MONITOR_INSTANCE_ID=${MOOX_MONITOR_INSTANCE_ID}"
 	"MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
 )
+# Observability credentials are a runtime concern rather than a checked-in
+# monitor config detail.  Keep the override available even when a component
+# overlay was produced without MOOX_EVENTBUS_ENABLE_TLS: an existing install
+# may still use the TLS EventBus and its role credential file.
+MONITOR_OBSERVABILITY_CREDENTIAL_FILE="${MOOX_MONITOR_OBSERVABILITY_CREDENTIAL_FILE:-${HOME}/.config/moox/eventbus/monitor-observability.yaml}"
+if [[ -r "${MONITOR_OBSERVABILITY_CREDENTIAL_FILE}" ]]; then
+  MONITOR_ENV+=("MOOX_OBSERVABILITY_CREDENTIAL_FILE=${MONITOR_OBSERVABILITY_CREDENTIAL_FILE}")
+fi
 
 METRICS_METADATA_URL="${MOOX_METRICS_STORAGE_METADATA_URL:-http://127.0.0.1:20200}"
 EVENTBUS_URL_ENV="${MOOX_EVENTBUS_NATS_URL:-__EVENTBUS_URL__}"

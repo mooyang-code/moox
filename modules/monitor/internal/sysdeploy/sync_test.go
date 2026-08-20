@@ -48,6 +48,55 @@ func TestSyncDeploymentsCreatesSystemChecks(t *testing.T) {
 	}
 }
 
+func TestSyncDeploymentsKeepsValidRowsWhenAnotherDefinitionIsInvalid(t *testing.T) {
+	ctx := context.Background()
+	mgr := openSyncDB(t)
+	checks := mgr.Repositories().Checks
+	syncer := NewSyncer(checks, nil)
+
+	// A remote deployment may carry a node-local health URL. It is invalid
+	// from the control node, but must not abort registration of other services.
+	n, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{
+		{NodeId: "compute-1", ServiceName: "storage-primary", Protocol: "http", Host: "127.0.0.1", Port: 20200, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:20210/readyz"}`},
+		{NodeId: "control", ServiceName: "moox_monitor", Protocol: "http", Host: "127.0.0.1", Port: 11410, Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:11409/readyz"}`},
+	})
+	if err != nil {
+		t.Fatalf("SyncDeployments: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("synced = %d, want one valid service", n)
+	}
+	if _, err := checks.Get(ctx, "", "sysdeploy:control:moox_monitor"); err != nil {
+		t.Fatalf("valid service check was not created: %v", err)
+	}
+}
+
+func TestSyncDeploymentsKeepsExistingCheckForInvalidActiveDefinition(t *testing.T) {
+	ctx := context.Background()
+	mgr := openSyncDB(t)
+	checks := mgr.Repositories().Checks
+	syncer := NewSyncer(checks, nil)
+	valid := &adminpb.ServiceDeployment{
+		NodeId: "node-a", ServiceName: "moox_monitor", Protocol: "http", Host: "10.0.0.1", Port: 11410,
+		Status: "active", ExtraConfig: `{"health_url":"http://10.0.0.1:11409/readyz"}`,
+	}
+	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{valid}); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+	invalid := *valid
+	invalid.ExtraConfig = `{"health_url":"http://127.0.0.1:11409/readyz"}`
+	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{&invalid}); err == nil {
+		t.Fatal("invalid metadata sync error = nil")
+	}
+	check, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_monitor")
+	if err != nil {
+		t.Fatalf("get check: %v", err)
+	}
+	if !check.Enabled {
+		t.Fatalf("existing check was disabled by invalid active metadata: %+v", check)
+	}
+}
+
 func TestSyncDeploymentsKeepsSameServiceOnTwoNodes(t *testing.T) {
 	ctx := context.Background()
 	mgr := openSyncDB(t)

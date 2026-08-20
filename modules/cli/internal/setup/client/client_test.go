@@ -261,6 +261,63 @@ func TestActivateStoragePlacementEnablesLocalStorageRoutes(t *testing.T) {
 	}
 }
 
+func TestRegisterServiceDeploymentCreatesCanonicalMonitorRow(t *testing.T) {
+	var created *pb.ServiceDeployment
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":"NOT_FOUND"}}`))
+		case "/trpc.moox.ops.SysDeploy/CreateServiceDeployment":
+			var input pb.CreateServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			created = input.GetDeployment()
+			response, _ := protojson.Marshal(&pb.CreateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: created})
+			_, _ = w.Write(response)
+		default:
+			http.NotFound(w, request)
+		}
+	})}
+
+	require.NoError(t, New(forwarder).RegisterServiceDeployment(context.Background(), "compute-1", "monitor", "203.0.113.10"))
+	require.NotNil(t, created)
+	assert.Equal(t, "compute-1", created.GetNodeId())
+	assert.Equal(t, "moox_monitor", created.GetServiceName())
+	assert.Equal(t, "203.0.113.10", created.GetHost())
+	assert.Equal(t, int32(11410), created.GetPort())
+	assert.Contains(t, created.GetExtraConfig(), "203.0.113.10:11409/readyz")
+}
+
+func TestRegisterServiceDeploymentPreservesExistingDefinition(t *testing.T) {
+	var updated *pb.ServiceDeployment
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
+			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
+				RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
+				Deployment: &pb.ServiceDeployment{NodeId: "control", ServiceName: "moox_monitor", Host: "127.0.0.1", Port: 11410, Status: "disabled", ExtraConfig: `{"monitor_enabled":false,"operator":"kept"}`},
+			})
+			_, _ = w.Write(response)
+		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
+			var input pb.UpdateServiceDeploymentReq
+			body, _ := io.ReadAll(request.Body)
+			_ = protojson.Unmarshal(body, &input)
+			updated = input.GetDeployment()
+			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: updated})
+			_, _ = w.Write(response)
+		default:
+			http.NotFound(w, request)
+		}
+	})}
+
+	require.NoError(t, New(forwarder).RegisterServiceDeployment(context.Background(), "control", "monitor", "192.0.2.99"))
+	require.NotNil(t, updated)
+	assert.Equal(t, "active", updated.GetStatus())
+	assert.Equal(t, "127.0.0.1", updated.GetHost())
+	assert.Equal(t, int32(11410), updated.GetPort())
+	assert.Contains(t, updated.GetExtraConfig(), "operator")
+}
+
 func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
 	for _, tt := range []struct {
 		name string

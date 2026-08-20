@@ -159,6 +159,9 @@ moox-cli setup deploy-service \
   --package ./release/moox-admin-linux-amd64.zip
 ```
 
+发布成功后，CLI 会以幂等方式把服务写入 Admin 的 `t_service_deployments`。
+Monitor 会从该目录同步系统服务检查，因此服务总览无需再手工创建服务记录。
+
 包内路径必须是相对路径，不能包含 `data/`、`logs/`、`run/`、`secrets/` 或 `certs/`。
 凭据不得打入 ZIP 包；远端已有的凭据和运行数据由 CLI 保留。默认远端目录为
 `~/moox/prod`，可通过 `--deploy-dir` 覆盖。

@@ -29,11 +29,12 @@ type ServiceOptions struct {
 }
 
 type ServiceResult struct {
-	ServiceName   string `json:"service_name"`
-	DeployDir     string `json:"deploy_dir"`
-	RemoteArchive string `json:"remote_archive"`
-	LocalSHA256   string `json:"local_sha256"`
-	RemoteSHA256  string `json:"remote_sha256"`
+	ServiceName    string `json:"service_name"`
+	DeployDir      string `json:"deploy_dir"`
+	RemoteArchive  string `json:"remote_archive"`
+	LocalSHA256    string `json:"local_sha256"`
+	RemoteSHA256   string `json:"remote_sha256"`
+	RegistrySynced bool   `json:"registry_synced,omitempty"`
 }
 
 func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions) (result ServiceResult, returnErr error) {

@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/doctor"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var errAdminUnavailable = errors.New("admin sysdeploy unavailable")
@@ -92,6 +93,7 @@ func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.Ser
 		processes[component.ServiceName] = true
 	}
 	synced := 0
+	var definitionErrors []error
 	activeIDs := map[string]struct{}{}
 	for _, deployment := range deployments {
 		if deployment == nil || !processes[deployment.GetServiceName()] {
@@ -99,7 +101,18 @@ func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.Ser
 		}
 		check, err := checkFromDeployment(deployment)
 		if err != nil {
-			return synced, err
+			if deployment.GetStatus() == "active" && strings.TrimSpace(deployment.GetNodeId()) != "" && strings.TrimSpace(deployment.GetServiceName()) != "" {
+				// Keep a previously valid check from being auto-disabled merely
+				// because this deployment's current health metadata is invalid.
+				activeIDs[sysDeployCheckID(deployment.GetNodeId(), deployment.GetServiceName())] = struct{}{}
+			}
+			// A malformed or unreachable deployment must not prevent valid
+			// services from being registered in the monitor store.  This is
+			// particularly important for a remote Storage node whose health URL
+			// may intentionally be loopback to that node.  Keep the error for
+			// observability, but continue reconciling the remaining rows.
+			definitionErrors = append(definitionErrors, err)
+			continue
 		}
 		if check == nil {
 			continue
@@ -126,6 +139,12 @@ func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.Ser
 		return synced, err
 	}
 	synced += int(disabled)
+	for _, definitionErr := range definitionErrors {
+		log.WarnContextf(ctx, "monitor sysdeploy definition skipped: %v", definitionErr)
+	}
+	if len(definitionErrors) > 0 && synced == 0 {
+		return synced, errors.Join(definitionErrors...)
+	}
 	return synced, nil
 }
 
