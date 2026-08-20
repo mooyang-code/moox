@@ -902,6 +902,13 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		return nil, err
 	}
 	if err := load("moox_collector_market_fetch_timer_available", func(state *timerCoordinationState, labels map[string]string, value float64) {
+		// Disabled SCF assignments are spare capacity, not an expected
+		// trigger. Their readback may legitimately be unavailable while the
+		// Collector is reconciling the fleet; only enabled assignments should
+		// participate in the coordination failure check.
+		if strings.EqualFold(strings.TrimSpace(labels["enabled"]), "false") {
+			return
+		}
 		// CloudNode reports -1 while a provider readback is unknown.  That is a
 		// transient observation, not proof that the trigger is unavailable; the
 		// next reconciliation will either confirm it or publish a real 0.
