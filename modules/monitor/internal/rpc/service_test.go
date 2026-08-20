@@ -130,6 +130,47 @@ func TestMonitorRPCCRUD(t *testing.T) {
 	}
 }
 
+func TestSysDeployCheckUpdatePersistsEnabledOverride(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	base := &monitorpb.MonitorCheck{
+		SpaceId:         "",
+		CheckId:         "sysdeploy:node-a:cloudnode",
+		Name:            "cloudnode@node-a",
+		GroupName:       "moox-system",
+		Kind:            monitorpb.CheckKind_CHECK_KIND_HTTP,
+		Url:             "http://10.0.0.1:11411/healthz",
+		Method:          "GET",
+		HeadersJson:     "{}",
+		IntervalSeconds: 30,
+		TimeoutMs:       1000,
+		ExpectedStatus:  "200-299",
+		Enabled:         true,
+		Source:          domain.CheckSourceSysDeploy,
+		LabelsJson:      `{"node_id":"node-a","service_name":"cloudnode"}`,
+	}
+	created, err := svc.CreateCheck(ctx, &monitorpb.CreateCheckReq{Check: base})
+	if err != nil || created.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("create ret=%+v err=%v", created.GetRetInfo(), err)
+	}
+	base.Enabled = false
+	disabled, err := svc.UpdateCheck(ctx, &monitorpb.UpdateCheckReq{Check: base})
+	if err != nil || disabled.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("disable ret=%+v err=%v", disabled.GetRetInfo(), err)
+	}
+	if enabled, ok := store.CheckEnabledOverride(disabled.GetCheck().GetLabelsJson()); !ok || enabled {
+		t.Fatalf("disabled labels = %q, override=%v/%v", disabled.GetCheck().GetLabelsJson(), enabled, ok)
+	}
+	base.Enabled = true
+	enabled, err := svc.UpdateCheck(ctx, &monitorpb.UpdateCheckReq{Check: base})
+	if err != nil || enabled.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("enable ret=%+v err=%v", enabled.GetRetInfo(), err)
+	}
+	if _, ok := store.CheckEnabledOverride(enabled.GetCheck().GetLabelsJson()); ok {
+		t.Fatalf("enabled labels retained override: %q", enabled.GetCheck().GetLabelsJson())
+	}
+}
+
 func TestMonitorRPCWebhookAndRuleCRUD(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

@@ -110,7 +110,7 @@ func (s *Syncer) SyncDeployments(ctx context.Context, deployments []*adminpb.Ser
 			if existing.Source != domain.CheckSourceSysDeploy {
 				continue
 			}
-			if err := s.checks.Update(ctx, check); err != nil {
+			if err := s.checks.UpdateSysDeployDefinition(ctx, check); err != nil {
 				return synced, err
 			}
 			synced++

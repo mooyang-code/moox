@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -178,6 +179,128 @@ func TestSyncDeploymentsDoesNotTouchManualCheck(t *testing.T) {
 	system, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_cloudnode")
 	if err != nil || system.Source != domain.CheckSourceSysDeploy {
 		t.Fatalf("system check = %+v, err = %v", system, err)
+	}
+}
+
+func TestSyncDeploymentsPreservesManualSystemCheckEnabledOverride(t *testing.T) {
+	ctx := context.Background()
+	mgr := openSyncDB(t)
+	checks := mgr.Repositories().Checks
+	checkID := "sysdeploy:node-a:moox_cloudnode"
+	if err := checks.Create(ctx, &domain.Check{
+		SpaceID:         "",
+		CheckID:         checkID,
+		Name:            "CloudNode@node-a",
+		Kind:            domain.CheckKindHTTP,
+		URL:             "http://10.0.0.1:11411/healthz",
+		Method:          "GET",
+		Headers:         "{}",
+		IntervalSeconds: 30,
+		TimeoutMS:       3000,
+		ExpectedStatus:  "200-299",
+		Enabled:         false,
+		Source:          domain.CheckSourceSysDeploy,
+		Labels:          `{"node_id":"node-a", "service_name":"moox_cloudnode", "monitor_enabled_override" : false}`,
+	}); err != nil {
+		t.Fatalf("create disabled system check: %v", err)
+	}
+
+	syncer := NewSyncer(checks, nil)
+	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{{
+		NodeId:      "node-a",
+		ServiceName: "moox_cloudnode",
+		Protocol:    "http",
+		Host:        "10.0.0.1",
+		Port:        11401,
+		Status:      "active",
+		ExtraConfig: `{"health_url":"http://10.0.0.1:11411/healthz"}`,
+	}}); err != nil {
+		t.Fatalf("sync active deployment: %v", err)
+	}
+
+	got, err := checks.Get(ctx, "", checkID)
+	if err != nil {
+		t.Fatalf("get system check: %v", err)
+	}
+	if got.Enabled {
+		t.Fatalf("system check was re-enabled by sync: %+v", got)
+	}
+	if _, err := syncer.SyncDeployments(ctx, nil); err != nil {
+		t.Fatalf("remove deployment: %v", err)
+	}
+	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{{
+		NodeId:      "node-a",
+		ServiceName: "moox_cloudnode",
+		Protocol:    "http",
+		Host:        "10.0.0.1",
+		Port:        11401,
+		Status:      "active",
+		ExtraConfig: `{"health_url":"http://10.0.0.1:11411/healthz"}`,
+	}}); err != nil {
+		t.Fatalf("restore deployment: %v", err)
+	}
+	got, err = checks.Get(ctx, "", checkID)
+	if err != nil {
+		t.Fatalf("get restored system check: %v", err)
+	}
+	if got.Enabled {
+		t.Fatalf("manual disabled override was lost after deployment recovery: %+v", got)
+	}
+}
+
+func TestSyncDeploymentsRestoresAutoDisabledCheckWhenDeploymentReturns(t *testing.T) {
+	ctx := context.Background()
+	mgr := openSyncDB(t)
+	checks := mgr.Repositories().Checks
+	syncer := NewSyncer(checks, nil)
+	deployment := &adminpb.ServiceDeployment{
+		NodeId:      "node-a",
+		ServiceName: "moox_cloudnode",
+		Protocol:    "http",
+		Host:        "10.0.0.1",
+		Port:        11401,
+		Status:      "active",
+		ExtraConfig: `{"health_url":"http://10.0.0.1:11411/healthz"}`,
+	}
+	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{deployment}); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+	checkedAt := time.Now().UTC().Truncate(time.Second)
+	nextCheckAt := checkedAt.Add(time.Minute)
+	initial, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_cloudnode")
+	if err != nil {
+		t.Fatalf("get initial check: %v", err)
+	}
+	initial.LastCheckedAt = &checkedAt
+	initial.NextCheckAt = &nextCheckAt
+	if err := checks.Update(ctx, initial); err != nil {
+		t.Fatalf("record check schedule: %v", err)
+	}
+	if _, err := syncer.SyncDeployments(ctx, nil); err != nil {
+		t.Fatalf("remove deployment: %v", err)
+	}
+	removed, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_cloudnode")
+	if err != nil {
+		t.Fatalf("get removed check: %v", err)
+	}
+	if removed.Enabled {
+		t.Fatalf("removed deployment remained enabled: %+v", removed)
+	}
+	if _, ok := store.CheckEnabledOverride(removed.Labels); ok {
+		t.Fatalf("automatic disable left a user override: %s", removed.Labels)
+	}
+	if _, err := syncer.SyncDeployments(ctx, []*adminpb.ServiceDeployment{deployment}); err != nil {
+		t.Fatalf("restore deployment: %v", err)
+	}
+	restored, err := checks.Get(ctx, "", "sysdeploy:node-a:moox_cloudnode")
+	if err != nil {
+		t.Fatalf("get restored check: %v", err)
+	}
+	if !restored.Enabled {
+		t.Fatalf("restored deployment was not enabled: %+v", restored)
+	}
+	if restored.LastCheckedAt == nil || !restored.LastCheckedAt.Equal(checkedAt) || restored.NextCheckAt == nil || !restored.NextCheckAt.Equal(nextCheckAt) {
+		t.Fatalf("sync changed runtime schedule: last=%v next=%v", restored.LastCheckedAt, restored.NextCheckAt)
 	}
 }
 

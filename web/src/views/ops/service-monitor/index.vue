@@ -145,7 +145,13 @@
           </a-table-column>
           <a-table-column title="启用" :width="90" align="center">
             <template #cell="{ record }">
-              <a-switch :model-value="record.enabled" size="small" @change="toggleCheck(record)" />
+              <a-switch
+                :model-value="record.enabled === true"
+                :loading="isTogglingCheck(record)"
+                :disabled="isTogglingCheck(record)"
+                size="small"
+                @change="toggleCheck(record, $event)"
+              />
             </template>
           </a-table-column>
           <a-table-column title="操作" :width="260" align="center" :fixed="'right'">
@@ -469,6 +475,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { monitorApi } from "@/api/monitor";
+import { reportControlError } from "@/api/admin/http";
 import type {
   AlertEvent,
   AlertRule,
@@ -500,11 +507,13 @@ const syncing = ref(false);
 const overview = ref<MonitorOverview>({});
 const checks = ref<MonitorCheck[]>([]);
 const latestResults = ref<Record<string, CheckResult>>({});
+let checksRequestID = 0;
 const webhooks = ref<WebhookChannel[]>([]);
 const rules = ref<AlertRule[]>([]);
 const detailResults = ref<CheckResult[]>([]);
 const detailEvents = ref<AlertEvent[]>([]);
 const selectedCheck = ref<MonitorCheck | null>(null);
+const togglingChecks = ref<Record<string, boolean>>({});
 const pagination = reactive(defaultPagination());
 const filters = reactive({ group_name: "", source: "" });
 
@@ -600,6 +609,7 @@ async function loadOverview() {
 }
 
 async function loadChecks() {
+  const requestID = ++checksRequestID;
   loading.value = true;
   try {
     const rsp = await monitorApi.listChecks({
@@ -607,15 +617,16 @@ async function loadChecks() {
       source: filters.source || undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
+    if (requestID !== checksRequestID) return;
     checks.value = rsp.checks || [];
     applyPageResult(pagination, { total: rsp.page_result?.total || checks.value.length });
-    await loadLatestResults(checks.value);
+    await loadLatestResults(checks.value, requestID);
   } finally {
-    loading.value = false;
+    if (requestID === checksRequestID) loading.value = false;
   }
 }
 
-async function loadLatestResults(rows: MonitorCheck[]) {
+async function loadLatestResults(rows: MonitorCheck[], requestID: number) {
   const pairs = await Promise.all(
     rows.map(async check => {
       if (!check.check_id) return null;
@@ -631,7 +642,7 @@ async function loadLatestResults(rows: MonitorCheck[]) {
   pairs.forEach(pair => {
     if (pair?.[1]) next[pair[0]] = pair[1];
   });
-  latestResults.value = next;
+  if (requestID === checksRequestID) latestResults.value = next;
 }
 
 async function loadWebhooks() {
@@ -777,10 +788,42 @@ async function runOnce(record: MonitorCheck) {
   await loadOverview();
 }
 
-async function toggleCheck(record: MonitorCheck) {
-  await monitorApi.updateCheck({ ...record, enabled: !record.enabled });
-  Message.success(record.enabled ? "探测已停用" : "探测已启用");
-  await refreshAll();
+function isTogglingCheck(record: MonitorCheck) {
+  return Boolean(togglingChecks.value[checkKey(record)]);
+}
+
+async function toggleCheck(record: MonitorCheck, value: boolean) {
+  if (!record.check_id) return;
+  const key = checkKey(record);
+  if (togglingChecks.value[key]) return;
+
+  const previous = record.enabled === true;
+  const enabled = Boolean(value);
+  togglingChecks.value = { ...togglingChecks.value, [key]: true };
+  // Keep the controlled switch responsive while the update is in flight.
+  record.enabled = enabled;
+  try {
+    try {
+      const rsp = await monitorApi.updateCheck({ ...record, enabled });
+      if (rsp.check) Object.assign(record, rsp.check);
+      Message.success(enabled ? "探测已启用" : "探测已停用");
+    } catch (error) {
+      record.enabled = previous;
+      reportControlError(error);
+      return;
+    }
+    try {
+      await refreshAll();
+    } catch (error) {
+      // The update has already committed; a refresh failure must not roll the
+      // switch back to the opposite state in the UI.
+      reportControlError(error);
+    }
+  } finally {
+    const next = { ...togglingChecks.value };
+    delete next[key];
+    togglingChecks.value = next;
+  }
 }
 
 async function deleteCheck(record: MonitorCheck) {

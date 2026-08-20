@@ -477,6 +477,10 @@ func normalizeCheck(in *monitorpb.MonitorCheck, create bool) (*domain.Check, err
 	if labels == "" {
 		labels = "{}"
 	}
+	enabled := in.GetEnabled() || create
+	if source == domain.CheckSourceSysDeploy {
+		labels = store.SetCheckEnabledOverride(labels, enabled)
+	}
 	return &domain.Check{
 		SpaceID:         in.GetSpaceId(),
 		CheckID:         checkID,
@@ -494,7 +498,7 @@ func normalizeCheck(in *monitorpb.MonitorCheck, create bool) (*domain.Check, err
 		ExpectedStatus:  expectedStatus,
 		MaxResponseMS:   int(in.GetMaxResponseMs()),
 		BodyContains:    in.GetBodyContains(),
-		Enabled:         in.GetEnabled() || create,
+		Enabled:         enabled,
 		Source:          source,
 		Labels:          labels,
 		Description:     in.GetDescription(),
