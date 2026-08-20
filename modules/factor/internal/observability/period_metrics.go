@@ -45,7 +45,7 @@ func NewPeriodMetrics(reg prometheus.Registerer) (*PeriodMetrics, error) {
 		}, []string{"source_view", "frequency"}),
 		batchRunning: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "factor", Name: "batch_running",
-			Help: "Factor subject batches currently executing.",
+			Help: "Factor subject batches outstanding in the current View-ready run.",
 		}, []string{"source_view", "frequency"}),
 		batchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "factor", Name: "batch_total",
@@ -57,7 +57,7 @@ func NewPeriodMetrics(reg prometheus.Registerer) (*PeriodMetrics, error) {
 		}, []string{"source_view", "frequency"}),
 		batchElapsed: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "moox", Subsystem: "factor", Name: "batch_elapsed_seconds",
-			Help: "Elapsed time for a View-ready factor period batch run.",
+			Help: "Total elapsed time for a View-ready factor run, observed per subject batch.",
 		}, []string{"source_view", "frequency"}),
 	}
 	var err error

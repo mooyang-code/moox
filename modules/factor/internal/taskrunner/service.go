@@ -309,7 +309,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 	})
 	if batchErr != nil {
 		for _, member := range valid {
-			s.setBatchError(ctx, member, results, batchErr)
+			s.setBatchErrorAudit(ctx, member, results, batchID, started, batchErr)
 		}
 		log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d status=failed elapsed_ms=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), time.Since(started).Milliseconds(), batchErr.Error())
 		return
@@ -317,7 +317,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 	if batchResult.BatchID != "" && batchResult.BatchID != batchID {
 		err := fmt.Errorf("factor batch response id %q does not match %q", batchResult.BatchID, batchID)
 		for _, member := range valid {
-			s.setBatchError(ctx, member, results, err)
+			s.setBatchErrorAudit(ctx, member, results, batchID, started, err)
 		}
 		log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d status=failed elapsed_ms=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), time.Since(started).Milliseconds(), err.Error())
 		return
@@ -327,7 +327,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 	for _, item := range batchResult.Items {
 		if _, expected := byTaskID[item.TaskID]; !expected {
 			for _, member := range valid {
-				s.setBatchError(ctx, member, results, fmt.Errorf("factor batch returned unknown task %s", item.TaskID))
+				s.setBatchErrorAudit(ctx, member, results, batchID, started, fmt.Errorf("factor batch returned unknown task %s", item.TaskID))
 			}
 			batchStatus = "failed"
 			log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d status=%s elapsed_ms=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), batchStatus, time.Since(started).Milliseconds(), "unknown task response")
@@ -335,7 +335,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		}
 		if _, exists := items[item.TaskID]; exists {
 			for _, member := range valid {
-				s.setBatchError(ctx, member, results, fmt.Errorf("factor batch returned duplicate task %s", item.TaskID))
+				s.setBatchErrorAudit(ctx, member, results, batchID, started, fmt.Errorf("factor batch returned duplicate task %s", item.TaskID))
 			}
 			batchStatus = "failed"
 			log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d status=%s elapsed_ms=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), batchStatus, time.Since(started).Milliseconds(), "duplicate task response")
@@ -347,28 +347,28 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		member := byTaskID[task.TaskID]
 		item, ok := items[task.TaskID]
 		if !ok {
-			s.setBatchError(ctx, member, results, fmt.Errorf("factor batch omitted task %s", task.TaskID))
+			s.setBatchErrorAudit(ctx, member, results, batchID, started, fmt.Errorf("factor batch omitted task %s", task.TaskID))
 			batchStatus = "degraded"
 			continue
 		}
 		if item.BindingID != "" && item.BindingID != task.BindingID {
-			s.setBatchError(ctx, member, results, fmt.Errorf("factor batch task %s binding mismatch", task.TaskID))
+			s.setBatchErrorAudit(ctx, member, results, batchID, started, fmt.Errorf("factor batch task %s binding mismatch", task.TaskID))
 			batchStatus = "degraded"
 			continue
 		}
 		if item.Err != nil {
-			s.setBatchError(ctx, member, results, item.Err)
+			s.setBatchErrorAudit(ctx, member, results, batchID, started, item.Err)
 			batchStatus = "degraded"
 			continue
 		}
 		if item.Result == nil {
-			s.setBatchError(ctx, member, results, errors.New("factor batch item returned nil result"))
+			s.setBatchErrorAudit(ctx, member, results, batchID, started, errors.New("factor batch item returned nil result"))
 			batchStatus = "degraded"
 			continue
 		}
 		result := filterTargetResult(item.Result, task.StartTime, task.EndTime)
 		if err := validateFactorResult(task.Factor, task.StartTime, task.EndTime, result); err != nil {
-			s.setBatchError(ctx, member, results, engine.NonRetryableError{Err: err})
+			s.setBatchErrorAudit(ctx, member, results, batchID, started, engine.NonRetryableError{Err: err})
 			batchStatus = "degraded"
 			continue
 		}
@@ -382,7 +382,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 			return nil
 		})
 		if writeErr != nil {
-			s.setBatchError(ctx, member, results, writeErr)
+			s.setBatchErrorAudit(ctx, member, results, batchID, started, writeErr)
 			batchStatus = "degraded"
 			continue
 		}
@@ -423,9 +423,17 @@ func (s *Service) runMembersIndividually(ctx context.Context, members []indexedT
 }
 
 func (s *Service) setBatchError(ctx context.Context, member indexedTask, results []Result, err error) {
+	s.setBatchErrorAudit(ctx, member, results, "", time.Time{}, err)
+}
+
+func (s *Service) setBatchErrorAudit(ctx context.Context, member indexedTask, results []Result, batchID string, started time.Time, err error) {
 	results[member.index].Err = err
 	task := member.task.FactorTask
-	logBatchMemberDone(ctx, task, "", "failed", 0, err, 0)
+	var elapsed time.Duration
+	if !started.IsZero() {
+		elapsed = time.Since(started)
+	}
+	logBatchMemberDone(ctx, task, batchID, "failed", 0, err, elapsed)
 	s.observeDatasetRun(ctx, report.DatasetObservation{
 		Key:    report.DatasetKey{SpaceID: task.SpaceID, DatasetID: taskResultDataset(member.task), Freq: task.Freq},
 		Result: "error", FinishedAt: time.Now().UTC(),
