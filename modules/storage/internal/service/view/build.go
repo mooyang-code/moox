@@ -43,6 +43,7 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 	}
 	s.mu.RLock()
 	runtime := s.views[viewRef{spaceID: spaceID, viewID: viewID}]
+	catalogView := s.catalogViews[viewRef{spaceID: spaceID, viewID: viewID}]
 	s.mu.RUnlock()
 	if runtime == nil {
 		return 0, errors.New("view runtime is not prepared")
@@ -58,7 +59,16 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 	// copying the active index can reproduce a short or stale View. Record
 	// Bleve Views retain the active-copy path because they have no time-series
 	// Primary history reader.
-	if activeID != "" && (minimumLookback > 0 || lookbackPeriods > 0) {
+	// Factor result Views are derived outputs. On their first creation there is
+	// no historical result stream to scan, and on later revisions the current
+	// active result index is authoritative. Requiring the generic Primary
+	// lookback here creates a bootstrap deadlock: the binding stays pending until
+	// the result View is active, while no factor rows can be produced while the
+	// binding is pending. Keep the strict Primary lookback contract for source
+	// and user-managed time-series Views, but let managed result Views start
+	// empty and copy their active index on subsequent revisions.
+	factorResultView := isFactorResultView(catalogView)
+	if activeID != "" && (minimumLookback > 0 || lookbackPeriods > 0) && !factorResultView {
 		nextEngine, err := s.engineFor(nextID)
 		if err != nil {
 			return 0, err
@@ -92,7 +102,6 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 		s.mu.RLock()
 		nextSchema := s.schemas[nextID]
 		activeSchema := s.schemas[activeID]
-		catalogView := s.catalogViews[viewRef{spaceID: spaceID, viewID: viewID}]
 		s.mu.RUnlock()
 		for _, timeRange := range backfillTimeRanges(catalogView, minimumLookback) {
 			var after *pb.RowKey
@@ -148,6 +157,14 @@ func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID st
 		}
 		if strings.EqualFold(strings.TrimSpace(next.Engine()), "bleve") {
 			log.Printf("storage record View %s/%s starts empty: no Primary history reader", spaceID, viewID)
+		} else if factorResultView {
+			// Factor results are produced by the Factor service from future
+			// source-ready periods. Their Primary dataset is intentionally empty
+			// until the binding becomes executable, so scanning it here would
+			// block bootstrap on history materialization and recreate the
+			// pending-view deadlock. The first result build is an empty, valid
+			// index; later revisions copy the active result index above.
+			log.Printf("storage factor result View %s/%s starts empty; waiting for Factor output", spaceID, viewID)
 		} else {
 			if reader == nil {
 				return 0, errors.New("Primary field reader is required for a time-series View rebuild")
@@ -275,6 +292,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 // configured bar budget. The subject catalog constrains one physical scan;
 // Primary rows remain authoritative for series and tag coverage.
 func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, periods, maxHistoryScanRows uint64) (uint64, error) {
+	allowPartial := isFactorResultView(view)
 	// Use the metadata subject binding table to avoid repeating the time-first
 	// Primary walk for every subject. If it is unavailable or empty, fall back
 	// to an unconstrained Primary scan rather than publishing an incomplete B.
@@ -405,6 +423,12 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 		}
 		if len(rows) == 0 || rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
 			partial, empty := periodCoverageGaps(expected, counts, periods)
+			if allowPartial {
+				if len(partial) > 0 || len(empty) > 0 || len(expected) == 0 {
+					log.Printf("storage factor result history backfill accepted partial coverage space=%s view=%s expected_series=%d partial_series=%d empty_series=%d written=%d", spaceID, viewID, len(expected), len(partial), len(empty), written)
+				}
+				return written, nil
+			}
 			if len(partial) > 0 {
 				return written, fmt.Errorf("Primary history has fewer than %d bars for %d series (first missing: %s; %d series have no matching bars: %s)", periods, len(partial), formatPeriodCoverageCounts(partial, counts), len(empty), formatPeriodSeriesKeys(empty))
 			}
@@ -443,6 +467,7 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 	if reader == nil || rangeReader == nil {
 		return 0, errors.New("Primary readers are required for subject-catalog history backfill")
 	}
+	allowPartial := isFactorResultView(view)
 	var written uint64
 	for _, subject := range subjects {
 		counts := make(map[string]uint64)
@@ -513,13 +538,26 @@ func (s *Service) backfillPrimaryHistoryBySubjectCatalog(ctx context.Context, sp
 				return written, fmt.Errorf("encode Primary subject history cursor: %w", err)
 			}
 		}
-		for seriesKey, count := range counts {
-			if count < periods {
-				return written, fmt.Errorf("Primary history has fewer than %d bars for series %s", periods, seriesKey)
+		if !allowPartial {
+			for seriesKey, count := range counts {
+				if count < periods {
+					return written, fmt.Errorf("Primary history has fewer than %d bars for series %s", periods, seriesKey)
+				}
 			}
+		} else if len(counts) == 0 {
+			log.Printf("storage factor result history backfill subject has no rows space=%s view=%s subject=%s", spaceID, viewID, subject)
 		}
 	}
 	return written, nil
+}
+
+func isFactorResultView(view *pb.View) bool {
+	if view == nil {
+		return false
+	}
+	attrs := view.GetAttributes()
+	return strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "factor_result") ||
+		strings.EqualFold(strings.TrimSpace(attrs["view_role"]), "factor_result")
 }
 
 // marshalTimeSeriesHistoryCursor converts the public range-read key into the

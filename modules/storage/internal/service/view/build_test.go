@@ -110,6 +110,33 @@ func TestPeriodBackfillRequiresPrimaryReaderForNewTimeSeriesView(t *testing.T) {
 	}
 }
 
+func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
+	engine := &primaryHistoryBackfillEngine{}
+	view := &pb.View{
+		SpaceId:          "space",
+		ViewId:           "factor-result-view",
+		Engine:           "duckdb",
+		PrimaryDatasetId: "factor-results",
+		FilterJson:       `{"freq":"1m"}`,
+		Attributes:       map[string]string{"dataset_role": "factor_result"},
+	}
+	runtime := &viewRuntime{next: "factor-result-view-b"}
+	svc := &Service{
+		engines:      map[string]viewindex.Engine{"duckdb": engine},
+		indexEngine:  map[string]string{"factor-result-view-b": "duckdb"},
+		schemas:      map[string]viewindex.ViewIndexSchema{"factor-result-view-b": {SpaceID: "space", ViewID: view.ViewId, PrimaryDatasetID: view.PrimaryDatasetId, Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema"}},
+		views:        map[viewRef]*viewRuntime{{spaceID: "space", viewID: view.ViewId}: runtime},
+		catalogViews: map[viewRef]*pb.View{{spaceID: "space", viewID: view.ViewId}: view},
+	}
+	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, nil, 0, 2, defaultMaxHistoryScanRows)
+	if err != nil {
+		t.Fatalf("empty factor result backfill: %v", err)
+	}
+	if written != 0 || runtime.status != "ready" {
+		t.Fatalf("written=%d status=%q, want empty ready build", written, runtime.status)
+	}
+}
+
 func TestMarshalTimeSeriesHistoryCursorConvertsReadKeyToRowKey(t *testing.T) {
 	readKey := &pb.TimeSeriesKey{
 		SpaceId: "crypto_market", DatasetId: "binance_spot_kline_1m",
