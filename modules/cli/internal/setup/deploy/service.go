@@ -84,7 +84,7 @@ func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions
 		return result, fmt.Errorf("service_digest_mismatch")
 	}
 
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", prepareServiceScript, "moox-prepare-service", deployDir, opts.ServiceName, result.RemoteArchive}, nil); err != nil {
+	if _, err := transport.Run(ctx, []string{"bash", "-lc", prepareServiceScript, "moox-prepare-service", deployDir, opts.ServiceName, result.RemoteArchive}, nil); err != nil {
 		return result, fmt.Errorf("service_prepare_failed")
 	}
 	prepared := true
@@ -92,14 +92,14 @@ func Service(ctx context.Context, transport setupssh.Client, opts ServiceOptions
 		if returnErr != nil && prepared {
 			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), 30*time.Second)
 			defer cancel()
-			_, _ = transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackServiceScript, "moox-rollback-service", deployDir, opts.ServiceName}, nil)
+			_, _ = transport.Run(rollbackCtx, []string{"bash", "-lc", rollbackServiceScript, "moox-rollback-service", deployDir, opts.ServiceName}, nil)
 		}
 	}()
 
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", activateServiceScript, "moox-activate-service", deployDir, opts.ServiceName}, nil); err != nil {
+	if _, err := transport.Run(ctx, []string{"bash", "-lc", activateServiceScript, "moox-activate-service", deployDir, opts.ServiceName}, nil); err != nil {
 		return result, fmt.Errorf("service_activate_failed")
 	}
-	if _, err := transport.Run(ctx, []string{"sh", "-lc", finalizeServiceScript, "moox-finalize-service", deployDir}, nil); err != nil {
+	if _, err := transport.Run(ctx, []string{"bash", "-lc", finalizeServiceScript, "moox-finalize-service", deployDir}, nil); err != nil {
 		return result, fmt.Errorf("service_finalize_failed")
 	}
 	prepared = false
