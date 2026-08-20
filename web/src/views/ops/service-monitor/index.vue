@@ -184,6 +184,7 @@
           <a-radio-group v-model="checkForm.kind" type="button">
             <a-radio :value="CHECK_KIND_HTTP">HTTP</a-radio>
             <a-radio :value="CHECK_KIND_TCP">TCP</a-radio>
+            <a-radio :value="CHECK_KIND_EXTERNAL">外部</a-radio>
           </a-radio-group>
         </a-form-item>
         <a-form-item field="name" label="名称" required>
@@ -496,6 +497,7 @@ const embedded = computed(() => props.embedded === true);
 
 const CHECK_KIND_HTTP = 1;
 const CHECK_KIND_TCP = 2;
+const CHECK_KIND_EXTERNAL = 3;
 
 type StatusTone = "ok" | "degraded" | "down" | "pending";
 type WebhookScope = "system" | "space";
@@ -804,7 +806,10 @@ async function toggleCheck(record: MonitorCheck, value: boolean) {
   record.enabled = enabled;
   try {
     try {
-      const rsp = await monitorApi.updateCheck({ ...record, enabled });
+      // ListChecks may expose protobuf enums as names (for example
+      // CHECK_KIND_HTTP). UpdateCheck expects the numeric enum on the wire,
+      // so normalize it instead of forwarding the display representation.
+      const rsp = await monitorApi.updateCheck({ ...record, kind: normalizeKind(record.kind), enabled });
       if (rsp.check) Object.assign(record, rsp.check);
       Message.success(enabled ? "探测已启用" : "探测已停用");
     } catch (error) {
@@ -1069,6 +1074,7 @@ function groupToneColor(group: GroupSummary) {
 }
 
 function normalizeKind(kind?: CheckKind) {
+  if (isExternalKind(kind)) return CHECK_KIND_EXTERNAL;
   if (isTcpKind(kind)) return CHECK_KIND_TCP;
   return CHECK_KIND_HTTP;
 }
@@ -1081,11 +1087,17 @@ function isTcpKind(kind?: CheckKind) {
   return kind === CHECK_KIND_TCP || kind === "CHECK_KIND_TCP" || String(kind || "").toLowerCase() === "tcp";
 }
 
+function isExternalKind(kind?: CheckKind) {
+  return kind === CHECK_KIND_EXTERNAL || kind === "CHECK_KIND_EXTERNAL" || String(kind || "").toLowerCase() === "external";
+}
+
 function kindLabel(kind?: CheckKind) {
+  if (isExternalKind(kind)) return "外部";
   return isTcpKind(kind) ? "TCP" : "HTTP";
 }
 
 function targetOf(check: MonitorCheck) {
+  if (isExternalKind(check.kind)) return "业务数据上报";
   if (isTcpKind(check.kind)) return `${check.tcp_host || "-"}:${check.tcp_port || "-"}`;
   return check.url || "-";
 }

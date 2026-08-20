@@ -418,7 +418,7 @@ func normalizeCheck(in *monitorpb.MonitorCheck, create bool) (*domain.Check, err
 	}
 	kind := kindToString(in.GetKind())
 	if kind == "" {
-		return nil, fmt.Errorf("check kind must be http or tcp")
+		return nil, fmt.Errorf("check kind must be http, tcp, or external")
 	}
 	checkID := strings.TrimSpace(in.GetCheckId())
 	if checkID == "" {

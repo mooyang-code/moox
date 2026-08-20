@@ -38,9 +38,11 @@ func TestCheckToPBMapsFields(t *testing.T) {
 func TestKindAndStatusMappings(t *testing.T) {
 	assert.Equal(t, domain.CheckKindHTTP, kindToString(monitorpb.CheckKind_CHECK_KIND_HTTP))
 	assert.Equal(t, domain.CheckKindTCP, kindToString(monitorpb.CheckKind_CHECK_KIND_TCP))
+	assert.Equal(t, domain.CheckKindExternal, kindToString(monitorpb.CheckKind_CHECK_KIND_EXTERNAL))
 	assert.Equal(t, "", kindToString(monitorpb.CheckKind(999)))
 	assert.Equal(t, monitorpb.CheckKind_CHECK_KIND_HTTP, kindToPB(domain.CheckKindHTTP))
 	assert.Equal(t, monitorpb.CheckKind_CHECK_KIND_TCP, kindToPB(domain.CheckKindTCP))
+	assert.Equal(t, monitorpb.CheckKind_CHECK_KIND_EXTERNAL, kindToPB(domain.CheckKindExternal))
 	assert.Equal(t, monitorpb.CheckKind_CHECK_KIND_UNSPECIFIED, kindToPB("unknown"))
 	assert.Equal(t, monitorpb.CheckStatus_CHECK_STATUS_OK, checkStatusToPB(domain.CheckStatusOK))
 	assert.Equal(t, monitorpb.AlertStatus_ALERT_STATUS_FIRING, alertStatusToPB(domain.AlertStatusFiring))

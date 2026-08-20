@@ -171,6 +171,27 @@ func TestSysDeployCheckUpdatePersistsEnabledOverride(t *testing.T) {
 	}
 }
 
+func TestExternalCheckCanBeUpdated(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	created, err := svc.CreateCheck(ctx, &monitorpb.CreateCheckReq{Check: &monitorpb.MonitorCheck{
+		SpaceId: "crypto", CheckId: "market-canary", Name: "Market canary",
+		Kind: monitorpb.CheckKind_CHECK_KIND_EXTERNAL, Source: domain.CheckSourceManual,
+		IntervalSeconds: 30, TimeoutMs: 1000, Enabled: true,
+	}})
+	if err != nil || created.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("create external ret=%+v err=%v", created.GetRetInfo(), err)
+	}
+	created.GetCheck().Enabled = false
+	updated, err := svc.UpdateCheck(ctx, &monitorpb.UpdateCheckReq{Check: created.GetCheck()})
+	if err != nil || updated.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		t.Fatalf("update external ret=%+v err=%v", updated.GetRetInfo(), err)
+	}
+	if updated.GetCheck().GetKind() != monitorpb.CheckKind_CHECK_KIND_EXTERNAL || updated.GetCheck().GetEnabled() {
+		t.Fatalf("updated external check=%+v", updated.GetCheck())
+	}
+}
+
 func TestMonitorRPCWebhookAndRuleCRUD(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

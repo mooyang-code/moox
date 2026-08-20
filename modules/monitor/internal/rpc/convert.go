@@ -127,6 +127,8 @@ func kindToString(kind monitorpb.CheckKind) string {
 		return domain.CheckKindHTTP
 	case monitorpb.CheckKind_CHECK_KIND_TCP:
 		return domain.CheckKindTCP
+	case monitorpb.CheckKind_CHECK_KIND_EXTERNAL:
+		return domain.CheckKindExternal
 	default:
 		return ""
 	}
@@ -138,6 +140,8 @@ func kindToPB(kind string) monitorpb.CheckKind {
 		return monitorpb.CheckKind_CHECK_KIND_HTTP
 	case domain.CheckKindTCP:
 		return monitorpb.CheckKind_CHECK_KIND_TCP
+	case domain.CheckKindExternal:
+		return monitorpb.CheckKind_CHECK_KIND_EXTERNAL
 	default:
 		return monitorpb.CheckKind_CHECK_KIND_UNSPECIFIED
 	}

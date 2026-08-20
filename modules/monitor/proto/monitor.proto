@@ -11,6 +11,8 @@ enum CheckKind {
   CHECK_KIND_UNSPECIFIED = 0;
   CHECK_KIND_HTTP = 1;
   CHECK_KIND_TCP = 2;
+  // External checks are updated by business freshness/reporting pipelines.
+  CHECK_KIND_EXTERNAL = 3;
 }
 
 enum CheckStatus {
