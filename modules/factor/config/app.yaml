@@ -26,3 +26,4 @@ engine:
   view_read_workers: 64
   view_read_timeout_ms: 10000
   task_timeout_ms: 30000
+  batch_enabled: true

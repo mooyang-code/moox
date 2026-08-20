@@ -89,3 +89,40 @@ func TestDecodeJSONResponseAllowsEmptyDataFrame(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, result.Rows)
 }
+
+func TestBatchJSONCodecPreservesMemberIdentityAndPartialErrors(t *testing.T) {
+	start := time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC)
+	batch := &BatchTask{BatchID: "b1", Tasks: []FactorTask{
+		{TaskID: "t1", BindingID: "bind-1", SpaceID: "crypto", SourceViewID: "bars", ResultDatasetID: "bias", SubjectID: "BTC", Freq: "1m", StartTime: start, EndTime: start.Add(time.Minute), LookbackPeriods: 20, Factor: FactorSpec{FactorID: "f1", Name: "Bias", ParamsJSON: `{}`}},
+		{TaskID: "t2", BindingID: "bind-2", SpaceID: "crypto", SourceViewID: "bars", ResultDatasetID: "cci", SubjectID: "BTC", Freq: "1m", StartTime: start.Add(time.Minute), EndTime: start.Add(2 * time.Minute), LookbackPeriods: 600, Factor: FactorSpec{FactorID: "f2", Name: "CCI", ParamsJSON: `{}`}},
+	}}
+	meta, err := EncodeJSONBatchRequestMeta(batch, &DataFrame{Columns: []string{"close"}, Rows: [][]any{{1.0}}, DataTimes: []time.Time{start}, SeriesTags: []string{"venue:binance"}})
+	require.NoError(t, err)
+	require.Equal(t, "batch", meta["mode"])
+	require.Len(t, meta["factors"], 2)
+	first := meta["factors"].([]any)[0].(map[string]any)
+	second := meta["factors"].([]any)[1].(map[string]any)
+	require.Equal(t, 20, first["lookback_periods"])
+	require.Equal(t, 600, second["lookback_periods"])
+
+	decoded, err := DecodeJSONBatchResponse(map[string]any{
+		"id": "b1", "items": []any{
+			map[string]any{"task_id": "t1", "binding_id": "bind-1", "ok": true, "results": []any{}},
+			map[string]any{"task_id": "t2", "binding_id": "bind-2", "ok": false, "message": "factor failed"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "b1", decoded.BatchID)
+	require.Len(t, decoded.Items, 2)
+	require.NoError(t, decoded.Items[0].Err)
+	require.Empty(t, decoded.Items[0].Result.Rows)
+	require.ErrorContains(t, decoded.Items[1].Err, "factor failed")
+}
+
+func TestDecodeJSONBatchResponseRejectsDuplicateTask(t *testing.T) {
+	_, err := DecodeJSONBatchResponse(map[string]any{"items": []any{
+		map[string]any{"task_id": "t1", "binding_id": "b1", "ok": true, "results": []any{}},
+		map[string]any{"task_id": "t1", "binding_id": "b2", "ok": true, "results": []any{}},
+	}})
+	require.ErrorContains(t, err, "duplicate")
+}

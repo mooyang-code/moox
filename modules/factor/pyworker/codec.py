@@ -37,26 +37,34 @@ def decode_json_df(meta):
 
 
 def encode_json_results(task_id, result, logs=None):
-    response = {
-        "id": task_id,
-        "ok": True,
-        "encoding": "json",
-        "results": [
-            {
-                "data_time": row["data_time"].isoformat().replace("+00:00", "Z"),
-                "series_tag": row["series_tag"],
-                "values": {
-                    name: _json_value(row[name])
-                    for name in result.columns
-                    if name not in {"data_time", "series_tag"}
-                },
-            }
-            for _, row in result.iterrows()
-        ],
-    }
+    response = {"id": task_id, "ok": True, "encoding": "json", "results": encode_result_rows(result)}
     if logs:
         response["logs"] = logs
     return response
+
+
+def encode_result_rows(result):
+    return [
+        {
+            "data_time": row["data_time"].isoformat().replace("+00:00", "Z"),
+            "series_tag": row["series_tag"],
+            "values": {
+                name: _json_value(row[name])
+                for name in result.columns
+                if name not in {"data_time", "series_tag"}
+            },
+        }
+        for _, row in result.iterrows()
+    ]
+
+
+def encode_json_batch_results(batch_id, items):
+    return {
+        "id": batch_id,
+        "ok": True,
+        "encoding": "json",
+        "items": items,
+    }
 
 
 def _json_value(value):

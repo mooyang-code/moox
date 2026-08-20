@@ -100,11 +100,14 @@ exactly-once，缺口可用 `run-once` 或同步 `RecalcFactor` 修复。
   移到队尾重试一次，不阻塞其他 subject。
 - `engine.python_workers` 默认 `32`，控制全局 Python 计算进程和数据就绪任务并发；启动
   时只预热一个 Python 进程，其余槽位按任务需要惰性启动。
+- `engine.batch_enabled` 默认 `true`，将同一 source View、frequency、period、subject
+  下的多个因子合并为一次 Python 调用；结果仍按 binding 独立校验和写回。设为 `false`
+  可回退到逐因子执行。
 
 相同 subject、period、lookback 和 trigger 的多个因子共享一次 View 读取，读取列为这些
-因子输入列的并集；任务获得 Python worker 时再按因子投影。读取结果通过容量为
+因子输入列的并集，并在批量模式下共享一次 Python 执行。读取结果通过容量为
 `2 * python_workers` 的内部队列形成背压，不增加可调批次、每 binding 并发或第三个队列
-配置。同一 subject 的多个因子可以并行，Python worker 总是领取下一个数据已就绪任务。
+配置；不同 subject 仍可并行。
 
 ### CLS 运行日志
 

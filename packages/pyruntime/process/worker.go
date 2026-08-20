@@ -31,8 +31,12 @@ type LoadRequest struct {
 type RunRequest struct {
 	RequestID, ModuleType, LogicalID, SourceHash string
 	Encoding                                     protocol.Encoding
-	Meta                                         json.RawMessage
-	Payload                                      []byte
+	// Timeout overrides the per-request worker budget when a request contains
+	// several independently isolated computations. Zero keeps the configured
+	// single-task timeout.
+	Timeout time.Duration
+	Meta    json.RawMessage
+	Payload []byte
 }
 type RunResult struct {
 	Meta    json.RawMessage
@@ -157,7 +161,11 @@ func (w *StdioWorker) Run(ctx context.Context, req RunRequest) (RunResult, error
 			w.state = StateReady
 		}
 	}()
-	ctx, cancel := context.WithTimeout(ctx, w.cfg.TaskTimeout)
+	taskTimeout := w.cfg.TaskTimeout
+	if req.Timeout > taskTimeout {
+		taskTimeout = req.Timeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, taskTimeout)
 	defer cancel()
 	fields, err := decodeRunMeta(req.Meta)
 	if err != nil {

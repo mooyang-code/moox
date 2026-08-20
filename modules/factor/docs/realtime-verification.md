@@ -18,8 +18,8 @@
 5. 查看 `GetEngineStatus`：`python_workers` 等于配置；View RPC 等待期间不增加
    `active_tasks`，周期结束后 `active_tasks` 与 `pending_tasks` 都回到 0。
 6. 为同一周期配置多个 subject 和多个 Factor，确认日志中的 View read 并发不超过
-   `view_read_workers`，Python 最大并发不超过 `python_workers`，且同一 subject 的不同
-   Factor 可以并行。
+   `view_read_workers`，Python 最大并发不超过 `python_workers`，且批量开启时同一
+   subject 的多个 Factor 只有一次 Python batch 调用。
 7. 确认相同 subject/period/lookback/trigger 的 Factor 只有一次
    `factor_view_read_done`，其 `column_count` 是输入列并集；制造一次读取超时后，日志先
    出现 `retry_position=tail`，其他 subject 仍继续读取和计算。写回/Marker 失败时应分别

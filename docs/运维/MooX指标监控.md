@@ -86,6 +86,10 @@ View 驱动因子链路额外暴露以下固定低基数指标（不包含 subje
 | `moox_storage_view_restore_failures_total` | 无 | View 索引恢复失败累计次数 |
 | `moox_factor_period_running` | `source_view,frequency` | 正在执行的因子周期数量 |
 | `moox_factor_period_degraded_total` | `source_view,frequency` | 输入缺失或因子执行失败而降级的周期数量 |
+| `moox_factor_batch_running` | `source_view,frequency` | 正在执行的标的批次数 |
+| `moox_factor_batch_total` | `source_view,frequency,status` | 标的批次完成数量 |
+| `moox_factor_batch_factor_total` | `source_view,frequency` | 批次内处理的因子成员数量 |
+| `moox_factor_batch_elapsed_seconds` | `source_view,frequency` | 标的批次执行耗时 |
 | `moox_factor_manifest_clear_total` | `binding` | 因跳过/失败 subject 清理结果 manifest 的次数 |
 | `moox_factor_source_ready_lag_seconds` | `source_view,frequency` | Factor 开始执行时 Source ready 的滞后秒数 |
 

@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildPeriodReadGroupsUsesExactReadIdentity(t *testing.T) {
+func TestBuildPeriodReadGroupsSharesSubjectWindowAndKeepsTriggerIdentity(t *testing.T) {
 	base := time.Date(2026, 8, 10, 7, 4, 0, 0, time.UTC)
 	bias := oneBarTask("BTC-USDT", base)
 	bias.PeriodTime = base.Unix()
@@ -35,18 +35,19 @@ func TestBuildPeriodReadGroupsUsesExactReadIdentity(t *testing.T) {
 
 	groups, singles := buildPeriodReadGroups([]Task{bias, cci, longer, differentTrigger, rangeTask})
 
-	require.Len(t, groups, 3)
+	require.Len(t, groups, 2)
 	require.Len(t, singles, 1)
 	require.Equal(t, "range", singles[0].task.Factor.FactorID)
 	var shared *periodReadGroup
 	for _, group := range groups {
-		if len(group.members) == 2 {
+		if len(group.members) == 3 {
 			shared = group
 		}
 	}
 	require.NotNil(t, shared)
 	require.Equal(t, []string{"close", "high", "low"}, shared.columns)
-	require.Equal(t, []int{0, 1}, []int{shared.members[0].index, shared.members[1].index})
+	require.Equal(t, 60, shared.lookbackPeriods)
+	require.Equal(t, []int{0, 1, 2}, []int{shared.members[0].index, shared.members[1].index, shared.members[2].index})
 }
 
 func TestPreparedTaskProjectsAtComputeTime(t *testing.T) {
@@ -177,7 +178,8 @@ func TestRunAllOverlapsNextSubjectReadWithPythonExecution(t *testing.T) {
 	done := make(chan []Result, 1)
 	go func() { done <- runner.RunAll(context.Background(), tasks) }()
 
-	require.Equal(t, "BTC", <-exec.entered)
+	firstSubject := <-exec.entered
+	require.Contains(t, []string{"BTC", "ETH"}, firstSubject)
 	require.Eventually(t, func() bool {
 		started, _ := storage.snapshot()
 		return len(started) >= 2 && started[1] == "ETH"

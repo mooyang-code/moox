@@ -13,9 +13,28 @@ func TestFactorConfigContainsOnlyRuntimeInputs(t *testing.T) {
 	require.Equal(t, 32, cfg.Engine.PythonWorkers)
 	require.Equal(t, 64, cfg.Engine.ViewReadWorkers)
 	require.Equal(t, 10000, cfg.Engine.ViewReadTimeoutMS)
+	require.True(t, cfg.Engine.BatchEnabled)
 	require.NotEmpty(t, cfg.Engine.PythonBin)
 	require.NotEmpty(t, cfg.Engine.WorkerPath)
 	require.NotEmpty(t, cfg.Engine.FactorsDir)
+}
+
+func TestBatchEnabledEnvOverride(t *testing.T) {
+	t.Setenv("MOOX_FACTOR_ENGINE_BATCH_ENABLED", "false")
+	cfg := Default()
+	require.NoError(t, cfg.applyEnv())
+	require.False(t, cfg.Engine.BatchEnabled)
+
+	t.Setenv("MOOX_FACTOR_ENGINE_BATCH_ENABLED", "true")
+	require.NoError(t, cfg.applyEnv())
+	require.True(t, cfg.Engine.BatchEnabled)
+}
+
+func TestInvalidBatchEnabledEnvIsRejected(t *testing.T) {
+	t.Setenv("MOOX_FACTOR_ENGINE_BATCH_ENABLED", "maybe")
+	cfg := Default()
+	require.Error(t, cfg.applyEnv())
+	require.True(t, cfg.Engine.BatchEnabled)
 }
 
 func TestViewReadPipelineEnvOverrides(t *testing.T) {

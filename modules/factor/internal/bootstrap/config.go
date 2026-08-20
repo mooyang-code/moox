@@ -55,6 +55,7 @@ type EngineConfig struct {
 	ViewReadWorkers   int    `yaml:"view_read_workers"`
 	ViewReadTimeoutMS int    `yaml:"view_read_timeout_ms"`
 	TaskTimeoutMS     int    `yaml:"task_timeout_ms"`
+	BatchEnabled      bool   `yaml:"batch_enabled"`
 }
 
 const (
@@ -76,7 +77,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.applyDefaults()
-	cfg.applyEnv()
+	if err := cfg.applyEnv(); err != nil {
+		return nil, err
+	}
 	if err := cfg.validateStorageTargets(); err != nil {
 		return nil, err
 	}
@@ -105,6 +108,7 @@ func Default() *Config {
 			PythonBin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./factors",
 			PythonWorkers: defaultPythonWorkers, ViewReadWorkers: defaultViewReadWorkers,
 			ViewReadTimeoutMS: defaultViewReadTimeoutMS, TaskTimeoutMS: 30000,
+			BatchEnabled: true,
 		},
 	}
 }
@@ -160,7 +164,7 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-func (c *Config) applyEnv() {
+func (c *Config) applyEnv() error {
 	if v := os.Getenv("MOOX_FACTOR_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
@@ -208,6 +212,14 @@ func (c *Config) applyEnv() {
 			c.Engine.ViewReadTimeoutMS = timeoutMS
 		}
 	}
+	if v, ok := os.LookupEnv("MOOX_FACTOR_ENGINE_BATCH_ENABLED"); ok {
+		batchEnabled, err := strconv.ParseBool(strings.TrimSpace(v))
+		if err != nil {
+			return fmt.Errorf("MOOX_FACTOR_ENGINE_BATCH_ENABLED must be true or false: %w", err)
+		}
+		c.Engine.BatchEnabled = batchEnabled
+	}
+	return nil
 }
 
 func splitEventBusURLs(value string) []string {

@@ -162,6 +162,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	factorGate := taskrunner.NewFactorGate()
 	operationGate := taskrunner.NewOperationGate()
 	runner = taskrunner.NewService(cfg.Engine.PythonWorkers, storage, pythonPool,
+		taskrunner.WithBatchExecution(cfg.Engine.BatchEnabled),
 		taskrunner.WithViewReadConfig(
 			cfg.Engine.ViewReadWorkers,
 			time.Duration(cfg.Engine.ViewReadTimeoutMS)*time.Millisecond,
