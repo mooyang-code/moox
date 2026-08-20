@@ -68,6 +68,12 @@ func TestLoadUsesPythonWorkersAsOnlyConcurrencySetting(t *testing.T) {
 	require.Equal(t, 100, cfg.Engine.PythonWorkers)
 }
 
+func TestLoadReadsBatchEnabledFromYAML(t *testing.T) {
+	cfg, err := Load(writeConfig(t, "engine:\n  batch_enabled: false\n"))
+	require.NoError(t, err)
+	require.False(t, cfg.Engine.BatchEnabled)
+}
+
 func TestLoadRejectsLegacyWorkersAndScheduler(t *testing.T) {
 	for _, raw := range []string{
 		"engine:\n  workers: 24\n",

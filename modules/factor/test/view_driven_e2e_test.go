@@ -127,6 +127,9 @@ func TestViewReadyPipelineOverlapsReadsAndRetriesTimeoutAtTail(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("execute pipelined ready period: %v", err)
 	}
+	if calls, items := exec.batchStats(); calls != 3 || items != 6 {
+		t.Fatalf("batch executions = %d/%d, want 3 successful subject batches and 6 factor members", calls, items)
+	}
 	if storage.markerCount() != 1 || storage.lastMarker().GetStatus() != "complete" {
 		t.Fatalf("factor marker = %+v, want one complete marker", storage.lastMarker())
 	}
@@ -360,6 +363,9 @@ func (p *pipelinePeriodStorage) writtenCombinations() []string {
 type pipelineFactorExecutor struct {
 	entered    chan string
 	releaseBTC chan struct{}
+	mu         sync.Mutex
+	batchCalls int
+	batchItems int
 }
 
 func (p *pipelineFactorExecutor) Execute(ctx context.Context, task *engine.FactorTask, frame *engine.DataFrame) (*engine.FactorResult, error) {
@@ -378,6 +384,44 @@ func (p *pipelineFactorExecutor) Execute(ctx context.Context, task *engine.Facto
 	return &engine.FactorResult{Rows: []engine.FactorResultRow{{
 		DataTime: frame.DataTimes[0], SeriesTag: frame.SeriesTags[0], Values: values,
 	}}}, nil
+}
+
+func (p *pipelineFactorExecutor) ExecuteBatch(ctx context.Context, batch *engine.BatchTask, frame *engine.DataFrame) (*engine.BatchResult, error) {
+	if batch == nil || len(batch.Tasks) == 0 {
+		return nil, errors.New("empty factor batch")
+	}
+	p.entered <- batch.Tasks[0].SubjectID
+	if batch.Tasks[0].SubjectID == "BTC" {
+		select {
+		case <-p.releaseBTC:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	p.mu.Lock()
+	p.batchCalls++
+	p.batchItems += len(batch.Tasks)
+	p.mu.Unlock()
+	items := make([]engine.BatchItemResult, 0, len(batch.Tasks))
+	for _, task := range batch.Tasks {
+		values := make(map[string]any, len(task.Factor.Outputs))
+		for _, output := range task.Factor.Outputs {
+			values[output] = 1.0
+		}
+		items = append(items, engine.BatchItemResult{
+			TaskID: task.TaskID, BindingID: task.BindingID,
+			Result: &engine.FactorResult{Rows: []engine.FactorResultRow{{
+				DataTime: frame.DataTimes[0], SeriesTag: frame.SeriesTags[0], Values: values,
+			}}},
+		})
+	}
+	return &engine.BatchResult{BatchID: batch.BatchID, Items: items}, nil
+}
+
+func (p *pipelineFactorExecutor) batchStats() (int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.batchCalls, p.batchItems
 }
 
 func (*pipelineFactorExecutor) Close() error { return nil }

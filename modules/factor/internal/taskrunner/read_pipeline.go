@@ -3,6 +3,7 @@ package taskrunner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -213,6 +214,86 @@ type preparedTask struct {
 	index  int
 	task   Task
 	shared *storageio.RangeChunk
+}
+
+// restrictRangeChunkForTask restores the per-member input window when a
+// period read group falls back to individual execution. The shared read uses
+// the largest lookback so it can serve the batch path; the legacy individual
+// path must still see exactly target rows plus N-1 distinct history periods.
+func restrictRangeChunkForTask(chunk *storageio.RangeChunk, startTime, endTime time.Time, lookbackPeriods int) (*storageio.RangeChunk, error) {
+	if chunk == nil || chunk.Frame == nil {
+		return chunk, nil
+	}
+	frame := chunk.Frame
+	if len(frame.Rows) != len(frame.DataTimes) {
+		return nil, fmt.Errorf("shared View read has %d rows but %d data times", len(frame.Rows), len(frame.DataTimes))
+	}
+	if len(frame.SeriesTags) != 0 && len(frame.SeriesTags) != len(frame.Rows) {
+		return nil, fmt.Errorf("shared View read has %d rows but %d series tags", len(frame.Rows), len(frame.SeriesTags))
+	}
+
+	// Find the latest N-1 distinct periods before the target window. All rows
+	// for a retained period (including multiple series tags) stay together.
+	historyTimes := make(map[int64]time.Time)
+	for _, at := range frame.DataTimes {
+		if at.Before(startTime) {
+			historyTimes[at.UTC().UnixNano()] = at
+		}
+	}
+	history := make([]time.Time, 0, len(historyTimes))
+	for _, at := range historyTimes {
+		history = append(history, at)
+	}
+	sort.Slice(history, func(i, j int) bool { return history[i].Before(history[j]) })
+	keep := lookbackPeriods - 1
+	if keep < 0 {
+		keep = 0
+	}
+	if keep < len(history) {
+		history = history[len(history)-keep:]
+	}
+	keepTimes := make(map[int64]struct{}, len(history))
+	for _, at := range history {
+		keepTimes[at.UTC().UnixNano()] = struct{}{}
+	}
+
+	indices := make([]int, 0, len(frame.Rows))
+	for index, at := range frame.DataTimes {
+		utc := at.UTC()
+		if (!utc.Before(startTime) && utc.Before(endTime)) || func() bool {
+			_, ok := keepTimes[utc.UnixNano()]
+			return ok
+		}() {
+			indices = append(indices, index)
+		}
+	}
+	filtered := &engine.DataFrame{
+		Columns:   append([]string(nil), frame.Columns...),
+		Rows:      make([][]any, 0, len(indices)),
+		DataTimes: make([]time.Time, 0, len(indices)),
+	}
+	if len(frame.SeriesTags) != 0 {
+		filtered.SeriesTags = make([]string, 0, len(indices))
+	}
+	for _, index := range indices {
+		filtered.Rows = append(filtered.Rows, append([]any(nil), frame.Rows[index]...))
+		filtered.DataTimes = append(filtered.DataTimes, frame.DataTimes[index])
+		if len(frame.SeriesTags) != 0 {
+			filtered.SeriesTags = append(filtered.SeriesTags, frame.SeriesTags[index])
+		}
+	}
+	targetPeriods := make([]time.Time, 0, len(chunk.TargetPeriods))
+	for _, at := range chunk.TargetPeriods {
+		if !at.Before(startTime) && at.Before(endTime) {
+			targetPeriods = append(targetPeriods, at)
+		}
+	}
+	return &storageio.RangeChunk{
+		Frame:         filtered,
+		TargetPeriods: targetPeriods,
+		Complete:      chunk.Complete,
+		IndexedTo:     chunk.IndexedTo,
+	}, nil
 }
 
 func (p preparedTask) project() (*storageio.RangeChunk, error) {

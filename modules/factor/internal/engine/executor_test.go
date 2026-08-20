@@ -98,6 +98,12 @@ def compute(df, params):
 	require.Error(t, result.Items[1].Err)
 }
 
+func TestBatchTimeoutScalesWithFactorCount(t *testing.T) {
+	require.Equal(t, 30*time.Second, batchTimeout(30*time.Second, 1))
+	require.Equal(t, 90*time.Second, batchTimeout(30*time.Second, 3))
+	require.Equal(t, 30*time.Second, batchTimeout(0, 0))
+}
+
 type blockingExecutorWorker struct {
 	entered chan<- string
 	release <-chan struct{}

@@ -104,7 +104,8 @@ exactly-once，缺口可用 `run-once` 或同步 `RecalcFactor` 修复。
   下的多个因子合并为一次 Python 调用；结果仍按 binding 独立校验和写回。设为 `false`
   可回退到逐因子执行。
 
-相同 subject、period、lookback 和 trigger 的多个因子共享一次 View 读取，读取列为这些
+相同 subject、period、目标窗口和 trigger 的多个因子共享一次 View 读取；读取时使用组内
+最大的 lookback，批量模式会在 Python 端为每个因子恢复其独立的 lookback 窗口。读取列为这些
 因子输入列的并集，并在批量模式下共享一次 Python 执行。读取结果通过容量为
 `2 * python_workers` 的内部队列形成背压，不增加可调批次、每 binding 并发或第三个队列
 配置；不同 subject 仍可并行。

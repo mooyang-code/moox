@@ -184,6 +184,34 @@ func TestRunAllBatchesFactorsBySubject(t *testing.T) {
 	require.Equal(t, 1, storage.periodReadCount())
 }
 
+func TestRunAllIndividualFallbackPreservesMemberLookback(t *testing.T) {
+	base := time.Date(2026, 8, 10, 6, 10, 0, 0, time.UTC)
+	for _, batchEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batch_enabled_%t", batchEnabled), func(t *testing.T) {
+			storage := &lookbackReadStorage{}
+			exec := &frameRecordingExecutor{}
+			runner := NewService(2, storage, exec, WithBatchExecution(batchEnabled))
+			short := oneBarTask("BTC-USDT", base)
+			short.PeriodTime = base.Unix()
+			short.TaskID = "task-short"
+			short.Factor.FactorID = "short"
+			short.LookbackPeriods = 2
+			long := oneBarTask("BTC-USDT", base)
+			long.PeriodTime = base.Unix()
+			long.TaskID = "task-long"
+			long.Factor.FactorID = "long"
+			long.LookbackPeriods = 4
+
+			results := runner.RunAll(context.Background(), []Task{short, long})
+			for _, result := range results {
+				require.NoError(t, result.Err)
+			}
+			require.Equal(t, 2, exec.rowsFor("short"))
+			require.Equal(t, 4, exec.rowsFor("long"))
+		})
+	}
+}
+
 func TestRunAllFailureDoesNotBlockOtherTasks(t *testing.T) {
 	exec := &selectiveFailureExecutor{failedFactor: "bad"}
 	runner := NewService(2, staticReadStorage{}, exec)
@@ -246,6 +274,28 @@ type recordingReadStorage struct {
 	reads       int
 	periodReads int
 	columns     []string
+}
+
+type lookbackReadStorage struct{}
+
+func (lookbackReadStorage) ReadRangeChunk(context.Context, storageio.WindowKey, time.Time, time.Time, int, int, []string) (*storageio.RangeChunk, error) {
+	return nil, errors.New("period read expected")
+}
+
+func (lookbackReadStorage) ReadPeriodChunk(_ context.Context, _ storageio.WindowKey, start, _ time.Time, _ int, columns []string) (*storageio.RangeChunk, error) {
+	times := []time.Time{start.Add(-3 * time.Minute), start.Add(-2 * time.Minute), start.Add(-time.Minute), start}
+	rows := make([][]any, len(times))
+	for index := range rows {
+		rows[index] = make([]any, len(columns))
+	}
+	return &storageio.RangeChunk{
+		Frame:         &engine.DataFrame{Columns: append([]string(nil), columns...), Rows: rows, DataTimes: times, SeriesTags: []string{"venue:binance", "venue:binance", "venue:binance", "venue:binance"}},
+		TargetPeriods: []time.Time{start}, Complete: true,
+	}, nil
+}
+
+func (lookbackReadStorage) WriteFactorPatch(context.Context, *engine.FactorTask, *engine.FactorResult) (uint64, error) {
+	return 1, nil
 }
 
 func (s *recordingReadStorage) ReadRangeChunk(
@@ -314,6 +364,7 @@ func (s *recordingReadStorage) readColumns() []string {
 type frameRecordingExecutor struct {
 	mu      sync.Mutex
 	columns map[string][]string
+	rows    map[string]int
 }
 
 func (e *frameRecordingExecutor) Execute(_ context.Context, task *engine.FactorTask, frame *engine.DataFrame) (*engine.FactorResult, error) {
@@ -321,7 +372,11 @@ func (e *frameRecordingExecutor) Execute(_ context.Context, task *engine.FactorT
 	if e.columns == nil {
 		e.columns = make(map[string][]string)
 	}
+	if e.rows == nil {
+		e.rows = make(map[string]int)
+	}
 	e.columns[task.Factor.FactorID] = append([]string(nil), frame.Columns...)
+	e.rows[task.Factor.FactorID] = len(frame.Rows)
 	e.mu.Unlock()
 	return resultForFrame(frame), nil
 }
@@ -332,6 +387,12 @@ func (e *frameRecordingExecutor) columnsFor(factorID string) []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]string(nil), e.columns[factorID]...)
+}
+
+func (e *frameRecordingExecutor) rowsFor(factorID string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.rows[factorID]
 }
 
 type recordingExecutor struct {

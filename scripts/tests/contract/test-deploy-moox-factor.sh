@@ -169,6 +169,7 @@ cmp "${UNPACKED}/expected.argv" "${UNPACKED}/captured.argv"
 grep -Fq 'python_workers: 32' "${UNPACKED}/factor/config/app.yaml"
 grep -Fq 'view_read_workers: 64' "${UNPACKED}/factor/config/app.yaml"
 grep -Fq 'view_read_timeout_ms: 10000' "${UNPACKED}/factor/config/app.yaml"
+grep -Fq 'batch_enabled: true' "${UNPACKED}/factor/config/app.yaml"
 ! grep -Fq 'scheduler:' "${UNPACKED}/factor/config/app.yaml"
 
 mv "${UNPACKED}/python-runtime" "${UNPACKED}/python-runtime.missing"

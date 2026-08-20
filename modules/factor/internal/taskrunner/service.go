@@ -243,6 +243,14 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		return
 	}
 	if len(batch.shared.TargetPeriods) == 0 {
+		batchID := "factor-batch-" + valid[0].task.TaskID
+		started := time.Now()
+		for _, member := range valid {
+			logBatchMemberStart(ctx, member.task.FactorTask, batchID)
+		}
+		log.InfoContextf(ctx, "factor_batch_start batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d", batchID, valid[0].task.SubjectID, len(valid), len(valid))
+		batchStatus := "complete"
+		emptyWriteCount := 0
 		for _, member := range valid {
 			task := member.task.FactorTask
 			var err error
@@ -250,15 +258,20 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 				_, err = s.storage.WriteFactorPatch(ctx, &task, &engine.FactorResult{})
 			}
 			if err != nil {
-				s.setBatchError(ctx, member, results, err)
+				batchStatus = "degraded"
+				s.setBatchErrorAudit(ctx, member, results, batchID, started, err)
 				continue
 			}
-			logBatchMemberDone(ctx, task, "", "empty", 0, nil, 0)
+			if member.task.TriggerType == "view_ready" {
+				emptyWriteCount++
+			}
+			logBatchMemberDone(ctx, task, batchID, "empty", 0, nil, time.Since(started))
 			s.observeDatasetRun(ctx, report.DatasetObservation{
 				Key:    report.DatasetKey{SpaceID: task.SpaceID, DatasetID: taskResultDataset(member.task), Freq: task.Freq},
 				Result: "empty", FinishedAt: time.Now().UTC(),
 			})
 		}
+		log.InfoContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d status=%s elapsed_ms=%d batch_elapsed_ms=%d python_execute_calls=%d write_factor_count=%d", batchID, valid[0].task.SubjectID, len(valid), len(valid), batchStatus, time.Since(started).Milliseconds(), time.Since(started).Milliseconds(), 0, emptyWriteCount)
 		return
 	}
 	batchTasks := make([]engine.FactorTask, 0, len(valid))
@@ -290,14 +303,17 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 	for _, task := range batchTasks {
 		logBatchMemberStart(ctx, task, batchID)
 	}
-	log.InfoContextf(ctx, "factor_batch_start batch_id=%s subject_id=%s factor_count=%d", batchID, batchTasks[0].SubjectID, len(batchTasks))
+	log.InfoContextf(ctx, "factor_batch_start batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks))
 	var batchResult *engine.BatchResult
+	pythonExecuteCalls := 0
+	writeFactorCount := 0
 	batchErr := s.withRetry(ctx, func() error {
 		runtime, ok := s.exec.(engine.BatchExecutor)
 		if !ok {
 			return engine.NonRetryableError{Err: errors.New("factor executor does not support batch execution")}
 		}
 		var err error
+		pythonExecuteCalls++
 		batchResult, err = runtime.ExecuteBatch(ctx, batchTask, batch.shared.Frame)
 		if err != nil {
 			return engine.RetryableError{Err: err}
@@ -311,7 +327,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		for _, member := range valid {
 			s.setBatchErrorAudit(ctx, member, results, batchID, started, batchErr)
 		}
-		log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d status=failed elapsed_ms=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), time.Since(started).Milliseconds(), batchErr.Error())
+		log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d status=failed elapsed_ms=%d batch_elapsed_ms=%d python_execute_calls=%d write_factor_count=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks), time.Since(started).Milliseconds(), time.Since(started).Milliseconds(), pythonExecuteCalls, writeFactorCount, batchErr.Error())
 		return
 	}
 	if batchResult.BatchID != "" && batchResult.BatchID != batchID {
@@ -319,7 +335,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		for _, member := range valid {
 			s.setBatchErrorAudit(ctx, member, results, batchID, started, err)
 		}
-		log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d status=failed elapsed_ms=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), time.Since(started).Milliseconds(), err.Error())
+		log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d status=failed elapsed_ms=%d batch_elapsed_ms=%d python_execute_calls=%d write_factor_count=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks), time.Since(started).Milliseconds(), time.Since(started).Milliseconds(), pythonExecuteCalls, writeFactorCount, err.Error())
 		return
 	}
 	items := make(map[string]engine.BatchItemResult, len(batchResult.Items))
@@ -330,7 +346,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 				s.setBatchErrorAudit(ctx, member, results, batchID, started, fmt.Errorf("factor batch returned unknown task %s", item.TaskID))
 			}
 			batchStatus = "failed"
-			log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d status=%s elapsed_ms=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), batchStatus, time.Since(started).Milliseconds(), "unknown task response")
+			log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d status=%s elapsed_ms=%d batch_elapsed_ms=%d python_execute_calls=%d write_factor_count=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks), batchStatus, time.Since(started).Milliseconds(), time.Since(started).Milliseconds(), pythonExecuteCalls, writeFactorCount, "unknown task response")
 			return
 		}
 		if _, exists := items[item.TaskID]; exists {
@@ -338,7 +354,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 				s.setBatchErrorAudit(ctx, member, results, batchID, started, fmt.Errorf("factor batch returned duplicate task %s", item.TaskID))
 			}
 			batchStatus = "failed"
-			log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d status=%s elapsed_ms=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), batchStatus, time.Since(started).Milliseconds(), "duplicate task response")
+			log.WarnContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d status=%s elapsed_ms=%d batch_elapsed_ms=%d python_execute_calls=%d write_factor_count=%d error=%q", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks), batchStatus, time.Since(started).Milliseconds(), time.Since(started).Milliseconds(), pythonExecuteCalls, writeFactorCount, "duplicate task response")
 			return
 		}
 		items[item.TaskID] = item
@@ -386,6 +402,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 			batchStatus = "degraded"
 			continue
 		}
+		writeFactorCount++
 		logBatchMemberDone(ctx, task, batchID, "succeeded", rowsWritten, nil, time.Since(started))
 		observation := report.DatasetObservation{
 			Key:    report.DatasetKey{SpaceID: task.SpaceID, DatasetID: taskResultDataset(Task{FactorTask: task}), Freq: task.Freq},
@@ -399,7 +416,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		}
 		s.observeDatasetRun(ctx, observation)
 	}
-	log.InfoContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d status=%s elapsed_ms=%d", batchID, batchTasks[0].SubjectID, len(batchTasks), batchStatus, time.Since(started).Milliseconds())
+	log.InfoContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d status=%s elapsed_ms=%d batch_elapsed_ms=%d python_execute_calls=%d write_factor_count=%d", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks), batchStatus, time.Since(started).Milliseconds(), time.Since(started).Milliseconds(), pythonExecuteCalls, writeFactorCount)
 }
 
 func (s *Service) runMembersIndividually(ctx context.Context, members []indexedTask, shared *storageio.RangeChunk, slots chan struct{}, results []Result) {
@@ -416,7 +433,16 @@ func (s *Service) runMembersIndividually(ctx context.Context, members []indexedT
 				results[member.index].Err = ctx.Err()
 				return
 			}
-			results[member.index].Err = s.runWithPeriodRead(ctx, member.task, shared)
+			prepared := shared
+			if shared != nil && member.task.PeriodTime > 0 {
+				var err error
+				prepared, err = restrictRangeChunkForTask(shared, member.task.StartTime, member.task.EndTime, member.task.LookbackPeriods)
+				if err != nil {
+					results[member.index].Err = err
+					return
+				}
+			}
+			results[member.index].Err = s.runWithPeriodRead(ctx, member.task, prepared)
 		}()
 	}
 	wg.Wait()

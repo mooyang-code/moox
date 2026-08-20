@@ -46,3 +46,25 @@ func TestFactorGateMutationWaitsForRunningTask(t *testing.T) {
 		}
 	}, time.Second, time.Millisecond)
 }
+
+func TestFactorGateAcquireRunsDeduplicatesAndReleasesAllLocks(t *testing.T) {
+	gate := NewFactorGate()
+	release := gate.AcquireRuns([]string{"factor-b", "factor-a", "factor-a"})
+	require.Len(t, gate.gates, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		gate.Mutate("factor-a", func() {})
+	}()
+	select {
+	case <-done:
+		t.Fatal("mutation entered while batch still held a read lock")
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("opposite-order batch remained blocked after release")
+	}
+}
