@@ -217,7 +217,31 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		}
 	}
 
-	results := r.taskRunner.RunAll(ctx, tasks)
+	batchCount := uniqueTaskSubjects(tasks)
+	r.periodMetrics.BeginBatches(ready.GetSourceViewId(), ready.GetFrequency(), batchCount)
+	var results []taskrunner.Result
+	defer func() {
+		bySubject := make(map[string]struct {
+			factors int
+			failed  bool
+		}, batchCount)
+		for index, task := range tasks {
+			state := bySubject[task.SubjectID]
+			state.factors++
+			if index >= len(results) || results[index].Err != nil {
+				state.failed = true
+			}
+			bySubject[task.SubjectID] = state
+		}
+		for _, state := range bySubject {
+			status := "complete"
+			if state.failed {
+				status = "degraded"
+			}
+			r.periodMetrics.ObserveBatch(ready.GetSourceViewId(), ready.GetFrequency(), status, 1, state.factors, time.Since(started))
+		}
+	}()
+	results = r.taskRunner.RunAll(ctx, tasks)
 	terminal := make(map[string]taskrunner.Result, len(results))
 	for _, result := range results {
 		terminal[combinationKey(result.Task.BindingID, result.Task.SubjectID)] = result
@@ -239,7 +263,6 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 		state.FailedSubjects = append(state.FailedSubjects, task.SubjectID)
 		state.Status = "degraded"
 	}
-
 	markerStates := make([]*storagepb.FactorBindingPeriodState, 0, len(selected))
 	for _, binding := range selected {
 		state := states[binding.BindingID]
@@ -263,9 +286,19 @@ func (r *ViewReadyRunner) executeSelected(ctx context.Context, spaceID, triggerE
 			triggerEventID, spaceID, ready.GetSourceViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(subjects), err.Error())
 		return err
 	}
-	log.InfoContextf(ctx, "factor_view_ready_done event_id=%s space_id=%s source_view_id=%s result_dataset_id=%s freq=%s period_time=%d binding_count=%d task_count=%d subject_count=%d status=%s elapsed_ms=%d",
-		triggerEventID, spaceID, ready.GetSourceViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(tasks), len(subjects), groupStatus, time.Since(started).Milliseconds())
+	log.InfoContextf(ctx, "factor_view_ready_done event_id=%s space_id=%s source_view_id=%s result_dataset_id=%s freq=%s period_time=%d binding_count=%d task_count=%d batch_count=%d subject_count=%d status=%s elapsed_ms=%d",
+		triggerEventID, spaceID, ready.GetSourceViewId(), resultDatasetID, ready.GetFrequency(), ready.GetPeriodTime(), len(selected), len(tasks), batchCount, len(subjects), groupStatus, time.Since(started).Milliseconds())
 	return nil
+}
+
+func uniqueTaskSubjects(tasks []taskrunner.Task) int {
+	seen := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		if strings.TrimSpace(task.SubjectID) != "" {
+			seen[task.SubjectID] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 func selectPeriodBindings(bindings []domain.FactorBinding, spaceID string, ready *publicstoragepb.ViewSourcePeriodReady) []domain.FactorBinding {

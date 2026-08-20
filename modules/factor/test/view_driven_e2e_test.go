@@ -110,8 +110,9 @@ func TestViewReadyPipelineOverlapsReadsAndRetriesTimeoutAtTail(t *testing.T) {
 	go func() { done <- executor.Execute(context.Background(), "space-a", "pipeline-ready-1", ready) }()
 
 	for range 2 {
-		if subject := <-exec.entered; subject != "BTC" {
-			t.Fatalf("first Python tasks subject = %s, want BTC", subject)
+		subject := <-exec.entered
+		if subject != "BTC" && subject != "SOL" {
+			t.Fatalf("first Python task subject = %s, want a ready non-timeout subject", subject)
 		}
 	}
 	if !eventually(time.Second, func() bool {

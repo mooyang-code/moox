@@ -15,10 +15,9 @@ import (
 
 type periodReadKey struct {
 	spaceID, sourceViewID, sourceDataset, subjectID, freq string
-	startTime, endTime                                    time.Time
-	lookbackPeriods                                       int
 	periodTime                                            int64
 	triggerType, triggerEventID                           string
+	startTime, endTime                                    time.Time
 }
 
 type indexedTask struct {
@@ -27,12 +26,15 @@ type indexedTask struct {
 }
 
 type periodReadGroup struct {
-	key        periodReadKey
-	columns    []string
-	members    []indexedTask
-	attempt    int
-	generation int
-	terminal   bool
+	key             periodReadKey
+	startTime       time.Time
+	endTime         time.Time
+	lookbackPeriods int
+	columns         []string
+	members         []indexedTask
+	attempt         int
+	generation      int
+	terminal        bool
 }
 
 type readJob struct {
@@ -50,7 +52,7 @@ type readOutcome struct {
 func (s *Service) runPeriodReadPipeline(
 	ctx context.Context,
 	groups []*periodReadGroup,
-	prepared chan<- preparedTask,
+	prepared chan<- preparedBatch,
 	results []Result,
 ) {
 	if len(groups) == 0 {
@@ -83,7 +85,7 @@ func (s *Service) runPeriodReadPipeline(
 				elapsed := time.Since(started)
 				log.InfoContextf(readCtx, "factor_view_read_done space_id=%s source_view_id=%s subject_id=%s freq=%s period_time=%d lookback_periods=%d attempt=%d result=%s elapsed_ms=%d column_count=%d",
 					job.group.key.spaceID, job.group.key.sourceViewID, job.group.key.subjectID,
-					job.group.key.freq, job.group.key.periodTime, job.group.key.lookbackPeriods,
+					job.group.key.freq, job.group.key.periodTime, job.group.lookbackPeriods,
 					job.attempt, viewReadResult(err), elapsed.Milliseconds(), len(job.group.columns))
 				outcomes <- readOutcome{job: job, chunk: chunk, err: err}
 			}
@@ -128,18 +130,12 @@ func (s *Service) runPeriodReadPipeline(
 				s.failReadGroup(group, outcome.err, results)
 				continue
 			}
-			for memberIndex, member := range group.members {
-				select {
-				case prepared <- preparedTask{index: member.index, task: member.task, shared: outcome.chunk}:
-				case <-ctx.Done():
-					for _, remaining := range group.members[memberIndex:] {
-						results[remaining.index].Err = ctx.Err()
-						s.finishPendingTask()
-					}
-					group.terminal = true
-				}
-				if group.terminal {
-					break
+			select {
+			case prepared <- preparedBatch{members: append([]indexedTask(nil), group.members...), shared: outcome.chunk}:
+			case <-ctx.Done():
+				for _, member := range group.members {
+					results[member.index].Err = ctx.Err()
+					s.finishPendingTask()
 				}
 			}
 			group.terminal = true
@@ -177,13 +173,13 @@ func (s *Service) readPeriodGroup(ctx context.Context, group *periodReadGroup) (
 	}
 	if periodReader, ok := s.storage.(periodStorageIO); ok {
 		return periodReader.ReadPeriodChunk(
-			ctx, key, representative.StartTime, representative.EndTime,
-			representative.LookbackPeriods, append([]string(nil), group.columns...),
+			ctx, key, group.startTime, group.endTime,
+			group.lookbackPeriods, append([]string(nil), group.columns...),
 		)
 	}
 	return s.storage.ReadRangeChunk(
-		ctx, key, representative.StartTime, representative.EndTime,
-		representative.LookbackPeriods, maxTargetRowsPerChunk, append([]string(nil), group.columns...),
+		ctx, key, group.startTime, group.endTime,
+		group.lookbackPeriods, maxTargetRowsPerChunk, append([]string(nil), group.columns...),
 	)
 }
 
@@ -206,6 +202,13 @@ func (s *Service) failReadGroup(group *periodReadGroup, err error, results []Res
 	}
 }
 
+type preparedBatch struct {
+	members []indexedTask
+	shared  *storageio.RangeChunk
+}
+
+// preparedTask remains as a small projection helper for single-task callers
+// and tests; period execution now transports preparedBatch values.
 type preparedTask struct {
 	index  int
 	task   Task
@@ -228,15 +231,25 @@ func buildPeriodReadGroups(tasks []Task) ([]*periodReadGroup, []indexedTask) {
 		}
 		key := periodReadKey{
 			spaceID: task.SpaceID, sourceViewID: taskSourceView(task), sourceDataset: task.SourceDataset,
-			subjectID: task.SubjectID, freq: task.Freq, startTime: task.StartTime, endTime: task.EndTime,
-			lookbackPeriods: task.LookbackPeriods, periodTime: task.PeriodTime,
+			subjectID: task.SubjectID, freq: task.Freq, periodTime: task.PeriodTime,
 			triggerType: task.TriggerType, triggerEventID: task.TriggerEventID,
+			startTime: task.StartTime, endTime: task.EndTime,
 		}
 		group := groupsByKey[key]
 		if group == nil {
-			group = &periodReadGroup{key: key}
+			group = &periodReadGroup{key: key, startTime: task.StartTime, endTime: task.EndTime, lookbackPeriods: task.LookbackPeriods}
 			groupsByKey[key] = group
 			groups = append(groups, group)
+		} else {
+			if task.StartTime.Before(group.startTime) {
+				group.startTime = task.StartTime
+			}
+			if task.EndTime.After(group.endTime) {
+				group.endTime = task.EndTime
+			}
+			if task.LookbackPeriods > group.lookbackPeriods {
+				group.lookbackPeriods = task.LookbackPeriods
+			}
 		}
 		group.members = append(group.members, member)
 	}

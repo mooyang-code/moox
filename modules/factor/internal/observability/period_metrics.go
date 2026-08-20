@@ -16,6 +16,10 @@ type PeriodMetrics struct {
 	periodDegraded *prometheus.CounterVec
 	manifestClear  *prometheus.CounterVec
 	sourceReadyLag *prometheus.GaugeVec
+	batchRunning   *prometheus.GaugeVec
+	batchTotal     *prometheus.CounterVec
+	batchFactors   *prometheus.CounterVec
+	batchElapsed   *prometheus.HistogramVec
 }
 
 func NewPeriodMetrics(reg prometheus.Registerer) (*PeriodMetrics, error) {
@@ -39,6 +43,22 @@ func NewPeriodMetrics(reg prometheus.Registerer) (*PeriodMetrics, error) {
 			Namespace: "moox", Subsystem: "factor", Name: "source_ready_lag_seconds",
 			Help: "Age of the latest source View ready event when factor execution starts.",
 		}, []string{"source_view", "frequency"}),
+		batchRunning: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "factor", Name: "batch_running",
+			Help: "Factor subject batches currently executing.",
+		}, []string{"source_view", "frequency"}),
+		batchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "factor", Name: "batch_total",
+			Help: "Factor subject batches completed.",
+		}, []string{"source_view", "frequency", "status"}),
+		batchFactors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "factor", Name: "batch_factor_total",
+			Help: "Factor members processed inside subject batches.",
+		}, []string{"source_view", "frequency"}),
+		batchElapsed: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "moox", Subsystem: "factor", Name: "batch_elapsed_seconds",
+			Help: "Elapsed time for a View-ready factor period batch run.",
+		}, []string{"source_view", "frequency"}),
 	}
 	var err error
 	if m.periodRunning, err = registerOrReusePeriod(reg, m.periodRunning); err != nil {
@@ -51,6 +71,18 @@ func NewPeriodMetrics(reg prometheus.Registerer) (*PeriodMetrics, error) {
 		return nil, err
 	}
 	if m.sourceReadyLag, err = registerOrReusePeriod(reg, m.sourceReadyLag); err != nil {
+		return nil, err
+	}
+	if m.batchRunning, err = registerOrReusePeriod(reg, m.batchRunning); err != nil {
+		return nil, err
+	}
+	if m.batchTotal, err = registerOrReusePeriod(reg, m.batchTotal); err != nil {
+		return nil, err
+	}
+	if m.batchFactors, err = registerOrReusePeriod(reg, m.batchFactors); err != nil {
+		return nil, err
+	}
+	if m.batchElapsed, err = registerOrReusePeriod(reg, m.batchElapsed); err != nil {
 		return nil, err
 	}
 	return m, nil
@@ -106,4 +138,37 @@ func (m *PeriodMetrics) ObserveSourceReady(sourceView, frequency string, readyAt
 		lag = 0
 	}
 	m.sourceReadyLag.WithLabelValues(strings.TrimSpace(sourceView), strings.TrimSpace(frequency)).Set(lag)
+}
+
+func (m *PeriodMetrics) BeginBatch(sourceView, frequency string) {
+	m.BeginBatches(sourceView, frequency, 1)
+}
+
+// BeginBatches records the number of subject batches that are about to run.
+// A View-ready event may contain many subjects, so the gauge must not collapse
+// them into one synthetic batch.
+func (m *PeriodMetrics) BeginBatches(sourceView, frequency string, batchCount int) {
+	if m == nil {
+		return
+	}
+	if batchCount > 0 {
+		m.batchRunning.WithLabelValues(strings.TrimSpace(sourceView), strings.TrimSpace(frequency)).Add(float64(batchCount))
+	}
+}
+
+func (m *PeriodMetrics) ObserveBatch(sourceView, frequency, status string, batchCount, factorCount int, elapsed time.Duration) {
+	if m == nil {
+		return
+	}
+	view, freq := strings.TrimSpace(sourceView), strings.TrimSpace(frequency)
+	if batchCount > 0 {
+		m.batchRunning.WithLabelValues(view, freq).Sub(float64(batchCount))
+		m.batchTotal.WithLabelValues(view, freq, strings.TrimSpace(status)).Add(float64(batchCount))
+	}
+	if factorCount > 0 {
+		m.batchFactors.WithLabelValues(view, freq).Add(float64(factorCount))
+	}
+	if elapsed > 0 {
+		m.batchElapsed.WithLabelValues(view, freq).Observe(elapsed.Seconds())
+	}
 }

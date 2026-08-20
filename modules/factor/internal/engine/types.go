@@ -52,3 +52,26 @@ type FactorResultRow struct {
 type FactorResult struct {
 	Rows []FactorResultRow
 }
+
+// BatchTask groups period-scoped factor tasks that share one source frame.
+// Each member keeps its original TaskID so writeback and manifests remain
+// independent even though Python receives one request.
+type BatchTask struct {
+	BatchID string
+	Tasks   []FactorTask
+}
+
+// BatchItemResult is the terminal result for one factor in a BatchTask.
+type BatchItemResult struct {
+	TaskID    string
+	BindingID string
+	Result    *FactorResult
+	Err       error
+}
+
+// BatchResult contains per-factor results. A nil batch error means the
+// protocol completed and individual failures are represented in Items.
+type BatchResult struct {
+	BatchID string
+	Items   []BatchItemResult
+}

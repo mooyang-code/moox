@@ -118,7 +118,7 @@ func TestRunAllExecutesSubjectFactorCartesianProduct(t *testing.T) {
 
 func TestRunAllAllowsSameSubjectFactorsToRunConcurrently(t *testing.T) {
 	exec := &blockingExecutor{entered: make(chan string, 2), release: make(chan struct{})}
-	runner := NewService(2, staticReadStorage{}, exec)
+	runner := NewService(2, staticReadStorage{}, exec, WithBatchExecution(false))
 	base := time.Unix(1, 0).UTC()
 	first := oneBarTask("BTC", base)
 	first.Factor.FactorID = "bias5"
@@ -158,6 +158,30 @@ func TestRunAllSharesPeriodReadAcrossSameSubjectFactors(t *testing.T) {
 	require.ElementsMatch(t, []string{"close", "high", "low"}, storage.readColumns())
 	require.Equal(t, []string{"close"}, exec.columnsFor("bias"))
 	require.Equal(t, []string{"close", "high", "low"}, exec.columnsFor("cci"))
+}
+
+func TestRunAllBatchesFactorsBySubject(t *testing.T) {
+	storage := &recordingReadStorage{}
+	exec := &recordingBatchExecutor{}
+	runner := NewService(2, storage, exec)
+	base := time.Date(2026, 8, 10, 6, 10, 0, 0, time.UTC)
+	first := oneBarTask("BTC-USDT", base)
+	first.PeriodTime = base.Unix()
+	first.Factor.FactorID = "bias"
+	first.TaskID = "task-btc-bias"
+	second := oneBarTask("BTC-USDT", base)
+	second.PeriodTime = base.Unix()
+	second.Factor.FactorID = "cci"
+	second.TaskID = "task-btc-cci"
+	second.LookbackPeriods = 600
+
+	results := runner.RunAll(context.Background(), []Task{first, second})
+	for _, result := range results {
+		require.NoError(t, result.Err)
+	}
+	require.Equal(t, 1, exec.batchCalls)
+	require.Equal(t, 2, exec.batchFactors)
+	require.Equal(t, 1, storage.periodReadCount())
 }
 
 func TestRunAllFailureDoesNotBlockOtherTasks(t *testing.T) {
@@ -314,6 +338,27 @@ type recordingExecutor struct {
 	mu    sync.Mutex
 	calls []string
 }
+
+type recordingBatchExecutor struct {
+	batchCalls   int
+	batchFactors int
+}
+
+func (e *recordingBatchExecutor) Execute(context.Context, *engine.FactorTask, *engine.DataFrame) (*engine.FactorResult, error) {
+	return nil, errors.New("single execution should not be used")
+}
+
+func (e *recordingBatchExecutor) ExecuteBatch(_ context.Context, batch *engine.BatchTask, frame *engine.DataFrame) (*engine.BatchResult, error) {
+	e.batchCalls++
+	e.batchFactors += len(batch.Tasks)
+	items := make([]engine.BatchItemResult, 0, len(batch.Tasks))
+	for _, task := range batch.Tasks {
+		items = append(items, engine.BatchItemResult{TaskID: task.TaskID, BindingID: task.BindingID, Result: resultForFrame(frame)})
+	}
+	return &engine.BatchResult{BatchID: batch.BatchID, Items: items}, nil
+}
+
+func (*recordingBatchExecutor) Close() error { return nil }
 
 func (e *recordingExecutor) Execute(_ context.Context, task *engine.FactorTask, frame *engine.DataFrame) (*engine.FactorResult, error) {
 	e.mu.Lock()

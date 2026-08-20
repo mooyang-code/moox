@@ -191,6 +191,92 @@ def test_execute_accepts_empty_dataframe(tmp_path: Path):
     assert worker.execute_request(request_meta())["results"] == []
 
 
+def test_execute_batch_shares_frame_and_isolates_factor_errors(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    other = factors_dir / "Other.py"
+    other.write_text(
+        "import pandas as pd\n\n"
+        "def compute(df, params):\n"
+        "    result = df[[\"data_time\", \"series_tag\"]].copy()\n"
+        "    result[\"double\"] = df[\"value\"] + 10\n"
+        "    result[\"triple\"] = df[\"value\"] + 20\n"
+        "    return result\n",
+        encoding="utf-8",
+    )
+    broken = factors_dir / "Broken.py"
+    broken.write_text("def compute(:\n", encoding="utf-8")
+    worker = FactorWorker(factors_dir)
+    load_factor(worker, factors_dir / "Generic.py", "Generic")
+    load_factor(worker, other, "Other")
+    meta = request_meta()
+    meta["id"] = "batch-1"
+    base = meta.pop("factor")
+    meta["mode"] = "batch"
+    generic_hash = hashlib.sha256((factors_dir / "Generic.py").read_bytes()).hexdigest()
+    other_hash = hashlib.sha256(other.read_bytes()).hexdigest()
+    broken_hash = hashlib.sha256(broken.read_bytes()).hexdigest()
+    meta["factors"] = [
+        {"task_id": "task-good", "binding_id": "binding-good", "factor": {**base, "name": "Generic", "source_path": str(factors_dir / "Generic.py"), "source_hash": generic_hash}},
+        {"task_id": "task-other", "binding_id": "binding-other", "factor": {**base, "name": "Other", "source_path": str(other), "source_hash": other_hash}},
+        {"task_id": "task-bad", "binding_id": "binding-bad", "factor": {**base, "name": "Broken", "source_path": str(broken), "source_hash": broken_hash}},
+    ]
+
+    response = worker.execute_request(meta)
+    assert response["id"] == "batch-1"
+    assert len(response["items"]) == 3
+    assert response["items"][0]["ok"] is True
+    assert response["items"][1]["ok"] is True
+    assert response["items"][2]["ok"] is False
+    assert "broken" in response["items"][2]["message"].lower()
+
+
+def test_execute_batch_applies_each_members_lookback_window(tmp_path: Path):
+    factors_dir = make_factor_dir(tmp_path)
+    count = factors_dir / "Count.py"
+    count.write_text(
+        "import pandas as pd\n\n"
+        "def compute(df, params):\n"
+        "    result = df[[\"data_time\", \"series_tag\"]].copy()\n"
+        "    result[\"double\"] = len(df)\n"
+        "    result[\"triple\"] = len(df)\n"
+        "    return result\n",
+        encoding="utf-8",
+    )
+    worker = FactorWorker(factors_dir)
+    load_factor(worker, count, "Count")
+    rows = [
+        [f"2026-07-28T00:00:00.00000000{i}Z", "venue:binance", float(i)]
+        for i in range(4)
+    ]
+    meta = {
+        "id": "batch-lookback", "mode": "batch",
+        "target_start_time": "2026-07-28T00:00:00.000000003Z",
+        "target_end_time": "2026-07-28T00:00:00.000000004Z",
+        "df": {"columns": ["data_time", "series_tag", "value"], "rows": rows},
+        "factors": [],
+    }
+    raw = count.read_bytes()
+    factor = {
+        "name": "Count", "input_columns": ["value"],
+        "outputs": ["double", "triple"], "params": {},
+        "source_path": str(count), "source_hash": hashlib.sha256(raw).hexdigest(),
+    }
+    for task_id, lookback in (("short", 2), ("long", 4)):
+        meta["factors"].append({
+            "task_id": task_id, "binding_id": task_id,
+            "lookback_periods": lookback,
+            "target_start_time": meta["target_start_time"],
+            "target_end_time": meta["target_end_time"],
+            "factor": factor,
+        })
+    response = worker.execute_request(meta)
+    values = {
+        item["task_id"]: item["results"][0]["values"]["double"]
+        for item in response["items"]
+    }
+    assert values == {"short": 2, "long": 4}
+
+
 @pytest.mark.parametrize(
     ("source", "outputs", "message"),
     [

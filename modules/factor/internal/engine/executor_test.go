@@ -56,6 +56,48 @@ def compute(df, params):
 	}}, result.Rows)
 }
 
+func TestPythonWorkerPoolBatchKeepsLoadFailureOnOneMember(t *testing.T) {
+	factorsDir := t.TempDir()
+	goodSource := []byte(`import pandas as pd
+
+def compute(df, params):
+    output = df[["data_time", "series_tag"]].copy()
+    output["double"] = df["value"] * 2
+    return output
+`)
+	goodPath := filepath.Join(factorsDir, "Good.py")
+	badPath := filepath.Join(factorsDir, "Broken.py")
+	require.NoError(t, os.WriteFile(goodPath, goodSource, 0o600))
+	require.NoError(t, os.WriteFile(badPath, []byte("def compute(:\n"), 0o600))
+	goodHash := sha256.Sum256(goodSource)
+	badSource, err := os.ReadFile(badPath)
+	require.NoError(t, err)
+	badHash := sha256.Sum256(badSource)
+	executor, err := NewPythonWorkerPool(context.Background(), 1, process.Config{
+		PythonBin:  "python3",
+		WorkerPath: filepath.Clean(filepath.Join("..", "..", "pyworker", "worker.py")),
+		Args:       []string{"--factors-dir", factorsDir},
+		Limits:     process.DefaultLimits(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, executor.Close()) })
+	at := time.Date(2026, 7, 29, 0, 0, 0, 1, time.UTC)
+	result, err := executor.ExecuteBatch(context.Background(), &BatchTask{
+		BatchID: "batch-load-test",
+		Tasks: []FactorTask{
+			{TaskID: "good", BindingID: "binding-good", SpaceID: "crypto", SourceViewID: "bars", ResultDatasetID: "good-out", SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond), Factor: FactorSpec{FactorID: "good", Name: "Good", SourcePath: goodPath, SourceHash: hex.EncodeToString(goodHash[:]), InputColumns: []string{"value"}, Outputs: []string{"double"}, ParamsJSON: `{}`}},
+			{TaskID: "bad", BindingID: "binding-bad", SpaceID: "crypto", SourceViewID: "bars", ResultDatasetID: "bad-out", SubjectID: "BTC", Freq: "1m", StartTime: at, EndTime: at.Add(time.Nanosecond), Factor: FactorSpec{FactorID: "bad", Name: "Broken", SourcePath: badPath, SourceHash: hex.EncodeToString(badHash[:]), InputColumns: []string{"value"}, Outputs: []string{"double"}, ParamsJSON: `{}`}},
+		},
+	}, &DataFrame{Columns: []string{"value"}, Rows: [][]any{{3.0}}, DataTimes: []time.Time{at}, SeriesTags: []string{"venue:binance"}})
+	require.NoError(t, err)
+	require.Len(t, result.Items, 2)
+	require.Equal(t, "good", result.Items[0].TaskID)
+	require.NoError(t, result.Items[0].Err)
+	require.Len(t, result.Items[0].Result.Rows, 1)
+	require.Equal(t, "bad", result.Items[1].TaskID)
+	require.Error(t, result.Items[1].Err)
+}
+
 type blockingExecutorWorker struct {
 	entered chan<- string
 	release <-chan struct{}
