@@ -187,7 +187,14 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		return result
 	}
 	priceReturn := math.Abs(current.Close/previous.Close - 1)
-	volumeRatio := current.Volume / math.Max(previous.Volume, 1e-12)
+	// A zero-volume bar is normal for thinly traded symbols. Treating it as
+	// an epsilon denominator turns the first non-zero bar into an infinite
+	// volume spike and creates a false canary alert. Only compare volume when
+	// the previous closed bar has an actual volume baseline.
+	volumeRatio := 0.0
+	if previous.Volume > 0 {
+		volumeRatio = current.Volume / previous.Volume
+	}
 	if priceReturn >= config.ReturnThreshold || volumeRatio >= config.VolumeRatioThreshold {
 		result.ErrorMessage = "threshold_exceeded"
 		result.BodyExcerpt = marketCanaryThresholdDetails(previous, current, priceReturn, volumeRatio, config)

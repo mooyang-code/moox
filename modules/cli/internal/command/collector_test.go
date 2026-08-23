@@ -2,10 +2,15 @@ package command
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,6 +117,72 @@ func TestCollectorFunctionEnvironmentUsesResolvedControlTrustMaterial(t *testing
 	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("eventbus-control-ca")), env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"])
 	assert.Equal(t, base64.StdEncoding.EncodeToString(controlCA), env["MOOX_GATEWAY_CA_PEM_B64"])
 	assert.Equal(t, base64.StdEncoding.EncodeToString(controlCA), env["MOOX_SERVICE_GATEWAY_CA_PEM_B64"])
+}
+
+func TestPreflightCollectorSCFEventBusCredentialUsesManifestPublicEndpoint(t *testing.T) {
+	ca := mustTestEventBusCAPEM(t)
+	credential, err := preflightCollectorSCFEventBusCredential(
+		jetstream.CredentialFile{
+			URLs:     []string{"tls://127.0.0.1:4222"},
+			Username: "publisher",
+			Password: "publisher-secret",
+			CAFile:   "ca.pem",
+		},
+		ca,
+		setupconfig.EventBus{PublicAddress: "eventbus.example.test", Port: 4333, TLSEnabled: true},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tls://eventbus.example.test:4333"}, credential.URLs)
+	assert.Equal(t, "publisher", credential.Username)
+	assert.Equal(t, "publisher-secret", credential.Password)
+	assert.Equal(t, "ca.pem", credential.CAFile)
+}
+
+func TestPreflightCollectorSCFEventBusCredentialRejectsUnsafeManifest(t *testing.T) {
+	baseCredential := jetstream.CredentialFile{
+		URLs:     []string{"tls://127.0.0.1:4222"},
+		Username: "publisher",
+		Password: "publisher-secret",
+	}
+	validCA := mustTestEventBusCAPEM(t)
+	tests := []struct {
+		name     string
+		eventBus setupconfig.EventBus
+		ca       []byte
+		want     string
+	}{
+		{name: "loopback public address", eventBus: setupconfig.EventBus{PublicAddress: "127.0.0.1", Port: 4222, TLSEnabled: true}, ca: validCA, want: "non-loopback"},
+		{name: "unspecified public address", eventBus: setupconfig.EventBus{PublicAddress: "0.0.0.0", Port: 4222, TLSEnabled: true}, ca: validCA, want: "non-loopback"},
+		{name: "tls disabled", eventBus: setupconfig.EventBus{PublicAddress: "eventbus.example.test", Port: 4222}, ca: validCA, want: "tls_enabled"},
+		{name: "missing ca", eventBus: setupconfig.EventBus{PublicAddress: "eventbus.example.test", Port: 4222, TLSEnabled: true}, want: "CA material"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := preflightCollectorSCFEventBusCredential(baseCredential, tt.ca, tt.eventBus)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func mustTestEventBusCAPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	require.NoError(t, err)
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
+	require.NoError(t, err)
+	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "moox-test-eventbus-ca"}, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func TestCollectorStoragePrimaryAuthSecretUsesNormalizedControlFile(t *testing.T) {
+	secret, err := collectorStoragePrimaryAuthSecret([]byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-secret\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"))
+	require.NoError(t, err)
+	assert.Equal(t, "primary-secret", secret)
+	_, err = collectorStoragePrimaryAuthSecret([]byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=old\nMOOX_STORAGE_PRIMARY_AUTH_SECRET=new\nMOOX_STORAGE_VIEW_AUTH_SECRET=view\n"))
+	assert.Error(t, err)
 }
 
 func TestCollectorTimerEnvironmentOmitsControlPlaneCredentials(t *testing.T) {

@@ -78,6 +78,12 @@ type Status struct {
 	PendingTasks int
 }
 
+type preparedFactorOutput struct {
+	member indexedTask
+	task   engine.FactorTask
+	result *engine.FactorResult
+}
+
 type Service struct {
 	workers         int
 	storage         StorageIO
@@ -359,6 +365,7 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 		}
 		items[item.TaskID] = item
 	}
+	preparedOutputs := make([]preparedFactorOutput, 0, len(batchTasks))
 	for _, task := range batchTasks {
 		member := byTaskID[task.TaskID]
 		item, ok := items[task.TaskID]
@@ -388,35 +395,77 @@ func (s *Service) executePreparedBatch(ctx context.Context, batch preparedBatch,
 			batchStatus = "degraded"
 			continue
 		}
-		var rowsWritten uint64
-		writeErr := s.withRetry(ctx, func() error {
-			var err error
-			rowsWritten, err = s.storage.WriteFactorPatch(ctx, &task, result)
-			if err != nil {
-				return engine.RetryableError{Err: err}
+		preparedOutputs = append(preparedOutputs, preparedFactorOutput{member: member, task: task, result: result})
+	}
+
+	if len(preparedOutputs) > 0 {
+		rowsWritten := make([]uint64, len(preparedOutputs))
+		if batchWriter, ok := s.storage.(storageio.FactorBatchWriter); ok && len(preparedOutputs) > 1 {
+			patches := make([]storageio.FactorPatch, 0, len(preparedOutputs))
+			for _, output := range preparedOutputs {
+				task := output.task
+				result := output.result
+				patches = append(patches, storageio.FactorPatch{Task: &task, Result: result})
 			}
-			return nil
-		})
-		if writeErr != nil {
-			s.setBatchErrorAudit(ctx, member, results, batchID, started, writeErr)
-			batchStatus = "degraded"
-			continue
-		}
-		writeFactorCount++
-		logBatchMemberDone(ctx, task, batchID, "succeeded", rowsWritten, nil, time.Since(started))
-		observation := report.DatasetObservation{
-			Key:    report.DatasetKey{SpaceID: task.SpaceID, DatasetID: taskResultDataset(Task{FactorTask: task}), Freq: task.Freq},
-			Result: "success", Rows: rowsWritten, FinishedAt: time.Now().UTC(),
-		}
-		if rowsWritten == 0 {
-			observation.Result = "empty"
+			writeErr := s.withRetry(ctx, func() error {
+				var err error
+				rowsWritten, err = batchWriter.WriteFactorPatches(ctx, patches)
+				if err != nil {
+					return engine.RetryableError{Err: err}
+				}
+				if len(rowsWritten) != len(patches) {
+					return engine.RetryableError{Err: fmt.Errorf("factor batch writer returned %d counts for %d patches", len(rowsWritten), len(patches))}
+				}
+				return nil
+			})
+			if writeErr != nil {
+				for _, output := range preparedOutputs {
+					s.setBatchErrorAudit(ctx, output.member, results, batchID, started, writeErr)
+				}
+				batchStatus = "degraded"
+			} else {
+				for index, output := range preparedOutputs {
+					s.recordBatchPatchSuccess(ctx, output.task, batchID, rowsWritten[index], batch.shared.TargetPeriods, started)
+					writeFactorCount++
+				}
+			}
 		} else {
-			watermark := maxTime(batch.shared.TargetPeriods)
-			observation.InputWatermark, observation.OutputWatermark = watermark, watermark
+			for index, output := range preparedOutputs {
+				output := output
+				writeErr := s.withRetry(ctx, func() error {
+					var err error
+					rowsWritten[index], err = s.storage.WriteFactorPatch(ctx, &output.task, output.result)
+					if err != nil {
+						return engine.RetryableError{Err: err}
+					}
+					return nil
+				})
+				if writeErr != nil {
+					s.setBatchErrorAudit(ctx, output.member, results, batchID, started, writeErr)
+					batchStatus = "degraded"
+					continue
+				}
+				s.recordBatchPatchSuccess(ctx, output.task, batchID, rowsWritten[index], batch.shared.TargetPeriods, started)
+				writeFactorCount++
+			}
 		}
-		s.observeDatasetRun(ctx, observation)
 	}
 	log.InfoContextf(ctx, "factor_batch_done batch_id=%s subject_id=%s factor_count=%d batch_factor_count=%d status=%s elapsed_ms=%d batch_elapsed_ms=%d python_execute_calls=%d write_factor_count=%d", batchID, batchTasks[0].SubjectID, len(batchTasks), len(batchTasks), batchStatus, time.Since(started).Milliseconds(), time.Since(started).Milliseconds(), pythonExecuteCalls, writeFactorCount)
+}
+
+func (s *Service) recordBatchPatchSuccess(ctx context.Context, task engine.FactorTask, batchID string, rowsWritten uint64, periods []time.Time, started time.Time) {
+	logBatchMemberDone(ctx, task, batchID, "succeeded", rowsWritten, nil, time.Since(started))
+	observation := report.DatasetObservation{
+		Key:    report.DatasetKey{SpaceID: task.SpaceID, DatasetID: taskResultDataset(Task{FactorTask: task}), Freq: task.Freq},
+		Result: "success", Rows: rowsWritten, FinishedAt: time.Now().UTC(),
+	}
+	if rowsWritten == 0 {
+		observation.Result = "empty"
+	} else {
+		watermark := maxTime(periods)
+		observation.InputWatermark, observation.OutputWatermark = watermark, watermark
+	}
+	s.observeDatasetRun(ctx, observation)
 }
 
 func (s *Service) runMembersIndividually(ctx context.Context, members []indexedTask, shared *storageio.RangeChunk, slots chan struct{}, results []Result) {

@@ -143,6 +143,32 @@ func TestNodeBatchRunnerRetriesTransientProviderFailure(t *testing.T) {
 	assert.Equal(t, "done after retry", aggregate.Items[0].ResultSummary)
 }
 
+func TestNodeBatchRunnerRetriesProviderTimeoutWithFreshAttemptContext(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	createRunnerBatch(t, catalog, "runner-timeout-retry", 1)
+	var calls atomic.Int32
+	svc := &Service{
+		catalog: catalog,
+		executeNodeBatchItem: func(ctx context.Context, _ store.NodeBatchItem) (string, error) {
+			if calls.Add(1) < nodeBatchProviderAttempts {
+				return "", context.DeadlineExceeded
+			}
+			if err := ctx.Err(); err != nil {
+				return "", fmt.Errorf("retry attempt context already canceled: %w", err)
+			}
+			return "done after timeout retry", nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
+
+	aggregate := waitForNodeBatchTerminal(t, catalog, "runner-timeout-retry")
+	assert.Equal(t, store.NodeBatchSuccess, aggregate.Job.Status)
+	assert.Equal(t, int32(nodeBatchProviderAttempts), calls.Load())
+	assert.Equal(t, "done after timeout retry", aggregate.Items[0].ResultSummary)
+}
+
 func TestNodeBatchRunnerDoesNotRetryPermanentProviderFailure(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-provider-permanent", 1)
@@ -159,6 +185,26 @@ func TestNodeBatchRunnerDoesNotRetryPermanentProviderFailure(t *testing.T) {
 	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
 
 	aggregate := waitForNodeBatchTerminal(t, catalog, "runner-provider-permanent")
+	assert.Equal(t, store.NodeBatchFailed, aggregate.Job.Status)
+	assert.Equal(t, int32(1), calls.Load())
+}
+
+func TestNodeBatchRunnerDoesNotRetryValidationTimeout(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	createRunnerBatch(t, catalog, "runner-validation-timeout", 1)
+	var calls atomic.Int32
+	svc := &Service{
+		catalog: catalog,
+		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
+			calls.Add(1)
+			return "", errors.New("validation deadline exceeded for cron")
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
+
+	aggregate := waitForNodeBatchTerminal(t, catalog, "runner-validation-timeout")
 	assert.Equal(t, store.NodeBatchFailed, aggregate.Job.Status)
 	assert.Equal(t, int32(1), calls.Load())
 }

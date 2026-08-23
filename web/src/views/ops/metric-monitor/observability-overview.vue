@@ -9,9 +9,6 @@
           ><b>{{ overview.services?.length || 0 }}</b> 服务</span
         >
         <span
-          ><b>{{ overview.hosts?.length || 0 }}</b> 主机</span
-        >
-        <span
           ><b>{{ overview.datasets?.length || 0 }}</b> Dataset + Frequency</span
         >
       </div>
@@ -42,48 +39,15 @@
           <a-table-column title="节点 / 实例" :width="260">
             <template #cell="{ record }">{{ record.node_id || "-" }} / {{ record.instance_id || "-" }}</template>
           </a-table-column>
-          <a-table-column title="原因" data-index="reason" :width="180" />
+          <a-table-column title="原因" :width="220">
+            <template #cell="{ record }">{{ reasonLabel(record.reason) }}</template>
+          </a-table-column>
           <a-table-column title="最后上报" :width="190">
             <template #cell="{ record }">{{ formatTime(record.last_seen_at) }}</template>
           </a-table-column>
         </template>
       </a-table>
       <div v-if="!loading && !overview.services?.length" class="inline-empty">尚未上报</div>
-    </section>
-
-    <section class="overview-section">
-      <div class="section-head"><strong>主机</strong><span>agent reachable、CPU、Memory、Filesystem</span></div>
-      <a-table
-        row-key="agent_id"
-        size="small"
-        :loading="loading"
-        :data="overview.hosts || []"
-        :pagination="false"
-        :scroll="{ x: 'max-content', y: 230 }"
-      >
-        <template #columns>
-          <a-table-column title="状态" :width="100">
-            <template #cell="{ record }"
-              ><a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag></template
-            >
-          </a-table-column>
-          <a-table-column title="主机" data-index="hostname" :width="200" />
-          <a-table-column title="CPU" :width="100"
-            ><template #cell="{ record }">{{ formatPercent(record.cpu_percent) }}</template></a-table-column
-          >
-          <a-table-column title="内存" :width="100"
-            ><template #cell="{ record }">{{ formatPercent(record.memory_percent) }}</template></a-table-column
-          >
-          <a-table-column title="文件系统峰值" :width="130">
-            <template #cell="{ record }">{{ formatPercent(record.filesystem_max_percent) }}</template>
-          </a-table-column>
-          <a-table-column title="原因" data-index="reason" :width="180" />
-          <a-table-column title="最后上报" :width="190">
-            <template #cell="{ record }">{{ formatTime(record.last_seen_at) }}</template>
-          </a-table-column>
-        </template>
-      </a-table>
-      <div v-if="!loading && !overview.hosts?.length" class="inline-empty">尚未上报</div>
     </section>
 
     <section class="overview-section dataset-section">
@@ -121,7 +85,9 @@
             >
           </a-table-column>
           <a-table-column title="Frequency" data-index="freq" :width="110" />
-          <a-table-column title="原因" data-index="reason" :width="170" />
+          <a-table-column title="原因" :width="260">
+            <template #cell="{ record }">{{ reasonLabel(record.reason) }}</template>
+          </a-table-column>
           <a-table-column title="最后运行" :width="190">
             <template #cell="{ record }">{{ formatTime(record.last_run_at) }}</template>
           </a-table-column>
@@ -160,7 +126,9 @@
           </a-table-column>
           <a-table-column title="类型" data-index="kind" :width="140" />
           <a-table-column title="模块" data-index="module" :width="160" />
-          <a-table-column title="原因" data-index="reason" :width="260" />
+          <a-table-column title="原因" :width="300">
+            <template #cell="{ record }">{{ reasonLabel(record.reason) }}</template>
+          </a-table-column>
           <a-table-column title="最后检查" :width="190">
             <template #cell="{ record }">{{ formatTime(record.last_checked_at) }}</template>
           </a-table-column>
@@ -197,7 +165,6 @@ const abnormalCount = computed(
   () =>
     [
       ...(overview.value.services || []),
-      ...(overview.value.hosts || []),
       ...(overview.value.datasets || []),
       ...(overview.value.business_checks || [])
     ].filter(item => item.status !== "healthy").length
@@ -254,14 +221,29 @@ function statusLabel(status?: string) {
   );
 }
 
+function reasonLabel(reason?: string) {
+  const value = (reason || "").trim();
+  const labels: Record<string, string> = {
+    "producer stale": "上报已停止，暂未收到新数据",
+    inventory_stale: "数据源清单超过 10 分钟未更新",
+    "尚未上报": "尚未收到运行上报",
+    "run stale": "运行任务超过允许间隔",
+    "success stale": "最近一次成功运行超过允许间隔",
+    "balance sync stale": "余额同步超过 15 分钟未成功",
+    "balance sync failed 3 consecutive runs": "余额同步连续 3 次失败",
+    normal: "正常",
+    "health check ok": "健康检查正常",
+    "health not checked": "尚未完成健康检查",
+    "reporter missing": "未收到服务上报",
+    no_longer_expected: "当前配置未启用，无需检查"
+  };
+  return labels[value] || value || "-";
+}
+
 function formatTime(value?: string) {
   if (!value) return "-";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-function formatPercent(value?: number) {
-  return typeof value === "number" ? `${value.toFixed(1)}%` : "-";
 }
 
 function formatLag(value?: number) {

@@ -32,6 +32,11 @@ public_address = ""
 port = 4222
 tls_enabled = true
 
+[paths]
+deploy_root = "/data/moox"
+control_root = "/data/moox/prod"
+storage_root = "/data/moox/storage"
+
 # 留空时仍采集和展示监控数据，但不发送站外告警。
 [monitoring]
 wecom_webhook = ""
@@ -62,6 +67,10 @@ password = ""
 TLS。用户不填写 EventBus 账号、token、CA 或私钥；MooX 在部署时生成这些材料以及
 `cloudnode-worker.yaml`。
 
+`paths` 统一声明运行时根目录。默认布局使用云磁盘 `/data/moox`：控制面在
+`/data/moox/prod`，独立 Storage 在 `/data/moox/storage`；数据、日志、证书、密钥和
+升级暂存目录都只能落在这些目录下，不再使用用户 home 目录。
+
 `monitoring.wecom_webhook` 是唯一需要用户提前填写的监控专用信息。填写企微群机器人
 HTTPS webhook 后，部署会以 mode `0600` 的运行时环境文件交给 Monitor；留空不会
 关闭监控采集、查询和规则计算，只是不发送站外告警。
@@ -80,8 +89,8 @@ used by the shell transport. `other_hosts` are imported as available hosts, but
 later service placement is decided after Admin is working. `control_host` and
 every `other_hosts` entry are also the physical-server inventory for monitoring;
 `compile_host` is not monitored unless it is also registered as a deployment host.
-注册主机不会代替安装 HostAgent；需要采集 CPU、内存、磁盘的部署主机仍应按
-`references/host-agent.md` 安装并启动 HostAgent。
+`moox-cli setup deploy-control` 会在控制主机一并安装并启动 HostAgent；其他主机仍应按
+`references/host-agent.md` 安装并启动各自的 HostAgent。
 
 ## Phase 1: custom.toml And Control Initialization
 
@@ -99,15 +108,18 @@ test -e ./custom.toml || exit 2
 健康检查续期调度。公网 IP/DNS 自动使用操作系统信任的 Let's Encrypt 证书，不需要
 用户安装根证书；私网、回环地址和 `.localhost` 自动使用 Caddy internal CA。该命令的
 脱敏 JSON `certificate` 字段会报告 `mode`、`issuer` 和 `automatic_renewal`，Skill
-只根据这些字段确认结果，不读取证书私钥。
+只根据这些字段确认结果，不读取证书私钥。internal CA 部署会自动检查并安装当前
+操作机的浏览器信任；需要提权时 CLI 会直接提示管理员授权。若中断后需要单独修复，
+执行 `./bin/moox-cli setup trust-browser --file ./custom.toml`。
 
 If validation reports `host_key_unknown`, obtain each SHA256 host fingerprint
 through an independent trusted channel, run `setup trust-host`, and repeat
 validation. Never accept a fingerprint merely because the same SSH connection
 reported it.
 
-`apply` is successful only when its JSON includes `login_api: valid`. Ask the
-user to confirm browser login when interactive browser acceptance is required.
+`apply` is successful only when its JSON includes `login_api: valid`. Internal
+CA trust is checked before the login probe, so a browser WebSocket certificate
+failure is surfaced during initialization instead of being deferred to the UI.
 Do not ask about Storage or business metadata until status 返回 `completed`.
 This phase ends after Admin, Gateway, Web, EventBus, CloudNode, and Collector are
 ready, the manifest records are written, and the public login API is valid.

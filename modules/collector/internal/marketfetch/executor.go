@@ -369,7 +369,7 @@ func (e *Executor) reportResults(req Request, results []domain.ItemResult, execu
 			"request_id": req.RequestID, "region": req.Region, "function_node_id": req.NodeID, "symbol": result.Symbol,
 			"dataset_id": result.DatasetID, "frequency": result.Frequency, "success": strconv.FormatBool(result.Outcome == domain.ItemOutcomeSuccess),
 			"error_kind": result.ErrorType, "error_message": truncateErrorString(result.ErrorSummary),
-			"elapsed_ms": strconv.FormatInt(executions[index].elapsed.Milliseconds(), 10), "rows": strconv.Itoa(rowCountByItem[index]),
+			"elapsed_ms": strconv.FormatInt(executions[index].elapsed.Milliseconds(), 10), "rows": strconv.Itoa(rowCountByItem[index]), "latest_data_time": result.TargetDataTime,
 		}
 		for key, value := range dnsReportFields(req) {
 			fields[key] = value
@@ -495,6 +495,7 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, emptyErr)
 			return failureResult(item, domain.ItemOutcomeStorageError, "empty_data", emptyErr), nil, nil, nil
 		}
+		item.TargetDataTime = latest.UTC().Format(time.RFC3339Nano)
 		log.InfoContextf(ctx, "market_fetch_kline_success batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=catchup elapsed_ms=%d success=true rows=%d latest=%s", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, len(rows), latest.UTC().Format(time.RFC3339Nano))
 		return successResult(item), rows, nil, nil
 	}
@@ -522,6 +523,7 @@ func (e *Executor) executeItem(ctx context.Context, req Request, item domain.Col
 			log.WarnContextf(ctx, "market_fetch_kline_failed batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=realtime elapsed_ms=%d success=false error=%v", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, staleErr)
 			return failureResult(item, domain.ItemOutcomeStorageError, "stale_data", staleErr), nil, nil, nil
 		}
+		item.TargetDataTime = latest.UTC().Format(time.RFC3339Nano)
 		log.InfoContextf(ctx, "market_fetch_kline_success batch_id=%s subject_id=%s symbol=%s dataset_id=%s frequency=%s kind=realtime elapsed_ms=%d success=true rows=%d latest=%s", req.BatchID, item.SubjectID, item.Symbol, item.DatasetID, item.Frequency, elapsedMS, len(rows), latest.UTC().Format(time.RFC3339Nano))
 		return successResult(item), rows, nil, nil
 	case "symbol", "symbols":

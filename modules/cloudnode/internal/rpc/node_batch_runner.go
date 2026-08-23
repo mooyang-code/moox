@@ -18,6 +18,10 @@ const (
 	nodeBatchCompletionTimeout  = 10 * time.Second
 	nodeBatchProviderAttempts   = 3
 	nodeBatchProviderRetryDelay = 500 * time.Millisecond
+	// Each provider attempt gets its own operation deadline. The outer item
+	// deadline leaves enough room for all attempts instead of making the first
+	// timeout consume the context used by the remaining retries.
+	nodeBatchItemTimeout = 16 * time.Minute
 )
 
 // StartNodeBatchRunner recovers interrupted work and starts the SQLite-backed
@@ -109,7 +113,7 @@ func (s *Service) runTakenNodeBatch(ctx context.Context, items []store.NodeBatch
 		item := items[index]
 		operation := operations[item.SpaceID+"\x00"+item.JobID]
 		handlers = append(handlers, func() error {
-			executeCtx, cancel := context.WithTimeout(ctx, scfOperationTimeout)
+			executeCtx, cancel := context.WithTimeout(ctx, nodeBatchItemTimeout)
 			summary, executeErr := s.dispatchNodeBatchItemWithRetry(executeCtx, item, operation)
 			cancel()
 			if ctx.Err() != nil && (errors.Is(executeErr, context.Canceled) || errors.Is(executeErr, context.DeadlineExceeded)) {
@@ -148,16 +152,25 @@ func (s *Service) dispatchNodeBatchItemWithRetry(
 	var summary string
 	var err error
 	for attempt := 1; attempt <= nodeBatchProviderAttempts; attempt++ {
-		summary, err = s.dispatchNodeBatchItem(ctx, item, operation)
+		attemptCtx, cancel := context.WithTimeout(ctx, scfOperationTimeout)
+		summary, err = s.dispatchNodeBatchItem(attemptCtx, item, operation)
+		cancel()
 		if err == nil || !isTransientSCFProviderError(err) || attempt == nodeBatchProviderAttempts {
 			return summary, err
 		}
+		if ctx.Err() != nil {
+			return summary, ctx.Err()
+		}
+		delay := nodeBatchProviderRetryDelay
+		for i := 1; i < attempt; i++ {
+			delay *= 2
+		}
 		log.WarnContextf(
 			ctx,
-			"[CloudNode] transient node batch provider failure; retrying space=%s job=%s item=%s node=%s attempt=%d/%d error=%q",
-			item.SpaceID, item.JobID, item.ItemID, item.NodeID, attempt, nodeBatchProviderAttempts, err,
+			"[CloudNode] transient node batch provider failure; retrying space=%s job=%s item=%s node=%s attempt=%d/%d backoff=%s error=%q",
+			item.SpaceID, item.JobID, item.ItemID, item.NodeID, attempt, nodeBatchProviderAttempts, delay, err,
 		)
-		if !waitNodeBatchPoll(ctx, nodeBatchProviderRetryDelay) {
+		if !waitNodeBatchPoll(ctx, delay) {
 			return summary, ctx.Err()
 		}
 	}
@@ -169,8 +182,31 @@ func isTransientSCFProviderError(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "clienterror.networkerror") ||
-		strings.Contains(message, "requestlimitexceeded")
+	for _, marker := range []string{"validation", "invalid param", "permission denied", "access denied", "not found", "quota", "limitexceeded.function"} {
+		if strings.Contains(message, marker) {
+			return false
+		}
+	}
+	if strings.Contains(message, "clienterror.networkerror") ||
+		strings.Contains(message, "requestlimitexceeded") ||
+		strings.Contains(message, "context deadline exceeded") ||
+		strings.Contains(message, "client.timeout") ||
+		strings.Contains(message, "request canceled") ||
+		strings.Contains(message, "context canceled") ||
+		strings.Contains(message, "connection reset") ||
+		strings.Contains(message, "connection refused") ||
+		strings.Contains(message, "service unavailable") ||
+		strings.Contains(message, "too many requests") ||
+		strings.Contains(message, "status code: 429") ||
+		strings.Contains(message, "status code: 500") ||
+		strings.Contains(message, "status code: 502") ||
+		strings.Contains(message, "status code: 503") ||
+		strings.Contains(message, "status code: 504") {
+		return true
+	}
+	// Provider SDKs use different wording for transport timeouts. Keep the
+	// generic fallback narrow so validation/quota errors are still fail-fast.
+	return strings.Contains(message, " i/o timeout") || strings.HasSuffix(message, "timeout")
 }
 
 func (s *Service) dispatchNodeBatchItem(

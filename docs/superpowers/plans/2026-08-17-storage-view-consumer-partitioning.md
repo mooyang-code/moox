@@ -8,7 +8,7 @@
 
 **约束：** 项目尚未上线，可以删除现有 View 数据、EventBus 历史消息和旧 durable consumer；不做旧 durable、旧配置或旧磁盘索引的兼容迁移。Primary 事实数据默认保留，以便新 View 按 `rebuild_lookback_periods` 回溯构建；若执行全量初始化，可显式一并清空 Primary。
 
-**架构：** 保留一个 `MOOX_STORAGE` Stream，但将 Storage View 从单一 `storage_view_period_v1` 改为显式的消费分区。每个分区拥有独立 durable、Fetch/ACK/worker 限额和状态；分区只接收其配置 Dataset 的四类 View 事件（rows、period、factor-period、sync-point）的精确 subject。K 线分区只包含 `crypto_market/binance_spot_kline_1m`，系统指标分区只包含 `moox_system/moox_service_metrics`，其余当前 View 的 source Dataset 进入显式 `other` 分区。任何 Dataset 必须且只能出现在一个分区，不能使用会与 K 线重叠的 catch-all wildcard。
+**架构：** 保留一个 `MOOX_STORAGE` Stream，但将 Storage View 从单一 `storage_view_period_v1` 改为显式的消费分区。每个分区拥有独立 durable、Fetch/ACK/worker 限额和状态；分区只接收其配置 Dataset 的四类 View 事件（rows、period、factor-period、sync-point）的精确 subject。K 线分区只包含 `crypto_market/binance_spot_kline_1m`，Factor 分区只包含 `crypto_market/binance_spot_kline_1m_factor`，系统指标分区只包含 `moox_system/moox_service_metrics`，其余当前 View 的 source Dataset 进入显式 `misc` 分区。任何 Dataset 必须且只能出现在一个分区；misc 的 wildcard 只能补齐未被显式路由的 Dataset。
 
 **关键不变量：**
 
@@ -34,10 +34,11 @@
 
 - [x] 在 `StorageView` 下新增 `consumer_partitions` 配置。每项至少包含：`id`、`durable`、`space_id`、`dataset_ids`、`fetch_batch`、`max_workers`、`max_ack_pending`、`ack_wait_ms`、`deliver_policy`、`max_retry_attempts`。
 - [x] 为当前环境建立三类分区：
-  - `kline`：`crypto_market/binance_spot_kline_1m`，durable 使用稳定的新名称，例如 `storage_view_kline_v2`。
-  - `system_metrics`：`moox_system/moox_service_metrics`，durable 使用 `storage_view_metrics_v2`。
-  - `other`：从 `examples/setup/default/metadata.yaml` 及实际 View 元数据盘点出的其余 source Dataset，使用 `storage_view_other_v2`；不得用 `>` wildcard 覆盖前两个分区。
-- [x] 为 K 线设置保守的独立资源上限（初始建议 `max_ack_pending=16`、`fetch_batch=4`、`max_workers=2`）；系统指标和 other 使用更小或独立可调的默认值，禁止再依赖单个全局 `eventbus.max_ack_pending`。
+  - `kline`：`crypto_market/binance_spot_kline_1m`，durable 使用 `storage_view_kline`。
+  - `system_metrics`：`moox_system/moox_service_metrics`，durable 使用 `storage_view_metrics`。
+  - `misc`：其余 source Dataset，使用 `storage_view_misc`；可使用按 space 限定的 wildcard，
+    但显式 Kline/Factor 路由优先，不能重复消费这两个 Dataset。
+- [x] 为 K 线和 Factor 设置保守的独立资源上限（初始建议 `max_ack_pending=16`、`fetch_batch=4`、`max_workers=2`）；系统指标和 misc 使用更小或独立可调的默认值，禁止再依赖单个全局 `eventbus.max_ack_pending`。
 - [x] 校验规则：partition_id/durable 唯一、Dataset 不重复、`space_id`/`dataset_ids` 非空、durable 名称符合 JetStream 规则、`fetch_batch <= max_ack_pending`、重试和 ACK 参数合法。
 - [x] Storage View 启动前从 Metadata 读取所有 managed View 的 source Dataset，验证每个 Dataset 恰好映射到一个 partition；缺失、重复时 fail-fast，不启动部分消费者。配置可包含尚未创建的未来 Dataset（例如 Factor 结果），避免默认部署顺序被反向依赖。
 - [x] 迁移默认值时删除 `StorageViewConsumer = storage_view_period_v1` 的业务默认依赖；旧 durable 只保留在一次性 reset 清单中，不再出现在运行时配置、ACL 或 watchdog 中。
@@ -73,7 +74,7 @@
 - [x] 每个分区使用独立 JetStream/NATS 连接；单分区坏订阅触发 reconnect 时不得关闭其他分区的连接。
 - [x] stop 函数必须按相反顺序停止全部分区，任一分区 bind/start 失败都关闭已启动分区并返回错误，不能留下半启动状态。
 - [x] 将单一 `consumerState/consumerBound` 改为 partition 状态集合：记录 durable、filters、bound、pending、ack_pending、last_error、last_delivery；整体 ready 只有全部 required partition bound 才为 true。
-- [x] 让 `consumerBacklog` 接受 View/source Dataset，聚合该 View 涉及的 partition 状态；Kline View 的容量重建只看 Kline partition，不被 metrics/other backlog 阻塞。多 Dataset View 要求所有依赖 partition 可用，并记录具体 blocker。
+- [x] 让 `consumerBacklog` 接受 View/source Dataset，聚合该 View 涉及的 partition 状态；Kline View 的容量重建只看 Kline partition，不被 Factor/metrics/misc backlog 阻塞。多 Dataset View 要求所有依赖 partition 可用，并记录具体 blocker。
 - [x] readiness/metrics 按 partition 输出，至少包含 `partition_id`、durable、bound、pending、ack_pending、oldest_pending_age、last_error；保留总览字段供旧监控读取，但不再把总 pending 作为 Kline 的门禁。
 - [x] 每个 partition 的 dispatcher queue key 仍使用 `space + dataset`，坏消息只能阻塞自己的 Dataset 和所在 partition；记录 partition 标签，避免日志无法定位来源。
 - [x] 测试：部分 partition bind 失败回滚、单 partition 重连、某 partition 停止不影响其他 partition、readyz 细节、聚合 backlog 和 View 依赖映射。
@@ -109,7 +110,7 @@
 - [x] 用共享 topology 常量替换 `storage_view_period_v1` 的 ACL 字符串，storage-eventbus 只允许创建/绑定新的 partition durables及其精确 subject；删除旧 durable 的运行时权限和部署引用。
 - [x] 若部署仍由 Storage 动态创建 consumer，明确 EventBus 只负责 Stream，不在 registry 中隐式创建旧 consumer；启动模板必须注入同一份 partition 配置，避免二进制和 ACL 漂移。
 - [x] 更新 storage profile、watchdog、start/stop/restart/status/healthcheck 中的 consumer 名称和状态判断；watchdog 按全部 partition 的 liveness 处理，不以某一个旧 durable 的 backlog 作为重启依据。
-- [x] 部署合同断言：旧 `storage_view_period_v1` 不再出现；Kline/metrics/other 三个 durable、精确 filters、deliver policy、ACL 权限和配置文件一致。
+- [x] 部署合同断言：旧 `storage_view_period_v1` 不再出现；Kline/Factor/metrics/misc 四个 durable、精确 filters、deliver policy、ACL 权限和配置文件一致。
 - [x] 补充 clean package、local overlay、remote package 三条路径的配置完整性测试。
 
 ## Task 6：增加一次性全量清理与重新初始化命令
@@ -147,7 +148,7 @@
 
 - [x] 使用嵌入 NATS JetStream 验证三个 durable 的 filter、pending 和 ACK 独立性。
 - [x] 注入一个永远失败或延迟很长的 metrics delivery，再发布 Kline rows + period marker + sync point；Kline View 必须继续推进、ACK 和查询到最新数据，metrics 只能在自己的 durable 中积压。
-- [x] 验证 Kline rows 在 marker 前到达同一 consumer，marker 不得越过未完成 rows；同时确认 metrics/other 事件不会被 Kline durable 拉取。
+- [x] 验证 Kline rows 在 marker 前到达同一 consumer，marker 不得越过未完成 rows；同时确认 metrics/Factor/misc 事件不会被 Kline durable 拉取。
 - [x] 重启 EventBus/Storage View，验证每个 durable 独立 rebind，pending 只在所属 partition 恢复，Kline 不重复消费其他 partition。
 - [x] 验证 `rebuild_lookback_periods`：Primary 中存在目标频率的足够历史根数、EventBus 从空开始，View 初建仍覆盖最低根数；不足回溯时构建不激活并暴露明确原因。
 - [ ] 线上验收指标：Kline durable pending/ack_pending 连续下降、Kline View 最新时间追平 Primary/Collector；metrics backlog 增长时 Kline p95 读取/写入延迟不显著恶化；readyz 展示三个 partition 的独立状态（待真实环境执行）。
@@ -159,14 +160,14 @@
 3. 执行 `reset-view-consumers --dry-run`，核对 durable、Stream purge 和 View index 路径；确认后加 `--yes` 执行。
 4. 启动 EventBus，再启动 Storage Primary/Node，最后启动 Storage View；Storage View 必须等待所有 partition bound 后才对外 ready。
 5. 保持 Primary 事实数据，等待或验证每个频率至少配置根数的历史；执行初次 View 构建，检查回溯水位达标后再启动 Collector/Factor。
-6. 按 Task 7 的脚本观察 Kline、metrics、other 三条链路；记录每个 durable 的 pending、ack_pending、last delivery、View latest timestamp 和 rebuild lookback。
+6. 按 Task 7 的脚本观察 Kline、Factor、metrics、misc 四条链路；记录每个 durable 的 pending、ack_pending、last delivery、View latest timestamp 和 rebuild lookback。
 7. 只有隔离验证通过后再启用系统指标高频上报和其他 Dataset；若 Kline 仍停滞，优先查看 Kline partition 自身状态，不再清空无关 Dataset 队列。
 
 ## 完成标准
 
 - [x] 运行时不再依赖或创建 `storage_view_period_v1`；reset CLI 仅保留旧 durable 名称用于一次性清理。
-- [x] Kline、system metrics、other 分区的 filters/durable/资源配额/状态可独立观察。
-- [x] metrics 或 other backlog、坏消息、重建不会阻塞 Kline View 的 rows/marker 消费（本地嵌入 JetStream E2E）。
+- [x] Kline、Factor、system metrics、misc 分区的 filters/durable/资源配额/状态可独立观察。
+- [x] metrics、Factor 或 misc backlog、坏消息、重建不会阻塞 Kline View 的 rows/marker 消费（本地嵌入 JetStream E2E）。
 - [x] 新 View/任何时序重建实际覆盖 `rebuild_lookback_periods` 后才能激活，日志包含目标/实际覆盖和阻塞原因。
 - [x] reset CLI 可 dry-run、需要显式确认、幂等清理旧队列和 View 索引，并能从空队列重新启动。
 - [ ] Storage、EventBus、Admin、部署合同、Go race、CGO View E2E 和真实部署验收全部通过。

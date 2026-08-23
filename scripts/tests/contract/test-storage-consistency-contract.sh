@@ -29,7 +29,7 @@ for subject in "${storage_subjects[@]}"; do
   }
 done
 
-for durable in storage_view_kline_v2 storage_view_metrics_v2 storage_view_other_v2 factor_view_ready_v1; do
+for durable in storage_view_kline storage_view_factor storage_view_metrics storage_view_misc factor_view_ready_v1; do
   grep -Fq "${durable}" "${repo_root}/modules/admin/cmd/cli/eventbus_credentials.go" || {
     echo "storage consistency contract failed: generated EventBus ACL is missing durable ${durable}" >&2
     exit 1

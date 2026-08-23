@@ -59,6 +59,38 @@ func TestWriteFactorPatchClearsDynamicManifestRows(t *testing.T) {
 	require.Empty(t, manifests.keys)
 }
 
+func TestWriteFactorPatchesMergesFactorsIntoOneStorageWrite(t *testing.T) {
+	access := &fakeAccessClient{}
+	manifests := &mapManifest{values: make(map[store.OutputManifestKey][]string)}
+	client := (&Client{access: access}).WithOutputManifests(manifests)
+	at := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
+	makePatch := func(factorID, field string, value float64) FactorPatch {
+		task := &engine.FactorTask{
+			TaskID: "task-" + factorID, BindingID: "binding-" + factorID,
+			SpaceID: "crypto", ResultDatasetID: "result", SubjectID: "BTC", Freq: "1m", PeriodTime: at.Unix(), TriggerEventID: "ready-1",
+			Factor: engine.FactorSpec{FactorID: factorID, SourceHash: "hash-" + factorID, Outputs: []string{field}},
+		}
+		return FactorPatch{
+			Task: task,
+			Result: &engine.FactorResult{Rows: []engine.FactorResultRow{{
+				DataTime: at,
+				Values:   map[string]any{field: value},
+			}}},
+		}
+	}
+	counts, err := client.WriteFactorPatches(context.Background(), []FactorPatch{
+		makePatch("bias", "value", 1),
+		makePatch("sma", "value", 2),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1}, counts)
+	require.Len(t, access.writeReqs, 1)
+	require.Len(t, access.writeReqs[0].GetRows(), 1)
+	require.Len(t, access.writeReqs[0].GetRows()[0].GetFields(), 2)
+	require.Equal(t, "bias", access.writeReqs[0].GetRows()[0].GetAttributes()["factor.id"].GetStringValue())
+	require.Len(t, manifests.values, 2)
+}
+
 func TestDeterministicWriteIDIgnoresComputedAtButNotResultValues(t *testing.T) {
 	at := time.Date(2026, 8, 9, 1, 0, 0, 0, time.UTC)
 	task := &engine.FactorTask{BindingID: "binding", SpaceID: "crypto", ResultDatasetID: "result", SubjectID: "BTC", Freq: "1m", PeriodTime: at.Unix(), TriggerEventID: "ready-1", TriggeredAt: at, Factor: engine.FactorSpec{FactorID: "factor", SourceHash: "hash", Outputs: []string{"value"}}}
@@ -83,5 +115,18 @@ func (m *memoryManifest) Get(context.Context, store.OutputManifestKey) ([]string
 }
 func (m *memoryManifest) Replace(_ context.Context, _ store.OutputManifestKey, keys []string) error {
 	m.keys = append([]string(nil), keys...)
+	return nil
+}
+
+type mapManifest struct {
+	values map[store.OutputManifestKey][]string
+}
+
+func (m *mapManifest) Get(_ context.Context, key store.OutputManifestKey) ([]string, error) {
+	return append([]string(nil), m.values[key]...), nil
+}
+
+func (m *mapManifest) Replace(_ context.Context, key store.OutputManifestKey, keys []string) error {
+	m.values[key] = append([]string(nil), keys...)
 	return nil
 }

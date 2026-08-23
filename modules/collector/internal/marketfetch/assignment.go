@@ -82,7 +82,7 @@ func BuildAssignments(groups []TaskGroup, nodes []scfinvoker.Node, maxSubjects i
 		needed += (len(group.Subjects) + maxSubjects - 1) / maxSubjects
 	}
 	if needed > len(timerNodes) {
-		return nil, fmt.Errorf("timer node capacity is insufficient: need %d, have %d", needed, len(timerNodes))
+		return nil, fmt.Errorf("timer assignment capacity insufficient: %d Timer nodes are required for the configured dataset/frequency shards, but only %d are available; increase the Timer SCF fleet", needed, len(timerNodes))
 	}
 	assignments := make([]NodeAssignment, 0, len(timerNodes))
 	nodeIndex := 0

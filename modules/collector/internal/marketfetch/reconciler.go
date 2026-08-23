@@ -46,18 +46,19 @@ type dnsSnapshotter interface {
 // Reconciler is the Collector control-plane loop for static Timer-triggered
 // functions. It never invokes a function; it only submits desired config.
 type Reconciler struct {
-	Rules       ruleSource
-	Symbols     datasetSource
-	Nodes       runtimeConfigClient
-	Instances   *store.TaskInstanceRepository
-	DNS         dnsSnapshotter
-	Metrics     *Metrics
-	MaxSubjects int
-	mu          sync.Mutex
-	reconcileMu sync.Mutex
-	pending     map[string]string
-	pendingAt   map[string]time.Time
-	pendingJob  string
+	Rules        ruleSource
+	Symbols      datasetSource
+	Nodes        runtimeConfigClient
+	Instances    *store.TaskInstanceRepository
+	DNS          dnsSnapshotter
+	Metrics      *Metrics
+	MaxSubjects  int
+	mu           sync.Mutex
+	reconcileMu  sync.Mutex
+	pending      map[string]string
+	pendingAt    map[string]time.Time
+	pendingJob   string
+	pendingSince time.Time
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
@@ -73,23 +74,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 	// snapshots and overwrite pendingJob.
 	r.reconcileMu.Lock()
 	defer r.reconcileMu.Unlock()
-	if pendingJob := r.pendingRuntimeJob(); pendingJob != "" {
+	if pendingJob, pendingSince := r.pendingRuntimeJobState(); pendingJob != "" {
 		status, statusErr := r.Nodes.GetRuntimeConfigBatchStatus(ctx, spaceID, pendingJob)
 		if statusErr != nil {
 			return r.fail(spaceID, "cloudnode", fmt.Errorf("get timer runtime config job %s: %w", pendingJob, statusErr))
 		}
 		switch status.GetStatus() {
 		case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING, cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING:
+			r.observeAssignmentPending(spaceID, true, pendingSince)
 			log.InfoContextf(ctx, "collector_scf_timer_reconciliation_pending space=%s job=%s status=%s", spaceID, pendingJob, status.GetStatus().String())
 			return nil
 		case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED:
 			r.clearPendingRuntimeJob(pendingJob)
+			r.observeAssignmentPending(spaceID, false, time.Time{})
 			return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s failed", pendingJob))
 		case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_PARTIAL:
 			r.clearPendingRuntimeJob(pendingJob)
+			r.observeAssignmentPending(spaceID, false, time.Time{})
 			return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s partially failed", pendingJob))
 		case cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS:
 			r.clearPendingRuntimeJob(pendingJob)
+			r.observeAssignmentPending(spaceID, false, time.Time{})
 		default:
 			return r.fail(spaceID, "cloudnode", fmt.Errorf("timer runtime config job %s returned unknown status %s", pendingJob, status.GetStatus().String()))
 		}
@@ -124,10 +129,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		return r.fail(spaceID, "environment", err)
 	}
 	r.observeAssignmentRequirements(spaceID, groups)
+	// Publish the fleet-level demand before building assignments. If the
+	// required shard count exceeds the visible Timer fleet, BuildAssignments
+	// will fail below, but Monitor can still report the exact shortfall instead
+	// of waiting for a generic coordination error.
+	r.observeTimerCapacity(spaceID, nodes, groups, nil)
 	assignments, err := BuildAssignments(groups, nodes, r.maxSubjects())
 	if err != nil {
 		return r.fail(spaceID, "capacity", err)
 	}
+	r.observeTimerCapacity(spaceID, nodes, groups, assignments)
 	dnsAvailable := len(dns) > 0
 	patches := make([]*cloudnodepb.NodeRuntimeConfigPatch, 0, len(assignments))
 	pendingFingerprints := make(map[string]string, len(assignments))
@@ -194,8 +205,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, spaceID string) error {
 		r.pendingAt[nodeID] = time.Now().UTC()
 	}
 	r.pendingJob = jobID
+	r.pendingSince = time.Now().UTC()
+	pendingSince := r.pendingSince
 	r.mu.Unlock()
 	log.InfoContextf(ctx, "collector_scf_timer_reconciled space=%s nodes=%d patches=%d job=%s", spaceID, len(nodes), len(patches), jobID)
+	r.observeAssignmentPending(spaceID, true, pendingSince)
 	r.observeAssignmentDesiredMetrics(spaceID, groups, assignments)
 	return nil
 }
@@ -343,6 +357,23 @@ func (r *Reconciler) observeAssignmentRequirements(spaceID string, groups []Task
 	}
 }
 
+func (r *Reconciler) observeTimerCapacity(spaceID string, nodes []scfinvoker.Node, groups []TaskGroup, assignments []NodeAssignment) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	required := 0
+	for _, scope := range assignmentMetricScopes(groups, nil) {
+		required += scope.Required
+	}
+	active := 0
+	for _, assignment := range assignments {
+		if assignment.Enabled && len(assignment.Subjects) > 0 {
+			active++
+		}
+	}
+	r.Metrics.ObserveTimerCapacity(spaceID, len(nodes), required, active)
+}
+
 func (r *Reconciler) observeTimerStates(spaceID string, nodes []scfinvoker.Node) {
 	if r == nil || r.Metrics == nil {
 		return
@@ -414,10 +445,10 @@ func currentDNSHash(nodeID string, nodes []scfinvoker.Node) string {
 	return ""
 }
 
-func (r *Reconciler) pendingRuntimeJob() string {
+func (r *Reconciler) pendingRuntimeJobState() (string, time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.pendingJob
+	return r.pendingJob, r.pendingSince
 }
 
 func (r *Reconciler) fail(spaceID, reason string, err error) error {
@@ -434,8 +465,16 @@ func (r *Reconciler) clearPendingRuntimeJob(jobID string) {
 		return
 	}
 	r.pendingJob = ""
+	r.pendingSince = time.Time{}
 	r.pending = make(map[string]string)
 	r.pendingAt = make(map[string]time.Time)
+}
+
+func (r *Reconciler) observeAssignmentPending(spaceID string, pending bool, since time.Time) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	r.Metrics.ObserveAssignmentPending(spaceID, pending, since)
 }
 
 func (r *Reconciler) observeAssignmentMetrics(spaceID string, groups []TaskGroup, assignments []NodeAssignment, reconciledAt int64) {

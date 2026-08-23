@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/eventmapper"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
@@ -25,6 +26,41 @@ func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventM
 		return eventconsumer.Permanent(err)
 	}
 	return s.applyDatasetEvent(ctx, message.GetSpaceId(), message.GetSubjectId(), rowEvent.GetRows())
+}
+
+// HandleDatasetRowsBatch merges contiguous rows events for one Dataset before
+// entering the per-index write gate. Markers are never included in this batch,
+// so the Dataset ordering fence remains unchanged while DuckDB receives one
+// larger transaction for multiple subjects.
+func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsumer.DatasetRowsBatchItem) error {
+	if len(items) == 0 {
+		return eventconsumer.Permanent(errors.New("storage dataset rows batch is empty"))
+	}
+	spaceID, datasetID := "", ""
+	rows := make([]*pb.RowFieldUpsert, 0)
+	for index, item := range items {
+		if item.Message == nil || item.Payload == nil {
+			return eventconsumer.Permanent(fmt.Errorf("storage dataset rows batch item %d is empty", index))
+		}
+		if index == 0 {
+			spaceID, datasetID = item.Message.GetSpaceId(), item.Message.GetSubjectId()
+		}
+		if item.Message.GetSpaceId() != spaceID || item.Message.GetSubjectId() != datasetID {
+			return eventconsumer.Permanent(errors.New("storage dataset rows batch crosses Dataset queues"))
+		}
+		if item.Payload.GetSpaceId() != spaceID || item.Payload.GetDatasetId() != datasetID {
+			return eventconsumer.Permanent(errors.New("storage dataset rows batch payload identity mismatch"))
+		}
+		rowEvent, err := eventmapper.ToStorageRows(item.Payload)
+		if err != nil {
+			return eventconsumer.Permanent(err)
+		}
+		rows = append(rows, rowEvent.GetRows()...)
+	}
+	if len(rows) == 0 {
+		return eventconsumer.Permanent(errors.New("storage dataset rows batch has no rows"))
+	}
+	return s.applyDatasetEvent(ctx, spaceID, datasetID, rows)
 }
 
 func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
@@ -55,6 +91,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		return nil
 	}
 	for viewKey := range viewKeys {
+		activeWatermarkIndexes := make(map[string]struct{}, 1)
 		s.mu.RLock()
 		runtime := s.views[viewKey]
 		s.mu.RUnlock()
@@ -100,6 +137,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			// replacement is READY and activation can make it authoritative.
 			if err := s.applyEventToIndex(ctx, activeID, datasetID, rows); err == nil {
 				activeReady, activeErr = true, nil
+				activeWatermarkIndexes[activeID] = struct{}{}
 			} else if nextID != "" {
 				log.Printf("storage view active index failed while replacement is ready; routing to replacement space=%s view=%s index=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, err)
 				activeFailure = err
@@ -130,6 +168,8 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 				// pending for activation.
 				activeFailure = err
 				activeReady = false
+			} else {
+				activeWatermarkIndexes[activeID] = struct{}{}
 			}
 		} else if activeErr == nil {
 			// A stale active pointer can survive a crash while the replacement
@@ -208,11 +248,15 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			}
 		}
 		runtime.mu.Unlock()
+		for indexID := range activeWatermarkIndexes {
+			s.observeActiveViewWatermark(indexID, rows)
+		}
 	}
 	for _, id := range standalone {
 		if err := s.applyEventToIndex(ctx, id, datasetID, rows); err != nil {
 			return err
 		}
+		s.observeActiveViewWatermark(id, rows)
 	}
 	return nil
 }
@@ -289,7 +333,47 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if len(complete) == 0 {
 		return nil
 	}
-	return s.writeIndex(ctx, id, engine, viewindex.ViewIndexWriteBatch{RowWrites: complete, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite})
+	if err := s.writeIndex(ctx, id, engine, viewindex.ViewIndexWriteBatch{RowWrites: complete, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) observeActiveViewWatermark(indexID string, rows []*pb.RowFieldUpsert) {
+	if s == nil || s.metrics == nil || indexID == "" || len(rows) == 0 {
+		return
+	}
+	s.mu.RLock()
+	viewKey, ok := s.indexView[indexID]
+	runtime := s.views[viewKey]
+	view := s.catalogViews[viewKey]
+	s.mu.RUnlock()
+	if !ok || runtime == nil || view == nil {
+		return
+	}
+	runtime.mu.Lock()
+	isActive := runtime.active == indexID
+	runtime.mu.Unlock()
+	if !isActive {
+		return
+	}
+	frequency := viewFrequencyValue(view)
+	if frequency == "" {
+		return
+	}
+	var watermark time.Time
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, row.GetKey().GetTimeSeries().GetDataTime())
+		if err == nil && at.After(watermark) {
+			watermark = at
+		}
+	}
+	if !watermark.IsZero() {
+		s.metrics.ObserveViewOutputWatermark(view.GetSpaceId(), view.GetViewId(), frequency, watermark)
+	}
 }
 
 func partitionCompleteWrites(schema viewindex.ViewIndexSchema, writes []viewindex.RowWrite) (complete, incomplete []viewindex.RowWrite) {

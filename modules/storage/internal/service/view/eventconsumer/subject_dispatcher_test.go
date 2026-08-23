@@ -169,6 +169,32 @@ func TestDatasetQueueKeySerializesRowsAndMarkersForOneDataset(t *testing.T) {
 	}
 }
 
+func TestSubjectDispatcherNextBatchStopsBeforeMarker(t *testing.T) {
+	d := &subjectDispatcher{
+		batch:         func(context.Context, []*jetstream.Delivery, []*deliveryHeartbeat) error { return nil },
+		batchSize:     8,
+		batchEligible: func(delivery *jetstream.Delivery) bool { return delivery != nil && delivery.Subject == "rows" },
+		queues:        make(map[string]*subjectQueue),
+	}
+	queue := &subjectQueue{subject: "space/dataset", deliveries: []*queuedDelivery{
+		{delivery: &jetstream.Delivery{Subject: "rows", RawMessageID: "row-1"}},
+		{delivery: &jetstream.Delivery{Subject: "rows", RawMessageID: "row-2"}},
+		{delivery: &jetstream.Delivery{Subject: "marker", RawMessageID: "marker-1"}},
+		{delivery: &jetstream.Delivery{Subject: "rows", RawMessageID: "row-3"}},
+	}}
+	first, ok := d.nextBatch(queue)
+	if !ok || len(first) != 2 {
+		t.Fatalf("first batch length = %d, ok=%v; want 2", len(first), ok)
+	}
+	if got := first[0].delivery.RawMessageID + "," + first[1].delivery.RawMessageID; got != "row-1,row-2" {
+		t.Fatalf("first batch = %s", got)
+	}
+	second, ok := d.nextBatch(queue)
+	if !ok || len(second) != 1 || second[0].delivery.RawMessageID != "marker-1" {
+		t.Fatalf("second item = %#v, ok=%v; want marker", second, ok)
+	}
+}
+
 func TestSubjectDispatcherBackpressuresAtMaxPending(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

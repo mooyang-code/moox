@@ -121,6 +121,22 @@ func TestBrowserHTTPSProbeKeepsPublicIdentityButConnectsLocally(t *testing.T) {
 	require.NotContains(t, command, "-k")
 }
 
+func TestEventBusProbeRequiresPersistedPublicTLSListener(t *testing.T) {
+	command := probeCommandForOptions(EventBusReady, Options{EventBusPublicAddress: "eventbus.example.com", EventBusPort: 4222, EventBusTLSEnabled: true})
+	require.Contains(t, command, `config/runtime.env`)
+	require.Contains(t, command, `MOOX_EVENTBUS_ENABLE_TLS`)
+	require.Contains(t, command, `http://127.0.0.1:11419/`)
+	require.Contains(t, command, `MOOX_EVENTBUS_HOST`)
+	require.Contains(t, command, `= 0.0.0.0`)
+}
+
+func TestEventBusCommandEnvRejectsUnroutableAddresses(t *testing.T) {
+	for _, address := range []string{"localhost", "LOCALHOST", "localhost.", "127.0.0.1", "0.0.0.0", "::"} {
+		_, err := eventBusCommandEnv(nil, Options{EventBusPublicAddress: address, EventBusPort: 4222, EventBusTLSEnabled: true})
+		require.EqualError(t, err, "control_deploy_invalid", address)
+	}
+}
+
 func TestControlPublicTLSDoesNotFetchPrivateCA(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "control.tar.gz")
 	require.NoError(t, os.WriteFile(archive, []byte("package"), 0o600))

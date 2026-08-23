@@ -20,6 +20,12 @@ import (
 const (
 	manifestName = "custom.toml"
 	maxFileSize  = 1 << 20
+	// The cloud disk mounted at /data is the canonical runtime volume. Keep all
+	// generated packages, state, logs and credentials below this root so a
+	// host's small system disk is not consumed by MooX.
+	DefaultDeployRoot  = "/data/moox"
+	DefaultControlRoot = "/data/moox/prod"
+	DefaultStorageRoot = "/data/moox/storage"
 	// DefaultStorageViewRebuildLookbackPeriods is the number of completed bars
 	// every View rebuild replays when no explicit manifest value is supplied.
 	DefaultStorageViewRebuildLookbackPeriods uint64 = 1000
@@ -32,7 +38,40 @@ const (
 	// SCFFinalResponseReserveMilliseconds keeps the SCF runtime enough time to
 	// serialize and return its response after best-effort CLS logging.
 	SCFFinalResponseReserveMilliseconds = 500
+	// DefaultCryptoMarketTimerFunctionCount is the baseline Timer fleet size
+	// for the built-in crypto market Space.
+	DefaultCryptoMarketTimerFunctionCount = 60
+	// DefaultStockCNMarketTimerFunctionCount is the baseline Timer fleet size
+	// for the mainland China A-share Space. Each region is capped at 50
+	// functions, so this default needs at least six enabled regions.
+	DefaultStockCNMarketTimerFunctionCount = 300
 )
+
+// Paths controls where setup-cli installs the control and Storage packages on
+// the target host. All paths are absolute and must remain below DeployRoot.
+// The section is optional: omitted values resolve to the cloud-disk defaults
+// above, which keeps older custom.toml files deterministic.
+type Paths struct {
+	DeployRoot  string `toml:"deploy_root"`
+	ControlRoot string `toml:"control_root"`
+	StorageRoot string `toml:"storage_root"`
+}
+
+func (p Paths) Resolved() Paths {
+	if strings.TrimSpace(p.DeployRoot) == "" {
+		p.DeployRoot = DefaultDeployRoot
+	}
+	if strings.TrimSpace(p.ControlRoot) == "" {
+		p.ControlRoot = filepath.Join(p.DeployRoot, "prod")
+	}
+	if strings.TrimSpace(p.StorageRoot) == "" {
+		p.StorageRoot = filepath.Join(p.DeployRoot, "storage")
+	}
+	p.DeployRoot = filepath.Clean(strings.TrimSpace(p.DeployRoot))
+	p.ControlRoot = filepath.Clean(strings.TrimSpace(p.ControlRoot))
+	p.StorageRoot = filepath.Clean(strings.TrimSpace(p.StorageRoot))
+	return p
+}
 
 type Admin struct {
 	Username string `toml:"username"`
@@ -132,6 +171,11 @@ type Host struct {
 	Port     int    `toml:"port"`
 	Username string `toml:"username"`
 	Password string `toml:"password"`
+	// TLSMode controls the certificate issuer for the control-plane HTTPS
+	// edge. "internal" is useful when the endpoint is a raw IP that cannot
+	// obtain a public ACME certificate; empty/"auto" keeps the existing
+	// host-based selection.
+	TLSMode string `toml:"tls_mode"`
 }
 
 type SCFFetcherRegion struct {
@@ -189,10 +233,14 @@ type SCFFetcherSpace struct {
 	PackageName      string `toml:"package_name"`
 	// CLSCloudAccountID owns the single regional CLS topic used by every
 	// short-lived collector function in this space, regardless of its SCF region.
-	CLSCloudAccountID       string             `toml:"cls_cloud_account_id"`
-	Namespace               string             `toml:"namespace"`
-	Runtime                 string             `toml:"runtime"`
-	FunctionPrefix          string             `toml:"function_prefix"`
+	CLSCloudAccountID string `toml:"cls_cloud_account_id"`
+	Namespace         string `toml:"namespace"`
+	Runtime           string `toml:"runtime"`
+	FunctionPrefix    string `toml:"function_prefix"`
+	// TimerFunctionCount is the total Timer fleet size for this Space. When it
+	// is zero and all enabled regional function_count values are zero, the
+	// built-in Space default is used and counts are distributed deterministically.
+	TimerFunctionCount      int                `toml:"timer_function_count"`
 	StorageGatewayNodeID    string             `toml:"storage_gateway_node_id"`
 	StorageRPCGatewayTarget string             `toml:"storage_rpc_gateway_target"`
 	MemorySize              int                `toml:"memory_size"`
@@ -212,10 +260,25 @@ type SCFFetcherSpace struct {
 	Regions                 []SCFFetcherRegion `toml:"regions"`
 }
 
+// DefaultTimerFunctionCount returns the built-in Timer capacity for a known
+// Space. Unknown Spaces must provide regional function_count values or an
+// explicit timer_function_count.
+func DefaultTimerFunctionCount(spaceID string) int {
+	switch strings.ToLower(strings.TrimSpace(spaceID)) {
+	case "crypto_market":
+		return DefaultCryptoMarketTimerFunctionCount
+	case "stock_cn":
+		return DefaultStockCNMarketTimerFunctionCount
+	default:
+		return 0
+	}
+}
+
 type Manifest struct {
 	Admin        Admin        `toml:"admin"`
 	TencentCloud TencentCloud `toml:"tencent_cloud"`
 	EventBus     EventBus     `toml:"eventbus"`
+	Paths        Paths        `toml:"paths"`
 	DNSResolver  DNSResolver  `toml:"dns_resolver"`
 	StorageView  StorageView  `toml:"storage_view"`
 	Monitoring   Monitoring   `toml:"monitoring"`
@@ -339,6 +402,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("tencent_cloud", "region") {
 		out.TencentCloud.Region = "ap-guangzhou"
 	}
+	out.Paths = out.Paths.Resolved()
 	if !md.IsDefined("factors", "enabled") {
 		out.Factors.Enabled = false
 	}
@@ -369,6 +433,10 @@ func decodeStrict(raw []byte, out *Manifest) error {
 }
 
 func validate(manifest *Manifest) error {
+	manifest.Paths = manifest.Paths.Resolved()
+	if err := validatePaths(&manifest.Paths); err != nil {
+		return err
+	}
 	manifest.Admin.Username = strings.TrimSpace(manifest.Admin.Username)
 	if manifest.Admin.Username == "" {
 		return fmt.Errorf("config_invalid: admin.username is required")
@@ -434,6 +502,35 @@ func validate(manifest *Manifest) error {
 	}
 	if err := validateDNSResolver(&manifest.DNSResolver, manifest); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validatePaths(paths *Paths) error {
+	if paths == nil {
+		return fmt.Errorf("config_invalid: paths is required")
+	}
+	paths.DeployRoot = filepath.Clean(strings.TrimSpace(paths.DeployRoot))
+	paths.ControlRoot = filepath.Clean(strings.TrimSpace(paths.ControlRoot))
+	paths.StorageRoot = filepath.Clean(strings.TrimSpace(paths.StorageRoot))
+	for name, value := range map[string]string{
+		"deploy_root": paths.DeployRoot, "control_root": paths.ControlRoot, "storage_root": paths.StorageRoot,
+	} {
+		if value == "" || !filepath.IsAbs(value) || value == "/" || strings.ContainsAny(value, "\x00\r\n") {
+			return fmt.Errorf("config_invalid: paths.%s must be a non-root absolute path", name)
+		}
+		for _, r := range value {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("/._-", r) {
+				continue
+			}
+			return fmt.Errorf("config_invalid: paths.%s contains an unsupported character", name)
+		}
+	}
+	base := paths.DeployRoot + string(filepath.Separator)
+	for name, value := range map[string]string{"control_root": paths.ControlRoot, "storage_root": paths.StorageRoot} {
+		if value != paths.DeployRoot && !strings.HasPrefix(value, base) {
+			return fmt.Errorf("config_invalid: paths.%s must stay under paths.deploy_root", name)
+		}
 	}
 	return nil
 }
@@ -753,8 +850,8 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	enabledRegions := 0
 	for i := range cfg.Regions {
 		region := strings.TrimSpace(cfg.Regions[i].Region)
-		if region == "" || cfg.Regions[i].FunctionCount <= 0 || cfg.Regions[i].FunctionCount > 50 || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
-			return fmt.Errorf("config_invalid: %s.regions[%d] region, cloud_account_id, and function_count 1..50 are required for enabled regions", path, i)
+		if region == "" || cfg.Regions[i].FunctionCount < 0 || cfg.Regions[i].FunctionCount > 50 || (cfg.Regions[i].Enabled && strings.TrimSpace(cfg.Regions[i].CloudAccountID) == "") {
+			return fmt.Errorf("config_invalid: %s.regions[%d] region, cloud_account_id, and function_count 0..50 are required (0 enables automatic allocation)", path, i)
 		}
 		if !supportedSCFRegion(region) {
 			return fmt.Errorf("config_invalid: %s.regions[%d] region %q is not supported", path, i, region)
@@ -789,6 +886,9 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 	if enabledRegions == 0 {
 		return fmt.Errorf("config_invalid: %s.regions must contain at least one enabled region", path)
 	}
+	if err := resolveSCFTimerFunctionCounts(cfg, path); err != nil {
+		return err
+	}
 	if cfg.CLSCloudAccountID == "" {
 		// Keep the central log sink deterministic for the standard MooX fleet
 		// while allowing a manifest to name a different dedicated log account.
@@ -807,6 +907,75 @@ func validateSCFFetcherSpace(cfg *SCFFetcherSpace, path string) error {
 			}
 		}
 	}
+	return nil
+}
+
+func resolveSCFTimerFunctionCounts(cfg *SCFFetcherSpace, path string) error {
+	if cfg == nil {
+		return fmt.Errorf("config_invalid: %s is required", path)
+	}
+	explicitTotal := 0
+	autoRegions := make([]int, 0)
+	enabledRegions := make([]int, 0)
+	for index, region := range cfg.Regions {
+		if !region.Enabled {
+			continue
+		}
+		enabledRegions = append(enabledRegions, index)
+		if region.FunctionCount == 0 {
+			autoRegions = append(autoRegions, index)
+			continue
+		}
+		explicitTotal += region.FunctionCount
+	}
+	desired := cfg.TimerFunctionCount
+	if desired <= 0 {
+		if explicitTotal > 0 {
+			// Preserve older manifests whose regional counts were already the
+			// source of truth.
+			desired = explicitTotal
+		} else {
+			desired = DefaultTimerFunctionCount(cfg.SpaceID)
+		}
+	}
+	if desired <= 0 {
+		return fmt.Errorf("config_invalid: %s.timer_function_count must be positive for Space %q", path, cfg.SpaceID)
+	}
+	if explicitTotal > desired {
+		return fmt.Errorf("config_invalid: %s regional function_count total %d exceeds timer_function_count %d", path, explicitTotal, desired)
+	}
+	remaining := desired - explicitTotal
+	if len(autoRegions) == 0 {
+		if remaining != 0 {
+			return fmt.Errorf("config_invalid: %s regional function_count total %d must equal timer_function_count %d", path, explicitTotal, desired)
+		}
+	} else {
+		if remaining < len(autoRegions) {
+			return fmt.Errorf("config_invalid: %s timer_function_count %d cannot assign at least one function to each automatic region", path, desired)
+		}
+		if remaining > len(autoRegions)*50 {
+			return fmt.Errorf("config_invalid: %s timer_function_count %d exceeds the 50-function-per-region limit for %d automatic regions", path, desired, len(autoRegions))
+		}
+		base, extra := remaining/len(autoRegions), remaining%len(autoRegions)
+		for order, index := range autoRegions {
+			cfg.Regions[index].FunctionCount = base
+			if order < extra {
+				cfg.Regions[index].FunctionCount++
+			}
+		}
+	}
+	actualTotal := 0
+	for _, index := range enabledRegions {
+		count := cfg.Regions[index].FunctionCount
+		if count < 1 || count > 50 {
+			return fmt.Errorf("config_invalid: %s.regions[%d] automatic function_count resolved to %d; each enabled region must receive 1..50 functions", path, index, count)
+		}
+		actualTotal += count
+	}
+	if actualTotal != desired {
+		return fmt.Errorf("config_invalid: %s resolved regional function_count total %d does not equal timer_function_count %d", path, actualTotal, desired)
+	}
+	cfg.TimerFunctionCount = desired
 	return nil
 }
 
@@ -896,6 +1065,10 @@ func validateHost(path string, host *Host, names, addresses map[string]struct{},
 	host.Name = strings.TrimSpace(host.Name)
 	host.Address = strings.TrimSpace(host.Address)
 	host.Username = strings.TrimSpace(host.Username)
+	host.TLSMode = strings.ToLower(strings.TrimSpace(host.TLSMode))
+	if host.TLSMode != "" && host.TLSMode != "auto" && host.TLSMode != "public" && host.TLSMode != "internal" {
+		return fmt.Errorf("config_invalid: %s.tls_mode must be auto, public, or internal", path)
+	}
 	if host.Name == "" {
 		return fmt.Errorf("config_invalid: %s.name is required", path)
 	}

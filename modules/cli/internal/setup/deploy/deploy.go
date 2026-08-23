@@ -28,7 +28,13 @@ import (
 )
 
 type Options struct {
-	RepositoryRoot         string
+	RepositoryRoot string
+	// DeployRoot is the shared parent on the target cloud disk. ControlRoot
+	// and StorageRoot are the independently managed package directories below
+	// it; empty values resolve to the canonical /data/moox layout.
+	DeployRoot             string
+	ControlRoot            string
+	StorageRoot            string
 	PublicHost             string
 	NodeID                 string
 	BrowserPort            int
@@ -54,6 +60,11 @@ type Options struct {
 	GatewayServiceKey      string
 	GatewayCABundle        []byte
 	TLSMode                TLSMode
+	// InstallLocalCA makes an internal-TLS control deployment verify that the
+	// browser machine trusts the Caddy root certificate. This is intentionally
+	// opt-in at the deployment package boundary so tests and non-browser
+	// package consumers do not unexpectedly mutate the operator trust store.
+	InstallLocalCA bool
 }
 
 type TLSMode string
@@ -80,8 +91,25 @@ func resolveTLSMode(mode TLSMode, publicHost string) TLSMode {
 	return TLSModePublic
 }
 
+// ResolveTLSMode exposes the same deterministic host-based selection used by
+// the deployment and readiness paths to setup commands that need to choose the
+// matching CA verification workflow.
+func ResolveTLSMode(mode TLSMode, publicHost string) TLSMode {
+	return resolveTLSMode(mode, publicHost)
+}
+
 func UsesPublicTLS(publicHost string) bool {
 	return resolveTLSMode("", publicHost) == TLSModePublic
+}
+
+func UsesPublicTLSMode(mode TLSMode, publicHost string) bool {
+	return resolveTLSMode(mode, publicHost) == TLSModePublic
+}
+
+// RequiresLocalCATrust reports whether browsers need the MooX Caddy root CA
+// installed in the operator's trust store for the selected endpoint.
+func RequiresLocalCATrust(mode TLSMode, publicHost string) bool {
+	return resolveTLSMode(mode, publicHost) == TLSModeInternal
 }
 
 type Packager interface {
@@ -108,6 +136,35 @@ type Probe interface {
 	Wait(context.Context, setupssh.Client, ReadinessStage, Options) error
 }
 
+func normalizeDeployPaths(opts *Options) error {
+	if opts == nil {
+		return fmt.Errorf("paths_missing")
+	}
+	paths := (setupconfig.Paths{
+		DeployRoot: opts.DeployRoot, ControlRoot: opts.ControlRoot, StorageRoot: opts.StorageRoot,
+	}).Resolved()
+	for _, value := range []string{paths.DeployRoot, paths.ControlRoot, paths.StorageRoot} {
+		if value == "/" || !filepath.IsAbs(value) || strings.ContainsAny(value, "\x00\r\n") {
+			return fmt.Errorf("paths_invalid")
+		}
+		for _, r := range value {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("/._-", r) {
+				continue
+			}
+			return fmt.Errorf("paths_invalid")
+		}
+	}
+	base := paths.DeployRoot + string(filepath.Separator)
+	if paths.ControlRoot != paths.DeployRoot && !strings.HasPrefix(paths.ControlRoot, base) {
+		return fmt.Errorf("paths_invalid")
+	}
+	if paths.StorageRoot != paths.DeployRoot && !strings.HasPrefix(paths.StorageRoot, base) {
+		return fmt.Errorf("paths_invalid")
+	}
+	opts.DeployRoot, opts.ControlRoot, opts.StorageRoot = paths.DeployRoot, paths.ControlRoot, paths.StorageRoot
+	return nil
+}
+
 // Storage deploys Access and the unified View runtime as one independently managed unit.
 // It uses a separate install directory so selecting the control host cannot
 // replace the Admin/Gateway/Web deployment.
@@ -120,6 +177,9 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	if deps.Probe == nil {
 		deps.Probe = CommandProbe{}
+	}
+	if err := normalizeDeployPaths(&opts); err != nil {
+		return fmt.Errorf("storage_deploy_invalid")
 	}
 	if err := detectPlatform(ctx, transport, &opts); err != nil {
 		return fmt.Errorf("storage_platform_unsupported")
@@ -166,7 +226,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		viewReset = "1"
 	}
 	if _, err := transport.Run(ctx, []string{
-		"sh", "-lc", installStorageScript, "moox-install-storage", reset, viewReset, controlGateway, activationToken, remoteArchive,
+		"sh", "-lc", installStorageScript, "moox-install-storage", opts.StorageRoot, opts.ControlRoot, reset, viewReset, controlGateway, activationToken, remoteArchive,
 	}, nil); err != nil {
 		return fmt.Errorf("storage_install_failed")
 	}
@@ -175,7 +235,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		if returnErr != nil && installed {
 			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), storageRollbackTimeout)
 			defer cancel()
-			if _, rollbackErr := transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript, "moox-rollback-storage", activationToken}, nil); rollbackErr != nil {
+			if _, rollbackErr := transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackStorageScript, "moox-rollback-storage", activationToken, opts.StorageRoot, opts.DeployRoot}, nil); rollbackErr != nil {
 				returnErr = fmt.Errorf("%v; storage_rollback_failed", returnErr)
 			}
 		}
@@ -191,7 +251,7 @@ func Storage(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		}
 	}
 	installed = false
-	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeStorageScript, "moox-finalize-storage", activationToken}, nil)
+	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeStorageScript, "moox-finalize-storage", activationToken, opts.StorageRoot, opts.DeployRoot}, nil)
 	return nil
 }
 
@@ -229,6 +289,9 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	if deps.CAStore == nil {
 		deps.CAStore = FileCAStore{}
+	}
+	if err := normalizeDeployPaths(&opts); err != nil {
+		return fmt.Errorf("control_deploy_invalid")
 	}
 	if err := detectPlatform(ctx, transport, &opts); err != nil {
 		return fmt.Errorf("control_platform_unsupported")
@@ -270,7 +333,7 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 	}
 	installResult, err := transport.Run(ctx, []string{
 		"sh", "-lc", installControlScript, "moox-install-control",
-		opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH, reset, string(opts.TLSMode), activationToken, remoteArchive,
+		opts.ControlRoot, opts.PublicHost, strconv.Itoa(opts.BrowserPort), opts.TargetGOARCH, reset, string(opts.TLSMode), activationToken, remoteArchive,
 	}, nil)
 	if err != nil {
 		return commandFailure("control_install_failed", installResult)
@@ -280,7 +343,7 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		if returnErr != nil && installed {
 			rollbackCtx, cancel := context.WithTimeout(trpc.BackgroundContext(), controlRollbackTimeout)
 			defer cancel()
-			if _, rollbackErr := transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackControlScript, "moox-rollback-control", activationToken}, nil); rollbackErr != nil {
+			if _, rollbackErr := transport.Run(rollbackCtx, []string{"sh", "-lc", rollbackControlScript, "moox-rollback-control", activationToken, opts.ControlRoot}, nil); rollbackErr != nil {
 				returnErr = fmt.Errorf("%v; control_rollback_failed", returnErr)
 			}
 		}
@@ -290,19 +353,31 @@ func Control(ctx context.Context, transport setupssh.Client, opts Options, deps 
 		CollectorReady, MonitorReady, WebReady, BrowserHTTPSReady,
 	} {
 		if err := deps.Probe.Wait(ctx, transport, stage, opts); err != nil {
+			fmt.Fprintf(os.Stderr, "control readiness failed stage=%s: %v\n", stage, err)
 			return fmt.Errorf("control_deploy_not_ready")
 		}
 	}
 	if opts.TLSMode == TLSModeInternal {
-		ca, err := transport.Run(ctx, []string{"sh", "-lc", `cat "$HOME/moox/prod/certs/caddy/root.crt"`}, nil)
+		ca, err := transport.Run(ctx, []string{"sh", "-lc", `cat "$1/certs/caddy/root.crt"`, "moox-read-control-ca", opts.ControlRoot}, nil)
 		if err != nil || deps.CAStore.Save(opts.PublicHost, []byte(ca.Stdout)) != nil {
 			return fmt.Errorf("control_ca_unavailable")
+		}
+		// Finalize the remote deployment before touching the operator trust
+		// store. A missing sudo password must not roll back an otherwise healthy
+		// control plane; the next CLI invocation can retry this idempotently.
+		if opts.InstallLocalCA {
+			installed = false
+			_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeControlScript, "moox-finalize-control", activationToken, opts.ControlRoot, opts.DeployRoot}, nil)
+			if err := EnsureLocalCATrustForHost(ctx, opts.RepositoryRoot, opts.PublicHost, opts.TLSMode); err != nil {
+				return err
+			}
+			return nil
 		}
 	}
 	// Once readiness and CA persistence succeed, the new deployment is authoritative.
 	// A lost finalize response must never roll it back after previous was removed.
 	installed = false
-	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeControlScript, "moox-finalize-control", activationToken}, nil)
+	_, _ = transport.Run(ctx, []string{"sh", "-lc", finalizeControlScript, "moox-finalize-control", activationToken, opts.ControlRoot, opts.DeployRoot}, nil)
 	return nil
 }
 
@@ -371,7 +446,7 @@ func parseSHA256(output string) (string, error) {
 func resolveRemoteDeployDir(ctx context.Context, transport setupssh.Client, deployDir string) (string, error) {
 	deployDir = strings.TrimSpace(deployDir)
 	if deployDir == "" {
-		deployDir = "~/moox/prod"
+		deployDir = setupconfig.DefaultControlRoot
 	}
 	if strings.ContainsAny(deployDir, "\x00\r\n") {
 		return "", fmt.Errorf("service_deploy_invalid")
@@ -424,6 +499,9 @@ func detectPlatform(ctx context.Context, transport setupssh.Client, opts *Option
 type CommandPackager struct{}
 
 func (CommandPackager) Package(ctx context.Context, opts Options) (string, error) {
+	if err := normalizeDeployPaths(&opts); err != nil {
+		return "", err
+	}
 	root, err := filepath.Abs(opts.RepositoryRoot)
 	if err != nil {
 		return "", err
@@ -439,7 +517,11 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 	_ = os.Remove(archive)
 	command := exec.CommandContext(ctx, filepath.Join(root, "scripts", "deploy-moox.sh"),
 		"--profile", "control", "--package-only", "--archive", archive,
-		"--target", "localhost", "--dir", "~/moox/prod", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
+		"--target", "localhost", "--dir", opts.ControlRoot, "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
+		// The control deployment is the complete non-trading application stack.
+		// The profile intentionally defaults to a smaller control plane, so make
+		// the requested Factor/Archive components explicit and keep Trade out.
+		"--with-archive", "--with-factor", "--no-trade",
 		"--public-host", opts.PublicHost, "--browser-https-port", strconv.Itoa(opts.BrowserPort),
 		"--tls-mode", string(resolveTLSMode(opts.TLSMode, opts.PublicHost)),
 		"--node-id", "control", "--gateway-control-url", "http://127.0.0.1:11000",
@@ -464,6 +546,12 @@ func (CommandPackager) Package(ctx context.Context, opts Options) (string, error
 func eventBusCommandEnv(base []string, opts Options) ([]string, error) {
 	address := strings.TrimSpace(opts.EventBusPublicAddress)
 	if address == "" || opts.EventBusPort < 1 || opts.EventBusPort > 65535 || !opts.EventBusTLSEnabled {
+		return nil, fmt.Errorf("control_deploy_invalid")
+	}
+	if strings.EqualFold(strings.TrimSuffix(address, "."), "localhost") {
+		return nil, fmt.Errorf("control_deploy_invalid")
+	}
+	if ip := net.ParseIP(strings.Trim(address, "[]")); ip != nil && (ip.IsLoopback() || ip.IsUnspecified()) {
 		return nil, fmt.Errorf("control_deploy_invalid")
 	}
 	const (
@@ -502,6 +590,9 @@ func monitoringCommandEnv(base []string, webhook string) []string {
 type StoragePackager struct{}
 
 func (StoragePackager) Package(ctx context.Context, opts Options) (string, error) {
+	if err := normalizeDeployPaths(&opts); err != nil {
+		return "", err
+	}
 	root, err := filepath.Abs(opts.RepositoryRoot)
 	if err != nil {
 		return "", err
@@ -544,7 +635,7 @@ func (StoragePackager) Package(ctx context.Context, opts Options) (string, error
 	}
 	args := []string{
 		"--profile", "storage", "--package-only", "--archive", archive,
-		"--target", "localhost", "--dir", "~/moox/storage", "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
+		"--target", "localhost", "--dir", opts.StorageRoot, "--goos", opts.TargetGOOS, "--goarch", opts.TargetGOARCH,
 		"--public-host", opts.PublicHost, "--node-id", storageNodeID(opts.NodeID), "--gateway-control-url", controlURL,
 	}
 	var gatewayFiles []string
@@ -696,6 +787,57 @@ func (FileCAStore) Save(publicHost string, raw []byte) error {
 	return nil
 }
 
+// EnsureLocalCATrust checks and, when needed, installs the public Caddy root
+// certificate into the operator machine's trust store. The repository script
+// owns the platform-specific trust-store details and prompts for elevation
+// only when the current user cannot perform the operation directly.
+func EnsureLocalCATrust(ctx context.Context, repositoryRoot, caPath string) error {
+	repositoryRoot = strings.TrimSpace(repositoryRoot)
+	caPath = strings.TrimSpace(caPath)
+	if repositoryRoot == "" || caPath == "" {
+		return fmt.Errorf("browser_ca_trust_failed: installer or CA path is empty")
+	}
+	script := filepath.Join(repositoryRoot, "scripts", "install-caddy-ca.sh")
+	info, err := os.Stat(script)
+	if err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("browser_ca_trust_failed: installer not found at %s", script)
+	}
+	if err := runLocalCACommand(ctx, script, caPath, true); err == nil {
+		return nil
+	}
+	if err := runLocalCACommand(ctx, script, caPath, false); err != nil {
+		return fmt.Errorf("browser_ca_trust_failed: install %s --ca-file %s: %w", script, caPath, err)
+	}
+	if err := runLocalCACommand(ctx, script, caPath, true); err != nil {
+		return fmt.Errorf("browser_ca_trust_failed: trust store rejected %s after installation: %w", caPath, err)
+	}
+	return nil
+}
+
+// EnsureLocalCATrustForHost is the endpoint-aware form used by setup flows.
+// Public ACME certificates are already trusted by normal browsers and must
+// not cause any local trust-store mutation.
+func EnsureLocalCATrustForHost(ctx context.Context, repositoryRoot, publicHost string, mode TLSMode) error {
+	if !RequiresLocalCATrust(mode, publicHost) {
+		return nil
+	}
+	return EnsureLocalCATrust(ctx, repositoryRoot, CAPath(publicHost))
+}
+
+func runLocalCACommand(ctx context.Context, script, caPath string, checkOnly bool) error {
+	args := []string{"--ca-file", caPath}
+	if checkOnly {
+		args = append(args, "--check")
+	}
+	command := exec.CommandContext(ctx, script, args...)
+	// Keep the command attached to the invoking terminal so sudo/security can
+	// explain what is happening and request the user's administrator approval.
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stderr
+	command.Stderr = os.Stderr
+	return command.Run()
+}
+
 type CommandProbe struct {
 	Attempts int
 	Delay    time.Duration
@@ -706,13 +848,23 @@ func (p CommandProbe) Wait(ctx context.Context, transport setupssh.Client, stage
 	if attempts <= 0 {
 		attempts = 30
 	}
+	// EventBus readiness includes the wildcard listener check. A freshly
+	// restarted broker can report its health endpoint before the TLS listener
+	// has completed binding; give this external dependency a bounded warm-up
+	// window instead of rolling back an otherwise healthy deployment.
+	if stage == EventBusReady && attempts < 300 {
+		attempts = 300
+	}
 	if delay <= 0 {
 		delay = time.Second
 	}
-	command := probeCommand(stage)
+	command := probeCommandForOptions(stage, opts)
 	args := []string{"sh", "-lc", command, "moox-readiness", opts.PublicHost, strconv.Itoa(opts.BrowserPort), string(resolveTLSMode(opts.TLSMode, opts.PublicHost))}
+	var lastResult setupssh.Result
 	for attempt := 0; attempt < attempts; attempt++ {
-		if _, err := transport.Run(ctx, args, nil); err == nil {
+		result, err := transport.Run(ctx, args, nil)
+		lastResult = result
+		if err == nil {
 			return nil
 		}
 		select {
@@ -721,33 +873,64 @@ func (p CommandProbe) Wait(ctx context.Context, transport setupssh.Client, stage
 		case <-time.After(delay):
 		}
 	}
+	detail := strings.TrimSpace(strings.Join([]string{lastResult.Stderr, lastResult.Stdout}, " "))
+	if len(detail) > 240 {
+		detail = detail[len(detail)-240:]
+	}
+	if detail != "" {
+		return fmt.Errorf("not_ready: %s", strings.Join(strings.Fields(detail), " "))
+	}
 	return fmt.Errorf("not_ready")
 }
 
 func probeCommand(stage ReadinessStage) string {
+	return probeCommandForOptions(stage, Options{})
+}
+
+func probeCommandForOptions(stage ReadinessStage, opts Options) string {
+	if err := normalizeDeployPaths(&opts); err != nil {
+		return "false"
+	}
+	control := opts.ControlRoot
+	storage := opts.StorageRoot
 	switch stage {
 	case AdminReady:
-		return `"$HOME/moox/prod/status.sh" admin >/dev/null`
+		return fmt.Sprintf(`%q/status.sh admin >/dev/null`, control)
 	case SetupReady:
 		return `curl -fsS -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:11110/trpc.moox.admin.Setup/GetSetupStatus >/dev/null`
 	case GatewayReady:
-		return `"$HOME/moox/prod/status.sh" gateway >/dev/null`
+		return fmt.Sprintf(`%q/status.sh gateway >/dev/null`, control)
 	case EventBusReady:
-		return `"$HOME/moox/prod/status.sh" eventbus >/dev/null`
+		// status.sh is human-oriented and historically returned success even
+		// when a service was stopped. EventBus is an external dependency for
+		// SCF, so setup readiness verifies the persisted listener contract and
+		// the broker's local health listener instead.
+		return fmt.Sprintf(`set -eu
+root=%q
+test -r "$root/config/runtime.env"
+set -a; . "$root/config/runtime.env"; set +a
+test "${MOOX_EVENTBUS_ENABLE_TLS:-}" = 1
+# MOOX_EVENTBUS_HOST is the broker bind address, not the advertised SCF
+# address. A public deployment must bind wildcard IPv4; 0.0.0.0 is expected.
+test "${MOOX_EVENTBUS_HOST:-}" = 0.0.0.0
+test -n "${MOOX_EVENTBUS_PORT:-}"
+		# Probe the broker's local health listener. Any HTTP response is ready;
+		# curl is intentionally used without -f so 401/404 still count.
+		curl --connect-timeout 2 -sS -o /dev/null http://127.0.0.1:11419/`, control)
 	case CloudNodeReady:
-		return `"$HOME/moox/prod/status.sh" cloudnode >/dev/null`
+		return fmt.Sprintf(`%q/status.sh cloudnode >/dev/null`, control)
 	case CollectorReady:
-		return `"$HOME/moox/prod/status.sh" collector >/dev/null`
+		return fmt.Sprintf(`%q/status.sh collector >/dev/null`, control)
 	case MonitorReady:
-		return `"$HOME/moox/prod/status.sh" monitor >/dev/null`
+		return fmt.Sprintf(`%q/status.sh monitor >/dev/null`, control)
 	case WebReady:
-		return `"$HOME/moox/prod/status.sh" web-host >/dev/null`
+		return fmt.Sprintf(`%q/status.sh web-host >/dev/null`, control)
 	case BrowserHTTPSReady:
-		return `if [ "$3" = internal ]; then curl -fsS --resolve "$1:$2:127.0.0.1" --cacert "$HOME/moox/prod/certs/caddy/root.crt" "https://$1:$2/" >/dev/null; else curl -fsS --resolve "$1:$2:127.0.0.1" "https://$1:$2/" >/dev/null; fi`
+		return fmt.Sprintf(`if [ "$3" = internal ]; then curl -fsS --resolve "$1:$2:127.0.0.1" --cacert %q/certs/caddy/root.crt "https://$1:$2/" >/dev/null; else curl -fsS --resolve "$1:$2:127.0.0.1" "https://$1:$2/" >/dev/null; fi`, control)
 	case StoragePrimaryReady:
-		return `"$HOME/moox/storage/status.sh" storage-primary >/dev/null`
+		return fmt.Sprintf(`%q/status.sh storage-primary >/dev/null`, storage)
 	case StorageViewReady:
-		return `"$HOME/moox/storage/status.sh" storage-view >/dev/null`
+		return fmt.Sprintf(`%q/status.sh storage-view >/dev/null`, storage)
 	default:
 		return "false"
 	}
@@ -760,14 +943,16 @@ install_storage() {
   use_control_gateway="$3"
   activation_token="$4"
   archive="$5"
+  storage_root="${6:-${HOME}/moox/storage}"
+  control_root="${7:-${HOME}/moox/prod}"
   case "$reset_storage_data" in 0|1) ;; *) echo storage_reset_invalid >&2; return 1 ;; esac
   case "$reset_view_data" in 0|1) ;; *) echo storage_view_reset_invalid >&2; return 1 ;; esac
   if [ "$reset_storage_data" = "1" ] && [ "$reset_view_data" = "1" ]; then echo storage_reset_flags_mutually_exclusive >&2; return 1; fi
   case "$use_control_gateway" in 0|1) ;; *) echo storage_gateway_invalid >&2; return 1 ;; esac
   case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo storage_activation_token_invalid >&2; return 1 ;; esac
   [ "$archive" = "/tmp/moox-storage-$activation_token.tar.gz" ] || { echo storage_archive_invalid >&2; return 1; }
-  root="$HOME/moox"
-  deploy="$root/storage"
+  deploy="$storage_root"
+	root=$(dirname "$deploy")
 	mkdir -p "$root"
 	# Serialize package replacement with generated healthchecks. The lock lives
 	# beside the directory so it survives atomic renames of the deployment.
@@ -804,10 +989,14 @@ install_storage() {
       echo 'storage_healthcheck_scheduler_unavailable' >&2
       return 1
     }
-    cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for healthcheck in "$HOME"/moox/*/healthcheck.sh; do root=$(dirname "$healthcheck"); case "$root" in *.next|*.next.*|*.previous|*.previous.*|*.failed|*.failed.*) continue ;; esac; if [ -x "$healthcheck" ]; then "$healthcheck" >/dev/null 2>&1 & fi; done; wait # moox-healthchecks'
+    if [ "$root" = "$HOME/moox" ]; then
+      cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for healthcheck in "$HOME"/moox/*/healthcheck.sh; do root=$(dirname "$healthcheck"); case "$root" in *.next|*.next.*|*.previous|*.previous.*|*.failed|*.failed.*) continue ;; esac; if [ -x "$healthcheck" ]; then "$healthcheck" >/dev/null 2>&1 & fi; done; wait # moox-healthchecks'
+    else
+      cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for healthcheck in '"$root"'/*/healthcheck.sh; do root=$(dirname "$healthcheck"); case "$root" in *.next|*.next.*|*.previous|*.previous.*|*.failed|*.failed.*) continue ;; esac; if [ -x "$healthcheck" ]; then "$healthcheck" >/dev/null 2>&1 & fi; done; wait # moox-healthchecks'
+    fi
     current=$("$crontab_command" -l 2>/dev/null || true)
     {
-      printf '%s\n' "$current" | grep -Fv '/moox/prod/healthcheck.sh' | grep -Fv '# moox-healthchecks' || true
+      printf '%s\n' "$current" | grep -Fv '# moox-healthchecks' || true
       printf '%s\n' "$cron_line"
     } | "$crontab_command" -
   }
@@ -834,7 +1023,7 @@ install_storage() {
   fi
   mkdir -p "$next/secrets"
   if [ "$use_control_gateway" = "1" ]; then
-    control_secrets="$root/prod/secrets"
+    control_secrets="$control_root/secrets"
     # Control-owned internal auth is the single authority for both packages.
     # Do not preserve an older storage copy when the control deployment has
     # rotated the secret.
@@ -882,7 +1071,7 @@ install_storage() {
 		# Reset needs JetStream management permissions (consumer delete and
 		# subject purge); the storage consumer credential is intentionally scoped
 		# to data delivery and cannot publish to $JS.API.STREAM.INFO.*.
-		credential="$HOME/.config/moox/eventbus/internal-admin.yaml"
+    credential="$HOME/.config/moox/eventbus/internal-admin.yaml"
     [ -r "$credential" ] || { echo storage_view_reset_credential_missing >&2; rollback_failed_install; return 1; }
     if ! "$deploy/bin/moox-storage-cli" reset-view-consumers \
       --storage-conf "$deploy/storage/config/storage.yaml" \
@@ -898,16 +1087,25 @@ install_storage() {
     rollback_failed_install
   fi
 }
-install_storage "$1" "$2" "$3" "$4" "$5"
+if [ "${1:-}" = 0 ] || [ "${1:-}" = 1 ]; then
+  install_storage "$1" "$2" "$3" "$4" "$5"
+else
+  storage_root="$1"
+  control_root="$2"
+  shift 2
+  install_storage "$1" "$2" "$3" "$4" "$5" "$storage_root" "$control_root"
+fi
 `
 
 const rollbackStorageScript = `set -eu
+# storage.previous rollback lineage is intentionally retained until finalize.
 activation_token="$1"
+deploy="${2:-${HOME}/moox/storage}"
+root="${3:-${HOME}/moox}"
 case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo storage_activation_token_invalid >&2; exit 1 ;; esac
-deploy="$HOME/moox/storage"
 exec 8>"$deploy.maintenance.lock"
 flock -x 8
-previous="$HOME/moox/storage.previous.$activation_token"
+previous="$root/storage.previous.$activation_token"
 [ -s "$deploy/.storage-activation-token" ] || exit 0
 [ "$(cat "$deploy/.storage-activation-token")" = "$activation_token" ] || exit 0
 if [ ! -d "$previous" ]; then
@@ -915,14 +1113,14 @@ if [ ! -d "$previous" ]; then
   # first installation. Stop and retain it for diagnosis instead of leaving a
   # deployment running after the CLI has reported failure.
   if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
-  failed="$HOME/moox/storage.failed.$activation_token"
+  failed="$root/storage.failed.$activation_token"
   rm -rf "$failed"
   mv "$deploy" "$failed"
   date +%s >"$failed/.storage-staged-at"
   exit 0
 fi
 if [ -x "$deploy/stop.sh" ]; then "$deploy/stop.sh" || true; fi
-restore_data="$HOME/moox/storage.data.rollback.$activation_token"
+restore_data="$root/storage.data.rollback.$activation_token"
 rm -rf "$restore_data"
 if [ -d "$deploy/data" ]; then mv "$deploy/data" "$restore_data"; fi
 rm -rf "$deploy"
@@ -933,19 +1131,23 @@ if [ -d "$restore_data" ]; then rm -rf "$deploy/data"; mv "$restore_data" "$depl
 `
 
 const finalizeStorageScript = `set -eu
+# storage.maintenance.lock serializes finalization with the watchdog.
+# storage.previous cleanup is scoped to the configured package root.
 activation_token="$1"
+deploy="${2:-${HOME}/moox/storage}"
+root="${3:-${HOME}/moox}"
 case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo storage_activation_token_invalid >&2; exit 1 ;; esac
-deploy="$HOME/moox/storage"
-exec 8>"$HOME/moox/storage.maintenance.lock"
+exec 8>"$deploy.maintenance.lock"
 flock -x 8
 [ -s "$deploy/.storage-activation-token" ] || exit 0
 [ "$(cat "$deploy/.storage-activation-token")" = "$activation_token" ] || exit 0
-rm -rf "$HOME/moox/storage.previous.$activation_token"
+deploy_base=$(basename "$deploy")
+rm -rf "$root"/"$deploy_base".previous."$activation_token"
 rm -f "$deploy/.storage-staged-at"
 # Abandoned token directories are never authoritative. Keep recent ones for
 # diagnosis and concurrent deployment fencing, but reclaim older leftovers so
 # failed upgrades cannot slowly consume the Storage volume.
-find "$HOME/moox" -mindepth 2 -maxdepth 2 -type f -name '.storage-staged-at' -mtime +1 \
+find "$root" -mindepth 2 -maxdepth 2 -type f -name '.storage-staged-at' -mtime +1 \
   -exec sh -c 'for marker do dir=${marker%/*}; case ${dir##*/} in storage.next.*|storage.failed.*|storage.previous.*) rm -rf -- "$dir" ;; esac; done' sh {} +
 `
 
@@ -959,6 +1161,7 @@ install_control() {
   tls_mode="$5"
   activation_token="$6"
   archive="$7"
+  deploy="${8:-${HOME}/moox/prod}"
   case "$reset_data" in 0|1) ;; *) echo 'control_reset_invalid' >&2; return 1 ;; esac
   case "$tls_mode" in public|internal) ;; *) echo 'control_tls_mode_invalid' >&2; return 1 ;; esac
   case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo 'control_activation_token_invalid' >&2; return 1 ;; esac
@@ -966,11 +1169,10 @@ install_control() {
     echo 'control_archive_invalid' >&2
     return 1
   }
-  root="$HOME/moox"
-  deploy="$root/prod"
-  next="$root/prod.next"
-  previous="$root/prod.previous.$activation_token"
-  mkdir -p "$root"
+	root=$(dirname "$deploy")
+	next="$deploy.next"
+	previous="$deploy.previous.$activation_token"
+	mkdir -p "$root"
   flock_command="${MOOX_FLOCK_COMMAND:-flock}"
   command -v "$flock_command" >/dev/null 2>&1 || { echo 'control_maintenance_lock_unavailable' >&2; return 1; }
   exec 8>"$deploy.maintenance.lock"
@@ -1003,10 +1205,14 @@ install_control() {
       echo 'control_healthcheck_scheduler_unavailable' >&2
       return 1
     }
-    cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for healthcheck in "$HOME"/moox/*/healthcheck.sh; do root=$(dirname "$healthcheck"); case "$root" in *.next|*.next.*|*.previous|*.previous.*|*.failed|*.failed.*) continue ;; esac; if [ -x "$healthcheck" ]; then "$healthcheck" >/dev/null 2>&1 & fi; done; wait # moox-healthchecks'
+    if [ "$root" = "$HOME/moox" ]; then
+      cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for healthcheck in "$HOME"/moox/*/healthcheck.sh; do root=$(dirname "$healthcheck"); case "$root" in *.next|*.next.*|*.previous|*.previous.*|*.failed|*.failed.*) continue ;; esac; if [ -x "$healthcheck" ]; then "$healthcheck" >/dev/null 2>&1 & fi; done; wait # moox-healthchecks'
+    else
+      cron_line='* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; for healthcheck in '"$root"'/*/healthcheck.sh; do root=$(dirname "$healthcheck"); case "$root" in *.next|*.next.*|*.previous|*.previous.*|*.failed|*.failed.*) continue ;; esac; if [ -x "$healthcheck" ]; then "$healthcheck" >/dev/null 2>&1 & fi; done; wait # moox-healthchecks'
+    fi
     current=$("$crontab_command" -l 2>/dev/null || true)
     {
-      printf '%s\n' "$current" | grep -Fv '/moox/prod/healthcheck.sh' | grep -Fv '# moox-healthchecks' || true
+      printf '%s\n' "$current" | grep -Fv '# moox-healthchecks' || true
       printf '%s\n' "$cron_line"
     } | "$crontab_command" -
   }
@@ -1157,13 +1363,24 @@ install_control() {
   fi
   caddy_stopped=0
 }
-install_control "$1" "$2" "$3" "$4" "$5" "$6" "$7"`
+case "${1:-}" in
+/*)
+  deploy_root="$1"
+  shift
+  install_control "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$deploy_root"
+  ;;
+*)
+  install_control "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+  ;;
+esac`
 
 const rollbackControlScript = `set -eu
-deploy="$HOME/moox/prod"
+# prod.previous rollback lineage is intentionally retained until finalize.
 activation_token="$1"
+deploy="${2:-${HOME}/moox/prod}"
+root="${3:-$(dirname "$deploy")}"
 case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo 'control_activation_token_invalid' >&2; exit 1 ;; esac
-previous="$HOME/moox/prod.previous.$activation_token"
+previous="$deploy.previous.$activation_token"
 flock_command="${MOOX_FLOCK_COMMAND:-flock}"
 command -v "$flock_command" >/dev/null 2>&1 || { echo 'control_maintenance_lock_unavailable' >&2; exit 1; }
 exec 8>"$deploy.maintenance.lock"
@@ -1183,8 +1400,10 @@ if [ -d "$previous" ]; then
 fi`
 
 const finalizeControlScript = `set -eu
-deploy="$HOME/moox/prod"
+# prod.previous cleanup is scoped to the configured package root.
 activation_token="$1"
+deploy="${2:-${HOME}/moox/prod}"
+root="${3:-$(dirname "$deploy")}"
 case "$activation_token" in *[!A-Za-z0-9._-]*|'') echo 'control_activation_token_invalid' >&2; exit 1 ;; esac
 flock_command="${MOOX_FLOCK_COMMAND:-flock}"
 command -v "$flock_command" >/dev/null 2>&1 || { echo 'control_maintenance_lock_unavailable' >&2; exit 1; }
@@ -1192,5 +1411,6 @@ exec 8>"$deploy.maintenance.lock"
 "$flock_command" 8
 [ -s "$deploy/.control-activation-token" ] || exit 0
 [ "$(cat "$deploy/.control-activation-token")" = "$activation_token" ] || exit 0
-rm -rf "$HOME/moox"/prod.previous.*
+deploy_base=$(basename "$deploy")
+rm -rf "$root"/"$deploy_base".previous.*
 rm -f "$deploy/.control-activation-token"`

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
 
 # This regression check is deliberately filesystem-only: it does not require a
 # running NATS server or a remote host, but verifies the package/lifecycle
@@ -11,6 +12,8 @@ grep -q 'moox-eventbus' "${ROOT}/scripts/build.sh"
 grep -q -- '--no-eventbus' "${ROOT}/scripts/deploy-moox.sh"
 grep -q '/readyz' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'start_eventbus' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'archive_eventbus_url' "${ROOT}/scripts/deploy-moox.sh"
+grep -q 'tls://127.0.0.1:4222' "${ROOT}/scripts/deploy-moox.sh"
 grep -q 'disable_conflicting_eventbus_supervisor' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'systemctl --user show -p ExecStart --value moox-eventbus.service' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'systemctl --user is-active moox-eventbus.service' "${ROOT}/scripts/deploy-moox.sh"
@@ -51,6 +54,10 @@ grep -Fq -- '--public-host "${PUBLIC_HOST:-127.0.0.1}"' "${ROOT}/scripts/deploy-
 grep -Fq '${MOOX_EVENTBUS_PUBLIC_IP}:${MOOX_EVENTBUS_PORT}' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'EVENTBUS_PORT="${MOOX_EVENTBUS_PORT}" perl -0pi' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_EVENTBUS_PUBLIC_IP requires MOOX_EVENTBUS_ENABLE_TLS=1' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'validate_eventbus_governance' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'remote Collector deployment requires MOOX_EVENTBUS_PUBLIC_IP' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'runtime governance acceptance passed' "${ROOT}/scripts/deploy-moox.sh"
+grep -Fq 'config/runtime.env' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'url="${url#tls://}"' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID=collector' "${ROOT}/scripts/deploy-moox.sh"
 grep -Fq 'gateway-moox-cli.env" "${deploy_dir}/secrets/gateway-moox-cli.env' "${ROOT}/scripts/deploy-moox.sh"

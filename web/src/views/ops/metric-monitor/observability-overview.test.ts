@@ -22,9 +22,10 @@ describe("observability overview", () => {
 
   it("keeps the active operational sections, filters, tooltips, and explicit empty states", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "observability-overview.vue"), "utf8");
-    for (const text of ["服务", "主机", "实时 Dataset + Frequency", "Canary / Balance"]) {
+    for (const text of ["服务", "实时 Dataset + Frequency", "Canary / Balance"]) {
       expect(source).toContain(text);
     }
+    expect(source).not.toContain('<strong>主机</strong>');
     expect(source).not.toContain("overview.scf");
     for (const filter of [
       'v-model="filters.status"',

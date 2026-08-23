@@ -189,11 +189,14 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(opts.PartitionConfigs) != 3 {
+	if len(opts.PartitionConfigs) != 4 {
 		t.Fatalf("consumer partitions = %+v", opts.PartitionConfigs)
 	}
-	if opts.PartitionConfigs[0].PartitionID != "kline" || opts.PartitionConfigs[0].Consumer != "storage_view_kline_v2" || len(opts.PartitionConfigs[0].FilterSubjects) != 4 || opts.PartitionConfigs[0].FetchBatch != 4 || opts.PartitionConfigs[0].MaxWorkers != 2 || opts.PartitionConfigs[0].MaxAckPending != 16 || opts.PartitionConfigs[0].AckWaitMS != 120000 || opts.PartitionConfigs[0].Ordering != "dataset" || opts.PartitionConfigs[0].DeliverPolicy != "new" {
+	if opts.PartitionConfigs[0].PartitionID != "kline" || opts.PartitionConfigs[0].Consumer != "storage_view_kline" || len(opts.PartitionConfigs[0].FilterSubjects) != 4 || opts.PartitionConfigs[0].FetchBatch != 4 || opts.PartitionConfigs[0].MaxWorkers != 2 || opts.PartitionConfigs[0].MaxAckPending != 16 || opts.PartitionConfigs[0].AckWaitMS != 120000 || opts.PartitionConfigs[0].Ordering != "dataset" || opts.PartitionConfigs[0].DeliverPolicy != "new" {
 		t.Fatalf("kline consumer options = %+v", opts.PartitionConfigs[0])
+	}
+	if opts.PartitionConfigs[1].PartitionID != "factor" || opts.PartitionConfigs[1].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[1].FilterSubjects) != 4 || opts.PartitionConfigs[1].FetchBatch != 16 || opts.PartitionConfigs[1].MaxWorkers != 8 || opts.PartitionConfigs[1].MaxAckPending != 128 {
+		t.Fatalf("factor consumer options = %+v", opts.PartitionConfigs[1])
 	}
 }
 

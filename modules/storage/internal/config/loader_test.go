@@ -108,25 +108,28 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
 	partitions := cfg.Storage.View.ConsumerPartitions
-	if len(partitions) != 3 {
-		t.Fatalf("consumer partitions = %+v, want kline/metrics/other", partitions)
+	if len(partitions) != 4 {
+		t.Fatalf("consumer partitions = %+v, want kline/factor/metrics/misc", partitions)
 	}
 	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err != nil {
 		t.Fatalf("ValidateConsumerPartitions() error = %v", err)
 	}
 	klineDatasets := partitions[0].Datasets()
-	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline_v2" || len(klineDatasets) != 1 || klineDatasets[0].SpaceID != "crypto_market" || klineDatasets[0].DatasetID != "binance_spot_kline_1m" {
+	if partitions[0].ID != "kline" || partitions[0].Durable != "storage_view_kline" || len(klineDatasets) != 1 || klineDatasets[0].SpaceID != "crypto_market" || klineDatasets[0].DatasetID != "binance_spot_kline_1m" {
 		t.Fatalf("kline partition = %+v", partitions[0])
 	}
-	if partitions[1].ID != "system_metrics" || partitions[1].Durable != "storage_view_metrics_v2" {
-		t.Fatalf("metrics partition = %+v", partitions[1])
+	if partitions[1].ID != "factor" || partitions[1].Durable != "storage_view_factor" || partitions[1].FetchBatch != 16 || partitions[1].MaxWorkers != 8 || partitions[1].MaxAckPending != 128 {
+		t.Fatalf("factor partition = %+v", partitions[1])
+	}
+	if partitions[2].ID != "system_metrics" || partitions[2].Durable != "storage_view_metrics" || partitions[2].FetchBatch != 16 || partitions[2].MaxWorkers != 4 || partitions[2].MaxAckPending != 64 {
+		t.Fatalf("metrics partition = %+v", partitions[2])
 	}
 }
 
 func TestStorageViewConsumerPartitionsRejectOverlapAndInvalidLimits(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "a", Durable: "storage_view_kline_v2", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 4, MaxAckPending: 8, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "b", Durable: "storage_view_metrics_v2", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "a", Durable: "storage_view_kline", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 4, MaxAckPending: 8, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "b", Durable: "storage_view_metrics", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	if err := view.ValidateConsumerPartitions(nil); err == nil {
 		t.Fatal("overlapping Dataset partition was accepted")
@@ -150,9 +153,10 @@ func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
 
 func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "kline", Durable: "storage_view_kline_v2", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "system_metrics", Durable: "storage_view_metrics_v2", SpaceID: "moox_system", DatasetIDs: []string{"moox_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "other", Durable: "storage_view_other_v2", SpaceID: "crypto_market", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m", "future_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m_factor"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "moox_system", DatasetIDs: []string{"moox_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "misc", Durable: "storage_view_misc", SpaceID: "crypto_market", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	managed := []StorageViewConsumerDataset{{SpaceID: "crypto_market", DatasetID: "binance_spot_kline_1m"}}
 	if err := view.ValidateConsumerPartitions(managed); err != nil {
@@ -162,7 +166,7 @@ func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T
 
 func TestStorageViewConsumerPartitionsRequireAllManagedDurables(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "kline", Durable: "storage_view_kline_v2", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "kline", Durable: "storage_view_kline", SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	if err := view.ValidateConsumerPartitions(nil); err == nil {
 		t.Fatal("partial consumer topology was accepted")

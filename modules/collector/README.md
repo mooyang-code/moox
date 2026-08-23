@@ -52,6 +52,8 @@ Symbol Rule 将手动配置的 Binance 标的写入 RECORD Dataset。K 线 Rule 
 
 每个启用规则按当前 Timer 函数确定性分片；单个函数最多 30 个标的，完整 Environment 还必须不超过 4KB。函数固定为 64MB、15 秒，Storage 请求预算为 5 秒，函数内 HTTP 并发由 Environment 配置；短暂失败由下一次 Timer 及独立缺口补采覆盖。
 
+Collector 同时上报 Space 级 Timer 容量指标：总节点数、当前分片需求、已分配节点数和容量余量。Monitor 会在需求超过节点数时立即告警，并在余量不超过 2 个节点时提前标记为降级，避免新增标的或频率后才发现容量不足。
+
 规则、运行态字段与接口说明见 [采集任务管理](../../docs/采集任务管理.md)。
 
 ## 构建

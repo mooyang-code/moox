@@ -48,7 +48,10 @@ market_canary:
   subjects:
     - space_id: crypto_market
       dataset_id: binance_spot_kline_1m
-      symbol: BTC-USDT
+      # Keep the canary bound to a subject that is present in the active spot
+      # symbol catalog. BTC-USDT is a perpetual-only subject in this setup;
+      # probing it made the service page report a false "insufficient_closed_bars".
+      symbol: OPG-USDT
       frequency: 1m
       series_tag: venue:binance
 

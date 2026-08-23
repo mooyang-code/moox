@@ -16,10 +16,22 @@ CLI，不再是占位模块。
 仓库有两个入口：
 
 - `make release`：生成二进制归档包，包含 Gateway、核心服务二进制与配置、Storage schema、docs 和 `examples/` 示例元数据；Linux amd64/arm64 归档额外包含 hostagent 制品；不包含源码开发脚本或 Agent skills。
+- `make release-binaries`：只编译并汇总所有可部署模块的二进制到 `release/moox-binaries-<version>-<goos>-<goarch>/bin`，同时刷新当前目标的 `release/bin`；产物包含 `manifest.txt` 校验清单和 `deploy/publish-release-binaries.sh` 发布脚本，适合后续只替换目标机器二进制。
 - `make release-matrix`：一次生成 Linux amd64/arm64、macOS amd64/arm64 和 Windows amd64 归档，并为每个归档生成 SHA-256 校验文件。
 - `make deploy`：通过 `scripts/deploy-moox.sh` 生成可运行部署目录并同步到本机或远端。Gateway 默认部署到每台机器；`--no-admin` 生成不含 Admin、浏览器资源、Admin schema 和 Admin 凭据的数据面节点。
+- `make publish-release-binaries ARGS="--target user@host --dir /data/moox --restart"`：把 `release/bin` 中的二进制上传到已有部署目录；默认不覆盖配置、密钥、数据和日志，只有显式指定 `--restart` 才会重启服务。
 
-`make release` 会打包 `cli`、`admin/admin-cli`、`gateway/gateway-cli`、`web-host`、`eventbus`、`cloudnode/cloudnode-cli`、`collector/collector-cli/collector-scf`、`factor/factor-cli`、`strategy/strategy-cli`、`trade/trade-cli`、`monitor/monitor-cli`、`storage/storage-cli` 和 `archive/archive-cli`；Linux amd64/arm64 还包含 HostAgent。`make deploy` 默认编排 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Strategy、Monitor、Storage 和 Archive，可用 `--no-strategy`、`--no-monitor`、`--no-eventbus` 等开关关闭独立模块；Trade 当前通过 release 制品或模块构建单独部署。
+`make release` 会打包 `cli`、`admin/admin-cli`、`gateway/gateway-cli`、`web-host`、`eventbus`、`cloudnode/cloudnode-cli`、`collector/collector-cli`、`factor/factor-cli`、`strategy/strategy-cli`、`trade/trade-cli`、`monitor/monitor-cli`、`storage/storage-cli` 和 `archive/archive-cli`；Linux amd64/arm64 还包含 HostAgent。需要把 SCF 入口也纳入平铺二进制发布时使用 `make release-binaries`，它会在 Linux amd64 额外生成 `moox-collector-scf`。`make deploy` 默认编排 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Strategy、Monitor、Storage 和 Archive，可用 `--no-strategy`、`--no-monitor`、`--no-eventbus` 等开关关闭独立模块；Trade 当前通过 release 制品或模块构建单独部署。
+
+`make release-binaries` 是二进制增量发布入口。Linux amd64 额外生成 `moox-collector-scf`；Linux 目标生成 HostAgent；Windows 二进制带 `.exe` 后缀。发布脚本使用 `rsync`，没有 `rsync` 时回退为 SSH+tar，不使用 `--delete`，因此不会清理目标机器上的历史文件。
+
+例如生成 Linux amd64 制品：
+
+```bash
+TARGET_GOOS=linux TARGET_GOARCH=amd64 STORAGE_CGO_ENABLED=0 VERSION=v0.1.0 make release-binaries
+```
+
+Storage 启用 DuckDB 的正式 Linux 制品仍需要 Linux 编译机和 `STORAGE_CGO_ENABLED=1`；可以在该编译环境直接运行本脚本，或先按既有 `make build-storage-linux` 流程准备 Storage，再将其他模块二进制一并放入 `bin/` 后使用 `--skip-build` 汇总。
 
 给版本打 Tag 并推送后，GitHub Actions 和 CNB 会分别创建 Release 并上传同一组跨平台归档；对应配置是 `.github/workflows/release.yml` 和 `.cnb.yml`。本地只构建不发布时可运行 `VERSION=v0.1.0 make release-matrix`，也可用 `RELEASE_PLATFORMS=linux/amd64,windows/amd64` 缩小矩阵。跨平台构建默认对 Storage 使用 no-CGO fallback；具备目标平台 C 工具链时可显式设置 `STORAGE_CGO_ENABLED=1`。
 
@@ -94,7 +106,7 @@ Parquet 则不会被通用清理器静默删除。各类数据的默认保留时
 本机发布并拉起：
 
 ```bash
-make deploy ARGS="--target localhost --dir ~/moox/dev --node-id gateway-dev --gateway-control-url http://127.0.0.1:11000 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
+make deploy ARGS="--target localhost --dir /data/moox/dev --node-id gateway-dev --gateway-control-url http://127.0.0.1:11000 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
 ```
 
 只生成发布目录，不启动服务：
@@ -106,7 +118,7 @@ make deploy ARGS="--target localhost --dir /tmp/moox --skip-build --no-start --n
 远端发布并拉起：
 
 ```bash
-make deploy ARGS="--target user@host --dir ~/moox/prod --goos linux --goarch amd64 --public-host node.example.com --node-id gateway-node-1 --gateway-control-url https://admin.example.com:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
+make deploy ARGS="--target user@host --dir /data/moox --goos linux --goarch amd64 --public-host node.example.com --node-id gateway-node-1 --gateway-control-url https://admin.example.com:9527 --gateway-ca-bundle /tmp/moox-gateway-peers.pem --gateway-control-key-file /tmp/moox-gateway-control.key --gateway-service-key-file /tmp/moox-gateway-service.key"
 ```
 
 公开部署应加 `--public-host <IP-or-DNS>`。部署会自动安装 checksum 校验的固定版本 Caddy、创建私有 CA、配置同机后端信任并做 HTTPS 验收；浏览器所在机器仍需使用 `skills/moox/scripts/caddy-ca.sh` 显式安装 CA 信任。

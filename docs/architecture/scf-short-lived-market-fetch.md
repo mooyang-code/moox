@@ -37,7 +37,9 @@ flowchart LR
 6. 不实现双版本任务快照。函数配置更新期间允许旧、新分片短暂重叠，重复 K 线写入是安全的；`assignment_hash` 只用于判断是否需要更新和排障。
 7. 配置驱动的标准发布会在每个启用地域额外保留 1 个 `trigger_type=invoke` 辅助函数，专门承载
    Symbol 全量快照、缺口补采、出口探针和人工 E2E；`function_count` 只表示用户配置的 Timer
-   实时容量。这样不会把按需工作错误投递到静态 Timer 环境，也不需要 SCF 在每次调用时回调控制面。
+   实时容量。Space 级 `timer_function_count` 表示 Timer 总容量；启用地域的 `function_count`
+   可以显式分配，或设为 0 由 CLI 自动均分。`crypto_market` 和 `stock_cn` 未提供地域数量时
+   默认分别为 60 和 300。这样不会把按需工作错误投递到静态 Timer 环境，也不需要 SCF 在每次调用时回调控制面。
 
 ## Invoke 辅助节点的作用
 

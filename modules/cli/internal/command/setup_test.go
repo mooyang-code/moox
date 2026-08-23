@@ -88,10 +88,49 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"init", "hosts", "validate", "trust-host", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus"} {
+	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "deploy-control", "deploy-service", "apply", "status", "deploy-storage", "install-storage-watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "e2e-eventbus"} {
 		require.Contains(t, output.String(), name)
 	}
 	require.Contains(t, output.String(), "render-runtime-config")
+}
+
+func TestSetupTrustBrowserSkipsPublicTLS(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"trust-browser", "--file", "custom.toml"})
+	require.NoError(t, cmd.Execute())
+	require.JSONEq(t, `{"host":"control","status":"not_required"}`, output.String())
+}
+
+func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "scripts", "install-caddy-ca.sh")
+	marker := filepath.Join(root, "installed")
+	require.NoError(t, os.MkdirAll(filepath.Dir(script), 0o755))
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nset -eu\ncase \" $* \" in\n  *' --check '*) test -f \"$MARKER\";;\n  *) : >\"$MARKER\";;\nesac\n"), 0o700))
+	t.Setenv("MARKER", marker)
+	t.Chdir(root)
+	snapshot := setupSnapshot(t)
+	snapshot.Manifest.ControlHost.TLSMode = "internal"
+	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"trust-browser", "--file", "custom.toml"})
+	require.NoError(t, cmd.Execute())
+	require.FileExists(t, marker)
+	require.Contains(t, output.String(), `"status":"trusted"`)
+}
+
+func TestBrowserServiceNames(t *testing.T) {
+	for _, service := range []string{"admin", "admin_gateway", "moox-admin", "web-host", "web_host", "moox-web-host"} {
+		assert.True(t, isBrowserService(service), service)
+	}
+	for _, service := range []string{"storage-view", "collector", "factor"} {
+		assert.False(t, isBrowserService(service), service)
+	}
 }
 
 func TestSetupRenderRuntimeConfigUsesOneSnapshot(t *testing.T) {

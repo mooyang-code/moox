@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -12,7 +13,9 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
 	metrics.ObserveAssignment("crypto_market", "bars", "1m", 16, 16, 1722652200)
+	metrics.ObserveAssignmentPending("crypto_market", true, time.Unix(1722652200, 0))
 	metrics.ObserveTimerState("crypto_market", "timer-1", "true", 1)
+	metrics.ObserveTimerCapacity("crypto_market", 45, 52, 0)
 	metrics.ObserveAssignmentError("crypto_market", "capacity")
 	metrics.ObservePeriodPending("bars", "1m", 2)
 	metrics.ObservePeriodReportRetry("bars", "1m")
@@ -24,14 +27,20 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 		got[family.GetName()] = struct{}{}
 	}
 	want := map[string]struct{}{
-		"moox_collector_market_fetch_assignment_required":                       {},
-		"moox_collector_market_fetch_assignment_active":                         {},
-		"moox_collector_market_fetch_assignment_last_success_timestamp_seconds": {},
-		"moox_collector_market_fetch_coordination_healthy":                      {},
-		"moox_collector_market_fetch_timer_available":                           {},
-		"moox_collector_market_fetch_assignment_errors_total":                   {},
-		"moox_collector_period_pending_total":                                   {},
-		"moox_collector_period_report_retry_total":                              {},
+		"moox_collector_market_fetch_assignment_required":                          {},
+		"moox_collector_market_fetch_assignment_active":                            {},
+		"moox_collector_market_fetch_assignment_last_success_timestamp_seconds":    {},
+		"moox_collector_market_fetch_coordination_healthy":                         {},
+		"moox_collector_market_fetch_coordination_pending":                         {},
+		"moox_collector_market_fetch_coordination_pending_since_timestamp_seconds": {},
+		"moox_collector_market_fetch_timer_available":                              {},
+		"moox_collector_market_fetch_timer_capacity_total":                         {},
+		"moox_collector_market_fetch_timer_capacity_required":                      {},
+		"moox_collector_market_fetch_timer_capacity_active":                        {},
+		"moox_collector_market_fetch_timer_capacity_headroom":                      {},
+		"moox_collector_market_fetch_assignment_errors_total":                      {},
+		"moox_collector_period_pending_total":                                      {},
+		"moox_collector_period_report_retry_total":                                 {},
 	}
 	for name := range want {
 		if _, ok := got[name]; !ok {
@@ -43,6 +52,23 @@ func TestMetricsExposeCompactAssignmentSet(t *testing.T) {
 			t.Fatalf("legacy completion metric %q should not be registered", name)
 		}
 	}
+}
+
+func TestMetricsClearAssignmentPending(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.ObserveAssignmentPending("crypto_market", true, time.Unix(1722652200, 0))
+	metrics.ObserveAssignmentPending("crypto_market", false, time.Time{})
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto_market")))
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentPendingSince.WithLabelValues("crypto_market")))
+}
+
+func TestMetricsExposeTimerCapacityHeadroom(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.ObserveTimerCapacity("crypto_market", 45, 52, 0)
+	require.Equal(t, float64(45), testutil.ToFloat64(metrics.timerCapacityTotal.WithLabelValues("crypto_market")))
+	require.Equal(t, float64(52), testutil.ToFloat64(metrics.timerCapacityRequired.WithLabelValues("crypto_market")))
+	require.Equal(t, float64(0), testutil.ToFloat64(metrics.timerCapacityActive.WithLabelValues("crypto_market")))
+	require.Equal(t, float64(-7), testutil.ToFloat64(metrics.timerCapacityHeadroom.WithLabelValues("crypto_market")))
 }
 
 func TestMetricsUseFixedErrorReasons(t *testing.T) {

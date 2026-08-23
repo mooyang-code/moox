@@ -97,6 +97,48 @@ func TestValidateSCFFetcherRejectsUnusableFleetAndUnsafeConcurrency(t *testing.T
 	})
 }
 
+func TestResolveSCFTimerFunctionCountsUsesSpaceDefaults(t *testing.T) {
+	crypto := SCFFetcherSpace{
+		SpaceID: "crypto_market",
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, FunctionCount: 0, CloudAccountID: "gz"},
+			{Region: "ap-shanghai", Enabled: true, FunctionCount: 0, CloudAccountID: "sh"},
+		},
+	}
+	require.NoError(t, resolveSCFTimerFunctionCounts(&crypto, "scf_fetcher.spaces[0]"))
+	assert.Equal(t, DefaultCryptoMarketTimerFunctionCount, crypto.TimerFunctionCount)
+	assert.Equal(t, 30, crypto.Regions[0].FunctionCount)
+	assert.Equal(t, 30, crypto.Regions[1].FunctionCount)
+
+	stock := SCFFetcherSpace{
+		SpaceID: "stock_cn",
+		Regions: []SCFFetcherRegion{
+			{Region: "ap-guangzhou", Enabled: true, CloudAccountID: "gz"},
+			{Region: "ap-shanghai", Enabled: true, CloudAccountID: "sh"},
+			{Region: "ap-beijing", Enabled: true, CloudAccountID: "bj"},
+			{Region: "ap-singapore", Enabled: true, CloudAccountID: "sg"},
+			{Region: "ap-tokyo", Enabled: true, CloudAccountID: "tokyo"},
+			{Region: "ap-chengdu", Enabled: true, CloudAccountID: "cd"},
+		},
+	}
+	require.NoError(t, resolveSCFTimerFunctionCounts(&stock, "scf_fetcher.spaces[1]"))
+	assert.Equal(t, DefaultStockCNMarketTimerFunctionCount, stock.TimerFunctionCount)
+	for _, region := range stock.Regions {
+		assert.Equal(t, 50, region.FunctionCount)
+	}
+}
+
+func TestResolveSCFTimerFunctionCountsRejectsMismatch(t *testing.T) {
+	cfg := SCFFetcherSpace{
+		SpaceID:            "crypto_market",
+		TimerFunctionCount: 60,
+		Regions:            []SCFFetcherRegion{{Region: "ap-guangzhou", Enabled: true, FunctionCount: 20, CloudAccountID: "gz"}},
+	}
+	err := resolveSCFTimerFunctionCounts(&cfg, "scf_fetcher.spaces[0]")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "regional function_count total")
+}
+
 const validManifest = `[admin]
 username = "admin"
 password = "admin-password"
@@ -137,11 +179,40 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, 4222, snapshot.Manifest.EventBus.Port)
 	assert.True(t, snapshot.Manifest.EventBus.TLSEnabled)
 	assert.Equal(t, "ap-guangzhou", snapshot.Manifest.TencentCloud.Region)
+	assert.Equal(t, DefaultDeployRoot, snapshot.Manifest.Paths.DeployRoot)
+	assert.Equal(t, DefaultControlRoot, snapshot.Manifest.Paths.ControlRoot)
+	assert.Equal(t, DefaultStorageRoot, snapshot.Manifest.Paths.StorageRoot)
 	assert.Equal(t, uint64(1000), snapshot.Manifest.StorageView.RebuildLookbackPeriods)
 	assert.Equal(t, 22, snapshot.Manifest.ControlHost.Port)
 	assert.Empty(t, snapshot.Manifest.Monitoring.WeComWebhook)
 	assert.Empty(t, snapshot.Manifest.OtherHosts)
 	require.NoError(t, snapshot.VerifyUnchanged())
+}
+
+func TestLoadPathsFromManifest(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/custom"
+control_root = "/data/custom/control"
+storage_root = "/data/custom/storage"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage"}, snapshot.Manifest.Paths)
+}
+
+func TestLoadRejectsPathsOutsideDeployRoot(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[paths]
+deploy_root = "/data/moox"
+control_root = "/var/lib/moox"
+storage_root = "/data/moox/storage"
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "paths.control_root")
 }
 
 func TestLoadStorageViewRebuildLookbackPeriodsFromManifest(t *testing.T) {

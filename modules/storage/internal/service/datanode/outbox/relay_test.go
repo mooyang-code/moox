@@ -56,6 +56,26 @@ type retryDuplicatePublisher struct {
 	testPublisher
 }
 
+type reconnectPublisher struct {
+	values      [][]byte
+	unavailable bool
+	reconnects  int
+}
+
+func (p *reconnectPublisher) PublishMessage(_ context.Context, data []byte) error {
+	if p.unavailable {
+		return errors.New("eventbus connection is stale")
+	}
+	p.values = append(p.values, append([]byte(nil), data...))
+	return nil
+}
+
+func (p *reconnectPublisher) Reconnect(context.Context) error {
+	p.reconnects++
+	p.unavailable = false
+	return nil
+}
+
 func (p *retryDuplicatePublisher) PublishMessageWithAck(ctx context.Context, data []byte) (*jetstream.PublishAck, error) {
 	if err := p.PublishMessage(ctx, data); err != nil {
 		return nil, err
@@ -151,6 +171,40 @@ func TestRelayBoundsPublishAttempt(t *testing.T) {
 	entries, err := store.ListOutbox(context.Background(), 0, 10)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("outbox after timeout=%v err=%v", entries, err)
+	}
+}
+
+func TestRelayReconnectsPublisherAfterRepeatedFailures(t *testing.T) {
+	store, err := pebble.Open(pebble.Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
+	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &reconnectPublisher{unavailable: true}
+	relay, err := NewRelay(store, publisher, RelayOptions{ReconnectAfterFailures: 3, ReconnectCooldown: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := relay.flush(context.Background()); err == nil {
+			t.Fatal("expected stale publisher failure")
+		}
+	}
+	if publisher.reconnects != 1 {
+		t.Fatalf("reconnects=%d, want 1", publisher.reconnects)
+	}
+	if err := relay.flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.ListOutbox(context.Background(), 0, 10)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("outbox after reconnect=%v err=%v", entries, err)
 	}
 }
 

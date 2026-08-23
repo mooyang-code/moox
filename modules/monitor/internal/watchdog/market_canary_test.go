@@ -109,6 +109,21 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	require.Equal(t, 12.0, diagnostic.CurrentVolume)
 }
 
+func TestMarketCanaryIgnoresVolumeRatioWithoutPreviousBaseline(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+		marketCanaryRow(now.Add(-2*time.Minute), 100, 0),
+		marketCanaryRow(now.Add(-time.Minute), 100.1, 5000),
+	}}
+	config := MarketCanaryConfig{
+		SpaceID: "crypto", DatasetID: "market_kline", SubjectID: "THIN-USDT", Frequency: "1m",
+		SeriesTag: stringPtr("venue:binance"),
+		Freshness: 3 * time.Minute, ReturnThreshold: 0.05, VolumeRatioThreshold: 5,
+	}
+	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
+	require.True(t, result.Success)
+}
+
 func TestMarketCanaryPageDoesNotMixVenuesAtSameTimestamp(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	reader := &tagFilteringCanaryReader{rows: []*storagepb.TimeSeriesRow{

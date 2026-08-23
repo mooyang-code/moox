@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
@@ -20,6 +21,29 @@ import (
 type OutputManifestStore interface {
 	Get(context.Context, store.OutputManifestKey) ([]string, error)
 	Replace(context.Context, store.OutputManifestKey, []string) error
+}
+
+// FactorPatch is one factor task result destined for the same result Dataset.
+// A batch writer can combine several factor definitions for one subject and
+// period into a single Primary write and therefore one Storage View event.
+type FactorPatch struct {
+	Task   *engine.FactorTask
+	Result *engine.FactorResult
+}
+
+// FactorBatchWriter is implemented by StorageIO clients that can submit
+// several factor patches as bounded clear/upsert batches. The task
+// runner keeps the single-patch fallback for small or test-only clients.
+type FactorBatchWriter interface {
+	WriteFactorPatches(context.Context, []FactorPatch) ([]uint64, error)
+}
+
+type preparedFactorPatch struct {
+	key     store.OutputManifestKey
+	task    *engine.FactorTask
+	current []string
+	stale   []*storagepb.RowFieldUpsert
+	upserts []*storagepb.RowFieldUpsert
 }
 
 func (c *Client) WithOutputManifests(manifests OutputManifestStore) *Client {
@@ -81,6 +105,100 @@ func (c *Client) WriteFactorPatch(ctx context.Context, task *engine.FactorTask, 
 		return 0, fmt.Errorf("replace factor output manifest: %w", err)
 	}
 	return uint64(len(upserts)), nil
+}
+
+// WriteFactorPatches combines the output rows of multiple factor definitions
+// before sending them to Storage. Each task keeps its own output manifest and
+// deterministic identity, while the remote write is reduced to at most one
+// clear event and one upsert event for the whole subject/period batch.
+func (c *Client) WriteFactorPatches(ctx context.Context, patches []FactorPatch) ([]uint64, error) {
+	if len(patches) == 0 {
+		return nil, fmt.Errorf("factor patches are required")
+	}
+	if c == nil || c.access == nil {
+		return nil, fmt.Errorf("factor storage client is unavailable")
+	}
+	// Deployments with the legacy manifest-less writer do not have enough
+	// state to safely combine clear plans. Preserve their existing semantics.
+	if c.manifests == nil {
+		counts := make([]uint64, len(patches))
+		for i, patch := range patches {
+			if patch.Task == nil || patch.Result == nil {
+				return nil, fmt.Errorf("factor patch %d task and result are required", i)
+			}
+			count, err := c.WriteFactorPatch(ctx, patch.Task, patch.Result)
+			if err != nil {
+				return nil, err
+			}
+			counts[i] = count
+		}
+		return counts, nil
+	}
+
+	prepared := make([]preparedFactorPatch, 0, len(patches))
+	counts := make([]uint64, len(patches))
+	batchKey := ""
+	for i, patch := range patches {
+		if patch.Task == nil || patch.Result == nil {
+			return nil, fmt.Errorf("factor patch %d task and result are required", i)
+		}
+		task := patch.Task
+		currentBatchKey := task.SpaceID + "\x00" + task.ResultDatasetID + "\x00" + task.SubjectID + "\x00" + task.Freq + "\x00" + strconv.FormatInt(task.PeriodTime, 10)
+		if batchKey == "" {
+			batchKey = currentBatchKey
+		} else if currentBatchKey != batchKey {
+			return nil, fmt.Errorf("factor patches must share space, result dataset, subject, frequency and period")
+		}
+		key := store.OutputManifestKey{BindingID: task.BindingID, SubjectID: task.SubjectID, Frequency: task.Freq, PeriodTime: time.Unix(task.PeriodTime, 0).UTC()}
+		previous, err := c.manifests.Get(ctx, key)
+		if err != nil {
+			return nil, fmt.Errorf("load factor output manifest: %w", err)
+		}
+		upserts, current, err := buildFactorRows(task, patch.Result)
+		if err != nil {
+			return nil, err
+		}
+		stale := difference(previous, current)
+		clearRows, err := clearRowsForKeys(stale, task.Factor.FactorID, task.Factor.Outputs)
+		if err != nil {
+			return nil, err
+		}
+		pending := append(append([]string(nil), previous...), current...)
+		sort.Strings(pending)
+		pending = compactStrings(pending)
+		// Persist every intent before the shared remote write. If the process
+		// exits midway, the pending union is replayed by the next attempt.
+		if err := c.manifests.Replace(ctx, key, pending); err != nil {
+			return nil, fmt.Errorf("persist factor output write intent: %w", err)
+		}
+		counts[i] = uint64(len(upserts))
+		prepared = append(prepared, preparedFactorPatch{key: key, task: task, current: current, stale: clearRows, upserts: upserts})
+	}
+
+	clearRows := make([]*storagepb.RowFieldUpsert, 0)
+	upsertRows := make([]*storagepb.RowFieldUpsert, 0)
+	for _, patch := range prepared {
+		clearRows = append(clearRows, patch.stale...)
+		upsertRows = append(upsertRows, patch.upserts...)
+	}
+	clearRows = mergeFactorRows(clearRows)
+	upsertRows = mergeFactorRows(upsertRows)
+	if len(clearRows) > 0 {
+		if err := c.writeRows(ctx, deterministicBatchWriteID(prepared, "clear", clearRows), clearRows); err != nil {
+			return nil, err
+		}
+	}
+	if len(upsertRows) > 0 {
+		if err := c.writeRows(ctx, deterministicBatchWriteID(prepared, "upsert", upsertRows), upsertRows); err != nil {
+			return nil, err
+		}
+	}
+	for _, patch := range prepared {
+		if err := c.manifests.Replace(ctx, patch.key, patch.current); err != nil {
+			return nil, fmt.Errorf("replace factor output manifest: %w", err)
+		}
+	}
+	return counts, nil
 }
 
 func (c *Client) writeLegacyFactorPatch(ctx context.Context, task *engine.FactorTask, result *engine.FactorResult) (uint64, error) {
@@ -186,6 +304,127 @@ func (c *Client) writeRows(ctx context.Context, sourceEventID string, rows []*st
 		return fmt.Errorf("write factor patch: %w", err)
 	}
 	return ensureStorageOK("write factor patch", rsp.GetRetInfo())
+}
+
+func deterministicBatchWriteID(patches []preparedFactorPatch, phase string, rows []*storagepb.RowFieldUpsert) string {
+	// This helper is intentionally kept generic below through the concrete
+	// adapter. The task identity and canonical row plan make retries idempotent.
+	parts := make([]string, 0, len(patches))
+	for _, patch := range patches {
+		if patch.task == nil {
+			continue
+		}
+		parts = append(parts, patch.task.TriggerEventID+"\x00"+patch.task.BindingID+"\x00"+patch.task.SubjectID+"\x00"+strconv.FormatInt(patch.task.PeriodTime, 10)+"\x00"+patch.task.Factor.FactorID)
+	}
+	sort.Strings(parts)
+	planHash := sha256.Sum256(canonicalWritePlan(rows))
+	identity := strings.Join(parts, "\x00") + "\x00" + phase + "\x00" + hex.EncodeToString(planHash[:])
+	sum := sha256.Sum256([]byte(identity))
+	return "factor-batch-" + hex.EncodeToString(sum[:16])
+}
+
+// mergeFactorRows collapses rows sharing the physical time-series key. This
+// is what lets multiple factor definitions contribute different output fields
+// to one event without producing duplicate primary keys in DuckDB.
+func mergeFactorRows(rows []*storagepb.RowFieldUpsert) []*storagepb.RowFieldUpsert {
+	if len(rows) < 2 {
+		return rows
+	}
+	positions := make(map[string]int, len(rows))
+	merged := make([]*storagepb.RowFieldUpsert, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || row.GetKey() == nil {
+			continue
+		}
+		id := factorPhysicalRowID(row.GetKey())
+		position, ok := positions[id]
+		if !ok {
+			clone := proto.Clone(row).(*storagepb.RowFieldUpsert)
+			clone.Fields = append([]*storagepb.FieldValue(nil), row.GetFields()...)
+			if len(row.GetAttributes()) > 0 {
+				clone.Attributes = make(map[string]*storagepb.TypedValue, len(row.GetAttributes()))
+				for name, value := range row.GetAttributes() {
+					clone.Attributes[name] = value
+				}
+			}
+			positions[id] = len(merged)
+			merged = append(merged, clone)
+			continue
+		}
+		mergeFactorRow(merged[position], row)
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		return factorPhysicalRowID(merged[i].GetKey()) < factorPhysicalRowID(merged[j].GetKey())
+	})
+	return merged
+}
+
+func mergeFactorRow(dst, src *storagepb.RowFieldUpsert) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, field := range src.GetFields() {
+		if field == nil {
+			continue
+		}
+		replaced := false
+		for index, existing := range dst.Fields {
+			if existing != nil && existing.GetFieldId() == field.GetFieldId() {
+				dst.Fields[index] = field
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			dst.Fields = append(dst.Fields, field)
+		}
+	}
+	if len(src.GetAttributes()) > 0 {
+		if dst.Attributes == nil {
+			dst.Attributes = make(map[string]*storagepb.TypedValue, len(src.GetAttributes()))
+		}
+		for name, value := range src.GetAttributes() {
+			// A physical factor row can now carry fields from several factors,
+			// while the legacy metadata attributes are scalar. Keep the first
+			// deterministic owner instead of letting later factors overwrite it.
+			if _, exists := dst.Attributes[name]; !exists {
+				dst.Attributes[name] = value
+			}
+		}
+	}
+}
+
+func factorPhysicalRowID(key *storagepb.RowKey) string {
+	if key == nil {
+		return ""
+	}
+	series := key.GetTimeSeries()
+	if series == nil {
+		return string(protoBytes(key))
+	}
+	dataTime := series.GetDataTime()
+	if parsed, err := time.Parse(time.RFC3339Nano, dataTime); err == nil {
+		dataTime = parsed.UTC().Format("2006-01-02T15:04:05.000000000Z")
+	}
+	return encodeFactorKeyParts(series.GetSubjectId(), series.GetFreq(), dataTime, series.GetSeriesTag())
+}
+
+func encodeFactorKeyParts(parts ...string) string {
+	var builder strings.Builder
+	for _, part := range parts {
+		builder.WriteString(strconv.Itoa(len(part)))
+		builder.WriteByte(':')
+		builder.WriteString(part)
+	}
+	return builder.String()
+}
+
+func protoBytes(message proto.Message) []byte {
+	if message == nil {
+		return nil
+	}
+	raw, _ := (proto.MarshalOptions{Deterministic: true}).Marshal(message)
+	return raw
 }
 
 func deterministicWriteID(task *engine.FactorTask, phase string, rows []*storagepb.RowFieldUpsert) string {

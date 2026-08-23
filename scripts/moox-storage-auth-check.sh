@@ -11,8 +11,8 @@ Linux through /proc without printing secret values.
 EOF
 }
 
-CONTROL_ROOT="${MOOX_CONTROL_ROOT:-${HOME}/moox/prod}"
-STORAGE_ROOT="${MOOX_STORAGE_ROOT:-${HOME}/moox/storage}"
+CONTROL_ROOT="${MOOX_CONTROL_ROOT:-/data/moox/prod}"
+STORAGE_ROOT="${MOOX_STORAGE_ROOT:-/data/moox/storage}"
 CHECK_PROCESSES=0
 while [[ $# -gt 0 ]]; do
   case "$1" in

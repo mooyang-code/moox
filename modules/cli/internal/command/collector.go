@@ -3,8 +3,10 @@ package command
 import (
 	"archive/zip"
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/http"
@@ -90,10 +92,11 @@ type collectorPublishOptions struct {
 }
 
 type collectorSCFTrustMaterial struct {
-	EventBusCredential  jetstream.CredentialFile
-	EventBusCAPEM       []byte
-	GatewayCAPEM        []byte
-	ServiceGatewayCAPEM []byte
+	EventBusCredential       jetstream.CredentialFile
+	EventBusCAPEM            []byte
+	GatewayCAPEM             []byte
+	ServiceGatewayCAPEM      []byte
+	StoragePrimaryAuthSecret string
 }
 
 type collectorPublishStatusOptions struct {
@@ -510,14 +513,37 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			maxCollectorPublishNodeCount,
 		)
 	}
+	// A manifest deployment must build the package from the authoritative
+	// control-plane trust material below. Accepting an operator-supplied zip
+	// here would bypass the Primary auth, EventBus endpoint and CA preflight.
+	if fetcherConfig != nil && strings.TrimSpace(opts.ZipPath) != "" {
+		return collectorPublishSummary{}, fmt.Errorf("--zip is not allowed with --file manifest deployments; rebuild the package from control-plane trust material")
+	}
 	if err := validateCollectorPublishAuth(opts); err != nil {
 		return collectorPublishSummary{}, err
 	}
 	if fetcherConfig != nil {
-		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost)
+		trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
 		if trustErr != nil {
 			return collectorPublishSummary{}, trustErr
 		}
+		// The credential file on the control host is intentionally an internal
+		// publisher credential and commonly contains a loopback NATS URL. SCF
+		// must never receive that URL: replace only the endpoint with the
+		// deployment-wide public endpoint from custom.toml while retaining the
+		// control-plane username/password and CA material.
+		trustMaterial.EventBusCredential, trustErr = preflightCollectorSCFEventBusCredential(
+			trustMaterial.EventBusCredential,
+			trustMaterial.EventBusCAPEM,
+			manifest.Manifest.EventBus,
+		)
+		if trustErr != nil {
+			return collectorPublishSummary{}, trustErr
+		}
+		// The SCF package signs Binance Storage requests. Always take the
+		// Primary secret from the control host's authoritative auth file rather
+		// than inheriting a possibly stale operator environment.
+		opts.StoragePrimaryAuthSecret = trustMaterial.StoragePrimaryAuthSecret
 		opts.EventBusCredential = &trustMaterial.EventBusCredential
 		opts.EventBusCAPEM = trustMaterial.EventBusCAPEM
 		opts.GatewayCAPEM = trustMaterial.GatewayCAPEM
@@ -649,6 +675,43 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			if uploadErr != nil {
 				return summary, uploadErr
 			}
+			// The auxiliary Invoke node is deployed and exercised first. A
+			// successful market_fetch canary proves the full SCF -> EventBus ->
+			// Storage path before any regional Timer fleet is changed.
+			invokeOpts := regionOpts
+			invokeOpts.TriggerType = "invoke"
+			invokeOpts.NodeCount = 1
+			invokeOpts.FunctionNamePrefix = strings.TrimSuffix(regionOpts.FunctionNamePrefix, "-") + "-invoke"
+			invokeNodes, inspectInvokeErr := inspectCollectorFleet(ctx, client, invokeOpts)
+			if inspectInvokeErr != nil {
+				return summary, inspectInvokeErr
+			}
+			invokeItems, buildInvokeErr := buildCollectorFleetCreateItems(invokeOpts, packageID)
+			if buildInvokeErr != nil {
+				return summary, buildInvokeErr
+			}
+			invokeSummary, submitInvokeErr := submitCollectorFleet(ctx, client, invokeOpts, packageID, invokeItems, invokeNodes)
+			if submitInvokeErr != nil {
+				return summary, submitInvokeErr
+			}
+			if err := waitCollectorBatch(ctx, client, invokeSummary.JobID); err != nil {
+				return summary, fmt.Errorf("SCF invoke canary fleet for region %s: %w", regionOpts.Region, err)
+			}
+			invokeNodes, inspectInvokeErr = inspectCollectorFleet(ctx, client, invokeOpts)
+			if inspectInvokeErr != nil || len(invokeNodes) != 1 {
+				if inspectInvokeErr != nil {
+					return summary, inspectInvokeErr
+				}
+				return summary, fmt.Errorf("SCF invoke canary fleet for region %s has no ready node", regionOpts.Region)
+			}
+			if err := runCollectorSCFCanary(ctx, client, invokeOpts, invokeNodes[0].NodeID); err != nil {
+				return summary, fmt.Errorf("SCF canary for region %s: %w", regionOpts.Region, err)
+			}
+			summary.TotalCount += invokeSummary.TotalCount
+			if invokeSummary.JobID != "" {
+				jobs = append(jobs, invokeSummary.JobID)
+			}
+
 			fleetNodes, inspectErr := inspectCollectorFleet(ctx, client, regionOpts)
 			if inspectErr != nil {
 				return summary, inspectErr
@@ -663,6 +726,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 				summary.JobID = strings.Join(summary.JobIDs, ",")
 				return summary, submitErr
 			}
+			if err := waitCollectorBatch(ctx, client, fleetSummary.JobID); err != nil {
+				return summary, fmt.Errorf("SCF Timer fleet for region %s: %w", regionOpts.Region, err)
+			}
 			summary.FleetMode = fleetSummary.FleetMode
 			summary.Operation = fleetSummary.Operation
 			summary.TotalCount += fleetSummary.TotalCount
@@ -671,39 +737,9 @@ func publishCollectorFunction(ctx context.Context, opts collectorPublishOptions)
 			summary.Regions = append(summary.Regions, collectorPublishRegionSummary{Region: regionOpts.Region, CloudAccountID: regionOpts.CloudAccountID, PackageID: packageID, CLSLogsetID: regionOpts.CLSLogsetID, CLSTopicID: regionOpts.CLSTopicID, JobID: fleetSummary.JobID, TotalCount: fleetSummary.TotalCount})
 			if fleetSummary.JobID != "" {
 				jobs = append(jobs, fleetSummary.JobID)
-				summary.JobIDs = append([]string(nil), jobs...)
-				summary.JobID = strings.Join(summary.JobIDs, ",")
 			}
-			// The normal config-driven deployment always needs one bounded
-			// Invoke node as well: Symbol snapshots, gap catch-up, probes and
-			// manual E2E are intentionally not sent to a static Timer function.
-			// Keep this auxiliary fleet to one function per region so the
-			// realtime count in custom.toml remains the Timer capacity the user
-			// explicitly configured.
-			if strings.EqualFold(strings.TrimSpace(regionOpts.TriggerType), "timer") {
-				invokeOpts := regionOpts
-				invokeOpts.TriggerType = "invoke"
-				invokeOpts.NodeCount = 1
-				invokeOpts.FunctionNamePrefix = strings.TrimSuffix(regionOpts.FunctionNamePrefix, "-") + "-invoke"
-				invokeNodes, inspectInvokeErr := inspectCollectorFleet(ctx, client, invokeOpts)
-				if inspectInvokeErr != nil {
-					return summary, inspectInvokeErr
-				}
-				invokeItems, buildInvokeErr := buildCollectorFleetCreateItems(invokeOpts, packageID)
-				if buildInvokeErr != nil {
-					return summary, buildInvokeErr
-				}
-				invokeSummary, submitInvokeErr := submitCollectorFleet(ctx, client, invokeOpts, packageID, invokeItems, invokeNodes)
-				if submitInvokeErr != nil {
-					return summary, submitInvokeErr
-				}
-				summary.TotalCount += invokeSummary.TotalCount
-				if invokeSummary.JobID != "" {
-					jobs = append(jobs, invokeSummary.JobID)
-					summary.JobIDs = append([]string(nil), jobs...)
-					summary.JobID = strings.Join(summary.JobIDs, ",")
-				}
-			}
+			summary.JobIDs = append([]string(nil), jobs...)
+			summary.JobID = strings.Join(summary.JobIDs, ",")
 		}
 		return summary, nil
 	}
@@ -815,7 +851,7 @@ func loadCollectorSCFFetcherConfigSnapshot(path, spaceID string) (*setupconfig.S
 	return nil, nil, fmt.Errorf("scf_fetcher has no configuration for space %q", spaceID)
 }
 
-func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconfig.Host) (collectorSCFTrustMaterial, error) {
+func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconfig.Host, controlRoot string) (collectorSCFTrustMaterial, error) {
 	transport, err := setupssh.Dial(ctx, sshTarget(controlHost), controlHost.Password, setupssh.Options{Timeout: 15 * time.Second})
 	if err != nil {
 		return collectorSCFTrustMaterial{}, fmt.Errorf("connect control host to read SCF trust material: %w", err)
@@ -834,7 +870,15 @@ func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconf
 	if err != nil {
 		return collectorSCFTrustMaterial{}, fmt.Errorf("read control EventBus CA: %w", err)
 	}
-	gatewayCA, err := readRemoteControlFile(ctx, transport, "moox/prod/certs/gateway/peers.pem")
+	storageAuthRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/storage-internal-auth.env"))
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("read control Storage auth: %w", err)
+	}
+	storagePrimaryAuthSecret, err := collectorStoragePrimaryAuthSecret(storageAuthRaw)
+	if err != nil {
+		return collectorSCFTrustMaterial{}, fmt.Errorf("validate control Storage auth: %w", err)
+	}
+	gatewayCA, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "certs/gateway/peers.pem"))
 	if err != nil {
 		return collectorSCFTrustMaterial{}, fmt.Errorf("read control Gateway peer CA: %w", err)
 	}
@@ -844,21 +888,39 @@ func resolveCollectorSCFTrustMaterial(ctx context.Context, controlHost setupconf
 	// a missing service-gateway CA must not block publishing this short-lived
 	// fleet.  Keep the material when an internal CA is present for other
 	// trigger types, but treat it as optional here.
-	serviceGatewayCA, _ := readRemoteControlFile(ctx, transport, "moox/prod/certs/caddy/root.crt")
+	serviceGatewayCA, _ := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "certs/caddy/root.crt"))
 	return collectorSCFTrustMaterial{
-		EventBusCredential:  credential,
-		EventBusCAPEM:       eventBusCA,
-		GatewayCAPEM:        gatewayCA,
-		ServiceGatewayCAPEM: serviceGatewayCA,
+		EventBusCredential:       credential,
+		EventBusCAPEM:            eventBusCA,
+		GatewayCAPEM:             gatewayCA,
+		ServiceGatewayCAPEM:      serviceGatewayCA,
+		StoragePrimaryAuthSecret: storagePrimaryAuthSecret,
 	}, nil
 }
 
 func readRemoteControlFile(ctx context.Context, transport setupssh.Client, relativePath string) ([]byte, error) {
-	result, err := transport.Run(ctx, []string{"sh", "-lc", `cat "$HOME/$1"`, "moox-scf-trust", relativePath}, nil)
+	command := `cat "$HOME/$1"`
+	if filepath.IsAbs(relativePath) {
+		command = `cat "$1"`
+	}
+	result, err := transport.Run(ctx, []string{"sh", "-lc", command, "moox-scf-trust", relativePath}, nil)
 	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 1<<20 {
 		return nil, fmt.Errorf("control_public_file_unavailable")
 	}
 	return []byte(result.Stdout), nil
+}
+
+func collectorStoragePrimaryAuthSecret(raw []byte) (string, error) {
+	normalized, err := normalizeStorageInternalAuth(string(raw))
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(normalized, "\n") {
+		if value, ok := strings.CutPrefix(line, "MOOX_STORAGE_PRIMARY_AUTH_SECRET="); ok {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("primary auth secret is missing")
 }
 
 func validateCollectorPublishAuth(opts collectorPublishOptions) error {
@@ -983,6 +1045,84 @@ func submitCollectorFleet(
 	summary.Operation = "deploy_nodes"
 	summary.TotalCount = resp.TotalCount
 	return summary, nil
+}
+
+// waitCollectorBatch makes publishing fail closed. CloudNode submissions are
+// asynchronous; proceeding to the next fleet without observing a terminal
+// success used to hide failed SCF deployments until the first production
+// timer fired.
+func waitCollectorBatch(ctx context.Context, client *adminclient.Client, jobID string) error {
+	if strings.TrimSpace(jobID) == "" {
+		return nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		change, err := client.GetNodeBatchChange(waitCtx, jobID)
+		if err != nil {
+			return err
+		}
+		if change == nil || change.Job == nil {
+			return fmt.Errorf("empty batch status")
+		}
+		switch strings.ToUpper(strings.TrimSpace(change.Job.Status)) {
+		case "NODE_BATCH_STATUS_SUCCESS", "SUCCESS", "SUCCEEDED":
+			return nil
+		case "NODE_BATCH_STATUS_FAILED", "FAILED", "NODE_BATCH_STATUS_PARTIAL", "PARTIAL":
+			return fmt.Errorf("batch %s ended with status %s failed=%d", jobID, change.Job.Status, change.Job.FailedCount)
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("wait batch %s: %w", jobID, waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// runCollectorSCFCanary exercises the same bounded market_fetch path used by
+// the scheduler. It writes one current BTC/USDT bar to Storage and publishes
+// the completion event, so a successful response proves credentials, CA,
+// public EventBus reachability, EventBus ACL/ACK and Storage auth together.
+func runCollectorSCFCanary(ctx context.Context, client *adminclient.Client, opts collectorPublishOptions, nodeID string) error {
+	batchID := fmt.Sprintf("deploy-canary-%d", time.Now().UnixNano())
+	response, err := client.InvokeFunction(ctx, nodeID, map[string]any{
+		"action":                     "market_fetch",
+		"storage_rpc_gateway_target": opts.StorageRPCGatewayTarget,
+		"data": map[string]any{
+			"batch_id": batchID,
+			// Completion events are validated against the scheduler's batch
+			// identity. Keep a stable schedule fence on the canary as well;
+			// omitting it makes the canary fail after Storage has already
+			// succeeded, defeating the deployment gate.
+			"schedule_id": "deploy-canary-schedule",
+			"batch_kind":  "realtime",
+			"space_id":    opts.SpaceID,
+			"dataset_id":  "binance_spot_kline_1m",
+			"frequency":   "1m",
+			"provider":    "binance",
+			"market_type": "spot",
+			"region":      opts.Region,
+			"node_id":     nodeID,
+			"items": []map[string]any{{
+				"subject_id": "BTC-USDT", "symbol": "BTCUSDT", "provider": "binance", "market_type": "spot",
+				// The exchange response includes the currently-open candle. A
+				// one-bar request therefore has no closed bar to persist; ask for
+				// two so the canary validates an actual write rather than a false
+				// empty-data failure at the minute boundary.
+				"data_type": "kline", "dataset_id": "binance_spot_kline_1m", "frequency": "1m", "bar_limit": 2,
+			}},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if success, ok := response["success"].(bool); !ok || !success {
+		raw, _ := json.Marshal(response)
+		return fmt.Errorf("market_fetch canary returned unsuccessful response: %s", raw)
+	}
+	return nil
 }
 
 func publishCollectorFunctionStatus(ctx context.Context, opts collectorPublishStatusOptions) (*adminclient.NodeBatchChangeResponse, error) {
@@ -1796,19 +1936,115 @@ func collectorEventBusCredentialMaterial(opts collectorPublishOptions) (jetstrea
 	return credential, caPEM, nil
 }
 
-func validateCollectorEventBusCredential(credential jetstream.CredentialFile) error {
+// preflightCollectorSCFEventBusCredential validates the trust material loaded
+// from the control host and rewrites its endpoint from the deployment manifest.
+// Control-plane credentials intentionally point at the local EventBus listener;
+// that address is valid for host services but cannot be used by an SCF function.
+func preflightCollectorSCFEventBusCredential(
+	credential jetstream.CredentialFile,
+	caPEM []byte,
+	eventBus setupconfig.EventBus,
+) (jetstream.CredentialFile, error) {
+	if err := validateCollectorEventBusCredentialShape(credential); err != nil {
+		return jetstream.CredentialFile{}, fmt.Errorf("invalid control EventBus credential: %w", err)
+	}
+	if len(strings.TrimSpace(string(caPEM))) == 0 {
+		return jetstream.CredentialFile{}, fmt.Errorf("control EventBus credential requires CA material")
+	}
+	if err := validateCollectorEventBusCAPEM(caPEM); err != nil {
+		return jetstream.CredentialFile{}, fmt.Errorf("invalid control EventBus CA material: %w", err)
+	}
+	address := strings.TrimSpace(eventBus.PublicAddress)
+	if address == "" || isCollectorEventBusLoopbackHost(address) {
+		return jetstream.CredentialFile{}, fmt.Errorf("eventbus.public_address must be a non-loopback host for SCF")
+	}
+	if eventBus.Port < 1 || eventBus.Port > 65535 {
+		return jetstream.CredentialFile{}, fmt.Errorf("eventbus.port must be between 1 and 65535")
+	}
+	if !eventBus.TLSEnabled {
+		return jetstream.CredentialFile{}, fmt.Errorf("eventbus.tls_enabled must be true for SCF")
+	}
+
+	prepared := credential
+	prepared.URLs = []string{"tls://" + net.JoinHostPort(address, strconv.Itoa(eventBus.Port))}
+	if err := validateCollectorEventBusCredential(prepared); err != nil {
+		return jetstream.CredentialFile{}, fmt.Errorf("SCF EventBus credential does not match custom.toml: %w", err)
+	}
+	return prepared, nil
+}
+
+// validateCollectorEventBusCAPEM rejects a placeholder or truncated CA before
+// it can be embedded in every SCF function. A CertPool append alone is not
+// sufficient because AppendCertsFromPEM silently returns false for malformed
+// input; parse every PEM block and require at least one CA certificate.
+func validateCollectorEventBusCAPEM(raw []byte) error {
+	remaining := raw
+	certificates := 0
+	caCertificates := 0
+	for {
+		block, rest := pem.Decode(remaining)
+		if block == nil {
+			break
+		}
+		remaining = rest
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return err
+		}
+		certificates++
+		if cert.IsCA {
+			caCertificates++
+		}
+	}
+	if certificates == 0 {
+		return fmt.Errorf("no certificates found")
+	}
+	if caCertificates == 0 {
+		return fmt.Errorf("no CA certificate found")
+	}
+	if strings.TrimSpace(string(remaining)) != "" {
+		return fmt.Errorf("trailing non-PEM data")
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(raw) {
+		return fmt.Errorf("certificate pool is empty")
+	}
+	return nil
+}
+
+func validateCollectorEventBusCredentialShape(credential jetstream.CredentialFile) error {
 	if len(credential.URLs) != 1 {
-		return fmt.Errorf("market-fetch-publisher credential must contain exactly one EventBus URL")
+		return fmt.Errorf("credential must contain exactly one EventBus URL")
 	}
 	eventBusURL, err := url.Parse(credential.URLs[0])
 	if err != nil || eventBusURL.Scheme != "tls" || eventBusURL.Hostname() == "" || eventBusURL.Port() == "" {
-		return fmt.Errorf("market-fetch-publisher credential URL must be tls with host and port")
-	}
-	if host := eventBusURL.Hostname(); host == "localhost" || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback() {
-		return fmt.Errorf("SCF EventBus URL must not use a loopback host")
+		return fmt.Errorf("credential URL must be tls with host and port")
 	}
 	if strings.TrimSpace(credential.Username) == "" || strings.TrimSpace(credential.Password) == "" {
-		return fmt.Errorf("market-fetch-publisher credential requires username and password")
+		return fmt.Errorf("credential requires username and password")
+	}
+	return nil
+}
+
+func isCollectorEventBusLoopbackHost(host string) bool {
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
+}
+
+func validateCollectorEventBusCredential(credential jetstream.CredentialFile) error {
+	if err := validateCollectorEventBusCredentialShape(credential); err != nil {
+		return fmt.Errorf("market-fetch-publisher %w", err)
+	}
+	eventBusURL, _ := url.Parse(credential.URLs[0])
+	if isCollectorEventBusLoopbackHost(eventBusURL.Hostname()) {
+		return fmt.Errorf("SCF EventBus URL must not use a loopback host")
 	}
 	return nil
 }

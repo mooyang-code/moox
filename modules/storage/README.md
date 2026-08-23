@@ -115,13 +115,17 @@ Outbox ID 使用定长二进制保存。Relay 按 ID 同步发布，失败后停
 moox.storage.dataset.rows.upserted.v2.<space-token>.<dataset-token>
 ```
 
-Token 是可逆的小写无 Padding Base32。View 使用唯一 Consumer
-View 使用三个相互独立的 durable：`storage_view_kline_v2`、
-`storage_view_metrics_v2`、`storage_view_other_v2`。每个 durable 的
+Token 是可逆的小写无 Padding Base32。View 使用四个相互独立的 durable：`storage_view_kline`、
+`storage_view_factor`、`storage_view_metrics`、`storage_view_misc`。每个 durable 的
 `FetchBatch`、`MaxAckPending`、worker 和精确 Dataset subject 都在
 `storage.view.consumer_partitions` 中配置；K 线分区默认只接收
-`crypto_market/binance_spot_kline_1m`。同一 Dataset 的 rows、Marker 和 SyncPoint
-进入同一个 Dataset 队列（队列键为 `space_id + dataset_id`），不同分区和 Dataset 可并行。
+`crypto_market/binance_spot_kline_1m`，因子分区只接收
+`crypto_market/binance_spot_kline_1m_factor`。同一 Dataset 的 rows、Marker 和 SyncPoint
+进入同一个 Dataset 队列（队列键为 `space_id + dataset_id`），不同分区和 Dataset 可并行；同一 Dataset
+仍按事件顺序消费，避免 rows 越过 Marker。连续 rows delivery 会在不跨越 Marker 的前提下合并为一次索引写入，
+因此单个因子 Dataset 也能通过批量事务提高吞吐。因子分区默认 `fetch_batch=16`、`max_workers=8`、
+`max_ack_pending=128`；Factor 会按同一 subject/period 把多个因子输出合并成一次 Primary 写入，减少
+DuckDB 事务和事件数量。若机器内存不足，应优先降低因子分区 worker，而不是扩大 K 线分区。
 Active 写失败时保持当前 Delivery 并本地退避；无法恢复的
 Subject/Proto/Payload 错误执行 `Term`，避免毒消息永久阻塞全部 Dataset。
 
@@ -131,6 +135,11 @@ Subject/Proto/Payload 错误执行 `Term`，避免毒消息永久阻塞全部 Da
 durable，按精确 Dataset subject 清理时序队列并删除时序 View A/B 索引，但默认保留 Primary
 事实数据。Record/Bleve View 也会删除 A/B 索引并从清空后的新事件开始，历史记录不保留；只有
 `--reset-all-storage-data` 才会删除 Primary/DataNode Pebble 数据，并在重启后只等待服务健康。
+
+从旧版升级时，旧版 `storage_view`、`storage_view_period_v1`、`storage_view_other_v2` 以及带
+版本后缀的四个 View durable 不再作为运行时 durable；执行一次
+`moox-cli storage reset-view-consumers --dry-run` 检查范围，确认后用 `--yes`
+删除旧 durable 及其积压，再启动新的无版本后缀 durable。
 
 ## 认证
 

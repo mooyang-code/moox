@@ -253,10 +253,10 @@ func (p StorageViewConsumerPartition) Datasets() []StorageViewConsumerDataset {
 func (v *StorageView) applyConsumerPartitionDefaults() {
 	if len(v.ConsumerPartitions) == 0 {
 		v.ConsumerPartitions = []StorageViewConsumerPartition{
-			{ID: "kline", Durable: "storage_view_kline_v2", Routes: []StorageViewConsumerRoute{{SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
-			{ID: "system_metrics", Durable: "storage_view_metrics_v2", Routes: []StorageViewConsumerRoute{{SpaceID: "moox_system", DatasetIDs: []string{"moox_service_metrics"}}}, FetchBatch: 2, MaxWorkers: 1, MaxAckPending: 8},
-			{ID: "other", Durable: "storage_view_other_v2", Routes: []StorageViewConsumerRoute{
-				{SpaceID: "crypto_market", DatasetIDs: []string{"perpetual_kline_1h", "spot_kline_1h", "binance_spot_kline_1m_factor"}},
+			{ID: "kline", Durable: events.StorageViewKlineConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m"}}}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
+			{ID: "factor", Durable: events.StorageViewFactorConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "crypto_market", DatasetIDs: []string{"binance_spot_kline_1m_factor"}}}, FetchBatch: 16, MaxWorkers: 8, MaxAckPending: 128},
+			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "moox_system", DatasetIDs: []string{"moox_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
+			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
 				{SpaceID: "moox_system", DatasetIDs: []string{"host_disk_v1", "host_fs_v1", "host_net_v1", "host_resource_v1"}},
 				{SpaceID: "stock_cn", DatasetIDs: []string{"financial_statement_metric", "financial_summary", "index_kline", "stock_kline"}},
 			}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
@@ -311,7 +311,7 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		if !validConsumerName(id) || !validConsumerName(durable) {
 			return fmt.Errorf("storage view consumer partition %q has an invalid id or durable name", id)
 		}
-		if durable != events.StorageViewKlineConsumer && durable != events.StorageViewMetricsConsumer && durable != events.StorageViewOtherConsumer {
+		if durable != events.StorageViewKlineConsumer && durable != events.StorageViewFactorConsumer && durable != events.StorageViewMetricsConsumer && durable != events.StorageViewMiscConsumer {
 			return fmt.Errorf("storage view durable %q is not one of the managed partition durables", durable)
 		}
 		if _, exists := partitionIDs[id]; exists {
@@ -372,11 +372,11 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		// created routes would make a fresh deployment unable to start before
 		// those optional Views exist.
 	}
-	// The three durable consumers are an intentional topology contract, not
+	// The four durable consumers are an intentional topology contract, not
 	// optional tuning knobs. A partial or overlapping config would silently put
 	// Kline back behind system metrics, defeating the partitioning guarantee.
-	if len(durables) != 3 {
-		return fmt.Errorf("storage view consumer topology must define exactly three durables (kline, metrics, other); got %d", len(durables))
+	if len(durables) != 4 {
+		return fmt.Errorf("storage view consumer topology must define exactly four durables (kline, factor, metrics, misc); got %d", len(durables))
 	}
 	requiredRoutes := map[string]struct {
 		durable string
@@ -384,6 +384,7 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		dataset string
 	}{
 		"kline":   {durable: events.StorageViewKlineConsumer, space: "crypto_market", dataset: "binance_spot_kline_1m"},
+		"factor":  {durable: events.StorageViewFactorConsumer, space: "crypto_market", dataset: "binance_spot_kline_1m_factor"},
 		"metrics": {durable: events.StorageViewMetricsConsumer, space: "moox_system", dataset: "moox_service_metrics"},
 	}
 	for name, required := range requiredRoutes {

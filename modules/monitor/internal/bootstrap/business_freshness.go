@@ -145,6 +145,13 @@ func buildBusinessFreshnessReporter(
 		for _, check := range existing {
 			key := check.SpaceID + "\x00" + check.CheckID
 			if _, frozen := suppressed[key]; frozen {
+				// Suppression avoids duplicating a producer-stale signal, but the
+				// old business check still needs a successful result so its alert
+				// state can resolve instead of remaining permanently firing.
+				items[key] = businessFreshnessItem{
+					spaceID: check.SpaceID, checkID: check.CheckID, name: check.Name,
+					success: true, reason: "no_longer_expected",
+				}
 				continue
 			}
 			if _, ok := items[key]; !ok {

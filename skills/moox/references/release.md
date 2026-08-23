@@ -31,7 +31,7 @@ Environment variables:
 
 - `MOOX_DEV_SSH_TARGET`: optional SSH target for developer scripts.
 - `scripts/deploy-moox.sh --target user@host`: preferred explicit deploy target.
-- `REMOTE_ROOT`: default `~/moox`.
+- `REMOTE_ROOT`: default `/data/moox`.
 - `MOOX_COLLECTOR_ADMIN_GATEWAY_URL`: optional same-host service-directory override; current deployment contract uses the independent Gateway at `http://127.0.0.1:11002`.
 - `MOOX_GATEWAY_NODE_ID`, `MOOX_GATEWAY_SERVICE_KEY_ID`, and `MOOX_GATEWAY_SERVICE_SECRET_KEY`: node-scoped HMAC identity for machine calls to `/api/service/*`. Deployment persists it in mode-`0600` `secrets/gateway-service.env`.
 - `MOOX_GATEWAY_CA_FILE`: CA bundle path for host processes. Serverless runtimes receive the same public certificates as base64 in `MOOX_GATEWAY_CA_PEM_B64`; file and material inputs are mutually exclusive.

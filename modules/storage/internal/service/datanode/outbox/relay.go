@@ -32,6 +32,12 @@ type RelayOptions struct {
 	Metrics                       *observability.ViewMetrics
 	ProcessedEventCleanupInterval time.Duration
 	ProcessedEventRetention       time.Duration
+	// ReconnectAfterFailures lets a long-lived relay replace a stale NATS
+	// connection after EventBus restarts instead of waiting for the process to
+	// be restarted manually. It is ignored when the publisher does not expose
+	// a Reconnect method.
+	ReconnectAfterFailures int
+	ReconnectCooldown      time.Duration
 	// DeleteOutbox is injectable for recovery tests. Production uses Pebble's
 	// delete operation, while tests can force a publish/delete split.
 	DeleteOutbox  func(context.Context, []uint64) error
@@ -42,15 +48,17 @@ type RelayOptions struct {
 // loop before later IDs are attempted; only the contiguous successful prefix
 // is removed from Pebble.
 type Relay struct {
-	store     *pebble.Store
-	publisher Publisher
-	options   RelayOptions
-	metrics   *observability.ViewMetrics
-	stop      chan struct{}
-	done      chan struct{}
-	started   chan struct{}
-	once      sync.Once
-	startOnce sync.Once
+	store           *pebble.Store
+	publisher       Publisher
+	options         RelayOptions
+	metrics         *observability.ViewMetrics
+	stop            chan struct{}
+	done            chan struct{}
+	started         chan struct{}
+	once            sync.Once
+	startOnce       sync.Once
+	publishFailures int
+	lastReconnect   time.Time
 }
 
 func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Relay, error) {
@@ -71,6 +79,12 @@ func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Rel
 	}
 	if opts.ProcessedEventRetention <= 0 {
 		opts.ProcessedEventRetention = store.ProcessedEventRetention()
+	}
+	if opts.ReconnectAfterFailures <= 0 {
+		opts.ReconnectAfterFailures = 3
+	}
+	if opts.ReconnectCooldown <= 0 {
+		opts.ReconnectCooldown = 5 * time.Second
 	}
 	if opts.Metrics == nil {
 		opts.Metrics = observability.DefaultViewMetrics
@@ -151,8 +165,14 @@ func (r *Relay) Close() {
 }
 
 func (r *Relay) flush(ctx context.Context) error {
-	if err := r.observeOutboxStats(ctx); err != nil {
-		return err
+	// OutboxStats builds a Pebble iterator across every SSTable. On a large
+	// DataNode this is an expensive operation, so the relay relies on the
+	// atomic write/delete hint and only scans when it is unknown or non-empty.
+	// This keeps an idle relay from monopolising a CPU while retaining a single
+	// restart-time scan to discover legacy entries.
+	if pending, known, mayHaveMore, oldest := r.store.OutboxPendingHint(); known && pending == 0 && !mayHaveMore {
+		r.metrics.SetOutboxSnapshotAt(0, oldest)
+		return nil
 	}
 	var err error
 	entries, err := r.store.ListOutbox(ctx, 0, r.options.BatchSize)
@@ -160,6 +180,8 @@ func (r *Relay) flush(ctx context.Context) error {
 		return err
 	}
 	if len(entries) == 0 {
+		pending, _, _, oldest := r.store.OutboxPendingHint()
+		r.metrics.SetOutboxSnapshotAt(pending, oldest)
 		return nil
 	}
 	confirmed := make([]uint64, 0, len(entries))
@@ -179,6 +201,8 @@ func (r *Relay) flush(ctx context.Context) error {
 		cancel()
 		if err != nil {
 			r.metrics.IncOutboxPublishError()
+			r.publishFailures++
+			r.reconnectPublisher(ctx)
 			if len(confirmed) > 0 {
 				err = errors.Join(err, r.cleanupConfirmed(ctx, confirmed))
 			}
@@ -188,12 +212,38 @@ func (r *Relay) flush(ctx context.Context) error {
 			r.metrics.IncOutboxDuplicatePublish()
 		}
 		confirmed = append(confirmed, entry.ID)
+		r.publishFailures = 0
 	}
 	err = r.options.DeleteOutbox(ctx, confirmed)
 	if err == nil {
-		err = r.observeOutboxStats(ctx)
+		pending, _, _, oldest := r.store.OutboxPendingHint()
+		r.metrics.SetOutboxSnapshotAt(pending, oldest)
 	}
 	return err
+}
+
+// reconnectPublisher is deliberately best-effort. The outbox entry remains
+// pending when the replacement connection cannot be established, so the next
+// poll retries both the reconnect and the publish without losing data.
+func (r *Relay) reconnectPublisher(ctx context.Context) {
+	if r.publishFailures < r.options.ReconnectAfterFailures {
+		return
+	}
+	reconnecter, ok := r.publisher.(interface{ Reconnect(context.Context) error })
+	if !ok {
+		return
+	}
+	if !r.lastReconnect.IsZero() && time.Since(r.lastReconnect) < r.options.ReconnectCooldown {
+		return
+	}
+	r.lastReconnect = time.Now()
+	reconnectCtx, cancel := context.WithTimeout(ctx, r.options.PublishTimeout)
+	defer cancel()
+	if err := reconnecter.Reconnect(reconnectCtx); err != nil {
+		r.report(fmt.Errorf("reconnect storage eventbus publisher: %w", err))
+		return
+	}
+	r.publishFailures = 0
 }
 
 func (r *Relay) cleanupConfirmed(ctx context.Context, ids []uint64) error {
@@ -204,9 +254,8 @@ func (r *Relay) cleanupConfirmed(ctx context.Context, ids []uint64) error {
 	if err := r.options.DeleteOutbox(ctx, ids); err != nil {
 		result = errors.Join(result, fmt.Errorf("delete confirmed outbox entries: %w", err))
 	}
-	if err := r.observeOutboxStats(ctx); err != nil {
-		result = errors.Join(result, fmt.Errorf("observe outbox after partial cleanup: %w", err))
-	}
+	pending, _, _, oldest := r.store.OutboxPendingHint()
+	r.metrics.SetOutboxSnapshotAt(pending, oldest)
 	return result
 }
 

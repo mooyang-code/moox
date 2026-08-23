@@ -71,6 +71,11 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
+			// Fail before mutating Admin/Storage metadata when an internal Caddy
+			// CA is not trusted by the browser machine.
+			if err := ensureSetupBrowserCATrust(cmd.Context(), snapshot); err != nil {
+				return err
+			}
 
 			admin, err := deps.applySpaces(cmd.Context(), snapshot, bundle.Spaces)
 			if err != nil {

@@ -54,6 +54,9 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	metrics.SetOutboxSnapshotAt(3, time.Now().Add(-4*time.Second))
 	metrics.ObserveDelivery("term", "success")
 	metrics.ObservePeriodWaiting("prices-view", "1m", 1)
+	metrics.ObserveViewOutputWatermark("crypto_market", "binance_spot_kline_1m_factor", "1m", time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC))
+	metrics.ObserveViewOutputWatermark("crypto_market", "binance_spot_kline_1m_factor", "1m", time.Date(2026, 8, 20, 13, 0, 0, 0, time.UTC))
+	assert.Equal(t, float64(time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC).Unix()), testutil.ToFloat64(metrics.viewOutputWatermark.WithLabelValues("crypto_market", "binance_spot_kline_1m_factor", "1m")))
 	metrics.ObserveReadyPublishRetry("prices-view", "source_period_ready")
 	metrics.ObserveRestore(true, 250*time.Millisecond)
 
@@ -95,6 +98,7 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 		"moox_storage_outbox_publish_errors_total":             true,
 		"moox_storage_outbox_duplicate_publish_total":          true,
 		"moox_storage_view_period_waiting_datasets":            true,
+		"moox_storage_view_output_watermark_timestamp_seconds": true,
 		"moox_storage_view_ready_publish_retry_total":          true,
 		"moox_storage_view_restore_duration_seconds":           true,
 		"moox_storage_view_restore_ready":                      true,

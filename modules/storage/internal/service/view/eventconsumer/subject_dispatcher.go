@@ -13,7 +13,9 @@ import (
 )
 
 type subjectDeliveryHandler func(context.Context, *jetstream.Delivery, *deliveryHeartbeat) error
+type subjectDeliveryBatchHandler func(context.Context, []*jetstream.Delivery, []*deliveryHeartbeat) error
 type deliveryQueueKey func(*jetstream.Delivery) (string, error)
+type deliveryBatchEligible func(*jetstream.Delivery) bool
 
 type subjectDispatcherMetricsHooks struct {
 	newHeartbeat func(context.Context, *jetstream.Delivery) *deliveryHeartbeat
@@ -37,19 +39,22 @@ type queuedDelivery struct {
 // subject queue is scheduled at most once, so one subject cannot have two
 // active handlers.
 type subjectDispatcher struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	maxWorkers int
-	handler    subjectDeliveryHandler
-	reporter   jetstream.ErrorReporter
-	hooks      subjectDispatcherMetricsHooks
-	queueKey   deliveryQueueKey
-	ready      chan *subjectQueue
-	pending    chan struct{}
-	queues     map[string]*subjectQueue
-	mu         sync.Mutex
-	closed     bool
-	wg         sync.WaitGroup
+	ctx           context.Context
+	cancel        context.CancelFunc
+	maxWorkers    int
+	handler       subjectDeliveryHandler
+	batch         subjectDeliveryBatchHandler
+	batchSize     int
+	batchEligible deliveryBatchEligible
+	reporter      jetstream.ErrorReporter
+	hooks         subjectDispatcherMetricsHooks
+	queueKey      deliveryQueueKey
+	ready         chan *subjectQueue
+	pending       chan struct{}
+	queues        map[string]*subjectQueue
+	mu            sync.Mutex
+	closed        bool
+	wg            sync.WaitGroup
 }
 
 func newSubjectDispatcher(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
@@ -57,11 +62,20 @@ func newSubjectDispatcher(parent context.Context, maxWorkers, maxPending int, ha
 }
 
 func newSubjectDispatcherWithKey(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, queueKey deliveryQueueKey, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
+	return newSubjectDispatcherWithKeyAndBatch(parent, maxWorkers, maxPending, handler, nil, 1, nil, reporter, queueKey, hooks...)
+}
+
+func newSubjectDispatcherWithKeyAndBatch(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, batch subjectDeliveryBatchHandler, batchSize int, batchEligible deliveryBatchEligible, reporter jetstream.ErrorReporter, queueKey deliveryQueueKey, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
 	if maxWorkers < 1 {
 		maxWorkers = 1
 	}
 	if maxPending < 1 {
 		maxPending = maxWorkers
+	}
+	if batchSize < 2 || batch == nil || batchEligible == nil {
+		batchSize = 1
+		batch = nil
+		batchEligible = nil
 	}
 	ctx, cancel := context.WithCancel(parent)
 	var metricsHooks subjectDispatcherMetricsHooks
@@ -69,8 +83,9 @@ func newSubjectDispatcherWithKey(parent context.Context, maxWorkers, maxPending 
 		metricsHooks = hooks[0]
 	}
 	d := &subjectDispatcher{
-		ctx: ctx, cancel: cancel, maxWorkers: maxWorkers, handler: handler, reporter: reporter,
-		hooks: metricsHooks, queueKey: queueKey,
+		ctx: ctx, cancel: cancel, maxWorkers: maxWorkers, handler: handler,
+		batch: batch, batchSize: batchSize, batchEligible: batchEligible,
+		reporter: reporter, hooks: metricsHooks, queueKey: queueKey,
 		ready: make(chan *subjectQueue, maxWorkers), pending: make(chan struct{}, maxPending), queues: make(map[string]*subjectQueue),
 	}
 	d.wg.Add(maxWorkers)
@@ -203,26 +218,40 @@ func (d *subjectDispatcher) worker() {
 			if queue == nil {
 				continue
 			}
-			item, ok := d.next(queue)
+			items, ok := d.nextBatch(queue)
 			if !ok {
 				continue
 			}
-			delivery := item.delivery
-			if d.hooks.onStart != nil {
-				d.hooks.onStart(delivery)
-			}
-			if d.handler != nil {
-				if err := d.handler(d.ctx, delivery, item.heartbeat); err != nil && d.ctx.Err() == nil && d.reporter != nil {
-					d.reporter.Report(fmt.Errorf("storage view subject %q delivery failed: %w", queue.subject, err))
+			for _, item := range items {
+				if d.hooks.onStart != nil {
+					d.hooks.onStart(item.delivery)
 				}
 			}
-			if item.heartbeat != nil {
-				item.heartbeat.stop()
+			var err error
+			if len(items) > 1 && d.batch != nil {
+				deliveries := make([]*jetstream.Delivery, 0, len(items))
+				heartbeats := make([]*deliveryHeartbeat, 0, len(items))
+				for _, item := range items {
+					deliveries = append(deliveries, item.delivery)
+					heartbeats = append(heartbeats, item.heartbeat)
+				}
+				err = d.batch(d.ctx, deliveries, heartbeats)
+			} else if d.handler != nil {
+				item := items[0]
+				err = d.handler(d.ctx, item.delivery, item.heartbeat)
 			}
-			if d.hooks.onFinish != nil {
-				d.hooks.onFinish(delivery)
+			if err != nil && d.ctx.Err() == nil && d.reporter != nil {
+				d.reporter.Report(fmt.Errorf("storage view subject %q delivery failed: %w", queue.subject, err))
 			}
-			<-d.pending
+			for _, item := range items {
+				if item.heartbeat != nil {
+					item.heartbeat.stop()
+				}
+				if d.hooks.onFinish != nil {
+					d.hooks.onFinish(item.delivery)
+				}
+				<-d.pending
+			}
 			d.finish(queue)
 		case <-d.ctx.Done():
 			return
@@ -230,7 +259,7 @@ func (d *subjectDispatcher) worker() {
 	}
 }
 
-func (d *subjectDispatcher) next(queue *subjectQueue) (*queuedDelivery, bool) {
+func (d *subjectDispatcher) nextBatch(queue *subjectQueue) ([]*queuedDelivery, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if len(queue.deliveries) == 0 {
@@ -238,9 +267,15 @@ func (d *subjectDispatcher) next(queue *subjectQueue) (*queuedDelivery, bool) {
 		delete(d.queues, queue.subject)
 		return nil, false
 	}
-	delivery := queue.deliveries[0]
-	queue.deliveries = queue.deliveries[1:]
-	return delivery, true
+	size := 1
+	if d.batch != nil && d.batchSize > 1 && d.batchEligible(queue.deliveries[0].delivery) {
+		for size < d.batchSize && size < len(queue.deliveries) && d.batchEligible(queue.deliveries[size].delivery) {
+			size++
+		}
+	}
+	items := append([]*queuedDelivery(nil), queue.deliveries[:size]...)
+	queue.deliveries = queue.deliveries[size:]
+	return items, true
 }
 
 func (d *subjectDispatcher) finish(queue *subjectQueue) {

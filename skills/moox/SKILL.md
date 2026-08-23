@@ -154,7 +154,7 @@ See `references/` for more detailed notes.
 ```bash
 # 先配置 MOOX_DEV_SSH_TARGET（勿提交密码）
 ./skills/dev-helper/scripts/storage-remote-build.sh \
-  --deploy-dir /home/ubuntu/moox \
+  --deploy-dir /data/moox \
   --deploy
 ```
 
@@ -175,6 +175,15 @@ candidate Caddyfile, rejects non-loopback upstreams, starts or reloads only the
 MooX-owned edge, and performs HTTPS acceptance. Its sanitized JSON includes a
 `certificate` summary (`mode`, `issuer`, and `automatic_renewal`) so the Skill
 can prove which trust model was selected without reading keys.
+
+For internal CA deployments, `moox-cli` also checks and installs the Caddy root
+in the operator machine's browser trust store during control initialization.
+The same check runs before publishing `admin` or `web-host` packages. If a
+previous run was interrupted, repair it with:
+
+```bash
+./bin/moox-cli setup trust-browser --file ./custom.toml
+```
 
 Automatic mode selects Let's Encrypt public certificates for public IP/DNS
 hosts and Caddy internal CA for private, loopback, and `.localhost` hosts.

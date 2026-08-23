@@ -222,9 +222,12 @@ assert_grep 'name: trpc.moox.storage.view.cleanup.timer' "${DEPLOY_DIR}/storage-
 assert_grep 'port: 20308' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'network: "\*/30 \* \* \* \* \*"' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'timeout: 20000' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
-for durable in storage_view_kline_v2 storage_view_metrics_v2 storage_view_other_v2; do
+for durable in storage_view_kline storage_view_factor storage_view_metrics storage_view_misc; do
   assert_grep "durable: ${durable}" "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 done
+assert_grep 'fetch_batch: 16' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'max_workers: 8' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
+assert_grep 'max_ack_pending: 128' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 if grep -q 'storage_view_period_v1' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"; then
   echo "legacy Storage View durable remains in package" >&2
   exit 1

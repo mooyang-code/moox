@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
@@ -37,6 +38,7 @@ func buildMonitorMarketCanary(
 		credentials,
 	)...)
 	canaries := make([]watchdog.MarketCanary, 0, len(cfg.MarketCanary.Subjects))
+	configuredCheckIDs := make(map[string]struct{}, len(cfg.MarketCanary.Subjects))
 	for _, subject := range cfg.MarketCanary.Subjects {
 		canaryConfig := watchdog.MarketCanaryConfig{
 			SpaceID: subject.SpaceID, DatasetID: subject.DatasetID, SubjectID: subject.Symbol, Frequency: subject.Frequency,
@@ -50,6 +52,7 @@ func buildMonitorMarketCanary(
 			GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceManual,
 			Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000,
 		}
+		configuredCheckIDs[check.CheckID] = struct{}{}
 		existing, getErr := runtime.Repositories.Checks.Get(ctx, check.SpaceID, check.CheckID)
 		switch {
 		case getErr == nil:
@@ -67,6 +70,42 @@ func buildMonitorMarketCanary(
 		canaries = append(canaries, watchdog.MarketCanary{
 			Reader: reader, AuthInfo: storageauth.Primary("monitor-market-canary"), Config: canaryConfig,
 		})
+	}
+	// Canary identity includes the symbol. When configuration moves from an
+	// inactive symbol to an active one, leave no enabled check behind for the
+	// old identity; otherwise its last failed result remains visible forever in
+	// the business overview and can continue to drive a stale alert.
+	checks, err := runtime.Repositories.Checks.List(ctx, store.ListChecksOptions{
+		Source: domain.CheckSourceManual,
+		Page:   store.Page{PageSize: 500},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	for index := range checks {
+		check := &checks[index]
+		if !strings.HasPrefix(check.CheckID, "market_canary:") {
+			continue
+		}
+		if _, keep := configuredCheckIDs[check.CheckID]; keep {
+			continue
+		}
+		rules, err := runtime.Repositories.Alerts.ListRulesForCheck(ctx, check.SpaceID, check.CheckID)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Remove obsolete rules instead of merely disabling them. DeleteRule also
+		// removes a previously firing AlertState, so a retired symbol cannot keep
+		// contributing a stale alert to the availability overview.
+		for index := range rules {
+			if err := runtime.Repositories.Alerts.DeleteRule(ctx, rules[index].SpaceID, rules[index].RuleID); err != nil {
+				return nil, nil, err
+			}
+		}
+		check.Enabled = false
+		if err := runtime.Repositories.Checks.Update(ctx, check); err != nil {
+			return nil, nil, err
+		}
 	}
 	run := func(runCtx context.Context) error {
 		var errs []error

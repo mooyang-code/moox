@@ -235,14 +235,27 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 		opts.BoundReporter(true)
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
-	dispatcher := newSubjectDispatcherWithKey(loopCtx, opts.MaxWorkers, opts.MaxAckPending, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
+	var batchHandler subjectDeliveryBatchHandler
+	if _, ok := c.handler.(DatasetRowsBatchHandler); ok {
+		batchHandler = func(ctx context.Context, deliveries []*jetstream.Delivery, heartbeats []*deliveryHeartbeat) error {
+			if opts.BeforeProcess != nil {
+				for _, delivery := range deliveries {
+					if err := opts.BeforeProcess(ctx, delivery); err != nil {
+						return err
+					}
+				}
+			}
+			return c.processRowsBatchWithPolicy(ctx, deliveries, heartbeats, opts.MaxRetryAttempts)
+		}
+	}
+	dispatcher := newSubjectDispatcherWithKeyAndBatch(loopCtx, opts.MaxWorkers, opts.MaxAckPending, func(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat) error {
 		if opts.BeforeProcess != nil {
 			if err := opts.BeforeProcess(ctx, delivery); err != nil {
 				return err
 			}
 		}
 		return c.processDeliveryWithPolicy(ctx, delivery, heartbeat, opts.MaxRetryAttempts)
-	}, opts.ErrorReporter, func(delivery *jetstream.Delivery) (string, error) {
+	}, batchHandler, opts.FetchBatch, isDatasetRowsDelivery, opts.ErrorReporter, func(delivery *jetstream.Delivery) (string, error) {
 		return datasetQueueKey(c.registry, delivery)
 	}, subjectDispatcherMetricsHooks{
 		newHeartbeat: func(ctx context.Context, delivery *jetstream.Delivery) *deliveryHeartbeat {
@@ -373,6 +386,13 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 		}
 	}()
 	return func() { cancel(); <-done }, nil
+}
+
+func isDatasetRowsDelivery(delivery *jetstream.Delivery) bool {
+	if delivery == nil || delivery.DecodeError != nil {
+		return false
+	}
+	return strings.Contains(delivery.Subject, ".dataset.rows.upserted.")
 }
 
 func (c *Consumer) reconnectClient(ctx context.Context) error {

@@ -66,7 +66,7 @@ make build
 TARGET_GOOS=linux TARGET_GOARCH=amd64 ./scripts/build.sh hostagent
 
 # 本机/远端一键发布
-make deploy ARGS="--target localhost --dir ~/moox/dev"
+make deploy ARGS="--target localhost --dir /data/moox/dev"
 ```
 
 `scripts/deploy-moox.sh` 默认部署 Admin、Gateway、web-host、EventBus、CloudNode、Collector、Factor、Strategy、Trade、Monitor、Storage 和 Archive；可用对应的 `--no-<module>` 关闭。`control` profile 会部署 Strategy 和 Trade；HostAgent 使用独立的 Linux rootless 部署流程。

@@ -32,9 +32,9 @@ const (
 	storagePrimaryRemoteAddress  = "127.0.0.1:20101"
 	adminSpaceRemoteAddress      = "127.0.0.1:11107"
 	storageBrowserRemoteAddress  = "127.0.0.1:9527"
-	storageAuthFile              = "$HOME/moox/storage/secrets/storage-node-auth.env"
-	storagePrimaryAuthFile       = "$HOME/moox/storage/secrets/storage-internal-auth.env"
-	storageRemoteProvenanceFile  = "$HOME/moox/storage/build-provenance.json"
+	storageAuthFile              = "/data/moox/storage/secrets/storage-node-auth.env"
+	storagePrimaryAuthFile       = "/data/moox/storage/secrets/storage-internal-auth.env"
+	storageRemoteProvenanceFile  = "/data/moox/storage/build-provenance.json"
 	storageLocalProvenanceFile   = "release/deploy-stage/moox/build-provenance.json"
 	storageReleaseManifestFile   = "artifacts/storage-datanode-release-sha256.txt"
 	storageE2ESpec               = "tests/storage-datanode-management.remote.e2e.spec.ts"
@@ -776,7 +776,7 @@ esac`}, nil)
 func readStorageComponents(ctx context.Context, transport setupssh.Client) (map[string]storageComponent, error) {
 	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
 for name in storage-primary storage-node storage-view; do
-  if "$HOME/moox/storage/status.sh" "$name" >/dev/null 2>&1; then printf '%s ready\n' "$name"; else printf '%s unhealthy\n' "$name"; fi
+  if "/data/moox/storage/status.sh" "$name" >/dev/null 2>&1; then printf '%s ready\n' "$name"; else printf '%s unhealthy\n' "$name"; fi
 done`}, nil)
 	if err != nil {
 		return nil, errors.New("storage_component_unavailable")
@@ -799,7 +799,7 @@ done`}, nil)
 func readStorageBinaryHashes(ctx context.Context, transport setupssh.Client) (map[string]string, error) {
 	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
 for name in moox-storage-primary moox-storage-node moox-storage-view; do
-  hash=$(sha256sum "$HOME/moox/storage/bin/$name" | awk '{print $1}')
+  hash=$(sha256sum "/data/moox/storage/bin/$name" | awk '{print $1}')
   printf '%s %s\n' "$name" "$hash"
 done`}, nil)
 	if err != nil {
@@ -826,7 +826,7 @@ done`}, nil)
 
 func readStorageSchemaVersion(ctx context.Context, transport setupssh.Client) (int, error) {
 	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-db="$HOME/moox/data/storage/metadata/storage_metadata.db"
+db="/data/moox/data/storage/metadata/storage_metadata.db"
 version=$(sqlite3 -readonly "$db" "SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version';")
 printf '%s' "$version"`}, nil)
 	if err != nil {
@@ -1339,9 +1339,9 @@ func defaultSetupBrowserE2EStorage(ctx context.Context, snapshot *setupconfig.Sn
 	}
 	defer controlTransport.Close()
 	if _, err := controlTransport.Run(ctx, []string{"sh", "-lc", `set -eu
-"$HOME/moox/prod/status.sh" admin >/dev/null
-"$HOME/moox/prod/status.sh" gateway >/dev/null
-"$HOME/moox/prod/status.sh" web-host >/dev/null
+"/data/moox/prod/status.sh" admin >/dev/null
+"/data/moox/prod/status.sh" gateway >/dev/null
+"/data/moox/prod/status.sh" web-host >/dev/null
 curl -kfsS https://127.0.0.1:9527/ >/dev/null`}, nil); err != nil {
 		return storageBrowserResult{}, errors.New("browser_e2e_control_unavailable")
 	}

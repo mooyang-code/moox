@@ -19,6 +19,185 @@ func (c *Consumer) processDeliveryWithPolicy(ctx context.Context, delivery *jets
 	})
 }
 
+func (c *Consumer) processRowsBatchWithPolicy(ctx context.Context, deliveries []*jetstream.Delivery, heartbeats []*deliveryHeartbeat, maxRetryAttempts int) error {
+	if len(deliveries) < 2 {
+		if len(deliveries) == 1 {
+			var heartbeat *deliveryHeartbeat
+			if len(heartbeats) == 1 {
+				heartbeat = heartbeats[0]
+			}
+			return c.processDeliveryWithPolicy(ctx, deliveries[0], heartbeat, maxRetryAttempts)
+		}
+		return errors.New("storage view rows batch is empty")
+	}
+	batchHandler, ok := c.handler.(DatasetRowsBatchHandler)
+	if !ok {
+		for index, delivery := range deliveries {
+			var heartbeat *deliveryHeartbeat
+			if index < len(heartbeats) {
+				heartbeat = heartbeats[index]
+			}
+			if err := c.processDeliveryWithPolicy(ctx, delivery, heartbeat, maxRetryAttempts); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	items, err := c.decodeRowsBatch(deliveries)
+	if err != nil {
+		// Fall back to the single-delivery policy so a malformed event cannot
+		// make otherwise valid rows share its permanent-error decision.
+		for index, delivery := range deliveries {
+			var heartbeat *deliveryHeartbeat
+			if index < len(heartbeats) {
+				heartbeat = heartbeats[index]
+			}
+			if singleErr := c.processDeliveryWithPolicy(ctx, delivery, heartbeat, maxRetryAttempts); singleErr != nil {
+				return singleErr
+			}
+		}
+		return nil
+	}
+	return c.processDeliveryBatchWithPolicy(ctx, deliveries, heartbeats, maxRetryAttempts, func(ctx context.Context) error {
+		return batchHandler.HandleDatasetRowsBatch(ctx, items)
+	})
+}
+
+func (c *Consumer) decodeRowsBatch(deliveries []*jetstream.Delivery) ([]DatasetRowsBatchItem, error) {
+	items := make([]DatasetRowsBatchItem, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		if delivery == nil {
+			return nil, errors.New("storage view rows delivery is nil")
+		}
+		if delivery.DecodeError != nil {
+			return nil, delivery.DecodeError
+		}
+		message, payload, err := events.DecodeRaw(c.registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+		if err != nil {
+			return nil, err
+		}
+		rows, ok := payload.(*storagepb.DatasetRowsUpserted)
+		if !ok {
+			return nil, fmt.Errorf("storage view rows batch contains %T", payload)
+		}
+		items = append(items, DatasetRowsBatchItem{Message: message, Payload: rows})
+	}
+	return items, nil
+}
+
+func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliveries []*jetstream.Delivery, heartbeats []*deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context) error) error {
+	if c == nil || len(deliveries) == 0 || len(deliveries) != len(heartbeats) || apply == nil {
+		return errors.New("storage view delivery batch policy is incomplete")
+	}
+	if ctx == nil {
+		return errors.New("storage view delivery batch context is required")
+	}
+	started := time.Now()
+	metrics := c.config.Metrics
+	if metrics == nil {
+		metrics = observability.DefaultViewMetrics
+	}
+	defer func() { metrics.ObserveDeliveryDuration(time.Since(started)) }()
+	for _, delivery := range deliveries {
+		if delivery != nil && delivery.DeliveryCount > 1 {
+			metrics.IncRedelivery()
+		}
+	}
+	if maxRetryAttempts < 1 {
+		maxRetryAttempts = defaultMaxRetryAttempts
+	}
+	retryCount := 0
+	for ctx.Err() == nil {
+		if c.config.Lease != nil {
+			if err := c.config.Lease.Acquire(ctx); err != nil {
+				return errors.Join(err, batchHeartbeatError(heartbeats))
+			}
+		}
+		err := apply(ctx)
+		if c.config.Lease != nil {
+			c.config.Lease.Release()
+		}
+		if err == nil {
+			acked := make([]bool, len(deliveries))
+			for ctx.Err() == nil {
+				allAcked := true
+				for index, delivery := range deliveries {
+					if acked[index] {
+						continue
+					}
+					if ackErr := delivery.Ack(ctx); ackErr == nil {
+						acked[index] = true
+						metrics.ObserveDelivery("ack", "success")
+						continue
+					}
+					allAcked = false
+					metrics.IncAckError()
+					metrics.ObserveDelivery("ack", "error")
+				}
+				if allAcked {
+					return batchHeartbeatError(heartbeats)
+				}
+				if !sleepDeliveryRetry(ctx, time.Second) {
+					return ctx.Err()
+				}
+			}
+			return ctx.Err()
+		}
+		if IsPermanent(err) {
+			if maxRetryAttempts > 0 {
+				return termDeliveryBatch(ctx, deliveries, metrics, err, heartbeats)
+			}
+			if !progressDeliveryBatch(ctx, deliveries, metrics) || !sleepDeliveryRetry(ctx, time.Second) {
+				return ctx.Err()
+			}
+			continue
+		}
+		retryCount++
+		if maxRetryAttempts > 0 && retryCount >= maxRetryAttempts {
+			metrics.IncRetryExhausted()
+			return termDeliveryBatch(ctx, deliveries, metrics, err, heartbeats)
+		}
+		if !progressDeliveryBatch(ctx, deliveries, metrics) || !sleepDeliveryRetry(ctx, time.Second) {
+			return ctx.Err()
+		}
+	}
+	return ctx.Err()
+}
+
+func progressDeliveryBatch(ctx context.Context, deliveries []*jetstream.Delivery, metrics *observability.ViewMetrics) bool {
+	for _, delivery := range deliveries {
+		if err := delivery.InProgress(ctx); err != nil {
+			metrics.IncInProgressError()
+			metrics.ObserveDelivery("in_progress", "error")
+		} else {
+			metrics.ObserveDelivery("in_progress", "success")
+		}
+	}
+	return ctx.Err() == nil
+}
+
+func termDeliveryBatch(ctx context.Context, deliveries []*jetstream.Delivery, metrics *observability.ViewMetrics, applyErr error, heartbeats []*deliveryHeartbeat) error {
+	for _, delivery := range deliveries {
+		if err := delivery.Term(ctx); err != nil {
+			metrics.IncAckError()
+			metrics.ObserveDelivery("term", "error")
+			return errors.Join(applyErr, err, batchHeartbeatError(heartbeats))
+		}
+		metrics.ObserveDelivery("term", "success")
+	}
+	return errors.Join(applyErr, batchHeartbeatError(heartbeats))
+}
+
+func batchHeartbeatError(heartbeats []*deliveryHeartbeat) error {
+	var result error
+	for _, heartbeat := range heartbeats {
+		if heartbeat != nil {
+			result = errors.Join(result, heartbeat.err())
+		}
+	}
+	return result
+}
+
 func (c *Consumer) processDeliveryWithApply(ctx context.Context, delivery *jetstream.Delivery, heartbeat *deliveryHeartbeat, maxRetryAttempts int, apply func(context.Context, *jetstream.Delivery) error) error {
 	return c.processDeliveryWithApplyAndActions(ctx, delivery, heartbeat, maxRetryAttempts, apply, deliveryActions{
 		ack:      delivery.Ack,

@@ -38,6 +38,7 @@ type ViewMetrics struct {
 	outboxPublishErrorsTotal     prometheus.Counter
 	outboxDuplicatePublish       prometheus.Counter
 	periodWaitingDatasets        *prometheus.GaugeVec
+	viewOutputWatermark          *prometheus.GaugeVec
 	readyPublishRetry            *prometheus.CounterVec
 	restoreDuration              prometheus.Gauge
 	restoreReady                 prometheus.Gauge
@@ -49,6 +50,8 @@ type ViewMetrics struct {
 	consumerBoundSnapshot        atomic.Bool
 	partitionMu                  sync.RWMutex
 	partitionStates              map[string]ConsumerPartitionSnapshot
+	viewWatermarkMu              sync.Mutex
+	viewWatermarks               map[string]int64
 	outboxObservedSnapshot       atomic.Bool
 	outboxDynamicAge             atomic.Bool
 	outboxOldestEventAt          atomic.Int64
@@ -191,6 +194,10 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "period_waiting_datasets",
 			Help: "Number of datasets still missing before a View source period can be published.",
 		}, []string{"view", "frequency"}),
+		viewOutputWatermark: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "output_watermark_timestamp_seconds",
+			Help: "Latest business timestamp successfully committed to an active Storage View.",
+		}, []string{"space_id", "view_id", "freq"}),
 		readyPublishRetry: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
 			Help: "View source/result ready event publishes that need retry.",
@@ -221,6 +228,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		}),
 		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
 		partitionStates:   make(map[string]ConsumerPartitionSnapshot),
+		viewWatermarks:    make(map[string]int64),
 	}
 	metrics.oldestPendingEventAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: "moox", Subsystem: "storage_view", Name: "oldest_pending_event_age_seconds",
@@ -287,6 +295,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.periodWaitingDatasets, err = registerOrReuse(registerer, metrics.periodWaitingDatasets); err != nil {
 		return nil, err
 	}
+	if metrics.viewOutputWatermark, err = registerOrReuse(registerer, metrics.viewOutputWatermark); err != nil {
+		return nil, err
+	}
 	if metrics.readyPublishRetry, err = registerOrReuse(registerer, metrics.readyPublishRetry); err != nil {
 		return nil, err
 	}
@@ -309,6 +320,31 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	return metrics, nil
+}
+
+// ObserveViewOutputWatermark advances the committed watermark for one active
+// View. View IDs are deliberately used as the dataset identity here so the
+// monitor can create an independent freshness check instead of folding this
+// signal into the Primary dataset watermark.
+func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, viewID, frequency string, watermark time.Time) {
+	if m == nil || strings.TrimSpace(spaceID) == "" || strings.TrimSpace(viewID) == "" || watermark.IsZero() {
+		return
+	}
+	frequency = strings.TrimSpace(frequency)
+	if frequency == "" {
+		return
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	viewID = strings.TrimSpace(viewID)
+	watermarkUnix := watermark.UTC().Unix()
+	key := strings.Join([]string{spaceID, viewID, frequency}, "\x00")
+	m.viewWatermarkMu.Lock()
+	defer m.viewWatermarkMu.Unlock()
+	if previous, ok := m.viewWatermarks[key]; ok && watermarkUnix <= previous {
+		return
+	}
+	m.viewWatermarks[key] = watermarkUnix
+	m.viewOutputWatermark.WithLabelValues(spaceID, viewID, frequency).Set(float64(watermarkUnix))
 }
 
 // ObservePeriodWaiting records the current missing-dataset count for a View

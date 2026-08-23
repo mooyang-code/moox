@@ -58,6 +58,12 @@ acknowledged by Storage. PrimaryStore advances only after the target DataNode
 accepts all rows in that dataset group. Factor advances input and output
 watermarks only after `WriteFactorPatch` succeeds.
 
+Storage View additionally exports
+`moox_storage_view_output_watermark_timestamp_seconds{space_id,view_id,freq}`.
+Monitor treats each View/frequency tuple as a separate `storage_view` freshness
+row, so a lagging Factor View raises its own watermark-lag check without
+masking or being masked by the K-line View or Primary dataset.
+
 ## Failure Boundaries
 
 | Failure | Detection and recovery |
@@ -123,6 +129,24 @@ Storage adapters, and HTTP test servers. They prove:
   while deliberately ignoring a service-root `404`.
 
 ## Deployment Verification
+
+### EventBus and SCF Governance
+
+For a remote deployment that enables Collector SCF, `scripts/deploy-moox.sh`
+requires `MOOX_EVENTBUS_PUBLIC_IP` and TLS. It rejects loopback-only topology
+before stopping the existing release. The generated `config/runtime.env`
+persists the EventBus listener host, port, and TLS mode so a restart cannot
+silently fall back to `127.0.0.1`. After startup the deployment acceptance
+check verifies that the file matches the process and that EventBus is listening
+on the public interface.
+
+The config-driven `moox-cli collector function publish` path rewrites the SCF
+EventBus endpoint from `custom.toml` while retaining the role credential and CA;
+it refuses a loopback address, missing CA, invalid port, or disabled TLS. Run
+`moox-cli setup e2e-eventbus --file custom.toml` after a production deployment
+to prove external TLS connectivity, JetStream publish/fetch/ACK, and worker
+ACLs. `MOOX_EVENTBUS_ALLOW_LOOPBACK_REMOTE=1` is an explicit private/VPN escape
+hatch and should not be used for Tencent SCF fleets.
 
 Local tests do not prove a remote deployment. Record these facts from the
 target environment:

@@ -15,6 +15,7 @@ import (
 // Dataset. The transport message id is stable for a DataNode outbox id.
 type JetStreamPublisher struct {
 	publisher *events.Publisher
+	client    *jetstream.Client
 }
 
 func (p *JetStreamPublisher) PublishMessage(ctx context.Context, data []byte) error {
@@ -35,6 +36,16 @@ func (p *JetStreamPublisher) PublishMessageWithAck(ctx context.Context, data []b
 		return nil, err
 	}
 	return p.publisher.PublishMessage(ctx, message)
+}
+
+// Reconnect replaces the underlying NATS connection after an EventBus
+// restart. The relay invokes this only after repeated publish failures and
+// keeps the outbox entry pending until a subsequent publish succeeds.
+func (p *JetStreamPublisher) Reconnect(ctx context.Context) error {
+	if p == nil || p.client == nil {
+		return errors.New("storage eventbus client is nil")
+	}
+	return p.client.Reconnect(ctx)
 }
 
 func validateDatasetEvent(data []byte) (string, string, error) {
@@ -87,5 +98,5 @@ func NewJetStreamPublisher(client *jetstream.Client) *JetStreamPublisher {
 	if err != nil {
 		return &JetStreamPublisher{}
 	}
-	return &JetStreamPublisher{publisher: publisher}
+	return &JetStreamPublisher{publisher: publisher, client: client}
 }

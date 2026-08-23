@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 )
 
@@ -20,7 +21,7 @@ const (
 // InstallStorageViewWatchdog installs and enables the host-level recovery loop
 // for the independently deployed Storage runtime. The files live in the
 // repository so the CLI can install the same checked-in version during setup.
-func InstallStorageViewWatchdog(ctx context.Context, transport setupssh.Client, repositoryRoot string) error {
+func InstallStorageViewWatchdog(ctx context.Context, transport setupssh.Client, repositoryRoot string, storageRoots ...string) error {
 	if transport == nil || strings.TrimSpace(repositoryRoot) == "" {
 		return fmt.Errorf("storage_watchdog_install_invalid")
 	}
@@ -29,7 +30,11 @@ func InstallStorageViewWatchdog(ctx context.Context, transport setupssh.Client, 
 	if err != nil {
 		return fmt.Errorf("storage_watchdog_remote_identity_failed")
 	}
-	serviceRoot := filepath.ToSlash(filepath.Join(home, "moox", "storage"))
+	serviceRoot := setupconfig.DefaultStorageRoot
+	if len(storageRoots) > 0 && strings.TrimSpace(storageRoots[0]) != "" {
+		serviceRoot = filepath.Clean(strings.TrimSpace(storageRoots[0]))
+	}
+	serviceRoot = filepath.ToSlash(serviceRoot)
 
 	script, err := readWatchdogAsset(repositoryRoot, filepath.Join("scripts", storageViewWatchdogScriptName+".sh"))
 	if err != nil {

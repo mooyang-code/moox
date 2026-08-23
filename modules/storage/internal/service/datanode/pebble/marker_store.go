@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/packages/events"
@@ -77,6 +78,7 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return "", err
 	}
+	s.noteOutboxCommitted(1, time.Now().UTC())
 	return message.GetEventId(), nil
 }
 

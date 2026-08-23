@@ -90,7 +90,7 @@ func TestViewConsumerPartitionsKeepKlineIndependentFromMetrics(t *testing.T) {
 		PartitionConfigs: []viewservice.EventConsumerOptions{
 			{PartitionID: "kline", Consumer: events.StorageViewKlineConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "binance_spot_kline_1m"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
 			{PartitionID: "system_metrics", Consumer: events.StorageViewMetricsConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "moox_service_metrics"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
-			{PartitionID: "other", Consumer: events.StorageViewOtherConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "other_dataset"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
+			{PartitionID: "misc", Consumer: events.StorageViewMiscConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "other_dataset"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
 		},
 	})
 	if err != nil {
@@ -108,7 +108,7 @@ func TestViewConsumerPartitionsKeepKlineIndependentFromMetrics(t *testing.T) {
 	waitForConcurrencyRows(t, ctx, service, auth, "binance_spot_kline_1m")
 	publishPartitionRow(t, ctx, publisher, "quant", "other_dataset", "other-1")
 	waitForConcurrencyRows(t, ctx, service, auth, "other_dataset")
-	for _, durable := range []string{events.StorageViewKlineConsumer, events.StorageViewOtherConsumer} {
+	for _, durable := range []string{events.StorageViewKlineConsumer, events.StorageViewMiscConsumer} {
 		state, stateErr := client.ConsumerState(ctx, events.StorageViewConsumerStream, durable)
 		if stateErr != nil {
 			t.Fatalf("read %s consumer state: %v", durable, stateErr)

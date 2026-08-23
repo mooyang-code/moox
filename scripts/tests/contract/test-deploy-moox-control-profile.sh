@@ -39,6 +39,7 @@ ln -s "${ROOT}/modules/eventbus" "${FIXTURE_ROOT}/modules/eventbus"
 ln -s "${ROOT}/modules/cloudnode" "${FIXTURE_ROOT}/modules/cloudnode"
 ln -s "${ROOT}/modules/collector" "${FIXTURE_ROOT}/modules/collector"
 ln -s "${ROOT}/modules/monitor" "${FIXTURE_ROOT}/modules/monitor"
+ln -s "${ROOT}/modules/hostagent" "${FIXTURE_ROOT}/modules/hostagent"
 ln -s "${ROOT}/modules/strategy" "${FIXTURE_ROOT}/modules/strategy"
 ln -s "${ROOT}/modules/trade" "${FIXTURE_ROOT}/modules/trade"
 ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
@@ -50,7 +51,7 @@ for binary in \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
   moox-collector moox-collector-cli \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
-  moox-monitor moox-monitor-cli; do
+  moox-monitor moox-monitor-cli moox-host-agent; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"${FIXTURE_ROOT}/bin/${binary}"
   chmod +x "${FIXTURE_ROOT}/bin/${binary}"
 done
@@ -89,7 +90,7 @@ for binary in \
   moox-eventbus moox-cloudnode moox-cloudnode-cli \
   moox-collector moox-collector-cli \
   moox-strategy moox-strategy-cli moox-trade moox-trade-cli \
-  moox-monitor moox-monitor-cli; do
+  moox-monitor moox-monitor-cli moox-host-agent; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing control binary: ${binary}" >&2; exit 1; }
 done
 for helper in moox-storage-auth-check moox-storage-auth-rotate; do

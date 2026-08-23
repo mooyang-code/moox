@@ -30,6 +30,15 @@ fi
 grep -q 'set -euo pipefail' "${ROOT}/scripts/release.sh"
 grep -q 'SKIP_WEB_ASSETS' "${ROOT}/scripts/release.sh"
 grep -q 'binary_name' "${ROOT}/scripts/build.sh"
+grep -q 'collector-scf)' "${ROOT}/scripts/build.sh"
+grep -q 'moox-collector-scf' "${ROOT}/scripts/build-release-binaries.sh"
+grep -q 'release/moox-binaries-' "${ROOT}/scripts/build-release-binaries.sh"
+grep -q 'publish-release-binaries.sh' "${ROOT}/scripts/build-release-binaries.sh"
+grep -q -- '--artifact' "${ROOT}/scripts/publish-release-binaries.sh"
+grep -q -- '--restart' "${ROOT}/scripts/publish-release-binaries.sh"
+grep -q 'checksum mismatch' "${ROOT}/scripts/publish-release-binaries.sh"
+grep -q 'manifest.txt' "${ROOT}/scripts/publish-release-binaries.sh"
+grep -q 'release-binaries' "${ROOT}/Makefile"
 grep -q 'RELEASE_PLATFORMS' "${ROOT}/scripts/release-matrix.sh"
 grep -q 'github.com/rakyll/statik@v0.1.7' "${ROOT}/scripts/release.sh"
 grep -q 'go run github.com/rakyll/statik@v0.1.7' "${ROOT}/scripts/deploy-moox.sh"
@@ -102,11 +111,26 @@ test ! -e "${release}/examples/metadata-quant-initial.seed.yaml"
 
 bash -n \
   "${ROOT}/scripts/build.sh" \
+  "${ROOT}/scripts/build-release-binaries.sh" \
+  "${ROOT}/scripts/publish-release-binaries.sh" \
   "${ROOT}/scripts/test-deploy-moox-factor.sh" \
   "${ROOT}/scripts/moox-factor-run-once.sh" \
   "${ROOT}/scripts/package-service.sh" \
   "${ROOT}/scripts/release.sh" \
   "${ROOT}/scripts/release-matrix.sh"
+
+tmp_binary_release="$(mktemp -d "${TMPDIR:-/tmp}/moox-binary-release.XXXXXX")"
+trap 'rm -rf "${tmp_strategy}" "${tmp_binary_release}"' EXIT
+mkdir -p "${tmp_binary_release}/bin"
+printf 'fixture\n' >"${tmp_binary_release}/bin/moox-fixture"
+publish_output="$("${ROOT}/scripts/publish-release-binaries.sh" \
+  --artifact "${tmp_binary_release}" \
+  --target user@example.invalid \
+  --dir /srv/moox \
+  --binary moox-fixture \
+  --dry-run)"
+grep -q 'publish 1 binaries' <<<"${publish_output}"
+grep -q 'moox-fixture' <<<"${publish_output}"
 "${ROOT}/scripts/test-package-service.sh"
 "${ROOT}/scripts/test-deploy-moox-factor.sh"
 matrix_output="$(VERSION=test RELEASE_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 "${ROOT}/scripts/release-matrix.sh" --dry-run)"

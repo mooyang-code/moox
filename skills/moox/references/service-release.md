@@ -54,7 +54,7 @@ Agent 不得读取、解析、打印、复制或 `source` `custom.toml` 中的�
   --package ./release/moox-admin-linux-amd64.zip
 ```
 
-默认远端部署目录为 `~/moox/prod`，服务部署到其他目录时显式指定：
+默认远端部署目录为 `/data/moox/prod`，服务部署到其他目录时显式指定：
 
 ```bash
 ./bin/moox-cli setup deploy-service \
@@ -62,12 +62,17 @@ Agent 不得读取、解析、打印、复制或 `source` `custom.toml` 中的�
   --host compute \
   --service storage-primary \
   --package ./release/moox-storage-primary-linux-amd64.zip \
-  --deploy-dir ~/moox/storage
+  --deploy-dir /data/moox/storage
 ```
 
 ## 发布流程
 
 CLI 会按以下顺序执行：
+
+当 `--service` 为 `admin`、`admin_gateway`、`web-host` 或 `web_host` 时，CLI
+会在上传前检查控制面 Caddy internal CA 是否已被当前浏览器机器信任，必要时自动
+执行平台证书安装。这样发布 Web 前端或 Admin 后端后，SSH WebSocket 不会因为
+`ERR_CERT_AUTHORITY_INVALID` 才暴露问题。公网 ACME 模式会跳过该检查。
 
 1. 在本地校验 ZIP 路径、大小、目录穿越、符号链接、必要文件和 SHA-256 摘要。
 2. 通过 SSH/SFTP 将 ZIP 上传到远端受限的临时路径，并再次校验远端摘要。

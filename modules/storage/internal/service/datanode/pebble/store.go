@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
@@ -60,6 +61,11 @@ type Store struct {
 	maxEventBytes           int
 	processedEventRetention time.Duration
 	outboxMu                sync.Mutex
+	outboxPending           atomic.Int64
+	outboxRevision          atomic.Uint64
+	outboxHintKnown         atomic.Bool
+	outboxHintMayHaveMore   atomic.Bool
+	outboxOldestEventNanos  atomic.Int64
 	maintenanceMu           sync.Mutex
 	maintenanceWG           sync.WaitGroup
 	historyWG               sync.WaitGroup
@@ -325,6 +331,9 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return nil, err
+	}
+	if len(entries) > 0 {
+		s.noteOutboxCommitted(len(entries), entries[0].CreatedAt)
 	}
 	return entries, nil
 }
@@ -737,6 +746,7 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 	if max <= 0 {
 		max = 100
 	}
+	revision := s.outboxRevision.Load()
 	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: []byte(outboxPrefix + "\xff")})
 	if err != nil {
 		return nil, err
@@ -751,7 +761,16 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 		}
 		result = append(result, &OutboxEntry{ID: id, Data: append([]byte(nil), iter.Value()...)})
 	}
-	return result, iter.Error()
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	// Keep the relay's hot path on a cheap atomic hint. A full scan is still
+	// used to discover legacy entries after restart, but it must not be repeated
+	// every poll when the outbox is empty. Do not overwrite a concurrent write.
+	if revision == s.outboxRevision.Load() {
+		s.setOutboxHintFromList(len(result), len(result) == max)
+	}
+	return result, nil
 }
 
 // OutboxStats 扫描已提交 outbox 记录，供 relay 汇报完整等待数量，而非仅汇报
@@ -761,6 +780,7 @@ func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
 	if err := ctx.Err(); err != nil {
 		return OutboxStats{}, err
 	}
+	revision := s.outboxRevision.Load()
 	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(outboxPrefix), UpperBound: []byte(outboxPrefix + "\xff")})
 	if err != nil {
 		return OutboxStats{}, err
@@ -784,7 +804,13 @@ func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
 			stats.OldestEventAt = eventAt
 		}
 	}
-	return stats, iter.Error()
+	if err := iter.Error(); err != nil {
+		return OutboxStats{}, err
+	}
+	if revision == s.outboxRevision.Load() {
+		s.setOutboxHintFromStats(stats)
+	}
+	return stats, nil
 }
 
 func (s *Store) DeleteOutbox(ctx context.Context, ids []uint64) error {
@@ -794,6 +820,8 @@ func (s *Store) DeleteOutbox(ctx context.Context, ids []uint64) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
 	sorted := append([]uint64(nil), ids...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	batch := s.db.NewBatch()
@@ -806,5 +834,92 @@ func (s *Store) DeleteOutbox(ctx context.Context, ids []uint64) error {
 			return err
 		}
 	}
-	return batch.Commit(s.writeOptions)
+	if err := batch.Commit(s.writeOptions); err != nil {
+		return err
+	}
+	s.noteOutboxDeleted(len(sorted))
+	return nil
+}
+
+// OutboxPendingHint returns a lock-free lower-cost view of the outbox state.
+// It is maintained by the atomic Pebble write/delete boundaries and is used by
+// the relay to avoid constructing a Pebble iterator on every empty poll.
+func (s *Store) OutboxPendingHint() (pending int, known, mayHaveMore bool, oldestEventAt time.Time) {
+	if s == nil {
+		return 0, false, false, time.Time{}
+	}
+	return int(maxInt64(s.outboxPending.Load(), 0)), s.outboxHintKnown.Load(), s.outboxHintMayHaveMore.Load(), unixNanoTime(s.outboxOldestEventNanos.Load())
+}
+
+func (s *Store) noteOutboxCommitted(count int, oldest time.Time) {
+	if count <= 0 {
+		return
+	}
+	// Keep the hint unknown until the first bounded scan after a restart. A
+	// newly committed event must not hide legacy entries that may already exist
+	// in the database.
+	s.outboxPending.Add(int64(count))
+	if !oldest.IsZero() {
+		oldestNanos := oldest.UTC().UnixNano()
+		for {
+			current := s.outboxOldestEventNanos.Load()
+			if current != 0 && current <= oldestNanos {
+				break
+			}
+			if s.outboxOldestEventNanos.CompareAndSwap(current, oldestNanos) {
+				break
+			}
+		}
+	}
+	s.outboxRevision.Add(1)
+}
+
+func (s *Store) noteOutboxDeleted(count int) {
+	if count <= 0 {
+		return
+	}
+	if s.outboxHintKnown.Load() {
+		pending := s.outboxPending.Add(-int64(count))
+		if pending < 0 {
+			s.outboxPending.Store(0)
+		}
+		if s.outboxPending.Load() == 0 && !s.outboxHintMayHaveMore.Load() {
+			s.outboxOldestEventNanos.Store(0)
+		}
+	}
+	s.outboxRevision.Add(1)
+}
+
+func (s *Store) setOutboxHintFromList(count int, mayHaveMore bool) {
+	s.outboxPending.Store(int64(count))
+	s.outboxHintKnown.Store(true)
+	s.outboxHintMayHaveMore.Store(mayHaveMore)
+	if count == 0 {
+		s.outboxOldestEventNanos.Store(0)
+	}
+}
+
+func (s *Store) setOutboxHintFromStats(stats OutboxStats) {
+	s.outboxPending.Store(int64(stats.Pending))
+	s.outboxHintKnown.Store(true)
+	s.outboxHintMayHaveMore.Store(false)
+	if stats.OldestEventAt.IsZero() {
+		s.outboxOldestEventNanos.Store(0)
+	} else {
+		s.outboxOldestEventNanos.Store(stats.OldestEventAt.UTC().UnixNano())
+	}
+}
+
+func maxInt64(value, minimum int64) int64 {
+	if value < minimum {
+		return minimum
+	}
+	return value
+}
+
+func unixNanoTime(value int64) time.Time {
+	if value == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, value).UTC()
 }

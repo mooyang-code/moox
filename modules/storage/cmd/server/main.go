@@ -568,8 +568,8 @@ func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy pb
 
 // expandStorageViewConsumerRoutes turns an explicit wildcard route into
 // concrete metadata routes before JetStream subjects are rendered. Exact
-// routes win, so the latency-sensitive Kline and metrics partitions can never
-// be pulled into the catch-all "other" partition.
+// routes win, so the latency-sensitive Kline and Factor partitions can never
+// be pulled into the catch-all "misc" partition.
 func expandStorageViewConsumerRoutes(options *viewservice.EventConsumerOptions, managed []storageconfig.StorageViewConsumerDataset) error {
 	registry, err := events.DefaultRegistry()
 	if err != nil {

@@ -231,13 +231,14 @@ func defaultOpenSetupFactor(ctx context.Context, snapshot *setupconfig.Snapshot)
 		_ = transport.Close()
 		return nil, fmt.Errorf("factor_gateway_unavailable")
 	}
-	secretRaw, err := readRemoteControlFile(ctx, transport, "moox/prod/secrets/gateway-moox-cli.key")
+	controlRoot := snapshot.Manifest.Paths.Resolved().ControlRoot
+	secretRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/gateway-moox-cli.key"))
 	if err != nil {
 		_ = listener.Close()
 		_ = transport.Close()
 		return nil, fmt.Errorf("factor_gateway_credentials_unavailable")
 	}
-	envRaw, err := readRemoteControlFile(ctx, transport, "moox/prod/secrets/gateway-service.env")
+	envRaw, err := readRemoteControlFile(ctx, transport, filepath.Join(controlRoot, "secrets/gateway-service.env"))
 	if err != nil {
 		_ = listener.Close()
 		_ = transport.Close()

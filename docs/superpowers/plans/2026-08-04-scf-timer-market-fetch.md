@@ -791,6 +791,10 @@ git commit -m "feat(web): show SCF trigger type and timer status"
 ```text
 moox_collector_market_fetch_assignment_required{space_id,dataset_id,frequency}
 moox_collector_market_fetch_assignment_active{space_id,dataset_id,frequency}
+moox_collector_market_fetch_timer_capacity_total{space_id}
+moox_collector_market_fetch_timer_capacity_required{space_id}
+moox_collector_market_fetch_timer_capacity_active{space_id}
+moox_collector_market_fetch_timer_capacity_headroom{space_id}
 moox_collector_market_fetch_assignment_last_success_timestamp_seconds{space_id}
 moox_collector_market_fetch_coordination_healthy{space_id}
 moox_collector_market_fetch_assignment_errors_total{space_id,reason}

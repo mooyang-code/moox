@@ -38,7 +38,7 @@ make release        # 仓库级发布包
 
 # 仓库根目录
 ./scripts/build.sh admin
-make deploy ARGS="--target localhost --dir ~/moox/dev"
+make deploy ARGS="--target localhost --dir /data/moox/dev"
 ```
 
 admin 单独部署时可排除其他服务：

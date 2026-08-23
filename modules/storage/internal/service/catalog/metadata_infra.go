@@ -72,9 +72,11 @@ func (s *Service) RegisterArchiveFile(ctx context.Context, req *pb.RegisterArchi
 	if err != nil {
 		return &pb.RegisterArchiveFileRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.RegisterArchiveFileRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
+	// The SQLite upsert is already committed at this point.  Cache publication
+	// is best-effort, just like RegisterDataSubject: a concurrent snapshot
+	// refresh must not turn a successful archive materialization into a retry
+	// loop (or make the archive worker report a false failure).
+	s.refreshMetadataCacheAfterCommit(ctx, "RegisterArchiveFile")
 	return &pb.RegisterArchiveFileRsp{RetInfo: retinfo.Success("success"), ArchiveFile: created}, nil
 }
 

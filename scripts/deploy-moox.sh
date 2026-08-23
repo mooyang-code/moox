@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="localhost"
-DEPLOY_DIR="${MOOX_DEPLOY_DIR:-${HOME}/moox}"
+DEPLOY_DIR="${MOOX_DEPLOY_DIR:-/data/moox}"
 STAGE_DIR=""
 SKIP_BUILD=0
 NO_START=0
@@ -23,6 +23,7 @@ WITH_FACTOR=1
 WITH_STRATEGY=1
 WITH_TRADE=1
 WITH_MONITOR=1
+WITH_HOSTAGENT=1
 WITH_ADMIN=1
 WITH_GATEWAY=1
 BUILD_WEB_ASSETS=1
@@ -96,7 +97,7 @@ Usage:
 
 Options:
   --target <localhost|user@host>  Deploy target. Default: localhost.
-  --dir <path>                    Deploy directory on target. Default: ~/moox.
+  --dir <path>                    Deploy directory on target. Default: /data/moox.
   --goos <linux|darwin>           Target OS. Auto-detected by default.
   --goarch <amd64|arm64>          Target arch. Auto-detected by default.
   --stage <path>                  Local staging directory. Default: release/deploy-stage/moox.
@@ -108,14 +109,17 @@ Options:
   --no-storage                    Do not package/stop/start moox-storage; preserve existing remote storage files.
   --with-storage-node            Package the optional independent DataNode process.
   --no-archive                    Do not package/start moox-archive.
+  --with-archive                  Package/start moox-archive (overrides profile default).
   --no-eventbus                   Do not package/stop/start moox-eventbus; preserve existing remote EventBus files.
   --no-web-host                   Do not package/start moox-web-host.
   --no-cloudnode                  Do not package/start moox-cloudnode.
   --no-collector                  Do not package/start moox-collector.
   --no-factor                     Do not package/start moox-factor.
+  --with-factor                   Package/start moox-factor (overrides profile default).
   --no-strategy                   Do not package/start moox-strategy.
   --no-trade                      Do not package/start moox-trade.
   --no-monitor                    Do not package/start moox-monitor.
+  --no-hostagent                  Do not package/start moox-host-agent.
   --no-gateway                    Do not package/start moox-gateway; use an existing same-host gateway.
   --no-admin                      Build a data-plane node without Admin, browser assets, schema, or credentials.
   --build-web-assets              Rebuild Vue dist and statik assets before building web-host. Default when web-host is enabled.
@@ -142,8 +146,8 @@ Options:
   -h, --help                      Show this help.
 
 Examples:
-  scripts/deploy-moox.sh --target localhost --dir ~/moox/dev
-  scripts/deploy-moox.sh --target user@host --dir ~/moox/prod --goos linux --goarch amd64
+  scripts/deploy-moox.sh --target localhost --dir /data/moox/dev
+  scripts/deploy-moox.sh --target user@host --dir /data/moox --goos linux --goarch amd64
   scripts/deploy-moox.sh --target localhost --dir /tmp/moox --skip-build --no-start
 EOF
 }
@@ -164,6 +168,7 @@ apply_profile() {
       WITH_STRATEGY=1
       WITH_TRADE=1
       WITH_MONITOR=1
+      WITH_HOSTAGENT=1
       ;;
     storage)
       WITH_ADMIN=0
@@ -180,6 +185,7 @@ apply_profile() {
       WITH_STRATEGY=0
       WITH_TRADE=0
       WITH_MONITOR=0
+      WITH_HOSTAGENT=0
       STORAGE_EXTERNAL_LISTEN=1
       ;;
     *) fail "unsupported deployment profile: $1" ;;
@@ -451,6 +457,10 @@ while [[ $# -gt 0 ]]; do
       WITH_ARCHIVE=0
       shift
       ;;
+    --with-archive)
+      WITH_ARCHIVE=1
+      shift
+      ;;
     --no-eventbus)
       WITH_EVENTBUS=0
       shift
@@ -471,6 +481,10 @@ while [[ $# -gt 0 ]]; do
       WITH_FACTOR=0
       shift
       ;;
+    --with-factor)
+      WITH_FACTOR=1
+      shift
+      ;;
     --no-strategy)
       WITH_STRATEGY=0
       shift
@@ -481,6 +495,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-monitor)
       WITH_MONITOR=0
+      shift
+      ;;
+    --no-hostagent)
+      WITH_HOSTAGENT=0
       shift
       ;;
     --no-gateway)
@@ -561,6 +579,30 @@ fi
 is_local_target() {
   [[ "${TARGET}" == "localhost" || "${TARGET}" == "127.0.0.1" || "${TARGET}" == "::1" ]]
 }
+
+# A remote Collector fleet is reached by Tencent SCF, not by the target host's
+# loopback interface.  Refuse to produce a deployment which would publish a
+# loopback-only EventBus and leave the failure to surface later as completion
+# timeouts.  Operators can explicitly opt out for a private/VPN topology, but
+# that escape hatch is intentionally named and never enabled implicitly.
+validate_eventbus_governance() {
+  [[ "${WITH_EVENTBUS}" == "1" && "${WITH_COLLECTOR}" == "1" ]] || return 0
+  is_local_target && return 0
+  [[ "${MOOX_EVENTBUS_ALLOW_LOOPBACK_REMOTE:-0}" == "1" ]] && return 0
+  local public_ip="${MOOX_EVENTBUS_PUBLIC_IP:-}" public_ip_lc
+  [[ -n "${public_ip}" ]] ||
+    fail "remote Collector deployment requires MOOX_EVENTBUS_PUBLIC_IP; refusing loopback-only EventBus"
+  public_ip_lc="$(printf '%s' "${public_ip}" | tr '[:upper:]' '[:lower:]')"
+  case "${public_ip_lc}" in
+    0.0.0.0|::|\[::\]|127.*|localhost|localhost.|::1|\[::1\]|::ffff:127.*|\[::ffff:127.*\])
+      fail "remote Collector deployment cannot use loopback EventBus address ${public_ip}"
+      ;;
+  esac
+  [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]] ||
+    fail "remote Collector deployment requires MOOX_EVENTBUS_ENABLE_TLS=1"
+}
+
+validate_eventbus_governance
 
 resolve_tls_mode() {
   if [[ "${TLS_MODE}" != auto ]]; then
@@ -761,7 +803,7 @@ build_core_binaries() {
     "${ROOT}/scripts/build-storage-linux.sh"
   fi
 
-  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 ]]; then
+  if [[ "${WITH_STORAGE}" -eq 1 || "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1 || "${WITH_HOSTAGENT}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" cli
   fi
@@ -800,6 +842,10 @@ build_core_binaries() {
   if [[ "${WITH_MONITOR}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build.sh" monitor
+  fi
+  if [[ "${WITH_HOSTAGENT}" -eq 1 ]]; then
+    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
+      "${ROOT}/scripts/build.sh" hostagent
   fi
   if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
@@ -1051,6 +1097,19 @@ write_runtime_scripts() {
     scf_service_gateway_target="https://${PUBLIC_HOST}:${SERVICE_HTTPS_PORT}"
     scf_storage_rpc_gateway_target="ip://${PUBLIC_HOST}:11003"
   fi
+
+  # Persist the listener contract in the release itself.  Previously this
+  # could be supplied only through an ad-hoc shell environment, so a restart
+  # could silently return EventBus to 127.0.0.1 while SCF still used the public
+  # address.  Do not persist credentials or the client URL here; start.sh
+  # renders the client URL from the deployment's topology and role files.
+  cat >"${STAGE_DIR}/config/runtime.env" <<EOF
+MOOX_EVENTBUS_HOST=$(printf '%q' "${MOOX_EVENTBUS_HOST}")
+MOOX_EVENTBUS_PORT=$(printf '%q' "${MOOX_EVENTBUS_PORT}")
+MOOX_EVENTBUS_ENABLE_TLS=$(printf '%q' "${MOOX_EVENTBUS_ENABLE_TLS:-0}")
+EOF
+  chmod 0600 "${STAGE_DIR}/config/runtime.env"
+
   cat > "${STAGE_DIR}/start.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1199,6 +1258,7 @@ WITH_COLLECTOR="${MOOX_WITH_COLLECTOR:-${MOOX_INSTALLED_WITH_COLLECTOR:-__WITH_C
 WITH_FACTOR="${MOOX_WITH_FACTOR:-${MOOX_INSTALLED_WITH_FACTOR:-__WITH_FACTOR__}}"
 WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-__WITH_STRATEGY__}}"
 WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-__WITH_TRADE__}}"
+WITH_HOSTAGENT="${MOOX_WITH_HOSTAGENT:-${MOOX_INSTALLED_WITH_HOSTAGENT:-__WITH_HOSTAGENT__}}"
 if [[ "${WITH_EVENTBUS}" == "1" && "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
   ADMIN_SECRET_ENV+=("MOOX_EVENTBUS_CA_FILE=${HOME}/.config/moox/eventbus/ca.pem")
 fi
@@ -1264,6 +1324,7 @@ source "${ROOT}/lib/loopback-listeners.sh"
 validate_moox_loopback_listeners
 stop_processes_by_binary() {
   local name="$1" expected="${ROOT}/bin/moox-${name}" proc pid exe
+  [[ "${name}" == "hostagent" ]] && expected="${ROOT}/bin/moox-host-agent"
   for proc in /proc/[0-9]*; do
     [[ -d "${proc}" ]] || continue
     pid="${proc##*/}"
@@ -1286,6 +1347,7 @@ stop_processes_by_binary() {
 process_matches_service() {
   local pid="$1" name="$2" command expected
   expected="${ROOT}/bin/moox-${name}"
+  [[ "${name}" == "hostagent" ]] && expected="${ROOT}/bin/moox-host-agent"
   command=$(ps -p "${pid}" -o command= 2>/dev/null || true)
   [[ "${command}" == "${expected}" || "${command}" == "${expected} "* ]]
 }
@@ -1293,6 +1355,7 @@ stop_if_running() {
   local name="$1"
   local pid_file="${ROOT}/run/${name}.pid"
   local pattern="${ROOT}/bin/moox-${name}([[:space:]]|$)"
+  [[ "${name}" == "hostagent" ]] && pattern="${ROOT}/bin/moox-host-agent([[:space:]]|$)"
   if [[ ! -f "${pid_file}" ]]; then
     stop_processes_by_binary "${name}"
     pkill -f -- "${pattern}" 2>/dev/null || true
@@ -1574,6 +1637,7 @@ probe_service() {
     cloudnode) url=http://127.0.0.1:11411/readyz ;;
     collector) url=http://127.0.0.1:11412/readyz ;;
     eventbus) url=http://127.0.0.1:11419/readyz ;;
+    hostagent) url=http://127.0.0.1:11425/readyz ;;
     factor) url=http://127.0.0.1:11414/readyz ;;
     strategy) url=http://127.0.0.1:11431/readyz ;;
     trade) url=http://127.0.0.1:11210/readyz ;;
@@ -1593,7 +1657,7 @@ listener_open() {
     admin) port=11010 ;; gateway) port=11012 ;; archive) port=11416 ;;
     cloudnode) port=11411 ;; collector) port=11412 ;; eventbus) port=11419 ;;
     factor) port=11414 ;; strategy) port=11431 ;; trade) port=11210 ;;
-    monitor) port=11409 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
+    monitor) port=11409 ;; hostagent) port=11425 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
     storage-view) port=20211 ;; storage-node) port=20212 ;; *) return 1 ;;
   esac
   # Do not use --fail: a 401/503 proves that the listener accepts TCP while
@@ -1755,16 +1819,57 @@ start_eventbus() {
   wait_http http://127.0.0.1:11419/readyz "${MOOX_WAIT_EVENTBUS_SECONDS:-60}"
 }
 
+start_hostagent() {
+  if [[ "${WITH_HOSTAGENT}" != "1" ]]; then
+    echo "hostagent is disabled in this deployment package" >&2
+    exit 2
+  fi
+  local credential_dir="${HOME}/.config/moox/eventbus"
+  mkdir -p "${credential_dir}"
+  if [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]]; then
+    [[ -r "${credential_dir}/hostagent-publisher.yaml" && -r "${credential_dir}/ca.pem" ]] || {
+      echo "missing HostAgent EventBus credential: ${credential_dir}/hostagent-publisher.yaml" >&2
+      exit 1
+    }
+  elif [[ ! -r "${credential_dir}/hostagent-publisher.yaml" ]]; then
+    umask 077
+    cat >"${credential_dir}/hostagent-publisher.yaml" <<HOSTAGENT_CONFIG_EOF
+version: 1
+urls:
+  - nats://127.0.0.1:${MOOX_EVENTBUS_PORT}
+username: hostagent-publisher
+eventbus_token: insecure-local-development
+ca_file: ""
+HOSTAGENT_CONFIG_EOF
+    chmod 0600 "${credential_dir}/hostagent-publisher.yaml"
+  fi
+  runtime_identity_env moox_hostagent "${ROOT}/hostagent/config/app.yaml"
+  start_service "hostagent" "${ROOT}/hostagent" \
+    env "${RUNTIME_IDENTITY_ENV[@]}" "MOOX_HOST_AGENT_HEALTH_ADDR=127.0.0.1:11425" \
+      "${ROOT}/bin/moox-host-agent" -conf=config/trpc_go.yaml
+  wait_http http://127.0.0.1:11425/readyz "${MOOX_WAIT_HOSTAGENT_SECONDS:-30}"
+}
+
 start_archive() {
   if [[ "${WITH_ARCHIVE}" != "1" ]]; then
     echo "archive is disabled in this deployment package" >&2
     exit 2
   fi
+  # Archive runs on the same host as EventBus.  Keep its consumer on the
+  # local listener instead of sending JetStream fetch/ack traffic through the
+  # public address (which is unreliable on hosts without public-IP hairpin
+  # routing).  Other processes, notably SCF-facing Collector, continue to use
+  # the deployment-wide public URL.
+  local archive_eventbus_url="${MOOX_ARCHIVE_EVENTBUS_NATS_URL:-}"
+  if [[ -z "${archive_eventbus_url}" ]]; then
+    archive_eventbus_url="nats://127.0.0.1:4222"
+    [[ "${MOOX_EVENTBUS_ENABLE_TLS:-0}" == "1" ]] && archive_eventbus_url="tls://127.0.0.1:4222"
+  fi
   gateway_service_env_for archive
   runtime_identity_env moox_archive "${ROOT}/archive/config/app.yaml"
   start_service "archive" "${ROOT}/archive" \
     env "${RUNTIME_IDENTITY_ENV[@]}" "${CALLER_GATEWAY_SERVICE_ENV[@]}" \
-      "MOOX_EVENTBUS_NATS_URL=${MOOX_EVENTBUS_NATS_URL:-nats://127.0.0.1:4222}" \
+      "MOOX_EVENTBUS_NATS_URL=${archive_eventbus_url}" \
       "${ROOT}/bin/moox-archive" -config=config/app.yaml -conf=config/trpc_go.yaml
 }
 
@@ -1892,6 +1997,7 @@ PY
     [[ "${WITH_COLLECTOR}" == "1" ]] || disabled_services+=(moox_collector)
     [[ "${WITH_FACTOR}" == "1" ]] || disabled_services+=(moox_factor)
     [[ "${WITH_MONITOR}" == "1" ]] || disabled_services+=(moox_monitor)
+    [[ "${WITH_HOSTAGENT}" == "1" ]] || disabled_services+=(moox_hostagent)
     [[ "${WITH_STRATEGY}" == "1" ]] || disabled_services+=(moox_strategy)
     [[ "${WITH_TRADE}" == "1" ]] || disabled_services+=(moox_trade)
     if [[ "${resolver_enabled}" != "1" || -z "${resolver_node}" || "${resolver_node}" != "${MOOX_ADMIN_NODE_ID}" ]]; then
@@ -2106,6 +2212,9 @@ case "${SERVICE}" in
     if [[ "${WITH_EVENTBUS}" == "1" ]]; then
       start_eventbus
     fi
+    if [[ "${WITH_HOSTAGENT}" == "1" ]]; then
+      start_hostagent
+    fi
     if [[ "${WITH_ARCHIVE}" == "1" ]]; then
       start_archive
     fi
@@ -2149,6 +2258,7 @@ case "${SERVICE}" in
     complete_storage_bootstrap
     ;;
   eventbus) start_eventbus ;;
+  hostagent) start_hostagent ;;
   archive) start_archive ;;
   storage-primary)
     if [[ "${WITH_STORAGE}" != "1" ]]; then
@@ -2218,6 +2328,7 @@ WITH_FACTOR="${MOOX_WITH_FACTOR:-${MOOX_INSTALLED_WITH_FACTOR:-__WITH_FACTOR__}}
 WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-__WITH_STRATEGY__}}"
 WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-__WITH_TRADE__}}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-${MOOX_INSTALLED_WITH_MONITOR:-__WITH_MONITOR__}}"
+WITH_HOSTAGENT="${MOOX_WITH_HOSTAGENT:-${MOOX_INSTALLED_WITH_HOSTAGENT:-__WITH_HOSTAGENT__}}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-${MOOX_INSTALLED_WITH_WEB_HOST:-__WITH_WEB_HOST__}}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-${MOOX_INSTALLED_WITH_ADMIN:-__WITH_ADMIN__}}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-${MOOX_INSTALLED_WITH_GATEWAY:-__WITH_GATEWAY__}}"
@@ -2237,6 +2348,7 @@ fi
 process_matches_service() {
   local pid="$1" name="$2" command expected
   expected="${ROOT}/bin/moox-${name}"
+  [[ "${name}" == "hostagent" ]] && expected="${ROOT}/bin/moox-host-agent"
   command=$(ps -p "${pid}" -o command= 2>/dev/null || true)
   [[ "${command}" == "${expected}" || "${command}" == "${expected} "* ]]
 }
@@ -2267,6 +2379,7 @@ disable_conflicting_eventbus_supervisor() {
 
 stop_processes_by_binary() {
   local name="$1" expected="${ROOT}/bin/moox-${name}" proc pid exe
+  [[ "${name}" == "hostagent" ]] && expected="${ROOT}/bin/moox-host-agent"
   for proc in /proc/[0-9]*; do
     [[ -d "${proc}" ]] || continue
     pid="${proc##*/}"
@@ -2377,6 +2490,9 @@ case "${SERVICE}" in
     if [[ "${WITH_EVENTBUS}" == "1" ]]; then
       stop_service "eventbus"
     fi
+    if [[ "${WITH_HOSTAGENT}" == "1" ]]; then
+      stop_service "hostagent"
+    fi
     if [[ "${WITH_ARCHIVE}" == "1" ]]; then
       stop_service "archive"
     fi
@@ -2399,6 +2515,10 @@ case "${SERVICE}" in
       exit 2
     fi
     stop_service "eventbus"
+    ;;
+  hostagent)
+    [[ "${WITH_HOSTAGENT}" == "1" ]] || { echo "hostagent is disabled in this deployment package" >&2; exit 2; }
+    stop_service "hostagent"
     ;;
   archive)
     stop_service "archive"
@@ -2465,7 +2585,7 @@ case "${SERVICE}" in
     stop_service "${SERVICE}"
     ;;
   *)
-    echo "unknown service: ${SERVICE}; valid: eventbus storage storage-primary storage-view storage-node cloudnode collector factor strategy trade monitor admin gateway web-host" >&2
+    echo "unknown service: ${SERVICE}; valid: eventbus hostagent storage storage-primary storage-view storage-node cloudnode collector factor strategy trade monitor admin gateway web-host" >&2
     exit 2
     ;;
 esac
@@ -2506,6 +2626,7 @@ WITH_FACTOR="${MOOX_WITH_FACTOR:-${MOOX_INSTALLED_WITH_FACTOR:-__WITH_FACTOR__}}
 WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-__WITH_STRATEGY__}}"
 WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-__WITH_TRADE__}}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-${MOOX_INSTALLED_WITH_MONITOR:-__WITH_MONITOR__}}"
+WITH_HOSTAGENT="${MOOX_WITH_HOSTAGENT:-${MOOX_INSTALLED_WITH_HOSTAGENT:-__WITH_HOSTAGENT__}}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-${MOOX_INSTALLED_WITH_WEB_HOST:-__WITH_WEB_HOST__}}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-${MOOX_INSTALLED_WITH_ADMIN:-__WITH_ADMIN__}}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-${MOOX_INSTALLED_WITH_GATEWAY:-__WITH_GATEWAY__}}"
@@ -2534,6 +2655,9 @@ if [[ "${WITH_ARCHIVE}" == "1" ]]; then
 fi
 if [[ "${WITH_EVENTBUS}" == "1" ]]; then
   services=(eventbus "${services[@]}")
+fi
+if [[ "${WITH_HOSTAGENT}" == "1" ]]; then
+  services=(hostagent "${services[@]}")
 fi
 if [[ "${WITH_WEB_HOST}" == "1" ]]; then
   services+=(web-host)
@@ -2603,6 +2727,7 @@ WITH_FACTOR="${MOOX_WITH_FACTOR:-${MOOX_INSTALLED_WITH_FACTOR:-__WITH_FACTOR__}}
 WITH_STRATEGY="${MOOX_WITH_STRATEGY:-${MOOX_INSTALLED_WITH_STRATEGY:-__WITH_STRATEGY__}}"
 WITH_TRADE="${MOOX_WITH_TRADE:-${MOOX_INSTALLED_WITH_TRADE:-__WITH_TRADE__}}"
 WITH_MONITOR="${MOOX_WITH_MONITOR:-${MOOX_INSTALLED_WITH_MONITOR:-__WITH_MONITOR__}}"
+WITH_HOSTAGENT="${MOOX_WITH_HOSTAGENT:-${MOOX_INSTALLED_WITH_HOSTAGENT:-__WITH_HOSTAGENT__}}"
 WITH_WEB_HOST="${MOOX_WITH_WEB_HOST:-${MOOX_INSTALLED_WITH_WEB_HOST:-__WITH_WEB_HOST__}}"
 WITH_ADMIN="${MOOX_WITH_ADMIN:-${MOOX_INSTALLED_WITH_ADMIN:-__WITH_ADMIN__}}"
 WITH_GATEWAY="${MOOX_WITH_GATEWAY:-${MOOX_INSTALLED_WITH_GATEWAY:-__WITH_GATEWAY__}}"
@@ -2640,6 +2765,7 @@ probe_service() {
     cloudnode) url=http://127.0.0.1:11411/healthz ;;
     collector) url=http://127.0.0.1:11412/healthz ;;
     eventbus) url=http://127.0.0.1:11419/healthz ;;
+    hostagent) url=http://127.0.0.1:11425/healthz ;;
     factor) url=http://127.0.0.1:11414/healthz ;;
     strategy) url=http://127.0.0.1:11431/healthz ;;
     trade) url=http://127.0.0.1:11210/healthz ;;
@@ -2680,7 +2806,7 @@ listener_open() {
     admin) port=11010 ;; gateway) port=11012 ;; archive) port=11416 ;;
     cloudnode) port=11411 ;; collector) port=11412 ;; eventbus) port=11419 ;;
     factor) port=11414 ;; strategy) port=11431 ;; trade) port=11210 ;;
-    monitor) port=11409 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
+    monitor) port=11409 ;; hostagent) port=11425 ;; web-host) port=19527 ;; storage-primary) port=20210 ;;
     storage-view) port=20211 ;; storage-node) port=20212 ;; *) return 1 ;;
   esac
   curl --silent --output /dev/null --connect-timeout 1 --max-time 1 "http://127.0.0.1:${port}/healthz"
@@ -2692,6 +2818,9 @@ if [[ "${WITH_ARCHIVE}" == "1" ]]; then
 fi
 if [[ "${WITH_EVENTBUS}" == "1" ]]; then
   default_services+=(eventbus)
+fi
+if [[ "${WITH_HOSTAGENT}" == "1" ]]; then
+  default_services+=(hostagent)
 fi
 if [[ "${WITH_STORAGE}" == "1" ]]; then
 	default_services+=(storage-primary storage-view)
@@ -2903,6 +3032,8 @@ EOF
 
   perl -0pi -e "s#__WITH_STORAGE__#${WITH_STORAGE}#g; s#__WITH_STORAGE_NODE__#${WITH_STORAGE_NODE}#g; s#__WITH_ARCHIVE__#${WITH_ARCHIVE}#g; s#__WITH_EVENTBUS__#${WITH_EVENTBUS}#g; s#__WITH_CLOUDNODE__#${WITH_CLOUDNODE}#g; s#__WITH_COLLECTOR__#${WITH_COLLECTOR}#g; s#__WITH_FACTOR__#${WITH_FACTOR}#g; s#__WITH_STRATEGY__#${WITH_STRATEGY}#g; s#__WITH_TRADE__#${WITH_TRADE}#g; s#__WITH_MONITOR__#${WITH_MONITOR}#g; s#__WITH_WEB_HOST__#${WITH_WEB_HOST}#g; s#__WITH_ADMIN__#${WITH_ADMIN}#g; s#__WITH_GATEWAY__#${WITH_GATEWAY}#g; s#__PRESERVE_STORAGE_ROUTES__#${preserve_storage_routes}#g; s#__NODE_ID__#${NODE_ID}#g; s#__MONITOR_INSTANCE_ID__#${MONITOR_INSTANCE_ID}#g; s#__EVENTBUS_URL__#${EVENTBUS_URL_ENV}#g; s#__EVENTBUS_HOST__#${MOOX_EVENTBUS_HOST}#g; s#__EVENTBUS_PORT__#${MOOX_EVENTBUS_PORT}#g; s#__EVENTBUS_ENABLE_TLS__#${MOOX_EVENTBUS_ENABLE_TLS:-0}#g; s#__PUBLIC_HOST__#${PUBLIC_HOST}#g; s#__SCF_SERVICE_GATEWAY_TARGET__#${scf_service_gateway_target}#g; s#__SCF_STORAGE_RPC_GATEWAY_TARGET__#${scf_storage_rpc_gateway_target}#g" \
     "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
+  perl -0pi -e "s#__WITH_HOSTAGENT__#${WITH_HOSTAGENT}#g" \
+    "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/healthcheck.sh"
   chmod +x "${STAGE_DIR}/start.sh" "${STAGE_DIR}/stop.sh" "${STAGE_DIR}/status.sh" "${STAGE_DIR}/restart.sh" "${STAGE_DIR}/healthcheck.sh"
 }
 
@@ -3066,6 +3197,7 @@ MOOX_INSTALLED_WITH_FACTOR=${WITH_FACTOR}
 MOOX_INSTALLED_WITH_STRATEGY=${WITH_STRATEGY}
 MOOX_INSTALLED_WITH_TRADE=${WITH_TRADE}
 MOOX_INSTALLED_WITH_MONITOR=${WITH_MONITOR}
+MOOX_INSTALLED_WITH_HOSTAGENT=${WITH_HOSTAGENT}
 MOOX_INSTALLED_WITH_WEB_HOST=${WITH_WEB_HOST}
 MOOX_INSTALLED_WITH_ADMIN=${WITH_ADMIN}
 MOOX_INSTALLED_WITH_GATEWAY=${WITH_GATEWAY}
@@ -3083,6 +3215,7 @@ MOOX_WITH_FACTOR=\${MOOX_WITH_FACTOR:-\${MOOX_INSTALLED_WITH_FACTOR}}
 MOOX_WITH_STRATEGY=\${MOOX_WITH_STRATEGY:-\${MOOX_INSTALLED_WITH_STRATEGY}}
 MOOX_WITH_TRADE=\${MOOX_WITH_TRADE:-\${MOOX_INSTALLED_WITH_TRADE}}
 MOOX_WITH_MONITOR=\${MOOX_WITH_MONITOR:-\${MOOX_INSTALLED_WITH_MONITOR}}
+MOOX_WITH_HOSTAGENT=\${MOOX_WITH_HOSTAGENT:-\${MOOX_INSTALLED_WITH_HOSTAGENT}}
 MOOX_WITH_WEB_HOST=\${MOOX_WITH_WEB_HOST:-\${MOOX_INSTALLED_WITH_WEB_HOST}}
 MOOX_WITH_ADMIN=\${MOOX_WITH_ADMIN:-\${MOOX_INSTALLED_WITH_ADMIN}}
 MOOX_WITH_GATEWAY=\${MOOX_WITH_GATEWAY:-\${MOOX_INSTALLED_WITH_GATEWAY}}
@@ -3185,6 +3318,9 @@ EOF
     copy_required_binary "moox-monitor"
     copy_required_binary "moox-monitor-cli"
   fi
+  if [[ "${WITH_HOSTAGENT}" -eq 1 ]]; then
+    copy_required_binary "moox-host-agent"
+  fi
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     copy_required_binary "moox-storage-primary"
     copy_required_binary "moox-storage-view"
@@ -3269,6 +3405,15 @@ EOF
       perl -pi -e 'if (/name:\s*trpc\.moox\.monitor\.Health/) { $health = 1 } elsif ($health && /ip:\s*127\.0\.0\.1/) { s#127\.0\.0\.1#0.0.0.0#; $health = 0 }' \
         "${STAGE_DIR}/monitor/config/trpc_go.yaml"
     fi
+  fi
+  if [[ "${WITH_HOSTAGENT}" -eq 1 ]]; then
+    mkdir -p "${STAGE_DIR}/hostagent/config"
+    cp -R "${ROOT}/modules/hostagent/config/." "${STAGE_DIR}/hostagent/config/"
+    # The central deployment exports the role credential outside the release
+    # tree. Point HostAgent at that durable file so credentials are never
+    # copied into the package or process arguments.
+    perl -0pi -e 's#eventbus_config:\s*.*#eventbus_config: ~/.config/moox/eventbus/hostagent-publisher.yaml#' \
+      "${STAGE_DIR}/hostagent/config/app.yaml"
   fi
   if [[ "${WITH_STORAGE}" -eq 1 ]]; then
     cp -R "${ROOT}/modules/storage/config/." "${STAGE_DIR}/storage/config/"
@@ -3461,8 +3606,13 @@ sync_local_stage() {
         --exclude '/build-provenance.json' --exclude '/reset-storage-view-indexes.sh' \
         --exclude '/bin/moox-storage' --exclude '/bin/moox-storage-cli' --exclude '/bin/moox-storage-primary' --exclude '/bin/moox-storage-view' --exclude '/bin/moox-storage-node')
     fi
-    if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
-      rsync_excludes+=(--exclude '/eventbus/' --exclude '/bin/moox-eventbus')
+  if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
+    rsync_excludes+=(--exclude '/eventbus/' --exclude '/bin/moox-eventbus')
+    if [[ "${component_overlay}" -eq 1 ]]; then
+      # A component overlay which does not own EventBus must preserve the
+      # installed listener contract for the next restart.
+      rsync_excludes+=(--exclude '/config/runtime.env')
+    fi
     fi
     if [[ "${WITH_ARCHIVE}" -eq 0 ]]; then
       rsync_excludes+=(--exclude '/archive/' --exclude '/bin/moox-archive' --exclude '/bin/moox-archive-cli')
@@ -3558,6 +3708,9 @@ sync_local_stage() {
       if [[ "${WITH_GATEWAY}" -eq 0 ]]; then
         overlay_excludes+=(--exclude='./gateway' --exclude='./bin/moox-gateway' --exclude='./bin/moox-gateway-cli')
       fi
+      if [[ "${WITH_EVENTBUS}" -eq 0 ]]; then
+        overlay_excludes+=(--exclude='./config/runtime.env')
+      fi
       tar -C "${STAGE_DIR}" -cf - "${overlay_excludes[@]}" . | tar -C "${deploy_dir}" -xf -
     else
       cp -R "${STAGE_DIR}/." "${deploy_dir}/"
@@ -3570,6 +3723,7 @@ sync_local_stage() {
       "MOOX_INSTALLED_WITH_CLOUDNODE:${WITH_CLOUDNODE}" "MOOX_INSTALLED_WITH_COLLECTOR:${WITH_COLLECTOR}" \
       "MOOX_INSTALLED_WITH_FACTOR:${WITH_FACTOR}" "MOOX_INSTALLED_WITH_STRATEGY:${WITH_STRATEGY}" \
       "MOOX_INSTALLED_WITH_TRADE:${WITH_TRADE}" "MOOX_INSTALLED_WITH_MONITOR:${WITH_MONITOR}" \
+      "MOOX_INSTALLED_WITH_HOSTAGENT:${WITH_HOSTAGENT}" \
       "MOOX_INSTALLED_WITH_WEB_HOST:${WITH_WEB_HOST}" "MOOX_INSTALLED_WITH_GATEWAY:${WITH_GATEWAY}"
   fi
 
@@ -3646,6 +3800,7 @@ sync_local_stage() {
     if [[ "${component_overlay}" -eq 1 ]]; then
       [[ "${WITH_GATEWAY}" -eq 0 ]] || MOOX_WITH_GATEWAY=1 "${deploy_dir}/start.sh" gateway 8>&-
       [[ "${WITH_EVENTBUS}" -eq 0 ]] || "${deploy_dir}/start.sh" eventbus 8>&-
+      [[ "${WITH_HOSTAGENT}" -eq 0 ]] || "${deploy_dir}/start.sh" hostagent 8>&-
       [[ "${WITH_ARCHIVE}" -eq 0 ]] || "${deploy_dir}/start.sh" archive 8>&-
       [[ "${WITH_CLOUDNODE}" -eq 0 ]] || "${deploy_dir}/start.sh" cloudnode 8>&-
       [[ "${WITH_COLLECTOR}" -eq 0 ]] || "${deploy_dir}/start.sh" collector 8>&-
@@ -3677,7 +3832,7 @@ sync_remote_stage() {
   scp -p "${archive}" "${TARGET}:${remote_archive}"
   ssh -o BatchMode=yes -o ConnectTimeout=10 "${TARGET}" "chmod 0600 -- $(shell_quote "${remote_archive}")"
 
-  local quoted_dir quoted_archive quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms quoted_control_root quoted_storage_root
+  local quoted_dir quoted_archive quoted_no_start quoted_component_overlay quoted_with_storage quoted_with_storage_node quoted_with_archive quoted_with_eventbus quoted_with_cloudnode quoted_with_collector quoted_with_factor quoted_with_strategy quoted_with_trade quoted_with_monitor quoted_with_hostagent quoted_with_web_host quoted_with_admin quoted_with_gateway quoted_reset_data quoted_metrics_metadata_url quoted_eventbus_url quoted_eventbus_host quoted_eventbus_port quoted_metrics_eventbus_url quoted_eventbus_enable_tls quoted_eventbus_public_ip quoted_public_host quoted_tls_mode quoted_browser_https_port quoted_service_https_port quoted_target_goos quoted_target_goarch quoted_local_storage_gateway_target quoted_local_storage_gateway_node_id quoted_storage_view_duckdb_memory_limit quoted_factor_python_workers quoted_factor_view_read_workers quoted_factor_view_read_timeout_ms quoted_control_root quoted_storage_root
   quoted_dir="$(shell_quote "${DEPLOY_DIR}")"
   quoted_archive="$(shell_quote "${remote_archive}")"
   quoted_no_start="$(shell_quote "${NO_START}")"
@@ -3692,6 +3847,7 @@ sync_remote_stage() {
   quoted_with_strategy="$(shell_quote "${WITH_STRATEGY}")"
   quoted_with_trade="$(shell_quote "${WITH_TRADE}")"
   quoted_with_monitor="$(shell_quote "${WITH_MONITOR}")"
+  quoted_with_hostagent="$(shell_quote "${WITH_HOSTAGENT}")"
   quoted_with_web_host="$(shell_quote "${WITH_WEB_HOST}")"
   quoted_with_admin="$(shell_quote "${WITH_ADMIN}")"
   quoted_with_gateway="$(shell_quote "${WITH_GATEWAY}")"
@@ -3719,7 +3875,7 @@ sync_remote_stage() {
   quoted_control_root="$(shell_quote "${MOOX_CONTROL_ROOT:-}")"
   quoted_storage_root="$(shell_quote "${MOOX_STORAGE_ROOT:-}")"
 
-  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
+  ssh "${TARGET}" "DEPLOY_DIR=${quoted_dir} ARCHIVE=${quoted_archive} NO_START=${quoted_no_start} COMPONENT_OVERLAY=${quoted_component_overlay} WITH_STORAGE=${quoted_with_storage} WITH_STORAGE_NODE=${quoted_with_storage_node} WITH_ARCHIVE=${quoted_with_archive} WITH_EVENTBUS=${quoted_with_eventbus} WITH_CLOUDNODE=${quoted_with_cloudnode} WITH_COLLECTOR=${quoted_with_collector} WITH_FACTOR=${quoted_with_factor} WITH_STRATEGY=${quoted_with_strategy} WITH_TRADE=${quoted_with_trade} WITH_MONITOR=${quoted_with_monitor} WITH_HOSTAGENT=${quoted_with_hostagent} WITH_WEB_HOST=${quoted_with_web_host} WITH_ADMIN=${quoted_with_admin} WITH_GATEWAY=${quoted_with_gateway} RESET_DATA=${quoted_reset_data} MOOX_METRICS_STORAGE_METADATA_URL=${quoted_metrics_metadata_url} MOOX_EVENTBUS_NATS_URL=${quoted_eventbus_url} MOOX_EVENTBUS_HOST=${quoted_eventbus_host} MOOX_EVENTBUS_PORT=${quoted_eventbus_port} MOOX_METRICS_EVENTBUS_URL=${quoted_metrics_eventbus_url} MOOX_EVENTBUS_ENABLE_TLS=${quoted_eventbus_enable_tls} MOOX_EVENTBUS_PUBLIC_IP=${quoted_eventbus_public_ip} MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target} MOOX_LOCAL_STORAGE_GATEWAY_NODE_ID=${quoted_local_storage_gateway_node_id} MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT=${quoted_storage_view_duckdb_memory_limit} MOOX_STORAGE_VIEW_MAINTENANCE_POLICY_B64=${quoted_storage_view_maintenance_policy_b64} MOOX_FACTOR_ENGINE_PYTHON_WORKERS=${quoted_factor_python_workers} MOOX_FACTOR_ENGINE_VIEW_READ_WORKERS=${quoted_factor_view_read_workers} MOOX_FACTOR_ENGINE_VIEW_READ_TIMEOUT_MS=${quoted_factor_view_read_timeout_ms} MOOX_CONTROL_ROOT=${quoted_control_root} MOOX_STORAGE_ROOT=${quoted_storage_root} PUBLIC_HOST=${quoted_public_host} TLS_MODE_RESOLVED=${quoted_tls_mode} BROWSER_HTTPS_PORT=${quoted_browser_https_port} SERVICE_HTTPS_PORT=${quoted_service_https_port} TARGET_GOOS=${quoted_target_goos} TARGET_GOARCH=${quoted_target_goarch} bash -s" <<'EOF'
 set -euo pipefail
 
 generate_secret() {
@@ -3795,6 +3951,7 @@ HAS_SELECTED_WORKLOAD=0
 if [[ "${WITH_ARCHIVE}" == "1" || "${WITH_EVENTBUS}" == "1" || "${WITH_CLOUDNODE}" == "1" || \
   "${WITH_COLLECTOR}" == "1" || "${WITH_FACTOR}" == "1" || "${WITH_STRATEGY}" == "1" || \
   "${WITH_TRADE}" == "1" || "${WITH_MONITOR}" == "1" || "${WITH_WEB_HOST}" == "1" || \
+  "${WITH_HOSTAGENT}" == "1" || \
   "${WITH_GATEWAY}" == "1" ]]; then
   HAS_SELECTED_WORKLOAD=1
 fi
@@ -3879,6 +4036,10 @@ if [[ "${WITH_MONITOR}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/monitor"
   rm -f "${DEPLOY_DIR}/bin/moox-monitor" "${DEPLOY_DIR}/bin/moox-monitor-cli"
 fi
+if [[ "${WITH_HOSTAGENT}" == "1" ]]; then
+  rm -rf "${DEPLOY_DIR}/hostagent"
+  rm -f "${DEPLOY_DIR}/bin/moox-host-agent" "${DEPLOY_DIR}/bin/moox-host-agent-cli"
+fi
 if [[ "${WITH_CLOUDNODE}" == "1" ]]; then
   rm -rf "${DEPLOY_DIR}/cloudnode"
   rm -f "${DEPLOY_DIR}/bin/moox-cloudnode" "${DEPLOY_DIR}/bin/moox-cloudnode-cli"
@@ -3923,6 +4084,11 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
       --exclude='./gateway' --exclude='./bin/moox-gateway' --exclude='./bin/moox-gateway-cli'
     )
   fi
+  if [[ "${WITH_EVENTBUS}" == "0" ]]; then
+    # A remote component overlay which does not own EventBus must preserve
+    # the installed listener contract for the next restart.
+    TAR_EXCLUDES+=(--exclude='./config/runtime.env')
+  fi
 fi
 tar "${TAR_EXCLUDES[@]}" -C "${DEPLOY_DIR}" -xzf "${ARCHIVE}"
 rm -f "${ARCHIVE}"
@@ -3931,7 +4097,8 @@ if [[ "${COMPONENT_OVERLAY}" == "1" ]]; then
     "MOOX_INSTALLED_WITH_ARCHIVE:${WITH_ARCHIVE}" "MOOX_INSTALLED_WITH_EVENTBUS:${WITH_EVENTBUS}" \
     "MOOX_INSTALLED_WITH_CLOUDNODE:${WITH_CLOUDNODE}" "MOOX_INSTALLED_WITH_COLLECTOR:${WITH_COLLECTOR}" \
     "MOOX_INSTALLED_WITH_FACTOR:${WITH_FACTOR}" "MOOX_INSTALLED_WITH_STRATEGY:${WITH_STRATEGY}" \
-    "MOOX_INSTALLED_WITH_TRADE:${WITH_TRADE}" "MOOX_INSTALLED_WITH_MONITOR:${WITH_MONITOR}" \
+      "MOOX_INSTALLED_WITH_TRADE:${WITH_TRADE}" "MOOX_INSTALLED_WITH_MONITOR:${WITH_MONITOR}" \
+      "MOOX_INSTALLED_WITH_HOSTAGENT:${WITH_HOSTAGENT}" \
     "MOOX_INSTALLED_WITH_WEB_HOST:${WITH_WEB_HOST}" "MOOX_INSTALLED_WITH_GATEWAY:${WITH_GATEWAY}"
 fi
 if [[ -f "${DEPLOY_DIR}/secrets/msgbox.env.next" ]]; then
@@ -3954,7 +4121,12 @@ chmod 0600 "${DEPLOY_DIR}/secrets/gateway-control.env" "${DEPLOY_DIR}/secrets/ga
 [[ "${WITH_ADMIN}" == "0" ]] || chmod 0600 "${DEPLOY_DIR}/secrets/admin-jwt.env"
 
   if [[ "${NO_START}" -eq 0 ]]; then
-  if [[ -n "${PUBLIC_HOST}" && "${COMPONENT_OVERLAY}" == "0" ]]; then
+  # A standalone Storage package using the control-plane Gateway does not
+  # own a public HTTPS edge.  Starting a second Caddy on the same host would
+  # contend with the control package's listener and leave Storage deployed
+  # but with a misleading activation failure.  Only packages that own Admin
+  # or Gateway expose an edge listener here.
+  if [[ -n "${PUBLIC_HOST}" && "${COMPONENT_OVERLAY}" == "0" && ( "${WITH_ADMIN}" == "1" || "${WITH_GATEWAY}" == "1" ) ]]; then
     CADDY_OS_NAME="${TARGET_GOOS}"
     [[ "${CADDY_OS_NAME}" != darwin ]] || CADDY_OS_NAME=mac
     CADDY_PORTS="${SERVICE_HTTPS_PORT}"
@@ -4083,6 +4255,7 @@ status() {
     --resolve "$browser_authority:127.0.0.1" --resolve "$service_authority:127.0.0.1" \
     --output /dev/null --write-out "%{http_code}" "$@"
 }
+
 expect_status() {
   expected=$1; shift
   for _ in $(seq 1 30); do
@@ -4130,5 +4303,35 @@ expect_status "$expected" -X POST -H "Content-Type: application/json" \
 }
 
 verify_public_https
+
+verify_runtime_governance() {
+  [[ "${NO_START}" -eq 0 && "${WITH_EVENTBUS}" == "1" ]] || return 0
+  local governance_script='set -euo pipefail
+root=$1; expected_host=$2; expected_port=$3; expected_tls=$4; require_public=$5
+test -r "$root/config/runtime.env"
+set -a; . "$root/config/runtime.env"; set +a
+[[ "${MOOX_EVENTBUS_HOST:-}" == "$expected_host" ]]
+[[ "${MOOX_EVENTBUS_PORT:-}" == "$expected_port" ]]
+[[ "${MOOX_EVENTBUS_ENABLE_TLS:-}" == "$expected_tls" ]]
+pgrep -f -- "$root/bin/moox-eventbus" >/dev/null
+if [[ "$require_public" == 1 ]]; then
+  command -v ss >/dev/null 2>&1
+  ss -ltnH | grep -Eq "(0\\.0\\.0\\.0|\\*):${expected_port}([[:space:]]|$)"
+fi'
+  local require_public=0
+  if [[ "${WITH_COLLECTOR}" == "1" && "${MOOX_EVENTBUS_ALLOW_LOOPBACK_REMOTE:-0}" != "1" ]] && ! is_local_target; then
+    require_public=1
+  fi
+  if is_local_target; then
+    bash -c "${governance_script}" _ "$(expand_local_path "${DEPLOY_DIR}")" "${MOOX_EVENTBUS_HOST}" "${MOOX_EVENTBUS_PORT}" "${MOOX_EVENTBUS_ENABLE_TLS:-0}" "${require_public}" ||
+      fail "runtime governance acceptance failed"
+  else
+    ssh -o BatchMode=yes "${TARGET}" bash -s -- "${DEPLOY_DIR%/}" "${MOOX_EVENTBUS_HOST}" "${MOOX_EVENTBUS_PORT}" "${MOOX_EVENTBUS_ENABLE_TLS:-0}" "${require_public}" <<<"${governance_script}" ||
+      fail "runtime governance acceptance failed"
+  fi
+  log "runtime governance acceptance passed"
+}
+
+verify_runtime_governance
 
 log "done"

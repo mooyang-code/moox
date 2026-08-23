@@ -116,6 +116,27 @@ func TestRunAllExecutesSubjectFactorCartesianProduct(t *testing.T) {
 	}, exec.executed())
 }
 
+func TestRunAllUsesBatchFactorWriterForOneSubjectPeriod(t *testing.T) {
+	storage := &batchRecordingStorage{}
+	runner := NewService(2, storage, &recordingBatchExecutor{})
+	base := time.Unix(1, 0).UTC()
+	first := oneBarTask("BTC", base)
+	first.Factor.FactorID = "bias5"
+	first.TaskID = "task-btc-bias5"
+	first.PeriodTime = base.Unix()
+	second := oneBarTask("BTC", base)
+	second.Factor.FactorID = "bias20"
+	second.TaskID = "task-btc-bias20"
+	second.PeriodTime = base.Unix()
+	results := runner.RunAll(context.Background(), []Task{first, second})
+	for _, result := range results {
+		require.NoError(t, result.Err)
+	}
+	require.Equal(t, 1, storage.batchCalls)
+	require.Equal(t, 2, storage.batchSize)
+	require.Zero(t, storage.singleCalls)
+}
+
 func TestRunAllAllowsSameSubjectFactorsToRunConcurrently(t *testing.T) {
 	exec := &blockingExecutor{entered: make(chan string, 2), release: make(chan struct{})}
 	runner := NewService(2, staticReadStorage{}, exec, WithBatchExecution(false))
@@ -267,6 +288,28 @@ func (staticReadStorage) ReadRangeChunk(
 
 func (staticReadStorage) WriteFactorPatch(context.Context, *engine.FactorTask, *engine.FactorResult) (uint64, error) {
 	return 1, nil
+}
+
+type batchRecordingStorage struct {
+	staticReadStorage
+	batchCalls  int
+	batchSize   int
+	singleCalls int
+}
+
+func (s *batchRecordingStorage) WriteFactorPatch(context.Context, *engine.FactorTask, *engine.FactorResult) (uint64, error) {
+	s.singleCalls++
+	return 1, nil
+}
+
+func (s *batchRecordingStorage) WriteFactorPatches(_ context.Context, patches []storageio.FactorPatch) ([]uint64, error) {
+	s.batchCalls++
+	s.batchSize = len(patches)
+	counts := make([]uint64, len(patches))
+	for index := range counts {
+		counts[index] = 1
+	}
+	return counts, nil
 }
 
 type recordingReadStorage struct {

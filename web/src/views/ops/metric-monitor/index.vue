@@ -3,7 +3,7 @@
     <header v-if="!embedded" class="page-head">
       <div v-if="!embedded">
         <h2>应用指标</h2>
-        <span>服务实例主动上报的 Prometheus 指标与历史趋势。</span>
+        <span>先看哪些服务需要关注，再定位到具体指标和时间。</span>
       </div>
     </header>
 
@@ -15,9 +15,9 @@
     <div class="metric-tab-content">
       <section v-if="activeTab === 'explorer'" class="metric-tab-panel">
         <section class="filter-band">
-          <a-button type="primary" status="success" @click="openCreateRule">
+          <a-button type="primary" status="success" aria-label="新建指标" @click="openCreateRule">
             <template #icon><icon-plus /></template>
-            新建指标
+            新建告警规则
           </a-button>
           <a-select
             v-model="selectedService"
@@ -27,7 +27,9 @@
             @change="onServiceChange"
             style="width: 220px"
           >
-            <a-option v-for="service in serviceOptions" :key="service" :value="service">{{ service }}</a-option>
+            <a-option v-for="service in serviceOptions" :key="service" :value="service">{{
+              serviceDisplayName(service)
+            }}</a-option>
           </a-select>
           <a-select v-model="selectedInstance" allow-clear placeholder="实例" @change="refreshSeriesData" style="width: 220px">
             <a-option v-for="instance in instanceOptions" :key="instance" :value="instance">{{ instance }}</a-option>
@@ -41,13 +43,13 @@
             style="width: 280px"
           >
             <a-option v-for="metric in metricOptions" :key="metric.metric_name" :value="metric.metric_name">
-              {{ metric.metric_name }} <span class="option-count">({{ metric.series_count || 0 }})</span>
+              {{ metricDisplayName(metric.metric_name) }} <span class="option-count">({{ metric.series_count || 0 }} 条)</span>
             </a-option>
           </a-select>
           <a-input
             v-model="labelsFilter"
             allow-clear
-            placeholder="标签文本过滤"
+            placeholder="维度过滤（空间、Dataset、频率）"
             style="width: 240px"
             @press-enter="refreshSeriesData"
           />
@@ -58,45 +60,97 @@
           <a-empty description="暂无已上报服务" />
         </section>
         <section v-else class="explorer-grid">
+          <section class="metric-summary" aria-label="指标摘要">
+            <div class="summary-item summary-ok">
+              <span>状态正常</span>
+              <strong>{{ healthyCount }}</strong>
+              <small>条指标序列</small>
+            </div>
+            <div class="summary-item summary-warning" title="陈旧数据会被标记为需要关注">
+              <span>需要关注</span>
+              <strong>{{ staleCount }}</strong>
+              <small>条指标序列</small>
+            </div>
+            <div class="summary-item summary-muted">
+              <span>暂无数据</span>
+              <strong>{{ noDataCount }}</strong>
+              <small>条指标序列</small>
+            </div>
+            <div class="summary-item summary-info">
+              <span>当前服务</span>
+              <strong>{{ serviceCount }}</strong>
+              <small>个服务</small>
+            </div>
+          </section>
+
           <div class="latest-panel">
             <div class="section-head">
               <div>
-                <strong>最新值</strong>
+                <strong>当前状态</strong>
                 <span v-if="seriesTotal > MAX_DISPLAY_SERIES" class="cardinality-note"
                   >已限制 {{ MAX_DISPLAY_SERIES }} 条，匹配总数 {{ seriesTotal }}</span
                 >
               </div>
-              <a-tag v-if="staleCount" color="orange">{{ staleCount }} 个实例陈旧</a-tag>
+              <a-tag v-if="staleCount" color="orange">{{ staleCount }} 条指标需关注</a-tag>
             </div>
             <a-table
               row-key="series_id"
               size="small"
               :bordered="{ cell: true }"
               :loading="latestLoading"
-              :data="latestRows"
+              :data="displayLatestRows"
               :pagination="false"
               :scroll="{ x: 'max-content', y: 430 }"
             >
               <template #columns>
-                <a-table-column title="指标" data-index="metric_name" :width="240" />
-                <a-table-column title="实例" data-index="instance_id" :width="180" />
-                <a-table-column title="标签" :width="270" :ellipsis="true" :tooltip="true">
-                  <template #cell="{ record }">{{ record.labels_json || "-" }}</template>
+                <a-table-column title="服务" :width="140">
+                  <template #cell="{ record }">{{ serviceDisplayName(record.service_name || selectedService) }}</template>
                 </a-table-column>
-                <a-table-column title="最新值" :width="130">
-                  <template #cell="{ record }">{{ formatNumber(record.value) }}</template>
+                <a-table-column title="指标" :width="240">
+                  <template #cell="{ record }">
+                    <span class="metric-cell" :title="record.metric_name || ''">
+                      <strong>{{ metricDisplayName(record.metric_name) }}</strong>
+                    </span>
+                  </template>
                 </a-table-column>
-                <a-table-column title="状态" :width="100">
+                <a-table-column title="当前值" :width="150">
+                  <template #cell="{ record }">{{ metricValueDisplay(record.metric_name, record.value) }}</template>
+                </a-table-column>
+                <a-table-column title="状态" :width="110">
                   <template #cell="{ record }"
-                    ><a-tag size="small" :color="statusColor(record)">{{ statusText(record) }}</a-tag></template
+                    ><a-tag size="small" :color="statusColor(record)">{{ metricStatusText(record) }}</a-tag></template
                   >
                 </a-table-column>
-                <a-table-column title="观测时间" :width="190">
+                <a-table-column title="更新时间" :width="190">
                   <template #cell="{ record }">{{ formatTime(record.observed_at) }}</template>
+                </a-table-column>
+                <a-table-column title="关键维度" :width="300">
+                  <template #cell="{ record }">
+                    <div v-if="metricDimensionSummary(record.labels_json).items.length" class="dimension-list">
+                      <a-tag
+                        v-for="dimension in metricDimensionSummary(record.labels_json).items"
+                        :key="`${dimension.key}-${dimension.value}`"
+                        size="small"
+                        class="dimension-tag"
+                        >{{ dimension.label }}：{{ dimension.value }}</a-tag
+                      >
+                      <span v-if="metricDimensionSummary(record.labels_json).overflow" class="dimension-more"
+                        >+{{ metricDimensionSummary(record.labels_json).overflow }}</span
+                      >
+                    </div>
+                    <span v-else class="muted-cell">暂无维度</span>
+                  </template>
+                </a-table-column>
+                <a-table-column title="操作" :width="80" fixed="right">
+                  <template #cell="{ record }">
+                    <a-button size="mini" type="text" @click="openMetricDetail(record)">详情</a-button>
+                  </template>
                 </a-table-column>
               </template>
             </a-table>
-            <div v-if="!latestLoading && !latestRows.length" class="inline-empty">没有匹配的指标序列</div>
+            <div v-if="!latestLoading && !latestRows.length" class="inline-empty">
+              {{ selectedSeries.length ? "当前筛选范围暂无可用数据" : "没有匹配的指标序列" }}
+            </div>
           </div>
 
           <div class="chart-panel">
@@ -212,6 +266,49 @@
       </a-table>
       <div v-if="!evaluationLoading && !evaluations.length" class="inline-empty">暂无评估记录</div>
     </a-drawer>
+
+    <a-drawer v-model:visible="metricDetailVisible" width="520px" title="指标详情" :footer="false" unmount-on-close>
+      <template v-if="selectedMetricRow">
+        <a-descriptions :column="1" bordered size="small">
+          <a-descriptions-item label="服务">{{
+            serviceDisplayName(selectedMetricRow.service_name || selectedService)
+          }}</a-descriptions-item>
+          <a-descriptions-item label="指标">{{ metricDisplayName(selectedMetricRow.metric_name) }}</a-descriptions-item>
+          <a-descriptions-item label="当前值">{{
+            metricValueDisplay(selectedMetricRow.metric_name, selectedMetricRow.value)
+          }}</a-descriptions-item>
+          <a-descriptions-item label="状态">
+            <a-tag size="small" :color="statusColor(selectedMetricRow)">{{ metricStatusText(selectedMetricRow) }}</a-tag>
+            <span class="detail-note">{{ metricStatusReason(selectedMetricRow) }}</span>
+          </a-descriptions-item>
+          <a-descriptions-item label="更新时间">{{ formatTime(selectedMetricRow.observed_at) }}</a-descriptions-item>
+          <a-descriptions-item label="实例">{{ selectedMetricRow.instance_id || "-" }}</a-descriptions-item>
+          <a-descriptions-item label="关键维度">
+            <div v-if="parseMetricLabels(selectedMetricRow.labels_json).length" class="detail-dimensions">
+              <a-tag
+                v-for="dimension in parseMetricLabels(selectedMetricRow.labels_json)"
+                :key="`${dimension.key}-${dimension.value}`"
+                size="small"
+              >
+                {{ dimension.label }}：{{ dimension.value }}
+              </a-tag>
+            </div>
+            <span v-else>-</span>
+          </a-descriptions-item>
+        </a-descriptions>
+        <a-collapse class="advanced-details">
+          <a-collapse-item key="raw" header="高级信息">
+            <div class="raw-field">
+              <span>原始指标名</span><code>{{ selectedMetricRow.metric_name || "-" }}</code>
+            </div>
+            <div class="raw-field">
+              <span>序列 ID</span><code>{{ selectedMetricRow.series_id || "-" }}</code>
+            </div>
+            <pre class="raw-json">{{ selectedMetricRow.labels_json || "{}" }}</pre>
+          </a-collapse-item>
+        </a-collapse>
+      </template>
+    </a-drawer>
   </div>
 </template>
 
@@ -232,6 +329,15 @@ import type {
   MetricRuleState,
   WebhookChannel
 } from "@/api/metric-monitor/types";
+import {
+  metricDimensionSummary,
+  metricDisplayName,
+  metricStatusReason,
+  metricStatusText,
+  metricValueDisplay,
+  parseMetricLabels,
+  serviceDisplayName
+} from "./metric-display";
 
 const props = defineProps<{ embedded?: boolean }>();
 const embedded = computed(() => props.embedded === true);
@@ -260,7 +366,9 @@ const selectedMetric = ref("");
 const labelsFilter = ref("");
 const ruleDrawerVisible = ref(false);
 const evaluationDrawerVisible = ref(false);
+const metricDetailVisible = ref(false);
 const editingRule = ref<MetricRule>();
+const selectedMetricRow = ref<MetricLatestPoint>();
 
 const serviceOptions = computed(() =>
   [...new Set(services.value.map(item => item.service_name).filter(Boolean) as string[])].sort()
@@ -293,9 +401,24 @@ const seriesTotal = computed(
     ).length
 );
 const staleCount = computed(() => latestRows.value.filter(item => isStale(item)).length);
+const healthyCount = computed(() => latestRows.value.filter(item => !isStale(item)).length);
+const noDataCount = computed(() => Math.max(0, selectedSeries.value.length - latestRows.value.length));
+const serviceCount = computed(() => {
+  const visibleServices = new Set(
+    latestRows.value.map(item => item.service_name || selectedService.value).filter(Boolean) as string[]
+  );
+  return visibleServices.size || (selectedService.value ? 1 : serviceOptions.value.length);
+});
+const displayLatestRows = computed(() =>
+  [...latestRows.value].sort((left, right) => Number(isStale(right)) - Number(isStale(left)))
+);
 const chartPoints = computed<ChartPoint[]>(() =>
   Object.entries(historyBySeries.value).flatMap(([seriesId, points]) =>
-    points.map(point => ({ time: formatTime(point.observed_at), value: point.value || 0, series: seriesId.slice(0, 12) }))
+    points.map(point => ({
+      time: formatTime(point.observed_at),
+      value: point.value || 0,
+      series: chartSeriesLabel(seriesId)
+    }))
   )
 );
 
@@ -506,6 +629,11 @@ async function openEvaluations(rule: MetricRule) {
   }
 }
 
+function openMetricDetail(row: MetricLatestPoint) {
+  selectedMetricRow.value = row;
+  metricDetailVisible.value = true;
+}
+
 function ruleState(ruleId?: string) {
   return ruleId ? ruleStates.value[ruleId] : undefined;
 }
@@ -520,11 +648,17 @@ function formatNumber(value?: number) {
 function isStale(row: MetricLatestPoint) {
   return !!row.stale || (!!row.observed_at && Date.now() - new Date(row.observed_at).valueOf() > 90_000);
 }
-function statusText(row: MetricLatestPoint) {
-  return isStale(row) ? "陈旧" : "正常";
-}
 function statusColor(row: MetricLatestPoint) {
   return isStale(row) ? "orange" : "green";
+}
+function chartSeriesLabel(seriesId: string) {
+  const metadata = series.value.find(item => item.series_id === seriesId);
+  if (!metadata) return metricDisplayName(selectedMetric.value);
+  const dimensions = metricDimensionSummary(metadata.labels_json, 2).items.map(
+    dimension => `${dimension.label}：${dimension.value}`
+  );
+  if (metadata.instance_id) dimensions.push(`实例：${metadata.instance_id}`);
+  return [metricDisplayName(metadata.metric_name), ...dimensions].join(" · ");
 }
 function connectorText(value?: number) {
   return value === 2 ? "OR" : "AND";
@@ -626,6 +760,52 @@ onMounted(refreshAll);
   grid-template-columns: minmax(0, 1fr);
   gap: var(--moox-space-4);
 }
+.metric-summary {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--moox-space-3);
+}
+.summary-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--moox-space-2);
+  min-height: 78px;
+  padding: var(--moox-space-3) var(--moox-space-4);
+  border: 1px solid var(--color-border-2);
+  border-left: 3px solid var(--color-text-3);
+  background: var(--color-bg-2);
+}
+.summary-item span,
+.summary-item small {
+  color: var(--color-text-3);
+}
+.summary-item span {
+  font-size: 13px;
+}
+.summary-item strong {
+  grid-row: span 2;
+  color: var(--color-text-1);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+}
+.summary-item small {
+  font-size: 11px;
+}
+.summary-ok {
+  border-left-color: rgb(var(--green-6));
+}
+.summary-warning {
+  border-left-color: rgb(var(--orange-6));
+}
+.summary-muted {
+  border-left-color: var(--color-text-4);
+}
+.summary-info {
+  border-left-color: rgb(var(--primary-6));
+}
 .latest-panel,
 .chart-panel {
   min-width: 0;
@@ -646,6 +826,62 @@ onMounted(refreshAll);
   text-align: center;
   color: var(--color-text-3);
 }
+.metric-cell {
+  display: inline-flex;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dimension-list,
+.detail-dimensions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.dimension-tag {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dimension-more,
+.muted-cell,
+.detail-note {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.detail-note {
+  margin-left: 8px;
+}
+.advanced-details {
+  margin-top: var(--moox-space-4);
+}
+.raw-field {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: var(--moox-space-2);
+  margin-bottom: var(--moox-space-2);
+  font-size: 12px;
+}
+.raw-field span {
+  color: var(--color-text-3);
+}
+.raw-field code,
+.raw-json {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.raw-json {
+  margin: var(--moox-space-3) 0 0;
+  padding: var(--moox-space-3);
+  border: 1px solid var(--color-border-2);
+  background: var(--color-fill-1);
+  color: var(--color-text-2);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
 .rule-name {
   display: flex;
   flex-direction: column;
@@ -654,5 +890,18 @@ onMounted(refreshAll);
 .rule-name span {
   color: var(--color-text-3);
   font-size: 12px;
+}
+@media (max-width: 900px) {
+  .metric-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .metric-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .summary-item {
+    min-height: 64px;
+  }
 }
 </style>

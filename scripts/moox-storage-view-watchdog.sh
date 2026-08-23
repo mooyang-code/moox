@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${MOOX_STORAGE_ROOT:-/home/ubuntu/moox/storage}"
+ROOT="${MOOX_STORAGE_ROOT:-/data/moox/storage}"
 PID_FILE="${ROOT}/run/storage-view.pid"
 BINARY="${ROOT}/bin/moox-storage-view"
 LOCK_FILE="${ROOT}/run/storage-view-watchdog.lock"

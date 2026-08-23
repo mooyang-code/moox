@@ -19,7 +19,15 @@ import (
 const packageUploadTimeout = 2 * time.Minute
 
 var newPackageUploadHTTPClient = func() *http.Client {
-	return &http.Client{Timeout: packageUploadTimeout}
+	// Tencent COS occasionally advertises an HTTP/2 endpoint that replies with
+	// a plaintext HTTP response during the TLS handshake. The default Go
+	// transport then reports "server gave HTTP response to HTTPS client" and a
+	// publish fails before CloudNode can finish the package transaction. Keep
+	// package uploads on an explicit HTTP/1.1 transport; the URL remains HTTPS
+	// and certificate verification is unchanged.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ForceAttemptHTTP2 = false
+	return &http.Client{Timeout: packageUploadTimeout, Transport: transport}
 }
 
 // CloudAccount 云账户（脱敏，仅用于列举与取 account_id）。

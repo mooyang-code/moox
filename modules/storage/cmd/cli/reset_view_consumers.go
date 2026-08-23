@@ -127,7 +127,15 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		return err
 	}
 	summary := resetViewConsumersSummary{
-		Stream: opts.stream, Consumers: append([]string{events.StorageViewLegacyBroadConsumer, events.StorageViewLegacyConsumer}, events.StorageViewConsumerDurables...),
+		Stream: opts.stream, Consumers: append([]string{
+			events.StorageViewLegacyBroadConsumer,
+			events.StorageViewLegacyConsumer,
+			events.StorageViewLegacyOtherConsumer,
+			events.StorageViewLegacyKlineConsumer,
+			events.StorageViewLegacyFactorConsumer,
+			events.StorageViewLegacyMetricsConsumer,
+			events.StorageViewLegacyMiscConsumer,
+		}, events.StorageViewConsumerDurables...),
 		Views: len(views), DryRun: opts.dryRun, Lookback: opts.lookback.String(),
 	}
 	for _, view := range views {
@@ -659,7 +667,19 @@ func resetStorageViewConsumers(ctx context.Context, opts resetViewConsumersOptio
 	if err != nil {
 		return false, err
 	}
-	for _, durable := range []string{events.StorageViewLegacyBroadConsumer, events.StorageViewLegacyConsumer, events.StorageViewKlineConsumer, events.StorageViewMetricsConsumer, events.StorageViewOtherConsumer} {
+	for _, durable := range []string{
+		events.StorageViewLegacyBroadConsumer,
+		events.StorageViewLegacyConsumer,
+		events.StorageViewLegacyOtherConsumer,
+		events.StorageViewLegacyKlineConsumer,
+		events.StorageViewLegacyFactorConsumer,
+		events.StorageViewLegacyMetricsConsumer,
+		events.StorageViewLegacyMiscConsumer,
+		events.StorageViewKlineConsumer,
+		events.StorageViewFactorConsumer,
+		events.StorageViewMetricsConsumer,
+		events.StorageViewMiscConsumer,
+	} {
 		mutationStarted = true
 		if err := js.DeleteConsumer(opts.stream, durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
 			return mutationStarted, fmt.Errorf("delete consumer %s: %w", durable, err)

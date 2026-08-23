@@ -40,7 +40,7 @@ storage:
     ordering: dataset
     consumer_partitions:
       - id: kline
-        durable: storage_view_kline_v2
+        durable: storage_view_kline
         routes:
           - space_id: crypto_market
             dataset_ids: [binance_spot_kline_1m]
@@ -52,19 +52,40 @@ storage:
         deliver_policy: new
         max_retry_attempts: -1
       - id: system_metrics
-        durable: storage_view_metrics_v2
+        durable: storage_view_metrics
         routes:
           - space_id: moox_system
             dataset_ids: [moox_service_metrics]
-        fetch_batch: 2
-        max_workers: 1
-        max_ack_pending: 8
+        # System metrics are emitted every 30 seconds and can accumulate a
+        # sizeable durable backlog after a Storage View restart. Keep the
+        # dataset/subject ordering guarantee while allowing independent
+        # service subjects to drain in parallel.
+        fetch_batch: 16
+        max_workers: 4
+        max_ack_pending: 64
         ack_wait_ms: 120000
         ordering: dataset
         deliver_policy: new
         max_retry_attempts: -1
-      - id: other
-        durable: storage_view_other_v2
+      - id: factor
+        durable: storage_view_factor
+        routes:
+          - space_id: crypto_market
+            dataset_ids: [binance_spot_kline_1m_factor]
+        # Factor results are emitted once per factor/subject/period. Keep a
+        # deeper fetch window and more worker capacity than Kline so a brief
+        # Storage View restart can drain the durable backlog faster than the
+        # one-minute producer rate. Rows are still ordered per Dataset; the
+        # consumer coalesces contiguous rows before one index transaction.
+        fetch_batch: 16
+        max_workers: 8
+        max_ack_pending: 128
+        ack_wait_ms: 120000
+        ordering: dataset
+        deliver_policy: new
+        max_retry_attempts: -1
+      - id: misc
+        durable: storage_view_misc
         routes:
           - space_id: crypto_market
             dataset_ids: ["*"]

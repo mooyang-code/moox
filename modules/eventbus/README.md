@@ -23,10 +23,11 @@ filter 或 deliver policy 等不可变参数冲突会显式失败，不会删除
 
 | 资源 | 时间边界 | 字节边界 |
 | --- | --- | --- |
-| `MOOX_STORAGE` | 72 小时 | 1 GiB |
-| `MOOX_METRICS` | 24 小时 | 256 MiB |
-| `MOOX_CLOUDNODE_EXEC` | 72 小时 | 256 MiB |
-| `MOOX_TRADE` | 7 天 | 256 MiB |
+| `MOOX_STORAGE` | 72 小时 | 512 MiB |
+| `MOOX_OBSERVABILITY` | 24 小时 | 128 MiB |
+| `MOOX_CLOUDNODE_EXEC` | 72 小时 | 128 MiB |
+| `MOOX_MARKET_FETCH` | 24 小时 | 128 MiB |
+| `MOOX_TRADE` | 7 天 | 128 MiB |
 | `MOOX_CLOUDNODE_JOB_ACTIVE` KV | 48 小时 | 无独立字节上限 |
 
 `limits` Stream 统一使用 `discard: old`；CloudNode 和 Trade 使用 work queue。这里的边界

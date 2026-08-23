@@ -118,6 +118,7 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 func monotonicMetric(name string) bool {
 	return strings.HasSuffix(name, "_dataset_input_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_dataset_output_watermark_timestamp_seconds") ||
+		strings.HasSuffix(name, "_view_output_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_business_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_input_watermark_timestamp_seconds") ||
 		strings.HasSuffix(name, "_last_success_timestamp_seconds") ||

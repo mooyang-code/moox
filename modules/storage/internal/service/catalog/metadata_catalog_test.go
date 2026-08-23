@@ -30,6 +30,11 @@ type registerDataSubjectMetadataStore struct {
 	registered bool
 }
 
+type registerArchiveFileMetadataStore struct {
+	metadata.Store
+	registered bool
+}
+
 type manualRebuildMetadataStore struct {
 	metadata.Store
 	view       *pb.View
@@ -57,6 +62,11 @@ func (s *registerDataSubjectMetadataStore) RegisterDataSubject(
 ) (*pb.Subject, []*pb.DatasetSubject, error) {
 	s.registered = true
 	return subject, bindings, nil
+}
+
+func (s *registerArchiveFileMetadataStore) RegisterArchiveFile(_ context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error) {
+	s.registered = true
+	return item, nil
 }
 
 func (s *activationMetadataStore) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
@@ -213,6 +223,21 @@ func TestRegisterDataSubjectSucceedsWhenCacheRefreshIsAlreadyRunning(t *testing.
 		DatasetBindings: []*pb.DatasetSubject{{
 			DatasetId: "symbols",
 		}},
+	})
+	require.NoError(t, err)
+	require.True(t, store.registered)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+}
+
+func TestRegisterArchiveFileSucceedsWhenCachePublicationIsUnavailable(t *testing.T) {
+	store := &registerArchiveFileMetadataStore{}
+	service, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret"})
+	require.NoError(t, err)
+
+	rsp, err := service.RegisterArchiveFile(context.Background(), &pb.RegisterArchiveFileReq{
+		ArchiveFile: &pb.ArchiveFile{
+			SpaceId: "crypto", DatasetId: "spot_kline_1h", DeviceId: "parquet-local", FileUri: "file:///tmp/spot.parquet",
+		},
 	})
 	require.NoError(t, err)
 	require.True(t, store.registered)

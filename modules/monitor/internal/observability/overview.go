@@ -439,6 +439,47 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 	for key, current := range storageValues {
 		values[key] = current
 	}
+	// Storage View exposes its own committed watermark because a View can lag
+	// behind the authoritative Primary dataset while the latter remains healthy.
+	// Treat each View/frequency tuple as an independent freshness producer so it
+	// gets a separate business check instead of being folded into storage output.
+	const viewWatermarkMetric = "moox_storage_view_output_watermark_timestamp_seconds"
+	for _, name := range names {
+		if name.MetricName != viewWatermarkMetric {
+			continue
+		}
+		rows, total, err := b.Metrics.Catalog().ListSeries(ctx, name.ServiceName, viewWatermarkMetric, "", 0, MaxDatasetFrequencyStatuses+1)
+		if err != nil {
+			return nil, err
+		}
+		if total > MaxDatasetFrequencyStatuses {
+			return nil, datasetLimitError()
+		}
+		for _, series := range rows {
+			labels, err := datasetLabels(series.LabelsJSON)
+			if err != nil {
+				return nil, fmt.Errorf("view watermark labels for %s: %w", series.SeriesID, err)
+			}
+			viewSpaceID, viewID, freq := labels["space_id"], labels["view_id"], labels["freq"]
+			if viewSpaceID == "" || viewID == "" || freq == "" {
+				continue
+			}
+			if spaceID != "" && viewSpaceID != spaceID {
+				continue
+			}
+			interval := parseOverviewFrequency(freq)
+			if interval <= 0 {
+				continue
+			}
+			latest, err := b.Metrics.Latest(ctx, series.SeriesID)
+			if err != nil {
+				return nil, err
+			}
+			observed := latest.ObservedAt.UTC().Unix()
+			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewID, freq: freq, labels: series.LabelsJSON}
+			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, reporterStale: series.IsStale}
+		}
+	}
 	type aggregatedDataset struct {
 		key   datasetKey
 		value datasetValues
@@ -802,12 +843,16 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 }
 
 type timerCoordinationState struct {
-	required, active, lastSuccess float64
-	hasRequired, hasLastSuccess   bool
-	healthy                       float64
-	hasHealth                     bool
-	staleSeries                   bool
-	badNodes                      []string
+	required, active, lastSuccess                                                 float64
+	pending, pendingSince                                                         float64
+	capacityTotal, capacityRequired, capacityActive, capacityHeadroom             float64
+	hasRequired, hasLastSuccess                                                   bool
+	hasPending, hasPendingSince                                                   bool
+	hasCapacityTotal, hasCapacityRequired, hasCapacityActive, hasCapacityHeadroom bool
+	healthy                                                                       float64
+	hasHealth                                                                     bool
+	staleSeries                                                                   bool
+	badNodes                                                                      []string
 }
 
 // A full Tencent runtime-config batch may touch dozens of functions. The
@@ -816,6 +861,13 @@ type timerCoordinationState struct {
 // observed multi-node provider update window; Storage freshness remains the
 // fast alert for an actual missing K-line.
 const timerCoordinationStaleAfter = 15 * time.Minute
+
+const timerCoordinationPendingGrace = 5 * time.Minute
+
+// Keep a small reserve so adding a new symbol or frequency is visible before
+// the next reconciliation hits a hard Timer capacity error. The metric still
+// exposes the exact headroom for operators who need a different threshold.
+const timerCoordinationLowCapacityHeadroom = 2
 
 // buildMarketFetchCoordination consumes the small Collector coordination
 // metric set. It deliberately does not call Tencent or CloudNode: Collector
@@ -901,6 +953,57 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	}); err != nil {
 		return nil, err
 	}
+	if err := load("moox_collector_market_fetch_coordination_pending", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		if value > state.pending {
+			state.pending = value
+		}
+		state.hasPending = true
+	}); err != nil {
+		return nil, err
+	}
+	if err := load("moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		if value > state.pendingSince {
+			state.pendingSince = value
+		}
+		state.hasPendingSince = true
+	}); err != nil {
+		return nil, err
+	}
+	if err := load("moox_collector_market_fetch_timer_capacity_total", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		if !state.hasCapacityTotal || value > state.capacityTotal {
+			state.capacityTotal = maxFloat(value, 0)
+		}
+		state.hasCapacityTotal = true
+	}); err != nil {
+		return nil, err
+	}
+	if err := load("moox_collector_market_fetch_timer_capacity_required", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		if !state.hasCapacityRequired || value > state.capacityRequired {
+			state.capacityRequired = maxFloat(value, 0)
+		}
+		state.hasCapacityRequired = true
+	}); err != nil {
+		return nil, err
+	}
+	if err := load("moox_collector_market_fetch_timer_capacity_active", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		if !state.hasCapacityActive || value > state.capacityActive {
+			state.capacityActive = maxFloat(value, 0)
+		}
+		state.hasCapacityActive = true
+	}); err != nil {
+		return nil, err
+	}
+	if err := load("moox_collector_market_fetch_timer_capacity_headroom", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		// During a rolling restart more than one Collector may report the same
+		// space. Use the smallest headroom so one constrained reporter cannot be
+		// hidden by a newer, more optimistic series.
+		if !state.hasCapacityHeadroom || value < state.capacityHeadroom {
+			state.capacityHeadroom = value
+		}
+		state.hasCapacityHeadroom = true
+	}); err != nil {
+		return nil, err
+	}
 	if err := load("moox_collector_market_fetch_timer_available", func(state *timerCoordinationState, labels map[string]string, value float64) {
 		// Disabled SCF assignments are spare capacity, not an expected
 		// trigger. Their readback may legitimately be unavailable while the
@@ -923,8 +1026,25 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	}
 	out := make([]BusinessStatus, 0, len(states))
 	for currentSpace, state := range states {
+		pendingGrace := state.hasRequired && state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
+			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= timerCoordinationPendingGrace &&
+			state.active >= state.required && len(state.badNodes) == 0
+		if pendingGrace {
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "Timer 配置协调进行中", LastCheckedAt: now})
+			continue
+		}
+		if state.hasCapacityTotal && state.hasCapacityRequired && state.capacityRequired > state.capacityTotal {
+			shortfall := state.capacityRequired - state.capacityTotal
+			reason := fmt.Sprintf("Timer SCF 容量不足：需要 %.0f 个节点，当前仅有 %.0f 个，缺口 %.0f 个", state.capacityRequired, state.capacityTotal, shortfall)
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
+			continue
+		}
 		if state.hasHealth && state.healthy <= 0 {
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector Timer 协调失败，请查看 Collector 日志", LastCheckedAt: now})
+			reason := "Collector Timer 协调失败：请检查 Timer 分片容量、触发器状态和 Collector 日志"
+			if state.hasRequired && state.required > state.active {
+				reason = fmt.Sprintf("Timer 分片节点不足：需要 %.0f 个，当前仅分配 %.0f 个", state.required, state.active)
+			}
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
 		if !state.hasRequired || state.required <= 0 {
@@ -935,6 +1055,8 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		}
 		status, reason := "healthy", "Timer 分配和触发器正常"
 		switch {
+		case state.hasCapacityHeadroom && state.capacityHeadroom >= 0 && state.capacityHeadroom <= timerCoordinationLowCapacityHeadroom:
+			status, reason = "degraded", fmt.Sprintf("Timer SCF 容量余量仅 %.0f 个节点，当前需要 %.0f/%.0f 个", state.capacityHeadroom, state.capacityRequired, state.capacityTotal)
 		case state.active < state.required:
 			status, reason = "down", fmt.Sprintf("Timer 节点分配不足：已分配 %.0f 个，需要 %.0f 个", state.active, state.required)
 		case !state.hasLastSuccess || state.lastSuccess <= 0:

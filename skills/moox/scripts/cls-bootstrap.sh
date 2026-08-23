@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TARGET=localhost
-DEPLOY_DIR="~/moox"
+DEPLOY_DIR="/data/moox"
 STAGE_DIR="${ROOT}/release/deploy-stage/moox"
 ADMIN_URL=http://127.0.0.1:11002
 CLOUD_ACCOUNT_ID=""

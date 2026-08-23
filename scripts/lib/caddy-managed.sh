@@ -15,7 +15,7 @@ sha512() { if command -v sha512sum >/dev/null; then sha512sum "$1" | awk '{print
 
 COMMAND=${1:-}; [[ -n "${COMMAND}" ]] || fail 'command required: check|install|ensure|start|reload|stop|rollback|status'
 shift
-DEPLOY_DIR=${MOOX_DEPLOY_DIR:-${HOME}/moox}
+DEPLOY_DIR=${MOOX_DEPLOY_DIR:-/data/moox}
 OS=${MOOX_CADDY_OS:-$(uname -s)}
 ARCH=${MOOX_CADDY_ARCH:-$(uname -m)}
 CONFIG_SOURCE=

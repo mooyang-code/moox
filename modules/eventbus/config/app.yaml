@@ -46,7 +46,9 @@ streams:
     replicas: 1
     max_age: 72h
     duplicates: 2m
-    max_bytes: 1073741824
+    # Keep broker retention below the disk-pressure threshold of the 40 GiB
+    # production host; a full historical queue can prevent NATS bootstrap.
+    max_bytes: 536870912
   - name: MOOX_OBSERVABILITY
     subjects: ["moox.observability.>"]
     retention: limits
@@ -55,7 +57,7 @@ streams:
     replicas: 1
     max_age: 24h
     duplicates: 2m
-    max_bytes: 268435456
+    max_bytes: 134217728
   - name: MOOX_CLOUDNODE_EXEC
     subjects: ["moox.cloudnode.job.execution.requested.v1.>"]
     retention: work_queue
@@ -64,7 +66,7 @@ streams:
     replicas: 1
     max_age: 72h
     duplicates: 2m
-    max_bytes: 268435456
+    max_bytes: 134217728
   - name: MOOX_MARKET_FETCH
     subjects: ["moox.market.fetch.batch.completed.v1.>"]
     # Collector and Monitor both observe the completion; work_queue would let
@@ -75,7 +77,7 @@ streams:
     replicas: 1
     max_age: 24h
     duplicates: 10m
-    max_bytes: 268435456
+    max_bytes: 134217728
   - name: MOOX_TRADE
     subjects: ["moox.trade.target.requested.v1.>"]
     retention: work_queue
@@ -84,7 +86,7 @@ streams:
     replicas: 1
     max_age: 168h
     duplicates: 2m
-    max_bytes: 268435456
+    max_bytes: 134217728
 
 kv:
   - bucket: MOOX_CLOUDNODE_JOB_ACTIVE

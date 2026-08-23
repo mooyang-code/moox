@@ -26,17 +26,17 @@ moox-cli setup ...                  # 初始化控制面、发布服务包、部
 
 ```bash
 moox-cli storage reset-view-consumers \
-  --storage-conf /home/ubuntu/moox/storage/config/storage.yaml \
-  --package-root /home/ubuntu/moox/storage \
+  --storage-conf /data/moox/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
   --lookback 24h --dry-run
 moox-cli storage reset-view-consumers \
-  --storage-conf /home/ubuntu/moox/storage/config/storage.yaml \
-  --package-root /home/ubuntu/moox/storage \
+  --storage-conf /data/moox/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
   --lookback 24h --yes
 ```
 
 命令停止整个 Storage 生命周期（Primary、DataNode、View），删除旧的
-`storage_view_period_v1`/`storage_view` 与新的 Kline、metrics、other durable，并清理
+`storage_view_period_v1`/`storage_view`、带版本后缀的 View durable 与当前 durable，并清理
 所有配置 Dataset 的精确 Storage subjects。该命令是破坏性“新一代”操作：Record/Bleve
 View 也会删除 A/B 索引和元数据，历史记录不保留；重启后只接收清理完成后的新事件。时序 View
 时序 View 会按 Storage 配置中的 `rebuild_lookback_periods` 从 Primary 回溯（默认所有频率 `1000` 根；
@@ -51,8 +51,8 @@ frequency 的旧 View 兼容兜底。默认不删 Primary 事实数据；只有�
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /home/ubuntu/moox/storage/config/storage.yaml \
-  --package-root /home/ubuntu/moox/storage \
+  --storage-conf /data/moox/storage/config/storage.yaml \
+  --package-root /data/moox/storage \
   --space-id crypto_market \
   --view-id binance_spot_kline_1m_factor \
   --yes
@@ -70,7 +70,7 @@ active 索引不会被删除。NATS 删除 consumer 需要 EventBus internal-adm
 
 ```bash
 moox-cli factor clear-queue \
-  --package-root /home/ubuntu/moox/prod \
+  --package-root /data/moox/prod \
   --credential-file /home/ubuntu/.config/moox/eventbus/internal-admin.yaml \
   --yes
 ```
@@ -124,10 +124,27 @@ loopback targets use Caddy internal CA. The command's sanitized JSON includes
 `certificate.mode`, `certificate.issuer`, and `certificate.automatic_renewal`.
 No certificate private key is printed or copied into the release package.
 
+For internal CA deployments, the CLI now checks the operator machine's browser
+trust store after control initialization and before publishing the `admin` or
+`web-host` packages. If the Caddy root is missing from the trust store, it runs
+the platform installer and asks for administrator approval when required. The
+same repair can be run explicitly:
+
+```bash
+moox-cli setup trust-browser --file ./custom.toml
+```
+
+This prevents the management page from loading while its WebSocket terminal
+still fails with `ERR_CERT_AUTHORITY_INVALID`. Public ACME deployments skip
+the local trust-store operation.
+
 `[eventbus]` 只填写 Collector SCF 能访问的公网 IPv4/DNS、端口和
 `tls_enabled = true`。EventBus 用户名、token、私有 CA 和
 `cloudnode-worker.yaml` 由部署流程生成，不写入 `custom.toml`。控制面部署单元包含
 Admin、Gateway、Web、EventBus、CloudNode 和 Collector。
+
+`[paths]` 将部署根、控制面根和独立 Storage 根统一放到 `/data/moox` 云磁盘下；省略时
+默认分别为 `/data/moox`、`/data/moox/prod` 和 `/data/moox/storage`。
 
 `[monitoring].wecom_webhook` 填写企微群机器人 HTTPS webhook；留空时 Monitor
 仍采集和计算状态，但不发送站外告警。标准服务、健康 URL 和实时 Dataset 清单不写入
@@ -164,7 +181,7 @@ Monitor 会从该目录同步系统服务检查，因此服务总览无需再手
 
 包内路径必须是相对路径，不能包含 `data/`、`logs/`、`run/`、`secrets/` 或 `certs/`。
 凭据不得打入 ZIP 包；远端已有的凭据和运行数据由 CLI 保留。默认远端目录为
-`~/moox/prod`，可通过 `--deploy-dir` 覆盖。
+`/data/moox/prod`，可通过 `--deploy-dir` 覆盖。
 
 命令不会输出或拼接 SSH 密码；密码只在 CLI 进程内读取和使用。
 
@@ -232,7 +249,7 @@ moox-cli setup deploy-storage \
   --reset-storage-data
 ```
 
-该选项默认关闭，并会清除远端 `~/moox/storage/data` 后重新初始化 Storage；远端
+该选项默认关闭，并会清除远端 `/data/moox/storage/data` 后重新初始化 Storage；远端
 `secrets/` 保留。它不是生产迁移或日常重部署选项，也不会修改 `custom.toml`。
 
 部署完成后可以使用三条边界明确的验证命令：

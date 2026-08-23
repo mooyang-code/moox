@@ -150,6 +150,9 @@ func TestReconcilerFailsWithoutTimerCapacityBeforeSubmitting(t *testing.T) {
 	// Capacity failure must publish required work before returning.
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentRequired.WithLabelValues("crypto_market", "bars", "1m")))
 	require.Equal(t, float64(0), testutil.ToFloat64(metrics.assignmentActive.WithLabelValues("crypto_market", "bars", "1m")))
+	require.Equal(t, float64(0), testutil.ToFloat64(metrics.timerCapacityTotal.WithLabelValues("crypto_market")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.timerCapacityRequired.WithLabelValues("crypto_market")))
+	require.Equal(t, float64(-1), testutil.ToFloat64(metrics.timerCapacityHeadroom.WithLabelValues("crypto_market")))
 }
 
 func TestReconcilerDoesNotEraseDNSWhenRefreshHasNoSnapshot(t *testing.T) {
