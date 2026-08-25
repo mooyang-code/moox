@@ -76,7 +76,7 @@ ExecutionAdapter
   |                                           |
   v                                           v
 LiveAdapter                               PaperAdapter
-Binance / OKX REST + 私有流               MarketDataSource + PaperMatcher
+Binance / OKX REST + 账户事件流           MarketDataSource + PaperMatcher
   |                                           |
   v                                           v
 规范化 Live 回报                         OPEN + version CAS
@@ -136,7 +136,6 @@ type ExecutionAdapter interface {
     CancelOrder(context.Context, ExchangeSymbol, string) (Order, error)
     SetLeverage(context.Context, ExchangeSymbol, Decimal) error
     SetMarginMode(context.Context, ExchangeSymbol, MarginMode) error
-    SubscribePrivate(context.Context, EventHandler) error
 }
 ```
 
@@ -145,15 +144,40 @@ Order 事实中，不由 Exchange 适配器解释。
 
 - `LiveAdapter` 封装 Binance/OKX 的真实执行接口。
 - `PaperAdapter` 使用 SQLite 中的共享订单事实和进程内 `PaperMatcher`。
-- Live 回报通过现有私有流进入共用 reducer；Paper 撮合直接调用共用事务 reducer。
+- Live 回报通过账户事件流进入共用 reducer；Paper 撮合直接调用共用事务 reducer。
 
-### 6.3 ExecutionBundle 与 ReservationPolicy
+### 6.3 AccountEventSource
+
+账户订单、成交、持仓和余额的实时推送使用可选接口：
+
+```go
+type AccountEventSource interface {
+    Subscribe(context.Context, AccountEventHandler) error
+}
+
+type AccountEventHandler interface {
+    OnOrder(context.Context, Order) error
+    OnFill(context.Context, Fill) error
+    OnPosition(context.Context, Position) error
+    OnAccountSnapshot(context.Context, AccountSnapshot) error
+}
+```
+
+接口名已经限定“账户事件来源”，因此成员函数只叫 `Subscribe`，不重复 `AccountEvents`。
+
+- Binance/OKX LiveAdapter 实现 `AccountEventSource`。
+- PaperAdapter 不实现；PaperMatcher 直接调用共用 SQLite reducer。
+- TradingSession 仅在 ExecutionBundle 提供 `AccountEvents` 时启动订阅。
+- `Subscribe` 持续运行到 context 取消或连接失败，REST 同步继续作为兜底对账。
+
+### 6.4 ExecutionBundle 与 ReservationPolicy
 
 `ExecutionFactory` 返回完整的账户执行依赖，不只返回下单接口：
 
 ```go
 type ExecutionBundle struct {
     Adapter            ExecutionAdapter
+    AccountEvents      AccountEventSource // Paper 为 nil
     MarketData         MarketDataSource
     ReservationPolicy ReservationPolicy
     InstrumentResolver InstrumentResolver
@@ -180,7 +204,7 @@ modules/trade/internal/execution/
   paper/
     adapter.go
     matcher.go
-    portfolio.go
+    account_state.go
 
 modules/trade/internal/exchange/
   binance/  # 保留现有真实 Exchange 实现
@@ -190,6 +214,8 @@ modules/trade/internal/exchange/
 现有 `application/order`、`application/target`、`application/operator`、
 `application/accountsync` 和 `domain/order` 保持共用，不复制 Paper 版本。
 Binance/OKX 文件不做无收益搬迁；它们直接实现 `execution.ExecutionAdapter`。
+`account_state.go` 定义 `AccountState`，只负责根据初始资金、Fill、活动 reservation 和报价
+计算 Paper 余额、持仓和 equity；不再使用容易与 LogicalAccount 混淆的 Portfolio 命名。
 
 ## 8. 账户模型
 
@@ -549,7 +575,7 @@ Live fake adapter 与 PaperAdapter 必须通过同一套测试：
 - ListOpenOrders
 - 重启恢复
 
-Live 另外验证私有流回报归一化；Paper 另外验证 Matcher CAS 和共用 reducer 原子提交。
+Live 另外验证账户事件流回报归一化；Paper 另外验证 Matcher CAS 和共用 reducer 原子提交。
 两种路径最终都必须生成同结构的本地 Order/Fill/Position 事实，但不强制使用同一种传输机制。
 
 ### 16.2 Paper 专项
@@ -581,7 +607,7 @@ Live 另外验证私有流回报归一化；Paper 另外验证 Matcher CAS 和�
 
 验收两条链路生成相同结构的 Order、Fill、Position 和 EquityPoint，并能由相同前端 API 查询。
 
-此外必须运行现有真实 Testnet smoke，覆盖 Binance/OKX 的 submit、query、private stream、
+此外必须运行现有真实 Testnet smoke，覆盖 Binance/OKX 的 submit、query、account event stream、
 sync、restart 和 cleanup。该验收需要显式凭据和确认变量，不作为无凭据 CI 的静默替代品。
 
 ## 17. 破坏式升级与回滚
