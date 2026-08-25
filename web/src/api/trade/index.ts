@@ -2,15 +2,15 @@ import { callTrade } from "./http";
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,
-  CreateAccountReq,
+  CreateTradingAccountReq,
   CreatePaperSimulationReq,
   CreateLogicalAccountReq,
-  ExchangeAccount,
+  TradingAccount,
   ExecutionCapabilities,
   EquityPoint,
   Fill,
   Holding,
-  ListAccountsReq,
+  ListTradingAccountsReq,
   ListFillsReq,
   ListOrdersReq,
   ListPositionsReq,
@@ -24,41 +24,41 @@ import type {
   PlaceManualOrderReq,
   Position,
   RetInfo,
-  UpdateAccountReq
+  UpdateTradingAccountReq
 } from "./types";
 
 export * from "./types";
 export { tradeServiceMap } from "./http";
 
-export function createAccount(req: CreateAccountReq) {
-  return callTrade<CreateAccountReq, AccountResponse>("console", "CreateAccount", req);
+export function createTradingAccount(req: CreateTradingAccountReq) {
+  return callTrade<CreateTradingAccountReq, AccountResponse>("console", "CreateTradingAccount", req);
 }
 
-export function updateAccount(req: UpdateAccountReq) {
-  return callTrade<UpdateAccountReq, AccountResponse>("console", "UpdateAccount", req);
+export function updateTradingAccount(req: UpdateTradingAccountReq) {
+  return callTrade<UpdateTradingAccountReq, AccountResponse>("console", "UpdateTradingAccount", req);
 }
 
-export function getAccount(exchange_account_id: string) {
-  return callTrade<{ exchange_account_id: string }, AccountResponse>("console", "GetAccount", {
-    exchange_account_id
+export function getTradingAccount(trading_account_id: string) {
+  return callTrade<{ trading_account_id: string }, AccountResponse>("console", "GetTradingAccount", {
+    trading_account_id
   });
 }
 
-export function listAccounts(req: ListAccountsReq = {}) {
-  return callTrade<ListAccountsReq, { ret_info: RetInfo; accounts: ExchangeAccount[]; page_result: PageResult }>(
+export function listTradingAccounts(req: ListTradingAccountsReq = {}) {
+  return callTrade<ListTradingAccountsReq, { ret_info: RetInfo; accounts: TradingAccount[]; page_result: PageResult }>(
     "console",
-    "ListAccounts",
+    "ListTradingAccounts",
     req
   );
 }
 
-export function setLeverage(req: { exchange_account_id: string; symbol: string; leverage: string }) {
+export function setLeverage(req: { trading_account_id: string; instrument_id: string; leverage: string }) {
   return callTrade<typeof req, AccountResponse>("console", "SetLeverage", req);
 }
 
-export function syncAccount(exchange_account_id: string) {
+export function syncTradingAccount(trading_account_id: string) {
   return callTrade<
-    { exchange_account_id: string },
+    { trading_account_id: string },
     {
       ret_info: RetInfo;
       fills_ingested: number;
@@ -69,40 +69,40 @@ export function syncAccount(exchange_account_id: string) {
       ready: boolean;
       warnings: string[];
     }
-  >("console", "SyncAccount", { exchange_account_id });
+  >("console", "SyncTradingAccount", { trading_account_id });
 }
 
 export function createPaperSimulation(req: CreatePaperSimulationReq) {
-  return callTrade<CreatePaperSimulationReq, { ret_info: RetInfo; account: ExchangeAccount; logical_account: LogicalAccount }>(
+  return callTrade<CreatePaperSimulationReq, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
     "console",
     "CreatePaperSimulation",
     req
   );
 }
 
-export function closePaperSimulation(exchange_account_id: string) {
-  return callTrade<{ exchange_account_id: string }, { ret_info: RetInfo; account: ExchangeAccount; logical_account: LogicalAccount }>(
+export function closePaperSimulation(trading_account_id: string) {
+  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
     "console",
     "ClosePaperSimulation",
-    { exchange_account_id }
+    { trading_account_id }
   );
 }
 
-export function getExecutionCapabilities(exchange_account_id: string) {
-  return callTrade<{ exchange_account_id: string }, { ret_info: RetInfo; capabilities: ExecutionCapabilities }>(
+export function getExecutionCapabilities(trading_account_id: string) {
+  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; capabilities: ExecutionCapabilities }>(
     "console",
     "GetExecutionCapabilities",
-    { exchange_account_id }
+    { trading_account_id }
   );
 }
 
-export function queryEquityCurve(req: { exchange_account_id?: string; logical_account_id?: string; start_time?: string; end_time?: string }) {
+export function queryEquityCurve(req: { trading_account_id?: string; logical_account_id?: string; start_time?: string; end_time?: string }) {
   return callTrade<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("console", "QueryEquityCurve", req);
 }
 
-export function listHoldings(exchange_account_id: string) {
-  return callTrade<{ exchange_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>("console", "ListHoldings", {
-    exchange_account_id
+export function listHoldings(trading_account_id: string) {
+  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>("console", "ListHoldings", {
+    trading_account_id
   });
 }
 
@@ -136,11 +136,11 @@ export function addLogicalAccountMember(req: AddLogicalAccountMemberReq) {
   return callTrade<AddLogicalAccountMemberReq, LogicalAccountResponse>("console", "AddLogicalAccountMember", req);
 }
 
-export function removeLogicalAccountMember(logical_account_id: string, exchange_account_id: string) {
-  return callTrade<{ logical_account_id: string; exchange_account_id: string }, LogicalAccountResponse>(
+export function removeLogicalAccountMember(logical_account_id: string, trading_account_id: string) {
+  return callTrade<{ logical_account_id: string; trading_account_id: string }, LogicalAccountResponse>(
     "console",
     "RemoveLogicalAccountMember",
-    { logical_account_id, exchange_account_id }
+    { logical_account_id, trading_account_id }
   );
 }
 
@@ -219,7 +219,7 @@ export function listPositions(req: ListPositionsReq) {
 export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX" };
 export const marketTypeLabels: Record<number, string> = { 0: "-", 1: "SPOT", 2: "SWAP" };
 export const executionModeLabels: Record<number, string> = { 0: "-", 1: "Paper", 2: "Live" };
-export const environmentLabels: Record<number, string> = { 0: "-", 1: "Paper", 2: "Testnet", 3: "Production" };
+export const environmentLabels: Record<number, string> = { 0: "-", 1: "Testnet", 2: "Production" };
 export const orderTypeLabels: Record<number, string> = { 0: "-", 1: "MARKET", 2: "LIMIT" };
 export const fillPolicyLabels: Record<number, string> = { 0: "-", 1: "GTC", 2: "IOC", 3: "FOK" };
 export const orderSideLabels: Record<number, string> = { 0: "-", 1: "买入", 2: "卖出" };

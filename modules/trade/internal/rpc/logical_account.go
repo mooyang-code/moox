@@ -151,7 +151,7 @@ func (h *LogicalAccountServer) AddLogicalAccountMember(
 	}
 	err = h.LogicalAccounts.AddMember(ctx, logicalapp.AddMemberCommand{
 		SpaceID: spaceID, LogicalAccountID: req.GetLogicalAccountId(),
-		TradingAccountID:      req.GetExchangeAccountId(),
+		TradingAccountID:      req.GetTradingAccountId(),
 		Enabled:               req.GetEnabled(),
 		Priority:              int(req.GetPriority()),
 		AdoptExistingExposure: req.GetAdoptExistingExposure(),
@@ -183,7 +183,7 @@ func (h *LogicalAccountServer) RemoveLogicalAccountMember(
 		ctx,
 		spaceID,
 		req.GetLogicalAccountId(),
-		req.GetExchangeAccountId(),
+		req.GetTradingAccountId(),
 	)
 	if err != nil {
 		return &tradepb.RemoveLogicalAccountMemberRsp{RetInfo: errorInfo(err)}, nil

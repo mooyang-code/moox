@@ -369,7 +369,7 @@ func (*Adapter) SetMarginMode(context.Context, string, exchange.MarginMode) erro
 	return nil
 }
 
-func (*Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHandler) error {
+func (*Adapter) Subscribe(ctx context.Context, handler exchange.EventHandler) error {
 	exchange.NotifyPrivateReady(handler)
 	<-ctx.Done()
 	return ctx.Err()

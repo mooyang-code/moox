@@ -19,7 +19,7 @@ type Adapter interface {
 	CancelOrder(context.Context, string, string) (Order, error)
 	SetLeverage(context.Context, string, shared.Decimal) error
 	SetMarginMode(context.Context, string, MarginMode) error
-	SubscribePrivate(context.Context, EventHandler) error
+	Subscribe(context.Context, EventHandler) error
 }
 
 type ExchangeOrderLookup interface {

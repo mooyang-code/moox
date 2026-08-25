@@ -81,7 +81,7 @@ func (a *adapterStub) SetLeverage(context.Context, string, shared.Decimal) error
 func (a *adapterStub) SetMarginMode(context.Context, string, exchange.MarginMode) error {
 	return nil
 }
-func (a *adapterStub) SubscribePrivate(context.Context, exchange.EventHandler) error {
+func (a *adapterStub) Subscribe(context.Context, exchange.EventHandler) error {
 	return nil
 }
 

@@ -91,7 +91,7 @@ func (publicExchangeStub) SetLeverage(context.Context, string, shared.Decimal) e
 func (publicExchangeStub) SetMarginMode(context.Context, string, exchange.MarginMode) error {
 	return nil
 }
-func (publicExchangeStub) SubscribePrivate(context.Context, exchange.EventHandler) error {
+func (publicExchangeStub) Subscribe(context.Context, exchange.EventHandler) error {
 	return nil
 }
 

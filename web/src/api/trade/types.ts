@@ -18,7 +18,7 @@ export interface PageResult {
 export type Exchange = 0 | 1 | 2;
 export type MarketType = 0 | 1 | 2;
 export type ExecutionMode = 0 | 1 | 2;
-export type AccountEnvironment = 0 | 1 | 2 | 3;
+export type AccountEnvironment = 0 | 1 | 2;
 export type OrderType = 0 | 1 | 2;
 export type FillPolicy = 0 | 1 | 2 | 3;
 export type PositionSide = 0 | 1;
@@ -31,7 +31,7 @@ export interface AssetBalance {
   total: string;
 }
 
-export interface ExchangeAccountSnapshot {
+export interface TradingAccountSnapshot {
   balances: AssetBalance[];
   equity: string;
   available_funds: string;
@@ -41,31 +41,43 @@ export interface ExchangeAccountSnapshot {
   exchange_updated_at: string;
 }
 
-export interface ExchangeAccount {
-  exchange_account_id: string;
+export interface TradingAccount {
+  trading_account_id: string;
   space_id: string;
   name: string;
   exchange: Exchange;
   market_type: MarketType;
   execution_mode: ExecutionMode;
-  environment: AccountEnvironment;
-  credential_secret_id: string;
   settlement_asset: string;
   margin_mode: string;
   status: string;
   ready: boolean;
   leverage_settings: Record<string, string>;
-  snapshot?: ExchangeAccountSnapshot;
+  snapshot?: TradingAccountSnapshot;
   last_sync_at: string;
   last_ready_at: string;
   last_error: string;
   created_at: string;
   updated_at: string;
   sync_symbols: string[];
+  live?: LiveConfig;
+  paper?: PaperConfig;
+}
+
+export interface LiveConfig {
+  environment: AccountEnvironment;
+  credential_secret_id: string;
+}
+
+export interface PaperConfig {
+  initial_balance: string;
+  maker_fee_rate: string;
+  taker_fee_rate: string;
+  slippage_bps: string;
 }
 
 export interface LogicalAccountMember {
-  exchange_account_id: string;
+  trading_account_id: string;
   enabled: boolean;
   priority: number;
 }
@@ -89,12 +101,13 @@ export interface LogicalAccount {
 
 export interface Order {
   order_id: string;
-  exchange_account_id: string;
+  trading_account_id: string;
   client_order_id: string;
   exchange_order_id: string;
   exchange: Exchange;
   market_type: MarketType;
-  symbol: string;
+  instrument_id: string;
+  exchange_symbol: string;
   order_type: OrderType;
   fill_policy: FillPolicy;
   side: OrderSide;
@@ -127,10 +140,11 @@ export interface Fill {
   exchange_trade_id: string;
   order_id: string;
   exchange_order_id: string;
-  exchange_account_id: string;
+  trading_account_id: string;
   exchange: Exchange;
   market_type: MarketType;
-  symbol: string;
+  instrument_id: string;
+  exchange_symbol: string;
   side: OrderSide;
   position_side: PositionSide;
   price: string;
@@ -145,8 +159,9 @@ export interface Fill {
 }
 
 export interface Position {
-  exchange_account_id: string;
-  symbol: string;
+  trading_account_id: string;
+  instrument_id: string;
+  exchange_symbol: string;
   position_side: PositionSide;
   signed_quantity: string;
   entry_price: string;
@@ -196,14 +211,14 @@ export interface OperatorAction {
 }
 
 export interface RemainingPosition {
-  symbol?: string;
+  instrument_id?: string;
   asset?: string;
   quantity: string;
   reason: string;
 }
 
 export interface FlattenAccountResult {
-  exchange_account_id: string;
+  trading_account_id: string;
   status: string;
   child_order_ids?: string[];
   remaining_positions?: RemainingPosition[];
@@ -214,20 +229,18 @@ export interface FlattenResult {
   accounts: FlattenAccountResult[];
 }
 
-export interface CreateAccountReq {
+export interface CreateTradingAccountReq {
   name: string;
   exchange: Exchange;
   market_type: MarketType;
-  execution_mode: ExecutionMode;
-  environment: AccountEnvironment;
-  credential_secret_id: string;
   settlement_asset: string;
   margin_mode?: string;
   sync_symbols?: string[];
+  live: LiveConfig;
 }
 
-export interface UpdateAccountReq {
-  exchange_account_id: string;
+export interface UpdateTradingAccountReq {
+  trading_account_id: string;
   name?: string;
   credential_secret_id?: string;
   settlement_asset?: string;
@@ -236,11 +249,10 @@ export interface UpdateAccountReq {
   sync_symbols?: string[];
 }
 
-export interface ListAccountsReq {
+export interface ListTradingAccountsReq {
   exchange?: Exchange;
   market_type?: MarketType;
   execution_mode?: ExecutionMode;
-  environment?: AccountEnvironment;
   status?: string;
   page?: Page;
 }
@@ -254,7 +266,7 @@ export interface CreateLogicalAccountReq {
 
 export interface AddLogicalAccountMemberReq {
   logical_account_id: string;
-  exchange_account_id: string;
+  trading_account_id: string;
   enabled: boolean;
   priority: number;
   adopt_existing_exposure: boolean;
@@ -262,13 +274,13 @@ export interface AddLogicalAccountMemberReq {
 
 export interface PlaceManualOrderReq {
   action_id: string;
-  exchange_account_id: string;
+  trading_account_id: string;
   client_order_id: string;
-  symbol: string;
+  instrument_id: string;
   order_type: OrderType;
   fill_policy: FillPolicy;
   side: OrderSide;
-  position_side: PositionSide;
+  position_side?: PositionSide;
   quantity: string;
   limit_price?: string;
   reason: string;
@@ -276,8 +288,8 @@ export interface PlaceManualOrderReq {
 
 export interface ListOrdersReq {
   logical_account_id?: string;
-  exchange_account_id?: string;
-  symbol?: string;
+  trading_account_id?: string;
+  instrument_id?: string;
   state?: string;
   only_open?: boolean;
   start_time?: string;
@@ -286,9 +298,9 @@ export interface ListOrdersReq {
 }
 
 export interface ListFillsReq {
-  exchange_account_id?: string;
+  trading_account_id?: string;
   order_id?: string;
-  symbol?: string;
+  instrument_id?: string;
   start_time?: string;
   end_time?: string;
   page?: Page;
@@ -296,13 +308,13 @@ export interface ListFillsReq {
 
 export interface ListPositionsReq {
   logical_account_id?: string;
-  exchange_account_id?: string;
-  symbol?: string;
+  trading_account_id?: string;
+  instrument_id?: string;
 }
 
 export interface AccountResponse {
   ret_info: RetInfo;
-  account: ExchangeAccount;
+  account: TradingAccount;
 }
 
 export interface LogicalAccountResponse {
@@ -333,7 +345,7 @@ export interface EquityPoint {
 }
 
 export interface Holding {
-  exchange_account_id: string;
+  trading_account_id: string;
   instrument_id: string;
   exchange_symbol: string;
   asset: string;

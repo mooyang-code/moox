@@ -41,7 +41,7 @@ func TestConsoleQueryEquityCurveReadsOnlyRequestedSpace(t *testing.T) {
 	server := &ConsoleServer{Store: tradeStore}
 	response, err := server.QueryEquityCurve(
 		spacecontext.WithSpaceID(context.Background(), "space-1"),
-		&tradepb.QueryEquityCurveReq{ExchangeAccountId: "account-1"},
+		&tradepb.QueryEquityCurveReq{TradingAccountId: "account-1"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestConsoleQueryEquityCurveReadsOnlyRequestedSpace(t *testing.T) {
 
 	other, err := server.QueryEquityCurve(
 		spacecontext.WithSpaceID(context.Background(), "space-2"),
-		&tradepb.QueryEquityCurveReq{ExchangeAccountId: "account-1"},
+		&tradepb.QueryEquityCurveReq{TradingAccountId: "account-1"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestConsoleRejectsAmbiguousEquityCurveTarget(t *testing.T) {
 	server := &ConsoleServer{Store: &store.Store{}}
 	response, err := server.QueryEquityCurve(
 		spacecontext.WithSpaceID(context.Background(), "space-1"),
-		&tradepb.QueryEquityCurveReq{ExchangeAccountId: "account-1", LogicalAccountId: "logical-1"},
+		&tradepb.QueryEquityCurveReq{TradingAccountId: "account-1", LogicalAccountId: "logical-1"},
 	)
 	if err != nil {
 		t.Fatal(err)

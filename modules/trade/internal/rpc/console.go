@@ -99,18 +99,18 @@ func (s *ConsoleServer) ClosePaperSimulation(
 	if s.Paper == nil || s.Store == nil {
 		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
-	err = s.Paper.Close(ctx, spaceID, req.GetExchangeAccountId())
+	err = s.Paper.Close(ctx, spaceID, req.GetTradingAccountId())
 	if err != nil {
 		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(err)}, nil
 	}
-	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetExchangeAccountId())
+	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
 	if err != nil {
 		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(err)}, nil
 	}
 	var logical *tradepb.LogicalAccount
 	for _, candidate := range mustLogicalAccounts(ctx, s.Store, spaceID) {
 		for _, member := range mustLogicalMembers(ctx, s.Store, spaceID, candidate.LogicalAccountID) {
-			if member.TradingAccountID == req.GetExchangeAccountId() {
+			if member.TradingAccountID == req.GetTradingAccountId() {
 				logical = s.logicalAccount(ctx, candidate)
 				break
 			}
@@ -136,7 +136,7 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 	if s.Store == nil {
 		return &tradepb.GetExecutionCapabilitiesRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
-	accountRecord, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetExchangeAccountId())
+	accountRecord, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
 	if err != nil {
 		return &tradepb.GetExecutionCapabilitiesRsp{RetInfo: errorInfo(err)}, nil
 	}
@@ -173,13 +173,13 @@ func (s *ConsoleServer) QueryEquityCurve(
 	if s.Store == nil {
 		return &tradepb.QueryEquityCurveRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
-	if (req.GetExchangeAccountId() == "") == (req.GetLogicalAccountId() == "") {
+	if (req.GetTradingAccountId() == "") == (req.GetLogicalAccountId() == "") {
 		return &tradepb.QueryEquityCurveRsp{RetInfo: invalidInfo(errInvalidCurveTarget)}, nil
 	}
 	from, to := req.GetStartTime(), req.GetEndTime()
 	var records []store.EquityPointRecord
-	if req.GetExchangeAccountId() != "" {
-		records, err = s.Store.ListAccountEquityPoints(ctx, spaceID, req.GetExchangeAccountId(), from, to)
+	if req.GetTradingAccountId() != "" {
+		records, err = s.Store.ListAccountEquityPoints(ctx, spaceID, req.GetTradingAccountId(), from, to)
 	} else {
 		records, err = s.Store.ListLogicalAccountEquityPoints(ctx, spaceID, req.GetLogicalAccountId(), from, to)
 	}
@@ -212,7 +212,7 @@ func (s *ConsoleServer) ListHoldings(
 	if s.Store == nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
-	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetExchangeAccountId())
+	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
 	if err != nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
 	}
@@ -220,14 +220,14 @@ func (s *ConsoleServer) ListHoldings(
 		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("holdings are only available for SPOT accounts"))}, nil
 	}
 	if s.Holdings != nil {
-		values, err := s.Holdings.List(ctx, spaceID, req.GetExchangeAccountId())
+		values, err := s.Holdings.List(ctx, spaceID, req.GetTradingAccountId())
 		if err != nil {
 			return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
 		}
 		result := make([]*tradepb.Holding, 0, len(values))
 		for _, value := range values {
 			item := &tradepb.Holding{
-				ExchangeAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID,
+				TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID,
 				ExchangeSymbol: value.ExchangeSymbol, Asset: value.Asset,
 				Quantity: value.Quantity.String(), AverageCost: value.AverageCost.String(),
 				MarkPrice: value.MarkPrice.String(), MarketValue: value.MarketValue.String(),
@@ -252,7 +252,7 @@ func (s *ConsoleServer) ListHoldings(
 			marketValue, markPrice = balance.Total, "1"
 		}
 		holdings = append(holdings, &tradepb.Holding{
-			ExchangeAccountId: req.GetExchangeAccountId(), Asset: balance.Asset, Quantity: balance.Total,
+			TradingAccountId: req.GetTradingAccountId(), Asset: balance.Asset, Quantity: balance.Total,
 			MarkPrice: markPrice, MarketValue: marketValue, SourceTime: account.Snapshot.ExchangeUpdatedAt,
 		})
 	}

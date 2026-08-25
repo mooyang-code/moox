@@ -14,8 +14,8 @@ import (
 func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 	want := map[protoreflect.FullName][]protoreflect.Name{
 		"trpc.moox.trade.TradeConsoleService": {
-			"CreateAccount", "UpdateAccount", "GetAccount", "ListAccounts",
-			"SetLeverage", "SyncAccount",
+			"CreateTradingAccount", "UpdateTradingAccount", "GetTradingAccount", "ListTradingAccounts",
+			"SetLeverage", "SyncTradingAccount",
 			"CreateLogicalAccount", "GetLogicalAccount", "ListLogicalAccounts",
 			"UpdateLogicalAccount", "AddLogicalAccountMember",
 			"RemoveLogicalAccountMember", "ClaimLogicalAccountOwner",
@@ -68,8 +68,8 @@ func TestTradeRPCUsesApprovedEnums(t *testing.T) {
 			"EXECUTION_MODE_LIVE",
 		},
 		"AccountEnvironment": {
-			"ACCOUNT_ENVIRONMENT_UNSPECIFIED", "ACCOUNT_ENVIRONMENT_PAPER",
-			"ACCOUNT_ENVIRONMENT_TESTNET", "ACCOUNT_ENVIRONMENT_PRODUCTION",
+			"ACCOUNT_ENVIRONMENT_UNSPECIFIED", "ACCOUNT_ENVIRONMENT_TESTNET",
+			"ACCOUNT_ENVIRONMENT_PRODUCTION",
 		},
 		"OrderType": {
 			"ORDER_TYPE_UNSPECIFIED", "ORDER_TYPE_MARKET", "ORDER_TYPE_LIMIT",
@@ -118,17 +118,17 @@ func TestTradeRPCUsesApprovedEnums(t *testing.T) {
 
 func TestManualOrderRequestHasExactApprovedShape(t *testing.T) {
 	want := map[protoreflect.Name]protoreflect.FieldNumber{
-		"action_id":           1,
-		"exchange_account_id": 2,
-		"client_order_id":     3,
-		"symbol":              4,
-		"order_type":          5,
-		"fill_policy":         6,
-		"side":                7,
-		"position_side":       8,
-		"quantity":            9,
-		"limit_price":         10,
-		"reason":              11,
+		"action_id":          1,
+		"trading_account_id": 2,
+		"client_order_id":    3,
+		"instrument_id":      4,
+		"order_type":         5,
+		"fill_policy":        6,
+		"side":               7,
+		"position_side":      8,
+		"quantity":           9,
+		"limit_price":        10,
+		"reason":             11,
 	}
 	fields := (&PlaceManualOrderReq{}).ProtoReflect().Descriptor().Fields()
 	if fields.Len() != len(want) {
@@ -227,10 +227,10 @@ func TestEveryPublicRPCRequestImplementsValidation(t *testing.T) {
 
 func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 	requests := []any{
-		&UpdateAccountReq{},
-		&GetAccountReq{},
+		&UpdateTradingAccountReq{},
+		&GetTradingAccountReq{},
 		&SetLeverageReq{},
-		&SyncAccountReq{},
+		&SyncTradingAccountReq{},
 		&GetLogicalAccountReq{},
 		&UpdateLogicalAccountReq{},
 		&AddLogicalAccountMemberReq{},
@@ -258,15 +258,15 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 	}
 
 	pagedRequests := []any{
-		&ListAccountsReq{Page: &Page{Size: 1001}},
+		&ListTradingAccountsReq{Page: &Page{Size: 1001}},
 		&ListLogicalAccountsReq{Page: &Page{Size: 1001}},
 		&ListOrdersReq{
-			ExchangeAccountId: "account-1",
-			Page:              &Page{Size: 1001},
+			TradingAccountId: "account-1",
+			Page:             &Page{Size: 1001},
 		},
 		&ListFillsReq{
-			ExchangeAccountId: "account-1",
-			Page:              &Page{Size: 1001},
+			TradingAccountId: "account-1",
+			Page:             &Page{Size: 1001},
 		},
 	}
 	for _, request := range pagedRequests {
@@ -277,66 +277,40 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 		})
 	}
 	if err := (&ListOrdersReq{
-		ExchangeAccountId: "account-1",
-		StartTime:         20,
-		EndTime:           10,
+		TradingAccountId: "account-1",
+		StartTime:        20,
+		EndTime:          10,
 	}).Validate(); err == nil {
 		t.Fatal("reversed time range was accepted")
 	}
 }
 
-func TestCreateAccountRejectsPaperLifecycleBypass(t *testing.T) {
-	valid := &CreateAccountReq{
-		Name:          "paper",
-		Exchange:      Exchange_EXCHANGE_BINANCE,
-		MarketType:    MarketType_MARKET_TYPE_SPOT,
-		ExecutionMode: ExecutionMode_EXECUTION_MODE_PAPER,
-		Environment:   AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
+func TestCreateTradingAccountRequiresLiveConfig(t *testing.T) {
+	base := func() *CreateTradingAccountReq {
+		return &CreateTradingAccountReq{
+			Name: "live", Exchange: Exchange_EXCHANGE_OKX,
+			MarketType: MarketType_MARKET_TYPE_SWAP,
+			Live:       &LiveConfig{Environment: AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
+		}
 	}
-	if err := valid.Validate(); err == nil {
-		t.Fatal("generic CreateAccount accepted a paper lifecycle request")
+	if err := base().Validate(); err != nil {
+		t.Fatalf("valid live request rejected: %v", err)
 	}
-
-	cases := []struct {
-		name string
-		req  *CreateAccountReq
+	for _, tc := range []struct {
+		name   string
+		mutate func(*CreateTradingAccountReq)
 	}{
-		{
-			name: "paper cannot use testnet",
-			req: &CreateAccountReq{
-				Name:          "paper",
-				Exchange:      Exchange_EXCHANGE_BINANCE,
-				MarketType:    MarketType_MARKET_TYPE_SPOT,
-				ExecutionMode: ExecutionMode_EXECUTION_MODE_PAPER,
-				Environment:   AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET,
-			},
-		},
-		{
-			name: "live requires secret",
-			req: &CreateAccountReq{
-				Name:          "live",
-				Exchange:      Exchange_EXCHANGE_OKX,
-				MarketType:    MarketType_MARKET_TYPE_SWAP,
-				ExecutionMode: ExecutionMode_EXECUTION_MODE_LIVE,
-				Environment:   AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET,
-			},
-		},
-		{
-			name: "unknown environment",
-			req: &CreateAccountReq{
-				Name:               "live",
-				Exchange:           Exchange_EXCHANGE_OKX,
-				MarketType:         MarketType_MARKET_TYPE_SWAP,
-				ExecutionMode:      ExecutionMode_EXECUTION_MODE_LIVE,
-				Environment:        AccountEnvironment(99),
-				CredentialSecretId: "secret-1",
-			},
-		},
-	}
-	for _, tc := range cases {
+		{"missing live config", func(req *CreateTradingAccountReq) { req.Live = nil }},
+		{"missing credential", func(req *CreateTradingAccountReq) { req.Live.CredentialSecretId = "" }},
+		{"paper environment removed", func(req *CreateTradingAccountReq) {
+			req.Live.Environment = AccountEnvironment_ACCOUNT_ENVIRONMENT_UNSPECIFIED
+		}},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.req.Validate(); err == nil {
-				t.Fatal("invalid environment profile was accepted")
+			req := base()
+			tc.mutate(req)
+			if err := req.Validate(); err == nil {
+				t.Fatal("invalid live config was accepted")
 			}
 		})
 	}
@@ -345,16 +319,16 @@ func TestCreateAccountRejectsPaperLifecycleBypass(t *testing.T) {
 func TestManualOrderValidation(t *testing.T) {
 	newMarketOrder := func() *PlaceManualOrderReq {
 		return &PlaceManualOrderReq{
-			ActionId:          "action-1",
-			ExchangeAccountId: "account-1",
-			ClientOrderId:     "client-1",
-			Symbol:            "BTCUSDT",
-			OrderType:         OrderType_ORDER_TYPE_MARKET,
-			FillPolicy:        FillPolicy_FILL_POLICY_UNSPECIFIED,
-			Side:              OrderSide_ORDER_SIDE_BUY,
-			PositionSide:      PositionSide_POSITION_SIDE_NET,
-			Quantity:          "1",
-			Reason:            "operator intervention",
+			ActionId:         "action-1",
+			TradingAccountId: "account-1",
+			ClientOrderId:    "client-1",
+			InstrumentId:     "BTCUSDT",
+			OrderType:        OrderType_ORDER_TYPE_MARKET,
+			FillPolicy:       FillPolicy_FILL_POLICY_UNSPECIFIED,
+			Side:             OrderSide_ORDER_SIDE_BUY,
+			PositionSide:     PositionSide_POSITION_SIDE_NET,
+			Quantity:         "1",
+			Reason:           "operator intervention",
 		}
 	}
 

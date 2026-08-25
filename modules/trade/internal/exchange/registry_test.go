@@ -54,7 +54,7 @@ func (*stubAdapter) SetLeverage(context.Context, string, shared.Decimal) error {
 func (*stubAdapter) SetMarginMode(context.Context, string, MarginMode) error {
 	return nil
 }
-func (*stubAdapter) SubscribePrivate(context.Context, EventHandler) error {
+func (*stubAdapter) Subscribe(context.Context, EventHandler) error {
 	return nil
 }
 

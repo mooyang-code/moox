@@ -701,6 +701,7 @@ func (s *Store) ListOrdersForLane(
 type OrderQuery struct {
 	LogicalAccountID string
 	TradingAccountID string
+	InstrumentID     string
 	ExchangeSymbol   string
 	Symbol           string
 	State            string
@@ -723,6 +724,9 @@ func (s *Store) ListOrders(
 	}
 	if query.TradingAccountID != "" {
 		db = db.Where("c_trading_account_id = ?", query.TradingAccountID)
+	}
+	if query.InstrumentID != "" {
+		db = db.Where("c_instrument_id = ?", query.InstrumentID)
 	}
 	if query.ExchangeSymbol != "" {
 		db = db.Where("c_exchange_symbol = ?", query.ExchangeSymbol)
@@ -1077,6 +1081,7 @@ type fillRow struct {
 type FillQuery struct {
 	TradingAccountID string
 	OrderID          string
+	InstrumentID     string
 	ExchangeSymbol   string
 	Symbol           string
 	StartTime        int64
@@ -1097,6 +1102,9 @@ func (s *Store) ListFills(
 	}
 	if query.OrderID != "" {
 		db = db.Where("c_order_id = ?", query.OrderID)
+	}
+	if query.InstrumentID != "" {
+		db = db.Where("c_instrument_id = ?", query.InstrumentID)
 	}
 	if query.ExchangeSymbol != "" {
 		db = db.Where("c_exchange_symbol = ?", query.ExchangeSymbol)
@@ -1437,10 +1445,30 @@ func (s *Store) ListPositions(
 	tradingAccountID string,
 	symbol string,
 ) ([]PositionRecord, error) {
+	return s.listPositions(ctx, spaceID, tradingAccountID, "c_exchange_symbol", symbol)
+}
+
+// ListPositionsByInstrument filters positions by the canonical instrument ID.
+func (s *Store) ListPositionsByInstrument(
+	ctx context.Context,
+	spaceID string,
+	tradingAccountID string,
+	instrumentID string,
+) ([]PositionRecord, error) {
+	return s.listPositions(ctx, spaceID, tradingAccountID, "c_instrument_id", instrumentID)
+}
+
+func (s *Store) listPositions(
+	ctx context.Context,
+	spaceID string,
+	tradingAccountID string,
+	filterColumn string,
+	filterValue string,
+) ([]PositionRecord, error) {
 	db := s.db.WithContext(ctx).Table("t_trading_positions").
 		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID)
-	if symbol != "" {
-		db = db.Where("c_exchange_symbol = ?", symbol)
+	if filterValue != "" {
+		db = db.Where(filterColumn+" = ?", filterValue)
 	}
 	var rows []struct {
 		SpaceID           string    `gorm:"column:c_space_id"`

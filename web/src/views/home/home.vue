@@ -272,7 +272,7 @@ import {
 import { callControl } from "@/api/admin/http";
 import { listServiceDeployments } from "@/api/admin/sysdeploy";
 import type { ServiceDeployment } from "@/api/admin/types";
-import { listAccounts } from "@/api/trade";
+import { listTradingAccounts } from "@/api/trade";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
 import { getNodeList } from "@/api/cloud-node";
 import { RequestGate } from "@/utils/request-gate";
@@ -632,7 +632,7 @@ async function loadSpaceScoped() {
     >("collectmgr", "GetTaskInstanceList", { filter: { space_id: spaceId, page: { page: 1, size: 1 } } }).then(rsp => {
       if (isCurrent()) counts.tasks = Number(rsp.page?.total) || rsp.instances?.length || 0;
     }),
-    listAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
+    listTradingAccounts({ page: { page: 1, size: 1 } }).then(rsp => {
       if (isCurrent()) counts.accounts = rsp.page_result?.total ?? rsp.accounts?.length ?? 0;
     }),
     getNodeList({ page: 1, page_size: 200 }).then(({ items, total }) => {

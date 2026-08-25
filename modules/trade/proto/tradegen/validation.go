@@ -16,54 +16,41 @@ var canonicalUnsignedDecimalPattern = regexp.MustCompile(
 	`^(0|[1-9][0-9]*)(\.[0-9]+)?$`,
 )
 
-func (r *CreateAccountReq) Validate() error {
+func (r *CreateTradingAccountReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.Name) == "" {
 		return fmt.Errorf("name is required")
 	}
 	if !validExchange(r.Exchange) ||
 		!validMarketType(r.MarketType) ||
-		!validExecutionMode(r.ExecutionMode) ||
-		!validAccountEnvironment(r.Environment) {
-		return fmt.Errorf(
-			"exchange, market_type, execution_mode and environment are required",
-		)
-	}
-	if (r.ExecutionMode == ExecutionMode_EXECUTION_MODE_PAPER &&
-		r.Environment != AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER) ||
-		(r.ExecutionMode == ExecutionMode_EXECUTION_MODE_LIVE &&
-			r.Environment != AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET &&
-			r.Environment != AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION) {
-		return fmt.Errorf("execution_mode and environment disagree")
-	}
-	if r.ExecutionMode == ExecutionMode_EXECUTION_MODE_PAPER {
-		return fmt.Errorf("paper accounts must be created with CreatePaperSimulation")
-	}
-	if r.ExecutionMode == ExecutionMode_EXECUTION_MODE_LIVE &&
-		strings.TrimSpace(r.CredentialSecretId) == "" {
-		return fmt.Errorf("credential_secret_id is required for live execution")
+		r.Live == nil ||
+		!validAccountEnvironment(r.Live.GetEnvironment()) ||
+		(r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET &&
+			r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION) ||
+		strings.TrimSpace(r.Live.GetCredentialSecretId()) == "" {
+		return fmt.Errorf("exchange, market_type and live environment/credential are required")
 	}
 	return nil
 }
 
-func (r *UpdateAccountReq) Validate() error {
+func (r *UpdateTradingAccountReq) Validate() error {
 	return requireID(r != nil, value(func() string {
 		if r == nil {
 			return ""
 		}
-		return r.ExchangeAccountId
-	}), "exchange_account_id")
+		return r.TradingAccountId
+	}), "trading_account_id")
 }
 
-func (r *GetAccountReq) Validate() error {
+func (r *GetTradingAccountReq) Validate() error {
 	return requireID(r != nil, value(func() string {
 		if r == nil {
 			return ""
 		}
-		return r.ExchangeAccountId
-	}), "exchange_account_id")
+		return r.TradingAccountId
+	}), "trading_account_id")
 }
 
-func (r *ListAccountsReq) Validate() error {
+func (r *ListTradingAccountsReq) Validate() error {
 	if r == nil {
 		return fmt.Errorf("request is required")
 	}
@@ -76,17 +63,14 @@ func (r *ListAccountsReq) Validate() error {
 	if r.ExecutionMode != nil && !validExecutionMode(r.GetExecutionMode()) {
 		return fmt.Errorf("invalid execution_mode")
 	}
-	if r.Environment != nil && !validAccountEnvironment(r.GetEnvironment()) {
-		return fmt.Errorf("invalid environment")
-	}
 	return validatePage(r.Page)
 }
 
 func (r *SetLeverageReq) Validate() error {
 	if r == nil ||
-		strings.TrimSpace(r.ExchangeAccountId) == "" ||
-		strings.TrimSpace(r.Symbol) == "" {
-		return fmt.Errorf("exchange_account_id and symbol are required")
+		strings.TrimSpace(r.TradingAccountId) == "" ||
+		strings.TrimSpace(r.InstrumentId) == "" {
+		return fmt.Errorf("trading_account_id and instrument_id are required")
 	}
 	if !isCanonicalPositiveDecimal(r.Leverage) {
 		return fmt.Errorf("leverage must be a canonical positive decimal")
@@ -94,9 +78,9 @@ func (r *SetLeverageReq) Validate() error {
 	return nil
 }
 
-func (r *SyncAccountReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
-		return fmt.Errorf("exchange_account_id is required")
+func (r *SyncTradingAccountReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.TradingAccountId) == "" {
+		return fmt.Errorf("trading_account_id is required")
 	}
 	return nil
 }
@@ -128,8 +112,8 @@ func (r *ClosePaperSimulationReq) Validate() error {
 		if r == nil {
 			return ""
 		}
-		return r.ExchangeAccountId
-	}), "exchange_account_id")
+		return r.TradingAccountId
+	}), "trading_account_id")
 }
 
 func (r *GetExecutionCapabilitiesReq) Validate() error {
@@ -137,13 +121,13 @@ func (r *GetExecutionCapabilitiesReq) Validate() error {
 		if r == nil {
 			return ""
 		}
-		return r.ExchangeAccountId
-	}), "exchange_account_id")
+		return r.TradingAccountId
+	}), "trading_account_id")
 }
 
 func (r *QueryEquityCurveReq) Validate() error {
-	if r == nil || (strings.TrimSpace(r.ExchangeAccountId) == "" && strings.TrimSpace(r.LogicalAccountId) == "") ||
-		(strings.TrimSpace(r.ExchangeAccountId) != "" && strings.TrimSpace(r.LogicalAccountId) != "") {
+	if r == nil || (strings.TrimSpace(r.TradingAccountId) == "" && strings.TrimSpace(r.LogicalAccountId) == "") ||
+		(strings.TrimSpace(r.TradingAccountId) != "" && strings.TrimSpace(r.LogicalAccountId) != "") {
 		return fmt.Errorf("exactly one equity curve target is required")
 	}
 	if r.StartTime < 0 || r.EndTime < 0 || (r.EndTime > 0 && r.StartTime > r.EndTime) {
@@ -157,8 +141,8 @@ func (r *ListHoldingsReq) Validate() error {
 		if r == nil {
 			return ""
 		}
-		return r.ExchangeAccountId
-	}), "exchange_account_id")
+		return r.TradingAccountId
+	}), "trading_account_id")
 }
 
 // Validate enforces the transport-level bounds for the batch DNS resolver
@@ -220,9 +204,9 @@ func (r *UpdateLogicalAccountReq) Validate() error {
 func (r *AddLogicalAccountMemberReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.LogicalAccountId) == "" ||
-		strings.TrimSpace(r.ExchangeAccountId) == "" {
+		strings.TrimSpace(r.TradingAccountId) == "" {
 		return fmt.Errorf(
-			"logical_account_id and exchange_account_id are required",
+			"logical_account_id and trading_account_id are required",
 		)
 	}
 	return nil
@@ -231,9 +215,9 @@ func (r *AddLogicalAccountMemberReq) Validate() error {
 func (r *RemoveLogicalAccountMemberReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.LogicalAccountId) == "" ||
-		strings.TrimSpace(r.ExchangeAccountId) == "" {
+		strings.TrimSpace(r.TradingAccountId) == "" {
 		return fmt.Errorf(
-			"logical_account_id and exchange_account_id are required",
+			"logical_account_id and trading_account_id are required",
 		)
 	}
 	return nil
@@ -296,12 +280,12 @@ func (r *FlattenLogicalAccountReq) Validate() error {
 func (r *PlaceManualOrderReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.ActionId) == "" ||
-		strings.TrimSpace(r.ExchangeAccountId) == "" ||
+		strings.TrimSpace(r.TradingAccountId) == "" ||
 		strings.TrimSpace(r.ClientOrderId) == "" ||
-		strings.TrimSpace(r.Symbol) == "" ||
+		strings.TrimSpace(r.InstrumentId) == "" ||
 		strings.TrimSpace(r.Reason) == "" {
 		return fmt.Errorf(
-			"action_id, exchange_account_id, client_order_id, symbol and reason are required",
+			"action_id, trading_account_id, client_order_id, instrument_id and reason are required",
 		)
 	}
 	if !validOrderType(r.OrderType) ||
@@ -369,9 +353,9 @@ func (r *GetOrderReq) Validate() error {
 func (r *ListOrdersReq) Validate() error {
 	if r == nil ||
 		(strings.TrimSpace(r.LogicalAccountId) == "" &&
-			strings.TrimSpace(r.ExchangeAccountId) == "") {
+			strings.TrimSpace(r.TradingAccountId) == "") {
 		return fmt.Errorf(
-			"logical_account_id or exchange_account_id is required",
+			"logical_account_id or trading_account_id is required",
 		)
 	}
 	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
@@ -381,8 +365,8 @@ func (r *ListOrdersReq) Validate() error {
 }
 
 func (r *ListFillsReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.ExchangeAccountId) == "" {
-		return fmt.Errorf("exchange_account_id is required")
+	if r == nil || strings.TrimSpace(r.TradingAccountId) == "" {
+		return fmt.Errorf("trading_account_id is required")
 	}
 	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
 		return err
@@ -393,9 +377,9 @@ func (r *ListFillsReq) Validate() error {
 func (r *ListPositionsReq) Validate() error {
 	if r == nil ||
 		(strings.TrimSpace(r.LogicalAccountId) == "" &&
-			strings.TrimSpace(r.ExchangeAccountId) == "") {
+			strings.TrimSpace(r.TradingAccountId) == "") {
 		return fmt.Errorf(
-			"logical_account_id or exchange_account_id is required",
+			"logical_account_id or trading_account_id is required",
 		)
 	}
 	return nil
@@ -417,7 +401,7 @@ func validExecutionMode(value ExecutionMode) bool {
 }
 
 func validAccountEnvironment(value AccountEnvironment) bool {
-	return value == AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER ||
+	return value == AccountEnvironment_ACCOUNT_ENVIRONMENT_UNSPECIFIED ||
 		value == AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET ||
 		value == AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION
 }

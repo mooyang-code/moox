@@ -12,7 +12,7 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHandler) error {
+func (a *Adapter) Subscribe(ctx context.Context, handler exchange.EventHandler) error {
 	if handler == nil {
 		return rejected("private event handler is required", nil)
 	}

@@ -38,9 +38,9 @@ describe("Trade public API", () => {
   it("keeps manual ownership fields server-controlled", async () => {
     await trade.placeManualOrder({
       action_id: "action-1",
-      exchange_account_id: "account-1",
+      trading_account_id: "account-1",
       client_order_id: "client1",
-      symbol: "BTC-USDT-SWAP",
+      instrument_id: "BTC-USDT-SWAP",
       order_type: 1,
       fill_policy: 0,
       side: 2,
@@ -51,9 +51,9 @@ describe("Trade public API", () => {
     const request = callTrade.mock.calls[0][2];
     expect(request).toEqual({
       action_id: "action-1",
-      exchange_account_id: "account-1",
+      trading_account_id: "account-1",
       client_order_id: "client1",
-      symbol: "BTC-USDT-SWAP",
+      instrument_id: "BTC-USDT-SWAP",
       order_type: 1,
       fill_policy: 0,
       side: 2,
@@ -81,9 +81,9 @@ describe("Trade public API", () => {
         result_json: JSON.stringify({
           accounts: [
             {
-              exchange_account_id: "account-1",
+              trading_account_id: "account-1",
               status: "PARTIAL",
-              remaining_positions: [{ symbol: "BTC-USDT-SWAP", quantity: "0.1", reason: "order rejected" }]
+              remaining_positions: [{ instrument_id: "BTC-USDT-SWAP", quantity: "0.1", reason: "order rejected" }]
             }
           ]
         }),

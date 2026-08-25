@@ -222,7 +222,7 @@ func (f *fakeExchange) SetMarginMode(_ context.Context, symbol string, mode exch
 	f.marginCalls = append(f.marginCalls, marginCall{symbol: symbol, mode: mode})
 	return nil
 }
-func (f *fakeExchange) SubscribePrivate(_ context.Context, handler exchange.EventHandler) error {
+func (f *fakeExchange) Subscribe(_ context.Context, handler exchange.EventHandler) error {
 	f.mu.Lock()
 	f.subscribeCalls++
 	err := f.subscribeErr

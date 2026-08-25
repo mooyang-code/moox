@@ -127,7 +127,7 @@ test("paused Logical Account exposes pending FULL target and per-account flatten
     owner_runner_id: "runner-paper",
     ready: true,
     readiness_reasons: [],
-    members: [{ exchange_account_id: "binance-paper", enabled: true, priority: 0 }]
+    members: [{ trading_account_id: "binance-paper", enabled: true, priority: 0 }]
   };
   await page.route("**/api/admin/trade_console/ListLogicalAccounts", route =>
     route.fulfill({
@@ -169,9 +169,9 @@ test("paused Logical Account exposes pending FULL target and per-account flatten
           result_json: JSON.stringify({
             accounts: [
               {
-                exchange_account_id: "binance-paper",
+                trading_account_id: "binance-paper",
                 status: "PARTIAL",
-                remaining_positions: [{ symbol: "ETH-USDT-SPOT", quantity: "0.2", reason: "minimum quantity" }],
+                remaining_positions: [{ instrument_id: "ETH-USDT-SPOT", quantity: "0.2", reason: "minimum quantity" }],
                 error: "minimum quantity"
               }
             ]

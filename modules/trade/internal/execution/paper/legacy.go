@@ -47,7 +47,7 @@ func (a *LegacyAdapter) SetLeverage(ctx context.Context, symbol string, value sh
 func (a *LegacyAdapter) SetMarginMode(ctx context.Context, symbol string, mode exchange.MarginMode) error {
 	return a.Adapter.SetMarginMode(ctx, shared.ExchangeSymbol(symbol), mode)
 }
-func (a *LegacyAdapter) SubscribePrivate(ctx context.Context, handler exchange.EventHandler) error {
+func (a *LegacyAdapter) Subscribe(ctx context.Context, handler exchange.EventHandler) error {
 	exchange.NotifyPrivateReady(handler)
 	<-ctx.Done()
 	return ctx.Err()

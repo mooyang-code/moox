@@ -27,7 +27,7 @@ type spotSubscriptionRequest struct {
 	Params map[string]any `json:"params"`
 }
 
-func (a *Adapter) SubscribePrivate(ctx context.Context, handler exchange.EventHandler) error {
+func (a *Adapter) Subscribe(ctx context.Context, handler exchange.EventHandler) error {
 	if handler == nil {
 		return typedRejected("private event handler is required", nil)
 	}

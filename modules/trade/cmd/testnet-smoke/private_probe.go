@@ -65,11 +65,11 @@ type probingAdapter struct {
 	probe *privateOrderProbe
 }
 
-func (a probingAdapter) SubscribePrivate(
+func (a probingAdapter) Subscribe(
 	ctx context.Context,
 	handler exchange.EventHandler,
 ) error {
-	return a.Adapter.SubscribePrivate(ctx, probingHandler{
+	return a.Adapter.Subscribe(ctx, probingHandler{
 		EventHandler: handler,
 		probe:        a.probe,
 	})

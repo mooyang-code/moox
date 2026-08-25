@@ -121,7 +121,7 @@ func (*syncAdapter) SetLeverage(context.Context, string, shared.Decimal) error {
 func (*syncAdapter) SetMarginMode(context.Context, string, exchange.MarginMode) error {
 	return nil
 }
-func (*syncAdapter) SubscribePrivate(context.Context, exchange.EventHandler) error {
+func (*syncAdapter) Subscribe(context.Context, exchange.EventHandler) error {
 	return nil
 }
 

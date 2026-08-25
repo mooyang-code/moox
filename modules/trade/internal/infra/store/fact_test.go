@@ -204,6 +204,61 @@ func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
 	require.False(t, positions[0].UpdatedAt.IsZero())
 }
 
+func TestCanonicalInstrumentQueriesDoNotUseExchangeSymbol(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
+			return err
+		}
+		if err := tx.UpsertInstrument(InstrumentRecord{
+			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BTC-USDT-SPOT",
+			ExchangeSymbol: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT",
+			PriceTick: "0.01", ExchangeQuantityStep: "0.0001", Status: "TRADING",
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateOrder(OrderRecord{
+			SpaceID: "space-1", OrderID: "canonical-order", TradingAccountID: "account-1",
+			ClientOrderID: "canonical-client", Exchange: "BINANCE", MarketType: "SPOT",
+			InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET",
+			Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL",
+			OwnerID: "canonical-order", State: "OPEN",
+		}); err != nil {
+			return err
+		}
+		inserted, err := tx.InsertFill(FillRecord{
+			SpaceID: "space-1", FillID: "canonical-fill", ExchangeTradeID: "canonical-trade",
+			OrderID: "canonical-order", TradingAccountID: "account-1", Exchange: "BINANCE",
+			MarketType: "SPOT", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
+			Side: "BUY", Price: "100", Quantity: "1", TradedAt: 100,
+		})
+		if err != nil || !inserted {
+			return err
+		}
+		return tx.UpsertPosition(PositionRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", InstrumentID: "BTC-USDT-SPOT",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+		})
+	}))
+
+	orders, total, err := s.ListOrders(ctx, "space-1", OrderQuery{
+		TradingAccountID: "account-1", InstrumentID: "BTC-USDT-SPOT", Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, orders, 1)
+	fills, total, err := s.ListFills(ctx, "space-1", FillQuery{
+		TradingAccountID: "account-1", InstrumentID: "BTC-USDT-SPOT", Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, fills, 1)
+	positions, err := s.ListPositionsByInstrument(ctx, "space-1", "account-1", "BTC-USDT-SPOT")
+	require.NoError(t, err)
+	require.Len(t, positions, 1)
+}
+
 func TestExchangeInstrumentSwapFieldsRoundTrip(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

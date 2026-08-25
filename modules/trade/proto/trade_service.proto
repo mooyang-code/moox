@@ -28,9 +28,8 @@ enum ExecutionMode {
 
 enum AccountEnvironment {
   ACCOUNT_ENVIRONMENT_UNSPECIFIED = 0;
-  ACCOUNT_ENVIRONMENT_PAPER = 1;
-  ACCOUNT_ENVIRONMENT_TESTNET = 2;
-  ACCOUNT_ENVIRONMENT_PRODUCTION = 3;
+  ACCOUNT_ENVIRONMENT_TESTNET = 1;
+  ACCOUNT_ENVIRONMENT_PRODUCTION = 2;
 }
 
 enum OrderType {
@@ -64,7 +63,7 @@ message AssetBalance {
   string total = 4;
 }
 
-message ExchangeAccountSnapshot {
+message TradingAccountSnapshot {
   repeated AssetBalance balances = 1;
   string equity = 2;
   string available_funds = 3;
@@ -74,31 +73,45 @@ message ExchangeAccountSnapshot {
   int64 exchange_updated_at = 7;
 }
 
-message ExchangeAccount {
-  string exchange_account_id = 1;
+message LiveConfig {
+  AccountEnvironment environment = 1;
+  string credential_secret_id = 2;
+}
+
+message PaperConfig {
+  string initial_balance = 1;
+  string maker_fee_rate = 2;
+  string taker_fee_rate = 3;
+  string slippage_bps = 4;
+}
+
+message TradingAccount {
+  string trading_account_id = 1;
   string space_id = 2;
   string name = 3;
   Exchange exchange = 4;
   MarketType market_type = 5;
   ExecutionMode execution_mode = 6;
-  AccountEnvironment environment = 7;
-  string credential_secret_id = 8;
-  string settlement_asset = 9;
-  string margin_mode = 10;
+  string settlement_asset = 7;
+  string margin_mode = 8;
+  map<string, string> leverage_settings = 9;
+  repeated string sync_symbols = 10;
   string status = 11;
   bool ready = 12;
-  map<string, string> leverage_settings = 13;
-  ExchangeAccountSnapshot snapshot = 14;
-  int64 last_sync_at = 15;
-  int64 last_ready_at = 16;
-  string last_error = 17;
-  int64 created_at = 18;
-  int64 updated_at = 19;
-  repeated string sync_symbols = 20;
+  int64 last_sync_at = 13;
+  int64 last_ready_at = 14;
+  string last_error = 15;
+  oneof execution_config {
+    LiveConfig live = 16;
+    PaperConfig paper = 17;
+  }
+  TradingAccountSnapshot snapshot = 18;
+  int64 created_at = 19;
+  int64 updated_at = 20;
 }
 
 message LogicalAccountMember {
-  string exchange_account_id = 1;
+  string trading_account_id = 1;
   bool enabled = 2;
   int32 priority = 3;
 }
@@ -122,12 +135,13 @@ message LogicalAccount {
 
 message Order {
   string order_id = 1;
-  string exchange_account_id = 2;
+  string trading_account_id = 2;
   string client_order_id = 3;
   string exchange_order_id = 4;
   Exchange exchange = 5;
   MarketType market_type = 6;
-  string symbol = 7;
+  string instrument_id = 7;
+  string exchange_symbol = 33;
   OrderType order_type = 8;
   FillPolicy fill_policy = 9;
   OrderSide side = 10;
@@ -160,10 +174,11 @@ message Fill {
   string exchange_trade_id = 2;
   string order_id = 3;
   string exchange_order_id = 4;
-  string exchange_account_id = 5;
+  string trading_account_id = 5;
   Exchange exchange = 6;
   MarketType market_type = 7;
-  string symbol = 8;
+  string instrument_id = 8;
+  string exchange_symbol = 20;
   OrderSide side = 9;
   PositionSide position_side = 10;
   string price = 11;
@@ -178,8 +193,9 @@ message Fill {
 }
 
 message Position {
-  string exchange_account_id = 1;
-  string symbol = 2;
+  string trading_account_id = 1;
+  string instrument_id = 2;
+  string exchange_symbol = 15;
   PositionSide position_side = 3;
   string signed_quantity = 4;
   string entry_price = 5;
@@ -230,24 +246,22 @@ message OperatorAction {
   int64 updated_at = 9;
 }
 
-message CreateAccountReq {
+message CreateTradingAccountReq {
   string name = 1;
   Exchange exchange = 2;
   MarketType market_type = 3;
-  ExecutionMode execution_mode = 4;
-  AccountEnvironment environment = 5;
-  string credential_secret_id = 6;
-  string settlement_asset = 7;
-  string margin_mode = 8;
-  repeated string sync_symbols = 9;
+  string settlement_asset = 4;
+  string margin_mode = 5;
+  repeated string sync_symbols = 6;
+  LiveConfig live = 7;
 }
-message CreateAccountRsp {
+message CreateTradingAccountRsp {
   common.RetInfo ret_info = 1;
-  ExchangeAccount account = 2;
+  TradingAccount account = 2;
 }
 
-message UpdateAccountReq {
-  string exchange_account_id = 1;
+message UpdateTradingAccountReq {
+  string trading_account_id = 1;
   string name = 2;
   string credential_secret_id = 3;
   string settlement_asset = 4;
@@ -255,47 +269,46 @@ message UpdateAccountReq {
   string status = 6;
   repeated string sync_symbols = 7;
 }
-message UpdateAccountRsp {
+message UpdateTradingAccountRsp {
   common.RetInfo ret_info = 1;
-  ExchangeAccount account = 2;
+  TradingAccount account = 2;
 }
 
-message GetAccountReq {
-  string exchange_account_id = 1;
+message GetTradingAccountReq {
+  string trading_account_id = 1;
 }
-message GetAccountRsp {
+message GetTradingAccountRsp {
   common.RetInfo ret_info = 1;
-  ExchangeAccount account = 2;
+  TradingAccount account = 2;
 }
 
-message ListAccountsReq {
+message ListTradingAccountsReq {
   optional Exchange exchange = 1;
   optional MarketType market_type = 2;
   optional ExecutionMode execution_mode = 3;
-  optional AccountEnvironment environment = 4;
   string status = 5;
   common.Page page = 6;
 }
-message ListAccountsRsp {
+message ListTradingAccountsRsp {
   common.RetInfo ret_info = 1;
-  repeated ExchangeAccount accounts = 2;
+  repeated TradingAccount accounts = 2;
   common.PageResult page_result = 3;
 }
 
 message SetLeverageReq {
-  string exchange_account_id = 1;
-  string symbol = 2;
+  string trading_account_id = 1;
+  string instrument_id = 2;
   string leverage = 3;
 }
 message SetLeverageRsp {
   common.RetInfo ret_info = 1;
-  ExchangeAccount account = 2;
+  TradingAccount account = 2;
 }
 
-message SyncAccountReq {
-  string exchange_account_id = 1;
+message SyncTradingAccountReq {
+  string trading_account_id = 1;
 }
-message SyncAccountRsp {
+message SyncTradingAccountRsp {
   common.RetInfo ret_info = 1;
   int32 fills_ingested = 2;
   int32 orders_updated = 3;
@@ -345,7 +358,7 @@ message UpdateLogicalAccountRsp {
 
 message AddLogicalAccountMemberReq {
   string logical_account_id = 1;
-  string exchange_account_id = 2;
+  string trading_account_id = 2;
   bool enabled = 3;
   int32 priority = 4;
   bool adopt_existing_exposure = 5;
@@ -357,7 +370,7 @@ message AddLogicalAccountMemberRsp {
 
 message RemoveLogicalAccountMemberReq {
   string logical_account_id = 1;
-  string exchange_account_id = 2;
+  string trading_account_id = 2;
 }
 message RemoveLogicalAccountMemberRsp {
   common.RetInfo ret_info = 1;
@@ -412,9 +425,9 @@ message FlattenLogicalAccountRsp {
 
 message PlaceManualOrderReq {
   string action_id = 1;
-  string exchange_account_id = 2;
+  string trading_account_id = 2;
   string client_order_id = 3;
-  string symbol = 4;
+  string instrument_id = 4;
   OrderType order_type = 5;
   FillPolicy fill_policy = 6;
   OrderSide side = 7;
@@ -466,8 +479,8 @@ message GetOrderRsp {
 
 message ListOrdersReq {
   string logical_account_id = 1;
-  string exchange_account_id = 2;
-  string symbol = 3;
+  string trading_account_id = 2;
+  string instrument_id = 3;
   string state = 4;
   bool only_open = 5;
   int64 start_time = 6;
@@ -481,9 +494,9 @@ message ListOrdersRsp {
 }
 
 message ListFillsReq {
-  string exchange_account_id = 1;
+  string trading_account_id = 1;
   string order_id = 2;
-  string symbol = 3;
+  string instrument_id = 3;
   int64 start_time = 4;
   int64 end_time = 5;
   common.Page page = 6;
@@ -496,8 +509,8 @@ message ListFillsRsp {
 
 message ListPositionsReq {
   string logical_account_id = 1;
-  string exchange_account_id = 2;
-  string symbol = 3;
+  string trading_account_id = 2;
+  string instrument_id = 3;
 }
 message ListPositionsRsp {
   common.RetInfo ret_info = 1;
@@ -540,22 +553,22 @@ message CreatePaperSimulationReq {
 
 message CreatePaperSimulationRsp {
   common.RetInfo ret_info = 1;
-  ExchangeAccount account = 2;
+  TradingAccount account = 2;
   LogicalAccount logical_account = 3;
 }
 
 message ClosePaperSimulationReq {
-  string exchange_account_id = 1;
+  string trading_account_id = 1;
 }
 
 message ClosePaperSimulationRsp {
   common.RetInfo ret_info = 1;
-  ExchangeAccount account = 2;
+  TradingAccount account = 2;
   LogicalAccount logical_account = 3;
 }
 
 message GetExecutionCapabilitiesReq {
-  string exchange_account_id = 1;
+  string trading_account_id = 1;
 }
 
 message ExecutionCapabilities {
@@ -581,7 +594,7 @@ message EquityPoint {
 }
 
 message QueryEquityCurveReq {
-  string exchange_account_id = 1;
+  string trading_account_id = 1;
   string logical_account_id = 2;
   int64 start_time = 3;
   int64 end_time = 4;
@@ -593,7 +606,7 @@ message QueryEquityCurveRsp {
 }
 
 message Holding {
-  string exchange_account_id = 1;
+  string trading_account_id = 1;
   string instrument_id = 2;
   string exchange_symbol = 3;
   string asset = 4;
@@ -606,7 +619,7 @@ message Holding {
 }
 
 message ListHoldingsReq {
-  string exchange_account_id = 1;
+  string trading_account_id = 1;
 }
 
 message ListHoldingsRsp {
@@ -619,12 +632,12 @@ service TradeDNSResolverService {
 }
 
 service TradeConsoleService {
-  rpc CreateAccount(CreateAccountReq) returns (CreateAccountRsp);
-  rpc UpdateAccount(UpdateAccountReq) returns (UpdateAccountRsp);
-  rpc GetAccount(GetAccountReq) returns (GetAccountRsp);
-  rpc ListAccounts(ListAccountsReq) returns (ListAccountsRsp);
+  rpc CreateTradingAccount(CreateTradingAccountReq) returns (CreateTradingAccountRsp);
+  rpc UpdateTradingAccount(UpdateTradingAccountReq) returns (UpdateTradingAccountRsp);
+  rpc GetTradingAccount(GetTradingAccountReq) returns (GetTradingAccountRsp);
+  rpc ListTradingAccounts(ListTradingAccountsReq) returns (ListTradingAccountsRsp);
   rpc SetLeverage(SetLeverageReq) returns (SetLeverageRsp);
-  rpc SyncAccount(SyncAccountReq) returns (SyncAccountRsp);
+  rpc SyncTradingAccount(SyncTradingAccountReq) returns (SyncTradingAccountRsp);
   rpc CreateLogicalAccount(CreateLogicalAccountReq) returns (CreateLogicalAccountRsp);
   rpc GetLogicalAccount(GetLogicalAccountReq) returns (GetLogicalAccountRsp);
   rpc ListLogicalAccounts(ListLogicalAccountsReq) returns (ListLogicalAccountsRsp);

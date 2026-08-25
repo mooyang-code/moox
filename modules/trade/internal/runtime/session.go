@@ -75,7 +75,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	streamDone := make(chan error, 1)
 	disconnected := make(chan struct{})
 	go func() {
-		err := s.Adapter.SubscribePrivate(streamCtx, handler)
+		err := s.Adapter.Subscribe(streamCtx, handler)
 		s.ready.Store(false)
 		close(disconnected)
 		streamDone <- err

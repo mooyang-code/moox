@@ -7,6 +7,24 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
+func TestTradeConsoleIsOnlyBusinessHTTPService(t *testing.T) {
+	services := File_trade_service_proto.Services()
+	require.NotNil(t, services.ByName("TradeConsoleService"))
+	require.Nil(t, services.ByName("ExchangeAccountService"))
+	require.Nil(t, services.ByName("TradingAccountService"))
+	require.Nil(t, services.ByName("TradeExecutionService"))
+	require.Nil(t, services.ByName("LogicalAccountService"))
+	account := File_trade_service_proto.Messages().ByName("TradingAccount")
+	require.NotNil(t, account)
+	require.NotNil(t, account.Fields().ByName("trading_account_id"))
+	require.NotNil(t, account.Oneofs().ByName("execution_config"))
+	require.NotNil(t, account.Fields().ByName("live"))
+	require.NotNil(t, account.Fields().ByName("paper"))
+	for _, forbidden := range []protoreflect.Name{"exchange_account_id", "environment", "credential_secret_id"} {
+		require.Nil(t, account.Fields().ByName(forbidden), forbidden)
+	}
+}
+
 func TestTradeProtoExposesLogicalAccountMethodsOnConsole(t *testing.T) {
 	services := File_trade_service_proto.Services()
 	logical := services.ByName("TradeConsoleService")
@@ -31,7 +49,7 @@ func TestTradeProtoExposesLogicalAccountMethodsOnConsole(t *testing.T) {
 func TestPhysicalAccountRPCDoesNotExposePause(t *testing.T) {
 	service := File_trade_service_proto.Services().ByName("TradeConsoleService")
 	require.NotNil(t, service)
-	require.NotNil(t, service.Methods().ByName("CreateAccount"))
+	require.NotNil(t, service.Methods().ByName("CreateTradingAccount"))
 	require.Nil(t, service.Methods().ByName("PauseAccount"))
 }
 
@@ -58,7 +76,7 @@ func TestTradeExecutionRPCUsesManualOrderAndLogicalTarget(t *testing.T) {
 	}
 	for _, required := range []protoreflect.Name{
 		"action_id",
-		"exchange_account_id",
+		"trading_account_id",
 		"client_order_id",
 		"fill_policy",
 		"reason",

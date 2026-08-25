@@ -27,10 +27,10 @@ type FlattenCommand struct {
 }
 
 type RemainingPosition struct {
-	Symbol   string `json:"symbol,omitempty"`
-	Asset    string `json:"asset,omitempty"`
-	Quantity string `json:"quantity"`
-	Reason   string `json:"reason"`
+	InstrumentID string `json:"instrument_id,omitempty"`
+	Asset        string `json:"asset,omitempty"`
+	Quantity     string `json:"quantity"`
+	Reason       string `json:"reason"`
 }
 
 type FlattenAccountResult struct {
@@ -623,8 +623,12 @@ func (s *Service) remainingForAccount(
 				continue
 			}
 			reason := reasonFor(reasons, position.Symbol, "position remains after final sync")
+			instrumentID := position.InstrumentID
+			if instrumentID == "" {
+				instrumentID = position.ExchangeSymbol
+			}
 			remaining = append(remaining, RemainingPosition{
-				Symbol: position.Symbol, Quantity: quantity.String(), Reason: reason,
+				InstrumentID: instrumentID, Quantity: quantity.String(), Reason: reason,
 			})
 		}
 	} else {
@@ -645,8 +649,8 @@ func (s *Service) remainingForAccount(
 		}
 	}
 	sort.Slice(remaining, func(i, j int) bool {
-		return remaining[i].Symbol+remaining[i].Asset <
-			remaining[j].Symbol+remaining[j].Asset
+		return remaining[i].InstrumentID+remaining[i].Asset <
+			remaining[j].InstrumentID+remaining[j].Asset
 	})
 	return remaining
 }

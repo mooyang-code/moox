@@ -25,9 +25,9 @@ func (secretSourceStub) GetExchangeSecret(
 }
 
 func TestAccountRPCRejectsMissingSpace(t *testing.T) {
-	response, err := (&AccountServer{}).GetAccount(
+	response, err := (&AccountServer{}).GetTradingAccount(
 		context.Background(),
-		&tradepb.GetAccountReq{ExchangeAccountId: "account-1"},
+		&tradepb.GetTradingAccountReq{TradingAccountId: "account-1"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -50,15 +50,14 @@ func TestAccountRPCCreateAndSpaceIsolation(t *testing.T) {
 	handler := &AccountServer{
 		Accounts: service, Store: tradeStore, NewID: func() string { return "account-1" },
 	}
-	response, err := handler.CreateAccount(
+	response, err := handler.CreateTradingAccount(
 		spacecontext.WithSpaceID(context.Background(), "space-1"),
-		&tradepb.CreateAccountReq{
+		&tradepb.CreateTradingAccountReq{
 			Name: "main", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-			MarketType:         tradepb.MarketType_MARKET_TYPE_SPOT,
-			ExecutionMode:      tradepb.ExecutionMode_EXECUTION_MODE_LIVE,
-			Environment:        tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET,
-			CredentialSecretId: "secret-1", SettlementAsset: "USDT",
-			SyncSymbols: []string{"BTCUSDT"},
+			MarketType:      tradepb.MarketType_MARKET_TYPE_SPOT,
+			Live:            &tradepb.LiveConfig{Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
+			SettlementAsset: "USDT",
+			SyncSymbols:     []string{"BTCUSDT"},
 		},
 	)
 	if err != nil {
@@ -68,9 +67,9 @@ func TestAccountRPCCreateAndSpaceIsolation(t *testing.T) {
 		response.GetAccount().GetSpaceId() != "space-1" {
 		t.Fatalf("create response = %+v", response)
 	}
-	other, err := handler.GetAccount(
+	other, err := handler.GetTradingAccount(
 		spacecontext.WithSpaceID(context.Background(), "space-2"),
-		&tradepb.GetAccountReq{ExchangeAccountId: "account-1"},
+		&tradepb.GetTradingAccountReq{TradingAccountId: "account-1"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +98,6 @@ func TestAccountEnumRoundTrip(t *testing.T) {
 		}
 	}
 	for _, value := range []tradepb.AccountEnvironment{
-		tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
 		tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET,
 		tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION,
 	} {

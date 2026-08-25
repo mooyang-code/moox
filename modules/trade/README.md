@@ -8,8 +8,8 @@ Trade 是 MooX 的交易执行与交易事实源，负责 Exchange 账户、逻�
 
 ## 核心对象
 
-- `ExchangeAccount`：一个绑定凭据的 paper 或 live 物理账户。
-- `LogicalAccount`：由一个或多个同质 `ExchangeAccount` 组成的逻辑总账户。
+- `TradingAccount`：一个通过 `LiveConfig` 或 `PaperConfig` 配置的物理账户。
+- `LogicalAccount`：由一个或多个同质 `TradingAccount` 组成的逻辑总账户。
 - `LogicalAccountTarget`：逻辑账户当前唯一、可替换的完整目标，不是执行历史。
 - `InstrumentTarget`：一个规范化标的及其绝对目标持仓量 `quantity`。
 - `Order`、`Fill`、`Position`：订单意图、交易所成交事实和已确认持仓。

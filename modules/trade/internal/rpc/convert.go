@@ -157,8 +157,6 @@ func executionModeToPB(value string) tradepb.ExecutionMode {
 
 func environmentFromPB(value tradepb.AccountEnvironment) exchange.AccountEnvironment {
 	switch value {
-	case tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER:
-		return exchange.AccountEnvironmentPaper
 	case tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET:
 		return exchange.AccountEnvironmentTestnet
 	case tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION:
@@ -170,8 +168,6 @@ func environmentFromPB(value tradepb.AccountEnvironment) exchange.AccountEnviron
 
 func environmentToPB(value string) tradepb.AccountEnvironment {
 	switch exchange.AccountEnvironment(value) {
-	case exchange.AccountEnvironmentPaper:
-		return tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER
 	case exchange.AccountEnvironmentTestnet:
 		return tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET
 	case exchange.AccountEnvironmentProduction:
@@ -265,7 +261,7 @@ func positionSideToPB(value string) tradepb.PositionSide {
 	return tradepb.PositionSide_POSITION_SIDE_UNSPECIFIED
 }
 
-func accountToPB(value store.TradingAccountRecord) *tradepb.ExchangeAccount {
+func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 	if value.TradingAccountID == "" {
 		return nil
 	}
@@ -276,18 +272,16 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.ExchangeAccount {
 			Locked: balance.Locked, Total: balance.Total,
 		})
 	}
-	return &tradepb.ExchangeAccount{
-		ExchangeAccountId: value.TradingAccountID, SpaceId: value.SpaceID,
+	account := &tradepb.TradingAccount{
+		TradingAccountId: value.TradingAccountID, SpaceId: value.SpaceID,
 		Name: value.Name, Exchange: exchangeToPB(value.Exchange),
-		MarketType:         marketToPB(value.MarketType),
-		ExecutionMode:      executionModeToPB(value.ExecutionMode),
-		Environment:        environmentToPB(value.Environment),
-		CredentialSecretId: value.CredentialSecretID,
-		SettlementAsset:    value.SettlementAsset, MarginMode: value.MarginMode,
+		MarketType:      marketToPB(value.MarketType),
+		ExecutionMode:   executionModeToPB(value.ExecutionMode),
+		SettlementAsset: value.SettlementAsset, MarginMode: value.MarginMode,
 		Status: value.Status, Ready: value.Ready,
 		SyncSymbols:      append([]string(nil), value.SyncSymbols...),
 		LeverageSettings: mapCopy(value.LeverageSettings),
-		Snapshot: &tradepb.ExchangeAccountSnapshot{
+		Snapshot: &tradepb.TradingAccountSnapshot{
 			Balances: balances, Equity: value.Snapshot.Equity,
 			AvailableFunds:    value.Snapshot.AvailableFunds,
 			UsedMargin:        value.Snapshot.UsedMargin,
@@ -299,6 +293,21 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.ExchangeAccount {
 		LastError: value.LastError, CreatedAt: unixMilli(value.CreatedAt),
 		UpdatedAt: unixMilli(value.UpdatedAt),
 	}
+	if value.ExecutionMode == string(exchange.ExecutionModePaper) {
+		config := value.PaperConfig
+		if config == nil {
+			config = &store.PaperAccountConfigRecord{}
+		}
+		account.ExecutionConfig = &tradepb.TradingAccount_Paper{Paper: &tradepb.PaperConfig{
+			InitialBalance: config.InitialBalance, MakerFeeRate: config.MakerFeeRate,
+			TakerFeeRate: config.TakerFeeRate, SlippageBps: config.SlippageBPS,
+		}}
+	} else {
+		account.ExecutionConfig = &tradepb.TradingAccount_Live{Live: &tradepb.LiveConfig{
+			Environment: environmentToPB(value.Environment), CredentialSecretId: value.CredentialSecretID,
+		}}
+	}
+	return account
 }
 
 func logicalAccountToPB(
@@ -312,9 +321,9 @@ func logicalAccountToPB(
 	pbMembers := make([]*tradepb.LogicalAccountMember, 0, len(members))
 	for _, member := range members {
 		pbMembers = append(pbMembers, &tradepb.LogicalAccountMember{
-			ExchangeAccountId: member.TradingAccountID,
-			Enabled:           member.Enabled,
-			Priority:          int32(member.Priority),
+			TradingAccountId: member.TradingAccountID,
+			Enabled:          member.Enabled,
+			Priority:         int32(member.Priority),
 		})
 	}
 	return &tradepb.LogicalAccount{
@@ -340,10 +349,11 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 		return nil
 	}
 	return &tradepb.Order{
-		OrderId: value.OrderID, ExchangeAccountId: value.TradingAccountID,
+		OrderId: value.OrderID, TradingAccountId: value.TradingAccountID,
 		ClientOrderId: value.ClientOrderID, ExchangeOrderId: value.ExchangeOrderID,
 		Exchange: exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
-		Symbol: value.Symbol, OrderType: orderTypeToPB(value.OrderType),
+		InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol,
+		OrderType:  orderTypeToPB(value.OrderType),
 		FillPolicy: fillPolicyToPB(value.TimeInForce), Side: sideToPB(value.Side),
 		PositionSide: positionSideToPB(value.PositionSide), Quantity: value.Quantity,
 		LimitPrice: value.LimitPrice, ReferencePrice: value.ReferencePrice,
@@ -365,9 +375,9 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 	return &tradepb.Fill{
 		FillId: value.FillID, ExchangeTradeId: value.ExchangeTradeID,
 		OrderId: value.OrderID, ExchangeOrderId: value.ExchangeOrderID,
-		ExchangeAccountId: value.TradingAccountID,
-		Exchange:          exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
-		Symbol: value.Symbol, Side: sideToPB(value.Side),
+		TradingAccountId: value.TradingAccountID,
+		Exchange:         exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
+		InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol, Side: sideToPB(value.Side),
 		PositionSide: positionSideToPB(value.PositionSide),
 		Price:        value.Price, Quantity: value.Quantity, Fee: value.Fee,
 		FeeAsset: value.FeeAsset, SettlementAsset: value.SettlementAsset,
@@ -378,7 +388,7 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 
 func positionToPB(value store.PositionRecord) *tradepb.Position {
 	return &tradepb.Position{
-		ExchangeAccountId: value.TradingAccountID, Symbol: value.Symbol,
+		TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol,
 		PositionSide:   positionSideToPB(value.PositionSide),
 		SignedQuantity: value.SignedQuantity, EntryPrice: value.EntryPrice,
 		MarkPrice: value.MarkPrice, Leverage: value.Leverage,

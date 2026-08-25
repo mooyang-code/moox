@@ -142,11 +142,11 @@ func (a *scriptedSessionAdapter) SetMarginMode(
 	a.record("SetMarginMode")
 	return nil
 }
-func (a *scriptedSessionAdapter) SubscribePrivate(
+func (a *scriptedSessionAdapter) Subscribe(
 	ctx context.Context,
 	handler exchange.EventHandler,
 ) error {
-	a.record("SubscribePrivate")
+	a.record("Subscribe")
 	exchange.NotifyPrivateReady(handler)
 	if err := handler.OnPosition(ctx, exchange.Position{
 		Symbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
@@ -187,7 +187,7 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		return len(adapter.callSnapshot()) >= 12
 	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, []string{
-		"SubscribePrivate",
+		"Subscribe",
 		"LoadInstruments",
 		"SetMarginMode",
 		"SetLeverage",

@@ -2,7 +2,7 @@
   <div class="moox-page">
     <div class="moox-inner">
       <div class="page-head">
-        <h2>Exchange 账户</h2>
+        <h2>Trading 账户</h2>
         <a-space>
           <a-button :loading="loading" @click="loadAccounts">
             <template #icon><icon-refresh /></template>
@@ -16,7 +16,7 @@
       </div>
 
       <a-table
-        row-key="exchange_account_id"
+        row-key="trading_account_id"
         :data="accounts"
         :loading="loading"
         :pagination="pagination"
@@ -27,7 +27,7 @@
           <a-table-column title="账户">
             <template #cell="{ record }">
               <strong>{{ record.name }}</strong>
-              <div class="muted">{{ record.exchange_account_id }}</div>
+              <div class="muted">{{ record.trading_account_id }}</div>
             </template>
           </a-table-column>
           <a-table-column title="Exchange">
@@ -40,7 +40,7 @@
             <template #cell="{ record }">{{ executionModeLabels[record.execution_mode] }}</template>
           </a-table-column>
           <a-table-column title="环境">
-            <template #cell="{ record }">{{ environmentLabels[record.environment] }}</template>
+            <template #cell="{ record }">{{ record.paper ? "Paper" : environmentLabels[record.live?.environment || 0] }}</template>
           </a-table-column>
           <a-table-column title="状态">
             <template #cell="{ record }">
@@ -58,7 +58,7 @@
           <a-table-column title="操作" fixed="right" :width="100">
             <template #cell="{ record }">
               <a-space>
-                <a-button size="mini" :loading="syncingId === record.exchange_account_id" @click="sync(record)">
+                <a-button size="mini" :loading="syncingId === record.trading_account_id" @click="sync(record)">
                   <template #icon><icon-sync /></template>
                   同步
                 </a-button>
@@ -96,13 +96,10 @@
               <a-radio :value="2">Live</a-radio>
             </a-radio-group>
           </a-form-item>
-          <a-form-item label="环境" required>
+          <a-form-item v-if="form.execution_mode === 2" label="环境" required>
             <a-radio-group v-model="form.environment" type="button">
-              <a-radio v-if="form.execution_mode === 1" :value="1">Paper</a-radio>
-              <template v-else>
-                <a-radio :value="2">Testnet</a-radio>
-                <a-radio :value="3">Production</a-radio>
-              </template>
+              <a-radio :value="1">Testnet</a-radio>
+              <a-radio :value="2">Production</a-radio>
             </a-radio-group>
           </a-form-item>
           <a-form-item v-if="form.execution_mode === 2" label="Credential Secret ID" required>
@@ -112,6 +109,12 @@
           <a-form-item v-if="form.execution_mode === 1" label="初始资金" required>
             <a-input v-model="form.initial_balance" suffix="USDT" />
           </a-form-item>
+          <template v-if="form.execution_mode === 1">
+            <a-form-item label="Maker 费率" required><a-input v-model="form.maker_fee_rate" /></a-form-item>
+            <a-form-item label="Taker 费率" required><a-input v-model="form.taker_fee_rate" /></a-form-item>
+            <a-form-item label="滑点 (bps)" required><a-input v-model="form.slippage_bps" /></a-form-item>
+            <a-form-item label="LogicalAccount 名称" required><a-input v-model="form.logical_account_name" /></a-form-item>
+          </template>
           <a-form-item v-if="form.market_type === 2" label="保证金模式">
             <a-input model-value="Cross" disabled />
           </a-form-item>
@@ -128,22 +131,23 @@
 import { onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
-  createAccount,
+  createTradingAccount,
   createPaperSimulation,
   closePaperSimulation,
   environmentLabels,
   exchangeLabels,
   executionModeLabels,
   formatTimestamp,
-  listAccounts,
+  listTradingAccounts,
   marketTypeLabels,
-  syncAccount
+  syncTradingAccount
 } from "@/api/trade";
-import type { ExchangeAccount } from "@/api/trade/types";
+import type { TradingAccount } from "@/api/trade/types";
+import { buildLiveRequest, buildPaperSimulationRequest, type AccountFormModel } from "./account-form";
 
 defineOptions({ name: "account-overview" });
 
-const accounts = ref<ExchangeAccount[]>([]);
+const accounts = ref<TradingAccount[]>([]);
 const loading = ref(false);
 const syncingId = ref("");
 const createVisible = ref(false);
@@ -154,24 +158,29 @@ const form = reactive({
   exchange: 1 as 1 | 2,
   market_type: 1 as 1 | 2,
   execution_mode: 1 as 1 | 2,
-  environment: 1 as 1 | 2 | 3,
+  environment: 1 as 1 | 2,
   credential_secret_id: "",
   settlement_asset: "USDT",
   margin_mode: "CROSS",
-  initial_balance: "100000"
+  initial_balance: "100000",
+  maker_fee_rate: "0",
+  taker_fee_rate: "0",
+  slippage_bps: "0",
+  logical_account_name: "",
+  sync_symbols: ""
 });
 
 watch(
   () => form.execution_mode,
-  mode => {
-    form.environment = mode === 1 ? 1 : 2;
+  () => {
+    form.environment = 1;
   }
 );
 
 async function loadAccounts() {
   loading.value = true;
   try {
-    const response = await listAccounts({ page: { page: pagination.current, size: pagination.pageSize } });
+    const response = await listTradingAccounts({ page: { page: pagination.current, size: pagination.pageSize } });
     accounts.value = response.accounts || [];
     pagination.total = response.page_result?.total || 0;
   } finally {
@@ -184,10 +193,10 @@ function changePage(page: number) {
   loadAccounts();
 }
 
-async function sync(account: ExchangeAccount) {
-  syncingId.value = account.exchange_account_id;
+async function sync(account: TradingAccount) {
+  syncingId.value = account.trading_account_id;
   try {
-    const response = await syncAccount(account.exchange_account_id);
+    const response = await syncTradingAccount(account.trading_account_id);
     Message.success(
       `同步完成：${response.fills_ingested} fills，${response.orders_updated} orders，${response.positions_updated} positions`
     );
@@ -199,35 +208,15 @@ async function sync(account: ExchangeAccount) {
 
 async function create() {
   const credentialMissing = form.execution_mode === 2 && !form.credential_secret_id.trim();
-  if (!form.name.trim() || credentialMissing || !form.settlement_asset.trim() || (form.execution_mode === 1 && !form.initial_balance.trim())) {
+  if (!form.name.trim() || credentialMissing || !form.settlement_asset.trim() || (form.execution_mode === 1 && (!form.initial_balance.trim() || !form.logical_account_name.trim()))) {
     Message.warning("请填写所有必填字段");
     return false;
   }
   if (form.execution_mode === 1) {
-    await createPaperSimulation({
-      account_name: form.name.trim(),
-      logical_account_name: `${form.name.trim()}-logical`,
-      exchange: form.exchange,
-      market_type: form.market_type,
-      settlement_asset: form.settlement_asset.trim().toUpperCase(),
-      margin_mode: form.market_type === 2 ? form.margin_mode : "",
-      initial_balance: form.initial_balance.trim(),
-      maker_fee_rate: "0",
-      taker_fee_rate: "0",
-      slippage_bps: "0"
-    });
+    await createPaperSimulation(buildPaperSimulationRequest(form as AccountFormModel));
   } else {
-    await createAccount({
-      ...form,
-      name: form.name.trim(),
-      credential_secret_id: form.credential_secret_id.trim(),
-      settlement_asset: form.settlement_asset.trim().toUpperCase(),
-      margin_mode: form.market_type === 2 ? form.margin_mode : "",
-      sync_symbols: syncSymbols.value
-        .split(",")
-        .map(value => value.trim().toUpperCase())
-        .filter(Boolean)
-    });
+    form.sync_symbols = syncSymbols.value;
+    await createTradingAccount(buildLiveRequest(form as AccountFormModel));
   }
   createVisible.value = false;
   await loadAccounts();
@@ -238,11 +227,12 @@ function openCreate() {
   form.name = "";
   form.execution_mode = 1;
   form.initial_balance = "100000";
+  form.logical_account_name = "";
   createVisible.value = true;
 }
 
-async function closePaper(account: ExchangeAccount) {
-  await closePaperSimulation(account.exchange_account_id);
+async function closePaper(account: TradingAccount) {
+  await closePaperSimulation(account.trading_account_id);
   Message.success("Paper 模拟已关闭");
   await loadAccounts();
 }
