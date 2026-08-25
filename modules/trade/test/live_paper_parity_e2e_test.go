@@ -7,7 +7,9 @@ import (
 
 	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	paperexec "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -27,9 +29,12 @@ func TestLiveAndPaperProduceEquivalentSpotFacts(t *testing.T) {
 	applyFakeFill(t, live, "parity-live", "parity-live-fill", "0.01", "50000", "0")
 	sampleEquity(t, live)
 
-	paper := newPaperFixture(t, exchange.MarketTypeSpot)
+	paper := newProductionPaperFixture(t, exchange.MarketTypeSpot)
 	paperOrder := mustPlace(t, paper, marketSpec("parity-paper", exchange.SideBuy, "0.01"))
-	paperOrder, err = paper.orders.Submit(ctx, testSpace, string(paperOrder.ID))
+	_, err = paper.orders.Submit(ctx, testSpace, string(paperOrder.ID))
+	require.NoError(t, err)
+	productionPaperMatch(t, paper)
+	paperOrder, err = paper.orders.Get(ctx, testSpace, string(paperOrder.ID))
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Filled, paperOrder.State)
 	sampleEquity(t, paper)
@@ -51,9 +56,12 @@ func TestLiveAndPaperProduceEquivalentSwapFacts(t *testing.T) {
 	require.NoError(t, err)
 	applyFakeFill(t, live, "parity-swap-live", "parity-swap-live-fill", "0.01", "50000", "0")
 
-	paper := newPaperFixture(t, exchange.MarketTypeSwap)
+	paper := newProductionPaperFixture(t, exchange.MarketTypeSwap)
 	paperOrder := mustPlace(t, paper, swapSpec("parity-swap-paper", exchange.SideBuy, "0.01", false))
-	paperOrder, err = paper.orders.Submit(ctx, testSpace, string(paperOrder.ID))
+	_, err = paper.orders.Submit(ctx, testSpace, string(paperOrder.ID))
+	require.NoError(t, err)
+	productionPaperMatch(t, paper)
+	paperOrder, err = paper.orders.Get(ctx, testSpace, string(paperOrder.ID))
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Filled, paperOrder.State)
 
@@ -70,6 +78,59 @@ func setFixtureLive(t *testing.T, f *fixture) {
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, testSpace, testAccount).Error
 	require.NoError(t, err)
+}
+
+func newProductionPaperFixture(t *testing.T, market exchange.MarketType) *fixture {
+	t.Helper()
+	path := filepathForTest(t)
+	tradeStore, err := store.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tradeStore.Close() })
+	fake := newFakeExchange(market)
+	seedFixture(t, tradeStore, market, fake.instrument)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), testAccount)
+	require.NoError(t, err)
+	base := &paperexec.Adapter{Account: account, Store: tradeStore, MarketData: fake}
+	_, err = base.LoadInstruments(context.Background())
+	require.NoError(t, err)
+	return buildFixture(tradeStore, path, fake, recordingAdapter{ExecutionAdapter: base, recorder: fake})
+}
+
+// productionPaperMatch runs the same persistent PaperAdapter -> Matcher ->
+// Reducer path used by bootstrap. The decision uses the persisted MARKET
+// execution price, so the test also guards the reservation/price contract.
+func productionPaperMatch(t *testing.T, f *fixture) {
+	t.Helper()
+	matcher := &paperexec.Matcher{
+		Store: f.store, Reducer: f.reducer,
+		DecideContext: func(ctx context.Context, candidate store.OrderRecord) (paperexec.Decision, error) {
+			price := shared.Zero()
+			if candidate.PaperExecutionPrice != nil {
+				price = shared.MustDecimal(*candidate.PaperExecutionPrice)
+			} else {
+				price = shared.MustDecimal(candidate.ReferencePrice)
+			}
+			config, err := f.store.GetPaperAccountConfig(ctx, candidate.SpaceID, candidate.TradingAccountID)
+			if err != nil {
+				return paperexec.Decision{}, err
+			}
+			feeRate := shared.Zero()
+			if config.TakerFeeRate != "" {
+				feeRate = shared.MustDecimal(config.TakerFeeRate)
+			}
+			fee := price.Mul(shared.MustDecimal(candidate.Quantity)).Mul(feeRate)
+			return paperexec.Decision{Fill: exchange.Fill{
+				ExchangeTradeID: candidate.TradingAccountID + ":" + candidate.ClientOrderID,
+				ExchangeOrderID: candidate.ExchangeOrderID, ClientOrderID: candidate.ClientOrderID,
+				ExchangeSymbol: candidate.ExchangeSymbol, Symbol: candidate.ExchangeSymbol,
+				Side: exchange.Side(candidate.Side), PositionSide: exchange.PositionSide(candidate.PositionSide),
+				Quantity: shared.MustDecimal(candidate.Quantity), Price: price, Fee: fee,
+				FeeAsset: candidate.ReservedAsset, SettlementAsset: candidate.ReservedAsset,
+				LiquidityRole: "TAKER", TradedAt: testNow,
+			}}, nil
+		},
+	}
+	require.NoError(t, matcher.Scan(context.Background()))
 }
 
 func assertCommonSpotFacts(t *testing.T, f *fixture, orderID string) {
