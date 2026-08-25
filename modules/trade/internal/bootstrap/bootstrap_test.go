@@ -41,6 +41,7 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 		"trpc.moox.trade.Health",
 		"trpc.moox.trade.TradeConsoleService",
 		"trpc.moox.trade.TradeDNSResolverService.trpc",
+		"trpc.moox.trade.equity.timer",
 		"trpc.moox.trade.metrics.timer",
 	}
 	if len(names) != len(want) {

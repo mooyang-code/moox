@@ -16,23 +16,6 @@ const storageMetadataGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor
 const storagePrimaryGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\",\"archive\",\"storage-view\"]"
 const storageViewGatewayCallers = "[\"admin-gateway\",\"collector\",\"factor\",\"monitor\"]"
 
-var obsoleteTradeDeploymentNames = []string{
-	"trade_account",
-	"trade_balance",
-	"trade_fund",
-	"trade_apikey",
-	"trade_channel",
-	"trade_tradeop",
-	"trade_order",
-	"trade_tradeq",
-	"trade_position",
-	"trade_rebalance",
-	"trade_ops",
-	"trade_exchange_account",
-	"trade_execution",
-	"trade_logical_account",
-}
-
 func DefaultDeployments(nodeID string) []Deployment {
 	rows := []Deployment{
 		withExtra(deployment("admin_gateway", "gateway", "https", defaultPublicHost, 9527, "/api/admin", "public", "Caddy 管理台 HTTPS 入口，浏览器同源访问 /api/admin/*"), `{"health_url":"http://127.0.0.1:11010/readyz","health_kind":"readiness","monitor_enabled":true}`),

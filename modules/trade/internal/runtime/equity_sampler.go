@@ -2,10 +2,10 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type AccountSampler interface {
@@ -16,16 +16,16 @@ type AccountSamplerLister interface {
 }
 type EquitySampler struct {
 	Service   AccountSampler
-	Interval  time.Duration
 	signal    chan struct{}
 	mu        sync.Mutex
+	runMu     sync.Mutex
 	pending   map[string]struct{}
 	degraded  atomic.Bool
 	lastError atomic.Value
 }
 
 func NewEquitySampler(service AccountSampler) *EquitySampler {
-	return &EquitySampler{Service: service, Interval: time.Minute, signal: make(chan struct{}, 1), pending: map[string]struct{}{}}
+	return &EquitySampler{Service: service, signal: make(chan struct{}, 1), pending: map[string]struct{}{}}
 }
 func (s *EquitySampler) Enqueue(id string) {
 	if s == nil || id == "" {
@@ -40,6 +40,15 @@ func (s *EquitySampler) Enqueue(id string) {
 	}
 }
 func (s *EquitySampler) RunPending(ctx context.Context) error {
+	if s == nil || s.Service == nil {
+		return errors.New("equity sampler: service is not configured")
+	}
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.runPending(ctx)
+}
+
+func (s *EquitySampler) runPending(ctx context.Context) error {
 	s.mu.Lock()
 	ids := make([]string, 0, len(s.pending))
 	for id := range s.pending {
@@ -60,27 +69,31 @@ func (s *EquitySampler) RunPending(ctx context.Context) error {
 	}
 	return first
 }
-func (s *EquitySampler) Run(ctx context.Context) error {
-	interval := s.Interval
-	if interval <= 0 {
-		interval = time.Minute
+
+// Handle is registered on the tRPC timer. Periodic sampling is timer-owned;
+// the local worker below only drains immediate fill/readiness wakeups.
+func (s *EquitySampler) Handle(ctx context.Context) error {
+	if s == nil || s.Service == nil {
+		return errors.New("equity sampler: service is not configured")
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	if lister, ok := s.Service.(AccountSamplerLister); ok {
+		ids, err := lister.ListSampleAccounts(ctx)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			s.Enqueue(id)
+		}
+	}
+	return s.RunPending(ctx)
+}
+
+func (s *EquitySampler) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-s.signal:
-			_ = s.RunPending(ctx)
-		case <-ticker.C:
-			if lister, ok := s.Service.(AccountSamplerLister); ok {
-				if ids, err := lister.ListSampleAccounts(ctx); err == nil {
-					for _, id := range ids {
-						s.Enqueue(id)
-					}
-				}
-			}
 			_ = s.RunPending(ctx)
 		}
 	}

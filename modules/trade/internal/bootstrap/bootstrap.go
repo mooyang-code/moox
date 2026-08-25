@@ -111,6 +111,7 @@ func initialize(
 	}
 	manager.OnSessionRemoved = balanceMetrics.Remove
 	equitySampler := traderuntime.NewEquitySampler(&equityapp.Service{Store: tradeStore, Adapters: manager})
+	registerEquitySamplerTimer(serverInstance, equitySampler)
 	fillReducer := &consumer.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: manager, SessionState: manager,
@@ -898,6 +899,21 @@ func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetric
 		handler.Handle,
 	)
 	return moduleMetrics
+}
+
+func registerEquitySamplerTimer(
+	serverInstance *server.Server,
+	sampler *traderuntime.EquitySampler,
+) {
+	if serverInstance == nil || sampler == nil {
+		return
+	}
+	service := serverInstance.Service("trpc.moox.trade.equity.timer")
+	if service == nil {
+		log.Warn("trade equity timer service is not configured")
+		return
+	}
+	timer.RegisterHandlerService(service, sampler.Handle)
 }
 
 func registerHealth(

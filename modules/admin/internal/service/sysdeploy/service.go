@@ -78,7 +78,7 @@ func (s *ServiceImpl) SeedDefaults(ctx context.Context) error {
 			}
 		}
 	}
-	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID), nodeID, obsoleteTradeDeploymentNames)
+	return s.dao.SeedDefaults(ctx, DefaultDeployments(nodeID), "", nil)
 }
 
 func (s *ServiceImpl) ListServiceDeployments(ctx context.Context, req *pb.ListServiceDeploymentsReq) (*pb.ListServiceDeploymentsRsp, error) {

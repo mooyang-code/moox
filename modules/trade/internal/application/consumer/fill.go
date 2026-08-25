@@ -366,7 +366,10 @@ func projectSwapPosition(
 		if leverage == "" {
 			leverage = account.LeverageSettings[record.Symbol]
 		}
-		if leverage == "" && account.ExecutionMode == "PAPER" {
+		// A wildcard leverage setting is a generic account fallback. Keep the
+		// reducer independent of execution mode; Live and Paper both project the
+		// same Position facts from a normalized Fill.
+		if leverage == "" {
 			leverage = account.LeverageSettings["*"]
 		}
 		if leverage == "" {

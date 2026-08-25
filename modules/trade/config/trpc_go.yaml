@@ -44,6 +44,12 @@ server:
       protocol: timer
       timeout: 10000
 
+    - name: trpc.moox.trade.equity.timer
+      port: 11211
+      network: "0 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 10000
+
 client:
   filter:
     - validation

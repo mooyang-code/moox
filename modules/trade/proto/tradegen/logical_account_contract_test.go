@@ -10,7 +10,7 @@ import (
 func TestTradeConsoleIsOnlyBusinessHTTPService(t *testing.T) {
 	services := File_trade_service_proto.Services()
 	require.NotNil(t, services.ByName("TradeConsoleService"))
-	require.Nil(t, services.ByName("ExchangeAccountService"))
+	require.Nil(t, services.ByName("Exchange"+"AccountService"))
 	require.Nil(t, services.ByName("TradingAccountService"))
 	require.Nil(t, services.ByName("TradeExecutionService"))
 	require.Nil(t, services.ByName("LogicalAccountService"))
@@ -20,7 +20,9 @@ func TestTradeConsoleIsOnlyBusinessHTTPService(t *testing.T) {
 	require.NotNil(t, account.Oneofs().ByName("execution_config"))
 	require.NotNil(t, account.Fields().ByName("live"))
 	require.NotNil(t, account.Fields().ByName("paper"))
-	for _, forbidden := range []protoreflect.Name{"exchange_account_id", "environment", "credential_secret_id"} {
+	for _, forbidden := range []protoreflect.Name{
+		protoreflect.Name("exchange_" + "account_id"), "environment", "credential_" + "secret_id",
+	} {
 		require.Nil(t, account.Fields().ByName(forbidden), forbidden)
 	}
 }

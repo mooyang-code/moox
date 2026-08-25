@@ -241,45 +241,6 @@ func TestSeedDefaultsSensitiveServicesCannotEnterSnapshot(t *testing.T) {
 	}
 }
 
-func TestSeedDefaultsDeletesOnlyNodeScopedObsoleteTradeDeployments(t *testing.T) {
-	db := setupEmptySysDeployTestDB(t)
-	ctx := context.Background()
-	for _, nodeID := range []string{"node-a", "node-b"} {
-		require.NoError(t, db.Create(&GatewayNode{
-			NodeID: nodeID, Name: nodeID,
-			PublicAddress: "https://" + nodeID + ".example", Status: "enabled",
-		}).Error)
-	}
-	for _, nodeID := range []string{"node-a", "node-b"} {
-		for _, serviceName := range obsoleteTradeDeploymentNames {
-			require.NoError(t, db.Create(&Deployment{
-				NodeID: nodeID, ServiceName: serviceName, ServiceKind: "trade",
-				Protocol: "http", Host: "127.0.0.1", Port: 11200,
-				GatewayPath: "trpc.moox.trade.Legacy", Scope: "internal", Status: "active",
-			}).Error)
-		}
-	}
-
-	svc := newTestService(db, "node-a")
-	require.NoError(t, svc.SeedDefaults(ctx))
-
-	var nodeAObsolete, nodeBObsolete int64
-	require.NoError(t, db.Model(&Deployment{}).
-		Where("c_node_id = ? AND c_service_name IN ?", "node-a", obsoleteTradeDeploymentNames).
-		Count(&nodeAObsolete).Error)
-	require.NoError(t, db.Model(&Deployment{}).
-		Where("c_node_id = ? AND c_service_name IN ?", "node-b", obsoleteTradeDeploymentNames).
-		Count(&nodeBObsolete).Error)
-	assert.Zero(t, nodeAObsolete)
-	assert.Equal(t, int64(len(obsoleteTradeDeploymentNames)), nodeBObsolete)
-
-	var canonical int64
-	require.NoError(t, db.Model(&Deployment{}).
-		Where("c_node_id = ? AND c_service_name IN ?", "node-a", []string{"trade_console"}).
-		Count(&canonical).Error)
-	assert.Equal(t, int64(1), canonical)
-}
-
 func TestUniqueConstraintClassificationIsNarrow(t *testing.T) {
 	assert.True(t, isUniqueConstraintError(errors.New("UNIQUE constraint failed: t.c")))
 	assert.False(t, isUniqueConstraintError(errors.New("constraint failed: FOREIGN KEY constraint failed (787)")))

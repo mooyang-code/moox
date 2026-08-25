@@ -107,7 +107,9 @@ Resume 会返回重新执行最新目标的提示。
 - `SUBMITTING`/`SUBMIT_UNKNOWN` 先按相同 client order ID 查询交易所，禁止盲目重发。
 - 成功但非 OPEN 的下单响应立即触发账户同步；没有 Fill ID 的聚合响应不会伪造成交。
 - OKX client order ID 使用 `xid` 生成，并在适配器边界校验长度和字母数字格式。
-- Paper V1 只接受 MARKET；不模拟 LIMIT 撮合。
+- Paper V1 使用公共行情做简化撮合：MARKET 使用最坏可成交价；LIMIT 可立即成交时按
+  taker 成交，未成交的 GTC 保持 OPEN 并在行情穿价后按 maker 成交，IOC/FOK 无法全量
+  立即成交时整单取消。不模拟盘口深度、排队优先级或部分成交。
 
 Live 交易默认关闭。启用 PRODUCTION 账户和提交 live 订单需要显式
 `live_trading_enabled=true`。Trade 通过服务认证的 `GetSecretValue(secret_id)` 单条读取

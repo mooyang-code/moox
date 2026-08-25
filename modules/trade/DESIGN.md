@@ -184,9 +184,11 @@ owner_id         target_id 或 action_id
 
 Exchange 同步导入的未知订单固定为 EXTERNAL。公共调用者不能提供 owner 或 runner。
 
-Paper V1 只支持 MARKET，并在订单与 reservation 落库前拒绝 LIMIT。Live Binance/OKX
-使用交易所快照作为余额和持仓权威。OKX client order ID 使用 `xid` 生成一次、先持久化，
-随后查询与受控重试复用原值；适配器仍校验最多 32 位字母数字。
+Paper V1 使用公共行情支持 MARKET 和简化 LIMIT 撮合：可立即成交的 LIMIT 按 taker
+成交，未立即成交的 GTC 等待行情穿价后按 maker 成交，IOC/FOK 无法立即全量成交时整单
+取消；不模拟盘口深度、排队优先级或部分成交。Live Binance/OKX 使用交易所快照作为
+余额和持仓权威。OKX client order ID 使用 `xid` 生成一次、先持久化，随后查询与受控重试
+复用原值；适配器仍校验最多 32 位字母数字。
 
 ## 人工控制
 
