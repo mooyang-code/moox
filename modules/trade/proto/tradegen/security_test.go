@@ -13,21 +13,18 @@ import (
 
 func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 	want := map[protoreflect.FullName][]protoreflect.Name{
-		"trpc.moox.trade.ExchangeAccountService": {
+		"trpc.moox.trade.TradeConsoleService": {
 			"CreateAccount", "UpdateAccount", "GetAccount", "ListAccounts",
 			"SetLeverage", "SyncAccount",
-		},
-		"trpc.moox.trade.LogicalAccountService": {
 			"CreateLogicalAccount", "GetLogicalAccount", "ListLogicalAccounts",
 			"UpdateLogicalAccount", "AddLogicalAccountMember",
 			"RemoveLogicalAccountMember", "ClaimLogicalAccountOwner",
 			"ReleaseLogicalAccountOwner", "PauseLogicalAccount",
 			"ResumeLogicalAccount", "FlattenLogicalAccount",
-		},
-		"trpc.moox.trade.TradeExecutionService": {
 			"PlaceManualOrder", "CancelOrder", "GetOperatorAction",
 			"GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills",
-			"ListPositions",
+			"ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
+			"GetExecutionCapabilities", "QueryEquityCurve", "ListHoldings",
 		},
 		"trpc.moox.trade.TradeDNSResolverService": {
 			"ResolveDomains",
@@ -288,7 +285,7 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 	}
 }
 
-func TestCreateAccountEnforcesEnvironmentProfile(t *testing.T) {
+func TestCreateAccountRejectsPaperLifecycleBypass(t *testing.T) {
 	valid := &CreateAccountReq{
 		Name:          "paper",
 		Exchange:      Exchange_EXCHANGE_BINANCE,
@@ -296,8 +293,8 @@ func TestCreateAccountEnforcesEnvironmentProfile(t *testing.T) {
 		ExecutionMode: ExecutionMode_EXECUTION_MODE_PAPER,
 		Environment:   AccountEnvironment_ACCOUNT_ENVIRONMENT_PAPER,
 	}
-	if err := valid.Validate(); err != nil {
-		t.Fatalf("valid paper account rejected: %v", err)
+	if err := valid.Validate(); err == nil {
+		t.Fatal("generic CreateAccount accepted a paper lifecycle request")
 	}
 
 	cases := []struct {

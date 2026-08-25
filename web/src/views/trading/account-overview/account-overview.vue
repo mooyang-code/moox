@@ -8,7 +8,7 @@
             <template #icon><icon-refresh /></template>
             刷新
           </a-button>
-          <a-button type="primary" status="success" @click="createVisible = true">
+          <a-button type="primary" status="success" @click="openCreate">
             <template #icon><icon-plus /></template>
             新增账户
           </a-button>
@@ -62,13 +62,20 @@
                   <template #icon><icon-sync /></template>
                   同步
                 </a-button>
+                <a-popconfirm
+                  v-if="record.execution_mode === 1 && record.status === 'ENABLED'"
+                  content="关闭后不可恢复，仅保留历史查询。"
+                  @ok="closePaper(record)"
+                >
+                  <a-button size="mini" status="danger">关闭 Paper</a-button>
+                </a-popconfirm>
               </a-space>
             </template>
           </a-table-column>
         </template>
       </a-table>
 
-      <a-modal v-model:visible="createVisible" title="新增 Exchange 账户" @ok="create">
+      <a-modal v-model:visible="createVisible" :title="form.execution_mode === 1 ? '创建 Paper 模拟' : '新增 Live 账户'" @ok="create">
         <a-form :model="form" auto-label-width>
           <a-form-item label="名称" required><a-input v-model="form.name" /></a-form-item>
           <a-form-item label="Exchange" required>
@@ -102,6 +109,9 @@
             <a-input v-model="form.credential_secret_id" />
           </a-form-item>
           <a-form-item label="结算资产" required><a-input v-model="form.settlement_asset" /></a-form-item>
+          <a-form-item v-if="form.execution_mode === 1" label="初始资金" required>
+            <a-input v-model="form.initial_balance" suffix="USDT" />
+          </a-form-item>
           <a-form-item v-if="form.market_type === 2" label="保证金模式">
             <a-input model-value="Cross" disabled />
           </a-form-item>
@@ -119,6 +129,8 @@ import { onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
   createAccount,
+  createPaperSimulation,
+  closePaperSimulation,
   environmentLabels,
   exchangeLabels,
   executionModeLabels,
@@ -145,7 +157,8 @@ const form = reactive({
   environment: 1 as 1 | 2 | 3,
   credential_secret_id: "",
   settlement_asset: "USDT",
-  margin_mode: "CROSS"
+  margin_mode: "CROSS",
+  initial_balance: "100000"
 });
 
 watch(
@@ -186,24 +199,52 @@ async function sync(account: ExchangeAccount) {
 
 async function create() {
   const credentialMissing = form.execution_mode === 2 && !form.credential_secret_id.trim();
-  if (!form.name.trim() || credentialMissing || !form.settlement_asset.trim()) {
+  if (!form.name.trim() || credentialMissing || !form.settlement_asset.trim() || (form.execution_mode === 1 && !form.initial_balance.trim())) {
     Message.warning("请填写所有必填字段");
     return false;
   }
-  await createAccount({
-    ...form,
-    name: form.name.trim(),
-    credential_secret_id: form.credential_secret_id.trim(),
-    settlement_asset: form.settlement_asset.trim().toUpperCase(),
-    margin_mode: form.market_type === 2 ? form.margin_mode : "",
-    sync_symbols: syncSymbols.value
-      .split(",")
-      .map(value => value.trim().toUpperCase())
-      .filter(Boolean)
-  });
+  if (form.execution_mode === 1) {
+    await createPaperSimulation({
+      account_name: form.name.trim(),
+      logical_account_name: `${form.name.trim()}-logical`,
+      exchange: form.exchange,
+      market_type: form.market_type,
+      settlement_asset: form.settlement_asset.trim().toUpperCase(),
+      margin_mode: form.market_type === 2 ? form.margin_mode : "",
+      initial_balance: form.initial_balance.trim(),
+      maker_fee_rate: "0",
+      taker_fee_rate: "0",
+      slippage_bps: "0"
+    });
+  } else {
+    await createAccount({
+      ...form,
+      name: form.name.trim(),
+      credential_secret_id: form.credential_secret_id.trim(),
+      settlement_asset: form.settlement_asset.trim().toUpperCase(),
+      margin_mode: form.market_type === 2 ? form.margin_mode : "",
+      sync_symbols: syncSymbols.value
+        .split(",")
+        .map(value => value.trim().toUpperCase())
+        .filter(Boolean)
+    });
+  }
   createVisible.value = false;
   await loadAccounts();
   return true;
+}
+
+function openCreate() {
+  form.name = "";
+  form.execution_mode = 1;
+  form.initial_balance = "100000";
+  createVisible.value = true;
+}
+
+async function closePaper(account: ExchangeAccount) {
+  await closePaperSimulation(account.exchange_account_id);
+  Message.success("Paper 模拟已关闭");
+  await loadAccounts();
 }
 
 onMounted(loadAccounts);

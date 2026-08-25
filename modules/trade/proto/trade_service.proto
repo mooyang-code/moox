@@ -525,16 +525,106 @@ message ResolveDomainsRsp {
   repeated string unresolved_domains = 3;
 }
 
-service ExchangeAccountService {
+message CreatePaperSimulationReq {
+  string account_name = 1;
+  string logical_account_name = 2;
+  Exchange exchange = 3;
+  MarketType market_type = 4;
+  string settlement_asset = 5;
+  string margin_mode = 6;
+  string initial_balance = 7;
+  string maker_fee_rate = 8;
+  string taker_fee_rate = 9;
+  string slippage_bps = 10;
+}
+
+message CreatePaperSimulationRsp {
+  common.RetInfo ret_info = 1;
+  ExchangeAccount account = 2;
+  LogicalAccount logical_account = 3;
+}
+
+message ClosePaperSimulationReq {
+  string exchange_account_id = 1;
+}
+
+message ClosePaperSimulationRsp {
+  common.RetInfo ret_info = 1;
+  ExchangeAccount account = 2;
+  LogicalAccount logical_account = 3;
+}
+
+message GetExecutionCapabilitiesReq {
+  string exchange_account_id = 1;
+}
+
+message ExecutionCapabilities {
+  bool can_place_order = 1;
+  string unavailable_reason = 2;
+  repeated OrderType order_types = 3;
+  repeated FillPolicy fill_policies = 4;
+  bool can_close_paper_simulation = 5;
+}
+
+message GetExecutionCapabilitiesRsp {
+  common.RetInfo ret_info = 1;
+  ExecutionCapabilities capabilities = 2;
+}
+
+message EquityPoint {
+  int64 bucket_time = 1;
+  string equity = 2;
+  string available_funds = 3;
+  string used_margin = 4;
+  optional string unrealized_pnl = 5;
+  int64 source_time = 6;
+}
+
+message QueryEquityCurveReq {
+  string exchange_account_id = 1;
+  string logical_account_id = 2;
+  int64 start_time = 3;
+  int64 end_time = 4;
+}
+
+message QueryEquityCurveRsp {
+  common.RetInfo ret_info = 1;
+  repeated EquityPoint points = 2;
+}
+
+message Holding {
+  string exchange_account_id = 1;
+  string instrument_id = 2;
+  string exchange_symbol = 3;
+  string asset = 4;
+  string quantity = 5;
+  string average_cost = 6;
+  string mark_price = 7;
+  string market_value = 8;
+  optional string unrealized_pnl = 9;
+  int64 source_time = 10;
+}
+
+message ListHoldingsReq {
+  string exchange_account_id = 1;
+}
+
+message ListHoldingsRsp {
+  common.RetInfo ret_info = 1;
+  repeated Holding holdings = 2;
+}
+
+service TradeDNSResolverService {
+  rpc ResolveDomains(ResolveDomainsReq) returns (ResolveDomainsRsp);
+}
+
+service TradeConsoleService {
   rpc CreateAccount(CreateAccountReq) returns (CreateAccountRsp);
   rpc UpdateAccount(UpdateAccountReq) returns (UpdateAccountRsp);
   rpc GetAccount(GetAccountReq) returns (GetAccountRsp);
   rpc ListAccounts(ListAccountsReq) returns (ListAccountsRsp);
   rpc SetLeverage(SetLeverageReq) returns (SetLeverageRsp);
   rpc SyncAccount(SyncAccountReq) returns (SyncAccountRsp);
-}
-
-service LogicalAccountService {
   rpc CreateLogicalAccount(CreateLogicalAccountReq) returns (CreateLogicalAccountRsp);
   rpc GetLogicalAccount(GetLogicalAccountReq) returns (GetLogicalAccountRsp);
   rpc ListLogicalAccounts(ListLogicalAccountsReq) returns (ListLogicalAccountsRsp);
@@ -546,9 +636,6 @@ service LogicalAccountService {
   rpc PauseLogicalAccount(PauseLogicalAccountReq) returns (PauseLogicalAccountRsp);
   rpc ResumeLogicalAccount(ResumeLogicalAccountReq) returns (ResumeLogicalAccountRsp);
   rpc FlattenLogicalAccount(FlattenLogicalAccountReq) returns (FlattenLogicalAccountRsp);
-}
-
-service TradeExecutionService {
   rpc PlaceManualOrder(PlaceManualOrderReq) returns (PlaceManualOrderRsp);
   rpc CancelOrder(CancelOrderReq) returns (CancelOrderRsp);
   rpc GetOperatorAction(GetOperatorActionReq) returns (GetOperatorActionRsp);
@@ -557,8 +644,9 @@ service TradeExecutionService {
   rpc ListOrders(ListOrdersReq) returns (ListOrdersRsp);
   rpc ListFills(ListFillsReq) returns (ListFillsRsp);
   rpc ListPositions(ListPositionsReq) returns (ListPositionsRsp);
-}
-
-service TradeDNSResolverService {
-  rpc ResolveDomains(ResolveDomainsReq) returns (ResolveDomainsRsp);
+  rpc CreatePaperSimulation(CreatePaperSimulationReq) returns (CreatePaperSimulationRsp);
+  rpc ClosePaperSimulation(ClosePaperSimulationReq) returns (ClosePaperSimulationRsp);
+  rpc GetExecutionCapabilities(GetExecutionCapabilitiesReq) returns (GetExecutionCapabilitiesRsp);
+  rpc QueryEquityCurve(QueryEquityCurveReq) returns (QueryEquityCurveRsp);
+  rpc ListHoldings(ListHoldingsReq) returns (ListHoldingsRsp);
 }

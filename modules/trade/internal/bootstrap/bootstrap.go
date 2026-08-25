@@ -17,6 +17,7 @@ import (
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -108,7 +109,7 @@ func initialize(
 		return nil, fmt.Errorf("register trade balance metrics: %w", err)
 	}
 	manager.OnSessionRemoved = balanceMetrics.Remove
-	equitySampler := traderuntime.NewEquitySampler(&equityapp.Service{Store: tradeStore})
+	equitySampler := traderuntime.NewEquitySampler(&equityapp.Service{Store: tradeStore, Adapters: manager})
 	fillReducer := &consumer.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: manager, SessionState: manager,
@@ -461,6 +462,12 @@ func initialize(
 			},
 		},
 		&rpc.DNSResolverServer{Resolver: dnsResolver},
+		rpc.ConsoleOptions{
+			Paper:              &papersimulation.Service{Store: tradeStore},
+			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
+			MatcherReady:       paperMatcherWorker.Ready,
+			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
+		},
 	)
 	if err := registerHealth(
 		serverInstance,
@@ -731,6 +738,9 @@ func paperOpeningReservationSufficient(
 	}
 	if leverage == "" {
 		leverage = account.LeverageSettings[candidate.Symbol]
+	}
+	if leverage == "" && account.ExecutionMode == "PAPER" {
+		leverage = account.LeverageSettings["*"]
 	}
 	parsedLeverage, leverageErr := shared.ParseDecimal(leverage)
 	reserved, reservedErr := shared.ParseDecimal(candidate.RemainingReservedQuantity)

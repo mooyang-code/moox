@@ -1,17 +1,15 @@
 package rpc
 
 import (
+	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
 const (
-	ExchangeAccountServiceName       = "trpc.moox.trade.TradingAccountService"
-	LegacyExchangeAccountServiceName = "trpc.moox.trade.ExchangeAccountService"
-	LogicalAccountServiceName        = "trpc.moox.trade.LogicalAccountService"
-	TradeExecutionServiceName        = "trpc.moox.trade.TradeExecutionService"
-	TradeDNSResolverServiceName      = "trpc.moox.trade.TradeDNSResolverService"
-	TradeDNSResolverTRPCName         = TradeDNSResolverServiceName + ".trpc"
+	TradeConsoleServiceName     = "trpc.moox.trade.TradeConsoleService"
+	TradeDNSResolverServiceName = "trpc.moox.trade.TradeDNSResolverService"
+	TradeDNSResolverTRPCName    = TradeDNSResolverServiceName + ".trpc"
 )
 
 func RegisterAll(
@@ -20,25 +18,23 @@ func RegisterAll(
 	logicalAccounts *LogicalAccountServer,
 	execution *ExecutionServer,
 	dnsResolver *DNSResolverServer,
+	options ...ConsoleOptions,
 ) {
-	accountService := s.Service(ExchangeAccountServiceName)
-	if accountService == nil {
-		// Keep the current generated proto/config usable until the destructive
-		// console proto cutover is generated and deployed together.
-		accountService = s.Service(LegacyExchangeAccountServiceName)
+	consoleService := s.Service(TradeConsoleServiceName)
+	if consoleService == nil {
+		panic("TradeConsoleService is not configured")
 	}
-	if accountService == nil {
-		panic("TradingAccountService is not configured")
+	console := &ConsoleServer{
+		AccountServer: accounts, LogicalAccountServer: logicalAccounts,
+		ExecutionServer: execution, Store: accounts.Store,
 	}
-	tradepb.RegisterExchangeAccountServiceService(accountService, accounts)
-	tradepb.RegisterLogicalAccountServiceService(
-		s.Service(LogicalAccountServiceName),
-		logicalAccounts,
-	)
-	tradepb.RegisterTradeExecutionServiceService(
-		s.Service(TradeExecutionServiceName),
-		execution,
-	)
+	if len(options) > 0 {
+		console.Paper = options[0].Paper
+		console.LiveTradingEnabled = options[0].LiveTradingEnabled
+		console.MatcherReady = options[0].MatcherReady
+		console.Holdings = options[0].Holdings
+	}
+	tradepb.RegisterTradeConsoleServiceService(consoleService, console)
 	dnsRegistered := false
 	for _, name := range []string{TradeDNSResolverTRPCName, TradeDNSResolverServiceName} {
 		if service := s.Service(name); service != nil {
@@ -49,4 +45,11 @@ func RegisterAll(
 	if !dnsRegistered {
 		panic("TradeDNSResolverService is not configured")
 	}
+}
+
+type ConsoleOptions struct {
+	Paper              *papersimulation.Service
+	LiveTradingEnabled bool
+	MatcherReady       func() bool
+	Holdings           HoldingQueryService
 }

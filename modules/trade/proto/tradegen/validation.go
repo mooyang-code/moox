@@ -35,6 +35,9 @@ func (r *CreateAccountReq) Validate() error {
 			r.Environment != AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION) {
 		return fmt.Errorf("execution_mode and environment disagree")
 	}
+	if r.ExecutionMode == ExecutionMode_EXECUTION_MODE_PAPER {
+		return fmt.Errorf("paper accounts must be created with CreatePaperSimulation")
+	}
 	if r.ExecutionMode == ExecutionMode_EXECUTION_MODE_LIVE &&
 		strings.TrimSpace(r.CredentialSecretId) == "" {
 		return fmt.Errorf("credential_secret_id is required for live execution")
@@ -96,6 +99,66 @@ func (r *SyncAccountReq) Validate() error {
 		return fmt.Errorf("exchange_account_id is required")
 	}
 	return nil
+}
+
+func (r *CreatePaperSimulationReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.AccountName) == "" || strings.TrimSpace(r.LogicalAccountName) == "" ||
+		!validExchange(r.Exchange) || !validMarketType(r.MarketType) || strings.TrimSpace(r.SettlementAsset) == "" {
+		return fmt.Errorf("account_name, logical_account_name, exchange, market_type and settlement_asset are required")
+	}
+	if !isCanonicalPositiveDecimal(r.InitialBalance) || !canonicalUnsignedDecimalPattern.MatchString(r.MakerFeeRate) ||
+		!canonicalUnsignedDecimalPattern.MatchString(r.TakerFeeRate) || !canonicalUnsignedDecimalPattern.MatchString(r.SlippageBps) {
+		return fmt.Errorf("paper configuration decimals are invalid")
+	}
+	margin := strings.ToUpper(strings.TrimSpace(r.MarginMode))
+	if r.MarketType == MarketType_MARKET_TYPE_SPOT && margin != "" {
+		return fmt.Errorf("SPOT paper simulation cannot configure margin_mode")
+	}
+	if r.MarketType == MarketType_MARKET_TYPE_SWAP && margin != "" && margin != "CROSS" {
+		return fmt.Errorf("SWAP paper simulation requires CROSS margin_mode")
+	}
+	if r.MarketType == MarketType_MARKET_TYPE_SWAP && !strings.EqualFold(strings.TrimSpace(r.SettlementAsset), "USDT") {
+		return fmt.Errorf("SWAP paper simulation requires USDT settlement_asset")
+	}
+	return nil
+}
+
+func (r *ClosePaperSimulationReq) Validate() error {
+	return requireID(r != nil, value(func() string {
+		if r == nil {
+			return ""
+		}
+		return r.ExchangeAccountId
+	}), "exchange_account_id")
+}
+
+func (r *GetExecutionCapabilitiesReq) Validate() error {
+	return requireID(r != nil, value(func() string {
+		if r == nil {
+			return ""
+		}
+		return r.ExchangeAccountId
+	}), "exchange_account_id")
+}
+
+func (r *QueryEquityCurveReq) Validate() error {
+	if r == nil || (strings.TrimSpace(r.ExchangeAccountId) == "" && strings.TrimSpace(r.LogicalAccountId) == "") ||
+		(strings.TrimSpace(r.ExchangeAccountId) != "" && strings.TrimSpace(r.LogicalAccountId) != "") {
+		return fmt.Errorf("exactly one equity curve target is required")
+	}
+	if r.StartTime < 0 || r.EndTime < 0 || (r.EndTime > 0 && r.StartTime > r.EndTime) {
+		return fmt.Errorf("invalid equity curve time range")
+	}
+	return nil
+}
+
+func (r *ListHoldingsReq) Validate() error {
+	return requireID(r != nil, value(func() string {
+		if r == nil {
+			return ""
+		}
+		return r.ExchangeAccountId
+	}), "exchange_account_id")
 }
 
 // Validate enforces the transport-level bounds for the batch DNS resolver

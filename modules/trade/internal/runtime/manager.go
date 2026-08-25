@@ -114,11 +114,18 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 	for symbol, value := range account.LeverageSettings {
 		leverage[symbol] = value.String()
 	}
+	environment := string(account.Environment)
+	if account.ExecutionMode == exchange.ExecutionModePaper {
+		// Paper has no persisted live environment. Its market-data environment
+		// is derived at bind time, so do not compare the domain sentinel PAPER
+		// with the empty live-environment column.
+		environment = ""
+	}
 	current := store.TradingAccountRecord{
 		SpaceID: account.SpaceID, TradingAccountID: account.ID,
 		Exchange: string(account.Exchange), MarketType: string(account.MarketType),
 		ExecutionMode:      string(account.ExecutionMode),
-		Environment:        string(account.Environment),
+		Environment:        environment,
 		CredentialSecretID: account.CredentialSecretID,
 		SettlementAsset:    account.SettlementAsset, MarginMode: string(account.MarginMode),
 		Status:           string(account.Status),
@@ -284,9 +291,21 @@ func sameSessionConfig(
 		left.SettlementAsset == right.SettlementAsset &&
 		left.MarginMode == right.MarginMode &&
 		left.Status == right.Status &&
-		reflect.DeepEqual(left.SyncSymbols, right.SyncSymbols) &&
+		equalStringSlices(left.SyncSymbols, right.SyncSymbols) &&
 		reflect.DeepEqual(left.LeverageSettings, right.LeverageSettings) &&
 		reflect.DeepEqual(left.PaperConfig, right.PaperConfig)
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) runSession(ctx context.Context, session ManagedSession) {

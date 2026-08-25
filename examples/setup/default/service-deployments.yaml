@@ -364,41 +364,17 @@ services:
         - ListActiveServiceDeployments
         - ListServiceDeployments
       gateway_callers: [admin-gateway, collector, monitor, moox-cli]
-  - name: trade_exchange_account
+  - name: trade_console
     kind: trade
     deployment_mode: endpoint
     protocol: http
     host: 127.0.0.1
     port: 11200
-    gateway_path: trpc.moox.trade.ExchangeAccountService
+    gateway_path: trpc.moox.trade.TradeConsoleService
     gateway_enabled: false
     scope: internal
     status: active
-    description: Exchange 账户管理与同步服务
-    extra_config: {}
-  - name: trade_execution
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11201
-    gateway_path: trpc.moox.trade.TradeExecutionService
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 订单、成交、持仓与目标执行服务
-    extra_config: {}
-  - name: trade_logical_account
-    kind: trade
-    deployment_mode: endpoint
-    protocol: http
-    host: 127.0.0.1
-    port: 11202
-    gateway_path: trpc.moox.trade.LogicalAccountService
-    gateway_enabled: false
-    scope: internal
-    status: active
-    description: 逻辑账户、执行归属与人工干预服务
+    description: 统一交易控制台与执行服务
     extra_config: {}
   - name: trade_dns_resolver
     kind: trade

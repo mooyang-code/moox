@@ -37,11 +37,9 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 	}
 	sort.Strings(names)
 	want := []string{
-		"trpc.moox.trade.ExchangeAccountService",
 		"trpc.moox.trade.Health",
-		"trpc.moox.trade.LogicalAccountService",
+		"trpc.moox.trade.TradeConsoleService",
 		"trpc.moox.trade.TradeDNSResolverService.trpc",
-		"trpc.moox.trade.TradeExecutionService",
 		"trpc.moox.trade.metrics.timer",
 	}
 	if len(names) != len(want) {

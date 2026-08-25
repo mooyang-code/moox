@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"gorm.io/gorm"
 )
 
 type LeverageSettings map[string]string
@@ -403,7 +404,14 @@ func (s *Store) GetTradingAccount(
 	if err != nil {
 		return TradingAccountRecord{}, err
 	}
-	return decodeAccountRow(row)
+	record, err := decodeAccountRow(row)
+	if err != nil {
+		return TradingAccountRecord{}, err
+	}
+	if err := loadPaperConfig(s.db, ctx, &record); err != nil {
+		return TradingAccountRecord{}, err
+	}
+	return record, nil
 }
 
 func (tx *Tx) GetTradingAccount(
@@ -417,7 +425,14 @@ func (tx *Tx) GetTradingAccount(
 	if err != nil {
 		return TradingAccountRecord{}, err
 	}
-	return decodeAccountRow(row)
+	record, err := decodeAccountRow(row)
+	if err != nil {
+		return TradingAccountRecord{}, err
+	}
+	if err := loadPaperConfig(tx.db, context.Background(), &record); err != nil {
+		return TradingAccountRecord{}, err
+	}
+	return record, nil
 }
 
 func (s *Store) ListTradingAccounts(
@@ -437,6 +452,9 @@ func (s *Store) ListTradingAccounts(
 		if err != nil {
 			return nil, err
 		}
+		if err := loadPaperConfig(s.db, ctx, &record); err != nil {
+			return nil, err
+		}
 		records = append(records, record)
 	}
 	return records, nil
@@ -451,6 +469,9 @@ func (s *Store) ListAllTradingAccounts(ctx context.Context) ([]TradingAccountRec
 	for _, row := range rows {
 		record, err := decodeAccountRow(row)
 		if err != nil {
+			return nil, err
+		}
+		if err := loadPaperConfig(s.db, ctx, &record); err != nil {
 			return nil, err
 		}
 		result = append(result, record)
@@ -478,7 +499,14 @@ func (s *Store) GetTradingAccountByID(
 			ErrInvalidRecord,
 		)
 	}
-	return decodeAccountRow(rows[0])
+	record, err := decodeAccountRow(rows[0])
+	if err != nil {
+		return TradingAccountRecord{}, err
+	}
+	if err := loadPaperConfig(s.db, ctx, &record); err != nil {
+		return TradingAccountRecord{}, err
+	}
+	return record, nil
 }
 
 func (s *Store) ListEnabledTradingAccounts(
@@ -495,6 +523,9 @@ func (s *Store) ListEnabledTradingAccounts(
 	for _, row := range rows {
 		record, err := decodeAccountRow(row)
 		if err != nil {
+			return nil, err
+		}
+		if err := loadPaperConfig(s.db, ctx, &record); err != nil {
 			return nil, err
 		}
 		records = append(records, record)
@@ -545,6 +576,31 @@ func decodeAccountRow(row tradingAccountRow) (TradingAccountRecord, error) {
 		LastReadyAt: row.LastReadyAt, LastError: row.LastError,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
+}
+
+func loadPaperConfig(db *gorm.DB, ctx context.Context, record *TradingAccountRecord) error {
+	if record == nil || record.ExecutionMode != "PAPER" {
+		return nil
+	}
+	var row struct {
+		SpaceID          string `gorm:"column:c_space_id"`
+		TradingAccountID string `gorm:"column:c_trading_account_id"`
+		InitialBalance   string `gorm:"column:c_initial_balance"`
+		MakerFeeRate     string `gorm:"column:c_maker_fee_rate"`
+		TakerFeeRate     string `gorm:"column:c_taker_fee_rate"`
+		SlippageBPS      string `gorm:"column:c_slippage_bps"`
+	}
+	if err := db.WithContext(ctx).Table("t_paper_account_configs").
+		Where("c_space_id = ? AND c_trading_account_id = ?", record.SpaceID, record.TradingAccountID).
+		Take(&row).Error; err != nil {
+		return err
+	}
+	record.PaperConfig = &PaperAccountConfigRecord{
+		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
+		InitialBalance: row.InitialBalance, MakerFeeRate: row.MakerFeeRate,
+		TakerFeeRate: row.TakerFeeRate, SlippageBPS: row.SlippageBPS,
+	}
+	return nil
 }
 
 func encodeSyncSymbols(symbols []string) (string, error) {

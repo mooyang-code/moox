@@ -24,9 +24,7 @@ Trade 是 MooX 的交易执行与交易事实源，负责 Exchange 账户、逻�
 
 | 服务 | 默认端口 | 职责 |
 | --- | --- | --- |
-| `ExchangeAccountService` | `11200` | 账户配置、同步和杠杆 |
-| `TradeExecutionService` | `11201` | 人工订单、撤单、查询和目标状态 |
-| `LogicalAccountService` | `11202` | 逻辑账户、成员、归属、暂停、恢复和清仓 |
+| `TradeConsoleService` | `11200` | 账户、模拟盘、逻辑账户、人工订单、查询和执行能力 |
 | Health | `11210` | `/healthz`、`/readyz`、`/metrics` |
 
 ### DNS Resolver

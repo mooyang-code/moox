@@ -11,12 +11,8 @@ import * as trade from "./index";
 describe("Trade public API", () => {
   beforeEach(() => callTrade.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "ok" } }));
 
-  it("registers the three real Trade services", () => {
-    expect(trade.tradeServiceMap).toEqual({
-      exchangeAccount: "trade_exchange_account",
-      execution: "trade_execution",
-      logicalAccount: "trade_logical_account"
-    });
+  it("uses one Trade console service", () => {
+    expect(trade.tradeServiceMap).toEqual({ console: "trade_console" });
   });
 
   it("constructs Logical Account lifecycle requests", async () => {
@@ -24,15 +20,15 @@ describe("Trade public API", () => {
     await trade.pauseLogicalAccount("logical-1", "manual intervention");
     await trade.resumeLogicalAccount("logical-1");
     await trade.flattenLogicalAccount("action-1", "logical-1", "risk cleanup");
-    expect(callTrade).toHaveBeenNthCalledWith(1, "logicalAccount", "CreateLogicalAccount", expect.any(Object));
-    expect(callTrade).toHaveBeenNthCalledWith(2, "logicalAccount", "PauseLogicalAccount", {
+    expect(callTrade).toHaveBeenNthCalledWith(1, "console", "CreateLogicalAccount", expect.any(Object));
+    expect(callTrade).toHaveBeenNthCalledWith(2, "console", "PauseLogicalAccount", {
       logical_account_id: "logical-1",
       reason: "manual intervention"
     });
-    expect(callTrade).toHaveBeenNthCalledWith(3, "logicalAccount", "ResumeLogicalAccount", {
+    expect(callTrade).toHaveBeenNthCalledWith(3, "console", "ResumeLogicalAccount", {
       logical_account_id: "logical-1"
     });
-    expect(callTrade).toHaveBeenNthCalledWith(4, "logicalAccount", "FlattenLogicalAccount", {
+    expect(callTrade).toHaveBeenNthCalledWith(4, "console", "FlattenLogicalAccount", {
       action_id: "action-1",
       logical_account_id: "logical-1",
       reason: "risk cleanup"
@@ -72,7 +68,7 @@ describe("Trade public API", () => {
 
   it("reads current quantity targets and parses per-account flatten progress", async () => {
     await trade.getLogicalAccountTarget("logical-1");
-    expect(callTrade).toHaveBeenCalledWith("execution", "GetLogicalAccountTarget", {
+    expect(callTrade).toHaveBeenCalledWith("console", "GetLogicalAccountTarget", {
       logical_account_id: "logical-1"
     });
     expect(

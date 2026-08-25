@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -38,12 +39,33 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 	if s == nil || s.Store == nil {
 		return Result{}, fmt.Errorf("paper simulation: store is not configured")
 	}
+	command.SettlementAsset = strings.ToUpper(strings.TrimSpace(command.SettlementAsset))
+	command.MarginMode = exchange.MarginMode(strings.ToUpper(strings.TrimSpace(string(command.MarginMode))))
 	if command.SpaceID == "" || command.AccountName == "" || command.LogicalAccountName == "" ||
 		!command.Exchange.Valid() || !command.MarketType.Valid() || command.SettlementAsset == "" {
 		return Result{}, fmt.Errorf("paper simulation: incomplete create command")
 	}
+	if command.MarketType == exchange.MarketTypeSpot && command.MarginMode != exchange.MarginModeUnspecified {
+		return Result{}, fmt.Errorf("paper simulation: SPOT cannot configure margin mode")
+	}
+	if command.MarketType == exchange.MarketTypeSwap && command.SettlementAsset != "USDT" {
+		return Result{}, fmt.Errorf("paper simulation: SWAP requires USDT settlement")
+	}
+	if command.MarketType == exchange.MarketTypeSwap && command.MarginMode != exchange.MarginModeUnspecified && command.MarginMode != exchange.MarginModeCross {
+		return Result{}, fmt.Errorf("paper simulation: SWAP requires CROSS margin mode")
+	}
 	if command.InitialBalance.Cmp(shared.Zero()) <= 0 {
 		return Result{}, fmt.Errorf("paper simulation: initial balance must be positive")
+	}
+	if command.MarketType == exchange.MarketTypeSwap && command.MarginMode == exchange.MarginModeUnspecified {
+		command.MarginMode = exchange.MarginModeCross
+	}
+	leverageSettings := store.LeverageSettings{}
+	if command.MarketType == exchange.MarketTypeSwap {
+		// The simulation form has no instrument-specific leverage yet. Persist a
+		// conservative wildcard so reservation, matching and Fill reduction use
+		// the same 1x value after restart.
+		leverageSettings["*"] = "1"
 	}
 	accountID, logicalID := stableIDs(command.SpaceID, command.AccountName, command.LogicalAccountName)
 	account := store.TradingAccountRecord{
@@ -51,6 +73,7 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 		Exchange: string(command.Exchange), MarketType: string(command.MarketType),
 		ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: command.SettlementAsset,
 		MarginMode: string(command.MarginMode), Status: "ENABLED", Ready: false,
+		LeverageSettings: leverageSettings,
 		Snapshot: store.TradingAccountSnapshot{
 			Balances: []store.AssetBalance{{Asset: command.SettlementAsset, Available: command.InitialBalance.String(), Total: command.InitialBalance.String()}},
 			Equity:   command.InitialBalance.String(), AvailableFunds: command.InitialBalance.String(),

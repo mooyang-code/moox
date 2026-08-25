@@ -7,9 +7,9 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func TestTradeProtoExposesLogicalAccountService(t *testing.T) {
+func TestTradeProtoExposesLogicalAccountMethodsOnConsole(t *testing.T) {
 	services := File_trade_service_proto.Services()
-	logical := services.ByName("LogicalAccountService")
+	logical := services.ByName("TradeConsoleService")
 	require.NotNil(t, logical)
 	for _, method := range []protoreflect.Name{
 		"CreateLogicalAccount",
@@ -29,13 +29,14 @@ func TestTradeProtoExposesLogicalAccountService(t *testing.T) {
 }
 
 func TestPhysicalAccountRPCDoesNotExposePause(t *testing.T) {
-	service := File_trade_service_proto.Services().ByName("ExchangeAccountService")
+	service := File_trade_service_proto.Services().ByName("TradeConsoleService")
 	require.NotNil(t, service)
+	require.NotNil(t, service.Methods().ByName("CreateAccount"))
 	require.Nil(t, service.Methods().ByName("PauseAccount"))
 }
 
 func TestTradeExecutionRPCUsesManualOrderAndLogicalTarget(t *testing.T) {
-	service := File_trade_service_proto.Services().ByName("TradeExecutionService")
+	service := File_trade_service_proto.Services().ByName("TradeConsoleService")
 	require.NotNil(t, service)
 	require.NotNil(t, service.Methods().ByName("PlaceManualOrder"))
 	require.NotNil(t, service.Methods().ByName("GetOperatorAction"))

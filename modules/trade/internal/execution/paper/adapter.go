@@ -280,7 +280,7 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 	}
 	result := make([]exchange.Order, 0, len(rows))
 	for _, row := range rows {
-		if row.State == "FILLED" || row.State == "CANCELED" || row.State == "PARTIALLY_CANCELED" || row.State == "REJECTED" || row.State == "EXPIRED" {
+		if row.State == "FILLED" || row.State == "CANCELED" || row.State == "PARTIALLY_CANCELED" || row.State == "REJECTED" || row.State == "EXPIRED" || row.State == "CANCELING" || row.State == "CANCEL_UNKNOWN" {
 			continue
 		}
 		result = append(result, orderFromRecord(row))
@@ -312,7 +312,14 @@ func (a *Adapter) GetOrder(ctx context.Context, symbol shared.ExchangeSymbol, cl
 	if symbol != "" && row.ExchangeSymbol != symbol.String() {
 		return exchange.Order{}, fmt.Errorf("paper: symbol mismatch")
 	}
-	return orderFromRecord(row), nil
+	result := orderFromRecord(row)
+	// Paper cancellation is local and deterministic. Returning the terminal
+	// exchange view lets the normal account sync path run ConfirmCancel and
+	// release the persisted reservation in the same reducer used by Live.
+	if row.State == "CANCELING" || row.State == "CANCEL_UNKNOWN" {
+		result.Status = exchange.OrderStatusCanceled
+	}
+	return result, nil
 }
 func (a *Adapter) PlaceOrder(_ context.Context, req exchange.OrderRequest) (exchange.Order, error) {
 	if a.Wake != nil {

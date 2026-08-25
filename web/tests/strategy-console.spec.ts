@@ -129,7 +129,7 @@ test("paused Logical Account exposes pending FULL target and per-account flatten
     readiness_reasons: [],
     members: [{ exchange_account_id: "binance-paper", enabled: true, priority: 0 }]
   };
-  await page.route("**/api/admin/trade_logical_account/ListLogicalAccounts", route =>
+  await page.route("**/api/admin/trade_console/ListLogicalAccounts", route =>
     route.fulfill({
       json: {
         ret_info: { code: 0 },
@@ -138,10 +138,10 @@ test("paused Logical Account exposes pending FULL target and per-account flatten
       }
     })
   );
-  await page.route("**/api/admin/trade_logical_account/GetLogicalAccount", route =>
+  await page.route("**/api/admin/trade_console/GetLogicalAccount", route =>
     route.fulfill({ json: { ret_info: { code: 0 }, logical_account: logicalAccount } })
   );
-  await page.route("**/api/admin/trade_execution/GetLogicalAccountTarget", route =>
+  await page.route("**/api/admin/trade_console/GetLogicalAccountTarget", route =>
     route.fulfill({
       json: {
         ret_info: { code: 0 },
@@ -156,7 +156,7 @@ test("paused Logical Account exposes pending FULL target and per-account flatten
       }
     })
   );
-  await page.route("**/api/admin/trade_logical_account/FlattenLogicalAccount", route =>
+  await page.route("**/api/admin/trade_console/FlattenLogicalAccount", route =>
     route.fulfill({
       json: {
         ret_info: { code: 0 },

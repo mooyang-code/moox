@@ -309,3 +309,46 @@ export interface LogicalAccountResponse {
   ret_info: RetInfo;
   logical_account: LogicalAccount;
 }
+
+export interface CreatePaperSimulationReq {
+  account_name: string;
+  logical_account_name: string;
+  exchange: Exchange;
+  market_type: MarketType;
+  settlement_asset: string;
+  margin_mode?: string;
+  initial_balance: string;
+  maker_fee_rate: string;
+  taker_fee_rate: string;
+  slippage_bps: string;
+}
+
+export interface EquityPoint {
+  bucket_time: string;
+  equity: string;
+  available_funds: string;
+  used_margin: string;
+  unrealized_pnl?: string;
+  source_time: string;
+}
+
+export interface Holding {
+  exchange_account_id: string;
+  instrument_id: string;
+  exchange_symbol: string;
+  asset: string;
+  quantity: string;
+  average_cost: string;
+  mark_price: string;
+  market_value: string;
+  unrealized_pnl?: string;
+  source_time: string;
+}
+
+export interface ExecutionCapabilities {
+  can_place_order: boolean;
+  unavailable_reason: string;
+  order_types: OrderType[];
+  fill_policies: FillPolicy[];
+  can_close_paper_simulation: boolean;
+}

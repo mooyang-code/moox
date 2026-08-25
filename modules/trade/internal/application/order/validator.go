@@ -170,6 +170,15 @@ func (v Validator) Validate(
 		if !found && instrument.Symbol != "" {
 			leverage, found = account.LeverageSettings[instrument.Symbol]
 		}
+		if !found && account.ExecutionMode == exchange.ExecutionModePaper {
+			leverage, found = account.LeverageSettings["*"]
+		}
+		// Paper simulations intentionally keep the lifecycle small: when no
+		// per-symbol leverage was configured, use conservative 1x CROSS
+		// margin instead of creating an account that can never place an order.
+		if !found && account.ExecutionMode == exchange.ExecutionModePaper {
+			leverage, found = shared.MustDecimal("1"), true
+		}
 		if !found || leverage.Cmp(shared.Zero()) <= 0 {
 			return Validation{}, fmt.Errorf("%w: missing symbol leverage", ErrLeverageLimit)
 		}

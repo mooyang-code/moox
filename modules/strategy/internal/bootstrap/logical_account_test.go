@@ -16,7 +16,7 @@ import (
 )
 
 type logicalAccountServiceStub struct {
-	tradepb.UnimplementedLogicalAccountService
+	tradepb.UnimplementedTradeConsoleService
 
 	mu      sync.Mutex
 	owner   string
@@ -138,10 +138,10 @@ func startLogicalAccountService(
 	tradeServer := server.New(
 		server.WithNetwork("tcp"),
 		server.WithProtocol("http"),
-		server.WithServiceName("trpc.moox.trade.LogicalAccountService"),
+		server.WithServiceName("trpc.moox.trade.TradeConsoleService"),
 		server.WithListener(listener),
 	)
-	tradepb.RegisterLogicalAccountServiceService(tradeServer, service)
+	tradepb.RegisterTradeConsoleServiceService(tradeServer, service)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- tradeServer.Serve() }()
 	t.Cleanup(func() {
@@ -156,7 +156,7 @@ func startLogicalAccountService(
 }
 
 type logicalAccountClientProxyStub struct {
-	tradepb.LogicalAccountServiceClientProxy
+	tradepb.TradeConsoleServiceClientProxy
 
 	getResponse     *tradepb.GetLogicalAccountRsp
 	getErr          error

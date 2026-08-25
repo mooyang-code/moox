@@ -366,6 +366,9 @@ func projectSwapPosition(
 		if leverage == "" {
 			leverage = account.LeverageSettings[record.Symbol]
 		}
+		if leverage == "" && account.ExecutionMode == "PAPER" {
+			leverage = account.LeverageSettings["*"]
+		}
 		if leverage == "" {
 			return errors.New("trade: missing leverage for estimated Position")
 		}
