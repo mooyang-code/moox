@@ -64,11 +64,11 @@ OrderService
   - PENDING 订单先落库
         |
         v
-ExecutionVenue
+ExecutionAdapter
   +--------------------+----------------------+
   |                                           |
   v                                           v
-LiveVenue                                 PaperVenue
+LiveAdapter                               PaperAdapter
 Binance / OKX REST + 私有流               MarketDataSource + PaperMatcher
   |                                           |
   +--------------------+----------------------+
@@ -83,7 +83,7 @@ AccountSync + FillReducer
 Order / Fill / Position / EquityPoint
 ```
 
-应用层不得根据 `execution_mode` 分叉订单或持仓流程。模式判断只允许出现在 `VenueFactory` 装配阶段。
+应用层不得根据 `execution_mode` 分叉订单或持仓流程。模式判断只允许出现在 `ExecutionFactory` 装配阶段。
 
 ## 6. 核心端口
 
@@ -101,10 +101,10 @@ type MarketDataSource interface {
 
 Paper V1 固定使用所选 Exchange 的生产公共行情，不需要交易凭据。
 
-### 6.2 ExecutionVenue
+### 6.2 ExecutionAdapter
 
 ```go
-type ExecutionVenue interface {
+type ExecutionAdapter interface {
     GetAccountSnapshot(context.Context) (AccountSnapshot, error)
     ListPositionSnapshots(context.Context) ([]Position, error)
     ListOpenOrders(context.Context) ([]Order, error)
@@ -118,28 +118,30 @@ type ExecutionVenue interface {
 }
 ```
 
-- `LiveVenue` 封装 Binance/OKX 的真实执行接口。
-- `PaperVenue` 使用 SQLite 中的共享订单事实和进程内 `PaperMatcher`。
+- `LiveAdapter` 封装 Binance/OKX 的真实执行接口。
+- `PaperAdapter` 使用 SQLite 中的共享订单事实和进程内 `PaperMatcher`。
 - 两者通过相同 `EventHandler` 发送 Order/Fill 回报。
 
 ## 7. 代码组织
 
 ```text
-modules/trade/internal/venue/
-  venue.go
+modules/trade/internal/execution/
+  adapter.go
   marketdata.go
   factory.go
-  live/
-    binance/
-    okx/
   paper/
-    venue.go
+    adapter.go
     matcher.go
     portfolio.go
+
+modules/trade/internal/exchange/
+  binance/  # 保留现有真实 Exchange 实现
+  okx/      # 保留现有真实 Exchange 实现
 ```
 
 现有 `application/order`、`application/target`、`application/operator`、
 `application/accountsync` 和 `domain/order` 保持共用，不复制 Paper 版本。
+Binance/OKX 文件不做无收益搬迁；它们直接实现 `execution.ExecutionAdapter`。
 
 ## 8. 账户模型
 
@@ -220,7 +222,7 @@ updated_at
 使用最新账户快照覆盖该分钟数据。
 
 LogicalAccount 曲线在查询时按分钟聚合成员账户；成员已有相同 `settlement_asset` 约束，
-不额外保存组合曲线。
+不额外保存组合曲线。只有所有启用成员都存在快照的分钟才返回聚合点，避免把缺失成员误算为 0。
 
 ## 10. Paper 撮合
 
@@ -241,12 +243,12 @@ LogicalAccount 曲线在查询时按分钟聚合成员账户；成员已有相�
 - SELL 的可执行价不低于 limit，立即全量成交。
 - 立即成交属于 TAKER，使用 `taker_fee_rate`。
 - 成交价使用可执行报价，但不得劣于 limit。
-
-不能立即成交时，订单进入 OPEN。
+- GTC 未立即成交时进入 OPEN。
+- IOC/FOK 因不模拟部分成交而采用相同语义：可立即全量成交则成交，否则立即取消。
 
 `PaperMatcher`：
 
-- 只在存在 OPEN Paper 订单时运行。
+- 只扫描 OPEN GTC Paper 订单。
 - 默认每秒扫描一次。
 - 按 Exchange + symbol 合并报价请求。
 - BUY 在可执行报价不高于 limit 时成交。
@@ -273,10 +275,10 @@ Paper 下单校验必须使用对应 maker/taker 费率预留资金，不能继�
 
 ## 11. 事件与恢复
 
-PaperVenue 内部维护有界事件通道，实现与真实私有流相同的 `SubscribePrivate`。
+PaperAdapter 内部维护有界事件通道，实现与真实私有流相同的 `SubscribePrivate`。
 
 ```text
-PaperVenue Place/Cancel/Match
+PaperAdapter Place/Cancel/Match
   -> OrderEvent / FillEvent
   -> TradingSession
   -> AccountSync / FillReducer
@@ -357,14 +359,15 @@ CancelOrder
 - Paper Place/Cancel 必须确定性返回，不产生 UNKNOWN。
 - Paper 报价过期时：
   - MARKET 拒绝下单。
-  - LIMIT 保持 OPEN，等待新鲜报价。
-- Venue 错误统一转换为现有 Trade 领域错误，不向应用层暴露 Binance/OKX/Paper 私有错误。
+  - GTC LIMIT 保持 OPEN，等待新鲜报价。
+  - IOC/FOK LIMIT 立即取消。
+- ExecutionAdapter 错误统一转换为现有 Trade 领域错误，不向应用层暴露 Binance/OKX/Paper 私有错误。
 
 ## 16. 测试与验收
 
-### 16.1 共用 Venue 契约
+### 16.1 共用 ExecutionAdapter 契约
 
-Live fake venue 与 PaperVenue 必须通过同一套测试：
+Live fake adapter 与 PaperAdapter 必须通过同一套测试：
 
 - Place 幂等
 - Cancel 幂等
@@ -389,8 +392,8 @@ Live fake venue 与 PaperVenue 必须通过同一套测试：
 
 使用同一个 Strategy FULL 目标分别运行：
 
-1. PaperVenue
-2. mock LiveVenue
+1. PaperAdapter
+2. mock LiveAdapter
 
 验收两条链路生成相同结构的 Order、Fill、Position 和 EquityPoint，并能由相同前端 API 查询。
 
@@ -399,7 +402,7 @@ Live fake venue 与 PaperVenue 必须通过同一套测试：
 - 只有一个 Trade 二进制。
 - 只有一个 Trade SQLite。
 - 只有一套应用服务和事实表。
-- 只有 VenueFactory 知道 Live/Paper 差异。
+- 只有 ExecutionFactory 知道 Live/Paper 差异。
 - PaperMatcher 只有一个进程内 worker。
 - 资金曲线只有一个 EquitySampler。
 - 模拟盘不实现盘口、部分成交、撮合优先级或独立账本。
