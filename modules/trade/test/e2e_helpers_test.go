@@ -48,6 +48,7 @@ type fakeExchange struct {
 	openOrdersErr  error
 	positionsErr   error
 	accountErr     error
+	quoteErr       error
 	fillsErr       error
 	subscribeErr   error
 	placeCalls     int
@@ -117,6 +118,9 @@ func (f *fakeExchange) GetReferencePrice(context.Context, string) (exchange.Refe
 func (f *fakeExchange) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.quoteErr != nil {
+		return execution.MarketQuote{}, f.quoteErr
+	}
 	return execution.MarketQuote{Bid: f.reference.Price, Ask: f.reference.Price, Last: f.reference.Price, SourceTime: f.reference.UpdatedAt}, nil
 }
 func (f *fakeExchange) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
@@ -558,6 +562,10 @@ func (s syncBridge) SyncAccount(ctx context.Context, accountID string) error {
 	return err
 }
 
+func (s syncBridge) ConfirmCancel(ctx context.Context, spaceID, orderID string) error {
+	return s.service.ConfirmCancel(ctx, spaceID, orderID)
+}
+
 type fixture struct {
 	path    string
 	store   *store.Store
@@ -600,7 +608,7 @@ func newPaperFixture(t *testing.T, market exchange.MarketType) *fixture {
 	seedFixture(t, tradeStore, market, fake.instrument)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), testAccount)
 	require.NoError(t, err)
-	base := &executionpaper.Adapter{Account: account, Store: tradeStore, MarketData: fake}
+	base := &executionpaper.Adapter{Account: account, Store: tradeStore, MarketData: fake, Now: func() time.Time { return testNow }}
 	_, err = base.LoadInstruments(context.Background())
 	require.NoError(t, err)
 	adapter := &synchronousPaperAdapter{Adapter: base, Store: tradeStore, Fake: fake}

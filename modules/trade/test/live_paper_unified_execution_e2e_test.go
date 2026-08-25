@@ -80,7 +80,7 @@ func TestPaperMatcherProductionAdapterFillAndRestartE2E(t *testing.T) {
 	account, err := s.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	market := deterministicMarketData{instrument: fake.instrument}
-	adapter := &paperexec.Adapter{Account: account, Store: s, MarketData: market}
+	adapter := &paperexec.Adapter{Account: account, Store: s, MarketData: market, Now: func() time.Time { return testNow }}
 	_, err = adapter.LoadInstruments(ctx)
 	require.NoError(t, err)
 

@@ -46,7 +46,7 @@ server:
 
     - name: trpc.moox.trade.equity.timer
       port: 11211
-      network: "0 * * * * *?startAtOnce=1"
+      network: "0 * * * * *"
       protocol: timer
       timeout: 10000
 

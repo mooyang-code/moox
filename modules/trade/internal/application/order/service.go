@@ -33,6 +33,10 @@ type AccountSyncer interface {
 	SyncAccount(context.Context, string) error
 }
 
+type CancelConfirmer interface {
+	ConfirmCancel(context.Context, string, string) error
+}
+
 type Service struct {
 	Store               *store.Store
 	Validator           Validator
@@ -417,8 +421,24 @@ func (s *Service) Cancel(
 		return orderdomain.Order{}, err
 	}
 
-	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.Symbol), record.ClientOrderID)
+	response, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.Symbol), record.ClientOrderID)
 	if callErr == nil {
+		account, accountErr := s.Store.GetTradingAccountByID(ctx, record.TradingAccountID)
+		if accountErr != nil {
+			return orderdomain.Order{}, accountErr
+		}
+		if account.ExecutionMode == string(exchange.ExecutionModePaper) &&
+			response.Status == exchange.OrderStatusCanceled {
+			if confirmer, ok := s.Syncer.(CancelConfirmer); ok {
+				if confirmErr := confirmer.ConfirmCancel(ctx, record.SpaceID, record.OrderID); confirmErr != nil {
+					return orderdomain.Order{}, confirmErr
+				}
+				if syncErr := s.Syncer.SyncAccount(ctx, record.TradingAccountID); syncErr != nil {
+					return orderdomain.Order{}, syncErr
+				}
+				return s.Get(ctx, record.SpaceID, record.OrderID)
+			}
+		}
 		err = s.Syncer.SyncAccount(ctx, record.TradingAccountID)
 		return aggregate, err
 	}

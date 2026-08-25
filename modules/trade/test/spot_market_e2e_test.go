@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
@@ -130,7 +131,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	recoveredAccount, err := restarted.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	recoveredPaper := &executionpaper.Adapter{
-		Account: recoveredAccount, Store: restarted, MarketData: base,
+		Account: recoveredAccount, Store: restarted, MarketData: base, Now: func() time.Time { return testNow },
 	}
 	_, err = recoveredPaper.LoadInstruments(ctx)
 	require.NoError(t, err)

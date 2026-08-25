@@ -226,6 +226,41 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 	require.Contains(t, stored.LastError, "private stream disconnected")
 }
 
+func TestSessionHandlerActivationDrainsEventsBeforeReadyHandoff(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	applied := make(chan struct{}, 1)
+	handler := newSessionHandler(func(context.Context, privateEvent) error {
+		applied <- struct{}{}
+		return nil
+	})
+	activateDone := make(chan error, 1)
+	go func() {
+		activateDone <- handler.activate(context.Background(), func() error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+	eventDone := make(chan error, 1)
+	go func() { eventDone <- handler.handle(context.Background(), privateEvent{}) }()
+	select {
+	case <-eventDone:
+		t.Fatal("event must remain buffered during activation")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-activateDone)
+	require.NoError(t, handler.finishActivation(context.Background()))
+	select {
+	case <-applied:
+	case <-time.After(time.Second):
+		t.Fatal("activation did not apply the buffered event")
+	}
+	require.NoError(t, <-eventDone)
+}
+
 func openRuntimeStore(t *testing.T) *store.Store {
 	t.Helper()
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))

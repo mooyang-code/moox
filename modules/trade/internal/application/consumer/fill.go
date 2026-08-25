@@ -411,6 +411,17 @@ func projectSwapPosition(
 	positionRecord.EntryPrice = estimatedEntry.String()
 	positionRecord.SignedQuantity = next.String()
 	positionRecord.MarkPrice = fill.Price.String()
+	if next.IsZero() {
+		positionRecord.UsedMargin = "0"
+		positionRecord.UnrealizedPnL = "0"
+	} else {
+		leverage, parseErr := shared.ParseDecimal(positionRecord.Leverage)
+		if parseErr != nil || leverage.Cmp(shared.Zero()) <= 0 {
+			return errors.New("trade: corrupted Position leverage")
+		}
+		positionRecord.UsedMargin = next.Abs().Mul(fill.Price).Div(leverage).String()
+		positionRecord.UnrealizedPnL = fill.Price.Sub(estimatedEntry).Mul(next).String()
+	}
 	positionRecord.RealizedPnL = realizedPnL.Add(fill.RealizedPnL).String()
 	if fill.TradedAt.UnixMilli() > positionRecord.ExchangeUpdatedAt {
 		positionRecord.ExchangeUpdatedAt = fill.TradedAt.UnixMilli()

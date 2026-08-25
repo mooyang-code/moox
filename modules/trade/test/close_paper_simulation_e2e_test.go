@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
@@ -58,4 +59,41 @@ func TestClosePaperSimulationCancelsReservationsAndSurvivesRestartE2E(t *testing
 	candidates, err := restarted.ListPaperMatchCandidates(ctx, 10)
 	require.NoError(t, err)
 	require.Empty(t, candidates)
+}
+
+func TestPaperCancelThroughOrderServiceReleasesReservationE2E(t *testing.T) {
+	ctx := context.Background()
+	f := newProductionPaperFixture(t, exchange.MarketTypeSpot)
+	placed := mustPlace(t, f, marketSpec("paper-cancel", exchange.SideBuy, "0.01"))
+	open, err := f.orders.Submit(ctx, testSpace, string(placed.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Open, open.State)
+
+	canceled, err := f.orders.Cancel(ctx, testSpace, string(open.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Canceled, canceled.State)
+	record, err := f.store.GetOrder(ctx, testSpace, string(open.ID))
+	require.NoError(t, err)
+	require.Equal(t, "CANCELED", record.State)
+	require.Equal(t, "0", record.RemainingReservedQuantity)
+}
+
+func TestPaperSnapshotFailsClosedWhenValuationQuoteErrorsE2E(t *testing.T) {
+	for _, market := range []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap} {
+		t.Run(string(market), func(t *testing.T) {
+			f := newPaperFixture(t, market)
+			spec := marketSpec("valuation-error", exchange.SideBuy, "0.01")
+			if market == exchange.MarketTypeSwap {
+				spec = swapSpec("valuation-error", exchange.SideBuy, "1", false)
+			}
+			order := mustPlace(t, f, spec)
+			_, err := f.orders.Submit(context.Background(), testSpace, string(order.ID))
+			require.NoError(t, err)
+			f.fake.mu.Lock()
+			f.fake.quoteErr = errors.New("public quote unavailable")
+			f.fake.mu.Unlock()
+			_, err = f.adapter.GetAccountSnapshot(context.Background())
+			require.Error(t, err)
+		})
+	}
 }

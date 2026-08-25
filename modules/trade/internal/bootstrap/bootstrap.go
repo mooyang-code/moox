@@ -633,6 +633,10 @@ func (s accountSyncer) SyncAccount(ctx context.Context, accountID string) error 
 	return err
 }
 
+func (s accountSyncer) ConfirmCancel(ctx context.Context, spaceID, orderID string) error {
+	return s.service.ConfirmCancel(ctx, spaceID, orderID)
+}
+
 type instrumentSource struct {
 	store *store.Store
 }

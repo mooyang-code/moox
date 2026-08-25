@@ -74,6 +74,17 @@ type Service struct {
 	LateFillWindow time.Duration
 }
 
+// ConfirmCancel exposes the shared reducer's terminal cancellation transition
+// to deterministic local adapters. Paper cancellation is authoritative once
+// the local adapter accepts it; the following sync only refreshes the account
+// snapshot after the reservation has been released.
+func (s *Service) ConfirmCancel(ctx context.Context, spaceID, orderID string) error {
+	if s == nil || s.Fills == nil {
+		return errors.New("trade account sync: fill reducer is not configured")
+	}
+	return s.Fills.ConfirmCancel(ctx, spaceID, orderID)
+}
+
 func (s *Service) SyncAccount(
 	ctx context.Context,
 	tradingAccountID string,

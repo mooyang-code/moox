@@ -27,7 +27,7 @@ func TestEquitySamplerPersistsOneMonotonicAccountPointE2E(t *testing.T) {
 	points, err := f.store.ListAccountEquityPoints(ctx, testSpace, testAccount, 0, 0)
 	require.NoError(t, err)
 	require.Len(t, points, 1)
-	require.Equal(t, "100000", points[0].Equity)
+	require.Equal(t, "600000", points[0].Equity)
 
 	// A newer source wins, while a later write carrying an older exchange
 	// watermark cannot overwrite the same minute bucket.

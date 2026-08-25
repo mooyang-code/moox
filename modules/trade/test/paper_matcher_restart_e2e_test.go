@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
@@ -92,7 +93,7 @@ func newRestingPaperFixture(t *testing.T, market exchange.MarketType) *fixture {
 	seedFixture(t, tradeStore, market, fake.instrument)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), testAccount)
 	require.NoError(t, err)
-	base := &paperexec.Adapter{Account: account, Store: tradeStore, MarketData: fake}
+	base := &paperexec.Adapter{Account: account, Store: tradeStore, MarketData: fake, Now: func() time.Time { return testNow }}
 	_, err = base.LoadInstruments(context.Background())
 	require.NoError(t, err)
 	return buildFixture(tradeStore, path, fake, recordingAdapter{ExecutionAdapter: base, recorder: fake})

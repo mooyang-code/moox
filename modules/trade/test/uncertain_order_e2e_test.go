@@ -65,7 +65,7 @@ func TestCanceledOrderAcceptsLateFillAndDeduplicatesIt(t *testing.T) {
 	require.Equal(t, orderdomain.Open, open.State)
 	canceled, err := f.orders.Cancel(ctx, testSpace, string(open.ID))
 	require.NoError(t, err)
-	require.Equal(t, orderdomain.Canceling, canceled.State)
+	require.Equal(t, orderdomain.Canceled, canceled.State)
 	canceled, err = f.orders.Get(ctx, testSpace, string(open.ID))
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Canceled, canceled.State)

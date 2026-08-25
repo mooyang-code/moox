@@ -132,27 +132,39 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	usedMargin := shared.Zero()
 	unrealizedPnL := shared.Zero()
 	if account.MarketType == string(exchange.MarketTypeSpot) {
+		byBase := make(map[string]store.InstrumentRecord, len(instruments))
 		for _, instrument := range instruments {
-			if instrument.QuoteAsset != account.SettlementAsset || instrument.BaseAsset == "" {
-				continue
-			}
-			balance := balances[instrument.BaseAsset]
-			if balance.IsZero() {
-				continue
-			}
-			if quote, quoteErr := a.referencePrice(ctx, instrument.ExchangeSymbol); quoteErr == nil {
-				equity = equity.Add(balance.Mul(quote))
+			if instrument.QuoteAsset == account.SettlementAsset && instrument.BaseAsset != "" {
+				byBase[instrument.BaseAsset] = instrument
 			}
 		}
-	} else if positions, positionErr := a.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, ""); positionErr == nil {
+		for asset, balance := range balances {
+			if asset == account.SettlementAsset || balance.IsZero() {
+				continue
+			}
+			instrument, found := byBase[asset]
+			if !found {
+				return exchange.AccountSnapshot{}, fmt.Errorf("paper: no valuation instrument for %s", asset)
+			}
+			quote, quoteErr := a.valuationQuote(ctx, instrument.ExchangeSymbol)
+			if quoteErr != nil {
+				return exchange.AccountSnapshot{}, quoteErr
+			}
+			equity = equity.Add(balance.Mul(quote))
+		}
+	} else {
+		positions, positionErr := a.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, "")
+		if positionErr != nil {
+			return exchange.AccountSnapshot{}, positionErr
+		}
 		for _, position := range positions {
 			quantity := decimalOrZero(position.SignedQuantity)
 			if quantity.IsZero() {
 				continue
 			}
-			mark := decimalOrZero(position.MarkPrice)
-			if quote, quoteErr := a.referencePrice(ctx, position.ExchangeSymbol); quoteErr == nil {
-				mark = quote
+			mark, quoteErr := a.valuationQuote(ctx, position.ExchangeSymbol)
+			if quoteErr != nil {
+				return exchange.AccountSnapshot{}, quoteErr
 			}
 			entry := decimalOrZero(position.EntryPrice)
 			unrealizedPnL = unrealizedPnL.Add(mark.Sub(entry).Mul(quantity))
@@ -173,6 +185,27 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		Balances: paperBalances(balances, locked), Equity: equity, AvailableFunds: available, UsedMargin: usedMargin,
 		UnrealizedPnL: unrealizedPnL, ExchangeUpdatedAt: a.now(), Present: exchange.AccountSnapshotPresence{Balances: true, Equity: true, AvailableFunds: true, UsedMargin: true, UnrealizedPnL: true},
 	}, nil
+}
+
+func (a *Adapter) valuationQuote(ctx context.Context, symbol string) (shared.Decimal, error) {
+	quote, err := a.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+	if err != nil {
+		return shared.Zero(), err
+	}
+	if !QuoteFresh(quote, a.now(), 10*time.Second) {
+		return shared.Zero(), fmt.Errorf("paper: valuation quote is stale for %s", symbol)
+	}
+	price := quote.Last
+	if price.IsZero() {
+		price = quote.Ask
+	}
+	if price.IsZero() {
+		price = quote.Bid
+	}
+	if price.Cmp(shared.Zero()) <= 0 {
+		return shared.Zero(), fmt.Errorf("paper: valuation quote is empty for %s", symbol)
+	}
+	return price, nil
 }
 
 func paperBalances(total, locked map[string]shared.Decimal) []exchange.AssetBalance {

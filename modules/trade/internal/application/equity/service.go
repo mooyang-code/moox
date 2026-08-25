@@ -70,7 +70,7 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 		return err
 	}
 	snapshot := account.Snapshot
-	if account.MarketType == string(exchange.MarketTypeSpot) && decimal(snapshot.Equity).IsZero() {
+	if account.MarketType == string(exchange.MarketTypeSpot) {
 		valued, valueErr := s.valueSpotSnapshot(ctx, account, snapshot)
 		if valueErr != nil {
 			return valueErr
@@ -210,7 +210,7 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 			memberSnapshot := memberAccount.Snapshot
 			if member.TradingAccountID == accountID && sampled != nil {
 				memberSnapshot = *sampled
-			} else if memberAccount.MarketType == string(exchange.MarketTypeSpot) && decimal(memberSnapshot.Equity).IsZero() {
+			} else if memberAccount.MarketType == string(exchange.MarketTypeSpot) {
 				valued, valueErr := s.valueSpotSnapshot(ctx, memberAccount, memberSnapshot)
 				if valueErr != nil {
 					return valueErr

@@ -25,7 +25,8 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 	var config struct {
 		Server struct {
 			Service []struct {
-				Name string `yaml:"name"`
+				Name    string `yaml:"name"`
+				Network string `yaml:"network"`
 			} `yaml:"service"`
 		} `yaml:"server"`
 	}
@@ -50,6 +51,11 @@ func TestTRPCConfigContainsOnlyApprovedServices(t *testing.T) {
 	for index := range want {
 		if names[index] != want[index] {
 			t.Fatalf("service names = %v, want %v", names, want)
+		}
+	}
+	for _, service := range config.Server.Service {
+		if service.Name == "trpc.moox.trade.equity.timer" {
+			require.Equal(t, "0 * * * * *", service.Network)
 		}
 	}
 }

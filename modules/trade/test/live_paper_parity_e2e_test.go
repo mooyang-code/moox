@@ -22,11 +22,30 @@ func TestLiveAndPaperProduceEquivalentSpotFacts(t *testing.T) {
 
 	liveFake := newFakeExchange(exchange.MarketTypeSpot)
 	live := newFixture(t, exchange.MarketTypeSpot, liveFake)
+	setSpotSnapshot(t, live, store.TradingAccountSnapshot{
+		Balances:          []store.AssetBalance{{Asset: "USDT", Available: "100000", Total: "100000"}},
+		Equity:            "100000",
+		AvailableFunds:    "100000",
+		ExchangeUpdatedAt: testNow.UnixMilli(),
+	})
 	setFixtureLive(t, live)
 	liveOrder := mustPlace(t, live, marketSpec("parity-live", exchange.SideBuy, "0.01"))
 	_, err := live.orders.Submit(ctx, testSpace, string(liveOrder.ID))
 	require.NoError(t, err)
 	applyFakeFill(t, live, "parity-live", "parity-live-fill", "0.01", "50000", "0")
+	liveFake.mu.Lock()
+	liveFake.account = exchange.AccountSnapshot{
+		Balances: []exchange.AssetBalance{
+			{Asset: "USDT", Available: shared.MustDecimal("99500"), Total: shared.MustDecimal("99500")},
+			{Asset: "BTC", Available: shared.MustDecimal("0.01"), Total: shared.MustDecimal("0.01")},
+		},
+		Equity: shared.MustDecimal("100000"), AvailableFunds: shared.MustDecimal("99500"),
+		ExchangeUpdatedAt: testNow,
+		Present:           exchange.AccountSnapshotPresence{Balances: true, Equity: true, AvailableFunds: true},
+	}
+	liveFake.mu.Unlock()
+	_, err = live.sync.SyncAccount(ctx, testAccount)
+	require.NoError(t, err)
 	sampleEquity(t, live)
 
 	paper := newProductionPaperFixture(t, exchange.MarketTypeSpot)
@@ -90,7 +109,7 @@ func newProductionPaperFixture(t *testing.T, market exchange.MarketType) *fixtur
 	seedFixture(t, tradeStore, market, fake.instrument)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), testAccount)
 	require.NoError(t, err)
-	base := &paperexec.Adapter{Account: account, Store: tradeStore, MarketData: fake}
+	base := &paperexec.Adapter{Account: account, Store: tradeStore, MarketData: fake, Now: func() time.Time { return testNow }}
 	_, err = base.LoadInstruments(context.Background())
 	require.NoError(t, err)
 	return buildFixture(tradeStore, path, fake, recordingAdapter{ExecutionAdapter: base, recorder: fake})
@@ -103,6 +122,26 @@ func productionPaperMatch(t *testing.T, f *fixture) {
 	t.Helper()
 	matcher := &paperexec.Matcher{
 		Store: f.store, Reducer: f.reducer,
+		Refresh: func(ctx context.Context, accountID string) error {
+			adapter := f.adapter.(recordingAdapter).ExecutionAdapter
+			snapshot, err := adapter.(interface {
+				GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error)
+			}).GetAccountSnapshot(ctx)
+			if err != nil {
+				return err
+			}
+			account, err := f.store.GetTradingAccountByID(ctx, accountID)
+			if err != nil {
+				return err
+			}
+			at := snapshot.ExchangeUpdatedAt.UnixMilli()
+			return f.store.Transaction(ctx, func(tx *store.Tx) error {
+				return tx.UpdateTradingAccountFacts(
+					account.SpaceID, accountID, account.FillCursors,
+					paperSnapshotRecordForTest(snapshot), at, at,
+				)
+			})
+		},
 		DecideContext: func(ctx context.Context, candidate store.OrderRecord) (paperexec.Decision, error) {
 			price := shared.Zero()
 			if candidate.PaperExecutionPrice != nil {
@@ -162,6 +201,9 @@ func assertCommonSpotFacts(t *testing.T, f *fixture, orderID string) {
 	points, err := f.store.ListAccountEquityPoints(ctx, testSpace, testAccount, 0, 0)
 	require.NoError(t, err)
 	require.Len(t, points, 1)
+	require.Equal(t, "100000", points[0].Equity)
+	require.Equal(t, "99500", points[0].AvailableFunds)
+	require.Equal(t, testNow.UnixMilli(), points[0].SourceTime)
 }
 
 func assertCommonSwapFacts(t *testing.T, f *fixture, orderID string) {
@@ -186,6 +228,8 @@ func assertCommonSwapFacts(t *testing.T, f *fixture, orderID string) {
 	require.NoError(t, err)
 	require.Len(t, positions, 1)
 	require.Equal(t, "0.01", positions[0].SignedQuantity)
+	require.Equal(t, "50", positions[0].UsedMargin)
+	require.Equal(t, "0", positions[0].UnrealizedPnL)
 }
 
 func sampleEquity(t *testing.T, f *fixture) {
@@ -195,4 +239,27 @@ func sampleEquity(t *testing.T, f *fixture) {
 		Now: func() time.Time { return testNow }, SourceMaxAge: time.Minute,
 	}
 	require.NoError(t, service.SampleAccount(context.Background(), testAccount))
+}
+
+func setSpotSnapshot(t *testing.T, f *fixture, snapshot store.TradingAccountSnapshot) {
+	t.Helper()
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountSnapshot(testSpace, testAccount, snapshot)
+	}))
+}
+
+func paperSnapshotRecordForTest(snapshot exchange.AccountSnapshot) store.TradingAccountSnapshot {
+	balances := make([]store.AssetBalance, 0, len(snapshot.Balances))
+	for _, balance := range snapshot.Balances {
+		balances = append(balances, store.AssetBalance{
+			Asset: balance.Asset, Available: balance.Available.String(),
+			Locked: balance.Locked.String(), Total: balance.Total.String(),
+		})
+	}
+	return store.TradingAccountSnapshot{
+		Balances: balances, Equity: snapshot.Equity.String(),
+		AvailableFunds: snapshot.AvailableFunds.String(), UsedMargin: snapshot.UsedMargin.String(),
+		MaintenanceMargin: snapshot.MaintenanceMargin.String(), UnrealizedPnL: snapshot.UnrealizedPnL.String(),
+		ExchangeUpdatedAt: snapshot.ExchangeUpdatedAt.UnixMilli(),
+	}
 }

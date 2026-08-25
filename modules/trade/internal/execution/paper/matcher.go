@@ -116,13 +116,15 @@ func (m *Matcher) MatchOrder(ctx context.Context, candidate store.OrderRecord, d
 		}
 		return err
 	})
-	if err == nil && m.Enqueue != nil && !decision.Fill.Quantity.IsZero() {
-		m.Enqueue(candidate.TradingAccountID)
-	}
 	if err == nil && m.Refresh != nil && !decision.Fill.Quantity.IsZero() {
 		if refreshErr := m.Refresh(ctx, candidate.TradingAccountID); refreshErr != nil {
 			return refreshErr
 		}
+	}
+	// Refresh the persisted account snapshot before waking the sampler so a
+	// fill cannot enqueue a point that still observes the pre-fill snapshot.
+	if err == nil && m.Enqueue != nil && !decision.Fill.Quantity.IsZero() {
+		m.Enqueue(candidate.TradingAccountID)
 	}
 	return err
 }

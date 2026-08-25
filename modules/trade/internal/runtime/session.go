@@ -232,10 +232,8 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		if err := s.Sync.SetReady(ctx, s.Account.TradingAccountID, true, nil); err != nil {
 			return err
 		}
-		s.ready.Store(true)
 		select {
 		case <-disconnected:
-			s.ready.Store(false)
 			_ = s.Sync.SetReady(
 				context.Background(),
 				s.Account.TradingAccountID,
@@ -248,6 +246,19 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		return nil
 	}); err != nil {
 		return s.disconnect(ctx, err)
+	}
+	if err := handler.finishActivation(ctx); err != nil {
+		return s.disconnect(ctx, err)
+	}
+	// Keep Ready invisible until the handler has released its activation lock.
+	// Events arriving in that handoff window are then applied synchronously
+	// before callers can submit against this session.
+	if err, ended := privateStreamError(disconnected, streamDone); ended {
+		return s.disconnect(ctx, err)
+	}
+	previous := s.ready.Swap(true)
+	if !previous && s.OnReady != nil {
+		s.OnReady(s.Account.TradingAccountID)
 	}
 
 	interval := s.SyncInterval
@@ -516,16 +527,23 @@ type sessionHandler struct {
 	ready     chan struct{}
 	readyOnce sync.Once
 	apply     func(context.Context, privateEvent) error
+	gateMu    sync.Mutex
+	gateCond  *sync.Cond
+	closing   bool
+	activated bool
+	inflight  int
 }
 
 func newSessionHandler(
 	apply func(context.Context, privateEvent) error,
 ) *sessionHandler {
-	return &sessionHandler{
+	handler := &sessionHandler{
 		buffering: true,
 		ready:     make(chan struct{}),
 		apply:     apply,
 	}
+	handler.gateCond = sync.NewCond(&handler.gateMu)
+	return handler
 }
 
 func (h *sessionHandler) OnSubscribed() {
@@ -555,6 +573,24 @@ func (h *sessionHandler) OnAccountSnapshot(
 }
 
 func (h *sessionHandler) handle(ctx context.Context, event privateEvent) error {
+	h.gateMu.Lock()
+	for h.closing && !h.activated {
+		h.gateCond.Wait()
+	}
+	if !h.activated {
+		h.inflight++
+	}
+	activated := h.activated
+	h.gateMu.Unlock()
+	if activated {
+		return h.apply(ctx, event)
+	}
+	defer func() {
+		h.gateMu.Lock()
+		h.inflight--
+		h.gateCond.Broadcast()
+		h.gateMu.Unlock()
+	}()
 	h.mu.Lock()
 	if h.buffering {
 		h.pending = append(h.pending, event)
@@ -576,7 +612,6 @@ func (h *sessionHandler) activate(
 				h.mu.Unlock()
 				return err
 			}
-			h.buffering = false
 			h.mu.Unlock()
 			return nil
 		}
@@ -585,6 +620,50 @@ func (h *sessionHandler) activate(
 		h.mu.Unlock()
 		for _, event := range pending {
 			if err := h.apply(ctx, event); err != nil {
+				h.gateMu.Lock()
+				h.activated = true
+				h.closing = false
+				h.gateCond.Broadcast()
+				h.gateMu.Unlock()
+				return err
+			}
+		}
+	}
+}
+
+// finishActivation drains events that arrived while the readiness callback
+// was committing its snapshot. The final buffering transition is performed
+// while holding the same mutex, so no pre-ready event can race the caller's
+// Ready publication.
+func (h *sessionHandler) finishActivation(ctx context.Context) error {
+	h.gateMu.Lock()
+	h.closing = true
+	for h.inflight > 0 {
+		h.gateCond.Wait()
+	}
+	h.gateMu.Unlock()
+	for {
+		h.mu.Lock()
+		if len(h.pending) == 0 {
+			h.buffering = false
+			h.mu.Unlock()
+			h.gateMu.Lock()
+			h.activated = true
+			h.closing = false
+			h.gateCond.Broadcast()
+			h.gateMu.Unlock()
+			return nil
+		}
+		pending := append([]privateEvent(nil), h.pending...)
+		h.pending = h.pending[:0]
+		h.mu.Unlock()
+		for _, event := range pending {
+			if err := h.apply(ctx, event); err != nil {
+				h.gateMu.Lock()
+				h.activated = true
+				h.closing = false
+				h.gateCond.Broadcast()
+				h.gateMu.Unlock()
 				return err
 			}
 		}
