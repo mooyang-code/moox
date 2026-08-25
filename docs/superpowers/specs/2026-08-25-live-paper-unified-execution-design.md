@@ -142,10 +142,21 @@ type MarketDataSource interface {
 ```go
 type InstrumentID string
 type ExchangeSymbol string
+
+type QuoteKey struct {
+    Exchange       Exchange
+    MarketType     MarketType
+    ExchangeSymbol ExchangeSymbol
+}
 ```
 
 应用层和 Strategy 只传 `InstrumentID`；`InstrumentResolver` 在账户、Exchange、行情环境和
 MarketType 上下文中解析 `ExchangeSymbol`。ExecutionAdapter 只接收 `ExchangeSymbol`。
+
+ExecutionBundle 中的 MarketDataSource 实例绑定一个 Exchange 和 MarketType，因此 `GetQuote`
+只需接收 ExchangeSymbol。PaperMatcher 跨账户合并请求或缓存报价时必须使用完整 QuoteKey，
+不能只按 Exchange + ExchangeSymbol 合并。Binance SPOT 和 SWAP 都可能使用 `BTCUSDT`，
+但对应不同公共行情接口。
 
 Paper V1 固定使用所选 Exchange 的生产公共行情，不需要交易凭据。
 
@@ -219,17 +230,40 @@ type ExecutionBundle struct {
     InstrumentResolver InstrumentResolver
 }
 
+type ReservationFacts struct {
+    AvailableByAsset       map[string]Decimal
+    AvailableFunds         Decimal
+    SignedPositionQuantity Decimal
+    Leverage               Decimal
+}
+
 type ReservationPolicy interface {
-    Reserve(context.Context, TradingAccount, OrderSpec, MarketQuote) (Reservation, error)
+    Evaluate(TradingAccount, Instrument, OrderSpec, MarketQuote, ReservationFacts) (Reservation, error)
 }
 ```
 
-ReservationPolicy 同时负责计算所需预占和判断可用资金。OrderService 在持有账户锁时只调用一次
-Policy，不得先按 Policy 扣减后再套用另一套余额算法：
+ReservationPolicy 是纯计算接口，不持有 Store，也不发起数据库查询。OrderService 持有账户锁并
+开启一个 Store.Transaction，在该事务内通过 `*store.Tx` 加载 ReservationFacts，再调用 Policy，
+最后创建携带 Reservation 的 Order：
 
-- Live Policy 保留现有“交易所快照 + `GetUnreflectedReservation`”语义。
-- Paper Policy 完全替换 Live 算法，以初始资金、Fill 和全部活动订单 reservation 为权威；
-  Paper 路径禁止再次调用 `GetUnreflectedReservation`。
+```text
+Store.Transaction
+  -> tx.LoadReservationFacts(account, instrument, order_spec)
+  -> reservation_policy.Evaluate(account, instrument, order_spec, quote, facts)
+  -> tx.CreateOrder(order_with_reservation)
+```
+
+OrderService 在事务外完成 instrument 解析、报价请求和 freshness 校验，避免持有 SQLite 事务执行
+网络 I/O；进入事务后只加载本地 Facts、执行纯计算并创建 Order。
+
+`ReservationFacts.AvailableByAsset` 和 `AvailableFunds` 都是扣除现有活动预占后的净可用量：
+
+- Live facts 使用交易所快照减去 `GetUnreflectedReservation`。
+- Paper facts 使用初始资金和 Fill 重建余额，再减去全部活动订单 reservation；Paper 不调用
+  `GetUnreflectedReservation`。
+
+Policy 只根据传入事实计算所需预占并判断余额，不得先按 Facts 扣减后再套用另一套余额算法：
+
 - Spot MARKET BUY 按持久化成交价加 taker fee 预占结算资产；GTC LIMIT BUY 按
   `limit × quantity × (1 + max(maker_fee_rate, taker_fee_rate))` 预占。
 - Spot SELL 预占基础资产 quantity。
@@ -237,9 +271,9 @@ Policy，不得先按 Policy 扣减后再套用另一套余额算法：
   `worst_notional / leverage + worst_notional × fee_rate`；reduce-only 部分只预占手续费，
   且继续禁止穿过零仓位。
 
-Policy 的资金读取、可用量判断和 Order 创建必须处于同一个 Store.Transaction；账户锁负责串行化
-同账户的本地下单与 Paper Match。Reservation 结果随 Order 持久化，后续 Fill/Cancel 只消费或释放，
-不重新估算。
+事务内禁止通过普通 Store 查询；当前 SQLite 只有一个连接，嵌套普通查询会等待事务自己占用的连接。
+账户锁负责串行化同账户的本地下单与 Paper Match。Reservation 结果随 Order 持久化，后续
+Fill/Cancel 只消费或释放，不重新估算。
 
 MARKET 的 `reference_price`、`reference_price_at` 和应用滑点后的成交价随 Order 持久化。
 MatchOnce 必须使用该成交价，保证实际成交金额不超过已预占金额。LIMIT 延迟成交以 limit 作为
@@ -467,7 +501,8 @@ ReservationPolicy，但 OrderService 只消费统一 Reservation 结果。
   IOC/FOK 不可成交则取消。
 - 首次决策完成后，只继续扫描 OPEN GTC。
 - 默认每秒扫描一次。
-- 周期扫描同时覆盖丢失的首次 wake 和延迟 GTC；按 Exchange + symbol 合并新报价请求。
+- 周期扫描同时覆盖丢失的首次 wake 和延迟 GTC；按
+  Exchange + MarketType + ExchangeSymbol 合并新报价请求和缓存。
 - BUY 在可执行报价不高于 limit 时成交。
 - SELL 在可执行报价不低于 limit 时成交。
 - 延迟成交属于 MAKER，使用 `maker_fee_rate`。
@@ -688,9 +723,11 @@ Live/Paper 最终都生成同结构的本地 Order、Fill、Holding/Position 事
 - 进程重启后续撮合
 - MARKET/GTC LIMIT 最坏价格与手续费预占
 - OPEN 订单 reservation 纳入 Paper available/locked
+- ReservationFacts 仅通过当前 `*store.Tx` 加载；Policy 不访问普通 Store
 - Paper Policy 替换 Live `GetUnreflectedReservation`，不会重复扣减
 - Swap 增仓保证金与手续费预占；reduce-only 只预占手续费
 - MARKET 使用持久化成交价，实际扣减不超过 reservation
+- Binance SPOT/SWAP 使用相同 ExchangeSymbol 时分别请求、缓存并返回各自报价
 - 首次 MatchOnce 覆盖 MARKET、LIMIT、IOC 和 FOK；丢失 wake 后可恢复
 - Match/Cancel 使用 version CAS，只有一方提交
 - CAS、Fill、Order、Holding/Position、reservation 同事务
