@@ -1377,7 +1377,7 @@ git commit -m "feat(trade): rebuild paper account state"
 
 ---
 
-### Task 7: 实现 PaperMatcher 原子 MatchOnce 与 worker 健康
+### Task 7: 实现 PaperMatcher 原子 MatchOrder 与 worker 健康
 
 **Files:**
 - Create: `modules/trade/internal/infra/store/paper_match.go`
@@ -1430,7 +1430,7 @@ AND (
 - [ ] **Step 2: 写 LIMIT 与首次决策表驱动测试**
 
 ```go
-func TestMatchOncePolicies(t *testing.T) {
+func TestMatchOrderPolicies(t *testing.T) {
     tests := []struct {
         name       string
         orderType  exchange.OrderType
@@ -1475,9 +1475,9 @@ type MatcherState struct {
 }
 ```
 
-`RunOnce` 先按 `Exchange + MarketType + ExchangeSymbol` 建 QuoteKey。MARKET 和首次 LIMIT 不请求新报价；延迟 GTC 每个 QuoteKey 只请求一次，禁止仅以 symbol 缓存。
+`Run` 持续运行 worker；`Scan` 扫描一轮候选订单，并按 `Exchange + MarketType + ExchangeSymbol` 建 QuoteKey。MARKET 和首次 LIMIT 不请求新报价；延迟 GTC 每个 QuoteKey 只请求一次，禁止仅以 symbol 缓存。
 
-- [ ] **Step 4: 实现单事务 MatchOnce**
+- [ ] **Step 4: 实现单事务 MatchOrder**
 
 Paper ExchangeOrderID、ExchangeTradeID 和本地 FillID 由 TradingAccountID + client order ID 确定性生成：
 
@@ -1492,7 +1492,7 @@ func paperIDs(tradingAccountID, clientOrderID string) (string, string, string) {
 报价决策在事务外完成；提交在一个 Store.Transaction 内：
 
 ```go
-func (m *Matcher) MatchOnce(
+func (m *Matcher) MatchOrder(
     ctx context.Context,
     candidate store.OrderRecord,
     decision Decision,
@@ -1561,10 +1561,10 @@ func TestPlaceRejectsAggregateReduceOnlyBeyondPosition(t *testing.T) {
 Match 测试：
 
 ```go
-func TestMatchOnceCancelsReduceOnlyWhenPositionShrank(t *testing.T) {
+func TestMatchOrderCancelsReduceOnlyWhenPositionShrank(t *testing.T) {
     fixture := acceptedReduceOnly(t, "0.8", "1")
     fixture.setPosition("0.5")
-    require.NoError(t, fixture.matcher.MatchOnce(
+    require.NoError(t, fixture.matcher.MatchOrder(
         context.Background(),
         fixture.order,
         fixture.fillDecision(),
@@ -1597,7 +1597,7 @@ func TestRepeatedMatcherTickCreatesOneFill(t *testing.T)
 
 ```go
 type PaperMatcherWorker struct {
-    Matcher  interface{ RunOnce(context.Context) error }
+    Matcher  interface{ Scan(context.Context) error }
     Interval time.Duration
     wake     chan struct{}
     state    *paper.MatcherState
@@ -2465,7 +2465,7 @@ TradingAccount oneof LiveConfig/PaperConfig
 CreateTradingAccount 仅 Live
 CreatePaperSimulation / ClosePaperSimulation
 一个执行内核 + LiveAdapter/PaperAdapter
-PaperMatcher 原子 MatchOnce
+PaperMatcher 原子 MatchOrder
 ReservationFacts 同事务 + reduce-only 容量
 Holding/Position 分读模型
 双持久化资金曲线 + tRPC Timer

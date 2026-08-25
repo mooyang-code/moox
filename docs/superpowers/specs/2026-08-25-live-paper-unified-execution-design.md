@@ -105,7 +105,7 @@ LiveAdapter                               PaperAdapter
 Binance / OKX REST + 账户事件流           MarketDataSource + PaperMatcher
   |                                           |
   v                                           v
-规范化 Live 回报                         MatchOnce + OPEN/version CAS
+规范化 Live 回报                         MatchOrder + OPEN/version CAS
   |                                           |
   +--------------------+----------------------+
                        v
@@ -294,7 +294,7 @@ Policy 只根据传入事实计算所需预占并判断余额，不得先按 Fac
 Fill/Cancel 只消费或释放，不重新估算。
 
 MARKET 的 `reference_price`、`reference_price_at` 和应用滑点后的成交价随 Order 持久化。
-MatchOnce 必须使用该成交价，保证实际成交金额不超过已预占金额。LIMIT 延迟成交以 limit 作为
+MatchOrder 必须使用该成交价，保证实际成交金额不超过已预占金额。LIMIT 延迟成交以 limit 作为
 最坏名义价值，因此行情穿价后仍不会突破预占。
 
 ## 7. 代码组织
@@ -513,6 +513,7 @@ ReservationPolicy，但 OrderService 只消费统一 Reservation 结果。
 
 `PaperMatcher`：
 
+- `Run` 持续运行 worker；`Scan` 扫描一轮候选订单；`MatchOrder` 原子处理其中一笔订单。
 - 首次决策处理所有 OPEN 且“首次撮合待处理”的 Paper 订单，不限订单类型或 FillPolicy。
 - MARKET 使用提交时持久化的成交价并全量成交。
 - LIMIT 首次使用提交报价判断：可成交则按 TAKER 成交；GTC 不可成交则清除首次标记并保持 OPEN；
@@ -553,7 +554,7 @@ OrderService
   -> PaperAdapter 返回接受结果
   -> 释放账户锁
   -> Matcher wake（可合并、可丢失，周期扫描兜底）
-  -> MatchOnce SQLite 事务
+  -> MatchOrder SQLite 事务
        Reload OPEN order + expected version
        Recheck reduce-only position capacity
        Insert Fill or cancel whole order
@@ -565,18 +566,18 @@ OrderService
 协议要求：
 
 - PaperAdapter 只返回接受结果，不同步回调 Fill。Matcher 可以提前收到 wake，但必须等待
-  OrderService 释放账户锁后执行 MatchOnce。
+  OrderService 释放账户锁后执行 MatchOrder。
 - PaperMatcher 只处理 SQLite 中的候选订单。首次 wake 丢失时，周期扫描仍处理 MARKET、
   IOC/FOK 和首次 LIMIT；重启不会留下永久 OPEN 的即时订单。
-- MatchOnce 在同一个 SQLite 事务内重新读取 Order，并校验
+- MatchOrder 在同一个 SQLite 事务内重新读取 Order，并校验
   `order_id + expected_version + OPEN`。CAS 不得先提交；Cancel 和 Match 只有一个事务成功。
-- 对 reduce-only Swap Order，MatchOnce 在插入 Fill 前重新读取最新 Position，并校验订单 side
+- 对 reduce-only Swap Order，MatchOrder 在插入 Fill 前重新读取最新 Position，并校验订单 side
   仍在减仓且 `order.remaining_quantity <= abs(current_position)`。这里使用实际仓位，不重复扣除
   当前候选订单；一个 Match 提交仓位后，下一个候选再读取更新后的仓位。
-- 若最新仓位无法容纳整笔 reduce-only 剩余数量，MatchOnce 在同一事务中把 Order 置为 CANCELED
+- 若最新仓位无法容纳整笔 reduce-only 剩余数量，MatchOrder 在同一事务中把 Order 置为 CANCELED
   并释放手续费 reservation，不插入 Fill。Paper 不为此场景引入部分成交。
 - Fill 插入、Order 终态、Holding/Position 和 reservation 更新复用 FillReducer 的事务内核心函数。
-  现有 `ApplyFill` 只负责为 Live 路径包裹外层事务，Paper 不能在 MatchOnce 内再次开启事务。
+  现有 `ApplyFill` 只负责为 Live 路径包裹外层事务，Paper 不能在 MatchOrder 内再次开启事务。
 - Fill 来源增加 `PAPER_MATCHER`，与 `ACCOUNT_EVENT`、`REST_SYNC` 一起进入同一归一化校验和指标维度。
 - GTC 首次不成交时，清除首次撮合标记并更新 Order version；IOC/FOK 首次不成交时，在同一事务
   进入 CANCELED 并释放 reservation。
@@ -732,7 +733,7 @@ V1 不实现 EXIT_ONLY。可靠的 EXIT_ONLY 必须服务端核验 Spot 持有�
   和 UNKNOWN 后通过查询恢复。
 - Binance/OKX Adapter 每次调用可以发送真实 HTTP 请求，不要求重复 POST/DELETE 返回相同结果。
 - AccountEventSource 测试订阅确认、启动缓冲、快照后回放和断线立即 Not Ready。
-- PaperAdapter 测试确定性接受；PaperMatcher 测试 MatchOnce、CAS 和共用 reducer 原子提交。
+- PaperAdapter 测试确定性接受；PaperMatcher 测试 MatchOrder、CAS 和共用 reducer 原子提交。
 
 Live/Paper 最终都生成同结构的本地 Order、Fill、Holding/Position 事实，但不强制使用同一种传输机制。
 
@@ -752,10 +753,10 @@ Live/Paper 最终都生成同结构的本地 Order、Fill、Holding/Position 事
 - Swap 增仓保证金与手续费预占；reduce-only 只预占手续费
 - 1 BTC 多仓已有 0.8 BTC reduce-only SELL 时，第二笔 0.8 BTC 在 Place 阶段被拒绝
 - 多笔活动 reduce-only 的剩余数量合计不超过当前可减仓数量
-- reduce-only 接受后仓位发生变化时，MatchOnce 整单取消、不写 Fill 并释放手续费 reservation
+- reduce-only 接受后仓位发生变化时，MatchOrder 整单取消、不写 Fill 并释放手续费 reservation
 - MARKET 使用持久化成交价，实际扣减不超过 reservation
 - Binance SPOT/SWAP 使用相同 ExchangeSymbol 时分别请求、缓存并返回各自报价
-- 首次 MatchOnce 覆盖 MARKET、LIMIT、IOC 和 FOK；丢失 wake 后可恢复
+- 首次 MatchOrder 覆盖 MARKET、LIMIT、IOC 和 FOK；丢失 wake 后可恢复
 - Match/Cancel 使用 version CAS，只有一方提交
 - CAS、Fill、Order、Holding/Position、reservation 同事务
 - 注入任一步失败后整个 Match 事务回滚
