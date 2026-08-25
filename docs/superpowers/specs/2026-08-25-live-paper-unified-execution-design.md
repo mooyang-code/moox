@@ -49,6 +49,7 @@ Trade 当前已经通过 `exchange.Adapter` 统一部分 Live/Paper 流程，但
 - Paper 分别配置 `maker_fee_rate` 和 `taker_fee_rate`。
 - Paper 只配置结算资产初始资金，不导入初始持仓。
 - 资金曲线每分钟采样，并在 Fill 入库后立即刷新当前分钟快照。
+- EquitySampler 的周期采样使用 tRPC Timer，不自建 ticker。
 - PaperConfig 创建后不可修改。
 - Paper LogicalAccount 固定只有一个 Paper TradingAccount 成员，创建后不更换成员。
 - 新一轮模拟交易创建新的 Paper TradingAccount 和新的 Paper LogicalAccount。
@@ -245,6 +246,36 @@ message PaperConfig {
 - Live SPOT 必须保留 `sync_symbols`，以完成订单、成交和余额同步。
 - Paper 配置创建后不可修改；不存在替换配置或重置入口。
 
+### 8.1 settlement_asset
+
+`settlement_asset` 是账户统一的结算、资金和估值资产，例如 `USDT`：
+
+- Spot：初始资金以它计价；买卖使用以它为报价资产的标的；账户 equity 也换算到该资产。
+- Swap：保证金、手续费、已实现盈亏和未实现盈亏都以它结算。
+- PaperConfig 的 `initial_balance` 必须以它为单位。
+- 同一 LogicalAccount 的所有成员必须使用相同 `settlement_asset`，才能直接聚合资金和曲线。
+
+它不是标的基础资产。例如 `BTC-USDT-SPOT` 中 BTC 是基础资产，USDT 才是 settlement asset。
+
+### 8.2 slippage_bps
+
+`slippage_bps` 表示 Paper MARKET 的不利滑点，单位是 basis point：
+
+```text
+1 bps = 0.01% = 0.0001
+5 bps = 0.05%
+```
+
+若行情为 50000、配置为 5 bps：
+
+```text
+BUY  = 50000 × (1 + 5/10000) = 50025
+SELL = 50000 × (1 - 5/10000) = 49975
+```
+
+滑点不是手续费。MARKET 应用滑点后再单独计算 taker fee；LIMIT 使用不劣于 limit 的
+可执行报价，不允许滑点突破用户限价。
+
 ## 9. 持久化
 
 ### 9.1 账户
@@ -277,7 +308,7 @@ t_account_equity_points
   equity
   available_funds
   used_margin
-  unrealized_pnl
+  unrealized_pnl (nullable)
   source_time
   updated_at
 
@@ -288,7 +319,7 @@ t_logical_account_equity_points
   equity
   available_funds
   used_margin
-  unrealized_pnl
+  unrealized_pnl (nullable)
   source_time
   updated_at
 ```
@@ -298,6 +329,17 @@ t_logical_account_equity_points
 
 Sampler 在采样当时按成员关系生成 LogicalAccount 点并持久化，从而冻结历史成员语义。
 任一启用成员缺少有效快照时，不写该 LogicalAccount 分钟点，不能把缺失成员按 0 计入。
+
+`unrealized_pnl` 表示当前仍未平仓或未卖出敞口按最新价格计算的浮动盈亏：
+
+```text
+Swap 多仓 = (mark_price - entry_price) × quantity
+Swap 空仓 = (entry_price - mark_price) × abs(quantity)
+```
+
+Swap 可以直接使用交易所或 Paper 持仓快照。Paper Spot 从完整 Fill 历史计算成本价，因此也能计算；
+Live Spot 的外部存量资产可能没有成本价，此时字段必须为 null，不能伪造为 0。LogicalAccount
+只在所有成员都提供该值时求和，否则组合 `unrealized_pnl` 为 null；这不影响 equity 曲线本身。
 
 ### 9.4 Paper reservation
 
@@ -401,7 +443,23 @@ OrderService
 - 账户点写入后，Sampler 使用采样当时的成员集合生成并持久化 LogicalAccount 点。
 - 任一成员 Not Ready、报价过期或采样失败时，跳过本次 LogicalAccount 点并记录指标。
 
-Sampler 是进程内单 worker，不使用 EventBus 或分布式调度。
+周期采样使用 tRPC Timer：
+
+```yaml
+- name: trpc.moox.trade.equity_sample.timer
+  port: 11210
+  network: "0 * * * * *"
+  protocol: timer
+  timeout: 30000
+```
+
+Timer Handler 通过 `timerjob.Job` 复用项目现有的执行超时和进程内防重入能力，并调用统一的
+`EquitySampler.SampleReadyAccounts`。不再创建自定义 ticker goroutine。
+
+配置不附加 `?startAtOnce=1`。Fill 成功提交后通过本地 wake 调用同一个
+`EquitySampler.SampleAccount`，立即刷新对应账户和 LogicalAccount 的当前分钟点；wake
+可以合并，下一次 Timer 是兜底。账户 Session 首次 Ready 时触发首个本地采样，避免 Timer
+在服务尚未 Ready 时阻塞启动。
 
 ## 13. Paper 模拟生命周期
 
@@ -509,6 +567,9 @@ Live 另外验证私有流回报归一化；Paper 另外验证 Matcher CAS 和�
 - Match 的 Fill/Order/Position/reservation 同事务
 - PaperConfig 不可更新，新的模拟运行创建新账户和新 LogicalAccount
 - 分钟采样与 Fill wake
+- tRPC equity timer 每分钟触发且不允许进程内重入
+- Session Ready 和 Fill wake 调用同一个 SampleAccount
+- Live Spot 成本未知时 unrealized_pnl 为 null
 - LogicalAccount 曲线不受后续成员变化影响
 
 ### 16.3 E2E
@@ -545,7 +606,7 @@ sync、restart 和 cleanup。该验收需要显式凭据和确认变量，不作
 - 只有一套应用服务和事实表。
 - 核心 Order/Fill/Position reducer 不知道 Live/Paper；模式差异由 ExecutionBundle 注入。
 - PaperMatcher 只有一个进程内 worker。
-- 资金曲线只有一个 EquitySampler。
+- 资金曲线只有一个 EquitySampler；周期触发复用 tRPC Timer，不自建调度器。
 - Paper 账户和 PaperConfig 创建后不可修改或重置。
 - 一个 Paper LogicalAccount 固定一个 Paper TradingAccount。
 - 模拟盘不实现盘口、部分成交、撮合优先级或独立账本。
