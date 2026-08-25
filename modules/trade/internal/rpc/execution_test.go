@@ -25,7 +25,7 @@ func TestExecutionRPCRejectsMissingSpace(t *testing.T) {
 
 func TestOrderConversionPreservesOwnershipAndExecutionFields(t *testing.T) {
 	record := store.OrderRecord{
-		OrderID: "order-1", ExchangeAccountID: "account-1",
+		OrderID: "order-1", TradingAccountID: "account-1",
 		Exchange: "OKX", MarketType: "SWAP", Symbol: "BTC-USDT-SWAP",
 		OrderType: "MARKET", TimeInForce: "", Side: "SELL",
 		PositionSide: "NET", Quantity: "2", ReferencePrice: "60000",
@@ -95,8 +95,8 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 	tradeStore := openRPCStore(t)
 	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		for _, accountID := range []string{"account-1", "account-2"} {
-			if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-				SpaceID: "space-1", ExchangeAccountID: accountID, Name: accountID,
+			if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+				SpaceID: "space-1", TradingAccountID: accountID, Name: accountID,
 				Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
 				Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 			}); err != nil {
@@ -123,14 +123,14 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-1", Enabled: true,
+			TradingAccountID: "account-1", Enabled: true,
 		}); err != nil {
 			return err
 		}
 		for _, record := range []store.OrderRecord{
 			{
 				SpaceID: "space-1", OrderID: "order-1",
-				ExchangeAccountID: "account-1", ClientOrderID: "client-1",
+				TradingAccountID: "account-1", ClientOrderID: "client-1",
 				Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
 				OrderType: "MARKET", Side: "BUY", Quantity: "1",
 				ReferencePrice: "100", OwnerType: "TARGET",
@@ -139,7 +139,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 			},
 			{
 				SpaceID: "space-1", OrderID: "order-2",
-				ExchangeAccountID: "account-2", ClientOrderID: "client-2",
+				TradingAccountID: "account-2", ClientOrderID: "client-2",
 				Exchange: "BINANCE", MarketType: "SPOT", Symbol: "ETHUSDT",
 				OrderType: "MARKET", Side: "BUY", Quantity: "1",
 				ReferencePrice: "10", OwnerType: "EXTERNAL",

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
@@ -26,7 +26,7 @@ var (
 )
 
 type AccountEligibility interface {
-	ExecutionEligibility(context.Context, string) (exchangeaccount.Account, error)
+	ExecutionEligibility(context.Context, string) (tradingaccount.Account, error)
 }
 
 type InstrumentSource interface {
@@ -38,7 +38,7 @@ type PositionSource interface {
 }
 
 type Validation struct {
-	Account          exchangeaccount.Account
+	Account          tradingaccount.Account
 	Instrument       exchange.Instrument
 	Notional         shared.Decimal
 	Leverage         shared.Decimal
@@ -69,7 +69,7 @@ func (v Validator) Validate(
 	if v.Now != nil {
 		now = v.Now()
 	}
-	account, err := v.Accounts.ExecutionEligibility(ctx, spec.ExchangeAccountID)
+	account, err := v.Accounts.ExecutionEligibility(ctx, spec.TradingAccountID)
 	if err != nil {
 		return Validation{}, err
 	}
@@ -174,7 +174,7 @@ func (v Validator) validateReduceOnly(ctx context.Context, spec orderdomain.Orde
 	if v.Positions == nil {
 		return ErrReduceOnly
 	}
-	position, err := v.Positions.GetPosition(ctx, spec.ExchangeAccountID, spec.InstrumentID)
+	position, err := v.Positions.GetPosition(ctx, spec.TradingAccountID, spec.InstrumentID)
 	if err != nil {
 		return err
 	}

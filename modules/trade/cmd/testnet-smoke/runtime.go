@@ -38,7 +38,7 @@ func seedSmokeStore(
 		return smokeIdentity{}, errors.New("testnet smoke store requires a supported TESTNET Exchange")
 	}
 	identity := smokeIdentityFor(options.Exchange)
-	existing, err := database.GetExchangeAccount(
+	existing, err := database.GetTradingAccount(
 		ctx,
 		smokeSpaceID,
 		identity.AccountID,
@@ -62,8 +62,8 @@ func seedSmokeStore(
 		return smokeIdentity{}, err
 	}
 	err = database.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: smokeSpaceID, ExchangeAccountID: identity.AccountID,
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: smokeSpaceID, TradingAccountID: identity.AccountID,
 			Name:     "Testnet smoke " + string(options.Exchange),
 			Exchange: string(options.Exchange), MarketType: string(exchange.MarketTypeSpot),
 			ExecutionMode:      string(exchange.ExecutionModeLive),
@@ -90,7 +90,7 @@ func seedSmokeStore(
 		}
 		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: smokeSpaceID, LogicalAccountID: identity.LogicalAccountID,
-			ExchangeAccountID: identity.AccountID, Enabled: true,
+			TradingAccountID: identity.AccountID, Enabled: true,
 		})
 	})
 	if err != nil {
@@ -128,7 +128,7 @@ func validateSmokeLogicalAccount(
 	if err != nil {
 		return err
 	}
-	if len(members) != 1 || members[0].ExchangeAccountID != identity.AccountID ||
+	if len(members) != 1 || members[0].TradingAccountID != identity.AccountID ||
 		!members[0].Enabled {
 		return errors.New("existing smoke LogicalAccount membership mismatch")
 	}

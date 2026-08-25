@@ -414,7 +414,7 @@ func TestSwapAccountSnapshotRejectsMultiAssetsMode(t *testing.T) {
 
 func testAdapter(market exchange.MarketType, baseURL string) *Adapter {
 	config := exchange.AccountConfig{
-		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeBinance,
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance,
 		MarketType: market, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}

@@ -235,7 +235,7 @@ func getInstrument(
 type OrderRecord struct {
 	SpaceID                   string
 	OrderID                   string
-	ExchangeAccountID         string
+	TradingAccountID          string
 	ClientOrderID             string
 	ExchangeOrderID           string
 	Exchange                  string
@@ -272,7 +272,7 @@ type OrderRecord struct {
 type orderRow struct {
 	SpaceID                   string    `gorm:"column:c_space_id"`
 	OrderID                   string    `gorm:"column:c_order_id"`
-	ExchangeAccountID         string    `gorm:"column:c_exchange_account_id"`
+	TradingAccountID          string    `gorm:"column:c_trading_account_id"`
 	ClientOrderID             string    `gorm:"column:c_client_order_id"`
 	ExchangeOrderID           string    `gorm:"column:c_exchange_order_id"`
 	Exchange                  string    `gorm:"column:c_exchange"`
@@ -307,7 +307,7 @@ type orderRow struct {
 }
 
 func (tx *Tx) CreateOrder(record OrderRecord) error {
-	if record.SpaceID == "" || record.OrderID == "" || record.ExchangeAccountID == "" ||
+	if record.SpaceID == "" || record.OrderID == "" || record.TradingAccountID == "" ||
 		record.ClientOrderID == "" || record.Symbol == "" ||
 		record.OrderType == "" || record.Side == "" ||
 		record.Quantity == "" || record.ReferencePrice == "" || record.OwnerType == "" ||
@@ -317,7 +317,7 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 	if err := validateOrderOwnership(tx, record); err != nil {
 		return err
 	}
-	identity, err := tx.accountIdentity(record.SpaceID, record.ExchangeAccountID)
+	identity, err := tx.accountIdentity(record.SpaceID, record.TradingAccountID)
 	if err != nil {
 		return err
 	}
@@ -345,7 +345,7 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 	}
 	return writeError(tx.db.Exec(`
 		INSERT INTO t_trade_orders (
-			c_space_id, c_order_id, c_exchange_account_id, c_client_order_id,
+			c_space_id, c_order_id, c_trading_account_id, c_client_order_id,
 			c_exchange_order_id, c_exchange, c_market_type, c_symbol, c_order_type,
 			c_time_in_force, c_side, c_position_side, c_quantity, c_limit_price,
 			c_reference_price, c_reference_price_at, c_reduce_only, c_owner_type,
@@ -355,7 +355,7 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 			c_reject_reason, c_exchange_updated_at, c_version, c_submitted_at, c_finished_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		record.SpaceID, record.OrderID, record.ExchangeAccountID, record.ClientOrderID,
+		record.SpaceID, record.OrderID, record.TradingAccountID, record.ClientOrderID,
 		record.ExchangeOrderID, record.Exchange, record.MarketType, record.Symbol,
 		record.OrderType, record.TimeInForce, record.Side, record.PositionSide,
 		record.Quantity, record.LimitPrice, record.ReferencePrice, record.ReferencePriceAt,
@@ -399,9 +399,9 @@ func validateOrderOwnership(tx *Tx, record OrderRecord) error {
 		SELECT COUNT(*)
 		FROM t_logical_account_members
 		WHERE c_space_id = ? AND c_logical_account_id = ?
-			AND c_exchange_account_id = ?
+			AND c_trading_account_id = ?
 	`,
-		record.SpaceID, record.LogicalAccountID, record.ExchangeAccountID,
+		record.SpaceID, record.LogicalAccountID, record.TradingAccountID,
 	).Scan(&membership).Error; err != nil {
 		return err
 	}
@@ -426,15 +426,15 @@ func (s *Store) GetOrder(
 func (s *Store) GetOrderByClientID(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	clientOrderID string,
 ) (OrderRecord, error) {
 	var row orderRow
 	err := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where(
-			"c_space_id = ? AND c_exchange_account_id = ? AND c_client_order_id = ?",
+			"c_space_id = ? AND c_trading_account_id = ? AND c_client_order_id = ?",
 			spaceID,
-			exchangeAccountID,
+			tradingAccountID,
 			clientOrderID,
 		).
 		Take(&row).Error
@@ -444,16 +444,16 @@ func (s *Store) GetOrderByClientID(
 func (s *Store) GetOrderByExchangeID(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	symbol string,
 	exchangeOrderID string,
 ) (OrderRecord, error) {
 	var row orderRow
 	err := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where(
-			"c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ? AND c_exchange_order_id = ?",
+			"c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ? AND c_exchange_order_id = ?",
 			spaceID,
-			exchangeAccountID,
+			tradingAccountID,
 			symbol,
 			exchangeOrderID,
 		).
@@ -464,12 +464,12 @@ func (s *Store) GetOrderByExchangeID(
 func (s *Store) ListOrdersForAccount(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	terminalSince int64,
 ) ([]OrderRecord, error) {
 	var rows []orderRow
 	query := s.db.WithContext(ctx).Table("t_trade_orders").
-		Where("c_space_id = ? AND c_exchange_account_id = ?", spaceID, exchangeAccountID)
+		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID)
 	if terminalSince > 0 {
 		query = query.Where(
 			"c_state NOT IN (?, ?, ?, ?, ?) OR c_finished_at >= ?",
@@ -494,15 +494,15 @@ func (s *Store) ListOrdersForAccount(
 func (s *Store) ListOrdersForLane(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	symbol string,
 ) ([]OrderRecord, error) {
 	var rows []orderRow
 	if err := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where(
-			"c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?",
+			"c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?",
 			spaceID,
-			exchangeAccountID,
+			tradingAccountID,
 			symbol,
 		).
 		Order("c_order_id").
@@ -517,15 +517,15 @@ func (s *Store) ListOrdersForLane(
 }
 
 type OrderQuery struct {
-	LogicalAccountID  string
-	ExchangeAccountID string
-	Symbol            string
-	State             string
-	OnlyOpen          bool
-	StartTime         int64
-	EndTime           int64
-	Offset            int
-	Limit             int
+	LogicalAccountID string
+	TradingAccountID string
+	Symbol           string
+	State            string
+	OnlyOpen         bool
+	StartTime        int64
+	EndTime          int64
+	Offset           int
+	Limit            int
 }
 
 func (s *Store) ListOrders(
@@ -538,8 +538,8 @@ func (s *Store) ListOrders(
 	if query.LogicalAccountID != "" {
 		db = db.Where("c_logical_account_id = ?", query.LogicalAccountID)
 	}
-	if query.ExchangeAccountID != "" {
-		db = db.Where("c_exchange_account_id = ?", query.ExchangeAccountID)
+	if query.TradingAccountID != "" {
+		db = db.Where("c_trading_account_id = ?", query.TradingAccountID)
 	}
 	if query.Symbol != "" {
 		db = db.Where("c_symbol = ?", query.Symbol)
@@ -591,21 +591,21 @@ func (tx *Tx) GetOrder(spaceID string, orderID string) (OrderRecord, error) {
 
 func (tx *Tx) FindOrderForFill(
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	clientOrderID string,
 	exchangeOrderID string,
 	symbol string,
 ) (OrderRecord, error) {
-	if spaceID == "" || exchangeAccountID == "" || symbol == "" ||
+	if spaceID == "" || tradingAccountID == "" || symbol == "" ||
 		(clientOrderID == "" && exchangeOrderID == "") {
 		return OrderRecord{}, fmt.Errorf("%w: incomplete Fill order identity", ErrInvalidRecord)
 	}
 	var row orderRow
 	query := `
 		SELECT * FROM t_trade_orders
-		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?
 	`
-	args := []any{spaceID, exchangeAccountID, symbol}
+	args := []any{spaceID, tradingAccountID, symbol}
 	if clientOrderID != "" && exchangeOrderID != "" {
 		query += " AND (c_client_order_id = ? OR c_exchange_order_id = ?)"
 		args = append(args, clientOrderID, exchangeOrderID)
@@ -689,7 +689,7 @@ func (tx *Tx) UpdateOrder(record OrderRecord, expectedVersion uint64) error {
 func orderRecordFromRow(row orderRow) OrderRecord {
 	return OrderRecord{
 		SpaceID: row.SpaceID, OrderID: row.OrderID,
-		ExchangeAccountID: row.ExchangeAccountID, ClientOrderID: row.ClientOrderID,
+		TradingAccountID: row.TradingAccountID, ClientOrderID: row.ClientOrderID,
 		ExchangeOrderID: row.ExchangeOrderID, Exchange: row.Exchange,
 		MarketType: row.MarketType, Symbol: row.Symbol, OrderType: row.OrderType,
 		TimeInForce: row.TimeInForce, Side: row.Side, PositionSide: row.PositionSide,
@@ -723,26 +723,26 @@ func valueOrEmpty(value *string) string {
 }
 
 type FillRecord struct {
-	SpaceID           string
-	FillID            string
-	ExchangeTradeID   string
-	OrderID           string
-	ExchangeOrderID   string
-	ExchangeAccountID string
-	Exchange          string
-	MarketType        string
-	Symbol            string
-	Side              string
-	PositionSide      string
-	Price             string
-	Quantity          string
-	Fee               string
-	FeeAsset          string
-	SettlementAsset   string
-	RealizedPnL       string
-	Role              string
-	TradedAt          int64
-	CreatedAt         time.Time
+	SpaceID          string
+	FillID           string
+	ExchangeTradeID  string
+	OrderID          string
+	ExchangeOrderID  string
+	TradingAccountID string
+	Exchange         string
+	MarketType       string
+	Symbol           string
+	Side             string
+	PositionSide     string
+	Price            string
+	Quantity         string
+	Fee              string
+	FeeAsset         string
+	SettlementAsset  string
+	RealizedPnL      string
+	Role             string
+	TradedAt         int64
+	CreatedAt        time.Time
 }
 
 func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
@@ -751,16 +751,16 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		return false, fmt.Errorf("%w: incomplete Fill", ErrInvalidRecord)
 	}
 	var orderIdentity struct {
-		ExchangeAccountID string `gorm:"column:c_exchange_account_id"`
-		ExchangeOrderID   string `gorm:"column:c_exchange_order_id"`
-		Exchange          string `gorm:"column:c_exchange"`
-		MarketType        string `gorm:"column:c_market_type"`
-		Symbol            string `gorm:"column:c_symbol"`
-		Side              string `gorm:"column:c_side"`
-		PositionSide      string `gorm:"column:c_position_side"`
+		TradingAccountID string `gorm:"column:c_trading_account_id"`
+		ExchangeOrderID  string `gorm:"column:c_exchange_order_id"`
+		Exchange         string `gorm:"column:c_exchange"`
+		MarketType       string `gorm:"column:c_market_type"`
+		Symbol           string `gorm:"column:c_symbol"`
+		Side             string `gorm:"column:c_side"`
+		PositionSide     string `gorm:"column:c_position_side"`
 	}
 	result := tx.db.Raw(`
-		SELECT c_exchange_account_id, c_exchange_order_id, c_exchange, c_market_type,
+		SELECT c_trading_account_id, c_exchange_order_id, c_exchange, c_market_type,
 			c_symbol, c_side, c_position_side
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_order_id = ?
@@ -776,7 +776,7 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		expected string
 		label    string
 	}{
-		{&record.ExchangeAccountID, orderIdentity.ExchangeAccountID, "Fill Exchange account"},
+		{&record.TradingAccountID, orderIdentity.TradingAccountID, "Fill Exchange account"},
 		{&record.Exchange, orderIdentity.Exchange, "Fill Exchange"},
 		{&record.MarketType, orderIdentity.MarketType, "Fill market type"},
 		{&record.Symbol, orderIdentity.Symbol, "Fill symbol"},
@@ -816,13 +816,13 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 	result = tx.db.Exec(`
 		INSERT INTO t_order_fills (
 			c_space_id, c_fill_id, c_exchange_trade_id, c_order_id,
-			c_exchange_order_id, c_exchange_account_id, c_exchange, c_market_type,
+			c_exchange_order_id, c_trading_account_id, c_exchange, c_market_type,
 			c_symbol, c_side, c_position_side, c_price, c_quantity, c_fee,
 			c_fee_asset, c_settlement_asset, c_realized_pnl, c_role, c_traded_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.SpaceID, record.FillID, record.ExchangeTradeID, record.OrderID,
-		record.ExchangeOrderID, record.ExchangeAccountID, record.Exchange,
+		record.ExchangeOrderID, record.TradingAccountID, record.Exchange,
 		record.MarketType, record.Symbol, record.Side, record.PositionSide,
 		record.Price, record.Quantity, record.Fee, record.FeeAsset,
 		record.SettlementAsset, record.RealizedPnL, record.Role,
@@ -842,44 +842,44 @@ func (tx *Tx) fillIdentityExists(record FillRecord) (bool, error) {
 	var count int64
 	err := tx.db.Raw(`
 		SELECT COUNT(*) FROM t_order_fills
-		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?
 			AND c_exchange_trade_id = ?
-	`, record.SpaceID, record.ExchangeAccountID, record.Symbol, record.ExchangeTradeID).
+	`, record.SpaceID, record.TradingAccountID, record.Symbol, record.ExchangeTradeID).
 		Scan(&count).Error
 	return count != 0, err
 }
 
 type fillRow struct {
-	SpaceID           string    `gorm:"column:c_space_id"`
-	FillID            string    `gorm:"column:c_fill_id"`
-	ExchangeTradeID   string    `gorm:"column:c_exchange_trade_id"`
-	OrderID           string    `gorm:"column:c_order_id"`
-	ExchangeOrderID   string    `gorm:"column:c_exchange_order_id"`
-	ExchangeAccountID string    `gorm:"column:c_exchange_account_id"`
-	Exchange          string    `gorm:"column:c_exchange"`
-	MarketType        string    `gorm:"column:c_market_type"`
-	Symbol            string    `gorm:"column:c_symbol"`
-	Side              string    `gorm:"column:c_side"`
-	PositionSide      string    `gorm:"column:c_position_side"`
-	Price             string    `gorm:"column:c_price"`
-	Quantity          string    `gorm:"column:c_quantity"`
-	Fee               string    `gorm:"column:c_fee"`
-	FeeAsset          string    `gorm:"column:c_fee_asset"`
-	SettlementAsset   string    `gorm:"column:c_settlement_asset"`
-	RealizedPnL       string    `gorm:"column:c_realized_pnl"`
-	Role              string    `gorm:"column:c_role"`
-	TradedAt          int64     `gorm:"column:c_traded_at"`
-	CreatedAt         time.Time `gorm:"column:c_ctime"`
+	SpaceID          string    `gorm:"column:c_space_id"`
+	FillID           string    `gorm:"column:c_fill_id"`
+	ExchangeTradeID  string    `gorm:"column:c_exchange_trade_id"`
+	OrderID          string    `gorm:"column:c_order_id"`
+	ExchangeOrderID  string    `gorm:"column:c_exchange_order_id"`
+	TradingAccountID string    `gorm:"column:c_trading_account_id"`
+	Exchange         string    `gorm:"column:c_exchange"`
+	MarketType       string    `gorm:"column:c_market_type"`
+	Symbol           string    `gorm:"column:c_symbol"`
+	Side             string    `gorm:"column:c_side"`
+	PositionSide     string    `gorm:"column:c_position_side"`
+	Price            string    `gorm:"column:c_price"`
+	Quantity         string    `gorm:"column:c_quantity"`
+	Fee              string    `gorm:"column:c_fee"`
+	FeeAsset         string    `gorm:"column:c_fee_asset"`
+	SettlementAsset  string    `gorm:"column:c_settlement_asset"`
+	RealizedPnL      string    `gorm:"column:c_realized_pnl"`
+	Role             string    `gorm:"column:c_role"`
+	TradedAt         int64     `gorm:"column:c_traded_at"`
+	CreatedAt        time.Time `gorm:"column:c_ctime"`
 }
 
 type FillQuery struct {
-	ExchangeAccountID string
-	OrderID           string
-	Symbol            string
-	StartTime         int64
-	EndTime           int64
-	Offset            int
-	Limit             int
+	TradingAccountID string
+	OrderID          string
+	Symbol           string
+	StartTime        int64
+	EndTime          int64
+	Offset           int
+	Limit            int
 }
 
 func (s *Store) ListFills(
@@ -889,8 +889,8 @@ func (s *Store) ListFills(
 ) ([]FillRecord, int64, error) {
 	db := s.db.WithContext(ctx).Table("t_order_fills").
 		Where("c_space_id = ?", spaceID)
-	if query.ExchangeAccountID != "" {
-		db = db.Where("c_exchange_account_id = ?", query.ExchangeAccountID)
+	if query.TradingAccountID != "" {
+		db = db.Where("c_trading_account_id = ?", query.TradingAccountID)
 	}
 	if query.OrderID != "" {
 		db = db.Where("c_order_id = ?", query.OrderID)
@@ -918,8 +918,8 @@ func (s *Store) ListFills(
 		records = append(records, FillRecord{
 			SpaceID: row.SpaceID, FillID: row.FillID,
 			ExchangeTradeID: row.ExchangeTradeID, OrderID: row.OrderID,
-			ExchangeOrderID:   row.ExchangeOrderID,
-			ExchangeAccountID: row.ExchangeAccountID, Exchange: row.Exchange,
+			ExchangeOrderID:  row.ExchangeOrderID,
+			TradingAccountID: row.TradingAccountID, Exchange: row.Exchange,
 			MarketType: row.MarketType, Symbol: row.Symbol, Side: row.Side,
 			PositionSide: row.PositionSide, Price: row.Price, Quantity: row.Quantity,
 			Fee: row.Fee, FeeAsset: row.FeeAsset,
@@ -937,13 +937,13 @@ func (tx *Tx) resolveDuplicateFill(
 	var existing fillRow
 	result := tx.db.Raw(`
 		SELECT c_space_id, c_fill_id, c_exchange_trade_id, c_order_id,
-			c_exchange_order_id, c_exchange_account_id, c_exchange, c_market_type,
+			c_exchange_order_id, c_trading_account_id, c_exchange, c_market_type,
 			c_symbol, c_side, c_position_side, c_price, c_quantity, c_fee,
 			c_fee_asset, c_settlement_asset, c_realized_pnl, c_role, c_traded_at
 		FROM t_order_fills
-		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?
 			AND c_exchange_trade_id = ?
-	`, record.SpaceID, record.ExchangeAccountID, record.Symbol, record.ExchangeTradeID).
+	`, record.SpaceID, record.TradingAccountID, record.Symbol, record.ExchangeTradeID).
 		Scan(&existing)
 	if result.Error != nil {
 		return false, result.Error
@@ -958,8 +958,8 @@ func fillRowFromRecord(record FillRecord) fillRow {
 	return fillRow{
 		SpaceID: record.SpaceID, FillID: record.FillID,
 		ExchangeTradeID: record.ExchangeTradeID, OrderID: record.OrderID,
-		ExchangeOrderID:   record.ExchangeOrderID,
-		ExchangeAccountID: record.ExchangeAccountID, Exchange: record.Exchange,
+		ExchangeOrderID:  record.ExchangeOrderID,
+		TradingAccountID: record.TradingAccountID, Exchange: record.Exchange,
 		MarketType: record.MarketType, Symbol: record.Symbol, Side: record.Side,
 		PositionSide: record.PositionSide, Price: record.Price,
 		Quantity: record.Quantity, Fee: record.Fee, FeeAsset: record.FeeAsset,
@@ -968,23 +968,23 @@ func fillRowFromRecord(record FillRecord) fillRow {
 	}
 }
 
-type exchangeAccountIdentity struct {
+type tradingAccountIdentity struct {
 	Exchange   string `gorm:"column:c_exchange"`
 	MarketType string `gorm:"column:c_market_type"`
 }
 
-func (tx *Tx) accountIdentity(spaceID string, exchangeAccountID string) (exchangeAccountIdentity, error) {
-	var identity exchangeAccountIdentity
+func (tx *Tx) accountIdentity(spaceID string, tradingAccountID string) (tradingAccountIdentity, error) {
+	var identity tradingAccountIdentity
 	result := tx.db.Raw(`
 		SELECT c_exchange, c_market_type
-		FROM t_exchange_accounts
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
-	`, spaceID, exchangeAccountID).Scan(&identity)
+		FROM t_trading_accounts
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+	`, spaceID, tradingAccountID).Scan(&identity)
 	if result.Error != nil {
-		return exchangeAccountIdentity{}, result.Error
+		return tradingAccountIdentity{}, result.Error
 	}
 	if result.RowsAffected != 1 {
-		return exchangeAccountIdentity{}, fmt.Errorf("%w: Exchange account identity", ErrInvalidRecord)
+		return tradingAccountIdentity{}, fmt.Errorf("%w: Exchange account identity", ErrInvalidRecord)
 	}
 	return identity, nil
 }
@@ -1002,7 +1002,7 @@ func validateOrDeriveIdentity(actual *string, expected string, label string) err
 
 type PositionRecord struct {
 	SpaceID           string
-	ExchangeAccountID string
+	TradingAccountID  string
 	Symbol            string
 	PositionSide      string
 	SignedQuantity    string
@@ -1019,11 +1019,11 @@ type PositionRecord struct {
 }
 
 func (tx *Tx) UpsertPosition(record PositionRecord) error {
-	if record.SpaceID == "" || record.ExchangeAccountID == "" || record.Symbol == "" ||
+	if record.SpaceID == "" || record.TradingAccountID == "" || record.Symbol == "" ||
 		record.PositionSide == "" {
 		return fmt.Errorf("%w: incomplete position", ErrInvalidRecord)
 	}
-	identity, err := tx.accountIdentity(record.SpaceID, record.ExchangeAccountID)
+	identity, err := tx.accountIdentity(record.SpaceID, record.TradingAccountID)
 	if err != nil {
 		return err
 	}
@@ -1031,13 +1031,13 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 		return err
 	}
 	return tx.db.Exec(`
-		INSERT INTO t_exchange_positions (
-			c_space_id, c_exchange_account_id, c_symbol, c_position_side,
+		INSERT INTO t_trading_positions (
+			c_space_id, c_trading_account_id, c_symbol, c_position_side,
 			c_signed_quantity, c_entry_price, c_mark_price, c_leverage, c_margin_mode,
 			c_used_margin, c_liquidation_price, c_unrealized_pnl, c_realized_pnl,
 			c_exchange_updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_exchange_account_id, c_symbol, c_position_side)
+		ON CONFLICT(c_space_id, c_trading_account_id, c_symbol, c_position_side)
 		DO UPDATE SET
 			c_signed_quantity = excluded.c_signed_quantity,
 			c_entry_price = excluded.c_entry_price,
@@ -1051,9 +1051,9 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 			c_exchange_updated_at = excluded.c_exchange_updated_at,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE excluded.c_exchange_updated_at >=
-			t_exchange_positions.c_exchange_updated_at
+			t_trading_positions.c_exchange_updated_at
 	`,
-		record.SpaceID, record.ExchangeAccountID, record.Symbol, record.PositionSide,
+		record.SpaceID, record.TradingAccountID, record.Symbol, record.PositionSide,
 		record.SignedQuantity, record.EntryPrice,
 		record.MarkPrice, record.Leverage, record.MarginMode,
 		record.UsedMargin, record.LiquidationPrice,
@@ -1064,15 +1064,15 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 
 func (tx *Tx) ReplacePositionsForAccount(
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	records []PositionRecord,
 	snapshotAt int64,
 ) error {
-	if blank(spaceID) || blank(exchangeAccountID) || snapshotAt <= 0 {
+	if blank(spaceID) || blank(tradingAccountID) || snapshotAt <= 0 {
 		return fmt.Errorf("%w: incomplete position snapshot identity", ErrInvalidRecord)
 	}
 	for _, record := range records {
-		if record.SpaceID != spaceID || record.ExchangeAccountID != exchangeAccountID {
+		if record.SpaceID != spaceID || record.TradingAccountID != tradingAccountID {
 			return fmt.Errorf("%w: conflicting position snapshot identity", ErrInvalidRecord)
 		}
 		if err := tx.UpsertPosition(record); err != nil {
@@ -1080,11 +1080,11 @@ func (tx *Tx) ReplacePositionsForAccount(
 		}
 	}
 	query := `
-		DELETE FROM t_exchange_positions
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
+		DELETE FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ?
 			AND c_exchange_updated_at <= ?
 	`
-	args := []any{spaceID, exchangeAccountID, snapshotAt}
+	args := []any{spaceID, tradingAccountID, snapshotAt}
 	if len(records) > 0 {
 		var retained strings.Builder
 		retained.WriteString(" AND NOT (")
@@ -1106,13 +1106,13 @@ func (tx *Tx) ReplacePositionsForAccount(
 
 func (tx *Tx) GetPosition(
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	symbol string,
 	positionSide string,
 ) (PositionRecord, bool, error) {
 	var row struct {
 		SpaceID           string    `gorm:"column:c_space_id"`
-		ExchangeAccountID string    `gorm:"column:c_exchange_account_id"`
+		TradingAccountID  string    `gorm:"column:c_trading_account_id"`
 		Symbol            string    `gorm:"column:c_symbol"`
 		PositionSide      string    `gorm:"column:c_position_side"`
 		SignedQuantity    string    `gorm:"column:c_signed_quantity"`
@@ -1128,10 +1128,10 @@ func (tx *Tx) GetPosition(
 		UpdatedAt         time.Time `gorm:"column:c_mtime"`
 	}
 	result := tx.db.Raw(`
-		SELECT * FROM t_exchange_positions
-		WHERE c_space_id = ? AND c_exchange_account_id = ?
+		SELECT * FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ?
 			AND c_symbol = ? AND c_position_side = ?
-	`, spaceID, exchangeAccountID, symbol, positionSide).Scan(&row)
+	`, spaceID, tradingAccountID, symbol, positionSide).Scan(&row)
 	if result.Error != nil {
 		return PositionRecord{}, false, result.Error
 	}
@@ -1139,7 +1139,7 @@ func (tx *Tx) GetPosition(
 		return PositionRecord{}, false, nil
 	}
 	return PositionRecord{
-		SpaceID: row.SpaceID, ExchangeAccountID: row.ExchangeAccountID,
+		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
 		Symbol: row.Symbol, PositionSide: row.PositionSide,
 		SignedQuantity: row.SignedQuantity, EntryPrice: row.EntryPrice,
 		MarkPrice: row.MarkPrice, Leverage: row.Leverage,
@@ -1154,7 +1154,7 @@ func (tx *Tx) GetPosition(
 func (s *Store) GetPosition(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	symbol string,
 	positionSide string,
 ) (PositionRecord, bool, error) {
@@ -1164,7 +1164,7 @@ func (s *Store) GetPosition(
 		var err error
 		record, found, err = tx.GetPosition(
 			spaceID,
-			exchangeAccountID,
+			tradingAccountID,
 			symbol,
 			positionSide,
 		)
@@ -1176,17 +1176,17 @@ func (s *Store) GetPosition(
 func (s *Store) ListPositions(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	symbol string,
 ) ([]PositionRecord, error) {
-	db := s.db.WithContext(ctx).Table("t_exchange_positions").
-		Where("c_space_id = ? AND c_exchange_account_id = ?", spaceID, exchangeAccountID)
+	db := s.db.WithContext(ctx).Table("t_trading_positions").
+		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID)
 	if symbol != "" {
 		db = db.Where("c_symbol = ?", symbol)
 	}
 	var rows []struct {
 		SpaceID           string    `gorm:"column:c_space_id"`
-		ExchangeAccountID string    `gorm:"column:c_exchange_account_id"`
+		TradingAccountID  string    `gorm:"column:c_trading_account_id"`
 		Symbol            string    `gorm:"column:c_symbol"`
 		PositionSide      string    `gorm:"column:c_position_side"`
 		SignedQuantity    string    `gorm:"column:c_signed_quantity"`
@@ -1207,7 +1207,7 @@ func (s *Store) ListPositions(
 	records := make([]PositionRecord, 0, len(rows))
 	for _, row := range rows {
 		records = append(records, PositionRecord{
-			SpaceID: row.SpaceID, ExchangeAccountID: row.ExchangeAccountID,
+			SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
 			Symbol: row.Symbol, PositionSide: row.PositionSide,
 			SignedQuantity: row.SignedQuantity, EntryPrice: row.EntryPrice,
 			MarkPrice: row.MarkPrice, Leverage: row.Leverage,

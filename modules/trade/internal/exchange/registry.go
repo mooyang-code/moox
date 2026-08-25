@@ -41,7 +41,7 @@ func (r *Registry) Bind(config AccountConfig, credential Credential) (Adapter, e
 	}
 	adapter, err := factory(config, credential)
 	if err != nil {
-		return nil, fmt.Errorf("exchange: bind %s account %q: %w", config.Exchange, config.ExchangeAccountID, err)
+		return nil, fmt.Errorf("exchange: bind %s account %q: %w", config.Exchange, config.TradingAccountID, err)
 	}
 	if adapter == nil {
 		return nil, fmt.Errorf("exchange: %s factory returned nil adapter", config.Exchange)
@@ -57,7 +57,7 @@ func (r *Registry) Bind(config AccountConfig, credential Credential) (Adapter, e
 }
 
 func validateBinding(config AccountConfig, credential Credential) error {
-	if strings.TrimSpace(config.ExchangeAccountID) == "" ||
+	if strings.TrimSpace(config.TradingAccountID) == "" ||
 		!config.Exchange.Valid() ||
 		!config.MarketType.Valid() ||
 		!config.ExecutionMode.Valid() ||

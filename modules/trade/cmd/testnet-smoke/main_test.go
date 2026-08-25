@@ -198,7 +198,7 @@ func TestSeedSmokeStoreCreatesOnlyTestnetLiveSpotAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account, err := database.GetExchangeAccountByID(ctx, identity.AccountID)
+	account, err := database.GetTradingAccountByID(ctx, identity.AccountID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestSeedSmokeStoreCreatesOnlyTestnetLiveSpotAccount(t *testing.T) {
 		identity.LogicalAccountID,
 		false,
 	)
-	if err != nil || len(members) != 1 || members[0].ExchangeAccountID != identity.AccountID {
+	if err != nil || len(members) != 1 || members[0].TradingAccountID != identity.AccountID {
 		t.Fatalf("members = %+v, err = %v", members, err)
 	}
 }
@@ -237,8 +237,8 @@ func TestSeedSmokeStoreRejectsExistingNonTestnetAccount(t *testing.T) {
 	}
 	identity := smokeIdentityFor(options.Exchange)
 	if err := database.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: smokeSpaceID, ExchangeAccountID: identity.AccountID,
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: smokeSpaceID, TradingAccountID: identity.AccountID,
 			Name: "bad", Exchange: "BINANCE", MarketType: "SPOT",
 			ExecutionMode: "LIVE", Environment: "PRODUCTION",
 			CredentialSecretID: options.SecretID, SettlementAsset: "USDT",

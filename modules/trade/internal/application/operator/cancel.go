@@ -116,7 +116,7 @@ func (s *Service) CancelOrder(
 			return s.failCancelAction(ctx, action, orderRecord, err)
 		}
 		if err := s.Syncer.SyncAccount(
-			ctx, orderRecord.ExchangeAccountID,
+			ctx, orderRecord.TradingAccountID,
 		); err != nil {
 			return s.failCancelAction(ctx, action, orderRecord, err)
 		}

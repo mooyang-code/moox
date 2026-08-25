@@ -8,13 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
 type AccountSource interface {
-	ListEnabledExchangeAccounts(context.Context) ([]store.ExchangeAccountRecord, error)
+	ListEnabledTradingAccounts(context.Context) ([]store.TradingAccountRecord, error)
 }
 
 type ManagedSession interface {
@@ -22,7 +22,7 @@ type ManagedSession interface {
 	Ready() bool
 }
 
-type SessionFactory func(store.ExchangeAccountRecord) (ManagedSession, error)
+type SessionFactory func(store.TradingAccountRecord) (ManagedSession, error)
 
 type SessionSnapshot struct {
 	Enabled      int
@@ -48,7 +48,7 @@ type Manager struct {
 type managedEntry struct {
 	session  ManagedSession
 	cancel   context.CancelFunc
-	account  store.ExchangeAccountRecord
+	account  store.TradingAccountRecord
 	done     chan struct{}
 	stopping bool
 }
@@ -95,14 +95,14 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 }
 
-func (m *Manager) Ready(exchangeAccountID string) bool {
+func (m *Manager) Ready(tradingAccountID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	entry := m.sessions[exchangeAccountID]
+	entry := m.sessions[tradingAccountID]
 	return entry != nil && !entry.stopping && entry.session.Ready()
 }
 
-func (m *Manager) ReadyFor(account exchangeaccount.Account) bool {
+func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry := m.sessions[account.ID]
@@ -113,8 +113,8 @@ func (m *Manager) ReadyFor(account exchangeaccount.Account) bool {
 	for symbol, value := range account.LeverageSettings {
 		leverage[symbol] = value.String()
 	}
-	current := store.ExchangeAccountRecord{
-		SpaceID: account.SpaceID, ExchangeAccountID: account.ID,
+	current := store.TradingAccountRecord{
+		SpaceID: account.SpaceID, TradingAccountID: account.ID,
 		Exchange: string(account.Exchange), MarketType: string(account.MarketType),
 		ExecutionMode:      string(account.ExecutionMode),
 		Environment:        string(account.Environment),
@@ -127,9 +127,9 @@ func (m *Manager) ReadyFor(account exchangeaccount.Account) bool {
 	return sameSessionConfig(entry.account, current)
 }
 
-func (m *Manager) Invalidate(exchangeAccountID string) {
+func (m *Manager) Invalidate(tradingAccountID string) {
 	m.mu.Lock()
-	entry := m.sessions[exchangeAccountID]
+	entry := m.sessions[tradingAccountID]
 	if entry != nil && !entry.stopping {
 		entry.stopping = true
 		entry.cancel()
@@ -137,10 +137,10 @@ func (m *Manager) Invalidate(exchangeAccountID string) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) Adapter(exchangeAccountID string) (exchange.Adapter, error) {
+func (m *Manager) Adapter(tradingAccountID string) (exchange.Adapter, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	entry := m.sessions[exchangeAccountID]
+	entry := m.sessions[tradingAccountID]
 	if entry == nil {
 		return nil, ErrSessionConfig
 	}
@@ -178,21 +178,21 @@ func (m *Manager) Snapshot() SessionSnapshot {
 }
 
 func (m *Manager) reconcile(ctx context.Context) error {
-	accounts, err := m.Accounts.ListEnabledExchangeAccounts(ctx)
+	accounts, err := m.Accounts.ListEnabledTradingAccounts(ctx)
 	if err != nil {
 		return err
 	}
-	wanted := make(map[string]store.ExchangeAccountRecord, len(accounts))
+	wanted := make(map[string]store.TradingAccountRecord, len(accounts))
 	configErrors := make([]string, 0)
 	for _, account := range accounts {
-		if _, duplicate := wanted[account.ExchangeAccountID]; duplicate {
+		if _, duplicate := wanted[account.TradingAccountID]; duplicate {
 			configErrors = append(
 				configErrors,
-				"duplicate enabled Exchange account ID "+account.ExchangeAccountID,
+				"duplicate enabled Exchange account ID "+account.TradingAccountID,
 			)
 			continue
 		}
-		wanted[account.ExchangeAccountID] = account
+		wanted[account.TradingAccountID] = account
 	}
 
 	m.mu.Lock()
@@ -253,11 +253,11 @@ func (m *Manager) reconcile(ctx context.Context) error {
 }
 
 func sameSessionConfig(
-	left store.ExchangeAccountRecord,
-	right store.ExchangeAccountRecord,
+	left store.TradingAccountRecord,
+	right store.TradingAccountRecord,
 ) bool {
 	return left.SpaceID == right.SpaceID &&
-		left.ExchangeAccountID == right.ExchangeAccountID &&
+		left.TradingAccountID == right.TradingAccountID &&
 		left.Exchange == right.Exchange &&
 		left.MarketType == right.MarketType &&
 		left.ExecutionMode == right.ExecutionMode &&

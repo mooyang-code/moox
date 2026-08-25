@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
@@ -19,7 +19,7 @@ func TestRepositoryPersistsAccountAndLeverage(t *testing.T) {
 	}
 	defer tradeStore.Close()
 	repository := Repository{Store: tradeStore}
-	value := exchangeaccount.Account{
+	value := tradingaccount.Account{
 		ID: "account-1", SpaceID: "space-1", Name: "main",
 		Exchange: exchange.ExchangeOKX, MarketType: exchange.MarketTypeSwap,
 		ExecutionMode:      exchange.ExecutionModeLive,

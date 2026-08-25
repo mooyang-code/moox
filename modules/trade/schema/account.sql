@@ -1,8 +1,8 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS t_exchange_accounts (
+CREATE TABLE IF NOT EXISTS t_trading_accounts (
     c_space_id TEXT NOT NULL,
-    c_exchange_account_id TEXT NOT NULL,
+    c_trading_account_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
     c_exchange TEXT NOT NULL,
     c_market_type TEXT NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS t_exchange_accounts (
     c_last_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_exchange_account_id),
+    PRIMARY KEY (c_space_id, c_trading_account_id),
     UNIQUE (c_space_id, c_name),
     CHECK (json_valid(c_leverage_settings_json)),
     CHECK (json_type(c_leverage_settings_json) = 'object'),
@@ -46,10 +46,10 @@ CREATE TABLE IF NOT EXISTS t_exchange_accounts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_exchange_accounts_status
-ON t_exchange_accounts (c_space_id, c_status);
+ON t_trading_accounts (c_space_id, c_status);
 
 CREATE INDEX IF NOT EXISTS idx_exchange_accounts_exchange
-ON t_exchange_accounts (c_exchange, c_market_type);
+ON t_trading_accounts (c_exchange, c_market_type);
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_exchange_accounts_id
-ON t_exchange_accounts (c_exchange_account_id);
+ON t_trading_accounts (c_trading_account_id);

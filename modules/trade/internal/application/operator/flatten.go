@@ -34,11 +34,11 @@ type RemainingPosition struct {
 }
 
 type FlattenAccountResult struct {
-	ExchangeAccountID string              `json:"exchange_account_id"`
-	Status            string              `json:"status"`
-	ChildOrderIDs     []string            `json:"child_order_ids,omitempty"`
-	Remaining         []RemainingPosition `json:"remaining_positions,omitempty"`
-	Error             string              `json:"error,omitempty"`
+	TradingAccountID string              `json:"trading_account_id"`
+	Status           string              `json:"status"`
+	ChildOrderIDs    []string            `json:"child_order_ids,omitempty"`
+	Remaining        []RemainingPosition `json:"remaining_positions,omitempty"`
+	Error            string              `json:"error,omitempty"`
 }
 
 type FlattenResult struct {
@@ -116,7 +116,7 @@ func (s *Service) FlattenLogicalAccount(
 	executable := 0
 	for _, member := range members {
 		accountResult, wasExecutable := s.flattenAccount(
-			ctx, command, member.ExchangeAccountID, deadline,
+			ctx, command, member.TradingAccountID, deadline,
 		)
 		if wasExecutable {
 			executable++
@@ -150,17 +150,17 @@ func flattenRequestJSON(command FlattenCommand) (string, error) {
 func (s *Service) flattenAccount(
 	ctx context.Context,
 	command FlattenCommand,
-	exchangeAccountID string,
+	tradingAccountID string,
 	deadline time.Time,
 ) (FlattenAccountResult, bool) {
 	result := FlattenAccountResult{
-		ExchangeAccountID: exchangeAccountID,
-		Status:            "RUNNING",
+		TradingAccountID: tradingAccountID,
+		Status:           "RUNNING",
 	}
 	recoveryCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	ctx = recoveryCtx
-	if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 		result.Status = "FAILED"
 		result.Error = err.Error()
 		return result, false
@@ -168,36 +168,36 @@ func (s *Service) flattenAccount(
 	if err := s.cancelAccountOrders(
 		ctx,
 		command.SpaceID,
-		exchangeAccountID,
+		tradingAccountID,
 		command.ActionID,
 	); err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, exchangeAccountID, nil,
+			ctx, command.SpaceID, tradingAccountID, nil,
 		)
 		return result, false
 	}
-	if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, exchangeAccountID, nil,
+			ctx, command.SpaceID, tradingAccountID, nil,
 		)
 		return result, false
 	}
 	if err := s.confirmAccountCancellations(
-		ctx, command.SpaceID, exchangeAccountID, command.ActionID,
+		ctx, command.SpaceID, tradingAccountID, command.ActionID,
 	); err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, exchangeAccountID, nil,
+			ctx, command.SpaceID, tradingAccountID, nil,
 		)
 		return result, false
 	}
-	account, err := s.Store.GetExchangeAccount(
-		ctx, command.SpaceID, exchangeAccountID,
+	account, err := s.Store.GetTradingAccount(
+		ctx, command.SpaceID, tradingAccountID,
 	)
 	if err != nil {
 		result.Status = "PARTIAL"
@@ -214,28 +214,28 @@ func (s *Service) flattenAccount(
 				result.Error = err.Error()
 				break
 			}
-			if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+			if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 				result.Error = err.Error()
 				break
 			}
 			if err := s.cancelAccountOrders(
-				ctx, command.SpaceID, exchangeAccountID, command.ActionID,
+				ctx, command.SpaceID, tradingAccountID, command.ActionID,
 			); err != nil {
 				result.Error = err.Error()
 				break
 			}
-			if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+			if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 				result.Error = err.Error()
 				break
 			}
 			if err := s.confirmAccountCancellations(
-				ctx, command.SpaceID, exchangeAccountID, command.ActionID,
+				ctx, command.SpaceID, tradingAccountID, command.ActionID,
 			); err != nil {
 				result.Error = err.Error()
 				break
 			}
-			account, err = s.Store.GetExchangeAccount(
-				ctx, command.SpaceID, exchangeAccountID,
+			account, err = s.Store.GetTradingAccount(
+				ctx, command.SpaceID, tradingAccountID,
 			)
 			if err != nil {
 				result.Error = err.Error()
@@ -252,11 +252,11 @@ func (s *Service) flattenAccount(
 		default:
 			result.Error = "unsupported market type " + account.MarketType
 		}
-		if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+		if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 			result.Error = joinError(result.Error, err.Error())
 		}
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, exchangeAccountID, reasons,
+			ctx, command.SpaceID, tradingAccountID, reasons,
 		)
 		if result.Error == "" && len(result.Remaining) == 0 {
 			result.Status = "COMPLETED"
@@ -270,11 +270,11 @@ func (s *Service) flattenAccount(
 func (s *Service) cancelAccountOrders(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	actionID string,
 ) error {
 	records, err := s.Store.ListOrdersForAccount(
-		ctx, spaceID, exchangeAccountID, 1,
+		ctx, spaceID, tradingAccountID, 1,
 	)
 	if err != nil {
 		return err
@@ -300,11 +300,11 @@ func (s *Service) cancelAccountOrders(
 func (s *Service) confirmAccountCancellations(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	actionID string,
 ) error {
 	records, err := s.Store.ListOrdersForAccount(
-		ctx, spaceID, exchangeAccountID, 1,
+		ctx, spaceID, tradingAccountID, 1,
 	)
 	if err != nil {
 		return err
@@ -328,12 +328,12 @@ func (s *Service) confirmAccountCancellations(
 func (s *Service) flattenSwap(
 	ctx context.Context,
 	command FlattenCommand,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	result *FlattenAccountResult,
 	reasons map[string]string,
 ) {
 	positions, err := s.Store.ListPositions(
-		ctx, command.SpaceID, account.ExchangeAccountID, "",
+		ctx, command.SpaceID, account.TradingAccountID, "",
 	)
 	if err != nil {
 		result.Error = joinError(result.Error, err.Error())
@@ -385,7 +385,7 @@ func (s *Service) flattenSwap(
 func (s *Service) flattenSpot(
 	ctx context.Context,
 	command FlattenCommand,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	result *FlattenAccountResult,
 	reasons map[string]string,
 ) {
@@ -440,7 +440,7 @@ func (s *Service) flattenSpot(
 			continue
 		}
 		quote, quoteErr := s.Prices.LatestPrice(
-			ctx, account.ExchangeAccountID, instrument.Symbol,
+			ctx, account.TradingAccountID, instrument.Symbol,
 		)
 		if quoteErr != nil {
 			reasons["asset:"+balance.Asset] = quoteErr.Error()
@@ -468,14 +468,14 @@ func (s *Service) flattenSpot(
 func (s *Service) placeOrContinueFlattenChild(
 	ctx context.Context,
 	command FlattenCommand,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	instrument store.InstrumentRecord,
 	side exchange.Side,
 	quantity shared.Decimal,
 	result *FlattenAccountResult,
 ) error {
 	quote, err := s.Prices.LatestPrice(
-		ctx, account.ExchangeAccountID, instrument.Symbol,
+		ctx, account.TradingAccountID, instrument.Symbol,
 	)
 	if err != nil {
 		return err
@@ -488,7 +488,7 @@ func (s *Service) placeOrContinueFlattenChild(
 func (s *Service) placeOrContinueFlattenChildWithQuote(
 	ctx context.Context,
 	command FlattenCommand,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	instrument store.InstrumentRecord,
 	side exchange.Side,
 	quantity shared.Decimal,
@@ -497,13 +497,13 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 ) error {
 	clientOrderID := flattenClientOrderIDForSpec(
 		command.ActionID,
-		account.ExchangeAccountID,
+		account.TradingAccountID,
 		instrument.Symbol,
 		side,
 		quantity,
 	)
 	existing, found, err := s.flattenChild(
-		ctx, command.SpaceID, account.ExchangeAccountID,
+		ctx, command.SpaceID, account.TradingAccountID,
 		command.ActionID, instrument.Symbol, clientOrderID,
 	)
 	if err != nil {
@@ -532,9 +532,9 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	}
 	spec := orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
-			ExchangeAccountID: account.ExchangeAccountID,
-			ClientOrderID:     clientOrderID,
-			InstrumentID:      instrument.Symbol, Type: exchange.OrderTypeMarket,
+			TradingAccountID: account.TradingAccountID,
+			ClientOrderID:    clientOrderID,
+			InstrumentID:     instrument.Symbol, Type: exchange.OrderTypeMarket,
 			Side: side, Quantity: quantity,
 		},
 		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
@@ -561,13 +561,13 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 func (s *Service) flattenChild(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	actionID string,
 	symbol string,
 	clientOrderID string,
 ) (store.OrderRecord, bool, error) {
 	records, err := s.Store.ListOrdersForLane(
-		ctx, spaceID, exchangeAccountID, symbol,
+		ctx, spaceID, tradingAccountID, symbol,
 	)
 	if err != nil {
 		return store.OrderRecord{}, false, err
@@ -602,10 +602,10 @@ func (s *Service) flattenChild(
 func (s *Service) remainingForAccount(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	reasons map[string]string,
 ) []RemainingPosition {
-	account, err := s.Store.GetExchangeAccount(ctx, spaceID, exchangeAccountID)
+	account, err := s.Store.GetTradingAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return []RemainingPosition{{
 			Quantity: "unknown", Reason: err.Error(),
@@ -614,7 +614,7 @@ func (s *Service) remainingForAccount(
 	var remaining []RemainingPosition
 	if account.MarketType == string(exchange.MarketTypeSwap) {
 		positions, listErr := s.Store.ListPositions(
-			ctx, spaceID, exchangeAccountID, "",
+			ctx, spaceID, tradingAccountID, "",
 		)
 		if listErr != nil {
 			return []RemainingPosition{{
@@ -674,7 +674,7 @@ func (s *Service) persistFlattenProgress(
 		if account.Error != "" {
 			result.Action.LastError = joinError(
 				result.Action.LastError,
-				account.ExchangeAccountID+": "+account.Error,
+				account.TradingAccountID+": "+account.Error,
 			)
 		}
 	}

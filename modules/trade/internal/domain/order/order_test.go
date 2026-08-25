@@ -298,7 +298,7 @@ func TestOrderRequiresPositiveQuantityAndIdentity(t *testing.T) {
 		mutate func(*OrderSpec)
 	}{
 		{"missing ID", "", func(*OrderSpec) {}},
-		{"missing account", "order-1", func(spec *OrderSpec) { spec.ExchangeAccountID = "" }},
+		{"missing account", "order-1", func(spec *OrderSpec) { spec.TradingAccountID = "" }},
 		{"missing client ID", "order-1", func(spec *OrderSpec) { spec.ClientOrderID = "" }},
 		{"zero quantity", "order-1", func(spec *OrderSpec) { spec.Quantity = shared.Zero() }},
 		{"negative quantity", "order-1", func(spec *OrderSpec) { spec.Quantity = shared.MustDecimal("-1") }},
@@ -329,7 +329,7 @@ func TestOrderAcceptsAuthoritativeExternalCancelWhileOpen(t *testing.T) {
 func validSpec() OrderSpec {
 	return OrderSpec{
 		ClientOrderSpec: ClientOrderSpec{
-			ExchangeAccountID: "account-1", ClientOrderID: "client-1",
+			TradingAccountID: "account-1", ClientOrderID: "client-1",
 			InstrumentID: "BTC-USDT", Type: exchange.OrderTypeMarket,
 			Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
 		},

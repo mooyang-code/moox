@@ -8,8 +8,8 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
@@ -41,7 +41,7 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, orderapp.ErrIdempotencyConflict):
 		code = tradepb.ErrorCode_CONFLICT
 	case errors.Is(err, store.ErrInvalidRecord),
-		errors.Is(err, exchangeaccount.ErrInvalidAccount),
+		errors.Is(err, tradingaccount.ErrInvalidAccount),
 		errors.Is(err, logicalapp.ErrAdoptionRequired),
 		errors.Is(err, logicalapp.ErrMemberHasExposure),
 		errors.Is(err, logicalapp.ErrNotReady),
@@ -265,8 +265,8 @@ func positionSideToPB(value string) tradepb.PositionSide {
 	return tradepb.PositionSide_POSITION_SIDE_UNSPECIFIED
 }
 
-func accountToPB(value store.ExchangeAccountRecord) *tradepb.ExchangeAccount {
-	if value.ExchangeAccountID == "" {
+func accountToPB(value store.TradingAccountRecord) *tradepb.ExchangeAccount {
+	if value.TradingAccountID == "" {
 		return nil
 	}
 	balances := make([]*tradepb.AssetBalance, 0, len(value.Snapshot.Balances))
@@ -277,7 +277,7 @@ func accountToPB(value store.ExchangeAccountRecord) *tradepb.ExchangeAccount {
 		})
 	}
 	return &tradepb.ExchangeAccount{
-		ExchangeAccountId: value.ExchangeAccountID, SpaceId: value.SpaceID,
+		ExchangeAccountId: value.TradingAccountID, SpaceId: value.SpaceID,
 		Name: value.Name, Exchange: exchangeToPB(value.Exchange),
 		MarketType:         marketToPB(value.MarketType),
 		ExecutionMode:      executionModeToPB(value.ExecutionMode),
@@ -312,7 +312,7 @@ func logicalAccountToPB(
 	pbMembers := make([]*tradepb.LogicalAccountMember, 0, len(members))
 	for _, member := range members {
 		pbMembers = append(pbMembers, &tradepb.LogicalAccountMember{
-			ExchangeAccountId: member.ExchangeAccountID,
+			ExchangeAccountId: member.TradingAccountID,
 			Enabled:           member.Enabled,
 			Priority:          int32(member.Priority),
 		})
@@ -340,7 +340,7 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 		return nil
 	}
 	return &tradepb.Order{
-		OrderId: value.OrderID, ExchangeAccountId: value.ExchangeAccountID,
+		OrderId: value.OrderID, ExchangeAccountId: value.TradingAccountID,
 		ClientOrderId: value.ClientOrderID, ExchangeOrderId: value.ExchangeOrderID,
 		Exchange: exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
 		Symbol: value.Symbol, OrderType: orderTypeToPB(value.OrderType),
@@ -365,7 +365,7 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 	return &tradepb.Fill{
 		FillId: value.FillID, ExchangeTradeId: value.ExchangeTradeID,
 		OrderId: value.OrderID, ExchangeOrderId: value.ExchangeOrderID,
-		ExchangeAccountId: value.ExchangeAccountID,
+		ExchangeAccountId: value.TradingAccountID,
 		Exchange:          exchangeToPB(value.Exchange), MarketType: marketToPB(value.MarketType),
 		Symbol: value.Symbol, Side: sideToPB(value.Side),
 		PositionSide: positionSideToPB(value.PositionSide),
@@ -378,7 +378,7 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 
 func positionToPB(value store.PositionRecord) *tradepb.Position {
 	return &tradepb.Position{
-		ExchangeAccountId: value.ExchangeAccountID, Symbol: value.Symbol,
+		ExchangeAccountId: value.TradingAccountID, Symbol: value.Symbol,
 		PositionSide:   positionSideToPB(value.PositionSide),
 		SignedQuantity: value.SignedQuantity, EntryPrice: value.EntryPrice,
 		MarkPrice: value.MarkPrice, Leverage: value.Leverage,

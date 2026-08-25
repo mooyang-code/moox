@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	ExchangeAccountServiceName  = "trpc.moox.trade.ExchangeAccountService"
+	ExchangeAccountServiceName  = "trpc.moox.trade.TradingAccountService"
 	LogicalAccountServiceName   = "trpc.moox.trade.LogicalAccountService"
 	TradeExecutionServiceName   = "trpc.moox.trade.TradeExecutionService"
 	TradeDNSResolverServiceName = "trpc.moox.trade.TradeDNSResolverService"

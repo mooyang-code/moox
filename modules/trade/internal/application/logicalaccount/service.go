@@ -27,7 +27,7 @@ var (
 type AddMemberCommand struct {
 	SpaceID               string
 	LogicalAccountID      string
-	ExchangeAccountID     string
+	TradingAccountID      string
 	Enabled               bool
 	Priority              int
 	AdoptExistingExposure bool
@@ -119,7 +119,7 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	if s.Syncer == nil {
 		return ErrServiceConfig
 	}
-	if err := s.Syncer.SyncAccount(ctx, command.ExchangeAccountID); err != nil {
+	if err := s.Syncer.SyncAccount(ctx, command.TradingAccountID); err != nil {
 		return err
 	}
 	unlock := s.Store.LockLogicalAccount(command.SpaceID, command.LogicalAccountID)
@@ -131,10 +131,10 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 		command.LogicalAccountID,
 	)
 	defer unlockExecution()
-	unlockAccount := s.Store.LockExchangeAccount(command.ExchangeAccountID)
+	unlockAccount := s.Store.LockTradingAccount(command.TradingAccountID)
 	defer unlockAccount()
 	exposed, err := s.memberHasExposure(
-		ctx, command.SpaceID, command.ExchangeAccountID,
+		ctx, command.SpaceID, command.TradingAccountID,
 	)
 	if err != nil {
 		return err
@@ -150,8 +150,8 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: command.SpaceID, LogicalAccountID: command.LogicalAccountID,
-			ExchangeAccountID: command.ExchangeAccountID,
-			Enabled:           command.Enabled, Priority: command.Priority,
+			TradingAccountID: command.TradingAccountID,
+			Enabled:          command.Enabled, Priority: command.Priority,
 		})
 	})
 }
@@ -160,7 +160,7 @@ func (s *Service) RemoveMember(
 	ctx context.Context,
 	spaceID string,
 	logicalAccountID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) error {
 	if s == nil || s.Store == nil {
 		return ErrServiceConfig
@@ -168,7 +168,7 @@ func (s *Service) RemoveMember(
 	if s.Syncer == nil {
 		return ErrServiceConfig
 	}
-	if err := s.Syncer.SyncAccount(ctx, exchangeAccountID); err != nil {
+	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 		return err
 	}
 	unlock := s.Store.LockLogicalAccount(spaceID, logicalAccountID)
@@ -177,9 +177,9 @@ func (s *Service) RemoveMember(
 	defer unlockMembership()
 	unlockExecution := s.Store.LockLogicalAccountExecution(spaceID, logicalAccountID)
 	defer unlockExecution()
-	unlockAccount := s.Store.LockExchangeAccount(exchangeAccountID)
+	unlockAccount := s.Store.LockTradingAccount(tradingAccountID)
 	defer unlockAccount()
-	exposed, err := s.memberHasExposure(ctx, spaceID, exchangeAccountID)
+	exposed, err := s.memberHasExposure(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return err
 	}
@@ -188,7 +188,7 @@ func (s *Service) RemoveMember(
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.DeleteLogicalAccountMember(
-			spaceID, logicalAccountID, exchangeAccountID,
+			spaceID, logicalAccountID, tradingAccountID,
 		)
 	})
 }
@@ -411,21 +411,21 @@ func (s *Service) readiness(
 	now := s.now()
 	supported := make(map[string]struct{})
 	for _, member := range members {
-		account, getErr := s.Store.GetExchangeAccountByID(
-			ctx, member.ExchangeAccountID,
+		account, getErr := s.Store.GetTradingAccountByID(
+			ctx, member.TradingAccountID,
 		)
 		if getErr != nil {
 			return Readiness{}, getErr
 		}
 		switch {
 		case account.Status != "ENABLED":
-			reasons = append(reasons, account.ExchangeAccountID+" is disabled")
+			reasons = append(reasons, account.TradingAccountID+" is disabled")
 		case !account.Ready:
-			reasons = append(reasons, account.ExchangeAccountID+" is not ready")
+			reasons = append(reasons, account.TradingAccountID+" is not ready")
 		case account.LastSyncAt <= 0:
-			reasons = append(reasons, account.ExchangeAccountID+" has no initial sync")
+			reasons = append(reasons, account.TradingAccountID+" has no initial sync")
 		case s.snapshotStale(now, account.LastSyncAt):
-			reasons = append(reasons, account.ExchangeAccountID+" snapshot is stale")
+			reasons = append(reasons, account.TradingAccountID+" snapshot is stale")
 		}
 		instruments, listErr := s.Store.ListInstruments(
 			ctx, account.Exchange, account.MarketType,
@@ -444,7 +444,7 @@ func (s *Service) readiness(
 			supported[instrument.InstrumentID] = struct{}{}
 		}
 		orders, listErr := s.Store.ListOrdersForAccount(
-			ctx, spaceID, account.ExchangeAccountID, 1,
+			ctx, spaceID, account.TradingAccountID, 1,
 		)
 		if listErr != nil {
 			return Readiness{}, listErr
@@ -453,13 +453,13 @@ func (s *Service) readiness(
 			if current.State == "SUBMITTING" || current.State == "SUBMIT_UNKNOWN" {
 				reasons = append(
 					reasons,
-					account.ExchangeAccountID+" has unresolved submit "+current.OrderID,
+					account.TradingAccountID+" has unresolved submit "+current.OrderID,
 				)
 			}
 			if current.OwnerType == "EXTERNAL" && !terminalOrderState(current.State) {
 				reasons = append(
 					reasons,
-					account.ExchangeAccountID+" has EXTERNAL order "+current.OrderID,
+					account.TradingAccountID+" has EXTERNAL order "+current.OrderID,
 				)
 			}
 		}
@@ -494,9 +494,9 @@ func (s *Service) readiness(
 func (s *Service) memberHasExposure(
 	ctx context.Context,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) (bool, error) {
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return false, err
 	}
@@ -505,7 +505,7 @@ func (s *Service) memberHasExposure(
 		return false, ErrNotReady
 	}
 	orders, err := s.Store.ListOrdersForAccount(
-		ctx, spaceID, exchangeAccountID, 1,
+		ctx, spaceID, tradingAccountID, 1,
 	)
 	if err != nil {
 		return false, err
@@ -515,7 +515,7 @@ func (s *Service) memberHasExposure(
 			return true, nil
 		}
 	}
-	positions, err := s.Store.ListPositions(ctx, spaceID, exchangeAccountID, "")
+	positions, err := s.Store.ListPositions(ctx, spaceID, tradingAccountID, "")
 	if err != nil {
 		return false, err
 	}

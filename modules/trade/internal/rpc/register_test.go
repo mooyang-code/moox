@@ -3,7 +3,7 @@ package rpc
 import "testing"
 
 func TestServiceNames(t *testing.T) {
-	if ExchangeAccountServiceName != "trpc.moox.trade.ExchangeAccountService" {
+	if ExchangeAccountServiceName != "trpc.moox.trade.TradingAccountService" {
 		t.Fatalf("account service name = %q", ExchangeAccountServiceName)
 	}
 	if LogicalAccountServiceName != "trpc.moox.trade.LogicalAccountService" {

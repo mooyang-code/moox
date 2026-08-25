@@ -96,7 +96,7 @@ func TestOpenRejectsSingleAccountTargetAndLedgerSchema(t *testing.T) {
 		`CREATE TABLE t_target_executions (
 			c_space_id TEXT NOT NULL,
 			c_execution_binding_id TEXT NOT NULL,
-			c_exchange_account_id TEXT NOT NULL
+			c_trading_account_id TEXT NOT NULL
 		)`,
 		`CREATE TABLE t_ledger_transactions (
 			c_space_id TEXT NOT NULL,
@@ -118,14 +118,14 @@ func TestOpenRejectsSingleAccountTargetAndLedgerSchema(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsExchangeAccountWithoutCurrentCursorColumns(t *testing.T) {
+func TestOpenRejectsTradingAccountWithoutCurrentCursorColumns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old-account.db")
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(`
-		CREATE TABLE t_exchange_accounts (
+		CREATE TABLE t_trading_accounts (
 			c_space_id TEXT NOT NULL,
-			c_exchange_account_id TEXT NOT NULL,
+			c_trading_account_id TEXT NOT NULL,
 			c_name TEXT NOT NULL
 		)
 	`).Error)
@@ -164,7 +164,7 @@ func TestOpenRejectsChangedPartialUniqueIndexPredicate(t *testing.T) {
 	require.NoError(t, db.Exec(`
 		CREATE UNIQUE INDEX uk_trade_orders_exchange_order
 		ON t_trade_orders (
-			c_space_id, c_exchange_account_id, c_symbol, c_exchange_order_id
+			c_space_id, c_trading_account_id, c_symbol, c_exchange_order_id
 		)
 		WHERE c_exchange_order_id = ''
 	`).Error)

@@ -21,7 +21,7 @@ func TestAccountSyncFailureRecoveryImportsExternalOrderAndFill(t *testing.T) {
 	result, err := f.sync.SyncAccount(ctx, testAccount)
 	require.Error(t, err)
 	require.False(t, result.Ready)
-	account, err := f.store.GetExchangeAccountByID(ctx, testAccount)
+	account, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	require.False(t, account.Ready)
 	require.Contains(t, account.LastError, "snapshot failure")
@@ -46,7 +46,7 @@ func TestAccountSyncFailureRecoveryImportsExternalOrderAndFill(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Ready)
 	require.Equal(t, 1, result.FillsIngested)
-	account, err = f.store.GetExchangeAccountByID(ctx, testAccount)
+	account, err = f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	require.True(t, account.Ready)
 	require.Empty(t, account.LastError)
@@ -60,7 +60,7 @@ func TestAccountSyncFailureRecoveryImportsExternalOrderAndFill(t *testing.T) {
 	fills, total, err := f.store.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
@@ -86,7 +86,7 @@ func TestAccountSyncEachSnapshotFailureKeepsNotReadyAndRecovers(t *testing.T) {
 			result, err := f.sync.SyncAccount(context.Background(), testAccount)
 			require.Error(t, err)
 			require.False(t, result.Ready)
-			account, getErr := f.store.GetExchangeAccountByID(context.Background(), testAccount)
+			account, getErr := f.store.GetTradingAccountByID(context.Background(), testAccount)
 			require.NoError(t, getErr)
 			require.False(t, account.Ready)
 
@@ -94,7 +94,7 @@ func TestAccountSyncEachSnapshotFailureKeepsNotReadyAndRecovers(t *testing.T) {
 			result, err = f.sync.SyncAccount(context.Background(), testAccount)
 			require.NoError(t, err)
 			require.True(t, result.Ready)
-			account, getErr = f.store.GetExchangeAccountByID(context.Background(), testAccount)
+			account, getErr = f.store.GetTradingAccountByID(context.Background(), testAccount)
 			require.NoError(t, getErr)
 			require.True(t, account.Ready)
 		})

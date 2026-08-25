@@ -23,9 +23,9 @@ const (
 )
 
 type Source struct {
-	SpaceID           string
-	ExchangeAccountID string
-	Kind              FillOrigin
+	SpaceID          string
+	TradingAccountID string
+	Kind             FillOrigin
 }
 
 type Reducer struct {
@@ -92,7 +92,7 @@ func (r *Reducer) ApplyFill(
 	err := r.Store.Transaction(ctx, func(tx *store.Tx) error {
 		record, err := tx.FindOrderForFill(
 			source.SpaceID,
-			source.ExchangeAccountID,
+			source.TradingAccountID,
 			fill.ClientOrderID,
 			fill.ExchangeOrderID,
 			fill.Symbol,
@@ -103,13 +103,13 @@ func (r *Reducer) ApplyFill(
 		if fill.ExchangeOrderID != "" && record.ExchangeOrderID == "" {
 			record.ExchangeOrderID = fill.ExchangeOrderID
 		}
-		fillID := canonicalFillID(source.ExchangeAccountID, fill)
+		fillID := canonicalFillID(source.TradingAccountID, fill)
 		inserted, err := tx.InsertFill(store.FillRecord{
 			SpaceID: source.SpaceID, FillID: fillID,
 			ExchangeTradeID: fill.ExchangeTradeID, OrderID: record.OrderID,
-			ExchangeOrderID:   fill.ExchangeOrderID,
-			ExchangeAccountID: source.ExchangeAccountID,
-			Exchange:          record.Exchange, MarketType: record.MarketType,
+			ExchangeOrderID:  fill.ExchangeOrderID,
+			TradingAccountID: source.TradingAccountID,
+			Exchange:         record.Exchange, MarketType: record.MarketType,
 			Symbol: fill.Symbol, Side: string(fill.Side),
 			PositionSide: string(fill.PositionSide), Price: fill.Price.String(),
 			Quantity: fill.Quantity.String(), Fee: fill.Fee.String(),
@@ -162,7 +162,7 @@ func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
 		return errors.New("trade: Fill reducer store is required")
 	}
 	if strings.TrimSpace(source.SpaceID) == "" ||
-		strings.TrimSpace(source.ExchangeAccountID) == "" ||
+		strings.TrimSpace(source.TradingAccountID) == "" ||
 		(source.Kind != OriginPrivateSocket && source.Kind != OriginRESTSnapshot) {
 		return errors.New("trade: invalid Fill source")
 	}
@@ -297,7 +297,7 @@ func projectSwapPosition(
 ) error {
 	positionRecord, found, err := tx.GetPosition(
 		record.SpaceID,
-		record.ExchangeAccountID,
+		record.TradingAccountID,
 		record.Symbol,
 		string(exchange.PositionSideNet),
 	)
@@ -305,7 +305,7 @@ func projectSwapPosition(
 		return err
 	}
 	if !found {
-		account, err := tx.GetExchangeAccount(record.SpaceID, record.ExchangeAccountID)
+		account, err := tx.GetTradingAccount(record.SpaceID, record.TradingAccountID)
 		if err != nil {
 			return err
 		}
@@ -314,7 +314,7 @@ func projectSwapPosition(
 			return errors.New("trade: missing leverage for estimated Position")
 		}
 		positionRecord = store.PositionRecord{
-			SpaceID: record.SpaceID, ExchangeAccountID: record.ExchangeAccountID,
+			SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID,
 			Symbol: record.Symbol, PositionSide: string(exchange.PositionSideNet),
 			SignedQuantity: "0", EntryPrice: "0", MarkPrice: "0",
 			Leverage: leverage, MarginMode: account.MarginMode,

@@ -22,21 +22,21 @@ import (
 var ErrServiceConfig = errors.New("trade account sync: service is not configured")
 
 type AdapterSource interface {
-	Adapter(exchangeAccountID string) (exchange.Adapter, error)
+	Adapter(tradingAccountID string) (exchange.Adapter, error)
 }
 
 type SessionState interface {
-	Ready(exchangeAccountID string) bool
+	Ready(tradingAccountID string) bool
 }
 
 type Metrics interface {
-	Observe(exchangeAccountID string, now time.Time, maxDifference float64, err error)
+	Observe(tradingAccountID string, now time.Time, maxDifference float64, err error)
 }
 
 type FactsObserver interface {
 	AccountFactsChanged(
 		ctx context.Context,
-		exchangeAccountID string,
+		tradingAccountID string,
 		external bool,
 	) error
 }
@@ -75,7 +75,7 @@ type Service struct {
 
 func (s *Service) SyncAccount(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) (result Result, err error) {
 	if err := s.validate(); err != nil {
 		return Result{}, err
@@ -83,44 +83,44 @@ func (s *Service) SyncAccount(
 	maxDifference := 0.0
 	defer func() {
 		if s.Metrics != nil {
-			s.Metrics.Observe(exchangeAccountID, s.now(), maxDifference, err)
+			s.Metrics.Observe(tradingAccountID, s.now(), maxDifference, err)
 		}
 	}()
 	unlockMembership := s.Store.LockLogicalAccountMembership()
-	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
+	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		unlockMembership()
 		return Result{}, err
 	}
-	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	result, maxDifference, err = s.syncAccountLocked(ctx, exchangeAccountID)
+	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	result, maxDifference, err = s.syncAccountLocked(ctx, tradingAccountID)
 	unlock()
 	if err == nil && result.ExternalFactsImported {
-		err = s.pauseForExternalFact(ctx, exchangeAccountID)
+		err = s.pauseForExternalFact(ctx, tradingAccountID)
 	}
 	unlockExecution()
 	unlockMembership()
 	if err != nil {
 		return result, err
 	}
-	result, err = s.resolveUnknownOrders(ctx, exchangeAccountID, result)
+	result, err = s.resolveUnknownOrders(ctx, tradingAccountID, result)
 	if err != nil {
 		return result, err
 	}
 	return result, s.notifyFacts(
-		ctx, exchangeAccountID, false,
+		ctx, tradingAccountID, false,
 	)
 }
 
 func (s *Service) syncAccountLocked(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) (Result, float64, error) {
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return Result{}, 0, err
 	}
-	adapter, err := s.Adapters.Adapter(exchangeAccountID)
+	adapter, err := s.Adapters.Adapter(tradingAccountID)
 	if err != nil {
 		return Result{}, 0, err
 	}
@@ -133,7 +133,7 @@ func (s *Service) syncAccountLocked(
 	localOrders, err := s.Store.ListOrdersForAccount(
 		ctx,
 		account.SpaceID,
-		account.ExchangeAccountID,
+		account.TradingAccountID,
 		s.now().Add(-s.lateFillWindow()).UnixMilli(),
 	)
 	if err != nil {
@@ -210,9 +210,9 @@ func (s *Service) syncAccountLocked(
 	}
 	ready := account.Ready
 	if s.SessionState != nil {
-		ready = s.SessionState.Ready(account.ExchangeAccountID)
+		ready = s.SessionState.Ready(account.TradingAccountID)
 	}
-	result, err := s.applySnapshot(ctx, account.ExchangeAccountID, Snapshot{
+	result, err := s.applySnapshot(ctx, account.TradingAccountID, Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, FillCursors: cursors, Ready: ready,
 	})
@@ -250,44 +250,44 @@ func parseBalance(value string) float64 {
 
 func (s *Service) ApplySnapshot(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	snapshot Snapshot,
 ) (Result, error) {
 	if err := s.validate(); err != nil {
 		return Result{}, err
 	}
 	unlockMembership := s.Store.LockLogicalAccountMembership()
-	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
+	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		unlockMembership()
 		return Result{}, err
 	}
-	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	result, err := s.applySnapshot(ctx, exchangeAccountID, snapshot)
+	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	result, err := s.applySnapshot(ctx, tradingAccountID, snapshot)
 	unlock()
 	if err == nil && result.ExternalFactsImported {
-		err = s.pauseForExternalFact(ctx, exchangeAccountID)
+		err = s.pauseForExternalFact(ctx, tradingAccountID)
 	}
 	unlockExecution()
 	unlockMembership()
 	if err != nil {
 		return result, err
 	}
-	result, err = s.resolveUnknownOrders(ctx, exchangeAccountID, result)
+	result, err = s.resolveUnknownOrders(ctx, tradingAccountID, result)
 	if err != nil {
 		return result, err
 	}
 	return result, s.notifyFacts(
-		ctx, exchangeAccountID, false,
+		ctx, tradingAccountID, false,
 	)
 }
 
 func (s *Service) applySnapshot(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	snapshot Snapshot,
 ) (Result, error) {
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -348,7 +348,7 @@ func (s *Service) applySnapshot(
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.ReplacePositionsForAccount(
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			positionRecords,
 			snapshot.Account.ExchangeUpdatedAt.UnixMilli(),
 		)
@@ -373,9 +373,9 @@ func (s *Service) applySnapshot(
 		snapshot.FillCursors = account.FillCursors
 	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.UpdateExchangeAccountFacts(
+		if err := tx.UpdateTradingAccountFacts(
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			snapshot.FillCursors,
 			account.Snapshot,
 			account.SnapshotSourceTime,
@@ -383,9 +383,9 @@ func (s *Service) applySnapshot(
 		); err != nil {
 			return err
 		}
-		return tx.UpdateExchangeAccountReadiness(
+		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			snapshot.Ready,
 			now,
 			"",
@@ -399,20 +399,20 @@ func (s *Service) applySnapshot(
 
 func (s *Service) resolveUnknownOrders(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	result Result,
 ) (Result, error) {
 	if s.Orders == nil {
 		return result, nil
 	}
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return result, err
 	}
 	unknown, err := s.Store.ListOrdersForAccount(
 		ctx,
 		account.SpaceID,
-		account.ExchangeAccountID,
+		account.TradingAccountID,
 		s.now().Add(-s.lateFillWindow()).UnixMilli(),
 	)
 	if err != nil {
@@ -441,7 +441,7 @@ func (s *Service) resolveUnknownOrders(
 
 func (s *Service) ApplyFill(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	fill exchange.Fill,
 ) (bool, error) {
 	if err := s.validate(); err != nil {
@@ -449,13 +449,13 @@ func (s *Service) ApplyFill(
 	}
 	unlockMembership := s.Store.LockLogicalAccountMembership()
 	defer unlockMembership()
-	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
+	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		return false, err
 	}
 	defer unlockExecution()
-	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
 		return false, err
@@ -469,17 +469,17 @@ func (s *Service) ApplyFill(
 	)
 	unlock()
 	if err == nil && external {
-		err = s.pauseForExternalFact(ctx, exchangeAccountID)
+		err = s.pauseForExternalFact(ctx, tradingAccountID)
 	}
 	if err != nil {
 		return applied, err
 	}
-	return applied, s.notifyFacts(ctx, exchangeAccountID, false)
+	return applied, s.notifyFacts(ctx, tradingAccountID, false)
 }
 
 func (s *Service) ApplyOrder(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	current exchange.Order,
 ) error {
 	if err := s.validate(); err != nil {
@@ -487,13 +487,13 @@ func (s *Service) ApplyOrder(
 	}
 	unlockMembership := s.Store.LockLogicalAccountMembership()
 	defer unlockMembership()
-	unlockExecution, err := s.lockLogicalAccountExecution(ctx, exchangeAccountID)
+	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		return err
 	}
 	defer unlockExecution()
-	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
 		return err
@@ -501,24 +501,24 @@ func (s *Service) ApplyOrder(
 	_, external, _, err := s.applyOrder(ctx, account, current)
 	unlock()
 	if err == nil && external {
-		err = s.pauseForExternalFact(ctx, exchangeAccountID)
+		err = s.pauseForExternalFact(ctx, tradingAccountID)
 	}
 	if err != nil {
 		return err
 	}
-	return s.notifyFacts(ctx, exchangeAccountID, false)
+	return s.notifyFacts(ctx, tradingAccountID, false)
 }
 
 func (s *Service) ApplyPosition(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	position exchange.Position,
 ) error {
 	if err := s.validate(); err != nil {
 		return err
 	}
-	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
 		return err
@@ -528,7 +528,7 @@ func (s *Service) ApplyPosition(
 		if position.RequiresSync || position.Present != (exchange.PositionPresence{}) {
 			current, found, getErr := tx.GetPosition(
 				account.SpaceID,
-				account.ExchangeAccountID,
+				account.TradingAccountID,
 				position.Symbol,
 				string(position.PositionSide),
 			)
@@ -540,9 +540,9 @@ func (s *Service) ApplyPosition(
 				// A private partial update cannot create a valid SWAP
 				// projection without leverage. Keep the stream alive and let
 				// the queued full synchronization create the authoritative row.
-				return tx.UpdateExchangeAccountReadiness(
+				return tx.UpdateTradingAccountReadiness(
 					account.SpaceID,
-					account.ExchangeAccountID,
+					account.TradingAccountID,
 					false,
 					s.now().UnixMilli(),
 					"private position update awaiting full sync",
@@ -553,9 +553,9 @@ func (s *Service) ApplyPosition(
 		if err := tx.UpsertPosition(record); err != nil {
 			return err
 		}
-		return tx.UpdateExchangeAccountReadiness(
+		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			false,
 			s.now().UnixMilli(),
 			"private position update awaiting full sync",
@@ -570,14 +570,14 @@ func (s *Service) ApplyPosition(
 
 func (s *Service) ApplyAccountSnapshot(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	snapshot exchange.AccountSnapshot,
 ) error {
 	if err := s.validate(); err != nil {
 		return err
 	}
-	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
 		return err
@@ -592,16 +592,16 @@ func (s *Service) ApplyAccountSnapshot(
 	}
 	merged := mergePrivateSnapshot(account.Snapshot, snapshot)
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.UpdateExchangeAccountSnapshot(
+		if err := tx.UpdateTradingAccountSnapshot(
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			merged,
 		); err != nil {
 			return err
 		}
-		return tx.UpdateExchangeAccountReadiness(
+		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			false,
 			s.now().UnixMilli(),
 			"private account update awaiting full sync",
@@ -616,15 +616,15 @@ func (s *Service) ApplyAccountSnapshot(
 
 func (s *Service) SetReady(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	ready bool,
 	cause error,
 ) error {
 	if s == nil || s.Store == nil {
 		return ErrServiceConfig
 	}
-	unlock := s.Store.LockExchangeAccount(exchangeAccountID)
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
 		return err
@@ -634,12 +634,12 @@ func (s *Service) SetReady(
 	if err != nil {
 		return err
 	}
-	return s.notifyFacts(ctx, exchangeAccountID, false)
+	return s.notifyFacts(ctx, tradingAccountID, false)
 }
 
 func (s *Service) setReady(
 	ctx context.Context,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	ready bool,
 	cause error,
 ) error {
@@ -649,9 +649,9 @@ func (s *Service) setReady(
 		lastError = cause.Error()
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountReadiness(
+		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			ready,
 			now,
 			lastError,
@@ -661,7 +661,7 @@ func (s *Service) setReady(
 
 func (s *Service) applyFill(
 	ctx context.Context,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	fill exchange.Fill,
 	kind consumer.FillOrigin,
 	syntheticQuantity shared.Decimal,
@@ -673,7 +673,7 @@ func (s *Service) applyFill(
 		return false, false, err
 	}
 	applied, err := s.Fills.ApplyFill(ctx, fill, consumer.Source{
-		SpaceID: account.SpaceID, ExchangeAccountID: account.ExchangeAccountID,
+		SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID,
 		Kind: kind,
 	})
 	return applied, external && applied, err
@@ -681,7 +681,7 @@ func (s *Service) applyFill(
 
 func (s *Service) ensureOrderForFill(
 	ctx context.Context,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	fill exchange.Fill,
 	syntheticQuantity shared.Decimal,
 ) (bool, error) {
@@ -689,7 +689,7 @@ func (s *Service) ensureOrderForFill(
 		if record, err := s.Store.GetOrderByExchangeID(
 			ctx,
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			fill.Symbol,
 			fill.ExchangeOrderID,
 		); err == nil {
@@ -702,7 +702,7 @@ func (s *Service) ensureOrderForFill(
 		if record, err := s.Store.GetOrderByClientID(
 			ctx,
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			fill.ClientOrderID,
 		); err == nil {
 			return record.OwnerType == string(orderdomain.OwnerExternal), nil
@@ -710,7 +710,7 @@ func (s *Service) ensureOrderForFill(
 			return false, err
 		}
 	}
-	adapter, err := s.Adapters.Adapter(account.ExchangeAccountID)
+	adapter, err := s.Adapters.Adapter(account.TradingAccountID)
 	if err != nil {
 		return false, err
 	}
@@ -761,7 +761,7 @@ func fillBatchKey(fill exchange.Fill) string {
 
 func (s *Service) applyOrder(
 	ctx context.Context,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	current exchange.Order,
 ) (bool, bool, string, error) {
 	var record store.OrderRecord
@@ -771,14 +771,14 @@ func (s *Service) applyOrder(
 		record, err = s.Store.GetOrderByClientID(
 			ctx,
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			current.ClientOrderID,
 		)
 	case current.ExchangeOrderID != "":
 		record, err = s.Store.GetOrderByExchangeID(
 			ctx,
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			current.Symbol,
 			current.ExchangeOrderID,
 		)
@@ -910,7 +910,7 @@ func (s *Service) terminalize(
 
 func (s *Service) importExternalOrder(
 	ctx context.Context,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	current exchange.Order,
 ) (store.OrderRecord, error) {
 	if strings.TrimSpace(current.ExchangeOrderID) == "" ||
@@ -975,8 +975,8 @@ func (s *Service) importExternalOrder(
 		ownerID = clientOrderID
 	}
 	logicalAccountID := ""
-	if logicalAccount, _, findErr := s.Store.FindLogicalAccountByExchangeAccount(
-		ctx, account.SpaceID, account.ExchangeAccountID,
+	if logicalAccount, _, findErr := s.Store.FindLogicalAccountByTradingAccount(
+		ctx, account.SpaceID, account.TradingAccountID,
 	); findErr == nil {
 		logicalAccountID = logicalAccount.LogicalAccountID
 	} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
@@ -984,10 +984,10 @@ func (s *Service) importExternalOrder(
 	}
 	record := store.OrderRecord{
 		SpaceID: account.SpaceID,
-		OrderID: "external:" + account.ExchangeAccountID + ":" +
+		OrderID: "external:" + account.TradingAccountID + ":" +
 			current.Symbol + ":" + current.ExchangeOrderID,
-		ExchangeAccountID: account.ExchangeAccountID,
-		ClientOrderID:     clientOrderID, ExchangeOrderID: current.ExchangeOrderID,
+		TradingAccountID: account.TradingAccountID,
+		ClientOrderID:    clientOrderID, ExchangeOrderID: current.ExchangeOrderID,
 		Exchange: account.Exchange, MarketType: account.MarketType,
 		Symbol: current.Symbol, OrderType: string(orderType),
 		TimeInForce: string(tif), Side: string(current.Side),
@@ -1008,7 +1008,7 @@ func (s *Service) importExternalOrder(
 		return s.Store.GetOrderByClientID(
 			ctx,
 			account.SpaceID,
-			account.ExchangeAccountID,
+			account.TradingAccountID,
 			clientOrderID,
 		)
 	}
@@ -1017,7 +1017,7 @@ func (s *Service) importExternalOrder(
 
 func (s *Service) fail(
 	ctx context.Context,
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	cause error,
 ) (Result, error) {
 	if setErr := s.setReady(ctx, account, false, cause); setErr != nil {
@@ -1035,27 +1035,27 @@ func (s *Service) validate() error {
 
 func (s *Service) notifyFacts(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	external bool,
 ) error {
 	if s.Facts == nil {
 		return nil
 	}
-	return s.Facts.AccountFactsChanged(ctx, exchangeAccountID, external)
+	return s.Facts.AccountFactsChanged(ctx, tradingAccountID, external)
 }
 
 func (s *Service) lockLogicalAccountExecution(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) (func(), error) {
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return nil, err
 	}
-	logicalAccount, _, err := s.Store.FindLogicalAccountByExchangeAccount(
+	logicalAccount, _, err := s.Store.FindLogicalAccountByTradingAccount(
 		ctx,
 		account.SpaceID,
-		exchangeAccountID,
+		tradingAccountID,
 	)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return func() {}, nil
@@ -1071,16 +1071,16 @@ func (s *Service) lockLogicalAccountExecution(
 
 func (s *Service) pauseForExternalFact(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 ) error {
-	account, err := s.Store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return err
 	}
-	logicalAccount, _, err := s.Store.FindLogicalAccountByExchangeAccount(
+	logicalAccount, _, err := s.Store.FindLogicalAccountByTradingAccount(
 		ctx,
 		account.SpaceID,
-		exchangeAccountID,
+		tradingAccountID,
 	)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
@@ -1093,7 +1093,7 @@ func (s *Service) pauseForExternalFact(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
 			"PAUSED",
-			"EXTERNAL order or fill detected on "+exchangeAccountID,
+			"EXTERNAL order or fill detected on "+tradingAccountID,
 		)
 	})
 }
@@ -1113,7 +1113,7 @@ func (s *Service) lateFillWindow() time.Duration {
 }
 
 func syncSymbols(
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	openOrders []exchange.Order,
 	localOrders []store.OrderRecord,
 	positions []exchange.Position,
@@ -1182,7 +1182,7 @@ func cloneCursors(current store.FillCursors) store.FillCursors {
 	return result
 }
 
-func snapshotRecord(snapshot exchange.AccountSnapshot) store.ExchangeAccountSnapshot {
+func snapshotRecord(snapshot exchange.AccountSnapshot) store.TradingAccountSnapshot {
 	balances := make([]store.AssetBalance, 0, len(snapshot.Balances))
 	for _, balance := range snapshot.Balances {
 		balances = append(balances, store.AssetBalance{
@@ -1190,7 +1190,7 @@ func snapshotRecord(snapshot exchange.AccountSnapshot) store.ExchangeAccountSnap
 			Locked: balance.Locked.String(), Total: balance.Total.String(),
 		})
 	}
-	return store.ExchangeAccountSnapshot{
+	return store.TradingAccountSnapshot{
 		Balances: balances, Equity: snapshot.Equity.String(),
 		AvailableFunds:    snapshot.AvailableFunds.String(),
 		UsedMargin:        snapshot.UsedMargin.String(),
@@ -1201,9 +1201,9 @@ func snapshotRecord(snapshot exchange.AccountSnapshot) store.ExchangeAccountSnap
 }
 
 func mergePrivateSnapshot(
-	current store.ExchangeAccountSnapshot,
+	current store.TradingAccountSnapshot,
 	update exchange.AccountSnapshot,
-) store.ExchangeAccountSnapshot {
+) store.TradingAccountSnapshot {
 	incoming := snapshotRecord(update)
 	if update.Present.Balances {
 		balances := make(
@@ -1252,11 +1252,11 @@ func mergePrivateSnapshot(
 }
 
 func positionRecord(
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	position exchange.Position,
 ) store.PositionRecord {
 	return store.PositionRecord{
-		SpaceID: account.SpaceID, ExchangeAccountID: account.ExchangeAccountID,
+		SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID,
 		Symbol: position.Symbol, PositionSide: string(position.PositionSide),
 		SignedQuantity: position.SignedQuantity.String(),
 		EntryPrice:     position.EntryPrice.String(), MarkPrice: position.MarkPrice.String(),
@@ -1270,7 +1270,7 @@ func positionRecord(
 }
 
 func mergePositionRecord(
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	current store.PositionRecord,
 	found bool,
 	incoming store.PositionRecord,
@@ -1287,7 +1287,7 @@ func mergePositionRecord(
 		}
 	}
 	current.SpaceID = incoming.SpaceID
-	current.ExchangeAccountID = incoming.ExchangeAccountID
+	current.TradingAccountID = incoming.TradingAccountID
 	current.Symbol = incoming.Symbol
 	current.PositionSide = incoming.PositionSide
 	for _, field := range []struct {

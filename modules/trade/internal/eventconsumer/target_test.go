@@ -199,8 +199,8 @@ func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
 func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 	tradeStore := openTargetStore(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: "space-1", ExchangeAccountID: "okx-1", Name: "okx",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx",
 			Exchange: "OKX", MarketType: "SWAP", ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS",
 			Status: "ENABLED", Ready: true,
@@ -217,7 +217,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "okx-1", Enabled: true,
+			TradingAccountID: "okx-1", Enabled: true,
 		}); err != nil {
 			return err
 		}
@@ -294,8 +294,8 @@ func seedLogicalTargetAccount(
 ) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT",
 			Status: "ENABLED", Ready: ready,
@@ -312,7 +312,7 @@ func seedLogicalTargetAccount(
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-1", Enabled: true, Priority: 1,
+			TradingAccountID: "account-1", Enabled: true, Priority: 1,
 		}); err != nil {
 			return err
 		}

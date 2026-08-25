@@ -111,7 +111,7 @@ func seedSwapLogicalAccount(t *testing.T, tradeStore *store.Store) {
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
-			ExchangeAccountID: testAccount, Enabled: true, Priority: 1,
+			TradingAccountID: testAccount, Enabled: true, Priority: 1,
 		}); err != nil {
 			return err
 		}

@@ -427,8 +427,8 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			continue
 		}
 		position := exchange.Position{
-			ExchangeAccountID: a.config.ExchangeAccountID,
-			Symbol:            row.Symbol, PositionSide: exchange.PositionSideNet,
+			TradingAccountID: a.config.TradingAccountID,
+			Symbol:           row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(row.UpdateTime),
 		}

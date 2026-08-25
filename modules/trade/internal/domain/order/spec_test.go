@@ -16,7 +16,7 @@ func TestOrderSpecValidationMatrix(t *testing.T) {
 	price := shared.MustDecimal("100")
 	base := OrderSpec{
 		ClientOrderSpec: ClientOrderSpec{
-			ExchangeAccountID: "account-1", ClientOrderID: "client-1",
+			TradingAccountID: "account-1", ClientOrderID: "client-1",
 			InstrumentID: "BTC-USDT", Side: exchange.SideBuy,
 			Quantity: shared.MustDecimal("0.25"),
 		},
@@ -112,7 +112,7 @@ func TestOrderSpecRejectsInvalidMatrixCombinations(t *testing.T) {
 	price := shared.MustDecimal("100")
 	valid := OrderSpec{
 		ClientOrderSpec: ClientOrderSpec{
-			ExchangeAccountID: "account-1", ClientOrderID: "client-1",
+			TradingAccountID: "account-1", ClientOrderID: "client-1",
 			InstrumentID: "BTC-USDT", Type: exchange.OrderTypeLimit,
 			FillPolicy: exchange.FillPolicyGTC, Side: exchange.SideBuy,
 			Quantity: shared.MustDecimal("1"), LimitPrice: &price,
@@ -178,14 +178,14 @@ func TestClientOrderSpecUsesFillPolicyWithoutReduceOnly(t *testing.T) {
 	price := shared.MustDecimal("100")
 	spec := OrderSpec{
 		ClientOrderSpec: ClientOrderSpec{
-			ExchangeAccountID: "account-1",
-			ClientOrderID:     "client-1",
-			InstrumentID:      "BTC-USDT",
-			Side:              exchange.SideBuy,
-			Type:              exchange.OrderTypeLimit,
-			FillPolicy:        exchange.FillPolicyIOC,
-			Quantity:          shared.MustDecimal("1"),
-			LimitPrice:        &price,
+			TradingAccountID: "account-1",
+			ClientOrderID:    "client-1",
+			InstrumentID:     "BTC-USDT",
+			Side:             exchange.SideBuy,
+			Type:             exchange.OrderTypeLimit,
+			FillPolicy:       exchange.FillPolicyIOC,
+			Quantity:         shared.MustDecimal("1"),
+			LimitPrice:       &price,
 		},
 		ReferencePrice: price, ReferencePriceAt: now,
 		Owner: OrderOwner{

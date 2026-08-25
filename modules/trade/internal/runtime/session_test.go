@@ -90,7 +90,7 @@ func TestExchangeSessionNeverBecomesReadyAfterDisconnectDuringStartup(t *testing
 	close(adapter.loadRelease)
 	require.ErrorIs(t, <-done, disconnectErr)
 	require.False(t, session.Ready())
-	stored, err := tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, stored.Ready)
 }
@@ -200,13 +200,13 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		"GetAccountSnapshot",
 		"ListRecentFills",
 	}, adapter.callSnapshot())
-	stored, err := tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.True(t, stored.Ready)
 	var positionUpdatedAt int64
 	require.NoError(t, tradeStore.DBForTest().Raw(`
-		SELECT c_exchange_updated_at FROM t_exchange_positions
-		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+		SELECT c_exchange_updated_at FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?
 	`, "space-1", "account-1", "BTC-USDT").Scan(&positionUpdatedAt).Error)
 	require.Equal(t, int64(2_500), positionUpdatedAt,
 		"buffered private event must apply after REST snapshot and before READY")
@@ -215,7 +215,7 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 	adapter.disconnect <- disconnectErr
 	require.ErrorIs(t, <-done, disconnectErr)
 	require.False(t, session.Ready())
-	stored, err = tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	stored, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, stored.Ready)
 	require.Contains(t, stored.LastError, "private stream disconnected")
@@ -232,10 +232,10 @@ func openRuntimeStore(t *testing.T) *store.Store {
 func seedRuntimeAccount(
 	t *testing.T,
 	tradeStore *store.Store,
-) store.ExchangeAccountRecord {
+) store.TradingAccountRecord {
 	t.Helper()
-	account := store.ExchangeAccountRecord{
-		SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",
+	account := store.TradingAccountRecord{
+		SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 		Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE",
 		Environment:        "TESTNET",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
@@ -243,7 +243,7 @@ func seedRuntimeAccount(
 		LeverageSettings: store.LeverageSettings{"BTC-USDT": "5"},
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateExchangeAccount(account)
+		return tx.CreateTradingAccount(account)
 	}))
 	return account
 }

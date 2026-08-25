@@ -19,7 +19,7 @@ var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configu
 var errPrivateDisconnected = errors.New("trade runtime: private stream disconnected")
 
 type ExchangeSession struct {
-	Account      store.ExchangeAccountRecord
+	Account      store.TradingAccountRecord
 	Adapter      exchange.Adapter
 	Sync         *accountsync.Service
 	SyncInterval time.Duration
@@ -42,12 +42,12 @@ func (s *ExchangeSession) ExchangeAdapter() exchange.Adapter {
 
 func (s *ExchangeSession) Run(ctx context.Context) error {
 	if s == nil || s.Adapter == nil || s.Sync == nil || s.Sync.Store == nil ||
-		s.Account.ExchangeAccountID == "" {
+		s.Account.TradingAccountID == "" {
 		return ErrSessionConfig
 	}
-	account, err := s.Sync.Store.GetExchangeAccountByID(
+	account, err := s.Sync.Store.GetTradingAccountByID(
 		ctx,
-		s.Account.ExchangeAccountID,
+		s.Account.TradingAccountID,
 	)
 	if err != nil {
 		return err
@@ -60,7 +60,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	s.syncRequested = make(chan struct{}, 1)
 	s.ready.Store(false)
-	_ = s.Sync.SetReady(ctx, s.Account.ExchangeAccountID, false, nil)
+	_ = s.Sync.SetReady(ctx, s.Account.TradingAccountID, false, nil)
 
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
@@ -143,7 +143,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	localOrders, err := s.Sync.Store.ListOrdersForAccount(
 		ctx,
 		s.Account.SpaceID,
-		s.Account.ExchangeAccountID,
+		s.Account.TradingAccountID,
 		0,
 	)
 	if err != nil {
@@ -178,7 +178,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 
 	s.opMu.Lock()
-	_, err = s.Sync.ApplySnapshot(ctx, s.Account.ExchangeAccountID, accountsync.Snapshot{
+	_, err = s.Sync.ApplySnapshot(ctx, s.Account.TradingAccountID, accountsync.Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, FillCursors: cursors, Ready: false,
 	})
@@ -190,7 +190,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		if err, ended := privateStreamError(disconnected, streamDone); ended {
 			return err
 		}
-		if err := s.Sync.SetReady(ctx, s.Account.ExchangeAccountID, true, nil); err != nil {
+		if err := s.Sync.SetReady(ctx, s.Account.TradingAccountID, true, nil); err != nil {
 			return err
 		}
 		s.ready.Store(true)
@@ -199,7 +199,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 			s.ready.Store(false)
 			_ = s.Sync.SetReady(
 				context.Background(),
-				s.Account.ExchangeAccountID,
+				s.Account.TradingAccountID,
 				false,
 				errPrivateDisconnected,
 			)
@@ -225,7 +225,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 			return s.disconnect(context.Background(), err)
 		case <-ticker.C:
 			s.opMu.Lock()
-			_, err := s.Sync.SyncAccount(ctx, s.Account.ExchangeAccountID)
+			_, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
 			s.opMu.Unlock()
 			if err != nil {
 				return s.disconnect(context.Background(), err)
@@ -235,7 +235,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 			}
 		case <-s.syncRequested:
 			s.opMu.Lock()
-			_, err := s.Sync.SyncAccount(ctx, s.Account.ExchangeAccountID)
+			_, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
 			s.opMu.Unlock()
 			if err != nil {
 				return s.disconnect(context.Background(), err)
@@ -270,7 +270,7 @@ func (s *ExchangeSession) disconnect(ctx context.Context, cause error) error {
 	}
 	setCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if err := s.Sync.SetReady(setCtx, s.Account.ExchangeAccountID, false, cause); err != nil {
+	if err := s.Sync.SetReady(setCtx, s.Account.TradingAccountID, false, cause); err != nil {
 		if cause == nil {
 			return err
 		}
@@ -315,12 +315,12 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 	defer s.opMu.Unlock()
 	switch event.kind {
 	case privateOrder:
-		return s.Sync.ApplyOrder(ctx, s.Account.ExchangeAccountID, event.order)
+		return s.Sync.ApplyOrder(ctx, s.Account.TradingAccountID, event.order)
 	case privateFill:
-		_, err := s.Sync.ApplyFill(ctx, s.Account.ExchangeAccountID, event.fill)
+		_, err := s.Sync.ApplyFill(ctx, s.Account.TradingAccountID, event.fill)
 		return err
 	case privatePosition:
-		err := s.Sync.ApplyPosition(ctx, s.Account.ExchangeAccountID, event.position)
+		err := s.Sync.ApplyPosition(ctx, s.Account.TradingAccountID, event.position)
 		if err == nil && s.syncRequested != nil {
 			select {
 			case s.syncRequested <- struct{}{}:
@@ -331,7 +331,7 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 	case privateAccount:
 		err := s.Sync.ApplyAccountSnapshot(
 			ctx,
-			s.Account.ExchangeAccountID,
+			s.Account.TradingAccountID,
 			event.account,
 		)
 		if err == nil && s.syncRequested != nil {
@@ -455,7 +455,7 @@ func leverageSymbols(settings store.LeverageSettings) []string {
 }
 
 func sessionSymbols(
-	account store.ExchangeAccountRecord,
+	account store.TradingAccountRecord,
 	orders []exchange.Order,
 	local []store.OrderRecord,
 	positions []exchange.Position,

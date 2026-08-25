@@ -142,8 +142,8 @@ func unsupportedLogicalTargetInstrument(
 	supportedIDs := make(map[string]struct{})
 	membersReady = true
 	for _, member := range members {
-		account, accountErr := tradeStore.GetExchangeAccountByID(
-			ctx, member.ExchangeAccountID,
+		account, accountErr := tradeStore.GetTradingAccountByID(
+			ctx, member.TradingAccountID,
 		)
 		if accountErr != nil {
 			return "", false, accountErr

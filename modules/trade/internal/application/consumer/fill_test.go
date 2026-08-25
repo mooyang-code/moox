@@ -27,8 +27,8 @@ func openFillStore(t *testing.T, market exchange.MarketType) *store.Store {
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: testSpace, ExchangeAccountID: testAccount, Name: "primary",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: testSpace, TradingAccountID: testAccount, Name: "primary",
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
 			ExecutionMode:      string(exchange.ExecutionModePaper),
 			Environment:        string(exchange.AccountEnvironmentPaper),
@@ -63,7 +63,7 @@ func seedFillOrder(
 		positionSide = string(exchange.PositionSideNet)
 	}
 	record := store.OrderRecord{
-		SpaceID: testSpace, OrderID: "order-1", ExchangeAccountID: testAccount,
+		SpaceID: testSpace, OrderID: "order-1", TradingAccountID: testAccount,
 		ClientOrderID: "client-1", ExchangeOrderID: "exchange-order-1",
 		Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
 		Symbol: testSymbol, OrderType: string(exchange.OrderTypeMarket),
@@ -81,7 +81,7 @@ func seedFillOrder(
 
 func fillSource() Source {
 	return Source{
-		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: OriginPrivateSocket,
+		SpaceID: testSpace, TradingAccountID: testAccount, Kind: OriginPrivateSocket,
 	}
 }
 
@@ -123,7 +123,7 @@ func TestReducerApplyFillSpotPersistsFillAndReservationOnce(t *testing.T) {
 	assert.Equal(t, uint64(2), got.Version)
 
 	applied, err = reducer.ApplyFill(context.Background(), fill, Source{
-		SpaceID: testSpace, ExchangeAccountID: testAccount, Kind: OriginRESTSnapshot,
+		SpaceID: testSpace, TradingAccountID: testAccount, Kind: OriginRESTSnapshot,
 	})
 	require.NoError(t, err)
 	assert.False(t, applied)
@@ -219,7 +219,7 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 	seedFillOrder(t, s, exchange.MarketTypeSwap, order.Open, "2", "20")
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpsertPosition(store.PositionRecord{
-			SpaceID: testSpace, ExchangeAccountID: testAccount, Symbol: testSymbol,
+			SpaceID: testSpace, TradingAccountID: testAccount, Symbol: testSymbol,
 			PositionSide: string(exchange.PositionSideNet), SignedQuantity: "-1",
 			EntryPrice: "90", MarkPrice: "90", Leverage: "10",
 			MarginMode: string(exchange.MarginModeCross),
@@ -246,8 +246,8 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 	}
 	require.NoError(t, s.DBForTest().Raw(`
 		SELECT c_signed_quantity, c_entry_price, c_realized_pnl
-		FROM t_exchange_positions
-		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+		FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?
 	`, testSpace, testAccount, testSymbol).Scan(&position).Error)
 	assert.Equal(t, "1", position.SignedQuantity)
 	assert.Equal(t, "100", position.EntryPrice)
@@ -280,8 +280,8 @@ func TestReducerApplyFillCreatesFirstSwapPosition(t *testing.T) {
 	}
 	require.NoError(t, s.DBForTest().Raw(`
 		SELECT c_signed_quantity, c_entry_price, c_leverage
-		FROM t_exchange_positions
-		WHERE c_space_id = ? AND c_exchange_account_id = ? AND c_symbol = ?
+		FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?
 	`, testSpace, testAccount, testSymbol).Scan(&position).Error)
 	require.Equal(t, "1", position.SignedQuantity)
 	require.Equal(t, "100", position.EntryPrice)

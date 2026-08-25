@@ -8,7 +8,7 @@ import (
 )
 
 type AdapterSource interface {
-	Adapter(exchangeAccountID string) (exchange.Adapter, error)
+	Adapter(tradingAccountID string) (exchange.Adapter, error)
 }
 
 type ExchangePriceSource struct {
@@ -17,13 +17,13 @@ type ExchangePriceSource struct {
 
 func (s ExchangePriceSource) LatestPrice(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	symbol string,
 ) (Quote, error) {
 	if s.Adapters == nil {
 		return Quote{}, ErrExecutorConfig
 	}
-	adapter, err := s.Adapters.Adapter(exchangeAccountID)
+	adapter, err := s.Adapters.Adapter(tradingAccountID)
 	if err != nil {
 		return Quote{}, err
 	}

@@ -212,7 +212,7 @@ func TestAdapterRestoresPaperBalancesFromPersistedFills(t *testing.T) {
 	tradedAt := time.Now().Add(-time.Minute).UTC()
 	persisted := fillStoreStub{fills: []store.FillRecord{{
 		ExchangeTradeID: "persisted-fill-1", ExchangeOrderID: "persisted-order-1",
-		ExchangeAccountID: "account-1", Symbol: "BTCUSDT",
+		TradingAccountID: "account-1", Symbol: "BTCUSDT",
 		Side: string(exchange.SideBuy), PositionSide: string(exchange.PositionSideNet),
 		Price: "50000", Quantity: "0.01", Fee: "0", FeeAsset: "USDT",
 		SettlementAsset: "USDT", RealizedPnL: "0", Role: "TAKER",
@@ -244,7 +244,7 @@ func TestAdapterRecoversSubmittedOrderWhenFillWasNotYetPersisted(t *testing.T) {
 	submittedAt := time.Now().Add(-time.Second).UTC().Truncate(time.Millisecond)
 	history := fillStoreStub{orders: []store.OrderRecord{{
 		SpaceID: "space-1", OrderID: "order-1",
-		ExchangeAccountID: "account-1", ClientOrderID: "client-1",
+		TradingAccountID: "account-1", ClientOrderID: "client-1",
 		MarketType: string(exchange.MarketTypeSpot), Symbol: "BTCUSDT",
 		OrderType: string(exchange.OrderTypeMarket), Side: string(exchange.SideBuy),
 		Quantity: "0.01", ReferencePrice: "50000",
@@ -280,7 +280,7 @@ func TestAdapterExcludesCurrentSubmittingSwapOrderFromRealizedPnLHistory(t *test
 	history := fillStoreStub{orders: []store.OrderRecord{
 		{
 			SpaceID: "space-1", OrderID: "order-open",
-			ExchangeAccountID: "account-1", ClientOrderID: "client-open",
+			TradingAccountID: "account-1", ClientOrderID: "client-open",
 			MarketType: string(exchange.MarketTypeSwap), Symbol: "BTCUSDT",
 			OrderType: string(exchange.OrderTypeMarket), Side: string(exchange.SideBuy),
 			PositionSide: string(exchange.PositionSideNet),
@@ -289,7 +289,7 @@ func TestAdapterExcludesCurrentSubmittingSwapOrderFromRealizedPnLHistory(t *test
 		},
 		{
 			SpaceID: "space-1", OrderID: "order-close",
-			ExchangeAccountID: "account-1", ClientOrderID: "client-close",
+			TradingAccountID: "account-1", ClientOrderID: "client-close",
 			MarketType: string(exchange.MarketTypeSwap), Symbol: "BTCUSDT",
 			OrderType: string(exchange.OrderTypeMarket), Side: string(exchange.SideSell),
 			PositionSide: string(exchange.PositionSideNet),

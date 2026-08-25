@@ -32,7 +32,7 @@ func TestPaperSwapFullCloseSyncPersistsClosingFill(t *testing.T) {
 	_, total, err := f.store.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	if closeOrder.State != orderdomain.Filled || total != 2 {
@@ -66,7 +66,7 @@ func TestPaperSwapCursorSurvivesClockRollback(t *testing.T) {
 	_, total, err := f.store.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)

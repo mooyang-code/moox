@@ -24,9 +24,9 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 	`).Scan(&tables).Error)
 
 	want := []string{
-		"t_exchange_accounts",
+		"t_trading_accounts",
 		"t_exchange_instruments",
-		"t_exchange_positions",
+		"t_trading_positions",
 		"t_logical_account_members",
 		"t_logical_account_targets",
 		"t_logical_accounts",
@@ -104,18 +104,18 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		table   string
 		columns []string
 	}{
-		{"t_exchange_accounts", []string{"c_space_id", "c_exchange_account_id"}},
-		{"t_exchange_accounts", []string{"c_space_id", "c_name"}},
+		{"t_trading_accounts", []string{"c_space_id", "c_trading_account_id"}},
+		{"t_trading_accounts", []string{"c_space_id", "c_name"}},
 		{"t_exchange_instruments", []string{"c_exchange", "c_market_type", "c_symbol"}},
 		{"t_trade_orders", []string{"c_space_id", "c_order_id"}},
-		{"t_trade_orders", []string{"c_space_id", "c_exchange_account_id", "c_client_order_id"}},
-		{"t_order_fills", []string{"c_space_id", "c_exchange_account_id", "c_symbol", "c_exchange_trade_id"}},
-		{"t_exchange_positions", []string{"c_space_id", "c_exchange_account_id", "c_symbol", "c_position_side"}},
+		{"t_trade_orders", []string{"c_space_id", "c_trading_account_id", "c_client_order_id"}},
+		{"t_order_fills", []string{"c_space_id", "c_trading_account_id", "c_symbol", "c_exchange_trade_id"}},
+		{"t_trading_positions", []string{"c_space_id", "c_trading_account_id", "c_symbol", "c_position_side"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_name"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_owner_runner_id"}},
-		{"t_logical_account_members", []string{"c_space_id", "c_logical_account_id", "c_exchange_account_id"}},
-		{"t_logical_account_members", []string{"c_space_id", "c_exchange_account_id"}},
+		{"t_logical_account_members", []string{"c_space_id", "c_logical_account_id", "c_trading_account_id"}},
+		{"t_logical_account_members", []string{"c_space_id", "c_trading_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_target_id"}},
 		{"t_operator_actions", []string{"c_space_id", "c_action_id"}},

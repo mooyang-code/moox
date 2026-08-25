@@ -169,13 +169,13 @@ type Credential struct {
 }
 
 type AccountConfig struct {
-	ExchangeAccountID string
-	Exchange          Exchange
-	MarketType        MarketType
-	ExecutionMode     ExecutionMode
-	Environment       AccountEnvironment
-	SettlementAsset   string
-	MarginMode        MarginMode
+	TradingAccountID string
+	Exchange         Exchange
+	MarketType       MarketType
+	ExecutionMode    ExecutionMode
+	Environment      AccountEnvironment
+	SettlementAsset  string
+	MarginMode       MarginMode
 }
 
 type Instrument struct {
@@ -226,7 +226,7 @@ type AccountSnapshotPresence struct {
 }
 
 type Position struct {
-	ExchangeAccountID string
+	TradingAccountID  string
 	Symbol            string
 	PositionSide      PositionSide
 	SignedQuantity    shared.Decimal

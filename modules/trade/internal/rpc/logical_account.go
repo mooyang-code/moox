@@ -151,7 +151,7 @@ func (h *LogicalAccountServer) AddLogicalAccountMember(
 	}
 	err = h.LogicalAccounts.AddMember(ctx, logicalapp.AddMemberCommand{
 		SpaceID: spaceID, LogicalAccountID: req.GetLogicalAccountId(),
-		ExchangeAccountID:     req.GetExchangeAccountId(),
+		TradingAccountID:      req.GetExchangeAccountId(),
 		Enabled:               req.GetEnabled(),
 		Priority:              int(req.GetPriority()),
 		AdoptExistingExposure: req.GetAdoptExistingExposure(),

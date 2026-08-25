@@ -306,8 +306,8 @@ func (a *Adapter) dispatchPrivate(
 				return err
 			}
 			position := exchange.Position{
-				ExchangeAccountID: a.config.ExchangeAccountID,
-				Symbol:            row.InstID, PositionSide: exchange.PositionSideNet,
+				TradingAccountID: a.config.TradingAccountID,
+				Symbol:           row.InstID, PositionSide: exchange.PositionSideNet,
 				SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 				ExchangeUpdatedAt: millisString(row.UTime),
 				Present: exchange.PositionPresence{

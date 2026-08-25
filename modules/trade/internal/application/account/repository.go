@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
@@ -14,24 +14,24 @@ type Repository struct {
 	Store *store.Store
 }
 
-func (r Repository) Create(ctx context.Context, value exchangeaccount.Account) error {
+func (r Repository) Create(ctx context.Context, value tradingaccount.Account) error {
 	return r.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.CreateExchangeAccount(accountRecord(value))
+		return tx.CreateTradingAccount(accountRecord(value))
 	})
 }
 
-func (r Repository) Get(ctx context.Context, id string) (exchangeaccount.Account, error) {
-	record, err := r.Store.GetExchangeAccountByID(ctx, id)
+func (r Repository) Get(ctx context.Context, id string) (tradingaccount.Account, error) {
+	record, err := r.Store.GetTradingAccountByID(ctx, id)
 	if err != nil {
-		return exchangeaccount.Account{}, err
+		return tradingaccount.Account{}, err
 	}
 	return accountDomain(record)
 }
 
 func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
-	unlock := r.Store.LockExchangeAccount(command.ExchangeAccountID)
+	unlock := r.Store.LockTradingAccount(command.TradingAccountID)
 	defer unlock()
-	current, err := r.Store.GetExchangeAccountByID(ctx, command.ExchangeAccountID)
+	current, err := r.Store.GetTradingAccountByID(ctx, command.TradingAccountID)
 	if err != nil {
 		return err
 	}
@@ -41,10 +41,10 @@ func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
 	}
 	applyUpdate(&value, command)
 	return r.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountConfiguration(
+		return tx.UpdateTradingAccountConfiguration(
 			value.SpaceID,
 			value.ID,
-			store.ExchangeAccountConfiguration{
+			store.TradingAccountConfiguration{
 				Name: value.Name, CredentialSecretID: value.CredentialSecretID,
 				SettlementAsset: value.SettlementAsset,
 				MarginMode:      string(value.MarginMode), Status: string(value.Status),
@@ -60,30 +60,30 @@ func (r Repository) SetLeverage(
 	symbol string,
 	leverage shared.Decimal,
 ) error {
-	unlock := r.Store.LockExchangeAccount(id)
+	unlock := r.Store.LockTradingAccount(id)
 	defer unlock()
-	current, err := r.Store.GetExchangeAccountByID(ctx, id)
+	current, err := r.Store.GetTradingAccountByID(ctx, id)
 	if err != nil {
 		return err
 	}
 	settings := cloneLeverage(current.LeverageSettings)
 	settings[symbol] = leverage.String()
 	return r.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetExchangeAccountLeverage(
+		return tx.SetTradingAccountLeverage(
 			current.SpaceID,
-			current.ExchangeAccountID,
+			current.TradingAccountID,
 			settings,
 		)
 	})
 }
 
-func accountRecord(value exchangeaccount.Account) store.ExchangeAccountRecord {
+func accountRecord(value tradingaccount.Account) store.TradingAccountRecord {
 	leverage := make(store.LeverageSettings, len(value.LeverageSettings))
 	for symbol, amount := range value.LeverageSettings {
 		leverage[symbol] = amount.String()
 	}
-	return store.ExchangeAccountRecord{
-		SpaceID: value.SpaceID, ExchangeAccountID: value.ID, Name: value.Name,
+	return store.TradingAccountRecord{
+		SpaceID: value.SpaceID, TradingAccountID: value.ID, Name: value.Name,
 		Exchange: string(value.Exchange), MarketType: string(value.MarketType),
 		ExecutionMode:      string(value.ExecutionMode),
 		Environment:        string(value.Environment),
@@ -99,17 +99,17 @@ func accountRecord(value exchangeaccount.Account) store.ExchangeAccountRecord {
 	}
 }
 
-func accountDomain(record store.ExchangeAccountRecord) (exchangeaccount.Account, error) {
+func accountDomain(record store.TradingAccountRecord) (tradingaccount.Account, error) {
 	leverage := make(map[string]shared.Decimal, len(record.LeverageSettings))
 	for symbol, raw := range record.LeverageSettings {
 		value, err := shared.ParseDecimal(raw)
 		if err != nil {
-			return exchangeaccount.Account{}, err
+			return tradingaccount.Account{}, err
 		}
 		leverage[symbol] = value
 	}
-	return exchangeaccount.Account{
-		ID: record.ExchangeAccountID, SpaceID: record.SpaceID, Name: record.Name,
+	return tradingaccount.Account{
+		ID: record.TradingAccountID, SpaceID: record.SpaceID, Name: record.Name,
 		Exchange:           exchange.Exchange(record.Exchange),
 		MarketType:         exchange.MarketType(record.MarketType),
 		ExecutionMode:      exchange.ExecutionMode(record.ExecutionMode),
@@ -134,7 +134,7 @@ func cloneLeverage(values store.LeverageSettings) store.LeverageSettings {
 	return cloned
 }
 
-func snapshotRecord(value exchange.AccountSnapshot) store.ExchangeAccountSnapshot {
+func snapshotRecord(value exchange.AccountSnapshot) store.TradingAccountSnapshot {
 	balances := make([]store.AssetBalance, 0, len(value.Balances))
 	for _, balance := range value.Balances {
 		balances = append(balances, store.AssetBalance{
@@ -142,7 +142,7 @@ func snapshotRecord(value exchange.AccountSnapshot) store.ExchangeAccountSnapsho
 			Locked: balance.Locked.String(), Total: balance.Total.String(),
 		})
 	}
-	return store.ExchangeAccountSnapshot{
+	return store.TradingAccountSnapshot{
 		Balances: balances, Equity: value.Equity.String(),
 		AvailableFunds:    value.AvailableFunds.String(),
 		UsedMargin:        value.UsedMargin.String(),
@@ -152,7 +152,7 @@ func snapshotRecord(value exchange.AccountSnapshot) store.ExchangeAccountSnapsho
 	}
 }
 
-func snapshotDomain(value store.ExchangeAccountSnapshot) exchange.AccountSnapshot {
+func snapshotDomain(value store.TradingAccountSnapshot) exchange.AccountSnapshot {
 	balances := make([]exchange.AssetBalance, 0, len(value.Balances))
 	for _, balance := range value.Balances {
 		balances = append(balances, exchange.AssetBalance{

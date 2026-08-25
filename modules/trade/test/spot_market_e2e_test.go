@@ -44,7 +44,7 @@ func TestSpotPersistsNormalizedNonzeroExchangeFee(t *testing.T) {
 	fills, total, err := f.store.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
@@ -67,7 +67,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	require.Equal(t, orderdomain.Filled, sell.State)
 
 	orders, total, err := f.store.ListOrders(ctx, testSpace, store.OrderQuery{
-		ExchangeAccountID: testAccount, Limit: 10,
+		TradingAccountID: testAccount, Limit: 10,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)
@@ -78,7 +78,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 		require.NotEmpty(t, current.ExchangeOrderID)
 	}
 	fills, fillTotal, err := f.store.ListFills(ctx, testSpace, store.FillQuery{
-		ExchangeAccountID: testAccount, Limit: 10,
+		TradingAccountID: testAccount, Limit: 10,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), fillTotal)
@@ -86,7 +86,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 		require.Empty(t, fill.PositionSide)
 		require.Equal(t, "0", fill.Fee)
 	}
-	account, err := f.store.GetExchangeAccountByID(ctx, testAccount)
+	account, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	require.True(t, account.Ready)
 	require.Equal(t, "100000", account.Snapshot.AvailableFunds)
@@ -113,7 +113,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	recoveredOrders, recoveredTotal, err := restarted.ListOrders(
 		ctx,
 		testSpace,
-		store.OrderQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.OrderQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), recoveredTotal)
@@ -121,7 +121,7 @@ func TestSpotPaperMarketBuySellPersistsAndRestarts(t *testing.T) {
 	recoveredFills, recoveredFillTotal, err := restarted.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), recoveredFillTotal)

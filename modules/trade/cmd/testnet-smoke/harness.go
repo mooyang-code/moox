@@ -84,7 +84,7 @@ func openLiveHarness(
 	}
 	probe := newPrivateOrderProbe()
 	orders.Syncer = smokeSyncer{service: syncService}
-	manager.NewSession = func(record store.ExchangeAccountRecord) (traderuntime.ManagedSession, error) {
+	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
 		if record.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			record.ExecutionMode != string(exchange.ExecutionModeLive) ||
 			record.MarketType != string(exchange.MarketTypeSpot) ||
@@ -92,12 +92,12 @@ func openLiveHarness(
 			return nil, errors.New("testnet smoke session configuration escaped TESTNET LIVE SPOT")
 		}
 		config := exchange.AccountConfig{
-			ExchangeAccountID: record.ExchangeAccountID,
-			Exchange:          exchange.Exchange(record.Exchange),
-			MarketType:        exchange.MarketType(record.MarketType),
-			ExecutionMode:     exchange.ExecutionMode(record.ExecutionMode),
-			Environment:       exchange.AccountEnvironmentTestnet,
-			SettlementAsset:   record.SettlementAsset,
+			TradingAccountID: record.TradingAccountID,
+			Exchange:         exchange.Exchange(record.Exchange),
+			MarketType:       exchange.MarketType(record.MarketType),
+			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
+			Environment:      exchange.AccountEnvironmentTestnet,
+			SettlementAsset:  record.SettlementAsset,
 		}
 		var adapter exchange.Adapter
 		switch options.Exchange {
@@ -257,7 +257,7 @@ func runSubmitPhase(
 	if err != nil {
 		return err
 	}
-	account, err := harness.store.GetExchangeAccountByID(ctx, harness.identity.AccountID)
+	account, err := harness.store.GetTradingAccountByID(ctx, harness.identity.AccountID)
 	if err != nil {
 		return err
 	}
@@ -270,8 +270,8 @@ func runSubmitPhase(
 		ctx,
 		operatorapp.ManualOrderCommand{
 			SpaceID: smokeSpaceID, ActionID: xid.New().String(),
-			ExchangeAccountID: harness.identity.AccountID,
-			ClientOrderID:     clientOrderID, InstrumentID: options.Symbol,
+			TradingAccountID: harness.identity.AccountID,
+			ClientOrderID:    clientOrderID, InstrumentID: options.Symbol,
 			Type: exchange.OrderTypeLimit, FillPolicy: exchange.FillPolicyGTC,
 			Side: exchange.SideBuy, Quantity: plan.Quantity, LimitPrice: &plan.Price,
 			Reason: "real testnet smoke submit",
@@ -584,7 +584,7 @@ func cleanupTestExposure(
 	if _, err := harness.sync.SyncAccount(ctx, state.AccountID); err != nil {
 		return shared.Zero(), err
 	}
-	account, err := harness.store.GetExchangeAccountByID(ctx, state.AccountID)
+	account, err := harness.store.GetTradingAccountByID(ctx, state.AccountID)
 	if err != nil {
 		return shared.Zero(), err
 	}
@@ -630,7 +630,7 @@ func cleanupTestExposure(
 		ctx,
 		operatorapp.ManualOrderCommand{
 			SpaceID: smokeSpaceID, ActionID: xid.New().String(),
-			ExchangeAccountID: state.AccountID, ClientOrderID: xid.New().String(),
+			TradingAccountID: state.AccountID, ClientOrderID: xid.New().String(),
 			InstrumentID: state.Symbol, Type: exchange.OrderTypeMarket,
 			Side: exchange.SideSell, Quantity: quantity,
 			Reason: "real testnet smoke reverse cleanup",
@@ -642,7 +642,7 @@ func cleanupTestExposure(
 	if err := waitLocalTerminal(ctx, harness, cleanup.Order.OrderID); err != nil {
 		return delta, err
 	}
-	account, err = harness.store.GetExchangeAccountByID(ctx, state.AccountID)
+	account, err = harness.store.GetTradingAccountByID(ctx, state.AccountID)
 	if err != nil {
 		return delta, err
 	}
@@ -674,7 +674,7 @@ func terminalExchangeStatus(status exchange.OrderStatus) bool {
 }
 
 func snapshotAssetTotal(
-	snapshot store.ExchangeAccountSnapshot,
+	snapshot store.TradingAccountSnapshot,
 	asset string,
 ) (shared.Decimal, error) {
 	for _, balance := range snapshot.Balances {
@@ -728,17 +728,17 @@ type smokePositionSource struct {
 
 func (s smokePositionSource) GetPosition(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	symbol string,
 ) (exchange.Position, error) {
-	account, err := s.store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return exchange.Position{}, err
 	}
 	record, found, err := s.store.GetPosition(
 		ctx,
 		account.SpaceID,
-		exchangeAccountID,
+		tradingAccountID,
 		symbol,
 		string(exchange.PositionSideNet),
 	)
@@ -747,12 +747,12 @@ func (s smokePositionSource) GetPosition(
 	}
 	if !found {
 		return exchange.Position{
-			ExchangeAccountID: exchangeAccountID,
-			Symbol:            symbol, PositionSide: exchange.PositionSideNet,
+			TradingAccountID: tradingAccountID,
+			Symbol:           symbol, PositionSide: exchange.PositionSideNet,
 		}, nil
 	}
 	return exchange.Position{
-		ExchangeAccountID: exchangeAccountID, Symbol: symbol,
+		TradingAccountID: tradingAccountID, Symbol: symbol,
 		PositionSide:      exchange.PositionSide(record.PositionSide),
 		SignedQuantity:    mustDecimal(record.SignedQuantity),
 		EntryPrice:        mustDecimal(record.EntryPrice),

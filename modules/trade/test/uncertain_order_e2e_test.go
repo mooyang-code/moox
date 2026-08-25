@@ -85,7 +85,7 @@ func TestCanceledOrderAcceptsLateFillAndDeduplicatesIt(t *testing.T) {
 	_, total, err := f.store.ListFills(
 		ctx,
 		testSpace,
-		store.FillQuery{ExchangeAccountID: testAccount, Limit: 10},
+		store.FillQuery{TradingAccountID: testAccount, Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
@@ -102,7 +102,7 @@ func TestCanceledOrderAcceptsLateFillAndDeduplicatesIt(t *testing.T) {
 
 func consumerSource() consumer.Source {
 	return consumer.Source{
-		SpaceID: testSpace, ExchangeAccountID: testAccount,
+		SpaceID: testSpace, TradingAccountID: testAccount,
 		Kind: consumer.OriginPrivateSocket,
 	}
 }

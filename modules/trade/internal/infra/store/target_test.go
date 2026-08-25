@@ -230,7 +230,7 @@ func seedLogicalAccount(t *testing.T, s *Store, runnerID string) {
 	t.Helper()
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
 			return err
 		}
 		return tx.CreateLogicalAccount(LogicalAccountRecord{

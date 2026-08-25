@@ -139,7 +139,7 @@ func initialize(
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
 	}
-	manager.NewSession = func(record store.ExchangeAccountRecord) (traderuntime.ManagedSession, error) {
+	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
 		credential := exchange.Credential{}
 		if exchange.ExecutionMode(record.ExecutionMode) == exchange.ExecutionModeLive {
 			var credentialErr error
@@ -154,13 +154,13 @@ func initialize(
 			}
 		}
 		accountConfig := exchange.AccountConfig{
-			ExchangeAccountID: record.ExchangeAccountID,
-			Exchange:          exchange.Exchange(record.Exchange),
-			MarketType:        exchange.MarketType(record.MarketType),
-			ExecutionMode:     exchange.ExecutionMode(record.ExecutionMode),
-			Environment:       exchange.AccountEnvironment(record.Environment),
-			SettlementAsset:   record.SettlementAsset,
-			MarginMode:        exchange.MarginMode(record.MarginMode),
+			TradingAccountID: record.TradingAccountID,
+			Exchange:         exchange.Exchange(record.Exchange),
+			MarketType:       exchange.MarketType(record.MarketType),
+			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
+			Environment:      exchange.AccountEnvironment(record.Environment),
+			SettlementAsset:  record.SettlementAsset,
+			MarginMode:       exchange.MarginMode(record.MarginMode),
 		}
 		adapter, bindErr := registry.Bind(accountConfig, credential)
 		if bindErr != nil {
@@ -171,7 +171,7 @@ func initialize(
 				adapter,
 				tradeStore,
 				record.SpaceID,
-				record.ExchangeAccountID,
+				record.TradingAccountID,
 				exchange.MarketType(record.MarketType),
 				record.SettlementAsset,
 				decimal(cfg.Runtime.PaperInitialBalance),
@@ -278,10 +278,10 @@ func initialize(
 					callCtx,
 					operatorapp.ManualOrderCommand{
 						SpaceID: command.SpaceID, ActionID: command.ActionID,
-						ExchangeAccountID: command.ExchangeAccountID,
-						ClientOrderID:     command.ClientOrderID,
-						InstrumentID:      command.Symbol,
-						Type:              command.OrderType, FillPolicy: command.FillPolicy,
+						TradingAccountID: command.TradingAccountID,
+						ClientOrderID:    command.ClientOrderID,
+						InstrumentID:     command.Symbol,
+						Type:             command.OrderType, FillPolicy: command.FillPolicy,
 						Side: command.Side, PositionSide: command.PositionSide,
 						Quantity: command.Quantity, LimitPrice: command.LimitPrice,
 						Reason: command.Reason,
@@ -436,17 +436,17 @@ type positionSource struct {
 
 func (s positionSource) GetPosition(
 	ctx context.Context,
-	exchangeAccountID string,
+	tradingAccountID string,
 	symbol string,
 ) (exchange.Position, error) {
-	account, err := s.store.GetExchangeAccountByID(ctx, exchangeAccountID)
+	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return exchange.Position{}, err
 	}
 	record, found, err := s.store.GetPosition(
 		ctx,
 		account.SpaceID,
-		exchangeAccountID,
+		tradingAccountID,
 		symbol,
 		string(exchange.PositionSideNet),
 	)
@@ -455,12 +455,12 @@ func (s positionSource) GetPosition(
 	}
 	if !found {
 		return exchange.Position{
-			ExchangeAccountID: exchangeAccountID, Symbol: symbol,
+			TradingAccountID: tradingAccountID, Symbol: symbol,
 			PositionSide: exchange.PositionSideNet,
 		}, nil
 	}
 	return exchange.Position{
-		ExchangeAccountID: exchangeAccountID, Symbol: symbol,
+		TradingAccountID: tradingAccountID, Symbol: symbol,
 		PositionSide:   exchange.PositionSide(record.PositionSide),
 		SignedQuantity: decimal(record.SignedQuantity),
 		EntryPrice:     decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice),

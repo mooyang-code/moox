@@ -74,11 +74,11 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 		exchange.ExchangeOKX,
 	} {
 		adapter, err := registry.Bind(exchange.AccountConfig{
-			ExchangeAccountID: "account-1",
-			Exchange:          name,
-			MarketType:        exchange.MarketTypeSpot,
-			ExecutionMode:     exchange.ExecutionModePaper,
-			SettlementAsset:   "USDT",
+			TradingAccountID: "account-1",
+			Exchange:         name,
+			MarketType:       exchange.MarketTypeSpot,
+			ExecutionMode:    exchange.ExecutionModePaper,
+			SettlementAsset:  "USDT",
 		}, exchange.Credential{})
 		if err != nil {
 			t.Fatalf("Bind(%s) error = %v", name, err)
@@ -89,11 +89,11 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 	}
 
 	_, err := registry.Bind(exchange.AccountConfig{
-		ExchangeAccountID: "account-1",
-		Exchange:          exchange.ExchangeOKX,
-		MarketType:        exchange.MarketTypeSpot,
-		ExecutionMode:     exchange.ExecutionModeLive,
-		SettlementAsset:   "USDT",
+		TradingAccountID: "account-1",
+		Exchange:         exchange.ExchangeOKX,
+		MarketType:       exchange.MarketTypeSpot,
+		ExecutionMode:    exchange.ExecutionModeLive,
+		SettlementAsset:  "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret"})
 	if err == nil || !strings.Contains(err.Error(), "passphrase") {
 		t.Fatalf("OKX LIVE Bind() error = %v, want passphrase rejection", err)

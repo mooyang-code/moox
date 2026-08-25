@@ -461,8 +461,8 @@ func (a *Adapter) dispatchFuturesAccount(
 			return err
 		}
 		position := exchange.Position{
-			ExchangeAccountID: a.config.ExchangeAccountID,
-			Symbol:            row.Symbol, PositionSide: exchange.PositionSideNet,
+			TradingAccountID: a.config.TradingAccountID,
+			Symbol:           row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
 			Present: exchange.PositionPresence{

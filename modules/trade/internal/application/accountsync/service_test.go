@@ -171,7 +171,7 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	require.Equal(t, "PARTIALLY_FILLED", orderRecord.State)
 	require.Equal(t, "0.5", orderRecord.FilledQuantity)
 
-	account, err := tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.True(t, account.Ready)
 	require.Equal(t, "11", account.FillCursors["BTC-USDT"])
@@ -435,7 +435,7 @@ func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
 		Facts: &LogicalAccountFactsObserver{
 			Store: tradeStore,
 			Wake: func() {
-				unlock := tradeStore.LockExchangeAccount("account-1")
+				unlock := tradeStore.LockTradingAccount("account-1")
 				unlock()
 				woke <- struct{}{}
 			},
@@ -458,7 +458,7 @@ func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("AccountFacts callback ran while the ExchangeAccount lock was held")
+		t.Fatal("AccountFacts callback ran while the TradingAccount lock was held")
 	}
 	select {
 	case <-woke:
@@ -623,7 +623,7 @@ func TestApplySnapshotResolvesUnknownWithoutReenteringAccountLock(t *testing.T) 
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "unknown-order",
-			ExchangeAccountID: "account-1", ClientOrderID: "unknown-client",
+			TradingAccountID: "account-1", ClientOrderID: "unknown-client",
 			Symbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY",
 			PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
 			ReferencePriceAt: 1_000, OwnerType: "TARGET", OwnerID: "target-1",
@@ -669,8 +669,8 @@ func TestPaperSyncRecoversSubmittedOrderAndPersistsSpotFill(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	submittedAt := time.Now().Add(-time.Second).UTC().UnixMilli()
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: "space-1", ExchangeAccountID: "paper-1", Name: "paper",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper",
 			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
 			Environment:     "PAPER",
 			SettlementAsset: "USDT", Status: "ENABLED",
@@ -688,7 +688,7 @@ func TestPaperSyncRecoversSubmittedOrderAndPersistsSpotFill(t *testing.T) {
 		}
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "order-1",
-			ExchangeAccountID: "paper-1", ClientOrderID: "client-1",
+			TradingAccountID: "paper-1", ClientOrderID: "client-1",
 			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "0.01", ReferencePrice: "50000",
 			ReferencePriceAt: submittedAt,
@@ -728,8 +728,8 @@ func TestPaperSyncRecoversSubmittedOrderAndPersistsSpotFill(t *testing.T) {
 	require.Equal(t, "FILLED", orderRecord.State)
 	require.NotEmpty(t, orderRecord.ExchangeOrderID)
 	fills, total, err := tradeStore.ListFills(ctx, "space-1", store.FillQuery{
-		ExchangeAccountID: "paper-1",
-		Limit:             10,
+		TradingAccountID: "paper-1",
+		Limit:            10,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
@@ -745,7 +745,7 @@ func TestApplyPartialPositionUsesConfiguredLeverage(t *testing.T) {
 		Fills: &consumer.Reducer{Store: tradeStore},
 	}
 	err := service.ApplyPosition(context.Background(), "account-1", exchange.Position{
-		ExchangeAccountID: "account-1",
+		TradingAccountID:  "account-1",
 		Symbol:            "BTC-USDT",
 		PositionSide:      exchange.PositionSideNet,
 		SignedQuantity:    shared.MustDecimal("1"),
@@ -815,7 +815,7 @@ func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T
 		},
 	))
 	require.Zero(t, wakes)
-	account, err := tradeStore.GetExchangeAccountByID(
+	account, err := tradeStore.GetTradingAccountByID(
 		context.Background(), "account-1",
 	)
 	require.NoError(t, err)
@@ -827,10 +827,10 @@ func TestApplyUnknownPartialPositionDefersToFullSync(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountSync(
+		return tx.UpdateTradingAccountSync(
 			"space-1",
 			"account-1",
-			store.ExchangeAccountSyncState{LastSyncAt: 1},
+			store.TradingAccountSyncState{LastSyncAt: 1},
 		)
 	}))
 	service := Service{
@@ -858,10 +858,10 @@ func TestApplyFillImportsEmptyClientIDPerSymbol(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.UpdateExchangeAccountSync(
+		if err := tx.UpdateTradingAccountSync(
 			"space-1",
 			"account-1",
-			store.ExchangeAccountSyncState{
+			store.TradingAccountSyncState{
 				LeverageSettings: store.LeverageSettings{
 					"BTC-USDT": "5",
 					"ETH-USDT": "5",
@@ -964,7 +964,7 @@ func TestApplySnapshotAggregatesSyntheticExternalOrderFills(t *testing.T) {
 }
 
 func TestMergePrivateSnapshotUsesPresenceAndPreservesUnmentionedBalances(t *testing.T) {
-	current := store.ExchangeAccountSnapshot{
+	current := store.TradingAccountSnapshot{
 		Balances: []store.AssetBalance{
 			{Asset: "BTC", Available: "1", Total: "1"},
 			{Asset: "USDT", Available: "100", Total: "100"},
@@ -1030,7 +1030,7 @@ func TestApplyAccountSnapshotMergesDisjointBalancesAtSameTimestamp(t *testing.T)
 		},
 	))
 
-	account, err := tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.Equal(t, int64(2_000), account.Snapshot.ExchangeUpdatedAt)
 	require.Len(t, account.Snapshot.Balances, 2)
@@ -1042,11 +1042,11 @@ func TestPrivateSnapshotDoesNotAdvanceFullSnapshotWatermark(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountFacts(
+		return tx.UpdateTradingAccountFacts(
 			"space-1",
 			"account-1",
 			nil,
-			store.ExchangeAccountSnapshot{
+			store.TradingAccountSnapshot{
 				AvailableFunds: "900", ExchangeUpdatedAt: 2_000,
 			},
 			2_000,
@@ -1070,7 +1070,7 @@ func TestPrivateSnapshotDoesNotAdvanceFullSnapshotWatermark(t *testing.T) {
 			RequiresSync:      true,
 		},
 	))
-	account, err := tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.Equal(t, int64(3_000), account.LastSyncAt)
 	require.Equal(t, int64(2_000), account.SnapshotSourceTime)
@@ -1127,7 +1127,7 @@ func TestDisconnectReadinessWinsAgainstConcurrentManualSync(t *testing.T) {
 	close(adapter.fillRelease)
 	require.NoError(t, <-syncDone)
 	require.NoError(t, <-disconnectDone)
-	account, err := tradeStore.GetExchangeAccountByID(context.Background(), "account-1")
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, account.Ready)
 	require.Equal(t, "disconnected", account.LastError)
@@ -1135,7 +1135,7 @@ func TestDisconnectReadinessWinsAgainstConcurrentManualSync(t *testing.T) {
 
 func TestSyncSymbolsRetainsConfiguredSpotSymbolAfterSellToZero(t *testing.T) {
 	symbols := syncSymbols(
-		store.ExchangeAccountRecord{
+		store.TradingAccountRecord{
 			MarketType:  "SPOT",
 			SyncSymbols: []string{"BTC-USDT"},
 		},
@@ -1153,7 +1153,7 @@ func TestSyncSymbolsRetainsConfiguredSpotSymbolAfterSellToZero(t *testing.T) {
 	require.Equal(t, []string{"BTC-USDT"}, symbols)
 
 	symbols = syncSymbols(
-		store.ExchangeAccountRecord{MarketType: "SWAP"},
+		store.TradingAccountRecord{MarketType: "SWAP"},
 		nil,
 		nil,
 		[]exchange.Position{{Symbol: "ETH-USDT"}},
@@ -1233,8 +1233,8 @@ func requireLogicalAccountRemainsActive(
 func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-1", Name: "main",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 			Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE",
 			Environment:        "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
@@ -1253,7 +1253,7 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-1", Enabled: true,
+			TradingAccountID: "account-1", Enabled: true,
 		}); err != nil {
 			return err
 		}

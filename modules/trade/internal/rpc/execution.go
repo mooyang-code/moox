@@ -11,18 +11,18 @@ import (
 )
 
 type ManualOrderCommand struct {
-	SpaceID           string
-	ActionID          string
-	ExchangeAccountID string
-	ClientOrderID     string
-	Symbol            string
-	OrderType         exchange.OrderType
-	FillPolicy        exchange.FillPolicy
-	Side              exchange.Side
-	PositionSide      exchange.PositionSide
-	Quantity          shared.Decimal
-	LimitPrice        *shared.Decimal
-	Reason            string
+	SpaceID          string
+	ActionID         string
+	TradingAccountID string
+	ClientOrderID    string
+	Symbol           string
+	OrderType        exchange.OrderType
+	FillPolicy       exchange.FillPolicy
+	Side             exchange.Side
+	PositionSide     exchange.PositionSide
+	Quantity         shared.Decimal
+	LimitPrice       *shared.Decimal
+	Reason           string
 }
 
 type ExecutionServer struct {
@@ -75,8 +75,8 @@ func (h *ExecutionServer) PlaceManualOrder(
 	if err == nil {
 		action, order, err = h.PlaceManual(ctx, ManualOrderCommand{
 			SpaceID: spaceID, ActionID: req.GetActionId(),
-			ExchangeAccountID: req.GetExchangeAccountId(),
-			ClientOrderID:     req.GetClientOrderId(), Symbol: req.GetSymbol(),
+			TradingAccountID: req.GetExchangeAccountId(),
+			ClientOrderID:    req.GetClientOrderId(), Symbol: req.GetSymbol(),
 			OrderType:    orderTypeFromPB(req.GetOrderType()),
 			FillPolicy:   fillPolicyFromPB(req.GetFillPolicy()),
 			Side:         sideFromPB(req.GetSide()),
@@ -199,7 +199,7 @@ func (h *ExecutionServer) ListOrders(
 		}
 	}
 	if req.GetExchangeAccountId() != "" {
-		if _, err = h.Store.GetExchangeAccount(
+		if _, err = h.Store.GetTradingAccount(
 			ctx,
 			spaceID,
 			req.GetExchangeAccountId(),
@@ -209,9 +209,9 @@ func (h *ExecutionServer) ListOrders(
 	}
 	page := pageFromPB(req.GetPage())
 	records, total, err := h.Store.ListOrders(ctx, spaceID, store.OrderQuery{
-		LogicalAccountID:  req.GetLogicalAccountId(),
-		ExchangeAccountID: req.GetExchangeAccountId(),
-		Symbol:            req.GetSymbol(), State: normalized(req.GetState()),
+		LogicalAccountID: req.GetLogicalAccountId(),
+		TradingAccountID: req.GetExchangeAccountId(),
+		Symbol:           req.GetSymbol(), State: normalized(req.GetState()),
 		OnlyOpen: req.GetOnlyOpen(), StartTime: req.GetStartTime(),
 		EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,
 	})
@@ -236,7 +236,7 @@ func (h *ExecutionServer) ListFills(
 	if err != nil {
 		return &tradepb.ListFillsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(
+	if _, err := h.Store.GetTradingAccount(
 		ctx,
 		spaceID,
 		req.GetExchangeAccountId(),
@@ -245,7 +245,7 @@ func (h *ExecutionServer) ListFills(
 	}
 	page := pageFromPB(req.GetPage())
 	records, total, err := h.Store.ListFills(ctx, spaceID, store.FillQuery{
-		ExchangeAccountID: req.GetExchangeAccountId(), OrderID: req.GetOrderId(),
+		TradingAccountID: req.GetExchangeAccountId(), OrderID: req.GetOrderId(),
 		Symbol: req.GetSymbol(), StartTime: req.GetStartTime(),
 		EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,
 	})
@@ -304,7 +304,7 @@ func (h *ExecutionServer) positionAccountIDs(
 	req *tradepb.ListPositionsReq,
 ) ([]string, error) {
 	if req.GetLogicalAccountId() == "" {
-		if _, err := h.Store.GetExchangeAccount(
+		if _, err := h.Store.GetTradingAccount(
 			ctx,
 			spaceID,
 			req.GetExchangeAccountId(),
@@ -332,10 +332,10 @@ func (h *ExecutionServer) positionAccountIDs(
 	ids := make([]string, 0, len(members))
 	for _, member := range members {
 		if req.GetExchangeAccountId() != "" &&
-			member.ExchangeAccountID != req.GetExchangeAccountId() {
+			member.TradingAccountID != req.GetExchangeAccountId() {
 			continue
 		}
-		ids = append(ids, member.ExchangeAccountID)
+		ids = append(ids, member.TradingAccountID)
 	}
 	if req.GetExchangeAccountId() != "" && len(ids) == 0 {
 		return nil, fmt.Errorf(

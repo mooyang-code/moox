@@ -9,8 +9,8 @@ import (
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
@@ -41,7 +41,7 @@ func (h *AccountServer) CreateAccount(
 	if req.GetMarketType() == tradepb.MarketType_MARKET_TYPE_SPOT {
 		marginMode = exchange.MarginModeUnspecified
 	}
-	value := exchangeaccount.Account{
+	value := tradingaccount.Account{
 		ID: h.accountID(), SpaceID: spaceID, Name: strings.TrimSpace(req.GetName()),
 		Exchange:           exchangeFromPB(req.GetExchange()),
 		MarketType:         marketFromPB(req.GetMarketType()),
@@ -57,7 +57,7 @@ func (h *AccountServer) CreateAccount(
 	if err != nil {
 		return &tradepb.CreateAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
-	record, err := h.Store.GetExchangeAccount(ctx, spaceID, created.ID)
+	record, err := h.Store.GetTradingAccount(ctx, spaceID, created.ID)
 	return &tradepb.CreateAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
 }
 
@@ -72,10 +72,10 @@ func (h *AccountServer) UpdateAccount(
 	if err := validatePB(req); err != nil {
 		return &tradepb.UpdateAccountRsp{RetInfo: invalidInfo(err)}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
+	if _, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
 		return &tradepb.UpdateAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
-	command := accountapp.UpdateCommand{ExchangeAccountID: req.GetExchangeAccountId()}
+	command := accountapp.UpdateCommand{TradingAccountID: req.GetExchangeAccountId()}
 	if value := strings.TrimSpace(req.GetName()); value != "" {
 		command.Name = &value
 	}
@@ -100,7 +100,7 @@ func (h *AccountServer) UpdateAccount(
 	if _, err := h.Accounts.Update(ctx, command); err != nil {
 		return &tradepb.UpdateAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
-	record, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId())
+	record, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetExchangeAccountId())
 	return &tradepb.UpdateAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
 }
 
@@ -115,7 +115,7 @@ func (h *AccountServer) GetAccount(
 	if err != nil {
 		return &tradepb.GetAccountRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	record, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId())
+	record, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetExchangeAccountId())
 	return &tradepb.GetAccountRsp{RetInfo: errorInfo(err), Account: accountToPB(record)}, nil
 }
 
@@ -130,7 +130,7 @@ func (h *AccountServer) ListAccounts(
 	if err != nil {
 		return &tradepb.ListAccountsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	records, err := h.Store.ListExchangeAccounts(ctx, spaceID)
+	records, err := h.Store.ListTradingAccounts(ctx, spaceID)
 	if err != nil {
 		return &tradepb.ListAccountsRsp{RetInfo: errorInfo(err)}, nil
 	}
@@ -184,14 +184,14 @@ func (h *AccountServer) SetLeverage(
 	if err != nil {
 		return &tradepb.SetLeverageRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
+	if _, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
 		return &tradepb.SetLeverageRsp{RetInfo: errorInfo(err)}, nil
 	}
 	leverage, err := shared.ParseDecimal(req.GetLeverage())
 	if err == nil {
 		err = h.Accounts.SetLeverage(ctx, req.GetExchangeAccountId(), req.GetSymbol(), leverage)
 	}
-	record, getErr := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId())
+	record, getErr := h.Store.GetTradingAccount(ctx, spaceID, req.GetExchangeAccountId())
 	if err == nil {
 		err = getErr
 	}
@@ -209,7 +209,7 @@ func (h *AccountServer) SyncAccount(
 	if err != nil {
 		return &tradepb.SyncAccountRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	if _, err := h.Store.GetExchangeAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
+	if _, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetExchangeAccountId()); err != nil {
 		return &tradepb.SyncAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
 	result, err := h.Sync.SyncAccount(ctx, req.GetExchangeAccountId())

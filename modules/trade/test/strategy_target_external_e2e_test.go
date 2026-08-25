@@ -22,8 +22,8 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
 	require.NoError(t, err)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: "space", ExchangeAccountID: "acct", Name: "external-e2e",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space", TradingAccountID: "acct", Name: "external-e2e",
 			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT",
 			Status: "ENABLED", Ready: true,
@@ -40,7 +40,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space", LogicalAccountID: "logical-e2e",
-			ExchangeAccountID: "acct", Enabled: true,
+			TradingAccountID: "acct", Enabled: true,
 		}); err != nil {
 			return err
 		}

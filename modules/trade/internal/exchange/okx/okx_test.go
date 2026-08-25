@@ -169,7 +169,7 @@ func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := newWithClient(exchange.AccountConfig{
-		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
@@ -279,7 +279,7 @@ func TestSpotMarketBuyUsesBaseQuantity(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := newWithClient(exchange.AccountConfig{
-		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
@@ -409,7 +409,7 @@ func TestRecentFillsPaginatesWithoutSkippingGap(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := newWithClient(exchange.AccountConfig{
-		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
@@ -464,7 +464,7 @@ func TestRecentFillsEmptyCursorConsumesAllAvailablePages(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := newWithClient(exchange.AccountConfig{
-		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
@@ -544,7 +544,7 @@ func TestRejectsUnsupportedAndClassifiesErrors(t *testing.T) {
 
 func swapAdapter(baseURL string) *Adapter {
 	return newWithClient(exchange.AccountConfig{
-		ExchangeAccountID: "account-1", Exchange: exchange.ExchangeOKX,
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
 		MarketType: exchange.MarketTypeSwap, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT", MarginMode: exchange.MarginModeCross,
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"}, httpclient.New(baseURL))

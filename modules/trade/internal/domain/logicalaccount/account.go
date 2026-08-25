@@ -36,11 +36,11 @@ type Account struct {
 }
 
 type Member struct {
-	SpaceID           string
-	LogicalAccountID  string
-	ExchangeAccountID string
-	Enabled           bool
-	Priority          int
+	SpaceID          string
+	LogicalAccountID string
+	TradingAccountID string
+	Enabled          bool
+	Priority         int
 }
 
 func New(
@@ -87,7 +87,7 @@ func (a Account) Validate() error {
 
 func (m Member) Validate() error {
 	if blank(m.SpaceID) || blank(m.LogicalAccountID) ||
-		blank(m.ExchangeAccountID) {
+		blank(m.TradingAccountID) {
 		return fmt.Errorf("%w: incomplete member", ErrInvalidAccount)
 	}
 	return nil

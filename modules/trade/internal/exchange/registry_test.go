@@ -64,11 +64,11 @@ func TestRegistryBindsAccountConfigurationAndCredential(t *testing.T) {
 		return &stubAdapter{config: config, credential: credential}, nil
 	})
 	config := AccountConfig{
-		ExchangeAccountID: "account-1",
-		Exchange:          ExchangeBinance,
-		MarketType:        MarketTypeSpot,
-		ExecutionMode:     ExecutionModeLive,
-		SettlementAsset:   "USDT",
+		TradingAccountID: "account-1",
+		Exchange:         ExchangeBinance,
+		MarketType:       MarketTypeSpot,
+		ExecutionMode:    ExecutionModeLive,
+		SettlementAsset:  "USDT",
 	}
 	credential := Credential{APIKey: "key", APISecret: "secret"}
 
@@ -99,11 +99,11 @@ func TestRegistryRejectsInvalidBinding(t *testing.T) {
 		{
 			name: "unknown Exchange",
 			config: AccountConfig{
-				ExchangeAccountID: "account-1",
-				Exchange:          Exchange("OTHER"),
-				MarketType:        MarketTypeSpot,
-				ExecutionMode:     ExecutionModeLive,
-				SettlementAsset:   "USDT",
+				TradingAccountID: "account-1",
+				Exchange:         Exchange("OTHER"),
+				MarketType:       MarketTypeSpot,
+				ExecutionMode:    ExecutionModeLive,
+				SettlementAsset:  "USDT",
 			},
 			credential: Credential{APIKey: "key", APISecret: "secret"},
 		},
@@ -120,22 +120,22 @@ func TestRegistryRejectsInvalidBinding(t *testing.T) {
 		{
 			name: "live missing credential",
 			config: AccountConfig{
-				ExchangeAccountID: "account-1",
-				Exchange:          ExchangeOKX,
-				MarketType:        MarketTypeSpot,
-				ExecutionMode:     ExecutionModeLive,
-				SettlementAsset:   "USDT",
+				TradingAccountID: "account-1",
+				Exchange:         ExchangeOKX,
+				MarketType:       MarketTypeSpot,
+				ExecutionMode:    ExecutionModeLive,
+				SettlementAsset:  "USDT",
 			},
 		},
 		{
 			name: "non USDT SWAP settlement",
 			config: AccountConfig{
-				ExchangeAccountID: "account-1",
-				Exchange:          ExchangeOKX,
-				MarketType:        MarketTypeSwap,
-				ExecutionMode:     ExecutionModePaper,
-				SettlementAsset:   "USDC",
-				MarginMode:        MarginModeCross,
+				TradingAccountID: "account-1",
+				Exchange:         ExchangeOKX,
+				MarketType:       MarketTypeSwap,
+				ExecutionMode:    ExecutionModePaper,
+				SettlementAsset:  "USDC",
+				MarginMode:       MarginModeCross,
 			},
 		},
 	}
@@ -166,11 +166,11 @@ func TestAccountBoundAdapterLooksUpTerminalOrderByClientOrderID(t *testing.T) {
 		return &stubAdapter{config: config, credential: credential}, nil
 	})
 	adapter, err := registry.Bind(AccountConfig{
-		ExchangeAccountID: "account-1",
-		Exchange:          ExchangeBinance,
-		MarketType:        MarketTypeSpot,
-		ExecutionMode:     ExecutionModePaper,
-		SettlementAsset:   "USDT",
+		TradingAccountID: "account-1",
+		Exchange:         ExchangeBinance,
+		MarketType:       MarketTypeSpot,
+		ExecutionMode:    ExecutionModePaper,
+		SettlementAsset:  "USDT",
 	}, Credential{})
 	if err != nil {
 		t.Fatalf("Bind() error = %v", err)

@@ -11,13 +11,13 @@ func TestLogicalAccountMembershipEnforcesHomogeneityAndOneEnabledGroup(t *testin
 	s := openTestStore(t)
 	ctx := context.Background()
 	second := testAccount()
-	second.ExchangeAccountID = "account-2"
+	second.TradingAccountID = "account-2"
 	second.Name = "second"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
 			return err
 		}
-		if err := tx.CreateExchangeAccount(second); err != nil {
+		if err := tx.CreateTradingAccount(second); err != nil {
 			return err
 		}
 		for _, account := range []LogicalAccountRecord{
@@ -38,14 +38,14 @@ func TestLogicalAccountMembershipEnforcesHomogeneityAndOneEnabledGroup(t *testin
 		}
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-1", Enabled: true,
+			TradingAccountID: "account-1", Enabled: true,
 		})
 	}))
 
 	err := s.Transaction(ctx, func(tx *Tx) error {
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2",
-			ExchangeAccountID: "account-1", Enabled: true,
+			TradingAccountID: "account-1", Enabled: true,
 		})
 	})
 	require.ErrorIs(t, err, ErrConflict)
@@ -53,7 +53,7 @@ func TestLogicalAccountMembershipEnforcesHomogeneityAndOneEnabledGroup(t *testin
 	err = s.Transaction(ctx, func(tx *Tx) error {
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2",
-			ExchangeAccountID: "account-1", Enabled: false,
+			TradingAccountID: "account-1", Enabled: false,
 		})
 	})
 	require.NoError(t, err)
@@ -63,12 +63,12 @@ func TestLogicalAccountMembershipRejectsInhomogeneousAccount(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	swap := testAccount()
-	swap.ExchangeAccountID = "swap-1"
+	swap.TradingAccountID = "swap-1"
 	swap.Name = "swap"
 	swap.MarketType = "SWAP"
 	swap.MarginMode = "CROSS"
 	err := s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(swap); err != nil {
+		if err := tx.CreateTradingAccount(swap); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
@@ -80,7 +80,7 @@ func TestLogicalAccountMembershipRejectsInhomogeneousAccount(t *testing.T) {
 		}
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "swap-1", Enabled: true,
+			TradingAccountID: "swap-1", Enabled: true,
 		})
 	})
 	require.ErrorIs(t, err, ErrInvalidRecord)
@@ -90,17 +90,17 @@ func TestLogicalAccountMembershipRejectsMixedEnvironmentProfiles(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	testnet := testAccount()
-	testnet.ExchangeAccountID = "testnet-1"
+	testnet.TradingAccountID = "testnet-1"
 	testnet.Name = "testnet"
 	testnet.ExecutionMode = "LIVE"
 	testnet.Environment = "TESTNET"
 	production := testnet
-	production.ExchangeAccountID = "production-1"
+	production.TradingAccountID = "production-1"
 	production.Name = "production"
 	production.Environment = "PRODUCTION"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		for _, account := range []ExchangeAccountRecord{testnet, production} {
-			if err := tx.CreateExchangeAccount(account); err != nil {
+		for _, account := range []TradingAccountRecord{testnet, production} {
+			if err := tx.CreateTradingAccount(account); err != nil {
 				return err
 			}
 		}
@@ -113,14 +113,14 @@ func TestLogicalAccountMembershipRejectsMixedEnvironmentProfiles(t *testing.T) {
 		}
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "testnet-1", Enabled: true,
+			TradingAccountID: "testnet-1", Enabled: true,
 		})
 	}))
 
 	err := s.Transaction(ctx, func(tx *Tx) error {
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "production-1", Enabled: true,
+			TradingAccountID: "production-1", Enabled: true,
 		})
 	})
 	require.ErrorIs(t, err, ErrInvalidRecord)
@@ -130,7 +130,7 @@ func TestLogicalAccountMembershipChangeRequiresPause(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
 			return err
 		}
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
@@ -142,7 +142,7 @@ func TestLogicalAccountMembershipChangeRequiresPause(t *testing.T) {
 	err := s.Transaction(ctx, func(tx *Tx) error {
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-1", Enabled: true,
+			TradingAccountID: "account-1", Enabled: true,
 		})
 	})
 	require.ErrorIs(t, err, ErrInvalidRecord)

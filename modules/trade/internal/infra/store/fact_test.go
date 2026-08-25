@@ -23,13 +23,13 @@ func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
 		}
 		if err := tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			ExchangeAccountID: "account-1", Enabled: true,
+			TradingAccountID: "account-1", Enabled: true,
 		}); err != nil {
 			return err
 		}
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "order-target",
-			ExchangeAccountID: "account-1", ClientOrderID: "client-target",
+			TradingAccountID: "account-1", ClientOrderID: "client-target",
 			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
 			OwnerType: "TARGET", OwnerID: "target-1",
@@ -48,7 +48,7 @@ func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
 	err = s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "invalid-target",
-			ExchangeAccountID: "account-1", ClientOrderID: "invalid-target",
+			TradingAccountID: "account-1", ClientOrderID: "invalid-target",
 			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
 			OwnerType: "TARGET", OwnerID: "target-1",
@@ -66,7 +66,7 @@ func TestInsertFillDeduplicatesExchangeTradeIdentity(t *testing.T) {
 	fill := FillRecord{
 		SpaceID: "space-1", FillID: "fill-1", ExchangeTradeID: "trade-1",
 		OrderID: "order-1", ExchangeOrderID: "exchange-order-1",
-		ExchangeAccountID: "account-1", Exchange: "BINANCE",
+		TradingAccountID: "account-1", Exchange: "BINANCE",
 		MarketType: "SPOT", Symbol: "BTCUSDT", Side: "BUY",
 		Price: "100", Quantity: "1", Fee: "0.1", FeeAsset: "USDT",
 		SettlementAsset: "USDT", TradedAt: 123,
@@ -104,7 +104,7 @@ func TestInsertFillDeduplicatesExchangeTradeIdentity(t *testing.T) {
 
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateOrder(OrderRecord{
-			SpaceID: "space-1", OrderID: "order-2", ExchangeAccountID: "account-1",
+			SpaceID: "space-1", OrderID: "order-2", TradingAccountID: "account-1",
 			ClientOrderID: "client-order-2", ExchangeOrderID: "exchange-order-2",
 			Symbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC",
 			Side: "BUY", Quantity: "1", LimitPrice: stringPointer("100"),
@@ -135,7 +135,7 @@ func TestCreateOrderEnforcesAccountClientIdentity(t *testing.T) {
 
 	err := s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateOrder(OrderRecord{
-			SpaceID: "space-1", OrderID: "order-2", ExchangeAccountID: "account-1",
+			SpaceID: "space-1", OrderID: "order-2", TradingAccountID: "account-1",
 			ClientOrderID: "client-order-1", Exchange: "BINANCE",
 			MarketType: "SPOT", Symbol: "BTCUSDT", OrderType: "MARKET",
 			Side: "BUY", Quantity: "1", ReferencePrice: "100",
@@ -151,7 +151,7 @@ func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
 	require.NoError(t, seedOrder(ctx, s))
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateOrder(OrderRecord{
-			SpaceID: "space-1", OrderID: "order-2", ExchangeAccountID: "account-1",
+			SpaceID: "space-1", OrderID: "order-2", TradingAccountID: "account-1",
 			ClientOrderID: "client-order-2", ExchangeOrderID: "exchange-order-2",
 			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
 			OrderType: "MARKET", Side: "SELL", Quantity: "1",
@@ -164,7 +164,7 @@ func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
 		inserted, err := tx.InsertFill(FillRecord{
 			SpaceID: "space-1", FillID: "fill-1", ExchangeTradeID: "trade-1",
 			OrderID: "order-2", ExchangeOrderID: "exchange-order-2",
-			ExchangeAccountID: "account-1", Exchange: "BINANCE",
+			TradingAccountID: "account-1", Exchange: "BINANCE",
 			MarketType: "SPOT", Symbol: "BTCUSDT", Side: "SELL",
 			Price: "101", Quantity: "1", Fee: "0", TradedAt: 1_500,
 		})
@@ -172,27 +172,27 @@ func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
 			return err
 		}
 		return tx.UpsertPosition(PositionRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-1",
+			SpaceID: "space-1", TradingAccountID: "account-1",
 			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			ExchangeUpdatedAt: 1_500,
 		})
 	}))
 	now := time.Now()
 	orders, total, err := s.ListOrders(ctx, "space-1", OrderQuery{
-		ExchangeAccountID: "account-1", StartTime: now.Add(-time.Minute).UnixMilli(),
+		TradingAccountID: "account-1", StartTime: now.Add(-time.Minute).UnixMilli(),
 		EndTime: now.Add(time.Minute).UnixMilli(), Limit: 1,
 	})
 	require.NoError(t, err)
 	require.Len(t, orders, 1)
 	require.Equal(t, int64(2), total)
 	open, openTotal, err := s.ListOrders(ctx, "space-1", OrderQuery{
-		ExchangeAccountID: "account-1", OnlyOpen: true, Limit: 10,
+		TradingAccountID: "account-1", OnlyOpen: true, Limit: 10,
 	})
 	require.NoError(t, err)
 	require.Len(t, open, 1)
 	require.Equal(t, int64(1), openTotal)
 	fills, fillTotal, err := s.ListFills(ctx, "space-1", FillQuery{
-		ExchangeAccountID: "account-1", StartTime: 1_000, EndTime: 2_000,
+		TradingAccountID: "account-1", StartTime: 1_000, EndTime: 2_000,
 		Limit: 10,
 	})
 	require.NoError(t, err)
@@ -250,7 +250,7 @@ func TestCreateOrderRejectsContradictoryExchangeIdentity(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
 			return err
 		}
 		return tx.UpsertInstrument(InstrumentRecord{
@@ -264,7 +264,7 @@ func TestCreateOrderRejectsContradictoryExchangeIdentity(t *testing.T) {
 
 	err := s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateOrder(OrderRecord{
-			SpaceID: "space-1", OrderID: "order-wrong", ExchangeAccountID: "account-1",
+			SpaceID: "space-1", OrderID: "order-wrong", TradingAccountID: "account-1",
 			ClientOrderID: "client-wrong", Exchange: "OKX", MarketType: "SWAP",
 			Symbol: "BTC-USDT-SWAP", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
@@ -278,7 +278,7 @@ func TestCreateOrderDerivesExchangeIdentityFromAccount(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
 			return err
 		}
 		if err := tx.UpsertInstrument(InstrumentRecord{
@@ -290,7 +290,7 @@ func TestCreateOrderDerivesExchangeIdentityFromAccount(t *testing.T) {
 		}
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "derived-order",
-			ExchangeAccountID: "account-1", ClientOrderID: "derived-client",
+			TradingAccountID: "account-1", ClientOrderID: "derived-client",
 			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
 			OwnerType: "EXTERNAL", OwnerID: "external-derived", State: "READY",
@@ -315,7 +315,7 @@ func TestInsertFillRejectsContradictoryOrderIdentity(t *testing.T) {
 	require.NoError(t, seedOrder(ctx, s))
 	base := FillRecord{
 		SpaceID: "space-1", FillID: "fill-wrong", ExchangeTradeID: "trade-wrong",
-		OrderID: "order-1", ExchangeAccountID: "other-account",
+		OrderID: "order-1", TradingAccountID: "other-account",
 		Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
 		Side: "BUY", Price: "100", Quantity: "1",
 	}
@@ -325,7 +325,7 @@ func TestInsertFillRejectsContradictoryOrderIdentity(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrInvalidRecord)
 
-	base.ExchangeAccountID = "account-1"
+	base.TradingAccountID = "account-1"
 	base.MarketType = "SWAP"
 	err = s.Transaction(ctx, func(tx *Tx) error {
 		_, err := tx.InsertFill(base)
@@ -354,17 +354,17 @@ func TestUpsertPositionUsesApprovedIdentity(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
 			return err
 		}
 		return tx.UpsertPosition(PositionRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-1",
+			SpaceID: "space-1", TradingAccountID: "account-1",
 			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 		})
 	}))
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.UpsertPosition(PositionRecord{
-			SpaceID: "space-1", ExchangeAccountID: "account-1",
+			SpaceID: "space-1", TradingAccountID: "account-1",
 			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "-2",
 		})
 	}))
@@ -372,7 +372,7 @@ func TestUpsertPositionUsesApprovedIdentity(t *testing.T) {
 	var rows []struct {
 		Quantity string `gorm:"column:c_signed_quantity"`
 	}
-	require.NoError(t, s.db.Table("t_exchange_positions").Find(&rows).Error)
+	require.NoError(t, s.db.Table("t_trading_positions").Find(&rows).Error)
 	require.Len(t, rows, 1)
 	require.Equal(t, "-2", rows[0].Quantity)
 }
@@ -405,7 +405,7 @@ func TestCreateOrderValidatesEveryDecimal(t *testing.T) {
 			limit := "100"
 			record := OrderRecord{
 				SpaceID: "space-1", OrderID: "decimal-order",
-				ExchangeAccountID: "account-1", ClientOrderID: "decimal-client",
+				TradingAccountID: "account-1", ClientOrderID: "decimal-client",
 				Symbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC",
 				Side: "BUY", Quantity: "1", LimitPrice: &limit,
 				ReferencePrice: "100", OwnerType: "EXTERNAL",
@@ -488,10 +488,10 @@ func TestUpsertPositionValidatesSignedAndNonNegativeDecimals(t *testing.T) {
 			s := openTestStore(t)
 			ctx := context.Background()
 			require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-				return tx.CreateExchangeAccount(testAccount())
+				return tx.CreateTradingAccount(testAccount())
 			}))
 			record := PositionRecord{
-				SpaceID: "space-1", ExchangeAccountID: "account-1",
+				SpaceID: "space-1", TradingAccountID: "account-1",
 				Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "-1",
 				EntryPrice: "100", MarkPrice: "101", Leverage: "0",
 				UsedMargin: "0", LiquidationPrice: "0",
@@ -512,10 +512,10 @@ func TestUpsertSwapPositionRequiresPositiveLeverageAndAllowsSignedPnL(t *testing
 	account := testAccount()
 	account.MarketType = "SWAP"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.CreateExchangeAccount(account)
+		return tx.CreateTradingAccount(account)
 	}))
 	position := PositionRecord{
-		SpaceID: "space-1", ExchangeAccountID: "account-1",
+		SpaceID: "space-1", TradingAccountID: "account-1",
 		Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "-1.00",
 		EntryPrice: "100", MarkPrice: "101", UsedMargin: "10",
 		UnrealizedPnL: "-2.00", RealizedPnL: "-1.00",
@@ -534,7 +534,7 @@ func TestUpsertSwapPositionRequiresPositiveLeverageAndAllowsSignedPnL(t *testing
 		Leverage      string `gorm:"column:c_leverage"`
 		UnrealizedPnL string `gorm:"column:c_unrealized_pnl"`
 	}
-	require.NoError(t, s.db.Table("t_exchange_positions").Take(&row).Error)
+	require.NoError(t, s.db.Table("t_trading_positions").Take(&row).Error)
 	require.Equal(t, "-1", row.Quantity)
 	require.Equal(t, "5", row.Leverage)
 	require.Equal(t, "-2", row.UnrealizedPnL)
@@ -546,17 +546,17 @@ func TestReplacePositionsPreservesNewerPrivateUpdate(t *testing.T) {
 	account := testAccount()
 	account.MarketType = "SWAP"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(account); err != nil {
+		if err := tx.CreateTradingAccount(account); err != nil {
 			return err
 		}
 		for _, position := range []PositionRecord{
 			{
-				SpaceID: "space-1", ExchangeAccountID: "account-1",
+				SpaceID: "space-1", TradingAccountID: "account-1",
 				Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "2",
 				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_800,
 			},
 			{
-				SpaceID: "space-1", ExchangeAccountID: "account-1",
+				SpaceID: "space-1", TradingAccountID: "account-1",
 				Symbol: "ETHUSDT", PositionSide: "NET", SignedQuantity: "1",
 				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_000,
 			},
@@ -569,7 +569,7 @@ func TestReplacePositionsPreservesNewerPrivateUpdate(t *testing.T) {
 			"space-1",
 			"account-1",
 			[]PositionRecord{{
-				SpaceID: "space-1", ExchangeAccountID: "account-1",
+				SpaceID: "space-1", TradingAccountID: "account-1",
 				Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_500,
 			}},
@@ -599,7 +599,7 @@ func seedOrder(ctx context.Context, s *Store) error {
 	}
 	return s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateOrder(OrderRecord{
-			SpaceID: "space-1", OrderID: "order-1", ExchangeAccountID: "account-1",
+			SpaceID: "space-1", OrderID: "order-1", TradingAccountID: "account-1",
 			ClientOrderID: "client-order-1", ExchangeOrderID: "exchange-order-1",
 			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY",
@@ -612,7 +612,7 @@ func seedOrder(ctx context.Context, s *Store) error {
 
 func seedAccountAndInstrument(ctx context.Context, s *Store) error {
 	return s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
 			return err
 		}
 		if err := tx.UpsertInstrument(InstrumentRecord{

@@ -62,7 +62,7 @@ type Result struct {
 
 type memberState struct {
 	member      store.LogicalAccountMemberRecord
-	account     store.ExchangeAccountRecord
+	account     store.TradingAccountRecord
 	instruments map[string]store.InstrumentRecord
 	positions   map[string]shared.Decimal
 	blocked     []store.BlockedTarget
@@ -132,7 +132,7 @@ func (e *Executor) Converge(
 	}
 	for _, member := range members {
 		if member.account.Status != "ENABLED" || !member.account.Ready {
-			target.LastError = "member " + member.account.ExchangeAccountID + " is not ready"
+			target.LastError = "member " + member.account.TradingAccountID + " is not ready"
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err
 			}
@@ -335,7 +335,7 @@ func (e *Executor) loadMembers(
 	}
 	members := make([]memberState, 0, len(records))
 	for _, record := range records {
-		account, err := e.Store.GetExchangeAccountByID(ctx, record.ExchangeAccountID)
+		account, err := e.Store.GetTradingAccountByID(ctx, record.TradingAccountID)
 		if err != nil {
 			return nil, err
 		}
@@ -380,7 +380,7 @@ func (e *Executor) loadMembers(
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: balance.Asset,
 						Quantity:     quantity.String(),
-						Reason: account.ExchangeAccountID +
+						Reason: account.TradingAccountID +
 							": asset has no unique tradable instrument mapping",
 					})
 					continue
@@ -389,7 +389,7 @@ func (e *Executor) loadMembers(
 			}
 		} else {
 			positionRecords, listErr := e.Store.ListPositions(
-				ctx, spaceID, account.ExchangeAccountID, "",
+				ctx, spaceID, account.TradingAccountID, "",
 			)
 			if listErr != nil {
 				return nil, listErr
@@ -407,7 +407,7 @@ func (e *Executor) loadMembers(
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: position.Symbol,
 						Quantity:     quantity.String(),
-						Reason: account.ExchangeAccountID +
+						Reason: account.TradingAccountID +
 							": position has no tradable instrument mapping",
 					})
 					continue
@@ -456,7 +456,7 @@ func (e *Executor) activeOrders(
 	var active []store.OrderRecord
 	for _, member := range members {
 		records, err := e.Store.ListOrdersForAccount(
-			ctx, spaceID, member.account.ExchangeAccountID, 1,
+			ctx, spaceID, member.account.TradingAccountID, 1,
 		)
 		if err != nil {
 			return nil, err
@@ -591,8 +591,8 @@ func positionsByAbsoluteSize(
 		if values[i].member.Priority != values[j].member.Priority {
 			return values[i].member.Priority < values[j].member.Priority
 		}
-		return values[i].account.ExchangeAccountID <
-			values[j].account.ExchangeAccountID
+		return values[i].account.TradingAccountID <
+			values[j].account.TradingAccountID
 	})
 	return values
 }
@@ -629,7 +629,7 @@ func (e *Executor) placeAction(
 		}
 		quote, err := e.Prices.LatestPrice(
 			ctx,
-			candidate.member.account.ExchangeAccountID,
+			candidate.member.account.TradingAccountID,
 			candidate.instrument.Symbol,
 		)
 		if err != nil {
@@ -655,7 +655,7 @@ func (e *Executor) placeAction(
 		if belowMinimum {
 			capacityErrors = append(
 				capacityErrors,
-				candidate.member.account.ExchangeAccountID+
+				candidate.member.account.TradingAccountID+
 					": notional is below Exchange minimum",
 			)
 			continue
@@ -663,12 +663,12 @@ func (e *Executor) placeAction(
 		runnerID := target.RunnerID
 		spec := orderdomain.OrderSpec{
 			ClientOrderSpec: orderdomain.ClientOrderSpec{
-				ExchangeAccountID: candidate.member.account.ExchangeAccountID,
-				ClientOrderID:     childClientOrderID(),
-				InstrumentID:      candidate.instrument.Symbol,
-				Type:              exchange.OrderTypeMarket,
-				Side:              sideForDelta(candidate.delta),
-				Quantity:          quantity,
+				TradingAccountID: candidate.member.account.TradingAccountID,
+				ClientOrderID:    childClientOrderID(),
+				InstrumentID:     candidate.instrument.Symbol,
+				Type:             exchange.OrderTypeMarket,
+				Side:             sideForDelta(candidate.delta),
+				Quantity:         quantity,
 			},
 			ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
 			ReducePositionOnly: candidate.reducing,
@@ -685,7 +685,7 @@ func (e *Executor) placeAction(
 			if capacityError(err) && !candidate.reducing {
 				capacityErrors = append(
 					capacityErrors,
-					candidate.member.account.ExchangeAccountID+": "+err.Error(),
+					candidate.member.account.TradingAccountID+": "+err.Error(),
 				)
 				continue
 			}

@@ -13,9 +13,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -293,9 +293,9 @@ func (s adapterSource) Adapter(string) (exchange.Adapter, error) { return s.adap
 
 type readySession bool
 
-func (s readySession) ReadyFor(exchangeaccount.Account) bool { return bool(s) }
-func (readySession) Invalidate(string)                       {}
-func (s readySession) Ready(string) bool                     { return bool(s) }
+func (s readySession) ReadyFor(tradingaccount.Account) bool { return bool(s) }
+func (readySession) Invalidate(string)                      {}
+func (s readySession) Ready(string) bool                    { return bool(s) }
 
 type instrumentSource struct{ store *store.Store }
 
@@ -322,10 +322,10 @@ type positionSource struct{ store *store.Store }
 func (s positionSource) GetPosition(ctx context.Context, accountID, symbol string) (exchange.Position, error) {
 	record, found, err := s.store.GetPosition(ctx, testSpace, accountID, symbol, string(exchange.PositionSideNet))
 	if err != nil || !found {
-		return exchange.Position{ExchangeAccountID: accountID, Symbol: symbol, PositionSide: exchange.PositionSideNet}, err
+		return exchange.Position{TradingAccountID: accountID, Symbol: symbol, PositionSide: exchange.PositionSideNet}, err
 	}
 	return exchange.Position{
-		ExchangeAccountID: accountID, Symbol: symbol,
+		TradingAccountID: accountID, Symbol: symbol,
 		PositionSide:   exchange.PositionSide(record.PositionSide),
 		SignedQuantity: decimal(record.SignedQuantity),
 		EntryPrice:     decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice),
@@ -443,15 +443,15 @@ func seedFixture(t *testing.T, tradeStore *store.Store, market exchange.MarketTy
 		leverage[testSymbol] = "10"
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: testSpace, ExchangeAccountID: testAccount, Name: "E2E",
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: testSpace, TradingAccountID: testAccount, Name: "E2E",
 			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
 			ExecutionMode:   string(exchange.ExecutionModePaper),
 			Environment:     string(exchange.AccountEnvironmentPaper),
 			SettlementAsset: "USDT",
 			MarginMode:      margin, Status: string(exchange.AccountStatusEnabled), Ready: true,
 			SyncSymbols: []string{testSymbol}, LeverageSettings: leverage,
-			Snapshot: store.ExchangeAccountSnapshot{
+			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
 					{Asset: "USDT", Available: "100000", Total: "100000"},
 					{Asset: "BTC", Available: "10", Total: "10"},
@@ -486,7 +486,7 @@ func (f *fixture) close(t *testing.T) {
 func marketSpec(clientID string, side exchange.Side, quantity string) orderdomain.OrderSpec {
 	return orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
-			ExchangeAccountID: testAccount, ClientOrderID: clientID,
+			TradingAccountID: testAccount, ClientOrderID: clientID,
 			InstrumentID: testSymbol, Type: exchange.OrderTypeMarket, Side: side,
 			Quantity: shared.MustDecimal(quantity),
 		},

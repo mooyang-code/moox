@@ -1,4 +1,4 @@
-package exchangeaccount
+package tradingaccount
 
 import (
 	"errors"

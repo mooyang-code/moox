@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/exchangeaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -159,7 +159,7 @@ func TestSubmitTargetRejectsExternalFactBeforeExchangeCall(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateOrder(store.OrderRecord{
 			SpaceID: "space-1", OrderID: "external-order",
-			ExchangeAccountID: "account-1", ClientOrderID: "external-client",
+			TradingAccountID: "account-1", ClientOrderID: "external-client",
 			ExchangeOrderID: "external-exchange-order",
 			Symbol:          "BTC-USDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
@@ -185,7 +185,7 @@ func TestSubmitTargetRechecksAccountReadinessBeforeExchangeCall(t *testing.T) {
 	pending, err := service.Place(context.Background(), "space-1", spec)
 	require.NoError(t, err)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateExchangeAccountReadiness(
+		return tx.UpdateTradingAccountReadiness(
 			"space-1", "account-1", false,
 			service.now().UnixMilli(), "private facts awaiting sync",
 		)
@@ -668,11 +668,11 @@ func TestServiceSubmitRevalidatesReadinessAndReferencePrice(t *testing.T) {
 	service.Validator.Accounts = accountEligibilityFunc(func(
 		context.Context,
 		string,
-	) (exchangeaccount.Account, error) {
-		return exchangeaccount.Account{}, exchangeaccount.ErrAccountNotExecutable
+	) (tradingaccount.Account, error) {
+		return tradingaccount.Account{}, tradingaccount.ErrAccountNotExecutable
 	})
 	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
-	require.ErrorIs(t, err, exchangeaccount.ErrAccountNotExecutable)
+	require.ErrorIs(t, err, tradingaccount.ErrAccountNotExecutable)
 	require.Equal(t, 0, adapter.placeCalls)
 	stored, err := tradeStore.GetOrder(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
@@ -1045,8 +1045,8 @@ func newTestServiceForMarket(
 	account := executableAccount(market)
 	instrument := testInstrument(market)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.CreateExchangeAccount(store.ExchangeAccountRecord{
-			SpaceID: account.SpaceID, ExchangeAccountID: account.ID, Name: account.Name,
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: account.SpaceID, TradingAccountID: account.ID, Name: account.Name,
 			Exchange: string(account.Exchange), MarketType: string(account.MarketType),
 			ExecutionMode:      string(account.ExecutionMode),
 			Environment:        string(account.Environment),
@@ -1066,7 +1066,7 @@ func newTestServiceForMarket(
 		}
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1",
-			ExchangeAccountID: account.ID, Enabled: true,
+			TradingAccountID: account.ID, Enabled: true,
 		}); err != nil {
 			return err
 		}

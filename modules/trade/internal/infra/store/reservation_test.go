@@ -12,7 +12,7 @@ func TestGetUnreflectedReservationUsesOrderFactsWithoutLedger(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateExchangeAccount(testAccount()); err != nil {
+		if err := tx.CreateTradingAccount(testAccount()); err != nil {
 			return err
 		}
 		if err := tx.UpsertInstrument(InstrumentRecord{
@@ -35,7 +35,7 @@ func TestGetUnreflectedReservationUsesOrderFactsWithoutLedger(t *testing.T) {
 		} {
 			id := fmt.Sprintf("order-%d", index)
 			if err := tx.CreateOrder(OrderRecord{
-				SpaceID: "space-1", OrderID: id, ExchangeAccountID: "account-1",
+				SpaceID: "space-1", OrderID: id, TradingAccountID: "account-1",
 				ClientOrderID: id, Exchange: "BINANCE", MarketType: "SPOT",
 				Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 				Quantity: "1", ReferencePrice: "100",

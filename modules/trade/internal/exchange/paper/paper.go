@@ -17,15 +17,15 @@ import (
 const fillPageSize = 1000
 
 type Adapter struct {
-	base              exchange.Adapter
-	store             PaperStore
-	spaceID           string
-	exchangeAccountID string
-	marketType        exchange.MarketType
-	settlementAsset   string
-	initialBalance    shared.Decimal
-	marginMode        exchange.MarginMode
-	leverageSettings  store.LeverageSettings
+	base             exchange.Adapter
+	store            PaperStore
+	spaceID          string
+	tradingAccountID string
+	marketType       exchange.MarketType
+	settlementAsset  string
+	initialBalance   shared.Decimal
+	marginMode       exchange.MarginMode
+	leverageSettings store.LeverageSettings
 
 	mu          sync.Mutex
 	orders      map[string]exchange.Order
@@ -52,7 +52,7 @@ func New(
 	base exchange.Adapter,
 	tradeStore PaperStore,
 	spaceID string,
-	exchangeAccountID string,
+	tradingAccountID string,
 	marketType exchange.MarketType,
 	settlementAsset string,
 	initialBalance shared.Decimal,
@@ -61,7 +61,7 @@ func New(
 ) *Adapter {
 	return &Adapter{
 		base: base, store: tradeStore, spaceID: spaceID,
-		exchangeAccountID: exchangeAccountID, marketType: marketType,
+		tradingAccountID: tradingAccountID, marketType: marketType,
 		settlementAsset: settlementAsset, initialBalance: initialBalance,
 		marginMode: marginMode, leverageSettings: cloneSettings(leverageSettings),
 		orders:      make(map[string]exchange.Order),
@@ -191,8 +191,8 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		}
 		unrealized := markPrice.Sub(state.entryPrice).Mul(state.quantity)
 		positions = append(positions, exchange.Position{
-			ExchangeAccountID: a.exchangeAccountID,
-			Symbol:            symbol, PositionSide: exchange.PositionSideNet,
+			TradingAccountID: a.tradingAccountID,
+			Symbol:           symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: state.quantity, EntryPrice: state.entryPrice,
 			MarkPrice: markPrice, Leverage: leverage,
 			MarginMode:    a.marginMode,
@@ -256,7 +256,7 @@ func (a *Adapter) GetOrder(
 	}
 	if a.store != nil {
 		record, err := a.store.GetOrderByClientID(
-			ctx, a.spaceID, a.exchangeAccountID, clientOrderID,
+			ctx, a.spaceID, a.tradingAccountID, clientOrderID,
 		)
 		if err == nil && paperSubmitted(record.State) {
 			return paperOrder(record)
@@ -299,7 +299,7 @@ func (a *Adapter) PlaceOrder(
 		if err != nil {
 			return exchange.Order{}, err
 		}
-		_, currentTradeID := paperIDs(a.exchangeAccountID, request.ClientOrderID)
+		_, currentTradeID := paperIDs(a.tradingAccountID, request.ClientOrderID)
 		previous := fills[:0]
 		for _, fill := range fills {
 			if fill.ExchangeTradeID != currentTradeID {
@@ -316,14 +316,14 @@ func (a *Adapter) PlaceOrder(
 	now := time.Now().UTC()
 	if a.store != nil {
 		record, err := a.store.GetOrderByClientID(
-			ctx, a.spaceID, a.exchangeAccountID, request.ClientOrderID,
+			ctx, a.spaceID, a.tradingAccountID, request.ClientOrderID,
 		)
 		if err == nil && record.SubmittedAt > 0 {
 			now = time.UnixMilli(record.SubmittedAt).UTC()
 		}
 	}
 	exchangeOrderID, exchangeTradeID := paperIDs(
-		a.exchangeAccountID,
+		a.tradingAccountID,
 		request.ClientOrderID,
 	)
 	order := exchange.Order{
@@ -378,8 +378,8 @@ func (a *Adapter) allFills(ctx context.Context) ([]exchange.Fill, error) {
 	if a.store != nil {
 		for offset := 0; ; offset += fillPageSize {
 			records, _, err := a.store.ListFills(ctx, a.spaceID, store.FillQuery{
-				ExchangeAccountID: a.exchangeAccountID,
-				Offset:            offset, Limit: fillPageSize,
+				TradingAccountID: a.tradingAccountID,
+				Offset:           offset, Limit: fillPageSize,
 			})
 			if err != nil {
 				return nil, err
@@ -397,7 +397,7 @@ func (a *Adapter) allFills(ctx context.Context) ([]exchange.Fill, error) {
 			}
 		}
 		orders, err := a.store.ListOrdersForAccount(
-			ctx, a.spaceID, a.exchangeAccountID, 0,
+			ctx, a.spaceID, a.tradingAccountID, 0,
 		)
 		if err != nil {
 			return nil, err
@@ -474,7 +474,7 @@ func paperOrder(record store.OrderRecord) (exchange.Order, error) {
 	if err != nil {
 		return exchange.Order{}, err
 	}
-	exchangeOrderID, _ := paperIDs(record.ExchangeAccountID, record.ClientOrderID)
+	exchangeOrderID, _ := paperIDs(record.TradingAccountID, record.ClientOrderID)
 	submittedAt := time.UnixMilli(record.SubmittedAt).UTC()
 	return exchange.Order{
 		ExchangeOrderID: exchangeOrderID, ClientOrderID: record.ClientOrderID,
@@ -493,7 +493,7 @@ func paperFill(record store.OrderRecord, settlementAsset string) (exchange.Fill,
 	if err != nil {
 		return exchange.Fill{}, err
 	}
-	_, exchangeTradeID := paperIDs(record.ExchangeAccountID, record.ClientOrderID)
+	_, exchangeTradeID := paperIDs(record.TradingAccountID, record.ClientOrderID)
 	return exchange.Fill{
 		ExchangeTradeID: exchangeTradeID,
 		ExchangeOrderID: order.ExchangeOrderID,
@@ -523,8 +523,8 @@ func decimalPointer(raw *string) *shared.Decimal {
 	return &value
 }
 
-func paperIDs(exchangeAccountID string, clientOrderID string) (string, string) {
-	sum := sha256.Sum256([]byte(exchangeAccountID + "\x00" + clientOrderID))
+func paperIDs(tradingAccountID string, clientOrderID string) (string, string) {
+	sum := sha256.Sum256([]byte(tradingAccountID + "\x00" + clientOrderID))
 	suffix := hex.EncodeToString(sum[:12])
 	return "paper-order-" + suffix, "paper-fill-" + suffix
 }

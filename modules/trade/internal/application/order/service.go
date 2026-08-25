@@ -25,7 +25,7 @@ var (
 )
 
 type AdapterSource interface {
-	Adapter(exchangeAccountID string) (exchange.Adapter, error)
+	Adapter(tradingAccountID string) (exchange.Adapter, error)
 }
 
 type AccountSyncer interface {
@@ -69,12 +69,12 @@ func (s *Service) Place(
 		spec.ClientOrderID = xid.New().String()
 		spec.ClientOrderSpec.ClientOrderID = spec.ClientOrderID
 	}
-	unlock := s.Store.LockExchangeAccount(spec.ExchangeAccountID)
+	unlock := s.Store.LockTradingAccount(spec.TradingAccountID)
 	defer unlock()
 	if existing, err := s.Store.GetOrderByClientID(
 		ctx,
 		spaceID,
-		spec.ExchangeAccountID,
+		spec.TradingAccountID,
 		spec.ClientOrderID,
 	); err == nil {
 		if !sameSpec(existing, spec) {
@@ -103,7 +103,7 @@ func (s *Service) Place(
 		if !validation.ReservedQuantity.IsZero() {
 			unreflected, err := tx.GetUnreflectedReservation(
 				validation.Account.SpaceID,
-				spec.ExchangeAccountID,
+				spec.TradingAccountID,
 				validation.ReservedAsset,
 				validation.Account.LastSyncAt.UnixMilli(),
 			)
@@ -129,7 +129,7 @@ func (s *Service) Place(
 			existing, getErr := s.Store.GetOrderByClientID(
 				ctx,
 				validation.Account.SpaceID,
-				spec.ExchangeAccountID,
+				spec.TradingAccountID,
 				spec.ClientOrderID,
 			)
 			if getErr != nil {
@@ -152,7 +152,7 @@ func (s *Service) deriveReducePositionOnly(
 	if s.Validator.Accounts == nil {
 		return spec, ErrServiceConfig
 	}
-	account, err := s.Validator.Accounts.ExecutionEligibility(ctx, spec.ExchangeAccountID)
+	account, err := s.Validator.Accounts.ExecutionEligibility(ctx, spec.TradingAccountID)
 	if err != nil {
 		return spec, err
 	}
@@ -165,7 +165,7 @@ func (s *Service) deriveReducePositionOnly(
 	}
 	position, err := s.Validator.Positions.GetPosition(
 		ctx,
-		spec.ExchangeAccountID,
+		spec.TradingAccountID,
 		spec.InstrumentID,
 	)
 	if err != nil {
@@ -231,7 +231,7 @@ func (s *Service) Submit(
 		}
 		defer unlockExecution()
 
-		unlockAccount := s.Store.LockExchangeAccount(record.ExchangeAccountID)
+		unlockAccount := s.Store.LockTradingAccount(record.TradingAccountID)
 		defer unlockAccount()
 		currentRecord, getErr := s.Store.GetOrder(ctx, spaceID, orderID)
 		if getErr != nil {
@@ -262,7 +262,7 @@ func (s *Service) Submit(
 	if err != nil || !synchronize || s.Syncer == nil {
 		return result, err
 	}
-	if err := s.Syncer.SyncAccount(ctx, record.ExchangeAccountID); err != nil {
+	if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
 		return result, err
 	}
 	return s.Get(ctx, record.SpaceID, record.OrderID)
@@ -276,9 +276,9 @@ func (s *Service) rejectTargetExternalConflict(
 		record.LogicalAccountID == "" {
 		return nil
 	}
-	account, err := s.Store.GetExchangeAccountByID(
+	account, err := s.Store.GetTradingAccountByID(
 		ctx,
-		record.ExchangeAccountID,
+		record.TradingAccountID,
 	)
 	if err != nil {
 		return err
@@ -330,7 +330,7 @@ func (s *Service) Cancel(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	adapter, err := s.Adapters.Adapter(record.ExchangeAccountID)
+	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
@@ -351,7 +351,7 @@ func (s *Service) Cancel(
 
 	_, callErr := adapter.CancelOrder(ctx, record.Symbol, record.ClientOrderID)
 	if callErr == nil {
-		err = s.Syncer.SyncAccount(ctx, record.ExchangeAccountID)
+		err = s.Syncer.SyncAccount(ctx, record.TradingAccountID)
 		return aggregate, err
 	}
 
@@ -401,19 +401,19 @@ func (s *Service) RecoverCancel(
 		current.State != orderdomain.CancelUnknown {
 		return current, orderdomain.ErrInvalidTransition
 	}
-	adapter, err := s.Adapters.Adapter(record.ExchangeAccountID)
+	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
 		return current, err
 	}
 	_, callErr := adapter.CancelOrder(ctx, record.Symbol, record.ClientOrderID)
 	if callErr == nil {
-		if err := s.Syncer.SyncAccount(ctx, record.ExchangeAccountID); err != nil {
+		if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
 			return current, err
 		}
 		return s.Get(ctx, spaceID, orderID)
 	}
 	if !uncertainExchangeError(callErr) {
-		if syncErr := s.Syncer.SyncAccount(ctx, record.ExchangeAccountID); syncErr == nil {
+		if syncErr := s.Syncer.SyncAccount(ctx, record.TradingAccountID); syncErr == nil {
 			latest, getErr := s.Get(ctx, spaceID, orderID)
 			if getErr == nil {
 				if latest.State.Terminal() ||
@@ -464,7 +464,7 @@ func (s *Service) DiscardPending(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	unlock := s.Store.LockExchangeAccount(record.ExchangeAccountID)
+	unlock := s.Store.LockTradingAccount(record.TradingAccountID)
 	defer unlock()
 	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
 	if err != nil {
@@ -501,7 +501,7 @@ func (s *Service) ResolveUnknown(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	unlock := s.Store.LockExchangeAccount(record.ExchangeAccountID)
+	unlock := s.Store.LockTradingAccount(record.TradingAccountID)
 	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
 	if err != nil {
 		unlock()
@@ -520,7 +520,7 @@ func (s *Service) ResolveUnknown(
 		s.Syncer == nil {
 		return resolved, err
 	}
-	if err := s.Syncer.SyncAccount(ctx, record.ExchangeAccountID); err != nil {
+	if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
 		return resolved, err
 	}
 	return s.Get(ctx, record.SpaceID, record.OrderID)
@@ -545,7 +545,7 @@ func (s *Service) resolveUnknown(
 	} else if current.State != orderdomain.SubmitUnknown {
 		return current, nil
 	}
-	adapter, err := s.Adapters.Adapter(record.ExchangeAccountID)
+	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
 		return current, err
 	}
@@ -648,7 +648,7 @@ func (s *Service) submit(
 		}
 		return orderdomain.Order{}, false, err
 	}
-	adapter, err := s.Adapters.Adapter(record.ExchangeAccountID)
+	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
 		return orderdomain.Order{}, false, err
 	}
@@ -782,10 +782,10 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 	}
 	return store.OrderRecord{
 		SpaceID: validation.Account.SpaceID, OrderID: string(value.ID),
-		ExchangeAccountID: value.Spec.ExchangeAccountID,
-		ClientOrderID:     value.Spec.ClientOrderID,
-		Exchange:          string(validation.Account.Exchange),
-		MarketType:        string(validation.Account.MarketType), Symbol: value.Spec.InstrumentID,
+		TradingAccountID: value.Spec.TradingAccountID,
+		ClientOrderID:    value.Spec.ClientOrderID,
+		Exchange:         string(validation.Account.Exchange),
+		MarketType:       string(validation.Account.MarketType), Symbol: value.Spec.InstrumentID,
 		OrderType: string(value.Spec.Type), TimeInForce: string(value.Spec.FillPolicy),
 		Side: string(value.Spec.Side), PositionSide: string(value.Spec.PositionSide),
 		Quantity: value.Spec.Quantity.String(), LimitPrice: limitPrice,
@@ -832,15 +832,15 @@ func domainOrder(record store.OrderRecord) (orderdomain.Order, error) {
 		ID: shared.OrderID(record.OrderID),
 		Spec: orderdomain.OrderSpec{
 			ClientOrderSpec: orderdomain.ClientOrderSpec{
-				ExchangeAccountID: record.ExchangeAccountID,
-				ClientOrderID:     record.ClientOrderID,
-				InstrumentID:      record.Symbol,
-				Type:              exchange.OrderType(record.OrderType),
-				FillPolicy:        exchange.FillPolicy(record.TimeInForce),
-				Side:              exchange.Side(record.Side),
-				PositionSide:      exchange.PositionSide(record.PositionSide),
-				Quantity:          quantity,
-				LimitPrice:        limitPrice,
+				TradingAccountID: record.TradingAccountID,
+				ClientOrderID:    record.ClientOrderID,
+				InstrumentID:     record.Symbol,
+				Type:             exchange.OrderType(record.OrderType),
+				FillPolicy:       exchange.FillPolicy(record.TimeInForce),
+				Side:             exchange.Side(record.Side),
+				PositionSide:     exchange.PositionSide(record.PositionSide),
+				Quantity:         quantity,
+				LimitPrice:       limitPrice,
 			},
 			ReferencePrice:     referencePrice,
 			ReferencePriceAt:   time.UnixMilli(record.ReferencePriceAt),
@@ -871,7 +871,7 @@ func sameSpec(record store.OrderRecord, spec orderdomain.OrderSpec) bool {
 	if err != nil {
 		return false
 	}
-	return stored.Spec.ExchangeAccountID == spec.ExchangeAccountID &&
+	return stored.Spec.TradingAccountID == spec.TradingAccountID &&
 		stored.Spec.ClientOrderID == spec.ClientOrderID &&
 		stored.Spec.InstrumentID == spec.InstrumentID &&
 		stored.Spec.Type == spec.Type &&
