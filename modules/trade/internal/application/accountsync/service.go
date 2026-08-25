@@ -154,11 +154,7 @@ func (s *Service) syncAccountLocked(
 		account.Snapshot.Balances,
 		snapshotRecord(accountSnapshot).Balances,
 	)
-	instruments, err := s.Store.ListInstruments(
-		ctx,
-		account.Exchange,
-		account.MarketType,
-	)
+	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 	if err != nil {
 		result, failErr := s.fail(ctx, account, err)
 		return result, maxDifference, failErr
@@ -745,6 +741,10 @@ func (s *Service) ensureOrderForFill(
 			CreatedAt: fill.TradedAt, UpdatedAt: fill.TradedAt,
 		}
 	}
+	// The fill stream is authoritative for symbol identity. Some exchange
+	// lookup adapters return a cached order without the requested symbol (or
+	// with a stale one); never let that collapse fills from two instruments.
+	current.Symbol = fill.Symbol
 	_, err = s.importExternalOrder(ctx, account, current)
 	return err == nil, err
 }
@@ -923,11 +923,12 @@ func (s *Service) importExternalOrder(
 	if strings.TrimSpace(clientOrderID) == "" {
 		clientOrderID = "external-" + current.Symbol + "-" + current.ExchangeOrderID
 	}
-	instrument, err := s.Store.GetInstrument(
-		ctx,
-		account.Exchange,
-		account.MarketType,
-		current.Symbol,
+	environment := account.Environment
+	if account.ExecutionMode == "PAPER" || environment == "" {
+		environment = "PRODUCTION"
+	}
+	instrument, err := s.Store.GetInstrumentInEnvironment(
+		ctx, account.Exchange, environment, account.MarketType, current.Symbol,
 	)
 	if err != nil {
 		return store.OrderRecord{}, err
@@ -1255,8 +1256,13 @@ func positionRecord(
 	account store.TradingAccountRecord,
 	position exchange.Position,
 ) store.PositionRecord {
+	exchangeSymbol := position.ExchangeSymbol
+	if exchangeSymbol == "" {
+		exchangeSymbol = position.Symbol
+	}
 	return store.PositionRecord{
 		SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID,
+		InstrumentID: position.InstrumentID, ExchangeSymbol: exchangeSymbol,
 		Symbol: position.Symbol, PositionSide: string(position.PositionSide),
 		SignedQuantity: position.SignedQuantity.String(),
 		EntryPrice:     position.EntryPrice.String(), MarkPrice: position.MarkPrice.String(),

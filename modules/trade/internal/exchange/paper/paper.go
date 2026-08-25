@@ -269,6 +269,9 @@ func (a *Adapter) PlaceOrder(
 	ctx context.Context,
 	request exchange.OrderRequest,
 ) (exchange.Order, error) {
+	if request.ExchangeSymbol != "" {
+		request.Symbol = request.ExchangeSymbol
+	}
 	if request.OrderType != exchange.OrderTypeMarket {
 		return exchange.Order{}, &exchange.Error{
 			Kind: exchange.ErrorRejected,
@@ -376,6 +379,20 @@ func (a *Adapter) allFills(ctx context.Context) ([]exchange.Fill, error) {
 	byID := make(map[string]exchange.Fill)
 	persistedIDs := make(map[string]struct{})
 	if a.store != nil {
+		orders, err := a.store.ListOrdersForAccount(
+			ctx, a.spaceID, a.tradingAccountID, 0,
+		)
+		if err != nil {
+			return nil, err
+		}
+		orderByExchangeID := make(map[string]store.OrderRecord, len(orders))
+		for _, record := range orders {
+			if record.ExchangeOrderID != "" {
+				orderByExchangeID[record.ExchangeOrderID] = record
+			}
+			generatedOrderID, _ := paperIDs(a.tradingAccountID, record.ClientOrderID)
+			orderByExchangeID[generatedOrderID] = record
+		}
 		for offset := 0; ; offset += fillPageSize {
 			records, _, err := a.store.ListFills(ctx, a.spaceID, store.FillQuery{
 				TradingAccountID: a.tradingAccountID,
@@ -389,18 +406,15 @@ func (a *Adapter) allFills(ctx context.Context) ([]exchange.Fill, error) {
 				if err != nil {
 					return nil, err
 				}
+				if order, ok := orderByExchangeID[fill.ExchangeOrderID]; ok {
+					fill.ClientOrderID = order.ClientOrderID
+				}
 				byID[fill.ExchangeTradeID] = fill
 				persistedIDs[fill.ExchangeTradeID] = struct{}{}
 			}
 			if len(records) < fillPageSize {
 				break
 			}
-		}
-		orders, err := a.store.ListOrdersForAccount(
-			ctx, a.spaceID, a.tradingAccountID, 0,
-		)
-		if err != nil {
-			return nil, err
 		}
 		sort.Slice(orders, func(i, j int) bool {
 			if orders[i].SubmittedAt == orders[j].SubmittedAt {

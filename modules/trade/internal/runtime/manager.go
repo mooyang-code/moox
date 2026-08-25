@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -124,6 +125,15 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 		SyncSymbols:      append([]string(nil), account.SyncSymbols...),
 		LeverageSettings: leverage,
 	}
+	if account.Paper != nil {
+		current.PaperConfig = &store.PaperAccountConfigRecord{
+			SpaceID: account.SpaceID, TradingAccountID: account.ID,
+			InitialBalance: account.Paper.InitialBalance.String(),
+			MakerFeeRate:   account.Paper.MakerFeeRate.String(),
+			TakerFeeRate:   account.Paper.TakerFeeRate.String(),
+			SlippageBPS:    account.Paper.SlippageBPS.String(),
+		}
+	}
 	return sameSessionConfig(entry.account, current)
 }
 
@@ -158,6 +168,14 @@ func (m *Manager) Adapter(tradingAccountID string) (exchange.Adapter, error) {
 		return nil, ErrSessionConfig
 	}
 	return adapter, nil
+}
+
+func (m *Manager) Bundle(tradingAccountID string) (execution.ExecutionBundle, error) {
+	adapter, err := m.Adapter(tradingAccountID)
+	if err != nil {
+		return execution.ExecutionBundle{}, err
+	}
+	return execution.ExecutionBundle{Adapter: execution.LegacyAdapter{Adapter: adapter}, ReservationPolicy: execution.LiveReservationPolicy{}}, nil
 }
 
 func (m *Manager) Snapshot() SessionSnapshot {
@@ -267,7 +285,8 @@ func sameSessionConfig(
 		left.MarginMode == right.MarginMode &&
 		left.Status == right.Status &&
 		reflect.DeepEqual(left.SyncSymbols, right.SyncSymbols) &&
-		reflect.DeepEqual(left.LeverageSettings, right.LeverageSettings)
+		reflect.DeepEqual(left.LeverageSettings, right.LeverageSettings) &&
+		reflect.DeepEqual(left.PaperConfig, right.PaperConfig)
 }
 
 func (m *Manager) runSession(ctx context.Context, session ManagedSession) {

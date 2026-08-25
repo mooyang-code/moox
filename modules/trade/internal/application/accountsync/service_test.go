@@ -1258,7 +1258,7 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SWAP", Symbol: "BTC-USDT",
+			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", Symbol: "BTC-USDT",
 			InstrumentID: "BTCUSDT", BaseAsset: "BTC", QuoteAsset: "USDT",
 			SettlementAsset: "USDT", Linear: true, ContractValue: "0.1",
 			ContractValueAsset: "BTC", ExchangeQuantityStep: "1",

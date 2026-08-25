@@ -41,7 +41,7 @@ func TestOpenConfiguresSQLiteAndTransactionRollback(t *testing.T) {
 	require.ErrorIs(t, err, stop)
 
 	var count int64
-	require.NoError(t, s.db.Table("t_exchange_instruments").Count(&count).Error)
+	require.NoError(t, s.db.Table("t_trade_instruments").Count(&count).Error)
 	require.Zero(t, count)
 }
 
@@ -164,7 +164,7 @@ func TestOpenRejectsChangedPartialUniqueIndexPredicate(t *testing.T) {
 	require.NoError(t, db.Exec(`
 		CREATE UNIQUE INDEX uk_trade_orders_exchange_order
 		ON t_trade_orders (
-			c_space_id, c_trading_account_id, c_symbol, c_exchange_order_id
+			c_space_id, c_trading_account_id, c_exchange_symbol, c_exchange_order_id
 		)
 		WHERE c_exchange_order_id = ''
 	`).Error)

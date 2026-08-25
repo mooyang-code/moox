@@ -247,7 +247,7 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 	require.NoError(t, s.DBForTest().Raw(`
 		SELECT c_signed_quantity, c_entry_price, c_realized_pnl
 		FROM t_trading_positions
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
 	`, testSpace, testAccount, testSymbol).Scan(&position).Error)
 	assert.Equal(t, "1", position.SignedQuantity)
 	assert.Equal(t, "100", position.EntryPrice)
@@ -281,7 +281,7 @@ func TestReducerApplyFillCreatesFirstSwapPosition(t *testing.T) {
 	require.NoError(t, s.DBForTest().Raw(`
 		SELECT c_signed_quantity, c_entry_price, c_leverage
 		FROM t_trading_positions
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
 	`, testSpace, testAccount, testSymbol).Scan(&position).Error)
 	require.Equal(t, "1", position.SignedQuantity)
 	require.Equal(t, "100", position.EntryPrice)

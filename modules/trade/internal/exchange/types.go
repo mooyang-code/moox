@@ -75,6 +75,10 @@ func (e AccountEnvironment) Valid() bool {
 		e == AccountEnvironmentProduction
 }
 
+func (e AccountEnvironment) ValidLive() bool {
+	return e == AccountEnvironmentTestnet || e == AccountEnvironmentProduction
+}
+
 type MarginMode string
 
 const (
@@ -181,7 +185,8 @@ type AccountConfig struct {
 type Instrument struct {
 	Exchange             Exchange
 	MarketType           MarketType
-	Symbol               string
+	ExchangeSymbol       string
+	Symbol               string // legacy adapter input; normalized at boundaries
 	InstrumentID         string
 	BaseAsset            string
 	QuoteAsset           string
@@ -227,6 +232,8 @@ type AccountSnapshotPresence struct {
 
 type Position struct {
 	TradingAccountID  string
+	InstrumentID      string
+	ExchangeSymbol    string
 	Symbol            string
 	PositionSide      PositionSide
 	SignedQuantity    shared.Decimal
@@ -257,6 +264,7 @@ type PositionPresence struct {
 
 type OrderRequest struct {
 	ClientOrderID  string
+	ExchangeSymbol string
 	Symbol         string
 	OrderType      OrderType
 	FillPolicy     FillPolicy
@@ -279,6 +287,7 @@ func (r OrderRequest) NativeTimeInForce() TimeInForce {
 type Order struct {
 	ExchangeOrderID string
 	ClientOrderID   string
+	ExchangeSymbol  string
 	Symbol          string
 	OrderType       OrderType
 	TimeInForce     TimeInForce
@@ -298,6 +307,7 @@ type Fill struct {
 	ExchangeTradeID string
 	ExchangeOrderID string
 	ClientOrderID   string
+	ExchangeSymbol  string
 	Symbol          string
 	Side            Side
 	PositionSide    PositionSide

@@ -39,6 +39,7 @@ type TradingAccountRecord struct {
 	MarketType         string
 	ExecutionMode      string
 	Environment        string
+	PaperConfig        *PaperAccountConfigRecord
 	CredentialSecretID string
 	SettlementAsset    string
 	MarginMode         string
@@ -63,7 +64,7 @@ type tradingAccountRow struct {
 	Exchange             string    `gorm:"column:c_exchange"`
 	MarketType           string    `gorm:"column:c_market_type"`
 	ExecutionMode        string    `gorm:"column:c_execution_mode"`
-	Environment          string    `gorm:"column:c_environment"`
+	Environment          string    `gorm:"column:c_live_environment"`
 	CredentialSecretID   string    `gorm:"column:c_credential_secret_id"`
 	SettlementAsset      string    `gorm:"column:c_settlement_asset"`
 	MarginMode           string    `gorm:"column:c_margin_mode"`
@@ -88,10 +89,16 @@ func (tradingAccountRow) TableName() string {
 func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 	if record.SpaceID == "" || record.TradingAccountID == "" || record.Name == "" ||
 		record.Exchange == "" || record.MarketType == "" || record.ExecutionMode == "" ||
-		record.Environment == "" ||
 		record.SettlementAsset == "" || record.Status == "" ||
 		(record.ExecutionMode == "LIVE" && record.CredentialSecretID == "") {
 		return fmt.Errorf("%w: incomplete Exchange account", ErrInvalidRecord)
+	}
+	if record.ExecutionMode == "PAPER" {
+		if record.PaperConfig == nil {
+			record.PaperConfig = &PaperAccountConfigRecord{SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID, InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBPS: "0"}
+		}
+		record.Environment = ""
+		record.CredentialSecretID = ""
 	}
 	leverageJSON, err := encodeLeverageSettings(record.LeverageSettings)
 	if err != nil {
@@ -125,7 +132,7 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 	err = tx.db.Exec(`
 		INSERT INTO t_trading_accounts (
 			c_space_id, c_trading_account_id, c_name, c_exchange, c_market_type,
-			c_execution_mode, c_environment, c_credential_secret_id,
+		c_execution_mode, c_live_environment, c_credential_secret_id,
 			c_settlement_asset, c_margin_mode,
 			c_status, c_ready, c_sync_symbols_json,
 			c_leverage_settings_json,
@@ -142,7 +149,13 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 		row.FillCursorsJSON, row.SnapshotJSON,
 		row.SnapshotSourceTime, row.LastSyncAt, row.LastReadyAt, row.LastError,
 	).Error
-	return writeError(err)
+	if err != nil {
+		return writeError(err)
+	}
+	if record.ExecutionMode == "PAPER" && record.PaperConfig != nil {
+		return tx.CreatePaperAccountConfig(*record.PaperConfig)
+	}
+	return nil
 }
 
 type TradingAccountConfiguration struct {
@@ -166,9 +179,10 @@ func (tx *Tx) UpdateTradingAccountConfiguration(
 	var current struct {
 		ExecutionMode   string `gorm:"column:c_execution_mode"`
 		SettlementAsset string `gorm:"column:c_settlement_asset"`
+		Status          string `gorm:"column:c_status"`
 	}
 	result := tx.db.Raw(`
-		SELECT c_execution_mode, c_settlement_asset
+		SELECT c_execution_mode, c_settlement_asset, c_status
 		FROM t_trading_accounts
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, spaceID, tradingAccountID).Scan(&current)
@@ -180,6 +194,12 @@ func (tx *Tx) UpdateTradingAccountConfiguration(
 	}
 	if current.ExecutionMode == "LIVE" && blank(config.CredentialSecretID) {
 		return fmt.Errorf("%w: LIVE requires an Exchange credential", ErrInvalidRecord)
+	}
+	if current.ExecutionMode == "PAPER" {
+		if current.Status == "DISABLED" && config.Status == "ENABLED" {
+			return fmt.Errorf("%w: closed paper account cannot be re-enabled", ErrConflict)
+		}
+		config.CredentialSecretID = ""
 	}
 	if current.SettlementAsset != config.SettlementAsset {
 		var membershipCount int64
@@ -420,6 +440,22 @@ func (s *Store) ListTradingAccounts(
 		records = append(records, record)
 	}
 	return records, nil
+}
+
+func (s *Store) ListAllTradingAccounts(ctx context.Context) ([]TradingAccountRecord, error) {
+	var rows []tradingAccountRow
+	if err := s.db.WithContext(ctx).Order("c_space_id, c_name, c_trading_account_id").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make([]TradingAccountRecord, 0, len(rows))
+	for _, row := range rows {
+		record, err := decodeAccountRow(row)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, record)
+	}
+	return result, nil
 }
 
 func (s *Store) GetTradingAccountByID(

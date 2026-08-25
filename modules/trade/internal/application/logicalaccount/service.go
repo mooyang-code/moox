@@ -17,11 +17,12 @@ import (
 )
 
 var (
-	ErrServiceConfig     = errors.New("trade logical account: service is not configured")
-	ErrAdoptionRequired  = errors.New("trade logical account: adoption is required")
-	ErrMemberHasExposure = errors.New("trade logical account: member has active exposure")
-	ErrOwnerConflict     = errors.New("trade logical account: runner ownership conflict")
-	ErrNotReady          = errors.New("trade logical account: not ready")
+	ErrServiceConfig            = errors.New("trade logical account: service is not configured")
+	ErrAdoptionRequired         = errors.New("trade logical account: adoption is required")
+	ErrMemberHasExposure        = errors.New("trade logical account: member has active exposure")
+	ErrOwnerConflict            = errors.New("trade logical account: runner ownership conflict")
+	ErrNotReady                 = errors.New("trade logical account: not ready")
+	ErrPaperMembershipImmutable = errors.New("trade logical account: paper membership is immutable")
 )
 
 type AddMemberCommand struct {
@@ -119,6 +120,13 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	if s.Syncer == nil {
 		return ErrServiceConfig
 	}
+	account, err := s.Store.GetTradingAccountByID(ctx, command.TradingAccountID)
+	if err != nil {
+		return err
+	}
+	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
+		return ErrPaperMembershipImmutable
+	}
 	if err := s.Syncer.SyncAccount(ctx, command.TradingAccountID); err != nil {
 		return err
 	}
@@ -167,6 +175,13 @@ func (s *Service) RemoveMember(
 	}
 	if s.Syncer == nil {
 		return ErrServiceConfig
+	}
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return err
+	}
+	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
+		return ErrPaperMembershipImmutable
 	}
 	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 		return err
@@ -427,9 +442,7 @@ func (s *Service) readiness(
 		case s.snapshotStale(now, account.LastSyncAt):
 			reasons = append(reasons, account.TradingAccountID+" snapshot is stale")
 		}
-		instruments, listErr := s.Store.ListInstruments(
-			ctx, account.Exchange, account.MarketType,
-		)
+		instruments, listErr := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if listErr != nil {
 			return Readiness{}, listErr
 		}

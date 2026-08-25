@@ -22,7 +22,6 @@ runtime:
   # Production order submission is disabled unless explicitly enabled.
   # TESTNET and account synchronization are unaffected.
   live_trading_enabled: false
-  paper_initial_balance: "100000"
 
 dns_resolver:
   enabled: false

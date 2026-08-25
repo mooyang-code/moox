@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     c_exchange TEXT NOT NULL,
     c_market_type TEXT NOT NULL,
     c_execution_mode TEXT NOT NULL,
-    c_environment TEXT NOT NULL,
+    c_live_environment TEXT NOT NULL DEFAULT '',
     c_credential_secret_id TEXT NOT NULL,
     c_settlement_asset TEXT NOT NULL,
     c_margin_mode TEXT NOT NULL DEFAULT '',
@@ -34,22 +34,24 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     CHECK (json_valid(c_snapshot_json)),
     CHECK (json_type(c_snapshot_json) = 'object'),
     CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
-    CHECK (c_environment IN ('PAPER', 'TESTNET', 'PRODUCTION')),
     CHECK (
-        (c_execution_mode = 'PAPER' AND c_environment = 'PAPER')
+        (c_execution_mode = 'PAPER'
+            AND c_live_environment = ''
+            AND c_credential_secret_id = '')
         OR
         (
             c_execution_mode = 'LIVE'
-            AND c_environment IN ('TESTNET', 'PRODUCTION')
+            AND c_live_environment IN ('TESTNET', 'PRODUCTION')
+            AND c_credential_secret_id <> ''
         )
     )
 );
 
-CREATE INDEX IF NOT EXISTS idx_exchange_accounts_status
+CREATE INDEX IF NOT EXISTS idx_trading_accounts_status
 ON t_trading_accounts (c_space_id, c_status);
 
-CREATE INDEX IF NOT EXISTS idx_exchange_accounts_exchange
+CREATE INDEX IF NOT EXISTS idx_trading_accounts_exchange
 ON t_trading_accounts (c_exchange, c_market_type);
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_exchange_accounts_id
+CREATE UNIQUE INDEX IF NOT EXISTS uk_trading_accounts_id
 ON t_trading_accounts (c_trading_account_id);

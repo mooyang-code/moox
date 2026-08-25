@@ -25,6 +25,11 @@ func (r Repository) Get(ctx context.Context, id string) (tradingaccount.Account,
 	if err != nil {
 		return tradingaccount.Account{}, err
 	}
+	if record.ExecutionMode == string(exchange.ExecutionModePaper) {
+		if cfg, cfgErr := r.Store.GetPaperAccountConfig(ctx, record.SpaceID, record.TradingAccountID); cfgErr == nil {
+			record.PaperConfig = &cfg
+		}
+	}
 	return accountDomain(record)
 }
 
@@ -45,7 +50,7 @@ func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
 			value.SpaceID,
 			value.ID,
 			store.TradingAccountConfiguration{
-				Name: value.Name, CredentialSecretID: value.CredentialSecretID,
+				Name: value.Name, CredentialSecretID: credentialSecret(value),
 				SettlementAsset: value.SettlementAsset,
 				MarginMode:      string(value.MarginMode), Status: string(value.Status),
 				SyncSymbols: append([]string(nil), value.SyncSymbols...),
@@ -82,12 +87,12 @@ func accountRecord(value tradingaccount.Account) store.TradingAccountRecord {
 	for symbol, amount := range value.LeverageSettings {
 		leverage[symbol] = amount.String()
 	}
-	return store.TradingAccountRecord{
+	record := store.TradingAccountRecord{
 		SpaceID: value.SpaceID, TradingAccountID: value.ID, Name: value.Name,
 		Exchange: string(value.Exchange), MarketType: string(value.MarketType),
 		ExecutionMode:      string(value.ExecutionMode),
-		Environment:        string(value.Environment),
-		CredentialSecretID: value.CredentialSecretID,
+		Environment:        string(value.MarketDataEnvironment()),
+		CredentialSecretID: credentialSecret(value),
 		SettlementAsset:    value.SettlementAsset, MarginMode: string(value.MarginMode),
 		Status: string(value.Status), Ready: value.Ready,
 		SyncSymbols:      append([]string(nil), value.SyncSymbols...),
@@ -97,6 +102,21 @@ func accountRecord(value tradingaccount.Account) store.TradingAccountRecord {
 		LastSyncAt:         timestampMillis(value.LastSyncAt),
 		LastReadyAt:        timestampMillis(value.LastReadyAt), LastError: value.LastError,
 	}
+	if value.ExecutionMode == exchange.ExecutionModePaper {
+		paper := value.Paper
+		if paper == nil {
+			paper = &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("100000"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero()}
+		}
+		record.PaperConfig = &store.PaperAccountConfigRecord{SpaceID: value.SpaceID, TradingAccountID: value.ID, InitialBalance: paper.InitialBalance.String(), MakerFeeRate: paper.MakerFeeRate.String(), TakerFeeRate: paper.TakerFeeRate.String(), SlippageBPS: paper.SlippageBPS.String()}
+	}
+	return record
+}
+
+func credentialSecret(value tradingaccount.Account) string {
+	if value.Live != nil {
+		return value.Live.CredentialSecretID
+	}
+	return value.CredentialSecretID
 }
 
 func accountDomain(record store.TradingAccountRecord) (tradingaccount.Account, error) {
@@ -108,7 +128,7 @@ func accountDomain(record store.TradingAccountRecord) (tradingaccount.Account, e
 		}
 		leverage[symbol] = value
 	}
-	return tradingaccount.Account{
+	value := tradingaccount.Account{
 		ID: record.TradingAccountID, SpaceID: record.SpaceID, Name: record.Name,
 		Exchange:           exchange.Exchange(record.Exchange),
 		MarketType:         exchange.MarketType(record.MarketType),
@@ -123,7 +143,39 @@ func accountDomain(record store.TradingAccountRecord) (tradingaccount.Account, e
 		SnapshotSourceTime: millisTime(record.SnapshotSourceTime),
 		LastSyncAt:         millisTime(record.LastSyncAt),
 		LastReadyAt:        millisTime(record.LastReadyAt), LastError: record.LastError,
-	}, nil
+	}
+	if value.ExecutionMode == exchange.ExecutionModePaper {
+		value.Environment = exchange.AccountEnvironmentPaper
+		if cfg, err := loadPaperConfig(record); err == nil {
+			value.Paper = cfg
+		}
+	} else {
+		value.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironment(record.Environment), CredentialSecretID: record.CredentialSecretID}
+	}
+	return value, nil
+}
+
+func loadPaperConfig(record store.TradingAccountRecord) (*tradingaccount.PaperConfig, error) {
+	if record.PaperConfig == nil {
+		return &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("100000"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero()}, nil
+	}
+	initial, err := shared.ParseDecimal(record.PaperConfig.InitialBalance)
+	if err != nil {
+		return nil, err
+	}
+	maker, err := shared.ParseDecimal(record.PaperConfig.MakerFeeRate)
+	if err != nil {
+		return nil, err
+	}
+	taker, err := shared.ParseDecimal(record.PaperConfig.TakerFeeRate)
+	if err != nil {
+		return nil, err
+	}
+	slip, err := shared.ParseDecimal(record.PaperConfig.SlippageBPS)
+	if err != nil {
+		return nil, err
+	}
+	return &tradingaccount.PaperConfig{InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slip}, nil
 }
 
 func cloneLeverage(values store.LeverageSettings) store.LeverageSettings {

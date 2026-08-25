@@ -19,15 +19,19 @@ var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configu
 var errPrivateDisconnected = errors.New("trade runtime: private stream disconnected")
 
 type ExchangeSession struct {
-	Account      store.TradingAccountRecord
-	Adapter      exchange.Adapter
-	Sync         *accountsync.Service
-	SyncInterval time.Duration
+	Account           store.TradingAccountRecord
+	Adapter           exchange.Adapter
+	Sync              *accountsync.Service
+	SyncInterval      time.Duration
+	PaperMatcherReady func() bool
+	OnReady           func(string)
 
 	ready         atomic.Bool
 	opMu          sync.Mutex
 	syncRequested chan struct{}
 }
+
+type TradingSession = ExchangeSession
 
 func (s *ExchangeSession) Ready() bool {
 	return s != nil && s.ready.Load()
@@ -57,6 +61,9 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModeLive &&
 		len(account.SyncSymbols) == 0 {
 		return fmt.Errorf("%w: SPOT account requires sync symbols", ErrSessionConfig)
+	}
+	if exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModePaper {
+		return s.runPaper(ctx)
 	}
 	s.syncRequested = make(chan struct{}, 1)
 	s.ready.Store(false)
@@ -247,6 +254,89 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 }
 
+// runPaper shares the same SQLite facts and sync projections as Live, but has
+// no private stream. Readiness is owned by the single process-local matcher.
+func (s *ExchangeSession) runPaper(ctx context.Context) error {
+	if s.Adapter == nil || s.Sync == nil {
+		return ErrSessionConfig
+	}
+	instruments, err := s.Adapter.LoadInstruments(ctx)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	if len(instruments) > 0 {
+		if err := s.persistInstruments(ctx, instruments); err != nil {
+			return s.disconnect(ctx, err)
+		}
+	}
+	accountSnapshot, err := s.Adapter.GetAccountSnapshot(ctx)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	positions, err := s.Adapter.ListPositionSnapshots(ctx)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	orders, err := s.Adapter.ListOpenOrders(ctx)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	localOrders, err := s.Sync.Store.ListOrdersForAccount(ctx, s.Account.SpaceID, s.Account.TradingAccountID, 0)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	symbols := sessionSymbols(s.Account, orders, localOrders, positions, instruments, accountSnapshot)
+	fills := make([]exchange.Fill, 0)
+	for _, symbol := range symbols {
+		rows, _, listErr := s.Adapter.ListRecentFills(ctx, symbol, "")
+		if listErr != nil {
+			return s.disconnect(ctx, listErr)
+		}
+		fills = append(fills, rows...)
+	}
+	if _, err := s.Sync.ApplySnapshot(ctx, s.Account.TradingAccountID, accountsync.Snapshot{
+		Fills: fills, Orders: orders, Positions: positions, Account: accountSnapshot, Ready: false,
+	}); err != nil {
+		return s.disconnect(ctx, err)
+	}
+	setReady := func(ready bool) error {
+		if err := s.Sync.SetReady(ctx, s.Account.TradingAccountID, ready, nil); err != nil {
+			return err
+		}
+		previous := s.ready.Swap(ready)
+		if ready && !previous && s.OnReady != nil {
+			s.OnReady(s.Account.TradingAccountID)
+		}
+		return nil
+	}
+	interval := s.SyncInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	poll := time.NewTicker(100 * time.Millisecond)
+	defer poll.Stop()
+	refresh := time.NewTicker(interval)
+	defer refresh.Stop()
+	for {
+		matcherReady := s.PaperMatcherReady != nil && s.PaperMatcherReady()
+		if matcherReady != s.Ready() {
+			if err := setReady(matcherReady); err != nil {
+				return s.disconnect(ctx, err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			_ = s.disconnect(context.Background(), ctx.Err())
+			return ctx.Err()
+		case <-poll.C:
+		case <-refresh.C:
+			if _, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID); err != nil {
+				return s.disconnect(ctx, err)
+			}
+		}
+	}
+}
+
 func privateStreamError(
 	disconnected <-chan struct{},
 	streamDone <-chan error,
@@ -284,15 +374,20 @@ func (s *ExchangeSession) persistInstruments(
 	instruments []exchange.Instrument,
 ) error {
 	return s.Sync.Store.Transaction(ctx, func(tx *store.Tx) error {
+		environment := s.Account.Environment
+		if s.Account.ExecutionMode == "PAPER" || environment == "" {
+			environment = "PRODUCTION"
+		}
 		for _, instrument := range instruments {
 			if instrument.Exchange != exchange.Exchange(s.Account.Exchange) ||
 				instrument.MarketType != exchange.MarketType(s.Account.MarketType) {
 				return fmt.Errorf("trade runtime: conflicting instrument identity")
 			}
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
-				Exchange:   string(instrument.Exchange),
-				MarketType: string(instrument.MarketType),
-				Symbol:     instrument.Symbol, InstrumentID: instrument.InstrumentID,
+				Exchange:       string(instrument.Exchange),
+				Environment:    environment,
+				MarketType:     string(instrument.MarketType),
+				ExchangeSymbol: instrument.ExchangeSymbol, Symbol: instrument.Symbol, InstrumentID: instrument.InstrumentID,
 				BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 				SettlementAsset: instrument.SettlementAsset, Linear: instrument.Linear,
 				ContractValue:        instrument.ContractValue.String(),
@@ -473,18 +568,18 @@ func sessionSymbols(
 		set[symbol] = struct{}{}
 	}
 	for _, current := range orders {
-		if current.Symbol != "" {
-			set[current.Symbol] = struct{}{}
+		if current.ExchangeSymbol != "" {
+			set[current.ExchangeSymbol] = struct{}{}
 		}
 	}
 	for _, current := range local {
-		if current.Symbol != "" {
-			set[current.Symbol] = struct{}{}
+		if current.ExchangeSymbol != "" {
+			set[current.ExchangeSymbol] = struct{}{}
 		}
 	}
 	for _, position := range positions {
-		if position.Symbol != "" {
-			set[position.Symbol] = struct{}{}
+		if position.ExchangeSymbol != "" {
+			set[position.ExchangeSymbol] = struct{}{}
 		}
 	}
 	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot {
@@ -504,7 +599,7 @@ func sessionSymbols(
 				continue
 			}
 			if _, held := heldAssets[instrument.BaseAsset]; held {
-				set[instrument.Symbol] = struct{}{}
+				set[instrument.ExchangeSymbol] = struct{}{}
 			}
 		}
 	}

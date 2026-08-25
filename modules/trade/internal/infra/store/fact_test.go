@@ -30,7 +30,7 @@ func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "order-target",
 			TradingAccountID: "account-1", ClientOrderID: "client-target",
-			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
 			OwnerType: "TARGET", OwnerID: "target-1",
 			LogicalAccountID: "logical-1", RunnerID: "runner-1",
@@ -49,7 +49,7 @@ func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "invalid-target",
 			TradingAccountID: "account-1", ClientOrderID: "invalid-target",
-			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
 			OwnerType: "TARGET", OwnerID: "target-1",
 			LogicalAccountID: "logical-1", State: "PENDING",
@@ -67,7 +67,7 @@ func TestInsertFillDeduplicatesExchangeTradeIdentity(t *testing.T) {
 		SpaceID: "space-1", FillID: "fill-1", ExchangeTradeID: "trade-1",
 		OrderID: "order-1", ExchangeOrderID: "exchange-order-1",
 		TradingAccountID: "account-1", Exchange: "BINANCE",
-		MarketType: "SPOT", Symbol: "BTCUSDT", Side: "BUY",
+		MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", Side: "BUY",
 		Price: "100", Quantity: "1", Fee: "0.1", FeeAsset: "USDT",
 		SettlementAsset: "USDT", TradedAt: 123,
 	}
@@ -106,7 +106,7 @@ func TestInsertFillDeduplicatesExchangeTradeIdentity(t *testing.T) {
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "order-2", TradingAccountID: "account-1",
 			ClientOrderID: "client-order-2", ExchangeOrderID: "exchange-order-2",
-			Symbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC",
+			ExchangeSymbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC",
 			Side: "BUY", Quantity: "1", LimitPrice: stringPointer("100"),
 			ReferencePrice: "100", OwnerType: "EXTERNAL",
 			OwnerID: "exchange-order-2", State: "OPEN",
@@ -137,7 +137,7 @@ func TestCreateOrderEnforcesAccountClientIdentity(t *testing.T) {
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "order-2", TradingAccountID: "account-1",
 			ClientOrderID: "client-order-1", Exchange: "BINANCE",
-			MarketType: "SPOT", Symbol: "BTCUSDT", OrderType: "MARKET",
+			MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET",
 			Side: "BUY", Quantity: "1", ReferencePrice: "100",
 			OwnerType: "EXTERNAL", OwnerID: "external-2", State: "READY",
 		})
@@ -153,7 +153,7 @@ func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
 		if err := tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "order-2", TradingAccountID: "account-1",
 			ClientOrderID: "client-order-2", ExchangeOrderID: "exchange-order-2",
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 			OrderType: "MARKET", Side: "SELL", Quantity: "1",
 			ReferencePrice: "101", OwnerType: "EXTERNAL",
 			OwnerID: "exchange-order-2", State: "FILLED",
@@ -165,7 +165,7 @@ func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
 			SpaceID: "space-1", FillID: "fill-1", ExchangeTradeID: "trade-1",
 			OrderID: "order-2", ExchangeOrderID: "exchange-order-2",
 			TradingAccountID: "account-1", Exchange: "BINANCE",
-			MarketType: "SPOT", Symbol: "BTCUSDT", Side: "SELL",
+			MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", Side: "SELL",
 			Price: "101", Quantity: "1", Fee: "0", TradedAt: 1_500,
 		})
 		if err != nil || !inserted {
@@ -173,7 +173,7 @@ func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
 		}
 		return tx.UpsertPosition(PositionRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1",
-			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 			ExchangeUpdatedAt: 1_500,
 		})
 	}))
@@ -208,7 +208,7 @@ func TestExchangeInstrumentSwapFieldsRoundTrip(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	want := InstrumentRecord{
-		Exchange: "OKX", MarketType: "SWAP", Symbol: "BTC-USDT-SWAP",
+		Exchange: "OKX", Environment: "PRODUCTION", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT-SWAP",
 		InstrumentID: "BTC-USDT-SWAP", BaseAsset: "BTC", QuoteAsset: "USDT",
 		SettlementAsset: "USDT", Linear: true, ContractValue: "0.01",
 		ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
@@ -219,7 +219,7 @@ func TestExchangeInstrumentSwapFieldsRoundTrip(t *testing.T) {
 		return tx.UpsertInstrument(want)
 	}))
 
-	got, err := s.GetInstrument(ctx, want.Exchange, want.MarketType, want.Symbol)
+	got, err := s.GetInstrument(ctx, want.Exchange, want.MarketType, want.ExchangeSymbol)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 }
@@ -228,7 +228,7 @@ func TestExchangeInstrumentRejectsIncompleteSwapConversion(t *testing.T) {
 	s := openTestStore(t)
 	err := s.Transaction(context.Background(), func(tx *Tx) error {
 		return tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "OKX", MarketType: "SWAP", Symbol: "BTC-USDT-SWAP",
+			Exchange: "OKX", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT-SWAP",
 			BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			ExchangeQuantityStep: "1", PriceTick: "0.1", Status: "TRADING",
 		})
@@ -236,11 +236,11 @@ func TestExchangeInstrumentRejectsIncompleteSwapConversion(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidRecord)
 
 	err = s.db.Exec(`
-		INSERT INTO t_exchange_instruments (
-			c_exchange, c_market_type, c_symbol, c_base_asset, c_quote_asset,
+		INSERT INTO t_trade_instruments (
+			c_exchange, c_environment, c_market_type, c_exchange_symbol, c_base_asset, c_quote_asset,
 			c_settlement_asset, c_linear, c_contract_value, c_contract_value_asset,
 			c_exchange_quantity_step, c_min_exchange_quantity, c_price_tick, c_status
-		) VALUES ('OKX', 'SWAP', 'ETH-USDT-SWAP', 'ETH', 'USDT', 'USDT', 0,
+		) VALUES ('OKX', 'PRODUCTION', 'SWAP', 'ETH-USDT-SWAP', 'ETH', 'USDT', 'USDT', 0,
 			'0', '', '1', '0', '0.01', 'TRADING')
 	`).Error
 	require.Error(t, err)
@@ -254,7 +254,7 @@ func TestCreateOrderRejectsContradictoryExchangeIdentity(t *testing.T) {
 			return err
 		}
 		return tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "OKX", MarketType: "SWAP", Symbol: "BTC-USDT-SWAP",
+			Exchange: "OKX", MarketType: "SWAP", ExchangeSymbol: "BTC-USDT-SWAP",
 			BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 			Linear: true, ContractValue: "0.01", ContractValueAsset: "BTC",
 			ExchangeQuantityStep: "1", MinExchangeQuantity: "1",
@@ -266,7 +266,7 @@ func TestCreateOrderRejectsContradictoryExchangeIdentity(t *testing.T) {
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "order-wrong", TradingAccountID: "account-1",
 			ClientOrderID: "client-wrong", Exchange: "OKX", MarketType: "SWAP",
-			Symbol: "BTC-USDT-SWAP", OrderType: "MARKET", Side: "BUY",
+			ExchangeSymbol: "BTC-USDT-SWAP", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
 			OwnerType: "EXTERNAL", OwnerID: "external-wrong", State: "READY",
 		})
@@ -282,7 +282,7 @@ func TestCreateOrderDerivesExchangeIdentityFromAccount(t *testing.T) {
 			return err
 		}
 		if err := tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 			BaseAsset: "BTC", QuoteAsset: "USDT", ExchangeQuantityStep: "0.0001",
 			PriceTick: "0.01", Status: "TRADING",
 		}); err != nil {
@@ -291,7 +291,7 @@ func TestCreateOrderDerivesExchangeIdentityFromAccount(t *testing.T) {
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "derived-order",
 			TradingAccountID: "account-1", ClientOrderID: "derived-client",
-			Symbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
+			ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
 			Quantity: "1", ReferencePrice: "100",
 			OwnerType: "EXTERNAL", OwnerID: "external-derived", State: "READY",
 		})
@@ -316,7 +316,7 @@ func TestInsertFillRejectsContradictoryOrderIdentity(t *testing.T) {
 	base := FillRecord{
 		SpaceID: "space-1", FillID: "fill-wrong", ExchangeTradeID: "trade-wrong",
 		OrderID: "order-1", TradingAccountID: "other-account",
-		Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 		Side: "BUY", Price: "100", Quantity: "1",
 	}
 	err := s.Transaction(ctx, func(tx *Tx) error {
@@ -359,13 +359,13 @@ func TestUpsertPositionUsesApprovedIdentity(t *testing.T) {
 		}
 		return tx.UpsertPosition(PositionRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1",
-			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 		})
 	}))
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.UpsertPosition(PositionRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1",
-			Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "-2",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "-2",
 		})
 	}))
 
@@ -406,7 +406,7 @@ func TestCreateOrderValidatesEveryDecimal(t *testing.T) {
 			record := OrderRecord{
 				SpaceID: "space-1", OrderID: "decimal-order",
 				TradingAccountID: "account-1", ClientOrderID: "decimal-client",
-				Symbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC",
+				ExchangeSymbol: "BTCUSDT", OrderType: "LIMIT", TimeInForce: "GTC",
 				Side: "BUY", Quantity: "1", LimitPrice: &limit,
 				ReferencePrice: "100", OwnerType: "EXTERNAL",
 				OwnerID: "external-decimal", State: "READY",
@@ -492,7 +492,7 @@ func TestUpsertPositionValidatesSignedAndNonNegativeDecimals(t *testing.T) {
 			}))
 			record := PositionRecord{
 				SpaceID: "space-1", TradingAccountID: "account-1",
-				Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "-1",
+				ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "-1",
 				EntryPrice: "100", MarkPrice: "101", Leverage: "0",
 				UsedMargin: "0", LiquidationPrice: "0",
 				UnrealizedPnL: "-1", RealizedPnL: "2",
@@ -516,7 +516,7 @@ func TestUpsertSwapPositionRequiresPositiveLeverageAndAllowsSignedPnL(t *testing
 	}))
 	position := PositionRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1",
-		Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "-1.00",
+		ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "-1.00",
 		EntryPrice: "100", MarkPrice: "101", UsedMargin: "10",
 		UnrealizedPnL: "-2.00", RealizedPnL: "-1.00",
 	}
@@ -552,12 +552,12 @@ func TestReplacePositionsPreservesNewerPrivateUpdate(t *testing.T) {
 		for _, position := range []PositionRecord{
 			{
 				SpaceID: "space-1", TradingAccountID: "account-1",
-				Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "2",
+				ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "2",
 				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_800,
 			},
 			{
 				SpaceID: "space-1", TradingAccountID: "account-1",
-				Symbol: "ETHUSDT", PositionSide: "NET", SignedQuantity: "1",
+				ExchangeSymbol: "ETHUSDT", PositionSide: "NET", SignedQuantity: "1",
 				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_000,
 			},
 		} {
@@ -570,7 +570,7 @@ func TestReplacePositionsPreservesNewerPrivateUpdate(t *testing.T) {
 			"account-1",
 			[]PositionRecord{{
 				SpaceID: "space-1", TradingAccountID: "account-1",
-				Symbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+				ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
 				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_500,
 			}},
 			2_000,
@@ -601,7 +601,7 @@ func seedOrder(ctx context.Context, s *Store) error {
 		return tx.CreateOrder(OrderRecord{
 			SpaceID: "space-1", OrderID: "order-1", TradingAccountID: "account-1",
 			ClientOrderID: "client-order-1", ExchangeOrderID: "exchange-order-1",
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY",
 			Quantity: "1", LimitPrice: stringPointer("100"), ReferencePrice: "100",
 			OwnerType: "EXTERNAL", OwnerID: "exchange-order-1",
@@ -616,7 +616,7 @@ func seedAccountAndInstrument(ctx context.Context, s *Store) error {
 			return err
 		}
 		if err := tx.UpsertInstrument(InstrumentRecord{
-			Exchange: "BINANCE", MarketType: "SPOT", Symbol: "BTCUSDT",
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
 			BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: "0.01",
 			ExchangeQuantityStep: "0.0001", Status: "TRADING",
 		}); err != nil {

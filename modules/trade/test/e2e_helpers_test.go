@@ -300,12 +300,15 @@ func (s readySession) Ready(string) bool                    { return bool(s) }
 type instrumentSource struct{ store *store.Store }
 
 func (s instrumentSource) GetInstrument(ctx context.Context, name exchange.Exchange, market exchange.MarketType, symbol string) (exchange.Instrument, error) {
-	record, err := s.store.GetInstrument(ctx, string(name), string(market), symbol)
+	record, err := s.store.GetInstrumentByIDScoped(ctx, symbol, string(name), string(market))
+	if err != nil {
+		record, err = s.store.GetInstrument(ctx, string(name), string(market), symbol)
+	}
 	if err != nil {
 		return exchange.Instrument{}, err
 	}
 	return exchange.Instrument{
-		Exchange: name, MarketType: market, Symbol: record.Symbol,
+		Exchange: name, MarketType: market, Symbol: record.Symbol, ExchangeSymbol: record.ExchangeSymbol,
 		InstrumentID: record.InstrumentID, BaseAsset: record.BaseAsset,
 		QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
 		Linear: record.Linear, ContractValue: decimal(record.ContractValue),
@@ -321,6 +324,11 @@ type positionSource struct{ store *store.Store }
 
 func (s positionSource) GetPosition(ctx context.Context, accountID, symbol string) (exchange.Position, error) {
 	record, found, err := s.store.GetPosition(ctx, testSpace, accountID, symbol, string(exchange.PositionSideNet))
+	if !found && err == nil {
+		if instrument, instrumentErr := s.store.GetInstrumentByIDScoped(ctx, symbol, "BINANCE", "SWAP"); instrumentErr == nil {
+			record, found, err = s.store.GetPosition(ctx, testSpace, accountID, instrument.ExchangeSymbol, string(exchange.PositionSideNet))
+		}
+	}
 	if err != nil || !found {
 		return exchange.Position{TradingAccountID: accountID, Symbol: symbol, PositionSide: exchange.PositionSideNet}, err
 	}

@@ -130,7 +130,7 @@ func TestTradingAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *testi
 	got, err := s.GetTradingAccount(ctx, "space-1", "account-1")
 	require.NoError(t, err)
 	require.Equal(t, "renamed", got.Name)
-	require.Equal(t, "secret-2", got.CredentialSecretID)
+	require.Empty(t, got.CredentialSecretID)
 	require.Equal(t, "USDC", got.SettlementAsset)
 	require.Equal(t, []string{"BTCUSDT"}, got.SyncSymbols)
 	require.False(t, got.Ready)

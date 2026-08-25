@@ -14,8 +14,6 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
-
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 
 // AppConfig Trade 应用配置。
@@ -46,8 +44,7 @@ type DatabaseConfig struct {
 
 // RuntimeConfig contains process-local execution settings.
 type RuntimeConfig struct {
-	LiveTradingEnabled  bool   `yaml:"live_trading_enabled"`
-	PaperInitialBalance string `yaml:"paper_initial_balance"`
+	LiveTradingEnabled bool `yaml:"live_trading_enabled"`
 }
 
 // AdminConfig configures Trade access to Admin secrets.
@@ -80,7 +77,7 @@ func DefaultConfig() *AppConfig {
 		Database: DatabaseConfig{
 			Path: "./data/moox_trade.db",
 		},
-		Runtime: RuntimeConfig{PaperInitialBalance: "100000"},
+		Runtime: RuntimeConfig{},
 		Admin: AdminConfig{
 			BaseURL: "https://106.53.107.122:11001",
 			ServiceAuth: ServiceAuthConfig{
@@ -177,10 +174,6 @@ func (c *AppConfig) Validate() error {
 	}
 	if err := c.DNSResolver.Validate(); err != nil {
 		return err
-	}
-	paperBalance, err := shared.ParseDecimal(c.Runtime.PaperInitialBalance)
-	if err != nil || paperBalance.Cmp(shared.Zero()) <= 0 {
-		return fmt.Errorf("runtime paper_initial_balance must be a positive decimal")
 	}
 	return nil
 }

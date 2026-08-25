@@ -6,11 +6,12 @@ import (
 )
 
 const (
-	ExchangeAccountServiceName  = "trpc.moox.trade.TradingAccountService"
-	LogicalAccountServiceName   = "trpc.moox.trade.LogicalAccountService"
-	TradeExecutionServiceName   = "trpc.moox.trade.TradeExecutionService"
-	TradeDNSResolverServiceName = "trpc.moox.trade.TradeDNSResolverService"
-	TradeDNSResolverTRPCName    = TradeDNSResolverServiceName + ".trpc"
+	ExchangeAccountServiceName       = "trpc.moox.trade.TradingAccountService"
+	LegacyExchangeAccountServiceName = "trpc.moox.trade.ExchangeAccountService"
+	LogicalAccountServiceName        = "trpc.moox.trade.LogicalAccountService"
+	TradeExecutionServiceName        = "trpc.moox.trade.TradeExecutionService"
+	TradeDNSResolverServiceName      = "trpc.moox.trade.TradeDNSResolverService"
+	TradeDNSResolverTRPCName         = TradeDNSResolverServiceName + ".trpc"
 )
 
 func RegisterAll(
@@ -20,10 +21,16 @@ func RegisterAll(
 	execution *ExecutionServer,
 	dnsResolver *DNSResolverServer,
 ) {
-	tradepb.RegisterExchangeAccountServiceService(
-		s.Service(ExchangeAccountServiceName),
-		accounts,
-	)
+	accountService := s.Service(ExchangeAccountServiceName)
+	if accountService == nil {
+		// Keep the current generated proto/config usable until the destructive
+		// console proto cutover is generated and deployed together.
+		accountService = s.Service(LegacyExchangeAccountServiceName)
+	}
+	if accountService == nil {
+		panic("TradingAccountService is not configured")
+	}
+	tradepb.RegisterExchangeAccountServiceService(accountService, accounts)
 	tradepb.RegisterLogicalAccountServiceService(
 		s.Service(LogicalAccountServiceName),
 		logicalAccounts,

@@ -243,6 +243,42 @@ func (a *Adapter) GetReferencePrice(
 	return exchange.ReferencePrice{Price: price, UpdatedAt: updatedAt}, nil
 }
 
+type Quote struct {
+	Bid, Ask, Last shared.Decimal
+	SourceTime     time.Time
+}
+
+func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (Quote, error) {
+	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/24hr", "/fapi/v1/ticker/24hr"), Query: url.Values{"symbol": []string{symbol.String()}}})
+	if err != nil {
+		return Quote{}, err
+	}
+	var payload struct {
+		BidPrice  string `json:"bidPrice"`
+		AskPrice  string `json:"askPrice"`
+		LastPrice string `json:"lastPrice"`
+		CloseTime int64  `json:"closeTime"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return Quote{}, typedRejected("decode quote", err)
+	}
+	return Quote{Bid: parseQuote(payload.BidPrice), Ask: parseQuote(payload.AskPrice), Last: parseQuote(payload.LastPrice), SourceTime: quoteTime(payload.CloseTime)}, nil
+}
+
+func parseQuote(raw string) shared.Decimal {
+	v, err := shared.ParseDecimal(raw)
+	if err != nil {
+		return shared.Zero()
+	}
+	return v
+}
+func quoteTime(ms int64) time.Time {
+	if ms > 0 {
+		return time.UnixMilli(ms).UTC()
+	}
+	return time.Now().UTC()
+}
+
 type spotAccount struct {
 	UpdateTime int64 `json:"updateTime"`
 	Balances   []struct {

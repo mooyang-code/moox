@@ -375,7 +375,7 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			OwnerRunnerID: "runner-1", ExecutionMode: "LIVE",
 			MarketType: "SWAP", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -410,7 +410,7 @@ func logicalFixtureAccount(id string) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
 		Exchange: "BINANCE", MarketType: "SWAP",
-		ExecutionMode: "PAPER", Environment: "PAPER",
+		ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-1",
 		SettlementAsset: "USDT", MarginMode: "CROSS",
 		Status: "ENABLED", Ready: true,
 		LeverageSettings: store.LeverageSettings{"BTCUSDT": "5"},

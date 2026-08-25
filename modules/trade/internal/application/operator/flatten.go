@@ -339,9 +339,7 @@ func (s *Service) flattenSwap(
 		result.Error = joinError(result.Error, err.Error())
 		return
 	}
-	instruments, err := s.Store.ListInstruments(
-		ctx, account.Exchange, account.MarketType,
-	)
+	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 	if err != nil {
 		result.Error = joinError(result.Error, err.Error())
 		return
@@ -389,9 +387,7 @@ func (s *Service) flattenSpot(
 	result *FlattenAccountResult,
 	reasons map[string]string,
 ) {
-	instruments, err := s.Store.ListInstruments(
-		ctx, account.Exchange, account.MarketType,
-	)
+	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 	if err != nil {
 		result.Error = joinError(result.Error, err.Error())
 		return

@@ -316,7 +316,7 @@ func TestValidatorRejectsInvalidReduceOnlyOrder(t *testing.T) {
 	}
 }
 
-func TestValidatorRejectsPaperLimitBeforeReservation(t *testing.T) {
+func TestValidatorAcceptsPaperLimitForMatcher(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := executableAccount(exchange.MarketTypeSpot)
 	account.ExecutionMode = exchange.ExecutionModePaper
@@ -327,7 +327,7 @@ func TestValidatorRejectsPaperLimitBeforeReservation(t *testing.T) {
 	spec.LimitPrice = decimalPointer("100")
 
 	_, err := validator.Validate(context.Background(), "space-1", spec)
-	require.ErrorIs(t, err, ErrPaperLimit)
+	require.NoError(t, err)
 }
 
 func TestValidatorAcceptsPaperMarket(t *testing.T) {

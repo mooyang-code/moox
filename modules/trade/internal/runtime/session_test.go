@@ -206,7 +206,7 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 	var positionUpdatedAt int64
 	require.NoError(t, tradeStore.DBForTest().Raw(`
 		SELECT c_exchange_updated_at FROM t_trading_positions
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_symbol = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
 	`, "space-1", "account-1", "BTC-USDT").Scan(&positionUpdatedAt).Error)
 	require.Equal(t, int64(2_500), positionUpdatedAt,
 		"buffered private event must apply after REST snapshot and before READY")

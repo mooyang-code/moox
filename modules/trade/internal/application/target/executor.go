@@ -339,9 +339,7 @@ func (e *Executor) loadMembers(
 		if err != nil {
 			return nil, err
 		}
-		instrumentRecords, err := e.Store.ListInstruments(
-			ctx, account.Exchange, account.MarketType,
-		)
+		instrumentRecords, err := e.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if err != nil {
 			return nil, err
 		}

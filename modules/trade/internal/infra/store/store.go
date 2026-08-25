@@ -116,10 +116,12 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		return fmt.Errorf("inspect trade schema: %w", err)
 	}
 	approved := map[string]struct{}{
-		"t_trading_accounts": {}, "t_exchange_instruments": {},
+		"t_trading_accounts": {}, "t_trade_instruments": {},
 		"t_trade_orders": {}, "t_order_fills": {}, "t_trading_positions": {},
 		"t_logical_accounts": {}, "t_logical_account_members": {},
 		"t_logical_account_targets": {}, "t_operator_actions": {},
+		"t_paper_account_configs": {}, "t_account_equity_points": {},
+		"t_logical_account_equity_points": {},
 	}
 	for _, table := range tables {
 		if _, found := approved[table]; !found {

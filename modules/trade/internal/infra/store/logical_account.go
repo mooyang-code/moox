@@ -219,7 +219,7 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 	}
 	var environments []string
 	if err := tx.db.Raw(`
-		SELECT DISTINCT a.c_environment
+		SELECT DISTINCT COALESCE(NULLIF(a.c_live_environment, ''), 'PRODUCTION')
 		FROM t_logical_account_members AS m
 		JOIN t_trading_accounts AS a
 			ON a.c_space_id = m.c_space_id
@@ -232,7 +232,11 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 		return err
 	}
 	for _, environment := range environments {
-		if environment != physical.Environment {
+		physicalEnvironment := physical.Environment
+		if physicalEnvironment == "" || physicalEnvironment == "PAPER" {
+			physicalEnvironment = "PRODUCTION"
+		}
+		if environment != physicalEnvironment {
 			return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrInhomogeneous)
 		}
 	}

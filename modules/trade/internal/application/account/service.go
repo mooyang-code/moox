@@ -11,11 +11,12 @@ import (
 )
 
 var (
-	ErrAccountNotFound      = errors.New("trade account: not found")
-	ErrAccountConflict      = errors.New("trade account: conflict")
-	ErrInvalidCredential    = errors.New("trade account: invalid Exchange credential")
-	ErrLiveTradingDisabled  = errors.New("trade account: production trading is disabled")
-	ErrServiceNotConfigured = errors.New("trade account: service is not configured")
+	ErrAccountNotFound       = errors.New("trade account: not found")
+	ErrAccountConflict       = errors.New("trade account: conflict")
+	ErrInvalidCredential     = errors.New("trade account: invalid Exchange credential")
+	ErrLiveTradingDisabled   = errors.New("trade account: production trading is disabled")
+	ErrPaperAccountImmutable = errors.New("trade account: paper account configuration is immutable")
+	ErrServiceNotConfigured  = errors.New("trade account: service is not configured")
 )
 
 type ExchangeSecret struct {
@@ -102,6 +103,12 @@ func (s *Service) Update(
 	if err != nil {
 		return tradingaccount.Account{}, err
 	}
+	if current.ExecutionMode == exchange.ExecutionModePaper &&
+		(command.Name != nil || command.CredentialSecretID != nil ||
+			command.SettlementAsset != nil || command.MarginMode != nil ||
+			command.Status != nil || command.SyncSymbols != nil) {
+		return tradingaccount.Account{}, ErrPaperAccountImmutable
+	}
 	projected := current
 	applyUpdate(&projected, command)
 	if err := projected.Validate(); err != nil {
@@ -143,6 +150,9 @@ func (s *Service) SetLeverage(
 	if current.MarketType != exchange.MarketTypeSwap {
 		return tradingaccount.ErrInvalidAccount
 	}
+	if current.ExecutionMode == exchange.ExecutionModePaper {
+		return ErrPaperAccountImmutable
+	}
 	if err := s.Store.SetLeverage(ctx, tradingAccountID, symbol, leverage); err != nil {
 		return err
 	}
@@ -183,10 +193,6 @@ func (s *Service) validateCredential(
 ) error {
 	if value.ExecutionMode == exchange.ExecutionModePaper {
 		return nil
-	}
-	if value.Environment == exchange.AccountEnvironmentProduction &&
-		!s.LiveTradingEnabled {
-		return ErrLiveTradingDisabled
 	}
 	if s.Secrets == nil {
 		return ErrServiceNotConfigured

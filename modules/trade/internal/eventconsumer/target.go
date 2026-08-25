@@ -151,9 +151,7 @@ func unsupportedLogicalTargetInstrument(
 		if !account.Ready {
 			membersReady = false
 		}
-		instruments, instrumentErr := tradeStore.ListInstruments(
-			ctx, account.Exchange, account.MarketType,
-		)
+		instruments, instrumentErr := tradeStore.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if instrumentErr != nil {
 			return "", false, instrumentErr
 		}

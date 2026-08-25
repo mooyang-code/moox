@@ -268,6 +268,37 @@ func (a *Adapter) GetReferencePrice(
 	}, nil
 }
 
+type Quote struct {
+	Bid, Ask, Last shared.Decimal
+	SourceTime     time.Time
+}
+
+func parseQuote(raw string) shared.Decimal {
+	value, err := shared.ParseDecimal(raw)
+	if err != nil {
+		return shared.Zero()
+	}
+	return value
+}
+
+func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (Quote, error) {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/ticker", url.Values{"instId": []string{symbol.String()}}, nil, false)
+	if err != nil {
+		return Quote{}, err
+	}
+	var rows []struct {
+		Bid  string `json:"bidPx"`
+		Ask  string `json:"askPx"`
+		Last string `json:"last"`
+		TS   string `json:"ts"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 {
+		return Quote{}, rejected("decode quote", err)
+	}
+	ms, _ := strconv.ParseInt(rows[0].TS, 10, 64)
+	return Quote{Bid: parseQuote(rows[0].Bid), Ask: parseQuote(rows[0].Ask), Last: parseQuote(rows[0].Last), SourceTime: time.UnixMilli(ms).UTC()}, nil
+}
+
 func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {
 	a.mu.RLock()
 	instrument, ok := a.instruments[symbol]
