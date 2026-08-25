@@ -1,5 +1,8 @@
 # Trade 实盘与模拟盘统一执行 Implementation Plan
 
+> **状态：已失效，禁止执行。** 设计第二版已删除 Reset，并新增 ReservationPolicy、
+> Paper 原子撮合、LogicalAccount 持久曲线和 Production 安全闸门；本计划必须重新生成。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在单个 Trade 进程和单个 SQLite 中实现共用交易内核，通过 `LiveAdapter` 真实下单、通过 `PaperAdapter` 虚拟撮合，并向两种模式提供相同的订单、成交、持仓、资金曲线、API 和前端页面。
